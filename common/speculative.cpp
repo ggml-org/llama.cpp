@@ -1051,6 +1051,12 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             }
             const int32_t n_rows = i_batch_end[seq_id] - i_batch_beg[seq_id] + 1;
 
+            // the previous block decoded its noise tokens at these very positions and left their K/V
+            // behind. injecting now would add a second cell at each position, and since the decoder
+            // runs non-causal both would be attended. drop the stale draft region first: the cache
+            // must hold exactly one injected target state per token, as in the reference.
+            llama_memory_seq_rm(llama_get_memory(ctx_dft), seq_id, batch_in.pos[i_batch_beg[seq_id]], -1);
+
             for (int32_t offset = 0; offset < n_rows; offset += n_ubatch) {
                 const int32_t n_chunk = std::min(n_ubatch, n_rows - offset);
 
