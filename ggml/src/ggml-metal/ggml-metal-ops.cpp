@@ -1676,6 +1676,7 @@ int ggml_metal_op_ssm_scan(ggml_metal_op_t ctx, int idx) {
 
     ggml_metal_library_t lib = ctx->lib;
     ggml_metal_encoder_t enc = ctx->enc;
+    const ggml_metal_device_props * props_dev = ggml_metal_device_get_props(ctx->dev);
 
     GGML_TENSOR_LOCALS( int32_t, ne0, op->src[0], ne);
     GGML_TENSOR_LOCALS(uint64_t, nb0, op->src[0], nb);
@@ -1745,9 +1746,25 @@ int ggml_metal_op_ssm_scan(ggml_metal_op_t ctx, int idx) {
         /*.nb0          =*/ nb0,
     };
 
-    auto pipeline = ggml_metal_library_get_pipeline_ssm_scan(lib, op);
+    // use the chunked SSD kernel for large multi-token prefill, sequential kernel otherwise
+    // ne30 != 1 means per-channel A (Mamba-1), which the SSD kernel does not support
+    constexpr int64_t CHUNK = 64;
 
-    GGML_ASSERT(d_state <= ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
+    const bool use_ssd = ne30 == 1 && n_seq_tokens >= CHUNK;
+    const bool use_mma = use_ssd &&
+        props_dev->has_simdgroup_mm &&
+        d_state      % 8     == 0 &&
+        d_inner              == 64 &&
+        n_seq_tokens % CHUNK == 0;
+
+    auto pipeline = use_mma ?
+        ggml_metal_library_get_pipeline_ssm_scan_ssd_mma(lib, op) :
+        use_ssd ?
+            ggml_metal_library_get_pipeline_ssm_scan_ssd(lib, op) :
+            ggml_metal_library_get_pipeline_ssm_scan(lib, op);
+
+    const int64_t nth = use_mma ? GGML_METAL_SSM_SCAN_SSD_MMA_NSG*32 : d_state;
+    GGML_ASSERT(nth <= ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
 
     const size_t smem = pipeline.smem;
 
@@ -1764,7 +1781,10 @@ int ggml_metal_op_ssm_scan(ggml_metal_op_t ctx, int idx) {
 
     ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
 
-    ggml_metal_encoder_dispatch_threadgroups(enc, d_inner, n_head, n_seqs, d_state, 1, 1);
+    ggml_metal_encoder_dispatch_threadgroups(
+        enc,
+        use_mma ? 1 : d_inner, n_head, n_seqs,
+        nth, 1, 1);
 
     return 1;
 }
