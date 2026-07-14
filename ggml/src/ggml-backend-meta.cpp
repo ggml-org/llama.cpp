@@ -64,13 +64,14 @@ struct ggml_backend_meta_device_context {
             simple_devs(std::move(simple_devs)), get_split_state(get_split_state), get_split_state_ud(get_split_state_ud) {
         name        = std::string("Meta(");
         description = std::string("Meta(");
-        for (size_t i = 0; i < simple_devs.size(); i++) {
+        // note: use the member, not the moved-from constructor parameter of the same name
+        for (size_t i = 0; i < this->simple_devs.size(); i++) {
             if (i > 0) {
                 name        += ",";
                 description += ",";
             }
-            name        += ggml_backend_dev_name       (simple_devs[i]);
-            description += ggml_backend_dev_description(simple_devs[i]);
+            name        += ggml_backend_dev_name       (this->simple_devs[i]);
+            description += ggml_backend_dev_description(this->simple_devs[i]);
         }
         name        += ")";
         description += ")";
@@ -253,11 +254,12 @@ struct ggml_backend_meta_buffer_type_context {
 
     ggml_backend_meta_buffer_type_context(std::vector<ggml_backend_buffer_type_t> simple_bufts) : simple_bufts(std::move(simple_bufts)) {
         name = "Meta(";
-        for (size_t i = 0; i < simple_bufts.size(); i++) {
+        // note: use the member, not the moved-from constructor parameter of the same name
+        for (size_t i = 0; i < this->simple_bufts.size(); i++) {
             if (i > 0) {
                 name += ",";
             }
-            name += ggml_backend_buft_name(simple_bufts[i]);
+            name += ggml_backend_buft_name(this->simple_bufts[i]);
         }
         name += ")";
     }
