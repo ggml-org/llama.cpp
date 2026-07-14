@@ -2629,6 +2629,13 @@ private:
         return true;
     }
 
+    // whether the memory state is valid only at its exact final position (hybrid/recurrent),
+    // as opposed to a range of positions (SWA)
+    bool ctx_tgt_state_exact() const {
+        return ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
+               ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS;
+    }
+
     // n_tokens_cur: the number of tokens added to the batch for the current slot
     void create_checkpoint(server_slot & slot, const int64_t n_tokens_cur, llama_pos pos_min, llama_pos pos_max) {
         const int id_task = slot.task->id;
@@ -2692,8 +2699,7 @@ private:
         // the state of hybrid/recurrent memory is valid only at its exact final position
         // TODO: for SWA models the saved range can still claim more than it actually covers:
         //       https://github.com/ggml-org/llama.cpp/pull/24411#issuecomment-4677983225
-        if (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
-            ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS) {
+        if (ctx_tgt_state_exact()) {
             pos_min = pos_max;
         }
 
@@ -4190,13 +4196,7 @@ private:
                                     SLT_WRN(slot, "%s\n", st1.str().c_str());
                                 }
 
-                                // whether the checkpoints hold a state that is valid only at its exact
-                                // final position (hybrid/recurrent memory), as opposed to a range (SWA)
-                                const bool ckpt_exact =
-                                    ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
-                                    ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS;
-
-                                auto reuse = slot.prompt.get_reuse(n_past, has_new_tokens, n_swa, pos_min, ckpt_exact);
+                                auto reuse = slot.prompt.get_reuse(n_past, has_new_tokens, n_swa, pos_min, ctx_tgt_state_exact());
 
                                 if (reuse.ckpt) {
                                     const auto & cur = *reuse.ckpt;
