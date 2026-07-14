@@ -1273,9 +1273,53 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_GATED_DELTA_NET:
             return has_simdgroup_reduction && op->src[2]->ne[0] % 32 == 0;
         case GGML_OP_SOLVE_TRI:
-        case GGML_OP_MUL_MAT:
-        case GGML_OP_MUL_MAT_ID:
             return has_simdgroup_reduction && op->src[0]->type != GGML_TYPE_NVFP4;
+        case GGML_OP_MUL_MAT:
+            {
+                if (!has_simdgroup_reduction || op->src[0]->type == GGML_TYPE_NVFP4) {
+                    return false;
+                }
+
+                // the mat-vec kernels only have an f16 x f16 variant when src0 is F16;
+                // for BF16 there is no f16-src1 kernel at all (mat-mat included), and for
+                // F32/quantized src0 there is no kernel_mul_mv_<type>_f16 (only _f32), so
+                // those shapes must take the mat-mat path instead, which does have full
+                // f16 coverage (see ggml_metal_op_mul_mat for the matching dispatch logic)
+                if (op->src[1]->type == GGML_TYPE_F16 && op->src[0]->type != GGML_TYPE_F16) {
+                    if (op->src[0]->type == GGML_TYPE_BF16) {
+                        return false;
+                    }
+
+                    return !ggml_is_transposed(op->src[0]) &&
+                           !ggml_is_transposed(op->src[1]) &&
+                           has_simdgroup_mm &&
+                           op->src[0]->ne[0] >= 64 &&
+                           op->src[1]->ne[1] > 8;
+                }
+
+                return true;
+            }
+        case GGML_OP_MUL_MAT_ID:
+            {
+                if (!has_simdgroup_reduction || op->src[0]->type == GGML_TYPE_NVFP4) {
+                    return false;
+                }
+
+                // the mat-vec-id kernels have no f16-src1 variant for any src0 type (only
+                // f32); f16 src1 is only supported via the mat-mat-id path, and even that
+                // path has no f16-src1 kernel for BF16 src0
+                if (op->src[1]->type == GGML_TYPE_F16) {
+                    if (op->src[0]->type == GGML_TYPE_BF16) {
+                        return false;
+                    }
+
+                    return has_simdgroup_mm &&
+                           op->src[0]->ne[0] >= 64 &&
+                           op->src[2]->ne[1] >= 32;
+                }
+
+                return true;
+            }
         case GGML_OP_SET:
         case GGML_OP_CPY:
         case GGML_OP_DUP:
