@@ -282,33 +282,25 @@ class _QwenMtpMixin:
     no_mtp: bool
     mtp_only: bool
     _original_block_count: int | None = None
+    opt_num_mtp_layers: int
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.block_count = self.hparams["num_hidden_layers"]
         if not self.no_mtp:
-            self.block_count += self.hparams.get("mtp_num_hidden_layers", 0)
+            n_mtp = self.hparams.get("mtp_num_hidden_layers", 0)
+            if n_mtp == 0:
+                assert self.opt_num_mtp_layers != 0
+                n_mtp = self.opt_num_mtp_layers
+            self.block_count += n_mtp
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
 
     def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
         hparams = {**self.hparams, **self.hparams.get("text_config", {})}
         key = next((k for k in ["n_layers", "num_hidden_layers", "n_layer", "num_layers"] if k in hparams), None)
         type(self)._original_block_count = hparams.get(key)
-        tensors = super().index_tensors(remote_hf_model_id=remote_hf_model_id)  # ty: ignore[unresolved-attribute]
-
-        # Qwen-3-Next doesn't include `mtp_num_hidden_layers` in config.
-        if not self.no_mtp and "mtp_num_hidden_layers" not in self.hparams:
-            assert self._original_block_count is not None
-            n_mtp = 0
-            for name in tensors:
-                if name.startswith("model.layers."):
-                    idx = name.split(".", 3)[2]
-                    if idx.isdecimal():
-                        n_mtp = max(n_mtp, int(idx) - self._original_block_count + 1)
-            if n_mtp > 0:
-                self.hparams["mtp_num_hidden_layers"] = n_mtp
-
-        return tensors
+        type(self).opt_num_mtp_layers = 0
+        return super().index_tensors(remote_hf_model_id=remote_hf_model_id)  # ty: ignore[unresolved-attribute]
 
     @classmethod
     def filter_tensors(cls, item):
@@ -332,6 +324,7 @@ class _QwenMtpMixin:
             if len(parts) == 4 and parts[1] == "layers" and parts[2].isdecimal():
                 mtp_idx = int(parts[2])
                 name = f"model.layers.{cls._original_block_count + mtp_idx}.{parts[3]}"
+                cls.opt_num_mtp_layers = max(cls.opt_num_mtp_layers, mtp_idx + 1)
             elif len(parts) == 3 and parts[1] in remapper:
                 name = f"model.layers.{cls._original_block_count}.{remapper[parts[1]]}.{parts[2]}"
         elif cls.mtp_only:
@@ -347,7 +340,7 @@ class _QwenMtpMixin:
         super().set_gguf_parameters()  # ty: ignore[unresolved-attribute]
         if self.no_mtp:
             return
-        if (n := self.hparams.get("mtp_num_hidden_layers", 0)) > 0:
+        if (n := self.block_count - self.hparams["num_hidden_layers"]) > 0:
             self.gguf_writer.add_nextn_predict_layers(n)
 
     def prepare_metadata(self, vocab_only: bool):

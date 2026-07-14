@@ -112,6 +112,8 @@ class ModelBase:
     # Architectures opt in by overriding the handling (see _QwenMtpMixin).
     mtp_only: bool = False
     no_mtp: bool = False
+    # used when calculated from the actual mtp layer tensors (e.g., Qwen-3-Next)
+    opt_num_mtp_layers: int = 0
 
     def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, fname_out: Path, *, is_big_endian: bool = False,
                  use_temp_file: bool = False, eager: bool = False,
