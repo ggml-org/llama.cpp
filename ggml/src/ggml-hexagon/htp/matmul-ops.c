@@ -2253,12 +2253,13 @@ static void transfer_activation_chunk_gathered_worker_fn(unsigned int n, unsigne
     struct htp_thread_trace * tr = &st->traces[i];
     int chunk_idx = i;
     int chunk_size = st->n_chunks_per_task;
-    int start_row = st->start_row + chunk_idx * chunk_size;
+    int vtcm_start_row = chunk_idx * chunk_size;
+    int start_row = st->start_row + vtcm_start_row;
     int n_rows = hex_smin(st->cne1 - start_row, chunk_size);
     if (n_rows > 0) {
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, chunk_idx);
         transfer_activation_chunk_fp32_to_fp16_gathered(
-            st->dst, st->src, start_row, n_rows, st->k_block,
+            st->dst, st->src, start_row, vtcm_start_row, n_rows, st->k_block,
             st->matrix_rows, st->cur_a, st->mapping_stride,
             st->ne11, &st->ne11_div, st->nb11, st->nb12, st->cne1, st->k_valid);
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, chunk_idx);
@@ -2270,12 +2271,13 @@ static void transfer_activation_chunk_gathered_worker_flat_fn(unsigned int n, un
     struct htp_thread_trace * tr = &st->traces[i];
     int chunk_idx = i;
     int chunk_size = st->n_chunks_per_task;
-    int start_row = st->start_row + chunk_idx * chunk_size;
+    int vtcm_start_row = chunk_idx * chunk_size;
+    int start_row = st->start_row + vtcm_start_row;
     int n_rows = hex_smin(st->cne1 - start_row, chunk_size);
     if (n_rows > 0) {
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_A_PREP, chunk_idx);
         transfer_activation_chunk_fp32_to_fp16_gathered_flat(
-            st->dst, st->src, start_row, n_rows, st->k_block,
+            st->dst, st->src, start_row, vtcm_start_row, n_rows, st->k_block,
             st->matrix_rows, st->cur_a, st->mapping_stride,
             st->nb12, st->cne1, st->k_valid);
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_A_PREP, chunk_idx);
@@ -2287,12 +2289,13 @@ static void transfer_output_chunk_scattered_worker_fn(unsigned int n, unsigned i
     struct htp_thread_trace * tr = &st->traces[i];
     int chunk_idx = i;
     int chunk_size = st->n_chunks_per_task;
-    int start_row = st->start_row + chunk_idx * chunk_size;
+    int vtcm_start_row = chunk_idx * chunk_size;
+    int start_row = st->start_row + vtcm_start_row;
     int n_rows = hex_smin(st->cne1 - start_row, chunk_size);
     if (n_rows > 0) {
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_O_PROC, chunk_idx);
         transfer_output_chunk_fp16_to_fp32_scattered(
-            st->dst, st->vtcm_src, start_row, n_rows, st->n_cols,
+            st->dst, st->vtcm_src, start_row, vtcm_start_row, n_rows, st->n_cols,
             st->matrix_rows, st->cur_a, st->mapping_stride,
             st->dst_nb1, st->dst_nb2, st->cne1);
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_O_PROC, chunk_idx);
