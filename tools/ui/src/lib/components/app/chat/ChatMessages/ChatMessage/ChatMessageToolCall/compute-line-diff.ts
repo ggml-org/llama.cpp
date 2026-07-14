@@ -18,6 +18,10 @@ export type DiffLineKind = 'context' | 'add' | 'remove';
 export interface DiffLine {
 	kind: DiffLineKind;
 	text: string;
+	/** 1-indexed line number in the OLD content. Undefined for `add` lines. */
+	oldLine?: number;
+	/** 1-indexed line number in the NEW content. Undefined for `remove` lines. */
+	newLine?: number;
 }
 
 export function computeLineDiff(oldText: string, newText: string): DiffLine[] {
@@ -28,8 +32,8 @@ export function computeLineDiff(oldText: string, newText: string): DiffLine[] {
 	const n = newLines.length;
 
 	if (m === 0 && n === 0) return [];
-	if (m === 0) return newLines.map((t) => ({ kind: 'add', text: t }));
-	if (n === 0) return oldLines.map((t) => ({ kind: 'remove', text: t }));
+	if (m === 0) return newLines.map((t, k) => ({ kind: 'add', text: t, newLine: k + 1 }));
+	if (n === 0) return oldLines.map((t, k) => ({ kind: 'remove', text: t, oldLine: k + 1 }));
 
 	const lcs: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
 	for (let i = 1; i <= m; i++) {
@@ -47,23 +51,23 @@ export function computeLineDiff(oldText: string, newText: string): DiffLine[] {
 	let j = n;
 	while (i > 0 && j > 0) {
 		if (oldLines[i - 1] === newLines[j - 1]) {
-			result.push({ kind: 'context', text: oldLines[i - 1] });
+			result.push({ kind: 'context', text: oldLines[i - 1], oldLine: i, newLine: j });
 			i--;
 			j--;
 		} else if (lcs[i - 1][j] >= lcs[i][j - 1]) {
-			result.push({ kind: 'remove', text: oldLines[i - 1] });
+			result.push({ kind: 'remove', text: oldLines[i - 1], oldLine: i });
 			i--;
 		} else {
-			result.push({ kind: 'add', text: newLines[j - 1] });
+			result.push({ kind: 'add', text: newLines[j - 1], newLine: j });
 			j--;
 		}
 	}
 	while (i > 0) {
-		result.push({ kind: 'remove', text: oldLines[i - 1] });
+		result.push({ kind: 'remove', text: oldLines[i - 1], oldLine: i });
 		i--;
 	}
 	while (j > 0) {
-		result.push({ kind: 'add', text: newLines[j - 1] });
+		result.push({ kind: 'add', text: newLines[j - 1], newLine: j });
 		j--;
 	}
 

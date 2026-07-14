@@ -11,23 +11,23 @@ describe('computeLineDiff', () => {
 
 	it('marks every line as removed for an empty new text', () => {
 		expect(computeLineDiff('a\nb\nc', '')).toEqual([
-			{ kind: 'remove', text: 'a' },
-			{ kind: 'remove', text: 'b' },
-			{ kind: 'remove', text: 'c' }
+			{ kind: 'remove', text: 'a', oldLine: 1 },
+			{ kind: 'remove', text: 'b', oldLine: 2 },
+			{ kind: 'remove', text: 'c', oldLine: 3 }
 		]);
 	});
 
 	it('marks every line as added for an empty old text', () => {
 		expect(computeLineDiff('', 'a\nb')).toEqual([
-			{ kind: 'add', text: 'a' },
-			{ kind: 'add', text: 'b' }
+			{ kind: 'add', text: 'a', newLine: 1 },
+			{ kind: 'add', text: 'b', newLine: 2 }
 		]);
 	});
 
 	it('detects a single-line replace', () => {
 		expect(computeLineDiff('old', 'new')).toEqual([
-			{ kind: 'add', text: 'new' },
-			{ kind: 'remove', text: 'old' }
+			{ kind: 'add', text: 'new', newLine: 1 },
+			{ kind: 'remove', text: 'old', oldLine: 1 }
 		]);
 	});
 
@@ -35,10 +35,10 @@ describe('computeLineDiff', () => {
 		const oldText = ['a', 'b', 'c'].join('\n');
 		const newText = ['a', 'b', 'B', 'c'].join('\n');
 		expect(computeLineDiff(oldText, newText)).toEqual([
-			{ kind: 'context', text: 'a' },
-			{ kind: 'context', text: 'b' },
-			{ kind: 'add', text: 'B' },
-			{ kind: 'context', text: 'c' }
+			{ kind: 'context', text: 'a', oldLine: 1, newLine: 1 },
+			{ kind: 'context', text: 'b', oldLine: 2, newLine: 2 },
+			{ kind: 'add', text: 'B', newLine: 3 },
+			{ kind: 'context', text: 'c', oldLine: 3, newLine: 4 }
 		]);
 	});
 
@@ -48,11 +48,11 @@ describe('computeLineDiff', () => {
 		const oldText = ['a', 'b', 'c', 'd'].join('\n');
 		const newText = ['a', 'b', 'X', 'd'].join('\n');
 		expect(computeLineDiff(oldText, newText)).toEqual([
-			{ kind: 'context', text: 'a' },
-			{ kind: 'context', text: 'b' },
-			{ kind: 'add', text: 'X' },
-			{ kind: 'remove', text: 'c' },
-			{ kind: 'context', text: 'd' }
+			{ kind: 'context', text: 'a', oldLine: 1, newLine: 1 },
+			{ kind: 'context', text: 'b', oldLine: 2, newLine: 2 },
+			{ kind: 'add', text: 'X', newLine: 3 },
+			{ kind: 'remove', text: 'c', oldLine: 3 },
+			{ kind: 'context', text: 'd', oldLine: 4, newLine: 4 }
 		]);
 	});
 
@@ -60,10 +60,10 @@ describe('computeLineDiff', () => {
 		const oldText = ['a', 'b', 'c', 'd'].join('\n');
 		const newText = ['a', 'c', 'd'].join('\n');
 		expect(computeLineDiff(oldText, newText)).toEqual([
-			{ kind: 'context', text: 'a' },
-			{ kind: 'remove', text: 'b' },
-			{ kind: 'context', text: 'c' },
-			{ kind: 'context', text: 'd' }
+			{ kind: 'context', text: 'a', oldLine: 1, newLine: 1 },
+			{ kind: 'remove', text: 'b', oldLine: 2 },
+			{ kind: 'context', text: 'c', oldLine: 3, newLine: 2 },
+			{ kind: 'context', text: 'd', oldLine: 4, newLine: 3 }
 		]);
 	});
 
@@ -71,24 +71,46 @@ describe('computeLineDiff', () => {
 		const text = 'x\ny\nz';
 		const result = computeLineDiff(text, text);
 		expect(result).toEqual([
-			{ kind: 'context', text: 'x' },
-			{ kind: 'context', text: 'y' },
-			{ kind: 'context', text: 'z' }
+			{ kind: 'context', text: 'x', oldLine: 1, newLine: 1 },
+			{ kind: 'context', text: 'y', oldLine: 2, newLine: 2 },
+			{ kind: 'context', text: 'z', oldLine: 3, newLine: 3 }
 		]);
 	});
 
 	it('strips a trailing newline on the old/new inputs', () => {
 		expect(computeLineDiff('a\n', 'a\nb\n')).toEqual([
-			{ kind: 'context', text: 'a' },
-			{ kind: 'add', text: 'b' }
+			{ kind: 'context', text: 'a', oldLine: 1, newLine: 1 },
+			{ kind: 'add', text: 'b', newLine: 2 }
 		]);
 	});
 
 	it('normalizes trailing CR on each line', () => {
 		expect(computeLineDiff('a\r\nb\r\n', 'a\nb')).toEqual([
-			{ kind: 'context', text: 'a' },
-			{ kind: 'context', text: 'b' }
+			{ kind: 'context', text: 'a', oldLine: 1, newLine: 1 },
+			{ kind: 'context', text: 'b', oldLine: 2, newLine: 2 }
 		]);
+	});
+
+	it('keeps line numbers monotonic across mixed add/remove/context', () => {
+		const oldText = ['l1', 'l2', 'l3', 'l4', 'l5'].join('\n');
+		const newText = ['l1', 'l2-EDIT', 'l3', 'l4-NEW', 'l5'].join('\n');
+		const diff = computeLineDiff(oldText, newText);
+
+		// Walk the diff: every oldLine must increase strictly, and every
+		// newLine must increase strictly. Lines missing one side (add or
+		// remove) carry no number on that side.
+		let lastOld = 0;
+		let lastNew = 0;
+		for (const line of diff) {
+			if (line.oldLine !== undefined) {
+				expect(line.oldLine).toBeGreaterThan(lastOld);
+				lastOld = line.oldLine;
+			}
+			if (line.newLine !== undefined) {
+				expect(line.newLine).toBeGreaterThan(lastNew);
+				lastNew = line.newLine;
+			}
+		}
 	});
 });
 
@@ -104,5 +126,13 @@ describe('renderUnifiedDiff', () => {
 			{ kind: 'remove' as const, text: 'minus' }
 		];
 		expect(renderUnifiedDiff(lines)).toBe(' ctx\n+plus\n-minus');
+	});
+
+	it('ignores oldLine/newLine metadata when emitting prefixes', () => {
+		const lines = [
+			{ kind: 'context' as const, text: 'a', oldLine: 1, newLine: 1 },
+			{ kind: 'add' as const, text: 'b', newLine: 2 }
+		];
+		expect(renderUnifiedDiff(lines)).toBe(' a\n+b');
 	});
 });

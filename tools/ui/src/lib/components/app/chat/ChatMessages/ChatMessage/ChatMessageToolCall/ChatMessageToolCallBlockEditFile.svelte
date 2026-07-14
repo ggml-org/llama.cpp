@@ -1,13 +1,13 @@
 <script lang="ts">
 	import { Loader2, Wrench, XCircle } from '@lucide/svelte';
-	import { CollapsibleContentBlock, SyntaxHighlightedCode } from '$lib/components/app';
+	import { CollapsibleContentBlock } from '$lib/components/app';
 	import { AgenticSectionType, BuiltInTool } from '$lib/enums';
 	import { FILE_PATH_SEPARATOR_REGEX } from '$lib/constants';
 	import { getBuiltinToolUi } from '$lib/constants/built-in-tools';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import type { AgenticSection } from '$lib/utils';
 	import { parsePartialJsonArgs } from './parse-partial-json-args';
-	import { computeLineDiff, renderUnifiedDiff } from './compute-line-diff';
+	import { computeLineDiff, type DiffLine } from './compute-line-diff';
 
 	interface Props {
 		section: AgenticSection;
@@ -21,7 +21,6 @@
 	const isPending = $derived(section.type === AgenticSectionType.TOOL_CALL_PENDING);
 	const isStreamingCall = $derived(section.type === AgenticSectionType.TOOL_CALL_STREAMING);
 	const showSpinner = $derived(isPending || (isStreamingCall && isStreaming));
-	const isCodeStreaming = $derived(isStreaming && (isPending || isStreamingCall));
 	const toolUi = $derived(getBuiltinToolUi(section.toolName));
 	const toolIcon = $derived(showSpinner ? Loader2 : (toolUi?.icon ?? Wrench));
 	const toolIconClass = $derived(showSpinner ? 'h-4 w-4 animate-spin' : 'h-4 w-4');
@@ -108,10 +107,11 @@
 		parseEditFileMeta(section.toolName, section.toolArgs, section.toolResult)
 	);
 
+	// Structured per-line diff for each edit. Rendered directly (instead of
+	// through SyntaxHighlightedCode) so we can attach a line-number gutter
+	// alongside each diff row.
 	const editDiffs = $derived(
-		(editFileMeta?.edits ?? []).map((edit) =>
-			renderUnifiedDiff(computeLineDiff(edit.oldText, edit.newText))
-		)
+		(editFileMeta?.edits ?? []).map((edit) => computeLineDiff(edit.oldText, edit.newText))
 	);
 
 	const subtitle = $derived(
@@ -123,6 +123,12 @@
 					? 'incomplete'
 					: undefined
 	);
+
+	function markerFor(kind: DiffLine['kind']): string {
+		if (kind === 'add') return '+';
+		if (kind === 'remove') return '-';
+		return ' ';
+	}
 </script>
 
 {#snippet editFileTitle()}
@@ -152,17 +158,23 @@
 			<span>{editFileMeta.errorMessage}</span>
 		</div>
 	{:else if editFileMeta && editFileMeta.edits.length > 0}
-		{#each editDiffs as diffText, ei (ei)}
+		{#each editDiffs as diffLines, ei (ei)}
 			<div class={ei === 0 ? '' : 'mt-3'}>
 				<div class="mb-1.5 text-xs text-muted-foreground/70 italic">
 					Edit {ei + 1}&nbsp;of&nbsp;{editFileMeta?.edits.length ?? 0}
 				</div>
-				<SyntaxHighlightedCode
-					code={diffText}
-					language="diff"
-					maxHeight="22rem"
-					streaming={isCodeStreaming}
-				/>
+				<div class="diff-block">
+					<div class="diff-pre">
+						{#each diffLines as line, li (li)}
+							<div class="diff-line diff-{line.kind}">
+								<span class="diff-old-num">{line.oldLine ?? ''}</span>
+								<span class="diff-marker">{markerFor(line.kind)}</span>
+								<span class="diff-new-num">{line.newLine ?? ''}</span>
+								<span class="diff-text">{line.text || '\u00A0'}</span>
+							</div>
+						{/each}
+					</div>
+				</div>
 			</div>
 		{/each}
 		<div class="mt-1.5 text-xs text-muted-foreground/70 italic">
@@ -179,3 +191,97 @@
 		<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">No edits</div>
 	{/if}
 </CollapsibleContentBlock>
+
+<style>
+	.diff-block {
+		max-height: 22rem;
+		overflow: auto;
+		border-radius: 0.75rem;
+		border-width: 1px;
+		border-color: color-mix(in oklch, var(--border) 30%, transparent);
+		background: var(--code-background);
+		box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+	}
+
+	:global(.dark) .diff-block {
+		border-color: color-mix(in oklch, var(--border) 20%, transparent);
+	}
+
+	/* Each row is a 4-column grid: old-line#, marker, new-line#, text.
+	 * The gutters stay fixed-width so the text column lines up unversally. */
+	.diff-line {
+		display: grid;
+		grid-template-columns: 3.25rem 1.5rem 3.25rem 1fr;
+		font-family: var(--font-mono);
+		font-size: 11px;
+		line-height: 1.65;
+		align-items: stretch;
+	}
+
+	.diff-old-num,
+	.diff-new-num {
+		text-align: right;
+		padding-right: 0.5rem;
+		user-select: none;
+		color: color-mix(in oklch, var(--muted-foreground) 70%, transparent);
+		font-variant-numeric: tabular-nums;
+	}
+
+	.diff-marker {
+		text-align: center;
+		color: color-mix(in oklch, var(--muted-foreground) 70%, transparent);
+		user-select: none;
+	}
+
+	.diff-line.diff-add {
+		background-color: #f0fff4;
+		color: #22863a;
+	}
+	.diff-line.diff-add .diff-new-num,
+	.diff-line.diff-add .diff-marker {
+		color: #22863a;
+	}
+
+	.diff-line.diff-remove {
+		background-color: #ffeef0;
+		color: #b31d28;
+	}
+	.diff-line.diff-remove .diff-old-num,
+	.diff-line.diff-remove .diff-marker {
+		color: #b31d28;
+	}
+
+	.diff-line.diff-add .diff-old-num,
+	.diff-line.diff-remove .diff-new-num {
+		/* Empty gutter columns for add/remove rows mirror git unification
+		 * (added lines don't have an old number, removed lines don't have a
+		 * new number). Keep them visible so columns stay aligned across
+		 * mixed rows. */
+		opacity: 0;
+	}
+
+	.diff-text {
+		padding-left: 0.4rem;
+		padding-right: 0.5rem;
+		white-space: pre;
+		overflow-x: auto;
+		min-width: 0;
+	}
+
+	:global(.dark) .diff-line.diff-add {
+		background-color: #033a16;
+		color: #aff5b4;
+	}
+	:global(.dark) .diff-line.diff-add .diff-new-num,
+	:global(.dark) .diff-line.diff-add .diff-marker {
+		color: #aff5b4;
+	}
+	:global(.dark) .diff-line.diff-remove {
+		background-color: #67060c;
+		color: #ffdcd7;
+	}
+	:global(.dark) .diff-line.diff-remove .diff-old-num,
+	:global(.dark) .diff-line.diff-remove .diff-marker {
+		color: #ffdcd7;
+	}
+</style>
