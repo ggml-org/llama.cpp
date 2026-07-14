@@ -124,16 +124,16 @@ static std::vector<std::function<void(const common_chat_template & tmpl, autopar
               analysis.tools.format.section_end    = "";
               analysis.tools.format.per_call_start = "<TOOLCALL>";
               analysis.tools.format.per_call_end   = "</TOOLCALL>";
+              analysis.tools.format.tools_array_wrapped = true;
               analysis.content.mode                = content_mode::PLAIN;
               analysis.content.start               = "";
               analysis.content.end                 = "";
               analysis.reasoning.mode              = reasoning_mode::TAG_BASED;
-              analysis.reasoning.start             = "<think>\n\n";
+              analysis.reasoning.start             = "<think>\n";
               analysis.reasoning.end               = "</think>";
               analysis.assistant_start             = "<SPECIAL_11>Assistant";
               analysis.user_start                  = "<SPECIAL_11>User";
               analysis.preserved_tokens.clear();
-              analysis.preserved_tokens.push_back("<SPECIAL_12>");
               analysis.preserved_tokens.push_back("<SPECIAL_11>");
               analysis.preserved_tokens.push_back("</think>");
               analysis.preserved_tokens.push_back("<TOOLCALL>");
@@ -163,6 +163,14 @@ static std::vector<std::function<void(const common_chat_template & tmpl, autopar
               analysis.user_start                  = "<|begin_user|>";
               analysis.assistant_start             = "<|begin_assistant|>";
               LOG_DBG(ANSI_ORANGE "[Patch: Apriel 1.6]\n" ANSI_RESET);
+          }
+      },
+      // template uses the JSON {name, parameters} tool instruction, emits the OpenAI function wrapper
+      [](const common_chat_template & tmpl, autoparser & analysis) -> void {
+          if (tmpl.src.find("Respond in the format {\"name\": function name") != std::string::npos &&
+              tmpl.src.find("Do not use variables.") != std::string::npos) {
+              analysis.tools.format.openai_wrapper_trigger = true;
+              LOG_DBG(ANSI_ORANGE "[Patch: JSON name/parameters tool instruction]\n" ANSI_RESET);
           }
       },
 
@@ -251,6 +259,7 @@ void autoparser::analyze_template(const common_chat_template & tmpl) {
     LOG_DBG("per_call_end: '%s'\n", tools.format.per_call_end.c_str());
     LOG_DBG("func_name_prefix: '%s'\n", tools.function.name_prefix.c_str());
     LOG_DBG("func_name_suffix: '%s'\n", tools.function.name_suffix.c_str());
+    LOG_DBG("func_args_separator: '%s'\n", tools.function.args_separator.c_str());
     LOG_DBG("func_close: '%s'\n", tools.function.close.c_str());
     LOG_DBG("call_id_prefix: '%s'\n", tools.call_id.prefix.c_str());
     LOG_DBG("call_id_suffix: '%s'\n", tools.call_id.suffix.c_str());
@@ -294,6 +303,7 @@ void autoparser::collect_preserved_tokens() {
     add_token(tools.format.per_call_end);
     add_token(tools.function.name_prefix);
     add_token(tools.function.name_suffix);
+    add_token(tools.function.args_separator);
     add_token(tools.function.close);
     add_token(tools.arguments.start);
     add_token(tools.arguments.end);
@@ -1043,6 +1053,23 @@ void analyze_tools::check_per_call_markers() {
         format.section_start.clear();
         format.section_end.clear();
     }
+
+    if (!format.per_call_end.empty()) {
+        auto count_occurrences = [](const std::string & haystack, const std::string & needle) {
+            size_t count = 0;
+            for (size_t pos = haystack.find(needle); pos != std::string::npos;
+                 pos = haystack.find(needle, pos + needle.size())) {
+                count++;
+            }
+            return count;
+        };
+        size_t calls_one = count_occurrences(one_vs_two->output_A, format.per_call_end);
+        size_t calls_two = count_occurrences(one_vs_two->output_B, format.per_call_end);
+        if (calls_one > 0 && calls_one == calls_two) {
+            format.section_end = format.per_call_end;
+            format.per_call_end.clear();
+        }
+    }
 }
 
 void analyze_tools::extract_function_markers() {
@@ -1124,6 +1151,17 @@ void analyze_tools::extract_function_markers() {
             auto suf_result = suffix_parser.parse_and_extract(diff.suffix);
             if (suf_result.result.success()) {
                 function.name_suffix += suf_result.tags["ext"];
+
+                auto arg_start = [&](common_peg_parser_builder &p) {
+                    return p.marker() + p.space() + p.choice({ p.literal(ARG_FIRST), p.literal(ARG_SECOND) });
+                };
+                auto sep_parser = build_tagged_peg_parser([&](common_peg_parser_builder &p) {
+                    return p.tag("sep", p.zero_or_more(p.negate(arg_start(p)) + p.any())) + arg_start(p);
+                });
+                auto sep_result = sep_parser.parse_and_extract(diff.suffix.substr(suf_result.tags["ext"].size()));
+                if (sep_result.result.success()) {
+                    function.args_separator = trim_whitespace(sep_result.tags["sep"]);
+                }
             }
         }
 
@@ -1229,8 +1267,8 @@ void analyze_tools::extract_argument_name_markers() {
             left_result.tags["pre"] == right_result.tags["pre"] &&
             left_result.tags["suffix"] == right_result.tags["suffix"]) {
             // Name is inside a structure (e.g., JSON key): prefix is the shared wrapper
-            arguments.name_prefix = trim_whitespace(left_result.tags["pre"]);
-            arguments.name_suffix = trim_leading_whitespace(left_result.tags["suffix"]);
+            arguments.name_prefix = left_result.tags["pre"];
+            arguments.name_suffix = left_result.tags["suffix"];
         } else if (diff.left.substr(0, ARG_FIRST.length()) == ARG_FIRST && diff.right.substr(0, ARG_SECOND.length()) == ARG_SECOND) {
             // Name is directly in the diff: prefix comes from last marker in diff.prefix
             auto pre_parser = build_tagged_peg_parser([&](common_peg_parser_builder & p) {
@@ -1315,8 +1353,7 @@ void analyze_tools::extract_argument_value_markers() {
                 value_suffix = value_suffix.substr(0, end_marker_pos);
             }
         }
-        value_suffix = trim_leading_whitespace(value_suffix);
-        if (!value_suffix.empty()) {
+        if (!trim_whitespace(value_suffix).empty()) {
             arguments.value_suffix = value_suffix;
         }
     }

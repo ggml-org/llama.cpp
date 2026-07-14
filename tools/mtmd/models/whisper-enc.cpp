@@ -1,7 +1,7 @@
 #include "models.h"
 
 ggml_cgraph * clip_graph_whisper_enc::build() {
-    const int n_frames = img.nx;
+    const int n_frames = img.nx();
     const int n_pos    = n_frames / 2;
     GGML_ASSERT(model.position_embeddings->ne[1] >= n_pos);
 

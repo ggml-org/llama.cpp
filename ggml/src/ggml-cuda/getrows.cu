@@ -42,7 +42,7 @@ static __global__ void k_get_rows(
 
 template<typename src0_t, typename dst_t>
 static __global__ void k_get_rows_float(
-        const src0_t * __restrict__ src0, const int32_t * __restrict__ src1, dst_t * __restrict__ dst,
+        const src0_t * src0_ptr, const int32_t * src1_ptr, dst_t * dst_ptr,
         const int64_t ne00, /*const int64_t ne01, const int64_t ne02, const int64_t ne03,*/
         /*const int64_t ne10,*/ const int64_t ne11, const uint3 ne12_fdv, /*const int64_t ne13,*/
         /*const size_t s0,*/ const size_t s1, const size_t s2, const size_t s3,
@@ -50,6 +50,9 @@ static __global__ void k_get_rows_float(
         const size_t s10, const size_t s11, const size_t s12/*, const size_t s13*/) {
 
     ggml_cuda_pdl_lc();
+    const src0_t  * GGML_CUDA_RESTRICT src0 = src0_ptr;
+    const int32_t * GGML_CUDA_RESTRICT src1 = src1_ptr;
+    dst_t         * GGML_CUDA_RESTRICT dst  = dst_ptr;
     ggml_cuda_pdl_sync();
     for (int64_t z = blockIdx.z; z < ne11*(int64_t)ne12_fdv.z; z += gridDim.z) {
         for (int64_t i00 = blockIdx.y*blockDim.x + threadIdx.x; i00 < ne00; i00 += gridDim.y*blockDim.x) {
@@ -75,26 +78,29 @@ static __global__ void k_get_rows_float(
 
 template<typename grad_t, typename dst_t>
 static __global__ void k_get_rows_back_float(
-        const grad_t * __restrict__ grad, const int32_t * __restrict__ rows, dst_t * __restrict__ dst, const int64_t ncols, const int64_t nrows_grad) {
+        const grad_t * __restrict__ grad, const int32_t * __restrict__ rows, dst_t * __restrict__ dst,
+        const int64_t ncols, const int64_t nrows_grad, const int64_t nrows_dst) {
     const int col = blockIdx.x*blockDim.x + threadIdx.x;
 
     if (col >= ncols) {
         return;
     }
 
-    const int dst_row = blockIdx.y*blockDim.y + threadIdx.y;
-
-    float sum = 0.0f;
-
     ggml_cuda_pdl_sync();
-    for (int64_t i = 0; i < nrows_grad; ++i) {
-        if (rows[i] != dst_row) {
-            continue;
-        }
-        sum += grad[i*ncols + col];
-    }
 
-    dst[dst_row*ncols + col] = sum;
+    // grid.y is clamped to the CUDA grid limit, so stride over the destination rows
+    for (int64_t dst_row = blockIdx.y; dst_row < nrows_dst; dst_row += gridDim.y) {
+        float sum = 0.0f;
+
+        for (int64_t i = 0; i < nrows_grad; ++i) {
+            if (rows[i] != dst_row) {
+                continue;
+            }
+            sum += grad[i*ncols + col];
+        }
+
+        dst[dst_row*ncols + col] = sum;
+    }
 }
 
 template<int qk, int qr, dequantize_kernel_t dq, typename dst_t>
@@ -299,7 +305,7 @@ void ggml_cuda_op_get_rows_back(ggml_backend_cuda_context & ctx, ggml_tensor * d
 
     const dim3 block_dims(CUDA_GET_ROWS_BACK_BLOCK_SIZE, 1, 1);
     const int block_num_x = (ne00 + CUDA_GET_ROWS_BACK_BLOCK_SIZE - 1) / CUDA_GET_ROWS_BACK_BLOCK_SIZE;
-    const dim3 block_nums(block_num_x, ne1, 1);
+    const dim3 block_nums(block_num_x, MIN(ne1, (int64_t)UINT16_MAX), 1);
 
-    k_get_rows_back_float<<<block_nums, block_dims, 0, stream>>>(src0_d, src1_d, dst_d, ne00, ne10);
+    k_get_rows_back_float<<<block_nums, block_dims, 0, stream>>>(src0_d, src1_d, dst_d, ne00, ne10, ne1);
 }

@@ -45,8 +45,15 @@ export default ts.config(
 		}
 	},
 	{
-		// Exclude Storybook files from main ESLint rules
-		ignores: ['.storybook/**/*']
+		// Exclude generated build output and Storybook files from ESLint
+		ignores: [
+			'dist/**',
+			'build/**',
+			'.svelte-kit/**',
+			'test-results/**',
+			'.storybook/**/*',
+			'src/lib/services/sandbox-worker.js'
+		]
 	},
 	storybook.configs['flat/recommended']
 );

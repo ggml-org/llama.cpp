@@ -1,12 +1,14 @@
 #pragma once
 
 #include "common.h"
+#include "download.h"
 
 #include <set>
 #include <map>
 #include <string>
 #include <vector>
 #include <cstring>
+#include <memory>
 
 // pseudo-env variable to identify preset-only arguments
 #define COMMON_ARG_PRESET_LOAD_ON_STARTUP "__PRESET_LOAD_ON_STARTUP"
@@ -129,8 +131,21 @@ bool common_params_to_map(int argc, char ** argv, llama_example ex, std::map<com
 // see: https://github.com/ggml-org/llama.cpp/issues/18163
 void common_params_add_preset_options(std::vector<common_arg> & args);
 
-// Populate model paths (main model, mmproj, etc) from -hf if necessary
-void common_params_handle_models(common_params & params, llama_example curr_ex);
+struct common_models_handler {
+    common_download_hf_plan plan;
+    common_download_hf_plan plan_spec;
+    common_download_hf_plan plan_voc;
+    common_download_opts opts;
+};
+
+// initialize downloading opts and hf_plan if needed, but does not download anything yet
+common_models_handler common_models_handler_init(const common_params & params, llama_example curr_ex);
+
+// check if the model is a preset repo (i.e. has a preset file)
+bool common_models_handler_is_preset_repo(const common_models_handler & handler);
+
+// download and update params with the downloaded model path
+void common_models_handler_apply(common_models_handler & handler, common_params & params, common_download_callback * callback = nullptr);
 
 // initialize argument parser context - used by test-arg-parser and preset
 common_params_context common_params_parser_init(common_params & params, llama_example ex, void(*print_usage)(int, char **) = nullptr);

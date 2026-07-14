@@ -3,7 +3,11 @@
  */
 
 import { base } from '$app/paths';
-import { CORS_PROXY_ENDPOINT, CORS_PROXY_URL_PARAM } from '$lib/constants';
+import {
+	CORS_PROXY_ENDPOINT,
+	CORS_PROXY_HEADER_PREFIX,
+	CORS_PROXY_URL_PARAM
+} from '$lib/constants';
 
 /**
  * Build a proxied URL that routes through llama-server's CORS proxy.
@@ -28,7 +32,7 @@ export function buildProxiedHeaders(headers: Record<string, string>): Record<str
 	const proxiedHeaders: Record<string, string> = {};
 
 	for (const [key, value] of Object.entries(headers)) {
-		proxiedHeaders[`x-proxy-header-${key}`] = value;
+		proxiedHeaders[`${CORS_PROXY_HEADER_PREFIX}${key}`] = value;
 	}
 
 	return proxiedHeaders;

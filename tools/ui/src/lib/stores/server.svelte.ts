@@ -1,5 +1,8 @@
 import { PropsService } from '$lib/services/props.service';
 import { ServerRole } from '$lib/enums';
+import { ApiError } from '$lib/utils/api-fetch';
+
+const LOADING_RETRY_INTERVAL_MS = 1000;
 
 /**
  * serverStore - Server connection state, configuration, and role detection
@@ -29,8 +32,10 @@ class ServerStore {
 	props = $state<ApiLlamaCppServerProps | null>(null);
 	loading = $state(false);
 	error = $state<string | null>(null);
+	status = $state<number | null>(null);
 	role = $state<ServerRole | null>(null);
 	private fetchPromise: Promise<void> | null = null;
+	private retryTimer: ReturnType<typeof setTimeout> | null = null;
 
 	/**
 	 *
@@ -70,23 +75,43 @@ class ServerStore {
 	 *
 	 */
 
-	async fetch(): Promise<void> {
+	/**
+	 * @param background - Set by the automatic "still loading" poll. Skips the
+	 * `loading` flag flip so the UI doesn't bounce between the full loading
+	 * splash and the chat screen every retry tick.
+	 */
+	async fetch({ background = false }: { background?: boolean } = {}): Promise<void> {
 		if (this.fetchPromise) return this.fetchPromise;
 
-		this.loading = true;
-		this.error = null;
+		this.clearRetryTimer();
+		if (!background) {
+			this.loading = true;
+		}
+		// Don't clear an existing "still loading" error before a retry -
+		// doing so would unmount/remount the error banner every second.
+		if (this.status !== 503) {
+			this.error = null;
+		}
 
 		const fetchPromise = (async () => {
 			try {
 				const props = await PropsService.fetch();
 				this.props = props;
 				this.error = null;
+				this.status = null;
 				this.detectRole(props);
-			} catch (error) {
-				this.error = this.getErrorMessage(error);
+			} catch (error: unknown) {
+				this.error = error instanceof Error ? error.message : String(error);
+				this.status = error instanceof ApiError ? error.status : null;
 				console.error('Error fetching server properties:', error);
+
+				if (this.status === 503) {
+					this.scheduleRetry();
+				}
 			} finally {
-				this.loading = false;
+				if (!background) {
+					this.loading = false;
+				}
 				this.fetchPromise = null;
 			}
 		})();
@@ -95,38 +120,29 @@ class ServerStore {
 		await fetchPromise;
 	}
 
-	private getErrorMessage(error: unknown): string {
-		if (error instanceof Error) {
-			const message = error.message || '';
-
-			if (error.name === 'TypeError' && message.includes('fetch')) {
-				return 'Server is not running or unreachable';
-			} else if (message.includes('ECONNREFUSED')) {
-				return 'Connection refused - server may be offline';
-			} else if (message.includes('ENOTFOUND')) {
-				return 'Server not found - check server address';
-			} else if (message.includes('ETIMEDOUT')) {
-				return 'Request timed out';
-			} else if (message.includes('503')) {
-				return 'Server temporarily unavailable';
-			} else if (message.includes('500')) {
-				return 'Server error - check server logs';
-			} else if (message.includes('404')) {
-				return 'Server endpoint not found';
-			} else if (message.includes('403') || message.includes('401')) {
-				return 'Access denied';
-			}
-		}
-
-		return 'Failed to connect to server';
-	}
-
 	clear(): void {
+		this.clearRetryTimer();
 		this.props = null;
 		this.error = null;
+		this.status = null;
 		this.loading = false;
 		this.role = null;
 		this.fetchPromise = null;
+	}
+
+	private scheduleRetry(): void {
+		if (this.retryTimer) return;
+		this.retryTimer = setTimeout(() => {
+			this.retryTimer = null;
+			this.fetch({ background: true });
+		}, LOADING_RETRY_INTERVAL_MS);
+	}
+
+	private clearRetryTimer(): void {
+		if (this.retryTimer) {
+			clearTimeout(this.retryTimer);
+			this.retryTimer = null;
+		}
 	}
 
 	/**
@@ -151,6 +167,7 @@ export const serverStore = new ServerStore();
 export const serverProps = () => serverStore.props;
 export const serverLoading = () => serverStore.loading;
 export const serverError = () => serverStore.error;
+export const serverStatus = () => serverStore.status;
 export const serverRole = () => serverStore.role;
 export const defaultParams = () => serverStore.defaultParams;
 export const contextSize = () => serverStore.contextSize;

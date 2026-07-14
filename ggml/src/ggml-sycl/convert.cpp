@@ -108,6 +108,19 @@ static void dequantize_row_q3_K_sycl(const void *vx, dst_t *y, const int64_t k,
 }
 
 template <typename dst_t>
+static void dequantize_row_q3_K_sycl_reorder(const void *vx, dst_t *y, const int64_t k,
+                                             dpct::queue_ptr stream) {
+    const int64_t nb = k / QK_K;
+
+    dpct::has_capability_or_fail(stream->get_device(), { sycl::aspect::fp16 });
+    stream->parallel_for(
+        sycl::nd_range<3>(sycl::range<3>(1, 1, nb) * sycl::range<3>(1, 1, 64), sycl::range<3>(1, 1, 64)),
+        [=](sycl::nd_item<3> item_ct1) {
+            dequantize_block_q3_K_reorder(vx, y, item_ct1, nb);
+        });
+}
+
+template <typename dst_t>
 static void dequantize_row_q4_0_sycl(const void *vx, dst_t *y, const int64_t k,
                                      dpct::queue_ptr stream) {
     const int64_t nb32 = k / 32;
@@ -629,6 +642,8 @@ static void convert_unary_sycl(const void * vx, dst_t * y, const int64_t k, dpct
 
 to_fp16_sycl_t ggml_get_to_fp16_sycl(ggml_type type, ggml_tensor * dst) {
     switch (type) {
+        case GGML_TYPE_Q1_0:
+            return dequantize_block_sycl<QK1_0, QR1_0, dequantize_q1_0>;
         case GGML_TYPE_Q4_0:
             if (dst->src[0]->extra &&
                 ((ggml_tensor_extra_gpu*)dst->src[0]->extra)->optimized_feature.reorder) {
@@ -652,7 +667,11 @@ to_fp16_sycl_t ggml_get_to_fp16_sycl(ggml_type type, ggml_tensor * dst) {
         case GGML_TYPE_Q2_K:
             return dequantize_row_q2_K_sycl;
         case GGML_TYPE_Q3_K:
-            return dequantize_row_q3_K_sycl;
+            if (dst->src[0]->extra && ((ggml_tensor_extra_gpu *) dst->src[0]->extra)->optimized_feature.reorder) {
+                return dequantize_row_q3_K_sycl_reorder;
+            } else {
+                return dequantize_row_q3_K_sycl;
+            }
         case GGML_TYPE_Q4_K:
             if (dst->src[0]->extra && ((ggml_tensor_extra_gpu *) dst->src[0]->extra)->optimized_feature.reorder) {
                 return dequantize_row_q4_K_sycl_reorder;
@@ -707,6 +726,8 @@ to_fp16_sycl_t ggml_get_to_fp16_sycl(ggml_type type, ggml_tensor * dst) {
 
 to_fp32_sycl_t ggml_get_to_fp32_sycl(ggml_type type, ggml_tensor *dst) {
     switch (type) {
+        case GGML_TYPE_Q1_0:
+            return dequantize_block_sycl<QK1_0, QR1_0, dequantize_q1_0>;
         case GGML_TYPE_Q4_0:
             if (dst->src[0]->extra &&
                 ((ggml_tensor_extra_gpu*)dst->src[0]->extra)->optimized_feature.reorder) {
@@ -730,7 +751,11 @@ to_fp32_sycl_t ggml_get_to_fp32_sycl(ggml_type type, ggml_tensor *dst) {
         case GGML_TYPE_Q2_K:
             return dequantize_row_q2_K_sycl;
         case GGML_TYPE_Q3_K:
-            return dequantize_row_q3_K_sycl;
+            if (dst->src[0]->extra && ((ggml_tensor_extra_gpu *) dst->src[0]->extra)->optimized_feature.reorder) {
+                return dequantize_row_q3_K_sycl_reorder;
+            } else {
+                return dequantize_row_q3_K_sycl;
+            }
         case GGML_TYPE_Q4_K:
             if (dst->src[0]->extra &&
                 ((ggml_tensor_extra_gpu*)dst->src[0]->extra)->optimized_feature.reorder) {
@@ -809,6 +834,8 @@ to_fp16_nc_sycl_t ggml_get_to_fp16_nc_sycl(ggml_type type) {
         case GGML_TYPE_BF16:
             return convert_unary_nc_sycl<sycl::ext::oneapi::bfloat16>;
 #endif
+        case GGML_TYPE_Q1_0:
+            return dequantize_block_nc_sycl<QK1_0, QR1_0, dequantize_q1_0>;
         case GGML_TYPE_Q4_0:
             return dequantize_block_nc_sycl<QK4_0, QR4_0, dequantize_q4_0>;
         case GGML_TYPE_Q4_1:

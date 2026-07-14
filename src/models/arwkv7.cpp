@@ -10,7 +10,7 @@ void llama_model_arwkv7::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_GATE_LORA_RANK,               hparams.n_lora_gate, false);
     ml.get_key(LLM_KV_TOKEN_SHIFT_COUNT,                      hparams.token_shift_count, false);
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 12:
             switch (hparams.n_embd) {
                 case 768: type = LLM_TYPE_190M; break;

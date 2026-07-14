@@ -1,6 +1,7 @@
 import { base } from '$app/paths';
 import { getJsonHeaders, getAuthHeaders } from './api-headers';
 import { UrlProtocol } from '$lib/enums';
+import { ERROR_MESSAGES, HTTP_CODE_TO_STRING } from '$lib/constants/error';
 
 /**
  * API Fetch Utilities
@@ -10,6 +11,21 @@ import { UrlProtocol } from '$lib/enums';
  * - Error handling with proper error messages
  * - Base path resolution
  */
+
+/**
+ * Error thrown when an API request fails, carrying the HTTP status code
+ * so callers can distinguish e.g. a 503 "still loading" response from a
+ * genuine failure.
+ */
+export class ApiError extends Error {
+	status: number;
+
+	constructor(message: string, status: number) {
+		super(message);
+		this.name = 'ApiError';
+		this.status = status;
+	}
+}
 
 export interface ApiFetchOptions extends Omit<RequestInit, 'headers'> {
 	/**
@@ -54,14 +70,19 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
 			? path
 			: `${base}${path}`;
 
-	const response = await fetch(url, {
-		...fetchOptions,
-		headers
-	});
+	let response;
+	try {
+		response = await fetch(url, {
+			...fetchOptions,
+			headers
+		});
+	} catch (e) {
+		throw new Error(beautifyNetworkError(e));
+	}
 
 	if (!response.ok) {
 		const errorMessage = await parseErrorMessage(response);
-		throw new Error(errorMessage);
+		throw new ApiError(errorMessage, response.status);
 	}
 
 	return response.json() as Promise<T>;
@@ -101,14 +122,19 @@ export async function apiFetchWithParams<T>(
 	const baseHeaders = authOnly ? getAuthHeaders() : getJsonHeaders();
 	const headers = { ...baseHeaders, ...customHeaders };
 
-	const response = await fetch(url.toString(), {
-		...fetchOptions,
-		headers
-	});
+	let response;
+	try {
+		response = await fetch(url.toString(), {
+			...fetchOptions,
+			headers
+		});
+	} catch (e) {
+		throw new Error(beautifyNetworkError(e));
+	}
 
 	if (!response.ok) {
 		const errorMessage = await parseErrorMessage(response);
-		throw new Error(errorMessage);
+		throw new ApiError(errorMessage, response.status);
 	}
 
 	return response.json() as Promise<T>;
@@ -154,5 +180,37 @@ async function parseErrorMessage(response: Response): Promise<string> {
 		// JSON parsing failed, use status text
 	}
 
-	return `Request failed: ${response.status} ${response.statusText}`;
+	const httpErrorStr = HTTP_CODE_TO_STRING[response.status];
+	if (httpErrorStr) {
+		return httpErrorStr;
+	}
+
+	return `${ERROR_MESSAGES.HTTP.GENERIC}: ${response.status} ${response.statusText}`;
+}
+
+/**
+ * Converts a network issue into a human-readable message.
+ * @param throwable - The throwable raised during fetch operation
+ * @returns Error in an human-readable format
+ */
+function beautifyNetworkError(throwable: unknown): string {
+	let message;
+	if (throwable instanceof Error) {
+		message = throwable.message;
+		if (throwable.name === 'TypeError' && message.includes('fetch')) {
+			return ERROR_MESSAGES.NETWORK.UNREACHABLE;
+		}
+	} else {
+		message = String(throwable);
+	}
+
+	if (message.includes('ECONNREFUSED')) {
+		return ERROR_MESSAGES.NETWORK.REFUSED;
+	} else if (message.includes('ENOTFOUND')) {
+		return ERROR_MESSAGES.NETWORK.NXDOMAIN;
+	} else if (message.includes('ETIMEDOUT')) {
+		return ERROR_MESSAGES.NETWORK.TIMEOUT;
+	}
+
+	return `${ERROR_MESSAGES.NETWORK.GENERIC} (${message})`;
 }

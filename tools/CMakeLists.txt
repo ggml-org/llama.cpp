@@ -33,8 +33,8 @@ else()
     if (GGML_RPC)
         add_subdirectory(rpc)
     endif()
-    if (NOT GGML_BACKEND_DL)
-        # these examples use the backends directly and cannot be built with dynamic loading
+    if (NOT GGML_BACKEND_DL AND GGML_CPU)
+        # these tools use backends directly (no dynamic loading) and depend on CPU backend symbols
         add_subdirectory(cvector-generator)
         add_subdirectory(export-lora)
     endif()

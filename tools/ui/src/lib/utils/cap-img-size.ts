@@ -1,11 +1,19 @@
 import { MEGAPIXELS_TO_PIXELS } from '$lib/constants/image-size';
 import { BASE64_IMAGE_URI_REGEX } from '$lib/constants/uri-template';
+import { getJpegOrientationFromDataURL, isJpegMimeType } from './jpeg-orientation';
 import { MimeTypeImage } from '$lib/enums';
 
 /**
  * Converts an Image base64 data URL to another Image data URL with capped dimensions to reduce file size.
+ *
+ * For JPEGs the EXIF orientation is baked into the pixels in the same canvas
+ * pass, the browser applies the rotation when decoding so naturalWidth and
+ * naturalHeight already describe the upright image. Backends decoding with
+ * stb_image ignore EXIF, see ggml-org/llama.cpp#20870. Images that need
+ * neither capping nor rotation pass through untouched, so at most one
+ * re-encode ever happens.
  * @param base64UrlImage - The Image base64 data URL to convert
- * @param maxMegapixels - The maximum image size in megapixels for the output Image
+ * @param maxMegapixels - The maximum image size in megapixels for the output Image, 0 disables capping
  * @returns Promise resolving to Image data URL
  */
 export function capImageDataURLSize(
@@ -25,6 +33,10 @@ export function capImageDataURLSize(
 			if (!Object.values(MimeTypeImage).includes(mimeType)) {
 				return reject(new Error(`Unsupported image MIME type: ${mimeType}`));
 			}
+
+			const orientation = isJpegMimeType(mimeType)
+				? getJpegOrientationFromDataURL(base64UrlImage)
+				: 1;
 
 			const img = new Image();
 
@@ -46,6 +58,10 @@ export function capImageDataURLSize(
 						const scaleFactor = Math.sqrt(maxPixels / totalPixels);
 						canvas.width = Math.floor(targetWidth * scaleFactor);
 						canvas.height = Math.floor(targetHeight * scaleFactor);
+					} else if (orientation > 1) {
+						// No capping needed but the pixels still need the rotation baked in
+						canvas.width = targetWidth;
+						canvas.height = targetHeight;
 					} else {
 						return resolve(base64UrlImage);
 					}

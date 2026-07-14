@@ -25,7 +25,7 @@ The convert script reads the model configuration, tokenizer, tensor names+data a
 
 The required steps to implement for an HF model are:
 
-1. Define the model `ModelBase.register` annotation in a new `TextModel` or `MmprojModel` subclass, example:
+1. Define the model `ModelBase.register` annotation in a new `TextModel` or `MmprojModel` subclass in the [conversion](/conversion) folder, example:
 
 ```python
 @ModelBase.register("MyModelForCausalLM")
@@ -98,7 +98,7 @@ The model params and tensors layout must be defined in `llama.cpp` source files:
 1. Define a new `llm_arch` enum value in `src/llama-arch.h`.
 2. In `src/llama-arch.cpp`:
     - Add the architecture name to the `LLM_ARCH_NAMES` map.
-    - Add the list of model tensors to `llm_get_tensor_names` (you may also need to update `LLM_TENSOR_NAMES`)
+    - You may also need to update `LLM_KV_NAMES`, `LLM_TENSOR_NAMES` and `LLM_TENSOR_INFOS`
 3. Add any non-standard metadata loading in the `llama_model_loader` constructor in `src/llama-model-loader.cpp`.
 4. If the model has a RoPE operation, add a case for the architecture in `llama_model_rope_type` function in `src/llama-model.cpp`.
 
@@ -106,10 +106,11 @@ NOTE: The dimensions in `ggml` are typically in the reverse order of the `pytorc
 
 ### 3. Build the GGML graph implementation
 
-This is the funniest part, you have to provide the inference graph implementation of the new model architecture in `src/llama-model.cpp`.
-Create a new struct that inherits from `llm_graph_context` and implement the graph-building logic in its constructor.
-Have a look at existing implementations like `llm_build_llama`, `llm_build_dbrx` or `llm_build_bert`.
-Then, in the `llama_model::build_graph` method, add a case for your architecture to instantiate your new graph-building struct.
+This is the funniest part, you have to provide the inference graph implementation of the new model architecture in `src/llama-model.cpp`:
+1. Create a new struct that inherits from `llama_model_base`.
+2. Implement the graph-building logic in its `build_arch_graph` method.
+3. The `build_arch_graph` method should return a constructed graph (inherited from `llm_graph_context`). Have a look at existing implementations like `llama_model_llama`, `llama_model_dbrx` or `llama_model_bert`.
+4. Then, in the `llama_model_mapping` function, add a case for your architecture to instantiate your new graph-building struct.
 
 Some `ggml` backends do not support all operations. Backend implementations can be added in a separate PR.
 

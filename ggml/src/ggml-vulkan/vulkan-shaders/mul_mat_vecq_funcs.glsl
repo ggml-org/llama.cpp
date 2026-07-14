@@ -212,28 +212,40 @@ i32vec4 repack4(uint ib, uint iqs) {
     const uint qs_shift = ((iqs_k % 32) / 8) * 2;
     const uint hm_shift = iqs_k / 8;
 
-    // bitwise OR to add 4 if hmask is set, subtract later
-    const i8vec2 vals00 = unpack8(int16_t((data_a_packed16[ib_k].qs[qs_idx  * 2    ] >> qs_shift) & uint16_t(0x0303))) |
-                          unpack8(int16_t(((data_a_packed16[ib_k].hmask[iqs * 2    ] >> hm_shift) & uint16_t(0x0101)) << 2));
-    const i8vec2 vals01 = unpack8(int16_t((data_a_packed16[ib_k].qs[qs_idx  * 2 + 1] >> qs_shift) & uint16_t(0x0303))) |
-                          unpack8(int16_t(((data_a_packed16[ib_k].hmask[iqs * 2 + 1] >> hm_shift) & uint16_t(0x0101)) << 2));
-    const i8vec2 vals10 = unpack8(int16_t((data_a_packed16[ib_k].qs[qs_idx  * 2 + 2] >> qs_shift) & uint16_t(0x0303))) |
-                          unpack8(int16_t(((data_a_packed16[ib_k].hmask[iqs * 2 + 2] >> hm_shift) & uint16_t(0x0101)) << 2));
-    const i8vec2 vals11 = unpack8(int16_t((data_a_packed16[ib_k].qs[qs_idx  * 2 + 3] >> qs_shift) & uint16_t(0x0303))) |
-                          unpack8(int16_t(((data_a_packed16[ib_k].hmask[iqs * 2 + 3] >> hm_shift) & uint16_t(0x0101)) << 2));
-    const i8vec2 vals20 = unpack8(int16_t((data_a_packed16[ib_k].qs[qs_idx  * 2 + 4] >> qs_shift) & uint16_t(0x0303))) |
-                          unpack8(int16_t(((data_a_packed16[ib_k].hmask[iqs * 2 + 4] >> hm_shift) & uint16_t(0x0101)) << 2));
-    const i8vec2 vals21 = unpack8(int16_t((data_a_packed16[ib_k].qs[qs_idx  * 2 + 5] >> qs_shift) & uint16_t(0x0303))) |
-                          unpack8(int16_t(((data_a_packed16[ib_k].hmask[iqs * 2 + 5] >> hm_shift) & uint16_t(0x0101)) << 2));
-    const i8vec2 vals30 = unpack8(int16_t((data_a_packed16[ib_k].qs[qs_idx  * 2 + 6] >> qs_shift) & uint16_t(0x0303))) |
-                          unpack8(int16_t(((data_a_packed16[ib_k].hmask[iqs * 2 + 6] >> hm_shift) & uint16_t(0x0101)) << 2));
-    const i8vec2 vals31 = unpack8(int16_t((data_a_packed16[ib_k].qs[qs_idx  * 2 + 7] >> qs_shift) & uint16_t(0x0303))) |
-                          unpack8(int16_t(((data_a_packed16[ib_k].hmask[iqs * 2 + 7] >> hm_shift) & uint16_t(0x0101)) << 2));
+    const uvec4 qs = uvec4( uint32_t(data_a_packed16[ib_k].qs[qs_idx * 2    ]) |
+                           (uint32_t(data_a_packed16[ib_k].qs[qs_idx * 2 + 1]) << 16),
+                            uint32_t(data_a_packed16[ib_k].qs[qs_idx * 2 + 2]) |
+                           (uint32_t(data_a_packed16[ib_k].qs[qs_idx * 2 + 3]) << 16),
+                            uint32_t(data_a_packed16[ib_k].qs[qs_idx * 2 + 4]) |
+                           (uint32_t(data_a_packed16[ib_k].qs[qs_idx * 2 + 5]) << 16),
+                            uint32_t(data_a_packed16[ib_k].qs[qs_idx * 2 + 6]) |
+                           (uint32_t(data_a_packed16[ib_k].qs[qs_idx * 2 + 7]) << 16));
 
-    return i32vec4(pack32(i8vec4(vals00.x, vals00.y, vals01.x, vals01.y) - int8_t(4)),
-                   pack32(i8vec4(vals10.x, vals10.y, vals11.x, vals11.y) - int8_t(4)),
-                   pack32(i8vec4(vals20.x, vals20.y, vals21.x, vals21.y) - int8_t(4)),
-                   pack32(i8vec4(vals30.x, vals30.y, vals31.x, vals31.y) - int8_t(4)));
+    const uvec4 hmask = uvec4( uint32_t(data_a_packed16[ib_k].hmask[iqs * 2    ]) |
+                              (uint32_t(data_a_packed16[ib_k].hmask[iqs * 2 + 1]) << 16),
+                               uint32_t(data_a_packed16[ib_k].hmask[iqs * 2 + 2]) |
+                              (uint32_t(data_a_packed16[ib_k].hmask[iqs * 2 + 3]) << 16),
+                               uint32_t(data_a_packed16[ib_k].hmask[iqs * 2 + 4]) |
+                              (uint32_t(data_a_packed16[ib_k].hmask[iqs * 2 + 5]) << 16),
+                               uint32_t(data_a_packed16[ib_k].hmask[iqs * 2 + 6]) |
+                              (uint32_t(data_a_packed16[ib_k].hmask[iqs * 2 + 7]) << 16));
+
+    // bitwise OR to add 4 if hmask is set, subtract later
+    const uint vals0 = ((    qs.x >> qs_shift) & 0x03030303) |
+                       (((hmask.x >> hm_shift) & 0x01010101) << 2);
+    const uint vals1 = ((    qs.y >> qs_shift) & 0x03030303) |
+                       (((hmask.y >> hm_shift) & 0x01010101) << 2);
+    const uint vals2 = ((    qs.z >> qs_shift) & 0x03030303) |
+                       (((hmask.z >> hm_shift) & 0x01010101) << 2);
+    const uint vals3 = ((    qs.w >> qs_shift) & 0x03030303) |
+                       (((hmask.w >> hm_shift) & 0x01010101) << 2);
+
+    // Subtract 4 by twiddling bits rather than using re-packing as mesa
+    // compiles repacking poorly.
+    return i32vec4(int32_t(((vals0 ^ 0x80808080) - 0x04040404) ^ 0x80808080),
+                   int32_t(((vals1 ^ 0x80808080) - 0x04040404) ^ 0x80808080),
+                   int32_t(((vals2 ^ 0x80808080) - 0x04040404) ^ 0x80808080),
+                   int32_t(((vals3 ^ 0x80808080) - 0x04040404) ^ 0x80808080));
 }
 
 float get_d_scale(uint ib, uint iqs) {
@@ -343,27 +355,39 @@ i32vec4 repack4(uint ib, uint iqs) {
     const uint qh_idx = (iqs_k / 32) * 8 + iqs;
     const uint qh_shift = ((iqs_k % 32) / 8) * 2;
 
-    const i8vec2 vals00 = (unpack8(int16_t((data_a_packed16[ib_k].ql[ql_idx * 2    ] >> ql_shift) & uint16_t(0x0F0F))) |
-                          unpack8(int16_t(((data_a_packed16[ib_k].qh[qh_idx * 2    ] >> qh_shift) & uint16_t(0x0303)) << 4))) - int8_t(32);
-    const i8vec2 vals01 = (unpack8(int16_t((data_a_packed16[ib_k].ql[ql_idx * 2 + 1] >> ql_shift) & uint16_t(0x0F0F))) |
-                          unpack8(int16_t(((data_a_packed16[ib_k].qh[qh_idx * 2 + 1] >> qh_shift) & uint16_t(0x0303)) << 4))) - int8_t(32);
-    const i8vec2 vals10 = (unpack8(int16_t((data_a_packed16[ib_k].ql[ql_idx * 2 + 2] >> ql_shift) & uint16_t(0x0F0F))) |
-                          unpack8(int16_t(((data_a_packed16[ib_k].qh[qh_idx * 2 + 2] >> qh_shift) & uint16_t(0x0303)) << 4))) - int8_t(32);
-    const i8vec2 vals11 = (unpack8(int16_t((data_a_packed16[ib_k].ql[ql_idx * 2 + 3] >> ql_shift) & uint16_t(0x0F0F))) |
-                          unpack8(int16_t(((data_a_packed16[ib_k].qh[qh_idx * 2 + 3] >> qh_shift) & uint16_t(0x0303)) << 4))) - int8_t(32);
-    const i8vec2 vals20 = (unpack8(int16_t((data_a_packed16[ib_k].ql[ql_idx * 2 + 4] >> ql_shift) & uint16_t(0x0F0F))) |
-                          unpack8(int16_t(((data_a_packed16[ib_k].qh[qh_idx * 2 + 4] >> qh_shift) & uint16_t(0x0303)) << 4))) - int8_t(32);
-    const i8vec2 vals21 = (unpack8(int16_t((data_a_packed16[ib_k].ql[ql_idx * 2 + 5] >> ql_shift) & uint16_t(0x0F0F))) |
-                          unpack8(int16_t(((data_a_packed16[ib_k].qh[qh_idx * 2 + 5] >> qh_shift) & uint16_t(0x0303)) << 4))) - int8_t(32);
-    const i8vec2 vals30 = (unpack8(int16_t((data_a_packed16[ib_k].ql[ql_idx * 2 + 6] >> ql_shift) & uint16_t(0x0F0F))) |
-                          unpack8(int16_t(((data_a_packed16[ib_k].qh[qh_idx * 2 + 6] >> qh_shift) & uint16_t(0x0303)) << 4))) - int8_t(32);
-    const i8vec2 vals31 = (unpack8(int16_t((data_a_packed16[ib_k].ql[ql_idx * 2 + 7] >> ql_shift) & uint16_t(0x0F0F))) |
-                          unpack8(int16_t(((data_a_packed16[ib_k].qh[qh_idx * 2 + 7] >> qh_shift) & uint16_t(0x0303)) << 4))) - int8_t(32);
+    const uvec4 ql = uvec4( uint32_t(data_a_packed16[ib_k].ql[ql_idx * 2    ]) |
+                           (uint32_t(data_a_packed16[ib_k].ql[ql_idx * 2 + 1]) << 16),
+                            uint32_t(data_a_packed16[ib_k].ql[ql_idx * 2 + 2]) |
+                           (uint32_t(data_a_packed16[ib_k].ql[ql_idx * 2 + 3]) << 16),
+                            uint32_t(data_a_packed16[ib_k].ql[ql_idx * 2 + 4]) |
+                           (uint32_t(data_a_packed16[ib_k].ql[ql_idx * 2 + 5]) << 16),
+                            uint32_t(data_a_packed16[ib_k].ql[ql_idx * 2 + 6]) |
+                           (uint32_t(data_a_packed16[ib_k].ql[ql_idx * 2 + 7]) << 16));
 
-    return i32vec4(pack32(i8vec4(vals00.x, vals00.y, vals01.x, vals01.y)),
-                   pack32(i8vec4(vals10.x, vals10.y, vals11.x, vals11.y)),
-                   pack32(i8vec4(vals20.x, vals20.y, vals21.x, vals21.y)),
-                   pack32(i8vec4(vals30.x, vals30.y, vals31.x, vals31.y)));
+    const uvec4 qh = uvec4( uint32_t(data_a_packed16[ib_k].qh[qh_idx * 2    ]) |
+                           (uint32_t(data_a_packed16[ib_k].qh[qh_idx * 2 + 1]) << 16),
+                            uint32_t(data_a_packed16[ib_k].qh[qh_idx * 2 + 2]) |
+                           (uint32_t(data_a_packed16[ib_k].qh[qh_idx * 2 + 3]) << 16),
+                            uint32_t(data_a_packed16[ib_k].qh[qh_idx * 2 + 4]) |
+                           (uint32_t(data_a_packed16[ib_k].qh[qh_idx * 2 + 5]) << 16),
+                            uint32_t(data_a_packed16[ib_k].qh[qh_idx * 2 + 6]) |
+                           (uint32_t(data_a_packed16[ib_k].qh[qh_idx * 2 + 7]) << 16));
+
+    const uint vals0 = (( ql.x >> ql_shift) & 0x0F0F0F0F) |
+                       (((qh.x >> qh_shift) & 0x03030303) << 4);
+    const uint vals1 = (( ql.y >> ql_shift) & 0x0F0F0F0F) |
+                       (((qh.y >> qh_shift) & 0x03030303) << 4);
+    const uint vals2 = (( ql.z >> ql_shift) & 0x0F0F0F0F) |
+                       (((qh.z >> qh_shift) & 0x03030303) << 4);
+    const uint vals3 = (( ql.w >> ql_shift) & 0x0F0F0F0F) |
+                       (((qh.w >> qh_shift) & 0x03030303) << 4);
+
+    // Subtract 32 by twiddling bits rather than using re-packing as mesa
+    // compiles repacking poorly.
+    return i32vec4(int32_t(((vals0 ^ 0x80808080) - 0x20202020) ^ 0x80808080),
+                   int32_t(((vals1 ^ 0x80808080) - 0x20202020) ^ 0x80808080),
+                   int32_t(((vals2 ^ 0x80808080) - 0x20202020) ^ 0x80808080),
+                   int32_t(((vals3 ^ 0x80808080) - 0x20202020) ^ 0x80808080));
 }
 
 float get_d_scale(uint ib, uint iqs) {

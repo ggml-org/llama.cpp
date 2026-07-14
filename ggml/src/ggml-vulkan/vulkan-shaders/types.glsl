@@ -7,6 +7,11 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
 #extension GL_EXT_shader_16bit_storage : require
 
+#ifdef USE_OCP_FP4
+#extension GL_EXT_float_e2m1 : require
+#extension GL_EXT_float_e4m3 : require
+#endif
+
 #if defined(DATA_A_F32)
 #define QUANT_K 1
 #define QUANT_R 1
@@ -598,9 +603,10 @@ const uint[1024] iq1s_grid_const = {
     0x55dd55df, 0x55d555d7, 0x5503550c, 0x557f5501, 0x5577557d, 0x55405575, 0x555d555f, 0x55555557
 };
 
+#if defined(NEEDS_IQ1S_GRID_GPU)
 // Same content as iq1s_grid_const except each 2-bit value is expanded to 4-bit
 // and has 1 added to it (allows packed values to be extracted with & 0x0F0F0F0F
-// and 0xF0F0F0F0).
+// and 0xF0F0F0F0). This is only used by the q8_1/int-dot vector path.
 const uint32_t[2048] iq1s_grid_gpu_const = {
     0x00000000, 0x00000002, 0x00000101, 0x00000200, 0x00000202, 0x00010001, 0x00010101, 0x00020000,
     0x00020002, 0x00020200, 0x00020202, 0x01000101, 0x01010001, 0x01010100, 0x01010102, 0x01020101,
@@ -859,9 +865,12 @@ const uint32_t[2048] iq1s_grid_gpu_const = {
     0x20222020, 0x20222022, 0x20222220, 0x20222222, 0x21212021, 0x21212120, 0x21212122, 0x22202020,
     0x22202022, 0x22202220, 0x22202222, 0x22212121, 0x22222020, 0x22222022, 0x22222220, 0x22222222,
 };
+#endif
 
 shared uint16_t iq1s_grid[2048];
+#if defined(NEEDS_IQ1S_GRID_GPU)
 shared uint32_t iq1s_grid_gpu[2048];
+#endif
 
 #define NEEDS_INIT_IQ_SHMEM
 void init_iq_shmem(uvec3 wgsize)
@@ -875,12 +884,14 @@ void init_iq_shmem(uvec3 wgsize)
             iq1s_grid[2*idx+1] = g.y;
         }
     }
+#if defined(NEEDS_IQ1S_GRID_GPU)
     [[unroll]] for (uint i = 0; i < iq1s_grid_gpu_const.length(); i += wgsize.x) {
         uint idx = i + gl_LocalInvocationIndex.x;
         if (iq1s_grid_gpu_const.length() % wgsize.x == 0 || idx < iq1s_grid_gpu_const.length()) {
             iq1s_grid_gpu[idx] = iq1s_grid_gpu_const[idx];
         }
     }
+#endif
     barrier();
 }
 #endif
@@ -1724,6 +1735,12 @@ struct block_nvfp4
     uint8_t qs[QUANT_K_NVFP4 / 2];
 };
 
+struct block_nvfp4_packed16
+{
+    uint16_t d[QUANT_K_NVFP4 / 16 / 2];
+    uint16_t qs[QUANT_K_NVFP4 / 2 / 2];
+};
+
 struct block_nvfp4_packed32
 {
     uint32_t d[QUANT_K_NVFP4 / 16 / 4];
@@ -1735,6 +1752,7 @@ struct block_nvfp4_packed32
 #define QUANT_R QUANT_R_NVFP4
 #define QUANT_AUXF 1
 #define A_TYPE block_nvfp4
+#define A_TYPE_PACKED16 block_nvfp4_packed16
 #define A_TYPE_PACKED32 block_nvfp4_packed32
 #endif
 
@@ -1758,14 +1776,16 @@ void init_iq_shmem(uvec3 wgsize)
 #endif
 
 #if defined(DATA_A_MXFP4) || defined(DATA_A_NVFP4)
+#if !defined(USE_OCP_FP4)
 const int8_t kvalues_mxfp4_const[16] = {
     int8_t(0), int8_t(1), int8_t(2), int8_t(3), int8_t(4), int8_t(6), int8_t(8), int8_t(12),
     int8_t(0), int8_t(-1), int8_t(-2), int8_t(-3), int8_t(-4), int8_t(-6), int8_t(-8), int8_t(-12),
 };
 
 shared int8_t kvalues_mxfp4[16];
+#endif
 
-#if defined(DATA_A_NVFP4)
+#if defined(DATA_A_NVFP4) && !defined(USE_OCP_FP4)
 // UE4M3 scale in NVFP4 blocks use only 7 bits; sign (bit 7) is always zero.
 shared float ue4m3_fp32_lut[128];
 
@@ -1783,6 +1803,7 @@ float ue4m3_to_fp32_build(uint u) {
 }
 #endif
 
+#if !defined(USE_OCP_FP4)
 #define NEEDS_INIT_IQ_SHMEM
 void init_iq_shmem(uvec3 wgsize)
 {
@@ -1797,6 +1818,7 @@ void init_iq_shmem(uvec3 wgsize)
 #endif
     barrier();
 }
+#endif
 #endif
 
 // returns the bfloat value in the low 16b.
@@ -1832,8 +1854,21 @@ float e8m0_to_fp32(uint8_t x) {
 }
 
 #if defined(DATA_A_NVFP4)
+#if defined(USE_OCP_FP4)
+floate4m3_t ue4m3_from_bits(uint8_t x) {
+    if (x == uint8_t(0x7F)) {
+        return floate4m3_t(0.0);
+    }
+    return uintBitsToFloate4m3EXT(x);
+}
+#endif
+
 float ue4m3_to_fp32(uint8_t x) {
+#if defined(USE_OCP_FP4)
+    return float(ue4m3_from_bits(x));
+#else
     return ue4m3_fp32_lut[uint(x)];
+#endif
 }
 #endif
 

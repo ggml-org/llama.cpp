@@ -381,11 +381,15 @@ extern "C" {
         //   - most tensors have n_segments == 1 and a contiguous slice of the tensor data
         //   - some tensors have an inhomogenenous data layout along the split axis,
         //     those tensors are divided into segments which are each individually split across devices
-        //   - ne has one entry per segment and device that add up to ggml_tensor::ne for that axis,
-        //     the outer/inner loops are over segments/devices like [seg0_dev0, seg0_dev1, seg1_dev0, seg1_dev1],
+        //   - ne has one entry per segment and device and that segment repeats nr times,
+        //     in total when accounting for repetitions the segments add up to ggml_tensor::ne for that axis,
+        //     the outer/inner loops are over segments/devices like [seg0_dev0_r0, seg0_dev1_r0, seg0_dev0_r1, seg0_dev1_r1, seg1_dev0_r0, seg1_dev1_r0],
         //   - for example, a transformer may have a fused QKV matrix rather than 3 matrices, those would be 3 separate segments
-        //     that each need to be split individually across devices so that each device gets a slice of Q, K, and V
+        //     that each need to be split individually across devices so that each device gets a slice of Q, K, and V,
+        //     the Q matrix can be larger than the K and V matrices so this can either be expressed as 3 segments or as 2 segments
+        //     where the segment for K/V repeats twice
         int64_t  ne[16*GGML_BACKEND_META_MAX_DEVICES];
+        uint32_t nr[16];
         uint32_t n_segments;
     };
 

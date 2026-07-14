@@ -27,8 +27,8 @@
 	let shouldShow = $derived(model && (modelProp !== undefined || isModelMode));
 </script>
 
-{#snippet badgeContent()}
-	<BadgeInfo class={className} {onclick}>
+{#snippet badgeContent(triggerProps?: Record<string, unknown>)}
+	<BadgeInfo {...triggerProps ?? {}} class={className} {onclick}>
 		{#snippet icon()}
 			<Package class="h-3 w-3" />
 		{/snippet}
@@ -47,7 +47,10 @@
 	{#if showTooltip}
 		<Tooltip.Root>
 			<Tooltip.Trigger>
-				{@render badgeContent()}
+				<!-- prevent another nested button element -->
+				{#snippet child({ props })}
+					{@render badgeContent(props)}
+				{/snippet}
 			</Tooltip.Trigger>
 
 			<Tooltip.Content>

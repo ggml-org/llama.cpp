@@ -9,11 +9,11 @@ void llama_model_lfm2moe::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp);
     ml.get_key(LLM_KV_EXPERT_GATING_FUNC,          hparams.expert_gating_func);
 
-    for (uint32_t il = 0; il < hparams.n_layer; ++il) {
-        hparams.recurrent_layer_arr[il] = hparams.n_head_kv(il) == 0;
+    for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
+        hparams.is_recr_impl[il] = hparams.n_head_kv(il) == 0;
     }
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 24: type = LLM_TYPE_8B_A1B;  break;
         case 40: type = LLM_TYPE_24B_A2B; break;
         default: type = LLM_TYPE_UNKNOWN;
@@ -55,7 +55,7 @@ void llama_model_lfm2moe::load_arch_tensors(llama_model_loader &) {
         // for operator_norm
         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
 
-        if (!hparams.is_recurrent(i)) {
+        if (!hparams.is_recr(i)) {
             layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, 0);
             layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, 0);
             GGML_ASSERT(n_embd_v_gqa == n_embd_k_gqa);

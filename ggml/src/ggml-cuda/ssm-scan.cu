@@ -17,14 +17,22 @@ using namespace cub;
 #endif // __clang__
 template <size_t splitD, size_t N, size_t L_template>
 __global__ void __launch_bounds__(splitD, 1)
-    ssm_scan_f32(const float *__restrict__ src0, const float *__restrict__ src1, const float *__restrict__ src2,
-                 const float *__restrict__ src3, const float *__restrict__ src4, const float *__restrict__ src5,
-                 const int32_t * __restrict__ src6, float * __restrict__ dst,
+    ssm_scan_f32(const float * src0_ptr, const float * src1_ptr, const float * src2_ptr,
+                 const float * src3_ptr, const float * src4_ptr, const float * src5_ptr,
+                 const int32_t * src6_ptr, float * dst_ptr,
                  const int src0_nb2, const int src0_nb3, const int src1_nb2, const int src1_nb3,
                  const int src2_nb1, const int src2_nb2, const int src3_nb1,
                  const int src4_nb2, const int src4_nb3, const int src5_nb2, const int src5_nb3,
                  const int64_t s_off, const int64_t d_inner, const int64_t L_param)
 {
+    const float   * GGML_CUDA_RESTRICT src0 = src0_ptr;
+    const float   * GGML_CUDA_RESTRICT src1 = src1_ptr;
+    const float   * GGML_CUDA_RESTRICT src2 = src2_ptr;
+    const float   * GGML_CUDA_RESTRICT src3 = src3_ptr;
+    const float   * GGML_CUDA_RESTRICT src4 = src4_ptr;
+    const float   * GGML_CUDA_RESTRICT src5 = src5_ptr;
+    const int32_t * GGML_CUDA_RESTRICT src6 = src6_ptr;
+    float         * GGML_CUDA_RESTRICT dst  = dst_ptr;
     const size_t L = L_template == 0 ? L_param : L_template;
     ggml_cuda_pdl_sync();
     const float *s0_block = (const float *)((const char *)src0 + src6[blockIdx.x] * src0_nb3 + blockIdx.y * splitD * src0_nb2);
@@ -59,6 +67,7 @@ __global__ void __launch_bounds__(splitD, 1)
     __shared__ CubTempStorage cub_temp_storage;
 
     BlockLoad(cub_temp_storage.load_temp).Load(A_block, regA);
+    __syncthreads();
     BlockLoad(cub_temp_storage.load_temp).Load(s0_block, regs0);
 #else
     const int stride_s0 = src0_nb2 / sizeof(float);
@@ -97,6 +106,7 @@ __global__ void __launch_bounds__(splitD, 1)
             regs0[n] = state;
         }
         y_block[i * stride_y + threadIdx.x] = sumf;
+        __syncthreads();
     }
 
 #ifdef USE_CUB
@@ -118,13 +128,21 @@ __global__ void __launch_bounds__(splitD, 1)
 template <int c_factor, int d_state>
 __global__ void __launch_bounds__(d_state, 1)
     ssm_scan_f32_group(
-        const float * __restrict__ src0, const float * __restrict__ src1, const float * __restrict__ src2,
-        const float * __restrict__ src3, const float * __restrict__ src4, const float * __restrict__ src5,
-        const int32_t * __restrict__ src6, float * __restrict__ dst,
+        const float * src0_ptr, const float * src1_ptr, const float * src2_ptr,
+        const float * src3_ptr, const float * src4_ptr, const float * src5_ptr,
+        const int32_t * src6_ptr, float * dst_ptr,
         const int src0_nb2, const int src0_nb3, const int src1_nb2, const int src1_nb3,
         const int src2_nb1, const int src2_nb2, const int src3_nb1,
         const int src4_nb2, const int src4_nb3, const int src5_nb2, const int src5_nb3,
         const int64_t s_off, const int64_t n_head, const int64_t d_head, const int64_t n_group, const int64_t n_tok) {
+    const float   * GGML_CUDA_RESTRICT src0 = src0_ptr;
+    const float   * GGML_CUDA_RESTRICT src1 = src1_ptr;
+    const float   * GGML_CUDA_RESTRICT src2 = src2_ptr;
+    const float   * GGML_CUDA_RESTRICT src3 = src3_ptr;
+    const float   * GGML_CUDA_RESTRICT src4 = src4_ptr;
+    const float   * GGML_CUDA_RESTRICT src5 = src5_ptr;
+    const int32_t * GGML_CUDA_RESTRICT src6 = src6_ptr;
+    float         * GGML_CUDA_RESTRICT dst  = dst_ptr;
 
     const int warp     = threadIdx.x / WARP_SIZE;
     const int lane     = threadIdx.x % WARP_SIZE;
@@ -233,9 +251,8 @@ static void ssm_scan_f32_cuda(const float * src0, const float * src1, const floa
         GGML_ASSERT(head_dim == 1);
         GGML_ASSERT(n_group == 1);
         const dim3 blocks(n_seq, (n_head + threads - 1) / threads, 1);
-        const int  smem_size = (threads * (d_state + 1) * 2) * sizeof(float);
         if (d_state == 16) {
-            const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks, threads, smem_size, stream);
+            const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(blocks, threads, 0, stream);
             switch (n_tok)
             {
             case 1:

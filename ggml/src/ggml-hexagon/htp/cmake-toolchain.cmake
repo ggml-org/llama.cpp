@@ -3,7 +3,7 @@ if (HEXAGON_TOOLCHAIN_INCLUDED)
 endif()
 set(HEXAGON_TOOLCHAIN_INCLUDED true)
 
-#Cross Compiling for Hexagon
+# Cross Compiling for Hexagon
 set(HEXAGON TRUE)
 set(CMAKE_SYSTEM_NAME QURT)
 set(CMAKE_SYSTEM_PROCESSOR Hexagon)
@@ -14,7 +14,6 @@ set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
 set(CUSTOM_RUNELF_PATH "")
 
-#To fix backward compatibility with EAI addon.
 if (NOT HEXAGON_SDK_ROOT)
     set(HEXAGON_SDK_ROOT $ENV{HEXAGON_SDK_ROOT})
 endif()
@@ -31,7 +30,6 @@ endif()
 file(TO_CMAKE_PATH "${HEXAGON_TOOLS_ROOT}" HEXAGON_TOOLS_ROOT)
 file(TO_CMAKE_PATH "${HEXAGON_SDK_ROOT}"   HEXAGON_SDK_ROOT)
 
-#Get the Binary extension of the Hexagon Toolchain
 if(CMAKE_HOST_SYSTEM_NAME STREQUAL Windows)
     set(HEXAGON_TOOLCHAIN_SUFFIX .exe)
 endif()
@@ -48,12 +46,12 @@ set(CMAKE_TRY_COMPILE_PLATFORM_VARIABLES
     HEXAGON_TOOLS_ROOT
 )
 
-#QURT Related includes and linker flags
+# QURT Related includes and linker flags
 set(V_ARCH ${HEXAGON_ARCH})
 set(_QURT_INSTALL_DIR "${HEXAGON_SDK_ROOT}/rtos/qurt/ADSP${V_ARCH}MP${V_ARCH_EXTN}")
 set(_QURT_INSTALL_DIR "${HEXAGON_SDK_ROOT}/rtos/qurt/compute${V_ARCH}${V_ARCH_EXTN}")
 
-if( ${TREE} MATCHES PAKMAN )
+if (${TREE} MATCHES PAKMAN)
     set(_QURT_INSTALL_DIR "${QURT_IMAGE_DIR}/compute${V_ARCH}${V_ARCH_EXTN}")
 endif()
 message(DEBUG "_QURT_INSTALL_DIR:${_QURT_INSTALL_DIR}")
@@ -83,11 +81,9 @@ set(QURT_START_LINK_LIBS
     )
 STRING(REPLACE ";" " " QURT_START_LINK_LIBS "${QURT_START_LINK_LIBS}")
 
-set(QURT_END_LINK_LIBS
-    ${TARGET_DIR}/fini.o
-    )
+set(QURT_END_LINK_LIBS ${TARGET_DIR}/fini.o)
 
-#Non QURT related includes and linker flags
+# Non QURT related includes and linker flags
 
 set(TARGET_DIR_NOOS "${HEXAGON_TOOLCHAIN}/Tools/target/hexagon/lib/${HEXAGON_ARCH}")
 
@@ -99,8 +95,10 @@ if (NOT NO_WRAP_MEM_API)
     set(WRAP_MEMALIGN -Wl,--wrap=memalign)
 endif()
 
+set(ARCH_FLAGS "-mcpu=${V_ARCH} -m${V_ARCH} -mhvx=${V_ARCH} -mhmx")
+
 set(PIC_SHARED_LD_FLAGS
-    -mcpu=${V_ARCH} -m${V_ARCH} -mhvx=${V_ARCH}
+    ${ARCH_FLAGS}
     -G0
     -fpic
     -Wl,-Bsymbolic
@@ -120,13 +118,13 @@ STRING(REPLACE ";" " " PIC_SHARED_LD_FLAGS "${PIC_SHARED_LD_FLAGS}")
 
 set(HEXAGON_PIC_SHARED_LINK_OPTIONS "${PIC_SHARED_LD_FLAGS}")
 
-#System include paths
+# System include paths
 include_directories(SYSTEM ${HEXAGON_SDK_ROOT}/incs)
 include_directories(SYSTEM ${HEXAGON_SDK_ROOT}/incs/stddef)
 include_directories(SYSTEM ${HEXAGON_SDK_ROOT}/ipc/fastrpc/incs)
 
-#LLVM toolchain setup
-#Compiler paths, options and architecture
+# LLVM toolchain setup
+# Compiler paths, options and architecture
 set(CMAKE_C_COMPILER ${HEXAGON_TOOLCHAIN}/Tools/bin/hexagon-clang${HEXAGON_TOOLCHAIN_SUFFIX})
 set(CMAKE_CXX_COMPILER ${HEXAGON_TOOLCHAIN}/Tools/bin/hexagon-clang++${HEXAGON_TOOLCHAIN_SUFFIX})
 set(CMAKE_AR ${HEXAGON_TOOLCHAIN}/Tools/bin/hexagon-ar${HEXAGON_TOOLCHAIN_SUFFIX})
@@ -137,8 +135,8 @@ set(CMAKE_PREFIX_PATH ${HEXAGON_TOOLCHAIN}/Tools/target/hexagon)
 set(CMAKE_SHARED_LIBRARY_SONAME_C_FLAG   "-Wl,-soname,")
 set(CMAKE_SHARED_LIBRARY_SONAME_CXX_FLAG "-Wl,-soname,")
 
-#Compiler Options
-set(COMMON_FLAGS "-mcpu=hexagon${V_ARCH} -m${V_ARCH} -mhvx=${V_ARCH} -fvectorize -flto -Wall -Werror -fno-zero-initialized-in-bss -G0 -fdata-sections -fpic ${XQF_ARGS}")
+# Compiler Options
+set(COMMON_FLAGS "${ARCH_FLAGS} -fvectorize -flto -Wall -Werror -fno-zero-initialized-in-bss -G0 -fdata-sections -fpic ${XQF_ARGS}")
 
 set(CMAKE_CXX_FLAGS_DEBUG          "${COMMON_FLAGS} -O0 -D_DEBUG -g")
 set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${COMMON_FLAGS} -O2 -g")

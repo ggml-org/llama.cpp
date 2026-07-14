@@ -29,6 +29,7 @@ import { permissionsStore } from '$lib/stores/permissions.svelte';
 import { ToolSource, ToolPermissionDecision } from '$lib/enums';
 import { SvelteMap } from 'svelte/reactivity';
 import { ToolsService } from '$lib/services/tools.service';
+import { SandboxService } from '$lib/services/sandbox.service';
 import { isAbortError } from '$lib/utils';
 import { DEFAULT_AGENTIC_CONFIG, NEWLINE_SEPARATOR } from '$lib/constants';
 import {
@@ -279,16 +280,13 @@ class AgenticStore {
 
 	getConfig(settings: SettingsConfigType, perChatOverrides?: McpServerOverride[]): AgenticConfig {
 		const maxTurns = Number(settings.agenticMaxTurns) || DEFAULT_AGENTIC_CONFIG.maxTurns;
-		const maxToolPreviewLines =
-			Number(settings.agenticMaxToolPreviewLines) || DEFAULT_AGENTIC_CONFIG.maxToolPreviewLines;
 		const hasTools =
 			mcpStore.hasEnabledServers(perChatOverrides) ||
 			toolsStore.builtinTools.length > 0 ||
 			toolsStore.customTools.length > 0;
 		return {
 			enabled: hasTools && DEFAULT_AGENTIC_CONFIG.enabled,
-			maxTurns,
-			maxToolPreviewLines
+			maxTurns
 		};
 	}
 
@@ -476,7 +474,7 @@ class AgenticStore {
 		conversationId: string;
 		messages: ApiChatMessageData[];
 		options: AgenticFlowOptions;
-		tools: ReturnType<typeof mcpStore.getToolDefinitionsForLLM>;
+		tools: ReturnType<typeof toolsStore.getEnabledToolsForLLM>;
 		agenticConfig: AgenticConfig;
 		callbacks: AgenticFlowCallbacks;
 		signal?: AbortSignal;
@@ -488,6 +486,7 @@ class AgenticStore {
 			onToolCallsStreaming,
 			onAttachments,
 			onModel,
+			onCompletionId,
 			onAssistantTurnComplete,
 			createToolResultMessage,
 			createAssistantMessage,
@@ -597,6 +596,7 @@ class AgenticStore {
 							}
 						},
 						onModel,
+						onCompletionId,
 						onTimings: (timings?: ChatMessageTimings, progress?: ChatMessagePromptProgress) => {
 							onTimings?.(timings, progress);
 							if (timings) {
@@ -611,7 +611,7 @@ class AgenticStore {
 							throw error;
 						}
 					},
-					undefined,
+					conversationId,
 					signal
 				);
 
@@ -779,6 +779,13 @@ class AgenticStore {
 						if (toolSource === ToolSource.BUILTIN) {
 							const args = this.parseToolArguments(toolCall.function.arguments);
 							const executionResult = await ToolsService.executeTool(toolName, args, signal);
+
+							result = executionResult.content;
+
+							if (executionResult.isError) toolSuccess = false;
+						} else if (toolSource === ToolSource.FRONTEND) {
+							const args = this.parseToolArguments(toolCall.function.arguments);
+							const executionResult = await SandboxService.executeTool(toolName, args, signal);
 
 							result = executionResult.content;
 
