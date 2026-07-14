@@ -14,6 +14,7 @@
 #include "ggml-impl.h"
 
 #include <assert.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -1239,7 +1240,17 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
         for (int b = 0; b < sched->n_backends && *cur_backend_id == -1; b++) {
             ggml_backend_sched_set_if_supported(sched, node, b, cur_backend_id);
         }
-        GGML_ASSERT(*cur_backend_id != -1);
+        if (*cur_backend_id == -1) {
+            GGML_LOG_ERROR("%s: no backend supports node %d: %s '%s' type=%s shape=[%" PRId64 ", %" PRId64 ", %" PRId64 ", %" PRId64 "]\n",
+                __func__, i, ggml_op_name(node->op), node->name, ggml_type_name(node->type),
+                node->ne[0], node->ne[1], node->ne[2], node->ne[3]);
+            for (int b = 0; b < sched->n_backends; ++b) {
+                GGML_LOG_ERROR("%s: backend %d (%s): op=%s\n", __func__, b,
+                    ggml_backend_name(sched->backends[b]),
+                    ggml_backend_supports_op(sched->backends[b], node) ? "yes" : "no");
+            }
+            GGML_ABORT("unsupported graph node");
+        }
     }
 
     // pass 5: split graph, find tensors that need to be copied
