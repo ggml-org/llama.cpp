@@ -259,10 +259,10 @@ def main() -> None:
             sys.exit(1)
 
         if args.mtp or args.no_mtp:
-            from conversion.qwen import _Qwen35MtpMixin
+            from conversion.qwen import _QwenMtpMixin
             from conversion.step3 import Step35Model
-            if not (issubclass(model_class, _Qwen35MtpMixin) or issubclass(model_class, Step35Model)):
-                logger.error("--mtp / --no-mtp are only supported for Qwen3.5/3.6 and Step3.5 text variants today")
+            if not (issubclass(model_class, _QwenMtpMixin) or issubclass(model_class, Step35Model)):
+                logger.error("--mtp / --no-mtp are only supported for Qwen3-Next, Qwen3.5/3.6 and Step3.5 text variants today")
                 sys.exit(1)
             if args.no_mtp:
                 model_class.no_mtp = True
