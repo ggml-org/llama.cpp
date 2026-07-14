@@ -4573,7 +4573,6 @@ struct ggml_tensor * ggml_conv_1d_dw_ph(
     return ggml_conv_1d_dw(ctx, a, b, s0, a->ne[0] / 2, d0);
 }
 
-<<<<<<< HEAD
 // ggml_col2im_1d
 
 struct ggml_tensor * ggml_col2im_1d(
@@ -4605,7 +4604,10 @@ struct ggml_tensor * ggml_col2im_1d(
 
     result->op     = GGML_OP_COL2IM_1D;
     result->src[0] = a;
-=======
+
+    return result;
+}
+
 // ggml_conv_1d_grouped
 
 struct ggml_tensor * ggml_conv_1d_grouped(
@@ -4659,7 +4661,6 @@ struct ggml_tensor * ggml_conv_1d_grouped(
             result = ggml_concat(ctx, result, out_g, 1);
         }
     }
->>>>>>> 99e5d03e2 (ops: add Conv1dGrouped operation)
 
     return result;
 }
