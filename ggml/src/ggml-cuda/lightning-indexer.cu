@@ -15,7 +15,7 @@ typedef union {
 #include <mma.h>
 namespace wmma = nvcuda::wmma;
 
-template <int WARPS_PER_BLOCK, int K_VECS_PER_BLOCK, int64_t n_embd, int64_t n_head, ggml_type type_K>
+template <int WARPS_PER_BLOCK, int K_VECS_PER_BLOCK, int64_t N_EMBD, int64_t N_HEAD, ggml_type TYPE_K>
 static __global__ void lightning_indexer_kernel_wmma(
         const float * Q, const char * K, const float * W, const half * M, float * dst,
         int64_t n_stream, int64_t n_batch, int64_t n_kv,
@@ -30,7 +30,7 @@ static __global__ void lightning_indexer_kernel_wmma(
     constexpr int THREADS_PER_BLOCK = WARPS_PER_BLOCK * WARP_SIZE;
     constexpr int HEADS_PER_INNER_LOOP = 8;
     constexpr int K_EMBD_PER_INNER_LOOP = 16;
-    constexpr int n_embd_padded = n_embd + 8;
+    constexpr int N_EMBD_PADDED = N_EMBD + 8;
 
     const int i_batch  = blockIdx.y;
     const int i_stream = blockIdx.z;
@@ -46,22 +46,22 @@ static __global__ void lightning_indexer_kernel_wmma(
 
     // phase 1 - load weights and first Q tile to shared memory
 
-    __shared__ float w_shared[n_head];
-    __shared__ int2  q_shared_h[HEADS_PER_INNER_LOOP][n_embd_padded / 4];
+    __shared__ float w_shared[N_HEAD];
+    __shared__ int2  q_shared_h[HEADS_PER_INNER_LOOP][N_EMBD_PADDED / 4];
 
-    if (tid < n_head) {
+    if (tid < N_HEAD) {
         w_shared[tid] = w_base[tid];
     }
 
-    // total number of half4 elements in HEADS_PER_INNER_LOOP x n_embd Q tile
-    constexpr int n_q_tile = HEADS_PER_INNER_LOOP * (n_embd / 4);
+    // total number of half4 elements in HEADS_PER_INNER_LOOP x N_EMBD Q tile
+    constexpr int N_Q_TILE = HEADS_PER_INNER_LOOP * (N_EMBD / 4);
     // number of registers needed in each thread to store Q tile in thread block
-    constexpr int n_q_next = (n_q_tile + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    constexpr int N_Q_NEXT = (N_Q_TILE + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
 
 #pragma unroll
-    for (int i_q = tid; i_q < n_q_tile; i_q += THREADS_PER_BLOCK) {
-        const int i_head = i_q / (n_embd / 4);
-        const int i_embd = i_q % (n_embd / 4);
+    for (int i_q = tid; i_q < N_Q_TILE; i_q += THREADS_PER_BLOCK) {
+        const int i_head = i_q / (N_EMBD / 4);
+        const int i_embd = i_q % (N_EMBD / 4);
         const float4 q = *(const float4 *) (q_base + i_head*nbq1 + i_embd*sizeof(float4));
         half4 q_packed;
         q_packed.h2[0] = __float22half2_rn(make_float2(q.x, q.y));
@@ -71,15 +71,15 @@ static __global__ void lightning_indexer_kernel_wmma(
 
     // phase 2 - load (and dequantize if needed) K to shared mem
 
-    __shared__ half2 k_shared_h[K_VECS_PER_BLOCK][n_embd_padded / 4][2];
+    __shared__ half2 k_shared_h[K_VECS_PER_BLOCK][N_EMBD_PADDED / 4][2];
 
-    constexpr int n_k = K_VECS_PER_BLOCK * (n_embd / 4);
+    constexpr int n_k = K_VECS_PER_BLOCK * (N_EMBD / 4);
 
-    if constexpr (type_K == GGML_TYPE_F16) {
+    if constexpr (TYPE_K == GGML_TYPE_F16) {
 #pragma unroll
         for (int i_k = tid; i_k < n_k; i_k += THREADS_PER_BLOCK) {
-            const int i_k_vec = i_k / (n_embd / 4);
-            const int i_embd = i_k % (n_embd / 4);
+            const int i_k_vec = i_k / (N_EMBD / 4);
+            const int i_embd = i_k % (N_EMBD / 4);
             const int i_kv = start_kv + i_k_vec;
             if (i_kv < n_kv) {
                 const int2 * k_base = (const int2 *) ((const char *) K + i_kv*nbk2 + i_stream*nbk3);
@@ -89,11 +89,11 @@ static __global__ void lightning_indexer_kernel_wmma(
             }
         }
     } else {
-        constexpr dequantize_V_t dequantize_k = get_dequantize_V<type_K, half, 4>();
+        constexpr dequantize_V_t dequantize_k = get_dequantize_V<TYPE_K, half, 4>();
 #pragma unroll
         for (int i_k = tid; i_k < n_k; i_k += THREADS_PER_BLOCK) {
-            const int i_k_vec = i_k / (n_embd / 4);
-            const int i_embd = i_k % (n_embd / 4);
+            const int i_k_vec = i_k / (N_EMBD / 4);
+            const int i_embd = i_k % (N_EMBD / 4);
             const int i_kv = start_kv + i_k_vec;
             if (i_kv < n_kv) {
                 const void * k_base = (const void *) ((const char *) K + i_kv*nbk2 + i_stream*nbk3);
@@ -112,11 +112,11 @@ static __global__ void lightning_indexer_kernel_wmma(
 
     // load K fragment
     wmma::fragment<wmma::matrix_b, HEADS_PER_INNER_LOOP, K_VECS_PER_BLOCK, K_EMBD_PER_INNER_LOOP, half, wmma::col_major> frag_k;
-    wmma::load_matrix_sync(frag_k, (half*) &k_shared_h[0][i_warp * K_EMBD_PER_INNER_LOOP / 4], n_embd_padded);
+    wmma::load_matrix_sync(frag_k, (half*) &k_shared_h[0][i_warp * K_EMBD_PER_INNER_LOOP / 4], N_EMBD_PADDED);
 
     float score_k = 0.0f;
 
-    for (int i_head_0 = 0; i_head_0 < n_head; i_head_0 += HEADS_PER_INNER_LOOP) {
+    for (int i_head_0 = 0; i_head_0 < N_HEAD; i_head_0 += HEADS_PER_INNER_LOOP) {
         const int i_head_next = i_head_0 + HEADS_PER_INNER_LOOP;
 
         // we don't use accumulator for anything, fill it with zeros
@@ -125,16 +125,16 @@ static __global__ void lightning_indexer_kernel_wmma(
 
         // load Q fragment
         wmma::fragment<wmma::matrix_a, HEADS_PER_INNER_LOOP, K_VECS_PER_BLOCK, K_EMBD_PER_INNER_LOOP, half, wmma::row_major> frag_q;
-        wmma::load_matrix_sync(frag_q, (half*) &q_shared_h[0][i_warp * K_EMBD_PER_INNER_LOOP / 4], n_embd_padded);
+        wmma::load_matrix_sync(frag_q, (half*) &q_shared_h[0][i_warp * K_EMBD_PER_INNER_LOOP / 4], N_EMBD_PADDED);
 
         // preload next Q tile to registers during matrix multiplication
-        float4 q_next[n_q_next];
+        float4 q_next[N_Q_NEXT];
 
-        if (i_head_next < n_head) {
+        if (i_head_next < N_HEAD) {
 #pragma unroll
-            for (int i_q = tid, i_q_next = 0; i_q < n_q_tile; i_q += THREADS_PER_BLOCK) {
-                const int i_head = i_head_next + i_q / (n_embd / 4);
-                const int i_embd =               i_q % (n_embd / 4);
+            for (int i_q = tid, i_q_next = 0; i_q < N_Q_TILE; i_q += THREADS_PER_BLOCK) {
+                const int i_head = i_head_next + i_q / (N_EMBD / 4);
+                const int i_embd =               i_q % (N_EMBD / 4);
                 q_next[i_q_next++] = *(const float4 *) (q_base + i_head*nbq1 + i_embd*sizeof(float4));
             }
         }
@@ -147,11 +147,11 @@ static __global__ void lightning_indexer_kernel_wmma(
         __syncthreads();
 
         // write preloaded Q tile to shared memory
-        if (i_head_next < n_head) {
+        if (i_head_next < N_HEAD) {
 #pragma unroll
-            for (int i_q = tid, i_q_next = 0; i_q < n_q_tile; i_q += THREADS_PER_BLOCK) {
-                const int i_head = i_q / (n_embd / 4);
-                const int i_embd = i_q % (n_embd / 4);
+            for (int i_q = tid, i_q_next = 0; i_q < N_Q_TILE; i_q += THREADS_PER_BLOCK) {
+                const int i_head = i_q / (N_EMBD / 4);
+                const int i_embd = i_q % (N_EMBD / 4);
                 half4 q_packed;
                 q_packed.h2[0] = __float22half2_rn(make_float2(q_next[i_q_next].x, q_next[i_q_next].y));
                 q_packed.h2[1] = __float22half2_rn(make_float2(q_next[i_q_next].z, q_next[i_q_next].w));
@@ -212,7 +212,7 @@ static __global__ void lightning_indexer_kernel_wmma(
 
 #else // defined(TURING_MMA_AVAILABLE)
 
-template <int WARPS_PER_BLOCK, int K_VECS_PER_BLOCK, int64_t n_embd, int64_t n_head, ggml_type type_K>
+template <int WARPS_PER_BLOCK, int K_VECS_PER_BLOCK, int64_t N_EMBD, int64_t N_HEAD, ggml_type TYPE_K>
 static __global__ void lightning_indexer_kernel_wmma(
         const float * Q, const char * K, const float * W, const half * M, float * dst,
         int64_t n_stream, int64_t n_batch, int64_t n_kv,
@@ -238,9 +238,9 @@ static __global__ void lightning_indexer_kernel_wmma(
 
 // TODO there is one ugly assumption used in this kernel - that WARP_SIZE is equal to 32
 // thanks to that one warp operating on float4 processes whole indexer K/Q vectors
-// 32 * 4 = 128 (n_embd)
+// 32 * 4 = 128 (N_EMBD)
 
-template <int WARPS_PER_BLOCK, int K_VECS_PER_BLOCK, int64_t n_embd, int64_t n_head, ggml_type type_K>
+template <int WARPS_PER_BLOCK, int K_VECS_PER_BLOCK, int64_t N_EMBD, int64_t N_HEAD, ggml_type TYPE_K>
 static __global__ void lightning_indexer_kernel_vec(
         const float * Q, const char * K, const float * W, const half * M, float * dst,
         int64_t n_stream, int64_t n_batch, int64_t n_kv,
@@ -272,7 +272,7 @@ static __global__ void lightning_indexer_kernel_vec(
 
     float4 k_reg_f[K_VECS_PER_WARP];
 
-    if constexpr (type_K == GGML_TYPE_F32) {
+    if constexpr (TYPE_K == GGML_TYPE_F32) {
         // direct copy of float4
 #pragma unroll
         for (int k = 0; k < K_VECS_PER_WARP; ++k) {
@@ -286,7 +286,7 @@ static __global__ void lightning_indexer_kernel_vec(
         }
     } else {
         // dequantize remaining types to float
-        constexpr dequantize_V_t dequantize_k = get_dequantize_V<type_K, float, 4>();
+        constexpr dequantize_V_t dequantize_k = get_dequantize_V<TYPE_K, float, 4>();
 #pragma unroll
         for (int k = 0; k < K_VECS_PER_WARP; ++k) {
             int i_kv = start_kv + k;
@@ -301,25 +301,25 @@ static __global__ void lightning_indexer_kernel_vec(
 
     float score_k[K_VECS_PER_WARP] = { 0.0f };
 
-    // load weights and Q only for n_head_inner heads at once to reduce shared memory usage
-    constexpr int n_head_inner = n_head / 4;
+    // load weights and Q only for N_HEAD_INNER heads at once to reduce shared memory usage
+    constexpr int N_HEAD_INNER = N_HEAD / 4;
 
-    for (int i_head_0 = 0; i_head_0 < n_head; i_head_0 += n_head_inner) {
+    for (int i_head_0 = 0; i_head_0 < N_HEAD; i_head_0 += N_HEAD_INNER) {
         // phase 2 - load weights and Q to shared memory
 
-        __shared__ float  w_shared[n_head_inner];
-        __shared__ float4 q_shared_f[n_head_inner][n_embd / 4];
+        __shared__ float  w_shared[N_HEAD_INNER];
+        __shared__ float4 q_shared_f[N_HEAD_INNER][N_EMBD / 4];
 
-        if (tid < n_head_inner) {
+        if (tid < N_HEAD_INNER) {
             w_shared[tid] = w_base[i_head_0 + tid];
         }
 
-        constexpr int n_q = n_head_inner * (n_embd / 4);
+        constexpr int n_q = N_HEAD_INNER * (N_EMBD / 4);
 #pragma unroll
         for (int i_q = tid; i_q < n_q; i_q += THREADS_PER_BLOCK) {
-            const int i_head_inner = i_q / (n_embd / 4);
+            const int i_head_inner = i_q / (N_EMBD / 4);
             const int i_head = i_head_0 + i_head_inner;
-            const int i_embd = i_q % (n_embd / 4);
+            const int i_embd = i_q % (N_EMBD / 4);
             q_shared_f[i_head_inner][i_embd] = *(const float4 *) (q_base + i_head*nbq1 + i_embd*sizeof(float4));
         }
 
@@ -327,7 +327,7 @@ static __global__ void lightning_indexer_kernel_vec(
 
         // phase 3 - calculate lightning indexer scores
 
-        for (int i_head_inner = 0; i_head_inner < n_head_inner; ++i_head_inner) {
+        for (int i_head_inner = 0; i_head_inner < N_HEAD_INNER; ++i_head_inner) {
             const float w_val = w_shared[i_head_inner];
             float qk[K_VECS_PER_WARP] = { 0.0f };
 
