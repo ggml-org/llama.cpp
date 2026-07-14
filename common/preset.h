@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <set>
 
 //
 // INI preset parser and writer
@@ -40,6 +41,10 @@ struct common_preset {
 
     // merge another preset into this one, overwriting existing options
     void merge(const common_preset & other);
+
+    // apply preset options to common_params
+    // optionally specify handled_keys to only apply a subset of options (identified by their env), if empty, apply all options
+    void apply_to_params(common_params & params, const std::set<std::string> & handled_keys = std::set<std::string>()) const;
 };
 
 // interface for multiple presets in one file
@@ -50,6 +55,11 @@ struct common_preset_context {
     common_params default_params; // unused for now
     common_params_context ctx_params;
     std::map<std::string, common_arg> key_to_opt;
+
+    bool filter_allowed_keys = false;
+    std::set<std::string> allowed_keys;
+
+    // if only_remote_allowed is true, only accept whitelisted keys
     common_preset_context(llama_example ex);
 
     // load presets from INI file

@@ -1,13 +1,14 @@
 #include "ggml.h"
 #include "gguf.h"
 
-#include <cstdlib>   /* abort() */
+#include <algorithm>
+#include <clocale>
 #include <cstddef>
 #include <cstdio>
-#include <string>
-#include <stdexcept>
-#include <algorithm>
+#include <cstdlib>   /* abort() */
 #include <cstring>
+#include <stdexcept>
+#include <string>
 
 #include <sstream>
 #include <fstream>
@@ -626,6 +627,8 @@ static hash_exit_code_t gguf_hash(const hash_params & hash_params) {
 }
 
 int main(int argc, const char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     hash_params params;
     manifest_check_params manifest_check;
     hash_params_parse(argc, argv, params);

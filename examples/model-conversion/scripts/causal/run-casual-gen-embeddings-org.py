@@ -53,10 +53,10 @@ model_name = os.path.basename(model_path)
 print(f"Model name: {model_name}")
 
 prompt = "Hello world today"
-input_ids = tokenizer(prompt, return_tensors="pt").input_ids
+input_ids = tokenizer(prompt, return_tensors="pt").input_ids  # ty: ignore[call-non-callable]
 print(f"Input tokens: {input_ids}")
 print(f"Input text: {repr(prompt)}")
-print(f"Tokenized: {tokenizer.convert_ids_to_tokens(input_ids[0])}")
+print(f"Tokenized: {tokenizer.convert_ids_to_tokens(input_ids[0])}")  # ty: ignore[unresolved-attribute]
 
 with torch.no_grad():
     outputs = model(input_ids, output_hidden_states=True)
@@ -67,7 +67,7 @@ with torch.no_grad():
     last_hidden_states = outputs.hidden_states[-1]
 
     # Get embeddings for all tokens
-    token_embeddings = last_hidden_states[0].cpu().numpy()  # Remove batch dimension
+    token_embeddings = last_hidden_states[0].float().cpu().numpy()  # Remove batch dimension
 
     print(f"Hidden states shape: {last_hidden_states.shape}")
     print(f"Token embeddings shape: {token_embeddings.shape}")
@@ -92,7 +92,7 @@ with torch.no_grad():
 
     # Print embeddings per token in the requested format
     print("\nToken embeddings:")
-    tokens = tokenizer.convert_ids_to_tokens(input_ids[0])
+    tokens = tokenizer.convert_ids_to_tokens(input_ids[0])  # ty: ignore[unresolved-attribute]
     for i, embedding in enumerate(token_embeddings):
         # Format: show first few values, ..., then last few values
         if len(embedding) > 10:

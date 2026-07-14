@@ -16,11 +16,11 @@
 int main(int argc, char ** argv) {
     common_params params;
 
+    common_init();
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON)) {
         return 1;
     }
-
-    common_init();
 
     llama_backend_init();
     llama_numa_init(params.numa);
@@ -146,6 +146,8 @@ int main(int argc, char ** argv) {
                 }
 
                 LOG_INF("Model %d/%d, Context %d/%d: %s\n\n", m + 1, num_models, c + 1, num_contexts, result.c_str());
+
+                llama_synchronize(ctx.get());
             });
         }
     }

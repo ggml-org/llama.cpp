@@ -3,12 +3,14 @@
 import argparse
 import os
 import sys
-import numpy as np
 import importlib
-from pathlib import Path
 
 from transformers import AutoTokenizer, AutoConfig, AutoModel
 import torch
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from utils.common import save_output_data
 
 
 def parse_arguments():
@@ -62,7 +64,7 @@ def load_model_and_tokenizer(model_path, use_sentence_transformers=False, device
         print("Using SentenceTransformer to apply all numbered layers")
         model = SentenceTransformer(model_path)
         tokenizer = model.tokenizer
-        config = model[0].auto_model.config  # type: ignore
+        config = model[0].auto_model.config  # ty: ignore[unresolved-attribute]
     else:
         tokenizer = AutoTokenizer.from_pretrained(model_path)
         config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)
@@ -106,8 +108,8 @@ def load_model_and_tokenizer(model_path, use_sentence_transformers=False, device
         print(f"Model file: {type(model).__module__}")
 
         # Verify the model is using the correct sliding window
-        if hasattr(model.config, 'sliding_window'):  # type: ignore
-            print(f"Model's sliding_window: {model.config.sliding_window}")  # type: ignore
+        if hasattr(model.config, 'sliding_window'):
+            print(f"Model's sliding_window: {model.config.sliding_window}")
         else:
             print("Model config does not have sliding_window attribute")
 
@@ -150,7 +152,7 @@ def main():
         device = next(model.parameters()).device
     else:
         # For SentenceTransformer, get device from the underlying model
-        device = next(model[0].auto_model.parameters()).device  # type: ignore
+        device = next(model[0].auto_model.parameters()).device
 
     model_name = os.path.basename(model_path)
 
@@ -169,12 +171,13 @@ def main():
                 return_tensors="pt"
             )
             tokens = encoded['input_ids'][0]
+            token_ids = tokens.cpu().tolist()
             token_strings = tokenizer.convert_ids_to_tokens(tokens)
             for i, (token_id, token_str) in enumerate(zip(tokens, token_strings)):
                 print(f"{token_id:6d} -> '{token_str}'")
 
             print(f"Embeddings shape (after all SentenceTransformer layers): {all_embeddings.shape}")
-            print(f"Embedding dimension: {all_embeddings.shape[1] if len(all_embeddings.shape) > 1 else all_embeddings.shape[0]}")  # type: ignore
+            print(f"Embedding dimension: {all_embeddings.shape[1] if len(all_embeddings.shape) > 1 else all_embeddings.shape[0]}")
         else:
             # Standard approach: use base model output only
             encoded = tokenizer(
@@ -185,6 +188,7 @@ def main():
             )
 
             tokens = encoded['input_ids'][0]
+            token_ids = tokens.cpu().tolist()
             token_strings = tokenizer.convert_ids_to_tokens(tokens)
             for i, (token_id, token_str) in enumerate(zip(tokens, token_strings)):
                 print(f"{token_id:6d} -> '{token_str}'")
@@ -201,12 +205,12 @@ def main():
             print(f"Embedding dimension: {all_embeddings.shape[1]}")
 
         if len(all_embeddings.shape) == 1:
-            n_embd = all_embeddings.shape[0]  # type: ignore
+            n_embd = all_embeddings.shape[0]
             n_embd_count = 1
             all_embeddings = all_embeddings.reshape(1, -1)
         else:
-            n_embd = all_embeddings.shape[1]  # type: ignore
-            n_embd_count = all_embeddings.shape[0]  # type: ignore
+            n_embd = all_embeddings.shape[1]
+            n_embd_count = all_embeddings.shape[0]
 
         print()
 
@@ -228,24 +232,11 @@ def main():
 
         print()
 
-        data_dir = Path("data")
-        data_dir.mkdir(exist_ok=True)
-        bin_filename = data_dir / f"pytorch-{model_name}-embeddings.bin"
-        txt_filename = data_dir / f"pytorch-{model_name}-embeddings.txt"
-
         flattened_embeddings = all_embeddings.flatten()
-        flattened_embeddings.astype(np.float32).tofile(bin_filename)
-
-        with open(txt_filename, "w") as f:
-            idx = 0
-            for j in range(n_embd_count):
-                for value in all_embeddings[j]:
-                    f.write(f"{idx}: {value:.6f}\n")
-                    idx += 1
         print(f"Total values: {len(flattened_embeddings)} ({n_embd_count} embeddings × {n_embd} dimensions)")
         print("")
-        print(f"Saved bin embeddings to: {bin_filename}")
-        print(f"Saved txt embeddings to: {txt_filename}")
+
+        save_output_data(flattened_embeddings, token_ids, prompt_text, model_name, type_suffix="-embeddings")
 
 
 if __name__ == "__main__":

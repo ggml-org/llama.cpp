@@ -1,0 +1,222 @@
+{#- ------------- special token variables ------------- -#}
+{%- set HYTK = ':opensource' %}
+{%- set eos_token = '<｜hy_eos{}｜>'.format(HYTK) %}
+{%- set bos_token = '<｜hy_begin_of_sentence{}｜>'.format(HYTK) %}
+{%- set pad_token = '<｜hy_pad{}｜>'.format(HYTK) %}
+{%- set user_token = '<｜hy_User{}｜>'.format(HYTK) %}
+{%- set assistant_token = '<｜hy_Assistant{}｜>'.format(HYTK) %}
+{%- set think_begin_token = '<think{}>'.format(HYTK) %}
+{%- set think_end_token = '</think{}>'.format(HYTK) %}
+{%- set toolcalls_begin_token = '<tool_calls{}>'.format(HYTK) %}
+{%- set toolcalls_end_token = '</tool_calls{}>'.format(HYTK) %}
+{%- set toolcall_begin_token = '<tool_call{}>'.format(HYTK) %}
+{%- set toolcall_end_token = '</tool_call{}>'.format(HYTK) %}
+{%- set toolsep_token = '<tool_sep{}>'.format(HYTK) %}
+{%- set argkey_begin_token = '<arg_key{}>'.format(HYTK) %}
+{%- set argkey_end_token = '</arg_key{}>'.format(HYTK) %}
+{%- set argvalue_begin_token = '<arg_value{}>'.format(HYTK) %}
+{%- set argvalue_end_token = '</arg_value{}>'.format(HYTK) %}
+{%- set toolresponses_begin_token = '<tool_responses{}>'.format(HYTK) %}
+{%- set toolresponses_end_token = '</tool_responses{}>'.format(HYTK) %}
+{%- set toolresponse_begin_token = '<tool_response{}>'.format(HYTK) %}
+{%- set toolresponse_end_token = '</tool_response{}>'.format(HYTK) %}
+{%- set reasoning_mode_token = '<｜reasoning_mode{}｜>'.format(HYTK) %}
+
+{#- ------------- hyperparameters variables ------------- -#}
+{%- if not add_generation_prompt is defined %}
+    {%- set add_generation_prompt = false %}
+{%- endif %}
+{%- if not preserved_thinking is defined %}
+    {%- if not tools %}
+        {%- set preserved_thinking = false %}
+    {%- else %}
+        {%- set preserved_thinking = true %}
+    {%- endif %}
+{%- endif %}
+{%- if not is_training is defined %}
+    {%- set is_training = false %}
+{%- endif %}
+
+{%- if not reasoning_effort is defined %}
+    {%- set reasoning_effort = 'no_think' %}
+{%- elif reasoning_effort not in ['high', 'low', 'no_think'] %}
+    {%- if reasoning_effort is none %}
+        {{- raise_exception('reasoning_effort error : None, should be no_think/low/high') }}
+    {%- else %}
+        {{- raise_exception('reasoning_effort error : ' + reasoning_effort + ', should be no_think/low/high') }}
+    {%- endif %}
+{%- endif %}
+
+{%- if fallback_strategy is defined and fallback_strategy == 'reasoning_toolcall_retry' %}
+    {%- set reasoning_effort = 'high' %}
+    {%- set add_generation_prompt = false %}
+{%- endif %}
+{%- if not raw_last_assistant is defined %}
+    {%- set raw_last_assistant = false %}
+{%- endif %}
+
+{%- macro visible_text(content) -%}
+    {%- if content is string -%}
+        {{- content }}
+    {%- elif content is iterable and content is not mapping -%}
+        {%- for item in content -%}
+            {%- if item is mapping and item.type == 'text' -%}
+                {{- item.text }}
+            {%- elif item is string -%}
+                {{- item }}
+            {%- endif -%}
+        {%- endfor -%}
+    {%- elif content is none -%}
+        {{- '' }}
+    {%- else -%}
+        {{- content }}
+    {%- endif -%}
+{%- endmacro -%}
+
+{%- set ns = namespace(last_user_index=-1) %}
+{%- set sp_ns = namespace(system_prompt='', is_first_sp=true) %}
+{%- for message in messages %}
+    {%- if message['role'] == 'system' %}
+        {%- set sp_ns.system_prompt = sp_ns.system_prompt + visible_text(message['content']) %}
+    {%- endif %}
+    {%- if message['role'] == 'user' %}
+        {%- set ns.last_user_index = loop.index0 %}
+    {%- endif %}
+{%- endfor %}
+{%- if reasoning_effort is defined and reasoning_effort is string and reasoning_effort != '' and not tools %}
+    {%- set sp_ns.system_prompt = sp_ns.system_prompt + reasoning_mode_token + 'reasoning_effort:' + reasoning_effort %}
+{%- endif %}
+{{- bos_token }}
+{{- sp_ns.system_prompt }}
+{%- if tools %}
+    {%- if sp_ns.system_prompt != '' %}
+        {{- '\n\n# Tools\n\nYou may call one or more functions to assist with the user query.' }}
+    {%- else %}
+        {{- '# Tools\n\nYou may call one or more functions to assist with the user query.' }}
+    {%- endif %}
+    {{- '\n\nYou are provided with function signatures within <tools></tools> XML tags:' }}
+    {{- '\n<tools>\n' }}
+    {%- for tool in tools %}
+        {%- if loop.index0 > 0 %}
+            {{- '\n' }}
+        {%- endif %}
+        {{- tool | tojson }}
+    {%- endfor %}
+    {{- '\n</tools>\n\n' }}
+    {{- 'For function call returns, you should first print ' + toolcalls_begin_token + '\n' }}
+    {{- 'For each function call, you should return object like:\n' }}
+    {{- toolcall_begin_token + '{function-name}' + toolsep_token + '\n' }}
+    {{- argkey_begin_token + '{arg-key-1}' + argkey_end_token + '\n' }}
+    {{- argvalue_begin_token + '{arg-value-1}' + argvalue_end_token + '\n' }}
+    {{- argkey_begin_token + '{arg-key-2}' + argkey_end_token + '\n' }}
+    {{- argvalue_begin_token + '{arg-value-2}' + argvalue_end_token + '\n' }}
+    {{- '...\n' }}
+    {{- toolcall_end_token + '\n' }}
+    {%- if reasoning_effort is defined and reasoning_effort is string and reasoning_effort != '' %}
+        {{- 'At the end of function call returns, you should print ' + toolcalls_end_token + reasoning_mode_token + 'reasoning_effort:' + reasoning_effort }}
+    {%- else %}
+        {{- 'At the end of function call returns, you should print ' + toolcalls_end_token }}
+    {%- endif %}
+{%- endif %}
+
+{%- set prev_ns = namespace(is_tool=false, is_tool_first=true) %}
+{%- set last_ns = namespace(last_is_assistant=false) %}
+{%- for message in messages %}
+    {%- if message['role'] == 'user' %}
+        {%- if prev_ns.is_tool %}
+            {{- toolresponses_end_token }}
+        {%- endif %}
+        {{- user_token + visible_text(message['content']) }}
+        {%- set prev_ns.is_tool = false %}
+    {%- endif %}
+    {%- if message['role'] == 'assistant' %}
+        {%- if is_training %}
+            {%- if 'reasoning_content' in message and message['reasoning_content'] is string %}
+                {%- set rc = message['reasoning_content'] %}
+            {%- elif 'reasoning' in message and message['reasoning'] is string %}
+                {%- set rc = message['reasoning'] %}
+            {%- else %}
+                {%- set rc = none %}
+            {%- endif %}
+            {%- if rc is not none %}
+                {%- set content = think_begin_token + rc + think_end_token + visible_text(message['content']) %}
+            {%- else %}
+                {%- set content = think_begin_token + think_end_token + visible_text(message['content']) %}
+            {%- endif %}
+        {%- else %}
+            {%- if ((preserved_thinking is defined and preserved_thinking) or loop.index0 > ns.last_user_index) %}
+                {%- if 'reasoning_content' in message and message['reasoning_content'] is string %}
+                    {%- set rc = message['reasoning_content'] %}
+                {%- elif 'reasoning' in message and message['reasoning'] is string %}
+                    {%- set rc = message['reasoning'] %}
+                {%- else %}
+                    {%- set rc = none %}
+                {%- endif %}
+                {%- if rc is not none %}
+                    {%- set content = think_begin_token + rc + think_end_token + visible_text(message['content']) %}
+                {%- else %}
+                    {%- set content = think_begin_token + think_end_token + visible_text(message['content']) %}
+                {%- endif %}
+            {%- else %}
+                {%- set content = think_begin_token + think_end_token + visible_text(message['content']) %}
+            {%- endif %}
+        {%- endif %}
+        {%- if prev_ns.is_tool %}
+            {{- toolresponses_end_token }}
+        {%- endif %}
+        {{- assistant_token }}
+        {%- if message['tool_calls'] is defined and message['tool_calls'] %}
+            {%- set prev_ns.is_tool_first = true %}
+            {{- content }}
+            {{- toolcalls_begin_token + '\n' }}
+            {%- for tool in message['tool_calls'] %}
+                {%- set arguments = tool['function']['arguments'] %}
+                {{- toolcall_begin_token + tool['function']['name'] + toolsep_token + '\n' }}
+                {%- for key, value in arguments.items() %}
+                    {{- argkey_begin_token + key + argkey_end_token + '\n' }}
+                    {%- if value is not string %}
+                        {%- set value = value | tojson(ensure_ascii=False) %}
+                    {%- endif %}
+                    {{- argvalue_begin_token + value + argvalue_end_token + '\n' }}
+                {%- endfor %}
+                {{- toolcall_end_token + '\n' }}
+            {%- endfor %}
+            {{- toolcalls_end_token + eos_token }}
+        {%- else %}
+            {%- if loop.last and raw_last_assistant %}
+                {{- visible_text(message['content']) }}
+            {%- elif not loop.last or is_training %}
+                {{- content + eos_token }}
+            {%- else %}
+                {{- content }}
+            {%- endif %}
+        {%- endif %}
+        {%- set prev_ns.is_tool = false %}
+    {%- endif %}
+    {%- if message['role'] == 'tool' %}
+        {%- set prev_ns.is_tool = true %}
+        {%- if prev_ns.is_tool_first %}
+            {{- toolresponses_begin_token + '\n' }}
+            {%- set prev_ns.is_tool_first = false %}
+        {%- endif %}
+        {{- toolresponse_begin_token + '\n' + visible_text(message['content']) + '\n' + toolresponse_end_token + '\n' }}
+    {%- endif %}
+    {%- if loop.last and message['role'] == 'assistant' %}
+        {%- set last_ns.last_is_assistant = true %}
+    {%- endif %}
+
+{%- endfor %}
+{%- if prev_ns.is_tool %}
+    {{- toolresponses_end_token }}
+{%- endif %}
+{%- if add_generation_prompt %}
+    {%- if not last_ns.last_is_assistant %}
+        {%- if reasoning_effort is defined and reasoning_effort in ['low', 'high'] %}
+            {{- assistant_token + think_begin_token }}
+        {%- elif reasoning_effort is defined and reasoning_effort == 'no_think' %}
+            {{- assistant_token + think_begin_token + think_end_token }}
+        {%- else %}
+            {{- assistant_token }}
+        {%- endif %}
+    {%- endif %}
+{%- endif %}

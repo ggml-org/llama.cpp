@@ -8,7 +8,6 @@
 #extension GL_KHR_shader_subgroup_basic : enable
 #endif
 
-#include "rte.glsl"
 #include "types.glsl"
 #include "utils.glsl"
 

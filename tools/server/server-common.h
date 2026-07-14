@@ -13,21 +13,21 @@
 #include <vector>
 #include <cinttypes>
 
-const static std::string build_info("b" + std::to_string(LLAMA_BUILD_NUMBER) + "-" + LLAMA_COMMIT);
-
 using json = nlohmann::ordered_json;
 
+#define SLT_DBG(slot, fmt, ...) LOG_DBG("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)
+#define SLT_TRC(slot, fmt, ...) LOG_TRC("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)
 #define SLT_INF(slot, fmt, ...) LOG_INF("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)
-#define SLT_CNT(slot, fmt, ...) LOG_CNT(""                                 fmt,                                                                __VA_ARGS__)
 #define SLT_WRN(slot, fmt, ...) LOG_WRN("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)
 #define SLT_ERR(slot, fmt, ...) LOG_ERR("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)
-#define SLT_DBG(slot, fmt, ...) LOG_DBG("slot %12.*s: id %2d | task %d | " fmt, 12, __func__, (slot).id, ((slot).task ? (slot).task->id : -1), __VA_ARGS__)
+#define SLT_CNT(slot, fmt, ...) LOG_CNT(""                                 fmt,                                                                __VA_ARGS__)
 
+#define SRV_DBG(fmt, ...) LOG_DBG("srv  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
+#define SRV_TRC(fmt, ...) LOG_TRC("srv  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
 #define SRV_INF(fmt, ...) LOG_INF("srv  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
-#define SRV_CNT(fmt, ...) LOG_CNT(""              fmt,               __VA_ARGS__)
 #define SRV_WRN(fmt, ...) LOG_WRN("srv  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
 #define SRV_ERR(fmt, ...) LOG_ERR("srv  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
-#define SRV_DBG(fmt, ...) LOG_DBG("srv  %12.*s: " fmt, 12, __func__, __VA_ARGS__)
+#define SRV_CNT(fmt, ...) LOG_CNT(""              fmt,               __VA_ARGS__)
 
 using raw_buffer = std::vector<uint8_t>;
 
@@ -93,6 +93,9 @@ json format_error_response(const std::string & message, const enum error_type ty
 std::string random_string();
 std::string gen_chatcmplid();
 std::string gen_tool_call_id();
+
+// get a random marker; note: each time the server restarts, the marker will be different
+const char * get_media_marker();
 
 //
 // lora utils
@@ -169,8 +172,17 @@ public:
     // for debugging
     std::string str() const;
 
-    llama_pos pos_next() const;
+    // the next position after n_tokens. if n_tokens < 0, return the next position after all tokens.
+    llama_pos pos_next(int64_t n_tokens = -1) const;
+
+    // number of tokens with position < max_pos
+    size_t size_up_to_pos(llama_pos max_pos) const;
+
     const mtmd::input_chunk_ptr & find_chunk(size_t idx) const;
+
+    // find next media chunk after idx
+    // returns a pair of pointer to the chunk (nullptr if not found) and its start index in tokens
+    std::pair<const mtmd::input_chunk_ptr *, size_t> find_next_media_chunk(size_t idx) const;
 
     void push_back(llama_token tok);
 
@@ -184,7 +196,9 @@ public:
     void insert(const llama_tokens & inp_tokens);
 
     // for compatibility with speculative decoding, ctx shift, slot save/load
-    const llama_tokens & get_text_tokens() const;
+    const llama_tokens & get_tokens() const;
+
+    llama_tokens get_text_tokens() const;
 
     // for compatibility with speculative decoding
     void set_token(llama_pos pos, llama_token id);
@@ -204,17 +218,11 @@ public:
 
     size_t get_common_prefix(const server_tokens & b) const;
 
+    // split the tokens into message spans, skipping over media chunks
+    common_chat_msg_spans find_message_spans(const common_chat_msg_delimiters & delims) const;
+
     // make sure all text tokens are within the vocab range
     bool validate(const struct llama_context * ctx) const;
-
-    // encode and decode the image chunk
-    int32_t process_chunk(
-                llama_context * ctx,
-                mtmd_context * mctx,
-                size_t idx,
-                llama_pos pos,
-                int32_t seq_id,
-                size_t & n_tokens_out) const;
 
     server_tokens clone() const;
 };
@@ -248,7 +256,8 @@ llama_tokens tokenize_mixed(const llama_vocab * vocab, const json & json_prompt,
 size_t validate_utf8(const std::string& text);
 
 // process mtmd prompt, return the server_tokens containing both text tokens and media chunks
-server_tokens process_mtmd_prompt(mtmd_context * mctx, std::string prompt, std::vector<raw_buffer> files);
+// if is_placeholder is true, the media chunk will be treated as placeholder for counting tokens; the output tokens are not usable for actual inference (e.g. for submitting a task to server_queue)
+server_tokens process_mtmd_prompt(mtmd_context * mctx, const std::string & prompt, const std::vector<raw_buffer> & files, bool is_placeholder = false);
 
 /**
  * break the input "prompt" object into multiple prompt if needed, then tokenize them
@@ -274,29 +283,31 @@ std::vector<server_tokens> tokenize_input_prompts(
 // OAI utils
 //
 
-// used by /completions endpoint
-json oaicompat_completion_params_parse(const json & body);
-
-struct oaicompat_parser_options {
+// global server parameters for chat formatting / parsing
+struct server_chat_params {
     bool use_jinja;
     bool prefill_assistant;
     common_reasoning_format reasoning_format;
-    std::map<std::string,std::string> chat_template_kwargs;
-    common_chat_templates * tmpls;
+    std::map<std::string, std::string> chat_template_kwargs; // mapping key --> json value
+    common_chat_templates_ptr tmpls;
     bool allow_image;
     bool allow_audio;
+    bool allow_video;
     bool enable_thinking = true;
+    int  reasoning_budget = -1;
+    std::string reasoning_budget_message;
     std::string media_path;
+    bool force_pure_content = false;
 };
+
+// used by /completions endpoint
+json oaicompat_completion_params_parse(const json & body);
 
 // used by /chat/completions endpoint
 json oaicompat_chat_params_parse(
     json & body, /* openai api json semantics */
-    const oaicompat_parser_options & opt,
+    const server_chat_params & opt,
     std::vector<raw_buffer> & out_files);
-
-// convert Anthropic Messages API format to OpenAI Chat Completions API format
-json convert_anthropic_to_oai(const json & body);
 
 // TODO: move it to server-task.cpp
 json format_embeddings_response_oaicompat(
@@ -318,7 +329,7 @@ json format_response_rerank(
 // other utils
 //
 
-std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int idx);
+std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int idx, size_t n_top);
 
 std::string safe_json_to_str(const json & data);
 
@@ -331,6 +342,8 @@ std::string tokens_to_output_formatted_string(const llama_context * ctx, const l
 // format server-sent event (SSE), return the formatted string to send
 // note: if data is a json array, it will be sent as multiple events, one per item
 std::string format_oai_sse(const json & data);
+
+std::string format_oai_resp_sse(const json & data);
 
 // format Anthropic-style SSE with event types
 std::string format_anthropic_sse(const json & data);

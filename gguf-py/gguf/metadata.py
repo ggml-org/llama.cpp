@@ -186,7 +186,7 @@ class Metadata:
         # Quick hack to fix the Norway problem
         # https://hitchdev.com/strictyaml/why/implicit-typing-removed/
         yaml_content = yaml_content.replace("- no\n", "- \"no\"\n")
-        # yaml should use 2 spaces insted of tab
+        # yaml should use 2 spaces instead of tab
         # this issue has came up with the Qwen/Qwen3-235B-A22B-Instruct-2507 model card
         #    (I've also sent a pr tp fix the modelcard too)
         yaml_content = yaml_content.replace("\t", "  ")

@@ -4,7 +4,11 @@
 namespace utils {
 template<typename T>
 static constexpr bool is_arithmetic_v() {
-    return std::is_arithmetic_v<T> || std::is_same_v<T, sycl::half> || std::is_same_v<T, sycl::ext::oneapi::bfloat16>;
+    return std::is_arithmetic_v<T> || std::is_same_v<T, sycl::half>
+#ifdef GGML_SYCL_HAS_BF16
+        || std::is_same_v<T, sycl::ext::oneapi::bfloat16>
+#endif
+        ;
 }
 }
 
@@ -131,7 +135,7 @@ static void set_rows_sycl(
 
     stream->parallel_for(
         sycl::nd_range<1>(grid_size * block_size, block_size),
-        [=](sycl::nd_item<1> item_ct1) {
+        [=](sycl::nd_item<1> item_ct1) [[intel::reqd_sub_group_size(WARP_SIZE)]] {
             k_set_rows<TIn, TIdx, TOut>(
                 src0_d, src1_d, dst_d,
                 ne00, ne01, ne02,
@@ -181,6 +185,7 @@ static void set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor * s
                 stream
             );
             break;
+#ifdef GGML_SYCL_HAS_BF16
         case GGML_TYPE_BF16:
             set_rows_sycl<TIn, TIdx, sycl::ext::oneapi::bfloat16>(
                 src0_d, src1_d, (char *)dst->data,
@@ -193,8 +198,12 @@ static void set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor * s
                 stream
             );
             break;
+#endif
         case GGML_TYPE_Q8_0:
             set_rows_sycl_q<TIdx, block_q8_0, QK8_0, cpy_blck_f32_q8_0>(src0_d, src1_d, (block_q8_0 *)dst->data, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
+            break;
+        case GGML_TYPE_Q1_0:
+            set_rows_sycl_q<TIdx, block_q1_0, QK1_0, cpy_blck_f32_q1_0>(src0_d, src1_d, (block_q1_0 *)dst->data, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
             break;
         case GGML_TYPE_Q5_1:
             set_rows_sycl_q<TIdx, block_q5_1, QK5_1, cpy_blck_f32_q5_1>(src0_d, src1_d, (block_q5_1 *)dst->data, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
@@ -211,7 +220,12 @@ static void set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor * s
         case GGML_TYPE_IQ4_NL:
             set_rows_sycl_q<TIdx, block_iq4_nl, QK4_NL, cpy_blck_f32_iq4_nl>(src0_d, src1_d, (block_iq4_nl *)dst->data, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
             break;
-
+        case GGML_TYPE_MXFP4:
+            set_rows_sycl_q<TIdx, block_mxfp4, QK_MXFP4, cpy_blck_f32_mxfp4>(src0_d, src1_d, (block_mxfp4 *)dst->data, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
+            break;
+        case GGML_TYPE_NVFP4:
+            set_rows_sycl_q<TIdx, block_nvfp4, QK_NVFP4, cpy_blck_f32_nvfp4>(src0_d, src1_d, (block_nvfp4 *)dst->data, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
+            break;
         default:
             GGML_ABORT("Unsupported tensor type!");
             break;

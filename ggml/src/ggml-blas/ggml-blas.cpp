@@ -115,16 +115,14 @@ static void ggml_backend_blas_mul_mat(ggml_backend_blas_context * ctx, struct gg
 #endif
     }
 
-#if defined(OPENBLAS_VERSION)
+#if defined(GGML_BLAS_USE_OPENBLAS)
     openblas_set_num_threads(ctx->n_threads);
-#endif
-
-#if defined(GGML_BLAS_USE_BLIS)
+#elif defined(GGML_BLAS_USE_BLIS)
     bli_thread_set_num_threads(ctx->n_threads);
-#endif
-
-#if defined(GGML_BLAS_USE_NVPL)
+#elif defined(GGML_BLAS_USE_NVPL)
     nvpl_blas_set_num_threads(ctx->n_threads);
+#elif defined(GGML_BLAS_USE_MKL)
+    mkl_set_num_threads(ctx->n_threads);
 #endif
 
     for (int64_t i13 = 0; i13 < ne13; i13++) {
@@ -230,6 +228,10 @@ static enum ggml_status ggml_backend_blas_graph_compute(ggml_backend_t backend, 
     for (int i = 0; i < cgraph->n_nodes; i++) {
         struct ggml_tensor * node = cgraph->nodes[i];
 
+        if ((node->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
+            continue;
+        }
+
         switch (node->op) {
             case GGML_OP_MUL_MAT:
                 ggml_backend_blas_mul_mat(ctx, node);
@@ -261,6 +263,8 @@ static struct ggml_backend_i blas_backend_i = {
     /* .free                    = */ ggml_backend_blas_free,
     /* .set_tensor_async        = */ NULL,
     /* .get_tensor_async        = */ NULL,
+    /* .set_tensor_2d_async     = */ NULL,
+    /* .get_tensor_2d_async     = */ NULL,
     /* .cpy_tensor_async        = */ NULL,
     /* .synchronize             = */ NULL,
     /* .graph_plan_create       = */ NULL,
@@ -288,7 +292,7 @@ ggml_backend_t ggml_backend_blas_init(void) {
         /* .context = */ ctx,
     };
 
-#if defined(OPENBLAS_VERSION) && defined(GGML_USE_OPENMP)
+#if defined(GGML_BLAS_USE_OPENBLAS) && defined(GGML_USE_OPENMP)
     if (openblas_get_parallel() != OPENBLAS_OPENMP) {
         GGML_LOG_DEBUG("%s: warning: ggml is using OpenMP, but OpenBLAS was compiled without OpenMP support\n", __func__);
     }
@@ -329,7 +333,7 @@ static const char * ggml_backend_blas_device_get_description(ggml_backend_dev_t 
         return "BLIS";
     #elif defined(GGML_BLAS_USE_NVPL)
         return "NVPL";
-    #elif defined(OPENBLAS_VERSION)
+    #elif defined(GGML_BLAS_USE_OPENBLAS)
         return "OpenBLAS";
     #else
         return "BLAS";
@@ -339,8 +343,8 @@ static const char * ggml_backend_blas_device_get_description(ggml_backend_dev_t 
 }
 
 static void ggml_backend_blas_device_get_memory(ggml_backend_dev_t dev, size_t * free, size_t * total) {
-    // TODO
-    *free = 0;
+    // no memory to report
+    *free  = 0;
     *total = 0;
 
     GGML_UNUSED(dev);

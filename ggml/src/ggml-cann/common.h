@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023-2024 The ggml authors
+ * Copyright (c) 2023-2026 The ggml authors
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to
@@ -101,9 +101,8 @@ struct ggml_cann_device_info {
 const ggml_cann_device_info & ggml_cann_info();
 
 void    ggml_cann_set_device(int32_t device);
-int32_t ggml_cann_get_device();
 
-std::optional<std::string> get_env(const std::string & name);
+std::optional<std::string> get_env_as_lowercase(const std::string & name);
 bool                       parse_bool(const std::string & value);
 int                        parse_integer(const std::string & value);
 
@@ -217,14 +216,16 @@ struct ggml_cann_pool_alloc {
 #ifdef USE_ACL_GRAPH
 struct ggml_graph_node_properties {
     // dst tensor
-    void *  node_address;
-    int64_t ne[GGML_MAX_DIMS];
-    size_t  nb[GGML_MAX_DIMS];
+    void *    node_address;
+    ggml_type node_type;
+    int64_t   ne[GGML_MAX_DIMS];
+    size_t    nb[GGML_MAX_DIMS];
 
     // src tensor
-    void *  src_address[GGML_MAX_SRC];
-    int64_t src_ne[GGML_MAX_SRC][GGML_MAX_DIMS];
-    size_t  src_nb[GGML_MAX_SRC][GGML_MAX_DIMS];
+    void *    src_address[GGML_MAX_SRC];
+    ggml_type src_type[GGML_MAX_SRC];
+    int64_t   src_ne[GGML_MAX_SRC][GGML_MAX_DIMS];
+    size_t    src_nb[GGML_MAX_SRC][GGML_MAX_DIMS];
 
     // op
     ggml_op node_op;
@@ -248,6 +249,10 @@ struct ggml_graph_node_properties {
             return false;
         }
 
+        if (node->type != this->node_type) {
+            return false;
+        }
+
         for (int i = 0; i < GGML_MAX_DIMS; i++) {
             if (node->ne[i] != this->ne[i]) {
                 return false;
@@ -260,6 +265,10 @@ struct ggml_graph_node_properties {
         for (int i = 0; i < GGML_MAX_SRC; i++) {
             if (node->src[i]) {
                 if (node->src[i]->data != this->src_address[i] && node->op != GGML_OP_VIEW) {
+                    return false;
+                }
+
+                if (node->src[i]->type != this->src_type[i]) {
                     return false;
                 }
 
@@ -278,10 +287,7 @@ struct ggml_graph_node_properties {
             }
         }
 
-        if (node->op == GGML_OP_SCALE || node->op == GGML_OP_UNARY || node->op == GGML_OP_GLU) {
-            return memcmp(this->op_params, node->op_params, GGML_MAX_OP_PARAMS) == 0;
-        }
-        return true;
+        return memcmp(this->op_params, node->op_params, GGML_MAX_OP_PARAMS) == 0;
     }
 };
 
@@ -323,6 +329,7 @@ struct ggml_cann_graph {
 
             prop.node_address = node->data;
             prop.node_op      = node->op;
+            prop.node_type    = node->type;
 
             std::copy_n(node->ne, GGML_MAX_DIMS, prop.ne);
             std::copy_n(node->nb, GGML_MAX_DIMS, prop.nb);
@@ -330,10 +337,12 @@ struct ggml_cann_graph {
             for (int src = 0; src < GGML_MAX_SRC; ++src) {
                 if (node->src[src]) {
                     prop.src_address[src] = node->src[src]->data;
+                    prop.src_type[src]    = node->src[src]->type;
                     std::copy_n(node->src[src]->ne, GGML_MAX_DIMS, prop.src_ne[src]);
                     std::copy_n(node->src[src]->nb, GGML_MAX_DIMS, prop.src_nb[src]);
                 } else {
                     prop.src_address[src] = nullptr;
+                    prop.src_type[src]    = GGML_TYPE_COUNT;
                     std::fill_n(prop.src_ne[src], GGML_MAX_DIMS, 0);
                     std::fill_n(prop.src_nb[src], GGML_MAX_DIMS, 0);
                 }
@@ -382,7 +391,7 @@ struct ggml_cann_graph_lru_cache {
 
     std::list<ggml_cann_graph *> cache_list; /**< List storing cached graphs as raw pointers. */
 
-    ggml_cann_graph_lru_cache() { capacity = parse_integer(get_env("GGML_CANN_GRAPH_CACHE_CAPACITY").value_or("12")); }
+    ggml_cann_graph_lru_cache() { capacity = parse_integer(get_env_as_lowercase("GGML_CANN_GRAPH_CACHE_CAPACITY").value_or("12")); }
 
     /**
      * @brief Push a new graph to the front of the cache.
@@ -574,7 +583,7 @@ struct ggml_backend_cann_context {
         description = aclrtGetSocName();
 
 #ifdef USE_ACL_GRAPH
-        acl_graph_mode = parse_bool(get_env("GGML_CANN_ACL_GRAPH").value_or("on"));
+        acl_graph_mode = parse_bool(get_env_as_lowercase("GGML_CANN_ACL_GRAPH").value_or("on"));
         GGML_LOG_INFO("%s: device %d execution mode is %s (%s)\n", __func__, device, acl_graph_mode ? "GRAPH" : "EAGER",
                       acl_graph_mode ? "acl graph enabled" : "acl graph disabled");
 #endif

@@ -1,0 +1,741 @@
+.markdown-block--unstable {
+	display: contents;
+}
+
+/* Streaming code block uses .code-block-wrapper styles */
+.streaming-code-block .streaming-code-pre {
+	background: transparent;
+	padding: 0.5rem;
+	margin: 0;
+	overflow-x: visible;
+	border-radius: 0;
+	border: none;
+	font-size: 0.875rem;
+}
+
+/* Base typography styles */
+.markdown-content :global(p) {
+	margin-block: 1rem;
+	line-height: 1.75;
+}
+
+.markdown-content :global(:is(h1, h2, h3, h4, h5, h6):first-child) {
+	margin-top: 0;
+}
+
+/* Headers with consistent spacing */
+.markdown-content :global(h1) {
+	font-size: 1.875rem;
+	font-weight: 700;
+	line-height: 1.2;
+	margin: 1.5rem 0 0.75rem 0;
+}
+
+.markdown-content :global(h2) {
+	font-size: 1.5rem;
+	font-weight: 600;
+	line-height: 1.3;
+	margin: 1.25rem 0 0.5rem 0;
+}
+
+.markdown-content :global(h3) {
+	font-size: 1.25rem;
+	font-weight: 600;
+	margin: 1.5rem 0 0.5rem 0;
+	line-height: 1.4;
+}
+
+.markdown-content :global(h4) {
+	font-size: 1.125rem;
+	font-weight: 600;
+	margin: 0.75rem 0 0.25rem 0;
+}
+
+.markdown-content :global(h5) {
+	font-size: 1rem;
+	font-weight: 600;
+	margin: 0.5rem 0 0.25rem 0;
+}
+
+.markdown-content :global(h6) {
+	font-size: 0.875rem;
+	font-weight: 600;
+	margin: 0.5rem 0 0.25rem 0;
+}
+
+/* Text formatting */
+.markdown-content :global(strong) {
+	font-weight: 600;
+}
+
+.markdown-content :global(em) {
+	font-style: italic;
+}
+
+.markdown-content :global(del) {
+	text-decoration: line-through;
+	opacity: 0.7;
+}
+
+/* Inline code */
+.markdown-content :global(code:not(pre code)) {
+	background: var(--muted);
+	color: var(--muted-foreground);
+	padding: 0.125rem 0.375rem;
+	border-radius: 0.375rem;
+	font-size: 0.875rem;
+}
+
+.markdown-content :global(pre) {
+	display: inline;
+	margin: 0 !important;
+	overflow: hidden !important;
+	background: var(--muted);
+	overflow-x: auto;
+	border-radius: 1rem;
+	border: none;
+	line-height: 1 !important;
+}
+
+.markdown-content :global(pre code) {
+	padding: 0 !important;
+	display: inline !important;
+}
+
+.markdown-content :global(code) {
+	background: transparent;
+	color: var(--code-foreground);
+}
+
+/* Links */
+.markdown-content :global(a) {
+	color: var(--primary);
+	text-decoration: underline;
+	text-underline-offset: 2px;
+	transition: color 0.2s ease;
+	overflow-wrap: anywhere;
+	word-break: break-all;
+}
+
+.markdown-content :global(a:hover) {
+	color: var(--primary);
+}
+
+/* Lists */
+.markdown-content :global(ul) {
+	list-style-type: disc;
+	margin-inline-start: 1.5rem;
+	margin-bottom: 1rem;
+}
+
+.markdown-content :global(ol) {
+	list-style-type: decimal;
+	margin-inline-start: 1.5rem;
+	margin-bottom: 1rem;
+}
+
+.markdown-content :global(li) {
+	margin-bottom: 0.25rem;
+	padding-inline-start: 0.5rem;
+}
+
+.markdown-content :global(li::marker) {
+	color: var(--muted-foreground);
+}
+
+/* Nested lists */
+.markdown-content :global(ul ul) {
+	list-style-type: circle;
+	margin-top: 0.25rem;
+	margin-bottom: 0.25rem;
+}
+
+.markdown-content :global(ol ol) {
+	list-style-type: lower-alpha;
+	margin-top: 0.25rem;
+	margin-bottom: 0.25rem;
+}
+
+/* Task lists */
+.markdown-content :global(.task-list-item) {
+	list-style: none;
+	margin-inline-start: 0;
+	padding-inline-start: 0;
+}
+
+.markdown-content :global(.task-list-item-checkbox) {
+	margin-right: 0.5rem;
+	margin-top: 0.125rem;
+}
+
+/* Blockquotes */
+.markdown-content :global(blockquote) {
+	border-left: 4px solid var(--border);
+	padding: 0.5rem 1rem;
+	margin: 1.5rem 0;
+	font-style: italic;
+	color: var(--muted-foreground);
+	background: var(--muted);
+	border-radius: 0 0.375rem 0.375rem 0;
+}
+
+/* Tables */
+.markdown-content :global(table) {
+	width: 100%;
+	margin: 1.5rem 0;
+	border-collapse: collapse;
+	border: 1px solid var(--border);
+	border-radius: 0.375rem;
+	overflow: hidden;
+}
+
+.markdown-content :global(th) {
+	background: hsl(var(--muted) / 0.3);
+	border: 1px solid var(--border);
+	padding: 0.5rem 0.75rem;
+	text-align: left;
+	font-weight: 600;
+}
+
+.markdown-content :global(td) {
+	border: 1px solid var(--border);
+	padding: 0.5rem 0.75rem;
+}
+
+.markdown-content :global(tr:nth-child(even)) {
+	background: hsl(var(--muted) / 0.1);
+}
+
+/* User message markdown should keep table borders visible on light primary backgrounds */
+div.markdown-user-content :global(table),
+div.markdown-user-content :global(th),
+div.markdown-user-content :global(td),
+div.markdown-user-content :global(.table-wrapper) {
+	border-color: currentColor;
+}
+
+/* Horizontal rules */
+.markdown-content :global(hr) {
+	border: none;
+	border-top: 1px solid var(--border);
+	margin: 1.5rem 0;
+}
+
+/* Images */
+.markdown-content :global(img) {
+	border-radius: 0.5rem;
+	box-shadow:
+		0 1px 3px 0 rgb(0 0 0 / 0.1),
+		0 1px 2px -1px rgb(0 0 0 / 0.1);
+	margin: 1.5rem 0;
+	max-width: 100%;
+	height: auto;
+}
+
+/* Code blocks */
+
+.markdown-content :global(.code-block-wrapper) {
+	margin: 1.5rem 0;
+	border-radius: 0.75rem;
+	overflow: hidden;
+	border: 1px solid color-mix(in oklch, var(--border) 30%, transparent);
+	background: var(--code-background);
+	box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+	min-height: var(--min-message-height);
+	max-height: var(--max-message-height);
+}
+
+.markdown-content:global(.dark) :global(.code-block-wrapper) {
+	border-color: color-mix(in oklch, var(--border) 20%, transparent);
+}
+
+/* Scroll container for code blocks (both streaming and completed) */
+.markdown-content :global(.code-block-scroll-container),
+.streaming-code-scroll-container {
+	min-height: var(--min-message-height);
+	max-height: var(--max-message-height);
+	overflow-y: auto;
+	overflow-x: auto;
+	padding: 3rem 1rem 1rem;
+	line-height: 1.3;
+}
+
+.full-height-code-blocks :global(.code-block-wrapper) {
+	max-height: none;
+}
+
+.full-height-code-blocks :global(.code-block-scroll-container),
+.full-height-code-blocks .streaming-code-scroll-container {
+	max-height: none;
+	overflow-y: visible;
+}
+
+.markdown-content :global(.code-block-header) {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 0.5rem 1rem 0;
+	font-size: 0.875rem;
+	position: absolute;
+	top: 0;
+	left: 0;
+	right: 0;
+}
+
+.markdown-content :global(.code-language) {
+	color: var(--color-foreground);
+	font-weight: 500;
+	font-family:
+		ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas,
+		'Liberation Mono', Menlo, monospace;
+	text-transform: uppercase;
+	font-size: 0.75rem;
+	letter-spacing: 0.05em;
+}
+
+.markdown-content :global(.code-block-actions) {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+}
+
+.markdown-content :global(.copy-code-btn),
+.markdown-content :global(.preview-code-btn),
+.markdown-content :global(.toggle-source-btn) {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0;
+	background: transparent;
+	color: var(--code-foreground);
+	cursor: pointer;
+	transition: all 0.2s ease;
+}
+
+.markdown-content :global(.copy-code-btn:hover),
+.markdown-content :global(.preview-code-btn:hover),
+.markdown-content :global(.toggle-source-btn:hover) {
+	transform: scale(1.05);
+}
+
+.markdown-content :global(.copy-code-btn:active),
+.markdown-content :global(.preview-code-btn:active),
+.markdown-content :global(.toggle-source-btn:active) {
+	transform: scale(0.95);
+}
+
+/* Pressed state marks the source view as active */
+.markdown-content :global(.toggle-source-btn[aria-pressed='true']) {
+	color: var(--primary);
+}
+
+.markdown-content :global(.code-block-wrapper pre) {
+	background: transparent;
+	margin: 0;
+	border-radius: 0;
+	border: none;
+	font-size: 0.875rem;
+}
+
+/* Mentions and hashtags */
+.markdown-content :global(.mention) {
+	color: hsl(var(--primary));
+	font-weight: 500;
+	text-decoration: none;
+}
+
+.markdown-content :global(.mention:hover) {
+	text-decoration: underline;
+}
+
+.markdown-content :global(.hashtag) {
+	color: hsl(var(--primary));
+	font-weight: 500;
+	text-decoration: none;
+}
+
+.markdown-content :global(.hashtag:hover) {
+	text-decoration: underline;
+}
+
+/* Advanced table enhancements */
+.markdown-content :global(table) {
+	transition: all 0.2s ease;
+}
+
+.markdown-content :global(table:hover) {
+	box-shadow:
+		0 4px 6px -1px rgb(0 0 0 / 0.1),
+		0 2px 4px -2px rgb(0 0 0 / 0.1);
+}
+
+.markdown-content :global(th:hover),
+.markdown-content :global(td:hover) {
+	background: var(--muted);
+}
+
+/* Disable hover effects when rendering user messages */
+.markdown-user-content :global(a),
+.markdown-user-content :global(a:hover) {
+	color: inherit;
+}
+
+.markdown-user-content :global(table:hover) {
+	box-shadow: none;
+}
+
+.markdown-user-content :global(th:hover),
+.markdown-user-content :global(td:hover) {
+	background: inherit;
+}
+
+/* Enhanced blockquotes */
+.markdown-content :global(blockquote) {
+	transition: all 0.2s ease;
+	position: relative;
+}
+
+.markdown-content :global(blockquote:hover) {
+	border-left-width: 6px;
+	background: var(--muted);
+	transform: translateX(2px);
+}
+
+.markdown-content :global(blockquote::before) {
+	content: '"';
+	position: absolute;
+	top: -0.5rem;
+	left: 0.5rem;
+	font-size: 3rem;
+	color: var(--muted-foreground);
+	font-family: serif;
+	line-height: 1;
+}
+
+/* Enhanced images */
+.markdown-content :global(img) {
+	transition: all 0.3s ease;
+	cursor: pointer;
+}
+
+.markdown-content :global(img:hover) {
+	transform: scale(1.02);
+	box-shadow:
+		0 10px 15px -3px rgb(0 0 0 / 0.1),
+		0 4px 6px -4px rgb(0 0 0 / 0.1);
+}
+
+/* Image zoom overlay */
+.markdown-content :global(.image-zoom-overlay) {
+	position: fixed;
+	top: 0;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	background: rgba(0, 0, 0, 0.8);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: 1000;
+	cursor: pointer;
+}
+
+.markdown-content :global(.image-zoom-overlay img) {
+	max-width: 90vw;
+	max-height: 90vh;
+	border-radius: 0.5rem;
+	box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.25);
+}
+
+/* Enhanced horizontal rules */
+.markdown-content :global(hr) {
+	border: none;
+	height: 2px;
+	background: linear-gradient(to right, transparent, var(--border), transparent);
+	margin: 2rem 0;
+	position: relative;
+}
+
+.markdown-content :global(hr::after) {
+	content: '';
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	transform: translate(-50%, -50%);
+	width: 1rem;
+	height: 1rem;
+	background: var(--border);
+	border-radius: 50%;
+}
+
+/* Scrollable tables */
+.markdown-content :global(.table-wrapper) {
+	overflow-x: auto;
+	margin: 1.5rem 0;
+	border-radius: 0.5rem;
+	border: 1px solid var(--border);
+}
+
+.markdown-content :global(.table-wrapper table) {
+	margin: 0;
+	border: none;
+}
+
+/* Responsive adjustments */
+@media (max-width: 640px) {
+	.markdown-content :global(h1) {
+		font-size: 1.5rem;
+	}
+
+	.markdown-content :global(h2) {
+		font-size: 1.25rem;
+	}
+
+	.markdown-content :global(h3) {
+		font-size: 1.125rem;
+	}
+
+	.markdown-content :global(table) {
+		font-size: 0.875rem;
+	}
+
+	.markdown-content :global(th),
+	.markdown-content :global(td) {
+		padding: 0.375rem 0.5rem;
+	}
+
+	.markdown-content :global(.table-wrapper) {
+		margin: 0.5rem -1rem;
+		border-radius: 0;
+		border-left: none;
+		border-right: none;
+	}
+}
+
+/* Dark mode adjustments */
+@media (prefers-color-scheme: dark) {
+	.markdown-content :global(blockquote:hover) {
+		background: var(--muted);
+	}
+}
+
+/* Image load error fallback */
+.markdown-content :global(.image-load-error) {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	margin: 1.5rem 0;
+	padding: 1.5rem;
+	border-radius: 0.5rem;
+	background: var(--muted);
+	border: 1px dashed var(--border);
+}
+
+.markdown-content :global(.image-error-content) {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 0.75rem;
+	color: var(--muted-foreground);
+	text-align: center;
+}
+
+.markdown-content :global(.image-error-content svg) {
+	opacity: 0.5;
+}
+
+.markdown-content :global(.image-error-text) {
+	font-size: 0.875rem;
+}
+
+.markdown-content :global(.image-error-link) {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.375rem;
+	padding: 0.5rem 1rem;
+	font-size: 0.875rem;
+	font-weight: 500;
+	color: var(--primary);
+	background: var(--background);
+	border: 1px solid var(--border);
+	border-radius: 0.375rem;
+	text-decoration: none;
+	transition: all 0.2s ease;
+}
+
+.markdown-content :global(.image-error-link:hover) {
+	background: var(--muted);
+	border-color: var(--primary);
+}
+
+/* Mermaid and svg blocks share the same block styling */
+.markdown-content :global(pre.mermaid),
+.markdown-content :global(.svg-block) {
+	background: transparent;
+	border: none;
+	padding: 0;
+	text-align: center;
+	font-family: inherit;
+	cursor: pointer;
+	transition: opacity 0.15s ease;
+	position: relative;
+}
+
+/* The svg block fills its flex container so the shadow host has a definite width to render into */
+.markdown-content :global(.svg-block) {
+	width: 100%;
+}
+
+/* Hide mermaid code text until rendered - prevents flash */
+.markdown-content :global(pre.mermaid:not([data-mermaid-rendered])),
+.markdown-content :global(pre.mermaid[data-mermaid-rendered]:not(:has(svg))) {
+	display: none;
+}
+
+/* Hide svg source until rendered - prevents flash. A rendered-but-unsanitized
+   block (oversized source) keeps its raw text visible as a safe fallback. */
+.markdown-content :global(pre.svg-block:not([data-svg-rendered])) {
+	display: none;
+}
+
+.markdown-content :global(pre.mermaid:hover),
+.markdown-content :global(.svg-block:hover) {
+	opacity: 0.85;
+}
+
+.markdown-content :global(pre.mermaid svg) {
+	max-width: 90%;
+	margin: 0 auto;
+	height: auto;
+	display: block;
+	padding: 3rem 1rem;
+}
+
+/* Diagram block wrapper - matches code block styling */
+.markdown-content :global(.mermaid-block-wrapper),
+.markdown-content :global(.svg-block-wrapper) {
+	margin: 1.5rem 0;
+	border-radius: 0.75rem;
+	overflow: hidden;
+	border: 1px solid color-mix(in oklch, var(--border) 30%, transparent);
+	background: var(--code-background);
+	box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+	position: relative;
+	min-height: var(--min-message-height);
+	max-height: var(--max-message-height);
+}
+
+.markdown-content:global(.dark) :global(.mermaid-block-wrapper),
+.markdown-content:global(.dark) :global(.svg-block-wrapper) {
+	border-color: color-mix(in oklch, var(--border) 20%, transparent);
+}
+
+.markdown-content :global(.mermaid-scroll-container),
+.markdown-content :global(.svg-scroll-container) {
+	min-height: 350px;
+	max-height: var(--max-message-height);
+	overflow-y: auto;
+	overflow-x: auto;
+	display: flex;
+	align-items: safe center;
+	justify-content: safe center;
+	padding: 3rem 1rem 1rem;
+}
+
+.full-height-code-blocks :global(.mermaid-block-wrapper),
+.full-height-code-blocks :global(.svg-block-wrapper) {
+	max-height: none;
+}
+
+.full-height-code-blocks :global(.mermaid-scroll-container),
+.full-height-code-blocks :global(.svg-scroll-container) {
+	max-height: none;
+	overflow-y: visible;
+}
+
+/* Diagram block uses same header styling as code blocks. The header floats over
+   scrollable diagram content and stays transparent, so the overflow shows up to
+   the box edge. It keeps a z-index so it stays the click target above content. */
+.markdown-content :global(.mermaid-block-wrapper .code-block-header),
+.markdown-content :global(.svg-block-wrapper .code-block-header) {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 0.5rem 1rem 0;
+	font-size: 0.875rem;
+	position: absolute;
+	top: 0;
+	left: 0;
+	right: 0;
+	z-index: 2;
+}
+
+.markdown-content :global(.mermaid-block-wrapper .code-block-actions),
+.markdown-content :global(.svg-block-wrapper .code-block-actions) {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+}
+
+/* Diagram pre element - remove default margins */
+.markdown-content :global(.mermaid-block-wrapper pre.mermaid),
+.markdown-content :global(.svg-block-wrapper pre.svg-block) {
+	background: transparent;
+	border: none;
+	padding: 0;
+	margin: 0;
+	text-align: center;
+}
+
+.markdown-content :global(.mermaid-block-wrapper pre.mermaid svg) {
+	width: unset !important;
+	height: auto;
+	display: block;
+	padding: 3rem 1rem;
+}
+
+/* Source view stays hidden while the block renders, css swaps the two views
+   from the wrapper mode so the click handler only flips one attribute. The view
+   reuses the code block scroll container, so it matches the app code blocks. */
+.markdown-content :global(.diagram-source) {
+	display: none;
+	text-align: left;
+}
+
+.markdown-content :global(.diagram-source pre) {
+	background: transparent;
+	margin: 0;
+	border-radius: 0;
+	border: none;
+	font-size: 0.875rem;
+}
+
+.markdown-content :global([data-view-mode='source'] .mermaid-scroll-container),
+.markdown-content :global([data-view-mode='source'] .svg-scroll-container) {
+	display: none;
+}
+
+.markdown-content :global([data-view-mode='source'] .diagram-source) {
+	display: block;
+}
+
+/* Streaming mermaid block - empty preview box */
+.mermaid-streaming-block {
+	min-height: 300px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.mermaid-loading-placeholder {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 3rem;
+	color: var(--muted-foreground);
+}
+
+.mermaid-loading-text {
+	font-size: 0.875rem;
+	font-style: italic;
+}

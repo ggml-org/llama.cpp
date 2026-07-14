@@ -1,6 +1,7 @@
 #include "arg.h"
 #include "common.h"
 
+#include <clocale>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -72,12 +73,12 @@ static void write_help(std::ostringstream & ss, const md_file & md) {
     auto ctx_arg = common_params_parser_init(params, md.ex);
 
     std::vector<common_arg *> common_options;
-    std::vector<common_arg *> sparam_options;
+    std::vector<common_arg *> sampling_options;
     std::vector<common_arg *> specific_options;
     for (auto & opt : ctx_arg.options) {
         // in case multiple LLAMA_EXAMPLE_* are set, we prioritize the LLAMA_EXAMPLE_* matching current example
-        if (opt.is_sparam) {
-            sparam_options.push_back(&opt);
+        if (opt.is_sampling) {
+            sampling_options.push_back(&opt);
         } else if (opt.in_example(ctx_arg.ex)) {
             specific_options.push_back(&opt);
         } else {
@@ -92,7 +93,7 @@ static void write_help(std::ostringstream & ss, const md_file & md) {
     ss << "### Common params\n\n";
     write_table(ss, common_options);
     ss << "\n\n### Sampling params\n\n";
-    write_table(ss, sparam_options);
+    write_table(ss, sampling_options);
     ss << "\n\n### " << md.specific_section_header << "\n\n";
     write_table(ss, specific_options);
 
@@ -100,6 +101,8 @@ static void write_help(std::ostringstream & ss, const md_file & md) {
 }
 
 int main(int, char **) {
+    std::setlocale(LC_NUMERIC, "C");
+
     for (const auto & md : md_files) {
         std::ifstream infile(md.fname);
         if (!infile.is_open()) {

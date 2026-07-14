@@ -15,6 +15,7 @@ if (CUDAToolkit_FOUND)
         # 80     == Ampere, asynchronous data loading, faster tensor core instructions
         # 86     == RTX 3000, needs CUDA v11.1
         # 89     == RTX 4000, needs CUDA v11.8
+        # 90     == Hopper H100/200, needs CUDA v11.8
         # 120    == Blackwell, needs CUDA v12.8, FP4 tensor cores
         #
         # XX-virtual == compile CUDA code as PTX, do JIT compilation to binary code on first run
@@ -33,7 +34,7 @@ if (CUDAToolkit_FOUND)
             list(APPEND CMAKE_CUDA_ARCHITECTURES 75-virtual 80-virtual 86-real)
 
             if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "11.8")
-                list(APPEND CMAKE_CUDA_ARCHITECTURES 89-real)
+                list(APPEND CMAKE_CUDA_ARCHITECTURES 89-real 90-virtual)
             endif()
 
             if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "12.8")
@@ -47,12 +48,29 @@ if (CUDAToolkit_FOUND)
                 #     check Modules/Internal/CMakeCUDAArchitecturesValidate.cmake in the CMake git repository instead.
                 # However, the architectures 120a-real and 121a-real should work with basically any CMake version and
                 #     until the release of e.g. Rubin there is no benefit to shipping virtual architectures for Blackwell.
-                list(APPEND CMAKE_CUDA_ARCHITECTURES 120a-real 121a-real)
+                list(APPEND CMAKE_CUDA_ARCHITECTURES 120a-real)
+            endif()
+            if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "12.9")
+                list(APPEND CMAKE_CUDA_ARCHITECTURES 121a-real)
             endif()
         endif()
     endif()
 
     enable_language(CUDA)
+
+    # TODO: Remove once CCCL 3.2 has been released and bundled with CUDA Toolkit
+    if (GGML_CUDA_CUB_3DOT2)
+        include(FetchContent)
+
+        FetchContent_Declare(
+            CCCL
+            GIT_REPOSITORY https://github.com/nvidia/cccl.git
+            GIT_TAG        v3.2.0
+            GIT_SHALLOW    TRUE
+        )
+
+        FetchContent_MakeAvailable(CCCL)
+    endif()
 
     # Replace any plain 12X CUDA architectures with their "architecture-specific" equivalents 12Xa.
     # 12X is forwards-compatible, 12Xa is not.
@@ -99,12 +117,11 @@ if (CUDAToolkit_FOUND)
         list(APPEND GGML_SOURCES_CUDA ${SRCS})
         add_compile_definitions(GGML_CUDA_FA_ALL_QUANTS)
     else()
-        file(GLOB   SRCS "template-instances/fattn-vec*q4_0-q4_0.cu")
-        list(APPEND GGML_SOURCES_CUDA ${SRCS})
-        file(GLOB   SRCS "template-instances/fattn-vec*q8_0-q8_0.cu")
-        list(APPEND GGML_SOURCES_CUDA ${SRCS})
-        file(GLOB   SRCS "template-instances/fattn-vec*f16-f16.cu")
-        list(APPEND GGML_SOURCES_CUDA ${SRCS})
+        list(APPEND GGML_SOURCES_CUDA
+            template-instances/fattn-vec-instance-f16-f16.cu
+            template-instances/fattn-vec-instance-q4_0-q4_0.cu
+            template-instances/fattn-vec-instance-q8_0-q8_0.cu
+            template-instances/fattn-vec-instance-bf16-bf16.cu)
     endif()
 
     ggml_add_backend_library(ggml-cuda
@@ -143,6 +160,9 @@ if (CUDAToolkit_FOUND)
             # As of 12.3.1 CUDA Toolkit for Windows does not offer a static cublas library
             target_link_libraries(ggml-cuda PRIVATE CUDA::cudart_static CUDA::cublas)
         else ()
+            if (GGML_CUDA_CUB_3DOT2)
+                target_link_libraries(ggml-cuda PRIVATE  CCCL::CCCL)
+            endif()
             if (CUDAToolkit_VERSION VERSION_GREATER_EQUAL "10.1")
                 target_link_libraries(ggml-cuda PRIVATE  CUDA::cudart_static CUDA::cublas_static CUDA::cublasLt_static)
             else()
@@ -150,6 +170,9 @@ if (CUDAToolkit_FOUND)
             endif()
         endif()
     else()
+        if (GGML_CUDA_CUB_3DOT2)
+            target_link_libraries(ggml-cuda PRIVATE  CCCL::CCCL)
+        endif()
         target_link_libraries(ggml-cuda PRIVATE CUDA::cudart CUDA::cublas)
     endif()
 
@@ -157,6 +180,16 @@ if (CUDAToolkit_FOUND)
         # No VMM requested, no need to link directly with the cuda driver lib (libcuda.so)
     else()
         target_link_libraries(ggml-cuda PRIVATE CUDA::cuda_driver)
+    endif()
+
+    if (GGML_CUDA_NCCL)
+        find_package(NCCL)
+        if (NCCL_FOUND)
+            add_compile_definitions(GGML_USE_NCCL)
+            target_link_libraries(ggml-cuda PRIVATE NCCL::NCCL)
+        else()
+            message(STATUS "Warning: NCCL not found, performance for multiple CUDA GPUs will be suboptimal")
+        endif()
     endif()
 
     set(CUDA_CXX_FLAGS "")
@@ -218,6 +251,10 @@ if (CUDAToolkit_FOUND)
 
     if (NOT MSVC)
         list(APPEND CUDA_CXX_FLAGS -Wno-pedantic)
+    else()
+        # CCCL 3.2 onwards will require a cpp-standard-compliant preprocessor for MSVC
+        # https://github.com/NVIDIA/cccl/pull/6827
+        list(APPEND CUDA_CXX_FLAGS /Zc:preprocessor)
     endif()
 
     list(JOIN   CUDA_CXX_FLAGS " " CUDA_CXX_FLAGS_JOINED)  # pass host compiler flags as a single argument

@@ -1,7 +1,7 @@
 message(STATUS  "GGML_SYCL_TARGET=${GGML_SYCL_TARGET}")
 
-if (NOT GGML_SYCL_TARGET MATCHES "^(INTEL|NVIDIA|AMD)$")
-    message(FATAL_ERROR "Invalid backend chosen, supported options are INTEL, NVIDIA, or AMD")
+if (NOT GGML_SYCL_TARGET MATCHES "^(INTEL)$")
+    message(FATAL_ERROR "GGML_SYCL_TARGET: Invalid target, the supported options are [INTEL]")
 endif()
 
 check_cxx_compiler_flag("-fsycl" SUPPORTS_SYCL)
@@ -25,6 +25,11 @@ ggml_add_backend_library(ggml-sycl
 
 file(GLOB   GGML_HEADERS_SYCL "*.hpp")
 file(GLOB   GGML_SOURCES_SYCL "*.cpp")
+file(GLOB   SRCS "template-instances/fattn-tile*.cpp")
+list(APPEND GGML_SOURCES_SYCL ${SRCS})
+file(GLOB   SRCS "template-instances/fattn-vec*.cpp")
+list(APPEND GGML_SOURCES_SYCL ${SRCS})
+
 target_sources(ggml-sycl PRIVATE ${GGML_HEADERS_SYCL} ${GGML_SOURCES_SYCL})
 
 if (WIN32)
@@ -33,6 +38,18 @@ if (WIN32)
         set_target_properties(ggml-sycl PROPERTIES VS_PLATFORM_TOOLSET "Intel C++ Compiler 2025")
         set(CMAKE_CXX_COMPILER "icx")
         set(CMAKE_CXX_COMPILER_ID "IntelLLVM")
+    endif()
+    # Level Zero SDK path for Windows (only when GGML_SYCL_SUPPORT_LEVEL_ZERO_API is enabled)
+    if(GGML_SYCL_SUPPORT_LEVEL_ZERO_API)
+        if(DEFINED ENV{LEVEL_ZERO_V1_SDK_PATH})
+            set(LEVEL_ZERO_V1_SDK_PATH $ENV{LEVEL_ZERO_V1_SDK_PATH})
+            if(EXISTS "${LEVEL_ZERO_V1_SDK_PATH}")
+                target_include_directories(ggml-sycl PRIVATE "${LEVEL_ZERO_V1_SDK_PATH}/include")
+                set(LEVEL_ZERO_V1_SDK_LIB_PATH "${LEVEL_ZERO_V1_SDK_PATH}/lib")
+            else()
+                message(WARNING "LEVEL_ZERO_V1_SDK_PATH set but folder not found: ${LEVEL_ZERO_V1_SDK_PATH}")
+            endif()
+        endif()
     endif()
 endif()
 
@@ -88,6 +105,23 @@ endif()
 
 target_compile_options(ggml-sycl PRIVATE "-Wno-narrowing")
 
+message(STATUS "GGML_SYCL_SUPPORT_LEVEL_ZERO_API ${GGML_SYCL_SUPPORT_LEVEL_ZERO_API}")
+if (GGML_SYCL_SUPPORT_LEVEL_ZERO_API)
+    # Link against Level Zero loader for direct device memory allocation.
+    # Avoids sycl::malloc_device triggering DMA-buf/TTM system RAM staging
+    # in the xe kernel driver during multi-GPU inference.
+    find_path(LEVEL_ZERO_INCLUDE_DIR level_zero/ze_api.h HINTS ${ONEAPI_ROOT}/include ${LEVEL_ZERO_V1_SDK_PATH}/include)
+    find_library(ZE_LOADER_LIB ze_loader HINTS ${ONEAPI_ROOT}/lib ${LEVEL_ZERO_V1_SDK_LIB_PATH} ENV LD_LIBRARY_PATH)
+    if(ZE_LOADER_LIB AND LEVEL_ZERO_INCLUDE_DIR)
+        target_link_libraries(ggml-sycl PRIVATE ${ZE_LOADER_LIB})
+        target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_SUPPORT_LEVEL_ZERO_API)
+        message(STATUS "Level Zero loader found: ${ZE_LOADER_LIB}")
+        message(STATUS "Level Zero headers found: ${LEVEL_ZERO_INCLUDE_DIR}")
+    else()
+        message(WARNING "Level Zero loader or headers not found, Level Zero support disabled")
+    endif()
+endif()
+
 # Link against oneDNN
 set(GGML_SYCL_DNNL 0)
 if(GGML_SYCL_DNN)
@@ -125,110 +159,49 @@ endif()
 target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_DNNL=${GGML_SYCL_DNNL})
 
 if (GGML_SYCL_F16)
-    if (GGML_SYCL_TARGET STREQUAL "AMD")
-        message(WARNING "AMD target does not entirely support FP16 in the SYCL backend.")
-    endif()
     add_compile_definitions(GGML_SYCL_F16)
 endif()
 
 if (GGML_SYCL_TARGET STREQUAL "INTEL")
     add_compile_definitions(GGML_SYCL_WARP_SIZE=16)
-    target_link_options(ggml-sycl PRIVATE  -Xs   -ze-intel-greater-than-4GB-buffer-required)
-elseif (GGML_SYCL_TARGET STREQUAL "NVIDIA")
-    add_compile_definitions(GGML_SYCL_WARP_SIZE=32)
-elseif (GGML_SYCL_TARGET STREQUAL "AMD")
-    # INFO: Allowed Sub_group_sizes are not consistent through all
-    # hip targets. For example, 64 is used for certain models, but the backend
-    # does not support it.
-    # Target archs tested working: gfx1030, gfx1031, (Only tested sub_group_size = 32)
-    add_compile_definitions(GGML_SYCL_WARP_SIZE=32)
-else()
-    # default for other target
-    add_compile_definitions(GGML_SYCL_WARP_SIZE=32)
-endif()
+    if (NOT GGML_SYCL_DEVICE_ARCH)
+        target_link_options(ggml-sycl PRIVATE -Xs -ze-intel-greater-than-4GB-buffer-required)
+    else()
+        message(STATUS "Skipping -ze-intel-greater-than-4GB-buffer-required for spir64_gen AOT")
+    endif()
 
-if (GGML_SYCL_GRAPH)
-    target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_GRAPH)
-endif()
-
-# Link against Intel oneMKL or oneMath
-if (GGML_SYCL_TARGET STREQUAL "INTEL")
-    # Intel devices use Intel oneMKL directly instead of oneMath to avoid the limitation of linking Intel oneMKL statically
-    # See https://github.com/uxlfoundation/oneMath/issues/654
+    # Link against Intel oneMKL
     if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
         set(SYCL_COMPILER ON)
     endif()
     find_package(MKL REQUIRED)
     target_link_libraries(ggml-sycl PRIVATE MKL::MKL_SYCL::BLAS)
-    target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_USE_INTEL_ONEMKL)
 else()
-    find_package(oneMath QUIET)
-    if (NOT oneMath_FOUND)
-        message(STATUS "oneMath not found: oneMath will be automatically downloaded")
-        # Use FetchContent to automatically pull and build oneMath
-        include(FetchContent)
-        set(BUILD_FUNCTIONAL_TESTS False)
-        set(BUILD_EXAMPLES False)
-        set(TARGET_DOMAINS blas)
-        if (GGML_SYCL_TARGET STREQUAL "NVIDIA")
-            set(ENABLE_MKLCPU_BACKEND False)
-            set(ENABLE_MKLGPU_BACKEND False)
-            set(ENABLE_CUBLAS_BACKEND True)
-        elseif (GGML_SYCL_TARGET STREQUAL "AMD")
-            set(ENABLE_MKLCPU_BACKEND False)
-            set(ENABLE_MKLGPU_BACKEND False)
-            set(ENABLE_ROCBLAS_BACKEND True)
-            # Ensure setting a string variable here is not overriden by oneMath CACHE variables
-            cmake_policy(SET CMP0126 NEW)
-            # Setting the device architecture is only needed and useful for AMD devices in oneMath
-            set(HIP_TARGETS ${GGML_SYCL_DEVICE_ARCH} CACHE STRING "oneMath HIP target" FORCE)
-        endif()
-        FetchContent_Declare(
-            ONEMATH
-            GIT_REPOSITORY https://github.com/uxlfoundation/oneMath.git
-            GIT_TAG 8efe85f5aaebb37f1d8c503b7af66315feabf142
-        )
-        FetchContent_MakeAvailable(ONEMATH)
-        # Create alias to match with find_package targets name
-        function(onemath_alias target)
-            if (TARGET ${target}_obj)
-                # Silence verbose warnings from external libraries
-                target_compile_options(${target}_obj PRIVATE -w)
-            endif()
-            if (TARGET ${target})
-                add_library(ONEMATH::${target} ALIAS ${target})
-            endif()
-        endfunction()
-        onemath_alias(onemath)
-        onemath_alias(onemath_blas_mklcpu)
-        onemath_alias(onemath_blas_mklgpu)
-        onemath_alias(onemath_blas_cublas)
-        onemath_alias(onemath_blas_rocblas)
-    endif()
+    # default for other target
+    message(FATAL_ERROR "GGML_SYCL_TARGET is not supported")
+    add_compile_definitions(GGML_SYCL_WARP_SIZE=32)
+endif()
 
-    # Below oneMath compile-time dispatching is used for better performance
-    if (GGML_SYCL_TARGET STREQUAL "NVIDIA")
-        target_link_libraries(ggml-sycl PRIVATE ONEMATH::onemath_blas_cublas)
-        target_compile_options(ggml-sycl PRIVATE "-fsycl-targets=nvptx64-nvidia-cuda")
-        target_link_options(ggml-sycl PRIVATE "-fsycl-targets=nvptx64-nvidia-cuda")
-        target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_NVIDIA)
-    elseif (GGML_SYCL_TARGET STREQUAL "AMD")
-        if (NOT GGML_SYCL_DEVICE_ARCH)
-            message(FATAL_ERROR "Can't enable SYCL hip backend, GGML_SYCL_DEVICE_ARCH has not been set.")
-        endif()
-        target_link_libraries(ggml-sycl PRIVATE ONEMATH::onemath_blas_rocblas)
-        target_compile_options(ggml-sycl PRIVATE "-fsycl-targets=amdgcn-amd-amdhsa")
-        target_link_options(ggml-sycl PRIVATE "-fsycl-targets=amdgcn-amd-amdhsa")
-        target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_AMD)
-    else()
-        # Fallback to oneMath runtime dispatcher
-        target_link_libraries(ggml-sycl PRIVATE ONEMATH::onemath)
-        target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_GENERIC)
-    endif()
+if (GGML_SYCL_GRAPH)
+    message(STATUS "find GGML_SYCL_GRAPH")
+    target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_GRAPH)
+endif()
+
+if (GGML_SYCL_HOST_MEM_FALLBACK)
+    message(STATUS "find GGML_SYCL_HOST_MEM_FALLBACK")
+    target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_HOST_MEM_FALLBACK)
 endif()
 
 if (GGML_SYCL_DEVICE_ARCH)
-    target_compile_options(ggml-sycl PRIVATE -Xsycl-target-backend --offload-arch=${GGML_SYCL_DEVICE_ARCH})
-    target_link_options(ggml-sycl PRIVATE -Xsycl-target-backend --offload-arch=${GGML_SYCL_DEVICE_ARCH})
+    message(STATUS "GGML_SYCL_DEVICE_ARCH=${GGML_SYCL_DEVICE_ARCH} (AOT via spir64_gen)")
+    target_compile_options(
+        ggml-sycl PRIVATE
+        -fsycl-targets=spir64_gen
+        "SHELL:-Xsycl-target-backend=spir64_gen \"-device ${GGML_SYCL_DEVICE_ARCH}\""
+    )
+    target_link_options(
+        ggml-sycl PRIVATE
+        -fsycl-targets=spir64_gen
+        "SHELL:-Xsycl-target-backend=spir64_gen \"-device ${GGML_SYCL_DEVICE_ARCH}\""
+    )
 endif()
-

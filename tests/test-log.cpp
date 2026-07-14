@@ -35,5 +35,9 @@ int main() {
         threads[i].join();
     }
 
+    common_log_flush(common_log_main());
+    // We explicitly free the logger singleton to avoid hanging on Windows
+    // related to timing issues of thread startup and DLL teardown
+    common_log_free(common_log_main());
     return 0;
 }

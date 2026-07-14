@@ -1,0 +1,80 @@
+export enum ChatMessageStatsView {
+	GENERATION = 'generation',
+	READING = 'reading',
+	TOOLS = 'tools',
+	SUMMARY = 'summary'
+}
+
+export enum ChatMessageStatisticsMode {
+	SWITCHABLE = 'switchable',
+	READING = 'reading',
+	GENERATION = 'generation'
+}
+
+/**
+ * Connection state of a streamed completion, drives the resume status indicator.
+ */
+export enum StreamConnectionState {
+	STREAMING = 'streaming',
+	RESUMING = 'resuming',
+	LOST = 'lost'
+}
+
+/**
+ * Reasoning format options for API requests.
+ */
+export enum ReasoningFormat {
+	NONE = 'none',
+	AUTO = 'auto'
+}
+
+/**
+ * Message roles for chat messages.
+ */
+export enum MessageRole {
+	USER = 'user',
+	ASSISTANT = 'assistant',
+	SYSTEM = 'system',
+	TOOL = 'tool'
+}
+
+/**
+ * Message types for different content kinds.
+ */
+export enum MessageType {
+	ROOT = 'root',
+	TEXT = 'text',
+	THINK = 'think',
+	SYSTEM = 'system'
+}
+
+/**
+ * Content part types for API chat message content.
+ */
+export enum ContentPartType {
+	TEXT = 'text',
+	IMAGE_URL = 'image_url',
+	INPUT_AUDIO = 'input_audio',
+	INPUT_VIDEO = 'input_video'
+}
+
+/**
+ * Error dialog types for displaying server/timeout errors.
+ */
+export enum ErrorDialogType {
+	TIMEOUT = 'timeout',
+	SERVER = 'server'
+}
+
+export enum ConversationSelectionMode {
+	EXPORT = 'export',
+	IMPORT = 'import'
+}
+
+/**
+ * PDF view mode options for previewing PDF attachments.
+ */
+export enum PdfViewMode {
+	TEXT = 'text',
+	PAGES = 'pages'
+}

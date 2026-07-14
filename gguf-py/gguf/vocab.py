@@ -11,33 +11,33 @@ from typing import Any, Callable, Sequence, Mapping, Iterable, Protocol, ClassVa
 try:
     from sentencepiece import SentencePieceProcessor
 except ImportError:
-    SentencePieceProcessor = None
+    SentencePieceProcessor: Any = None
 
 try:
-    from mistral_common.tokens.tokenizers.mistral import MistralTokenizer # pyright: ignore[reportMissingImports]
-    from mistral_common.tokens.tokenizers.tekken import Tekkenizer # pyright: ignore[reportMissingImports]
-    from mistral_common.tokens.tokenizers.utils import ( # pyright: ignore[reportMissingImports]
+    from mistral_common.tokens.tokenizers.mistral import MistralTokenizer # type: ignore[import-not-found, ty:unresolved-import]
+    from mistral_common.tokens.tokenizers.tekken import Tekkenizer # type: ignore[import-not-found, ty:unresolved-import]
+    from mistral_common.tokens.tokenizers.utils import ( # type: ignore[import-not-found, ty:unresolved-import]
         _filter_valid_tokenizer_files,
     )
-    from mistral_common.tokens.tokenizers.sentencepiece import ( # pyright: ignore[reportMissingImports]
+    from mistral_common.tokens.tokenizers.sentencepiece import ( # type: ignore[import-not-found, ty:unresolved-import]
         SentencePieceTokenizer,
     )
 except ImportError:
     _mistral_common_installed = False
-    MistralTokenizer = None
-    Tekkenizer = None
-    SentencePieceTokenizer = None
-    _filter_valid_tokenizer_files = None
+    MistralTokenizer: Any = None
+    Tekkenizer: Any = None
+    SentencePieceTokenizer: Any = None
+    _filter_valid_tokenizer_files: Any = None
 else:
     _mistral_common_installed = True
 
 try:
-    from mistral_common.tokens.tokenizers.utils import ( # pyright: ignore[reportMissingImports]
+    from mistral_common.tokens.tokenizers.utils import ( # type: ignore[import-not-found, ty:unresolved-import]
         get_one_valid_tokenizer_file,
     )
 except ImportError:
     # We still want the conversion to work with older mistral-common versions.
-    get_one_valid_tokenizer_file = None
+    get_one_valid_tokenizer_file: Any = None
 
 
 import gguf
@@ -52,6 +52,8 @@ class SpecialVocab:
     add_special_token: dict[str, bool]
     special_token_ids: dict[str, int]
     chat_template: str | Sequence[Mapping[str, str]] | None
+    normalizer_lowercase: bool | None
+    normalizer_strip_accents: bool | None
 
     def __init__(
         self, path: str | os.PathLike[str], load_merges: bool = False,
@@ -64,6 +66,8 @@ class SpecialVocab:
         self.load_merges = load_merges
         self.merges = []
         self.chat_template = None
+        self.normalizer_lowercase = None
+        self.normalizer_strip_accents = None
         if special_token_types is not None:
             self.special_token_types = special_token_types
         else:
@@ -102,6 +106,14 @@ class SpecialVocab:
             if not quiet:
                 logger.info(f'Setting chat_template to {self.chat_template}')
             gw.add_chat_template(self.chat_template)
+        if self.normalizer_lowercase is not None:
+            if not quiet:
+                logger.info(f'Setting normalizer_lowercase to {self.normalizer_lowercase}')
+            gw.add_normalizer_lowercase(self.normalizer_lowercase)
+        if self.normalizer_strip_accents is not None:
+            if not quiet:
+                logger.info(f'Setting normalizer_strip_accents to {self.normalizer_strip_accents}')
+            gw.add_normalizer_strip_accents(self.normalizer_strip_accents)
 
     def _load(self, path: Path) -> None:
         self._try_load_from_tokenizer_json(path)
@@ -146,6 +158,28 @@ class SpecialVocab:
             return
         logger.warning(f'Special token type {typ}, id {tid} out of range, must be under {self.n_vocab} - skipping')
 
+    def _parse_normalizer(self, normalizer: dict) -> None:
+        # ref: https://huggingface.co/docs/tokenizers/api/normalizers
+        #
+        # Extracts normalizer flags from three possible formats:
+        # 1. Standalone:           {"type": "Lowercase"}
+        # 2. BertNormalizer attrs: {"type": "BertNormalizer", ...}
+        # 3. Nested in Sequence:   {"type": "Sequence", "normalizers": [...]}
+
+        normalizer_type = normalizer.get('type')
+        if normalizer_type == 'Lowercase':
+            self.normalizer_lowercase = True
+        elif normalizer_type == 'StripAccents':
+            self.normalizer_strip_accents = True
+        elif normalizer_type == 'BertNormalizer':
+            if 'lowercase' in normalizer:
+                self.normalizer_lowercase = normalizer['lowercase']
+            if 'strip_accents' in normalizer:
+                self.normalizer_strip_accents = normalizer['strip_accents']
+        elif normalizer_type == 'Sequence':
+            for norm in normalizer.get('normalizers', []):
+                self._parse_normalizer(norm)
+
     def _try_load_from_tokenizer_json(self, path: Path) -> bool:
         tokenizer = None
         tokenizer_file = path / 'tokenizer.json'
@@ -178,6 +212,9 @@ class SpecialVocab:
                         ]
                     else:
                         raise ValueError("Unknown tokenizer merges format")
+            # Parse normalizer configuration (e.g. Lowercase) into metadata
+            if normalizer := tokenizer.get('normalizer'):
+                self._parse_normalizer(normalizer)
             added_tokens = tokenizer.get('added_tokens', {})
         else:
             added_tokens = {}
@@ -219,6 +256,11 @@ class SpecialVocab:
                             if special_first := tmpl_single[0].get('SpecialToken', {}).get('id'):
                                 if not tokenizer_config:
                                     special_bos = special_first
+                                elif special_first not in (special_bos, special_cls):
+                                    if not special_bos:
+                                        tokenizer_config['bos_token'] = special_bos = special_first
+                                    if not special_cls:
+                                        tokenizer_config['cls_token'] = special_cls = special_first
                                 self.add_special_token['bos'] = True if special_first in (special_bos, special_cls) else False
                                 if special_first not in (special_bos, special_cls):
                                     logger.warning(f'Unknown leading special token {special_first!r} in TemplateProcessing<single>')
@@ -543,7 +585,7 @@ class LlamaHfVocab(Vocab):
             cache_dir=base_path,
             local_files_only=True,
         )
-        assert self.tokenizer.is_fast  # assume tokenizer.json is used
+        assert self.tokenizer.is_fast  # assume tokenizer.json is used  # ty: ignore[unresolved-attribute]
 
         # Initialize lists and dictionaries for added tokens
         self.added_tokens_list = []
@@ -552,30 +594,30 @@ class LlamaHfVocab(Vocab):
 
         # Process added tokens
         for tok, tokidx in sorted(
-            self.tokenizer.get_added_vocab().items(), key=lambda x: x[1]
+            self.tokenizer.get_added_vocab().items(), key=lambda x: x[1]  # ty: ignore[unresolved-attribute]
         ):
             # Only consider added tokens that are not in the base vocabulary
-            if tokidx >= self.tokenizer.vocab_size:
+            if tokidx >= self.tokenizer.vocab_size:  # ty: ignore[unresolved-attribute]
                 self.added_tokens_list.append(tok)
                 self.added_tokens_dict[tok] = tokidx
                 self.added_tokens_ids.add(tokidx)
 
         # Store special tokens and their IDs
         self.specials = {
-            tok: self.tokenizer.get_vocab()[tok]
-            for tok in self.tokenizer.all_special_tokens
+            tok: self.tokenizer.get_vocab()[tok]  # ty: ignore[unresolved-attribute]
+            for tok in self.tokenizer.all_special_tokens  # ty: ignore[unresolved-attribute]
         }
-        self.special_ids = set(self.tokenizer.all_special_ids)
+        self.special_ids = set(self.tokenizer.all_special_ids)  # ty: ignore[unresolved-attribute]
 
         # Set vocabulary sizes
-        self.vocab_size_base = self.tokenizer.vocab_size
+        self.vocab_size_base = self.tokenizer.vocab_size  # ty: ignore[unresolved-attribute]
         self.vocab_size      = self.vocab_size_base + len(self.added_tokens_list)
 
         self.fname_tokenizer = fname_tokenizer
 
     def hf_tokens(self) -> Iterable[tuple[bytes, float, gguf.TokenType]]:
         reverse_vocab = {
-            id: encoded_tok for encoded_tok, id in self.tokenizer.get_vocab().items()
+            id: encoded_tok for encoded_tok, id in self.tokenizer.get_vocab().items()  # ty: ignore[unresolved-attribute]
         }
 
         for token_id in range(self.vocab_size_base):
@@ -616,7 +658,7 @@ class LlamaHfVocab(Vocab):
             yield text.encode("utf-8"), score, toktype
 
     def has_newline_token(self):
-        return "<0x0A>" in self.tokenizer.vocab or "\n" in self.tokenizer.vocab
+        return "<0x0A>" in self.tokenizer.vocab or "\n" in self.tokenizer.vocab  # ty: ignore[unresolved-attribute]
 
     def all_tokens(self) -> Iterable[tuple[bytes, float, gguf.TokenType]]:
         yield from self.hf_tokens()
@@ -703,7 +745,7 @@ class MistralVocab(Vocab):
 
             tokenizer_file_path = base_path / tokenizer_file
 
-        self.tokenizer = MistralTokenizer.from_file(
+        self.tokenizer: Any = MistralTokenizer.from_file(
             tokenizer_file_path
         ).instruct_tokenizer.tokenizer
         self.tokenizer_type = (

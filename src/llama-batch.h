@@ -18,7 +18,7 @@ struct llama_ubatch {
     }
 
     // typical for M-RoPE cases:
-    //   0 - sequantial position of the tokens/embeddings in the sequence
+    //   0 - sequential position of the tokens/embeddings in the sequence
     //   1 - y position in the image
     //   2 - x position in the image
     //   3 - other
@@ -104,7 +104,8 @@ public:
 
     // make ubatches of equal-length sequences sets
     // if sequential == true, the tokens in the ubatch will have increasing sequential sequence ids
-    llama_ubatch split_equal(uint32_t n_ubatch, bool sequential);
+    // n_keep_tail = minimum trailing tokens of a seq that must land in the same ubatch
+    llama_ubatch split_equal(uint32_t n_ubatch, bool sequential, uint32_t n_keep_tail);
 
     // sequence-set-wise split - each ubatch contains a single sequence-set
     llama_ubatch split_seq(uint32_t n_ubatch);

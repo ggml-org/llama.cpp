@@ -21,7 +21,8 @@
 #    define LOG_ATTRIBUTE_FORMAT(...) __attribute__((format(printf, __VA_ARGS__)))
 #endif
 
-#define LOG_LEVEL_DEBUG  4
+#define LOG_LEVEL_DEBUG  5
+#define LOG_LEVEL_TRACE  4
 #define LOG_LEVEL_INFO   3
 #define LOG_LEVEL_WARN   2
 #define LOG_LEVEL_ERROR  1
@@ -38,7 +39,7 @@ enum log_colors {
 
 // needed by the LOG_TMPL macro to avoid computing log arguments if the verbosity lower
 // set via common_log_set_verbosity()
-extern int common_log_verbosity_thold;
+int  common_log_get_verbosity_thold(void);
 
 void common_log_set_verbosity_thold(int verbosity); // not thread-safe
 
@@ -49,7 +50,11 @@ void common_log_default_callback(enum ggml_log_level level, const char * text, v
 struct common_log;
 
 struct common_log * common_log_init();
-struct common_log * common_log_main(); // singleton, automatically destroys itself on exit
+
+// Singleton, intentionally leaked to avoid Windows teardown hangs.
+// Call common_log_flush() before exit if you want to ensure all logs are flushed.
+struct common_log * common_log_main();
+
 void                common_log_pause (struct common_log * log); // pause  the worker thread, not thread-safe
 void                common_log_resume(struct common_log * log); // resume the worker thread, not thread-safe
 void                common_log_free  (struct common_log * log);
@@ -98,7 +103,7 @@ void common_log_flush         (struct common_log * log);                    // f
 
 #define LOG_TMPL(level, verbosity, ...) \
     do { \
-        if ((verbosity) <= common_log_verbosity_thold) { \
+        if ((verbosity) <= common_log_get_verbosity_thold()) { \
             common_log_add(common_log_main(), (level), __VA_ARGS__); \
         } \
     } while (0)
@@ -107,13 +112,15 @@ void common_log_flush         (struct common_log * log);                    // f
 #define LOGV(verbosity, ...) LOG_TMPL(GGML_LOG_LEVEL_NONE, verbosity,        __VA_ARGS__)
 
 #define LOG_DBG(...) LOG_TMPL(GGML_LOG_LEVEL_DEBUG, LOG_LEVEL_DEBUG,  __VA_ARGS__)
+#define LOG_TRC(...) LOG_TMPL(GGML_LOG_LEVEL_INFO,  LOG_LEVEL_TRACE,  __VA_ARGS__)
 #define LOG_INF(...) LOG_TMPL(GGML_LOG_LEVEL_INFO,  LOG_LEVEL_INFO,   __VA_ARGS__)
 #define LOG_WRN(...) LOG_TMPL(GGML_LOG_LEVEL_WARN,  LOG_LEVEL_WARN,   __VA_ARGS__)
 #define LOG_ERR(...) LOG_TMPL(GGML_LOG_LEVEL_ERROR, LOG_LEVEL_ERROR,  __VA_ARGS__)
 #define LOG_CNT(...) LOG_TMPL(GGML_LOG_LEVEL_CONT,  LOG_LEVEL_INFO,   __VA_ARGS__) // same as INFO
 
+#define LOG_DBGV(verbosity, ...) LOG_TMPL(GGML_LOG_LEVEL_DEBUG, verbosity, __VA_ARGS__)
+#define LOG_TRCV(verbosity, ...) LOG_TMPL(GGML_LOG_LEVEL_TRACE, verbosity, __VA_ARGS__)
 #define LOG_INFV(verbosity, ...) LOG_TMPL(GGML_LOG_LEVEL_INFO,  verbosity, __VA_ARGS__)
 #define LOG_WRNV(verbosity, ...) LOG_TMPL(GGML_LOG_LEVEL_WARN,  verbosity, __VA_ARGS__)
 #define LOG_ERRV(verbosity, ...) LOG_TMPL(GGML_LOG_LEVEL_ERROR, verbosity, __VA_ARGS__)
-#define LOG_DBGV(verbosity, ...) LOG_TMPL(GGML_LOG_LEVEL_DEBUG, verbosity, __VA_ARGS__)
 #define LOG_CNTV(verbosity, ...) LOG_TMPL(GGML_LOG_LEVEL_CONT,  verbosity, __VA_ARGS__)

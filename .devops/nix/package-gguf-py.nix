@@ -3,6 +3,7 @@
   llamaVersion,
   numpy,
   tqdm,
+  requests,
   sentencepiece,
   pyyaml,
   poetry-core,
@@ -20,6 +21,7 @@ buildPythonPackage {
     tqdm
     sentencepiece
     pyyaml
+    requests
   ];
   src = lib.cleanSource ../../gguf-py;
   pythonImportsCheck = [

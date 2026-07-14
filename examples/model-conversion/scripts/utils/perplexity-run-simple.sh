@@ -3,6 +3,7 @@
 set -e
 
 QUANTIZED_MODEL="${1:-"$QUANTIZED_MODEL"}"
+BUILD_DIR="${2:-"$BUILD_DIR"}"
 
 if [ -z "$QUANTIZED_MODEL" ]; then
     echo "Error: Model path must be provided either as:" >&2
@@ -20,8 +21,12 @@ if [ ! -d "ppl/wikitext-2-raw" ]; then
     popd
 fi
 
-cmake --build ../../build --target llama-perplexity -j8
+if [ -z "$BUILD_DIR" ]; then
+    BUILD_DIR="../../build"
+fi
 
-../.././build/bin/llama-perplexity -m $QUANTIZED_MODEL -f ppl/wikitext-2-raw/wiki.test.raw
+cmake --build $BUILD_DIR --target llama-perplexity -j8
+
+${BUILD_DIR}/bin/llama-perplexity -m $QUANTIZED_MODEL -f ppl/wikitext-2-raw/wiki.test.raw
 
 

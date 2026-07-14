@@ -1,0 +1,162 @@
+name: CI (CUDA, windows)
+
+# TODO: this workflow is only triggered manually because it is very heavy on the CI
+#       when we provision dedicated windows runners, we can enable it for pushes too
+# note: running this workflow manually will populate the ccache for the release builds
+#       this can be used before merging a PR to speed up the release workflow
+on:
+  workflow_dispatch: # allows manual triggering
+
+# note: this will run in queue with the release workflow
+concurrency:
+  group: release
+  queue: max
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  GGML_NLOOP: 3
+  GGML_N_THREADS: 1
+  LLAMA_ARG_LOG_COLORS: 1
+  LLAMA_ARG_LOG_PREFIX: 1
+  LLAMA_ARG_LOG_TIMESTAMPS: 1
+
+jobs:
+  cuda:
+    runs-on: windows-2022
+
+    permissions:
+      actions: write
+
+    strategy:
+      matrix:
+        cuda: ['12.4', '13.3']
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          key: release-windows-2022-x64-cuda-${{ matrix.cuda }}
+
+      - name: Install Cuda Toolkit
+        uses: ./.github/actions/windows-setup-cuda
+        with:
+          cuda_version: ${{ matrix.cuda }}
+
+      - name: Install Ninja
+        id: install_ninja
+        run: |
+          choco install ninja
+
+      - name: Build
+        id: cmake_build
+        shell: cmd
+        # TODO: Remove GGML_CUDA_CUB_3DOT2 flag once CCCL 3.2 is bundled within CTK and that CTK version is used in this project
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+          cmake -S . -B build -G "Ninja Multi-Config" ^
+            -DLLAMA_BUILD_SERVER=ON ^
+            -DLLAMA_BUILD_BORINGSSL=ON ^
+            -DGGML_NATIVE=OFF ^
+            -DGGML_BACKEND_DL=ON ^
+            -DGGML_CPU_ALL_VARIANTS=ON ^
+            -DGGML_CUDA=ON ^
+            -DGGML_RPC=ON ^
+            -DGGML_CUDA_CUB_3DOT2=ON
+          set /A NINJA_JOBS=%NUMBER_OF_PROCESSORS%-1
+          cmake --build build --config Release -j %NINJA_JOBS% -t ggml
+          cmake --build build --config Release
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          key: release-windows-2022-x64-cuda-${{ matrix.cuda }}
+
+  hip:
+    runs-on: windows-2022
+
+    permissions:
+      actions: write
+
+    env:
+      # Make sure this is in sync with build-cache.yml
+      HIPSDK_INSTALLER_VERSION: "26.Q1"
+
+    strategy:
+      matrix:
+        include:
+          # sync with release.yml
+          - name: "radeon"
+            gpu_targets: "gfx1150;gfx1151;gfx1200;gfx1201;gfx1100;gfx1101;gfx1102;gfx1030;gfx1031;gfx1032"
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Grab rocWMMA package
+        id: grab_rocwmma
+        run: |
+          curl -o rocwmma.deb "https://repo.radeon.com/rocm/apt/7.2.1/pool/main/r/rocwmma-dev/rocwmma-dev_2.2.0.70201-81~24.04_amd64.deb"
+          7z x rocwmma.deb
+          7z x data.tar
+
+      - name: Use ROCm Installation Cache
+        uses: actions/cache@v5
+        id: cache-rocm
+        with:
+          path: C:\Program Files\AMD\ROCm
+          key: cache-gha-rocm-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ runner.os }}
+
+      - name: Setup ROCm
+        if: steps.cache-rocm.outputs.cache-hit != 'true'
+        uses: ./.github/actions/windows-setup-rocm
+        with:
+          version: ${{ env.HIPSDK_INSTALLER_VERSION }}
+
+      - name: Verify ROCm
+        id: verify
+        run: |
+          # Find and test ROCm installation
+          $clangPath = Get-ChildItem 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' | Select-Object -First 1
+          if (-not $clangPath) {
+            Write-Error "ROCm installation not found"
+            exit 1
+          }
+          & $clangPath.FullName --version
+
+      - name: ccache
+        uses: ggml-org/ccache-action@v1.2.21
+        with:
+          # TODO: this build does not match the build in release.yml, so we use a different cache key
+          #       ideally, the builds should match, similar to the CUDA build above so that we would be able
+          #       to populate the ccache for the release with manual runs of this workflow
+          #key: release-windows-2022-x64-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}
+          key: cuda-windows-2022-x64-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}
+
+      - name: Build
+        id: cmake_build
+        run: |
+          $env:HIP_PATH=$(Resolve-Path 'C:\Program Files\AMD\ROCm\*\bin\clang.exe' | split-path | split-path)
+          $env:CMAKE_PREFIX_PATH="${env:HIP_PATH}"
+          cmake -G "Unix Makefiles" -B build -S . `
+            -DCMAKE_C_COMPILER="${env:HIP_PATH}\bin\clang.exe" `
+            -DCMAKE_CXX_COMPILER="${env:HIP_PATH}\bin\clang++.exe" `
+            -DCMAKE_CXX_FLAGS="-I$($PWD.Path.Replace('\', '/'))/opt/rocm-7.2.1/include/" `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DLLAMA_BUILD_BORINGSSL=ON `
+            -DROCM_DIR="${env:HIP_PATH}" `
+            -DGGML_HIP=ON `
+            -DGGML_HIP_ROCWMMA_FATTN=ON `
+            -DGPU_TARGETS="gfx1100"  `
+            -DGGML_RPC=ON
+          cmake --build build -j ${env:NUMBER_OF_PROCESSORS}
+
+      - name: ccache-clear
+        uses: ./.github/actions/ccache-clear
+        with:
+          #key: release-windows-2022-x64-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}
+          key: cuda-windows-2022-x64-hip-${{ env.HIPSDK_INSTALLER_VERSION }}-${{ matrix.name }}

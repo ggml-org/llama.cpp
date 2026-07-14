@@ -5,20 +5,59 @@
 #include "types.glsl"
 
 #if defined(DATA_A_F32)
+FLOAT_TYPE dequantize1(uint ib, uint iqs, uint a_offset) {
+    return data_a[a_offset + ib];
+}
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     return vec2(data_a[a_offset + ib], data_a[a_offset + ib + 1]);
 }
+vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
+    return vec4(data_a[a_offset + ib    ], data_a[a_offset + ib + 1],
+                data_a[a_offset + ib + 2], data_a[a_offset + ib + 3]);
+}
+vec4 dequantize4_2aligned(uint ib, uint iqs, uint a_offset) {
+    return vec4(data_a[a_offset + ib    ], data_a[a_offset + ib + 1],
+                data_a[a_offset + ib + 2], data_a[a_offset + ib + 3]);
+}
+
 #endif
 
 #if defined(DATA_A_F16)
+FLOAT_TYPE dequantize1(uint ib, uint iqs, uint a_offset) {
+    return data_a[a_offset + ib];
+}
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     return vec2(data_a[a_offset + ib], data_a[a_offset + ib + 1]);
+}
+vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
+    return vec4(data_a[a_offset + ib    ], data_a[a_offset + ib + 1],
+                data_a[a_offset + ib + 2], data_a[a_offset + ib + 3]);
+}
+vec4 dequantize4_2aligned(uint ib, uint iqs, uint a_offset) {
+    const vec2 a = data_a_packed32[(a_offset + ib)/2];
+    const vec2 b = data_a_packed32[(a_offset + ib)/2 + 1];
+    return vec4(a, b);
 }
 #endif
 
 #if defined(DATA_A_BF16)
+FLOAT_TYPE dequantize1(uint ib, uint iqs, uint a_offset) {
+    return bf16_to_fp32(data_a[a_offset + ib]);
+}
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     return vec2(bf16_to_fp32(data_a[a_offset + ib]), bf16_to_fp32(data_a[a_offset + ib + 1]));
+}
+vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
+    return vec4(bf16_to_fp32(data_a[a_offset + ib    ]), bf16_to_fp32(data_a[a_offset + ib + 1]),
+                bf16_to_fp32(data_a[a_offset + ib + 2]), bf16_to_fp32(data_a[a_offset + ib + 3]));
+}
+vec4 dequantize4_2aligned(uint ib, uint iqs, uint a_offset) {
+    const uint a = data_a_packed32[(a_offset + ib)/2];
+    const uint b = data_a_packed32[(a_offset + ib)/2 + 1];
+    return vec4(uintBitsToFloat((a & 0x0000ffff) << 16),
+                uintBitsToFloat( a & 0xffff0000),
+                uintBitsToFloat((b & 0x0000ffff) << 16),
+                uintBitsToFloat( b & 0xffff0000));
 }
 #endif
 
@@ -84,6 +123,23 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
     const i8vec2 v0 = unpack8(int32_t(data_a_packed16[a_offset + ib].qs[iqs/2])).xy; // vec4 used due to #12147
     const i8vec2 v1 = unpack8(int32_t(data_a_packed16[a_offset + ib].qs[iqs/2 + 1])).xy;
     return vec4(v0.x, v0.y, v1.x, v1.y);
+}
+#endif
+
+#if defined(DATA_A_Q1_0)
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    const uint bits = uint(data_a[a_offset + ib].qs[iqs / 8u]) >> (iqs % 8u);
+    return vec2(
+        (bits & 1u) != 0u ? 1.0f : -1.0f,
+        (bits & 2u) != 0u ? 1.0f : -1.0f);
+}
+vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
+    const uint bits = uint(data_a[a_offset + ib].qs[iqs / 8u]) >> (iqs % 8u);
+    return vec4(
+        (bits & 1u) != 0u ? 1.0f : -1.0f,
+        (bits & 2u) != 0u ? 1.0f : -1.0f,
+        (bits & 4u) != 0u ? 1.0f : -1.0f,
+        (bits & 8u) != 0u ? 1.0f : -1.0f);
 }
 #endif
 
@@ -424,12 +480,55 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
 #if defined(DATA_A_MXFP4)
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     const uint vui = uint(data_a[a_offset + ib].qs[iqs]);
+#ifdef USE_OCP_FP4
+    return vec2(unpackFloat2xfe2m1EXT(uint8_t(vui)));
+#else
     return vec2(kvalues_mxfp4[vui & 0xF], kvalues_mxfp4[vui >> 4]) * 0.5;
+#endif
 }
 vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
+#ifdef USE_OCP_FP4
+    const uint16_t vui = uint16_t(uint(data_a[a_offset + ib].qs[iqs]) |
+                                  uint(data_a[a_offset + ib].qs[iqs + 1]) << 8);
+    return vec4(unpackFloat4xfe2m1EXT(vui));
+#else
     vec2 v0 = dequantize(ib, iqs, a_offset);
     vec2 v1 = dequantize(ib, iqs + 1, a_offset);
     return vec4(v0.x, v0.y, v1.x, v1.y);
+#endif
+}
+#endif
+
+#if defined(DATA_A_NVFP4)
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    const uint sub = iqs >> 4;
+    const float d = ue4m3_to_fp32(data_a[a_offset + ib].d[sub]);
+    const uint j = iqs & 7;
+    const uint shift = (iqs & 8) >> 1; // 0 or 4
+#ifdef USE_OCP_FP4
+    const uint vui = uint(data_a_packed16[a_offset + ib].qs[(sub * 8u + j) / 2u]);
+    return vec2(bitcastExtractfe2m1EXT(unpack8(vui).xy, shift)) * d;
+#else
+    const uint vui0 = uint(data_a[a_offset + ib].qs[sub * 8u + j]);
+    const uint vui1 = uint(data_a[a_offset + ib].qs[sub * 8u + j + 1]);
+    const uint qs0 = (vui0 >> shift) & 0xF;
+    const uint qs1 = (vui1 >> shift) & 0xF;
+    return vec2(float(kvalues_mxfp4[qs0]), float(kvalues_mxfp4[qs1])) * d * 0.5;
+#endif
+}
+vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
+#ifdef USE_OCP_FP4
+    const uint sub = iqs >> 4;
+    const float d = ue4m3_to_fp32(data_a[a_offset + ib].d[sub]);
+    const uint j = iqs & 7;
+    const uint shift = (iqs & 8) >> 1; // 0 or 4
+    const uint vui = data_a_packed32[a_offset + ib].qs[(sub * 8u + j) / 4u];
+    return vec4(bitcastExtractfe2m1EXT(unpack8(vui), shift)) * d;
+#else
+    const vec2 v0 = dequantize(ib, iqs, a_offset);
+    const vec2 v1 = dequantize(ib, iqs + 2u, a_offset);
+    return vec4(v0.x, v0.y, v1.x, v1.y);
+#endif
 }
 #endif
 
@@ -454,15 +553,29 @@ vec2 get_dm(uint ib, uint a_offset) {
 }
 #endif
 
+#if defined(DATA_A_Q1_0)
+vec2 get_dm(uint ib, uint a_offset) {
+    const float d = float(data_a[a_offset + ib].d);
+    return vec2(d, 0);
+}
+#endif
+
 #if defined(DATA_A_MXFP4)
 vec2 get_dm(uint ib, uint a_offset) {
     return vec2(e8m0_to_fp32(data_a[a_offset + ib].e), 0);
 }
 #endif
 
+#if defined(DATA_A_NVFP4)
+vec2 get_dm(uint ib, uint a_offset) {
+    return vec2(1.0, 0.0);
+}
+#endif
+
 #if defined(DATA_A_Q4_1) || defined(DATA_A_Q5_1)
 vec2 get_dm(uint ib, uint a_offset) {
-    return vec2(float(data_a[a_offset + ib].d), float(data_a[a_offset + ib].m));
+    const vec2 dm = vec2(data_a_packed32[a_offset + ib].dm);
+    return dm;
 }
 #endif
 

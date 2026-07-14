@@ -1,1 +1,0 @@
-export const PROCESSING_INFO_TIMEOUT = 2000;

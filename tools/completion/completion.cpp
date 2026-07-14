@@ -6,6 +6,7 @@
 #include "llama.h"
 #include "chat.h"
 
+#include <clocale>
 #include <cstdio>
 #include <cstring>
 #include <ctime>
@@ -32,12 +33,8 @@
 #endif
 
 static llama_context           ** g_ctx;
-static llama_model             ** g_model;
 static common_sampler          ** g_smpl;
 static common_params            * g_params;
-static std::vector<llama_token> * g_input_tokens;
-static std::ostringstream       * g_output_ss;
-static std::vector<llama_token> * g_output_tokens;
 static bool is_interacting  = false;
 static bool need_insert_eot = false;
 
@@ -83,15 +80,20 @@ static void sigint_handler(int signo) {
 }
 #endif
 
-int main(int argc, char ** argv) {
+// satisfies -Wmissing-declarations
+int llama_completion(int argc, char ** argv);
+
+int llama_completion(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     common_params params;
     g_params = &params;
+
+    common_init();
 
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMPLETION, print_usage)) {
         return 1;
     }
-
-    common_init();
 
     auto & sparams = params.sampling;
 
@@ -130,7 +132,6 @@ int main(int argc, char ** argv) {
     llama_context * ctx = nullptr;
     common_sampler * smpl = nullptr;
 
-    g_model = &model;
     g_ctx = &ctx;
     g_smpl = &smpl;
 
@@ -305,6 +306,7 @@ int main(int argc, char ** argv) {
                 inputs.use_jinja = g_params->use_jinja;
                 inputs.messages = chat_msgs;
                 inputs.add_generation_prompt = !params.prompt.empty();
+                inputs.force_pure_content = params.force_pure_content_parser;
 
                 prompt = common_chat_templates_apply(chat_templates.get(), inputs).prompt;
             }
@@ -342,44 +344,56 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    // debug message about similarity of saved session, if applicable
-    size_t n_matching_session_tokens = 0;
-    if (!session_tokens.empty()) {
-        for (llama_token id : session_tokens) {
-            if (n_matching_session_tokens >= embd_inp.size() || id != embd_inp[n_matching_session_tokens]) {
-                break;
+    bool session_do_save = false;
+
+    {
+        size_t n_match = 0;
+
+        if (!session_tokens.empty()) {
+            for (llama_token id : session_tokens) {
+                if (n_match >= embd_inp.size() || id != embd_inp[n_match]) {
+                    break;
+                }
+                n_match++;
             }
-            n_matching_session_tokens++;
+            if (params.prompt.empty() && n_match == embd_inp.size()) {
+                LOG_INF("%s: using full prompt from session file\n", __func__);
+            } else if (n_match >= embd_inp.size()) {
+                LOG_INF("%s: session file has exact match for prompt!\n", __func__);
+            } else if (n_match < (embd_inp.size() / 2)) {
+                LOG_WRN("%s: session file has low similarity to prompt (%zu / %zu tokens); will mostly be reevaluated\n",
+                        __func__, n_match, embd_inp.size());
+            } else {
+                LOG_INF("%s: session file matches %zu / %zu tokens of prompt\n",
+                        __func__, n_match, embd_inp.size());
+            }
+
+            // remove any "future" tokens that we might have inherited from the previous session
+            if (session_tokens.size() > n_match) {
+                llama_pos pos = n_match > 0 ? (llama_pos)(n_match - 1) : 0;
+                if (!llama_memory_seq_rm(mem, -1, pos, -1)) {
+                    LOG_WRN("%s: unable to reuse common prefix (for example, when the memory is recurrent)\n", __func__);
+                    llama_memory_clear(mem, true);
+                    session_tokens.clear();
+                    n_match = 0;
+                } else {
+                    session_tokens.resize(n_match);
+                }
+            }
         }
-        if (params.prompt.empty() && n_matching_session_tokens == embd_inp.size()) {
-            LOG_INF("%s: using full prompt from session file\n", __func__);
-        } else if (n_matching_session_tokens >= embd_inp.size()) {
-            LOG_INF("%s: session file has exact match for prompt!\n", __func__);
-        } else if (n_matching_session_tokens < (embd_inp.size() / 2)) {
-            LOG_WRN("%s: session file has low similarity to prompt (%zu / %zu tokens); will mostly be reevaluated\n",
-                    __func__, n_matching_session_tokens, embd_inp.size());
-        } else {
-            LOG_INF("%s: session file matches %zu / %zu tokens of prompt\n",
-                    __func__, n_matching_session_tokens, embd_inp.size());
+
+        session_do_save = !path_session.empty() && n_match < embd_inp.size() && !params.prompt_cache_ro;
+
+        // Logits are not stored as part of the session state so we need to
+        // "replay" the last token to get logits for sampling.
+        if (!session_tokens.empty() && n_match > 0 && n_match == session_tokens.size()) {
+            if (!common_replay_last_token(ctx, session_tokens.back(), n_match - 1)) {
+                return 1;
+            }
+
+            session_do_save = false;
+            LOG_INF("%s: replayed last token from session\n", __func__);
         }
-
-        // remove any "future" tokens that we might have inherited from the previous session
-        if (!llama_memory_seq_rm(mem, -1, n_matching_session_tokens, -1)) {
-            LOG_INF("%s: unable to resuse common prefix\n", __func__);
-            n_matching_session_tokens = 0;
-            llama_memory_seq_rm(mem, -1, -1, -1);
-        }
-    }
-
-    LOG_DBG("recalculate the cached logits (check): embd_inp.size() %zu, n_matching_session_tokens %zu, embd_inp.size() %zu, session_tokens.size() %zu\n",
-         embd_inp.size(), n_matching_session_tokens, embd_inp.size(), session_tokens.size());
-
-    // if we will use the cache for the full prompt without reaching the end of the cache, force
-    // reevaluation of the last token to recalculate the cached logits
-    if (!embd_inp.empty() && n_matching_session_tokens == embd_inp.size() && session_tokens.size() > embd_inp.size()) {
-        LOG_DBG("recalculate the cached logits (do): session_tokens.resize( %zu )\n", embd_inp.size() - 1);
-
-        session_tokens.resize(embd_inp.size() - 1);
     }
 
     // number of tokens to keep when resetting context
@@ -521,19 +535,18 @@ int main(int argc, char ** argv) {
         is_interacting = params.interactive_first;
     }
 
-    bool is_antiprompt        = false;
-    bool input_echo           = true;
-    bool display              = true;
-    bool need_to_save_session = !path_session.empty() && n_matching_session_tokens < embd_inp.size();
+    bool is_antiprompt = false;
+    bool input_echo    = true;
+    bool display       = true;
 
     int n_past             = 0;
     int n_remain           = params.n_predict;
     int n_consumed         = 0;
     int n_session_consumed = 0;
 
-    std::vector<int>   input_tokens;  g_input_tokens  = &input_tokens;
-    std::vector<int>   output_tokens; g_output_tokens = &output_tokens;
-    std::ostringstream output_ss;     g_output_ss     = &output_ss;
+    std::vector<int>   input_tokens;
+    std::vector<int>   output_tokens;
+    std::ostringstream output_ss;
     std::ostringstream assistant_ss; // for storing current assistant message, used in conversation mode
 
     // the first thing we will do is to output the prompt, so set color accordingly
@@ -668,44 +681,30 @@ int main(int argc, char ** argv) {
                 }
             }
 
-            for (int i = 0; i < (int) embd.size(); i += params.n_batch) {
-                int n_eval = (int) embd.size() - i;
-                if (n_eval > params.n_batch) {
-                    n_eval = params.n_batch;
-                }
-
-                LOG_DBG("eval: %s\n", string_from(ctx, embd).c_str());
-
-                if (llama_decode(ctx, llama_batch_get_one(&embd[i], n_eval))) {
-                    LOG_ERR("%s : failed to eval\n", __func__);
+            if (!embd.empty()) {
+                const bool is_last_batch = (n_consumed >= (int) embd_inp.size());
+                const bool save_now = session_do_save && is_last_batch;
+                session_tokens.insert(session_tokens.end(), embd.begin(), embd.end());
+                if (!common_prompt_batch_decode(ctx, session_tokens, embd.size(), n_past, params.n_batch, path_session, save_now)) {
                     return 1;
                 }
-
-                n_past += n_eval;
+                n_session_consumed += embd.size();
+                if (save_now) {
+                    session_do_save = false;
+                }
 
                 LOG_DBG("n_past = %d\n", n_past);
+
                 // Display total tokens alongside total time
                 if (params.n_print > 0 && n_past % params.n_print == 0) {
                     LOG_DBG("\n\033[31mTokens consumed so far = %d / %d \033[0m\n", n_past, n_ctx);
                 }
-            }
-
-            if (!embd.empty() && !path_session.empty()) {
-                session_tokens.insert(session_tokens.end(), embd.begin(), embd.end());
-                n_session_consumed = session_tokens.size();
             }
         }
 
         embd.clear();
 
         if ((int) embd_inp.size() <= n_consumed && !is_interacting) {
-            // optionally save the session on first sample (for faster prompt loading next time)
-            if (!path_session.empty() && need_to_save_session && !params.prompt_cache_ro) {
-                need_to_save_session = false;
-                llama_state_save_file(ctx, path_session.c_str(), session_tokens.data(), session_tokens.size());
-
-                LOG_DBG("saved session to %s\n", path_session.c_str());
-            }
 
             const llama_token id = common_sampler_sample(smpl, ctx, -1);
 
@@ -737,7 +736,7 @@ int main(int argc, char ** argv) {
                 common_sampler_accept(smpl, embd_inp[n_consumed], /* accept_grammar= */ false);
 
                 ++n_consumed;
-                if ((int) embd.size() >= params.n_batch) {
+                if ((int) embd.size() == params.n_batch) {
                     break;
                 }
             }
@@ -983,7 +982,10 @@ int main(int argc, char ** argv) {
 
     if (!path_session.empty() && params.prompt_cache_all && !params.prompt_cache_ro) {
         LOG("\n%s: saving final output to session file '%s'\n", __func__, path_session.c_str());
+        session_tokens.insert(session_tokens.end(), embd.begin(), embd.end());
         llama_state_save_file(ctx, path_session.c_str(), session_tokens.data(), session_tokens.size());
+        LOG_INF("saved final session to %s, n_tokens = %zu\n", path_session.data(), session_tokens.size());
+
     }
 
     LOG("\n\n");

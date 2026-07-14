@@ -21,14 +21,6 @@ indent_style = tab
 [prompts/*.txt]
 insert_final_newline = unset
 
-[tools/server/public/*]
-indent_size = 2
-
-[tools/server/public/deps_*]
-trim_trailing_whitespace = unset
-indent_style = unset
-indent_size = unset
-
 [tools/server/deps_*]
 trim_trailing_whitespace = unset
 indent_style = unset
@@ -53,7 +45,7 @@ insert_final_newline = unset
 trim_trailing_whitespace = unset
 insert_final_newline = unset
 
-[tools/server/webui/**]
+[tools/ui/**]
 indent_style = unset
 indent_size = unset
 end_of_line = unset

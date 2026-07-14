@@ -1,9 +1,12 @@
 #pragma once
 
 #include "llama.h"
+#include "llama-ext.h"
 #include "llama-cparams.h"
 #include "llama-graph.h"
 #include "llama-adapter.h"
+#include "llama-impl.h"
+#include "llama-memory.h"
 
 #include "ggml-cpp.h"
 #include "ggml-opt.h"
@@ -21,16 +24,20 @@ class llama_io_write_i;
 struct llama_memory_i;
 struct llama_memory_context_i;
 
-// "memory" as in physical memory for a buffer type, in bytes
-struct llama_memory_breakdown_data {
-    size_t model   = 0; // memory allocated for the model
-    size_t context = 0; // memory allocated for the context
-    size_t compute = 0; // memory allocated for temporary compute buffers
+// stores copy of the memory in device buffer. used for fast state save/load
+struct llama_memory_buffer {
+    int n_tensors = 0;
+    size_t total_size = 0;
 
-    size_t total() const {
-        return model + context + compute;
-    }
+    ggml_backend_buffer_ptr buf;
+
+    ggml_context_ptr ctx;
+
+    std::vector<ggml_tensor *> org;
+    std::vector<ggml_tensor *> cpy;
 };
+
+using llama_memory_buffers = std::map<ggml_backend_buffer_type_t, llama_memory_buffer>;
 
 struct llama_context {
     // init scheduler and compute buffers, reserve worst-case graphs
@@ -39,6 +46,14 @@ struct llama_context {
                   llama_context_params params);
 
     ~llama_context();
+
+    // reserve a new backend scheduler (if needed)
+    // for example, when:
+    //   - changing loras
+    //   - changing samplers
+    //   - changing attention type
+    //   - etc.
+    void sched_reserve();
 
     void synchronize();
 
@@ -70,6 +85,23 @@ struct llama_context {
     float * get_embeddings_ith(int32_t i);
     float * get_embeddings_seq(llama_seq_id seq_id);
 
+    float * get_embeddings_nextn();
+    float * get_embeddings_nextn_ith(int32_t i);
+
+    float * get_embeddings_layer_inp(uint32_t lid);
+
+    llama_token * get_sampled_tokens() const;
+    llama_token   get_sampled_token_ith(int32_t idx);
+
+    float * get_sampled_logits_ith(int32_t idx);
+    size_t  get_sampled_logits_count(int32_t idx);
+
+    float * get_sampled_probs_ith(int32_t idx);
+    size_t  get_sampled_probs_count(int32_t idx);
+
+    const llama_token * get_sampled_candidates_ith(int32_t idx);
+    size_t get_sampled_candidates_count(int32_t idx);
+
     void attach_threadpool(
             ggml_threadpool_t threadpool,
             ggml_threadpool_t threadpool_batch);
@@ -81,19 +113,17 @@ struct llama_context {
     void set_abort_callback(bool (*abort_callback)(void * data), void * abort_callback_data);
 
     void set_embeddings (bool value);
+    void set_embeddings_nextn(bool value, bool masked);
+    void set_embeddings_layer_inp(uint32_t lid, bool enable);
+    void set_nextn_layer_offset(int32_t offset);
     void set_causal_attn(bool value);
     void set_warmup(bool value);
 
-    void set_adapter_lora(
-            llama_adapter_lora * adapter,
-            float scale);
+    void set_adapters_lora(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);
 
-    bool rm_adapter_lora(
-            llama_adapter_lora * adapter);
+    bool adapters_lora_are_same(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);
 
-    void clear_adapter_lora();
-
-    bool apply_adapter_cvec(
+    bool set_adapter_cvec(
             const float * data,
                  size_t   len,
                 int32_t   n_embd,
@@ -122,6 +152,7 @@ struct llama_context {
     size_t state_set_data(const uint8_t * src, size_t size);
 
     size_t state_seq_get_size(llama_seq_id seq_id, llama_state_seq_flags flags);
+
     size_t state_seq_get_data(llama_seq_id seq_id,       uint8_t * dst, size_t size, llama_state_seq_flags flags);
     size_t state_seq_set_data(llama_seq_id seq_id, const uint8_t * src, size_t size, llama_state_seq_flags flags);
 
@@ -156,7 +187,7 @@ struct llama_context {
     llama_perf_context_data perf_get_data() const;
     void perf_reset();
 
-    std::map<ggml_backend_buffer_type_t, llama_memory_breakdown_data> memory_breakdown() const;
+    llama_memory_breakdown memory_breakdown() const;
 
     //
     // training
@@ -196,6 +227,13 @@ private:
 
     void output_reorder();
 
+    // map the output row index `i` to batch index
+    int64_t output_resolve_row(int32_t i) const;
+
+    // async-copy enabled layer-input tensors (per cparams.output_layer_inp)
+    // from backend into host-side embd_layer_inp buffers
+    void extract_layer_inputs(const llm_graph_result * res, size_t token_offset, size_t n_tokens);
+
     //
     // graph
     //
@@ -213,6 +251,8 @@ public:
     ggml_cgraph * graph_reserve(
         uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only = false, size_t * sizes = nullptr);
 
+    bool set_sampler(llama_seq_id seq_id, llama_sampler * sampler);
+
 private:
     llm_graph_params graph_params(
                         llm_graph_result * res,
@@ -221,6 +261,10 @@ private:
                           llm_graph_type   gtype) const;
 
     llm_graph_cb graph_get_cb() const;
+
+    // disable auto fused ops (Flash Attention, Gated Delta Net) whose op lands on a device
+    // that differs from the layer it belongs to (usually due to missing backend support)
+    void resolve_fused_ops(const llama_memory_context_i * mctx, uint32_t n_seqs);
 
     // TODO: read/write lora adapters and cvec
     size_t state_write_data(llama_io_write_i & io);
@@ -235,22 +279,49 @@ private:
 
     const llama_model & model;
 
-    llama_cparams       cparams;
-    llama_adapter_cvec  cvec;
-    llama_adapter_loras loras;
+    llama_cparams cparams;
+
+    llama_adapter_cvec_ptr  cvec;
+    llama_adapter_loras_ptr loras;
 
     llama_cross cross; // TODO: tmp for handling cross-attention - need something better probably
 
-    std::unique_ptr<llama_memory_i> memory;
+    llama_memory_ptr memory;
 
     // decode output (2-dimensional array: [n_outputs][n_vocab])
-    size_t  logits_size = 0; // capacity (of floats) for logits
-    float * logits      = nullptr;
+    buffer_view<float> logits = {nullptr, 0};
 
     // embeddings output (2-dimensional array: [n_outputs][n_embd])
     // populated only when pooling_type == LLAMA_POOLING_TYPE_NONE
-    size_t  embd_size = 0; // capacity (of floats) for embeddings
-    float * embd      = nullptr;
+    buffer_view<float> embd = {nullptr, 0};
+
+    // hidden state required by the nextn layers (2-dimensional array: [n_outputs][n_embd])
+    // populated only when cparams.embeddings_nextn is enabled and the model graph
+    // sets llm_graph_result::t_h_nextn
+    buffer_view<float> embd_nextn = {nullptr, 0};
+
+    // host buffers for output layer input embeddings, per layer
+    // populated when cparams.output_layer_inp[il] is true
+    std::vector<buffer_view<float>> embd_layer_inp;
+
+    struct sampling_info {
+        // !samplers.empty() to check if any samplers are active
+        std::map<llama_seq_id, llama_sampler *> samplers;
+
+        buffer_view<float>       logits     = {nullptr, 0};
+        buffer_view<llama_token> sampled    = {nullptr, 0};
+        buffer_view<float>       probs      = {nullptr, 0};
+        buffer_view<llama_token> candidates = {nullptr, 0};
+
+        std::vector<uint32_t> logits_count;
+        std::vector<uint32_t> probs_count;
+        std::vector<uint32_t> candidates_count;
+
+        // optimization
+        std::vector<llama_token> token_ids_full_vocab;
+    };
+
+    sampling_info sampling;
 
     // sequence embeddings output (map of [n_embd] vectors)
     // populated only when pooling_type != LLAMA_POOLING_TYPE_NONE
@@ -271,6 +342,8 @@ private:
     std::vector<swap_info> output_swaps;
 
     ggml_backend_sched_ptr sched;
+
+    bool sched_need_reserve = true;
 
     ggml_backend_t backend_cpu = nullptr;
     std::vector<ggml_backend_ptr> backends;
@@ -296,6 +369,9 @@ private:
 
     // host buffer for the model output (logits and embeddings)
     ggml_backend_buffer_ptr buf_output;
+
+    // keep copies of the per-sequence memory on the device
+    std::map<llama_seq_id, llama_memory_buffers> mem_storage;
 
     bool has_evaluated_once = false;
 

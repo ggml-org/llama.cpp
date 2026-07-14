@@ -109,8 +109,7 @@ rm -rf "$build_dir" && mkdir "$build_dir" || abort "Failed to make $build_dir"
 # Step 2: Setup Build Environment and Compile Test Binaries
 ###########################################################
 
-# Note: test-eval-callback requires -DLLAMA_CURL
-cmake -B "./$build_dir" -DCMAKE_BUILD_TYPE=Debug -DGGML_CUDA=1 -DLLAMA_CURL=1 || abort "Failed to build environment"
+cmake -B "./$build_dir" -DCMAKE_BUILD_TYPE=Debug -DGGML_CUDA=1 || abort "Failed to build environment"
 pushd "$build_dir"
 make -j || abort "Failed to compile"
 popd > /dev/null || exit 1

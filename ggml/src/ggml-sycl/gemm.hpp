@@ -29,6 +29,9 @@ public:
     static constexpr dt to_dt() {
         if constexpr (std::is_same_v<T, float>) return dt::f32;
         else if constexpr (std::is_same_v<T, sycl::half>) return dt::f16;
+#ifdef GGML_SYCL_HAS_BF16
+        else if constexpr (std::is_same_v<T, sycl::ext::oneapi::bfloat16>) return dt::bf16;
+#endif
         else static_assert(0);
     }
 
