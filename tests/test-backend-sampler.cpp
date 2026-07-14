@@ -814,6 +814,34 @@ static std::vector<llama_token_data> apply_cpu_sampler(
 }
 
 using sampler_setup_fn = std::function<void(llama_sampler *)>;
+using sampler_init_fn = std::function<llama_sampler *()>;
+
+enum class penalties_position {
+    before_filter,
+    after_filter,
+};
+
+static void add_filter_and_penalties(
+        llama_sampler * chain,
+        const sampler_init_fn & init_filter,
+        int32_t penalty_last_n,
+        float penalty_repeat,
+        float penalty_freq,
+        float penalty_present,
+        penalties_position position) {
+    const auto add_penalties = [&]() {
+        llama_sampler_chain_add(chain, llama_sampler_init_penalties(
+                    penalty_last_n, penalty_repeat, penalty_freq, penalty_present));
+    };
+
+    if (position == penalties_position::before_filter) {
+        add_penalties();
+        llama_sampler_chain_add(chain, init_filter());
+    } else {
+        llama_sampler_chain_add(chain, init_filter());
+        add_penalties();
+    }
+}
 
 static llama_sampler_ptr make_sampler_chain(
         const sampler_setup_fn & add_samplers,
@@ -1007,14 +1035,18 @@ static void compare_top_k_penalties_logits(
         float penalty_repeat,
         float penalty_freq,
         float penalty_present,
-        const std::string & prompt) {
+        const std::string & prompt,
+        penalties_position position) {
     const auto * vocab = llama_model_get_vocab(params.model.get());
     const std::vector<float> raw_logits = decode_raw_logits(params, prompt);
     const int n_vocab = (int) raw_logits.size();
 
     GGML_ASSERT(n_vocab > k);
 
-    llama_sampler_ptr top_k(llama_sampler_init_top_k(k));
+    const sampler_init_fn init_top_k = [k]() {
+        return llama_sampler_init_top_k(k);
+    };
+    llama_sampler_ptr top_k(init_top_k());
     const std::vector<llama_token_data> top_k_data = apply_cpu_sampler(raw_logits, top_k.get());
     GGML_ASSERT(top_k_data.size() == (size_t) k);
     const llama_token retained_history_token = top_k_data[0].id;
@@ -1032,9 +1064,8 @@ static void compare_top_k_penalties_logits(
     GGML_ASSERT(excluded_history_token != LLAMA_TOKEN_NULL);
 
     const auto add_samplers = [&](llama_sampler * chain) {
-        llama_sampler_chain_add(chain, llama_sampler_init_top_k(k));
-        llama_sampler_chain_add(chain, llama_sampler_init_penalties(
-                    penalty_last_n, penalty_repeat, penalty_freq, penalty_present));
+        add_filter_and_penalties(chain, init_top_k,
+                penalty_last_n, penalty_repeat, penalty_freq, penalty_present, position);
     };
 
     auto accept_history = [&](llama_sampler * smpl) {
@@ -1053,14 +1084,30 @@ static void compare_top_k_penalties_logits(
 
     const std::unordered_map<llama_token, float> expected_logits = map_logits(output.expected);
 
-    GGML_ASSERT(expected_logits.find(retained_history_token) != expected_logits.end());
-    GGML_ASSERT(fabsf(expected_logits.at(retained_history_token) - raw_logits[retained_history_token]) > 1e-6f);
-    GGML_ASSERT(expected_logits.find(excluded_history_token) == expected_logits.end());
-    GGML_ASSERT(std::find(output.actual.candidates.begin(), output.actual.candidates.end(),
-                excluded_history_token) == output.actual.candidates.end());
+    if (position == penalties_position::after_filter) {
+        GGML_ASSERT(expected_logits.find(retained_history_token) != expected_logits.end());
+        GGML_ASSERT(fabsf(expected_logits.at(retained_history_token) - raw_logits[retained_history_token]) > 1e-6f);
+        GGML_ASSERT(expected_logits.find(excluded_history_token) == expected_logits.end());
+        GGML_ASSERT(std::find(output.actual.candidates.begin(), output.actual.candidates.end(),
+                    excluded_history_token) == output.actual.candidates.end());
+    } else {
+        const std::unordered_map<llama_token, float> unpenalized_logits = map_logits(top_k_data);
+        bool changed = false;
+        for (const auto & item : expected_logits) {
+            const auto it = unpenalized_logits.find(item.first);
+            if (it == unpenalized_logits.end() || fabsf(it->second - item.second) > 1e-6f) {
+                changed = true;
+                break;
+            }
+        }
+        GGML_ASSERT(changed);
+    }
 
+    const char * name = position == penalties_position::before_filter
+        ? "penalties top-k"
+        : "top-k penalties";
     const sampler_comparison_stats stats = compare_sampler_outputs(
-            "top-k penalties", expected_logits, output.actual);
+            name, expected_logits, output.actual);
     GGML_ASSERT(stats.n_masked == 0);
     GGML_ASSERT(stats.n_mismatch == 0);
 }
@@ -1068,12 +1115,14 @@ static void compare_top_k_penalties_logits(
 static void compare_masking_penalties_logits(
         const test_params & params,
         const char * filter_name,
-        const std::function<llama_sampler *()> & init_filter,
+        const sampler_init_fn & init_filter,
         int32_t penalty_last_n,
         float penalty_repeat,
         float penalty_freq,
         float penalty_present,
         const std::string & prompt,
+        penalties_position position,
+        bool allow_extra_candidates,
         bool add_history = true) {
     const auto * vocab = llama_model_get_vocab(params.model.get());
     const std::vector<float> raw_logits = decode_raw_logits(params, prompt);
@@ -1100,9 +1149,8 @@ static void compare_masking_penalties_logits(
     GGML_ASSERT(masked_token != LLAMA_TOKEN_NULL);
 
     const auto add_samplers = [&](llama_sampler * chain) {
-        llama_sampler_chain_add(chain, init_filter());
-        llama_sampler_chain_add(chain, llama_sampler_init_penalties(
-                    penalty_last_n, penalty_repeat, penalty_freq, penalty_present));
+        add_filter_and_penalties(chain, init_filter,
+                penalty_last_n, penalty_repeat, penalty_freq, penalty_present, position);
     };
     auto accept_history = [&](llama_sampler * smpl) {
         if (!add_history) {
@@ -1122,15 +1170,26 @@ static void compare_masking_penalties_logits(
 
     const std::unordered_map<llama_token, float> expected_logits = map_logits(output.expected);
 
-    GGML_ASSERT(expected_logits.find(penalized_token) != expected_logits.end());
     GGML_ASSERT(expected_logits.find(masked_token) == expected_logits.end());
     if (add_history) {
-        GGML_ASSERT(fabsf(expected_logits.at(penalized_token) - raw_logits[penalized_token]) > 1e-6f);
+        if (position == penalties_position::after_filter) {
+            GGML_ASSERT(expected_logits.find(penalized_token) != expected_logits.end());
+            GGML_ASSERT(fabsf(expected_logits.at(penalized_token) - raw_logits[penalized_token]) > 1e-6f);
+        } else {
+            llama_sampler_ptr penalties(llama_sampler_init_penalties(
+                        penalty_last_n, penalty_repeat, penalty_freq, penalty_present));
+            accept_history(penalties.get());
+            const std::unordered_map<llama_token, float> penalized_logits =
+                map_logits(apply_cpu_sampler(raw_logits, penalties.get()));
+            GGML_ASSERT(fabsf(penalized_logits.at(penalized_token) - raw_logits[penalized_token]) > 1e-6f);
+        }
     }
 
-    const std::string name = std::string(filter_name) + " penalties";
+    const std::string name = position == penalties_position::before_filter
+        ? "penalties " + std::string(filter_name)
+        : std::string(filter_name) + " penalties";
     const sampler_comparison_stats stats = compare_sampler_outputs(
-            name.c_str(), expected_logits, output.actual, true);
+            name.c_str(), expected_logits, output.actual, allow_extra_candidates);
     const float masked_logit = find_backend_logit(output.actual, masked_token);
     GGML_ASSERT(stats.n_masked > 0);
     GGML_ASSERT(std::isinf(masked_logit) && masked_logit < 0.0f);
@@ -1160,33 +1219,48 @@ static void test_backend_penalties_sampling(const test_params & params) {
     });
 
     printf("Testing backend top-k followed by penalties\n");
-    compare_top_k_penalties_logits(params, 8, 64, 1.1f, 0.5f, 0.25f, "Hello");
+    compare_top_k_penalties_logits(params, 8, 64, 1.1f, 0.5f, 0.25f, "Hello",
+            penalties_position::after_filter);
+
+    printf("Testing backend penalties followed by top-k\n");
+    compare_top_k_penalties_logits(params, 8, 64, 1.1f, 0.5f, 0.25f, "Hello",
+            penalties_position::before_filter);
 
     printf("Testing backend top-p followed by penalties\n");
     compare_masking_penalties_logits(params, "top-p", []() {
         return llama_sampler_init_top_p(0.9f, 0);
-    }, 64, 1.1f, 0.5f, 0.25f, "Hello");
+    }, 64, 1.1f, 0.5f, 0.25f, "Hello", penalties_position::after_filter, true);
+
+    printf("Testing backend penalties followed by top-p\n");
+    compare_masking_penalties_logits(params, "top-p", []() {
+        return llama_sampler_init_top_p(0.9f, 0);
+    }, 64, 1.1f, 0.5f, 0.25f, "Hello", penalties_position::before_filter, true);
 
     printf("Testing backend min-p followed by penalties\n");
     compare_masking_penalties_logits(params, "min-p", []() {
         return llama_sampler_init_min_p(0.1f, 0);
-    }, 64, 1.1f, 0.5f, 0.25f, "Hello");
+    }, 64, 1.1f, 0.5f, 0.25f, "Hello", penalties_position::after_filter, false);
+
+    printf("Testing backend penalties followed by min-p\n");
+    compare_masking_penalties_logits(params, "min-p", []() {
+        return llama_sampler_init_min_p(0.1f, 0);
+    }, 64, 1.1f, 0.5f, 0.25f, "Hello", penalties_position::before_filter, false);
 
     printf("Testing backend top-p followed by penalties with empty history\n");
     compare_masking_penalties_logits(params, "top-p empty", []() {
         return llama_sampler_init_top_p(0.9f, 0);
-    }, 64, 1.1f, 0.5f, 0.25f, "Hello", false);
+    }, 64, 1.1f, 0.5f, 0.25f, "Hello", penalties_position::after_filter, true, false);
 
     printf("Testing backend top-p followed by individual penalties\n");
     compare_masking_penalties_logits(params, "top-p repeat", []() {
         return llama_sampler_init_top_p(0.9f, 0);
-    }, 64, 1.1f, 0.0f, 0.0f, "Hello");
+    }, 64, 1.1f, 0.0f, 0.0f, "Hello", penalties_position::after_filter, true);
     compare_masking_penalties_logits(params, "top-p frequency", []() {
         return llama_sampler_init_top_p(0.9f, 0);
-    }, 64, 1.0f, 0.5f, 0.0f, "Hello");
+    }, 64, 1.0f, 0.5f, 0.0f, "Hello", penalties_position::after_filter, true);
     compare_masking_penalties_logits(params, "top-p presence", []() {
         return llama_sampler_init_top_p(0.9f, 0);
-    }, 64, 1.0f, 0.0f, 0.25f, "Hello");
+    }, 64, 1.0f, 0.0f, 0.25f, "Hello", penalties_position::after_filter, true);
 
     printf("backend penalties sampling test PASSED\n");
 }
