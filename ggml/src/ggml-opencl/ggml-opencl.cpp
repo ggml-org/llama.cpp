@@ -5928,6 +5928,21 @@ static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev) {
         backend_ctx->adreno_cl_compiler_version.major >= 0 &&
         backend_ctx->adreno_cl_compiler_version.type != DX &&
         !backend_ctx->adreno_cl_compiler_version.newer_than_or_same(E031, 38, 11, 0);
+
+    // Without an override the split path is reachable only on the few devices whose
+    // compiler needs it, so a wrong GGML_CL_ONLY index -- which surfaces as -46 at
+    // clCreateKernel, and only there -- can be found only on hardware almost nobody has.
+    // Forcing it lets any device build every per-kernel program and check that each index
+    // still agrees with the guard in the .cl source. It changes nothing in a normal run.
+    if (const char * e = getenv("GGML_OPENCL_SPLIT_PROGRAMS")) {
+        if (e[0] != '\0') {
+            backend_ctx->split_kernel_programs = (atoi(e) != 0);
+            GGML_LOG_INFO("ggml_opencl: split_kernel_programs forced %s by "
+                          "GGML_OPENCL_SPLIT_PROGRAMS\n",
+                          backend_ctx->split_kernel_programs ? "on" : "off");
+        }
+    }
+
     backend_ctx->has_vector_subgroup_broadcast =
         (backend_ctx->adreno_cl_compiler_version.type == E031 && backend_ctx->adreno_cl_compiler_version.major >= 47) ||
         (backend_ctx->adreno_cl_compiler_version.type == DX   && backend_ctx->adreno_cl_compiler_version.major >= 17);
