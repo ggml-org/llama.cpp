@@ -11076,6 +11076,7 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
         }
         return nullptr;
     case GGML_OP_CONV_2D:
+        return (ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1]));
     case GGML_OP_CONV_TRANSPOSE_2D:
         if (src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
             uint32_t K = dst->ne[2]; // Cout
