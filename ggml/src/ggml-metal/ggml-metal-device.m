@@ -788,6 +788,12 @@ void ggml_metal_encoder_debug_group_pop (ggml_metal_encoder_t encoder) {
 }
 
 void ggml_metal_encoder_set_pipeline(ggml_metal_encoder_t encoder, struct ggml_metal_pipeline_with_params pipeline) {
+    // compile_pipeline already logs the missing kernel name; dummy_kernel probes
+    // use compile_pipeline directly and must still be allowed to return nil
+    if (!pipeline.pipeline) {
+        GGML_ABORT("%s: nil Metal pipeline (missing kernel; see compile_pipeline log above)\n", __func__);
+    }
+
     [encoder->obj setComputePipelineState:pipeline.pipeline->obj];
 }
 
