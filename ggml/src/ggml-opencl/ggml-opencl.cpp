@@ -563,9 +563,12 @@ struct ggml_backend_opencl_context {
     size_t max_workgroup_size;
     bool fp16_support;
     bool has_vector_subgroup_broadcast;
-    // Some Adreno compilers cannot build a program that holds more than one kernel: they
-    // crash or exhaust the host heap, while each of those kernels compiles fine on its own.
-    // Such a device gets one program per kernel.
+    // On some Adreno compilers a program cannot define any kernel after a kernel that calls
+    // a subgroup builtin (sub_group_reduce_*, _scan_*, _shuffle_*): the build fails with -6,
+    // or crashes outright in a larger program. A subgroup kernel that comes last is fine, and
+    // a program with no subgroup builtins is fine at any size. It is the ordering that breaks
+    // the compiler, not the kernel count. Such a device gets one program per kernel, which
+    // trivially satisfies the rule.
     bool split_kernel_programs = false;
     bool has_subgroup_shuffle = false;       // cl_khr_subgroup_shuffle or cl_qcom_subgroup_shuffle
     bool has_integer_dot      = false;       // cl_khr_integer_dot_product or cl_qcom_dot_product8
