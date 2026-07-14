@@ -114,6 +114,7 @@ class ServerProcess:
     backend_sampling: bool = False
     gcp_compat: bool = False
     server_tools: str | None = None
+    cors_origins: str | None = None
 
     # session variables
     process: subprocess.Popen | None = None
@@ -170,6 +171,8 @@ class ServerProcess:
             server_args.extend(["--models-max", self.models_max])
         if self.models_preset:
             server_args.extend(["--models-preset", self.models_preset])
+        if self.cors_origins:
+            server_args.extend(["--cors-origins", self.cors_origins])
         if self.n_batch:
             server_args.extend(["--batch-size", self.n_batch])
         if self.n_ubatch:
@@ -359,7 +362,7 @@ class ServerProcess:
         if parse_body:
             try:
                 result.body = response.json()
-            except JSONDecodeError:
+            except (JSONDecodeError, requests.exceptions.JSONDecodeError):
                 result.body = response.text
         else:
             result.body = None

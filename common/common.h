@@ -631,6 +631,14 @@ struct common_params {
     std::string api_prefix    = "";                                                                         // NOLINT
     std::string chat_template = "";                                                                         // NOLINT
     bool use_jinja = true;                                                                                  // NOLINT
+
+    // server CORS params
+    std::string cors_origins = "*";
+    std::string cors_methods = "GET, POST, DELETE, OPTIONS";
+    std::string cors_headers = "*";
+    bool cors_credentials = true;
+    bool cors_origins_explicit = false; // for --agent option
+
     bool enable_chat_template = true;
     bool force_pure_content_parser = false;
     common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;

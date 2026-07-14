@@ -697,7 +697,7 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         }
     };
 
-    // parse the first time to get -hf option (used for remote preset)
+    // parse all CLI args now, so that -hf is available below for remote preset resolution
     parse_cli_args();
 
     postprocess_cpu_params(params.cpuparams,       nullptr);
@@ -746,6 +746,11 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
     if (!params.kv_overrides.empty()) {
         params.kv_overrides.emplace_back();
         params.kv_overrides.back().key[0] = 0;
+    }
+
+    if (!params.server_tools.empty() && !params.cors_origins_explicit) {
+        LOG_WRN("server tools are enabled, using localhost as default CORS origin (change via --cors-origins)\n");
+        params.cors_origins = "localhost";
     }
 
     // pad tensor_buft_overrides for llama_params_fit:
@@ -3048,6 +3053,42 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_STATIC_PATH"));
     add_opt(common_arg(
+        {"--cors-origins"}, "ORIGINS",
+        string_format(
+            "comma-separated list of allowed origins for CORS (default: %s)\n"
+            "if set to special value 'localhost', reflect the Origin header only if it is localhost",
+        params.cors_origins.c_str()),
+        [](common_params & params, const std::string & value) {
+            params.cors_origins = value;
+            params.cors_origins_explicit = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CORS_ORIGINS"));
+    add_opt(common_arg(
+        {"--cors-methods"}, "METHODS",
+        string_format("comma-separated list of allowed methods for CORS (default: %s)", params.cors_methods.c_str()),
+        [](common_params & params, const std::string & value) {
+            params.cors_methods = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CORS_METHODS"));
+    add_opt(common_arg(
+        {"--cors-headers"}, "HEADERS",
+        string_format("comma-separated list of allowed headers for CORS (default: %s)", params.cors_headers.c_str()),
+        [](common_params & params, const std::string & value) {
+            params.cors_headers = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CORS_HEADERS"));
+    add_opt(common_arg(
+        {"--cors-credentials"},
+        {"--no-cors-credentials"},
+        string_format(
+            "whether to allow credentials for CORS (default: %s)\n"
+            "note: if this is enabled and --cors-origins is set to * (default), the Origin header will be echoed back, and credentials will always be allowed",
+        params.cors_credentials ? "enabled" : "disabled"),
+        [](common_params & params, bool value) {
+            params.cors_credentials = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CORS_CREDENTIALS"));
+    add_opt(common_arg(
         {"--api-prefix"}, "PREFIX",
         string_format("prefix path the server serves from, without the trailing slash (default: %s)", params.api_prefix.c_str()),
         [](common_params & params, const std::string & value) {
@@ -3080,7 +3121,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--tools"}, "TOOL1,TOOL2,...",
         "experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)\n"
         "specify \"all\" to enable all tools\n"
-        "available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, get_datetime",
+        "available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, get_datetime\n"
+        "note: for security reasons, this will limit --cors-origins to localhost by default",
         [](common_params & params, const std::string & value) {
             params.server_tools = parse_csv_row(value);
         }
@@ -3088,7 +3130,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"-ag", "--agent"},
         {"-no-ag", "--no-agent"},
-        "whether to enable CORS proxy and all built-in tools - do not enable in untrusted environments (default: disabled)",
+        "whether to enable CORS proxy and all built-in tools - do not enable in untrusted environments (default: disabled)\n"
+        "note: for security reasons, this will limit --cors-origins to localhost by default",
         [](common_params & params, bool value) {
             if (value) {
                 params.server_tools = {"all"};
@@ -3097,6 +3140,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 params.server_tools.clear();
                 params.ui_mcp_proxy = false;
             }
+            // note: do not modify cors_origins here, as the options are not evaluated in order (user may explicitly set --cors-origins before --agent)
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_AGENT"));
     add_opt(common_arg(
