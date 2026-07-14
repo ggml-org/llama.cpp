@@ -237,6 +237,10 @@ struct llama_hparams {
     float    dsv4_hc_eps               = 0.0f;
     std::array<uint32_t, LLAMA_MAX_LAYERS> dsv4_compress_ratios;
 
+    // true when a DFlash drafter uses a DeepSeek-V4 backbone (MLA + MoE + hyper-connections)
+    // instead of the original dense Qwen3-style backbone.
+    bool dflash_dsv4_backbone = false;
+
     // qwen3vl deepstack
     // When parsed from GGUF, this implies the first N layers consume the first
     // N deepstack embeddings. Use deepstack_mapping_arr if you need a more

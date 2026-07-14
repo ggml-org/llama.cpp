@@ -23,9 +23,49 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
     // DFlash has a single rope, so the SWA rope == main rope.
     if (ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW, hparams.n_swa, false) && hparams.n_swa > 0) {
         hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-        ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer());
+        if (!ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer(), false)) {
+            hparams.set_swa_pattern(0); // no pattern key: every layer is SWA
+        }
         hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
         hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
+    }
+
+    // DeepSeek-V4 backbone (DSpark 3-stage MLA/MoE/hyper-connection blocks) vs. the original
+    // dense Qwen3-style backbone: detected from the presence of the MLA query-down tensor.
+    hparams.dflash_dsv4_backbone = ml.get_tensor_meta(tn(LLM_TENSOR_ATTN_Q_A, "weight", 0).str().c_str()) != nullptr;
+
+    if (hparams.dflash_dsv4_backbone) {
+        ml.get_key(LLM_KV_ATTENTION_Q_LORA_RANK,                hparams.n_lora_q);
+        ml.get_key(LLM_KV_ATTENTION_OUTPUT_GROUP_COUNT,         hparams.dsv4_o_group_count);
+        ml.get_key(LLM_KV_ATTENTION_OUTPUT_LORA_RANK,           hparams.dsv4_o_lora_rank);
+        ml.get_key(LLM_KV_HYPER_CONNECTION_COUNT,               hparams.dsv4_hc_mult);
+        ml.get_key(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, hparams.dsv4_hc_sinkhorn_iters);
+        ml.get_key(LLM_KV_HYPER_CONNECTION_EPSILON,             hparams.dsv4_hc_eps);
+
+        ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp);
+        ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,        hparams.n_expert_shared);
+        ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,       hparams.expert_weights_scale);
+        ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,        hparams.expert_weights_norm);
+        ml.get_key(LLM_KV_EXPERT_GATING_FUNC,         hparams.expert_gating_func);
+        ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_EXP,    hparams.swiglu_clamp_exp,   hparams.n_layer());
+        if (!ml.get_key_or_arr(LLM_KV_SWIGLU_CLAMP_SHEXP, hparams.swiglu_clamp_shexp, hparams.n_layer(), 0)) {
+            hparams.swiglu_clamp_shexp = hparams.swiglu_clamp_exp;
+        }
+
+        if (hparams.expert_gating_func != LLAMA_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS) {
+            throw std::runtime_error("DFlash DeepSeek-V4 backbone currently expects sqrtsoftplus MoE scoring");
+        }
+
+        // DSpark blocks only ever run the plain sliding-window MLA path (compress_ratio=0):
+        // no lightning indexer, no compressed attention, no hash-routed layers.
+        uint32_t hash_layer_count = 0;
+        ml.get_key(LLM_KV_HASH_LAYER_COUNT, hash_layer_count, false);
+        if (hash_layer_count != 0) {
+            throw std::runtime_error("DFlash DeepSeek-V4 backbone does not support hash-routed layers");
+        }
+
+        LLAMA_LOG_INFO("%s: DFlash with DeepSeek-V4 backbone (q_lora_rank = %u, hc_mult = %u)\n",
+                __func__, hparams.n_lora_q, hparams.dsv4_hc_mult);
     }
 
     type = LLM_TYPE_UNKNOWN;
@@ -37,9 +77,6 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
     const int64_t n_embd_inp = hparams.n_embd_inp_enc();
 
     // DSpark = DFlash + a semi-autoregressive Markov head and Confidence head
-    //
-    // TODO: only Qwen3-style backbones are supported for now; other backbones (e.g. Gemma4)
-    //       need their own conversion path and graph tweaks
     const struct ggml_tensor * markov_meta = ml->get_tensor_meta("markov_w1.weight");
     if (markov_meta) {
         const int64_t dspark_markov_rank = markov_meta->ne[0];
@@ -56,6 +93,58 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
     fc              = create_tensor(tn(LLM_TENSOR_FC,              "weight"), { n_embd_inp, n_embd }, 0);
     output_norm_enc = create_tensor(tn(LLM_TENSOR_ENC_OUTPUT_NORM, "weight"), { n_embd }, 0); // encoder hidden_norm (after fc)
     output_norm     = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM,    "weight"), { n_embd }, 0); // decoder final norm
+
+    if (hparams.dflash_dsv4_backbone) {
+        const int64_t q_lora_rank     = hparams.n_lora_q;
+        const int64_t n_ff_exp        = hparams.n_ff_exp;
+        const int64_t n_expert_shared = hparams.n_expert_shared;
+
+        const int64_t o_groups    = hparams.dsv4_o_group_count;
+        const int64_t o_lora_rank = hparams.dsv4_o_lora_rank;
+        const int64_t hc_mult     = hparams.dsv4_hc_mult;
+        const int64_t hc_dim      = hc_mult * n_embd;
+        const int64_t hc_mix_dim  = (2 + hc_mult) * hc_mult;
+
+        GGML_ASSERT(n_embd_head_k == n_embd_head_v);
+
+        hc_head_fn    = create_tensor(tn(LLM_TENSOR_HC_HEAD_FN, "weight"),    {hc_dim, hc_mult}, 0);
+        hc_head_base  = create_tensor(tn(LLM_TENSOR_HC_HEAD_BASE, "weight"),  {hc_mult}, 0);
+        hc_head_scale = create_tensor(tn(LLM_TENSOR_HC_HEAD_SCALE, "weight"), {1}, 0);
+
+        for (int i = 0; i < n_layer; ++i) {
+            auto & layer = layers[i];
+
+            layer.attn_norm     = create_tensor(tn(LLM_TENSOR_ATTN_NORM,     "weight", i), { n_embd }, 0);
+            layer.attn_sinks    = create_tensor(tn(LLM_TENSOR_ATTN_SINKS,    "weight", i), { n_head }, 0);
+            layer.wq_a          = create_tensor(tn(LLM_TENSOR_ATTN_Q_A,      "weight", i), { n_embd, q_lora_rank }, 0);
+            layer.attn_q_a_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_A_NORM, "weight", i), { q_lora_rank }, 0);
+            layer.wq_b          = create_tensor(tn(LLM_TENSOR_ATTN_Q_B,      "weight", i), { q_lora_rank, n_head * n_embd_head_k }, 0);
+            layer.wkv           = create_tensor(tn(LLM_TENSOR_ATTN_KV,       "weight", i), { n_embd, n_embd_head_k }, 0);
+            layer.attn_kv_norm  = create_tensor(tn(LLM_TENSOR_ATTN_KV_NORM,  "weight", i), { n_embd_head_k }, 0);
+            layer.wo_a          = create_tensor(tn(LLM_TENSOR_ATTN_OUT_A,    "weight", i), { n_head * n_embd_head_k / o_groups, o_lora_rank * o_groups }, 0);
+            layer.wo_b          = create_tensor(tn(LLM_TENSOR_ATTN_OUT_B,    "weight", i), { o_groups * o_lora_rank, n_embd }, 0);
+
+            layer.hc_attn_fn    = create_tensor(tn(LLM_TENSOR_HC_ATTN_FN,    "weight", i), {hc_dim, hc_mix_dim}, 0);
+            layer.hc_attn_base  = create_tensor(tn(LLM_TENSOR_HC_ATTN_BASE,  "weight", i), {hc_mix_dim}, 0);
+            layer.hc_attn_scale = create_tensor(tn(LLM_TENSOR_HC_ATTN_SCALE, "weight", i), {3}, 0);
+            layer.hc_ffn_fn     = create_tensor(tn(LLM_TENSOR_HC_FFN_FN,     "weight", i), {hc_dim, hc_mix_dim}, 0);
+            layer.hc_ffn_base   = create_tensor(tn(LLM_TENSOR_HC_FFN_BASE,   "weight", i), {hc_mix_dim}, 0);
+            layer.hc_ffn_scale  = create_tensor(tn(LLM_TENSOR_HC_FFN_SCALE,  "weight", i), {3}, 0);
+
+            layer.ffn_gate_inp    = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), { n_embd, n_expert }, 0);
+            layer.ffn_exp_probs_b = create_tensor(tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), { n_expert }, 0);
+            layer.ffn_norm        = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), { n_embd }, 0);
+
+            layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), { n_embd,   n_ff_exp, n_expert }, 0);
+            layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), { n_ff_exp, n_embd,   n_expert }, 0);
+            layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), { n_embd,   n_ff_exp, n_expert }, 0);
+
+            layer.ffn_gate_shexp = create_tensor(tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), { n_embd,                     n_ff_exp * n_expert_shared }, 0);
+            layer.ffn_down_shexp = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), { n_ff_exp * n_expert_shared, n_embd                     }, 0);
+            layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), { n_embd,                     n_ff_exp * n_expert_shared }, 0);
+        }
+        return;
+    }
 
     for (int i = 0; i < n_layer; ++i) {
         auto & layer = layers[i];
@@ -106,7 +195,7 @@ ggml_tensor * llama_model_dflash::graph<true>::build_inp_embd_enc() const {
 
 // DFlash Encoder: processes target model features through feature fusion layer
 template <>
-llama_model_dflash::graph<true>::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_dflash::graph<true>::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context_dsv4_mla(params) {
     ggml_tensor * cur = build_inp_embd_enc();
 
     cur = build_lora_mm(model.fc, cur);
@@ -212,11 +301,138 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
     ggml_build_forward_expand(g.gf, out);
 }
 
+// DeepSeek-V4 backbone decoder: HC-expand -> N x (HC-pre/MLA-attn/HC-post, HC-pre/MoE-FFN/HC-post) -> HC-head
+template <>
+void llama_model_dflash::graph<false>::build_dsv4(const llama_model & model, ggml_tensor * inp_pos,
+        llm_graph_input_attn_kv * inp_attn, llm_graph_input_attn_kv_iswa * inp_attn_iswa,
+        bool use_iswa, ggml_tensor * inp_tokens, ggml_tensor * tok_embd) {
+    const int64_t n_embd_head      = n_embd_head_k;
+    const int64_t n_embd_head_rope = n_rot;
+    const int64_t n_groups         = hparams.dsv4_o_group_count;
+    const int64_t o_lora_rank      = hparams.dsv4_o_lora_rank;
+    const int64_t hc               = hparams.dsv4_hc_mult;
+
+    GGML_ASSERT(n_embd_head == n_embd_head_v);
+    GGML_ASSERT(n_head % n_groups == 0);
+
+    const float kq_scale = 1.0f/sqrtf(float(n_embd_head));
+
+    ggml_tensor * inpL = ggml_get_rows(ctx0, tok_embd, inp_tokens);
+    cb(inpL, "inp_noise_embd", -1);
+
+    // hyper-connections: expand the single embedding stream into `hc` copies, like the target
+    inpL = ggml_reshape_3d(ctx0, inpL, n_embd, 1, n_tokens);
+    inpL = ggml_repeat_4d(ctx0, inpL, n_embd, hc, n_tokens, 1);
+    cb(inpL, "hc_init", -1);
+
+    for (int il = 0; il < n_layer; ++il) {
+        const auto & layer = model.layers[il];
+
+        ggml_tensor * residual = inpL;
+        ggml_tensor * post = nullptr;
+        ggml_tensor * comb = nullptr;
+
+        ggml_tensor * cur = build_hc_pre(inpL, layer.hc_attn_fn, layer.hc_attn_scale, layer.hc_attn_base, &post, &comb, il);
+        cb(cur, "hc_attn_pre", il);
+
+        cur = build_norm(cur, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
+        cb(cur, "attn_norm", il);
+
+        ggml_tensor * qr = build_lora_mm(layer.wq_a, cur);
+        qr = build_norm(qr, layer.attn_q_a_norm, nullptr, LLM_NORM_RMS, il);
+        cb(qr, "qr", il);
+
+        ggml_tensor * q  = nullptr;
+        ggml_tensor * kv = nullptr;
+        build_mla_qkv(cur, qr, inp_pos, layer.wq_b, layer.wkv, layer.attn_kv_norm,
+                n_embd_head, n_embd_head_rope, n_head,
+                rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor, beta_fast, beta_slow,
+                &q, &kv, il);
+
+        // MLA: the single kv latent (nope+rope) serves as both K and V, matching the
+        // deepseek4 raw-SWA path (compress_ratio=0); n_head_kv == 1 broadcasts across heads.
+        ggml_tensor * attn_out = use_iswa
+            ? build_attn(inp_attn_iswa, nullptr, nullptr, nullptr, q, kv, kv, nullptr, layer.attn_sinks, nullptr, kq_scale, il)
+            : build_attn(inp_attn,      nullptr, nullptr, nullptr, q, kv, kv, nullptr, layer.attn_sinks, nullptr, kq_scale, il);
+
+        cur = build_mla_o(attn_out, inp_pos, layer.wo_a, layer.wo_b,
+                n_embd_head, n_embd_head_rope, n_head, n_groups, o_lora_rank,
+                rope_type, n_ctx_orig, freq_base, freq_scale, ext_factor, beta_fast, beta_slow, il);
+        cb(cur, "attn_out", il);
+
+        inpL = build_hc_post(cur, residual, post, comb, il);
+        cb(inpL, "hc_attn_post", il);
+
+        residual = inpL;
+        cur = build_hc_pre(inpL, layer.hc_ffn_fn, layer.hc_ffn_scale, layer.hc_ffn_base, &post, &comb, il);
+        cb(cur, "hc_ffn_pre", il);
+
+        cur = build_norm(cur, layer.ffn_norm, nullptr, LLM_NORM_RMS, il);
+        cb(cur, "ffn_norm", il);
+
+        ggml_tensor * moe_out = build_moe_ffn(cur,
+                layer.ffn_gate_inp,
+                layer.ffn_up_exps,
+                layer.ffn_gate_exps,
+                layer.ffn_down_exps,
+                layer.ffn_exp_probs_b,
+                n_expert, hparams.n_expert_used,
+                LLM_FFN_SILU, hparams.expert_weights_norm,
+                hparams.expert_weights_scale,
+                (llama_expert_gating_func_type) hparams.expert_gating_func,
+                il,
+                nullptr, nullptr, nullptr, nullptr, nullptr,
+                nullptr);
+        cb(moe_out, "ffn_moe_out", il);
+
+        ggml_tensor * ffn_shexp = build_ffn(cur,
+                layer.ffn_up_shexp,   nullptr, nullptr,
+                layer.ffn_gate_shexp, nullptr, nullptr,
+                layer.ffn_down_shexp, nullptr, nullptr,
+                nullptr, LLM_FFN_SILU, LLM_FFN_PAR, il);
+        cb(ffn_shexp, "ffn_shexp", il);
+
+        cur = ggml_add(ctx0, moe_out, ffn_shexp);
+        cb(cur, "ffn_out", il);
+
+        inpL = build_hc_post(cur, residual, post, comb, il);
+        cb(inpL, "l_out", il);
+    }
+
+    ggml_tensor * cur = build_hc_head(inpL, model.hc_head_fn, model.hc_head_scale, model.hc_head_base);
+    cb(cur, "hc_head", -1);
+
+    cur = build_norm(cur, model.output_norm, nullptr, LLM_NORM_RMS, -1);
+    cb(cur, "result_norm", -1);
+
+    res->t_embd = cur;
+
+    // lm_head from the target model (shared via ctx_other)
+    auto * output = model.output;
+    if (output == nullptr) {
+        GGML_ASSERT(cparams.ctx_other != nullptr);
+        const auto * model_other = llama_get_model(cparams.ctx_other);
+        GGML_ASSERT(model_other->output != nullptr && "DFlash decoder requires the target model's output projection");
+        output = model_other->output;
+    }
+
+    cur = build_lora_mm(output, cur);
+    cb(cur, "result_output", -1);
+    res->t_logits = cur;
+
+    ggml_build_forward_expand(gf, cur);
+
+    // DSpark: bias the draft logits with the Markov head
+    if (model.dspark_markov_w1) {
+        build_dspark_markov_head(*this, model, inp_tokens);
+    }
+}
+
 // DFlash decoder, dual-mode by batch type:
 //   * embd batch  -> fused target features: project + inject K/V into the cache.
 //   * token batch -> noise-block diffusion: attend over [committed, MASK...] to generate draft tokens
 template <>
-llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context_dsv4_mla(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
@@ -236,6 +452,8 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
 
     const float kq_scale = 1.0f/sqrtf(float(n_embd_head));
 
+    const int64_t n_embd_head_rope = hparams.dflash_dsv4_backbone ? n_rot : 0;
+
     // KV cache injection
     if (ubatch.embd) {
         auto inp = std::make_unique<llm_graph_input_embd>(n_embd);
@@ -251,18 +469,45 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
         for (int il = 0; il < n_layer; ++il) {
             const auto & layer = model.layers[il];
 
-            ggml_tensor * Kcur = build_lora_mm(layer.wk, inp_g);
-            ggml_tensor * Vcur = build_lora_mm(layer.wv, inp_g);
+            ggml_tensor * Kcur;
+            ggml_tensor * Vcur;
 
-            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
-            Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+            if (hparams.dflash_dsv4_backbone) {
+                // MLA: single kv latent (nope+rope), used as both K and V, one broadcast head.
+                ggml_tensor * kv = build_lora_mm(layer.wkv, inp_g);
+                kv = build_norm(kv, layer.attn_kv_norm, NULL, LLM_NORM_RMS, il);
+                kv = ggml_reshape_3d(ctx0, kv, n_embd_head, 1, n_tokens);
 
-            Kcur = build_norm(Kcur, layer.attn_k_norm, NULL, LLM_NORM_RMS, il);
-            Kcur = ggml_rope_ext(
-                    ctx0, Kcur, inp_pos, nullptr,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
-                    );
+                const int64_t n_embd_head_nope = n_embd_head - n_embd_head_rope;
+
+                ggml_tensor * kv_nope = ggml_view_3d(ctx0, kv, n_embd_head_nope, 1, n_tokens,
+                        kv->nb[1], kv->nb[2], 0);
+                ggml_tensor * kv_pe = ggml_view_3d(ctx0, kv, n_embd_head_rope, 1, n_tokens,
+                        kv->nb[1], kv->nb[2], ggml_row_size(kv->type, n_embd_head_nope));
+                kv_pe = ggml_rope_ext(
+                        ctx0, kv_pe, inp_pos, nullptr,
+                        n_embd_head_rope, rope_type, n_ctx_orig, freq_base, freq_scale,
+                        ext_factor, attn_factor, beta_fast, beta_slow
+                        );
+                kv = ggml_concat(ctx0, kv_nope, kv_pe, 0);
+                cb(kv, "kv_injected", il);
+
+                Kcur = kv;
+                Vcur = kv;
+            } else {
+                Kcur = build_lora_mm(layer.wk, inp_g);
+                Vcur = build_lora_mm(layer.wv, inp_g);
+
+                Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
+                Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
+
+                Kcur = build_norm(Kcur, layer.attn_k_norm, NULL, LLM_NORM_RMS, il);
+                Kcur = ggml_rope_ext(
+                        ctx0, Kcur, inp_pos, nullptr,
+                        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                        ext_factor, attn_factor, beta_fast, beta_slow
+                        );
+            }
             cb(Kcur, "Kcur_injected", il);
             cb(Vcur, "Vcur_injected", il);
 
@@ -303,10 +548,15 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
 
     ggml_tensor * inp_tokens = inp->tokens;
 
-    ggml_tensor * inpL = ggml_get_rows(ctx0, tok_embd, inp->tokens);
-    cb(inpL, "inp_noise_embd", -1);
-
     res->add_input(std::move(inp));
+
+    if (hparams.dflash_dsv4_backbone) {
+        build_dsv4(model, inp_pos, inp_attn, inp_attn_iswa, use_iswa, inp_tokens, tok_embd);
+        return;
+    }
+
+    ggml_tensor * inpL = ggml_get_rows(ctx0, tok_embd, inp_tokens);
+    cb(inpL, "inp_noise_embd", -1);
 
     for (int il = 0; il < n_layer; ++il) {
         const auto & layer = model.layers[il];
