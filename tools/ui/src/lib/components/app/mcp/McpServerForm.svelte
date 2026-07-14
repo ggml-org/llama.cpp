@@ -18,6 +18,22 @@
 		onUseProxyChange?: (useProxy: boolean) => void;
 		urlError?: string | null;
 		id?: string;
+		/**
+		 * "Wants Authorization" is the user's *intent* to add a Bearer token
+		 * (separate from `hasAuthorization` which reflects what's already in
+		 * the headers). Bindable so a parent - e.g. the recommendation cards
+		 * on the "Add New Server" dialog - can flip the switch on when the
+		 * picked server ships a `needsAuthorization: true` flag.
+		 */
+		wantsAuthorization?: boolean;
+		/**
+		 * Marks the "Authorization" field as required. Locks the toggle so the
+		 * user can't dismiss it, and visually marks the field with a red
+		 * asterisk. The parent is expected to gate its submit affordance on
+		 * the bearer token actually being filled. Used by the "Add New Server"
+		 * dialog for recommendations whose `needsAuthorization` flag is true.
+		 */
+		required?: boolean;
 	}
 
 	let {
@@ -28,7 +44,9 @@
 		onHeadersChange,
 		onUseProxyChange,
 		urlError = null,
-		id = 'server'
+		id = 'server',
+		wantsAuthorization = $bindable(false),
+		required = false
 	}: Props = $props();
 
 	let isWebSocket = $derived(
@@ -54,8 +72,6 @@
 		matchesAuthorizationKey(p.key) && isBearerScheme(p.value);
 
 	let hasAuthorization = $derived(headerPairs.some(ownedByBearerUi));
-
-	let wantsAuthorization = $state(false);
 
 	let showAuthorization = $derived(hasAuthorization || wantsAuthorization);
 
@@ -119,7 +135,7 @@
 
 <div class="grid gap-2">
 	<div class="mb-4">
-		<label for="server-url-{id}" class="mb-2 block text-xs font-medium">
+		<label for="server-url-{id}" class="mb-2 block text-xs font-medium select-none">
 			Server URL <span class="text-destructive">*</span>
 		</label>
 
@@ -138,14 +154,18 @@
 		{/if}
 	</div>
 
-	<label class="flex items-center gap-2 cursor-pointer">
+	<label class="flex items-center gap-2 cursor-pointer select-none">
 		<Switch
 			id="use-authorization-{id}"
 			checked={showAuthorization}
 			onCheckedChange={setUseAuthorization}
+			disabled={required}
 		/>
 
-		<span class="text-xs text-muted-foreground">Authorization</span>
+		<span class="text-xs text-muted-foreground">
+			Authorization{#if required}
+				<span class="text-destructive">*</span>{/if}
+		</span>
 	</label>
 
 	{#if showAuthorization}
