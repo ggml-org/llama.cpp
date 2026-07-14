@@ -3481,6 +3481,8 @@ private:
                             : ggml_time_us();
                         slot.t_start_generation = 0;
 
+                        int32_t n_prefilled = slot.task->n_prefilled;
+
                         slot.state = SLOT_STATE_PROCESSING_PROMPT;
 
                         SLT_TRC(slot, "new prompt, n_ctx_slot = %d, n_keep = %d, task.n_tokens = %d\n",
@@ -3553,9 +3555,16 @@ private:
                                 return;
                             }
 
-                            if (slot.task->n_prefilled > 0) {
+                            if (n_prefilled > 0) {
                                 n_past = slot.prompt.tokens.get_common_prefix(input_tokens);
-                                GGML_ASSERT(n_past == slot.task->n_prefilled);
+                                if (n_past != n_prefilled) {
+                                    SLT_WRN(slot,
+                                            "restored prefill prefix mismatch, expected = %d, actual = %d; falling back to local processing\n",
+                                            n_prefilled, n_past);
+                                    slot.prompt_clear();
+                                    n_prefilled = 0;
+                                    n_past = 0;
+                                }
                             } else if (slot.task->params.cache_prompt) {
                                 // reuse any previously computed tokens that are common with the new prompt
                                 n_past = slot.prompt.tokens.get_common_prefix(input_tokens);
@@ -3693,7 +3702,7 @@ private:
                                     SLT_WRN(slot, "%s\n", st1.str().c_str());
                                 }
 
-                                if (slot.task->n_prefilled == 0 && pos_min >= pos_min_thold) {
+                                if (n_prefilled == 0 && pos_min >= pos_min_thold) {
                                     // search for a context checkpoint
                                     const auto it = std::find_if(
                                         slot.prompt.checkpoints.rbegin(),
@@ -3753,8 +3762,8 @@ private:
                             SLT_WRN(slot, "n_past was set to %d\n", n_past);
                         }
 
-                        slot.n_prompt_tokens_cache = std::max(0, n_past - slot.task->n_prefilled);
-                        slot.n_prompt_tokens_processed = slot.task->n_prefilled;
+                        slot.n_prompt_tokens_cache = std::max(0, n_past - n_prefilled);
+                        slot.n_prompt_tokens_processed = n_prefilled;
 
                         slot.prompt.tokens.keep_first(n_past);
 
