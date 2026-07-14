@@ -176,9 +176,6 @@ void ggml_cuda_mul_mat_q(
     // gate/up activations are broadcast across experts (ne11 == 1): quantize each token once and
     // scatter to its slots. ids_src1 then holds the inverse map (token slot -> compact row).
     const bool dedup_bcast = ne11 == 1 && n_expert_used > 1;
-    if (dedup_bcast) {
-        CUDA_CHECK(cudaMemsetAsync(ids_src1.get(), 0xFF, ne_get_rows*sizeof(int32_t), stream)); // -1 for unused slots
-    }
 
     {
         GGML_ASSERT(ids->nb[0] == ggml_element_size(ids));
