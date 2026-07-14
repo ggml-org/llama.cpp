@@ -541,6 +541,7 @@ class _Qwen35MtpMixin:
     `mtp.*` to the standard layer-indexed nextn naming so the existing
     tensor_map handles them."""
 
+    supports_mtp_export = True
     hparams: dict[str, Any]
     model_arch: gguf.MODEL_ARCH
     gguf_writer: gguf.GGUFWriter
