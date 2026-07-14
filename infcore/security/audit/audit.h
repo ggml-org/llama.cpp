@@ -10,6 +10,7 @@
 // (fsync до возврата из log()), при этом флуд не сериализуется на диске.
 #pragma once
 
+#include <atomic>
 #include <condition_variable>
 #include <deque>
 #include <mutex>
@@ -35,6 +36,10 @@ public:
     bool open(const std::string& path);   // false при ошибке открытия
     void log(const AuditEvent& e);
     bool enabled() const { return fd_ >= 0; }
+    // true, если поток-писатель фатально упал в рантайме (ENOSPC/EIO): дальнейшие
+    // события НЕ пишутся. Читается без блокировки из потоков запросов, чтобы шлюз
+    // мог fail-closed (не отдавать трафик без аудита, если audit.require=true).
+    bool failed() const { return failed_.load(std::memory_order_acquire); }
 
 private:
     void writer_loop();                   // group-commit: батч + один fsync
@@ -47,6 +52,7 @@ private:
     unsigned long long       committed_seq_ = 0;   // последний зафиксированный (fsync) номер
     bool                     stop_          = false;
     bool                     writer_failed_ = false; // фатальная ошибка I/O -> не блокируем навсегда
+    std::atomic<bool>        failed_{false};         // то же, но для lock-free чтения снаружи
     std::thread              writer_;
     int                      fd_ = -1;
 };

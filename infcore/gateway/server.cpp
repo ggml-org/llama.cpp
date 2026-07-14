@@ -155,10 +155,29 @@ int GatewayServer::run() {
     std::signal(SIGINT, on_term);
     std::signal(SIGTERM, on_term);
     std::signal(SIGPIPE, SIG_IGN);   // оборванный клиент при SSE не должен ронять gateway
+    std::signal(SIGXFSZ, SIG_IGN);   // лимит размера файла аудита -> EFBIG (fail-closed), а не kill
 
-    // health (без авторизации)
+    // Fail-closed при рантайм-сбое аудита: если журнал обязателен (audit.require=true)
+    // и поток-писатель фатально упал (диск полон/IO-ошибка), НЕ отдаём трафик, который
+    // не сможем записать. /health и /metrics оставляем, чтобы ops видели деградацию.
+    svr.set_pre_routing_handler(
+        [this](const httplib::Request& req, httplib::Response& res) {
+            if (cfg_.audit_require && audit_.failed() &&
+                req.path != "/health" && req.path != "/metrics") {
+                error_json(res, 503, "api_error",
+                           "audit journal unavailable; refusing traffic (fail-closed)");
+                return httplib::Server::HandlerResponse::Handled;
+            }
+            return httplib::Server::HandlerResponse::Unhandled;
+        });
+
+    // health (без авторизации). Отражает и состояние аудита, чтобы деградация была видна.
     svr.Get("/health", [this](const httplib::Request&, httplib::Response& res) {
-        json h = {{"status", "ok"}, {"models", (int)cfg_.models.size()}};
+        const bool audit_ok = !(cfg_.audit_require && audit_.failed());
+        json h = {{"status", audit_ok ? "ok" : "degraded"},
+                  {"models", (int)cfg_.models.size()},
+                  {"audit", audit_.failed() ? "failed" : "ok"}};
+        if (!audit_ok) res.status = 503;
         res.set_content(h.dump(), "application/json");
     });
 

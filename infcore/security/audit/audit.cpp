@@ -5,6 +5,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include <cstdio>
+#include <cstring>
 #include <ctime>
 
 #include "nlohmann/json.hpp"
@@ -87,25 +89,33 @@ void AuditLog::writer_loop() {
         lock.unlock();
 
         bool ok = true;
+        int  werr = 0;
         for (const auto& line : batch) {
             ssize_t off = 0, n = (ssize_t)line.size();
             while (off < n) {
                 ssize_t w = ::write(fd_, line.data() + off, n - off);
                 if (w < 0) {
                     if (errno == EINTR) continue;  // повтор, а не потеря записи
-                    ok = false; break;             // фатальная I/O-ошибка
+                    werr = errno; ok = false; break;  // фатальная I/O-ошибка
                 }
                 off += w;
             }
             if (!ok) break;
         }
-        if (ok) ::fsync(fd_);
+        if (ok && ::fsync(fd_) < 0) { werr = errno; ok = false; }
 
         lock.lock();
         if (ok) {
             committed_seq_ = upto;
         } else {
             writer_failed_ = true;   // разблокируем всех ждущих и больше не блокируем log()
+            failed_.store(true, std::memory_order_release);
+            // Громко: инвариант «нет трафика без аудита» иначе деградировал бы молча.
+            // Шлюз, увидев failed(), начнёт fail-closed (503) при audit.require=true.
+            std::fprintf(stderr,
+                "infcore: КРИТИЧНО: сбой записи audit-журнала (%s); дальнейшие события "
+                "НЕ фиксируются. При audit.require=true шлюз перестаёт отдавать трафик.\n",
+                std::strerror(werr));
         }
         cv_commit_.notify_all();
         if (writer_failed_) return;  // журнал сломан; продьюсеры увидят writer_failed_

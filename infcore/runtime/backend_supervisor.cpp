@@ -189,6 +189,16 @@ std::string BackendSupervisor::ensure_ready(const ModelEntry& e, std::string& er
                 if (ok) ok = wait_health(port);
                 lock.lock();
                 b.pid = pid;  // присваиваем под mu_ (reaper читает pid под mu_)
+                if (ok && b.stop_requested) {
+                    // disable пришёл, пока бэкенд стартовал (тогда pid был -1 и гасить было
+                    // нечего). Теперь pid известен — гасим начисто и отказываем инициатору
+                    // (модель отключена). Детерминированно, без гонки с reaper.
+                    stop_backend(b, lock);        // -> Stopped, pid=-1, port=0
+                    b.stop_requested = false;
+                    b.cv.notify_all();
+                    err = "модель отключена во время старта";
+                    return std::string();
+                }
                 if (ok) {
                     b.url = "http://127.0.0.1:" + std::to_string(port);
                     b.state = State::Ready;
@@ -238,6 +248,12 @@ void BackendSupervisor::stop(const std::string& logical_name) {
     if (b.state == State::Stopped || b.state == State::Failed || b.state == State::Stopping) {
         b.stop_requested = false; return;
     }
+    // Starting: процесс ещё поднимается, b.pid пока -1 (присваивается только после
+    // health-check под mu_). Убить сейчас нечего — откладываем: ensure_ready увидит
+    // stop_requested и не даст бэкенду задержаться (reaper/release погасят его, как
+    // только завершится инициировавший старт запрос). Без этого disable во время
+    // старта терялся, а llama-server жил до idle-таймаута.
+    if (b.state == State::Starting) { b.stop_requested = true; return; }
     if (b.active == 0) {
         stop_backend(b, lock);    // никого не рвём — гасим немедленно
         b.stop_requested = false;

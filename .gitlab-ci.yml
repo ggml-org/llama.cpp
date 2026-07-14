@@ -15,7 +15,9 @@ unit:
   script:
     - cmake -S infcore -B build -DINFCORE_BUILD_TESTS=ON
         -DGGML_CUDA=OFF -DGGML_VULKAN=OFF -DCMAKE_BUILD_TYPE=Release
-    - cmake --build build --target infcore_unit_tests -j"$(nproc)"
+    # Собираем и сам gateway: иначе поломка server.cpp/backend_supervisor.cpp/main.cpp
+    # (не входят в infcore_unit_tests) всплыла бы только на прод-сборке образа.
+    - cmake --build build --target infcore_gateway infcore_unit_tests -j"$(nproc)"
     - ctest --test-dir build --output-on-failure -R infcore_unit
   artifacts:
     when: on_failure
