@@ -2513,11 +2513,16 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
 #else
         const std::string kernel_src = read_file("norm.cl");
 #endif
-        backend_ctx->program_norm =
-            build_program_from_source(backend_ctx, kernel_src.c_str(), compile_opts);
+        // kernel_norm_mul_add calls subgroup builtins, and on E031.38 a program is
+        // miscompiled if any kernel is defined after one that does. It is last here, so the
+        // file happens to build -- but only by accident of ordering. Split it like the other
+        // subgroup-bearing files so that stays true no matter what is appended.
+        backend_ctx->program_norm = nullptr;
 
-        CL_CHECK((backend_ctx->kernel_norm         = clCreateKernel(backend_ctx->program_norm, "kernel_norm", &err), err));
-        CL_CHECK((backend_ctx->kernel_norm_mul_add = clCreateKernel(backend_ctx->program_norm, "kernel_norm_mul_add", &err), err));
+        CL_CHECK((backend_ctx->kernel_norm         = clCreateKernel(
+            cl_program_for_kernel(backend_ctx, kernel_src, compile_opts, backend_ctx->program_norm, 1), "kernel_norm", &err), err));
+        CL_CHECK((backend_ctx->kernel_norm_mul_add = clCreateKernel(
+            cl_program_for_kernel(backend_ctx, kernel_src, compile_opts, backend_ctx->program_norm, 2), "kernel_norm_mul_add", &err), err));
         GGML_LOG_CONT(".");
     }
 
