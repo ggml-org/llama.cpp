@@ -29,12 +29,11 @@ struct work_queue_task_s {
 
 // internal structure kept in thread-local storage per instance of work queue
 struct work_queue_s {
-    struct work_queue_task_s queue[WORK_QUEUE_SIZE];
-
     atomic_uint        seqn;      // seqno used to detect new jobs
     atomic_uint        idx_read;  // Updated by producer (pop/reclaim)
     unsigned int       idx_write; // Updated by producer (push)
     uint32_t           idx_mask;
+    uint32_t           capacity;
 
     qurt_thread_t      thread[WORK_QUEUE_MAX_N_THREADS];   // thread ID's of the workers
     worker_context_t   context[WORK_QUEUE_MAX_N_THREADS];  // worker contexts
@@ -44,6 +43,9 @@ struct work_queue_s {
 
     atomic_bool        active;                             // workers are polling/active
     atomic_bool        killed;                             // threads need to exit
+    bool               external_mem;                       // memory owned externally
+
+    struct work_queue_task_s queue[] __attribute__((aligned(HEX_L2_LINE_SIZE)));
 };
 
 static void work_queue_thread(void * context) {
@@ -134,23 +136,30 @@ bool work_queue_run_async(work_queue_t q, work_queue_func_t func, void * data, u
     return true;
 }
 
-work_queue_t work_queue_create(uint32_t n_threads) {
-    uint32_t stack_size = WORK_QUEUE_THREAD_STACK_SIZE;
-    uint32_t n_workers  = n_threads > 1 ? n_threads - 1 : 0;
+size_t work_queue_sizeof(uint32_t n_threads, uint32_t capacity, uint32_t stack_size) {
+    capacity = hex_ceil_pow2(capacity);
+    uint32_t n_workers = n_threads > 1 ? n_threads - 1 : 0;
+    size_t size_stacks = stack_size * n_workers;
+    size_t size_q = hex_align_up(sizeof(struct work_queue_s) + capacity * sizeof(struct work_queue_task_s), HEX_L2_LINE_SIZE);
+    return size_stacks + size_q;
+}
 
-    // Allocations
-    size_t size = (stack_size * n_workers) + (sizeof(struct work_queue_s));
+size_t work_queue_alignof(void) {
+    return 4096;
+}
 
-    unsigned char * mem_blob = (unsigned char *) memalign(4096, size);
-    if (!mem_blob) {
-        FARF(ERROR, "Could not allocate memory for work queue!!");
-        return NULL;
-    }
+work_queue_t work_queue_init(void * ptr, uint32_t n_threads, uint32_t capacity, uint32_t stack_size) {
+    capacity = hex_ceil_pow2(capacity);
+    uint32_t n_workers = n_threads > 1 ? n_threads - 1 : 0;
+    unsigned char * mem_blob = (unsigned char *) ptr;
 
     work_queue_t q = (work_queue_t) (mem_blob + stack_size * n_workers);
+    memset(q, 0, sizeof(struct work_queue_s) + capacity * sizeof(struct work_queue_task_s));
 
     q->n_threads = n_threads;
     q->n_workers = n_workers;
+    q->external_mem = true;
+    q->capacity = capacity;
 
     for (unsigned int i = 0; i < n_workers; i++) {
         q->stack[i]  = mem_blob; mem_blob += stack_size;
@@ -163,9 +172,9 @@ work_queue_t work_queue_create(uint32_t n_threads) {
     atomic_init(&q->seqn,     0);
     atomic_init(&q->active,   false);
     q->idx_write = 0;
-    q->idx_mask  = WORK_QUEUE_SIZE - 1;
+    q->idx_mask  = capacity - 1;
     q->killed    = 0;
-    for (int i = 0; i < WORK_QUEUE_SIZE; i++) {
+    for (int i = 0; i < (int) capacity; i++) {
         atomic_init(&q->queue[i].barrier, 0);
         q->queue[i].func      = NULL;
         q->queue[i].data      = NULL;
@@ -198,7 +207,7 @@ work_queue_t work_queue_create(uint32_t n_threads) {
         int err = qurt_thread_create(&q->thread[i], &attr, work_queue_thread, (void *) &q->context[i]);
         if (err) {
             FARF(ERROR, "Could not launch worker threads!");
-            work_queue_delete(q);
+            work_queue_free(q);
             return NULL;
         }
     }
@@ -206,7 +215,25 @@ work_queue_t work_queue_create(uint32_t n_threads) {
     return q;
 }
 
-void work_queue_delete(work_queue_t q) {
+work_queue_t work_queue_create(uint32_t n_threads, uint32_t capacity, uint32_t stack_size) {
+    size_t size = work_queue_sizeof(n_threads, capacity, stack_size);
+
+    unsigned char * mem_blob = (unsigned char *) memalign(4096, size);
+    if (!mem_blob) {
+        FARF(ERROR, "Could not allocate memory for work queue!!");
+        return NULL;
+    }
+
+    work_queue_t q = work_queue_init(mem_blob, n_threads, capacity, stack_size);
+    if (!q) {
+        free(mem_blob);
+        return NULL;
+    }
+    q->external_mem = false;
+    return q;
+}
+
+void work_queue_free(work_queue_t q) {
     if (!q) { return; }
 
     atomic_store_explicit(&q->killed,   1, memory_order_relaxed);
@@ -219,9 +246,15 @@ void work_queue_delete(work_queue_t q) {
             (void) qurt_thread_join(q->thread[i], &status);
         }
     }
+}
 
-    // free allocated memory (were allocated as a single buffer starting at stack[0])
-    if (q->stack[0]) {
+void work_queue_delete(work_queue_t q) {
+    if (!q) { return; }
+
+    work_queue_free(q);
+
+    // free allocated memory if it was allocated internally by work_queue_create
+    if (!q->external_mem && q->stack[0]) {
         free(q->stack[0]);
     }
 }

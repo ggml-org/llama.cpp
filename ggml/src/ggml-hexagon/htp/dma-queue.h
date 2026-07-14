@@ -98,16 +98,27 @@ struct dma_ring_s {
 };
 
 typedef struct dma_queue_s dma_queue;
+typedef dma_queue * dma_queue_t;
+
 struct dma_queue_s {
     dma_ring *          ring;      // Points to the descriptor ring state
     uint8_t             nocache;   // Queue-specific bypass flag
     bool                alias;     // When set, dma_queue_delete will not free the ring
 };
 
-dma_queue * dma_queue_create(size_t capacity, uintptr_t vtcm_base, size_t vtcm_size, struct htp_thread_trace * trace);
-dma_queue * dma_queue_create_alias(dma_queue * main_q, uint8_t nocache);
-void        dma_queue_delete(dma_queue * q);
-void        dma_queue_flush(dma_queue * q);
+dma_queue_t dma_queue_create(size_t capacity, uintptr_t vtcm_base, size_t vtcm_size, struct htp_thread_trace * trace);
+dma_queue_t dma_queue_create_alias(dma_queue_t main_q, uint8_t nocache);
+void        dma_queue_delete(dma_queue_t q);
+void        dma_queue_flush(dma_queue_t q);
+
+size_t      dma_queue_sizeof(size_t capacity);
+size_t      dma_queue_alignof(void);
+dma_queue_t dma_queue_init(void * ptr, size_t capacity, uintptr_t vtcm_base, size_t vtcm_size, struct htp_thread_trace * trace);
+void        dma_queue_free(dma_queue_t q);
+
+size_t      dma_queue_alias_sizeof(void);
+dma_queue_t dma_queue_alias_init(void * ptr, dma_queue_t main_q, uint8_t nocache);
+void        dma_queue_alias_free(dma_queue_t q);
 
 // TODO: technically we don't need these and could use Q6_dmstart/wait/etc instead
 // but those do not seem to always compiler properly.

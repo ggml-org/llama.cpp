@@ -22,28 +22,40 @@ static inline uintptr_t align_up(uintptr_t addr, size_t align) {
     return (addr + align - 1) & ~(align - 1);
 }
 
-dma_queue * dma_queue_create(size_t capacity, uintptr_t vtcm_base, size_t vtcm_size, struct htp_thread_trace * trace) {
+size_t dma_queue_sizeof(size_t capacity) {
     capacity = pow2_ceil(capacity);
 
     size_t size_q      = sizeof(dma_queue);
-    size_t offset_r    = align_up(size_q, 32);
+    size_t offset_r    = align_up(size_q, HEX_L2_LINE_SIZE);
     size_t size_r      = sizeof(dma_ring);
-    size_t offset_desc = align_up(offset_r + size_r, 64);
+    size_t offset_desc = align_up(offset_r + size_r, HEX_L2_LINE_SIZE);
     size_t size_desc   = capacity * sizeof(dma_descriptor_2d);
-    size_t offset_dptr = align_up(offset_desc + size_desc, 4);
+    size_t offset_dptr = align_up(offset_desc + size_desc, HEX_L2_LINE_SIZE);
+    size_t size_dptr   = capacity * sizeof(dma_ptr);
+
+    return offset_dptr + size_dptr;
+}
+
+size_t dma_queue_alignof(void) {
+    return HEX_L2_LINE_SIZE;
+}
+
+dma_queue_t dma_queue_init(void * ptr, size_t capacity, uintptr_t vtcm_base, size_t vtcm_size, struct htp_thread_trace * trace) {
+    capacity = pow2_ceil(capacity);
+
+    size_t size_q      = sizeof(dma_queue);
+    size_t offset_r    = align_up(size_q, HEX_L2_LINE_SIZE);
+    size_t size_r      = sizeof(dma_ring);
+    size_t offset_desc = align_up(offset_r + size_r, HEX_L2_LINE_SIZE);
+    size_t size_desc   = capacity * sizeof(dma_descriptor_2d);
+    size_t offset_dptr = align_up(offset_desc + size_desc, HEX_L2_LINE_SIZE);
     size_t size_dptr   = capacity * sizeof(dma_ptr);
 
     size_t total_size = offset_dptr + size_dptr;
+    memset(ptr, 0, total_size);
 
-    void * block = memalign(64, total_size);
-    if (block == NULL) {
-        FARF(ERROR, "%s: failed to allocate unified DMA memory block of size %zu\n", __FUNCTION__, total_size);
-        return NULL;
-    }
-    memset(block, 0, total_size);
-
-    dma_queue * q = (dma_queue *) block;
-    dma_ring * r  = (dma_ring *) ((uintptr_t) block + offset_r);
+    dma_queue * q = (dma_queue *) ptr;
+    dma_ring * r  = (dma_ring *) ((uintptr_t) ptr + offset_r);
 
     q->ring    = r;
     q->nocache = 0;
@@ -57,8 +69,8 @@ dma_queue * dma_queue_create(size_t capacity, uintptr_t vtcm_base, size_t vtcm_s
     r->push_idx  = 0;
     r->pop_idx   = 0;
 
-    r->desc = (dma_descriptor_2d *) ((uintptr_t) block + offset_desc);
-    r->dptr = (dma_ptr *) ((uintptr_t) block + offset_dptr);
+    r->desc = (dma_descriptor_2d *) ((uintptr_t) ptr + offset_desc);
+    r->dptr = (dma_ptr *) ((uintptr_t) ptr + offset_dptr);
     r->tail = &r->desc[capacity - 1];
 
     FARF(HIGH, "dma-queue: capacity %u, unified memory size %zu\n", capacity, total_size);
@@ -66,12 +78,17 @@ dma_queue * dma_queue_create(size_t capacity, uintptr_t vtcm_base, size_t vtcm_s
     return q;
 }
 
-dma_queue * dma_queue_create_alias(dma_queue * main_q, uint8_t nocache) {
-    dma_queue * q = (dma_queue *) memalign(32, sizeof(dma_queue));
-    if (q == NULL) {
-        FARF(ERROR, "%s: failed to allocate DMA queue alias\n", __FUNCTION__);
-        return NULL;
-    }
+void dma_queue_free(dma_queue_t q) {
+    (void) q;
+}
+
+size_t dma_queue_alias_sizeof(void) {
+    return sizeof(dma_queue);
+}
+
+dma_queue_t dma_queue_alias_init(void * ptr, dma_queue_t main_q, uint8_t nocache) {
+    dma_queue * q = (dma_queue *) ptr;
+    memset(q, 0, sizeof(dma_queue));
 
     q->ring    = main_q->ring;
     q->nocache = nocache;
@@ -80,13 +97,40 @@ dma_queue * dma_queue_create_alias(dma_queue * main_q, uint8_t nocache) {
     return q;
 }
 
-void dma_queue_delete(dma_queue * q) {
+void dma_queue_alias_free(dma_queue_t q) {
+    (void) q;
+}
+
+dma_queue_t dma_queue_create(size_t capacity, uintptr_t vtcm_base, size_t vtcm_size, struct htp_thread_trace * trace) {
+    size_t total_size = dma_queue_sizeof(capacity);
+
+    void * block = memalign(64, total_size);
+    if (block == NULL) {
+        FARF(ERROR, "%s: failed to allocate unified DMA memory block of size %zu\n", __FUNCTION__, total_size);
+        return NULL;
+    }
+
+    return dma_queue_init(block, capacity, vtcm_base, vtcm_size, trace);
+}
+
+dma_queue_t dma_queue_create_alias(dma_queue_t main_q, uint8_t nocache) {
+    size_t size = dma_queue_alias_sizeof();
+    void * block = memalign(32, size);
+    if (block == NULL) {
+        FARF(ERROR, "%s: failed to allocate DMA queue alias\n", __FUNCTION__);
+        return NULL;
+    }
+
+    return dma_queue_alias_init(block, main_q, nocache);
+}
+
+void dma_queue_delete(dma_queue_t q) {
     if (!q) {
         return;
     }
     free(q);
 }
 
-void dma_queue_flush(dma_queue * q) {
+void dma_queue_flush(dma_queue_t q) {
     while (dma_queue_pop(q).dst != NULL) ;
 }

@@ -1886,16 +1886,6 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
         }
     }
 
-    if (opt_profile) {
-        htp_iface_pmu_conf pmu_conf{};
-        std::copy(opt_pmu_evt.begin(), opt_pmu_evt.end(), pmu_conf.events);
-
-        err = htp_iface_profiler(this->handle, opt_profile, &pmu_conf);
-        if (err != 0) {
-            GGML_LOG_ERROR("ggml-hex: failed to enable profiling: 0x%08x\n", (unsigned) err);
-        }
-    }
-
     // Allocate buffers and state for op batching
     this->op_queue = new ggml_hexagon_opqueue(this, opt_opbatch, opt_opqueue);
 
@@ -1914,6 +1904,16 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
         throw std::runtime_error("ggml-hex: iface start failed (see log for details)");
     }
     this->valid_iface = true;
+
+    if (opt_profile) {
+        htp_iface_pmu_conf pmu_conf{};
+        std::copy(opt_pmu_evt.begin(), opt_pmu_evt.end(), pmu_conf.events);
+
+        err = htp_iface_profiler(this->handle, opt_profile, &pmu_conf);
+        if (err != 0) {
+            GGML_LOG_ERROR("ggml-hex: failed to enable profiling: 0x%08x\n", (unsigned) err);
+        }
+    }
 }
 
 void ggml_hexagon_session::release() noexcept(true) {

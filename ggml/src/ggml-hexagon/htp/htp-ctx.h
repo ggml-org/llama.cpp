@@ -72,10 +72,10 @@ struct htp_context {
     dspqueue_t             queue;
 
     struct htp_mmap        mmap[HTP_MAX_MMAPS];
-    dma_queue *            dma[HTP_MAX_NTHREADS];
-    dma_queue *            dma_cached[HTP_MAX_NTHREADS];
+    dma_queue_t            dma[HTP_MAX_NTHREADS];
+    dma_queue_t            dma_cached[HTP_MAX_NTHREADS];
     work_queue_t           work_queue;
-    struct hmx_queue *     hmx_queue;
+    hmx_queue_t            hmx_queue;
 
     uint32_t               n_threads;
     struct fastdiv_values  n_threads_div;
@@ -106,6 +106,7 @@ struct htp_context {
     qurt_thread_t          main_thread;
     void *                 main_stack;
     atomic_bool            killed;
+    size_t                 footprint;
 };
 
 int op_matmul(struct htp_ops_context * octx);

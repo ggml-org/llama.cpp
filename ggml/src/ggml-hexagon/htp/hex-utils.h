@@ -30,6 +30,13 @@ static inline void hex_l2fetch(const void * p, uint32_t width, uint32_t stride, 
     Q6_l2fetch_AP((void *) p, control);
 }
 
+static inline void hex_l2fetch_block(const void * addr, size_t size) {
+    if (size == 0) return;
+    const uint32_t width = 16384; // 16KB rows
+    const uint32_t height = (size + width - 1) / width;
+    hex_l2fetch(addr, width, width, height);
+}
+
 #define HEX_L2_LINE_SIZE           128
 #define HEX_L2_FLUSH_WQ_THRESHOLD  (4 * 1024)
 #define HEX_L2_FLUSH_ALL_THRESHOLD (4 * 1024 * 1024)
