@@ -76,6 +76,8 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-dio, --direct-io, -ndio, --no-direct-io` | use DirectIO if available. (default: disabled)<br/>(env: LLAMA_ARG_DIO) |
 | `--numa TYPE` | attempt optimizations that help on some NUMA systems<br/>- distribute: spread execution evenly over all nodes<br/>- isolate: only spawn threads on CPUs on the node that execution started on<br/>- numactl: use the CPU map provided by numactl<br/>if run without this previously, it is recommended to drop the system page cache before using this<br/>see https://github.com/ggml-org/llama.cpp/issues/1437<br/>(env: LLAMA_ARG_NUMA) |
 | `-dev, --device <dev1,dev2,..>` | comma-separated list of devices to use for offloading (none = don't offload)<br/>use --list-devices to see a list of available devices<br/>(env: LLAMA_ARG_DEVICE) |
+| `--prefill-device <dev1,dev2;dev3,dev4;..>` | semicolon-separated device groups for disaggregated prefill contexts<br/>use --list-devices to see a list of available devices<br/>(env: LLAMA_ARG_PREFILL_DEVICE) |
+| `--prefill-min-tokens N` | minimum uncached prefix length for disaggregated prefill (default: 0)<br/>(env: LLAMA_ARG_PREFILL_MIN_TOKENS) |
 | `--list-devices` | print list of available devices and exit |
 | `-ot, --override-tensor <tensor name pattern>=<buffer type>,...` | override tensor buffer type<br/>(env: LLAMA_ARG_OVERRIDE_TENSOR) |
 | `-cmoe, --cpu-moe` | keep all Mixture of Experts (MoE) weights in the CPU<br/>(env: LLAMA_ARG_CPU_MOE) |
@@ -380,6 +382,27 @@ docker run -p 8080:8080 -v /path/to/models:/models ghcr.io/ggml-org/llama.cpp:se
 # or, with CUDA:
 docker run -p 8080:8080 -v /path/to/models:/models --gpus all ghcr.io/ggml-org/llama.cpp:server-cuda -m models/7B/ggml-model.gguf -c 512 --host 0.0.0.0 --port 8080 --n-gpu-layers 99
 ```
+
+### Disaggregated prefill and decode
+
+`--prefill-device` creates separate models and contexts which process prompt prefixes without occupying a decode slot. The prefix state is copied through host memory and the final prompt token is evaluated by the decode context. Separate worker device groups with semicolons, for example `--prefill-device 'RPC0;RPC1'`. Requests are assigned to the worker with the shortest queue.
+
+The prefill and decode contexts use the same model and context configuration, but their device lists can differ. RPC devices can therefore perform prefill on remote hosts while the main `--device` list remains local. Each prefill worker loads another full model copy and allocates another context.
+
+For example, start an RPC server on the prefill host:
+
+```bash
+bin/ggml-rpc-server --host 0.0.0.0 --port 50052
+```
+
+Then register that host and select its device for prefill:
+
+```bash
+bin/llama-server -m model.gguf --rpc 192.168.1.20:50052 \
+    --device CUDA0 --prefill-device RPC0 --prefill-min-tokens 1024
+```
+
+Use `--list-devices` after `--rpc` to confirm the generated RPC device names. Disaggregated prefill is used for text completion requests without speculative decoding, multimodal input, or LoRA adapters. A prompt with an available local or RAM-cached prefix keeps using that cache. A worker or state-transfer failure falls back to normal local prompt processing.
 
 ## Using with CURL
 

@@ -115,6 +115,8 @@ class ServerProcess:
     gcp_compat: bool = False
     server_tools: str | None = None
     cors_origins: str | None = None
+    prefill_devices: List[str] | None = None
+    prefill_min_tokens: int | None = None
 
     # session variables
     process: subprocess.Popen | None = None
@@ -181,6 +183,10 @@ class ServerProcess:
             server_args.extend(["--threads", self.n_threads])
         if self.n_gpu_layer:
             server_args.extend(["--n-gpu-layers", self.n_gpu_layer])
+        if self.prefill_devices:
+            server_args.extend(["--prefill-device", ";".join(self.prefill_devices)])
+        if self.prefill_min_tokens is not None:
+            server_args.extend(["--prefill-min-tokens", self.prefill_min_tokens])
         if self.server_continuous_batching:
             server_args.append("--cont-batching")
         if self.server_embeddings:
