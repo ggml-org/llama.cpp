@@ -142,14 +142,6 @@ static inline void atomic_store_f32(volatile float * addr, float value) {
     et_global_swap_w(addr, *(uint32_t *) &value);
 }
 
-static inline void atomic_add_f32(volatile float * addr, float value) {
-    et_global_add_w(addr, *(uint32_t *) &value);
-}
-
-static inline void atomic_store_f16(volatile uint16_t * addr, uint16_t value) {
-    et_global_store_hw(addr, value);
-}
-
 // Atomic add for F32 values to global memory
 // Uses ET hardware's custom amoaddg.w instruction for global atomic add
 // This ensures correct accumulation when multiple threads contribute to the same output
