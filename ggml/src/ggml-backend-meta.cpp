@@ -1184,6 +1184,11 @@ static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(ggml_backend_m
                 // The offset can be internal to the data split, in those cases the view offset should not be scaled.
                 // If however, the offset is larger than the data split then it needs to be scaled proportionally.
                 bool split_internal_offset = t_ij->view_offs <= tensor->view_src->nb[split_dim_view_src];
+                // An offset smaller than the stride of one split unit stays within each unit and
+                // must not be scaled (e.g. a view at a fixed offset into rows split by that unit).
+                if (t_ij->view_offs < tensor->nb[split_dim]) {
+                    split_internal_offset = true;
+                }
                 for (int i = 0; i < GGML_MAX_DIMS; i++) {
                     const size_t dim_size = tensor->ne[i] * tensor->nb[i];
                     if (tensor->view_offs <= dim_size && dim_size < tensor->nb[split_dim]) {
