@@ -33,10 +33,12 @@ struct ggml_opt_context {
     ggml_cgraph              * allocated_graph_copy = nullptr;
     struct ggml_context      * ctx_static           = nullptr;
     struct ggml_context      * ctx_cpu              = nullptr;
+    struct ggml_context      * ctx_grads_cpu        = nullptr;
     struct ggml_context      * ctx_compute          = nullptr;
     struct ggml_context      * ctx_copy             = nullptr;
     ggml_backend_buffer_t      buf_static           = nullptr;
     ggml_backend_buffer_t      buf_cpu              = nullptr;
+    ggml_backend_buffer_t      buf_grads_cpu        = nullptr;
     std::mt19937               rng;
     enum ggml_opt_loss_type    loss_type;
     enum ggml_opt_build_type   build_type;
@@ -75,6 +77,7 @@ struct ggml_opt_context {
     int32_t opt_period         = 1;
     int32_t opt_i              = 0;
     int32_t grad_checkpoint_interval = 0;
+    bool    grad_offload            = false;
     bool    loss_per_datapoint = false;
 
     ggml_opt_get_optimizer_params get_opt_pars    = nullptr;
@@ -331,6 +334,7 @@ struct ggml_opt_params ggml_opt_default_params(
         /*get_opt_pars              =*/ ggml_opt_get_default_optimizer_params,
         /*get_opt_pars_ud          =*/ nullptr,
         /*grad_checkpoint_interval =*/ 0,
+        /*grad_offload             =*/ false,
         /*optimizer                =*/ GGML_OPT_OPTIMIZER_TYPE_ADAMW,
     };
 }
@@ -402,7 +406,7 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
     const enum ggml_opt_optimizer_type optimizer = opt_ctx->optimizer;
 
     const bool accumulate = opt_ctx->build_type_alloc >= GGML_OPT_BUILD_TYPE_GRAD &&
-        !(opt_ctx->static_graphs && opt_ctx->build_type_alloc == GGML_OPT_BUILD_TYPE_OPT && opt_ctx->opt_period == 1);
+        (opt_ctx->grad_offload || !(opt_ctx->static_graphs && opt_ctx->build_type_alloc == GGML_OPT_BUILD_TYPE_OPT && opt_ctx->opt_period == 1));
 
     const bool need_momenta = opt_ctx->build_type_alloc == GGML_OPT_BUILD_TYPE_OPT &&
         opt_ctx->optimizer == GGML_OPT_OPTIMIZER_TYPE_ADAMW;
@@ -537,11 +541,21 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
         GGML_ASSERT(opt_ctx->build_type_alloc >= GGML_OPT_BUILD_TYPE_GRAD);
 
         const int n_nodes = opt_ctx->gf->n_nodes;
+        if (opt_ctx->grad_offload) {
+            struct ggml_init_params params = {
+                /*.mem_size   =*/ size_t(n_nodes)*ggml_tensor_overhead(),
+                /*.mem_buffer =*/ nullptr,
+                /*.no_alloc   =*/ true,
+            };
+            opt_ctx->ctx_grads_cpu = ggml_init(params);
+        }
         opt_ctx->grad_accs.resize(n_nodes);
         for (int i = 0; i < n_nodes; ++i) {
             ggml_tensor * node = opt_ctx->gf->nodes[i];
             if ((accumulate && (node->flags & GGML_TENSOR_FLAG_PARAM)) || (node->flags & GGML_TENSOR_FLAG_LOSS)) {
-                opt_ctx->grad_accs[i] = ggml_new_tensor(opt_ctx->ctx_static, GGML_TYPE_F32, GGML_MAX_DIMS, node->ne);
+                struct ggml_context * ctx_grad = opt_ctx->grad_offload && (node->flags & GGML_TENSOR_FLAG_PARAM)
+                    ? opt_ctx->ctx_grads_cpu : opt_ctx->ctx_static;
+                opt_ctx->grad_accs[i] = ggml_new_tensor(ctx_grad, GGML_TYPE_F32, GGML_MAX_DIMS, node->ne);
             } else {
                 opt_ctx->grad_accs[i] = nullptr;
             }
@@ -703,6 +717,13 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
         ggml_graph_reset(opt_ctx->gb_opt);
     }
 
+    if (opt_ctx->ctx_grads_cpu && !opt_ctx->buf_grads_cpu) {
+        opt_ctx->buf_grads_cpu = ggml_backend_alloc_ctx_tensors_from_buft(
+            opt_ctx->ctx_grads_cpu, ggml_backend_cpu_buffer_type());
+        ggml_backend_buffer_clear(opt_ctx->buf_grads_cpu, 0);
+        GGML_LOG_INFO("%s: parameter gradient accumulators are offloaded to CPU\n", __func__);
+    }
+
     opt_ctx->buf_cpu = ggml_backend_alloc_ctx_tensors_from_buft(opt_ctx->ctx_cpu, ggml_backend_cpu_buffer_type());
 }
 
@@ -717,6 +738,7 @@ ggml_opt_context_t ggml_opt_init(struct ggml_opt_params params) {
     result->outputs          = params.outputs;
     result->opt_period                = params.opt_period;
     result->grad_checkpoint_interval  = params.grad_checkpoint_interval;
+    result->grad_offload              = params.grad_offload;
     result->get_opt_pars              = params.get_opt_pars;
     result->get_opt_pars_ud           = params.get_opt_pars_ud;
     result->optimizer                 = params.optimizer;
@@ -748,6 +770,7 @@ void ggml_opt_free(ggml_opt_context_t opt_ctx) {
     }
     ggml_backend_buffer_free(opt_ctx->buf_static);
     ggml_backend_buffer_free(opt_ctx->buf_cpu);
+    ggml_backend_buffer_free(opt_ctx->buf_grads_cpu);
     for (ggml_backend_buffer_t buf : opt_ctx->bufs_momenta) {
         ggml_backend_buffer_free(buf);
     }
@@ -756,6 +779,7 @@ void ggml_opt_free(ggml_opt_context_t opt_ctx) {
     }
     ggml_free(opt_ctx->ctx_static);
     ggml_free(opt_ctx->ctx_cpu);
+    ggml_free(opt_ctx->ctx_grads_cpu);
     ggml_free(opt_ctx->ctx_copy);
     delete opt_ctx;
 }

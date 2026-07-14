@@ -1590,6 +1590,8 @@ extern "C" {
         // at the cost of ~0 extra compute (activations are kept, not recomputed).
         // Set to 0 (default) to disable.  Good values: 32–64 nodes ≈ every 1–2 transformer layers.
         int32_t grad_checkpoint_interval;
+
+        bool grad_offload;
     };
 
     LLAMA_API void llama_opt_init(struct llama_context * lctx, struct llama_model * model, struct llama_opt_params lopt_params);

@@ -256,6 +256,144 @@ void quantize(uint dst_idx, uint src_idx)
 }
 #endif
 
+#if defined(DATA_A_Q3_K)
+void quantize(uint dst_idx, uint src_idx)
+{
+    float scales[16];
+    int quants[256];
+    float max_scale = 0.0;
+    float max_scale_value = 0.0;
+
+    for (int j = 0; j < 16; ++j) {
+        float amax = 0.0;
+        float vmax = 0.0;
+        for (int l = 0; l < 16; ++l) {
+            const float v = data_s[src_idx + 16*j + l];
+            if (amax < abs(v)) {
+                amax = abs(v);
+                vmax = v;
+            }
+        }
+        scales[j] = vmax / -4.0;
+        if (max_scale < abs(scales[j])) {
+            max_scale = abs(scales[j]);
+            max_scale_value = scales[j];
+        }
+    }
+
+    uint scale_bytes[12];
+    for (int j = 0; j < 12; ++j) scale_bytes[j] = 0;
+
+    float d_all = 0.0;
+    if (max_scale == 0.0) {
+        d_all = 0.0;
+    } else {
+        const float iscale = -32.0/max_scale_value;
+        d_all = 1.0/iscale;
+        for (int j = 0; j < 16; ++j) {
+            int l = int(round(iscale*scales[j]));
+            l = min(31, max(-32, l)) + 32;
+            if (j < 8) {
+                scale_bytes[j] = uint(l & 0xF);
+            } else {
+                scale_bytes[j - 8] |= uint((l & 0xF) << 4);
+            }
+            scale_bytes[8 + j % 4] |= (uint(l) >> 4) << (2*(j/4));
+        }
+    }
+
+    for (int j = 0; j < 16; ++j) {
+        const int sc = (j < 8 ? int(scale_bytes[j] & 0xF) : int(scale_bytes[j - 8] >> 4))
+            | (int((scale_bytes[8 + j % 4] >> (2*(j/4))) & 3) << 4);
+        const float d = d_all * float(sc - 32);
+        for (int l = 0; l < 16; ++l) {
+            int q = d == 0.0 ? 0 : int(round(data_s[src_idx + 16*j + l]/d));
+            quants[16*j + l] = min(3, max(-4, q)) + 4;
+        }
+    }
+
+    for (int j = 0; j < 32; ++j) {
+        data_q[dst_idx].hmask[j] = uint8_t(0);
+    }
+    for (int j = 0; j < 256; ++j) {
+        if (quants[j] > 3) {
+            data_q[dst_idx].hmask[j % 32] |= uint8_t(1 << (j / 32));
+            quants[j] -= 4;
+        }
+    }
+    for (int j = 0; j < 256; j += 128) {
+        for (int l = 0; l < 32; ++l) {
+            data_q[dst_idx].qs[j/4 + l] = uint8_t(quants[j + l] | (quants[j + l + 32] << 2) | (quants[j + l + 64] << 4) | (quants[j + l + 96] << 6));
+        }
+    }
+    data_q[dst_idx].d = float16_t(d_all);
+    for (int j = 0; j < 12; ++j) data_q[dst_idx].scales[j] = uint8_t(scale_bytes[j]);
+}
+#endif
+
+#if defined(DATA_A_Q4_K)
+void quantize(uint dst_idx, uint src_idx)
+{
+    float scales[8];
+    float mins[8];
+    int quants[256];
+    float max_scale = 0.0;
+    float max_min = 0.0;
+
+    for (int j = 0; j < 8; ++j) {
+        float vmin = data_s[src_idx + 32*j];
+        float vmax = vmin;
+        for (int l = 1; l < 32; ++l) {
+            const float v = data_s[src_idx + 32*j + l];
+            vmin = min(vmin, v);
+            vmax = max(vmax, v);
+        }
+        mins[j] = max(0.0, -vmin);
+        scales[j] = (vmax + mins[j])/15.0;
+        max_scale = max(max_scale, scales[j]);
+        max_min = max(max_min, mins[j]);
+    }
+
+    uint scale_bytes[12];
+    for (int j = 0; j < 12; ++j) scale_bytes[j] = 0;
+    const float d_all = max_scale/63.0;
+    const float dmin_all = max_min/63.0;
+    data_q[dst_idx].dm.x = float16_t(d_all);
+    data_q[dst_idx].dm.y = float16_t(dmin_all);
+
+    for (int j = 0; j < 8; ++j) {
+        const int ls = min(63, int(round(max_scale == 0.0 ? 0.0 : 63.0*scales[j]/max_scale)));
+        const int lm = min(63, int(round(max_min == 0.0 ? 0.0 : 63.0*mins[j]/max_min)));
+        if (j < 4) {
+            scale_bytes[j] = uint(ls);
+            scale_bytes[j + 4] = uint(lm);
+        } else {
+            scale_bytes[j + 4] = uint((ls & 0xF) | ((lm & 0xF) << 4));
+            scale_bytes[j - 4] |= uint((ls >> 4) << 6);
+            scale_bytes[j] |= uint((lm >> 4) << 6);
+        }
+    }
+
+    for (int j = 0; j < 8; ++j) {
+        const int ls = j < 4 ? int(scale_bytes[j]) : int((scale_bytes[j - 4] >> 6) | ((scale_bytes[j + 4] & 0xF) << 4));
+        const int lm = j < 4 ? int(scale_bytes[j + 4]) : int((scale_bytes[j] >> 6) | ((scale_bytes[j + 4] >> 4) << 4));
+        const float d = d_all*float(ls);
+        const float dm = dmin_all*float(lm);
+        for (int l = 0; l < 32; ++l) {
+            int q = d == 0.0 ? 0 : int(round((data_s[src_idx + 32*j + l] + dm)/d));
+            quants[32*j + l] = min(15, max(0, q));
+        }
+    }
+
+    for (int j = 0; j < 256; j += 64) {
+        for (int l = 0; l < 32; ++l) {
+            data_q[dst_idx].qs[j/2 + l] = uint8_t(quants[j + l] | (quants[j + l + 32] << 4));
+        }
+    }
+    for (int j = 0; j < 12; ++j) data_q[dst_idx].scales[j] = uint8_t(scale_bytes[j]);
+}
+#endif
+
 #if defined(DATA_A_F32) || defined(DATA_A_F16)
 void quantize(uint dst_idx, uint src_idx)
 {

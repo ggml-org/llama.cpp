@@ -4099,6 +4099,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, int value) { params.grad_checkpoint_interval = value; }
     ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
     add_opt(common_arg(
+        {"--grad-offload"},
+        "offload LoRA parameter gradient accumulators to CPU between microbatches",
+        [](common_params & params) { params.grad_offload = true; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
         {"--lora-qat"}, "TYPE",
         "LoRA fake quantization: none, q3_k, q4_k, q4_0 (default: none)",
         [](common_params & params, const std::string & value) {

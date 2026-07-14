@@ -1,0 +1,43 @@
+#version 450
+
+#include "types.glsl"
+#include "generic_unary_head.glsl"
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+void main() {
+    if (gl_LocalInvocationID.x != 0) return;
+
+    const uint idx = gl_WorkGroupID.z * 262144 + gl_WorkGroupID.y * 512 + gl_WorkGroupID.x * QUANT_K;
+    if (idx >= p.ne) return;
+
+    const uint src_idx = src0_idx_quant(idx, QUANT_K);
+    const uint dst_idx = get_doffset() + dst_idx(idx);
+
+#if defined(DATA_A_Q3_K)
+    const float d_all = float(data_a[src_idx].d);
+    for (uint j = 0; j < 256; ++j) {
+        const uint is = j / 16;
+        const uint qsi = (j / 128) * 32 + (j % 32);
+        const uint shift = ((j % 128) / 32) * 2;
+        const uint hbit = 1 << ((j / 128) * 4 + (j % 128) / 32);
+        const int sc = int((is < 8 ? data_a[src_idx].scales[is] & 0xF : data_a[src_idx].scales[is - 8] >> 4)
+            | (((data_a[src_idx].scales[8 + is % 4] >> (2*(is/4))) & 3) << 4));
+        const int q = int((data_a[src_idx].qs[qsi] >> shift) & 3) - ((data_a[src_idx].hmask[j % 32] & hbit) != 0 ? 0 : 4);
+        data_d[dst_idx + j] = D_TYPE(d_all*float(sc - 32)*float(q));
+    }
+#endif
+
+#if defined(DATA_A_Q4_K)
+    const float d_all = float(data_a[src_idx].dm.x);
+    const float dmin_all = float(data_a[src_idx].dm.y);
+    for (uint j = 0; j < 256; ++j) {
+        const uint is = j / 32;
+        const int sc = is < 4 ? int(data_a[src_idx].scales[is]) : int((data_a[src_idx].scales[is - 4] >> 6) | ((data_a[src_idx].scales[is + 4] & 0xF) << 4));
+        const int m = is < 4 ? int(data_a[src_idx].scales[is + 4]) : int((data_a[src_idx].scales[is] >> 6) | ((data_a[src_idx].scales[is + 4] >> 4) << 4));
+        const uint qsi = (j / 64) * 32 + (j % 32);
+        const uint q = j % 64 < 32 ? data_a[src_idx].qs[qsi] & 0xF : data_a[src_idx].qs[qsi] >> 4;
+        data_d[dst_idx + j] = D_TYPE(d_all*float(sc)*float(q) - dmin_all*float(m));
+    }
+#endif
+}

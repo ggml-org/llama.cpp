@@ -137,6 +137,8 @@ extern "C" {
         // Set to 0 (default) to disable.  A value of ~32–64 cuts activation VRAM by ~50%.
         int32_t grad_checkpoint_interval;
 
+        bool grad_offload;
+
         // only GGML_OPT_OPTIMIZER_TYPE_ADAMW needs m, v momenta per parameter tensor
         enum ggml_opt_optimizer_type optimizer;
     };

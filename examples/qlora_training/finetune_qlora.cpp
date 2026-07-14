@@ -929,6 +929,7 @@ static int run_grpo_mode(
         /*.optimizer_type           =*/params.optimizer,
         /*.lora_qat_type            =*/lora_qat_type_from_string(params.lora_qat),
         /*.grad_checkpoint_interval =*/params.grad_checkpoint_interval,
+        /*.grad_offload             =*/params.grad_offload,
     };
     llama_opt_init(ctx, model, lopt_params);
 
@@ -1267,6 +1268,7 @@ int main(int argc, char ** argv) {
         /*.optimizer_type           =*/params.optimizer,
         /*.lora_qat_type            =*/lora_qat_type_from_string(params.lora_qat),
         /*.grad_checkpoint_interval =*/params.grad_checkpoint_interval,
+        /*.grad_offload             =*/params.grad_offload,
     };
     llama_opt_init(ctx, model, lopt_params);
 
