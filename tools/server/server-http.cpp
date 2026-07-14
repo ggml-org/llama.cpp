@@ -1,4 +1,5 @@
 #include "common.h"
+#include "http.h"
 #include "server-http.h"
 #include "server-common.h"
 #include "ui.h"
@@ -46,6 +47,16 @@ static void log_server_request(const httplib::Request & req, const httplib::Resp
     SRV_DBG("response: %s\n", res.body.c_str());
 }
 
+// returns true if the Origin header value's host is localhost / 127.0.0.1 / ::1 (any port)
+static bool origin_is_localhost(const std::string & origin) {
+    try {
+        const std::string host = common_http_parse_url(origin).host;
+        return host == "localhost" || host == "127.0.0.1" || host == "::1";
+    } catch (const std::exception &) {
+        return false;
+    }
+}
+
 // For Google Cloud Platform deployment compatibility
 struct gcp_params {
     bool enabled;
@@ -82,7 +93,7 @@ bool server_http_context::init(const common_params & params) {
     hostname = params.hostname;
 
     if (gcp.enabled) {
-        SRV_INF("Google Cloud Platform compat: health route = %s, predict route = %s, port = %d\n", gcp.path_health.c_str(), gcp.path_predict.c_str(), gcp.port);
+        SRV_TRC("Google Cloud Platform compat: health route = %s, predict route = %s, port = %d\n", gcp.path_health.c_str(), gcp.path_predict.c_str(), gcp.port);
 
         if (port != gcp.port) {
             SRV_WRN("Google Cloud Platform compat: overriding server port %d with AIP_HTTP_PORT %d\n", port, gcp.port);
@@ -95,13 +106,13 @@ bool server_http_context::init(const common_params & params) {
 
 #ifdef CPPHTTPLIB_OPENSSL_SUPPORT
     if (!params.ssl_file_key.empty() && !params.ssl_file_cert.empty()) {
-        SRV_INF("running with SSL: key = %s, cert = %s\n", params.ssl_file_key.c_str(), params.ssl_file_cert.c_str());
+        SRV_TRC("running with SSL: key = %s, cert = %s\n", params.ssl_file_key.c_str(), params.ssl_file_cert.c_str());
         srv = std::make_unique<httplib::SSLServer>(
             params.ssl_file_cert.c_str(), params.ssl_file_key.c_str()
         );
         is_ssl = true;
     } else {
-        SRV_INF("%s", "running without SSL\n");
+        SRV_TRC("%s", "running without SSL\n");
         srv = std::make_unique<httplib::Server>();
     }
 #else
@@ -113,7 +124,7 @@ bool server_http_context::init(const common_params & params) {
 #endif
 
     srv->set_default_headers({{"Server", "llama.cpp"}});
-    srv->set_logger(log_server_request);
+    // srv->set_logger(log_server_request); // TODO @ngxson : this is too spamy, no very useful; improve it in the future
     srv->set_exception_handler([](const httplib::Request &, httplib::Response & res, const std::exception_ptr & ep) {
         // this is fail-safe; exceptions should already handled by `ex_wrapper`
 
@@ -164,97 +175,33 @@ bool server_http_context::init(const common_params & params) {
     if (params.api_keys.size() == 1) {
         const auto key = params.api_keys[0];
         const std::string substr = key.substr(std::max(static_cast<int>(key.length() - 4), 0));
-        SRV_INF("api_keys: ****%s\n", substr.c_str());
+        SRV_TRC("api_keys: ****%s\n", substr.c_str());
     } else if (params.api_keys.size() > 1) {
-        SRV_INF("api_keys: %zu keys loaded\n", params.api_keys.size());
+        SRV_TRC("api_keys: %zu keys loaded\n", params.api_keys.size());
     }
-
-    //
-    // Helper: Generate iOS splash screen paths from device dimensions
-    // This centralizes PWA asset paths to avoid duplication across CMake, C++, and TypeScript.
-    // Source of truth: tools/ui/src/lib/constants/pwa.ts (APPLE_DEVICES)
-    //
-    auto generate_splash_endpoints = []() -> std::vector<std::string> {
-        // Apple device dimensions (width x height) with orientation and color scheme
-        // Format: "orientation-dimension1xdimension2.png" or "orientation-dark-dimension1xdimension2.png"
-        // Based on https://developer.apple.com/design/human-interface-guidelines/app-icons
-        static const std::vector<std::pair<std::string, std::string>> splash_specs = {
-            // Portrait screens (light)
-            {"portrait", "640x1136"},     {"portrait", "750x1334"},
-            {"portrait", "1170x2532"},    {"portrait", "1179x2556"},
-            {"portrait", "1206x2622"},    {"portrait", "1284x2778"},
-            {"portrait", "1290x2796"},    {"portrait", "1320x2868"},
-            {"portrait", "1488x2266"},    {"portrait", "1640x2360"},
-            {"portrait", "1668x2388"},    {"portrait", "2048x2732"},
-            // Landscape screens (light) - dimensions swapped
-            {"landscape", "1136x640"},    {"landscape", "1334x750"},
-            {"landscape", "2532x1170"},   {"landscape", "2556x1179"},
-            {"landscape", "2622x1206"},   {"landscape", "2778x1284"},
-            {"landscape", "2796x1290"},   {"landscape", "2868x1320"},
-            {"landscape", "2266x1488"},   {"landscape", "2360x1640"},
-            {"landscape", "2388x1668"},   {"landscape", "2732x2048"},
-            // Portrait screens (dark)
-            {"portrait-dark", "640x1136"}, {"portrait-dark", "750x1334"},
-            {"portrait-dark", "1170x2532"}, {"portrait-dark", "1179x2556"},
-            {"portrait-dark", "1206x2622"}, {"portrait-dark", "1284x2778"},
-            {"portrait-dark", "1290x2796"}, {"portrait-dark", "1320x2868"},
-            {"portrait-dark", "1488x2266"}, {"portrait-dark", "1640x2360"},
-            {"portrait-dark", "1668x2388"}, {"portrait-dark", "2048x2732"},
-            // Landscape screens (dark)
-            {"landscape-dark", "1136x640"}, {"landscape-dark", "1334x750"},
-            {"landscape-dark", "2532x1170"}, {"landscape-dark", "2556x1179"},
-            {"landscape-dark", "2622x1206"}, {"landscape-dark", "2778x1284"},
-            {"landscape-dark", "2796x1290"}, {"landscape-dark", "2868x1320"},
-            {"landscape-dark", "2266x1488"}, {"landscape-dark", "2360x1640"},
-            {"landscape-dark", "2388x1668"}, {"landscape-dark", "2732x2048"}
-        };
-
-        std::vector<std::string> endpoints;
-        endpoints.reserve(splash_specs.size());
-        for (const auto & [orientation, dimensions] : splash_specs) {
-            endpoints.push_back("/apple-splash-" + orientation + "-" + dimensions + ".png");
-        }
-        return endpoints;
-    };
 
     //
     // Middlewares
     //
 
-    // Public endpoints list - includes health, UI, and PWA assets
-    // Source of truth for splash screen paths: tools/ui/src/lib/constants/pwa.ts (APPLE_DEVICES)
-    static const std::unordered_set<std::string> get_public_endpoints = [generate_splash_endpoints]() {
+    // Frontend paths - all embedded UI assets
+    static const std::unordered_set<std::string> frontend_paths = []() {
+        std::unordered_set<std::string> paths { "/" };
+        for (const llama_ui_asset & a : llama_ui_get_assets()) {
+            paths.insert("/" + a.name);
+        }
+        return paths;
+    }();
+
+    // Public endpoints - API routes plus all embedded UI assets
+    static const std::unordered_set<std::string> get_public_endpoints = []() {
         std::unordered_set<std::string> endpoints {
             "/health",
             "/v1/health",
             "/models",
             "/v1/models",
-            "/",
-            "/index.html",
-            // PWA assets
-            "/favicon.ico",
-            "/favicon-dark.ico",
-            "/favicon.svg",
-            "/favicon-dark.svg",
-            "/pwa-64x64.png",
-            "/pwa-192x192.png",
-            "/pwa-512x512.png",
-            "/maskable-icon-512x512.png",
-            "/apple-touch-icon-180x180.png",
-            // iOS splash screens (generated from APPLE_DEVICES in TypeScript)
-            // PWA runtime files
-            "/manifest.webmanifest",
-            "/sw.js",
-            "/version.json",
-            "/workbox-<hash>.js",
-            "/_app/version.json",
-            "/build.json"
         };
-        // Add all splash screen endpoints
-        auto splash = generate_splash_endpoints();
-        for (const auto & path : splash) {
-            endpoints.insert(path);
-        }
+        endpoints.insert(frontend_paths.begin(), frontend_paths.end());
         return endpoints;
     }();
 
@@ -264,13 +211,8 @@ bool server_http_context::init(const common_params & params) {
             return true;
         }
 
-        // If path is public or static file, skip validation
-        if (get_public_endpoints.find(req.path) != get_public_endpoints.end()) {
-            return true;
-        }
-        // Static assets (_app/ files, workbox runtime). These are embedded at build time
-        // so no API key is needed — browsers fetch them directly.
-        if (req.path.find("/_app/") == 0 || req.path.find("/workbox-") == 0) {
+        // If path is public or a UI asset, skip validation
+        if (get_public_endpoints.count(req.path)) {
             return true;
         }
 
@@ -312,18 +254,9 @@ bool server_http_context::init(const common_params & params) {
 
     auto middleware_server_state = [this](const httplib::Request & req, httplib::Response & res) {
         if (!is_ready.load()) {
-#if defined(LLAMA_UI_HAS_ASSETS)
-            if (const auto tmp = string_split<std::string>(req.path, '.');
-                req.path == "/" || (!tmp.empty() && tmp.back() == "html")) {
-                if (const llama_ui_asset * a = llama_ui_find_asset("loading.html")) {
-                    res.status = 503;
-                    res.set_content(reinterpret_cast<const char*>(a->data), a->size, "text/html; charset=utf-8");
-                    return false;
-                }
+            if (frontend_paths.count(req.path)) {
+                return true; // frontend asset, allow it to load and show "loading"
             }
-#else
-            (void)req;
-#endif
             // no endpoints are allowed to be accessed when the server is not ready
             // this is to prevent any data races or inconsistent states
             res.status = 503;
@@ -343,13 +276,26 @@ bool server_http_context::init(const common_params & params) {
     };
 
     // register server middlewares
-    srv->set_pre_routing_handler([middleware_validate_api_key, middleware_server_state](const httplib::Request & req, httplib::Response & res) {
-        res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
+    srv->set_pre_routing_handler([&params, middleware_validate_api_key, middleware_server_state](const httplib::Request & req, httplib::Response & res) {
+        if (params.cors_credentials && params.cors_origins == "*") {
+            // special case: echo back the Origin header to allow any origin to access the server with credentials
+            res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
+        } else if (params.cors_origins == "localhost") {
+            // special case: only reflect the Origin header if it is a localhost origin
+            std::string origin = req.get_header_value("Origin");
+            if (origin_is_localhost(origin)) {
+                res.set_header("Access-Control-Allow-Origin", origin);
+            } else {
+                SRV_WRN("(CORS) skip non-localhost origin: %s\n", origin.c_str());
+            }
+        } else {
+            res.set_header("Access-Control-Allow-Origin", params.cors_origins);
+        }
         // If this is OPTIONS request, skip validation because browsers don't include Authorization header
         if (req.method == "OPTIONS") {
-            res.set_header("Access-Control-Allow-Credentials", "true");
-            res.set_header("Access-Control-Allow-Methods",     "GET, POST");
-            res.set_header("Access-Control-Allow-Headers",     "*");
+            res.set_header("Access-Control-Allow-Credentials", params.cors_credentials ? "true" : "false");
+            res.set_header("Access-Control-Allow-Methods",     params.cors_methods);
+            res.set_header("Access-Control-Allow-Headers",     params.cors_headers);
             res.set_content("", "text/html"); // blank response, no data
             return httplib::Server::HandlerResponse::Handled; // skip further processing
         }
@@ -367,7 +313,7 @@ bool server_http_context::init(const common_params & params) {
         // +4 threads for monitoring, health and some threads reserved for MCP and other tasks in the future
         n_threads_http = std::max(params.n_parallel + 4, static_cast<int32_t>(std::thread::hardware_concurrency() - 1));
     }
-    SRV_INF("using %d threads for HTTP server\n", n_threads_http);
+    SRV_TRC("using %d threads for HTTP server\n", n_threads_http);
     srv->new_task_queue = [n_threads_http] {
         // spawn n_threads_http fixed thread (always alive), while allow up to 1024 max possible additional threads
         // when n_threads_http is used, server will create new "dynamic" threads that will be destroyed after processing each request
@@ -394,151 +340,83 @@ bool server_http_context::init(const common_params & params) {
             }
         } else {
 #if defined(LLAMA_UI_HAS_ASSETS)
-            // Embedded assets are immutable — cache aggressively for PWA/sw offline support.
-            // PWA runtime files (sw.js, manifest, version.json) use no-cache for revalidation.
-            // Bundle files use Vite content hashes (bundle.<hash>.js/css) so each build
-            // produces a different filename — browsers naturally get a fresh copy on upgrade.
-            auto serve_asset_cached = [](const std::string & name, const char * mime, bool with_isolation_headers) {
-                return [name, mime, with_isolation_headers](const httplib::Request & req, httplib::Response & res) {
-                    const llama_ui_asset * a = llama_ui_find_asset(name.c_str());
-                    if (!a) {
-                        res.status = 404;
-                        return false;
+            static auto handle_gzip_header = [](const httplib::Request & req, httplib::Response & res) {
+                if (!llama_ui_use_gzip()) {
+                    // no gzip build, skip
+                    return true;
+                }
+                if (req.get_header_value("Accept-Encoding").find("gzip") == std::string::npos) {
+                    res.status = 415; // unsupported media type
+                    res.set_content("Error: gzip is not supported by this browser", "text/plain");
+                    return false;
+                } else {
+                    res.set_header("Content-Encoding", "gzip");
+                }
+                return true;
+            };
+
+            auto serve_asset_cached = [](const std::string & name, bool isolation) {
+                return [name, isolation](const httplib::Request & req, httplib::Response & res) {
+                    if (!handle_gzip_header(req, res)) {
+                        return true; // returns error message
                     }
+                    const llama_ui_asset * a = llama_ui_find_asset(name);
+                    if (!a) { res.status = 404; return false; }
                     res.set_header("ETag", a->etag);
-                    // Check If-None-Match for conditional GET (304 Not Modified)
                     if (const std::string & inm = req.get_header_value("If-None-Match");
                         !inm.empty() && (inm == a->etag || inm == std::string("W/") + a->etag)) {
                         res.status = 304;
                         return false;
                     }
-                    if (with_isolation_headers) {
-                        // COEP and COOP headers, required by pyodide (python interpreter)
+                    if (isolation) {
                         res.set_header("Cross-Origin-Embedder-Policy", "require-corp");
-                        res.set_header("Cross-Origin-Opener-Policy", "same-origin");
+                        res.set_header("Cross-Origin-Opener-Policy",   "same-origin");
                     }
                     res.set_header("Cache-Control", "public, max-age=31536000, immutable");
-                    res.set_content(reinterpret_cast<const char*>(a->data), a->size, mime);
+                    res.set_content(reinterpret_cast<const char*>(a->data), a->size, a->type.c_str());
                     return false;
                 };
             };
 
-            auto serve_asset_nocache = [](const std::string & name, const char * mime, bool with_isolation_headers) {
-                return [name, mime, with_isolation_headers](const httplib::Request & /*req*/, httplib::Response & res) {
-                    const llama_ui_asset * a = llama_ui_find_asset(name.c_str());
+            auto serve_asset_nocache = [](const std::string & name) {
+                return [name](const httplib::Request & req, httplib::Response & res) {
+                    if (!handle_gzip_header(req, res)) {
+                        return true; // returns error message
+                    }
+                    const llama_ui_asset * a = llama_ui_find_asset(name);
                     if (!a) {
                         res.status = 404;
                         return false;
                     }
-                    if (with_isolation_headers) {
-                        res.set_header("Cross-Origin-Embedder-Policy", "require-corp");
-                        res.set_header("Cross-Origin-Opener-Policy", "same-origin");
-                    }
                     res.set_header("Cache-Control", "no-cache");
-                    res.set_content(reinterpret_cast<const char*>(a->data), a->size, mime);
+                    res.set_content(reinterpret_cast<const char*>(a->data), a->size, a->type.c_str());
                     return false;
                 };
             };
 
-            // Bundle files in _app/immutable/ — SvelteKit outputs them here and index.html
-            // and sw.js reference them via these paths (vanilla build, no plugin).
-            auto serve_bundle = [serve_asset_cached](const httplib::Request & req, httplib::Response & res) {
-                std::string path = req.path;
-                std::string name;
-                const char * mime;
-                if (path.rfind("/_app/immutable/bundle.", 0) == 0 && path.size() > 22) {
-                    name = path.substr(1);  // strip leading /
-                    mime = "application/javascript; charset=utf-8";
-                } else if (path.rfind("/_app/immutable/assets/bundle.", 0) == 0 && path.size() > 30) {
-                    name = path.substr(1);  // strip leading /
-                    mime = "text/css; charset=utf-8";
+            // main index file
+            srv->Get(params.api_prefix + "/",           serve_asset_cached("index.html", true));
+            srv->Get(params.api_prefix + "/index.html", serve_asset_cached("index.html", true));
+
+            // All remaining assets registered directly from the embedded asset table.
+            // PWA revalidation files (sw.js, manifest, version.json) use no-cache;
+            // everything else is immutable.
+            static const std::unordered_set<std::string> no_cache_names = {
+                "sw.js",
+                "manifest.webmanifest",
+                "_app/version.json",
+                "build.json"
+            };
+
+            for (const auto & a : llama_ui_get_assets()) {
+                if (a.name == "index.html") continue;  // served at "/" and "/index.html" above
+                if (no_cache_names.count(a.name)) {
+                    SRV_DBG("serve nocache for %s\n", a.name.c_str());
+                    srv->Get(params.api_prefix + "/" + a.name, serve_asset_nocache(a.name));
                 } else {
-                    res.status = 404;
-                    return false;
+                    srv->Get(params.api_prefix + "/" + a.name, serve_asset_cached(a.name, false));
                 }
-                return serve_asset_cached(name, mime, false)(req, res);
-            };
-
-            // _app/ paths — vanilla SvelteKit output, index.html and sw.js reference
-            // bundles and version.json here directly.
-            srv->Get(params.api_prefix + R"(/_app/immutable/bundle\.[^/]+\.js)",  serve_bundle);
-            srv->Get(params.api_prefix + R"(/_app/immutable/assets/bundle\.[^/]+\.css)", serve_bundle);
-            srv->Get(params.api_prefix + "/_app/version.json",                    serve_asset_cached("_app/version.json", "application/json; charset=utf-8", false));
-
-            auto serve_workbox = [serve_asset_cached](const httplib::Request & req, httplib::Response & res) {
-                std::string name = req.path.substr(1);
-                if (name.rfind("workbox-", 0) == 0 && name.size() > 10) {
-                    return serve_asset_cached(name, "application/javascript; charset=utf-8", false)(req, res);
-                }
-                res.status = 404;
-                return false;
-            };
-            srv->Get(params.api_prefix + R"(/workbox-[^/]+\.js)",               serve_workbox);
-            srv->Get(params.api_prefix + R"(/sw\.js)",                          serve_asset_cached("sw.js",               "application/javascript; charset=utf-8", false));
-            srv->Get(params.api_prefix + "/manifest.webmanifest",                serve_asset_cached("manifest.webmanifest", "application/manifest+json; charset=utf-8", false));
-            srv->Get(params.api_prefix + "/version.json",                        serve_asset_cached("_app/version.json",  "application/json; charset=utf-8",       false));
-            srv->Get(params.api_prefix + "/build.json",                          serve_asset_cached("build.json",         "application/json; charset=utf-8",       false));
-
-            // Finally serve index.html for all other routes (SPA fallback)
-            srv->Get(params.api_prefix + "/",                               serve_asset_cached("index.html",                   "text/html; charset=utf-8",                 true));
-            srv->Get(params.api_prefix + "/favicon.ico",                    serve_asset_cached("favicon.ico",                  "image/x-icon",                             false));
-            srv->Get(params.api_prefix + "/favicon-dark.ico",                serve_asset_cached("favicon-dark.ico",              "image/x-icon",                             false));
-            srv->Get(params.api_prefix + "/favicon.svg",                    serve_asset_cached("favicon.svg",                  "image/svg+xml",                            false));
-            srv->Get(params.api_prefix + "/favicon-dark.svg",              serve_asset_cached("favicon-dark.svg",            "image/svg+xml",                            false));
-            srv->Get(params.api_prefix + "/pwa-64x64.png",                  serve_asset_cached("pwa-64x64.png",                "image/png",                                false));
-            srv->Get(params.api_prefix + "/pwa-192x192.png",                serve_asset_cached("pwa-192x192.png",              "image/png",                                false));
-            srv->Get(params.api_prefix + "/pwa-512x512.png",                serve_asset_cached("pwa-512x512.png",              "image/png",                                false));
-            srv->Get(params.api_prefix + "/maskable-icon-512x512.png",      serve_asset_cached("maskable-icon-512x512.png",    "image/png",                                false));
-            srv->Get(params.api_prefix + "/apple-touch-icon-180x180.png",   serve_asset_cached("apple-touch-icon-180x180.png", "image/png",                                false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-640x1136.png",          serve_asset_cached("apple-splash-portrait-640x1136.png",          "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-1136x640.png",         serve_asset_cached("apple-splash-landscape-1136x640.png",         "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-750x1334.png",          serve_asset_cached("apple-splash-portrait-750x1334.png",          "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-1334x750.png",         serve_asset_cached("apple-splash-landscape-1334x750.png",         "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-1170x2532.png",         serve_asset_cached("apple-splash-portrait-1170x2532.png",         "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-2532x1170.png",        serve_asset_cached("apple-splash-landscape-2532x1170.png",        "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-1179x2556.png",         serve_asset_cached("apple-splash-portrait-1179x2556.png",         "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-2556x1179.png",        serve_asset_cached("apple-splash-landscape-2556x1179.png",        "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-1206x2622.png",         serve_asset_cached("apple-splash-portrait-1206x2622.png",         "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-2622x1206.png",        serve_asset_cached("apple-splash-landscape-2622x1206.png",        "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-1284x2778.png",         serve_asset_cached("apple-splash-portrait-1284x2778.png",         "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-2778x1284.png",        serve_asset_cached("apple-splash-landscape-2778x1284.png",        "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-1290x2796.png",         serve_asset_cached("apple-splash-portrait-1290x2796.png",         "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-2796x1290.png",        serve_asset_cached("apple-splash-landscape-2796x1290.png",        "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-1320x2868.png",         serve_asset_cached("apple-splash-portrait-1320x2868.png",         "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-2868x1320.png",        serve_asset_cached("apple-splash-landscape-2868x1320.png",        "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-1488x2266.png",         serve_asset_cached("apple-splash-portrait-1488x2266.png",         "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-2266x1488.png",        serve_asset_cached("apple-splash-landscape-2266x1488.png",        "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-1640x2360.png",         serve_asset_cached("apple-splash-portrait-1640x2360.png",         "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-2360x1640.png",        serve_asset_cached("apple-splash-landscape-2360x1640.png",        "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-1668x2388.png",         serve_asset_cached("apple-splash-portrait-1668x2388.png",         "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-2388x1668.png",        serve_asset_cached("apple-splash-landscape-2388x1668.png",        "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-2048x2732.png",         serve_asset_cached("apple-splash-portrait-2048x2732.png",         "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-2732x2048.png",        serve_asset_cached("apple-splash-landscape-2732x2048.png",        "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-dark-640x1136.png",     serve_asset_cached("apple-splash-portrait-dark-640x1136.png",     "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-dark-1136x640.png",    serve_asset_cached("apple-splash-landscape-dark-1136x640.png",    "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-dark-750x1334.png",     serve_asset_cached("apple-splash-portrait-dark-750x1334.png",     "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-dark-1334x750.png",    serve_asset_cached("apple-splash-landscape-dark-1334x750.png",    "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-dark-1170x2532.png",    serve_asset_cached("apple-splash-portrait-dark-1170x2532.png",    "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-dark-2532x1170.png",   serve_asset_cached("apple-splash-landscape-dark-2532x1170.png",   "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-dark-1179x2556.png",    serve_asset_cached("apple-splash-portrait-dark-1179x2556.png",    "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-dark-2556x1179.png",   serve_asset_cached("apple-splash-landscape-dark-2556x1179.png",   "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-dark-1206x2622.png",    serve_asset_cached("apple-splash-portrait-dark-1206x2622.png",    "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-dark-2622x1206.png",   serve_asset_cached("apple-splash-landscape-dark-2622x1206.png",   "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-dark-1284x2778.png",    serve_asset_cached("apple-splash-portrait-dark-1284x2778.png",    "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-dark-2778x1284.png",   serve_asset_cached("apple-splash-landscape-dark-2778x1284.png",   "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-dark-1290x2796.png",    serve_asset_cached("apple-splash-portrait-dark-1290x2796.png",    "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-dark-2796x1290.png",   serve_asset_cached("apple-splash-landscape-dark-2796x1290.png",   "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-dark-1320x2868.png",    serve_asset_cached("apple-splash-portrait-dark-1320x2868.png",    "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-dark-2868x1320.png",   serve_asset_cached("apple-splash-landscape-dark-2868x1320.png",   "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-dark-1640x2360.png",    serve_asset_cached("apple-splash-portrait-dark-1640x2360.png",    "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-dark-2360x1640.png",   serve_asset_cached("apple-splash-landscape-dark-2360x1640.png",   "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-dark-1668x2388.png",    serve_asset_cached("apple-splash-portrait-dark-1668x2388.png",    "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-dark-2388x1668.png",   serve_asset_cached("apple-splash-landscape-dark-2388x1668.png",   "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-portrait-dark-2048x2732.png",    serve_asset_cached("apple-splash-portrait-dark-2048x2732.png",    "image/png", false));
-            srv->Get(params.api_prefix + "/apple-splash-landscape-dark-2732x2048.png",   serve_asset_cached("apple-splash-landscape-dark-2732x2048.png",   "image/png", false));
-            srv->Get(params.api_prefix + "/manifest.webmanifest",           serve_asset_nocache("manifest.webmanifest",        "application/manifest+json",                false));
-            srv->Get(params.api_prefix + "/sw.js",                          serve_asset_nocache("sw.js",                       "application/javascript; charset=utf-8",    false));
-            srv->Get(params.api_prefix + "/version.json",                   serve_asset_nocache("version.json",                 "application/json",                         false));
+            }
 
 #endif
         }
@@ -554,13 +432,13 @@ bool server_http_context::start() {
     auto is_sock = false;
     if (string_ends_with(std::string(hostname), ".sock")) {
         is_sock = true;
-        SRV_INF("%s", "setting address family to AF_UNIX\n");
+        SRV_TRC("%s", "setting address family to AF_UNIX\n");
         srv->set_address_family(AF_UNIX);
         // bind_to_port requires a second arg, any value other than 0 should
         // simply get ignored
         was_bound = srv->bind_to_port(hostname, 8080);
     } else {
-        SRV_INF("%s", "binding port with default address family\n");
+        SRV_TRC("%s", "binding port with default address family\n");
         // bind HTTP listen port
         if (port == 0) {
             const auto bound_port = srv->bind_to_any_port(hostname);
@@ -583,7 +461,7 @@ bool server_http_context::start() {
     srv->wait_until_ready();
 
     listening_address = is_sock ? string_format("unix://%s", hostname.c_str())
-                                : string_format("%s://%s:%d", is_ssl ? "https" : "http", hostname.c_str(), port);
+                                : string_format("%s://%s:%d", is_ssl ? "https" : "http", common_http_format_host(hostname).c_str(), port);
     return true;
 }
 
@@ -599,13 +477,40 @@ static void set_headers(httplib::Response & res, const std::map<std::string, std
     }
 }
 
+// percent-decode a path component (%XX). path params arrive raw from httplib, unlike query
+// params, so a conv id like "conv::model" sent as "conv%3A%3Amodel" must be decoded here to
+// match the value the client put in the X-Conversation-Id header
+static std::string decode_path_component(const std::string & in) {
+    std::string out;
+    out.reserve(in.size());
+    for (size_t i = 0; i < in.size(); i++) {
+        if (in[i] == '%' && i + 2 < in.size()) {
+            auto hex = [](char c) -> int {
+                if (c >= '0' && c <= '9') return c - '0';
+                if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+                if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+                return -1;
+            };
+            int hi = hex(in[i + 1]);
+            int lo = hex(in[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                out.push_back(char((hi << 4) | lo));
+                i += 2;
+                continue;
+            }
+        }
+        out.push_back(in[i]);
+    }
+    return out;
+}
+
 static std::map<std::string, std::string> get_params(const httplib::Request & req) {
     std::map<std::string, std::string> params;
     for (const auto & [key, value] : req.params) {
         params[key] = value;
     }
     for (const auto & [key, value] : req.path_params) {
-        params[key] = value;
+        params[key] = decode_path_component(value);
     }
     return params;
 }
@@ -635,12 +540,15 @@ using server_http_req_ptr = std::unique_ptr<server_http_req>;
 static void process_handler_response(server_http_req_ptr && request, server_http_res_ptr & response, httplib::Response & res) {
     if (response->is_stream()) {
         res.status = response->status;
+        // Tell Nginx to not buffer any streamed response
+        response->headers["X-Accel-Buffering"] = "no";
         set_headers(res, response->headers);
         const std::string content_type = response->content_type;
         // convert to shared_ptr as both chunked_content_provider() and on_complete() need to use it
-        std::shared_ptr q_ptr = std::move(request);
-        std::shared_ptr r_ptr = std::move(response);
-        const auto chunked_content_provider = [response = r_ptr](size_t, const httplib::DataSink & sink) -> bool {
+        std::shared_ptr<server_http_req> q_ptr = std::move(request);
+        std::shared_ptr<server_http_res> r_ptr = std::move(response);
+
+        const auto chunked_content_provider = [response = r_ptr](size_t, httplib::DataSink & sink) -> bool {
             std::string chunk;
             const bool has_next = response->next(chunk);
             if (!chunk.empty()) {
@@ -656,14 +564,16 @@ static void process_handler_response(server_http_req_ptr && request, server_http
             return has_next;
         };
         const auto on_complete = [request = q_ptr, response = r_ptr](bool) mutable {
-            response.reset(); // trigger the destruction of the response object
-            request.reset();  // trigger the destruction of the request object
+            response->on_complete();
+            response.reset();
+            request.reset();
         };
         res.set_chunked_content_provider(content_type, chunked_content_provider, on_complete);
     } else {
         res.status = response->status;
         set_headers(res, response->headers);
         res.set_content(response->data, response->content_type);
+        response->on_complete();
     }
 }
 
@@ -724,6 +634,23 @@ void server_http_context::post(const std::string & path, const server_http_conte
             build_query_string(req),
             body,
             std::move(files),
+            req.is_connection_closed
+        });
+        server_http_res_ptr response = handler(*request);
+        process_handler_response(std::move(request), response, res);
+    });
+}
+
+void server_http_context::del(const std::string & path, const server_http_context::handler_t & handler) const {
+    handlers.emplace(path, handler);
+    pimpl->srv->Delete(path_prefix + path, [handler](const httplib::Request & req, httplib::Response & res) {
+        server_http_req_ptr request = std::make_unique<server_http_req>(server_http_req{
+            get_params(req),
+            get_headers(req),
+            req.path,
+            build_query_string(req),
+            req.body,
+            {},
             req.is_connection_closed
         });
         server_http_res_ptr response = handler(*request);

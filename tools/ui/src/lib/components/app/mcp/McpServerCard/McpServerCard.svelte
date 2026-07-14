@@ -32,7 +32,9 @@
 	let isHealthChecking = $derived(healthState.status === HealthCheckStatus.CONNECTING);
 	let isConnected = $derived(healthState.status === HealthCheckStatus.SUCCESS);
 	let isError = $derived(healthState.status === HealthCheckStatus.ERROR);
-	let showSkeleton = $derived(isIdle || isHealthChecking);
+	// Disabled servers stay IDLE (no startup health check), so the body
+	// skeleton only applies while a check is running or expected to run.
+	let showSkeleton = $derived(isHealthChecking || (isIdle && server.enabled));
 	let errorMessage = $derived(
 		healthState.status === HealthCheckStatus.ERROR ? healthState.message : undefined
 	);
@@ -163,7 +165,7 @@
 			{/if}
 		</div>
 
-		<div class="flex justify-between gap-4">
+		<div class="mt-auto flex justify-between gap-4">
 			{#if showSkeleton}
 				<Skeleton class="h-3 w-28" />
 			{:else if protocolVersion}

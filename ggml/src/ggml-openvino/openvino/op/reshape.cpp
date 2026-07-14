@@ -10,7 +10,6 @@
 #include <openvino/op/concat.hpp>
 #include <openvino/op/constant.hpp>
 #include <openvino/op/reshape.hpp>
-#include <stdexcept>
 #include <vector>
 
 namespace ov {
@@ -20,7 +19,8 @@ namespace op {
 
 OutputVector translate_reshape(const NodeContext & context) {
     num_inputs_check(context, 1, 1);
-    if (context.get_input_shape(0) == context.get_output_shape()) {
+    if (context.get_input(0).get_partial_shape().is_static() &&
+        context.get_input_shape(0) == context.get_output_shape()) {
         return {context.get_input(0)};
     }
 
@@ -34,12 +34,12 @@ OutputVector translate_reshape(const NodeContext & context) {
     if (op_case == 1) {
         if (context.is_stateful()) {
             new_shape_node = ov::op::v0::Constant::create(
-                ov::element::i64, {3},
-                std::vector<int64_t>{-1, (int64_t) output_shape[2], (int64_t) output_shape[3]});
+                ov::element::i64, {3}, std::vector<int64_t>{-1, (int64_t) output_shape[2], (int64_t) output_shape[3]});
         } else {
             new_shape_node = ov::op::v0::Constant::create(
                 ov::element::i64, {4},
-                std::vector<int64_t>{(int64_t) output_shape[0], -1, (int64_t) output_shape[2], (int64_t) output_shape[3]});
+                std::vector<int64_t>{(int64_t) output_shape[0], -1, (int64_t) output_shape[2],
+                                     (int64_t) output_shape[3]});
         }
     } else if (op_case == 2) {
         new_shape_node = ov::op::v0::Constant::create(
@@ -47,7 +47,14 @@ OutputVector translate_reshape(const NodeContext & context) {
             std::vector<int64_t>{(int64_t) output_shape[0], (int64_t) output_shape[1], -1, (int64_t) output_shape[3]});
 
     } else if (op_case == 3) {
-        throw std::runtime_error("might be outdated RESHAPE case");
+        //  -  14: [     1,  1024,     1,     1] RESHAPE              Vcur-0 (reshaped) (reshaped)
+        //         [   512,     2,     1,     1]            0: RESHAPE     Vcur-0 (reshaped)
+        //  -  15: [     1, 524288,     1,     1] RESHAPE              cache_v_l0 (reshaped)
+        //         [   512,  1024,     1,     1]            0: NONE        cache_v_l0
+        //  -  16: [     1, 524288,     1,     1] SET_ROWS             cache_v_l0 (reshaped) (view)
+        //         [     1,  1024,     1,     1]            0: RESHAPE     Vcur-0 (reshaped) (reshaped)
+        //         [  1024,     1,     1,     1]            1: NONE        leaf_11
+        //         [     1, 524288,     1,     1]            2: RESHAPE     cache_v_l0 (reshaped)
         new_shape_node = ov::op::v0::Constant::create(
             ov::element::i64, {4}, std::vector<int64_t>{(int64_t) output_shape[0], (int64_t) output_shape[1], -1, 1});
 

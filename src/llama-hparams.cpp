@@ -104,6 +104,10 @@ uint32_t llama_hparams::n_embd_inp() const {
     return n_embd_inp;
 }
 
+uint32_t llama_hparams::n_embd_inp_enc() const {
+    return n_embd_inp_enc_impl > 0 ? n_embd_inp_enc_impl : n_embd_inp();
+}
+
 uint32_t llama_hparams::n_embd_out() const {
     return n_embd_out_impl > 0 ? n_embd_out_impl : n_embd;
 }

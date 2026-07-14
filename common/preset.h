@@ -60,7 +60,7 @@ struct common_preset_context {
     std::set<std::string> allowed_keys;
 
     // if only_remote_allowed is true, only accept whitelisted keys
-    common_preset_context(llama_example ex, bool only_remote_allowed = false);
+    common_preset_context(llama_example ex);
 
     // load presets from INI file
     common_presets load_from_ini(const std::string & path, common_preset & global) const;

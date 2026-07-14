@@ -4,6 +4,7 @@
  */
 
 import { copyCodeToClipboard, copyToClipboard } from '$lib/utils';
+import { MERMAID_WRAPPER_CLASS, MERMAID_BLOCK_CLASS, MERMAID_SYNTAX_ATTR } from '$lib/constants';
 
 export interface PreviewState {
 	previewDialogOpen: boolean;
@@ -106,17 +107,19 @@ export function createHandleMermaidClick(mermaidState: MermaidPreviewState) {
 		const target = event.target as HTMLElement;
 
 		// Check if clicking on copy or preview button in mermaid block
-		const copyBtn = target.closest('.mermaid-block-wrapper .copy-code-btn');
-		const previewBtn = target.closest('.mermaid-block-wrapper .preview-code-btn');
+		const copyBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .copy-code-btn`);
+		const previewBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .preview-code-btn`);
 
 		if (copyBtn || previewBtn) {
-			const wrapper = target.closest('.mermaid-block-wrapper');
+			const wrapper = target.closest(`.${MERMAID_WRAPPER_CLASS}`);
 			if (!wrapper) return;
 
-			const preElement = wrapper.querySelector<HTMLElement>('pre.mermaid[data-mermaid-syntax]');
+			const preElement = wrapper.querySelector<HTMLElement>(
+				`pre.${MERMAID_BLOCK_CLASS}[${MERMAID_SYNTAX_ATTR}]`
+			);
 			if (!preElement) return;
 
-			const mermaidSyntax = preElement.dataset.mermaidSyntax ?? '';
+			const mermaidSyntax = preElement.getAttribute(MERMAID_SYNTAX_ATTR) ?? '';
 
 			if (copyBtn) {
 				event.preventDefault();
@@ -141,7 +144,7 @@ export function createHandleMermaidClick(mermaidState: MermaidPreviewState) {
 		}
 
 		// Otherwise, open preview when clicking on the mermaid diagram itself
-		const mermaidEl = target.closest('.mermaid');
+		const mermaidEl = target.closest(`.${MERMAID_BLOCK_CLASS}`);
 		if (!mermaidEl) return;
 
 		const svg = mermaidEl.querySelector('svg');

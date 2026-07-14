@@ -26,10 +26,7 @@ export {
 	findLeafNode,
 	findDescendantMessages,
 	getMessageSiblings,
-	getMessageDisplayList,
-	hasMessageSiblings,
-	getNextSibling,
-	getPreviousSibling
+	buildSiblingInfoMap
 } from './branching';
 
 // Code
@@ -43,6 +40,9 @@ export { buildProxiedUrl, buildProxiedHeaders } from './cors-proxy';
 
 // URL utilities
 export { extractRootDomain, sanitizeExternalUrl } from './url';
+
+// Progress helpers
+export { modelLoadFraction, modelLoadProgressText } from './progress';
 
 // Conversation utilities
 export { createMessageCountMap, getMessageCount } from './conversation-utils';

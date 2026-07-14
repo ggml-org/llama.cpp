@@ -1,0 +1,18 @@
+// Auto-generated uberkernel kernel-id mapping. Do not edit.
+#include "ggml-et-uberkernel-kernel-map.h"
+
+#ifdef GGML_ET_UBERKERNEL_HOST_LOOKUP
+#include <string>
+#include <unordered_map>
+
+uint16_t ggml_et_uberkernel_kernel_id_from_name(const char * kernel_name) {
+    if (kernel_name == nullptr) {
+        return GGML_ET_UBERKERNEL_KERNEL_INVALID;
+    }
+    static const std::unordered_map<std::string, uint16_t> kernel_id_map = {
+@UBERKERNEL_MAP_ENTRIES@
+    };
+    auto it = kernel_id_map.find(std::string(kernel_name));
+    return it == kernel_id_map.end() ? GGML_ET_UBERKERNEL_KERNEL_INVALID : it->second;
+}
+#endif

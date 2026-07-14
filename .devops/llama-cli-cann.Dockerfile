@@ -3,7 +3,7 @@ ARG BUILD_DATE=N/A
 ARG APP_VERSION=N/A
 ARG APP_REVISION=N/A
 
-FROM ascendai/cann:$ASCEND_VERSION AS build
+FROM docker.io/ascendai/cann:$ASCEND_VERSION AS build
 
 WORKDIR /app
 
@@ -30,7 +30,7 @@ RUN echo "Building with static libs" && \
     cmake --build build --config Release --target llama-completion
 
 # TODO: use image with NNRT
-FROM ascendai/cann:$ASCEND_VERSION AS runtime
+FROM docker.io/ascendai/cann:$ASCEND_VERSION AS runtime
 
 ARG BUILD_DATE=N/A
 ARG APP_VERSION=N/A

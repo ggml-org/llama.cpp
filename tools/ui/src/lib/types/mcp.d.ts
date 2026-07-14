@@ -174,7 +174,6 @@ export interface HealthCheckParams {
 	id: string;
 	enabled: boolean;
 	url: string;
-	requestTimeoutSeconds: number;
 	headers?: string;
 	useProxy?: boolean;
 }
@@ -209,13 +208,18 @@ export type MCPToolCall = {
 	};
 };
 
-export type MCPServerSettingsEntry = {
+/**
+ * Minimum fields needed to display or identify an MCP server.
+ */
+export interface MCPServerDisplayInfo {
 	id: string;
-	enabled: boolean;
-	url: string;
-	requestTimeoutSeconds: number;
-	headers?: string;
 	name?: string;
+	url: string;
+}
+
+export type MCPServerSettingsEntry = MCPServerDisplayInfo & {
+	enabled: boolean;
+	headers?: string;
 	iconUrl?: string;
 	useProxy?: boolean;
 };

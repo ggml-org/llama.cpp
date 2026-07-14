@@ -9,7 +9,6 @@ import {
 	MimeTypeText
 } from '$lib/enums';
 import {
-	DEFAULT_MCP_CONFIG,
 	MCP_SERVER_ID_PREFIX,
 	IMAGE_FILE_EXTENSION_REGEX,
 	CODE_FILE_EXTENSION_REGEX,
@@ -19,7 +18,10 @@ import {
 	DISPLAY_NAME_SEPARATOR_REGEX,
 	PATH_SEPARATOR,
 	RESOURCE_TEXT_CONTENT_SEPARATOR,
-	DEFAULT_RESOURCE_FILENAME
+	DEFAULT_RESOURCE_FILENAME,
+	MCP_SSE_ENDPOINT,
+	MCP_SSE_ENDPOINT_SLASH,
+	MCP_SSE_ENDPOINT_QUERY
 } from '$lib/constants';
 import {
 	Database,
@@ -41,15 +43,26 @@ import type { MimeTypeUnion } from '$lib/types/common';
 export function detectMcpTransportFromUrl(url: string): MCPTransportType {
 	const normalized = url.trim().toLowerCase();
 
-	return normalized.startsWith(UrlProtocol.WEBSOCKET) ||
+	if (
+		normalized.startsWith(UrlProtocol.WEBSOCKET) ||
 		normalized.startsWith(UrlProtocol.WEBSOCKET_SECURE)
-		? MCPTransportType.WEBSOCKET
-		: MCPTransportType.STREAMABLE_HTTP;
+	) {
+		return MCPTransportType.WEBSOCKET;
+	}
+
+	if (
+		normalized.endsWith(MCP_SSE_ENDPOINT) ||
+		normalized.endsWith(MCP_SSE_ENDPOINT_SLASH) ||
+		normalized.includes(MCP_SSE_ENDPOINT_QUERY)
+	) {
+		return MCPTransportType.SSE;
+	}
+
+	return MCPTransportType.STREAMABLE_HTTP;
 }
 
 /**
  * Parses MCP server settings from a JSON string or array.
- * Preserves per-server requestTimeoutSeconds if stored, otherwise falls back to the global default.
  * @param rawServers - The raw servers to parse
  * @returns An empty array if the input is invalid.
  */
@@ -88,9 +101,6 @@ export function parseMcpServerSettings(rawServers: unknown): MCPServerSettingsEn
 			enabled: Boolean((entry as { enabled?: unknown })?.enabled),
 			url,
 			name: (entry as { name?: string })?.name,
-			requestTimeoutSeconds:
-				(entry as { requestTimeoutSeconds?: number })?.requestTimeoutSeconds ??
-				DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
 			headers: headers || undefined,
 			useProxy: Boolean((entry as { useProxy?: unknown })?.useProxy)
 		} satisfies MCPServerSettingsEntry;

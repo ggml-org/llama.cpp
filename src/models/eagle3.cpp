@@ -19,7 +19,7 @@ void llama_model_eagle3::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_TARGET_HIDDEN_SIZE, n_embd_tgt);
     LLAMA_LOG_INFO("%s: EAGLE3 n_embd_tgt = %u (draft n_embd = %u)\n", __func__, n_embd_tgt, hparams.n_embd);
 
-    hparams.n_embd_inp_impl = (uint32_t) target_layer_ids.size() * n_embd_tgt;
+    hparams.n_embd_inp_enc_impl = (uint32_t) target_layer_ids.size() * n_embd_tgt;
 
     // eagle3 norm_before_residual (optional, default false)
     // compatible with Readhat eagle3 speculator model
@@ -34,7 +34,7 @@ void llama_model_eagle3::load_arch_hparams(llama_model_loader & ml) {
 void llama_model_eagle3::load_arch_tensors(llama_model_loader &) {
     LLAMA_LOAD_LOCALS;
 
-    const int64_t n_embd_inp = hparams.n_embd_inp();
+    const int64_t n_embd_inp = hparams.n_embd_inp_enc();
     const int64_t n_embd_attn_input = 2 * n_embd;
 
     // Get vocab size from the d2t tensor in the GGUF file (optional - only needed if eagle3 has different vocab_size than target)
@@ -109,8 +109,8 @@ ggml_tensor * llama_model_eagle3::graph<true>::build_inp_embd_enc() const {
 
     // Input: Target model features (3 layers concatenated: low, mid, high)
     // Data will be provided via ubatch->embd in encode_eagle3_features()
-    auto inp_target = std::make_unique<llm_graph_input_embd>(hparams.n_embd_inp());
-    inp_target->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32,hparams.n_embd_inp(), n_tokens);
+    auto inp_target = std::make_unique<llm_graph_input_embd>(hparams.n_embd_inp_enc());
+    inp_target->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd_inp_enc(), n_tokens);
     ggml_set_input(inp_target->embd);
 
     cur = inp_target->embd;

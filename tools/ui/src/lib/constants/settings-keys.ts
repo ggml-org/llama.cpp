@@ -22,7 +22,6 @@ export const SETTINGS_KEYS = {
 	// Display
 	SHOW_MESSAGE_STATS: 'showMessageStats',
 	SHOW_THOUGHT_IN_PROGRESS: 'showThoughtInProgress',
-	KEEP_STATS_VISIBLE: 'keepStatsVisible',
 	AUTO_MIC_ON_EMPTY: 'autoMicOnEmpty',
 	RENDER_USER_CONTENT_AS_MARKDOWN: 'renderUserContentAsMarkdown',
 	DISABLE_AUTO_SCROLL: 'disableAutoScroll',
@@ -33,6 +32,7 @@ export const SETTINGS_KEYS = {
 	SHOW_MODEL_TAGS: 'showModelTags',
 	SHOW_BUILD_VERSION: 'showBuildVersion',
 	SHOW_SYSTEM_MESSAGE: 'showSystemMessage',
+	RENDER_THINKING_AS_MARKDOWN: 'renderThinkingAsMarkdown',
 	// Sampling
 	TEMPERATURE: 'temperature',
 	DYNATEMP_RANGE: 'dynatemp_range',
@@ -59,15 +59,12 @@ export const SETTINGS_KEYS = {
 	MCP_SERVERS: 'mcpServers',
 	MCP_REQUEST_TIMEOUT_SECONDS: 'mcpRequestTimeoutSeconds',
 	AGENTIC_MAX_TURNS: 'agenticMaxTurns',
-	ALWAYS_SHOW_AGENTIC_TURNS: 'alwaysShowAgenticTurns',
-	AGENTIC_MAX_TOOL_PREVIEW_LINES: 'agenticMaxToolPreviewLines',
 	SHOW_TOOL_CALL_IN_PROGRESS: 'showToolCallInProgress',
 	// Performance
 	PRE_ENCODE_CONVERSATION: 'preEncodeConversation',
 	// Developer
 	DISABLE_REASONING_PARSING: 'disableReasoningParsing',
 	EXCLUDE_REASONING_FROM_CONTEXT: 'excludeReasoningFromContext',
-	ENABLE_THINKING: 'enableThinking',
 	SHOW_RAW_OUTPUT_SWITCH: 'showRawOutputSwitch',
 	// PY_INTERPRETER_ENABLED: 'pyInterpreterEnabled',
 	JS_SANDBOX_ENABLED: 'jsSandboxEnabled',

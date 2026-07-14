@@ -10,12 +10,11 @@
 	import { getMessageEditContext } from '$lib/contexts';
 	import { useProcessingState } from '$lib/hooks/use-processing-state.svelte';
 	import { isLoading, isChatStreaming } from '$lib/stores/chat.svelte';
-	import { copyToClipboard, deriveAgenticSections } from '$lib/utils';
-	import { AgenticSectionType } from '$lib/enums';
+	import { copyToClipboard, deriveAgenticSections, modelLoadProgressText } from '$lib/utils';
+	import { AgenticSectionType, ChatMessageStatisticsMode } from '$lib/enums';
 	import { REASONING_TAGS } from '$lib/constants/agentic';
-	import { tick } from 'svelte';
 	import { fade } from 'svelte/transition';
-	import { MessageRole, ChatMessageStatsView } from '$lib/enums';
+	import { MessageRole } from '$lib/enums';
 	import { config } from '$lib/stores/settings.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import { modelsStore } from '$lib/stores/models.svelte';
@@ -122,68 +121,22 @@
 		return parts.join('\n\n\n');
 	});
 
-	let activeStatsView = $state<ChatMessageStatsView>(ChatMessageStatsView.GENERATION);
-	let statsContainerEl: HTMLDivElement | undefined = $state();
-
-	function getScrollParent(el: HTMLElement): HTMLElement | null {
-		let parent = el.parentElement;
-		while (parent) {
-			const style = getComputedStyle(parent);
-			if (/(auto|scroll)/.test(style.overflowY)) {
-				return parent;
-			}
-			parent = parent.parentElement;
-		}
-		return null;
-	}
-
-	async function handleStatsViewChange(view: ChatMessageStatsView) {
-		const el = statsContainerEl;
-		if (!el) {
-			activeStatsView = view;
-
-			return;
-		}
-
-		const scrollParent = getScrollParent(el);
-		if (!scrollParent) {
-			activeStatsView = view;
-
-			return;
-		}
-
-		const yBefore = el.getBoundingClientRect().top;
-
-		activeStatsView = view;
-
-		await tick();
-
-		const delta = el.getBoundingClientRect().top - yBefore;
-		if (delta !== 0) {
-			scrollParent.scrollTop += delta;
-		}
-
-		// Correct any drift after browser paint
-		requestAnimationFrame(() => {
-			const drift = el.getBoundingClientRect().top - yBefore;
-
-			if (Math.abs(drift) > 1) {
-				scrollParent.scrollTop += drift;
-			}
-		});
-	}
-
-	let highlightAgenticTurns = $derived(
-		isAgentic &&
-			(currentConfig.alwaysShowAgenticTurns || activeStatsView === ChatMessageStatsView.SUMMARY)
-	);
-
 	let displayedModel = $derived(message.model ?? null);
+
+	// model being switched to while it loads, so the selector bar tracks it
+	let pendingModel = $state<string | null>(null);
 
 	let isCurrentlyLoading = $derived(isLoading());
 	let isStreaming = $derived(isChatStreaming());
 	let hasNoContent = $derived(!message?.content?.trim());
 	let isActivelyProcessing = $derived(isCurrentlyLoading || isStreaming);
+
+	// during a router auto-load the message has no model yet, so target the selected one
+	let loadTargetModel = $derived(message.model ?? modelsStore.selectedModelName);
+	let modelLoadProgress = $derived(
+		isRouter && loadTargetModel ? modelsStore.getLoadProgress(loadTargetModel) : null
+	);
+	let modelLoadingText = $derived(modelLoadProgressText(modelLoadProgress));
 
 	let showProcessingInfoTop = $derived(
 		message?.role === MessageRole.ASSISTANT &&
@@ -200,6 +153,42 @@
 			isLastAssistantMessage
 	);
 
+	let assistantEl: HTMLDivElement | undefined = $state();
+	let lastUserMessageHeight = $state(0);
+	let assistantMarginTop = $state(0);
+
+	$effect(() => {
+		if (!assistantEl) return;
+
+		assistantMarginTop = Math.round(parseFloat(getComputedStyle(assistantEl).marginTop));
+
+		const chatMessageEl = assistantEl.closest('.chat-message');
+		const previousChatMessage = chatMessageEl?.previousElementSibling;
+		const userMessageEl = previousChatMessage?.querySelector(
+			'.chat-message-user'
+		) as HTMLElement | null;
+
+		if (!userMessageEl) {
+			lastUserMessageHeight = 0;
+			return;
+		}
+
+		const updateHeight = () => {
+			const rect = userMessageEl.getBoundingClientRect();
+			const marginTop = Math.round(parseFloat(getComputedStyle(userMessageEl).marginTop));
+			lastUserMessageHeight = Math.round(rect.height + marginTop);
+		};
+
+		updateHeight();
+
+		const resizeObserver = new ResizeObserver(updateHeight);
+		resizeObserver.observe(userMessageEl);
+
+		return () => {
+			resizeObserver.disconnect();
+		};
+	});
+
 	function handleCopyModel() {
 		void copyToClipboard(displayedModel ?? '');
 	}
@@ -212,15 +201,21 @@
 </script>
 
 <div
-	class="text-md group w-full leading-7.5 {className}"
+	bind:this={assistantEl}
+	class="chat-message-assistant text-md group w-full leading-7.5 {className}"
+	style:--last-user-message-height={lastUserMessageHeight > 0
+		? `${lastUserMessageHeight}px`
+		: undefined}
+	style:--assistant-margin-top={assistantMarginTop > 0 ? `${assistantMarginTop}px` : undefined}
 	role="group"
 	aria-label="Assistant message with actions"
 >
 	{#if showProcessingInfoTop}
-		<div class="mt-6 w-full max-w-[48rem]" in:fade>
+		<div class="mt-6 w-full max-w-3xl" in:fade>
 			<div class="processing-container">
 				<span class="processing-text">
-					{processingState.getPromptProgressText() ??
+					{modelLoadingText ??
+						processingState.getPromptProgressText() ??
 						processingState.getProcessingMessage() ??
 						'Processing...'}
 				</span>
@@ -239,7 +234,6 @@
 				{toolMessages}
 				isStreaming={isChatStreaming()}
 				{isLastAssistantMessage}
-				highlightTurns={highlightAgenticTurns}
 			/>
 		{/if}
 	{:else}
@@ -249,10 +243,11 @@
 	{/if}
 
 	{#if showProcessingInfoBottom}
-		<div class="mt-4 w-full max-w-[48rem]" in:fade>
+		<div class="mt-4 w-full max-w-3xl" in:fade>
 			<div class="processing-container">
 				<span class="processing-text">
-					{processingState.getPromptProgressText() ??
+					{modelLoadingText ??
+						processingState.getPromptProgressText() ??
 						processingState.getProcessingMessage() ??
 						'Processing...'}
 				</span>
@@ -262,19 +257,22 @@
 
 	<div class="info my-6 grid gap-4 tabular-nums">
 		{#if displayedModel}
-			<div
-				bind:this={statsContainerEl}
-				class="inline-flex flex-wrap items-start gap-2 text-xs text-muted-foreground"
-			>
+			<div class="inline-flex flex-wrap items-start gap-2 text-xs text-muted-foreground">
 				{#if isRouter}
 					<ModelsSelectorDropdown
-						currentModel={displayedModel}
+						currentModel={pendingModel ?? displayedModel}
 						disabled={isLoading()}
 						onModelChange={async (modelId: string, modelName: string) => {
 							const status = modelsStore.getModelStatus(modelId);
 
 							if (status !== ServerModelStatus.LOADED) {
-								await modelsStore.loadModel(modelId);
+								pendingModel = modelId;
+
+								try {
+									await modelsStore.loadModel(modelId);
+								} finally {
+									pendingModel = null;
+								}
 							}
 
 							onRegenerate(modelName);
@@ -288,28 +286,25 @@
 				{#if currentConfig.showMessageStats && message.timings && message.timings.predicted_n && message.timings.predicted_ms}
 					{@const agentic = message.timings.agentic}
 					<ChatMessageStatistics
+						mode={ChatMessageStatisticsMode.GENERATION}
 						promptTokens={agentic ? agentic.llm.prompt_n : message.timings.prompt_n}
 						promptMs={agentic ? agentic.llm.prompt_ms : message.timings.prompt_ms}
 						predictedTokens={agentic ? agentic.llm.predicted_n : message.timings.predicted_n}
 						predictedMs={agentic ? agentic.llm.predicted_ms : message.timings.predicted_ms}
 						agenticTimings={agentic}
-						onActiveViewChange={handleStatsViewChange}
 					/>
 				{:else if isLoading() && currentConfig.showMessageStats}
 					{@const liveStats = processingState.getLiveProcessingStats()}
 					{@const genStats = processingState.getLiveGenerationStats()}
-					{@const promptProgress = processingState.processingState?.promptProgress}
-					{@const isStillProcessingPrompt =
-						promptProgress && promptProgress.processed < promptProgress.total}
 
-					{#if liveStats || genStats}
+					{#if genStats}
 						<ChatMessageStatistics
+							mode={ChatMessageStatisticsMode.GENERATION}
 							isLive
-							isProcessingPrompt={!!isStillProcessingPrompt}
 							promptTokens={liveStats?.tokensProcessed}
 							promptMs={liveStats?.timeMs}
-							predictedTokens={genStats?.tokensGenerated}
-							predictedMs={genStats?.timeMs}
+							predictedTokens={genStats.tokensGenerated}
+							predictedMs={genStats.timeMs}
 						/>
 					{/if}
 				{/if}
@@ -342,6 +337,23 @@
 </div>
 
 <style>
+	:global(.chat-message):last-child .chat-message-assistant {
+		--assistant-min-height-offset: calc(
+			var(--last-user-message-height, 19rem) + var(--chat-form-height, 6rem) +
+				var(--chat-form-bottom-position, 0.5rem) + var(--chat-form-padding-top, 6rem) +
+				var(--assistant-margin-top, 3rem)
+		);
+		min-height: calc(100dvh - var(--assistant-min-height-offset));
+
+		@media (width > 768px) {
+			--assistant-min-height-offset: calc(
+				var(--last-user-message-height, 18rem) + var(--chat-form-height, 6rem) +
+					var(--chat-form-bottom-position, 1rem) + var(--chat-form-padding-top, 6rem) +
+					var(--assistant-margin-top, 3rem)
+			);
+		}
+	}
+
 	.processing-container {
 		display: flex;
 		flex-direction: column;

@@ -1369,7 +1369,7 @@ static void test_nemotron_tool_format(testing & t) {
     // Check argument markers (note: markers retain trailing newlines for proper parsing)
     t.assert_equal("arg_name_prefix should be '<parameter='", "<parameter=", analysis.tools.arguments.name_prefix);
     t.assert_equal("arg_name_suffix should be '>\\n'", ">\n", analysis.tools.arguments.name_suffix);
-    t.assert_equal("arg_value_suffix should be '</parameter>\\n'", "</parameter>\n", analysis.tools.arguments.value_suffix);
+    t.assert_equal("arg_value_suffix should be '\\n</parameter>\\n'", "\n</parameter>\n", analysis.tools.arguments.value_suffix);
 
     // Check format classification
     t.assert_true("tool format should be TAG_WITH_TAGGED", analysis.tools.format.mode == tool_format::TAG_WITH_TAGGED);
@@ -1887,7 +1887,6 @@ static void test_role_markers_all_templates(testing & t) {
         { "Qwen-Qwen3-0.6B.jinja",                           "<|im_start|>user",       "<|im_start|>assistant"      },
         { "Qwen-QwQ-32B.jinja",                              "<|im_start|>user",       "<|im_start|>assistant"      },
         { "StepFun3.5-Flash.jinja",                          "<|im_start|>user",       "<|im_start|>assistant"      },
-        { "stepfun-ai-Step-3.5-Flash.jinja",                 "<|im_start|>user",       "<|im_start|>assistant"      },
 
         // DeepSeek family
         { "deepseek-ai-DeepSeek-R1-Distill-Llama-8B.jinja",  "<｜User｜>",                "<｜Assistant｜>"             },
@@ -1944,6 +1943,9 @@ static void test_role_markers_all_templates(testing & t) {
 
         // MiniMax M2: ]~b]{user|ai}
         { "MiniMax-M2.jinja",                                "]~b]user",               "]~b]ai"                     },
+
+        // HunYuan V3: <｜hy_User:opensource｜> / <｜hy_Assistant:opensource｜>
+        { "tencent-Hy3.jinja",                               "<｜hy_User:opensource｜>", "<｜hy_Assistant:opensource｜>" },
 
         // Nemotron Nano v2: <SPECIAL_11>{User|Assistant}; assistant marker
         // is followed by a prefilled <think> block that gets included.
@@ -2030,12 +2032,11 @@ static void test_tagged_args_with_embedded_quotes(testing & t) {
         return p.content(p.until("<seed:tool_call>")) + p.optional(tool_section) + p.end();
     });
 
-    // The exact input from the failing test
     std::string input =
         "<seed:tool_call>\n"
         "<function=edit>\n"
-        "<parameter=filename>\n"
-        "foo.cpp\n"
+        "<parameter=filename>"
+        "foo.cpp"
         "</parameter>\n"
         "<parameter=oldString>"
         "def foo(arg = \"14\"):\n"

@@ -2,8 +2,10 @@
 	import { ChevronDown, Loader2, Package } from '@lucide/svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { KeyboardKey } from '$lib/enums';
+	import { KeyboardKey, ServerModelStatus } from '$lib/enums';
 	import { useModelsSelector } from '$lib/hooks/use-models-selector.svelte';
+	import { modelsStore, routerModels } from '$lib/stores/models.svelte';
+	import { modelLoadFraction } from '$lib/utils';
 	import {
 		DialogModelInformation,
 		DropdownMenuSearchable,
@@ -11,6 +13,7 @@
 		ModelsSelectorList,
 		ModelsSelectorOption
 	} from '$lib/components/app';
+	import ModelLoadHighlight from './ModelLoadHighlight.svelte';
 	import type { ModelItem } from './utils';
 
 	interface Props {
@@ -113,6 +116,17 @@
 		{/if}
 	{:else}
 		{@const selectedOption = ms.getDisplayOption()}
+		{@const triggerModel = selectedOption?.model}
+		{@const triggerStatus = triggerModel
+			? routerModels().find((m) => m.id === triggerModel)?.status?.value
+			: undefined}
+		{@const triggerLoading =
+			!!triggerModel &&
+			(triggerStatus === ServerModelStatus.LOADING ||
+				modelsStore.isModelOperationInProgress(triggerModel))}
+		{@const triggerLoadPercent = triggerLoading
+			? Math.round(modelLoadFraction(modelsStore.getLoadProgress(triggerModel)) * 100)
+			: 0}
 
 		{#if ms.isRouter}
 			<DropdownMenu.Root bind:open={isOpen} onOpenChange={ms.handleOpenChange}>
@@ -123,7 +137,7 @@
 							<DropdownMenu.Trigger
 								{...props}
 								class={[
-									`inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
+									`relative inline-grid cursor-pointer grid-cols-[1fr_auto_1fr] items-center gap-1.5 rounded-sm bg-background px-1.5 py-1 text-xs shadow-sm transition hover:bg-muted-foreground/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-muted-foreground/15 dark:text-secondary-foreground`,
 									!ms.isCurrentModelInCache
 										? 'bg-red-400/10 !text-red-400 hover:bg-red-400/20 hover:text-red-400'
 										: forceForegroundText
@@ -153,6 +167,10 @@
 									<Loader2 class="h-3 w-3.5 shrink-0 animate-spin" />
 								{:else}
 									<ChevronDown class="h-3 w-3.5 shrink-0" />
+								{/if}
+
+								{#if triggerLoading}
+									<ModelLoadHighlight percent={triggerLoadPercent} />
 								{/if}
 							</DropdownMenu.Trigger>
 						{/snippet}

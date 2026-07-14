@@ -39,11 +39,14 @@ test.describe('PWA Service Worker', () => {
 		const swContent = await swResponse.text();
 
 		// Precache contains SvelteKit content-hashed bundle paths
-		expect(swContent).toMatch(/"_app\/immutable\/bundle\.[a-zA-Z0-9-]+\.js"/);
-		expect(swContent).toMatch(/"_app\/immutable\/assets\/bundle\.[a-zA-Z0-9-]+\.css"/);
+		expect(swContent).toMatch(/"_app\/immutable\/bundle\.[a-zA-Z0-9_-]+\.js"/);
+		expect(swContent).toMatch(/"_app\/immutable\/assets\/bundle\.[a-zA-Z0-9_-]+\.css"/);
 		expect(swContent).toMatch(/"manifest\.webmanifest"/);
 		expect(swContent).toMatch(/"_app\/version\.json"/);
-		expect(swContent).toMatch(/NavigationRoute/);
+		// NavigationRoute is intentionally absent — server API endpoints
+		// (e.g. /slots, /models) must not be intercepted by the PWA and
+		// should return JSON directly from the server.
+		expect(swContent).not.toMatch(/NavigationRoute/);
 		expect(swContent).toMatch(/api-cache/);
 	});
 
@@ -99,8 +102,8 @@ test.describe('PWA Service Worker', () => {
 		const html = await response.text();
 
 		// SvelteKit outputs content-hashed bundle names in _app/immutable/
-		expect(html).toMatch(/href="(\.\/|\/)_app\/immutable\/bundle\.[a-zA-Z0-9-]+\.js"/);
-		expect(html).toMatch(/href="(\.\/|\/)_app\/immutable\/assets\/bundle\.[a-zA-Z0-9-]+\.css"/);
-		expect(html).toMatch(/import\("(\.\/|\/)_app\/immutable\/bundle\.[a-zA-Z0-9-]+\.js"\)/);
+		expect(html).toMatch(/href="(\.\/|\/)_app\/immutable\/bundle\.[a-zA-Z0-9_-]+\.js"/);
+		expect(html).toMatch(/href="(\.\/|\/)_app\/immutable\/assets\/bundle\.[a-zA-Z0-9_-]+\.css"/);
+		expect(html).toMatch(/import\("(\.\/|\/)_app\/immutable\/bundle\.[a-zA-Z0-9_-]+\.js"\)/);
 	});
 });

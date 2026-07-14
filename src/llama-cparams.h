@@ -18,6 +18,8 @@ struct llama_cparams {
     int32_t  n_threads;       // number of threads to use for generation
     int32_t  n_threads_batch; // number of threads to use for batch processing
 
+    int32_t  nextn_layer_offset = 0;
+
     float rope_freq_base;
     float rope_freq_scale;
 
@@ -39,6 +41,8 @@ struct llama_cparams {
     bool fused_gdn_ar;       // use fused gated delta net (autoregressive)
     bool fused_gdn_ch;       // use fused gated delta net (chunked)
     bool auto_fgdn;
+    bool fused_lid;          // use fused lightning indexer
+    bool auto_flid;
     bool no_perf;
     bool warmup;             // TODO: remove [TAG_LLAMA_GRAPH_NO_WARMUP]
     bool op_offload;
