@@ -383,35 +383,6 @@ static __global__ void lightning_indexer_kernel_vec(
     }
 }
 
-#define DECL_LIGHTNING_INDEXER_CASE(lightning_indexer_kernel, n_embd, n_head, type_K)              \
-    template __global__ void lightning_indexer_kernel<n_embd, n_head, type_K>(                     \
-        const float * src0, const char * src1, const float * src2, const half * src3, float * dst, \
-        int64_t n_stream, int64_t n_batch, int64_t n_kv,                                           \
-        size_t nb1, size_t nb2, size_t nb3,                                                        \
-        size_t nb01, size_t nb02, size_t nb03,                                                     \
-        size_t nb11, size_t nb12, size_t nb13,                                                     \
-        size_t nb21, size_t nb22, size_t nb23,                                                     \
-        size_t nb31, size_t nb32, size_t nb33,                                                     \
-        int64_t ne33);
-
-#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-DECL_LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_wmma, 128, 64, GGML_TYPE_F16)
-DECL_LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_wmma, 128, 64, GGML_TYPE_Q4_0)
-DECL_LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_wmma, 128, 64, GGML_TYPE_Q4_1)
-DECL_LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_wmma, 128, 64, GGML_TYPE_Q5_0)
-DECL_LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_wmma, 128, 64, GGML_TYPE_Q5_1)
-DECL_LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_wmma, 128, 64, GGML_TYPE_Q8_0)
-#endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-
-DECL_LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 64, GGML_TYPE_F16)
-DECL_LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 64, GGML_TYPE_Q4_0)
-DECL_LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 64, GGML_TYPE_Q4_1)
-DECL_LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 64, GGML_TYPE_Q5_0)
-DECL_LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 64, GGML_TYPE_Q5_1)
-DECL_LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 64, GGML_TYPE_Q8_0)
-DECL_LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 64, GGML_TYPE_BF16)
-DECL_LIGHTNING_INDEXER_CASE(lightning_indexer_kernel_vec, 128, 64, GGML_TYPE_F32)
-
 #define LIGHTNING_INDEXER_CASE(lightning_indexer_kernel, n_embd, n_head, K, type_K)         \
     if (K->type == (type_K)) {                                                              \
         lightning_indexer_kernel<n_embd, n_head, type_K><<<grid, block, 0, ctx.stream()>>>( \
