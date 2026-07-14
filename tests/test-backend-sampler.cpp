@@ -1280,6 +1280,11 @@ static void test_backend_penalties_sampling(const test_params & params) {
         return llama_sampler_init_top_p(0.9f, 0);
     }, 64, 1.1f, 0.5f, 0.25f, "Hello", penalties_position::after_filter, true);
 
+    printf("Testing backend top-p followed by penalties with a large history window\n");
+    compare_masking_penalties_logits(params, "top-p large-window", []() {
+        return llama_sampler_init_top_p(0.9f, 0);
+    }, 4096, 1.1f, 0.5f, 0.25f, "Hello", penalties_position::after_filter, true);
+
     printf("Testing backend penalties followed by top-p\n");
     compare_masking_penalties_logits(params, "top-p", []() {
         return llama_sampler_init_top_p(0.9f, 0);
