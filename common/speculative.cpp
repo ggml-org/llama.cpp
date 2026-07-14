@@ -1131,6 +1131,11 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
             const int32_t n = (int32_t) dp.n_past;
 
+            // the previous block left its noise tokens' K/V in the draft region. the decoder runs
+            // non-causal, so those cells are not masked out by position and the new block would
+            // attend to them. only the injected target states (positions < n_past) may persist.
+            llama_memory_seq_rm(llama_get_memory(ctx_dft), seq_id, n, -1);
+
             int32_t n_draft = params.n_max;
             if (dp.n_max > 0) {
                 n_draft = std::min(n_draft, dp.n_max);
