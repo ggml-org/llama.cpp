@@ -38,7 +38,7 @@ static inline void hmx_queue_process(struct hmx_queue *q, bool* killed) {
         if (!d->done) {
             FARF(HIGH, "hmx-queue-process: ir %u func %p data %p", ir, d->func, d->data);
 
-            enum hmx_queue_signal sig = (enum hmx_queue_signal) (unsigned int) d->func;
+            uintptr_t sig = (uintptr_t) d->func;
             switch (sig) {
                 case HMX_QUEUE_NOOP:    /* noop */;     break;
                 case HMX_QUEUE_KILL:    *killed = true; break;
