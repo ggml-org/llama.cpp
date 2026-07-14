@@ -303,6 +303,14 @@ int llama_server(common_params & params, int argc, char ** argv) {
         return res;
     };
 
+    if (params.cors_origins == "*" && params.api_keys.empty()) {
+        SRV_WRN("%s", "-----------------\n");
+        SRV_WRN("%s", "CORS is set to allow all origins ('*') and no API key is set\n");
+        SRV_WRN("%s", "this can be a security risk (cross-origin attacks)\n");
+        SRV_WRN("%s", "more info: ...\n");
+        SRV_WRN("%s", "-----------------\n");
+    }
+
     // CORS proxy (EXPERIMENTAL, only used by the Web UI for MCP)
     if (params.ui_mcp_proxy) {
         SRV_WRN("%s", "-----------------\n");

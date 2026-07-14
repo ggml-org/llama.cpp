@@ -697,7 +697,7 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         }
     };
 
-    // parse the first time to get -hf option (used for remote preset)
+    // parse all CLI args now, so that -hf is available below for remote preset resolution
     parse_cli_args();
 
     postprocess_cpu_params(params.cpuparams,       nullptr);
@@ -750,7 +750,7 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
 
     if (!params.server_tools.empty() && !params.cors_origins_explicit) {
         LOG_WRN("server tools are enabled, using localhost as default CORS origin (change via --cors-origins)\n");
-        params.cors_origins = "http://localhost,http://127.0.0.1,http://0.0.0.0,http://[::1]";
+        params.cors_origins = "localhost";
     }
 
     // pad tensor_buft_overrides for llama_params_fit:
@@ -3017,7 +3017,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_STATIC_PATH"));
     add_opt(common_arg(
         {"--cors-origins"}, "ORIGINS",
-        string_format("comma-separated list of allowed origins for CORS (default: %s)", params.cors_origins.c_str()),
+        string_format(
+            "comma-separated list of allowed origins for CORS (default: %s)\n"
+            "if set to special value 'localhost', reflect the Origin header only if it is localhost",
+        params.cors_origins.c_str()),
         [](common_params & params, const std::string & value) {
             params.cors_origins = value;
             params.cors_origins_explicit = true;
@@ -3100,6 +3103,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 params.server_tools.clear();
                 params.ui_mcp_proxy = false;
             }
+            // note: do not modify cors_origins here, as the options are not evaluated in order (user may explicitly set --cors-origins before --agent)
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_AGENT"));
     add_opt(common_arg(
