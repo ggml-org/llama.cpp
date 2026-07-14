@@ -19,15 +19,6 @@
 export { default as DialogMcpServerAddNew } from './DialogMcpServerAddNew.svelte';
 
 /**
- * **DialogMcpServerRecommendations** - Suggested MCP servers opt-in dialog
- *
- * Prompts the user to enable pre-defined recommended MCP servers on first launch.
- * Shows one switch per suggested server and persists the choice as a per-chat
- * override so the selected servers become available in conversations.
- */
-export { default as DialogMcpServerRecommendations } from './DialogMcpServerRecommendations.svelte';
-
-/**
  * **DialogExportSettings** - Settings export dialog with sensitive data warning
  *
  * Dialog for exporting settings with an option to include or exclude

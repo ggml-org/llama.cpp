@@ -219,13 +219,14 @@ void server_model_meta::update_caps() {
             "LLAMA_ARG_MODEL_URL",
             "LLAMA_ARG_MMPROJ",
             "LLAMA_ARG_MMPROJ_URL",
+            "LLAMA_ARG_MMPROJ_AUTO",
             "LLAMA_ARG_HF_REPO",
             "LLAMA_ARG_HF_REPO_FILE",
         });
         params.offline = true;
         common_models_handler handler = common_models_handler_init(params, LLAMA_EXAMPLE_SERVER);
         common_models_handler_apply(handler, params); // note: this won't download the model because offline=true
-        if (params.mmproj.path.empty()) {
+        if (params.no_mmproj || params.mmproj.path.empty()) {
             multimodal = { false, false };
         } else {
             multimodal = mtmd_get_cap_from_file(params.mmproj.path.c_str());

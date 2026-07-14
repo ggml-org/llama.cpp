@@ -1232,11 +1232,15 @@ float16_t dequantFuncMXFP4(const in decodeBufMXFP4 bl, const in uint blockCoords
     const uint idx = coordInBlock[1];
     const uint iqs = idx & 0xF;
     const uint shift = (idx & 0x10) >> 2;
+#ifdef USE_OCP_FP4
+    return float16_t(bitcastExtractfe2m1EXT(bl.block.qs[iqs], shift)) * float16_t(d);
+#else
     uint32_t qs = bl.block.qs[iqs];
     qs >>= shift;
     qs &= 0xF;
     float16_t ret = float16_t(kvalues_mxfp4[qs] * d * 0.5);
     return ret;
+#endif
 }
 
 f16vec4 dequantFuncMXFP4_v(const in decodeBufMXFP4 bl, const in uint blockCoords[2], const in uint coordInBlock[2])
@@ -1245,6 +1249,16 @@ f16vec4 dequantFuncMXFP4_v(const in decodeBufMXFP4 bl, const in uint blockCoords
     const uint idx = coordInBlock[1];
     const uint iqs = idx & 0xF;
     const uint shift = (idx & 0x10) >> 2;
+#ifdef USE_OCP_FP4
+    const fe2m1vec4 qv = bitcastExtractfe2m1EXT(
+        u8vec4(
+            bl.block.qs[iqs],
+            bl.block.qs[iqs + 1u],
+            bl.block.qs[iqs + 2u],
+            bl.block.qs[iqs + 3u]),
+        shift);
+    return f16vec4(qv) * float16_t(d);
+#else
     uvec4 qv = uvec4(
         uint(bl.block.qs[iqs]),
         uint(bl.block.qs[iqs + 1u]),
@@ -1257,6 +1271,7 @@ f16vec4 dequantFuncMXFP4_v(const in decodeBufMXFP4 bl, const in uint blockCoords
         float(kvalues_mxfp4[qv.z]),
         float(kvalues_mxfp4[qv.w])) * d * 0.5f;
     return f16vec4(ret);
+#endif
 }
 #endif
 
@@ -1275,10 +1290,15 @@ float16_t dequantFuncNVFP4(const in decodeBufNVFP4 bl, const in uint blockCoords
     const uint sub = (idx & 0x30) >> 4;
     const uint iqs = ((idx & 0x30) >> 1) + (idx & 0x7);
     const uint shift = (idx & 0x8) >> 1;
+#ifdef USE_OCP_FP4
+    const float16_t d = float16_t(ue4m3_from_bits(bl.block.d[sub]));
+    return float16_t(bitcastExtractfe2m1EXT(bl.block.qs[iqs], shift)) * d;
+#else
     const float d = ue4m3_to_fp32(bl.block.d[sub]);
     uint qs = uint(bl.block.qs[iqs]);
     qs = (qs >> shift) & 0xF;
     return float16_t(kvalues_mxfp4[qs] * d * 0.5);
+#endif
 }
 
 f16vec4 dequantFuncNVFP4_v(const in decodeBufNVFP4 bl, const in uint blockCoords[2], const in uint coordInBlock[2])
@@ -1288,9 +1308,14 @@ f16vec4 dequantFuncNVFP4_v(const in decodeBufNVFP4 bl, const in uint blockCoords
     const uint sub   = idx >> 4;
     const uint qs_w  = ((idx & 0x30) >> 3) + ((idx & 0x4u) >> 2);  // iqs / 4, in [0,8)
     const uint shift = (idx & 0x8) >> 1;
-    const float d    = ue4m3_to_fp32(bl.block.d[sub]);
 
     const uint qsw  = uint32_t(bl32.block.qs[qs_w]);
+#ifdef USE_OCP_FP4
+    const float16_t d = float16_t(ue4m3_from_bits(bl.block.d[sub]));
+    const fe2m1vec4 qv = bitcastExtractfe2m1EXT(unpack8(qsw), shift);
+    return f16vec4(qv) * d;
+#else
+    const float d = ue4m3_to_fp32(bl.block.d[sub]);
     const u8vec4 qv = unpack8((qsw >> shift) & 0x0F0F0F0Fu);
     const vec4 ret = vec4(
         float(kvalues_mxfp4[qv.x]),
@@ -1298,6 +1323,7 @@ f16vec4 dequantFuncNVFP4_v(const in decodeBufNVFP4 bl, const in uint blockCoords
         float(kvalues_mxfp4[qv.z]),
         float(kvalues_mxfp4[qv.w])) * d * 0.5f;
     return f16vec4(ret);
+#endif
 }
 #endif
 

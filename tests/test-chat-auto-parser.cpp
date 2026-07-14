@@ -1944,6 +1944,9 @@ static void test_role_markers_all_templates(testing & t) {
         // MiniMax M2: ]~b]{user|ai}
         { "MiniMax-M2.jinja",                                "]~b]user",               "]~b]ai"                     },
 
+        // HunYuan V3: <｜hy_User:opensource｜> / <｜hy_Assistant:opensource｜>
+        { "tencent-Hy3.jinja",                               "<｜hy_User:opensource｜>", "<｜hy_Assistant:opensource｜>" },
+
         // Nemotron Nano v2: <SPECIAL_11>{User|Assistant}; assistant marker
         // is followed by a prefilled <think> block that gets included.
         { "NVIDIA-Nemotron-Nano-v2.jinja",                   "<SPECIAL_11>User",       "<SPECIAL_11>Assistant" },

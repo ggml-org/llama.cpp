@@ -662,6 +662,13 @@ static bool handcrafted_check_tensors(const gguf_context * gguf_ctx, const unsig
             if (gguf_get_tensor_type(gguf_ctx, id) != type) {
                 ok = false;
             }
+
+            const int64_t * ne = gguf_get_tensor_ne(gguf_ctx, id);
+            for (int j = 0; j < GGML_MAX_DIMS; ++j) {
+                if (ne[j] != shape[j]) {
+                    ok = false;
+                }
+            }
         } else {
             ok = false;
             continue;
