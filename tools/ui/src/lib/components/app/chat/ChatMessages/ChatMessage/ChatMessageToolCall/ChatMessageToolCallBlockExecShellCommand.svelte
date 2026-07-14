@@ -1,22 +1,41 @@
 <script lang="ts">
-	import { Loader2, Wrench, XCircle } from '@lucide/svelte';
+	import { Check, Loader2, Wrench, XCircle, AlertTriangle } from '@lucide/svelte';
 	import { CollapsibleTerminalBlock } from '$lib/components/app';
 	import { AgenticSectionType, BuiltInTool } from '$lib/enums';
+	import { SETTINGS_KEYS } from '$lib/constants';
+	import { config } from '$lib/stores/settings.svelte';
+	import { TOOL_RUNTIME_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants/auto-scroll';
 	import { getBuiltinToolUi } from '$lib/constants/built-in-tools';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { parseToolResultWithImages, type AgenticSection, type ToolResultLine } from '$lib/utils';
+	import {
+		highlightCode,
+		parseToolResultWithImages,
+		type AgenticSection,
+		type ToolResultLine
+	} from '$lib/utils';
 	import type { DatabaseMessageExtra } from '$lib/types';
 	import { parseExecShellCommandError } from './parse-exec-shell-error';
+	import {
+		isExitCodeSummaryLine,
+		parseExecShellCommandExitStatus,
+		type ExecShellExitStatus
+	} from './parse-exec-shell-status';
 
 	interface Props {
 		section: AgenticSection;
 		open: boolean;
 		isStreaming: boolean;
+		/** True while the agentic loop is streaming output chunks for THIS
+		 *  specific tool call. Mirrors ChatMessageReasoningBlock's "isPending"
+		 *  semantics: while true, the output region is clamped to a max-height
+		 *  container that auto-scrolls to follow new chunks; once execution
+		 *  finishes the container unlocks and renders the full content. */
+		isExecuting?: boolean;
 		attachments?: DatabaseMessageExtra[];
 		onToggle?: () => void;
 	}
 
-	let { section, open, isStreaming, attachments, onToggle }: Props = $props();
+	let { section, open, isStreaming, isExecuting = false, attachments, onToggle }: Props = $props();
 
 	const isPending = $derived(section.type === AgenticSectionType.TOOL_CALL_PENDING);
 	const isStreamingCall = $derived(section.type === AgenticSectionType.TOOL_CALL_STREAMING);
@@ -28,6 +47,15 @@
 	const iconUrl = $derived(
 		!showSpinner && !toolUi?.icon && mcpServerFavicon ? mcpServerFavicon : null
 	);
+
+	// Two distinct "live" phases:
+	//   1. Spinner-only - tool invoked but no chunks yet (very first frames).
+	//   2. Live streaming - chunks arriving, max-height + auto-scroll.
+	// While either holds we keep the spinner over the terminal icon. Once
+	// isExecuting flips off but isStreaming is still true the chunks are
+	// frozen (this tool is done; the agent may still be doing other things).
+	const isLive = $derived(isExecuting);
+	const showLiveSpinner = $derived(showSpinner || isLive);
 
 	type ExecShellCommandMeta = {
 		command: string;
@@ -56,31 +84,160 @@
 
 	const execShellMeta = $derived(parseExecShellCommandMeta(section.toolName, section.toolArgs));
 	const execShellError = $derived(parseExecShellCommandError(section.toolResult));
+	const execShellExitStatus: ExecShellExitStatus | undefined = $derived(
+		parseExecShellCommandExitStatus(section.toolResult)
+	);
 
 	const parsedLines: ToolResultLine[] = $derived(
 		section.toolResult ? parseToolResultWithImages(section.toolResult, attachments) : []
 	);
 
+	// Strip the trailing "[exit code: N]" line from the rendered output - it's
+	// promoted into a colored status badge below instead. While streaming we
+	// keep it visible (status will appear once the final chunk lands).
+	const outputLines: ToolResultLine[] = $derived(
+		execShellExitStatus && parsedLines.length > 0
+			? parsedLines.slice(0, parsedLines.length - 1)
+			: parsedLines
+	);
+
+	const isExitCodeFinalLine = $derived(
+		execShellExitStatus !== undefined &&
+			parsedLines.length > 0 &&
+			isExitCodeSummaryLine(parsedLines[parsedLines.length - 1].text, execShellExitStatus)
+	);
+
+	// bash highlighting for the command title. Tokens (variables, flags,
+	// strings) get the highlight.js theme colors via the styles loaded by
+	// SyntaxHighlightedCode; output uses the bare monospace render so the
+	// (typically huge) log blob isn't dragged through hljs line-by-line.
+	const highlightedCommandHtml = $derived(
+		execShellMeta ? highlightCode(execShellMeta.command, 'bash') : ''
+	);
+
+	const exitBadgeClass = $derived(
+		execShellExitStatus?.timedOut
+			? 'exit-badge warning'
+			: execShellExitStatus?.code === 0
+				? 'exit-badge success'
+				: 'exit-badge failure'
+	);
+
 	const subtitle = $derived(
 		showSpinner
 			? 'executing...'
-			: execShellError
-				? 'failed'
-				: isStreamingCall && !isStreaming
-					? 'incomplete'
-					: undefined
+			: isLive
+				? 'streaming...'
+				: execShellError
+					? 'failed'
+					: isStreamingCall && !isStreaming
+						? 'incomplete'
+						: undefined
 	);
+
+	// `Use full height code blocks` display setting: when on, the shell
+	// output runs at its natural height (no inner max-height, page-level
+	// scroll governs). Default is clamped at max-height: 28rem so long
+	// command output stays bounded regardless of streaming state.
+	const useFullHeightCodeBlocks = $derived(
+		Boolean(config()[SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS])
+	);
+
+	// Auto-scroll-to-bottom only makes sense inside a clamped container.
+	// With full-height the page handles scrolling and this region can't
+	// overflow, so following is a no-op.
+	const autoScroll = $derived(isLive && !useFullHeightCodeBlocks);
+
+	// Auto-scroll / sticky-bottom for live streaming output. Mirrors the
+	// pattern in ChatMessageReasoningBlock: a MutationObserver catches DOM
+	// changes that don't touch section.toolResult directly (line-wrap reflow,
+	// image attach, exit-code line appended at the end of the stream, etc.).
+	let scrollEl: HTMLDivElement | undefined = $state();
+	const SCROLL_BOTTOM_THRESHOLD_PX = TOOL_RUNTIME_SCROLL_AT_BOTTOM_THRESHOLD_PX;
+	let userScrolledUp = $state(false);
+	let lastScrollTop = 0;
+	let pendingFrame: number | null = null;
+
+	function isAtBottom(): boolean {
+		if (!scrollEl) return false;
+		return (
+			scrollEl.scrollHeight - scrollEl.clientHeight - scrollEl.scrollTop <=
+			SCROLL_BOTTOM_THRESHOLD_PX
+		);
+	}
+
+	function scrollToBottomOnFrame() {
+		if (pendingFrame !== null || !scrollEl || userScrolledUp) return;
+		pendingFrame = requestAnimationFrame(() => {
+			pendingFrame = null;
+			// Re-check `userScrolledUp` at paint time. Skip an `isAtBottom`
+			// gate: it would falsely return false on the first chunk that
+			// overflows the container (scrollTop is still at the top),
+			// freezing autoscroll for the rest of the stream.
+			if (scrollEl && !userScrolledUp) {
+				scrollEl.scrollTop = scrollEl.scrollHeight;
+			}
+		});
+	}
+
+	function handleScrollEvent() {
+		if (!scrollEl) return;
+		const isScrollingUp = scrollEl.scrollTop < lastScrollTop;
+		if (isScrollingUp && !isAtBottom()) {
+			userScrolledUp = true;
+		} else if (isAtBottom()) {
+			userScrolledUp = false;
+		}
+		lastScrollTop = scrollEl.scrollTop;
+	}
+
+	$effect(() => {
+		// Primary trigger: toolResult directly. Coalesced via RAF so a burst
+		// of chunks within the same paint frame results in one scroll.
+		void section.toolResult;
+		if (!scrollEl || !autoScroll) return;
+		scrollToBottomOnFrame();
+	});
+
+	$effect(() => {
+		// Secondary trigger: any DOM mutation inside the scroll region. Catches
+		// layout changes that don't touch section.toolResult directly (line wrap
+		// reflow, image attaches, syntax highlighting settle, etc.).
+		if (!scrollEl || !autoScroll) return;
+
+		const observer = new MutationObserver(() => scrollToBottomOnFrame());
+		observer.observe(scrollEl, {
+			childList: true,
+			subtree: true,
+			characterData: true
+		});
+
+		return () => observer.disconnect();
+	});
+
+	$effect(() => {
+		// Tool just finished streaming - reset sticky state so the next
+		// rendering pass (now full-height) starts pinned to the bottom.
+		if (!isLive) {
+			userScrolledUp = false;
+			lastScrollTop = 0;
+		}
+	});
 </script>
 
 {#snippet execShellTitle()}
-	<span class="font-mono">{execShellMeta?.command}</span>
+	{#if highlightedCommandHtml}
+		<span class="font-mono">{@html highlightedCommandHtml}</span>
+	{:else}
+		<span class="font-mono">{execShellMeta?.command}</span>
+	{/if}
 {/snippet}
 
 <CollapsibleTerminalBlock
 	{open}
 	class="my-2"
-	icon={toolIcon}
-	iconClass={toolIconClass}
+	icon={showLiveSpinner ? Loader2 : toolIcon}
+	iconClass={showLiveSpinner ? 'h-4 w-4 animate-spin' : toolIconClass}
 	{iconUrl}
 	title=""
 	titleSnippet={execShellTitle}
@@ -88,7 +245,7 @@
 	{onToggle}
 >
 	{#if isPending}
-		<div class="flex items-center gap-2 text-xs text-muted-foreground/70">
+		<div class="flex items-start gap-2 text-xs text-muted-foreground/70">
 			<Loader2 class="h-3 w-3 animate-spin" />
 			Running...
 		</div>
@@ -98,8 +255,13 @@
 			<span>{execShellError}</span>
 		</div>
 	{:else if section.toolResult}
-		<div class="max-h-96 overflow-auto">
-			{#each parsedLines as line, i (i)}
+		<div
+			bind:this={scrollEl}
+			class="terminal-output"
+			class:is-clamped={!useFullHeightCodeBlocks}
+			onscroll={handleScrollEvent}
+		>
+			{#each outputLines as line, i (i)}
 				<div class="font-mono text-[11px] leading-relaxed whitespace-pre-wrap">{line.text}</div>
 				{#if line.image}
 					<img
@@ -110,6 +272,84 @@
 					/>
 				{/if}
 			{/each}
+
+			{#if isExitCodeFinalLine && execShellExitStatus}
+				<div class={exitBadgeClass}>
+					{#if execShellExitStatus.timedOut}
+						<AlertTriangle class="h-3 w-3" />
+						<span>timed out</span>
+						<span class="exit-sep">&middot;</span>
+						<span>exit {execShellExitStatus.code}</span>
+					{:else if execShellExitStatus.code === 0}
+						<Check class="h-3 w-3" />
+						<span>exit 0</span>
+					{:else}
+						<XCircle class="h-3 w-3" />
+						<span>exit {execShellExitStatus.code}</span>
+					{/if}
+				</div>
+			{/if}
 		</div>
 	{/if}
 </CollapsibleTerminalBlock>
+
+<style>
+	.terminal-output {
+		overscroll-behavior: contain;
+	}
+
+	.terminal-output.is-clamped {
+		max-height: 28rem;
+		overflow-y: auto;
+		scrollbar-gutter: stable;
+		padding-right: 0.25rem;
+	}
+
+	.exit-badge {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+		margin-top: 0.5rem;
+		padding: 0.2rem 0.55rem;
+		border-radius: 0.375rem;
+		font-family: var(--font-mono);
+		font-size: 11px;
+		font-weight: 500;
+		letter-spacing: 0.01em;
+		line-height: 1;
+	}
+
+	.exit-badge.success {
+		background: color-mix(in oklch, var(--color-green-500, #22c55e) 14%, transparent);
+		color: var(--color-green-700, #15803d);
+	}
+
+	:global(.dark) .exit-badge.success {
+		background: color-mix(in oklch, var(--color-green-400, #4ade80) 18%, transparent);
+		color: var(--color-green-300, #86efac);
+	}
+
+	.exit-badge.failure {
+		background: color-mix(in oklch, var(--color-red-500, #ef4444) 14%, transparent);
+		color: var(--color-red-700, #b91c1c);
+	}
+
+	:global(.dark) .exit-badge.failure {
+		background: color-mix(in oklch, var(--color-red-400, #f87171) 18%, transparent);
+		color: var(--color-red-300, #fca5a5);
+	}
+
+	.exit-badge.warning {
+		background: color-mix(in oklch, var(--color-amber-500, #f59e0b) 14%, transparent);
+		color: var(--color-amber-700, #b45309);
+	}
+
+	:global(.dark) .exit-badge.warning {
+		background: color-mix(in oklch, var(--color-amber-400, #fbbf24) 18%, transparent);
+		color: var(--color-amber-300, #fcd34d);
+	}
+
+	.exit-sep {
+		opacity: 0.45;
+	}
+</style>

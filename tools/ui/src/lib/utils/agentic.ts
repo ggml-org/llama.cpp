@@ -18,6 +18,11 @@ export interface AgenticSection {
 	toolArgs?: string;
 	toolResult?: string;
 	toolResultExtras?: DatabaseMessageExtra[];
+	/** ID of the model-side tool call (matches tool_calls[i].id). Lets
+	 *  downstream consumers correlate a section with the agentic loop's
+	 *  currently-executing tool, e.g. to drive live-streaming UI state
+	 *  by matching against agenticStore.executingToolCallId. */
+	toolCallId?: string;
 	wasInterrupted?: boolean;
 }
 
@@ -81,7 +86,8 @@ function deriveSingleTurnSections(
 			toolName: tc.function?.name,
 			toolArgs: tc.function?.arguments,
 			toolResult: resultMsg?.content,
-			toolResultExtras: resultMsg?.extra
+			toolResultExtras: resultMsg?.extra,
+			toolCallId: tc.id
 		});
 	}
 
@@ -93,7 +99,8 @@ function deriveSingleTurnSections(
 			type: AgenticSectionType.TOOL_CALL_STREAMING,
 			content: '',
 			toolName: tc.function?.name,
-			toolArgs: tc.function?.arguments
+			toolArgs: tc.function?.arguments,
+			toolCallId: tc.id
 		});
 	}
 

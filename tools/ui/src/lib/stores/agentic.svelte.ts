@@ -26,7 +26,7 @@ import { mcpStore } from '$lib/stores/mcp.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
 import { permissionsStore } from '$lib/stores/permissions.svelte';
-import { ToolSource, ToolPermissionDecision } from '$lib/enums';
+import { BuiltInTool, ToolSource, ToolPermissionDecision } from '$lib/enums';
 import { SvelteMap } from 'svelte/reactivity';
 import { ToolsService } from '$lib/services/tools.service';
 import { SandboxService } from '$lib/services/sandbox.service';
@@ -86,7 +86,8 @@ function createDefaultSession(): AgenticSession {
 		totalToolCalls: 0,
 		lastError: null,
 		streamingToolCall: null,
-		pendingPermissionRequest: null
+		pendingPermissionRequest: null,
+		executingToolCallId: null
 	};
 }
 
@@ -204,6 +205,10 @@ class AgenticStore {
 
 	streamingToolCall(conversationId: string): { name: string; arguments: string } | null {
 		return this._sessions.get(conversationId)?.streamingToolCall ?? null;
+	}
+
+	executingToolCallId(conversationId: string): string | null {
+		return this._sessions.get(conversationId)?.executingToolCallId ?? null;
 	}
 
 	pendingPermissionRequest(
@@ -489,6 +494,7 @@ class AgenticStore {
 			onCompletionId,
 			onAssistantTurnComplete,
 			createToolResultMessage,
+			updateToolResultMessage,
 			createAssistantMessage,
 			onFlowComplete,
 			onTimings,
@@ -784,15 +790,49 @@ class AgenticStore {
 				const toolStartTime = performance.now();
 				const toolSource = toolsStore.getToolSource(toolName);
 
-				let result: string;
+				let result = '';
 				let toolSuccess = true;
+				let createdToolResultMessageId: string | null = null;
+
+				// Streaming tools (currently only exec_shell_command): mark
+				// the session so the matching renderer can switch to live mode.
+				// Cleared unconditionally below.
+				this.updateSession(conversationId, { executingToolCallId: toolCall.id });
 
 				if (permission === ToolPermissionDecision.DENY) {
 					result = 'Tool execution was denied by the user.';
 					toolSuccess = false;
 				} else {
 					try {
-						if (toolSource === ToolSource.BUILTIN) {
+						if (
+							toolSource === ToolSource.BUILTIN &&
+							toolName === BuiltInTool.EXEC_SHELL_COMMAND &&
+							createToolResultMessage &&
+							updateToolResultMessage
+						) {
+							const args = this.parseToolArguments(toolCall.function.arguments);
+							const msg = await createToolResultMessage(toolCall.id, '');
+							createdToolResultMessageId = msg.id;
+
+							let accumulated = '';
+							for await (const ev of ToolsService.streamTool(toolName, args, signal)) {
+								if (ev.chunk !== null) {
+									accumulated += ev.chunk;
+									await updateToolResultMessage(msg.id, accumulated);
+								}
+								if (ev.done) {
+									if (ev.error) {
+										accumulated = accumulated
+											? `${accumulated}\nError: ${ev.error}`
+											: `Error: ${ev.error}`;
+										await updateToolResultMessage(msg.id, accumulated);
+										toolSuccess = false;
+									}
+									break;
+								}
+							}
+							result = accumulated;
+						} else if (toolSource === ToolSource.BUILTIN) {
 							const args = this.parseToolArguments(toolCall.function.arguments);
 							const executionResult = await ToolsService.executeTool(toolName, args, signal);
 
@@ -817,13 +857,23 @@ class AgenticStore {
 						}
 					} catch (error) {
 						if (isAbortError(error)) {
+							this.updateSession(conversationId, { executingToolCallId: null });
 							onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
 							return;
 						}
-						result = `Error: ${error instanceof Error ? error.message : String(error)}`;
+						// Carry the partial stream contents already mirrored to the UI -
+						// they show up as live output even if the stream broke off mid-run.
+						result = result
+							? `${result}\nError: ${error instanceof Error ? error.message : String(error)}`
+							: `Error: ${error instanceof Error ? error.message : String(error)}`;
 						toolSuccess = false;
+						if (createdToolResultMessageId && updateToolResultMessage) {
+							await updateToolResultMessage(createdToolResultMessageId, result);
+						}
 					}
 				}
+
+				this.updateSession(conversationId, { executingToolCallId: null });
 
 				const toolDurationMs = performance.now() - toolStartTime;
 				const toolTiming: ChatMessageToolCallTiming = {
@@ -845,9 +895,19 @@ class AgenticStore {
 
 				const { cleanedResult, attachments } = this.extractBase64Attachments(result);
 
-				// Create the tool result message in the DB
+				// For streaming tools the result message was created empty
+				// at the start of execution and updated in place as chunks
+				// arrived via updateToolResultMessage. Skip the second
+				// create call - just attach any base64 attachments found in
+				// the final accumulator (rare, since chunks usually don't
+				// carry image data URIs) and emit the attachments callback.
 				let toolResultMessage: DatabaseMessage | undefined;
-				if (createToolResultMessage) {
+				if (createdToolResultMessageId) {
+					toolResultMessage = { id: createdToolResultMessageId } as DatabaseMessage;
+					if (attachments.length > 0 && updateToolResultMessage) {
+						await updateToolResultMessage(createdToolResultMessageId, cleanedResult, attachments);
+					}
+				} else if (createToolResultMessage) {
 					toolResultMessage = await createToolResultMessage(
 						toolCall.id,
 						cleanedResult,
@@ -1047,4 +1107,8 @@ export function agenticClearSteeringMessage(conversationId: string) {
 
 export function agenticIsAnyRunning() {
 	return agenticStore.isAnyRunning;
+}
+
+export function agenticExecutingToolCallId(conversationId: string) {
+	return agenticStore.executingToolCallId(conversationId);
 }

@@ -121,6 +121,10 @@ export { sanitizeKeyValuePairKey, sanitizeKeyValuePairValue } from './sanitize';
 // Image error fallback utilities
 export { getImageErrorFallbackHtml } from './image-error-fallback';
 
+// SSE-with-JSON stream iterator (used by built-in tool streaming, decoupled
+// from chat.service.ts which embeds its own SSE parser for resume support)
+export { parseSseJsonStream, type SseJsonEvent } from './sse';
+
 // MCP utilities
 export {
 	detectMcpTransportFromUrl,

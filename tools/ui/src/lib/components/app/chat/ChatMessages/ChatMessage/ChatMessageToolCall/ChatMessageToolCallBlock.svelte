@@ -18,10 +18,15 @@
 		attachments?: DatabaseMessageExtra[];
 		open: boolean;
 		isStreaming: boolean;
+		/** True while the agentic loop is streaming output for THIS specific
+		 *  tool call (matched by toolCallId). Lets the underlying renderer -
+		 *  currently only exec_shell_command - switch into live-update mode
+		 *  with auto-scroll + max-height so chunked output stays visible. */
+		isExecuting?: boolean;
 		onToggle?: () => void;
 	}
 
-	let { section, attachments, open, isStreaming, onToggle }: Props = $props();
+	let { section, attachments, open, isStreaming, isExecuting, onToggle }: Props = $props();
 
 	// Search-result runs render via the dedicated hover-card block even
 	// outside the BuiltInTool namespace, so the matcher runs first.
@@ -43,6 +48,7 @@
 		{section}
 		{open}
 		{isStreaming}
+		{isExecuting}
 		{attachments}
 		{onToggle}
 	/>

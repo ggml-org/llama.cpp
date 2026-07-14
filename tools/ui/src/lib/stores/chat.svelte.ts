@@ -1261,6 +1261,28 @@ class ChatStore {
 				lastCreatedInFlow = msg.id;
 				return msg;
 			},
+			updateToolResultMessage: async (
+				messageId: string,
+				content: string,
+				extras?: DatabaseMessageExtra[]
+			) => {
+				// Persist latest content + merged extras; mirror into the active
+				// store so the chat view sees live updates for streaming tools
+				// (e.g. exec_shell_command). The existing tool message node
+				// pointer stays put - the renderer is already scoped to it.
+				const updates: Partial<DatabaseMessage> = { content };
+				if (extras) {
+					const idx = conversationsStore.findMessageIndex(messageId);
+					const existing = idx >= 0 ? (conversationsStore.activeMessages[idx]?.extra ?? []) : [];
+					const merged = [...existing, ...extras];
+					updates.extra = merged;
+				}
+				if (conversationsStore.activeConversation?.id === convId) {
+					const idx = conversationsStore.findMessageIndex(messageId);
+					if (idx >= 0) conversationsStore.updateMessageAtIndex(idx, updates);
+				}
+				await DatabaseService.updateMessage(messageId, updates);
+			},
 			createAssistantMessage: async () => {
 				// Reset streaming state for new message
 				streamedContent = '';

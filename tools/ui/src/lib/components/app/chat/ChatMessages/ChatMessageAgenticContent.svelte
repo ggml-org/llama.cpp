@@ -18,7 +18,8 @@
 		agenticResolvePermission,
 		agenticPendingContinueRequest,
 		agenticResolveContinue,
-		agenticLastError
+		agenticLastError,
+		agenticExecutingToolCallId
 	} from '$lib/stores/agentic.svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import ChatMessageReasoningBlock from './ChatMessageReasoningBlock.svelte';
@@ -92,6 +93,30 @@
 	}
 
 	const sections = $derived(deriveAgenticSections(message, toolMessages, [], isStreaming));
+
+	// Per-section tool execution state for live-streaming renderers.
+	const currentlyExecutingToolCallId = $derived(
+		isStreaming ? agenticExecutingToolCallId(message.convId) : null
+	);
+
+	// Auto-expand a tool section the moment its execution begins so the user
+	// can watch streamed output land in real time. Stickier than reasoning's
+	// `showThoughtInProgress` flag: once we set expandedStates[idx] = true we
+	// intentionally do NOT reset it when execution finishes, so the section
+	// stays open with the final output visible. The user can still collapse
+	// it manually; that writes expandedStates[idx] = false which we never
+	// override (we only act when expandedStates[idx] is undefined).
+	let lastSeenExecutingToolCallId: string | null = null;
+	$effect(() => {
+		const current = currentlyExecutingToolCallId;
+		const previous = lastSeenExecutingToolCallId;
+		lastSeenExecutingToolCallId = current;
+		if (!current || current === previous) return;
+		const idx = sections.findIndex((s) => s.toolCallId === current);
+		if (idx >= 0 && expandedStates[idx] === undefined) {
+			expandedStates[idx] = true;
+		}
+	});
 
 	type TurnGroup = {
 		sections: AgenticSection[];
@@ -189,13 +214,15 @@
 			{section}
 			open={isExpanded(index, section)}
 			{isStreaming}
+			isExecuting={section.toolCallId !== undefined &&
+				section.toolCallId === currentlyExecutingToolCallId}
 			attachments={message?.extra}
 			onToggle={() => toggleExpanded(index, section)}
 		/>
 	{/if}
 {/snippet}
 
-<div class="agentic-content gap-1.5">
+<div class="agentic-content gap-2">
 	{#if turnGroups.length > 1}
 		{#each turnGroups as turn, turnIndex (turnIndex)}
 			{@const turnStats = message?.timings?.agentic?.perTurn?.[turnIndex]}

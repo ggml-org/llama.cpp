@@ -9,3 +9,8 @@ export const REASONING_SCROLL_AT_BOTTOM_THRESHOLD_PX = 64;
 // wrap reflows while the highlight.js pass settles can drift a few pixels
 // off bottom.
 export const SYNTAX_CODE_SCROLL_AT_BOTTOM_THRESHOLD_PX = 32;
+// Streaming tool output (e.g. exec_shell_command): shell commands produce
+// lots of small line writes and the exit-code line appended at the tail
+// past the last user-visible frame is what triggers DOM drift, so use a
+// threshold generous enough to capture that tail flush.
+export const TOOL_RUNTIME_SCROLL_AT_BOTTOM_THRESHOLD_PX = 64;
