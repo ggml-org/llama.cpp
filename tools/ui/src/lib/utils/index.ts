@@ -173,9 +173,11 @@ export {
 
 // Search-result parsing (web-search / fetch MCP tools)
 export {
+	SUPPORTED_WEB_SEARCH_TOOL_NAMES,
 	extractSearchResults,
 	extractSearchQuery,
 	faviconForUrl,
+	isWebSearchToolName,
 	type SearchResult
 } from './search-results';
 

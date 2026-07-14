@@ -164,3 +164,23 @@ export function faviconForUrl(url: string): string | null {
 		return null;
 	}
 }
+
+// Web-search MCP servers broadly follow the `web_search` token convention
+// for their primary tool, but the rich pill UI makes assumptions about
+// both the request shape (single `query` string) and the response shape
+// (Title:/URL:/Published:/Author:/Highlights blocks). Adding a tool here
+// is a deliberate signal that the renderer is known to handle its output.
+// Continued maintenance note: when broadening this list, verify both the
+// tool schema and the response format against the supported spec above.
+export const SUPPORTED_WEB_SEARCH_TOOL_NAMES: readonly string[] = ['web_search_exa'];
+
+/**
+ * True when the tool's name is in the explicit allow-list of web-search
+ * tools above. Returned to the dispatcher so it can route the call's UI
+ * early (before results arrive) without false-firing on non-web-search
+ * tools that also happen to accept a `query` argument.
+ */
+export function isWebSearchToolName(toolName: string | undefined | null): boolean {
+	if (!toolName) return false;
+	return SUPPORTED_WEB_SEARCH_TOOL_NAMES.includes(toolName);
+}

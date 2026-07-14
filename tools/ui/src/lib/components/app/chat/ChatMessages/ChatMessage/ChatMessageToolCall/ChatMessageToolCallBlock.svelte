@@ -1,6 +1,11 @@
 <script lang="ts">
 	import { BuiltInTool } from '$lib/enums';
-	import { extractSearchQuery, extractSearchResults, type AgenticSection } from '$lib/utils';
+	import {
+		extractSearchQuery,
+		extractSearchResults,
+		isWebSearchToolName,
+		type AgenticSection
+	} from '$lib/utils';
 	import type { DatabaseMessageExtra } from '$lib/types';
 	import ChatMessageToolCallBlockDefault from './ChatMessageToolCallBlockDefault.svelte';
 	import ChatMessageToolCallBlockEditFile from './ChatMessageToolCallBlockEditFile.svelte';
@@ -31,12 +36,16 @@
 	// Search-result runs render via the dedicated hover-card block even
 	// outside the BuiltInTool namespace. The block already handles the
 	// pending state (formatted heading from query + "Searching..." spinner),
-	// so routing off `toolArgs.query` as well as parsed results lets the
-	// rich UI show from the moment the args arrive rather than after the
-	// tool returns.
+	// so we route off `toolArgs.query` *only* when the tool name marks it as
+	// a web-search call - otherwise non-search tools that happen to accept
+	// a `query` argument (e.g. GitHub's `search_pull_requests`) get
+	// mis-labelled. After results arrive the parsed-result check takes
+	// over so still-unrecognized servers render correctly.
 	const searchResults = $derived(extractSearchResults(section.toolResult));
 	const searchQuery = $derived(extractSearchQuery(section.toolArgs));
-	const isSearchCall = $derived(searchResults.length > 0 || searchQuery.length > 0);
+	const isSearchCall = $derived(
+		searchResults.length > 0 || (searchQuery.length > 0 && isWebSearchToolName(section.toolName))
+	);
 </script>
 
 {#if isSearchCall}

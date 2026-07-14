@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { extractSearchResults, extractSearchQuery, faviconForUrl } from '$lib/utils/search-results';
+import {
+	SUPPORTED_WEB_SEARCH_TOOL_NAMES,
+	extractSearchResults,
+	extractSearchQuery,
+	faviconForUrl,
+	isWebSearchToolName
+} from '$lib/utils/search-results';
 
 describe('extractSearchResults', () => {
 	it('parses the Exa fixture with multiple results', () => {
@@ -88,5 +94,26 @@ a highlight`;
 		);
 		expect(faviconForUrl('http://example.com/x')).toBe('http://example.com/favicon.ico');
 		expect(faviconForUrl('not a url')).toBeNull();
+	});
+});
+
+describe('isWebSearchToolName', () => {
+	it('excludes tools that take the same query argument but are not web searches', () => {
+		expect(isWebSearchToolName('search_pull_requests')).toBe(false);
+		expect(isWebSearchToolName('search_code')).toBe(false);
+		expect(isWebSearchToolName('search_repositories')).toBe(false);
+		expect(isWebSearchToolName('search_issues')).toBe(false);
+	});
+
+	it('handles empty / missing input', () => {
+		expect(isWebSearchToolName(null)).toBe(false);
+		expect(isWebSearchToolName(undefined)).toBe(false);
+		expect(isWebSearchToolName('')).toBe(false);
+	});
+
+	it('returns false for unrelated tools', () => {
+		expect(isWebSearchToolName('web_fetch')).toBe(false);
+		expect(isWebSearchToolName('read_file')).toBe(false);
+		expect(isWebSearchToolName('exec_shell_command')).toBe(false);
 	});
 });
