@@ -4,6 +4,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <regex>
 #include <thread>
 #include <chrono>
@@ -24,7 +25,7 @@ json server_tool::to_json() const {
     return {
         {"display_name", display_name},
         {"tool", name},
-        {"type", "builtin"},
+        {"type", type()},
         {"permissions", json{
             {"write", permission_write}
         }},
@@ -1102,6 +1103,59 @@ struct server_tools_res : server_http_res {
     }
 };
 
+//
+// server_mcp_tool: delegates invocation to a running MCP server instance
+//
+struct server_mcp_tool : server_tool {
+    std::string server_name;
+    std::string tool_name;
+    server_mcp_tool_definition def;
+    std::weak_ptr<server_mcp_manager> mcp_mgr;
+
+    server_mcp_tool(std::string srv, std::string tool, server_mcp_tool_definition d, std::weak_ptr<server_mcp_manager> mgr)
+        : server_name(std::move(srv))
+        , tool_name(std::move(tool))
+        , def(std::move(d))
+        , mcp_mgr(std::move(mgr))
+    {
+        name = server_name + "_" + tool_name;
+        display_name = name;
+        permission_write = false;
+        support_stream = false;
+    }
+
+    std::string type() const override { return "mcp"; }
+
+    json get_definition() const override {
+        json schema = def.input_schema;
+        if (schema.is_null() || !schema.is_object()) {
+            schema = json::object();
+        }
+        return {
+            {"type", "function"},
+            {"function", {
+                {"name", name},
+                {"description", def.description},
+                {"parameters", schema},
+            }},
+        };
+    }
+
+    json invoke(json params, server_tool::stream *) const override {
+        auto mgr = mcp_mgr.lock();
+        if (!mgr) {
+            return {{"error", "MCP manager not available"}};
+        }
+
+        auto instance = mgr->get_or_create(server_name);
+        if (!instance) {
+            return {{"error", "failed to get MCP instance for server: " + server_name}};
+        }
+
+        return instance->call_tool(tool_name, params, instance->timeout_ms);
+    }
+};
+
 static server_tool & find_tool(std::vector<std::unique_ptr<server_tool>> & tools, const std::string & name, bool require_stream) {
     for (auto & t : tools) {
         if (t->name == name) {
@@ -1130,7 +1184,8 @@ static std::vector<std::unique_ptr<server_tool>> build_tools() {
     return tools;
 }
 
-void server_tools::setup(const std::vector<std::string> & enabled_tools) {
+void server_tools::setup(const std::vector<std::string> & enabled_tools,
+                         std::weak_ptr<server_mcp_manager> mcp_mgr) {
     if (!enabled_tools.empty()) {
         std::unordered_set<std::string> enabled_set(enabled_tools.begin(), enabled_tools.end());
         auto all_tools = build_tools();
@@ -1138,7 +1193,7 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools) {
         // collect all known tool names for validation
         std::vector<std::string> known_names;
         known_names.reserve(all_tools.size());
-        for (const auto & t : all_tools) {
+        for (auto & t : all_tools) {
             known_names.push_back(t->name);
         }
 
@@ -1147,8 +1202,7 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools) {
             if (name == "all") continue;
             if (std::find(known_names.begin(), known_names.end(), name) == known_names.end()) {
                 throw std::runtime_error(string_format(
-                    "unknown tool \"%s\". available tools: %s",
-                    name.c_str(),
+                    "unknown tool \"%s\". available tools: %s", name.c_str(),
                     string_join(known_names, ", ").c_str()));
             }
         }
@@ -1161,11 +1215,36 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools) {
         }
     }
 
+    // Add MCP tools if manager is provided
+    if (!mcp_mgr.expired()) {
+        auto all_mcp_tools = mcp_mgr.lock()->get_all_tools();
+        std::unordered_set<std::string> seen_names;
+        for (auto & t : tools) {
+            seen_names.insert(t->name);
+        }
+        size_t n_added = 0;
+        for (const auto & t : all_mcp_tools) {
+            std::string mcp_name = t.server_name + "_" + t.name;
+            if (seen_names.count(mcp_name)) {
+                SRV_WRN("MCP tool \"%s\" from server \"%s\" collides with existing tool, skipping\n",
+                    mcp_name.c_str(), t.server_name.c_str());
+                continue;
+            }
+            seen_names.insert(mcp_name);
+            tools.push_back(std::make_unique<server_mcp_tool>(
+                t.server_name, t.name, t, mcp_mgr));
+            n_added++;
+        }
+        if (n_added > 0) {
+            SRV_INF("Added %zu MCP tools\n", n_added);
+        }
+    }
+
     handle_get = [this](const server_http_req &) -> server_http_res_ptr {
         auto res = std::make_unique<server_http_res>();
         try {
             json result = json::array();
-            for (const auto & t : tools) {
+            for (auto & t : tools) {
                 result.push_back(t->to_json());
             }
             res->data = safe_json_to_str(result);

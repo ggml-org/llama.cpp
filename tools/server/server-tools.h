@@ -3,9 +3,11 @@
 #include "server-common.h"
 #include "server-http.h"
 #include "server-queue.h"
+#include "server-mcp.h"
 
 #include <atomic>
 #include <functional>
+#include <memory>
 
 struct server_tool {
     std::string name;
@@ -15,6 +17,7 @@ struct server_tool {
 
     virtual ~server_tool() = default;
     virtual json get_definition() const = 0;
+    virtual std::string type() const { return "builtin"; }
 
     struct stream {
         server_response & qr;
@@ -34,7 +37,8 @@ struct server_tools {
     server_response queue_res;
     std::atomic<int> res_id{0};
 
-    void setup(const std::vector<std::string> & enabled_tools);
+    void setup(const std::vector<std::string> & enabled_tools,
+               std::weak_ptr<server_mcp_manager> mcp_mgr);
 
     server_http_context::handler_t handle_get;
     server_http_context::handler_t handle_post;
