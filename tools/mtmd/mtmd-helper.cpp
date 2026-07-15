@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cinttypes>
+#include <optional>
 #include <vector>
 
 //#define MTMD_AUDIO_DEBUG
@@ -238,6 +239,23 @@ struct decode_embd_batch {
     }
 };
 
+// Helper class to set non-causal attention via RAII
+class scoped_non_causal_attention {
+public:
+    explicit scoped_non_causal_attention(llama_context * context) : context_(context) {
+        llama_set_causal_attn(context_, false);
+    }
+    ~scoped_non_causal_attention() {
+        llama_set_causal_attn(context_, true);
+    }
+
+    scoped_non_causal_attention(const scoped_non_causal_attention &) = delete;
+    scoped_non_causal_attention & operator=(const scoped_non_causal_attention &) = delete;
+
+private:
+    llama_context * context_;
+};
+
 // Helper function for decoding an image whose embeddings have already been calculated
 int32_t mtmd_helper_decode_image_chunk(
         mtmd_context * ctx,
@@ -287,9 +305,9 @@ int32_t mtmd_helper_decode_image_chunk(
         batch_embd.set_position_normal(n_past, seq_id);
     }
 
-    const bool use_non_causal = mtmd_decode_use_non_causal(ctx, chunk);
-    if (use_non_causal) {
-        llama_set_causal_attn(lctx, false);
+    std::optional<scoped_non_causal_attention> scoped_non_causal_attn;
+    if (mtmd_decode_use_non_causal(ctx, chunk)) {
+        scoped_non_causal_attn.emplace(lctx);
         // TODO @ngxson : need to make sure only one image is processed at a time, and n_ubatch must be enough to hold the image
     }
 
@@ -304,9 +322,6 @@ int32_t mtmd_helper_decode_image_chunk(
         int32_t ret = llama_decode(lctx, batch_embd_view);
         if (ret != 0) {
             LOG_ERR("failed to decode %s\n", name);
-            if (use_non_causal) {
-                llama_set_causal_attn(lctx, true);
-            }
             return ret;
         }
 
@@ -314,9 +329,6 @@ int32_t mtmd_helper_decode_image_chunk(
             ret = callback(batch_embd_view, user_data);
             if (ret != 0) {
                 LOG_ERR("post-decode callback failed\n");
-                if (use_non_causal) {
-                    llama_set_causal_attn(lctx, true);
-                }
                 return ret;
             }
         }
@@ -329,9 +341,6 @@ int32_t mtmd_helper_decode_image_chunk(
     n_past += mtmd_input_chunk_get_n_pos(chunk);
     *new_n_past = n_past;
 
-    if (use_non_causal) {
-        llama_set_causal_attn(lctx, true);
-    }
     return 0;
 }
 
