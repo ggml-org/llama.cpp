@@ -652,7 +652,7 @@ class DFlashModel(Qwen3Model):
         target_cls = get_model_class(target_arch)
 
         if target_cls is not type(self):
-            target_cls.set_vocab(self)
+            target_cls.set_vocab(self)  # ty: ignore[unresolved-attribute]
         else:
             super().set_vocab()
 
