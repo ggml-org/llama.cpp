@@ -715,6 +715,9 @@ class GGUFWriter:
     def add_full_attention_interval(self, interval: int) -> None:
         self.add_uint32(Keys.LLM.FULL_ATTENTION_INTERVAL.format(arch=self.arch), interval)
 
+    def add_hash_layer_count(self, count: int) -> None:
+        self.add_uint32(Keys.LLM.HASH_LAYER_COUNT.format(arch=self.arch), count)
+
     def add_feed_forward_length(self, length: int | Sequence[int]) -> None:
         if isinstance(length, int):
             self.add_uint32(Keys.LLM.FEED_FORWARD_LENGTH.format(arch=self.arch), length)
@@ -939,6 +942,39 @@ class GGUFWriter:
 
     def add_sliding_window(self, value: int) -> None:
         self.add_uint32(Keys.Attention.SLIDING_WINDOW.format(arch=self.arch), value)
+
+    def add_block_size(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.BLOCK_SIZE.format(arch=self.arch), value)
+
+    def add_target_layers(self, value: Sequence[int]) -> None:
+        self.add_array(Keys.LLM.TARGET_LAYERS.format(arch=self.arch), value)
+
+    def add_target_hidden_size(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.TARGET_HIDDEN_SIZE.format(arch=self.arch), value)
+
+    def add_norm_before_residual(self, value: bool) -> None:
+        self.add_bool(Keys.LLM.NORM_BEFORE_RESIDUAL.format(arch=self.arch), value)
+
+    def add_attention_output_group_count(self, count: int) -> None:
+        self.add_uint32(Keys.Attention.OUTPUT_GROUP_COUNT.format(arch=self.arch), count)
+
+    def add_attention_output_lora_rank(self, length: int) -> None:
+        self.add_uint32(Keys.Attention.OUTPUT_LORA_RANK.format(arch=self.arch), length)
+
+    def add_attention_compress_ratios(self, values: Sequence[int]) -> None:
+        self.add_array(Keys.Attention.COMPRESS_RATIOS.format(arch=self.arch), values)
+
+    def add_attention_compress_rope_freq_base(self, value: float) -> None:
+        self.add_float32(Keys.Attention.COMPRESS_ROPE_FREQ_BASE.format(arch=self.arch), value)
+
+    def add_hyper_connection_count(self, count: int) -> None:
+        self.add_uint32(Keys.HyperConnection.COUNT.format(arch=self.arch), count)
+
+    def add_hyper_connection_sinkhorn_iterations(self, count: int) -> None:
+        self.add_uint32(Keys.HyperConnection.SINKHORN_ITERATIONS.format(arch=self.arch), count)
+
+    def add_hyper_connection_epsilon(self, value: float) -> None:
+        self.add_float32(Keys.HyperConnection.EPSILON.format(arch=self.arch), value)
 
     def add_attention_scale(self, value: float) -> None:
         self.add_float32(Keys.Attention.SCALE.format(arch=self.arch), value)

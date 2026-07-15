@@ -26,7 +26,28 @@ llama_kv_cache_iswa::llama_kv_cache_iswa(
            llama_memory_t   mem_other,
     const layer_filter_cb & filter,
     const  layer_reuse_cb & reuse,
-    const  layer_share_cb & share) : hparams(model.hparams), unified(unified) {
+    const  layer_share_cb & share) :
+    llama_kv_cache_iswa(model, model.hparams, type_k, type_v, v_trans, offload, swa_full, unified,
+            kv_size, n_seq_max, n_ubatch, n_pad, mem_other, filter, reuse, share) {
+}
+
+llama_kv_cache_iswa::llama_kv_cache_iswa(
+        const llama_model & model,
+        const llama_hparams & hparams,
+                ggml_type   type_k,
+                ggml_type   type_v,
+                     bool   v_trans,
+                     bool   offload,
+                     bool   swa_full,
+                     bool   unified,
+                 uint32_t   kv_size,
+                 uint32_t   n_seq_max,
+                 uint32_t   n_ubatch,
+                 uint32_t   n_pad,
+           llama_memory_t   mem_other,
+    const layer_filter_cb & filter,
+    const  layer_reuse_cb & reuse,
+    const  layer_share_cb & share) : unified(unified) {
 
     // chain filters
     const layer_filter_cb filter_base = [&](int32_t il) {
@@ -185,7 +206,7 @@ llama_memory_context_ptr llama_kv_cache_iswa::init_batch(llama_batch_allocr & ba
 
         std::vector<llama_ubatch> ubatches;
         while (true) {
-            auto ubatch = balloc.split_equal(n_ubatch, !unified);
+            auto ubatch = balloc.split_equal(n_ubatch, !unified, 0);
 
             if (ubatch.n_tokens == 0) {
                 break;

@@ -134,16 +134,7 @@ static inline HVX_Vector hvx_vec_f32_to_f16_shuff(HVX_Vector v0, HVX_Vector v1) 
 }
 
 static inline HVX_Vector hvx_vec_f32_to_f16(HVX_Vector v0, HVX_Vector v1) {
-    HVX_Vector v = Q6_Vh_vdeal_Vh(hvx_vec_f32_to_f16_shuff(v0, v1));
-
-#if __HVX_ARCH__ < 79
-    // replace NaNs with -INF, older arches produce NaNs for (-INF + 0.0)
-    const HVX_Vector neg_inf = hvx_vec_splat_f16(-INFINITY);
-    HVX_VectorPred nan = hvx_vec_is_nan_f16(v);
-    v = Q6_V_vmux_QVV(nan, neg_inf, v);
-#endif
-
-    return v;
+    return Q6_Vh_vdeal_Vh(hvx_vec_f32_to_f16_shuff(v0, v1));
 }
 
 #if __HVX_ARCH__ >= 79
@@ -169,8 +160,6 @@ static inline HVX_VectorPair hvx_vec_f16_to_f32(HVX_Vector v) {
     return Q6_W_vcombine_VV(Q6_Vsf_equals_Vqf32(Q6_V_hi_W(p)), Q6_Vsf_equals_Vqf32(Q6_V_lo_W(p)));
 }
 #endif
-
-
 
 static inline HVX_Vector hvx_vec_i16_from_hf_rnd_sat(HVX_Vector vin) {
     // This looks complicated.

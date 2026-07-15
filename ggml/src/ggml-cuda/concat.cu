@@ -152,8 +152,8 @@ static void concat_cuda(const ggml_tensor * src0, const ggml_tensor * src1, ggml
                         src0_d + i3*(src0->nb[3] / sizeof(T)),
                         src1_d + i3*(src1->nb[3] / sizeof(T)),
                         dst_d  + i3*( dst->nb[3] / sizeof(T)),
-                        src0->ne[0], src0->ne[1], src0->ne[2],
-                        dst->ne[0],  dst->ne[1],  dst->ne[2], dim, stream);
+                        ggml_row_size(src0->type, src0->ne[0])/sizeof(T), src0->ne[1], src0->ne[2],
+                        ggml_row_size(dst->type, dst->ne[0])/sizeof(T),  dst->ne[1],  dst->ne[2], dim, stream);
             }
         } else {
             const size_t size0 = ggml_nbytes(src0);
@@ -163,6 +163,8 @@ static void concat_cuda(const ggml_tensor * src0, const ggml_tensor * src1, ggml
             CUDA_CHECK(cudaMemcpyAsync((char *) dst->data + size0, src1->data, size1, cudaMemcpyDeviceToDevice, stream));
         }
     } else {
+        GGML_ASSERT(!ggml_is_quantized(src0->type));
+
         dim3 grid_dim(dst->ne[1], dst->ne[2], dst->ne[3]);
         auto launch_kernel = [&](auto dim) {
             concat_non_cont<T, dim><<<grid_dim, CUDA_CONCAT_BLOCK_SIZE, 0, stream>>>(
@@ -204,24 +206,34 @@ void ggml_cuda_op_concat(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
     GGML_ASSERT(src0->type == src1->type);
     GGML_ASSERT(dst->type  == src0->type);
-    GGML_ASSERT(!ggml_is_quantized(src0->type));
-    GGML_ASSERT(ggml_blck_size(src0->type) == 1);
 
-    switch (ggml_type_size(src0->type)) {
-        case 1:
-            concat_cuda<uint8_t>(src0, src1, dst, dim, stream);
-            break;
-        case 2:
-            concat_cuda<uint16_t>(src0, src1, dst, dim, stream);
-            break;
-        case 4:
-            concat_cuda<uint32_t>(src0, src1, dst, dim, stream);
-            break;
-        case 8:
-            concat_cuda<uint64_t>(src0, src1, dst, dim, stream);
-            break;
-        default:
-            GGML_ABORT("Unsupported type size: %zu", ggml_type_size(src0->type));
-            break;
+    if (ggml_is_quantized(src0->type)) {
+        GGML_ASSERT(ggml_is_contiguous(src0));
+        GGML_ASSERT(ggml_is_contiguous(src1));
+        GGML_ASSERT(src0->ne[0] % ggml_blck_size(src0->type) == 0);
+        GGML_ASSERT(src1->ne[0] % ggml_blck_size(src1->type) == 0);
+
+        // if tensors are contiguous and ne[0] is multiple of the block size we can concat both tensors as byte tensors
+        concat_cuda<uint8_t>(src0, src1, dst, dim, stream);
+    } else {
+        GGML_ASSERT(ggml_blck_size(src0->type) == 1);
+
+        switch (ggml_type_size(src0->type)) {
+            case 1:
+                concat_cuda<uint8_t>(src0, src1, dst, dim, stream);
+                break;
+            case 2:
+                concat_cuda<uint16_t>(src0, src1, dst, dim, stream);
+                break;
+            case 4:
+                concat_cuda<uint32_t>(src0, src1, dst, dim, stream);
+                break;
+            case 8:
+                concat_cuda<uint64_t>(src0, src1, dst, dim, stream);
+                break;
+            default:
+                GGML_ABORT("Unsupported type size: %zu", ggml_type_size(src0->type));
+                break;
+        }
     }
 }

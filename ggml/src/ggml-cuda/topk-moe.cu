@@ -312,6 +312,10 @@ static void launch_topk_moe_cuda(ggml_backend_cuda_context & ctx,
             ggml_cuda_kernel_launch(topk_moe_cuda<256, has_bias>, launch_params,
                 logits, weights, ids, bias, n_rows, n_expert_used, clamp_val, scale_val, config);
             break;
+        case 288: // StepFun 3.7
+            ggml_cuda_kernel_launch(topk_moe_cuda<288, has_bias>, launch_params,
+                logits, weights, ids, bias, n_rows, n_expert_used, clamp_val, scale_val, config);
+            break;
         case 512:
             ggml_cuda_kernel_launch(topk_moe_cuda<512, has_bias>, launch_params,
                 logits, weights, ids, bias, n_rows, n_expert_used, clamp_val, scale_val, config);
@@ -377,8 +381,10 @@ bool ggml_cuda_should_use_topk_moe(const ggml_tensor * gating_op,
                                    const ggml_tensor * weights,
                                    const ggml_tensor * logits,
                                    const ggml_tensor * ids) {
+    // must match an instantiation of launch_topk_moe_cuda: a power of 2 up to 512,
+    // or one of the non-power-of-2 expert counts of supported models
     const int n_expert = ids->nb[1] / ids->nb[0];
-    if (((n_expert & (n_expert - 1)) != 0 || n_expert > 512) && n_expert != 576) {
+    if (((n_expert & (n_expert - 1)) != 0 || n_expert > 512) && n_expert != 288 && n_expert != 576) {
         return false;
     }
 
