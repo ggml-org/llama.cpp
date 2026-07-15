@@ -26,14 +26,19 @@
 		onToggle
 	}: Props = $props();
 
+	const REASONING_HEADER = 'Reasoning';
+	const REASONING_HEADER_PENDING = 'Reasoning...';
+	const REASONING_SUBTITLE_ERROR = 'Error';
+	const REASONING_SUBTITLE_CANCELLED = 'Cancelled';
+
 	const isPending = $derived(section.type === AgenticSectionType.REASONING_PENDING);
-	const title = $derived(isPending && isStreaming ? 'Reasoning...' : 'Reasoning');
+	const title = $derived(isPending && isStreaming ? REASONING_HEADER_PENDING : REASONING_HEADER);
 	const subtitle = $derived.by(() => {
 		if (isPending && !isStreaming) {
-			return hasReasoningError ? 'Error' : 'Cancelled';
+			return hasReasoningError ? REASONING_SUBTITLE_ERROR : REASONING_SUBTITLE_CANCELLED;
 		}
 		if (section.wasInterrupted) {
-			return hasReasoningError ? 'Error' : 'Cancelled';
+			return hasReasoningError ? REASONING_SUBTITLE_ERROR : REASONING_SUBTITLE_CANCELLED;
 		}
 		return isStreaming ? '' : undefined;
 	});

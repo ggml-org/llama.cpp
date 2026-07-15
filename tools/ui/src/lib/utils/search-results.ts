@@ -27,12 +27,51 @@ export type SearchResult = {
 const SEPARATOR_LINE_RE = /^\s*---\s*$/;
 const URL_SCHEME_RE = /^https?:\/\//i;
 
-type FieldKey = 'title' | 'url' | 'published' | 'author';
+// Match either Unix or Windows line endings so chunking/parsing handles
+// payloads written by either scheme without off-by-one mismatches.
+const LINE_BREAK_RE = /\r?\n/;
+
+// Sentinel the search-result wire format uses when a field is absent
+// (e.g. `Author: N/A`). Treated identically to a missing field so the
+// rendered card hides the row either way.
+const NOT_AVAILABLE_VALUE = 'N/A';
+
+// Section header that announces the start of the multi-line Highlights
+// block. Everything from that line onward (until the next `---`
+// separator or end of chunk) is captured verbatim as highlight text
+// instead of being re-scanned for `Title:`/`URL:`/... field lines.
+const HIGHLIGHTS_SECTION_HEADER = 'Highlights:';
+
+// Field name conventionally used by web-search tools (Exa etc.) as the
+// user-supplied query parameter. Extracted so future tool schemas that
+// adopt the same convention stay grep-compatible with this parser.
+const SEARCH_TOOL_QUERY_FIELD = 'query';
+
+// URL schemes the favicon helper will resolve to a hosted favicon. Any
+// other scheme (e.g. data:, blob:) intentionally returns null so the UI
+// can fall back to a generic globe icon.
+const RESOLVABLE_URL_PROTOCOLS: readonly string[] = ['https:', 'http:'];
+
+// Conventional favicon path served by virtually every web host.
+// Appended to the URL origin as a best-effort lookup target; ignore
+// 404s at render time.
+const FAVICON_PATH = '/favicon.ico';
+
+// Wire-format field names emitted by the search-result parser. String
+// values match the keys the chunk parser writes into the `fields` map
+// (and that callers read off `SearchResult`), so `FieldKey.TITLE` is a
+// drop-in for the literal `'title'`.
+enum FieldKey {
+	TITLE = 'title',
+	URL = 'url',
+	PUBLISHED = 'published',
+	AUTHOR = 'author'
+}
 const FIELD_PREFIXES: ReadonlyArray<{ key: FieldKey; prefix: string }> = [
-	{ key: 'title', prefix: 'Title:' },
-	{ key: 'url', prefix: 'URL:' },
-	{ key: 'published', prefix: 'Published:' },
-	{ key: 'author', prefix: 'Author:' }
+	{ key: FieldKey.TITLE, prefix: 'Title:' },
+	{ key: FieldKey.URL, prefix: 'URL:' },
+	{ key: FieldKey.PUBLISHED, prefix: 'Published:' },
+	{ key: FieldKey.AUTHOR, prefix: 'Author:' }
 ];
 
 /**
@@ -42,7 +81,7 @@ const FIELD_PREFIXES: ReadonlyArray<{ key: FieldKey; prefix: string }> = [
  * leading / consecutive separators are not lost.
  */
 function splitChunks(text: string): string[] {
-	const lines = text.split(/\r?\n/);
+	const lines = text.split(LINE_BREAK_RE);
 	const chunks: string[] = [];
 	let buffer: string[] = [];
 	for (const line of lines) {
@@ -69,19 +108,19 @@ function parseChunk(chunk: string): SearchResult | null {
 	const trimmed = chunk.trim();
 	if (!trimmed) return null;
 
-	const lines = chunk.split(/\r?\n/);
+	const lines = chunk.split(LINE_BREAK_RE);
 
 	const fields: Record<FieldKey, string | undefined> = {
-		title: undefined,
-		url: undefined,
-		published: undefined,
-		author: undefined
+		[FieldKey.TITLE]: undefined,
+		[FieldKey.URL]: undefined,
+		[FieldKey.PUBLISHED]: undefined,
+		[FieldKey.AUTHOR]: undefined
 	};
 	const highlightLines: string[] = [];
 	let inHighlights = false;
 
 	for (const line of lines) {
-		if (!inHighlights && line.trim() === 'Highlights:') {
+		if (!inHighlights && line.trim() === HIGHLIGHTS_SECTION_HEADER) {
 			inHighlights = true;
 			continue;
 		}
@@ -94,20 +133,24 @@ function parseChunk(chunk: string): SearchResult | null {
 		for (const { key, prefix } of FIELD_PREFIXES) {
 			if (!line.startsWith(prefix)) continue;
 			const value = line.slice(prefix.length).trim();
-			if (value && value !== 'N/A') {
+			if (value && value !== NOT_AVAILABLE_VALUE) {
 				fields[key] = value;
 			}
 			break;
 		}
 	}
 
-	if (!fields.title || !fields.url || !URL_SCHEME_RE.test(fields.url)) return null;
+	if (!fields[FieldKey.TITLE] || !fields[FieldKey.URL] || !URL_SCHEME_RE.test(fields[FieldKey.URL]))
+		return null;
 
 	const highlights = highlightLines.join('\n').trim();
 
-	const result: SearchResult = { title: fields.title, url: fields.url };
-	if (fields.published) result.published = fields.published;
-	if (fields.author) result.author = fields.author;
+	const result: SearchResult = {
+		title: fields[FieldKey.TITLE],
+		url: fields[FieldKey.URL]
+	};
+	if (fields[FieldKey.PUBLISHED]) result.published = fields[FieldKey.PUBLISHED];
+	if (fields[FieldKey.AUTHOR]) result.author = fields[FieldKey.AUTHOR];
 	if (highlights) result.highlights = highlights;
 	return result;
 }
@@ -140,7 +183,7 @@ export function extractSearchQuery(toolArgs: string | undefined | null): string 
 	try {
 		const parsed: unknown = JSON.parse(toolArgs);
 		if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-			const candidate = (parsed as { query?: unknown }).query;
+			const candidate = (parsed as Record<string, unknown>)[SEARCH_TOOL_QUERY_FIELD];
 			if (typeof candidate === 'string') return candidate.trim();
 		}
 	} catch {
@@ -158,8 +201,8 @@ export function extractSearchQuery(toolArgs: string | undefined | null): string 
 export function faviconForUrl(url: string): string | null {
 	try {
 		const parsed = new URL(url);
-		if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null;
-		return `${parsed.protocol}//${parsed.host}/favicon.ico`;
+		if (!RESOLVABLE_URL_PROTOCOLS.includes(parsed.protocol)) return null;
+		return `${parsed.protocol}//${parsed.host}${FAVICON_PATH}`;
 	} catch {
 		return null;
 	}

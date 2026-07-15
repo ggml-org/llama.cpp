@@ -184,7 +184,7 @@
 						tooltip={item.tooltip}
 						tooltipSide={TooltipSide.RIGHT}
 						size="lg"
-						iconSize="ICON_CLASS_DEFAULT"
+						iconSize={ICON_CLASS_DEFAULT}
 						class="h-9 w-9 rounded-full hover:bg-accent! {isActive
 							? 'bg-accent text-accent-foreground'
 							: ''}"
