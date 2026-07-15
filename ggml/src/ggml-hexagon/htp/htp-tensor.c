@@ -40,21 +40,17 @@ static void l2flush_thread_worker(unsigned int n, unsigned int i, void * data) {
     htp_trace_event_stop(tr, HTP_TRACE_EVT_L2FLUSH, ti);
 }
 
-void htp_tensor_flush(struct htp_context * ctx, const struct htp_tensor * t) {
+static void flush_all_dcache(struct htp_context * ctx) {
     struct htp_thread_trace * tr = &ctx->trace[0];
+    htp_trace_event_start(tr, HTP_TRACE_EVT_L2FLUSH, 0);
+    qurt_mem_cache_clean((qurt_addr_t) 0, 0, QURT_MEM_CACHE_FLUSH_ALL, QURT_MEM_DCACHE);
+    hex_l2fetch_block(ctx, ctx->footprint);
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_L2FLUSH, 0);
+    bitmap_reset(ctx->dirty_map, HTP_OP_MAX_TENSORS);
+}
 
-    if (!bitmap_test(ctx->dirty_map, t->ti)) {
-        return;
-    }
-
-    if (t->size > HEX_L2_FLUSH_ALL_THRESHOLD) {
-        htp_trace_event_start(tr, HTP_TRACE_EVT_L2FLUSH, t->ti);
-        qurt_mem_cache_clean((qurt_addr_t) 0, 0, QURT_MEM_CACHE_FLUSH_ALL, QURT_MEM_DCACHE);
-        hex_l2fetch_block(ctx, ctx->footprint);
-        htp_trace_event_stop(tr, HTP_TRACE_EVT_L2FLUSH, t->ti);
-        bitmap_reset(ctx->dirty_map, HTP_OP_MAX_TENSORS);
-        return;
-    }
+static void flush_tensor_range(struct htp_context * ctx, const struct htp_tensor * t) {
+    struct htp_thread_trace * tr = &ctx->trace[0];
 
     if (t->size > HEX_L2_FLUSH_WQ_THRESHOLD && ctx->n_threads > 1) {
         struct l2flush_task task;
@@ -76,4 +72,46 @@ void htp_tensor_flush(struct htp_context * ctx, const struct htp_tensor * t) {
     }
 
     htp_tensor_make_clean(t, ctx->dirty_map);
+}
+
+void htp_tensor_flush(struct htp_context * ctx, const struct htp_tensor * t) {
+    if (!bitmap_test(ctx->dirty_map, t->ti)) {
+        return;
+    }
+
+    if (t->size > HEX_L2_FLUSH_ALL_THRESHOLD) {
+        flush_all_dcache(ctx);
+        return;
+    }
+
+    flush_tensor_range(ctx, t);
+}
+
+// Flush a set of tensors, coalescing the decision: if the aggregate dirty size
+// crosses the flush-all threshold, do a single big-bang flush instead of walking
+// each range separately.
+void htp_tensor_flush_all(struct htp_context * ctx, const struct htp_tensor * const * tensors, uint32_t n) {
+    uint64_t total_dirty = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        const struct htp_tensor * t = tensors[i];
+        if (t && bitmap_test(ctx->dirty_map, t->ti)) {
+            total_dirty += t->size;
+        }
+    }
+
+    if (total_dirty == 0) {
+        return;
+    }
+
+    if (total_dirty > HEX_L2_FLUSH_ALL_THRESHOLD) {
+        flush_all_dcache(ctx);
+        return;
+    }
+
+    for (uint32_t i = 0; i < n; i++) {
+        const struct htp_tensor * t = tensors[i];
+        if (t && bitmap_test(ctx->dirty_map, t->ti)) {
+            flush_tensor_range(ctx, t);
+        }
+    }
 }

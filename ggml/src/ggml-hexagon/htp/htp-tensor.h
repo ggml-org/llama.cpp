@@ -31,5 +31,6 @@ static inline void htp_tensor_make_clean(const struct htp_tensor * t, uint32_t *
 
 struct htp_context;
 void htp_tensor_flush(struct htp_context * ctx, const struct htp_tensor * t);
+void htp_tensor_flush_all(struct htp_context * ctx, const struct htp_tensor * const * tensors, uint32_t n);
 
 #endif // HTP_TENSOR_H
