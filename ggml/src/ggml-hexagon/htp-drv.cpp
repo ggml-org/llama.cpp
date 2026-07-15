@@ -1,13 +1,8 @@
-// sample drv interface
-
-#pragma clang diagnostic ignored "-Wgnu-anonymous-struct"
-#pragma clang diagnostic ignored "-Wmissing-prototypes"
-#pragma clang diagnostic ignored "-Wsign-compare"
-
 #include <filesystem>
 #include <set>
 #include <sstream>
 #include <string>
+
 #ifdef _WIN32
 #   define WIN32_LEAN_AND_MEAN
 #   ifndef NOMINMAX
@@ -16,9 +11,17 @@
 #   include <windows.h>
 #   include <winevt.h>
 #else
-#    include <dlfcn.h>
-#    include <unistd.h>
+#   include <dlfcn.h>
+#   include <unistd.h>
 #endif
+
+#pragma clang diagnostic ignored "-Wgnu-anonymous-struct"
+#pragma clang diagnostic ignored "-Wmissing-prototypes"
+#pragma clang diagnostic ignored "-Wsign-compare"
+#pragma clang diagnostic ignored "-Wlanguage-extension-token"
+#pragma clang diagnostic ignored "-Wmicrosoft-enum-value"
+#pragma clang diagnostic ignored "-Wnested-anon-types"
+
 #include "ggml-impl.h"
 #include "htp-drv.h"
 #include "libdl.h"

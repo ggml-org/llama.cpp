@@ -21,6 +21,11 @@
 #include <algorithm>
 
 #ifdef _WIN32
+#    define WIN32_LEAN_AND_MEAN
+#    ifndef NOMINMAX
+#       define NOMINMAX
+#    endif
+#    include <windows.h>
 #    include <sal.h>
 #else
 #    include <semaphore.h>
@@ -28,7 +33,9 @@
 #endif
 
 #pragma clang diagnostic ignored "-Wnested-anon-types"
+#pragma clang diagnostic ignored "-Wlanguage-extension-token"
 #pragma clang diagnostic ignored "-Wgnu-anonymous-struct"
+#pragma clang diagnostic ignored "-Wmicrosoft-enum-value"
 
 #include <AEEStdErr.h>
 #include <dspqueue.h>
@@ -503,6 +510,8 @@ static void repack_q4_0_tiled(ggml_tensor * t, const void * data, size_t size) {
             }
         }
     }
+
+    GGML_UNUSED(size);
 }
 
 // repack q4_0_tiled tensor into q4_0 data
@@ -556,6 +565,8 @@ static void repack_tiled_q4_0(void * data, const ggml_tensor * t, size_t size) {
             }
         }
     }
+
+    GGML_UNUSED(size);
 }
 
 // repack q4_1 data into q4_1_tiled tensor
@@ -613,6 +624,8 @@ static void repack_q4_1_tiled(ggml_tensor * t, const void * data, size_t size) {
             }
         }
     }
+
+    GGML_UNUSED(size);
 }
 
 // repack q4_1_tiled tensor into q4_1 data
@@ -667,6 +680,8 @@ static void repack_tiled_q4_1(void * data, const ggml_tensor * t, size_t size) {
             }
         }
     }
+
+    GGML_UNUSED(size);
 }
 
 // repack q8_0 data into q8_0_tiled tensor
@@ -713,6 +728,8 @@ static void repack_q8_0_tiled(ggml_tensor * t, const void * data, size_t size) {
             }
         }
     }
+
+    GGML_UNUSED(size);
 }
 
 // repack q8_0_tiled tensor into q8_0 data
@@ -763,6 +780,8 @@ static void repack_tiled_q8_0(void * data, const ggml_tensor * t, size_t size) {
             }
         }
     }
+
+    GGML_UNUSED(size);
 }
 
 // repack mxfp4 data into mxfp4_tiled tensor
@@ -814,6 +833,8 @@ static void repack_mxfp4_tiled(ggml_tensor * t, const void * data, size_t size) 
             }
         }
     }
+
+    GGML_UNUSED(size);
 }
 
 // repack mxfp4_tiled tensor into mxfp4 data
@@ -867,6 +888,8 @@ static void repack_tiled_mxfp4(void * data, const ggml_tensor * t, size_t size) 
             }
         }
     }
+
+    GGML_UNUSED(size);
 }
 
 static void ggml_backend_hexagon_buffer_set_tensor(ggml_backend_buffer_t buffer,
@@ -967,11 +990,12 @@ static void ggml_backend_hexagon_buffer_get_tensor(ggml_backend_buffer_t buffer,
 static bool ggml_backend_hexagon_buffer_cpy_tensor(ggml_backend_buffer_t      buffer,
                                                    const struct ggml_tensor * src,
                                                    struct ggml_tensor *       dst) {
+    // we might optimize this later, for now take the slow path (ie get/set_tensor)
+    return false;
+
     GGML_UNUSED(buffer);
     GGML_UNUSED(src);
     GGML_UNUSED(dst);
-    // we might optimize this later, for now take the slow path (ie get/set_tensor)
-    return false;
 }
 
 static void ggml_backend_hexagon_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
@@ -1027,9 +1051,9 @@ static ggml_backend_buffer_t ggml_backend_hexagon_repack_buffer_type_alloc_buffe
     }
 }
 
-static size_t ggml_backend_hexagon_buffer_type_get_alignment(ggml_backend_buffer_type_t buffer_type) {
+static size_t ggml_backend_hexagon_buffer_type_get_alignment(ggml_backend_buffer_type_t buft) {
     return 128;  // HVX alignment
-    GGML_UNUSED(buffer_type);
+    GGML_UNUSED(buft);
 }
 
 static size_t ggml_backend_hexagon_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const struct ggml_tensor * t) {
@@ -1041,20 +1065,24 @@ static size_t ggml_backend_hexagon_buffer_type_get_alloc_size(ggml_backend_buffe
         return ggml_row_size(t->type, ne0) * ne1 * ne2 * ne3;
     }
     return ggml_nbytes(t);
+
+    GGML_UNUSED(buft);
 }
 
-static size_t ggml_backend_hexagon_buffer_type_get_max_size(ggml_backend_buffer_type_t buffer_type) {
-    auto * context = static_cast<ggml_backend_hexagon_buffer_type_context *>(buffer_type->context);
+static size_t ggml_backend_hexagon_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
+    auto * context = static_cast<ggml_backend_hexagon_buffer_type_context *>(buft->context);
     return context->sess->max_bufsize;
 }
 
 static bool ggml_backend_hexagon_buffer_type_is_host(ggml_backend_buffer_type_t buft) {
     return opt_hostbuf;
+
     GGML_UNUSED(buft);
 }
 
 static bool ggml_backend_hexagon_repack_buffer_type_is_host(ggml_backend_buffer_type_t buft) {
     return false;
+
     GGML_UNUSED(buft);
 }
 
@@ -2022,6 +2050,8 @@ static bool ggml_hexagon_flash_attn_is_hmx_eligible(
     }
 
     return true;
+
+    GGML_UNUSED(sinks);
 }
 
 static bool ggml_hexagon_precompute_flash_attn_params(
@@ -2242,8 +2272,9 @@ static bool ggml_hexagon_supported_gated_delta_net(const struct ggml_hexagon_ses
         return false;
     }
 
-    GGML_UNUSED(sess);
     return true;
+
+    GGML_UNUSED(sess);
 }
 
 static bool ggml_hexagon_matmul_is_hmx_eligible(
@@ -2291,6 +2322,8 @@ static bool ggml_hexagon_matmul_is_hmx_eligible(
     }
 
     return true;
+
+    GGML_UNUSED(dst);
 }
 
 static bool ggml_hexagon_precompute_hmx_mm_params(
@@ -2362,6 +2395,8 @@ static bool ggml_hexagon_precompute_hmx_mm_params(
         kparams->kernel_type = HTP_MM_KERNEL_HMX_2D;
     }
     return true;
+
+    GGML_UNUSED(src0);
 }
 
 static void ggml_hexagon_precompute_hvx_mm_params(
@@ -2956,6 +2991,8 @@ static bool ggml_hexagon_supported_binary(const struct ggml_hexagon_session * se
     }
 
     return true;
+
+    GGML_UNUSED(sess);
 }
 
 static bool ggml_hexagon_supported_add_id(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
@@ -2982,6 +3019,8 @@ static bool ggml_hexagon_supported_add_id(const struct ggml_hexagon_session * se
     }
 
     return true;
+
+    GGML_UNUSED(sess);
 }
 
 static bool ggml_hexagon_supported_unary(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
@@ -3007,6 +3046,8 @@ static bool ggml_hexagon_supported_unary(const struct ggml_hexagon_session * ses
     }
 
     return true;
+
+    GGML_UNUSED(sess);
 }
 
 static bool ggml_hexagon_supported_sum_rows(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
@@ -3026,10 +3067,11 @@ static bool ggml_hexagon_supported_sum_rows(const struct ggml_hexagon_session * 
     }
 
     return true;
+
+    GGML_UNUSED(sess);
 }
 
-static bool ggml_hexagon_supported_activations(const struct ggml_hexagon_session * sess,
-                                               const struct ggml_tensor *          op) {
+static bool ggml_hexagon_supported_activations(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * src1 = op->src[1];
     const struct ggml_tensor * dst  = op;
@@ -3058,6 +3100,8 @@ static bool ggml_hexagon_supported_activations(const struct ggml_hexagon_session
     }
 
     return true;
+
+    GGML_UNUSED(sess);
 }
 
 static bool ggml_hexagon_supported_softmax(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
@@ -3123,6 +3167,8 @@ static bool ggml_hexagon_supported_softmax(const struct ggml_hexagon_session * s
     }
 
     return true;
+
+    GGML_UNUSED(sess);
 }
 
 static bool ggml_hexagon_supported_set_rows(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
@@ -3143,6 +3189,8 @@ static bool ggml_hexagon_supported_set_rows(const struct ggml_hexagon_session * 
     }
 
     return true;
+
+    GGML_UNUSED(sess);
 }
 
 static bool ggml_hexagon_supported_get_rows(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
@@ -3163,6 +3211,8 @@ static bool ggml_hexagon_supported_get_rows(const struct ggml_hexagon_session * 
     }
 
     return true;
+
+    GGML_UNUSED(sess);
 }
 
 static bool ggml_hexagon_supported_argsort(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
@@ -3183,6 +3233,8 @@ static bool ggml_hexagon_supported_argsort(const struct ggml_hexagon_session * s
     }
 
     return true;
+
+    GGML_UNUSED(sess);
 }
 
 static bool ggml_hexagon_supported_rope(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
@@ -3244,6 +3296,8 @@ static bool ggml_hexagon_supported_rope(const struct ggml_hexagon_session * sess
         return false;
     }
     return true;
+
+    GGML_UNUSED(sess);
 }
 
 static bool ggml_hexagon_supported_ssm_conv(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
@@ -3283,6 +3337,8 @@ static bool ggml_hexagon_supported_ssm_conv(const struct ggml_hexagon_session * 
     }
 
     return true;
+
+    GGML_UNUSED(sess);
 }
 
 static bool ggml_hexagon_supported_pad(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
@@ -3293,8 +3349,9 @@ static bool ggml_hexagon_supported_pad(const struct ggml_hexagon_session * sess,
         return false;
     }
 
-    GGML_UNUSED(sess);
     return true;
+
+    GGML_UNUSED(sess);
 }
 
 static bool ggml_hexagon_supported_cumsum(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
@@ -3309,8 +3366,9 @@ static bool ggml_hexagon_supported_cumsum(const struct ggml_hexagon_session * se
         return false;
     }
 
-    GGML_UNUSED(sess);
     return true;
+
+    GGML_UNUSED(sess);
 }
 
 static bool ggml_hexagon_supported_diag(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
@@ -3332,8 +3390,9 @@ static bool ggml_hexagon_supported_diag(const struct ggml_hexagon_session * sess
         return false;
     }
 
-    GGML_UNUSED(sess);
     return true;
+
+    GGML_UNUSED(sess);
 }
 
 static bool ggml_hexagon_supported_solve_tri(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
@@ -3365,8 +3424,9 @@ static bool ggml_hexagon_supported_solve_tri(const struct ggml_hexagon_session *
         return false;
     }
 
-    GGML_UNUSED(sess);
     return true;
+
+    GGML_UNUSED(sess);
 }
 
 static bool ggml_hexagon_supported_tri(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
@@ -3813,6 +3873,8 @@ static void ggml_backend_hexagon_graph_optimize(ggml_backend_t backend, ggml_cgr
             }
         }
     }
+
+    GGML_UNUSED(backend);
 }
 
 static struct ggml_backend_i hexagon_backend_i = {
@@ -3931,6 +3993,8 @@ static bool ggml_hexagon_supported_buffers(ggml_hexagon_session *sess, const str
 }
 
 static bool ggml_hexagon_supported_cpy(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
+    GGML_UNUSED(sess);
+
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * dst  = op;
 
@@ -4001,6 +4065,7 @@ static bool ggml_hexagon_supported_concat(const struct ggml_hexagon_session * se
     }
 
     return true;
+    GGML_UNUSED(sess);
 }
 
 static bool ggml_hexagon_supported_fill(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
@@ -4010,8 +4075,8 @@ static bool ggml_hexagon_supported_fill(const struct ggml_hexagon_session * sess
         return false;
     }
 
-    GGML_UNUSED(sess);
     return true;
+    GGML_UNUSED(sess);
 }
 
 static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
@@ -4294,6 +4359,7 @@ static void * ggml_backend_hexagon_get_proc_address(ggml_backend_reg_t reg, cons
     }
 
     return NULL;
+    GGML_UNUSED(reg);
 }
 
 template<typename T> std::vector<T> str_to_vec(const char* str) {
