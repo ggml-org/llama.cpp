@@ -108,8 +108,7 @@ enum htp_op_code {
 #define HTP_OP_MAX_KERN_PARAMS 32
 
 #define HTP_OP_MAX_BUFS    16
-#define HTP_OP_MAX_REQS    256
-#define HTP_OP_MAX_TENSORS (HTP_OP_MAX_REQS * HTP_OP_MAX_INPUTS + HTP_OP_MAX_REQS)
+#define HTP_OP_MAX_TENSORS 8192 // must stay under 64K (uint16)
 
 #define HTP_OP_MAX_VMEM_DEFAULT (3355443200u)
 

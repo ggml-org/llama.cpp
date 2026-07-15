@@ -1135,7 +1135,7 @@ struct ggml_hexagon_opbatch {
 
         n_bufs_max = HTP_OP_MAX_BUFS;
         n_ops_max  = batch_size;
-        n_tens_max = n_ops_max + n_ops_max * HTP_OP_MAX_INPUTS;
+        n_tens_max = std::min<size_t>(n_ops_max + n_ops_max * HTP_OP_MAX_INPUTS, HTP_OP_MAX_TENSORS);
 
         b_vmem_max = max_vmem;
 
