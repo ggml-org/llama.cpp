@@ -681,6 +681,28 @@ static json parse_gcp_predict_response(const server_http_res_ptr & res) {
     }
 }
 
+struct gcp_forwarded_stream_response : server_http_res {
+    std::shared_ptr<server_http_req> forwarded_req;
+    server_http_res_ptr forwarded_res;
+
+    gcp_forwarded_stream_response(
+            std::shared_ptr<server_http_req> forwarded_req,
+            server_http_res_ptr forwarded_res)
+        : forwarded_req(std::move(forwarded_req)),
+          forwarded_res(std::move(forwarded_res)) {
+        content_type = this->forwarded_res->content_type;
+        status = this->forwarded_res->status;
+        headers = this->forwarded_res->headers;
+        next = [this](std::string & output) {
+            return this->forwarded_res->next(output);
+        };
+    }
+
+    void on_complete() override {
+        forwarded_res->on_complete();
+    }
+};
+
 void server_http_context::register_gcp_compat() const {
     const gcp_params gcp;
 
@@ -712,6 +734,51 @@ void server_http_context::register_gcp_compat() const {
             return json {{"error", format_error_response(message, type)}};
         };
 
+        const auto error_response = [](const std::string & message, error_type type) -> server_http_res_ptr {
+            auto res = std::make_unique<server_http_res>();
+            res->status = type == ERROR_TYPE_INVALID_REQUEST ? 400 : 500;
+            res->data = safe_json_to_str({{"error", format_error_response(message, type)}});
+            return res;
+        };
+
+        const auto dispatch = [this, &req, &alias_to_path](json payload, const std::string & default_format) -> server_http_res_ptr {
+            std::string format = default_format;
+            if (payload.contains("@requestFormat")) {
+                if (!payload.at("@requestFormat").is_string()) {
+                    throw std::invalid_argument("@requestFormat must be a string");
+                }
+                format = payload.at("@requestFormat").get<std::string>();
+                payload.erase("@requestFormat");
+            }
+
+            std::string dispatch_path;
+            auto it_alias = alias_to_path.find(format);
+            if (it_alias != alias_to_path.end()) {
+                dispatch_path = it_alias->second;
+            } else if (handlers.count(format)) {
+                dispatch_path = format;
+            } else {
+                throw std::invalid_argument("no handler registered for @requestFormat: " + format);
+            }
+
+            auto internal_req = std::make_shared<server_http_req>(server_http_req {
+                req.params,
+                req.headers,
+                path_prefix + dispatch_path,
+                req.query_string,
+                payload.dump(),
+                {},
+                req.should_stop,
+            });
+
+            server_http_res_ptr internal_res = handlers.at(dispatch_path)(*internal_req);
+            if (internal_res != nullptr && internal_res->is_stream()) {
+                return std::make_unique<gcp_forwarded_stream_response>(
+                    std::move(internal_req), std::move(internal_res));
+            }
+            return internal_res;
+        };
+
         json data;
         try {
             data = json::parse(req.body);
@@ -727,7 +794,20 @@ void server_http_context::register_gcp_compat() const {
             res->data = safe_json_to_str({{"error", format_error_response("request body must be a JSON object", ERROR_TYPE_INVALID_REQUEST)}});
             return res;
         }
-        if (!data.contains("instances") || !data.at("instances").is_array()) {
+
+        if (!data.contains("instances")) {
+            try {
+                return dispatch(std::move(data), "chatCompletions");
+            } catch (const std::invalid_argument & e) {
+                return error_response(e.what(), ERROR_TYPE_INVALID_REQUEST);
+            } catch (const std::exception & e) {
+                return error_response(e.what(), ERROR_TYPE_SERVER);
+            } catch (...) {
+                return error_response("unknown error", ERROR_TYPE_SERVER);
+            }
+        }
+
+        if (!data.at("instances").is_array()) {
             auto res = std::make_unique<server_http_res>();
             res->status = 400;
             res->data = safe_json_to_str({{"error", format_error_response("request body must include an array field named instances", ERROR_TYPE_INVALID_REQUEST)}});
@@ -743,11 +823,42 @@ void server_http_context::register_gcp_compat() const {
             return res;
         }
 
+        const auto is_streaming = [](const json & instance) {
+            return instance.is_object()
+                && instance.contains("stream")
+                && instance.at("stream").is_boolean()
+                && instance.at("stream").get<bool>();
+        };
+
+        if (instances.size() > 1) {
+            for (const auto & instance : instances) {
+                if (is_streaming(instance)) {
+                    return error_response("streaming is only supported for a single instance", ERROR_TYPE_INVALID_REQUEST);
+                }
+            }
+        }
+
+        if (instances.size() == 1 && is_streaming(instances.at(0))) {
+            const json & instance = instances.at(0);
+            if (!instance.contains("@requestFormat")) {
+                return error_response("each instance must include a string @requestFormat", ERROR_TYPE_INVALID_REQUEST);
+            }
+            try {
+                return dispatch(instance, "");
+            } catch (const std::invalid_argument & e) {
+                return error_response(e.what(), ERROR_TYPE_INVALID_REQUEST);
+            } catch (const std::exception & e) {
+                return error_response(e.what(), ERROR_TYPE_SERVER);
+            } catch (...) {
+                return error_response("unknown error", ERROR_TYPE_SERVER);
+            }
+        }
+
         std::vector<std::future<json>> futures;
         futures.reserve(instances.size());
 
         for (const auto & instance : instances) {
-            futures.push_back(std::async(std::launch::async, [this, &req, &alias_to_path, instance]() -> json {
+            futures.push_back(std::async(std::launch::async, [&dispatch, instance]() -> json {
                 if (!instance.is_object()) {
                     return build_error("each instance must be a JSON object", ERROR_TYPE_INVALID_REQUEST);
                 }
@@ -756,37 +867,7 @@ void server_http_context::register_gcp_compat() const {
                 }
 
                 try {
-                    json payload = instance;
-                    const std::string format = payload.at("@requestFormat").get<std::string>();
-                    payload.erase("@requestFormat");
-
-                    if (payload.contains("stream")) {
-                        SRV_WRN("%s", "ignoring client-provided stream field in instance, streaming is not supported in predict route\n");
-                        payload["stream"] = false;
-                    }
-
-                    // accept both camelCase aliases (e.g. "chatCompletions") and direct paths
-                    std::string dispatch_path;
-                    auto it_alias = alias_to_path.find(format);
-                    if (it_alias != alias_to_path.end()) {
-                        dispatch_path = it_alias->second;
-                    } else if (handlers.count(format)) {
-                        dispatch_path = format;
-                    } else {
-                        return build_error("no handler registered for @requestFormat: " + format, ERROR_TYPE_INVALID_REQUEST);
-                    }
-
-                    const server_http_req internal_req {
-                        req.params,
-                        req.headers,
-                        path_prefix + dispatch_path,
-                        req.query_string,
-                        payload.dump(),
-                        {},
-                        req.should_stop,
-                    };
-
-                    server_http_res_ptr internal_res = handlers.at(dispatch_path)(internal_req);
+                    server_http_res_ptr internal_res = dispatch(instance, "");
                     return parse_gcp_predict_response(internal_res);
                 } catch (const std::invalid_argument & e) {
                     return build_error(e.what(), ERROR_TYPE_INVALID_REQUEST);
