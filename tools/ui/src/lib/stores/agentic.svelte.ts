@@ -280,16 +280,13 @@ class AgenticStore {
 
 	getConfig(settings: SettingsConfigType, perChatOverrides?: McpServerOverride[]): AgenticConfig {
 		const maxTurns = Number(settings.agenticMaxTurns) || DEFAULT_AGENTIC_CONFIG.maxTurns;
-		const maxToolPreviewLines =
-			Number(settings.agenticMaxToolPreviewLines) || DEFAULT_AGENTIC_CONFIG.maxToolPreviewLines;
 		const hasTools =
 			mcpStore.hasEnabledServers(perChatOverrides) ||
 			toolsStore.builtinTools.length > 0 ||
 			toolsStore.customTools.length > 0;
 		return {
 			enabled: hasTools && DEFAULT_AGENTIC_CONFIG.enabled,
-			maxTurns,
-			maxToolPreviewLines
+			maxTurns
 		};
 	}
 

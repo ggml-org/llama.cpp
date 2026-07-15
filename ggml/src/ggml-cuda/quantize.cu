@@ -88,12 +88,12 @@ static __global__ void quantize_mmq_nvfp4(
         return;
     }
 
-    const int64_t k_block = i0_base / QK_K;
-    const int64_t blocks_per_col = (ne0 + QK_K - 1) / QK_K;
+    const int64_t k_block = i0_base / QK_FP4_MMQ;
+    const int64_t blocks_per_col = (ne0 + QK_FP4_MMQ - 1) / QK_FP4_MMQ;
     if (k_block >= blocks_per_col) {
         return;
     }
-    const int sub = (i0_base % QK_K) / QK_NVFP4_SUB;
+    const int sub = (i0_base % QK_FP4_MMQ) / QK_NVFP4_SUB;
 
     int64_t base_idx;
     if constexpr (scatter) {
@@ -217,7 +217,7 @@ static __global__ void quantize_mmq_mxfp4(const float * __restrict__ x,
         return;
     }
 
-    const int64_t block_fp4_mmq_size = 8 * QK_MXFP4;  // 256 values
+    const int64_t block_fp4_mmq_size = QK_FP4_MMQ;
     const int64_t k_block            = warp_start_offset / block_fp4_mmq_size;
     const int64_t quad_idx_in_block  = (warp_start_offset % block_fp4_mmq_size) / vals_per_warp;
 
@@ -342,8 +342,8 @@ static __global__ void quantize_mmq_q8_1(
     const float4 * x4 = (const float4 *) x;
     block_q8_1_mmq * y = (block_q8_1_mmq *) vy;
 
-    const int64_t k_block = i0 / (4*QK8_1); // column block in the channel
-    const int64_t iqs     = i0 % (4*QK8_1); // quant index in block
+    const int64_t k_block = i0 / QK8_1_MMQ; // column block in the channel
+    const int64_t iqs     = i0 % QK8_1_MMQ; // quant index in block
 
     // Load 4 floats per thread and calculate max. abs. value between them:
     const float4 xi = i0 < ne00 ? x4[(base_idx + i00)/4] : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
@@ -434,7 +434,7 @@ void quantize_mmq_q8_1_cuda(
         const int64_t ne00, const int64_t s01, const int64_t s02, const int64_t s03,
         const int64_t ne0, const int64_t ne1, const int64_t ne2, const int64_t ne3, cudaStream_t stream) {
     GGML_ASSERT(ne00 % 4 == 0);
-    GGML_ASSERT(ne0 % (4*QK8_1) == 0);
+    GGML_ASSERT(ne0 % QK8_1_MMQ == 0);
 
     // ne1 tends to assume the highest values, therefore use it as the "x" dimension of the CUDA grid:
     const int64_t block_num_y = (ne0 + 4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ - 1) / (4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ);
@@ -465,7 +465,7 @@ void quantize_scatter_mmq_q8_1_cuda(
         const int64_t ne00, const int64_t stride_token, const int64_t ne0,
         const int64_t n_tokens, const int64_t nrows_dst, const int n_expert_used, cudaStream_t stream) {
     GGML_ASSERT(ne00 % 4 == 0);
-    GGML_ASSERT(ne0 % (4*QK8_1) == 0);
+    GGML_ASSERT(ne0 % QK8_1_MMQ == 0);
 
     const int64_t block_num_y = (ne0 + 4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ - 1) / (4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ);
     const dim3 num_blocks(n_tokens, block_num_y, 1);

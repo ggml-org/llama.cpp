@@ -7,6 +7,7 @@
 #include "build-info.h"
 #include "preset.h"
 #include "download.h"
+#include "http.h"
 
 #include <cpp-httplib/httplib.h> // TODO: remove this once we use HTTP client from download.h
 #include <optional>
@@ -28,14 +29,7 @@
 #include <sstream>
 #include <cstring>
 
-#ifdef _WIN32
-#include <winsock2.h>
-#include <windows.h>
-#else
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
+#ifndef _WIN32
 extern char **environ;
 #endif
 
@@ -225,13 +219,14 @@ void server_model_meta::update_caps() {
             "LLAMA_ARG_MODEL_URL",
             "LLAMA_ARG_MMPROJ",
             "LLAMA_ARG_MMPROJ_URL",
+            "LLAMA_ARG_MMPROJ_AUTO",
             "LLAMA_ARG_HF_REPO",
             "LLAMA_ARG_HF_REPO_FILE",
         });
         params.offline = true;
         common_models_handler handler = common_models_handler_init(params, LLAMA_EXAMPLE_SERVER);
         common_models_handler_apply(handler, params); // note: this won't download the model because offline=true
-        if (params.mmproj.path.empty()) {
+        if (params.no_mmproj || params.mmproj.path.empty()) {
             multimodal = { false, false };
         } else {
             multimodal = mtmd_get_cap_from_file(params.mmproj.path.c_str());
@@ -716,66 +711,6 @@ std::optional<server_model_meta> server_models::get_meta(const std::string & nam
     return std::nullopt;
 }
 
-static int get_free_port() {
-#ifdef _WIN32
-    WSADATA wsaData;
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-        return -1;
-    }
-    typedef SOCKET native_socket_t;
-#define INVALID_SOCKET_VAL INVALID_SOCKET
-#define CLOSE_SOCKET(s) closesocket(s)
-#else
-    typedef int native_socket_t;
-#define INVALID_SOCKET_VAL -1
-#define CLOSE_SOCKET(s) close(s)
-#endif
-
-    native_socket_t sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock == INVALID_SOCKET_VAL) {
-#ifdef _WIN32
-        WSACleanup();
-#endif
-        return -1;
-    }
-
-    struct sockaddr_in serv_addr;
-    std::memset(&serv_addr, 0, sizeof(serv_addr));
-    serv_addr.sin_family = AF_INET;
-    serv_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    serv_addr.sin_port = htons(0);
-
-    if (bind(sock, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) != 0) {
-        CLOSE_SOCKET(sock);
-#ifdef _WIN32
-        WSACleanup();
-#endif
-        return -1;
-    }
-
-#ifdef _WIN32
-    int namelen = sizeof(serv_addr);
-#else
-    socklen_t namelen = sizeof(serv_addr);
-#endif
-    if (getsockname(sock, (struct sockaddr*)&serv_addr, &namelen) != 0) {
-        CLOSE_SOCKET(sock);
-#ifdef _WIN32
-        WSACleanup();
-#endif
-        return -1;
-    }
-
-    int port = ntohs(serv_addr.sin_port);
-
-    CLOSE_SOCKET(sock);
-#ifdef _WIN32
-    WSACleanup();
-#endif
-
-    return port;
-}
-
 // helper to convert vector<string> to char **
 // pointers are only valid as long as the original vector is valid
 static std::vector<char *> to_char_ptr_array(const std::vector<std::string> & vec) {
@@ -879,7 +814,7 @@ void server_models::load(const std::string & name, const load_options & opts) {
     // prepare new instance info
     instance_t inst;
     inst.meta             = meta;
-    inst.meta.port        = get_free_port();
+    inst.meta.port        = common_http_get_free_port();
     inst.meta.status      = SERVER_MODEL_STATUS_LOADING;
     inst.meta.loaded_info = json{};
     inst.meta.last_used   = ggml_time_ms();

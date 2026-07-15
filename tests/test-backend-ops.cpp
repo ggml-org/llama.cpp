@@ -15,10 +15,10 @@
 // ##############################
 
 
-#include <ggml.h>
-#include <ggml-alloc.h>
-#include <ggml-backend.h>
-#include <ggml-cpp.h>
+#include "ggml.h"
+#include "ggml-alloc.h"
+#include "ggml-backend.h"
+#include "ggml-cpp.h"
 
 #include <algorithm>
 #include <atomic>
@@ -1326,34 +1326,32 @@ struct test_case {
         };
         const bool use_weights = use_weight_context();
 
-        ggml_context * ctx = ggml_init(params);
+        ggml_context_ptr ctx(ggml_init(params));
         GGML_ASSERT(ctx);
-        ggml_context * ctx_weights = use_weights ? ggml_init(params) : nullptr;
+        ggml_context_ptr ctx_weights(use_weights ? ggml_init(params) : nullptr);
         GGML_ASSERT(!use_weights || ctx_weights);
 
-        gf = ggml_new_graph(ctx);
+        gf = ggml_new_graph(ctx.get());
 
         // pre-graph sentinel
-        add_sentinel(ctx);
+        add_sentinel(ctx.get());
         if (ctx_weights) {
-            add_sentinel(ctx_weights);
+            add_sentinel(ctx_weights.get());
         }
 
-        ggml_tensor * out = build_graph(ctx, ctx_weights);
+        ggml_tensor * out = build_graph(ctx.get(), ctx_weights.get());
         current_op_name   = op_desc(out);
-        check_for_f16_tensor(ctx);
+        check_for_f16_tensor(ctx.get());
 
         if (!matches_filter(out, op_names_filter)) {
             //printf("  %s: skipping\n", op_desc(out).c_str());
-            ggml_free(ctx_weights);
-            ggml_free(ctx);
             return test_status_t::SKIPPED;
         }
 
         // check if the backends support the ops
         bool supported = true;
         for (ggml_backend_t backend : {backend1, backend2}) {
-            for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            for (ggml_tensor * t = ggml_get_first_tensor(ctx.get()); t != NULL; t = ggml_get_next_tensor(ctx.get(), t)) {
                 if (!ggml_backend_supports_op(backend, t)) {
                     supported = false;
                     break;
@@ -1368,37 +1366,30 @@ struct test_case {
 
             print_test_result_locked(output_printer, result);
 
-            ggml_free(ctx_weights);
-            ggml_free(ctx);
             return test_status_t::NOT_SUPPORTED;
         }
 
         // post-graph sentinel
-        add_sentinel(ctx);
+        add_sentinel(ctx.get());
         if (ctx_weights) {
-            add_sentinel(ctx_weights);
+            add_sentinel(ctx_weights.get());
         }
 
-        ggml_backend_buffer_t buf_weights = nullptr;
+        ggml_backend_buffer_ptr buf_weights(nullptr);
         if (ctx_weights) {
-            buf_weights = ggml_backend_alloc_ctx_tensors(ctx_weights, backend1);
+            buf_weights.reset(ggml_backend_alloc_ctx_tensors(ctx_weights.get(), backend1));
             if (buf_weights == NULL) {
                 printf("failed to allocate weight tensors [%s] ", ggml_backend_name(backend1));
-                ggml_free(ctx_weights);
-                ggml_free(ctx);
                 return test_status_t::FAIL;
             }
-            ggml_backend_buffer_set_usage(buf_weights, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+            ggml_backend_buffer_set_usage(buf_weights.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
         }
 
         // allocate
-        ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend1);
+        ggml_backend_buffer_ptr buf(ggml_backend_alloc_ctx_tensors(ctx.get(), backend1));
 
         if (buf == NULL) {
             printf("failed to allocate tensors [%s] ", ggml_backend_name(backend1));
-            ggml_backend_buffer_free(buf_weights);
-            ggml_free(ctx_weights);
-            ggml_free(ctx);
             return test_status_t::FAIL;
         }
 
@@ -1411,9 +1402,9 @@ struct test_case {
         }
 
         // randomize tensors
-        initialize_tensors(ctx);
+        initialize_tensors(ctx.get());
         if (ctx_weights) {
-            initialize_tensors(ctx_weights);
+            initialize_tensors(ctx_weights.get());
         }
 
         // compare
@@ -1498,11 +1489,6 @@ struct test_case {
         const bool cmp_ok = ggml_backend_compare_graph_backend(backend1, backend2, gf, callback, &ud,
                                                                run_whole_graph() ? fused_nodes_to_verify.data() : nullptr,
                                                                fused_nodes_to_verify.size());
-
-        ggml_backend_buffer_free(buf);
-        ggml_backend_buffer_free(buf_weights);
-        ggml_free(ctx_weights);
-        ggml_free(ctx);
 
         // Create test result
         bool        test_passed = ud.ok && cmp_ok;
@@ -2437,11 +2423,10 @@ struct test_set_rows : public test_case {
 
     void initialize_tensors(ggml_context * ctx) override {
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (ggml_is_view_op(t->op)) {
+                continue;
+            }
             if (t->type == GGML_TYPE_I64 || t->type == GGML_TYPE_I32) {
-                if (ggml_is_view_op(t->op)) {
-                    continue;
-                }
-
                 init_set_rows_row_ids(t, ne[1]);
             } else {
                 init_tensor_uniform(t);
@@ -2464,6 +2449,9 @@ struct test_set_rows : public test_case {
                 err_estimate /= 8.0f;
             }
             err_estimate *= err_estimate;
+            if (type_src == GGML_TYPE_F16) {
+                err_estimate *= 16.0f;
+            }
             err_estimate /= 0.25f*float(ne[0] * r * ne[2]*nr23[0] * ne[3]*nr23[1]);
             return err_estimate;
         }
@@ -5451,25 +5439,28 @@ struct test_conv_2d : public test_case {
 struct test_conv_2d_dw : public test_case {
     const std::array<int64_t, 4> ne_input;
     const std::array<int64_t, 4> ne_kernel;
+    const ggml_type type_kernel;
     const int stride;
     const int padding;
     const int dilation;
     const bool cwhn;
 
     std::string vars() override {
-        return VARS_TO_STR6(ne_input, ne_kernel, stride, padding, dilation, cwhn);
+        return VARS_TO_STR7(ne_input, ne_kernel, type_kernel, stride, padding, dilation, cwhn);
     }
 
-    test_conv_2d_dw(std::array<int64_t, 4> ne_input = {64, 64, 16, 1},
+    test_conv_2d_dw(
+            std::array<int64_t, 4> ne_input = {64, 64, 16, 1},
             std::array<int64_t, 4> ne_kernel = {3, 3, 1, 16},
+            ggml_type type_kernel = GGML_TYPE_F32,
             int stride = 1, int padding = 0, int dilation = 1, bool cwhn = false)
-        : ne_input(ne_input), ne_kernel(ne_kernel), stride(stride), padding(padding), dilation(dilation), cwhn(cwhn) {}
+        : ne_input(ne_input), ne_kernel(ne_kernel), type_kernel(type_kernel), stride(stride), padding(padding), dilation(dilation), cwhn(cwhn) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * input = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_input.data());
         ggml_set_name(input, "input");
 
-        ggml_tensor * kernel = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne_kernel.data());
+        ggml_tensor * kernel = ggml_new_tensor(ctx, type_kernel, 4, ne_kernel.data());
         ggml_set_name(kernel, "kernel");
 
         if (cwhn) {
@@ -5564,7 +5555,7 @@ struct test_concat : public test_case {
     const std::array<int64_t, 4> ne_a;
     const int64_t ne_b_d;
     const int dim;
-    const int v; // view (1 << 0: non-cont a, 1 << 1: non-cont b)
+    const int v; // view (1 << 0: non-cont a (first 3 dim), 1 << 1: non-cont b (first 3 dim), 1 << 2: non-cont a (last 2 dim), 1 << 3: non-cont b (last 2 dim))
 
     std::string vars() override {
         return VARS_TO_STR5(type, ne_a, ne_b_d, dim, v);
@@ -5587,6 +5578,13 @@ struct test_concat : public test_case {
 
             a = ggml_view_4d(ctx, a, ne_a[0], ne_a[1], ne_a[2], ne_a[3], a->nb[1], a->nb[2], a->nb[3], 0);
             ggml_set_name(a, "view_of_a");
+        } else if (v & 4) {
+            auto ne = ne_a; ne[2] *= 2; ne[3] *= 4;
+            a = ggml_new_tensor(ctx, type, 4, ne.data());
+            ggml_set_name(a, "a");
+
+            a = ggml_view_4d(ctx, a, ne_a[0], ne_a[1], ne_a[2], ne_a[3], a->nb[1], a->nb[2], a->nb[3], 0);
+            ggml_set_name(a, "view_of_a");
         } else {
             a = ggml_new_tensor(ctx, type, 4, ne_a.data());
             ggml_set_name(a, "a");
@@ -5594,6 +5592,13 @@ struct test_concat : public test_case {
         ggml_tensor * b;
         if (v & 2) {
             auto ne = ne_b; ne[0] *= 3; ne[1] *= 2; ne[2] *= 4;
+            b = ggml_new_tensor(ctx, type, 4, ne.data());
+            ggml_set_name(b, "b");
+
+            b = ggml_view_4d(ctx, b, ne_b[0], ne_b[1], ne_b[2], ne_b[3], b->nb[1], b->nb[2], b->nb[3], 0);
+            ggml_set_name(b, "view_of_b");
+        } else if (v & 8) {
+            auto ne = ne_b; ne[2] *= 3; ne[3] *= 2;
             b = ggml_new_tensor(ctx, type, 4, ne.data());
             ggml_set_name(b, "b");
 
@@ -7108,6 +7113,67 @@ struct test_diag : public test_case {
     }
 };
 
+// GGML_OP_LIGHTNING_INDEXER
+struct test_lightning_indexer : public test_case {
+    const int64_t hsk; // indexer K head size
+    const int64_t nh; // num indexer heads
+    const int64_t kv; // kv size
+    const int64_t nb; // batch size
+    const int64_t ns; // num streams
+    const int64_t nm; // ne[3] of mask
+
+    const ggml_type type_K;
+
+    std::string vars() override {
+        return VARS_TO_STR7(hsk, nh, kv, nb, ns, nm, type_K);
+    }
+
+    double max_nmse_err() override {
+        return 1e-6;
+    }
+
+    uint64_t op_flops(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return ((2 * hsk + 2) * nh + 1) * kv * nb * ns;
+    }
+
+    test_lightning_indexer(int64_t hsk = 128, int64_t nh = 64, int64_t kv = 256, int64_t nb = 128, int64_t ns = 1, int64_t nm = 1, ggml_type type_K = GGML_TYPE_F16)
+        : hsk(hsk), nh(nh), kv(kv), nb(nb), ns(ns), nm(nm), type_K(type_K) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, hsk, nh, nb, ns);
+        ggml_set_param(q);
+        ggml_set_name(q, "q");
+
+        ggml_tensor * k = ggml_new_tensor_4d(ctx, type_K, hsk, 1, kv, ns);
+        ggml_set_param(k);
+        ggml_set_name(k, "k");
+
+        ggml_tensor * w = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, nh, nb, 1, ns);
+        ggml_set_param(w);
+        ggml_set_name(w, "w");
+
+        ggml_tensor * m = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, kv, nb, 1, nm);
+        ggml_set_param(m);
+        ggml_set_name(m, "m");
+
+        ggml_tensor * out = ggml_lightning_indexer(ctx, q, k, w, m);
+        ggml_set_name(out, "out");
+
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "m") == 0) {
+                init_tensor_kq_mask(t);
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
 // Deserializable generic test case
 struct input_tensor {
     ggml_type type;
@@ -7878,17 +7944,19 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_I64, { 1, 8, 1, 3 }, { 1, 1 }, 2, false));
     test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_I32, { 1, 8, 1, 3 }, { 1, 1 }, 2, false));
     test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, GGML_TYPE_Q8_0, GGML_TYPE_I32, { 256, 5, 1, 3 }, { 1, 1, }, 1, false));
-    for (ggml_type type : all_types) {
-        for (int b : {1, 7}) {
-            for (bool v : {false, true}) {
-                test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, type, GGML_TYPE_I64, { 256, 5,  b, 3 }, { 1, 1, }, 1, v));
-                test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, type, GGML_TYPE_I64, { 256, 11, 1, b }, { 2, 3, }, 7, v));
+    for (ggml_type src_type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
+        for (ggml_type type : all_types) {
+            for (int b : {1, 7}) {
+                for (bool v : {false, true}) {
+                    test_cases.emplace_back(new test_set_rows(src_type, type, GGML_TYPE_I64, { 256, 5,  b, 3 }, { 1, 1, }, 1, v));
+                    test_cases.emplace_back(new test_set_rows(src_type, type, GGML_TYPE_I64, { 256, 11, 1, b }, { 2, 3, }, 7, v));
 
-                test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, type, GGML_TYPE_I64, { 3*ggml_blck_size(type), 3, b, 1 }, { 2, 3, }, 2, v));
+                    test_cases.emplace_back(new test_set_rows(src_type, type, GGML_TYPE_I64, { 3*ggml_blck_size(type), 3, b, 1 }, { 2, 3, }, 2, v));
 
-                if (ggml_blck_size(type) == 1) {
-                    test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, type, GGML_TYPE_I64, { 31, 3, b, 1 }, { 2, 3, }, 2, v));
-                    test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, type, GGML_TYPE_I64, { 33, 5, 1, b }, { 2, 3, }, 1, v));
+                    if (ggml_blck_size(type) == 1) {
+                        test_cases.emplace_back(new test_set_rows(src_type, type, GGML_TYPE_I64, { 31, 3, b, 1 }, { 2, 3, }, 2, v));
+                        test_cases.emplace_back(new test_set_rows(src_type, type, GGML_TYPE_I64, { 33, 5, 1, b }, { 2, 3, }, 1, v));
+                    }
                 }
             }
         }
@@ -7963,6 +8031,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     // im2col 2D
     test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_F32));
+    test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_F16));
     test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F32));
     test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     for (int s0 : {1, 3}) {
@@ -8114,10 +8183,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F16, {1024, 1024, 256, 1}, {3, 3, 256, 1}, 1, 1, 1, 1, 1, 1, true));
     // test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F32, {1024, 1024, 256, 1}, {3, 3, 256, 1}, 1, 1, 1, 1, 1, 1, true));
 
-    test_cases.emplace_back(new test_conv_2d_dw({17, 34, 9, 1}, {3, 3, 1, 9}, 1, 0, 1, false));
-    test_cases.emplace_back(new test_conv_2d_dw({17, 34, 9, 1}, {3, 3, 1, 9}, 1, 0, 1, true));
-    test_cases.emplace_back(new test_conv_2d_dw({32, 8, 64, 1}, {3, 3, 1, 64}, 2, 1, 1, false));
-    test_cases.emplace_back(new test_conv_2d_dw({32, 8, 64, 1}, {3, 3, 1, 64}, 2, 1, 1, true));
+    test_cases.emplace_back(new test_conv_2d_dw({17, 34, 9, 1}, {3, 3, 1, 9},  GGML_TYPE_F32, 1, 0, 1, false));
+    test_cases.emplace_back(new test_conv_2d_dw({17, 34, 9, 1}, {3, 3, 1, 9},  GGML_TYPE_F32, 1, 0, 1, true));
+    test_cases.emplace_back(new test_conv_2d_dw({32, 8, 64, 1}, {3, 3, 1, 64}, GGML_TYPE_F32, 2, 1, 1, false));
+    test_cases.emplace_back(new test_conv_2d_dw({32, 8, 64, 1}, {3, 3, 1, 64}, GGML_TYPE_F32, 2, 1, 1, true));
+
+    test_cases.emplace_back(new test_conv_2d_dw({17, 34, 9, 1}, {3, 3, 1, 9},  GGML_TYPE_F16, 1, 0, 1, false));
+    test_cases.emplace_back(new test_conv_2d_dw({17, 34, 9, 1}, {3, 3, 1, 9},  GGML_TYPE_F16, 1, 0, 1, true));
+    test_cases.emplace_back(new test_conv_2d_dw({32, 8, 64, 1}, {3, 3, 1, 64}, GGML_TYPE_F16, 2, 1, 1, false));
+    test_cases.emplace_back(new test_conv_2d_dw({32, 8, 64, 1}, {3, 3, 1, 64}, GGML_TYPE_F16, 2, 1, 1, true));
 
     // CONV_3D
     auto calc_conv_output_size_3d = [](int64_t ins, int64_t ks, int s, int p, int d) -> int64_t {
@@ -9029,8 +9103,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
 
     for (ggml_type type_a : { GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, GGML_TYPE_Q8_0 }) {
-        for (int dim : { 0, 1, 2, 3, }) {
-            test_cases.emplace_back(new test_concat(type_a, {128, 12, 13, 14}, dim == 0 ? 256 : 7, dim, 0));
+        for (int v : { 0, 4, 8, 12 }) {
+            for (int dim : { 0, 1, 2, 3, }) {
+                test_cases.emplace_back(new test_concat(type_a, {128, 12, 13, 14}, dim == 0 ? 256 : 7, dim, v));
+            }
         }
     }
 
@@ -9399,6 +9475,19 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_falcon(2));
 #endif
 
+    // lightning_indexer
+    for (int kv : { 256 }) {
+        for (int bs : { 1, 512 }) {
+            for (int nh : { 32, 64 }) {
+                for (auto [ns, nm] : { std::pair{1, 1}, std::pair{4, 4}, std::pair{4, 1} }) {
+                    for (ggml_type type_K : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0, GGML_TYPE_IQ4_NL}) {
+                        test_cases.emplace_back(new test_lightning_indexer(128, nh, kv, bs, ns, nm, type_K));
+                    }
+                }
+            }
+        }
+    }
+
     return test_cases;
 }
 #ifdef _MSC_VER
@@ -9621,8 +9710,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         }
     }
 
-    test_cases.emplace_back(new test_conv_2d_dw({512, 512, 256, 1}, {3, 3, 1, 256}, 1, 1, 1, false));
-    test_cases.emplace_back(new test_conv_2d_dw({512, 512, 256, 1}, {3, 3, 1, 256}, 1, 1, 1, true));
+    test_cases.emplace_back(new test_conv_2d_dw({512, 512, 256, 1}, {3, 3, 1, 256}, GGML_TYPE_F32, 1, 1, 1, false));
+    test_cases.emplace_back(new test_conv_2d_dw({512, 512, 256, 1}, {3, 3, 1, 256}, GGML_TYPE_F32, 1, 1, 1, true));
+    test_cases.emplace_back(new test_conv_2d_dw({112, 112, 32,  1}, {3, 3, 1, 32},  GGML_TYPE_F32, 1, 1, 1, false));
+    test_cases.emplace_back(new test_conv_2d_dw({112, 112, 32,  1}, {3, 3, 1, 32},  GGML_TYPE_F32, 1, 1, 1, true));
+    test_cases.emplace_back(new test_conv_2d_dw({56,  56,  128, 1}, {5, 5, 1, 128}, GGML_TYPE_F32, 2, 2, 1, false));
+    test_cases.emplace_back(new test_conv_2d_dw({56,  56,  128, 1}, {5, 5, 1, 128}, GGML_TYPE_F32, 2, 2, 1, true));
 
     for (ggml_type kernel_type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
         test_cases.emplace_back(new test_conv_transpose_2d({256, 256, 256, 1}, {3, 3, 16, 256}, 1, kernel_type));
@@ -9723,6 +9816,19 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 128, 512, 1));  // 4h PP-512
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 128, 1024, 1)); // 4h PP-1024
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 64, 1, 1, false, true)); // KDA PP-64
+
+    // lightning_indexer
+    for (int kv : { 256, 4096, 65536 }) {
+        for (int bs : { 1, 512, 2048 }) {
+            for (int nh : { 32, 64 }) {
+                for (int ns : { 1, 4 }) {
+                    for (ggml_type type_K : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0, GGML_TYPE_Q5_1, GGML_TYPE_Q5_0, GGML_TYPE_Q4_1, GGML_TYPE_Q4_0, GGML_TYPE_IQ4_NL}) {
+                        test_cases.emplace_back(new test_lightning_indexer(128, nh, kv, bs, ns, ns, type_K));
+                    }
+                }
+            }
+        }
+    }
 
     return test_cases;
 }
@@ -9830,7 +9936,7 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
     filter_test_cases(test_cases, params_filter);
 
     if (mode == MODE_TEST) {
-        ggml_backend_t backend_cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, NULL);
+        ggml_backend_ptr backend_cpu(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, NULL));
         if (backend_cpu == NULL) {
             test_operation_info info("", "", "CPU");
             info.set_error("backend", "Failed to initialize CPU backend");
@@ -9839,10 +9945,10 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
         }
         // Use reference implementation on the CPU backend for comparison
         using ggml_backend_cpu_set_use_ref_t = void (*)(ggml_backend_t, bool);
-        auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend_cpu));
+        auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend_cpu.get()));
         auto * set_use_ref = (ggml_backend_cpu_set_use_ref_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cpu_set_use_ref");
         if (set_use_ref) {
-            set_use_ref(backend_cpu, true);
+            set_use_ref(backend_cpu.get(), true);
         }
 
         std::atomic<size_t> n_ok = 0;
@@ -9889,29 +9995,26 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
         if (parallel_workers <= 1) {
             // Reuse the outer backend / backend_cpu so we don't pay an
             // extra CPU backend init.
-            run_tests(backend, backend_cpu);
+            run_tests(backend, backend_cpu.get());
         } else {
             std::atomic<size_t> workers_started = 0;
 
             const auto & eval_worker = [&]() {
-                ggml_backend_t b = ggml_backend_dev_init(dev, NULL);
+                ggml_backend_ptr b(ggml_backend_dev_init(dev, NULL));
                 if (b == NULL) {
                     return;
                 }
 
-                ggml_backend_t b_cpu = ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, NULL);
+                ggml_backend_ptr b_cpu(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, NULL));
                 if (b_cpu == NULL) {
-                    ggml_backend_free(b);
                     return;
                 }
 
                 if (set_use_ref) {
-                    set_use_ref(b_cpu, true);
+                    set_use_ref(b_cpu.get(), true);
                 }
                 workers_started++;
-                run_tests(b, b_cpu);
-                ggml_backend_free(b_cpu);
-                ggml_backend_free(b);
+                run_tests(b.get(), b_cpu.get());
             };
 
             std::vector<std::thread> threads;
@@ -9924,15 +10027,12 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
             }
 
             if (workers_started == 0 && !test_cases.empty()) {
-                ggml_backend_free(backend_cpu);
                 return false;
             }
         }
 
         output_printer->print_summary(test_summary_info(n_ok, tests_run, false));
         output_printer->print_failed_tests(failed_tests);
-
-        ggml_backend_free(backend_cpu);
 
         return n_ok == tests_run;
     }
@@ -10039,10 +10139,10 @@ static void show_test_coverage() {
     };
 
     for (auto & test_case : test_cases) {
-        ggml_context * ctx = ggml_init(params);
+        ggml_context_ptr ctx(ggml_init(params));
         if (ctx) {
             test_case->mode = MODE_TEST;
-            ggml_tensor * out = test_case->build_graph(ctx);
+            ggml_tensor * out = test_case->build_graph(ctx.get());
             if (out && out->op != GGML_OP_NONE) {
                 if (out->op == GGML_OP_UNARY) {
                     tested_ops.insert(ggml_unary_op_name(ggml_get_unary_op(out)));
@@ -10052,7 +10152,6 @@ static void show_test_coverage() {
                     tested_ops.insert(ggml_op_name(out->op));
                 }
             }
-            ggml_free(ctx);
         }
     }
     std::set<std::string> covered_ops;
@@ -10207,14 +10306,14 @@ int main(int argc, char ** argv) {
             continue;
         }
 
-        ggml_backend_t backend = ggml_backend_dev_init(dev, NULL);
+        ggml_backend_ptr backend(ggml_backend_dev_init(dev, NULL));
         GGML_ASSERT(backend != NULL);
 
         ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
         auto ggml_backend_set_n_threads_fn = (ggml_backend_set_n_threads_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads");
         if (ggml_backend_set_n_threads_fn) {
             // TODO: better value for n_threads
-            ggml_backend_set_n_threads_fn(backend, N_THREADS);
+            ggml_backend_set_n_threads_fn(backend.get(), N_THREADS);
         }
 
         size_t free, total;  // NOLINT
@@ -10223,15 +10322,13 @@ int main(int argc, char ** argv) {
                                                              false, "", ggml_backend_dev_description(dev),
                                                              total / 1024 / 1024, free / 1024 / 1024, true));
 
-        bool ok = test_backend(backend, dev, mode, op_names_filter, params_filter, output_printer.get(), test_file_path, parallel_workers);
+        bool ok = test_backend(backend.get(), dev, mode, op_names_filter, params_filter, output_printer.get(), test_file_path, parallel_workers);
 
         if (ok) {
             n_ok++;
         }
         output_printer->print_backend_status(
-            backend_status_info(ggml_backend_name(backend), ok ? test_status_t::OK : test_status_t::FAIL));
-
-        ggml_backend_free(backend);
+            backend_status_info(ggml_backend_name(backend.get()), ok ? test_status_t::OK : test_status_t::FAIL));
     }
 
     ggml_quantize_free();

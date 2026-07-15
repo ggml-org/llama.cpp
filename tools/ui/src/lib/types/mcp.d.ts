@@ -174,7 +174,6 @@ export interface HealthCheckParams {
 	id: string;
 	enabled: boolean;
 	url: string;
-	requestTimeoutSeconds: number;
 	headers?: string;
 	useProxy?: boolean;
 }
@@ -220,20 +219,10 @@ export interface MCPServerDisplayInfo {
 
 export type MCPServerSettingsEntry = MCPServerDisplayInfo & {
 	enabled: boolean;
-	requestTimeoutSeconds: number;
 	headers?: string;
 	iconUrl?: string;
 	useProxy?: boolean;
 };
-
-/**
- * Pre-defined recommended MCP server shown to the user in onboarding/picker UIs.
- */
-export interface RecommendedMCPServer extends MCPServerDisplayInfo {
-	description: string;
-	enabled: boolean;
-	requestTimeoutSeconds: number;
-}
 
 export interface MCPHostManagerConfig {
 	servers: MCPClientConfig['servers'];
