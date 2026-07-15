@@ -6237,8 +6237,10 @@ struct ggml_tensor * ggml_opt_step_adamw(
         struct ggml_tensor  * adamw_params) {
     GGML_ASSERT(a->flags & GGML_TENSOR_FLAG_PARAM);
     GGML_ASSERT(ggml_are_same_shape(a, grad));
-    GGML_ASSERT(ggml_are_same_shape(a, m));
-    GGML_ASSERT(ggml_are_same_shape(a, v));
+    GGML_ASSERT((ggml_are_same_shape(a, m) && ggml_are_same_shape(a, v)) ||
+        (m->type == GGML_TYPE_Q8_0 && v->type == GGML_TYPE_Q8_0 &&
+         ggml_is_contiguous(m) && ggml_is_contiguous(v) &&
+         ggml_nelements(m) >= ggml_nelements(a) && ggml_nelements(v) >= ggml_nelements(a)));
     GGML_ASSERT(adamw_params->type == GGML_TYPE_F32);
     GGML_ASSERT(ggml_nelements(adamw_params) == 8);
 

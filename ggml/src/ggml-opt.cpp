@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cinttypes>
+#include <cstring>
 #include <map>
 #include <random>
 #include <vector>
@@ -100,6 +101,16 @@ static enum ggml_type ggml_opt_optimizer_state_type(enum ggml_opt_optimizer_type
         case GGML_OPT_OPTIMIZER_TYPE_ADAMW_IQ4_NL:return GGML_TYPE_IQ4_NL;
         default:                                  return GGML_TYPE_COUNT;
     }
+}
+
+static bool ggml_opt_is_cuda_buffer_type(ggml_backend_buffer_type_t buft) {
+    ggml_backend_dev_t dev = ggml_backend_buft_get_device(buft);
+    if (!dev) {
+        return false;
+    }
+
+    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+    return reg && strcmp(ggml_backend_reg_name(reg), "CUDA") == 0;
 }
 
 static void ggml_opt_step_adamw_quantized(ggml_opt_context_t opt_ctx, const ggml_opt_optimizer_params & opt_pars) {
@@ -415,6 +426,8 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
 
     const bool need_momenta = opt_ctx->build_type_alloc == GGML_OPT_BUILD_TYPE_OPT &&
         opt_ctx->optimizer == GGML_OPT_OPTIMIZER_TYPE_ADAMW;
+    const bool need_q8_cuda_momenta = opt_ctx->build_type_alloc == GGML_OPT_BUILD_TYPE_OPT &&
+        opt_ctx->optimizer == GGML_OPT_OPTIMIZER_TYPE_ADAMW_Q8_0;
     const bool need_quantized_momenta = opt_ctx->build_type_alloc == GGML_OPT_BUILD_TYPE_OPT &&
         ggml_opt_optimizer_state_type(opt_ctx->optimizer) != GGML_TYPE_COUNT;
 
@@ -439,7 +452,7 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
         //   - pred (if using static graphs)
         //   - ncorrect (if using static graphs, 2 tensors).
         constexpr size_t n_loss = 1;
-        const size_t tensors_per_param = (accumulate ? 1 : 0) + (need_momenta ? 2 : 0);
+        const size_t tensors_per_param = (accumulate ? 1 : 0) + ((need_momenta || need_q8_cuda_momenta) ? 2 : 0);
         const size_t tensors_const = opt_ctx->static_graphs ? 9 : 0;
         const size_t size_meta = (n_loss + tensors_per_param*n_param + tensors_const) * ggml_tensor_overhead();
         struct ggml_init_params params = {
@@ -556,7 +569,7 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
             }
         }
 
-        if (need_momenta && opt_ctx->build_type_alloc >= GGML_OPT_BUILD_TYPE_OPT) {
+        if ((need_momenta || need_q8_cuda_momenta) && opt_ctx->build_type_alloc >= GGML_OPT_BUILD_TYPE_OPT) {
             opt_ctx->grad_m.resize(n_nodes);
             opt_ctx->grad_v.resize(n_nodes);
             for (int i = 0; i < n_nodes; ++i) {
@@ -569,12 +582,26 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
                         ? ggml_backend_buffer_get_type(node->buffer)
                         : ggml_backend_cpu_buffer_type();
 
+                    if (need_q8_cuda_momenta && !ggml_opt_is_cuda_buffer_type(param_buft)) {
+                        opt_ctx->grad_m[i] = nullptr;
+                        opt_ctx->grad_v[i] = nullptr;
+                        continue;
+                    }
+
                     // Allocate a tiny context + buffer for this pair of moment tensors.
                     const size_t sz = 2 * ggml_tensor_overhead();
                     struct ggml_init_params mip = { sz, nullptr, true };
                     struct ggml_context * mctx = ggml_init(mip);
-                    opt_ctx->grad_m[i] = ggml_new_tensor(mctx, GGML_TYPE_F32, GGML_MAX_DIMS, node->ne);
-                    opt_ctx->grad_v[i] = ggml_new_tensor(mctx, GGML_TYPE_F32, GGML_MAX_DIMS, node->ne);
+                    if (need_q8_cuda_momenta) {
+                        const int64_t ne = ggml_nelements(node);
+                        const int64_t block_size = ggml_blck_size(GGML_TYPE_Q8_0);
+                        const int64_t ne_padded = (ne + block_size - 1)/block_size*block_size;
+                        opt_ctx->grad_m[i] = ggml_new_tensor_1d(mctx, GGML_TYPE_Q8_0, ne_padded);
+                        opt_ctx->grad_v[i] = ggml_new_tensor_1d(mctx, GGML_TYPE_Q8_0, ne_padded);
+                    } else {
+                        opt_ctx->grad_m[i] = ggml_new_tensor(mctx, GGML_TYPE_F32, GGML_MAX_DIMS, node->ne);
+                        opt_ctx->grad_v[i] = ggml_new_tensor(mctx, GGML_TYPE_F32, GGML_MAX_DIMS, node->ne);
+                    }
                     ggml_backend_buffer_t mbuf = ggml_backend_alloc_ctx_tensors_from_buft(mctx, param_buft);
                     ggml_backend_buffer_clear(mbuf, 0);
                     opt_ctx->bufs_momenta.push_back(mbuf);
@@ -632,6 +659,9 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
                 continue;
             }
             GGML_ASSERT(node->type == GGML_TYPE_F32 && grad->type == GGML_TYPE_F32);
+            if (need_q8_cuda_momenta && opt_ctx->grad_m[i]) {
+                continue;
+            }
             const int64_t ne = ggml_nelements(node);
             const enum ggml_type state_type_v = state_type == GGML_TYPE_F16 ? GGML_TYPE_F16 : GGML_TYPE_Q8_0;
             const int64_t block_size = std::max(ggml_blck_size(state_type), ggml_blck_size(state_type_v));
@@ -689,10 +719,21 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
                 v = opt_ctx->grad_v[i];
                 ggml_format_name(m, "AdamW m for %s", node->name);
                 ggml_format_name(v, "AdamW v for %s", node->name);
+            } else if (need_q8_cuda_momenta && opt_ctx->grad_m[i]) {
+                m = opt_ctx->grad_m[i];
+                v = opt_ctx->grad_v[i];
+                ggml_format_name(m, "AdamW Q8_0 m for %s", node->name);
+                ggml_format_name(v, "AdamW Q8_0 v for %s", node->name);
             }
             struct ggml_tensor * opt_step;
             switch (optimizer) {
                 case GGML_OPT_OPTIMIZER_TYPE_ADAMW:
+                    opt_step = ggml_opt_step_adamw(opt_ctx->ctx_compute, node, grad, m, v, adamw_params);
+                    break;
+                case GGML_OPT_OPTIMIZER_TYPE_ADAMW_Q8_0:
+                    if (!m || !v) {
+                        continue;
+                    }
                     opt_step = ggml_opt_step_adamw(opt_ctx->ctx_compute, node, grad, m, v, adamw_params);
                     break;
                 case GGML_OPT_OPTIMIZER_TYPE_SGD:

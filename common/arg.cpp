@@ -4281,7 +4281,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({ LLAMA_EXAMPLE_FINETUNE, LLAMA_EXAMPLE_FINETUNE_QLORA }));
     add_opt(common_arg(
         {"-opt", "--optimizer"}, "sgd|adamw|adamw_f16|adamw_q8_0|adamw_q6_k|adamw_iq4_nl",
-        "optimizer (adamw_q8_0/q6_k/iq4_nl keep optimizer state on CPU)",
+        "optimizer (adamw_q8_0 uses CUDA state when LoRA tensors are on CUDA; q6_k/iq4_nl use CPU state)",
         [](common_params & params, const std::string & name) {
             params.optimizer = common_opt_get_optimizer(name.c_str());
             if (params.optimizer == GGML_OPT_OPTIMIZER_TYPE_COUNT) {
