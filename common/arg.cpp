@@ -1817,6 +1817,46 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_sampling());
     add_opt(common_arg(
+        {"--reasoning-temp"}, "N",
+        "temperature override while inside the reasoning block (default: inherit)",
+        [](common_params & params, const std::string & value) {
+            params.sampling.reasoning_temp = std::max(std::stof(value), 0.0f);
+            params.sampling.reasoning_sampling = true;
+        }
+    ).set_sampling());
+    add_opt(common_arg(
+        {"--reasoning-top-k"}, "N",
+        "top-k override while inside the reasoning block (default: inherit)",
+        [](common_params & params, int value) {
+            params.sampling.reasoning_top_k = value;
+            params.sampling.reasoning_sampling = true;
+        }
+    ).set_sampling());
+    add_opt(common_arg(
+        {"--reasoning-top-p"}, "N",
+        "top-p override while inside the reasoning block (default: inherit)",
+        [](common_params & params, const std::string & value) {
+            params.sampling.reasoning_top_p = std::stof(value);
+            params.sampling.reasoning_sampling = true;
+        }
+    ).set_sampling());
+    add_opt(common_arg(
+        {"--reasoning-min-p"}, "N",
+        "min-p override while inside the reasoning block (default: inherit)",
+        [](common_params & params, const std::string & value) {
+            params.sampling.reasoning_min_p = std::stof(value);
+            params.sampling.reasoning_sampling = true;
+        }
+    ).set_sampling());
+    add_opt(common_arg(
+        {"--reasoning-repeat-penalty"}, "N",
+        "repeat-penalty override while inside the reasoning block (default: inherit)",
+        [](common_params & params, const std::string & value) {
+            params.sampling.reasoning_penalty_repeat = std::stof(value);
+            params.sampling.reasoning_sampling = true;
+        }
+    ).set_sampling());
+    add_opt(common_arg(
         {"--top-nsigma", "--top-n-sigma"}, "N",
         string_format("top-n-sigma sampling (default: %.2f, -1.0 = disabled)", params.sampling.top_n_sigma),
         [](common_params & params, const std::string & value) {

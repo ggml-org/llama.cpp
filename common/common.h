@@ -290,6 +290,19 @@ struct common_params_sampling {
     std::string              reasoning_budget_message;         // message injected before end tag when budget exhausted
     bool                     reasoning_control = false;        // create the budget sampler on demand so reasoning can be ended at runtime
 
+    // reasoning-section sampling overrides
+    // when enabled, a second sampler chain is built and used while generation is
+    // inside the reasoning block (between reasoning_budget_start and reasoning_budget_end),
+    // allowing e.g. a higher exploratory temperature for thinking and a sharper,
+    // stricter configuration for the final response / code / tool calls.
+    // values < 0 (INT32_MIN for top_k) inherit the base setting.
+    bool    reasoning_sampling      = false;
+    float   reasoning_temp          = -1.0f;
+    int32_t reasoning_top_k         = INT32_MIN;
+    float   reasoning_top_p         = -1.0f;
+    float   reasoning_min_p         = -1.0f;
+    float   reasoning_penalty_repeat = -1.0f;
+
     bool backend_sampling = false;
 
     bool has_logit_bias() const {
