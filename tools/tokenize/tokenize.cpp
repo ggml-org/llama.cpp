@@ -103,18 +103,10 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    // which prompt source was requested?
-    // -p/--prompt and -f/--file both end up in params.prompt (common's -f also
-    // strips a single trailing newline), but -f additionally records the path
-    // in params.prompt_file, so we use that to tell them apart.
+    // -f and -p both land in params.prompt; -f also sets prompt_file. -f and -p
+    // resolve like the other tools (no mutual exclusion), --stdin takes precedence.
     const bool use_stdin = params.tokenize_stdin;
     const bool use_file  = !params.prompt_file.empty();
-
-    // sanity check: --stdin is mutually exclusive with -f/--file and -p/--prompt
-    if (use_stdin && (use_file || !params.prompt.empty())) {
-        LOG_ERR("error: --stdin is mutually exclusive with --file and --prompt\n");
-        return 1;
-    }
 
     // must have some prompt
     if (!use_stdin && !use_file && params.prompt.empty()) {
