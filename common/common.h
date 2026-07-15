@@ -329,6 +329,8 @@ struct common_params_speculative_draft {
 
     float p_split = 0.1f; // speculative decoding split probability
     float p_min   = 0.0f; // minimum speculative decoding probability (greedy)
+    int32_t adaptive_length_threshold = 0; // Number of consecutive successes (failures) before increasing (decreasing) the size of the draft by one
+    int32_t adaptive_length_bias = 0; // Number of consecutive successes (failures) before increasing (decreasing) the size of the draft by one
 
     bool backend_sampling = true; // offload draft sampling to the backend (default: on)
 
