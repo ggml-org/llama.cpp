@@ -59,22 +59,9 @@ struct server_mcp_instance {
     std::vector<server_mcp_tool_definition> list_tools();
     json call_tool(const std::string & tool_name, const json & arguments, int timeout_ms);
 
-    // Platform-specific process state
-    struct process_handle {
-#if defined(_WIN32)
-        HANDLE hProcess;
-        HANDLE hStdinWrite;
-        HANDLE hStdoutRead;
-#else
-        pid_t pid;
-        int stdin_fd;
-        int stdout_fd;
-#endif
-        process_handle();
-        ~process_handle();
-        void terminate_process();
-        bool is_alive() const;
-    };
+    // Platform-specific process state; defined in server-mcp.cpp so that platform
+    // headers (windows.h) are not pulled into every TU that includes this header
+    struct process_handle;
     std::unique_ptr<process_handle> proc;
 
     json send_rpc(const json & request, int timeout_ms);

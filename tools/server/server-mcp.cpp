@@ -21,8 +21,11 @@
 #if defined(_WIN32)
 #include <windows.h>
 #else
+#include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <unistd.h>
+#include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/select.h>
 #endif
@@ -89,6 +92,22 @@ std::vector<server_mcp_server_config> server_mcp_server_config::parse_cursor_for
 //
 // Process handle (platform-specific)
 //
+
+struct server_mcp_instance::process_handle {
+#if defined(_WIN32)
+    HANDLE hProcess;
+    HANDLE hStdinWrite;
+    HANDLE hStdoutRead;
+#else
+    pid_t pid;
+    int stdin_fd;
+    int stdout_fd;
+#endif
+    process_handle();
+    ~process_handle();
+    void terminate_process();
+    bool is_alive() const;
+};
 
 server_mcp_instance::process_handle::process_handle() {
 #if defined(_WIN32)
@@ -242,13 +261,14 @@ static bool spawn_process_stdio(
         cmdline += quote_windows_arg(a);
     }
 
-    STARTUPINFOA si = { sizeof(STARTUPINFOA) };
+    STARTUPINFOA si = {};
+    si.cb = sizeof(STARTUPINFOA);
     si.dwFlags = STARTF_USESTDHANDLES;
     si.hStdInput = hStdinRead;
     si.hStdOutput = hStdoutWrite;
     si.hStdError = hStdoutWrite;
 
-    PROCESS_INFORMATION pi = { 0 };
+    PROCESS_INFORMATION pi = {};
 
     std::string env_block;
     if (!env.empty()) {
