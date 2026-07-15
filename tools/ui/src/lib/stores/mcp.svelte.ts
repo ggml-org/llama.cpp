@@ -559,7 +559,6 @@ class MCPStore {
 		});
 	}
 
-
 	async ensureInitialized(perChatOverrides?: McpServerOverride[]): Promise<boolean> {
 		if (!browser) {
 			return false;
@@ -1002,7 +1001,6 @@ class MCPStore {
 		if (perChatOverrides !== undefined) {
 			enabledServerIds = new Set(perChatOverrides.filter((o) => o.enabled).map((o) => o.serverId));
 		} else {
-			// No overrides provided - fall back to each server's own `enabled` flag
 			enabledServerIds = new Set(
 				this.getServers()
 					.filter((s) => s.enabled)
@@ -1010,12 +1008,10 @@ class MCPStore {
 			);
 		}
 
-		// No enabled servers = no capability
 		if (enabledServerIds.size === 0) {
 			return false;
 		}
 
-		// Check health check states for enabled servers with prompts capability
 		for (const [serverId, state] of Object.entries(this._healthChecks)) {
 			if (!enabledServerIds.has(serverId)) continue;
 			if (
@@ -1026,7 +1022,6 @@ class MCPStore {
 			}
 		}
 
-		// Also check active connections as fallback
 		for (const [serverName, connection] of this.connections) {
 			if (!enabledServerIds.has(serverName)) continue;
 			if (connection.serverCapabilities?.prompts) {
@@ -1553,19 +1548,16 @@ class MCPStore {
 		if (perChatOverrides !== undefined) {
 			enabledServerIds = new Set(perChatOverrides.filter((o) => o.enabled).map((o) => o.serverId));
 		} else {
-			// No overrides provided - fall back to each server's own `enabled` flag
 			enabledServerIds = new Set(
 				this.getServers()
 					.filter((s) => s.enabled)
 					.map((s) => s.id)
 			);
 		}
-		// No enabled servers = no capability
 		if (enabledServerIds.size === 0) {
 			return false;
 		}
 
-		// Check health check states for enabled servers with resources capability
 		for (const [serverId, state] of Object.entries(this._healthChecks)) {
 			if (!enabledServerIds.has(serverId)) continue;
 			if (
@@ -1576,7 +1568,6 @@ class MCPStore {
 			}
 		}
 
-		// Also check active connections as fallback
 		for (const [serverName, connection] of this.connections) {
 			if (!enabledServerIds.has(serverName)) continue;
 			if (MCPService.supportsResources(connection)) {

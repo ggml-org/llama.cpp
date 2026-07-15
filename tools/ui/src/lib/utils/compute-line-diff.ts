@@ -13,7 +13,7 @@
  * `edit_file` snippet typically carries.
  */
 
-export type DiffLineKind = 'context' | 'add' | 'remove';
+import { DiffLineKind } from '$lib/enums';
 
 export interface DiffLine {
 	kind: DiffLineKind;
@@ -32,8 +32,10 @@ export function computeLineDiff(oldText: string, newText: string): DiffLine[] {
 	const n = newLines.length;
 
 	if (m === 0 && n === 0) return [];
-	if (m === 0) return newLines.map((t, k) => ({ kind: 'add', text: t, newLine: k + 1 }));
-	if (n === 0) return oldLines.map((t, k) => ({ kind: 'remove', text: t, oldLine: k + 1 }));
+	if (m === 0)
+		return newLines.map((t, k) => ({ kind: DiffLineKind.ADD, text: t, newLine: k + 1 }));
+	if (n === 0)
+		return oldLines.map((t, k) => ({ kind: DiffLineKind.REMOVE, text: t, oldLine: k + 1 }));
 
 	const lcs: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
 	for (let i = 1; i <= m; i++) {
@@ -51,23 +53,28 @@ export function computeLineDiff(oldText: string, newText: string): DiffLine[] {
 	let j = n;
 	while (i > 0 && j > 0) {
 		if (oldLines[i - 1] === newLines[j - 1]) {
-			result.push({ kind: 'context', text: oldLines[i - 1], oldLine: i, newLine: j });
+			result.push({
+				kind: DiffLineKind.CONTEXT,
+				text: oldLines[i - 1],
+				oldLine: i,
+				newLine: j
+			});
 			i--;
 			j--;
 		} else if (lcs[i - 1][j] >= lcs[i][j - 1]) {
-			result.push({ kind: 'remove', text: oldLines[i - 1], oldLine: i });
+			result.push({ kind: DiffLineKind.REMOVE, text: oldLines[i - 1], oldLine: i });
 			i--;
 		} else {
-			result.push({ kind: 'add', text: newLines[j - 1], newLine: j });
+			result.push({ kind: DiffLineKind.ADD, text: newLines[j - 1], newLine: j });
 			j--;
 		}
 	}
 	while (i > 0) {
-		result.push({ kind: 'remove', text: oldLines[i - 1], oldLine: i });
+		result.push({ kind: DiffLineKind.REMOVE, text: oldLines[i - 1], oldLine: i });
 		i--;
 	}
 	while (j > 0) {
-		result.push({ kind: 'add', text: newLines[j - 1], newLine: j });
+		result.push({ kind: DiffLineKind.ADD, text: newLines[j - 1], newLine: j });
 		j--;
 	}
 
@@ -84,9 +91,10 @@ export function renderUnifiedDiff(lines: DiffLine[]): string {
 	return lines.map((l) => prefixFor(l.kind) + l.text).join('\n');
 }
 
-function prefixFor(kind: DiffLineKind): string {
-	if (kind === 'add') return '+';
-	if (kind === 'remove') return '-';
+/** Column-1 marker for a `DiffLine`: ` `, `+`, or `-`. */
+export function prefixFor(kind: DiffLineKind): string {
+	if (kind === DiffLineKind.ADD) return '+';
+	if (kind === DiffLineKind.REMOVE) return '-';
 	return ' ';
 }
 

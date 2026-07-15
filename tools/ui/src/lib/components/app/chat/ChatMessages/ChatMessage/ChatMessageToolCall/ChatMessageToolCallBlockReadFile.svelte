@@ -5,12 +5,12 @@
 	import {
 		DEFAULT_LANGUAGE,
 		FILE_PATH_SEPARATOR_REGEX,
+		MAX_HEIGHT_CODE_BLOCK,
 		TEXT_LANGUAGE_PREFIX_REGEX
 	} from '$lib/constants';
 	import { getBuiltinToolUi } from '$lib/constants/built-in-tools';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { getFileTypeByExtension, type AgenticSection } from '$lib/utils';
-	import { parsePartialJsonArgs } from './parse-partial-json-args';
+	import { getFileTypeByExtension, parsePartialJsonArgs, type AgenticSection } from '$lib/utils';
 
 	interface Props {
 		section: AgenticSection;
@@ -101,7 +101,7 @@
 		<SyntaxHighlightedCode
 			code={section.toolResult}
 			language={readFileMeta?.language ?? DEFAULT_LANGUAGE}
-			maxHeight="22rem"
+			maxHeight={MAX_HEIGHT_CODE_BLOCK}
 		/>
 	{:else}
 		<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">

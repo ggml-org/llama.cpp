@@ -94,18 +94,11 @@
 
 	const sections = $derived(deriveAgenticSections(message, toolMessages, [], isStreaming));
 
-	// Per-section tool execution state for live-streaming renderers.
 	const currentlyExecutingToolCallId = $derived(
 		isStreaming ? agenticExecutingToolCallId(message.convId) : null
 	);
 
-	// Auto-expand a tool section the moment its execution begins so the user
-	// can watch streamed output land in real time. Stickier than reasoning's
-	// `showThoughtInProgress` flag: once we set expandedStates[idx] = true we
-	// intentionally do NOT reset it when execution finishes, so the section
-	// stays open with the final output visible. The user can still collapse
-	// it manually; that writes expandedStates[idx] = false which we never
-	// override (we only act when expandedStates[idx] is undefined).
+	// Skip sections the user manually collapsed - we never override an explicit false.
 	let lastSeenExecutingToolCallId: string | null = null;
 	$effect(() => {
 		const current = currentlyExecutingToolCallId;

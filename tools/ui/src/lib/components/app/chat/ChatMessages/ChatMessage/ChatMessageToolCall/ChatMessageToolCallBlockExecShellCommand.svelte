@@ -9,17 +9,15 @@
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import {
 		highlightCode,
+		isExitCodeSummaryLine,
+		parseExecShellCommandError,
+		parseExecShellCommandExitStatus,
 		parseToolResultWithImages,
 		type AgenticSection,
+		type ExecShellExitStatus,
 		type ToolResultLine
 	} from '$lib/utils';
 	import type { DatabaseMessageExtra } from '$lib/types';
-	import { parseExecShellCommandError } from './parse-exec-shell-error';
-	import {
-		isExitCodeSummaryLine,
-		parseExecShellCommandExitStatus,
-		type ExecShellExitStatus
-	} from './parse-exec-shell-status';
 
 	interface Props {
 		section: AgenticSection;
@@ -30,6 +28,9 @@
 		 *  semantics: while true, the output region is clamped to a max-height
 		 *  container that auto-scrolls to follow new chunks; once execution
 		 *  finishes the container unlocks and renders the full content. */
+		/** True while the agentic loop is streaming output chunks for THIS
+		 *  tool call. Drives max-height + auto-scroll while true; releases
+		 *  them when the loop reports this call as done. */
 		isExecuting?: boolean;
 		attachments?: DatabaseMessageExtra[];
 		onToggle?: () => void;
@@ -48,12 +49,8 @@
 		!showSpinner && !toolUi?.icon && mcpServerFavicon ? mcpServerFavicon : null
 	);
 
-	// Two distinct "live" phases:
-	//   1. Spinner-only - tool invoked but no chunks yet (very first frames).
-	//   2. Live streaming - chunks arriving, max-height + auto-scroll.
-	// While either holds we keep the spinner over the terminal icon. Once
-	// isExecuting flips off but isStreaming is still true the chunks are
-	// frozen (this tool is done; the agent may still be doing other things).
+	// `isLive` covers all in-flight phases: pre-chunk spinner and streaming
+	// itself. Frozen output (tool done while agent continues) is not live.
 	const isLive = $derived(isExecuting);
 	const showLiveSpinner = $derived(showSpinner || isLive);
 
@@ -92,9 +89,9 @@
 		section.toolResult ? parseToolResultWithImages(section.toolResult, attachments) : []
 	);
 
-	// Strip the trailing "[exit code: N]" line from the rendered output - it's
-	// promoted into a colored status badge below instead. While streaming we
-	// keep it visible (status will appear once the final chunk lands).
+	// Drop the trailing "[exit code: N]" line - rendered as a colored badge
+	// below. During streaming we keep it so a partial stream still shows the
+	// status once the final chunk lands.
 	const outputLines: ToolResultLine[] = $derived(
 		execShellExitStatus && parsedLines.length > 0
 			? parsedLines.slice(0, parsedLines.length - 1)
@@ -107,10 +104,8 @@
 			isExitCodeSummaryLine(parsedLines[parsedLines.length - 1].text, execShellExitStatus)
 	);
 
-	// bash highlighting for the command title. Tokens (variables, flags,
-	// strings) get the highlight.js theme colors via the styles loaded by
-	// SyntaxHighlightedCode; output uses the bare monospace render so the
-	// (typically huge) log blob isn't dragged through hljs line-by-line.
+	// Highlight just the command for the title; the (typically large) output
+	// blob uses bare monospace to skip hljs per-line highlighting.
 	const highlightedCommandHtml = $derived(
 		execShellMeta ? highlightCode(execShellMeta.command, 'bash') : ''
 	);
@@ -135,23 +130,12 @@
 						: undefined
 	);
 
-	// `Use full height code blocks` display setting: when on, the shell
-	// output runs at its natural height (no inner max-height, page-level
-	// scroll governs). Default is clamped at max-height: 28rem so long
-	// command output stays bounded regardless of streaming state.
 	const useFullHeightCodeBlocks = $derived(
 		Boolean(config()[SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS])
 	);
 
-	// Auto-scroll-to-bottom only makes sense inside a clamped container.
-	// With full-height the page handles scrolling and this region can't
-	// overflow, so following is a no-op.
 	const autoScroll = $derived(isLive && !useFullHeightCodeBlocks);
 
-	// Auto-scroll / sticky-bottom for live streaming output. Mirrors the
-	// pattern in ChatMessageReasoningBlock: a MutationObserver catches DOM
-	// changes that don't touch section.toolResult directly (line-wrap reflow,
-	// image attach, exit-code line appended at the end of the stream, etc.).
 	let scrollEl: HTMLDivElement | undefined = $state();
 	const SCROLL_BOTTOM_THRESHOLD_PX = TOOL_RUNTIME_SCROLL_AT_BOTTOM_THRESHOLD_PX;
 	let userScrolledUp = $state(false);
@@ -170,10 +154,8 @@
 		if (pendingFrame !== null || !scrollEl || userScrolledUp) return;
 		pendingFrame = requestAnimationFrame(() => {
 			pendingFrame = null;
-			// Re-check `userScrolledUp` at paint time. Skip an `isAtBottom`
-			// gate: it would falsely return false on the first chunk that
-			// overflows the container (scrollTop is still at the top),
-			// freezing autoscroll for the rest of the stream.
+
+			// Re-check on rAF - user may scroll between scheduling and paint.
 			if (scrollEl && !userScrolledUp) {
 				scrollEl.scrollTop = scrollEl.scrollHeight;
 			}
@@ -192,17 +174,14 @@
 	}
 
 	$effect(() => {
-		// Primary trigger: toolResult directly. Coalesced via RAF so a burst
-		// of chunks within the same paint frame results in one scroll.
 		void section.toolResult;
 		if (!scrollEl || !autoScroll) return;
 		scrollToBottomOnFrame();
 	});
 
 	$effect(() => {
-		// Secondary trigger: any DOM mutation inside the scroll region. Catches
-		// layout changes that don't touch section.toolResult directly (line wrap
-		// reflow, image attaches, syntax highlighting settle, etc.).
+		// Catch layout changes that don't touch toolResult (line-wrap reflow,
+		// image attaches, hljs settle).
 		if (!scrollEl || !autoScroll) return;
 
 		const observer = new MutationObserver(() => scrollToBottomOnFrame());
@@ -216,8 +195,7 @@
 	});
 
 	$effect(() => {
-		// Tool just finished streaming - reset sticky state so the next
-		// rendering pass (now full-height) starts pinned to the bottom.
+		// Reset on stream end so the next render (full-height) starts pinned.
 		if (!isLive) {
 			userScrolledUp = false;
 			lastScrollTop = 0;

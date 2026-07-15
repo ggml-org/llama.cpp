@@ -31,7 +31,7 @@ import { SvelteMap } from 'svelte/reactivity';
 import { ToolsService } from '$lib/services/tools.service';
 import { SandboxService } from '$lib/services/sandbox.service';
 import { isAbortError } from '$lib/utils';
-import { DEFAULT_AGENTIC_CONFIG, NEWLINE_SEPARATOR } from '$lib/constants';
+import { DEFAULT_AGENTIC_CONFIG, NEWLINE } from '$lib/constants';
 import {
 	IMAGE_MIME_TO_EXTENSION,
 	DATA_URI_BASE64_REGEX,
@@ -1002,7 +1002,7 @@ class AgenticStore {
 			return { cleanedResult: result, attachments: [] };
 		}
 
-		const lines = result.split(NEWLINE_SEPARATOR);
+		const lines = result.split(NEWLINE);
 		const attachments: DatabaseMessageExtra[] = [];
 		let attachmentIndex = 0;
 
@@ -1033,7 +1033,7 @@ class AgenticStore {
 			return line;
 		});
 
-		return { cleanedResult: cleanedLines.join(NEWLINE_SEPARATOR), attachments };
+		return { cleanedResult: cleanedLines.join(NEWLINE), attachments };
 	}
 
 	private buildAttachmentName(mimeType: string, index: number): string {

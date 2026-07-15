@@ -2,6 +2,7 @@
 	import { Loader2, Wrench, XCircle, Terminal } from '@lucide/svelte';
 	import { CollapsibleContentBlock, SyntaxHighlightedCode } from '$lib/components/app';
 	import { AgenticSectionType, BuiltInTool, FileTypeText } from '$lib/enums';
+	import { MAX_HEIGHT_CODE_BLOCK } from '$lib/constants';
 	import { getBuiltinToolUi } from '$lib/constants/built-in-tools';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { type AgenticSection } from '$lib/utils';
@@ -103,7 +104,7 @@
 			<SyntaxHighlightedCode
 				code={runJsMeta.code}
 				language={FileTypeText.JAVASCRIPT}
-				maxHeight="22rem"
+				maxHeight={MAX_HEIGHT_CODE_BLOCK}
 				streaming={isCodeStreaming}
 			/>
 		</div>
@@ -111,7 +112,7 @@
 		<SyntaxHighlightedCode
 			code={runJsMeta.code}
 			language={FileTypeText.JAVASCRIPT}
-			maxHeight="22rem"
+			maxHeight={MAX_HEIGHT_CODE_BLOCK}
 			streaming={isCodeStreaming}
 		/>
 		<div class="mb-2 mt-3 flex items-center gap-2 text-xs text-muted-foreground/70">
@@ -126,7 +127,7 @@
 				<SyntaxHighlightedCode
 					code={section.toolResult}
 					language={FileTypeText.JAVASCRIPT}
-					maxHeight="22rem"
+					maxHeight={MAX_HEIGHT_CODE_BLOCK}
 				/>
 			</div>
 		{:else}

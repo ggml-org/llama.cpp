@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import {
-	computeLineDiff,
-	renderUnifiedDiff
-} from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/compute-line-diff';
+import { DiffLineKind } from '$lib/enums';
+import { computeLineDiff, renderUnifiedDiff, type DiffLine } from '$lib/utils';
 
 describe('computeLineDiff', () => {
 	it('returns empty for two empty inputs', () => {
@@ -120,18 +118,18 @@ describe('renderUnifiedDiff', () => {
 	});
 
 	it('prefixes each line with `+`, `-`, or a single space', () => {
-		const lines = [
-			{ kind: 'context' as const, text: 'ctx' },
-			{ kind: 'add' as const, text: 'plus' },
-			{ kind: 'remove' as const, text: 'minus' }
+		const lines: DiffLine[] = [
+			{ kind: DiffLineKind.CONTEXT, text: 'ctx' },
+			{ kind: DiffLineKind.ADD, text: 'plus' },
+			{ kind: DiffLineKind.REMOVE, text: 'minus' }
 		];
 		expect(renderUnifiedDiff(lines)).toBe(' ctx\n+plus\n-minus');
 	});
 
 	it('ignores oldLine/newLine metadata when emitting prefixes', () => {
-		const lines = [
-			{ kind: 'context' as const, text: 'a', oldLine: 1, newLine: 1 },
-			{ kind: 'add' as const, text: 'b', newLine: 2 }
+		const lines: DiffLine[] = [
+			{ kind: DiffLineKind.CONTEXT, text: 'a', oldLine: 1, newLine: 1 },
+			{ kind: DiffLineKind.ADD, text: 'b', newLine: 2 }
 		];
 		expect(renderUnifiedDiff(lines)).toBe(' a\n+b');
 	});

@@ -1,3 +1,10 @@
+import {
+	SSE_DATA_PREFIX,
+	SSE_DONE_MARKER,
+	SSE_LINE_SEPARATOR,
+	SSE_RECORD_SEPARATOR
+} from '$lib/constants';
+
 /**
  * Minimal SSE-with-JSON stream iterator.
  *
@@ -13,11 +20,6 @@
 export interface SseJsonEvent<T = unknown> {
 	data: T;
 }
-
-const SSE_RECORD_SEPARATOR = '\n\n';
-const SSE_LINE_SEPARATOR = '\n';
-const SSE_DATA_PREFIX = 'data:';
-const SSE_DONE_MARKER = '[DONE]';
 
 export async function* parseSseJsonStream<T = unknown>(
 	response: Response,
@@ -49,8 +51,8 @@ export async function* parseSseJsonStream<T = unknown>(
 					if (!payload) continue;
 					try {
 						yield { data: JSON.parse(payload) as T };
-					} catch {
-						// skip malformed lines
+					} catch (error) {
+						console.error('[sse] malformed JSON payload, skipping:', error);
 					}
 				}
 			}
@@ -58,8 +60,8 @@ export async function* parseSseJsonStream<T = unknown>(
 	} finally {
 		try {
 			reader.releaseLock();
-		} catch {
-			/* already released */
+		} catch (error) {
+			console.error('[sse] failed to release reader lock:', error);
 		}
 	}
 }

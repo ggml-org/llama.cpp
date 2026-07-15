@@ -117,13 +117,13 @@ async function formatNonOkResponse(response: Response): Promise<string> {
 		const errBody = (await response.clone().json()) as { error?: string; message?: string };
 		if (errBody?.error) return `${status}: ${errBody.error}`;
 		if (errBody?.message) return `${status}: ${errBody.message}`;
-	} catch {
-		/* not JSON, fall through to raw text */
+	} catch (error) {
+		console.error('[tools] Non-JSON error response, falling back to raw text:', error);
 		try {
 			const text = await response.text();
 			if (text.trim()) return `${status}: ${text.trim()}`;
-		} catch {
-			/* nothing we can do */
+		} catch (error) {
+			console.error('[tools] Failed to read error response as text:', error);
 		}
 	}
 	return status || `HTTP ${response.status}`;

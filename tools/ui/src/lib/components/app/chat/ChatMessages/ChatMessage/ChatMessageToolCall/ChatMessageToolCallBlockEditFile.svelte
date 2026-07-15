@@ -2,12 +2,15 @@
 	import { Loader2, Wrench, XCircle } from '@lucide/svelte';
 	import { CollapsibleContentBlock } from '$lib/components/app';
 	import { AgenticSectionType, BuiltInTool } from '$lib/enums';
-	import { FILE_PATH_SEPARATOR_REGEX } from '$lib/constants';
+	import { FILE_PATH_SEPARATOR_REGEX, MAX_HEIGHT_CODE_BLOCK } from '$lib/constants';
 	import { getBuiltinToolUi } from '$lib/constants/built-in-tools';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import type { AgenticSection } from '$lib/utils';
-	import { parsePartialJsonArgs } from './parse-partial-json-args';
-	import { computeLineDiff, type DiffLine } from './compute-line-diff';
+	import {
+		computeLineDiff,
+		parsePartialJsonArgs,
+		prefixFor,
+		type AgenticSection
+	} from '$lib/utils';
 
 	interface Props {
 		section: AgenticSection;
@@ -88,8 +91,8 @@
 						}
 					}
 				}
-			} catch {
-				// Plain string tool result = legacy success, no rich metadata.
+			} catch (e) {
+        		console.error(e);
 			}
 		}
 
@@ -107,9 +110,6 @@
 		parseEditFileMeta(section.toolName, section.toolArgs, section.toolResult)
 	);
 
-	// Structured per-line diff for each edit. Rendered directly (instead of
-	// through SyntaxHighlightedCode) so we can attach a line-number gutter
-	// alongside each diff row.
 	const editDiffs = $derived(
 		(editFileMeta?.edits ?? []).map((edit) => computeLineDiff(edit.oldText, edit.newText))
 	);
@@ -123,12 +123,6 @@
 					? 'incomplete'
 					: undefined
 	);
-
-	function markerFor(kind: DiffLine['kind']): string {
-		if (kind === 'add') return '+';
-		if (kind === 'remove') return '-';
-		return ' ';
-	}
 </script>
 
 {#snippet editFileTitle()}
@@ -163,12 +157,12 @@
 				<div class="mb-1.5 text-xs text-muted-foreground/70 italic">
 					Edit {ei + 1}&nbsp;of&nbsp;{editFileMeta?.edits.length ?? 0}
 				</div>
-				<div class="diff-block">
+				<div class="diff-block" style:max-height={MAX_HEIGHT_CODE_BLOCK}>
 					<div class="diff-pre">
 						{#each diffLines as line, li (li)}
 							<div class="diff-line diff-{line.kind}">
 								<span class="diff-old-num">{line.oldLine ?? ''}</span>
-								<span class="diff-marker">{markerFor(line.kind)}</span>
+								<span class="diff-marker">{prefixFor(line.kind)}</span>
 								<span class="diff-new-num">{line.newLine ?? ''}</span>
 								<span class="diff-text">{line.text || '\u00A0'}</span>
 							</div>
@@ -194,7 +188,6 @@
 
 <style>
 	.diff-block {
-		max-height: 22rem;
 		overflow: auto;
 		border-radius: 0.75rem;
 		border-width: 1px;

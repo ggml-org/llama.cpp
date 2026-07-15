@@ -14,9 +14,8 @@
 		class?: string;
 		maxHeight?: string;
 		maxWidth?: string;
-		// When true the container auto-scrolls to the bottom as new chunks
-		// arrive; scrolling up pauses the follow until the user returns to
-		// the bottom. Same pattern as ChatMessageReasoningBlock.
+		/** Auto-scrolls to the bottom of new chunks; pauses on user scroll-up
+		 *  until the user returns to the bottom. */
 		streaming?: boolean;
 	}
 
@@ -62,10 +61,7 @@
 		if (pendingFrame !== null || !scrollEl || userScrolledUp) return;
 		pendingFrame = requestAnimationFrame(() => {
 			pendingFrame = null;
-			// Re-check `userScrolledUp` at paint time. Skip an `isAtBottom`
-			// gate: it would falsely return false on the first chunk that
-			// overflows the container (scrollTop is still at the top),
-			// freezing autoscroll for the rest of the stream.
+			// User may scroll between scheduling and paint.
 			if (scrollEl && !userScrolledUp) {
 				scrollEl.scrollTop = scrollEl.scrollHeight;
 			}
@@ -90,10 +86,7 @@
 		loadHighlightTheme(isDark);
 	});
 
-	// Reset sticky state at the start of a streaming episode so the first
-	// chunk pins to the bottom again. Only depends on `streaming`, so
-	// post-stream code updates don't trigger this and preserve the user's
-	// scroll position.
+	// Pin to bottom at the start of each streaming episode.
 	$effect(() => {
 		if (streaming) {
 			userScrolledUp = false;
@@ -101,16 +94,13 @@
 		}
 	});
 
-	// Follow growing content while streaming. Tracks `code` so each chunk
-	// schedules a scroll, but skips if the user has scrolled up.
 	$effect(() => {
 		void code;
 		if (!streaming || userScrolledUp) return;
 		scrollToBottomOnFrame();
 	});
 
-	// Catch DOM mutations that don't change `code` directly (e.g. layout
-	// shifts after highlight.js re-tokenizes, line-wrap reflows).
+	// Layout shifts that don't change `code` (highlight.js re-tokenize, line-wrap reflow).
 	$effect(() => {
 		if (!streaming || !scrollEl) return;
 
@@ -133,7 +123,7 @@
 		? `max-width: ${maxWidth};`
 		: ''}"
 >
-	<!-- Needs to be formatted as single line for proper rendering -->
+	<!-- Single line: hljs injection depends on a contiguous source string. -->
 	<pre class="m-0"><code class="hljs text-sm leading-relaxed">{@html highlightedHtml}</code></pre>
 </div>
 

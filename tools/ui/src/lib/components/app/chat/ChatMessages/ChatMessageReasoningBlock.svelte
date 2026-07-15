@@ -59,10 +59,7 @@
 		if (pendingFrame !== null || !scrollEl || userScrolledUp) return;
 		pendingFrame = requestAnimationFrame(() => {
 			pendingFrame = null;
-			// Re-check `userScrolledUp` at paint time. Skip an `isAtBottom`
-			// gate: it would falsely return false on the first chunk that
-			// overflows the container (scrollTop is still at the top),
-			// freezing autoscroll for the rest of the stream.
+			// User may scroll between scheduling and paint.
 			if (scrollEl && !userScrolledUp) {
 				scrollEl.scrollTop = scrollEl.scrollHeight;
 			}
@@ -81,18 +78,14 @@
 	}
 
 	$effect(() => {
-		// Primary trigger: content updates directly. Coalesced via RAF so a
-		// burst of chunks within the same paint frame results in one scroll.
 		void section.content;
 		if (!scrollEl || !isPending || !isStreaming) return;
 		scrollToBottomOnFrame();
 	});
 
 	$effect(() => {
-		// Secondary trigger: any DOM mutation inside the scroll region. This
-		// catches layout changes that don't touch section.content directly,
-		// e.g. markdown re-parsing turning plain text into a list, code blocks
-		// expanding as syntax highlighting settles, image loads, etc.
+		// Layout shifts that don't change section.content (markdown re-parse,
+		// syntax-highlight settle, image loads).
 		if (!scrollEl || !isPending || !isStreaming) return;
 
 		const observer = new MutationObserver(() => scrollToBottomOnFrame());
@@ -106,8 +99,7 @@
 	});
 
 	$effect(() => {
-		// Reasoning just ended - reset sticky state so the next round starts
-		// pinned to the bottom again, even if the user scrolled away.
+		// Pin to bottom at the start of each round.
 		if (!isPending) {
 			userScrolledUp = false;
 			lastScrollTop = 0;
@@ -135,7 +127,7 @@
 			<MarkdownContent content={section.content} class="text-muted-foreground" {attachments} />
 		{:else}
 			<div
-				class="text-[13px] leading-relaxed break-words whitespace-pre-wrap text-muted-foreground"
+				class="text-[13px] leading-relaxed wrap-break-word whitespace-pre-wrap text-muted-foreground"
 			>
 				{section.content}
 			</div>

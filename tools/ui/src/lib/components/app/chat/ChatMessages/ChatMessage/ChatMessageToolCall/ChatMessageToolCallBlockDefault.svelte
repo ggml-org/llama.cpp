@@ -5,7 +5,8 @@
 		MarkdownContent,
 		SyntaxHighlightedCode
 	} from '$lib/components/app';
-	import { AgenticSectionType, FileTypeText } from '$lib/enums';
+	import { AgenticSectionType, FileTypeText, ToolResultKind } from '$lib/enums';
+	import { MAX_HEIGHT_CODE_BLOCK } from '$lib/constants';
 	import { getBuiltinToolUi } from '$lib/constants/built-in-tools';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import {
@@ -30,23 +31,17 @@
 	const isPending = $derived(section.type === AgenticSectionType.TOOL_CALL_PENDING);
 	const isStreamingCall = $derived(section.type === AgenticSectionType.TOOL_CALL_STREAMING);
 	const showSpinner = $derived(isPending || (isStreamingCall && isStreaming));
-	// True only while the LLM is still emitting chunks into this tool call's
-	// args. Drives streaming-only UI like auto-scroll in code blocks.
-	// Note: chat-streaming tool calls are surfaced as TOOL_CALL_PENDING
-	// (not TOOL_CALL_STREAMING) because `message.toolCalls` is JSON-encoded
-	// on every chunk, so the outer array always parses cleanly while the
-	// inner arguments string is partial. Both pending and streaming-call
-	// states match "still receiving args".
+	// True while the LLM is still emitting chunks into this tool call's args.
+	// PENDING and STREAMING both cover this (chat-streaming tool calls are
+	// surfaced as PENDING because toolArgs is partial while the outer call list
+	// parses intact).
 	const isCodeStreaming = $derived(isStreaming && (isPending || isStreamingCall));
 
 	const toolUi = $derived(getBuiltinToolUi(section.toolName));
 	const toolIcon = $derived(showSpinner ? Loader2 : (toolUi?.icon ?? Wrench));
 	const toolIconClass = $derived(showSpinner ? 'h-4 w-4 animate-spin' : 'h-4 w-4');
 
-	// For MCP-sourced tools without a built-in icon, swap the wrench fallback
-	// for the server's own icon (MCP spec `icons[]`, theme-aware, with
-	// /favicon.ico fallback). Spinner keeps precedence while the call is in
-	// flight so the user sees execution status.
+	// Server favicon fallback for MCP tools with no built-in icon.
 	const mcpServerFavicon = $derived(mcpStore.getServerFaviconForTool(section.toolName));
 	const iconUrl = $derived(
 		!showSpinner && !toolUi?.icon && mcpServerFavicon ? mcpServerFavicon : null
@@ -56,10 +51,7 @@
 		section.toolResult ? parseToolResultWithImages(section.toolResult, attachments) : []
 	);
 
-	// Pick a richer renderer than the line-by-line fallback when the tool
-	// output already speaks JSON or markdown - saves the user from a wall
-	// of monospace text for MCP tool results that come back as pretty-
-	// printed JSON or as markdown-formatted prose.
+	// Pick a richer renderer (JSON / markdown) than the line-by-line fallback.
 	const outputKind = $derived(classifyToolResult(section.toolResult));
 
 	const title = $derived(toolUi?.label ?? section.toolName ?? '');
@@ -90,7 +82,7 @@
 			<SyntaxHighlightedCode
 				code={formatJsonPretty(section.toolArgs)}
 				language={FileTypeText.JSON}
-				maxHeight="22rem"
+				maxHeight={MAX_HEIGHT_CODE_BLOCK}
 				streaming={isCodeStreaming}
 			/>
 		{:else if isStreaming}
@@ -111,7 +103,7 @@
 			<SyntaxHighlightedCode
 				code={formatJsonPretty(section.toolArgs ?? '')}
 				language={FileTypeText.JSON}
-				maxHeight="22rem"
+				maxHeight={MAX_HEIGHT_CODE_BLOCK}
 				streaming={isCodeStreaming}
 			/>
 		{/if}
@@ -130,13 +122,13 @@
 				Waiting for result...
 			</div>
 		{:else if section.toolResult}
-			{#if outputKind === 'json'}
+			{#if outputKind === ToolResultKind.JSON}
 				<SyntaxHighlightedCode
 					code={formatJsonPretty(section.toolResult)}
 					language={FileTypeText.JSON}
-					maxHeight="22rem"
+					maxHeight={MAX_HEIGHT_CODE_BLOCK}
 				/>
-			{:else if outputKind === 'markdown'}
+			{:else if outputKind === ToolResultKind.MARKDOWN}
 				<MarkdownContent content={section.toolResult} {attachments} />
 			{:else}
 				<div class="overflow-auto">

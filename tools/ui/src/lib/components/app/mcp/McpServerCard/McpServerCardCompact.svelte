@@ -12,9 +12,6 @@
 
 	let { server, onClick, selected = false, dimmed = false }: Props = $props();
 
-	// Pick the favicon for the active theme. Themed variants take
-	// precedence; if the entry only ships a single `iconUrl` we use that
-	// regardless of theme (current behaviour for Exa/HF/Context7).
 	let activeIconUrl = $derived.by(() => {
 		const isDark = mode.current === 'dark';
 

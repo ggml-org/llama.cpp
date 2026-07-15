@@ -167,9 +167,27 @@ export {
 	hasAgenticContent,
 	classifyToolResult,
 	type AgenticSection,
-	type ToolResultLine,
-	type ToolResultKind
+	type ToolResultLine
 } from './agentic';
+
+// Line-level unified diff for tool result rendering (`edit_file` block)
+export {
+	computeLineDiff,
+	prefixFor,
+	renderUnifiedDiff,
+	type DiffLine
+} from './compute-line-diff';
+
+// Partial-incremental JSON parser for streaming tool arguments
+export { parsePartialJsonArgs } from './parse-partial-json-args';
+
+// `exec_shell_command` result parsing
+export { parseExecShellCommandError } from './parse-exec-shell-error';
+export {
+	parseExecShellCommandExitStatus,
+	isExitCodeSummaryLine,
+	type ExecShellExitStatus
+} from './parse-exec-shell-status';
 
 // Search-result parsing (web-search / fetch MCP tools)
 export {

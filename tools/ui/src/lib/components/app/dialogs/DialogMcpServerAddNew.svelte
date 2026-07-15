@@ -23,15 +23,8 @@
 	let newServerHeaders = $state('');
 	let newServerUseProxy = $state(false);
 
-	// Mirrored from the form via `bind:` so the recommendation click handler
-	// can flip the "Authorization" switch on for servers whose
-	// `needsAuthorization` flag is true.
 	let newServerWantsAuthorization = $state(false);
 
-	// A recommendation is "selected" iff the form URL exactly matches its
-	// URL. Clicking a card writes its URL into the form, which lights it
-	// up; editing the URL away from any recommendation's URL clears the
-	// selection automatically - no separate state to keep in sync.
 	let selectedRecommendationId = $derived.by(() => {
 		const url = newServerUrl.trim();
 		if (!url) return null;
@@ -44,10 +37,6 @@
 	);
 	let authRequired = $derived(selectedRecommendation?.needsAuthorization ?? false);
 
-	// Reflects whether the Authorization: Bearer header currently carries a
-	// non-empty token. Auth-required recommendations gate the Add button on
-	// this rather than on `hasAuthorization` (which would also light up for
-	// empty "Bearer " entries).
 	let bearerTokenFilled = $derived.by(() => {
 		const pairs = parseHeadersToArray(newServerHeaders);
 		const bearer = pairs.find(
@@ -78,11 +67,7 @@
 		!newServerUrlError && newServerHeaderPairsValid && (!authRequired || bearerTokenFilled)
 	);
 
-	// Stored as a boolean string ("true"/"false"). Reads also tolerate the
-	// legacy JSON-array payload: anything non-empty in the old shape counted
-	// as "dismissed" because the only writer back then wrote every rec id at
-	// once, so users who dismissed under the previous schema keep the
-	// section hidden after upgrading.
+	// Backward-compatible read: older versions stored a JSON array of dismissed ids.
 	function readRecommendationsDismissed(): boolean {
 		if (!browser) return false;
 		const raw = localStorage.getItem(DISMISSED_RECOMMENDED_MCP_SERVERS_LOCALSTORAGE_KEY);
@@ -113,11 +98,8 @@
 
 	let recommendationsDismissed = $state<boolean>(readRecommendationsDismissed());
 
-	// Keep the Authorization intent on whenever the picked recommendation
-	// requires it. Pairs with the `disabled` switch on the form so the user
-	// can't end up on a needed-auth URL with the toggle off and no way to
-	// recover - they'd have to either retype the URL or delete the auth
-	// entry from the KV grid manually.
+	// Read-only once a recommendation is picked: switch is disabled, so we keep
+	// the Authorization field in sync with the requirement.
 	$effect(() => {
 		if (authRequired) {
 			newServerWantsAuthorization = true;
@@ -126,12 +108,6 @@
 
 	let hasSelection = $derived(selectedRecommendationId !== null);
 
-	// Cross-check against the configured MCP servers by URL - a recommended
-	// entry whose URL is already in the config is filtered out of the slot.
-	// Dismissed entries are also filtered out, so the section disappears
-	// entirely once the user has dismissed everything. URLs are normalized
-	// before comparing so a stored `https://api.example.com/mcp/` doesn't
-	// slip past the recommended `https://api.example.com/mcp`.
 	let unconfiguredRecommendations = $derived.by(() => {
 		const configuredCanonicals = new Set(
 			mcpStore.getServers().map((s) => canonicalizeServerUrl(s.url))
@@ -149,23 +125,12 @@
 
 		if (!recommendation) return;
 
-		// Fill the form so the user can review / tweak before saving through
-		// the dialog's primary "Add" button. The selection highlight follows
-		// from the URL match (see selectedRecommendationId).
 		newServerUrl = recommendation.url;
 		newServerHeaders = '';
-		// Honor the server's auth requirement - servers flagged
-		// `needsAuthorization: true` flip the form's "Authorization" switch on
-		// so the user can paste a Bearer token right away. Servers without
-		// the flag turn the switch off, so pre-existing tokens don't leak
-		// across recommendation picks.
 		newServerWantsAuthorization = recommendation.needsAuthorization ?? false;
 	}
 
 	function handleDismissAll() {
-		// Keep the section hidden on future opens, even after the user
-		// re-configures a server that currently makes one disappear from
-		// the unconfigured list above.
 		writeRecommendationsDismissed(true);
 	}
 

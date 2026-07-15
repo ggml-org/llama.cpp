@@ -1,12 +1,32 @@
-import { AgenticSectionType, ContinueIntentKind, MessageRole } from '$lib/enums';
-import { ATTACHMENT_SAVED_REGEX, NEWLINE, NEWLINE_SEPARATOR, REASONING_TAGS } from '$lib/constants';
+import {
+	AgenticSectionType,
+	AttachmentType,
+	ContinueIntentKind,
+	MessageRole,
+	ToolResultKind
+} from '$lib/enums';
+import {
+	ATTACHMENT_SAVED_REGEX,
+	MARKDOWN_ATX_HEADING_REGEX,
+	MARKDOWN_BOLD_REGEX,
+	MARKDOWN_BLOCKQUOTE_REGEX,
+	MARKDOWN_CODE_FENCE_REGEX,
+	MARKDOWN_LINK_REGEX,
+	MARKDOWN_LIST_BULLET_REGEX,
+	MARKDOWN_LIST_NUMBERED_REGEX,
+	MARKDOWN_TABLE_SEPARATOR_REGEX,
+	NEWLINE,
+	REASONING_TAGS,
+	SEARCH_SUMMARY_SEPARATOR,
+	SEARCH_SUMMARY_TOTAL_REGEX,
+	TOOL_RESULT_JSON_OPEN_REGEX
+} from '$lib/constants';
 import type { ApiChatCompletionToolCall } from '$lib/types/api';
 import type {
 	DatabaseMessage,
 	DatabaseMessageExtra,
 	DatabaseMessageExtraImageFile
 } from '$lib/types/database';
-import { AttachmentType } from '$lib/enums';
 
 /**
  * Represents a parsed section of agentic content for display
@@ -243,17 +263,18 @@ export function splitSearchSummaryList(
 	text: string,
 	captureTotal: (n: number) => void
 ): { lines: string[] } {
-	const separatorIndex = text.indexOf('---\n');
+	const separatorIndex = text.indexOf(SEARCH_SUMMARY_SEPARATOR);
 	const matchesText = separatorIndex === -1 ? text : text.slice(0, separatorIndex);
-	const summaryText = separatorIndex === -1 ? '' : text.slice(separatorIndex + '---\n'.length);
+	const summaryText =
+		separatorIndex === -1 ? '' : text.slice(separatorIndex + SEARCH_SUMMARY_SEPARATOR.length);
 
-	const totalMatch = summaryText.match(/Total matches:\s*(\d+)/);
+	const totalMatch = summaryText.match(SEARCH_SUMMARY_TOTAL_REGEX);
 	if (totalMatch) {
 		captureTotal(parseInt(totalMatch[1], 10));
 	}
 
 	const lines = matchesText
-		.split('\n')
+		.split(NEWLINE)
 		.map((line) => line.trim())
 		.filter((line) => line.length > 0);
 
@@ -267,7 +288,7 @@ export function parseToolResultWithImages(
 	toolResult: string,
 	extras?: DatabaseMessageExtra[]
 ): ToolResultLine[] {
-	const lines = toolResult.split(NEWLINE_SEPARATOR);
+	const lines = toolResult.split(NEWLINE);
 	return lines.map((line) => {
 		const match = line.match(ATTACHMENT_SAVED_REGEX);
 		if (!match || !extras) return { text: line };
@@ -283,13 +304,6 @@ export function parseToolResultWithImages(
 }
 
 /**
- * How a tool's result content should be rendered for the default
- * tool-call block. Drives the choice between MarkdownContent, JSON
- * syntax highlighting, and the line-by-line plain-text fallback.
- */
-export type ToolResultKind = 'json' | 'markdown' | 'text';
-
-/**
  * Pick a renderer tier for a tool's result content.
  *
  *   json     - trimmed content starts with `{` or `[` and parses cleanly.
@@ -300,23 +314,23 @@ export type ToolResultKind = 'json' | 'markdown' | 'text';
  *              attachment resolution as a side effect).
  */
 export function classifyToolResult(content: string | undefined): ToolResultKind {
-	if (!content) return 'text';
+	if (!content) return ToolResultKind.TEXT;
 	const trimmed = content.trim();
-	if (!trimmed) return 'text';
+	if (!trimmed) return ToolResultKind.TEXT;
 
 	// Strongest signal: JSON object/array round-trips through JSON.parse.
-	if (/^[[{]/.test(trimmed)) {
+	if (TOOL_RESULT_JSON_OPEN_REGEX.test(trimmed)) {
 		try {
 			JSON.parse(trimmed);
-			return 'json';
-		} catch {
-			// not JSON, fall through
+			return ToolResultKind.JSON;
+		} catch (error) {
+			console.error('[agentic] tool result looked like JSON but failed to parse:', error);
 		}
 	}
 
-	if (looksLikeMarkdown(trimmed)) return 'markdown';
+	if (looksLikeMarkdown(trimmed)) return ToolResultKind.MARKDOWN;
 
-	return 'text';
+	return ToolResultKind.TEXT;
 }
 
 /**
@@ -330,27 +344,27 @@ export function classifyToolResult(content: string | undefined): ToolResultKind 
  */
 function looksLikeMarkdown(content: string): boolean {
 	// Code fences are unambiguous - triple backticks or tildes at line start.
-	if (/^(```|~~~)/m.test(content)) return true;
+	if (MARKDOWN_CODE_FENCE_REGEX.test(content)) return true;
 
-	const lines = content.split('\n');
+	const lines = content.split(NEWLINE);
 
 	for (const line of lines) {
-		if (/^#{1,6}\s+\S/.test(line)) return true;
-		if (/^>\s+\S/.test(line)) return true;
-		if (/^\s*[-*+]\s+\S/.test(line)) return true;
-		if (/^\s*\d+[.)]\s+\S/.test(line)) return true;
+		if (MARKDOWN_ATX_HEADING_REGEX.test(line)) return true;
+		if (MARKDOWN_BLOCKQUOTE_REGEX.test(line)) return true;
+		if (MARKDOWN_LIST_BULLET_REGEX.test(line)) return true;
+		if (MARKDOWN_LIST_NUMBERED_REGEX.test(line)) return true;
 	}
 
 	// Inline structural markers anywhere in the body.
-	if (/\[[^\]\n]+\]\([^)\s]+\)/.test(content)) return true;
-	if (/(\*\*[^*\n]+\*\*|__[^_\n]+__)/.test(content)) return true;
+	if (MARKDOWN_LINK_REGEX.test(content)) return true;
+	if (MARKDOWN_BOLD_REGEX.test(content)) return true;
 
 	// Tables: a pipe-bearing header line followed by a separator row.
 	if (lines.length >= 2) {
 		const head = lines[0];
 		const sep = lines[1];
 
-		if (head.includes('|') && /^\s*\|?[\s:|-]+\|?\s*$/.test(sep)) return true;
+		if (head.includes('|') && MARKDOWN_TABLE_SEPARATOR_REGEX.test(sep)) return true;
 	}
 
 	return false;

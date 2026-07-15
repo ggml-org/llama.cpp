@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-	isExitCodeSummaryLine,
-	parseExecShellCommandExitStatus
-} from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parse-exec-shell-status';
+import { isExitCodeSummaryLine, parseExecShellCommandExitStatus } from '$lib/utils';
 
 describe('parseExecShellCommandExitStatus', () => {
 	it('returns undefined when result is empty', () => {

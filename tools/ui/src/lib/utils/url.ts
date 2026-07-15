@@ -1,4 +1,8 @@
-import { TWO_PART_PUBLIC_SUFFIXES, WILDCARD_PUBLIC_SUFFIXES } from '$lib/constants';
+import {
+	TRAILING_SLASHES_REGEX,
+	TWO_PART_PUBLIC_SUFFIXES,
+	WILDCARD_PUBLIC_SUFFIXES
+} from '$lib/constants';
 import { UrlProtocol } from '$lib/enums';
 
 /**
@@ -87,10 +91,10 @@ export function canonicalizeServerUrl(raw: string): string {
 
 	try {
 		const parsed = new URL(trimmed);
-		const pathname = parsed.pathname.replace(/\/+$/, '');
+		const pathname = parsed.pathname.replace(TRAILING_SLASHES_REGEX, '');
 
 		return `${parsed.protocol}//${parsed.host}${pathname}${parsed.search}`;
 	} catch {
-		return trimmed.toLowerCase().replace(/\/+$/, '');
+		return trimmed.toLowerCase().replace(TRAILING_SLASHES_REGEX, '');
 	}
 }

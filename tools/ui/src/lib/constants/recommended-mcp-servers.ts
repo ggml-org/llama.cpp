@@ -1,29 +1,19 @@
 import type { RecommendedMCPServer } from '$lib/types';
 
-/**
- * Hard-coded suggested MCP servers.
- *
- * Shown inside the "Add New Server" dialog as opt-in cards. These entries
- * are rendered without triggering any connection or health check, so
- * showing them never causes a request to leave the user's machine. Only
- * when the user explicitly picks one and clicks the dialog's own Add
- * button does the URL end up in the configured server list and start
- * contacting the upstream server.
- *
- * Favicons are bundled in `static/recommended-mcp/` and resolved via
- * static asset paths so the card never reaches the upstream domain
- * until the user adds the server.
- */
+// Suggested MCP servers shown as opt-in cards in the "Add New Server" dialog.
+// Rendering these cards never reaches the upstream domain - favicons come
+// from local bundles in static/recommended-mcp/ and the URL is only used
+// after the user clicks Add.
 export const RECOMMENDED_MCP_SERVERS: RecommendedMCPServer[] = [
 	{
-		id: 'exa-web-search',
+		id: 'exa',
 		name: 'Exa',
 		description: 'Search the web and fetch full page content as clean markdown.',
 		url: 'https://mcp.exa.ai/mcp',
 		iconUrl: '/recommended-mcp/exa.ico'
 	},
 	{
-		id: 'huggingface-mcp',
+		id: 'huggingface',
 		name: 'Hugging Face',
 		description: 'Search and browse AI models, datasets, spaces, and docs on the Hugging Face Hub.',
 		url: 'https://huggingface.co/mcp',

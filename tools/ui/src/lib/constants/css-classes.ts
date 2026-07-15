@@ -18,3 +18,6 @@ export const PANEL_CLASSES = `
 
 export const CHAT_FORM_POPOVER_MAX_HEIGHT = 'max-h-80';
 export const DIALOG_SUBMENU_CONTENT = 'w-60';
+
+/** Default Tailwind size class for inline icon components (lucide, etc.). */
+export const ICON_CLASS_DEFAULT = 'h-4 w-4';

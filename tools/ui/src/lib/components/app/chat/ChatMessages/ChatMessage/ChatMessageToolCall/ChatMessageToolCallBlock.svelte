@@ -23,24 +23,12 @@
 		attachments?: DatabaseMessageExtra[];
 		open: boolean;
 		isStreaming: boolean;
-		/** True while the agentic loop is streaming output for THIS specific
-		 *  tool call (matched by toolCallId). Lets the underlying renderer -
-		 *  currently only exec_shell_command - switch into live-update mode
-		 *  with auto-scroll + max-height so chunked output stays visible. */
 		isExecuting?: boolean;
 		onToggle?: () => void;
 	}
 
 	let { section, attachments, open, isStreaming, isExecuting, onToggle }: Props = $props();
 
-	// Search-result runs render via the dedicated hover-card block even
-	// outside the BuiltInTool namespace. The block already handles the
-	// pending state (formatted heading from query + "Searching..." spinner),
-	// so we route off `toolArgs.query` *only* when the tool name marks it as
-	// a web-search call - otherwise non-search tools that happen to accept
-	// a `query` argument (e.g. GitHub's `search_pull_requests`) get
-	// mis-labelled. After results arrive the parsed-result check takes
-	// over so still-unrecognized servers render correctly.
 	const searchResults = $derived(extractSearchResults(section.toolResult));
 	const searchQuery = $derived(extractSearchQuery(section.toolArgs));
 	const isSearchCall = $derived(

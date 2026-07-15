@@ -22,8 +22,6 @@
 
 	let { class: className }: Props = $props();
 
-	// Every configured server is listed; `enabled` is an on/off state,
-	// not a visibility filter, so a disabled server stays toggleable.
 	let servers = $derived(mcpStore.getServers());
 
 	let isAddingServer = $state(false);
