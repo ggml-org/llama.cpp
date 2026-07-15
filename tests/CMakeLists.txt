@@ -244,6 +244,8 @@ llama_build_and_test(test-backend-ops.cpp)
 llama_build_and_test(test-model-load-cancel.cpp LABEL "model")
 llama_build_and_test(test-autorelease.cpp       LABEL "model")
 llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
+llama_build_and_test(test-reasoning-overrides.cpp LABEL "model" ARGS "${MODEL_DEST}")
+set_tests_properties(test-reasoning-overrides PROPERTIES FIXTURES_REQUIRED test-download-model)
 
 # Test for state restore with fragmented KV cache
 # Requires a model, uses same args pattern as test-thread-safety
