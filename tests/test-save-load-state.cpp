@@ -4,6 +4,7 @@
 #include "llama-cpp.h"
 
 #include <clocale>
+#include <random>
 #include <vector>
 
 struct llama_batch_ptr {
@@ -23,16 +24,15 @@ struct llama_batch_ptr {
     const llama_batch & get() const { return batch; }
 };
 
-static std::string generate_tokens(llama_context * ctx, llama_sampler * smpl, int & n_past, int32_t n_predict, llama_seq_id seq_id) {
-    std::string result;
+static llama_tokens generate_tokens(llama_context * ctx, llama_sampler * smpl, int & n_past, int32_t n_predict, llama_seq_id seq_id) {
+    llama_tokens result;
     llama_batch_ptr batch(1, 0, 1);
 
     for (int i = 0; i < n_predict; i++) {
-        auto next_token     = llama_sampler_sample(smpl, ctx, -1);
-        auto next_token_str = common_token_to_piece(ctx, next_token);
+        auto next_token = llama_sampler_sample(smpl, ctx, -1);
 
-        LOG("%s", next_token_str.c_str());
-        result += next_token_str;
+        LOG("%d ", next_token);
+        result.push_back(next_token);
 
         common_batch_clear(batch.get());
         common_batch_add(batch.get(), next_token, n_past, {seq_id}, true);
@@ -48,19 +48,16 @@ static std::string generate_tokens(llama_context * ctx, llama_sampler * smpl, in
 }
 
 // Test 1: baseline
-// - tokenize the prompt
 // - decode all but the last token
 // - save state to disk
 // - decode the last token
 // - generate n_predict tokens
-static std::string test_baseline(struct llama_model * model, const struct common_params & params) {
+static llama_tokens test_baseline(struct llama_model * model, const struct common_params & params, const llama_tokens & tokens) {
     auto ctx = llama_context_ptr{llama_init_from_model(model, common_context_params_to_llama(params))};
 
     auto sparams = llama_sampler_chain_default_params();
     auto smpl = llama_sampler_ptr{llama_sampler_chain_init(sparams)};
     llama_sampler_chain_add(smpl.get(), llama_sampler_init_dist(params.sampling.seed));
-
-    auto tokens = common_tokenize(ctx.get(), params.prompt, true);
 
     auto n_past = 0;
     if (!common_prompt_batch_decode(ctx.get(), tokens, (int)tokens.size(), n_past, params.n_batch, params.out_file, true)) {
@@ -69,7 +66,6 @@ static std::string test_baseline(struct llama_model * model, const struct common
     }
 
     LOG("\n=== Test 1: baseline ===\n");
-    LOG("%s", params.prompt.c_str());
 
     auto result = generate_tokens(ctx.get(), smpl.get(), n_past, params.n_predict, 0);
     if (result.empty()) {
@@ -82,25 +78,99 @@ static std::string test_baseline(struct llama_model * model, const struct common
 }
 
 
-// Test 2: state load
+// Test 2: sequence removal isolation
+// - decode the same prefix into two sequences
+// - remove sequence 0
+// - verify that sequence 1 remains unchanged
+static bool test_seq_rm_isolated(
+        struct llama_model         * model,
+        const struct common_params & params,
+        const llama_tokens         & tokens) {
+    auto params_ctx = common_context_params_to_llama(params);
+    params_ctx.n_ctx      = 256;
+    params_ctx.n_seq_max  = 2;
+    params_ctx.kv_unified = true;
+
+    auto ctx = llama_context_ptr{llama_init_from_model(model, params_ctx)};
+    if (!ctx) {
+        LOG_ERR("%s: failed to create context\n", __func__);
+        return false;
+    }
+
+    LOG("\n=== Test 2: sequence removal isolation ===\n");
+
+    const size_t n_tokens = tokens.size() < 128 ? tokens.size() : 128;
+    for (llama_seq_id seq_id = 0; seq_id < 2; ++seq_id) {
+        llama_batch_ptr batch(n_tokens, 0, 1);
+        for (size_t i = 0; i < n_tokens; ++i) {
+            common_batch_add(batch.get(), tokens[i], i, { seq_id }, false);
+        }
+
+        if (llama_decode(ctx.get(), batch.get())) {
+            LOG_ERR("%s: failed to decode prompt for sequence %d\n", __func__, seq_id);
+            return false;
+        }
+    }
+
+    const auto get_seq_state = [&](llama_seq_id seq_id, std::vector<uint8_t> & state) {
+        const size_t state_size = llama_state_seq_get_size(ctx.get(), seq_id);
+        if (state_size == 0) {
+            LOG_ERR("%s: sequence state is empty\n", __func__);
+            return false;
+        }
+
+        state.resize(state_size);
+        const size_t ncopy = llama_state_seq_get_data(ctx.get(), state.data(), state.size(), seq_id);
+        if (ncopy != state.size()) {
+            LOG_ERR("%s: sequence state length %zu does not match expected length %zu\n",
+                    __func__, ncopy, state.size());
+            return false;
+        }
+
+        return true;
+    };
+
+    std::vector<uint8_t> state_before;
+    if (!get_seq_state(1, state_before)) {
+        return false;
+    }
+
+    if (!llama_memory_seq_rm(llama_get_memory(ctx.get()), 0, -1, -1)) {
+        LOG_ERR("%s: failed to remove sequence 0\n", __func__);
+        return false;
+    }
+
+    std::vector<uint8_t> state_after;
+    if (!get_seq_state(1, state_after)) {
+        return false;
+    }
+
+    if (state_before != state_after) {
+        LOG_ERR("%s: removing sequence 0 changed sequence 1\n", __func__);
+        return false;
+    }
+
+    LOG("PASS\n");
+    return true;
+}
+
+
+// Test 3: state load
 // - create a new context
 // - load state from file
 // - replay the last prompt token
 // - generate n_predict tokens and compare against expected result
-static bool test_state_load(struct llama_model * model, const struct common_params & params, const std::string & expected_result) {
+static bool test_state_load(struct llama_model * model, const struct common_params & params, const llama_tokens & tokens, const llama_tokens & expected_result) {
     auto ctx = llama_context_ptr{llama_init_from_model(model, common_context_params_to_llama(params))};
 
     auto sparams = llama_sampler_chain_default_params();
     auto smpl = llama_sampler_ptr{llama_sampler_chain_init(sparams)};
     llama_sampler_chain_add(smpl.get(), llama_sampler_init_dist(params.sampling.seed));
 
-    auto tokens = common_tokenize(ctx.get(), params.prompt, true);
-
-    LOG("\n=== Test 2: state load ===\n");
-    LOG("%s", params.prompt.c_str());
+    LOG("\n=== Test 3: state load ===\n");
 
     // Load state from file
-    std::vector<llama_token> unused_sts(tokens.size());
+    llama_tokens unused_sts(tokens.size());
     size_t n_token_count_out = 0;
 
     if (!llama_state_load_file(ctx.get(), params.out_file.data(), unused_sts.data(), unused_sts.size(), &n_token_count_out)) {
@@ -133,13 +203,13 @@ static bool test_state_load(struct llama_model * model, const struct common_para
 }
 
 
-// Test 3: seq copy (host)
+// Test 4: seq copy (host)
 // - create a multi-seq context
 // - load state from file
 // - replay the last prompt token
 // - migrate KV cache from seq 0 to seq 1 via the CPU path
 // - generate n_predict tokens on seq 1 and compare against expected result
-static bool test_seq_cp_host(struct llama_model * model, const struct common_params & params, const std::string & expected_result) {
+static bool test_seq_cp_host(struct llama_model * model, const struct common_params & params, const llama_tokens & tokens, const llama_tokens & expected_result) {
     auto params_ctx = common_context_params_to_llama(params);
     params_ctx.n_seq_max = 2;
     auto ctx = llama_context_ptr{llama_init_from_model(model, params_ctx)};
@@ -148,13 +218,10 @@ static bool test_seq_cp_host(struct llama_model * model, const struct common_par
     auto smpl = llama_sampler_ptr{llama_sampler_chain_init(sparams)};
     llama_sampler_chain_add(smpl.get(), llama_sampler_init_dist(params.sampling.seed));
 
-    auto tokens = common_tokenize(ctx.get(), params.prompt, true);
-
-    LOG("\n=== Test 3: seq copy (host) ===\n");
-    LOG("%s", params.prompt.c_str());
+    LOG("\n=== Test 4: seq copy (host) ===\n");
 
     // Load state from file
-    std::vector<llama_token> unused_sts(tokens.size());
+    llama_tokens unused_sts(tokens.size());
     size_t n_token_count_out = 0;
 
     if (!llama_state_load_file(ctx.get(), params.out_file.data(), unused_sts.data(), unused_sts.size(), &n_token_count_out)) {
@@ -208,13 +275,13 @@ static bool test_seq_cp_host(struct llama_model * model, const struct common_par
 }
 
 
-// Test 4: seq copy (device)
+// Test 5: seq copy (device)
 // - create a multi-seq context
 // - load state from file
 // - replay the last prompt token
 // - migrate KV cache from seq 0 to seq 1 via the on-device path
 // - generate n_predict tokens on seq 1 and compare against expected result
-static bool test_seq_cp_device(struct llama_model * model, const struct common_params & params, const std::string & expected_result) {
+static bool test_seq_cp_device(struct llama_model * model, const struct common_params & params, const llama_tokens & tokens, const llama_tokens & expected_result) {
     auto params_ctx = common_context_params_to_llama(params);
     params_ctx.n_seq_max = 2;
     auto ctx = llama_context_ptr{llama_init_from_model(model, params_ctx)};
@@ -223,13 +290,10 @@ static bool test_seq_cp_device(struct llama_model * model, const struct common_p
     auto smpl = llama_sampler_ptr{llama_sampler_chain_init(sparams)};
     llama_sampler_chain_add(smpl.get(), llama_sampler_init_dist(params.sampling.seed));
 
-    auto tokens = common_tokenize(ctx.get(), params.prompt, true);
-
-    LOG("\n=== Test 4: seq copy (device) ===\n");
-    LOG("%s", params.prompt.c_str());
+    LOG("\n=== Test 5: seq copy (device) ===\n");
 
     // Load state from file
-    std::vector<llama_token> unused_sts(tokens.size());
+    llama_tokens unused_sts(tokens.size());
     size_t n_token_count_out = 0;
 
     if (!llama_state_load_file(ctx.get(), params.out_file.data(), unused_sts.data(), unused_sts.size(), &n_token_count_out)) {
@@ -287,7 +351,8 @@ int main(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
 
     common_params params;
-    params.prompt = "The quick brown fox";
+    params.prompt = "";
+    params.n_batch = 100;
     params.out_file = "dump_state.bin";
     params.sampling.seed = 1234;
 
@@ -318,24 +383,54 @@ int main(int argc, char ** argv) {
 
     GGML_ASSERT(llama_init->context() == nullptr);
 
+    // Tokenize prompt or generate random tokens
+    llama_tokens tokens;
+    if (params.prompt.empty()) {
+        const int n_prompt = params.n_batch;
+
+        // this path is useful for model files that do not have a tokenizer
+        LOG_INF("%s: no prompt provided, generating %d (n_batch) random tokens\n", __func__, n_prompt);
+
+        const auto * vocab = llama_model_get_vocab(model);
+        const auto n_vocab = llama_vocab_n_tokens(vocab);
+
+        std::mt19937 rng(params.sampling.seed);
+        std::uniform_int_distribution<llama_token> dist(0, n_vocab - 1);
+        for (int i = 0; i < n_prompt; i++) {
+            tokens.push_back(dist(rng));
+        }
+    } else {
+        LOG_INF("%s: tokenizing prompt '%s'\n", __func__, params.prompt.c_str());
+
+        auto ctx = llama_context_ptr{llama_init_from_model(model, common_context_params_to_llama(params))};
+        tokens = common_tokenize(ctx.get(), params.prompt, true);
+    }
+
+    LOG_INF("%s: the input prompt is %d tokens\n", __func__, (int)tokens.size());
+
     // Test 1: baseline (saves state to disk)
-    auto result_baseline = test_baseline(model, params);
+    auto result_baseline = test_baseline(model, params, tokens);
     if (result_baseline.empty()) {
         return 1;
     }
 
-    // Test 2: state load
-    if (!test_state_load(model, params, result_baseline)) {
+    // Test 2: sequence removal isolation
+    if (!test_seq_rm_isolated(model, params, tokens)) {
         return 1;
     }
 
-    // Test 3: seq copy (host)
-    if (!test_seq_cp_host(model, params, result_baseline)) {
+    // Test 3: state load
+    if (!test_state_load(model, params, tokens, result_baseline)) {
         return 1;
     }
 
-    // Test 4: seq copy (device)
-    if (!test_seq_cp_device(model, params, result_baseline)) {
+    // Test 4: seq copy (host)
+    if (!test_seq_cp_host(model, params, tokens, result_baseline)) {
+        return 1;
+    }
+
+    // Test 5: seq copy (device)
+    if (!test_seq_cp_device(model, params, tokens, result_baseline)) {
         return 1;
     }
 

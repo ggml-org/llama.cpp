@@ -6,6 +6,7 @@
 
 #include <qurt_thread.h>
 #include <qurt_futex.h>
+#include <qurt_hvx.h>
 
 #include <HAP_compute_res.h>
 
@@ -37,14 +38,17 @@ static inline void hmx_queue_process(struct hmx_queue *q, bool* killed) {
         if (!d->done) {
             FARF(HIGH, "hmx-queue-process: ir %u func %p data %p", ir, d->func, d->data);
 
-            enum hmx_queue_signal sig = (enum hmx_queue_signal) (unsigned int) d->func;
+            uintptr_t sig = (uintptr_t) d->func;
             switch (sig) {
                 case HMX_QUEUE_NOOP:    /* noop */;     break;
                 case HMX_QUEUE_KILL:    *killed = true; break;
                 case HMX_QUEUE_SUSPEND: hmx_unlock(q);  break;
+                case HMX_QUEUE_WAKEUP:  hmx_lock(q);    break;
                 default:
                     hmx_lock(q);
+                    htp_trace_event_start(q->trace, HTP_TRACE_EVT_HMX_COMP, ir);
                     d->func(d->data);
+                    htp_trace_event_stop(q->trace, HTP_TRACE_EVT_HMX_COMP, ir);
                     break;
             }
 
@@ -68,9 +72,14 @@ static void hmx_queue_thread(void * arg) {
     while (!killed) {
         unsigned int seqn = atomic_load(&q->seqn);
         if (seqn == prev_seqn) {
+            // drop HVX context while spinning
+            if (poll_cnt > 1 && poll_cnt == HMX_QUEUE_POLL_COUNT) {
+                qurt_hvx_unlock();
+            }
             if (--poll_cnt) { hex_pause(); continue; }
             FARF(HIGH, "hmx-queue-thread: sleeping");
             qurt_futex_wait(&q->seqn, prev_seqn);
+            poll_cnt = HMX_QUEUE_POLL_COUNT;
             continue;
         }
         prev_seqn = seqn;

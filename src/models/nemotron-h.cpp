@@ -9,7 +9,7 @@ void llama_model_nemotron_h::load_arch_hparams(llama_model_loader & ml) {
 
     // A layer is recurrent IFF the n_head_kv value is set to 0 and
     // the n_ff value is set to 0
-    for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+    for (uint32_t i = 0; i < hparams.n_layer(); ++i) {
         hparams.is_recr_impl[i] = (hparams.n_head_kv(i) == 0 && hparams.n_ff(i) == 0);
     }
 
@@ -22,7 +22,7 @@ void llama_model_nemotron_h::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,              hparams.expert_weights_scale, false);
     ml.get_key(LLM_KV_MOE_LATENT_SIZE,                   hparams.moe_latent_size, false);
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 52: type = LLM_TYPE_31B_A3_5B; break; // Nemotron-H_MOE 31B
         case 56: type = LLM_TYPE_9B; break;
         case 88: type = LLM_TYPE_120B_A12B; break;

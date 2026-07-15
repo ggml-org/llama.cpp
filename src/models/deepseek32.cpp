@@ -31,7 +31,7 @@ void llama_model_deepseek32::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_INDEXER_TOP_K,      hparams.indexer_top_k);
 
     // Expert gating function
-    ml.get_key(LLM_KV_EXPERT_GATING_FUNC,          hparams.expert_gating_func);
+    ml.get_key(LLM_KV_EXPERT_GATING_FUNC, hparams.expert_gating_func);
 
     if (ml.get_key(LLM_KV_ROPE_SCALING_YARN_LOG_MUL, hparams.rope_yarn_log_mul, 0.0f)) {
         // [TAG_DEEPSEEK2_YARN_LOG_MUL_FIX]
@@ -40,13 +40,10 @@ void llama_model_deepseek32::load_arch_hparams(llama_model_loader & ml) {
     }
 
     // NextN/MTP parameters
-    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS,        hparams.nextn_predict_layers, false);
-    GGML_ASSERT(hparams.nextn_predict_layers < hparams.n_layer && "nextn_predict_layers must be < n_layer");
+    ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.n_layer_nextn, false);
+    GGML_ASSERT(hparams.n_layer_nextn < hparams.n_layer_all && "n_layer_nextn must be < n_layer");
 
-    // TODO: when MTP is implemented, this should probably be updated if needed
-    hparams.n_layer_kv_from_start = hparams.n_layer - hparams.nextn_predict_layers;
-
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 62: type = LLM_TYPE_685B_A37B; break;
         default: type = LLM_TYPE_UNKNOWN;
     }
@@ -82,9 +79,9 @@ void llama_model_deepseek32::load_arch_tensors(llama_model_loader &) {
         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
     }
 
-    for (int i = 0; i < n_layer; ++i) {
+    for (int i = 0; i < n_layer_all; ++i) {
         int flags = 0;
-        if (hparams.nextn_predict_layers > 0 && static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers) {
+        if (i >= n_layer) {
             // skip all tensors in the NextN layers
             // TODO @ngxson : TENSOR_NOT_REQUIRED was a hack, need to remove it later
             flags |= TENSOR_SKIP | TENSOR_NOT_REQUIRED;
@@ -142,7 +139,7 @@ void llama_model_deepseek32::load_arch_tensors(llama_model_loader &) {
         }
 
         // NextN/MTP tensors (preserved but unused) - conditionally load for last nextn_predict_layers
-        if (hparams.nextn_predict_layers > 0 && static_cast<uint32_t>(i) >= n_layer - hparams.nextn_predict_layers) {
+        if (i >= n_layer) {
             layer.nextn.eh_proj          = create_tensor(tn(LLM_TENSOR_NEXTN_EH_PROJ, "weight", i), { 2 * n_embd, n_embd }, flags);
             layer.nextn.enorm            = create_tensor(tn(LLM_TENSOR_NEXTN_ENORM, "weight", i), { n_embd }, flags);
             layer.nextn.hnorm            = create_tensor(tn(LLM_TENSOR_NEXTN_HNORM, "weight", i), { n_embd }, flags);
@@ -205,8 +202,7 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
-    int effective_n_layers = hparams.n_layer - hparams.nextn_predict_layers;
-    for (int il = 0; il < effective_n_layers; ++il) {
+    for (int il = 0; il < n_layer; ++il) {
         ggml_tensor * inpSA = inpL;
 
         // norm
@@ -305,43 +301,50 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
                 indexer_q = ggml_view_4d(ctx0, indexer_q, indexer_q->ne[0], indexer_q->ne[1], indexer_q->ne[2]/n_stream, n_stream, indexer_q->nb[1], indexer_q->nb[2], indexer_q->nb[3]/n_stream, 0);
                 indexer_weights = ggml_view_4d(ctx0, indexer_weights, indexer_weights->ne[0], indexer_weights->ne[1]/n_stream, indexer_weights->ne[2], n_stream, indexer_weights->nb[1], indexer_weights->nb[2]/n_stream, indexer_weights->nb[3]/n_stream, 0);
 
-                // calculate indexer kq
-                indexer_q = ggml_permute(ctx0, indexer_q, 0, 2, 1, 3);
-                cb(indexer_q, "indexer_q", il);
-                indexer_k = ggml_permute(ctx0, indexer_k, 0, 2, 1, 3);
-                cb(indexer_k, "indexer_k", il);
-
-                ggml_tensor * indexer_kq = ggml_mul_mat(ctx0, indexer_k, indexer_q);
-                cb(indexer_kq, "indexer_kq", il);
-
-                // ReLU requires contiguous tensors
-                indexer_kq = ggml_cont(ctx0, ggml_permute(ctx0, indexer_kq, 2, 1, 0, 3));
-                cb(indexer_kq, "indexer_kq", il);
-
-                // apply ReLU
-                ggml_tensor * indexer_score = ggml_relu(ctx0, indexer_kq);
-                cb(indexer_score, "indexer_score", il);
-
                 // pre-scale weights to avoid scaling operations on huge indexer_score tensor
                 indexer_weights = ggml_scale(ctx0, indexer_weights, 1.0f / sqrtf(float(n_embd_indexer_head * n_indexer_head)));
                 cb(indexer_weights, "indexer_weights", il);
 
-                // multiply scores by indexer weights
-                indexer_score = ggml_mul(ctx0, indexer_score, indexer_weights);
-                cb(indexer_score, "indexer_score", il);
+                ggml_tensor * indexer_score = nullptr;
+                if (cparams.fused_lid) {
+                    indexer_score = ggml_lightning_indexer(ctx0, indexer_q, indexer_k, indexer_weights, inp_attn_dsa->get_kq_mask_lid());
+                    cb(indexer_score, "indexer_score", il);
+                    res->add_fused_node({LLM_FUSED_OP_LIGHTNING_INDEXER, indexer_score, il});
+                } else {
+                    // calculate indexer kq
+                    indexer_q = ggml_permute(ctx0, indexer_q, 0, 2, 1, 3);
+                    cb(indexer_q, "indexer_q", il);
+                    indexer_k = ggml_permute(ctx0, indexer_k, 0, 2, 1, 3);
+                    cb(indexer_k, "indexer_k", il);
 
-                // sum by q n_indexer_head dimension
-                indexer_score = ggml_sum_rows(ctx0, indexer_score);
-                cb(indexer_score, "indexer_score", il);
+                    ggml_tensor * indexer_kq = ggml_mul_mat(ctx0, indexer_k, indexer_q);
+                    cb(indexer_kq, "indexer_kq", il);
 
-                // permute result to match KQ mask
-                indexer_score = ggml_cont(ctx0, ggml_permute(ctx0, indexer_score, 2, 1, 0, 3));
-                cb(indexer_score, "indexer_score", il);
+                    // ReLU requires contiguous tensors
+                    indexer_kq = ggml_cont(ctx0, ggml_permute(ctx0, indexer_kq, 2, 1, 0, 3));
+                    cb(indexer_kq, "indexer_kq", il);
 
-                // mask indexer scores
-                ggml_tensor * indexer_kq_mask = inp_attn_dsa->get_kq_mask_lid();
-                indexer_score = ggml_add(ctx0, indexer_score, indexer_kq_mask);
-                cb(indexer_score, "indexer_score", il);
+                    // apply ReLU
+                    indexer_score = ggml_relu(ctx0, indexer_kq);
+                    cb(indexer_score, "indexer_score", il);
+
+                    // multiply scores by indexer weights
+                    indexer_score = ggml_mul(ctx0, indexer_score, indexer_weights);
+                    cb(indexer_score, "indexer_score", il);
+
+                    // sum by q n_indexer_head dimension
+                    indexer_score = ggml_sum_rows(ctx0, indexer_score);
+                    cb(indexer_score, "indexer_score", il);
+
+                    // permute result to match KQ mask
+                    indexer_score = ggml_cont(ctx0, ggml_permute(ctx0, indexer_score, 2, 1, 0, 3));
+                    cb(indexer_score, "indexer_score", il);
+
+                    // mask indexer scores
+                    ggml_tensor * indexer_kq_mask = inp_attn_dsa->get_kq_mask_lid();
+                    indexer_score = ggml_add(ctx0, indexer_score, indexer_kq_mask);
+                    cb(indexer_score, "indexer_score", il);
+                }
 
                 // get indices of top k indexer scores
                 uint32_t n_top_k = indexer_score->ne[0] < n_indexer_top_k ? indexer_score->ne[0] : n_indexer_top_k;
@@ -427,7 +430,7 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
                         Qcur, Kcur, Vcur, nullptr, nullptr, model.layers[il].wv_b, top_k, kq_scale, il);
             }
         }
-        if (il == effective_n_layers - 1 && inp_out_ids) {
+        if (il == n_layer - 1 && inp_out_ids) {
             cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }

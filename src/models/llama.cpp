@@ -7,13 +7,13 @@ void llama_model_llama::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
 
     if (hparams.n_expert == 8) {
-        switch (hparams.n_layer) {
+        switch (hparams.n_layer()) {
             case 32: type = LLM_TYPE_8x7B; break;
             case 56: type = LLM_TYPE_8x22B; break;
             default: type = LLM_TYPE_UNKNOWN;
         }
     } else {
-        switch (hparams.n_layer) {
+        switch (hparams.n_layer()) {
             case 16: type = LLM_TYPE_1B; break; // Llama 3.2 1B
             case 22: type = LLM_TYPE_1B; break;
             case 26: type = LLM_TYPE_3B; break;
@@ -124,6 +124,8 @@ llama_model_llama::graph<embed>::graph(const llama_model & model, const llm_grap
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     for (int il = 0; il < n_layer; ++il) {
+        res->t_layer_inp[il] = inpL;
+
         ggml_tensor * inpSA = inpL;
 
         // norm

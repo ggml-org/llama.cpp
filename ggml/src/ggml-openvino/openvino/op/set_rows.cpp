@@ -28,20 +28,20 @@ namespace op {
 OutputVector translate_set_rows(const NodeContext & context) {
     num_inputs_check(context, 3, 3);
 
-    auto data = context.get_input(0);
+    auto data = process_view_input_new(context, 0);
     auto indices = context.get_input(1);
     auto dst = context.get_input(2);
 
     data = std::make_shared<ov::op::v0::Convert>(data, context.get_output_type());
 
-    auto dst_shape = context.get_output_shape().to_shape();
+    auto row_size = context.get_input_shape(2)[3].get_length();
 
     auto ind_squeezed =
         std::make_shared<ov::op::v0::Squeeze>(indices, ov::op::v0::Constant::create(ov::element::i64, {3}, {0, 1, 2}));
     auto data_reshaped = std::make_shared<ov::op::v1::Reshape>(
         data,
         ov::op::v0::Constant::create(ov::element::i64, {4},
-                                     {(int64_t) 1, (int64_t) 1, (int64_t) -1, (int64_t) dst_shape[3]}),
+                                     {(int64_t) 1, (int64_t) 1, (int64_t) -1, (int64_t) row_size}),
         false);
     auto axes = ov::op::v0::Constant::create(ov::element::i64, ov::Shape{}, {2});
 

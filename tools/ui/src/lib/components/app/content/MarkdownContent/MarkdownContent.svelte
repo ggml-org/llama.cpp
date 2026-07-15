@@ -16,25 +16,65 @@
 	import { rehypeRestoreTableHtml } from './plugins/rehype/table-html-restorer';
 	import { rehypeEnhanceLinks } from './plugins/rehype/enhance-links';
 	import { rehypeEnhanceCodeBlocks } from './plugins/rehype/enhance-code-blocks';
+	import { rehypeEnhanceMermaidBlocks } from './plugins/rehype/enhance-mermaid-blocks';
+	import { rehypeMermaidPre } from './plugins/rehype/mermaid-pre';
+	import { rehypeSvgPre } from './plugins/rehype/svg-pre';
+	import { rehypeEnhanceSvgBlocks } from './plugins/rehype/enhance-svg-blocks';
 	import { rehypeResolveAttachmentImages } from './plugins/rehype/resolve-attachment-images';
 	import { rehypeRtlSupport } from './plugins/rehype/rehype-rtl-support';
 	import { remarkLiteralHtml } from './plugins/remark/literal-html';
-	import { copyCodeToClipboard, preprocessLaTeX, getImageErrorFallbackHtml } from '$lib/utils';
+	import {
+		getHastNodeId,
+		getMdastNodeHash,
+		isAppendMode,
+		getCodeInfoFromTarget
+	} from './markdown-utils';
+	import {
+		preprocessLaTeX,
+		getImageErrorFallbackHtml,
+		copyCodeToClipboard,
+		copyToClipboard
+	} from '$lib/utils';
 	import {
 		IMAGE_NOT_ERROR_BOUND_SELECTOR,
 		DATA_ERROR_BOUND_ATTR,
 		DATA_ERROR_HANDLED_ATTR,
 		BOOL_TRUE_STRING,
-		SETTINGS_KEYS
+		SETTINGS_KEYS,
+		CODE_BLOCK_HEADER_CLASS,
+		MERMAID_WRAPPER_CLASS,
+		MERMAID_BLOCK_CLASS,
+		MERMAID_LANGUAGE,
+		MERMAID_SYNTAX_ATTR,
+		MERMAID_RENDERED_ATTR,
+		SVG_WRAPPER_CLASS,
+		SVG_BLOCK_CLASS,
+		SVG_LANGUAGE,
+		XML_LANGUAGE,
+		SVG_TAG_PREFIX,
+		SVG_SOURCE_ATTR,
+		SVG_RENDERED_ATTR,
+		SVG_INLINE_SHADOW_STYLE,
+		TOGGLE_SOURCE_BTN_CLASS,
+		DIAGRAM_VIEW_MODE_ATTR,
+		DIAGRAM_VIEW_RENDERED,
+		DIAGRAM_VIEW_SOURCE
 	} from '$lib/constants';
 	import { ColorMode, UrlProtocol } from '$lib/enums';
 	import { FileTypeText } from '$lib/enums/files.enums';
 	import { highlightCode, detectIncompleteCodeBlock, type IncompleteCodeBlock } from '$lib/utils';
+	import { sanitizeSvg } from '$lib/utils/sanitize-svg';
+	import { mountSvgShadow } from '$lib/utils/svg-shadow';
 	import '$styles/katex-custom.scss';
 	import githubDarkCss from 'highlight.js/styles/github-dark.css?inline';
 	import githubLightCss from 'highlight.js/styles/github.css?inline';
 	import { mode } from 'mode-watcher';
-	import { CodeBlockActions, DialogCodePreview } from '$lib/components/app';
+	import {
+		CodeBlockActions,
+		DialogCodePreview,
+		DialogMermaidPreview,
+		ActionIconCopyToClipboard
+	} from '$lib/components/app';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
 	import type { DatabaseMessageExtra } from '$lib/types/database';
 	import { config } from '$lib/stores/settings.svelte';
@@ -59,9 +99,33 @@
 	let renderedBlocks = $state<MarkdownBlock[]>([]);
 	let unstableBlockHtml = $state('');
 	let incompleteCodeBlock = $state<IncompleteCodeBlock | null>(null);
+	const streamingSvgCode = $derived.by(() => {
+		const block = incompleteCodeBlock;
+		if (!block) return null;
+		if (block.language === SVG_LANGUAGE) return block.code;
+		if (block.language === XML_LANGUAGE && block.code.trimStart().startsWith(SVG_TAG_PREFIX))
+			return block.code;
+		return null;
+	});
+	const liveSvgHtml = $derived(streamingSvgCode !== null ? sanitizeSvg(streamingSvgCode) : '');
 	let previewDialogOpen = $state(false);
 	let previewCode = $state('');
 	let previewLanguage = $state('text');
+	let mermaidPreviewOpen = $state(false);
+	let mermaidPreviewSvgHtml = $state('');
+	let svgPreviewLive = $state(false);
+	let streamingSvgHost = $state<HTMLDivElement | null>(null);
+
+	// While the zoom dialog is open on a streaming svg, mirror the live render into it
+	$effect(() => {
+		if (svgPreviewLive && liveSvgHtml) mermaidPreviewSvgHtml = liveSvgHtml;
+	});
+
+	// Mount the streaming svg into its shadow host on every chunk so it renders live
+	$effect(() => {
+		if (streamingSvgHost) mountSvgShadow(streamingSvgHost, liveSvgHtml, SVG_INLINE_SHADOW_STYLE);
+	});
+
 	let streamingCodeScrollContainer = $state<HTMLDivElement>();
 
 	// Auto-scroll controller for streaming code block content
@@ -102,7 +166,11 @@
 			}) // Add syntax highlighting
 			.use(rehypeRestoreTableHtml) // Restore limited HTML (e.g., <br>, <ul>) inside Markdown tables
 			.use(rehypeEnhanceLinks) // Add target="_blank" to links
+			.use(rehypeMermaidPre) // Convert mermaid blocks to <pre class="mermaid">
+			.use(rehypeSvgPre) // Convert svg blocks to <pre class="svg-block">
 			.use(rehypeEnhanceCodeBlocks) // Wrap code blocks with header and actions
+			.use(rehypeEnhanceMermaidBlocks) // Wrap mermaid blocks with header and actions
+			.use(rehypeEnhanceSvgBlocks) // Wrap svg blocks with header and actions
 			.use(rehypeResolveAttachmentImages, { attachments })
 			.use(rehypeRtlSupport) // Add bidirectional text support
 			.use(rehypeStringify, { allowDangerousHtml: true }); // Convert to HTML string
@@ -157,73 +225,7 @@
 	}
 
 	/**
-	 * Extracts code information from a button click target within a code block.
-	 * @param target - The clicked button element
-	 * @returns Object with rawCode and language, or null if extraction fails
-	 */
-	function getCodeInfoFromTarget(target: HTMLElement) {
-		const wrapper = target.closest('.code-block-wrapper');
-
-		if (!wrapper) {
-			console.error('No wrapper found');
-			return null;
-		}
-
-		const codeElement = wrapper.querySelector<HTMLElement>('code[data-code-id]');
-
-		if (!codeElement) {
-			console.error('No code element found in wrapper');
-			return null;
-		}
-
-		const rawCode = codeElement.textContent ?? '';
-
-		const languageLabel = wrapper.querySelector<HTMLElement>('.code-language');
-		const language = languageLabel?.textContent?.trim() || 'text';
-
-		return { rawCode, language };
-	}
-
-	/**
-	 * Generates a unique identifier for a HAST node based on its position.
-	 * Used for stable block identification during incremental rendering.
-	 * @param node - The HAST root content node
-	 * @param indexFallback - Fallback index if position is unavailable
-	 * @returns Unique string identifier for the node
-	 */
-	function getHastNodeId(node: HastRootContent, indexFallback: number): string {
-		const position = node.position;
-
-		if (position?.start?.offset != null && position?.end?.offset != null) {
-			return `hast-${position.start.offset}-${position.end.offset}`;
-		}
-
-		return `${node.type}-${indexFallback}`;
-	}
-
-	/**
-	 * Generates a hash for MDAST node based on its position.
-	 * Used for cache lookup during incremental rendering.
-	 */
-	function getMdastNodeHash(node: unknown, index: number): string {
-		const n = node as {
-			type?: string;
-			position?: { start?: { offset?: number }; end?: { offset?: number } };
-		};
-
-		if (n.position?.start?.offset != null && n.position?.end?.offset != null) {
-			return `${n.type}-${n.position.start.offset}-${n.position.end.offset}`;
-		}
-
-		return `${n.type}-idx${index}`;
-	}
-
-	/**
-	 * Check if we're in append-only mode (streaming).
-	 */
-	function isAppendMode(newContent: string): boolean {
-		return previousContent.length > 0 && newContent.startsWith(previousContent);
-	}
+	 * Transforms a single MDAST node to HTML string with caching.
 
 	/**
 	 * Transforms a single MDAST node to HTML string with caching.
@@ -359,7 +361,7 @@
 				const nextBlocks: MarkdownBlock[] = [];
 
 				// Check if we're in append mode for cache reuse
-				const appendMode = isAppendMode(prefixMarkdown);
+				const appendMode = isAppendMode(prefixMarkdown, previousContent);
 				const previousBlockCount = appendMode ? renderedBlocks.length : 0;
 
 				// All prefix blocks are now stable since code block is separate
@@ -411,7 +413,7 @@
 		const nextBlocks: MarkdownBlock[] = [];
 
 		// Check if we're in append mode for cache reuse
-		const appendMode = isAppendMode(markdown);
+		const appendMode = isAppendMode(markdown, previousContent);
 		const previousBlockCount = appendMode ? renderedBlocks.length : 0;
 
 		for (let index = 0; index < stableCount; index++) {
@@ -497,6 +499,224 @@
 	}
 
 	/**
+	 * Opens the mermaid diagram in a full-screen preview dialog with zoom/pan support.
+	 * Also handles copy and preview button clicks for mermaid blocks.
+	 * Uses event delegation: a single handler on the container.
+	 */
+	async function handleMermaidClick(event: MouseEvent) {
+		const target = event.target as HTMLElement;
+
+		// Toggle a diagram block between its rendered view and its source view.
+		// Shared by mermaid and svg, css drives the visibility from the wrapper mode.
+		const toggleBtn = target.closest(`.${TOGGLE_SOURCE_BTN_CLASS}`);
+		if (toggleBtn) {
+			event.preventDefault();
+			event.stopPropagation();
+
+			const wrapper = toggleBtn.closest(`.${MERMAID_WRAPPER_CLASS}, .${SVG_WRAPPER_CLASS}`);
+			if (!wrapper) return;
+
+			const isSource = wrapper.getAttribute(DIAGRAM_VIEW_MODE_ATTR) === DIAGRAM_VIEW_SOURCE;
+			const next = isSource ? DIAGRAM_VIEW_RENDERED : DIAGRAM_VIEW_SOURCE;
+			wrapper.setAttribute(DIAGRAM_VIEW_MODE_ATTR, next);
+			toggleBtn.setAttribute('aria-pressed', String(!isSource));
+			return;
+		}
+
+		// Check if clicking on copy or preview button in mermaid block
+		const copyBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .copy-code-btn`);
+		const previewBtn = target.closest(`.${MERMAID_WRAPPER_CLASS} .preview-code-btn`);
+
+		if (copyBtn || previewBtn) {
+			const wrapper = target.closest(`.${MERMAID_WRAPPER_CLASS}`);
+			if (!wrapper) return;
+
+			const preElement = wrapper.querySelector<HTMLElement>(
+				`pre.${MERMAID_BLOCK_CLASS}[${MERMAID_SYNTAX_ATTR}]`
+			);
+			if (!preElement) return;
+
+			const mermaidSyntax = preElement.getAttribute(MERMAID_SYNTAX_ATTR) ?? '';
+
+			if (copyBtn) {
+				event.preventDefault();
+				event.stopPropagation();
+				try {
+					await copyToClipboard(mermaidSyntax);
+				} catch (error) {
+					console.error('Failed to copy mermaid syntax:', error);
+				}
+				return;
+			}
+
+			if (previewBtn) {
+				event.preventDefault();
+				event.stopPropagation();
+				const svg = preElement.querySelector('svg');
+				if (!svg) return;
+				mermaidPreviewSvgHtml = svg.outerHTML;
+				svgPreviewLive = false;
+				mermaidPreviewOpen = true;
+				return;
+			}
+		}
+
+		// Check if clicking on copy or preview button in svg block
+		const svgCopyBtn = target.closest(`.${SVG_WRAPPER_CLASS} .copy-code-btn`);
+		const svgPreviewBtn = target.closest(`.${SVG_WRAPPER_CLASS} .preview-code-btn`);
+
+		if (svgCopyBtn || svgPreviewBtn) {
+			const wrapper = target.closest(`.${SVG_WRAPPER_CLASS}`);
+			if (!wrapper) return;
+
+			const preElement = wrapper.querySelector<HTMLElement>(
+				`pre.${SVG_BLOCK_CLASS}[${SVG_SOURCE_ATTR}]`
+			);
+			if (!preElement) return;
+
+			if (svgCopyBtn) {
+				event.preventDefault();
+				event.stopPropagation();
+				try {
+					await copyToClipboard(preElement.getAttribute(SVG_SOURCE_ATTR) ?? '');
+				} catch (error) {
+					console.error('Failed to copy svg source:', error);
+				}
+				return;
+			}
+
+			if (svgPreviewBtn) {
+				event.preventDefault();
+				event.stopPropagation();
+				mermaidPreviewSvgHtml = sanitizeSvg(preElement.getAttribute(SVG_SOURCE_ATTR) ?? '');
+				svgPreviewLive = false;
+				mermaidPreviewOpen = true;
+				return;
+			}
+		}
+
+		// A click on the header chrome targets the action buttons, never the
+		// diagram. Guard so a header click can not fall through to the click to
+		// zoom branches below, whatever the scroll position or stacking.
+		if (target.closest(`.${CODE_BLOCK_HEADER_CLASS}`)) return;
+
+		// Open preview when clicking the svg block itself. A final block carries its
+		// source, a streaming block does not and is mirrored live into the dialog.
+		const svgEl = target.closest(`.${SVG_BLOCK_CLASS}`);
+		if (svgEl) {
+			const source = svgEl.getAttribute(SVG_SOURCE_ATTR);
+			if (source !== null) {
+				mermaidPreviewSvgHtml = sanitizeSvg(source);
+				svgPreviewLive = false;
+			} else {
+				svgPreviewLive = true;
+			}
+			mermaidPreviewOpen = true;
+			return;
+		}
+
+		// Otherwise, open preview when clicking on the mermaid diagram itself
+		const mermaidEl = target.closest(`.${MERMAID_BLOCK_CLASS}`);
+		if (!mermaidEl) return;
+
+		const svg = mermaidEl.querySelector('svg');
+		if (!svg) return;
+
+		mermaidPreviewSvgHtml = svg.outerHTML;
+		svgPreviewLive = false;
+		mermaidPreviewOpen = true;
+	}
+
+	/**
+	 * Handles mermaid preview dialog open state changes.
+	 * Cleans up SVG content when dialog is closed.
+	 */
+	function handleMermaidPreviewOpenChange(open: boolean) {
+		mermaidPreviewOpen = open;
+		if (!open) {
+			mermaidPreviewSvgHtml = '';
+			svgPreviewLive = false;
+		}
+	}
+
+	/**
+	 * Renders mermaid diagrams that haven't been rendered yet.
+	 * Called after each markdown content update.
+	 * Marks nodes immediately to prevent duplicate renders during streaming.
+	 * Reads mode.current before await to ensure reactive tracking.
+	 */
+	async function renderMermaidDiagrams() {
+		if (!containerRef) return;
+
+		const nodes = containerRef.querySelectorAll(
+			`pre.${MERMAID_BLOCK_CLASS}:not([${MERMAID_RENDERED_ATTR}])`
+		);
+		if (nodes.length === 0) return;
+
+		// Mark nodes immediately to prevent duplicate renders if called again during streaming.
+		// This avoids needing a guard that would block node discovery.
+		nodes.forEach((node) => node.setAttribute(MERMAID_RENDERED_ATTR, 'true'));
+
+		// Read mode before await so Svelte tracks it reactively.
+		const isDark = mode.current === ColorMode.DARK;
+
+		// lazy load the mermaid dependecy only when needed to reduce bundle size.
+		const { default: mermaid } = await import('mermaid');
+
+		mermaid.initialize({
+			startOnLoad: false,
+			theme: isDark ? 'dark' : 'default',
+			securityLevel: 'strict',
+			flowchart: {
+				useMaxWidth: false,
+				htmlLabels: true
+			},
+			sequence: {
+				useMaxWidth: false
+			},
+			gantt: {
+				useMaxWidth: false
+			}
+		});
+
+		try {
+			await mermaid.run({
+				nodes: Array.from(nodes) as unknown as NodeListOf<HTMLElement>
+			});
+		} catch (error) {
+			console.error('Failed to render mermaid diagram:', error);
+		}
+	}
+
+	/**
+	 * Renders svg diagrams that haven't been rendered yet.
+	 * Sanitizes the source before injecting and marks each node so it renders once.
+	 * An empty sanitize result keeps the raw source as escaped text.
+	 */
+	function renderSvgDiagrams() {
+		if (!containerRef) return;
+
+		const nodes = containerRef.querySelectorAll<HTMLElement>(
+			`pre.${SVG_BLOCK_CLASS}:not([${SVG_RENDERED_ATTR}])`
+		);
+		if (nodes.length === 0) return;
+
+		nodes.forEach((node) => {
+			node.setAttribute(SVG_RENDERED_ATTR, 'true');
+
+			const source = node.getAttribute(SVG_SOURCE_ATTR) ?? node.textContent ?? '';
+			const clean = sanitizeSvg(source);
+
+			if (clean) {
+				node.textContent = '';
+				const host = document.createElement('div');
+				node.appendChild(host);
+				mountSvgShadow(host, clean, SVG_INLINE_SHADOW_STYLE);
+			}
+		});
+	}
+
+	/**
 	 * Handles image load errors by replacing the image with a fallback UI.
 	 * Shows a placeholder with a link to open the image in a new tab.
 	 */
@@ -577,6 +797,8 @@
 		if ((hasRenderedBlocks || hasUnstableBlock) && containerRef) {
 			setupCodeBlockActions();
 			setupImageErrorHandlers();
+			renderMermaidDiagrams();
+			renderSvgDiagrams();
 		}
 	});
 
@@ -596,15 +818,17 @@
 	});
 </script>
 
+<!-- svelte-ignore a11y_click_events_have_key_events -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
 	bind:this={containerRef}
-	class="{className}{config()[SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS]
+	onclick={handleMermaidClick}
+	class="markdown-content {className}{config()[SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS]
 		? ' full-height-code-blocks'
 		: ''}"
 >
 	{#each renderedBlocks as block (block.id)}
 		<div class="markdown-block" data-block-id={block.id} use:fadeInView={{ skipIfVisible: true }}>
-			<!-- eslint-disable-next-line no-at-html-tags -->
 			{@html block.html}
 		</div>
 	{/each}
@@ -617,34 +841,77 @@
 	{/if}
 
 	{#if incompleteCodeBlock}
-		<div class="code-block-wrapper streaming-code-block relative">
-			<div class="code-block-header">
-				<span class="code-language">{incompleteCodeBlock.language || 'text'}</span>
-				<CodeBlockActions
-					code={incompleteCodeBlock.code}
-					language={incompleteCodeBlock.language || 'text'}
-					disabled
-					onPreview={(code, lang) => {
-						previewCode = code;
-						previewLanguage = lang;
-						previewDialogOpen = true;
-					}}
-				/>
+		{#if incompleteCodeBlock.language === MERMAID_LANGUAGE}
+			<div class="mermaid-block-wrapper streaming-mermaid-block">
+				<div class="code-block-header">
+					<span class="code-language">mermaid</span>
+					<div class="code-block-actions">
+						<ActionIconCopyToClipboard
+							text={incompleteCodeBlock.code}
+							canCopy={false}
+							ariaLabel="Diagram incomplete"
+						/>
+					</div>
+				</div>
+				<div class="mermaid-loading-placeholder">
+					<span class="mermaid-loading-text">Generating diagram...</span>
+				</div>
 			</div>
-			<div
-				bind:this={streamingCodeScrollContainer}
-				class="streaming-code-scroll-container"
-				onscroll={() => streamingAutoScroll.handleScroll()}
-			>
-				<pre class="streaming-code-pre"><code
-						class="hljs language-{incompleteCodeBlock.language || 'text'}"
-						>{@html highlightCode(
-							incompleteCodeBlock.code,
-							incompleteCodeBlock.language || 'text'
-						)}</code
-					></pre>
+		{:else if streamingSvgCode !== null}
+			<div class="svg-block-wrapper streaming-svg-block">
+				<div class="code-block-header">
+					<span class="code-language">svg</span>
+					<div class="code-block-actions">
+						<ActionIconCopyToClipboard
+							text={incompleteCodeBlock.code}
+							canCopy={false}
+							ariaLabel="Diagram incomplete"
+						/>
+					</div>
+				</div>
+				{#if liveSvgHtml}
+					<div class="svg-scroll-container">
+						<div class={SVG_BLOCK_CLASS}>
+							<div bind:this={streamingSvgHost}></div>
+						</div>
+					</div>
+				{:else}
+					<div class="mermaid-loading-placeholder">
+						<span class="mermaid-loading-text">Rendering svg...</span>
+					</div>
+				{/if}
 			</div>
-		</div>
+		{:else}
+			<div class="code-block-wrapper streaming-code-block relative">
+				<div class="code-block-header">
+					<span class="code-language">{incompleteCodeBlock.language || 'text'}</span>
+					<CodeBlockActions
+						code={incompleteCodeBlock.code}
+						language={incompleteCodeBlock.language || 'text'}
+						disabled
+						onPreview={(code, lang) => {
+							previewCode = code;
+							previewLanguage = lang;
+							previewDialogOpen = true;
+						}}
+					/>
+				</div>
+
+				<div
+					bind:this={streamingCodeScrollContainer}
+					class="streaming-code-scroll-container"
+					onscroll={() => streamingAutoScroll.handleScroll()}
+				>
+					<pre class="streaming-code-pre"><code
+							class="hljs language-{incompleteCodeBlock.language || 'text'}"
+							>{@html highlightCode(
+								incompleteCodeBlock.code,
+								incompleteCodeBlock.language || 'text'
+							)}</code
+						></pre>
+				</div>
+			</div>
+		{/if}
 	{/if}
 </div>
 
@@ -655,566 +922,12 @@
 	onOpenChange={handlePreviewDialogOpenChange}
 />
 
+<DialogMermaidPreview
+	open={mermaidPreviewOpen}
+	svgHtml={mermaidPreviewSvgHtml}
+	onOpenChange={handleMermaidPreviewOpenChange}
+/>
+
 <style>
-	.markdown-block--unstable {
-		display: contents;
-	}
-
-	/* Streaming code block uses .code-block-wrapper styles */
-	.streaming-code-block .streaming-code-pre {
-		background: transparent;
-		padding: 0.5rem;
-		margin: 0;
-		overflow-x: visible;
-		border-radius: 0;
-		border: none;
-		font-size: 0.875rem;
-	}
-
-	/* Base typography styles */
-	div :global(p) {
-		margin-block: 1rem;
-		line-height: 1.75;
-	}
-
-	div :global(:is(h1, h2, h3, h4, h5, h6):first-child) {
-		margin-top: 0;
-	}
-
-	/* Headers with consistent spacing */
-	div :global(h1) {
-		font-size: 1.875rem;
-		font-weight: 700;
-		line-height: 1.2;
-		margin: 1.5rem 0 0.75rem 0;
-	}
-
-	div :global(h2) {
-		font-size: 1.5rem;
-		font-weight: 600;
-		line-height: 1.3;
-		margin: 1.25rem 0 0.5rem 0;
-	}
-
-	div :global(h3) {
-		font-size: 1.25rem;
-		font-weight: 600;
-		margin: 1.5rem 0 0.5rem 0;
-		line-height: 1.4;
-	}
-
-	div :global(h4) {
-		font-size: 1.125rem;
-		font-weight: 600;
-		margin: 0.75rem 0 0.25rem 0;
-	}
-
-	div :global(h5) {
-		font-size: 1rem;
-		font-weight: 600;
-		margin: 0.5rem 0 0.25rem 0;
-	}
-
-	div :global(h6) {
-		font-size: 0.875rem;
-		font-weight: 600;
-		margin: 0.5rem 0 0.25rem 0;
-	}
-
-	/* Text formatting */
-	div :global(strong) {
-		font-weight: 600;
-	}
-
-	div :global(em) {
-		font-style: italic;
-	}
-
-	div :global(del) {
-		text-decoration: line-through;
-		opacity: 0.7;
-	}
-
-	/* Inline code */
-	div :global(code:not(pre code)) {
-		background: var(--muted);
-		color: var(--muted-foreground);
-		padding: 0.125rem 0.375rem;
-		border-radius: 0.375rem;
-		font-size: 0.875rem;
-	}
-
-	div :global(pre) {
-		display: inline;
-		margin: 0 !important;
-		overflow: hidden !important;
-		background: var(--muted);
-		overflow-x: auto;
-		border-radius: 1rem;
-		border: none;
-		line-height: 1 !important;
-	}
-
-	div :global(pre code) {
-		padding: 0 !important;
-		display: inline !important;
-	}
-
-	div :global(code) {
-		background: transparent;
-		color: var(--code-foreground);
-	}
-
-	/* Links */
-	div :global(a) {
-		color: var(--primary);
-		text-decoration: underline;
-		text-underline-offset: 2px;
-		transition: color 0.2s ease;
-		overflow-wrap: anywhere;
-		word-break: break-all;
-	}
-
-	div :global(a:hover) {
-		color: var(--primary);
-	}
-
-	/* Lists */
-	div :global(ul) {
-		list-style-type: disc;
-		margin-inline-start: 1.5rem;
-		margin-bottom: 1rem;
-	}
-
-	div :global(ol) {
-		list-style-type: decimal;
-		margin-inline-start: 1.5rem;
-		margin-bottom: 1rem;
-	}
-
-	div :global(li) {
-		margin-bottom: 0.25rem;
-		padding-inline-start: 0.5rem;
-	}
-
-	div :global(li::marker) {
-		color: var(--muted-foreground);
-	}
-
-	/* Nested lists */
-	div :global(ul ul) {
-		list-style-type: circle;
-		margin-top: 0.25rem;
-		margin-bottom: 0.25rem;
-	}
-
-	div :global(ol ol) {
-		list-style-type: lower-alpha;
-		margin-top: 0.25rem;
-		margin-bottom: 0.25rem;
-	}
-
-	/* Task lists */
-	div :global(.task-list-item) {
-		list-style: none;
-		margin-inline-start: 0;
-		padding-inline-start: 0;
-	}
-
-	div :global(.task-list-item-checkbox) {
-		margin-right: 0.5rem;
-		margin-top: 0.125rem;
-	}
-
-	/* Blockquotes */
-	div :global(blockquote) {
-		border-left: 4px solid var(--border);
-		padding: 0.5rem 1rem;
-		margin: 1.5rem 0;
-		font-style: italic;
-		color: var(--muted-foreground);
-		background: var(--muted);
-		border-radius: 0 0.375rem 0.375rem 0;
-	}
-
-	/* Tables */
-	div :global(table) {
-		width: 100%;
-		margin: 1.5rem 0;
-		border-collapse: collapse;
-		border: 1px solid var(--border);
-		border-radius: 0.375rem;
-		overflow: hidden;
-	}
-
-	div :global(th) {
-		background: hsl(var(--muted) / 0.3);
-		border: 1px solid var(--border);
-		padding: 0.5rem 0.75rem;
-		text-align: left;
-		font-weight: 600;
-	}
-
-	div :global(td) {
-		border: 1px solid var(--border);
-		padding: 0.5rem 0.75rem;
-	}
-
-	div :global(tr:nth-child(even)) {
-		background: hsl(var(--muted) / 0.1);
-	}
-
-	/* User message markdown should keep table borders visible on light primary backgrounds */
-	div.markdown-user-content :global(table),
-	div.markdown-user-content :global(th),
-	div.markdown-user-content :global(td),
-	div.markdown-user-content :global(.table-wrapper) {
-		border-color: currentColor;
-	}
-
-	/* Horizontal rules */
-	div :global(hr) {
-		border: none;
-		border-top: 1px solid var(--border);
-		margin: 1.5rem 0;
-	}
-
-	/* Images */
-	div :global(img) {
-		border-radius: 0.5rem;
-		box-shadow:
-			0 1px 3px 0 rgb(0 0 0 / 0.1),
-			0 1px 2px -1px rgb(0 0 0 / 0.1);
-		margin: 1.5rem 0;
-		max-width: 100%;
-		height: auto;
-	}
-
-	/* Code blocks */
-
-	div :global(.code-block-wrapper) {
-		margin: 1.5rem 0;
-		border-radius: 0.75rem;
-		overflow: hidden;
-		border: 1px solid color-mix(in oklch, var(--border) 30%, transparent);
-		background: var(--code-background);
-		box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-		min-height: var(--min-message-height);
-		max-height: var(--max-message-height);
-	}
-
-	:global(.dark) div :global(.code-block-wrapper) {
-		border-color: color-mix(in oklch, var(--border) 20%, transparent);
-	}
-
-	/* Scroll container for code blocks (both streaming and completed) */
-	div :global(.code-block-scroll-container),
-	.streaming-code-scroll-container {
-		min-height: var(--min-message-height);
-		max-height: var(--max-message-height);
-		overflow-y: auto;
-		overflow-x: auto;
-		padding: 3rem 1rem 1rem;
-		line-height: 1.3;
-	}
-
-	.full-height-code-blocks :global(.code-block-wrapper) {
-		max-height: none;
-	}
-
-	.full-height-code-blocks :global(.code-block-scroll-container),
-	.full-height-code-blocks .streaming-code-scroll-container {
-		max-height: none;
-		overflow-y: visible;
-	}
-
-	div :global(.code-block-header) {
-		display: flex;
-		justify-content: space-between;
-		align-items: center;
-		padding: 0.5rem 1rem 0;
-		font-size: 0.875rem;
-		position: absolute;
-		top: 0;
-		left: 0;
-		right: 0;
-	}
-
-	div :global(.code-language) {
-		color: var(--color-foreground);
-		font-weight: 500;
-		font-family:
-			ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas,
-			'Liberation Mono', Menlo, monospace;
-		text-transform: uppercase;
-		font-size: 0.75rem;
-		letter-spacing: 0.05em;
-	}
-
-	div :global(.code-block-actions) {
-		display: flex;
-		align-items: center;
-		gap: 0.5rem;
-	}
-
-	div :global(.copy-code-btn),
-	div :global(.preview-code-btn) {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		padding: 0;
-		background: transparent;
-		color: var(--code-foreground);
-		cursor: pointer;
-		transition: all 0.2s ease;
-	}
-
-	div :global(.copy-code-btn:hover),
-	div :global(.preview-code-btn:hover) {
-		transform: scale(1.05);
-	}
-
-	div :global(.copy-code-btn:active),
-	div :global(.preview-code-btn:active) {
-		transform: scale(0.95);
-	}
-
-	div :global(.code-block-wrapper pre) {
-		background: transparent;
-		margin: 0;
-		border-radius: 0;
-		border: none;
-		font-size: 0.875rem;
-	}
-
-	/* Mentions and hashtags */
-	div :global(.mention) {
-		color: hsl(var(--primary));
-		font-weight: 500;
-		text-decoration: none;
-	}
-
-	div :global(.mention:hover) {
-		text-decoration: underline;
-	}
-
-	div :global(.hashtag) {
-		color: hsl(var(--primary));
-		font-weight: 500;
-		text-decoration: none;
-	}
-
-	div :global(.hashtag:hover) {
-		text-decoration: underline;
-	}
-
-	/* Advanced table enhancements */
-	div :global(table) {
-		transition: all 0.2s ease;
-	}
-
-	div :global(table:hover) {
-		box-shadow:
-			0 4px 6px -1px rgb(0 0 0 / 0.1),
-			0 2px 4px -2px rgb(0 0 0 / 0.1);
-	}
-
-	div :global(th:hover),
-	div :global(td:hover) {
-		background: var(--muted);
-	}
-
-	/* Disable hover effects when rendering user messages */
-	.markdown-user-content :global(a),
-	.markdown-user-content :global(a:hover) {
-		color: inherit;
-	}
-
-	.markdown-user-content :global(table:hover) {
-		box-shadow: none;
-	}
-
-	.markdown-user-content :global(th:hover),
-	.markdown-user-content :global(td:hover) {
-		background: inherit;
-	}
-
-	/* Enhanced blockquotes */
-	div :global(blockquote) {
-		transition: all 0.2s ease;
-		position: relative;
-	}
-
-	div :global(blockquote:hover) {
-		border-left-width: 6px;
-		background: var(--muted);
-		transform: translateX(2px);
-	}
-
-	div :global(blockquote::before) {
-		content: '"';
-		position: absolute;
-		top: -0.5rem;
-		left: 0.5rem;
-		font-size: 3rem;
-		color: var(--muted-foreground);
-		font-family: serif;
-		line-height: 1;
-	}
-
-	/* Enhanced images */
-	div :global(img) {
-		transition: all 0.3s ease;
-		cursor: pointer;
-	}
-
-	div :global(img:hover) {
-		transform: scale(1.02);
-		box-shadow:
-			0 10px 15px -3px rgb(0 0 0 / 0.1),
-			0 4px 6px -4px rgb(0 0 0 / 0.1);
-	}
-
-	/* Image zoom overlay */
-	div :global(.image-zoom-overlay) {
-		position: fixed;
-		top: 0;
-		left: 0;
-		right: 0;
-		bottom: 0;
-		background: rgba(0, 0, 0, 0.8);
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		z-index: 1000;
-		cursor: pointer;
-	}
-
-	div :global(.image-zoom-overlay img) {
-		max-width: 90vw;
-		max-height: 90vh;
-		border-radius: 0.5rem;
-		box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.25);
-	}
-
-	/* Enhanced horizontal rules */
-	div :global(hr) {
-		border: none;
-		height: 2px;
-		background: linear-gradient(to right, transparent, var(--border), transparent);
-		margin: 2rem 0;
-		position: relative;
-	}
-
-	div :global(hr::after) {
-		content: '';
-		position: absolute;
-		top: 50%;
-		left: 50%;
-		transform: translate(-50%, -50%);
-		width: 1rem;
-		height: 1rem;
-		background: var(--border);
-		border-radius: 50%;
-	}
-
-	/* Scrollable tables */
-	div :global(.table-wrapper) {
-		overflow-x: auto;
-		margin: 1.5rem 0;
-		border-radius: 0.5rem;
-		border: 1px solid var(--border);
-	}
-
-	div :global(.table-wrapper table) {
-		margin: 0;
-		border: none;
-	}
-
-	/* Responsive adjustments */
-	@media (max-width: 640px) {
-		div :global(h1) {
-			font-size: 1.5rem;
-		}
-
-		div :global(h2) {
-			font-size: 1.25rem;
-		}
-
-		div :global(h3) {
-			font-size: 1.125rem;
-		}
-
-		div :global(table) {
-			font-size: 0.875rem;
-		}
-
-		div :global(th),
-		div :global(td) {
-			padding: 0.375rem 0.5rem;
-		}
-
-		div :global(.table-wrapper) {
-			margin: 0.5rem -1rem;
-			border-radius: 0;
-			border-left: none;
-			border-right: none;
-		}
-	}
-
-	/* Dark mode adjustments */
-	@media (prefers-color-scheme: dark) {
-		div :global(blockquote:hover) {
-			background: var(--muted);
-		}
-	}
-
-	/* Image load error fallback */
-	div :global(.image-load-error) {
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		margin: 1.5rem 0;
-		padding: 1.5rem;
-		border-radius: 0.5rem;
-		background: var(--muted);
-		border: 1px dashed var(--border);
-	}
-
-	div :global(.image-error-content) {
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		gap: 0.75rem;
-		color: var(--muted-foreground);
-		text-align: center;
-	}
-
-	div :global(.image-error-content svg) {
-		opacity: 0.5;
-	}
-
-	div :global(.image-error-text) {
-		font-size: 0.875rem;
-	}
-
-	div :global(.image-error-link) {
-		display: inline-flex;
-		align-items: center;
-		gap: 0.375rem;
-		padding: 0.5rem 1rem;
-		font-size: 0.875rem;
-		font-weight: 500;
-		color: var(--primary);
-		background: var(--background);
-		border: 1px solid var(--border);
-		border-radius: 0.375rem;
-		text-decoration: none;
-		transition: all 0.2s ease;
-	}
-
-	div :global(.image-error-link:hover) {
-		background: var(--muted);
-		border-color: var(--primary);
-	}
+	@import './markdown-content.css';
 </style>

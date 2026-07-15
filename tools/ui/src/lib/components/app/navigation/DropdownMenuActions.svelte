@@ -34,24 +34,28 @@
 </script>
 
 <DropdownMenu.Root bind:open>
-	<DropdownMenu.Trigger
-		class="flex h-6 w-6 cursor-pointer items-center justify-center rounded-md p-0 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground focus:outline-none disabled:pointer-events-none disabled:opacity-50 data-[state=open]:bg-accent data-[state=open]:text-accent-foreground {triggerClass}"
-		onclick={(e) => e.stopPropagation()}
-	>
-		{#if triggerTooltip}
-			<Tooltip.Root>
-				<Tooltip.Trigger>
+	<Tooltip.Root>
+		<Tooltip.Trigger>
+			<!-- prevent another nested button element -->
+			{#snippet child({ props })}
+				<DropdownMenu.Trigger
+					{...props}
+					class="flex h-6 w-6 cursor-pointer items-center justify-center rounded-md p-0 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus:bg-accent focus:text-accent-foreground focus:outline-none disabled:pointer-events-none disabled:opacity-50 data-[state=open]:bg-accent data-[state=open]:text-accent-foreground {triggerClass}"
+					onclick={(e) => e.stopPropagation()}
+				>
 					{@render iconComponent(triggerIcon, 'h-3 w-3')}
-					<span class="sr-only">{triggerTooltip}</span>
-				</Tooltip.Trigger>
-				<Tooltip.Content>
-					<p>{triggerTooltip}</p>
-				</Tooltip.Content>
-			</Tooltip.Root>
-		{:else}
-			{@render iconComponent(triggerIcon, 'h-3 w-3')}
+					{#if triggerTooltip}
+						<span class="sr-only">{triggerTooltip}</span>
+					{/if}
+				</DropdownMenu.Trigger>
+			{/snippet}
+		</Tooltip.Trigger>
+		{#if triggerTooltip}
+			<Tooltip.Content>
+				<p>{triggerTooltip}</p>
+			</Tooltip.Content>
 		{/if}
-	</DropdownMenu.Trigger>
+	</Tooltip.Root>
 
 	<DropdownMenu.Content {align} class="z-[999999] w-48">
 		{#each actions as action, index (action.label)}

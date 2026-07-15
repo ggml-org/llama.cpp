@@ -39,13 +39,17 @@
 					{@const faviconUrl = group.serverId ? mcpStore.getServerFavicon(group.serverId) : null}
 
 					<span class="inline-flex min-w-0 items-center gap-1.5 font-medium">
-						<McpServerIdentity
-							iconClass="h-4 w-4"
-							iconRounded="rounded-sm"
-							showVersion={false}
-							displayName={group.label}
-							{faviconUrl}
-						/>
+						{#if group.source === 'mcp'}
+							<McpServerIdentity
+								iconClass="h-4 w-4"
+								iconRounded="rounded-sm"
+								showVersion={false}
+								displayName={group.label}
+								{faviconUrl}
+							/>
+						{:else}
+							<TruncatedText text={group.label} class="font-medium" />
+						{/if}
 					</span>
 
 					<span class="ml-auto shrink-0 text-xs text-muted-foreground">
@@ -62,13 +66,11 @@
 							<span class="w-20 shrink-0 text-center">Always allow</span>
 						</div>
 
-						{#each group.tools as tool (tool.function.name)}
-							{@const toolName = tool.function.name}
-							{@const isEnabled = toolsStore.isToolEnabled(toolName)}
-							{@const permissionKey = toolsStore.getPermissionKey(toolName)}
-							{@const isAlwaysAllowed = permissionKey
-								? permissionsStore.hasTool(permissionKey)
-								: false}
+						{#each group.tools as entry (entry.key)}
+							{@const toolName = entry.definition.function.name}
+							{@const isEnabled = toolsStore.isToolEnabled(entry.key)}
+							{@const permissionKey = entry.key}
+							{@const isAlwaysAllowed = permissionsStore.hasTool(permissionKey)}
 
 							<div class="flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50">
 								<TruncatedText text={toolName} class="flex-1" showTooltip={true} />
@@ -76,7 +78,7 @@
 								<div class="flex w-16 shrink-0 justify-center">
 									<Checkbox
 										checked={isEnabled}
-										onCheckedChange={() => toolsStore.toggleTool(toolName)}
+										onCheckedChange={() => toolsStore.toggleTool(entry.key)}
 										class="h-4 w-4"
 									/>
 								</div>
@@ -86,9 +88,9 @@
 										checked={isAlwaysAllowed}
 										onCheckedChange={() => {
 											if (isAlwaysAllowed) {
-												permissionsStore.revokeTool(permissionKey!);
+												permissionsStore.revokeTool(permissionKey);
 											} else {
-												permissionsStore.allowTool(permissionKey!);
+												permissionsStore.allowTool(permissionKey);
 											}
 										}}
 										class="h-4 w-4"

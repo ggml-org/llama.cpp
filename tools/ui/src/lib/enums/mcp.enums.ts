@@ -54,7 +54,9 @@ export enum MCPContentType {
  * JSON Schema types used in MCP tool definitions
  */
 export enum JsonSchemaType {
-	OBJECT = 'object'
+	OBJECT = 'object',
+	STRING = 'string',
+	NUMBER = 'number'
 }
 
 /**

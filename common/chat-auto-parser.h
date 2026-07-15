@@ -181,6 +181,7 @@ struct tool_format_analysis {
 
     bool fun_name_is_key = false;       // In JSON format function name is JSON key, i.e. { "<funname>": { ... arguments ... } }
     bool tools_array_wrapped = false;   // Tool calls wrapped in JSON array [...]
+    bool openai_wrapper_trigger = false;  // model emits the OpenAI function wrapper, trigger on it
 
     std::string              function_field = "function";
     std::string              name_field     = "name";
@@ -191,9 +192,10 @@ struct tool_format_analysis {
 };
 
 struct tool_function_analysis {
-    std::string name_prefix;  // e.g., "<function=", "\"name\": \"", "functions."
-    std::string name_suffix;  // e.g., ">", "\"", ":0"
-    std::string close;        // e.g., "</function>", "" (for tag-based)
+    std::string name_prefix;     // e.g., "<function=", "\"name\": \"", "functions."
+    std::string name_suffix;     // e.g., ">", "\"", ":0"
+    std::string args_separator;  // e.g., "<tool_sep>" (marker between function name and arguments)
+    std::string close;           // e.g., "</function>", "" (for tag-based)
 };
 
 struct tool_arguments_analysis {

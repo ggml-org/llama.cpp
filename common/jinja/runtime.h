@@ -47,11 +47,18 @@ const T * cast_stmt(const statement_ptr & ptr) {
 // not thread-safe
 void enable_debug(bool enable);
 
+// for visiting AST nodes
+// function signature: void(bool is_leaf, statement * node, pair of <label, children>)
+using visitor_pair = std::pair<std::string, std::vector<statement *>>;
+using visitor_fn = std::function<void(bool, statement *, std::vector<visitor_pair>)>;
+
 struct context {
     std::shared_ptr<std::string> src; // for debugging; use shared_ptr to avoid copying on scope creation
     std::time_t current_time; // for functions that need current time
 
     bool is_get_stats = false; // whether to collect stats
+
+    visitor_fn visitor;
 
     // src is optional, used for error reporting
     context(std::string src = "") : src(std::make_shared<std::string>(std::move(src))) {
@@ -99,6 +106,15 @@ private:
     value_object env;
 };
 
+// utils for visiting AST nodes
+static std::vector<statement *> stmts_to_ptr(const statements & stmts) {
+    std::vector<statement *> children;
+    for (const auto & stmt : stmts) {
+        children.push_back(stmt.get());
+    }
+    return children;
+}
+
 /**
  * Base class for all nodes in the AST.
  */
@@ -106,6 +122,7 @@ struct statement {
     size_t pos; // position in source, for debugging
     virtual ~statement() = default;
     virtual std::string type() const { return "Statement"; }
+    virtual void visit(context & ctx) { ctx.visitor(true, this, {}); }
 
     // execute_impl must be overridden by derived classes
     virtual value execute_impl(context &) { throw_exec_error(); }
@@ -166,6 +183,13 @@ struct if_statement : public statement {
 
     std::string type() const override { return "If"; }
     value execute_impl(context & ctx) override;
+    void visit(context & ctx) override {
+        ctx.visitor(false, this, {
+            {"test", {test.get()}},
+            {"body", stmts_to_ptr(body)},
+            {"alternate", stmts_to_ptr(alternate)}
+        });
+    }
 };
 
 struct identifier;
@@ -190,6 +214,14 @@ struct for_statement : public statement {
 
     std::string type() const override { return "For"; }
     value execute_impl(context & ctx) override;
+    void visit(context & ctx) override {
+        ctx.visitor(false, this, {
+            {"loopvar", {loopvar.get()}},
+            {"iterable", {iterable.get()}},
+            {"body", stmts_to_ptr(body)},
+            {"default_block", stmts_to_ptr(default_block)}
+        });
+    }
 };
 
 struct break_statement : public statement {
@@ -241,6 +273,13 @@ struct set_statement : public statement {
 
     std::string type() const override { return "Set"; }
     value execute_impl(context & ctx) override;
+    void visit(context & ctx) override {
+        ctx.visitor(false, this, {
+            {"assignee", {assignee.get()}},
+            {"value", {val.get()}},
+            {"body", stmts_to_ptr(body)}
+        });
+    }
 };
 
 struct macro_statement : public statement {
@@ -256,6 +295,13 @@ struct macro_statement : public statement {
 
     std::string type() const override { return "Macro"; }
     value execute_impl(context & ctx) override;
+    void visit(context & ctx) override {
+        ctx.visitor(false, this, {
+            {"name", {name.get()}},
+            {"args", stmts_to_ptr(args)},
+            {"body", stmts_to_ptr(body)}
+        });
+    }
 };
 
 struct comment_statement : public statement {
@@ -289,6 +335,12 @@ struct member_expression : public expression {
     }
     std::string type() const override { return "MemberExpression"; }
     value execute_impl(context & ctx) override;
+    void visit(context & ctx) override {
+        ctx.visitor(false, this, {
+            {"object", {object.get()}},
+            {"property", {property.get()}}
+        });
+    }
 };
 
 struct call_expression : public expression {
@@ -302,6 +354,12 @@ struct call_expression : public expression {
     }
     std::string type() const override { return "CallExpression"; }
     value execute_impl(context & ctx) override;
+    void visit(context & ctx) override {
+        ctx.visitor(false, this, {
+            {"callee", {callee.get()}},
+            {"args", stmts_to_ptr(args)}
+        });
+    }
 };
 
 /**
@@ -405,6 +463,12 @@ struct binary_expression : public expression {
     }
     std::string type() const override { return "BinaryExpression"; }
     value execute_impl(context & ctx) override;
+    void visit(context & ctx) override {
+        ctx.visitor(false, this, {
+            {"left", {left.get()}},
+            {"right", {right.get()}}
+        });
+    }
 };
 
 /**
@@ -431,6 +495,12 @@ struct filter_expression : public expression {
 
     std::string type() const override { return "FilterExpression"; }
     value execute_impl(context & ctx) override;
+    void visit(context & ctx) override {
+        ctx.visitor(false, this, {
+            {"operand", {operand.get()}},
+            {"filter", {filter.get()}}
+        });
+    }
 };
 
 struct filter_statement : public statement {
@@ -443,6 +513,12 @@ struct filter_statement : public statement {
     }
     std::string type() const override { return "FilterStatement"; }
     value execute_impl(context & ctx) override;
+    void visit(context & ctx) override {
+        ctx.visitor(false, this, {
+            {"filter", {filter.get()}},
+            {"body", stmts_to_ptr(body)}
+        });
+    }
 };
 
 /**
@@ -468,6 +544,12 @@ struct select_expression : public expression {
         }
         return lhs->execute_impl(ctx);
     }
+    void visit(context & ctx) override {
+        ctx.visitor(false, this, {
+            {"lhs", {lhs.get()}},
+            {"test", {test.get()}}
+        });
+    }
 };
 
 /**
@@ -486,6 +568,12 @@ struct test_expression : public expression {
     }
     std::string type() const override { return "TestExpression"; }
     value execute_impl(context & ctx) override;
+    void visit(context & ctx) override {
+        ctx.visitor(false, this, {
+            {"operand", {operand.get()}},
+            {"test", {test.get()}}
+        });
+    }
 };
 
 /**
@@ -501,6 +589,11 @@ struct unary_expression : public expression {
     }
     std::string type() const override { return "UnaryExpression"; }
     value execute_impl(context & ctx) override;
+    void visit(context & ctx) override {
+        ctx.visitor(false, this, {
+            {"argument", {argument.get()}}
+        });
+    }
 };
 
 struct slice_expression : public expression {
@@ -518,6 +611,13 @@ struct slice_expression : public expression {
     [[noreturn]] value execute_impl(context &) override {
         throw std::runtime_error("must be handled by MemberExpression");
     }
+    void visit(context & ctx) override {
+        ctx.visitor(false, this, {
+            {"start_expr", {start_expr.get()}},
+            {"stop_expr", {stop_expr.get()}},
+            {"step_expr", {step_expr.get()}}
+        });
+    }
 };
 
 struct keyword_argument_expression : public expression {
@@ -531,6 +631,12 @@ struct keyword_argument_expression : public expression {
     }
     std::string type() const override { return "KeywordArgumentExpression"; }
     value execute_impl(context & ctx) override;
+    void visit(context & ctx) override {
+        ctx.visitor(false, this, {
+            {"key", {key.get()}},
+            {"val", {val.get()}}
+        });
+    }
 };
 
 struct spread_expression : public expression {
@@ -539,6 +645,11 @@ struct spread_expression : public expression {
         chk_type<expression>(this->argument);
     }
     std::string type() const override { return "SpreadExpression"; }
+    void visit(context & ctx) override {
+        ctx.visitor(false, this, {
+            {"argument", {argument.get()}}
+        });
+    }
 };
 
 struct call_statement : public statement {
@@ -552,6 +663,14 @@ struct call_statement : public statement {
         for (const auto & arg : this->caller_args) chk_type<expression>(arg);
     }
     std::string type() const override { return "CallStatement"; }
+    value execute_impl(context & ctx) override;
+    void visit(context & ctx) override {
+        ctx.visitor(false, this, {
+            {"call", {call.get()}},
+            {"caller_args", stmts_to_ptr(caller_args)},
+            {"body", stmts_to_ptr(body)}
+        });
+    }
 };
 
 struct ternary_expression : public expression {
@@ -573,6 +692,13 @@ struct ternary_expression : public expression {
         } else {
             return false_expr->execute(ctx);
         }
+    }
+    void visit(context & ctx) override {
+        ctx.visitor(false, this, {
+            {"condition", {condition.get()}},
+            {"true_expr", {true_expr.get()}},
+            {"false_expr", {false_expr.get()}}
+        });
     }
 };
 
@@ -647,6 +773,8 @@ struct runtime {
         }
         return parts;
     }
+
+    static std::string debug_dump_program(const program & prog, const std::string & src);
 };
 
 } // namespace jinja
