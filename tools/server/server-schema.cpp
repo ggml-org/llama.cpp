@@ -1,6 +1,7 @@
 #include "server-schema.h"
 
 #include "json-schema-to-grammar.h"
+#include "log.h"
 
 namespace server_schema {
 
@@ -669,6 +670,13 @@ task_params eval_llama_cmpl_schema(
         if ((params.sampling.reasoning_sampling & COMMON_PARAMS_SAMPLING_CONFIG_DRY_PENALTY_LAST_N) &&
             params.sampling.reasoning_dry_penalty_last_n == -1) {
             params.sampling.reasoning_dry_penalty_last_n = n_ctx_slot;
+        }
+
+        if (params.sampling.reasoning_sampling &&
+            (params.sampling.reasoning_budget_start.empty() || params.sampling.reasoning_budget_end.empty())) {
+            LOG_WRN("%s: reasoning_* sampling overrides are set but no reasoning start/end tags are available "
+                    "(chat template without thinking tags, or missing reasoning_budget_start_tag/reasoning_budget_end_tag); "
+                    "the overrides will have no effect\n", __func__);
         }
 
         // if "reasoning_format" is not provided, its handler will not be called, we will need to handle it here

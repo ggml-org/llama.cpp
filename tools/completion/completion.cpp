@@ -288,6 +288,10 @@ int llama_completion(int argc, char ** argv) {
 
     auto configure_reasoning_sampler = [&](const common_chat_params & chat_params) {
         if (chat_params.thinking_start_tag.empty() || chat_params.thinking_end_tag.empty()) {
+            if (sparams.reasoning_sampling) {
+                LOG_WRN("%s: --reasoning-* sampling overrides are set but the chat template has no thinking tags; "
+                        "the overrides will have no effect\n", __func__);
+            }
             return;
         }
 
