@@ -1695,6 +1695,20 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
 
             return true;
         }
+
+        // KleidiAI only provides kernels for Q4_0, Q8_0 and F32. A model quantized to any other
+        // type (K-quants, IQ) silently uses the generic ggml CPU kernels. Warn once so users do
+        // not assume KleidiAI is accelerating a weight type it has no kernel for.
+        if ((op->op == GGML_OP_MUL_MAT || op->op == GGML_OP_GET_ROWS) &&
+            ggml_is_quantized(op->src[0]->type) &&
+            op->src[0]->type != GGML_TYPE_Q4_0 && op->src[0]->type != GGML_TYPE_Q8_0 &&
+            op->src[0]->buffer && op->src[0]->buffer->buft == ggml_backend_cpu_kleidiai_buffer_type()) {
+            static std::atomic<bool> warned(false);
+            if (!warned.exchange(true)) {
+                GGML_LOG_WARN("kleidiai: no kernels for tensor type %s; falling back to generic CPU kernels\n",
+                              ggml_type_name(op->src[0]->type));
+            }
+        }
         return false;
     }
 
