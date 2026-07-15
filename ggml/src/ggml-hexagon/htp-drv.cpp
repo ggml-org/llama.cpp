@@ -359,7 +359,7 @@ int htpdrv_init() {
     return AEE_SUCCESS;
 }
 
-domain * get_domain(int domain_id) {
+domain * htpdrv_get_domain(int domain_id) {
     int i    = 0;
     int size = sizeof(supported_domains) / sizeof(domain);
 
@@ -372,7 +372,7 @@ domain * get_domain(int domain_id) {
     return NULL;
 }
 
-int get_hex_arch_ver(int domain, int * arch) {
+int htpdrv_get_arch(int domain, int * arch) {
     if (!remote_handle_control_pfn) {
         GGML_LOG_ERROR("ggml-hex: remote_handle_control is not supported on this device\n");
         return AEE_EUNSUPPORTEDAPI;
@@ -394,25 +394,7 @@ int get_hex_arch_ver(int domain, int * arch) {
         return err;
     }
 
-    switch (arch_ver.capability & 0xff) {
-        case 0x68:
-            *arch = 68;
-            return 0;
-        case 0x69:
-            *arch = 69;
-            return 0;
-        case 0x73:
-            *arch = 73;
-            return 0;
-        case 0x75:
-            *arch = 75;
-            return 0;
-        case 0x79:
-            *arch = 79;
-            return 0;
-        case 0x81:
-            *arch = 81;
-            return 0;
-    }
-    return -1;
+    uint32_t val = arch_ver.capability & 0xff;
+    *arch = (int) ((val >> 4) * 10 + (val & 0x0f));
+    return 0;
 }

@@ -1740,7 +1740,7 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
 
     GGML_LOG_DEBUG("ggml-hex: %s allocating new session\n", this->name.c_str());
 
-    domain * my_domain = get_domain(this->domain_id);
+    domain * my_domain = htpdrv_get_domain(this->domain_id);
     if (my_domain == NULL) {
         GGML_LOG_ERROR("ggml-hex: unable to get domain struct for CDSP\n");
         throw std::runtime_error("ggml-hex: failed to get CDSP domain (see log for details)");
@@ -4352,10 +4352,18 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
 
     // Init Arch first since it affects other defaults
     if (!str_arch) {
-        int err = get_hex_arch_ver(CDSP_DOMAIN_ID, &opt_arch);
+        int err = htpdrv_get_arch(CDSP_DOMAIN_ID, &opt_arch);
         if (err != 0) {
             GGML_LOG_ERROR("ggml-hex: failed to query HTP version (err %d) defaulting to v73\n", err);
             opt_arch = 73;
+        } else {
+            if (opt_arch < 73) {
+                GGML_LOG_WARN("ggml-hex: Hexagon arch v%d is under supported range, capping at v73\n", opt_arch);
+                opt_arch = 73;
+            } else if (opt_arch > 81) {
+                GGML_LOG_WARN("ggml-hex: Hexagon arch v%d is over supported range, capping at v81\n", opt_arch);
+                opt_arch = 81;
+            }
         }
     } else {
         if (str_arch[0] == 'v' || str_arch[0] == 'V') {
