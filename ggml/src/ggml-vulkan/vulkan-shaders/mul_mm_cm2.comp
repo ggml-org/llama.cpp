@@ -332,9 +332,6 @@ void main() {
 #ifdef NEEDS_INIT_IQ_SHMEM
     init_iq_shmem(gl_WorkGroupSize);
 #endif
-#ifdef MULMAT_QUANT
-    init_iq_shmem(gl_WorkGroupSize);
-#endif
 
 #ifndef MUL_MAT_ID
     const uint batch_idx = gl_WorkGroupID.z + p.base_work_group_z;
