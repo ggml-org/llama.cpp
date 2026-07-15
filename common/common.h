@@ -912,9 +912,14 @@ struct common_init_result {
 
     std::vector<llama_adapter_lora_ptr> & lora();
 
+    llama_context * reinit_context(common_params & params);
+
+    void finalize_and_warmup(common_params & params);
 private:
     struct impl;
     std::unique_ptr<impl> pimpl;
+
+    llama_context * init_context_inner(common_params & params);
 };
 
 using common_init_result_ptr = std::unique_ptr<common_init_result>;
