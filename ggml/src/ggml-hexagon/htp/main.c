@@ -955,7 +955,13 @@ static void l2flush_thread_worker(unsigned int n, unsigned int i, void * data) {
     const uint32_t chunk_size = task->chunk_size;
 
     const uint32_t thread_s = start + i * chunk_size;
-    const uint32_t thread_e = (i == n - 1) ? end : (thread_s + chunk_size);
+    if (thread_s >= end) {
+        return;
+    }
+    uint32_t thread_e = thread_s + chunk_size;
+    if (thread_e > end) {
+        thread_e = end;
+    }
 
     struct htp_thread_trace * tr = &task->trace[i];
     htp_trace_event_start(tr, HTP_TRACE_EVT_L2FLUSH, ti);
@@ -985,7 +991,9 @@ static inline void flush_tensor(struct htp_ops_context * octx, struct htp_tensor
         task.trace = octx->ctx->trace;
 
         const uint32_t total_size = task.end - task.start;
-        task.chunk_size = (fastdiv(total_size, &octx->ctx->n_threads_div)) & ~((HEX_L2_LINE_SIZE * 4) - 1);
+        const uint32_t n_blocks   = (total_size + HEX_L2_BLOCK_SIZE - 1) / HEX_L2_BLOCK_SIZE;
+        const uint32_t blocks_per_thread = fastdiv(n_blocks + octx->n_threads - 1, &octx->ctx->n_threads_div);
+        task.chunk_size = blocks_per_thread * HEX_L2_BLOCK_SIZE;
 
         work_queue_run(octx->ctx->work_queue, l2flush_thread_worker, &task, octx->n_threads);
     } else {
