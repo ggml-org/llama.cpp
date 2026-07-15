@@ -4449,6 +4449,70 @@ static void ggml_compute_forward_out_prod_q_f32(
     }
 }
 
+static void ggml_compute_forward_out_prod_f16_f32(
+        const ggml_compute_params * params,
+              ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+
+    GGML_TENSOR_BINARY_OP_LOCALS;
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    GGML_ASSERT(src0->type == GGML_TYPE_F16);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+
+    GGML_ASSERT(ne02 == ne12);
+    GGML_ASSERT(ne03 == ne13);
+    GGML_ASSERT(ne2  == ne12);
+    GGML_ASSERT(ne3  == ne13);
+
+    GGML_ASSERT(nb00 == sizeof(ggml_fp16_t));
+    GGML_ASSERT(nb0  == sizeof(float));
+
+    GGML_ASSERT(ne0 == ne00);
+    GGML_ASSERT(ne1 == ne10);
+    GGML_ASSERT(ne2 == ne02);
+    GGML_ASSERT(ne3 == ne03);
+
+    if (ith == 0) {
+        ggml_vec_set_f32(ne0*ne1*ne2*ne3, (float *)dst->data, 0);
+    }
+    ggml_barrier(params->threadpool);
+
+    const int64_t nr = ne1*ne2*ne3;
+    const int64_t dr = (nr + nth - 1)/nth;
+    const int64_t ir0 = dr*ith;
+    const int64_t ir1 = MIN(ir0 + dr, nr);
+
+    float * wdata = (float *) params->wdata + (ne0 + CACHE_LINE_SIZE_F32) * ith;
+
+    for (int64_t ir = ir0; ir < ir1; ++ir) {
+        const int64_t i3 = ir/(ne2*ne1);
+        const int64_t i2 = (ir - i3*ne2*ne1)/ne1;
+        const int64_t i1 = (ir - i3*ne2*ne1 - i2*ne1);
+
+        const int64_t i02 = i2;
+        const int64_t i03 = i3;
+
+        const int64_t i12 = i2;
+        const int64_t i13 = i3;
+
+        float * d = (float *) ((char *) dst->data + (i1*nb1 + i2*nb2 + i3*nb3));
+
+        for (int64_t i01 = 0; i01 < ne01; ++i01) {
+            const int64_t i11 = i01;
+            ggml_fp16_t * s0 = (ggml_fp16_t *) ((char *) src0->data + (i01*nb01 + i02*nb02 + i03*nb03));
+            float * s1 = (float *) ((char *) src1->data + (i1*nb10 + i11*nb11 + i12*nb12 + i13*nb13));
+            ggml_fp16_to_fp32_row(s0, wdata, ne0);
+            ggml_vec_mad_f32(ne0, d, wdata, *s1);
+        }
+    }
+}
+
 void ggml_compute_forward_out_prod(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
@@ -4486,9 +4550,8 @@ void ggml_compute_forward_out_prod(
             } break;
         case GGML_TYPE_F16:
             {
-                GGML_ABORT("fatal error"); // todo
-                // ggml_compute_forward_out_prod_f16_f32(params, dst);
-            }
+                ggml_compute_forward_out_prod_f16_f32(params, dst);
+            } break;
         case GGML_TYPE_F32:
             {
                 ggml_compute_forward_out_prod_f32(params, dst);
@@ -6469,7 +6532,7 @@ void ggml_compute_forward_im2col_back_f32(
     const ggml_tensor * src1 = dst->src[1]; // convolution kernel
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32);
-    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
 
     GGML_TENSOR_BINARY_OP_LOCALS;
