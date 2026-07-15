@@ -6,9 +6,13 @@
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { parseHeadersToArray, uuid, canonicalizeServerUrl } from '$lib/utils';
 	import {
+		BEARER_PREFIX,
+		BOOL_FALSE_STRING,
+		BOOL_TRUE_STRING,
 		DISMISSED_RECOMMENDED_MCP_SERVERS_LOCALSTORAGE_KEY,
 		MCP_SERVER_ID_PREFIX,
-		RECOMMENDED_MCP_SERVERS
+		RECOMMENDED_MCP_SERVERS,
+		REDACTED_HEADERS
 	} from '$lib/constants';
 	import { browser } from '$app/environment';
 
@@ -43,15 +47,16 @@
 
 	let bearerTokenFilled = $derived.by(() => {
 		const pairs = parseHeadersToArray(newServerHeaders);
+		const bearerPrefix = BEARER_PREFIX.toLowerCase();
 		const bearer = pairs.find(
 			(p) =>
-				p.key.trim().toLowerCase() === 'authorization' &&
-				p.value.trim().toLowerCase().startsWith('bearer ')
+				REDACTED_HEADERS.has(p.key.trim().toLowerCase()) &&
+				p.value.trim().toLowerCase().startsWith(bearerPrefix)
 		);
 
 		if (!bearer) return false;
 
-		return bearer.value.trim().slice('bearer '.length).trim().length > 0;
+		return bearer.value.trim().slice(bearerPrefix.length).trim().length > 0;
 	});
 
 	let newServerUrlError = $derived.by(() => {
@@ -78,8 +83,8 @@
 
 		if (!raw) return false;
 
-		if (raw === 'true') return true;
-		if (raw === 'false') return false;
+		if (raw === BOOL_TRUE_STRING) return true;
+		if (raw === BOOL_FALSE_STRING) return false;
 
 		try {
 			const parsed = JSON.parse(raw);
@@ -95,7 +100,7 @@
 		if (browser) {
 			localStorage.setItem(
 				DISMISSED_RECOMMENDED_MCP_SERVERS_LOCALSTORAGE_KEY,
-				dismissed ? 'true' : 'false'
+				dismissed ? BOOL_TRUE_STRING : BOOL_FALSE_STRING
 			);
 		}
 	}

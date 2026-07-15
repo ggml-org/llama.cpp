@@ -5,9 +5,14 @@
 	import type { KeyValuePair } from '$lib/types';
 	import { parseHeadersToArray, serializeHeaders } from '$lib/utils';
 	import { UrlProtocol } from '$lib/enums';
-	import { MCP_SERVER_URL_PLACEHOLDER } from '$lib/constants';
+	import {
+		AUTHORIZATION_HEADER,
+		BEARER_PREFIX,
+		CLI_FLAGS,
+		MCP_SERVER_URL_PLACEHOLDER,
+		REDACTED_HEADERS
+	} from '$lib/constants';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { CLI_FLAGS } from '$lib/constants';
 
 	interface Props {
 		url: string;
@@ -56,14 +61,11 @@
 
 	let headerPairs = $derived<KeyValuePair[]>(parseHeadersToArray(headers));
 
-	const AUTHORIZATION_HEADER = 'Authorization';
-	const BEARER_PREFIX = 'Bearer ';
-
 	// Heuristic: this dedicated UI only owns Authorization headers that already
 	// carry a Bearer scheme. Anything else (e.g. Basic, raw tokens) stays in the
 	// KV section so the user can still edit those values verbatim.
 	const matchesAuthorizationKey = (key: string): boolean =>
-		key.trim().toLowerCase() === AUTHORIZATION_HEADER.toLowerCase();
+		REDACTED_HEADERS.has(key.trim().toLowerCase());
 
 	const isBearerScheme = (value: string): boolean =>
 		value.trim().toLowerCase().startsWith(BEARER_PREFIX.toLowerCase());

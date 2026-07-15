@@ -22,7 +22,7 @@
 	import { Toaster } from 'svelte-sonner';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
+	import { AUTHORIZATION_HEADER, BEARER_PREFIX, TOOLTIP_DELAY_DURATION } from '$lib/constants';
 	import { FAVICON_PATHS, FAVICON_SELECTORS } from '$lib/constants/pwa';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { usePwa } from '$lib/hooks/use-pwa.svelte';
@@ -119,7 +119,7 @@
 			) {
 				const headers: Record<string, string> = {
 					'Content-Type': 'application/json',
-					Authorization: `Bearer ${apiKey.trim()}`
+					[AUTHORIZATION_HEADER]: `${BEARER_PREFIX}${apiKey.trim()}`
 				};
 
 				fetch(`${base}/props`, { headers })

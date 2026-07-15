@@ -8,7 +8,7 @@
 	import Label from '$lib/components/ui/label/label.svelte';
 	import { serverStore, serverLoading } from '$lib/stores/server.svelte';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
-	import { SETTINGS_KEYS } from '$lib/constants';
+	import { AUTHORIZATION_HEADER, BEARER_PREFIX, SETTINGS_KEYS } from '$lib/constants';
 	import { ROUTES } from '$lib/constants/routes';
 	import { fade, fly, scale } from 'svelte/transition';
 	import { KeyboardKey } from '$lib/enums';
@@ -72,7 +72,7 @@
 			const response = await fetch(`${base}/props`, {
 				headers: {
 					'Content-Type': 'application/json',
-					Authorization: `Bearer ${apiKeyInput.trim()}`
+					[AUTHORIZATION_HEADER]: `${BEARER_PREFIX}${apiKeyInput.trim()}`
 				}
 			});
 
