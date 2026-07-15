@@ -29,4 +29,7 @@ static inline void htp_tensor_make_clean(const struct htp_tensor * t, uint32_t *
     bitmap_clear(dirty_map, t->ti);
 }
 
+struct htp_context;
+void htp_tensor_flush(struct htp_context * ctx, const struct htp_tensor * t);
+
 #endif // HTP_TENSOR_H

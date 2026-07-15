@@ -923,8 +923,6 @@ static int execute_op_unary_f32(struct htp_ops_context * octx) {
 }
 
 int op_unary(struct htp_ops_context * octx) {
-    // htp_tensor_make_clean(octx->dst);
-
     switch (octx->src[0]->type) {
         case HTP_TYPE_F32:
             return execute_op_unary_f32(octx);

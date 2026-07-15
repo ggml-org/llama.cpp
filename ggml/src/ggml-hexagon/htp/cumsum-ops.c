@@ -255,7 +255,6 @@ int op_cumsum_f32(struct htp_ops_context * octx) {
 
 int op_cumsum(struct htp_ops_context * octx) {
     const struct htp_tensor * dst = octx->dst;
-    // htp_tensor_make_clean(dst);
 
     switch (dst->type) {
         case HTP_TYPE_F32:

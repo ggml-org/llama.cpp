@@ -713,8 +713,6 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
 }
 
 int op_rope(struct htp_ops_context * octx) {
-    // htp_tensor_make_clean(octx->dst, octx->ctx->dirty_map);
-
     switch (octx->src[0]->type) {
         case HTP_TYPE_F32:
             return execute_op_rope_f32(octx);
