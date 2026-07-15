@@ -1338,37 +1338,23 @@ struct test_case {
         }
 
         // check if the backends support the ops
-        bool supported1 = true;
-        bool supported2 = true;
+        bool supported = true;
+        std::string unsupported_str;
         for (ggml_backend_t backend : {backend1, backend2}) {
             for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
                 if (!ggml_backend_supports_op(backend, t)) {
-                    if (backend == backend1) {
-                        supported1 = false;
+                    supported = false;
+                    if (unsupported_str.empty()) {
+                        unsupported_str = std::string(ggml_backend_name(backend));
                     } else {
-                        supported2 = false;
+                        unsupported_str += ", " + std::string(ggml_backend_name(backend));
                     }
-                    break;
                 }
             }
         }
 
-        if (!supported1 || !supported2) {
-            // Create test result for unsupported operation
-            std::string unsupported_backend = "";
-            if(!supported1 && supported2) {
-                unsupported_backend = ggml_backend_name(backend1);
-            }
-
-            if(supported1 && !supported2) {
-                unsupported_backend = ggml_backend_name(backend2);
-            }
-
-            if(!supported1 && !supported2) {
-                unsupported_backend = std::string(ggml_backend_name(backend1)) + ", " + std::string(ggml_backend_name(backend2));
-            }
-
-            test_result result(unsupported_backend.c_str(), current_op_name, vars(), "test",
+        if (!supported) {
+            test_result result(unsupported_str, current_op_name, vars(), "test",
                              false, false, "not supported");
 
             print_test_result_locked(output_printer, result);
@@ -1490,7 +1476,7 @@ struct test_case {
         // Create test result
         bool        test_passed = ud.ok && cmp_ok;
         std::string error_msg   = test_passed ? "" : (!cmp_ok ? "compare failed" : "test failed");
-        test_result result(ggml_backend_name(backend1), current_op_name, vars(), "test", supported1, test_passed,
+        test_result result(ggml_backend_name(backend1), current_op_name, vars(), "test", supported, test_passed,
                            error_msg);
 
         print_test_result_locked(output_printer, result);
