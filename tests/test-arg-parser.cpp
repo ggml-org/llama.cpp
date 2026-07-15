@@ -132,6 +132,26 @@ static void test(void) {
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_SPECULATIVE));
     assert(params.speculative.draft.n_max == 123);
 
+    common_params reasoning_params;
+    argv = {
+        "binary_name",
+        "--model", "model_file.gguf",
+        "--reasoning-temp", "1.25",
+        "--reasoning-top-k", "17",
+        "--reasoning-presence-penalty", "-0.2",
+        "--reasoning-frequency-penalty", "0.4",
+        "--reasoning-dry-multiplier", "0.8",
+        "--reasoning-mirostat", "2",
+    };
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), reasoning_params, LLAMA_EXAMPLE_COMPLETION));
+    assert(reasoning_params.sampling.reasoning_temp == 1.25f);
+    assert(reasoning_params.sampling.reasoning_top_k == 17);
+    assert(reasoning_params.sampling.reasoning_penalty_present == -0.2f);
+    assert(reasoning_params.sampling.reasoning_penalty_freq == 0.4f);
+    assert(reasoning_params.sampling.reasoning_dry_multiplier == 0.8f);
+    assert(reasoning_params.sampling.reasoning_mirostat == 2);
+    assert(reasoning_params.sampling.reasoning_sampling != 0);
+
     // multi-value args (CSV)
     argv = {"binary_name", "--lora", "file1.gguf,\"file2,2.gguf\",\"file3\"\"3\"\".gguf\",file4\".gguf"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));

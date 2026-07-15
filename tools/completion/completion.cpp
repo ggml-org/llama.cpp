@@ -286,6 +286,22 @@ int llama_completion(int argc, char ** argv) {
         return formatted;
     };
 
+    auto configure_reasoning_sampler = [&](const common_chat_params & chat_params) {
+        if (chat_params.thinking_start_tag.empty() || chat_params.thinking_end_tag.empty()) {
+            return;
+        }
+
+        sparams.generation_prompt       = chat_params.generation_prompt;
+        sparams.reasoning_budget_start  = common_tokenize(vocab, chat_params.thinking_start_tag, false, true);
+        sparams.reasoning_budget_end    = common_tokenize(vocab, chat_params.thinking_end_tag, false, true);
+        sparams.reasoning_budget_forced = common_tokenize(vocab, sparams.reasoning_budget_message + chat_params.thinking_end_tag, false, true);
+
+        common_sampler_configure_reasoning(smpl, vocab, sparams);
+    };
+
+    const bool needs_reasoning_sampler = sparams.reasoning_sampling ||
+        sparams.reasoning_budget_tokens >= 0 || sparams.reasoning_control;
+
     std::string prompt;
     {
         if (params.conversation_mode && params.enable_chat_template) {
@@ -308,7 +324,11 @@ int llama_completion(int argc, char ** argv) {
                 inputs.add_generation_prompt = !params.prompt.empty();
                 inputs.force_pure_content = params.force_pure_content_parser;
 
-                prompt = common_chat_templates_apply(chat_templates.get(), inputs).prompt;
+                auto chat_params = common_chat_templates_apply(chat_templates.get(), inputs);
+                prompt = chat_params.prompt;
+                if (needs_reasoning_sampler) {
+                    configure_reasoning_sampler(chat_params);
+                }
             }
         } else {
             // otherwise use the prompt as is
@@ -909,6 +929,14 @@ int llama_completion(int argc, char ** argv) {
                     std::string user_inp = format_chat
                         ? chat_add_and_format("user", std::move(buffer))
                         : std::move(buffer);
+                    if (format_chat && needs_reasoning_sampler) {
+                        common_chat_templates_inputs inputs;
+                        inputs.use_jinja             = params.use_jinja;
+                        inputs.messages              = chat_msgs;
+                        inputs.add_generation_prompt = true;
+                        inputs.force_pure_content    = params.force_pure_content_parser;
+                        configure_reasoning_sampler(common_chat_templates_apply(chat_templates.get(), inputs));
+                    }
                     // TODO: one inconvenient of current chat template implementation is that we can't distinguish between user input and special tokens (prefix/postfix)
                     const auto line_pfx = common_tokenize(ctx, params.input_prefix, false, true);
                     const auto line_inp = common_tokenize(ctx, user_inp,            false, format_chat);

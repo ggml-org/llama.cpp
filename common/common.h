@@ -152,18 +152,32 @@ struct common_grammar_trigger {
 };
 
 enum common_params_sampling_config : uint64_t {
-    COMMON_PARAMS_SAMPLING_CONFIG_SAMPLERS        = 1 << 0,
-    COMMON_PARAMS_SAMPLING_CONFIG_TOP_K           = 1 << 1,
-    COMMON_PARAMS_SAMPLING_CONFIG_TOP_P           = 1 << 2,
-    COMMON_PARAMS_SAMPLING_CONFIG_MIN_P           = 1 << 3,
-    COMMON_PARAMS_SAMPLING_CONFIG_XTC_PROBABILITY = 1 << 4,
-    COMMON_PARAMS_SAMPLING_CONFIG_XTC_THRESHOLD   = 1 << 5,
-    COMMON_PARAMS_SAMPLING_CONFIG_TEMP            = 1 << 6,
-    COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_LAST_N  = 1 << 7,
-    COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_REPEAT  = 1 << 8,
-    COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT        = 1 << 9,
-    COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT_TAU    = 1 << 10,
-    COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT_ETA    = 1 << 11,
+    COMMON_PARAMS_SAMPLING_CONFIG_SAMPLERS          = 1ULL << 0,
+    COMMON_PARAMS_SAMPLING_CONFIG_TOP_K             = 1ULL << 1,
+    COMMON_PARAMS_SAMPLING_CONFIG_TOP_P             = 1ULL << 2,
+    COMMON_PARAMS_SAMPLING_CONFIG_MIN_P             = 1ULL << 3,
+    COMMON_PARAMS_SAMPLING_CONFIG_XTC_PROBABILITY   = 1ULL << 4,
+    COMMON_PARAMS_SAMPLING_CONFIG_XTC_THRESHOLD     = 1ULL << 5,
+    COMMON_PARAMS_SAMPLING_CONFIG_TEMP              = 1ULL << 6,
+    COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_LAST_N    = 1ULL << 7,
+    COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_REPEAT    = 1ULL << 8,
+    COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT          = 1ULL << 9,
+    COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT_TAU      = 1ULL << 10,
+    COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT_ETA      = 1ULL << 11,
+    COMMON_PARAMS_SAMPLING_CONFIG_TOP_N_SIGMA       = 1ULL << 12,
+    COMMON_PARAMS_SAMPLING_CONFIG_TYPICAL_P         = 1ULL << 13,
+    COMMON_PARAMS_SAMPLING_CONFIG_DYNATEMP_RANGE    = 1ULL << 14,
+    COMMON_PARAMS_SAMPLING_CONFIG_DYNATEMP_EXPONENT = 1ULL << 15,
+    COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_FREQ      = 1ULL << 16,
+    COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_PRESENT   = 1ULL << 17,
+    COMMON_PARAMS_SAMPLING_CONFIG_DRY_MULTIPLIER    = 1ULL << 18,
+    COMMON_PARAMS_SAMPLING_CONFIG_DRY_BASE          = 1ULL << 19,
+    COMMON_PARAMS_SAMPLING_CONFIG_DRY_ALLOWED_LEN   = 1ULL << 20,
+    COMMON_PARAMS_SAMPLING_CONFIG_DRY_PENALTY_LAST_N = 1ULL << 21,
+    COMMON_PARAMS_SAMPLING_CONFIG_ADAPTIVE_TARGET   = 1ULL << 22,
+    COMMON_PARAMS_SAMPLING_CONFIG_ADAPTIVE_DECAY    = 1ULL << 23,
+    COMMON_PARAMS_SAMPLING_CONFIG_MIN_KEEP          = 1ULL << 24,
+    COMMON_PARAMS_SAMPLING_CONFIG_SEED              = 1ULL << 25,
 };
 
 enum common_speculative_type {
@@ -290,18 +304,35 @@ struct common_params_sampling {
     std::string              reasoning_budget_message;         // message injected before end tag when budget exhausted
     bool                     reasoning_control = false;        // create the budget sampler on demand so reasoning can be ended at runtime
 
-    // reasoning-section sampling overrides
-    // when enabled, a second sampler chain is built and used while generation is
-    // inside the reasoning block (between reasoning_budget_start and reasoning_budget_end),
-    // allowing e.g. a higher exploratory temperature for thinking and a sharper,
-    // stricter configuration for the final response / code / tool calls.
-    // values < 0 (INT32_MIN for top_k) inherit the base setting.
-    bool    reasoning_sampling      = false;
-    float   reasoning_temp          = -1.0f;
-    int32_t reasoning_top_k         = INT32_MIN;
-    float   reasoning_top_p         = -1.0f;
-    float   reasoning_min_p         = -1.0f;
-    float   reasoning_penalty_repeat = -1.0f;
+    // Sampling overrides used while inside the reasoning block. The bitfield
+    // records which values override the base chain.
+    uint64_t reasoning_sampling = 0;
+
+    uint32_t reasoning_seed               = LLAMA_DEFAULT_SEED;
+    int32_t  reasoning_min_keep           = 0;
+    int32_t  reasoning_top_k              = 40;
+    float    reasoning_top_p              = 0.95f;
+    float    reasoning_min_p              = 0.05f;
+    float    reasoning_xtc_probability    = 0.00f;
+    float    reasoning_xtc_threshold      = 0.10f;
+    float    reasoning_typ_p              = 1.00f;
+    float    reasoning_temp               = 0.80f;
+    float    reasoning_dynatemp_range     = 0.00f;
+    float    reasoning_dynatemp_exponent  = 1.00f;
+    int32_t  reasoning_penalty_last_n     = 64;
+    float    reasoning_penalty_repeat     = 1.00f;
+    float    reasoning_penalty_freq       = 0.00f;
+    float    reasoning_penalty_present    = 0.00f;
+    float    reasoning_dry_multiplier     = 0.00f;
+    float    reasoning_dry_base           = 1.75f;
+    int32_t  reasoning_dry_allowed_length = 2;
+    int32_t  reasoning_dry_penalty_last_n = -1;
+    float    reasoning_adaptive_target    = -1.00f;
+    float    reasoning_adaptive_decay     = 0.90f;
+    int32_t  reasoning_mirostat           = 0;
+    float    reasoning_top_n_sigma        = -1.00f;
+    float    reasoning_mirostat_tau       = 5.00f;
+    float    reasoning_mirostat_eta       = 0.10f;
 
     bool backend_sampling = false;
 
