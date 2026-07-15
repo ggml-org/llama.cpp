@@ -25,9 +25,9 @@ class Keys:
         ALIGNMENT                  = "general.alignment"
         FILE_TYPE                  = "general.file_type"
 
-        # Per-tensor activation precision policy (tensor name -> allow 4-bit activations).
-        ALLOW_4BIT_ACT_TENSOR      = "general.allow_4bit_act.tensor"
-        ALLOW_4BIT_ACT_VALUE       = "general.allow_4bit_act.value"
+        # Per-tensor extra options (tensor name array + parallel option arrays, e.g. allow_4bit_act).
+        TENSOR_EXTRA_NAME          = "general.tensor_extra.name"
+        TENSOR_EXTRA_ALLOW_4BIT_ACT = "general.tensor_extra.allow_4bit_act"
 
         # Recommended Sampler Parameters
         SAMPLING_SEQUENCE           = "general.sampling.sequence"

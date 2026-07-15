@@ -3301,7 +3301,7 @@ void ggml_mul_mat_set_hint(
         enum ggml_op_hint    hint) {
     // MUL_MAT accepts any hint, but MUL_MAT_ID (MoE experts) only the activation-side hint.
     GGML_ASSERT(a->op == GGML_OP_MUL_MAT ||
-               (a->op == GGML_OP_MUL_MAT_ID && hint == GGML_HINT_NO_QUANT_SRC1));
+               (a->op == GGML_OP_MUL_MAT_ID && hint == GGML_HINT_SRC1_ALLOW_4BIT));
 
     const int32_t hint_i32 = (int32_t) hint;
 

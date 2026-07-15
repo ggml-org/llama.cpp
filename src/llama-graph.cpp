@@ -1381,19 +1381,14 @@ ggml_tensor * llm_graph_context::build_cvec(
     return cvec->apply_to(ctx0, cur, il);
 }
 
-// True iff `w` should keep activations at higher precision (no 4-bit activation path).
-static bool no_quant_src1_for_weight(const llama_weight_act_policy * act_policy, const ggml_tensor * w) {
-    return act_policy && w && !act_policy->allows_4bit_act(w);
-}
-
 ggml_tensor * llm_graph_context::build_lora_mm(
           ggml_tensor * w,
           ggml_tensor * cur,
           ggml_tensor * w_s) const {
     ggml_tensor * res = ggml_mul_mat(ctx0, w, cur);
 
-    if (no_quant_src1_for_weight(act_policy, w)) {
-        ggml_mul_mat_set_hint(res, GGML_HINT_NO_QUANT_SRC1);
+    if (llama_act_policy_allow_4bit(act_policy, w)) {
+        ggml_mul_mat_set_hint(res, GGML_HINT_SRC1_ALLOW_4BIT);
     }
 
     if (w_s) {
@@ -1428,8 +1423,8 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
           ggml_tensor * w_s) const {
     ggml_tensor * res = ggml_mul_mat_id(ctx0, w, cur, ids);
 
-    if (no_quant_src1_for_weight(act_policy, w)) {
-        ggml_mul_mat_set_hint(res, GGML_HINT_NO_QUANT_SRC1);
+    if (llama_act_policy_allow_4bit(act_policy, w)) {
+        ggml_mul_mat_set_hint(res, GGML_HINT_SRC1_ALLOW_4BIT);
     }
 
     if (w_s) {

@@ -203,8 +203,8 @@ void llama_model_saver::add_kv_from_model() {
             tensor_names.push_back(name);
             values.push_back(allow ? 1 : 0);
         }
-        add_kv(LLM_KV_GENERAL_ALLOW_4BIT_ACT_TENSOR, tensor_names);
-        gguf_set_arr_data(gguf_ctx, llm_kv(LLM_KV_GENERAL_ALLOW_4BIT_ACT_VALUE).c_str(), GGUF_TYPE_BOOL, values.data(), values.size());
+        add_kv(LLM_KV_GENERAL_TENSOR_EXTRA_NAME, tensor_names);
+        gguf_set_arr_data(gguf_ctx, llm_kv(LLM_KV_GENERAL_TENSOR_EXTRA_ALLOW_4BIT_ACT).c_str(), GGUF_TYPE_BOOL, values.data(), values.size());
     }
     // add_kv(LLM_KV_GENERAL_AUTHOR,                    ???);
     // add_kv(LLM_KV_GENERAL_VERSION,                   ???);

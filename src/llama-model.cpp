@@ -1030,7 +1030,7 @@ struct llama_model::impl {
     std::vector<float> tensor_split_owned;
 };
 
-bool llama_weight_act_policy::allows_4bit_act(const ggml_tensor * w) const {
+bool llama_act_policy::allows_4bit_act(const ggml_tensor * w) const {
     if (!w) {
         return true;
     }
@@ -1043,32 +1043,50 @@ bool llama_weight_act_policy::allows_4bit_act(const ggml_tensor * w) const {
     return true;
 }
 
-static void load_act_policy(llama_model_loader & ml, llama_weight_act_policy & policy) {
+static bool load_act_policy_arr(
+        llama_model_loader & ml,
+        const std::string & key_tensor,
+        const std::string & key_value,
+        llama_act_policy & policy) {
     std::vector<std::string> tensor_names;
-    if (!ml.get_arr(LLM_KV_GENERAL_ALLOW_4BIT_ACT_TENSOR, tensor_names, false)) {
-        return;
+    if (!ml.get_arr(key_tensor, tensor_names, false)) {
+        return false;
     }
 
     const gguf_context * ctx = ml.metadata;
-    const int kid = gguf_find_key(ctx, ml.llm_kv(LLM_KV_GENERAL_ALLOW_4BIT_ACT_VALUE).c_str());
+    const int kid = gguf_find_key(ctx, key_value.c_str());
     if (kid < 0 || gguf_get_kv_type(ctx, kid) != GGUF_TYPE_ARRAY) {
-        throw std::runtime_error("missing general.allow_4bit_act.value array");
+        throw std::runtime_error(format("missing %s array", key_value.c_str()));
     }
     if (gguf_get_arr_type(ctx, kid) != GGUF_TYPE_BOOL) {
-        throw std::runtime_error("general.allow_4bit_act.value must be a bool array");
+        throw std::runtime_error(format("%s must be a bool array", key_value.c_str()));
     }
 
     const size_t n_values = gguf_get_arr_n(ctx, kid);
     if (n_values != tensor_names.size()) {
         throw std::runtime_error(format(
-            "general.allow_4bit_act tensor/value length mismatch (%zu vs %zu)",
-            tensor_names.size(), n_values));
+            "%s tensor/value length mismatch (%zu vs %zu)",
+            key_tensor.c_str(), tensor_names.size(), n_values));
     }
 
     const int8_t * values = (const int8_t *) gguf_get_arr_data(ctx, kid);
     for (size_t i = 0; i < n_values; ++i) {
         policy.per_tensor.emplace(tensor_names[i], values[i] != 0);
     }
+
+    return true;
+}
+
+static void load_act_policy(llama_model_loader & ml, llama_act_policy & policy) {
+    if (load_act_policy_arr(ml,
+            ml.llm_kv(LLM_KV_GENERAL_TENSOR_EXTRA_NAME),
+            ml.llm_kv(LLM_KV_GENERAL_TENSOR_EXTRA_ALLOW_4BIT_ACT),
+            policy)) {
+        return;
+    }
+
+    // Legacy keys from earlier NVFP4 W4A8 metadata.
+    load_act_policy_arr(ml, "general.allow_4bit_act.tensor", "general.allow_4bit_act.value", policy);
 }
 
 llama_model::llama_model(const llama_model_params & params) : params(params), pimpl(std::make_unique<impl>()) {

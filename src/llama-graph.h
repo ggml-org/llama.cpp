@@ -18,7 +18,7 @@ struct ggml_tensor;
 
 struct llama_cparams;
 struct llama_layer;
-struct llama_weight_act_policy;
+struct llama_act_policy;
 
 struct llama_memory_context_i;
 
@@ -709,7 +709,7 @@ struct llm_graph_params {
 
     llm_graph_result * res;
 
-    const llama_weight_act_policy * act_policy = nullptr;
+    const llama_act_policy * act_policy = nullptr;
 
     // return true if the "other" params would result in a graph with the same topology as with the current params
     //   having the same topology allows us to reuse the graph in some cases
@@ -934,7 +934,7 @@ struct llm_graph_context {
 
     llm_graph_result * res;
 
-    const llama_weight_act_policy * act_policy;
+    const llama_act_policy * act_policy;
 
     ggml_context * ctx0 = nullptr;
     ggml_cgraph  * gf   = nullptr;

@@ -1065,7 +1065,7 @@ class ModelBase:
             names = sorted(self._allow_4bit_act.keys())
             values = [self._allow_4bit_act[n] for n in names]
             logger.info(f"Set allow_4bit_act metadata for {len(names)} tensor(s)")
-            self.gguf_writer.add_allow_4bit_act(names, values)
+            self.gguf_writer.add_tensor_extra_allow_4bit_act(names, values)
 
     def write_vocab(self):
         raise NotImplementedError("write_vocab() must be implemented in subclasses")
