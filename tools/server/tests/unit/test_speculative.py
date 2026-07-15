@@ -40,7 +40,6 @@ def test_with_and_without_draft():
     server.start()
     res = server.make_request("POST", "/completion", data=request)
     assert res.status_code == 200
-    content_no_draft = res.body["content"]
     tokens_no_draft = res.body["tokens"]
     server.stop()
 
@@ -51,10 +50,8 @@ def test_with_and_without_draft():
     res = server.make_request("POST", "/completion", data=request)
     assert res.status_code == 200
     assert res.body["timings"]["draft_n"] > 0
-    content_draft = res.body["content"]
     tokens_draft = res.body["tokens"]
 
-    assert content_no_draft == content_draft
     assert tokens_no_draft == tokens_draft
 
 

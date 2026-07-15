@@ -70,6 +70,7 @@ static llama_token sample_dist(llama_sampler * sampler, const std::vector<float>
     llama_token_data_array cur_p = { cur.data(), cur.size(), -1, false };
     llama_sampler_apply(sampler, &cur_p);
     GGML_ASSERT(cur_p.selected >= 0);
+    GGML_ASSERT((size_t) cur_p.selected < cur_p.size);
     return cur_p.data[cur_p.selected].id;
 }
 
@@ -80,7 +81,10 @@ static void test_dist_singleton_rng() {
     sample_dist(singleton, { 0.0f });
     sample_dist(control,   { 0.0f, 0.0f });
 
-    GGML_ASSERT(sample_dist(singleton, { 0.0f, 0.0f }) == sample_dist(control, { 0.0f, 0.0f }));
+    const std::vector<float> logits(256, 0.0f);
+    for (int i = 0; i < 4; ++i) {
+        GGML_ASSERT(sample_dist(singleton, logits) == sample_dist(control, logits));
+    }
 
     llama_sampler_free(singleton);
     llama_sampler_free(control);
