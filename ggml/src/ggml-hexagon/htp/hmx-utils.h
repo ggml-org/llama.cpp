@@ -197,4 +197,26 @@ static inline void hmx_interleave_cols_to_tiles(__fp16 * restrict tiles_out,
     }
 }
 
+// --- HMX inline asm macros for load-store packetization ---
+#define HMX_LOAD_MPY_F16(act, wt, range) \
+    "{\n" \
+    "    activation.hf = mxmem(" act ", " range ")\n" \
+    "    weight.hf = mxmem(" wt ", " range ")\n" \
+    "}\n"
+
+#define HMX_LOAD_MPY_DEEP_F16(act, wt, range) \
+    "{\n" \
+    "    activation.hf = mxmem(" act ", " range "):deep\n" \
+    "    weight.hf = mxmem(" wt ", " range ")\n" \
+    "}\n"
+
+#define HMX_STORE_AFTER_F16(out, scale_reg) \
+    "mxmem(" out ", " scale_reg "):after.hf = acc\n"
+
+#define HMX_SET_BIAS(scales) \
+    "bias = mxmem2(" scales ")\n"
+
+#define HMX_CLRACC_F16() \
+    "mxclracc.hf\n"
+
 #endif // HMX_UTILS_H

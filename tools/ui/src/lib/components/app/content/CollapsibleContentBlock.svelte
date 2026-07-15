@@ -76,7 +76,7 @@
 		open = value;
 		onToggle?.();
 	}}
-	class={className}
+	class="{className} my-0!"
 >
 	<Card class="gap-0 border-muted bg-muted/30 py-0">
 		<Collapsible.Trigger class="flex w-full cursor-pointer items-start justify-between gap-2 p-3">
