@@ -279,8 +279,7 @@ void main() {
     const uint LOAD_VEC_A_EFF = LOAD_VEC_A;
     const uint LOAD_VEC_BATCH_A = 1;
 #else
-    const uint mm_lva = mm_load_vec_a();
-    const uint LOAD_VEC_A_EFF = mm_lva;
+    const uint LOAD_VEC_A_EFF = mm_load_vec_a();
     const uint LOAD_VEC_BATCH_A = 1;
 #endif
     const uint LOAD_VEC_B_EFF = (ALIGNED != 0) ? LOAD_VEC_B : 1;
