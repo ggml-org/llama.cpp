@@ -995,18 +995,135 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, u
     return status;
 }
 
-#define DSPQUEUE_POLL_TIMEOUT_USEC 100
-#define DSPQUEUE_POLL_COUNT        100
-
-static void process_ops(struct htp_context * ctx) {
+static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_req * req, const struct dspqueue_buffer * dbuf) {
     dspqueue_t queue = ctx->queue;
     int err;
 
-    uint32_t poll_count = DSPQUEUE_POLL_COUNT;
+    const uint32_t n_bufs = req->n_bufs;
+    const uint32_t n_tens = req->n_tensors;
+    const uint32_t n_ops  = req->n_ops;
 
-    vtcm_acquire(ctx);
+    const uint32_t b_size = sizeof(struct htp_buf_desc)  * n_bufs;
+    const uint32_t t_size = sizeof(struct htp_tensor)    * n_tens;
+    const uint32_t o_size = sizeof(struct htp_op_desc)   * n_ops;
+    const uint32_t p_size = sizeof(struct htp_prof_desc) * n_ops;
+    const uint32_t tr_size = (HTP_MAX_NTHREADS + 1) * req->n_traces * sizeof(struct htp_trace_desc);
 
-    while (!ctx->vtcm_needs_release && !atomic_load(&ctx->killed)) {
+    if (dbuf->size < b_size + t_size + o_size + p_size + tr_size) {
+        FARF(ERROR, "invalid opbatch memory block size %u (req %u)", dbuf->size, b_size + t_size + o_size + p_size + tr_size);
+        return;
+    }
+
+    FARF(HIGH, "processing opbatch #%u: n-bufs %u n-tensors %u n-ops %u n-traces %u : m-size %u b-size %u t-size %u o-size %u", req->id,
+            n_bufs, n_tens, n_ops, req->n_traces, dbuf->size, b_size, t_size, o_size);
+
+    // Clean cache at the start of the batch
+    htp_trace_event_start(&ctx->trace[0], HTP_TRACE_EVT_L2FLUSH, 0);
+    qurt_mem_cache_clean((qurt_addr_t) 0, 0, QURT_MEM_CACHE_FLUSH_INVALIDATE_ALL, QURT_MEM_DCACHE);
+    hex_l2fetch_block(ctx, ctx->footprint);
+    bitmap_reset(ctx->dirty_map, HTP_OP_MAX_TENSORS);
+    htp_trace_event_stop(&ctx->trace[0], HTP_TRACE_EVT_L2FLUSH, 0);
+
+    // Setup descriptor pointers
+    uint8_t * m_ptr = dbuf->ptr;
+    struct htp_buf_desc* bufs = (struct htp_buf_desc*)  m_ptr; m_ptr += b_size;
+    struct htp_tensor*   tens = (struct htp_tensor*)    m_ptr; m_ptr += t_size;
+    struct htp_op_desc*   ops = (struct htp_op_desc*)   m_ptr; m_ptr += o_size;
+    struct htp_prof_desc* pds = (struct htp_prof_desc*) m_ptr;
+
+    prep_op_bufs(ctx, bufs, n_bufs);
+    prep_tensors(ctx, bufs, tens, n_tens);
+
+    struct htp_ops_context *octx = &ctx->octx;
+    memset(octx, 0, sizeof(*octx));
+    octx->n_threads = ctx->n_threads;
+    octx->ctx       = ctx;
+
+    memset(ctx->trace, 0, sizeof(ctx->trace));
+    if (ctx->profiler == HTP_PROF_TRACE) {
+        struct htp_trace_desc * trace_events = (struct htp_trace_desc *) (m_ptr + p_size);
+        for (int t = 0; t <= HTP_MAX_NTHREADS; t++) {
+            ctx->trace[t].events     = &trace_events[t * req->n_traces];
+            ctx->trace[t].max_events = req->n_traces;
+        }
+    }
+
+    work_queue_wakeup(ctx->work_queue);
+    if (ctx->hmx_queue) {
+        hmx_queue_wakeup(ctx->hmx_queue);
+    }
+
+    uint32_t op_wakeup = n_ops < 16 ? ~0UL : n_ops / 2; // half-way through the batch
+
+    int op_status = HTP_STATUS_OK;
+    for (uint32_t i = 0; i < n_ops && op_status == HTP_STATUS_OK; i++) {
+        struct profile_data prof;
+
+        if (i == op_wakeup) {
+            dspqueue_write_early_wakeup_noblock(queue, 0, 0);
+        }
+
+        profile_start(ctx->profiler, &prof);
+
+        op_status = proc_op_req(octx, tens, i, &ops[i]);
+
+        profile_stop(ctx->profiler, &prof);
+
+        if (ctx->profiler) {
+            pds[i].opcode = ops[i].opcode;
+            pds[i].usecs  = prof.usecs;
+            pds[i].cycles_start = prof.cycles_start;
+            pds[i].cycles_stop = prof.cycles_stop;
+            for (int j = 0; j < HEX_NUM_PMU_COUNTERS; j++) {
+                pds[i].pmu[j] = prof.pmu_counters[j];
+            }
+        }
+    }
+
+    if (ctx->hmx_queue) {
+        hmx_queue_suspend(ctx->hmx_queue);
+        hmx_queue_flush(ctx->hmx_queue);
+    }
+    work_queue_suspend(ctx->work_queue);
+
+    struct htp_opbatch_rsp rsp;
+    memset(&rsp, 0, sizeof(rsp));
+    rsp.id        = req->id;
+    rsp.status    = op_status;
+    rsp.n_bufs    = n_bufs;
+    rsp.n_tensors = n_tens;
+    rsp.n_ops     = n_ops;
+
+    if (ctx->profiler == HTP_PROF_TRACE) {
+        for (int t = 0; t <= HTP_MAX_NTHREADS; t++) {
+            rsp.n_traces[t] = ctx->trace[t].count;
+        }
+    }
+
+    struct dspqueue_buffer write_dbuf = *dbuf;
+    write_dbuf.flags = DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER | DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT;
+
+    // Flush remaining dirty tensors at the end of the batch
+    htp_trace_event_start(&ctx->trace[0], HTP_TRACE_EVT_L2FLUSH, 0);
+    qurt_mem_cache_clean((qurt_addr_t) 0, 0, QURT_MEM_CACHE_FLUSH_INVALIDATE_ALL, QURT_MEM_DCACHE);
+    htp_trace_event_stop(&ctx->trace[0], HTP_TRACE_EVT_L2FLUSH, 0);
+
+    err = dspqueue_write(queue, 0, 1, &write_dbuf, sizeof(rsp), (const uint8_t *) &rsp, DSPQUEUE_TIMEOUT_NONE);
+    if (err != 0) {
+        FARF(ERROR, "dspqueue_write failed: 0x%08x", (unsigned) err);
+    }
+}
+
+#define DSPQUEUE_READ_TIMEOUT_USEC 5000
+#define DSPQUEUE_POLL_TIMEOUT_USEC 100
+#define DSPQUEUE_POLL_COUNT        100
+
+static void htp_main_thread(void * context) {
+    struct htp_context * ctx = (struct htp_context *) context;
+
+    FARF(HIGH, "htp-main-thread: started");
+
+    while (!atomic_load(&ctx->killed)) {
         struct htp_opbatch_req req;
         uint32_t r_size = sizeof(req);
 
@@ -1014,17 +1131,12 @@ static void process_ops(struct htp_context * ctx) {
         uint32_t n_dbufs = 1;
         uint32_t flags   = 0;
 
-        err = dspqueue_read_noblock(queue, &flags, n_dbufs, &n_dbufs, &dbuf, r_size, &r_size, (uint8_t *) &req);
-        if (err == AEE_EWOULDBLOCK) {
-            if (--poll_count) {
-                qurt_sleep(DSPQUEUE_POLL_TIMEOUT_USEC);
-                continue;
-            }
-            break;
+        int err = dspqueue_read(ctx->queue, &flags, 1, &n_dbufs, &dbuf, sizeof(req), &r_size, (uint8_t *) &req, DSPQUEUE_READ_TIMEOUT_USEC);
+        if (err == AEE_EWOULDBLOCK || err == AEE_EEXPIRED) {
+            continue;
         }
-
         if (err != 0) {
-            FARF(ERROR, "dspqueue_read_noblock failed: 0x%08x", (unsigned) err);
+            FARF(ERROR, "dspqueue_read failed: 0x%08x", (unsigned) err);
             break;
         }
 
@@ -1033,154 +1145,43 @@ static void process_ops(struct htp_context * ctx) {
             continue;
         }
 
-        // Reset poll count for valid requests
-        poll_count = DSPQUEUE_POLL_COUNT;
+        // We got a request. Grab VTCM and process it, then poll for more
+        vtcm_acquire(ctx);
 
-        const uint32_t n_bufs = req.n_bufs;
-        const uint32_t n_tens = req.n_tensors;
-        const uint32_t n_ops  = req.n_ops;
+        process_opbatch(ctx, &req, &dbuf);
 
-        const uint32_t b_size = sizeof(struct htp_buf_desc)  * n_bufs;
-        const uint32_t t_size = sizeof(struct htp_tensor)    * n_tens;
-        const uint32_t o_size = sizeof(struct htp_op_desc)   * n_ops;
-        const uint32_t p_size = sizeof(struct htp_prof_desc) * n_ops;
-        const uint32_t tr_size = (HTP_MAX_NTHREADS + 1) * req.n_traces * sizeof(struct htp_trace_desc);
+        uint32_t poll_count = DSPQUEUE_POLL_COUNT;
+        while (!ctx->vtcm_needs_release && !atomic_load(&ctx->killed)) {
+            r_size  = sizeof(req);
+            n_dbufs = 1;
+            flags   = 0;
 
-        if (dbuf.size < b_size + t_size + o_size + p_size + tr_size) {
-            FARF(ERROR, "invalid opbatch memory block size %u (req %u)", dbuf.size, b_size + t_size + o_size + p_size + tr_size);
-            break;
-        }
-
-        FARF(HIGH, "processing opbatch #%u: n-bufs %u n-tensors %u n-ops %u n-traces %u : m-size %u b-size %u t-size %u o-size %u", req.id,
-                n_bufs, n_tens, n_ops, req.n_traces, dbuf.size, b_size, t_size, o_size);
-
-        // Clean cache at the start of the batch
-        struct htp_thread_trace * tr = &ctx->trace[0];
-        htp_trace_event_start(tr, HTP_TRACE_EVT_L2FLUSH, 0);
-        qurt_mem_cache_clean((qurt_addr_t) 0, 0, QURT_MEM_CACHE_FLUSH_INVALIDATE_ALL, QURT_MEM_DCACHE);
-        hex_l2fetch_block(ctx, ctx->footprint);
-        htp_trace_event_stop(tr, HTP_TRACE_EVT_L2FLUSH, 0);
-        bitmap_reset(ctx->dirty_map, HTP_OP_MAX_TENSORS);
-
-        // Setup descriptor pointers
-        uint8_t * m_ptr = dbuf.ptr;
-        struct htp_buf_desc* bufs = (struct htp_buf_desc*)  m_ptr; m_ptr += b_size;
-        struct htp_tensor*   tens = (struct htp_tensor*)    m_ptr; m_ptr += t_size;
-        struct htp_op_desc*   ops = (struct htp_op_desc*)   m_ptr; m_ptr += o_size;
-        struct htp_prof_desc* pds = (struct htp_prof_desc*) m_ptr;
-
-        prep_op_bufs(ctx, bufs, n_bufs);
-        prep_tensors(ctx, bufs, tens, n_tens);
-
-        struct htp_ops_context *octx = &ctx->octx;
-        memset(octx, 0, sizeof(*octx));
-        octx->n_threads = ctx->n_threads;
-        octx->ctx       = ctx;
-
-        memset(ctx->trace, 0, sizeof(ctx->trace));
-        if (ctx->profiler == HTP_PROF_TRACE) {
-            struct htp_trace_desc * trace_events = (struct htp_trace_desc *) (m_ptr + p_size);
-            for (int t = 0; t <= HTP_MAX_NTHREADS; t++) {
-                ctx->trace[t].events     = &trace_events[t * req.n_traces];
-                ctx->trace[t].max_events = req.n_traces;
-            }
-        }
-
-        int      op_status = HTP_STATUS_OK;
-        uint32_t op_wakeup = n_ops < 16 ? ~0UL : n_ops / 2; // half-way throgh the batch
-
-        work_queue_wakeup(ctx->work_queue);
-        if (ctx->hmx_queue) {
-            hmx_queue_wakeup(ctx->hmx_queue);
-        }
-
-        for (uint32_t i=0; i < n_ops; i++) {
-            struct profile_data prof;
-
-            if (i == op_wakeup) {
-                dspqueue_write_early_wakeup_noblock(queue, 0, 0);
-            }
-
-            profile_start(ctx->profiler, &prof);
-
-            op_status = proc_op_req(octx, tens, i, &ops[i]);
-
-            profile_stop(ctx->profiler, &prof);
-
-            if (op_status != HTP_STATUS_OK) {
+            err = dspqueue_read_noblock(ctx->queue, &flags, 1, &n_dbufs, &dbuf, sizeof(req), &r_size, (uint8_t *) &req);
+            if (err == AEE_EWOULDBLOCK) {
+                if (--poll_count) {
+                    qurt_sleep(DSPQUEUE_POLL_TIMEOUT_USEC);
+                    continue;
+                }
                 break;
             }
 
-            if (ctx->profiler) {
-                pds[i].opcode = ops[i].opcode;
-                pds[i].usecs  = prof.usecs;
-                pds[i].cycles_start = prof.cycles_start;
-                pds[i].cycles_stop = prof.cycles_stop;
-                for (int j = 0; j < HEX_NUM_PMU_COUNTERS; j++) {
-                    pds[i].pmu[j] = prof.pmu_counters[j];
-                }
+            if (err != 0) {
+                FARF(ERROR, "dspqueue_read_noblock failed: 0x%08x", (unsigned) err);
+                break;
             }
-        }
 
-        if (ctx->hmx_queue) {
-            hmx_queue_suspend(ctx->hmx_queue);
-            hmx_queue_flush(ctx->hmx_queue);
-        }
-        work_queue_suspend(ctx->work_queue);
-
-        struct htp_opbatch_rsp rsp;
-        rsp.id        = req.id;
-        rsp.status    = op_status;
-        rsp.n_bufs    = n_bufs;
-        rsp.n_tensors = n_tens;
-        rsp.n_ops     = n_ops;
-        memset(rsp.pad, 0, sizeof(rsp.pad));
-        if (ctx->profiler == HTP_PROF_TRACE) {
-            for (int t = 0; t <= HTP_MAX_NTHREADS; t++) {
-                rsp.n_traces[t] = ctx->trace[t].count;
+            if (r_size < sizeof(req) || n_dbufs != 1) {
+                FARF(ERROR, "invalid request : size %u n-dbufs %u", r_size, n_dbufs);
+                continue;
             }
-        } else {
-            memset(rsp.n_traces, 0, sizeof(rsp.n_traces));
+
+            // Reset poll count for valid requests
+            poll_count = DSPQUEUE_POLL_COUNT;
+
+            process_opbatch(ctx, &req, &dbuf);
         }
 
-        dbuf.flags = DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER | DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT;
-
-        // Flush remaining dirty tensors at the end of the batch
-        tr = &ctx->trace[0];
-        htp_trace_event_start(tr, HTP_TRACE_EVT_L2FLUSH, 0);
-        qurt_mem_cache_clean((qurt_addr_t) 0, 0, QURT_MEM_CACHE_FLUSH_INVALIDATE_ALL, QURT_MEM_DCACHE);
-        hex_l2fetch_block(ctx, ctx->footprint);
-        htp_trace_event_stop(tr, HTP_TRACE_EVT_L2FLUSH, 0);
-
-        err = dspqueue_write(queue, 0, 1, &dbuf, sizeof(rsp), (const uint8_t *) &rsp, DSPQUEUE_TIMEOUT_NONE);
-        if (err != 0) {
-            FARF(ERROR, "dspqueue_write failed: 0x%08x", (unsigned) err);
-            break;
-        }
-    }
-
-    vtcm_release(ctx);
-}
-
-static void htp_main_thread(void * context) {
-    struct htp_context * ctx = (struct htp_context *) context;
-
-    FARF(HIGH, "htp-main-thread: started");
-
-    while (!atomic_load(&ctx->killed)) {
-        uint32_t flags = 0;
-        uint32_t num_buffers = 0;
-        uint32_t message_length = 0;
-
-        int err = dspqueue_peek(ctx->queue, &flags, &num_buffers, &message_length, 50000);
-        if (err == 0) {
-            process_ops(ctx);
-        } else if (err == AEE_EWOULDBLOCK || err == AEE_EEXPIRED) {
-            continue;
-        } else {
-            FARF(ERROR, "dspqueue_peek failed: 0x%08x", (unsigned) err);
-            break;
-        }
+        vtcm_release(ctx);
     }
 
     FARF(HIGH, "htp-main-thread: stopped");
