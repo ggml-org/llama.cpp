@@ -117,6 +117,7 @@ struct common_sampler {
     struct llama_sampler * chain_think;
 
     std::vector<llama_token> prefill_tokens;
+    bool grmr_prefilled;
 
     ring_buffer<llama_token> prev;
 
@@ -339,6 +340,32 @@ static std::vector<llama_token> common_sampler_prefill_tokens(
     return result;
 }
 
+// Feed generation prompt tokens to the grammar sampler so it advances past
+// tokens the template already placed in the prompt.
+// Only applies to output-format and tool-call grammars; user-supplied grammars must not be prefilled.
+// Returns true when the grammar was advanced, so callers can avoid feeding it twice.
+static bool common_sampler_grammar_prefill(
+        struct llama_sampler * grmr,
+        const common_params_sampling & params,
+        const std::vector<llama_token> & prefill_tokens) {
+    if (!grmr || params.grammar_lazy || !common_grammar_needs_prefill(params.grammar) || prefill_tokens.empty()) {
+        return false;
+    }
+
+    try {
+        for (const auto & token : prefill_tokens) {
+            llama_sampler_accept(grmr, token);
+            LOG_DBG("%s: grammar accepted prefill token (%d)\n", __func__, token);
+        }
+    } catch (std::exception &e) {
+        LOG_ERR("%s: error initializing grammar sampler for grammar:\n%s\n\nGeneration prompt:\n'%s'\n", __func__,
+            common_grammar_value(params.grammar).c_str(), params.generation_prompt.c_str());
+        throw e;
+    }
+
+    return true;
+}
+
 struct common_sampler * common_sampler_init(const struct llama_model * model, struct common_params_sampling & params) {
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
@@ -413,21 +440,7 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
 
     auto prefill_tokens = common_sampler_prefill_tokens(vocab, params.generation_prompt);
 
-    // Feed generation prompt tokens to the grammar sampler so it advances past
-    // tokens the template already placed in the prompt.
-    // Only applies to output-format and tool-call grammars; user-supplied grammars must not be prefilled.
-    if (grmr && !params.grammar_lazy && common_grammar_needs_prefill(params.grammar)) {
-        try {
-            for (const auto & token : prefill_tokens) {
-                llama_sampler_accept(grmr, token);
-                LOG_DBG("%s: grammar accepted prefill token (%d)\n", __func__, token);
-            }
-        } catch (std::exception &e) {
-            LOG_ERR("%s: error initializing grammar sampler for grammar:\n%s\n\nGeneration prompt:\n'%s'\n", __func__,
-                common_grammar_value(params.grammar).c_str(), params.generation_prompt.c_str());
-            throw e;
-        }
-    }
+    const bool grmr_prefilled = common_sampler_grammar_prefill(grmr, params, prefill_tokens);
 
     rbudget = common_sampler_reasoning_budget_init(vocab, params, prefill_tokens);
 
@@ -486,6 +499,7 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
         /* .chain          = */ chain,
         /* .chain_think    = */ chain_think,
         /* .prefill_tokens = */ std::move(prefill_tokens),
+        /* .grmr_prefilled = */ grmr_prefilled,
         /* .prev           = */ ring_buffer<llama_token>(std::max(32, params.n_prev)),
         /* .cur            = */ {},
         /* .cur_p          = */ {},
@@ -511,6 +525,10 @@ void common_sampler_configure_reasoning(
     gsmpl->params.reasoning_control        = params.reasoning_control;
 
     gsmpl->prefill_tokens = common_sampler_prefill_tokens(vocab, params.generation_prompt);
+
+    if (!gsmpl->grmr_prefilled) {
+        gsmpl->grmr_prefilled = common_sampler_grammar_prefill(gsmpl->grmr, gsmpl->params, gsmpl->prefill_tokens);
+    }
 
     llama_sampler_free(gsmpl->rbudget);
     gsmpl->rbudget = common_sampler_reasoning_budget_init(vocab, gsmpl->params, gsmpl->prefill_tokens);
@@ -608,6 +626,7 @@ struct common_sampler * common_sampler_clone(common_sampler * gsmpl) {
         /* .chain          = */ llama_sampler_clone(gsmpl->chain),
         /* .chain_think    = */ gsmpl->chain_think ? llama_sampler_clone(gsmpl->chain_think) : nullptr,
         /* .prefill_tokens = */ gsmpl->prefill_tokens,
+        /* .grmr_prefilled = */ gsmpl->grmr_prefilled,
         /* .prev           = */ gsmpl->prev,
         /* .cur            = */ gsmpl->cur,
         /* .cur_p          = */ gsmpl->cur_p,
