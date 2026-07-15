@@ -95,6 +95,21 @@ static std::vector<std::string> split_csv(const std::string & s) {
     return out;
 }
 
+static int64_t train_split_from_val_fraction(int64_t ndata, float val_split) {
+    if (ndata <= 0) {
+        return 0;
+    }
+    if (val_split <= 0.0f) {
+        return ndata;
+    }
+    if (val_split >= 1.0f) {
+        return 0;
+    }
+
+    const int64_t split = (int64_t) (ndata * (1.0f - val_split));
+    return std::max<int64_t>(1, split);
+}
+
 static std::string preview_text(const std::string & s, size_t max_len = 240) {
     std::string out;
     out.reserve(std::min(s.size(), max_len));
@@ -1302,11 +1317,16 @@ int main(int argc, char ** argv) {
     };
     llama_opt_init(ctx, model, lopt_params);
 
-    const int64_t idata_split = ggml_opt_dataset_ndata(dataset) * (1.0f - params.val_split);
+    const int64_t ndata = ggml_opt_dataset_ndata(dataset);
+    const int64_t idata_split = train_split_from_val_fraction(ndata, params.val_split);
     if (idata_split <= 0) {
         LOG_ERR("%s: no training windows after val split (ndata=%ld val_split=%.3f)\n",
-                __func__, (long) ggml_opt_dataset_ndata(dataset), (double) params.val_split);
+                __func__, (long) ndata, (double) params.val_split);
         return 1;
+    }
+    if (params.val_split > 0.0f && idata_split == ndata) {
+        LOG_WRN("%s: validation split skipped because dataset has only %ld training window(s)\n",
+                __func__, (long) ndata);
     }
 
     ggml_opt_result_t result_train = ggml_opt_result_init();
