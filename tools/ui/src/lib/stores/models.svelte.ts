@@ -245,21 +245,20 @@ class ModelsStore {
 	 * Whether the selected model's chat template supports thinking/reasoning.
 	 * Uses heuristic detection on the model's chat_template from /props.
 	 *
-	 * - MODEL mode: uses serverStore.props.chat_template (single loaded model)
-	 * - ROUTER mode: fetches /props?model=<id> for the selected model (cached)
-	 *
-	 * Triggers an async fetch of model props if not yet cached in ROUTER mode.
+	 * - MODEL mode: the global /props already describes the single loaded model,
+	 *   so its chat_template is used directly and no per-model cache is involved
+	 * - ROUTER mode: fetches /props?model=<id> for the selected model (cached),
+	 *   triggering an async fetch if not yet cached
 	 */
 	get supportsThinking(): boolean {
-		const modelId = this.selectedModelName;
-		if (!modelId) {
-			if (!isRouterMode()) {
-				return detectThinkingSupport(serverStore.props?.chat_template ?? '');
-			}
-			return false;
+		if (!isRouterMode()) {
+			return detectThinkingSupport(serverStore.props?.chat_template ?? '');
 		}
 
-		if (isRouterMode() && !this.modelPropsCache.get(modelId)) {
+		const modelId = this.selectedModelName;
+		if (!modelId) return false;
+
+		if (!this.modelPropsCache.get(modelId)) {
 			this.fetchModelProps(modelId);
 		}
 		const props = this.getModelProps(modelId);
@@ -268,12 +267,17 @@ class ModelsStore {
 
 	/**
 	 * Check if a specific model supports thinking.
-	 * Fetches model props if not cached (in router mode).
+	 * In MODEL mode the global /props describes the single loaded model.
+	 * In ROUTER mode, fetches model props if not cached.
 	 */
 	checkModelSupportsThinking(modelId: string): boolean {
+		if (!isRouterMode()) {
+			return detectThinkingSupport(serverStore.props?.chat_template ?? '');
+		}
+
 		if (!modelId) return false;
 
-		if (isRouterMode() && !this.modelPropsCache.get(modelId)) {
+		if (!this.modelPropsCache.get(modelId)) {
 			this.fetchModelProps(modelId);
 		}
 
@@ -285,14 +289,16 @@ class ModelsStore {
 	 * Detailed thinking support detection result with reason for debugging/UI.
 	 */
 	get thinkingSupportDetails(): { supported: boolean; reason: string } {
+		if (!isRouterMode()) {
+			return detectThinkingSupportWithReason(serverStore.props?.chat_template ?? '');
+		}
+
 		const modelId = this.selectedModelName;
 		if (!modelId) {
-			if (!isRouterMode()) {
-				return detectThinkingSupportWithReason(serverStore.props?.chat_template ?? '');
-			}
 			return { supported: false, reason: 'No model selected' };
 		}
-		if (isRouterMode() && !this.modelPropsCache.get(modelId)) {
+
+		if (!this.modelPropsCache.get(modelId)) {
 			this.fetchModelProps(modelId);
 		}
 		const props = this.getModelProps(modelId);
