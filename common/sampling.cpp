@@ -200,7 +200,6 @@ std::string common_params_sampling::print() const {
 
 static llama_sampler * common_sampler_chain_build(const struct llama_model * model, const struct common_params_sampling & params) {
     const llama_vocab * vocab = llama_model_get_vocab(model);
-    const int32_t penalty_last_n = params.penalty_last_n == -1 ? llama_model_n_ctx_train(model) : params.penalty_last_n;
 
     llama_sampler_chain_params lparams = llama_sampler_chain_default_params();
 
@@ -255,7 +254,7 @@ static llama_sampler * common_sampler_chain_build(const struct llama_model * mod
                     samplers.push_back(llama_sampler_init_infill(vocab));
                     break;
                 case COMMON_SAMPLER_TYPE_PENALTIES:
-                    samplers.push_back(llama_sampler_init_penalties(penalty_last_n, params.penalty_repeat, params.penalty_freq, params.penalty_present));
+                    samplers.push_back(llama_sampler_init_penalties(params.penalty_last_n, params.penalty_repeat, params.penalty_freq, params.penalty_present));
                     break;
                 case COMMON_SAMPLER_TYPE_ADAPTIVE_P:
                     // the `adaptive-p` sampler is like `dist` and `mirostat` in that it selects
