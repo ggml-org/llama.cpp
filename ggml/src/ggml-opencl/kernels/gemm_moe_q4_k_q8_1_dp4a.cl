@@ -37,16 +37,21 @@ inline void get_scale_min_k4(
                   (((uint)((u) & 0xF000u)) << 12) )
 
 // One token's dp4a dot (8 uints = 32 K elems) + q4_K scale/min epilogue into acc[t].
+// The 8 activation uints are read as two 128-bit uint4 loads staged to private (Adreno
+// wants 128-bit local reads, and a __local operand fed straight to the dp4a builtin is
+// slower and can miscompile).
 #define MOE_Q4K_DP4A_T(t) do {                                       \
+        uint4 a0 = vload4(0, &sh_qa[t][0]);                          \
+        uint4 a1 = vload4(0, &sh_qa[t][4]);                          \
         int raw = 0;                                                 \
-        raw = dot_acc_sat_4x8packed_ss_int(qw[0], sh_qa[t][0], raw); \
-        raw = dot_acc_sat_4x8packed_ss_int(qw[1], sh_qa[t][1], raw); \
-        raw = dot_acc_sat_4x8packed_ss_int(qw[2], sh_qa[t][2], raw); \
-        raw = dot_acc_sat_4x8packed_ss_int(qw[3], sh_qa[t][3], raw); \
-        raw = dot_acc_sat_4x8packed_ss_int(qw[4], sh_qa[t][4], raw); \
-        raw = dot_acc_sat_4x8packed_ss_int(qw[5], sh_qa[t][5], raw); \
-        raw = dot_acc_sat_4x8packed_ss_int(qw[6], sh_qa[t][6], raw); \
-        raw = dot_acc_sat_4x8packed_ss_int(qw[7], sh_qa[t][7], raw); \
+        raw = dot_acc_sat_4x8packed_ss_int(qw[0], a0.s0, raw);       \
+        raw = dot_acc_sat_4x8packed_ss_int(qw[1], a0.s1, raw);       \
+        raw = dot_acc_sat_4x8packed_ss_int(qw[2], a0.s2, raw);       \
+        raw = dot_acc_sat_4x8packed_ss_int(qw[3], a0.s3, raw);       \
+        raw = dot_acc_sat_4x8packed_ss_int(qw[4], a1.s0, raw);       \
+        raw = dot_acc_sat_4x8packed_ss_int(qw[5], a1.s1, raw);       \
+        raw = dot_acc_sat_4x8packed_ss_int(qw[6], a1.s2, raw);       \
+        raw = dot_acc_sat_4x8packed_ss_int(qw[7], a1.s3, raw);       \
         acc[t] += scale * (float)sh_d[t] * (float)raw - minv * (float)sh_s[t]; \
     } while (0)
 

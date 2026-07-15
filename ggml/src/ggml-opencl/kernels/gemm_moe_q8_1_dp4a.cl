@@ -102,8 +102,10 @@ inline int dp4a4(uint w0,uint w1,uint w2,uint w3,uint a0,uint a1,uint a2,uint a3
 
 // One token's two-half dp4a + uniform scale/min epilogue into acc[t].
 #define MOE_DP4A_T(t) do {                                                                  \
-        const int raw1 = dp4a4(qw[0],qw[1],qw[2],qw[3], sh_qa[t][0],sh_qa[t][1],sh_qa[t][2],sh_qa[t][3]); \
-        const int raw2 = dp4a4(qw[4],qw[5],qw[6],qw[7], sh_qa[t][4],sh_qa[t][5],sh_qa[t][6],sh_qa[t][7]); \
+        uint4 a0 = vload4(0, &sh_qa[t][0]);                                                 \
+        uint4 a1 = vload4(0, &sh_qa[t][4]);                                                 \
+        const int raw1 = dp4a4(qw[0],qw[1],qw[2],qw[3], a0.s0,a0.s1,a0.s2,a0.s3);           \
+        const int raw2 = dp4a4(qw[4],qw[5],qw[6],qw[7], a1.s0,a1.s1,a1.s2,a1.s3);           \
         const float a_d = (float)sh_d[t];                                                   \
         acc[t] += sc0*a_d*(float)raw1 + sc1*a_d*(float)raw2 - mn*(float)sh_s[t];             \
     } while (0)
