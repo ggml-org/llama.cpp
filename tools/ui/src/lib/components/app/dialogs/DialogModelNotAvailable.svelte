@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
 	import { AlertTriangle, ArrowRight } from '@lucide/svelte';
 	import { goto } from '$app/navigation';
@@ -60,7 +61,7 @@
 							>
 								<span class="min-w-0 truncate font-mono text-xs">{model}</span>
 								<ArrowRight
-									class="h-4 w-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100"
+									class="{ICON_CLASS_DEFAULT} shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100"
 								/>
 							</button>
 						{/each}

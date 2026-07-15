@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { FolderOpen, Plus, Loader2, Braces } from '@lucide/svelte';
 	import { toast } from 'svelte-sonner';
 	import * as Dialog from '$lib/components/ui/dialog';
@@ -289,7 +290,7 @@
 				{#if selectedTemplate && !templatePreviewContent}
 					<div class="flex h-full flex-col">
 						<div class="mb-3 flex items-center gap-2">
-							<Braces class="h-4 w-4 text-muted-foreground" />
+							<Braces class="{ICON_CLASS_DEFAULT} text-muted-foreground" />
 
 							<span class="text-sm font-medium">
 								{selectedTemplate.title || selectedTemplate.name}
@@ -371,9 +372,9 @@
 			{#if hasTemplateResult}
 				<Button onclick={handleAttachTemplateResource} disabled={isAttaching}>
 					{#if isAttaching}
-						<Loader2 class="mr-2 h-4 w-4 animate-spin" />
+						<Loader2 class="mr-2 {ICON_CLASS_DEFAULT} animate-spin" />
 					{:else}
-						<Plus class="mr-2 h-4 w-4" />
+						<Plus class="mr-2 {ICON_CLASS_DEFAULT}" />
 					{/if}
 
 					Attach Resource
@@ -381,9 +382,9 @@
 			{:else}
 				<Button onclick={handleAttach} disabled={selectedResources.size === 0 || isAttaching}>
 					{#if isAttaching}
-						<Loader2 class="mr-2 h-4 w-4 animate-spin" />
+						<Loader2 class="mr-2 {ICON_CLASS_DEFAULT} animate-spin" />
 					{:else}
-						<Plus class="mr-2 h-4 w-4" />
+						<Plus class="mr-2 {ICON_CLASS_DEFAULT}" />
 					{/if}
 
 					Attach {selectedResources.size > 0 ? `(${selectedResources.size})` : 'Resource'}

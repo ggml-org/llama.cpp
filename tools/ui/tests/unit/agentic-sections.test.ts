@@ -95,6 +95,29 @@ describe('deriveAgenticSections', () => {
 		expect(sections[0].toolName).toBe('bash');
 	});
 
+	it('chat-streaming write_file surfaces as TOOL_CALL_PENDING with partial toolArgs (not TOOL_CALL_STREAMING)', () => {
+		// Regression: while the LLM is emitting a write_file tool call's
+		// args, `chat.svelte.ts` JSON-encodes the partial tool-call array on
+		// every chunk, so `parseToolCalls` succeeds and the section is
+		// classified TOOL_CALL_PENDING - not TOOL_CALL_STREAMING (which is
+		// only produced from the `streamingToolCalls` parameter, never set
+		// by current UI callers). Streaming-only UI like auto-scroll in the
+		// code block must still trigger, driven by `isStreaming && (isPending
+		// || isStreamingCall)`, not `isStreamingCall` alone.
+		const partialArgs = '{"path":"/Users/fifa2026.html","content":"<!DOCTYPE h';
+		const msg = makeAssistant({
+			toolCalls: JSON.stringify([
+				{ id: 'call_1', type: 'function', function: { name: 'write_file', arguments: partialArgs } }
+			])
+		});
+		const sections = deriveAgenticSections(msg, [], [], true);
+		expect(sections).toHaveLength(1);
+		expect(sections[0].type).toBe(AgenticSectionType.TOOL_CALL_PENDING);
+		expect(sections[0].type).not.toBe(AgenticSectionType.TOOL_CALL_STREAMING);
+		expect(sections[0].toolName).toBe('write_file');
+		expect(sections[0].toolArgs).toBe(partialArgs);
+	});
+
 	it('multi-turn: two assistant turns grouped as one session', () => {
 		const assistant1 = makeAssistant({
 			id: 'ast-1',

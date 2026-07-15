@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { Search } from '@lucide/svelte';
@@ -85,7 +86,7 @@
 </script>
 
 {#snippet itemIcon(IconComponent: Component)}
-	<IconComponent class="h-4 w-4" />
+	<IconComponent class={ICON_CLASS_DEFAULT} />
 {/snippet}
 
 {#if isSearchModeActive}
@@ -183,7 +184,7 @@
 						tooltip={item.tooltip}
 						tooltipSide={TooltipSide.RIGHT}
 						size="lg"
-						iconSize="h-4 w-4"
+						iconSize={ICON_CLASS_DEFAULT}
 						class="h-9 w-9 rounded-full hover:bg-accent! {isActive
 							? 'bg-accent text-accent-foreground'
 							: ''}"

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { tick } from 'svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Skeleton } from '$lib/components/ui/skeleton';
@@ -134,7 +135,7 @@
 			{#if showSkeleton}
 				<div class="space-y-2">
 					<div class="flex items-center gap-2">
-						<Skeleton class="h-4 w-4 rounded" />
+						<Skeleton class="{ICON_CLASS_DEFAULT} rounded" />
 						<Skeleton class="h-3 w-24" />
 					</div>
 					<div class="flex flex-wrap gap-1.5">
@@ -146,7 +147,7 @@
 
 				<div class="space-y-1.5">
 					<div class="flex items-center gap-2">
-						<Skeleton class="h-4 w-4 rounded" />
+						<Skeleton class="{ICON_CLASS_DEFAULT} rounded" />
 						<Skeleton class="h-3 w-32" />
 					</div>
 				</div>

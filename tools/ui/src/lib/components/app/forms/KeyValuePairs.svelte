@@ -101,7 +101,7 @@
 <div class={className}>
 	<div class="mb-2 flex items-center justify-between">
 		{#if sectionLabel}
-			<span class="text-xs font-medium">
+			<span class="text-xs font-medium select-none">
 				{sectionLabel}
 				{#if sectionLabelOptional}
 					<span class="text-muted-foreground">(optional)</span>
@@ -118,6 +118,7 @@
 			{addButtonLabel}
 		</button>
 	</div>
+
 	{#if pairs.length > 0}
 		<div class="space-y-3">
 			{#each pairs as pair, index (index)}
@@ -159,6 +160,6 @@
 			{/each}
 		</div>
 	{:else}
-		<p class="text-xs text-muted-foreground">{emptyMessage}</p>
+		<p class="select-none text-xs text-muted-foreground">{emptyMessage}</p>
 	{/if}
 </div>

@@ -1,5 +1,10 @@
 import { config } from '$lib/stores/settings.svelte';
-import { CORS_PROXY_HEADER_PREFIX, REDACTED_HEADERS } from '$lib/constants';
+import {
+	AUTHORIZATION_HEADER,
+	BEARER_PREFIX,
+	CORS_PROXY_HEADER_PREFIX,
+	REDACTED_HEADERS
+} from '$lib/constants';
 import { redactValue } from './redact';
 
 /**
@@ -10,7 +15,7 @@ export function getAuthHeaders(): Record<string, string> {
 	const currentConfig = config();
 	const apiKey = currentConfig.apiKey?.toString().trim();
 
-	return apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
+	return apiKey ? { [AUTHORIZATION_HEADER]: `${BEARER_PREFIX}${apiKey}` } : {};
 }
 
 /**

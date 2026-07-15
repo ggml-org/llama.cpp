@@ -1,5 +1,5 @@
 import {
-	NEWLINE_SEPARATOR,
+	NEWLINE,
 	SANDBOX_EMPTY_OUTPUT,
 	SANDBOX_OUTPUT_MAX_CHARS,
 	SANDBOX_TIMEOUT_MS_DEFAULT,
@@ -29,10 +29,10 @@ function formatReply(reply: SandboxReply): ToolExecutionResult {
 		lines.push(`=> ${String(reply.result)}`);
 	}
 
-	let content = lines.join(NEWLINE_SEPARATOR);
+	let content = lines.join(NEWLINE);
 	if (!content) content = SANDBOX_EMPTY_OUTPUT;
 	if (content.length > SANDBOX_OUTPUT_MAX_CHARS) {
-		content = `${content.slice(0, SANDBOX_OUTPUT_MAX_CHARS)}${NEWLINE_SEPARATOR}${SANDBOX_TRUNCATION_NOTICE}`;
+		content = `${content.slice(0, SANDBOX_OUTPUT_MAX_CHARS)}${NEWLINE}${SANDBOX_TRUNCATION_NOTICE}`;
 	}
 
 	return { content, isError: reply.error != null };

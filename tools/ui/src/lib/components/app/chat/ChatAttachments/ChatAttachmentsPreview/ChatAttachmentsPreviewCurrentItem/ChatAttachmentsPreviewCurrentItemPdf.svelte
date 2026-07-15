@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import type { ChatAttachmentDisplayItem } from '$lib/types';
 	import { FileText, Eye, Info } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
@@ -88,7 +89,7 @@
 		onclick={() => (pdfViewMode = PdfViewMode.TEXT)}
 		disabled={pdfImagesLoading}
 	>
-		<FileText class="mr-1 h-4 w-4" />
+		<FileText class="mr-1 {ICON_CLASS_DEFAULT}" />
 		Text
 	</Button>
 
@@ -100,10 +101,10 @@
 	>
 		{#if pdfImagesLoading}
 			<div
-				class="mr-1 h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent"
+				class="mr-1 {ICON_CLASS_DEFAULT} animate-spin rounded-full border-2 border-current border-t-transparent"
 			></div>
 		{:else}
-			<Eye class="mr-1 h-4 w-4" />
+			<Eye class="mr-1 {ICON_CLASS_DEFAULT}" />
 		{/if}
 		Pages
 	</Button>
@@ -111,7 +112,7 @@
 
 {#if !hasVisionModality && activeModelId && currentItem}
 	<Alert.Root class="mb-4 max-w-4xl">
-		<Info class="h-4 w-4" />
+		<Info class={ICON_CLASS_DEFAULT} />
 		<Alert.Title>Preview only</Alert.Title>
 		<Alert.Description>
 			<span class="inline-flex">

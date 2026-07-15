@@ -12,9 +12,9 @@
 		NUMERIC_FIELDS,
 		POSITIVE_INTEGER_FIELDS,
 		SETTINGS_CHAT_SECTIONS,
-		SETTINGS_SECTION_TITLES,
-		type SettingsSection
+		SETTINGS_SECTION_TITLES
 	} from '$lib/constants';
+	import type { SettingsSection } from '$lib/types';
 	import { RouterService } from '$lib/services/router.service';
 	import { setMode } from 'mode-watcher';
 	import { ColorMode } from '$lib/enums/ui.enums';

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import type { Snippet } from 'svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import * as Sheet from '$lib/components/ui/sheet';
@@ -108,15 +109,15 @@
 					>
 						<Collapsible.Trigger class={sheetItemClass}>
 							{#if reasoningExpanded}
-								<ChevronDown class="h-4 w-4 shrink-0" />
+								<ChevronDown class="{ICON_CLASS_DEFAULT} shrink-0" />
 							{:else}
-								<ChevronRight class="h-4 w-4 shrink-0" />
+								<ChevronRight class="{ICON_CLASS_DEFAULT} shrink-0" />
 							{/if}
 
 							{#if reasoning.thinkingEnabled}
-								<Lightbulb class="h-4 w-4 shrink-0 text-amber-400" />
+								<Lightbulb class="{ICON_CLASS_DEFAULT} shrink-0 text-amber-400" />
 							{:else}
-								<LightbulbOff class="h-4 w-4 shrink-0 text-muted-foreground" />
+								<LightbulbOff class="{ICON_CLASS_DEFAULT} shrink-0 text-muted-foreground" />
 							{/if}
 
 							<span class="flex-1">Reasoning</span>
@@ -138,9 +139,9 @@
 									>
 										<div class="flex min-w-0 items-center gap-3">
 											{#if reasoning.isSelected(level)}
-												<Check class="h-4 w-4 shrink-0 text-foreground" />
+												<Check class="{ICON_CLASS_DEFAULT} shrink-0 text-foreground" />
 											{:else}
-												<div class="h-4 w-4 shrink-0"></div>
+												<div class="{ICON_CLASS_DEFAULT} shrink-0"></div>
 											{/if}
 
 											<span class="text-sm">{level.label}</span>
@@ -161,12 +162,12 @@
 				<Collapsible.Root open={filesExpanded} onOpenChange={(open) => (filesExpanded = open)}>
 					<Collapsible.Trigger class={sheetItemClass}>
 						{#if filesExpanded}
-							<ChevronDown class="h-4 w-4 shrink-0" />
+							<ChevronDown class="{ICON_CLASS_DEFAULT} shrink-0" />
 						{:else}
-							<ChevronRight class="h-4 w-4 shrink-0" />
+							<ChevronRight class="{ICON_CLASS_DEFAULT} shrink-0" />
 						{/if}
 
-						<File class="h-4 w-4 shrink-0" />
+						<File class="{ICON_CLASS_DEFAULT} shrink-0" />
 
 						<span class="flex-1">Add files</span>
 					</Collapsible.Trigger>
@@ -181,7 +182,7 @@
 										class={sheetItemClass}
 										onclick={() => attachmentMenu.callbacks[item.action]()}
 									>
-										<item.icon class="h-4 w-4 shrink-0" />
+										<item.icon class="{ICON_CLASS_DEFAULT} shrink-0" />
 
 										<span>{item.label}</span>
 									</button>
@@ -189,7 +190,7 @@
 									<Tooltip.Root delayDuration={TOOLTIP_DELAY_DURATION}>
 										<Tooltip.Trigger>
 											<button type="button" class={sheetItemClass} disabled>
-												<item.icon class="h-4 w-4 shrink-0" />
+												<item.icon class="{ICON_CLASS_DEFAULT} shrink-0" />
 
 												<span>{item.label}</span>
 											</button>
@@ -208,12 +209,12 @@
 				<Collapsible.Root open={mcpExpanded} onOpenChange={(open) => (mcpExpanded = open)}>
 					<Collapsible.Trigger class={sheetItemClass}>
 						{#if mcpExpanded}
-							<ChevronDown class="h-4 w-4 shrink-0" />
+							<ChevronDown class="{ICON_CLASS_DEFAULT} shrink-0" />
 						{:else}
-							<ChevronRight class="h-4 w-4 shrink-0" />
+							<ChevronRight class="{ICON_CLASS_DEFAULT} shrink-0" />
 						{/if}
 
-						<McpLogo class="inline h-4 w-4 shrink-0" />
+						<McpLogo class="inline {ICON_CLASS_DEFAULT} shrink-0" />
 
 						<span class="flex-1">MCP Servers</span>
 
@@ -242,7 +243,7 @@
 											<img
 												src={faviconUrl}
 												alt=""
-												class="h-4 w-4 shrink-0 rounded-sm"
+												class="{ICON_CLASS_DEFAULT} shrink-0 rounded-sm"
 												onerror={(e) => {
 													(e.currentTarget as HTMLImageElement).style.display = 'none';
 												}}
@@ -280,12 +281,12 @@
 					<Collapsible.Root open={toolsExpanded} onOpenChange={(open) => (toolsExpanded = open)}>
 						<Collapsible.Trigger class={sheetItemClass}>
 							{#if toolsExpanded}
-								<ChevronDown class="h-4 w-4 shrink-0" />
+								<ChevronDown class="{ICON_CLASS_DEFAULT} shrink-0" />
 							{:else}
-								<ChevronRight class="h-4 w-4 shrink-0" />
+								<ChevronRight class="{ICON_CLASS_DEFAULT} shrink-0" />
 							{/if}
 
-							<PencilRuler class="inline h-4 w-4 shrink-0" />
+							<PencilRuler class="inline {ICON_CLASS_DEFAULT} shrink-0" />
 
 							<span class="flex-1">Tools</span>
 
@@ -310,7 +311,7 @@
 											<img
 												src={favicon}
 												alt=""
-												class="h-4 w-4 shrink-0 rounded-sm"
+												class="{ICON_CLASS_DEFAULT} shrink-0 rounded-sm"
 												onerror={(e) => {
 													(e.currentTarget as HTMLImageElement).style.display = 'none';
 												}}
@@ -325,7 +326,7 @@
 
 										<Checkbox
 											{checked}
-											class="h-4 w-4 shrink-0"
+											class="{ICON_CLASS_DEFAULT} shrink-0"
 											onclick={(e) => e.stopPropagation()}
 											onCheckedChange={() => toolsPanel.toggleGroupByLabel(group.label)}
 										/>
@@ -341,7 +342,7 @@
 					class={sheetItemClass}
 					onclick={() => attachmentMenu.callbacks[AttachmentAction.SYSTEM_PROMPT_CLICK]()}
 				>
-					<MessageSquare class="h-4 w-4 shrink-0" />
+					<MessageSquare class="{ICON_CLASS_DEFAULT} shrink-0" />
 
 					<span>System Message</span>
 				</button>
@@ -352,7 +353,7 @@
 						class={sheetItemClass}
 						onclick={() => attachmentMenu.callbacks[AttachmentAction.MCP_PROMPT_CLICK]()}
 					>
-						<Zap class="h-4 w-4 shrink-0" />
+						<Zap class="{ICON_CLASS_DEFAULT} shrink-0" />
 
 						<span>MCP Prompt</span>
 					</button>
@@ -364,7 +365,7 @@
 						class={sheetItemClass}
 						onclick={() => attachmentMenu.callbacks[AttachmentAction.MCP_RESOURCES_CLICK]()}
 					>
-						<FolderOpen class="h-4 w-4 shrink-0" />
+						<FolderOpen class="{ICON_CLASS_DEFAULT} shrink-0" />
 
 						<span>MCP Resources</span>
 					</button>

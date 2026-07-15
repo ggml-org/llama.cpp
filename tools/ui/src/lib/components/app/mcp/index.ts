@@ -181,6 +181,17 @@ export { default as McpServerCardDeleteDialog } from './McpServerCard/McpServerC
 export { default as McpServerCardSkeleton } from './McpServerCardSkeleton.svelte';
 
 /**
+ * **McpServerCardCompact** - Condensed MCP server card
+ *
+ * Static card for picker-style UIs (e.g. recommended MCP servers in the
+ * Add New Server dialog). Shows an optional favicon, the server name, and
+ * a short description. Performs no network requests - safe to render
+ * without contacting any upstream server until the user explicitly adds
+ * the server.
+ */
+export { default as McpServerCardCompact } from './McpServerCard/McpServerCardCompact.svelte';
+
+/**
  * **McpServerIdentity** - Server identity display (icon, name, version)
  *
  * Reusable headless component for displaying server name, favicon/icon, and version badge.
