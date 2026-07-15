@@ -1031,15 +1031,9 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
         hmx_queue_wakeup(ctx->hmx_queue);
     }
 
-    uint32_t op_wakeup = n_ops < 16 ? ~0UL : n_ops / 2; // half-way through the batch
-
     int op_status = HTP_STATUS_OK;
     for (uint32_t i = 0; i < n_ops && op_status == HTP_STATUS_OK; i++) {
         struct profile_data prof;
-
-        if (i == op_wakeup) {
-            dspqueue_write_early_wakeup_noblock(queue, 0, 0);
-        }
 
         profile_start(ctx->profiler, &prof);
 
