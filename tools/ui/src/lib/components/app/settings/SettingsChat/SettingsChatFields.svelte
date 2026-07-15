@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { RotateCcw, FlaskConical } from '@lucide/svelte';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { Input } from '$lib/components/ui/input';
@@ -193,7 +194,7 @@
 							<div class="flex items-center gap-2">
 								{#if selectedOption?.icon}
 									{@const IconComponent = selectedOption.icon}
-									<IconComponent class="h-4 w-4" />
+									<IconComponent class={ICON_CLASS_DEFAULT} />
 								{/if}
 
 								{selectedOption?.label || `Select ${field.label.toLowerCase()}`}
@@ -221,7 +222,7 @@
 									<div class="flex items-center gap-2">
 										{#if option.icon}
 											{@const IconComponent = option.icon}
-											<IconComponent class="h-4 w-4" />
+											<IconComponent class={ICON_CLASS_DEFAULT} />
 										{/if}
 										{option.label}
 									</div>

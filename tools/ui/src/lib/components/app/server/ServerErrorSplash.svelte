@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { base } from '$app/paths';
 	import { AlertTriangle, RefreshCw, Key, CheckCircle, XCircle } from '@lucide/svelte';
 	import { goto } from '$app/navigation';
@@ -145,7 +146,7 @@
 		{#if isAccessDeniedError && !showApiKeyInput}
 			<div in:fly={{ y: 10, duration: 300, delay: 200 }} class="mb-4">
 				<Button onclick={handleShowApiKeyInput} variant="outline" class="w-full">
-					<Key class="h-4 w-4" />
+					<Key class={ICON_CLASS_DEFAULT} />
 					Enter API Key
 				</Button>
 			</div>
@@ -171,21 +172,21 @@
 						/>
 						{#if apiKeyState === 'validating'}
 							<div class="absolute top-1/2 right-3 -translate-y-1/2">
-								<RefreshCw class="h-4 w-4 animate-spin text-muted-foreground" />
+								<RefreshCw class="{ICON_CLASS_DEFAULT} animate-spin text-muted-foreground" />
 							</div>
 						{:else if apiKeyState === 'success'}
 							<div
 								class="absolute top-1/2 right-3 -translate-y-1/2"
 								in:scale={{ duration: 200, start: 0.8 }}
 							>
-								<CheckCircle class="h-4 w-4 text-green-500" />
+								<CheckCircle class="{ICON_CLASS_DEFAULT} text-green-500" />
 							</div>
 						{:else if apiKeyState === 'error'}
 							<div
 								class="absolute top-1/2 right-3 -translate-y-1/2"
 								in:scale={{ duration: 200, start: 0.8 }}
 							>
-								<XCircle class="h-4 w-4 text-destructive" />
+								<XCircle class="{ICON_CLASS_DEFAULT} text-destructive" />
 							</div>
 						{/if}
 					</div>
@@ -209,7 +210,7 @@
 						class="flex-1"
 					>
 						{#if apiKeyState === 'validating'}
-							<RefreshCw class="h-4 w-4 animate-spin" />
+							<RefreshCw class="{ICON_CLASS_DEFAULT} animate-spin" />
 							Validating...
 						{:else if apiKeyState === 'success'}
 							Success!
@@ -237,11 +238,11 @@
 			<div in:fly={{ y: 10, duration: 300, delay: 200 }}>
 				<Button onclick={handleRetryConnection} disabled={isServerLoading} class="w-full">
 					{#if isServerLoading}
-						<RefreshCw class="h-4 w-4 animate-spin" />
+						<RefreshCw class="{ICON_CLASS_DEFAULT} animate-spin" />
 
 						Connecting...
 					{:else}
-						<RefreshCw class="h-4 w-4" />
+						<RefreshCw class={ICON_CLASS_DEFAULT} />
 
 						Retry Connection
 					{/if}

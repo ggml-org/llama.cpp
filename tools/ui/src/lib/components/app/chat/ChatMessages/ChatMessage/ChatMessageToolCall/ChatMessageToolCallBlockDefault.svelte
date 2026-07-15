@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ICON_CLASS_DEFAULT, ICON_CLASS_SPIN } from '$lib/constants/css-classes';
 	import { Loader2, Wrench } from '@lucide/svelte';
 	import {
 		CollapsibleContentBlock,
@@ -39,7 +40,7 @@
 
 	const toolUi = $derived(getBuiltinToolUi(section.toolName));
 	const toolIcon = $derived(showSpinner ? Loader2 : (toolUi?.icon ?? Wrench));
-	const toolIconClass = $derived(showSpinner ? 'h-4 w-4 animate-spin' : 'h-4 w-4');
+	const toolIconClass = $derived(showSpinner ? ICON_CLASS_SPIN : ICON_CLASS_DEFAULT);
 
 	// Server favicon fallback for MCP tools with no built-in icon.
 	const mcpServerFavicon = $derived(mcpStore.getServerFaviconForTool(section.toolName));

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import * as Collapsible from '$lib/components/ui/collapsible/index.js';
 	import { cn } from '$lib/components/ui/utils';
@@ -23,7 +24,7 @@
 		open = $bindable(false),
 		class: className = '',
 		icon: IconComponent,
-		iconClass = 'h-4 w-4',
+		iconClass = ICON_CLASS_DEFAULT,
 		iconUrl = null,
 		title = '',
 		titleSnippet,

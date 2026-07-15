@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ICON_CLASS_DEFAULT, ICON_CLASS_SPIN } from '$lib/constants/css-classes';
 	import { Check, Loader2, Wrench, XCircle, AlertTriangle } from '@lucide/svelte';
 	import { CollapsibleTerminalBlock } from '$lib/components/app';
 	import { AgenticSectionType, BuiltInTool } from '$lib/enums';
@@ -43,7 +44,7 @@
 	const showSpinner = $derived(isPending || (isStreamingCall && isStreaming));
 	const toolUi = $derived(getBuiltinToolUi(section.toolName));
 	const toolIcon = $derived(showSpinner ? Loader2 : (toolUi?.icon ?? Wrench));
-	const toolIconClass = $derived(showSpinner ? 'h-4 w-4 animate-spin' : 'h-4 w-4');
+	const toolIconClass = $derived(showSpinner ? ICON_CLASS_SPIN : ICON_CLASS_DEFAULT);
 	const mcpServerFavicon = $derived(mcpStore.getServerFaviconForTool(section.toolName));
 	const iconUrl = $derived(
 		!showSpinner && !toolUi?.icon && mcpServerFavicon ? mcpServerFavicon : null
@@ -215,7 +216,7 @@
 	{open}
 	class="my-2"
 	icon={showLiveSpinner ? Loader2 : toolIcon}
-	iconClass={showLiveSpinner ? 'h-4 w-4 animate-spin' : toolIconClass}
+	iconClass={showLiveSpinner ? ICON_CLASS_SPIN : toolIconClass}
 	{iconUrl}
 	title=""
 	titleSnippet={execShellTitle}

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ICON_CLASS_DEFAULT, ICON_CLASS_SPIN } from '$lib/constants/css-classes';
 	import { Globe, Loader2 } from '@lucide/svelte';
 	import { CollapsibleContentBlock } from '$lib/components/app';
 	import * as HoverCard from '$lib/components/ui/hover-card';
@@ -34,7 +35,7 @@
 	// while the call is in flight so the user sees execution status.
 	const iconUrl = $derived(showSpinner ? null : mcpStore.getServerFaviconForTool(section.toolName));
 	const icon = $derived(showSpinner ? Loader2 : undefined);
-	const iconClass = $derived(showSpinner ? 'h-4 w-4 animate-spin' : 'h-4 w-4');
+	const iconClass = $derived(showSpinner ? ICON_CLASS_SPIN : ICON_CLASS_DEFAULT);
 
 	// Verb reflects state: "Searching" while the call is in flight, "Searched"
 	// once results (or a definitive empty response) have arrived. Lets the
