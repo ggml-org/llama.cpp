@@ -286,7 +286,13 @@ int llama_completion(int argc, char ** argv) {
         return formatted;
     };
 
+    // the thinking tags and generation prompt do not change between turns, so this only needs to run
+    // once, on the first template application
+    bool reasoning_sampler_configured = false;
+
     auto configure_reasoning_sampler = [&](const common_chat_params & chat_params) {
+        reasoning_sampler_configured = true;
+
         if (chat_params.thinking_start_tag.empty() || chat_params.thinking_end_tag.empty()) {
             if (sparams.reasoning_sampling) {
                 LOG_WRN("%s: --reasoning-* sampling overrides are set but the chat template has no thinking tags; "
@@ -933,7 +939,9 @@ int llama_completion(int argc, char ** argv) {
                     std::string user_inp = format_chat
                         ? chat_add_and_format("user", std::move(buffer))
                         : std::move(buffer);
-                    if (format_chat && needs_reasoning_sampler) {
+                    if (format_chat && needs_reasoning_sampler && !reasoning_sampler_configured) {
+                        // only reached when the startup path had no prompt to format; the markers
+                        // do not change between turns, so one application is enough
                         common_chat_templates_inputs inputs;
                         inputs.use_jinja             = params.use_jinja;
                         inputs.messages              = chat_msgs;
