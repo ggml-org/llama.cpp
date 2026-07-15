@@ -107,6 +107,7 @@ struct htp_context {
     void *                 main_stack;
     atomic_bool            killed;
     size_t                 footprint;
+    atomic_uint            main_futex;
 };
 
 int op_matmul(struct htp_ops_context * octx);
