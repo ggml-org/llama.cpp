@@ -730,7 +730,19 @@ bool ggml_et_op_mul_mat(ggml_backend_et_device_context * dev_ctx,
                node->src[1]->type == GGML_TYPE_F32) {
         kernel_name    = "mul_mat_Q4_0";  // N < 53, or M % 16 != 0 or K % 32 != 0
         src0_type_name = "Q4_0";
+    } else if (node->type == GGML_TYPE_F32 && node->src[0]->type == GGML_TYPE_Q4_K &&
+               node->src[1]->type == GGML_TYPE_F32 &&
+               node->src[1]->ne[1] >= 53 &&       // N >= 53 (prefill): use matrix engine
+               node->src[0]->ne[1] % 16 == 0 &&   // M % TILE_M
+               node->src[0]->ne[0] % 256 == 0) {  // K % QK_K (Q4_K super-block)
+        kernel_name    = "mul_mat_Q4_K_matrix_engine";
+        src0_type_name = "Q4_K";
+    } else if (node->type == GGML_TYPE_F32 &&
+        node->src[0]->type == GGML_TYPE_Q4_K &&
+        node->src[1]->type == GGML_TYPE_F32) {
 
+        kernel_name = "mul_mat_Q4_K";  // N < 53, or M % 16 != 0, or K % 256 != 0
+        src0_type_name = "Q4_K";
     } else if (node->type == GGML_TYPE_F32 && node->src[0]->type == GGML_TYPE_Q8_0 &&
                node->src[1]->type == GGML_TYPE_F32) {
         kernel_name    = "mul_mat_Q8_0";
