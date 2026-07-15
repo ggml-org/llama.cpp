@@ -843,7 +843,7 @@ static const char * ggml_backend_sycl_buffer_type_get_name(ggml_backend_buffer_t
 }
 
 static bool check_usm_system(int device, size_t size) {
-    bool use_usm_system = g_ggml_sycl_usm_system && size >= MEM_SIZE_1G;
+    bool use_usm_system = g_ggml_sycl_usm_system && size >= ((size_t)4 * MEM_SIZE_1G);
 
     if (use_usm_system && !ggml_sycl_info().devices[device].usm_system_support) {
         GGML_LOG_INFO("Device does not support USM system allocations\n");
@@ -882,6 +882,7 @@ ggml_backend_sycl_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft,
 
     void * dev_ptr;
     if (use_usm_system) {
+        GGML_SYCL_DEBUG("[SYCL] allocating %lu Bytes with USM system\n", size);
         dev_ptr = (void *)aligned_malloc_host(alignment, aligned_size);
         if (!dev_ptr) {
             GGML_LOG_ERROR("%s: can't allocate %lu Bytes of memory on host\n", __func__, size);
