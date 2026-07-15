@@ -116,7 +116,7 @@ AEEResult htp_iface_close(remote_handle64 handle) {
 
     struct htp_context * ctx = h->ctx;
     if (ctx) {
-        if (ctx->queue) {
+        if (ctx->dsp_queue) {
             FARF(ERROR, "Closing handle with queue still open");
             return AEE_EITEMBUSY;
         }
@@ -296,8 +296,7 @@ static void vtcm_free(struct htp_context * ctx) {
     }
 }
 
-static void htp_main_thread_peek(void * context);
-static void htp_main_thread_futex(void * context);
+static void htp_main_thread(void * context);
 static void htp_packet_callback(dspqueue_t queue, int error, void * context);
 static void htp_error_callback(dspqueue_t queue, int error, void * context);
 
@@ -312,13 +311,28 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
         return AEE_EITEMBUSY;
     }
 
-    void (*thread_func)(void *) = htp_main_thread_peek;
-
     // Cache the original FastRPC thread priority, then calculate compute priority
     int fastrpc_tid  = qurt_thread_get_id();
     int fastrpc_prio = qurt_thread_get_priority(fastrpc_tid);
     int main_prio    = fastrpc_prio - 10;
     if (main_prio < 1) main_prio = 1;
+
+    dspqueue_t dsp_queue = NULL;
+    bool use_callbacks = false;
+
+    // Import queue with NULL callbacks to avoid starting dspueue internal threads
+    int err = dspqueue_import(dsp_queue_id, NULL, NULL, (void *) h, &dsp_queue);
+    if (err == AEE_EBADPARM) {
+        // Fallback for devices that don't support NULL callbacks
+        FARF(HIGH, "dspqueue import with NULL callbacks failed, trying with callbacks");
+        use_callbacks = true;
+        err = dspqueue_import(dsp_queue_id, htp_packet_callback, htp_error_callback, (void *) h, &dsp_queue);
+    }
+
+    if (err) {
+        FARF(ERROR, "Queue import failed with 0x%08x", (unsigned) err);
+        return err;
+    }
 
     qurt_sysenv_max_hthreads_t hw_threads;
     qurt_sysenv_get_max_hw_threads(&hw_threads);
@@ -343,14 +357,18 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
     offset = offset_ctx + size_ctx;
 
     // 2. main_stack
-    size_t offset_main_stack = hex_align_up(offset, 4096);
-    size_t size_main_stack   = MAIN_THREAD_STACK_SIZE;
-    offset = offset_main_stack + size_main_stack;
+    size_t offset_main_stack = 0;
+    size_t size_main_stack   = 0;
+    if (!use_callbacks) {
+        offset_main_stack = hex_align_up(offset, 4096);
+        size_main_stack   = MAIN_THREAD_STACK_SIZE;
+        offset = offset_main_stack + size_main_stack;
+    }
 
     // 3. work_queue
-    size_t wq_align = work_queue_alignof();
+    size_t wq_align  = work_queue_alignof();
     size_t offset_wq = hex_align_up(offset, wq_align);
-    size_t size_wq = work_queue_sizeof(n_hvx, WORK_QUEUE_CAPACITY, WORK_QUEUE_STACK_SIZE);
+    size_t size_wq   = work_queue_sizeof(n_hvx, WORK_QUEUE_CAPACITY, WORK_QUEUE_STACK_SIZE);
     offset = offset_wq + size_wq;
 
     // 4. dma_queue
@@ -358,9 +376,9 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
     size_t offset_dma = hex_align_up(offset, dma_align);
     size_t size_dma = 0;
     for (uint32_t i = 0; i < n_hvx; i++) {
-        size_dma = hex_align_up(size_dma, dma_queue_alignof());
+        size_dma  = hex_align_up(size_dma, dma_queue_alignof());
         size_dma += dma_queue_sizeof(256);
-        size_dma = hex_align_up(size_dma, dma_queue_alignof());
+        size_dma  = hex_align_up(size_dma, dma_queue_alignof());
         size_dma += dma_queue_alias_sizeof();
     }
     offset = offset_dma + size_dma;
@@ -371,7 +389,7 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
     if (n_hmx) {
         size_t hmx_align = hmx_queue_alignof();
         offset_hmx = hex_align_up(offset, hmx_align);
-        size_hmx = hmx_queue_sizeof(HMX_QUEUE_CAPACITY, HMX_QUEUE_STACK_SIZE);
+        size_hmx   = hmx_queue_sizeof(HMX_QUEUE_CAPACITY, HMX_QUEUE_STACK_SIZE);
         offset = offset_hmx + size_hmx;
     }
 
@@ -380,6 +398,7 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
     void * block = memalign(4096, footprint);
     if (!block) {
         FARF(ERROR, "Unable to allocate unified block of size %zu\n", footprint);
+        dspqueue_close(dsp_queue);
         return AEE_ENOMEMORY;
     }
     memset(block, 0, footprint);
@@ -391,31 +410,13 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
     ctx->thread_id   = fastrpc_tid;
     ctx->thread_prio = main_prio;
     ctx->max_vmem    = max_vmem;
-    atomic_init(&ctx->main_futex, 0);
-
-    // Import queue with NULL callbacks to avoid starting dspueue internal threads
-    int err = dspqueue_import(dsp_queue_id, NULL, NULL, (void *) ctx, &ctx->queue);
-    if (err == AEE_EBADPARM) {
-        // Fallback for devices that don't support NULL callbacks
-        FARF(HIGH, "dspqueue import with NULL callbacks failed, trying with callbacks");
-        thread_func = htp_main_thread_futex;
-        err = dspqueue_import(dsp_queue_id, htp_packet_callback, htp_error_callback, (void *) ctx, &ctx->queue);
-    }
-
-    if (err) {
-        FARF(ERROR, "Queue import failed with 0x%08x", (unsigned) err);
-        free(block);
-        h->ctx = NULL;
-        return err;
-    }
+    ctx->dsp_queue   = dsp_queue;
 
     // allocate VTCM
     err = vtcm_alloc(ctx);
     if (err != AEE_SUCCESS) {
         FARF(ERROR, "Unable to allocate VTCM");
-        dspqueue_close(ctx->queue);
-        free(block);
-        h->ctx = NULL;
+        htp_iface_stop(handle);
         return AEE_ENOMEMORY;
     }
 
@@ -430,10 +431,7 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
         request.apptype = HAP_POWER_COMPUTE_CLIENT_CLASS;
 
         if ((err = HAP_power_set((void *) ctx, &request)) != 0) {
-            vtcm_free(ctx);
-            dspqueue_close(ctx->queue);
-            free(block);
-            h->ctx = NULL;
+            htp_iface_stop(handle);
             return err;
         }
     }
@@ -460,10 +458,7 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
         HAP_set_dcvs_v3_protected_bus_corners(&request, 1);
 #endif
         if ((err = HAP_power_set((void *) ctx, &request)) != 0) {
-            vtcm_free(ctx);
-            dspqueue_close(ctx->queue);
-            free(block);
-            h->ctx = NULL;
+            htp_iface_stop(handle);
             return err;
         }
 
@@ -471,10 +466,7 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
         request.type         = HAP_power_set_HVX;
         request.hvx.power_up = TRUE;
         if ((err = HAP_power_set((void *) ctx, &request)) != 0) {
-            vtcm_free(ctx);
-            dspqueue_close(ctx->queue);
-            free(block);
-            h->ctx = NULL;
+            htp_iface_stop(handle);
             return err;
         }
     }
@@ -496,10 +488,7 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
         err = HAP_power_set((void *) ctx, &request);
         if (err != AEE_SUCCESS) {
             FARF(ERROR, "ggml-hex: error setting HMX clock.");
-            vtcm_free(ctx);
-            dspqueue_close(ctx->queue);
-            free(block);
-            h->ctx = NULL;
+            htp_iface_stop(handle);
             return err;
         }
     }
@@ -514,10 +503,7 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
         err = HAP_power_set((void *) ctx, &request);
         if (err != AEE_SUCCESS) {
             FARF(ERROR, "ggml-hex: error powering on HMX.");
-            vtcm_free(ctx);
-            dspqueue_close(ctx->queue);
-            free(block);
-            h->ctx = NULL;
+            htp_iface_stop(handle);
             return err;
         }
     }
@@ -555,38 +541,27 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
     void * wq_ptr = (void *) ((uintptr_t) block + offset_wq);
     ctx->work_queue = work_queue_init(wq_ptr, n_hvx, WORK_QUEUE_CAPACITY, WORK_QUEUE_STACK_SIZE);
 
-    // Start our main compute thread
-    ctx->main_stack = (void *) ((uintptr_t) block + offset_main_stack);
+    ctx->main_stack = NULL;
+    ctx->main_thread = 0;
     atomic_store(&ctx->killed, false);
 
-    qurt_thread_attr_t attr;
-    qurt_thread_attr_init(&attr);
-    qurt_thread_attr_set_stack_addr(&attr, ctx->main_stack);
-    qurt_thread_attr_set_stack_size(&attr, size_main_stack);
-    qurt_thread_attr_set_priority(&attr, main_prio);
-    qurt_thread_attr_set_name(&attr, "htp-main");
+    if (!use_callbacks) {
+        // Start our main compute thread
+        ctx->main_stack = (void *) ((uintptr_t) block + offset_main_stack);
 
-    int err_thread = qurt_thread_create(&ctx->main_thread, &attr, thread_func, ctx);
-    if (err_thread) {
-        FARF(ERROR, "Unable to create htp main thread: %d", err_thread);
-        work_queue_free(ctx->work_queue);
-        if (ctx->ddr_spad_base) {
-            free(ctx->ddr_spad_base);
-            ctx->ddr_spad_base = NULL;
-            ctx->ddr_spad_size = 0;
+        qurt_thread_attr_t attr;
+        qurt_thread_attr_init(&attr);
+        qurt_thread_attr_set_stack_addr(&attr, ctx->main_stack);
+        qurt_thread_attr_set_stack_size(&attr, size_main_stack);
+        qurt_thread_attr_set_priority(&attr, main_prio);
+        qurt_thread_attr_set_name(&attr, "htp-main");
+
+        int err_thread = qurt_thread_create(&ctx->main_thread, &attr, htp_main_thread, ctx);
+        if (err_thread) {
+            FARF(ERROR, "Unable to create htp main thread: %d", err_thread);
+            htp_iface_stop(handle);
+            return AEE_ENOMEMORY;
         }
-        for (int i = 0; i < ctx->n_threads; i++) {
-            dma_queue_alias_free(ctx->dma[i]);
-            dma_queue_free(ctx->dma_cached[i]);
-        }
-        if (ctx->hmx_queue) {
-            hmx_queue_free(ctx->hmx_queue);
-        }
-        vtcm_free(ctx);
-        dspqueue_close(ctx->queue);
-        free(block);
-        h->ctx = NULL;
-        return AEE_ENOMEMORY;
     }
 
     FARF(HIGH, "session %u started: n-hvx %u vtcm-size %zu vtcm-rctx %u n-threads %u thread-id %d thread-prio %d \n",
@@ -603,15 +578,13 @@ AEEResult htp_iface_stop(remote_handle64 handle) {
     struct htp_context * ctx = h->ctx;
 
     if (ctx->main_thread) {
-        int status;
         atomic_store(&ctx->killed, true);
-        atomic_fetch_add_explicit(&ctx->main_futex, 1, memory_order_release);
-        qurt_futex_wake(&ctx->main_futex, 1);
-        qurt_thread_join(ctx->main_thread, &status);
+        int status;
+        (void) qurt_thread_join(ctx->main_thread, &status);
         ctx->main_thread = 0;
     }
 
-    int err = dspqueue_close(ctx->queue); ctx->queue = NULL;
+    int err = dspqueue_close(ctx->dsp_queue); ctx->dsp_queue = NULL;
     if (err != 0) {
         FARF(ERROR, "Queue close failed with 0x%08x", (unsigned) err);
         return err;
@@ -1001,7 +974,7 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, u
 }
 
 static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_req * req, const struct dspqueue_buffer * dbuf) {
-    dspqueue_t queue = ctx->queue;
+    dspqueue_t queue = ctx->dsp_queue;
     int err;
 
     const uint32_t n_bufs = req->n_bufs;
@@ -1124,7 +1097,7 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
 #define DSPQUEUE_POLL_COUNT        100
 
 static void process_ops(struct htp_context * ctx) {
-    dspqueue_t queue = ctx->queue;
+    dspqueue_t queue = ctx->dsp_queue;
     int err;
 
     uint32_t poll_count = DSPQUEUE_POLL_COUNT;
@@ -1170,22 +1143,23 @@ static void process_ops(struct htp_context * ctx) {
 static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
     (void) queue;
     (void) error;
-    struct htp_context * ctx = (struct htp_context *) context;
-    atomic_fetch_add_explicit(&ctx->main_futex, 1, memory_order_release);
-    qurt_futex_wake(&ctx->main_futex, 1);
+    struct htp_handle * h = (struct htp_handle *) context;
+    if (h && h->ctx) {
+        process_ops(h->ctx);
+    }
 }
 
-static void htp_main_thread_peek(void * context) {
+static void htp_main_thread(void * context) {
     struct htp_context * ctx = (struct htp_context *) context;
 
-    FARF(HIGH, "htp-main-thread-peek: started");
+    FARF(HIGH, "htp-main-thread: started");
 
     while (!atomic_load(&ctx->killed)) {
         uint32_t flags = 0;
         uint32_t num_buffers = 0;
         uint32_t message_length = 0;
 
-        int err = dspqueue_peek(ctx->queue, &flags, &num_buffers, &message_length, 50000);
+        int err = dspqueue_peek(ctx->dsp_queue, &flags, &num_buffers, &message_length, 50000);
         if (err == 0) {
             process_ops(ctx);
         } else if (err == AEE_EWOULDBLOCK || err == AEE_EEXPIRED) {
@@ -1196,24 +1170,5 @@ static void htp_main_thread_peek(void * context) {
         }
     }
 
-    FARF(HIGH, "htp-main-thread-peek: stopped");
-}
-
-static void htp_main_thread_futex(void * context) {
-    struct htp_context * ctx = (struct htp_context *) context;
-
-    FARF(HIGH, "htp-main-thread-futex: started");
-
-    unsigned int prev_futex = 0;
-    while (!atomic_load(&ctx->killed)) {
-        unsigned int val = atomic_load_explicit(&ctx->main_futex, memory_order_acquire);
-        if (val == prev_futex) {
-            qurt_futex_wait(&ctx->main_futex, prev_futex);
-            continue;
-        }
-        prev_futex = val;
-        process_ops(ctx);
-    }
-
-    FARF(HIGH, "htp-main-thread-futex: stopped");
+    FARF(HIGH, "htp-main-thread: stopped");
 }

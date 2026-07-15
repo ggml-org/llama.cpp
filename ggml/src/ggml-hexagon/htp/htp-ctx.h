@@ -69,7 +69,7 @@ struct htp_ops_context {
 
 // Main context for htp DSP backend
 struct htp_context {
-    dspqueue_t             queue;
+    dspqueue_t             dsp_queue;
 
     struct htp_mmap        mmap[HTP_MAX_MMAPS];
     dma_queue_t            dma[HTP_MAX_NTHREADS];
@@ -107,7 +107,6 @@ struct htp_context {
     void *                 main_stack;
     atomic_bool            killed;
     size_t                 footprint;
-    atomic_uint            main_futex;
 };
 
 int op_matmul(struct htp_ops_context * octx);
