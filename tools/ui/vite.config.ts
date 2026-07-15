@@ -1,13 +1,16 @@
 import tailwindcss from '@tailwindcss/vite';
 import { sveltekit } from '@sveltejs/kit/vite';
+import { SvelteKitPWA } from '@vite-pwa/sveltekit';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
 import { defineConfig, searchForWorkspaceRoot } from 'vite';
-import devtoolsJson from 'vite-plugin-devtools-json';
 import { storybookTest } from '@storybook/addon-vitest/vitest-plugin';
-import { llamaCppBuildPlugin } from './scripts/vite-plugin-llama-cpp-build';
+import { splashScreenPlugin } from './scripts/vite-plugin-splash-screen';
+import { buildInfoPlugin } from './scripts/vite-plugin-build-info';
+import { relativizeBasePlugin } from './scripts/vite-plugin-relativize-base';
 import { playwright } from '@vitest/browser-playwright';
+import { SVELTEKIT_PWA_OPTIONS } from './src/lib/constants/pwa';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -37,7 +40,14 @@ export default defineConfig({
 		minify: true
 	},
 
-	plugins: [tailwindcss(), sveltekit(), devtoolsJson(), llamaCppBuildPlugin()],
+	plugins: [
+		tailwindcss(),
+		sveltekit(),
+		SvelteKitPWA(SVELTEKIT_PWA_OPTIONS),
+		splashScreenPlugin(),
+		buildInfoPlugin(),
+		relativizeBasePlugin()
+	],
 
 	test: {
 		projects: [

@@ -1,16 +1,26 @@
 # llama.cpp for OpenCL
 
-- [Background](#background)
-- [OS](#os)
-- [Hardware](#hardware)
-- [DataType Supports](#datatype-supports)
-- [Model Preparation](#model-preparation)
-- [CMake Options](#cmake-options)
-- [Android](#android)
-- [Windows 11 Arm64](#windows-11-arm64)
-- [Linux](#Linux)
-- [Known Issue](#known-issues)
-- [TODO](#todo)
+- [llama.cpp for OpenCL](#llamacpp-for-opencl)
+  - [Background](#background)
+    - [Llama.cpp + OpenCL](#llamacpp--opencl)
+  - [OS](#os)
+  - [Hardware](#hardware)
+    - [Adreno GPU](#adreno-gpu)
+  - [DataType Supports](#datatype-supports)
+  - [Model Preparation](#model-preparation)
+  - [Binary Kernel Library](#binary-kernel-library)
+  - [CMake Options](#cmake-options)
+  - [Android](#android)
+    - [I. Setup Environment](#i-setup-environment)
+    - [II. Build llama.cpp](#ii-build-llamacpp)
+  - [Windows 11 Arm64](#windows-11-arm64)
+    - [I. Setup Environment](#i-setup-environment-1)
+    - [II. Build llama.cpp](#ii-build-llamacpp-1)
+  - [Linux](#linux)
+    - [I. Setup Environment](#i-setup-environment-2)
+    - [II. Build llama.cpp](#ii-build-llamacpp-2)
+  - [Known Issues](#known-issues)
+  - [TODO](#todo)
 
 ## Background
 
@@ -34,11 +44,13 @@ The llama.cpp OpenCL backend is designed to enable llama.cpp on **Qualcomm Adren
 
 **Verified devices**
 
-| Adreno GPU                           | Status  |
-|:------------------------------------:|:-------:|
-| Adreno 750 (Snapdragon 8 Gen 3)      | Support |
-| Adreno 830 (Snapdragon 8 Elite)      | Support |
-| Adreno X85 (Snapdragon X Elite)      | Support |
+| Adreno GPU                            | Status  |
+|:-------------------------------------:|:-------:|
+| Adreno 750 (Snapdragon 8 Gen 3)       | Support |
+| Adreno 830 (Snapdragon 8 Elite)       | Support |
+| Adreno 840 (Snapdragon 8 Elite Gen 5) | Support |
+| Adreno X1-85 (Snapdragon X Elite)     | Support |
+| Adreno X2-90 (Snapdragon X2 Elite)    | Support |
 
 > A6x GPUs with a recent driver and compiler are supported; they are usually found in IoT platforms.
 However, A6x GPUs in phones are likely not supported due to the outdated driver and compiler.
@@ -47,42 +59,43 @@ However, A6x GPUs in phones are likely not supported due to the outdated driver 
 
 | DataType               | Status                     |
 |:----------------------:|:--------------------------:|
+| Q1_0                   | Support                    |
 | Q4_0                   | Support                    |
-| Q6_K                   | Support, but not optimized |
+| Q4_1                   | Support                    |
+| Q5_0                   | Support                    |
+| Q5_1                   | Support                    |
 | Q8_0                   | Support                    |
+| Q4_K                   | Support                    |
+| Q5_K                   | Support                    |
+| Q6_K                   | Support                    |
 | MXFP4                  | Support                    |
+| IQ4_NL                 | Support                    |
 
 ## Model Preparation
 
-You can refer to the general [llama-quantize tool](/tools/quantize/README.md) for steps to convert a model in Hugging Face safetensor format to GGUF with quantization.
+Since common quantizations are supported now, it is recommanded to download GGUF models directly from Huggingface.
 
-Currently we support `Q4_0` quantization and have optimized for it. To achieve best performance on Adreno GPU, add `--pure` to `llama-quantize` (i.e., make all weights in `Q4_0`). For example,
+## Binary Kernel Library
 
-```sh
-./llama-quantize --pure ggml-model-qwen2.5-3b-f16.gguf ggml-model-qwen-3b-Q4_0.gguf Q4_0
-```
+A prebuilt binary kernel library has been introduced for Adreno GPUs.
+It currently targets X2 GPUs (X2-90, X2-85 and X2-45) found in Snapdragon X2 SoC.
+The library currently contains kernels for MUL_MAT_ID with Q4_0, Q4_1, Q4_K, MXFP4.
+The library must be manually downloaded from https://softwarecenter.qualcomm.com/catalog/item/Adreno_Kernel_Library_GGML.
 
-Since `Q6_K` is also supported, `Q4_0` quantization without `--pure` will also work. However, the performance will be worse compared to pure `Q4_0` quantization.
+To allow using the kernel library, add `-DGGML_OPENCL_USE_ADRENO_BIN_KERNELS=ON` when configuring with CMake.
+Then, extract `adreno-opencl-kernels.dll` from the zip file downloaded from the above URL and put it alongside the executables.
+If kernels compatible with the current GPU are found in the library, they will be loaded and used.
 
-### `MXFP4` MoE Models
-
-OpenAI gpt-oss models are MoE models in `MXFP4`. The quantized model will be in `MXFP4_MOE`, a mixture of `MXFP4` and `Q8_0`.
-For this quantization, there is no need to specify `--pure`.
-For gpt-oss-20b model, you can directly [download](https://huggingface.co/ggml-org/gpt-oss-20b-GGUF) the quantized GGUF file in `MXFP4_MOE` from Hugging Face.
-
-Although it is possible to quantize gpt-oss-20b model in pure `Q4_0` (all weights in `Q4_0`), it is not recommended since `MXFP4` has been optimized for MoE while `Q4_0` is not. In addition, accuracy should degrade with such pure `Q4_0` quantization.
-Hence, using the default `MXFP4_MOE` quantization (see the link above) is recommended for this model.
-
-> Note that the `Q4_0` model found [here](https://huggingface.co/unsloth/gpt-oss-20b-GGUF/blob/main/gpt-oss-20b-Q4_0.gguf) is a mixture of `Q4_0`, `Q8_0` and `MXFP4` and gives better performance than `MXFP4_MOE` quantization.
 
 ## CMake Options
 
 The OpenCL backend has the following CMake options that control the behavior of the backend.
 
-| CMake options                     | Default value  | Description                               |
-|:---------------------------------:|:--------------:|:------------------------------------------|
-| `GGML_OPENCL_EMBED_KERNELS`       | `ON`           | Embed OpenCL kernels into the executable. |
-| `GGML_OPENCL_USE_ADRENO_KERNELS`  | `ON`           | Use kernels optimized for Adreno.         |
+| CMake options                        | Default value  | Description                               |
+|:------------------------------------:|:--------------:|:------------------------------------------|
+| `GGML_OPENCL_EMBED_KERNELS`          | `ON`           | Embed OpenCL kernels into the executable. |
+| `GGML_OPENCL_USE_ADRENO_KERNELS`     | `ON`           | Use kernels optimized for Adreno.         |
+| `GGML_OPENCL_USE_ADRENO_BIN_KERNELS` | `OFF`          | Allow using binary kernel lib for Adreno. |
 
 ## Android
 
@@ -277,6 +290,5 @@ ninja
 
 ## TODO
 
-- Optimization for Q6_K
-- Support and optimization for Q4_K
 - Improve flash attention
+- Improve OpenCL C kernels performance

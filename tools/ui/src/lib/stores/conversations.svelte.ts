@@ -24,9 +24,18 @@ import { toast } from 'svelte-sonner';
 import { DatabaseService } from '$lib/services/database.service';
 import { MigrationService } from '$lib/services/migration.service';
 import { config } from '$lib/stores/settings.svelte';
+import { mcpStore } from '$lib/stores/mcp.svelte';
 import { filterByLeafNodeId, findLeafNode, generateConversationTitle } from '$lib/utils';
 import type { McpServerOverride } from '$lib/types/database';
-import { MessageRole, HtmlInputType, FileExtensionText, ReasoningEffort } from '$lib/enums';
+import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate';
+import {
+	MessageRole,
+	HtmlInputType,
+	FileExtensionText,
+	MimeTypeText,
+	MimeTypeApplication,
+	ReasoningEffort
+} from '$lib/enums';
 import {
 	ISO_DATE_TIME_SEPARATOR,
 	ISO_DATE_TIME_SEPARATOR_REPLACEMENT,
@@ -38,8 +47,6 @@ import {
 	ISO_TIME_SEPARATOR_REPLACEMENT,
 	NON_ALPHANUMERIC_REGEX,
 	MULTIPLE_UNDERSCORE_REGEX,
-	MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY,
-	THINKING_ENABLED_DEFAULT_LOCALSTORAGE_KEY,
 	REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY
 } from '$lib/constants';
 
@@ -73,75 +80,25 @@ class ConversationsStore {
 	/** Whether the store has been initialized */
 	isInitialized = $state(false);
 
-	/** Pending MCP server overrides for new conversations (before first message) */
-	pendingMcpServerOverrides = $state<McpServerOverride[]>(ConversationsStore.loadMcpDefaults());
-
-	/** Global (non-conversation-specific) thinking toggle default */
-	pendingThinkingEnabled = $state(ConversationsStore.loadThinkingDefaults());
+	/** Global (non-conversation-specific) thinking toggle default, derived from reasoning effort */
+	pendingThinkingEnabled = $state(false);
 
 	/** Global (non-conversation-specific) reasoning effort default */
-	pendingReasoningEffort = $state<ReasoningEffort>(ConversationsStore.loadReasoningEffortDefault());
+	pendingReasoningEffort = $state<ReasoningEffort | ReasoningEffort.OFF>(
+		ConversationsStore.loadReasoningEffortDefault()
+	);
 
-	/** Load MCP default overrides from localStorage */
-	private static loadMcpDefaults(): McpServerOverride[] {
-		if (typeof globalThis.localStorage === 'undefined') return [];
-		try {
-			const raw = localStorage.getItem(MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY);
-			if (!raw) return [];
-			const parsed = JSON.parse(raw);
-			if (!Array.isArray(parsed)) return [];
-			return parsed.filter(
-				(o: unknown) => typeof o === 'object' && o !== null && 'serverId' in o && 'enabled' in o
-			) as McpServerOverride[];
-		} catch {
-			return [];
-		}
-	}
-
-	/** Persist MCP default overrides to localStorage */
-	private saveMcpDefaults(): void {
-		if (typeof globalThis.localStorage === 'undefined') return;
-		const plain = this.pendingMcpServerOverrides.map((o) => ({
-			serverId: o.serverId,
-			enabled: o.enabled
-		}));
-		if (plain.length > 0) {
-			localStorage.setItem(MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY, JSON.stringify(plain));
-		} else {
-			localStorage.removeItem(MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY);
-		}
-	}
-
-	/** Load thinking-enabled default from localStorage */
-	private static loadThinkingDefaults(): boolean {
-		if (typeof globalThis.localStorage === 'undefined') return false;
-		try {
-			const raw = localStorage.getItem(THINKING_ENABLED_DEFAULT_LOCALSTORAGE_KEY);
-			if (!raw) return false;
-			const parsed = raw === 'true';
-			return typeof parsed === 'boolean' ? parsed : false;
-		} catch {
-			return false;
-		}
-	}
-
-	/** Persist thinking-enabled default to localStorage */
-	private saveThinkingDefaults(): void {
-		if (typeof globalThis.localStorage === 'undefined') return;
-		localStorage.setItem(
-			THINKING_ENABLED_DEFAULT_LOCALSTORAGE_KEY,
-			this.pendingThinkingEnabled ? 'true' : 'false'
-		);
-	}
+	/** Last non-off reasoning effort, restored when re-enabling thinking globally */
+	private lastNonOffEffort: ReasoningEffort | null = null;
 
 	/** Load reasoning effort default from localStorage */
-	private static loadReasoningEffortDefault(): ReasoningEffort {
-		if (typeof globalThis.localStorage === 'undefined') return ReasoningEffort.MEDIUM;
+	private static loadReasoningEffortDefault(): ReasoningEffort | ReasoningEffort.OFF {
+		if (typeof globalThis.localStorage === 'undefined') return ReasoningEffort.OFF;
 		try {
 			const raw = localStorage.getItem(REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY);
-			return (raw as ReasoningEffort) || ReasoningEffort.MEDIUM;
+			return (raw as ReasoningEffort | ReasoningEffort.OFF) || ReasoningEffort.OFF;
 		} catch {
-			return ReasoningEffort.MEDIUM;
+			return ReasoningEffort.OFF;
 		}
 	}
 
@@ -180,7 +137,6 @@ class ConversationsStore {
 
 		try {
 			await MigrationService.runAllMigrations();
-
 			await this.loadConversations();
 			this.isInitialized = true;
 		} catch (error) {
@@ -287,23 +243,21 @@ class ConversationsStore {
 		const conversationName = name || `Chat ${new Date().toLocaleString()}`;
 		const conversation = await DatabaseService.createConversation(conversationName);
 
-		if (this.pendingMcpServerOverrides.length > 0) {
-			// Deep clone to plain objects (Svelte 5 $state uses Proxies which can't be cloned to IndexedDB)
-			const plainOverrides = this.pendingMcpServerOverrides.map((o) => ({
-				serverId: o.serverId,
-				enabled: o.enabled
-			}));
-			conversation.mcpServerOverrides = plainOverrides;
-			await DatabaseService.updateConversation(conversation.id, {
-				mcpServerOverrides: plainOverrides
-			});
-			this.pendingMcpServerOverrides = [];
-		}
+		// No MCP override list is seeded: getAllMcpServerOverrides resolves
+		// servers without a per-conversation override to `mcpServers[i].enabled`,
+		// and only explicit toggles are stored on the conversation.
 
-		// Inherit global thinking default into the new conversation
-		conversation.thinkingEnabled = this.pendingThinkingEnabled;
+		// Inherit global thinking/reasoning defaults into the new conversation
+		const thinkingEnabled = this.getThinkingEnabled();
+		conversation.thinkingEnabled = thinkingEnabled;
+		conversation.reasoningEffort =
+			this.pendingReasoningEffort === ReasoningEffort.OFF ? undefined : this.pendingReasoningEffort;
 		await DatabaseService.updateConversation(conversation.id, {
-			thinkingEnabled: this.pendingThinkingEnabled
+			thinkingEnabled,
+			reasoningEffort:
+				this.pendingReasoningEffort === ReasoningEffort.OFF
+					? undefined
+					: this.pendingReasoningEffort
 		});
 
 		this.conversations = [conversation, ...this.conversations];
@@ -328,8 +282,6 @@ class ConversationsStore {
 				return false;
 			}
 
-			this.pendingMcpServerOverrides = [];
-			this.pendingThinkingEnabled = false;
 			this.activeConversation = conversation;
 
 			if (conversation.currNode) {
@@ -359,8 +311,7 @@ class ConversationsStore {
 		this.activeConversation = null;
 		this.activeMessages = [];
 		// reload defaults so new chats inherit persisted state
-		this.pendingMcpServerOverrides = ConversationsStore.loadMcpDefaults();
-		this.pendingThinkingEnabled = ConversationsStore.loadThinkingDefaults();
+		this.pendingReasoningEffort = ConversationsStore.loadReasoningEffortDefault();
 	}
 
 	/**
@@ -650,29 +601,41 @@ class ConversationsStore {
 	 */
 
 	/**
-	 * Gets MCP server override for a specific server in the active conversation.
-	 * Falls back to pending overrides if no active conversation exists.
-	 * @param serverId - The server ID to check
-	 * @returns The override if set, undefined if using global setting
+	 * Resolve the default enabled value for a server: its own `enabled`
+	 * flag in `mcpServers`, so the global on/off state lives in one place.
 	 */
-	getMcpServerOverride(serverId: string): McpServerOverride | undefined {
-		if (this.activeConversation) {
-			return this.activeConversation.mcpServerOverrides?.find(
-				(o: McpServerOverride) => o.serverId === serverId
-			);
-		}
-		return this.pendingMcpServerOverrides.find((o) => o.serverId === serverId);
+	#getDefaultOverride(serverId: string): McpServerOverride | undefined {
+		const server = mcpStore.getServers().find((s) => s.id === serverId);
+		if (!server) return undefined;
+		return { serverId, enabled: server.enabled };
 	}
 
 	/**
-	 * Get all MCP server overrides for the current conversation.
-	 * Returns pending overrides if no active conversation.
+	 * Gets the effective MCP server override for a specific server.
+	 * A per-conversation override wins when present; a server without one
+	 * resolves to its `mcpServers[i].enabled` default.
+	 * @param serverId - The server ID to check
+	 * @returns The effective override, undefined if no matching server
+	 */
+	getMcpServerOverride(serverId: string): McpServerOverride | undefined {
+		const override = this.activeConversation?.mcpServerOverrides?.find(
+			(o: McpServerOverride) => o.serverId === serverId
+		);
+		if (override) return override;
+		return this.#getDefaultOverride(serverId);
+	}
+
+	/**
+	 * Gets the effective override list for the current conversation:
+	 * one entry per configured server, resolved per server. The stored
+	 * per-conversation list is sparse and only holds explicit toggles.
 	 */
 	getAllMcpServerOverrides(): McpServerOverride[] {
-		if (this.activeConversation?.mcpServerOverrides) {
-			return this.activeConversation.mcpServerOverrides;
-		}
-		return this.pendingMcpServerOverrides;
+		const overrides = this.activeConversation?.mcpServerOverrides;
+		return mcpStore.getServers().map((s) => {
+			const override = overrides?.find((o: McpServerOverride) => o.serverId === s.id);
+			return { serverId: s.id, enabled: override?.enabled ?? s.enabled };
+		});
 	}
 
 	/**
@@ -687,13 +650,16 @@ class ConversationsStore {
 
 	/**
 	 * Sets or removes MCP server override for the active conversation.
-	 * If no conversation exists, stores as pending override.
+	 * If no conversation exists, persists `enabled` onto `mcpServers[i].enabled`
+	 * (the single source of truth for new-chat defaults).
 	 * @param serverId - The server ID to override
-	 * @param enabled - The enabled state, or undefined to remove override
+	 * @param enabled - The enabled state, or undefined to remove per-conversation override
 	 */
 	async setMcpServerOverride(serverId: string, enabled: boolean | undefined): Promise<void> {
 		if (!this.activeConversation) {
-			this.setPendingMcpServerOverride(serverId, enabled);
+			if (enabled !== undefined) {
+				mcpStore.updateServer(serverId, { enabled });
+			}
 			return;
 		}
 
@@ -738,29 +704,6 @@ class ConversationsStore {
 	}
 
 	/**
-	 * Sets or removes a pending MCP server override (for new conversations).
-	 */
-	private setPendingMcpServerOverride(serverId: string, enabled: boolean | undefined): void {
-		if (enabled === undefined) {
-			this.pendingMcpServerOverrides = this.pendingMcpServerOverrides.filter(
-				(o) => o.serverId !== serverId
-			);
-		} else {
-			const existingIndex = this.pendingMcpServerOverrides.findIndex(
-				(o) => o.serverId === serverId
-			);
-			if (existingIndex >= 0) {
-				const newOverrides = [...this.pendingMcpServerOverrides];
-				newOverrides[existingIndex] = { serverId, enabled };
-				this.pendingMcpServerOverrides = newOverrides;
-			} else {
-				this.pendingMcpServerOverrides = [...this.pendingMcpServerOverrides, { serverId, enabled }];
-			}
-		}
-		this.saveMcpDefaults();
-	}
-
-	/**
 	 * Toggles MCP server enabled state for the active conversation.
 	 * @param serverId - The server ID to toggle
 	 */
@@ -778,22 +721,16 @@ class ConversationsStore {
 	}
 
 	/**
-	 * Clears all pending MCP server overrides.
-	 */
-	clearPendingMcpServerOverrides(): void {
-		this.pendingMcpServerOverrides = [];
-		this.saveMcpDefaults();
-	}
-
-	/**
 	 * Gets the effective thinking-enabled state for the active conversation.
 	 * Returns the conversation override if set, otherwise the global default.
 	 */
 	getThinkingEnabled(): boolean {
 		if (this.activeConversation) {
-			return this.activeConversation.thinkingEnabled ?? this.pendingThinkingEnabled;
+			if (this.activeConversation.thinkingEnabled !== undefined) {
+				return this.activeConversation.thinkingEnabled;
+			}
 		}
-		return this.pendingThinkingEnabled;
+		return this.getReasoningEffort() !== ReasoningEffort.OFF;
 	}
 
 	/**
@@ -803,8 +740,17 @@ class ConversationsStore {
 	 */
 	async setThinkingEnabled(enabled: boolean): Promise<void> {
 		if (!this.activeConversation) {
-			this.pendingThinkingEnabled = enabled;
-			this.saveThinkingDefaults();
+			if (enabled) {
+				const effort = this.lastNonOffEffort ?? ReasoningEffort.LOW;
+				this.pendingReasoningEffort = effort;
+				this.saveReasoningEffortDefaults();
+			} else {
+				if (this.pendingReasoningEffort !== ReasoningEffort.OFF) {
+					this.lastNonOffEffort = this.pendingReasoningEffort;
+				}
+				this.pendingReasoningEffort = ReasoningEffort.OFF;
+				this.saveReasoningEffortDefaults();
+			}
 			return;
 		}
 
@@ -828,7 +774,7 @@ class ConversationsStore {
 	 * Gets the effective reasoning effort for the active conversation.
 	 * Returns the conversation override if set, otherwise the global default.
 	 */
-	getReasoningEffort(): ReasoningEffort {
+	getReasoningEffort(): ReasoningEffort | ReasoningEffort.OFF {
 		if (this.activeConversation) {
 			return this.activeConversation.reasoningEffort ?? this.pendingReasoningEffort;
 		}
@@ -934,41 +880,177 @@ class ConversationsStore {
 			.replace(ISO_DATE_TIME_SEPARATOR, ISO_DATE_TIME_SEPARATOR_REPLACEMENT)
 			.replaceAll(ISO_TIME_SEPARATOR, ISO_TIME_SEPARATOR_REPLACEMENT);
 		const trimmedConvId = conversation.id?.slice(0, EXPORT_CONV_ID_TRIM_LENGTH) ?? '';
-		return `${formattedDate}_conv_${trimmedConvId}_${sanitizedName}.json`;
+		return `${formattedDate}_conv_${trimmedConvId}_${sanitizedName}${FileExtensionText.JSONL}`;
+	}
+
+	/**
+	 * Serializes a session (a conversation with its messages) as JSONL.
+	 * The first line is the session header (a `type: 'session'` record carrying the
+	 * conversation properties); each subsequent line is a single message.
+	 * @param data - The exported conversation payload
+	 * @returns The JSONL string (one record per line)
+	 */
+	serializeSessionToJsonl(data: ExportedConversation): string {
+		const { conv, messages } = data;
+
+		const sessionLine = JSON.stringify({ type: 'session', harness: 'llama.app', ...conv });
+		const messageLines = messages.map((message: DatabaseMessage) => {
+			// `toolCalls` is stored as a JSON string; drop it when empty, otherwise parse it.
+			const { toolCalls, ...rest } = message;
+			const normalized = toolCalls ? { ...rest, toolCalls: JSON.parse(toolCalls) } : rest;
+
+			return JSON.stringify({ type: 'message', message: normalized });
+		});
+
+		return [sessionLine, ...messageLines].join('\n');
+	}
+
+	/**
+	 * Parses the JSONL session format produced by {@link serializeSessionToJsonl}.
+	 * A `type: 'session'` line starts a new session; following `type: 'message'`
+	 * lines are appended to it. Supports multiple sessions in a single file.
+	 * @param text - The JSONL file contents
+	 * @returns The parsed conversations with their messages
+	 */
+	parseSessionsJsonl(text: string): ExportedConversation[] {
+		const sessions: ExportedConversation[] = [];
+		let current: ExportedConversation | null = null;
+
+		for (const line of text.split('\n')) {
+			const trimmed = line.trim();
+			if (!trimmed) continue;
+
+			const record = JSON.parse(trimmed);
+
+			if (record.type === 'session') {
+				// Drop the discriminator and harness marker; the rest is the conversation.
+				const conv = { ...record };
+				delete conv.type;
+				delete conv.harness;
+				current = { conv: conv as DatabaseConversation, messages: [] };
+				sessions.push(current);
+			} else if (record.type === 'message') {
+				if (!current) {
+					throw new Error('Invalid JSONL: message record before any session record');
+				}
+
+				const message = record.message as DatabaseMessage;
+				// `toolCalls` is parsed to an array on export; the DB stores it as a string.
+				if (message.toolCalls !== undefined && typeof message.toolCalls !== 'string') {
+					message.toolCalls = JSON.stringify(message.toolCalls);
+				}
+				current.messages.push(message);
+			}
+			// Ignore unknown record types for forward compatibility.
+		}
+
+		return sessions;
+	}
+
+	/**
+	 * Parses an import file into conversations, accepting the current `.jsonl` and
+	 * `.zip` formats as well as the legacy `.json` format.
+	 * @param file - The user-selected file
+	 * @returns The parsed conversations with their messages
+	 */
+	async parseImportFile(file: File): Promise<ExportedConversation[]> {
+		const name = file.name.toLowerCase();
+
+		if (name.endsWith(FileExtensionText.ZIP)) {
+			const entries = unzipSync(new Uint8Array(await file.arrayBuffer()));
+			const sessions: ExportedConversation[] = [];
+			for (const [entryName, bytes] of Object.entries(entries)) {
+				if (!entryName.toLowerCase().endsWith(FileExtensionText.JSONL)) continue;
+				sessions.push(...this.parseSessionsJsonl(strFromU8(bytes)));
+			}
+			return sessions;
+		}
+
+		const text = await file.text();
+
+		if (name.endsWith(FileExtensionText.JSONL)) {
+			return this.parseSessionsJsonl(text);
+		}
+
+		// Legacy JSON format: an array of conversations or a single conversation object.
+		const parsed = JSON.parse(text);
+		if (Array.isArray(parsed)) {
+			return parsed;
+		}
+		if (parsed && typeof parsed === 'object' && 'conv' in parsed && 'messages' in parsed) {
+			return [parsed];
+		}
+		throw new Error(
+			'Invalid file format: expected array of conversations or single conversation object'
+		);
 	}
 
 	/**
 	 * Triggers a browser download of the provided exported conversation data
-	 * @param data - The exported conversation payload (either a single conversation or array of them)
+	 * @param data - The exported conversation payload (a single conversation with its messages)
 	 * @param filename - Filename; if omitted, a deterministic name is generated
 	 */
-	downloadConversationFile(data: ExportedConversations, filename?: string): void {
-		// Choose the first conversation or message
-		const conversation =
-			'conv' in data ? data.conv : Array.isArray(data) ? data[0]?.conv : undefined;
-		const msgs =
-			'messages' in data ? data.messages : Array.isArray(data) ? data[0]?.messages : undefined;
+	downloadConversationFile(data: ExportedConversation, filename?: string): void {
+		const { conv: conversation, messages: msgs } = data;
 
 		if (!conversation) {
 			console.error('Invalid data: missing conversation');
 			return;
 		}
 
-		let downloadFilename: string;
+		const downloadFilename = filename ?? this.generateConversationFilename(conversation, msgs);
 
-		if (filename) {
-			downloadFilename = filename;
-		} else if (Array.isArray(data) && data.length > 1) {
-			downloadFilename = `${new Date().toISOString().split(ISO_DATE_TIME_SEPARATOR)[0]}_conversations.json`;
-		} else {
-			downloadFilename = this.generateConversationFilename(conversation, msgs);
+		const jsonl = this.serializeSessionToJsonl(data);
+		const blob = new Blob([jsonl], { type: MimeTypeText.JSONL });
+		this.triggerDownload(blob, downloadFilename);
+	}
+
+	/**
+	 * Triggers a browser download of multiple conversations as a `.zip`, one
+	 * `.jsonl` file per conversation.
+	 * @param data - The conversations to export
+	 */
+	downloadConversationsArchive(data: ExportedConversation[]): void {
+		if (data.length === 0) {
+			console.error('Invalid data: no conversations to export');
+			return;
 		}
 
-		const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+		const usedNames = new SvelteSet<string>();
+		const files: Record<string, Uint8Array> = {};
+
+		for (const session of data) {
+			const baseName = this.generateConversationFilename(session.conv, session.messages);
+
+			// Disambiguate any duplicate filenames within the archive.
+			let entryName = baseName;
+			let suffix = 1;
+			while (usedNames.has(entryName)) {
+				entryName = baseName.replace(
+					new RegExp(`${FileExtensionText.JSONL}$`),
+					`_${suffix++}${FileExtensionText.JSONL}`
+				);
+			}
+			usedNames.add(entryName);
+
+			files[entryName] = strToU8(this.serializeSessionToJsonl(session));
+		}
+
+		const archiveName = `${new Date().toISOString().split(ISO_DATE_TIME_SEPARATOR)[0]}_conversations${FileExtensionText.ZIP}`;
+
+		const zipped = zipSync(files);
+		const blob = new Blob([zipped], { type: MimeTypeApplication.ZIP });
+		this.triggerDownload(blob, archiveName);
+	}
+
+	/**
+	 * Triggers a browser download of a blob under the given filename.
+	 */
+	private triggerDownload(blob: Blob, filename: string): void {
 		const url = URL.createObjectURL(blob);
 		const a = document.createElement('a');
 		a.href = url;
-		a.download = downloadFilename;
+		a.download = filename;
 		document.body.appendChild(a);
 		a.click();
 		document.body.removeChild(a);
@@ -976,21 +1058,18 @@ class ConversationsStore {
 	}
 
 	/**
-	 * Downloads a conversation as JSON file.
+	 * Downloads a single conversation as a JSONL file, serializing the full message tree.
 	 * @param convId - The conversation ID to download
 	 */
 	async downloadConversation(convId: string): Promise<void> {
-		let conversation: DatabaseConversation | null;
-		let messages: DatabaseMessage[];
+		const conversation =
+			this.activeConversation?.id === convId
+				? this.activeConversation
+				: await DatabaseService.getConversation(convId);
 
-		if (this.activeConversation?.id === convId) {
-			conversation = this.activeConversation;
-			messages = this.activeMessages;
-		} else {
-			conversation = await DatabaseService.getConversation(convId);
-			if (!conversation) return;
-			messages = await DatabaseService.getConversationMessages(convId);
-		}
+		if (!conversation) return;
+
+		const messages = await DatabaseService.getConversationMessages(convId);
 
 		this.downloadConversationFile({ conv: conversation, messages });
 	}

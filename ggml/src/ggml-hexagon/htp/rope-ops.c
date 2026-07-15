@@ -23,6 +23,7 @@
 #define HTP_ROPE_TYPE_NORMAL 0
 #define HTP_ROPE_TYPE_NEOX   2
 #define HTP_ROPE_TYPE_MROPE  8
+#define HTP_ROPE_TYPE_VISION 24
 #define HTP_ROPE_TYPE_IMROPE 40
 
 #define HTP_ROPE_SPAD_NROWS  16
@@ -70,7 +71,9 @@ struct htp_rope_context {
     struct htp_ops_context * octx;
 
     size_t src0_row_size;
+    size_t src0_row_stride;
     size_t dst_row_size;
+    size_t dst_row_stride;
     size_t src0_row_size_aligned;
     size_t dst_row_size_aligned;
     size_t theta_cache_offset;
@@ -210,6 +213,7 @@ static __attribute__((noinline)) void mrope_cache_init(const float    pos_t,
                              const float    pos_e,
                              const int32_t  sections[4],
                              const bool     is_imrope,
+                             const bool     indep_sects,
                              const float    freq_scale,
                              const float *  freq_factors,
                              float *        corr_dims,
@@ -230,6 +234,14 @@ static __attribute__((noinline)) void mrope_cache_init(const float    pos_t,
     for (uint32_t i0 = 0; i0 < ne0; i0 += 2) {
         const float ff     = freq_factors ? freq_factors[i0 / 2] : 1.0f;
         const int   sector = (i0 / 2) % sect_dims;
+
+        if (indep_sects) {
+            // Reset theta when crossing into a new section.
+            if      (sector == 0)           { theta_t = pos_t; }
+            else if (sector == sections[0]) { theta_h = pos_h; }
+            else if (sector == sec_w)       { theta_w = pos_w; }
+            else if (sector == sec_e)       { theta_e = pos_e; }
+        }
 
         float theta;
         if (is_imrope) {
@@ -422,6 +434,17 @@ static void inline rope_neox_f32(struct htp_rope_context * rctx, uint8_t * restr
     }
 }
 
+static void inline rope_vision_f32(struct htp_rope_context * rctx, uint8_t * restrict dst, uint8_t * restrict src,
+                   uint32_t nr, uint32_t ne0, const float * restrict theta_cache) {
+    #pragma unroll(4)
+    for (uint32_t i = 0; i < nr; i++) {
+        float * d = (float *) (dst + i * rctx->dst_row_size_aligned);
+        float * s = (float *) (src + i * rctx->src0_row_size_aligned);
+
+        hvx_rope_neox_f32_aa(d, s, ne0, theta_cache);
+    }
+}
+
 static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
     struct htp_rope_context * rctx = (struct htp_rope_context *) data;
     struct htp_ops_context * octx = rctx->octx;
@@ -447,8 +470,9 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
     uint64_t tt = HAP_perf_get_qtimer_count();
 
     const int32_t mode    = rctx->mode;
-    // MROPE and IMROPE use NEOX-style pairing for the rotation
+    // MROPE, IMROPE and VISION use NEOX-style pairing for the rotation
     const bool    is_neox = (mode & HTP_ROPE_TYPE_NEOX) || (mode & HTP_ROPE_TYPE_MROPE);
+    const bool    is_vision = (mode == HTP_ROPE_TYPE_VISION);
 
     // VTCM setup
     uint8_t * src0_spad_base = octx->src0_spad.data + (ith * octx->src0_spad.size_per_thread);
@@ -496,8 +520,10 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
 
                     const uint8_t * src_addr = (const uint8_t *) src0->data + i3 * nb03 + i2 * nb02 + pi1 * nb01;
                           uint8_t * src_spad = src0_spad_base + pr * rctx->src0_row_size_aligned;
-                    dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(src_spad, src_addr),
-                        rctx->src0_row_size_aligned, rctx->src0_row_size, pnr);
+
+                    // Copy only the row payload while striding the DDR source
+                    dma_queue_push(dma_queue, dma_make_ptr(src_spad, src_addr),
+                        rctx->src0_row_size_aligned, rctx->src0_row_stride, rctx->src0_row_size, pnr);
 
                     // FARF(HIGH, "rope-prefetch %u: pr %u i1 %u i2 %u i3 %u src-spad %p src-addr %p pnr %u", ith, pir, pi1, i2, i3, src_spad, src_addr, pnr);
                 }
@@ -516,7 +542,7 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
                             (float) pos[i2 + ne2],
                             (float) pos[i2 + ne2 * 2],
                             (float) pos[i2 + ne2 * 3],
-                            rctx->sections, is_imrope,
+                            rctx->sections, is_imrope, is_vision,
                             rctx->freq_scale, freq_factors, rctx->corr_dims,
                             ne0, rctx->ext_factor, rctx->attn_factor,
                             theta_cache, rctx->theta_scale);
@@ -542,14 +568,19 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
                     // FARF(HIGH, "rope-compute %u: ir %u i1 %u i2 %u i3 %u src-spad %p cnr %u : usec %u", ith, ir, i1, i2, i3, src_spad, cnr,
                     //         (unsigned) HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - rctx->t_start));
 
-                    if (is_neox) {
+                    if (is_vision) {
+                        rope_vision_f32(rctx, dst_spad, src_spad, cnr, ne0, theta_cache);
+                    } else if (is_neox) {
                         rope_neox_f32(rctx, dst_spad, src_spad, cnr, ne0, theta_cache);
                     } else {
                         rope_basic_f32(rctx, dst_spad, src_spad, cnr, ne0, theta_cache);
                     }
 
                     uint8_t * dst_addr = (uint8_t *) dst->data + i3 * nb3 + i2 * nb2 + i1 * nb1;
-                    dma_queue_push_vtcm_to_ddr(dma_queue, dma_make_ptr(dst_addr, dst_spad), rctx->dst_row_size, rctx->dst_row_size_aligned, cnr);
+
+                    // Write only the row payload while striding the DDR dst
+                    dma_queue_push(dma_queue, dma_make_ptr(dst_addr, dst_spad),
+                        rctx->dst_row_stride, rctx->dst_row_size_aligned, rctx->dst_row_size, cnr);
 
                     // Prefetch more rows (if any)
                     if ((cr + HTP_ROPE_SPAD_NROWS) < nrows) {
@@ -558,8 +589,8 @@ static void rope_job_f32(unsigned int nth, unsigned int ith, void * data) {
                         uint32_t pir = ir + HTP_ROPE_SPAD_NROWS;
 
                         const uint8_t * src_addr = (const uint8_t *) src0->data + i3 * nb03 + i2 * nb02 + pi1 * nb01;
-                        dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(src_spad, src_addr),
-                            rctx->src0_row_size_aligned, rctx->src0_row_size, pnr);
+                        dma_queue_push(dma_queue, dma_make_ptr(src_spad, src_addr),
+                            rctx->src0_row_size_aligned, rctx->src0_row_stride, rctx->src0_row_size, pnr);
 
                         // FARF(HIGH, "rope-prefetch %u: pr %u i1 %u i2 %u i3 %u src-spad %p src-addr %p pnr %u", ith, pir, pi1, i2, i3, src_spad, src_addr, pnr);
                     }
@@ -598,12 +629,14 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
     const uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
     const uint32_t n_threads = MIN(octx->n_threads, src0_nrows);
 
-    const size_t src0_row_size = src0->nb[1];
-    const size_t dst_row_size  = dst->nb[1];
+    const size_t src0_row_size   = src0->ne[0] * sizeof(float);
+    const size_t src0_row_stride = src0->nb[1];
+    const size_t dst_row_size    = dst->ne[0] * sizeof(float);
+    const size_t dst_row_stride  = dst->nb[1];
 
     // Aligned row sizes for VTCM
     const size_t src0_row_size_aligned    = hex_round_up(src0_row_size, VLEN);
-    const size_t dst_row_size_aligned     = hex_round_up(dst_row_size, VLEN);
+    const size_t dst_row_size_aligned     = hex_round_up(dst_row_stride, VLEN);
     const size_t theta_cache_size_aligned = hex_round_up(src0->ne[0] * sizeof(float), 256);
 
     // Calculate spad sizes per thread
@@ -652,8 +685,10 @@ static int execute_op_rope_f32(struct htp_ops_context * octx) {
 
     rope_corr_dims(rctx.n_dims, rctx.n_ctx_orig, rctx.freq_base, rctx.beta_fast, rctx.beta_slow, rctx.corr_dims);
 
-    rctx.src0_row_size = src0_row_size;
-    rctx.dst_row_size  = dst_row_size;
+    rctx.src0_row_size   = src0_row_size;
+    rctx.src0_row_stride = src0_row_stride;
+    rctx.dst_row_size    = dst_row_size;
+    rctx.dst_row_stride  = dst_row_stride;
     rctx.src0_row_size_aligned = src0_row_size_aligned;
     rctx.dst_row_size_aligned  = dst_row_size_aligned;
     rctx.theta_cache_offset    = theta_cache_size_aligned;

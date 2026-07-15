@@ -300,7 +300,8 @@ div.markdown-user-content :global(.table-wrapper) {
 }
 
 .markdown-content :global(.copy-code-btn),
-.markdown-content :global(.preview-code-btn) {
+.markdown-content :global(.preview-code-btn),
+.markdown-content :global(.toggle-source-btn) {
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -312,13 +313,20 @@ div.markdown-user-content :global(.table-wrapper) {
 }
 
 .markdown-content :global(.copy-code-btn:hover),
-.markdown-content :global(.preview-code-btn:hover) {
+.markdown-content :global(.preview-code-btn:hover),
+.markdown-content :global(.toggle-source-btn:hover) {
 	transform: scale(1.05);
 }
 
 .markdown-content :global(.copy-code-btn:active),
-.markdown-content :global(.preview-code-btn:active) {
+.markdown-content :global(.preview-code-btn:active),
+.markdown-content :global(.toggle-source-btn:active) {
 	transform: scale(0.95);
+}
+
+/* Pressed state marks the source view as active */
+.markdown-content :global(.toggle-source-btn[aria-pressed='true']) {
+	color: var(--primary);
 }
 
 .markdown-content :global(.code-block-wrapper pre) {
@@ -560,8 +568,9 @@ div.markdown-user-content :global(.table-wrapper) {
 	border-color: var(--primary);
 }
 
-/* Mermaid diagrams */
-.markdown-content :global(pre.mermaid) {
+/* Mermaid and svg blocks share the same block styling */
+.markdown-content :global(pre.mermaid),
+.markdown-content :global(.svg-block) {
 	background: transparent;
 	border: none;
 	padding: 0;
@@ -572,13 +581,25 @@ div.markdown-user-content :global(.table-wrapper) {
 	position: relative;
 }
 
+/* The svg block fills its flex container so the shadow host has a definite width to render into */
+.markdown-content :global(.svg-block) {
+	width: 100%;
+}
+
 /* Hide mermaid code text until rendered - prevents flash */
 .markdown-content :global(pre.mermaid:not([data-mermaid-rendered])),
 .markdown-content :global(pre.mermaid[data-mermaid-rendered]:not(:has(svg))) {
 	display: none;
 }
 
-.markdown-content :global(pre.mermaid:hover) {
+/* Hide svg source until rendered - prevents flash. A rendered-but-unsanitized
+   block (oversized source) keeps its raw text visible as a safe fallback. */
+.markdown-content :global(pre.svg-block:not([data-svg-rendered])) {
+	display: none;
+}
+
+.markdown-content :global(pre.mermaid:hover),
+.markdown-content :global(.svg-block:hover) {
 	opacity: 0.85;
 }
 
@@ -590,8 +611,9 @@ div.markdown-user-content :global(.table-wrapper) {
 	padding: 3rem 1rem;
 }
 
-/* Mermaid block wrapper - matches code block styling */
-.markdown-content :global(.mermaid-block-wrapper) {
+/* Diagram block wrapper - matches code block styling */
+.markdown-content :global(.mermaid-block-wrapper),
+.markdown-content :global(.svg-block-wrapper) {
 	margin: 1.5rem 0;
 	border-radius: 0.75rem;
 	overflow: hidden;
@@ -603,32 +625,39 @@ div.markdown-user-content :global(.table-wrapper) {
 	max-height: var(--max-message-height);
 }
 
-.markdown-content:global(.dark) :global(.mermaid-block-wrapper) {
+.markdown-content:global(.dark) :global(.mermaid-block-wrapper),
+.markdown-content:global(.dark) :global(.svg-block-wrapper) {
 	border-color: color-mix(in oklch, var(--border) 20%, transparent);
 }
 
-.markdown-content :global(.mermaid-scroll-container) {
+.markdown-content :global(.mermaid-scroll-container),
+.markdown-content :global(.svg-scroll-container) {
 	min-height: 350px;
 	max-height: var(--max-message-height);
 	overflow-y: auto;
 	overflow-x: auto;
 	display: flex;
-	align-items: center;
-	justify-content: center;
+	align-items: safe center;
+	justify-content: safe center;
 	padding: 3rem 1rem 1rem;
 }
 
-.full-height-code-blocks :global(.mermaid-block-wrapper) {
+.full-height-code-blocks :global(.mermaid-block-wrapper),
+.full-height-code-blocks :global(.svg-block-wrapper) {
 	max-height: none;
 }
 
-.full-height-code-blocks :global(.mermaid-scroll-container) {
+.full-height-code-blocks :global(.mermaid-scroll-container),
+.full-height-code-blocks :global(.svg-scroll-container) {
 	max-height: none;
 	overflow-y: visible;
 }
 
-/* Mermaid block uses same header styling as code blocks */
-.markdown-content :global(.mermaid-block-wrapper .code-block-header) {
+/* Diagram block uses same header styling as code blocks. The header floats over
+   scrollable diagram content and stays transparent, so the overflow shows up to
+   the box edge. It keeps a z-index so it stays the click target above content. */
+.markdown-content :global(.mermaid-block-wrapper .code-block-header),
+.markdown-content :global(.svg-block-wrapper .code-block-header) {
 	display: flex;
 	justify-content: space-between;
 	align-items: center;
@@ -638,16 +667,19 @@ div.markdown-user-content :global(.table-wrapper) {
 	top: 0;
 	left: 0;
 	right: 0;
+	z-index: 2;
 }
 
-.markdown-content :global(.mermaid-block-wrapper .code-block-actions) {
+.markdown-content :global(.mermaid-block-wrapper .code-block-actions),
+.markdown-content :global(.svg-block-wrapper .code-block-actions) {
 	display: flex;
 	align-items: center;
 	gap: 0.5rem;
 }
 
-/* Mermaid pre element - remove default margins */
-.markdown-content :global(.mermaid-block-wrapper pre.mermaid) {
+/* Diagram pre element - remove default margins */
+.markdown-content :global(.mermaid-block-wrapper pre.mermaid),
+.markdown-content :global(.svg-block-wrapper pre.svg-block) {
 	background: transparent;
 	border: none;
 	padding: 0;
@@ -655,12 +687,36 @@ div.markdown-user-content :global(.table-wrapper) {
 	text-align: center;
 }
 
-/* Mermaid SVG should be bigger */
 .markdown-content :global(.mermaid-block-wrapper pre.mermaid svg) {
 	width: unset !important;
 	height: auto;
 	display: block;
 	padding: 3rem 1rem;
+}
+
+/* Source view stays hidden while the block renders, css swaps the two views
+   from the wrapper mode so the click handler only flips one attribute. The view
+   reuses the code block scroll container, so it matches the app code blocks. */
+.markdown-content :global(.diagram-source) {
+	display: none;
+	text-align: left;
+}
+
+.markdown-content :global(.diagram-source pre) {
+	background: transparent;
+	margin: 0;
+	border-radius: 0;
+	border: none;
+	font-size: 0.875rem;
+}
+
+.markdown-content :global([data-view-mode='source'] .mermaid-scroll-container),
+.markdown-content :global([data-view-mode='source'] .svg-scroll-container) {
+	display: none;
+}
+
+.markdown-content :global([data-view-mode='source'] .diagram-source) {
+	display: block;
 }
 
 /* Streaming mermaid block - empty preview box */

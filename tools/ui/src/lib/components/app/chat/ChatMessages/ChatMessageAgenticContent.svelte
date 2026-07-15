@@ -41,21 +41,21 @@
 		toolMessages?: DatabaseMessage[];
 		isStreaming?: boolean;
 		isLastAssistantMessage?: boolean;
-		highlightTurns?: boolean;
 	}
 
 	let {
 		message,
 		toolMessages = [],
 		isStreaming = false,
-		isLastAssistantMessage = false,
-		highlightTurns = false
+		isLastAssistantMessage = false
 	}: Props = $props();
 
 	let expandedStates: Record<number, boolean> = $state({});
 
 	const showToolCallInProgress = $derived(config().showToolCallInProgress as boolean);
 	const showThoughtInProgress = $derived(config().showThoughtInProgress as boolean);
+	const renderThinkingAsMarkdown = $derived(config().renderThinkingAsMarkdown as boolean);
+	const showMessageStats = $derived(config().showMessageStats as boolean);
 
 	const hasReasoningError = $derived(
 		isLastAssistantMessage ? !!agenticLastError(message.convId) : false
@@ -316,9 +316,13 @@
 			onToggle={() => toggleExpanded(index, section)}
 		>
 			<div class="pt-3">
-				<div class="text-xs leading-relaxed break-words whitespace-pre-wrap">
-					{section.content}
-				</div>
+				{#if renderThinkingAsMarkdown}
+					<MarkdownContent content={section.content} attachments={message?.extra} />
+				{:else}
+					<div class="text-xs leading-relaxed break-words whitespace-pre-wrap">
+						{section.content}
+					</div>
+				{/if}
 			</div>
 		</CollapsibleContentBlock>
 	{:else if section.type === AgenticSectionType.REASONING_PENDING}
@@ -336,25 +340,30 @@
 			onToggle={() => toggleExpanded(index, section)}
 		>
 			<div class="pt-3">
-				<div class="text-xs leading-relaxed break-words whitespace-pre-wrap">
-					{section.content}
-				</div>
+				{#if renderThinkingAsMarkdown}
+					<MarkdownContent content={section.content} attachments={message?.extra} />
+				{:else}
+					<div class="text-xs leading-relaxed break-words whitespace-pre-wrap">
+						{section.content}
+					</div>
+				{/if}
 			</div>
 		</CollapsibleContentBlock>
 	{/if}
 {/snippet}
 
 <div class="agentic-content">
-	{#if highlightTurns && turnGroups.length > 1}
+	{#if turnGroups.length > 1}
 		{#each turnGroups as turn, turnIndex (turnIndex)}
 			{@const turnStats = message?.timings?.agentic?.perTurn?.[turnIndex]}
-			<div class="agentic-turn my-2 hover:bg-muted/80 dark:hover:bg-muted/30">
-				<span class="agentic-turn-label">Turn {turnIndex + 1}</span>
+
+			<div class="agentic-turn group/turn grid gap-3 mb-4">
 				{#each turn.sections as section, sIdx (turn.flatIndices[sIdx])}
 					{@render renderSection(section, turn.flatIndices[sIdx])}
 				{/each}
-				{#if turnStats}
-					<div class="turn-stats">
+
+				{#if turnStats && showMessageStats}
+					<div class="turn-stats transition-opacity duration-150">
 						<ChatMessageStatistics
 							promptTokens={turnStats.llm.prompt_n}
 							promptMs={turnStats.llm.prompt_ms}
@@ -393,39 +402,21 @@
 	.agentic-content {
 		display: flex;
 		flex-direction: column;
-		gap: 0.5rem;
 		width: 100%;
 		max-width: 48rem;
+		gap: 1rem;
+	}
+
+	.agentic-content > :global(*),
+	.agentic-turn > :global(*) {
+		min-width: 0;
 	}
 
 	.agentic-text {
 		width: 100%;
 	}
 
-	.agentic-turn {
-		position: relative;
-		border: 1.5px dashed var(--muted-foreground);
-		border-radius: 0.75rem;
-		padding: 1rem;
-		transition: background 0.1s;
-	}
-
-	.agentic-turn-label {
-		position: absolute;
-		top: -1rem;
-		left: 0.75rem;
-		padding: 0 0.375rem;
-		background: var(--background);
-		font-size: 0.7rem;
-		font-weight: 500;
-		color: var(--muted-foreground);
-		text-transform: uppercase;
-		letter-spacing: 0.05em;
-	}
-
 	.turn-stats {
-		margin-top: 0.75rem;
-		padding-top: 0.5rem;
 		border-top: 1px solid hsl(var(--muted) / 0.5);
 	}
 </style>

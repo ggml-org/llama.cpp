@@ -905,11 +905,12 @@ struct ggml_webgpu_mul_mat_vec_pipeline_key {
     ggml_type src0_type;
     ggml_type src1_type;
     int       vectorized;
+    uint32_t  num_cols;
     bool      use_mmvq;
 
     bool operator==(const ggml_webgpu_mul_mat_vec_pipeline_key & other) const {
         return src0_type == other.src0_type && src1_type == other.src1_type && vectorized == other.vectorized &&
-               use_mmvq == other.use_mmvq;
+               num_cols == other.num_cols && use_mmvq == other.use_mmvq;
     }
 };
 
@@ -919,6 +920,7 @@ struct ggml_webgpu_mul_mat_vec_pipeline_key_hash {
         ggml_webgpu_hash_combine(seed, key.src0_type);
         ggml_webgpu_hash_combine(seed, key.src1_type);
         ggml_webgpu_hash_combine(seed, key.vectorized);
+        ggml_webgpu_hash_combine(seed, key.num_cols);
         ggml_webgpu_hash_combine(seed, key.use_mmvq);
         return seed;
     }
@@ -993,11 +995,12 @@ struct ggml_webgpu_mul_mat_id_pipeline_key {
     ggml_type src0_type;
     ggml_type src1_type;
     uint32_t  n_experts;
+    uint32_t  num_cols;
     int       vectorized;
 
     bool operator==(const ggml_webgpu_mul_mat_id_pipeline_key & other) const {
         return src0_type == other.src0_type && src1_type == other.src1_type && n_experts == other.n_experts &&
-               vectorized == other.vectorized;
+               num_cols == other.num_cols && vectorized == other.vectorized;
     }
 };
 
@@ -1007,6 +1010,7 @@ struct ggml_webgpu_mul_mat_id_pipeline_key_hash {
         ggml_webgpu_hash_combine(seed, key.src0_type);
         ggml_webgpu_hash_combine(seed, key.src1_type);
         ggml_webgpu_hash_combine(seed, key.n_experts);
+        ggml_webgpu_hash_combine(seed, key.num_cols);
         ggml_webgpu_hash_combine(seed, key.vectorized);
         return seed;
     }
@@ -1107,7 +1111,7 @@ inline bool ggml_webgpu_can_use_mmvq(const ggml_tensor * src0,
                                      const ggml_tensor * src1,
                                      bool                supports_dot_product,
                                      const std::string & vendor) {
-    if (src1->ne[1] == 1) {
+    if (src1->ne[1] <= 4) {
         bool supports_dp4a = vendor == "amd" || vendor == "intel" || vendor == "nvidia";
         if (supports_dp4a && supports_dot_product) {
             switch (src1->type) {
@@ -1559,6 +1563,7 @@ class ggml_webgpu_shader_lib {
                         case GGML_TYPE_IQ1_S:
                         case GGML_TYPE_IQ4_NL:
                         case GGML_TYPE_MXFP4:
+                        case GGML_TYPE_NVFP4:
                             {
                                 // Quantized types using u32 buffers for portability.
                                 defines.push_back("SRC_TYPE=u32");
@@ -1589,6 +1594,8 @@ class ggml_webgpu_shader_lib {
                     } else if ((key.src_type >= GGML_TYPE_Q4_0 && key.src_type <= GGML_TYPE_Q8_1) ||
                                key.src_type == GGML_TYPE_IQ4_NL || key.src_type == GGML_TYPE_MXFP4) {
                         defines.push_back("BLOCK_SIZE=32u");
+                    } else if (key.src_type == GGML_TYPE_NVFP4) {
+                        defines.push_back("BLOCK_SIZE=64u");
                     } else if (key.src_type >= GGML_TYPE_Q2_K) {
                         defines.push_back("BLOCK_SIZE=256u");
                     } else {
@@ -1889,6 +1896,7 @@ class ggml_webgpu_shader_lib {
                           (context.src0->type == GGML_TYPE_F32 || context.src0->type == GGML_TYPE_F16)) ?
                              1 :
                              0;
+        key.num_cols   = context.dst->ne[1];
         key.use_mmvq =
             ggml_webgpu_can_use_mmvq(context.src0, context.src1, context.supports_dot_product, context.vendor);
 
@@ -1955,6 +1963,7 @@ class ggml_webgpu_shader_lib {
                             defines.push_back(type_upper + "_TABLES");
                             break;
                         case GGML_TYPE_MXFP4:
+                        case GGML_TYPE_NVFP4:
                             defines.push_back(type_upper + "_LUT");
                             break;
                         default:
@@ -2004,6 +2013,7 @@ class ggml_webgpu_shader_lib {
         if (key.vectorized) {
             variant += "_vectorized";
         }
+        defines.push_back(std::string("NUM_COLS=") + std::to_string(key.num_cols));
 
         auto processed            = preprocessor.preprocess(shader_src, defines);
         auto decisions            = std::make_shared<ggml_webgpu_mul_mat_vec_shader_decisions>();
@@ -2097,6 +2107,7 @@ class ggml_webgpu_shader_lib {
                             defines.push_back(type_upper + "_TABLES");
                             break;
                         case GGML_TYPE_MXFP4:
+                        case GGML_TYPE_NVFP4:
                             defines.push_back(type_upper + "_LUT");
                             break;
                         default:
@@ -2268,6 +2279,7 @@ class ggml_webgpu_shader_lib {
                             defines.push_back(type_upper + "_TABLES");
                             break;
                         case GGML_TYPE_MXFP4:
+                        case GGML_TYPE_NVFP4:
                             defines.push_back(type_upper + "_LUT");
                             break;
                         default:
@@ -2388,6 +2400,7 @@ class ggml_webgpu_shader_lib {
                             defines.push_back(type_upper + "_TABLES");
                             break;
                         case GGML_TYPE_MXFP4:
+                        case GGML_TYPE_NVFP4:
                             defines.push_back(type_upper + "_LUT");
                             break;
                         default:
@@ -2421,6 +2434,7 @@ class ggml_webgpu_shader_lib {
         if (key.vectorized) {
             variant += "_vectorized";
         }
+        defines.push_back(std::string("NUM_COLS=1"));
 
         defines.push_back(std::string("N_EXPERTS=") + std::to_string(key.n_experts));
 
@@ -2807,23 +2821,16 @@ class ggml_webgpu_shader_lib {
             variant.resize(variant.size() - (sizeof("_mask") - 1));
             variant += "_mask_blk";
         }
-        uint32_t vec_ne = 1u;
-        if (key.common.k_type == GGML_TYPE_F16 && key.common.v_type == GGML_TYPE_F16 &&
-            key.common.head_dim_qk == key.common.head_dim_v) {
-            switch (key.common.head_dim_qk) {
-                case 64:
-                case 192:
-                case 576:
-                    vec_ne = 2u;
-                    break;
-                case 96:
-                    vec_ne = 4u;
-                    break;
-                default:
-                    break;
-            }
+
+        uint32_t d_split = context.min_subgroup_size;
+        if (key.common.k_type == GGML_TYPE_F16 && key.common.v_type == GGML_TYPE_F16) {
+            const uint32_t D     = key.common.head_dim_qk | key.common.head_dim_v;
+            const uint32_t D_lsb = D & (~(D - 1u));
+            d_split              = std::min(std::min(context.min_subgroup_size, 4u), std::max(D_lsb / 4u, 1u));
         }
-        defines.push_back(std::string("VEC_NE=") + std::to_string(vec_ne) + "u");
+
+        defines.push_back(std::string("D_SPLIT=") + std::to_string(d_split));
+        variant += "_dsplit" + std::to_string(d_split);
 
         auto            pipeline_decisions = std::make_shared<ggml_webgpu_flash_attn_vec_decisions>(decisions);
         webgpu_pipeline pipeline =

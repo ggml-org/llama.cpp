@@ -40,6 +40,12 @@ jobs:
           name: ui-build
           path: tools/ui/dist/
 
+      - name: Create distribution archive
+        run: |
+          tar -czf dist.tar.gz -C tools/ui/dist .
+          sha256sum dist.tar.gz > dist.tar.gz.sha256
+          mv dist.tar.gz dist.tar.gz.sha256 tools/ui/dist/
+
       - name: Install Hugging Face Hub CLI
         run: pip install -U huggingface_hub
 
@@ -67,4 +73,3 @@ jobs:
           hf buckets rm ggml-org/${{ env.HF_BUCKET_NAME }}/index.html --yes 2>/dev/null || true
           hf buckets rm ggml-org/${{ env.HF_BUCKET_NAME }}/bundle.js --yes 2>/dev/null || true
           hf buckets rm ggml-org/${{ env.HF_BUCKET_NAME }}/bundle.css --yes 2>/dev/null || true
-          hf buckets rm ggml-org/${{ env.HF_BUCKET_NAME }}/loading.html --yes 2>/dev/null || true
