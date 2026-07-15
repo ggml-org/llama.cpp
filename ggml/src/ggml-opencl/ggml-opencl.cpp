@@ -265,7 +265,8 @@ static ADRENO_GPU_GEN get_adreno_gpu_gen(const char *device_name) {
     }
 
     if (strstr(device_name, "830") ||
-        strstr(device_name, "840")) {
+        strstr(device_name, "840") ||
+        strstr(device_name, "850")) {
         return ADRENO_GPU_GEN::A8X;
     }
 
@@ -280,14 +281,6 @@ static ADRENO_GPU_GEN get_adreno_gpu_gen(const char *device_name) {
     return ADRENO_GPU_GEN::ADRENO_UNKNOWN;
 }
 
-// The art.api37 (E17) shader compiler miscompiles or crashes on several kernels. These are
-// CORRECTNESS workarounds (a compiler SIGSEGV and silently garbage weights), so they are
-// keyed on the compiler class and stay ON until a fixed compiler is verified -- they do not
-// lift themselves on a version bump. GGML_OPENCL_ART_QUIRKS=0 turns them all off in one run,
-// which is how a new compiler gets re-verified without a rebuild.
-struct ggml_backend_opencl_context;
-static bool adreno_art_compiler_quirks(const ggml_backend_opencl_context *backend_ctx);
-
 static ggml_cl_compiler_version get_adreno_cl_compiler_version(const char *driver_version) {
     std::string driver_ver_str(driver_version);
     ADRENO_CL_COMPILER_TYPE type = ADRENO_CL_COMPILER_TYPE::E031;
@@ -298,8 +291,6 @@ static ggml_cl_compiler_version get_adreno_cl_compiler_version(const char *drive
     size_t compiler_patch_offset = 11;
 
     if (compiler_ver_pos == std::string::npos) {
-        // "Compiler E17.51.05.00" -- the art.api37 driver series. Its prefix is three
-        // characters, so every field sits one earlier than in the E031 layout.
         compiler_ver_pos = driver_ver_str.find("E17");
         if (compiler_ver_pos != std::string::npos) {
             type = ADRENO_CL_COMPILER_TYPE::E17;
@@ -318,6 +309,8 @@ static ggml_cl_compiler_version get_adreno_cl_compiler_version(const char *drive
         type = ADRENO_CL_COMPILER_TYPE::DX;
         compiler_ver_len = 11;
         compiler_major_offset = 3;
+        compiler_minor_offset = 6;
+        compiler_patch_offset = 9;
     }
 
     std::string compiler_ver_str = driver_ver_str.substr(compiler_ver_pos, compiler_ver_len);
@@ -6969,12 +6962,12 @@ inline bool use_adreno_kernels(const ggml_backend_opencl_context *backend_ctx, c
     return threashold_ok;
 }
 
-static bool adreno_art_compiler_quirks(const ggml_backend_opencl_context *backend_ctx) {
+static bool adreno_e17_compiler_quirks(const ggml_backend_opencl_context *backend_ctx) {
     if (!backend_ctx || backend_ctx->gpu_family != GPU_FAMILY::ADRENO ||
         backend_ctx->adreno_cl_compiler_version.type != ADRENO_CL_COMPILER_TYPE::E17) {
         return false;
     }
-    const char * env = getenv("GGML_OPENCL_ART_QUIRKS");
+    const char * env = getenv("GGML_OPENCL_ADRENO_E17_QUIRKS");
     return !(env && env[0] == '0');
 }
 
@@ -6990,7 +6983,7 @@ inline bool use_adreno_moe_kernels(const ggml_backend_opencl_context *backend_ct
         return false;
     }
 
-    if (adreno_art_compiler_quirks(backend_ctx)) {
+    if (adreno_e17_compiler_quirks(backend_ctx)) {
         return false;
     }
 
@@ -7326,10 +7319,8 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
         case GGML_OP_MEAN:
             return op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_FLASH_ATTN_EXT: {
-            // The art.api37 (E17) shader compiler segfaults while building the flash_attn
-            // programs, which kills the process. Decline FA there; attention falls back to
-            // the unfused path, which is correct.
-            if (adreno_art_compiler_quirks(backend_ctx)) {
+            // The E17 compilers segfault while building FA kernels, skip E17 for now
+            if (adreno_e17_compiler_quirks(backend_ctx)) {
                 return false;
             }
             const ggml_tensor * q = op->src[0];
