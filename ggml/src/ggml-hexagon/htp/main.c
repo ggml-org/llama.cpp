@@ -1147,7 +1147,7 @@ static void process_ops(struct htp_context * ctx) {
         }
 
         int      op_status = HTP_STATUS_OK;
-        uint32_t op_wakeup = n_ops / 2; // half-way throgh the batch
+        uint32_t op_wakeup = n_ops < 16 ? ~0UL : n_ops / 2; // half-way throgh the batch
 
         work_queue_wakeup(ctx->work_queue);
         if (ctx->hmx_queue) {
