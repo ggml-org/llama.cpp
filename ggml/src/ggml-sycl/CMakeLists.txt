@@ -158,6 +158,10 @@ else()
 endif()
 target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_DNNL=${GGML_SYCL_DNNL})
 
+if (GGML_SYCL_ESIMD)
+    add_compile_definitions(GGML_SYCL_ESIMD)
+endif()
+
 if (GGML_SYCL_F16)
     add_compile_definitions(GGML_SYCL_F16)
 endif()
