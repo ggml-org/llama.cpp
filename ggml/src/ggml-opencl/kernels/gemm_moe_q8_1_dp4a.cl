@@ -180,10 +180,13 @@ kernel void kernel_gemm_moe_q8_1_dp4a(
 
         LOAD_QW(step, sub)
 
-        const uint stage_lim = (uint)n_real * 8;
-        for (uint idx = lid; idx < stage_lim; idx += 64) {
-            const uint t = idx >> 3, u = idx & 7;
-            sh_qa[t][u] = src1_qa[(col + t) * ne00_u + (step >> 2) + u];
+        // Stage each token's 8 activation uints as two 128-bit uint4 loads/stores.
+        const uint vlim = (uint)n_real * 2;
+        for (uint idx = lid; idx < vlim; idx += 64) {
+            const uint t = idx >> 1;
+            const uint h = (idx & 1) << 2;   // 0 or 4
+            uint4 v = vload4(0, &src1_qa[(col + t) * ne00_u + (step >> 2) + h]);
+            vstore4(v, 0, &sh_qa[t][h]);
         }
         if (lid < (uint)n_real) {
             sh_d[lid] = src1_da[(col + lid) * ne00_b + sub];
