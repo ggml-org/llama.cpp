@@ -126,6 +126,60 @@ static void test_xtc(const std::vector<float> & probs, const std::vector<float> 
     tester.check();
 }
 
+static size_t apply_xtc_count(llama_sampler * sampler) {
+    std::vector<llama_token_data> candidates = {
+        { 0, logf(0.4f), 0.0f },
+        { 1, logf(0.3f), 0.0f },
+        { 2, logf(0.2f), 0.0f },
+        { 3, logf(0.1f), 0.0f },
+    };
+    llama_token_data_array cur_p = { candidates.data(), candidates.size(), -1, false };
+
+    llama_sampler_apply(sampler, &cur_p);
+    return cur_p.size;
+}
+
+static void test_xtc_set() {
+    constexpr uint32_t seed = 12345;
+
+    auto * sampler = llama_sampler_init_xtc(1.0f, 0.0f, 2, seed);
+    auto * control = llama_sampler_init_xtc(0.5f, 0.0f, 1, seed);
+
+    GGML_ASSERT(apply_xtc_count(sampler) == 4);
+    (void) apply_xtc_count(control);
+
+    llama_sampler_xtc_set(sampler, 1.0f, 0.0f, 1);
+    GGML_ASSERT(apply_xtc_count(sampler) == 1);
+    (void) apply_xtc_count(control);
+
+    llama_sampler_xtc_set(sampler, 0.5f, 0.0f, 1);
+    auto * clone = llama_sampler_clone(sampler);
+
+    for (int i = 0; i < 64; ++i) {
+        const size_t count = apply_xtc_count(sampler);
+        GGML_ASSERT(count == apply_xtc_count(control));
+        GGML_ASSERT(count == apply_xtc_count(clone));
+    }
+
+    llama_sampler_xtc_set(sampler, 0.0f, 0.0f, 1);
+    auto * disabled_clone = llama_sampler_clone(sampler);
+    for (int i = 0; i < 4; ++i) {
+        GGML_ASSERT(apply_xtc_count(sampler) == 4);
+        GGML_ASSERT(apply_xtc_count(disabled_clone) == 4);
+    }
+
+    llama_sampler_xtc_set(sampler,        0.5f, 0.0f, 1);
+    llama_sampler_xtc_set(disabled_clone, 0.5f, 0.0f, 1);
+    for (int i = 0; i < 16; ++i) {
+        GGML_ASSERT(apply_xtc_count(sampler) == apply_xtc_count(disabled_clone));
+    }
+
+    llama_sampler_free(disabled_clone);
+    llama_sampler_free(clone);
+    llama_sampler_free(control);
+    llama_sampler_free(sampler);
+}
+
 static void test_typical(const std::vector<float> & probs, const std::vector<float> & probs_expected, float p) {
     sampler_tester tester(probs, probs_expected);
 
@@ -156,6 +210,39 @@ static void test_penalties(
     DUMP(&tester.cur_p);
 
     tester.check();
+}
+
+static void test_penalties_clone() {
+    auto * sampler = llama_sampler_init_penalties(64, 1.0f, 0.5f, 0.5f);
+
+    llama_sampler_accept(sampler, 0);
+    llama_sampler_accept(sampler, 1);
+    llama_sampler_accept(sampler, 0);
+
+    auto * clone = llama_sampler_clone(sampler);
+
+    std::vector<llama_token_data> source_data = {
+        { 0, 1.0f, 0.0f },
+        { 1, 1.0f, 0.0f },
+        { 2, 1.0f, 0.0f },
+    };
+    auto clone_data = source_data;
+
+    llama_token_data_array source_p = { source_data.data(), source_data.size(), -1, false };
+    llama_token_data_array clone_p  = { clone_data.data(),  clone_data.size(),  -1, false };
+
+    llama_sampler_apply(sampler, &source_p);
+    llama_sampler_apply(clone, &clone_p);
+
+    GGML_ASSERT(source_data[0].logit < source_data[1].logit);
+    GGML_ASSERT(source_data[1].logit < source_data[2].logit);
+    for (size_t i = 0; i < source_data.size(); ++i) {
+        GGML_ASSERT(source_data[i].id == clone_data[i].id);
+        GGML_ASSERT(source_data[i].logit == clone_data[i].logit);
+    }
+
+    llama_sampler_free(clone);
+    llama_sampler_free(sampler);
 }
 
 static void test_dry(
@@ -341,6 +428,7 @@ int main(void) {
 
     printf("XTC should not:\n");
     test_xtc({0.4f, 0.3f, 0.2f, 0.1f},   {0.4f, 0.3f, 0.2f, 0.1f},              0.99f, 0.39f);
+    test_xtc_set();
 
     test_typical({0.97f, 0.01f, 0.01f, 0.01f}, {0.97f},            0.5f);
     test_typical({0.4f, 0.2f, 0.2f, 0.2f},     {0.2f, 0.2f, 0.2f}, 0.5f);
@@ -352,6 +440,7 @@ int main(void) {
     test_penalties({0.2f, 0.2f, 0.2f, 0.2f, 0.2f}, {0},             {0.000011f, 0.249997f, 0.249997f, 0.249997f, 0.249997f}, 1.0f, 5.0f, 5.0f);
     test_penalties({0.2f, 0.2f, 0.2f, 0.2f, 0.2f}, {0, 1, 2},       {0.000023f, 0.000023f, 0.000023f, 0.499966f, 0.499966f}, 1.0f, 5.0f, 5.0f);
     test_penalties({0.2f, 0.2f, 0.2f, 0.2f, 0.2f}, {0, 1, 2, 0, 0}, {0.000000f, 0.000023f, 0.000023f, 0.499977f, 0.499977f}, 1.0f, 5.0f, 5.0f);
+    test_penalties_clone();
 
 
     test_dry({0.25f, 0.25f, 0.25f, 0.25f}, {0, 1}, {0.25f, 0.25f, 0.25f, 0.25f}, 1.0f, 1.1f, 2, 4, {});

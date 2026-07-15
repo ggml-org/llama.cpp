@@ -194,7 +194,7 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
     add((new field_num("reasoning_temp", params.sampling.reasoning_temp))
         ->set_limits(0.0f, std::numeric_limits<float>::infinity())
         ->add_alias("reasoning_temperature")
-        ->set_desc("Temperature override inside reasoning blocks"));
+        ->set_desc("Temperature override inside reasoning blocks; uses the existing sampling chain with continuous RNG and history state"));
 
     add((new field_num("reasoning_top_k", params.sampling.reasoning_top_k))
         ->set_limits(0, INT32_MAX)
@@ -256,30 +256,9 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         ->set_hard_limits(-1, INT32_MAX)
         ->set_desc("DRY history override inside reasoning blocks"));
 
-    add((new field_num("reasoning_mirostat", params.sampling.reasoning_mirostat))
-        ->set_limits(0, 2)
-        ->set_desc("Mirostat mode override inside reasoning blocks"));
-
-    add((new field_num("reasoning_mirostat_tau", params.sampling.reasoning_mirostat_tau))
-        ->set_desc("Mirostat target entropy override inside reasoning blocks"));
-
-    add((new field_num("reasoning_mirostat_eta", params.sampling.reasoning_mirostat_eta))
-        ->set_desc("Mirostat learning rate override inside reasoning blocks"));
-
-    add((new field_num("reasoning_adaptive_target", params.sampling.reasoning_adaptive_target))
-        ->set_limits(-std::numeric_limits<float>::max(), 1.0f)
-        ->set_desc("Adaptive sampling target override inside reasoning blocks"));
-
-    add((new field_num("reasoning_adaptive_decay", params.sampling.reasoning_adaptive_decay))
-        ->set_hard_limits(0.0f, 0.99f)
-        ->set_desc("Adaptive sampling decay override inside reasoning blocks"));
-
     add((new field_num("reasoning_min_keep", params.sampling.reasoning_min_keep))
         ->set_hard_limits(0, INT32_MAX)
         ->set_desc("Minimum candidate count override inside reasoning blocks"));
-
-    add((new field_num("reasoning_seed", params.sampling.reasoning_seed))
-        ->set_desc("RNG seed override inside reasoning blocks"));
 
     //
     // Speculative decoding params
@@ -655,13 +634,7 @@ task_params eval_llama_cmpl_schema(
         enable_reasoning_override("reasoning_dry_base",           COMMON_PARAMS_SAMPLING_CONFIG_DRY_BASE);
         enable_reasoning_override("reasoning_dry_allowed_length", COMMON_PARAMS_SAMPLING_CONFIG_DRY_ALLOWED_LEN);
         enable_reasoning_override("reasoning_dry_penalty_last_n", COMMON_PARAMS_SAMPLING_CONFIG_DRY_PENALTY_LAST_N);
-        enable_reasoning_override("reasoning_mirostat",           COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT);
-        enable_reasoning_override("reasoning_mirostat_tau",       COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT_TAU);
-        enable_reasoning_override("reasoning_mirostat_eta",       COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT_ETA);
-        enable_reasoning_override("reasoning_adaptive_target",    COMMON_PARAMS_SAMPLING_CONFIG_ADAPTIVE_TARGET);
-        enable_reasoning_override("reasoning_adaptive_decay",     COMMON_PARAMS_SAMPLING_CONFIG_ADAPTIVE_DECAY);
         enable_reasoning_override("reasoning_min_keep",           COMMON_PARAMS_SAMPLING_CONFIG_MIN_KEEP);
-        enable_reasoning_override("reasoning_seed",               COMMON_PARAMS_SAMPLING_CONFIG_SEED);
 
         if ((params.sampling.reasoning_sampling & COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_LAST_N) &&
             params.sampling.reasoning_penalty_last_n == -1) {

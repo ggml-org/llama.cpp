@@ -174,10 +174,7 @@ enum common_params_sampling_config : uint64_t {
     COMMON_PARAMS_SAMPLING_CONFIG_DRY_BASE          = 1ULL << 19,
     COMMON_PARAMS_SAMPLING_CONFIG_DRY_ALLOWED_LEN   = 1ULL << 20,
     COMMON_PARAMS_SAMPLING_CONFIG_DRY_PENALTY_LAST_N = 1ULL << 21,
-    COMMON_PARAMS_SAMPLING_CONFIG_ADAPTIVE_TARGET   = 1ULL << 22,
-    COMMON_PARAMS_SAMPLING_CONFIG_ADAPTIVE_DECAY    = 1ULL << 23,
     COMMON_PARAMS_SAMPLING_CONFIG_MIN_KEEP          = 1ULL << 24,
-    COMMON_PARAMS_SAMPLING_CONFIG_SEED              = 1ULL << 25,
 };
 
 enum common_speculative_type {
@@ -305,10 +302,9 @@ struct common_params_sampling {
     bool                     reasoning_control = false;        // create the budget sampler on demand so reasoning can be ended at runtime
 
     // Sampling overrides used while inside the reasoning block. The bitfield
-    // records which values override the base chain.
+    // records which parameter values change within the shared sampler chain.
     uint64_t reasoning_sampling = 0;
 
-    uint32_t reasoning_seed               = LLAMA_DEFAULT_SEED;
     int32_t  reasoning_min_keep           = 0;
     int32_t  reasoning_top_k              = 40;
     float    reasoning_top_p              = 0.95f;
@@ -327,12 +323,7 @@ struct common_params_sampling {
     float    reasoning_dry_base           = 1.75f;
     int32_t  reasoning_dry_allowed_length = 2;
     int32_t  reasoning_dry_penalty_last_n = -1;
-    float    reasoning_adaptive_target    = -1.00f;
-    float    reasoning_adaptive_decay     = 0.90f;
-    int32_t  reasoning_mirostat           = 0;
     float    reasoning_top_n_sigma        = -1.00f;
-    float    reasoning_mirostat_tau       = 5.00f;
-    float    reasoning_mirostat_eta       = 0.10f;
 
     bool backend_sampling = false;
 

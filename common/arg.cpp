@@ -1818,7 +1818,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_sampling());
     add_opt(common_arg(
         {"--reasoning-temp"}, "N",
-        "temperature override while inside the reasoning block (default: inherit)",
+        "temperature override while inside the reasoning block; uses the existing sampling chain with continuous RNG and history state (default: inherit)",
         [](common_params & params, const std::string & value) {
             params.sampling.reasoning_temp = std::max(std::stof(value), 0.0f);
             params.sampling.reasoning_sampling |= COMMON_PARAMS_SAMPLING_CONFIG_TEMP;
@@ -1972,59 +1972,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_sampling());
     add_opt(common_arg(
-        {"--reasoning-mirostat"}, "N",
-        "Mirostat mode override while inside the reasoning block (default: inherit)",
-        [](common_params & params, int value) {
-            params.sampling.reasoning_mirostat = value;
-            params.sampling.reasoning_sampling |= COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT;
-        }
-    ).set_sampling());
-    add_opt(common_arg(
-        {"--reasoning-mirostat-ent", "--reasoning-mirostat-tau"}, "N",
-        "Mirostat target entropy override while inside the reasoning block (default: inherit)",
-        [](common_params & params, const std::string & value) {
-            params.sampling.reasoning_mirostat_tau = std::stof(value);
-            params.sampling.reasoning_sampling |= COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT_TAU;
-        }
-    ).set_sampling());
-    add_opt(common_arg(
-        {"--reasoning-mirostat-lr", "--reasoning-mirostat-eta"}, "N",
-        "Mirostat learning rate override while inside the reasoning block (default: inherit)",
-        [](common_params & params, const std::string & value) {
-            params.sampling.reasoning_mirostat_eta = std::stof(value);
-            params.sampling.reasoning_sampling |= COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT_ETA;
-        }
-    ).set_sampling());
-    add_opt(common_arg(
-        {"--reasoning-adaptive-target"}, "N",
-        "adaptive sampling target override while inside the reasoning block (default: inherit)",
-        [](common_params & params, const std::string & value) {
-            params.sampling.reasoning_adaptive_target = std::stof(value);
-            params.sampling.reasoning_sampling |= COMMON_PARAMS_SAMPLING_CONFIG_ADAPTIVE_TARGET;
-        }
-    ).set_sampling());
-    add_opt(common_arg(
-        {"--reasoning-adaptive-decay"}, "N",
-        "adaptive sampling decay override while inside the reasoning block (default: inherit)",
-        [](common_params & params, const std::string & value) {
-            params.sampling.reasoning_adaptive_decay = std::stof(value);
-            params.sampling.reasoning_sampling |= COMMON_PARAMS_SAMPLING_CONFIG_ADAPTIVE_DECAY;
-        }
-    ).set_sampling());
-    add_opt(common_arg(
         {"--reasoning-min-keep"}, "N",
         "minimum candidate count override while inside the reasoning block (default: inherit)",
         [](common_params & params, int value) {
             params.sampling.reasoning_min_keep = value;
             params.sampling.reasoning_sampling |= COMMON_PARAMS_SAMPLING_CONFIG_MIN_KEEP;
-        }
-    ).set_sampling());
-    add_opt(common_arg(
-        {"--reasoning-seed"}, "SEED",
-        "RNG seed override while inside the reasoning block (default: inherit)",
-        [](common_params & params, const std::string & value) {
-            params.sampling.reasoning_seed = std::stoul(value);
-            params.sampling.reasoning_sampling |= COMMON_PARAMS_SAMPLING_CONFIG_SEED;
         }
     ).set_sampling());
     add_opt(common_arg(
