@@ -12,8 +12,9 @@ def create_server():
     server = ServerPreset.stories15m_moe()
     # set default values
     server.model_draft = download_file(MODEL_DRAFT_FILE_URL)
-    server.draft_min = 4
-    server.draft_max = 8
+    server.spec_type = "draft-simple"
+    server.spec_draft_n_min = 4
+    server.spec_draft_n_max = 8
     server.fa = "off"
 
 
@@ -25,6 +26,7 @@ def fixture_create_server():
 def test_with_and_without_draft():
     global server
     server.model_draft = None  # disable draft model
+    server.spec_type = None
     server.start()
     res = server.make_request("POST", "/completion", data={
         "prompt": "I believe the meaning of life is",
@@ -46,6 +48,7 @@ def test_with_and_without_draft():
         "n_predict": 16,
     })
     assert res.status_code == 200
+    assert res.body["timings"]["draft_n"] > 0
     content_draft = res.body["content"]
 
     assert content_no_draft == content_draft
@@ -63,8 +66,8 @@ def test_different_draft_min_draft_max():
     last_content = None
     for draft_min, draft_max in test_values:
         server.stop()
-        server.draft_min = draft_min
-        server.draft_max = draft_max
+        server.spec_draft_n_min = draft_min
+        server.spec_draft_n_max = draft_max
         server.start()
         res = server.make_request("POST", "/completion", data={
             "prompt": "I believe the meaning of life is",
