@@ -882,6 +882,7 @@ static inline void q4_dot_compute_x2_aligned(const block_q4_0 * q_row0,
                                              float *            out1) {
     const int32_t gather_pattern[8] = { 0, 1, 2, 3, 4, 5, 6, 7 };
     __asm__ volatile("flw.ps f31, %[g]\n" : : [g] "m"(*(const int32_t (*)[8]) gather_pattern) : "f31");
+
     __asm__ volatile(
         "fbci.pi f20, 0\n"
         "fbci.pi f21, 0\n" ::
@@ -994,4 +995,75 @@ static inline void q4_dot_compute_x2_aligned(const block_q4_0 * q_row0,
 
     *out0 = result0;
     *out1 = result1;
+}
+
+
+// Full-row dot product for Q4_K weights against an F32 activation column.
+//
+// Unlike Q4_0/Q8_0 (whose dequant is a pure per-block scale, so the scale can
+// be factored out of the dot product), Q4_K reconstructs each weight via an
+// affine transform `w = d*scale*q - dmin*min` with per-group scales/mins inside
+// each 256-element super-block. That makes the cheap "scale the integer dot"
+// trick inapplicable.
+//
+// The dequant math mirrors dequantize_q4_K_block exactly, but the per-element
+// product is folded straight into a scalar accumulator instead of being staged
+// through a temporary buffer. This deliberately avoids a large (1KB) on-stack
+// dequant buffer and the vector-mask save/restore of the F32 dot helper, both
+// of which are unsafe in the uberkernel context.
+//
+// K_sblocks is the number of QK_K (256) element super-blocks in the row
+// (i.e. K / QK_K).
+static inline float sw_fp16_to_fp32(uint16_t h) {
+    uint32_t sign = (uint32_t)(h & 0x8000) << 16;
+    uint32_t exp  = (h >> 10) & 0x1F;
+    uint32_t mant = h & 0x3FF;
+    uint32_t f;
+    if (exp == 0) {
+        if (mant == 0) { f = sign; }
+        else {
+            exp = 127 - 15 + 1;
+            while ((mant & 0x400) == 0) { mant <<= 1; exp--; }
+            mant &= 0x3FF;
+            f = sign | (exp << 23) | (mant << 13);
+        }
+    } else if (exp == 0x1F) {
+        f = sign | 0x7F800000u | (mant << 13);
+    } else {
+        f = sign | ((exp + (127 - 15)) << 23) | (mant << 13);
+    }
+    float out; __builtin_memcpy(&out, &f, 4); return out;
+}
+
+static inline float compute_row_dot_q4_K(const block_q4_K* q_row,
+                                         const float* b_col,
+                                         int64_t K_sblocks) {
+    float acc = 0.0f;
+    for (int64_t sb = 0; sb < K_sblocks; sb++) {
+        const block_q4_K* block = q_row + sb;
+        const float* b = b_col + sb * QK_K;
+        const uint8_t* q = block->qs;
+        const float d   = sw_fp16_to_fp32(block->d);
+        const float min = sw_fp16_to_fp32(block->dmin);
+
+        int is = 0;
+        uint8_t sc, m;
+        for (int j = 0; j < QK_K; j += 64) {
+            get_scale_min_k4(is + 0, block->scales, &sc, &m);
+            const float d1 = d * sc;
+            const float m1 = min * m;
+            get_scale_min_k4(is + 1, block->scales, &sc, &m);
+            const float d2 = d * sc;
+            const float m2 = min * m;
+            for (int l = 0; l < 32; ++l) {
+                acc += (d1 * (float)(q[l] & 0xF) - m1) * (*b++);
+            }
+            for (int l = 0; l < 32; ++l) {
+                acc += (d2 * (float)(q[l] >> 4) - m2) * (*b++);
+            }
+            q += 32;
+            is += 2;
+        }
+    }
+    return acc;
 }

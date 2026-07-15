@@ -1016,6 +1016,27 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
 
                 supported = src0_first_dim_contiguous && src1_first_dim_contiguous && dst_first_dim_contiguous &&
                             dst_properly_ordered;
+            } else if (op->type == GGML_TYPE_F32 &&
+                op->src[0] && op->src[0]->type == GGML_TYPE_Q4_K &&
+                op->src[1] && op->src[1]->type == GGML_TYPE_F32) {
+
+                // Keep the existing quantized path constraints separate from the
+                // relaxed non-quant generic fallback.
+                bool src0_first_dim_contiguous = (op->src[0]->nb[0] == ggml_type_size(op->src[0]->type));
+                bool src1_first_dim_contiguous = (op->src[1]->nb[0] == ggml_type_size(op->src[1]->type));
+                bool dst_first_dim_contiguous = (op->nb[0] == sizeof(float));
+
+                bool dst_properly_ordered = true;
+                for (int d = 0; d < 3; d++) {
+                    if (op->ne[d] > 1 && op->ne[d+1] > 1 && op->nb[d] > op->nb[d+1]) {
+                        dst_properly_ordered = false;
+                    }
+                }
+
+                supported = src0_first_dim_contiguous &&
+                            src1_first_dim_contiguous &&
+                            dst_first_dim_contiguous &&
+                            dst_properly_ordered;
             } else {
                 supported = false;
             }

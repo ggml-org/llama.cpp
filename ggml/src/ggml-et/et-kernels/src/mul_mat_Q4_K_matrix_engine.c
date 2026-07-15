@@ -1,3 +1,8 @@
+//******************************************************************************
+// MUL_MAT Kernel
+// Matrix multiplication: C[M,N] = A[M,K] * B[K,N]
+//******************************************************************************
+
 #include <etsoc/common/utils.h>
 #include <stdint.h>
 #include "ggml_tensor.h"
@@ -6,8 +11,10 @@
 #include "quants.h"
 #include "math_fp.h"
 
-// Q4_0 x F32 -> F32 MUL_MAT on the tensor (matrix) engine, TensorFMA32.
-// Hart 1: dequantize Q4_0 weights to FP32 into double-buffered L2 SCP.
+// Q4_K x F32 -> F32 MUL_MAT on the tensor (matrix) engine, TensorFMA32.
+// identical to mul_mat_Q4_0_matrix_engine.c, identical producer/consumer, tiling and
+// tensor-engine loop; only the weight dequant differs (Q4_K affine per-group).
+// Hart 1: dequantize Q4_K weights to FP32 into double-buffered L2 SCP.
 // Hart 0: tensor engine compute (FMA, reduce, store).
 //
 // Two execution paths (selected at runtime by N % TILE_N):
@@ -23,12 +30,12 @@
 
 #define TILE_M  16
 #define TILE_N  16
-#define BLOCK_K QK4_0   // 32 elements per Q4_0 block
+#define BLOCK_K 32      // one Q4_K group (32 elements) per panel
 #define FMA_K   16      // tensor FMA k-width for FP32 (a_num_cols = FMA_K-1)
 
 // --- Reuse knobs ----------------------------------------------------------
 // REUSE_MAX caps the L2-SCP C-scratch footprint; the actual reuse factor is
-// chosen at runtime (see ru_n) as the largest value that still keeps the whole
+// chosen at runtime as the largest value that still keeps the whole
 // machine busy. KWIN is the dequant-cache depth (K-blocks per window).
 #ifndef REUSE_MAX
 #define REUSE_MAX 15
@@ -83,25 +90,56 @@ scp_wait(volatile uint32_t *flag, uint32_t expected) {
     }
 }
 
-// Dequantize one 32-element Q4_0 block of TILE_M weight rows into the FP32
-// panel, written directly in TenB [k][m] order: panel[k*TILE_M + m].
-//   Low  nibble of byte i -> k = i
-//   High nibble of byte i -> k = i + 16
-//   value = d * (nibble - 8)
+// Software fp16->fp32 (pure integer). The hardware fcvt.ps.f16 returns wrong
+// values after the attention block (shared conversion-unit state), which would
+// corrupt the Q4_K weight scales here; software conversion avoids that
+// instruction entirely. Only 2 conversions per super-block, so cost is negligible.
+// Since this is only observed for Q4_K and only after the attention block, we need
+// to investigate it further.
+static inline float __attribute__((always_inline)) me_sw_fp16(uint16_t h) {
+    uint32_t sign = (uint32_t)(h & 0x8000) << 16;
+    uint32_t exp  = (h >> 10) & 0x1F;
+    uint32_t mant = h & 0x3FF;
+    uint32_t f;
+    if (exp == 0) {
+        if (mant == 0) { f = sign; }
+        else {
+            exp = 127 - 15 + 1;
+            while ((mant & 0x400) == 0) { mant <<= 1; exp--; }
+            mant &= 0x3FF;
+            f = sign | (exp << 23) | (mant << 13);
+        }
+    } else if (exp == 0x1F) {
+        f = sign | 0x7F800000u | (mant << 13);
+    } else {
+        f = sign | ((exp + (127 - 15)) << 23) | (mant << 13);
+    }
+    float out; __builtin_memcpy(&out, &f, 4); return out;
+}
+
+// Dequantize one 32-element Q4_K GROUP of TILE_M weight rows into the FP32 panel,
+// written in TenB [k][m] order: panel[k*TILE_M + m].
 //
-// Vectorized: for each weight row m we gather 8 packed bytes at a time, expand
-// the low/high nibbles to FP32 (nibble-8), scale by the block's fp16 d, and
-// fscw.ps-scatter the 8 values down 8 panel lines (stride 64B) at column m.
-// 4 groups of 8 cover the 32 k-values (low 0..15, high 16..31).
+// A Q4_K super-block packs 256 elements as 8 groups of 32, each with a 6-bit
+// scale (sc) and 6-bit min (m), plus a super-block fp16 d and dmin:
+//     w = (d*sc) * nibble - (dmin*m)          (nibble in 0..15, no zero point)
+// kb_group is the global group index: super-block = kb_group/8, group = kb_group%8.
+// Group g draws its 32 nibbles from qs[(g/2)*32 .. +31], low nibble if g even and
+// high nibble if g odd (matching dequantize_q4_K_block / compute_row_dot_q4_K).
 static inline void __attribute__((always_inline))
-dequant_q4_0_panel(float *panel, const char *src0_batch,
-                   int64_t mb, int64_t kb_block, int64_t nb1_0) {
+dequant_q4_K_panel(float *panel, const char *src0_batch,
+                   int64_t mb, int64_t kb_group, int64_t nb1_0) {
     static const int32_t __attribute__((aligned(32))) scatter_idx[8] = {
         0, 64, 128, 192, 256, 320, 384, 448   // byte offsets: 8 lines apart
     };
     static const int32_t __attribute__((aligned(32))) gather_idx[8] = {
         0, 1, 2, 3, 4, 5, 6, 7                 // 8 consecutive bytes
     };
+
+    const int64_t sb   = kb_group >> 3;        // super-block index
+    const int     g    = (int) (kb_group & 7); // group within super-block
+    const int64_t qoff = (int64_t)(g >> 1) * 32;
+    const int     hi   = g & 1;                // high-nibble group?
 
     unsigned long old_mask;
     __asm__ volatile(
@@ -116,48 +154,50 @@ dequant_q4_0_panel(float *panel, const char *src0_batch,
 
     char *pbase = (char *) panel;
     for (int j = 0; j < TILE_M; ++j) {
-        const block_q4_0 *blk =
-            (const block_q4_0 *)(src0_batch + (mb + j) * nb1_0) + kb_block;
-        uint32_t scale_raw = (uint32_t) blk->d;
-        const uint8_t *qs = blk->qs;
-        char *col = pbase + j * 4;           // column m=j of the panel
+        const block_q4_K *blk =
+            (const block_q4_K *)(src0_batch + (mb + j) * nb1_0) + sb;
+        const float d    = me_sw_fp16(blk->d);
+        const float dmin = me_sw_fp16(blk->dmin);
+        uint8_t sc, mm;
+        get_scale_min_k4(g, blk->scales, &sc, &mm);
+        const float dsc    = d * (float) sc;
+        const float negmin = -(dmin * (float) mm);
+        uint32_t dsc_bits, nmin_bits;
+        __builtin_memcpy(&dsc_bits, &dsc, 4);
+        __builtin_memcpy(&nmin_bits, &negmin, 4);
 
-        __asm__ volatile(
-            "fbcx.ps     f3, %[sb]      \n\t"   // broadcast fp16 scale bits
-            "fcvt.ps.f16 f3, f3         \n\t"   // -> d in all 8 lanes (fp32)
+        const uint8_t *qs  = blk->qs + qoff;   // 32 bytes for this group
+        char          *col = pbase + j * 4;    // column m=j of the panel
 
-            "fgb.ps      f4, f2(%[qs0]) \n\t"   // gather qs[0..7]
-            "fandi.pi    f5, f4, 15     \n\t"   // low nibble
-            "faddi.pi    f5, f5, -8     \n\t"
-            "fcvt.ps.pw  f5, f5, rne    \n\t"
-            "fmul.ps     f5, f5, f3     \n\t"
-            "fscw.ps     f5, f1(%[c0])  \n\t"   // k=0..7   -> lines 0..7
-            "fsrli.pi    f6, f4, 4      \n\t"   // high nibble
-            "fandi.pi    f6, f6, 15     \n\t"
-            "faddi.pi    f6, f6, -8     \n\t"
-            "fcvt.ps.pw  f6, f6, rne    \n\t"
-            "fmul.ps     f6, f6, f3     \n\t"
-            "fscw.ps     f6, f1(%[c16]) \n\t"   // k=16..23 -> lines 16..23
-
-            "fgb.ps      f4, f2(%[qs8]) \n\t"   // gather qs[8..15]
-            "fandi.pi    f5, f4, 15     \n\t"
-            "faddi.pi    f5, f5, -8     \n\t"
-            "fcvt.ps.pw  f5, f5, rne    \n\t"
-            "fmul.ps     f5, f5, f3     \n\t"
-            "fscw.ps     f5, f1(%[c8])  \n\t"   // k=8..15  -> lines 8..15
-            "fsrli.pi    f6, f4, 4      \n\t"
-            "fandi.pi    f6, f6, 15     \n\t"
-            "faddi.pi    f6, f6, -8     \n\t"
-            "fcvt.ps.pw  f6, f6, rne    \n\t"
-            "fmul.ps     f6, f6, f3     \n\t"
-            "fscw.ps     f6, f1(%[c24]) \n\t"   // k=24..31 -> lines 24..31
-            :
-            : [sb] "r"(scale_raw),
-              [qs0] "r"(qs), [qs8] "r"(qs + 8),
-              [c0] "r"(col), [c8] "r"(col + 8 * 64),
-              [c16] "r"(col + 16 * 64), [c24] "r"(col + 24 * 64)
-            : "f3", "f4", "f5", "f6", "memory"
-        );
+        if (hi) {
+            __asm__ volatile(
+                "fbcx.ps  f3, %[dsc]  \n\t"   // (d*sc) in all 8 lanes
+                "fbcx.ps  f7, %[nmin] \n\t"   // -(dmin*m) in all 8 lanes
+                "fgb.ps f4,f2(%[q0]) \n\t fsrli.pi f5,f4,4\n\t fandi.pi f5,f5,15\n\t fcvt.ps.pw f5,f5,rne\n\t fmadd.ps f5,f3,f5,f7\n\t fscw.ps f5,f1(%[c0]) \n\t"
+                "fgb.ps f4,f2(%[q8]) \n\t fsrli.pi f5,f4,4\n\t fandi.pi f5,f5,15\n\t fcvt.ps.pw f5,f5,rne\n\t fmadd.ps f5,f3,f5,f7\n\t fscw.ps f5,f1(%[c8]) \n\t"
+                "fgb.ps f4,f2(%[q16])\n\t fsrli.pi f5,f4,4\n\t fandi.pi f5,f5,15\n\t fcvt.ps.pw f5,f5,rne\n\t fmadd.ps f5,f3,f5,f7\n\t fscw.ps f5,f1(%[c16])\n\t"
+                "fgb.ps f4,f2(%[q24])\n\t fsrli.pi f5,f4,4\n\t fandi.pi f5,f5,15\n\t fcvt.ps.pw f5,f5,rne\n\t fmadd.ps f5,f3,f5,f7\n\t fscw.ps f5,f1(%[c24])\n\t"
+                :
+                : [dsc] "r"(dsc_bits), [nmin] "r"(nmin_bits),
+                  [q0] "r"(qs), [q8] "r"(qs + 8), [q16] "r"(qs + 16), [q24] "r"(qs + 24),
+                  [c0] "r"(col), [c8] "r"(col + 8 * 64), [c16] "r"(col + 16 * 64), [c24] "r"(col + 24 * 64)
+                : "f3", "f4", "f5", "f7", "memory"
+            );
+        } else {
+            __asm__ volatile(
+                "fbcx.ps  f3, %[dsc]  \n\t"
+                "fbcx.ps  f7, %[nmin] \n\t"
+                "fgb.ps f4,f2(%[q0]) \n\t fandi.pi f5,f4,15\n\t fcvt.ps.pw f5,f5,rne\n\t fmadd.ps f5,f3,f5,f7\n\t fscw.ps f5,f1(%[c0]) \n\t"
+                "fgb.ps f4,f2(%[q8]) \n\t fandi.pi f5,f4,15\n\t fcvt.ps.pw f5,f5,rne\n\t fmadd.ps f5,f3,f5,f7\n\t fscw.ps f5,f1(%[c8]) \n\t"
+                "fgb.ps f4,f2(%[q16])\n\t fandi.pi f5,f4,15\n\t fcvt.ps.pw f5,f5,rne\n\t fmadd.ps f5,f3,f5,f7\n\t fscw.ps f5,f1(%[c16])\n\t"
+                "fgb.ps f4,f2(%[q24])\n\t fandi.pi f5,f4,15\n\t fcvt.ps.pw f5,f5,rne\n\t fmadd.ps f5,f3,f5,f7\n\t fscw.ps f5,f1(%[c24])\n\t"
+                :
+                : [dsc] "r"(dsc_bits), [nmin] "r"(nmin_bits),
+                  [q0] "r"(qs), [q8] "r"(qs + 8), [q16] "r"(qs + 16), [q24] "r"(qs + 24),
+                  [c0] "r"(col), [c8] "r"(col + 8 * 64), [c16] "r"(col + 16 * 64), [c24] "r"(col + 24 * 64)
+                : "f3", "f4", "f5", "f7", "memory"
+            );
+        }
     }
 
     __asm__ volatile("mova.m.x %0" :: "r"(old_mask));
@@ -215,7 +255,7 @@ int entry_point(struct ggml_et_binary_params *params, void *env) {
     const int64_t N = params->src1.ne[1];
 
     if ((M % TILE_M) != 0)  return 0;
-    if ((K % BLOCK_K) != 0) return 0;
+    if ((K % QK_K) != 0)    return 0;
 
     const int64_t ne2_0 = params->src0.ne[2], ne3_0 = params->src0.ne[3];
     const int64_t ne2_1 = params->src1.ne[2], ne3_1 = params->src1.ne[3];
@@ -324,7 +364,7 @@ int entry_point(struct ggml_et_binary_params *params, void *env) {
 
                     float *cf = (float *) cache_buf[buf];
                     for (int64_t i = 0; i < kbn; ++i) {
-                        dequant_q4_0_panel(cf + i * (SCP_PANEL_SIZE / 4),
+                        dequant_q4_K_panel(cf + i * (SCP_PANEL_SIZE / 4),
                                            src0_batch, mb, kb0 + i, nb1_0);
                     }
                     FENCE;
@@ -465,7 +505,7 @@ int entry_point(struct ggml_et_binary_params *params, void *env) {
                 int buf = chunk_id & 1;
                 if (chunk_id >= 2) scp_wait(consumed_ctr, chunk_id - 1);
 
-                dequant_q4_0_panel(scp_panel[buf], src0_batch, mb, kb, nb1_0);
+                dequant_q4_K_panel(scp_panel[buf], src0_batch, mb, kb, nb1_0);
 
                 FENCE;
                 flush_to_l2(scp_panel[buf], BLOCK_K, 64);

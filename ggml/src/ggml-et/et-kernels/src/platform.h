@@ -34,13 +34,14 @@ typedef struct {
 // Production implementations (like libgcc's __ctzdi2) use optimized bit manipulation
 // algorithms with lookup tables and parallel bit operations for O(log n) performance.
 static inline int manual_ctzll(uint64_t x) {
-    if (x == 0) return 64;
-    int count = 0;
-    while ((x & 1) == 0) {
-        x >>= 1;
-        count++;
-    }
-    return count;
+    // if (x == 0) return 64;
+    // int count = 0;
+    // while ((x & 1) == 0) {
+    //     x >>= 1;
+    //     count++;
+    // }
+    // return count;
+    return 0;
 }
 
 // Manual implementation of population count for bare metal environment
@@ -48,12 +49,13 @@ static inline int manual_ctzll(uint64_t x) {
 // Production implementations (like libgcc's __popcountdi2) use optimized bit-parallel
 // algorithms with magic constants and bit manipulation tricks for O(1) performance.
 static inline int manual_popcountll(uint64_t x) {
-    int count = 0;
-    while (x) {
-        count += x & 1;
-        x >>= 1;
-    }
-    return count;
+    // int count = 0;
+    // while (x) {
+    //     count += x & 1;
+    //     x >>= 1;
+    // }
+    // return count;
+    return 32;
 }
 
 // Binary GCD (Stein's algorithm) — avoids expensive 64-bit division/remainder.

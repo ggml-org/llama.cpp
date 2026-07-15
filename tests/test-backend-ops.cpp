@@ -8696,6 +8696,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32, 16, 16, 256, {2, 3}, {1, 1}, {0, 1, 3, 2}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32, 16, 16, 256, {2, 3}, {1, 1}, {0, 3, 2, 1}));
 
+    // [ET] Q4_K MUL_MAT at real Llama-3.2-1B shapes: large K (->use_ksplit path) and
+    // prefill batch N>=53. These exercise paths the K=256/N<=16 cases above never hit.
+    for (int64_t n : {1, 64}) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 2048, n, 2048, {1, 1}, {1, 1})); // wq/wo
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32,  512, n, 2048, {1, 1}, {1, 1})); // wk/wv
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 2048, n, 8192, {1, 1}, {1, 1})); // ffn_down
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 8192, n, 2048, {1, 1}, {1, 1})); // ffn_gate/up (simple path, control)
+    }
+
     for (ggml_type type_a : other_types) {
         for (ggml_type type_b : {GGML_TYPE_F32}) {
             if (ggml_blck_size(type_a) != 256) {
