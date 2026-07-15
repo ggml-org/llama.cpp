@@ -114,6 +114,7 @@ enum GPU_FAMILY {
 
 enum ADRENO_GPU_GEN {
     ADRENO_UNKNOWN,
+    A6X,
     A7X,
     A8X,
     X1E,
@@ -243,6 +244,19 @@ static ggml_cl_version get_opencl_c_version(ggml_cl_version platform_version, cl
 }
 
 static ADRENO_GPU_GEN get_adreno_gpu_gen(const char *device_name) {
+    if (strstr(device_name, "610") || strstr(device_name, "612") ||
+        strstr(device_name, "613") || strstr(device_name, "615") ||
+        strstr(device_name, "616") || strstr(device_name, "618") ||
+        strstr(device_name, "619") || strstr(device_name, "620") ||
+        strstr(device_name, "630") || strstr(device_name, "640") ||
+        strstr(device_name, "642") || strstr(device_name, "643") ||
+        strstr(device_name, "644") || strstr(device_name, "650") ||
+        strstr(device_name, "660") || strstr(device_name, "663") ||
+        strstr(device_name, "680") || strstr(device_name, "685") ||
+        strstr(device_name, "690")) {
+        return ADRENO_GPU_GEN::A6X;
+    }
+
     if (strstr(device_name, "730") ||
         strstr(device_name, "740") ||
         strstr(device_name, "750")) {
@@ -6933,7 +6947,16 @@ inline bool use_adreno_kernels(const ggml_backend_opencl_context *backend_ctx, c
 }
 
 inline bool use_adreno_moe_kernels(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
-    GGML_UNUSED(backend_ctx);
+    // The moe weight repack kernels *_trans4_ns alias a private ushort8 through a uchar*.
+    // Certain compilers (found with some A7x and A6x) miscompiles this, corrupting the weights.
+    // So, exclude A6x and A7x from using Adreno MoE kernels for now.
+    // The quants that have a general mul_mat_id kernel fallback to the general version; the
+    // rest fallback to CPU.
+    if (backend_ctx && (backend_ctx->adreno_gen == ADRENO_GPU_GEN::A6X ||
+                        backend_ctx->adreno_gen == ADRENO_GPU_GEN::A7X ||
+                        backend_ctx->adreno_gen == ADRENO_GPU_GEN::ADRENO_UNKNOWN)) {
+        return false;
+    }
     int ne01 = tensor->ne[1];
     return (((strstr(tensor->name, "ffn") != NULL) && (strstr(tensor->name, "exps") != NULL)) || (strstr(tensor->name, "as") != NULL)) && (ne01 % 32 == 0);
 }
