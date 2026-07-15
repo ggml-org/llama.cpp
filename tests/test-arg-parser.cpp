@@ -24,7 +24,7 @@ static void test(void) {
 
     assert_output_limits(16, 2,  3, 8, 4);
     assert_output_limits(16, 2, -1, 2, 1);
-    assert_output_limits( 4, 2,  3, 4, 4);
+    assert_output_limits( 6, 2,  3, 6, 4);
     assert_output_limits( 2, 1,  3, 2, 2);
     assert_output_limits(
             std::numeric_limits<int32_t>::max(),
