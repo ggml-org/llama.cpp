@@ -21,6 +21,9 @@ enum mmq_q8_1_ds_layout {
     MMQ_Q8_1_DS_LAYOUT_D2S6,
 };
 
+static constexpr int QK8_1_MMQ  = 4*QK8_1;
+static constexpr int QK_FP4_MMQ = 2*QK8_1_MMQ;
+
 struct block_q8_1_mmq {
     // The y float data is converted to a data layout that can simply be copied to shared memory as a contiguous block.
     // The y float data is first grouped as blocks of 128 values.
@@ -39,7 +42,7 @@ struct block_q8_1_mmq {
         half  d2s6[8];  // 1 16 bit scale per 64 values + 1 16 bit partial sum per 16 values for the first 96 values,
                         //     stored as d0,d1,s1,s2,s3,s4,s5
     };
-    int8_t qs[4*QK8_1]; // 128 values quantized to 8 bit each
+    int8_t qs[QK8_1_MMQ];
 };
 
 // this struct is used for fp4 data types (currently only used for Blackwell)
@@ -47,10 +50,10 @@ struct block_q8_1_mmq {
 // nvfp4 has block size 16, each int32 of d4 contains 4 ue4m3 scales
 struct block_fp4_mmq {
     uint32_t d4[4];
-    int8_t   qs[4 * 32];  // 256 FP4 values packed as 4-bit pairs (2 per byte)
+    int8_t   qs[QK_FP4_MMQ / 2];
 };
 
-static_assert(sizeof(block_q8_1_mmq) == 4*QK8_1 + 4*sizeof(half2), "Unexpected block_q8_1_mmq size");
+static_assert(sizeof(block_q8_1_mmq) == QK8_1_MMQ + 4*sizeof(half2), "Unexpected block_q8_1_mmq size");
 static_assert(sizeof(block_q8_1_mmq) == 4*sizeof(block_q8_1),      "Unexpected block_q8_1_mmq size");
 static_assert(sizeof(block_fp4_mmq)  == sizeof(block_q8_1_mmq),    "Unexpected block_fp4_mmq size");
 
@@ -833,9 +836,9 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 
 #if defined(BLACKWELL_MMA_AVAILABLE)
     // FP4 tile stores 8 blocks
-    constexpr int ne_block = (type == GGML_TYPE_MXFP4 || type == GGML_TYPE_NVFP4) ? QK_K : 4 * QK8_1;
+    constexpr int ne_block = (type == GGML_TYPE_MXFP4 || type == GGML_TYPE_NVFP4) ? QK_FP4_MMQ : QK8_1_MMQ;
 #else
-    constexpr int ne_block = 4 * QK8_1;
+    constexpr int ne_block = QK8_1_MMQ;
 #endif  // defined(BLACKWELL_MMA_AVAILABLE)
 
     constexpr int ITER_K          = ggml_cuda_mmq_get_K_vram(type, J, fallback);
