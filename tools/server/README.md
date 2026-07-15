@@ -127,6 +127,32 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--top-k N` | top-k sampling (default: 40, 0 = disabled)<br/>(env: LLAMA_ARG_TOP_K) |
 | `--top-p N` | top-p sampling (default: 0.95, 1.0 = disabled) |
 | `--min-p N` | min-p sampling (default: 0.05, 0.0 = disabled) |
+| `--reasoning-temp N` | temperature override while inside the reasoning block (default: inherit) |
+| `--reasoning-top-k N` | top-k override while inside the reasoning block (default: inherit) |
+| `--reasoning-top-p N` | top-p override while inside the reasoning block (default: inherit) |
+| `--reasoning-min-p N` | min-p override while inside the reasoning block (default: inherit) |
+| `--reasoning-top-n-sigma N` | top-n-sigma override while inside the reasoning block (default: inherit) |
+| `--reasoning-xtc-probability N` | XTC probability override while inside the reasoning block (default: inherit) |
+| `--reasoning-xtc-threshold N` | XTC threshold override while inside the reasoning block (default: inherit) |
+| `--reasoning-typical-p N` | locally typical sampling override while inside the reasoning block (default: inherit) |
+| `--reasoning-dynatemp-range N` | dynamic temperature range override while inside the reasoning block (default: inherit) |
+| `--reasoning-dynatemp-exp, --reasoning-dynatemp-exponent N` | dynamic temperature exponent override while inside the reasoning block (default: inherit) |
+| `--reasoning-repeat-last-n N` | repeat history override while inside the reasoning block (default: inherit) |
+| `--reasoning-repeat-penalty N` | repeat-penalty override while inside the reasoning block (default: inherit) |
+| `--reasoning-presence-penalty N` | presence penalty override while inside the reasoning block (default: inherit) |
+| `--reasoning-frequency-penalty N` | frequency penalty override while inside the reasoning block (default: inherit) |
+| `--reasoning-dry-multiplier N` | DRY multiplier override while inside the reasoning block (default: inherit) |
+| `--reasoning-dry-base N` | DRY base override while inside the reasoning block (default: inherit) |
+| `--reasoning-dry-allowed-length N` | DRY allowed length override while inside the reasoning block (default: inherit) |
+| `--reasoning-dry-penalty-last-n N` | DRY history override while inside the reasoning block (default: inherit) |
+| `--reasoning-mirostat N` | Mirostat mode override while inside the reasoning block (default: inherit) |
+| `--reasoning-mirostat-ent, --reasoning-mirostat-tau N` | Mirostat target entropy override while inside the reasoning block (default: inherit) |
+| `--reasoning-mirostat-lr, --reasoning-mirostat-eta N` | Mirostat learning rate override while inside the reasoning block (default: inherit) |
+| `--reasoning-adaptive-target N` | adaptive sampling target override while inside the reasoning block (default: inherit) |
+| `--reasoning-adaptive-decay N` | adaptive sampling decay override while inside the reasoning block (default: inherit) |
+| `--reasoning-min-keep N` | minimum candidate count override while inside the reasoning block (default: inherit) |
+| `--reasoning-seed SEED` | RNG seed override while inside the reasoning block (default: inherit) |
+| `--reasoning-preserve, --no-reasoning-preserve` | preserve reasoning trace in the full history, not just the last assistant message (default: template default)<br/>compatible with certain templates having 'supports_preserve_reasoning' capability<br/>example: https://docs.z.ai/guides/capabilities/thinking-mode#preserved-thinking<br/>(env: LLAMA_ARG_REASONING_PRESERVE) |
 | `--top-nsigma, --top-n-sigma N` | top-n-sigma sampling (default: -1.00, -1.0 = disabled) |
 | `--xtc-probability N` | xtc probability (default: 0.00, 0.0 = disabled) |
 | `--xtc-threshold N` | xtc threshold (default: 0.10, 1.0 = disabled) |
@@ -506,6 +532,8 @@ These words will not be included in the completion, so make sure to add them to 
 `n_probs`: If greater than 0, the response also contains the probabilities of top N tokens for each generated token given the sampling settings. Note that for temperature < 0 the tokens are sampled greedily but token probabilities are still being calculated via a simple softmax of the logits without considering any other sampler settings. Default: `0`
 
 `min_keep`: If greater than 0, force samplers to return N possible tokens at minimum. Default: `0`
+
+`reasoning_*`: Sampling overrides applied only while generation is inside the model's reasoning (thinking) block; outside of it the base values above are used. Each base sampling parameter has a reasoning counterpart: `reasoning_temp` (alias `reasoning_temperature`), `reasoning_top_k`, `reasoning_top_p`, `reasoning_min_p`, `reasoning_top_n_sigma`, `reasoning_xtc_probability`, `reasoning_xtc_threshold`, `reasoning_typical_p`, `reasoning_dynatemp_range`, `reasoning_dynatemp_exponent`, `reasoning_repeat_last_n`, `reasoning_repeat_penalty`, `reasoning_presence_penalty`, `reasoning_frequency_penalty`, `reasoning_dry_multiplier`, `reasoning_dry_base`, `reasoning_dry_allowed_length`, `reasoning_dry_penalty_last_n`, `reasoning_mirostat`, `reasoning_mirostat_tau`, `reasoning_mirostat_eta`, `reasoning_adaptive_target`, `reasoning_adaptive_decay`, `reasoning_min_keep` and `reasoning_seed`. Any parameter that is not set inherits the base value. The overrides require the reasoning start/end tags to be known: on `/v1/chat/completions` they are picked up automatically from chat templates with thinking support, while `/completion` requests must also provide `reasoning_budget_start_tag` and `reasoning_budget_end_tag`; without tags the overrides are ignored (a warning is logged). Default: inherit
 
 `t_max_predict_ms`: Set a time limit in milliseconds for the prediction (a.k.a. text-generation) phase. The timeout will trigger if the generation takes more than the specified time (measured since the first token was generated) and if a new-line character has already been generated. Useful for FIM applications. Default: `0`, which is disabled.
 
