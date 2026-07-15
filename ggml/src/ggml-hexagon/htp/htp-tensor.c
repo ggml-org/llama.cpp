@@ -87,9 +87,60 @@ void htp_tensor_flush(struct htp_context * ctx, const struct htp_tensor * t) {
     flush_tensor_range(ctx, t);
 }
 
-// Flush a set of tensors, coalescing the decision: if the aggregate dirty size
-// crosses the flush-all threshold, do a single big-bang flush instead of walking
-// each range separately.
+// One dirty tensor's line-aligned range, placed in the flattened global block space.
+struct l2flush_range {
+    uint32_t start;       // line-aligned start address
+    uint32_t end;         // line-aligned end address
+    uint32_t block_first; // global block index of this range's first block
+    uint32_t n_blocks;    // number of HEX_L2_BLOCK_SIZE chunks (last may be partial)
+};
+
+struct l2flush_multi_task {
+    struct htp_thread_trace * trace;
+    struct l2flush_range      ranges[HTP_OP_MAX_INPUTS];
+    uint32_t                  n_ranges;
+    uint32_t                  total_blocks;
+    uint32_t                  blocks_per_thread;
+};
+
+static void l2flush_multi_worker(unsigned int n, unsigned int i, void * data) {
+    (void) n;
+    struct l2flush_multi_task * task = (struct l2flush_multi_task *) data;
+
+    const uint32_t gb_first = i * task->blocks_per_thread;
+    uint32_t       gb_last  = gb_first + task->blocks_per_thread;
+    if (gb_last > task->total_blocks) {
+        gb_last = task->total_blocks;
+    }
+    if (gb_first >= gb_last) {
+        return;
+    }
+
+    struct htp_thread_trace * tr = &task->trace[i];
+    htp_trace_event_start(tr, HTP_TRACE_EVT_L2FLUSH, gb_first);
+
+    for (uint32_t r = 0; r < task->n_ranges; r++) {
+        const struct l2flush_range * rg = &task->ranges[r];
+        const uint32_t rb_first = rg->block_first;
+        const uint32_t rb_last  = rg->block_first + rg->n_blocks;
+
+        const uint32_t lo = gb_first > rb_first ? gb_first : rb_first;
+        const uint32_t hi = gb_last  < rb_last  ? gb_last  : rb_last;
+        if (lo >= hi) {
+            continue;
+        }
+
+        const uint32_t s = rg->start + (lo - rb_first) * HEX_L2_BLOCK_SIZE;
+        uint32_t       e = rg->start + (hi - rb_first) * HEX_L2_BLOCK_SIZE;
+        if (e > rg->end) {
+            e = rg->end;
+        }
+        hex_l2flush((void *) (uintptr_t) s, e - s);
+    }
+
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_L2FLUSH, gb_first);
+}
+
 void htp_tensor_flush_all(struct htp_context * ctx, const struct htp_tensor * const * tensors, uint32_t n) {
     uint64_t total_dirty = 0;
     for (uint32_t i = 0; i < n; i++) {
@@ -108,10 +159,46 @@ void htp_tensor_flush_all(struct htp_context * ctx, const struct htp_tensor * co
         return;
     }
 
+    // Aggregate is small enough to walk. Thread it across all dirty ranges at once
+    // when it is worth the dispatch, otherwise flush sequentially.
+    if (total_dirty > HEX_L2_FLUSH_WQ_THRESHOLD && ctx->n_threads > 1) {
+        struct l2flush_multi_task task;
+        task.trace    = ctx->trace;
+        task.n_ranges = 0;
+
+        uint32_t block_acc = 0;
+        for (uint32_t i = 0; i < n; i++) {
+            const struct htp_tensor * t = tensors[i];
+            if (!t || !bitmap_test(ctx->dirty_map, t->ti)) {
+                continue;
+            }
+            // Clear as we go: dedups a tensor passed as multiple srcs (e.g. mul(x,x)).
+            htp_tensor_make_clean(t, ctx->dirty_map);
+
+            struct l2flush_range * rg = &task.ranges[task.n_ranges++];
+            rg->start = hex_align_down((size_t) t->data, HEX_L2_LINE_SIZE);
+            rg->end   = hex_align_up((size_t) t->data + t->size, HEX_L2_LINE_SIZE);
+            rg->block_first = block_acc;
+            rg->n_blocks = (rg->end - rg->start + HEX_L2_BLOCK_SIZE - 1) / HEX_L2_BLOCK_SIZE;
+            block_acc += rg->n_blocks;
+        }
+
+        task.total_blocks      = block_acc;
+        task.blocks_per_thread = fastdiv(block_acc + ctx->n_threads - 1, &ctx->n_threads_div);
+
+        work_queue_run(ctx->work_queue, l2flush_multi_worker, &task, ctx->n_threads);
+        return;
+    }
+
+    struct htp_thread_trace * tr = &ctx->trace[0];
     for (uint32_t i = 0; i < n; i++) {
         const struct htp_tensor * t = tensors[i];
-        if (t && bitmap_test(ctx->dirty_map, t->ti)) {
-            flush_tensor_range(ctx, t);
+        if (!t || !bitmap_test(ctx->dirty_map, t->ti)) {
+            continue;
         }
+        htp_trace_event_start(tr, HTP_TRACE_EVT_L2FLUSH, t->ti);
+        hex_l2flush((void *) t->data, t->size);
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_L2FLUSH, t->ti);
+        htp_tensor_make_clean(t, ctx->dirty_map);
     }
 }
