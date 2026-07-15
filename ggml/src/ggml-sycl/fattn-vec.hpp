@@ -15,13 +15,11 @@
 
 namespace syclex = sycl::ext::oneapi::experimental;
 
-static int ggml_sycl_fattn_vec_get_nthreads_host(const int cc) {
-    return 128;
-    GGML_UNUSED(cc);
-}
-
-static constexpr int ggml_sycl_fattn_vec_get_nthreads_device() {
-    return 128;
+static int ggml_sycl_fattn_vec_get_nthreads_device(gpu_arch arch) {
+    // Xe2 (Battlemage, Lunar Lake) runs the flash-attention vec kernel best with a 256-thread work group.
+    return (arch == gpu_arch::intel_gpu_bmg_g21 ||
+            arch == gpu_arch::intel_gpu_bmg_g31 ||
+            arch == gpu_arch::intel_gpu_lnl_m) ? 256 : 128;
 }
 
 // Currenlty llvm with the amdgcn target dose not support unrolling loops
@@ -36,7 +34,8 @@ template <int D,
           int type_K,
           int type_V,
           bool use_logit_softcap,
-          int warp_size>  // D == head size
+          int warp_size,
+          int nthreads>  // D == head size
 static void flash_attn_ext_vec(const char* __restrict__ Q,
                         const char* __restrict__ K,
                         const char* __restrict__ V,
@@ -99,7 +98,6 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
     constexpr int nthreads_KQ_q = (D/4 < warp_size ? D/4 : warp_size);
     constexpr int nthreads_V_q  = (D/4 < warp_size ? D/4 : warp_size);
 
-    constexpr int nthreads    = ggml_sycl_fattn_vec_get_nthreads_device();
     constexpr int nthreads_KQ = type_K == GGML_TYPE_F16 ? 128 / cpy_nb : nthreads_KQ_q;
     constexpr int nthreads_V  = type_V == GGML_TYPE_F16 ? 128 / cpy_nb : nthreads_V_q;
 
@@ -581,24 +579,34 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
 #endif // __clang__
 
 
+
 template <int D, int cols_per_block, int type_K, int type_V, bool use_logit_softcap>
 void ggml_sycl_flash_attn_ext_vec_case_impl(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 
-    const int warp_size = WARP_16_SIZE; //better performance than WARP_32_SIZE
-
-    const int cc = ggml_sycl_info().devices[ggml_sycl_get_device()].cc;
-
-    const int nthreads = ggml_sycl_fattn_vec_get_nthreads_host(cc);
-    const int nwarps   = nthreads / warp_size;
+    constexpr int warp_size = WARP_16_SIZE; //better performance than WARP_32_SIZE
 
     const bool need_f16_K = type_K == GGML_TYPE_F16;
     const bool need_f16_V = type_V == GGML_TYPE_F16;
     constexpr size_t nbytes_shared = 0;
 
-    launch_fattn<D, cols_per_block, 1,
-                 flash_attn_ext_vec<D, cols_per_block, type_K, type_V,
-                                    use_logit_softcap, warp_size>, warp_size>(
-        ctx, dst, nwarps, nbytes_shared, D, need_f16_K, need_f16_V, false);
+    const auto arch = ggml_sycl_info().devices[ctx.device].hw_info.arch;
+    const int nthreads = ggml_sycl_fattn_vec_get_nthreads_device(arch);
+    // 256 threads would overflow the 64 KB work-group local memory at D == 512, so keep 128 there.
+    if (D <= 256 && nthreads == 256) {
+        constexpr int nthreads_hw = 256;
+        constexpr int nwarps = nthreads_hw / warp_size;
+        launch_fattn<D, cols_per_block, 1,
+                     flash_attn_ext_vec<D, cols_per_block, type_K, type_V,
+                                        use_logit_softcap, warp_size, nthreads_hw>, warp_size>(
+            ctx, dst, nwarps, nbytes_shared, D, need_f16_K, need_f16_V, false);
+    } else {
+        constexpr int nthreads_hw = 128;
+        constexpr int nwarps = nthreads_hw / warp_size;
+        launch_fattn<D, cols_per_block, 1,
+                     flash_attn_ext_vec<D, cols_per_block, type_K, type_V,
+                                        use_logit_softcap, warp_size, nthreads_hw>, warp_size>(
+            ctx, dst, nwarps, nbytes_shared, D, need_f16_K, need_f16_V, false);
+    }
 }
 
 template <int D, int type_K, int type_V>

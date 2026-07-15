@@ -32,7 +32,9 @@
 	let isHealthChecking = $derived(healthState.status === HealthCheckStatus.CONNECTING);
 	let isConnected = $derived(healthState.status === HealthCheckStatus.SUCCESS);
 	let isError = $derived(healthState.status === HealthCheckStatus.ERROR);
-	let showSkeleton = $derived(isIdle || isHealthChecking);
+	// Disabled servers stay IDLE (no startup health check), so the body
+	// skeleton only applies while a check is running or expected to run.
+	let showSkeleton = $derived(isHealthChecking || (isIdle && server.enabled));
 	let errorMessage = $derived(
 		healthState.status === HealthCheckStatus.ERROR ? healthState.message : undefined
 	);

@@ -30,36 +30,15 @@ protected:
 
 // producer end: writes chunks into the ring buffer and owns the session lifetime, finalizing it
 // on destruction.
-//
-// lifetime safety: holds a shared_ptr<atomic<bool>> alive also captured by the session's
-// stop_producer hook. cleanup() sets alive=false and clears the hook; it must run while the
-// response the hook calls stop() on is still alive. ~server_res_generator() does this explicitly.
 struct stream_pipe_producer : stream_pipe {
     ~stream_pipe_producer() override;
 
     bool write(const char * data, size_t len);
 
-    // mark the natural end on the wire so a later close() is a no-op
-    void done();
-
-    // on a peer drop, pump the response next() into the ring buffer until done. runs on the http
-    // worker from on_complete, no-op after done() or cancel
-    void close();
-
-    // disarm the stop hook and drop the alive guard, must run while the response the hook
-    // references is still alive. idempotent, the destructor calls it too
-    void cleanup();
-
-    // res.stop() is invoked when the session is cancelled, the alive guard ensures stop() is not
-    // called after cleanup() has run
-    static std::shared_ptr<stream_pipe_producer> create(stream_session_ptr session, server_http_res & res);
+    static stream_pipe_producer * create(stream_session_ptr session);
 
 private:
     explicit stream_pipe_producer(stream_session_ptr session);
-
-    bool                                done_ = false;
-    std::shared_ptr<std::atomic<bool>>  alive_;
-    server_http_res *                   res_ = nullptr;
 };
 
 void server_stream_session_manager_start();
@@ -73,10 +52,22 @@ server_http_context::handler_t server_stream_make_delete_handler();
 // extract the X-Conversation-Id header value (case-insensitive), empty when absent
 std::string server_stream_conv_id_from_headers(const std::map<std::string, std::string> & headers);
 
-// on an X-Conversation-Id header, create or replace the session and attach a producer pipe to res
-void server_stream_session_attach_pipe(server_http_res & res, const std::map<std::string, std::string> & headers);
+// implement tee-style pipe (spipe) for "stream replay" functionality
+struct server_res_spipe : server_http_res {
+private:
+    // if set, the stream survives a client disconnect:
+    // connection kept alive, output is forwarded to spipe and reuse later
+    std::unique_ptr<stream_pipe_producer> spipe;
+    // if spipe is set, use this next_orig to implement tee-style pipe
+    std::function<bool(std::string &)> next_orig;
+    const server_http_req * req = nullptr;
+    // set once next_orig reports no more data, so on_complete() doesn't re-drain a finished stream
+    bool next_finished = false;
 
-// should_stop closure that ignores peer disconnect when a pipe is attached, so only an explicit
-// DELETE stops the producer and generation keeps flowing into the ring buffer. without a pipe it
-// delegates to fallback, the legacy non-resumable flow
-std::function<bool()> server_stream_aware_should_stop(server_http_res * res, std::function<bool()> fallback);
+public:
+    void set_req(const server_http_req * req);
+    bool conn_alive();
+    bool should_stop();
+    void on_complete() override;
+    void set_next(std::function<bool(std::string &)> next_fn);
+};

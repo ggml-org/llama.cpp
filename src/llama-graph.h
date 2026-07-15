@@ -42,6 +42,7 @@ enum llm_fused_op {
     LLM_FUSED_OP_FLASH_ATTN,
     LLM_FUSED_OP_GDN_AR,
     LLM_FUSED_OP_GDN_CH,
+    LLM_FUSED_OP_LIGHTNING_INDEXER,
 };
 
 enum llm_ffn_op_type : int {

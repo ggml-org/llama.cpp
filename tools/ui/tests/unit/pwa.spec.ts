@@ -189,9 +189,5 @@ describe('PWA Build Output', () => {
 			expect(existsSync(resolve(DIST_DIR, 'pwa-192x192.png'))).toBeTruthy();
 			expect(existsSync(resolve(DIST_DIR, 'pwa-512x512.png'))).toBeTruthy();
 		});
-
-		it('has loading.html fallback page', () => {
-			expect(existsSync(resolve(DIST_DIR, 'loading.html'))).toBeTruthy();
-		});
 	});
 });

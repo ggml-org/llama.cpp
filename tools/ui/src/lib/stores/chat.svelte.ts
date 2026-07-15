@@ -1334,7 +1334,7 @@ class ChatStore {
 			}
 		};
 
-		const perChatOverrides = conversationsStore.activeConversation?.mcpServerOverrides;
+		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
 
 		{
 			const agenticResult = await agenticStore.runAgenticFlow({

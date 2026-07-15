@@ -44,6 +44,7 @@
 #include "htp-ops.h"
 #include "htp/matmul-ops.h"
 #include "htp/flash-attn-ops.h"
+#include "htp/unary-ops.h"
 #include "htp_iface.h"
 #include "htp-drv.h"
 
@@ -170,14 +171,23 @@ static inline bool ggml_hexagon_is_hmx_weight_type(enum ggml_type type) {
     return type == GGML_TYPE_F16 || type == GGML_TYPE_F32 || ggml_hexagon_is_repack_type(type);
 }
 
-struct htp_mm_kernel_params;
 struct ggml_hexagon_session;
+
 static void ggml_hexagon_precompute_matmul_params(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * src0,
     const struct ggml_tensor * src1,
     const struct ggml_tensor * dst,
     struct htp_mm_kernel_params * kparams
+);
+
+static void ggml_hexagon_precompute_unary_params(
+    const struct ggml_hexagon_session * sess,
+    uint32_t op,
+    const struct ggml_tensor * src0,
+    const struct ggml_tensor * src1,
+    const struct ggml_tensor * dst,
+    struct htp_unary_kernel_params * kparams
 );
 
 static void ggml_hexagon_precompute_fused_qkv_params(
@@ -2591,6 +2601,74 @@ finalize:
     kparams->div_ne11     = init_fastdiv_values(ne11);
 }
 
+static void ggml_hexagon_precompute_unary_params(
+    const struct ggml_hexagon_session * sess,
+    uint32_t op,
+    const struct ggml_tensor * src0,
+    const struct ggml_tensor * src1,
+    const struct ggml_tensor * dst,
+    struct htp_unary_kernel_params * kparams
+) {
+    memset(kparams, 0, sizeof(*kparams));
+
+    const uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
+    const uint32_t n_threads  = (std::min)((uint32_t)sess->n_threads, src0_nrows);
+
+    kparams->n_threads = n_threads;
+
+    const size_t src0_data_row_size = src0->ne[0] * sizeof(float);
+    const size_t dst_data_row_size  = dst->ne[0]  * sizeof(float);
+
+    const size_t src0_row_size_aligned = hex_round_up(src0_data_row_size, 128);
+    const size_t dst_row_size_aligned  = hex_round_up(dst_data_row_size,  128);
+
+    kparams->src0_row_size_aligned = src0_row_size_aligned;
+    kparams->dst_row_size_aligned  = dst_row_size_aligned;
+
+    size_t src1_data_row_size = 0;
+    size_t src1_row_size_aligned = 0;
+    bool broadcast_weight = false;
+
+    if (op == HTP_OP_RMS_NORM_MUL) {
+        GGML_ASSERT(src1 != nullptr);
+        src1_data_row_size = src1->ne[0] * sizeof(float);
+        src1_row_size_aligned = hex_round_up(src1_data_row_size, 128);
+        broadcast_weight = (src1->ne[1] * src1->ne[2] * src1->ne[3] == 1);
+    }
+
+    kparams->src1_row_size_aligned = src1_row_size_aligned;
+    kparams->broadcast_weight      = broadcast_weight;
+
+    struct htp_unary_vtcm_layout L;
+    uint32_t col_tile = 0;
+    uint32_t vtcm_row_per_thread = 0;
+
+    htp_unary_vtcm_layout_build(&L, op, src0->ne[0], dst->ne[0],
+                                op == HTP_OP_RMS_NORM_MUL ? src1->ne[0] : 0,
+                                broadcast_weight, n_threads, sess->vtcm_size,
+                                &col_tile, &vtcm_row_per_thread);
+
+    kparams->col_tile = col_tile;
+    kparams->vtcm_row_per_thread = vtcm_row_per_thread;
+    kparams->vtcm_size = L.total_bytes;
+
+    kparams->vtcm_src0_size_per_thread = L.src0_bytes;
+    kparams->vtcm_src1_size_per_thread = L.src1_bytes;
+    kparams->vtcm_dst_size_per_thread  = L.dst_bytes;
+
+    kparams->vtcm_src0_size = L.src0_bytes * n_threads;
+    kparams->vtcm_src1_size = L.src1_bytes * n_threads;
+    kparams->vtcm_dst_size  = L.dst_bytes * n_threads;
+
+    kparams->block = col_tile ? 0 : ((L.src0_bytes / 2) / src0_row_size_aligned);
+
+    const uint32_t tiles_per_row = col_tile > 0 ? (src0->ne[0] + col_tile - 1) / col_tile : 1;
+    kparams->div_ne01  = init_fastdiv_values(src0->ne[1]);
+    kparams->div_ne02  = init_fastdiv_values(src0->ne[2]);
+    kparams->div_ne012 = init_fastdiv_values(src0->ne[1] * src0->ne[2]);
+    kparams->div_tpr   = init_fastdiv_values(tiles_per_row);
+}
+
 static void ggml_hexagon_precompute_fused_qkv_params(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * src0, // Wk
@@ -2866,6 +2944,9 @@ static bool ggml_hexagon_supported_binary(const struct ggml_hexagon_session * se
         return false;
     }
 
+    if (ggml_is_permuted(src0) || ggml_is_permuted(dst)) {
+        return false;
+    }
     if (!ggml_are_same_shape(src0, dst)) {
         return false;
     }
@@ -2910,6 +2991,9 @@ static bool ggml_hexagon_supported_unary(const struct ggml_hexagon_session * ses
         return false;
     }
     if (dst->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (ggml_is_permuted(src0)) {
         return false;
     }
     if (!ggml_are_same_shape(src0, dst)) {
@@ -3105,8 +3189,12 @@ static bool ggml_hexagon_supported_rope(const struct ggml_hexagon_session * sess
 
     int mode = op_params[2];
 
+    // n_dims == ne0/2, so the rotation spans the full row
     if (mode == GGML_ROPE_TYPE_VISION) {
-        return false;
+        const int n_dims = op_params[1];
+        if (n_dims != (int) (op->src[0]->ne[0] / 2)) {
+            return false;
+        }
     }
     if (mode & 1) {
         return false;
@@ -3137,16 +3225,23 @@ static bool ggml_hexagon_supported_rope(const struct ggml_hexagon_session * sess
     }
 
     if (src2) {
-        if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1) || !ggml_is_contiguous(src2) ||
-            !ggml_is_contiguous(dst)) {
+        if (!ggml_is_contiguous(src1) || !ggml_is_contiguous(src2)) {
             return false;
         }
     } else {
-        if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1) || !ggml_is_contiguous(dst)) {
+        if (!ggml_is_contiguous(src1)) {
             return false;
         }
     }
 
+    // src0/dst elements within a row must be contiguous (nb[0] == sizeof(float)).
+    // nb[1] may exceed ne[0]*sizeof(float) when the tensor is a strided view of a larger one
+    if (src0->nb[0] != sizeof(float) || dst->nb[0] != sizeof(float)) {
+        return false;
+    }
+    if (src0->nb[1] < src0->ne[0] * sizeof(float) || dst->nb[1] < dst->ne[0] * sizeof(float)) {
+        return false;
+    }
     return true;
 }
 
@@ -3440,6 +3535,15 @@ static bool try_fuse_node(const ggml_hexagon_session * sess, const ggml_cgraph *
         if (next_node->op == GGML_OP_MUL && op_is_compute(next_node) && ggml_can_fuse(graph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL })) {
             htp_opnode node(n, {}, HTP_OP_RMS_NORM_MUL);
             node.add_fused(next_node);
+
+            auto inputs = node.get_inputs();
+            const struct ggml_tensor * src0 = inputs[0];
+            const struct ggml_tensor * src1 = inputs.size() > 1 ? inputs[1] : nullptr;
+            ggml_hexagon_precompute_unary_params(sess,
+                node.opcode, src0, src1, node.dst(),
+                (struct htp_unary_kernel_params *)node.kernel_params
+            );
+
             nodes.push_back(std::move(node));
             i++; // skip the fused MUL node
             return true;
@@ -3543,6 +3647,14 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
                 ggml_hexagon_precompute_flash_attn_params(sess,
                     node.node,
                     (struct htp_fa_kernel_params *)node.kernel_params
+                );
+            } else if (htp_op_is_unary(node.opcode)) {
+                auto inputs = node.get_inputs();
+                const struct ggml_tensor * src0 = inputs[0];
+                const struct ggml_tensor * src1 = inputs.size() > 1 ? inputs[1] : nullptr;
+                ggml_hexagon_precompute_unary_params(sess,
+                    node.opcode, src0, src1, node.dst(),
+                    (struct htp_unary_kernel_params *)node.kernel_params
                 );
             }
             computed_nodes.push_back(std::move(node));

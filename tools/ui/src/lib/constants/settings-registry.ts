@@ -24,11 +24,9 @@ import type {
 	SettingsSection
 } from '$lib/types';
 import { CLI_FLAGS, DEFAULT_MCP_CONFIG } from '$lib/constants';
-import McpLogo from '$lib/components/app/mcp/McpLogo.svelte';
 import { SETTINGS_KEYS } from './settings-keys';
 import { ROUTES, SETTINGS_SECTION_SLUGS } from './routes';
 import { TITLE_GENERATION } from './title-generation';
-import { RECOMMENDED_MCP_SERVERS } from './recommended-mcp-servers';
 
 export const SETTINGS_SECTION_TITLES = {
 	GENERAL: 'General',
@@ -37,7 +35,6 @@ export const SETTINGS_SECTION_TITLES = {
 	PENALTIES: 'Penalties',
 	AGENTIC: 'Agentic',
 	TOOLS: 'Tools',
-	MCP: 'MCP',
 	IMPORT_EXPORT: 'Import/Export',
 	DEVELOPER: 'Developer'
 } as const;
@@ -636,15 +633,15 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				}
 			},
 			{
-				key: SETTINGS_KEYS.AGENTIC_MAX_TOOL_PREVIEW_LINES,
-				label: 'Max lines per tool preview',
-				help: 'Number of lines shown in tool output previews (last N lines). Only these previews and the final LLM response persist after the agentic loop completes.',
-				defaultValue: 25,
+				key: SETTINGS_KEYS.MCP_REQUEST_TIMEOUT_SECONDS,
+				label: 'MCP request timeout (seconds)',
+				help: 'Timeout for individual MCP tool calls.',
+				defaultValue: DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.AGENTIC,
 				isPositiveInteger: true,
 				sync: {
-					serverKey: SETTINGS_KEYS.AGENTIC_MAX_TOOL_PREVIEW_LINES,
+					serverKey: SETTINGS_KEYS.MCP_REQUEST_TIMEOUT_SECONDS,
 					paramType: SyncableParameterType.NUMBER
 				}
 			}
@@ -736,26 +733,6 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				}
 			}
 		]
-	},
-	[SETTINGS_SECTION_SLUGS.MCP]: {
-		title: SETTINGS_SECTION_TITLES.MCP,
-		slug: SETTINGS_SECTION_SLUGS.MCP,
-		icon: McpLogo,
-		settings: [
-			{
-				key: SETTINGS_KEYS.MCP_REQUEST_TIMEOUT_SECONDS,
-				label: 'Request timeout (seconds)',
-				help: 'Default timeout for individual MCP tool calls. Can be overridden per server.',
-				defaultValue: DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
-				type: SettingsFieldType.INPUT,
-				section: SETTINGS_SECTION_SLUGS.MCP,
-				isPositiveInteger: true,
-				sync: {
-					serverKey: SETTINGS_KEYS.MCP_REQUEST_TIMEOUT_SECONDS,
-					paramType: SyncableParameterType.NUMBER
-				}
-			}
-		]
 	}
 } as const;
 
@@ -775,16 +752,9 @@ const NON_UI_SETTINGS: SettingsEntry[] = [
 		key: SETTINGS_KEYS.MCP_SERVERS,
 		label: 'MCP servers',
 		help: 'Configure MCP servers as a JSON list. Use the form in the MCP Client settings section to edit.',
-		defaultValue: JSON.stringify(RECOMMENDED_MCP_SERVERS),
+		defaultValue: '[]',
 		type: SettingsFieldType.INPUT,
 		sync: { serverKey: SETTINGS_KEYS.MCP_SERVERS, paramType: SyncableParameterType.STRING }
-	},
-	{
-		key: SETTINGS_KEYS.MCP_DEFAULT_SERVER_OVERRIDES,
-		label: 'MCP default server overrides',
-		help: 'Per-server enable/disable defaults inherited by new chats. JSON-serialized list of {serverId, enabled} entries.',
-		defaultValue: '[]',
-		type: SettingsFieldType.INPUT
 	}
 	// {
 	// 	key: SETTINGS_KEYS.PY_INTERPRETER_ENABLED,

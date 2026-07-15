@@ -96,8 +96,6 @@ struct stream_session {
     size_t  dropped_prefix() const; // bytes evicted from the front due to cap
     int64_t completed_at() const;   // 0 while alive, unix seconds after finalize
 
-    void set_stop_producer(std::function<void()> fn);
-
     void cancel();
 
 private:
@@ -109,7 +107,6 @@ private:
     bool                    done;
     std::atomic<bool>       cancelled; // polled lock-free by the should_stop closure, no mu
     int64_t                 completed_ts;
-    std::function<void()>   stop_producer;
 };
 stream_session::stream_session(std::string conversation_id_, size_t max_bytes_)
     : conversation_id(std::move(conversation_id_))
@@ -217,26 +214,10 @@ int64_t stream_session::completed_at() const {
     return completed_ts;
 }
 
-void stream_session::set_stop_producer(std::function<void()> fn) {
-    std::lock_guard<std::mutex> lock(mu);
-    stop_producer = std::move(fn);
-}
-
 void stream_session::cancel() {
-    // flip cancelled first so the producer-side server_stream_aware_should_stop can break out of the
-    // recv() wait even if remove_waiting_task_ids does not notify the condvar (the cancel task
-    // posted by rd.stop() will eventually notify, but we do not want to depend on that timing)
+    // the should_stop closure on both the producer and any HTTP reader polls is_cancelled()
+    // so flipping this is the only signal needed to unwind both sides
     cancelled.store(true, std::memory_order_release);
-    // copy the hook under the lock then invoke outside, the producer side may grab queue locks
-    // and we do not want to hold our mu across that path
-    std::function<void()> fn;
-    {
-        std::lock_guard<std::mutex> lock(mu);
-        fn = stop_producer;
-    }
-    if (fn) {
-        fn();
-    }
 }
 
 bool stream_session::is_cancelled() const {
@@ -325,8 +306,10 @@ void stream_session_manager::evict_and_cancel(const std::string & conversation_i
         s = it->second;
         sessions.erase(it);
     }
-    // signal the producer side first so the inference is cancelled at the queue level,
-    // then finalize, which wakes any pending HTTP reader and lets the drain exit naturally
+    // cancel first so the producer's on_complete() drain loop and any pending HTTP reader
+    // observe is_cancelled() and stop pulling further output, then finalize to wake readers
+    // blocked in read_from(). note: this does not interrupt the underlying generation itself,
+    // which keeps running to its own natural stop condition (EOS/max_tokens)
     s->cancel();
     s->finalize();
 }
@@ -431,65 +414,15 @@ stream_pipe_producer::stream_pipe_producer(stream_session_ptr session)
 }
 
 stream_pipe_producer::~stream_pipe_producer() {
-    cleanup();
     session_->finalize();
-}
-
-void stream_pipe_producer::cleanup() {
-    if (!alive_) {
-        return;
-    }
-    alive_->store(false, std::memory_order_release);
-    session_->set_stop_producer(nullptr);
-    alive_.reset();
 }
 
 bool stream_pipe_producer::write(const char * data, size_t len) {
     return session_->append(data, len);
 }
 
-void stream_pipe_producer::done() {
-    done_ = true;
-}
-
-void stream_pipe_producer::close() {
-    // httplib bails its content provider the moment is_peer_alive() goes false, so pump the rest
-    // of the generation into the ring buffer here. a DELETE flips is_cancelled and cuts it short
-    if (done_ || session_->is_cancelled()) {
-        SRV_TRC("stream_pipe close: skip drain (done=%d cancelled=%d) conv=%s\n",
-                done_ ? 1 : 0, session_->is_cancelled() ? 1 : 0, session_->conversation_id.c_str());
-        return;
-    }
-    SRV_TRC("stream_pipe close: draining conv=%s\n", session_->conversation_id.c_str());
-    size_t drained = 0;
-    std::string chunk;
-    while (true) {
-        chunk.clear();
-        bool has_next = res_->next(chunk);
-        if (!chunk.empty()) {
-            write(chunk.data(), chunk.size());
-            drained += chunk.size();
-        }
-        if (!has_next) {
-            break;
-        }
-    }
-    SRV_TRC("stream_pipe close: drain ended conv=%s bytes=%zu\n", session_->conversation_id.c_str(), drained);
-}
-
-std::shared_ptr<stream_pipe_producer> stream_pipe_producer::create(stream_session_ptr session,
-                                                                   server_http_res & res) {
-    auto alive = std::make_shared<std::atomic<bool>>(true);
-    auto * res_ptr = &res;
-    session->set_stop_producer([alive, res_ptr]() {
-        if (alive->load(std::memory_order_acquire)) {
-            res_ptr->stop();
-        }
-    });
-    auto pipe = std::shared_ptr<stream_pipe_producer>(new stream_pipe_producer(std::move(session)));
-    pipe->alive_ = std::move(alive);
-    pipe->res_   = res_ptr;
-    return pipe;
+stream_pipe_producer * stream_pipe_producer::create(stream_session_ptr session) {
+    return new stream_pipe_producer(std::move(session));
 }
 
 // stream_pipe_consumer
@@ -661,21 +594,68 @@ std::string server_stream_conv_id_from_headers(const std::map<std::string, std::
     return std::string();
 }
 
-void server_stream_session_attach_pipe(server_http_res & res, const std::map<std::string, std::string> & headers) {
+static stream_pipe_producer * server_stream_create_spipe(const std::map<std::string, std::string> & headers) {
     std::string conversation_id = server_stream_conv_id_from_headers(headers);
     SRV_TRC("conv_id=%s (empty=%d)\n", conversation_id.c_str(), conversation_id.empty() ? 1 : 0);
     if (conversation_id.empty()) {
-        return;
+        return nullptr;
     }
     auto session = g_stream_sessions.create_or_replace(conversation_id);
-    res.spipe = stream_pipe_producer::create(session, res);
+    return stream_pipe_producer::create(session);
 }
 
-std::function<bool()> server_stream_aware_should_stop(server_http_res * res, std::function<bool()> fallback) {
-    return [res, fallback = std::move(fallback)]() -> bool {
-        if (res->spipe) {
-            return res->spipe->is_cancelled();
+//
+// server_res_spipe
+//
+
+void server_res_spipe::set_req(const server_http_req * req) {
+    this->req = req;
+    // optionally attach spipe to the response when X-Conversation-Id is present
+    spipe.reset(server_stream_create_spipe(req->headers));
+}
+
+bool server_res_spipe::conn_alive() {
+    GGML_ASSERT(req != nullptr);
+    return !req->should_stop();
+}
+
+bool server_res_spipe::should_stop() {
+    if (spipe) {
+        // note: if DELETE /v1/stream/<conv_id> is called, is_cancelled() will be true
+        return spipe->is_cancelled();
+    } else {
+        return !conn_alive();
+    }
+}
+
+void server_res_spipe::on_complete() {
+    if (!spipe || next_finished) {
+        return;
+    }
+    std::string chunk;
+    while (!spipe->is_cancelled()) {
+        chunk.clear();
+        bool has_next = next_orig(chunk);
+        if (!chunk.empty()) {
+            spipe->write(chunk.data(), chunk.size());
         }
-        return fallback();
+        if (!has_next) {
+            break;
+        }
+    }
+}
+
+void server_res_spipe::set_next(std::function<bool(std::string &)> next_fn) {
+    next_orig = std::move(next_fn);
+    next = [this](std::string & out) {
+        bool has_next = next_orig(out);
+        if (spipe) {
+            // if spipe is set, tee-style pipe input to both HTTP and spipe
+            spipe->write(out.data(), out.size());
+        }
+        if (!has_next) {
+            next_finished = true;
+        }
+        return has_next;
     };
 }

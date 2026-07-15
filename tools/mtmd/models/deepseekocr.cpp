@@ -96,6 +96,8 @@ ggml_tensor * clip_graph_deepseekocr::build_sam(ggml_tensor * inp_raw) {
     const int n_heads = hparams.sam_n_head;
     const int d_heads = n_embd / n_heads;
     const int window  = hparams.attn_window_size;
+    // SAM stage runs its layernorms at 1e-6
+    const float sam_eps = 1e-6f;
 
     ggml_tensor * inpL;
 
@@ -134,7 +136,7 @@ ggml_tensor * clip_graph_deepseekocr::build_sam(ggml_tensor * inp_raw) {
         ggml_tensor * shortcut = cur;
 
         // layernorm1
-        cur = build_norm(cur, layer.ln_1_w, layer.ln_1_b, NORM_TYPE_NORMAL, eps, il);
+        cur = build_norm(cur, layer.ln_1_w, layer.ln_1_b, NORM_TYPE_NORMAL, sam_eps, il);
 
         const int64_t w0 = cur->ne[1];
         const int64_t h0 = cur->ne[2];
@@ -214,7 +216,7 @@ ggml_tensor * clip_graph_deepseekocr::build_sam(ggml_tensor * inp_raw) {
         ggml_tensor * inpFF = cur;
 
         // layernorm2
-        cur = build_norm(inpFF, layer.ln_2_w, layer.ln_2_b, NORM_TYPE_NORMAL, eps, il);
+        cur = build_norm(inpFF, layer.ln_2_w, layer.ln_2_b, NORM_TYPE_NORMAL, sam_eps, il);
 
         // ffn
         cur = build_ffn(cur, layer.ff_up_w, layer.ff_up_b, nullptr, nullptr, layer.ff_down_w, layer.ff_down_b,
@@ -229,12 +231,12 @@ ggml_tensor * clip_graph_deepseekocr::build_sam(ggml_tensor * inp_raw) {
 
     cur = ggml_conv_2d(ctx0, model.neck_0_w, cur, 1, 1, 0, 0, 1, 1);
     cur = ggml_cont(ctx0, ggml_permute(ctx0, cur, 1, 2, 0, 3));
-    cur = build_norm(cur, model.neck_1_w, model.neck_1_b, NORM_TYPE_NORMAL, hparams.eps, -1);
+    cur = build_norm(cur, model.neck_1_w, model.neck_1_b, NORM_TYPE_NORMAL, sam_eps, -1);
     cur = ggml_cont(ctx0, ggml_permute(ctx0, cur, 2, 0, 1, 3));
 
     cur = ggml_conv_2d(ctx0, model.neck_2_w, cur, 1, 1, 1, 1, 1, 1);
     cur = ggml_cont(ctx0, ggml_permute(ctx0, cur, 1, 2, 0, 3));
-    cur = build_norm(cur, model.neck_3_w, model.neck_3_b, NORM_TYPE_NORMAL, hparams.eps, -1);
+    cur = build_norm(cur, model.neck_3_w, model.neck_3_b, NORM_TYPE_NORMAL, sam_eps, -1);
     cur = ggml_cont(ctx0, ggml_permute(ctx0, cur, 2, 0, 1, 3));
 
     cur = ggml_conv_2d(ctx0, model.net_2, cur, 2, 2, 1, 1, 1, 1);
@@ -248,7 +250,39 @@ ggml_tensor * clip_graph_deepseekocr::build_sam(ggml_tensor * inp_raw) {
 ggml_cgraph * clip_graph_deepseekocr::build() {
     // patch embedding
     ggml_tensor * inp_raw = build_inp_raw();
+
+    bool is_overview = img.add_viewsep;
+    int n_tiles_per_row = 0;
+
+    // note: we expect either a batch of rows or a batch of overviews, but not a mix of both
+
+    if (!is_overview) {
+        // handle the case where we have a batch of rows
+        // sanity check
+        for (auto & entry : img_batch->entries) {
+            if (entry.add_viewsep) {
+                throw std::runtime_error("DeepSeek-OCR: mixed overview and non-overview images in batch");
+            }
+            if (entry.nx() != img.nx() || entry.ny() != img.ny()) {
+                throw std::runtime_error("DeepSeek-OCR: mixed image sizes in batch");
+            }
+        }
+
+        GGML_ASSERT(img.ny() >= img.nx());
+        GGML_ASSERT(img.ny() % img.nx() == 0);
+        n_tiles_per_row = img.ny() / img.nx();
+
+        // input shape: [tile_size, tile_size * n_tiles_per_row, 3]
+        // we want to reshape it to [tile_size, tile_size, 3, n_tiles_per_row]
+        inp_raw = ggml_reshape_4d(ctx0, inp_raw, img.nx(), img.nx(), n_tiles_per_row, 3);
+        inp_raw = ggml_cont(ctx0, ggml_permute(ctx0, inp_raw, 0, 1, 3, 2));
+    }
+
     ggml_tensor * sam_out = build_sam(inp_raw);
+
+    if (!is_overview) {
+        n_batch = n_tiles_per_row;
+    }
 
     const int clip_n_patches = sam_out->ne[0] * sam_out->ne[1];
 
@@ -257,7 +291,9 @@ ggml_cgraph * clip_graph_deepseekocr::build() {
     {
         ggml_tensor * inp;
 
-        inp = ggml_reshape_2d(ctx0, sam_out, clip_n_patches, sam_out->ne[2]);
+        // sam_out: [patch_h, patch_w, n_embd, n_batch]
+        // -> [n_embd, clip_n_patches, n_batch]
+        inp = ggml_reshape_3d(ctx0, sam_out, clip_n_patches, sam_out->ne[2], sam_out->ne[3]);
         inp = ggml_cont(ctx0, ggml_permute(ctx0, inp, 1, 0, 2, 3));
 
         ggml_tensor * new_pos_embd = model.position_embeddings;
@@ -281,8 +317,11 @@ ggml_cgraph * clip_graph_deepseekocr::build() {
             n_pos        = tgt_size * tgt_size + 1;
         }
 
-        // add CLS token
-        inp = ggml_concat(ctx0, model.class_embedding, inp, 1);
+        // add CLS token per batch item
+        // inp: [n_embd, clip_n_patches, n_batch]
+        // class_embedding: [n_embd] -> [n_embd, 1, n_batch]
+        ggml_tensor * cls_embd = ggml_repeat_4d(ctx0, model.class_embedding, n_embd, 1, n_batch, 1);
+        inp = ggml_concat(ctx0, cls_embd, inp, 1);
 
         // for selecting learned pos embd, used by ViT
         ggml_tensor * positions        = ggml_cast(ctx0, ggml_arange(ctx0, 0, n_pos, 1), GGML_TYPE_I32);
@@ -294,25 +333,56 @@ ggml_cgraph * clip_graph_deepseekocr::build() {
         clip_out = cur;
     }
 
+    // sam_out: [patch_h, patch_w, n_embd, n_batch]
+    // -> [n_embd, clip_n_patches, n_batch]
     sam_out  = ggml_cont(ctx0, ggml_permute(ctx0, sam_out, 1, 2, 0, 3));
-    sam_out  = ggml_reshape_2d(ctx0, sam_out, sam_out->ne[0], clip_n_patches);
-    clip_out = ggml_view_2d(ctx0, clip_out, n_embd, clip_n_patches, clip_out->nb[1], clip_out->nb[1]);
+    sam_out  = ggml_reshape_3d(ctx0, sam_out, sam_out->ne[0], clip_n_patches, n_batch);
+
+    // clip_out: [n_embd, n_pos, n_batch] where n_pos = clip_n_patches + 1 (CLS)
+    // strip CLS token: skip first position, view only the patch tokens
+    clip_out = ggml_view_3d(ctx0, clip_out, n_embd, clip_n_patches, n_batch,
+                            clip_out->nb[1], clip_out->nb[2], clip_out->nb[1]);
 
     ggml_tensor * cur;
     cur = ggml_concat(ctx0, clip_out, sam_out, 0);
     cur = ggml_mul_mat(ctx0, model.mm_fc_w, cur);
     cur = ggml_add(ctx0, cur, model.mm_fc_b);
 
-    const auto h     = static_cast<int>(std::sqrt(static_cast<float>(cur->ne[1])));
-    const auto w     = h;
-    const auto n_dim = cur->ne[0];
+    if (is_overview) {
+        // global view: weave one newline per row + trailing view separator
+        const auto h     = static_cast<int>(std::sqrt(static_cast<float>(cur->ne[1])));
+        const auto w     = h;
+        const auto n_dim = cur->ne[0];
 
-    ggml_tensor * imgnl;
+        ggml_tensor * imgnl = ggml_repeat_4d(ctx0, model.image_newline, n_dim, 1, h, 1);
+        cur = ggml_reshape_3d(ctx0, cur, n_dim, w, h);
+        cur = ggml_reshape_2d(ctx0, ggml_concat(ctx0, cur, imgnl, 1), n_dim, (w + 1) * h);
+        cur = ggml_concat(ctx0, cur, model.view_seperator, 1);  // (n_dim, h*(w+1) + 1)
+    } else {
+        // tile row: interleave tiles within each row, add newline per row
+        const int grid_x      = static_cast<int>(std::sqrt(static_cast<float>(clip_n_patches)));
+        const int grid_y      = grid_x;
+        const auto n_dim      = cur->ne[0];
 
-    imgnl = ggml_repeat_4d(ctx0, model.image_newline, n_dim, 1, h, 1);
-    cur   = ggml_reshape_3d(ctx0, cur, n_dim, w, h);
-    cur   = ggml_reshape_2d(ctx0, ggml_concat(ctx0, cur, imgnl, 1), n_dim, (w + 1) * h);
-    cur   = ggml_concat(ctx0, cur, model.view_seperator, 1);  // (n_dim, h*(w+1) + 1)
+        // (n_dim, clip_n_patches, n_batch) -> (n_dim, grid_x, grid_y, n_batch)
+        cur = ggml_reshape_4d(ctx0, cur, n_dim, grid_x, grid_y, n_batch);
+
+        // tiles: re-order from A.row0 A.row1 B.row0 B.row1 ...
+        //        to A.row0 B.row0 A.row1 B.row1 ...
+        //        then add nl: A.row0 B.row0 [nl] A.row1 B.row1 [nl] ...
+        // interleave tiles: (n_dim, grid_x, grid_y, n_batch) -> (n_dim, grid_x, n_batch, grid_y)
+        cur = ggml_cont(ctx0, ggml_permute(ctx0, cur, 0, 1, 3, 2));
+
+        // merge: (n_dim, grid_x, n_batch, grid_y) -> (n_dim, grid_x*n_batch, grid_y, 1)
+        cur = ggml_reshape_4d(ctx0, cur, n_dim, grid_x * n_batch, grid_y, 1);
+
+        // append newline per row: (n_dim, grid_x*n_batch+1, grid_y, 1)
+        ggml_tensor * imgnl = ggml_repeat_4d(ctx0, model.image_newline, n_dim, 1, grid_y, 1);
+        cur = ggml_concat(ctx0, cur, imgnl, 1);
+
+        // flatten: (n_dim, (grid_x*n_batch+1)*grid_y)
+        cur = ggml_reshape_2d(ctx0, cur, n_dim, (grid_x * n_batch + 1) * grid_y);
+    }
 
     cb(cur, "dsocr_output", -1);
 
