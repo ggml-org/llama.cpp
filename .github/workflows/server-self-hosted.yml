@@ -29,6 +29,7 @@ on:
     ]
 
 env:
+  HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
   LLAMA_ARG_LOG_COLORS: 1
   LLAMA_ARG_LOG_PREFIX: 1
   LLAMA_ARG_LOG_TIMESTAMPS: 1
