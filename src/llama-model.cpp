@@ -1692,6 +1692,13 @@ const float * llama_model::tensor_split() const {
     return params.tensor_split;
 }
 
+void llama_model::set_tensor_split(const std::vector<float> & tensor_split) {
+    pimpl->tensor_split_owned.assign(llama_max_devices(), 0.0f);
+    std::copy_n(tensor_split.begin(), std::min(tensor_split.size(), pimpl->tensor_split_owned.size()),
+        pimpl->tensor_split_owned.begin());
+    params.tensor_split = pimpl->tensor_split_owned.data();
+}
+
 uint32_t llama_model::n_gpu_layers() const {
     // note: plus 1 for the "output" layer
     return params.n_gpu_layers >= 0 ? params.n_gpu_layers : hparams.n_layer_all + 1;
