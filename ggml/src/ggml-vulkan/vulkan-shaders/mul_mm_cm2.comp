@@ -324,12 +324,12 @@ void main() {
     if (tid < BN) {
         row_ids[tid] = u16vec4(0);
     }
-#if !defined(NEEDS_INIT_IQ_SHMEM)
+#if !defined(NEEDS_INIT_IQ_SHMEM) && !defined(MULMAT_QUANT)
     barrier();
 #endif
 #endif
 
-#ifdef NEEDS_INIT_IQ_SHMEM
+#if defined(NEEDS_INIT_IQ_SHMEM) || defined(MULMAT_QUANT)
     init_iq_shmem(gl_WorkGroupSize);
 #endif
 
