@@ -28,7 +28,11 @@
 	let selectedRecommendationId = $derived.by(() => {
 		const url = newServerUrl.trim();
 		if (!url) return null;
-		return RECOMMENDED_MCP_SERVERS.find((rec) => rec.url === url)?.id ?? null;
+		const targetCanonical = canonicalizeServerUrl(url);
+		return (
+			RECOMMENDED_MCP_SERVERS.find((rec) => canonicalizeServerUrl(rec.url) === targetCanonical)
+				?.id ?? null
+		);
 	});
 	let selectedRecommendation = $derived(
 		selectedRecommendationId

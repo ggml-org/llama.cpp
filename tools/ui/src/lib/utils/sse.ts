@@ -10,7 +10,11 @@ import {
  *
  * Yields one event per `\n\n`-separated record. Each event payload is the
  * decoded `data:` field after JSON-parsing. A `[DONE]` sentinel terminates
- * the stream early. Malformed records are skipped silently.
+ * the stream early. Malformed records - any record whose `data:` payload
+ * fails `JSON.parse` - are skipped silently: usually a transient mid-stream
+ * fault that the caller should not have to special-case, and the noise of
+ * logging every occurrence on long-running streams outweighs the diagnostic
+ * value.
  *
  * Less ambitious than ChatService.handleStreamResponse (no resume, no byte
  * offset tracking) - suitable for one-shot streams like `/tools?stream=true`
@@ -51,8 +55,8 @@ export async function* parseSseJsonStream<T = unknown>(
 					if (!payload) continue;
 					try {
 						yield { data: JSON.parse(payload) as T };
-					} catch (error) {
-						console.error('[sse] malformed JSON payload, skipping:', error);
+					} catch {
+						// Skip silently per the function contract above.
 					}
 				}
 			}

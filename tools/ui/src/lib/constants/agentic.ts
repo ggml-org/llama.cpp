@@ -23,9 +23,10 @@ export const SEARCH_SUMMARY_SEPARATOR = '---\n';
 export const SEARCH_SUMMARY_TOTAL_REGEX = /Total matches:\s*(\d+)/;
 
 // Separator rendered between stats in the tool-result footer (e.g. between a
-// result message and the byte/edit count). Non-breaking-spaces on both sides
-// hold the middot on a single visual line even if the surrounding text wraps.
-export const RESULT_STAT_SEPARATOR = '\u00A0\u00B7\u00A0';
+// result message and the byte/edit count). Plain ASCII spaces bracket a hyphen
+// so the whole " - " sits on one visual line even when the surrounding text
+// wraps mid-paragraph.
+export const RESULT_STAT_SEPARATOR = ' - ';
 
 export const DEFAULT_AGENTIC_CONFIG: AgenticConfig = {
 	enabled: true,

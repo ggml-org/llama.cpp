@@ -51,7 +51,7 @@
 									<span class="diff-old-num">{line.oldLine ?? ''}</span>
 									<span class="diff-marker">{prefixFor(line.kind)}</span>
 									<span class="diff-new-num">{line.newLine ?? ''}</span>
-									<span class="diff-text">{line.text || '\u00A0'}</span>
+									<span class="diff-text">{line.text || ' '}</span>
 								</div>
 							{/each}
 						</div>
