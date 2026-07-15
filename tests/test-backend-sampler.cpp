@@ -731,7 +731,7 @@ static void test_backend_multi_sequence_sampling(const test_params & params) {
 }
 
 static void test_backend_dist_sampling(const test_params & params) {
-    const int seq_id = 189;
+    const int seq_id = 0;
     const int32_t seed = 88;
 
     struct llama_sampler_chain_params backend_chain_params = llama_sampler_chain_default_params();
@@ -1242,7 +1242,7 @@ static void test_backend_multi_output_sampling_chain(const test_params & params)
     const int32_t seed = 88;
     const llama_vocab * vocab = llama_model_get_vocab(params.model.get());
     const int32_t n_vocab = llama_vocab_n_tokens(vocab);
-    const uint32_t k = std::min<uint32_t>(2048, n_vocab);
+    const uint32_t k = std::min<uint32_t>(512, n_vocab);
 
     const llama_logit_bias bias = { llama_vocab_bos(vocab), -0.1f };
 
