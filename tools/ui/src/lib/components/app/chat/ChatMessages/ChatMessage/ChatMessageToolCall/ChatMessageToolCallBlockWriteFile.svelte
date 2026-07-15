@@ -7,6 +7,7 @@
 		DEFAULT_LANGUAGE,
 		FILE_PATH_SEPARATOR_REGEX,
 		MAX_HEIGHT_CODE_BLOCK,
+		RESULT_STAT_SEPARATOR,
 		TEXT_LANGUAGE_PREFIX_REGEX
 	} from '$lib/constants';
 	import { getBuiltinToolUi } from '$lib/constants/built-in-tools';
@@ -147,7 +148,7 @@
 		<div class="mt-1.5 text-xs text-muted-foreground/70 italic">
 			{#if writeFileMeta.resultMessage}
 				{writeFileMeta.resultMessage}{writeFileMeta.bytesWritten != null
-					? '\u00A0\u00B7\u00A0'
+					? RESULT_STAT_SEPARATOR
 					: ''}{/if}
 			{#if writeFileMeta.bytesWritten != null}
 				<span class="font-mono">{writeFileMeta.bytesWritten}</span>

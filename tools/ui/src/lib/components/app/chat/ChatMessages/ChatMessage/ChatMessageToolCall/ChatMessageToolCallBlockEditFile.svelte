@@ -3,7 +3,7 @@
 	import { Loader2, Wrench, XCircle } from '@lucide/svelte';
 	import { CollapsibleContentBlock } from '$lib/components/app';
 	import { AgenticSectionType, BuiltInTool } from '$lib/enums';
-	import { FILE_PATH_SEPARATOR_REGEX, MAX_HEIGHT_CODE_BLOCK } from '$lib/constants';
+	import { FILE_PATH_SEPARATOR_REGEX, MAX_HEIGHT_CODE_BLOCK, RESULT_STAT_SEPARATOR } from '$lib/constants';
 	import { getBuiltinToolUi } from '$lib/constants/built-in-tools';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import {
@@ -175,7 +175,7 @@
 		<div class="mt-1.5 text-xs text-muted-foreground/70 italic">
 			{#if editFileMeta.resultMessage}
 				{editFileMeta.resultMessage}{editFileMeta.editsApplied != null
-					? '\u00A0\u00B7\u00A0'
+					? RESULT_STAT_SEPARATOR
 					: ''}{/if}
 			{#if editFileMeta.editsApplied != null}
 				<span class="font-mono">{editFileMeta.editsApplied}</span>
