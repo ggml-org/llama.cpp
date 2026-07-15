@@ -32,8 +32,7 @@ export function computeLineDiff(oldText: string, newText: string): DiffLine[] {
 	const n = newLines.length;
 
 	if (m === 0 && n === 0) return [];
-	if (m === 0)
-		return newLines.map((t, k) => ({ kind: DiffLineKind.ADD, text: t, newLine: k + 1 }));
+	if (m === 0) return newLines.map((t, k) => ({ kind: DiffLineKind.ADD, text: t, newLine: k + 1 }));
 	if (n === 0)
 		return oldLines.map((t, k) => ({ kind: DiffLineKind.REMOVE, text: t, oldLine: k + 1 }));
 

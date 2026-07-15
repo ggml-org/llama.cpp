@@ -351,7 +351,6 @@ class MCPStore {
 	}
 
 	clearHealthCheck(serverId: string): void {
-		// eslint-disable-next-line @typescript-eslint/no-unused-vars
 		const { [serverId]: _removed, ...rest } = this._healthChecks;
 		this._healthChecks = rest;
 	}

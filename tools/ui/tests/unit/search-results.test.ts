@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-	SUPPORTED_WEB_SEARCH_TOOL_NAMES,
 	extractSearchResults,
 	extractSearchQuery,
 	faviconForUrl,

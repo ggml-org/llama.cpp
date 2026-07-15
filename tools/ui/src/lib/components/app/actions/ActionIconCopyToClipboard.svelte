@@ -12,7 +12,7 @@
 <ActionIcon
 	icon={Copy}
 	tooltip={ariaLabel}
-	iconSize=ICON_CLASS_DEFAULT
+	iconSize={ICON_CLASS_DEFAULT}
 	disabled={!canCopy}
 	onclick={() => canCopy && copyToClipboard(text)}
 />

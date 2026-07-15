@@ -1,13 +1,16 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT, ICON_CLASS_SPIN } from '$lib/constants/css-classes';
-	import { Check, Loader2, Wrench, XCircle, AlertTriangle } from '@lucide/svelte';
+	// Block for `exec_shell_command`. Unlike the other tools, this
+	// renderer uses CollapsibleTerminalBlock (terminal-style frame)
+	// and treats "live" output chunks as active even after the call
+	// resolved, so the spinner stays on while stdout is still flowing.
+	// The scroll-to-bottom auto-scroll logic mirrors what was here
+	// before extraction.
+
+	import { Check, Loader2, XCircle, AlertTriangle } from '@lucide/svelte';
 	import { CollapsibleTerminalBlock } from '$lib/components/app';
-	import { AgenticSectionType, BuiltInTool } from '$lib/enums';
 	import { SETTINGS_KEYS } from '$lib/constants';
 	import { config } from '$lib/stores/settings.svelte';
 	import { TOOL_RUNTIME_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants/auto-scroll';
-	import { getBuiltinToolUi } from '$lib/constants/built-in-tools';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import {
 		highlightCode,
 		isExitCodeSummaryLine,
@@ -18,17 +21,14 @@
 		type ExecShellExitStatus,
 		type ToolResultLine
 	} from '$lib/utils';
+	import { parseExecShellCommandMeta } from './parsers/exec-shell-command';
 	import type { DatabaseMessageExtra } from '$lib/types';
+	import ToolCallBlock from './ToolCallBlock.svelte';
 
 	interface Props {
 		section: AgenticSection;
 		open: boolean;
 		isStreaming: boolean;
-		/** True while the agentic loop is streaming output chunks for THIS
-		 *  specific tool call. Mirrors ChatMessageReasoningBlock's "isPending"
-		 *  semantics: while true, the output region is clamped to a max-height
-		 *  container that auto-scrolls to follow new chunks; once execution
-		 *  finishes the container unlocks and renders the full content. */
 		/** True while the agentic loop is streaming output chunks for THIS
 		 *  tool call. Drives max-height + auto-scroll while true; releases
 		 *  them when the loop reports this call as done. */
@@ -39,48 +39,12 @@
 
 	let { section, open, isStreaming, isExecuting = false, attachments, onToggle }: Props = $props();
 
-	const isPending = $derived(section.type === AgenticSectionType.TOOL_CALL_PENDING);
-	const isStreamingCall = $derived(section.type === AgenticSectionType.TOOL_CALL_STREAMING);
-	const showSpinner = $derived(isPending || (isStreamingCall && isStreaming));
-	const toolUi = $derived(getBuiltinToolUi(section.toolName));
-	const toolIcon = $derived(showSpinner ? Loader2 : (toolUi?.icon ?? Wrench));
-	const toolIconClass = $derived(showSpinner ? ICON_CLASS_SPIN : ICON_CLASS_DEFAULT);
-	const mcpServerFavicon = $derived(mcpStore.getServerFaviconForTool(section.toolName));
-	const iconUrl = $derived(
-		!showSpinner && !toolUi?.icon && mcpServerFavicon ? mcpServerFavicon : null
-	);
-
-	// `isLive` covers all in-flight phases: pre-chunk spinner and streaming
-	// itself. Frozen output (tool done while agent continues) is not live.
+	// `isLive` covers all in-flight phases: pre-chunk spinner and
+	// streaming itself. Frozen output (tool done while agent continues)
+	// is not live.
 	const isLive = $derived(isExecuting);
-	const showLiveSpinner = $derived(showSpinner || isLive);
 
-	type ExecShellCommandMeta = {
-		command: string;
-	};
-
-	function parseExecShellCommandMeta(
-		toolName: string | undefined,
-		toolArgsString: string | undefined
-	): ExecShellCommandMeta | null {
-		if (toolName !== BuiltInTool.EXEC_SHELL_COMMAND || !toolArgsString) return null;
-
-		let args: Record<string, unknown>;
-		try {
-			const parsed: unknown = JSON.parse(toolArgsString);
-			if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-			args = parsed as Record<string, unknown>;
-		} catch {
-			return null;
-		}
-
-		const commandRaw = args.command ?? args.cmd ?? args.shell_command;
-		if (typeof commandRaw !== 'string' || !commandRaw) return null;
-
-		return { command: commandRaw };
-	}
-
-	const execShellMeta = $derived(parseExecShellCommandMeta(section.toolName, section.toolArgs));
+	const execShellMeta = $derived(parseExecShellCommandMeta(section));
 	const execShellError = $derived(parseExecShellCommandError(section.toolResult));
 	const execShellExitStatus: ExecShellExitStatus | undefined = $derived(
 		parseExecShellCommandExitStatus(section.toolResult)
@@ -90,9 +54,9 @@
 		section.toolResult ? parseToolResultWithImages(section.toolResult, attachments) : []
 	);
 
-	// Drop the trailing "[exit code: N]" line - rendered as a colored badge
-	// below. During streaming we keep it so a partial stream still shows the
-	// status once the final chunk lands.
+	// Drop the trailing "[exit code: N]" line - rendered as a colored
+	// badge below. During streaming we keep it so a partial stream still
+	// shows the status once the final chunk lands.
 	const outputLines: ToolResultLine[] = $derived(
 		execShellExitStatus && parsedLines.length > 0
 			? parsedLines.slice(0, parsedLines.length - 1)
@@ -105,8 +69,8 @@
 			isExitCodeSummaryLine(parsedLines[parsedLines.length - 1].text, execShellExitStatus)
 	);
 
-	// Highlight just the command for the title; the (typically large) output
-	// blob uses bare monospace to skip hljs per-line highlighting.
+	// Highlight just the command for the title; the (typically large)
+	// output blob uses bare monospace to skip hljs per-line highlighting.
 	const highlightedCommandHtml = $derived(
 		execShellMeta ? highlightCode(execShellMeta.command, 'bash') : ''
 	);
@@ -119,26 +83,15 @@
 				: 'exit-badge failure'
 	);
 
-	const subtitle = $derived(
-		showSpinner
-			? 'executing...'
-			: isLive
-				? 'streaming...'
-				: execShellError
-					? 'failed'
-					: isStreamingCall && !isStreaming
-						? 'incomplete'
-						: undefined
-	);
-
 	const useFullHeightCodeBlocks = $derived(
 		Boolean(config()[SETTINGS_KEYS.FULL_HEIGHT_CODE_BLOCKS])
 	);
 
 	const autoScroll = $derived(isLive && !useFullHeightCodeBlocks);
 
-	let scrollEl: HTMLDivElement | undefined = $state();
 	const SCROLL_BOTTOM_THRESHOLD_PX = TOOL_RUNTIME_SCROLL_AT_BOTTOM_THRESHOLD_PX;
+
+	let scrollEl: HTMLDivElement | undefined = $state();
 	let userScrolledUp = $state(false);
 	let lastScrollTop = 0;
 	let pendingFrame: number | null = null;
@@ -181,8 +134,8 @@
 	});
 
 	$effect(() => {
-		// Catch layout changes that don't touch toolResult (line-wrap reflow,
-		// image attaches, hljs settle).
+		// Catch layout changes that don't touch toolResult (line-wrap
+		// reflow, image attaches, hljs settle).
 		if (!scrollEl || !autoScroll) return;
 
 		const observer = new MutationObserver(() => scrollToBottomOnFrame());
@@ -196,7 +149,8 @@
 	});
 
 	$effect(() => {
-		// Reset on stream end so the next render (full-height) starts pinned.
+		// Reset on stream end so the next render (full-height) starts
+		// pinned.
 		if (!isLive) {
 			userScrolledUp = false;
 			lastScrollTop = 0;
@@ -212,65 +166,70 @@
 	{/if}
 {/snippet}
 
-<CollapsibleTerminalBlock
+<ToolCallBlock
+	{section}
 	{open}
-	class="my-2"
-	icon={showLiveSpinner ? Loader2 : toolIcon}
-	iconClass={showLiveSpinner ? ICON_CLASS_SPIN : toolIconClass}
-	{iconUrl}
-	title=""
-	titleSnippet={execShellTitle}
-	{subtitle}
+	{isStreaming}
+	meta={execShellMeta ? { errorMessage: execShellError } : null}
+	wrapper={CollapsibleTerminalBlock}
+	extraLiveStreaming={isLive}
+	spinIconWhenActive={true}
 	{onToggle}
 >
-	{#if isPending}
-		<div class="flex items-start gap-2 text-xs text-muted-foreground/70">
-			<Loader2 class="h-3 w-3 animate-spin" />
-			Running...
-		</div>
-	{:else if execShellError}
-		<div class="flex items-start gap-2 text-xs text-red-600 italic dark:text-red-400">
-			<XCircle class="mt-0.5 h-3 w-3 shrink-0" />
-			<span>{execShellError}</span>
-		</div>
-	{:else if section.toolResult}
-		<div
-			bind:this={scrollEl}
-			class="terminal-output"
-			class:is-clamped={!useFullHeightCodeBlocks}
-			onscroll={handleScrollEvent}
-		>
-			{#each outputLines as line, i (i)}
-				<div class="font-mono text-[11px] leading-relaxed whitespace-pre-wrap">{line.text}</div>
-				{#if line.image}
-					<img
-						src={line.image.base64Url}
-						alt={line.image.name}
-						class="mt-2 mb-2 h-auto max-w-full rounded-lg"
-						loading="lazy"
-					/>
-				{/if}
-			{/each}
+	{#snippet titleSnippet()}
+		{@render execShellTitle()}
+	{/snippet}
 
-			{#if isExitCodeFinalLine && execShellExitStatus}
-				<div class={exitBadgeClass}>
-					{#if execShellExitStatus.timedOut}
-						<AlertTriangle class="h-3 w-3" />
-						<span>timed out</span>
-						<span class="exit-sep">&middot;</span>
-						<span>exit {execShellExitStatus.code}</span>
-					{:else if execShellExitStatus.code === 0}
-						<Check class="h-3 w-3" />
-						<span>exit 0</span>
-					{:else}
-						<XCircle class="h-3 w-3" />
-						<span>exit {execShellExitStatus.code}</span>
+	{#snippet children(_meta, ctx)}
+		{#if ctx.isPending}
+			<div class="flex items-start gap-2 text-xs text-muted-foreground/70">
+				<Loader2 class="h-3 w-3 animate-spin" />
+				Running...
+			</div>
+		{:else if execShellError}
+			<div class="flex items-start gap-2 text-xs text-red-600 italic dark:text-red-400">
+				<XCircle class="mt-0.5 h-3 w-3 shrink-0" />
+				<span>{execShellError}</span>
+			</div>
+		{:else if section.toolResult}
+			<div
+				bind:this={scrollEl}
+				class="terminal-output"
+				class:is-clamped={!useFullHeightCodeBlocks}
+				onscroll={handleScrollEvent}
+			>
+				{#each outputLines as line, i (i)}
+					<div class="font-mono text-[11px] leading-relaxed whitespace-pre-wrap">{line.text}</div>
+					{#if line.image}
+						<img
+							src={line.image.base64Url}
+							alt={line.image.name}
+							class="mt-2 mb-2 h-auto max-w-full rounded-lg"
+							loading="lazy"
+						/>
 					{/if}
-				</div>
-			{/if}
-		</div>
-	{/if}
-</CollapsibleTerminalBlock>
+				{/each}
+
+				{#if isExitCodeFinalLine && execShellExitStatus}
+					<div class={exitBadgeClass}>
+						{#if execShellExitStatus.timedOut}
+							<AlertTriangle class="h-3 w-3" />
+							<span>timed out</span>
+							<span class="exit-sep">&middot;</span>
+							<span>exit {execShellExitStatus.code}</span>
+						{:else if execShellExitStatus.code === 0}
+							<Check class="h-3 w-3" />
+							<span>exit 0</span>
+						{:else}
+							<XCircle class="h-3 w-3" />
+							<span>exit {execShellExitStatus.code}</span>
+						{/if}
+					</div>
+				{/if}
+			</div>
+		{/if}
+	{/snippet}
+</ToolCallBlock>
 
 <style>
 	.terminal-output {

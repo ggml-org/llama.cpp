@@ -1,15 +1,12 @@
 <script lang="ts">
-	import { ICON_CLASS_DEFAULT, ICON_CLASS_SPIN } from '$lib/constants/css-classes';
-	import { Loader2, Wrench } from '@lucide/svelte';
-	import {
-		CollapsibleContentBlock,
-		MarkdownContent,
-		SyntaxHighlightedCode
-	} from '$lib/components/app';
-	import { AgenticSectionType, FileTypeText, ToolResultKind } from '$lib/enums';
+	// Fall-through renderer for tool calls without a dedicated block.
+	// Renders section.toolArgs / section.toolResult directly using the
+	// shared chrome shell.
+
+	import { Loader2 } from '@lucide/svelte';
+	import { MarkdownContent, SyntaxHighlightedCode } from '$lib/components/app';
+	import { FileTypeText, ToolResultKind } from '$lib/enums';
 	import { MAX_HEIGHT_CODE_BLOCK } from '$lib/constants';
-	import { getBuiltinToolUi } from '$lib/constants/built-in-tools';
-	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import {
 		classifyToolResult,
 		formatJsonPretty,
@@ -17,7 +14,9 @@
 		type AgenticSection,
 		type ToolResultLine
 	} from '$lib/utils';
+	import { getBuiltinToolUi } from '$lib/constants/built-in-tools';
 	import type { DatabaseMessageExtra } from '$lib/types';
+	import ToolCallBlock from './ToolCallBlock.svelte';
 
 	interface Props {
 		section: AgenticSection;
@@ -29,125 +28,97 @@
 
 	let { section, open, isStreaming, attachments, onToggle }: Props = $props();
 
-	const isPending = $derived(section.type === AgenticSectionType.TOOL_CALL_PENDING);
-	const isStreamingCall = $derived(section.type === AgenticSectionType.TOOL_CALL_STREAMING);
-	const showSpinner = $derived(isPending || (isStreamingCall && isStreaming));
-	// True while the LLM is still emitting chunks into this tool call's args.
-	// PENDING and STREAMING both cover this (chat-streaming tool calls are
-	// surfaced as PENDING because toolArgs is partial while the outer call list
-	// parses intact).
-	const isCodeStreaming = $derived(isStreaming && (isPending || isStreamingCall));
-
-	const toolUi = $derived(getBuiltinToolUi(section.toolName));
-	const toolIcon = $derived(showSpinner ? Loader2 : (toolUi?.icon ?? Wrench));
-	const toolIconClass = $derived(showSpinner ? ICON_CLASS_SPIN : ICON_CLASS_DEFAULT);
-
-	// Server favicon fallback for MCP tools with no built-in icon.
-	const mcpServerFavicon = $derived(mcpStore.getServerFaviconForTool(section.toolName));
-	const iconUrl = $derived(
-		!showSpinner && !toolUi?.icon && mcpServerFavicon ? mcpServerFavicon : null
-	);
+	const title = $derived(getBuiltinToolUi(section.toolName)?.label ?? section.toolName ?? '');
 
 	const parsedLines: ToolResultLine[] = $derived(
 		section.toolResult ? parseToolResultWithImages(section.toolResult, attachments) : []
 	);
-
-	// Pick a richer renderer (JSON / markdown) than the line-by-line fallback.
 	const outputKind = $derived(classifyToolResult(section.toolResult));
-
-	const title = $derived(toolUi?.label ?? section.toolName ?? '');
-
-	const subtitle = $derived(
-		showSpinner ? 'executing...' : isStreamingCall && !isStreaming ? 'incomplete' : undefined
-	);
 </script>
 
-<CollapsibleContentBlock
-	{open}
-	class="my-2"
-	icon={toolIcon}
-	iconClass={toolIconClass}
-	{iconUrl}
-	{title}
-	{subtitle}
-	{onToggle}
->
-	{#if isStreamingCall}
-		<div class="mb-2 flex items-center gap-2 text-xs text-muted-foreground/70">
-			<span>Input</span>
-			{#if isStreaming}
-				<Loader2 class="h-3 w-3 animate-spin" />
-			{/if}
-		</div>
-		{#if section.toolArgs}
-			<SyntaxHighlightedCode
-				code={formatJsonPretty(section.toolArgs)}
-				language={FileTypeText.JSON}
-				maxHeight={MAX_HEIGHT_CODE_BLOCK}
-				streaming={isCodeStreaming}
-			/>
-		{:else if isStreaming}
-			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
-				Receiving arguments...
-			</div>
-		{:else}
-			<div class="rounded bg-yellow-500/10 p-2 text-xs text-yellow-600 italic dark:text-yellow-400">
-				Response was truncated
-			</div>
-		{/if}
-	{:else}
-		{@const showInput = Boolean(section.toolArgs)}
-		{#if showInput}
-			<div class="mb-1.5 flex items-center gap-2 text-xs text-muted-foreground/70">
+<ToolCallBlock {section} {open} {isStreaming} meta={null} {title} {onToggle}>
+	{#snippet children(_meta, ctx)}
+		{#if ctx.isStreamingCall}
+			<div class="mb-2 flex items-center gap-2 text-xs text-muted-foreground/70">
 				<span>Input</span>
+				{#if ctx.isStreaming}
+					<Loader2 class="h-3 w-3 animate-spin" />
+				{/if}
 			</div>
-			<SyntaxHighlightedCode
-				code={formatJsonPretty(section.toolArgs ?? '')}
-				language={FileTypeText.JSON}
-				maxHeight={MAX_HEIGHT_CODE_BLOCK}
-				streaming={isCodeStreaming}
-			/>
-		{/if}
-		<div
-			class={showInput
-				? 'mt-4 mb-1.5 flex items-center gap-2 text-xs text-muted-foreground/70'
-				: 'mb-1.5 flex items-center gap-2 text-xs text-muted-foreground/70'}
-		>
-			<span>Output</span>
-			{#if isPending}
-				<Loader2 class="h-3 w-3 animate-spin" />
-			{/if}
-		</div>
-		{#if isPending}
-			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
-				Waiting for result...
-			</div>
-		{:else if section.toolResult}
-			{#if outputKind === ToolResultKind.JSON}
+			{#if section.toolArgs}
 				<SyntaxHighlightedCode
-					code={formatJsonPretty(section.toolResult)}
+					code={formatJsonPretty(section.toolArgs)}
 					language={FileTypeText.JSON}
 					maxHeight={MAX_HEIGHT_CODE_BLOCK}
+					streaming={ctx.isCodeStreaming}
 				/>
-			{:else if outputKind === ToolResultKind.MARKDOWN}
-				<MarkdownContent content={section.toolResult} {attachments} />
+			{:else if ctx.isStreaming}
+				<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
+					Receiving arguments...
+				</div>
 			{:else}
-				<div class="overflow-auto">
-					{#each parsedLines as line, i (i)}
-						<div class="font-mono text-[11px] leading-relaxed whitespace-pre-wrap">{line.text}</div>
-						{#if line.image}
-							<img
-								src={line.image.base64Url}
-								alt={line.image.name}
-								class="mt-2 mb-2 h-auto max-w-full rounded-lg"
-								loading="lazy"
-							/>
-						{/if}
-					{/each}
+				<div
+					class="rounded bg-yellow-500/10 p-2 text-xs text-yellow-600 italic dark:text-yellow-400"
+				>
+					Response was truncated
 				</div>
 			{/if}
 		{:else}
-			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">No output</div>
+			{@const showInput = Boolean(section.toolArgs)}
+			{#if showInput}
+				<div class="mb-1.5 flex items-center gap-2 text-xs text-muted-foreground/70">
+					<span>Input</span>
+				</div>
+				<SyntaxHighlightedCode
+					code={formatJsonPretty(section.toolArgs ?? '')}
+					language={FileTypeText.JSON}
+					maxHeight={MAX_HEIGHT_CODE_BLOCK}
+					streaming={ctx.isCodeStreaming}
+				/>
+			{/if}
+			<div
+				class={showInput
+					? 'mt-4 mb-1.5 flex items-center gap-2 text-xs text-muted-foreground/70'
+					: 'mb-1.5 flex items-center gap-2 text-xs text-muted-foreground/70'}
+			>
+				<span>Output</span>
+				{#if ctx.isPending}
+					<Loader2 class="h-3 w-3 animate-spin" />
+				{/if}
+			</div>
+			{#if ctx.isPending}
+				<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
+					Waiting for result...
+				</div>
+			{:else if section.toolResult}
+				{#if outputKind === ToolResultKind.JSON}
+					<SyntaxHighlightedCode
+						code={formatJsonPretty(section.toolResult)}
+						language={FileTypeText.JSON}
+						maxHeight={MAX_HEIGHT_CODE_BLOCK}
+					/>
+				{:else if outputKind === ToolResultKind.MARKDOWN}
+					<MarkdownContent content={section.toolResult} {attachments} />
+				{:else}
+					<div class="overflow-auto">
+						{#each parsedLines as line, i (i)}
+							<div class="font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
+								{line.text}
+							</div>
+							{#if line.image}
+								<img
+									src={line.image.base64Url}
+									alt={line.image.name}
+									class="mt-2 mb-2 h-auto max-w-full rounded-lg"
+									loading="lazy"
+								/>
+							{/if}
+						{/each}
+					</div>
+				{/if}
+			{:else}
+				<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">No output</div>
+			{/if}
 		{/if}
-	{/if}
-</CollapsibleContentBlock>
+	{/snippet}
+</ToolCallBlock>

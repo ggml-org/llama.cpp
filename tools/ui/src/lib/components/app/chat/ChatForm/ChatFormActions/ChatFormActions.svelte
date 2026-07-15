@@ -186,7 +186,9 @@
 		>
 			<span class="sr-only">Skip reasoning</span>
 
-			<SkipForward class="{ICON_CLASS_DEFAULT} stroke-muted-foreground group-hover:stroke-foreground" />
+			<SkipForward
+				class="{ICON_CLASS_DEFAULT} stroke-muted-foreground group-hover:stroke-foreground"
+			/>
 		</Button>
 	{/if}
 

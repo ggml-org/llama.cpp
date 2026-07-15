@@ -171,12 +171,7 @@ export {
 } from './agentic';
 
 // Line-level unified diff for tool result rendering (`edit_file` block)
-export {
-	computeLineDiff,
-	prefixFor,
-	renderUnifiedDiff,
-	type DiffLine
-} from './compute-line-diff';
+export { computeLineDiff, prefixFor, renderUnifiedDiff, type DiffLine } from './compute-line-diff';
 
 // Partial-incremental JSON parser for streaming tool arguments
 export { parsePartialJsonArgs } from './parse-partial-json-args';
@@ -224,6 +219,19 @@ export {
 	createTimeoutSignal,
 	withAbortSignal
 } from './abort';
+
+// Tool-call meta utilities. Parsers for each built-in tool live next to
+// their renderer family under
+// `src/lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/`.
+// This module only carries the helpers that genuinely cross tool
+// boundaries (currently: parsing the tool-result blob into a JSON
+// object).
+export { tryParseToolResultObject } from './tool-call-meta';
+
+// Per-tool UI metadata (label + icon) used by the tool-call chrome.
+// Re-exported through $lib/utils so renderer components can read the
+// label without depending on $lib/constants directly.
+export { getBuiltinToolUi, type BuiltinToolUiEntry } from '$lib/constants/built-in-tools';
 
 // Cryptography utilities
 
