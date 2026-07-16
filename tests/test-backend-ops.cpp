@@ -52,17 +52,18 @@
 #   define N_THREADS std::thread::hardware_concurrency()
 #endif
 
-static bool g_enable_renderdoc = false;
-static bool g_print_result     = false;
+static bool g_enable_renderdoc       = false;
+static bool g_print_result           = false;
+static bool deterministicSeedforFA   = false;
 
-static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f, bool deterministic = false) {
+static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f, bool deterministicSeedforFA = false) {
     if (ggml_is_empty(tensor)) {
         return;
     }
 
     size_t nels = ggml_nelements(tensor);
     std::vector<float> data(nels);
-    if (deterministic) {
+    if (deterministicSeedforFA) {
         for (size_t i = 0; i < nels; i++) {
             data[i] = min + (max - min) * (i % 17) / 16.0f;
         }
@@ -156,7 +157,7 @@ static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float m
 }
 
 // generate an F16 mask where certain blocks are randomly masked with -INF value
-static void init_tensor_kq_mask(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f, bool deterministic = false) {
+static void init_tensor_kq_mask(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f, bool deterministicSeedforFA = false) {
     GGML_ASSERT(tensor->type == GGML_TYPE_F16);
 
     GGML_TENSOR_LOCALS( int32_t, ne, tensor, ne);
@@ -169,7 +170,7 @@ static void init_tensor_kq_mask(ggml_tensor * tensor, float min = -1.0f, float m
     std::uniform_real_distribution<float> dis(min, max);
 
     for (size_t i = 0; i < data_f32.size(); i++) {
-        data_f32[i] = deterministic ? min + (max - min) * (i % 17) / 16.0f : dis(gen);
+        data_f32[i] = deterministicSeedforFA ? min + (max - min) * (i % 17) / 16.0f : dis(gen);
     }
 
     // block size
@@ -180,12 +181,12 @@ static void init_tensor_kq_mask(ggml_tensor * tensor, float min = -1.0f, float m
     const int n_inf_zero_blocks = 0.2*(ne0*ne1*ne2*ne3)/(blck0*blck1);
 
     for (int b = 0; b < n_inf_zero_blocks; b++) {
-        const int p3 = deterministic ? (b % ne3) : (rd() % ne3);
-        const int p2 = deterministic ? ((b / ne3) % ne2) : (rd() % ne2);
-        const int p1 = deterministic ? ((b / (ne3 * ne2)) % ne1) : (rd() % ne1);
-        const int p0 = deterministic ? ((b / (ne3 * ne2 * ne1)) % ne0) : (rd() % ne0);
+        const int p3 = deterministicSeedforFA ? (b % ne3) : (rd() % ne3);
+        const int p2 = deterministicSeedforFA ? ((b / ne3) % ne2) : (rd() % ne2);
+        const int p1 = deterministicSeedforFA ? ((b / (ne3 * ne2)) % ne1) : (rd() % ne1);
+        const int p0 = deterministicSeedforFA ? ((b / (ne3 * ne2 * ne1)) % ne0) : (rd() % ne0);
 
-        bool inf = deterministic ? (b & 1) : (rd() & 1);
+        bool inf = deterministicSeedforFA ? (b & 1) : (rd() & 1);
 
         for (int i1 = 0; i1 < blck1 && p1 + i1 < ne1; i1++) {
             const int idx = p3*ne2*ne1*ne0 + p2*ne1*ne0 + (p1 + i1)*ne0 + p0;
@@ -8789,15 +8790,15 @@ struct test_flash_attn_ext : public test_case {
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
             if (strcmp(t->name, "s") == 0) {
                 // make the sink values more noticeable in order to trigger a test failure when the implementation is wrong
-                init_tensor_uniform(t, -10.0f, 10.0f, true);
+                init_tensor_uniform(t, -10.0f, 10.0f, deterministicSeedforFA);
             } else if (strcmp(t->name, "m") == 0) {
                 if (n_kv_max > 0) {
                     init_tensor_kq_mask_sparse(t, n_kv_max);
                 } else {
-                    init_tensor_kq_mask(t, -1.0f, 1.0f, true);
+                    init_tensor_kq_mask(t, -1.0f, 1.0f, deterministicSeedforFA);
                 }
             } else {
-                init_tensor_uniform(t, -1.0f, 1.0f, true);
+                init_tensor_uniform(t, -1.0f, 1.0f, deterministicSeedforFA);
             }
         }
     }
@@ -13676,6 +13677,7 @@ static void usage(char ** argv) {
     printf("  -vulkandebug <on|off>       enables or disables Vulkan debug logging\n");
     printf("  -enablerenderdoc           captures the selected Vulkan test case (use -j 1 and select one case)\n");
     printf("  -printResult               prints golden, backend, and difference values (use -j 1 and select one case)\n");
+    printf("  -deterministicSeedforFA    uses deterministic input data for flash attention tests\n");
     printf("Examples:\n");
     printf("  %s -j 8\n", argv[0]);
     printf("  %s -o ADD,MUL_MAT\n", argv[0]);
@@ -13790,6 +13792,8 @@ int main(int argc, char ** argv) {
             g_enable_renderdoc = true;
         } else if (strcmp(argv[i], "-printResult") == 0) {
             g_print_result = true;
+        } else if (strcmp(argv[i], "-deterministicSeedforFA") == 0) {
+            deterministicSeedforFA = true;
         } else {
             usage(argv);
             return 1;
