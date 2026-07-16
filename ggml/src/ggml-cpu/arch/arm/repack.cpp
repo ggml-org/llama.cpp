@@ -3784,6 +3784,7 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
 
     constexpr int ncols_interleaved = 8;
     constexpr int blocklen          = 8;
+    constexpr int q8_k_blocklen = 4;
 
     assert(n % qk == 0);
     assert(nr % 4 == 0);
@@ -3794,8 +3795,6 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
     UNUSED(blocklen);
 
 #if defined(__aarch64__) && defined(__ARM_FEATURE_SVE) && defined(__ARM_FEATURE_MATMUL_INT8)
-    
-    constexpr int    q8_k_blocklen = 4;
     
     switch(svcntb() * 8){
         case 256:
@@ -4468,13 +4467,13 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                     // 8 values in total -> i from 0 to 3 and j from 0 to 1
                     // (y * q8_k_blocklen + i)* bs + x * ncols_interleaved + j * 4;
                     svst1_f32(pg4, s + (y * q8_k_blocklen + 0)* bs + x * ncols_interleaved + 0 * 4, acc_f32_00);
-                    svst1_f32(pg4, s + (y * q8_k_blocklen + 0)* bs + x * ncols_interleaved + 1 * 4, acc_f32_00);
-                    svst1_f32(pg4, s + (y * q8_k_blocklen + 1)* bs + x * ncols_interleaved + 0 * 4, acc_f32_00);
-                    svst1_f32(pg4, s + (y * q8_k_blocklen + 1)* bs + x * ncols_interleaved + 1 * 4, acc_f32_00);
-                    svst1_f32(pg4, s + (y * q8_k_blocklen + 2)* bs + x * ncols_interleaved + 0 * 4, acc_f32_00);
-                    svst1_f32(pg4, s + (y * q8_k_blocklen + 2)* bs + x * ncols_interleaved + 1 * 4, acc_f32_00);
-                    svst1_f32(pg4, s + (y * q8_k_blocklen + 3)* bs + x * ncols_interleaved + 0 * 4, acc_f32_00);
-                    svst1_f32(pg4, s + (y * q8_k_blocklen + 3)* bs + x * ncols_interleaved + 1 * 4, acc_f32_00);
+                    svst1_f32(pg4, s + (y * q8_k_blocklen + 0)* bs + x * ncols_interleaved + 1 * 4, acc_f32_11);
+                    svst1_f32(pg4, s + (y * q8_k_blocklen + 1)* bs + x * ncols_interleaved + 0 * 4, acc_f32_22);
+                    svst1_f32(pg4, s + (y * q8_k_blocklen + 1)* bs + x * ncols_interleaved + 1 * 4, acc_f32_33);
+                    svst1_f32(pg4, s + (y * q8_k_blocklen + 2)* bs + x * ncols_interleaved + 0 * 4, acc_f32_44);
+                    svst1_f32(pg4, s + (y * q8_k_blocklen + 2)* bs + x * ncols_interleaved + 1 * 4, acc_f32_55);
+                    svst1_f32(pg4, s + (y * q8_k_blocklen + 3)* bs + x * ncols_interleaved + 0 * 4, acc_f32_66);
+                    svst1_f32(pg4, s + (y * q8_k_blocklen + 3)* bs + x * ncols_interleaved + 1 * 4, acc_f32_77);
 
                 }  // for x
             }  // for y
