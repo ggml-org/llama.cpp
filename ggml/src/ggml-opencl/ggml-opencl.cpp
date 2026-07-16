@@ -14609,7 +14609,11 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
 
     // Flash-Decoding K-split decision. Resolved here, before the prefill
     // prepass, because KV-pad and blk prepass are pure overhead when FD fires.
-    const int is_causal = (mask == NULL && n_q > 1 && n_q == n_kv);
+    // Do not infer causality from tensor shapes: a NULL mask means full
+    // (bidirectional) attention, e.g. ViT encoders, where n_q == n_kv as well.
+    // Causal attention in llama.cpp always comes with an explicit KQ mask.
+    // Inferring is_causal here corrupted mmproj output on OpenCL (see #23800).
+    const int is_causal = 0;
     const int fd_max_n_q = (d_head_q <= FD_MAX_DK_MULTI) ? FD_MAX_N_Q_MULTI : 1;
     cl_kernel fd_k_split = NULL;
     bool use_fd_mq = false;
