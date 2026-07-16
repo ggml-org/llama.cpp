@@ -332,6 +332,26 @@ static bool spawn_process_stdio(
         return false;
     }
 
+    // Prevent subsequently spawned MCP servers from inheriting these pipes.
+    int pipe_fds[] = {stdin_pipe[0], stdin_pipe[1], stdout_pipe[0], stdout_pipe[1]};
+    for (int fd : pipe_fds) {
+        int flags;
+        do {
+            flags = fcntl(fd, F_GETFD);
+        } while (flags < 0 && errno == EINTR);
+
+        int ret;
+        do {
+            ret = flags < 0 ? -1 : fcntl(fd, F_SETFD, flags | FD_CLOEXEC);
+        } while (ret < 0 && errno == EINTR);
+
+        if (ret < 0) {
+            close(stdin_pipe[0]); close(stdin_pipe[1]);
+            close(stdout_pipe[0]); close(stdout_pipe[1]);
+            return false;
+        }
+    }
+
     pid_t pid = fork();
     if (pid == 0) {
         // child
