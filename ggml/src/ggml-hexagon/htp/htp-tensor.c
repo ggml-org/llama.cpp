@@ -43,7 +43,7 @@ static void l2flush_thread_worker(unsigned int n, unsigned int i, void * data) {
 static void flush_all_dcache(struct htp_context * ctx) {
     struct htp_thread_trace * tr = &ctx->trace[0];
     htp_trace_event_start(tr, HTP_TRACE_EVT_L2FLUSH, 0);
-    qurt_mem_cache_clean((qurt_addr_t) 0, 0, QURT_MEM_CACHE_FLUSH_ALL, QURT_MEM_DCACHE);
+    qurt_mem_cache_clean((qurt_addr_t) 0, 0, QURT_MEM_CACHE_FLUSH_INVALIDATE_ALL, QURT_MEM_DCACHE);
     hex_l2fetch_block(ctx, ctx->footprint);
     htp_trace_event_stop(tr, HTP_TRACE_EVT_L2FLUSH, 0);
     bitmap_reset(ctx->dirty_map, HTP_OP_MAX_TENSORS);
