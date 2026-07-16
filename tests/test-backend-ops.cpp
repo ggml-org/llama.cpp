@@ -55,14 +55,18 @@
 static bool g_enable_renderdoc = false;
 static bool g_print_result     = false;
 
-static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f) {
+static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f, bool deterministic = false) {
     if (ggml_is_empty(tensor)) {
         return;
     }
 
     size_t nels = ggml_nelements(tensor);
     std::vector<float> data(nels);
-    {
+    if (deterministic) {
+        for (size_t i = 0; i < nels; i++) {
+            data[i] = min + (max - min) * (i % 17) / 16.0f;
+        }
+    } else {
         // parallel initialization
         static const size_t n_threads = std::max<size_t>(1, std::min<size_t>(nels/1024, std::min<size_t>(4, N_THREADS/2)));
 
@@ -152,7 +156,7 @@ static void init_tensor_uniform(ggml_tensor * tensor, float min = -1.0f, float m
 }
 
 // generate an F16 mask where certain blocks are randomly masked with -INF value
-static void init_tensor_kq_mask(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f) {
+static void init_tensor_kq_mask(ggml_tensor * tensor, float min = -1.0f, float max = 1.0f, bool deterministic = false) {
     GGML_ASSERT(tensor->type == GGML_TYPE_F16);
 
     GGML_TENSOR_LOCALS( int32_t, ne, tensor, ne);
@@ -165,7 +169,7 @@ static void init_tensor_kq_mask(ggml_tensor * tensor, float min = -1.0f, float m
     std::uniform_real_distribution<float> dis(min, max);
 
     for (size_t i = 0; i < data_f32.size(); i++) {
-        data_f32[i] = dis(gen);
+        data_f32[i] = deterministic ? min + (max - min) * (i % 17) / 16.0f : dis(gen);
     }
 
     // block size
@@ -176,12 +180,12 @@ static void init_tensor_kq_mask(ggml_tensor * tensor, float min = -1.0f, float m
     const int n_inf_zero_blocks = 0.2*(ne0*ne1*ne2*ne3)/(blck0*blck1);
 
     for (int b = 0; b < n_inf_zero_blocks; b++) {
-        const int p3 = (rd() % ne3);
-        const int p2 = (rd() % ne2);
-        const int p1 = (rd() % ne1);
-        const int p0 = (rd() % ne0);
+        const int p3 = deterministic ? (b % ne3) : (rd() % ne3);
+        const int p2 = deterministic ? ((b / ne3) % ne2) : (rd() % ne2);
+        const int p1 = deterministic ? ((b / (ne3 * ne2)) % ne1) : (rd() % ne1);
+        const int p0 = deterministic ? ((b / (ne3 * ne2 * ne1)) % ne0) : (rd() % ne0);
 
-        bool inf = rd() & 1;
+        bool inf = deterministic ? (b & 1) : (rd() & 1);
 
         for (int i1 = 0; i1 < blck1 && p1 + i1 < ne1; i1++) {
             const int idx = p3*ne2*ne1*ne0 + p2*ne1*ne0 + (p1 + i1)*ne0 + p0;
@@ -8785,15 +8789,15 @@ struct test_flash_attn_ext : public test_case {
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
             if (strcmp(t->name, "s") == 0) {
                 // make the sink values more noticeable in order to trigger a test failure when the implementation is wrong
-                init_tensor_uniform(t, -10.0f, 10.0f);
+                init_tensor_uniform(t, -10.0f, 10.0f, true);
             } else if (strcmp(t->name, "m") == 0) {
                 if (n_kv_max > 0) {
                     init_tensor_kq_mask_sparse(t, n_kv_max);
                 } else {
-                    init_tensor_kq_mask(t);
+                    init_tensor_kq_mask(t, -1.0f, 1.0f, true);
                 }
             } else {
-                init_tensor_uniform(t);
+                init_tensor_uniform(t, -1.0f, 1.0f, true);
             }
         }
     }
