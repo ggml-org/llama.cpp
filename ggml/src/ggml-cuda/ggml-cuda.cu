@@ -105,6 +105,13 @@ void ggml_cuda_error(const char * stmt, const char * func, const char * file, in
     GGML_ABORT(GGML_CUDA_NAME " error");
 }
 
+// map a (possibly virtual) device id to the physical CUDA device that backs it
+static int ggml_cuda_get_physical_device(int device) {
+    const ggml_cuda_device_info & info = ggml_cuda_info();
+    GGML_ASSERT(device >= 0 && device < info.device_count);
+    return info.devices[device].physical_device;
+}
+
 // this is faster on Windows
 // probably because the Windows CUDA libraries forget to make this check before invoking the drivers
 void ggml_cuda_set_device(int device) {
@@ -125,12 +132,6 @@ int ggml_cuda_get_device() {
     int id;
     CUDA_CHECK(cudaGetDevice(&id));
     return id;
-}
-
-int ggml_cuda_get_physical_device(int device) {
-    const ggml_cuda_device_info & info = ggml_cuda_info();
-    GGML_ASSERT(device >= 0 && device < info.device_count);
-    return info.devices[device].physical_device;
 }
 
 static cudaError_t ggml_cuda_device_malloc(void ** ptr, size_t size, int device) {

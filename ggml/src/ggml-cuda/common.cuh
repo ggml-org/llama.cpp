@@ -1144,9 +1144,6 @@ const ggml_cuda_device_info & ggml_cuda_info();
 void ggml_cuda_set_device(int device);
 int ggml_cuda_get_device();
 
-// map a (possibly virtual) device id to the physical CUDA device that backs it
-int ggml_cuda_get_physical_device(int device);
-
 struct ggml_cuda_pool {
     virtual ~ggml_cuda_pool() = default;
 
