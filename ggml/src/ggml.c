@@ -6962,72 +6962,152 @@ static void ggml_compute_backward(
     GGML_ASSERT(!src2_needs_grads || ggml_are_same_shape(src2, cgraph->grads[isrc2]));
 }
 
-static size_t ggml_visit_parents_graph(struct ggml_cgraph * cgraph, struct ggml_tensor * node, bool compute) {
-    if (node->op != GGML_OP_NONE && compute) {
-        node->flags |= GGML_TENSOR_FLAG_COMPUTE;
-    }
+// Iterative post-order DFS with an explicit heap-allocated stack. The
+// recursive version's native call depth equals the longest op chain in the
+// graph (~1000+ frames for a deep transformer), which overflows the small
+// worker stacks of some platforms (iOS Safari/JSC throws "Maximum call stack
+// size exceeded" from inside the WASM call). Semantics are identical to the
+// recursive form, including src eval order and use_count accounting.
+static size_t ggml_visit_parents_graph(struct ggml_cgraph * cgraph, struct ggml_tensor * root, bool compute) {
+    enum { VP_ENTER = 0, VP_FRESH = 1, VP_REVISIT = 2 };
+    struct vp_frame {
+        struct ggml_tensor * node;
+        size_t hash_pos;
+        int    next_src;
+        char   state;
+        bool   compute;
+    };
 
-    const size_t node_hash_pos = ggml_hash_find(&cgraph->visited_hash_set, node);
-    GGML_ASSERT(node_hash_pos != GGML_HASHSET_FULL);
+    size_t cap   = 256;
+    size_t depth = 0;
+    struct vp_frame * st = GGML_MALLOC(cap * sizeof(*st));
 
-    if (ggml_bitset_get(cgraph->visited_hash_set.used, node_hash_pos)) {
-        // already visited
+    // Result of the most recently completed frame, consumed by a VP_FRESH
+    // parent to bump the operand's use count (VP_REVISIT parents ignore it,
+    // matching the recursive form which discards those return values).
+    size_t last_hash  = 0;
+    bool   last_valid = false;
 
-        if (compute) {
-            // update the compute flag regardless
-            for (int i = 0; i < GGML_MAX_SRC; ++i) {
-                struct ggml_tensor * src = node->src[i];
-                if (src && ((src->flags & GGML_TENSOR_FLAG_COMPUTE) == 0)) {
-                    ggml_visit_parents_graph(cgraph, src, true);
-                }
+    st[depth++] = (struct vp_frame){ root, 0, 0, VP_ENTER, compute };
+
+    while (depth > 0) {
+        struct vp_frame * f = &st[depth - 1];
+        struct ggml_tensor * node = f->node;
+
+        if (f->state == VP_ENTER) {
+            if (node->op != GGML_OP_NONE && f->compute) {
+                node->flags |= GGML_TENSOR_FLAG_COMPUTE;
             }
+
+            f->hash_pos = ggml_hash_find(&cgraph->visited_hash_set, node);
+            GGML_ASSERT(f->hash_pos != GGML_HASHSET_FULL);
+
+            if (ggml_bitset_get(cgraph->visited_hash_set.used, f->hash_pos)) {
+                // already visited
+                if (f->compute) {
+                    // still need to propagate the compute flag into sources
+                    f->state    = VP_REVISIT;
+                    f->next_src = 0;
+                    continue;
+                }
+                last_hash  = f->hash_pos;
+                last_valid = true;
+                depth--;
+                continue;
+            }
+
+            // This is the first time we see this node in the current graph.
+            cgraph->visited_hash_set.keys[f->hash_pos] = node;
+            ggml_bitset_set(cgraph->visited_hash_set.used, f->hash_pos);
+            cgraph->use_counts[f->hash_pos] = 0;
+
+            f->state    = VP_FRESH;
+            f->next_src = 0;
+            last_valid  = false;
+            continue;
         }
 
-        return node_hash_pos;
+        if (f->state == VP_FRESH) {
+            if (last_valid) {
+                // Update the use count for the operand that just completed.
+                cgraph->use_counts[last_hash]++;
+                last_valid = false;
+            }
+
+            if (f->next_src < GGML_MAX_SRC) {
+                const int i = f->next_src++;
+                const int k =
+                    (cgraph->order == GGML_CGRAPH_EVAL_ORDER_LEFT_TO_RIGHT) ? i :
+                    (cgraph->order == GGML_CGRAPH_EVAL_ORDER_RIGHT_TO_LEFT) ? (GGML_MAX_SRC-1-i) :
+                    /* unknown order, just fall back to using i */ i;
+
+                struct ggml_tensor * src = node->src[k];
+                if (src) {
+                    const bool src_compute = f->compute;
+                    if (depth == cap) {
+                        cap *= 2;
+                        struct vp_frame * st2 = GGML_MALLOC(cap * sizeof(*st2));
+                        memcpy(st2, st, depth * sizeof(*st2));
+                        GGML_FREE(st);
+                        st = st2;
+                    }
+                    st[depth++] = (struct vp_frame){ src, 0, 0, VP_ENTER, src_compute };
+                }
+                continue;
+            }
+
+            if (node->op == GGML_OP_NONE && !(node->flags & GGML_TENSOR_FLAG_PARAM)) {
+                // reached a leaf node, not part of the gradient graph (e.g. a constant)
+                GGML_ASSERT(cgraph->n_leafs < cgraph->size);
+
+                if (strlen(node->name) == 0) {
+                    ggml_format_name(node, "leaf_%d", cgraph->n_leafs);
+                }
+
+                cgraph->leafs[cgraph->n_leafs] = node;
+                cgraph->n_leafs++;
+            } else {
+                GGML_ASSERT(cgraph->n_nodes < cgraph->size);
+
+                if (strlen(node->name) == 0) {
+                    ggml_format_name(node, "node_%d", cgraph->n_nodes);
+                }
+
+                cgraph->nodes[cgraph->n_nodes] = node;
+                cgraph->n_nodes++;
+            }
+
+            last_hash  = f->hash_pos;
+            last_valid = true;
+            depth--;
+            continue;
+        }
+
+        // VP_REVISIT: propagate the compute flag; these edges were already
+        // use-counted on first visit, so child results are discarded.
+        last_valid = false;
+        if (f->next_src < GGML_MAX_SRC) {
+            const int i = f->next_src++;
+            struct ggml_tensor * src = node->src[i];
+            if (src && ((src->flags & GGML_TENSOR_FLAG_COMPUTE) == 0)) {
+                if (depth == cap) {
+                    cap *= 2;
+                    struct vp_frame * st2 = GGML_MALLOC(cap * sizeof(*st2));
+                    memcpy(st2, st, depth * sizeof(*st2));
+                    GGML_FREE(st);
+                    st = st2;
+                }
+                st[depth++] = (struct vp_frame){ src, 0, 0, VP_ENTER, true };
+            }
+            continue;
+        }
+        last_hash  = f->hash_pos;
+        last_valid = true;
+        depth--;
     }
 
-    // This is the first time we see this node in the current graph.
-    cgraph->visited_hash_set.keys[node_hash_pos] = node;
-    ggml_bitset_set(cgraph->visited_hash_set.used, node_hash_pos);
-    cgraph->use_counts[node_hash_pos] = 0;
-
-    for (int i = 0; i < GGML_MAX_SRC; ++i) {
-        const int k =
-            (cgraph->order == GGML_CGRAPH_EVAL_ORDER_LEFT_TO_RIGHT) ? i :
-            (cgraph->order == GGML_CGRAPH_EVAL_ORDER_RIGHT_TO_LEFT) ? (GGML_MAX_SRC-1-i) :
-            /* unknown order, just fall back to using i */ i;
-
-        struct ggml_tensor * src = node->src[k];
-        if (src) {
-            const size_t src_hash_pos = ggml_visit_parents_graph(cgraph, src, compute);
-
-            // Update the use count for this operand.
-            cgraph->use_counts[src_hash_pos]++;
-        }
-    }
-
-    if (node->op == GGML_OP_NONE && !(node->flags & GGML_TENSOR_FLAG_PARAM)) {
-        // reached a leaf node, not part of the gradient graph (e.g. a constant)
-        GGML_ASSERT(cgraph->n_leafs < cgraph->size);
-
-        if (strlen(node->name) == 0) {
-            ggml_format_name(node, "leaf_%d", cgraph->n_leafs);
-        }
-
-        cgraph->leafs[cgraph->n_leafs] = node;
-        cgraph->n_leafs++;
-    } else {
-        GGML_ASSERT(cgraph->n_nodes < cgraph->size);
-
-        if (strlen(node->name) == 0) {
-            ggml_format_name(node, "node_%d", cgraph->n_nodes);
-        }
-
-        cgraph->nodes[cgraph->n_nodes] = node;
-        cgraph->n_nodes++;
-    }
-
-    return node_hash_pos;
+    GGML_FREE(st);
+    return last_hash;   // hash pos of root (the last frame to complete)
 }
 
 static void ggml_build_forward_impl(struct ggml_cgraph * cgraph, struct ggml_tensor * tensor, bool expand, bool compute) {
