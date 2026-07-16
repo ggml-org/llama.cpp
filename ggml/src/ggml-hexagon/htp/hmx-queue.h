@@ -99,7 +99,7 @@ static inline bool hmx_queue_empty(hmx_queue_t q) {
 }
 
 static inline uint32_t hmx_queue_depth(hmx_queue_t q) {
-    return (q->idx_read - q->idx_read) & q->idx_mask;
+    return (q->idx_write - q->idx_read) & q->idx_mask;
 }
 
 static inline uint32_t hmx_queue_capacity(hmx_queue_t q) {
