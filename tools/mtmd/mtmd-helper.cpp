@@ -13,7 +13,6 @@
 
 #include <algorithm>
 #include <cinttypes>
-#include <optional>
 #include <vector>
 
 //#define MTMD_AUDIO_DEBUG
@@ -242,11 +241,16 @@ struct decode_embd_batch {
 // Helper class to set non-causal attention via RAII
 class scoped_non_causal_attention {
 public:
-    explicit scoped_non_causal_attention(llama_context * context) : context_(context) {
-        llama_set_causal_attn(context_, false);
+    scoped_non_causal_attention(llama_context * context, bool enabled) : context_(context), enabled_(enabled) {
+        if (enabled_) {
+            // TODO @ngxson : need to make sure only one image is processed at a time, and n_ubatch must be enough to hold the image
+            llama_set_causal_attn(context_, false);
+        }
     }
     ~scoped_non_causal_attention() {
-        llama_set_causal_attn(context_, true);
+        if (enabled_) {
+            llama_set_causal_attn(context_, true);
+        }
     }
 
     scoped_non_causal_attention(const scoped_non_causal_attention &) = delete;
@@ -254,6 +258,7 @@ public:
 
 private:
     llama_context * context_;
+    bool enabled_;
 };
 
 // Helper function for decoding an image whose embeddings have already been calculated
@@ -305,11 +310,8 @@ int32_t mtmd_helper_decode_image_chunk(
         batch_embd.set_position_normal(n_past, seq_id);
     }
 
-    std::optional<scoped_non_causal_attention> scoped_non_causal_attn;
-    if (mtmd_decode_use_non_causal(ctx, chunk)) {
-        scoped_non_causal_attn.emplace(lctx);
-        // TODO @ngxson : need to make sure only one image is processed at a time, and n_ubatch must be enough to hold the image
-    }
+    const bool use_non_causal = mtmd_decode_use_non_causal(ctx, chunk);
+    const scoped_non_causal_attention scoped_non_causal_attn(lctx, use_non_causal);
 
     while (i_batch < n_img_batches) { // split into batches
         int pos_offset = i_batch*n_batch;
