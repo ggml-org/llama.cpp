@@ -166,12 +166,12 @@ kernel void kernel_mul_mv_q4_K_f32_flat(
             uint v0 = b0 & 0xFFFF, v1 = b0 >> 16, v2 = b1 & 0xFFFF, v3 = b1 >> 16;
 
             float4 acc1, acc2;
-            acc1.s0 = yl[0]*(w0&0x000F) + yl[2]*(w1&0x000F) + yl[4]*(w2&0x000F) + yl[6]*(w3&0x000F);
-            acc1.s1 = yl[1]*(w0&0x0F00) + yl[3]*(w1&0x0F00) + yl[5]*(w2&0x0F00) + yl[7]*(w3&0x0F00);
+            acc1.s0 = yl[0]*(w0&0x000F) + yl[ 2]*(w1&0x000F) + yl[ 4]*(w2&0x000F) + yl[ 6]*(w3&0x000F);
+            acc1.s1 = yl[1]*(w0&0x0F00) + yl[ 3]*(w1&0x0F00) + yl[ 5]*(w2&0x0F00) + yl[ 7]*(w3&0x0F00);
             acc1.s2 = yl[8]*(w0&0x00F0) + yl[10]*(w1&0x00F0) + yl[12]*(w2&0x00F0) + yl[14]*(w3&0x00F0);
             acc1.s3 = yl[9]*(w0&0xF000) + yl[11]*(w1&0xF000) + yl[13]*(w2&0xF000) + yl[15]*(w3&0xF000);
-            acc2.s0 = yh[0]*(v0&0x000F) + yh[2]*(v1&0x000F) + yh[4]*(v2&0x000F) + yh[6]*(v3&0x000F);
-            acc2.s1 = yh[1]*(v0&0x0F00) + yh[3]*(v1&0x0F00) + yh[5]*(v2&0x0F00) + yh[7]*(v3&0x0F00);
+            acc2.s0 = yh[0]*(v0&0x000F) + yh[ 2]*(v1&0x000F) + yh[ 4]*(v2&0x000F) + yh[ 6]*(v3&0x000F);
+            acc2.s1 = yh[1]*(v0&0x0F00) + yh[ 3]*(v1&0x0F00) + yh[ 5]*(v2&0x0F00) + yh[ 7]*(v3&0x0F00);
             acc2.s2 = yh[8]*(v0&0x00F0) + yh[10]*(v1&0x00F0) + yh[12]*(v2&0x00F0) + yh[14]*(v3&0x00F0);
             acc2.s3 = yh[9]*(v0&0xF000) + yh[11]*(v1&0xF000) + yh[13]*(v2&0xF000) + yh[15]*(v3&0xF000);
 
