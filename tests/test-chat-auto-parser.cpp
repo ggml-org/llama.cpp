@@ -1415,9 +1415,23 @@ static void test_laguna_tool_format(testing & t) {
     t.assert_equal("arg_value_suffix should be '</arg_value>'", "</arg_value>", analysis.tools.arguments.value_suffix);
 }
 
+static void test_laguna_stop_string(testing & t) {
+    // The </assistant> turn terminator can be emitted as ordinary text tokens
+    // (not the single eot token), so it must also be a literal stop string.
+    common_chat_template tmpl = load_laguna_template(t);
+    struct autoparser analysis;
+    analysis.analyze_template(tmpl);
+    bool has_stop = false;
+    for (const auto & stop : analysis.additional_stops) {
+        if (stop == "</assistant>") { has_stop = true; break; }
+    }
+    t.assert_true("Laguna additional_stops contains </assistant>", has_stop);
+}
+
 static void test_laguna_analysis(testing & t) {
     t.test("Laguna reasoning detection", test_laguna_reasoning_detection);
     t.test("Laguna tool format", test_laguna_tool_format);
+    t.test("Laguna stop string", test_laguna_stop_string);
 }
 
 static common_chat_template load_laguna_s_template(testing & t) {

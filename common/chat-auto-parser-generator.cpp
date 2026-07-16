@@ -47,6 +47,8 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
     data.generation_prompt = common_chat_template_generation_prompt(tmpl, inputs);
     data.format            = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.preserved_tokens  = autoparser.preserved_tokens;
+    data.additional_stops.insert(data.additional_stops.end(),
+        autoparser.additional_stops.begin(), autoparser.additional_stops.end());
 
     std::string parser_generation_prompt = data.generation_prompt;
 

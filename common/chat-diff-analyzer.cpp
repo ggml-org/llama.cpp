@@ -186,6 +186,10 @@ static std::vector<std::function<void(const common_chat_template & tmpl, autopar
               analysis.tools.arguments.value_suffix = trim_whitespace(analysis.tools.arguments.value_suffix);
               analysis.tools.arguments.separator    = trim_whitespace(analysis.tools.arguments.separator);
               analysis.tools.arguments.tolerate_intertag_whitespace = true;
+              // The CONTROL/eot </assistant> token only halts generation when emitted as the
+              // single token; after tool calls the model can spell it out as text tokens.
+              // A literal stop string catches it either way.
+              analysis.additional_stops.push_back("</assistant>");
               LOG_DBG(ANSI_ORANGE "[Patch: Laguna]\n" ANSI_RESET);
           }
       },
