@@ -16,6 +16,7 @@
 #include "htp-ctx.h"
 #include "htp-ops.h"
 #include "htp-ops.h"
+#include "htp-tensor.h"
 
 #define htp_act_preamble                                 \
     const struct htp_tensor * src0 = actx->octx->src[0]; \
@@ -766,17 +767,11 @@ static int execute_op_activations_f32(struct htp_ops_context * octx) {
 }
 
 int op_activations(struct htp_ops_context * octx) {
-    int err = HTP_STATUS_OK;
-
     switch (octx->src[0]->type) {
         case HTP_TYPE_F32:
-            err = execute_op_activations_f32(octx);
-            break;
+            return execute_op_activations_f32(octx);
 
         default:
-            err = HTP_STATUS_NO_SUPPORT;
-            break;
+            return HTP_STATUS_NO_SUPPORT;
     }
-
-    return err;
 }
