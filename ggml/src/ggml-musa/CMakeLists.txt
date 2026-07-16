@@ -101,6 +101,10 @@ if (MUSAToolkit_FOUND)
         add_compile_definitions(GGML_CUDA_NO_PEER_COPY)
     endif()
 
+    if (GGML_MUSA_WMMA_FATTN)
+        add_compile_definitions(GGML_MUSA_WMMA_FATTN)
+    endif()
+
     if (GGML_STATIC)
         target_link_libraries(ggml-musa PRIVATE MUSA::musart_static MUSA::mublas_static)
         # TODO: mudnn has not provided static libraries yet

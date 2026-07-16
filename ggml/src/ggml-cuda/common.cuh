@@ -291,9 +291,13 @@ static const char * cu_get_error_str(CUresult err) {
 #define CP_ASYNC_AVAILABLE
 #endif // !defined(GGML_USE_HIP) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
 
-#if !defined(GGML_CUDA_NO_FA) && !(defined(GGML_USE_MUSA) && __MUSA_ARCH__ < 220)
+#if defined(GGML_USE_MUSA) && (__MUSA_ARCH__ < 220) && !defined(GGML_MUSA_WMMA_FATTN)
+#define GGML_MUSA_NO_FA
+#endif // defined(GGML_USE_MUSA) && (__MUSA_ARCH__ < 220) && !defined(GGML_MUSA_WMMA_FATTN)
+
+#if !defined(GGML_CUDA_NO_FA) && !defined(GGML_MUSA_NO_FA)
 #define FLASH_ATTN_AVAILABLE
-#endif // !defined(GGML_CUDA_NO_FA) && !(defined(GGML_USE_MUSA) && __MUSA_ARCH__ < 220)
+#endif // !defined(GGML_CUDA_NO_FA) && !defined(GGML_MUSA_NO_FA)
 
 static bool fp16_available(const int cc) {
     return ggml_cuda_highest_compiled_arch(cc) >= GGML_CUDA_CC_PASCAL ||
