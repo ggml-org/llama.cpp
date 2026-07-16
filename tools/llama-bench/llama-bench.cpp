@@ -1856,12 +1856,6 @@ struct markdown_printer : public printer {
         if (field == "devices") {
             return -12;
         }
-        if (field == "use_mmap") {
-            return 4;
-        }
-        if (field == "use_direct_io") {
-            return 3;
-        }
         if (field == "test") {
             return 15;
         }
