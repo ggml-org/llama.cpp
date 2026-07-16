@@ -222,6 +222,7 @@ class Runner::RunnerImpl {
 
         llama_memory_clear(llama_get_memory(ctx.lctx), false);
         ctx.n_past = 0;
+        pending_eot = LLAMA_TOKEN_NULL;  // fresh context: nothing to carry over
     }
 
     int get_output_sample_rate() const {
@@ -236,6 +237,11 @@ class Runner::RunnerImpl {
 
     std::atomic<bool> stop_requested = false;
     std::string       last_error_;
+
+    // The turn-ending (EOG) token is sampled but the loop breaks before decoding it,
+    // so it never reaches the KV cache. Remember it and re-supply it at the next
+    // continuation prefill (see eval_messages()).
+    llama_token pending_eot = LLAMA_TOKEN_NULL;
 
     // perf
     size_t                 text_tokens_count = 0, audio_samples_count = 0;
@@ -274,6 +280,9 @@ class Runner::RunnerImpl {
                 common_sampler_accept(ctx.smpl, next_text_token, true);
 
                 if (llama_vocab_is_eog(ctx.vocab, next_text_token)) {
+                    // Sampled, not decoded. eval_messages() re-supplies it on the next
+                    // continuation prefill so a reset_context=false resume isn't a token short.
+                    pending_eot = next_text_token;
                     LOG("\n");
                     break;  // end of generation
                 }
@@ -328,10 +337,23 @@ class Runner::RunnerImpl {
         tmpl_inputs.messages              = msgs;
         tmpl_inputs.add_generation_prompt = true;
         auto formatted_chat               = common_chat_templates_apply(ctx.tmpls.get(), tmpl_inputs);
-        LOG_DBG("formatted_chat.prompt: %s\n", formatted_chat.prompt.c_str());
+
+        std::string prompt = formatted_chat.prompt;
+        // If the previous turn's EOG was sampled but never decoded, it is missing from
+        // the cached KV. Prepend it — with the template's "\n" turn separator — so this
+        // prefill closes that turn before the next one begins. pending_eot is only set
+        // after a generation and cleared on reset, so a non-null value already means we
+        // are continuing (reset_context=false). Keyed on "a turn is pending", not on the
+        // next role, so it also covers assistant->assistant hand-offs (<|mixed_start|>
+        // then audio) that a "next turn is a user turn" check would miss.
+        if (pending_eot != LLAMA_TOKEN_NULL) {
+            prompt = common_token_to_piece(ctx.lctx, pending_eot, true) + "\n" + prompt;
+        }
+        pending_eot = LLAMA_TOKEN_NULL;
+        LOG_DBG("formatted_chat.prompt: %s\n", prompt.c_str());
 
         mtmd_input_text text;
-        text.text          = formatted_chat.prompt.c_str();
+        text.text          = prompt.c_str();
         text.add_special   = add_bos;
         text.parse_special = true;
 
