@@ -49,30 +49,29 @@ static __device__ __forceinline__ int ggml_cuda_fattn_swz_bytes_rc(const int row
 
 namespace ggml_cuda_fattn_smem_swizzle {
 
-// ldmatrix.x4 from a 32-bit .shared address (lower register pressure than 64-bit generic pointers).
-static __device__ __forceinline__ void ggml_cuda_fattn_ldmatrix_x4(int * xi, const uint32_t saddr) {
+// ldmatrix.x4 via 64-bit generic pointer.
+static __device__ __forceinline__ void ggml_cuda_fattn_ldmatrix_x4(int * xi, const half2 * addr) {
     asm volatile("ldmatrix.sync.aligned.m8n8.x4.b16 {%0, %1, %2, %3}, [%4];"
         : "=r"(xi[0]), "=r"(xi[1]), "=r"(xi[2]), "=r"(xi[3])
-        : "r"(saddr));
+        : "l"(addr));
 }
-static __device__ __forceinline__ void ggml_cuda_fattn_ldmatrix_x4_trans(int * xi, const uint32_t saddr) {
+static __device__ __forceinline__ void ggml_cuda_fattn_ldmatrix_x4_trans(int * xi, const half2 * addr) {
     asm volatile("ldmatrix.sync.aligned.m8n8.x4.trans.b16 {%0, %1, %2, %3}, [%4];"
         : "=r"(xi[0]), "=r"(xi[2]), "=r"(xi[1]), "=r"(xi[3])
-        : "r"(saddr));
+        : "l"(addr));
 }
 
-// Per-lane swizzled .shared address for tile<16,8> ldmatrix.
+// Per-lane swizzled generic pointer for tile<16,8> ldmatrix.
 template<int stride_h2>
-static __device__ __forceinline__ uint32_t ggml_cuda_fattn_swz_saddr(
+static __device__ __forceinline__ const half2 * ggml_cuda_fattn_swz_saddr(
         const half2 * tile_base, const int base_row, const int base_col_h2, const int I, const int J) {
     const int lane_row = threadIdx.x % I;
     const int lane_col = (threadIdx.x / I) * (J / 2);
-    const uint32_t base = __cvta_generic_to_shared(tile_base);
     uint32_t byte_off = (uint32_t)((base_row + lane_row) * stride_h2 + base_col_h2 + lane_col) * (uint32_t)sizeof(half2);
     if constexpr (ggml_cuda_fattn_swz_enabled(stride_h2)) {
         byte_off ^= (uint32_t)(((base_row + lane_row) & 7) << 4);
     }
-    return base + byte_off;
+    return (const half2 *) ((const char *) tile_base + byte_off);
 }
 
 template<typename TileT, int stride_h2>
@@ -83,8 +82,8 @@ static __device__ __forceinline__ void load_ldmatrix(
     constexpr int J = Tile::J;
 #if defined(TURING_MMA_AVAILABLE)
     if constexpr (I == 16 && J == 8 && ggml_cuda_fattn_swz_enabled(stride_h2)) {
-        const uint32_t saddr = ggml_cuda_fattn_swz_saddr<stride_h2>(tile_base, base_row, base_col_h2, I, J);
-        ggml_cuda_fattn_ldmatrix_x4((int *) t.x, saddr);
+        const half2 * addr = ggml_cuda_fattn_swz_saddr<stride_h2>(tile_base, base_row, base_col_h2, I, J);
+        ggml_cuda_fattn_ldmatrix_x4((int *) t.x, addr);
         return;
     }
 #endif // TURING_MMA_AVAILABLE
@@ -99,8 +98,8 @@ static __device__ __forceinline__ void load_ldmatrix_trans(
     constexpr int J = Tile::J;
 #if defined(TURING_MMA_AVAILABLE)
     if constexpr (I == 16 && J == 8 && ggml_cuda_fattn_swz_enabled(stride_h2)) {
-        const uint32_t saddr = ggml_cuda_fattn_swz_saddr<stride_h2>(tile_base, base_row, base_col_h2, I, J);
-        ggml_cuda_fattn_ldmatrix_x4_trans((int *) t.x, saddr);
+        const half2 * addr = ggml_cuda_fattn_swz_saddr<stride_h2>(tile_base, base_row, base_col_h2, I, J);
+        ggml_cuda_fattn_ldmatrix_x4_trans((int *) t.x, addr);
         return;
     }
 #endif // TURING_MMA_AVAILABLE
