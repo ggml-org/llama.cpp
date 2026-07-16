@@ -264,7 +264,8 @@ static ADRENO_GPU_GEN get_adreno_gpu_gen(const char *device_name) {
         return ADRENO_GPU_GEN::A7X;
     }
 
-    if (strstr(device_name, "830") ||
+    if (strstr(device_name, "810") ||
+        strstr(device_name, "830") ||
         strstr(device_name, "840") ||
         strstr(device_name, "850")) {
         return ADRENO_GPU_GEN::A8X;

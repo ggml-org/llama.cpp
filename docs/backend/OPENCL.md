@@ -47,6 +47,7 @@ The llama.cpp OpenCL backend is designed to enable llama.cpp on **Qualcomm Adren
 | Adreno GPU                            | Status  |
 |:-------------------------------------:|:-------:|
 | Adreno 750 (Snapdragon 8 Gen 3)       | Support |
+| Adreno 810 (Snapdragon 7s Gen 3)      | Support |
 | Adreno 830 (Snapdragon 8 Elite)       | Support |
 | Adreno 840 (Snapdragon 8 Elite Gen 5) | Support |
 | Adreno X1-85 (Snapdragon X Elite)     | Support |
