@@ -2,7 +2,7 @@
 	import { notebookStore } from '$lib/stores/notebook.svelte';
 	import Button from '$lib/components/ui/button/button.svelte';
 	import Textarea from '$lib/components/ui/textarea/textarea.svelte';
-	import { Play, Square, Settings, Undo, Redo, RulerDimensionLine } from '@lucide/svelte';
+	import { Play, Square, Undo, Redo, RulerDimensionLine } from '@lucide/svelte';
 	import { config } from '$lib/stores/settings.svelte';
 	import {
 		ChatMessageStatistics,
@@ -16,7 +16,7 @@
 	import { modelOptions, selectedModelId } from '$lib/stores/models.svelte';
 	import { isRouterMode } from '$lib/stores/server.svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { ROUTES } from '$lib/constants/routes';
+
 
 	import {
 		AUTO_SCROLL_AT_BOTTOM_THRESHOLD,
@@ -219,14 +219,9 @@
 
 <div class="flex h-full flex-col">
 	<header
-		class="flex items-center justify-between border-b border-border/40 bg-background/95 px-6 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/60"
+		class="flex items-center justify-center border-b border-border/40 bg-background/95 px-6 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/60"
 	>
-		<div class="w-10"></div>
-		<!-- Spacer for centering -->
 		<h1 class="text-lg font-semibold">Notebook</h1>
-		<Button variant="ghost" size="icon" href={ROUTES.SETTINGS}>
-			<Settings class="h-5 w-5" />
-		</Button>
 	</header>
 
 	<div class="flex-1 overflow-y-auto px-2 pt-2 pb-0 md:px-4 md:pt-4">
