@@ -220,34 +220,8 @@ ggml_tensor * llama_model_deepseek4::graph::build_hc_sinkhorn(
         int           il) const {
     GGML_UNUSED(il);
 
-    // comb is [dst_hc, src_hc, n_tokens]. Sinkhorn follows the reference:
-    // row softmax over dst, one column normalization, then repeated row/column normalization.
-    comb = ggml_soft_max(ctx0, comb);
-
-    ggml_tensor * eps = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
-    eps = ggml_fill(ctx0, eps, hparams.dsv4_hc_eps);
-
-    comb = ggml_add(ctx0, comb, eps);
-
-    auto norm_cols = [&]() {
-        ggml_tensor * comb_src_dst = ggml_cont(ctx0, ggml_permute(ctx0, comb, 1, 0, 2, 3));
-        ggml_tensor * col_sum = ggml_sum_rows(ctx0, comb_src_dst);
-        col_sum = ggml_add(ctx0, col_sum, eps);
-        col_sum = ggml_permute(ctx0, col_sum, 1, 0, 2, 3);
-        comb = ggml_div(ctx0, comb, col_sum);
-    };
-
-    auto norm_rows = [&]() {
-        ggml_tensor * row_sum = ggml_sum_rows(ctx0, comb);
-        row_sum = ggml_add(ctx0, row_sum, eps);
-        comb = ggml_div(ctx0, comb, row_sum);
-    };
-
-    norm_cols();
-    for (uint32_t i = 1; i < hparams.dsv4_hc_sinkhorn_iters; ++i) {
-        norm_rows();
-        norm_cols();
-    }
+    comb = ggml_cont(ctx0, comb);
+    comb = ggml_sinkhorn_norm(ctx0, comb, (int) hparams.dsv4_hc_sinkhorn_iters, hparams.dsv4_hc_eps);
 
     return comb;
 }
