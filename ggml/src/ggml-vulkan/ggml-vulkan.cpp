@@ -4365,9 +4365,7 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     if (device->coopmat2) {
         auto const &ggml_vk_mul_mm_cm2_spec = [&](std::vector<uint32_t> spec, bool aligned, bool mul_mat_id, uint32_t type = UINT32_MAX) {
             spec.push_back(aligned ? 1u : 0u);        // ALIGNED
-            if (mul_mat_id) {
-                spec.push_back(device->subgroup_size); // subgroup_size
-            }
+            spec.push_back(device->subgroup_size);     // subgroup_size
             if (type != UINT32_MAX) {
                 spec.push_back(type);                  // MmTypeA
             }
