@@ -1488,6 +1488,15 @@ struct ggml_backend_cuda_context {
         return cublas_handle(device);
     }
 
+    struct prequant_q8_1_entry { const void * q8_1; int64_t ne10; int64_t ne10_padded; };
+    std::unordered_map<const ggml_tensor *, prequant_q8_1_entry> prequant_q8_1_map;
+    std::vector<std::unique_ptr<ggml_cuda_pool_alloc<char>>> prequant_q8_1_bufs;
+
+    void prequant_q8_1_reset() {
+        prequant_q8_1_map.clear();
+        prequant_q8_1_bufs.clear();
+    }
+
     // pool
     std::unique_ptr<ggml_cuda_pool> pools[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS];
 

@@ -702,6 +702,10 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
     std::unique_lock<std::mutex> lock(ggml_cuda_lock);
     ggml_cuda_lock_cv.wait(lock, []{ return ggml_cuda_lock_counter.load(std::memory_order_relaxed) == 0; });
 
+    // release the producer-side q8_1 fusion buffers (last graph's) before the pools they were allocated
+    // from are destroyed, otherwise the pool destructor asserts on the outstanding allocations.
+    prequant_q8_1_reset();
+
     if (copy_event != nullptr) {
         CUDA_CHECK(cudaEventDestroy(copy_event));
     }
@@ -3123,6 +3127,26 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
 }
 
 // try and fuse nodes and return the number of nodes to skip
+static bool ggml_cuda_norm_feeds_quant_mmvq(const ggml_cgraph * cgraph, int mul_idx,
+                                            const ggml_tensor * mul_out, int64_t & ncols_padded) {
+    if (ggml_nrows(mul_out) != 1 || mul_out->ne[0] % QK8_1 != 0) { // single-token only: one q8_1 row
+        return false;
+    }
+    for (int j = mul_idx + 1; j < cgraph->n_nodes; ++j) {
+        const ggml_tensor * n = cgraph->nodes[j];
+        if (n->op != GGML_OP_MUL_MAT && n->op != GGML_OP_MUL_MAT_ID) {
+            continue;
+        }
+        const ggml_tensor * s1 = n->src[1];
+        const bool matches = s1 == mul_out || (s1 && s1->view_src == mul_out);
+        if (matches && n->src[0] && ggml_is_quantized(n->src[0]->type) && s1->type == GGML_TYPE_F32) {
+            ncols_padded = GGML_PAD(mul_out->ne[0], MATRIX_ROW_PADDING);
+            return true;
+        }
+    }
+    return false;
+}
+
 static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
 
     static bool disable_fusion = getenv("GGML_CUDA_DISABLE_FUSION") != nullptr && std::atoi(getenv("GGML_CUDA_DISABLE_FUSION"));
@@ -3808,7 +3832,19 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     }
 
     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL }, {})) {
-        ggml_cuda_op_rms_norm_fused(*cuda_ctx, node, cgraph->nodes[i + 1]);
+        ggml_tensor * mul_out = cgraph->nodes[i + 1];
+
+        int64_t ncols_padded = 0;
+        if (ggml_cuda_norm_feeds_quant_mmvq(cgraph, i + 1, mul_out, ncols_padded)) {
+            const size_t buf_sz = (size_t) (ncols_padded / QK8_1) * sizeof(block_q8_1); // single row
+            auto buf = std::make_unique<ggml_cuda_pool_alloc<char>>(cuda_ctx->pool(), buf_sz);
+            void * q8_ptr = buf->get();
+            ggml_cuda_op_rms_norm_fused_q8(*cuda_ctx, node, mul_out, q8_ptr, ncols_padded);
+            cuda_ctx->prequant_q8_1_map[mul_out] = { q8_ptr, mul_out->ne[0], ncols_padded };
+            cuda_ctx->prequant_q8_1_bufs.push_back(std::move(buf));
+        } else {
+            ggml_cuda_op_rms_norm_fused(*cuda_ctx, node, mul_out);
+        }
         return 1;
     }
 
@@ -4077,6 +4113,8 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) backend->context;
 
     ggml_cuda_set_device(cuda_ctx->device);
+
+    cuda_ctx->prequant_q8_1_reset();
 
     bool use_cuda_graph             = false;
     bool cuda_graph_update_required = false;
