@@ -64,6 +64,7 @@
 #include <cstring>
 #include <fstream>
 #include <random>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -187,6 +188,66 @@ struct tokenization_request {
     float reward = 1.0f;
 };
 
+struct jsonl_input_line {
+    std::string text;
+    int lineno;
+};
+
+struct jsonl_load_result {
+    tokenization_request request;
+    training_sample      sample;
+    bool                 parsed = false;
+    bool                 valid = false;
+};
+
+static size_t physical_core_count() {
+#ifdef __linux__
+    std::ifstream cpuinfo("/proc/cpuinfo");
+    if (cpuinfo.is_open()) {
+        std::set<std::pair<int, int>> cores;
+        int package_id = -1;
+        int core_id = -1;
+        std::string line;
+
+        auto add_core = [&] {
+            if (package_id >= 0 && core_id >= 0) {
+                cores.insert({ package_id, core_id });
+            }
+            package_id = -1;
+            core_id = -1;
+        };
+
+        while (std::getline(cpuinfo, line)) {
+            if (line.empty()) {
+                add_core();
+                continue;
+            }
+
+            const size_t colon = line.find(':');
+            if (colon == std::string::npos) continue;
+            const std::string key = line.substr(0, colon);
+            if (key.find("physical id") != std::string::npos) {
+                package_id = std::stoi(line.substr(colon + 1));
+            } else if (key.find("core id") != std::string::npos) {
+                core_id = std::stoi(line.substr(colon + 1));
+            }
+        }
+        add_core();
+
+        if (!cores.empty()) {
+            return cores.size();
+        }
+    }
+#endif
+
+    return std::max(1u, std::thread::hardware_concurrency());
+}
+
+static size_t dataset_worker_count(int32_t requested, size_t n_lines) {
+    const size_t n_workers = requested > 0 ? (size_t) requested : physical_core_count();
+    return std::min(n_lines, n_workers);
+}
+
 // Apply a very simple ChatML fallback template when the model has no template.
 static std::string apply_chatml(const std::vector<common_chat_msg> & msgs) {
     std::string out;
@@ -206,8 +267,9 @@ static std::string apply_chatml(const std::vector<common_chat_msg> & msgs) {
 
 static std::vector<training_sample> load_jsonl(
         const std::string & path,
-        llama_context      * ctx,
-        common_chat_templates * tmpls) {
+        const llama_vocab  * vocab,
+        common_chat_templates * tmpls,
+        int32_t              n_threads) {
 
     std::ifstream f(path);
     if (!f.is_open()) {
@@ -216,7 +278,7 @@ static std::vector<training_sample> load_jsonl(
     }
 
     std::vector<training_sample> samples;
-    std::vector<tokenization_request> requests;
+    std::vector<jsonl_input_line> lines;
     std::string line;
     int lineno = 0;
     bool logged_preview = false;
@@ -225,21 +287,39 @@ static std::vector<training_sample> load_jsonl(
         ++lineno;
         if (line.empty()) continue;
 
-        nlohmann::json j;
-        try { j = nlohmann::json::parse(line); }
-        catch (...) {
-            LOG_WRN("%s: skipping invalid JSON on line %d\n", __func__, lineno);
-            continue;
-        }
+        lines.push_back({ std::move(line), lineno });
+    }
 
-        float reward = 1.0f;
-        if      (j.contains("reward")) reward = j["reward"].get<float>();
-        else if (j.contains("score"))  reward = j["score"].get<float>();
+    std::vector<jsonl_load_result> results(lines.size());
+    std::atomic<size_t> next_line { 0 };
+    const size_t n_workers = dataset_worker_count(n_threads, lines.size());
+    std::vector<std::thread> workers;
+    workers.reserve(n_workers);
 
-        std::string prompt_text;
-        std::string response_text;
+    for (size_t worker = 0; worker < n_workers; ++worker) {
+        workers.emplace_back([&] {
+            for (;;) {
+                const size_t i = next_line.fetch_add(1);
+                if (i >= lines.size()) break;
 
-        if (j.contains("messages")) {
+                const jsonl_input_line & input = lines[i];
+                jsonl_load_result & result = results[i];
+
+                nlohmann::json j;
+                try { j = nlohmann::json::parse(input.text); }
+                catch (...) {
+                    LOG_WRN("%s: skipping invalid JSON on line %d\n", __func__, input.lineno);
+                    continue;
+                }
+
+                float reward = 1.0f;
+                if      (j.contains("reward")) reward = j["reward"].get<float>();
+                else if (j.contains("score"))  reward = j["score"].get<float>();
+
+                std::string prompt_text;
+                std::string response_text;
+
+                if (j.contains("messages")) {
             // chat format — apply template
             std::vector<common_chat_msg> msgs;
             for (const auto & m : j["messages"]) {
@@ -267,7 +347,7 @@ static std::vector<training_sample> load_jsonl(
             }
             if (last_asst_idx < 0) {
                 // No assistant turn: nothing to train on.
-                LOG_DBG("%s: skipping line %d: no assistant turn\n", __func__, lineno);
+                LOG_DBG("%s: skipping line %d: no assistant turn\n", __func__, input.lineno);
                 continue;
             }
             last_assistant_content = msgs[last_asst_idx].content_parts.empty()
@@ -324,10 +404,10 @@ static std::vector<training_sample> load_jsonl(
                     if (marker_pos != std::string::npos) {
                         response_text = last_assistant_content + marked_text.substr(marker_pos + marker.size());
                         LOG_WRN("%s: line %d full chat render is not prefixed by prompt render; using marker-derived response suffix\n",
-                                __func__, lineno);
+                                __func__, input.lineno);
                     } else {
                         LOG_WRN("%s: line %d could not derive template response suffix; using raw assistant content\n",
-                                __func__, lineno);
+                                __func__, input.lineno);
                         response_text = last_assistant_content;
                     }
                 }
@@ -338,37 +418,25 @@ static std::vector<training_sample> load_jsonl(
                 prompt_text   = "";
                 response_text = apply_chatml(all_msgs);
             }
-        } else if (j.contains("prompt") && j.contains("response")) {
+                } else if (j.contains("prompt") && j.contains("response")) {
             response_text = j["response"].get<std::string>();
             prompt_text = j["prompt"].get<std::string>();
-        } else if (j.contains("text")) {
+                } else if (j.contains("text")) {
             response_text = j["text"].get<std::string>();
-        } else {
-            LOG_WRN("%s: unknown format on line %d, skipping\n", __func__, lineno);
-            continue;
-        }
+                } else {
+                    LOG_WRN("%s: unknown format on line %d, skipping\n", __func__, input.lineno);
+                    continue;
+                }
 
-        requests.push_back({std::move(prompt_text), std::move(response_text), reward});
-    }
+                result.parsed = true;
+                result.request = {std::move(prompt_text), std::move(response_text), reward};
 
-    std::vector<training_sample> tokenized(requests.size());
-    std::vector<uint8_t> valid(requests.size(), 0);
-    std::atomic<size_t> next_request { 0 };
-    const size_t n_workers = std::min<size_t>(requests.size(), std::max(1u, std::thread::hardware_concurrency()));
-    std::vector<std::thread> workers;
-    workers.reserve(n_workers);
-    for (size_t worker = 0; worker < n_workers; ++worker) {
-        workers.emplace_back([&] {
-            for (;;) {
-                const size_t i = next_request.fetch_add(1);
-                if (i >= requests.size()) break;
-
-                const tokenization_request & request = requests[i];
-                auto tok_prompt = common_tokenize(ctx, request.prompt, /*add_special=*/true, /*parse_special=*/true);
-                auto tok_response = common_tokenize(ctx, request.response, /*add_special=*/false, /*parse_special=*/true);
+                const tokenization_request & request = result.request;
+                auto tok_prompt = common_tokenize(vocab, request.prompt, /*add_special=*/true, /*parse_special=*/true);
+                auto tok_response = common_tokenize(vocab, request.response, /*add_special=*/false, /*parse_special=*/true);
                 if (tok_prompt.empty() && tok_response.empty()) continue;
 
-                training_sample & sample = tokenized[i];
+                training_sample & sample = result.sample;
                 sample.reward = request.reward;
                 sample.tokens.insert(sample.tokens.end(), tok_prompt.begin(), tok_prompt.end());
                 sample.tokens.insert(sample.tokens.end(), tok_response.begin(), tok_response.end());
@@ -376,26 +444,29 @@ static std::vector<training_sample> load_jsonl(
                 for (size_t j = tok_prompt.size(); j < sample.tokens.size(); ++j) {
                     sample.is_label[j] = true;
                 }
-                valid[i] = 1;
+                result.valid = true;
             }
         });
     }
     for (std::thread & worker : workers) worker.join();
 
-    samples.reserve(tokenized.size());
-    for (size_t i = 0; i < tokenized.size(); ++i) {
-        if (!valid[i]) continue;
+    samples.reserve(results.size());
+    size_t n_requests = 0;
+    for (size_t i = 0; i < results.size(); ++i) {
+        const jsonl_load_result & result = results[i];
+        if (result.parsed) ++n_requests;
+        if (!result.valid) continue;
         if (!logged_preview) {
             logged_preview = true;
-            LOG_INF("%s: first prompt preview: \"%s\"\n", __func__, preview_text(requests[i].prompt).c_str());
-            LOG_INF("%s: first response preview: \"%s\"\n", __func__, preview_text(requests[i].response).c_str());
-            const size_t prompt_tokens = tokenized[i].tokens.size() - std::count(tokenized[i].is_label.begin(), tokenized[i].is_label.end(), true);
-            LOG_INF("%s: first sample tokens: prompt=%zu response=%zu\n", __func__, prompt_tokens, tokenized[i].tokens.size() - prompt_tokens);
+            LOG_INF("%s: first prompt preview: \"%s\"\n", __func__, preview_text(result.request.prompt).c_str());
+            LOG_INF("%s: first response preview: \"%s\"\n", __func__, preview_text(result.request.response).c_str());
+            const size_t prompt_tokens = result.sample.tokens.size() - std::count(result.sample.is_label.begin(), result.sample.is_label.end(), true);
+            LOG_INF("%s: first sample tokens: prompt=%zu response=%zu\n", __func__, prompt_tokens, result.sample.tokens.size() - prompt_tokens);
         }
-        samples.push_back(std::move(tokenized[i]));
+        samples.push_back(std::move(results[i].sample));
     }
 
-    LOG_INF("%s: tokenized %zu input lines with %zu workers\n", __func__, requests.size(), n_workers);
+    LOG_INF("%s: tokenized %zu input lines with %zu workers\n", __func__, n_requests, n_workers);
 
     LOG_INF("%s: loaded %zu samples from %s\n", __func__, samples.size(), path.c_str());
     return samples;
@@ -1284,7 +1355,8 @@ int main(int argc, char ** argv) {
         llama_backend_free();
         return rc;
     }
-    auto samples = load_jsonl(params.train_file, ctx, tmpls.get());
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+    auto samples = load_jsonl(params.train_file, vocab, tmpls.get(), params.dataset_threads);
     if (samples.empty()) {
         LOG_ERR("%s: no training samples loaded\n", __func__);
         return 1;

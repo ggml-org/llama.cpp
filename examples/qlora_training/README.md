@@ -61,6 +61,7 @@ Trains LoRA adapters on a quantized GGUF model.
 |---|---|---|
 | `--model` | *(required)* | Path to quantized GGUF model |
 | `--train-file` | *(required)* | JSONL training dataset |
+| `-dthr` / `--dataset-threads` | physical CPU cores | JSONL parse, template, and tokenization worker threads |
 | `--lora-rank` | `16` | LoRA rank r |
 | `--lora-alpha` | `0` (= rank) | LoRA alpha; effective scale = alpha/rank |
 | `--lora-targets` | see below | Comma-separated internal tensor name substrings |

@@ -4210,6 +4210,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) { params.train_file = value; }
     ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
     add_opt(common_arg(
+        {"-dthr", "--dataset-threads"}, "N",
+        "JSONL loading worker threads (default: physical CPU core count)",
+        [](common_params & params, int value) {
+            if (value < 1) {
+                throw std::invalid_argument("dataset-threads must be at least 1");
+            }
+            params.dataset_threads = value;
+        }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
         {"--save-every"}, "N",
         "save adapter checkpoint every N dataset windows during training (default: 0 = only at end)",
         [](common_params & params, int value) { params.save_every = value; }
