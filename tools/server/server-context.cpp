@@ -1111,6 +1111,9 @@ private:
 
     std::unique_ptr<RenderDocUtil> renderdoc;
     bool renderdoc_capture_done = false;
+    bool renderdoc_prefill_capture_active = false;
+    bool renderdoc_prefill_capture_done = false;
+    int32_t renderdoc_prefill_slot_id = -1;
 
     std::unique_ptr<server_prompt_cache> prompt_cache;
 
@@ -4690,6 +4693,7 @@ private:
         }
 
         const bool capture_renderdoc =
+            !renderdoc_prefill_capture_active &&
             !renderdoc_capture_done &&
             params_base.renderdoc_token > 0 &&
             batch.slot_batched != nullptr &&
@@ -4701,6 +4705,40 @@ private:
             }
             renderdoc->startFrame();
         }
+
+        const bool start_prefill_capture =
+            params_base.enable_prefill_capture &&
+            !renderdoc_prefill_capture_active &&
+            !renderdoc_prefill_capture_done &&
+            batch.slot_batched != nullptr &&
+            (batch.slot_batched->state == SLOT_STATE_PROCESSING_PROMPT ||
+             batch.slot_batched->state == SLOT_STATE_DONE_PROMPT);
+        if (start_prefill_capture) {
+            if (!renderdoc) {
+                renderdoc = std::make_unique<RenderDocUtil>();
+            }
+            renderdoc->startFrame();
+            renderdoc_prefill_capture_active = true;
+            renderdoc_prefill_slot_id = batch.slot_batched->id;
+            SRV_INF("RenderDoc prefill capture started: slot = %d, off = %d, n_tokens = %d\n",
+                    renderdoc_prefill_slot_id, off, batch.view.size());
+        }
+
+        server_slot * prefill_slot = nullptr;
+        if (renderdoc_prefill_capture_active) {
+            for (auto & slot : slots) {
+                if (slot.id == renderdoc_prefill_slot_id) {
+                    prefill_slot = &slot;
+                    break;
+                }
+            }
+        }
+
+        const bool end_prefill_capture =
+            prefill_slot != nullptr &&
+            prefill_slot->state == SLOT_STATE_DONE_PROMPT &&
+            prefill_slot->i_batch >= off &&
+            prefill_slot->i_batch < off + batch.view.size();
 
         // yield to the queue, so we can still handle metrics tasks while decoding
         // note: the sync is done here too, so that the wait is also covered by the yield
@@ -4715,6 +4753,14 @@ private:
         if (capture_renderdoc) {
             renderdoc->endFrame();
             renderdoc_capture_done = true;
+        }
+
+        if (end_prefill_capture && ret == 0) {
+            renderdoc->endFrame();
+            renderdoc_prefill_capture_active = false;
+            renderdoc_prefill_capture_done = true;
+            SRV_INF("RenderDoc prefill capture ended: slot = %d, off = %d, n_tokens = %d\n",
+                    renderdoc_prefill_slot_id, off, batch.view.size());
         }
 
         if (ret != 0) {

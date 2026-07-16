@@ -2896,7 +2896,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_MAIN_GPU"));
     add_opt(common_arg(
-        {"-enablerenderdoc", "--enable-renderdoc"}, "N",
+        {"-enabledecodecapture", "--enable-decode-capture"}, "N",
         "capture the decode of the Nth generated token with RenderDoc (N is 1-based)",
         [](common_params & params, int value) {
             if (value < 1) {
@@ -2904,7 +2904,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             params.renderdoc_token = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_CLI}));
+    ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"-enableprefillcapture", "--enable-prefill-capture"},
+        "capture the complete prompt prefill with RenderDoc",
+        [](common_params & params) {
+            params.enable_prefill_capture = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
         {"-coopmat", "--coopmat"}, "N",
         "Vulkan cooperative matrix mode: 0=disable, 1=VK_KHR_cooperative_matrix, 2=VK_NV_cooperative_matrix2, 3=VK_NV_cooperative_matrix2 decode vector",
@@ -2914,7 +2921,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
             common_set_env("GGML_VK_COOPMAT", std::to_string(value));
         }
-    ).set_examples({LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_COOPMAT"));
+    ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_COOPMAT"));
     add_opt(common_arg(
         {"-vulkandebug", "--vulkan-debug"}, "[on|off]",
         "enable or disable Vulkan debug logging",
@@ -2927,7 +2934,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                 throw std::invalid_argument("invalid value");
             }
         }
-    ).set_examples({LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_VULKAN_DEBUG"));
+    ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_VULKAN_DEBUG"));
     add_opt(common_arg(
         { "-fit", "--fit" }, "[on|off]",
         string_format("whether to adjust unset arguments to fit in device memory ('on' or 'off', default: '%s')", params.fit_params ? "on" : "off"),
