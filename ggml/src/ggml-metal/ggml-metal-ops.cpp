@@ -1601,8 +1601,10 @@ int ggml_metal_op_rwkv(ggml_metal_op_t ctx, int idx) {
 
 // Match gated_delta_net + the trailing cpy that scatters state snapshots into the recurrent cache.
 // Returns 1 (skip the cpy) on success, 0 otherwise.
-static int ggml_metal_try_gdn_cache_fusion(ggml_metal_op_t ctx, int idx,
-        ggml_metal_buffer_id * cache_buf_id, int32_t * slot_stride) {
+static int ggml_metal_try_gdn_cache_fusion(ggml_metal_op_t        ctx,
+                                           int                    idx,
+                                           ggml_metal_buffer_id * cache_buf_id,
+                                           int32_t              * slot_stride) {
     const ggml_tensor * gdn = ctx->node(idx);
 
     if (gdn->op != GGML_OP_GATED_DELTA_NET || gdn->type != GGML_TYPE_F32 ||
@@ -1618,10 +1620,11 @@ static int ggml_metal_try_gdn_cache_fusion(ggml_metal_op_t ctx, int idx,
     const int64_t n_tokens = gdn->src[2]->ne[2];
     const int64_t n_seqs   = gdn->src[2]->ne[3];
     const int64_t K        = ggml_get_op_params_i32(gdn, 0);
-    const size_t   tail_off = ggml_row_size(GGML_TYPE_F32, S_v * H * n_tokens * n_seqs);
+    const size_t  tail_off = ggml_row_size(GGML_TYPE_F32, S_v * H * n_tokens * n_seqs);
 
     const ggml_tensor * cpy = nullptr;
-    int                 cpy_idx = -1;
+    int cpy_idx = -1;
+
     for (int j = idx + 1; j < ctx->n_nodes() && j <= idx + 16; ++j) {
         const ggml_tensor * n = ctx->node(j);
         if (ggml_op_is_empty(n->op)) {
@@ -1645,7 +1648,7 @@ static int ggml_metal_try_gdn_cache_fusion(ggml_metal_op_t ctx, int idx,
         return 0;
     }
 
-    const int64_t D         = S_v * S_v * H;
+    const int64_t D = S_v * S_v * H;
     const int64_t n_written = std::min<int64_t>(n_tokens, K);
 
     const ggml_tensor * src = cpy->src[0]; // view of the gdn snapshot tail
@@ -1664,7 +1667,7 @@ static int ggml_metal_try_gdn_cache_fusion(ggml_metal_op_t ctx, int idx,
     }
 
     *cache_buf_id = ggml_metal_get_buffer_id(dst);
-    *slot_stride  = K > 1 ? (int32_t) (dst->nb[2] / sizeof(float)) : 0;
+    *slot_stride = K > 1 ? (int32_t) (dst->nb[2] / sizeof(float)) : 0;
 
     // skip the trailing cpy: the fused kernel wrote the state straight into the cache.
     // clearing COMPUTE makes the dispatch loop no-op this node (ggml_metal_op_encode_impl).
