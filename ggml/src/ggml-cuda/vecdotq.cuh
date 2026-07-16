@@ -681,35 +681,40 @@ static __device__ __forceinline__ float vec_dot_q1_0_q8_1(
     // Q8_1: 32 elements per block with individual scales
     // iqs selects which of the 4 chunks of 32 elements to process (0-3)
 
-    const float d1 = bq1_0->d;
+    const float     d1 = bq1_0->d;
+    const int16_t * qs = (const int16_t *) bq1_0->qs + iqs * 2;
 
     // Process only the chunk specified by iqs
     const block_q8_1 * bq8_1_chunk = bq8_1 + iqs;
 
-    // Load 32 bits (4 bytes) for this chunk from Q1_0
-    const int offset = iqs * 4;
-    const int v = bq1_0->qs[offset + 0] | (bq1_0->qs[offset + 1] << 8) |
-                  (bq1_0->qs[offset + 2] << 16) | (bq1_0->qs[offset + 3] << 24);
-
-    // Unpack 32 bits into 32 signed values (-1 or +1)
-    int vi_bytes[8];
-#pragma unroll
-    for (int j = 0; j < 8; ++j) {
-        const int shift = j * 4;
-        const int bits4 = (v >> shift) & 0x0F;
-        const int b0 = (bits4 & 0x01) ? 1 : -1;
-        const int b1 = (bits4 & 0x02) ? 1 : -1;
-        const int b2 = (bits4 & 0x04) ? 1 : -1;
-        const int b3 = (bits4 & 0x08) ? 1 : -1;
-        vi_bytes[j] = (b0 & 0xFF) | ((b1 & 0xFF) << 8) | ((b2 & 0xFF) << 16) | ((b3 & 0xFF) << 24);
-    }
-
-    // Compute dot product for this 32-element chunk
     int sumi = 0;
 #pragma unroll
-    for (int j = 0; j < 8; ++j) {
-        const int u = get_int_b4(bq8_1_chunk->qs, j);
-        sumi = ggml_cuda_dp4a(vi_bytes[j], u, sumi);
+    for (int j = 0; j < 2; ++j) {
+        const int q  = qs[j];
+
+        const int u0 = get_int_b4(bq8_1_chunk->qs, j*4+0);
+        const int u1 = get_int_b4(bq8_1_chunk->qs, j*4+1);
+        const int u2 = get_int_b4(bq8_1_chunk->qs, j*4+2);
+        const int u3 = get_int_b4(bq8_1_chunk->qs, j*4+3);
+
+        // unpack crumbs into nibble indices
+        const int n0 = __byte_perm(0x11100100, 0x11100100, q >> 0); // [0, 1, 4, 5] [ 8,  9, 12, 13]
+        const int n1 = __byte_perm(0x11100100, 0x11100100, q >> 2); // [2, 3, 6, 7] [10, 11, 14, 15]
+        // unpack nibbles into byte values
+        const int s0 = __byte_perm(0x01FF, 0x01FF, n0 >>  0);
+        const int s1 = __byte_perm(0x01FF, 0x01FF, n1 >>  0);
+        const int s2 = __byte_perm(0x01FF, 0x01FF, n0 >> 16);
+        const int s3 = __byte_perm(0x01FF, 0x01FF, n1 >> 16);
+        // unshuffle values
+        const int v0 = __byte_perm(s0, s1, 0x5410);
+        const int v1 = __byte_perm(s0, s1, 0x7632);
+        const int v2 = __byte_perm(s2, s3, 0x5410);
+        const int v3 = __byte_perm(s2, s3, 0x7632);
+
+        sumi = ggml_cuda_dp4a(v0, u0, sumi);
+        sumi = ggml_cuda_dp4a(v1, u1, sumi);
+        sumi = ggml_cuda_dp4a(v2, u2, sumi);
+        sumi = ggml_cuda_dp4a(v3, u3, sumi);
     }
 
     // Apply Q1_0's single scale and this chunk's Q8_1 scale

@@ -39,29 +39,37 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
         }
 
         const block_q1_0 * bxi = (const block_q1_0 *) x + kbx0 + i*stride + kbx;
-        const int qs_offset = 4*kqsx;
-        const int qs0 = bxi->qs[qs_offset + 0] | (bxi->qs[qs_offset + 1] << 8) |
-                        (bxi->qs[qs_offset + 2] << 16) | (bxi->qs[qs_offset + 3] << 24);
-
-        int unpacked_bytes[8];
-#pragma unroll
-        for (int j = 0; j < 8; ++j) {
-            const int shift = j * 4;
-            const int bits4 = (qs0 >> shift) & 0x0F;
-            const int b0 = (bits4 & 0x01) ? 1 : -1;
-            const int b1 = (bits4 & 0x02) ? 1 : -1;
-            const int b2 = (bits4 & 0x04) ? 1 : -1;
-            const int b3 = (bits4 & 0x08) ? 1 : -1;
-            unpacked_bytes[j] = (b0 & 0xFF) | ((b1 & 0xFF) << 8) | ((b2 & 0xFF) << 16) | ((b3 & 0xFF) << 24);
-        }
+        const int16_t    * qxi = (const int16_t *) bxi->qs + kqsx * 2;
 
         const int dst_offset = kbx*(scale_entries_per_block*QI8_0) + kqsx*QI8_0;
 #pragma unroll
-        for (int j = 0; j < 8; ++j) {
+        for (int j = 0; j < 2; ++j) {
+            const int q  = qxi[j];
+
+            // unpack crumbs into nibble indices
+            const int n0 = __byte_perm(0x11100100, 0x11100100, q >> 0); // [0, 1, 4, 5] [ 8,  9, 12, 13]
+            const int n1 = __byte_perm(0x11100100, 0x11100100, q >> 2); // [2, 3, 6, 7] [10, 11, 14, 15]
+            // unpack nibbles into byte values
+            const int s0 = __byte_perm(0x01FF, 0x01FF, n0 >>  0);
+            const int s1 = __byte_perm(0x01FF, 0x01FF, n1 >>  0);
+            const int s2 = __byte_perm(0x01FF, 0x01FF, n0 >> 16);
+            const int s3 = __byte_perm(0x01FF, 0x01FF, n1 >> 16);
+            // unshuffle values
+            const int v0 = __byte_perm(s0, s1, 0x5410);
+            const int v1 = __byte_perm(s0, s1, 0x7632);
+            const int v2 = __byte_perm(s2, s3, 0x5410);
+            const int v3 = __byte_perm(s2, s3, 0x7632);
+
 #if defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
-            x_qs[i*sram_stride           + dst_offset + j] = unpacked_bytes[j];
+            x_qs[i*sram_stride           + dst_offset + j*4+0] = v0;
+            x_qs[i*sram_stride           + dst_offset + j*4+1] = v1;
+            x_qs[i*sram_stride           + dst_offset + j*4+2] = v2;
+            x_qs[i*sram_stride           + dst_offset + j*4+3] = v3;
 #else
-            x_qs[i*(2*MMQ_TILE_NE_K + 1) + dst_offset + j] = unpacked_bytes[j];
+            x_qs[i*(2*MMQ_TILE_NE_K + 1) + dst_offset + j*4+0] = v0;
+            x_qs[i*(2*MMQ_TILE_NE_K + 1) + dst_offset + j*4+1] = v1;
+            x_qs[i*(2*MMQ_TILE_NE_K + 1) + dst_offset + j*4+2] = v2;
+            x_qs[i*(2*MMQ_TILE_NE_K + 1) + dst_offset + j*4+3] = v3;
 #endif // defined(AMD_MFMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE)
         }
     }
