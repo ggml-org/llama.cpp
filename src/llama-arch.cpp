@@ -171,7 +171,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_GENERAL_SOURCE_URL,                     "general.source.url"                    },
     { LLM_KV_GENERAL_SOURCE_HF_REPO,                 "general.source.huggingface.repository" },
     { LLM_KV_GENERAL_TENSOR_EXTRA_NAME,              "general.tensor_extra.name"             },
-    { LLM_KV_GENERAL_TENSOR_EXTRA_ALLOW_4BIT_ACT,    "general.tensor_extra.allow_4bit_act"   },
+    { LLM_KV_GENERAL_TENSOR_EXTRA_ALLOW_PREC_A8,     "general.tensor_extra.allow_prec_a8"    },
 
     { LLM_KV_VOCAB_SIZE,                        "%s.vocab_size"                        },
     { LLM_KV_CONTEXT_LENGTH,                    "%s.context_length"                    },

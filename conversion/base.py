@@ -154,7 +154,7 @@ class ModelBase:
         self.dir_model_card = dir_model  # overridden in convert_lora_to_gguf.py
         self._is_nvfp4 = False
         self._is_mxfp4 = False
-        self._allow_4bit_act: dict[str, bool] = {} # gguf tensor name -> allow 4-bit activations (False = keep higher precision)
+        self._allow_prec_a8: dict[str, bool] = {} # gguf tensor name -> wants >= 8-bit (A8) activations (True = keep higher precision)
         self._fp8_as_q8 = fp8_as_q8
         self._fp8_dequantized: set[str] = set()
 
@@ -867,7 +867,7 @@ class ModelBase:
                 if not isinstance(entry, dict) or entry.get("quant_algo") != "W4A16_NVFP4":
                     continue
                 for gguf_name in self._hf_quant_tensors_to_gguf(tensor_name):
-                    self._allow_4bit_act[gguf_name] = False
+                    self._allow_prec_a8[gguf_name] = True
 
         # NVFP4 weights are repacked and written directly to gguf_writer.
         # This must run before dequant_model so NVFP4 tensors are removed
@@ -1061,11 +1061,11 @@ class ModelBase:
         logger.info("Set model quantization version")
         self.gguf_writer.add_quantization_version(gguf.GGML_QUANT_VERSION)
 
-        if self._allow_4bit_act:
-            names = sorted(self._allow_4bit_act.keys())
-            values = [self._allow_4bit_act[n] for n in names]
-            logger.info(f"Set allow_4bit_act metadata for {len(names)} tensor(s)")
-            self.gguf_writer.add_tensor_extra_allow_4bit_act(names, values)
+        if self._allow_prec_a8:
+            names = sorted(self._allow_prec_a8.keys())
+            values = [self._allow_prec_a8[n] for n in names]
+            logger.info(f"Set allow_prec_a8 metadata for {len(names)} tensor(s)")
+            self.gguf_writer.add_tensor_extra_allow_prec_a8(names, values)
 
     def write_vocab(self):
         raise NotImplementedError("write_vocab() must be implemented in subclasses")

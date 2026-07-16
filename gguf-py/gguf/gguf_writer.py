@@ -511,11 +511,11 @@ class GGUFWriter:
     def add_file_type(self, ftype: int) -> None:
         self.add_uint32(Keys.General.FILE_TYPE, ftype)
 
-    def add_tensor_extra_allow_4bit_act(self, tensor_names: Sequence[str], values: Sequence[bool]) -> None:
+    def add_tensor_extra_allow_prec_a8(self, tensor_names: Sequence[str], values: Sequence[bool]) -> None:
         if len(tensor_names) != len(values):
-            raise ValueError("tensor_extra allow_4bit_act names and values must have the same length")
+            raise ValueError("tensor_extra allow_prec_a8 names and values must have the same length")
         self.add_array(Keys.General.TENSOR_EXTRA_NAME, list(tensor_names))
-        self.add_array(Keys.General.TENSOR_EXTRA_ALLOW_4BIT_ACT, list(values))
+        self.add_array(Keys.General.TENSOR_EXTRA_ALLOW_PREC_A8, list(values))
 
     def add_sampling_sequence(self, sequence: str) -> None:
         self.add_string(Keys.General.SAMPLING_SEQUENCE, sequence)

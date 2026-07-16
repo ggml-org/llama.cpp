@@ -84,7 +84,8 @@ static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, con
     }
 }
 
-// NVFP4 uses native W4A4 only when the allow-4bit hint is set, unless GGML_CUDA_FORCE_W4A4 overrides it.
+// NVFP4 defaults to native W4A4 on Blackwell, also allows if the requested activation precision of >= 8 bits
+// (GGML_PREC_A8) selects the W4A8 path, unless GGML_CUDA_FORCE_W4A4 overrides it.
 static inline bool ggml_cuda_mmq_force_w4a8(const ggml_tensor * src0, const ggml_tensor * dst) {
     static const bool force_w4a4 = []() {
         const char * env = getenv("GGML_CUDA_FORCE_W4A4");
@@ -93,7 +94,7 @@ static inline bool ggml_cuda_mmq_force_w4a8(const ggml_tensor * src0, const ggml
     if (force_w4a4 || src0->type != GGML_TYPE_NVFP4) {
         return false;
     }
-    return ggml_get_op_params_i32(dst, 1) != GGML_HINT_SRC1_ALLOW_4BIT;
+    return ggml_get_op_params_i32(dst, 0) == GGML_PREC_A8;
 }
 
 void ggml_cuda_mul_mat_q(

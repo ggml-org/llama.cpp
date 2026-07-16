@@ -436,6 +436,7 @@ extern "C" {
     // precision
     enum ggml_prec {
         GGML_PREC_DEFAULT =  0, // stored as ggml_tensor.op_params, 0 by default
+        GGML_PREC_A8      =  1, // request at least 8-bit activations
         GGML_PREC_F32     = 10,
     };
 
@@ -443,7 +444,6 @@ extern "C" {
     enum ggml_op_hint {
         GGML_HINT_NONE             = 0,
         GGML_HINT_SRC0_IS_HADAMARD = 1,
-        GGML_HINT_SRC1_ALLOW_4BIT  = 2, // allow 4-bit activation quant on src1.
     };
 
     // model file types

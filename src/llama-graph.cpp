@@ -1387,8 +1387,8 @@ ggml_tensor * llm_graph_context::build_lora_mm(
           ggml_tensor * w_s) const {
     ggml_tensor * res = ggml_mul_mat(ctx0, w, cur);
 
-    if (llama_act_policy_allow_4bit(act_policy, w)) {
-        ggml_mul_mat_set_hint(res, GGML_HINT_SRC1_ALLOW_4BIT);
+    if (llama_act_policy_prec_a8(act_policy, w)) {
+        ggml_mul_mat_set_prec(res, GGML_PREC_A8);
     }
 
     if (w_s) {
@@ -1423,8 +1423,8 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
           ggml_tensor * w_s) const {
     ggml_tensor * res = ggml_mul_mat_id(ctx0, w, cur, ids);
 
-    if (llama_act_policy_allow_4bit(act_policy, w)) {
-        ggml_mul_mat_set_hint(res, GGML_HINT_SRC1_ALLOW_4BIT);
+    if (llama_act_policy_prec_a8(act_policy, w)) {
+        ggml_mul_mat_set_prec(res, GGML_PREC_A8);
     }
 
     if (w_s) {

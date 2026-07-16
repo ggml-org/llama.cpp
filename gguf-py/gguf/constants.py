@@ -25,9 +25,9 @@ class Keys:
         ALIGNMENT                  = "general.alignment"
         FILE_TYPE                  = "general.file_type"
 
-        # Per-tensor extra options (tensor name array + parallel option arrays, e.g. allow_4bit_act).
+        # Per-tensor extra options (tensor name array + parallel option arrays, e.g. allow_prec_a8).
         TENSOR_EXTRA_NAME          = "general.tensor_extra.name"
-        TENSOR_EXTRA_ALLOW_4BIT_ACT = "general.tensor_extra.allow_4bit_act"
+        TENSOR_EXTRA_ALLOW_PREC_A8 = "general.tensor_extra.allow_prec_a8"
 
         # Recommended Sampler Parameters
         SAMPLING_SEQUENCE           = "general.sampling.sequence"

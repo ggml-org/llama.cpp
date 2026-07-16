@@ -4060,14 +4060,15 @@ static int32_t test_get_op_params_i32(const ggml_tensor * tensor, uint32_t i) {
     return tensor->op_params[i];
 }
 
-static bool graph_has_op_hint(ggml_cgraph * gf, ggml_op op, ggml_op_hint hint) {
+// true if any node of the given op requests >= 8-bit activations (GGML_PREC_A8)
+static bool graph_mul_mat_hi_prec_act(ggml_cgraph * gf, ggml_op op) {
     if (gf == nullptr) {
         return false;
     }
 
     ggml_tensor ** nodes = ggml_graph_nodes(gf);
     for (int i = 0; i < ggml_graph_n_nodes(gf); ++i) {
-        if (nodes[i]->op == op && test_get_op_params_i32(nodes[i], 1) == hint) {
+        if (nodes[i]->op == op && test_get_op_params_i32(nodes[i], 0) == GGML_PREC_A8) {
             return true;
         }
     }
@@ -4099,7 +4100,7 @@ struct test_mul_mat : public test_case {
     double max_nmse_err(ggml_backend_t backend) override {
         // for blackwell we quantize activations to mxfp4 instead of q8_1 so we add higher tolerance
         if ((type_a == GGML_TYPE_MXFP4 ||
-             (type_a == GGML_TYPE_NVFP4 && graph_has_op_hint(gf, GGML_OP_MUL_MAT, GGML_HINT_SRC1_ALLOW_4BIT))) &&
+             (type_a == GGML_TYPE_NVFP4 && !graph_mul_mat_hi_prec_act(gf, GGML_OP_MUL_MAT))) &&
                 backend_has_feature(backend, "BLACKWELL_NATIVE_FP4")) {
             return 2e-2;
         }
@@ -4247,22 +4248,9 @@ struct test_mul_mat_hadamard : public test_mul_mat {
     }
 };
 
-// NVFP4 W4A8 path (no allow-4bit hint)
+// NVFP4 W4A8 path (GGML_PREC_A8 requests >= 8-bit activations)
 struct test_mul_mat_nvfp4_w4a8 : public test_mul_mat {
     test_mul_mat_nvfp4_w4a8(ggml_type type_a = GGML_TYPE_NVFP4, ggml_type type_b = GGML_TYPE_F32,
-            int64_t m = 32, int64_t n = 32, int64_t k = 256,
-            std::array<int64_t, 2> bs = {1, 1},
-            std::array<int64_t, 2> nr = {1, 1})
-        : test_mul_mat(type_a, type_b, m, n, k, bs, nr) {}
-    std::string op_desc(ggml_tensor * t) override {
-        GGML_UNUSED(t);
-        return "MUL_MAT_NVFP4_W4A8";
-    }
-};
-
-// GGML_HINT_SRC1_ALLOW_4BIT
-struct test_mul_mat_allow_4bit : public test_mul_mat {
-    test_mul_mat_allow_4bit(ggml_type type_a = GGML_TYPE_NVFP4, ggml_type type_b = GGML_TYPE_F32,
             int64_t m = 32, int64_t n = 32, int64_t k = 256,
             std::array<int64_t, 2> bs = {1, 1},
             std::array<int64_t, 2> nr = {1, 1})
@@ -4271,14 +4259,27 @@ struct test_mul_mat_allow_4bit : public test_mul_mat {
         ggml_tensor * out = test_mul_mat::build_graph(ctx);
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
             if (t->op == GGML_OP_MUL_MAT) {
-                ggml_mul_mat_set_hint(t, GGML_HINT_SRC1_ALLOW_4BIT);
+                ggml_mul_mat_set_prec(t, GGML_PREC_A8);
             }
         }
         return out;
     }
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
-        return "MUL_MAT_ALLOW_4BIT";
+        return "MUL_MAT_NVFP4_W4A8";
+    }
+};
+
+// NVFP4 native W4A4 path (default precision)
+struct test_mul_mat_nvfp4_w4a4 : public test_mul_mat {
+    test_mul_mat_nvfp4_w4a4(ggml_type type_a = GGML_TYPE_NVFP4, ggml_type type_b = GGML_TYPE_F32,
+            int64_t m = 32, int64_t n = 32, int64_t k = 256,
+            std::array<int64_t, 2> bs = {1, 1},
+            std::array<int64_t, 2> nr = {1, 1})
+        : test_mul_mat(type_a, type_b, m, n, k, bs, nr) {}
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT_NVFP4_W4A4";
     }
 };
 
@@ -4325,7 +4326,7 @@ struct test_mul_mat_id : public test_case {
     double max_nmse_err(ggml_backend_t backend) override {
         // for blackwell we quantize activations to mxfp4 instead of q8_1 so we add higher tolerance
         if ((type_a == GGML_TYPE_MXFP4 ||
-             (type_a == GGML_TYPE_NVFP4 && graph_has_op_hint(gf, GGML_OP_MUL_MAT_ID, GGML_HINT_SRC1_ALLOW_4BIT))) &&
+             (type_a == GGML_TYPE_NVFP4 && !graph_mul_mat_hi_prec_act(gf, GGML_OP_MUL_MAT_ID))) &&
                 backend_has_feature(backend, "BLACKWELL_NATIVE_FP4")) {
             return 2e-2;
         }
@@ -4371,21 +4372,9 @@ struct test_mul_mat_id : public test_case {
     }
 };
 
-// NVFP4 W4A8 path on the MoE path (no allow-4bit hint)
+// NVFP4 W4A8 path on the MoE path (GGML_PREC_A8 requests >= 8-bit activations)
 struct test_mul_mat_id_nvfp4_w4a8 : public test_mul_mat_id {
     test_mul_mat_id_nvfp4_w4a8(ggml_type type_a = GGML_TYPE_NVFP4, ggml_type type_b = GGML_TYPE_F32,
-            int n_mats = 8, int n_used = 2, bool b = false,
-            int64_t m = 32, int64_t n = 32, int64_t k = 256)
-        : test_mul_mat_id(type_a, type_b, n_mats, n_used, b, m, n, k) {}
-    std::string op_desc(ggml_tensor * t) override {
-        GGML_UNUSED(t);
-        return "MUL_MAT_ID_NVFP4_W4A8";
-    }
-};
-
-// GGML_HINT_SRC1_ALLOW_4BIT on the MoE path (NVFP4 native W4A4)
-struct test_mul_mat_id_allow_4bit : public test_mul_mat_id {
-    test_mul_mat_id_allow_4bit(ggml_type type_a = GGML_TYPE_NVFP4, ggml_type type_b = GGML_TYPE_F32,
             int n_mats = 8, int n_used = 2, bool b = false,
             int64_t m = 32, int64_t n = 32, int64_t k = 256)
         : test_mul_mat_id(type_a, type_b, n_mats, n_used, b, m, n, k) {}
@@ -4393,14 +4382,26 @@ struct test_mul_mat_id_allow_4bit : public test_mul_mat_id {
         ggml_tensor * out = test_mul_mat_id::build_graph(ctx);
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
             if (t->op == GGML_OP_MUL_MAT_ID) {
-                ggml_mul_mat_set_hint(t, GGML_HINT_SRC1_ALLOW_4BIT);
+                ggml_mul_mat_set_prec(t, GGML_PREC_A8);
             }
         }
         return out;
     }
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
-        return "MUL_MAT_ID_ALLOW_4BIT";
+        return "MUL_MAT_ID_NVFP4_W4A8";
+    }
+};
+
+// NVFP4 native W4A4 path on the MoE path (default precision)
+struct test_mul_mat_id_nvfp4_w4a4 : public test_mul_mat_id {
+    test_mul_mat_id_nvfp4_w4a4(ggml_type type_a = GGML_TYPE_NVFP4, ggml_type type_b = GGML_TYPE_F32,
+            int n_mats = 8, int n_used = 2, bool b = false,
+            int64_t m = 32, int64_t n = 32, int64_t k = 256)
+        : test_mul_mat_id(type_a, type_b, n_mats, n_used, b, m, n, k) {}
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT_ID_NVFP4_W4A4";
     }
 };
 
@@ -8704,16 +8705,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F32, 128, 32, 128));
     test_cases.emplace_back(new test_mul_mat_hadamard(GGML_TYPE_F32, GGML_TYPE_F32, 128, 4, 128, {2, 3}));
 
-    // NVFP4 activation precision hints
+    // NVFP4 activation precision (default = native W4A4, GGML_PREC_A8 = W4A8)
     test_cases.emplace_back(new test_mul_mat_nvfp4_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32, 32,  1, 256));
     test_cases.emplace_back(new test_mul_mat_nvfp4_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32, 32, 32, 256));
     test_cases.emplace_back(new test_mul_mat_nvfp4_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32, 64, 16, 512));
-    test_cases.emplace_back(new test_mul_mat_allow_4bit(GGML_TYPE_NVFP4, GGML_TYPE_F32, 32,  1, 256));
-    test_cases.emplace_back(new test_mul_mat_allow_4bit(GGML_TYPE_NVFP4, GGML_TYPE_F32, 32, 32, 256));
+    test_cases.emplace_back(new test_mul_mat_nvfp4_w4a4(GGML_TYPE_NVFP4, GGML_TYPE_F32, 32,  1, 256));
+    test_cases.emplace_back(new test_mul_mat_nvfp4_w4a4(GGML_TYPE_NVFP4, GGML_TYPE_F32, 32, 32, 256));
     test_cases.emplace_back(new test_mul_mat_id_nvfp4_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32, 8, 2, false, 32, 32, 256));
     test_cases.emplace_back(new test_mul_mat_id_nvfp4_w4a8(GGML_TYPE_NVFP4, GGML_TYPE_F32, 4, 2, true,  64, 16, 256));
-    test_cases.emplace_back(new test_mul_mat_id_allow_4bit(GGML_TYPE_NVFP4, GGML_TYPE_F32, 8, 2, false, 32, 32, 256));
-    test_cases.emplace_back(new test_mul_mat_id_allow_4bit(GGML_TYPE_NVFP4, GGML_TYPE_F32, 4, 2, true,  64, 16, 256));
+    test_cases.emplace_back(new test_mul_mat_id_nvfp4_w4a4(GGML_TYPE_NVFP4, GGML_TYPE_F32, 8, 2, false, 32, 32, 256));
+    test_cases.emplace_back(new test_mul_mat_id_nvfp4_w4a4(GGML_TYPE_NVFP4, GGML_TYPE_F32, 4, 2, true,  64, 16, 256));
 
 #if 0
     // > 4GB A matrix. Too slow to be enabled by default.

@@ -1030,9 +1030,9 @@ struct llama_model::impl {
     std::vector<float> tensor_split_owned;
 };
 
-bool llama_act_policy::allows_4bit_act(const ggml_tensor * w) const {
+bool llama_act_policy::wants_prec_a8(const ggml_tensor * w) const {
     if (!w) {
-        return true;
+        return false;
     }
 
     const auto it = per_tensor.find(w->name);
@@ -1040,7 +1040,7 @@ bool llama_act_policy::allows_4bit_act(const ggml_tensor * w) const {
         return it->second;
     }
 
-    return true;
+    return false;
 }
 
 static bool load_act_policy_arr(
@@ -1078,15 +1078,10 @@ static bool load_act_policy_arr(
 }
 
 static void load_act_policy(llama_model_loader & ml, llama_act_policy & policy) {
-    if (load_act_policy_arr(ml,
+    load_act_policy_arr(ml,
             ml.llm_kv(LLM_KV_GENERAL_TENSOR_EXTRA_NAME),
-            ml.llm_kv(LLM_KV_GENERAL_TENSOR_EXTRA_ALLOW_4BIT_ACT),
-            policy)) {
-        return;
-    }
-
-    // Legacy keys from earlier NVFP4 W4A8 metadata.
-    load_act_policy_arr(ml, "general.allow_4bit_act.tensor", "general.allow_4bit_act.value", policy);
+            ml.llm_kv(LLM_KV_GENERAL_TENSOR_EXTRA_ALLOW_PREC_A8),
+            policy);
 }
 
 llama_model::llama_model(const llama_model_params & params) : params(params), pimpl(std::make_unique<impl>()) {
