@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { Lightbulb, LightbulbOff, Check, Info } from '@lucide/svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -13,9 +14,9 @@
 	<DropdownMenu.Sub bind:open={subOpen}>
 		<DropdownMenu.SubTrigger class="flex cursor-pointer items-center gap-2">
 			{#if reasoning.thinkingEnabled}
-				<Lightbulb class="h-4 w-4 shrink-0 text-amber-400" />
+				<Lightbulb class="{ICON_CLASS_DEFAULT} shrink-0 text-amber-400" />
 			{:else}
-				<LightbulbOff class="h-4 w-4 shrink-0 text-muted-foreground" />
+				<LightbulbOff class="{ICON_CLASS_DEFAULT} shrink-0 text-muted-foreground" />
 			{/if}
 
 			<span
@@ -46,9 +47,9 @@
 					}}
 				>
 					{#if reasoning.isSelected(level)}
-						<Check class="h-4 w-4 shrink-0 text-foreground" />
+						<Check class="{ICON_CLASS_DEFAULT} shrink-0 text-foreground" />
 					{:else}
-						<div class="h-4 w-4 shrink-0"></div>
+						<div class="{ICON_CLASS_DEFAULT} shrink-0"></div>
 					{/if}
 
 					<span class="flex-1">{level.label}</span>

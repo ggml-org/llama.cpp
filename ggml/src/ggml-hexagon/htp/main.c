@@ -25,112 +25,44 @@
 
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
+#include "hex-bitmap.h"
 #include "htp-ctx.h"
 #include "htp-ops.h"
-#include "htp-ops.h"
+#include "htp-tensor.h"
 #include "htp_iface.h"
-#include "worker-pool.h"
+#include "work-queue.h"
+#include "hex-profile.h"
+
+#define HMX_QUEUE_CAPACITY     16
+#define HMX_QUEUE_STACK_SIZE   16384
+#define WORK_QUEUE_CAPACITY    16
+#define WORK_QUEUE_STACK_SIZE  16384
+#define MAIN_THREAD_STACK_SIZE 32768
+
+_Static_assert(WORK_QUEUE_MAX_N_THREADS >= HTP_MAX_NTHREADS,
+               "work-queue thread cap must be >= HTP_MAX_NTHREADS");
+
+struct htp_handle {
+    struct htp_context * ctx;
+};
 
 AEEResult htp_iface_open(const char * uri, remote_handle64 * handle) {
-    struct htp_context * ctx;
-    int                  err = 0;
-
-    ctx = calloc(1, sizeof(*ctx));
-    if (ctx == NULL) {
+    (void) uri;
+    struct htp_handle * h = calloc(1, sizeof(*h));
+    if (h == NULL) {
         return AEE_ENOMEMORY;
     }
 
-    // Use the context structure as the handle
-    *handle = (remote_handle64) ctx;
-
-    // Enable FARF logs
-    HAP_setFARFRuntimeLoggingParams(0xffff, NULL, 0);
-
-    // Set client class
-    {
-        HAP_power_request_t request;
-        memset(&request, 0, sizeof(HAP_power_request_t));
-        request.type    = HAP_power_set_apptype;
-        request.apptype = HAP_POWER_COMPUTE_CLIENT_CLASS;
-
-        if ((err = HAP_power_set((void *) ctx, &request)) != 0) {
-            return err;
-        }
-    }
-
-    {
-        HAP_power_request_t request;
-        memset(&request, 0, sizeof(request));
-
-        request.type                              = HAP_power_set_DCVS_v3;
-        request.dcvs_v3.set_dcvs_enable           = TRUE;
-        request.dcvs_v3.dcvs_enable               = FALSE;
-        request.dcvs_v3.set_bus_params            = TRUE;
-        request.dcvs_v3.bus_params.min_corner     = HAP_DCVS_VCORNER_MAX;
-        request.dcvs_v3.bus_params.max_corner     = HAP_DCVS_VCORNER_MAX;
-        request.dcvs_v3.bus_params.target_corner  = HAP_DCVS_VCORNER_MAX;
-        request.dcvs_v3.set_core_params           = TRUE;
-        request.dcvs_v3.core_params.min_corner    = HAP_DCVS_VCORNER_MAX;
-        request.dcvs_v3.core_params.max_corner    = HAP_DCVS_VCORNER_MAX;
-        request.dcvs_v3.core_params.target_corner = HAP_DCVS_VCORNER_MAX;
-        request.dcvs_v3.set_sleep_disable         = TRUE;
-        request.dcvs_v3.sleep_disable             = TRUE;
-
-#if (__HEXAGON_ARCH__ >= 79)
-        HAP_set_dcvs_v3_protected_bus_corners(&request, 1);
-#endif
-        if ((err = HAP_power_set((void *) ctx, &request)) != 0) {
-            return err;
-        }
-
-        memset(&request, 0, sizeof(request));
-        request.type         = HAP_power_set_HVX;
-        request.hvx.power_up = TRUE;
-        if ((err = HAP_power_set((void *) ctx, &request)) != 0) {
-            return err;
-        }
-    }
-
-#if __HVX_ARCH__ >= 75
-    {
-        // Power on HMX and set HMX clock
-        HAP_power_request_t request;
-        memset(&request, 0, sizeof(HAP_power_request_t));
-        request.type = HAP_power_set_HMX_v2;
-        request.hmx_v2.set_power     = TRUE;
-        request.hmx_v2.power_up      = TRUE;
-        request.hmx_v2.set_clock     = TRUE;
-        request.hmx_v2.target_corner = HAP_DCVS_EXP_VCORNER_MAX;
-        request.hmx_v2.min_corner    = HAP_DCVS_EXP_VCORNER_MAX;
-        request.hmx_v2.max_corner    = HAP_DCVS_EXP_VCORNER_MAX;
-        request.hmx_v2.perf_mode     = HAP_CLK_PERF_HIGH;
-        FARF(ALWAYS, "Setting HMX clock\n");
-        err = HAP_power_set((void *) ctx, &request);
-        if (err != AEE_SUCCESS) {
-            FARF(ERROR, "ggml-hex: error setting HMX clock.");
-            return err;
-        }
-    }
-#else
-    {
-        // Power on HMX
-        HAP_power_request_t request;
-        memset(&request, 0, sizeof(HAP_power_request_t));
-        request.type         = HAP_power_set_HMX;
-        request.hmx.power_up = TRUE;
-        FARF(ALWAYS, "Powering HMX on\n");
-        err = HAP_power_set((void *) ctx, &request);
-        if (err != AEE_SUCCESS) {
-            FARF(ERROR, "ggml-hex: error powering on HMX.");
-            return err;
-        }
-    }
-#endif
-
+    *handle = (remote_handle64) h;
     return AEE_SUCCESS;
 }
 
 AEEResult htp_iface_etm(remote_handle64 handle, uint32_t enable) {
+    struct htp_handle * h = (struct htp_handle *) handle;
+    if (!h) {
+        return AEE_EBADPARM;
+    }
+
     int err = enable ? HAP_user_etm_enable() : HAP_user_etm_disable();
     if (err) {
         if (err == AEE_EVERSIONNOTSUPPORT) {
@@ -143,10 +75,11 @@ AEEResult htp_iface_etm(remote_handle64 handle, uint32_t enable) {
 }
 
 AEEResult htp_iface_profiler(remote_handle64 handle, uint32_t mode, const htp_iface_pmu_conf* pmu_conf) {
-    struct htp_context * ctx = (struct htp_context *) handle;
-    if (!ctx) {
+    struct htp_handle * h = (struct htp_handle *) handle;
+    if (!h || !h->ctx) {
         return AEE_EBADPARM;
     }
+    struct htp_context * ctx = h->ctx;
 
     if (mode == HTP_PROF_PMU) {
         const uint32_t* events = pmu_conf->events;
@@ -179,48 +112,55 @@ AEEResult htp_iface_profiler(remote_handle64 handle, uint32_t mode, const htp_if
 }
 
 AEEResult htp_iface_close(remote_handle64 handle) {
-    struct htp_context * ctx = (struct htp_context *) handle;
-
-    if (!ctx) {
+    struct htp_handle * h = (struct htp_handle *) handle;
+    if (!h) {
         return AEE_EBADPARM;
     }
 
-    if (ctx->queue) {
-        FARF(ERROR, "Closing handle with queue still open");
-        return AEE_EITEMBUSY;
-    }
-
-    // release the mmaps (if any)
-    for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) {
-        if (ctx->mmap[i].size) {
-#if __HVX_ARCH__ > 73
-            HAP_munmap2((void *) ctx->mmap[i].base, ctx->mmap[i].size);
-#else
-            HAP_munmap((void *) ctx->mmap[i].base, ctx->mmap[i].size);
-#endif
-            ctx->mmap[i].size = 0;
-            ctx->mmap[i].base = NULL;
-            ctx->mmap[i].fd   = -1;
+    struct htp_context * ctx = h->ctx;
+    if (ctx) {
+        if (ctx->dsp_queue) {
+            FARF(ERROR, "Closing handle with queue still open");
+            return AEE_EITEMBUSY;
         }
+
+        // release the mmaps (if any)
+        for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) {
+            if (ctx->mmap[i].size) {
+#if __HVX_ARCH__ > 73
+                HAP_munmap2((void *) ctx->mmap[i].base, ctx->mmap[i].size);
+#else
+                HAP_munmap((void *) ctx->mmap[i].base, ctx->mmap[i].size);
+#endif
+                ctx->mmap[i].size = 0;
+                ctx->mmap[i].base = NULL;
+                ctx->mmap[i].fd   = -1;
+            }
+        }
+
+        if (ctx->profiler) {
+            qurt_pmu_enable(1);
+        }
+
+        if (ctx->etm) {
+            HAP_user_etm_disable();
+        }
+
+        // Free the unified block (ctx is the base address of the block)
+        free(ctx);
+        h->ctx = NULL;
     }
 
-    if (ctx->profiler) {
-        qurt_pmu_enable(1);
-    }
-
-    if (ctx->etm) {
-        HAP_user_etm_disable();
-    }
-
-    free(ctx);
+    free(h);
     return AEE_SUCCESS;
 }
 
 AEEResult htp_iface_mmap(remote_handle64 handle, uint32_t fd, uint32_t size) {
-    struct htp_context * ctx = (struct htp_context *) handle;
-    if (!ctx) {
+    struct htp_handle * h = (struct htp_handle *) handle;
+    if (!h || !h->ctx) {
         return AEE_EBADPARM;
     }
+    struct htp_context * ctx = h->ctx;
 
     // See if we already have this mapping
     for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) {
@@ -262,10 +202,11 @@ AEEResult htp_iface_mmap(remote_handle64 handle, uint32_t fd, uint32_t size) {
 }
 
 AEEResult htp_iface_munmap(remote_handle64 handle, uint32 fd) {
-    struct htp_context * ctx = (struct htp_context *) handle;
-    if (!ctx) {
+    struct htp_handle * h = (struct htp_handle *) handle;
+    if (!h || !h->ctx) {
         return AEE_EBADPARM;
     }
+    struct htp_context * ctx = h->ctx;
 
     for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) {
         struct htp_mmap *m = &ctx->mmap[i];
@@ -358,55 +299,43 @@ static void vtcm_free(struct htp_context * ctx) {
     }
 }
 
+static void htp_main_thread(void * context);
 static void htp_packet_callback(dspqueue_t queue, int error, void * context);
 static void htp_error_callback(dspqueue_t queue, int error, void * context);
 
 AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp_queue_id, uint32_t n_hvx, uint32_t n_hmx, uint64_t max_vmem) {
-    struct htp_context * ctx = (struct htp_context *) handle;
-
-    if (!ctx) {
+    struct htp_handle * h = (struct htp_handle *) handle;
+    if (!h) {
         return AEE_EBADPARM;
     }
 
-    if (ctx->queue) {
+    if (h->ctx) {
         FARF(ERROR, "Queue already open");
         return AEE_EITEMBUSY;
     }
 
-    // Import queue created on the CPU
-    int err = dspqueue_import(dsp_queue_id,         // Queue ID from dspqueue_export
-                              htp_packet_callback,  // Packet callback
-                              htp_error_callback,   // Error callback; no errors expected on the DSP
-                              (void *) ctx,         // Callback context
-                              &ctx->queue);
+    // Cache the original FastRPC thread priority, then calculate compute priority
+    int fastrpc_tid  = qurt_thread_get_id();
+    int fastrpc_prio = qurt_thread_get_priority(fastrpc_tid);
+    int main_prio    = fastrpc_prio - 10;
+    if (main_prio < 1) main_prio = 1;
+
+    dspqueue_t dsp_queue = NULL;
+    bool use_callbacks = false;
+
+    // Import queue with NULL callbacks to avoid starting dspueue internal threads
+    int err = dspqueue_import(dsp_queue_id, NULL, NULL, (void *) h, &dsp_queue);
+    if (err == AEE_EBADPARM) {
+        // Fallback for devices that don't support NULL callbacks
+        FARF(HIGH, "dspqueue import with NULL callbacks failed, trying with callbacks");
+        use_callbacks = true;
+        err = dspqueue_import(dsp_queue_id, htp_packet_callback, htp_error_callback, (void *) h, &dsp_queue);
+    }
+
     if (err) {
         FARF(ERROR, "Queue import failed with 0x%08x", (unsigned) err);
         return err;
     }
-
-    ctx->max_vmem    = max_vmem;
-    ctx->thread_id   = qurt_thread_get_id();
-    ctx->thread_prio = qurt_thread_get_priority(ctx->thread_id);
-
-    // allocate VTCM
-    err = vtcm_alloc(ctx);
-    if (err != AEE_SUCCESS) {
-        FARF(ERROR, "Unable to allocate VTCM");
-        return AEE_ENOMEMORY;
-    }
-
-    ctx->hmx_enabled = n_hmx;
-    ctx->hmx_queue   = NULL;
-    if (n_hmx) {
-        ctx->hmx_queue = hmx_queue_create(16, ctx->vtcm_rctx);
-        if (ctx->hmx_queue) {
-            ctx->hmx_queue->trace = &ctx->trace[HTP_MAX_NTHREADS];
-        } else {
-            FARF(ERROR, "hmx-queue-create failed");
-            ctx->hmx_enabled = false;
-        }
-    }
-    FARF(HIGH, "HMX %s (n_hmx=%d)", ctx->hmx_enabled ? "enabled" : "disabled", n_hmx);
 
     qurt_sysenv_max_hthreads_t hw_threads;
     qurt_sysenv_get_max_hw_threads(&hw_threads);
@@ -422,27 +351,216 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
         n_hvx = HTP_MAX_NTHREADS;
     }
 
-    ctx->n_threads = n_hvx;
-    for (int i = 0; i < ctx->n_threads; i++) {
-        ctx->dma[i] = dma_queue_create(256); // queue depth
-        if (ctx->dma[i]) {
-            ctx->dma[i]->trace = &ctx->trace[i];
+    // layout segments of our contiguous block
+
+    // 1. htp_context : sits at the base (block is 4K-aligned via memalign below)
+    size_t offset = sizeof(struct htp_context);
+
+    // 2. main_stack
+    size_t offset_main_stack = 0;
+    size_t size_main_stack   = 0;
+    if (!use_callbacks) {
+        offset_main_stack = hex_align_up(offset, 4096);
+        size_main_stack   = MAIN_THREAD_STACK_SIZE;
+        offset = offset_main_stack + size_main_stack;
+    }
+
+    // 3. work_queue
+    size_t wq_align  = work_queue_alignof();
+    size_t offset_wq = hex_align_up(offset, wq_align);
+    size_t size_wq   = work_queue_sizeof(n_hvx, WORK_QUEUE_CAPACITY, WORK_QUEUE_STACK_SIZE);
+    offset = offset_wq + size_wq;
+
+    // 4. dma_queue
+    size_t dma_align = dma_queue_alignof();
+    size_t offset_dma = hex_align_up(offset, dma_align);
+    size_t size_dma = 0;
+    for (uint32_t i = 0; i < n_hvx; i++) {
+        size_dma  = hex_align_up(size_dma, dma_queue_alignof());
+        size_dma += dma_queue_sizeof(256);
+        size_dma  = hex_align_up(size_dma, dma_queue_alignof());
+        size_dma += dma_queue_alias_sizeof();
+    }
+    offset = offset_dma + size_dma;
+
+    // 5. hmx_queue
+    size_t offset_hmx = 0;
+    size_t size_hmx = 0;
+    if (n_hmx) {
+        size_t hmx_align = hmx_queue_alignof();
+        offset_hmx = hex_align_up(offset, hmx_align);
+        size_hmx   = hmx_queue_sizeof(HMX_QUEUE_CAPACITY, HMX_QUEUE_STACK_SIZE);
+        offset = offset_hmx + size_hmx;
+    }
+
+    size_t footprint = hex_align_up(offset, 128);
+
+    void * block = memalign(4096, footprint);
+    if (!block) {
+        FARF(ERROR, "Unable to allocate unified block of size %zu\n", footprint);
+        dspqueue_close(dsp_queue);
+        return AEE_ENOMEMORY;
+    }
+    memset(block, 0, footprint);
+
+    h->ctx = (struct htp_context *) block;
+    struct htp_context * ctx = h->ctx;
+    ctx->footprint = footprint;
+
+    ctx->thread_id   = fastrpc_tid;
+    ctx->thread_prio = main_prio;
+    ctx->max_vmem    = max_vmem;
+    ctx->dsp_queue   = dsp_queue;
+
+    err = vtcm_alloc(ctx);
+    if (err != AEE_SUCCESS) {
+        FARF(ERROR, "Unable to allocate VTCM");
+        htp_iface_stop(handle);
+        return AEE_ENOMEMORY;
+    }
+
+    HAP_setFARFRuntimeLoggingParams(0xffff, NULL, 0);
+
+    // Set client class
+    {
+        HAP_power_request_t request;
+        memset(&request, 0, sizeof(HAP_power_request_t));
+        request.type    = HAP_power_set_apptype;
+        request.apptype = HAP_POWER_COMPUTE_CLIENT_CLASS;
+
+        if ((err = HAP_power_set((void *) ctx, &request)) != 0) {
+            htp_iface_stop(handle);
+            return err;
         }
+    }
+
+    // DCVS setup
+    {
+        HAP_power_request_t request;
+        memset(&request, 0, sizeof(request));
+
+        request.type                              = HAP_power_set_DCVS_v3;
+        request.dcvs_v3.set_dcvs_enable           = TRUE;
+        request.dcvs_v3.dcvs_enable               = FALSE;
+        request.dcvs_v3.set_bus_params            = TRUE;
+        request.dcvs_v3.bus_params.min_corner     = HAP_DCVS_VCORNER_MAX;
+        request.dcvs_v3.bus_params.max_corner     = HAP_DCVS_VCORNER_MAX;
+        request.dcvs_v3.bus_params.target_corner  = HAP_DCVS_VCORNER_MAX;
+        request.dcvs_v3.set_core_params           = TRUE;
+        request.dcvs_v3.core_params.min_corner    = HAP_DCVS_VCORNER_MAX;
+        request.dcvs_v3.core_params.max_corner    = HAP_DCVS_VCORNER_MAX;
+        request.dcvs_v3.core_params.target_corner = HAP_DCVS_VCORNER_MAX;
+        request.dcvs_v3.set_sleep_disable         = TRUE;
+        request.dcvs_v3.sleep_disable             = TRUE;
+
+#if (__HEXAGON_ARCH__ >= 79)
+        HAP_set_dcvs_v3_protected_bus_corners(&request, 1);
+#endif
+        if ((err = HAP_power_set((void *) ctx, &request)) != 0) {
+            htp_iface_stop(handle);
+            return err;
+        }
+
+        memset(&request, 0, sizeof(request));
+        request.type         = HAP_power_set_HVX;
+        request.hvx.power_up = TRUE;
+        if ((err = HAP_power_set((void *) ctx, &request)) != 0) {
+            htp_iface_stop(handle);
+            return err;
+        }
+    }
+
+#if __HVX_ARCH__ >= 75
+    {
+        // Power on HMX and set HMX clock
+        HAP_power_request_t request;
+        memset(&request, 0, sizeof(HAP_power_request_t));
+        request.type = HAP_power_set_HMX_v2;
+        request.hmx_v2.set_power     = TRUE;
+        request.hmx_v2.power_up      = TRUE;
+        request.hmx_v2.set_clock     = TRUE;
+        request.hmx_v2.target_corner = HAP_DCVS_EXP_VCORNER_MAX;
+        request.hmx_v2.min_corner    = HAP_DCVS_EXP_VCORNER_MAX;
+        request.hmx_v2.max_corner    = HAP_DCVS_EXP_VCORNER_MAX;
+        request.hmx_v2.perf_mode     = HAP_CLK_PERF_HIGH;
+        FARF(ALWAYS, "Setting HMX clock\n");
+        err = HAP_power_set((void *) ctx, &request);
+        if (err != AEE_SUCCESS) {
+            FARF(ERROR, "ggml-hex: error setting HMX clock.");
+            htp_iface_stop(handle);
+            return err;
+        }
+    }
+#else
+    {
+        // Power on HMX
+        HAP_power_request_t request;
+        memset(&request, 0, sizeof(HAP_power_request_t));
+        request.type         = HAP_power_set_HMX;
+        request.hmx.power_up = TRUE;
+        FARF(ALWAYS, "Powering HMX on\n");
+        err = HAP_power_set((void *) ctx, &request);
+        if (err != AEE_SUCCESS) {
+            FARF(ERROR, "ggml-hex: error powering on HMX.");
+            htp_iface_stop(handle);
+            return err;
+        }
+    }
+#endif
+
+    ctx->hmx_enabled = n_hmx;
+    ctx->hmx_queue   = NULL;
+    if (n_hmx) {
+        void * hmx_ptr = (void *) ((uintptr_t) block + offset_hmx);
+        ctx->hmx_queue = hmx_queue_init(hmx_ptr, HMX_QUEUE_CAPACITY, HMX_QUEUE_STACK_SIZE, ctx->vtcm_rctx, &ctx->trace[HTP_MAX_NTHREADS]);
+    }
+    FARF(HIGH, "HMX %s (n_hmx=%d)", ctx->hmx_enabled ? "enabled" : "disabled", n_hmx);
+
+    ctx->n_threads = n_hvx;
+    ctx->n_threads_div = init_fastdiv_values(ctx->n_threads);
+
+    // Initialize DMA queues
+    uint8_t * dma_ptr_curr = (uint8_t *) ((uintptr_t) block + offset_dma);
+    size_t size_dma_q = dma_queue_sizeof(256);
+    size_t size_dma_alias = dma_queue_alias_sizeof();
+
+    for (int i = 0; i < ctx->n_threads; i++) {
+        dma_ptr_curr = (uint8_t *) hex_align_up((uintptr_t) dma_ptr_curr, dma_queue_alignof());
+        ctx->dma_cached[i] = dma_queue_init(dma_ptr_curr, 256, (uintptr_t) ctx->vtcm_base, ctx->vtcm_size, &ctx->trace[i]);
+        dma_ptr_curr += size_dma_q;
+
+        dma_ptr_curr = (uint8_t *) hex_align_up((uintptr_t) dma_ptr_curr, dma_queue_alignof());
+        ctx->dma[i] = dma_queue_alias_init(dma_ptr_curr, ctx->dma_cached[i], 1);
+        dma_ptr_curr += size_dma_alias;
     }
 
     ctx->ddr_spad_size = 512 * 1024; // 512 KB
     ctx->ddr_spad_base = memalign(128, ctx->ddr_spad_size);
 
-    // init worker pool
-    err = worker_pool_init(&ctx->worker_pool, n_hvx);
-    if (err != AEE_SUCCESS) {
-        FARF(ERROR, "Unable to create worker pool");
-        if (ctx->ddr_spad_base) {
-            free(ctx->ddr_spad_base);
-            ctx->ddr_spad_base = NULL;
-            ctx->ddr_spad_size = 0;
+    void * wq_ptr = (void *) ((uintptr_t) block + offset_wq);
+    ctx->work_queue = work_queue_init(wq_ptr, n_hvx, WORK_QUEUE_CAPACITY, WORK_QUEUE_STACK_SIZE);
+
+    ctx->main_stack = NULL;
+    ctx->main_thread = 0;
+    atomic_store(&ctx->killed, false);
+
+    if (!use_callbacks) {
+        // Start main compute thread
+        ctx->main_stack = (void *) ((uintptr_t) block + offset_main_stack);
+
+        qurt_thread_attr_t attr;
+        qurt_thread_attr_init(&attr);
+        qurt_thread_attr_set_stack_addr(&attr, ctx->main_stack);
+        qurt_thread_attr_set_stack_size(&attr, size_main_stack);
+        qurt_thread_attr_set_priority(&attr, main_prio);
+        qurt_thread_attr_set_name(&attr, "htp-main");
+
+        int err_thread = qurt_thread_create(&ctx->main_thread, &attr, htp_main_thread, ctx);
+        if (err_thread) {
+            FARF(ERROR, "Unable to create htp main thread: %d", err_thread);
+            htp_iface_stop(handle);
+            return AEE_ENOMEMORY;
         }
-        return err;
     }
 
     FARF(HIGH, "session %u started: n-hvx %u vtcm-size %zu vtcm-rctx %u n-threads %u thread-id %d thread-prio %d \n",
@@ -452,35 +570,34 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
 }
 
 AEEResult htp_iface_stop(remote_handle64 handle) {
-    struct htp_context * ctx = (struct htp_context *) handle;
-    if (!ctx) {
+    struct htp_handle * h = (struct htp_handle *) handle;
+    if (!h || !h->ctx) {
         return AEE_EBADPARM;
     }
+    struct htp_context * ctx = h->ctx;
 
-    if (!ctx->queue) {
-        FARF(ERROR, "Queue not open");
-        return AEE_EBADSTATE;
+    if (ctx->main_thread) {
+        atomic_store(&ctx->killed, true);
+        int status;
+        (void) qurt_thread_join(ctx->main_thread, &status);
+        ctx->main_thread = 0;
     }
 
-    // Close queue. dspqueue_close() will also wait for callbacks to finish.
-    int err    = dspqueue_close(ctx->queue);
-    ctx->queue = NULL;
+    int err = dspqueue_close(ctx->dsp_queue); ctx->dsp_queue = NULL;
     if (err != 0) {
         FARF(ERROR, "Queue close failed with 0x%08x", (unsigned) err);
         return err;
     }
 
-    if (ctx->worker_pool) {
-        // Release worker pool
-        worker_pool_release(&ctx->worker_pool);
-    }
+    work_queue_free(ctx->work_queue);
 
     for (int i = 0; i < ctx->n_threads; i++) {
-        dma_queue_delete(ctx->dma[i]);
+        dma_queue_alias_free(ctx->dma[i]);
+        dma_queue_free(ctx->dma_cached[i]);
     }
 
     if (ctx->hmx_queue) {
-        hmx_queue_delete(ctx->hmx_queue);
+        hmx_queue_free(ctx->hmx_queue);
         ctx->hmx_queue = NULL;
     }
     ctx->hmx_enabled = false;
@@ -492,6 +609,9 @@ AEEResult htp_iface_stop(remote_handle64 handle) {
         ctx->ddr_spad_base = NULL;
         ctx->ddr_spad_size = 0;
     }
+
+    free(ctx);
+    h->ctx = NULL;
 
     return AEE_SUCCESS;
 }
@@ -671,8 +791,6 @@ static int execute_op(struct htp_ops_context * octx) {
 
         case HTP_OP_INVALID:
             break;
-
-        // No default to catch missing cases
     }
 
     FARF(ERROR, "Unknown Op %u", octx->op);
@@ -778,12 +896,14 @@ static void prep_op_bufs(struct htp_context *ctx, struct htp_buf_desc *bufs, uin
     }
 }
 
-static void prep_tensor(struct htp_context *ctx, struct htp_buf_desc *bufs, uint32_t idx, struct htp_tensor *t) {
+static void prep_tensor(struct htp_context *ctx, struct htp_buf_desc *bufs, struct htp_tensor *tens, uint32_t idx, struct htp_tensor *t) {
     uint32_t offset = t->data;
     uint32_t size   = t->size;
     uint32_t bi     = t->bi;
+    uint32_t alias  = t->alias;
 
-    t->data = bufs[bi].base + offset; // update data to the actual pointer
+    t->data  = (uint32_t) (bufs[bi].base + offset);  // update data to the actual pointer
+    t->alias = (uint32_t) (tens + alias);            // update alias to the actual pointer
 
     FARF(HIGH, "prep-tensor #%u: bi %u offset %u size %u data %p : %u:%u:%u:%u", idx, t->bi, offset, t->size, (void*) t->data,
         t->ne[0], t->ne[1], t->ne[3], t->ne[3]);
@@ -791,7 +911,7 @@ static void prep_tensor(struct htp_context *ctx, struct htp_buf_desc *bufs, uint
 
 static void prep_tensors(struct htp_context *ctx, struct htp_buf_desc *bufs, struct htp_tensor *tens, uint32_t n_tens) {
     for (uint32_t i=0; i < n_tens; i++) {
-        prep_tensor(ctx, bufs, i, tens + i);
+        prep_tensor(ctx, bufs, tens, i, tens + i);
     }
 }
 
@@ -805,29 +925,36 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, u
 
     // Prep input tensors
     for (uint32_t i=0; i<HTP_OP_MAX_INPUTS; i++) {
-        struct htp_tensor *src = op->src[i] == 0xffff ? NULL : tens + op->src[i];
-
-        octx->src[i] = src;
-        if (!src) continue;
-
-        if (!(src->flags & HTP_TENSOR_FLUSHED) && (src->flags & HTP_TENSOR_COMPUTE)) {
-            // flush compute buffers on input
-            hex_l2flush((void *) src->data, src->size);
+        uint16_t src_idx = op->src[i];
+        if (src_idx == 0xffff) {
+            octx->src[i]     = NULL;
+            octx->src_dma[i] = NULL;
+            continue;
         }
+
+        struct htp_tensor *src = tens + src_idx;
+        octx->src[i]     = src;
+        octx->src_dma[i] = octx->ctx->dma; // FIXME: ? octx->ctx->dma_cached : octx->ctx->dma;
 
         FARF(HIGH, "prep-src #%u: data %p size %u : %u:%u:%u:%u", op->src[i], (void*) src->data, src->size,
             src->ne[0], src->ne[1], src->ne[3], src->ne[3]);
     }
 
+    htp_tensor_flush_all(octx->ctx, octx->src, HTP_OP_MAX_INPUTS);
+
     // Prep output tensors
     for (uint32_t i = 0; i < HTP_OP_MAX_OUTPUTS; i++) {
         uint16_t dst_idx = op->dst[i];
         if (dst_idx == 0xffff) {
-            octx->dsts[i] = NULL;
+            octx->dsts[i]    = NULL;
+            octx->dst_dma[i] = NULL;
             continue;
         }
         struct htp_tensor *dst = tens + dst_idx;
-        octx->dsts[i] = dst;
+        octx->dsts[i]    = dst;
+        octx->dst_dma[i] = octx->ctx->dma; // FIXME: ? octx->ctx->dma_cached : octx->ctx->dma;
+
+        htp_tensor_make_dirty(dst, octx->ctx->dirty_map);
 
         FARF(HIGH, "prep-dst[%u] #%u: data %p size %u : %u:%u:%u:%u", i, dst_idx, (void*) dst->data, dst->size,
             dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
@@ -841,34 +968,134 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, u
     octx->src3_spad.src = NULL;
     octx->dst_spad.src  = NULL;
 
-    // flush buffers on output
-    for (uint32_t i = 0; i < HTP_OP_MAX_OUTPUTS; i++) {
-        if (octx->dsts[i]) {
-            struct htp_tensor *dst = (struct htp_tensor *)octx->dsts[i];
-            hex_l2flush((void *) dst->data, dst->size);
-            dst->flags |= HTP_TENSOR_FLUSHED;
-
-            FARF(HIGH, "post-dst[%u] #%u: data %p size %u : %u:%u:%u:%u", i, op->dst[i], (void*) dst->data, dst->size,
-                dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
-        }
-    }
-
     return status;
 }
 
+static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_req * req, const struct dspqueue_buffer * dbuf) {
+    dspqueue_t queue = ctx->dsp_queue;
+    int err;
+
+    const uint32_t n_bufs = req->n_bufs;
+    const uint32_t n_tens = req->n_tensors;
+    const uint32_t n_ops  = req->n_ops;
+
+    const uint32_t b_size = sizeof(struct htp_buf_desc)  * n_bufs;
+    const uint32_t t_size = sizeof(struct htp_tensor)    * n_tens;
+    const uint32_t o_size = sizeof(struct htp_op_desc)   * n_ops;
+    const uint32_t p_size = sizeof(struct htp_prof_desc) * n_ops;
+    const uint32_t tr_size = (HTP_MAX_NTHREADS + 1) * req->n_traces * sizeof(struct htp_trace_desc);
+
+    if (dbuf->size < b_size + t_size + o_size + p_size + tr_size) {
+        FARF(ERROR, "invalid opbatch memory block size %u (req %u)", dbuf->size, b_size + t_size + o_size + p_size + tr_size);
+        return;
+    }
+
+    FARF(HIGH, "processing opbatch #%u: n-bufs %u n-tensors %u n-ops %u n-traces %u : m-size %u b-size %u t-size %u o-size %u", req->id,
+            n_bufs, n_tens, n_ops, req->n_traces, dbuf->size, b_size, t_size, o_size);
+
+    // Clean cache at the start of the batch
+    // We cant trace this part because the trace buffer is setup later
+    qurt_mem_cache_clean((qurt_addr_t) 0, 0, QURT_MEM_CACHE_FLUSH_INVALIDATE_ALL, QURT_MEM_DCACHE);
+    hex_l2fetch_block(ctx, ctx->footprint);
+    bitmap_reset(ctx->dirty_map, HTP_OP_MAX_TENSORS);
+
+    // Setup descriptor pointers
+    uint8_t * m_ptr = dbuf->ptr;
+    struct htp_buf_desc* bufs = (struct htp_buf_desc*)  m_ptr; m_ptr += b_size;
+    struct htp_tensor*   tens = (struct htp_tensor*)    m_ptr; m_ptr += t_size;
+    struct htp_op_desc*   ops = (struct htp_op_desc*)   m_ptr; m_ptr += o_size;
+    struct htp_prof_desc* pds = (struct htp_prof_desc*) m_ptr;
+
+    prep_op_bufs(ctx, bufs, n_bufs);
+    prep_tensors(ctx, bufs, tens, n_tens);
+
+    struct htp_ops_context *octx = &ctx->octx;
+    memset(octx, 0, sizeof(*octx));
+    octx->n_threads = ctx->n_threads;
+    octx->ctx       = ctx;
+
+    memset(ctx->trace, 0, sizeof(ctx->trace));
+    if (ctx->profiler == HTP_PROF_TRACE) {
+        struct htp_trace_desc * trace_events = (struct htp_trace_desc *) (m_ptr + p_size);
+        for (int t = 0; t <= HTP_MAX_NTHREADS; t++) {
+            ctx->trace[t].events     = &trace_events[t * req->n_traces];
+            ctx->trace[t].max_events = req->n_traces;
+        }
+    }
+
+    work_queue_wakeup(ctx->work_queue);
+    if (ctx->hmx_queue) {
+        hmx_queue_wakeup(ctx->hmx_queue);
+    }
+
+    int op_status = HTP_STATUS_OK;
+    for (uint32_t i = 0; i < n_ops && op_status == HTP_STATUS_OK; i++) {
+        struct profile_data prof;
+
+        profile_start(ctx->profiler, &prof);
+
+        op_status = proc_op_req(octx, tens, i, &ops[i]);
+
+        profile_stop(ctx->profiler, &prof);
+
+        if (ctx->profiler) {
+            pds[i].opcode = ops[i].opcode;
+            pds[i].usecs  = prof.usecs;
+            pds[i].cycles_start = prof.cycles_start;
+            pds[i].cycles_stop = prof.cycles_stop;
+            for (int j = 0; j < HEX_NUM_PMU_COUNTERS; j++) {
+                pds[i].pmu[j] = prof.pmu_counters[j];
+            }
+        }
+    }
+
+    if (ctx->hmx_queue) {
+        hmx_queue_suspend(ctx->hmx_queue);
+        hmx_queue_flush(ctx->hmx_queue);
+    }
+    work_queue_suspend(ctx->work_queue);
+
+    struct htp_opbatch_rsp rsp;
+    memset(&rsp, 0, sizeof(rsp));
+    rsp.id        = req->id;
+    rsp.status    = op_status;
+    rsp.n_bufs    = n_bufs;
+    rsp.n_tensors = n_tens;
+    rsp.n_ops     = n_ops;
+
+    if (ctx->profiler == HTP_PROF_TRACE) {
+        for (int t = 0; t <= HTP_MAX_NTHREADS; t++) {
+            rsp.n_traces[t] = ctx->trace[t].count;
+        }
+    }
+
+    struct dspqueue_buffer write_dbuf = *dbuf;
+    write_dbuf.flags = DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER | DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT;
+
+    // Flush remaining dirty tensors at the end of the batch
+    htp_trace_event_start(&ctx->trace[0], HTP_TRACE_EVT_L2FLUSH, 0);
+    qurt_mem_cache_clean((qurt_addr_t) 0, 0, QURT_MEM_CACHE_FLUSH_INVALIDATE_ALL, QURT_MEM_DCACHE);
+    htp_trace_event_stop(&ctx->trace[0], HTP_TRACE_EVT_L2FLUSH, 0);
+
+    err = dspqueue_write(queue, 0, 1, &write_dbuf, sizeof(rsp), (const uint8_t *) &rsp, DSPQUEUE_TIMEOUT_NONE);
+    if (err != 0) {
+        FARF(ERROR, "dspqueue_write failed: 0x%08x", (unsigned) err);
+    }
+}
+
+#define DSPQUEUE_READ_TIMEOUT_USEC 5000
 #define DSPQUEUE_POLL_TIMEOUT_USEC 100
 #define DSPQUEUE_POLL_COUNT        100
 
-static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
-    struct htp_context * ctx = (struct htp_context *) context;
-
+static void process_ops(struct htp_context * ctx) {
+    dspqueue_t queue = ctx->dsp_queue;
     int err;
 
     uint32_t poll_count = DSPQUEUE_POLL_COUNT;
 
     vtcm_acquire(ctx);
 
-    while (!ctx->vtcm_needs_release) {
+    while (!ctx->vtcm_needs_release && !atomic_load(&ctx->killed)) {
         struct htp_opbatch_req req;
         uint32_t r_size = sizeof(req);
 
@@ -898,111 +1125,41 @@ static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
         // Reset poll count for valid requests
         poll_count = DSPQUEUE_POLL_COUNT;
 
-        const uint32_t n_bufs = req.n_bufs;
-        const uint32_t n_tens = req.n_tensors;
-        const uint32_t n_ops  = req.n_ops;
+        process_opbatch(ctx, &req, &dbuf);
+    }
 
-        const uint32_t b_size = sizeof(struct htp_buf_desc)  * n_bufs;
-        const uint32_t t_size = sizeof(struct htp_tensor)    * n_tens;
-        const uint32_t o_size = sizeof(struct htp_op_desc)   * n_ops;
-        const uint32_t p_size = sizeof(struct htp_prof_desc) * n_ops;
-        const uint32_t tr_size = (HTP_MAX_NTHREADS + 1) * req.n_traces * sizeof(struct htp_trace_desc);
+    vtcm_release(ctx);
+}
 
-        if (dbuf.size < b_size + t_size + o_size + p_size + tr_size) {
-            FARF(ERROR, "invalid opbatch memory block size %u (req %u)", dbuf.size, b_size + t_size + o_size + p_size + tr_size);
-            break;
-        }
+static void htp_packet_callback(dspqueue_t queue, int error, void * context) {
+    (void) queue;
+    (void) error;
+    struct htp_handle * h = (struct htp_handle *) context;
+    if (h && h->ctx) {
+        process_ops(h->ctx);
+    }
+}
 
-        FARF(HIGH, "processing opbatch #%u: n-bufs %u n-tensors %u n-ops %u n-traces %u : m-size %u b-size %u t-size %u o-size %u", req.id,
-                n_bufs, n_tens, n_ops, req.n_traces, dbuf.size, b_size, t_size, o_size);
+static void htp_main_thread(void * context) {
+    struct htp_context * ctx = (struct htp_context *) context;
 
-        // Setup descriptor pointers
-        uint8_t * m_ptr = dbuf.ptr;
-        struct htp_buf_desc* bufs = (struct htp_buf_desc*)  m_ptr; m_ptr += b_size;
-        struct htp_tensor*   tens = (struct htp_tensor*)    m_ptr; m_ptr += t_size;
-        struct htp_op_desc*   ops = (struct htp_op_desc*)   m_ptr; m_ptr += o_size;
-        struct htp_prof_desc* pds = (struct htp_prof_desc*) m_ptr;
+    FARF(HIGH, "htp-main-thread: started");
 
-        prep_op_bufs(ctx, bufs, n_bufs);
-        prep_tensors(ctx, bufs, tens, n_tens);
+    while (!atomic_load(&ctx->killed)) {
+        uint32_t flags = 0;
+        uint32_t num_buffers = 0;
+        uint32_t message_length = 0;
 
-        struct htp_ops_context *octx = &ctx->octx;
-        memset(octx, 0, sizeof(*octx));
-        octx->n_threads = ctx->n_threads;
-        octx->ctx       = ctx;
-
-        if (ctx->profiler == HTP_PROF_TRACE) {
-            memset(ctx->trace, 0, sizeof(ctx->trace));
-            struct htp_trace_desc * trace_events = (struct htp_trace_desc *) (m_ptr + p_size);
-            for (int t = 0; t <= HTP_MAX_NTHREADS; t++) {
-                ctx->trace[t].events = &trace_events[t * req.n_traces];
-                ctx->trace[t].max_events = req.n_traces;
-            }
+        int err = dspqueue_peek(ctx->dsp_queue, &flags, &num_buffers, &message_length, 50000);
+        if (err == 0) {
+            process_ops(ctx);
+        } else if (err == AEE_EWOULDBLOCK || err == AEE_EEXPIRED) {
+            continue;
         } else {
-            for (int t = 0; t <= HTP_MAX_NTHREADS; t++) {
-                ctx->trace[t].events = NULL;
-                ctx->trace[t].max_events = 0;
-            }
-        }
-
-        int      op_status = HTP_STATUS_OK;
-        uint32_t op_wakeup = n_ops / 2; // half-way throgh the batch
-
-        hmx_queue_wakeup(ctx->hmx_queue);
-
-        for (uint32_t i=0; i < n_ops; i++) {
-            struct profile_data prof;
-
-            if (i == op_wakeup) {
-                dspqueue_write_early_wakeup_noblock(queue, 0, 0);
-            }
-
-            profile_start(ctx->profiler, &prof);
-
-            op_status = proc_op_req(octx, tens, i, &ops[i]);
-
-            profile_stop(ctx->profiler, &prof);
-
-            if (op_status != HTP_STATUS_OK) {
-                break;
-            }
-
-            if (ctx->profiler) {
-                pds[i].opcode = ops[i].opcode;
-                pds[i].usecs  = prof.usecs;
-                pds[i].cycles_start = prof.cycles_start;
-                pds[i].cycles_stop = prof.cycles_stop;
-                for (int j = 0; j < HEX_NUM_PMU_COUNTERS; j++) {
-                    pds[i].pmu[j] = prof.pmu_counters[j];
-                }
-            }
-        }
-
-        hmx_queue_suspend(ctx->hmx_queue);
-
-        struct htp_opbatch_rsp rsp;
-        rsp.id        = req.id;
-        rsp.status    = op_status;
-        rsp.n_bufs    = n_bufs;
-        rsp.n_tensors = n_tens;
-        rsp.n_ops     = n_ops;
-        memset(rsp.pad, 0, sizeof(rsp.pad));
-        if (ctx->profiler == HTP_PROF_TRACE) {
-            for (int t = 0; t <= HTP_MAX_NTHREADS; t++) {
-                rsp.n_traces[t] = ctx->trace[t].count;
-            }
-        } else {
-            memset(rsp.n_traces, 0, sizeof(rsp.n_traces));
-        }
-
-        dbuf.flags = DSPQUEUE_BUFFER_FLAG_FLUSH_SENDER | DSPQUEUE_BUFFER_FLAG_INVALIDATE_RECIPIENT;
-
-        err = dspqueue_write(queue, 0, 1, &dbuf, sizeof(rsp), (const uint8_t *) &rsp, DSPQUEUE_TIMEOUT_NONE);
-        if (err != 0) {
-            FARF(ERROR, "dspqueue_write failed: 0x%08x", (unsigned) err);
+            FARF(ERROR, "dspqueue_peek failed: 0x%08x", (unsigned) err);
             break;
         }
     }
 
-    vtcm_release(ctx);
+    FARF(HIGH, "htp-main-thread: stopped");
 }

@@ -205,6 +205,9 @@ class MCPStore {
 		server: MCPServerSettingsEntry,
 		perChatOverrides?: McpServerOverride[]
 	): boolean {
+		// Per-chat overrides win when present; missing entries inherit the
+		// server's own `enabled` flag so partial override lists are not all
+		// treated as disabled.
 		const override = perChatOverrides?.find((o) => o.serverId === server.id);
 		return override?.enabled ?? server.enabled;
 	}
@@ -348,7 +351,6 @@ class MCPStore {
 	}
 
 	clearHealthCheck(serverId: string): void {
-		// eslint-disable-next-line @typescript-eslint/no-unused-vars
 		const { [serverId]: _removed, ...rest } = this._healthChecks;
 		this._healthChecks = rest;
 	}
@@ -939,6 +941,41 @@ class MCPStore {
 		return this.toolsIndex.get(toolName);
 	}
 
+	/**
+	 * Resolve which configured MCP server owns a given tool name. Looks at
+	 * active connections first (fast path), then falls back to per-server
+	 * health-check data so server-side MCP proxies (where llama-server
+	 * executes MCP tools but the browser does not hold a direct connection)
+	 * still resolve tool names to their owning server.
+	 */
+	findServerForTool(toolName: string): string | undefined {
+		const fromIndex = this.toolsIndex.get(toolName);
+		if (fromIndex) return fromIndex;
+
+		for (const server of this.getServers()) {
+			const health = this._healthChecks[server.id];
+			if (!health || health.status !== HealthCheckStatus.SUCCESS) continue;
+			if (health.tools.some((tool) => tool.name === toolName)) {
+				return server.id;
+			}
+		}
+
+		return undefined;
+	}
+
+	/**
+	 * Resolve the favicon URL for an MCP server by one of its tool names.
+	 * Returns `null` if the tool is not provided by any configured MCP server,
+	 * or if the owning server has no icon to show.
+	 * Pair with {@link getServerFavicon} for direct server-id lookup.
+	 */
+	getServerFaviconForTool(toolName: string | undefined): string | null {
+		if (!toolName) return null;
+		const serverId = this.findServerForTool(toolName);
+		if (!serverId) return null;
+		return this.getServerFavicon(serverId);
+	}
+
 	hasPromptsSupport(): boolean {
 		for (const connection of this.connections.values()) {
 			if (connection.serverCapabilities?.prompts) {
@@ -955,44 +992,27 @@ class MCPStore {
 	 * the user actually sends a message or uses prompts.
 	 * @param perChatOverrides - Per-chat server overrides to filter by enabled servers.
 	 *                          If provided (even empty array), only checks enabled servers.
-	 *                          If undefined, checks all servers with successful health checks.
+	 *                          If undefined, falls back to each server's own `enabled` flag.
 	 */
 	hasPromptsCapability(perChatOverrides?: McpServerOverride[]): boolean {
-		// If perChatOverrides is provided (even empty array), filter by enabled servers
+		let enabledServerIds: Set<string>;
+
 		if (perChatOverrides !== undefined) {
-			const enabledServerIds = new Set(
-				perChatOverrides.filter((o) => o.enabled).map((o) => o.serverId)
+			enabledServerIds = new Set(perChatOverrides.filter((o) => o.enabled).map((o) => o.serverId));
+		} else {
+			enabledServerIds = new Set(
+				this.getServers()
+					.filter((s) => s.enabled)
+					.map((s) => s.id)
 			);
+		}
 
-			// No enabled servers = no capability
-			if (enabledServerIds.size === 0) {
-				return false;
-			}
-
-			// Check health check states for enabled servers with prompts capability
-			for (const [serverId, state] of Object.entries(this._healthChecks)) {
-				if (!enabledServerIds.has(serverId)) continue;
-				if (
-					state.status === HealthCheckStatus.SUCCESS &&
-					state.capabilities?.server?.prompts !== undefined
-				) {
-					return true;
-				}
-			}
-
-			// Also check active connections as fallback
-			for (const [serverName, connection] of this.connections) {
-				if (!enabledServerIds.has(serverName)) continue;
-				if (connection.serverCapabilities?.prompts) {
-					return true;
-				}
-			}
-
+		if (enabledServerIds.size === 0) {
 			return false;
 		}
 
-		// No overrides provided - check all servers (global mode)
-		for (const state of Object.values(this._healthChecks)) {
+		for (const [serverId, state] of Object.entries(this._healthChecks)) {
+			if (!enabledServerIds.has(serverId)) continue;
 			if (
 				state.status === HealthCheckStatus.SUCCESS &&
 				state.capabilities?.server?.prompts !== undefined
@@ -1001,7 +1021,8 @@ class MCPStore {
 			}
 		}
 
-		for (const connection of this.connections.values()) {
+		for (const [serverName, connection] of this.connections) {
+			if (!enabledServerIds.has(serverName)) continue;
 			if (connection.serverCapabilities?.prompts) {
 				return true;
 			}
@@ -1518,43 +1539,26 @@ class MCPStore {
 	 * the user actually sends a message or uses prompts.
 	 * @param perChatOverrides - Per-chat server overrides to filter by enabled servers.
 	 *                          If provided (even empty array), only checks enabled servers.
-	 *                          If undefined, checks all servers with successful health checks.
+	 *                          If undefined, falls back to each server's own `enabled` flag.
 	 */
 	hasResourcesCapability(perChatOverrides?: McpServerOverride[]): boolean {
-		// If perChatOverrides is provided (even empty array), filter by enabled servers
+		let enabledServerIds: Set<string>;
+
 		if (perChatOverrides !== undefined) {
-			const enabledServerIds = new Set(
-				perChatOverrides.filter((o) => o.enabled).map((o) => o.serverId)
+			enabledServerIds = new Set(perChatOverrides.filter((o) => o.enabled).map((o) => o.serverId));
+		} else {
+			enabledServerIds = new Set(
+				this.getServers()
+					.filter((s) => s.enabled)
+					.map((s) => s.id)
 			);
-			// No enabled servers = no capability
-			if (enabledServerIds.size === 0) {
-				return false;
-			}
-
-			// Check health check states for enabled servers with resources capability
-			for (const [serverId, state] of Object.entries(this._healthChecks)) {
-				if (!enabledServerIds.has(serverId)) continue;
-				if (
-					state.status === HealthCheckStatus.SUCCESS &&
-					state.capabilities?.server?.resources !== undefined
-				) {
-					return true;
-				}
-			}
-
-			// Also check active connections as fallback
-			for (const [serverName, connection] of this.connections) {
-				if (!enabledServerIds.has(serverName)) continue;
-				if (MCPService.supportsResources(connection)) {
-					return true;
-				}
-			}
-
+		}
+		if (enabledServerIds.size === 0) {
 			return false;
 		}
 
-		// No overrides provided - check all servers (global mode)
-		for (const state of Object.values(this._healthChecks)) {
+		for (const [serverId, state] of Object.entries(this._healthChecks)) {
+			if (!enabledServerIds.has(serverId)) continue;
 			if (
 				state.status === HealthCheckStatus.SUCCESS &&
 				state.capabilities?.server?.resources !== undefined
@@ -1563,7 +1567,8 @@ class MCPStore {
 			}
 		}
 
-		for (const connection of this.connections.values()) {
+		for (const [serverName, connection] of this.connections) {
+			if (!enabledServerIds.has(serverName)) continue;
 			if (MCPService.supportsResources(connection)) {
 				return true;
 			}
@@ -1573,14 +1578,20 @@ class MCPStore {
 	}
 
 	/**
-	 * Get list of servers that support resources.
+	 * Get list of enabled servers that support resources.
 	 * Checks active connections first, then health check state as fallback.
 	 */
 	getServersWithResources(): string[] {
+		const enabledServerIds = new Set(
+			this.getServers()
+				.filter((s) => s.enabled)
+				.map((s) => s.id)
+		);
 		const servers: string[] = [];
 
 		// Check active connections
 		for (const [name, connection] of this.connections) {
+			if (!enabledServerIds.has(name)) continue;
 			if (MCPService.supportsResources(connection) && !servers.includes(name)) {
 				servers.push(name);
 			}
@@ -1588,6 +1599,7 @@ class MCPStore {
 
 		// Also check health check states for servers not yet connected
 		for (const [serverId, state] of Object.entries(this._healthChecks)) {
+			if (!enabledServerIds.has(serverId)) continue;
 			if (
 				!servers.includes(serverId) &&
 				state.status === HealthCheckStatus.SUCCESS &&

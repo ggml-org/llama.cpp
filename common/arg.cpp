@@ -2932,7 +2932,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_TOKENIZE}));
     add_opt(common_arg(
         {"--stdin"},
-        string_format("read the prompt from stdin (mutually exclusive with -f/--file and -p/--prompt) (default: %s)", params.tokenize_stdin ? "true" : "false"),
+        string_format("read the prompt from stdin (takes precedence over -f/--file and -p/--prompt) (default: %s)", params.tokenize_stdin ? "true" : "false"),
         [](common_params & params) {
             params.tokenize_stdin = true;
         }

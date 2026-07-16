@@ -40,8 +40,10 @@ static double nmse(const std::vector<float> & a, const std::vector<float> & b) {
 }
 
 static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
+    size_t seed = *(const size_t *) userdata;
     std::hash<std::string> hasher;
-    std::mt19937 gen(hasher(tensor->name) + *(const size_t *) userdata);
+    seed ^= hasher(tensor->name);
+    std::mt19937 gen(seed);
     std::normal_distribution<float> dis(0.0f, 1.0e-2f);
 
     const int64_t ne = ggml_nelements(tensor);
@@ -465,7 +467,7 @@ static int save_models(const llm_arch target_arch, const size_t seed, const ggml
             if (!moe && moe_mandatory(arch)) {
                 continue;
             }
-            if (!llama_model_saver_supports_arch(arch)) {
+            if (!llama_model_saver_supports_arch(arch) || !arch_supported(arch)) {
                 LOG_INF("%s: %s model (%s) is unsupported, skipping\n", __func__, llm_arch_name(arch), moe ? "MoE" : "dense");
                 continue;
             }

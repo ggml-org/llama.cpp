@@ -673,7 +673,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_mod
     ggml_type new_type = default_type;
 
     // get more optimal quantization type based on the tensor shape, layer, etc.
-    if (!params->pure && ggml_is_quantized(default_type)) {
+    if (ggml_is_quantized(default_type)) {
         // if the user provided tensor types - use those
         bool manual = false;
         if (!qs.tensor_type_patterns.empty()) {
@@ -692,7 +692,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs, const llama_mod
         }
 
         // if not manual - use the standard logic for choosing the quantization type based on the selected mixture
-        if (!manual) {
+        if (!manual && !params->pure) {
             new_type = llama_tensor_get_type_impl(qs, new_type, tensor, params->ftype, tm.category);
         }
 
