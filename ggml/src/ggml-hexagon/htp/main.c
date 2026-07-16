@@ -349,12 +349,9 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
     }
 
     // layout segments of our contiguous block
-    size_t offset = 0;
 
-    // 1. htp_context
-    size_t offset_ctx = hex_align_up(offset, 128);
-    size_t size_ctx   = sizeof(struct htp_context);
-    offset = offset_ctx + size_ctx;
+    // 1. htp_context : sits at the base (block is 4K-aligned via memalign below)
+    size_t offset = sizeof(struct htp_context);
 
     // 2. main_stack
     size_t offset_main_stack = 0;
@@ -403,7 +400,7 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
     }
     memset(block, 0, footprint);
 
-    h->ctx = (struct htp_context *) ((uintptr_t) block + offset_ctx);
+    h->ctx = (struct htp_context *) block;
     struct htp_context * ctx = h->ctx;
     ctx->footprint = footprint;
 
@@ -412,7 +409,6 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
     ctx->max_vmem    = max_vmem;
     ctx->dsp_queue   = dsp_queue;
 
-    // allocate VTCM
     err = vtcm_alloc(ctx);
     if (err != AEE_SUCCESS) {
         FARF(ERROR, "Unable to allocate VTCM");
@@ -420,7 +416,6 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
         return AEE_ENOMEMORY;
     }
 
-    // Enable FARF logs
     HAP_setFARFRuntimeLoggingParams(0xffff, NULL, 0);
 
     // Set client class
@@ -436,6 +431,7 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
         }
     }
 
+    // DCVS setup
     {
         HAP_power_request_t request;
         memset(&request, 0, sizeof(request));
@@ -520,7 +516,7 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
     ctx->n_threads = n_hvx;
     ctx->n_threads_div = init_fastdiv_values(ctx->n_threads);
 
-    // Initialize DMA queues inside block
+    // Initialize DMA queues
     uint8_t * dma_ptr_curr = (uint8_t *) ((uintptr_t) block + offset_dma);
     size_t size_dma_q = dma_queue_sizeof(256);
     size_t size_dma_alias = dma_queue_alias_sizeof();
@@ -546,7 +542,7 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
     atomic_store(&ctx->killed, false);
 
     if (!use_callbacks) {
-        // Start our main compute thread
+        // Start main compute thread
         ctx->main_stack = (void *) ((uintptr_t) block + offset_main_stack);
 
         qurt_thread_attr_t attr;
@@ -611,7 +607,6 @@ AEEResult htp_iface_stop(remote_handle64 handle) {
         ctx->ddr_spad_size = 0;
     }
 
-    // Free the unified block (ctx is at offset_ctx, which is 0, so ctx points to the block base)
     free(ctx);
     h->ctx = NULL;
 
