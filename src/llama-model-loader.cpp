@@ -524,7 +524,6 @@ llama_model_loader::llama_model_loader(
         std::vector<std::string> & splits,
         FILE * file,
         llama_load_mode load_mode,
-        llama_load_modifier load_modifier,
         bool check_tensors,
         bool no_alloc,
         const llama_model_kv_override * param_overrides_p,
@@ -543,7 +542,7 @@ llama_model_loader::llama_model_loader(
 
     tensor_buft_overrides = param_tensor_buft_overrides_p;
 
-    this->use_mmap      = load_mode == LLAMA_LOAD_MODE_MMAP || load_modifier == LLAMA_LOAD_MODIFIER_MLOCK;
+    this->use_mmap      = load_mode == LLAMA_LOAD_MODE_MMAP;
     this->use_direct_io = load_mode == LLAMA_LOAD_MODE_DIRECT_IO;
 
     if (!fname.empty()) {

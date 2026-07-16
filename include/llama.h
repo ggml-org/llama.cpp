@@ -205,20 +205,12 @@ extern "C" {
     enum llama_load_mode {
         LLAMA_LOAD_MODE_NONE      = 0, // no special loading mode
         LLAMA_LOAD_MODE_MMAP      = 1, // memory map the model
-        LLAMA_LOAD_MODE_DIRECT_IO = 2, // use direct I/O if available
+        LLAMA_LOAD_MODE_MLOCK     = 2, // mmap + force system to keep model in RAM rather than swapping or compressing
+        LLAMA_LOAD_MODE_DIRECT_IO = 3, // use direct I/O if available
     };
 
     LLAMA_API const char * llama_load_mode_name(enum llama_load_mode load_mode);
     LLAMA_API enum llama_load_mode llama_load_mode_from_str(const char * str);
-
-    enum llama_load_modifier {
-        LLAMA_LOAD_MODIFIER_NONE  = 0,      // no modifier
-        LLAMA_LOAD_MODIFIER_MLOCK = 1u << 0, // force system to keep model in RAM rather than swapping or compressing
-    };
-
-    // uint32_t because llama_load_modifier is a bitflag and we want to return all active modifiers as a string
-    LLAMA_API const char * llama_load_modifier_name(uint32_t load_modifier);
-    LLAMA_API enum llama_load_modifier llama_load_modifier_from_str(const char * str);
 
     enum llama_context_type {
         LLAMA_CONTEXT_TYPE_DEFAULT = 0,
@@ -319,9 +311,7 @@ extern "C" {
 
         int32_t n_gpu_layers; // number of layers to store in VRAM, a negative value means all layers
         enum llama_split_mode split_mode; // how to split the model across multiple GPUs
-
-        enum llama_load_mode     load_mode;     // how to load the model
-        enum llama_load_modifier load_modifier; // model loading modifier
+        enum llama_load_mode  load_mode;  // how to load the model
 
         // the GPU that is used for the entire model when split_mode is LLAMA_SPLIT_MODE_NONE
         int32_t main_gpu;

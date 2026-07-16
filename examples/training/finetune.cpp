@@ -29,7 +29,6 @@ int main(int argc, char ** argv) {
     if (params.load_mode != LLAMA_LOAD_MODE_NONE) {
         LOG_INF("%s: forcing load_mode = none to enable writable pointers to the weights\n", __func__);
         params.load_mode = LLAMA_LOAD_MODE_NONE;
-        // note: maybe disable all load_modifiers?
     }
     if (params.cache_type_k != GGML_TYPE_F32) {
         LOG_INF("%s: force changing k cache type to f32 due to a lack of f16 support for OUT_PROD\n", __func__);

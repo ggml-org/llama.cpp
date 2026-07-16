@@ -341,7 +341,6 @@ struct cmd_params {
     std::vector<int>                 n_cpu_moe;
     std::vector<llama_split_mode>    split_mode;
     std::vector<llama_load_mode>     load_mode;
-    std::vector<llama_load_modifier> load_modifier;
     std::vector<int>                 main_gpu;
     std::vector<bool>                no_kv_offload;
     std::vector<llama_flash_attn_type> flash_attn;
@@ -386,7 +385,6 @@ static const cmd_params cmd_params_defaults = {
     /* n_cpu_moe            */ { 0 },
     /* split_mode           */ { LLAMA_SPLIT_MODE_LAYER },
     /* load_mode            */ { LLAMA_LOAD_MODE_MMAP },
-    /* load_modifier        */ { LLAMA_LOAD_MODIFIER_NONE },
     /* main_gpu             */ { 0 },
     /* no_kv_offload        */ { false },
     /* flash_attn           */ { LLAMA_FLASH_ATTN_TYPE_AUTO },
@@ -461,7 +459,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -nkvo, --no-kv-offload <0|1>                (default: %s)\n", join(cmd_params_defaults.no_kv_offload, ",").c_str());
     printf("  -fa, --flash-attn <on|off|auto>             (default: %s)\n", join(transform_to_str(cmd_params_defaults.flash_attn, llama_flash_attn_type_name), ",").c_str());
     printf("  -dev, --device <dev0/dev1/...>              (default: auto)\n");
-    printf("  -lm, --load-mode <none|mmap|dio>            (default: %s)\n", join(transform_to_str(cmd_params_defaults.load_mode, llama_load_mode_name), ",").c_str());
+    printf("  -lm, --load-mode <none|mmap|mlock|dio>      (default: %s)\n", join(transform_to_str(cmd_params_defaults.load_mode, llama_load_mode_name), ",").c_str());
     printf("  -mmp, --mmap <0|1>                          (DEPRECATED IN FAVOUR OF --load-mode)\n");
     printf("  -dio, --direct-io <0|1>                     (DEPRECATED IN FAVOUR OF --load-mode)\n");
     printf("  -embd, --embeddings <0|1>                   (default: %s)\n", join(cmd_params_defaults.embeddings, ",").c_str());
@@ -778,30 +776,27 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto p = string_split<std::string>(argv[i], split_delim);
 
+                std::vector<llama_load_mode> modes;
                 for (const auto & m : p) {
-                    try {
-                        const std::vector<std::string> parts = string_split<std::string>(m, '+');
-                        params.load_mode.push_back(llama_load_mode_from_str(parts[0].c_str()));
-
-                        llama_load_modifier modifier = LLAMA_LOAD_MODIFIER_NONE;
-                        for (size_t j = 1; j < parts.size(); ++j) {
-                            modifier = (llama_load_modifier)(modifier | llama_load_modifier_from_str(parts[j].c_str()));
-                        }
-
-                        // prevents -lm none+mlock or similar combinations that don't make sense
-                        if (params.load_mode.back() == LLAMA_LOAD_MODE_NONE) {
-                            modifier = LLAMA_LOAD_MODIFIER_NONE;
-                        }
-
-                        params.load_modifier.push_back(modifier);
-                    } catch (const std::invalid_argument &) {
+                    llama_load_mode mode;
+                    if (m == "none") {
+                        mode = LLAMA_LOAD_MODE_NONE;
+                    } else if (m == "mmap") {
+                        mode = LLAMA_LOAD_MODE_MMAP;
+                    } else if (m == "mlock") {
+                        mode = LLAMA_LOAD_MODE_MLOCK;
+                    } else if (m == "dio") {
+                        mode = LLAMA_LOAD_MODE_DIRECT_IO;
+                    } else {
                         invalid_param = true;
                         break;
                     }
+                    modes.push_back(mode);
                 }
                 if (invalid_param) {
                     break;
                 }
+                params.load_mode.insert(params.load_mode.end(), modes.begin(), modes.end());
             } else if (arg == "-mg" || arg == "--main-gpu") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -866,22 +861,16 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 auto p = string_split<bool>(argv[i], split_delim);
 
                 std::vector<llama_load_mode> modes;
-                std::vector<llama_load_modifier> modifiers;
                 for (const auto & m : p) {
                     llama_load_mode mode;
-                    llama_load_modifier modifier;
                     if (m) {
-                        mode     = LLAMA_LOAD_MODE_MMAP;
-                        modifier = LLAMA_LOAD_MODIFIER_NONE;
+                        mode = LLAMA_LOAD_MODE_MMAP;
                     } else {
-                        mode     = LLAMA_LOAD_MODE_NONE;
-                        modifier = LLAMA_LOAD_MODIFIER_NONE;
+                        mode = LLAMA_LOAD_MODE_NONE;
                     }
                     modes.push_back(mode);
-                    modifiers.push_back(modifier);
                 }
                 params.load_mode.insert(params.load_mode.end(), modes.begin(), modes.end());
-                params.load_modifier.insert(params.load_modifier.end(), modifiers.begin(), modifiers.end());
             } else if (arg == "-dio" || arg == "--direct-io") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -891,22 +880,16 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 auto p = string_split<bool>(argv[i], split_delim);
 
                 std::vector<llama_load_mode> modes;
-                std::vector<llama_load_modifier> modifiers;
                 for (const auto & m : p) {
                     llama_load_mode mode;
-                    llama_load_modifier modifier;
                     if (m) {
-                        mode     = LLAMA_LOAD_MODE_DIRECT_IO;
-                        modifier = LLAMA_LOAD_MODIFIER_NONE;
+                        mode = LLAMA_LOAD_MODE_DIRECT_IO;
                     } else {
-                        mode     = LLAMA_LOAD_MODE_NONE;
-                        modifier = LLAMA_LOAD_MODIFIER_NONE;
+                        mode = LLAMA_LOAD_MODE_NONE;
                     }
                     modes.push_back(mode);
-                    modifiers.push_back(modifier);
                 }
                 params.load_mode.insert(params.load_mode.end(), modes.begin(), modes.end());
-                params.load_modifier.insert(params.load_modifier.end(), modifiers.begin(), modifiers.end());
             } else if (arg == "-embd" || arg == "--embeddings") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1165,9 +1148,6 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.load_mode.empty()) {
         params.load_mode = cmd_params_defaults.load_mode;
     }
-    if (params.load_modifier.empty()) {
-        params.load_modifier = cmd_params_defaults.load_modifier;
-    }
     if (params.main_gpu.empty()) {
         params.main_gpu = cmd_params_defaults.main_gpu;
     }
@@ -1218,34 +1198,33 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
 }
 
 struct cmd_params_instance {
-    std::string         model;
-    int                 n_prompt;
-    int                 n_gen;
-    int                 n_depth;
-    int                 n_batch;
-    int                 n_ubatch;
-    ggml_type           type_k;
-    ggml_type           type_v;
-    int                 n_threads;
-    std::string         cpu_mask;
-    bool                cpu_strict;
-    int                 poll;
-    int                 n_gpu_layers;
-    int                 n_cpu_moe;
-    llama_split_mode    split_mode;
-    llama_load_mode     load_mode;
-    llama_load_modifier load_modifier;
-    int                 main_gpu;
-    bool                no_kv_offload;
+    std::string        model;
+    int                n_prompt;
+    int                n_gen;
+    int                n_depth;
+    int                n_batch;
+    int                n_ubatch;
+    ggml_type          type_k;
+    ggml_type          type_v;
+    int                n_threads;
+    std::string        cpu_mask;
+    bool               cpu_strict;
+    int                poll;
+    int                n_gpu_layers;
+    int                n_cpu_moe;
+    llama_split_mode   split_mode;
+    llama_load_mode    load_mode;
+    int                main_gpu;
+    bool               no_kv_offload;
     llama_flash_attn_type flash_attn;
     std::vector<ggml_backend_dev_t> devices;
-    std::vector<float>  tensor_split;
+    std::vector<float> tensor_split;
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
-    bool                embeddings;
-    bool                no_op_offload;
-    bool                no_host;
-    size_t              fit_target;
-    uint32_t            fit_min_ctx;
+    bool               embeddings;
+    bool               no_op_offload;
+    bool               no_host;
+    size_t             fit_target;
+    uint32_t           fit_min_ctx;
 
     llama_model_params to_llama_mparams() const {
         llama_model_params mparams = llama_model_default_params();
@@ -1256,7 +1235,6 @@ struct cmd_params_instance {
         }
         mparams.split_mode    = split_mode;
         mparams.load_mode     = load_mode;
-        mparams.load_modifier = load_modifier;
         mparams.main_gpu      = main_gpu;
         mparams.tensor_split  = tensor_split.data();
         mparams.no_host       = no_host;
@@ -1304,8 +1282,7 @@ struct cmd_params_instance {
         return model == other.model && n_gpu_layers == other.n_gpu_layers && n_cpu_moe == other.n_cpu_moe &&
                split_mode == other.split_mode &&
                main_gpu == other.main_gpu && tensor_split == other.tensor_split &&
-               load_mode == other.load_mode && load_modifier == other.load_modifier &&
-               devices == other.devices && no_host == other.no_host &&
+               load_mode == other.load_mode && devices == other.devices && no_host == other.no_host &&
                vec_tensor_buft_override_equal(tensor_buft_overrides, other.tensor_buft_overrides);
     }
 
@@ -1339,7 +1316,6 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & ncmoe : params.n_cpu_moe)
     for (const auto & sm : params.split_mode)
     for (const auto & lm : params.load_mode)
-    for (const auto & lmod : params.load_modifier)
     for (const auto & mg : params.main_gpu)
     for (const auto & devs : params.devices)
     for (const auto & ts : params.tensor_split)
@@ -1379,7 +1355,6 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .n_cpu_moe             = */ ncmoe,
                 /* .split_mode            = */ sm,
                 /* .load_mode             = */ lm,
-                /* .load_modifier         = */ lmod,
                 /* .main_gpu              = */ mg,
                 /* .no_kv_offload         = */ nkvo,
                 /* .flash_attn            = */ fa,
@@ -1416,7 +1391,6 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .n_cpu_moe             = */ ncmoe,
                 /* .split_mode            = */ sm,
                 /* .load_mode             = */ lm,
-                /* .load_modifier         = */ lmod,
                 /* .main_gpu              = */ mg,
                 /* .no_kv_offload         = */ nkvo,
                 /* .flash_attn            = */ fa,
@@ -1453,7 +1427,6 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .n_cpu_moe             = */ ncmoe,
                 /* .split_mode            = */ sm,
                 /* .load_mode             = */ lm,
-                /* .load_modifier         = */ lmod,
                 /* .main_gpu              = */ mg,
                 /* .no_kv_offload         = */ nkvo,
                 /* .flash_attn            = */ fa,
@@ -1495,7 +1468,6 @@ struct test {
     int                      n_cpu_moe;
     llama_split_mode         split_mode;
     llama_load_mode          load_mode;
-    llama_load_modifier      load_modifier;
     int                      main_gpu;
     bool                     no_kv_offload;
     llama_flash_attn_type    flash_attn;
@@ -1535,7 +1507,6 @@ struct test {
         n_cpu_moe      = inst.n_cpu_moe;
         split_mode     = inst.split_mode;
         load_mode      = inst.load_mode;
-        load_modifier  = inst.load_modifier;
         main_gpu       = inst.main_gpu;
         no_kv_offload  = inst.no_kv_offload;
         flash_attn     = inst.flash_attn;
@@ -1697,9 +1668,7 @@ struct test {
                                             devices_to_string(devices),
                                             tensor_split_str,
                                             tensor_buft_overrides_str,
-                                            std::strcmp(llama_load_modifier_name(load_modifier), "none") == 0
-                                                ? llama_load_mode_name(load_mode)
-                                                : std::string(llama_load_mode_name(load_mode)) + "+" + llama_load_modifier_name(load_modifier),
+                                            llama_load_mode_name(load_mode),
                                             std::to_string(embeddings),
                                             std::to_string(no_op_offload),
                                             std::to_string(no_host),
@@ -2017,8 +1986,7 @@ struct markdown_printer : public printer {
         if (params.tensor_buft_overrides.size() > 1 || !vec_vec_tensor_buft_override_equal(params.tensor_buft_overrides, cmd_params_defaults.tensor_buft_overrides)) {
             fields.emplace_back("tensor_buft_overrides");
         }
-        if (params.load_mode.size() > 1 || params.load_mode != cmd_params_defaults.load_mode
-            || params.load_modifier.size() > 1 || params.load_modifier != cmd_params_defaults.load_modifier) {
+        if (params.load_mode.size() > 1 || params.load_mode != cmd_params_defaults.load_mode) {
             fields.emplace_back("load_mode");
         }
         if (params.embeddings.size() > 1 || params.embeddings != cmd_params_defaults.embeddings) {

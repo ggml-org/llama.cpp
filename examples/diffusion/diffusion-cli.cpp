@@ -118,7 +118,6 @@ int main(int argc, char ** argv) {
     model_params.n_gpu_layers       = params.n_gpu_layers;
     model_params.devices            = params.devices.data();
     model_params.load_mode          = params.load_mode;
-    model_params.load_modifier      = params.load_modifier;
     model_params.check_tensors      = params.check_tensors;
 
     llama_model * model = llama_model_load_from_file(params.model.path.c_str(), model_params);

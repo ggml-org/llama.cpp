@@ -139,14 +139,13 @@ static void test(void) {
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
     assert(params.load_mode == LLAMA_LOAD_MODE_MMAP);
 
+    argv = {"binary_name", "-lm", "mlock"};
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+    assert(params.load_mode == LLAMA_LOAD_MODE_MLOCK);
+
     argv = {"binary_name", "-lm", "dio"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
     assert(params.load_mode == LLAMA_LOAD_MODE_DIRECT_IO);
-
-    argv = {"binary_name", "-lm", "mmap+mlock"};
-    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
-    assert(params.load_mode == LLAMA_LOAD_MODE_MMAP);
-    assert(params.load_modifier == LLAMA_LOAD_MODIFIER_MLOCK);
 
     // multi-value args (CSV)
     argv = {"binary_name", "--lora", "file1.gguf,\"file2,2.gguf\",\"file3\"\"3\"\".gguf\",file4\".gguf"};
@@ -183,16 +182,15 @@ static void test(void) {
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
     assert(params.load_mode == LLAMA_LOAD_MODE_MMAP);
 
+    setenv("LLAMA_ARG_LOAD_MODE", "mlock", true);
+    argv = {"binary_name"};
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+    assert(params.load_mode == LLAMA_LOAD_MODE_MLOCK);
+
     setenv("LLAMA_ARG_LOAD_MODE", "dio", true);
     argv = {"binary_name"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
     assert(params.load_mode == LLAMA_LOAD_MODE_DIRECT_IO);
-
-    setenv("LLAMA_ARG_LOAD_MODE", "mmap+mlock", true);
-    argv = {"binary_name"};
-    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
-    assert(params.load_mode == LLAMA_LOAD_MODE_MMAP);
-    assert(params.load_modifier == LLAMA_LOAD_MODIFIER_MLOCK);
 
     printf("test-arg-parser: test negated environment variables\n\n");
 

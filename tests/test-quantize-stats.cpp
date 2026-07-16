@@ -312,9 +312,7 @@ int main(int argc, char ** argv) {
 
     {
         auto mparams = llama_model_default_params();
-        if (mparams.load_modifier == LLAMA_LOAD_MODIFIER_MLOCK) {
-            mparams.load_modifier = LLAMA_LOAD_MODIFIER_NONE;
-        }
+        mparams.load_mode = LLAMA_LOAD_MODE_NONE;
 
         model = llama_model_load_from_file(params.model.c_str(), mparams);
 

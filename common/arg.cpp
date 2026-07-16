@@ -2499,8 +2499,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "DEPRECATED in favor of `--load-mode`: mmap + force system to keep model in RAM rather than swapping or compressing",
         [](common_params & params) {
             LOG_WRN("DEPRECATED: --mlock is deprecated. use --load-mode mlock instead\n");
-            params.load_mode     = LLAMA_LOAD_MODE_MMAP;
-            params.load_modifier = LLAMA_LOAD_MODIFIER_MLOCK;
+            params.load_mode = LLAMA_LOAD_MODE_MLOCK;
         }
     ).set_env("LLAMA_ARG_MLOCK"));
     add_opt(common_arg(
@@ -2511,10 +2510,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             LOG_WRN("DEPRECATED: --mmap and --no-mmap are deprecated. use --load-mode mmap instead\n");
             if (value) {
                 params.load_mode = LLAMA_LOAD_MODE_MMAP;
-                params.load_modifier = LLAMA_LOAD_MODIFIER_NONE;
             } else {
                 params.load_mode = LLAMA_LOAD_MODE_NONE;
-                params.load_modifier = LLAMA_LOAD_MODIFIER_NONE;
             }
         }
     ).set_env("LLAMA_ARG_MMAP"));
@@ -2526,10 +2523,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             LOG_WRN("DEPRECATED: --direct-io and --no-direct-io are deprecated. use --load-mode dio instead\n");
             if (value) {
                 params.load_mode = LLAMA_LOAD_MODE_DIRECT_IO;
-                params.load_modifier = LLAMA_LOAD_MODIFIER_NONE;
             } else {
                 params.load_mode = LLAMA_LOAD_MODE_NONE;
-                params.load_modifier = LLAMA_LOAD_MODIFIER_NONE;
             }
         }
     ).set_env("LLAMA_ARG_DIO"));
@@ -2538,21 +2533,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "model loading mode (default: mmap)\n"
         "- none: no special loading mode\n"
         "- mmap: memory-map model (if mmap disabled, slower load but may reduce pageouts if not using mlock)\n"
-        "- mmap+mlock: mmap + force system to keep model in RAM rather than swapping or compressing\n"
+        "- mlock: mmap + force system to keep model in RAM rather than swapping or compressing\n"
         "- dio: use DirectIO if available\n",
         [](common_params & params, const std::string & value) {
-            // split the modifiers from the load mode.
-            // for example, "mmap+mlock", mmap would be the load mode and mlock would be the modifier.
-            // in the future, more modifiers may be added and users can chain the modifiers using the `+` symbol.
-            const std::vector<std::string> parts = string_split<std::string>(value, '+');
-
-            params.load_mode = llama_load_mode_from_str(parts[0].c_str());
-            for (size_t i = 1; i < parts.size(); ++i) {
-                params.load_modifier = (llama_load_modifier)(params.load_modifier | llama_load_modifier_from_str(parts[i].c_str()));
-            }
-
-            // prevents -lm none+mlock or similar combinations that don't make sense
-            if (params.load_mode == LLAMA_LOAD_MODE_NONE) { params.load_modifier = LLAMA_LOAD_MODIFIER_NONE; }
+            /**/ if (value == "none")  { params.load_mode = LLAMA_LOAD_MODE_NONE;      }
+            else if (value == "mmap")  { params.load_mode = LLAMA_LOAD_MODE_MMAP;      }
+            else if (value == "mlock") { params.load_mode = LLAMA_LOAD_MODE_MLOCK;     }
+            else if (value == "dio")   { params.load_mode = LLAMA_LOAD_MODE_DIRECT_IO; }
+            else { throw std::invalid_argument("invalid value"); }
         }
     ).set_env("LLAMA_ARG_LOAD_MODE"));
     add_opt(common_arg(
