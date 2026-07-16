@@ -4037,7 +4037,7 @@ struct test_ssm_scan : public test_case {
         if (xbc_overlap) {
             ggml_tensor * xbc = ggml_new_tensor_4d(ctx, type, d_state, n_head, n_seq_tokens, 2 * n_seqs);
             x = ggml_view_4d(ctx, xbc, head_dim, n_head, n_seq_tokens, n_seqs,
-                             xbc->nb[1], xbc->nb[2], xbc->nb[3], xbc->nb[3]);
+                             head_dim * xbc->nb[0], xbc->nb[2], xbc->nb[3], xbc->nb[3]);
             B = ggml_view_4d(ctx, xbc, d_state, n_group, n_seq_tokens, n_seqs,
                              xbc->nb[1], xbc->nb[2], xbc->nb[3], 0);
             C = ggml_view_4d(ctx, xbc, d_state, n_group, n_seq_tokens, n_seqs,
@@ -8808,16 +8808,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 80, 128, 1, 512, 1)); // Nemotron-9B SSD multi-chunk (2 aligned chunks)
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 80, 8, 300, 2)); // Mamba-2 SSD multi-chunk (partial 2nd chunk, 2 seqs)
 
-    // sweep n_seq_tokens across the SSD dispatch threshold (64) and n_group across 1/2/8
-    // (repeat_interleave group indexing)
-    for (int64_t n_seq_tokens : {64, 128, 512, 2048}) {
-        test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 48, 1, n_seq_tokens, 4)); // Granite-style, n_group=1
-        test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 48, 2, n_seq_tokens, 4)); // n_group=2
-        test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 48, 8, n_seq_tokens, 4)); // Nemotron-style, n_group=8
+    // sequential-only, MMA-only, and MMA-prefix plus sequential-tail boundaries
+    for (int64_t n_seq_tokens : {63, 64, 65, 127, 128, 129}) {
+        for (int64_t n_group : {1, 2, 8}) {
+            test_cases.emplace_back(new test_ssm_scan(
+                GGML_TYPE_F32, 128, 64, 8, n_group, n_seq_tokens, 4));
+        }
     }
-    // non-multiple tails must stay on the masked scalar SSD fallback
-    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 48, 1,  65, 2));
-    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 48, 8, 100, 2));
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 8, 2,  65, 2, true));
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 8, 8, 129, 2, true));
 
     test_cases.emplace_back(new test_rwkv_wkv6(GGML_TYPE_F32, 32, 64, 1, 1));
     test_cases.emplace_back(new test_rwkv_wkv6(GGML_TYPE_F32, 32, 64, 32, 1));

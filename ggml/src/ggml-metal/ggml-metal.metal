@@ -2382,13 +2382,17 @@ kernel void kernel_ssm_scan_f32(
     const int32_t nh  = args.n_head;
     const int32_t ng  = args.n_group;
     const int32_t n_t = args.n_seq_tokens;
+    const int32_t n_t_total = args.n_seq_tokens_total;
+    const int32_t t_off = args.token_offset;
 
     const int32_t s_off = args.s_off;
 
     device const int32_t * ids = (device const int32_t *) src6;
 
-    device const float * s0_buff = (device const float *) ((device const char *) src0 + ir*args.nb02 + ids[i3]*args.nb03);
     device       float * s_buff  = (device       float *) ((device       char *) dst  + ir*args.nb02 +      i3*args.nb03 + s_off);
+    device const float * s0_buff = args.state_from_dst ?
+        s_buff :
+        (device const float *) ((device const char *) src0 + ir*args.nb02 + ids[i3]*args.nb03);
 
     const int32_t i = i0 + i1*nc;
     const int32_t g = ir / (nh / ng); // repeat_interleave
@@ -2400,12 +2404,12 @@ kernel void kernel_ssm_scan_f32(
 
     const float A0 = A[i0%args.ne30];
 
-    device const float * x  = (device const float *)((device const char *) src1 + i1*args.nb10  + ir*args.nb11 + i3*args.nb13); // {dim, nh, nt, ns}
-    device const float * dt = (device const float *)((device const char *) src2 + ir*args.nb20  + i3*args.nb22);                // {nh, nt, ns}
-    device const float * B  = (device const float *)((device const char *) src4 +  g*args.nb41  + i3*args.nb43);                // {d_state, ng, nt, ns}
-    device const float * C  = (device const float *)((device const char *) src5 +  g*args.nb51  + i3*args.nb53);                // {d_state, ng, nt, ns}
+    device const float * x  = (device const float *)((device const char *) src1 + i1*args.nb10 + ir*args.nb11 + t_off*args.nb12 + i3*args.nb13); // {dim, nh, nt, ns}
+    device const float * dt = (device const float *)((device const char *) src2 + ir*args.nb20 + t_off*args.nb21 + i3*args.nb22);                 // {nh, nt, ns}
+    device const float * B  = (device const float *)((device const char *) src4 + g*args.nb41 + t_off*args.nb42 + i3*args.nb43);                  // {d_state, ng, nt, ns}
+    device const float * C  = (device const float *)((device const char *) src5 + g*args.nb51 + t_off*args.nb52 + i3*args.nb53);                  // {d_state, ng, nt, ns}
 
-    device float * y = dst + (i1 + ir*(nr) + i3*(n_t*nh*nr)); // {dim, nh, nt, ns}
+    device float * y = dst + (i1 + ir*nr + t_off*nh*nr + i3*(n_t_total*nh*nr)); // {dim, nh, nt, ns}
 
     for (int i2 = 0; i2 < n_t; i2 += sgptg) {
         threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -2462,177 +2466,6 @@ kernel void kernel_ssm_scan_f32(
     s_buff[i] = s;
 }
 
-// dispatch target for n_seq_tokens >= CHUNK, selected in ggml_metal_op_ssm_scan.
-//
-// Implements the chunked SSD (structured state-space duality) reformulation of the Mamba-2
-// recurrence, SPEC.md §6 / §8.1 ("v1", correctness-first, scalar, single-dispatch):
-//
-//   a[t]      = dt[t]*A                                  (dt after softplus; A < 0, scalar/head)
-//   acs[t]    = cumsum_{tau<=t within chunk} a[tau]       (segsum cumsum, reset to 0 each chunk)
-//   Lmat[i,j] = exp(acs[i] - acs[j])  for j <= i           (segsum decay, computed on the fly,
-//                                                            never materialized as a {CS,CS} tile)
-//   y_diag[i] = sum_{j<=i} Lmat[i,j] * (C[i]*B[j]) * (dt[j]*x[j])     (intra-chunk)
-//   S_c       = sum_j exp(acs[last]-acs[j]) * dt[j]*B[j]*x[j]         (this chunk's state contrib)
-//   y[i]      = y_diag[i] + exp(acs[i]) * (C[i] * S_prev)             (inter-chunk correction)
-//   S_prev'   = exp(acs[last]) * S_prev + S_c                        (sequential state passing)
-//
-// Threadgroup/thread layout is unchanged from kernel_ssm_scan_f32 (one threadgroup per
-// (channel, head, seq), d_state threads per threadgroup) -- no host-side dispatch changes needed
-// beyond pipeline selection. Each thread owns one d_state index (i0) of the state vector and
-// caches its own B/C column for the chunk in registers; dt/x (per head/token, not per d_state)
-// are staged once per chunk in threadgroup memory to avoid n_head-fold redundant global loads.
-// n_group > 1 uses index arithmetic (g = head / (n_head/n_group)), same as the sequential kernel
-// -- no repeat/repeat_interleave op, so it is correct by construction for grouped models.
-kernel void kernel_ssm_scan_ssd_f32(
-        constant ggml_metal_kargs_ssm_scan & args,
-        device const void * src0,
-        device const void * src1,
-        device const void * src2,
-        device const void * src3,
-        device const void * src4,
-        device const void * src5,
-        device const void * src6,
-        device      float * dst,
-        threadgroup float * shared [[threadgroup(0)]],
-        uint3   tgpig[[threadgroup_position_in_grid]],
-        ushort3 tpitg[[thread_position_in_threadgroup]],
-        ushort  sgitg[[simdgroup_index_in_threadgroup]],
-        ushort  tiisg[[thread_index_in_simdgroup]],
-        ushort  sgptg[[simdgroups_per_threadgroup]],
-        uint3    tgpg[[threadgroups_per_grid]]) {
-    constexpr short CS = GGML_METAL_SSM_SCAN_SSD_CS;
-
-    // Shared memory layout (sized by ggml_metal_library_get_pipeline_ssm_scan_ssd):
-    // [0..CS-1]:          shared_acs -- a[t] on write, converted in-place to cumsum acs[t]
-    // [CS..2*CS-1]:       shared_dtx -- dt_softplus[t] * x[t, channel] for this threadgroup's channel
-    // [2*CS..2*CS+sgptg-1]: shared_sums -- cross-simdgroup partial-sum scratch for one output token
-    threadgroup float * shared_acs  = shared;
-    threadgroup float * shared_dtx  = shared + CS;
-    threadgroup float * shared_sums = shared + 2*CS;
-
-    const int32_t i0 = tpitg.x; // this thread's d_state index
-    const int32_t i1 = tgpig.x; // current channel (head_dim index)
-    const int32_t ir = tgpig.y; // current head
-    const int32_t i3 = tgpig.z; // current seq
-
-    const int32_t nc  = args.d_state;
-    const int32_t nr  = args.d_inner;
-    const int32_t nh  = args.n_head;
-    const int32_t ng  = args.n_group;
-    const int32_t n_t = args.n_seq_tokens;
-
-    const int32_t s_off = args.s_off;
-
-    device const int32_t * ids = (device const int32_t *) src6;
-
-    device const float * s0_buff = (device const float *) ((device const char *) src0 + ir*args.nb02 + ids[i3]*args.nb03);
-    device       float * s_buff  = (device       float *) ((device       char *) dst  + ir*args.nb02 +      i3*args.nb03 + s_off);
-
-    const int32_t i = i0 + i1*nc;
-    const int32_t g = ir / (nh / ng); // repeat_interleave
-
-    // running inter-chunk state for this (channel, d_state) pair; updated once per chunk
-    float S_prev = s0_buff[i];
-
-    device const float * A = (device const float *) ((device const char *) src3 + ir*args.nb31); // {ne30, nh}
-
-    const float A0 = A[i0%args.ne30];
-
-    device const float * x  = (device const float *)((device const char *) src1 + i1*args.nb10  + ir*args.nb11 + i3*args.nb13); // {dim, nh, nt, ns}
-    device const float * dt = (device const float *)((device const char *) src2 + ir*args.nb20  + i3*args.nb22);                // {nh, nt, ns}
-    device const float * B  = (device const float *)((device const char *) src4 +  g*args.nb41  + i3*args.nb43);                // {d_state, ng, nt, ns}
-    device const float * C  = (device const float *)((device const char *) src5 +  g*args.nb51  + i3*args.nb53);                // {d_state, ng, nt, ns}
-
-    device float * y = dst + (i1 + ir*(nr) + i3*(n_t*nh*nr)); // {dim, nh, nt, ns}
-
-    float B_local[CS];
-    float C_local[CS];
-
-    for (int32_t t0 = 0; t0 < n_t; t0 += CS) {
-        const int32_t len = min((int32_t) CS, n_t - t0);
-
-        // Phase A: stage per-token a[t] (-> cumsum) and dt_softplus[t]*x[t] in threadgroup memory.
-        // dt/x depend only on (head, token, channel), not on this thread's d_state index, so the
-        // work is striped across threads (each token computed by exactly one thread) instead of
-        // duplicated by all of them.
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-        for (int32_t t = i0; t < len; t += nc) {
-            const float dt0  = dt[t * (int32_t) args.ns21];
-            const float dtsp = dt0 <= 20.0f ? log(1.0f + exp(dt0)) : dt0;
-
-            shared_acs[t] = dtsp * A0; // a[t], turned into a cumsum below
-            shared_dtx[t] = x[t * (int32_t) args.ns12] * dtsp;
-        }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-        if (i0 == 0) {
-            float acc = 0.0f;
-            for (int32_t t = 0; t < len; ++t) {
-                acc += shared_acs[t];
-                shared_acs[t] = acc; // acs[t], monotonically non-increasing (A < 0, dt > 0)
-            }
-        }
-        threadgroup_barrier(mem_flags::mem_threadgroup);
-
-        // Phase B: cache this thread's (channel, d_state) column of B/C for the whole chunk, so
-        // the intra-chunk double sum below only touches registers, not device memory.
-        for (int32_t t = 0; t < len; ++t) {
-            B_local[t] = B[i0];
-            C_local[t] = C[i0];
-
-            B += args.ns42;
-            C += args.ns52;
-        }
-
-        // Phase C: intra-chunk output (segsum decay applied via direct acs[i]-acs[j] differences,
-        // never via a ratio of exponentials -- always <= 0 since acs is non-increasing, so this
-        // is stable for arbitrarily long chunks) plus the inter-chunk correction from S_prev.
-        float S_c = 0.0f; // == the i == len-1 iteration's intra-chunk partial sum, saved below
-
-        for (int32_t i2 = 0; i2 < len; ++i2) {
-            const float acs_i = shared_acs[i2];
-
-            float partial = 0.0f;
-            for (int32_t j = 0; j <= i2; ++j) {
-                partial += exp(acs_i - shared_acs[j]) * B_local[j] * shared_dtx[j];
-            }
-
-            if (i2 == len - 1) {
-                S_c = partial;
-            }
-
-            const float combined = partial + exp(acs_i) * S_prev;
-            const float term     = combined * C_local[i2];
-
-            const float part = simd_sum(term);
-            if (tiisg == 0) {
-                shared_sums[sgitg] = part;
-            }
-
-            threadgroup_barrier(mem_flags::mem_threadgroup);
-
-            if (i0 == 0) {
-                float total = 0.0f;
-                for (int32_t k = 0; k < sgptg; ++k) {
-                    total += shared_sums[k];
-                }
-                y[0] = total;
-            }
-
-            y += nh*nr;
-
-            threadgroup_barrier(mem_flags::mem_threadgroup);
-        }
-
-        // Phase D: sequential state passing across chunks (SPEC.md §6): S' = exp(acs[last])*S + S_c
-        S_prev = exp(shared_acs[len - 1]) * S_prev + S_c;
-
-        x  += len * args.ns12;
-        dt += len * args.ns21;
-    }
-
-    s_buff[i] = S_prev;
-}
-
 // MMA fast path for the common Mamba-2 layout (head_dim=64). One threadgroup owns a complete
 // (head, sequence) pair so the channel-independent C*B^T matrix is computed once per chunk and
 // reused for all eight 8-channel output tiles.
@@ -2676,6 +2509,7 @@ kernel void kernel_ssm_scan_ssd_mma_f32(
     const int32_t nh  = args.n_head;
     const int32_t ng  = args.n_group;
     const int32_t n_t = args.n_seq_tokens;
+    const int32_t n_t_total = args.n_seq_tokens_total;
     const int32_t g   = ir / (nh / ng);
 
     device const int32_t * ids = (device const int32_t *) src6;
@@ -2689,7 +2523,7 @@ kernel void kernel_ssm_scan_ssd_mma_f32(
     device const float * B  = (device const float *) ((device const char *) src4 +  g*args.nb41 + i3*args.nb43);
     device const float * C  = (device const float *) ((device const char *) src5 +  g*args.nb51 + i3*args.nb53);
 
-    device float * y = dst + (ir*nr + i3*(n_t*nh*nr));
+    device float * y = dst + (ir*nr + i3*(n_t_total*nh*nr));
 
     for (int32_t t0 = 0; t0 < n_t; t0 += CS) {
         for (int32_t idx = tiitg; idx < CS*HD; idx += NSG*N_SIMDWIDTH) {

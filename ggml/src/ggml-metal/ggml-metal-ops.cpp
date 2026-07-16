@@ -1718,7 +1718,10 @@ int ggml_metal_op_ssm_scan(ggml_metal_op_t ctx, int idx) {
         /*.n_head       =*/ n_head,
         /*.n_group      =*/ n_group,
         /*.n_seq_tokens =*/ n_seq_tokens,
+        /*.n_seq_tokens_total =*/ n_seq_tokens,
+        /*.token_offset =*/ 0,
         /*.n_seqs       =*/ n_seqs,
+        /*.state_from_dst =*/ false,
         /*.s_off        =*/ ggml_nelements(op->src[1]) * sizeof(float),
         /*.nb00         =*/ nb00,
         /*.nb01         =*/ nb01,
@@ -1746,45 +1749,52 @@ int ggml_metal_op_ssm_scan(ggml_metal_op_t ctx, int idx) {
         /*.nb0          =*/ nb0,
     };
 
-    // use the chunked SSD kernel for large multi-token prefill, sequential kernel otherwise
-    // ne30 != 1 means per-channel A (Mamba-1), which the SSD kernel does not support
-    constexpr int64_t CHUNK = 64;
+    constexpr int64_t CHUNK = GGML_METAL_SSM_SCAN_SSD_CS;
 
-    const bool use_ssd = ne30 == 1 && n_seq_tokens >= CHUNK;
-    const bool use_mma = use_ssd &&
+    const int64_t mma_tokens = n_seq_tokens / CHUNK * CHUNK;
+    const bool use_mma =
+        mma_tokens > 0 &&
+        ne30 == 1 &&
         props_dev->has_simdgroup_mm &&
-        d_state      % 8     == 0 &&
-        d_inner              == 64 &&
-        n_seq_tokens % CHUNK == 0;
+        d_state % 8 == 0 &&
+        d_inner == 64;
 
-    auto pipeline = use_mma ?
-        ggml_metal_library_get_pipeline_ssm_scan_ssd_mma(lib, op) :
-        use_ssd ?
-            ggml_metal_library_get_pipeline_ssm_scan_ssd(lib, op) :
-            ggml_metal_library_get_pipeline_ssm_scan(lib, op);
+    const auto dispatch = [&](ggml_metal_pipeline_with_params pipeline, int64_t nth, int64_t n_tg_x) {
+        GGML_ASSERT(nth <= ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
 
-    const int64_t nth = use_mma ? GGML_METAL_SSM_SCAN_SSD_MMA_NSG*32 : d_state;
-    GGML_ASSERT(nth <= ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
+        ggml_metal_encoder_set_pipeline(enc, pipeline);
+        ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[2]), 3);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[3]), 4);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[4]), 5);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[5]), 6);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[6]), 7);
+        ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         8);
+        ggml_metal_encoder_set_threadgroup_memory_size(enc, pipeline.smem, 0);
+        ggml_metal_encoder_dispatch_threadgroups(enc, n_tg_x, n_head, n_seqs, nth, 1, 1);
+    };
 
-    const size_t smem = pipeline.smem;
+    if (!use_mma) {
+        dispatch(ggml_metal_library_get_pipeline_ssm_scan(lib, op), d_state, d_inner);
+        return 1;
+    }
 
-    ggml_metal_encoder_set_pipeline(enc, pipeline);
-    ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[2]), 3);
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[3]), 4);
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[4]), 5);
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[5]), 6);
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[6]), 7);
-    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         8);
+    args.n_seq_tokens = mma_tokens;
+    dispatch(
+        ggml_metal_library_get_pipeline_ssm_scan_ssd_mma(lib, op),
+        GGML_METAL_SSM_SCAN_SSD_MMA_NSG*32,
+        1);
 
-    ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
+    if (mma_tokens < n_seq_tokens) {
+        ggml_metal_encoder_memory_barrier(enc);
 
-    ggml_metal_encoder_dispatch_threadgroups(
-        enc,
-        use_mma ? 1 : d_inner, n_head, n_seqs,
-        nth, 1, 1);
+        args.n_seq_tokens = n_seq_tokens - mma_tokens;
+        args.token_offset = mma_tokens;
+        args.state_from_dst = true;
+        dispatch(ggml_metal_library_get_pipeline_ssm_scan(lib, op), d_state, d_inner);
+    }
 
     return 1;
 }

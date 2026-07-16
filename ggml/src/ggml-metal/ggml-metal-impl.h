@@ -870,8 +870,7 @@ typedef struct {
     uint64_t nb2;
 } ggml_metal_kargs_ssm_conv;
 
-// chunk length for kernel_ssm_scan_ssd_f32 (SSD/chunked-scan path); shared between the kernel
-// and the host-side threadgroup-memory sizing in ggml_metal_library_get_pipeline_ssm_scan_ssd
+// chunk length for the MMA SSD path; shared between the kernel and host-side memory sizing
 #define GGML_METAL_SSM_SCAN_SSD_CS 64
 #define GGML_METAL_SSM_SCAN_SSD_MMA_NSG 4
 
@@ -881,7 +880,10 @@ typedef struct {
     int64_t  n_head;
     int64_t  n_group;
     int64_t  n_seq_tokens;
+    int64_t  n_seq_tokens_total;
+    int64_t  token_offset;
     int64_t  n_seqs;
+    bool     state_from_dst;
     uint64_t s_off;
     uint64_t nb00;
     uint64_t nb01;
