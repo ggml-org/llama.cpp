@@ -4348,80 +4348,80 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
 
                         // i=0, j=0
                         svfloat32_t q8_d = svdup_n_f32(q8_ptr[b].d[0]);
-                        svfloat32_t q4_dmin = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].dmin + 0 * 4)), svdup_f16((__fp16)0.0)));
-                        svfloat32_t dmins = svmul_f32_x(svptrue_b32(), q4_dmin, q8_d);
-                        svfloat32_t q4_d = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].d + 0 * 4)), svdup_f16((__fp16)0.0)));
-                        svfloat32_t scale = svmul_f32_x(svptrue_b32(), q4_d, q8_d);
+                        svfloat32_t q4_dmin_0 = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].dmin + 0 * 4)), svdup_f16((__fp16)0.0)));
+                        svfloat32_t dmins = svmul_f32_x(svptrue_b32(), q4_dmin_0, q8_d);
+                        svfloat32_t q4_d_0 = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].d + 0 * 4)), svdup_f16((__fp16)0.0)));
+                        svfloat32_t scale = svmul_f32_x(svptrue_b32(), q4_d_0, q8_d);
                         
                         acc_f32_00 = svmls_f32_m(svptrue_b32(), acc_f32_00, svcvt_f32_s32_x(svptrue_b32(), bias_acc_00), dmins);
                         acc_f32_00 = svmla_f32_m(svptrue_b32(), acc_f32_00, svcvt_f32_s32_x(svptrue_b32(), reorder_acc_0), scale);
 
                         //i == 0, j == 1
-                        q8_d = svdup_n_f32(q8_ptr[b].d[0]);
-                        q4_dmin = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].dmin + 1 * 4)), svdup_f16((__fp16)0.0)));
-                        dmins = svmul_f32_x(svptrue_b32(), q4_dmin, q8_d);
-                        q4_d = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].d + 1 * 4)), svdup_f16((__fp16)0.0)));
-                        scale = svmul_f32_x(svptrue_b32(), q4_d, q8_d);
+                        // q8_d = svdup_n_f32(q8_ptr[b].d[0]);
+                        svfloat32_t q4_dmin_1 = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].dmin + 1 * 4)), svdup_f16((__fp16)0.0)));
+                        dmins = svmul_f32_x(svptrue_b32(), q4_dmin_1, q8_d);
+                        svfloat32_t q4_d_1 = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].d + 1 * 4)), svdup_f16((__fp16)0.0)));
+                        scale = svmul_f32_x(svptrue_b32(), q4_d_1, q8_d);
                         
                         acc_f32_11 = svmls_f32_m(svptrue_b32(), acc_f32_11, svcvt_f32_s32_x(svptrue_b32(), bias_acc_11), dmins);
                         acc_f32_11 = svmla_f32_m(svptrue_b32(), acc_f32_11, svcvt_f32_s32_x(svptrue_b32(), reorder_acc_1), scale);
 
                         //i == 1, j == 0
                         q8_d = svdup_n_f32(q8_ptr[b].d[1]);
-                        q4_dmin = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].dmin + 0 * 4)), svdup_f16((__fp16)0.0)));
-                        dmins = svmul_f32_x(svptrue_b32(), q4_dmin, q8_d);
-                        q4_d = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].d + 0 * 4)), svdup_f16((__fp16)0.0)));
-                        scale = svmul_f32_x(svptrue_b32(), q4_d, q8_d);
+                        // q4_dmin = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].dmin + 0 * 4)), svdup_f16((__fp16)0.0)));
+                        dmins = svmul_f32_x(svptrue_b32(), q4_dmin_0, q8_d);
+                        // q4_d = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].d + 0 * 4)), svdup_f16((__fp16)0.0)));
+                        scale = svmul_f32_x(svptrue_b32(), q4_d_0, q8_d);
                         
                         acc_f32_22 = svmls_f32_m(svptrue_b32(), acc_f32_22, svcvt_f32_s32_x(svptrue_b32(), bias_acc_22), dmins);
                         acc_f32_22 = svmla_f32_m(svptrue_b32(), acc_f32_22, svcvt_f32_s32_x(svptrue_b32(), reorder_acc_2), scale);
 
                         //i == 1, j == 1
-                        q8_d = svdup_n_f32(q8_ptr[b].d[1]);
-                        q4_dmin = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].dmin + 1 * 4)), svdup_f16((__fp16)0.0)));
-                        dmins = svmul_f32_x(svptrue_b32(), q4_dmin, q8_d);
-                        q4_d = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].d + 1 * 4)), svdup_f16((__fp16)0.0)));
-                        scale = svmul_f32_x(svptrue_b32(), q4_d, q8_d);
+                        // q8_d = svdup_n_f32(q8_ptr[b].d[1]);
+                        // q4_dmin = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].dmin + 1 * 4)), svdup_f16((__fp16)0.0)));
+                        dmins = svmul_f32_x(svptrue_b32(), q4_dmin_1, q8_d);
+                        // q4_d = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].d + 1 * 4)), svdup_f16((__fp16)0.0)));
+                        scale = svmul_f32_x(svptrue_b32(), q4_d_1, q8_d);
                         
                         acc_f32_33 = svmls_f32_m(svptrue_b32(), acc_f32_33, svcvt_f32_s32_x(svptrue_b32(), bias_acc_33), dmins);
                         acc_f32_33 = svmla_f32_m(svptrue_b32(), acc_f32_33, svcvt_f32_s32_x(svptrue_b32(), reorder_acc_3), scale);
                         
                         //i == 2, j == 0
                         q8_d = svdup_n_f32(q8_ptr[b].d[2]);
-                        q4_dmin = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].dmin + 0 * 4)), svdup_f16((__fp16)0.0)));
-                        dmins = svmul_f32_x(svptrue_b32(), q4_dmin, q8_d);
-                        q4_d = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].d + 0 * 4)), svdup_f16((__fp16)0.0)));
-                        scale = svmul_f32_x(svptrue_b32(), q4_d, q8_d);
+                        // q4_dmin = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].dmin + 0 * 4)), svdup_f16((__fp16)0.0)));
+                        dmins = svmul_f32_x(svptrue_b32(), q4_dmin_0, q8_d);
+                        // q4_d = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].d + 0 * 4)), svdup_f16((__fp16)0.0)));
+                        scale = svmul_f32_x(svptrue_b32(), q4_d_0, q8_d);
                         
                         acc_f32_44 = svmls_f32_m(svptrue_b32(), acc_f32_44, svcvt_f32_s32_x(svptrue_b32(), bias_acc_44), dmins);
                         acc_f32_44 = svmla_f32_m(svptrue_b32(), acc_f32_44, svcvt_f32_s32_x(svptrue_b32(), reorder_acc_4), scale);
 
                         //i == 2, j == 1
-                        q8_d = svdup_n_f32(q8_ptr[b].d[2]);
-                        q4_dmin = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].dmin + 1 * 4)), svdup_f16((__fp16)0.0)));
-                        dmins = svmul_f32_x(svptrue_b32(), q4_dmin, q8_d);
-                        q4_d = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].d + 1 * 4)), svdup_f16((__fp16)0.0)));
-                        scale = svmul_f32_x(svptrue_b32(), q4_d, q8_d);
+                        // q8_d = svdup_n_f32(q8_ptr[b].d[2]);
+                        // q4_dmin = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].dmin + 1 * 4)), svdup_f16((__fp16)0.0)));
+                        dmins = svmul_f32_x(svptrue_b32(), q4_dmin_1, q8_d);
+                        // q4_d = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].d + 1 * 4)), svdup_f16((__fp16)0.0)));
+                        scale = svmul_f32_x(svptrue_b32(), q4_d_1, q8_d);
                         
                         acc_f32_55 = svmls_f32_m(svptrue_b32(), acc_f32_55, svcvt_f32_s32_x(svptrue_b32(), bias_acc_55), dmins);
                         acc_f32_55 = svmla_f32_m(svptrue_b32(), acc_f32_55, svcvt_f32_s32_x(svptrue_b32(), reorder_acc_5), scale);
 
                         //i == 3, j == 0
                         q8_d = svdup_n_f32(q8_ptr[b].d[3]);
-                        q4_dmin = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].dmin + 0 * 4)), svdup_f16((__fp16)0.0)));
-                        dmins = svmul_f32_x(svptrue_b32(), q4_dmin, q8_d);
-                        q4_d = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].d + 0 * 4)), svdup_f16((__fp16)0.0)));
-                        scale = svmul_f32_x(svptrue_b32(), q4_d, q8_d);
+                        // q4_dmin = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].dmin + 0 * 4)), svdup_f16((__fp16)0.0)));
+                        dmins = svmul_f32_x(svptrue_b32(), q4_dmin_0, q8_d);
+                        // q4_d = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].d + 0 * 4)), svdup_f16((__fp16)0.0)));
+                        scale = svmul_f32_x(svptrue_b32(), q4_d_0, q8_d);
                         
                         acc_f32_66 = svmls_f32_m(svptrue_b32(), acc_f32_66, svcvt_f32_s32_x(svptrue_b32(), bias_acc_66), dmins);
                         acc_f32_66 = svmla_f32_m(svptrue_b32(), acc_f32_66, svcvt_f32_s32_x(svptrue_b32(), reorder_acc_6), scale);
 
                         //i == 3, j == 1
-                        q8_d = svdup_n_f32(q8_ptr[b].d[3]);
-                        q4_dmin = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].dmin + 1 * 4)), svdup_f16((__fp16)0.0)));
-                        dmins = svmul_f32_x(svptrue_b32(), q4_dmin, q8_d);
-                        q4_d = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].d + 1 * 4)), svdup_f16((__fp16)0.0)));
-                        scale = svmul_f32_x(svptrue_b32(), q4_d, q8_d);
+                        // q8_d = svdup_n_f32(q8_ptr[b].d[3]);
+                        // q4_dmin = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].dmin + 1 * 4)), svdup_f16((__fp16)0.0)));
+                        dmins = svmul_f32_x(svptrue_b32(), q4_dmin_1, q8_d);
+                        // q4_d = svcvt_f32_f16_z(svptrue_b32(), svzip1_f16(svld1_f16(svptrue_pat_b16(SV_VL4),(const __fp16 *) (q4_ptr[b].d + 1 * 4)), svdup_f16((__fp16)0.0)));
+                        scale = svmul_f32_x(svptrue_b32(), q4_d_1, q8_d);
                         
                         acc_f32_77 = svmls_f32_m(svptrue_b32(), acc_f32_77, svcvt_f32_s32_x(svptrue_b32(), bias_acc_77), dmins);
                         acc_f32_77 = svmla_f32_m(svptrue_b32(), acc_f32_77, svcvt_f32_s32_x(svptrue_b32(), reorder_acc_7), scale);
