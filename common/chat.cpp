@@ -2063,6 +2063,14 @@ static common_chat_params common_chat_params_init_minimax_m3(const common_chat_t
         THINK_END,
     };
 
+    data.message_delimiters = {
+        { COMMON_CHAT_ROLE_ASSISTANT, "]~b]ai"        },
+        { COMMON_CHAT_ROLE_USER,      "]~b]user"      },
+        { COMMON_CHAT_ROLE_TOOL,      "]~b]tool"      },
+        { COMMON_CHAT_ROLE_SYSTEM,    "]~b]developer" },
+        { COMMON_CHAT_ROLE_SYSTEM,    "]~b]system"    },
+    };
+
     auto has_tools           = inputs.tools.is_array() && !inputs.tools.empty();
     auto has_response_format = !inputs.json_schema.is_null() && inputs.json_schema.is_object();
     auto extract_reasoning   = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
