@@ -196,28 +196,26 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
 
     llama_build_and_test(test-llama-archs.cpp)
 
-    set(QWEN35_ROLLBACK_MODEL_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-models/qwen35")
-    set(QWEN35_ROLLBACK_MODEL     "${QWEN35_ROLLBACK_MODEL_DIR}/qwen35-dense.gguf")
-
-    file(MAKE_DIRECTORY "${QWEN35_ROLLBACK_MODEL_DIR}")
+    set(MODEL_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-models/")
+    file(MAKE_DIRECTORY "${MODEL_DIR}")
 
     llama_test(
         test-llama-archs
-        NAME test-generate-qwen35-rollback-model
+        NAME test-generate-models
         LABEL main
-        ARGS -a qwen35 -s 1234 -o "${QWEN35_ROLLBACK_MODEL_DIR}"
+        ARGS -o "${MODEL_DIR}"
     )
-    set_tests_properties(test-generate-qwen35-rollback-model PROPERTIES
-        FIXTURES_SETUP qwen35-rollback-model
+    set_tests_properties(test-generate-models PROPERTIES
+        FIXTURES_SETUP generate-models
     )
 
     llama_test(
         test-recurrent-state-rollback
         LABEL main
-        ARGS -m "${QWEN35_ROLLBACK_MODEL}" -ngl 0
+        ARGS -m "${MODEL_DIR}/qwen35-dense.gguf"
     )
     set_tests_properties(test-recurrent-state-rollback PROPERTIES
-        FIXTURES_REQUIRED qwen35-rollback-model
+        FIXTURES_REQUIRED generate-models
     )
 endif()
 
