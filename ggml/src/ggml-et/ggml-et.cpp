@@ -1037,6 +1037,26 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                             src1_first_dim_contiguous &&
                             dst_first_dim_contiguous &&
                             dst_properly_ordered;
+            } else if (op->type == GGML_TYPE_F32 &&
+                op->src[0] && (op->src[0]->type == GGML_TYPE_Q6_K || op->src[0]->type == GGML_TYPE_Q2_K ||
+                               op->src[0]->type == GGML_TYPE_Q3_K || op->src[0]->type == GGML_TYPE_Q5_K) &&
+                op->src[1] && op->src[1]->type == GGML_TYPE_F32) {
+
+                bool src0_first_dim_contiguous = (op->src[0]->nb[0] == ggml_type_size(op->src[0]->type));
+                bool src1_first_dim_contiguous = (op->src[1]->nb[0] == ggml_type_size(op->src[1]->type));
+                bool dst_first_dim_contiguous = (op->nb[0] == sizeof(float));
+
+                bool dst_properly_ordered = true;
+                for (int d = 0; d < 3; d++) {
+                    if (op->ne[d] > 1 && op->ne[d+1] > 1 && op->nb[d] > op->nb[d+1]) {
+                        dst_properly_ordered = false;
+                    }
+                }
+
+                supported = src0_first_dim_contiguous &&
+                            src1_first_dim_contiguous &&
+                            dst_first_dim_contiguous &&
+                            dst_properly_ordered;
             } else {
                 supported = false;
             }
@@ -1339,11 +1359,13 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             }
             break;
         case GGML_OP_GET_ROWS:
-            // Support F32/F16/Q4_0/Q8_0/Q4_K data with I32 indices -> F32 output
+            // Support F32/F16/Q4_0/Q8_0/Q4_K/Q6_K data with I32 indices -> F32 output
             if (op->type == GGML_TYPE_F32 && op->src[0] &&
                 (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16 ||
                  op->src[0]->type == GGML_TYPE_Q4_0 || op->src[0]->type == GGML_TYPE_Q8_0 ||
-                 op->src[0]->type == GGML_TYPE_Q4_K) &&
+                 op->src[0]->type == GGML_TYPE_Q4_K || op->src[0]->type == GGML_TYPE_Q6_K ||
+                 op->src[0]->type == GGML_TYPE_Q2_K || op->src[0]->type == GGML_TYPE_Q3_K ||
+                 op->src[0]->type == GGML_TYPE_Q5_K) &&
                 op->src[1] && op->src[1]->type == GGML_TYPE_I32 && ggml_is_contiguous(op) &&
                 ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1])) {
                 // Validate dimension constraints from ggml implementation

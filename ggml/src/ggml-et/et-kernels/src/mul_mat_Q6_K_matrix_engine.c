@@ -1,3 +1,8 @@
+//******************************************************************************
+// MUL_MAT Kernel
+// Matrix multiplication: C[M,N] = A[M,K] * B[K,N]
+//******************************************************************************
+
 #include <etsoc/common/utils.h>
 #include <stdint.h>
 #include "ggml_tensor.h"
@@ -6,8 +11,11 @@
 #include "quants.h"
 #include "math_fp.h"
 
-// Q4_0 x F32 -> F32 MUL_MAT on the tensor (matrix) engine, TensorFMA32.
-// Hart 1: dequantize Q4_0 weights to FP32 into double-buffered L2 SCP.
+// Q6_K x F32 -> F32 MUL_MAT on the tensor (matrix) engine, TensorFMA32.
+// Identical producer/consumer, tiling and tensor-engine loop to
+// mul_mat_Q4_K_matrix_engine.c; only the weight dequant differs (Q6_K uses a
+// 6-bit quant with a per-16-element int8 scale and no min term).
+// Hart 1: dequantize Q6_K weights to FP32 into double-buffered L2 SCP.
 // Hart 0: tensor engine compute (FMA, reduce, store).
 //
 // Two execution paths (selected at runtime by N % TILE_N):
@@ -23,12 +31,12 @@
 
 #define TILE_M  16
 #define TILE_N  16
-#define BLOCK_K QK4_0   // 32 elements per Q4_0 block
+#define BLOCK_K 32      // one Q6_K group (32 elements) per panel
 #define FMA_K   16      // tensor FMA k-width for FP32 (a_num_cols = FMA_K-1)
 
 // --- Reuse knobs ----------------------------------------------------------
 // REUSE_MAX caps the L2-SCP C-scratch footprint; the actual reuse factor is
-// chosen at runtime (see ru_n) as the largest value that still keeps the whole
+// chosen at runtime as the largest value that still keeps the whole
 // machine busy. KWIN is the dequant-cache depth (K-blocks per window).
 #ifndef REUSE_MAX
 #define REUSE_MAX 15
@@ -64,84 +72,78 @@
 #define SCP_CONSUMED_OFF (SCP_READY_OFF + 64)
 #define SCP_PER_MINION   (SCP_CONSUMED_OFF + 64)
 
-// Dequantize one 32-element Q4_0 block of TILE_M weight rows into the FP32
-// panel, written directly in TenB [k][m] order: panel[k*TILE_M + m].
-//   Low  nibble of byte i -> k = i
-//   High nibble of byte i -> k = i + 16
-//   value = d * (nibble - 8)
-//
-// Vectorized: for each weight row m we gather 8 packed bytes at a time, expand
-// the low/high nibbles to FP32 (nibble-8), scale by the block's fp16 d, and
-// fscw.ps-scatter the 8 values down 8 panel lines (stride 64B) at column m.
-// 4 groups of 8 cover the 32 k-values (low 0..15, high 16..31).
-static inline void __attribute__((always_inline))
-dequant_q4_0_panel(float *panel, const char *src0_batch,
-                   int64_t mb, int64_t kb_block, int64_t nb1_0) {
-    static const int32_t __attribute__((aligned(32))) scatter_idx[8] = {
-        0, 64, 128, 192, 256, 320, 384, 448   // byte offsets: 8 lines apart
-    };
-    static const int32_t __attribute__((aligned(32))) gather_idx[8] = {
-        0, 1, 2, 3, 4, 5, 6, 7                 // 8 consecutive bytes
-    };
 
-    unsigned long old_mask;
-    __asm__ volatile(
-        "mova.x.m  %[ms]            \n\t"
-        "mov.m.x   m0, x0, 0xFF     \n\t"   // all 8 lanes active
-        "flw.ps    f1, (%[sidx])    \n\t"   // f1 = scatter offsets
-        "flw.ps    f2, (%[gidx])    \n\t"   // f2 = gather offsets
-        : [ms] "=&r"(old_mask)
-        : [sidx] "r"(scatter_idx), [gidx] "r"(gather_idx)
-        : "f1", "f2"
-    );
 
-    char *pbase = (char *) panel;
-    for (int j = 0; j < TILE_M; ++j) {
-        const block_q4_0 *blk =
-            (const block_q4_0 *)(src0_batch + (mb + j) * nb1_0) + kb_block;
-        uint32_t scale_raw = (uint32_t) blk->d;
-        const uint8_t *qs = blk->qs;
-        char *col = pbase + j * 4;           // column m=j of the panel
-
-        __asm__ volatile(
-            "fbcx.ps     f3, %[sb]      \n\t"   // broadcast fp16 scale bits
-            "fcvt.ps.f16 f3, f3         \n\t"   // -> d in all 8 lanes (fp32)
-
-            "fgb.ps      f4, f2(%[qs0]) \n\t"   // gather qs[0..7]
-            "fandi.pi    f5, f4, 15     \n\t"   // low nibble
-            "faddi.pi    f5, f5, -8     \n\t"
-            "fcvt.ps.pw  f5, f5, rne    \n\t"
-            "fmul.ps     f5, f5, f3     \n\t"
-            "fscw.ps     f5, f1(%[c0])  \n\t"   // k=0..7   -> lines 0..7
-            "fsrli.pi    f6, f4, 4      \n\t"   // high nibble
-            "fandi.pi    f6, f6, 15     \n\t"
-            "faddi.pi    f6, f6, -8     \n\t"
-            "fcvt.ps.pw  f6, f6, rne    \n\t"
-            "fmul.ps     f6, f6, f3     \n\t"
-            "fscw.ps     f6, f1(%[c16]) \n\t"   // k=16..23 -> lines 16..23
-
-            "fgb.ps      f4, f2(%[qs8]) \n\t"   // gather qs[8..15]
-            "fandi.pi    f5, f4, 15     \n\t"
-            "faddi.pi    f5, f5, -8     \n\t"
-            "fcvt.ps.pw  f5, f5, rne    \n\t"
-            "fmul.ps     f5, f5, f3     \n\t"
-            "fscw.ps     f5, f1(%[c8])  \n\t"   // k=8..15  -> lines 8..15
-            "fsrli.pi    f6, f4, 4      \n\t"
-            "fandi.pi    f6, f6, 15     \n\t"
-            "faddi.pi    f6, f6, -8     \n\t"
-            "fcvt.ps.pw  f6, f6, rne    \n\t"
-            "fmul.ps     f6, f6, f3     \n\t"
-            "fscw.ps     f6, f1(%[c24]) \n\t"   // k=24..31 -> lines 24..31
-            :
-            : [sb] "r"(scale_raw),
-              [qs0] "r"(qs), [qs8] "r"(qs + 8),
-              [c0] "r"(col), [c8] "r"(col + 8 * 64),
-              [c16] "r"(col + 16 * 64), [c24] "r"(col + 24 * 64)
-            : "f3", "f4", "f5", "f6", "memory"
-        );
+// Software fp16->fp32 (pure integer). The hardware fcvt.ps.f16 returns wrong
+// values after the attention block (shared conversion-unit state), which would
+// corrupt the weight scales here; software conversion avoids that instruction
+// entirely. Only the super-block d is fp16, so cost is negligible.
+static inline float __attribute__((always_inline)) me_sw_fp16(uint16_t h) {
+    uint32_t sign = (uint32_t)(h & 0x8000) << 16;
+    uint32_t exp  = (h >> 10) & 0x1F;
+    uint32_t mant = h & 0x3FF;
+    uint32_t f;
+    if (exp == 0) {
+        if (mant == 0) { f = sign; }
+        else {
+            exp = 127 - 15 + 1;
+            while ((mant & 0x400) == 0) { mant <<= 1; exp--; }
+            mant &= 0x3FF;
+            f = sign | (exp << 23) | (mant << 13);
+        }
+    } else if (exp == 0x1F) {
+        f = sign | 0x7F800000u | (mant << 13);
+    } else {
+        f = sign | ((exp + (127 - 15)) << 23) | (mant << 13);
     }
+    float out; __builtin_memcpy(&out, &f, 4); return out;
+}
 
-    __asm__ volatile("mova.m.x %0" :: "r"(old_mask));
+// EXPERIMENT: use the hardware fcvt.ps.f16 (fp16_to_fp32, math_fp.h) for the
+// super-block scale instead of the software me_sw_fp16 above. Hardware fcvt was
+// observed to corrupt Q4_K scales after the attention block; trying it here for
+// the other K-quants. If it produces garbage, flip ME_FP16 back to me_sw_fp16.
+// #define ME_FP16(h) fp16_to_fp32(h)  // hardware fcvt: garbage for Q3/Q5/Q6 (fcvt-after-attention bug)
+#define ME_FP16(h) me_sw_fp16(h)
+
+// Dequantize one 32-element Q6_K GROUP of TILE_M weight rows into the FP32 panel,
+// written in TenB [k][m] order: panel[k*TILE_M + m].
+//
+// A Q6_K super-block packs 256 elements as two 128-element chunks of four
+// 32-element groups; each 6-bit weight is (ql nibble | qh 2-bit) - 32, scaled
+// by a per-16-element int8 scale and the super-block fp16 d:
+//     w = d * scale * ((nibble | (bits << 4)) - 32)
+// kb_group is the global group index: super-block = kb_group/8, group g = kb_group%8.
+// Group g maps to chunk c = g/4 and sub-group sub = g%4 (see dequantize_q6_K_block).
+static inline void __attribute__((always_inline))
+dequant_q6_K_panel(float *panel, const char *src0_batch,
+                   int64_t mb, int64_t kb_group, int64_t nb1_0) {
+    const int64_t sb  = kb_group >> 3;        // super-block index
+    const int     g   = (int) (kb_group & 7); // group within super-block
+    const int     c   = g >> 2;               // 128-element chunk (0 or 1)
+    const int     sub = g & 3;                // sub-group within chunk (0..3)
+
+    const int     hi     = sub >> 1;          // high nibble for sub 2,3
+    const int     qloff  = 64 * c + (sub & 1) * 32;
+    const int     qhoff  = 32 * c;
+    const int     qhshift = 2 * sub;
+    const int     scoff  = 8 * c + 2 * sub;
+
+    for (int j = 0; j < TILE_M; ++j) {
+        const block_q6_K *blk =
+            (const block_q6_K *)(src0_batch + (mb + j) * nb1_0) + sb;
+        const float          d  = ME_FP16(blk->d);
+        const uint8_t      * ql = blk->ql + qloff;
+        const uint8_t      * qh = blk->qh + qhoff;
+        const int8_t       * sc = blk->scales + scoff;
+
+        for (int l = 0; l < 32; ++l) {
+            const uint8_t nib = hi ? (ql[l] >> 4) : (ql[l] & 0xF);
+            const int8_t  q   = (int8_t)(nib | (((qh[l] >> qhshift) & 3) << 4)) - 32;
+            const float   val = d * (float) sc[l >> 4] * (float) q;
+            panel[l * TILE_M + j] = val;
+        }
+    }
 }
 
 // Spill / seed the FP32 C accumulator (16x16 tile in the vector register file,
@@ -196,7 +198,7 @@ int entry_point(struct ggml_et_binary_params *params, void *env) {
     const int64_t N = params->src1.ne[1];
 
     if ((M % TILE_M) != 0)  return 0;
-    if ((K % BLOCK_K) != 0) return 0;
+    if ((K % QK_K) != 0)    return 0;
 
     const int64_t ne2_0 = params->src0.ne[2], ne3_0 = params->src0.ne[3];
     const int64_t ne2_1 = params->src1.ne[2], ne3_1 = params->src1.ne[3];
@@ -221,7 +223,7 @@ int entry_point(struct ggml_et_binary_params *params, void *env) {
     const int64_t r2 = ne2_1 / ne2_0;
     const int64_t r3 = ne3_1 / ne3_0;
 
-    const int64_t k_steps = K / BLOCK_K;        // number of Q4_0 blocks
+    const int64_t k_steps = K / BLOCK_K;        // number of 32-element groups
 
     const int64_t tiles_per_shire = MINIONS_PER_SHIRE;
     const int64_t local_tile_idx  = local_minion;
@@ -247,10 +249,10 @@ int entry_point(struct ggml_et_binary_params *params, void *env) {
         int64_t n_groups = (n_tiles + r - 1) / r;
         int64_t base_units = m_tiles * n_groups * batch_count;
         int64_t waves = (base_units + MACHINE_SLOTS - 1) / MACHINE_SLOTS;
-        
+
         int64_t penalty = (r > 8) ? r : 8;
         int64_t score = waves * penalty;
-        
+
         if (score < min_score) {
             min_score = score;
             best_r = r;
@@ -305,7 +307,7 @@ int entry_point(struct ggml_et_binary_params *params, void *env) {
 
                     float *cf = (float *) cache_buf[buf];
                     for (int64_t i = 0; i < kbn; ++i) {
-                        dequant_q4_0_panel(cf + i * (SCP_PANEL_SIZE / 4),
+                        dequant_q6_K_panel(cf + i * (SCP_PANEL_SIZE / 4),
                                            src0_batch, mb, kb0 + i, nb1_0);
                     }
                     FENCE;
@@ -446,7 +448,7 @@ int entry_point(struct ggml_et_binary_params *params, void *env) {
                 int buf = chunk_id & 1;
                 if (chunk_id >= 2) scp_wait(consumed_ctr, chunk_id - 1);
 
-                dequant_q4_0_panel(scp_panel[buf], src0_batch, mb, kb, nb1_0);
+                dequant_q6_K_panel(scp_panel[buf], src0_batch, mb, kb, nb1_0);
 
                 FENCE;
                 flush_to_l2(scp_panel[buf], BLOCK_K, 64);

@@ -1,14 +1,11 @@
 //******************************************************************************
-// MUL_MAT Kernel (Q4_K weights x F32 activations -> F32)
+// MUL_MAT Kernel (Q3_K weights x F32 activations -> F32)
 // Matrix multiplication: C[M,N] = A[M,K] * B[K,N]
 //
-// Structure mirrors mul_mat_Q4_0.c. The key difference is the block size:
-// Q4_K packs 256 elements per super-block (8 groups of 32) with per-group
-// scales/mins, versus 32 elements per block for Q4_0. The actual dequant +
-// dot work is delegated to Q4K_DOT() in block_ops.h. The K-tiling
-// and K-split thresholds below are expressed in super-blocks but chosen so the
-// element-level behaviour matches the Q4_0 kernel (one Q4_K super-block == 8
-// Q4_0 blocks, so the block thresholds are divided by 8).
+// Structure mirrors mul_mat_Q4_K.c. Q3_K also packs 256 elements per
+// super-block (16 groups of 16) with per-group int8 scales, so the same
+// super-block K-tiling applies; only the per-element dequant differs and is
+// delegated to Q3K_DOT() in block_ops.h.
 //******************************************************************************
 
 #include <stdint.h>
@@ -23,11 +20,11 @@
 #define KSPLIT_MIN_K_BLOCKS 32    /* K >= 8192 elements (32 super-blocks) */
 #define KSPLIT_SMALL_ROWS_K_BLOCKS 8   /* K >= 2048 elements for very small M */
 #define KSPLIT_MAX_ROWS     8     /* max rows per minion for K-split */
-#define TILE_KB           32      /* K-tile size in Q4_K super-blocks (8192 elems, 32KB B data) */
+#define TILE_KB           32      /* K-tile size in Q3_K super-blocks (8192 elems) */
 #define KSPLIT_GROUP_ROWS 4
 
 // Vectorized (8-wide) dot
-#define Q4K_DOT(a, b, c) compute_row_dot_q4_K_vec(a, b, c)
+#define Q3K_DOT(a, b, c) compute_row_dot_q3_K_vec(a, b, c)
 
 #ifdef ET_UBERKERNEL
 static inline size_t tensor_bytes(const struct ggml_tensor* t) {
@@ -39,8 +36,8 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
     uint64_t hart_id = get_hart_id();
 
 #ifdef ET_UBERKERNEL
-    // Uberkernel coherency: src1 (activations) may be stale in L1/L2 from a
-    // prior op's write; force re-read from L3/DRAM. src0 (weights) is read-only.
+    // Uberkernel coherency: src1 (activations) may be stale in L1/L2; force
+    // re-read from L3/DRAM. src0 (weights) is read-only, never stale.
     evict_region_past_l2(params->src1.data, tensor_bytes(&params->src1));
 #endif
 
@@ -66,7 +63,7 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
     const size_t nbd2 = params->dst.nb[2];
     const size_t nbd3 = params->dst.nb[3];
 
-    // Q4_K super-block holds 256 elements
+    // Q3_K super-block holds 256 elements
     const int64_t K_blocks = K / QK_K;
 
     // Broadcasting ratios
@@ -83,11 +80,11 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
                                    && (K_blocks >= KSPLIT_SMALL_ROWS_K_BLOCKS);
     /*
      * K-split when K is large enough to benefit, and either:
-     *   - few rows (≤4): always safe, proven working
+     *   - few rows (<=4): always safe, proven working
      *   - more rows (5-8): only if each hart's half fits in one tile,
-     *     otherwise L1 thrashing from 2 harts × 8 rows kills performance
+     *     otherwise L1 thrashing from 2 harts x 8 rows kills performance
      *
-     * Also allow K-split earlier for the low-M regime (≤2 rows/minion). In
+     * Also allow K-split earlier for the low-M regime (<=2 rows/minion). In
      * that case the simple row-striped path leaves half the machine idle, so
      * using both harts on each row pays off even for moderate K.
      */
@@ -125,9 +122,9 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
                     const float* b_col_base = (const float*)(src1_ptr2 + n * nb11);
 
                     for (int64_t m = minion_id; m < M; m += STRIDE_M_KSPLIT) {
-                        const block_q4_K* q_row = (const block_q4_K*)(src0_ptr2 + m * nb01);
+                        const block_q3_K* q_row = (const block_q3_K*)(src0_ptr2 + m * nb01);
 
-                        float partial = Q4K_DOT(
+                        float partial = Q3K_DOT(
                             q_row + k_start, b_col_base + k_start * QK_K, k_len);
 
                         if (is_hart1) {
@@ -195,23 +192,23 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
                             const int64_t row_kb = k_start + kb;
 
                             if (m0 < M) {
-                                s0 += Q4K_DOT(
-                                    (const block_q4_K*)(src0_ptr2 + m0 * nb01) + row_kb,
+                                s0 += Q3K_DOT(
+                                    (const block_q3_K*)(src0_ptr2 + m0 * nb01) + row_kb,
                                     b_tile, tile_len);
                             }
                             if (m1 < M) {
-                                s1 += Q4K_DOT(
-                                    (const block_q4_K*)(src0_ptr2 + m1 * nb01) + row_kb,
+                                s1 += Q3K_DOT(
+                                    (const block_q3_K*)(src0_ptr2 + m1 * nb01) + row_kb,
                                     b_tile, tile_len);
                             }
                             if (m2 < M) {
-                                s2 += Q4K_DOT(
-                                    (const block_q4_K*)(src0_ptr2 + m2 * nb01) + row_kb,
+                                s2 += Q3K_DOT(
+                                    (const block_q3_K*)(src0_ptr2 + m2 * nb01) + row_kb,
                                     b_tile, tile_len);
                             }
                             if (m3 < M) {
-                                s3 += Q4K_DOT(
-                                    (const block_q4_K*)(src0_ptr2 + m3 * nb01) + row_kb,
+                                s3 += Q3K_DOT(
+                                    (const block_q3_K*)(src0_ptr2 + m3 * nb01) + row_kb,
                                     b_tile, tile_len);
                             }
                         }
@@ -276,22 +273,22 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
                             if (tile_len > TILE_KB) tile_len = TILE_KB;
                             const float* b_tile = b_col_base + kb * QK_K;
 
-                            s0 += Q4K_DOT(
-                                (const block_q4_K*)(src0_ptr2 + m0 * nb01) + kb,
+                            s0 += Q3K_DOT(
+                                (const block_q3_K*)(src0_ptr2 + m0 * nb01) + kb,
                                 b_tile, tile_len);
                             if (m1 < M) {
-                                s1 += Q4K_DOT(
-                                    (const block_q4_K*)(src0_ptr2 + m1 * nb01) + kb,
+                                s1 += Q3K_DOT(
+                                    (const block_q3_K*)(src0_ptr2 + m1 * nb01) + kb,
                                     b_tile, tile_len);
                             }
                             if (m2 < M) {
-                                s2 += Q4K_DOT(
-                                    (const block_q4_K*)(src0_ptr2 + m2 * nb01) + kb,
+                                s2 += Q3K_DOT(
+                                    (const block_q3_K*)(src0_ptr2 + m2 * nb01) + kb,
                                     b_tile, tile_len);
                             }
                             if (m3 < M) {
-                                s3 += Q4K_DOT(
-                                    (const block_q4_K*)(src0_ptr2 + m3 * nb01) + kb,
+                                s3 += Q3K_DOT(
+                                    (const block_q3_K*)(src0_ptr2 + m3 * nb01) + kb,
                                     b_tile, tile_len);
                             }
                         }
@@ -325,9 +322,9 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
                     const float* b_col_base = (const float*)(src1_ptr2 + n * nb11);
 
                     for (int64_t m = hart_id; m < M; m += STRIDE_M) {
-                        const block_q4_K* q_row = (const block_q4_K*)(src0_ptr2 + m * nb01);
+                        const block_q3_K* q_row = (const block_q3_K*)(src0_ptr2 + m * nb01);
 
-                        float sum = Q4K_DOT(q_row, b_col_base, K_blocks);
+                        float sum = Q3K_DOT(q_row, b_col_base, K_blocks);
 
                         float* dst_entry = (float*)(dst_ptr2 + n * nbd1 + m * sizeof(float));
                         atomic_store_f32((volatile float*)dst_entry, sum);
@@ -338,7 +335,7 @@ int entry_point(struct ggml_et_binary_params* params, void* env) {
     }
 
 #ifdef ET_UBERKERNEL
-    // Publish dst to L3/DRAM so the next uberkernel op reads fresh data.
+    // Publish dst to L3/DRAM for the next uberkernel op.
     FENCE;
     evict_region_past_l2(params->dst.data, tensor_bytes(&params->dst));
     WAIT_CACHEOPS;

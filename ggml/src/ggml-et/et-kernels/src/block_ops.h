@@ -1067,3 +1067,460 @@ static inline float compute_row_dot_q4_K(const block_q4_K* q_row,
     }
     return acc;
 }
+
+// Vectorized (8-wide) full-row dot for Q4_K. Affine 8-groups-of-32 layout
+// w = d*sc*nibble - dmin*m (no qh bit). Group g -> qs pair g/2, nibble
+// low(g even)/high(g odd). f10 scale term, f9 min term; result = f10 - f9.
+#define Q4V_LO "fandi.pi f12, f11, 15\n\t"
+#define Q4V_HI "fsrli.pi f12, f11, 4\n\t fandi.pi f12, f12, 15\n\t"
+#define Q4V_CHUNK(NIB, qlp, bp, dscb, dmb)                               \
+    __asm__ volatile(                                                    \
+        "fgb.ps     f11, f31(%[q])\n\t"                                  \
+        NIB                                                              \
+        "fcvt.ps.pw f12, f12, rne\n\t"                                   \
+        "fbcx.ps    f16, %[dsc]\n\t"                                     \
+        "flw.ps     f15, 0(%[b])\n\t"                                    \
+        "fmul.ps    f12, f12, f16\n\t"                                   \
+        "fmadd.ps   f10, f12, f15, f10\n\t"                              \
+        "fbcx.ps    f17, %[dm]\n\t"                                      \
+        "fmadd.ps   f9, f15, f17, f9\n\t"                                \
+        :: [q] "r"(qlp), [b] "r"(bp), [dsc] "r"(dscb), [dm] "r"(dmb)     \
+        : "f11", "f12", "f15", "f16", "f17")
+#define Q4V_GROUP(NIB, pp)                                               \
+    do {                                                                 \
+        const uint8_t* qlb = block->qs + (pp) * 32;                      \
+        Q4V_CHUNK(NIB, qlb + 0,  bg + 0,  dscb, dmb);                    \
+        Q4V_CHUNK(NIB, qlb + 8,  bg + 8,  dscb, dmb);                    \
+        Q4V_CHUNK(NIB, qlb + 16, bg + 16, dscb, dmb);                    \
+        Q4V_CHUNK(NIB, qlb + 24, bg + 24, dscb, dmb);                    \
+    } while (0)
+
+static inline float compute_row_dot_q4_K_vec(const block_q4_K* q_row,
+                                             const float* b_col,
+                                             int64_t K_sblocks) {
+    unsigned long saved_mask;
+    __asm__ volatile("mova.x.m %0" : "=r"(saved_mask));
+    __asm__ volatile("mov.m.x m0, x0, 0xFF");
+
+    static const int32_t __attribute__((aligned(64))) gp[8] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+    __asm__ volatile("flw.ps f31, %[g]\n\t"
+                     "fbci.ps f10, 0\n\t"
+                     "fbci.ps f9, 0\n\t"
+                     :: [g] "m"(*(const int32_t(*)[8]) gp)
+                     : "f31", "f10", "f9");
+
+    for (int64_t sb = 0; sb < K_sblocks; sb++) {
+        const block_q4_K* block = q_row + sb;
+        const float* b = b_col + sb * QK_K;
+        const float d   = sw_fp16_to_fp32(block->d);
+        const float min = sw_fp16_to_fp32(block->dmin);
+
+        for (int g = 0; g < 8; ++g) {
+            uint8_t sc, m;
+            get_scale_min_k4(g, block->scales, &sc, &m);
+            const float dscf = d * (float) sc;
+            const float dmf  = min * (float) m;
+            uint32_t dscb, dmb;
+            __builtin_memcpy(&dscb, &dscf, 4);
+            __builtin_memcpy(&dmb, &dmf, 4);
+            const float* bg = b + g * 32;
+            const int p = g >> 1;
+
+            if (g & 1) {
+                Q4V_GROUP(Q4V_HI, p);
+            } else {
+                Q4V_GROUP(Q4V_LO, p);
+            }
+        }
+    }
+
+    float final_sum;
+    __asm__ volatile(
+        "fswizz.ps f1, f10, 0xB1 \n\t fadd.ps f2, f10, f1, rne \n\t"
+        "fswizz.ps f3, f2, 0x4E \n\t fadd.ps f4, f2, f3, rne \n\t"
+        "fmvz.x.ps t0, f4, 4 \n\t fbcx.ps f5, t0 \n\t fadd.ps f6, f4, f5, rne \n\t"
+        "fswizz.ps f1, f9, 0xB1 \n\t fadd.ps f2, f9, f1, rne \n\t"
+        "fswizz.ps f3, f2, 0x4E \n\t fadd.ps f4, f2, f3, rne \n\t"
+        "fmvz.x.ps t0, f4, 4 \n\t fbcx.ps f5, t0 \n\t fadd.ps f7, f4, f5, rne \n\t"
+        "fsub.ps   %[out], f6, f7, rne \n\t"
+        : [out] "=f"(final_sum)
+        :: "t0", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f9", "f10");
+
+    __asm__ volatile("mova.m.x %0" ::"r"(saved_mask));
+    return final_sum;
+}
+
+// Vectorized (8-wide) full-row dot for Q6_K, modeled on the q4_0/q8_0 vector
+// dots. Each 32-element group of contiguous output elements maps to contiguous
+// ql/qh bytes and a fixed nibble/shift, so a group is 4 chunks of 8 lanes.
+// The per-group factor d*scale is folded into the weight vector (fmul), so a
+// single fp32 accumulator (f10) covers the whole row and is reduced once at the
+// end. f30 holds -32.0 (the Q6_K zero point), f31 the byte-gather pattern.
+#define Q6V_NIB_LO "fandi.pi f12, f11, 15\n\t"
+#define Q6V_NIB_HI "fsrli.pi f12, f11, 4\n\t fandi.pi f12, f12, 15\n\t"
+#define Q6V_CHUNK(NIB, SH, qlp, qhp, bp, facbits)                        \
+    __asm__ volatile(                                                    \
+        "fgb.ps     f11, f31(%[q])\n\t"                                  \
+        "fgb.ps     f13, f31(%[h])\n\t"                                  \
+        NIB                                                              \
+        "fsrli.pi   f13, f13, " #SH "\n\t"                               \
+        "fandi.pi   f13, f13, 3\n\t"                                     \
+        "fslli.pi   f13, f13, 4\n\t"                                     \
+        "fcvt.ps.pw f12, f12, rne\n\t"                                   \
+        "fcvt.ps.pw f13, f13, rne\n\t"                                   \
+        "fadd.ps    f12, f12, f13, rne\n\t"                              \
+        "fadd.ps    f12, f12, f30, rne\n\t"                              \
+        "fbcx.ps    f16, %[f]\n\t"                                       \
+        "flw.ps     f15, 0(%[b])\n\t"                                    \
+        "fmul.ps    f12, f12, f16\n\t"                                   \
+        "fmadd.ps   f10, f12, f15, f10\n\t"                              \
+        :: [q] "r"(qlp), [h] "r"(qhp), [b] "r"(bp), [f] "r"(facbits)     \
+        : "f11", "f12", "f13", "f15", "f16")
+
+static inline float compute_row_dot_q6_K_vec(const block_q6_K* q_row,
+                                             const float* b_col,
+                                             int64_t K_sblocks) {
+    unsigned long saved_mask;
+    __asm__ volatile("mova.x.m %0" : "=r"(saved_mask));
+    __asm__ volatile("mov.m.x m0, x0, 0xFF");
+
+    static const int32_t __attribute__((aligned(64))) gp[8] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+    const uint32_t neg32 = 0xC2000000u;  // -32.0f
+    __asm__ volatile("flw.ps f31, %[g]\n\t"
+                     "fbcx.ps f30, %[n]\n\t"
+                     "fbci.ps f10, 0\n\t"
+                     :: [g] "m"(*(const int32_t(*)[8]) gp), [n] "r"(neg32)
+                     : "f31", "f30", "f10");
+
+    for (int64_t sb = 0; sb < K_sblocks; sb++) {
+        const block_q6_K* block = q_row + sb;
+        const float* b = b_col + sb * QK_K;
+        const float d = sw_fp16_to_fp32(block->d);
+
+        for (int g = 0; g < 8; ++g) {
+            const int c   = g >> 2;
+            const int sub = g & 3;
+            const uint8_t* qlbase = block->ql + 64 * c + (sub & 1) * 32;
+            const uint8_t* qhbase = block->qh + 32 * c;
+            const float* bg = b + g * 32;
+            const float f0f = d * (float) block->scales[8 * c + 2 * sub + 0];
+            const float f1f = d * (float) block->scales[8 * c + 2 * sub + 1];
+            uint32_t f0, f1;
+            __builtin_memcpy(&f0, &f0f, 4);
+            __builtin_memcpy(&f1, &f1f, 4);
+
+            switch (sub) {
+                case 0:
+                    Q6V_CHUNK(Q6V_NIB_LO, 0, qlbase + 0,  qhbase + 0,  bg + 0,  f0);
+                    Q6V_CHUNK(Q6V_NIB_LO, 0, qlbase + 8,  qhbase + 8,  bg + 8,  f0);
+                    Q6V_CHUNK(Q6V_NIB_LO, 0, qlbase + 16, qhbase + 16, bg + 16, f1);
+                    Q6V_CHUNK(Q6V_NIB_LO, 0, qlbase + 24, qhbase + 24, bg + 24, f1);
+                    break;
+                case 1:
+                    Q6V_CHUNK(Q6V_NIB_LO, 2, qlbase + 0,  qhbase + 0,  bg + 0,  f0);
+                    Q6V_CHUNK(Q6V_NIB_LO, 2, qlbase + 8,  qhbase + 8,  bg + 8,  f0);
+                    Q6V_CHUNK(Q6V_NIB_LO, 2, qlbase + 16, qhbase + 16, bg + 16, f1);
+                    Q6V_CHUNK(Q6V_NIB_LO, 2, qlbase + 24, qhbase + 24, bg + 24, f1);
+                    break;
+                case 2:
+                    Q6V_CHUNK(Q6V_NIB_HI, 4, qlbase + 0,  qhbase + 0,  bg + 0,  f0);
+                    Q6V_CHUNK(Q6V_NIB_HI, 4, qlbase + 8,  qhbase + 8,  bg + 8,  f0);
+                    Q6V_CHUNK(Q6V_NIB_HI, 4, qlbase + 16, qhbase + 16, bg + 16, f1);
+                    Q6V_CHUNK(Q6V_NIB_HI, 4, qlbase + 24, qhbase + 24, bg + 24, f1);
+                    break;
+                default:
+                    Q6V_CHUNK(Q6V_NIB_HI, 6, qlbase + 0,  qhbase + 0,  bg + 0,  f0);
+                    Q6V_CHUNK(Q6V_NIB_HI, 6, qlbase + 8,  qhbase + 8,  bg + 8,  f0);
+                    Q6V_CHUNK(Q6V_NIB_HI, 6, qlbase + 16, qhbase + 16, bg + 16, f1);
+                    Q6V_CHUNK(Q6V_NIB_HI, 6, qlbase + 24, qhbase + 24, bg + 24, f1);
+                    break;
+            }
+        }
+    }
+
+    float final_sum;
+    __asm__ volatile(
+        "fswizz.ps f1, f10, 0xB1 \n\t"
+        "fadd.ps   f2, f10, f1, rne \n\t"
+        "fswizz.ps f3, f2, 0x4E \n\t"
+        "fadd.ps   f4, f2, f3, rne \n\t"
+        "fmvz.x.ps t0, f4, 4 \n\t"
+        "fbcx.ps   f5, t0 \n\t"
+        "fadd.ps   %[out], f4, f5, rne \n\t"
+        : [out] "=f"(final_sum)
+        :: "t0", "f1", "f2", "f3", "f4", "f5", "f10");
+
+    __asm__ volatile("mova.m.x %0" ::"r"(saved_mask));
+    return final_sum;
+}
+
+// NOTE: two further Q6_K dot experiments were tried and REMOVED as neither
+// helped - the generation dot is memory/overhead bound, not compute bound:
+//   * gather-reduced (ql/qh gathered once, reused across sub-groups, 64->24
+//     fgb/super-block) - perf-neutral (14.95 vs 14.93 t/s).
+//   * 4 rotating accumulators to pipeline the fmadd chain - also neutral (15.02).
+
+// Vectorized (8-wide) full-row dot for Q5_K. Same 8-groups-of-32 affine layout
+// as Q4_K plus a 5th bit from qh: w = d*sc*(nibble + qh_bit*16) - dmin*m.
+// Group g -> qs pair g/2, nibble low(g even)/high(g odd), qh bit at position g.
+// f10 accumulates the scale term, f9 the min term (sum of b*dmin*m per group);
+// result = reduce(f10) - reduce(f9).
+#define Q5V_LO "fandi.pi f12, f11, 15\n\t"
+#define Q5V_HI "fsrli.pi f12, f11, 4\n\t fandi.pi f12, f12, 15\n\t"
+#define Q5V_CHUNK(NIB, BP, qlp, qhp, bp, dscb, dmb)                      \
+    __asm__ volatile(                                                    \
+        "fgb.ps     f11, f31(%[q])\n\t"                                  \
+        "fgb.ps     f13, f31(%[h])\n\t"                                  \
+        NIB                                                              \
+        "fsrli.pi   f13, f13, " #BP "\n\t"                               \
+        "fandi.pi   f13, f13, 1\n\t"                                     \
+        "fslli.pi   f13, f13, 4\n\t"                                     \
+        "fcvt.ps.pw f12, f12, rne\n\t"                                   \
+        "fcvt.ps.pw f13, f13, rne\n\t"                                   \
+        "fadd.ps    f12, f12, f13, rne\n\t"                              \
+        "fbcx.ps    f16, %[dsc]\n\t"                                     \
+        "flw.ps     f15, 0(%[b])\n\t"                                    \
+        "fmul.ps    f12, f12, f16\n\t"                                   \
+        "fmadd.ps   f10, f12, f15, f10\n\t"                              \
+        "fbcx.ps    f17, %[dm]\n\t"                                      \
+        "fmadd.ps   f9, f15, f17, f9\n\t"                                \
+        :: [q] "r"(qlp), [h] "r"(qhp), [b] "r"(bp), [dsc] "r"(dscb), [dm] "r"(dmb) \
+        : "f11", "f12", "f13", "f15", "f16", "f17")
+#define Q5V_GROUP(NIB, BP, pp)                                           \
+    do {                                                                 \
+        const uint8_t* qlb = block->qs + (pp) * 32;                      \
+        const uint8_t* qhb = block->qh;                                  \
+        Q5V_CHUNK(NIB, BP, qlb + 0,  qhb + 0,  bg + 0,  dscb, dmb);      \
+        Q5V_CHUNK(NIB, BP, qlb + 8,  qhb + 8,  bg + 8,  dscb, dmb);      \
+        Q5V_CHUNK(NIB, BP, qlb + 16, qhb + 16, bg + 16, dscb, dmb);      \
+        Q5V_CHUNK(NIB, BP, qlb + 24, qhb + 24, bg + 24, dscb, dmb);      \
+    } while (0)
+
+static inline float compute_row_dot_q5_K_vec(const block_q5_K* q_row,
+                                             const float* b_col,
+                                             int64_t K_sblocks) {
+    unsigned long saved_mask;
+    __asm__ volatile("mova.x.m %0" : "=r"(saved_mask));
+    __asm__ volatile("mov.m.x m0, x0, 0xFF");
+
+    static const int32_t __attribute__((aligned(64))) gp[8] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+    __asm__ volatile("flw.ps f31, %[g]\n\t"
+                     "fbci.ps f10, 0\n\t"
+                     "fbci.ps f9, 0\n\t"
+                     :: [g] "m"(*(const int32_t(*)[8]) gp)
+                     : "f31", "f10", "f9");
+
+    for (int64_t sb = 0; sb < K_sblocks; sb++) {
+        const block_q5_K* block = q_row + sb;
+        const float* b = b_col + sb * QK_K;
+        const float d   = sw_fp16_to_fp32(block->d);
+        const float min = sw_fp16_to_fp32(block->dmin);
+
+        for (int g = 0; g < 8; ++g) {
+            uint8_t sc, m;
+            get_scale_min_k4(g, block->scales, &sc, &m);
+            const float dscf = d * (float) sc;
+            const float dmf  = min * (float) m;
+            uint32_t dscb, dmb;
+            __builtin_memcpy(&dscb, &dscf, 4);
+            __builtin_memcpy(&dmb, &dmf, 4);
+            const float* bg = b + g * 32;
+            const int p = g >> 1;
+
+            switch (g) {
+                case 0: Q5V_GROUP(Q5V_LO, 0, p); break;
+                case 1: Q5V_GROUP(Q5V_HI, 1, p); break;
+                case 2: Q5V_GROUP(Q5V_LO, 2, p); break;
+                case 3: Q5V_GROUP(Q5V_HI, 3, p); break;
+                case 4: Q5V_GROUP(Q5V_LO, 4, p); break;
+                case 5: Q5V_GROUP(Q5V_HI, 5, p); break;
+                case 6: Q5V_GROUP(Q5V_LO, 6, p); break;
+                default: Q5V_GROUP(Q5V_HI, 7, p); break;
+            }
+        }
+    }
+
+    float final_sum;
+    __asm__ volatile(
+        "fswizz.ps f1, f10, 0xB1 \n\t fadd.ps f2, f10, f1, rne \n\t"
+        "fswizz.ps f3, f2, 0x4E \n\t fadd.ps f4, f2, f3, rne \n\t"
+        "fmvz.x.ps t0, f4, 4 \n\t fbcx.ps f5, t0 \n\t fadd.ps f6, f4, f5, rne \n\t"
+        "fswizz.ps f1, f9, 0xB1 \n\t fadd.ps f2, f9, f1, rne \n\t"
+        "fswizz.ps f3, f2, 0x4E \n\t fadd.ps f4, f2, f3, rne \n\t"
+        "fmvz.x.ps t0, f4, 4 \n\t fbcx.ps f5, t0 \n\t fadd.ps f7, f4, f5, rne \n\t"
+        "fsub.ps   %[out], f6, f7, rne \n\t"
+        : [out] "=f"(final_sum)
+        :: "t0", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f9", "f10");
+
+    __asm__ volatile("mova.m.x %0" ::"r"(saved_mask));
+    return final_sum;
+}
+
+// Vectorized (8-wide) full-row dot for Q2_K. Affine 2-bit
+// w = d*(sc&0xF)*q - dmin*(sc>>4), 16 groups of 16. Sub-group sg -> chunk
+// c=sg/8, shift 2*((sg&7)/2), A/B nibble-set ab=(sg&7)&1 selecting qs/scale.
+// f10 scale term, f9 min term; result = reduce(f10) - reduce(f9).
+#define Q2V_CHUNK(SH, qp, bp, dlb, mlb)                                  \
+    __asm__ volatile(                                                    \
+        "fgb.ps     f11, f31(%[q])\n\t"                                  \
+        "fsrli.pi   f12, f11, " #SH "\n\t"                               \
+        "fandi.pi   f12, f12, 3\n\t"                                     \
+        "fcvt.ps.pw f12, f12, rne\n\t"                                   \
+        "fbcx.ps    f16, %[dl]\n\t"                                      \
+        "flw.ps     f15, 0(%[b])\n\t"                                    \
+        "fmul.ps    f12, f12, f16\n\t"                                   \
+        "fmadd.ps   f10, f12, f15, f10\n\t"                              \
+        "fbcx.ps    f17, %[ml]\n\t"                                      \
+        "fmadd.ps   f9, f15, f17, f9\n\t"                                \
+        :: [q] "r"(qp), [b] "r"(bp), [dl] "r"(dlb), [ml] "r"(mlb)        \
+        : "f11", "f12", "f15", "f16", "f17")
+#define Q2V_GROUP(SH, qb, bg)                                            \
+    do {                                                                 \
+        Q2V_CHUNK(SH, (qb) + 0, (bg) + 0, dlb, mlb);                     \
+        Q2V_CHUNK(SH, (qb) + 8, (bg) + 8, dlb, mlb);                     \
+    } while (0)
+
+static inline float compute_row_dot_q2_K_vec(const block_q2_K* q_row,
+                                             const float* b_col,
+                                             int64_t K_sblocks) {
+    unsigned long saved_mask;
+    __asm__ volatile("mova.x.m %0" : "=r"(saved_mask));
+    __asm__ volatile("mov.m.x m0, x0, 0xFF");
+
+    static const int32_t __attribute__((aligned(64))) gp[8] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+    __asm__ volatile("flw.ps f31, %[g]\n\t"
+                     "fbci.ps f10, 0\n\t"
+                     "fbci.ps f9, 0\n\t"
+                     :: [g] "m"(*(const int32_t(*)[8]) gp)
+                     : "f31", "f10", "f9");
+
+    for (int64_t sb = 0; sb < K_sblocks; sb++) {
+        const block_q2_K* block = q_row + sb;
+        const float* b = b_col + sb * QK_K;
+        const float d   = sw_fp16_to_fp32(block->d);
+        const float min = sw_fp16_to_fp32(block->dmin);
+
+        for (int sg = 0; sg < 16; ++sg) {
+            const int c   = sg >> 3;
+            const int sgi = sg & 7;
+            const int j   = sgi >> 1;
+            const int ab  = sgi & 1;
+            const uint8_t sc = block->scales[c * 8 + 2 * j + ab];
+            const float dlf = d   * (float) (sc & 0xF);
+            const float mlf = min * (float) (sc >> 4);
+            uint32_t dlb, mlb;
+            __builtin_memcpy(&dlb, &dlf, 4);
+            __builtin_memcpy(&mlb, &mlf, 4);
+            const uint8_t* qb = block->qs + c * 32 + ab * 16;
+            const float* bg = b + sg * 16;
+
+            switch (j) {
+                case 0: Q2V_GROUP(0, qb, bg); break;
+                case 1: Q2V_GROUP(2, qb, bg); break;
+                case 2: Q2V_GROUP(4, qb, bg); break;
+                default: Q2V_GROUP(6, qb, bg); break;
+            }
+        }
+    }
+
+    float final_sum;
+    __asm__ volatile(
+        "fswizz.ps f1, f10, 0xB1 \n\t fadd.ps f2, f10, f1, rne \n\t"
+        "fswizz.ps f3, f2, 0x4E \n\t fadd.ps f4, f2, f3, rne \n\t"
+        "fmvz.x.ps t0, f4, 4 \n\t fbcx.ps f5, t0 \n\t fadd.ps f6, f4, f5, rne \n\t"
+        "fswizz.ps f1, f9, 0xB1 \n\t fadd.ps f2, f9, f1, rne \n\t"
+        "fswizz.ps f3, f2, 0x4E \n\t fadd.ps f4, f2, f3, rne \n\t"
+        "fmvz.x.ps t0, f4, 4 \n\t fbcx.ps f5, t0 \n\t fadd.ps f7, f4, f5, rne \n\t"
+        "fsub.ps   %[out], f6, f7, rne \n\t"
+        : [out] "=f"(final_sum)
+        :: "t0", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f9", "f10");
+
+    __asm__ volatile("mova.m.x %0" ::"r"(saved_mask));
+    return final_sum;
+}
+
+// Vectorized (8-wide) full-row dot for Q3_K. 3-bit
+// w = d*(scale-32)*(q2 + hbit*4 - 4), 16 groups of 16, no min term. Sub-group
+// sg -> c=sg/8, j=(sg&7)/2 (qs shift 2*j), ab=(sg&7)&1 (qs/hmask offset),
+// hmask bit at position c*4+j. f30 holds -4.0.
+#define Q3V_CHUNK(SH, BP, qp, hp, bp, dlb)                               \
+    __asm__ volatile(                                                    \
+        "fgb.ps     f11, f31(%[q])\n\t"                                  \
+        "fgb.ps     f13, f31(%[h])\n\t"                                  \
+        "fsrli.pi   f12, f11, " #SH "\n\t fandi.pi f12, f12, 3\n\t"      \
+        "fsrli.pi   f13, f13, " #BP "\n\t fandi.pi f13, f13, 1\n\t fslli.pi f13, f13, 2\n\t" \
+        "fcvt.ps.pw f12, f12, rne\n\t"                                   \
+        "fcvt.ps.pw f13, f13, rne\n\t"                                   \
+        "fadd.ps    f12, f12, f13, rne\n\t"                              \
+        "fadd.ps    f12, f12, f30, rne\n\t"                              \
+        "fbcx.ps    f16, %[dl]\n\t"                                      \
+        "flw.ps     f15, 0(%[b])\n\t"                                    \
+        "fmul.ps    f12, f12, f16\n\t"                                   \
+        "fmadd.ps   f10, f12, f15, f10\n\t"                              \
+        :: [q] "r"(qp), [h] "r"(hp), [b] "r"(bp), [dl] "r"(dlb)          \
+        : "f11", "f12", "f13", "f15", "f16")
+#define Q3V_GROUP(SH, BP, qb, hb, bg)                                    \
+    do {                                                                 \
+        Q3V_CHUNK(SH, BP, (qb) + 0, (hb) + 0, (bg) + 0, dlb);            \
+        Q3V_CHUNK(SH, BP, (qb) + 8, (hb) + 8, (bg) + 8, dlb);            \
+    } while (0)
+
+static inline float compute_row_dot_q3_K_vec(const block_q3_K* q_row,
+                                             const float* b_col,
+                                             int64_t K_sblocks) {
+    unsigned long saved_mask;
+    __asm__ volatile("mova.x.m %0" : "=r"(saved_mask));
+    __asm__ volatile("mov.m.x m0, x0, 0xFF");
+
+    static const int32_t __attribute__((aligned(64))) gp[8] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+    const uint32_t neg4 = 0xC0800000u;  // -4.0f
+    __asm__ volatile("flw.ps f31, %[g]\n\t"
+                     "fbcx.ps f30, %[n]\n\t"
+                     "fbci.ps f10, 0\n\t"
+                     :: [g] "m"(*(const int32_t(*)[8]) gp), [n] "r"(neg4)
+                     : "f31", "f30", "f10");
+
+    for (int64_t sb = 0; sb < K_sblocks; sb++) {
+        const block_q3_K* block = q_row + sb;
+        const float* b = b_col + sb * QK_K;
+        const float d = sw_fp16_to_fp32(block->d);
+        int8_t scales[16];
+        unpack_q3_K_scales(block->scales, scales);
+
+        for (int sg = 0; sg < 16; ++sg) {
+            const int c   = sg >> 3;
+            const int sgi = sg & 7;
+            const int j   = sgi >> 1;
+            const int ab  = sgi & 1;
+            const float dlf = d * (float) (scales[c * 8 + 2 * j + ab] - 32);
+            uint32_t dlb;
+            __builtin_memcpy(&dlb, &dlf, 4);
+            const uint8_t* qb = block->qs + c * 32 + ab * 16;
+            const uint8_t* hb = block->hmask + ab * 16;
+            const float* bg = b + sg * 16;
+            const int cj = c * 4 + j;  // hmask bit position
+
+            switch (cj) {
+                case 0: Q3V_GROUP(0, 0, qb, hb, bg); break;
+                case 1: Q3V_GROUP(2, 1, qb, hb, bg); break;
+                case 2: Q3V_GROUP(4, 2, qb, hb, bg); break;
+                case 3: Q3V_GROUP(6, 3, qb, hb, bg); break;
+                case 4: Q3V_GROUP(0, 4, qb, hb, bg); break;
+                case 5: Q3V_GROUP(2, 5, qb, hb, bg); break;
+                case 6: Q3V_GROUP(4, 6, qb, hb, bg); break;
+                default: Q3V_GROUP(6, 7, qb, hb, bg); break;
+            }
+        }
+    }
+
+    float final_sum;
+    __asm__ volatile(
+        "fswizz.ps f1, f10, 0xB1 \n\t fadd.ps f2, f10, f1, rne \n\t"
+        "fswizz.ps f3, f2, 0x4E \n\t fadd.ps f4, f2, f3, rne \n\t"
+        "fmvz.x.ps t0, f4, 4 \n\t fbcx.ps f5, t0 \n\t fadd.ps %[out], f4, f5, rne \n\t"
+        : [out] "=f"(final_sum)
+        :: "t0", "f1", "f2", "f3", "f4", "f5", "f10");
+
+    __asm__ volatile("mova.m.x %0" ::"r"(saved_mask));
+    return final_sum;
+}
