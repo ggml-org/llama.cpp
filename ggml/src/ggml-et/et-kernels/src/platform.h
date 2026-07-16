@@ -632,4 +632,27 @@ static void evict_region_past_l2(const void * addr, size_t bytes) {
     }
 }
 
+//******************************************************************************
+// Counter signaling between harts via L2 scratchpad (SCP)
+//******************************************************************************
+
+// Signal a counter value to the other hart via L2 SCP.
+static inline void __attribute__((always_inline))
+scp_signal(volatile uint32_t *flag, uint32_t value) {
+    *flag = value;
+    FENCE;
+    evict_to_l2((const void *)flag, 1, 64);
+    WAIT_CACHEOPS;
+}
+
+// Wait for a counter in L2 SCP to reach the expected value.
+static inline void __attribute__((always_inline))
+scp_wait(volatile uint32_t *flag, uint32_t expected) {
+    while (1) {
+        evict_to_l2((const void *)flag, 1, 64);
+        WAIT_CACHEOPS;
+        if (*flag >= expected) return;
+    }
+}
+
 #endif  // PLATFORM_H
