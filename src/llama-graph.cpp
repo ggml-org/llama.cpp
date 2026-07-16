@@ -1230,9 +1230,7 @@ void llm_graph_result::set_inputs(const llama_ubatch * ubatch) {
 void llm_graph_result::set_outputs(const llm_graph_params & params) {
     auto set_output = [](ggml_tensor * t) {
         ggml_set_output(t);
-        if (t->view_src != nullptr) {
-            ggml_set_output(t->view_src);
-        }
+        GGML_ASSERT(t->view_src == nullptr && "views cannot be outputs");
     };
 
     if (t_logits != nullptr) {
