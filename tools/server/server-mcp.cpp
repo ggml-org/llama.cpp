@@ -199,23 +199,30 @@ bool server_mcp_instance::process_handle::is_alive() const {
 
 #if defined(_WIN32)
 static std::string quote_windows_arg(const std::string & arg) {
-    std::string result;
-    bool needs_quotes = arg.find(' ') != std::string::npos || arg.find('"') != std::string::npos;
-    if (!needs_quotes) {
+    if (!arg.empty() && arg.find_first_of(" \t\"") == std::string::npos) {
         return arg;
     }
+
+    std::string result;
     result.push_back('"');
+
+    size_t backslashes = 0;
     for (char c : arg) {
-        if (c == '"') {
-            result.push_back('\\');
-            result.push_back('"');
-        } else if (c == '\\') {
-            result.push_back('\\');
-            result.push_back('\\');
-        } else {
-            result.push_back(c);
+        if (c == '\\') {
+            ++backslashes;
+            continue;
         }
+
+        if (c == '"') {
+            result.append(backslashes * 2 + 1, '\\');
+        } else {
+            result.append(backslashes, '\\');
+        }
+        backslashes = 0;
+        result.push_back(c);
     }
+
+    result.append(backslashes * 2, '\\');
     result.push_back('"');
     return result;
 }
@@ -266,7 +273,7 @@ static bool spawn_process_stdio(
     si.dwFlags = STARTF_USESTDHANDLES;
     si.hStdInput = hStdinRead;
     si.hStdOutput = hStdoutWrite;
-    si.hStdError = hStdoutWrite;
+    si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
 
     PROCESS_INFORMATION pi = {};
 
