@@ -3755,23 +3755,6 @@ struct test_dsv4_hc : public test_case {
 
     ggml_tensor * out = nullptr;
 
-    double err(const float * a, const float * b, size_t n) override {
-        double max_abs = 0.0;
-        for (size_t i = 0; i < n; ++i) {
-            max_abs = std::max<double>(max_abs, fabsf(a[i] - b[i]));
-        }
-        return max_abs;
-    }
-
-    double max_err() override {
-        return 1e-5;
-    }
-
-    double max_err(ggml_backend_t backend) override {
-        GGML_UNUSED(backend);
-        return max_err();
-    }
-
     static uint32_t tensor_seed(const ggml_tensor * t) {
         uint32_t seed = 2166136261u;
         for (const char * p = ggml_get_name(t); *p; ++p) {

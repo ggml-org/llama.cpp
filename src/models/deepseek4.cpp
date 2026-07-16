@@ -197,32 +197,31 @@ static ggml_tensor * dsv4_hc_affine(
     return x;
 }
 
-ggml_tensor * llama_model_deepseek4::graph::build_hc_weighted_sum(
+ggml_tensor * llama_model_deepseek4::graph::build_hc_pre(
         ggml_tensor * x,
         ggml_tensor * weights,
-        bool          fuse) const {
+        int           il) const {
     GGML_ASSERT(x->ne[0] == n_embd);
     GGML_ASSERT(x->ne[1] == hparams.dsv4_hc_mult);
 
     const int64_t hc = hparams.dsv4_hc_mult;
     const int64_t nt = x->ne[2];
 
-    auto build_ref = [&]() {
-        ggml_tensor * acc = nullptr;
-        for (int64_t ih = 0; ih < hc; ++ih) {
-            ggml_tensor * xh = ggml_view_2d(ctx0, x, n_embd, nt, x->nb[2], ih*x->nb[1]);
-            ggml_tensor * wh = ggml_view_2d(ctx0, weights, 1, nt, weights->nb[1], ih*weights->nb[0]);
-            ggml_tensor * cur = ggml_mul(ctx0, xh, wh);
-            acc = acc ? ggml_add(ctx0, acc, cur) : cur;
-        }
-        return acc;
-    };
-
-    if (fuse) {
-        return ggml_dsv4_hc_pre(ctx0, x, weights);
+    if (cparams.fused_dsv4_hc_pre && il >= 0) {
+        ggml_tensor * result = ggml_dsv4_hc_pre(ctx0, x, weights);
+        res->add_fused_node({LLM_FUSED_OP_DSV4_HC_PRE, result, il});
+        return result;
     }
 
-    return build_ref();
+    ggml_tensor * result = nullptr;
+    for (int64_t ih = 0; ih < hc; ++ih) {
+        ggml_tensor * xh = ggml_view_2d(ctx0, x, n_embd, nt, x->nb[2], ih*x->nb[1]);
+        ggml_tensor * wh = ggml_view_2d(ctx0, weights, 1, nt, weights->nb[1], ih*weights->nb[0]);
+        ggml_tensor * cur = ggml_mul(ctx0, xh, wh);
+        result = result ? ggml_add(ctx0, result, cur) : cur;
+    }
+
+    return result;
 }
 
 ggml_tensor * llama_model_deepseek4::graph::build_hc_sinkhorn(
@@ -316,10 +315,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_hc_pre(
     }
     cb(*comb, "hc_comb", il);
 
-    ggml_tensor * result = build_hc_weighted_sum(x, pre, cparams.fused_dsv4_hc_pre);
-    if (cparams.fused_dsv4_hc_pre) {
-        res->add_fused_node({LLM_FUSED_OP_DSV4_HC_PRE, result, il});
-    }
+    ggml_tensor * result = build_hc_pre(x, pre, il);
     return result;
 }
 
@@ -379,7 +375,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_hc_head(
     pre = ggml_scale_bias(ctx0, pre, 1.0f, hparams.dsv4_hc_eps);
     cb(pre, "hc_head_pre", -1);
 
-    return build_hc_weighted_sum(x, pre, false);
+    return build_hc_pre(x, pre, -1);
 }
 
 ggml_tensor * llama_model_deepseek4::graph::build_hca_compressed_kv_from_state(

@@ -1187,10 +1187,10 @@ struct llama_model_deepseek4 : public llama_model_base {
                 float kq_scale,
                 int il) const;
 
-        ggml_tensor * build_hc_weighted_sum(
+        ggml_tensor * build_hc_pre(
                 ggml_tensor * x,
                 ggml_tensor * weights,
-                bool fuse) const;
+                int il) const;
 
         ggml_tensor * build_hc_sinkhorn(
                 ggml_tensor * comb,
