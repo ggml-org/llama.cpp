@@ -253,14 +253,14 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				}
 			},
 			{
-				key: SETTINGS_KEYS.SHOW_TOOL_CALL_IN_PROGRESS,
-				label: 'Show tool call in progress',
+				key: SETTINGS_KEYS.ALWAYS_SHOW_TOOL_CALL_CONTENT,
+				label: 'Always show tool call content',
 				help: 'Automatically expand tool call details while executing and keep them expanded after completion.',
 				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.DISPLAY,
 				sync: {
-					serverKey: SETTINGS_KEYS.SHOW_TOOL_CALL_IN_PROGRESS,
+					serverKey: SETTINGS_KEYS.ALWAYS_SHOW_TOOL_CALL_CONTENT,
 					paramType: SyncableParameterType.BOOLEAN
 				}
 			},

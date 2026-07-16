@@ -43,7 +43,7 @@
 
 	const renderThinkingAsMarkdown = $derived(config().renderThinkingAsMarkdown as boolean);
 	const showThoughtInProgress = $derived(Boolean(config().showThoughtInProgress));
-	const showToolCallInProgress = $derived(Boolean(config().showToolCallInProgress));
+	const alwaysShowToolCallContent = $derived(Boolean(config().alwaysShowToolCallContent));
 	const showMessageStats = $derived(Boolean(config().showMessageStats));
 	const showAgenticTurnStats = $derived(showMessageStats && Boolean(config().showAgenticTurnStats));
 
@@ -141,7 +141,7 @@
 			section.type === AgenticSectionType.TOOL_CALL_PENDING ||
 			section.type === AgenticSectionType.TOOL_CALL_STREAMING
 		) {
-			return showToolCallInProgress;
+			return alwaysShowToolCallContent;
 		}
 
 		if (section.type === AgenticSectionType.REASONING_PENDING) {
