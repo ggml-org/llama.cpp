@@ -9,6 +9,19 @@
 #include "simd-mappings.h"
 #include "traits.h"
 
+/* #region Added by KI */
+#include <arm_sve.h>    // SVE intrinsics
+#include <arm_fp16.h>   // for fp16 support
+
+// // check if SVE enabled
+// #if defined(__ARM_FEATURE_SVE)
+// #warning SVE_ENABLED
+// #else
+// #warning SVE_DISABLED
+// #endif
+
+/* #endregion  */
+
 #include <cmath>
 #include <cstring>
 #include <cassert>
@@ -47,6 +60,92 @@ static inline void decode_q_Kx8_6bit_scales(const uint8_t * scales_in, int16x8_t
     memcpy(out_scales, scales_u32, 8);
 }
 #endif
+#if defined(__aarch64__) && (defined(__ARM_FEATURE_SVE) || defined(__ARM_FEATURE_SVE2))
+/**
+ * This function is meant to decode subblock scales and mins
+ * from block_q4_Kx8.scales[96], i.e. the repacked format, and
+ * this gives you exactly one row worth of scales and mins meaning,
+ * exactly one subblock, for 8 rows, hence the Kx8.
+ * 
+ * scales_in is the pointer to the first subblock for each row.
+ */
+static inline void decode_q_Kx8_6bit_scales_sve128(
+    const uint8_t* scales_in,   // scales & mins come in as uint8_t 
+    svint16_t*     out_mins,    // mins stored as int16x8_t
+    int8_t*        out_scales   // scales stored as int8_t[8]
+){
+    constexpr uint32_t kmask1= 0x3f3f3f3f;  // keep lower 6 bits of each byte
+    constexpr uint32_t kmask2= 0x0f0f0f0f;  // keep lower 4 bits of each byte
+    constexpr uint32_t kmask3= 0x03030303;  // keep lower 2 bits of each byte
+    constexpr uint8_t scales_size= 12;
+
+    /* The packed 12 bytes will have the scales and mins
+    of first subblock but for all 8 rows, hence do extraction
+    in general purpose registers and only vectorize the final 
+    output.
+     */
+    uint32_t sm[3];     
+    // first  4 bytes contain only scales
+    // second 4 bytes contain only mins
+    // last   4 bytes contain scales & mins
+    memcpy(sm, scales_in, scales_size);     // copy 12 bytes
+
+    /* ---- MINS ---- */
+    // mins 0 to 3: lower 6bits in each byte of sm[1]
+    const uint32_t mins_0_3= sm[1] & kmask1;
+    // mins 4 to 7: lower nibble comes from sm[2]>>4;
+    // higher nibble comes from sm[1]>>6 but shifted to 4:5
+    const uint32_t mins_4_7= ( (sm[2]>>4) & kmask2 ) |
+        ( ( (sm[1]>>6) & kmask3 ) << 4 );
+    // with this, we have also implicitly converted all the
+    // mins to uint8_t. Each uint32_t above contains 4 mins
+
+    // pack them
+    uint32_t mins_packed[2]= {mins_0_3, mins_4_7};
+
+    // now we have 8 mins, which we load into 16x8 slots
+    svuint16_t mins_u16= svld1ub_u16(svptrue_b16(), (const uint8_t*)mins_packed);
+    // reinterpret as uint8_t's and load.
+
+    // reinterpret as signed 16-bit ints now.
+    *out_mins= svreinterpret_s16_u16(mins_u16);
+
+    /* ---- SCALES ---- */
+    // scales 0...3: lower 6-bits of sm[0]
+    // scales 4...7: low nibble from sm[2], 
+    // high bits from sm[0]>>6
+    uint32_t scales_u32[2];
+    scales_u32[0]= sm[0] & kmask1;
+    scales_u32[1]= (sm[2] & kmask2) |
+        ( ( (sm[0]>>6) & kmask3) << 4);
+    
+    // copy scales_u32 which contains 8 uint8_t's now to outscales
+    memcpy(out_scales, scales_u32, 8);
+}
+
+// widening operation
+static inline svfloat32_t load_f16x4_as_f32_sve128(
+    const __fp16 * p,
+    svbool_t pg32
+) {
+    const svuint32_t bits =
+        svld1uh_u32(pg32, (const uint16_t*)p);
+
+    return svcvt_f32_f16_x(
+        pg32,
+        svreinterpret_f16_u32(bits)
+    );
+}
+// duplicating operation
+static inline svint8_t load_dup_q8x8_sve128(const int8_t * p) {
+    uint64_t bits;
+    memcpy(&bits, p, sizeof(bits));
+    return svreinterpret_s8_u64(svdup_n_u64(bits));
+}
+
+
+#endif
+
 
 void ggml_quantize_mat_q8_0_4x4(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k) {
     assert(QK8_0 == 32);
@@ -706,18 +805,20 @@ void ggml_gemv_q4_K_8x4_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
     ggml_gemv_q4_K_8x4_q8_K_generic(n, s, bs, vx, vy, nr, nc);
 }
 
-void ggml_gemv_q4_K_8x8_q8_K(int                        n,
-                             float * GGML_RESTRICT      s,
-                             size_t                     bs,
-                             const void * GGML_RESTRICT vx,
-                             const void * GGML_RESTRICT vy,
-                             int                        nr,
-                             int                        nc) {
+void ggml_gemv_q4_K_8x8_q8_K(
+    int                        n,   // dot-product dimension, no.of cols in computation
+    float * GGML_RESTRICT      s,   // output vector [nc x 1]
+    size_t                     bs,  // block size / stride
+    const void * GGML_RESTRICT vx,  // matrix (quantized, q4_K) [nc x n]
+    const void * GGML_RESTRICT vy,  // vector (quantized, q8_K) [n x 1]
+    int                        nr,  // [unused] 
+    int                        nc   // number of rows in matrix (fuckall naming!)
+) {
     constexpr int qk = QK_K;
     const int     nb = n / qk;
 
-    constexpr int ncols_interleaved = 8;
-    constexpr int blocklen          = 8;
+    constexpr int ncols_interleaved = 8;    // actually number of rows!
+    constexpr int blocklen          = 8;    
 
     assert(n % qk == 0);
     assert(nc % ncols_interleaved == 0);
@@ -726,6 +827,351 @@ void ggml_gemv_q4_K_8x8_q8_K(int                        n,
     UNUSED(ncols_interleaved);
     UNUSED(blocklen);
 
+/* #region Added by KI */
+#if defined(__aarch64__) && defined(__ARM_FEATURE_SVE) && defined(__ARM_FEATURE_SVE2)
+// vector vy as block_q8_K array (ptr)
+const block_q8_K* GGML_RESTRICT q8_ptr= (const block_q8_K*) vy;
+
+/* Different Paths for different vector lengths */
+if(svcntw()==4){    // 128-bit SVE path
+    // predicates
+    const svbool_t pg8 = svptrue_b8();
+    const svbool_t pg16= svptrue_b16();
+    const svbool_t pg32= svptrue_b32();
+    const svuint8_t m4b= svdup_n_u8(0x0f);
+
+    // accumulators init [1x8 tile = 2x4] -> 4 meaning 4 float32 in one Z-reg.
+    svfloat32_t acc_f32_0;
+    svfloat32_t acc_f32_1;
+
+    for(int x=0; x<nc/ncols_interleaved; x++){  // iterate through rows 8 at time
+        // pointer to current row-block of things [8 x QK_K elements]
+        const block_q4_Kx8* GGML_RESTRICT q4_ptr= (const block_q4_Kx8*)vx
+            + (x*nb);
+        
+        // reinitialize to zero [accumulators for row 8*x to 8*x+7]
+        acc_f32_0 = svdup_n_f32(0.0f);  // 4 x 32 
+        acc_f32_1 = svdup_n_f32(0.0f);  // 4 x 32
+
+        for(int b=0; b<nb; b++){    // iterate through columns QK_K at a time
+            // Load all 8 q4_K global scales as float32, using 2 float32x4 [svfloat32_t]
+            // Look at the docs for more detailed mathematics behind it.
+            // d0 d1 d2 d3
+            svfloat32_t q4_d_0= load_f16x4_as_f32_sve128((const __fp16*)q4_ptr[b].d, pg32);
+            // d4 d5 d6 d7
+            svfloat32_t q4_d_1= load_f16x4_as_f32_sve128((const __fp16*)q4_ptr[b].d+4, pg32);
+            
+            // Load all 8 q4_K global mins as float32, using 2 float32x4 [svfloat32_t]
+            // dmin0 dmin1 dmin2 dmin3
+            svfloat32_t q4_dmin_0= load_f16x4_as_f32_sve128((const __fp16*)q4_ptr[b].dmin, pg32);
+            // dmin4 dmin5 dmin6 dmin7
+            svfloat32_t q4_dmin_1= load_f16x4_as_f32_sve128((const __fp16*)q4_ptr[b].dmin+4, pg32);
+            
+            // Load the q8_K scale, single float broadcasted to all 4 slots
+            svfloat32_t q8_d= svdup_n_f32(q8_ptr[b].d);
+            
+            // Calculate d4*d8 [multiply global scales]
+            svfloat32_t sb_scale_0= svmul_f32_x(pg32, q4_d_0, q8_d);
+            svfloat32_t sb_scale_1= svmul_f32_x(pg32, q4_d_1, q8_d);
+            // calculate dmin4*d8 [multiply global min q4_K with q8_K global scale]
+            svfloat32_t sb_min_0= svmul_f32_x(pg32, q4_dmin_0, q8_d);
+            svfloat32_t sb_min_1= svmul_f32_x(pg32, q4_dmin_1, q8_d);
+
+            // Accumulators for subblock processing [2 sb per iteration]
+            // lower subblock   [each thing contains 4-int32's]
+            // 4x4 = 16 int32_t's
+            svint32_t acc_lo_0;  
+            svint32_t acc_lo_1;
+            svint32_t acc_lo_2;
+            svint32_t acc_lo_3;
+            // higher subblock
+            svint32_t acc_hi_0;
+            svint32_t acc_hi_1;
+            svint32_t acc_hi_2;
+            svint32_t acc_hi_3;
+
+            // bias accumulator and bsums
+            svint32_t bias_acc_0= svdup_n_s32(0);
+            svint32_t bias_acc_1= svdup_n_s32(0);
+
+            svint16_t bsums_a= svld1_s16(pg16, q8_ptr[b].bsums);
+            svint16_t bsums_b= svld1_s16(pg16, q8_ptr[b].bsums + 8);
+            svint16_t bsums  = svadd_s16_x(pg16, svuzp1_s16(bsums_a, bsums_b),
+                                                svuzp2_s16(bsums_a, bsums_b));
+            
+            int16_t bsums_arr[8];
+            svst1_s16(pg16, bsums_arr, bsums);
+
+            // process 64 elements at once, which is iterate
+            // in terms of 2 q4_k subblocks
+            for(int sb=0; sb<QK_K/64; sb++){
+                // Reinitialize the subblocks [to all zeros]
+                acc_lo_0= svdup_n_s32(0); acc_lo_1= svdup_n_s32(0);
+                acc_lo_2= svdup_n_s32(0); acc_lo_3= svdup_n_s32(0);
+
+                acc_hi_0= svdup_n_s32(0); acc_hi_1= svdup_n_s32(0);
+                acc_hi_2= svdup_n_s32(0); acc_hi_3= svdup_n_s32(0);
+
+                // load the subblock scales and mins [for 2 subblocks]
+                // 8 rows -> 8 uint8_t per subblock converted to int16_t
+                // MINS [for q4_K subblock pairs]
+                svint16_t q4sb_min_0;
+                svint16_t q4sb_min_1;
+                // SCALES [for q4_K subblock pairs]
+                svint16_t q4sb_scale_0;
+                svint16_t q4sb_scale_1;
+                
+                // temp arrays for this
+                int8_t aux_q4sb[8];
+                
+                // Decode scale and min 0 [scope blocks put to reuse 
+                // offset]. Loop unrolling NEON code.
+                {
+                    const int offset= sb*24;
+                    decode_q_Kx8_6bit_scales_sve128(
+                        &q4_ptr[b].scales[offset],
+                        &q4sb_min_0,
+                        aux_q4sb
+                    );
+                    // s16 widening load: different than one inside 
+                    // decode function, that is u16 widening load
+                    q4sb_scale_0= svld1sb_s16(pg16, aux_q4sb);
+                }{
+                    // move 12 bytes ahead for next row scales
+                    const int offset= sb*24+12;
+                    decode_q_Kx8_6bit_scales_sve128(
+                        &q4_ptr[b].scales[offset],
+                        &q4sb_min_1,
+                        aux_q4sb
+                    );
+                    q4sb_scale_1= svld1sb_s16(pg16, aux_q4sb);
+                }
+                
+                // move two q4_K subblock per sb iteration
+                // in repacked, that corresponds to 4*(8*QK_K/(2*16))
+                // = QK_K bytes forward.
+                const uint8_t* q4_base= q4_ptr[b].qs + sb*QK_K;
+                // each sb consumes 64 columns (actual columns) at once
+                // hence, for q8_base,
+                const int8_t* q8_base= q8_ptr[b].qs + sb*64;
+                // 64 uint8_t's => 64
+                // each 8 q8 quants require a full Z-register
+                // 64 of them will require 8 of that
+                // subblock-0
+                svint8_t q8_0= load_dup_q8x8_sve128(q8_base+0*8);
+                svint8_t q8_1= load_dup_q8x8_sve128(q8_base+1*8);
+                svint8_t q8_2= load_dup_q8x8_sve128(q8_base+2*8);
+                svint8_t q8_3= load_dup_q8x8_sve128(q8_base+3*8);
+                // subblock-1
+                svint8_t q8_4= load_dup_q8x8_sve128(q8_base+4*8);
+                svint8_t q8_5= load_dup_q8x8_sve128(q8_base+5*8);
+                svint8_t q8_6= load_dup_q8x8_sve128(q8_base+6*8);
+                svint8_t q8_7= load_dup_q8x8_sve128(q8_base+7*8);
+
+                // ---- cp= 0 (rows 0, 1) ---- //
+                {
+                    const uint8_t* p= q4_base + 16*0;   // 0, 1
+                    // 4 loads of 16B each to conver subblock
+                    // pair. 4 pair in total
+                    svuint8_t q4_qs_0= svld1_u8(pg8, p);
+                    svuint8_t q4_qs_1= svld1_u8(pg8, p + 64);
+                    svuint8_t q4_qs_2= svld1_u8(pg8, p + 128);
+                    svuint8_t q4_qs_3= svld1_u8(pg8, p + 192);
+
+                    // low nibble processing
+                    acc_lo_0= svdot_s32(acc_lo_0,
+                    svreinterpret_s8_u8(svand_u8_x(pg8, q4_qs_0, m4b)), q8_0);
+                    acc_lo_0= svdot_s32(acc_lo_0,
+                    svreinterpret_s8_u8(svand_u8_x(pg8, q4_qs_1, m4b)), q8_1);
+                    acc_lo_0= svdot_s32(acc_lo_0,
+                    svreinterpret_s8_u8(svand_u8_x(pg8, q4_qs_2, m4b)), q8_2);
+                    acc_lo_0= svdot_s32(acc_lo_0,
+                    svreinterpret_s8_u8(svand_u8_x(pg8, q4_qs_3, m4b)), q8_3);
+
+                    // high nibble processing
+                    acc_hi_0= svdot_s32(acc_hi_0,
+                    svreinterpret_s8_u8(svlsr_n_u8_x(pg8, q4_qs_0, 4)), q8_4);
+                    acc_hi_0= svdot_s32(acc_hi_0,
+                    svreinterpret_s8_u8(svlsr_n_u8_x(pg8, q4_qs_1, 4)), q8_5);
+                    acc_hi_0= svdot_s32(acc_hi_0,
+                    svreinterpret_s8_u8(svlsr_n_u8_x(pg8, q4_qs_2, 4)), q8_6);
+                    acc_hi_0= svdot_s32(acc_hi_0,
+                    svreinterpret_s8_u8(svlsr_n_u8_x(pg8, q4_qs_3, 4)), q8_7);
+                }
+                // ---- cp= 1 (rows 2, 3) ---- //
+                {
+                    const uint8_t* p= q4_base + 16*1;   // 2, 3
+                    // 4 loads of 16B each to conver subblock
+                    // pair. 4 pair in total
+                    svuint8_t q4_qs_0= svld1_u8(pg8, p);
+                    svuint8_t q4_qs_1= svld1_u8(pg8, p + 64);
+                    svuint8_t q4_qs_2= svld1_u8(pg8, p + 128);
+                    svuint8_t q4_qs_3= svld1_u8(pg8, p + 192);
+
+                    // low nibble processing
+                    acc_lo_1= svdot_s32(acc_lo_1,
+                    svreinterpret_s8_u8(svand_u8_x(pg8, q4_qs_0, m4b)), q8_0);
+                    acc_lo_1= svdot_s32(acc_lo_1,
+                    svreinterpret_s8_u8(svand_u8_x(pg8, q4_qs_1, m4b)), q8_1);
+                    acc_lo_1= svdot_s32(acc_lo_1,
+                    svreinterpret_s8_u8(svand_u8_x(pg8, q4_qs_2, m4b)), q8_2);
+                    acc_lo_1= svdot_s32(acc_lo_1,
+                    svreinterpret_s8_u8(svand_u8_x(pg8, q4_qs_3, m4b)), q8_3);
+
+                    // high nibble processing
+                    acc_hi_1= svdot_s32(acc_hi_1,
+                    svreinterpret_s8_u8(svlsr_n_u8_x(pg8, q4_qs_0, 4)), q8_4);
+                    acc_hi_1= svdot_s32(acc_hi_1,
+                    svreinterpret_s8_u8(svlsr_n_u8_x(pg8, q4_qs_1, 4)), q8_5);
+                    acc_hi_1= svdot_s32(acc_hi_1,
+                    svreinterpret_s8_u8(svlsr_n_u8_x(pg8, q4_qs_2, 4)), q8_6);
+                    acc_hi_1= svdot_s32(acc_hi_1,
+                    svreinterpret_s8_u8(svlsr_n_u8_x(pg8, q4_qs_3, 4)), q8_7);
+                }
+                // ---- cp= 2 (rows 4, 5) ---- //
+                {
+                    const uint8_t* p= q4_base + 16*2;   // 4, 5
+                    // 4 loads of 16B each to conver subblock
+                    // pair. 4 pair in total
+                    svuint8_t q4_qs_0= svld1_u8(pg8, p);
+                    svuint8_t q4_qs_1= svld1_u8(pg8, p + 64);
+                    svuint8_t q4_qs_2= svld1_u8(pg8, p + 128);
+                    svuint8_t q4_qs_3= svld1_u8(pg8, p + 192);
+
+                    // low nibble processing
+                    acc_lo_2= svdot_s32(acc_lo_2,
+                    svreinterpret_s8_u8(svand_u8_x(pg8, q4_qs_0, m4b)), q8_0);
+                    acc_lo_2= svdot_s32(acc_lo_2,
+                    svreinterpret_s8_u8(svand_u8_x(pg8, q4_qs_1, m4b)), q8_1);
+                    acc_lo_2= svdot_s32(acc_lo_2,
+                    svreinterpret_s8_u8(svand_u8_x(pg8, q4_qs_2, m4b)), q8_2);
+                    acc_lo_2= svdot_s32(acc_lo_2,
+                    svreinterpret_s8_u8(svand_u8_x(pg8, q4_qs_3, m4b)), q8_3);
+
+                    // high nibble processing
+                    acc_hi_2= svdot_s32(acc_hi_2,
+                    svreinterpret_s8_u8(svlsr_n_u8_x(pg8, q4_qs_0, 4)), q8_4);
+                    acc_hi_2= svdot_s32(acc_hi_2,
+                    svreinterpret_s8_u8(svlsr_n_u8_x(pg8, q4_qs_1, 4)), q8_5);
+                    acc_hi_2= svdot_s32(acc_hi_2,
+                    svreinterpret_s8_u8(svlsr_n_u8_x(pg8, q4_qs_2, 4)), q8_6);
+                    acc_hi_2= svdot_s32(acc_hi_2,
+                    svreinterpret_s8_u8(svlsr_n_u8_x(pg8, q4_qs_3, 4)), q8_7);
+                }
+                // ---- cp= 3 (rows 6, 7) ---- //
+                {
+                    const uint8_t* p= q4_base + 16*3;   // 6, 7
+                    // 4 loads of 16B each to conver subblock
+                    // pair. 4 pair in total
+                    svuint8_t q4_qs_0= svld1_u8(pg8, p);
+                    svuint8_t q4_qs_1= svld1_u8(pg8, p + 64);
+                    svuint8_t q4_qs_2= svld1_u8(pg8, p + 128);
+                    svuint8_t q4_qs_3= svld1_u8(pg8, p + 192);
+
+                    // low nibble processing
+                    acc_lo_3= svdot_s32(acc_lo_3,
+                    svreinterpret_s8_u8(svand_u8_x(pg8, q4_qs_0, m4b)), q8_0);
+                    acc_lo_3= svdot_s32(acc_lo_3,
+                    svreinterpret_s8_u8(svand_u8_x(pg8, q4_qs_1, m4b)), q8_1);
+                    acc_lo_3= svdot_s32(acc_lo_3,
+                    svreinterpret_s8_u8(svand_u8_x(pg8, q4_qs_2, m4b)), q8_2);
+                    acc_lo_3= svdot_s32(acc_lo_3,
+                    svreinterpret_s8_u8(svand_u8_x(pg8, q4_qs_3, m4b)), q8_3);
+
+                    // high nibble processing
+                    acc_hi_3= svdot_s32(acc_hi_3,
+                    svreinterpret_s8_u8(svlsr_n_u8_x(pg8, q4_qs_0, 4)), q8_4);
+                    acc_hi_3= svdot_s32(acc_hi_3,
+                    svreinterpret_s8_u8(svlsr_n_u8_x(pg8, q4_qs_1, 4)), q8_5);
+                    acc_hi_3= svdot_s32(acc_hi_3,
+                    svreinterpret_s8_u8(svlsr_n_u8_x(pg8, q4_qs_2, 4)), q8_6);
+                    acc_hi_3= svdot_s32(acc_hi_3,
+                    svreinterpret_s8_u8(svlsr_n_u8_x(pg8, q4_qs_3, 4)), q8_7);
+                }
+
+                // ===================== fold + scale: cols 0-3 (rows 0..3) =====================
+                {
+                    // pairwise-add replacement (no vpaddq in SVE1): uzp1 gathers even-position
+                    // sums, uzp2 gathers odd-position sums, add combines them into per-row totals
+                    svint32_t fold_lo = svadd_s32_x(pg32, svuzp1_s32(acc_lo_0, acc_lo_1),
+                                                            svuzp2_s32(acc_lo_0, acc_lo_1));
+                    svint32_t fold_hi = svadd_s32_x(pg32, svuzp1_s32(acc_hi_0, acc_hi_1),
+                                                            svuzp2_s32(acc_hi_0, acc_hi_1));
+                    
+                    // q4sb_scale_0 holds scales for subblock 2*sb, across all 8 rows (int16x8).
+                    // rows 0..3 live in the low half -> svunpklo widens that half to s32.
+                    svint32_t gs_lo = svunpklo_s32(q4sb_scale_0);  // scale for subblock 2*sb, rows 0..3
+                    svint32_t gs_hi = svunpklo_s32(q4sb_scale_1);  // scale for subblock 2*sb+1, rows 0..3
+                    
+                    svfloat32_t sumf_lo = svcvt_f32_s32_x(pg32, svmul_s32_x(pg32, gs_lo, fold_lo));
+                    svfloat32_t sumf_hi = svcvt_f32_s32_x(pg32, svmul_s32_x(pg32, gs_hi, fold_hi));
+                    
+                    // accumulate, scaled by sb_scale_0 = d4[0..3] * d8 (computed earlier, per-b)
+                    acc_f32_0 = svmla_f32_x(pg32, acc_f32_0, sb_scale_0, sumf_lo);
+                    acc_f32_0 = svmla_f32_x(pg32, acc_f32_0, sb_scale_0, sumf_hi);
+                }
+                // ===================== fold + scale: cols 4-7 (rows 4..7) =====================
+                {
+                    svint32_t fold_lo = svadd_s32_x(pg32, svuzp1_s32(acc_lo_2, acc_lo_3),
+                                                            svuzp2_s32(acc_lo_2, acc_lo_3));
+                    svint32_t fold_hi = svadd_s32_x(pg32, svuzp1_s32(acc_hi_2, acc_hi_3),
+                                                            svuzp2_s32(acc_hi_2, acc_hi_3));
+                    
+                    // rows 4..7 live in the high half -> svunpkhi
+                    svint32_t gs_lo = svunpkhi_s32(q4sb_scale_0);  // rows 4..7
+                    svint32_t gs_hi = svunpkhi_s32(q4sb_scale_1);
+                    
+                    svfloat32_t sumf_lo = svcvt_f32_s32_x(pg32, svmul_s32_x(pg32, gs_lo, fold_lo));
+                    svfloat32_t sumf_hi = svcvt_f32_s32_x(pg32, svmul_s32_x(pg32, gs_hi, fold_hi));
+                    
+                    acc_f32_1 = svmla_f32_x(pg32, acc_f32_1, sb_scale_1, sumf_lo);
+                    acc_f32_1 = svmla_f32_x(pg32, acc_f32_1, sb_scale_1, sumf_hi);
+                }
+                
+
+                // ===================== bias term: bsums · mins =====================
+                // Broadcast this sb's two subblock bsums (scalars) into full vectors —
+                // SVE replacement for vdup_n_s16.
+                svint16_t bsums_vec_lo = svdup_n_s16(bsums_arr[2 * sb + 0]);  // subblock 2*sb
+                svint16_t bsums_vec_hi = svdup_n_s16(bsums_arr[2 * sb + 1]);  // subblock 2*sb+1
+                
+                // Widen the (identical, broadcast) bsum scalar to s32. Since every lane already
+                // holds the same value, low-half and high-half widen give identical content —
+                // only computed once each and reused for both column groups below.
+                svint32_t bsums_lo_w = svunpklo_s32(bsums_vec_lo);
+                svint32_t bsums_hi_w = svunpklo_s32(bsums_vec_hi);
+                
+                // cols 0-3 bias: rows 0..3 mins (low half of q4sb_min_0/1)
+                svint32_t mins0_lo = svunpklo_s32(q4sb_min_0);   // subblock 2*sb, rows 0..3
+                svint32_t mins1_lo = svunpklo_s32(q4sb_min_1);   // subblock 2*sb+1, rows 0..3
+                bias_acc_0 = svmla_s32_x(pg32, bias_acc_0, bsums_lo_w, mins0_lo);
+                bias_acc_0 = svmla_s32_x(pg32, bias_acc_0, bsums_hi_w, mins1_lo);
+                
+                // cols 4-7 bias: rows 4..7 mins (high half of q4sb_min_0/1)
+                svint32_t mins0_hi = svunpkhi_s32(q4sb_min_0);   // subblock 2*sb, rows 4..7
+                svint32_t mins1_hi = svunpkhi_s32(q4sb_min_1);   // subblock 2*sb+1, rows 4..7
+                bias_acc_1 = svmla_s32_x(pg32, bias_acc_1, bsums_lo_w, mins0_hi);
+                bias_acc_1 = svmla_s32_x(pg32, bias_acc_1, bsums_hi_w, mins1_hi);
+                
+            }   // for sb
+
+            acc_f32_0= svmls_f32_x(pg32, acc_f32_0, svcvt_f32_s32_x(pg32, bias_acc_0), sb_min_0);
+            acc_f32_1= svmls_f32_x(pg32, acc_f32_1, svcvt_f32_s32_x(pg32, bias_acc_1), sb_min_1);
+
+        }   // for b
+
+        int base = x * ncols_interleaved;
+        svst1_f32(pg32, s + base,     acc_f32_0);
+        svst1_f32(pg32, s + base + 4, acc_f32_1);
+
+    }   // for x
+
+    return;
+}
+
+#endif // defined(__aarch64__) && defined(__ARM_FEATURE_SVE)
+/* #endregion */    
+
 #if defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
     constexpr int    col_pairs = ncols_interleaved / 2;
     const uint8x16_t m4b       = vdupq_n_u8(0x0f);
@@ -733,7 +1179,7 @@ void ggml_gemv_q4_K_8x8_q8_K(int                        n,
     // 1x8 tile = 2 x 4
     float32x4_t acc_f32[ncols_interleaved / 4];
 
-    const block_q8_K * GGML_RESTRICT q8_ptr = (const block_q8_K *) vy;
+    // const block_q8_K * GGML_RESTRICT q8_ptr = (const block_q8_K *) vy;
 
     for (int x = 0; x < nc / ncols_interleaved; x++) {
         const block_q4_Kx8 * GGML_RESTRICT q4_ptr = (const block_q4_Kx8 *) vx + (x * nb);
@@ -857,6 +1303,8 @@ void ggml_gemv_q4_K_8x8_q8_K(int                        n,
     }  // for x
     return;
 #endif  // defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
+
+
     ggml_gemv_q4_K_8x8_q8_K_generic(n, s, bs, vx, vy, nr, nc);
 }
 
