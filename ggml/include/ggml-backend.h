@@ -110,10 +110,10 @@ extern "C" {
     GGML_API bool ggml_backend_offload_op(ggml_backend_t backend, const struct ggml_tensor * op);
 
     // asynchronous copy
-    // the copy is performed after all the currently queued operations in backend_src
-    // backend_dst will wait for the copy to complete before performing other operations
-    // automatic fallback to sync copy if async is not supported
-    GGML_API void ggml_backend_tensor_copy_async(ggml_backend_t backend_src, ggml_backend_t backend_dst, const struct ggml_tensor * src, struct ggml_tensor * dst);
+    //   - the copy is performed by backend_copy after all operations currently queued on that backend
+    //   - if backend_wait is not null it will wait for the copy to complete before performing other operations
+    //   - automatic fallback to sync copy if async copy is not supported
+    GGML_API void ggml_backend_tensor_copy_async(ggml_backend_t backend_copy, ggml_backend_t backend_wait, const struct ggml_tensor * src, struct ggml_tensor * dst);
 
     GGML_API ggml_backend_dev_t ggml_backend_get_device(ggml_backend_t backend);
 
@@ -121,11 +121,13 @@ extern "C" {
     // Events
     //
 
+    // the functions with bool return type return whether the backend could successfully synchronize on the event
+    //   - returns false if the event is null
     GGML_API ggml_backend_event_t ggml_backend_event_new(ggml_backend_dev_t device);
     GGML_API void                 ggml_backend_event_free(ggml_backend_event_t event);
-    GGML_API void                 ggml_backend_event_record(ggml_backend_event_t event, ggml_backend_t backend);
+    GGML_API bool                 ggml_backend_event_record(ggml_backend_event_t event, ggml_backend_t backend);
     GGML_API void                 ggml_backend_event_synchronize(ggml_backend_event_t event);
-    GGML_API void                 ggml_backend_event_wait(ggml_backend_t backend, ggml_backend_event_t event);
+    GGML_API bool                 ggml_backend_event_wait(ggml_backend_t backend, ggml_backend_event_t event);
 
     //
     // Backend device
