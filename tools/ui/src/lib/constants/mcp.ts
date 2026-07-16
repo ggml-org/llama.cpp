@@ -51,6 +51,9 @@ export const EXPECTED_THEMED_ICON_PAIR_COUNT = 2;
 /** CORS proxy URL query parameter name */
 export const CORS_PROXY_URL_PARAM = 'url';
 
+/** Header prefix for headers that should be forwarded by the CORS proxy */
+export const CORS_PROXY_HEADER_PREFIX = 'x-llama-server-proxy-header-';
+
 /** Number of trailing characters to keep visible when partially redacting mcp-session-id */
 export const MCP_SESSION_ID_VISIBLE_CHARS = 5;
 
@@ -58,6 +61,12 @@ export const MCP_SESSION_ID_VISIBLE_CHARS = 5;
 export const MCP_PARTIAL_REDACT_HEADERS = new Map<string, number>([
 	['mcp-session-id', MCP_SESSION_ID_VISIBLE_CHARS]
 ]);
+
+/** Bearer scheme prefix used for Authorization headers (RFC 6750) */
+export const BEARER_PREFIX = 'Bearer ';
+
+/** Canonical casing for the Authorization header (RFC 7235) */
+export const AUTHORIZATION_HEADER = 'Authorization';
 
 /** Header names whose values should be redacted in diagnostic logs */
 export const REDACTED_HEADERS = new Set([

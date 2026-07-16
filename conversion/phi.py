@@ -18,7 +18,7 @@ class Phi2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.PHI2
 
     def set_gguf_parameters(self):
-        rot_pct = self.find_hparam(["partial_rotary_factor"])
+        rot_pct = self.rope_parameters["partial_rotary_factor"]
         n_embd = self.find_hparam(["hidden_size", "n_embd"])
         n_head = self.find_hparam(["num_attention_heads", "n_head"])
 
@@ -149,8 +149,8 @@ class Phi3MiniModel(TextModel):
         n_head_kv = self.find_hparam(["num_key_value_heads", "n_head_kv"])
         rms_eps = self.find_hparam(["rms_norm_eps"])
         max_pos_embds = self.find_hparam(["n_positions", "max_position_embeddings"])
-        orig_max_pos_embds = self.find_hparam(["original_max_position_embeddings"])
-        rot_pct = self.hparams.get("partial_rotary_factor", 1.0)
+        orig_max_pos_embds = self.rope_parameters["original_max_position_embeddings"]
+        rot_pct = self.rope_parameters.get("partial_rotary_factor", 1.0)
         rope_dims = int(rot_pct * n_embd) // n_head
 
         self.gguf_writer.add_context_length(max_pos_embds)
@@ -174,18 +174,19 @@ class Phi3MiniModel(TextModel):
         n_embd = self.find_hparam(["hidden_size", "n_embd"])
         n_head = self.find_hparam(["num_attention_heads", "n_head"])
         max_pos_embds = self.find_hparam(["n_positions", "max_position_embeddings"])
-        orig_max_pos_embds = self.find_hparam(["original_max_position_embeddings"])
-        rot_pct = self.hparams.get("partial_rotary_factor", 1.0)
+        orig_max_pos_embds = self.rope_parameters["original_max_position_embeddings"]
+        rot_pct = self.rope_parameters.get("partial_rotary_factor", 1.0)
         rope_dims = int(rot_pct * n_embd) // n_head
 
         # write rope scaling for long context (128k) model
-        rope_scaling = self.find_hparam(['rope_scaling'], True)
-        if rope_scaling is None:
+        long_factors = self.rope_parameters.get('long_factor')
+        short_factors = self.rope_parameters.get('short_factor')
+        if not long_factors:
             return
 
         scale = max_pos_embds / orig_max_pos_embds
 
-        rope_scaling_type = rope_scaling.get('rope_type', rope_scaling.get('type', '')).lower()
+        rope_scaling_type = self.rope_parameters.get('rope_type', '').lower()
         if len(rope_scaling_type) == 0:
             raise KeyError('Missing the required key rope_scaling.type')
 
@@ -197,9 +198,6 @@ class Phi3MiniModel(TextModel):
             raise NotImplementedError(f'The rope scaling type {rope_scaling_type} is not supported yet')
 
         self.gguf_writer.add_rope_scaling_attn_factors(attn_factor)
-
-        long_factors = rope_scaling.get('long_factor', None)
-        short_factors = rope_scaling.get('short_factor', None)
 
         if long_factors is None or short_factors is None:
             raise KeyError('Missing the required key rope_scaling.long_factor or rope_scaling_short_factor')

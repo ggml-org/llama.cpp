@@ -98,6 +98,7 @@ class Step3VLTextModel(Qwen3Model):
 @ModelBase.register("Step3p5ForCausalLM", "Step3p7ForConditionalGeneration")
 class Step35Model(TextModel):
     model_arch = gguf.MODEL_ARCH.STEP35
+    supports_mtp_export = True
 
     # The --mtp / --no-mtp toggles are ModelBase.mtp_only / no_mtp (set in
     # convert_hf_to_gguf.py main()). Unlike Qwen3.5, which stores MTP under a
@@ -314,7 +315,7 @@ class Step35Model(TextModel):
         factor = float(rope_params.get("factor", 8.0))
         low_freq_factor = float(rope_params.get("low_freq_factor", 1.0))
         high_freq_factor = float(rope_params.get("high_freq_factor", 4.0))
-        old_context_len = int(rope_params.get("original_max_position_embeddings", self.hparams.get("original_max_position_embeddings", 8192)))
+        old_context_len = int(rope_params.get("original_max_position_embeddings", 8192))
 
         low_freq_wavelen = old_context_len / low_freq_factor
         high_freq_wavelen = old_context_len / high_freq_factor

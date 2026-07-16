@@ -63,3 +63,11 @@ export { default as ProcessingInfo } from './ProcessingInfo.svelte';
  * Preview button is shown only for HTML code blocks.
  */
 export { default as CodeBlockActions } from './CodeBlockActions.svelte';
+
+/**
+ * **Logo** - Application brand mark
+ *
+ * Inline SVG of the application logo. Accepts styling via the standard
+ * `class` and `style` props and inherits color via `currentColor`.
+ */
+export { default as Logo } from './Logo.svelte';

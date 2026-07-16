@@ -31,6 +31,9 @@ import wget
 
 DEFAULT_HTTP_TIMEOUT = 60
 
+# per-request timeout, a hung server fails the test instead of stalling the CI for hours
+DEFAULT_REQUEST_TIMEOUT = 600
+
 
 class ServerResponse:
     headers: dict
@@ -92,9 +95,10 @@ class ServerProcess:
     no_models_autoload: bool | None = None
     lora_files: List[str] | None = None
     enable_ctx_shift: int | None = False
+    spec_type: str | None = None
     spec_draft_n_min: int | None = None
     spec_draft_n_max: int | None = None
-    no_webui: bool | None = None
+    no_ui: bool | None = None
     jinja: bool | None = None
     reasoning_format: Literal['deepseek', 'none', 'nothink'] | None = None
     reasoning: Literal['on', 'off', 'auto'] | None = None
@@ -107,9 +111,11 @@ class ServerProcess:
     cache_ram: int | None = None
     no_cache_idle_slots: bool = False
     log_path: str | None = None
-    webui_mcp_proxy: bool = False
+    ui_mcp_proxy: bool = False
     backend_sampling: bool = False
     gcp_compat: bool = False
+    server_tools: str | None = None
+    cors_origins: str | None = None
 
     # session variables
     process: subprocess.Popen | None = None
@@ -166,6 +172,8 @@ class ServerProcess:
             server_args.extend(["--models-max", self.models_max])
         if self.models_preset:
             server_args.extend(["--models-preset", self.models_preset])
+        if self.cors_origins:
+            server_args.extend(["--cors-origins", self.cors_origins])
         if self.n_batch:
             server_args.extend(["--batch-size", self.n_batch])
         if self.n_ubatch:
@@ -219,14 +227,16 @@ class ServerProcess:
                 server_args.extend(["--lora", lora_file])
         if self.enable_ctx_shift:
             server_args.append("--context-shift")
+        if self.spec_type:
+            server_args.extend(["--spec-type", self.spec_type])
         if self.api_key:
             server_args.extend(["--api-key", self.api_key])
         if self.spec_draft_n_max:
             server_args.extend(["--spec-draft-n-max", self.spec_draft_n_max])
         if self.spec_draft_n_min:
             server_args.extend(["--spec-draft-n-min", self.spec_draft_n_min])
-        if self.no_webui:
-            server_args.append("--no-webui")
+        if self.no_ui:
+            server_args.append("--no-ui")
         if self.no_models_autoload:
             server_args.append("--no-models-autoload")
         if self.jinja:
@@ -251,8 +261,10 @@ class ServerProcess:
             server_args.extend(["--cache-ram", self.cache_ram])
         if self.no_cache_idle_slots:
             server_args.append("--no-cache-idle-slots")
-        if self.webui_mcp_proxy:
-            server_args.append("--webui-mcp-proxy")
+        if self.ui_mcp_proxy:
+            server_args.append("--ui-mcp-proxy")
+        if self.server_tools:
+            server_args.extend(["--tools", self.server_tools])
         if self.backend_sampling:
             server_args.append("--backend_sampling")
         if self.gcp_compat:
@@ -330,7 +342,7 @@ class ServerProcess:
         path: str,
         data: dict | Any | None = None,
         headers: dict | None = None,
-        timeout: float | None = None,
+        timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
     ) -> ServerResponse:
         url = f"http://{self.server_host}:{self.server_port}{path}"
         parse_body = False
@@ -353,7 +365,7 @@ class ServerProcess:
         if parse_body:
             try:
                 result.body = response.json()
-            except JSONDecodeError:
+            except (JSONDecodeError, requests.exceptions.JSONDecodeError):
                 result.body = response.text
         else:
             result.body = None
@@ -389,7 +401,7 @@ class ServerProcess:
         path: str,
         data: dict | None = None,
         headers: dict | None = None,
-        timeout: float | None = None,
+        timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
     ) -> dict:
         stream = data.get('stream', False)
         if stream:

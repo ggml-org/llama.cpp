@@ -995,6 +995,32 @@ static void test_macros(testing & t) {
         json::object(),
         "Hello, John Smith,Hi, Jane Doe"
     );
+
+    test_template(t, "macro with caller",
+        "\
+{%- macro nest_dict(o, i, ff='') %}\n\
+  {{- caller(ff) }}\n\
+  {%- for k, v in o|items %}\n\
+    {{- i + k + ': ' }}\n\
+    {%- if v is mapping %}\n\
+      {{- '{' }}\n\
+      {% call(f) nest_dict(v, i + '    ') %}\n\
+        {{- 'fail' if ff is undefined }}\n\
+      {%- endcall %}\n\
+      {{- i + '}' }}\n\
+    {% else %}\n\
+      {{- v|string }}\n\
+    {% endif %}\n\
+  {%- endfor %}\n\
+{%- endmacro %}\n\
+{%- call(f) nest_dict({'root1': 1, 'root2': {'nest1': 1, 'nest2': {'nest3': 2}}}, '    ', 'Dict') %}\n\
+  {{- 'fail' if ff is defined }}\n\
+  {{- f + ' {' }}\n\
+{% endcall %}\n\
+{{- '}' }}",
+        json::object(),
+        "Dict {\n    root1: 1\n    root2: {\n        nest1: 1\n        nest2: {\n            nest3: 2\n        }\n    }\n}"
+    );
 }
 
 static void test_namespace(testing & t) {
@@ -1350,6 +1376,36 @@ static void test_string_methods(testing & t) {
         "bXnXna"
     );
 
+    test_template(t, "string.format() auto numbering",
+        "{{ '<{}|{}>'.format(s, 42) }}",
+        {{"s", "hello"}},
+        "<hello|42>"
+    );
+
+    test_template(t, "string.format() manual numbering",
+        "{{ '{1}-{0}-{1}'.format('a', 'b') }}",
+        json::object(),
+        "b-a-b"
+    );
+
+    test_template(t, "string.format() named fields",
+        "{{ '{name} is {age}'.format(name='Bob', age=7) }}",
+        json::object(),
+        "Bob is 7"
+    );
+
+    test_template(t, "string.format() escaped braces",
+        "{{ '{{}} {} {{x}}'.format('mid') }}",
+        json::object(),
+        "{} mid {x}"
+    );
+
+    test_template(t, "string.format() no fields",
+        "{{ 'plain'.format() }}",
+        json::object(),
+        "plain"
+    );
+
     test_template(t, "undefined|capitalize",
         "{{ arr|capitalize }}",
         json::object(),
@@ -1556,6 +1612,36 @@ static void test_array_methods(testing & t) {
         "{{ arr|map('int')|sum }}",
         {{"arr", json::array({"1", "2", "3"})}},
         "6"
+    );
+
+    test_template(t, "array|min",
+        "{{ [tool_calls_count, tool_sep_count]|min }}",
+        {{"tool_calls_count", 2}, {"tool_sep_count", 1}},
+        "1"
+    );
+
+    test_template(t, "array|max",
+        "{{ [tool_calls_count, tool_sep_count]|max }}",
+        {{"tool_calls_count", 2}, {"tool_sep_count", 1}},
+        "2"
+    );
+
+    test_template(t, "array|min attribute",
+        "{{ items|min(attribute='x') }}",
+        {{"items", json::array({
+            json({{"x", 2}}),
+            json({{"x", 1}}),
+        })}},
+        "{'x': 1}"
+    );
+
+    test_template(t, "array|max attribute",
+        "{{ items|max(attribute='x') }}",
+        {{"items", json::array({
+            json({{"x", 2}}),
+            json({{"x", 1}}),
+        })}},
+        "{'x': 2}"
     );
 
     // not used by any chat templates

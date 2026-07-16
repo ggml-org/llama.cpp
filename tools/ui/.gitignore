@@ -28,10 +28,9 @@ vite.config.ts.timestamp-*
 # PWA Artifacts
 apple-splash-*.png
 apple-touch-icon-*.png
-favicon.ico
-favicon-dark.ico
 maskable-icon-*.png
 pwa-*.png
+static/favicon*
 
 # Storybook
 *storybook.log

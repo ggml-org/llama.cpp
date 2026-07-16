@@ -23,6 +23,7 @@ from .base import ModelBase, TextModel, gguf, logger
     "LlavaForConditionalGeneration",
     "VoxtralForConditionalGeneration",
     "LlamaForCausalLMEagle3",
+    "Eagle3LlamaForCausalLM",
     "Eagle3Speculator",
     "Eagle3DraftModel",
     "IQuestCoderForCausalLM",
@@ -72,7 +73,7 @@ class LlamaModel(TextModel):
             target_num_layers = target_config["num_hidden_layers"]
             target_layers = [2, target_num_layers // 2, target_num_layers - 3]
             logger.info(f"EAGLE-3: target_layers = {target_layers} (target model has {target_num_layers} layers)")
-            self.gguf_writer.add_array(f"{self.gguf_writer.arch}.target_layers", target_layers)
+            self.gguf_writer.add_target_layers(target_layers)
 
             # target_hidden_size: prefer eagle3 config, fallback to target config
             if eagle3_raw_config.get("target_hidden_size") is not None:
@@ -82,12 +83,12 @@ class LlamaModel(TextModel):
                 target_hidden_size = target_config["hidden_size"]
                 src = "target model config"
             logger.info(f"EAGLE-3: target_hidden_size = {target_hidden_size} (from {src})")
-            self.gguf_writer.add_uint32(f"{self.gguf_writer.arch}.target_hidden_size", target_hidden_size)
+            self.gguf_writer.add_target_hidden_size(target_hidden_size)
 
             # norm_before_residual (RedHat-style eagle3 specific)
             norm_before_residual = eagle3_raw_config.get("norm_before_residual", False)
             logger.info(f"EAGLE-3: norm_before_residual = {norm_before_residual}")
-            self.gguf_writer.add_bool(f"{self.gguf_writer.arch}.norm_before_residual", norm_before_residual)
+            self.gguf_writer.add_norm_before_residual(norm_before_residual)
 
     def set_vocab(self):
         # eagle3: use tokenizer from target model if provided
@@ -289,7 +290,7 @@ class LlamaModel(TextModel):
                 factor = rope_params.get("factor", 8.0)
                 low_freq_factor = rope_params.get("low_freq_factor", 1.0)
                 high_freq_factor = rope_params.get("high_freq_factor", 4.0)
-                old_context_len = self.hparams.get("original_max_position_embeddings", 8192)
+                old_context_len = rope_params.get("original_max_position_embeddings", 8192)
 
                 low_freq_wavelen = old_context_len / low_freq_factor
                 high_freq_wavelen = old_context_len / high_freq_factor

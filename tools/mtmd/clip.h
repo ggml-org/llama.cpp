@@ -24,6 +24,9 @@ struct clip_image_size {
         return !(*this == other);
     }
     int area() const {
+        // avoid overflow when computing area
+        GGML_ASSERT(width  >= 0 && width  <= 46000);
+        GGML_ASSERT(height >= 0 && height <= 46000);
         return width * height;
     }
 };
@@ -51,6 +54,8 @@ struct clip_context_params {
     ggml_backend_sched_eval_callback cb_eval;
     void * cb_eval_user_data;
     bool no_alloc;
+    mtmd_progress_callback progress_callback;
+    void * progress_callback_user_data;
 };
 
 struct clip_init_result {

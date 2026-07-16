@@ -26,6 +26,13 @@ void mtmd_image_preproc_out::append(const clip_hparams & hparams, clip_image_f32
     entries.push_back(std::move(img));
 }
 
+void mtmd_image_preproc_out::append_overview(const clip_hparams & hparams, const clip_image_u8 & img, bool normalized) {
+    overview.from_u8(img);
+    if (normalized) {
+        overview.normalize(hparams.image_mean, hparams.image_std);
+    }
+}
+
 // set of tools to manipulate images
 // in the future, we can have HW acceleration by allowing this struct to access 3rd party lib like imagick or opencv
 struct img_tool {
@@ -607,10 +614,11 @@ private:
 mtmd_image_preproc_out mtmd_image_preprocessor_llava_uhd::preprocess(const clip_image_u8 & img) {
     const clip_image_size original_size = img.get_size();
     auto const inst = get_slice_instructions(original_size);
-    std::vector<clip_image_u8> imgs = slice_image(img, inst);
+    auto sliced = slice_image(img, inst);
 
     mtmd_image_preproc_out output;
-    output.append(hparams, imgs, true);
+    output.append_overview(hparams, sliced.overview, true);
+    output.append(hparams, sliced.slices, true);
     output.grid_x = inst.grid_size.width;
     output.grid_y = inst.grid_size.height;
 
@@ -620,7 +628,7 @@ mtmd_image_preproc_out mtmd_image_preprocessor_llava_uhd::preprocess(const clip_
 mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_llava_uhd::get_slice_instructions(const clip_image_size & original_size) {
     mtmd_image_preprocessor_llava_uhd::slice_instructions res;
     // align slices by patch_size * n_merge so an integer number of merger output tokens fits per slice
-    const int n_merge         = hparams.n_merge > 0 ? hparams.n_merge : 1;
+    const int n_merge         = hparams.n_merge;
     const int patch_size      = hparams.patch_size * n_merge;
     const int slice_size      = hparams.image_size;
     const int original_width  = original_size.width;
@@ -722,22 +730,15 @@ mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_ll
     return res;
 }
 
-std::vector<clip_image_u8> mtmd_image_preprocessor_llava_uhd::slice_image(const clip_image_u8 & img, const mtmd_image_preprocessor_llava_uhd::slice_instructions & inst, bool overview_first) {
-    std::vector<clip_image_u8> output;
+mtmd_image_preprocessor_llava_uhd::slice_output mtmd_image_preprocessor_llava_uhd::slice_image(const clip_image_u8 & img, const mtmd_image_preprocessor_llava_uhd::slice_instructions & inst) {
+    slice_output output;
 
     // resize to overview size
-    clip_image_u8 resized_img;
-    img_tool::resize(img, resized_img, inst.overview_size, hparams.image_resize_algo_ov,
+    img_tool::resize(img, output.overview, inst.overview_size, hparams.image_resize_algo_ov,
                         hparams.image_pad_ov, hparams.image_pad_color_ov);
-    if (overview_first) {
-        output.push_back(resized_img);
-    }
 
     if (inst.slices.empty()) {
-        // no slices, just return the resized image
-        if (!overview_first) {
-            output.push_back(resized_img);
-        }
+        // no slices, just return the overview image
         return output;
     }
 
@@ -755,11 +756,7 @@ std::vector<clip_image_u8> mtmd_image_preprocessor_llava_uhd::slice_image(const 
 
         clip_image_u8 img_slice;
         img_tool::crop(refined_img, img_slice, x, y, w, h);
-        output.push_back(std::move(img_slice));
-    }
-
-    if (!overview_first) {
-        output.push_back(resized_img);
+        output.slices.push_back(std::move(img_slice));
     }
 
     return output;
@@ -897,7 +894,7 @@ mtmd_image_preproc_out mtmd_image_preprocessor_dyn_size::preprocess(const clip_i
     clip_image_u8 resized_image;
     const clip_image_size original_size = img.get_size();
     // the original pixtral model doesn't have n_merge
-    const int cur_merge = hparams.n_merge == 0 ? 1 : hparams.n_merge;
+    const int cur_merge = hparams.n_merge;
     const clip_image_size target_size = img_tool::calc_size_preserved_ratio(
         original_size,
         hparams.patch_size * cur_merge,
@@ -1077,10 +1074,11 @@ mtmd_image_preproc_out mtmd_image_preprocessor_idefics3::preprocess(const clip_i
             });
         }
     }
-    auto imgs = slice_image(img, instructions);
+    auto sliced = slice_image(img, instructions);
 
     mtmd_image_preproc_out output;
-    output.append(hparams, imgs, true);
+    output.append_overview(hparams, sliced.overview, true);
+    output.append(hparams, sliced.slices, true);
     output.grid_x = instructions.grid_size.width;
     output.grid_y = instructions.grid_size.height;
     return output;
@@ -1094,10 +1092,12 @@ mtmd_image_preproc_out mtmd_image_preprocessor_internvl::preprocess(const clip_i
     GGML_ASSERT(!hparams.image_res_candidates.empty());
     const clip_image_size original_size = img.get_size();
     auto const inst = get_slice_instructions(original_size);
-    std::vector<clip_image_u8> imgs = slice_image(img, inst, false);
+    auto sliced = slice_image(img, inst);
 
     mtmd_image_preproc_out output;
-    output.append(hparams, imgs, true);
+    // InternVL: slices first, then overview
+    output.append(hparams, sliced.slices, true);
+    output.append_overview(hparams, sliced.overview, true);
     output.grid_x = inst.grid_size.width;
     output.grid_y = inst.grid_size.height;
     return output;
@@ -1107,43 +1107,7 @@ mtmd_image_preproc_out mtmd_image_preprocessor_internvl::preprocess(const clip_i
 // mtmd_image_preprocessor_deepseekocr
 //
 
-mtmd_image_preproc_out mtmd_image_preprocessor_deepseekocr::preprocess(const clip_image_u8 & img) {
-    static constexpr int native_resolutions[] = { 1024 /* base */, 1280 /* large */ };
-    // TODO: support 512 (tiny) and 640 (small) once we have eval data for them
-
-    const int64_t orig_area = static_cast<int64_t>(img.get_size().area());
-
-    size_t  mode_i   = 0;
-    int64_t min_diff = std::numeric_limits<int64_t>::max();
-    for (size_t i = 0; i < std::size(native_resolutions); i++) {
-        const int64_t r    = native_resolutions[i];
-        const int64_t diff = std::abs(orig_area - r * r);
-        if (diff < min_diff) {
-            mode_i   = i;
-            min_diff = diff;
-        }
-    }
-    const int image_size = native_resolutions[mode_i];
-
-    // Aspect-preserving fit-and-pad. Pillow bicubic + PAD_NEAREST for
-    // byte-parity with the upstream deepseek-ai/DeepSeek-OCR HF preprocessor.
-    clip_image_u8 padded;
-    img_tool::resize(img, padded, {image_size, image_size}, RESIZE_ALGO_BICUBIC_PILLOW,
-                     PAD_NEAREST, hparams.image_pad_color);
-    mtmd_image_preproc_out output;
-    output.append(hparams, padded, true);
-    output.grid_x = 1;
-    output.grid_y = 1;
-    return output;
-}
-
-//
-// mtmd_image_preprocessor_deepseekocr2
-//
-
-// candidate tile grids (cols, rows) with min_tiles <= cols*rows <= max_tiles
-// sorted by tile count
-std::vector<clip_image_size> mtmd_image_preprocessor_deepseekocr2::get_target_ratios() {
+std::vector<clip_image_size> mtmd_image_preprocessor_deepseekocr::get_target_ratios() const {
     std::vector<clip_image_size> ratios;
     for (int n = min_tiles; n <= max_tiles; n++) {
         for (int w = 1; w <= n; w++) {
@@ -1170,13 +1134,11 @@ std::vector<clip_image_size> mtmd_image_preprocessor_deepseekocr2::get_target_ra
     return ratios;
 }
 
-// pick the grid whose aspect ratio is closest to the image
-// on a tie, prefer the larger grid when the image fits
-clip_image_size mtmd_image_preprocessor_deepseekocr2::find_closest_aspect_ratio(
+clip_image_size mtmd_image_preprocessor_deepseekocr::find_closest_aspect_ratio(
     float                                aspect_ratio,
     const std::vector<clip_image_size> & target_ratios,
     int                                  width,
-    int                                  height) {
+    int                                  height) const {
     float           best_ratio_diff = std::numeric_limits<float>::max();
     clip_image_size best_ratio      = { 1, 1 };
     const float     area            = static_cast<float>(width * height);
@@ -1197,39 +1159,69 @@ clip_image_size mtmd_image_preprocessor_deepseekocr2::find_closest_aspect_ratio(
     return best_ratio;
 }
 
-mtmd_image_preproc_out mtmd_image_preprocessor_deepseekocr2::preprocess(const clip_image_u8 & img) {
-    // emit 768x768 local tiles when the image is larger than a tile in either
-    // dimension, then always a 1024x1024 global view. order: [tiles..., global].
-
+mtmd_image_preproc_out mtmd_image_preprocessor_deepseekocr::preprocess(const clip_image_u8 & img) {
     mtmd_image_preproc_out output;
+    int grid_w = 0;
+    int grid_h = 0;
     const auto img_size = img.get_size();
+
+    // global view: aspect-preserving fit-and-pad to base_size
+    clip_image_u8 padded;
+    img_tool::resize(img, padded,
+                    { base_size, base_size },
+                    RESIZE_ALGO_BICUBIC_PILLOW,
+                    PAD_NEAREST,
+                    hparams.image_pad_color);
+    output.append_overview(hparams, padded, true);
+    output.overview.add_viewsep = true;
+
+    // if this condition doesn't hold, the output is overview only, no tiles
     if (img_size.width > tile_size || img_size.height > tile_size) {
         const float           aspect_ratio  = static_cast<float>(img_size.width) / img_size.height;
         const auto            target_ratios = get_target_ratios();
-        const clip_image_size grid          = find_closest_aspect_ratio(aspect_ratio, target_ratios, img_size.width, img_size.height);
+        const clip_image_size grid =
+            find_closest_aspect_ratio(aspect_ratio, target_ratios, img_size.width, img_size.height);
+        grid_w = grid.width;
+        grid_h = grid.height;
 
-        // stretch onto the grid (no aspect preserve), then crop tiles row-major.
         clip_image_u8 refined;
-        img_tool::resize(img, refined, { tile_size * grid.width, tile_size * grid.height },
-                         RESIZE_ALGO_BICUBIC_PILLOW, PAD_NONE);
+        img_tool::resize(img, refined, { tile_size * grid_w, tile_size * grid_h }, RESIZE_ALGO_BICUBIC_PILLOW,
+                         PAD_NONE);
 
-        for (int row = 0; row < grid.height; row++) {
-            for (int col = 0; col < grid.width; col++) {
-                clip_image_u8 tile;
-                img_tool::crop(refined, tile, col * tile_size, row * tile_size, tile_size, tile_size);
-                output.append(hparams, tile, true);
+        for (int row = 0; row < grid_h; row++) {
+            if (fuse_row) {
+                // concat all tiles in this row into a single image, along the H axis
+                // output image size: w = tile_size, h = tile_size * grid_w
+                // this is to ensure the whole row is always processed together
+                clip_image_u8 row_img;
+                row_img.set_size({tile_size, tile_size * grid_w}, false);
+                for (int col = 0; col < grid_w; col++) {
+                    for (int py = 0; py < tile_size; py++) {
+                        for (int px = 0; px < tile_size; px++) {
+                            row_img.set_pixel(px, col * tile_size + py,
+                                              refined.get_pixel(col * tile_size + px, row * tile_size + py));
+                        }
+                    }
+                }
+                output.append(hparams, row_img, true);
+            } else {
+                for (int col = 0; col < grid_w; col++) {
+                    clip_image_u8 tile;
+                    img_tool::crop(refined, tile, col * tile_size, row * tile_size, tile_size, tile_size);
+                    output.append(hparams, tile, true);
+                }
             }
+        }
+        if (fuse_row) {
+            grid_w = 1; // each fused row is one image; a single output column
         }
     }
 
-    // global view: aspect-preserving fit-and-pad to base_size.
-    clip_image_u8 padded;
-    img_tool::resize(img, padded, { base_size, base_size }, RESIZE_ALGO_BICUBIC_PILLOW,
-                     PAD_NEAREST, hparams.image_pad_color);
-    output.append(hparams, padded, true);
-    output.entries.back().add_viewsep = true;
-    output.grid_x = 1;
-    output.grid_y = 1;
+    LOG_DBG("%s: grid size: %d x %d (%d tiles) + global view\n", __func__, grid_w, grid_h, grid_w * grid_h);
+    LOG_DBG("%s: overview size: %d x %d\n", __func__, padded.get_size().width, padded.get_size().height);
+
+    output.grid_x = grid_w;
+    output.grid_y = grid_h;
     return output;
 }
 
@@ -1447,15 +1439,14 @@ mtmd_image_preproc_out mtmd_image_preprocessor_step3vl::preprocess(const clip_im
     const auto instructions = build_slice_instructions(hparams, prepared.get_size());
 
     mtmd_image_preproc_out output;
-    clip_image_f32 overview_f32;
+    // overview (normalized f32, already includes mean/std)
     img_u8_resize_bilinear_to_f32(
         prepared,
-        overview_f32,
+        output.overview,
         hparams.image_size,
         hparams.image_size,
         hparams.image_mean,
         hparams.image_std);
-    output.append(hparams, overview_f32, false);
 
     if (instructions.slices.empty()) {
         output.grid_x = 0;
@@ -1548,13 +1539,13 @@ mtmd_image_preproc_out mtmd_image_preprocessor_youtuvl::preprocess(const clip_im
 
 mtmd_image_preproc_out mtmd_image_preprocessor_granite::preprocess(const clip_image_u8 & img) {
     auto output = mtmd_image_preprocessor_llava_uhd::preprocess(img);
-    if (output.entries.size() == 1) {
+    if (output.entries.size() == 0) {
         // Single-tile (overview only): append one newline row.
-        output.entries[0].add_newline = true;
+        output.overview.add_newline = true;
     } else {
         // Multi-tile: overview gets no newline, grid tiles get one.
-        output.entries[0].add_newline = false;
-        for (size_t i = 1; i < output.entries.size(); ++i) {
+        output.overview.add_newline = false;
+        for (size_t i = 0; i < output.entries.size(); ++i) {
             output.entries[i].add_newline = true;
         }
     }

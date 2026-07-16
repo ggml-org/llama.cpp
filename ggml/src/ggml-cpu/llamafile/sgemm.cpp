@@ -2321,31 +2321,35 @@ class tinyBLAS_Q0_PPC {
     }
 
     void matmul(int64_t m, int64_t n) {
-    #if defined(_AIX) || defined(__BIG_ENDIAN__)
-        mnpack(0, m, 0, n);
-    #else
-        const int64_t mc = 64;
-        const int64_t kc = 64;
+        int64_t mc = 64;
         int64_t nc = 64;
+        int64_t kc = 64;
+        int64_t n_chunk = 64;
+    #if defined(_AIX) || defined(__BIG_ENDIAN__)
+        mc = 32;
+        nc = 32;
+        kc = 32;
+        n_chunk = 32
+    #endif
         int64_t n_aligned = 0;
-        if (n % 64 == 0) {
+        if (n % n_chunk == 0) {
             n_aligned = n;
         } else if (n == 4) {
             n_aligned = 4;
-        } else if (n < 64) {
+        } else if (n < n_chunk) {
             n_aligned = (n / 8) * 8;
         } else {
-            n_aligned = (n / 64) * 64;
+            n_aligned = (n / n_chunk) * n_chunk;
         }
         if (n_aligned > 0) {
-            if (n_aligned % 64 == 0)      nc = 64;
+            if (n_aligned % n_chunk == 0) nc = n_chunk;
             else if (n_aligned == n)      nc = n;
             else if (n_aligned % 32 == 0) nc = 32;
             else if (n_aligned % 24 == 0) nc = 24;
             else if (n_aligned % 16 == 0) nc = 16;
             else                          nc = 8;
         }
-        bool can_use_tiled = n_aligned > 0 && (m % mc == 0) && (k % kc == 0);
+        bool can_use_tiled = n_aligned > 0 && (m % mc == 0);
         if (can_use_tiled) {
             matmul_tiled(m, n_aligned, mc, nc, kc);
             if (n > n_aligned) {
@@ -2354,7 +2358,6 @@ class tinyBLAS_Q0_PPC {
         } else {
             mnpack(0, m, 0, n);
         }
-    #endif
     }
 
   private:
@@ -3063,13 +3066,14 @@ class tinyBLAS_Q0_PPC {
             int64_t ii = (job / xtiles) * mc;
             int64_t jj = (job % xtiles) * nc;
             for (int64_t kk = 0; kk < k; kk += kc) {
+                int64_t k_cur = MIN(kc, k - kk);
                 if constexpr(is_Ablock_q4) {
-                    packNormal_q4_fp16(A + ii * lda + kk, lda, mc, kc, (uint8_t *)A_pack);
+                    packNormal_q4_fp16(A + ii * lda + kk, lda, mc, k_cur, (uint8_t *)A_pack);
                 } else {
-                    packNormal_q8_fp16(A + ii * lda + kk, lda, mc, kc, (uint8_t *)A_pack);
+                    packNormal_q8_fp16(A + ii * lda + kk, lda, mc, k_cur, (uint8_t *)A_pack);
                 }
-                packNormal_q8_fp16(B + jj * ldb + kk, ldb, nc, kc, (uint8_t *)B_pack);
-                KERNEL_Q0(ii, jj, mc, nc, kc, kk, A_pack, B_pack);
+                packNormal_q8_fp16(B + jj * ldb + kk, ldb, nc, k_cur, (uint8_t *)B_pack);
+                KERNEL_Q0(ii, jj, mc, nc, k_cur, kk, A_pack, B_pack);
             }
         }
     }
@@ -3194,16 +3198,19 @@ class tinyBLAS_PPC {
     }
 
     void matmul(int64_t m, int64_t n) {
+        int64_t mc = 256;
+        int64_t nc = 256;
+        int64_t kc = 256;
     #if defined(_AIX) || defined(__BIG_ENDIAN__)
-        mnpack(0, m, 0, n);
-    #else
-        int64_t mc = 256; int64_t nc = 256; int64_t kc = 256;
+        mc = 128;
+        nc = 128;
+        kc = 128;
+    #endif
         if (m % mc == 0 && n % nc == 0 && k % kc == 0) {
             matmul_tiled(m, n, mc, nc, kc);
         } else {
             mnpack(0, m, 0, n);
         }
-    #endif
     }
 
   private:

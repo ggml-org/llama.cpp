@@ -4,7 +4,9 @@
 #include "hex-dma.h"
 #include "hmx-queue.h"
 #include "htp-ops.h"
-#include "worker-pool.h"
+#include "hex-profile.h"
+#include "work-queue.h"
+#include "hex-fastdiv.h"
 
 #include <assert.h>
 #include <dspqueue.h>
@@ -12,7 +14,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#ifndef HTP_MAX_NTHREADS
 #define HTP_MAX_NTHREADS 10
+#endif
 #define HTP_MAX_MMAPS    16
 
 // Memory mapping
@@ -41,9 +45,16 @@ struct htp_ops_context {
 
     enum htp_op_code    op; // FIXME: rename to opcode
     int32_t             op_params[HTP_OP_MAX_PARAMS];
+    int32_t             kernel_params[HTP_OP_MAX_KERN_PARAMS];
 
     const struct htp_tensor * src[HTP_OP_MAX_INPUTS];
-    const struct htp_tensor * dst;
+    union {
+        const struct htp_tensor * dst;
+        const struct htp_tensor * dsts[HTP_OP_MAX_OUTPUTS];
+    };
+
+    dma_queue **    src_dma[HTP_OP_MAX_INPUTS];
+    dma_queue **    dst_dma[HTP_OP_MAX_OUTPUTS];
 
     // TODO convert these to an array
     struct htp_spad src0_spad;
@@ -58,11 +69,16 @@ struct htp_ops_context {
 
 // Main context for htp DSP backend
 struct htp_context {
-    dspqueue_t             queue;
-    dma_queue *            dma[HTP_MAX_NTHREADS];
+    dspqueue_t             dsp_queue;
+
     struct htp_mmap        mmap[HTP_MAX_MMAPS];
-    worker_pool_context_t  worker_pool;
+    dma_queue_t            dma[HTP_MAX_NTHREADS];
+    dma_queue_t            dma_cached[HTP_MAX_NTHREADS];
+    work_queue_t           work_queue;
+    hmx_queue_t            hmx_queue;
+
     uint32_t               n_threads;
+    struct fastdiv_values  n_threads_div;
 
     int                    thread_id;
     int                    thread_prio;
@@ -70,6 +86,7 @@ struct htp_context {
     bool                   hmx_enabled;
     bool                   etm;
     uint32_t               profiler;
+    struct htp_thread_trace trace[HTP_MAX_NTHREADS + 1];
 
     uint8_t *              vtcm_base;
     size_t                 vtcm_size;
@@ -78,6 +95,7 @@ struct htp_context {
     atomic_bool            vtcm_needs_release;
 
     uint64_t               max_vmem;
+    uint32_t               dirty_map[HTP_OP_MAX_TENSORS / 32];
 
     // Persistent DDR scratchpad for MUL_MAT_ID mappings
     void *                 ddr_spad_base;
@@ -85,13 +103,16 @@ struct htp_context {
 
     struct htp_ops_context octx;
 
-#ifdef HTP_HAS_HMX
-    struct hmx_queue *     hmx_queue; // Async HMX queue for pipeline overlap
-#endif
+    qurt_thread_t          main_thread;
+    void *                 main_stack;
+    atomic_bool            killed;
+    size_t                 footprint;
 };
 
 int op_matmul(struct htp_ops_context * octx);
 int op_matmul_id(struct htp_ops_context * octx);
+int op_matmul_qkv(struct htp_ops_context * octx);
+int op_matmul_ffn(struct htp_ops_context * octx);
 int op_binary(struct htp_ops_context * octx);
 int op_unary(struct htp_ops_context * octx);
 int op_sum_rows(struct htp_ops_context * octx);
@@ -112,7 +133,6 @@ int op_concat(struct htp_ops_context * octx);
 int op_diag(struct htp_ops_context * octx);
 int op_solve_tri(struct htp_ops_context * octx);
 int op_gated_delta_net(struct htp_ops_context * octx);
-int op_tri(struct htp_ops_context * octx);
 int op_pad(struct htp_ops_context * octx);
 
 #endif /* HTP_CTX_H */

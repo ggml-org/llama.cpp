@@ -1,12 +1,12 @@
-ARG OPENVINO_VERSION_MAJOR=2026.2
-ARG OPENVINO_VERSION_FULL=2026.2.0.21903.52ddc073857
+ARG OPENVINO_VERSION_MAJOR=2026.2.1
+ARG OPENVINO_VERSION_FULL=2026.2.1.21919.ede283a88e3
 ARG UBUNTU_VERSION=24.04
 
 # Intel GPU driver versions. https://github.com/intel/compute-runtime/releases
-ARG IGC_VERSION=v2.34.4
-ARG IGC_VERSION_FULL=2_2.34.4+21428
-ARG COMPUTE_RUNTIME_VERSION=26.18.38308.1
-ARG COMPUTE_RUNTIME_VERSION_FULL=26.18.38308.1-0
+ARG IGC_VERSION=v2.36.3
+ARG IGC_VERSION_FULL=2_2.36.3+21719
+ARG COMPUTE_RUNTIME_VERSION=26.22.38646.4
+ARG COMPUTE_RUNTIME_VERSION_FULL=26.22.38646.4-0
 ARG IGDGMM_VERSION=22.10.0
 
 # Intel NPU driver versions. https://github.com/intel/linux-npu-driver/releases
@@ -21,6 +21,20 @@ ARG https_proxy=
 ARG BUILD_DATE=N/A
 ARG APP_VERSION=N/A
 ARG APP_REVISION=N/A
+
+ARG NODE_VERSION=24
+
+FROM docker.io/node:$NODE_VERSION AS web
+
+ARG APP_VERSION
+
+WORKDIR /app/tools/ui
+
+COPY tools/ui/package.json tools/ui/package-lock.json ./
+RUN npm ci
+
+COPY tools/ui/ ./
+RUN LLAMA_BUILD_NUMBER="$APP_VERSION" npm run build
 
 ## Build Image
 FROM docker.io/ubuntu:${UBUNTU_VERSION} AS build
@@ -68,6 +82,8 @@ ENV OpenVINO_DIR=/opt/intel/openvino
 WORKDIR /app
 
 COPY . .
+
+COPY --from=web /app/tools/ui/dist tools/ui/dist
 
 # Build Stage
 RUN bash -c "source ${OpenVINO_DIR}/setupvars.sh && \
@@ -198,7 +214,7 @@ ENTRYPOINT ["/app/tools.sh"]
 ### Light, CLI only
 FROM base AS light
 
-COPY --from=build /app/full/llama-cli /app/full/llama-completion /app/
+COPY --from=build /app/full/llama /app/full/llama-cli /app/full/llama-completion /app/
 
 WORKDIR /app
 
@@ -209,7 +225,7 @@ FROM base AS server
 
 ENV LLAMA_ARG_HOST=0.0.0.0
 
-COPY --from=build /app/full/llama-server /app/
+COPY --from=build /app/full/llama /app/full/llama-server /app/
 
 WORKDIR /app
 

@@ -80,6 +80,7 @@ struct clip_graph_minicpmv4_6 : clip_graph {
 struct clip_graph_internvl : clip_graph {
     clip_graph_internvl(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
+    bool support_batch() const override { return true; }
 };
 
 struct clip_graph_nemotron_v2_vl : clip_graph {
@@ -126,6 +127,7 @@ struct clip_graph_deepseekocr : clip_graph {
     clip_graph_deepseekocr(clip_ctx * ctx, const clip_image_f32 & img) : clip_graph(ctx, img) {}
     ggml_cgraph * build() override;
     ggml_tensor * build_sam(ggml_tensor * inp); // build the SAM model
+    // bool support_batch() const override { return true; } // TODO: support batch for DeepSeek-OCR v1
 };
 
 struct clip_graph_deepseekocr2 : clip_graph_deepseekocr {
