@@ -9809,11 +9809,9 @@ static std::vector<int> fa_vec_legal_ne(int dk, int dv) {
     return r;
 }
 
-// Baseline-path smoke test: with no override fa_vec_pick returns (1, baseline_ne) for each
-// (dk,dv), which dispatches the no-suffix baseline kernel. Confirms baseline FA stays
-// numerically correct for all 10 shapes. NE is numerically transparent and the no-suffix
-// kernel is dispatched regardless of baseline_ne, so this does not by itself detect a wrong
-// baseline_ne; the (Q,NE) kernels' existence/correctness are covered by run_fa_vec_tune_check.
+// Baseline-path smoke test: with no override, fa_vec_pick returns (1, baseline_ne) and
+// dispatches the no-suffix baseline kernel. Checks baseline correctness across all 10 shapes
+// (NE is numerically transparent; the (Q,NE) kernels are covered by run_fa_vec_tune_check).
 static bool run_fa_vec_drift_guard(ggml_backend_t backend_metal, ggml_backend_t backend_cpu) {
     struct shape_t { int dk, dv; };
     const shape_t shapes[] = { {32,32},{64,64},{96,96},{128,128},{192,192},
@@ -10026,9 +10024,8 @@ static bool run_fa_vec_tune_perf(ggml_backend_t backend_metal) {
     auto * reg    = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend_metal));
     auto   set_ov      = (set_fa_vec_override_t)   ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_set_fa_vec_override");
     auto   clr_ov      = (clear_fa_vec_override_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_clear_fa_vec_override");
-    // Share the runtime's bucket layout + baseline NE via read-only proc bridges (single source of
-    // truth): the emitted (ne11_b, ne01_b) keys then match fa_vec_pick by construction, and a change
-    // to FA_VEC_*_BUCKETS / fa_vec_baseline_ne can never silently desync the sweep from the runtime.
+    // Share the runtime's bucketers + baseline NE via read-only proc bridges, so the emitted
+    // (ne11_b, ne01_b) keys match fa_vec_pick and can't silently desync from FA_VEC_*_BUCKETS.
     auto   ne11_bucket = (fa_vec_bucket_t)      ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_fa_vec_ne11_bucket");
     auto   ne01_bucket = (fa_vec_bucket_t)      ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_fa_vec_ne01_bucket");
     auto   baseline_ne = (fa_vec_baseline_ne_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_fa_vec_baseline_ne");
@@ -10071,202 +10068,198 @@ static bool run_fa_vec_tune_perf(ggml_backend_t backend_metal) {
     const ggml_type types[] = { GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1,
                                 GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, GGML_TYPE_Q8_0 };
     for (ggml_type type_kv : types) {
-    printf("\n### dtype=%s\n", ggml_type_name(type_kv));
-    std::vector<pt_t> pts;  // one per swept (shape, ne11, ne01); bucketed + compressed below
+        printf("\n### dtype=%s\n", ggml_type_name(type_kv));
+        std::vector<pt_t> pts;  // one per swept (shape, ne11, ne01); bucketed + compressed below
 
-    for (auto s : shapes) {
-        const int base_ne = baseline_ne(s.dk, s.dv);
-        const std::vector<int> legal = fa_vec_legal_ne(s.dk, s.dv);
-        for (int ne11 : ne11_rep) {
-            for (int ne01 : ne01_rep) {
-                fa_perf_cell cell = fa_build_perf_cell(backend_metal, s.dk, s.dv, ne01, ne11, type_kv);
-                if (!cell.ok) {
-                    continue;
-                }
-
-                std::vector<cand_t> cs;
-                for (int ne : legal) {
-                    for (int Q : { 1, 2, 4 }) {
-                        cs.push_back({ Q, ne, 0.0 });
+        for (auto s : shapes) {
+            const int base_ne = baseline_ne(s.dk, s.dv);
+            const std::vector<int> legal = fa_vec_legal_ne(s.dk, s.dv);
+            for (int ne11 : ne11_rep) {
+                for (int ne01 : ne01_rep) {
+                    fa_perf_cell cell = fa_build_perf_cell(backend_metal, s.dk, s.dv, ne01, ne11, type_kv);
+                    if (!cell.ok) {
+                        continue;
                     }
-                }
-                // randomize config order to decorrelate thermal throttling across the cell
-                std::shuffle(cs.begin(), cs.end(), std::mt19937(1234));
 
-                double anchor = 0.0;  // periodic baseline re-measure -> throttling detection
-                for (size_t i = 0; i < cs.size(); ++i) {
-                    set_ov(cs[i].Q, cs[i].NE);
-                    cs[i].t = time_fa_cell_median(backend_metal, cell, REPS);
-                    clr_ov();
-
-                    if (i % 4 == 0) {
-                        const double a = time_fa_cell_median(backend_metal, cell, REPS);  // baseline (override cleared)
-                        if (anchor > 0.0) {
-                            double drift = (a - anchor) / anchor;
-                            if (drift < 0) {
-                                drift = -drift;
-                            }
-                            if (drift > 0.10) {
-                                printf("# WARN throttling? anchor drift %.1f%% dk=%d ne11=%d\n", 100.0 * drift, s.dk, ne11);
-                            }
+                    std::vector<cand_t> cs;
+                    for (int ne : legal) {
+                        for (int Q : { 1, 2, 4 }) {
+                            cs.push_back({ Q, ne, 0.0 });
                         }
-                        anchor = (anchor > 0.0) ? std::min(anchor, a) : a;
                     }
-                }
+                    // randomize config order to decorrelate thermal throttling across the cell
+                    std::shuffle(cs.begin(), cs.end(), std::mt19937(1234));
 
-                std::sort(cs.begin(), cs.end(), [](const cand_t & a, const cand_t & b) {
-                    return a.Q != b.Q ? a.Q < b.Q : a.NE < b.NE;
-                });
-                cand_t best = cs[0];
-                for (const auto & c : cs) {
-                    if (c.t > 0.0 && (best.t <= 0.0 || c.t < best.t)) {
-                        best = c;
+                    double anchor = 0.0;  // periodic baseline re-measure -> throttling detection
+                    for (size_t i = 0; i < cs.size(); ++i) {
+                        set_ov(cs[i].Q, cs[i].NE);
+                        cs[i].t = time_fa_cell_median(backend_metal, cell, REPS);
+                        clr_ov();
+
+                        if (i % 4 == 0) {
+                            const double a = time_fa_cell_median(backend_metal, cell, REPS);
+                            if (anchor > 0.0) {
+                                double drift = (a - anchor) / anchor;
+                                if (drift < 0) {
+                                    drift = -drift;
+                                }
+                                if (drift > 0.10) {
+                                    printf("# WARN throttling? anchor drift %.1f%% dk=%d ne11=%d\n", 100.0 * drift, s.dk, ne11);
+                                }
+                            }
+                            anchor = (anchor > 0.0) ? std::min(anchor, a) : a;
+                        }
                     }
-                }
-                double base_t = 0.0;  // the swept (Q=1, base_ne) candidate == baseline kernel
-                for (const auto & c : cs) {
-                    if (c.Q == 1 && c.NE == base_ne) { base_t = c.t; break; }
-                }
-                const bool keep = best.t > 0.0 && base_t > 0.0 && best.t < base_t * 0.98;
 
-                printf("# dtype=%s dk=%d dv=%d ne11=%d ne01=%d:", ggml_type_name(type_kv), s.dk, s.dv, ne11, ne01);
-                for (const auto & c : cs) {
-                    printf("  Q%dNE%d=%.1f%s", c.Q, c.NE, c.t, (c.Q == best.Q && c.NE == best.NE) ? "*" : "");
+                    std::sort(cs.begin(), cs.end(), [](const cand_t & a, const cand_t & b) {
+                        return a.Q != b.Q ? a.Q < b.Q : a.NE < b.NE;
+                    });
+                    cand_t best = cs[0];
+                    for (const auto & c : cs) {
+                        if (c.t > 0.0 && (best.t <= 0.0 || c.t < best.t)) {
+                            best = c;
+                        }
+                    }
+                    double base_t = 0.0;  // the swept (Q=1, base_ne) candidate == baseline kernel
+                    for (const auto & c : cs) {
+                        if (c.Q == 1 && c.NE == base_ne) { base_t = c.t; break; }
+                    }
+                    const bool keep = best.t > 0.0 && base_t > 0.0 && best.t < base_t * 0.98;
+
+                    printf("# dtype=%s dk=%d dv=%d ne11=%d ne01=%d:", ggml_type_name(type_kv), s.dk, s.dv, ne11, ne01);
+                    for (const auto & c : cs) {
+                        printf("  Q%dNE%d=%.1f%s", c.Q, c.NE, c.t, (c.Q == best.Q && c.NE == best.NE) ? "*" : "");
+                    }
+                    if (keep) {
+                        printf("  => Q%d,NE%d  %.2fx\n", best.Q, best.NE, base_t / best.t);
+                    } else {
+                        printf("  => baseline\n");
+                    }
+                    pts.push_back({ s.dk, s.dv, ne11, ne01, cs, base_t });
                 }
-                if (keep) {
-                    printf("  => Q%d,NE%d  %.2fx\n", best.Q, best.NE, base_t / best.t);
-                } else {
-                    printf("  => baseline\n");
-                }
-                pts.push_back({ s.dk, s.dv, ne11, ne01, cs, base_t });
             }
         }
-    }
 
-    // [2] Compress into pasteable rows. For each (dk,dv) and each ne01 domain
-    // {decode = ne01==1, batch = ne01>=2}, emit one ne11-collapsed default cfg (the one needing the
-    // fewest rows) plus a per-bucket exception wherever the default's POINTWISE regret vs that bucket's
-    // min-max-regret target (worst point in the bucket), or its aggregate slowdown vs baseline, exceeds
-    // TUNE_TAU. ne11_b = -1 marks a default. The target itself keeps an intrinsic per-point regret from
-    // lumping ne01 (e.g. 5..19) into one tail bucket; TUNE_TAU only bounds resolved-vs-target, not
-    // resolved-vs-oracle.
-    // buffer this dtype's rows so the header can carry the count ("// ---- dtype: N rows ----")
-    std::vector<std::string> rows_out;
-    char rbuf[192];
-    for (auto s : shapes) {
-        const int base_ne = baseline_ne(s.dk, s.dv);
-        std::vector<cand_t> cfgs;  // candidate list (identical for every grid point of this shape)
-        int base_i = 0;
-        for (int ne : fa_vec_legal_ne(s.dk, s.dv)) {
-            for (int Q : { 1, 2, 4 }) {
-                if (Q == 1 && ne == base_ne) { base_i = (int) cfgs.size(); }
-                cfgs.push_back({ Q, ne, 0.0 });
+        // [2] Compress into pasteable rows. Per (dk,dv) and ne01 domain {decode==1, batch>=2}, emit
+        // one ne11-collapsed default cfg (fewest rows, ne11_b=-1) plus a per-bucket exception wherever
+        // the default's pointwise regret vs the bucket's min-max-regret target, or its aggregate
+        // slowdown vs baseline, exceeds TUNE_TAU. The target still carries an intrinsic per-point regret
+        // from lumping ne01 into one tail bucket — TUNE_TAU bounds resolved-vs-target, not vs-oracle.
+        std::vector<std::string> rows_out;
+        char rbuf[192];
+        for (auto s : shapes) {
+            const int base_ne = baseline_ne(s.dk, s.dv);
+            std::vector<cand_t> cfgs;  // candidate list (identical for every grid point of this shape)
+            int base_i = 0;
+            for (int ne : fa_vec_legal_ne(s.dk, s.dv)) {
+                for (int Q : { 1, 2, 4 }) {
+                    if (Q == 1 && ne == base_ne) { base_i = (int) cfgs.size(); }
+                    cfgs.push_back({ Q, ne, 0.0 });
+                }
             }
-        }
-        auto cfg_time = [&](const pt_t & p, int i) {
-            for (const auto & c : p.cs) { if (c.Q == cfgs[i].Q && c.NE == cfgs[i].NE) { return c.t; } }
-            return 0.0;
-        };
+            auto cfg_time = [&](const pt_t & p, int i) {
+                for (const auto & c : p.cs) { if (c.Q == cfgs[i].Q && c.NE == cfgs[i].NE) { return c.t; } }
+                return 0.0;
+            };
 
-        // Bucket the grid points using the runtime's bucketers (via proc), so keys match fa_vec_pick.
-        // Short-KV points (ne11 bucket 0) are dropped — the runtime serves those from baseline. Each
-        // kept bucket picks a min-max-regret target (gated by the aggregate TUNE_THETA benefit gate).
-        struct bkt_t { int b11, b01, Ti; std::vector<double> agg; double base_agg;
-                       std::vector<const pt_t *> bp; };  // bp kept for the pointwise ride test below
-        std::set<std::pair<int, int>> seen;
-        for (const auto & p : pts) {
-            if (p.dk != s.dk || p.dv != s.dv) { continue; }
-            const int b11 = ne11_bucket(p.ne11);
-            if (b11 == 0) { continue; }
-            seen.insert({ b11, ne01_bucket(p.ne01) });
-        }
-        std::vector<bkt_t> bks;
-        for (const auto & bb : seen) {
-            const int b11 = bb.first, b01 = bb.second;
-            std::vector<const pt_t *> bp;
+            // Bucket the grid points using the runtime's bucketers (via proc), so keys match fa_vec_pick.
+            // Short-KV points (ne11 bucket 0) are dropped — the runtime serves those from baseline. Each
+            // kept bucket picks a min-max-regret target (gated by the aggregate TUNE_THETA benefit gate).
+            struct bkt_t { int b11, b01, Ti; std::vector<double> agg; double base_agg;
+                           std::vector<const pt_t *> bp; };  // bp kept for the pointwise ride test below
+            std::set<std::pair<int, int>> seen;
             for (const auto & p : pts) {
-                if (p.dk == s.dk && p.dv == s.dv && ne11_bucket(p.ne11) == b11 && ne01_bucket(p.ne01) == b01) {
-                    bp.push_back(&p);
-                }
+                if (p.dk != s.dk || p.dv != s.dv) { continue; }
+                const int b11 = ne11_bucket(p.ne11);
+                if (b11 == 0) { continue; }
+                seen.insert({ b11, ne01_bucket(p.ne01) });
             }
-            std::vector<double> agg(cfgs.size(), 0.0), worst(cfgs.size(), 0.0);
-            for (const auto * p : bp) {
-                double bestt = 0.0;
-                for (size_t i = 0; i < cfgs.size(); ++i) {
-                    double t = cfg_time(*p, (int) i);
-                    if (t > 0.0 && (bestt == 0.0 || t < bestt)) { bestt = t; }
+            std::vector<bkt_t> bks;
+            for (const auto & bb : seen) {
+                const int b11 = bb.first, b01 = bb.second;
+                std::vector<const pt_t *> bp;
+                for (const auto & p : pts) {
+                    if (p.dk == s.dk && p.dv == s.dv && ne11_bucket(p.ne11) == b11 && ne01_bucket(p.ne01) == b01) {
+                        bp.push_back(&p);
+                    }
                 }
-                for (size_t i = 0; i < cfgs.size(); ++i) {
-                    double t = cfg_time(*p, (int) i);
-                    agg[i] += t;
-                    if (t > 0.0 && bestt > 0.0) { worst[i] = std::max(worst[i], t / bestt); }
+                std::vector<double> agg(cfgs.size(), 0.0), worst(cfgs.size(), 0.0);
+                for (const auto * p : bp) {
+                    double bestt = 0.0;
+                    for (size_t i = 0; i < cfgs.size(); ++i) {
+                        double t = cfg_time(*p, (int) i);
+                        if (t > 0.0 && (bestt == 0.0 || t < bestt)) { bestt = t; }
+                    }
+                    for (size_t i = 0; i < cfgs.size(); ++i) {
+                        double t = cfg_time(*p, (int) i);
+                        agg[i] += t;
+                        if (t > 0.0 && bestt > 0.0) { worst[i] = std::max(worst[i], t / bestt); }
+                    }
                 }
+                int robust = 0;
+                for (size_t i = 1; i < cfgs.size(); ++i) {
+                    if (worst[i] < worst[robust] ||
+                        (worst[i] == worst[robust] && (cfgs[i].Q < cfgs[robust].Q ||
+                        (cfgs[i].Q == cfgs[robust].Q && cfgs[i].NE < cfgs[robust].NE)))) {
+                        robust = (int) i;
+                    }
+                }
+                const bool tune = robust != base_i && agg[base_i] / agg[robust] >= TUNE_THETA;
+                bks.push_back({ b11, b01, tune ? robust : base_i, agg, agg[base_i], bp });
             }
-            int robust = 0;
-            for (size_t i = 1; i < cfgs.size(); ++i) {
-                if (worst[i] < worst[robust] ||
-                    (worst[i] == worst[robust] && (cfgs[i].Q < cfgs[robust].Q ||
-                    (cfgs[i].Q == cfgs[robust].Q && cfgs[i].NE < cfgs[robust].NE)))) {
-                    robust = (int) i;
-                }
-            }
-            const bool tune = robust != base_i && agg[base_i] / agg[robust] >= TUNE_THETA;
-            bks.push_back({ b11, b01, tune ? robust : base_i, agg, agg[base_i], bp });
-        }
 
-        // Pointwise compression regret of default cfg d vs the bucket target Ti (worst point in the
-        // bucket). This is the regret the runtime actually experiences: an aggregate ratio-of-sums lets
-        // a default that wins on aligned ne01 (e.g. 8, 16) hide a large penalty on a misaligned point
-        // (e.g. ne01=5), so the ride/exception decision must be per point, not on the summed time.
-        auto reg_pointwise = [&](const bkt_t * b, int d) {
-            double r = 0.0;
-            for (const auto * p : b->bp) {
-                const double td = cfg_time(*p, d), tT = cfg_time(*p, b->Ti);
-                if (td > 0.0 && tT > 0.0) { r = std::max(r, td / tT - 1.0); }
-            }
-            return r;
-        };
+            // Pointwise regret of default cfg d vs the bucket target Ti. Per-point (not aggregate):
+            // a ratio-of-sums lets a default that wins on aligned ne01 (8, 16) hide a large penalty
+            // on a misaligned point (ne01=5), so the ride/exception decision must be per point.
+            auto reg_pointwise = [&](const bkt_t * b, int d) {
+                double r = 0.0;
+                for (const auto * p : b->bp) {
+                    const double td = cfg_time(*p, d), tT = cfg_time(*p, b->Ti);
+                    if (td > 0.0 && tT > 0.0) { r = std::max(r, td / tT - 1.0); }
+                }
+                return r;
+            };
 
-        for (int dom = 0; dom <= 1; ++dom) {  // 0 = decode (ne01==1), 1 = batch (ne01>=2)
-            std::vector<const bkt_t *> db;
-            for (const auto & b : bks) { if ((dom == 0) == (b.b01 == 0)) { db.push_back(&b); } }
-            if (db.empty()) { continue; }
+            for (int dom = 0; dom <= 1; ++dom) {  // 0 = decode (ne01==1), 1 = batch (ne01>=2)
+                std::vector<const bkt_t *> db;
+                for (const auto & b : bks) { if ((dom == 0) == (b.b01 == 0)) { db.push_back(&b); } }
+                if (db.empty()) { continue; }
 
-            // default cfg = the one minimizing (#rows, total achieved time, Q, NE)
-            int bestD = -1, bestRows = 1 << 30; double bestTot = 0.0;
-            for (size_t d = 0; d < cfgs.size(); ++d) {
-                int rows = ((int) d != base_i) ? 1 : 0; double tot = 0.0;
+                // default cfg = the one minimizing (#rows, total achieved time, Q, NE)
+                int bestD = -1, bestRows = 1 << 30; double bestTot = 0.0;
+                for (size_t d = 0; d < cfgs.size(); ++d) {
+                    int rows = ((int) d != base_i) ? 1 : 0; double tot = 0.0;
+                    for (const auto * b : db) {
+                        const double reg  = reg_pointwise(b, (int) d);       // pointwise vs bucket target
+                        const double slow = b->agg[d] / b->base_agg - 1.0;   // aggregate vs baseline (safety net)
+                        if (reg > TUNE_TAU || slow > TUNE_TAU) { rows++; tot += b->agg[b->Ti]; }
+                        else                                   {         tot += b->agg[d];      }
+                    }
+                    const bool better = bestD < 0 || rows < bestRows ||
+                        (rows == bestRows && (tot < bestTot ||
+                        (tot == bestTot && (cfgs[d].Q < cfgs[bestD].Q ||
+                        (cfgs[d].Q == cfgs[bestD].Q && cfgs[d].NE < cfgs[bestD].NE)))));
+                    if (better) { bestD = (int) d; bestRows = rows; bestTot = tot; }
+                }
+
+                const int dom_id = (dom == 0) ? 0 : 1;  // FA_VEC_DOMAIN_DECODE / FA_VEC_DOMAIN_BATCH
+                if (bestD != base_i) {
+                    snprintf(rbuf, sizeof(rbuf), "    { { GGML_METAL_DEVICE_M4_MAX, %s, %d, %d, -1, %d }, { %d, %d } },",
+                             type_token(type_kv), s.dk, s.dv, dom_id, cfgs[bestD].Q, cfgs[bestD].NE);
+                    rows_out.emplace_back(rbuf);
+                }
                 for (const auto * b : db) {
-                    const double reg  = reg_pointwise(b, (int) d);       // pointwise vs bucket target
-                    const double slow = b->agg[d] / b->base_agg - 1.0;   // aggregate vs baseline (safety net)
-                    if (reg > TUNE_TAU || slow > TUNE_TAU) { rows++; tot += b->agg[b->Ti]; }
-                    else                                   {         tot += b->agg[d];      }
+                    const double reg  = reg_pointwise(b, bestD);            // pointwise vs bucket target
+                    const double slow = b->agg[bestD] / b->base_agg - 1.0;  // aggregate vs baseline
+                    if (reg <= TUNE_TAU && slow <= TUNE_TAU) { continue; }  // rides the default / baseline
+                    snprintf(rbuf, sizeof(rbuf), "    { { GGML_METAL_DEVICE_M4_MAX, %s, %d, %d, %d, %d }, { %d, %d } },",
+                             type_token(type_kv), s.dk, s.dv, b->b11, b->b01, cfgs[b->Ti].Q, cfgs[b->Ti].NE);
+                    rows_out.emplace_back(rbuf);
                 }
-                const bool better = bestD < 0 || rows < bestRows ||
-                    (rows == bestRows && (tot < bestTot ||
-                    (tot == bestTot && (cfgs[d].Q < cfgs[bestD].Q ||
-                    (cfgs[d].Q == cfgs[bestD].Q && cfgs[d].NE < cfgs[bestD].NE)))));
-                if (better) { bestD = (int) d; bestRows = rows; bestTot = tot; }
-            }
-
-            const int dom_id = (dom == 0) ? 0 : 1;  // FA_VEC_DOMAIN_DECODE / FA_VEC_DOMAIN_BATCH
-            if (bestD != base_i) {
-                snprintf(rbuf, sizeof(rbuf), "    { { GGML_METAL_DEVICE_M4_MAX, %s, %d, %d, -1, %d }, { %d, %d } },",
-                         type_token(type_kv), s.dk, s.dv, dom_id, cfgs[bestD].Q, cfgs[bestD].NE);
-                rows_out.emplace_back(rbuf);
-            }
-            for (const auto * b : db) {
-                const double reg  = reg_pointwise(b, bestD);            // pointwise vs bucket target
-                const double slow = b->agg[bestD] / b->base_agg - 1.0;  // aggregate vs baseline
-                if (reg <= TUNE_TAU && slow <= TUNE_TAU) { continue; }  // rides the default / baseline
-                snprintf(rbuf, sizeof(rbuf), "    { { GGML_METAL_DEVICE_M4_MAX, %s, %d, %d, %d, %d }, { %d, %d } },",
-                         type_token(type_kv), s.dk, s.dv, b->b11, b->b01, cfgs[b->Ti].Q, cfgs[b->Ti].NE);
-                rows_out.emplace_back(rbuf);
             }
         }
-    }
-    printf("\n    // ---- %s: %zu rows ----\n", ggml_type_name(type_kv), rows_out.size());
-    for (const auto & r : rows_out) { printf("%s\n", r.c_str()); }
+        printf("\n    // ---- %s: %zu rows ----\n", ggml_type_name(type_kv), rows_out.size());
+        for (const auto & r : rows_out) { printf("%s\n", r.c_str()); }
     }  // for type_kv
     return true;
 }

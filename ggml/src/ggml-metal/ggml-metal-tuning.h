@@ -7,13 +7,10 @@
 
 namespace ggml_metal_tuning {
 
-// FA vec selection key buckets: ne11 = KV length, ne01 = query rows.
-// ne01 splits decode (==1) from batch (>=2): Q>1 reuses one K/V tile load across query
-// rows, so the optimum flips to Q>1 only with >=2 rows. Quant KV refines the batch side
-// into {2,3,4,5}: Q>1 wastes work unless ne01 is a multiple of Q (penalty recurs with
-// ne01 % Q), and q5 flips Q2->Q4 by ne01.
-// ne11 keeps a finer split: the baseline->Q>1 crossover by KV length is head-size
-// dependent (small dk crosses late, large dk wins even at short KV).
+// FA vec selection buckets. ne01 (query rows) splits decode (==1) from batch (>=2), the
+// batch side refined into {2,3,4,5}: Q>1 reuses one K/V load across rows, so it only pays
+// off once ne01 aligns with Q. ne11 (KV length) is bucketed too, as the Q>1 crossover is
+// head-size dependent (small dk crosses late, large dk wins even at short KV).
 constexpr int FA_VEC_NE11_BUCKETS[] = { 1024, 4096, 16384 };
 constexpr int FA_VEC_NE01_BUCKETS[] = { 2, 3, 4, 5 };
 

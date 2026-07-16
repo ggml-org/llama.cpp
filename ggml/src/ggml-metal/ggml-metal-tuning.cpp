@@ -291,7 +291,7 @@ bool fa_vec_override_active() {
     return g_override_set;
 }
 
-static const fa_vec_cfg_t * find(const fa_vec_entry_t * tbl, size_t n, const fa_vec_key_t & k) {
+static const fa_vec_cfg_t * find_cfg(const fa_vec_entry_t * tbl, size_t n, const fa_vec_key_t & k) {
     for (size_t i = 0; i < n; ++i) {
         if (memcmp(&tbl[i].key, &k, sizeof(k)) == 0) {
             return &tbl[i].cfg;
@@ -305,11 +305,11 @@ fa_vec_cfg_t fa_vec_pick(enum ggml_metal_device_id device_id, int gpu_family, in
         return g_override_cfg;
     }
 
-    const fa_vec_cfg_t kBaseline = fa_vec_baseline_cfg(dk, dv);
+    const fa_vec_cfg_t baseline = fa_vec_baseline_cfg(dk, dv);
 
     const int ne11_b = fa_vec_ne11_bucket(ne11);
     if (ne11_b == 0) {
-        return kBaseline;  // short KV: attention is a small slice of the step, left to baseline
+        return baseline;  // short KV: attention is a small slice of the step, left to baseline
     }
     const int ne01_b = fa_vec_ne01_bucket(ne01);
 
@@ -323,12 +323,12 @@ fa_vec_cfg_t fa_vec_pick(enum ggml_metal_device_id device_id, int gpu_family, in
         k.device_id = (int8_t) dev;
         k.ne11_b    = (int8_t) ne11_b;
         k.ne01_b    = (int8_t) ne01_b;
-        if (auto * c = find(fa_vec_tuned_table, std::size(fa_vec_tuned_table), k)) {
+        if (auto * c = find_cfg(fa_vec_tuned_table, std::size(fa_vec_tuned_table), k)) {
             return c;
         }
         k.ne11_b = FA_VEC_NE11_DEFAULT;
         k.ne01_b = (ne01_b == 0) ? FA_VEC_DOMAIN_DECODE : FA_VEC_DOMAIN_BATCH;
-        return find(fa_vec_tuned_table, std::size(fa_vec_tuned_table), k);
+        return find_cfg(fa_vec_tuned_table, std::size(fa_vec_tuned_table), k);
     };
 
     if (auto * c = lookup(device_id)) {
@@ -345,7 +345,7 @@ fa_vec_cfg_t fa_vec_pick(enum ggml_metal_device_id device_id, int gpu_family, in
         }
     }
 
-    return kBaseline;
+    return baseline;
 }
 
 }  // namespace ggml_metal_tuning
