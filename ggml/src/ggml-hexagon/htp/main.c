@@ -39,6 +39,9 @@
 #define WORK_QUEUE_STACK_SIZE  16384
 #define MAIN_THREAD_STACK_SIZE 32768
 
+_Static_assert(WORK_QUEUE_MAX_N_THREADS >= HTP_MAX_NTHREADS,
+               "work-queue thread cap must be >= HTP_MAX_NTHREADS");
+
 struct htp_handle {
     struct htp_context * ctx;
 };
