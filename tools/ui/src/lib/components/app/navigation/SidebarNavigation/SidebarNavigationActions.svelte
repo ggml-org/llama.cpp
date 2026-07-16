@@ -119,9 +119,7 @@
 					: onSearchClick}
 			{@const itemTransition = {
 				duration: ICON_STRIP_TRANSITION_DURATION,
-				delay: !initialized
-					? ICON_STRIP_TRANSITION_DELAY_MULTIPLIER + i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER
-					: 0,
+				delay: !initialized ? i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER : 0,
 				easing: circIn
 			}}
 
@@ -141,8 +139,8 @@
 
 							{#if showIcons}
 								<span
-									in:fade={{ duration: 150, easing: circIn, delay: 50 }}
-									out:fade={{ duration: 100 }}
+									in:fade={itemTransition}
+									out:fade={itemTransition}
 									class="min-w-0 truncate">{item.tooltip}</span
 								>
 							{/if}
@@ -171,9 +169,7 @@
 					: onSearchClick}
 			{@const itemTransition = {
 				duration: ICON_STRIP_TRANSITION_DURATION,
-				delay: !initialized
-					? ICON_STRIP_TRANSITION_DELAY_MULTIPLIER + i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER
-					: 0,
+				delay: !initialized ? i * ICON_STRIP_TRANSITION_DELAY_MULTIPLIER : 0,
 				easing: circIn
 			}}
 

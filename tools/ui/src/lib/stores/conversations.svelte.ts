@@ -387,6 +387,127 @@ class ConversationsStore {
 	}
 
 	/**
+	 * Deletes multiple conversations in sequence.
+	 * Mirrors deleteConversation() per-id; navigates to NEW_CHAT only if the
+	 * currently-open chat was among the deleted ones.
+	 * @param convIds - Conversation IDs to delete
+	 */
+	async bulkDeleteConversations(convIds: string[]): Promise<void> {
+		if (convIds.length === 0) return;
+
+		try {
+			const activeWasDeleted =
+				this.activeConversation !== null && convIds.includes(this.activeConversation.id);
+
+			const idsToRemove = new SvelteSet(convIds);
+			// Collect all descendants recursively so the local cache stays consistent
+			// even when deleteWithForks is omitted.
+			const queue = [...convIds];
+			while (queue.length > 0) {
+				const parentId = queue.pop()!;
+				for (const c of this.conversations) {
+					if (c.forkedFromConversationId === parentId && !idsToRemove.has(c.id)) {
+						idsToRemove.add(c.id);
+						queue.push(c.id);
+					}
+				}
+			}
+
+			for (const id of convIds) {
+				await DatabaseService.deleteConversation(id);
+			}
+
+			this.conversations = this.conversations.filter((c) => !idsToRemove.has(c.id));
+
+			if (activeWasDeleted) {
+				this.clearActiveConversation();
+				await goto(ROUTES.NEW_CHAT);
+			}
+
+			toast.success(
+				convIds.length === 1
+					? 'Conversation deleted'
+					: `${convIds.length} conversations deleted`
+			);
+		} catch (error) {
+			console.error('Failed to bulk delete conversations:', error);
+			toast.error('Failed to delete conversations');
+		}
+	}
+
+	/**
+	 * Pins or unpins multiple conversations. Each id is toggled individually so
+	 * mixed selections (some pinned, some not) converge to a uniform state:
+	 * pinned -> unpinned; unpinned -> pinned.
+	 * @param convIds - Conversation IDs to toggle
+	 */
+	async bulkToggleConversationPin(convIds: string[]): Promise<void> {
+		if (convIds.length === 0) return;
+
+		try {
+			for (const id of convIds) {
+				const newPinned = await DatabaseService.toggleConversationPin(id);
+				const convIndex = this.conversations.findIndex((c) => c.id === id);
+				if (convIndex !== -1) {
+					this.conversations[convIndex].pinned = newPinned;
+				}
+				if (this.activeConversation?.id === id) {
+					this.activeConversation = { ...this.activeConversation, pinned: newPinned };
+				}
+			}
+
+			this.conversations = [...this.conversations];
+
+			toast.success(
+				convIds.length === 1
+					? 'Conversation pin toggled'
+					: `Updated pin state for ${convIds.length} conversations`
+			);
+		} catch (error) {
+			console.error('Failed to bulk toggle pin:', error);
+			toast.error('Failed to update pin state');
+		}
+	}
+
+	/**
+	 * Bundles the given conversations into a single zip archive and triggers a
+	 * browser download (one JSONL file per conversation).
+	 * @param convIds - Conversation IDs to export
+	 */
+	async bulkExportConversations(convIds: string[]): Promise<void> {
+		if (convIds.length === 0) return;
+
+		try {
+			const exported: ExportedConversation[] = [];
+			for (const id of convIds) {
+				const conversation =
+					this.activeConversation?.id === id
+						? this.activeConversation
+						: await DatabaseService.getConversation(id);
+				if (!conversation) continue;
+				const messages = await DatabaseService.getConversationMessages(id);
+				exported.push({ conv: conversation, messages });
+			}
+
+			if (exported.length === 0) {
+				toast.error('No conversations to export');
+				return;
+			}
+
+			this.downloadConversationsArchive(exported);
+
+			toast.success(
+				exported.length === 1
+					? 'Conversation exported'
+					: `${exported.length} conversations exported`
+			);
+		} catch (error) {
+			console.error('Failed to bulk export conversations:', error);
+			toast.error('Failed to export conversations');
+		}
+	}
+
+	/**
 	 *
 	 *
 	 * Message Management
