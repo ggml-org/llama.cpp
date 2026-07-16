@@ -75,7 +75,7 @@ public:
     server_mcp_manager(std::vector<server_mcp_server_config> configs);
     ~server_mcp_manager();
 
-    void warmup();                                  // spawn → list → shutdown each server
+    void warmup();                                  // spawn -> list -> shutdown each server
     std::vector<server_mcp_tool_definition> get_all_tools() const;
 
     std::shared_ptr<server_mcp_instance> get_or_create(const std::string & server_name);
@@ -97,7 +97,7 @@ private:
     std::vector<server_mcp_server_config> configs;
     mutable std::mutex mutex;
 
-    // server_name → global instance for that server
+    // server_name -> global instance for that server
     std::map<std::string, std::shared_ptr<server_mcp_instance>> global_instances;
 
     // Warmup-cached tool lists (from servers that were successfully warmed up)

@@ -642,11 +642,11 @@ json server_mcp_instance::send_rpc(const json & request, int timeout_ms) {
                 return {{"error", {{"code", -32603}, {"message", "process not running"}}}};
             }
             if (request_has_id && !resp.contains("id")) {
-                // Notification or malformed response — keep waiting for actual response
+                // Notification or malformed response - keep waiting for actual response
                 continue;
             }
             if (request_has_id && resp.contains("id") && resp["id"] != request_id) {
-                // Out-of-order response — keep waiting
+                // Out-of-order response - keep waiting
                 continue;
             }
             return resp;
@@ -662,11 +662,11 @@ json server_mcp_instance::send_rpc(const json & request, int timeout_ms) {
                     return {{"error", {{"code", -32603}, {"message", "process not running"}}}};
                 }
                 if (request_has_id && !resp.contains("id")) {
-                    // Notification or malformed response — keep waiting for actual response
+                    // Notification or malformed response - keep waiting for actual response
                     continue;
                 }
                 if (request_has_id && resp.contains("id") && resp["id"] != request_id) {
-                    // Out-of-order response — keep waiting
+                    // Out-of-order response - keep waiting
                     continue;
                 }
                 return resp;
@@ -683,11 +683,11 @@ json server_mcp_instance::send_rpc(const json & request, int timeout_ms) {
                     return {{"error", {{"code", -32603}, {"message", "process not running"}}}};
                 }
                 if (request_has_id && !resp.contains("id")) {
-                    // Notification or malformed response — keep waiting
+                    // Notification or malformed response - keep waiting
                     continue;
                 }
                 if (request_has_id && resp.contains("id") && resp["id"] != request_id) {
-                    // Out-of-order response — keep waiting
+                    // Out-of-order response - keep waiting
                     continue;
                 }
                 return resp;
@@ -714,11 +714,11 @@ json server_mcp_instance::send_rpc(const json & request, int timeout_ms) {
                     return {{"error", {{"code", -32603}, {"message", "process not running"}}}};
                 }
                 if (request_has_id && !resp.contains("id")) {
-                    // Notification or malformed response — keep waiting for actual response
+                    // Notification or malformed response - keep waiting for actual response
                     continue;
                 }
                 if (request_has_id && resp.contains("id") && resp["id"] != request_id) {
-                    // Out-of-order response — keep waiting
+                    // Out-of-order response - keep waiting
                     continue;
                 }
                 return resp;
@@ -918,7 +918,7 @@ std::shared_ptr<server_mcp_instance> server_mcp_manager::get_or_create(const std
     if (it != global_instances.end()) {
         auto & inst = it->second;
         if (!inst->is_alive()) {
-            // respawn if dead — move the old instance out so its destruction
+            // respawn if dead - move the old instance out so its destruction
             // (which may block ~500ms in terminate_process) does not hold the manager lock
             auto old_inst = std::move(it->second);
             global_instances.erase(it);

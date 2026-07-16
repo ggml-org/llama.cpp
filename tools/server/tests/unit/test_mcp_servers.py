@@ -281,7 +281,7 @@ def test_mcp_tools_slot_independent():
     server = _start_server_with_mcp(mcp_json)
 
     try:
-        # Call /tools without any slot binding — should succeed
+        # Call /tools without any slot binding - should succeed
         res = server.make_request("POST", "/tools", data={
             "tool": "echo_echo",
             "params": {"message": "hello"}
