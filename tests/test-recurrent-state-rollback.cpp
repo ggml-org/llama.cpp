@@ -20,7 +20,7 @@ static llama_context * make_ctx(const common_params & params, llama_model * mode
 static bool decode_tokens(llama_context * ctx, const std::vector<llama_token> & tokens, uint32_t count) {
     llama_batch batch = llama_batch_init(count, 0, 1);
     for (uint32_t pos = 0; pos < count; ++pos) {
-        common_batch_add(batch, tokens[pos], pos, { 0 }, false);
+        common_batch_add(batch, tokens[pos], pos, { 0 }, pos + 1 == count);
     }
     const bool ok = llama_decode(ctx, batch) == 0;
     llama_batch_free(batch);
