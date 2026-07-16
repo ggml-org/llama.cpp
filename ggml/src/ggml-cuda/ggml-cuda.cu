@@ -3765,6 +3765,25 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         return fused_node_count - 1;
     }
 
+    if (node->op == GGML_OP_MUL_MAT_ID &&
+            ggml_can_fuse_subgraph(cgraph, i, { GGML_OP_MUL_MAT_ID, GGML_OP_MUL }, { i + 1 })) {
+        ggml_tensor * mm_node  = node;
+        ggml_tensor * mul_node = cgraph->nodes[i + 1];
+        ggml_tensor * weights  = (mul_node->src[0] == mm_node) ? mul_node->src[1] :
+                                 (mul_node->src[1] == mm_node) ? mul_node->src[0] : nullptr;
+        const bool weights_ok = weights && weights->type == GGML_TYPE_F32 && ggml_is_contiguous(weights) &&
+                                weights->ne[0] == 1 && weights->ne[1] == mm_node->ne[1] &&
+                                weights->ne[2] == mm_node->ne[2] && weights->ne[3] == mm_node->ne[3];
+        int out_nodes[] = { i + 1 };
+        if (weights_ok && ggml_cuda_should_fuse_mul_mat_vec_q(mm_node) &&
+                ggml_cuda_check_fusion_memory_ranges(cgraph, i, 2, out_nodes, 1)) {
+            ggml_cuda_mm_fusion_args_host fusion_data{};
+            fusion_data.dst_scale = weights;
+            ggml_cuda_mul_mat_vec_q(*cuda_ctx, mm_node->src[0], mm_node->src[1], mm_node->src[2], mul_node, &fusion_data);
+            return 1;
+        }
+    }
+
     // mul_mat + add
     for (ggml_op op : { GGML_OP_MUL_MAT, GGML_OP_MUL_MAT_ID }) {
         const ggml_op bias_op = op == GGML_OP_MUL_MAT ? GGML_OP_ADD : GGML_OP_ADD_ID;
