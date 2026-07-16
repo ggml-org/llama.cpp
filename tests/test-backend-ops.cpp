@@ -3751,6 +3751,166 @@ struct test_snake_fuse : public test_case {
     }
 };
 
+
+struct test_dsv4_hc : public test_case {
+    static constexpr int64_t hc = 4;
+
+    ggml_tensor * out = nullptr;
+
+    static uint32_t tensor_seed(const ggml_tensor * t) {
+        uint32_t seed = 2166136261u;
+        for (const char * p = ggml_get_name(t); *p; ++p) {
+            seed ^= (uint8_t) *p;
+            seed *= 16777619u;
+        }
+        for (int i = 0; i < GGML_MAX_DIMS; ++i) {
+            seed ^= (uint32_t) t->ne[i];
+            seed *= 16777619u;
+        }
+        return seed;
+    }
+
+    static bool tensor_range(const std::string & name, float & lo, float & hi) {
+        if (name == "mixes") {
+            lo = -2.0f; hi = 2.0f; return true;
+        }
+        if (name == "scale") {
+            lo = -0.5f; hi = 0.5f; return true;
+        }
+        if (name == "base") {
+            lo = -0.25f; hi = 0.25f; return true;
+        }
+        if (name == "weights" || name == "comb") {
+            lo = 0.0f; hi = 1.0f; return true;
+        }
+        if (name == "post") {
+            lo = 0.0f; hi = 2.0f; return true;
+        }
+        if (name == "x" || name == "residual") {
+            lo = -1.0f; hi = 1.0f; return true;
+        }
+        return false;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            const std::string name = ggml_get_name(t);
+            float lo;
+            float hi;
+            if (!tensor_range(name, lo, hi)) {
+                continue;
+            }
+
+            GGML_ASSERT(t->type == GGML_TYPE_F32);
+            std::mt19937 rng(tensor_seed(t));
+            std::uniform_real_distribution<float> dist(lo, hi);
+            std::vector<float> data(ggml_nelements(t));
+            for (float & v : data) {
+                v = dist(rng);
+            }
+            ggml_backend_tensor_set(t, data.data(), 0, data.size()*sizeof(float));
+        }
+    }
+};
+
+struct test_dsv4_hc_comb : public test_dsv4_hc {
+    const int64_t n_tokens;
+    const int32_t n_iter;
+    const float eps;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "DSV4_HC_COMB";
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR3(n_tokens, n_iter, eps);
+    }
+
+    test_dsv4_hc_comb(int64_t n_tokens = 17, int32_t n_iter = 4, float eps = 1e-6f)
+        : n_tokens(n_tokens), n_iter(n_iter), eps(eps) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * mixes = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, (2 + hc)*hc, n_tokens);
+        ggml_set_name(mixes, "mixes");
+
+        ggml_tensor * scale = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 3);
+        ggml_set_name(scale, "scale");
+
+        ggml_tensor * base = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, (2 + hc)*hc);
+        ggml_set_name(base, "base");
+
+        out = ggml_dsv4_hc_comb(ctx, mixes, scale, base, eps, n_iter);
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
+struct test_dsv4_hc_pre : public test_dsv4_hc {
+    const int64_t n_embd;
+    const int64_t n_tokens;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "DSV4_HC_PRE";
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR2(n_embd, n_tokens);
+    }
+
+    test_dsv4_hc_pre(int64_t n_embd = 31, int64_t n_tokens = 17)
+        : n_embd(n_embd), n_tokens(n_tokens) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * x = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd, hc, n_tokens);
+        ggml_set_name(x, "x");
+
+        ggml_tensor * weights = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hc, n_tokens);
+        ggml_set_name(weights, "weights");
+
+        out = ggml_dsv4_hc_pre(ctx, x, weights);
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
+struct test_dsv4_hc_post : public test_dsv4_hc {
+    const int64_t n_embd;
+    const int64_t n_tokens;
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "DSV4_HC_POST";
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR2(n_embd, n_tokens);
+    }
+
+    test_dsv4_hc_post(int64_t n_embd = 31, int64_t n_tokens = 17)
+        : n_embd(n_embd), n_tokens(n_tokens) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n_embd, n_tokens);
+        ggml_set_name(x, "x");
+
+        ggml_tensor * residual = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd, hc, n_tokens);
+        ggml_set_name(residual, "residual");
+
+        ggml_tensor * post = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, hc, n_tokens);
+        ggml_set_name(post, "post");
+
+        ggml_tensor * comb = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, hc, hc, n_tokens);
+        ggml_set_name(comb, "comb");
+
+        out = ggml_dsv4_hc_post(ctx, x, residual, post, comb);
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
+
 // GGML_OP_SSM_CONV
 struct test_ssm_conv : public test_case {
     const ggml_type type;
@@ -7881,6 +8041,19 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_snake_fuse(type, {  64,  32, 1, 2}));   // ne[3] > 1
         test_cases.emplace_back(new test_snake_fuse(type, {  64,  32, 2, 3}));   // ne[2] > 1 and ne[3] > 1
     }
+
+    test_cases.emplace_back(new test_dsv4_hc_comb(1, 1));
+    test_cases.emplace_back(new test_dsv4_hc_comb(17, 4));
+    test_cases.emplace_back(new test_dsv4_hc_comb(257, 8));
+
+    test_cases.emplace_back(new test_dsv4_hc_pre(1, 1));
+    test_cases.emplace_back(new test_dsv4_hc_pre(31, 17));
+    test_cases.emplace_back(new test_dsv4_hc_pre(128, 257));
+    test_cases.emplace_back(new test_dsv4_hc_pre(4096, 21));
+
+    test_cases.emplace_back(new test_dsv4_hc_post(1, 1));
+    test_cases.emplace_back(new test_dsv4_hc_post(31, 17));
+    test_cases.emplace_back(new test_dsv4_hc_post(128, 257));
 
     // glu ops
     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
