@@ -283,9 +283,9 @@ bool server_http_context::init(const common_params & params) {
         } else if (params.cors_origins == "localhost") {
             // special case: only reflect the Origin header if it is a localhost origin
             std::string origin = req.get_header_value("Origin");
-            if (origin_is_localhost(origin)) {
+            if (!origin.empty() && origin_is_localhost(origin)) {
                 res.set_header("Access-Control-Allow-Origin", origin);
-            } else {
+            } else if (!origin.empty()) {
                 SRV_WRN("(CORS) skip non-localhost origin: %s\n", origin.c_str());
             }
         } else {
