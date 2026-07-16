@@ -996,11 +996,10 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
             n_bufs, n_tens, n_ops, req->n_traces, dbuf->size, b_size, t_size, o_size);
 
     // Clean cache at the start of the batch
-    htp_trace_event_start(&ctx->trace[0], HTP_TRACE_EVT_L2FLUSH, 0);
+    // We cant trace this part because the trace buffer is setup later
     qurt_mem_cache_clean((qurt_addr_t) 0, 0, QURT_MEM_CACHE_FLUSH_INVALIDATE_ALL, QURT_MEM_DCACHE);
     hex_l2fetch_block(ctx, ctx->footprint);
     bitmap_reset(ctx->dirty_map, HTP_OP_MAX_TENSORS);
-    htp_trace_event_stop(&ctx->trace[0], HTP_TRACE_EVT_L2FLUSH, 0);
 
     // Setup descriptor pointers
     uint8_t * m_ptr = dbuf->ptr;
