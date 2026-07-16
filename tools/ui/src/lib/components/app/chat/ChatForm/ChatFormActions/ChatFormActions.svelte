@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { Square, SkipForward } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { ChatService } from '$lib/services';
@@ -185,7 +186,9 @@
 		>
 			<span class="sr-only">Skip reasoning</span>
 
-			<SkipForward class="h-4 w-4 stroke-muted-foreground group-hover:stroke-foreground" />
+			<SkipForward
+				class="{ICON_CLASS_DEFAULT} stroke-muted-foreground group-hover:stroke-foreground"
+			/>
 		</Button>
 	{/if}
 

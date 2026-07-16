@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { ArrowDown } from '@lucide/svelte';
 	import ActionIcon from '$lib/components/app/actions/ActionIcon.svelte';
 
@@ -12,7 +13,7 @@
 		ariaLabel="Scroll to bottom"
 		tooltip="Scroll to bottom"
 		size="lg"
-		iconSize="h-4 w-4"
+		iconSize={ICON_CLASS_DEFAULT}
 		class="h-9 w-9 rounded-full bg-accent text-accent-foreground absolute bottom-4 shadow-md"
 	/>
 </div>

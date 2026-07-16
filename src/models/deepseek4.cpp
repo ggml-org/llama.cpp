@@ -435,27 +435,29 @@ ggml_tensor * llama_model_deepseek4::graph::build_overlap_compressed_kv_from_sta
     kv_state    = dsv4_append_zero_row(ctx0, kv_state,    false);
     score_state = dsv4_append_zero_row(ctx0, score_state, true);
 
-    ggml_tensor * prev_idxs = dsv4_view_1d(ctx0, state_read_idxs, ratio*n_blocks, 0);
-    ggml_tensor * cur_idxs  = dsv4_view_1d(ctx0, state_read_idxs, ratio*n_blocks, ratio*n_blocks);
+    const int64_t n_read = ratio*n_blocks;
 
-    ggml_tensor * kv_prev = ggml_get_rows(ctx0, kv_state, prev_idxs);
-    kv_prev = ggml_cont(ctx0, ggml_view_2d(ctx0, kv_prev, n_embd_head, ratio*n_blocks, kv_prev->nb[1], 0));
+    ggml_tensor * kv_rows = ggml_get_rows(ctx0, kv_state, state_read_idxs);
+    ggml_tensor * score_rows = ggml_get_rows(ctx0, score_state, state_read_idxs);
+
+    ggml_tensor * kv_prev = ggml_cont(ctx0,
+            ggml_view_2d(ctx0, kv_rows, n_embd_head, n_read, kv_rows->nb[1], 0));
     kv_prev = ggml_reshape_3d(ctx0, kv_prev, n_embd_head, ratio, n_blocks);
     cb(kv_prev, name, il);
 
-    ggml_tensor * score_prev = ggml_get_rows(ctx0, score_state, prev_idxs);
-    score_prev = ggml_cont(ctx0, ggml_view_2d(ctx0, score_prev, n_embd_head, ratio*n_blocks, score_prev->nb[1], 0));
+    ggml_tensor * score_prev = ggml_cont(ctx0,
+            ggml_view_2d(ctx0, score_rows, n_embd_head, n_read, score_rows->nb[1], 0));
     score_prev = ggml_reshape_3d(ctx0, score_prev, n_embd_head, ratio, n_blocks);
     cb(score_prev, name, il);
 
-    ggml_tensor * kv_cur = ggml_get_rows(ctx0, kv_state, cur_idxs);
-    kv_cur = ggml_cont(ctx0, ggml_view_2d(ctx0, kv_cur, n_embd_head, ratio*n_blocks, kv_cur->nb[1],
-            ggml_row_size(kv_cur->type, n_embd_head)));
+    ggml_tensor * kv_cur = ggml_cont(ctx0,
+            ggml_view_2d(ctx0, kv_rows, n_embd_head, n_read, kv_rows->nb[1],
+                n_read*kv_rows->nb[1] + ggml_row_size(kv_rows->type, n_embd_head)));
     kv_cur = ggml_reshape_3d(ctx0, kv_cur, n_embd_head, ratio, n_blocks);
 
-    ggml_tensor * score_cur = ggml_get_rows(ctx0, score_state, cur_idxs);
-    score_cur = ggml_cont(ctx0, ggml_view_2d(ctx0, score_cur, n_embd_head, ratio*n_blocks, score_cur->nb[1],
-            ggml_row_size(score_cur->type, n_embd_head)));
+    ggml_tensor * score_cur = ggml_cont(ctx0,
+            ggml_view_2d(ctx0, score_rows, n_embd_head, n_read, score_rows->nb[1],
+                n_read*score_rows->nb[1] + ggml_row_size(score_rows->type, n_embd_head)));
     score_cur = ggml_reshape_3d(ctx0, score_cur, n_embd_head, ratio, n_blocks);
 
     ggml_tensor * values = ggml_concat(ctx0, kv_prev, kv_cur, 1);
