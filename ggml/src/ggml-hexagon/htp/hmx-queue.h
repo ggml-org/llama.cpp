@@ -70,7 +70,7 @@ static inline struct hmx_queue_desc hmx_queue_make_desc(hmx_queue_func func, voi
 
 static inline bool hmx_queue_push(hmx_queue_t q, struct hmx_queue_desc d) {
     unsigned int ir = atomic_load(&q->idx_read);
-    unsigned int iw = q->idx_write;
+    unsigned int iw = atomic_load(&q->idx_write);
 
     if (((iw + 1) & q->idx_mask) == ir) {
         FARF(HIGH, "hmx-queue-push: queue is full\n");
@@ -95,11 +95,11 @@ static inline bool hmx_queue_signal(hmx_queue_t q, enum hmx_queue_signal sig) {
 }
 
 static inline bool hmx_queue_empty(hmx_queue_t q) {
-    return q->idx_pop == q->idx_write;
+    return q->idx_pop == atomic_load(&q->idx_write);
 }
 
 static inline uint32_t hmx_queue_depth(hmx_queue_t q) {
-    return (q->idx_write - q->idx_read) & q->idx_mask;
+    return (atomic_load(&q->idx_write) - atomic_load(&q->idx_read)) & q->idx_mask;
 }
 
 static inline uint32_t hmx_queue_capacity(hmx_queue_t q) {
@@ -108,7 +108,7 @@ static inline uint32_t hmx_queue_capacity(hmx_queue_t q) {
 
 static inline struct hmx_queue_desc hmx_queue_pop_one(hmx_queue_t q) {
     unsigned int ip = q->idx_pop;
-    unsigned int iw = q->idx_write;
+    unsigned int iw = atomic_load(&q->idx_write);
 
     struct hmx_queue_desc rd = { NULL, NULL };
     if (ip == iw) {
