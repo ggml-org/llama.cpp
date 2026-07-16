@@ -217,14 +217,14 @@
 
 <svelte:window onbeforeunload={handleBeforeUnload} onkeydown={handleKeydown} />
 
-<div class="flex h-full flex-col">
+<div class="flex h-dvh flex-col">
 	<header
 		class="flex items-center justify-center border-b border-border/40 bg-background/95 px-6 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/60"
 	>
 		<h1 class="text-lg font-semibold">Notebook</h1>
 	</header>
 
-	<div class="flex-1 overflow-y-auto px-2 pt-2 pb-0 md:px-4 md:pt-4">
+	<div class="min-h-0 flex-1 overflow-hidden px-2 pt-2 pb-0 md:px-4 md:pt-4">
 		<Textarea
 			bind:ref={scrollContainer}
 			onscroll={handleScroll}
