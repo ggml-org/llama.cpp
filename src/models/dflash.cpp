@@ -177,9 +177,13 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
                 ggml_build_forward_expand(gf, kv->cpy_k(ctx0, Kcur, k_idxs, il));
                 ggml_build_forward_expand(gf, kv->cpy_v(ctx0, Vcur, v_idxs, il));
             } else {
-                // rotate K/V into the cache's rotated space (quantized KV only)
-                if (inp_attn->self_k_rot) { Kcur = llama_mul_mat_hadamard(ctx0, Kcur, inp_attn->self_k_rot); }
-                if (inp_attn->self_v_rot) { Vcur = llama_mul_mat_hadamard(ctx0, Vcur, inp_attn->self_v_rot); }
+                // rotate K/V into the cache's rotated space
+                if (inp_attn->self_k_rot) { 
+                    Kcur = llama_mul_mat_hadamard(ctx0, Kcur, inp_attn->self_k_rot); 
+                }
+                if (inp_attn->self_v_rot) { 
+                    Vcur = llama_mul_mat_hadamard(ctx0, Vcur, inp_attn->self_v_rot); 
+                }
                 ggml_build_forward_expand(gf, inp_attn->mctx->cpy_k(ctx0, Kcur, inp_attn->get_k_idxs(), il));
                 ggml_build_forward_expand(gf, inp_attn->mctx->cpy_v(ctx0, Vcur, inp_attn->get_v_idxs(), il));
             }
