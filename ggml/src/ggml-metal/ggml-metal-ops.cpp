@@ -1694,9 +1694,8 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
 
     // try to fuse the trailing cpy that scatters state snapshots into the recurrent cache
     ggml_metal_buffer_id cache_buf_id = { nullptr, 0 };
-    int32_t              slot_stride  = 0;
-    const bool           fused        = ctx->use_fusion &&
-        ggml_metal_try_gdn_cache_fusion(ctx, idx, &cache_buf_id, &slot_stride) > 0;
+    int32_t slot_stride = 0;
+    const bool fused = ctx->use_fusion && ggml_metal_try_gdn_cache_fusion(ctx, idx, &cache_buf_id, &slot_stride) > 0;
 
     auto pipeline = ggml_metal_library_get_pipeline_gated_delta_net(lib, op);
 
@@ -1764,7 +1763,6 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
 
     ggml_metal_encoder_dispatch_threadgroups(enc, op->src[2]->ne[0]/nsg, op->src[2]->ne[1], op->src[2]->ne[3], 32, nsg, 1);
 
-    // the fused cpy (if any) is skipped via its cleared COMPUTE flag, so only consume this node
     return 1;
 }
 
