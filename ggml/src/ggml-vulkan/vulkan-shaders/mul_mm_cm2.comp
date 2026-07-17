@@ -21,9 +21,14 @@
 #extension GL_EXT_bfloat16 : enable
 #endif
 
+#include "ggml_type_ids.glsl"
+
+#ifdef MULMAT_QUANT
+layout (constant_id = 7) const uint MmTypeA = 0;
+#endif
+
 #include "types.glsl"
 #include "utils.glsl"
-#include "ggml_type_ids.glsl"
 
 layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
@@ -41,7 +46,6 @@ layout (constant_id = 5) const uint ALIGNED = 0;
 layout (constant_id = 6) const uint subgroup_size = 32;
 
 #ifdef MULMAT_QUANT
-layout (constant_id = 7) const uint MmTypeA = 0;
 
 uint mm_quant_k() {
     switch (MmTypeA) {

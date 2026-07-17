@@ -22,8 +22,8 @@ void calc_superblock(const uint a_offset, const uint b_offset, const uint itid, 
             const uint qs = data_a[ibi].qs[8 * ib32 + 2 * (itid & 1) + l];
             const uint sign = bitfieldExtract(signscale, 7 * int(2 * (itid & 1) + l), 7);
             const uint sign7 = bitCount(sign);
-            const vec4 grid0 = vec4(unpack8(iq2xxs_grid[qs].x));
-            const vec4 grid1 = vec4(unpack8(iq2xxs_grid[qs].y));
+            const vec4 grid0 = vec4(unpack8(iq2_grid[qs].x));
+            const vec4 grid1 = vec4(unpack8(iq2_grid[qs].y));
 
             [[unroll]] for (uint j = 0; j < NUM_COLS; ++j) {
                 const vec4 b0 = vec4(data_b_v4[(j*p.batch_stride_b + b_offset + y_idx) / 4 + 2*l + 0]);

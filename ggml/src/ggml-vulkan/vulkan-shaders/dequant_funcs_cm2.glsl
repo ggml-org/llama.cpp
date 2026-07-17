@@ -898,7 +898,7 @@ float16_t dequantFuncIQ2_XXS(const in decodeBufIQ2_XXS bl, const in uint blockCo
     uint sign = bitfieldExtract(signscale, 7 * int(ib8), 7);
     sign |= bitCount(sign) << 7;
 
-    uint g2 = iq2xxs_grid[qs][(idx & 4) >> 2];
+    uint g2 = iq2_grid[qs][(idx & 4) >> 2];
     g2 >>= (idx & 2) * 8;
     const vec2 g = vec2(unpack8(g2));
 
@@ -923,7 +923,7 @@ f16vec4 dequantFuncIQ2_XXS_v(const in decodeBufIQ2_XXS bl, const in uint blockCo
     sign |= bitCount(sign) << 7;
     const uint sb = sign >> (idx & 7u);
 
-    const uint   g2 = iq2xxs_grid[qs][(idx & 4) >> 2];
+    const uint   g2 = iq2_grid[qs][(idx & 4) >> 2];
     const u8vec4 g  = unpack8(g2);
 
     return f16vec4(
@@ -953,7 +953,7 @@ float16_t dequantFuncIQ2_XS(const in decodeBufIQ2_XS bl, const in uint blockCoor
 
     uint sign = uint(qs >> 9);
     sign |= bitCount(sign) << 7;
-    uint g2 = iq2xs_grid[qs & 0x1FF][(idx & 4) >> 2];
+    uint g2 = iq2_grid[qs & 0x1FF][(idx & 4) >> 2];
     g2 >>= (idx & 2) * 8;
     const vec2 g = vec2(unpack8(g2));
 
@@ -976,7 +976,7 @@ f16vec4 dequantFuncIQ2_XS_v(const in decodeBufIQ2_XS bl, const in uint blockCoor
     sign |= bitCount(sign) << 7;
     const uint sb = sign >> (idx & 7u);
 
-    const uint   g2 = iq2xs_grid[qs & 0x1FF][(idx & 4) >> 2];
+    const uint   g2 = iq2_grid[qs & 0x1FF][(idx & 4) >> 2];
     const u8vec4 g  = unpack8(g2);
 
     return f16vec4(
@@ -1008,7 +1008,7 @@ float16_t dequantFuncIQ2_S(const in decodeBufIQ2_S bl, const in uint blockCoords
     const float d = float(bl.block.d);
     const float db = d * 0.25 * (0.5 + scale);
     const ivec2 sign01 = 1 - (2 & ivec2(sign << 1, sign));
-    uint g2 = iq2s_grid[qs | ((qh << (8 - qhshift)) & 0x300)][(idx & 4) >> 2];
+    uint g2 = iq2_grid[qs | ((qh << (8 - qhshift)) & 0x300)][(idx & 4) >> 2];
     g2 >>= (idx & 2) * 8;
     const vec2 v = db * vec2(sign01) * vec2(unpack8(g2));
     return float16_t(v[idx & 1]);
@@ -1030,7 +1030,7 @@ f16vec4 dequantFuncIQ2_S_v(const in decodeBufIQ2_S bl, const in uint blockCoords
     const float d  = float(bl.block.d);
     const float db = d * 0.25 * (0.5 + scale);
 
-    const uint   g2 = iq2s_grid[qs | ((qh << (8 - qhshift)) & 0x300)][(idx & 4) >> 2];
+    const uint   g2 = iq2_grid[qs | ((qh << (8 - qhshift)) & 0x300)][(idx & 4) >> 2];
     const u8vec4 g  = unpack8(g2);
 
     return f16vec4(
@@ -1068,7 +1068,7 @@ float16_t dequantFuncIQ3_XXS(const in decodeBufIQ3_XXS bl, const in uint blockCo
     const uint32_t sign7 = bitfieldExtract(signs, 7 * (int(iqs / 2) % 4), 7);
     const uint sign = (sign7 | (bitCount(sign7) << 7)) >> (idx & 0x6);
     const ivec2 sign01 = ivec2(1 - (2 & ivec2(sign << 1, sign)));
-    const uint grid = iq3xxs_grid[qs] >> (16 * ((idx & 2) >> 1));
+    const uint grid = iq3_grid[qs] >> (16 * ((idx & 2) >> 1));
     const vec2 v = db * vec2(sign01) * vec2(unpack8(grid).xy);
     return float16_t(v[idx & 1]);
 }
@@ -1089,7 +1089,7 @@ f16vec4 dequantFuncIQ3_XXS_v(const in decodeBufIQ3_XXS bl, const in uint blockCo
     const uint sign7 = bitfieldExtract(signs, 7 * (int(iqs / 2) % 4), 7);
     const uint sb    = (sign7 | (bitCount(sign7) << 7)) >> (idx & 0x6u);
 
-    const uint   grid = iq3xxs_grid[qs];
+    const uint   grid = iq3_grid[qs];
     const u8vec4 g    = unpack8(grid);
 
     return f16vec4(
@@ -1119,7 +1119,7 @@ float16_t dequantFuncIQ3_S(const in decodeBufIQ3_S bl, const in uint blockCoords
     const uint scale = bl.block.scales[iqs / 16];
     const ivec2 sign01 = ivec2(1 - (2 & ivec2(sign << 1, sign)));
     const float db = d * (1 + 2 * ((scale >> (4 * (iqh & 1))) & 0xf));
-    const uint32_t grid = iq3s_grid[qs | ((qh << (8 - (iqs % 8))) & 256)] >> ((idx & 2) << 3);
+    const uint32_t grid = iq3_grid[qs | ((qh << (8 - (iqs % 8))) & 256)] >> ((idx & 2) << 3);
     const vec2 v = db * vec2(sign01) * vec2(unpack8(grid).xy);
 
     return float16_t(v[idx & 1]);
@@ -1139,7 +1139,7 @@ f16vec4 dequantFuncIQ3_S_v(const in decodeBufIQ3_S bl, const in uint blockCoords
     const uint  scale = bl.block.scales[iqs / 16];
     const float db    = d * (1 + 2 * ((scale >> (4 * (iqh & 1))) & 0xf));
 
-    const uint   grid = iq3s_grid[qs | ((qh << (8 - (iqs % 8))) & 256)];
+    const uint   grid = iq3_grid[qs | ((qh << (8 - (iqs % 8))) & 256)];
     const u8vec4 g    = unpack8(grid);
 
     return f16vec4(
