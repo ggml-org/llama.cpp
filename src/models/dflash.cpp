@@ -28,6 +28,12 @@ void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
         hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
     }
 
+    // Gemma4 backbone: scaled token embeddings, kq_scale override and final-logit softcapping
+    hparams.f_final_logit_softcapping = 0.0f;
+    ml.get_key(LLM_KV_EMBEDDING_SCALE,          hparams.f_embedding_scale,         false);
+    ml.get_key(LLM_KV_ATTENTION_SCALE,          hparams.f_attention_scale,         false);
+    ml.get_key(LLM_KV_FINAL_LOGIT_SOFTCAPPING,  hparams.f_final_logit_softcapping, false);
+
     type = LLM_TYPE_UNKNOWN;
 }
 
@@ -35,6 +41,23 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
     LLAMA_LOAD_LOCALS;
 
     const int64_t n_embd_inp = hparams.n_embd_inp_enc();
+
+    // DSpark = DFlash + a semi-autoregressive Markov head; detect it by tensor presence
+    //
+    // TODO: only Qwen3-style backbones are supported for now; other backbones (e.g. Gemma4)
+    //       need their own conversion path and graph tweaks
+    const struct ggml_tensor * markov_meta = ml->get_tensor_meta("markov_w1.weight");
+    if (markov_meta) {
+        const int64_t R = markov_meta->ne[0]; // markov rank
+
+        dspark_markov_w1 = create_tensor(tn(LLM_TENSOR_DSPARK_MARKOV_W1, "weight"), { R, n_vocab }, 0);
+        dspark_markov_w2 = create_tensor(tn(LLM_TENSOR_DSPARK_MARKOV_W2, "weight"), { R, n_vocab }, 0);
+
+        dspark_conf_proj   = create_tensor(tn(LLM_TENSOR_DSPARK_CONF_PROJ, "weight"), { n_embd + R, 1 }, TENSOR_NOT_REQUIRED);
+        dspark_conf_proj_b = create_tensor(tn(LLM_TENSOR_DSPARK_CONF_PROJ, "bias"),   { 1 },             TENSOR_NOT_REQUIRED);
+
+        LLAMA_LOG_INFO("%s: DFlash with DSpark markov head (rank = %lld)\n", __func__, (long long) R);
+    }
 
     fc              = create_tensor(tn(LLM_TENSOR_FC,              "weight"), { n_embd_inp, n_embd }, 0);
     output_norm_enc = create_tensor(tn(LLM_TENSOR_ENC_OUTPUT_NORM, "weight"), { n_embd }, 0); // encoder hidden_norm (after fc)
@@ -47,7 +70,7 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
 
         layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), { n_embd, n_embd_head_k * n_head }, 0);
         layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), { n_embd, n_embd_k_gqa }, 0);
-        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), { n_embd, n_embd_v_gqa }, 0);
+        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), { n_embd, n_embd_v_gqa }, TENSOR_NOT_REQUIRED); // absent for Gemma4 (V = K projection)
         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd_head_k * n_head, n_embd }, 0);
 
         layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), { n_embd_head_k }, 0);
@@ -57,6 +80,20 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
         layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), { n_embd, n_ff }, 0);
         layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), { n_ff, n_embd }, 0);
         layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), { n_embd, n_ff }, 0);
+
+        // Gemma4 backbone: sandwich norms, per-layer output scalar and proportional-rope freq factors
+        layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), { n_embd }, TENSOR_NOT_REQUIRED);
+        layer.ffn_post_norm  = create_tensor(tn(LLM_TENSOR_FFN_POST_NORM,  "weight", i), { n_embd }, TENSOR_NOT_REQUIRED);
+        layer.out_scale      = create_tensor(tn(LLM_TENSOR_LAYER_OUT_SCALE, "weight", i), { 1u }, TENSOR_NOT_REQUIRED);
+        layer.rope_freqs     = create_tensor(tn(LLM_TENSOR_ROPE_FREQS, "weight", i), { n_embd_head_k/2 },
+                TENSOR_NOT_REQUIRED | (i != 0 ? TENSOR_DUPLICATED : 0));
+
+        // the optional tensors must agree on the backbone type:
+        // Gemma4 has sandwich norms and no V projection (V = K), Qwen has the opposite
+        const bool gemma = layer.attn_post_norm != nullptr;
+        if (gemma == (layer.wv != nullptr) || gemma != (layer.ffn_post_norm != nullptr)) {
+            throw std::runtime_error(format("inconsistent DFlash backbone tensors in layer %d", i));
+        }
     }
 }
 
@@ -104,6 +141,99 @@ llama_model_dflash::graph<true>::graph(const llama_model & model, const llm_grap
     ggml_build_forward_expand(gf, cur);
 }
 
+// DSpark drafts only (DFlash + Markov head): Markov bias on the draft logits,
+// chained per block position:
+//   logits'(i) = logits(i) + markov_w2 . markov_w1[prev(i)]
+//   prev(0)    = the block's anchor token, prev(i>0) = argmax(logits'(i-1))
+static void build_dspark_markov_head(llm_graph_context & g, const llama_model & model, ggml_tensor * tokens) {
+    ggml_context * ctx0 = g.ctx0;
+    auto         & res  = g.res;
+
+    ggml_tensor * w1 = model.dspark_markov_w1;
+    ggml_tensor * w2 = model.dspark_markov_w2;
+    GGML_ASSERT(w1 && w2 && "DSpark markov weights not loaded");
+
+    ggml_tensor * base = res->t_logits; // [n_vocab, n_tokens]
+    const int64_t n_vocab = base->ne[0];
+    const int64_t n_tok   = base->ne[1];
+
+    // the trained draft block size bounds the runtime block length (anchor + up to bs-1 masks)
+    const auto it = model.gguf_kv.find("dflash.block_size");
+    GGML_ASSERT(it != model.gguf_kv.end() && "DSpark draft requires 'dflash.block_size' in GGUF metadata");
+    const int64_t bs = std::stoi(it->second);
+    GGML_ASSERT(bs > 0);
+
+    // the drafting loop submits one uniform anchor-first block per sequence; recover the runtime
+    // block length from the ubatch instead of assuming the full trained block_size
+    const int64_t n_blocks = g.ubatch.n_seqs_unq;
+    if (n_blocks == 0 || n_tok % n_blocks != 0) {
+        return;
+    }
+    const int64_t bs_rt = n_tok / n_blocks; // runtime block length, <= bs
+    if (bs_rt > bs) {
+        return;
+    }
+
+    // anchor (committed last) token of every block: token 0 of each block, i.e. a strided view
+    ggml_tensor * prev = ggml_view_2d(ctx0, tokens, 1, n_blocks, bs_rt*tokens->nb[0], 0);
+    prev = ggml_cont_1d(ctx0, prev, n_blocks); // I32 [n_blocks]
+
+    // confidence head (optional): predicted acceptance per position, from the same
+    // hidden state that feeds the lm_head plus the markov embedding of prev
+    ggml_tensor * h = model.dspark_conf_proj ? res->t_embd : nullptr; // [n_embd, n_tok]
+
+    ggml_tensor * cat      = nullptr;
+    ggml_tensor * cat_conf = nullptr;
+    // TODO: the in-graph chain is greedy (argmax); sampling params affect only the final
+    //       token pick, not the Markov conditioning path
+    for (int64_t i = 0; i < bs_rt; ++i) {
+        ggml_tensor * w1_prev = ggml_get_rows(ctx0, w1, prev);   // [R, n_blocks]
+        ggml_tensor * bias    = ggml_mul_mat(ctx0, w2, w1_prev); // [n_vocab, n_blocks]
+
+        // position i of every block: strided view [n_vocab, n_blocks]
+        ggml_tensor * base_i = ggml_view_2d(ctx0, base, n_vocab, n_blocks, bs_rt*base->nb[1], i*base->nb[1]);
+        ggml_tensor * col    = ggml_add(ctx0, base_i, bias);
+
+        cat = cat ? ggml_concat(ctx0, cat, col, 1) : col;
+
+        if (h) {
+            // conf(i) = sigmoid(conf_proj . [h(i); markov_w1[prev(i)]] + b)  -- [1, n_blocks]
+            ggml_tensor * h_i  = ggml_view_2d(ctx0, h, h->ne[0], n_blocks, bs_rt*h->nb[1], i*h->nb[1]);
+            ggml_tensor * feat = ggml_concat(ctx0, ggml_cont(ctx0, h_i), w1_prev, 0);
+            ggml_tensor * conf = ggml_mul_mat(ctx0, model.dspark_conf_proj, feat);
+            if (model.dspark_conf_proj_b) {
+                conf = ggml_add(ctx0, conf, model.dspark_conf_proj_b);
+            }
+            conf = ggml_sigmoid(ctx0, conf);
+
+            cat_conf = cat_conf ? ggml_concat(ctx0, cat_conf, conf, 1) : conf;
+        }
+
+        if (i + 1 < bs_rt) {
+            prev = ggml_argmax(ctx0, col); // I32 [n_blocks]
+        }
+    }
+
+    // cat is position-major; restore the ubatch's block-major order
+    ggml_tensor * out = ggml_reshape_3d(ctx0, cat, n_vocab, n_blocks, bs_rt);
+    out = ggml_cont(ctx0, ggml_permute(ctx0, out, 0, 2, 1, 3)); // [n_vocab, bs_rt, n_blocks]
+    out = ggml_reshape_2d(ctx0, out, n_vocab, n_tok);
+
+    if (cat_conf) {
+        // same position-major -> block-major reorder as the logits
+        ggml_tensor * conf = ggml_reshape_3d(ctx0, cat_conf, 1, n_blocks, bs_rt);
+        conf = ggml_cont(ctx0, ggml_permute(ctx0, conf, 0, 2, 1, 3));
+        conf = ggml_reshape_2d(ctx0, conf, 1, n_tok);
+
+        conf = ggml_repeat(ctx0, conf, res->t_embd);
+        res->t_h_nextn = conf;
+        ggml_build_forward_expand(g.gf, conf);
+    }
+
+    res->t_logits = out;
+    ggml_build_forward_expand(g.gf, out);
+}
+
 // DFlash decoder, dual-mode by batch type:
 //   * embd batch  -> fused target features: project + inject K/V into the cache.
 //   * token batch -> noise-block diffusion: attend over [committed, MASK...] to generate draft tokens
@@ -126,7 +256,7 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
         inp_attn = build_attn_inp_kv();
     }
 
-    const float kq_scale = 1.0f/sqrtf(float(n_embd_head));
+    const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 
     // KV cache injection
     if (ubatch.embd) {
@@ -144,14 +274,18 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
             const auto & layer = model.layers[il];
 
             ggml_tensor * Kcur = build_lora_mm(layer.wk, inp_g);
-            ggml_tensor * Vcur = build_lora_mm(layer.wv, inp_g);
+            ggml_tensor * Vcur = layer.wv ? build_lora_mm(layer.wv, inp_g) : Kcur;
 
             Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
             Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
             Kcur = build_norm(Kcur, layer.attn_k_norm, NULL, LLM_NORM_RMS, il);
+            if (layer.wv == nullptr) {
+                // Gemma4: V is the K projection passed through a scale-less RMS norm, no rope
+                Vcur = ggml_rms_norm(ctx0, Vcur, hparams.f_norm_rms_eps);
+            }
             Kcur = ggml_rope_ext(
-                    ctx0, Kcur, inp_pos, nullptr,
+                    ctx0, Kcur, inp_pos, layer.rope_freqs,
                     n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                     ext_factor, attn_factor, beta_fast, beta_slow
                     );
@@ -193,7 +327,12 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
     inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
     ggml_set_input(inp->tokens);
 
+    ggml_tensor * inp_tokens = inp->tokens;
+
     ggml_tensor * inpL = ggml_get_rows(ctx0, tok_embd, inp->tokens);
+    if (hparams.f_embedding_scale != 0.0f) {
+        inpL = ggml_scale(ctx0, inpL, hparams.f_embedding_scale);
+    }
     cb(inpL, "inp_noise_embd", -1);
 
     res->add_input(std::move(inp));
@@ -206,7 +345,7 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
 
         ggml_tensor * Qcur = build_lora_mm(layer.wq, noise_norm);
         ggml_tensor * Kcur = build_lora_mm(layer.wk, noise_norm);
-        ggml_tensor * Vcur = build_lora_mm(layer.wv, noise_norm);
+        ggml_tensor * Vcur = layer.wv ? build_lora_mm(layer.wv, noise_norm) : Kcur;
 
         Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
         Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
@@ -214,14 +353,18 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
 
         Qcur = build_norm(Qcur, layer.attn_q_norm, NULL, LLM_NORM_RMS, il);
         Kcur = build_norm(Kcur, layer.attn_k_norm, NULL, LLM_NORM_RMS, il);
+        if (layer.wv == nullptr) {
+            // Gemma4: V is the K projection passed through a scale-less RMS norm, no rope
+            Vcur = ggml_rms_norm(ctx0, Vcur, hparams.f_norm_rms_eps);
+        }
 
         Qcur = ggml_rope_ext(
-                ctx0, Qcur, inp_pos, nullptr,
+                ctx0, Qcur, inp_pos, layer.rope_freqs,
                 n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                 ext_factor, attn_factor, beta_fast, beta_slow
                 );
         Kcur = ggml_rope_ext(
-                ctx0, Kcur, inp_pos, nullptr,
+                ctx0, Kcur, inp_pos, layer.rope_freqs,
                 n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                 ext_factor, attn_factor, beta_fast, beta_slow
                 );
@@ -234,21 +377,36 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
             ? build_attn(inp_attn_iswa, layer.wo, NULL, NULL, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il)
             : build_attn(inp_attn,      layer.wo, NULL, NULL, Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
 
+        if (layer.attn_post_norm) {
+            cur = build_norm(cur, layer.attn_post_norm, NULL, LLM_NORM_RMS, il);
+            cb(cur, "attn_post_norm", il);
+        }
+
         ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpL);
         cb(ffn_inp, "ffn_inp", il);
 
         cur = build_norm(ffn_inp, layer.ffn_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "ffn_norm", il);
 
+        // sandwich norms mark a Gemma4 backbone, which uses GELU instead of SiLU
         cur = build_ffn(cur,
                 layer.ffn_up,   NULL, NULL,
                 layer.ffn_gate, NULL, NULL,
                 layer.ffn_down, NULL, NULL,
                 NULL,
-                LLM_FFN_SILU, LLM_FFN_PAR, il);
+                layer.ffn_post_norm ? LLM_FFN_GELU : LLM_FFN_SILU, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);
 
+        if (layer.ffn_post_norm) {
+            cur = build_norm(cur, layer.ffn_post_norm, NULL, LLM_NORM_RMS, il);
+            cb(cur, "ffn_post_norm", il);
+        }
+
         cur = ggml_add(ctx0, cur, ffn_inp);
+
+        if (layer.out_scale) {
+            cur = ggml_mul(ctx0, cur, layer.out_scale);
+        }
         cb(cur, "l_out", il);
 
         inpL = cur;
@@ -269,8 +427,18 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
     }
 
     cur = build_lora_mm(output, cur);
+    if (hparams.f_final_logit_softcapping) {
+        cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_final_logit_softcapping);
+        cur = ggml_tanh(ctx0, cur);
+        cur = ggml_scale(ctx0, cur, hparams.f_final_logit_softcapping);
+    }
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 
     ggml_build_forward_expand(gf, cur);
+
+    // DSpark drafts only: bias the draft logits with the Markov head
+    if (model.dspark_markov_w1) {
+        build_dspark_markov_head(*this, model, inp_tokens);
+    }
 }
