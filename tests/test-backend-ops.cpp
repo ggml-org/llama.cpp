@@ -45,6 +45,35 @@
 #include <vector>
 #include <unordered_map>
 
+#ifdef _WIN32
+static void set_environment_variable(const char * name, const char * value) {
+    _putenv_s(name, value ? value : "");
+}
+#else
+static void set_environment_variable(const char * name, const char * value) {
+    if (value) {
+        setenv(name, value, 1);
+    } else {
+        unsetenv(name);
+    }
+}
+#endif
+
+struct scoped_environment_variable {
+    const char * name;
+    bool had_value;
+    std::string old_value;
+
+    scoped_environment_variable(const char * name, const char * value)
+        : name(name), had_value(getenv(name) != nullptr), old_value(had_value ? getenv(name) : "") {
+        set_environment_variable(name, value);
+    }
+
+    ~scoped_environment_variable() {
+        set_environment_variable(name, had_value ? old_value.c_str() : nullptr);
+    }
+};
+
 #ifdef __EMSCRIPTEN__
 #   define N_THREADS 1
 #else
@@ -1313,10 +1342,10 @@ struct test_case {
         }
     }
 
-    test_status_t eval(ggml_backend_t backend1,
-                       ggml_backend_t backend2,
-                       const char *   op_names_filter,
-                       printer *      output_printer) {
+    virtual test_status_t eval(ggml_backend_t backend1,
+                               ggml_backend_t backend2,
+                               const char *   op_names_filter,
+                               printer *      output_printer) {
         mode = MODE_TEST;
 
         ggml_init_params params = {
@@ -4410,6 +4439,174 @@ static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats) {
         }
     }
 }
+
+// GGML_TYPE_NVFP4 MMQ + weight-scale epilogue
+struct test_mul_mat_mmq_fusion : public test_case {
+    const bool use_id;
+    const int64_t m;
+    const int64_t n;
+    const int64_t k;
+    const int n_mats;
+    const int n_used;
+
+    test_mul_mat_mmq_fusion(
+            bool use_id, int64_t m = 32, int64_t n = 64, int64_t k = 256, int n_mats = 16, int n_used = 8)
+        : use_id(use_id), m(m), n(n), k(k), n_mats(n_mats), n_used(n_used) {
+        GGML_ASSERT(n_used <= n_mats);
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR6(use_id, m, n, k, n_mats, n_used);
+    }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT_MMQ_FUSION";
+    }
+
+    ggml_tensor * build_scale_id(
+            ggml_context * ctx, ggml_tensor * scale, ggml_tensor * ids, ggml_tensor * out) {
+        ggml_tensor * s = ggml_reshape_3d(ctx, scale, 1, n_mats, 1);
+        s = ggml_repeat_4d(ctx, s, 1, n_mats, m, 1);
+        s = ggml_get_rows(ctx, s, ids);
+        return ggml_mul(ctx, out, s);
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        if (!use_id) {
+            ggml_tensor * weights = ggml_new_tensor_2d(ctx, GGML_TYPE_NVFP4, k, n);
+            ggml_tensor * input   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, m);
+            ggml_tensor * scale   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
+
+            return ggml_mul(ctx, ggml_mul_mat(ctx, weights, input), scale);
+        }
+
+        ggml_tensor * weights = ggml_new_tensor_3d(ctx, GGML_TYPE_NVFP4, k, n, n_mats);
+        ggml_tensor * input   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, k, n_used, m);
+        ggml_tensor * ids     = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_mats, m);
+        if (n_used != n_mats) {
+            ids = ggml_view_2d(ctx, ids, n_used, m, ids->nb[1], 0);
+        }
+        ggml_tensor * scale   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_mats);
+
+        return build_scale_id(ctx, scale, ids, ggml_mul_mat_id(ctx, weights, input, ids));
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        if (use_id) {
+            init_mul_mat_id_tensors(ctx, n_mats);
+        } else {
+            test_case::initialize_tensors(ctx);
+        }
+    }
+
+    test_status_t eval(ggml_backend_t backend1,
+                       ggml_backend_t backend2,
+                       const char *   op_names_filter,
+                       printer *      output_printer) override {
+        GGML_UNUSED(backend2);
+
+        if (strncmp(ggml_backend_name(backend1), "CUDA", 4) != 0) {
+            return test_status_t::NOT_SUPPORTED;
+        }
+
+        mode = MODE_TEST;
+        ggml_init_params params = {
+            /* .mem_size = */ ggml_tensor_overhead()*128 + ggml_graph_overhead(),
+            /* .mem_base = */ nullptr,
+            /* .no_alloc = */ true,
+        };
+        ggml_context * ctx = ggml_init(params);
+        GGML_ASSERT(ctx);
+
+        ggml_cgraph * graph = ggml_new_graph(ctx);
+        ggml_tensor * out = build_graph(ctx);
+        current_op_name = op_desc(out);
+        if (!matches_filter(out, op_names_filter)) {
+            ggml_free(ctx);
+            return test_status_t::SKIPPED;
+        }
+        ggml_build_forward_expand(graph, out);
+
+        ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend1);
+        if (!buffer) {
+            ggml_free(ctx);
+            return test_status_t::FAIL;
+        }
+        if (use_id) {
+            ggml_backend_buffer_set_usage(buffer, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        }
+        initialize_tensors(ctx);
+        ggml_backend_synchronize(backend1);
+
+        ggml_backend_t backend_fused = ggml_backend_dev_init(ggml_backend_get_device(backend1), nullptr);
+        GGML_ASSERT(backend_fused);
+
+        ggml_context * ctx_fused = ggml_init(params);
+        GGML_ASSERT(ctx_fused);
+        ggml_cgraph * graph_fused = ggml_new_graph(ctx_fused);
+        ggml_tensor * out_fused = build_graph(ctx_fused);
+        ggml_build_forward_expand(graph_fused, out_fused);
+
+        ggml_backend_buffer_t buffer_fused = ggml_backend_alloc_ctx_tensors(ctx_fused, backend_fused);
+        GGML_ASSERT(buffer_fused);
+        if (use_id) {
+            ggml_backend_buffer_set_usage(buffer_fused, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        }
+        ggml_tensor * tensor_unfused = ggml_get_first_tensor(ctx);
+        ggml_tensor * tensor_fused   = ggml_get_first_tensor(ctx_fused);
+        while (tensor_unfused && tensor_fused) {
+            GGML_ASSERT(tensor_unfused->type == tensor_fused->type);
+            GGML_ASSERT(ggml_are_same_shape(tensor_unfused, tensor_fused));
+            if (!ggml_is_view_op(tensor_unfused->op)) {
+                ggml_backend_tensor_copy(tensor_unfused, tensor_fused);
+            }
+            tensor_unfused = ggml_get_next_tensor(ctx, tensor_unfused);
+            tensor_fused   = ggml_get_next_tensor(ctx_fused, tensor_fused);
+        }
+        GGML_ASSERT(!tensor_unfused && !tensor_fused);
+        ggml_backend_synchronize(backend_fused);
+
+        ggml_status status_fused;
+        {
+            scoped_environment_variable enable_fusion("GGML_CUDA_FUSE_WS", "1");
+            scoped_environment_variable disable_fusion("GGML_CUDA_NO_FUSE_WS", nullptr);
+            status_fused = ggml_backend_graph_compute(backend_fused, graph_fused);
+        }
+
+        ggml_status status_unfused;
+        {
+            scoped_environment_variable enable_fusion("GGML_CUDA_FUSE_WS", nullptr);
+            scoped_environment_variable disable_fusion("GGML_CUDA_NO_FUSE_WS", "1");
+            status_unfused = ggml_backend_graph_compute(backend1, graph);
+        }
+
+        std::vector<float> data_unfused(ggml_nelements(out));
+        std::vector<float> data_fused(ggml_nelements(out_fused));
+        ggml_backend_tensor_get(out,       data_unfused.data(), 0, ggml_nbytes(out));
+        ggml_backend_tensor_get(out_fused, data_fused.data(),   0, ggml_nbytes(out_fused));
+
+        double max_diff = 0.0;
+        for (size_t i = 0; i < data_unfused.size(); ++i) {
+            max_diff = std::max(max_diff, (double) std::fabs(data_unfused[i] - data_fused[i]));
+        }
+        const bool bit_exact = memcmp(data_unfused.data(), data_fused.data(), ggml_nbytes(out)) == 0;
+        const bool passed = status_unfused == GGML_STATUS_SUCCESS && status_fused == GGML_STATUS_SUCCESS && bit_exact;
+
+        ggml_backend_buffer_free(buffer_fused);
+        ggml_backend_free(backend_fused);
+        ggml_free(ctx_fused);
+        ggml_backend_buffer_free(buffer);
+        ggml_free(ctx);
+
+        char error_buf[64];
+        snprintf(error_buf, sizeof(error_buf), "bit_exact=%d, max_diff=%.9f", bit_exact, max_diff);
+        const std::string error = passed ? "" : error_buf;
+        print_test_result_locked(output_printer,
+            test_result(ggml_backend_name(backend1), current_op_name, vars(), "test", true, passed, error));
+        return passed ? test_status_t::OK : test_status_t::FAIL;
+    }
+};
 
 // GGML_OP_MUL_MAT_ID
 struct test_mul_mat_id : public test_case {
@@ -8018,6 +8215,23 @@ static const ggml_type other_types[] = {
 static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     std::vector<std::unique_ptr<test_case>> test_cases;
     std::default_random_engine rng(0);
+
+    test_cases.emplace_back(new test_mul_mat_mmq_fusion(false));
+    test_cases.emplace_back(new test_mul_mat_mmq_fusion(true));
+    for (bool use_id : { false, true }) {
+        test_cases.emplace_back(new test_mul_mat_mmq_fusion(use_id, 11,  256, 4096));
+        test_cases.emplace_back(new test_mul_mat_mmq_fusion(use_id, 11, 4096,  256));
+    }
+    for (int64_t m : { 2, 4, 12 }) {
+        test_cases.emplace_back(new test_mul_mat_mmq_fusion(false, m, 8192, 2048));
+        test_cases.emplace_back(new test_mul_mat_mmq_fusion(false, m,   32, 2048));
+        test_cases.emplace_back(new test_mul_mat_mmq_fusion(false, m, 4096, 2048));
+        test_cases.emplace_back(new test_mul_mat_mmq_fusion(false, m, 2048, 4096));
+        test_cases.emplace_back(new test_mul_mat_mmq_fusion(false, m,  512, 2048));
+        test_cases.emplace_back(new test_mul_mat_mmq_fusion(false, m, 2048,  512));
+        test_cases.emplace_back(new test_mul_mat_mmq_fusion(true,  m,  512, 2048, 256, 8));
+        test_cases.emplace_back(new test_mul_mat_mmq_fusion(true,  m, 2048,  512, 256, 8));
+    }
 
     // unary ops
     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
