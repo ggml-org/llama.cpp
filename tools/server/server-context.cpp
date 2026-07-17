@@ -1118,10 +1118,21 @@ private:
                     const uint32_t n_ctx_spec = cparams_dft.n_ctx == 0 ? hp_nct : cparams_dft.n_ctx;
                     GGML_ASSERT(n_ctx_spec != 0);
 
-                    // calculate spec footprint as a fixed portion and a ctx-dependent portion
+                    const bool fa_on = cparams_dft.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED;
+
+                    // estimate the per_ctx portion of the compute buffer according the attention input mask
+                    // built for each layer, which has dimensions n_ctx * n_ubatch.
+                    const size_t mask_per_ctx = cparams_dft.n_ubatch * (fa_on ? 2 : 4);
+                    const size_t mask_at_spec = mask_per_ctx * n_ctx_spec;
+
                     for (size_t j = 0; j < devs.size(); ++j) {
-                        const size_t fixed   = (measure_model_bytes ? dmd[j].model : 0) + dmd[j].compute;
-                        const size_t per_ctx = dmd[j].context / n_ctx_spec;
+                        const size_t compute_fixed = dmd[j].compute > mask_at_spec
+                            ? dmd[j].compute - mask_at_spec
+                            : 0;
+
+                        // calculate spec footprint as a fixed portion and a ctx-dependent portion
+                        const size_t fixed   = (measure_model_bytes ? dmd[j].model : 0) + compute_fixed;
+                        const size_t per_ctx = (dmd[j].context / n_ctx_spec) + mask_per_ctx;
                         total_fixed += fixed;
                         for (size_t i = 0; i < tgt_devices.size(); i++) {
                             if (tgt_devices[i] == devs[j]) {
