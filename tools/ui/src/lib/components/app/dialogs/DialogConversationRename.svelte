@@ -22,13 +22,8 @@
 
 	let inputRef = $state<HTMLInputElement | null>(null);
 
-	// Submit is enabled only when there's a non-empty trimmed value that actually
-	// differs from the current title - empty renames wouldn't change anything,
-	// and unchanged renames would be a no-op.
 	const canSubmit = $derived(value.trim().length > 0 && value.trim() !== currentTitle.trim());
 
-	// Re-sync the input value and re-focus whenever the dialog opens so the user
-	// can immediately edit rather than see the prior value lingering.
 	$effect(() => {
 		if (open) {
 			value = currentTitle;
