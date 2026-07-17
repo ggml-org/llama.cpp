@@ -418,6 +418,8 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
     constexpr int nwarps    = ggml_cuda_mmq_get_nthreads(type, J, fallback) / warp_size;
     constexpr int I         = ggml_cuda_mmq_get_I(type, J, fallback);
 
+    const bool y_scale_used = y_scale != nullptr;
+
 #pragma unroll
     for (int j0 = 0; j0 < J; j0 += nwarps) {
         const int j = j0 + threadIdx.y;
@@ -434,13 +436,16 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
                 continue;
             }
 
-            float val = sum[(j0/nwarps) * (I/warp_size) + i0/warp_size];
             if constexpr (type == GGML_TYPE_NVFP4) {
-                val *= y_scale ? y_scale[j] : 1.0f;
+                if (y_scale_used) {
+                    dst[ids_dst[j]*stride + i] = y_scale[j] * sum[(j0/nwarps) * (I/warp_size) + i0/warp_size];
+                } else {
+                    dst[ids_dst[j]*stride + i] = sum[(j0/nwarps) * (I/warp_size) + i0/warp_size];
+                }
             } else {
-                GGML_UNUSED(y_scale);
+                dst[ids_dst[j]*stride + i] = sum[(j0/nwarps) * (I/warp_size) + i0/warp_size];
+                GGML_UNUSED(y_scale_used);
             }
-            dst[ids_dst[j]*stride + i] = val;
         }
     }
 }
@@ -464,6 +469,8 @@ static __device__ __forceinline__ void ggml_cuda_mmq_write_back_mma(
 
     const int i0 = (threadIdx.y / ntx) * (ntx*tile_C::I);
 
+    const bool y_scale_used = y_scale != nullptr;
+
 #pragma unroll
     for (int j0 = 0; j0 < J; j0 += ntx*tile_C::J) {
 #pragma unroll
@@ -482,13 +489,16 @@ static __device__ __forceinline__ void ggml_cuda_mmq_write_back_mma(
                     continue;
                 }
 
-                float val = sum[(j0/tile_C::J + n)*tile_C::ne + l];
                 if constexpr (type == GGML_TYPE_NVFP4) {
-                    val *= y_scale ? y_scale[j] : 1.0f;
+                    if (y_scale_used) {
+                        dst[ids_dst[j]*stride + i] = y_scale[j] * sum[(j0/tile_C::J + n)*tile_C::ne + l];
+                    } else {
+                        dst[ids_dst[j]*stride + i] = sum[(j0/tile_C::J + n)*tile_C::ne + l];
+                    }
                 } else {
-                    GGML_UNUSED(y_scale);
+                    dst[ids_dst[j]*stride + i] = sum[(j0/tile_C::J + n)*tile_C::ne + l];
+                    GGML_UNUSED(y_scale_used);
                 }
-                dst[ids_dst[j]*stride + i] = val;
             }
         }
     }
