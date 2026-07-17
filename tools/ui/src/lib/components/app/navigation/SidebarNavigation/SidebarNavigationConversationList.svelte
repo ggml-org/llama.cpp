@@ -136,7 +136,7 @@
 			</ul>
 		{/if}
 
-		<div class="mt-2 flex min-h-0 flex-1 flex-col gap-4 md:gap-2 whitespace-nowrap {className}">
+		<div class="mt-2 flex min-h-0 flex-1 flex-col gap-4 md:gap-0 whitespace-nowrap {className}">
 			{#if filteredConversations.length > 0}
 				<div
 					class="text-muted-foreground flex h-8 shrink-0 items-center rounded-md px-2 text-xs font-medium"
@@ -146,7 +146,7 @@
 			{/if}
 
 			<div class="min-h-0 flex-1 md:overflow-y-auto">
-				<ul class="flex w-full min-w-0 flex-col gap-4 md:gap-1">
+				<ul class="flex w-full min-w-0 flex-col gap-4 md:gap-0">
 					{#each unpinnedConversations as { conversation, depth } (conversation.id)}
 						<li class="group/item relative mb-1 p-0">
 							<SidebarNavigationConversationItem

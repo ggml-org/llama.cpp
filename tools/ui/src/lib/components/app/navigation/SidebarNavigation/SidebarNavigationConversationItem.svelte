@@ -155,7 +155,7 @@
 		? 'bg-foreground/5 text-accent-foreground'
 		: ''} {isSelected ? 'bg-primary/10 hover:bg-primary/15' : ''} {isSelectionMode
 		? 'is-selection-mode'
-		: ''} px-3"
+		: ''} px-2"
 	data-conversation-row={conversation.id}
 	onclick={(e) => handleSelect(e)}
 	onmouseover={handleMouseOver}
@@ -174,7 +174,7 @@
 	>
 		{#if isSelectionMode}
 			<div
-				class="shrink-0 pr-0.5"
+				class="shrink-0"
 				onclick={(e) => handleCheckboxClick(e)}
 				onkeydown={handleCheckboxKeydown}
 				role="checkbox"

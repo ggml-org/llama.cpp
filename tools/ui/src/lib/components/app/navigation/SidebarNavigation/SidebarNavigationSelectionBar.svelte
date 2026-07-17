@@ -97,7 +97,7 @@
 			ariaLabel={pinTooltip}
 			size="sm"
 			iconSize="h-3.5 w-3.5"
-			class="h-7 w-7 rounded-md bg-transparent backdrop-blur-none hover:bg-foreground/10 {pinDisabled
+			class="h-7 w-7 rounded-md bg-transparent backdrop-blur-none hover:bg-accent! {pinDisabled
 				? 'cursor-not-allowed'
 				: ''} {!pinDisabled ? 'opacity-100' : 'opacity-40'}"
 			onclick={onBulkPinToggle}
@@ -111,7 +111,7 @@
 			ariaLabel="Export selected"
 			size="sm"
 			iconSize="h-3.5 w-3.5"
-			class="h-7 w-7 rounded-md bg-transparent backdrop-blur-none hover:bg-foreground/10 {hasSelection
+			class="h-7 w-7 rounded-md bg-transparent backdrop-blur-none hover:bg-accent! {hasSelection
 				? 'opacity-100'
 				: 'opacity-40'}"
 			onclick={onBulkExport}
@@ -125,7 +125,7 @@
 			ariaLabel="Delete selected"
 			size="sm"
 			iconSize="h-3.5 w-3.5 text-destructive"
-			class="h-7 w-7 rounded-md hover:bg-destructive/10 bg-transparent backdrop-blur-none disabled:hover:bg-transparent {hasSelection
+			class="h-7 w-7 rounded-md bg-transparent backdrop-blur-none hover:bg-destructive/10! dark:hover:bg-destructive/20! disabled:hover:bg-transparent {hasSelection
 				? 'opacity-100'
 				: 'opacity-40'}"
 			onclick={handleDeleteClick}
@@ -140,7 +140,7 @@
 			ariaLabel="Exit bulk selection mode"
 			size="sm"
 			iconSize="h-3.5 w-3.5"
-			class="h-7 w-7 rounded-md bg-transparent backdrop-blur-none hover:bg-foreground/10"
+			class="h-7 w-7 rounded-md bg-transparent backdrop-blur-none hover:bg-accent!"
 			onclick={onClose}
 		/>
 	</div>
