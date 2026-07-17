@@ -306,6 +306,8 @@ struct vk_command_pool {
 struct vk_queue_handle {
     vk::Queue queue;
     virtual void submit(vk::ArrayProxy<const vk::SubmitInfo> submits, vk::Fence fence) = 0;
+    virtual void lock()   {}   // no-op by default (internally synchronized case)
+    virtual void unlock() {}
     virtual ~vk_queue_handle() = default;
 };
 
@@ -315,6 +317,8 @@ struct vk_queue_handle_synchronized : vk_queue_handle {
         std::lock_guard<std::mutex> guard(mutex);
         queue.submit(submits, fence);
     }
+    void lock()   override { mutex.lock(); }
+    void unlock() override { mutex.unlock(); }
 };
 
 struct vk_queue_handle_unsynchronized : vk_queue_handle {
@@ -322,6 +326,7 @@ struct vk_queue_handle_unsynchronized : vk_queue_handle {
         // Driver guarantees internal synchronization via VK_KHR_internally_synchronized_queues
         queue.submit(submits, fence);
     }
+    // lock()/unlock() inherited no-ops
 };
 
 struct vk_queue {
@@ -16490,6 +16495,8 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         vk::DebugUtilsLabelEXT dul = {};
         dul.pLabelName = "ggml_backend_vk_graph_compute";
         dul.color = std::array<float,4>{1.0f, 1.0f, 1.0f, 1.0f};
+
+        std::lock_guard<vk_queue_handle> guard(*ctx->device->compute_queue->handle);
         vk_instance.pfn_vkQueueBeginDebugUtilsLabelEXT(ctx->device->compute_queue->handle->queue, reinterpret_cast<VkDebugUtilsLabelEXT*>(&dul));
     }
 
