@@ -174,21 +174,8 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				label: 'Conversation title',
 				help: 'Choose how conversation titles are generated. The first non-empty line uses a fast deterministic rule; the LLM option uses a model-generated title from the first message exchange.',
 				defaultValue: true,
-				pairedKey: SETTINGS_KEYS.TITLE_GENERATION_USE_LLM,
 				sync: {
 					serverKey: SETTINGS_KEYS.TITLE_GENERATION_USE_FIRST_LINE,
-					paramType: SyncableParameterType.BOOLEAN
-				}
-			},
-			{
-				...TITLE_GENERATION_BASE,
-				key: SETTINGS_KEYS.TITLE_GENERATION_USE_LLM,
-				label: SETTINGS_KEYS.TITLE_GENERATION_USE_LLM,
-				help: 'Counterpart of TITLE_GENERATION_USE_FIRST_LINE; rendered inside the paired radio group.',
-				defaultValue: false,
-				pairedKey: SETTINGS_KEYS.TITLE_GENERATION_USE_FIRST_LINE,
-				sync: {
-					serverKey: SETTINGS_KEYS.TITLE_GENERATION_USE_LLM,
 					paramType: SyncableParameterType.BOOLEAN
 				}
 			},
@@ -817,7 +804,6 @@ export const SETTINGS_CHAT_SECTIONS: SettingsSection[] = [
 			dependsOn: s.dependsOn,
 			help: s.help,
 			options: s.options,
-			pairedKey: s.pairedKey,
 			radioOptions: s.radioOptions
 		}))
 	})),
