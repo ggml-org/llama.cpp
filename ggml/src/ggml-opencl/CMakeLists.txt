@@ -211,6 +211,7 @@ set(GGML_OPENCL_KERNELS
     tanh
     exp
     expm1
+    abs
     softplus
     pad
     repeat
