@@ -22,5 +22,6 @@
 #define GGML_TYPE_IQ1_M   29u
 #define GGML_TYPE_BF16    30u
 #define GGML_TYPE_Q1_0    41u
+#define GGML_TYPE_Q2_0    42u
 #define GGML_TYPE_MXFP4   39u
 #define GGML_TYPE_NVFP4   40u
