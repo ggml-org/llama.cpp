@@ -1557,7 +1557,11 @@ private:
                 }
 
                 // fraction of the Longest Common Prefix length with respect to the input prompt length
-                const float sim_cur = float(tokens.get_common_prefix(task.tokens)) / task.tokens.size();
+                const int32_t n_prefix = tokens.get_common_prefix(task.tokens);
+                const float sim_cur = float(n_prefix) / task.tokens.size();
+
+                SLT_TRC(slot, "prefix similarity check: n_prefix = %d, n_task_tokens = %d, sim_cur = %.3f, sim_best = %.3f, threshold = %.3f\n",
+                        n_prefix, (int) task.tokens.size(), sim_cur, sim_best, slot_prompt_similarity);
 
                 // select the current slot if the criteria match
                 if (sim_cur > sim_best && sim_cur > slot_prompt_similarity) {
