@@ -401,9 +401,7 @@ class ConversationsStore {
 				}
 			}
 
-			for (const id of convIds) {
-				await DatabaseService.deleteConversation(id);
-			}
+			await DatabaseService.bulkDeleteConversations([...idsToRemove]);
 
 			this.conversations = this.conversations.filter((c) => !idsToRemove.has(c.id));
 
@@ -431,17 +429,19 @@ class ConversationsStore {
 		if (convIds.length === 0) return;
 
 		try {
-			for (const id of convIds) {
-				const newPinned = await DatabaseService.toggleConversationPin(id);
-				const convIndex = this.conversations.findIndex((c) => c.id === id);
-				if (convIndex !== -1) {
-					this.conversations[convIndex].pinned = newPinned;
-				}
-				if (this.activeConversation?.id === id) {
-					this.activeConversation = { ...this.activeConversation, pinned: newPinned };
-				}
-			}
+			const updates = await DatabaseService.bulkToggleConversationPins(convIds);
 
+			const activeId = this.activeConversation?.id;
+			if (activeId && updates.has(activeId)) {
+				this.activeConversation = {
+					...this.activeConversation!,
+					pinned: updates.get(activeId)!
+				};
+			}
+			for (let i = 0; i < this.conversations.length; i++) {
+				const newPinned = updates.get(this.conversations[i].id);
+				if (newPinned !== undefined) this.conversations[i].pinned = newPinned;
+			}
 			this.conversations = [...this.conversations];
 
 			toast.success(
@@ -464,17 +464,15 @@ class ConversationsStore {
 		if (convIds.length === 0) return;
 
 		try {
-			const exported: ExportedConversation[] = [];
-			for (const id of convIds) {
-				const conversation =
-					this.activeConversation?.id === id
-						? this.activeConversation
-						: await DatabaseService.getConversation(id);
-				if (!conversation) continue;
-				const messages = await DatabaseService.getConversationMessages(id);
-				exported.push({ conv: conversation, messages });
+			const fetched = await DatabaseService.getConversationsWithMessages(convIds);
+
+			const activeId = this.activeConversation?.id;
+			const overridden = fetched.get(activeId ?? '');
+			if (overridden && activeId) {
+				overridden.conv = { ...this.activeConversation! };
 			}
 
+			const exported = [...fetched.values()];
 			if (exported.length === 0) {
 				toast.error('No conversations to export');
 				return;
