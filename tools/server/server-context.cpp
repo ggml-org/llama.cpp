@@ -64,6 +64,18 @@ enum slot_state {
     SLOT_STATE_GENERATING,
 };
 
+static const char * slot_state_to_string(slot_state s) {
+    switch (s) {
+        case SLOT_STATE_IDLE:              return "idle";
+        case SLOT_STATE_WAIT_OTHER:        return "wait_other";
+        case SLOT_STATE_STARTED:           return "started";
+        case SLOT_STATE_PROCESSING_PROMPT: return "processing_prompt";
+        case SLOT_STATE_DONE_PROMPT:       return "done_prompt";
+        case SLOT_STATE_GENERATING:        return "generating";
+        default:                           return "unknown";
+    }
+}
+
 struct server_slot; // forward declaration
 
 struct server_batch {
@@ -643,6 +655,8 @@ struct server_slot {
             {"n_ctx",         n_ctx},
             {"speculative",   can_speculate()},
             {"is_processing", is_processing()},
+            {"state",         (int)state},
+            {"state_name",    slot_state_to_string(state)},
         };
 
         const auto & ptask = task ? task : task_prev;
@@ -661,6 +675,32 @@ struct server_slot {
                     {"n_decoded",      n_decoded},
                 }
             };
+            
+            if (is_processing()) {
+                const int32_t pp_total = ptask->n_tokens();
+                int32_t pp_processed = 0;
+                if (state == SLOT_STATE_PROCESSING_PROMPT) {
+                    pp_processed = std::min<int32_t>((int32_t) prompt.tokens.size(), pp_total);
+                } else if (state == SLOT_STATE_DONE_PROMPT || state == SLOT_STATE_GENERATING) {
+                    pp_processed = pp_total;
+                }
+
+                const bool has_pp_timing =
+                    state == SLOT_STATE_PROCESSING_PROMPT ||
+                    state == SLOT_STATE_DONE_PROMPT ||
+                    state == SLOT_STATE_GENERATING;
+                
+                const double pp_time_ms = has_pp_timing ? t_prompt_processing : 0.0;
+
+                res["pp_progress"] = pp_total > 0 ? std::min(1.0, (double) pp_processed / pp_total) : 0.0;
+                res["pp_time_ms"] = pp_time_ms;
+                res["pp_tps"] = pp_time_ms > 1.0 ? (1e3 / pp_time_ms * n_prompt_tokens_processed) : 0.0;
+                
+                const bool is_generating = state == SLOT_STATE_GENERATING;
+                res["tg_tokens_generated"] = is_generating ? n_decoded : 0;
+                res["tg_time_ms"]          = is_generating ? t_token_generation : 0.0;
+                res["tg_tps"]              = is_generating && t_token_generation > 0.0 ? (1e3 / t_token_generation * n_decoded) : 0.0;
+            }
 
             if (!only_metrics) {
                 res["prompt"] = ptask->tokens.detokenize(ctx_tgt, true);

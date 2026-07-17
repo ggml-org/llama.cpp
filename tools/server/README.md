@@ -904,6 +904,19 @@ This endpoint is enabled by default and can be disabled with `--no-slots`. It ca
 
 If query param `?fail_on_no_slot=1` is set, this endpoint will respond with status code 503 if there is no available slots.
 
+Each slot object includes the following realtime inference fields:
+
+- `state`: numeric slot state machine value
+- `state_name`: slot state, one of `idle`, `wait_other`, `started`, `processing_prompt`, `done_prompt`, `generating`
+- `pp_progress`: prompt-processing (prefill) completion ratio in `[0, 1]`. Only meaningful while the slot is processing; reaches `1.0` once prefill is done
+- `pp_time_ms`: total prompt-processing time in milliseconds (finalized once prefill completes)
+- `pp_tps`: prompt-processing throughput in tokens/second
+- `tg_tokens_generated`: number of tokens generated so far in the generation phase
+- `tg_time_ms`: total generation time in milliseconds
+- `tg_tps`: generation throughput in tokens/second
+
+These fields are only emitted while a slot is actively processing; an idle slot reports only its basic state.
+
 **Response format**
 
 <details>
