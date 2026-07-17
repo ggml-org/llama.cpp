@@ -127,7 +127,8 @@ static void concat_T_sycl_non_cont(
     int64_t ne2, int64_t ne3, uint64_t nb0, uint64_t nb1, uint64_t nb2,
     uint64_t nb3, int32_t dim) {
   sycl::range<3> gridDim(ne3, ne2, ne1);
-  stream->parallel_for(sycl::nd_range<3>(gridDim, sycl::range<3>(1, 1, 1)), [=](sycl::nd_item<3> item_ct1) {
+  sycl::range<3> blockDim(1, 1, SYCL_CONCAT_BLOCK_SIZE);
+  stream->parallel_for(sycl::nd_range<3>(gridDim * blockDim, blockDim), [=](sycl::nd_item<3> item_ct1) {
       int64_t i3 = item_ct1.get_group(0);
       int64_t i2 = item_ct1.get_group(1);
       int64_t i1 = item_ct1.get_group(2);
