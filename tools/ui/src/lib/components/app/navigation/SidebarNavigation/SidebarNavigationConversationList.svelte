@@ -95,6 +95,7 @@
 			{onRowMouseDown}
 		/>
 	{:else}
+
 		{#if pinnedConversations.length > 0}
 			<div class="py-2 flex whitespace-nowrap {className}">
 				<div
