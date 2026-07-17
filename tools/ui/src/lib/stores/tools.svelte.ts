@@ -143,7 +143,7 @@ class ToolsStore {
 	}
 
 	get frontendTools(): OpenAIToolDefinition[] {
-		return config().jsSandboxEnabled ? [SANDBOX_TOOL_DEFINITION] : [];
+		return [SANDBOX_TOOL_DEFINITION];
 	}
 
 	get customTools(): OpenAIToolDefinition[] {

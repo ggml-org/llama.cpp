@@ -143,6 +143,19 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				}
 			},
 			{
+				key: SETTINGS_KEYS.AUTO_MIC_ON_EMPTY,
+				label: 'Show microphone on empty input',
+				help: 'Automatically show microphone button instead of send button when textarea is empty for models with audio modality support.',
+				defaultValue: false,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.GENERAL,
+				isExperimental: true,
+				sync: {
+					serverKey: SETTINGS_KEYS.AUTO_MIC_ON_EMPTY,
+					paramType: SyncableParameterType.BOOLEAN
+				}
+			},
+			{
 				key: SETTINGS_KEYS.ENABLE_CONTINUE_GENERATION,
 				label: 'Enable "Continue" button',
 				help: 'Enable "Continue" button for assistant messages, including reasoning models.',
@@ -277,19 +290,6 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				section: SETTINGS_SECTION_SLUGS.DISPLAY,
 				sync: {
 					serverKey: SETTINGS_KEYS.SHOW_TOOL_CALL_IN_PROGRESS,
-					paramType: SyncableParameterType.BOOLEAN
-				}
-			},
-			{
-				key: SETTINGS_KEYS.AUTO_MIC_ON_EMPTY,
-				label: 'Show microphone on empty input',
-				help: 'Automatically show microphone button instead of send button when textarea is empty for models with audio modality support.',
-				defaultValue: false,
-				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DISPLAY,
-				isExperimental: true,
-				sync: {
-					serverKey: SETTINGS_KEYS.AUTO_MIC_ON_EMPTY,
 					paramType: SyncableParameterType.BOOLEAN
 				}
 			},
@@ -722,18 +722,6 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				section: SETTINGS_SECTION_SLUGS.DEVELOPER,
 				sync: {
 					serverKey: SETTINGS_KEYS.SHOW_RAW_OUTPUT_SWITCH,
-					paramType: SyncableParameterType.BOOLEAN
-				}
-			},
-			{
-				key: SETTINGS_KEYS.JS_SANDBOX_ENABLED,
-				label: 'JavaScript sandbox tool',
-				help: 'Expose a run_javascript tool to the model. Code runs in a Web Worker inside a sandboxed iframe with an opaque origin, isolated from the WebUI and its API, with a hard timeout.',
-				defaultValue: false,
-				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DEVELOPER,
-				sync: {
-					serverKey: SETTINGS_KEYS.JS_SANDBOX_ENABLED,
 					paramType: SyncableParameterType.BOOLEAN
 				}
 			},
