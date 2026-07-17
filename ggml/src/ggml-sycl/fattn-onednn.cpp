@@ -242,7 +242,9 @@ void ggml_sycl_flash_attn_ext_onednn(ggml_backend_sycl_context & ctx, ggml_tenso
         ti.emplace_back(lt, eng, id2ptr(lt.get_id()));
     }
     tensor to(E.out, eng, outf.get());
+    stream->wait_and_throw();
     E.cp.execute(strm, ti, {to});
+    strm.wait();
 
     permute_sdpa_out_sycl(outf.get(), (float *) dst->data, mb, H, q, d, stream);
     // Single device: no sync is required, and actually PP perf is ~6% > wait_and_throw() (tested on llama-3.1-8b & qwen3.6-27b, both Q8_0, with Arc B70).
