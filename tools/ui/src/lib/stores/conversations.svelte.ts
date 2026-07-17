@@ -108,9 +108,6 @@ class ConversationsStore {
 		localStorage.setItem(REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY, this.pendingReasoningEffort);
 	}
 
-	/** Callback for title update confirmation dialog */
-	titleUpdateConfirmationCallback?: (currentTitle: string, newTitle: string) => Promise<boolean>;
-
 	/**
 	 * Callback for updating message content in chatStore.
 	 * Registered by chatStore to enable cross-store updates without circular dependency.
@@ -207,15 +204,6 @@ class ConversationsStore {
 			return this.activeMessages.splice(index, 1)[0];
 		}
 		return undefined;
-	}
-
-	/**
-	 * Sets the callback function for title update confirmations
-	 */
-	setTitleUpdateConfirmationCallback(
-		callback: (currentTitle: string, newTitle: string) => Promise<boolean>
-	): void {
-		this.titleUpdateConfirmationCallback = callback;
 	}
 
 	/**
@@ -606,38 +594,6 @@ class ConversationsStore {
 	}
 
 	/**
-	 * Updates conversation title with optional confirmation dialog based on settings
-	 * @param convId - The conversation ID to update
-	 * @param newTitle - The new title content
-	 * @returns True if title was updated, false if cancelled
-	 */
-	async updateConversationTitleWithConfirmation(
-		convId: string,
-		newTitle: string
-	): Promise<boolean> {
-		try {
-			const currentConfig = config();
-
-			if (currentConfig.askForTitleConfirmation && this.titleUpdateConfirmationCallback) {
-				const conversation = await DatabaseService.getConversation(convId);
-				if (!conversation) return false;
-
-				const shouldUpdate = await this.titleUpdateConfirmationCallback(
-					conversation.name,
-					newTitle
-				);
-				if (!shouldUpdate) return false;
-			}
-
-			await this.updateConversationName(convId, newTitle);
-			return true;
-		} catch (error) {
-			console.error('Failed to update conversation title with confirmation:', error);
-			return false;
-		}
-	}
-
-	/**
 	 * Updates conversation lastModified timestamp and moves it to top of list
 	 */
 	updateConversationTimestamp(): void {
@@ -702,7 +658,7 @@ class ConversationsStore {
 					newFirstUserMessage.id !== currentFirstUserMessage.id ||
 					newFirstUserMessage.content.trim() !== currentFirstUserMessage.content.trim())
 			) {
-				await this.updateConversationTitleWithConfirmation(
+				await this.updateConversationName(
 					this.activeConversation.id,
 					generateConversationTitle(
 						newFirstUserMessage.content,

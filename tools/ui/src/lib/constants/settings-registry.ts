@@ -152,18 +152,6 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				}
 			},
 			{
-				key: SETTINGS_KEYS.ASK_FOR_TITLE_CONFIRMATION,
-				label: 'Ask for confirmation before changing conversation title',
-				help: 'Ask for confirmation before automatically changing conversation title when editing the first message.',
-				defaultValue: false,
-				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.GENERAL,
-				sync: {
-					serverKey: SETTINGS_KEYS.ASK_FOR_TITLE_CONFIRMATION,
-					paramType: SyncableParameterType.BOOLEAN
-				}
-			},
-			{
 				key: SETTINGS_KEYS.TITLE_GENERATION_USE_FIRST_LINE,
 				label: 'Use first non-empty line for conversation title',
 				help: 'Use only the first non-empty line of the prompt to generate the conversation title.',

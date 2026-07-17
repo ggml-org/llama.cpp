@@ -4,6 +4,7 @@
 	import { PanelLeftClose, PanelLeftOpen, X } from '@lucide/svelte';
 	import {
 		ActionIcon,
+		DialogConversationRename,
 		Logo,
 		SidebarNavigationConversationList,
 		SidebarNavigationActions
@@ -97,6 +98,11 @@
 
 	let isSelectionMode = $state(false);
 	let selectedIds = new SvelteSet<string>();
+
+	let renameDialogOpen = $state(false);
+	let renameTargetConversationId = $state<string | null>(null);
+	let renameDraft = $state('');
+	let renameOriginalTitle = $state('');
 
 	// Visual order used by both shift+click range and marquee hit-testing.
 	// buildConversationTree puts pinned items first then unpinned, with forks
@@ -402,10 +408,30 @@
 		const conversation = conversations().find((conv) => conv.id === id);
 		if (!conversation) return;
 
-		const newName = window.prompt('Rename conversation', conversation.name);
-		if (newName && newName.trim()) {
-			await conversationsStore.updateConversationName(id, newName.trim());
-		}
+		renameTargetConversationId = id;
+		renameOriginalTitle = conversation.name;
+		renameDraft = conversation.name;
+		renameDialogOpen = true;
+	}
+
+	async function handleRenameConfirm() {
+		const id = renameTargetConversationId;
+		if (!id) return;
+
+		const nextName = renameDraft.trim();
+		if (!nextName || nextName === renameOriginalTitle.trim()) return;
+
+		await conversationsStore.updateConversationName(id, nextName);
+
+		renameDialogOpen = false;
+		renameTargetConversationId = null;
+	}
+
+	function handleRenameCancel() {
+		renameDialogOpen = false;
+		renameTargetConversationId = null;
+		renameDraft = '';
+		renameOriginalTitle = '';
 	}
 
 	async function handleDeleteConversation(id: string) {
@@ -585,6 +611,14 @@
 		</div>
 	</aside>
 {/if}
+
+<DialogConversationRename
+	bind:open={renameDialogOpen}
+	currentTitle={renameOriginalTitle}
+	bind:value={renameDraft}
+	onConfirm={handleRenameConfirm}
+	onCancel={handleRenameCancel}
+/>
 
 <style>
 	aside {

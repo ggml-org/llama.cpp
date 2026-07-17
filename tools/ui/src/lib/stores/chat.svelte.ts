@@ -1596,7 +1596,7 @@ class ChatStore {
 			conversationsStore.updateMessageAtIndex(messageIndex, { content: newContent });
 			await DatabaseService.updateMessage(messageId, { content: newContent });
 			if (isFirstUserMessage && newContent.trim())
-				await conversationsStore.updateConversationTitleWithConfirmation(
+				await conversationsStore.updateConversationName(
 					activeConv.id,
 					generateConversationTitle(newContent, Boolean(config().titleGenerationUseFirstLine))
 				);
@@ -2113,7 +2113,7 @@ class ChatStore {
 			const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
 
 			if (rootMessage && msg.parent === rootMessage.id && newContent.trim()) {
-				await conversationsStore.updateConversationTitleWithConfirmation(
+				await conversationsStore.updateConversationName(
 					activeConv.id,
 					generateConversationTitle(newContent, Boolean(config().titleGenerationUseFirstLine))
 				);
@@ -2187,7 +2187,7 @@ class ChatStore {
 
 			conversationsStore.updateConversationTimestamp();
 			if (isFirstUserMessage && newContent.trim())
-				await conversationsStore.updateConversationTitleWithConfirmation(
+				await conversationsStore.updateConversationName(
 					activeConv.id,
 					generateConversationTitle(newContent, Boolean(config().titleGenerationUseFirstLine))
 				);
