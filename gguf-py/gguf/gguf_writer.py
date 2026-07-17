@@ -898,6 +898,12 @@ class GGUFWriter:
     def add_token_shift_count(self, count: int) -> None:
         self.add_uint32(Keys.LLM.TOKEN_SHIFT_COUNT.format(arch=self.arch), count)
 
+    def add_num_loops(self, count: int) -> None:
+        self.add_uint32(Keys.LLM.NUM_LOOPS.format(arch=self.arch), count)
+
+    def add_skip_loop_final_norm(self, value: bool) -> None:
+        self.add_bool(Keys.LLM.SKIP_LOOP_FINAL_NORM.format(arch=self.arch), value)
+
     def add_interleave_moe_layer_step(self, value: int) -> None:
         self.add_uint32(Keys.LLM.INTERLEAVE_MOE_LAYER_STEP.format(arch=self.arch), value)
 
