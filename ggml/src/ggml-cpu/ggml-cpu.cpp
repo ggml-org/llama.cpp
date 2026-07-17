@@ -595,6 +595,9 @@ static ggml_backend_feature * ggml_backend_cpu_get_features(ggml_backend_reg_t r
         if (ggml_cpu_has_sme()) {
             features.push_back({ "SME", "1" });
         }
+        if (ggml_cpu_has_sme2()) {
+            features.push_back({ "SME2", "1" });
+        }
         if (ggml_cpu_has_riscv_v()) {
             features.push_back({ "RISCV_V", "1" });
         }

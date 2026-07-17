@@ -26,6 +26,9 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#ifndef HWCAP2_SME2
+#define HWCAP2_SME2 (1UL << 37)
+#endif
 #elif defined(__APPLE__)
 #include <string_view>
 #include <sys/sysctl.h>
@@ -66,9 +69,15 @@ struct ggml_kleidiai_context {
     int chunk_multiplier;
 } static ctx = { CPU_FEATURE_NONE, nullptr, nullptr, nullptr, 0, -1, 4 };
 
+static inline bool is_sme_family(cpu_feature f) {
+    return (f & (CPU_FEATURE_SME | CPU_FEATURE_SME2)) != CPU_FEATURE_NONE;
+}
+
 static const char* cpu_feature_to_string(cpu_feature f) {
     if (f == CPU_FEATURE_NONE) {
         return "NONE";
+    } else if ((f & CPU_FEATURE_SME2) == CPU_FEATURE_SME2) {
+        return "SME2";
     } else if ((f & CPU_FEATURE_SME) == CPU_FEATURE_SME) {
         return "SME";
     } else if ((f & CPU_FEATURE_SVE) == CPU_FEATURE_SVE) {
@@ -251,6 +260,18 @@ static void init_kleidiai_context(void) {
 
         if (sme_cores > 0) {
             ctx.features |= CPU_FEATURE_SME;
+#if defined(__aarch64__) && defined(__linux__)
+            // ARM guarantees SME2 implies SME, so only check SME2 when SME is enabled.
+            if (getauxval(AT_HWCAP2) & HWCAP2_SME2) {
+                ctx.features |= CPU_FEATURE_SME2;
+            }
+#elif defined(__aarch64__) && defined(__APPLE__)
+            int feat_sme2 = 0;
+            size_t size = sizeof(feat_sme2);
+            if (sysctlbyname("hw.optional.arm.FEAT_SME2", &feat_sme2, &size, NULL, 0) == 0 && feat_sme2) {
+                ctx.features |= CPU_FEATURE_SME2;
+            }
+#endif
         }
 
         // Kernel selection
@@ -279,10 +300,13 @@ static void init_kleidiai_context(void) {
         ctx.sme_thread_cap = (ctx.features & CPU_FEATURE_SME) ? sme_cores : 0;
 
         if (ctx.features & CPU_FEATURE_SME) {
+            const bool has_sme2 = (ctx.features & CPU_FEATURE_SME2) != CPU_FEATURE_NONE;
             if (sme_env_set && sme_env_ok && sme_cores > 0) {
-                GGML_LOG_INFO("kleidiai: SME enabled (GGML_KLEIDIAI_SME=%d override)\n", sme_cores);
+                GGML_LOG_INFO("kleidiai: SME%s enabled (GGML_KLEIDIAI_SME=%d override)\n",
+                    has_sme2 ? "2" : "", sme_cores);
             } else {
-                GGML_LOG_INFO("kleidiai: SME enabled (runtime-detected SME cores=%d)\n", sme_cores);
+                GGML_LOG_INFO("kleidiai: SME%s enabled (runtime-detected SME cores=%d)\n",
+                    has_sme2 ? "2" : "", sme_cores);
             }
         } else {
             GGML_LOG_INFO("kleidiai: SME disabled\n");
@@ -442,8 +466,8 @@ static int kleidiai_collect_kernel_chain_common(
         return count;
     }
 
-    if ((primary->required_cpu & CPU_FEATURE_SME) == CPU_FEATURE_SME) {
-        const cpu_feature fallback_mask = static_cast<cpu_feature>(features & ~CPU_FEATURE_SME);
+    if (is_sme_family(primary->required_cpu)) {
+        const cpu_feature fallback_mask = static_cast<cpu_feature>(features & ~CPU_FEATURE_SME & ~CPU_FEATURE_SME2);
         if (fallback_mask != CPU_FEATURE_NONE) {
             ggml_kleidiai_kernels * fallback = select_fallback(fallback_mask);
             if (fallback && fallback != primary &&
@@ -1054,14 +1078,14 @@ class tensor_traits : public ggml::cpu::tensor_traits {
 
         int sme_slot = -1;
         for (int i = 0; i < runtime_count; ++i) {
-            if ((runtime[i].kernels->required_cpu & CPU_FEATURE_SME) == CPU_FEATURE_SME) {
+            if (is_sme_family(runtime[i].kernels->required_cpu)) {
                 sme_slot = i;
                 break;
             }
         }
         int non_sme_slot = -1;
         for (int i = 0; i < runtime_count; ++i) {
-            if ((runtime[i].kernels->required_cpu & CPU_FEATURE_SME) != CPU_FEATURE_SME) {
+            if (!is_sme_family(runtime[i].kernels->required_cpu)) {
                 non_sme_slot = i;
                 break;
             }
@@ -1099,7 +1123,7 @@ class tensor_traits : public ggml::cpu::tensor_traits {
             // Recompute SME slot based on the collapsed runtime[0]
             sme_slot = -1;
             if (runtime_count > 0 &&
-                (runtime[0].kernels->required_cpu & CPU_FEATURE_SME) == CPU_FEATURE_SME) {
+                is_sme_family(runtime[0].kernels->required_cpu)) {
                 sme_slot = 0;
             }
         }

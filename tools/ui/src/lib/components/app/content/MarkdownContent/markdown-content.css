@@ -19,8 +19,16 @@
 	line-height: 1.75;
 }
 
+.markdown-content :global(.markdown-block:first-child p:first-child) {
+	margin-block-start: 0;
+}
+
+.markdown-content :global(.markdown-block:last-child p:last-child) {
+	margin-block-end: 0;
+}
+
 .markdown-content :global(:is(h1, h2, h3, h4, h5, h6):first-child) {
-	margin-top: 0;
+	margin-top: 0.5rem;
 }
 
 /* Headers with consistent spacing */

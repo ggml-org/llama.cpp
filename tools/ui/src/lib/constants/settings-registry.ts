@@ -223,13 +223,22 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				key: SETTINGS_KEYS.SHOW_MESSAGE_STATS,
 				label: 'Show message generation statistics',
 				help: 'Display generation statistics (tokens/second, token count, duration) below each assistant message.',
-				defaultValue: true,
+				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.DISPLAY,
 				sync: {
 					serverKey: SETTINGS_KEYS.SHOW_MESSAGE_STATS,
 					paramType: SyncableParameterType.BOOLEAN
 				}
+			},
+			{
+				key: SETTINGS_KEYS.SHOW_AGENTIC_TURN_STATS,
+				label: 'Show statistics for individual agentic turns',
+				help: 'Display per-turn statistics (tokens, duration) under each turn in agentic responses. Shown only when "Show message generation statistics" is enabled.',
+				defaultValue: false,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.DISPLAY,
+				dependsOn: SETTINGS_KEYS.SHOW_MESSAGE_STATS
 			},
 			{
 				key: SETTINGS_KEYS.SHOW_THOUGHT_IN_PROGRESS,
@@ -789,9 +798,6 @@ export const SETTING_CONFIG_INFO: Record<string, string> = Object.fromEntries(
 /** Theme select options. */
 export const SETTINGS_COLOR_MODES_CONFIG = COLOR_MODE_OPTIONS;
 
-export type { SettingsSectionTitle } from '$lib/types';
-export type { SettingsSection } from '$lib/types';
-
 /** Sidebar sections + field configs (as consumed by UI). */
 export const SETTINGS_CHAT_SECTIONS: SettingsSection[] = [
 	...Object.values(SETTINGS_REGISTRY).map((section) => ({
@@ -804,6 +810,7 @@ export const SETTINGS_CHAT_SECTIONS: SettingsSection[] = [
 			type: s.type,
 			isExperimental: s.isExperimental,
 			isPositiveInteger: s.isPositiveInteger,
+			dependsOn: s.dependsOn,
 			help: s.help,
 			options: s.options
 		}))
@@ -832,5 +839,3 @@ export const SYNCABLE_PARAMETERS: SyncableParameter[] = getAllSettings()
 	}));
 
 export const SETTINGS_FALLBACK_EXIT_ROUTE = ROUTES.START;
-
-export { SETTINGS_KEYS } from './settings-keys';

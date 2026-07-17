@@ -6,7 +6,7 @@
 	import { REASONING_EFFORT_TOKENS } from '$lib/constants/reasoning-effort-tokens';
 	import { REASONING_EFFORT_LEVELS } from '$lib/constants/reasoning-effort';
 	import type { ReasoningEffortLevel } from '$lib/types';
-	import { DIALOG_SUBMENU_CONTENT } from '$lib/constants/css-classes';
+	import { DIALOG_SUBMENU_CONTENT, ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import {
 		modelsStore,
 		checkModelSupportsThinking,
@@ -74,9 +74,9 @@
 	<DropdownMenu.Sub bind:open={subOpen}>
 		<DropdownMenu.SubTrigger class="flex cursor-pointer items-center gap-2">
 			{#if thinkingEnabled}
-				<Lightbulb class="h-4 w-4 shrink-0 text-amber-400" />
+				<Lightbulb class="{ICON_CLASS_DEFAULT} shrink-0 text-amber-400" />
 			{:else}
-				<LightbulbOff class="h-4 w-4 shrink-0 text-muted-foreground" />
+				<LightbulbOff class="{ICON_CLASS_DEFAULT} shrink-0 text-muted-foreground" />
 			{/if}
 
 			<span class="flex-1">Thinking</span>
@@ -118,7 +118,7 @@
 					{/if}
 
 					{#if isSelected(level)}
-						<Check class="h-4 w-4 shrink-0 text-foreground" />
+						<Check class="{ICON_CLASS_DEFAULT} shrink-0 text-foreground" />
 					{/if}
 				</button>
 			{/each}
