@@ -11,14 +11,8 @@ ggml_cgraph * clip_graph_llava::build() {
     // Calculate the deepest feature layer based on hparams and projector type
     int max_feature_layer = n_layer;
     {
-        // Get the index of the second to last layer; this is the default for models that have a llava projector
-        int il_last = hparams.n_layer - 1;
+        int il_last = hparams.n_layer;
         int deepest_feature_layer = -1;
-
-        if (proj_type == PROJECTOR_TYPE_MINICPMV || proj_type == PROJECTOR_TYPE_GLM_EDGE) {
-            il_last += 1;
-        }
-
         // If we set explicit vision feature layers, only go up to the deepest one
         // NOTE: only used by granite-vision models for now
         for (const auto & feature_layer : hparams.feature_layers) {
