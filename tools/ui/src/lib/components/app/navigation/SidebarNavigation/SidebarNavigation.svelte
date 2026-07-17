@@ -174,8 +174,7 @@
 
 	function toggleSelectAllVisible() {
 		const visibleIds = filteredConversations.map((c) => c.id);
-		const allSelected =
-			visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
+		const allSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
 
 		if (allSelected) {
 			for (const id of visibleIds) selectedIds.delete(id);
@@ -284,8 +283,12 @@
 			if (!id || !visibleIds.has(id)) continue;
 
 			const rect = row.getBoundingClientRect();
-			const intersects =
-				!(rect.right < left || rect.left > right || rect.bottom < top || rect.top > bottom);
+			const intersects = !(
+				rect.right < left ||
+				rect.left > right ||
+				rect.bottom < top ||
+				rect.top > bottom
+			);
 
 			if (dragMode === 'add') {
 				// Additive marquee: rows the rect covers become selected; rows outside
@@ -593,13 +596,11 @@
 						onRowMouseDown={handleRowMouseDown}
 						visibleCount={visibleSelectionStats.visibleCount}
 						allVisibleSelected={visibleSelectionStats.visibleCount > 0 &&
-							visibleSelectionStats.selectedVisibleCount ===
-								visibleSelectionStats.visibleCount}
+							visibleSelectionStats.selectedVisibleCount === visibleSelectionStats.visibleCount}
 						someVisibleSelected={visibleSelectionStats.selectedVisibleCount > 0 &&
-							visibleSelectionStats.selectedVisibleCount <
-								visibleSelectionStats.visibleCount}
-						allSelectedArePinned={allSelectedArePinned}
-						pinStateIsMixed={pinStateIsMixed}
+							visibleSelectionStats.selectedVisibleCount < visibleSelectionStats.visibleCount}
+						{allSelectedArePinned}
+						{pinStateIsMixed}
 						onSelectAllToggle={toggleSelectAllVisible}
 						onBulkPinToggle={handleBulkPinToggle}
 						onBulkExport={handleBulkExport}

@@ -153,7 +153,9 @@
 <button
 	class="group flex min-h-9 w-full cursor-pointer items-center justify-between space-x-3 rounded-lg py-1.5 text-left transition-colors hover:bg-foreground/10 {isActive
 		? 'bg-foreground/5 text-accent-foreground'
-		: ''} {isSelected ? 'bg-primary/10 hover:bg-primary/15' : ''} {isSelectionMode ? 'is-selection-mode' : ''} px-3"
+		: ''} {isSelected ? 'bg-primary/10 hover:bg-primary/15' : ''} {isSelectionMode
+		? 'is-selection-mode'
+		: ''} px-3"
 	data-conversation-row={conversation.id}
 	onclick={(e) => handleSelect(e)}
 	onmouseover={handleMouseOver}
@@ -182,9 +184,7 @@
 			>
 				<Checkbox
 					checked={isSelected}
-					aria-label={isSelected
-						? `Deselect ${conversation.name}`
-						: `Select ${conversation.name}`}
+					aria-label={isSelected ? `Deselect ${conversation.name}` : `Select ${conversation.name}`}
 				/>
 			</div>
 		{/if}

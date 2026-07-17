@@ -99,9 +99,7 @@
 			iconSize="h-3.5 w-3.5"
 			class="h-7 w-7 rounded-md bg-transparent backdrop-blur-none hover:bg-foreground/10 {pinDisabled
 				? 'cursor-not-allowed'
-				: ''} {!pinDisabled
-				? 'opacity-100'
-				: 'opacity-40'}"
+				: ''} {!pinDisabled ? 'opacity-100' : 'opacity-40'}"
 			onclick={onBulkPinToggle}
 		/>
 

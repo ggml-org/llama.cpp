@@ -413,9 +413,7 @@ class ConversationsStore {
 			}
 
 			toast.success(
-				convIds.length === 1
-					? 'Conversation deleted'
-					: `${convIds.length} conversations deleted`
+				convIds.length === 1 ? 'Conversation deleted' : `${convIds.length} conversations deleted`
 			);
 		} catch (error) {
 			console.error('Failed to bulk delete conversations:', error);

@@ -138,10 +138,8 @@
 							{@render itemIcon(item.icon)}
 
 							{#if showIcons}
-								<span
-									in:fade={itemTransition}
-									out:fade={itemTransition}
-									class="min-w-0 truncate">{item.tooltip}</span
+								<span in:fade={itemTransition} out:fade={itemTransition} class="min-w-0 truncate"
+									>{item.tooltip}</span
 								>
 							{/if}
 						</span>

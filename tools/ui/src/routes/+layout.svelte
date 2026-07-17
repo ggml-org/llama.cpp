@@ -129,7 +129,6 @@
 		});
 	}
 
-
 	onMount(() => {
 		updateFavicon();
 		// snapshot of every backend running stream on first load, populates the sidebar spinners

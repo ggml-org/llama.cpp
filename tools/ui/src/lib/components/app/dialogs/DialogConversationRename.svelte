@@ -12,7 +12,13 @@
 		onCancel: () => void;
 	}
 
-	let { open = $bindable(), currentTitle, value = $bindable(''), onConfirm, onCancel }: Props = $props();
+	let {
+		open = $bindable(),
+		currentTitle,
+		value = $bindable(''),
+		onConfirm,
+		onCancel
+	}: Props = $props();
 
 	let inputRef = $state<HTMLInputElement | null>(null);
 
@@ -55,9 +61,7 @@
 				Rename conversation
 			</AlertDialog.Title>
 
-			<AlertDialog.Description>
-				Choose a new title for this conversation.
-			</AlertDialog.Description>
+			<AlertDialog.Description>Choose a new title for this conversation.</AlertDialog.Description>
 		</AlertDialog.Header>
 
 		<form onsubmit={handleSubmit} class="space-y-2 pt-2 pb-4">

@@ -45,8 +45,7 @@
 </script>
 
 {#each fields as field (field.key)}
-	{@const isPairedCounterpart =
-		Boolean(field.pairedKey) && field.key! > field.pairedKey!}
+	{@const isPairedCounterpart = Boolean(field.pairedKey) && field.key! > field.pairedKey!}
 	{#if !isPairedCounterpart && (!field.dependsOn || Boolean(localConfig[field.dependsOn]))}
 		<div class={field.dependsOn ? 'space-y-2 pl-6' : 'space-y-2'}>
 			{#if field.type === SettingsFieldType.INPUT}
@@ -254,7 +253,7 @@
 				</Label>
 
 				<RadioGroup.Root
-				    class="gap-4"
+					class="gap-4"
 					value={currentMode}
 					onValueChange={(value) => {
 						for (const opt of radioOptions) {
@@ -266,7 +265,10 @@
 						{@const itemId = `${field.key}-${opt.value}`}
 						<div class="flex items-center gap-2">
 							<RadioGroup.Item value={opt.value} id={itemId} />
-							<Label for={itemId} class="flex cursor-pointer items-center gap-1.5 text-sm font-normal">
+							<Label
+								for={itemId}
+								class="flex cursor-pointer items-center gap-1.5 text-sm font-normal"
+							>
 								{opt.label}
 
 								{#if opt.isExperimental}
