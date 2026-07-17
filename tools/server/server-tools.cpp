@@ -7,6 +7,7 @@
 #include <regex>
 #include <thread>
 #include <chrono>
+#include <ctime>
 #include <atomic>
 #include <cstring>
 #include <climits>
@@ -1039,7 +1040,7 @@ private:
 struct server_tool_get_datetime : server_tool {
     server_tool_get_datetime() {
         name = "get_datetime";
-        display_name = "Get Date & Time";
+        display_name = "Get Date & Time in UTC, ISO format";
         permission_write = false;
     }
 
@@ -1048,7 +1049,7 @@ struct server_tool_get_datetime : server_tool {
             {"type", "function"},
             {"function", {
                 {"name", name},
-                {"description", "Returns the current date and time"},
+                {"description", "Returns the current date and time in UTC, ISO format"},
             }},
         };
     }
@@ -1056,8 +1057,10 @@ struct server_tool_get_datetime : server_tool {
     json invoke(json, server_tool::stream *) const override {
         auto now = std::chrono::system_clock::now();
         auto time = std::chrono::system_clock::to_time_t(now);
-
-        return {{"result", std::ctime(&time)}};
+        auto tm = std::gmtime(&time);
+        char buf[sizeof("YYYY-MM-DDTHH:MM:SSZ")];
+        std::strftime(buf, sizeof(buf), "%FT%TZ", tm);
+        return {{"result", buf}};
     }
 };
 
