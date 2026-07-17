@@ -3799,7 +3799,6 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
         case 256:
         {
             const svuint8_t m4b_1          = svdup_n_u8(0x0f);
-            
             // 8 accumulators: 2 row pairs × 4 col pairs
             svfloat32_t acc_f32_01, acc_f32_23, acc_f32_45, acc_f32_67;
             uint32_t idx_arr[8] = { 0, 2, 4, 6,  1, 3, 5, 7 };
