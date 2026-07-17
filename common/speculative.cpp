@@ -1572,8 +1572,12 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                     continue;
                 }
 
+                common_sampler_accept(smpl, id, true);
+
                 auto & dp = dparams.at(seq_id);
                 auto & result = *dp.result;
+
+                result.push_back(id);
 
                 if(adaptive_length_threshold > 0)
                 {
@@ -1583,10 +1587,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                         continue;
                     }
                 }
-
-                common_sampler_accept(smpl, id, true);
-
-                result.push_back(id);
 
                 if (params.n_max <= (int) result.size()) {
                     drafting[seq_id] = false;
