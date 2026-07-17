@@ -437,6 +437,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
     int32_t n_embd_dec = 0;       // draft hidden size
     int32_t n_embd_enc = 0;       // target_layer_ids_n * target_hidden_size
     int32_t n_embd_tgt = 0;       // target model hidden size
+    int32_t n_layer_tgt = 0;      // target model layer count
 
     const int32_t * target_layer_ids   = nullptr; // model_dft's extract layer indices
     uint32_t        target_layer_ids_n = 0;
@@ -478,6 +479,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         n_embd_tgt = llama_model_n_embd(model_tgt);
         n_embd_dec = llama_model_n_embd(model_dft);
         n_embd_enc = (int32_t) target_layer_ids_n * n_embd_tgt;
+        n_layer_tgt = llama_model_n_layer(model_tgt);
 
         const int32_t n_b = (int32_t) llama_n_batch(ctx_dft);
         batch = llama_batch_init(/*n_tokens=*/ n_b, /*embd=*/ n_embd_dec, /*n_seq_max=*/ 1);
@@ -510,9 +512,15 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
             }
         }
 
-        // turn on extraction of the target layers' input embeddings
+        // turn on extraction of the target layers' hidden states
         for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
-            llama_set_embeddings_layer_inp(ctx_tgt, (uint32_t) target_layer_ids[k], true);
+            if (target_layer_ids[k] < n_layer_tgt) {
+                llama_set_embeddings_layer_inp(ctx_tgt, (uint32_t) target_layer_ids[k], true);
+            } else if (target_layer_ids[k] == n_layer_tgt) {
+                llama_set_embeddings_nextn(ctx_tgt, true, /*masked*/ false);
+            } else {
+                GGML_ABORT("EAGLE3: target layer id %d exceeds target n_layer %d", target_layer_ids[k], n_layer_tgt);
+            }
         }
 
         // turn on extraction of the draft model's pre-norm hidden state
@@ -600,7 +608,9 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         features_buf.resize((size_t) n_tokens * n_embd_enc, 0.0f);
 
         for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
-            const float * layer = llama_get_embeddings_layer_inp(ctx_tgt, (uint32_t) target_layer_ids[k]);
+            const float * layer = target_layer_ids[k] < n_layer_tgt
+                ? llama_get_embeddings_layer_inp(ctx_tgt, (uint32_t) target_layer_ids[k])
+                : llama_get_embeddings_nextn(ctx_tgt);
             if (!layer) {
                 GGML_ABORT("EAGLE3: target layer %d input not extracted.", target_layer_ids[k]);
             }

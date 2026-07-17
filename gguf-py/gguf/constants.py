@@ -159,6 +159,7 @@ class Keys:
         TARGET_HIDDEN_SIZE                = "{arch}.target_hidden_size"
         BLOCK_SIZE                        = "{arch}.block_size"
         NORM_BEFORE_RESIDUAL              = "{arch}.norm_before_residual"
+        NORM_BEFORE_FC                    = "{arch}.norm_before_fc"
 
     class Attention:
         HEAD_COUNT                   = "{arch}.attention.head_count"
@@ -4219,6 +4220,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN,
         MODEL_TENSOR.FFN_UP,
         MODEL_TENSOR.FC,
+        MODEL_TENSOR.ENC_OUTPUT_NORM,
         MODEL_TENSOR.D2T,
     ],
     MODEL_ARCH.DFLASH: [
