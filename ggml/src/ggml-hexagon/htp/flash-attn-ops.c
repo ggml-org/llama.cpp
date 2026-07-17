@@ -453,24 +453,21 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
                 S_vec = HVX_OP_ADD_F32(HVX_OP_MUL_F32(S_vec, ms_vec), p_sum_vec);
 
                 // 5. Accumulate V (F16 * F16 -> F32 accumulator)
-                __fp16 __attribute__((aligned(128))) p_arr[VLEN_FP16];
-                hvx_vec_store_a(p_arr, 128, P);
+                const uint32_t stride_v2 = factx->size_v_row_padded * 2;
+                const uint8_t * v_ptr = v_base;
 
                 for (uint32_t j = 0; j < current_block_size; j += 2) {
                     if (j + 1 == current_block_size) {
-                        if (p_arr[j] != 0.0f) {
-                            const uint8_t * v_ptr = v_base + j * factx->size_v_row_padded;
-                            hvx_mad_f32_f16_aa(VKQ32, v_ptr, (p_arr + j), DV);
-                        }
+                        HVX_Vector S0 = hvx_vec_repl_f16(Q6_V_vror_VR(P, j * 2));
+                        hvx_mad_f32_f16_aa_vec(VKQ32, v_ptr, S0, DV);
                         break;
                     }
 
-                    if (p_arr[j] == 0.0f && p_arr[j + 1] == 0.0f) {
-                        continue;
-                    }
+                    HVX_Vector S0 = hvx_vec_repl_f16(Q6_V_vror_VR(P, j * 2));
+                    HVX_Vector S1 = hvx_vec_repl_f16(Q6_V_vror_VR(P, (j + 1) * 2));
 
-                    const uint8_t * v_ptr = v_base + j * factx->size_v_row_padded;
-                    hvx_mad_f32_f16_aa_rx2(VKQ32, v_ptr, v_ptr + factx->size_v_row_padded, (p_arr + j), (p_arr + j + 1), DV);
+                    hvx_mad_f32_f16_aa_rx2_vec(VKQ32, v_ptr, v_ptr + factx->size_v_row_padded, S0, S1, DV);
+                    v_ptr += stride_v2;
                 }
             }
             htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_FA_SFM, ir);
