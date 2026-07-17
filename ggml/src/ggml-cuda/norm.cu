@@ -363,6 +363,52 @@ static __global__ void l2_norm_f32(
     }
 }
 
+// Two independent L2-norms (e.g. the deltanet q and k) of the same shape in one dispatch. Each block
+// normalizes q[row] and k[row]; q/k may be strided (views), outputs are contiguous.
+template <int block_size>
+static __global__ void l2_norm_pair_f32(
+        const float * q, float * q_dst, const float * k, float * k_dst, const int ncols,
+        const int64_t q_stride_row, const int64_t q_stride_channel, const int64_t q_stride_sample,
+        const int64_t k_stride_row, const int64_t k_stride_channel, const int64_t k_stride_sample,
+        const float eps) {
+    const int nrows     = gridDim.x;
+    const int nchannels = gridDim.y;
+
+    const int row     = blockIdx.x;
+    const int channel = blockIdx.y;
+    const int sample  = blockIdx.z;
+    const int tid     = threadIdx.x;
+
+    q += sample*q_stride_sample + channel*q_stride_channel + row*q_stride_row;
+    k += sample*k_stride_sample + channel*k_stride_channel + row*k_stride_row;
+    const int64_t dst_off = ((sample*nchannels + channel)*nrows + row)*ncols;
+    q_dst += dst_off;
+    k_dst += dst_off;
+
+    float tq = 0.0f, tk = 0.0f;
+    ggml_cuda_pdl_sync();
+    for (int col = tid; col < ncols; col += block_size) {
+        const float qi = q[col];
+        const float ki = k[col];
+        tq += qi * qi;
+        tk += ki * ki;
+    }
+
+    extern __shared__ float s_sum[];
+    tq = block_reduce<block_reduce_method::SUM, block_size>(tq, s_sum);
+    __syncthreads();
+    tk = block_reduce<block_reduce_method::SUM, block_size>(tk, s_sum);
+    ggml_cuda_pdl_lc();
+
+    const float sq = rsqrtf(fmaxf(tq, eps * eps));
+    const float sk = rsqrtf(fmaxf(tk, eps * eps));
+
+    for (int col = tid; col < ncols; col += block_size) {
+        q_dst[col] = sq * q[col];
+        k_dst[col] = sk * k[col];
+    }
+}
+
 static void norm_f32_cuda(
         const float * x, float * dst, const int ncols, const int nrows, const int nchannels, const int nsamples,
         const int64_t stride_row, const int64_t stride_channel, const int64_t stride_sample, const float eps, cudaStream_t stream) {
@@ -605,6 +651,26 @@ static void l2_norm_f32_cuda(
         const dim3 block_dims(1024, 1, 1);
         const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params{blocks_num, block_dims, block_dims.x > WARP_SIZE ? 32 * sizeof(float): 0, stream};
         ggml_cuda_kernel_launch(l2_norm_f32<1024>, launch_params, x, dst, ncols, stride_row, stride_channel, stride_sample, eps);
+    }
+}
+
+static void l2_norm_pair_f32_cuda(
+        const float * q, float * q_dst, const float * k, float * k_dst,
+        const int ncols, const int nrows, const int nchannels, const int nsamples,
+        const int64_t q_stride_row, const int64_t q_stride_channel, const int64_t q_stride_sample,
+        const int64_t k_stride_row, const int64_t k_stride_channel, const int64_t k_stride_sample,
+        const float eps, cudaStream_t stream) {
+    const dim3 blocks_num(nrows, nchannels, nsamples);
+    if (ncols < 1024) {
+        const dim3 block_dims(WARP_SIZE, 1, 1);
+        const ggml_cuda_kernel_launch_params lp{blocks_num, block_dims, 0, stream};
+        ggml_cuda_kernel_launch(l2_norm_pair_f32<WARP_SIZE>, lp, q, q_dst, k, k_dst, ncols,
+            q_stride_row, q_stride_channel, q_stride_sample, k_stride_row, k_stride_channel, k_stride_sample, eps);
+    } else {
+        const dim3 block_dims(1024, 1, 1);
+        const ggml_cuda_kernel_launch_params lp{blocks_num, block_dims, 32 * sizeof(float), stream};
+        ggml_cuda_kernel_launch(l2_norm_pair_f32<1024>, lp, q, q_dst, k, k_dst, ncols,
+            q_stride_row, q_stride_channel, q_stride_sample, k_stride_row, k_stride_channel, k_stride_sample, eps);
     }
 }
 
@@ -965,4 +1031,37 @@ void ggml_cuda_op_l2_norm(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int64_t s03 = nb03 / ts0;
 
     l2_norm_f32_cuda(src0_d, dst_d, ne00, ne01, ne02, ne03, s01, s02, s03, eps, stream);
+}
+
+void ggml_cuda_op_l2_norm_pair(ggml_backend_cuda_context & ctx, ggml_tensor * l2q, ggml_tensor * l2k) {
+    const ggml_tensor * q = l2q->src[0];
+    const ggml_tensor * k = l2k->src[0];
+
+    GGML_ASSERT(q->type == GGML_TYPE_F32 && k->type == GGML_TYPE_F32);
+    GGML_ASSERT(l2q->type == GGML_TYPE_F32 && l2k->type == GGML_TYPE_F32);
+
+    float eps;
+    memcpy(&eps, l2q->op_params, sizeof(float));
+    GGML_ASSERT(eps >= 0.0f);
+
+    const int64_t ne00 = q->ne[0];
+    const int64_t ne01 = q->ne[1];
+    const int64_t ne02 = q->ne[2];
+    const int64_t ne03 = q->ne[3];
+
+    const size_t tsq = ggml_type_size(q->type);
+    GGML_ASSERT(q->nb[0] == tsq);
+    const int64_t q_s01 = q->nb[1] / tsq;
+    const int64_t q_s02 = q->nb[2] / tsq;
+    const int64_t q_s03 = q->nb[3] / tsq;
+
+    const size_t tsk = ggml_type_size(k->type);
+    GGML_ASSERT(k->nb[0] == tsk);
+    const int64_t k_s01 = k->nb[1] / tsk;
+    const int64_t k_s02 = k->nb[2] / tsk;
+    const int64_t k_s03 = k->nb[3] / tsk;
+
+    l2_norm_pair_f32_cuda(
+        (const float *) q->data, (float *) l2q->data, (const float *) k->data, (float *) l2k->data,
+        ne00, ne01, ne02, ne03, q_s01, q_s02, q_s03, k_s01, k_s02, k_s03, eps, ctx.stream());
 }

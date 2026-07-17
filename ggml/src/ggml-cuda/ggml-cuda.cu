@@ -3850,6 +3850,21 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         return 2;
     }
 
+    // pair the deltanet q/k L2-norms: they are adjacent siblings separated by a no-op VIEW of k
+    // (L2_NORM(q) -> VIEW(k) -> L2_NORM(k)), so normalize both in one dispatch.
+    if (node->op == GGML_OP_L2_NORM && i + 2 < cgraph->n_nodes) {
+        ggml_tensor * l2q = node;
+        ggml_tensor * mid = cgraph->nodes[i + 1];
+        ggml_tensor * l2k = cgraph->nodes[i + 2];
+        if (mid->op == GGML_OP_VIEW && l2k->op == GGML_OP_L2_NORM && l2k->src[0] == mid &&
+                l2q->src[0] && l2q->src[0]->type == GGML_TYPE_F32 && l2k->src[0]->type == GGML_TYPE_F32 &&
+                ggml_is_contiguous(l2q) && ggml_is_contiguous(l2k) && ggml_are_same_shape(l2q, l2k) &&
+                memcmp(l2q->op_params, l2k->op_params, sizeof(float)) == 0) {
+            ggml_cuda_op_l2_norm_pair(*cuda_ctx, l2q, l2k);
+            return 2; // skip the view and the k L2_NORM
+        }
+    }
+
     // fused residual-add + rms_norm * mul: the pre-norm residual ADD -> RMS_NORM -> MUL that transformer
     // blocks emit. The dedicated kernel writes the residual sum back for the downstream residual.
     if (node->op == GGML_OP_ADD &&

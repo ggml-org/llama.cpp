@@ -6406,6 +6406,46 @@ struct test_l2_norm : public test_case {
     }
 };
 
+// two GGML_OP_L2_NORM (deltanet q/k pair): two L2_NORMs of same-shape views, separated by the k view
+struct test_l2_norm_pair : public test_case {
+    const ggml_type type;
+    const std::array<int64_t, 4> ne; // per-half (q and k each)
+    const float eps;
+
+    std::string op_desc(ggml_tensor * t) override { GGML_UNUSED(t); return "L2_NORM_PAIR"; }
+    bool run_whole_graph() override { return true; }
+    std::string vars() override { return VARS_TO_STR3(type, ne, eps); }
+
+    test_l2_norm_pair(ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = {128, 16, 2, 1}, float eps = 1e-6f)
+        : type(type), ne(ne), eps(eps) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        // base stacks q and k along dim1; q/k are views of it, like the deltanet conv output
+        const std::array<int64_t, 4> bne = {ne[0], ne[1]*2, ne[2], ne[3]};
+        ggml_tensor * base = ggml_new_tensor(ctx, type, 4, bne.data());
+        ggml_set_param(base); ggml_set_name(base, "base");
+
+        ggml_tensor * q = ggml_view_4d(ctx, base, ne[0], ne[1], ne[2], ne[3],
+            base->nb[1], base->nb[2], base->nb[3], 0);
+        ggml_tensor * qn = ggml_l2_norm(ctx, q, eps);
+        ggml_set_name(qn, "qn");
+        ggml_tensor * k = ggml_view_4d(ctx, base, ne[0], ne[1], ne[2], ne[3],
+            base->nb[1], base->nb[2], base->nb[3], ne[1]*base->nb[1]);
+        ggml_tensor * kn = ggml_l2_norm(ctx, k, eps);
+        ggml_set_name(kn, "kn");
+        ggml_tensor * out = ggml_add(ctx, qn, kn);
+        ggml_set_name(out, "out");
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            init_tensor_uniform(t, -10.f, 10.f);
+        }
+    }
+};
+
 // GGML_OP_ACC
 struct test_acc : public test_case {
     const ggml_type type;
@@ -8554,6 +8594,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_l2_norm(GGML_TYPE_F32, { n, 5, 4, 3 }, eps, false));
             test_cases.emplace_back(new test_l2_norm(GGML_TYPE_F32, { n, 5, 4, 3 }, eps, true));
             test_cases.emplace_back(new test_l2_norm(GGML_TYPE_F32, { n, 5, 4, 3 }, eps, false, true));
+            test_cases.emplace_back(new test_l2_norm_pair(GGML_TYPE_F32, { n, 16, 2, 1 }, eps));
         }
     }
 
