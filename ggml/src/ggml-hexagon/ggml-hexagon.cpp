@@ -2334,6 +2334,7 @@ static void ggml_hexagon_precompute_hvx_mm_params(
     int ne12,
     int ne13,
     bool is_matmul_id,
+    const size_t src2_row_size,
     size_t vtcm_budget,
     struct htp_mm_kernel_params * kparams
 ) {
@@ -2359,7 +2360,7 @@ static void ggml_hexagon_precompute_hvx_mm_params(
             for (uint32_t d = max_prefetch; d >= 2; d /= 2) {
                 htp_mm_hvx_vtcm_layout_build(
                     &L, kparams->kernel_type, wtype, ne10, src1_nrows, sess->n_threads,
-                    0, src0->nb[1], 0, d, true, false, false
+                    0, src0->nb[1], 0, src2_row_size, d, true, false, false
                 );
                 if (L.total_bytes <= vtcm_budget) {
                     best_n_prefetch = d;
@@ -2369,7 +2370,7 @@ static void ggml_hexagon_precompute_hvx_mm_params(
             if (best_n_prefetch == 2 && L.total_bytes > vtcm_budget) {
                 htp_mm_hvx_vtcm_layout_build(
                     &L, kparams->kernel_type, wtype, ne10, src1_nrows, sess->n_threads,
-                    0, src0->nb[1], 0, 2, true, false, false
+                    0, src0->nb[1], 0, src2_row_size, 2, true, false, false
                 );
             }
             kparams->n_prefetch = best_n_prefetch;
@@ -2393,7 +2394,7 @@ static void ggml_hexagon_precompute_hvx_mm_params(
                 for (uint32_t d = max_prefetch; d >= 2; d /= 2) {
                     htp_mm_hvx_vtcm_layout_build(
                         &L, kparams->kernel_type, wtype, ne10, src1_nrows, sess->n_threads,
-                        dst->nb[1], src0->nb[1], src1->nb[1], d, false, false, false
+                        dst->nb[1], src0->nb[1], src1->nb[1], src2_row_size, d, false, false, false
                     );
                     if (L.total_bytes <= vtcm_budget) {
                         best_n_prefetch = d;
@@ -2403,7 +2404,7 @@ static void ggml_hexagon_precompute_hvx_mm_params(
                 if (best_n_prefetch == 2 && L.total_bytes > vtcm_budget) {
                     htp_mm_hvx_vtcm_layout_build(
                         &L, kparams->kernel_type, wtype, ne10, src1_nrows, sess->n_threads,
-                        dst->nb[1], src0->nb[1], src1->nb[1], 2, false, false, false
+                        dst->nb[1], src0->nb[1], src1->nb[1], src2_row_size, 2, false, false, false
                     );
                 }
 
@@ -2427,7 +2428,7 @@ static void ggml_hexagon_precompute_hvx_mm_params(
                 struct htp_mm_hvx_vtcm_layout L;
                 htp_mm_hvx_vtcm_layout_build(
                     &L, kparams->kernel_type, wtype, ne10, src1_nrows, sess->n_threads,
-                    dst->nb[1], src0->nb[1], src1->nb[1], 16, false, false, false
+                    dst->nb[1], src0->nb[1], src1->nb[1], src2_row_size, 16, false, false, false
                 );
 
                 kparams->n_prefetch = 16;
@@ -2447,7 +2448,7 @@ static void ggml_hexagon_precompute_hvx_mm_params(
         struct htp_mm_hvx_vtcm_layout L;
         htp_mm_hvx_vtcm_layout_build(
             &L, HTP_MM_KERNEL_HVX_F16_F16_VTCM, wtype, ne10, src1_nrows, sess->n_threads,
-            dst->nb[1], src0->nb[1], src1->nb[1], 16, false, false, false
+            dst->nb[1], src0->nb[1], src1->nb[1], src2_row_size, 16, false, false, false
         );
 
         if (!is_batched && !is_permuted && L.total_bytes <= vtcm_budget) {
@@ -2467,7 +2468,7 @@ static void ggml_hexagon_precompute_hvx_mm_params(
             kparams->src1_row_size = src1->nb[1];
             htp_mm_hvx_vtcm_layout_build(
                 &L, kparams->kernel_type, wtype, ne10, src1_nrows, sess->n_threads,
-                dst->nb[1], src0->nb[1], src1->nb[1], 16, false, false, false
+                dst->nb[1], src0->nb[1], src1->nb[1], src2_row_size, 16, false, false, false
             );
             kparams->vtcm_size = L.total_bytes;
             kparams->vtcm_src0_size = L.src0_bytes;
@@ -2483,7 +2484,7 @@ static void ggml_hexagon_precompute_hvx_mm_params(
         struct htp_mm_hvx_vtcm_layout L;
         htp_mm_hvx_vtcm_layout_build(
             &L, HTP_MM_KERNEL_HVX_F32_F32_VTCM, wtype, ne10, src1_nrows, sess->n_threads,
-            dst->nb[1], src0->nb[1], src1->nb[1], 16, false, false, false
+            dst->nb[1], src0->nb[1], src1->nb[1], src2_row_size, 16, false, false, false
         );
 
         if (!is_batched && !is_permuted && L.total_bytes <= vtcm_budget) {
@@ -2499,7 +2500,7 @@ static void ggml_hexagon_precompute_hvx_mm_params(
             kparams->src1_row_size = src1->nb[1];
             htp_mm_hvx_vtcm_layout_build(
                 &L, kparams->kernel_type, wtype, ne10, src1_nrows, sess->n_threads,
-                dst->nb[1], src0->nb[1], src1->nb[1], 16, false, false, false
+                dst->nb[1], src0->nb[1], src1->nb[1], src2_row_size, 16, false, false, false
             );
             kparams->vtcm_size = L.total_bytes;
             kparams->vtcm_src0_size = L.src0_bytes;
@@ -2510,11 +2511,12 @@ static void ggml_hexagon_precompute_hvx_mm_params(
     }
 }
 
-static void ggml_hexagon_precompute_matmul_params(
+static void ggml_hexagon_precompute_matmul_params_impl(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * src0,
     const struct ggml_tensor * src1,
     const struct ggml_tensor * dst,
+    const size_t src2_row_size,
     struct htp_mm_kernel_params * kparams
 ) {
     memset(kparams, 0, sizeof(*kparams));
@@ -2549,7 +2551,7 @@ static void ggml_hexagon_precompute_matmul_params(
     }
 
     // Fallback to HVX parameter computation
-    ggml_hexagon_precompute_hvx_mm_params(sess, src0, src1, dst, wtype, ne02, ne03, ne10, ne11, ne12, ne13, is_matmul_id, vtcm_budget, kparams);
+    ggml_hexagon_precompute_hvx_mm_params(sess, src0, src1, dst, wtype, ne02, ne03, ne10, ne11, ne12, ne13, is_matmul_id, src2_row_size, vtcm_budget, kparams);
 
 finalize:
     kparams->div_ne12_ne1 = init_fastdiv_values(ne12 * ne11);
@@ -2557,6 +2559,27 @@ finalize:
     kparams->div_r2       = init_fastdiv_values(ne02 > 0 ? ne12 / ne02 : 1);
     kparams->div_r3       = init_fastdiv_values(ne03 > 0 ? ne13 / ne03 : 1);
     kparams->div_ne11     = init_fastdiv_values(ne11);
+}
+
+static void ggml_hexagon_precompute_matmul_params(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * src0,
+    const struct ggml_tensor * src1,
+    const struct ggml_tensor * dst,
+    struct htp_mm_kernel_params * kparams
+) {
+    ggml_hexagon_precompute_matmul_params_impl(sess, src0, src1, dst, 0, kparams);
+}
+
+static void ggml_hexagon_precompute_fused_matmul_add_params(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * src0,
+    const struct ggml_tensor * src1,
+    const struct ggml_tensor * src2,
+    const struct ggml_tensor * dst,
+    struct htp_mm_kernel_params * kparams
+) {
+    ggml_hexagon_precompute_matmul_params_impl(sess, src0, src1, dst, src2->nb[1], kparams);
 }
 
 static void ggml_hexagon_precompute_unary_params(
@@ -2652,7 +2675,7 @@ static void ggml_hexagon_precompute_fused_qkv_params(
             struct htp_mm_hvx_vtcm_layout L;
             htp_mm_hvx_vtcm_layout_build(
                 &L, HTP_MM_KERNEL_HVX_QUANT_ROW, wtype, ne10, src1_nrows, sess->n_threads,
-                0, src0_row_size, src1_row_size, d, false, true, false
+                0, src0_row_size, src1_row_size, 0, d, false, true, false
             );
             if (L.total_bytes <= sess->vtcm_size) {
                 best_n_prefetch = d;
@@ -2667,7 +2690,7 @@ static void ggml_hexagon_precompute_fused_qkv_params(
     // Test tiled first
     htp_mm_hvx_vtcm_layout_build(
         &L, HTP_MM_KERNEL_HVX_QUANT_ROW, wtype, ne10, src1_nrows, sess->n_threads,
-        0, src0_row_size, src1_row_size, best_n_prefetch, false, true, false
+        0, src0_row_size, src1_row_size, 0, best_n_prefetch, false, true, false
     );
 
     if (try_tiled && L.total_bytes <= sess->vtcm_size) {
@@ -2685,7 +2708,7 @@ static void ggml_hexagon_precompute_fused_qkv_params(
 
         htp_mm_hvx_vtcm_layout_build(
             &L, HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT, wtype, ne10, src1_nrows, sess->n_threads,
-            0, src0_row_size, flat_src1_row_size, best_n_prefetch, false, true, false
+            0, src0_row_size, flat_src1_row_size, 0, best_n_prefetch, false, true, false
         );
         kparams->vtcm_src0_size = L.src0_bytes;
         kparams->vtcm_src1_size = L.src1_bytes;
@@ -2722,7 +2745,7 @@ static void ggml_hexagon_precompute_fused_ffn_params(
             struct htp_mm_hvx_vtcm_layout L;
             htp_mm_hvx_vtcm_layout_build(
                 &L, HTP_MM_KERNEL_HVX_QUANT_ROW, wtype, ne10, src1_nrows, sess->n_threads,
-                0, src0_row_size, src1_row_size, d, false, false, true
+                0, src0_row_size, src1_row_size, 0, d, false, false, true
             );
             if (L.total_bytes <= sess->vtcm_size) {
                 best_n_prefetch = d;
@@ -2737,7 +2760,7 @@ static void ggml_hexagon_precompute_fused_ffn_params(
     // Test tiled first
     htp_mm_hvx_vtcm_layout_build(
         &L, HTP_MM_KERNEL_HVX_QUANT_ROW, wtype, ne10, src1_nrows, sess->n_threads,
-        0, src0_row_size, src1_row_size, best_n_prefetch, false, false, true
+        0, src0_row_size, src1_row_size, 0, best_n_prefetch, false, false, true
     );
 
     if (try_tiled && L.total_bytes <= sess->vtcm_size) {
@@ -2754,7 +2777,7 @@ static void ggml_hexagon_precompute_fused_ffn_params(
 
         htp_mm_hvx_vtcm_layout_build(
             &L, HTP_MM_KERNEL_HVX_QUANT_ROW_FLAT, wtype, ne10, src1_nrows, sess->n_threads,
-            0, src0_row_size, flat_src1_row_size, best_n_prefetch, false, false, true
+            0, src0_row_size, flat_src1_row_size, 0, best_n_prefetch, false, false, true
         );
         kparams->vtcm_src0_size = L.src0_bytes;
         kparams->vtcm_src1_size = L.src1_bytes;
@@ -3577,16 +3600,19 @@ static bool try_fuse_node(const ggml_hexagon_session * sess, const ggml_cgraph *
     if (n->op == GGML_OP_MUL_MAT && next_node) {
         if (next_node->op == GGML_OP_ADD && op_is_compute(next_node) && ggml_can_fuse(graph, i, { GGML_OP_MUL_MAT, GGML_OP_ADD })) {
             if (next_node->src[0] == n || next_node->src[1] == n) {
+                const struct ggml_tensor * src2 = (next_node->src[0] == n) ? next_node->src[1] : next_node->src[0];
                 struct htp_mm_kernel_params kparams;
-                ggml_hexagon_precompute_matmul_params(sess, n->src[0], n->src[1], next_node, &kparams);
-                if ((size_t)kparams.vtcm_size <= sess->vtcm_size) {
+                ggml_hexagon_precompute_fused_matmul_add_params(sess, n->src[0], n->src[1], src2, next_node, &kparams);
+                const int src1_nrows = n->src[1]->ne[1] * n->src[1]->ne[2] * n->src[1]->ne[3];
+                const bool can_fuse = (kparams.n_hmx > 0) || (src1_nrows == 1);
+                if (can_fuse && (size_t)kparams.vtcm_size <= sess->vtcm_size) {
                     htp_opnode node(n, {}, HTP_OP_MUL_MAT_ADD);
                     node.add_fused(next_node);
                     memcpy(node.kernel_params, &kparams, sizeof(kparams));
                     nodes.push_back(std::move(node));
                     i += 1;
                     return true;
-                } else {
+                } else if (can_fuse) {
                     HEX_VERBOSE("ggml-hex: skip MUL_MAT_ADD fusion because VTCM needed (%d) > budget (%zu)\n",
                                 kparams.vtcm_size, sess->vtcm_size);
                 }
