@@ -4534,6 +4534,7 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
                 create_mm_pipelines(key, tc, name, len, data, pc_size, pc, qs, false, rsgs > 0, rsgs);
             }
         };
+#if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
         auto sg_create_mmq = [&](vk_matmul_pipeline_key key, const std::vector<vk_tile_config>& tc_base,
                                  const std::string& name, size_t len, const void* data, uint32_t pc_size, uint32_t pc,
                                  uint32_t rsgs = 0) {
@@ -4543,6 +4544,7 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
                 create_mm_pipelines(key, tc, name, len, data, pc_size, pc, identity, false, rsgs > 0, rsgs, false);
             }
         };
+#endif
 
         std::vector<vk_tile_config> tc_id = {{s_warptile_id, s_wg_denoms, s_align}, {m_warptile_id, m_wg_denoms, m_align}, {l_warptile_id, l_wg_denoms, l_align}};
         std::vector<vk_tile_config> tc_mmqid = {{s_warptile_mmqid, s_mmq_wg_denoms, s_align}, {m_warptile_mmqid, m_mmq_wg_denoms, m_align}, {l_warptile_mmqid, l_mmq_wg_denoms, l_align}};
