@@ -1696,19 +1696,6 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
             return true;
         }
 
-        // KleidiAI only provides kernels for Q4_0, Q8_0 and F32. A model quantized to any other
-        // type (K-quants, IQ) silently uses the generic ggml CPU kernels. Warn once so users do
-        // not assume KleidiAI is accelerating a weight type it has no kernel for.
-        if ((op->op == GGML_OP_MUL_MAT || op->op == GGML_OP_GET_ROWS) &&
-            ggml_is_quantized(op->src[0]->type) &&
-            op->src[0]->type != GGML_TYPE_Q4_0 && op->src[0]->type != GGML_TYPE_Q8_0 &&
-            op->src[0]->buffer && op->src[0]->buffer->buft == ggml_backend_cpu_kleidiai_buffer_type()) {
-            static std::atomic<bool> warned(false);
-            if (!warned.exchange(true)) {
-                GGML_LOG_WARN("kleidiai: no kernels for tensor type %s; falling back to generic CPU kernels\n",
-                              ggml_type_name(op->src[0]->type));
-            }
-        }
         return false;
     }
 
@@ -1717,6 +1704,19 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
             if (op->src[0]->buffer && op->src[0]->buffer->buft == ggml_backend_cpu_kleidiai_buffer_type()) {
                 return (ggml::cpu::tensor_traits *) op->src[0]->extra;
             } else {
+                // KleidiAI only provides kernels for Q4_0, Q8_0 and F32. A quantized weight of
+                // any other type (K-quants, IQ) executes on the generic ggml CPU kernels. This
+                // runs per node of a graph being computed, not in supports_op(), which the
+                // scheduler may call speculatively before any operator executes, so it fires
+                // only when a real fallback occurs. Warn once per process.
+                if (ggml_is_quantized(op->src[0]->type) &&
+                    op->src[0]->type != GGML_TYPE_Q4_0 && op->src[0]->type != GGML_TYPE_Q8_0) {
+                    static std::atomic<bool> warned(false);
+                    if (!warned.exchange(true)) {
+                        GGML_LOG_WARN("kleidiai: no kernels for tensor type %s; falling back to generic CPU kernels\n",
+                                      ggml_type_name(op->src[0]->type));
+                    }
+                }
                 if (op->src[0]->type != GGML_TYPE_F16) {
                     return nullptr;
                 }
