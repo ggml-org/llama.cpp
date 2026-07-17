@@ -54,6 +54,34 @@ const COLOR_MODE_OPTIONS: Array<{ value: string; label: string; icon: Component 
 	{ value: ColorMode.DARK, label: 'Dark', icon: Moon }
 ];
 
+// Shared options for the title-generation radio group. Both paired registry entries
+// (USE_FIRST_LINE, USE_LLM) reference this list so labels stay in lockstep.
+const TITLE_GENERATION_RADIO_OPTIONS: Array<{
+	value: string;
+	label: string;
+	key: string;
+	isExperimental?: boolean;
+}> = [
+	{
+		value: 'firstLine',
+		label: 'Use first non-empty line for the conversation title',
+		key: SETTINGS_KEYS.TITLE_GENERATION_USE_FIRST_LINE
+	},
+	{
+		value: 'llm',
+		label: 'Generate title with LLM',
+		key: SETTINGS_KEYS.TITLE_GENERATION_USE_LLM,
+		isExperimental: true
+	}
+];
+
+// Common shape shared between the two title-generation registry entries.
+const TITLE_GENERATION_BASE = {
+	type: SettingsFieldType.RADIO,
+	section: SETTINGS_SECTION_SLUGS.GENERAL,
+	radioOptions: TITLE_GENERATION_RADIO_OPTIONS
+} as const;
+
 const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 	[SETTINGS_SECTION_SLUGS.GENERAL]: {
 		title: SETTINGS_SECTION_TITLES.GENERAL,
@@ -115,18 +143,6 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				}
 			},
 			{
-				key: SETTINGS_KEYS.COPY_TEXT_ATTACHMENTS_AS_PLAIN_TEXT,
-				label: 'Copy text attachments as plain text',
-				help: 'When copying a message with text attachments, combine them into a single plain text string instead of a special format that can be pasted back as attachments.',
-				defaultValue: false,
-				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.GENERAL,
-				sync: {
-					serverKey: SETTINGS_KEYS.COPY_TEXT_ATTACHMENTS_AS_PLAIN_TEXT,
-					paramType: SyncableParameterType.BOOLEAN
-				}
-			},
-			{
 				key: SETTINGS_KEYS.ENABLE_CONTINUE_GENERATION,
 				label: 'Enable "Continue" button',
 				help: 'Enable "Continue" button for assistant messages, including reasoning models.',
@@ -140,37 +156,24 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				}
 			},
 			{
-				key: SETTINGS_KEYS.PDF_AS_IMAGE,
-				label: 'Parse PDF as image',
-				help: 'Parse PDF as image instead of text. Automatically falls back to text processing for non-vision models.',
-				defaultValue: false,
-				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.GENERAL,
-				sync: {
-					serverKey: SETTINGS_KEYS.PDF_AS_IMAGE,
-					paramType: SyncableParameterType.BOOLEAN
-				}
-			},
-			{
+				...TITLE_GENERATION_BASE,
 				key: SETTINGS_KEYS.TITLE_GENERATION_USE_FIRST_LINE,
-				label: 'Use first non-empty line for conversation title',
-				help: 'Use only the first non-empty line of the prompt to generate the conversation title.',
-				defaultValue: false,
-				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.GENERAL,
+				label: 'Conversation title',
+				help: 'Choose how conversation titles are generated. The first non-empty line uses a fast deterministic rule; the LLM option uses a model-generated title from the first message exchange.',
+				defaultValue: true,
+				pairedKey: SETTINGS_KEYS.TITLE_GENERATION_USE_LLM,
 				sync: {
 					serverKey: SETTINGS_KEYS.TITLE_GENERATION_USE_FIRST_LINE,
 					paramType: SyncableParameterType.BOOLEAN
 				}
 			},
 			{
+				...TITLE_GENERATION_BASE,
 				key: SETTINGS_KEYS.TITLE_GENERATION_USE_LLM,
-				label: 'Use LLM to generate conversation title',
-				help: 'Use the LLM to automatically generate conversation titles based on the first message exchange.',
+				label: SETTINGS_KEYS.TITLE_GENERATION_USE_LLM,
+				help: 'Counterpart of TITLE_GENERATION_USE_FIRST_LINE; rendered inside the paired radio group.',
 				defaultValue: false,
-				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.GENERAL,
-				isExperimental: true,
+				pairedKey: SETTINGS_KEYS.TITLE_GENERATION_USE_FIRST_LINE,
 				sync: {
 					serverKey: SETTINGS_KEYS.TITLE_GENERATION_USE_LLM,
 					paramType: SyncableParameterType.BOOLEAN
@@ -183,9 +186,34 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				defaultValue: TITLE_GENERATION.DEFAULT_PROMPT,
 				type: SettingsFieldType.TEXTAREA,
 				section: SETTINGS_SECTION_SLUGS.GENERAL,
+				dependsOn: SETTINGS_KEYS.TITLE_GENERATION_USE_LLM,
 				sync: {
 					serverKey: SETTINGS_KEYS.TITLE_GENERATION_PROMPT,
 					paramType: SyncableParameterType.STRING
+				}
+			},
+			{
+				key: SETTINGS_KEYS.COPY_TEXT_ATTACHMENTS_AS_PLAIN_TEXT,
+				label: 'Copy text attachments as plain text',
+				help: 'When copying a message with text attachments, combine them into a single plain text string instead of a special format that can be pasted back as attachments.',
+				defaultValue: false,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.GENERAL,
+				sync: {
+					serverKey: SETTINGS_KEYS.COPY_TEXT_ATTACHMENTS_AS_PLAIN_TEXT,
+					paramType: SyncableParameterType.BOOLEAN
+				}
+			},
+			{
+				key: SETTINGS_KEYS.PDF_AS_IMAGE,
+				label: 'Parse PDF as image',
+				help: 'Parse PDF as image instead of text. Automatically falls back to text processing for non-vision models.',
+				defaultValue: false,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.GENERAL,
+				sync: {
+					serverKey: SETTINGS_KEYS.PDF_AS_IMAGE,
+					paramType: SyncableParameterType.BOOLEAN
 				}
 			},
 			{
@@ -800,7 +828,9 @@ export const SETTINGS_CHAT_SECTIONS: SettingsSection[] = [
 			isPositiveInteger: s.isPositiveInteger,
 			dependsOn: s.dependsOn,
 			help: s.help,
-			options: s.options
+			options: s.options,
+			pairedKey: s.pairedKey,
+			radioOptions: s.radioOptions
 		}))
 	})),
 	...STANDALONE_SECTIONS

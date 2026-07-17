@@ -27,6 +27,10 @@ export interface SettingsEntry {
 	type: SettingsFieldType;
 	section?: string;
 	options?: Array<{ value: string; label: string; icon: Component }>;
+	/** Mutually exclusive counterpart key (for RADIO fields that toggle two booleans). */
+	pairedKey?: string;
+	/** Options rendered for RADIO fields. Each entry maps a `value` (the radio's selected value) to the underlying config `key` whose boolean state mirrors it. */
+	radioOptions?: Array<{ value: string; label: string; key: string; isExperimental?: boolean }>;
 	isExperimental?: boolean;
 	isPositiveInteger?: boolean;
 	dependsOn?: string;
@@ -53,6 +57,10 @@ export interface SettingsFieldConfig {
 	dependsOn?: string;
 	help?: string;
 	options?: Array<{ value: string; label: string; icon?: typeof Icon }>;
+	/** Mutually exclusive counterpart key (for RADIO fields that toggle two booleans). */
+	pairedKey?: string;
+	/** Options rendered for RADIO fields. Each entry maps a `value` (the radio's selected value) to the underlying config `key` whose boolean state mirrors it. */
+	radioOptions?: Array<{ value: string; label: string; key: string; isExperimental?: boolean }>;
 }
 
 /** Re-exported for backward compatibility. */

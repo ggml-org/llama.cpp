@@ -4,6 +4,7 @@
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { Input } from '$lib/components/ui/input';
 	import Label from '$lib/components/ui/label/label.svelte';
+	import * as RadioGroup from '$lib/components/ui/radio-group';
 	import * as Select from '$lib/components/ui/select';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { SETTING_CONFIG_INFO, SETTINGS_KEYS } from '$lib/constants';
@@ -44,7 +45,9 @@
 </script>
 
 {#each fields as field (field.key)}
-	{#if !field.dependsOn || Boolean(localConfig[field.dependsOn])}
+	{@const isPairedCounterpart =
+		Boolean(field.pairedKey) && field.key! > field.pairedKey!}
+	{#if !isPairedCounterpart && (!field.dependsOn || Boolean(localConfig[field.dependsOn]))}
 		<div class={field.dependsOn ? 'space-y-2 pl-6' : 'space-y-2'}>
 			{#if field.type === SettingsFieldType.INPUT}
 				{@const currentValue = String(localConfig[field.key] ?? '')}
@@ -233,6 +236,49 @@
 				</Select.Root>
 				{#if field.help || SETTING_CONFIG_INFO[field.key]}
 					<p class="mt-1 text-xs text-muted-foreground">
+						{field.help || SETTING_CONFIG_INFO[field.key]}
+					</p>
+				{/if}
+			{:else if field.type === SettingsFieldType.RADIO && field.radioOptions}
+				{@const radioOptions = field.radioOptions}
+				{@const currentMode =
+					radioOptions.find((o: { key: string }) => Boolean(localConfig[o.key]))?.value ??
+					radioOptions[0].value}
+
+				<Label class="flex items-center gap-1.5 text-sm font-medium mb-4">
+					{field.label}
+
+					{#if field.isExperimental}
+						<FlaskConical class="h-3.5 w-3.5 text-muted-foreground" />
+					{/if}
+				</Label>
+
+				<RadioGroup.Root
+				    class="gap-4"
+					value={currentMode}
+					onValueChange={(value) => {
+						for (const opt of radioOptions) {
+							onConfigChange(opt.key, opt.value === value);
+						}
+					}}
+				>
+					{#each radioOptions as opt (opt.value)}
+						{@const itemId = `${field.key}-${opt.value}`}
+						<div class="flex items-center gap-2">
+							<RadioGroup.Item value={opt.value} id={itemId} />
+							<Label for={itemId} class="flex cursor-pointer items-center gap-1.5 text-sm font-normal">
+								{opt.label}
+
+								{#if opt.isExperimental}
+									<FlaskConical class="h-3.5 w-3.5 text-muted-foreground" />
+								{/if}
+							</Label>
+						</div>
+					{/each}
+				</RadioGroup.Root>
+
+				{#if field.help || SETTING_CONFIG_INFO[field.key]}
+					<p class="text-xs text-muted-foreground">
 						{field.help || SETTING_CONFIG_INFO[field.key]}
 					</p>
 				{/if}
