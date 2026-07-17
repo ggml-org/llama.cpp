@@ -3795,13 +3795,12 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
     UNUSED(blocklen);
 
 #if defined(__aarch64__) && defined(__ARM_FEATURE_SVE) && defined(__ARM_FEATURE_MATMUL_INT8)
-    
     switch(svcntb() * 8){
         case 256:
         {
             const svuint8_t m4b_1          = svdup_n_u8(0x0f);
             
-            //SV_VL8 would enable lower 8 lanes, since we're only loading 8 VALUES here this should work for higher VLs as well 
+            // 8 accumulators: 2 row pairs × 4 col pairs
             svfloat32_t acc_f32_01, acc_f32_23, acc_f32_45, acc_f32_67;
             uint32_t idx_arr[8] = { 0, 2, 4, 6,  1, 3, 5, 7 };
             svbool_t pg = svptrue_pat_b32(SV_VL8);
@@ -3821,7 +3820,7 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                     acc_f32_45 = svdup_n_f32(0);
                     acc_f32_67 = svdup_n_f32(0);
 
-                    for (int b = 0; b < nb; b++) { //nb is number of quantization blocks
+                    for (int b = 0; b < nb; b++) {
                         // bsums pairs belongs to the same q8_k subblock
                         // 64 elements loaded and made sum of 0-7 and 8-15 sum || 16-23 and 24 - 31 sum
                         const int16x8_t bsums[4]{
@@ -3930,7 +3929,7 @@ void ggml_gemm_q4_K_8x8_q8_K(int                        n,
                                 block_scale_1 = svtbl_s32(svzip2_s32(S01_d, R01_d), idx);
                                 block_scale_2 = svtbl_s32(svzip1_s32(S23_d, R23_d), idx);
                                 block_scale_3 = svtbl_s32(svzip2_s32(S23_d, R23_d), idx);
-                            } //This Q4_K scale computation should also remain the same
+                            }
 
                             const int8_t * q8_base_1 = q8_ptr[b].qs + sb * 256;
 
