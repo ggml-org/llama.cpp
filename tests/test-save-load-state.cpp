@@ -78,7 +78,84 @@ static llama_tokens test_baseline(struct llama_model * model, const struct commo
 }
 
 
-// Test 2: state load
+// Test 2: sequence removal isolation
+// - decode the same prefix into two sequences
+// - remove sequence 0
+// - verify that sequence 1 remains unchanged
+static bool test_seq_rm_isolated(
+        struct llama_model         * model,
+        const struct common_params & params,
+        const llama_tokens         & tokens) {
+    auto params_ctx = common_context_params_to_llama(params);
+    params_ctx.n_ctx      = 256;
+    params_ctx.n_seq_max  = 2;
+    params_ctx.kv_unified = true;
+
+    auto ctx = llama_context_ptr{llama_init_from_model(model, params_ctx)};
+    if (!ctx) {
+        LOG_ERR("%s: failed to create context\n", __func__);
+        return false;
+    }
+
+    LOG("\n=== Test 2: sequence removal isolation ===\n");
+
+    const size_t n_tokens = tokens.size() < 128 ? tokens.size() : 128;
+    for (llama_seq_id seq_id = 0; seq_id < 2; ++seq_id) {
+        llama_batch_ptr batch(n_tokens, 0, 1);
+        for (size_t i = 0; i < n_tokens; ++i) {
+            common_batch_add(batch.get(), tokens[i], i, { seq_id }, false);
+        }
+
+        if (llama_decode(ctx.get(), batch.get())) {
+            LOG_ERR("%s: failed to decode prompt for sequence %d\n", __func__, seq_id);
+            return false;
+        }
+    }
+
+    const auto get_seq_state = [&](llama_seq_id seq_id, std::vector<uint8_t> & state) {
+        const size_t state_size = llama_state_seq_get_size(ctx.get(), seq_id);
+        if (state_size == 0) {
+            LOG_ERR("%s: sequence state is empty\n", __func__);
+            return false;
+        }
+
+        state.resize(state_size);
+        const size_t ncopy = llama_state_seq_get_data(ctx.get(), state.data(), state.size(), seq_id);
+        if (ncopy != state.size()) {
+            LOG_ERR("%s: sequence state length %zu does not match expected length %zu\n",
+                    __func__, ncopy, state.size());
+            return false;
+        }
+
+        return true;
+    };
+
+    std::vector<uint8_t> state_before;
+    if (!get_seq_state(1, state_before)) {
+        return false;
+    }
+
+    if (!llama_memory_seq_rm(llama_get_memory(ctx.get()), 0, -1, -1)) {
+        LOG_ERR("%s: failed to remove sequence 0\n", __func__);
+        return false;
+    }
+
+    std::vector<uint8_t> state_after;
+    if (!get_seq_state(1, state_after)) {
+        return false;
+    }
+
+    if (state_before != state_after) {
+        LOG_ERR("%s: removing sequence 0 changed sequence 1\n", __func__);
+        return false;
+    }
+
+    LOG("PASS\n");
+    return true;
+}
+
+
+// Test 3: state load
 // - create a new context
 // - load state from file
 // - replay the last prompt token
@@ -90,7 +167,7 @@ static bool test_state_load(struct llama_model * model, const struct common_para
     auto smpl = llama_sampler_ptr{llama_sampler_chain_init(sparams)};
     llama_sampler_chain_add(smpl.get(), llama_sampler_init_dist(params.sampling.seed));
 
-    LOG("\n=== Test 2: state load ===\n");
+    LOG("\n=== Test 3: state load ===\n");
 
     // Load state from file
     llama_tokens unused_sts(tokens.size());
@@ -126,7 +203,7 @@ static bool test_state_load(struct llama_model * model, const struct common_para
 }
 
 
-// Test 3: seq copy (host)
+// Test 4: seq copy (host)
 // - create a multi-seq context
 // - load state from file
 // - replay the last prompt token
@@ -141,7 +218,7 @@ static bool test_seq_cp_host(struct llama_model * model, const struct common_par
     auto smpl = llama_sampler_ptr{llama_sampler_chain_init(sparams)};
     llama_sampler_chain_add(smpl.get(), llama_sampler_init_dist(params.sampling.seed));
 
-    LOG("\n=== Test 3: seq copy (host) ===\n");
+    LOG("\n=== Test 4: seq copy (host) ===\n");
 
     // Load state from file
     llama_tokens unused_sts(tokens.size());
@@ -198,7 +275,7 @@ static bool test_seq_cp_host(struct llama_model * model, const struct common_par
 }
 
 
-// Test 4: seq copy (device)
+// Test 5: seq copy (device)
 // - create a multi-seq context
 // - load state from file
 // - replay the last prompt token
@@ -213,7 +290,7 @@ static bool test_seq_cp_device(struct llama_model * model, const struct common_p
     auto smpl = llama_sampler_ptr{llama_sampler_chain_init(sparams)};
     llama_sampler_chain_add(smpl.get(), llama_sampler_init_dist(params.sampling.seed));
 
-    LOG("\n=== Test 4: seq copy (device) ===\n");
+    LOG("\n=== Test 5: seq copy (device) ===\n");
 
     // Load state from file
     llama_tokens unused_sts(tokens.size());
@@ -337,17 +414,22 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    // Test 2: state load
+    // Test 2: sequence removal isolation
+    if (!test_seq_rm_isolated(model, params, tokens)) {
+        return 1;
+    }
+
+    // Test 3: state load
     if (!test_state_load(model, params, tokens, result_baseline)) {
         return 1;
     }
 
-    // Test 3: seq copy (host)
+    // Test 4: seq copy (host)
     if (!test_seq_cp_host(model, params, tokens, result_baseline)) {
         return 1;
     }
 
-    // Test 4: seq copy (device)
+    // Test 5: seq copy (device)
     if (!test_seq_cp_device(model, params, tokens, result_baseline)) {
         return 1;
     }

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { Copy } from '@lucide/svelte';
 	import { copyToClipboard } from '$lib/utils';
 	import ActionIcon from './ActionIcon.svelte';
@@ -11,7 +12,7 @@
 <ActionIcon
 	icon={Copy}
 	tooltip={ariaLabel}
-	iconSize="h-4 w-4"
+	iconSize={ICON_CLASS_DEFAULT}
 	disabled={!canCopy}
 	onclick={() => canCopy && copyToClipboard(text)}
 />

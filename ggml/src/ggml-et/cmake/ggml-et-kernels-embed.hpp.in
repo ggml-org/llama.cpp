@@ -1,0 +1,12 @@
+// Auto-generated kernel embeddings. Do not edit.
+#pragma once
+
+#include <cstdint>
+#include <unordered_map>
+#include <string>
+#include <utility>
+
+@EMBED_EXTERNS@
+
+// Kernel name -> (data, length) lookup map
+extern const std::unordered_map<std::string, std::pair<const unsigned char*, uint64_t>> ggml_et_embedded_kernels;

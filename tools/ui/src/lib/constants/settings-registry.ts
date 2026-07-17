@@ -24,11 +24,9 @@ import type {
 	SettingsSection
 } from '$lib/types';
 import { CLI_FLAGS, DEFAULT_MCP_CONFIG } from '$lib/constants';
-import McpLogo from '$lib/components/app/mcp/McpLogo.svelte';
 import { SETTINGS_KEYS } from './settings-keys';
 import { ROUTES, SETTINGS_SECTION_SLUGS } from './routes';
 import { TITLE_GENERATION } from './title-generation';
-import { RECOMMENDED_MCP_SERVERS } from './recommended-mcp-servers';
 
 export const SETTINGS_SECTION_TITLES = {
 	GENERAL: 'General',
@@ -37,7 +35,6 @@ export const SETTINGS_SECTION_TITLES = {
 	PENALTIES: 'Penalties',
 	AGENTIC: 'Agentic',
 	TOOLS: 'Tools',
-	MCP: 'MCP',
 	IMPORT_EXPORT: 'Import/Export',
 	DEVELOPER: 'Developer'
 } as const;
@@ -226,13 +223,22 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				key: SETTINGS_KEYS.SHOW_MESSAGE_STATS,
 				label: 'Show message generation statistics',
 				help: 'Display generation statistics (tokens/second, token count, duration) below each assistant message.',
-				defaultValue: true,
+				defaultValue: false,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.DISPLAY,
 				sync: {
 					serverKey: SETTINGS_KEYS.SHOW_MESSAGE_STATS,
 					paramType: SyncableParameterType.BOOLEAN
 				}
+			},
+			{
+				key: SETTINGS_KEYS.SHOW_AGENTIC_TURN_STATS,
+				label: 'Show statistics for individual agentic turns',
+				help: 'Display per-turn statistics (tokens, duration) under each turn in agentic responses. Shown only when "Show message generation statistics" is enabled.',
+				defaultValue: false,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.DISPLAY,
+				dependsOn: SETTINGS_KEYS.SHOW_MESSAGE_STATS
 			},
 			{
 				key: SETTINGS_KEYS.SHOW_THOUGHT_IN_PROGRESS,
@@ -255,18 +261,6 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				section: SETTINGS_SECTION_SLUGS.DISPLAY,
 				sync: {
 					serverKey: SETTINGS_KEYS.SHOW_TOOL_CALL_IN_PROGRESS,
-					paramType: SyncableParameterType.BOOLEAN
-				}
-			},
-			{
-				key: SETTINGS_KEYS.KEEP_STATS_VISIBLE,
-				label: 'Keep stats visible after generation',
-				help: 'Keep processing statistics visible after generation finishes.',
-				defaultValue: false,
-				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DISPLAY,
-				sync: {
-					serverKey: SETTINGS_KEYS.KEEP_STATS_VISIBLE,
 					paramType: SyncableParameterType.BOOLEAN
 				}
 			},
@@ -376,18 +370,6 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				section: SETTINGS_SECTION_SLUGS.DISPLAY,
 				sync: {
 					serverKey: SETTINGS_KEYS.SHOW_MODEL_TAGS,
-					paramType: SyncableParameterType.BOOLEAN
-				}
-			},
-			{
-				key: SETTINGS_KEYS.ALWAYS_SHOW_AGENTIC_TURNS,
-				label: 'Always show agentic turns in conversation',
-				help: 'Always expand and display agentic loop turns in conversation messages.',
-				defaultValue: false,
-				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DISPLAY,
-				sync: {
-					serverKey: SETTINGS_KEYS.ALWAYS_SHOW_AGENTIC_TURNS,
 					paramType: SyncableParameterType.BOOLEAN
 				}
 			},
@@ -660,15 +642,15 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				}
 			},
 			{
-				key: SETTINGS_KEYS.AGENTIC_MAX_TOOL_PREVIEW_LINES,
-				label: 'Max lines per tool preview',
-				help: 'Number of lines shown in tool output previews (last N lines). Only these previews and the final LLM response persist after the agentic loop completes.',
-				defaultValue: 25,
+				key: SETTINGS_KEYS.MCP_REQUEST_TIMEOUT_SECONDS,
+				label: 'MCP request timeout (seconds)',
+				help: 'Timeout for individual MCP tool calls.',
+				defaultValue: DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.AGENTIC,
 				isPositiveInteger: true,
 				sync: {
-					serverKey: SETTINGS_KEYS.AGENTIC_MAX_TOOL_PREVIEW_LINES,
+					serverKey: SETTINGS_KEYS.MCP_REQUEST_TIMEOUT_SECONDS,
 					paramType: SyncableParameterType.NUMBER
 				}
 			}
@@ -760,26 +742,6 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				}
 			}
 		]
-	},
-	[SETTINGS_SECTION_SLUGS.MCP]: {
-		title: SETTINGS_SECTION_TITLES.MCP,
-		slug: SETTINGS_SECTION_SLUGS.MCP,
-		icon: McpLogo,
-		settings: [
-			{
-				key: SETTINGS_KEYS.MCP_REQUEST_TIMEOUT_SECONDS,
-				label: 'Request timeout (seconds)',
-				help: 'Default timeout for individual MCP tool calls. Can be overridden per server.',
-				defaultValue: DEFAULT_MCP_CONFIG.requestTimeoutSeconds,
-				type: SettingsFieldType.INPUT,
-				section: SETTINGS_SECTION_SLUGS.MCP,
-				isPositiveInteger: true,
-				sync: {
-					serverKey: SETTINGS_KEYS.MCP_REQUEST_TIMEOUT_SECONDS,
-					paramType: SyncableParameterType.NUMBER
-				}
-			}
-		]
 	}
 } as const;
 
@@ -799,16 +761,9 @@ const NON_UI_SETTINGS: SettingsEntry[] = [
 		key: SETTINGS_KEYS.MCP_SERVERS,
 		label: 'MCP servers',
 		help: 'Configure MCP servers as a JSON list. Use the form in the MCP Client settings section to edit.',
-		defaultValue: JSON.stringify(RECOMMENDED_MCP_SERVERS),
+		defaultValue: '[]',
 		type: SettingsFieldType.INPUT,
 		sync: { serverKey: SETTINGS_KEYS.MCP_SERVERS, paramType: SyncableParameterType.STRING }
-	},
-	{
-		key: SETTINGS_KEYS.MCP_DEFAULT_SERVER_OVERRIDES,
-		label: 'MCP default server overrides',
-		help: 'Per-server enable/disable defaults inherited by new chats. JSON-serialized list of {serverId, enabled} entries.',
-		defaultValue: '[]',
-		type: SettingsFieldType.INPUT
 	}
 	// {
 	// 	key: SETTINGS_KEYS.PY_INTERPRETER_ENABLED,
@@ -843,9 +798,6 @@ export const SETTING_CONFIG_INFO: Record<string, string> = Object.fromEntries(
 /** Theme select options. */
 export const SETTINGS_COLOR_MODES_CONFIG = COLOR_MODE_OPTIONS;
 
-export type { SettingsSectionTitle } from '$lib/types';
-export type { SettingsSection } from '$lib/types';
-
 /** Sidebar sections + field configs (as consumed by UI). */
 export const SETTINGS_CHAT_SECTIONS: SettingsSection[] = [
 	...Object.values(SETTINGS_REGISTRY).map((section) => ({
@@ -858,6 +810,7 @@ export const SETTINGS_CHAT_SECTIONS: SettingsSection[] = [
 			type: s.type,
 			isExperimental: s.isExperimental,
 			isPositiveInteger: s.isPositiveInteger,
+			dependsOn: s.dependsOn,
 			help: s.help,
 			options: s.options
 		}))
@@ -886,5 +839,3 @@ export const SYNCABLE_PARAMETERS: SyncableParameter[] = getAllSettings()
 	}));
 
 export const SETTINGS_FALLBACK_EXIT_ROUTE = ROUTES.START;
-
-export { SETTINGS_KEYS } from './settings-keys';

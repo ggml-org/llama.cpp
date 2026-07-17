@@ -6,7 +6,7 @@ on:
     branches:
       - master
     paths: [
-      '.github/workflows/build.yml',
+      '.github/workflows/build-self-hosted.yml',
       '**/CMakeLists.txt',
       '**/.cmake',
       '**/*.h',
@@ -48,6 +48,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # note: this is dud token to avoid rate limiting (https://github.com/ggml-org/llama.cpp/pull/25706#issuecomment-4979941302)
+  HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
   GGML_NLOOP: 3
   GGML_N_THREADS: 1
   LLAMA_ARG_LOG_COLORS: 1

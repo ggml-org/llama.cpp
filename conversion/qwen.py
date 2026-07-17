@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from typing import Any, Callable, Iterable, TYPE_CHECKING
 
 import torch
@@ -541,6 +543,7 @@ class _Qwen35MtpMixin:
     `mtp.*` to the standard layer-indexed nextn naming so the existing
     tensor_map handles them."""
 
+    supports_mtp_export = True
     hparams: dict[str, Any]
     model_arch: gguf.MODEL_ARCH
     gguf_writer: gguf.GGUFWriter
@@ -640,7 +643,19 @@ class DFlashModel(Qwen3Model):
         logger.info(f"DFlash: Using tokenizer from target model: {self.target_model_dir}")
         original_dir = self.dir_model
         self.dir_model = self.target_model_dir
-        super().set_vocab()
+
+        # Reuse the target model's own vocab handler (e.g. Gemma-4 needs its
+        # own tokenizer logic, not the Qwen default).
+        from . import get_model_class
+        with open(self.target_model_dir / "config.json", "r", encoding="utf-8") as f:
+            target_arch = json.load(f)["architectures"][0]
+        target_cls = get_model_class(target_arch)
+
+        if target_cls is not type(self):
+            target_cls.set_vocab(self)  # ty: ignore[unresolved-attribute]
+        else:
+            super().set_vocab()
+
         self.dir_model = original_dir
 
         mask_token_id = self.hparams.get("dflash_config", {}).get("mask_token_id")

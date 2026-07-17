@@ -116,6 +116,10 @@ __kernel void kernel_gemv_noshuffle_q1_0_f32(
 
     if (groupId == 0) {
         dst = (global float*)((global char*)dst + offsetd);
-        dst[gid] = totalSum;
+        // Guard the output row. The x-grid is padded to CEIL_DIV(M,wavesize)*wavesize,
+        // so when ne01 is not a multiple of the wave size the tail work-items run past
+        // row ne01 and would overrun dst into the adjacent tensor. No-op / byte-identical
+        // when ne01 is wave-aligned (no padding).
+        if (gid < M) dst[gid] = totalSum;
     }
 }

@@ -95,7 +95,7 @@ export function useToolsPanel(): UseToolsPanelReturn {
 		if (toolsStore.builtinTools.length === 0 && !toolsStore.loading) {
 			toolsStore.fetchBuiltinTools();
 		}
-		mcpStore.runHealthChecksForServers(mcpStore.getServersSorted().filter((s) => s.enabled));
+		mcpStore.runHealthChecksForServers(mcpStore.getServers().filter((s) => s.enabled));
 	}
 
 	return {

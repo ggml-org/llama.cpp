@@ -21,8 +21,8 @@ export const SETTINGS_KEYS = {
 	MAX_IMAGE_RESOLUTION: 'maxImageMPixels',
 	// Display
 	SHOW_MESSAGE_STATS: 'showMessageStats',
+	SHOW_AGENTIC_TURN_STATS: 'showAgenticTurnStats',
 	SHOW_THOUGHT_IN_PROGRESS: 'showThoughtInProgress',
-	KEEP_STATS_VISIBLE: 'keepStatsVisible',
 	AUTO_MIC_ON_EMPTY: 'autoMicOnEmpty',
 	RENDER_USER_CONTENT_AS_MARKDOWN: 'renderUserContentAsMarkdown',
 	DISABLE_AUTO_SCROLL: 'disableAutoScroll',
@@ -59,10 +59,7 @@ export const SETTINGS_KEYS = {
 	// MCP
 	MCP_SERVERS: 'mcpServers',
 	MCP_REQUEST_TIMEOUT_SECONDS: 'mcpRequestTimeoutSeconds',
-	MCP_DEFAULT_SERVER_OVERRIDES: 'mcpDefaultServerOverrides',
 	AGENTIC_MAX_TURNS: 'agenticMaxTurns',
-	ALWAYS_SHOW_AGENTIC_TURNS: 'alwaysShowAgenticTurns',
-	AGENTIC_MAX_TOOL_PREVIEW_LINES: 'agenticMaxToolPreviewLines',
 	SHOW_TOOL_CALL_IN_PROGRESS: 'showToolCallInProgress',
 	// Performance
 	PRE_ENCODE_CONVERSATION: 'preEncodeConversation',
