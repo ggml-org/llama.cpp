@@ -892,9 +892,9 @@ const uint32_t[2048] iq1s_grid_gpu_const = {
 #endif
 
 #ifdef MULMAT_QUANT
-shared uint16_t iq1s_grid[(MmTypeA == GGML_TYPE_IQ1_S || MmTypeA == GGML_TYPE_IQ1_M) ? 2048 : 1];
+shared uint16_t iq1s_grid[(MmTypeA == GGML_TYPE_IQ1_S || MmTypeA == GGML_TYPE_IQ1_M) ? 2048 : 8];
 #if defined(NEEDS_IQ1S_GRID_GPU)
-shared uint32_t iq1s_grid_gpu[(MmTypeA == GGML_TYPE_IQ1_S || MmTypeA == GGML_TYPE_IQ1_M) ? 2048 : 1];
+shared uint32_t iq1s_grid_gpu[(MmTypeA == GGML_TYPE_IQ1_S || MmTypeA == GGML_TYPE_IQ1_M) ? 2048 : 8];
 #endif
 #else
 shared uint16_t iq1s_grid[2048];
@@ -931,7 +931,7 @@ void init_iq_shmem(uvec3 wgsize)
 
 #if defined(DATA_A_IQ2_XXS) || defined(DATA_A_IQ2_XS) || defined(DATA_A_IQ2_S) || defined(MULMAT_QUANT)
 #ifdef MULMAT_QUANT
-shared uvec2 iq2_grid[MmTypeA == GGML_TYPE_IQ2_S ? 1024 : MmTypeA == GGML_TYPE_IQ2_XS ? 512 : MmTypeA == GGML_TYPE_IQ2_XXS ? 256 : 1];
+shared uvec2 iq2_grid[MmTypeA == GGML_TYPE_IQ2_S ? 1024 : MmTypeA == GGML_TYPE_IQ2_XS ? 512 : MmTypeA == GGML_TYPE_IQ2_XXS ? 256 : 8];
 #elif defined(DATA_A_IQ2_S)
 shared uvec2 iq2_grid[1024];
 #elif defined(DATA_A_IQ2_XS)
@@ -1523,7 +1523,7 @@ void init_iq_shmem(uvec3 wgsize)
 
 #if defined(DATA_A_IQ3_XXS) || defined(DATA_A_IQ3_S) || defined(MULMAT_QUANT)
 #ifdef MULMAT_QUANT
-shared uint32_t iq3_grid[MmTypeA == GGML_TYPE_IQ3_S ? 512 : MmTypeA == GGML_TYPE_IQ3_XXS ? 256 : 1];
+shared uint32_t iq3_grid[MmTypeA == GGML_TYPE_IQ3_S ? 512 : MmTypeA == GGML_TYPE_IQ3_XXS ? 256 : 8];
 #elif defined(DATA_A_IQ3_S)
 shared uint32_t iq3_grid[512];
 #else
@@ -1828,7 +1828,7 @@ const int8_t kvalues_iq4nl_const[16] = {
 };
 
 #ifdef MULMAT_QUANT
-shared FLOAT_TYPE kvalues_iq4nl[(MmTypeA == GGML_TYPE_IQ4_NL || MmTypeA == GGML_TYPE_IQ4_XS) ? 16 : 1];
+shared FLOAT_TYPE kvalues_iq4nl[(MmTypeA == GGML_TYPE_IQ4_NL || MmTypeA == GGML_TYPE_IQ4_XS) ? 16 : 8];
 #else
 shared FLOAT_TYPE kvalues_iq4nl[16];
 #endif
@@ -1854,7 +1854,7 @@ const int8_t kvalues_mxfp4_const[16] = {
 };
 
 #ifdef MULMAT_QUANT
-shared int8_t kvalues_mxfp4[(MmTypeA == GGML_TYPE_MXFP4 || MmTypeA == GGML_TYPE_NVFP4) ? 16 : 1];
+shared int8_t kvalues_mxfp4[(MmTypeA == GGML_TYPE_MXFP4 || MmTypeA == GGML_TYPE_NVFP4) ? 16 : 8];
 #else
 shared int8_t kvalues_mxfp4[16];
 #endif
@@ -1862,7 +1862,7 @@ shared int8_t kvalues_mxfp4[16];
 
 #if (defined(DATA_A_NVFP4) || defined(MULMAT_QUANT)) && !defined(USE_OCP_FP4)
 #ifdef MULMAT_QUANT
-shared float ue4m3_fp32_lut[MmTypeA == GGML_TYPE_NVFP4 ? 128 : 1];
+shared float ue4m3_fp32_lut[MmTypeA == GGML_TYPE_NVFP4 ? 128 : 8];
 #else
 shared float ue4m3_fp32_lut[128];
 #endif
