@@ -217,17 +217,37 @@ export class DatabaseService {
 	}
 
 	/**
-	 * Reparents direct children of `parentId` to that parent's own parent
-	 * (or promotes them to top-level when the parent was top-level). Children
-	 * whose id is in `excludeIds` are left untouched (they are being deleted
-	 * themselves in the same batch).
+	 * Reparents direct children of `parentId` to the nearest surviving
+	 * ancestor (or promotes them to top-level when the immediate parent was
+	 * top-level). Walking skips any ancestor listed in `excludeIds`, since
+	 * those will be deleted in the same batch — leaving a grandchild pointing
+	 * at an `excludeIds` entry would orphan it. Children whose own id is in
+	 * `excludeIds` are dropped from the updates (the bulk-delete pass will
+	 * remove them). `prefetched` may carry a pre-fetched ancestor map to
+	 * avoid repeat reads inside a bulk transaction.
 	 */
 	private static async reparentDirectChildren(
 		parentId: string,
-		excludeIds: ReadonlySet<string> = new Set()
+		excludeIds: ReadonlySet<string> = new Set(),
+		prefetched?: ReadonlyMap<string, DatabaseConversation>
 	): Promise<void> {
-		const conv = await db[IDXDB_TABLES.conversations].get(parentId);
-		const newParent = conv?.forkedFromConversationId;
+		const conv = prefetched?.get(parentId) ?? (await db[IDXDB_TABLES.conversations].get(parentId));
+		if (!conv) return;
+
+		let newParent = conv.forkedFromConversationId;
+		const visited = new Set<string>([parentId]);
+		while (newParent && excludeIds.has(newParent)) {
+			if (visited.has(newParent)) break;
+			visited.add(newParent);
+			const next =
+				prefetched?.get(newParent) ?? (await db[IDXDB_TABLES.conversations].get(newParent));
+			if (!next) {
+				newParent = undefined;
+				break;
+			}
+			newParent = next.forkedFromConversationId;
+		}
+
 		const directChildren = await db[IDXDB_TABLES.conversations]
 			.filter((c) => c.forkedFromConversationId === parentId)
 			.toArray();
@@ -243,9 +263,9 @@ export class DatabaseService {
 
 	/**
 	 * Deletes multiple conversations in a single transaction. Each deleted
-	 * conversation has its direct children reparented to its own parent (or
-	 * promoted to top-level), matching the per-id {@link deleteConversation}
-	 * without `deleteWithForks`. Children also in `ids` are dropped instead.
+	 * conversation has its direct children reparented to the nearest surviving
+	 * ancestor (or promoted to top-level). Children also in `ids` are dropped
+	 * entirely rather than reparented.
 	 *
 	 * @param ids - Conversation IDs to delete
 	 */
@@ -258,8 +278,28 @@ export class DatabaseService {
 			'rw',
 			[db[IDXDB_TABLES.conversations], db[IDXDB_TABLES.messages]],
 			async () => {
+				// Pre-load each to-delete conversation so the per-id reparent
+				// walk-up doesn't ping-pong the same ancestry chain.
+				const prefetched = new Map<string, DatabaseConversation>();
+				let frontier = [...cleanIds];
+				const requested = new Set<string>(frontier);
+				while (frontier.length > 0) {
+					const fetched = await db[IDXDB_TABLES.conversations].bulkGet(frontier);
+					frontier = [];
+					for (let i = 0; i < fetched.length; i++) {
+						const conv = fetched[i];
+						if (!conv || !conv.id) continue;
+						prefetched.set(conv.id, conv);
+						const ancestor = conv.forkedFromConversationId;
+						if (ancestor && !prefetched.has(ancestor) && !requested.has(ancestor)) {
+							frontier.push(ancestor);
+							requested.add(ancestor);
+						}
+					}
+				}
+
 				for (const id of cleanIds) {
-					await this.reparentDirectChildren(id, idSet);
+					await this.reparentDirectChildren(id, idSet, prefetched);
 				}
 
 				await db[IDXDB_TABLES.conversations].bulkDelete(cleanIds);
