@@ -41,8 +41,10 @@ inline int dp4a_q6(uint qw0, uint qw1, uint qw2, uint qw3,
 
 // One token's q6_K dp4a dot (two halves, per-16 scales) + epilogue into acc[t].
 #define MOE_Q6K_DP4A_T(t) do {                                                                            \
-        const int raw1 = dp4a_q6(qw[0], qw[1], qw[2], qw[3], sh_qa[t][0], sh_qa[t][1], sh_qa[t][2], sh_qa[t][3]); \
-        const int raw2 = dp4a_q6(qw[4], qw[5], qw[6], qw[7], sh_qa[t][4], sh_qa[t][5], sh_qa[t][6], sh_qa[t][7]); \
+        uint4 a0 = vload4(0, &sh_qa[t][0]);                                                               \
+        uint4 a1 = vload4(0, &sh_qa[t][4]);                                                               \
+        const int raw1 = dp4a_q6(qw[0], qw[1], qw[2], qw[3], a0.s0, a0.s1, a0.s2, a0.s3);                 \
+        const int raw2 = dp4a_q6(qw[4], qw[5], qw[6], qw[7], a1.s0, a1.s1, a1.s2, a1.s3);                 \
         const float a_d = (float)sh_d[t];                                                                 \
         acc[t] += scale0 * a_d * (float)raw1 + scale1 * a_d * (float)raw2;                                \
     } while (0)
@@ -144,11 +146,13 @@ kernel void kernel_gemm_moe_q6_k_q8_1_dp4a(
         qw[6] = SIGN6(EXP4(r3)       | EXP2((qh2 >> 16) & 0xFFu));
         qw[7] = SIGN6(EXP4(r3 >> 16) | EXP2((qh2 >> 24) & 0xFFu));
 
-        const uint stage_lim = (uint)n_real * 8;
-        for (uint idx = lid; idx < stage_lim; idx += 64) {
-            const uint t = idx >> 3;
-            const uint u = idx & 7;
-            sh_qa[t][u] = src1_qa[(col + t) * ne00_u + (step >> 2) + u];
+        // Stage each token's 8 activation uints as two 128-bit uint4 loads/stores.
+        const uint vlim = (uint)n_real * 2;
+        for (uint idx = lid; idx < vlim; idx += 64) {
+            const uint t = idx >> 1;
+            const uint h = (idx & 1) << 2;   // 0 or 4
+            uint4 v = vload4(0, &src1_qa[(col + t) * ne00_u + (step >> 2) + h]);
+            vstore4(v, 0, &sh_qa[t][h]);
         }
         if (lid < (uint)n_real) {
             sh_d[lid] = src1_da[(col + lid) * ne00_b + sub];
