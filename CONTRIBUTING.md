@@ -195,7 +195,7 @@ Maintainers reserve the right to decline review or close pull requests for any r
   - Download/link the required files via CMake as a build step.
   - Otherwise, ensure that the files are licensed under MIT; same as llama.cpp. And keep these extras as minimal as possible.
 - Keep your initial implementation minimal to the `GGML_OP_MUL_MAT` operator with support only for `GGML_TYPE_F32`.
-  - Once your backend is approved and upstream, you can create more PRs to further support the backend.
+  - Once your backend is approved and upstream, you can create more PRs to introduce further support.
   - This is to reduce the amount of time and effort required for review, and ensure you understand the basics of the GGML backend system.
 
 # Documentation
