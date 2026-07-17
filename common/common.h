@@ -390,8 +390,7 @@ struct common_params_speculative {
             return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP || t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 || t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH;
         });
 
-        const int32_t n_max = std::max(0, draft.n_max);
-        return needs_rs_seq && n_max > 0 ? (uint32_t) (n_max + 1) : 0u;
+        return needs_rs_seq ? draft.n_max: 0u;
     }
 };
 

@@ -1092,7 +1092,7 @@ private:
                 if (spec_mtp) {
                     cparams_dft.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
                 }
-                cparams_dft.n_rs_seq = spec_mtp ? params_base.speculative.need_n_rs_seq() : 0;
+                cparams_dft.n_rs_seq = 0;
 
                 std::vector<ggml_backend_dev_t> devs;
                 uint32_t hp_ngl = 0;

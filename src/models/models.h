@@ -1123,6 +1123,21 @@ struct llama_model_deepseek4 : public llama_model_base {
                 ggml_tensor * inp_pos,
                 int il) const;
 
+        ggml_tensor * build_attention(
+                const llama_model & model,
+                llm_graph_input_attn_kv_iswa * inp_mtp,
+                ggml_tensor * cur,
+                ggml_tensor * inp_pos,
+                int il) const;
+
+        ggml_tensor * build_attention_impl(
+                const llama_model & model,
+                llm_graph_input_dsv4 * inp_dsv4,
+                llm_graph_input_attn_kv_iswa * inp_mtp,
+                ggml_tensor * cur,
+                ggml_tensor * inp_pos,
+                int il) const;
+
         ggml_tensor * build_hca_compressed_kv_from_state(
                 ggml_tensor * kv_state,
                 ggml_tensor * score_state,
