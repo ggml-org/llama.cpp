@@ -1214,8 +1214,10 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 return false;
             }
 
-            return (ggml_get_op_params_i32(op, 0) == 0) && (ggml_get_op_params_i32(op, 2) == 0) &&
-                   (ggml_get_op_params_i32(op, 4) == 0) && (ggml_get_op_params_i32(op, 6) == 0);
+            // kernel_pad_impl now supports non-zero left padding on all dims,
+            // so we no longer require lp0/lp1/lp2/lp3 == 0. Element type is
+            // constrained separately by the pipeline name lookup.
+            return true;
         case GGML_OP_PAD_REFLECT_1D:
         case GGML_OP_TIMESTEP_EMBEDDING:
         case GGML_OP_LEAKY_RELU:

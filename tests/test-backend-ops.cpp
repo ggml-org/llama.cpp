@@ -9390,6 +9390,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_pad());
     test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {33, 17, 2, 1}, 4, 3, true)); // circular
     test_cases.emplace_back(new test_pad_ext());
+    // left-padding only (lp > 0, rp == 0). Regression coverage for the Metal
+    // pad kernel, which previously only handled right padding (lp == 0).
+    test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {101, 1024, 1, 1}, 2, 0, 0, 0, 0, 0, 0, 0)); // mirrors CosyVoice's flow PAD
+    test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {512, 512, 1, 1}, 4, 0, 0, 0, 0, 0, 0, 0));  // dim0 left only
+    test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {512, 512, 1, 1}, 0, 0, 3, 0, 0, 0, 0, 0));  // dim1 left only
+    test_cases.emplace_back(new test_pad_ext(GGML_TYPE_F32, {64, 64, 3, 1}, 2, 3, 1, 0, 0, 0, 0, 0));    // mixed left+right
     test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {1024, 1, 1, 1}, 1, 0, false));
     test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {1024, 2, 1, 1}, 1, 0, false));
     test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {1024, 16, 1, 1}, 0, 1, false));

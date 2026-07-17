@@ -5842,9 +5842,15 @@ kernel void kernel_pad_impl(
     const int32_t k0 = tgpig.x/args.ne1;
     const int32_t i1 = tgpig.x - k0*args.ne1;
 
-    const int32_t i03 = i3;
-    const int32_t i02 = i2;
-    const int32_t i01 = i1;
+    // Source coords = dst coords minus left padding. If a source coord falls
+    // outside [0, ne0x) the whole row/column is in the padding region -> fill 0.
+    const int32_t i03 = i3 - args.lp3;
+    const int32_t i02 = i2 - args.lp2;
+    const int32_t i01 = i1 - args.lp1;
+
+    const bool row_in_src = (i01 >= 0 && i01 < args.ne01)
+                         && (i02 >= 0 && i02 < args.ne02)
+                         && (i03 >= 0 && i03 < args.ne03);
 
     device const T * src0_ptr = (device const T *) (src0 + i03*args.nb03 + i02*args.nb02 + i01*args.nb01);
     device       T * dst_ptr  = (device       T *) (dst  +  i3*args.nb3  +  i2*args.nb2  +  i1*args.nb1);
@@ -5855,8 +5861,10 @@ kernel void kernel_pad_impl(
             break;
         }
 
-        if (i0 < args.ne00 && i1 < args.ne01 && i2 < args.ne02 && i3 < args.ne03) {
-            dst_ptr[i0] = src0_ptr[i0];
+        // dim 0 source coord, with left padding offset
+        const int32_t i00 = i0 - args.lp0;
+        if (row_in_src && i00 >= 0 && i00 < args.ne00) {
+            dst_ptr[i0] = src0_ptr[i00];
         } else {
             dst_ptr[i0] = 0.0f;
         }
