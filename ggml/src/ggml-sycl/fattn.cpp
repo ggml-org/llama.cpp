@@ -19,6 +19,7 @@
 #include "fattn-vec.hpp"
 #include "fattn.hpp"
 #include "fattn-onednn.hpp"
+#include "fattn-hybrid.hpp"
 
 
 #define FATTN_VEC_CASE(D, type_K, type_V)                                                                        \
@@ -98,6 +99,7 @@ enum best_fattn_kernel {
     BEST_FATTN_KERNEL_NONE     =   0,
     BEST_FATTN_KERNEL_VEC      = 100,
     BEST_FATTN_KERNEL_ONEDNN   = 150, // added enum for onednn==150
+    BEST_FATTN_KERNEL_HYBRID   = 250, // dequant K/V → oneDNN SDPA
     BEST_FATTN_KERNEL_TILE     = 200,
 };
 
@@ -197,6 +199,12 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
         return BEST_FATTN_KERNEL_ONEDNN;
     }
 
+    // HYBRID path: dequantize quantized/BF16/F32 K/V to F16, then oneDNN SDPA.
+    // Catches KV types that ONEDNN's native F16-only gate excludes.
+    if (ggml_sycl_flash_attn_ext_hybrid_supported(dst)) {
+        return BEST_FATTN_KERNEL_HYBRID;
+    }
+
     // If there are no tensor cores available, use the generic tile kernel:
     if (can_use_vector_kernel) {
         if (!ggml_is_quantized(K->type) && !ggml_is_quantized(V->type)) {
@@ -226,6 +234,11 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
             ggml_sycl_flash_attn_ext_onednn(ctx, dst);
 #endif
             break;
+#if GGML_SYCL_DNNL
+        case BEST_FATTN_KERNEL_HYBRID:
+            ggml_sycl_flash_attn_ext_hybrid(ctx, dst);
+            break;
+#endif
         case BEST_FATTN_KERNEL_TILE:
             ggml_sycl_flash_attn_ext_tile(ctx, dst);
             break;
