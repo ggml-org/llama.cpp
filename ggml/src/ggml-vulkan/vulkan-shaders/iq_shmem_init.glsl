@@ -10,37 +10,37 @@ void init_iq_shmem(uvec3 wgsize) {
         }
         barrier();
     } else if (MmTypeA == GGML_TYPE_IQ2_XXS) {
-        [[unroll]] for (uint i = 0; i < iq2xxs_grid.length(); i += wgsize.x) {
+        [[unroll]] for (uint i = 0; i < iq2_grid.length(); i += wgsize.x) {
             if (iq2xxs_grid_const.length() % wgsize.x == 0 || i + gl_LocalInvocationIndex.x < iq2xxs_grid_const.length()) {
-                iq2xxs_grid[i + gl_LocalInvocationIndex.x] = iq2xxs_grid_const[i + gl_LocalInvocationIndex.x];
+                iq2_grid[i + gl_LocalInvocationIndex.x] = iq2xxs_grid_const[i + gl_LocalInvocationIndex.x];
             }
         }
         barrier();
     } else if (MmTypeA == GGML_TYPE_IQ2_XS) {
-        [[unroll]] for (uint i = 0; i < iq2xs_grid.length(); i += wgsize.x) {
+        [[unroll]] for (uint i = 0; i < iq2_grid.length(); i += wgsize.x) {
             if (iq2xs_grid_const.length() % wgsize.x == 0 || i + gl_LocalInvocationIndex.x < iq2xs_grid_const.length()) {
-                iq2xs_grid[i + gl_LocalInvocationIndex.x] = iq2xs_grid_const[i + gl_LocalInvocationIndex.x];
+                iq2_grid[i + gl_LocalInvocationIndex.x] = iq2xs_grid_const[i + gl_LocalInvocationIndex.x];
             }
         }
         barrier();
     } else if (MmTypeA == GGML_TYPE_IQ2_S) {
-        [[unroll]] for (uint i = 0; i < iq2s_grid.length(); i += wgsize.x) {
+        [[unroll]] for (uint i = 0; i < iq2_grid.length(); i += wgsize.x) {
             if (iq2s_grid_const.length() % wgsize.x == 0 || i + gl_LocalInvocationIndex.x < iq2s_grid_const.length()) {
-                iq2s_grid[i + gl_LocalInvocationIndex.x] = iq2s_grid_const[i + gl_LocalInvocationIndex.x];
+                iq2_grid[i + gl_LocalInvocationIndex.x] = iq2s_grid_const[i + gl_LocalInvocationIndex.x];
             }
         }
         barrier();
     } else if (MmTypeA == GGML_TYPE_IQ3_XXS) {
-        [[unroll]] for (uint i = 0; i < iq3xxs_grid.length(); i += wgsize.x) {
+        [[unroll]] for (uint i = 0; i < iq3_grid.length(); i += wgsize.x) {
             if (iq3xxs_grid_const.length() % wgsize.x == 0 || i + gl_LocalInvocationIndex.x < iq3xxs_grid_const.length()) {
-                iq3xxs_grid[i + gl_LocalInvocationIndex.x] = iq3xxs_grid_const[i + gl_LocalInvocationIndex.x];
+                iq3_grid[i + gl_LocalInvocationIndex.x] = iq3xxs_grid_const[i + gl_LocalInvocationIndex.x];
             }
         }
         barrier();
     } else if (MmTypeA == GGML_TYPE_IQ3_S) {
-        [[unroll]] for (uint i = 0; i < iq3s_grid.length(); i += wgsize.x) {
+        [[unroll]] for (uint i = 0; i < iq3_grid.length(); i += wgsize.x) {
             if (iq3s_grid_const.length() % wgsize.x == 0 || i + gl_LocalInvocationIndex.x < iq3s_grid_const.length()) {
-                iq3s_grid[i + gl_LocalInvocationIndex.x] = iq3s_grid_const[i + gl_LocalInvocationIndex.x];
+                iq3_grid[i + gl_LocalInvocationIndex.x] = iq3s_grid_const[i + gl_LocalInvocationIndex.x];
             }
         }
         barrier();

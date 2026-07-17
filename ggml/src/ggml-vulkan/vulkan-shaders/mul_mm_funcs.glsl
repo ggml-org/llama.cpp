@@ -364,7 +364,7 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
         const FLOAT_TYPE db = FLOAT_TYPE(d * 0.25 * (0.5 + (signs >> 28)));
         const uint32_t sign7 = bitfieldExtract(signs, 7 * int(ib8), 7);
         const uint sign = sign7 | (bitCount(sign7) << 7);
-        const uvec2 grid = iq2xxs_grid[qs];
+        const uvec2 grid = iq2_grid[qs];
         const vec4 grid0 = vec4(unpack8(grid.x));
         const vec4 grid1 = vec4(unpack8(grid.y));
 
@@ -390,7 +390,7 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
         const uint qs = a_iq2_xs.data[ib].qs[4 * ib32 + ib8];
         const uint sign7 = qs >> 9;
         const uint sign = sign7 | (bitCount(sign7) << 7);
-        const uvec2 grid = iq2xs_grid[qs & 511];
+        const uvec2 grid = iq2_grid[qs & 511];
         const vec4 grid0 = vec4(unpack8(grid.x));
         const vec4 grid1 = vec4(unpack8(grid.y));
 
@@ -418,7 +418,7 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
 
         const float d = float(a_iq2_s.data[ib].d);
         const FLOAT_TYPE db = FLOAT_TYPE(d * 0.25 * (0.5 + scale));
-        const uvec2 grid = iq2s_grid[qs | ((qh << (8 - qhshift)) & 0x300)];
+        const uvec2 grid = iq2_grid[qs | ((qh << (8 - qhshift)) & 0x300)];
         const vec4 grid0 = vec4(unpack8(grid.x));
         const vec4 grid1 = vec4(unpack8(grid.y));
 
@@ -447,7 +447,7 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
         const float db = d * 0.5 * (0.5 + (signs >> 28));
         const uint32_t sign7 = bitfieldExtract(signs, 7 * (int(iqs / 2) % 4), 7);
         const uint sign = (sign7 | (bitCount(sign7) << 7)) >> (4 * (idx % 2));
-        const uint grid = iq3xxs_grid[qs];
+        const uint grid = iq3_grid[qs];
         const vec4 v = db * vec4(unpack8(grid));
 
         buf_a[buf_idx    ] = FLOAT_TYPEV2((sign &   1) != 0 ? -v.x : v.x,
@@ -469,7 +469,7 @@ void load_a_to_shmem(const uint pos_a, const uint row, const uint col, const uin
         const uint scale = a_iq3_s.data[ib].scales[iqs / 16];
         const i8vec2 sign01 = i8vec2(1 - (2 & i8vec2(sign << 1, sign)));
         const float db = d * (1 + 2 * ((scale >> (4 * (iqh & 1))) & 0xf));
-        const uint32_t grid = iq3s_grid[qs | ((qh << (8 - (iqs % 8))) & 256)];
+        const uint32_t grid = iq3_grid[qs | ((qh << (8 - (iqs % 8))) & 256)];
         const vec4 v = db * vec4(unpack8(grid));
 
         buf_a[buf_idx    ] = FLOAT_TYPEV2((sign &   1) != 0 ? -v.x : v.x,

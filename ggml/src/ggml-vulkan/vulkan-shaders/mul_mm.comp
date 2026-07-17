@@ -31,6 +31,11 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int16 : require
 #endif
 
+#ifdef MULMAT_QUANT
+#include "ggml_type_ids.glsl"
+layout (constant_id = 12) const uint MmTypeA = 0;
+#endif
+
 #include "types.glsl"
 #include "dot_product_funcs.glsl"
 
@@ -46,8 +51,6 @@
 layout (constant_id = 11) const uint ALIGNED = 0;
 
 #ifdef MULMAT_QUANT
-#include "ggml_type_ids.glsl"
-layout (constant_id = 12) const uint MmTypeA = 0;
 
 uint mm_load_vec_a() {
     switch (MmTypeA) {
