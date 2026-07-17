@@ -172,6 +172,7 @@ enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3,  // Eagle3 speculative decoding
     COMMON_SPECULATIVE_TYPE_DRAFT_MTP,     // Multi-token prediction
     COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH,  // DFlash speculative decoding
+    COMMON_SPECULATIVE_TYPE_DRAFT_REMOTE,  // Remote draft model via API
     COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,  // simple self-speculative decoding based on n-grams
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,   // self-speculative decoding with n-gram keys only
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, // self-speculative decoding with n-gram keys and 4 m-gram values
@@ -348,6 +349,11 @@ struct common_params_speculative_draft {
     std::vector<ggml_backend_dev_t> devices; // devices to use for offloading
 
     std::vector<llama_model_tensor_buft_override> tensor_buft_overrides;
+
+    // Remote draft model parameters (when api_url is not empty, use remote model instead of local)
+    std::string api_url;           // URL of the remote draft model API (e.g., "http://192.168.1.100:8080/v1"), empty = use local model
+    int32_t context_limit = 8192;  // maximum context length to send to remote model
+    int32_t timeout_seconds = 3;   // timeout for API requests in seconds
 };
 
 struct common_params_speculative_ngram_mod {
@@ -382,7 +388,11 @@ struct common_params_speculative {
     common_params_speculative_ngram_cache ngram_cache;
 
     bool has_dft() const {
-        return !draft.mparams.empty();
+        return !draft.mparams.empty() || !draft.api_url.empty();
+    }
+
+    bool is_draft_remote() const {
+        return !draft.api_url.empty();
     }
 
     uint32_t need_n_rs_seq() const {

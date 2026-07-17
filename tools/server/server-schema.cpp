@@ -200,6 +200,11 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
     add((new field_num("speculative.n_max", params.speculative.draft.n_max))
         ->set_hard_limits(0, INT32_MAX)
         ->set_desc("Maximum number of tokens to draft during speculative decoding"));
+    add((new field_str("speculative.remote_draft_url"))
+        ->set_desc("URL for remote draft model using OpenAI API format (e.g., http://localhost:8080/v1)")
+        ->set_handler([&](field_eval_context & ctx, const json & data) {
+            ctx.params.speculative.draft.api_url = data.at("speculative.remote_draft_url").get<std::string>();
+        }));
 
     add((new field_num("speculative.n_min", params.speculative.draft.n_min))
         ->set_hard_limits(0, INT32_MAX)
