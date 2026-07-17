@@ -86,10 +86,7 @@
 						type={field.isPositiveInteger ? 'number' : 'text'}
 						{...field.isPositiveInteger ? { min: '1', step: '1' } : {}}
 						value={currentValue}
-						oninput={(e) => {
-							// Update local config immediately for real-time badge feedback
-							onConfigChange(field.key, e.currentTarget.value);
-						}}
+						oninput={(e) => onConfigChange(field.key, e.currentTarget.value)}
 						placeholder={currentModelParams[field.key] != null
 							? `Default: ${normalizeFloatingPoint(currentModelParams[field.key])}`
 							: ''}

@@ -21,9 +21,6 @@
 		onEnterSelectionMode?: (id: string) => void;
 		onSelectionClick?: (id: string, options: { shiftKey: boolean }) => void;
 		onRowMouseDown?: (id: string, event: MouseEvent) => void;
-		// Bulk-action bar props (rendered when `isSelectionMode` is true). These are
-		// forwarded to a sticky `SidebarNavigationSelectionBar` placed at the bottom
-		// of the list so the bar stays visible while scrolling conversations.
 		visibleCount: number;
 		allVisibleSelected: boolean;
 		someVisibleSelected: boolean;
@@ -98,23 +95,6 @@
 			{onRowMouseDown}
 		/>
 	{:else}
-		<!-- {#if isSelectionMode}
-      		<SidebarNavigationSelectionBar
-     			class="sticky top-0 z-10"
-     			selectedCount={selectedIds.size}
-     			{visibleCount}
-     			{allVisibleSelected}
-     			{someVisibleSelected}
-     			someSelectedPinned={allSelectedArePinned}
-     			{pinStateIsMixed}
-     			{onSelectAllToggle}
-     			{onBulkPinToggle}
-     			{onBulkExport}
-     			{onBulkDelete}
-     			onClose={onCloseSelection}
-      		/>
-     	{/if} -->
-
 		{#if pinnedConversations.length > 0}
 			<div class="py-2 flex whitespace-nowrap {className}">
 				<div

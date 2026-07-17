@@ -564,11 +564,7 @@ const jsSandboxEnabledMigration: Migration = {
 		'Migrate explicit `jsSandboxEnabled=false` user override to per-tool enabled state in Tools (non-destructive)',
 
 	async run(): Promise<void> {
-		// Distinguish "user opted out" from "value stuck at default" by looking at
-		// USER_OVERRIDES_LOCALSTORAGE_KEY: that set is populated only when the
-		// user actively toggles a value, never by initial defaults. Users who
-		// never touched the legacy toggle are left alone -- the new model makes
-		// the sandbox tool enabled by default, which is what they implicitly had.
+		// USER_OVERRIDES_LOCALSTORAGE_KEY records keys the user actively toggled, never defaults; membership signals a real opt-out vs. a default-stuck value.
 		let overrides: unknown;
 		try {
 			const raw = localStorage.getItem(USER_OVERRIDES_LOCALSTORAGE_KEY);
@@ -591,8 +587,7 @@ const jsSandboxEnabledMigration: Migration = {
 		}
 
 		if (config[LEGACY_JS_SANDBOX_ENABLED_KEY] !== false) {
-			// User actively set it ON (or toggled off+on); the new model defaults
-			// to enabled, so no action needed.
+			// Non-false values match the new default of enabled; no action needed.
 			return;
 		}
 

@@ -67,13 +67,7 @@
 			<!-- prevent another nested button element -->
 			{#snippet child({ props })}
 				{#if disabled}
-					<!--
-						A disabled <button> has `pointer-events:none` (set by the
-						Button styles) and stops firing hover events, so the tooltip
-						would never open. Per Radix guidance, wrap a disabled trigger
-						in a <span> so the hover/pointer events have somewhere to land
-						while the inner button stays visually + functionally disabled.
-					-->
+					<!-- disabled buttons have pointer-events:none; wrap in a span so the tooltip hover surface stays alive -->
 					<span {...props}>
 						{@render button({})}
 					</span>

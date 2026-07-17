@@ -422,9 +422,9 @@ class ConversationsStore {
 	}
 
 	/**
-	 * Pins or unpins multiple conversations. Each id is toggled individually so
-	 * mixed selections (some pinned, some not) converge to a uniform state:
-	 * pinned -> unpinned; unpinned -> pinned.
+	 * Toggles the pinned state of each conversation individually.
+	 * Mixed-pin selections are intentionally not normalised here; the bulk
+	 * action UI surfaces them as a disabled mixed-state instead.
 	 * @param convIds - Conversation IDs to toggle
 	 */
 	async bulkToggleConversationPin(convIds: string[]): Promise<void> {
@@ -1237,6 +1237,10 @@ export const isConversationsInitialized = () => conversationsStore.isInitialized
 /**
  * Builds a flat tree of conversations with depth levels for nested forks.
  * Accepts a pre-filtered list so search filtering stays in the component.
+ *
+ * Output order matches the sidebar render exactly: pinned first, then
+ * unpinned by lastModified desc, with forks interleaved under their parents.
+ * Range-select / marquee in the sidebar rely on this alignment.
  */
 
 // Pinned conversations first, then by lastModified descending

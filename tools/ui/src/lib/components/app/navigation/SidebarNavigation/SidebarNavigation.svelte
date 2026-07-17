@@ -46,7 +46,6 @@
 	const isOnMobile = $derived(isMobile.current);
 	const alwaysShowOnDesktop = $derived(config().alwaysShowSidebarOnDesktop as boolean);
 
-	// Keep the sidebar expanded on desktop when the user pins it open
 	$effect(() => {
 		if (alwaysShowOnDesktop && !isOnMobile) {
 			isExpandedMode = true;
@@ -69,9 +68,6 @@
 		}
 	});
 
-	// On mobile the dedicated /search route hides the sidebar (see the aside
-	// render guard below). Collapse it as we enter /search so it doesn't
-	// reappear expanded when the user navigates back via the back button.
 	$effect(() => {
 		if (isMobile.current && page.url.hash.includes(ROUTES.SEARCH)) {
 			isExpandedMode = false;
@@ -104,9 +100,6 @@
 	let renameDraft = $state('');
 	let renameOriginalTitle = $state('');
 
-	// Visual order used by both shift+click range and marquee hit-testing.
-	// buildConversationTree puts pinned items first then unpinned, with forks
-	// interleaved under their parents - matching the rendered list exactly.
 	const renderedOrderIds = $derived(
 		buildConversationTree(filteredConversations).map((t) => t.conversation.id)
 	);
@@ -121,10 +114,6 @@
 		return true;
 	});
 
-	// Mixed state happens when some selected items are pinned and others are not.
-	// The Pin/Unpin bulk action toggles per-id, so applying it to a mixed selection
-	// would invert pinned state inconsistently - we surface that as a disabled
-	// state with an explanatory tooltip instead.
 	const pinStateIsMixed = $derived.by(() => {
 		if (selectedIds.size === 0) return false;
 		const convs = conversations();
@@ -213,6 +202,16 @@
 
 	const DRAG_THRESHOLD_PX = 5;
 
+	/**
+	 * Marquee mode is locked in at the drag threshold from the row where mousedown
+	 * happened. Cursor position does not flip add/remove mid-drag, so the user
+	 * feels in control: drag from a selected row to remove a contiguous block,
+	 * from an unselected row to add one.
+	 */
+	function decideDragMode(startingRowId: string | null, currentlySelected: Set<string>) {
+		return startingRowId !== null && currentlySelected.has(startingRowId) ? 'remove' : 'add';
+	}
+
 	function rangeSelect(fromId: string, toId: string) {
 		if (fromId === toId) {
 			selectedIds.add(toId);
@@ -223,9 +222,6 @@
 		const toIdx = order.indexOf(toId);
 		if (fromIdx === -1 || toIdx === -1) return;
 		const [lo, hi] = fromIdx < toIdx ? [fromIdx, toIdx] : [toIdx, fromIdx];
-		// A range from `hi` to `lo` would overwrite in-between items we don't want.
-		// Range-select mode always ADDS within [lo, hi] - it should not deselect items
-		// outside the range that the user previously picked via other means.
 		for (let i = lo; i <= hi; i++) {
 			selectedIds.add(order[i]);
 		}
@@ -263,8 +259,6 @@
 		dragMode = null;
 
 		if (event.shiftKey && dragAnchorId !== null && dragAnchorId !== id) {
-			// Initial range guess on mousedown so the user sees an instant range
-			// even if they release without crossing the drag threshold.
 			rangeSelect(dragAnchorId, id);
 		}
 	}
@@ -291,15 +285,8 @@
 			);
 
 			if (dragMode === 'add') {
-				// Additive marquee: rows the rect covers become selected; rows outside
-				// the rect are untouched (prior selection is preserved). This is the
-				// "I already have a group, drag from an unselected row to add more" case.
 				if (intersects) selectedIds.add(id);
 			} else if (dragMode === 'remove') {
-				// Reverse marquee: only previously-selected rows inside the rect get
-				// unselected. Rows that were never selected are not flipped to
-				// 'selected then deselected' and prior selection outside the rect is
-				// preserved. Idempotent per frame so cursor sweep speed can't flip-flop.
 				if (intersects && selectedIds.has(id)) selectedIds.delete(id);
 			}
 		}
@@ -309,7 +296,6 @@
 		if (!isSelectionMode || !mouseDownActive) return;
 
 		if (event.shiftKey && dragAnchorId !== null) {
-			// Shift+drag: live range selection, anchored on `dragAnchorId`.
 			const target = findRowAtPoint(event.clientX, event.clientY);
 			if (target && target !== mousedownRowId) {
 				rangeSelect(dragAnchorId, target);
@@ -322,12 +308,7 @@
 			const dy = event.clientY - dragStartY;
 			if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
 			isMarqueeDragging = true;
-			// Mode is fixed for the entire drag based on the row the user started
-			// on: dragging from a selected row enters "remove" mode (unselect);
-			// dragging from an unselected row enters "add" mode (additive). The
-			// user feels in control because the cursor position does not toggle the
-			// mode mid-drag.
-			dragMode = mousedownRowId !== null && selectedIds.has(mousedownRowId) ? 'remove' : 'add';
+			dragMode = decideDragMode(mousedownRowId, selectedIds);
 		}
 		updateMarqueeRect(event.clientX, event.clientY);
 	}
@@ -336,7 +317,6 @@
 		if (!isSelectionMode) return;
 		if (isMarqueeDragging) {
 			suppressNextClick = true;
-			// Anchor for the next shift+click matches the drag-end row.
 			const target = findRowAtPoint(event.clientX, event.clientY);
 			if (target) dragAnchorId = target;
 		}
@@ -380,9 +360,6 @@
 		if (options.shiftKey) {
 			const fromId = dragAnchorId;
 			if (fromId !== null) {
-				// Range from anchor to current target. Anchor moves to the *target* after
-				// each shift+click, so a chained shift+click after a marquee drag keeps
-				// extending from where the previous drag / shift+click ended.
 				rangeSelect(fromId, id);
 				dragAnchorId = id;
 			} else {
@@ -479,9 +456,7 @@
 {#if innerWidth > 768 || (!page.url.hash.includes(ROUTES.SETTINGS) && !page.url.hash.includes(ROUTES.MCP_SERVERS) && !page.url.hash.includes(ROUTES.SEARCH))}
 	<aside
 		class={[
-			// Layout & positioning
 			'fixed md:sticky top-2 left-2 md:left-0 md:ml-2 md:mt-2 pt-2 z-10 w-[calc(100dvw-1rem)]',
-			// Dimensions & overflow
 			'md:h-[calc(100dvh-1.125rem)]',
 			isExpandedMode &&
 				(device.isStandalone
@@ -489,17 +464,11 @@
 					: device.isIOSDevice
 						? 'h-[calc(100dvh-0.5rem)]'
 						: 'h-[calc(100dvh-1rem)]'),
-			// Shape & depth
 			'rounded-3xl md:rounded-2xl',
-			// Flex layout
 			'flex flex-col justify-between',
-			// Transition
 			'md:transition-[width,padding] duration-200 ease-out',
-			// Expanded state: width, surface, depth
 			isStripExpanded && 'md:w-72 md:bg-muted/60 md:backdrop-blur-xl border-border shadow-md',
-			// Collapsed state
 			!isStripExpanded && 'md:w-12',
-			// Expanded mode flag (for mobile ::before overlay)
 			isExpandedMode && 'is-expanded'
 		]}
 	>
