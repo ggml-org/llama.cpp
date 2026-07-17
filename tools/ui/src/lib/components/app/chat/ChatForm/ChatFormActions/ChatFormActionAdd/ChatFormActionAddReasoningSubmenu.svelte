@@ -15,8 +15,10 @@
 		<DropdownMenu.SubTrigger class="flex cursor-pointer items-center gap-2">
 			{#if reasoning.thinkingEnabled}
 				<Lightbulb class="{ICON_CLASS_DEFAULT} shrink-0 text-amber-400" />
-			{:else}
+			{:else if reasoning.isOff}
 				<LightbulbOff class="{ICON_CLASS_DEFAULT} shrink-0 text-muted-foreground" />
+			{:else}
+				<Lightbulb class="{ICON_CLASS_DEFAULT} shrink-0 text-muted-foreground" />
 			{/if}
 
 			<span
@@ -27,7 +29,7 @@
 				Reasoning
 
 				<span class="capitalize text-muted-foreground">
-					{reasoning.thinkingEnabled ? reasoning.currentEffort : 'off'}
+					{reasoning.currentEffort}
 				</span>
 			</span>
 		</DropdownMenu.SubTrigger>
