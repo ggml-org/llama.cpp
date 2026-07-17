@@ -6,6 +6,40 @@
 
 // Each iqs value maps to a 32-bit integer
 
+#if defined(DATA_A_Q2_0)
+void block_a_to_shmem(const uint buf_ib, const uint ib, const uint iqs) {
+    const uint block_idx = ib / 2;
+    const uint byte_idx = (ib & 1u) * 8u + iqs;
+    const uint bits = uint(data_a[block_idx].qs[byte_idx]);
+    buf_a[buf_ib].qs[iqs] = pack32(i8vec4(
+        int8_t(bits & 3u),
+        int8_t((bits >> 2u) & 3u),
+        int8_t((bits >> 4u) & 3u),
+        int8_t(bits >> 6u)));
+
+    if (iqs == 0) {
+        buf_a[buf_ib].dm = FLOAT_TYPE(data_a[block_idx].d);
+    }
+}
+
+void block_a_to_registers(const uint reg_ib, const uint buf_ib) {
+    cache_a[reg_ib].dm = buf_a[buf_ib].dm;
+
+    [[unroll]] for (uint iqs = 0; iqs < 8; ++iqs) {
+        cache_a[reg_ib].qs[iqs] = buf_a[buf_ib].qs[iqs];
+    }
+}
+
+ACC_TYPE mmq_dot_product(const uint ib_a) {
+    int32_t q_sum = 0;
+    [[unroll]] for (uint iqs = 0; iqs < 8; ++iqs) {
+        q_sum += dotPacked4x8EXT(cache_a[ib_a].qs[iqs], cache_b.qs[iqs]);
+    }
+
+    return ACC_TYPE(float(cache_a[ib_a].dm) * (float(q_sum) * float(cache_b.ds.x) - float(cache_b.ds.y)));
+}
+#endif
+
 #if defined(DATA_A_Q4_0) || defined(DATA_A_Q4_1)
 // 2-byte loads for Q4_0 blocks (18 bytes)
 // 4-byte loads for Q4_1 blocks (20 bytes)
