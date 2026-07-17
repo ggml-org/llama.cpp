@@ -3850,6 +3850,43 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
         return 2;
     }
 
+    // fused residual-add + rms_norm * mul: the pre-norm residual ADD -> RMS_NORM -> MUL that transformer
+    // blocks emit. The dedicated kernel writes the residual sum back for the downstream residual.
+    if (node->op == GGML_OP_ADD &&
+            ggml_can_fuse_subgraph(cgraph, i, { GGML_OP_ADD, GGML_OP_RMS_NORM, GGML_OP_MUL }, { i, i + 2 })) {
+        ggml_tensor * add_node = node;
+        ggml_tensor * rms_node = cgraph->nodes[i + 1];
+        ggml_tensor * mul_node = cgraph->nodes[i + 2];
+        const ggml_tensor * a = add_node->src[0];
+        const ggml_tensor * b = add_node->src[1];
+        const bool ok = rms_node->src[0] == add_node && a && b &&
+                        a->type == GGML_TYPE_F32 && b->type == GGML_TYPE_F32 &&
+                        ggml_is_contiguous(add_node) && ggml_is_contiguous(a) && ggml_is_contiguous(b) &&
+                        ggml_are_same_shape(a, b) && ggml_are_same_shape(a, add_node);
+        // The kernel reads a[col]/b[col] then writes the residual sum in the same output pass, so an
+        // in-place add (add_node aliasing a or b) is safe; the only unsafe overlap is the norm output
+        // (mul_node) clobbering the residual sum (add_node), which is consumed downstream.
+        auto overlaps = [](const ggml_tensor * x, const ggml_tensor * y) {
+            const int64_t xs = (int64_t) x->data, xe = xs + ggml_nbytes(x);
+            const int64_t ys = (int64_t) y->data, ye = ys + ggml_nbytes(y);
+            return (ys <= xs && xs < ye) || (xs <= ys && ys < xe);
+        };
+        if (ok && !overlaps(mul_node, add_node)) {
+            int64_t ncols_padded = 0;
+            if (ggml_cuda_norm_feeds_quant_mmvq(cgraph, i + 2, mul_node, ncols_padded)) {
+                const size_t buf_sz = (size_t) (ncols_padded / QK8_1) * sizeof(block_q8_1);
+                auto buf = std::make_unique<ggml_cuda_pool_alloc<char>>(cuda_ctx->pool(), buf_sz);
+                void * q8_ptr = buf->get();
+                ggml_cuda_op_rms_norm_fused_prev_add(*cuda_ctx, rms_node, mul_node, add_node, q8_ptr, ncols_padded);
+                cuda_ctx->prequant_q8_1_map[mul_node] = { q8_ptr, mul_node->ne[0], ncols_padded };
+                cuda_ctx->prequant_q8_1_bufs.push_back(std::move(buf));
+            } else {
+                ggml_cuda_op_rms_norm_fused_prev_add(*cuda_ctx, rms_node, mul_node, add_node, nullptr, 0);
+            }
+            return 2;
+        }
+    }
+
     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL }, {})) {
         ggml_tensor * mul_out = cgraph->nodes[i + 1];
 

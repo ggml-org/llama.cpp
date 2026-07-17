@@ -3591,6 +3591,46 @@ struct test_rms_norm_mul_add : public test_case {
     }
 };
 
+// GGML_OP_ADD + GGML_OP_RMS_NORM + GGML_OP_MUL (fused residual-add + rms_norm * weight)
+struct test_add_rms_norm_mul : public test_case {
+    const ggml_type type;
+    const std::array<int64_t, 4> ne;
+    const float eps;
+
+    std::string op_desc(ggml_tensor * t) override { GGML_UNUSED(t); return "ADD_RMS_NORM_MUL"; }
+    bool run_whole_graph() override { return true; }
+    std::string vars() override { return VARS_TO_STR3(type, ne, eps); }
+
+    test_add_rms_norm_mul(ggml_type type = GGML_TYPE_F32,
+            std::array<int64_t, 4> ne = {64, 5, 4, 3}, float eps = 1e-6f)
+        : type(type), ne(ne), eps(eps) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_tensor * b = ggml_new_tensor(ctx, type, 4, ne.data());
+        ggml_set_param(a); ggml_set_name(a, "a");
+        ggml_set_param(b); ggml_set_name(b, "b");
+
+        // The mul weight must already be "used" (here: b, also an add operand), otherwise a fresh leaf
+        // becomes an OP_NONE node between rms_norm and mul and breaks the contiguous {ADD,RMS_NORM,MUL}
+        // pattern. 'add' (the residual) is consumed by the norm AND the trailing add, mimicking a
+        // transformer residual, so the fusion (which writes the residual back) actually fires.
+        ggml_tensor * add = ggml_add(ctx, a, b);
+        ggml_set_name(add, "add");
+        ggml_tensor * norm = ggml_mul(ctx, ggml_rms_norm(ctx, add, eps), b);
+        ggml_set_name(norm, "norm");
+        ggml_tensor * out = ggml_add(ctx, norm, add);
+        ggml_set_name(out, "out");
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            init_tensor_uniform(t, -10.f, 10.f);
+        }
+    }
+};
+
 // GGML_OP_ADD + GGML_OP_RMS_NORM (fused operation)
 struct test_add_rms_norm : public test_case {
     const ggml_type type;
@@ -8528,6 +8568,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_norm_mul_add(GGML_TYPE_F32, { n, 5, 4, 3 }, eps, true));
             test_cases.emplace_back(new test_add_rms_norm(GGML_TYPE_F32, { n, 5, 4, 3 }, eps, false));
             test_cases.emplace_back(new test_add_rms_norm(GGML_TYPE_F32, { n, 5, 4, 3 }, eps, true));
+            test_cases.emplace_back(new test_add_rms_norm_mul(GGML_TYPE_F32, { n, 5, 4, 3 }, eps));
+            test_cases.emplace_back(new test_add_rms_norm_mul(GGML_TYPE_F32, { n, 1, 1, 1 }, eps));
         }
     }
     for (uint32_t n : {1, 511, 1025, 8192, 33*512}) {
