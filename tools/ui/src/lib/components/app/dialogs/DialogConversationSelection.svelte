@@ -58,6 +58,7 @@
 
 			<ConversationSelection
 				bind:this={conversationSelectionRef}
+				isOpen={open}
 				{conversations}
 				{messageCountMap}
 				{mode}

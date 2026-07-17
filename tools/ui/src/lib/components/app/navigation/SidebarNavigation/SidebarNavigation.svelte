@@ -12,6 +12,7 @@
 	import { ROUTES } from '$lib/constants';
 	import { fade } from 'svelte/transition';
 	import { SvelteSet } from 'svelte/reactivity';
+	import { useMarqueeSelection } from '$lib/hooks/use-marquee-selection.svelte';
 
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import {
@@ -191,190 +192,20 @@
 		await conversationsStore.bulkExportConversations(ids);
 	}
 
-	let dragAnchorId = $state<string | null>(null);
-	let isMarqueeDragging = $state(false);
-	let mouseDownActive = $state(false);
-	let dragStartX = 0;
-	let dragStartY = 0;
-	let mousedownRowId: string | null = null;
-	let dragMode: 'add' | 'remove' | null = null;
-	let suppressNextClick = false;
-
-	const DRAG_THRESHOLD_PX = 5;
-
-	/**
-	 * Marquee mode is locked in at the drag threshold from the row where mousedown
-	 * happened. Cursor position does not flip add/remove mid-drag, so the user
-	 * feels in control: drag from a selected row to remove a contiguous block,
-	 * from an unselected row to add one.
-	 */
-	function decideDragMode(startingRowId: string | null, currentlySelected: Set<string>) {
-		return startingRowId !== null && currentlySelected.has(startingRowId) ? 'remove' : 'add';
-	}
-
-	function rangeSelect(fromId: string, toId: string) {
-		if (fromId === toId) {
-			selectedIds.add(toId);
-			return;
-		}
-		const order = renderedOrderIds;
-		const fromIdx = order.indexOf(fromId);
-		const toIdx = order.indexOf(toId);
-		if (fromIdx === -1 || toIdx === -1) return;
-		const [lo, hi] = fromIdx < toIdx ? [fromIdx, toIdx] : [toIdx, fromIdx];
-		for (let i = lo; i <= hi; i++) {
-			selectedIds.add(order[i]);
-		}
-	}
-
-	function findRowAtPoint(x: number, y: number): string | null {
-		let bestMatch: HTMLElement | null = null;
-		let bestCenterDistance = Infinity;
-
-		for (const row of document.querySelectorAll<HTMLElement>('[data-conversation-row]')) {
-			const rect = row.getBoundingClientRect();
-			if (y >= rect.top && y <= rect.bottom && x >= rect.left && x <= rect.right) {
-				return row.dataset.conversationRow ?? null;
-			}
-			if (x >= rect.left && x <= rect.right) {
-				const centerDistance = Math.abs(y - (rect.top + rect.height / 2));
-				if (centerDistance < bestCenterDistance) {
-					bestCenterDistance = centerDistance;
-					bestMatch = row;
-				}
-			}
-		}
-		return bestMatch ? (bestMatch.dataset.conversationRow ?? null) : null;
-	}
+	const marquee = useMarqueeSelection({
+		selectedIds: () => selectedIds,
+		orderedIds: () => renderedOrderIds,
+		enabled: () => isSelectionMode
+	});
 
 	function handleRowMouseDown(id: string, event: MouseEvent) {
 		if (!isSelectionMode) return;
-		if (event.button !== 0) return;
-		event.preventDefault();
-		mouseDownActive = true;
-		mousedownRowId = id;
-		dragStartX = event.clientX;
-		dragStartY = event.clientY;
-		isMarqueeDragging = false;
-		dragMode = null;
-
-		if (event.shiftKey && dragAnchorId !== null && dragAnchorId !== id) {
-			rangeSelect(dragAnchorId, id);
-		}
+		marquee.rowMouseDown(id, event);
 	}
-
-	function updateMarqueeRect(currentX: number, currentY: number) {
-		const left = Math.min(dragStartX, currentX);
-		const top = Math.min(dragStartY, currentY);
-		const right = Math.max(dragStartX, currentX);
-		const bottom = Math.max(dragStartY, currentY);
-
-		const visibleIds = new Set(renderedOrderIds);
-		const rows = document.querySelectorAll<HTMLElement>('[data-conversation-row]');
-
-		for (const row of rows) {
-			const id = row.dataset.conversationRow;
-			if (!id || !visibleIds.has(id)) continue;
-
-			const rect = row.getBoundingClientRect();
-			const intersects = !(
-				rect.right < left ||
-				rect.left > right ||
-				rect.bottom < top ||
-				rect.top > bottom
-			);
-
-			if (dragMode === 'add') {
-				if (intersects) selectedIds.add(id);
-			} else if (dragMode === 'remove') {
-				if (intersects && selectedIds.has(id)) selectedIds.delete(id);
-			}
-		}
-	}
-
-	function handleDocumentMouseMove(event: MouseEvent) {
-		if (!isSelectionMode || !mouseDownActive) return;
-
-		if (event.shiftKey && dragAnchorId !== null) {
-			const target = findRowAtPoint(event.clientX, event.clientY);
-			if (target && target !== mousedownRowId) {
-				rangeSelect(dragAnchorId, target);
-			}
-			return;
-		}
-
-		if (!isMarqueeDragging) {
-			const dx = event.clientX - dragStartX;
-			const dy = event.clientY - dragStartY;
-			if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
-			isMarqueeDragging = true;
-			dragMode = decideDragMode(mousedownRowId, selectedIds);
-		}
-		updateMarqueeRect(event.clientX, event.clientY);
-	}
-
-	function handleDocumentMouseUp(event: MouseEvent) {
-		if (!isSelectionMode) return;
-		if (isMarqueeDragging) {
-			suppressNextClick = true;
-			const target = findRowAtPoint(event.clientX, event.clientY);
-			if (target) dragAnchorId = target;
-		}
-		isMarqueeDragging = false;
-		mouseDownActive = false;
-		mousedownRowId = null;
-		dragMode = null;
-		dragStartX = 0;
-		dragStartY = 0;
-	}
-
-	function handleClickCapture(event: MouseEvent) {
-		if (suppressNextClick) {
-			event.stopPropagation();
-			event.preventDefault();
-			suppressNextClick = false;
-		}
-	}
-
-	$effect(() => {
-		if (!isSelectionMode) {
-			dragAnchorId = null;
-			isMarqueeDragging = false;
-			mouseDownActive = false;
-			suppressNextClick = false;
-			mousedownRowId = null;
-			dragMode = null;
-			return;
-		}
-		document.addEventListener('mousemove', handleDocumentMouseMove);
-		document.addEventListener('mouseup', handleDocumentMouseUp);
-		document.addEventListener('click', handleClickCapture, { capture: true });
-		return () => {
-			document.removeEventListener('mousemove', handleDocumentMouseMove);
-			document.removeEventListener('mouseup', handleDocumentMouseUp);
-			document.removeEventListener('click', handleClickCapture, { capture: true });
-		};
-	});
 
 	function handleSelectionClick(id: string, options: { shiftKey: boolean }): void {
-		if (options.shiftKey) {
-			const fromId = dragAnchorId;
-			if (fromId !== null) {
-				rangeSelect(fromId, id);
-				dragAnchorId = id;
-			} else {
-				selectedIds.add(id);
-				dragAnchorId = id;
-			}
-			return;
-		}
-
-		if (selectedIds.has(id)) {
-			selectedIds.delete(id);
-		} else {
-			selectedIds.add(id);
-		}
-		dragAnchorId = id;
+		if (!isSelectionMode) return;
+		marquee.rowClick(id, options.shiftKey);
 	}
 
 	async function selectConversation(id: string) {
