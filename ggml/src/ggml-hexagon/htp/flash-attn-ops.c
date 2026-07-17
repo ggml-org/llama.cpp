@@ -236,10 +236,6 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
         const uint32_t iv3 = fastdiv(iq3, &factx->broadcast_rv3);
         const uint32_t iv2 = fastdiv(iq2, &factx->broadcast_rv2);
 
-        // Fetch Q row
-        const uint8_t * q_row_ptr = (const uint8_t *) q->data + (iq1*nbq1 + iq2*nbq2 + iq3*nbq3);
-        dma_queue_push(dma, dma_make_ptr(spad_q, q_row_ptr), factx->size_q_row_padded, nbq1, size_q_row, 1);
-
         const __fp16 * mp_base = NULL;
         if (mask) {
             const uint32_t im2 = fastmodulo(iq2, mask->ne[2], &factx->src3_div2);
@@ -247,26 +243,32 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
             mp_base = (const __fp16 *) ((const uint8_t *) mask->data + iq1*mask->nb[1] + im2*mask->nb[2] + im3*mask->nb[3]);
         }
 
-        // Prefetch first two blocks
-        for (uint32_t ib = 0; ib < MIN(factx->n_blocks, 2); ++ib) {
-            const uint32_t ic_start = ib * FLASH_ATTN_BLOCK_SIZE;
-            const uint32_t current_block_size = MIN(FLASH_ATTN_BLOCK_SIZE, nek1 - ic_start);
+        if (ir == ir0) {
+            // Fetch Q row
+            const uint8_t * q_row_ptr = (const uint8_t *) q->data + (iq1*nbq1 + iq2*nbq2 + iq3*nbq3);
+            dma_queue_push(dma, dma_make_ptr(spad_q, q_row_ptr), factx->size_q_row_padded, nbq1, size_q_row, 1);
 
-            // K
-            const uint8_t * k_src = (const uint8_t *) k->data + (ic_start*nbk1 + ik2*nbk2 + ik3*nbk3);
-            uint8_t * k_dst = spad_k + (ib % 2) * factx->size_k_block;
-            dma_queue_push(dma, dma_make_ptr(k_dst, k_src), factx->size_k_row_padded, nbk1, size_k_row, current_block_size);
+            // Prefetch first two blocks
+            for (uint32_t ib = 0; ib < MIN(factx->n_blocks, 2); ++ib) {
+                const uint32_t ic_start = ib * FLASH_ATTN_BLOCK_SIZE;
+                const uint32_t current_block_size = MIN(FLASH_ATTN_BLOCK_SIZE, nek1 - ic_start);
 
-            // V
-            const uint8_t * v_src = (const uint8_t *) v->data + (ic_start*nbv1 + iv2*nbv2 + iv3*nbv3);
-            uint8_t * v_dst = spad_v + (ib % 2) * factx->size_v_block;
-            dma_queue_push(dma, dma_make_ptr(v_dst, v_src), factx->size_v_row_padded, nbv1, size_v_row, current_block_size);
+                // K
+                const uint8_t * k_src = (const uint8_t *) k->data + (ic_start*nbk1 + ik2*nbk2 + ik3*nbk3);
+                uint8_t * k_dst = spad_k + (ib % 2) * factx->size_k_block;
+                dma_queue_push(dma, dma_make_ptr(k_dst, k_src), factx->size_k_row_padded, nbk1, size_k_row, current_block_size);
 
-            // Mask
-            if (mask) {
-                const uint8_t * m_src = (const uint8_t *) (mp_base + ic_start);
-                // Mask is 1D contiguous for this row
-                dma_cache_push(dma, &m_cache, m_src, current_block_size * 2, current_block_size * 2, current_block_size * 2, 1);
+                // V
+                const uint8_t * v_src = (const uint8_t *) v->data + (ic_start*nbv1 + iv2*nbv2 + iv3*nbv3);
+                uint8_t * v_dst = spad_v + (ib % 2) * factx->size_v_block;
+                dma_queue_push(dma, dma_make_ptr(v_dst, v_src), factx->size_v_row_padded, nbv1, size_v_row, current_block_size);
+
+                // Mask
+                if (mask) {
+                    const uint8_t * m_src = (const uint8_t *) (mp_base + ic_start);
+                    // Mask is 1D contiguous for this row
+                    dma_cache_push(dma, &m_cache, m_src, current_block_size * 2, current_block_size * 2, current_block_size * 2, 1);
+                }
             }
         }
 
@@ -410,6 +412,53 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
                 if (mask) {
                     const uint8_t * m_src = (const uint8_t *) (mp_base + next_ic_start);
                     dma_cache_push(dma, &m_cache, m_src, next_block_size * 2, next_block_size * 2, next_block_size * 2, 1);
+                }
+            }
+        }
+
+        if (ir + 1 < ir1) {
+            const uint32_t next_ir = ir + 1;
+            const uint32_t next_iq3 = fastdiv(next_ir, &factx->src0_div21);
+            const uint32_t next_iq2 = fastdiv(next_ir - next_iq3*neq2*neq1, &factx->src0_div1);
+            const uint32_t next_iq1 = (next_ir - next_iq3*neq2*neq1 - next_iq2 * neq1);
+
+            const uint32_t next_ik3 = fastdiv(next_iq3, &factx->broadcast_rk3);
+            const uint32_t next_ik2 = fastdiv(next_iq2, &factx->broadcast_rk2);
+
+            const uint32_t next_iv3 = fastdiv(next_iq3, &factx->broadcast_rv3);
+            const uint32_t next_iv2 = fastdiv(next_iq2, &factx->broadcast_rv2);
+
+            // Fetch next Q row
+            const uint8_t * next_q_row_ptr = (const uint8_t *) q->data + (next_iq1*nbq1 + next_iq2*nbq2 + next_iq3*nbq3);
+            dma_queue_push(dma, dma_make_ptr(spad_q, next_q_row_ptr), factx->size_q_row_padded, nbq1, size_q_row, 1);
+
+            const __fp16 * next_mp_base = NULL;
+            if (mask) {
+                const uint32_t next_im2 = fastmodulo(next_iq2, mask->ne[2], &factx->src3_div2);
+                const uint32_t next_im3 = fastmodulo(next_iq3, mask->ne[3], &factx->src3_div3);
+                next_mp_base = (const __fp16 *) ((const uint8_t *) mask->data + next_iq1*mask->nb[1] + next_im2*mask->nb[2] + next_im3*mask->nb[3]);
+            }
+
+            // Prefetch first two blocks for next row
+            for (uint32_t ib = 0; ib < MIN(factx->n_blocks, 2); ++ib) {
+                const uint32_t ic_start = ib * FLASH_ATTN_BLOCK_SIZE;
+                const uint32_t current_block_size = MIN(FLASH_ATTN_BLOCK_SIZE, nek1 - ic_start);
+
+                // K
+                const uint8_t * k_src = (const uint8_t *) k->data + (ic_start*nbk1 + next_ik2*nbk2 + next_ik3*nbk3);
+                uint8_t * k_dst = spad_k + (ib % 2) * factx->size_k_block;
+                dma_queue_push(dma, dma_make_ptr(k_dst, k_src), factx->size_k_row_padded, nbk1, size_k_row, current_block_size);
+
+                // V
+                const uint8_t * v_src = (const uint8_t *) v->data + (ic_start*nbv1 + next_iv2*nbv2 + next_iv3*nbv3);
+                uint8_t * v_dst = spad_v + (ib % 2) * factx->size_v_block;
+                dma_queue_push(dma, dma_make_ptr(v_dst, v_src), factx->size_v_row_padded, nbv1, size_v_row, current_block_size);
+
+                // Mask
+                if (mask) {
+                    const uint8_t * m_src = (const uint8_t *) (next_mp_base + ic_start);
+                    // Mask is 1D contiguous for this row
+                    dma_cache_push(dma, &m_cache, m_src, current_block_size * 2, current_block_size * 2, current_block_size * 2, 1);
                 }
             }
         }
