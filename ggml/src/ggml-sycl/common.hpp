@@ -126,6 +126,10 @@ extern int g_ggml_sycl_fa_q8_gqa_tile;
 #define GGML_SYCL_MMV_Y 1
 #endif
 
+#ifndef GGML_SYCL_MMVQ_NUM_SUBGROUPS
+#define GGML_SYCL_MMVQ_NUM_SUBGROUPS 16
+#endif
+
 typedef sycl::queue *queue_ptr;
 
 enum ggml_sycl_backend_gpu_mode {
