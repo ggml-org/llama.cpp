@@ -4236,9 +4236,9 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
     add_opt(common_arg(
         {"--lora-qat"}, "TYPE",
-        "LoRA fake quantization: none, q3_k, q4_k, q4_0 (default: none)",
+        "LoRA fake quantization: none, q3_k, q4_k, q4_0, mxfp4, q6_k, q8_0 (default: none)",
         [](common_params & params, const std::string & value) {
-            if (value != "none" && value != "q3_k" && value != "q4_k" && value != "q4_0") {
+            if (value != "none" && value != "q3_k" && value != "q4_k" && value != "q4_0" && value != "mxfp4" && value != "q6_k" && value != "q8_0") {
                 throw std::invalid_argument("invalid --lora-qat");
             }
             params.lora_qat = value;

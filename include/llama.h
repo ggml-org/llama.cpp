@@ -1571,6 +1571,9 @@ extern "C" {
         LLAMA_LORA_QAT_TYPE_Q3_K,
         LLAMA_LORA_QAT_TYPE_Q4_K,
         LLAMA_LORA_QAT_TYPE_Q4_0,
+        LLAMA_LORA_QAT_TYPE_MXFP4,
+        LLAMA_LORA_QAT_TYPE_Q6_K,
+        LLAMA_LORA_QAT_TYPE_Q8_0,
     };
 
     struct llama_opt_params {
