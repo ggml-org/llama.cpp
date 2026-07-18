@@ -9668,6 +9668,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    for (int kv : { 1, 7, 8, 63, 64, 65 }) {
+        test_cases.emplace_back(new test_lightning_indexer(128, 64, kv, 1, 4, 1, GGML_TYPE_F16));
+    }
+
     return test_cases;
 }
 #ifdef _MSC_VER
