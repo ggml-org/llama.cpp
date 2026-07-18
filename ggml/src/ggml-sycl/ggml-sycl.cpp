@@ -568,16 +568,26 @@ static void ggml_backend_sycl_buffer_set_tensor(ggml_backend_buffer_t buffer,
     ggml_backend_sycl_buffer_context * ctx = ( ggml_backend_sycl_buffer_context *)buffer->context;
     ggml_sycl_set_device(ctx->device);
     auto stream = &(dpct::dev_mgr::instance().get_device(ctx->device).default_queue());
-    SYCL_CHECK(CHECK_TRY_ERROR(dpct::dev_mgr::instance().get_device(ctx->device).queues_wait_and_throw()));
 #ifndef _WIN32
-    // Note: Use host buffer to save the data from mmap(), then copy to device. It's workaround for mmap() issue on PVC GPU.
-    // This function will be called during load model from disk. Use memory buffer replace dynamic won't save more time and brings potential memory leak risk here.
-    char * host_buf = (char *) malloc(size);
-    memcpy(host_buf, data, size);
-    SYCL_CHECK(CHECK_TRY_ERROR((*stream).memcpy((char *) tensor->data + offset, host_buf, size).wait()));
-    free(host_buf);
+    const auto arch = ggml_sycl_info().devices[ctx->device].hw_info.arch;
+    if (arch == gpu_arch::intel_gpu_pvc || arch == gpu_arch::intel_gpu_pvc_vg) {
+        // Work around mmap-backed upload issues on PVC by copying through a host buffer.
+        SYCL_CHECK(CHECK_TRY_ERROR(
+            dpct::dev_mgr::instance().get_device(ctx->device).queues_wait_and_throw()));
+        char * host_buf = (char *) malloc(size);
+        memcpy(host_buf, data, size);
+        SYCL_CHECK(CHECK_TRY_ERROR(
+            (*stream).memcpy((char *) tensor->data + offset, host_buf, size).wait()));
+        free(host_buf);
+    } else {
+        SYCL_CHECK(CHECK_TRY_ERROR(
+            (*stream).memcpy((char *) tensor->data + offset, data, size).wait()));
+    }
 #else
-    SYCL_CHECK(CHECK_TRY_ERROR((*stream).memcpy((char *) tensor->data + offset, data, size).wait()));
+    SYCL_CHECK(CHECK_TRY_ERROR(
+        dpct::dev_mgr::instance().get_device(ctx->device).queues_wait_and_throw()));
+    SYCL_CHECK(CHECK_TRY_ERROR(
+        (*stream).memcpy((char *) tensor->data + offset, data, size).wait()));
 #endif
 }
 catch (sycl::exception const &exc) {
