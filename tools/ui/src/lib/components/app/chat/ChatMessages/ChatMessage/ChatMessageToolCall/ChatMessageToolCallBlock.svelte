@@ -15,6 +15,7 @@
 	import ChatMessageToolCallBlockGetInfo from './ChatMessageToolCallBlockGetInfo.svelte';
 	import ChatMessageToolCallBlockGrepSearch from './ChatMessageToolCallBlockGrepSearch.svelte';
 	import ChatMessageToolCallBlockReadFile from './ChatMessageToolCallBlockReadFile.svelte';
+	import ChatMessageToolCallBlockReadImage from './ChatMessageToolCallBlockReadImage.svelte';
 	import ChatMessageToolCallBlockRunJavascript from './ChatMessageToolCallBlockRunJavascript.svelte';
 	import ChatMessageToolCallBlockSearchResults from './ChatMessageToolCallBlockSearchResults.svelte';
 	import ChatMessageToolCallBlockWriteFile from './ChatMessageToolCallBlockWriteFile.svelte';
@@ -45,6 +46,8 @@
 	<ChatMessageToolCallBlockGetInfo {section} {isStreaming} />
 {:else if section.toolName === BuiltInTool.READ_FILE}
 	<ChatMessageToolCallBlockReadFile {section} {open} {isStreaming} {onToggle} />
+{:else if section.toolName === BuiltInTool.READ_IMAGE}
+	<ChatMessageToolCallBlockReadImage {section} {open} {isStreaming} {onToggle} />
 {:else if section.toolName === BuiltInTool.EDIT_FILE}
 	<ChatMessageToolCallBlockEditFile {section} {open} {isStreaming} {onToggle} />
 {:else if section.toolName === BuiltInTool.WRITE_FILE}
