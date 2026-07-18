@@ -288,6 +288,7 @@ class AgenticStore {
 		const hasTools =
 			mcpStore.hasEnabledServers(perChatOverrides) ||
 			toolsStore.builtinTools.length > 0 ||
+			toolsStore.frontendTools.length > 0 ||
 			toolsStore.customTools.length > 0;
 		return {
 			enabled: hasTools && DEFAULT_AGENTIC_CONFIG.enabled,
