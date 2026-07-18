@@ -523,6 +523,9 @@ llama_context::~llama_context() {
             }
         }
     }
+    // The scheduler owns transient and resident weight buffers that reference
+    // backend state. Destroy it before member destruction releases backends.
+    sched.reset();
     ggml_opt_free(opt_ctx);
 }
 

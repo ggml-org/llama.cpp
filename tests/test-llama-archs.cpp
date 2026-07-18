@@ -448,9 +448,10 @@ static bool arch_supported(const llm_arch arch) {
 
 static void test_sequential_arch_allowlist() {
     for (const llm_arch arch : {
-             LLM_ARCH_LLAMA,
-             LLM_ARCH_QWEN2,
-             LLM_ARCH_GEMMA,
+         LLM_ARCH_LLAMA,
+         LLM_ARCH_QWEN2,
+         LLM_ARCH_GEMMA,
+         LLM_ARCH_DEEPSEEK4,
          }) {
         GGML_ASSERT(llama_model_arch_supports_sequential_load(arch));
     }
