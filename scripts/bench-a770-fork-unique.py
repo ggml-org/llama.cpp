@@ -23,11 +23,13 @@ human) is:
     sudo fuser -k /dev/dri/renderD128
 repeated until the fuser exit signals no holder.
 
-Arms are named environment configurations on a single `--bin-dir`. The
-canonical baseline is the empty env and runs alone (six launches per
-cell) when no `--env` is supplied. `--env NAME=VALUE` (repeatable) sets
-the candidate arm's environment and adds a second arm to each cell; both
-arms run the same number of launches under alternating pair order.
+By default both arms use `--bin-dir`. Supplying `--candidate-bin-dir`
+routes the candidate arm through an independently built `llama-bench`,
+which is required for compile-time/code-generation comparisons.
+The canonical baseline is the empty env and runs alone (six launches per
+cell) when no `--env` is supplied. `--env NAME=VALUE` (repeatable) enables
+the candidate arm; both arms run the same number of launches under
+alternating pair order.
 
 Pairing rule: paired percent samples align by sample index (rep 1 of
 baseline is paired with rep 1 of candidate, etc.). A cell with any
