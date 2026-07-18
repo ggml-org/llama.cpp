@@ -1,67 +1,59 @@
 #version 450
 
-#extension GL_EXT_control_flow_attributes : enable
+#extension GL_EXT_shader_16bit_storage : require
 
-#include "types.glsl"
-#include "generic_binary_head.glsl"
-#if !defined(DATA_A_F32)
-#include "dequant_funcs.glsl"
-#endif
+layout (push_constant) uniform parameter
+{
+    uint ne;
+    uint ne00; uint ne01; uint ne02; uint ne03; uint nb00; uint nb01; uint nb02; uint nb03;
+    uint ne10; uint ne11; uint ne12; uint ne13; uint nb10; uint nb11; uint nb12; uint nb13;
+    uint ne20; uint ne21; uint ne22; uint ne23; uint nb20; uint nb21; uint nb22; uint nb23;
+    uint misalign_offsets;
+    float param1; float param2; int param3;
+} p;
 
-const uint num_threads = 256;
+layout (binding = 0) readonly buffer A {float data_a[];};
+layout (binding = 1) readonly buffer B {float data_b[];};
+layout (binding = 2) writeonly buffer D {float data_d[];};
 
-layout(local_size_x = num_threads, local_size_y = 1, local_size_z = 1) in;
-
-float load_src0(uint i0, uint ik, uint i02, uint i03) {
-#if !defined(DATA_A_F32)
-    const uint ib = get_aoffset() + ik*p.nb01 + i02*p.nb02 + i03*p.nb03 + i0/QUANT_K;
-    const uint q = i0 % QUANT_K;
-#if QUANT_R == 2
-    const uint y_offset = QUANT_K/2;
-    const uint iqs = q < y_offset ? q : q - y_offset;
-    const bool lane_y = q >= y_offset;
-#else
-    const uint iqs = q & ~1u;
-    const bool lane_y = (q & 1u) != 0;
-#endif
-    const vec2 v = dequantize(ib, iqs, 0);
-    const vec2 dm = get_dm(ib, 0);
-    return (lane_y ? v.y : v.x) * dm.x + dm.y;
-#else
-    return data_a[get_aoffset() + i0*p.nb00 + ik*p.nb01 + i02*p.nb02 + i03*p.nb03];
-#endif
+uint get_idx() {
+    return gl_GlobalInvocationID.z * 262144 + gl_GlobalInvocationID.y * 512 + gl_GlobalInvocationID.x;
 }
 
+uint get_aoffset() { return p.misalign_offsets >> 16; }
+uint get_boffset() { return (p.misalign_offsets >> 8) & 0xFF; }
+uint get_doffset() { return p.misalign_offsets & 0xFF; }
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
 void main() {
-#ifdef NEEDS_INIT_IQ_SHMEM
-    init_iq_shmem(gl_WorkGroupSize);
-#endif
-
     uint idx = get_idx();
-
-    const uint num_iter = 2;
-
-    [[unroll]] for (uint i = 0; i < num_iter; ++i) {
-        if (idx >= p.ne) {
-            continue;
-        }
-
-        uint i0, i1, i2, i3;
-        get_indices(idx, i0, i1, i2, i3, p.ne20, p.ne21, p.ne22, p.ne23);
-
-        const uint dps2 = p.ne22 / p.ne02;
-        const uint dps3 = p.ne23 / p.ne03;
-        const uint i02 = i2 / dps2;
-        const uint i03 = i3 / dps3;
-
-        float acc = 0.0f;
-        for (uint ik = 0; ik < p.ne01; ++ik) {
-            const uint b_idx = get_boffset() + i1*p.nb10 + ik*p.nb11 + i2*p.nb12 + i3*p.nb13;
-            acc += load_src0(i0, ik, i02, i03) * data_b[b_idx];
-        }
-
-        data_d[get_doffset() + dst_idx(i0, i1, i2, i3)] = acc;
-
-        idx += num_threads;
+    if (idx >= p.ne) {
+        return;
     }
+
+    uint tmp = idx;
+    uint i0 = tmp % p.ne20; tmp /= p.ne20;
+    uint i1 = tmp % p.ne21; tmp /= p.ne21;
+    uint i2 = tmp % p.ne22; tmp /= p.ne22;
+    uint i3 = tmp;
+
+    uint a_i0 = i0 % p.ne00;
+    uint a_i2 = i2 / (p.ne22 / p.ne02);
+    uint a_i3 = i3 / (p.ne23 / p.ne03);
+
+    uint b_i0 = i1 % p.ne10;
+    uint b_i2 = i2;
+    uint b_i3 = i3;
+
+    float sum = 0.0f;
+    uint K = p.ne01;
+    for (uint k = 0; k < K; k++) {
+        uint aoff = get_aoffset() + a_i3*p.nb03 + a_i2*p.nb02 + k*p.nb01 + a_i0*p.nb00;
+        uint boff = get_boffset() + b_i3*p.nb13 + b_i2*p.nb12 + k*p.nb11 + b_i0*p.nb10;
+        sum += data_a[aoff] * data_b[boff];
+    }
+
+    uint doff = get_doffset() + i3*p.nb23 + i2*p.nb22 + i1*p.nb21 + i0*p.nb20;
+    data_d[doff] = sum;
 }

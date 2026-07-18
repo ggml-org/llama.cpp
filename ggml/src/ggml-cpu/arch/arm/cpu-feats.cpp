@@ -28,6 +28,7 @@ struct aarch64_features {
     bool has_sve2        = false;
     bool has_i8mm        = false;
     bool has_sme         = false;
+    bool has_sme2        = false;
 
     aarch64_features() {
 #if defined(__linux__)
@@ -54,6 +55,10 @@ struct aarch64_features {
 
         if (sysctlbyname("hw.optional.arm.FEAT_SME", &oldp, &size, NULL, 0) == 0) {
             has_sme = static_cast<bool>(oldp);
+        }
+
+        if (sysctlbyname("hw.optional.arm.FEAT_SME2", &oldp, &size, NULL, 0) == 0) {
+            has_sme2 = static_cast<bool>(oldp);
         }
 
         // Apple apparently does not implement SVE yet

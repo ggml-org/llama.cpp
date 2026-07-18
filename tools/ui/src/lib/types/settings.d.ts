@@ -29,6 +29,7 @@ export interface SettingsEntry {
 	options?: Array<{ value: string; label: string; icon: Component }>;
 	isExperimental?: boolean;
 	isPositiveInteger?: boolean;
+	dependsOn?: string;
 	sync?: {
 		serverKey: string;
 		paramType: SyncableParameterType;
@@ -49,6 +50,7 @@ export interface SettingsFieldConfig {
 	type: SettingsFieldType;
 	isExperimental?: boolean;
 	isPositiveInteger?: boolean;
+	dependsOn?: string;
 	help?: string;
 	options?: Array<{ value: string; label: string; icon?: typeof Icon }>;
 }

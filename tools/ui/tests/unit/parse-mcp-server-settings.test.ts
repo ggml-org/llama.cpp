@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { parseMcpServerSettings } from '$lib/utils/mcp';
-import { DEFAULT_MCP_CONFIG, MCP_SERVER_ID_PREFIX } from '$lib/constants/mcp';
+import { MCP_SERVER_ID_PREFIX } from '$lib/constants/mcp';
 
 /**
  * Tests for the mcpServers settings parser.
@@ -58,24 +58,16 @@ describe('parseMcpServerSettings', () => {
 		expect(parsed[2]?.id).toBe('custom-3');
 	});
 
-	it('falls back to the configured default requestTimeoutSeconds only for nullish values', () => {
-		const fallback = DEFAULT_MCP_CONFIG.requestTimeoutSeconds;
-
+	it('does not emit a per-server timeout, the request timeout is a live global setting', () => {
+		// A stored per-server requestTimeoutSeconds was never editable in
+		// any UI and froze the global setting at server creation time,
+		// making the Settings value a no-op for existing servers. The
+		// parser drops the field so the global applies live everywhere.
 		const parsed = parseMcpServerSettings(
-			JSON.stringify([
-				{ id: 'a', url: 'https://a.test' },
-				{ id: 'b', url: 'https://b.test', requestTimeoutSeconds: undefined },
-				{ id: 'c', url: 'https://c.test', requestTimeoutSeconds: 0 },
-				{ id: 'd', url: 'https://d.test', requestTimeoutSeconds: 45 }
-			])
+			JSON.stringify([{ id: 'a', url: 'https://a.test', requestTimeoutSeconds: 45 }])
 		);
 
-		// The parser uses ?? for timeout fallback, which only triggers on
-		// null/undefined. Explicit 0 is preserved at face value.
-		expect(parsed[0]?.requestTimeoutSeconds).toBe(fallback);
-		expect(parsed[1]?.requestTimeoutSeconds).toBe(fallback);
-		expect(parsed[2]?.requestTimeoutSeconds).toBe(0);
-		expect(parsed[3]?.requestTimeoutSeconds).toBe(45);
+		expect(parsed[0]).not.toHaveProperty('requestTimeoutSeconds');
 	});
 
 	it('treats whitespace-only headers strings as undefined', () => {
@@ -106,6 +98,22 @@ describe('parseMcpServerSettings', () => {
 		expect(parsed[2]?.enabled).toBe(false);
 		expect(parsed[0]?.useProxy).toBe(false);
 		expect(parsed[3]?.useProxy).toBe(true);
+	});
+
+	it('keeps disabled entries in the list, enabled is state and never a visibility filter', () => {
+		// Regression guard for issue #25625: filtering the server list on
+		// `enabled` hides a toggled-off server from every UI surface with
+		// no way to re-enable it. Any list derived from this parser must
+		// contain disabled entries.
+		const parsed = parseMcpServerSettings(
+			JSON.stringify([
+				{ id: 'on', url: 'https://on.test', enabled: true },
+				{ id: 'off', url: 'https://off.test', enabled: false }
+			])
+		);
+
+		expect(parsed.map((entry) => entry.id)).toEqual(['on', 'off']);
+		expect(parsed[1]?.enabled).toBe(false);
 	});
 
 	it('preserves input order when mapping entries', () => {

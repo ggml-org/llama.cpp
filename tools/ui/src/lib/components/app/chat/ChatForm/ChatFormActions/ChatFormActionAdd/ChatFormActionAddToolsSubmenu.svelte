@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { PencilRuler, ChevronDown, ChevronRight, Loader2, Info, Check } from '@lucide/svelte';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Collapsible from '$lib/components/ui/collapsible';
@@ -15,7 +16,7 @@
 
 <DropdownMenu.Sub onOpenChange={(open) => open && toolsPanel.handleOpen()}>
 	<DropdownMenu.SubTrigger class="flex cursor-pointer items-center gap-2">
-		<PencilRuler class="h-4 w-4" />
+		<PencilRuler class={ICON_CLASS_DEFAULT} />
 
 		<span>Tools</span>
 	</DropdownMenu.SubTrigger>
@@ -24,14 +25,14 @@
 		{#if toolsPanel.totalToolCount === 0}
 			{#if toolsStore.loading}
 				<div class="px-3 py-4 text-center text-sm text-muted-foreground">
-					<Loader2 class="mx-auto mb-1 h-4 w-4 animate-spin" />
+					<Loader2 class="mx-auto mb-1 {ICON_CLASS_DEFAULT} animate-spin" />
 
 					Loading tools...
 				</div>
 			{:else if toolsStore.isToolsEndpointUnreachable}
 				<div class="grid gap-2.5 px-3 py-4 text-sm text-muted-foreground">
 					<span class="flex gap-2">
-						<Info class="mt-0.5 h-4 w-4 shrink-0" />
+						<Info class="mt-0.5 {ICON_CLASS_DEFAULT} shrink-0" />
 
 						<span>
 							Run llama-server with <code>{CLI_FLAGS.TOOLS}</code> flag to enable
@@ -41,7 +42,7 @@
 					</span>
 
 					<span class="flex gap-2">
-						<Info class="mt-0.5 h-4 w-4 shrink-0" />
+						<Info class="mt-0.5 {ICON_CLASS_DEFAULT} shrink-0" />
 
 						<span>
 							{hasMcpServersAvailable ? 'Enable' : 'Add'} MCP Server(s) to access
@@ -54,7 +55,7 @@
 				<div class="px-3 py-4 text-center text-sm text-muted-foreground">Failed to load tools</div>
 			{:else if toolsPanel.noToolsInfoMessage}
 				<div class="flex gap-2 px-3 py-4 text-sm text-muted-foreground">
-					<Info class="mt-0.5 h-4 w-4 shrink-0" />
+					<Info class="mt-0.5 {ICON_CLASS_DEFAULT} shrink-0" />
 
 					<span>{toolsPanel.noToolsInfoMessage}</span>
 				</div>
@@ -87,7 +88,7 @@
 										<img
 											src={favicon}
 											alt=""
-											class="h-4 w-4 shrink-0 rounded-sm"
+											class="{ICON_CLASS_DEFAULT} shrink-0 rounded-sm"
 											onerror={(e) => {
 												(e.currentTarget as HTMLImageElement).style.display = 'none';
 											}}
@@ -109,7 +110,7 @@
 											{...props}
 											{checked}
 											onCheckedChange={() => toolsPanel.toggleGroupByLabel(group.label)}
-											class="mr-2 h-4 w-4 shrink-0"
+											class="mr-2 {ICON_CLASS_DEFAULT} shrink-0"
 										/>
 									{/snippet}
 								</Tooltip.Trigger>

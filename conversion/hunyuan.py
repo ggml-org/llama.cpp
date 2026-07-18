@@ -361,6 +361,7 @@ class HunyuanVLTextModel(HunYuanModel):
 @ModelBase.register("HYV3ForCausalLM")
 class HYV3Model(TextModel):
     model_arch = gguf.MODEL_ARCH.HY_V3
+    supports_mtp_export = True
 
     # Trunk layer count, stashed before indexing so the classmethod
     # filter_tensors can identify the appended MTP block(s) (mirrors

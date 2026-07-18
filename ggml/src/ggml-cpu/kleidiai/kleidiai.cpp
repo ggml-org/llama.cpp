@@ -26,6 +26,9 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#ifndef HWCAP2_SME2
+#define HWCAP2_SME2 (1UL << 37)
+#endif
 #elif defined(__APPLE__)
 #include <string_view>
 #include <sys/sysctl.h>
@@ -60,14 +63,21 @@ struct ggml_kleidiai_context {
     cpu_feature features;
     ggml_kleidiai_kernels * kernels_q4;
     ggml_kleidiai_kernels * kernels_q8;
+    ggml_kleidiai_kernels * kernels_f32;
     int sme_thread_cap; // <= 0 means “SME disabled/unknown”;
     int thread_hint;    // <= 0 means “no hint”
     int chunk_multiplier;
-} static ctx = { CPU_FEATURE_NONE, nullptr, nullptr, 0, -1, 4 };
+} static ctx = { CPU_FEATURE_NONE, nullptr, nullptr, nullptr, 0, -1, 4 };
+
+static inline bool is_sme_family(cpu_feature f) {
+    return (f & (CPU_FEATURE_SME | CPU_FEATURE_SME2)) != CPU_FEATURE_NONE;
+}
 
 static const char* cpu_feature_to_string(cpu_feature f) {
     if (f == CPU_FEATURE_NONE) {
         return "NONE";
+    } else if ((f & CPU_FEATURE_SME2) == CPU_FEATURE_SME2) {
+        return "SME2";
     } else if ((f & CPU_FEATURE_SME) == CPU_FEATURE_SME) {
         return "SME";
     } else if ((f & CPU_FEATURE_SVE) == CPU_FEATURE_SVE) {
@@ -156,10 +166,10 @@ static size_t detect_num_smcus() {
             }
         }
     }
-    return 1;
+    return 0;
 
 #else
-    return 1;
+    return 0;
 #endif
 }
 
@@ -192,7 +202,6 @@ static void init_kleidiai_context(void) {
         const char *env_threads     = getenv("GGML_TOTAL_THREADS");
         const char *env_chunk_mult  = getenv("GGML_KLEIDIAI_CHUNK_MULTIPLIER");
 
-        const bool cpu_has_sme = ggml_cpu_has_sme();
         size_t detected_smcus = 0;
 
         ctx.features  = (ggml_cpu_has_dotprod()     ? CPU_FEATURE_DOTPROD : CPU_FEATURE_NONE) |
@@ -216,56 +225,59 @@ static void init_kleidiai_context(void) {
         }
 
         // SME policy:
-        // - If CPU doesn't support SME: SME always off.
-        // - Else:
-        //   - env unset => auto-detect cores; enable if detected > 0.
-        //   - env=0     => force off.
-        //   - env>0     => force N cores (skip detection).
+        // - env unset => auto-detect SMCUs; enable SME only if detected > 0.
+        // - env=0     => force off.
+        // - env>0     => force N cores, if the binary was built with SME.
         int sme_cores = 0;
         bool sme_env_ok = false;
         bool sme_env_set = (env_sme != nullptr);
 
-        if (!cpu_has_sme) {
-            if (sme_env_set) {
-                bool ok = false;
-                int req = parse_uint_env(env_sme, "GGML_KLEIDIAI_SME", &ok);
-                if (ok && req > 0) {
-                    GGML_LOG_WARN("kleidiai: GGML_KLEIDIAI_SME=%d but SME is not supported on this CPU; disabling SME\n", req);
-                }
-            }
-            sme_cores = 0;
-        } else {
-            if (sme_env_set) {
-                bool ok = false;
-                int v = parse_uint_env(env_sme, "GGML_KLEIDIAI_SME", &ok);
-                sme_env_ok = ok;
+        if (sme_env_set) {
+            bool ok = false;
+            int v = parse_uint_env(env_sme, "GGML_KLEIDIAI_SME", &ok);
+            sme_env_ok = ok;
 
-                if (!ok) {
-                    GGML_LOG_WARN("kleidiai: GGML_KLEIDIAI_SME set but parsing failed; falling back to runtime SME-core detection\n");
-                    detected_smcus = detect_num_smcus();
-                    sme_cores = detected_smcus > 0 ? (int)detected_smcus : 0;
-                } else if (v == 0) {
-                    sme_cores = 0;
-                } else {
-                    sme_cores = v;
-                }
-            } else {
+            if (!ok) {
+                GGML_LOG_WARN("kleidiai: GGML_KLEIDIAI_SME set but parsing failed; falling back to runtime SME-core detection\n");
                 detected_smcus = detect_num_smcus();
                 sme_cores = detected_smcus > 0 ? (int)detected_smcus : 0;
+            } else if (v == 0) {
+                sme_cores = 0;
+            } else if (!ggml_cpu_has_sme()) {
+                GGML_LOG_WARN("kleidiai: GGML_KLEIDIAI_SME=%d but the binary was not built with SME; disabling SME\n", v);
+                sme_cores = 0;
+            } else {
+                sme_cores = v;
             }
+        } else {
+            detected_smcus = detect_num_smcus();
+            sme_cores = detected_smcus > 0 ? (int)detected_smcus : 0;
+        }
 
-            if (!sme_env_set && sme_cores == 0) {
-                GGML_LOG_WARN("kleidiai: SME supported but runtime SME-core detection returned 0; falling back to NEON\n");
-            }
+        if (!sme_env_set && ggml_cpu_has_sme() && sme_cores == 0) {
+            GGML_LOG_WARN("kleidiai: runtime SME-core detection returned 0; falling back to NEON\n");
+        }
 
-            if (sme_cores > 0) {
-                ctx.features |= CPU_FEATURE_SME;
+        if (sme_cores > 0) {
+            ctx.features |= CPU_FEATURE_SME;
+#if defined(__aarch64__) && defined(__linux__)
+            // ARM guarantees SME2 implies SME, so only check SME2 when SME is enabled.
+            if (getauxval(AT_HWCAP2) & HWCAP2_SME2) {
+                ctx.features |= CPU_FEATURE_SME2;
             }
+#elif defined(__aarch64__) && defined(__APPLE__)
+            int feat_sme2 = 0;
+            size_t size = sizeof(feat_sme2);
+            if (sysctlbyname("hw.optional.arm.FEAT_SME2", &feat_sme2, &size, NULL, 0) == 0 && feat_sme2) {
+                ctx.features |= CPU_FEATURE_SME2;
+            }
+#endif
         }
 
         // Kernel selection
-        ctx.kernels_q4 = ggml_kleidiai_select_kernels_q4_0(ctx.features);
-        ctx.kernels_q8 = ggml_kleidiai_select_kernels_q8_0(ctx.features);
+        ctx.kernels_q4  = ggml_kleidiai_select_kernels_q4_0(ctx.features);
+        ctx.kernels_q8  = ggml_kleidiai_select_kernels_q8_0(ctx.features);
+        ctx.kernels_f32 = ggml_kleidiai_select_kernels_f32(ctx.features);
 
         if (!ctx.kernels_q4) {
             GGML_LOG_INFO("kleidiai: no compatible q4 kernels found for CPU features mask %d\n", (int)ctx.features);
@@ -279,13 +291,22 @@ static void init_kleidiai_context(void) {
             GGML_LOG_INFO("kleidiai: primary q8 kernel feature %s\n", cpu_feature_to_string(ctx.kernels_q8->required_cpu));
         }
 
+        if (!ctx.kernels_f32) {
+            GGML_LOG_INFO("kleidiai: no compatible f32 kernels found for CPU features mask %d\n", (int)ctx.features);
+        } else {
+            GGML_LOG_INFO("kleidiai: primary f32 kernel feature %s\n", cpu_feature_to_string(ctx.kernels_f32->required_cpu));
+        }
+
         ctx.sme_thread_cap = (ctx.features & CPU_FEATURE_SME) ? sme_cores : 0;
 
         if (ctx.features & CPU_FEATURE_SME) {
+            const bool has_sme2 = (ctx.features & CPU_FEATURE_SME2) != CPU_FEATURE_NONE;
             if (sme_env_set && sme_env_ok && sme_cores > 0) {
-                GGML_LOG_INFO("kleidiai: SME enabled (GGML_KLEIDIAI_SME=%d override)\n", sme_cores);
+                GGML_LOG_INFO("kleidiai: SME%s enabled (GGML_KLEIDIAI_SME=%d override)\n",
+                    has_sme2 ? "2" : "", sme_cores);
             } else {
-                GGML_LOG_INFO("kleidiai: SME enabled (runtime-detected SME cores=%d)\n", sme_cores);
+                GGML_LOG_INFO("kleidiai: SME%s enabled (runtime-detected SME cores=%d)\n",
+                    has_sme2 ? "2" : "", sme_cores);
             }
         } else {
             GGML_LOG_INFO("kleidiai: SME disabled\n");
@@ -332,6 +353,13 @@ static inline bool lcm_size(size_t a, size_t b, size_t & result) {
 
 static inline size_t ceil_div_size(size_t a, size_t b) {
     return b == 0 ? 0 : (a + b - 1) / b;
+}
+
+static inline size_t kleidiai_chunk_cols(size_t n, int nth_total, bool disable_chunking, size_t n_step) {
+    const size_t multiplier = (nth_total == 1 || disable_chunking) ? 1 : std::max<size_t>(1, (size_t) ctx.chunk_multiplier);
+    const size_t divisor = std::max<size_t>(1, (size_t) nth_total * multiplier);
+    const size_t chunk_cols = align_up(std::max<size_t>(1, ceil_div_size(n, divisor)), n_step);
+    return chunk_cols ? chunk_cols : n_step;
 }
 
 struct kleidiai_block_args {
@@ -418,6 +446,10 @@ static inline ggml_kleidiai_kernels * kleidiai_primary_kernel_q8() {
     return ctx.kernels_q8;
 }
 
+static inline ggml_kleidiai_kernels * kleidiai_primary_kernel_f32() {
+    return ctx.kernels_f32;
+}
+
 template <typename SelectFallback>
 static int kleidiai_collect_kernel_chain_common(
         ggml_kleidiai_kernels * primary,
@@ -430,11 +462,16 @@ static int kleidiai_collect_kernel_chain_common(
     }
     out[count++] = primary;
 
-    if ((primary->required_cpu & CPU_FEATURE_SME) == CPU_FEATURE_SME) {
-        const cpu_feature fallback_mask = static_cast<cpu_feature>(features & ~CPU_FEATURE_SME);
+    if (primary->rhs_info.repack_mode == RHS_REPACK_SINGLE_ONLY) {
+        return count;
+    }
+
+    if (is_sme_family(primary->required_cpu)) {
+        const cpu_feature fallback_mask = static_cast<cpu_feature>(features & ~CPU_FEATURE_SME & ~CPU_FEATURE_SME2);
         if (fallback_mask != CPU_FEATURE_NONE) {
             ggml_kleidiai_kernels * fallback = select_fallback(fallback_mask);
             if (fallback && fallback != primary &&
+                fallback->rhs_info.repack_mode != RHS_REPACK_SINGLE_ONLY &&
                 fallback->lhs_type == primary->lhs_type &&
                 fallback->rhs_type == primary->rhs_type &&
                 fallback->op_type  == primary->op_type) {
@@ -463,6 +500,12 @@ static int kleidiai_collect_q8_chain(std::array<ggml_kleidiai_kernels *, GGML_KL
     ggml_kleidiai_kernels * primary = kleidiai_primary_kernel_q8();
     return kleidiai_collect_kernel_chain_common(primary, ctx.features, out,
         [&](cpu_feature mask) { return ggml_kleidiai_select_kernels_q8_0(mask); });
+}
+
+static int kleidiai_collect_f32_chain(std::array<ggml_kleidiai_kernels *, GGML_KLEIDIAI_MAX_KERNEL_SLOTS> & out) {
+    ggml_kleidiai_kernels * primary = kleidiai_primary_kernel_f32();
+    return kleidiai_collect_kernel_chain_common(primary, ctx.features, out,
+        [&](cpu_feature mask) { return ggml_kleidiai_select_kernels_f32(mask); });
 }
 
 static inline int64_t ggml_ne(const ggml_tensor * tensor, int dim) {
@@ -539,6 +582,36 @@ class tensor_traits : public ggml::cpu::tensor_traits {
             return true;
         }
 
+        if (op->src[0]->type == GGML_TYPE_F32) {
+            size_t cursor = 0;
+            bool any_slot = false;
+
+            for (int slot = 0; slot < slot_count; ++slot) {
+                ggml_kleidiai_kernels * kernels = kernel_chain[slot];
+                lhs_packing_info * lhs_info = &kernels->gemm_lhs_info;
+                kernel_info * kernel        = &kernels->gemm;
+
+                if (!lhs_info || !lhs_info->packed_size_ex || !kernel) {
+                    return false;
+                }
+
+                const size_t mr = kernel->get_mr();
+                const size_t kr = kernel->get_kr();
+                const size_t sr = kernel->get_sr();
+
+                cursor  = align_up(cursor, GGML_KLEIDIAI_PACK_ALIGN);
+                cursor += lhs_info->packed_size_ex(m, k, 0, mr, kr, sr);
+                any_slot = true;
+            }
+
+            if (!any_slot) {
+                return false;
+            }
+
+            size = cursor;
+            return true;
+        }
+
         if (op->src[0]->type == GGML_TYPE_F16) {
             const int64_t lhs_batch_size0 = op->src[1]->ne[2];
             const int64_t rhs_batch_size0 = op->src[0]->ne[2];
@@ -595,6 +668,8 @@ class tensor_traits : public ggml::cpu::tensor_traits {
         if (dst->op == GGML_OP_MUL_MAT) {
             if (dst->src[0]->type == GGML_TYPE_Q4_0 || dst->src[0]->type == GGML_TYPE_Q8_0) {
                 return compute_forward_qx(params, dst);
+            } else if (dst->src[0]->type == GGML_TYPE_F32) {
+                return compute_forward_f32(params, dst);
             } else if (dst->src[0]->type == GGML_TYPE_F16) {
                 return compute_forward_fp16(params, dst);
             }
@@ -604,6 +679,144 @@ class tensor_traits : public ggml::cpu::tensor_traits {
             }
         }
         return false;
+    }
+
+    bool compute_forward_f32(ggml_compute_params * params, struct ggml_tensor * dst) {
+        GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
+
+        const ggml_tensor * src0 = dst->src[0];
+        const ggml_tensor * src1 = dst->src[1];
+
+        GGML_TENSOR_BINARY_OP_LOCALS
+
+        if (src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+            return false;
+        }
+
+        ggml_kleidiai_kernels * kernels = kleidiai_primary_kernel_f32();
+        if (!kernels) {
+            return false;
+        }
+
+        kernel_info * kernel        = &kernels->gemm;
+        lhs_packing_info * lhs_info = &kernels->gemm_lhs_info;
+
+        if (!kernel || !lhs_info || !lhs_info->get_offset || !lhs_info->get_packed_offset_ex ||
+            !lhs_info->packed_size_ex || !lhs_info->pack_func_ex ||
+            !kernel->get_rhs_packed_offset_ex || !kernel->run_kernel_ex || !kernel->get_dst_offset) {
+            return false;
+        }
+
+        const kleidiai_weight_header * header = kleidiai_weight_header_from_ptr(src0->data);
+        const bool has_header = kleidiai_is_weight_header_valid(header);
+
+        const uint8_t * rhs_base = has_header ? kleidiai_weight_slot_ptr(header, 0)
+                                              : static_cast<const uint8_t *>(src0->data);
+        if (!rhs_base) {
+            return false;
+        }
+
+        const int nth = params->nth > 0 ? params->nth : 1;
+        const int ith = params->ith;
+
+        const size_t k = ne00;
+        const size_t m = ne11;
+        const size_t n = ne01;
+
+        const size_t mr = kernel->get_mr();
+        const size_t kr = kernel->get_kr();
+        const size_t sr = kernel->get_sr();
+
+        const size_t lhs_packed_size = lhs_info->packed_size_ex(m, k, 0, mr, kr, sr);
+        GGML_ASSERT(lhs_packed_size <= params->wsize);
+
+        uint8_t * lhs_packed   = static_cast<uint8_t *>(params->wdata);
+        const size_t dst_stride = dst->nb[1];
+        const size_t n_step = kernel->get_n_step() ? kernel->get_n_step() : 1;
+        const bool disable_chunking = ggml_is_numa();
+        GGML_ASSERT(n <= (size_t) INT_MAX);
+
+        for (int64_t batch_idx = 0; batch_idx < ne12; ++batch_idx) {
+            const uint8_t * lhs_batch_base = static_cast<const uint8_t *>(src1->data) + batch_idx * src1->nb[2];
+            uint8_t * dst_batch_base = static_cast<uint8_t *>(dst->data) + batch_idx * dst->nb[2];
+
+            {
+                const int64_t m_roundup_mr = kai_roundup((int64_t)m, (int64_t)mr);
+                int64_t max_threads = mr ? (m_roundup_mr / (int64_t)mr) : nth;
+                max_threads = std::max<int64_t>(1, max_threads);
+                const int64_t use_threads = std::min<int64_t>(nth, max_threads);
+
+                if (ith < use_threads) {
+                    const int64_t num_m_per_thread0   = round_down((size_t)(m_roundup_mr / use_threads), mr);
+                    const int64_t num_m_per_threadN_1 = (int64_t)m - (use_threads - 1) * num_m_per_thread0;
+
+                    const int64_t m_start = (int64_t)ith * num_m_per_thread0;
+                    const int64_t m_count = (ith == use_threads - 1) ? num_m_per_threadN_1 : num_m_per_thread0;
+
+                    const size_t base_packed_off  = lhs_info->get_packed_offset_ex(m_start, k, 0, mr, kr, sr);
+                    const size_t next_block_off   = lhs_info->get_packed_offset_ex(m_start + mr, k, 0, mr, kr, sr);
+                    const size_t row_stride_bytes = mr ? (next_block_off - base_packed_off) / mr : 0;
+
+                    int64_t remaining = m_count;
+                    int64_t cur       = m_start;
+
+                    while (remaining > 0) {
+                        const int64_t take = std::min<int64_t>((int64_t)m - cur, remaining);
+                        const size_t src_off = lhs_info->get_offset(cur, src1->nb[1]);
+                        const void * src_ptr = lhs_batch_base + src_off;
+                        const size_t dst_off = base_packed_off + (size_t)(cur - m_start) * row_stride_bytes;
+                        void * dst_ptr       = lhs_packed + dst_off;
+
+                        lhs_info->pack_func_ex(take, k, 0, mr, kr, sr, 0, src_ptr, src1->nb[1], dst_ptr);
+
+                        cur       += take;
+                        remaining -= take;
+                    }
+                }
+            }
+
+            if (ith == 0) {
+                ggml_threadpool_chunk_set(params->threadpool, 0);
+            }
+
+            ggml_barrier(params->threadpool);
+
+            const size_t chunk_cols = kleidiai_chunk_cols(n, nth, disable_chunking, n_step);
+            GGML_ASSERT(chunk_cols <= (size_t) INT_MAX);
+
+            int current_col = ggml_threadpool_chunk_add(params->threadpool, (int) chunk_cols);
+            while ((size_t) current_col < n) {
+                const size_t n_start = (size_t) current_col;
+                const size_t n_to_process = std::min(chunk_cols, n - n_start);
+
+                if (n_to_process > 0) {
+                    const size_t lhs_packed_offset = lhs_info->get_packed_offset_ex(0, k, 0, mr, kr, sr);
+                    const size_t rhs_packed_offset = kernel->get_rhs_packed_offset_ex(n_start, k, 0);
+                    const size_t dst_offset        = kernel->get_dst_offset(0, n_start, dst_stride);
+
+                    const void * lhs_ptr = lhs_packed + lhs_packed_offset;
+                    const void * rhs_ptr = rhs_base + rhs_packed_offset;
+                    float * dst_ptr      = reinterpret_cast<float *>(dst_batch_base + dst_offset);
+
+                    kernel->run_kernel_ex(m, n_to_process, k, 0,
+                                          lhs_ptr,
+                                          rhs_ptr,
+                                          dst_ptr,
+                                          dst_stride,
+                                          sizeof(float),
+                                          -FLT_MAX,
+                                          FLT_MAX);
+                }
+
+                current_col = ggml_threadpool_chunk_add(params->threadpool, (int) chunk_cols);
+            }
+
+            if (batch_idx != ne12 - 1) {
+                ggml_barrier(params->threadpool);
+            }
+        }
+
+        return true;
     }
 
     bool compute_forward_fp16(ggml_compute_params * params, struct ggml_tensor * dst) {
@@ -865,14 +1078,14 @@ class tensor_traits : public ggml::cpu::tensor_traits {
 
         int sme_slot = -1;
         for (int i = 0; i < runtime_count; ++i) {
-            if ((runtime[i].kernels->required_cpu & CPU_FEATURE_SME) == CPU_FEATURE_SME) {
+            if (is_sme_family(runtime[i].kernels->required_cpu)) {
                 sme_slot = i;
                 break;
             }
         }
         int non_sme_slot = -1;
         for (int i = 0; i < runtime_count; ++i) {
-            if ((runtime[i].kernels->required_cpu & CPU_FEATURE_SME) != CPU_FEATURE_SME) {
+            if (!is_sme_family(runtime[i].kernels->required_cpu)) {
                 non_sme_slot = i;
                 break;
             }
@@ -910,7 +1123,7 @@ class tensor_traits : public ggml::cpu::tensor_traits {
             // Recompute SME slot based on the collapsed runtime[0]
             sme_slot = -1;
             if (runtime_count > 0 &&
-                (runtime[0].kernels->required_cpu & CPU_FEATURE_SME) == CPU_FEATURE_SME) {
+                is_sme_family(runtime[0].kernels->required_cpu)) {
                 sme_slot = 0;
             }
         }
@@ -1214,7 +1427,7 @@ class tensor_traits : public ggml::cpu::tensor_traits {
 
 public:
     int repack(struct ggml_tensor * tensor, const void * data, size_t data_size) {
-        GGML_ASSERT(tensor->type == GGML_TYPE_Q4_0 || tensor->type == GGML_TYPE_Q8_0);
+        GGML_ASSERT(tensor->type == GGML_TYPE_Q4_0 || tensor->type == GGML_TYPE_Q8_0 || tensor->type == GGML_TYPE_F32);
         const size_t n = tensor->ne[1];
         const size_t k = tensor->ne[0];
 
@@ -1233,12 +1446,15 @@ public:
 
         std::array<ggml_kleidiai_kernels *, GGML_KLEIDIAI_MAX_KERNEL_SLOTS> kernel_chain;
         const bool want_q8 = tensor->type == GGML_TYPE_Q8_0;
-        const int slot_total = want_q8 ? kleidiai_collect_q8_chain(kernel_chain)
-                                       : kleidiai_collect_q4_chain(kernel_chain);
+        const bool want_f32 = tensor->type == GGML_TYPE_F32;
+        const int slot_total = want_f32 ? kleidiai_collect_f32_chain(kernel_chain)
+                                        : want_q8 ? kleidiai_collect_q8_chain(kernel_chain)
+                                                  : kleidiai_collect_q4_chain(kernel_chain);
         const bool allow_fallback = kleidiai_pack_fallback_allowed();
 
         std::vector<int8_t> qdata;
         std::vector<float>  scales;
+        std::vector<float>  bias;
 
         if (want_q8 && slot_total > 0) {
             qdata.resize(n * k, 0);
@@ -1286,6 +1502,10 @@ public:
             }
         }
 
+        if (want_f32 && slot_total > 0) {
+            bias.resize(n, 0.0f);
+        }
+
         for (int slot = 0; slot < slot_total && slot < GGML_KLEIDIAI_MAX_KERNEL_SLOTS; ++slot) {
             if (!allow_fallback && slot > 0) {
                 break;
@@ -1302,8 +1522,9 @@ public:
             const size_t sr = kernel->get_sr();
             const ggml_type rhs_type = kernels->rhs_type;
             const size_t block_len = rhs_type == GGML_TYPE_Q8_0 ? QK8_0 :
-                                     rhs_type == GGML_TYPE_Q4_0 ? QK4_0 : 0;
-            if (block_len == 0) {
+                                     rhs_type == GGML_TYPE_Q4_0 ? QK4_0 :
+                                     rhs_type == GGML_TYPE_F32 ? 0 : SIZE_MAX;
+            if (block_len == SIZE_MAX) {
                 continue;
             }
 
@@ -1326,6 +1547,10 @@ public:
                 rhs_info->pack_func_ex(1, n, k, nr, kr, sr, 0, 0,
                                        qdata.data(), nullptr, scales.data(),
                                        dst_ptr, 0, &params);
+            } else if (rhs_type == GGML_TYPE_F32) {
+                rhs_info->pack_func_ex(1, n, k, nr, kr, sr, 0, tensor->nb[1],
+                                       data, bias.data(), nullptr,
+                                       dst_ptr, 0, nullptr);
             } else {
                 continue;
             }
@@ -1400,7 +1625,7 @@ static size_t ggml_backend_cpu_kleidiai_buffer_type_get_alignment(ggml_backend_b
 static size_t ggml_backend_cpu_kleidiai_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const struct ggml_tensor * tensor) {
     GGML_UNUSED(buft);
 
-    if (tensor->type != GGML_TYPE_Q4_0 && tensor->type != GGML_TYPE_Q8_0) {
+    if (tensor->type != GGML_TYPE_Q4_0 && tensor->type != GGML_TYPE_Q8_0 && tensor->type != GGML_TYPE_F32) {
         return ggml_nbytes(tensor);
     }
 
@@ -1412,8 +1637,10 @@ static size_t ggml_backend_cpu_kleidiai_buffer_type_get_alloc_size(ggml_backend_
 
     std::array<ggml_kleidiai_kernels *, GGML_KLEIDIAI_MAX_KERNEL_SLOTS> kernel_chain;
     const bool want_q8 = tensor->type == GGML_TYPE_Q8_0;
-    const int slot_total = want_q8 ? kleidiai_collect_q8_chain(kernel_chain)
-                                   : kleidiai_collect_q4_chain(kernel_chain);
+    const bool want_f32 = tensor->type == GGML_TYPE_F32;
+    const int slot_total = want_f32 ? kleidiai_collect_f32_chain(kernel_chain)
+                                    : want_q8 ? kleidiai_collect_q8_chain(kernel_chain)
+                                              : kleidiai_collect_q4_chain(kernel_chain);
     const bool allow_fallback = kleidiai_pack_fallback_allowed();
 
     size_t slot_count = 0;
@@ -1433,8 +1660,9 @@ static size_t ggml_backend_cpu_kleidiai_buffer_type_get_alloc_size(ggml_backend_
 
         const ggml_type rhs_type = kernels->rhs_type;
         const size_t block_len = rhs_type == GGML_TYPE_Q4_0 ? QK4_0 :
-                                 rhs_type == GGML_TYPE_Q8_0 ? QK8_0 : 0;
-        if (block_len == 0) {
+                                 rhs_type == GGML_TYPE_Q8_0 ? QK8_0 :
+                                 rhs_type == GGML_TYPE_F32 ? 0 : SIZE_MAX;
+        if (block_len == SIZE_MAX) {
             continue;
         }
 
@@ -1455,25 +1683,41 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
     bool supports_op(ggml_backend_dev_t, const struct ggml_tensor * op) override {
         std::array<ggml_kleidiai_kernels *, GGML_KLEIDIAI_MAX_KERNEL_SLOTS> kernel_chain;
         const int slot_total = kleidiai_collect_kernel_chain(op, kernel_chain);
-        if ((op->op == GGML_OP_MUL_MAT || op->op == GGML_OP_GET_ROWS) &&
-            (op->src[0]->type == GGML_TYPE_Q4_0 || op->src[0]->type == GGML_TYPE_Q8_0) &&
+        const bool src0_is_kleidiai =
             op->src[0]->buffer &&
             (ggml_n_dims(op->src[0]) == 2) &&
             op->src[0]->buffer->buft == ggml_backend_cpu_kleidiai_buffer_type() &&
-            slot_total > 0) {
+            slot_total > 0;
+
+        if ((op->op == GGML_OP_MUL_MAT || op->op == GGML_OP_GET_ROWS) &&
+            (op->src[0]->type == GGML_TYPE_Q4_0 || op->src[0]->type == GGML_TYPE_Q8_0 || op->src[0]->type == GGML_TYPE_F32) &&
+            src0_is_kleidiai) {
             if (op->src[0]->type == GGML_TYPE_Q4_0 && ctx.kernels_q4 == nullptr) {
                 return false;
             }
             if (op->src[0]->type == GGML_TYPE_Q8_0 && ctx.kernels_q8 == nullptr) {
                 return false;
             }
+            if (op->src[0]->type == GGML_TYPE_F32 && ctx.kernels_f32 == nullptr) {
+                return false;
+            }
             if (op->src[1]->buffer && !ggml_backend_buft_is_host(op->src[1]->buffer->buft)) {
                 return false;
             }
-            if ((op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_I32) &&
-                ggml_ne(op->src[1], 3) == 1) {
-                return true;
+
+            if (op->src[0]->type == GGML_TYPE_Q4_0 || op->src[0]->type == GGML_TYPE_Q8_0) {
+                if ((op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_I32) &&
+                    ggml_ne(op->src[1], 3) == 1) {
+                    return true;
+                }
+                return false;
             }
+
+            if (op->op != GGML_OP_MUL_MAT || op->src[1]->type != GGML_TYPE_F32 || op->type != GGML_TYPE_F32) {
+                return false;
+            }
+
+            return true;
         }
         return false;
     }
