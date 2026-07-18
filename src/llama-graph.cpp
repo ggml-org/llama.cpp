@@ -1410,6 +1410,11 @@ ggml_tensor * llm_graph_context::build_lora_mm(
                 default: return tensor;
             }
 
+            const int64_t n_per_row = w->ne[0];
+            if (n_per_row % ggml_blck_size(type) != 0) {
+                return tensor;
+            }
+
             const int64_t ne = ggml_nelements(tensor);
             if (ne % ggml_blck_size(type) != 0) {
                 return tensor;

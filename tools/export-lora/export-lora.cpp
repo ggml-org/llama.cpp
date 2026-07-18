@@ -358,6 +358,10 @@ struct lora_merge_ctx {
         } else {
             return GGML_TYPE_F16;
         }
+        if (t->ne[0] % ggml_blck_size(out_type) != 0) {
+            return t->type;
+        }
+        return out_type;
     }
 
     void run_merge() {
