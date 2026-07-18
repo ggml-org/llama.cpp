@@ -69,6 +69,7 @@ extern int g_ggml_sycl_disable_optimize;
 extern int g_ggml_sycl_prioritize_dmmv;
 extern int g_ggml_sycl_enable_flash_attention;
 extern int g_ggml_sycl_fa_force_vec_standard;
+extern int g_ggml_sycl_fa_q8_gqa_tile;
 
 
 #if defined(__clang__) && __has_builtin(__builtin_expect)

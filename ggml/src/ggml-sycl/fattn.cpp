@@ -305,6 +305,17 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
         return BEST_FATTN_KERNEL_VEC;
     }
     const bool can_use_vector_kernel = Q->ne[0] <= 512 && Q->ne[0] % 64 == 0 && K->ne[1] % FATTN_KQ_STRIDE == 0;
+    const bool force_q8_gqa_tile =
+        g_ggml_sycl_fa_q8_gqa_tile == 1 &&
+        Q->ne[1] == 1 &&
+        K->ne[0] == 128 &&
+        K->type == GGML_TYPE_Q8_0 &&
+        V->type == GGML_TYPE_Q8_0 &&
+        gqa_opt_applies &&
+        gqa_ratio >= 2;
+    if (force_q8_gqa_tile) {
+        return BEST_FATTN_KERNEL_TILE;
+    }
     const bool force_vec_standard =
         g_ggml_sycl_fa_force_vec_standard == 1 &&
         Q->ne[1] == 1 &&
