@@ -10279,7 +10279,19 @@ static bool ggml_vk_use_mul_mat_vec_id(const struct ggml_cgraph * cgraph, int no
     ggml_tensor * dst = cgraph->nodes[node_idx];
     ggml_tensor * src0 = dst->src[0];
     ggml_tensor * src2 = dst->src[2];
-    return (src2->ne[1] <= 8) && (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || ggml_is_quantized(src0->type));
+    const bool type_ok = (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || ggml_is_quantized(src0->type));
+    // Small batches (single-token decode) always use the vec path.
+    if (src2->ne[1] <= 8 && type_ok) {
+        return true;
+    }
+    // High-expert-count MoE (>64 experts, e.g. DeepSeek-V3/V4-class 256-expert models):
+    // route the decode regime (batch <= 256) to mul_mat_vec_id. On RADV the mul_mat_id
+    // shader for >=256 experts stalls during pipeline compilation at high -ngl; the vec
+    // path avoids this and is also faster per-dispatch for token generation.
+    if (src0->ne[2] > 64 && src2->ne[1] <= 256 && type_ok) {
+        return true;
+    }
+    return false;
 }
 
 static void ggml_vk_mul_mat_id(ggml_backend_vk_context * ctx, vk_context& subctx, const struct ggml_cgraph * cgraph, int node_idx) {
