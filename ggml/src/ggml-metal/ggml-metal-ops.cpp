@@ -1599,8 +1599,9 @@ int ggml_metal_op_rwkv(ggml_metal_op_t ctx, int idx) {
     return 1;
 }
 
-// Match gated_delta_net + the trailing cpy that scatters state snapshots into the recurrent cache.
-// Returns 1 (skip the cpy) on success, 0 otherwise.
+// Match gated_delta_net + the trailing cpy that scatters its state snapshots into the
+// recurrent cache, so the kernel can write them straight to the cache and the cpy is skipped.
+// Returns 1 on success (cpy flagged out), 0 otherwise. Mirrors ggml_cuda_try_gdn_cache_fusion.
 static int ggml_metal_try_gdn_cache_fusion(ggml_metal_op_t        ctx,
                                            int                    idx,
                                            ggml_metal_buffer_id * cache_buf_id,
@@ -1612,9 +1613,6 @@ static int ggml_metal_try_gdn_cache_fusion(ggml_metal_op_t        ctx,
         return 0;
     }
 
-    // the snapshot cpy is the first real node after the gdn; it may be separated by
-    // view/no-op nodes and by other compute ops (e.g. the gate sigmoid and the R-cell
-    // scale) that do not read the gdn state tail. walk forward to find it.
     const int64_t S_v      = gdn->src[2]->ne[0];
     const int64_t H        = gdn->src[2]->ne[1];
     const int64_t n_tokens = gdn->src[2]->ne[2];
@@ -1622,25 +1620,24 @@ static int ggml_metal_try_gdn_cache_fusion(ggml_metal_op_t        ctx,
     const int64_t K        = ggml_get_op_params_i32(gdn, 0);
     const size_t  tail_off = ggml_row_size(GGML_TYPE_F32, S_v * H * n_tokens * n_seqs);
 
+    // Find the snapshot cpy. Views are filtered out of idxs, so only real ops appear
+    // here. The fused kernel writes the state tail straight to the cache instead of into
+    // gdn's dst, so if an intervening op reads that tail it sees stale data and we
+    // must not fuse.
     const ggml_tensor * cpy = nullptr;
     int cpy_idx = -1;
 
-    for (int j = idx + 1; j < ctx->n_nodes() && j <= idx + 16; ++j) {
+    for (int j = idx + 1; j < ctx->n_nodes(); ++j) {
         const ggml_tensor * n = ctx->node(j);
-        if (ggml_op_is_empty(n->op)) {
-            continue; // view/no-op: skip
-        }
         if (n->op == GGML_OP_CPY && !(n->flags & GGML_TENSOR_FLAG_OUTPUT)) {
-            cpy = n; // candidate; validated below
+            cpy = n;
             cpy_idx = j;
             break;
         }
-        // another compute op sits before the cpy: it must not read the gdn state tail,
-        // since the fused kernel writes the tail straight to the cache (gdn dst tail unwritten)
         for (int s = 0; s < GGML_MAX_SRC && n->src[s]; ++s) {
             const ggml_tensor * r = n->src[s];
-            if (r && r->view_src == gdn && r->view_offs >= tail_off) {
-                return 0; // tail is read before the cpy: unsafe to fuse
+            if (r == gdn || (r->view_src == gdn && r->view_offs >= tail_off)) {
+                return 0;
             }
         }
     }
@@ -1669,8 +1666,8 @@ static int ggml_metal_try_gdn_cache_fusion(ggml_metal_op_t        ctx,
     *cache_buf_id = ggml_metal_get_buffer_id(dst);
     *slot_stride = K > 1 ? (int32_t) (dst->nb[2] / sizeof(float)) : 0;
 
-    // skip the trailing cpy: the fused kernel wrote the state straight into the cache.
-    // clearing COMPUTE makes the dispatch loop no-op this node (ggml_metal_op_encode_impl).
+    // skip the trailing cpy: the fused kernel writes the state straight into the cache,
+    // and clearing COMPUTE makes encode_impl no-op the node.
     ctx->node(cpy_idx)->flags &= ~GGML_TENSOR_FLAG_COMPUTE;
 
     return 1;
@@ -1699,12 +1696,11 @@ int ggml_metal_op_gated_delta_net(ggml_metal_op_t ctx, int idx) {
 
     auto pipeline = ggml_metal_library_get_pipeline_gated_delta_net(lib, op);
 
-    // non-fused: state_out = dst buffer past the attn scores; stride = per-snap size
-    const int32_t state_size_per_snap = ne20 * ne20 * ne21 * ne23;
     if (!fused) {
+        // state_out = dst buffer past the attn scores; stride = per-snapshot size
         cache_buf_id  = ggml_metal_get_buffer_id(op);
         cache_buf_id.offs += (size_t) ggml_row_size(GGML_TYPE_F32, ne20 * ne21 * ne22 * ne23);
-        slot_stride   = state_size_per_snap;
+        slot_stride   = ne20 * ne20 * ne21 * ne23;
     }
 
     int ida = 0;
