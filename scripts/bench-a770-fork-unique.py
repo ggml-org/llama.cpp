@@ -252,11 +252,14 @@ DEFAULT_PRODUCT_DEPTHS: tuple[int, ...] = (0, 2048, 4096, 8192, 16384)
 DEFAULT_PRODUCT_KV_TYPES: tuple[tuple[str, str], ...] = (("f16", "f16"), ("q8_0", "q8_0"))
 DEFAULT_PRODUCT_REPETITIONS: int = 6
 
-# dmesg regex: catch any line mentioning xe followed (anywhere) by one of
-# the event keywords. The plan's safety gate is "xe.*(reset|hang|timeout|IGC)".
-DMESG_RE = re.compile(r"xe.*(?:reset|hang|timeout|IGC)", re.IGNORECASE)
+# Treat both the current i915 driver and the xe driver as Arc fault sources.
+DMESG_RE = re.compile(
+    r"(i915|xe).*(?:reset|hang|timeout|GPU HANG|device.?lost)", re.IGNORECASE
+)
 
 SOLE_TENANCY_EXIT = 70
+QK8_0 = 32
+Q8_0_BLOCK_BYTES = 34
 
 
 class SoleTenancyViolation(Exception):
@@ -308,18 +311,31 @@ def capture_dmesg(
     since: str = "-1h",
     runner=subprocess.run,
 ) -> int:
-    """Capture xe.*(reset|hang|timeout|IGC) dmesg lines to out_path."""
+    """Capture i915/xe reset, hang, timeout, or device-loss lines."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         proc = runner(
             ["dmesg", "-T", "--since", since],
             check=False, capture_output=True, text=True, timeout=30,
         )
+        if proc.returncode != 0:
+            proc = runner(
+                ["sudo", "-n", "dmesg", "-T", "--since", since],
+                check=False, capture_output=True, text=True, timeout=30,
+            )
     except Exception as exc:  # pragma: no cover
         out_path.write_text(f"dmesg failed: {exc}\n", encoding="utf-8")
-        return 0
-    matches = [ln for ln in (proc.stdout or "").splitlines() if DMESG_RE.search(ln)]
-    out_path.write_text("\n".join(matches) + ("\n" if matches else ""), encoding="utf-8")
+        return -1
+    if proc.returncode != 0:
+        error = (proc.stderr or proc.stdout or "unknown dmesg error").strip()
+        out_path.write_text(f"dmesg failed: {error}\n", encoding="utf-8")
+        return -1
+    matches = [
+        line for line in (proc.stdout or "").splitlines() if DMESG_RE.search(line)
+    ]
+    out_path.write_text(
+        "\n".join(matches) + ("\n" if matches else ""), encoding="utf-8"
+    )
     return len(matches)
 
 
@@ -415,6 +431,7 @@ def _product_bench_argv(bin_dir: Path, model: str, kv: tuple[str, str], depth: i
         "-fa", "on",
         "-ctk", kv[0],
         "-ctv", kv[1],
+        "-p", "512",
         "-n", "128",
         "-b", "512",
         "-ub", "512",
@@ -427,41 +444,149 @@ def _product_bench_argv(bin_dir: Path, model: str, kv: tuple[str, str], depth: i
     return argv
 
 
-def _select_product_rows(bench: list[dict[str, Any]]) -> dict[str, dict[str, Any] | None]:
-    """Select the required pp512 and tg128 rows from llama-bench JSON."""
-    selected: dict[str, dict[str, Any] | None] = {"pp512": None, "tg128": None}
+def _select_prompt_row(
+    bench: list[dict[str, Any]], n_prompt: int, n_gen: int
+) -> dict[str, Any] | None:
+    """Select one exact llama-bench row and reject non-positive throughput."""
     for row in bench:
         try:
+            row_prompt = int(row.get("n_prompt", 0) or 0)
+            row_gen = int(row.get("n_gen", 0) or 0)
             avg_ts = float(row.get("avg_ts", 0.0) or 0.0)
-            n_prompt = int(row.get("n_prompt", 0) or 0)
-            n_gen = int(row.get("n_gen", 0) or 0)
         except (TypeError, ValueError):
             continue
-        if avg_ts <= 0:
-            continue
-        if n_prompt == 512:
-            selected["pp512"] = row
-        if n_gen == 128:
-            selected["tg128"] = row
-    return selected
+        if row_prompt == n_prompt and row_gen == n_gen and avg_ts > 0:
+            return row
+    return None
+
+
+def _select_product_rows(
+    bench: list[dict[str, Any]],
+) -> dict[str, dict[str, Any] | None]:
+    """Select the exact pp512 and tg128 rows from llama-bench JSON."""
+    return {
+        "pp512": _select_prompt_row(bench, n_prompt=512, n_gen=0),
+        "tg128": _select_prompt_row(bench, n_prompt=0, n_gen=128),
+    }
+
+
+def _kv_bytes_per_element(kv_type: str) -> float:
+    if kv_type == "f16":
+        return 2.0
+    if kv_type == "q8_0":
+        return Q8_0_BLOCK_BYTES / QK8_0
+    raise ValueError(f"effective KV bandwidth does not support {kv_type!r}")
+
+
+def _effective_kv_read_bytes_per_step(
+    kv: tuple[str, str], depth: int, layers: int, query_heads: int, head_dim: int
+) -> float:
+    """Requested K+V bytes read per generated token, without cache effects."""
+    return (
+        layers
+        * query_heads
+        * depth
+        * head_dim
+        * (_kv_bytes_per_element(kv[0]) + _kv_bytes_per_element(kv[1]))
+    )
+
+
+def _annotate_effective_kv_bandwidth(
+    cell: dict[str, Any], model_shape: tuple[int, int, int] | None
+) -> None:
+    cell["effective_kv_read_bytes_per_step"] = None
+    cell["effective_kv_gbps"] = {"baseline": None, "candidate": None}
+    if model_shape is None:
+        return
+    layers, query_heads, head_dim = model_shape
+    read_bytes = _effective_kv_read_bytes_per_step(
+        tuple(cell["kv"]), cell["depth"], layers, query_heads, head_dim
+    )
+    tg128 = cell["metrics"]["tg128"]
+    cell["effective_kv_read_bytes_per_step"] = read_bytes
+    cell["effective_kv_gbps"] = {
+        "baseline": read_bytes * tg128["baseline_stats"]["median"] / 1e9,
+        "candidate": (
+            read_bytes * tg128["candidate_stats"]["median"] / 1e9
+            if tg128["candidate_stats"]["n"] > 0
+            else None
+        ),
+    }
+
+
+def _candidate_env_log_assertions(
+    cells: list[dict[str, Any]], candidate_env: dict[str, str] | None
+) -> tuple[dict[str, dict[str, Any]], bool]:
+    """Require requested candidate values when the backend logs that key."""
+    if candidate_env is None:
+        return {}, True
+    all_samples: list[dict[str, Any]] = []
+    candidate_samples: list[dict[str, Any]] = []
+    for cell in cells:
+        for arm_name, samples in cell["samples"].items():
+            all_samples.extend(samples)
+            if arm_name == "candidate":
+                candidate_samples.extend(samples)
+    assertions: dict[str, dict[str, Any]] = {}
+    all_valid = True
+    for key, value in candidate_env.items():
+        key_re = re.compile(rf"(?m)^\s*{re.escape(key)}\s*:")
+        value_re = re.compile(
+            rf"(?m)^\s*{re.escape(key)}\s*:\s*{re.escape(value)}(?:\s|$)"
+        )
+        backend_logs_key = any(
+            key_re.search(
+                sample.get("stdout", "") + "\n" + sample.get("stderr", "")
+            )
+            for sample in all_samples
+        )
+        matched_samples = sum(
+            bool(
+                value_re.search(
+                    sample.get("stdout", "") + "\n" + sample.get("stderr", "")
+                )
+            )
+            for sample in candidate_samples
+        )
+        valid = not backend_logs_key or matched_samples == len(candidate_samples)
+        assertions[key] = {
+            "requested_value": value,
+            "backend_logs_key": backend_logs_key,
+            "candidate_samples": len(candidate_samples),
+            "candidate_samples_with_requested_value": matched_samples,
+            "valid": valid,
+        }
+        all_valid = all_valid and valid
+    return assertions, all_valid
 
 
 def _write_product_summary_md(summary: dict[str, Any], md_path: Path) -> None:
     lines = [
         f"# Product campaign: {summary['model_name']}",
         "",
-        f"- bin-dir: `{summary['bin_dir']}`",
-        f"- baseline label: `{summary['baseline_label']}`",
-        f"- candidate label: `{summary['candidate_label']}`",
-        f"- baseline env: `{summary['baseline_env']}`",
-        f"- candidate env: `{summary['candidate_env']}`",
+        f"- bin-dir: {summary['bin_dir']}",
+        f"- baseline label: {summary['baseline_label']}",
+        f"- candidate label: {summary['candidate_label']}",
+        f"- baseline env: {summary['baseline_env']}",
+        f"- candidate env: {summary['candidate_env']}",
         f"- candidate_enabled: {summary['candidate_enabled']}",
-        f"- dmesg xe.* hits before={summary['dmesg_before_hits']} after={summary['dmesg_after_hits']}",
+        f"- model shape: {summary['model_shape']}",
+        f"- candidate env log assertions: {summary['candidate_env_log_assertions']}",
+        f"- dmesg fault hits before={summary['dmesg_before_hits']} after={summary['dmesg_after_hits']} new={len(summary['dmesg_new_matches'])}",
         "",
-        "| depth | kv | metric | valid | baseline median tok/s | baseline mean | baseline stddev | baseline 95% CI | candidate median tok/s | candidate mean | candidate stddev | candidate 95% CI | paired median % | paired mean % | paired stddev | paired 95% CI | n |",
-        "|---:|---|---|:-:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| depth | kv | metric | valid | baseline median tok/s | baseline mean | baseline stddev | baseline 95% CI | candidate median tok/s | candidate mean | candidate stddev | candidate 95% CI | paired median % | paired mean % | paired stddev | paired 95% CI | effective KV B/step | baseline effective GB/s | candidate effective GB/s | n |",
+        "|---:|---|---|:-:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for cell in summary["cells"]:
+        read_bytes = cell["effective_kv_read_bytes_per_step"]
+        gbps = cell["effective_kv_gbps"]
+        read_bytes_text = f"{read_bytes:.0f}" if read_bytes is not None else "n/a"
+        baseline_gbps_text = (
+            f"{gbps['baseline']:.3f}" if gbps["baseline"] is not None else "n/a"
+        )
+        candidate_gbps_text = (
+            f"{gbps['candidate']:.3f}" if gbps["candidate"] is not None else "n/a"
+        )
         for metric_name in ("pp512", "tg128"):
             metric = cell["metrics"][metric_name]
             b = metric["baseline_stats"]
@@ -469,25 +594,14 @@ def _write_product_summary_md(summary: dict[str, Any], md_path: Path) -> None:
             p = metric["paired"]
             valid = "Y" if cell["valid"] else "N"
             lines.append(
-                "| {d} | {kt}/{vt} | {metric} | {v} | {bm:.2f} | {bmean:.2f} | {bsd:.2f} | +/- {bc:.2f} | {cm:.2f} | {cmean:.2f} | {csd:.2f} | +/- {cc:.2f} | {pm:+.2f} | {pmean:+.2f} | {psd:.2f} | +/- {pc:.2f} | {n} |".format(
-                    d=cell["depth"],
-                    kt=cell["kv"][0],
-                    vt=cell["kv"][1],
-                    metric=metric_name,
-                    v=valid,
-                    bm=b["median"],
-                    bmean=b["mean"],
-                    bsd=b["stddev"],
-                    bc=b["ci95"],
-                    cm=c["median"],
-                    cmean=c["mean"],
-                    csd=c["stddev"],
-                    cc=c["ci95"],
-                    pm=p["pct_median"],
-                    pmean=p["pct_mean"],
-                    psd=p["pct_stddev"],
-                    pc=p["pct_ci95"],
-                    n=p["n"],
+                "| {d} | {kt}/{vt} | {metric} | {v} | {bm:.2f} | {bmean:.2f} | {bsd:.2f} | +/- {bc:.2f} | {cm:.2f} | {cmean:.2f} | {csd:.2f} | +/- {cc:.2f} | {pm:+.2f} | {pmean:+.2f} | {psd:.2f} | +/- {pc:.2f} | {read_bytes} | {bgbps} | {cgbps} | {n} |".format(
+                    d=cell["depth"], kt=cell["kv"][0], vt=cell["kv"][1],
+                    metric=metric_name, v=valid, bm=b["median"], bmean=b["mean"],
+                    bsd=b["stddev"], bc=b["ci95"], cm=c["median"],
+                    cmean=c["mean"], csd=c["stddev"], cc=c["ci95"],
+                    pm=p["pct_median"], pmean=p["pct_mean"], psd=p["pct_stddev"],
+                    pc=p["pct_ci95"], read_bytes=read_bytes_text,
+                    bgbps=baseline_gbps_text, cgbps=candidate_gbps_text, n=p["n"],
                 )
             )
     md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -558,6 +672,15 @@ def run_product_cell(
                     if result["ok"] and row is not None and row.get("avg_ts")
                     else 0.0
                 )
+            sample_record = {
+                "rep": rep,
+                "ok": result["ok"],
+                "returncode": result["returncode"],
+                "pp512_ts": sample_values["pp512_ts"],
+                "tg128_ts": sample_values["tg128_ts"],
+                "stdout": result.get("stdout", ""),
+                "stderr": result.get("stderr", ""),
+            }
             sample_path = samples_dir / (
                 f"cell{cell_idx:02d}_{kv[0]}_{kv[1]}_d{depth}"
                 f"_{arm_name}_rep{rep}.json"
@@ -566,27 +689,23 @@ def run_product_cell(
                 json.dumps(
                     {
                         "argv": argv,
-                        "env": arm_env,
+                        "baseline_env": baseline_env,
+                        "candidate_env": candidate_env,
+                        "active_arm": arm_name,
+                        "active_env": arm_env,
                         "result_ok": result["ok"],
                         "returncode": result["returncode"],
                         "elapsed_s": result["elapsed_s"],
                         "selected_rows": rows,
-                        "stdout_tail": result.get("stdout", "")[-4000:],
-                        "stderr_tail": result.get("stderr", "")[-4000:],
+                        "stdout": result.get("stdout", ""),
+                        "stderr": result.get("stderr", ""),
                     },
                     sort_keys=True,
                 )
                 + "\n",
                 encoding="utf-8",
             )
-            cell_samples[arm_name].append(
-                {
-                    "rep": rep,
-                    "ok": result["ok"],
-                    "returncode": result["returncode"],
-                    **sample_values,
-                }
-            )
+            cell_samples[arm_name].append(sample_record)
 
     retained_reps = list(range(1, repetitions))
     expected = len(retained_reps)
@@ -651,85 +770,78 @@ def run_product_campaign_main(ns: argparse.Namespace) -> int:
     bin_dir = Path(ns.bin_dir).resolve()
     bench_path = bin_dir / "llama-bench"
     if not bench_path.is_file() or not os.access(bench_path, os.X_OK):
-        print(
-            f"--bin-dir must contain an executable regular llama-bench: {bench_path}",
-            file=sys.stderr,
-            flush=True,
-        )
+        print(f"--bin-dir must contain an executable regular llama-bench: {bench_path}", file=sys.stderr, flush=True)
         return 2
     model = Path(ns.model).resolve()
     if not model.is_file() or model.stat().st_size <= 0:
-        print(
-            f"--model must be a non-empty regular file: {model}",
-            file=sys.stderr,
-            flush=True,
-        )
+        print(f"--model must be a non-empty regular file: {model}", file=sys.stderr, flush=True)
         return 2
 
-    model_path = str(model)
+    try:
+        baseline_env = _parse_env_list(getattr(ns, "baseline_env", []) or [])
+        candidate_env = _parse_env_list(getattr(ns, "env", []) or []) or None
+        depths = _parse_depths(ns.depths)
+        kv_types = _parse_kv_types(ns.kv_types)
+    except (TypeError, ValueError) as exc:
+        print(str(exc), file=sys.stderr, flush=True)
+        return 2
+
+    shape_values = (getattr(ns, "model_layers", None), getattr(ns, "query_heads", None), getattr(ns, "head_dim", None))
+    if any(value is not None for value in shape_values) and not all(value is not None for value in shape_values):
+        print("--model-layers, --query-heads, and --head-dim must be all present or all absent", file=sys.stderr, flush=True)
+        return 2
+    model_shape: tuple[int, int, int] | None = None
+    if all(value is not None for value in shape_values):
+        model_shape = tuple(int(value) for value in shape_values)
+        if any(value <= 0 for value in model_shape):
+            print("model shape values must be positive", file=sys.stderr, flush=True)
+            return 2
+        if any("q8_0" in kv for kv in kv_types) and model_shape[2] % QK8_0 != 0:
+            print(f"--head-dim must be divisible by QK8_0={QK8_0} for q8_0", file=sys.stderr, flush=True)
+            return 2
+
     out_dir = Path(ns.out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     samples_dir = out_dir / "samples"
     samples_dir.mkdir(parents=True, exist_ok=True)
     dmesg_before_path = out_dir / "dmesg.before.txt"
     dmesg_after_path = out_dir / "dmesg.after.txt"
-
     try:
         check_sole_tenancy()
     except SoleTenancyViolation as exc:
         sys.stderr.write(str(exc) + "\n")
-        (out_dir / "sole-tenancy-violation.txt").write_text(
-            "\n".join(exc.holder_lines) + "\n", encoding="utf-8"
-        )
+        (out_dir / "sole-tenancy-violation.txt").write_text("\n".join(exc.holder_lines) + "\n", encoding="utf-8")
         return SOLE_TENANCY_EXIT
-    baseline_env: dict[str, str] = {}
-    candidate_env = _parse_env_list(getattr(ns, "env", []) or []) or None
-    provenance = collect_product_provenance(bin_dir, baseline_env, candidate_env)
-    (out_dir / "provenance.json").write_text(
-        json.dumps(provenance, sort_keys=True, indent=2) + "\n", encoding="utf-8"
-    )
 
     dmesg_before_n = capture_dmesg(dmesg_before_path)
-    depths = _parse_depths(ns.depths)
-    kv_types = _parse_kv_types(ns.kv_types)
-    repetitions = int(
-        getattr(ns, "repetitions", DEFAULT_PRODUCT_REPETITIONS)
-        or DEFAULT_PRODUCT_REPETITIONS
-    )
+    if dmesg_before_n < 0:
+        print("unable to capture pre-run dmesg; campaign is not gateable", file=sys.stderr)
+        return 1
+    provenance = collect_product_provenance(bin_dir, baseline_env, candidate_env)
+    (out_dir / "provenance.json").write_text(json.dumps(provenance, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+
+    repetitions = int(getattr(ns, "repetitions", DEFAULT_PRODUCT_REPETITIONS) or DEFAULT_PRODUCT_REPETITIONS)
     timeout_s = int(ns.timeout)
     if repetitions < 2:
-        print(
-            "--repetitions must be >= 2 (sample 0 is always discarded)",
-            file=sys.stderr,
-            flush=True,
-        )
+        print("--repetitions must be >= 2 (sample 0 is always discarded)", file=sys.stderr, flush=True)
         return 2
-
     cells: list[dict[str, Any]] = []
     cell_idx = 0
     try:
         for depth in depths:
             for kv in kv_types:
                 cell_idx += 1
-                cells.append(
-                    run_product_cell(
-                        bin_dir=bin_dir,
-                        model_path=model_path,
-                        kv=kv,
-                        depth=depth,
-                        baseline_env=baseline_env,
-                        candidate_env=candidate_env,
-                        repetitions=repetitions,
-                        timeout_s=timeout_s,
-                        samples_dir=samples_dir,
-                        cell_idx=cell_idx,
-                    )
+                cell = run_product_cell(
+                    bin_dir=bin_dir, model_path=str(model), kv=kv, depth=depth,
+                    baseline_env=baseline_env, candidate_env=candidate_env,
+                    repetitions=repetitions, timeout_s=timeout_s,
+                    samples_dir=samples_dir, cell_idx=cell_idx,
                 )
+                _annotate_effective_kv_bandwidth(cell, model_shape)
+                cells.append(cell)
     except SoleTenancyViolation as exc:
         sys.stderr.write(str(exc) + "\n")
-        (out_dir / "sole-tenancy-violation.txt").write_text(
-            "\n".join(exc.holder_lines) + "\n", encoding="utf-8"
-        )
+        (out_dir / "sole-tenancy-violation.txt").write_text("\n".join(exc.holder_lines) + "\n", encoding="utf-8")
         return SOLE_TENANCY_EXIT
 
     dmesg_after_n = capture_dmesg(dmesg_after_path)
@@ -741,71 +853,65 @@ def run_product_campaign_main(ns: argparse.Namespace) -> int:
         for metric_name, metric in cell["metrics"].items():
             n_base = len(metric["retained_baseline_ts"])
             if n_base != expected_pairs:
-                cell_diag.append(
-                    f"{metric_name} baseline has {n_base} retained samples "
-                    f"(expected {expected_pairs})"
-                )
+                cell_diag.append(f"{metric_name} baseline has {n_base} retained samples (expected {expected_pairs})")
             if candidate_env is not None:
                 n_candidate = len(metric["retained_candidate_ts"])
                 if n_candidate != expected_pairs:
-                    cell_diag.append(
-                        f"{metric_name} candidate has {n_candidate} retained samples "
-                        f"(expected {expected_pairs})"
-                    )
+                    cell_diag.append(f"{metric_name} candidate has {n_candidate} retained samples (expected {expected_pairs})")
                 n_pairs = metric["paired"]["n"]
                 if n_pairs != expected_pairs:
-                    cell_diag.append(
-                        f"{metric_name} paired has {n_pairs} pairs "
-                        f"(expected {expected_pairs})"
-                    )
+                    cell_diag.append(f"{metric_name} paired has {n_pairs} pairs (expected {expected_pairs})")
         if cell_diag or not cell["valid"]:
             cell["valid"] = False
             invalid_cell_ids.append(cell["cell"])
-            tag = (
-                f"cell {cell['cell']} d={cell['depth']} "
-                f"kv={cell['kv'][0]}/{cell['kv'][1]}"
-            )
+            tag = f"cell {cell['cell']} d={cell['depth']} kv={cell['kv']}"
             for diagnostic in cell_diag or ["marked invalid by per-cell gate"]:
                 invalid_diagnostics.append(f"{tag}: {diagnostic}")
 
-    all_valid = not invalid_cell_ids
+    env_log_assertions, env_logs_valid = _candidate_env_log_assertions(cells, candidate_env)
+    if not env_logs_valid:
+        for key, assertion in env_log_assertions.items():
+            if not assertion["valid"]:
+                invalid_diagnostics.append(f"candidate env log mismatch for {key}: {assertion}")
+
+    dmesg_new_matches: list[str] = []
+    if dmesg_after_n < 0:
+        invalid_diagnostics.append("unable to capture post-run dmesg")
+    else:
+        unmatched_before = dmesg_before_path.read_text(encoding="utf-8").splitlines()
+        for line in dmesg_after_path.read_text(encoding="utf-8").splitlines():
+            if line in unmatched_before:
+                unmatched_before.remove(line)
+            else:
+                dmesg_new_matches.append(line)
+        if dmesg_new_matches:
+            invalid_diagnostics.append(f"{len(dmesg_new_matches)} new i915/xe fault line(s) after campaign")
+
+    all_valid = not invalid_cell_ids and env_logs_valid and not dmesg_new_matches and dmesg_after_n >= 0
     summary = {
-        "model_name": model.name,
-        "model_path": model_path,
-        "bin_dir": str(bin_dir),
-        "baseline_label": ns.baseline_label,
-        "candidate_label": ns.candidate_label,
-        "baseline_env": baseline_env,
-        "candidate_env": candidate_env or {},
+        "model_name": model.name, "model_path": str(model), "bin_dir": str(bin_dir),
+        "baseline_label": ns.baseline_label, "candidate_label": ns.candidate_label,
+        "baseline_env": baseline_env, "candidate_env": candidate_env or {},
         "candidate_enabled": candidate_env is not None,
+        "candidate_env_log_assertions": env_log_assertions,
+        "model_shape": ({"model_layers": model_shape[0], "query_heads": model_shape[1], "head_dim": model_shape[2]} if model_shape is not None else None),
         "provenance": provenance,
-        "dmesg_before_hits": dmesg_before_n,
-        "dmesg_after_hits": dmesg_after_n,
-        "dmesg_before_path": str(dmesg_before_path),
-        "dmesg_after_path": str(dmesg_after_path),
-        "depths": list(depths),
-        "kv_types": [list(kv) for kv in kv_types],
-        "repetitions": repetitions,
-        "expected_retained_per_arm": expected_pairs,
-        "all_cells_valid": all_valid,
-        "invalid_cell_ids": invalid_cell_ids,
-        "invalid_cell_count": len(invalid_cell_ids),
-        "invalid_diagnostics": invalid_diagnostics,
+        "dmesg_before_hits": dmesg_before_n, "dmesg_after_hits": dmesg_after_n,
+        "dmesg_before_path": str(dmesg_before_path), "dmesg_after_path": str(dmesg_after_path),
+        "dmesg_new_matches": dmesg_new_matches,
+        "depths": list(depths), "kv_types": [list(kv) for kv in kv_types],
+        "repetitions": repetitions, "expected_retained_per_arm": expected_pairs,
+        "all_cells_valid": all_valid, "invalid_cell_ids": invalid_cell_ids,
+        "invalid_cell_count": len(invalid_cell_ids), "invalid_diagnostics": invalid_diagnostics,
         "cells": cells,
     }
     json_path = out_dir / "product.json"
-    json_path.write_text(
-        json.dumps(summary, sort_keys=True, indent=2) + "\n", encoding="utf-8"
-    )
+    json_path.write_text(json.dumps(summary, sort_keys=True, indent=2) + "\n", encoding="utf-8")
     _write_product_summary_md(summary, out_dir / "product.md")
     print(f"wrote {json_path}")
     print(f"wrote {out_dir / 'product.md'}")
     if not all_valid:
-        sys.stderr.write(
-            f"product campaign: {len(invalid_cell_ids)} invalid cell(s) "
-            f"(ids={invalid_cell_ids}); returning non-zero so this "
-            "evidence is NOT gateable.\n"
-        )
+        sys.stderr.write(f"product campaign is not gateable; {len(invalid_diagnostics)} diagnostic(s), invalid cells={invalid_cell_ids}\n")
         for line in invalid_diagnostics:
             sys.stderr.write(f"  {line}\n")
         return 1
@@ -829,6 +935,16 @@ def main() -> int:
     ap.add_argument("--model", help="[product] path to a GGUF model.")
     ap.add_argument("--depths", help="[product] comma-separated depths (default: 0,2048,4096,8192,16384).")
     ap.add_argument("--kv-types", help="[product] comma-separated K/V pairs (default: f16/f16,q8_0/q8_0).")
+    ap.add_argument("--model-layers", type=int,
+                    help="[product] model layer count for requested-KV bandwidth.")
+    ap.add_argument("--query-heads", type=int,
+                    help="[product] query head count for requested-KV bandwidth.")
+    ap.add_argument("--head-dim", type=int,
+                    help="[product] attention head dimension for requested-KV bandwidth.")
+    ap.add_argument(
+        "--baseline-env", action="append", default=[],
+        help="[product] repeatable NAME=VALUE env applied only to the baseline arm.",
+    )
     ap.add_argument(
         "--env", action="append", default=[],
         help="[product] repeatable NAME=VALUE env applied to the candidate arm. Omit to run the canonical baseline alone (six launches per cell).",

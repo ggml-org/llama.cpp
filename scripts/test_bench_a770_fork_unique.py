@@ -39,12 +39,14 @@ class ProductCampaignTests(unittest.TestCase):
     def test_selects_pp512_and_tg128_rows(self) -> None:
         rows = [
             {"n_prompt": 64, "n_gen": 0, "avg_ts": 999.0},
+            {"n_prompt": 512, "n_gen": 1, "avg_ts": 777.0},
+            {"n_prompt": 1, "n_gen": 128, "avg_ts": 666.0},
             {"n_prompt": 512, "n_gen": 0, "avg_ts": 101.5},
             {"n_prompt": 0, "n_gen": 128, "avg_ts": 12.25},
         ]
         selected = HARNESS._select_product_rows(rows)
-        self.assertEqual(selected["pp512"], rows[1])
-        self.assertEqual(selected["tg128"], rows[2])
+        self.assertEqual(selected["pp512"], rows[3])
+        self.assertEqual(selected["tg128"], rows[4])
 
     def test_product_argv_uses_supported_no_warmup_flag(self) -> None:
         argv = HARNESS._product_bench_argv(
@@ -52,6 +54,8 @@ class ProductCampaignTests(unittest.TestCase):
         )
         self.assertIn("--no-warmup", argv)
         self.assertNotIn("-no-warmup", argv)
+        self.assertIn("-p", argv)
+        self.assertEqual(argv[argv.index("-p") + 1], "512")
 
 
     def test_discards_sample_zero_and_pairs_baseline_candidate(self) -> None:
@@ -169,6 +173,196 @@ class ProductCampaignTests(unittest.TestCase):
                 "1234", (out_dir / "sole-tenancy-violation.txt").read_text()
             )
 
+    def test_nonzero_sample_invalidates_cell(self) -> None:
+        calls = 0
+
+        def fake_run(argv, env_extra, timeout_s, cwd=None):
+            nonlocal calls
+            del argv, env_extra, timeout_s, cwd
+            calls += 1
+            result = bench_result(100.0, 20.0)
+            if calls == 2:
+                result["ok"] = False
+                result["returncode"] = 3
+            return result
+
+        with tempfile.TemporaryDirectory() as td, mock.patch.object(
+            HARNESS, "check_sole_tenancy"
+        ), mock.patch.object(HARNESS, "run", side_effect=fake_run):
+            cell = HARNESS.run_product_cell(
+                bin_dir=Path(td),
+                model_path="model.gguf",
+                kv=("q8_0", "q8_0"),
+                depth=0,
+                baseline_env={},
+                candidate_env=None,
+                repetitions=3,
+                timeout_s=5,
+                samples_dir=Path(td) / "samples",
+                cell_idx=1,
+            )
+
+        self.assertFalse(cell["valid"])
+        self.assertEqual(cell["metrics"]["pp512"]["baseline_stats"]["n"], 0)
+
+    def test_sample_artifacts_preserve_raw_output_and_both_env_maps(self) -> None:
+        prefix = "raw-prefix-" + ("x" * 5000)
+
+        def fake_run(argv, env_extra, timeout_s, cwd=None):
+            del argv, timeout_s, cwd
+            result = bench_result(100.0, 20.0)
+            result["stdout"] = prefix + result["stdout"]
+            result["stderr"] = f"TEST_ARM: {env_extra['TEST_ARM']}\n" + ("y" * 5000)
+            return result
+
+        with tempfile.TemporaryDirectory() as td, mock.patch.object(
+            HARNESS, "check_sole_tenancy"
+        ), mock.patch.object(HARNESS, "run", side_effect=fake_run):
+            samples_dir = Path(td) / "samples"
+            HARNESS.run_product_cell(
+                bin_dir=Path(td),
+                model_path="model.gguf",
+                kv=("q8_0", "q8_0"),
+                depth=0,
+                baseline_env={"TEST_ARM": "baseline"},
+                candidate_env={"TEST_ARM": "candidate"},
+                repetitions=2,
+                timeout_s=5,
+                samples_dir=samples_dir,
+                cell_idx=1,
+            )
+            for sample_path in samples_dir.glob("*.json"):
+                sample = json.loads(sample_path.read_text())
+                self.assertTrue(sample["stdout"].startswith(prefix))
+                self.assertGreater(len(sample["stderr"]), 5000)
+                self.assertEqual(sample["baseline_env"], {"TEST_ARM": "baseline"})
+                self.assertEqual(sample["candidate_env"], {"TEST_ARM": "candidate"})
+
+    def test_q8_effective_requested_kv_bandwidth_formula(self) -> None:
+        layers, heads, depth, head_dim = 32, 32, 16384, 128
+        expected = 2 * layers * heads * depth * head_dim * (34 / 32)
+        actual = HARNESS._effective_kv_read_bytes_per_step(
+            ("q8_0", "q8_0"), depth, layers, heads, head_dim
+        )
+        self.assertEqual(actual, expected)
+        cell = {
+            "kv": ["q8_0", "q8_0"],
+            "depth": depth,
+            "metrics": {
+                "tg128": {
+                    "baseline_stats": {"median": 20.0},
+                    "candidate_stats": {"median": 22.0, "n": 1},
+                }
+            },
+        }
+        HARNESS._annotate_effective_kv_bandwidth(
+            cell, (layers, heads, head_dim)
+        )
+        self.assertEqual(cell["effective_kv_read_bytes_per_step"], expected)
+        self.assertEqual(cell["effective_kv_gbps"]["baseline"], expected * 20 / 1e9)
+
+    def test_campaign_routes_distinct_envs_and_asserts_logged_value(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            bench = bin_dir / "llama-bench"
+            bench.write_text("#!/bin/sh\n", encoding="utf-8")
+            bench.chmod(0o755)
+            model = root / "model.gguf"
+            model.write_bytes(b"gguf")
+            out_dir = root / "output"
+            ns = self.make_namespace(bin_dir, model, out_dir)
+            ns.repetitions = 2
+            ns.baseline_env = ["TEST_ARM=baseline"]
+            ns.env = ["TEST_ARM=candidate"]
+            seen_envs = []
+
+            def fake_run(argv, env_extra, timeout_s, cwd=None):
+                del argv, timeout_s, cwd
+                seen_envs.append(dict(env_extra))
+                result = bench_result(100.0, 20.0)
+                result["stderr"] = f"TEST_ARM: {env_extra['TEST_ARM']}\n"
+                return result
+
+            def clean_dmesg(path, *args, **kwargs):
+                del args, kwargs
+                path.write_text("", encoding="utf-8")
+                return 0
+
+            with mock.patch.object(HARNESS, "check_sole_tenancy"), \
+                 mock.patch.object(HARNESS, "run", side_effect=fake_run), \
+                 mock.patch.object(HARNESS, "capture_dmesg", side_effect=clean_dmesg), \
+                 mock.patch.object(HARNESS, "collect_product_provenance", return_value={}):
+                rc = HARNESS.run_product_campaign_main(ns)
+
+            self.assertEqual(rc, 0)
+            self.assertIn({"TEST_ARM": "baseline"}, seen_envs)
+            self.assertIn({"TEST_ARM": "candidate"}, seen_envs)
+            summary = json.loads((out_dir / "product.json").read_text())
+            self.assertEqual(summary["baseline_env"], {"TEST_ARM": "baseline"})
+            self.assertEqual(summary["candidate_env"], {"TEST_ARM": "candidate"})
+            self.assertTrue(
+                summary["candidate_env_log_assertions"]["TEST_ARM"]["valid"]
+            )
+
+    def test_new_i915_dmesg_fault_invalidates_campaign(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            bench = bin_dir / "llama-bench"
+            bench.write_text("#!/bin/sh\n", encoding="utf-8")
+            bench.chmod(0o755)
+            model = root / "model.gguf"
+            model.write_bytes(b"gguf")
+            out_dir = root / "output"
+            ns = self.make_namespace(bin_dir, model, out_dir)
+            ns.repetitions = 2
+            captures = 0
+
+            def capture(path, *args, **kwargs):
+                nonlocal captures
+                del args, kwargs
+                captures += 1
+                line = (
+                    "[now] i915 GPU HANG detected\n" if captures == 2 else ""
+                )
+                path.write_text(line, encoding="utf-8")
+                return 1 if line else 0
+
+            with mock.patch.object(HARNESS, "check_sole_tenancy"), \
+                 mock.patch.object(HARNESS, "run", return_value=bench_result(100.0, 20.0)), \
+                 mock.patch.object(HARNESS, "capture_dmesg", side_effect=capture), \
+                 mock.patch.object(HARNESS, "collect_product_provenance", return_value={}):
+                rc = HARNESS.run_product_campaign_main(ns)
+
+            self.assertEqual(rc, 1)
+            summary = json.loads((out_dir / "product.json").read_text())
+            self.assertFalse(summary["all_cells_valid"])
+            self.assertEqual(
+                summary["dmesg_new_matches"], ["[now] i915 GPU HANG detected"]
+            )
+
+    def test_partial_model_shape_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            bench = bin_dir / "llama-bench"
+            bench.write_text("#!/bin/sh\n", encoding="utf-8")
+            bench.chmod(0o755)
+            model = root / "model.gguf"
+            model.write_bytes(b"gguf")
+            out_dir = root / "output"
+            ns = self.make_namespace(bin_dir, model, out_dir)
+            ns.model_layers = 32
+
+            rc = HARNESS.run_product_campaign_main(ns)
+
+            self.assertEqual(rc, 2)
+            self.assertFalse(out_dir.exists())
+
     @staticmethod
     def make_namespace(bin_dir: Path, model: Path, out_dir: Path) -> argparse.Namespace:
         return argparse.Namespace(
@@ -178,6 +372,10 @@ class ProductCampaignTests(unittest.TestCase):
             depths="0",
             kv_types="q8_0/q8_0",
             env=[],
+            baseline_env=[],
+            model_layers=None,
+            query_heads=None,
+            head_dim=None,
             repetitions=3,
             timeout=5,
             baseline_label="stock",
