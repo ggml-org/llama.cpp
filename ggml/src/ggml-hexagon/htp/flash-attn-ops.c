@@ -348,6 +348,11 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
 
         const HVX_Vector slope_vec = hvx_vec_splat_f16(slope);
         const HVX_Vector v_neg_inf = Q6_Vh_vsplat_R(0xfbff);
+        const HVX_Vector v_cap     = (factx->logit_softcap != 0.0f) ? hvx_vec_splat_f16(factx->logit_softcap) : Q6_V_vzero();
+        const HVX_Vector vinf      = Q6_Vh_vsplat_R(0xFC00);
+        const HVX_Vector vmin      = Q6_Vh_vsplat_R(0xFBFF);
+        const HVX_Vector v_log2e   = hvx_vec_splat_f16(EXP_LOG2E_F);
+        const uint32_t stride_v2   = factx->size_v_row_padded * 2;
         for (uint32_t ib = 0; ib < factx->n_blocks; ++ib) {
             const uint32_t ic_start = ib * FLASH_ATTN_BLOCK_SIZE;
             const uint32_t current_block_size = MIN(FLASH_ATTN_BLOCK_SIZE, nek1 - ic_start);
@@ -370,7 +375,6 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
 
             // 2. Softcap (in FP16)
             if (factx->logit_softcap != 0.0f) {
-                const HVX_Vector v_cap = hvx_vec_splat_f16(factx->logit_softcap);
                 scores_f16 = hvx_vec_tanh_f16(scores_f16);
                 scores_f16 = hvx_vec_mul_f16_f16(scores_f16, v_cap);
             }
@@ -380,8 +384,6 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
             // 3. Mask (in FP16)
             if (mask) {
                 HVX_Vector m_vals_f16 = *(const HVX_UVector *) m_base;
-                HVX_Vector vinf = Q6_Vh_vsplat_R(0xFC00);
-                HVX_Vector vmin = Q6_Vh_vsplat_R(0xFBFF);
                 HVX_VectorPred is_inf = Q6_Q_vcmp_eq_VhVh(m_vals_f16, vinf);
                 m_vals_f16 = Q6_V_vmux_QVV(is_inf, vmin, m_vals_f16);
 
@@ -420,8 +422,6 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
 
             htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_FA_SFM, ir);
             {
-                const HVX_Vector v_log2e = hvx_vec_splat_f16(EXP_LOG2E_F);
-
                 // 4. Online Softmax Update
                 HVX_Vector M_new_vec = Q6_Vsf_vmax_VsfVsf(v_max, M_vec);
                 HVX_Vector diff_vec  = HVX_OP_SUB_F32(M_vec, M_new_vec);
@@ -453,7 +453,6 @@ static void flash_attn_ext_f16_thread(unsigned int nth, unsigned int ith, void *
                 S_vec = HVX_OP_ADD_F32(HVX_OP_MUL_F32(S_vec, ms_vec), p_sum_vec);
 
                 // 5. Accumulate V (F16 * F16 -> F32 accumulator)
-                const uint32_t stride_v2 = factx->size_v_row_padded * 2;
                 const uint8_t * v_ptr = v_base;
 
                 for (uint32_t j = 0; j < current_block_size; j += 2) {
