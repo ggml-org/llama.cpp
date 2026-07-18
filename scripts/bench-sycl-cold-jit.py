@@ -1,0 +1,259 @@
+#!/usr/bin/env python3
+"""Measure process-start-to-first-row latency for SYCL llama-bench builds."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import queue
+import re
+import statistics
+import subprocess
+import sys
+import threading
+import time
+from pathlib import Path
+from typing import Any
+
+T95 = {1: 12.706, 2: 4.303, 3: 3.182, 4: 2.776, 5: 2.571, 6: 2.447, 7: 2.365, 8: 2.306, 9: 2.262, 10: 2.228}
+
+
+class ColdJitError(RuntimeError):
+    """A cold-JIT campaign could not produce admissible evidence."""
+
+
+def parse_assignments(values: list[str], *, separator: str = "=") -> dict[str, str]:
+    parsed: dict[str, str] = {}
+    for value in values:
+        key, found, item = value.partition(separator)
+        if not found or not key or not item:
+            raise ColdJitError(f"expected NAME{separator}VALUE, got {value!r}")
+        parsed[key] = item
+    return parsed
+
+
+def summarize(values: list[float]) -> dict[str, float | int]:
+    if not values:
+        raise ColdJitError("cannot summarize an empty sample")
+    mean = statistics.mean(values)
+    stdev = statistics.stdev(values) if len(values) > 1 else 0.0
+    critical = T95.get(len(values) - 1, 1.96)
+    ci95 = critical * stdev / len(values) ** 0.5
+    return {
+        "n": len(values),
+        "mean": mean,
+        "median": statistics.median(values),
+        "stdev": stdev,
+        "ci95": ci95,
+        "lower95": mean - ci95,
+        "upper95": mean + ci95,
+    }
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def holder_snapshot(render_node: str) -> dict[str, Any]:
+    proc = subprocess.run(
+        ["fuser", "-v", render_node],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if proc.returncode not in (0, 1):
+        raise ColdJitError(f"fuser failed for {render_node}: {proc.stderr.strip()}")
+    combined = proc.stdout + proc.stderr
+    return {
+        "returncode": proc.returncode,
+        "pids": sorted({int(value) for value in re.findall(r"\b\d+\b", combined)}),
+        "output": combined,
+    }
+
+
+def _stdout_reader(stream: Any, messages: queue.Queue[tuple[float, str] | None]) -> None:
+    for line in stream:
+        messages.put((time.monotonic(), line))
+    messages.put(None)
+
+
+def run_sample(
+    *,
+    bench: Path,
+    bin_dir: Path,
+    model: Path,
+    timeout_s: int,
+    env_extra: dict[str, str],
+    stderr_path: Path,
+) -> dict[str, Any]:
+    argv = [
+        str(bench),
+        "-m", str(model),
+        "-ngl", "99",
+        "-fa", "on",
+        "-ctk", "q8_0",
+        "-ctv", "q8_0",
+        "-p", "512",
+        "-n", "128",
+        "-b", "512",
+        "-ub", "512",
+        "--no-warmup",
+        "-r", "1",
+        "-o", "jsonl",
+    ]
+    env = os.environ.copy()
+    env.update(env_extra)
+    env["SYCL_CACHE_PERSISTENT"] = "0"
+    env["LD_LIBRARY_PATH"] = str(bin_dir) + (":" + env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else "")
+
+    started = time.monotonic()
+    rows: list[dict[str, Any]] = []
+    stdout_lines: list[str] = []
+    first_row_s: float | None = None
+    with stderr_path.open("w", encoding="utf-8") as stderr_file:
+        proc = subprocess.Popen(
+            argv,
+            stdout=subprocess.PIPE,
+            stderr=stderr_file,
+            text=True,
+            bufsize=1,
+            env=env,
+        )
+        assert proc.stdout is not None
+        messages: queue.Queue[tuple[float, str] | None] = queue.Queue()
+        reader = threading.Thread(target=_stdout_reader, args=(proc.stdout, messages), daemon=True)
+        reader.start()
+        deadline = started + timeout_s
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                proc.kill()
+                proc.wait()
+                raise ColdJitError(f"llama-bench timed out after {timeout_s}s")
+            try:
+                message = messages.get(timeout=min(remaining, 0.25))
+            except queue.Empty:
+                if proc.poll() is not None and not reader.is_alive():
+                    break
+                continue
+            if message is None:
+                break
+            observed, line = message
+            stdout_lines.append(line)
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(row, dict) and "avg_ts" in row:
+                rows.append(row)
+                if first_row_s is None:
+                    first_row_s = observed - started
+        returncode = proc.wait()
+        reader.join(timeout=1)
+
+    wall_s = time.monotonic() - started
+    pp_rows = [row for row in rows if row.get("n_prompt") == 512 and row.get("n_gen") == 0]
+    tg_rows = [row for row in rows if row.get("n_prompt") == 0 and row.get("n_gen") == 128]
+    return {
+        "argv": argv,
+        "returncode": returncode,
+        "first_valid_row_s": first_row_s,
+        "process_wall_s": wall_s,
+        "rows": rows,
+        "pp512": pp_rows[-1] if pp_rows else None,
+        "tg128": tg_rows[-1] if tg_rows else None,
+        "stdout": "".join(stdout_lines),
+        "valid": returncode == 0 and first_row_s is not None and bool(pp_rows) and bool(tg_rows),
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--bin-dir", type=Path, required=True)
+    parser.add_argument("--model", action="append", default=[], help="NAME=GGUF (repeatable)")
+    parser.add_argument("--out-dir", type=Path, required=True)
+    parser.add_argument("--repetitions", type=int, default=6, help="sample 0 is discarded")
+    parser.add_argument("--timeout", type=int, default=300)
+    parser.add_argument("--render-node", default="/dev/dri/renderD128")
+    parser.add_argument("--env", action="append", default=[], help="NAME=VALUE (repeatable)")
+    args = parser.parse_args()
+
+    try:
+        if args.repetitions < 2:
+            raise ColdJitError("--repetitions must be >= 2 because sample 0 is discarded")
+        models = {name: Path(path).resolve() for name, path in parse_assignments(args.model).items()}
+        if not models:
+            raise ColdJitError("at least one --model NAME=GGUF is required")
+        missing_models = [str(path) for path in models.values() if not path.is_file()]
+        if missing_models:
+            raise ColdJitError(f"model files do not exist: {', '.join(missing_models)}")
+        bin_dir = args.bin_dir.resolve()
+        bench = bin_dir / "llama-bench"
+        if not bench.is_file() or not os.access(bench, os.X_OK):
+            raise ColdJitError(f"missing executable {bench}")
+        env_extra = parse_assignments(args.env)
+        args.out_dir.mkdir(parents=True, exist_ok=True)
+
+        before = holder_snapshot(args.render_node)
+        if before["pids"]:
+            raise ColdJitError(f"render node is not idle: {before['output'].strip()}")
+
+        model_results: dict[str, Any] = {}
+        for model_name, model in models.items():
+            samples: list[dict[str, Any]] = []
+            for repetition in range(args.repetitions):
+                stderr_path = args.out_dir / f"{model_name}-rep{repetition}.stderr.log"
+                sample = run_sample(
+                    bench=bench,
+                    bin_dir=bin_dir,
+                    model=model,
+                    timeout_s=args.timeout,
+                    env_extra=env_extra,
+                    stderr_path=stderr_path,
+                )
+                sample_path = args.out_dir / f"{model_name}-rep{repetition}.json"
+                sample_path.write_text(json.dumps(sample, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+                print(f"{model_name} rep={repetition} valid={sample['valid']} first_row={sample['first_valid_row_s']}", flush=True)
+                samples.append(sample)
+            retained = samples[1:]
+            if not all(sample["valid"] for sample in samples):
+                raise ColdJitError(f"{model_name} has an invalid sample")
+            model_results[model_name] = {
+                "model": str(model),
+                "samples": samples,
+                "retained_repetitions": list(range(1, args.repetitions)),
+                "first_valid_row_s": summarize([sample["first_valid_row_s"] for sample in retained]),
+                "process_wall_s": summarize([sample["process_wall_s"] for sample in retained]),
+                "pp512_ts": summarize([sample["pp512"]["avg_ts"] for sample in retained]),
+                "tg128_ts": summarize([sample["tg128"]["avg_ts"] for sample in retained]),
+            }
+
+        after = holder_snapshot(args.render_node)
+        if after["pids"] != before["pids"]:
+            raise ColdJitError(f"render-node holders changed: before={before['pids']} after={after['pids']}")
+        product = {
+            "bin_dir": str(bin_dir),
+            "bench_sha256": sha256_file(bench),
+            "environment": {**env_extra, "SYCL_CACHE_PERSISTENT": "0"},
+            "holder_before": before,
+            "holder_after": after,
+            "models": model_results,
+        }
+        product_path = args.out_dir / "product.json"
+        product_path.write_text(json.dumps(product, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        print(f"wrote {product_path}")
+        return 0
+    except (ColdJitError, OSError, subprocess.SubprocessError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

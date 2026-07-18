@@ -10,7 +10,9 @@ expect the oneAPI environment to be sourced first.
 |---|---|
 | `audit-sycl-op-candidates.py` | Maps exported graph op IDs to `ggml_op` names and reports whether selected SYCL port candidates are present, absent, or already implemented. |
 | `bench-a770-fork-unique.py` | Benchmarks fork-only A770 modes. Its `product` campaign enforces sole tenancy, alternates paired arms, discards warm-up sample 0, records raw JSON, confidence intervals, provenance, dmesg deltas, and effective KV bandwidth. `--candidate-bin-dir` compares separate builds; omit it for environment-only comparisons. |
+| `bench-sycl-cold-jit.py` | Runs fail-closed, idle-render-node SYCL cold-start campaigns. It forces `SYCL_CACHE_PERSISTENT=0`, timestamps the first parsed `llama-bench -o jsonl` row, preserves every raw row/stderr stream, discards sample 0, and summarizes cold latency plus pp512/tg128. |
 | `test_bench_a770_fork_unique.py` | Unit tests for the A770 product campaign, including pairing, invalid samples, dmesg gating, environment routing, and separate candidate binaries. |
+| `test_bench_sycl_cold_jit.py` | Unit tests for cold-run argument validation, retained-sample statistics, and fail-closed render-node tenancy checks. |
 | `sweep-a770-mmvq-geometry.py` | Reproducible `MMV_Y={1,2,4}` x `MMVQ_NUM_SUBGROUPS={4,8,16,32}` orchestrator. It can build isolated JIT binaries, run correctness plus dmesg gates, and benchmark multiple models sequentially against the `1x16` baseline. |
 | `test_sweep_a770_mmvq_geometry.py` | Unit tests for geometry naming, dmesg overlap calculation, and fail-closed render-node tenancy checks. |
 | `validate-dense-turbo4-capacity.sh` | Runs the dense low-GQA turbo4 capacity/quality validation workflow and preserves the paired evidence used by the research queue. |
@@ -43,6 +45,30 @@ render node is idle. The script never kills a holder. Benchmark output is one
 `product.json`/`product.md` pair per geometry and model, plus a top-level
 `manifest.json`. Use `--phase build`, `correctness`, or `benchmark` to run an
 individual phase against existing build directories.
+
+## SYCL cold-JIT benchmark
+
+Source oneAPI, prove the render node is idle, then compare separately built
+binaries. The runner rejects a non-idle render node and any invalid sample:
+
+```bash
+set +u
+source /opt/intel/oneapi/setvars.sh
+set -u
+export ONEAPI_DEVICE_SELECTOR=level_zero:0
+
+scripts/bench-sycl-cold-jit.py \
+  --bin-dir /home/user/build-baseline/bin \
+  --model mistral=/models/mistral.gguf \
+  --model llama=/models/llama.gguf \
+  --out-dir /tmp/cold-jit-baseline \
+  --repetitions 6
+```
+
+Each child receives `SYCL_CACHE_PERSISTENT=0`. The script observes stdout as it
+arrives and records process start to the first valid JSONL result row, total
+process wall time, pp512/tg128, exact command/environment, binary SHA-256, and
+stable before/after render-node holder snapshots.
 
 ## Benchmark and performance analysis
 
