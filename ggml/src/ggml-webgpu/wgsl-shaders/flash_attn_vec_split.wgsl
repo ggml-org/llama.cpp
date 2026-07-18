@@ -39,9 +39,6 @@ enable subgroups;
 #define KV_GRANULARITY 8
 #define KV_TILE 16
 #define WG_SIZE 64
-#ifndef VEC_NE
-#define VEC_NE 4u
-#endif
 
 #define KV_BLOCKS (KV_TILE / KV_GRANULARITY)
 
@@ -367,11 +364,11 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 
       // accumulate q block * k block into registers across the entire KV tile
       if (!skip_tile) {
-        let num_of_threads = subgroup_size / VEC_NE;
+        let num_of_threads:u32 = D_SPLIT;
         let tx = sg_inv_id % num_of_threads;
         let ty = sg_inv_id / num_of_threads;
           if (subgroup_id == 0u && q_row_start < params.seq_len_q) {
-              for (var kv_base : u32 = 0u; kv_base < KV_TILE; kv_base += VEC_NE) {
+              for (var kv_base : u32 = 0u; kv_base < KV_TILE; kv_base += subgroup_size / D_SPLIT) {
                   let kv_idx = kv_base + ty;
                   var partial_sum: f32 = 0.0;
                   let kv_valid = kv_idx < KV_TILE && (kv_tile + kv_idx) < params.seq_len_kv;
@@ -486,15 +483,18 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
       if (!skip_tile) {
           // we have P (KV_TILE) in inter_shmem and V (KV_TILE x head_dim_v) in kv_shmem
           // we want to compute O += P * V across the full KV tile
-          let ne_threads : u32 = VEC_NE;
+          let ne_threads : u32 = subgroup_size / D_SPLIT;
           let nl_threads = max(1u, subgroup_size / ne_threads);
           let tx_pv = sg_inv_id % nl_threads;
           let ty_pv = sg_inv_id / nl_threads;
           if (subgroup_id == 0u && q_row_start < params.seq_len_q) {
               for (var vec_col = tx_pv; vec_col < (HEAD_DIM_V / 4u); vec_col += nl_threads) {
                   var lo = vec4<f32>(0.0, 0.0, 0.0, 0.0);
-                  for (var cc = 0u; cc < KV_TILE / ne_threads; cc += 1u) {
+                  for (var cc = 0u; cc * ne_threads < KV_TILE; cc += 1u) {
                       let kv_idx = cc * ne_threads + ty_pv;
+                      if (kv_idx >= KV_TILE) {
+                          continue;
+                      }
                       let v_row = kv_tile + kv_idx;
                       if (v_row >= params.seq_len_kv) {
                           continue;

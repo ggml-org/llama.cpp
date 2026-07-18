@@ -17,8 +17,32 @@ float op_neg(float x) {
     return -x;
 }
 
+float op_sqr(float x) {
+    return x * x;
+}
+
+float op_sqrt(float x) {
+    return sqrt(x);
+}
+
+float op_sin(float x) {
+    return sin(x);
+}
+
+float op_cos(float x) {
+    return cos(x);
+}
+
+float op_clamp(float x) {
+    return clamp(x, p.param1, p.param2);
+}
+
+float op_leaky_relu(float x) {
+    return max(x, 0.0f) + min(x, 0.0f) * p.param1;
+}
+
 float op_step(float x) {
-    return x >= 0.0f ? 1.0f : 0.0f;
+    return x > 0.0f ? 1.0f : 0.0f;
 }
 
 float op_tanh(float x) {

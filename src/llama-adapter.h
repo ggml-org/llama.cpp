@@ -15,6 +15,8 @@
 //
 
 struct llama_adapter_cvec {
+    bool is_active() const;
+
     ggml_tensor * tensor_for(int il) const;
 
     ggml_tensor * apply_to(ggml_context * ctx, ggml_tensor * cur, int  il) const;

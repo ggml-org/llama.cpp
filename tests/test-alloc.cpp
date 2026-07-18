@@ -1,8 +1,8 @@
-#include <ggml-alloc.h>
-#include <ggml-backend-impl.h>
-#include <ggml-cpp.h>
-#include <ggml-impl.h>
-#include <ggml.h>
+#include "ggml-alloc.h"
+#include "../ggml/src/ggml-backend-impl.h"
+#include "ggml-cpp.h"
+#include "../ggml/src/ggml-impl.h"
+#include "ggml.h"
 
 #include <algorithm>
 #include <exception>
@@ -583,6 +583,56 @@ static void test_reallocation() {
     }
 }
 
+static void test_no_alloc_tensor() {
+    dummy_backend backend      = dummy_backend_init(SIZE_MAX);
+    auto [ctx, graph, ctx_ptr] = make_context();
+
+    ggml_tensor * ordinary_a = make_input_with_size(ctx, 16);
+    ggml_tensor * ordinary_b = make_input_with_size(ctx, 16);
+    ggml_tensor * transient = ggml_add(ctx, ordinary_a, ordinary_b);
+    transient->flags |= GGML_TENSOR_FLAG_NO_ALLOC;
+    ggml_tensor * consumer_a = ggml_add(ctx, ordinary_a, transient);
+    ggml_tensor * consumer_b = ggml_mul(ctx, ordinary_b, transient);
+    ggml_tensor * output = ggml_add(ctx, consumer_a, consumer_b);
+    assign_names(ctx);
+
+    ggml_set_output(output);
+    ggml_build_forward_expand(graph, output);
+
+    GGML_ASSERT(consumer_a->src[1] == transient);
+    GGML_ASSERT(consumer_b->src[1] == transient);
+
+    ggml_gallocr_ptr galloc(ggml_gallocr_new(&backend.buffer_type));
+    GGML_ASSERT(ggml_gallocr_reserve(galloc.get(), graph));
+    GGML_ASSERT(ggml_gallocr_alloc_graph(galloc.get(), graph));
+
+    GGML_ASSERT(ordinary_a->buffer != nullptr && ordinary_a->data != nullptr);
+    GGML_ASSERT(ordinary_b->buffer != nullptr && ordinary_b->data != nullptr);
+    GGML_ASSERT(consumer_a->buffer != nullptr && consumer_a->data != nullptr);
+    GGML_ASSERT(consumer_b->buffer != nullptr && consumer_b->data != nullptr);
+    GGML_ASSERT(output->buffer != nullptr && output->data != nullptr);
+    GGML_ASSERT(transient->buffer == nullptr && transient->data == nullptr);
+
+    ggml_backend_buffer_t external = ggml_backend_buft_alloc_buffer(&backend.buffer_type, ggml_nbytes(transient));
+    GGML_ASSERT(external != nullptr);
+    GGML_ASSERT(ggml_backend_tensor_alloc(external, transient, ggml_backend_buffer_get_base(external)) == GGML_STATUS_SUCCESS);
+    ggml_backend_buffer_t preserved_buffer = transient->buffer;
+    void *                preserved_data   = transient->data;
+
+    GGML_ASSERT(ggml_gallocr_reserve(galloc.get(), graph));
+    GGML_ASSERT(ggml_gallocr_alloc_graph(galloc.get(), graph));
+    GGML_ASSERT(transient->buffer == preserved_buffer && transient->data == preserved_data);
+
+    transient->buffer = nullptr;
+    transient->data   = nullptr;
+    GGML_ASSERT(ggml_gallocr_alloc_graph(galloc.get(), graph));
+    GGML_ASSERT(transient->buffer == nullptr && transient->data == nullptr);
+    GGML_ASSERT(consumer_a->src[1] == transient);
+    GGML_ASSERT(consumer_b->src[1] == transient);
+
+    ggml_backend_buffer_free(external);
+}
+
 static void run(const char * name, void (*f)()) {
     printf("%s ", name);
     fflush(stdout);
@@ -604,5 +654,6 @@ int main() {
     run("test_multiple_buffer_types", test_multiple_buffer_types);
     run("test_buffer_size_zero", test_buffer_size_zero);
     run("test_reallocation", test_reallocation);
+    run("test_no_alloc_tensor", test_no_alloc_tensor);
     return 0;
 }

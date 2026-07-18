@@ -207,6 +207,9 @@ public:
 
     bool empty() const { return tokens.empty(); }
 
+    // true if the sequence actually contains image/audio chunks.
+    bool has_media() const { return !map_idx_to_media.empty(); }
+
     void clear() {
         map_idx_to_media.clear();
         tokens.clear();
@@ -217,6 +220,9 @@ public:
     std::string detokenize(const llama_context * ctx, bool special) const;
 
     size_t get_common_prefix(const server_tokens & b) const;
+
+    // split the tokens into message spans, skipping over media chunks
+    common_chat_msg_spans find_message_spans(const common_chat_msg_delimiters & delims) const;
 
     // make sure all text tokens are within the vocab range
     bool validate(const struct llama_context * ctx) const;

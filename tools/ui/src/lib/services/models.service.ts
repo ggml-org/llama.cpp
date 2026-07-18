@@ -1,5 +1,5 @@
 import { ServerModelStatus } from '$lib/enums';
-import { apiFetch, apiPost } from '$lib/utils';
+import { apiFetch, apiPost, normalizeModelName } from '$lib/utils';
 import type { ParsedModelId } from '$lib/types/models';
 import {
 	MODEL_QUANTIZATION_SEGMENT_RE,
@@ -7,6 +7,7 @@ import {
 	MODEL_PARAMS_RE,
 	MODEL_ACTIVATED_PARAMS_RE,
 	MODEL_IGNORED_SEGMENTS,
+	MODEL_WEIGHT_EXTENSION_RE,
 	MODEL_ID_NOT_FOUND,
 	MODEL_ID_ORG_SEPARATOR,
 	MODEL_ID_SEGMENT_SEPARATOR,
@@ -139,15 +140,19 @@ export class ModelsService {
 			tags: []
 		};
 
+		// strip directory path and weight extension so a bare `-m /path/file.gguf`
+		// parses like a clean repo id; the HF `org/model` form is preserved
+		const source = normalizeModelName(modelId).replace(MODEL_WEIGHT_EXTENSION_RE, '');
+
 		// 1. Extract colon-separated quantization (e.g. `model:Q4_K_M`)
-		const colonIdx = modelId.indexOf(MODEL_ID_QUANTIZATION_SEPARATOR);
+		const colonIdx = source.indexOf(MODEL_ID_QUANTIZATION_SEPARATOR);
 		let modelPath: string;
 
 		if (colonIdx !== MODEL_ID_NOT_FOUND) {
-			result.quantization = modelId.slice(colonIdx + 1) || null;
-			modelPath = modelId.slice(0, colonIdx);
+			result.quantization = source.slice(colonIdx + 1) || null;
+			modelPath = source.slice(0, colonIdx);
 		} else {
-			modelPath = modelId;
+			modelPath = source;
 		}
 
 		// 2. Extract org name (e.g. `org/model` -> org = "org")

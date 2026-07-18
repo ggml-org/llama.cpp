@@ -310,6 +310,40 @@ static std::pair<int, llama_model *> llama_model_load(struct gguf_context * meta
         } catch(const std::exception & e) {
             throw std::runtime_error("error loading model hyperparameters: " + std::string(e.what()));
         }
+        if (params.sequential_load) {
+            if (!llama_model_arch_supports_sequential_load(model->arch)) {
+                throw std::runtime_error(
+                    "sequential MVP does not support architecture " + std::string(llm_arch_name(model->arch)));
+            }
+            if (model->hparams.n_expert != 0) {
+                throw std::runtime_error("sequential MVP does not support expert models");
+            }
+            if (llm_arch_is_recurrent(model->arch)) {
+                throw std::runtime_error("sequential MVP does not support recurrent models");
+            }
+            if (llm_arch_is_hybrid(model->arch)) {
+                throw std::runtime_error("sequential MVP does not support hybrid models");
+            }
+            if (fname.empty() || metadata != nullptr || file != nullptr || !ml.use_mmap) {
+                throw std::runtime_error("sequential MVP requires an mmap-backed path model source");
+            }
+            if (ml.use_direct_io) {
+                throw std::runtime_error("sequential MVP does not support direct I/O");
+            }
+            if (params.use_mlock) {
+                throw std::runtime_error("sequential MVP does not support mlock");
+            }
+            if (params.no_alloc) {
+                throw std::runtime_error("sequential MVP does not support no-alloc model loading");
+            }
+            if (model->devices.size() != 1) {
+                throw std::runtime_error("sequential MVP requires exactly one selected non-CPU device");
+            }
+            ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(model->devices.front().dev);
+            if (reg == nullptr || strcmp(ggml_backend_reg_name(reg), "CUDA") != 0) {
+                throw std::runtime_error("sequential MVP requires the selected device to use the native CUDA backend");
+            }
+        }
         if (model->arch == LLM_ARCH_CLIP) {
             throw std::runtime_error("CLIP cannot be used as main model, use it with --mmproj instead");
         }
@@ -335,6 +369,17 @@ static std::pair<int, llama_model *> llama_model_load(struct gguf_context * meta
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: error loading model: %s\n", __func__, err.what());
         return {-1, nullptr};
+    }
+}
+
+bool llama_model_arch_supports_sequential_load(const llm_arch arch) {
+    switch (arch) {
+        case LLM_ARCH_LLAMA:
+        case LLM_ARCH_QWEN2:
+        case LLM_ARCH_GEMMA:
+            return true;
+        default:
+            return false;
     }
 }
 

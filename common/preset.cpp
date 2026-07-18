@@ -7,6 +7,7 @@
 #include <fstream>
 #include <sstream>
 #include <filesystem>
+#include <regex>
 
 static std::string rm_leading_dashes(const std::string & str) {
     size_t pos = 0;
@@ -14,6 +15,23 @@ static std::string rm_leading_dashes(const std::string & str) {
         ++pos;
     }
     return str.substr(pos);
+}
+
+static std::string canonical_tag(const std::string & tag) {
+    static const std::regex re_tag("[-.]([A-Z0-9_]+)$", std::regex::icase);
+    std::smatch m;
+    if (std::regex_search(tag, m, re_tag)) {
+        std::string canon = m[1].str();
+        for (char & c : canon) {
+            c = (char) std::toupper((unsigned char) c);
+        }
+        return canon;
+    }
+    std::string upper = tag;
+    for (char & c : upper) {
+        c = (char) std::toupper((unsigned char) c);
+    }
+    return upper;
 }
 
 std::vector<std::string> common_preset::to_args(const std::string & bin_path) const {
@@ -28,8 +46,10 @@ std::vector<std::string> common_preset::to_args(const std::string & bin_path) co
             continue; // skip preset-only options (they are not CLI args)
         }
 
-        // use the last arg as the main arg (i.e. --long-form)
-        args.push_back(opt.args.back());
+        // Sequential loading keeps its shorter spelling canonical; the longer
+        // form is input compatibility only.
+        const bool sequential = opt.env && strcmp(opt.env, "LLAMA_ARG_SEQUENTIAL") == 0;
+        args.push_back(sequential ? "--sequential" : opt.args.back());
 
         // handle value(s)
         if (opt.value_hint == nullptr && opt.value_hint_2 == nullptr) {
@@ -37,7 +57,7 @@ std::vector<std::string> common_preset::to_args(const std::string & bin_path) co
             if (common_arg_utils::is_falsey(value)) {
                 // use negative arg if available
                 if (!opt.args_neg.empty()) {
-                    args.back() = opt.args_neg.back();
+                    args.back() = sequential ? "--no-sequential" : opt.args_neg.back();
                 } else {
                     // otherwise, skip the flag
                     // TODO: maybe throw an error instead?
@@ -67,7 +87,8 @@ std::string common_preset::to_ini() const {
     for (const auto & [opt, value] : options) {
         auto espaced_value = value;
         string_replace_all(espaced_value, "\n", "\\\n");
-        ss << rm_leading_dashes(opt.args.back()) << " = ";
+        const bool sequential = opt.env && strcmp(opt.env, "LLAMA_ARG_SEQUENTIAL") == 0;
+        ss << (sequential ? "sequential-load" : rm_leading_dashes(opt.args.back())) << " = ";
         ss << espaced_value << "\n";
     }
     ss << "\n";
@@ -270,11 +291,18 @@ common_presets common_preset_context::load_from_ini(const std::string & path, co
 
     for (auto section : ini_data) {
         common_preset preset;
-        if (section.first.empty()) {
-            preset.name = COMMON_PRESET_DEFAULT_NAME;
-        } else {
-            preset.name = section.first;
+        std::string section_name = section.first.empty() ? std::string(COMMON_PRESET_DEFAULT_NAME) : section.first;
+        if (section_name != "*" && section_name != COMMON_PRESET_DEFAULT_NAME) {
+            auto colon_idx = section_name.rfind(':');
+            if (colon_idx != std::string::npos) {
+                std::string tag       = section_name.substr(colon_idx + 1);
+                std::string canon_tag = canonical_tag(tag);
+                if (canon_tag != tag) {
+                    section_name = section_name.substr(0, colon_idx + 1) + canon_tag;
+                }
+            }
         }
+        preset.name = section_name;
         LOG_DBG("loading preset: %s\n", preset.name.c_str());
         for (const auto & [key, value] : section.second) {
             if (key == "version") {
@@ -289,14 +317,10 @@ common_presets common_preset_context::load_from_ini(const std::string & path, co
                     key.c_str()
                 ));
             }
-            auto it = key_to_opt.find(key);
-            // fallback: try dash-separated form (e.g. sequential_load -> sequential-load)
-            std::string key_dash;
-            if (it == key_to_opt.end() && key.find('_') != std::string::npos) {
-                key_dash = key;
-                string_replace_all(key_dash, "_", "-");
-                it = key_to_opt.find(key_dash);
-            }
+            // Preserve only the exact legacy spelling for sequential loading.
+            // Unknown underscore-separated keys must remain errors.
+            const std::string canonical_key = key == "sequential_load" ? "sequential-load" : key;
+            auto it = key_to_opt.find(canonical_key);
             if (it != key_to_opt.end()) {
                 const auto & opt = it->second;
                 if (is_bool_arg(opt)) {

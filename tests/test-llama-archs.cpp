@@ -9,6 +9,8 @@
 
 // TODO: replace with #include "llama-ext.h" in the future
 #include "../src/llama-arch.h"
+#include "../src/llama-adapter.h"
+#include "../src/llama-impl.h"
 #include "../src/llama-model-saver.h"
 
 #include <cinttypes>
@@ -16,6 +18,8 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
+#include <cmath>
+#include <filesystem>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -40,8 +44,10 @@ static double nmse(const std::vector<float> & a, const std::vector<float> & b) {
 }
 
 static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
+    size_t seed = *(const size_t *) userdata;
     std::hash<std::string> hasher;
-    std::mt19937 gen(hasher(tensor->name) + *(const size_t *) userdata);
+    seed ^= hasher(tensor->name);
+    std::mt19937 gen(seed);
     std::normal_distribution<float> dis(0.0f, 1.0e-2f);
 
     const int64_t ne = ggml_nelements(tensor);
@@ -77,7 +83,7 @@ static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32
     return ret;
 }
 
-static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const bool valid_tokenizer = false) {
     gguf_context_ptr ret(gguf_init_empty());
     llama_model_saver ms(arch, ret.get());
     const uint32_t n_ctx = 128;
@@ -200,7 +206,20 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     ms.add_kv(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH, uint32_t(64));
     ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,      uint32_t(8));
     ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({n_embd_head/4, n_embd_head/4, n_embd_head/4, n_embd_head/4}));
-    ms.add_kv(LLM_KV_TOKENIZER_MODEL,         "no_vocab");
+    if (valid_tokenizer) {
+        std::vector<std::string> tokens;
+        tokens.reserve(n_vocab);
+        for (uint32_t i = 0; i < n_vocab; ++i) {
+            char token[8];
+            snprintf(token, sizeof(token), "t%03" PRIu32, i);
+            tokens.emplace_back(token);
+        }
+        ms.add_kv(LLM_KV_TOKENIZER_MODEL,         "llama");
+        ms.add_kv(LLM_KV_TOKENIZER_LIST,          tokens);
+        ms.add_kv(LLM_KV_TOKENIZER_ADD_BOS,       false);
+    } else {
+        ms.add_kv(LLM_KV_TOKENIZER_MODEL,         "no_vocab");
+    }
     // ms.add_kv(LLM_KV_DENSE_2_FEAT_OUT,     n_embd);
     // ms.add_kv(LLM_KV_DENSE_3_FEAT_IN,      n_embd);
 
@@ -346,6 +365,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_ERNIE4_5:
         case LLM_ARCH_ERNIE4_5_MOE:
         case LLM_ARCH_HUNYUAN_MOE:
+        case LLM_ARCH_HY_V3:
         case LLM_ARCH_OPENAI_MOE:
         case LLM_ARCH_LFM2MOE:
         case LLM_ARCH_SMALLTHINKER:
@@ -412,6 +432,9 @@ static bool arch_supported(const llm_arch arch) {
     if (arch == LLM_ARCH_DEEPSEEK2OCR) {
         return false;
     }
+    if (arch == LLM_ARCH_DEEPSEEK4) {
+        return false;
+    }
 
     // FIXME some models are segfaulting with WebGPU:
 #ifdef GGML_USE_WEBGPU
@@ -421,6 +444,124 @@ static bool arch_supported(const llm_arch arch) {
 #endif // GGML_USE_WEBGPU
 
     return true;
+}
+
+static void test_sequential_arch_allowlist() {
+    for (const llm_arch arch : {
+             LLM_ARCH_LLAMA,
+             LLM_ARCH_QWEN2,
+             LLM_ARCH_GEMMA,
+         }) {
+        GGML_ASSERT(llama_model_arch_supports_sequential_load(arch));
+    }
+    for (const llm_arch arch : {
+             LLM_ARCH_LLAMA4,       // MoE is mandatory in the local generator.
+             LLM_ARCH_QWEN2MOE,     // MoE.
+             LLM_ARCH_RWKV6,        // Recurrent.
+             LLM_ARCH_JAMBA,        // Hybrid.
+             LLM_ARCH_QWEN2VL,      // Multimodal.
+             LLM_ARCH_MISTRAL3,     // Numerical validation exceeds the relative-error tolerance.
+             LLM_ARCH_GEMMA2,       // Numerical validation exceeds the relative-error tolerance.
+             LLM_ARCH_PHI3,         // Numerical validation exceeds the relative-error tolerance.
+             LLM_ARCH_UNKNOWN,
+         }) {
+        GGML_ASSERT(!llama_model_arch_supports_sequential_load(arch));
+    }
+}
+
+struct error_stats {
+    double max_abs = 0.0;
+    double max_rel = 0.0;
+};
+
+static error_stats compare_logits(const std::vector<float> & expected, const std::vector<float> & actual) {
+    GGML_ASSERT(expected.size() == actual.size());
+    error_stats result;
+    for (size_t i = 0; i < expected.size(); ++i) {
+        const double abs_error = std::abs(double(expected[i]) - double(actual[i]));
+        const double denom = std::max(std::abs(double(expected[i])), 1.0e-6);
+        result.max_abs = std::max(result.max_abs, abs_error);
+        result.max_rel = std::max(result.max_rel, abs_error / denom);
+    }
+    return result;
+}
+
+static ggml_backend_dev_t get_single_cuda_device() {
+    ggml_backend_dev_t result = nullptr;
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+        if (reg != nullptr && strcmp(ggml_backend_reg_name(reg), "CUDA") == 0) {
+            GGML_ASSERT(result == nullptr);
+            result = dev;
+        }
+    }
+    return result;
+}
+
+static std::vector<float> load_file_and_decode(
+        const std::string & path, ggml_backend_dev_t cuda_dev, bool sequential, const std::vector<llama_token> & tokens) {
+    llama_model_params model_params = llama_model_default_params();
+    ggml_backend_dev_t devices[] = { cuda_dev, nullptr };
+    model_params.devices = devices;
+    model_params.sequential_load = sequential;
+    model_params.use_mmap = true;
+
+    llama_model_ptr model(llama_model_load_from_file(path.c_str(), model_params));
+    if (!model) {
+        throw std::runtime_error(std::string(sequential ? "sequential" : "ordinary") + " file load failed");
+    }
+    llama_context_params ctx_params = llama_context_default_params();
+    ctx_params.n_ctx = 128;
+    ctx_params.n_batch = 32;
+    ctx_params.n_ubatch = 32;
+    llama_context_ptr ctx(llama_init_from_model(model.get(), ctx_params));
+    if (!ctx) {
+        throw std::runtime_error(std::string(sequential ? "sequential" : "ordinary") + " context creation failed");
+    }
+    return get_logits(model.get(), ctx.get(), tokens);
+}
+
+static int validate_sequential_fixture(const llm_arch arch, const size_t seed, const std::string & dir) {
+    if (!llama_model_arch_supports_sequential_load(arch)) {
+        throw std::runtime_error("architecture is not in the sequential allowlist");
+    }
+    ggml_backend_dev_t cuda_dev = get_single_cuda_device();
+    if (cuda_dev == nullptr) {
+        throw std::runtime_error("exactly one visible CUDA device is required");
+    }
+
+    std::filesystem::create_directories(dir);
+    const std::string path = dir + "/" + llm_arch_name(arch) + "-dense.gguf";
+    gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, false, true);
+    auto generated = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {});
+    llama_model_save_to_file(generated.first.get(), path.c_str());
+    generated = {};
+
+    const std::vector<llama_token> tokens = { 5, 6, 7, 8 };
+    const std::vector<float> ordinary = load_file_and_decode(path, cuda_dev, false, tokens);
+
+    size_t free_before = 0;
+    size_t total = 0;
+    ggml_backend_dev_memory(cuda_dev, &free_before, &total);
+    error_stats worst;
+    for (int cycle = 0; cycle < 3; ++cycle) {
+        const std::vector<float> sequential = load_file_and_decode(path, cuda_dev, true, tokens);
+        const error_stats current = compare_logits(ordinary, sequential);
+        worst.max_abs = std::max(worst.max_abs, current.max_abs);
+        worst.max_rel = std::max(worst.max_rel, current.max_rel);
+    }
+    size_t free_after = 0;
+    ggml_backend_dev_memory(cuda_dev, &free_after, &total);
+    const int64_t drift = int64_t(free_before) - int64_t(free_after);
+    const uintmax_t file_size = std::filesystem::file_size(path);
+    printf("SEQUENTIAL_RESULT arch=%s bytes=%" PRIuMAX " ordinary=PASS sequential=PASS cycles=3 max_abs=%.9g max_rel=%.9g free_before=%zu free_after=%zu drift=%" PRId64 "\n",
+        llm_arch_name(arch), file_size, worst.max_abs, worst.max_rel, free_before, free_after, drift);
+
+    if (worst.max_abs > 1.0e-5 || worst.max_rel > 1.0e-4 || std::abs(drift) > 2*1024*1024) {
+        throw std::runtime_error("sequential fixture tolerance or VRAM drift exceeded");
+    }
+    return 0;
 }
 
 static int save_models(const llm_arch target_arch, const size_t seed, const ggml_log_level log_level, const std::string & dir) {
@@ -451,7 +592,7 @@ static int save_models(const llm_arch target_arch, const size_t seed, const ggml
         if (arch == LLM_ARCH_GEMMA4 || arch == LLM_ARCH_GEMMA4_ASSISTANT) {
             continue; // FIXME: ISWA KV cache initialization needs more fixture params
         }
-        if (arch == LLM_ARCH_EAGLE3) {
+        if (arch == LLM_ARCH_EAGLE3 || arch == LLM_ARCH_DFLASH) {
             continue;
         }
         for (bool moe : {false, true}) {
@@ -461,7 +602,7 @@ static int save_models(const llm_arch target_arch, const size_t seed, const ggml
             if (!moe && moe_mandatory(arch)) {
                 continue;
             }
-            if (!llama_model_saver_supports_arch(arch)) {
+            if (!llama_model_saver_supports_arch(arch) || !arch_supported(arch)) {
                 LOG_INF("%s: %s model (%s) is unsupported, skipping\n", __func__, llm_arch_name(arch), moe ? "MoE" : "dense");
                 continue;
             }
@@ -557,7 +698,7 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
         if (arch == LLM_ARCH_GEMMA4 || arch == LLM_ARCH_GEMMA4_ASSISTANT) {
             continue; // FIXME: ISWA KV cache initialization needs more fixture params
         }
-        if (arch == LLM_ARCH_EAGLE3) {
+        if (arch == LLM_ARCH_EAGLE3 || arch == LLM_ARCH_DFLASH) {
             continue;
         }
 
@@ -642,6 +783,9 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
 }
 
 int main(int argc, char ** argv) {
+    GGML_ASSERT(!llama_adapter_cvec().is_active());
+    test_sequential_arch_allowlist();
+
     // FIXME these tests are disabled in the CI for macOS-latest-cmake-arm64 because they are segfaulting
     common_init();
     std::random_device rd;
@@ -650,6 +794,7 @@ int main(int argc, char ** argv) {
     size_t seed = rd();
     ggml_log_level log_level = GGML_LOG_LEVEL_ERROR;
     std::string out;
+    std::string sequential_validate_dir;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--arch") == 0) {
@@ -685,10 +830,24 @@ int main(int argc, char ** argv) {
                 return 1;
             }
         }
+        if (strcmp(argv[i], "--sequential-validate") == 0) {
+            if (i + 1 < argc) {
+                sequential_validate_dir = argv[++i];
+            } else {
+                usage(argv);
+                return 1;
+            }
+        }
     }
     printf("%s: using seed %zu\n", __func__, seed);
 
     try {
+        if (!sequential_validate_dir.empty()) {
+            if (arch == LLM_ARCH_UNKNOWN) {
+                throw std::runtime_error("--sequential-validate requires --arch");
+            }
+            return validate_sequential_fixture(arch, seed, sequential_validate_dir);
+        }
         if (!out.empty()) {
             return save_models(arch, seed, log_level, out);
         }

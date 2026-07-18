@@ -11,6 +11,10 @@
 
 // vec
 
+bool llama_adapter_cvec::is_active() const {
+    return layer_start >= 0 && layer_end >= layer_start;
+}
+
 ggml_tensor * llama_adapter_cvec::tensor_for(int il) const {
     if (il < 0 || il < layer_start || il > layer_end || (size_t) il >= tensors.size()) {
         return nullptr;

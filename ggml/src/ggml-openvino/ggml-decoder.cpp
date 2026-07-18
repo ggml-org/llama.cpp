@@ -1270,77 +1270,14 @@ void GgmlOvDecoder::visit_subgraph(std::function<void(std::shared_ptr<GgmlDecode
 }
 
 std::string GgmlOvDecoder::compute_op_type(const ggml_tensor * node) {
-    static const std::map<ggml_op, std::string> ops = {
-        {GGML_OP_NONE,            "GGML_OP_NONE"           },
-        {GGML_OP_ACC,             "GGML_OP_ACC"            },
-        {GGML_OP_ADD,             "GGML_OP_ADD"            },
-        {GGML_OP_ADD1,            "GGML_OP_ADD1"           },
-        {GGML_OP_ADD_ID,          "GGML_OP_ADD_ID"         },
-        {GGML_OP_CONCAT,          "GGML_OP_CONCAT"         },
-        {GGML_OP_CONT,            "GGML_OP_CONT"           },
-        {GGML_OP_DIV,             "GGML_OP_DIV"            },
-        {GGML_OP_DUP,             "GGML_OP_DUP"            },
-        {GGML_OP_GET_ROWS,        "GGML_OP_GET_ROWS"       },
-        {GGML_OP_MUL,             "GGML_OP_MUL"            },
-        {GGML_OP_MUL_MAT,         "GGML_OP_MUL_MAT"        },
-        {GGML_OP_MUL_MAT_ID,      "GGML_OP_MUL_MAT_ID"     },
-        {GGML_OP_PERMUTE,         "GGML_OP_PERMUTE"        },
-        {GGML_OP_RESHAPE,         "GGML_OP_RESHAPE"        },
-        {GGML_OP_RMS_NORM,        "GGML_OP_RMS_NORM"       },
-        {GGML_OP_NORM,            "GGML_OP_NORM"           },
-        {GGML_OP_ROPE,            "GGML_OP_ROPE"           },
-        {GGML_OP_SCALE,           "GGML_OP_SCALE"          },
-        {GGML_OP_SOFT_MAX,        "GGML_OP_SOFT_MAX"       },
-        {GGML_OP_SUM_ROWS,        "GGML_OP_SUM_ROWS"       },
-        {GGML_OP_SUB,             "GGML_OP_SUB"            },
-        {GGML_OP_TRANSPOSE,       "GGML_OP_TRANSPOSE"      },
-        {GGML_OP_VIEW,            "GGML_OP_VIEW"           },
-        {GGML_OP_SET_ROWS,        "GGML_OP_SET_ROWS"       },
-        {GGML_OP_CPY,             "GGML_OP_CPY"            },
-        {GGML_OP_FLASH_ATTN_EXT,  "GGML_OP_FLASH_ATTN_EXT" },
-        {GGML_OP_L2_NORM,         "GGML_OP_L2_NORM"        },
-        {GGML_OP_CLAMP,           "GGML_OP_CLAMP"          },
-        {GGML_OP_PAD,             "GGML_OP_PAD"            },
-        {GGML_OP_SSM_CONV,        "GGML_OP_SSM_CONV"       },
-        {GGML_OP_GATED_DELTA_NET, "GGML_OP_GATED_DELTA_NET"},
-        {GGML_OP_ARGSORT,         "GGML_OP_ARGSORT"        },
-        {GGML_OP_REPEAT,          "GGML_OP_REPEAT"         },
-        {GGML_OP_IM2COL,          "GGML_OP_IM2COL"         }
-    };
-    static const std::map<ggml_unary_op, std::string> unary_ops = {
-        {GGML_UNARY_OP_ABS,         "GGML_UNARY_OP_ABS"        },
-        {GGML_UNARY_OP_SGN,         "GGML_UNARY_OP_SGN"        },
-        {GGML_UNARY_OP_NEG,         "GGML_UNARY_OP_NEG"        },
-        {GGML_UNARY_OP_STEP,        "GGML_UNARY_OP_STEP"       },
-        {GGML_UNARY_OP_TANH,        "GGML_UNARY_OP_TANH"       },
-        {GGML_UNARY_OP_ELU,         "GGML_UNARY_OP_ELU"        },
-        {GGML_UNARY_OP_RELU,        "GGML_UNARY_OP_RELU"       },
-        {GGML_UNARY_OP_SIGMOID,     "GGML_UNARY_OP_SIGMOID"    },
-        {GGML_UNARY_OP_GELU,        "GGML_UNARY_OP_GELU"       },
-        {GGML_UNARY_OP_GELU_QUICK,  "GGML_UNARY_OP_GELU_QUICK" },
-        {GGML_UNARY_OP_SILU,        "GGML_UNARY_OP_SILU"       },
-        {GGML_UNARY_OP_SOFTPLUS,    "GGML_UNARY_OP_SOFTPLUS"   },
-        {GGML_UNARY_OP_HARDSWISH,   "GGML_UNARY_OP_HARDSWISH"  },
-        {GGML_UNARY_OP_HARDSIGMOID, "GGML_UNARY_OP_HARDSIGMOID"},
-        {GGML_UNARY_OP_EXP,         "GGML_UNARY_OP_EXP"        },
-        {GGML_UNARY_OP_COUNT,       "GGML_UNARY_OP_COUNT"      }
-    };
-    static const std::map<ggml_glu_op, std::string> glu_ops = {
-        {GGML_GLU_OP_SWIGLU, "GGML_GLU_OP_SWIGLU"},
-        {GGML_GLU_OP_GEGLU,  "GGML_GLU_OP_GEGLU" },
-        {GGML_GLU_OP_REGLU,  "GGML_GLU_OP_REGLU" }
-    };
-
     switch (node->op) {
     case GGML_OP_UNARY:
-        return unary_ops.at(ggml_get_unary_op(node));
+        return std::string("GGML_UNARY_OP_") + ggml_unary_op_name(ggml_get_unary_op(node));
     case GGML_OP_GLU:
-        return glu_ops.at(ggml_get_glu_op(node));
+        return std::string("GGML_GLU_OP_") + ggml_glu_op_name(ggml_get_glu_op(node));
     default:
-        return ops.at(node->op);
+        return std::string("GGML_OP_") + ggml_op_name(node->op);
     }
-    static const std::string unknown_op = "UNKNOWN_GGML_OP";
-    return unknown_op;
 }
 
 const std::string & GgmlOvDecoder::get_op_type(int node_idx) const {

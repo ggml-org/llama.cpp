@@ -256,15 +256,45 @@ def test_router_reload_models():
         os.remove(preset_path)
 
 
+def test_router_remote_preset():
+    global server
+    server.model_hf_repo = "ggml-org/test-preset-ci"
+    server.model_hf_file = None
+    server.offline = False
+    server.start()
+
+    # Should see preset models in GET /models
+    res = server.make_request("GET", "/models")
+    assert res.status_code == 200
+    ids = {item["id"] for item in res.body.get("data", [])}
+    assert "tinygemma3-preset" in ids
+    assert "stories260K-test" in ids
+
+    # Should be able to load a preset model
+    model_id = "tinygemma3-preset"
+    _load_model_and_wait(model_id)
+
+
 MODEL_DOWNLOAD_ID = "ggml-org/test-model-router-download:F16"
-MODEL_DOWNLOAD_TIMEOUT = 300
+MODEL_DOWNLOAD_TIMEOUT = 30
 
 
-def _listen_sse(server: ServerProcess, collected: list, stop: threading.Event):
-    """Collect /models/sse events into `collected` until `stop` is set."""
+def _listen_sse(
+    server: ServerProcess, collected: list, stop: threading.Event, ready: threading.Event | None = None
+):
+    """Collect /models/sse events into `collected` until `stop` is set.
+
+    When `ready` is provided, it is set once the streaming response is open,
+    i.e. the server has accepted the connection and registered us as a
+    subscriber. Callers that trigger one-shot events (e.g. download_finished)
+    must wait on `ready` before acting, otherwise the event can be broadcast
+    before this client is subscribed and be lost.
+    """
     url = f"http://{server.server_host}:{server.server_port}/models/sse"
     try:
         with requests.get(url, stream=True, timeout=MODEL_DOWNLOAD_TIMEOUT) as resp:
+            if ready is not None:
+                ready.set()
             for line_bytes in resp.iter_lines():
                 if stop.is_set():
                     break
@@ -294,10 +324,16 @@ def test_router_download_model():
 
     sse_events: list = []
     stop = threading.Event()
+    sse_ready = threading.Event()
     sse_thread = threading.Thread(
-        target=_listen_sse, args=(server, sse_events, stop), daemon=True
+        target=_listen_sse, args=(server, sse_events, stop, sse_ready), daemon=True
     )
     sse_thread.start()
+
+    # wait for the SSE client to be subscribed before triggering the download,
+    # otherwise the one-shot download_finished event can be broadcast before
+    # this client is registered and be lost
+    assert sse_ready.wait(10), "SSE client failed to connect"
 
     # Trigger the download
     res = server.make_request("POST", "/models", data={"model": MODEL_DOWNLOAD_ID})
@@ -328,13 +364,17 @@ def test_router_delete_model():
 
     # Ensure the model exists (download it if needed)
     if MODEL_DOWNLOAD_ID not in _get_model_ids(is_reload=False):
-        res = server.make_request("POST", "/models", data={"model": MODEL_DOWNLOAD_ID})
-        assert res.status_code == 200
         sse_events: list = []
         stop = threading.Event()
+        sse_ready = threading.Event()
         threading.Thread(
-            target=_listen_sse, args=(server, sse_events, stop), daemon=True
+            target=_listen_sse, args=(server, sse_events, stop, sse_ready), daemon=True
         ).start()
+        # subscribe before triggering the download so the one-shot
+        # download_finished event is not lost (see test_router_download_model)
+        assert sse_ready.wait(10), "SSE client failed to connect"
+        res = server.make_request("POST", "/models", data={"model": MODEL_DOWNLOAD_ID})
+        assert res.status_code == 200
         finished = _wait_for_sse_event(
             sse_events, "download_finished", MODEL_DOWNLOAD_ID, MODEL_DOWNLOAD_TIMEOUT
         )
@@ -351,8 +391,14 @@ def test_router_delete_model():
     assert MODEL_DOWNLOAD_ID not in ids, f"{MODEL_DOWNLOAD_ID} still present after deletion"
 
 
+def _get_model_entry(model_id: str) -> dict:
+    res = server.make_request("GET", "/models")
+    assert res.status_code == 200
+    return next(item for item in res.body["data"] if item["id"] == model_id)
+
+
 def test_router_models_preset_sequential_load():
-    """models.ini preset with sequential_load = true should be parsed without error."""
+    """Legacy sequential_load is canonicalized and contained without spawning."""
     global server
 
     preset_path = os.path.join(TMP_DIR, "test_sequential.ini")
@@ -362,17 +408,113 @@ def test_router_models_preset_sequential_load():
             "[model-seq]\n"
             "hf-repo = ggml-org/test-model-stories260K\n"
             "sequential_load = true\n"
+            "device = CUDA0\n"
+            "alias = seq-alias\n"
+            "ctx-size = 128\n"
         )
 
     server.models_preset = preset_path
     server.start()
 
     try:
-        ids = _get_model_ids(is_reload=False)
-        assert "model-seq" in ids, "model with sequential_load should appear in model list"
-
-        # load the model and verify it loads successfully with sequential mode
-        _load_model_and_wait("model-seq", timeout=120)
-        assert _get_model_status("model-seq") == "loaded"
+        entry = _get_model_entry("model-seq")
+        args = entry["status"]["args"]
+        assert args.count("--sequential") == 1
+        assert "--sequential-load" not in args
+        assert "--no-sequential" not in args
+        assert args[args.index("--device") + 1] == "CUDA0"
+        # Router CLI values keep their documented precedence over model INI.
+        assert args[args.index("--ctx-size") + 1] == "1024"
+        assert "seq-alias" in entry["aliases"]
+        assert entry["status"]["value"] == "unloaded"
+        props = server.make_request("GET", "/props")
+        assert props.body["max_instances"] == 1
     finally:
         os.remove(preset_path)
+
+
+@pytest.mark.parametrize("sequential_line", ["", "sequential-load = false\n"])
+def test_router_sequential_false_or_absent_stays_disabled(sequential_line: str):
+    """False and absent settings do not enable child or router sequential mode."""
+    preset_path = os.path.join(TMP_DIR, "test_sequential_disabled.ini")
+    with open(preset_path, "w") as f:
+        f.write(
+            "[model-ordinary]\n"
+            "hf-repo = ggml-org/test-model-stories260K\n"
+            f"{sequential_line}"
+            "alias = ordinary-alias\n"
+            "ctx-size = 96\n"
+        )
+    server.models_preset = preset_path
+    server.start()
+    try:
+        entry = _get_model_entry("model-ordinary")
+        args = entry["status"]["args"]
+        assert "--sequential" not in args
+        assert args.count("--no-sequential") == (1 if sequential_line else 0)
+        assert args[args.index("--ctx-size") + 1] == "1024"
+        assert "ordinary-alias" in entry["aliases"]
+        assert entry["status"]["value"] == "unloaded"
+        props = server.make_request("GET", "/props")
+        assert props.body["max_instances"] != 1
+    finally:
+        os.remove(preset_path)
+
+
+@pytest.mark.parametrize(
+    "cli_value,ini_value,expected",
+    [(False, "true", "--no-sequential"), (True, "false", "--sequential")],
+)
+def test_router_sequential_cli_precedence(cli_value: bool, ini_value: str, expected: str):
+    preset_path = os.path.join(TMP_DIR, "test_sequential_precedence.ini")
+    with open(preset_path, "w") as f:
+        f.write(
+            "[model-seq]\n"
+            "hf-repo = ggml-org/test-model-stories260K\n"
+            f"sequential-load = {ini_value}\n"
+            "device = CUDA0\n"
+        )
+    server.models_preset = preset_path
+    server.sequential = cli_value
+    server.device = "CUDA1"
+    server.start()
+    try:
+        args = _get_model_entry("model-seq")["status"]["args"]
+        assert expected in args
+        assert args[args.index("--device") + 1] == "CUDA1"
+    finally:
+        os.remove(preset_path)
+
+
+@pytest.mark.parametrize("models_max", [0, 2])
+def test_router_sequential_explicit_models_max_rejected(models_max: int):
+    preset_path = os.path.join(TMP_DIR, "test_sequential_models_max.ini")
+    log_path = os.path.join(TMP_DIR, "test_sequential_models_max.log")
+    with open(preset_path, "w") as f:
+        f.write("[model-seq]\nhf-repo = local/test\nsequential-load = true\ndevice = CUDA0\n")
+    server.models_preset = preset_path
+    server.models_max = models_max
+    server.log_path = log_path
+    with pytest.raises(RuntimeError):
+        server.start(timeout_seconds=10)
+    with open(log_path) as f:
+        assert "sequential loading requires --models-max 1 in router mode" in f.read()
+    os.remove(preset_path)
+    os.remove(log_path)
+
+
+@pytest.mark.parametrize("device", [None, "none", "CPU", "CUDA0,CUDA1", "Vulkan0"])
+def test_router_sequential_invalid_device_rejected(device: str | None):
+    preset_path = os.path.join(TMP_DIR, "test_sequential_device.ini")
+    log_path = os.path.join(TMP_DIR, "test_sequential_device.log")
+    device_line = "" if device is None else f"device = {device}\n"
+    with open(preset_path, "w") as f:
+        f.write(f"[model-seq]\nhf-repo = local/test\nsequential-load = true\n{device_line}")
+    server.models_preset = preset_path
+    server.log_path = log_path
+    with pytest.raises(RuntimeError):
+        server.start(timeout_seconds=10)
+    with open(log_path) as f:
+        assert "sequential loading requires exactly one explicit CUDA device in router mode" in f.read()
+    os.remove(preset_path)
+    os.remove(log_path)

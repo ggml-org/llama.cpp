@@ -357,10 +357,22 @@ extern "C" {
     // Enable one-split lookahead async upload for host weights copied to device split inputs.
     GGML_API void                 ggml_backend_sched_set_async_weight_prefetch(ggml_backend_sched_t sched, bool prefetch);
 
-    // Limit total weight bytes per GPU split when force_weight_offload is active.
+    // Limit total weight bytes per accelerator scheduler split when force_weight_offload is active.
     // When non-zero, splits are broken when accumulated weight inputs exceed this limit.
-    // This enables streaming layer-by-layer execution in VRAM-constrained scenarios.
+    // The split is an execution unit and does not imply a semantic model layer.
     GGML_API void                 ggml_backend_sched_set_max_weight_bytes_per_split(ggml_backend_sched_t sched, size_t max_bytes);
+
+    // Configure an exact transient-weight admission window from a synchronized, post-reservation
+    // device-memory sample. A zero or inconsistent sample enables fail-closed admission.
+    // configured_cap is SIZE_MAX when no explicit cap is requested.
+    GGML_API bool                 ggml_backend_sched_set_weight_window(
+            ggml_backend_sched_t sched, ggml_backend_t backend,
+            size_t free_bytes, size_t total_bytes, size_t configured_cap,
+            size_t * window_bytes, size_t * safety_reserve_bytes);
+
+    // Enable bounded persistent scheduler-weight residency on one caller-qualified CUDA backend.
+    GGML_API void                 ggml_backend_sched_set_weight_residency(
+            ggml_backend_sched_t sched, ggml_backend_t backend, bool enabled);
 
     //
     // Meta backend

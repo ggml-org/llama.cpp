@@ -1,7 +1,11 @@
 #include "arg.h"
 #include "common.h"
 #include "download.h"
+#include "preset.h"
 
+#include <algorithm>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 #include <sstream>
@@ -83,6 +87,77 @@ static void test(void) {
     };
 
     std::vector<std::string> argv;
+
+    printf("test-arg-parser: test sequential argument contract\n\n");
+
+    params = common_params{};
+    assert(params.sequential_load == false);
+
+    for (const char * arg : { "--sequential", "--sequential-load" }) {
+        params = common_params{};
+        argv = {"binary_name", "-m", "model.gguf", arg};
+        assert(common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+        assert(params.sequential_load == true);
+    }
+    for (const char * arg : { "--no-sequential", "--no-sequential-load" }) {
+        params = common_params{};
+        params.sequential_load = true;
+        argv = {"binary_name", "-m", "model.gguf", arg};
+        assert(common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+        assert(params.sequential_load == false);
+    }
+
+    {
+        const auto ini_path = std::filesystem::temp_directory_path() / "llama-test-sequential-preset.ini";
+        common_preset_context preset_ctx(LLAMA_EXAMPLE_COMMON);
+        common_preset global;
+
+        auto load_ini = [&](const std::string & contents) {
+            std::ofstream out(ini_path, std::ios::trunc);
+            out << contents;
+            out.close();
+            return preset_ctx.load_from_ini(ini_path.string(), global);
+        };
+
+        for (const char * key : { "sequential-load", "sequential_load" }) {
+            const auto presets = load_ini(std::string("[model]\n") + key + " = true\n");
+            const auto & preset = presets.at("model");
+            common_params preset_params;
+            preset.apply_to_params(preset_params);
+            assert(preset_params.sequential_load == true);
+            const auto args = preset.to_args();
+            assert(std::find(args.begin(), args.end(), "--sequential") != args.end());
+            assert(preset.to_ini().find("sequential-load = true") != std::string::npos);
+        }
+
+        bool rejected = false;
+        try {
+            (void) load_ini("[model]\nno_mmap = true\n");
+        } catch (const std::runtime_error & e) {
+            rejected = std::string(e.what()).find("option 'no_mmap' not recognized") != std::string::npos;
+        }
+        assert(rejected);
+
+        std::error_code ec;
+        std::filesystem::remove(ini_path, ec);
+    }
+
+#ifdef _WIN32
+    _putenv_s("LLAMA_ARG_SEQUENTIAL", "1");
+#else
+    setenv("LLAMA_ARG_SEQUENTIAL", "1", true);
+#endif
+    params = common_params{};
+    argv = {"binary_name", "-m", "model.gguf"};
+    assert(common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+    assert(params.sequential_load == true);
+#ifdef _WIN32
+    _putenv_s("LLAMA_ARG_SEQUENTIAL", "");
+#else
+    unsetenv("LLAMA_ARG_SEQUENTIAL");
+#endif
+
+    params = common_params{};
 
     printf("test-arg-parser: test invalid usage\n\n");
 

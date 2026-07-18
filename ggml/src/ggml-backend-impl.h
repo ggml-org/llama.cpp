@@ -4,11 +4,97 @@
 
 #include "ggml-backend.h"
 
+#include <stdint.h>
+
 #ifdef  __cplusplus
 extern "C" {
 #endif
 
     #define GGML_BACKEND_API_VERSION 2
+
+    // Internal scheduler observability. Callers must serialize snapshots with
+    // all other scheduler operations. These definitions are not a stable API.
+    #define GGML_BACKEND_SCHED_TRANSIENT_MAX_BACKENDS 16
+
+    enum ggml_backend_sched_transient_drain_reason {
+        GGML_BACKEND_SCHED_TRANSIENT_DRAIN_NORMAL = 0,
+        GGML_BACKEND_SCHED_TRANSIENT_DRAIN_ALLOCATION_FAILURE,
+        GGML_BACKEND_SCHED_TRANSIENT_DRAIN_ATTACHMENT_FAILURE,
+        GGML_BACKEND_SCHED_TRANSIENT_DRAIN_COMPUTE_FAILURE,
+        GGML_BACKEND_SCHED_TRANSIENT_DRAIN_RESET,
+        GGML_BACKEND_SCHED_TRANSIENT_DRAIN_GRAPH_REBUILD,
+        GGML_BACKEND_SCHED_TRANSIENT_DRAIN_DESTRUCTION,
+        GGML_BACKEND_SCHED_TRANSIENT_DRAIN_REASON_COUNT,
+    };
+
+    struct ggml_backend_sched_transient_metrics_backend {
+        int backend_index;
+        ggml_backend_t backend;
+        size_t current_transient_bytes;
+        size_t peak_transient_bytes;
+        size_t current_transient_records;
+        size_t peak_transient_records;
+        size_t current_resident_bytes;
+        size_t peak_resident_bytes;
+        size_t current_resident_records;
+        size_t peak_resident_records;
+        size_t peak_manually_owned_bytes;
+        size_t weight_window_limit_bytes;
+        size_t weight_window_safety_reserve_bytes;
+        size_t weight_window_post_reservation_free_bytes;
+        size_t weight_window_total_bytes;
+        bool weight_window_configured;
+        bool weight_window_memory_valid;
+        uint64_t allocation_requested_bytes;
+        uint64_t allocation_admitted_bytes;
+        uint64_t allocation_rejected_bytes;
+        uint64_t allocation_count;
+        uint64_t allocation_failure_count;
+        uint64_t allocation_limit_rejection_count;
+        uint64_t oversized_tensor_rejection_count;
+        uint64_t allocation_live_guard_rejection_count;
+        uint64_t allocation_unknown_memory_rejection_count;
+        uint64_t allocation_time_us;
+        uint64_t uploaded_logical_bytes;
+        uint64_t uploaded_backend_bytes;
+        uint64_t upload_count;
+        uint64_t transfer_completion_wait_count;
+        uint64_t transfer_completion_wait_us;
+        uint64_t compute_completion_wait_count;
+        uint64_t compute_completion_wait_us;
+        uint64_t splits_seen_count;
+        uint64_t transient_split_count;
+        uint64_t shared_reload_count;
+        uint64_t residency_hit_count;
+        uint64_t residency_miss_count;
+        uint64_t residency_upload_count;
+        uint64_t residency_eviction_count;
+        uint64_t residency_fallback_count;
+        uint64_t residency_drain_count;
+        uint64_t drain_count[GGML_BACKEND_SCHED_TRANSIENT_DRAIN_REASON_COUNT];
+        uint64_t drain_time_us[GGML_BACKEND_SCHED_TRANSIENT_DRAIN_REASON_COUNT];
+    };
+
+    struct ggml_backend_sched_transient_metrics {
+        int n_backends;
+        size_t current_transient_bytes;
+        size_t peak_transient_bytes;
+        size_t current_transient_records;
+        size_t peak_transient_records;
+        size_t current_resident_bytes;
+        size_t peak_resident_bytes;
+        size_t current_resident_records;
+        size_t peak_resident_records;
+        uint64_t graph_compute_count;
+        uint64_t graph_compute_failure_count;
+        uint64_t callback_early_stop_count;
+        uint64_t ledger_mismatch_count;
+        uint64_t counter_overflow_count;
+        struct ggml_backend_sched_transient_metrics_backend backends[GGML_BACKEND_SCHED_TRANSIENT_MAX_BACKENDS];
+    };
+
+    GGML_API bool ggml_backend_sched_get_transient_metrics(
+            ggml_backend_sched_t sched, struct ggml_backend_sched_transient_metrics * out);
 
     //
     // Backend buffer type

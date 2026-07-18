@@ -126,7 +126,7 @@ static void soft_max_f32(const float *         x,
             break;
         }
 
-        const float val = sycl::native::exp(vals[col] - max_val);
+        const float val = sycl::native::exp(sycl::max(vals[col] - max_val, -80.0f));
         tmp += val;
         vals[col] = val;
     }
@@ -154,7 +154,7 @@ static void soft_max_f32(const float *         x,
         tmp = warp_reduce_sum<WARP_SIZE>(tmp);
     }
     if (sinks) {
-        tmp += sycl::native::exp(sinks[i02] - max_val);
+        tmp += sycl::native::exp(sycl::max(sinks[i02] - max_val, -80.0f));
     }
     const float inv_sum = 1.0f / tmp;
 
