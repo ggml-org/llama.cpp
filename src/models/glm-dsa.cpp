@@ -3,7 +3,7 @@
 #include "llama-kv-cache-dsa.h"
 
 // https://huggingface.co/zai-org/GLM-5.2/blob/main/config.json#L26
-const std::array<uint32_t, LLAMA_MAX_LAYERS> GLM_DSA_DEFAULT_INDEXER_TYPES = {
+const std::array<uint32_t, LLAMA_MAX_LAYERS> GLM_5_2_DEFAULT_INDEXER_TYPES = {
     1, 1,
     1, 0, 0, 0,
     1, 0, 0, 0,
@@ -62,7 +62,13 @@ void llama_model_glm_dsa::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_NEXTN_PREDICT_LAYERS, hparams.n_layer_nextn, false);
     GGML_ASSERT(hparams.n_layer_nextn < hparams.n_layer_all && "n_layer_nextn must be < n_layer_all");
 
-    hparams.is_indexer_full_impl = GLM_DSA_DEFAULT_INDEXER_TYPES;
+    // BC for GLM 5, 5.1 (full indexers) without indexer_types metadata
+    const bool is_pre_5_2 = hparams.n_ctx_train < 1048576;
+    if (is_pre_5_2) {
+        std::fill(hparams.is_indexer_full_impl.begin(), hparams.is_indexer_full_impl.end(), 1);
+    } else {
+        hparams.is_indexer_full_impl = GLM_5_2_DEFAULT_INDEXER_TYPES;
+    }
     ml.get_key_or_arr(LLM_KV_ATTENTION_INDEXER_TYPES, hparams.is_indexer_full_impl, hparams.n_layer(), false);
 
     switch (hparams.n_layer()) {
