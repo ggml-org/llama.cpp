@@ -206,6 +206,8 @@ option(GGML_SYCL_GRAPH                      "ggml: enable graphs in the SYCL bac
 option(GGML_SYCL_HOST_MEM_FALLBACK          "ggml: allow host memory fallback in SYCL reorder (requires kernel 6.8+)" ON)
 option(GGML_SYCL_SUPPORT_LEVEL_ZERO         "ggml: use Level Zero API in SYCL backend"  ON)
 option(GGML_SYCL_DNN                        "ggml: enable oneDNN in the SYCL backend"         ON)
+option(GGML_SYCL_DEVICE_CODE_SPLIT          "ggml: split SYCL device code per kernel"         OFF)
+option(GGML_SYCL_COMPILE_FAST               "ggml: use the SYCL fast device compiler path"    OFF)
 set   (GGML_SYCL_TARGET "INTEL" CACHE STRING
                                             "ggml: sycl target device")
 set   (GGML_SYCL_DEVICE_ARCH "" CACHE STRING

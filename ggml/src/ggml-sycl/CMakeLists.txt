@@ -105,6 +105,18 @@ endif()
 
 target_compile_options(ggml-sycl PRIVATE "-Wno-narrowing")
 
+if (GGML_SYCL_DEVICE_CODE_SPLIT)
+    target_compile_options(ggml-sycl PRIVATE "-fsycl-device-code-split=per_kernel")
+    target_link_options(ggml-sycl PRIVATE "-fsycl-device-code-split=per_kernel")
+endif()
+
+if (GGML_SYCL_COMPILE_FAST)
+    target_compile_options(ggml-sycl PRIVATE "-ftarget-compile-fast")
+endif()
+
+message(STATUS "GGML_SYCL_DEVICE_CODE_SPLIT ${GGML_SYCL_DEVICE_CODE_SPLIT}")
+message(STATUS "GGML_SYCL_COMPILE_FAST ${GGML_SYCL_COMPILE_FAST}")
+
 message(STATUS "GGML_SYCL_SUPPORT_LEVEL_ZERO ${GGML_SYCL_SUPPORT_LEVEL_ZERO}")
 if (GGML_SYCL_SUPPORT_LEVEL_ZERO)
     # Link against Level Zero loader for direct device memory allocation.
