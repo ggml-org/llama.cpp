@@ -90,6 +90,7 @@ int g_ggml_sycl_use_async_mem_op = 0;
 int g_ggml_sycl_use_async_mem_op_requested = 1;
 int g_ggml_sycl_enable_level_zero = 0;
 int g_ggml_sycl_enable_flash_attention = 1;
+int g_ggml_sycl_fa_force_vec_standard = 0;
 
 
 static ggml_sycl_device_info ggml_sycl_init() {
@@ -290,6 +291,7 @@ static void ggml_check_sycl() try {
 #else
         g_ggml_sycl_enable_flash_attention = 0;
 #endif
+        g_ggml_sycl_fa_force_vec_standard = get_sycl_env("GGML_SYCL_FA_FORCE_VEC_STANDARD", 0);
 
         GGML_SYCL_DEBUG("[SYCL] call ggml_check_sycl\n");
 
@@ -358,6 +360,8 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_ENABLE_FLASH_ATTN: %d disabled by compile flag\n",
             g_ggml_sycl_enable_flash_attention);
 #endif
+        GGML_LOG_INFO("  GGML_SYCL_FA_FORCE_VEC_STANDARD: %d\n",
+            g_ggml_sycl_fa_force_vec_standard);
 
 /* NOT REMOVE, keep it for next optimize for XMX.
 #if defined(SYCL_USE_XMX)

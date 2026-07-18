@@ -304,9 +304,18 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
         }
         return BEST_FATTN_KERNEL_VEC;
     }
-
-    // For small batch sizes the vector kernel may be preferable over the kernels optimized for large batch sizes:
     const bool can_use_vector_kernel = Q->ne[0] <= 512 && Q->ne[0] % 64 == 0 && K->ne[1] % FATTN_KQ_STRIDE == 0;
+    const bool force_vec_standard =
+        g_ggml_sycl_fa_force_vec_standard == 1 &&
+        Q->ne[1] == 1 &&
+        K->ne[0] == 128 &&
+        K->type == V->type &&
+        (K->type == GGML_TYPE_F16 || K->type == GGML_TYPE_Q8_0) &&
+        can_use_vector_kernel;
+    if (force_vec_standard) {
+        return BEST_FATTN_KERNEL_VEC;
+    }
+
 
     // XMX (DPAS) path -- opt-in via GGML_SYCL_FA_XMX. Scope: f16 or q8_0 KV,
     // D in {128, 256}, additive mask (ne[2]==1). The math is validated
