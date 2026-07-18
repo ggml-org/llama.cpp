@@ -954,7 +954,8 @@ struct llm_graph_context {
     ggml_tensor * build_lora_mm(
               ggml_tensor * w,
               ggml_tensor * cur,
-              ggml_tensor * w_s = nullptr) const;
+              ggml_tensor * w_s = nullptr,
+            enum ggml_prec   prec = GGML_PREC_DEFAULT) const;
 
     // do mat_mul_id, while optionally apply lora and per-expert scale
     ggml_tensor * build_lora_mm_id(

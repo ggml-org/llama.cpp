@@ -33,7 +33,7 @@ enum resize_algo {
     RESIZE_ALGO_BILINEAR, // stretch to target resolution
     RESIZE_ALGO_BICUBIC, // center-crop when aspect ratio doesn't match
     RESIZE_ALGO_BICUBIC_PILLOW,
-    // RESIZE_ALGO_LANCZOS, // TODO
+    RESIZE_ALGO_LANCZOS,
 };
 
 // Padding style for img_tool::resize
@@ -347,6 +347,11 @@ struct qf_block {
     std::vector<clip_layer> qf_proj_layers;
 };
 
+struct inkling_hmlp_layer {
+    ggml_tensor * linear_w = nullptr;
+    ggml_tensor * norm_w   = nullptr;
+};
+
 struct clip_model {
     clip_modality modality = CLIP_MODALITY_VISION;
     projector_type proj_type = PROJECTOR_TYPE_MLP;
@@ -360,6 +365,12 @@ struct clip_model {
     ggml_tensor * position_embeddings = nullptr;
     ggml_tensor * norm_embd_w = nullptr;
     ggml_tensor * norm_embd_b = nullptr;
+
+    // Inkling towers (neither uses standard transformer blocks).
+    std::vector<inkling_hmlp_layer> inkling_hmlp_layers;
+    ggml_tensor * inkling_hmlp_final_norm_w = nullptr;
+    ggml_tensor * inkling_dmel_embd_w        = nullptr;
+    ggml_tensor * inkling_dmel_final_norm_w  = nullptr;
 
     // "indexed" patch embedding norms
     ggml_tensor * patch_norm_1_w = nullptr;

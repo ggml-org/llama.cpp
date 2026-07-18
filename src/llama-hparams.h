@@ -79,6 +79,17 @@ struct llama_hparams {
 
     uint32_t n_shortconv_l_cache  = 0;
 
+    // explicit override for the rolling state size per layer (see n_embd_r())
+    uint32_t n_embd_r_impl = 0;
+
+    // inkling (private arch)
+    uint32_t inkling_d_rel          = 0;
+    uint32_t inkling_rel_extent     = 0; // global (non-SWA) layers
+    uint32_t inkling_rel_extent_swa = 0; // local (SWA) layers
+    uint32_t inkling_log_n_floor    = 0; // 0 = log-N scaling disabled
+    float    inkling_log_alpha      = 0.0f;
+    uint32_t inkling_unpadded_n_vocab = 0; // 0 = no padded-vocab masking
+
     std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_arr;
     std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_kv_arr;
     std::array<uint32_t, LLAMA_MAX_LAYERS> n_ff_arr;

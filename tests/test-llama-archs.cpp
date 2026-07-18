@@ -418,6 +418,9 @@ static bool arch_supported(const llm_arch arch) {
     if (arch == LLM_ARCH_DEEPSEEK4) {
         return false;
     }
+    if (arch == LLM_ARCH_INKLING) {
+        return false; // TODO fixture params for the arch-specific hparams (d_rel, rel_extent, shortconv, logit_scale_denom)
+    }
 
     // FIXME some models are segfaulting with WebGPU:
 #ifdef GGML_USE_WEBGPU

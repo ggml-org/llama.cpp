@@ -25,6 +25,7 @@
 #include "ggml-cuda/diagmask.cuh"
 #include "ggml-cuda/diag.cuh"
 #include "ggml-cuda/fattn.cuh"
+#include "ggml-cuda/fattn-banded.cuh"
 #include "ggml-cuda/fwht.cuh"
 #include "ggml-cuda/getrows.cuh"
 #include "ggml-cuda/im2col.cuh"
@@ -906,7 +907,7 @@ static size_t ggml_backend_cuda_buffer_type_get_alignment(ggml_backend_buffer_ty
 static size_t ggml_backend_cuda_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const ggml_tensor * tensor) {
     ggml_backend_cuda_buffer_type_context * buft_ctx = (ggml_backend_cuda_buffer_type_context *) buft->context;
 
-    size_t size = tensor->op == GGML_OP_FLASH_ATTN_EXT
+    size_t size = (tensor->op == GGML_OP_FLASH_ATTN_EXT || tensor->op == GGML_OP_FLASH_ATTN_EXT_BANDED)
         ? ggml_cuda_flash_attn_ext_get_alloc_size(buft_ctx->device, tensor)
         : ggml_nbytes(tensor);
     int64_t ne0 = tensor->ne[0];
@@ -1496,6 +1497,9 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
     size_t nbd2 = dst->nb[2];
     size_t nbd3 = dst->nb[3];
 
+    const bool f32_pedantic = compute_type == GGML_TYPE_F32 &&
+        src0->type == GGML_TYPE_F32 && ggml_prec(dst->op_params[0]) == GGML_PREC_F32_PEDANTIC;
+
     cublasComputeType_t cu_compute_type = traits::compute_type;
     cudaDataType_t cu_data_type = traits::data_type;
     cudaDataType_t cu_data_type_a = traits::data_type;
@@ -1527,6 +1531,18 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
         }
     }
 
+    if (f32_pedantic) {
+#if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11020
+        cu_compute_type = CUBLAS_COMPUTE_32F_PEDANTIC;
+#else
+        // no pedantic compute enum here; ordinary F32 is the strongest available contract
+        cu_compute_type = CUBLAS_COMPUTE_32F;
+#endif
+    }
+
+    const auto cu_gemm_algo = f32_pedantic ?
+        CUBLAS_GEMM_DEFAULT : CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+
     GGML_ASSERT(ne12 % ne02 == 0);
     GGML_ASSERT(ne13 % ne03 == 0);
 
@@ -1538,12 +1554,23 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
     // However, for some old NVIDIA and AMD GPUs the strided/Ex GEMM is much slower,
     //     probably because the internal kernel selection logic is suboptimal.
     if (compute_type == GGML_TYPE_F32 && ne12 == 1 && ne13 == 1) {
-        CUBLAS_CHECK(
-            cublasSgemm(ctx.cublas_handle(), CUBLAS_OP_T, CUBLAS_OP_N,
-                    ne01, ne11, ne10,
-                    (const float *) alpha, (const float *) src0_ptr, s01,
-                                           (const float *) src1_ptr, s11,
-                    (const float *) beta,  (float       *)  dst_ptr, ne0));
+        if (f32_pedantic) {
+            CUBLAS_CHECK(
+                cublasGemmEx(ctx.cublas_handle(), CUBLAS_OP_T, CUBLAS_OP_N,
+                        ne01, ne11, ne10,
+                        alpha, src0_ptr, CUDA_R_32F, s01,
+                               src1_ptr, CUDA_R_32F, s11,
+                        beta,   dst_ptr, CUDA_R_32F, ne0,
+                        cu_compute_type,
+                        cu_gemm_algo));
+        } else {
+            CUBLAS_CHECK(
+                cublasSgemm(ctx.cublas_handle(), CUBLAS_OP_T, CUBLAS_OP_N,
+                        ne01, ne11, ne10,
+                        (const float *) alpha, (const float *) src0_ptr, s01,
+                                               (const float *) src1_ptr, s11,
+                        (const float *) beta,  (float       *)  dst_ptr, ne0));
+        }
     } else if (ne12 == 1 && ne13 == 1) {
         CUBLAS_CHECK(
             cublasGemmEx(ctx.cublas_handle(), CUBLAS_OP_T, CUBLAS_OP_N,
@@ -1552,7 +1579,7 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
                            src1_ptr, cu_data_type_b, s11,
                     beta,   dst_ptr, cu_data_type,   ne0,
                     cu_compute_type,
-                    CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+                    cu_gemm_algo));
     } else if (r2 == 1 && r3 == 1 && is_src0_cont_2 && is_src1_cont_2) {
         // with a [0, 2, 1, 3] perm. and ne02==1 the matrix strides need to be determined from dim 3:
         const int64_t sma = ne02 == 1 ? s03 : s02;
@@ -1568,7 +1595,7 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
                 beta,   dst_ptr, cu_data_type,   ne0, ne1*ne0, // strideC
                 ne12*ne13,
                 cu_compute_type,
-                CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+                cu_gemm_algo));
     } else {
         // use cublasGemmBatchedEx
         const int64_t ne23 = ne12*ne13;
@@ -1606,7 +1633,7 @@ static void ggml_cuda_mul_mat_cublas_impl(ggml_backend_cuda_context & ctx, const
                 beta,  (      void **) (ptrs_dst.get() + 0*ne23), cu_data_type,   ne0,
                 ne23,
                 cu_compute_type,
-                CUBLAS_GEMM_DEFAULT_TENSOR_OP));
+                cu_gemm_algo));
     }
 
     // Convert output back to F32 if needed
@@ -1642,6 +1669,11 @@ static void ggml_cuda_mul_mat_cublas(ggml_backend_cuda_context & ctx, const ggml
         } else if (env_cpp != "auto") {
             GGML_LOG_WARN("%s: unknown value for GGML_CUDA_CUBLAS_COMPUTE_TYPE: %s", __func__, env_cpp.c_str());
         }
+    }
+
+    // a scoped pedantic request overrides the process-wide compute type, for F32 weights only
+    if (src0->type == GGML_TYPE_F32 && ggml_prec(dst->op_params[0]) == GGML_PREC_F32_PEDANTIC) {
+        compute_type = GGML_TYPE_F32;
     }
 
     switch (compute_type) {
@@ -1829,6 +1861,8 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
 
     const int cc        = ggml_cuda_info().devices[ctx.device].cc;
     const int warp_size = ggml_cuda_info().devices[ctx.device].warp_size;
+    const bool f32_pedantic = src0->type == GGML_TYPE_F32 &&
+        ggml_prec(dst->op_params[0]) == GGML_PREC_F32_PEDANTIC;
 
     if (ggml_cuda_should_use_mmvf(src0->type, cc, src0->ne, src0->nb, ne11)) {
         // The custom F16 vector kernel can be used over batched cuBLAS GEMM.
@@ -1836,7 +1870,8 @@ static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor
         ggml_cuda_mul_mat_vec_f(ctx, src0, src1, nullptr, dst);
         return;
     }
-    if (ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, ne11, /*mul_mat_id =*/ false)) {
+    if (!f32_pedantic && ggml_cuda_should_use_mmf(
+            src0->type, cc, warp_size, src0->ne, src0->nb, ne11, /*mul_mat_id =*/ false)) {
         ggml_cuda_mul_mat_f(ctx, src0, src1, nullptr, dst);
         return;
     }
@@ -1862,6 +1897,8 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     GGML_TENSOR_BINARY_OP_LOCALS
 
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+    const bool f32_pedantic = src0->type == GGML_TYPE_F32 &&
+        ggml_prec(dst->op_params[0]) == GGML_PREC_F32_PEDANTIC;
 
     // [TAG_MUL_MAT_ID_CUDA_GRAPHS]
     if (src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
@@ -1886,7 +1923,8 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
             return;
         }
 
-        if (ggml_cuda_should_use_mmf(src0->type, cc, WARP_SIZE, src0->ne, src0->nb, src1->ne[2], /*mul_mat_id=*/true)) {
+        if (!f32_pedantic && ggml_cuda_should_use_mmf(
+                src0->type, cc, WARP_SIZE, src0->ne, src0->nb, src1->ne[2], /*mul_mat_id=*/true)) {
             ggml_cuda_mul_mat_f(ctx, src0, src1, ids, dst);
             return;
         }
@@ -1994,6 +2032,7 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
         dst_slice.nb[2]  = dst_slice.ne[1] * dst_slice.nb[1];
         dst_slice.nb[3]  = dst_slice.ne[2] * dst_slice.nb[2];
         dst_slice.data   = dst_data_cur;
+        dst_slice.op_params[0] = dst->op_params[0];
 
         ggml_cuda_mul_mat(ctx, &src0_slice, &src1_slice, &dst_slice);
         CUDA_CHECK(cudaGetLastError());
@@ -2304,6 +2343,9 @@ static bool ggml_cuda_compute_forward(ggml_backend_cuda_context & ctx, struct gg
             break;
         case GGML_OP_FLASH_ATTN_EXT:
             ggml_cuda_flash_attn_ext(ctx, dst);
+            break;
+        case GGML_OP_FLASH_ATTN_EXT_BANDED:
+            ggml_cuda_flash_attn_ext_banded(ctx, dst);
             break;
         case GGML_OP_CROSS_ENTROPY_LOSS:
             ggml_cuda_cross_entropy_loss(ctx, dst);
@@ -5110,6 +5152,8 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 op->type == GGML_TYPE_F32;
         case GGML_OP_FLASH_ATTN_EXT:
             return ggml_cuda_flash_attn_ext_supported(dev_ctx->device, op);
+        case GGML_OP_FLASH_ATTN_EXT_BANDED:
+            return ggml_cuda_flash_attn_ext_banded_supported(dev_ctx->device, op);
         case GGML_OP_CROSS_ENTROPY_LOSS:
         case GGML_OP_CROSS_ENTROPY_LOSS_BACK:
         case GGML_OP_OPT_STEP_ADAMW:

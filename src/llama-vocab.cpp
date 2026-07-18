@@ -433,6 +433,12 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                     "[^\\r\\n\\p{L}\\p{N}]?((?=[\\p{L}])([^a-z]))*((?=[\\p{L}])([^A-Z]))+(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?|[^\\r\\n\\p{L}\\p{N}]?((?=[\\p{L}])([^a-z]))+((?=[\\p{L}])([^A-Z]))*(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
                 };
                 break;
+            case LLAMA_VOCAB_PRE_TYPE_INKLING:
+                // o200k-family with \p{M} in the letter classes; own pre-type so GPT4O / MINIMAX_M2 stay unchanged
+                regex_exprs = {
+                    "[^\\r\\n\\p{L}\\p{N}]?((?=[\\p{L}\\p{M}])([^a-z]))*((?=[\\p{L}\\p{M}])([^A-Z]))+(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?|[^\\r\\n\\p{L}\\p{N}]?((?=[\\p{L}\\p{M}])([^a-z]))+((?=[\\p{L}\\p{M}])([^A-Z]))*(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
+                };
+                break;
             case LLAMA_VOCAB_PRE_TYPE_GRANITE_EMB_MULTI:
                 // Same lookaheads as GPT4O but with \p{M} added so combining marks
                 // (diacritics) attach to their base letters. Avoids excessive
@@ -2285,6 +2291,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 tokenizer_pre == "kanana2" ||
                 tokenizer_pre == "talkie") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_GPT4O;
+                clean_spaces = false;
+            } else if (
+                tokenizer_pre == "inkling") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_INKLING;
                 clean_spaces = false;
             } else if (
                 tokenizer_pre == "granite-embed-multi-97m") {

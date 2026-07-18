@@ -540,6 +540,7 @@ class MODEL_ARCH(IntEnum):
     KIMI_LINEAR      = auto()
     TALKIE           = auto()
     MELLUM           = auto()
+    INKLING          = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -763,6 +764,14 @@ class MODEL_TENSOR(IntEnum):
     SHORTCONV_CONV       = auto()
     SHORTCONV_INPROJ     = auto()
     SHORTCONV_OUTPROJ    = auto()
+    # inkling
+    ATTN_R               = auto()
+    ATTN_REL_PROJ        = auto()
+    SHORTCONV_K          = auto()
+    SHORTCONV_V          = auto()
+    SHORTCONV_ATTN       = auto()
+    SHORTCONV_MLP        = auto()
+    FFN_GSCALE           = auto()
     VISEXP_ATTN_QKV      = auto()
     VISEXP_ATTN_OUT      = auto()
     VISEXP_GATE          = auto()
@@ -1122,6 +1131,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.KIMI_LINEAR:      "kimi-linear",
     MODEL_ARCH.TALKIE:           "talkie",
     MODEL_ARCH.MELLUM:           "mellum",
+    MODEL_ARCH.INKLING:          "inkling",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -1343,6 +1353,13 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.SHORTCONV_CONV:            "blk.{bid}.shortconv.conv",
     MODEL_TENSOR.SHORTCONV_INPROJ:          "blk.{bid}.shortconv.in_proj",
     MODEL_TENSOR.SHORTCONV_OUTPROJ:         "blk.{bid}.shortconv.out_proj",
+    MODEL_TENSOR.ATTN_R:                    "blk.{bid}.attn_r",             # inkling
+    MODEL_TENSOR.ATTN_REL_PROJ:             "blk.{bid}.attn_rel_proj",      # inkling
+    MODEL_TENSOR.SHORTCONV_K:               "blk.{bid}.shortconv_k",        # inkling
+    MODEL_TENSOR.SHORTCONV_V:               "blk.{bid}.shortconv_v",        # inkling
+    MODEL_TENSOR.SHORTCONV_ATTN:            "blk.{bid}.shortconv_attn",     # inkling
+    MODEL_TENSOR.SHORTCONV_MLP:             "blk.{bid}.shortconv_mlp",      # inkling
+    MODEL_TENSOR.FFN_GSCALE:                "blk.{bid}.ffn_gscale",         # inkling
     MODEL_TENSOR.VISEXP_ATTN_QKV:           "blk.{bid}.vis_attn_qkv",
     MODEL_TENSOR.VISEXP_ATTN_OUT:           "blk.{bid}.vis_attn_output",
     MODEL_TENSOR.VISEXP_GATE:               "blk.{bid}.vis_gate",
@@ -4044,6 +4061,38 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_UP_EXP,
         MODEL_TENSOR.FFN_EXP_PROBS_B,
     ],
+    MODEL_ARCH.INKLING: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.TOKEN_EMBD_NORM,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_R,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_REL_PROJ,
+        MODEL_TENSOR.SHORTCONV_K,
+        MODEL_TENSOR.SHORTCONV_V,
+        MODEL_TENSOR.SHORTCONV_ATTN,
+        MODEL_TENSOR.SHORTCONV_MLP,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_GSCALE,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+    ],
     MODEL_ARCH.SMALLTHINKER: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
@@ -4665,6 +4714,7 @@ class GGUFValueType(IntEnum):
 
 
 class VisionProjectorType:
+    INKLING = "inkling"
     GEMMA3 = "gemma3"
     GEMMA3NV = "gemma3nv"
     GEMMA3NA = "gemma3na"

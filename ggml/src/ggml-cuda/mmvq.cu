@@ -587,7 +587,7 @@ static __global__ void mul_mat_vec_q(
     float tmp_gate[ncols_dst][rows_per_cuda_block] = {{0.0f}};
 
     const block_q8_1 * y = ((const block_q8_1 *) vy) + sample_y*stride_sample_y + channel_y*stride_channel_y;
-    const int kbx_offset = sample_x*stride_sample_x + channel_x*stride_channel_x + row0*stride_row_x;
+    const int64_t kbx_offset = int64_t(sample_x)*stride_sample_x + int64_t(channel_x)*stride_channel_x + int64_t(row0)*stride_row_x;
 
     for (int kbx = tid / (qi/vdr); kbx < blocks_per_row_x; kbx += blocks_per_iter) {
         const int kby = kbx * (qk/QK8_1); // y block index that aligns with kbx
@@ -739,7 +739,7 @@ static __global__ void mul_mat_vec_q_moe(
     const uint32_t channel_y = fastmodulo(channel_dst, nchannels_y);
 
     const block_q8_1 * y = ((const block_q8_1 *) vy) + channel_y*stride_channel_y + token_idx*stride_col_y;
-    const int kbx_offset  = channel_x*stride_channel_x + row0*stride_row_x;
+    const int64_t kbx_offset  = int64_t(channel_x)*stride_channel_x + int64_t(row0)*stride_row_x;
 
     // partial sum for each thread
     float tmp[c_rows_per_block] = {0.0f};

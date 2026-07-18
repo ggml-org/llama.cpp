@@ -63,6 +63,7 @@ class TensorNameMap:
             "model.layers.0.pre_norm",    # rwkv7
             "backbone.norm",              # wavtokenizer
             "model.embedding_norm",       # lfm2
+            "model.embed_norm",           # inkling
         ),
 
         # Position embeddings
@@ -86,6 +87,7 @@ class TensorNameMap:
             "lm_head",                   # llama4
             "model.transformer.ff_out",  # llada
             "head.decoder",              # modern-bert
+            "model.unembed",             # inkling
         ),
         MODEL_TENSOR.DENSE_2_OUT: (
             "dense_2_out",  # embeddinggemma
@@ -2415,6 +2417,53 @@ class TensorNameMap:
 
     # architecture-specific block mappings
     arch_block_mappings_cfg: dict[MODEL_ARCH, dict[MODEL_TENSOR, tuple[str, ...]]] = {
+        MODEL_ARCH.INKLING: {
+            MODEL_TENSOR.ATTN_NORM: (
+                "model.layers.{bid}.attn_norm",
+            ),
+            MODEL_TENSOR.ATTN_Q: (
+                "model.layers.{bid}.attn.wq_du",
+            ),
+            MODEL_TENSOR.ATTN_K: (
+                "model.layers.{bid}.attn.wk_dv",
+            ),
+            MODEL_TENSOR.ATTN_V: (
+                "model.layers.{bid}.attn.wv_dv",
+            ),
+            MODEL_TENSOR.ATTN_R: (
+                "model.layers.{bid}.attn.wr_du",
+            ),
+            MODEL_TENSOR.ATTN_OUT: (
+                "model.layers.{bid}.attn.wo_ud",
+            ),
+            MODEL_TENSOR.ATTN_Q_NORM: (
+                "model.layers.{bid}.attn.q_norm",
+            ),
+            MODEL_TENSOR.ATTN_K_NORM: (
+                "model.layers.{bid}.attn.k_norm",
+            ),
+            MODEL_TENSOR.ATTN_REL_PROJ: (
+                "model.layers.{bid}.attn.rel_logits_proj",
+            ),
+            MODEL_TENSOR.SHORTCONV_K: (
+                "model.layers.{bid}.attn.k_sconv",
+            ),
+            MODEL_TENSOR.SHORTCONV_V: (
+                "model.layers.{bid}.attn.v_sconv",
+            ),
+            MODEL_TENSOR.SHORTCONV_ATTN: (
+                "model.layers.{bid}.attn_sconv",
+            ),
+            MODEL_TENSOR.SHORTCONV_MLP: (
+                "model.layers.{bid}.mlp_sconv",
+            ),
+            MODEL_TENSOR.FFN_NORM: (
+                "model.layers.{bid}.mlp_norm",
+            ),
+            MODEL_TENSOR.FFN_DOWN: (
+                "model.layers.{bid}.mlp.w2_md",
+            ),
+        },
         MODEL_ARCH.ARCTIC: {
             MODEL_TENSOR.FFN_NORM: (
                 "model.layers.{bid}.residual_layernorm",

@@ -600,6 +600,7 @@ static size_t ggml_backend_rpc_buffer_type_get_alloc_size(ggml_backend_buffer_ty
     // ops that require additional memory for fleeting data on certain backends
     // ref: https://github.com/ggml-org/llama.cpp/pull/15966
     rpc_get |= tensor->op == GGML_OP_FLASH_ATTN_EXT;
+    rpc_get |= tensor->op == GGML_OP_FLASH_ATTN_EXT_BANDED;
     rpc_get |= tensor->op == GGML_OP_MUL_MAT_ID;
 
     if (rpc_get) {

@@ -2910,6 +2910,85 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     }
 
     {
+        // Inkling / TML typed content blocks: <|end_message|> separates blocks, <|content_model_end_sampling|> ends the turn.
+        auto tst = peg_tester("models/templates/Inkling.jinja", detailed_debug);
+
+        // reasoning + visible answer
+        tst.test("<|content_thinking|>I'm\nthinking<|end_message|>"
+                 "<|message_model|><|content_text|>Hello, world!\nWhat's up?<|end_message|>"
+                 "<|content_model_end_sampling|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist_thoughts)
+            .run();
+
+        // Visible answer only (reasoning_effort=0 -> no thinking block).
+        tst.test("<|content_text|>Hello, world!\nWhat's up?<|end_message|>"
+                 "<|content_model_end_sampling|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist)
+            .run();
+
+        // Empty thinking block, then the answer.
+        tst.test("<|content_thinking|><|end_message|>"
+                 "<|message_model|><|content_text|>Hello, world!\nWhat's up?<|end_message|>"
+                 "<|content_model_end_sampling|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist)
+            .run();
+
+        // single tool call with reasoning; the bare tool-name echo and role opener are dropped
+        tst.test("<|content_thinking|>I'm\nthinking<|end_message|>"
+                 "<|message_model|>special_function<|content_invoke_tool_json|>"
+                 "{\"name\":\"special_function\",\"args\":{\"arg1\":1}}<|end_message|>"
+                 "<|content_model_end_sampling|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect(message_with_reasoning_and_tool_call("I'm\nthinking", "special_function", "{\"arg1\": 1}"))
+            .run();
+
+        // Tool call, no reasoning.
+        tst.test("<|message_model|>special_function<|content_invoke_tool_json|>"
+                 "{\"name\":\"special_function\",\"args\":{\"arg1\":1}}<|end_message|>"
+                 "<|content_model_end_sampling|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+
+        // regression: the tool branch must not swallow a pure-text answer
+        tst.test("<|content_thinking|>I'm\nthinking<|end_message|>"
+                 "<|message_model|><|content_text|>Hello, world!\nWhat's up?<|end_message|>"
+                 "<|content_model_end_sampling|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect(message_assist_thoughts)
+            .run();
+
+        // tools available, content only, no thinking (reasoning_effort=0 leak scenario)
+        tst.test("<|content_text|>Hello, world!\nWhat's up?<|end_message|>"
+                 "<|content_model_end_sampling|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect(message_assist)
+            .run();
+
+        // parallel tool calls are separate marker-wrapped blocks
+        tst.test("<|message_model|>special_function<|content_invoke_tool_json|>"
+                 "{\"name\":\"special_function\",\"args\":{\"arg1\":1}}<|end_message|>"
+                 "<|message_model|>python<|content_invoke_tool_json|>"
+                 "{\"name\":\"python\",\"args\":{\"code\":\"print('hey')\"}}<|end_message|>"
+                 "<|content_model_end_sampling|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .parallel_tool_calls(true)
+            .tools({ special_function_tool, python_tool })
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", "" },
+                { "python", "{\"code\": \"print('hey')\"}", "" },
+            })
+            .run();
+    }
+
+    {
         // Google Gemma 2 2B - does not support tool calling
         auto tst = peg_tester("models/templates/google-gemma-2-2b-it.jinja");
 

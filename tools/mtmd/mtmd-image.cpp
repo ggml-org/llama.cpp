@@ -68,6 +68,9 @@ struct img_tool {
                 case RESIZE_ALGO_BICUBIC_PILLOW:
                     resize_bicubic_pillow(src, dst, target_resolution.width, target_resolution.height);
                     break;
+                case RESIZE_ALGO_LANCZOS:
+                    resize_lanczos_pillow(src, dst, target_resolution.width, target_resolution.height);
+                    break;
                 default:
                     throw std::runtime_error("Unsupported resize algorithm");
             }
@@ -96,6 +99,9 @@ struct img_tool {
                     break;
                 case RESIZE_ALGO_BICUBIC_PILLOW:
                     resize_bicubic_pillow(src, resized_image, new_width, new_height);
+                    break;
+                case RESIZE_ALGO_LANCZOS:
+                    resize_lanczos_pillow(src, resized_image, new_width, new_height);
                     break;
                 default:
                     throw std::runtime_error("Unsupported resize algorithm");
@@ -345,6 +351,19 @@ private:
     // 2. Pre-computes normalized filter coefficients for each output pixel
     // 3. Applies convolution using fixed-point integer arithmetic for performance
     static bool resize_bicubic_pillow(const clip_image_u8 & img, clip_image_u8 & dst, int target_width, int target_height) {
+        return resize_pillow(img, dst, target_width, target_height, false);
+    }
+
+    static bool resize_lanczos_pillow(const clip_image_u8 & img, clip_image_u8 & dst, int target_width, int target_height) {
+        return resize_pillow(img, dst, target_width, target_height, true);
+    }
+
+    static bool resize_pillow(
+            const clip_image_u8 & img,
+            clip_image_u8 & dst,
+            int target_width,
+            int target_height,
+            bool use_lanczos) {
         // Fixed-point precision: 22 bits = 32 (int32_t) - 8 (uint8_t pixels) - 2 (headroom for accumulation)
         // This allows encoding fractional weights as integers: weight * 2^22
         const int PRECISION_BITS = 32 - 8 - 2;
@@ -352,7 +371,21 @@ private:
         // Bicubic filter function with a = -0.5 (Note that GGML/PyTorch takes a = -0.75)
         // Returns filter weight for distance x from pixel center
         // Support: [-2, 2], meaning the filter influences pixels within 2 units of distance
-        auto bicubic_filter = [](double x) -> double {
+        auto resample_filter = [use_lanczos](double x) -> double {
+            if (use_lanczos) {
+                if (-3.0 <= x && x < 3.0) {
+                    auto sinc = [](double value) {
+                        if (value == 0.0) {
+                            return 1.0;
+                        }
+                        const double pix = value * 3.141592653589793238462643383279502884;
+                        return std::sin(pix) / pix;
+                    };
+                    return sinc(x) * sinc(x / 3.0);
+                }
+                return 0.0;
+            }
+
             constexpr double a = -0.5;
             if (x < 0.0) {
                 x = -x;
@@ -367,7 +400,7 @@ private:
         };
 
         // Filter support radius: bicubic extends 2 pixels in each direction
-        constexpr double filter_support = 2.0;
+        const double filter_support = use_lanczos ? 3.0 : 2.0;
 
         // Clipping function for 8-bit values
         auto clip8 = [](int val) -> uint8_t {
@@ -434,7 +467,7 @@ private:
                 // Compute filter weights for each contributing input pixel
                 for (x = 0; x < xmax; x++) {
                     // Distance from input pixel center to output pixel center in input space
-                    double w = bicubic_filter((x + xmin - center + 0.5) * ss);
+                    double w = resample_filter((x + xmin - center + 0.5) * ss);
                     pre_weights[xx * ksize + x] = w;
                     ww += w;  // Accumulate for normalization
                 }
@@ -463,6 +496,12 @@ private:
             const double fxp_scale = std::ldexp(1.0, PRECISION_BITS); // 1.0 * 2^PRECISION_BITS
 
             for (int i = 0; i < outSize * ksize; i++) {
+                if (use_lanczos) {
+                    // Pillow adds +/- 0.5 then truncates toward zero; std::round would round twice
+                    const double rounded = pre_weights[i] * fxp_scale + (pre_weights[i] < 0 ? -0.5 : 0.5);
+                    weights[i] = static_cast<int32_t>(rounded);
+                    continue;
+                }
                 double tmp_val = pre_weights[i] * fxp_scale;
                 if (pre_weights[i] < 0) {
                     tmp_val -= 0.5;
@@ -605,6 +644,82 @@ private:
         return s + (e - s) * t;
     }
 };
+
+mtmd_inkling_image_preproc_out mtmd_image_preprocess_inkling(
+        const clip_image_u8 & img,
+        resize_algo algo) {
+    constexpr int patch_size = 40;
+    constexpr int temporal_patch_size = 2;
+    constexpr int max_upscaled_long_edge = 2048;
+    constexpr double rescale_image_frac = 2.0;
+    constexpr float image_mean[3] = { 0.48145466f, 0.4578275f, 0.40821073f };
+    constexpr float image_std[3]  = { 0.26862954f, 0.26130258f, 0.27577711f };
+
+    mtmd_inkling_image_preproc_out output;
+    output.source_size = img.get_size();
+    GGML_ASSERT(output.source_size.width > 0 && output.source_size.height > 0);
+    GGML_ASSERT(!img.is_placeholder());
+
+    const int long_edge = std::max(output.source_size.width, output.source_size.height);
+    const double target_long_edge = std::min(
+        static_cast<double>(long_edge) * rescale_image_frac,
+        static_cast<double>(std::max(max_upscaled_long_edge, long_edge)));
+    const double ratio = target_long_edge / long_edge;
+    const auto scaled = [ratio](int size) {
+        // The reference explicitly requests half-up rounding for positive sizes.
+        return std::max(1, static_cast<int>(std::floor(size * ratio + 0.5)));
+    };
+    output.resized_size = {
+        scaled(output.source_size.width),
+        scaled(output.source_size.height),
+    };
+
+    clip_image_u8 resized;
+    img_tool::resize(img, resized, output.resized_size, algo, PAD_NONE);
+    output.resized_rgb = resized.get_ro_buf();
+
+    output.patch_rows = (output.resized_size.height + patch_size - 1) / patch_size;
+    // Inkling always appends a right-hand patch, even at exact multiples of 40
+    output.patch_cols = output.resized_size.width / patch_size + 1;
+    const size_t n_patches = static_cast<size_t>(output.patch_rows) * output.patch_cols;
+    const size_t values_per_patch = static_cast<size_t>(temporal_patch_size) *
+        patch_size * patch_size * 3;
+    output.pixel_values_bthwc.resize(n_patches * values_per_patch);
+
+    // preserve torchvision's fused (raw - mean*255)/(std*255) order (raw=-1 for padding) for ulp parity
+    float mean_255[3];
+    float std_255[3];
+    for (int c = 0; c < 3; ++c) {
+        mean_255[c] = image_mean[c] * 255.0f;
+        std_255[c]  = image_std[c]  * 255.0f;
+    }
+
+    for (int py = 0; py < output.patch_rows; ++py) {
+        for (int px = 0; px < output.patch_cols; ++px) {
+            const size_t patch_index = static_cast<size_t>(py) * output.patch_cols + px;
+            for (int t = 0; t < temporal_patch_size; ++t) {
+                for (int y = 0; y < patch_size; ++y) {
+                    const int iy = py * patch_size + y;
+                    for (int x = 0; x < patch_size; ++x) {
+                        const int ix = px * patch_size + x;
+                        const bool in_image = iy < output.resized_size.height && ix < output.resized_size.width;
+                        const std::array<uint8_t, 3> rgb = in_image
+                            ? resized.get_pixel(ix, iy)
+                            : std::array<uint8_t, 3>{ 0, 0, 0 };
+                        for (int c = 0; c < 3; ++c) {
+                            const float raw = in_image ? static_cast<float>(rgb[c]) : -1.0f;
+                            const size_t offset = (((((patch_index * temporal_patch_size + t) *
+                                patch_size + y) * patch_size + x) * 3) + c);
+                            output.pixel_values_bthwc[offset] = (raw - mean_255[c]) / std_255[c];
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return output;
+}
 
 
 //
@@ -882,6 +997,80 @@ mtmd_image_preproc_out mtmd_image_preprocessor_fixed_size::preprocess(const clip
                         hparams.image_pad_color);
     mtmd_image_preproc_out output;
     output.append(hparams, resized_image, true);
+    return output;
+}
+
+// Inkling hMLP patches
+mtmd_image_preproc_out mtmd_image_preprocessor_inkling::preprocess(const clip_image_u8 & img) {
+    GGML_ASSERT(hparams.patch_size == 40);
+    constexpr int temporal_patch_size = 2;
+    constexpr float rescale_frac = 2.0f;
+    constexpr int rescale_max_long_edge = 2048;
+
+    const auto original = img.get_size();
+    const int long_edge = std::max(original.width, original.height);
+    const float target_long = std::min(
+        static_cast<float>(long_edge) * rescale_frac,
+        static_cast<float>(std::max(long_edge, rescale_max_long_edge)));
+    const float ratio = long_edge > 0 ? target_long / long_edge : 1.0f;
+    const clip_image_size scaled_size {
+        std::max(1, static_cast<int>(std::floor(original.width  * ratio + 0.5f))),
+        std::max(1, static_cast<int>(std::floor(original.height * ratio + 0.5f))),
+    };
+
+    clip_image_u8 scaled;
+    // The reference processor resizes with Pillow Lanczos (radius 3).
+    img_tool::resize(img, scaled, scaled_size, RESIZE_ALGO_LANCZOS, PAD_NONE);
+
+    const int p = hparams.patch_size;
+    const int nph = (scaled_size.height + p - 1) / p;
+    // The extra right column is intentional, including exact multiples of 40.
+    const int npw = scaled_size.width / p + 1;
+
+    const float pad_raw = -1.0f / 255.0f;
+    // the reference materializes normalized patches as bf16; round through bf16 for bit-parity
+    const auto bf16_round = [](float v) {
+        return ggml_bf16_to_fp32(ggml_fp32_to_bf16(v));
+    };
+    float pad_norm[3];
+    for (int c = 0; c < 3; ++c) {
+        pad_norm[c] = bf16_round((pad_raw - hparams.image_mean[c]) / hparams.image_std[c]);
+    }
+
+    mtmd_image_preproc_out output;
+    output.entries.reserve(static_cast<size_t>(nph) * npw * temporal_patch_size);
+    for (int py = 0; py < nph; ++py) {
+        for (int px = 0; px < npw; ++px) {
+            std::vector<float> data(static_cast<size_t>(p) * p * 3);
+            for (int y = 0; y < p; ++y) {
+                const int iy = py * p + y;
+                for (int x = 0; x < p; ++x) {
+                    const int ix = px * p + x;
+                    const size_t off = static_cast<size_t>(y * p + x) * 3;
+                    if (iy < scaled_size.height && ix < scaled_size.width && !scaled.is_placeholder()) {
+                        const auto rgb = scaled.get_pixel(ix, iy);
+                        for (int c = 0; c < 3; ++c) {
+                            const float raw = static_cast<float>(rgb[c]) / 255.0f;
+                            data[off + c] = bf16_round((raw - hparams.image_mean[c]) / hparams.image_std[c]);
+                        }
+                    } else {
+                        for (int c = 0; c < 3; ++c) {
+                            data[off + c] = pad_norm[c];
+                        }
+                    }
+                }
+            }
+
+            for (int t = 0; t < temporal_patch_size; ++t) {
+                clip_image_f32 patch;
+                patch.set_size({p, p}, scaled.is_placeholder(), false);
+                if (!scaled.is_placeholder()) {
+                    patch.cpy_buf(data);
+                }
+                output.entries.push_back(std::move(patch));
+            }
+        }
+    }
     return output;
 }
 

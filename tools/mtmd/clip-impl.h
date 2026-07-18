@@ -258,6 +258,13 @@
 #define TN_A_FFN_POST_NORM   "%s.blk.%d.ffn_post_norm.%s"
 #define TN_A_FFN_POST_NORM_1 "%s.blk.%d.ffn_post_norm_1.%s"
 
+// Inkling hMLP vision and dMel audio towers.
+#define TN_INKLING_HMLP_LINEAR     "v.hmlp.%d.linear.weight"
+#define TN_INKLING_HMLP_NORM       "v.hmlp.%d.norm.weight"
+#define TN_INKLING_HMLP_FINAL_NORM "v.hmlp.final_norm.weight"
+#define TN_INKLING_DMEL_EMBD       "a.dmel.embedding.weight"
+#define TN_INKLING_DMEL_FINAL_NORM "a.dmel.final_norm.weight"
+
 // mobilenetv5 (gemma3n) definitions
 #define TN_MNV5_STEM_CONV        "v.conv_stem.conv.weight"
 #define TN_MNV5_STEM_BIAS        "v.conv_stem.conv.bias"
@@ -320,6 +327,7 @@
 struct clip_ctx;
 
 enum projector_type {
+    PROJECTOR_TYPE_INKLING,
     PROJECTOR_TYPE_MLP,
     PROJECTOR_TYPE_MLP_NORM,
     PROJECTOR_TYPE_LDP,
@@ -375,6 +383,7 @@ enum projector_type {
 };
 
 static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
+    { PROJECTOR_TYPE_INKLING,           "inkling" },
     { PROJECTOR_TYPE_MLP,               "mlp" },
     { PROJECTOR_TYPE_LDP,               "ldp" },
     { PROJECTOR_TYPE_LDPV2,             "ldpv2"},

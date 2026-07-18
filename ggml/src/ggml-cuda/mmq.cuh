@@ -434,7 +434,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
                 continue;
             }
 
-            dst[ids_dst[j]*stride + i] = sum[(j0/nwarps) * (I/warp_size) + i0/warp_size];
+            dst[(int64_t) ids_dst[j]*stride + i] = sum[(j0/nwarps) * (I/warp_size) + i0/warp_size];
         }
     }
 }
@@ -475,7 +475,7 @@ static __device__ __forceinline__ void ggml_cuda_mmq_write_back_mma(
                     continue;
                 }
 
-                dst[ids_dst[j]*stride + i] = sum[(j0/tile_C::J + n)*tile_C::ne + l];
+                dst[(int64_t) ids_dst[j]*stride + i] = sum[(j0/tile_C::J + n)*tile_C::ne + l];
             }
         }
     }
@@ -944,7 +944,7 @@ static __global__ void mul_mat_q(
         int col_high   = ncols_dst;
         int col_diff   = ncols_dst;
         int offset_y   = wt*stride_sample_y   + zt*stride_channel_y;
-        int offset_dst = wt*stride_sample_dst + zt*stride_channel_dst + jt*J*stride_col_dst;
+        int64_t offset_dst = (int64_t) wt*stride_sample_dst + (int64_t) zt*stride_channel_dst + (int64_t) jt*J*stride_col_dst;
 
         if (ids_dst) {
             col_low  = expert_bounds[zt + 0];
@@ -1017,7 +1017,7 @@ static __global__ void mul_mat_q(
         int col_high   = ncols_dst;
         int col_diff   = ncols_dst;
         int offset_y   = wt*stride_sample_y   + zt*stride_channel_y;
-        int offset_dst = wt*stride_sample_dst + zt*stride_channel_dst + jt*J*stride_col_dst;
+        int64_t offset_dst = (int64_t) wt*stride_sample_dst + (int64_t) zt*stride_channel_dst + (int64_t) jt*J*stride_col_dst;
 
         if (ids_dst) {
             col_low  = expert_bounds[zt + 0];
@@ -1091,7 +1091,7 @@ static __global__ void mul_mat_q(
     int col_high   = ncols_dst;
     int col_diff   = ncols_dst;
     int offset_y   = wt*stride_sample_y   + zt*stride_channel_y;
-    int offset_dst = wt*stride_sample_dst + zt*stride_channel_dst + jt*J*stride_col_dst;
+    int64_t offset_dst = (int64_t) wt*stride_sample_dst + (int64_t) zt*stride_channel_dst + (int64_t) jt*J*stride_col_dst;
 
     if (ids_dst) {
         col_low  = expert_bounds[zt + 0];
@@ -1219,7 +1219,7 @@ static __global__ void mul_mat_q_stream_k_fixup(
     const int it = tmp2.x;
 
     if (!ids_dst) {
-        const int offset_dst = wt*stride_sample_dst + zt*stride_channel_dst + jt*J*stride_col_dst + it*I;
+        const int64_t offset_dst = (int64_t) wt*stride_sample_dst + (int64_t) zt*stride_channel_dst + (int64_t) jt*J*stride_col_dst + (int64_t) it*I;
         dst += offset_dst;
 
         const int i_max = nrows_x   - it*I - 1;
