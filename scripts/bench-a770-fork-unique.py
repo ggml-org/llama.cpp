@@ -122,12 +122,15 @@ def _cmake_cache_values(cache_path: Path) -> dict[str, str]:
 
 def collect_product_provenance(
     bin_dir: Path,
+    candidate_bin_dir: Path,
     baseline_env: dict[str, str],
     candidate_env: dict[str, str] | None,
 ) -> dict[str, Any]:
     repo_root = Path(__file__).resolve().parents[1]
     bench_path = bin_dir / "llama-bench"
     sycl_lib = bin_dir / "libggml-sycl.so"
+    candidate_bench_path = candidate_bin_dir / "llama-bench"
+    candidate_sycl_lib = candidate_bin_dir / "libggml-sycl.so"
     baseline_effective = _effective_env(baseline_env)
     candidate_effective = _effective_env(candidate_env or {})
     return {
@@ -140,8 +143,19 @@ def collect_product_provenance(
         "sha256": {
             str(bench_path): _sha256_file(bench_path),
             str(sycl_lib): _sha256_file(sycl_lib) if sycl_lib.is_file() else None,
+            str(candidate_bench_path): _sha256_file(candidate_bench_path),
+            str(candidate_sycl_lib): (
+                _sha256_file(candidate_sycl_lib)
+                if candidate_sycl_lib.is_file()
+                else None
+            ),
         },
-        "cmake_cache": _cmake_cache_values(bin_dir.parent / "CMakeCache.txt"),
+        "cmake_cache": _cmake_cache_values(
+            bin_dir.parent / "CMakeCache.txt"
+        ),
+        "candidate_cmake_cache": _cmake_cache_values(
+            candidate_bin_dir.parent / "CMakeCache.txt"
+        ),
         "sycl_ls": _capture_command(["sycl-ls"], baseline_effective),
         "kernel": _capture_command(["uname", "-a"]),
         "compute_runtime": _capture_command(
@@ -643,21 +657,27 @@ def run_product_cell(
     timeout_s: int,
     samples_dir: Path,
     cell_idx: int,
+    candidate_bin_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Run one paired product cell and retain both pp512 and tg128."""
     if repetitions < 2:
         raise ValueError("repetitions must be >= 2 (sample 0 is always discarded)")
     samples_dir.mkdir(parents=True, exist_ok=True)
+    candidate_bin_dir = candidate_bin_dir or bin_dir
     has_candidate = candidate_env is not None
-    arms: list[tuple[str, dict[str, str]]] = [("baseline", baseline_env)]
+    arms: list[tuple[str, dict[str, str], Path]] = [
+        ("baseline", baseline_env, bin_dir)
+    ]
     if has_candidate:
-        arms.append(("candidate", candidate_env))
-    cell_samples: dict[str, list[dict[str, Any]]] = {name: [] for name, _ in arms}
+        arms.append(("candidate", candidate_env, candidate_bin_dir))
+    cell_samples: dict[str, list[dict[str, Any]]] = {
+        name: [] for name, _, _ in arms
+    }
     for rep in range(repetitions):
         order = list(arms) if rep % 2 == 0 else list(reversed(arms))
-        for arm_name, arm_env in order:
+        for arm_name, arm_env, arm_bin_dir in order:
             check_sole_tenancy()
-            argv = _product_bench_argv(bin_dir, model_path, kv, depth)
+            argv = _product_bench_argv(arm_bin_dir, model_path, kv, depth)
             label = (
                 f"[cell {cell_idx} d={depth} kv={kv[0]}/{kv[1]} rep={rep}] "
                 f"arm={arm_name}"
@@ -693,6 +713,7 @@ def run_product_cell(
                         "candidate_env": candidate_env,
                         "active_arm": arm_name,
                         "active_env": arm_env,
+                        "active_bin_dir": str(arm_bin_dir),
                         "result_ok": result["ok"],
                         "returncode": result["returncode"],
                         "elapsed_s": result["elapsed_s"],
@@ -766,11 +787,22 @@ def run_product_cell(
 
 
 def run_product_campaign_main(ns: argparse.Namespace) -> int:
-    """Entry point for the sole-tenancy product campaign."""
     bin_dir = Path(ns.bin_dir).resolve()
+    candidate_bin_dir = Path(
+        getattr(ns, "candidate_bin_dir", None) or ns.bin_dir
+    ).resolve()
     bench_path = bin_dir / "llama-bench"
+    candidate_bench_path = candidate_bin_dir / "llama-bench"
     if not bench_path.is_file() or not os.access(bench_path, os.X_OK):
         print(f"--bin-dir must contain an executable regular llama-bench: {bench_path}", file=sys.stderr, flush=True)
+        return 2
+    if not candidate_bench_path.is_file() or not os.access(candidate_bench_path, os.X_OK):
+        print(
+            "--candidate-bin-dir must contain an executable regular "
+            f"llama-bench: {candidate_bench_path}",
+            file=sys.stderr,
+            flush=True,
+        )
         return 2
     model = Path(ns.model).resolve()
     if not model.is_file() or model.stat().st_size <= 0:
@@ -817,7 +849,9 @@ def run_product_campaign_main(ns: argparse.Namespace) -> int:
     if dmesg_before_n < 0:
         print("unable to capture pre-run dmesg; campaign is not gateable", file=sys.stderr)
         return 1
-    provenance = collect_product_provenance(bin_dir, baseline_env, candidate_env)
+    provenance = collect_product_provenance(
+        bin_dir, candidate_bin_dir, baseline_env, candidate_env
+    )
     (out_dir / "provenance.json").write_text(json.dumps(provenance, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
     repetitions = int(getattr(ns, "repetitions", DEFAULT_PRODUCT_REPETITIONS) or DEFAULT_PRODUCT_REPETITIONS)
@@ -832,10 +866,17 @@ def run_product_campaign_main(ns: argparse.Namespace) -> int:
             for kv in kv_types:
                 cell_idx += 1
                 cell = run_product_cell(
-                    bin_dir=bin_dir, model_path=str(model), kv=kv, depth=depth,
-                    baseline_env=baseline_env, candidate_env=candidate_env,
-                    repetitions=repetitions, timeout_s=timeout_s,
-                    samples_dir=samples_dir, cell_idx=cell_idx,
+                    bin_dir=bin_dir,
+                    candidate_bin_dir=candidate_bin_dir,
+                    model_path=str(model),
+                    kv=kv,
+                    depth=depth,
+                    baseline_env=baseline_env,
+                    candidate_env=candidate_env,
+                    repetitions=repetitions,
+                    timeout_s=timeout_s,
+                    samples_dir=samples_dir,
+                    cell_idx=cell_idx,
                 )
                 _annotate_effective_kv_bandwidth(cell, model_shape)
                 cells.append(cell)
@@ -890,6 +931,7 @@ def run_product_campaign_main(ns: argparse.Namespace) -> int:
     all_valid = not invalid_cell_ids and env_logs_valid and not dmesg_new_matches and dmesg_after_n >= 0
     summary = {
         "model_name": model.name, "model_path": str(model), "bin_dir": str(bin_dir),
+        "candidate_bin_dir": str(candidate_bin_dir),
         "baseline_label": ns.baseline_label, "candidate_label": ns.candidate_label,
         "baseline_env": baseline_env, "candidate_env": candidate_env or {},
         "candidate_enabled": candidate_env is not None,
@@ -929,6 +971,11 @@ def main() -> int:
     ap.add_argument(
         "--campaign", choices=["product"], default=None,
         help="Use a non-default harness (currently: product = sole-tenancy product/depth sweep).",
+    )
+    ap.add_argument(
+        "--candidate-bin-dir",
+        help="[product] directory containing the candidate llama-bench; "
+        "defaults to --bin-dir for environment-only comparisons",
     )
     # Product-campaign subcommand flags. Ignored by the legacy matrix path.
     ap.add_argument("--bin-dir", help="[product] directory containing llama-bench (and llama-server for spec-decode legs).")

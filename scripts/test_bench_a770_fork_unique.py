@@ -268,18 +268,26 @@ class ProductCampaignTests(unittest.TestCase):
             bin_dir.mkdir()
             bench = bin_dir / "llama-bench"
             bench.write_text("#!/bin/sh\n", encoding="utf-8")
+            candidate_bin_dir = root / "candidate-bin"
+            candidate_bin_dir.mkdir()
+            candidate_bench = candidate_bin_dir / "llama-bench"
+            candidate_bench.write_text("#!/bin/sh\n", encoding="utf-8")
+            candidate_bench.chmod(0o755)
             bench.chmod(0o755)
             model = root / "model.gguf"
             model.write_bytes(b"gguf")
             out_dir = root / "output"
             ns = self.make_namespace(bin_dir, model, out_dir)
+            ns.candidate_bin_dir = str(candidate_bin_dir)
             ns.repetitions = 2
             ns.baseline_env = ["TEST_ARM=baseline"]
             ns.env = ["TEST_ARM=candidate"]
             seen_envs = []
+            seen_bench_paths = []
 
             def fake_run(argv, env_extra, timeout_s, cwd=None):
-                del argv, timeout_s, cwd
+                del timeout_s, cwd
+                seen_bench_paths.append(argv[0])
                 seen_envs.append(dict(env_extra))
                 result = bench_result(100.0, 20.0)
                 result["stderr"] = f"TEST_ARM: {env_extra['TEST_ARM']}\n"
@@ -299,8 +307,13 @@ class ProductCampaignTests(unittest.TestCase):
             self.assertEqual(rc, 0)
             self.assertIn({"TEST_ARM": "baseline"}, seen_envs)
             self.assertIn({"TEST_ARM": "candidate"}, seen_envs)
+            self.assertIn(str(bench), seen_bench_paths)
+            self.assertIn(str(candidate_bench), seen_bench_paths)
             summary = json.loads((out_dir / "product.json").read_text())
             self.assertEqual(summary["baseline_env"], {"TEST_ARM": "baseline"})
+            self.assertEqual(
+                summary["candidate_bin_dir"], str(candidate_bin_dir.resolve())
+            )
             self.assertEqual(summary["candidate_env"], {"TEST_ARM": "candidate"})
             self.assertTrue(
                 summary["candidate_env_log_assertions"]["TEST_ARM"]["valid"]
@@ -367,6 +380,7 @@ class ProductCampaignTests(unittest.TestCase):
     def make_namespace(bin_dir: Path, model: Path, out_dir: Path) -> argparse.Namespace:
         return argparse.Namespace(
             bin_dir=str(bin_dir),
+            candidate_bin_dir=None,
             model=str(model),
             out_dir=str(out_dir),
             depths="0",
