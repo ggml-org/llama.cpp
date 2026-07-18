@@ -418,7 +418,7 @@ def _product_bench_argv(bin_dir: Path, model: str, kv: tuple[str, str], depth: i
         "-n", "128",
         "-b", "512",
         "-ub", "512",
-        "-no-warmup",
+        "--no-warmup",
         "-r", "1",
         "-o", "json",
     ]

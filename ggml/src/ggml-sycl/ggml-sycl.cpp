@@ -309,7 +309,7 @@ static void ggml_check_sycl() try {
 #else
         GGML_LOG_INFO("  GGML_SYCL_GRAPH: no\n");
 #endif
-#if defined(GGML_SYCL_DNNL)
+#if GGML_SYCL_DNNL
         GGML_LOG_INFO("  GGML_SYCL_DNNL: yes\n");
 #else
         GGML_LOG_INFO("  GGML_SYCL_DNNL: no\n");

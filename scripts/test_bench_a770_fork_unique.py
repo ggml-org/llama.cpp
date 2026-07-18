@@ -46,6 +46,14 @@ class ProductCampaignTests(unittest.TestCase):
         self.assertEqual(selected["pp512"], rows[1])
         self.assertEqual(selected["tg128"], rows[2])
 
+    def test_product_argv_uses_supported_no_warmup_flag(self) -> None:
+        argv = HARNESS._product_bench_argv(
+            Path("/tmp/bin"), "model.gguf", ("f16", "f16"), 0
+        )
+        self.assertIn("--no-warmup", argv)
+        self.assertNotIn("-no-warmup", argv)
+
+
     def test_discards_sample_zero_and_pairs_baseline_candidate(self) -> None:
         calls = {"baseline": 0, "candidate": 0}
 
