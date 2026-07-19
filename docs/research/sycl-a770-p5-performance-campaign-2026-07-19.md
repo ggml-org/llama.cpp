@@ -457,9 +457,11 @@ source state clean.
 
 ## Evidence map
 
-The raw artifacts are host-local because model-scale logs and compiler dumps
-are too large for the repository. The report records their conclusions so the
-negative results do not need to be rediscovered.
+The model-scale logs and compiler dumps are too large for the repository.
+Their original `/tmp` names are retained below for correspondence with the
+commands and verdicts, but the complete surviving P5 set was rescued to
+durable ZFS storage after the campaign. Map any `/tmp/NAME` entry below to
+`/home/svnbjrn/llama-p5-evidence/2026-07-19/tmp/NAME`.
 
 | Task | Principal evidence |
 |---|---|
@@ -482,6 +484,29 @@ P5.14's verdict SHA-256 is
 `283ba030206d4110ff169c9a6e1623b485e6783f04b696e27c8b00553ef7ee73`; its
 evidence-manifest SHA-256 is
 `1c281d09ce91730f869d1ca06742364d03ea70a2a4bb558491e35a413a894590`.
+
+### Durable evidence rescue
+
+The 2026-07-19 rescue copied every surviving top-level `/tmp/p5-*` entry
+without deleting or rewriting its source:
+
+- durable root: `/home/svnbjrn/llama-p5-evidence/2026-07-19`;
+- 366 top-level entries, 8,011 evidence files, and 411 directories;
+- 2,011,368,030 evidence bytes (1.873 GiB);
+- source-to-destination SHA-256 mismatches: zero;
+- `SHA256SUMS`: 8,013 entries, covering all evidence plus
+  `rescue-metadata.json` and `top-level-entries.txt`;
+- `SHA256SUMS` SHA-256:
+  `4579f9a79acc510b37a285d199ab55e87e588ddaa50b6f68dff614dead29291a`;
+- `verification.json` SHA-256:
+  `0ee61bb988dae4dc49b6c747010d82e18b1f446b9d500594aa06898219185178`.
+
+The independent verification command completed successfully:
+
+```bash
+cd /home/svnbjrn/llama-p5-evidence/2026-07-19
+sha256sum --quiet -c SHA256SUMS
+```
 
 ## Operational recommendations
 
