@@ -17,7 +17,6 @@
 #include <fstream>
 #include <iostream>
 #include <string>
-#include <vector>
 
 #include "dpct/helper.hpp"
 #include "ggml.h"
@@ -473,8 +472,6 @@ struct ggml_backend_sycl_context {
 
 #ifdef GGML_SYCL_GRAPH
     std::unique_ptr<sycl_ex::command_graph<sycl_ex::graph_state::executable>> exec_graph = nullptr;
-    std::vector<uint8_t> exec_graph_signature;
-    std::vector<uint8_t> graph_signature_scratch;
 #endif
 
     ggml_sycl_pool & host_pool(int device) {

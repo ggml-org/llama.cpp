@@ -83,7 +83,6 @@ static bool g_sycl_loaded = false;
 int g_ggml_sycl_debug = 0;
 int g_ggml_sycl_disable_optimize = 0;
 int g_ggml_sycl_disable_graph = 0;
-int g_ggml_sycl_graph_replay = 0;
 int g_ggml_sycl_disable_dnn = 0;
 int g_ggml_sycl_enable_vmm = 1;
 int g_ggml_sycl_prioritize_dmmv = 0;
@@ -279,7 +278,6 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_debug = get_sycl_env("GGML_SYCL_DEBUG", 0);
         g_ggml_sycl_disable_optimize = get_sycl_env("GGML_SYCL_DISABLE_OPT", 0);
         g_ggml_sycl_disable_graph = get_sycl_env("GGML_SYCL_DISABLE_GRAPH", 1);
-        g_ggml_sycl_graph_replay = get_sycl_env("GGML_SYCL_GRAPH_REPLAY", 0);
         g_ggml_sycl_disable_dnn = get_sycl_env("GGML_SYCL_DISABLE_DNN", 0);
         g_ggml_sycl_enable_vmm = get_sycl_env("GGML_SYCL_ENABLE_VMM", 1);
         g_ggml_sycl_prioritize_dmmv = get_sycl_env("GGML_SYCL_PRIORITIZE_DMMV", 0);
@@ -336,7 +334,6 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_DISABLE_OPT: %d\n", g_ggml_sycl_disable_optimize);
 #ifdef GGML_SYCL_GRAPH
         GGML_LOG_INFO("  GGML_SYCL_DISABLE_GRAPH: %d\n", g_ggml_sycl_disable_graph);
-        GGML_LOG_INFO("  GGML_SYCL_GRAPH_REPLAY: %d\n", g_ggml_sycl_graph_replay);
 #else
         GGML_LOG_INFO("  GGML_SYCL_DISABLE_GRAPH: graph disabled by compile flag\n");
 #endif
@@ -4212,11 +4209,10 @@ __dpct_inline__ static void k_copy_dst_from_contiguous(
     }
 }
 
-// Fused MoE TG fast path. This predicate is also the graph-compatibility
-// contract: any shape that returns false reaches the host memcpy/wait fallback.
-static bool ggml_sycl_mul_mat_id_mmvq_fused_supported(
-    const ggml_tensor * src0, const ggml_tensor * src1,
-    const ggml_tensor * ids, const ggml_tensor * dst)
+// Fused MoE TG fast path. Returns false to fall back to the per-expert loop below.
+static bool ggml_sycl_mul_mat_id_mmvq_fused(
+    ggml_backend_sycl_context & ctx, const ggml_tensor * src0,
+    const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst)
 {
     const int64_t ne10 = src1->ne[0];
     const int64_t ne11 = src1->ne[1];
@@ -4226,6 +4222,7 @@ static bool ggml_sycl_mul_mat_id_mmvq_fused_supported(
     if (ne10 != src0->ne[0] || ne10 % QK8_1 != 0) return false;
     if (!ggml_is_contiguous(src1)) return false;
 
+    // Reorder layout not supported; fall back.
     const ggml_tensor_extra_gpu * src0_extra =
         static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
     if (src0_extra && src0_extra->optimized_feature.reorder) return false;
@@ -4233,21 +4230,6 @@ static bool ggml_sycl_mul_mat_id_mmvq_fused_supported(
     const int64_t n_ids_per_group = ids->ne[0];
     if (ids->ne[1] != 1) return false;
     if (ne11 != 1 && ne11 != n_ids_per_group) return false;
-    return true;
-}
-
-static bool ggml_sycl_mul_mat_id_mmvq_fused(
-    ggml_backend_sycl_context & ctx, const ggml_tensor * src0,
-    const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst)
-{
-    if (!ggml_sycl_mul_mat_id_mmvq_fused_supported(src0, src1, ids, dst)) {
-        return false;
-    }
-
-    const int64_t ne10 = src1->ne[0];
-    const int64_t ne11 = src1->ne[1];
-
-    const int64_t n_ids_per_group = ids->ne[0];
 
     const queue_ptr stream           = ctx.stream();
     const int       src1_padded_cols = GGML_PAD((int) ne10, MATRIX_ROW_PADDING);
@@ -5050,109 +5032,6 @@ static ggml_status ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_contex
 }
 
 #ifdef GGML_SYCL_GRAPH
-static void ggml_sycl_graph_signature_append(
-        std::vector<uint8_t> & signature, const void * data, size_t size) {
-    const auto * bytes = static_cast<const uint8_t *>(data);
-    signature.insert(signature.end(), bytes, bytes + size);
-}
-
-static void ggml_sycl_graph_tensor_signature(
-        std::vector<uint8_t> & signature, const ggml_tensor * tensor) {
-    const bool present = tensor != nullptr;
-    ggml_sycl_graph_signature_append(signature, &present, sizeof(present));
-    if (!present) {
-        return;
-    }
-
-    // Address equality is intentional: any allocator movement must force
-    // re-recording rather than replay a graph with stale kernel arguments.
-    const uintptr_t data = reinterpret_cast<uintptr_t>(tensor->data);
-    ggml_sycl_graph_signature_append(signature, &tensor->type, sizeof(tensor->type));
-    ggml_sycl_graph_signature_append(signature, &tensor->op, sizeof(tensor->op));
-    ggml_sycl_graph_signature_append(signature, &tensor->flags, sizeof(tensor->flags));
-    ggml_sycl_graph_signature_append(signature, &data, sizeof(data));
-    ggml_sycl_graph_signature_append(signature, tensor->ne, sizeof(tensor->ne));
-    ggml_sycl_graph_signature_append(signature, tensor->nb, sizeof(tensor->nb));
-    ggml_sycl_graph_signature_append(signature, &tensor->view_offs, sizeof(tensor->view_offs));
-}
-
-static void ggml_sycl_graph_signature(
-        const ggml_cgraph * cgraph, std::vector<uint8_t> & signature) {
-    constexpr size_t tensor_signature_size =
-        sizeof(bool) +
-        sizeof(((ggml_tensor *) nullptr)->type) +
-        sizeof(((ggml_tensor *) nullptr)->op) +
-        sizeof(((ggml_tensor *) nullptr)->flags) +
-        sizeof(uintptr_t) +
-        sizeof(((ggml_tensor *) nullptr)->ne) +
-        sizeof(((ggml_tensor *) nullptr)->nb) +
-        sizeof(((ggml_tensor *) nullptr)->view_offs);
-    constexpr size_t node_signature_size =
-        tensor_signature_size * (GGML_MAX_SRC + 1) +
-        sizeof(((ggml_tensor *) nullptr)->op_params);
-    const size_t required_size =
-        sizeof(cgraph->n_nodes) + (size_t) cgraph->n_nodes * node_signature_size;
-
-    signature.clear();
-    if (signature.capacity() < required_size) {
-        signature.reserve(required_size);
-    }
-    ggml_sycl_graph_signature_append(signature, &cgraph->n_nodes, sizeof(cgraph->n_nodes));
-
-    for (int i = 0; i < cgraph->n_nodes; ++i) {
-        const ggml_tensor * node = cgraph->nodes[i];
-        ggml_sycl_graph_tensor_signature(signature, node);
-        ggml_sycl_graph_signature_append(signature, node->op_params, sizeof(node->op_params));
-        for (int j = 0; j < GGML_MAX_SRC; ++j) {
-            ggml_sycl_graph_tensor_signature(signature, node->src[j]);
-        }
-    }
-}
-static void ggml_sycl_graph_prepare_fattn_buffers(
-        ggml_backend_sycl_context * sycl_ctx, const ggml_cgraph * cgraph) {
-    size_t k_f16_elems = 0;
-    size_t v_f16_elems = 0;
-    for (int i = 0; i < cgraph->n_nodes; ++i) {
-        const ggml_tensor * node = cgraph->nodes[i];
-        if (node->op != GGML_OP_FLASH_ATTN_EXT) {
-            continue;
-        }
-
-        const ggml_tensor * k = node->src[1];
-        const ggml_tensor * v = node->src[2];
-        if (k->type != GGML_TYPE_F16) {
-            k_f16_elems = std::max(k_f16_elems, (size_t) ggml_nelements(k));
-        }
-        if (v->type != GGML_TYPE_F16) {
-            v_f16_elems = std::max(v_f16_elems, (size_t) ggml_nelements(v));
-        }
-    }
-
-    ggml_sycl_fattn_kv_buffers & buffers = sycl_ctx->fattn_buffers();
-    if (k_f16_elems > 0) {
-        buffers.K.ensure_half(k_f16_elems);
-    }
-    if (v_f16_elems > 0) {
-        buffers.V.ensure_half(v_f16_elems);
-    }
-}
-
-static ggml_status ggml_backend_sycl_graph_launch(
-        ggml_backend_sycl_context * sycl_ctx,
-        ggml_backend_sycl_device_context * dev_ctx) {
-    try {
-        sycl_ctx->stream()->ext_oneapi_graph(*(sycl_ctx->exec_graph));
-        sycl_ctx->stream()->wait();
-        return GGML_STATUS_SUCCESS;
-    } catch (sycl::exception const & e) {
-        GGML_LOG_ERROR("%s: SYCL graph launch/wait failed: %s\n", __func__, e.what());
-        ggml_backend_sycl_record_failed_exception(dev_ctx, e);
-        sycl_ctx->exec_graph.reset();
-        sycl_ctx->exec_graph_signature.clear();
-        return GGML_STATUS_FAILED;
-    }
-}
-
 static bool check_graph_compatibility(ggml_cgraph * cgraph) {
     if (ggml_sycl_info().device_count > 1) {
         // A sycl_ex::command_graph object can only be created for a single device
@@ -5161,8 +5040,7 @@ static bool check_graph_compatibility(ggml_cgraph * cgraph) {
     }
 
     for (int i = 0; i < cgraph->n_nodes; i++) {
-        const ggml_tensor * node = cgraph->nodes[i];
-        const ggml_op node_op = node->op;
+        const ggml_op node_op = cgraph->nodes[i]->op;
         switch (node_op) {
             default:
                 break;
@@ -5170,15 +5048,11 @@ static bool check_graph_compatibility(ggml_cgraph * cgraph) {
                 // ggml_sycl_op_concat() does a blocking host wait after memcpy operations,
                 // but wait() can't be called on the events returned by a queue recording
                 // to a graph.
-                GGML_LOG_INFO("%s: disabling SYCL graphs due to unsupported node type %s\n", __func__,
-                              ggml_op_name(node_op));
-                return false;
+                [[fallthrough]];
             case GGML_OP_MUL_MAT_ID:
-                if (ggml_sycl_mul_mat_id_mmvq_fused_supported(
-                        node->src[0], node->src[1], node->src[2], node)) {
-                    break;
-                }
-                // Fallback shapes copy ids to the host and wait on the queue.
+                // ggml_sycl_mul_mat_id() does a blocking host wait on the sycl queue after
+                // submitting a memcpy operation, but wait() can't be called on a queue that
+                // is recording to a graph.
                 GGML_LOG_INFO("%s: disabling SYCL graphs due to unsupported node type %s\n", __func__,
                               ggml_op_name(node_op));
                 return false;
@@ -5218,44 +5092,22 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
             return status;
         }
 
-        const bool graph_update_support =
-            dpct::get_device(sycl_ctx->device).has(sycl::aspect::ext_oneapi_graph);
-        if (g_ggml_sycl_graph_replay && !graph_update_support) {
-            ggml_sycl_graph_signature(cgraph, sycl_ctx->graph_signature_scratch);
-            if (sycl_ctx->exec_graph &&
-                sycl_ctx->graph_signature_scratch == sycl_ctx->exec_graph_signature) {
-                GGML_SYCL_DEBUG("[SYCL-GRAPH] exact-signature replay hit\n");
-                return ggml_backend_sycl_graph_launch(sycl_ctx, dev_ctx);
-            }
-            GGML_SYCL_DEBUG("[SYCL-GRAPH] exact-signature replay miss\n");
-        }
+        sycl_ex::command_graph model_sycl_graph(*(sycl_ctx->stream()), {sycl_ex::property::graph::assume_buffer_outlives_graph{}});
 
-        // Scratch allocation may wait on the queue. Grow it before recording;
-        // waiting while a queue is being captured is forbidden by oneAPI.
-        ggml_sycl_graph_prepare_fattn_buffers(sycl_ctx, cgraph);
-        sycl_ex::command_graph model_sycl_graph(
-            *(sycl_ctx->stream()), {sycl_ex::property::graph::assume_buffer_outlives_graph{}});
         model_sycl_graph.begin_recording(*(sycl_ctx->stream()));
         const ggml_status graph_status = ggml_backend_sycl_graph_compute_impl(sycl_ctx, dev_ctx, cgraph);
         model_sycl_graph.end_recording();
         if (graph_status != GGML_STATUS_SUCCESS) {
             ggml_backend_sycl_record_failed_status(dev_ctx);
-            sycl_ctx->exec_graph.reset();
-            sycl_ctx->exec_graph_signature.clear();
             return graph_status;
         }
 
+        const bool graph_update_support = dpct::get_device(sycl_ctx->device).has(sycl::aspect::ext_oneapi_graph);
         if (!sycl_ctx->exec_graph || !graph_update_support) {
-            auto exec_graph = graph_update_support
-                ? model_sycl_graph.finalize(sycl_ex::property::graph::updatable{})
-                : model_sycl_graph.finalize();
+            auto exec_graph = graph_update_support ? model_sycl_graph.finalize(sycl_ex::property::graph::updatable{}) :
+                                                     model_sycl_graph.finalize();
             sycl_ctx->exec_graph = std::make_unique<
                 sycl_ex::command_graph<sycl_ex::graph_state::executable>>(exec_graph);
-            if (g_ggml_sycl_graph_replay && !graph_update_support) {
-                sycl_ctx->exec_graph_signature.swap(sycl_ctx->graph_signature_scratch);
-            } else {
-                sycl_ctx->exec_graph_signature.clear();
-            }
         } else {
             try {
                 sycl_ctx->exec_graph->update(model_sycl_graph);
@@ -5267,19 +5119,24 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
                     sycl_ex::command_graph<sycl_ex::graph_state::executable>>(exec_graph);
             }
         }
-        return ggml_backend_sycl_graph_launch(sycl_ctx, dev_ctx);
-    }
-    if (g_ggml_sycl_graph_replay) {
-        sycl_ctx->exec_graph.reset();
-        sycl_ctx->exec_graph_signature.clear();
-    }
+        try {
+            sycl_ctx->stream()->ext_oneapi_graph(*(sycl_ctx->exec_graph));
+            sycl_ctx->stream()->wait();
+        } catch (sycl::exception const & e) {
+            GGML_LOG_ERROR("%s: SYCL graph launch/wait failed: %s\n", __func__, e.what());
+            ggml_backend_sycl_record_failed_exception(dev_ctx, e);
+            return GGML_STATUS_FAILED;
+        }
+    } else
 #endif
-
-    const ggml_status status = ggml_backend_sycl_graph_compute_impl(sycl_ctx, dev_ctx, cgraph);
-    if (status != GGML_STATUS_SUCCESS) {
-        ggml_backend_sycl_record_failed_status(dev_ctx);
+    {
+        const ggml_status status = ggml_backend_sycl_graph_compute_impl(sycl_ctx, dev_ctx, cgraph);
+        if (status != GGML_STATUS_SUCCESS) {
+            ggml_backend_sycl_record_failed_status(dev_ctx);
+            return status;
+        }
     }
-    return status;
+    return GGML_STATUS_SUCCESS;
 }
 
 static void ggml_backend_sycl_event_record(ggml_backend_t backend, ggml_backend_event_t event) {
