@@ -901,10 +901,8 @@ static void prep_tensor(struct htp_context *ctx, struct htp_buf_desc *bufs, stru
     uint32_t offset = t->data;
     uint32_t size   = t->size;
     uint32_t bi     = t->bi;
-    uint32_t alias  = t->alias;
 
     t->data  = (uint32_t) (bufs[bi].base + offset);  // update data to the actual pointer
-    t->alias = (uint32_t) (tens + alias);            // update alias to the actual pointer
 
     FARF(HIGH, "prep-tensor #%u: bi %u offset %u size %u data %p : %u:%u:%u:%u", idx, t->bi, offset, t->size, (void*) t->data,
         t->ne[0], t->ne[1], t->ne[3], t->ne[3]);
@@ -955,7 +953,7 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, u
         octx->dsts[i]    = dst;
         octx->dst_dma[i] = octx->ctx->dma; // FIXME: ? octx->ctx->dma_cached : octx->ctx->dma;
 
-        htp_tensor_make_dirty(dst, octx->ctx->dirty_map);
+        htp_tensor_make_dirty(octx->ctx, dst);
 
         FARF(HIGH, "prep-dst[%u] #%u: data %p size %u : %u:%u:%u:%u", i, dst_idx, (void*) dst->data, dst->size,
             dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
@@ -998,7 +996,7 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
     // We cant trace this part because the trace buffer is setup later
     qurt_mem_cache_clean((qurt_addr_t) 0, 0, QURT_MEM_CACHE_FLUSH_INVALIDATE_ALL, QURT_MEM_DCACHE);
     hex_l2fetch_block(ctx, ctx->footprint);
-    bitmap_reset(ctx->dirty_map, HTP_OP_MAX_TENSORS);
+    memset(ctx->dirty_ranges, 0, sizeof(ctx->dirty_ranges));
 
     // Setup descriptor pointers
     uint8_t * m_ptr = dbuf->ptr;

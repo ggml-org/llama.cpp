@@ -123,7 +123,7 @@ enum htp_tensor_flags {
 // Tensor descriptor
 struct htp_tensor {
     uint32_t data;                 // Buffer offset in the messages, and data pointer on the NPU
-    uint32_t alias;                // Index of the canonical tensor for this memory buffer
+    uint32_t reserved;             // Reserved for alignment padding (must be multiple of 8)
     uint32_t size;                 // Data size in bytes
     uint32_t flags;                // Buffer / tensor flags
     uint32_t type;                 // Data type
