@@ -2021,6 +2021,7 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
             svbool_t pg32_8 = svptrue_b32();
             svbool_t pg16_4 = svwhilelt_b16(0, 4);
             svbool_t pg16_8 = svwhilelt_b16(0, 8);
+            svbool_t pg16_16 = svwhilelt_b16(0, 16);
 
             double total_padd_time = 0;
             
@@ -2052,47 +2053,94 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                     //
                     // b0_s15 --- b7_s15
                     //The first row corresponds to 0th index scale for all 8 blocks
-                    int16_t q6_scales[16 * 8];
-                    for (int i = 0; i < 16; i++) {
-                        // Load 8 int8 values and sign-extend to int16 lanes
-                        svint16_t scales = svld1sb_s16(pg16_8, q6_ptr[b].scales + i * 8);
-                        svst1_s16(pg16_8, q6_scales + i * 8, scales);
-                    }
+                    // int16_t q6_scales[16 * 8];
 
-                    svint32_t bias_lo = zeros;
-                    svint32_t bias_hi = zeros;
-                    svint32_t bias_all = zeros;
+                    // for (int i = 0; i < 16; i++) {
+                    //     // Load 8 int8 values and sign-extend to int16 lanes
+                    //     svint16_t scales = svld1sb_s16(pg16_8, q6_ptr[b].scales + i * 8);
+                    //     svst1_s16(pg16_8, q6_scales + i * 8, scales);
+                    // }
+
+                    svint16_t scales_0 = svld1sb_s16(pg16_8, q6_ptr[b].scales);                      
+                    svint16_t scales_1 = svld1sb_s16(pg16_8, q6_ptr[b].scales + 8);
+                    svint16_t scales_2 = svld1sb_s16(pg16_8, q6_ptr[b].scales + 16);
+                    svint16_t scales_3 = svld1sb_s16(pg16_8, q6_ptr[b].scales + 24);
+                    svint16_t scales_4 = svld1sb_s16(pg16_8, q6_ptr[b].scales + 32);
+                    svint16_t scales_5 = svld1sb_s16(pg16_8, q6_ptr[b].scales + 40);
+                    svint16_t scales_6 = svld1sb_s16(pg16_8, q6_ptr[b].scales + 48);
+                    svint16_t scales_7 = svld1sb_s16(pg16_8, q6_ptr[b].scales + 56);
+                    svint16_t scales_8 = svld1sb_s16(pg16_8, q6_ptr[b].scales + 64);
+                    svint16_t scales_9 = svld1sb_s16(pg16_8, q6_ptr[b].scales + 72);
+                    svint16_t scales_10 = svld1sb_s16(pg16_8, q6_ptr[b].scales + 80);
+                    svint16_t scales_11 = svld1sb_s16(pg16_8, q6_ptr[b].scales + 88);
+                    svint16_t scales_12 = svld1sb_s16(pg16_8, q6_ptr[b].scales + 96);
+                    svint16_t scales_13 = svld1sb_s16(pg16_8, q6_ptr[b].scales + 104);
+                    svint16_t scales_14 = svld1sb_s16(pg16_8, q6_ptr[b].scales + 112);
+                    svint16_t scales_15 = svld1sb_s16(pg16_8, q6_ptr[b].scales + 120);
 
                     // Load bsums in chunks of 4 to process with vectorized operations
-                    for (int i = 0; i < 16; i += 4) {
-                        svint16_t bsums_vec   = svld1(pg16_4, q8_ptr[b].bsums + i);
-                        svint16_t b0 = svdup_lane_s16(bsums_vec, 0);
-                        svint16_t b1 = svdup_lane_s16(bsums_vec, 1); 
-                        svint16_t b2 = svdup_lane_s16(bsums_vec, 2);
-                        svint16_t b3 = svdup_lane_s16(bsums_vec, 3);                                            
+                    // for (int i = 0; i < 16; i += 4) {
+                    //     svint16_t bsums_vec   = svld1(pg16_4, q8_ptr[b].bsums + i);
+                    //     svint16_t b0 = svdup_lane_s16(bsums_vec, 0);
+                    //     svint16_t b1 = svdup_lane_s16(bsums_vec, 1); 
+                    //     svint16_t b2 = svdup_lane_s16(bsums_vec, 2);
+                    //     svint16_t b3 = svdup_lane_s16(bsums_vec, 3);                                            
 
-                        svint16_t scales_0 = svld1(pg16_8, q6_scales + (i + 0) * 8);                        
-                        svint16_t scales_1 = svld1(pg16_8, q6_scales + (i + 1) * 8);                        
-                        svint16_t scales_2 = svld1(pg16_8, q6_scales + (i + 2) * 8);                        
-                        svint16_t scales_3 = svld1(pg16_8, q6_scales + (i + 3) * 8);
+                    //     svint16_t scales_0 = svld1(pg16_8, q6_scales + (i + 0) * 8);                        
+                    //     svint16_t scales_1 = svld1(pg16_8, q6_scales + (i + 1) * 8);                        
+                    //     svint16_t scales_2 = svld1(pg16_8, q6_scales + (i + 2) * 8);                        
+                    //     svint16_t scales_3 = svld1(pg16_8, q6_scales + (i + 3) * 8);
                         
                         
-                        bias_all = svmla_s32_x(pg32_8, bias_all, svunpklo_s32(scales_0), svunpklo_s32(b0));
+                    //     bias_all = svmla_s32_x(pg32_8, bias_all, svunpklo_s32(scales_0), svunpklo_s32(b0));
 
                         
-                        bias_all = svmla_s32_x(pg32_8, bias_all, svunpklo_s32(scales_1), svunpklo_s32(b1));
+                    //     bias_all = svmla_s32_x(pg32_8, bias_all, svunpklo_s32(scales_1), svunpklo_s32(b1));
 
 
-                        bias_all = svmla_s32_x(pg32_8, bias_all, svunpklo_s32(scales_2), svunpklo_s32(b2));
+                    //     bias_all = svmla_s32_x(pg32_8, bias_all, svunpklo_s32(scales_2), svunpklo_s32(b2));
 
                                               
-                        bias_all = svmla_s32_x(pg32_8, bias_all, svunpklo_s32(scales_3), svunpklo_s32(b3));
+                    //     bias_all = svmla_s32_x(pg32_8, bias_all, svunpklo_s32(scales_3), svunpklo_s32(b3));
+                    // }
+
+                    svint32_t bias_all = zeros;
+                    {
+                        svint16_t bsums_vec   = svld1(pg16_16, q8_ptr[b].bsums + 0);
+                        svint16_t b_ = svdup_lane_s16(bsums_vec, 0);
+                        bias_all = svmla_s32_x(pg32_8, bias_all, svunpklo_s32(scales_0), svunpklo_s32(b_));
+                        b_ = svdup_lane_s16(bsums_vec, 1);
+                        bias_all = svmla_s32_x(pg32_8, bias_all, svunpklo_s32(scales_1), svunpklo_s32(b_));
+                        b_ = svdup_lane_s16(bsums_vec, 2);
+                        bias_all = svmla_s32_x(pg32_8, bias_all, svunpklo_s32(scales_2), svunpklo_s32(b_));
+                        b_ = svdup_lane_s16(bsums_vec, 3);
+                        bias_all = svmla_s32_x(pg32_8, bias_all, svunpklo_s32(scales_3), svunpklo_s32(b_));
+                        b_ = svdup_lane_s16(bsums_vec, 4);
+                        bias_all = svmla_s32_x(pg32_8, bias_all, svunpklo_s32(scales_4), svunpklo_s32(b_));
+                        b_ = svdup_lane_s16(bsums_vec, 5);
+                        bias_all = svmla_s32_x(pg32_8, bias_all, svunpklo_s32(scales_5), svunpklo_s32(b_));
+                        b_ = svdup_lane_s16(bsums_vec, 6);
+                        bias_all = svmla_s32_x(pg32_8, bias_all, svunpklo_s32(scales_6), svunpklo_s32(b_));
+                        b_ = svdup_lane_s16(bsums_vec, 7);
+                        bias_all = svmla_s32_x(pg32_8, bias_all, svunpklo_s32(scales_7), svunpklo_s32(b_));
+                        b_ = svdup_lane_s16(bsums_vec, 8);
+                        bias_all = svmla_s32_x(pg32_8, bias_all, svunpklo_s32(scales_8), svunpklo_s32(b_));
+                        b_ = svdup_lane_s16(bsums_vec, 9);
+                        bias_all = svmla_s32_x(pg32_8, bias_all, svunpklo_s32(scales_9), svunpklo_s32(b_));
+                        b_ = svdup_lane_s16(bsums_vec, 10);
+                        bias_all = svmla_s32_x(pg32_8, bias_all, svunpklo_s32(scales_10), svunpklo_s32(b_));
+                        b_ = svdup_lane_s16(bsums_vec, 11);
+                        bias_all = svmla_s32_x(pg32_8, bias_all, svunpklo_s32(scales_11), svunpklo_s32(b_));
+                        b_ = svdup_lane_s16(bsums_vec, 12);
+                        bias_all = svmla_s32_x(pg32_8, bias_all, svunpklo_s32(scales_12), svunpklo_s32(b_));
+                        b_ = svdup_lane_s16(bsums_vec, 13);
+                        bias_all = svmla_s32_x(pg32_8, bias_all, svunpklo_s32(scales_13), svunpklo_s32(b_));
+                        b_ = svdup_lane_s16(bsums_vec, 14);
+                        bias_all = svmla_s32_x(pg32_8, bias_all, svunpklo_s32(scales_14), svunpklo_s32(b_));
+                        b_ = svdup_lane_s16(bsums_vec, 15);
+                        bias_all = svmla_s32_x(pg32_8, bias_all, svunpklo_s32(scales_15), svunpklo_s32(b_));
                     }
-                    
                     bias_all = svlsl_n_s32_x(pg32_8, bias_all, 5);
-                    // auto tend_bias = std::chrono::high_resolution_clock::now();
-                    // double sec_bias = std::chrono::duration<double>(tbegin_bias - tend_bias).count();
-                    // printf("bias_all time = %f nanosec\n", sec_bias*10e9);
 
                     // Process two 128-value halves per superblock
                     for (int half = 0; half < 2; half++) {
@@ -2205,17 +2253,53 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                             svint32_t sum_l_23 = pairwise_add_8xi32_sve1(sb_acc_l);
                             svint32_t sum_h_23 = pairwise_add_8xi32_sve1(sb_acc_h);
 
-                            const int scale_idx_l = half * 8 + sb;
-                            const int scale_idx_h = half * 8 + sb + 4;
-
-                            svint32_t scale_vec_l = svld1sh_s32(pg32_8, &q6_scales[scale_idx_l * 8]);
-                            svint32_t scale_vec_h = svld1sh_s32(pg32_8, &q6_scales[scale_idx_h * 8]);
+                            // const int scale_idx_l = half * 8 + sb;
+                            // const int scale_idx_h = half * 8 + sb + 4;
+                            // svint32_t scale_vec_l = svld1sh_s32(pg32_8, &q6_scales[scale_idx_l * 8]);
+                            // svint32_t scale_vec_h = svld1sh_s32(pg32_8, &q6_scales[scale_idx_h * 8]);
+                            svint16_t scale_vec_l, scale_vec_h;
+                            if(half == 0){
+                                if(sb == 0){
+                                    scale_vec_l = scales_0;
+                                    scale_vec_h = scales_4;
+                                }
+                                if(sb == 1){
+                                    scale_vec_l = scales_1;
+                                    scale_vec_h = scales_5;
+                                }
+                                if(sb == 2){
+                                    scale_vec_l = scales_2;
+                                    scale_vec_h = scales_6;
+                                }
+                                if(sb == 3){
+                                    scale_vec_l = scales_3;
+                                    scale_vec_h = scales_7;
+                                }
+                            }
+                            else{
+                                if(sb == 0){
+                                    scale_vec_l = scales_8;
+                                    scale_vec_h = scales_12;
+                                }
+                                if(sb == 1){
+                                    scale_vec_l = scales_9;
+                                    scale_vec_h = scales_13;
+                                }
+                                if(sb == 2){
+                                    scale_vec_l = scales_10;
+                                    scale_vec_h = scales_14;
+                                }
+                                if(sb == 3){
+                                    scale_vec_l = scales_11;
+                                    scale_vec_h = scales_15;
+                                }
+                            }
 
                             svint32_t sum_l = svsel(pg32_4, sum_l_01, svext_s32(sum_l_01, sum_l_23, 4)); //splice
                             svint32_t sum_h = svsel(pg32_4, sum_h_01, svext_s32(sum_h_01, sum_h_23, 4));
 
-                            acc_01 = svmla_s32_x(pg32_8, acc_01, sum_l, scale_vec_l);
-                            acc_01 = svmla_s32_x(pg32_8, acc_01, sum_h, scale_vec_h);
+                            acc_01 = svmla_s32_x(pg32_8, acc_01, sum_l, svunpklo_s32(scale_vec_l));
+                            acc_01 = svmla_s32_x(pg32_8, acc_01, sum_h, svunpklo_s32(scale_vec_h));
                             
                         } // for sb
                     }   // for half
