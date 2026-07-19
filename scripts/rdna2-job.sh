@@ -114,12 +114,29 @@ start_job() {
     local id dir
     id="$(date +%Y%m%d-%H%M%S)-$label"
     dir="$(job_dir "$id")"
-    mkdir -p "$dir"
+    mkdir -p "$dir/inputs"
     write_status "$dir" queued
-    printf '%q ' "$@" > "$dir/command.sh"
+
+    # Queue-safe snapshots for small ad-hoc /tmp dependencies. Model files and
+    # installed binaries outside /tmp are referenced in place and never copied.
+    local -a command=("$@")
+    local i src dst size
+    for i in "${!command[@]}"; do
+        src=${command[$i]}
+        if [[ "$src" == /tmp/* && -f "$src" ]]; then
+            size=$(stat -c %s "$src")
+            if [ "$size" -le 1048576 ]; then
+                dst="$dir/inputs/${i}-$(basename "$src")"
+                cp -p "$src" "$dst"
+                command[$i]=$dst
+            fi
+        fi
+    done
+
+    printf '%q ' "${command[@]}" > "$dir/command.sh"
     printf '\n' >> "$dir/command.sh"
 
-    setsid nohup "$SELF" _run "$id" "$timeout_s" -- "$@" \
+    setsid nohup "$SELF" _run "$id" "$timeout_s" -- "${command[@]}" \
         > "$dir/supervisor.log" 2>&1 < /dev/null &
     local launcher_pid=$!
     printf '%s\n' "$launcher_pid" > "$dir/pid"
