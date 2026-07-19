@@ -6,6 +6,8 @@
 #include "llama-memory.h"
 #include "llama-turbo-innerq-runtime.h"
 
+#include <cstddef>
+#include <cstdint>
 #include <unordered_map>
 #include <vector>
 
