@@ -5,6 +5,7 @@
 
 #include <map>
 #include <optional>
+#include <set>
 #include <vector>
 
 class common_chat_peg_mapper {
@@ -26,6 +27,7 @@ class common_chat_peg_mapper {
       int                                  arg_count             = 0;
       bool                                 closing_quote_pending = false;
       std::string                          args_buffer;  // Buffer to delay arguments until tool name is known
+      std::set<std::string>                unique_arg_names;
 
       // Returns a reference to the active argument destination string.
       // Before tool_name is known, writes go to args_buffer; after, to current_tool->arguments.
@@ -61,6 +63,7 @@ class common_chat_peg_builder : public common_peg_parser_builder {
     static constexpr const char * TOOL_ARG_OPEN  = "tool-arg-open";
     static constexpr const char * TOOL_ARG_CLOSE = "tool-arg-close";
     static constexpr const char * TOOL_ARG_NAME         = "tool-arg-name";
+    static constexpr const char * TOOL_ARG_NAME_UNIQUE  = "tool-arg-name-unique";
     static constexpr const char * TOOL_ARG_VALUE        = "tool-arg-value";
     static constexpr const char * TOOL_ARG_STRING_VALUE = "tool-arg-string-value";  // For schema-declared string types
 
@@ -86,6 +89,7 @@ class common_chat_peg_builder : public common_peg_parser_builder {
     common_peg_parser tool_arg_open(const common_peg_parser & p) { return atomic(tag(TOOL_ARG_OPEN, p)); }
     common_peg_parser tool_arg_close(const common_peg_parser & p) { return atomic(tag(TOOL_ARG_CLOSE, p)); }
     common_peg_parser tool_arg_name(const common_peg_parser & p) { return atomic(tag(TOOL_ARG_NAME, p)); }
+    common_peg_parser tool_arg_name_unique(const common_peg_parser & p) { return atomic(tag(TOOL_ARG_NAME_UNIQUE, p)); }
     common_peg_parser tool_arg_value(const common_peg_parser & p) { return tag(TOOL_ARG_VALUE, p); }
 
     // Use for schema-declared string types - won't be treated as potential JSON container

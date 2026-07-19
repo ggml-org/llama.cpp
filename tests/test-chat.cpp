@@ -4018,6 +4018,252 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
     }
 
+    // DeepSeek V4 tests - format uses DSML markup:
+    //   <｜DSML｜tool_calls>
+    //   <｜DSML｜invoke name="foo">
+    //   <｜DSML｜parameter name="bar" string="true|false">value</｜DSML｜parameter>
+    //   </｜DSML｜invoke>
+    //   </｜DSML｜tool_calls>
+    {
+        auto tst = peg_tester("models/templates/deepseek-ai-DeepSeek-V4.jinja", detailed_debug);
+
+        tst.test("Hello, world!\nWhat's up?")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist)
+            .run();
+
+        tst.test(
+               "Let me check the time</think>\n\n"
+               "<｜DSML｜tool_calls>\n"
+               "<｜DSML｜invoke name=\"get_time\">\n"
+               "<｜DSML｜parameter name=\"city\" string=\"true\">Tokyo</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜tool_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .expect(message_with_tool_calls_and_reasoning("get_time", R"({"city": "Tokyo"})", "Let me check the time"))
+            .run();
+
+        tst.test(
+               "Let me check the time\n\n"
+               "<｜DSML｜tool_calls>\n"
+               "<｜DSML｜invoke name=\"get_time\">\n"
+               "<｜DSML｜parameter name=\"city\" string=\"true\">Tokyo</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜tool_calls>\n"
+               "</think>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .expect_reasoning("Let me check the time")
+            .expect_tool_calls({ { "get_time", R"({"city": "Tokyo"})", {} } })
+            .run();
+
+        tst.test(
+               "I need to output the invoice details in JSON</think>"
+               R"({"amount": 123.45, "date": "2025-12-03"})")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .json_schema(invoice_schema)
+            .expect_reasoning("I need to output the invoice details in JSON")
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
+            .run();
+
+        tst.test(R"({"amount": 123.45, "date": "2025-12-03"})")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .json_schema(invoice_schema)
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
+            .run();
+
+        tst.test(
+               "Let me call a tool first</think>\n\n"
+               "<｜DSML｜tool_calls>\n"
+               "<｜DSML｜invoke name=\"get_time\">\n"
+               "<｜DSML｜parameter name=\"city\" string=\"true\">Tokyo</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜tool_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .json_schema(invoice_schema)
+            .expect(message_with_tool_calls_and_reasoning("get_time", R"({"city": "Tokyo"})", "Let me call a tool first"))
+            .run();
+
+        const std::string inline_tool_markup =
+            "This remains content: <｜DSML｜tool_calls>\n"
+            "<｜DSML｜invoke name=\"get_time\">\n"
+            "<｜DSML｜parameter name=\"city\" string=\"true\">Tokyo</｜DSML｜parameter>\n"
+            "</｜DSML｜invoke>\n"
+            "</｜DSML｜tool_calls>";
+        tst.test(inline_tool_markup)
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .expect_content(inline_tool_markup)
+            .run();
+
+        tst.test(
+               "Calling both</think>\n\n"
+               "<｜DSML｜tool_calls>\n"
+               "<｜DSML｜invoke name=\"get_time\">\n"
+               "<｜DSML｜parameter name=\"city\" string=\"true\">Paris</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "<｜DSML｜invoke name=\"get_weather\">\n"
+               "<｜DSML｜parameter name=\"city\" string=\"true\">Paris</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜tool_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .parallel_tool_calls(true)
+            .tools({ get_time_tool, get_weather_tool })
+            .expect(message_with_reasoning_content_and_multiple_tool_calls(
+                "Calling both", "",
+                { { "get_time", R"({"city": "Paris"})" }, { "get_weather", R"({"city": "Paris"})" } }))
+            .run();
+
+        tst.test(
+               "Optional first</think>\n\n"
+               "<｜DSML｜tool_calls>\n"
+               "<｜DSML｜invoke name=\"magic_int\">\n"
+               "<｜DSML｜parameter name=\"name\" string=\"true\">foo bar</｜DSML｜parameter>\n"
+               "<｜DSML｜parameter name=\"ref\" string=\"false\">42</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜tool_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ magic_int_tool })
+            .expect_reasoning("Optional first")
+            .expect_tool_calls({
+                { "magic_int", R"({"name": "foo bar", "ref": 42})", {} },
+            })
+            .run();
+
+        tst.test(
+               "Still thinking\n\n"
+               "<｜DSML｜tool_calls>\n"
+               "<｜DSML｜invoke name=\"get_time\">\n"
+               "<｜DSML｜parameter name=\"city\" string=\"true\">Tokyo</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜tool_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .expect_reasoning(
+               "Still thinking\n\n"
+               "<｜DSML｜tool_calls>\n"
+               "<｜DSML｜invoke name=\"get_time\">\n"
+               "<｜DSML｜parameter name=\"city\" string=\"true\">Tokyo</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜tool_calls>")
+            .expect_content("")
+            .expect_tool_calls({})
+            .run();
+
+        tst.test("world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .enable_thinking(false)
+            .messages({ message_user, message_assist_prefill_content })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_CONTENT)
+            .expect_content("Hello, world!\nWhat's up?")
+            .run();
+
+        {
+            auto tmpls = read_templates("models/templates/deepseek-ai-DeepSeek-V4.jinja");
+
+            common_chat_templates_inputs inputs;
+            inputs.messages         = { message_user };
+            inputs.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+            inputs.enable_thinking  = true;
+            inputs.tools            = { magic_int_tool };
+
+            make_peg_parser parser(tmpls.get(), inputs, detailed_debug);
+
+            auto expect_parse_error = [&](const std::string & output) {
+                bool got_error = false;
+                try {
+                    parser.parse(output, false);
+                } catch (const std::runtime_error &) {
+                    got_error = true;
+                }
+
+                if (!got_error) {
+                    throw std::runtime_error("Expected DeepSeek V4 parser to reject invalid parameters");
+                }
+            };
+
+            expect_parse_error(
+                    "Missing required</think>\n\n"
+                    "<｜DSML｜tool_calls>\n"
+                    "<｜DSML｜invoke name=\"magic_int\">\n"
+                    "<｜DSML｜parameter name=\"name\" string=\"true\">foo bar</｜DSML｜parameter>\n"
+                    "</｜DSML｜invoke>\n"
+                    "</｜DSML｜tool_calls>");
+
+            expect_parse_error(
+                    "Duplicate required</think>\n\n"
+                    "<｜DSML｜tool_calls>\n"
+                    "<｜DSML｜invoke name=\"magic_int\">\n"
+                    "<｜DSML｜parameter name=\"ref\" string=\"false\">1</｜DSML｜parameter>\n"
+                    "<｜DSML｜parameter name=\"ref\" string=\"false\">2</｜DSML｜parameter>\n"
+                    "</｜DSML｜invoke>\n"
+                    "</｜DSML｜tool_calls>");
+
+            expect_parse_error(
+                    "Duplicate optional</think>\n\n"
+                    "<｜DSML｜tool_calls>\n"
+                    "<｜DSML｜invoke name=\"magic_int\">\n"
+                    "<｜DSML｜parameter name=\"ref\" string=\"false\">1</｜DSML｜parameter>\n"
+                    "<｜DSML｜parameter name=\"name\" string=\"true\">first</｜DSML｜parameter>\n"
+                    "<｜DSML｜parameter name=\"name\" string=\"true\">second</｜DSML｜parameter>\n"
+                    "</｜DSML｜invoke>\n"
+                    "</｜DSML｜tool_calls>");
+        }
+
+        json many_required_schema = {
+            { "type", "object" },
+            { "properties", json::object() },
+            { "required", json::array() },
+        };
+        json many_required_args = json::object();
+        std::string many_required_call =
+            "Many required</think>\n\n"
+            "<｜DSML｜tool_calls>\n"
+            "<｜DSML｜invoke name=\"many_required\">\n";
+        for (int i = 0; i < 16; i++) {
+            const auto param_name = "arg" + std::to_string(i);
+            many_required_schema["properties"][param_name] = { { "type", "integer" } };
+            many_required_schema["required"].push_back(param_name);
+        }
+        for (int i = 15; i >= 0; i--) {
+            const auto param_name = "arg" + std::to_string(i);
+            many_required_args[param_name] = i;
+            many_required_call +=
+                "<｜DSML｜parameter name=\"" + param_name + "\" string=\"false\">" + std::to_string(i) +
+                "</｜DSML｜parameter>\n";
+        }
+        many_required_call +=
+            "</｜DSML｜invoke>\n"
+            "</｜DSML｜tool_calls>";
+
+        common_chat_tool many_required_tool{
+            /* .name = */ "many_required",
+            /* .description = */ "Tool with many required arguments",
+            /* .parameters = */ many_required_schema.dump(),
+        };
+        tst.test(many_required_call)
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ many_required_tool })
+            .expect_reasoning("Many required")
+            .expect_tool_calls({ { "many_required", many_required_args.dump(), {} } })
+            .run();
+    }
+
     // GLM-4.6 tests - format: <tool_call>function_name\n<arg_key>...</arg_key>\n<arg_value>...</arg_value>\n</tool_call>
     {
         auto tst = peg_tester("models/templates/GLM-4.6.jinja", detailed_debug);
@@ -5745,6 +5991,7 @@ static void test_template_generation_prompt() {
         std::vector<common_chat_msg> messages;
         bool                         add_generation_prompt  = true;
         common_chat_continuation     continue_final_message = COMMON_CHAT_CONTINUATION_NONE;
+        bool                         enable_thinking        = true;
     };
 
     auto basic = [&]() {
@@ -5776,6 +6023,7 @@ static void test_template_generation_prompt() {
         inputs.messages               = opts.messages;
         inputs.add_generation_prompt  = opts.add_generation_prompt;
         inputs.continue_final_message = opts.continue_final_message;
+        inputs.enable_thinking        = opts.enable_thinking;
 
         auto params = common_chat_templates_apply(tmpls.get(), inputs);
 
@@ -5872,6 +6120,133 @@ static void test_template_generation_prompt() {
         check(tmpls, basic(),                  "<｜Assistant｜><think>");
         check(tmpls, continuation_content(),   "<｜Assistant｜><think>I'm thinking</think>Hello, ");
         check(tmpls, continuation_reasoning(), "<｜Assistant｜><think>I'm");
+    }
+
+    {
+        auto tmpls = read_templates("models/templates/deepseek-ai-DeepSeek-V4.jinja");
+        check(tmpls, basic(),                  "<｜Assistant｜><think>");
+        check(tmpls, continuation_content(),   "<｜Assistant｜><think>I'm thinking</think>Hello, ");
+        check(tmpls, continuation_reasoning(), "<｜Assistant｜><think>I'm");
+
+        auto continuation_content_no_thinking = continuation_content();
+        continuation_content_no_thinking.enable_thinking = false;
+        check(tmpls, continuation_content_no_thinking, "<｜Assistant｜></think>Hello, ");
+
+        const std::string reasoning_effort_max =
+            "Reasoning Effort: Absolute maximum with no shortcuts permitted.\n"
+            "You MUST be very thorough in your thinking and comprehensively decompose the problem to resolve the root cause, rigorously stress-testing your logic against all potential paths, edge cases, and adversarial scenarios.\n"
+            "Explicitly write out your entire deliberation process, documenting every intermediate step, considered alternative, and rejected hypothesis to ensure absolutely no assumption is left unchecked.\n\n";
+
+        common_chat_templates_inputs max_inputs;
+        max_inputs.messages = { system_msg, message_user };
+        max_inputs.chat_template_kwargs["reasoning_effort"] = R"("max")";
+        auto max_params = common_chat_templates_apply(tmpls.get(), max_inputs);
+        assert_contains(max_params.prompt, reasoning_effort_max + system_msg.content);
+
+        auto high_inputs = max_inputs;
+        high_inputs.chat_template_kwargs["reasoning_effort"] = R"("high")";
+        auto high_params = common_chat_templates_apply(tmpls.get(), high_inputs);
+        assert_equals(std::string::npos, high_params.prompt.find(reasoning_effort_max));
+
+        auto non_thinking_max_inputs = max_inputs;
+        non_thinking_max_inputs.enable_thinking = false;
+        auto non_thinking_max_params = common_chat_templates_apply(tmpls.get(), non_thinking_max_inputs);
+        assert_equals(std::string::npos, non_thinking_max_params.prompt.find(reasoning_effort_max));
+
+        common_chat_templates_inputs response_format_inputs;
+        response_format_inputs.messages = { system_msg, message_user };
+        response_format_inputs.tools = { get_time_tool };
+        response_format_inputs.json_schema =
+            R"({"type":"object","properties":{"answer":{"type":"string"}}})";
+        auto response_format_params = common_chat_templates_apply(tmpls.get(), response_format_inputs);
+        const auto tools_pos = response_format_params.prompt.find("## Tools");
+        const auto response_format_pos = response_format_params.prompt.find(
+            "## Response Format:\n\nYou MUST strictly adhere to the following schema to reply:\n");
+        if (tools_pos == std::string::npos || response_format_pos == std::string::npos || tools_pos > response_format_pos) {
+            LOG_ERR("Expected response format after tools\nActual: %s\n", response_format_params.prompt.c_str());
+            common_log_flush(common_log_main());
+            throw std::runtime_error("Test failed");
+        }
+        assert_contains(response_format_params.prompt, R"("answer": {"type": "string"})");
+
+        response_format_inputs.json_schema = "{}";
+        auto json_object_params = common_chat_templates_apply(tmpls.get(), response_format_inputs);
+        assert_contains(json_object_params.prompt,
+                        "## Response Format:\n\nYou MUST strictly adhere to the following schema to reply:\n{}");
+
+        common_chat_msg assistant_history;
+        assistant_history.role              = "assistant";
+        assistant_history.content           = "Previous answer";
+        assistant_history.reasoning_content = "Previous reasoning";
+
+        common_chat_msg user_followup;
+        user_followup.role    = "user";
+        user_followup.content = "Follow up";
+
+        common_chat_templates_inputs default_history_inputs;
+        default_history_inputs.messages = { message_user, assistant_history, user_followup };
+        auto default_history_params = common_chat_templates_apply(tmpls.get(), default_history_inputs);
+        assert_contains(default_history_params.prompt, "<｜Assistant｜></think>Previous answer");
+
+        auto preserved_history_inputs = default_history_inputs;
+        preserved_history_inputs.chat_template_kwargs["preserve_thinking"] = "true";
+        auto preserved_history_params = common_chat_templates_apply(tmpls.get(), preserved_history_inputs);
+        assert_contains(preserved_history_params.prompt, "<｜Assistant｜><think>Previous reasoning</think>Previous answer");
+
+        auto preserve_reasoning_inputs = default_history_inputs;
+        preserve_reasoning_inputs.chat_template_kwargs["preserve_reasoning"] = "true";
+        auto preserve_reasoning_params = common_chat_templates_apply(tmpls.get(), preserve_reasoning_inputs);
+        assert_contains(preserve_reasoning_params.prompt, "<｜Assistant｜><think>Previous reasoning</think>Previous answer");
+        assert_equals(true, common_chat_templates_get_caps(tmpls.get()).at("supports_preserve_reasoning"));
+
+        common_chat_msg empty_tool_call = simple_assist_msg("", "", "empty_args", "{}");
+        common_chat_templates_inputs empty_tool_inputs;
+        empty_tool_inputs.messages = { message_user, empty_tool_call };
+        empty_tool_inputs.tools    = { empty_args_tool };
+        auto empty_tool_params = common_chat_templates_apply(tmpls.get(), empty_tool_inputs);
+        assert_contains(empty_tool_params.prompt,
+                        "<｜DSML｜invoke name=\"empty_args\">\n\n</｜DSML｜invoke>");
+
+        common_chat_msg user_start;
+        user_start.role    = "user";
+        user_start.content = "Check time and weather.";
+
+        common_chat_msg assistant_tools;
+        assistant_tools.role              = "assistant";
+        assistant_tools.reasoning_content = "Need both";
+        assistant_tools.tool_calls = {
+            { "get_time",    R"({"city":"Paris"})", "call_time"    },
+            { "get_weather", R"({"city":"Paris"})", "call_weather" },
+        };
+
+        common_chat_msg weather_result;
+        weather_result.role         = "tool";
+        weather_result.content      = "weather result";
+        weather_result.tool_call_id = "call_weather";
+
+        common_chat_msg time_result;
+        time_result.role         = "tool";
+        time_result.content      = "time result";
+        time_result.tool_call_id = "call_time";
+
+        common_chat_msg user_continue;
+        user_continue.role    = "user";
+        user_continue.content = "Continue.";
+
+        common_chat_templates_inputs inputs;
+        inputs.messages = { user_start, assistant_tools, weather_result, time_result, user_continue };
+        inputs.tools    = { get_time_tool, get_weather_tool };
+
+        auto params = common_chat_templates_apply(tmpls.get(), inputs);
+        assert_contains(params.prompt, "<｜Assistant｜><think>Need both</think>\n\n<｜DSML｜tool_calls>");
+
+        const auto time_pos    = params.prompt.find("<tool_result>time result</tool_result>");
+        const auto weather_pos = params.prompt.find("<tool_result>weather result</tool_result>");
+        if (time_pos == std::string::npos || weather_pos == std::string::npos || time_pos > weather_pos) {
+            LOG_ERR("Expected tool results in tool-call order\nActual: %s\n", params.prompt.c_str());
+            common_log_flush(common_log_main());
+            throw std::runtime_error("Test failed");
+        }
     }
 
     {

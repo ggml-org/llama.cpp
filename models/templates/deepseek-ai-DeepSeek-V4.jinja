@@ -11,6 +11,9 @@
 {%- set dsml_token = '｜DSML｜' -%}
 {%- set thinking_start_token = '<think>' -%}
 {%- set thinking_end_token = '</think>' -%}
+{%- set reasoning_effort_max = 'Reasoning Effort: Absolute maximum with no shortcuts permitted.\nYou MUST be very thorough in your thinking and comprehensively decompose the problem to resolve the root cause, rigorously stress-testing your logic against all potential paths, edge cases, and adversarial scenarios.\nExplicitly write out your entire deliberation process, documenting every intermediate step, considered alternative, and rejected hypothesis to ensure absolutely no assumption is left unchecked.\n\n' -%}
+{%- set response_format_template = '## Response Format:\n\nYou MUST strictly adhere to the following schema to reply:\n' -%}
+{%- set has_tools = false -%}
 {%- set tools_header = '## Tools\n\nYou have access to a set of tools to help answer the user\'s question. You can invoke tools by writing a "<' + dsml_token + 'tool_calls>" block like the following:\n\n<' + dsml_token + 'tool_calls>\n<' + dsml_token + 'invoke name="$TOOL_NAME">\n<' + dsml_token + 'parameter name="$PARAMETER_NAME" string="true|false">$PARAMETER_VALUE</' + dsml_token + 'parameter>\n...\n</' + dsml_token + 'invoke>\n<' + dsml_token + 'invoke name="$TOOL_NAME2">\n...\n</' + dsml_token + 'invoke>\n</' + dsml_token + 'tool_calls>\n\nString parameters should be specified as is and set `string="true"`. For all other types (numbers, booleans, arrays, objects), pass the value in JSON format and set `string="false"`.\n\nIf thinking_mode is enabled (triggered by ' + thinking_start_token + '), you MUST output your complete reasoning inside ' + thinking_start_token + '...' + thinking_end_token + ' BEFORE any tool calls or final response.\n\nOtherwise, output directly after ' + thinking_end_token + ' with tool calls or final response.\n\n### Available Tool Schemas\n\n' -%}
 {%- set tools_footer = '\nYou MUST strictly follow the above defined tool name and parameter schemas to invoke tool calls.\n' -%}
 {%- set ns = namespace(system_prompt='', is_first_sp=true) -%}
@@ -25,6 +28,7 @@
   {%- endif -%}
 {%- endfor -%}
 {%- if tools is defined and tools -%}
+  {%- set has_tools = true -%}
   {%- set ts = namespace(schemas='') -%}
   {%- for tool in tools -%}
     {%- if tool['type'] == 'function' -%}
@@ -37,7 +41,16 @@
     {%- set ns.system_prompt = tools_header + ts.schemas + tools_footer -%}
   {%- endif -%}
 {%- endif -%}
+{%- if response_format is defined -%}
+  {%- if ns.system_prompt -%}
+    {%- set ns.system_prompt = ns.system_prompt + '\n\n' -%}
+  {%- endif -%}
+  {%- set ns.system_prompt = ns.system_prompt + response_format_template + (response_format | tojson) -%}
+{%- endif -%}
 {{- bos_token -}}
+{%- if messages and thinking and reasoning_effort is defined and reasoning_effort == 'max' -%}
+  {{- reasoning_effort_max -}}
+{%- endif -%}
 {{- ns.system_prompt -}}
 {%- set last_user_idx = namespace(value=-1) -%}
 {%- for message in messages -%}
@@ -67,7 +80,8 @@
     {%- set state.in_user = false -%}
     {{- '<｜Assistant｜>' -}}
     {%- set is_after_last_user = loop.index0 > last_user_idx.value -%}
-    {%- if is_after_last_user and thinking -%}
+    {%- set keep_reasoning = thinking and (has_tools or (preserve_thinking is defined and preserve_thinking) or is_after_last_user) -%}
+    {%- if keep_reasoning -%}
       {{- thinking_start_token -}}
       {%- if message['reasoning_content'] is defined and message['reasoning_content'] -%}
         {{- message['reasoning_content'] -}}
@@ -95,6 +109,9 @@
             {{- '<' + dsml_token + 'parameter name="' + key + '" string="false">' + (val | tojson) + '</' + dsml_token + 'parameter>\n' -}}
           {%- endif -%}
         {%- endfor -%}
+        {%- if not args -%}
+          {{- '\n' -}}
+        {%- endif -%}
         {{- '</' + dsml_token + 'invoke>\n' -}}
       {%- endfor -%}
       {{- '</' + dsml_token + 'tool_calls>' -}}
