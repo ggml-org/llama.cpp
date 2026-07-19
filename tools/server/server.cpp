@@ -303,14 +303,24 @@ int llama_server(common_params & params, int argc, char ** argv) {
         return res;
     };
 
+    if (params.cors_origins == "*" && params.api_keys.empty()) {
+        SRV_WRN("%s", "-----------------\n");
+        SRV_WRN("%s", "CORS is set to allow all origins ('*') and no API key is set\n");
+        SRV_WRN("%s", "this can be a security risk (cross-origin attacks)\n");
+        SRV_WRN("%s", "more info: https://github.com/ggml-org/llama.cpp/pull/25655\n");
+        SRV_WRN("%s", "-----------------\n");
+    }
+
     // CORS proxy (EXPERIMENTAL, only used by the Web UI for MCP)
+    std::vector<std::string> warn_names;
+    if (is_router_server) {
+        warn_names.push_back("router mode");
+    }
+
     if (params.ui_mcp_proxy) {
-        SRV_WRN("%s", "-----------------\n");
-        SRV_WRN("%s", "CORS proxy is enabled, do not expose server to untrusted environments\n");
-        SRV_WRN("%s", "This feature is EXPERIMENTAL and may be removed or changed in future versions\n");
-        SRV_WRN("%s", "-----------------\n");
         ctx_http.get ("/cors-proxy",      ex_wrapper(proxy_handler_get));
         ctx_http.post("/cors-proxy",      ex_wrapper(proxy_handler_post));
+        warn_names.push_back("MCP proxy (experimental)");
     } else {
         ctx_http.get ("/cors-proxy",      ex_wrapper(res_403));
         ctx_http.post("/cors-proxy",      ex_wrapper(res_403));
@@ -324,15 +334,22 @@ int llama_server(common_params & params, int argc, char ** argv) {
             SRV_ERR("tools setup failed: %s\n", e.what());
             return 1;
         }
-        SRV_WRN("%s", "-----------------\n");
-        SRV_WRN("%s", "Built-in tools are enabled, do not expose server to untrusted environments\n");
-        SRV_WRN("%s", "This feature is EXPERIMENTAL and may be changed in the future\n");
-        SRV_WRN("%s", "-----------------\n");
         ctx_http.get ("/tools",           ex_wrapper(tools.handle_get));
         ctx_http.post("/tools",           ex_wrapper(tools.handle_post));
+        warn_names.push_back("built-in tools (experimental)");
     } else {
         ctx_http.get ("/tools",           ex_wrapper(res_403));
         ctx_http.post("/tools",           ex_wrapper(res_403));
+    }
+
+    if (warn_names.size() > 0) {
+        SRV_WRN("%s", "-----------------\n");
+        SRV_WRN("%s", "the following feature(s) are enabled:\n");
+        for (const auto & name : warn_names) {
+            SRV_WRN("    %s\n", name.c_str());
+        }
+        SRV_WRN("%s", "do not expose the server to untrusted environments\n");
+        SRV_WRN("%s", "-----------------\n");
     }
 
     //
@@ -452,9 +469,6 @@ int llama_server(common_params & params, int argc, char ** argv) {
     SRV_INF("listening on %s\n", ctx_http.listening_address.c_str());
 
     if (is_router_server) {
-        SRV_WRN("%s", "NOTE: router mode is experimental\n");
-        SRV_WRN("%s", "      it is not recommended to use this mode in untrusted environments\n");
-
         if (!params.models_preset_hf.empty()) {
             SRV_WRN(      "NOTE: using preset.ini from HF repo '%s'\n", params.models_preset_hf.c_str());
             SRV_WRN("%s", "      please only use presets that you can trust! Unknown presets may be unsafe\n");

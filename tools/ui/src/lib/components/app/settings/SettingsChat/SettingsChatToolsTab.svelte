@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { ChevronDown, ChevronRight } from '@lucide/svelte';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Collapsible from '$lib/components/ui/collapsible';
@@ -41,7 +42,7 @@
 					<span class="inline-flex min-w-0 items-center gap-1.5 font-medium">
 						{#if group.source === 'mcp'}
 							<McpServerIdentity
-								iconClass="h-4 w-4"
+								iconClass={ICON_CLASS_DEFAULT}
 								iconRounded="rounded-sm"
 								showVersion={false}
 								displayName={group.label}
@@ -79,7 +80,7 @@
 									<Checkbox
 										checked={isEnabled}
 										onCheckedChange={() => toolsStore.toggleTool(entry.key)}
-										class="h-4 w-4"
+										class={ICON_CLASS_DEFAULT}
 									/>
 								</div>
 
@@ -93,7 +94,7 @@
 												permissionsStore.allowTool(permissionKey);
 											}
 										}}
-										class="h-4 w-4"
+										class={ICON_CLASS_DEFAULT}
 									/>
 								</div>
 							</div>

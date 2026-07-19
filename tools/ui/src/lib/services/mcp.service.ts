@@ -692,8 +692,31 @@ export class MCPService {
 			this.createLog(MCPConnectionPhase.INITIALIZING, 'Sending initialize request...')
 		);
 
+		// The SDK timeout only covers the initialize request, not transport.start(),
+		// which can hang forever on an unreachable host (SSE endpoint wait, WebSocket
+		// handshake, proxied fetch). This race bounds the whole handshake and closes
+		// the transport on expiry so the underlying fetch or socket is aborted.
+		const handshakeTimeoutMs =
+			serverConfig.handshakeTimeoutMs ?? DEFAULT_MCP_CONFIG.connectionTimeoutMs;
+
 		try {
-			await client.connect(transport);
+			let handshakeTimer: ReturnType<typeof setTimeout> | undefined;
+			const handshakeDeadline = new Promise<never>((_, reject) => {
+				handshakeTimer = setTimeout(() => {
+					void transport.close().catch(() => {});
+					reject(new Error(`Connection timed out after ${Math.round(handshakeTimeoutMs / 1000)}s`));
+				}, handshakeTimeoutMs);
+			});
+
+			try {
+				await Promise.race([
+					client.connect(transport, { timeout: handshakeTimeoutMs }),
+					handshakeDeadline
+				]);
+			} finally {
+				clearTimeout(handshakeTimer);
+			}
+
 			// Transport diagnostics are only for the initial handshake, not long-lived traffic.
 			stopPhaseLogging();
 			client.onerror = runtimeErrorHandler;

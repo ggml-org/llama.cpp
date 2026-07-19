@@ -28,7 +28,7 @@ import {
 	NEW_TO_DEPRECATED_MAP
 } from '$lib/constants';
 import { LEGACY_AGENTIC_REGEX, LEGACY_REASONING_TAGS } from '$lib/constants/agentic';
-import { SETTINGS_KEYS } from '$lib/constants/settings-registry';
+import { SETTINGS_KEYS } from '$lib/constants/settings-keys';
 import { MessageRole } from '$lib/enums';
 
 // Types
@@ -522,7 +522,7 @@ const mcpDefaultEnabledMigration: Migration = {
 		const config = configRaw ? JSON.parse(configRaw) : {};
 
 		// Don't overwrite an existing config entry — current data wins.
-		if (SETTINGS_KEYS.MCP_DEFAULT_SERVER_OVERRIDES in config) {
+		if (MCP_DEFAULT_OVERRIDES_LEGACY_KEY in config) {
 			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
 				console.log('[Migration] MCP default enabled: config already has overrides, skipping');
 			return;
@@ -543,7 +543,7 @@ const mcpDefaultEnabledMigration: Migration = {
 			return;
 		}
 
-		config[SETTINGS_KEYS.MCP_DEFAULT_SERVER_OVERRIDES] = raw;
+		config[MCP_DEFAULT_OVERRIDES_LEGACY_KEY] = raw;
 		localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(config));
 
 		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
@@ -586,6 +586,83 @@ const configTypesMigration: Migration = {
 	}
 };
 
+const MCP_DEFAULT_OVERRIDES_LEGACY_KEY = `${STORAGE_APP_NAME}.mcpDefaultServerOverrides`;
+const MCP_DEFAULT_OVERRIDES_MERGE_MIGRATION_ID = 'mcp-default-overrides-merge-v1';
+
+/**
+ * Folds `mcpDefaultServerOverrides` (the legacy "default for new chats" list,
+ * JSON-encoded as `[{ serverId, enabled }, ...]`) into `mcpServers[i].enabled`.
+ * The legacy override key is intentionally left in the config so a downgrade
+ * keeps reading it. Runs after `mcpDefaultEnabledMigration` so any legacy
+ * standalone overrides are already inside the config.
+ */
+const mcpDefaultOverridesMergeMigration: Migration = {
+	id: MCP_DEFAULT_OVERRIDES_MERGE_MIGRATION_ID,
+	description:
+		'Merge mcpDefaultServerOverrides entries onto mcpServers[i].enabled (preserves legacy key)',
+
+	async run(): Promise<void> {
+		const configRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
+		if (configRaw === null) return;
+
+		const config = JSON.parse(configRaw);
+		const raw = config[MCP_DEFAULT_OVERRIDES_LEGACY_KEY];
+
+		if (typeof raw !== 'string' || raw.length === 0) {
+			if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+				console.log('[Migration] MCP default overrides merge: nothing to merge');
+			return;
+		}
+
+		let overrides: { serverId: string; enabled: boolean }[];
+		try {
+			const parsed = JSON.parse(raw);
+			if (!Array.isArray(parsed)) return;
+			overrides = parsed.filter(
+				(o) =>
+					typeof o === 'object' &&
+					o !== null &&
+					typeof (o as Record<string, unknown>).serverId === 'string' &&
+					typeof (o as Record<string, unknown>).enabled === 'boolean'
+			) as { serverId: string; enabled: boolean }[];
+		} catch {
+			return;
+		}
+
+		const serversRaw = config[SETTINGS_KEYS.MCP_SERVERS];
+		let servers: { id: string; enabled?: boolean }[];
+		try {
+			servers = typeof serversRaw === 'string' ? JSON.parse(serversRaw) : [];
+		} catch {
+			return;
+		}
+
+		if (!Array.isArray(servers)) servers = [];
+
+		let serversChanged = false;
+		const knownIds = new Set(servers.map((s) => s.id));
+		for (const override of overrides) {
+			if (!knownIds.has(override.serverId)) continue;
+			const index = servers.findIndex((s) => s.id === override.serverId);
+
+			if (index >= 0 && servers[index].enabled !== override.enabled) {
+				servers[index] = { ...servers[index], enabled: override.enabled };
+				serversChanged = true;
+			}
+		}
+
+		if (serversChanged) {
+			config[SETTINGS_KEYS.MCP_SERVERS] = JSON.stringify(servers);
+			localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(config));
+		}
+
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log(
+				`[Migration] MCP default overrides merge: applied=${overrides.length} serversChanged=${serversChanged} (legacy key preserved)`
+			);
+	}
+};
+
 const migrations: Migration[] = [
 	localStorageMigration,
 	idxdbMigration,
@@ -593,6 +670,7 @@ const migrations: Migration[] = [
 	themeMigration,
 	customJsonKeyMigration,
 	mcpDefaultEnabledMigration,
+	mcpDefaultOverridesMergeMigration,
 	configTypesMigration
 ];
 
