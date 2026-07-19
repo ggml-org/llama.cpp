@@ -159,4 +159,15 @@ endif()
 
 target_link_libraries(ggml-hip PRIVATE ggml-base hip::host roc::rocblas roc::hipblas)
 
+if (UNIX)
+    set_property(TARGET ggml-hip APPEND PROPERTY BUILD_RPATH
+                 "$<TARGET_FILE_DIR:roc::rocblas>"
+                 "$<TARGET_FILE_DIR:roc::hipblas>"
+                 "$<TARGET_FILE_DIR:hip::amdhip64>")
+    set_property(TARGET ggml-hip APPEND PROPERTY INSTALL_RPATH
+                 "$<TARGET_FILE_DIR:roc::rocblas>"
+                 "$<TARGET_FILE_DIR:roc::hipblas>"
+                 "$<TARGET_FILE_DIR:hip::amdhip64>")
+endif()
+
 target_compile_options(ggml-hip PRIVATE "$<$<COMPILE_LANGUAGE:HIP>:-ffast-math;-fno-finite-math-only>")
