@@ -428,6 +428,12 @@ static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const st
         return true;
     }
 
+    // This fork-local layout is only implemented by the SYCL backend. Reject
+    // CPU scheduling rather than interpreting its bytes as canonical q8_0.
+    if (ggml_tensor_op_uses_kv_q8_quants_first(op)) {
+        return false;
+    }
+
     // check extra buffer types
     // note: only the first sources are checked for extra buffer types to reduce overhead, increase if necessary
     for (int i = 0; i < 4; i++) {

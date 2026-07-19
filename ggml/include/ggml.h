@@ -653,7 +653,7 @@ extern "C" {
         GGML_TENSOR_FLAG_PARAM          =  4, // ...contains trainable parameters
         GGML_TENSOR_FLAG_LOSS           =  8, // ...defines loss for numerical optimization (multiple loss tensors add up)
         GGML_TENSOR_FLAG_COMPUTE        = 16, // ...must be computed
-        GGML_TENSOR_FLAG_KV_Q8_QUANTS_FIRST = 32, // ...stores q8_0 KV as 4*QK8_0 quants + 4 scales (QK8_0=32)
+        GGML_TENSOR_FLAG_KV_Q8_QUANTS_FIRST = 32, // fork-local: stores q8_0 KV as 4*QK8_0 quants + 4 scales (QK8_0=32)
     };
 
     enum ggml_tri_type {
@@ -711,6 +711,19 @@ extern "C" {
                 return true;
             }
             tensor = tensor->view_src;
+        }
+        return false;
+    }
+
+    static inline bool ggml_tensor_op_uses_kv_q8_quants_first(const struct ggml_tensor * op) {
+        if (op->type == GGML_TYPE_Q8_0 && ggml_tensor_is_kv_q8_quants_first(op)) {
+            return true;
+        }
+        for (int i = 0; i < GGML_MAX_SRC; ++i) {
+            const struct ggml_tensor * src = op->src[i];
+            if (src != NULL && src->type == GGML_TYPE_Q8_0 && ggml_tensor_is_kv_q8_quants_first(src)) {
+                return true;
+            }
         }
         return false;
     }

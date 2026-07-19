@@ -2496,7 +2496,7 @@ inline void ggml_sycl_op_mul_mat_sycl(
         if (src0->type != GGML_TYPE_F16) {
             scope_op_debug_print scope_dbg_print(__func__, "/to_fp16_sycl", dst, /*num_src=*/2,
                                                  " : converting src0 to fp16");
-            const to_fp16_sycl_t to_fp16_sycl = ggml_get_to_fp16_sycl(src0->type, dst);
+            const to_fp16_sycl_t to_fp16_sycl = ggml_get_to_fp16_sycl(src0->type, src0);
             GGML_ASSERT(to_fp16_sycl != nullptr);
             size_t ne = row_diff*ne00;
             src0_as_f16.alloc(ne);
@@ -2510,7 +2510,7 @@ inline void ggml_sycl_op_mul_mat_sycl(
         if (src1->type != GGML_TYPE_F16) {
             scope_op_debug_print scope_dbg_print(__func__, "/to_fp16_sycl", dst, /*num_src=*/2,
                                                  " : converting src1 to fp16");
-            const to_fp16_sycl_t to_fp16_sycl = ggml_get_to_fp16_sycl(src1->type, dst);
+            const to_fp16_sycl_t to_fp16_sycl = ggml_get_to_fp16_sycl(src1->type, src1);
             GGML_ASSERT(to_fp16_sycl != nullptr);
             size_t ne = src1_ncols*ne10;
             src1_as_f16.alloc(ne);
@@ -3386,13 +3386,13 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx, cons
         // oneDNN handles strided data and does not need overhead of ggml_get_to_fp16_nc_sycl
         const int64_t ne_src1 = src1->nb[last_str] * src1->ne[last_dim] / type_size_src1;
         src1_f16_alloc.alloc(ne_src1);
-        const to_fp16_sycl_t to_fp16_sycl = ggml_get_to_fp16_sycl(src1->type, dst);
+        const to_fp16_sycl_t to_fp16_sycl = ggml_get_to_fp16_sycl(src1->type, src1);
         GGML_ASSERT(to_fp16_sycl != nullptr);
         to_fp16_sycl(src1_f16, src1_f16_alloc.get(), ne_src1, queue);
 # else
         const int64_t ne_src1 = ggml_nelements(src1);
         src1_f16_alloc.alloc(ne_src1);
-        const to_fp16_nc_sycl_t to_fp16_nc_sycl = ggml_get_to_fp16_nc_sycl(src1->type, dst);
+        const to_fp16_nc_sycl_t to_fp16_nc_sycl = ggml_get_to_fp16_nc_sycl(src1->type, src1);
         GGML_ASSERT(to_fp16_nc_sycl != nullptr);
         to_fp16_nc_sycl(src1_f16, src1_f16_alloc.get(), ne10, ne11, ne12, ne13, s11, s12, s13, queue);
 #endif

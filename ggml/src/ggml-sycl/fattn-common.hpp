@@ -1097,7 +1097,7 @@ void launch_fattn(
 
         K_f16.alloc(ggml_nelements(K));
         if (ggml_is_contiguously_allocated(K)) {
-            to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(K->type, dst);
+            to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(K->type, K);
             to_fp16(K_data, K_f16.ptr, ggml_nelements(K), main_stream);
 
             nb11 = nb11 * bs * sizeof(sycl::half) / ts;
@@ -1105,7 +1105,7 @@ void launch_fattn(
             nb13 = nb13 * bs * sizeof(sycl::half) / ts;
         } else {
             GGML_ASSERT(K->nb[0] == ts);
-            to_fp16_nc_sycl_t to_fp16 = ggml_get_to_fp16_nc_sycl(K->type, dst);
+            to_fp16_nc_sycl_t to_fp16 = ggml_get_to_fp16_nc_sycl(K->type, K);
             const int64_t s01 = nb11 / ts;
             const int64_t s02 = nb12 / ts;
             const int64_t s03 = nb13 / ts;
@@ -1130,7 +1130,7 @@ void launch_fattn(
 
             V_f16.alloc(ggml_nelements(V));
             if (ggml_is_contiguously_allocated(V)) {
-                to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(V->type, dst);
+                to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(V->type, V);
                 to_fp16(V_data, V_f16.ptr, ggml_nelements(V), main_stream);
                 V_data = (char *) V_f16.ptr;
 
@@ -1139,7 +1139,7 @@ void launch_fattn(
                 nb23 = nb23 * bs * sizeof(sycl::half) / ts;
             } else {
                 GGML_ASSERT(V->nb[0] == ts);
-                to_fp16_nc_sycl_t to_fp16 = ggml_get_to_fp16_nc_sycl(V->type, dst);
+                to_fp16_nc_sycl_t to_fp16 = ggml_get_to_fp16_nc_sycl(V->type, V);
                 const int64_t s01 = nb21 / ts;
                 const int64_t s02 = nb22 / ts;
                 const int64_t s03 = nb23 / ts;

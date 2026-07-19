@@ -1737,7 +1737,7 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
         scope_op_debug_print scope_dbg_print(__func__, "/to_fp16_sycl", dst, /*num_src=*/2,
                                              " : converting src1 to fp16");
         src1_dfloat = src1_dfloat_a.alloc(ne00);
-        const to_fp16_sycl_t to_fp16_sycl = ggml_get_to_fp16_sycl(src1->type, dst);
+        const to_fp16_sycl_t to_fp16_sycl = ggml_get_to_fp16_sycl(src1->type, src1);
         GGML_ASSERT(to_fp16_sycl != nullptr);
         to_fp16_sycl(src1_ddf_i, src1_dfloat, ne00, stream);
     }

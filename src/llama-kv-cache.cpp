@@ -20,7 +20,7 @@ static constexpr size_t Q8_KV_QUANTS_PER_BLOCK = 32;
 static constexpr size_t Q8_KV_BLOCK_BYTES = sizeof(ggml_fp16_t) + Q8_KV_QUANTS_PER_BLOCK;
 static constexpr size_t Q8_KV_QUANTS_FIRST_BYTES = Q8_KV_QUANTS_FIRST_BLOCKS * Q8_KV_BLOCK_BYTES;
 
-static void q8_kv_repack_groups(uint8_t * data, size_t size, bool to_quants_first) {
+void llama_kv_cache_q8_repack_groups(uint8_t * data, size_t size, bool to_quants_first) {
     GGML_ASSERT(size % Q8_KV_QUANTS_FIRST_BYTES == 0);
     for (size_t offset = 0; offset < size; offset += Q8_KV_QUANTS_FIRST_BYTES) {
         uint8_t canonical[Q8_KV_QUANTS_FIRST_BYTES];
@@ -52,7 +52,7 @@ static void q8_kv_write_canonical(
     for (size_t written = 0; written < size;) {
         const size_t chunk = std::min(buffer.size(), size - written);
         ggml_backend_tensor_get(tensor, buffer.data(), offset + written, chunk);
-        q8_kv_repack_groups(buffer.data(), chunk, false);
+        llama_kv_cache_q8_repack_groups(buffer.data(), chunk, false);
         io.write(buffer.data(), chunk);
         written += chunk;
     }
@@ -69,7 +69,7 @@ static void q8_kv_read_canonical(
     for (size_t read = 0; read < size;) {
         const size_t chunk = std::min(buffer.size(), size - read);
         io.read(buffer.data(), chunk);
-        q8_kv_repack_groups(buffer.data(), chunk, true);
+        llama_kv_cache_q8_repack_groups(buffer.data(), chunk, true);
         ggml_backend_tensor_set(tensor, buffer.data(), offset + read, chunk);
         read += chunk;
     }
@@ -506,6 +506,8 @@ llama_kv_cache::llama_kv_cache(
 
         const bool quants_first_layer =
             quants_first_requested &&
+            k != nullptr &&
+            v != nullptr &&
             strstr(dev_name, "SYCL") != nullptr &&
             layer_type_k == GGML_TYPE_Q8_0 &&
             layer_type_v == GGML_TYPE_Q8_0 &&

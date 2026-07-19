@@ -35,6 +35,12 @@ class ColdJitRunnerTests(unittest.TestCase):
         self.assertLess(summary["lower95"], summary["mean"])
         self.assertGreater(summary["upper95"], summary["mean"])
 
+    def test_summary_uses_student_t_through_thirty_degrees_of_freedom(self) -> None:
+        values = [float(value) for value in range(31)]
+        summary = COLD_JIT.summarize(values)
+        expected_ci95 = 2.042 * COLD_JIT.statistics.stdev(values) / len(values) ** 0.5
+        self.assertAlmostEqual(summary["ci95"], expected_ci95)
+
     def test_empty_fuser_exit_one_proves_idle(self) -> None:
         proc = subprocess.CompletedProcess(["fuser"], 1, "", "")
         with mock.patch.object(COLD_JIT.subprocess, "run", return_value=proc):

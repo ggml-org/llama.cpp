@@ -341,7 +341,11 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     // D in {128, 256}, additive mask (ne[2]==1). The math is validated
     // (docs/research/xmx_fa_*.cpp) and oracle-gated; off by default. D=512 is
     // excluded (staging tiles exceed the 64KB SLM budget).
-    const bool xmx_kv_ok = (K->type == GGML_TYPE_F16 || K->type == GGML_TYPE_Q8_0) && K->type == V->type;
+    const bool xmx_kv_ok =
+        (K->type == GGML_TYPE_F16 || K->type == GGML_TYPE_Q8_0) &&
+        K->type == V->type &&
+        !ggml_sycl_tensor_is_kv_q8_quants_first(K) &&
+        !ggml_sycl_tensor_is_kv_q8_quants_first(V);
     if (getenv("GGML_SYCL_FA_XMX") && xmx_features_ok && xmx_kv_ok && (Q->ne[0] == 128 || Q->ne[0] == 256)) {
         return BEST_FATTN_KERNEL_XMX;
     }

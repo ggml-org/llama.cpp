@@ -1754,6 +1754,13 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
         return;
     }
 
+    const bool metadata_only =
+        tensor->op == GGML_OP_RESHAPE || tensor->op == GGML_OP_VIEW ||
+        tensor->op == GGML_OP_PERMUTE || tensor->op == GGML_OP_TRANSPOSE;
+    if (!metadata_only && ggml_tensor_op_uses_kv_q8_quants_first(tensor)) {
+        GGML_ABORT("%s: CPU backend cannot consume fork-local quants-first q8_0 KV tensors", __func__);
+    }
+
     // extra_buffer op?
     if (ggml_cpu_extra_compute_forward(params, tensor)) {
         return;

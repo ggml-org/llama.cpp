@@ -680,22 +680,12 @@ static void convert_unary_sycl(const void * vx, dst_t * y, const int64_t k, dpct
 }
 
 
-static bool ggml_sycl_op_uses_q8_quants_first(const ggml_tensor * dst) {
-    for (int i = 0; i < GGML_MAX_SRC; ++i) {
-        const ggml_tensor * src = dst->src[i];
-        if (src != nullptr && src->type == GGML_TYPE_Q8_0 &&
-            ggml_sycl_tensor_is_kv_q8_quants_first(src)) {
-            return true;
-        }
-    }
-    return false;
-}
 
-to_fp16_sycl_t ggml_get_to_fp16_sycl(ggml_type type, ggml_tensor * dst) {
+to_fp16_sycl_t ggml_get_to_fp16_sycl(ggml_type type, const ggml_tensor * src) {
     switch (type) {
         case GGML_TYPE_Q4_0:
-            if (dst->src[0]->extra &&
-                ((ggml_tensor_extra_gpu*)dst->src[0]->extra)->optimized_feature.reorder) {
+            if (src->extra &&
+                ((ggml_tensor_extra_gpu *) src->extra)->optimized_feature.reorder) {
                 return dequantize_row_q4_0_sycl_reorder;
             } else {
                 return dequantize_block_sycl<QK4_0, QR4_0, dequantize_q4_0>;
@@ -707,10 +697,10 @@ to_fp16_sycl_t ggml_get_to_fp16_sycl(ggml_type type, ggml_tensor * dst) {
         case GGML_TYPE_Q5_1:
             return dequantize_block_sycl<QK5_1, QR5_1, dequantize_q5_1>;
         case GGML_TYPE_Q8_0:
-            if (ggml_sycl_op_uses_q8_quants_first(dst)) {
+            if (ggml_sycl_tensor_is_kv_q8_quants_first(src)) {
                 return dequantize_row_q8_0_quants_first_sycl;
-            } else if (dst->src[0]->extra &&
-                       ((ggml_tensor_extra_gpu *) dst->src[0]->extra)->optimized_feature.reorder) {
+            } else if (src->extra &&
+                       ((ggml_tensor_extra_gpu *) src->extra)->optimized_feature.reorder) {
                 return dequantize_row_q8_0_sycl_reorder;
             } else {
                 return dequantize_block_sycl<QK8_0, QR8_0, dequantize_q8_0>;
@@ -718,25 +708,25 @@ to_fp16_sycl_t ggml_get_to_fp16_sycl(ggml_type type, ggml_tensor * dst) {
         case GGML_TYPE_Q2_K:
             return dequantize_row_q2_K_sycl;
         case GGML_TYPE_Q3_K:
-            if (dst->src[0]->extra && ((ggml_tensor_extra_gpu *) dst->src[0]->extra)->optimized_feature.reorder) {
+            if (src->extra && ((ggml_tensor_extra_gpu *) src->extra)->optimized_feature.reorder) {
                 return dequantize_row_q3_K_sycl_reorder;
             } else {
                 return dequantize_row_q3_K_sycl;
             }
         case GGML_TYPE_Q4_K:
-            if (dst->src[0]->extra && ((ggml_tensor_extra_gpu *) dst->src[0]->extra)->optimized_feature.reorder) {
+            if (src->extra && ((ggml_tensor_extra_gpu *) src->extra)->optimized_feature.reorder) {
                 return dequantize_row_q4_K_sycl_reorder;
             } else {
                 return dequantize_row_q4_K_sycl;
             }
         case GGML_TYPE_Q5_K:
-            if (dst->src[0]->extra && ((ggml_tensor_extra_gpu *) dst->src[0]->extra)->optimized_feature.reorder) {
+            if (src->extra && ((ggml_tensor_extra_gpu *) src->extra)->optimized_feature.reorder) {
                 return dequantize_row_q5_K_sycl_reorder;
             } else {
                 return dequantize_row_q5_K_sycl;
             }
         case GGML_TYPE_Q6_K:
-            if (dst->src[0]->extra && ((ggml_tensor_extra_gpu *) dst->src[0]->extra)->optimized_feature.reorder) {
+            if (src->extra && ((ggml_tensor_extra_gpu *) src->extra)->optimized_feature.reorder) {
                 return dequantize_row_q6_K_sycl_reorder;
             } else {
                 return dequantize_row_q6_K_sycl;
@@ -910,8 +900,8 @@ to_fp16_nc_sycl_t ggml_get_to_fp16_nc_sycl(ggml_type type) {
     }
 }
 
-to_fp16_nc_sycl_t ggml_get_to_fp16_nc_sycl(ggml_type type, ggml_tensor * dst) {
-    if (type == GGML_TYPE_Q8_0 && ggml_sycl_op_uses_q8_quants_first(dst)) {
+to_fp16_nc_sycl_t ggml_get_to_fp16_nc_sycl(ggml_type type, const ggml_tensor * src) {
+    if (type == GGML_TYPE_Q8_0 && ggml_sycl_tensor_is_kv_q8_quants_first(src)) {
         return dequantize_row_q8_0_quants_first_nc_sycl;
     }
     return ggml_get_to_fp16_nc_sycl(type);

@@ -20,7 +20,7 @@ using to_t_sycl_t = void (*)(const void * __restrict__ x, T * __restrict__ y, in
 typedef to_t_sycl_t<float>      to_fp32_sycl_t;
 typedef to_t_sycl_t<sycl::half> to_fp16_sycl_t;
 
-to_fp16_sycl_t ggml_get_to_fp16_sycl(ggml_type type, ggml_tensor * dst);
+to_fp16_sycl_t ggml_get_to_fp16_sycl(ggml_type type, const ggml_tensor * src);
 to_fp32_sycl_t ggml_get_to_fp32_sycl(ggml_type type, ggml_tensor * dst);
 
 #ifdef GGML_SYCL_HAS_BF16
@@ -35,7 +35,7 @@ using to_t_nc_sycl_t = void (*)(const void * x, T * y, int64_t ne00, int64_t ne0
 
 typedef to_t_nc_sycl_t<sycl::half> to_fp16_nc_sycl_t;
 to_fp16_nc_sycl_t ggml_get_to_fp16_nc_sycl(ggml_type type);
-to_fp16_nc_sycl_t ggml_get_to_fp16_nc_sycl(ggml_type type, ggml_tensor * dst);
+to_fp16_nc_sycl_t ggml_get_to_fp16_nc_sycl(ggml_type type, const ggml_tensor * src);
 
 template<typename dst_t, typename src_t>
  inline dst_t ggml_sycl_cast(src_t x) {

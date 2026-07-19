@@ -24,6 +24,10 @@ struct llama_context;
 // must select from its own inputs, never inherit the first construction's.
 int llama_kv_cache_adaptive_mode(const char * env_val, ggml_type type_v, uint32_t n_layer);
 
+// Converts complete 4-block q8_0 groups between canonical block_q8_0 bytes
+// and the fork-local quants-first KV layout used only in SYCL device memory.
+void llama_kv_cache_q8_repack_groups(uint8_t * data, size_t size, bool to_quants_first);
+
 class llama_kv_cache : public llama_memory_i {
 public:
     struct stream_copy_info {
