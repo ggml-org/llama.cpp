@@ -62,6 +62,12 @@ export const MCP_PARTIAL_REDACT_HEADERS = new Map<string, number>([
 	['mcp-session-id', MCP_SESSION_ID_VISIBLE_CHARS]
 ]);
 
+/** Bearer scheme prefix used for Authorization headers (RFC 6750) */
+export const BEARER_PREFIX = 'Bearer ';
+
+/** Canonical casing for the Authorization header (RFC 7235) */
+export const AUTHORIZATION_HEADER = 'Authorization';
+
 /** Header names whose values should be redacted in diagnostic logs */
 export const REDACTED_HEADERS = new Set([
 	'authorization',

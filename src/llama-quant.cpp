@@ -244,6 +244,9 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     // do not quantize expert gating tensors
     quantize &= name.find("ffn_gate_inp.weight") == std::string::npos;
 
+    // do not quantize the i32 token-id -> expert-id routing table (DeepSeek-V4)
+    quantize &= name.find("ffn_gate_tid2eid.weight") == std::string::npos;
+
     // these are very small (e.g. 4x4)
     quantize &= name.find("altup")  == std::string::npos;
     quantize &= name.find("laurel") == std::string::npos;
@@ -560,7 +563,7 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs,
     ggml_type new_type = default_type;
 
     // get more optimal quantization type based on the tensor shape, layer, etc.
-    if (!params->pure && ggml_is_quantized(default_type)) {
+    if (ggml_is_quantized(default_type)) {
         // if the user provided tensor types, use those
         bool manual = false;
         if (!qs.tensor_type_patterns.empty()) {
@@ -578,8 +581,8 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs,
             }
         }
 
-        // otherwise, use the standard logic
-        if (!manual) { new_type = llama_tensor_get_type_impl(qs, new_type, tensor, params->ftype, tm.category); }
+        // otherwise, use the standard logic for choosing the quantization type based on the selected mixture
+        if (!manual && !params->pure) { new_type = llama_tensor_get_type_impl(qs, new_type, tensor, params->ftype, tm.category); }
 
         // if incompatible tensor shape, fallback to a compatible type
         new_type = tensor_type_fallback(qs, tensor, new_type);
