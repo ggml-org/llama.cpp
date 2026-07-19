@@ -78,6 +78,36 @@ See:
 
 - #22105
 
+### Multi Token Prediction (draft-mtp)
+
+This draft type uses MTP (Multi Token Prediction) heads from the main model itself, requiring no additional draft model. During inference, the main model predicts multiple future tokens in a single forward pass using dedicated MTP heads — these predictions are then verified by another single forward pass of the main model. This approach is most beneficial on hardware where the draft and verify passes do not significantly increase per-token latency.
+
+#### Jetson AGX Xavier (Volta) Benchmark
+
+Tested on an NVIDIA Jetson AGX Xavier (Volta 512-core, ~135 GB/s unified memory, 32 GB shared RAM, 30W TDP) using a Q3_K_M quantized 35B MoE model with built-in MTP heads:
+
+| Configuration | Throughput | MTP Accept Rate | Notes |
+|---|---|---|---|
+| No MTP, all layers on GPU (no `--cpu-moe`) | 15.66 t/s | — | Baseline |
+| `--spec-type draft-mtp --speculative-max 2 --speculative-min 2` | **23.14 t/s** (+48%) | **97.7%** | Optimal on Volta |
+| `--speculative-max 3` (default) | ~18 t/s | ~75% | Lower acceptance costs speed |
+| With `--cpu-moe` (MoE on CPU) | ~6 t/s | — | Drastically slower |
+
+**Key findings for integrated GPUs:**
+
+- **Do not use `--cpu-moe`** on iGPU/UMA systems. On Xavier, moving MoE experts to system memory forces their computation to the CPU, which is ~20× slower than integrated GPU compute (6 vs 23 t/s).
+- **`--speculative-max 2`** is the optimal draft size for embedded GPUs. The default of 3 produces more rejected drafts and wastes compute.
+- **Keep all layers on GPU**: `--gpu-layers all` (or `auto`) and omit `--cpu-moe`. For large MoE models that don't fit entirely, `--fit` is safer than manual `--cpu-moe` assignment.
+- **97.7% acceptance rate** indicates that MTP draft quality is excellent even on bandwidth-limited embedded GPUs — the bottleneck is draft generation cost per spec token, not rejection rate.
+
+Example startup for an integrated GPU with an MTP-capable model:
+```bash
+llama-server \
+    -m model-with-mtp-heads.gguf \
+    --spec-type draft-mtp --speculative-max 2 --speculative-min 2 \
+    --gpu-layers all --no-cpu-moe
+```
+
 ### n-gram Cache (`ngram-cache`)
 
 An n-gram is a sequence of n tokens. The n-gram cache implementation maintains statistics about short n-gram sequences.
