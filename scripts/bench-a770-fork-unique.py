@@ -685,8 +685,10 @@ def run_product_cell(
     candidate_bin_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Run one paired product cell and retain both pp512 and tg128."""
-    if repetitions < 2:
-        raise ValueError("repetitions must be >= 2 (sample 0 is always discarded)")
+    if repetitions < 3:
+        raise ValueError(
+            "repetitions must be >= 3 (sample 0 is always discarded, need at least 2 for CI)"
+        )
     samples_dir.mkdir(parents=True, exist_ok=True)
     candidate_bin_dir = candidate_bin_dir or bin_dir
     has_candidate = candidate_env is not None

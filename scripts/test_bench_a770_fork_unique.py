@@ -146,6 +146,21 @@ class ProductCampaignTests(unittest.TestCase):
 
 
 
+    def test_run_product_cell_requires_two_retained_repetitions(self) -> None:
+        with self.assertRaisesRegex(ValueError, "repetitions must be >= 3"):
+            HARNESS.run_product_cell(
+                bin_dir=Path("bin"),
+                model_path="model.gguf",
+                kv=("q8_0", "q8_0"),
+                depth=0,
+                baseline_env={},
+                candidate_env=None,
+                repetitions=2,
+                timeout_s=5,
+                samples_dir=Path("samples"),
+                cell_idx=1,
+            )
+
     def test_discards_sample_zero_and_pairs_baseline_candidate(self) -> None:
         calls = {"baseline": 0, "candidate": 0}
 
@@ -314,7 +329,7 @@ class ProductCampaignTests(unittest.TestCase):
                 depth=0,
                 baseline_env={"TEST_ARM": "baseline"},
                 candidate_env={"TEST_ARM": "candidate"},
-                repetitions=2,
+                repetitions=3,
                 timeout_s=5,
                 samples_dir=samples_dir,
                 cell_idx=1,
