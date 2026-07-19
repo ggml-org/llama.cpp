@@ -761,7 +761,7 @@ extern "C" {
               llama_seq_id seq_id,
                  llama_pos p0,
                  llama_pos p1,
-                       int d);
+                       int32_t d);
 
     // Returns the smallest position present in the memory for the specified sequence
     // This is typically non-zero only for SWA caches
