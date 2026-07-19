@@ -59,6 +59,33 @@ export GGML_HIP_GRAPHS=1
 RCCL was confirmed active by the absence of the internal all-reduce and
 meta-backend butterfly fallback warnings.
 
+## Non-blocking GPU jobs
+
+Long builds, server loads, profiler runs, and benchmarks should be launched
+through the tracked job runner instead of a foreground SSH command:
+
+```bash
+job_id=$(./scripts/rdna2-job.sh start tg128 --timeout 1800 -- \
+  ./scripts/run-my-benchmark.sh)
+echo "$job_id"
+```
+
+The launch returns immediately. Inspect it later with short commands:
+
+```bash
+./scripts/rdna2-job.sh status "$job_id"
+./scripts/rdna2-job.sh logs "$job_id" 80
+./scripts/rdna2-job.sh result "$job_id"
+./scripts/rdna2-job.sh stop "$job_id"
+```
+
+Jobs live under `~/llama-jobs/<job-id>/`, are serialized with a GPU `flock`,
+run in their own process group, and are bounded by `timeout` plus a forced-kill
+grace period. The runner records status, PID/PGID, command, logs, exit code,
+and timestamps. A ROCm illegal-memory signature changes the terminal state to
+`reset-required`. Benchmark wrappers can write `summary.json`, `result.json`,
+or `result.jsonl` through the `LLAMA_JOB_DIR` environment variable.
+
 ## Prompt-processing scaling
 
 These tests used `llama-server`, `--parallel 1`, and one 262k context slot.
