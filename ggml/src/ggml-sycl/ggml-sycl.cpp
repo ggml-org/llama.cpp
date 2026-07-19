@@ -5072,6 +5072,35 @@ static bool check_graph_compatibility(ggml_cgraph * cgraph) {
     }
     return true;
 }
+static void ggml_sycl_graph_prepare_fattn_buffers(
+        ggml_backend_sycl_context * sycl_ctx, const ggml_cgraph * cgraph) {
+    size_t k_f16_elems = 0;
+    size_t v_f16_elems = 0;
+    for (int i = 0; i < cgraph->n_nodes; ++i) {
+        const ggml_tensor * node = cgraph->nodes[i];
+        if (node->op != GGML_OP_FLASH_ATTN_EXT) {
+            continue;
+        }
+
+        const ggml_tensor * k = node->src[1];
+        const ggml_tensor * v = node->src[2];
+        if (k->type != GGML_TYPE_F16) {
+            k_f16_elems = std::max(k_f16_elems, (size_t) ggml_nelements(k));
+        }
+        if (v->type != GGML_TYPE_F16) {
+            v_f16_elems = std::max(v_f16_elems, (size_t) ggml_nelements(v));
+        }
+    }
+
+    ggml_sycl_fattn_kv_buffers & buffers = sycl_ctx->fattn_buffers();
+    if (k_f16_elems > 0) {
+        buffers.K.ensure_half(k_f16_elems);
+    }
+    if (v_f16_elems > 0) {
+        buffers.V.ensure_half(v_f16_elems);
+    }
+}
+
 #endif
 
 static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_cgraph * cgraph) {
@@ -5091,6 +5120,10 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
             }
             return status;
         }
+
+        // Scratch allocation may wait on the queue. Grow it before recording;
+        // waiting while a queue is being captured is forbidden by oneAPI.
+        ggml_sycl_graph_prepare_fattn_buffers(sycl_ctx, cgraph);
 
         sycl_ex::command_graph model_sycl_graph(*(sycl_ctx->stream()), {sycl_ex::property::graph::assume_buffer_outlives_graph{}});
 
