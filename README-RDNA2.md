@@ -163,6 +163,47 @@ A separate deterministic 122B comparison measured:
 RCCL improved 122B decode by approximately **9.6%**. An 8.8k prompt improved
 from approximately 615 t/s to 750 t/s in the same comparison.
 
+## HIP decode profile and partial TOP_K optimization
+
+A `rocprofv3` kernel profile of a 64-token 35B MTP request identified the
+current decode priorities:
+
+| Kernel family | Approximate kernel time |
+|---|---:|
+| RCCL all-reduce | **46.9%** |
+| Q4_K output/projection matvecs | **14.7%** |
+| Quantized model and MoE matvecs | remaining majority |
+| Sampling sort/selection | about 2% before optimization |
+| Flash attention | below 1% for short-context decode |
+
+The model performs exactly **80 all-reduces per raw decode step**: two 2,048
+float (8 KiB) reductions for each of 40 layers. This makes small-collective
+latency the largest remaining tensor-parallel optimization target.
+
+Commit `b60551777` replaces HIP's full-vocabulary sort for `TOP_K` values up to
+256 with `rocprim::topk_pairs`, followed by a compact 256-element block radix
+sort. The feature is detected with `__has_include`; older ROCm releases without
+`device_topk.hpp` retain the existing argsort fallback.
+
+A fixed-seed 35B server A/B test measured:
+
+| TOP_K implementation | Average | Median |
+|---|---:|---:|
+| Full-vocabulary argsort | 86.04 t/s | 86.51 t/s |
+| rocPRIM partial TOP_K | **86.68 t/s** | **87.04 t/s** |
+
+The end-to-end gain is approximately **0.6-0.8%**, consistent with the sampler's
+profile share. Draft acceptance was identical. A separate 256-token greedy test
+produced byte-identical output, and focused 248,320-vocabulary tests pass for
+`k=20` and `k=256`.
+
+Experiments with a custom four-GPU direct-P2P collective were not retained:
+peer payload reads work, but reliable cross-root synchronization on these
+RDNA2 cards cost more than RCCL. Forced RCCL Ring/Tree and LL/Simple protocols
+also did not improve over RCCL's automatic selection. Future collective work
+should therefore target fused/persistent small-message collectives or graph
+architecture that removes/reduces the 80 host-submitted boundaries.
+
 ## Notes and caveats
 
 - Results are specific to four V620 cards, this PCIe topology, ROCm version,

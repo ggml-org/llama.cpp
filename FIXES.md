@@ -38,6 +38,9 @@ HIP/meta backend to run the sampler safely:
   `MEAN`, and `CUMSUM` paths.
 - Remove the 1024-column HIP `TOP_K` limit when hipCUB is available. This is
   required by Qwen's 248,320-token vocabulary.
+- When rocPRIM `device_topk.hpp` is available, select only the requested
+  candidates and sort that compact set instead of sorting the entire
+  vocabulary. Older ROCm releases retain the full argsort fallback.
 - Mirror the output projection and output bias across tensor-split devices.
   Each GPU therefore has complete logits and can execute sampling locally,
   instead of trying to sample a vocabulary shard.
@@ -231,6 +234,7 @@ An 8.8k-token prompt improved from approximately **615 t/s** with butterfly to
 ## Relevant commits
 
 ```text
+b60551777 hip: use rocPRIM partial top-k when available
 0f6b98c2c build: add reproducible RDNA2 ROCm RCCL helper
 05c471731 hip: enable tensor-split backend sampling with hipCUB
 edc691711 local fix: skip recurrent shrink for prompt cache when n_parallel > 1
