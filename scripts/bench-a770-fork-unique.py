@@ -457,6 +457,8 @@ def _parse_env_list(items: list[str] | None) -> dict[str, str]:
         k = k.strip()
         if not k:
             raise ValueError(f"--env has empty name in {raw!r}")
+        if k in out:
+            raise ValueError(f"--env has duplicate name {k!r}")
         out[k] = v
     return out
 

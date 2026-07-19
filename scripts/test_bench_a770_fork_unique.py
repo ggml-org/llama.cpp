@@ -107,6 +107,12 @@ class ProductCampaignTests(unittest.TestCase):
             else:
                 self.assertNotIn(name, env)
 
+    def test_environment_lists_reject_duplicate_names(self) -> None:
+        with self.assertRaisesRegex(ValueError, "duplicate name 'TEST_ARM'"):
+            HARNESS._parse_env_list(
+                ["TEST_ARM=baseline", "TEST_ARM=candidate"]
+            )
+
     def test_product_input_lists_reject_empty_incomplete_and_negative_entries(self) -> None:
         for value in ("", "0,", "-1"):
             with self.subTest(depths=value), self.assertRaises(ValueError):

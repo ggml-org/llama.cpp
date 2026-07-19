@@ -224,7 +224,7 @@ class GeometrySweepTests(unittest.TestCase):
         self.assertFalse(SWEEP._cell_valid(2, 32))  # 2*32*32 = 2048
 
     def test_cells_excludes_invalid_configurations(self) -> None:
-        """The exported CELLS tuple contains ONLY work-groups ≤ 1024."""
+        """The exported CELLS tuple contains ONLY work-groups <= 1024."""
         for y, sg in SWEEP.CELLS:
             size = y * sg * 32
             self.assertLessEqual(
