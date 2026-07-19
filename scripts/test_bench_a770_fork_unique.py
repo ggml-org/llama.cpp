@@ -87,6 +87,26 @@ class ProductCampaignTests(unittest.TestCase):
         with mock.patch.object(sys, "argv", argv), self.assertRaises(SystemExit) as raised:
             HARNESS.main()
         self.assertEqual(raised.exception.code, 2)
+
+    def test_effective_env_clears_ambient_behavior_toggles(self) -> None:
+        controlled = (
+            "GGML_SYCL_FA_XMX",
+            "GGML_SYCL_FA_FORCE_VEC_STANDARD",
+            "GGML_SYCL_FA_Q8_GQA_TILE",
+            "GGML_SYCL_Q8_KV_QUANTS_FIRST",
+            "LLAMA_ENABLE_INNERQ",
+            "TURBO_LAYER_ADAPTIVE",
+            "TURBO_AUTO_ASYMMETRIC",
+        )
+        with mock.patch.dict(HARNESS.os.environ, {name: "1" for name in controlled}):
+            env = HARNESS._effective_env({"GGML_SYCL_FA_Q8_GQA_TILE": "1"})
+
+        for name in controlled:
+            if name == "GGML_SYCL_FA_Q8_GQA_TILE":
+                self.assertEqual(env[name], "1")
+            else:
+                self.assertNotIn(name, env)
+
     def test_product_input_lists_reject_empty_incomplete_and_negative_entries(self) -> None:
         for value in ("", "0,", "-1"):
             with self.subTest(depths=value), self.assertRaises(ValueError):

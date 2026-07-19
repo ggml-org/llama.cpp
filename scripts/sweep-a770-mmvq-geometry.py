@@ -353,7 +353,7 @@ def parse_models(raw_models: list[str]) -> dict[str, Path]:
         if not name:
             raise SweepError(f"--model name is empty: {value}")
         if path.is_file() and path.stat().st_size > 0 and name in models:
-            raise SweepError(f"duplicate model label '{name}' — refusing to overwrite")
+            raise SweepError(f"duplicate model label '{name}' - refusing to overwrite")
         if not path.is_file() or path.stat().st_size == 0:
             raise SweepError(f"invalid benchmark model: {value}")
         models[name] = path
@@ -404,7 +404,7 @@ def benchmark_matrix(
         if not _has_matching_correctness(manifest, y, sg, baseline_manifest_id):
             raise SweepError(
                 f"no valid correctness record for {baseline_key} "
-                f"(identity={baseline_manifest_id}) — benchmark cannot proceed"
+                f"(identity={baseline_manifest_id}) - benchmark cannot proceed"
             )
 
     baseline = (

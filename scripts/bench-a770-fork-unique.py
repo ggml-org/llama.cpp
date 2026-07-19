@@ -63,7 +63,15 @@ DEFAULT_MODELS = [
 def _effective_env(env_extra: dict[str, str]) -> dict[str, str]:
     env = os.environ.copy()
     env.setdefault("ONEAPI_DEVICE_SELECTOR", "level_zero:0")
-    for knob in ("GGML_SYCL_FA_XMX", "TURBO_LAYER_ADAPTIVE", "TURBO_AUTO_ASYMMETRIC"):
+    for knob in (
+        "GGML_SYCL_FA_XMX",
+        "GGML_SYCL_FA_FORCE_VEC_STANDARD",
+        "GGML_SYCL_FA_Q8_GQA_TILE",
+        "GGML_SYCL_Q8_KV_QUANTS_FIRST",
+        "LLAMA_ENABLE_INNERQ",
+        "TURBO_LAYER_ADAPTIVE",
+        "TURBO_AUTO_ASYMMETRIC",
+    ):
         env.pop(knob, None)
     env.update(env_extra)
     return env
