@@ -238,20 +238,9 @@ static __global__ void dequantize_block_iq4_xs(const void * __restrict__ vx, dst
 
 template<typename dst_t>
 static __global__ void dequantize_block_mxfp4(const void * __restrict__ vx, dst_t * __restrict__ yy) {
+    const int64_t i = blockIdx.x;
 
-    const int64_t i   = blockIdx.x;
-    const block_mxfp4 * x = (const block_mxfp4 *) vx + i*(QK_K/QK_MXFP4);
-
-    const int64_t tid = threadIdx.x;
-    const int64_t il = tid/8; // 0...3
-    const int64_t ib = tid%8; // 0...7
-    dst_t * y = yy + i*QK_K + 32*ib + 4*il;
-    const uint8_t  * q4 = x[ib].qs + 4*il;
-    const float d = ggml_cuda_e8m0_to_fp32(x[ib].e);
-    for (int j = 0; j < 4; ++j) {
-        y[j+ 0] = ggml_cuda_cast<dst_t>(d * kvalues_mxfp4[q4[j] & 0xf]*0.5f);
-        y[j+16] = ggml_cuda_cast<dst_t>(d * kvalues_mxfp4[q4[j] >>  4]*0.5f);
-    }
+    dequantize_mxfp4(vx, i, yy + i*QK_K, threadIdx.x);
 }
 
 template <int qk, int qr, dequantize_kernel_t dequantize_kernel, typename dst_t>
