@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { AlertTriangle, Server } from '@lucide/svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
@@ -57,7 +58,7 @@
 
 	{#if showActions && error}
 		<Button variant="outline" size="sm" class="text-destructive">
-			<AlertTriangle class="h-4 w-4" />
+			<AlertTriangle class={ICON_CLASS_DEFAULT} />
 
 			{error}
 		</Button>

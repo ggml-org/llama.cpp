@@ -1,6 +1,7 @@
 <script lang="ts">
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { Settings } from '@lucide/svelte';
-	import type { SettingsSection, SettingsSectionTitle } from '$lib/constants';
+	import type { SettingsSection, SettingsSectionTitle } from '$lib/types';
 
 	interface Props {
 		sections: SettingsSection[];
@@ -30,7 +31,7 @@
 						: 'text-muted-foreground'}"
 					href={getHref(section)}
 				>
-					<section.icon class="h-4 w-4" />
+					<section.icon class={ICON_CLASS_DEFAULT} />
 					<span class="ml-2">{section.title}</span>
 				</a>
 			{:else}
@@ -42,7 +43,7 @@
 						: 'text-muted-foreground'}"
 					onclick={() => onSectionChange?.(section.title)}
 				>
-					<section.icon class="h-4 w-4" />
+					<section.icon class={ICON_CLASS_DEFAULT} />
 					<span class="ml-2">{section.title}</span>
 				</button>
 			{/if}

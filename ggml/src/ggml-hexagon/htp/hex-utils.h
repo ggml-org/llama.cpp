@@ -30,21 +30,26 @@ static inline void hex_l2fetch(const void * p, uint32_t width, uint32_t stride, 
     Q6_l2fetch_AP((void *) p, control);
 }
 
-#define HEX_L2_LINE_SIZE  64
-#define HEX_L2_FLUSH_SIZE (128 * 1024)
+static inline void hex_l2fetch_block(const void * addr, size_t size) {
+    if (size == 0) return;
+    const uint32_t width = 16384; // 16KB rows
+    const uint32_t height = (size + width - 1) / width;
+    hex_l2fetch(addr, width, width, height);
+}
+
+#define HEX_L2_LINE_SIZE           128
+#define HEX_L2_BLOCK_SIZE          (HEX_L2_LINE_SIZE * 4) // flush granularity (lines per loop iteration)
+#define HEX_L2_FLUSH_WQ_THRESHOLD  (4 * 1024)
+#define HEX_L2_FLUSH_ALL_THRESHOLD (4 * 1024 * 1024)
 
 static inline void hex_l2flush(void * addr, size_t size) {
-    if (size > HEX_L2_FLUSH_SIZE) {
-        qurt_mem_cache_clean((qurt_addr_t) 0, 0, QURT_MEM_CACHE_FLUSH_INVALIDATE_ALL, QURT_MEM_DCACHE);
-    } else {
-        const uint32_t s = (uint32_t) addr;
-        const uint32_t e = s + size;
-        for (uint32_t i = s; i < e; i += HEX_L2_LINE_SIZE * 4) {
-            Q6_dccleaninva_A((void *) i + HEX_L2_LINE_SIZE * 0);
-            Q6_dccleaninva_A((void *) i + HEX_L2_LINE_SIZE * 1);
-            Q6_dccleaninva_A((void *) i + HEX_L2_LINE_SIZE * 2);
-            Q6_dccleaninva_A((void *) i + HEX_L2_LINE_SIZE * 3);
-        }
+    const uint32_t s = ((uint32_t) addr) & ~(HEX_L2_LINE_SIZE - 1);
+    const uint32_t e = (((uint32_t) addr) + size + HEX_L2_LINE_SIZE - 1) & ~(HEX_L2_LINE_SIZE - 1);
+    for (uint32_t i = s; i < e; i += HEX_L2_BLOCK_SIZE) {
+        Q6_dccleaninva_A((void *) i + HEX_L2_LINE_SIZE * 0);
+        Q6_dccleaninva_A((void *) i + HEX_L2_LINE_SIZE * 1);
+        Q6_dccleaninva_A((void *) i + HEX_L2_LINE_SIZE * 2);
+        Q6_dccleaninva_A((void *) i + HEX_L2_LINE_SIZE * 3);
     }
 }
 
