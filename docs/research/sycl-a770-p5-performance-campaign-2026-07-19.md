@@ -12,7 +12,7 @@ The principal results are:
   conventional baseline-relative cold-start latency by 19.94% on Mistral and
   17.01% on Llama-3.1 without a warm throughput or correctness regression.
 - **Retained opt-in experiment:** quants-first q8_0 KV rows. It improved tg128
-  by 8.01–20.62% from depth 4096 through 16384 while preserving canonical
+  by 8.01-20.62% from depth 4096 through 16384 while preserving canonical
   host/session bytes and standard correctness. Canonical q8_0 remains the
   default.
 - **Retained diagnostics:** standard VEC forcing and q8_0 GQA TILE routing.
@@ -32,7 +32,7 @@ The principal results are:
 No TurboQuant/Turbo FA, XMX FA, asymmetric KV, sparse-V, TriAttention, QJL, or
 SLM-LUT work was reopened by this campaign.
 
-“Complete campaign” below refers only to the enumerated P5.1-P5.14 queue. It
+"Complete campaign" below refers only to the enumerated P5.1-P5.14 queue. It
 does not mean that every candidate from the preceding research survey was
 executed: GQA KV-read amortization and KV prefetch were not scheduled as
 standalone measurement tasks and remain unmeasured.
@@ -81,13 +81,13 @@ Terminology:
 - `pp512`: prompt processing for 512 tokens, tokens/s.
 - `tg128`: generation of 128 tokens, tokens/s.
 - `dN`: KV depth N.
-- “promoted” means retained in the branch. It does not necessarily mean
+- "promoted" means retained in the branch. It does not necessarily mean
   enabled by default.
-- “killed” means the measured gate rejected the hypothesis.
+- "killed" means the measured gate rejected the hypothesis.
 
 ## Complete experiment matrix
 
-### P5.1 — effective oneDNN truth reporting
+### P5.1 - effective oneDNN truth reporting
 
 **Change tested:** replace a preprocessor presence check with an effective-value
 check for `GGML_SYCL_DNNL`.
@@ -101,7 +101,7 @@ disabled. The fixed Release-JIT build prints literal `GGML_SYCL_DNNL: no`.
 Mistral and Llama q8_0/q8_0 one-token smokes succeeded and dmesg gained no GPU
 fault. This was a reporting fix; oneDNN was not enabled here.
 
-### P5.2 — paired campaign hardening
+### P5.2 - paired campaign hardening
 
 **Change tested:** extend `scripts/bench-a770-fork-unique.py` with separate
 repeatable baseline/candidate environments, exact environment assertions,
@@ -115,7 +115,7 @@ six launches per arm, sample-zero discard, alternating order, paired raw
 samples, exact env maps, q8_0 requested-KV bandwidth, and an empty GPU-fault
 delta. Invalid cells fail closed; sole-tenancy failure remains exit 70.
 
-### P5.3 — spill inventory and global large-GRF
+### P5.3 - spill inventory and global large-GRF
 
 **Changes tested:**
 
@@ -132,7 +132,7 @@ Observed kernels:
 |---|---:|---:|---|
 | q8_0 VEC D=128 | 16 | 128 | zero spill; zero private bytes |
 | Q4_K reorder-MMVQ | 16 | 128 | zero spill |
-| selected f16 GQA TILE D=128 | 32 | 128 | 7,744–12,480 spill bytes |
+| selected f16 GQA TILE D=128 | 32 | 128 | 7,744-12,480 spill bytes |
 
 The f16-VEC assumption was false: Mistral 4:1 GQA selected TILE. Because a hot
 TILE family spilled, the global 256-GRF option was tested across the full
@@ -142,7 +142,7 @@ ceiling to 512 while RMS_NORM requested more. The focused correctness harness
 alone passed, demonstrating why the full-model gate was binding. No optional
 large-GRF configuration was retained.
 
-### P5.4 — same-path f16/q8_0 VEC bandwidth
+### P5.4 - same-path f16/q8_0 VEC bandwidth
 
 **Change tested:** default-off `GGML_SYCL_FA_FORCE_VEC_STANDARD=1`, forcing
 compatible standard f16/f16 and q8_0/q8_0 D=128 decode through VEC.
@@ -161,7 +161,7 @@ The bandwidth ratio was below the 0.77 kill threshold, so the q8 layout
 hypothesis remained live for P5.11. The q8 dot path assembles one 4-byte int
 from two 2-byte-aligned `uint16_t` reads; it is not a single 2-byte load.
 
-### P5.5 — existing TILE route for q8_0 GQA
+### P5.5 - existing TILE route for q8_0 GQA
 
 **Change tested:** default-off `GGML_SYCL_FA_Q8_GQA_TILE=1`, routing only
 q8_0/q8_0 D=128 single-token GQA decode to the existing TILE implementation.
@@ -183,7 +183,7 @@ every possible tested cutover retained the depth-0 regression below the -2%
 shallow guard, so no token-count threshold was encoded and VEC remains the
 default.
 
-### P5.6 — SYCL graphs and Level Zero submission
+### P5.6 - SYCL graphs and Level Zero submission
 
 **Changes tested:**
 
@@ -206,7 +206,7 @@ All five paired arms were valid with empty GPU-fault deltas. `ltrace` confirmed
 that the Level Zero adapter read each requested value. The A770 exposed only
 `ext_oneapi_limited_graph`, not full graph argument-update support.
 
-### P5.7 — reorder/MMVQ versus DMMV routing
+### P5.7 - reorder/MMVQ versus DMMV routing
 
 **Change tested:**
 `GGML_SYCL_DISABLE_OPT={0,1} x GGML_SYCL_PRIORITIZE_DMMV={0,1}` on dense
@@ -224,20 +224,20 @@ default dense path used reorder+MMVQ, the prioritized-DMMV arm emitted
 `dequantize_mul_mat_vec_*`, and Qwen's Q3_K MoE stayed on fused MMVQ-MoE in
 both cases. Six campaigns were valid and had no GPU-fault delta.
 
-### P5.8 — MMVQ launch geometry
+### P5.8 - MMVQ launch geometry
 
 **Change tested:** all twelve compile-time combinations
 `GGML_SYCL_MMV_Y={1,2,4}` x
 `GGML_SYCL_MMVQ_NUM_SUBGROUPS={4,8,16,32}` across all seven live subgroup
 sites.
 
-**Result:** **R6 killed; default 1×16 retained**.
+**Result:** **R6 killed; default 1x16 retained**.
 
 Twelve isolated Release-JIT builds had distinct SYCL library hashes and all
 passed correctness with `0 GATE-FAIL`. Twenty-four model campaigns produced
 288 launches with valid pairing and no new GPU fault. No non-default geometry
 reached +3% tg128 with a positive paired lower bound on both Mistral and
-Qwen3-Coder. The best cross-model alternative, 1×4, bottomed out at -0.0148%
+Qwen3-Coder. The best cross-model alternative, 1x4, bottomed out at -0.0148%
 median and -0.4847% lower 95%. The guarded parameters remain useful for
 measurement, but no architecture lookup or runtime geometry router was added.
 
@@ -252,7 +252,7 @@ historical twelve-cell results remain valid for the recorded workload, but do
 not establish all-op safety for those oversized geometries. This does not
 change the retained `1x16` default or the decision to kill alternate geometry.
 
-### P5.9 — JIT code split and compile-fast
+### P5.9 - JIT code split and compile-fast
 
 **Changes tested:** isolated baseline, per-kernel device-code split,
 compile-fast, and split+compile-fast builds.
@@ -279,7 +279,7 @@ Commit `76108af1a` makes per-kernel split the default and removes the
 compile-fast experiment. `scripts/bench-sycl-cold-jit.py` and focused tests
 remain as reusable tooling.
 
-### P5.10 — non-PVC upload path
+### P5.10 - non-PVC upload path
 
 **Change tested:** replace the non-Windows, non-PVC tensor-upload bounce buffer
 with direct blocking queue `memcpy`.
@@ -288,12 +288,12 @@ with direct blocking queue `memcpy`.
 
 After one warmup, six alternating warm-page-cache model-load-only processes per
 arm measured 2.278841 s baseline versus 2.784785 s candidate median. The
-candidate regressed by 0.505943 s, equivalent to a -22.20% “reduction,” rather
+candidate regressed by 0.505943 s, equivalent to a -22.20% "reduction," rather
 than meeting the required improvement of at least 0.5 s. Both arms generated
 the exact one-token response `Blue`; dmesg recorded no new GPU fault. The
 bounce-buffer path remains intact.
 
-### P5.11 — scale-separated q8_0 KV rows
+### P5.11 - scale-separated q8_0 KV rows
 
 **Change tested:** opt-in `GGML_SYCL_Q8_KV_QUANTS_FIRST=1` plus explicit
 `GGML_TENSOR_FLAG_KV_Q8_QUANTS_FIRST` tensor metadata. The 136-byte D=128 row
@@ -322,7 +322,7 @@ and 836,576 canonical bytes, restored the same count and byte size in another
 slot, and reproduced the deterministic continuation. Marker-absent q8_0
 weights and host/session bytes remain canonical `block_q8_0`.
 
-### P5.12 — isolated GPU oneDNN
+### P5.12 - isolated GPU oneDNN
 
 **Changes tested:** isolated oneDNN v3.11.3 GPU-DPCPP build, effective
 `GGML_SYCL_DNNL=1`, generated-kernel inspection, and paired Mistral/Llama
@@ -344,7 +344,7 @@ Both missed the required +5% median with positive lower bound and produced no
 new GPU faults. No Q4_K/Q4_0 repacking, oneDNN decompression attributes, or
 primitive caching was added. Default builds remain `GGML_SYCL_DNNL=0`.
 
-### P5.13 — dense proxy for MoE reorder
+### P5.13 - dense proxy for MoE reorder
 
 **Change tested:** six alternating `test-backend-ops perf -o MUL_MAT` arms on
 model-scale dense Q3_K and Q4_K shapes with reorder disabled/enabled.
@@ -357,7 +357,7 @@ Five retained aggregate pairs measured:
 |---|---:|---:|
 | Q3_K | +2.01% | +1.80% |
 | Q4_K | -6.61% | -6.78% |
-| Combined fleet | -2.43% | — |
+| Combined fleet | -2.43% | - |
 
 The shape split explained why a global extension was unsafe: Q3_K/Q4_K `n=1`
 improved +14.47%/+55.49%, Q4_K `n=8` collapsed -60.13%, and the other measured
@@ -365,7 +365,7 @@ shapes stayed within 3.1%. The proxy missed its +3% gate and dmesg stayed
 clean. No MUL_MAT_ID reorder allocation, expert transform, SOA trait, or fused
 MoE routing change was implemented.
 
-### P5.14 — exact graph replay and FA capture safety
+### P5.14 - exact graph replay and FA capture safety
 
 **Changes tested:**
 
@@ -570,7 +570,7 @@ sha256sum --quiet -c SHA256SUMS
    quants-first format receives broader architecture and lifecycle coverage.
 3. Use q8_0 TILE only as an explicit deep-context experiment; do not infer a
    safe cutover from the deep wins because depth 0 regressed by about 5.5%.
-4. Keep global reorder/MMVQ routing and 1×16 geometry unchanged.
+4. Keep global reorder/MMVQ routing and 1x16 geometry unchanged.
 5. Do not deploy the isolated GPU-oneDNN prefix for this workload.
 6. Keep the upload bounce buffer and per-call graph record/finalize behavior.
 7. Preserve FA scratch pre-growth before graph capture.
