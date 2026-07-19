@@ -3802,6 +3802,7 @@ struct test_dsv4_hc : public test_case {
             float lo;
             float hi;
             if (!tensor_range(name, lo, hi)) {
+                init_tensor_uniform(t);
                 continue;
             }
 
