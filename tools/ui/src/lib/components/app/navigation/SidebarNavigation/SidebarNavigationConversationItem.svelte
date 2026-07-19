@@ -124,9 +124,12 @@
 	}
 
 	function handleCheckboxKeydown(event: KeyboardEvent) {
-		if (event.key === ' ' || event.key === 'Enter') {
-			event.stopPropagation();
-			event.preventDefault();
+		if (event.key !== ' ' && event.key !== 'Enter') return;
+		event.stopPropagation();
+		event.preventDefault();
+		if (isSelectionMode) {
+			onSelectionClick?.(conversation.id, { shiftKey: event.shiftKey });
+		} else {
 			onToggleSelect?.(conversation.id);
 		}
 	}
