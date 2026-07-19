@@ -48,6 +48,16 @@ HIP/meta backend to run the sampler safely:
 Mirroring the output head uses more VRAM and repeats the output projection on
 each GPU, but avoids CPU sampling and the associated device/host round trips.
 
+### Embedding-sharded output projection
+
+An opt-in `GGML_TP_SHARDED_OUTPUT=1` path shards validated Qwen 35B/122B main
+and MTP LM heads along the embedding dimension. Each device computes
+full-vocabulary partial logits, followed by an FP32 all-reduce before unchanged
+sampling. This avoids four redundant full LM-head projections while preserving
+full-logit semantics. See [`docs/rdna2-sharded-output-plan.md`](docs/rdna2-sharded-output-plan.md)
+and [`README-RDNA2.md`](README-RDNA2.md) for design, validation, and benchmark
+results.
+
 ### Four-GPU RCCL collectives
 
 llama.cpp's internal fast all-reduce currently supports only two devices in

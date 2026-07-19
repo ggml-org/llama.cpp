@@ -231,6 +231,63 @@ also did not improve over RCCL's automatic selection. Future collective work
 should therefore target fused/persistent small-message collectives or graph
 architecture that removes/reduces the 80 host-submitted boundaries.
 
+## Experimental sharded LM head
+
+Set the following before model load to enable embedding-axis sharding of
+validated Qwen3.5/Qwen3.6 35B-A3B and 122B-A10B main/MTP output heads:
+
+```bash
+export GGML_TP_SHARDED_OUTPUT=1
+```
+
+Each rank computes a full-vocabulary partial projection from one embedding
+slice. A forced-FP32 all-reduce produces mirrored complete logits before scale,
+LoRA, bias, or sampling. Existing CPU/backend sampler semantics remain intact.
+Unsupported architectures, model sizes, tied heads, invalid quant-block splits,
+and zero-width rotated splits retain mirrored placement.
+
+### Decode results
+
+| Workload | Mirrored | Sharded | Change |
+|---|---:|---:|---:|
+| 35B MTP, five-run mean | 86.59 t/s | **92.41 t/s** | **+6.72%** |
+| 35B raw tg128 | 62.93 t/s | **65.61 t/s** | **+4.25%** |
+| 122B MTP, five-run mean | 49.02 t/s | **65.51 t/s** | **+33.65% observed** |
+
+The 122B mirrored process degraded substantially across its five runs while the
+sharded process remained stable. The direction and large benefit are clear, but
+the exact 33.65% figure includes thermal/run-order effects and should not be
+interpreted as a topology-independent estimate.
+
+Five paired 35B runs had identical draft/accepted counts in every pair. A
+separate deterministic 64-token test produced the same output SHA-256 in both
+modes.
+
+### Prompt processing
+
+Clean-reset, isolated process results:
+
+| Prompt | Mirrored | Sharded | Change |
+|---|---:|---:|---:|
+| 64k (65,533 actual) | 1,361.57 t/s | 1,361.57 t/s | parity |
+| 128k (131,071 actual) | **1,029.30 t/s** | 1,020.43 t/s | -0.86% |
+
+Both modes completed 64k and 128k without truncation or GPU faults after a clean
+GPU reset. The feature is decode-focused; a sub-1% 128k prefill regression is
+the measured tradeoff on this system.
+
+### Validation and limits
+
+- Feature selection is immutable after model placement and exact-string gated.
+- Output reductions are FP32 even above the generic RCCL BF16 crossover.
+- Main and shared MTP heads use tensor identity and validated split rotation.
+- Terminal raw-logit/CPU-verification graphs include an explicit synchronization
+  alias so final partial logits cannot escape unreduced.
+- Focused split-validation unit tests cover equal/rotated/skewed/zero-width and
+  non-divisible layouts.
+- The implementation remains experimental and opt-in. Generic butterfly is a
+  correct slower fallback when RCCL does not service a reduction.
+
 ## Notes and caveats
 
 - Results are specific to four V620 cards, this PCIe topology, ROCm version,

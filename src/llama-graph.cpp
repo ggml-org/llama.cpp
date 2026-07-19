@@ -1382,8 +1382,12 @@ ggml_tensor * llm_graph_context::build_cvec(
 ggml_tensor * llm_graph_context::build_lora_mm(
           ggml_tensor * w,
           ggml_tensor * cur,
-          ggml_tensor * w_s) const {
+          ggml_tensor * w_s,
+                  bool   force_fp32_allreduce) const {
     ggml_tensor * res = ggml_mul_mat(ctx0, w, cur);
+    if (force_fp32_allreduce) {
+        res->flags |= GGML_TENSOR_FLAG_FORCE_FP32_ALLREDUCE;
+    }
 
     if (w_s) {
         res = ggml_mul(ctx0, res, w_s);

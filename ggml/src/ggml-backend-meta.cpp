@@ -586,6 +586,11 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
         if (src_ss[1].axis == GGML_BACKEND_SPLIT_AXIS_1 && src_ss[0].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED) {
             return src_ss[1];
         }
+        if ((tensor->flags & GGML_TENSOR_FLAG_FORCE_FP32_ALLREDUCE) && tensor->op == GGML_OP_MUL_MAT &&
+                src_ss[0].axis == GGML_BACKEND_SPLIT_AXIS_0 && src_ss[1].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED) {
+            GGML_ASSERT(src_ss[0].n_segments == 1 && src_ss[0].nr[0] == 1);
+            return {assume_sync ? GGML_BACKEND_SPLIT_AXIS_MIRRORED : GGML_BACKEND_SPLIT_AXIS_PARTIAL, {0}, {1}, 1};
+        }
         if (src_ss[0].axis == GGML_BACKEND_SPLIT_AXIS_0 && src_ss[1].axis == GGML_BACKEND_SPLIT_AXIS_0) {
             GGML_ASSERT(split_states_equal(src_ss[0], src_ss[1]));
             return {assume_sync ? GGML_BACKEND_SPLIT_AXIS_MIRRORED : GGML_BACKEND_SPLIT_AXIS_PARTIAL, {0}, {1}, 1};
@@ -1222,6 +1227,44 @@ static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(ggml_backend_m
             }
         }
 
+        if (tensor->flags & GGML_TENSOR_FLAG_FORCE_FP32_ALLREDUCE) {
+            GGML_ASSERT(tensor->op == GGML_OP_MUL_MAT);
+            GGML_ASSERT(tensor->src[0] != nullptr && tensor->src[1] != nullptr);
+            const ggml_backend_meta_split_state weight_ss =
+                ggml_backend_meta_get_split_state(stc, tensor->src[0], /*assume_sync =*/ false);
+            GGML_ASSERT(weight_ss.axis == GGML_BACKEND_SPLIT_AXIS_0 && weight_ss.n_segments == 1 && weight_ss.nr[0] == 1);
+
+            ggml_tensor * weight = t_ij->src[0];
+            ggml_tensor * rhs    = t_ij->src[1];
+            GGML_ASSERT(weight != nullptr && rhs != nullptr);
+            GGML_ASSERT(rhs->type == GGML_TYPE_F32 && rhs->ne[0] == tensor->src[1]->ne[0]);
+
+            int64_t offset_ne0 = 0;
+            for (size_t k = 0; k < j; ++k) {
+                offset_ne0 += ggml_backend_meta_buffer_simple_tensor(tensor->src[0], k)->ne[0];
+            }
+            GGML_ASSERT(offset_ne0 >= 0 && offset_ne0 + weight->ne[0] <= rhs->ne[0]);
+            const size_t view_offs = (size_t) offset_ne0 * rhs->nb[0];
+
+            ggml_tensor * rhs_view = ggml_view_4d(simple_ctx, rhs,
+                weight->ne[0], rhs->ne[1], rhs->ne[2], rhs->ne[3],
+                rhs->nb[1], rhs->nb[2], rhs->nb[3], view_offs);
+            ggml_format_name(rhs_view, "%s (tp output slice %zu)", rhs->name, j);
+
+            if (ggml_nelements(rhs_view) > 0) {
+                size_t last = view_offs + ggml_type_size(rhs->type);
+                for (int d = 0; d < GGML_MAX_DIMS; ++d) {
+                    last += (size_t) (rhs_view->ne[d] - 1) * rhs_view->nb[d];
+                }
+                GGML_ASSERT(last <= ggml_nbytes(rhs));
+            }
+            const ggml_status view_status = ggml_backend_view_init(rhs_view);
+            if (view_status != GGML_STATUS_SUCCESS) {
+                return view_status;
+            }
+            t_ij->src[1] = rhs_view;
+        }
+
         simple_tensors.push_back(t_ij);
     }
 
@@ -1625,6 +1668,7 @@ struct ggml_backend_meta_context {
 
     void *                               comm_ctx       = nullptr;
     ggml_backend_comm_allreduce_tensor_t comm_allreduce = nullptr;
+    bool                                 logged_generic_allreduce = false;
 
     ggml_backend_meta_context(ggml_backend_dev_t meta_dev, const char * params) {
         const size_t n_devs = ggml_backend_meta_dev_n_devs(meta_dev);
@@ -1849,6 +1893,9 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
                 int idr = i; // i_delayed return, last safe return value
 
                 ggml_tensor * node = cgraph->nodes[id];
+                if (node->flags & GGML_TENSOR_FLAG_FORCE_FP32_ALLREDUCE) {
+                    return id;
+                }
                 int32_t n_used = ggml_node_get_use_count(cgraph, id);
 
                 // Skip MIRRORED nodes that don't consume node
@@ -2219,6 +2266,10 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
             }
 
             if (!backend_allreduce_success) {
+                if (!backend_ctx->logged_generic_allreduce) {
+                    GGML_LOG_WARN("using meta-backend generic butterfly AllReduce fallback\n");
+                    backend_ctx->logged_generic_allreduce = true;
+                }
                 const ggml_status status = allreduce_fallback(i);
                 if (status != GGML_STATUS_SUCCESS) {
                     return status;

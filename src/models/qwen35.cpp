@@ -219,7 +219,11 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
     res->t_embd = cur;
 
     // LM head
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur, model.output_s, model.is_tensor_parallel_output_head(model.output));
+    if (model.is_tensor_parallel_output_head(model.output)) {
+        cb(cur, "result_output_partial", -1);
+        cur = ggml_reshape_4d(ctx0, cur, cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]);
+    }
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;
@@ -636,7 +640,11 @@ llama_model_qwen35::graph_mtp::graph_mtp(const llama_model & model, const llm_gr
     ggml_tensor * head_w = layer.nextn.shared_head_head ? layer.nextn.shared_head_head : model.output;
     ggml_tensor * head_s = layer.nextn.shared_head_head ? layer.nextn.shared_head_head_s : model.output_s;
     GGML_ASSERT(head_w && "QWEN35 MTP: missing LM head (nextn.shared_head_head or model.output)");
-    cur = build_lora_mm(head_w, cur, head_s);
+    cur = build_lora_mm(head_w, cur, head_s, model.is_tensor_parallel_output_head(head_w));
+    if (model.is_tensor_parallel_output_head(head_w)) {
+        cb(cur, "result_output_partial", -1);
+        cur = ggml_reshape_4d(ctx0, cur, cur->ne[0], cur->ne[1], cur->ne[2], cur->ne[3]);
+    }
     cb(cur, "result_output", -1);
 
     res->t_logits = cur;
