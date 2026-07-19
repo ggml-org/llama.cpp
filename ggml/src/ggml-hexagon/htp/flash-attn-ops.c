@@ -1805,6 +1805,12 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
 
     const size_t qo_element_size = factx.is_q_fp32 ? sizeof(float) : sizeof(__fp16);
 
+    const bool q_transposed                 = q->nb[1] < q->nb[2];
+    const size_t q_src_stride               = q_transposed ? q->nb[2] : q->nb[1];
+    const size_t q_row_bytes_untransposed   = factx.G * factx.DK * qo_element_size;
+    const size_t q_row_bytes_trans_factor   = factx.DK * qo_element_size;
+    const uint32_t kv_rows0                 = hex_smin(Bc, nek1);
+
     // ======== Reusable job descriptors for pipeline ========
     hmx_fa_qk_job_t       qk_job;
     hmx_fa_o_update_job_t ou_job;
@@ -1828,17 +1834,12 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                 // 1. Push Q and KV DMAs for the very first iteration.
                 // Subsequent iterations are enqueued early at the end of the previous iteration.
                 if (ib3 == 0 && q_start == 0 && kv_head == 0) {
-                    const bool q_transposed = q->nb[1] < q->nb[2];
-                    const uint8_t * q_ptr = (const uint8_t *) q->data + q_start * q->nb[1] + (kv_head * factx.G) * q->nb[2] + ib3 * q->nb[3];
-                    const size_t el_size = factx.is_q_fp32 ? sizeof(float) : sizeof(__fp16);
-                    const size_t q_row_bytes = q_transposed ? n_rows_q * factx.DK * el_size : factx.G * factx.DK * el_size;
-                    const size_t src_stride  = q_transposed ? q->nb[2] : q->nb[1];
+                    const uint8_t * q_ptr = (const uint8_t *) q->data;
+                    const size_t q_row_bytes = q_transposed ? n_rows_q * q_row_bytes_trans_factor : q_row_bytes_untransposed;
                     const size_t n_rows      = q_transposed ? factx.G : n_rows_q;
-                    dma_queue_push(dma, dma_make_ptr(factx.vtcm_q_dma, q_ptr), q_row_bytes, hex_smax(src_stride, q_row_bytes), q_row_bytes, n_rows);
+                    dma_queue_push(dma, dma_make_ptr(factx.vtcm_q_dma, q_ptr), q_row_bytes, hex_smax(q_src_stride, q_row_bytes), q_row_bytes, n_rows);
 
                     if (factx.n_kv_blocks > 0) {
-                        const uint32_t kv_rows0 = hex_smin(Bc, nek1);
-
                         const uint8_t * k_src = (const uint8_t *) k->data + ik2 * k->nb[2] + ik3 * k->nb[3];
                         dma_queue_push(dma, dma_make_ptr(factx.vtcm_k_fp16[0], k_src), size_k_row_padded, k->nb[1], size_k_row, kv_rows0);
 
@@ -2115,27 +2116,26 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
 
                 if (has_next) {
                     const uint32_t next_n_rows_q = hex_smin(Br, neq1 - next_q_start);
-                    const size_t   next_n_rows_g = next_n_rows_q * G;
-                    const bool next_q_transposed = q->nb[1] < q->nb[2];
                     const uint8_t * next_q_ptr = (const uint8_t *) q->data + next_q_start * q->nb[1] + (next_kv_head * factx.G) * q->nb[2] + next_ib3 * q->nb[3];
-                    const size_t el_size = factx.is_q_fp32 ? sizeof(float) : sizeof(__fp16);
-                    const size_t next_q_row_bytes = next_q_transposed ? next_n_rows_q * factx.DK * el_size : factx.G * factx.DK * el_size;
-                    const size_t next_src_stride  = next_q_transposed ? q->nb[2] : q->nb[1];
-                    const size_t next_n_rows      = next_q_transposed ? factx.G : next_n_rows_q;
-                    dma_queue_push(dma, dma_make_ptr(factx.vtcm_q_dma, next_q_ptr), next_q_row_bytes, hex_smax(next_src_stride, next_q_row_bytes), next_q_row_bytes, next_n_rows);
+                    const size_t next_q_row_bytes = q_transposed ? next_n_rows_q * q_row_bytes_trans_factor : q_row_bytes_untransposed;
+                    const size_t next_n_rows      = q_transposed ? factx.G : next_n_rows_q;
+                    dma_queue_push(dma, dma_make_ptr(factx.vtcm_q_dma, next_q_ptr), next_q_row_bytes, hex_smax(q_src_stride, next_q_row_bytes), next_q_row_bytes, next_n_rows);
 
                     if (factx.n_kv_blocks > 0) {
                         const uint32_t next_ik2 = next_kv_head;
-                        const uint32_t next_ik3 = fastdiv(next_ib3, &kparams->broadcast_rk3);
                         const uint32_t next_iv2 = next_kv_head;
-                        const uint32_t next_iv3 = fastdiv(next_ib3, &kparams->broadcast_rv3);
-                        const uint32_t next_kv_rows0 = hex_smin(Bc, nek1);
+                        uint32_t next_ik3 = ik3;
+                        uint32_t next_iv3 = iv3;
+                        if (next_ib3 != ib3) {
+                            next_ik3 = fastdiv(next_ib3, &kparams->broadcast_rk3);
+                            next_iv3 = fastdiv(next_ib3, &kparams->broadcast_rv3);
+                        }
 
                         const uint8_t * next_k_src = (const uint8_t *) k->data + next_ik2 * k->nb[2] + next_ik3 * k->nb[3];
-                        dma_queue_push(dma, dma_make_ptr(factx.vtcm_k_fp16[0], next_k_src), size_k_row_padded, k->nb[1], size_k_row, next_kv_rows0);
+                        dma_queue_push(dma, dma_make_ptr(factx.vtcm_k_fp16[0], next_k_src), size_k_row_padded, k->nb[1], size_k_row, kv_rows0);
 
                         const uint8_t * next_v_src = (const uint8_t *) v->data + next_iv2 * v->nb[2] + next_iv3 * v->nb[3];
-                        dma_queue_push(dma, dma_make_ptr(factx.vtcm_v_fp16[0], next_v_src), size_v_row_padded, v->nb[1], size_v_row, next_kv_rows0);
+                        dma_queue_push(dma, dma_make_ptr(factx.vtcm_v_fp16[0], next_v_src), size_v_row_padded, v->nb[1], size_v_row, kv_rows0);
                     }
                 }
 
