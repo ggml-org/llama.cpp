@@ -1,3 +1,5 @@
+﻿// TurboPrefill by Trykhlieb
+// Base: ggml-org/llama.cpp b10068
 #pragma once
 
 #include "llama.h"
@@ -344,6 +346,53 @@ private:
     ggml_backend_sched_ptr sched;
 
     bool sched_need_reserve = true;
+
+    struct llama_turboprefill_state {
+        bool enabled = false;
+        // 0 = regular scheduler path.
+        // Positive values defer full ubatches; a negative value marks the final full ubatch and triggers replay.
+        int stage = 0;
+        uint32_t ubatch_index = 0;
+        uint32_t n_full_ubatches = 0;
+
+        void begin_batch(bool is_enabled, uint32_t n_tokens, uint32_t n_ubatch) {
+            enabled = is_enabled;
+            stage = 0;
+            ubatch_index = 0;
+            n_full_ubatches = enabled ? n_tokens / n_ubatch : 0;
+        }
+
+        int stage_for_ubatch(uint32_t n_tokens, uint32_t n_ubatch) {
+            stage = 0;
+
+            if (enabled && ubatch_index < n_full_ubatches && n_tokens == n_ubatch) {
+                if (ubatch_index + 1 == n_full_ubatches) {
+                    stage = -((int) ubatch_index + 1);
+                    if (stage == -1) {
+                        // A single full ubatch goes through the standard path.
+                        stage = 0;
+                    }
+                } else {
+                    stage = ubatch_index + 1;
+                }
+            }
+
+            return stage;
+        }
+
+        void finish_ubatch() {
+            ubatch_index++;
+        }
+
+        void finish_batch() {
+            enabled = false;
+            stage = 0;
+            ubatch_index = 0;
+            n_full_ubatches = 0;
+        }
+    };
+
+    llama_turboprefill_state turboprefill;
 
     ggml_backend_t backend_cpu = nullptr;
     std::vector<ggml_backend_ptr> backends;
