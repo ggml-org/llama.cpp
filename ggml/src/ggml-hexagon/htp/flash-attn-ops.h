@@ -272,8 +272,9 @@ static inline int hmx_fa_find_chunk_size(size_t * Br_out,
     const size_t Bc_limit     = can_pipeline ? hex_align_down(kv_len / FA_MIN_KV_BLOCKS, bc_unit) :
                                                (kv_len >= bc_unit ? hex_align_down(kv_len, bc_unit) : bc_unit);
     // Cost coefficients calibrated from profiling
-    const size_t c_q_fixed    = 1400;  // per-Q-block: q_load + epilogue o_update + o_norm + o_store
-    const size_t c_iter_fixed = 200;   // per-KV-iter: HMX queue push/pop + DMA pop + barriers
+    const size_t c_q_fixed    = 800;   // per-Q-block: q_load + epilogue o_update + o_norm + o_store
+    const size_t c_iter_base  = 200;   // per-KV-iter base (HMX dot/update + DMA)
+    const size_t c_softmax    = 600;   // per 64-row vector chunk on HVX
 
     size_t best_cost = SIZE_MAX, best_mn = 0;
     size_t best_Br = 0, best_Bc = 0;
@@ -284,10 +285,17 @@ static inline int hmx_fa_find_chunk_size(size_t * Br_out,
             size_t vtcm_needed = hmx_fa_compute_vtcm_usage(gqa_factor, DK, DV, Br, Bc, n_threads, can_pipeline, is_q_fp32);
             if (vtcm_needed <= vtcm_budget) {
                 // This Bc fits for this Br!
-                const size_t q_blocks  = (qo_len + Br - 1) / Br;
-                const size_t kv_blocks = (kv_len + Bc - 1) / Bc;
-                const size_t cost      = q_blocks * (c_q_fixed + kv_blocks * c_iter_fixed);
-                const size_t mn        = Br * Bc;
+                const size_t q_blocks       = (qo_len + Br - 1) / Br;
+                const size_t kv_blocks      = (kv_len + Bc - 1) / Bc;
+                const size_t actual_threads = (kv_blocks >= 3 && n_threads >= 2) ? n_threads : 1;
+                const size_t n_rows_g       = Br * gqa_factor;
+                const size_t n_row_vec_cnt  = (n_rows_g + 63) / 64;
+                const size_t n_use          = n_row_vec_cnt < actual_threads ? n_row_vec_cnt : actual_threads;
+                const size_t vecs_per_t     = n_use > 0 ? (n_row_vec_cnt + n_use - 1) / n_use : 1;
+
+                const size_t c_iter_actual  = c_iter_base + c_softmax * vecs_per_t;
+                const size_t cost           = q_blocks * (c_q_fixed + kv_blocks * c_iter_actual);
+                const size_t mn             = Br * Bc;
 
                 if (cost < best_cost || (cost == best_cost && mn > best_mn)) {
                     best_cost = cost;
