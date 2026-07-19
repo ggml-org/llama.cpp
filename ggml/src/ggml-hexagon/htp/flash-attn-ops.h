@@ -110,6 +110,7 @@ struct hmx_fa_vtcm_layout {
     size_t off_s_tiles;
     size_t off_p_tiles;
     size_t off_d_tiles;
+    size_t off_d_inv_l;
     size_t off_m_vec;
     size_t off_l_vec;
     size_t off_s_rowmax;
@@ -167,6 +168,7 @@ static inline void hmx_fa_vtcm_layout_build(struct hmx_fa_vtcm_layout * L,
     VTCM_LAYOUT_ALLOC(off, off_o_tiles[0],    o_tile_size);
     VTCM_LAYOUT_ALLOC(off, off_o_tiles[1],    o_tile_size);
     VTCM_LAYOUT_ALLOC(off, off_d_tiles,       d_tile_size);
+    VTCM_LAYOUT_ALLOC(off, off_d_inv_l,       d_tile_size);
 
     // Group B & C share start offset (Group B tiles must be 2KB aligned)
     size_t off_group_b_c = hex_align_up(off, HTP_FA_HMX_TILE_SIZE);

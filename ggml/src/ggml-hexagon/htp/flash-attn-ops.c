@@ -133,6 +133,7 @@ struct hmx_fa_context {
     __fp16 *     vtcm_s_tiles;         // S = QK^T [g_br, Bc]
     __fp16 *     vtcm_p_tiles;         // P = softmax(S) [g_br, Bc]
     __fp16 *     vtcm_d_tiles;         // Diagonal rescale [g_br, g_br]
+    __fp16 *     vtcm_d_inv_l;         // Diagonal rescale (1/l) [g_br, g_br]
     HVX_Vector * vtcm_m_vec;           // Row max [g_br]
     HVX_Vector * vtcm_l_vec;           // Row sum [g_br]
     HVX_Vector * vtcm_s_rowmax;        // Softmax intermediate [g_br]
@@ -780,12 +781,13 @@ static void fa_q_load_thread(unsigned int n, unsigned int i, void * data) {
             }
         }
 
-        // Initialize vtcm_d_tiles to 0
+        // Initialize vtcm_d_tiles and vtcm_d_inv_l to 0
         const size_t d_bytes_per_t = hex_align_up(d_tile_bytes / n, 128);
         const size_t d_start       = i * d_bytes_per_t;
         const size_t d_end         = hex_smin(d_start + d_bytes_per_t, d_tile_bytes);
         if (d_start < d_tile_bytes) {
             hvx_splat_u8_a((char *) factx->vtcm_d_tiles + d_start, 0, d_end - d_start);
+            hvx_splat_u8_a((char *) factx->vtcm_d_inv_l + d_start, 0, d_end - d_start);
         }
     }
 
@@ -1415,7 +1417,7 @@ static __attribute__((noinline)) void fa_build_d_diag_inv_l(struct hmx_fa_contex
             v_content = Q6_V_vror_VR(v_content, 64);
         }
 
-        __fp16 * out_base = factx->vtcm_d_tiles + i * (n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
+        __fp16 * out_base = factx->vtcm_d_inv_l + i * (n_row_tiles_g_br + 1) * HMX_FP16_TILE_N_ELMS;
         Q6_vscatter_QRMVhV(q_32_mask, (size_t) out_base, HMX_FP16_TILE_SIZE - 1, v_offsets, v_content);
     }
 }
@@ -1768,6 +1770,7 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
     factx.vtcm_s_tiles        = VTCM_LAYOUT_PTR(__fp16, base, L.off_s_tiles);
     factx.vtcm_p_tiles        = VTCM_LAYOUT_PTR(__fp16, base, L.off_p_tiles);
     factx.vtcm_d_tiles        = VTCM_LAYOUT_PTR(__fp16, base, L.off_d_tiles);
+    factx.vtcm_d_inv_l        = VTCM_LAYOUT_PTR(__fp16, base, L.off_d_inv_l);
     factx.vtcm_m_vec          = VTCM_LAYOUT_PTR(HVX_Vector, base, L.off_m_vec);
     factx.vtcm_l_vec          = VTCM_LAYOUT_PTR(HVX_Vector, base, L.off_l_vec);
     factx.vtcm_s_rowmax       = VTCM_LAYOUT_PTR(HVX_Vector, base, L.off_s_rowmax);
@@ -1991,6 +1994,11 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                         ou_job.n_tiles_per_bc   = n_tiles_per_bc;
                         ou_job.DV               = DV;
                         hmx_queue_push(hmx_q, hmx_queue_make_desc(hmx_fa_o_update_worker, &ou_job));
+
+                        // Overlapped: run HVX build diag inv L while HMX is busy executing the update
+                        htp_trace_event_start(tr_hvx, HTP_TRACE_EVT_HVX_O_PROC, (uint16_t) q_start);
+                        fa_build_d_diag_inv_l(&factx, n_row_tiles, n_row_tiles_g_br);
+                        htp_trace_event_stop(tr_hvx, HTP_TRACE_EVT_HVX_O_PROC, (uint16_t) q_start);
                         hmx_queue_pop(hmx_q);
 
                         hex_swap_ptr((void **) &o_tile_curr, (void **) &o_tile_prev);
@@ -2091,6 +2099,12 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
                             ou_job.DV               = DV;
 
                             hmx_queue_push(ctx->hmx_queue, hmx_queue_make_desc(hmx_fa_o_update_worker, &ou_job));
+                            if (kv_blk + 1 == factx.n_kv_blocks) {
+                                // Overlapped: run CPU build diag inv L while HMX is busy executing the update
+                                htp_trace_event_start(tr_hvx, HTP_TRACE_EVT_HVX_O_PROC, (uint16_t) q_start);
+                                fa_build_d_diag_inv_l(&factx, n_row_tiles, n_row_tiles_g_br);
+                                htp_trace_event_stop(tr_hvx, HTP_TRACE_EVT_HVX_O_PROC, (uint16_t) q_start);
+                            }
                             hmx_queue_pop(ctx->hmx_queue);
 
                             hex_swap_ptr((void **) &o_tile_curr, (void **) &o_tile_prev);
@@ -2141,13 +2155,9 @@ int hmx_flash_attn_ext(struct htp_ops_context * octx) {
 
                 // ---- Final normalization ----
                 {
-                    htp_trace_event_start(tr_hvx, HTP_TRACE_EVT_HVX_O_PROC, (uint16_t) q_start);
-                    fa_build_d_diag_inv_l(&factx, n_row_tiles, n_row_tiles_g_br);
-                    htp_trace_event_stop(tr_hvx, HTP_TRACE_EVT_HVX_O_PROC, (uint16_t) q_start);
-
                     on_job.o_curr           = o_tile_curr;
                     on_job.o_prev           = o_tile_prev;
-                    on_job.d_tiles          = factx.vtcm_d_tiles;
+                    on_job.d_tiles          = factx.vtcm_d_inv_l;
                     on_job.hmx_scales       = factx.vtcm_hmx_scales_id;
                     on_job.n_row_tiles      = n_row_tiles;
                     on_job.n_row_tiles_g_br = n_row_tiles_g_br;
