@@ -1827,6 +1827,9 @@ static struct ggml_tensor * ggml_new_tensor_impl(
         /*.extra        =*/ NULL,
         /*.padding      =*/ { 0 },
     };
+    if (view_src != NULL) {
+        result->flags |= view_src->flags & GGML_TENSOR_FLAG_KV_Q8_QUANTS_FIRST;
+    }
 
     // TODO: this should not be needed as long as we don't rely on aligned SIMD loads
     //GGML_ASSERT_ALIGNED(result->data);

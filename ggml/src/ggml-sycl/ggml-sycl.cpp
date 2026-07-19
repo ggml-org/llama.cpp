@@ -522,14 +522,16 @@ ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer_t buffer,
         return GGML_STATUS_SUCCESS;
     }
 
-    if (!g_ggml_sycl_disable_optimize) {
-        // set reorder extra buffer based on supported type
+    const bool kv_q8_quants_first = ggml_tensor_is_kv_q8_quants_first(tensor);
+    if (!g_ggml_sycl_disable_optimize || kv_q8_quants_first) {
+        // Quantized tensors carry backend-owned layout/reorder metadata.
         switch (tensor->type) {
             case GGML_TYPE_Q4_0:
             case GGML_TYPE_Q8_0:
             case GGML_TYPE_Q4_K:
             case GGML_TYPE_Q6_K:{
                 ggml_tensor_extra_gpu * extra = new ggml_tensor_extra_gpu{};
+                extra->kv_q8_quants_first     = kv_q8_quants_first;
                 tensor->extra                 = extra;
                 ctx->tensor_extras.push_back(extra);
                 break;
@@ -1034,6 +1036,7 @@ ggml_backend_sycl_split_buffer_init_tensor(ggml_backend_buffer_t buffer,
     const int64_t ne0 = tensor->ne[0];
 
     ggml_tensor_extra_gpu * extra = new ggml_tensor_extra_gpu{};
+    extra->kv_q8_quants_first = ggml_tensor_is_kv_q8_quants_first(tensor);
 
     ctx->tensor_extras.push_back(extra);
     ctx->streams.push_back(&(dpct::get_current_device().default_queue()));

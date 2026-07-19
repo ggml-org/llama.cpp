@@ -288,6 +288,80 @@ static void ggml_cpy_q8_0_f32_sycl(const char * cx, char * cdst, const int ne, c
                          });
 }
 
+static void ggml_cpy_f32_q8_0_quants_first_sycl(
+        const char * cx, char * cdst, const int ne,
+        const int ne00, const int ne01, const int ne02,
+        const int nb00, const int nb01, const int nb02, const int nb03,
+        const int ne10, const int ne11, const int ne12,
+        const int nb11, const int nb12, const int nb13,
+        queue_ptr stream) {
+    GGML_ASSERT(ne10 % 128 == 0 && ne % QK8_0 == 0);
+    const int num_blocks = ne / QK8_0;
+    stream->parallel_for(
+        sycl::nd_range<1>(num_blocks, 1),
+        [=](sycl::nd_item<1> item_ct1) {
+            const int i = item_ct1.get_global_linear_id() * QK8_0;
+            const int i03 = i / (ne00 * ne01 * ne02);
+            const int i02 = (i - i03 * ne00 * ne01 * ne02) / (ne00 * ne01);
+            const int i01 = (i - i03 * ne00 * ne01 * ne02 - i02 * ne00 * ne01) / ne00;
+            const int i00 = i - i03 * ne00 * ne01 * ne02 - i02 * ne00 * ne01 - i01 * ne00;
+            const int src_offset = i00 * nb00 + i01 * nb01 + i02 * nb02 + i03 * nb03;
+
+            const int i13 = i / (ne10 * ne11 * ne12);
+            const int i12 = (i - i13 * ne10 * ne11 * ne12) / (ne10 * ne11);
+            const int i11 = (i - i13 * ne10 * ne11 * ne12 - i12 * ne10 * ne11) / ne10;
+            const int i10 = i - i13 * ne10 * ne11 * ne12 - i12 * ne10 * ne11 - i11 * ne10;
+            const int block = i10 / QK8_0;
+            const int group = block / 4;
+            const int lane = block % 4;
+            char * group_dst = cdst + group * 4 * sizeof(block_q8_0) + i11 * nb11 + i12 * nb12 + i13 * nb13;
+
+            block_q8_0 quantized;
+            cpy_blck_f32_q8_0(cx + src_offset, reinterpret_cast<char *>(&quantized));
+            for (int q = 0; q < QK8_0; ++q) {
+                group_dst[lane * QK8_0 + q] = quantized.qs[q];
+            }
+            reinterpret_cast<sycl::half *>(group_dst + 4 * QK8_0)[lane] = quantized.d;
+        });
+}
+
+static void ggml_cpy_q8_0_quants_first_f32_sycl(
+        const char * cx, char * cdst, const int ne,
+        const int ne00, const int ne01, const int ne02,
+        const int nb01, const int nb02, const int nb03,
+        const int ne10, const int ne11, const int ne12,
+        const int nb10, const int nb11, const int nb12, const int nb13,
+        queue_ptr stream) {
+    GGML_ASSERT(ne00 % 128 == 0 && ne % QK8_0 == 0);
+    const int num_blocks = ne / QK8_0;
+    stream->parallel_for(
+        sycl::nd_range<1>(num_blocks, 1),
+        [=](sycl::nd_item<1> item_ct1) {
+            const int i = item_ct1.get_global_linear_id() * QK8_0;
+            const int i03 = i / (ne00 * ne01 * ne02);
+            const int i02 = (i - i03 * ne00 * ne01 * ne02) / (ne00 * ne01);
+            const int i01 = (i - i03 * ne00 * ne01 * ne02 - i02 * ne00 * ne01) / ne00;
+            const int i00 = i - i03 * ne00 * ne01 * ne02 - i02 * ne00 * ne01 - i01 * ne00;
+            const int block = i00 / QK8_0;
+            const int group = block / 4;
+            const int lane = block % 4;
+            const char * group_src = cx + group * 4 * sizeof(block_q8_0) + i01 * nb01 + i02 * nb02 + i03 * nb03;
+
+            block_q8_0 quantized;
+            for (int q = 0; q < QK8_0; ++q) {
+                quantized.qs[q] = group_src[lane * QK8_0 + q];
+            }
+            quantized.d = reinterpret_cast<const sycl::half *>(group_src + 4 * QK8_0)[lane];
+
+            const int i13 = i / (ne10 * ne11 * ne12);
+            const int i12 = (i - i13 * ne10 * ne11 * ne12) / (ne10 * ne11);
+            const int i11 = (i - i13 * ne10 * ne11 * ne12 - i12 * ne10 * ne11) / ne10;
+            const int i10 = i - i13 * ne10 * ne11 * ne12 - i12 * ne10 * ne11 - i11 * ne10;
+            const int dst_offset = i10 * nb10 + i11 * nb11 + i12 * nb12 + i13 * nb13;
+            cpy_blck_q8_0_f32(reinterpret_cast<const char *>(&quantized), cdst + dst_offset);
+        });
+}
+
 static void ggml_cpy_f32_q4_0_sycl(const char * cx, char * cdst, const int ne, const int ne00, const int ne01,
                                    const int ne02, const int nb00, const int nb01, const int nb02, const int nb03,
                                    const int ne10, const int ne11, const int ne12, const int nb10, const int nb11,
@@ -585,7 +659,10 @@ void ggml_sycl_cpy(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, co
 
     char * src0_ddc = (char *) src0->data;
     char * src1_ddc = (char *) src1->data;
-    if ((src0->type == src1->type) && (ggml_is_contiguous(src0) && ggml_is_contiguous(src1))) {
+    const bool src0_q8_quants_first = ggml_sycl_tensor_is_kv_q8_quants_first(src0);
+    const bool src1_q8_quants_first = ggml_sycl_tensor_is_kv_q8_quants_first(src1);
+    if ((src0->type == src1->type) && (src0_q8_quants_first == src1_q8_quants_first) &&
+        (ggml_is_contiguous(src0) && ggml_is_contiguous(src1))) {
         GGML_SYCL_DEBUG("%s: memcpy path\n", __func__);
         main_stream->memcpy(src1_ddc, src0_ddc, ggml_nbytes(src0));
     } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32) {
@@ -595,8 +672,15 @@ void ggml_sycl_cpy(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, co
         ggml_cpy_f32_f16_sycl(src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10,
                               nb11, nb12, nb13, main_stream);
     } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_Q8_0) {
-        ggml_cpy_f32_q8_0_sycl(src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10,
-                               nb11, nb12, nb13, main_stream);
+        if (src1_q8_quants_first) {
+            ggml_cpy_f32_q8_0_quants_first_sycl(
+                src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03,
+                ne10, ne11, ne12, nb11, nb12, nb13, main_stream);
+        } else {
+            ggml_cpy_f32_q8_0_sycl(
+                src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03,
+                ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
+        }
     } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_Q4_0) {
         ggml_cpy_f32_q4_0_sycl(src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10,
                                nb11, nb12, nb13, main_stream);
@@ -622,8 +706,15 @@ void ggml_sycl_cpy(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, co
         ggml_cpy_q4_1_f32_sycl(src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10,
                                nb11, nb12, nb13, main_stream);
     } else if (src0->type == GGML_TYPE_Q8_0 && src1->type == GGML_TYPE_F32) {
-        ggml_cpy_q8_0_f32_sycl(src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10,
-                               nb11, nb12, nb13, main_stream);
+        if (src0_q8_quants_first) {
+            ggml_cpy_q8_0_quants_first_f32_sycl(
+                src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb01, nb02, nb03,
+                ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
+        } else {
+            ggml_cpy_q8_0_f32_sycl(
+                src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03,
+                ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
+        }
     } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_Q5_0) {
         ggml_cpy_f32_q5_0_sycl(src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10,
                                nb11, nb12, nb13, main_stream);
@@ -640,6 +731,7 @@ void ggml_sycl_cpy(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, co
         ggml_cpy_f32_iq4_nl_sycl(src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12,
                                  nb10, nb11, nb12, nb13, main_stream);
     } else if (src0->type == GGML_TYPE_Q8_0 && src1->type == GGML_TYPE_Q8_0) {
+        GGML_ASSERT(src0_q8_quants_first == src1_q8_quants_first);
         ggml_cpy_q8_0_q8_0(src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
     } else if (src0->type == GGML_TYPE_Q5_0 && src1->type == GGML_TYPE_Q5_0) {
         ggml_cpy_q5_0_q5_0(src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);

@@ -326,8 +326,19 @@ struct ggml_tensor_extra_gpu {
   dpct::event_ptr events[GGML_SYCL_MAX_DEVICES]
                         [GGML_SYCL_MAX_STREAMS]; // events for synchronizing multiple GPUs
   optimize_feature optimized_feature;
+  bool kv_q8_quants_first = false;
 };
 
+static inline bool ggml_sycl_tensor_is_kv_q8_quants_first(const ggml_tensor * tensor) {
+    while (tensor != nullptr) {
+        const auto * extra = static_cast<const ggml_tensor_extra_gpu *>(tensor->extra);
+        if (extra != nullptr && extra->kv_q8_quants_first) {
+            return true;
+        }
+        tensor = tensor->view_src;
+    }
+    return false;
+}
 extern int g_ggml_sycl_enable_level_zero;
 void * ggml_sycl_malloc_device(size_t size, sycl::queue &q);
 void ggml_sycl_free_device(void *ptr, sycl::queue &q);

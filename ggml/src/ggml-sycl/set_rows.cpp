@@ -218,6 +218,57 @@ static void set_rows_sycl_q(const char * __restrict__ src0_d,
     GGML_UNUSED(nb13);
 }
 
+template <typename TIdx>
+static void set_rows_sycl_q8_quants_first(
+        const char * __restrict__ src0_d,
+        const TIdx * __restrict__ src1_d,
+        char * __restrict__ dst_d,
+        const int64_t ne00, const int64_t ne01, const int64_t ne02, const int64_t ne03,
+        const int64_t ne11, const int64_t ne12,
+        const size_t nb01, const size_t nb02, const size_t nb03,
+        const size_t nb10, const size_t nb11, const size_t nb12,
+        const size_t nb1, const size_t nb2, const size_t nb3,
+        queue_ptr stream) {
+    GGML_ASSERT(ne00 % 128 == 0);
+    const int64_t total_blocks = (ne00 * ne01 * ne02 * ne03) / QK8_0;
+    constexpr int block_size = 256;
+    const int64_t grid_size = ceil_div(total_blocks, block_size);
+
+    stream->parallel_for(sycl::nd_range<1>(grid_size * block_size, block_size), [=](sycl::nd_item<1> item_ct1) {
+        const int64_t i = item_ct1.get_global_linear_id();
+        if (i >= total_blocks) {
+            return;
+        }
+
+        const int64_t i_base = i * QK8_0;
+        const int64_t i03 = i_base / (ne00 * ne01 * ne02);
+        const int64_t rem1 = i_base - i03 * ne00 * ne01 * ne02;
+        const int64_t i02 = rem1 / (ne00 * ne01);
+        const int64_t rem2 = rem1 - i02 * ne00 * ne01;
+        const int64_t i01 = rem2 / ne00;
+        const int64_t i00 = rem2 - i01 * ne00;
+        const int64_t i12 = i03 % ne12;
+        const int64_t i11 = i02 % ne11;
+        const size_t src_offset = calculate_offset<3>({ nb01, nb02, nb03 }, { i01, i02, i03 });
+        const size_t src1_offset = calculate_offset<3>({ nb10, nb11, nb12 }, { i01, i11, i12 });
+        const int64_t dst_row = src1_d[src1_offset / sizeof(TIdx)];
+
+        block_q8_0 block;
+        cpy_blck_f32_q8_0(src0_d + src_offset + i00 * sizeof(float), reinterpret_cast<char *>(&block));
+
+        const int64_t block_in_row = i00 / QK8_0;
+        const int64_t group = block_in_row / 4;
+        const int64_t lane = block_in_row % 4;
+        char * group_dst =
+            dst_d + calculate_offset<3>({ nb1, nb2, nb3 }, { dst_row, i02, i03 }) +
+            group * 4 * sizeof(block_q8_0);
+        for (int q = 0; q < QK8_0; ++q) {
+            group_dst[lane * QK8_0 + q] = block.qs[q];
+        }
+        reinterpret_cast<sycl::half *>(group_dst + 4 * QK8_0)[lane] = block.d;
+    });
+}
+
 template<typename TIn, typename TIdx, typename TOut>
 static void k_set_rows(
         const char * __restrict__ src0, const TIdx * __restrict__ src1, char * __restrict__ dst,
@@ -336,7 +387,19 @@ static void set_rows_sycl(ggml_backend_sycl_context & ctx, const ggml_tensor * s
             break;
 #endif
         case GGML_TYPE_Q8_0:
-            set_rows_sycl_q<TIdx, block_q8_0, QK8_0, cpy_blck_f32_q8_0>(src0_d, src1_d, (block_q8_0 *)dst->data, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);
+            if (ggml_sycl_tensor_is_kv_q8_quants_first(dst)) {
+                GGML_ASSERT(src0->type == GGML_TYPE_F32);
+                set_rows_sycl_q8_quants_first(
+                    src0_d, src1_d, (char *) dst->data,
+                    ne00, ne01, ne02, ne03, ne11, ne12,
+                    nb01, nb02, nb03, nb10, nb11, nb12, nb1, nb2, nb3, stream);
+            } else {
+                set_rows_sycl_q<TIdx, block_q8_0, QK8_0, cpy_blck_f32_q8_0>(
+                    src0_d, src1_d, (block_q8_0 *) dst->data,
+                    ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13,
+                    nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13,
+                    nb1, nb2, nb3, stream);
+            }
             break;
         case GGML_TYPE_Q5_1:
             set_rows_sycl_q<TIdx, block_q5_1, QK5_1, cpy_blck_f32_q5_1>(src0_d, src1_d, (block_q5_1 *)dst->data, ne00, ne01, ne02, ne03, ne10, ne11, ne12, ne13, nb00, nb01, nb02, nb03, nb10, nb11, nb12, nb13, nb1, nb2, nb3, stream);

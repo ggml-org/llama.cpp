@@ -293,6 +293,35 @@ static __dpct_inline__ float vec_dot_fattn_vec_KQ_q8_0(const char * __restrict__
     return sum;
 }
 
+template <int D, int nthreads, int warp_size>
+static __dpct_inline__ float vec_dot_fattn_vec_KQ_q8_0_quants_first(
+        const char * __restrict__ K_c,
+        const void * __restrict__ Q_v,
+        const int * __restrict__ Q_q8,
+        const void * __restrict__ Q_ds_v) {
+    static_assert(D == 128, "quants-first q8_0 groups span one 128-element head");
+    auto item_ct1 = sycl::ext::oneapi::this_work_item::get_nd_item<3>();
+    const int8_t * quants = reinterpret_cast<const int8_t *>(K_c);
+    const sycl::half * scales = reinterpret_cast<const sycl::half *>(K_c + 4 * QK8_0);
+    GGML_UNUSED(Q_v);
+
+    float sum = 0.0f;
+#pragma unroll
+    for (int k_KQ_0 = 0; k_KQ_0 < int(D / sizeof(int)); k_KQ_0 += nthreads) {
+        const int k_KQ =
+            k_KQ_0 + (nthreads == warp_size ? item_ct1.get_local_id(2) : item_ct1.get_local_id(2) % nthreads);
+        const int ib = k_KQ / QI8_0;
+        const int iqs = k_KQ % QI8_0;
+        int v;
+        ggml_sycl_memcpy_1<sizeof(v), 2>(&v, quants + ib * QK8_0 + 4 * iqs);
+        const sycl::float2 * Q_ds = (const sycl::float2 *) Q_ds_v;
+        const float Q_d = Q_ds[k_KQ_0 / nthreads].x();
+        sum += vec_dot_q8_0_q8_1_impl<float, 1>(
+            &v, &Q_q8[k_KQ_0 / nthreads], scales[ib], Q_d);
+    }
+    return sum;
+}
+
 #include "turbo-quants.hpp"
 
 template <int D, int nthreads, typename block_t, int QK, float (*dequantize_fn)(const block_t *, int, float)>
@@ -625,6 +654,38 @@ static __dpct_inline__ void dequantize_V_q8_0(const void * __restrict__ vx, void
         }
     } else {
         static_assert(std::is_same_v<T, void>, "unsupported type");
+    }
+}
+
+template <typename T, int ne>
+static __dpct_inline__ void dequantize_V_q8_0_quants_first(
+        const void * __restrict__ vx, void * __restrict__ dst, const int64_t i0) {
+    const char * group = reinterpret_cast<const char *>(vx);
+    const int8_t * quants = reinterpret_cast<const int8_t *>(group);
+    const sycl::half * scales = reinterpret_cast<const sycl::half *>(group + 4 * QK8_0);
+    const int64_t ib = i0 / QK8_0;
+    const int iqs = i0 % QK8_0;
+    static_assert(ne % 2 == 0, "bad ne");
+    int8_t qs[ne];
+    ggml_sycl_memcpy_1<ne, 2>(qs, quants + ib * QK8_0 + iqs);
+
+#ifdef GGML_SYCL_F16
+    if constexpr (std::is_same<T, sycl::half>::value) {
+        const sycl::half2 d = sycl::half2(scales[ib]);
+#pragma unroll
+        for (int l0 = 0; l0 < ne; l0 += 2) {
+            ((sycl::half2 *) dst)[l0 / 2] = d * make_half2(qs[l0], qs[l0 + 1]);
+        }
+    } else
+#endif
+    if constexpr (std::is_same<T, float>::value) {
+        const float d = scales[ib];
+#pragma unroll
+        for (int l = 0; l < ne; ++l) {
+            ((float *) dst)[l] = d * qs[l];
+        }
+    } else {
+        static_assert(std::is_same_v<T, void>, "bad type");
     }
 }
 
@@ -1044,7 +1105,7 @@ void launch_fattn(
             nb13 = nb13 * bs * sizeof(sycl::half) / ts;
         } else {
             GGML_ASSERT(K->nb[0] == ts);
-            to_fp16_nc_sycl_t to_fp16 = ggml_get_to_fp16_nc_sycl(K->type);
+            to_fp16_nc_sycl_t to_fp16 = ggml_get_to_fp16_nc_sycl(K->type, dst);
             const int64_t s01 = nb11 / ts;
             const int64_t s02 = nb12 / ts;
             const int64_t s03 = nb13 / ts;
@@ -1078,7 +1139,7 @@ void launch_fattn(
                 nb23 = nb23 * bs * sizeof(sycl::half) / ts;
             } else {
                 GGML_ASSERT(V->nb[0] == ts);
-                to_fp16_nc_sycl_t to_fp16 = ggml_get_to_fp16_nc_sycl(V->type);
+                to_fp16_nc_sycl_t to_fp16 = ggml_get_to_fp16_nc_sycl(V->type, dst);
                 const int64_t s01 = nb21 / ts;
                 const int64_t s02 = nb22 / ts;
                 const int64_t s03 = nb23 / ts;

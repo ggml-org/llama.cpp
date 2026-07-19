@@ -35,6 +35,7 @@ template <int D,
           int ncols,
           int type_K,
           int type_V,
+          bool q8_quants_first,
           bool use_logit_softcap,
           int warp_size>  // D == head size
 static void flash_attn_ext_vec(const char* __restrict__ Q,
@@ -109,13 +110,24 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
     constexpr int V_rows_per_thread = type_V == GGML_TYPE_F16 ? 2*cpy_ne : 4;
     constexpr int V_cols_per_iter   = warp_size / nthreads_V;
 
-    constexpr vec_dot_KQ_t vec_dot_KQ = get_vec_dot_KQ<type_K, D, nthreads_KQ, warp_size>();
+    constexpr vec_dot_KQ_t vec_dot_KQ = [] {
+        if constexpr (q8_quants_first) {
+            static_assert(D == 128 && type_K == GGML_TYPE_Q8_0 && type_V == GGML_TYPE_Q8_0);
+            return vec_dot_fattn_vec_KQ_q8_0_quants_first<D, nthreads_KQ, warp_size>;
+        } else {
+            return get_vec_dot_KQ<type_K, D, nthreads_KQ, warp_size>();
+        }
+    }();
     constexpr bool K_is_turbo = (type_K == GGML_TYPE_TURBO3_0 || type_K == GGML_TYPE_TURBO2_0 || type_K == GGML_TYPE_TURBO4_0);
     constexpr bool Q_q8_1 = type_K != GGML_TYPE_F16 && !K_is_turbo;
 #ifdef GGML_SYCL_F16
-    constexpr dequantize_V_t dequantize_V = get_dequantize_V<type_V, sycl::half, V_rows_per_thread>();
+    constexpr dequantize_V_t dequantize_V = q8_quants_first
+        ? dequantize_V_q8_0_quants_first<sycl::half, V_rows_per_thread>
+        : get_dequantize_V<type_V, sycl::half, V_rows_per_thread>();
 #else
-    constexpr dequantize_V_t dequantize_V = get_dequantize_V<type_V, float, V_rows_per_thread>();
+    constexpr dequantize_V_t dequantize_V = q8_quants_first
+        ? dequantize_V_q8_0_quants_first<float, V_rows_per_thread>
+        : get_dequantize_V<type_V, float, V_rows_per_thread>();
 #endif // GGML_SYCL_F16
 
     const int ic0 = item_ct1.get_group(2) * ncols;  // Index of the Q/QKV column to work on.
@@ -578,54 +590,56 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
 #endif // __clang__
 
 
-template <int D, int cols_per_block, int type_K, int type_V, bool use_logit_softcap>
+template <int D, int cols_per_block, int type_K, int type_V, bool q8_quants_first, bool use_logit_softcap>
 void ggml_sycl_flash_attn_ext_vec_case_impl(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-
     const int warp_size = WARP_16_SIZE; //better performance than WARP_32_SIZE
-
     const int cc = ggml_sycl_info().devices[ggml_sycl_get_device()].cc;
-
     const int nthreads = ggml_sycl_fattn_vec_get_nthreads_host(cc);
-    const int nwarps   = nthreads / warp_size;
-
+    const int nwarps = nthreads / warp_size;
     const bool need_f16_K = type_K == GGML_TYPE_F16;
     const bool need_f16_V = type_V == GGML_TYPE_F16;
     constexpr size_t nbytes_shared = 0;
 
     launch_fattn<D, cols_per_block, 1,
                  flash_attn_ext_vec<D, cols_per_block, type_K, type_V,
-                                    use_logit_softcap, warp_size>, warp_size>(
+                                    q8_quants_first, use_logit_softcap, warp_size>, warp_size>(
         ctx, dst, nwarps, nbytes_shared, D, need_f16_K, need_f16_V, false);
 }
 
-template <int D, int type_K, int type_V>
-void ggml_sycl_flash_attn_ext_vec_case(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+template <int D, int type_K, int type_V, bool q8_quants_first>
+static void ggml_sycl_flash_attn_ext_vec_case_dispatch(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * KQV = dst;
-    const ggml_tensor * Q   = dst->src[0];
-
+    const ggml_tensor * Q = dst->src[0];
     float logit_softcap;
     memcpy(&logit_softcap, (const float *) KQV->op_params + 2, sizeof(float));
 
     if (Q->ne[1] == 1) {
         constexpr int cols_per_block = 1;
         if (logit_softcap == 0.0f) {
-            constexpr bool use_logit_softcap = false;
-            ggml_sycl_flash_attn_ext_vec_case_impl<D, cols_per_block, type_K, type_V, use_logit_softcap>(ctx, dst);
+            ggml_sycl_flash_attn_ext_vec_case_impl<D, cols_per_block, type_K, type_V, q8_quants_first, false>(ctx, dst);
         } else {
-            constexpr bool use_logit_softcap = true;
-            ggml_sycl_flash_attn_ext_vec_case_impl<D, cols_per_block, type_K, type_V, use_logit_softcap>(ctx, dst);
+            ggml_sycl_flash_attn_ext_vec_case_impl<D, cols_per_block, type_K, type_V, q8_quants_first, true>(ctx, dst);
         }
         return;
     }
 
     constexpr int cols_per_block = 2;
     if (logit_softcap == 0.0f) {
-        constexpr bool use_logit_softcap = false;
-        ggml_sycl_flash_attn_ext_vec_case_impl<D, cols_per_block, type_K, type_V, use_logit_softcap>(ctx, dst);
+        ggml_sycl_flash_attn_ext_vec_case_impl<D, cols_per_block, type_K, type_V, q8_quants_first, false>(ctx, dst);
     } else {
-        constexpr bool use_logit_softcap = true;
-        ggml_sycl_flash_attn_ext_vec_case_impl<D, cols_per_block, type_K, type_V, use_logit_softcap>(ctx, dst);
+        ggml_sycl_flash_attn_ext_vec_case_impl<D, cols_per_block, type_K, type_V, q8_quants_first, true>(ctx, dst);
     }
+}
+
+template <int D, int type_K, int type_V>
+void ggml_sycl_flash_attn_ext_vec_case(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    ggml_sycl_flash_attn_ext_vec_case_dispatch<D, type_K, type_V, false>(ctx, dst);
+}
+
+template <int D>
+void ggml_sycl_flash_attn_ext_vec_case_q8_quants_first(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    static_assert(D == 128);
+    ggml_sycl_flash_attn_ext_vec_case_dispatch<D, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, true>(ctx, dst);
 }
 
 #define DECL_FATTN_VEC_CASE(D, type_K, type_V)                              \

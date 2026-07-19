@@ -14,6 +14,66 @@
 #include <map>
 #include <stdexcept>
 
+
+static constexpr size_t Q8_KV_QUANTS_FIRST_BLOCKS = 4;
+static constexpr size_t Q8_KV_QUANTS_PER_BLOCK = 32;
+static constexpr size_t Q8_KV_BLOCK_BYTES = sizeof(ggml_fp16_t) + Q8_KV_QUANTS_PER_BLOCK;
+static constexpr size_t Q8_KV_QUANTS_FIRST_BYTES = Q8_KV_QUANTS_FIRST_BLOCKS * Q8_KV_BLOCK_BYTES;
+
+static void q8_kv_repack_groups(uint8_t * data, size_t size, bool to_quants_first) {
+    GGML_ASSERT(size % Q8_KV_QUANTS_FIRST_BYTES == 0);
+    for (size_t offset = 0; offset < size; offset += Q8_KV_QUANTS_FIRST_BYTES) {
+        uint8_t canonical[Q8_KV_QUANTS_FIRST_BYTES];
+        memcpy(canonical, data + offset, sizeof(canonical));
+        for (size_t block = 0; block < Q8_KV_QUANTS_FIRST_BLOCKS; ++block) {
+            const size_t canonical_offset = block * Q8_KV_BLOCK_BYTES;
+            const size_t quants_offset = block * Q8_KV_QUANTS_PER_BLOCK;
+            const size_t scale_offset =
+                Q8_KV_QUANTS_FIRST_BLOCKS * Q8_KV_QUANTS_PER_BLOCK + block * sizeof(ggml_fp16_t);
+            if (to_quants_first) {
+                memcpy(data + offset + quants_offset, canonical + canonical_offset + sizeof(ggml_fp16_t), Q8_KV_QUANTS_PER_BLOCK);
+                memcpy(data + offset + scale_offset, canonical + canonical_offset, sizeof(ggml_fp16_t));
+            } else {
+                memcpy(data + offset + canonical_offset, canonical + scale_offset, sizeof(ggml_fp16_t));
+                memcpy(data + offset + canonical_offset + sizeof(ggml_fp16_t), canonical + quants_offset, Q8_KV_QUANTS_PER_BLOCK);
+            }
+        }
+    }
+}
+
+static void q8_kv_write_canonical(
+        llama_io_write_i & io, ggml_tensor * tensor, size_t offset, size_t size) {
+    static constexpr size_t MAX_CHUNK_BYTES = 256 * 1024;
+    GGML_ASSERT(offset % Q8_KV_QUANTS_FIRST_BYTES == 0);
+    GGML_ASSERT(size % Q8_KV_QUANTS_FIRST_BYTES == 0);
+    const size_t chunk_capacity =
+        std::max(Q8_KV_QUANTS_FIRST_BYTES, MAX_CHUNK_BYTES / Q8_KV_QUANTS_FIRST_BYTES * Q8_KV_QUANTS_FIRST_BYTES);
+    std::vector<uint8_t> buffer(std::min(size, chunk_capacity));
+    for (size_t written = 0; written < size;) {
+        const size_t chunk = std::min(buffer.size(), size - written);
+        ggml_backend_tensor_get(tensor, buffer.data(), offset + written, chunk);
+        q8_kv_repack_groups(buffer.data(), chunk, false);
+        io.write(buffer.data(), chunk);
+        written += chunk;
+    }
+}
+
+static void q8_kv_read_canonical(
+        llama_io_read_i & io, ggml_tensor * tensor, size_t offset, size_t size) {
+    static constexpr size_t MAX_CHUNK_BYTES = 256 * 1024;
+    GGML_ASSERT(offset % Q8_KV_QUANTS_FIRST_BYTES == 0);
+    GGML_ASSERT(size % Q8_KV_QUANTS_FIRST_BYTES == 0);
+    const size_t chunk_capacity =
+        std::max(Q8_KV_QUANTS_FIRST_BYTES, MAX_CHUNK_BYTES / Q8_KV_QUANTS_FIRST_BYTES * Q8_KV_QUANTS_FIRST_BYTES);
+    std::vector<uint8_t> buffer(std::min(size, chunk_capacity));
+    for (size_t read = 0; read < size;) {
+        const size_t chunk = std::min(buffer.size(), size - read);
+        io.read(buffer.data(), chunk);
+        q8_kv_repack_groups(buffer.data(), chunk, true);
+        ggml_backend_tensor_set(tensor, buffer.data(), offset + read, chunk);
+        read += chunk;
+    }
+}
 static bool ggml_is_power_of_2(int n) {
     return (n & (n - 1)) == 0;
 }
@@ -275,6 +335,9 @@ llama_kv_cache::llama_kv_cache(
     // cache must decide from its own type_v/model shape/env.
     const char * const turbo_layer_adaptive_env = getenv("TURBO_LAYER_ADAPTIVE");
     const int adaptive_mode = llama_kv_cache_adaptive_mode(turbo_layer_adaptive_env, type_v, hparams.n_layer());
+    const char * const quants_first_env = getenv("GGML_SYCL_Q8_KV_QUANTS_FIRST");
+    const bool quants_first_requested =
+        quants_first_env != nullptr && quants_first_env[0] != '\0' && quants_first_env[0] != '0';
     if (adaptive_mode > 0) {
         // The per-layer switch ignores the mode for non-turbo KV types or
         // shallow models; only log "enabled" when the mode will actually
@@ -440,6 +503,27 @@ llama_kv_cache::llama_kv_cache(
 
         ggml_tensor * k = has_k ? ggml_new_tensor_3d(ctx, layer_type_k, n_embd_k_gqa_eff, kv_size, n_stream) : nullptr;
         ggml_tensor * v = has_v ? ggml_new_tensor_3d(ctx, layer_type_v, n_embd_v_gqa_eff, kv_size, n_stream) : nullptr;
+
+        const bool quants_first_layer =
+            quants_first_requested &&
+            strstr(dev_name, "SYCL") != nullptr &&
+            layer_type_k == GGML_TYPE_Q8_0 &&
+            layer_type_v == GGML_TYPE_Q8_0 &&
+            n_embd_head_k == 128 &&
+            n_embd_head_v == 128 &&
+            !v_trans;
+        if (quants_first_layer) {
+            k->flags |= GGML_TENSOR_FLAG_KV_Q8_QUANTS_FIRST;
+            v->flags |= GGML_TENSOR_FLAG_KV_Q8_QUANTS_FIRST;
+            if (il == 0) {
+                LLAMA_LOG_INFO("%s: q8_0 KV quants-first layout enabled for 128-element heads\n", __func__);
+            }
+        } else if (quants_first_requested && il == 0) {
+            LLAMA_LOG_WARN(
+                "%s: GGML_SYCL_Q8_KV_QUANTS_FIRST ignored (dev=%s type_k=%s type_v=%s head_k=%u head_v=%u v_trans=%d)\n",
+                __func__, dev_name, ggml_type_name(layer_type_k), ggml_type_name(layer_type_v),
+                n_embd_head_k, n_embd_head_v, (int) v_trans);
+        }
 
         has_k && ggml_format_name(k, "cache_k_l%d", il);
         has_v && ggml_format_name(v, "cache_v_l%d", il);
@@ -2520,7 +2604,11 @@ void llama_kv_cache::state_write_data(llama_io_write_i & io, const cell_ranges_t
         for (const auto & range : cr.data) {
             const size_t range_size = range.second - range.first;
             const size_t buf_size = range_size * k_size_row;
-            io.write_tensor(k, range.first * k_size_row, buf_size);
+            if (ggml_tensor_is_kv_q8_quants_first(k)) {
+                q8_kv_write_canonical(io, k, range.first * k_size_row, buf_size);
+            } else {
+                io.write_tensor(k, range.first * k_size_row, buf_size);
+            }
         }
     }
 
@@ -2546,7 +2634,11 @@ void llama_kv_cache::state_write_data(llama_io_write_i & io, const cell_ranges_t
             for (const auto & range : cr.data) {
                 const size_t range_size = range.second - range.first;
                 const size_t buf_size = range_size * v_size_row;
-                io.write_tensor(v, range.first * v_size_row, buf_size);
+                if (ggml_tensor_is_kv_q8_quants_first(v)) {
+                    q8_kv_write_canonical(io, v, range.first * v_size_row, buf_size);
+                } else {
+                    io.write_tensor(v, range.first * v_size_row, buf_size);
+                }
             }
         }
     } else {
@@ -2760,13 +2852,21 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
 
         if (cell_count) {
             if (sinfo.is_contiguous()) {
-                // Fast path: contiguous cells, single memcpy
-                io.read_tensor(k, sinfo.head() * k_size_row, cell_count * k_size_row);
+                const size_t dst_offset = sinfo.head() * k_size_row;
+                const size_t size = cell_count * k_size_row;
+                if (ggml_tensor_is_kv_q8_quants_first(k)) {
+                    q8_kv_read_canonical(io, k, dst_offset, size);
+                } else {
+                    io.read_tensor(k, dst_offset, size);
+                }
             } else {
-                // Slow path: scatter to non-contiguous positions
                 for (uint32_t i = 0; i < cell_count; ++i) {
                     const size_t dst_offset = sinfo.idxs[0][i] * k_size_row;
-                    io.read_tensor(k, dst_offset, k_size_row);
+                    if (ggml_tensor_is_kv_q8_quants_first(k)) {
+                        q8_kv_read_canonical(io, k, dst_offset, k_size_row);
+                    } else {
+                        io.read_tensor(k, dst_offset, k_size_row);
+                    }
                 }
             }
         }
@@ -2804,13 +2904,21 @@ bool llama_kv_cache::state_read_data(llama_io_read_i & io, uint32_t strm, uint32
 
             if (cell_count) {
                 if (sinfo.is_contiguous()) {
-                    // Fast path: contiguous cells, single memcpy
-                    io.read_tensor(v, sinfo.head() * v_size_row, cell_count * v_size_row);
+                    const size_t dst_offset = sinfo.head() * v_size_row;
+                    const size_t size = cell_count * v_size_row;
+                    if (ggml_tensor_is_kv_q8_quants_first(v)) {
+                        q8_kv_read_canonical(io, v, dst_offset, size);
+                    } else {
+                        io.read_tensor(v, dst_offset, size);
+                    }
                 } else {
-                    // Slow path: scatter to non-contiguous positions
                     for (uint32_t i = 0; i < cell_count; ++i) {
                         const size_t dst_offset = sinfo.idxs[0][i] * v_size_row;
-                        io.read_tensor(v, dst_offset, v_size_row);
+                        if (ggml_tensor_is_kv_q8_quants_first(v)) {
+                            q8_kv_read_canonical(io, v, dst_offset, v_size_row);
+                        } else {
+                            io.read_tensor(v, dst_offset, v_size_row);
+                        }
                     }
                 }
             }

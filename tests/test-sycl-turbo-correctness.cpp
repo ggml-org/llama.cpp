@@ -86,6 +86,28 @@ static std::vector<char> quantize_host(ggml_type type, const std::vector<float> 
     return dst;
 }
 
+static void q8_kv_quants_first_host(std::vector<char> & data) {
+    constexpr size_t blocks_per_group = 4;
+    constexpr size_t quants_per_block = 32;
+    constexpr size_t block_bytes = sizeof(ggml_fp16_t) + quants_per_block;
+    constexpr size_t group_bytes = blocks_per_group * block_bytes;
+    GGML_ASSERT(data.size() % group_bytes == 0);
+    for (size_t offset = 0; offset < data.size(); offset += group_bytes) {
+        char canonical[group_bytes];
+        memcpy(canonical, data.data() + offset, group_bytes);
+        for (size_t block = 0; block < blocks_per_group; ++block) {
+            memcpy(
+                data.data() + offset + block * quants_per_block,
+                canonical + block * block_bytes + sizeof(ggml_fp16_t),
+                quants_per_block);
+            memcpy(
+                data.data() + offset + blocks_per_group * quants_per_block + block * sizeof(ggml_fp16_t),
+                canonical + block * block_bytes,
+                sizeof(ggml_fp16_t));
+        }
+    }
+}
+
 struct err_stats {
     double nmse;       // ||test - ref||^2 / ||ref||^2
     double max_abs;    // max |test - ref|
@@ -486,6 +508,14 @@ static void probe_flash_attn(ggml_backend_t cpu, ggml_backend_t sycl,
     // Turbo copies for the kernel under test.
     auto k_q = quantize_host(kv_type, k_f32, d, n_kv * nh_kv);
     auto v_q = quantize_host(kv_type, v_f32, d, n_kv * nh_kv);
+    const char * quants_first_env = getenv("GGML_SYCL_Q8_KV_QUANTS_FIRST");
+    const bool q8_quants_first =
+        kv_type == GGML_TYPE_Q8_0 && d == 128 &&
+        quants_first_env != nullptr && quants_first_env[0] != '\0' && quants_first_env[0] != '0';
+    if (q8_quants_first) {
+        q8_kv_quants_first_host(k_q);
+        q8_kv_quants_first_host(v_q);
+    }
 
     std::vector<ggml_fp16_t> mask(n_kv * n_q_pad, ggml_fp32_to_fp16(0.0f));
     const float scale = 1.0f / std::sqrt((float) d);
@@ -497,6 +527,10 @@ static void probe_flash_attn(ggml_backend_t cpu, ggml_backend_t sycl,
         ggml_set_name(k, "k");
         ggml_tensor * v = ggml_new_tensor_4d(ctx, kvt, d, n_kv, nh_kv, 1);
         ggml_set_name(v, "v");
+        if (q8_quants_first && kvt == GGML_TYPE_Q8_0) {
+            k->flags |= GGML_TENSOR_FLAG_KV_Q8_QUANTS_FIRST;
+            v->flags |= GGML_TENSOR_FLAG_KV_Q8_QUANTS_FIRST;
+        }
         ggml_tensor * m = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, n_kv, n_q_pad, 1, 1);
         ggml_set_name(m, "m");
         const bool turbo = (kvt == GGML_TYPE_TURBO2_0 || kvt == GGML_TYPE_TURBO3_0 || kvt == GGML_TYPE_TURBO4_0);
@@ -521,12 +555,13 @@ static void probe_flash_attn(ggml_backend_t cpu, ggml_backend_t sycl,
         return o;
     };
 
-    char label[80];
+    char label[96];
+    const char * layout = q8_quants_first ? " quants-first" : "";
     if (nh_q == nh_kv) {
-        snprintf(label, sizeof(label), "flash_attn %s d=%d [%s nq=%d]", name, (int) d, path, (int) n_q);
+        snprintf(label, sizeof(label), "flash_attn %s%s d=%d [%s nq=%d]", name, layout, (int) d, path, (int) n_q);
     } else {
-        snprintf(label, sizeof(label), "flash_attn %s d=%d [%s nq=%d GQA %d:%d]",
-                 name, (int) d, path, (int) n_q, (int) nh_q, (int) nh_kv);
+        snprintf(label, sizeof(label), "flash_attn %s%s d=%d [%s nq=%d GQA %d:%d]",
+                 name, layout, (int) d, path, (int) n_q, (int) nh_q, (int) nh_kv);
     }
 
     const bool turbo_kv = kv_type == GGML_TYPE_TURBO2_0 || kv_type == GGML_TYPE_TURBO3_0 ||

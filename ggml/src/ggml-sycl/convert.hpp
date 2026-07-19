@@ -35,6 +35,7 @@ using to_t_nc_sycl_t = void (*)(const void * x, T * y, int64_t ne00, int64_t ne0
 
 typedef to_t_nc_sycl_t<sycl::half> to_fp16_nc_sycl_t;
 to_fp16_nc_sycl_t ggml_get_to_fp16_nc_sycl(ggml_type type);
+to_fp16_nc_sycl_t ggml_get_to_fp16_nc_sycl(ggml_type type, ggml_tensor * dst);
 
 template<typename dst_t, typename src_t>
  inline dst_t ggml_sycl_cast(src_t x) {

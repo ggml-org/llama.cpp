@@ -27,9 +27,18 @@
         const bool type_K_okay = K->type == (type_K) || (K->type == GGML_TYPE_F32 && (type_K) == GGML_TYPE_F16); \
         const bool type_V_okay = V->type == (type_V) || (V->type == GGML_TYPE_F32 && (type_V) == GGML_TYPE_F16); \
         if (Q->ne[0] == (D) && type_K_okay && type_V_okay) {                                                     \
+            if constexpr ((D) == 128 && (type_K) == GGML_TYPE_Q8_0 && (type_V) == GGML_TYPE_Q8_0) {              \
+                const bool K_quants_first = ggml_sycl_tensor_is_kv_q8_quants_first(K);                                     \
+                const bool V_quants_first = ggml_sycl_tensor_is_kv_q8_quants_first(V);                                     \
+                GGML_ASSERT(K_quants_first == V_quants_first);                                                     \
+                if (K_quants_first) {                                                                             \
+                    ggml_sycl_flash_attn_ext_vec_case_q8_quants_first<D>(ctx, dst);                               \
+                    return;                                                                                      \
+                }                                                                                               \
+            }                                                                                                   \
             ggml_sycl_flash_attn_ext_vec_case<D, type_K, type_V>(ctx, dst);                                      \
             return;                                                                                              \
-        }                                                                                                        \
+        }                                                                                                       \
     }                                                                    \
 
 #define FATTN_VEC_CASES_ALL_D(type_K, type_V) \
