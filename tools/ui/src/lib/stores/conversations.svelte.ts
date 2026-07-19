@@ -384,9 +384,6 @@ class ConversationsStore {
 		if (convIds.length === 0) return;
 
 		try {
-			const activeWasDeleted =
-				this.activeConversation !== null && convIds.includes(this.activeConversation.id);
-
 			const idsToRemove = new SvelteSet(convIds);
 			// Collect all descendants recursively so the local cache stays consistent
 			// even when deleteWithForks is omitted.
@@ -400,6 +397,9 @@ class ConversationsStore {
 					}
 				}
 			}
+
+			const activeWasDeleted =
+				this.activeConversation !== null && idsToRemove.has(this.activeConversation.id);
 
 			await DatabaseService.bulkDeleteConversations([...idsToRemove]);
 
