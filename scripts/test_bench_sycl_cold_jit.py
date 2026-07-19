@@ -38,6 +38,15 @@ class ColdJitRunnerTests(unittest.TestCase):
             ):
                 COLD_JIT.parse_assignments([invalid])
 
+    def test_parse_assignments_rejects_duplicate_names(self) -> None:
+        with self.assertRaisesRegex(
+            COLD_JIT.ColdJitError,
+            "duplicate assignment for 'mistral'",
+        ):
+            COLD_JIT.parse_assignments(
+                ["mistral=/models/a.gguf", "mistral=/models/b.gguf"]
+            )
+
     def test_summary_reports_student_t_interval(self) -> None:
         values = [1.0, 2.0, 3.0, 4.0, 5.0]
         summary = COLD_JIT.summarize(values)

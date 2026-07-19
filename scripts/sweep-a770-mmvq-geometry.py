@@ -292,11 +292,26 @@ def parse_gate_fail(summary: str) -> bool:
     return fail_count == 0
 
 
+def _correctness_env() -> dict[str, str]:
+    env = os.environ.copy()
+    for knob in (
+        "GGML_SYCL_FA_XMX",
+        "GGML_SYCL_FA_FORCE_VEC_STANDARD",
+        "GGML_SYCL_FA_Q8_GQA_TILE",
+        "GGML_SYCL_Q8_KV_QUANTS_FIRST",
+        "LLAMA_ENABLE_INNERQ",
+        "TURBO_LAYER_ADAPTIVE",
+        "TURBO_AUTO_ASYMMETRIC",
+    ):
+        env.pop(knob, None)
+    env["ONEAPI_DEVICE_SELECTOR"] = "level_zero:0"
+    return env
+
+
 def correctness_matrix(
     args: argparse.Namespace, tag: str, manifest_identity: str
 ) -> list[dict[str, Any]]:
-    env = os.environ.copy()
-    env["ONEAPI_DEVICE_SELECTOR"] = "level_zero:0"
+    env = _correctness_env()
     results: list[dict[str, Any]] = []
     for y, sg in CELLS:
         require_sole_tenancy(args.render_node)

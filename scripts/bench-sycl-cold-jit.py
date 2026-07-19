@@ -62,6 +62,8 @@ def parse_assignments(values: list[str], *, separator: str = "=") -> dict[str, s
         key, found, item = value.partition(separator)
         if not found or not key or not item:
             raise ColdJitError(f"expected NAME{separator}VALUE, got {value!r}")
+        if key in parsed:
+            raise ColdJitError(f"duplicate assignment for {key!r}")
         parsed[key] = item
     return parsed
 

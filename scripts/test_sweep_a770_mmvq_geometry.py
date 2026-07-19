@@ -237,7 +237,7 @@ class GeometrySweepTests(unittest.TestCase):
         self.assertIn((1, 16), SWEEP.CELLS)
 
     def test_all_possible_configs_defined(self) -> None:
-        """_ALL_CELL_CONFIGS enumerates every product of MMV_Y × subgroups."""
+        """_ALL_CELL_CONFIGS enumerates every product of MMV_Y x subgroups."""
         expected = [(y, sg) for y in (1, 2, 4) for sg in (4, 8, 16, 32)]
         self.assertEqual(set(SWEEP._ALL_CELL_CONFIGS), set(expected))
 
@@ -512,6 +512,24 @@ class GeometrySweepTests(unittest.TestCase):
     # ------------------------------------------------------------------ #
     # Correctness matrix persists identity                                #
     # ------------------------------------------------------------------ #
+
+    def test_correctness_env_clears_ambient_fork_knobs(self) -> None:
+        controlled = (
+            "GGML_SYCL_FA_XMX",
+            "GGML_SYCL_FA_FORCE_VEC_STANDARD",
+            "GGML_SYCL_FA_Q8_GQA_TILE",
+            "GGML_SYCL_Q8_KV_QUANTS_FIRST",
+            "LLAMA_ENABLE_INNERQ",
+            "TURBO_LAYER_ADAPTIVE",
+            "TURBO_AUTO_ASYMMETRIC",
+        )
+        ambient = {name: "1" for name in controlled}
+        ambient["ONEAPI_DEVICE_SELECTOR"] = "ambient:9"
+        with mock.patch.dict(SWEEP.os.environ, ambient):
+            env = SWEEP._correctness_env()
+        for name in controlled:
+            self.assertNotIn(name, env)
+        self.assertEqual(env["ONEAPI_DEVICE_SELECTOR"], "level_zero:0")
 
     def test_correctness_persists_identity_fields(self) -> None:
         """Each correctness record carries manifest_identity for verification."""
