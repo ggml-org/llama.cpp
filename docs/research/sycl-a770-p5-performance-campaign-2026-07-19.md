@@ -1,16 +1,16 @@
-# Intel SYCL/A770 P5 performance campaign — 2026-07-18/19
+# Intel SYCL/A770 P5 performance campaign - 2026-07-18/19
 
 ## Decision
 
-This campaign tested the remaining plausible standard Intel-SYCL performance
-levers on an Intel Arc A770 and retained only changes that survived explicit
-correctness, performance, and GPU-safety gates.
+This campaign executed the scheduled P5.1-P5.14 standard Intel-SYCL matrix on
+an Intel Arc A770 and retained only changes that survived explicit correctness,
+performance, and GPU-safety gates.
 
 The principal results are:
 
 - **Retained default change:** per-kernel SYCL device-code split. It reduced
-  cold start by 24.91% on Mistral and 20.50% on Llama-3.1 without a warm
-  throughput or correctness regression.
+  conventional baseline-relative cold-start latency by 19.94% on Mistral and
+  17.01% on Llama-3.1 without a warm throughput or correctness regression.
 - **Retained opt-in experiment:** quants-first q8_0 KV rows. It improved tg128
   by 8.01–20.62% from depth 4096 through 16384 while preserving canonical
   host/session bytes and standard correctness. Canonical q8_0 remains the
@@ -31,6 +31,11 @@ The principal results are:
 
 No TurboQuant/Turbo FA, XMX FA, asymmetric KV, sparse-V, TriAttention, QJL, or
 SLM-LUT work was reopened by this campaign.
+
+“Complete campaign” below refers only to the enumerated P5.1-P5.14 queue. It
+does not mean that every candidate from the preceding research survey was
+executed: GQA KV-read amortization and KV prefetch were not scheduled as
+standalone measurement tasks and remain unmeasured.
 
 ## Scope and pins
 
@@ -204,7 +209,7 @@ that the Level Zero adapter read each requested value. The A770 exposed only
 ### P5.7 — reorder/MMVQ versus DMMV routing
 
 **Change tested:**
-`GGML_SYCL_DISABLE_OPT={0,1} × GGML_SYCL_PRIORITIZE_DMMV={0,1}` on dense
+`GGML_SYCL_DISABLE_OPT={0,1} x GGML_SYCL_PRIORITIZE_DMMV={0,1}` on dense
 Mistral Q4_K/Q6_K and Qwen3-Coder Q3_K MoE.
 
 **Result:** **alternatives killed; default `0/0` retained**.
@@ -222,7 +227,7 @@ both cases. Six campaigns were valid and had no GPU-fault delta.
 ### P5.8 — MMVQ launch geometry
 
 **Change tested:** all twelve compile-time combinations
-`GGML_SYCL_MMV_Y={1,2,4}` ×
+`GGML_SYCL_MMV_Y={1,2,4}` x
 `GGML_SYCL_MMVQ_NUM_SUBGROUPS={4,8,16,32}` across all seven live subgroup
 sites.
 
@@ -240,6 +245,13 @@ Reusable isolated-binary and geometry runners landed in `071e396f5` and
 `67411cce8`; their 16 focused tests passed and the reusable runner repeated all
 12 correctness cells successfully.
 
+A follow-up generic Q4_0 `MUL_MAT` audit found that the `4x32` cell requests
+4,096 work-items per work-group on the A770, above its 1,024 limit. The
+reusable runner now excludes every `Y * subgroups * 32 > 1024` cell. The
+historical twelve-cell results remain valid for the recorded workload, but do
+not establish all-op safety for those oversized geometries. This does not
+change the retained `1x16` default or the decision to kill alternate geometry.
+
 ### P5.9 — JIT code split and compile-fast
 
 **Changes tested:** isolated baseline, per-kernel device-code split,
@@ -250,8 +262,9 @@ compile-fast, and split+compile-fast builds.
 Six forced-cold process launches per build/model used
 `SYCL_CACHE_PERSISTENT=0` and measured first-valid-JSON timing:
 
-- per-kernel split improved cold-start median by 24.91% on Mistral and 20.50%
-  on Llama-3.1;
+- per-kernel split reduced conventional baseline-relative cold-start latency
+  by 19.94% on Mistral and 17.01% on Llama-3.1 (equivalent to candidate-relative
+  speedups of 24.91% and 20.50%);
 - compile-fast changed cold start by only +1.52% and -0.93%.
 
 Warm paired split results were:
@@ -271,7 +284,7 @@ remain as reusable tooling.
 **Change tested:** replace the non-Windows, non-PVC tensor-upload bounce buffer
 with direct blocking queue `memcpy`.
 
-**Result:** **killed and reverted** (`c6c98bed1` → `faa068cd4`).
+**Result:** **killed and reverted** (`c6c98bed1` -> `faa068cd4`).
 
 After one warmup, six alternating warm-page-cache model-load-only processes per
 arm measured 2.278841 s baseline versus 2.784785 s candidate median. The
@@ -443,16 +456,58 @@ source state clean.
 - oneDNN was rejected on performance despite confirmed DPAS engagement.
 - Upload and graph-replay candidates were reverted after their gates failed.
 
+## Review-adjudicated route invariants
+
+- Optional K/V tensors are guarded by `quants_first_layer`, which requires
+  both pointers before setting either layout flag.
+- Non-contiguous q8_0 converter strides are canonical-block counts derived
+  from `nb / type_size`, not byte offsets; grouped byte addressing is therefore
+  intentional rather than a second stride scaling.
+- Forced q8_0 GQA TILE supports quants-first rows through the source-aware
+  `ggml_get_to_fp16_nc_sycl(type, tensor)` conversion used by TILE. The focused
+  forced-TILE 4:1 and 8:1 correctness cells remain the binding route proof.
+
+### Post-review hardening
+
+The branch was hardened after the archived campaign without rewriting its
+measurements:
+
+- mixed canonical/quants-first q8_0 CPY now performs an explicit on-device
+  layout conversion instead of asserting; canonical-to-quants-first,
+  quants-first-to-canonical, and non-contiguous same-layout probes all pass;
+- the product runner rejects incomplete inputs, non-finite timing values, fewer
+  than three repetitions, and an explicit candidate binary without an explicit
+  candidate environment;
+- the cold-JIT runner invalidates stale products at startup, bounds shutdown
+  after stdout EOF, records its effective library path, validates every JSON
+  timing row, and uses Student-t critical values beyond 30 degrees of freedom;
+- the geometry runner parses the exact `GATE-FAIL` count, requires same-identity
+  correctness before benchmarking on `level_zero:0`, fingerprints dirty source
+  contents, rejects duplicate model labels, and excludes workgroups above the
+  A770's 1024-work-item limit before build.
+
+The original 12-build geometry archive remains historical evidence for the
+campaign as executed. The reusable runner now schedules only the nine valid
+A770 cells. No model-scale performance measurements were rerun during this
+review hardening.
+
+Current verification after these fixes: 57 focused Python tests pass; the
+rebuilt SYCL correctness harness reports `0 GATE-FAIL`, including all three
+layout-aware q8_0 CPY probes; the host KV guard test passes; and the focused
+MMVQ small-row matrix passes 10/10 cases.
+
 ## Reusable repository tooling
 
 - `scripts/bench-a770-fork-unique.py`: fail-closed paired product campaigns,
   environment A/B, bandwidth accounting, raw evidence, and GPU-fault checks.
-- `scripts/bench-sycl-cold-jit.py`: cold-process JIT comparisons with persistent
-  caching disabled.
-- `scripts/sweep-a770-mmvq-geometry.py`: isolated build/correctness/benchmark
-  sweep across guarded MMVQ geometry.
+- `scripts/bench-sycl-cold-jit.py`: fail-closed cold-process JIT comparisons
+  with persistent caching disabled and complete runtime provenance.
+- `scripts/sweep-a770-mmvq-geometry.py`: identity-coupled
+  build/correctness/benchmark sweeps across A770-valid MMVQ geometry.
 - `scripts/test_bench_a770_fork_unique.py`: focused campaign-contract tests.
 - `scripts/test_bench_sycl_cold_jit.py`: focused cold-JIT runner tests.
+- `scripts/test_sweep_a770_mmvq_geometry.py`: focused geometry, identity, and
+  correctness-ledger tests.
 - `scripts/README.md`: command catalog and expected usage.
 
 ## Evidence map

@@ -87,6 +87,42 @@ class ProductCampaignTests(unittest.TestCase):
         with mock.patch.object(sys, "argv", argv), self.assertRaises(SystemExit) as raised:
             HARNESS.main()
         self.assertEqual(raised.exception.code, 2)
+    def test_product_input_lists_reject_empty_incomplete_and_negative_entries(self) -> None:
+        for value in ("", "0,", "-1"):
+            with self.subTest(depths=value), self.assertRaises(ValueError):
+                HARNESS._parse_depths(value)
+        for value in ("", "q8_0/q8_0,", "q8_0", "/q8_0", "q8_0/"):
+            with self.subTest(kv_types=value), self.assertRaises(ValueError):
+                HARNESS._parse_kv_types(value)
+
+    def test_non_finite_timing_invalidates_aligned_samples(self) -> None:
+        samples = {
+            "baseline": [{"rep": 1, "pp512_ts": 100.0}],
+            "candidate": [{"rep": 1, "pp512_ts": float("nan")}],
+        }
+
+        _, failures = HARNESS._align_cell_samples_by_rep(samples, [1], "pp512")
+
+        self.assertTrue(any("non-finite" in failure for failure in failures))
+
+    def test_product_requires_two_retained_repetitions(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            bench = bin_dir / "llama-bench"
+            bench.write_text("#!/bin/sh\n", encoding="utf-8")
+            bench.chmod(0o755)
+            model = root / "model.gguf"
+            model.write_bytes(b"gguf")
+            out_dir = root / "output"
+            ns = self.make_namespace(bin_dir, model, out_dir)
+            ns.repetitions = 2
+
+            rc = HARNESS.run_product_campaign_main(ns)
+
+            self.assertEqual(rc, 2)
+            self.assertFalse(out_dir.exists())
 
 
 
@@ -311,7 +347,7 @@ class ProductCampaignTests(unittest.TestCase):
             out_dir = root / "output"
             ns = self.make_namespace(bin_dir, model, out_dir)
             ns.candidate_bin_dir = str(candidate_bin_dir)
-            ns.repetitions = 2
+            ns.repetitions = 3
             ns.baseline_env = ["TEST_ARM=baseline"]
             ns.env = ["TEST_ARM=candidate"]
             seen_envs = []
@@ -363,7 +399,7 @@ class ProductCampaignTests(unittest.TestCase):
             model.write_bytes(b"gguf")
             out_dir = root / "output"
             ns = self.make_namespace(bin_dir, model, out_dir)
-            ns.repetitions = 2
+            ns.repetitions = 3
             captures = 0
 
             def capture(path, *args, **kwargs):

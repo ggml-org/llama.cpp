@@ -314,6 +314,8 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
         return BEST_FATTN_KERNEL_VEC;
     }
     const bool can_use_vector_kernel = Q->ne[0] <= 512 && Q->ne[0] % 64 == 0 && K->ne[1] % FATTN_KQ_STRIDE == 0;
+    // TILE's quantized staging uses the source-aware non-contiguous converter,
+    // so both canonical and quants-first q8_0 rows are supported here.
     const bool force_q8_gqa_tile =
         g_ggml_sycl_fa_q8_gqa_tile == 1 &&
         Q->ne[1] == 1 &&

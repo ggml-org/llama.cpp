@@ -356,6 +356,132 @@ static void probe_dequant(ggml_backend_t cpu, ggml_backend_t sycl,
     probe(label, cpu, sycl, build, set_inputs);
 }
 
+static void probe_q8_quants_first_copy_view(ggml_backend_t sycl) {
+    constexpr int64_t storage_width = 256;
+    constexpr int64_t copy_width = 128;
+    constexpr int64_t rows = 2;
+
+    auto src_f32 = gen_normal(storage_width * rows, 0xC0FFEEu);
+    auto canonical = quantize_host(GGML_TYPE_Q8_0, src_f32, storage_width, rows);
+    std::vector<float> dequantized(storage_width * rows);
+    ggml_get_type_traits(GGML_TYPE_Q8_0)->to_float(
+        canonical.data(), dequantized.data(), dequantized.size());
+
+    std::vector<float> expected(copy_width * rows);
+    for (int64_t row = 0; row < rows; ++row) {
+        memcpy(
+            expected.data() + row * copy_width,
+            dequantized.data() + row * storage_width,
+            copy_width * sizeof(float));
+    }
+
+    auto quants_first = canonical;
+    q8_kv_quants_first_host(quants_first);
+    std::vector<char> dst_initial(quants_first.size(), 0);
+
+    auto build = [=](ggml_context * ctx) -> ggml_tensor * {
+        ggml_tensor * src_base = ggml_new_tensor_2d(ctx, GGML_TYPE_Q8_0, storage_width, rows);
+        src_base->flags |= GGML_TENSOR_FLAG_KV_Q8_QUANTS_FIRST;
+        ggml_set_name(src_base, "q8_copy_src");
+        ggml_tensor * dst_base = ggml_new_tensor_2d(ctx, GGML_TYPE_Q8_0, storage_width, rows);
+        dst_base->flags |= GGML_TENSOR_FLAG_KV_Q8_QUANTS_FIRST;
+        ggml_set_name(dst_base, "q8_copy_dst");
+
+        ggml_tensor * src = ggml_view_2d(ctx, src_base, copy_width, rows, src_base->nb[1], 0);
+        ggml_tensor * dst = ggml_view_2d(ctx, dst_base, copy_width, rows, dst_base->nb[1], 0);
+        ggml_tensor * copied = ggml_cpy(ctx, src, dst);
+        ggml_tensor * out = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, copy_width, rows);
+        return ggml_cpy(ctx, copied, out);
+    };
+    auto set_inputs = [=](ggml_context * ctx) {
+        ggml_tensor * src = ggml_get_tensor(ctx, "q8_copy_src");
+        ggml_tensor * dst = ggml_get_tensor(ctx, "q8_copy_dst");
+        ggml_backend_tensor_set(src, quants_first.data(), 0, quants_first.size());
+        ggml_backend_tensor_set(dst, dst_initial.data(), 0, dst_initial.size());
+    };
+
+    bool supported = true;
+    const std::vector<float> test = run_on_backend(sycl, build, set_inputs, &supported);
+    if (!supported || test.size() != expected.size()) {
+        printf("  [FAIL] %-28s unavailable or size mismatch\n", "cpy q8_0 quants-first view");
+        g_failures++;
+        return;
+    }
+    verdict("cpy q8_0 quants-first view", compare(test, expected), Tol::STD, Exp::GATE);
+}
+// (2c) Q8_0 layout-aware CPY probes. The CPU backend deliberately rejects
+// fork-local quants-first tensors, so use canonical host dequantization as the
+// oracle and exercise each layout combination on SYCL.
+static void probe_q8_0_layout_copy(
+        ggml_backend_t sycl, bool src_quants_first, bool dst_quants_first,
+        const char * label) {
+    constexpr int64_t storage_width = 256;
+    constexpr int64_t copy_width = 128;
+    constexpr int64_t rows = 2;
+
+    auto src_f32 = gen_normal(storage_width * rows, 0xDEADC0DEU);
+    auto canonical = quantize_host(
+        GGML_TYPE_Q8_0, src_f32, storage_width, rows);
+    std::vector<float> dequantized(storage_width * rows);
+    ggml_get_type_traits(GGML_TYPE_Q8_0)->to_float(
+        canonical.data(), dequantized.data(), dequantized.size());
+    std::vector<float> expected(copy_width * rows);
+    for (int64_t row = 0; row < rows; ++row) {
+        memcpy(
+            expected.data() + row * copy_width,
+            dequantized.data() + row * storage_width,
+            copy_width * sizeof(float));
+    }
+
+    auto source_bytes = canonical;
+    if (src_quants_first) {
+        q8_kv_quants_first_host(source_bytes);
+    }
+    std::vector<char> destination_bytes(canonical.size(), 0);
+
+    auto build = [=](ggml_context * ctx) -> ggml_tensor * {
+        ggml_tensor * src_base = ggml_new_tensor_2d(
+            ctx, GGML_TYPE_Q8_0, storage_width, rows);
+        ggml_tensor * dst_base = ggml_new_tensor_2d(
+            ctx, GGML_TYPE_Q8_0, storage_width, rows);
+        if (src_quants_first) {
+            src_base->flags |= GGML_TENSOR_FLAG_KV_Q8_QUANTS_FIRST;
+        }
+        if (dst_quants_first) {
+            dst_base->flags |= GGML_TENSOR_FLAG_KV_Q8_QUANTS_FIRST;
+        }
+        ggml_set_name(src_base, "q8_layout_copy_src");
+        ggml_set_name(dst_base, "q8_layout_copy_dst");
+
+        ggml_tensor * src = ggml_view_2d(
+            ctx, src_base, copy_width, rows, src_base->nb[1], 0);
+        ggml_tensor * dst = ggml_view_2d(
+            ctx, dst_base, copy_width, rows, dst_base->nb[1], 0);
+        ggml_tensor * copied = ggml_cpy(ctx, src, dst);
+        ggml_tensor * out = ggml_new_tensor_2d(
+            ctx, GGML_TYPE_F32, copy_width, rows);
+        return ggml_cpy(ctx, copied, out);
+    };
+    auto set_inputs = [=](ggml_context * ctx) {
+        ggml_backend_tensor_set(
+            ggml_get_tensor(ctx, "q8_layout_copy_src"),
+            source_bytes.data(), 0, source_bytes.size());
+        ggml_backend_tensor_set(
+            ggml_get_tensor(ctx, "q8_layout_copy_dst"),
+            destination_bytes.data(), 0, destination_bytes.size());
+    };
+
+    bool supported = true;
+    const std::vector<float> test = run_on_backend(
+        sycl, build, set_inputs, &supported);
+    if (!supported || test.size() != expected.size()) {
+        printf("  [FAIL] %-28s unavailable or size mismatch\n", label);
+        g_failures++;
+        return;
+    }
+    verdict(label, compare(test, expected), Tol::STD, Exp::GATE);
+}
+
 // (2b) SET_ROWS turbo quantize-store path: F32 -> turbo write, on-device.
 // probe_dequant (above) only exercises CPY reading pre-quantized bytes; it
 // never runs the GPU's own quantize kernel (k_set_rows_turbo_generic in
@@ -555,7 +681,7 @@ static void probe_flash_attn(ggml_backend_t cpu, ggml_backend_t sycl,
         return o;
     };
 
-    char label[96];
+    char label[256];
     const char * layout = q8_quants_first ? " quants-first" : "";
     if (nh_q == nh_kv) {
         snprintf(label, sizeof(label), "flash_attn %s%s d=%d [%s nq=%d]", name, layout, (int) d, path, (int) n_q);
@@ -853,6 +979,16 @@ int main() {
         probe_dequant(cpu, sycl, GGML_TYPE_TURBO3_0, "turbo3_0", K);
         probe_dequant(cpu, sycl, GGML_TYPE_TURBO4_0, "turbo4_0", K);
     }
+
+    printf("\n[2a] non-contiguous q8_0 quants-first copy\n");
+    probe_q8_quants_first_copy_view(sycl);
+    printf("\n[2c] Q8_0 layout-aware non-contiguous CPY - GATE\n"); // GATE
+    probe_q8_0_layout_copy(
+        sycl, false, true, "cpy q8 canonical->quants-first");
+    probe_q8_0_layout_copy(
+        sycl, true, false, "cpy q8 quants-first->canonical");
+    probe_q8_0_layout_copy(
+        sycl, true, true, "cpy q8 quants-first->quants-first");
 
     printf("\n[2b] SET_ROWS quantize-store (F32 -> turbo write, on-device)\n"); // GATE
     for (int64_t K : {128, 256}) {

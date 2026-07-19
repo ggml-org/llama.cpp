@@ -206,6 +206,8 @@ static void dequantize_row_q8_0_quants_first_nc_sycl(
         const int64_t rem2 = rem1 - i02 * ne00 * ne01;
         const int64_t i01 = rem2 / ne00;
         const int64_t i00 = rem2 - i01 * ne00;
+        // s01/s02/s03 are canonical q8_0 block counts (nb / type_size),
+        // so convert the resulting block index to the grouped byte layout.
         const int64_t source_block = i03 * s03 + i02 * s02 + i01 * s01;
         const char * group = static_cast<const char *>(vx) +
             source_block / 4 * 4 * sizeof(block_q8_0) + (i00 / 128) * 4 * sizeof(block_q8_0);

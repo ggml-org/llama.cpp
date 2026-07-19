@@ -9,12 +9,12 @@ expect the oneAPI environment to be sourced first.
 | Path | Purpose |
 |---|---|
 | `audit-sycl-op-candidates.py` | Maps exported graph op IDs to `ggml_op` names and reports whether selected SYCL port candidates are present, absent, or already implemented. |
-| `bench-a770-fork-unique.py` | Benchmarks fork-only A770 modes. Its `product` campaign enforces sole tenancy, alternates paired arms, discards warm-up sample 0, records raw JSON, confidence intervals, provenance, dmesg deltas, and effective KV bandwidth. `--candidate-bin-dir` compares separate builds; omit it for environment-only comparisons. |
-| `bench-sycl-cold-jit.py` | Runs fail-closed, idle-render-node SYCL cold-start campaigns. It forces `SYCL_CACHE_PERSISTENT=0`, timestamps the first parsed `llama-bench -o jsonl` row, preserves every raw row/stderr stream, discards sample 0, and summarizes cold latency plus pp512/tg128. |
-| `test_bench_a770_fork_unique.py` | Unit tests for the A770 product campaign, including pairing, invalid samples, dmesg gating, environment routing, and separate candidate binaries. |
-| `test_bench_sycl_cold_jit.py` | Unit tests for cold-run argument validation, retained-sample statistics, and fail-closed render-node tenancy checks. |
-| `sweep-a770-mmvq-geometry.py` | Reproducible `MMV_Y={1,2,4}` x `MMVQ_NUM_SUBGROUPS={4,8,16,32}` orchestrator. It can build isolated JIT binaries, run correctness plus dmesg gates, and benchmark multiple models sequentially against the `1x16` baseline. |
-| `test_sweep_a770_mmvq_geometry.py` | Unit tests for geometry naming, dmesg overlap calculation, and fail-closed render-node tenancy checks. |
+| `bench-a770-fork-unique.py` | Benchmarks fork-only A770 modes. Its `product` campaign enforces sole tenancy, alternates paired arms, discards sample 0, records raw JSON, confidence intervals, provenance, dmesg deltas, and effective KV bandwidth. `--candidate-bin-dir` compares separate builds and requires an explicit `--env`; omit it for environment-only comparisons. |
+| `bench-sycl-cold-jit.py` | Runs fail-closed, idle-render-node SYCL cold-start campaigns. It forces `SYCL_CACHE_PERSISTENT=0`, timestamps the first validated `llama-bench -o jsonl` row, bounds child shutdown, invalidates stale products, records the effective library path, preserves raw rows/stderr, discards sample 0, and summarizes cold latency plus pp512/tg128. |
+| `test_bench_a770_fork_unique.py` | Unit tests for the A770 product campaign, including pairing, input/timing validation, dmesg gating, environment routing, and separate candidate binaries. |
+| `test_bench_sycl_cold_jit.py` | Unit tests for cold-run input/timing validation, shutdown deadlines, retained-sample statistics, provenance, and fail-closed render-node tenancy checks. |
+| `sweep-a770-mmvq-geometry.py` | Reproducible orchestrator for the valid subset of `MMV_Y={1,2,4}` x `MMVQ_NUM_SUBGROUPS={4,8,16,32}`; combinations above the A770's 1024-work-item limit are excluded before build. It builds isolated JIT binaries, requires same-identity correctness evidence, and benchmarks multiple models sequentially on `level_zero:0` against the `1x16` baseline. |
+| `test_sweep_a770_mmvq_geometry.py` | Unit tests for geometry bounds/naming, exact correctness parsing, source identity, dmesg overlap, device selection, and fail-closed render-node tenancy checks. |
 | `validate-dense-turbo4-capacity.sh` | Runs the dense low-GQA turbo4 capacity/quality validation workflow and preserves the paired evidence used by the research queue. |
 | `turbo-quality-gate.sh` | Pre-push TurboQuant correctness, perplexity, and context-scaling gate. Strict mode rejects skips, XFAILs, and XPASSes. |
 | `bench-smem-m5.sh` | Apple M5 Max experiment comparing shared-memory pre-dequantization with a baseline at multiple context depths. It is not an A770 runner. |
@@ -33,18 +33,20 @@ python scripts/sweep-a770-mmvq-geometry.py \
   --phase all \
   --source "$PWD" \
   --build-root "$HOME" \
-  --tag "$(git rev-parse --short=9 HEAD)" \
   --model mistral=/path/to/mistral.gguf \
-  --model qwen=/path/to/qwen.gguf \
-  --out-root /tmp/a770-mmvq-geometry-"$(git rev-parse --short=9 HEAD)"
+  --model qwen=/path/to/qwen.gguf
 ```
 
 The build phase is the only concurrent phase. Correctness and benchmark legs
-are sequential and fail closed unless `fuser -v /dev/dri/renderD128` proves the
-render node is idle. The script never kills a holder. Benchmark output is one
-`product.json`/`product.md` pair per geometry and model, plus a top-level
-`manifest.json`. Use `--phase build`, `correctness`, or `benchmark` to run an
-individual phase against existing build directories.
+are sequential on `level_zero:0` and fail closed unless
+`fuser -v /dev/dri/renderD128` proves the render node is idle. The script never
+kills a holder. Benchmarking requires a valid correctness record for every
+tested geometry under the same source identity. Default identities hash HEAD,
+tracked diffs, and untracked contents; use `--tag` only when supplying an
+equally strong external identity. Benchmark output is one
+`product.json`/`product.md` pair per geometry and model, plus an atomically
+updated top-level `manifest.json`. Use `--phase build`, `correctness`, or
+`benchmark` to resume an individual phase against matching build directories.
 
 ## SYCL cold-JIT benchmark
 
@@ -65,10 +67,14 @@ scripts/bench-sycl-cold-jit.py \
   --repetitions 6
 ```
 
-Each child receives `SYCL_CACHE_PERSISTENT=0`. The script observes stdout as it
-arrives and records process start to the first valid JSONL result row, total
+Each child receives `SYCL_CACHE_PERSISTENT=0` and the selected binary directory
+is prepended to its effective `LD_LIBRARY_PATH`. The script removes an old
+`product.json` before campaign validation, rejects invalid/non-finite timing
+rows, and bounds process shutdown within the sample timeout even after stdout
+closes. It records process start to the first valid JSONL result row, total
 process wall time, pp512/tg128, exact command/environment, binary SHA-256, and
-stable before/after render-node holder snapshots.
+stable before/after render-node holder snapshots. At least three repetitions
+are required so discarding sample 0 leaves two values for a Student-t interval.
 
 ## Benchmark and performance analysis
 

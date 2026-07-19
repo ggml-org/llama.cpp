@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """Build, correctness-check, and benchmark the Arc A770 MMVQ geometry matrix.
 
-The matrix is the Cartesian product MMV_Y={1,2,4} x
-MMVQ_NUM_SUBGROUPS={4,8,16,32}. Builds may run concurrently; every GPU phase
-runs sequentially and aborts if the render node has a foreign holder. Source
-oneAPI before invoking this script.
+The candidate set starts from MMV_Y={1,2,4} x
+MMVQ_NUM_SUBGROUPS={4,8,16,32}, then excludes combinations whose SIMD32
+workgroup exceeds the A770 limit. Builds may run concurrently; every GPU
+phase runs sequentially and aborts if the render node has a foreign holder.
+Source oneAPI before invoking this script.
 """
 
 from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import hashlib
 import json
 import os
 import re
@@ -20,10 +22,35 @@ import sys
 from pathlib import Path
 from typing import Any
 
-CELLS = [(y, sg) for y in (1, 2, 4) for sg in (4, 8, 16, 32)]
+A770_MAX_WORK_ITEMS: int = 1024
+
+
+CELL_WORKGROUP_RE = re.compile(r"^(\d+) \w*$", re.MULTILINE)
+
+
+def _cell_workgroup_size(y: int, sg: int) -> int | None:
+    """Return the SIMD32 workgroup size for a (y,sg) cell, or None on bad input."""
+    if isinstance(y, int) and isinstance(sg, int):
+        return y * sg * 32
+    return None
+
+
+def _cell_valid(y: int, sg: int) -> bool:
+    return (
+        _cell_workgroup_size(y, sg) is not None
+        and _cell_workgroup_size(y, sg) <= A770_MAX_WORK_ITEMS
+    )
+
+
+_ALL_CELL_CONFIGS = [(y, sg) for y in (1, 2, 4) for sg in (4, 8, 16, 32)]
+
+CELLS = tuple(c for c in _ALL_CELL_CONFIGS if _cell_valid(*c))
+
 GPU_FAULT_RE = re.compile(
     r"reset|hang|timeout|GPU HANG|device lost|i915.*error|xe.*error", re.I
 )
+
+RE_GATE_FAIL = re.compile(r"\b(\d+)\s+GATE-FAIL\b")
 
 
 class SweepError(RuntimeError):
@@ -42,11 +69,11 @@ def parse_args() -> argparse.Namespace:
         "--build-root",
         type=Path,
         default=Path.home(),
-        help="Parent directory for build-p58-yY-sgSG-TAG directories.",
+        help="Parent directory for build-p58-yY-sgSG-IDENTITY directories.",
     )
     parser.add_argument(
         "--tag",
-        help="Build/output identity; defaults to the source HEAD short SHA.",
+        help="Build/output identity; defaults to <sha9>-<fingerprint>. Use --tag to supply a fixed identity (no fingerprint appended).",
     )
     parser.add_argument(
         "--model",
@@ -91,15 +118,57 @@ def run(
     return proc
 
 
+def source_fingerprint(source: Path) -> str:
+    """Hash tracked diffs plus untracked paths and contents deterministically."""
+    diff = run(
+        ["git", "-C", str(source), "diff", "--binary", "HEAD", "--", "."],
+        cwd=source,
+    )
+    untracked = run(
+        [
+            "git",
+            "-C",
+            str(source),
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "-z",
+        ],
+        cwd=source,
+    )
+    if diff.returncode != 0 or untracked.returncode != 0:
+        return ""
+
+    paths = sorted(path for path in untracked.stdout.split("\0") if path)
+    if not diff.stdout and not paths:
+        return ""
+
+    digest = hashlib.sha256(diff.stdout.encode("utf-8"))
+    for relative in paths:
+        path = source / relative
+        content = (
+            os.readlink(path).encode("utf-8")
+            if path.is_symlink()
+            else path.read_bytes()
+        )
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(len(content).to_bytes(8, "big"))
+        digest.update(content)
+    return digest.hexdigest()[:12]
+
+
 def source_tag(source: Path) -> str:
     proc = run(["git", "-C", str(source), "rev-parse", "--short=9", "HEAD"])
     if proc.returncode != 0:
         raise SweepError(f"cannot resolve source HEAD: {proc.stdout.strip()}")
-    return proc.stdout.strip()
+    head = proc.stdout.strip()
+    fp = source_fingerprint(source)
+    return f"{head}-{fp}" if fp else head
 
 
-def build_dir(build_root: Path, tag: str, y: int, sg: int) -> Path:
-    return build_root / f"build-p58-y{y}-sg{sg}-{tag}"
+def build_dir(build_root: Path, manifest_identity: str, y: int, sg: int) -> Path:
+    return build_root / f"build-p58-y{y}-sg{sg}-{manifest_identity}"
 
 
 def require_tool(name: str) -> str:
@@ -109,41 +178,81 @@ def require_tool(name: str) -> str:
     return path
 
 
-def build_one(args: argparse.Namespace, tag: str, y: int, sg: int) -> dict[str, Any]:
-    out = build_dir(args.build_root, tag, y, sg)
+def cmake_cache_has_flags(cache: str, requested_flags: str) -> bool:
+    prefix = "CMAKE_CXX_FLAGS:STRING="
+    configured = next(
+        (
+            line.removeprefix(prefix)
+            for line in cache.splitlines()
+            if line.startswith(prefix)
+        ),
+        "",
+    )
+    return set(requested_flags.split()).issubset(configured.split())
+
+
+def build_one(
+    args: argparse.Namespace, manifest_identity: str, y: int, sg: int
+) -> dict[str, Any]:
+    out = build_dir(args.build_root, manifest_identity, y, sg)
     out.mkdir(parents=True, exist_ok=True)
     flags = f"-DGGML_SYCL_MMV_Y={y} -DGGML_SYCL_MMVQ_NUM_SUBGROUPS={sg}"
     configure = [
-        require_tool("cmake"), "-S", str(args.source), "-B", str(out), "-G", "Ninja",
+        require_tool("cmake"),
+        "-S",
+        str(args.source),
+        "-B",
+        str(out),
+        "-G",
+        "Ninja",
         "-DCMAKE_BUILD_TYPE=Release",
         f"-DCMAKE_C_COMPILER={require_tool('icx')}",
         f"-DCMAKE_CXX_COMPILER={require_tool('icpx')}",
         f"-DCMAKE_CXX_FLAGS={flags}",
-        "-DGGML_SYCL=ON", "-DGGML_SYCL_TARGET=INTEL", "-DGGML_SYCL_F16=ON",
-        "-DGGML_SYCL_SUPPORT_LEVEL_ZERO=ON", "-DLLAMA_CURL=OFF",
-        "-DLLAMA_BUILD_TOOLS=ON", "-DLLAMA_BUILD_SERVER=ON",
+        "-DGGML_SYCL=ON",
+        "-DGGML_SYCL_TARGET=INTEL",
+        "-DGGML_SYCL_F16=ON",
+        "-DGGML_SYCL_SUPPORT_LEVEL_ZERO=ON",
+        "-DLLAMA_CURL=OFF",
+        "-DLLAMA_BUILD_TOOLS=ON",
+        "-DLLAMA_BUILD_SERVER=ON",
         "-DLLAMA_BUILD_TESTS=ON",
     ]
     configured = run(configure, output=out / "p58-configure.log")
     if configured.returncode != 0:
-        raise SweepError(f"configure failed for y={y} sg={sg}: {out / 'p58-configure.log'}")
+        raise SweepError(
+            f"configure failed for y={y} sg={sg}: {out / 'p58-configure.log'}"
+        )
     built = run(
-        [require_tool("cmake"), "--build", str(out), f"-j{args.jobs}", "--target", "llama-bench", "test-sycl-turbo-correctness"],
+        [
+            require_tool("cmake"),
+            "--build",
+            str(out),
+            f"-j{args.jobs}",
+            "--target",
+            "llama-bench",
+            "test-sycl-turbo-correctness",
+        ],
         output=out / "p58-build.log",
     )
     if built.returncode != 0:
         raise SweepError(f"build failed for y={y} sg={sg}: {out / 'p58-build.log'}")
     cache = (out / "CMakeCache.txt").read_text(encoding="utf-8", errors="replace")
-    if f"CMAKE_CXX_FLAGS:STRING={flags}" not in cache:
+    if not cmake_cache_has_flags(cache, flags):
         raise SweepError(f"CMakeCache lost requested flags for y={y} sg={sg}")
-    return {"y": y, "subgroups": sg, "build_dir": str(out), "flags": flags}
+    return {"y": y, "subgroups": sg, "success": True}
 
 
-def build_matrix(args: argparse.Namespace, tag: str) -> list[dict[str, Any]]:
+def build_matrix(
+    args: argparse.Namespace, manifest_identity: str
+) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=args.parallel_builds) as pool:
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=args.parallel_builds
+    ) as pool:
         futures = {
-            pool.submit(build_one, args, tag, y, sg): (y, sg) for y, sg in CELLS
+            pool.submit(build_one, args, manifest_identity, y, sg): (y, sg)
+            for y, sg in CELLS
         }
         for future in concurrent.futures.as_completed(futures):
             result = future.result()
@@ -158,9 +267,7 @@ def require_sole_tenancy(render_node: str) -> None:
     if proc.returncode == 1 and not output:
         return
     detail = output or f"fuser exited {proc.returncode} without holder details"
-    raise SweepError(
-        f"cannot prove render node is idle: {render_node}\n{detail}"
-    )
+    raise SweepError(f"cannot prove render node is idle: {render_node}\n{detail}")
 
 
 def dmesg_faults() -> list[str]:
@@ -178,25 +285,46 @@ def added_suffix(before: list[str], after: list[str]) -> list[str]:
     return list(after)
 
 
-def correctness_matrix(args: argparse.Namespace, tag: str) -> list[dict[str, Any]]:
+def parse_gate_fail(summary: str) -> bool:
+    """Return True only when the numeric GATE-FAIL count is exactly 0."""
+    if not summary:
+        return False
+    match = RE_GATE_FAIL.search(summary)
+    if not match:
+        return False
+    fail_count = int(match.group(1))
+    return fail_count == 0
+
+
+def correctness_matrix(
+    args: argparse.Namespace, tag: str, manifest_identity: str
+) -> list[dict[str, Any]]:
     env = os.environ.copy()
     env["ONEAPI_DEVICE_SELECTOR"] = "level_zero:0"
     results: list[dict[str, Any]] = []
     for y, sg in CELLS:
         require_sole_tenancy(args.render_node)
-        out = build_dir(args.build_root, tag, y, sg)
+        out = build_dir(args.build_root, manifest_identity, y, sg)
         binary = out / "bin/test-sycl-turbo-correctness"
         if not binary.is_file():
             raise SweepError(f"missing correctness binary: {binary}")
         before = dmesg_faults()
-        proc = run([require_tool("timeout"), str(args.timeout), str(binary)], env=env, output=out / "p58-correctness.log")
+        proc = run(
+            [require_tool("timeout"), str(args.timeout), str(binary)],
+            env=env,
+            output=out / "p58-correctness.log",
+        )
         after = dmesg_faults()
         new_faults = added_suffix(before, after)
         summary = next(
-            (line for line in proc.stdout.splitlines() if line.startswith("== summary:")),
+            (
+                line
+                for line in proc.stdout.splitlines()
+                if line.startswith("== summary:")
+            ),
             "",
         )
-        valid = proc.returncode == 0 and "0 GATE-FAIL" in summary and not new_faults
+        valid = proc.returncode == 0 and parse_gate_fail(summary) and not new_faults
         result = {
             "y": y,
             "subgroups": sg,
@@ -204,6 +332,9 @@ def correctness_matrix(args: argparse.Namespace, tag: str) -> list[dict[str, Any
             "summary": summary,
             "new_gpu_faults": new_faults,
             "valid": valid,
+            "source": str(args.source),
+            "tag": tag,
+            "manifest_identity": manifest_identity,
         }
         results.append(result)
         print(f"correctness y={y} sg={sg} valid={valid}", flush=True)
@@ -219,57 +350,144 @@ def parse_models(raw_models: list[str]) -> dict[str, Path]:
             raise SweepError(f"--model must be NAME=PATH: {value}")
         name, raw_path = value.split("=", 1)
         path = Path(raw_path).expanduser().resolve()
-        if not name or not path.is_file() or path.stat().st_size == 0:
+        if not name:
+            raise SweepError(f"--model name is empty: {value}")
+        if path.is_file() and path.stat().st_size > 0 and name in models:
+            raise SweepError(f"duplicate model label '{name}' — refusing to overwrite")
+        if not path.is_file() or path.stat().st_size == 0:
             raise SweepError(f"invalid benchmark model: {value}")
         models[name] = path
     return models
 
 
-def benchmark_matrix(args: argparse.Namespace, tag: str) -> list[dict[str, Any]]:
+def _has_matching_correctness(
+    manifest: dict[str, Any], target_y: int, target_sg: int, manifest_identity: str
+) -> bool:
+    """Check that a valid correctness record exists under the same identity."""
+    for rec in manifest.get("correctness", []):
+        if (
+            rec.get("y") == target_y
+            and rec.get("subgroups") == target_sg
+            and rec.get("manifest_identity") == manifest_identity
+            and rec.get("valid") is True
+        ):
+            return True
+    return False
+
+
+def benchmark_matrix(
+    args: argparse.Namespace, manifest_identity: str
+) -> list[dict[str, Any]]:
     models = parse_models(args.model)
     if not models:
         raise SweepError("benchmark phase requires at least one --model NAME=PATH")
     harness = args.source / "scripts/bench-a770-fork-unique.py"
     if not harness.is_file():
         raise SweepError(f"product benchmark harness not found: {harness}")
-    out_root = (args.out_root or Path(f"/tmp/a770-mmvq-geometry-{tag}")).resolve()
-    baseline = build_dir(
-        args.build_root, tag, args.baseline_y, args.baseline_subgroups
-    ) / "bin"
+
+    out_root = (args.out_root or Path(f"/tmp/a770-mmvq-geometry-{args.tag}")).resolve()
+
     results: list[dict[str, Any]] = []
+    manifest_path = out_root / "manifest.json"
+    if not manifest_path.is_file():
+        raise SweepError("no manifest.json found for benchmark-only correctness check")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    # Fail closed: every benchmark geometry must have valid correctness evidence
+    baseline_manifest_id = manifest.get("manifest_identity")
+    if baseline_manifest_id is None:
+        raise SweepError(
+            "manifest lacks 'manifest_identity'; correctness evidence not found"
+        )
     for y, sg in CELLS:
-        candidate = build_dir(args.build_root, tag, y, sg) / "bin"
+        baseline_key = f"y{y}-sg{sg}"
+        if not _has_matching_correctness(manifest, y, sg, baseline_manifest_id):
+            raise SweepError(
+                f"no valid correctness record for {baseline_key} "
+                f"(identity={baseline_manifest_id}) — benchmark cannot proceed"
+            )
+
+    baseline = (
+        build_dir(
+            args.build_root, manifest_identity, args.baseline_y, args.baseline_subgroups
+        )
+        / "bin"
+    )
+    for y, sg in CELLS:
+        candidate = build_dir(args.build_root, manifest_identity, y, sg) / "bin"
         for model_name, model in models.items():
             out_dir = out_root / f"y{y}-sg{sg}-{model_name}"
             if out_dir.exists():
-                raise SweepError(f"refusing to mix with existing result directory: {out_dir}")
+                raise SweepError(
+                    f"refusing to mix with existing result directory: {out_dir}"
+                )
             require_sole_tenancy(args.render_node)
+            env = os.environ.copy()
+            env["ONEAPI_DEVICE_SELECTOR"] = "level_zero:0"
             argv = [
-                sys.executable, str(harness), "--campaign", "product",
-                "--bin-dir", str(baseline), "--candidate-bin-dir", str(candidate),
-                "--model", str(model), "--depths", "0", "--kv-types", "q8_0/q8_0",
-                "--repetitions", str(args.repetitions),
-                "--model-layers", str(args.model_layers),
-                "--query-heads", str(args.query_heads), "--head-dim", str(args.head_dim),
-                "--baseline-label", f"y{args.baseline_y}-sg{args.baseline_subgroups}",
-                "--candidate-label", f"y{y}-sg{sg}", "--env", "GGML_SYCL_DEBUG=0",
-                "--out-dir", str(out_dir), "--timeout", str(args.timeout),
+                sys.executable,
+                str(harness),
+                "--campaign",
+                "product",
+                "--bin-dir",
+                str(baseline),
+                "--candidate-bin-dir",
+                str(candidate),
+                "--model",
+                str(model),
+                "--depths",
+                "0",
+                "--kv-types",
+                "q8_0/q8_0",
+                "--repetitions",
+                str(args.repetitions),
+                "--model-layers",
+                str(args.model_layers),
+                "--query-heads",
+                str(args.query_heads),
+                "--head-dim",
+                str(args.head_dim),
+                "--baseline-label",
+                f"y{args.baseline_y}-sg{args.baseline_subgroups}",
+                "--candidate-label",
+                f"y{y}-sg{sg}",
+                "--env",
+                "GGML_SYCL_DEBUG=0",
+                "--out-dir",
+                str(out_dir),
+                "--timeout",
+                str(args.timeout),
             ]
-            proc = run(argv, cwd=args.source)
+            proc = run(argv, cwd=args.source, env=env)
             result = {
                 "y": y,
                 "subgroups": sg,
                 "model": model_name,
                 "returncode": proc.returncode,
                 "product_json": str(out_dir / "product.json"),
+                "oneapi_device_selector": "level_zero:0",
             }
             results.append(result)
-            print(f"benchmark y={y} sg={sg} model={model_name} exit={proc.returncode}", flush=True)
+            print(
+                f"benchmark y={y} sg={sg} model={model_name} exit={proc.returncode}",
+                flush=True,
+            )
             if proc.returncode != 0:
-                raise SweepError(f"benchmark failed for y={y} sg={sg} model={model_name}")
+                raise SweepError(
+                    f"benchmark failed for y={y} sg={sg} model={model_name}"
+                )
     return results
 
 
+def write_manifest(path: Path, manifest: dict[str, Any]) -> None:
+    """Atomically persist completed phases for later fail-closed reuse."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
 
 
 def main() -> int:
@@ -277,10 +495,18 @@ def main() -> int:
     args.source = args.source.resolve()
     args.build_root = args.build_root.resolve()
     if args.jobs < 1 or args.parallel_builds < 1 or args.repetitions < 2:
-        print("error: jobs/parallel-builds must be positive and repetitions >= 2", file=sys.stderr)
+        print(
+            "error: jobs/parallel-builds must be positive and repetitions >= 2",
+            file=sys.stderr,
+        )
         return 2
     try:
-        tag = args.tag or source_tag(args.source)
+        if args.tag:
+            tag = args.tag
+            manifest_identity = tag
+        else:
+            tag = source_tag(args.source)
+            manifest_identity = tag
         manifest_path = (
             args.out_root or Path(f"/tmp/a770-mmvq-geometry-{tag}")
         ).resolve() / "manifest.json"
@@ -288,7 +514,7 @@ def main() -> int:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             if (
                 manifest.get("source") != str(args.source)
-                or manifest.get("tag") != tag
+                or manifest.get("manifest_identity") != manifest_identity
             ):
                 raise SweepError(
                     f"existing manifest identity mismatch: {manifest_path}"
@@ -297,16 +523,18 @@ def main() -> int:
             manifest = {
                 "source": str(args.source),
                 "tag": tag,
+                "manifest_identity": manifest_identity,
                 "cells": [{"y": y, "subgroups": sg} for y, sg in CELLS],
             }
         if args.phase in ("build", "all"):
-            manifest["builds"] = build_matrix(args, tag)
+            manifest["builds"] = build_matrix(args, manifest_identity)
+            write_manifest(manifest_path, manifest)
         if args.phase in ("correctness", "all"):
-            manifest["correctness"] = correctness_matrix(args, tag)
+            manifest["correctness"] = correctness_matrix(args, tag, manifest_identity)
+            write_manifest(manifest_path, manifest)
         if args.phase in ("benchmark", "all"):
-            manifest["benchmarks"] = benchmark_matrix(args, tag)
-        manifest_path.parent.mkdir(parents=True, exist_ok=True)
-        manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            manifest["benchmarks"] = benchmark_matrix(args, manifest_identity)
+            write_manifest(manifest_path, manifest)
         print(f"wrote {manifest_path}")
     except SweepError as exc:
         print(f"error: {exc}", file=sys.stderr)

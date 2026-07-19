@@ -402,27 +402,39 @@ def _paired_percent(candidate: list[float], baseline: list[float]) -> dict[str, 
 
 
 def _parse_depths(arg: str | None) -> tuple[int, ...]:
-    if not arg:
+    if arg is None:
         return DEFAULT_PRODUCT_DEPTHS
+    if not arg.strip():
+        raise ValueError("depth list cannot be empty")
     out: list[int] = []
     for tok in arg.split(","):
         tok = tok.strip()
         if not tok:
-            continue
-        out.append(int(tok))
+            raise ValueError("depth list contains an empty entry")
+        depth = int(tok)
+        if depth < 0:
+            raise ValueError(f"depth cannot be negative: {depth}")
+        out.append(depth)
     return tuple(out)
 
 
 def _parse_kv_types(arg: str | None) -> tuple[tuple[str, str], ...]:
-    if not arg:
+    if arg is None:
         return DEFAULT_PRODUCT_KV_TYPES
+    if not arg.strip():
+        raise ValueError("KV type list cannot be empty")
     out: list[tuple[str, str]] = []
     for tok in arg.split(","):
         tok = tok.strip()
         if not tok:
-            continue
-        k, v = tok.split("/")
-        out.append((k.strip(), v.strip()))
+            raise ValueError("KV type list contains an empty entry")
+        parts = tok.split("/")
+        if len(parts) != 2:
+            raise ValueError(f"KV type must be K/V, got {tok!r}")
+        k, v = (part.strip() for part in parts)
+        if not k or not v:
+            raise ValueError(f"KV type names cannot be empty, got {tok!r}")
+        out.append((k, v))
     return tuple(out)
 
 
@@ -645,8 +657,8 @@ def _align_cell_samples_by_rep(
                 failures.append(f"{metric_name} {arm_name} rep={rep} (no record)")
                 continue
             ts = float(entry.get(value_key, 0.0))
-            if ts <= 0:
-                failures.append(f"{metric_name} {arm_name} rep={rep} (missing or non-positive avg_ts)")
+            if not math.isfinite(ts) or ts <= 0:
+                failures.append(f"{metric_name} {arm_name} rep={rep} (missing, non-finite, or non-positive avg_ts)")
             aligned[arm_name].append(ts)
     return aligned, failures
 
@@ -836,6 +848,16 @@ def run_product_campaign_main(ns: argparse.Namespace) -> int:
         if any("q8_0" in kv for kv in kv_types) and model_shape[2] % QK8_0 != 0:
             print(f"--head-dim must be divisible by QK8_0={QK8_0} for q8_0", file=sys.stderr, flush=True)
             return 2
+    timeout_s = int(ns.timeout)
+    repetitions = int(getattr(ns, "repetitions", DEFAULT_PRODUCT_REPETITIONS) or DEFAULT_PRODUCT_REPETITIONS)
+    if repetitions < 3:
+        print(
+            "--repetitions must be >= 3 (sample 0 is always discarded, need at least 2 for CI)",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 2
+
 
     out_dir = Path(ns.out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -859,11 +881,6 @@ def run_product_campaign_main(ns: argparse.Namespace) -> int:
     )
     (out_dir / "provenance.json").write_text(json.dumps(provenance, sort_keys=True, indent=2) + "\n", encoding="utf-8")
 
-    repetitions = int(getattr(ns, "repetitions", DEFAULT_PRODUCT_REPETITIONS) or DEFAULT_PRODUCT_REPETITIONS)
-    timeout_s = int(ns.timeout)
-    if repetitions < 2:
-        print("--repetitions must be >= 2 (sample 0 is always discarded)", file=sys.stderr, flush=True)
-        return 2
     cells: list[dict[str, Any]] = []
     cell_idx = 0
     try:
