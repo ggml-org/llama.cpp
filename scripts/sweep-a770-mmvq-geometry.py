@@ -189,7 +189,7 @@ def correctness_matrix(args: argparse.Namespace, tag: str) -> list[dict[str, Any
         if not binary.is_file():
             raise SweepError(f"missing correctness binary: {binary}")
         before = dmesg_faults()
-        proc = run(["timeout", str(args.timeout), str(binary)], env=env, output=out / "p58-correctness.log")
+        proc = run([require_tool("timeout"), str(args.timeout), str(binary)], env=env, output=out / "p58-correctness.log")
         after = dmesg_faults()
         new_faults = added_suffix(before, after)
         summary = next(

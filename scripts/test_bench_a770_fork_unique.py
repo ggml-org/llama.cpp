@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -56,6 +57,37 @@ class ProductCampaignTests(unittest.TestCase):
         self.assertNotIn("-no-warmup", argv)
         self.assertIn("-p", argv)
         self.assertEqual(argv[argv.index("-p") + 1], "512")
+
+    def test_tenancy_probe_accepts_only_empty_exit_one(self) -> None:
+        cases = (
+            (1, "", "", False),
+            (0, "1234", "", True),
+            (1, "", "permission denied", True),
+            (2, "", "", True),
+        )
+        for returncode, stdout, stderr, should_raise in cases:
+            with self.subTest(returncode=returncode, stdout=stdout, stderr=stderr):
+                proc = mock.Mock(returncode=returncode, stdout=stdout, stderr=stderr)
+                runner = mock.Mock(return_value=proc)
+                if should_raise:
+                    with self.assertRaises(HARNESS.SoleTenancyViolation):
+                        HARNESS.check_sole_tenancy(runner=runner)
+                else:
+                    HARNESS.check_sole_tenancy(runner=runner)
+
+    def test_candidate_binary_requires_candidate_environment(self) -> None:
+        argv = [
+            str(SCRIPT_PATH),
+            "--campaign", "product",
+            "--bin-dir", "/tmp/baseline",
+            "--candidate-bin-dir", "/tmp/candidate",
+            "--model", "/tmp/model.gguf",
+            "--out-dir", "/tmp/output",
+        ]
+        with mock.patch.object(sys, "argv", argv), self.assertRaises(SystemExit) as raised:
+            HARNESS.main()
+        self.assertEqual(raised.exception.code, 2)
+
 
 
     def test_discards_sample_zero_and_pairs_baseline_candidate(self) -> None:

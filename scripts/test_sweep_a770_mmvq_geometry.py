@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import importlib.util
 import subprocess
+import tempfile
+from types import SimpleNamespace
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -47,6 +49,30 @@ class GeometrySweepTests(unittest.TestCase):
             SWEEP.build_dir(Path("/builds"), "abc123", 4, 32),
             Path("/builds/build-p58-y4-sg32-abc123"),
         )
+    def test_correctness_matrix_requires_timeout_tool(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            tag = "abc123"
+            binary = SWEEP.build_dir(root, tag, 1, 4) / "bin/test-sycl-turbo-correctness"
+            binary.parent.mkdir(parents=True)
+            binary.write_bytes(b"test")
+            args = SimpleNamespace(
+                build_root=root,
+                render_node="/dev/dri/renderD128",
+                timeout=60,
+            )
+            proc = subprocess.CompletedProcess(
+                ["/usr/bin/timeout"], 0, "== summary: 0 GATE-FAIL\n", ""
+            )
+            with mock.patch.object(SWEEP, "CELLS", [(1, 4)]), \
+                 mock.patch.object(SWEEP, "require_sole_tenancy"), \
+                 mock.patch.object(SWEEP, "dmesg_faults", side_effect=[[], []]), \
+                 mock.patch.object(SWEEP, "run", return_value=proc), \
+                 mock.patch.object(SWEEP, "require_tool", return_value="/usr/bin/timeout") as require_tool:
+                results = SWEEP.correctness_matrix(args, tag)
+            require_tool.assert_called_once_with("timeout")
+            self.assertTrue(results[0]["valid"])
+
 
 
 if __name__ == "__main__":

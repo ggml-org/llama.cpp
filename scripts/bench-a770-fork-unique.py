@@ -10,9 +10,8 @@ It writes JSONL records for each subprocess plus a compact Markdown summary.
 
 `--campaign product` adds a sole-tenancy product/depth harness used for the
 SYCL performance plan. One `llama-bench -r 1` invocation per sample with
-`-m MODEL -ngl 99 -fa on -ctk KV -ctv KV -n 128 -b 512 -ub 512 -no-warmup
+`-m MODEL -ngl 99 -fa on -ctk KV -ctv KV -n 128 -b 512 -ub 512 --no-warmup
 -o json` (plus `-d DEPTH` only when DEPTH > 0). Six samples per cell,
-sample 0 discarded, arm order alternates per cell, median/mean/sd +
 paired percent samples (candidate/baseline - 1)*100 with 95% t-interval.
 The runner probes `fuser /dev/dri/renderD128` immediately before each
 leg; if any holder is reported, the leg is aborted with exit 70 and the
@@ -296,8 +295,8 @@ class SoleTenancyViolation(Exception):
         head += (
             " Aborting leg. Run the authorized orchestrator command: "
             "sudo systemctl stop llama-sycl.cpp.service && "
-            "sudo fuser -k /dev/dri/renderD128 (repeat until fuser exits "
-            "non-zero), then rerun."
+            "sudo fuser -k /dev/dri/renderD128, then repeat the non-mutating "
+            "probe until fuser exits 1 with no output."
         )
         super().__init__(head + "\n" + "\n".join(holder_lines))
 
@@ -315,11 +314,15 @@ def check_sole_tenancy(
         )
     except Exception as exc:  # pragma: no cover
         raise SoleTenancyViolation([], probe_error=str(exc)) from exc
-    if proc.returncode == 0:
-        holders = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
-        if not holders:
-            holders = ["<fuser reported a holder but printed no PIDs>"]
-        raise SoleTenancyViolation(holders)
+    output = "\n".join(
+        part.strip() for part in (proc.stdout, proc.stderr) if part and part.strip()
+    )
+    if proc.returncode == 1 and not output:
+        return
+    holders = output.splitlines() or [
+        f"<fuser exited {proc.returncode} without holder or error details>"
+    ]
+    raise SoleTenancyViolation(holders)
 
 
 def capture_dmesg(
@@ -1009,6 +1012,8 @@ def main() -> int:
     if ns.campaign == "product":
         if not ns.bin_dir or not ns.model or not ns.out_dir:
             ap.error("--campaign product requires --bin-dir, --model, --out-dir")
+        if ns.candidate_bin_dir and not ns.env:
+            ap.error("--candidate-bin-dir requires --env to enable the candidate arm")
         return run_product_campaign_main(ns)
 
     # Legacy matrix path: unchanged from the original runner.

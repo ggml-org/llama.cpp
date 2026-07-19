@@ -46,6 +46,12 @@ class ColdJitRunnerTests(unittest.TestCase):
         with mock.patch.object(COLD_JIT.subprocess, "run", return_value=proc):
             with self.assertRaises(COLD_JIT.ColdJitError):
                 COLD_JIT.holder_snapshot("/dev/dri/renderD128")
+    def test_fuser_exit_one_with_diagnostics_is_not_idle(self) -> None:
+        proc = subprocess.CompletedProcess(["fuser"], 1, "", "permission denied")
+        with mock.patch.object(COLD_JIT.subprocess, "run", return_value=proc):
+            with self.assertRaises(COLD_JIT.ColdJitError):
+                COLD_JIT.holder_snapshot("/dev/dri/renderD128")
+
 
 
 if __name__ == "__main__":

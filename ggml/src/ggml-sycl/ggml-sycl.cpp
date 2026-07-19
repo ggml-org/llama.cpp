@@ -522,8 +522,7 @@ ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer_t buffer,
         return GGML_STATUS_SUCCESS;
     }
 
-    const bool kv_q8_quants_first = ggml_tensor_is_kv_q8_quants_first(tensor);
-    if (!g_ggml_sycl_disable_optimize || kv_q8_quants_first) {
+    if (!g_ggml_sycl_disable_optimize) {
         // Quantized tensors carry backend-owned layout/reorder metadata.
         switch (tensor->type) {
             case GGML_TYPE_Q4_0:
@@ -531,7 +530,6 @@ ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer_t buffer,
             case GGML_TYPE_Q4_K:
             case GGML_TYPE_Q6_K:{
                 ggml_tensor_extra_gpu * extra = new ggml_tensor_extra_gpu{};
-                extra->kv_q8_quants_first     = kv_q8_quants_first;
                 tensor->extra                 = extra;
                 ctx->tensor_extras.push_back(extra);
                 break;
@@ -1036,7 +1034,6 @@ ggml_backend_sycl_split_buffer_init_tensor(ggml_backend_buffer_t buffer,
     const int64_t ne0 = tensor->ne[0];
 
     ggml_tensor_extra_gpu * extra = new ggml_tensor_extra_gpu{};
-    extra->kv_q8_quants_first = ggml_tensor_is_kv_q8_quants_first(tensor);
 
     ctx->tensor_extras.push_back(extra);
     ctx->streams.push_back(&(dpct::get_current_device().default_queue()));
@@ -3395,7 +3392,7 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx, cons
 # else
         const int64_t ne_src1 = ggml_nelements(src1);
         src1_f16_alloc.alloc(ne_src1);
-        const to_fp16_nc_sycl_t to_fp16_nc_sycl = ggml_get_to_fp16_nc_sycl(src1->type);
+        const to_fp16_nc_sycl_t to_fp16_nc_sycl = ggml_get_to_fp16_nc_sycl(src1->type, dst);
         GGML_ASSERT(to_fp16_nc_sycl != nullptr);
         to_fp16_nc_sycl(src1_f16, src1_f16_alloc.get(), ne10, ne11, ne12, ne13, s11, s12, s13, queue);
 #endif

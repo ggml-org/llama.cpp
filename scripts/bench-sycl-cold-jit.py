@@ -68,9 +68,16 @@ def holder_snapshot(render_node: str) -> dict[str, Any]:
         stderr=subprocess.PIPE,
         text=True,
     )
-    if proc.returncode not in (0, 1):
-        raise ColdJitError(f"fuser failed for {render_node}: {proc.stderr.strip()}")
     combined = proc.stdout + proc.stderr
+    if proc.returncode == 1 and not combined.strip():
+        return {
+            "returncode": proc.returncode,
+            "pids": [],
+            "output": combined,
+        }
+    if proc.returncode != 0:
+        detail = combined.strip() or f"fuser exited {proc.returncode} without details"
+        raise ColdJitError(f"fuser failed for {render_node}: {detail}")
     return {
         "returncode": proc.returncode,
         "pids": sorted({int(value) for value in re.findall(r"\b\d+\b", combined)}),
