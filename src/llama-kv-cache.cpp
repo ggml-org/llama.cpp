@@ -248,6 +248,7 @@ llama_kv_cache::llama_kv_cache(
             : nullptr;
         if (k_idx) {
             ggml_format_name(k_idx, "cache_k_idx_l%d", il);
+            msa_strict_slots = (n_stream == n_seq_max);
         }
 
         std::vector<ggml_tensor *> k_idx_stream;
@@ -1025,6 +1026,11 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
 
         uint32_t head_cur = v_heads[seq_to_stream[seq_id]];
 
+        // MSA block selection assumes slot == logical position (append-only streams), which Head-based placement can technically violate after tail trims
+        if (msa_strict_slots) {
+            head_cur = 0;
+        }
+
         // if we have enough unused cells before the current head ->
         //   better to start searching from the beginning of the cache, hoping to fill it
         if (head_cur > cells.get_used() + 2*n_tokens) {
@@ -1141,6 +1147,15 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & 
             auto & cells = v_cells[sinfo.strm[s]];
 
             const auto idx = sinfo.idxs[s][ii];
+
+            if (msa_strict_slots && (llama_pos) idx != ubatch.pos[i]) {
+                LLAMA_LOG_ERROR("%s: MSA slot/position invariant violated: "
+                        "writing pos %d into cell %u (stream %u). The indexer cache "
+                        "would desync and block selection would silently corrupt. "
+                        "This is a bug, please report it with reproduction steps.\n",
+                        __func__, ubatch.pos[i], idx, sinfo.strm[s]);
+                GGML_ABORT("MSA: slot != pos");
+            }
 
             if (!cells.is_empty(idx)) {
                 assert(cells.seq_count(idx) == 1);
