@@ -375,6 +375,12 @@ def _has_matching_correctness(
     return False
 
 
+def output_root(args: argparse.Namespace, manifest_identity: str) -> Path:
+    return (
+        args.out_root or Path(f"/tmp/a770-mmvq-geometry-{manifest_identity}")
+    ).resolve()
+
+
 def benchmark_matrix(
     args: argparse.Namespace, manifest_identity: str
 ) -> list[dict[str, Any]]:
@@ -385,7 +391,7 @@ def benchmark_matrix(
     if not harness.is_file():
         raise SweepError(f"product benchmark harness not found: {harness}")
 
-    out_root = (args.out_root or Path(f"/tmp/a770-mmvq-geometry-{args.tag}")).resolve()
+    out_root = output_root(args, manifest_identity)
 
     results: list[dict[str, Any]] = []
     manifest_path = out_root / "manifest.json"
@@ -494,9 +500,9 @@ def main() -> int:
     args = parse_args()
     args.source = args.source.resolve()
     args.build_root = args.build_root.resolve()
-    if args.jobs < 1 or args.parallel_builds < 1 or args.repetitions < 2:
+    if args.jobs < 1 or args.parallel_builds < 1 or args.repetitions < 3:
         print(
-            "error: jobs/parallel-builds must be positive and repetitions >= 2",
+            "error: jobs/parallel-builds must be positive and repetitions >= 3",
             file=sys.stderr,
         )
         return 2
@@ -507,9 +513,7 @@ def main() -> int:
         else:
             tag = source_tag(args.source)
             manifest_identity = tag
-        manifest_path = (
-            args.out_root or Path(f"/tmp/a770-mmvq-geometry-{tag}")
-        ).resolve() / "manifest.json"
+        manifest_path = output_root(args, manifest_identity) / "manifest.json"
         if manifest_path.is_file():
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             if (

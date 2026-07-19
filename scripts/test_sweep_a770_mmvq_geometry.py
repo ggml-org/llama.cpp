@@ -585,6 +585,29 @@ class GeometrySweepTests(unittest.TestCase):
                 with self.assertRaises(SWEEP.SweepError):
                     SWEEP.correctness_matrix(args, tag, tag)
 
+    def test_default_output_root_uses_manifest_identity(self) -> None:
+        args = SimpleNamespace(out_root=None, tag=None)
+
+        self.assertEqual(
+            SWEEP.output_root(args, "source-identity"),
+            Path("/tmp/a770-mmvq-geometry-source-identity"),
+        )
+
+    def test_main_rejects_two_repetitions_before_campaign_work(self) -> None:
+        args = SimpleNamespace(
+            phase="all",
+            source=Path("/tmp/source"),
+            build_root=Path("/tmp/build"),
+            tag=None,
+            out_root=None,
+            jobs=1,
+            parallel_builds=1,
+            repetitions=2,
+        )
+
+        with mock.patch.object(SWEEP, "parse_args", return_value=args):
+            self.assertEqual(SWEEP.main(), 2)
+
     def test_all_phase_persists_correctness_before_benchmark(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

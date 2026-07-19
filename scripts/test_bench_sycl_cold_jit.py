@@ -112,7 +112,9 @@ class ColdJitRunnerTests(unittest.TestCase):
         for row in invalid_rows:
             proc = mock.Mock()
             proc.stdout = iter((json.dumps(row) + "\n",))
-            proc.wait.return_value = 0
+            proc.wait.side_effect = subprocess.TimeoutExpired(
+                cmd=["llama-bench"], timeout=1
+            )
             with (
                 self.subTest(row=row),
                 tempfile.TemporaryDirectory() as directory,
@@ -127,6 +129,26 @@ class ColdJitRunnerTests(unittest.TestCase):
                     env_extra={},
                     stderr_path=Path(directory) / "stderr.log",
                 )
+
+    def test_run_sample_preserves_non_object_error_when_reap_times_out(self) -> None:
+        proc = mock.Mock()
+        proc.stdout = iter(("[]\n",))
+        proc.wait.side_effect = subprocess.TimeoutExpired(
+            cmd=["llama-bench"], timeout=1
+        )
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(COLD_JIT.subprocess, "Popen", return_value=proc),
+            self.assertRaisesRegex(COLD_JIT.ColdJitError, "non-object JSON row"),
+        ):
+            COLD_JIT.run_sample(
+                bench=Path("bench"),
+                bin_dir=Path("bin"),
+                model=Path("model"),
+                timeout_s=10,
+                env_extra={},
+                stderr_path=Path(directory) / "stderr.log",
+            )
 
     def test_run_sample_accepts_required_finite_rows(self) -> None:
         lines = (

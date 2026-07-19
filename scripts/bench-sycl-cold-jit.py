@@ -132,6 +132,14 @@ def holder_snapshot(render_node: str) -> dict[str, Any]:
     }
 
 
+def kill_and_reap(proc: subprocess.Popen[str]) -> None:
+    proc.kill()
+    try:
+        proc.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        pass
+
+
 def _stdout_reader(
     stream: Any, messages: queue.Queue[tuple[float, str] | None]
 ) -> None:
@@ -208,11 +216,7 @@ def run_sample(
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                proc.kill()
-                try:
-                    proc.wait(timeout=1)
-                except subprocess.TimeoutExpired:
-                    pass
+                kill_and_reap(proc)
                 raise ColdJitError(f"llama-bench timed out after {timeout_s}s")
             try:
                 message = messages.get(timeout=min(remaining, 0.25))
@@ -229,8 +233,7 @@ def run_sample(
             except json.JSONDecodeError:
                 continue
             if not isinstance(row, dict):
-                proc.kill()
-                proc.wait(timeout=1)
+                kill_and_reap(proc)
                 raise ColdJitError("llama-bench emitted a non-object JSON row")
             avg_ts = row.get("avg_ts")
             if (
@@ -238,8 +241,7 @@ def run_sample(
                 or not isinstance(avg_ts, (int, float))
                 or not math.isfinite(avg_ts)
             ):
-                proc.kill()
-                proc.wait(timeout=1)
+                kill_and_reap(proc)
                 raise ColdJitError(f"llama-bench emitted invalid avg_ts: {avg_ts!r}")
             rows.append(row)
             if first_row_s is None:
@@ -249,18 +251,10 @@ def run_sample(
             try:
                 returncode = proc.wait(timeout=remaining)
             except subprocess.TimeoutExpired:
-                proc.kill()
-                try:
-                    proc.wait(timeout=1)
-                except subprocess.TimeoutExpired:
-                    pass
+                kill_and_reap(proc)
                 raise ColdJitError(f"llama-bench timed out after {timeout_s}s")
         else:
-            proc.kill()
-            try:
-                proc.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                pass
+            kill_and_reap(proc)
             raise ColdJitError(f"llama-bench timed out after {timeout_s}s")
         reader.join(timeout=1)
 
