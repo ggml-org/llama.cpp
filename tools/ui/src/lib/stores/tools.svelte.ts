@@ -1,7 +1,13 @@
 import type { OpenAIToolDefinition, ToolEntry, ToolGroup } from '$lib/types';
 import { ToolsService } from '$lib/services/tools.service';
 import { mcpStore } from '$lib/stores/mcp.svelte';
-import { HealthCheckStatus, JsonSchemaType, ToolCallType, ToolSource } from '$lib/enums';
+import {
+	HealthCheckStatus,
+	JsonSchemaType,
+	ToolCallType,
+	ToolSource,
+	BuiltInTool
+} from '$lib/enums';
 import { config } from '$lib/stores/settings.svelte';
 import {
 	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
@@ -24,12 +30,30 @@ class ToolsStore {
 	constructor() {
 		try {
 			const stored = localStorage.getItem(DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY);
+			const list: string[] = [];
 			if (stored) {
 				const parsed = JSON.parse(stored);
 				if (Array.isArray(parsed)) {
-					for (const key of parsed) {
-						if (typeof key === 'string') this._disabledTools.add(key);
+					for (const entry of parsed) {
+						if (typeof entry === 'string') list.push(entry);
 					}
+				}
+			}
+
+			const sandboxKey = `${ToolSource.FRONTEND}:${BuiltInTool.RUN_JAVASCRIPT}`;
+			let mutated = false;
+			if (!list.includes(sandboxKey)) {
+				list.push(sandboxKey);
+				mutated = true;
+			}
+
+			for (const key of list) this._disabledTools.add(key);
+
+			if (mutated) {
+				try {
+					localStorage.setItem(DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY, JSON.stringify(list));
+				} catch {
+					// best-effort
 				}
 			}
 		} catch (err) {
