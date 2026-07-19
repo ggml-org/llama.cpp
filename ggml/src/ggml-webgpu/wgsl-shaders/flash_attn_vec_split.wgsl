@@ -196,49 +196,35 @@ struct Params {
 
 // Just a very small float value.
 const FLOAT_MIN: f32 = -1.0e9;
+const kv_shmem_size = KV_TILE * max(HEAD_DIM_QK, HEAD_DIM_V);
 
 var<workgroup> q_shmem: array<f32, HEAD_DIM_QK>;
-
-#ifndef KV_DIRECT
-const kv_shmem_size = KV_TILE * max(HEAD_DIM_QK, HEAD_DIM_V);
-// we can reuse the same shmem for K and V since we only need one at a time
-var<workgroup> kv_shmem: array<f32, kv_shmem_size>;
-#endif
-
 var<workgroup> o_shmem: array<f32, HEAD_DIM_V>;
+// note that we reuse the same storage for both since we only need one at a time
+var<workgroup> inter_shmem: array<f32, KV_TILE>;
 
 #ifdef MASK
 // storage for mask values
 var<workgroup> mask_shmem: array<f32, KV_TILE>;
 #endif
 
-// note that we reuse the same storage for both since we only need one at a time
-var<workgroup> inter_shmem: array<f32, KV_TILE>;
-
-// Storage for row max and exp sum during online softmax
-fn calc_softmax_term(kv_idx: u32, slope: f32, has_bias: bool, apply_mask: bool) -> f32 {
-    var v = select(FLOAT_MIN,
-                   inter_shmem[kv_idx] * params.scale,
-                   kv_idx < KV_TILE);
-#ifdef LOGIT_SOFTCAP
-    v = params.logit_softcap * tanh(v);
+#if defined(K_DIRECT) || defined(V_DIRECT)
+// d cache for the quantized KV. several threads uses the same d,
+// so it is more efficient to cache it even with direct path.
+var<workgroup> d_shmem: array<f32, kv_shmem_size / 32>;
 #endif
-#ifdef MASK
-    if (apply_mask) {
-        var mask_val = select(0.0, mask_shmem[kv_idx], kv_idx < KV_TILE);
-        v += select(mask_val, slope * mask_val, has_bias);
-    }
-#endif
-    return v;
-}
 
-#ifndef KV_DIRECT
+// logic for kv_shmem
+#if !defined(K_DIRECT) || !defined(V_DIRECT)
+
+// we can reuse the same shmem for K and V since we only need one at a time
+var<workgroup> kv_shmem: array<f32, kv_shmem_size>;
+
 #define QUANT_SHMEM kv_shmem
 #define QUANT_OUT_TYPE f32
-#include "quant_inner_loops.tmpl"
 #include "flash_attn_quant_staging.tmpl"
 
-#if !defined(K_Q4_0) && !defined(K_Q8_0)
+#if !defined(K_DIRECT) && !defined(K_Q4_0) && !defined(K_Q8_0)
 fn load_k_tile_block(local_x: u32, kv_count: u32, kv_tile: u32, k_head_offset: u32) {
     for (var elem_idx = local_x * 4u; elem_idx < KV_TILE * HEAD_DIM_QK; elem_idx += WG_SIZE * 4u) {
         let k_row = elem_idx / HEAD_DIM_QK;
@@ -256,7 +242,7 @@ fn load_k_tile_block(local_x: u32, kv_count: u32, kv_tile: u32, k_head_offset: u
 }
 #endif
 
-#if !defined(V_Q4_0) && !defined(V_Q8_0)
+#if !defined(V_DIRECT) && !defined(V_Q4_0) && !defined(V_Q8_0)
 fn load_v_tile_block(local_x: u32, kv_count: u32, kv_tile: u32, v_head_offset: u32) {
     for (var elem_idx = local_x * 4u; elem_idx < KV_TILE * HEAD_DIM_V; elem_idx += WG_SIZE * 4u) {
         let v_row = elem_idx / HEAD_DIM_V;
@@ -273,7 +259,24 @@ fn load_v_tile_block(local_x: u32, kv_count: u32, kv_tile: u32, v_head_offset: u
     }
 }
 #endif
+#endif // !K_DIRECT || !V_DIRECT
+
+// Storage for row max and exp sum during online softmax
+fn calc_softmax_term(kv_idx: u32, slope: f32, has_bias: bool, apply_mask: bool) -> f32 {
+    var v = select(FLOAT_MIN,
+                   inter_shmem[kv_idx] * params.scale,
+                   kv_idx < KV_TILE);
+#ifdef LOGIT_SOFTCAP
+    v = params.logit_softcap * tanh(v);
 #endif
+#ifdef MASK
+    if (apply_mask) {
+        var mask_val = select(0.0, mask_shmem[kv_idx], kv_idx < KV_TILE);
+        v += select(mask_val, slope * mask_val, has_bias);
+    }
+#endif
+    return v;
+}
 
 @compute @workgroup_size(WG_SIZE)
 fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
@@ -355,12 +358,31 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
             inter_shmem[elem_idx] = 0.0;
         }
 
+#ifdef K_DIRECT
+      // load only `d` of quantized block into shared memory in the direct path
+#if defined(K_Q8_0)
+        for (var j = local_id.x * 32; j < KV_TILE * HEAD_DIM_QK; j += WG_SIZE * 32) {
+            let kv_row = kv_tile + j / HEAD_DIM_QK;
+            let block_idx = (j % HEAD_DIM_QK) / 32;
+            let block_byte_base = 34 * (k_head_offset + kv_row * params.stride_k1 + block_idx);
+            let d = f32(f16_from_u16(load_k_u16_at(block_byte_base)));
+            d_shmem[j / 32] = d;
+        }
+#elif defined(K_Q4_0)
+        for (var j = local_id.x * 32; j < KV_TILE * HEAD_DIM_QK; j += WG_SIZE * 32) {
+            let kv_row = kv_tile + j / HEAD_DIM_QK;
+            let block_idx = (j % HEAD_DIM_QK) / 32;
+            let block_byte_base = 18 * (k_head_offset + kv_row * params.stride_k1 + block_idx);
+            let d = f32(f16_from_u16(load_k_u16_at(block_byte_base)));
+            d_shmem[j / 32] = d;
+        }
+#endif // K_Q8_0 || K_Q4_0
+#else
       // load k tile into shared memory
-#ifndef KV_DIRECT
       load_k_tile_block(local_id.x, kv_count, kv_tile, k_head_offset);
-#endif
+#endif // K_DIRECT
 
-      workgroupBarrier();
+        workgroupBarrier();
 
       // accumulate q block * k block into registers across the entire KV tile
       if (!skip_tile) {
@@ -381,9 +403,40 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                             q_shmem[q_off + 1u],
                             q_shmem[q_off + 2u],
                             q_shmem[q_off + 3u]);
-#ifdef KV_DIRECT
+#ifdef K_DIRECT
+#if defined(K_Q8_0)
+                        let kv_row = kv_tile + kv_idx;
+                        let block_idx = (i * 4u) / 32;
+                        let id_in_block = (i * 4u) % 32;
+                        let block_byte_base = 34 * (k_head_offset + kv_row * params.stride_k1 + block_idx);
+                        let q_byte_base = block_byte_base + 2u;
+                        let d = d_shmem[(kv_idx * HEAD_DIM_QK) / 32 + block_idx];
+                        let q8u4 = load_k_u32_at(q_byte_base + id_in_block);
+                        let kv = vec4<f32>(
+                            d * f32(get_byte_i32(q8u4, 0)),
+                            d * f32(get_byte_i32(q8u4, 1)),
+                            d * f32(get_byte_i32(q8u4, 2)),
+                            d * f32(get_byte_i32(q8u4, 3)),
+                        );
+#elif defined(K_Q4_0)
+                        let kv_row = kv_tile + kv_idx;
+                        let block_idx = (i * 4u) / 32;
+                        let id_in_block = (i * 4u) % 32;
+                        let phase = id_in_block / 16;
+                        let block_byte_base = 18 * (k_head_offset + kv_row * params.stride_k1 + block_idx);
+                        let q_byte_base = block_byte_base + 2u;
+                        let d = d_shmem[(kv_idx * HEAD_DIM_QK) / 32 + block_idx];
+                        let q8u4 = load_k_u32_at(q_byte_base + (id_in_block - phase * 16u));
+                        let kv = vec4<f32>(
+                            d * (f32((get_byte(q8u4, 0) >> (phase * 4u)) & 0xFu) - 8.0),
+                            d * (f32((get_byte(q8u4, 1) >> (phase * 4u)) & 0xFu) - 8.0),
+                            d * (f32((get_byte(q8u4, 2) >> (phase * 4u)) & 0xFu) - 8.0),
+                            d * (f32((get_byte(q8u4, 3) >> (phase * 4u)) & 0xFu) - 8.0),
+                        );
+#else
                         let idx = k_head_offset + (kv_tile + kv_idx) * params.stride_k1 + (i * 4u);
                         let kv = vec4<f32>(K[idx >> 2u]);
+#endif // K_Q8_0 || K_Q4_0
 #else
                         let idx = kv_idx * HEAD_DIM_QK + (i * 4u);
                         let kv = vec4<f32>(
@@ -391,7 +444,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                             kv_shmem[idx + 1u],
                             kv_shmem[idx + 2u],
                             kv_shmem[idx + 3u]);
-#endif
+#endif // K_DIRECT
                         partial_sum += dot(qv, kv);
                     }
                   }
@@ -473,12 +526,32 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
           }
       }
 
+      
+#ifdef V_DIRECT
+      // load only `d` of quantized block into shared memory in the direct path
+#if defined(V_Q8_0)
+        for (var j = local_id.x * 32; j < KV_TILE * HEAD_DIM_V; j += WG_SIZE * 32) {
+            let v_row = kv_tile + j / HEAD_DIM_V;
+            let block_idx = (j % HEAD_DIM_V) / 32;
+            let block_byte_base = 34 * (v_head_offset + v_row * params.stride_v1 + block_idx);
+            let d = f32(f16_from_u16(load_v_u16_at(block_byte_base)));
+            d_shmem[j / 32] = d;
+        }
+#elif defined(V_Q4_0)
+        for (var j = local_id.x * 32; j < KV_TILE * HEAD_DIM_V; j += WG_SIZE * 32) {
+            let v_row = kv_tile + j / HEAD_DIM_V;
+            let block_idx = (j % HEAD_DIM_V) / 32;
+            let block_byte_base = 18 * (v_head_offset + v_row * params.stride_v1 + block_idx);
+            let d = f32(f16_from_u16(load_v_u16_at(block_byte_base)));
+            d_shmem[j / 32] = d;
+        }
+#endif // V_Q8_0 || V_Q4_0
+#else
       // load v tile into shared memory
-#ifndef KV_DIRECT
       load_v_tile_block(local_id.x, kv_count, kv_tile, v_head_offset);
-#endif
+#endif // V_DIRECT
 
-      workgroupBarrier();
+        workgroupBarrier();
 
       if (!skip_tile) {
           // we have P (KV_TILE) in inter_shmem and V (KV_TILE x head_dim_v) in kv_shmem
@@ -501,9 +574,38 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                       }
 
                       let p = inter_shmem[kv_idx];
-#ifdef KV_DIRECT
+#ifdef V_DIRECT
+#if defined(V_Q8_0)
+                        let block_idx = (vec_col * 4u) / 32;
+                        let id_in_block = (vec_col * 4u) % 32;
+                        let block_byte_base = 34 * (v_head_offset + v_row * params.stride_v1 + block_idx);
+                        let q_byte_base = block_byte_base + 2u;
+                        let d = d_shmem[(kv_idx * HEAD_DIM_V) / 32 + block_idx];
+                        let q8u4 = load_v_u32_at(q_byte_base + id_in_block);
+                        let v4 = vec4<f32>(
+                            d * f32(get_byte_i32(q8u4, 0)),
+                            d * f32(get_byte_i32(q8u4, 1)),
+                            d * f32(get_byte_i32(q8u4, 2)),
+                            d * f32(get_byte_i32(q8u4, 3)),
+                        );
+#elif defined(V_Q4_0)
+                        let block_idx = (vec_col * 4u) / 32;
+                        let id_in_block = (vec_col * 4u) % 32;
+                        let phase = id_in_block / 16;
+                        let block_byte_base = 18 * (v_head_offset + v_row * params.stride_v1 + block_idx);
+                        let q_byte_base = block_byte_base + 2u;
+                        let d = d_shmem[(kv_idx * HEAD_DIM_V) / 32 + block_idx];
+                        let q8u4 = load_v_u32_at(q_byte_base + (id_in_block - phase * 16u));
+                        let v4 = vec4<f32>(
+                            d * (f32((get_byte(q8u4, 0) >> (phase * 4u)) & 0xFu) - 8.0),
+                            d * (f32((get_byte(q8u4, 1) >> (phase * 4u)) & 0xFu) - 8.0),
+                            d * (f32((get_byte(q8u4, 2) >> (phase * 4u)) & 0xFu) - 8.0),
+                            d * (f32((get_byte(q8u4, 3) >> (phase * 4u)) & 0xFu) - 8.0),
+                        );
+#else
                       let v_idx = v_head_offset + v_row * params.stride_v1 + vec_col * 4u;
                       let v4 = vec4<f32>(V[v_idx >> 2u]);
+#endif // V_Q8_0 || V_Q4_0
 #else
                       let v_idx = kv_idx * HEAD_DIM_V + vec_col * 4u;
                       let v4 = vec4<f32>(
@@ -511,7 +613,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                           kv_shmem[v_idx + 1u],
                           kv_shmem[v_idx + 2u],
                           kv_shmem[v_idx + 3u]);
-#endif
+#endif // V_DIRECT
                       lo += p * v4;
                   }
 
