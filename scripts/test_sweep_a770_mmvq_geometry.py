@@ -28,7 +28,7 @@ class GeometrySweepTests(unittest.TestCase):
         self.assertEqual(SWEEP.added_suffix(["a"], ["x"]), ["x"])
 
     # ------------------------------------------------------------------ #
-    # Defect 1: parse_gate_fail – substring must not accept 10 GATE-FAIL  #
+    # Defect 1: parse_gate_fail - substring must not accept 10 GATE-FAIL  #
     # ------------------------------------------------------------------ #
 
     def test_parse_gate_fail_exact_zero_passes(self) -> None:
@@ -38,7 +38,7 @@ class GeometrySweepTests(unittest.TestCase):
         self.assertFalse(SWEEP.parse_gate_fail("== summary: 3 GATE-FAIL"))
 
     def test_parse_gate_fail_10_is_not_zero(self) -> None:
-        """Sub-string '0' inside '10' must NOT match — verify boundary logic."""
+        """Sub-string '0' inside '10' must NOT match - verify boundary logic."""
         self.assertFalse(
             SWEEP.parse_gate_fail("== summary: 10 GATE-FAIL"),
         )

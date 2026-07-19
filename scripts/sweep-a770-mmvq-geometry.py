@@ -25,8 +25,6 @@ from typing import Any
 A770_MAX_WORK_ITEMS: int = 1024
 
 
-CELL_WORKGROUP_RE = re.compile(r"^(\d+) \w*$", re.MULTILINE)
-
 
 def _cell_workgroup_size(y: int, sg: int) -> int | None:
     """Return the SIMD32 workgroup size for a (y,sg) cell, or None on bad input."""
@@ -36,10 +34,8 @@ def _cell_workgroup_size(y: int, sg: int) -> int | None:
 
 
 def _cell_valid(y: int, sg: int) -> bool:
-    return (
-        _cell_workgroup_size(y, sg) is not None
-        and _cell_workgroup_size(y, sg) <= A770_MAX_WORK_ITEMS
-    )
+    workgroup_size = _cell_workgroup_size(y, sg)
+    return workgroup_size is not None and workgroup_size <= A770_MAX_WORK_ITEMS
 
 
 _ALL_CELL_CONFIGS = [(y, sg) for y in (1, 2, 4) for sg in (4, 8, 16, 32)]
