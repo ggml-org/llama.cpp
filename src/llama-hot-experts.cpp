@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cinttypes>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <vector>
 
@@ -63,6 +64,10 @@ llama_hot_expert_cache::~llama_hot_expert_cache() {
 void llama_hot_expert_cache::print_stats() const {
     std::lock_guard<std::mutex> lock(mu);
 
+    // fprintf(stderr, ...) on purpose, NOT LLAMA_LOG_*: at destruction time the
+    // ggml/llama log callback may already be torn down (or was never routed to
+    // a visible sink), which was silently swallowing these stats before.
+
     size_t   total_distinct_seen  = counts.size();
     size_t   total_pinned         = pinned.size();
     uint64_t global_coldest_count = UINT64_MAX;
@@ -79,32 +84,34 @@ void llama_hot_expert_cache::print_stats() const {
         global_hottest_count = std::get<0>(*pinned_rank.rbegin());
     }
 
-    // LLAMA_LOG_WARN (not INFO) so the message is visible with the default
-    // verbosity threshold in llama-server (INFO maps to LOG_LEVEL_TRACE=4, which
-    // is above the default threshold of 3). The user explicitly enabled this
-    // feature, so WARN is the correct level for periodic stats output.
-    LLAMA_LOG_WARN("[pin-hotexperts] obs=%" PRIu64
-                   " | locked=%.2f MiB | moe_layers=%zu | "
-                   "pinned=%zu/%d (global, N=%d x layers=%zu) | distinct (layer,expert) seen=%zu",
-                   n_eval_calls, n_bytes_locked / (1024.0 * 1024.0), layers.size(), total_pinned, n_pin_total, n_pin,
-                   layers.size(), total_distinct_seen);
+    fprintf(stderr,
+            "[pin-hotexperts] obs=%" PRIu64
+            " | locked=%.2f MiB | moe_layers=%zu | "
+            "pinned=%zu/%d (global, N=%d x layers=%zu) | distinct (layer,expert) seen=%zu",
+            n_eval_calls, n_bytes_locked / (1024.0 * 1024.0), layers.size(), total_pinned, n_pin_total, n_pin,
+            layers.size(), total_distinct_seen);
 
     if (!pinned_rank.empty()) {
-        LLAMA_LOG_CONT(" | pinned count range=[%" PRIu64 ", %" PRIu64 "]", global_coldest_count, global_hottest_count);
+        fprintf(stderr, " | pinned count range=[%" PRIu64 ", %" PRIu64 "]", global_coldest_count, global_hottest_count);
     }
 
     if (!pinned_per_layer.empty()) {
-        LLAMA_LOG_CONT(" | per-layer: {");
+        fprintf(stderr, " | per-layer: {");
+        bool                                first = true;
         // Sort by layer index for readable output
         std::vector<std::pair<int, size_t>> sorted_layers(pinned_per_layer.begin(), pinned_per_layer.end());
         std::sort(sorted_layers.begin(), sorted_layers.end());
-        for (size_t i = 0; i < sorted_layers.size(); i++) {
-            const auto & [il, cnt] = sorted_layers[i];
-            LLAMA_LOG_CONT("L%d=%zu%s", il, cnt, (i + 1 < sorted_layers.size()) ? ", " : "");
+        for (const auto & [il, cnt] : sorted_layers) {
+            if (!first) {
+                fprintf(stderr, ", ");
+            }
+            fprintf(stderr, "L%d=%zu", il, cnt);
+            first = false;
         }
-        LLAMA_LOG_CONT("}");
+        fprintf(stderr, "}");
     }
-    LLAMA_LOG_CONT("\n");
+    fprintf(stderr, "\n");
+    fflush(stderr);
 }
 
 bool llama_hot_expert_cache::eval_callback(struct ggml_tensor * t, bool ask, void * user_data) {
