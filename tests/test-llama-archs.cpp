@@ -419,13 +419,6 @@ static bool arch_supported(const llm_arch arch) {
         return false;
     }
 
-    // FIXME some models are segfaulting with WebGPU:
-#ifdef GGML_USE_WEBGPU
-    if (arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_KIMI_LINEAR) {
-        return false;
-    }
-#endif // GGML_USE_WEBGPU
-
     return true;
 }
 
@@ -591,9 +584,6 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
                 std::string status_roundtrip = "\033[1;33mSKIP\033[0m";
                 char nmse_str[12] = {0};
                 bool skip = !arch_supported(arch) || (dc.split_mode == LLAMA_SPLIT_MODE_TENSOR && dc.devs.empty());
-#if defined(GGML_USE_WEBGPU)
-                skip = true; // FIXME
-#endif // GGML_USE_WEBGPU
                 if (!skip) {
                     if (logits_cpu.empty()) {
                         model_and_ctx_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {}, LLAMA_SPLIT_MODE_LAYER, encode);

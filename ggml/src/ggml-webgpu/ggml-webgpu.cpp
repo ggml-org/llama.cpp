@@ -2619,13 +2619,28 @@ static webgpu_encoded_op ggml_webgpu_glu(webgpu_context & ctx,
 
     webgpu_pipeline pipeline = ctx->shader_lib->get_glu_pipeline(shader_lib_ctx);
 
-    auto * decisions = static_cast<ggml_webgpu_generic_shader_decisions *>(pipeline.context.get());
+    auto * decisions = static_cast<ggml_webgpu_glu_shader_decisions *>(pipeline.context.get());
 
     const int split = (src1 != nullptr);
 
+    uint32_t offset_src0 =
+        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src0) / ggml_type_size(src0->type));
+    uint32_t offset_src1 =
+        src1 != nullptr ? (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src1) / ggml_type_size(src1->type)) : 0;
+    size_t merged_offset = 0;
+    size_t merged_size   = 0;
+    if (decisions->src_overlap) {
+        const ggml_webgpu_merged_binding_range merged_range =
+            ggml_webgpu_tensor_merged_binding_range(ctx, { src0, src1 });
+        merged_offset = merged_range.offset;
+        merged_size   = merged_range.size;
+        offset_src0   = ggml_webgpu_tensor_merged_element_offset(src0, merged_range);
+        offset_src1   = ggml_webgpu_tensor_merged_element_offset(src1, merged_range);
+    }
+
     std::vector<uint32_t> params = {
-        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src0) / ggml_type_size(src0->type)),
-        src1 != nullptr ? (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src1) / ggml_type_size(src1->type)) : 0,
+        offset_src0,
+        offset_src1,
         (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, dst) / ggml_type_size(dst->type)),
         (uint32_t) (src0->nb[1] / ggml_type_size(src0->type)),
         (uint32_t) (src0->nb[2] / ggml_type_size(src0->type)),
@@ -2648,11 +2663,15 @@ static webgpu_encoded_op ggml_webgpu_glu(webgpu_context & ctx,
         ggml_webgpu_u32_from_f32(ggml_get_op_params_f32(dst, 3)),  // limit, for swiglu_oai
     };
 
-    std::vector<wgpu::BindGroupEntry> entries = {
-        ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src0),
-    };
+    std::vector<wgpu::BindGroupEntry> entries;
     uint32_t dst_binding = 1;
-    if (split) {
+    if (decisions->src_overlap) {
+        entries.push_back(
+            ggml_webgpu_make_bind_group_entry(0, ggml_webgpu_tensor_buf(src0), merged_offset, merged_size));
+    } else {
+        entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src0));
+    }
+    if (split && !decisions->src_overlap) {
         dst_binding = 2;
         entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, 1, src1));
     }
