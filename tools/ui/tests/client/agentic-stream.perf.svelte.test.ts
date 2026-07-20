@@ -256,12 +256,52 @@ function report() {
 // toolMessages array for EVERY message in the conversation. Drive the real
 // store through the real list component to measure that.
 
-async function measureConversation(label: string, priorMessages: number, tokens = 60) {
+async function measureConversation(
+	label: string,
+	priorMessages: number,
+	tokens = 60,
+	/**
+	 * Give each prior assistant turn a resolved tool call, so the fixture pays
+	 * `hasAgenticContent`'s JSON.parse and the tool-message grouping walk that a
+	 * real agent thread would - plain prose messages skip both.
+	 */
+	agentic = false
+) {
 	const history: DatabaseMessage[] = [];
 	for (let i = 0; i < priorMessages; i++) {
+		const isAssistant = i % 2 !== 0;
+
+		if (isAssistant && agentic) {
+			const id = `prior_call_${i}`;
+			history.push(
+				baseMessage({
+					role: MessageRole.ASSISTANT,
+					content: `Message ${i}`,
+					toolCalls: JSON.stringify([
+						{
+							id,
+							type: 'function',
+							function: {
+								name: 'exec_shell_command',
+								arguments: JSON.stringify({ command: `grep -rn "thing_${i}" src/` })
+							}
+						}
+					])
+				})
+			);
+			history.push(
+				baseMessage({
+					role: MessageRole.TOOL,
+					toolCallId: id,
+					content: `${blob(1024, `r${i}`)}\n[exit code: 0]`
+				})
+			);
+			continue;
+		}
+
 		history.push(
 			baseMessage({
-				role: i % 2 === 0 ? MessageRole.USER : MessageRole.ASSISTANT,
+				role: isAssistant ? MessageRole.ASSISTANT : MessageRole.USER,
 				content: `Message ${i}: ${blob(512, `m${i}`)}`
 			})
 		);
@@ -346,6 +386,10 @@ describe('agentic streaming perf', () => {
 		await measureConversation('convo: 1 prior message', 1);
 		await measureConversation('convo: 10 prior messages', 10);
 		await measureConversation('convo: 40 prior messages', 40);
+
+		// Same, but each prior assistant turn carries a resolved tool call.
+		await measureConversation('convo: 10 prior, agentic', 10, 60, true);
+		await measureConversation('convo: 40 prior, agentic', 40, 60, true);
 
 		// Message length: MarkdownContent re-parses the whole accumulated string
 		// each frame, so per-token cost should climb as the response grows.
