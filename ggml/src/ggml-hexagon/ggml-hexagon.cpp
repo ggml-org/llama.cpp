@@ -147,8 +147,35 @@ static const char * htp_event_name(uint16_t id) {
     }
 }
 
+static void ggml_hexagon_dump_trace_events(const std::string & sess_name, const std::string & op_name,
+                                           uint32_t start_cycles, uint32_t duration_cycles,
+                                           const htp_trace_desc * trace_events, uint32_t n_traces,
+                                           uint32_t * trace_idx, const uint32_t * valid_cnt) {
+    if (opt_profile == 3 && trace_events) {
+        for (uint32_t t = 0; t <= HTP_MAX_NTHREADS; t++) {
+            while (trace_idx[t] < valid_cnt[t]) {
+                const auto & e = trace_events[t * n_traces + trace_idx[t]];
+                uint32_t offset = e.cycles - start_cycles;
+                if (offset >= 0x80000000) {
+                    trace_idx[t]++;
+                    continue;
+                }
+                if (offset > duration_cycles) {
+                    break;
+                }
+                bool is_stop = (e.info & 0x8000) != 0;
+                uint16_t info = e.info & 0x7FFF;
+                GGML_LOG_DEBUG("ggml-hex: %s trace-op %s: thread %u event %s info %u %s %u\n",
+                               sess_name.c_str(), op_name.c_str(), t, htp_event_name(e.id), info, is_stop ? "stop" : "start", e.cycles);
+                trace_idx[t]++;
+            }
+        }
+    }
+}
+
 static void ggml_hexagon_dump_op_prof(const std::string &sess_name, const htp_opnode & node,
-                                      const htp_prof_desc & pd) {
+                                      const htp_prof_desc & pd, const htp_trace_desc * trace_events,
+                                      uint32_t n_traces, uint32_t * trace_idx, const uint32_t * valid_cnt) {
     if (!opt_profile) return;
 
     uint32_t op_usec = pd.usecs;
@@ -166,6 +193,58 @@ static void ggml_hexagon_dump_op_prof(const std::string &sess_name, const htp_op
     float mhz = op_usec > 0 ? (float) op_cycles / op_usec : 0.0f;
     GGML_LOG_DEBUG("ggml-hex: %s profile-op %s|%s|%s|%s|%s|%s|usec %u cycles %u start %u mhz %.1f%s\n", sess_name.c_str(),
             node.op_name().c_str(), fmt.names, fmt.dims, fmt.types, fmt.strides, fmt.kparams, op_usec, op_cycles, pd.cycles_start, mhz, pmu_str);
+
+    ggml_hexagon_dump_trace_events(sess_name, node.op_name(), pd.cycles_start, op_cycles, trace_events, n_traces, trace_idx, valid_cnt);
+}
+
+static void ggml_hexagon_dump_batch_start_prof(const std::string & sess_name, const htp_opbatch_rsp & rsp, const htp_prof_desc * pd,
+                                               const htp_trace_desc * trace_events, uint32_t n_traces,
+                                               uint32_t * trace_idx, const uint32_t * valid_cnt) {
+    uint32_t init_start = rsp.cycles_start;
+    uint32_t init_stop = (rsp.n_ops > 0) ? pd[0].cycles_start : rsp.cycles_stop;
+    if (init_stop > init_start) {
+        uint32_t init_cycles = init_stop - init_start;
+        uint32_t batch_cycles = rsp.cycles_stop - rsp.cycles_start;
+        uint32_t init_usecs = batch_cycles > 0 ? (uint32_t)(((uint64_t)init_cycles * rsp.usecs) / batch_cycles) : 0;
+        float mhz = init_usecs > 0 ? (float)init_cycles / init_usecs : 0.0f;
+
+        GGML_LOG_DEBUG("ggml-hex: %s profile-op INIT|----|----|----|----|----|usec %u cycles %u start %u mhz %.1f\n",
+                       sess_name.c_str(), init_usecs, init_cycles, init_start, mhz);
+
+        ggml_hexagon_dump_trace_events(sess_name, "INIT", init_start, init_cycles, trace_events, n_traces, trace_idx, valid_cnt);
+    }
+}
+
+static void ggml_hexagon_dump_batch_end_prof(const std::string & sess_name, const htp_opbatch_rsp & rsp, const htp_prof_desc * pd,
+                                             const htp_trace_desc * trace_events, uint32_t n_traces,
+                                             uint32_t * trace_idx, const uint32_t * valid_cnt) {
+    if (rsp.n_ops > 0) {
+        uint32_t cleanup_start = pd[rsp.n_ops - 1].cycles_stop;
+        uint32_t cleanup_stop = rsp.cycles_stop;
+        if (cleanup_stop > cleanup_start) {
+            uint32_t cleanup_cycles = cleanup_stop - cleanup_start;
+            uint32_t batch_cycles = rsp.cycles_stop - rsp.cycles_start;
+            uint32_t cleanup_usecs = batch_cycles > 0 ? (uint32_t)(((uint64_t)cleanup_cycles * rsp.usecs) / batch_cycles) : 0;
+            float mhz = cleanup_usecs > 0 ? (float)cleanup_cycles / cleanup_usecs : 0.0f;
+
+            GGML_LOG_DEBUG("ggml-hex: %s profile-op FINI|----|----|----|----|----|usec %u cycles %u start %u mhz %.1f\n",
+                           sess_name.c_str(), cleanup_usecs, cleanup_cycles, cleanup_start, mhz);
+
+            ggml_hexagon_dump_trace_events(sess_name, "FINI", cleanup_start, cleanup_cycles, trace_events, n_traces, trace_idx, valid_cnt);
+        }
+    }
+
+    char evt_str[256] = "";
+    if (opt_profile == 3) {
+        snprintf(evt_str, sizeof(evt_str), " evt [%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u]",
+                rsp.n_traces[0], rsp.n_traces[1], rsp.n_traces[2], rsp.n_traces[3],
+                rsp.n_traces[4], rsp.n_traces[5], rsp.n_traces[6], rsp.n_traces[7],
+                rsp.n_traces[8], rsp.n_traces[9], rsp.n_traces[10]);
+    }
+
+    float batch_mhz = rsp.usecs > 0 ? (float) (rsp.cycles_stop - rsp.cycles_start) / rsp.usecs : 0.0f;
+    GGML_LOG_DEBUG("ggml-hex: %s profile-batch n-ops %u|usec %u cycles %u start %u mhz %.1f%s\n",
+                   sess_name.c_str(), rsp.n_ops, rsp.usecs, rsp.cycles_stop - rsp.cycles_start, rsp.cycles_start, batch_mhz, evt_str);
 }
 
 // **
@@ -1503,9 +1582,6 @@ struct ggml_hexagon_opqueue {
         if (opt_profile && rsp.n_ops > 0) {
             auto & ops = op_cache[rsp.id];
 
-            uint64_t batch_usec = ggml_time_us() - start_usec[rsp.id];
-            uint32_t htp_usec   = 0;
-
             GGML_ASSERT(rsp.n_ops <= ops.size());
 
             const htp_prof_desc * pd = (const htp_prof_desc *) p_ptr;
@@ -1526,45 +1602,13 @@ struct ggml_hexagon_opqueue {
                 }
             }
 
+            ggml_hexagon_dump_batch_start_prof(shm_buf->sess->name, rsp, pd, trace_events, n_traces, trace_idx, valid_cnt);
+
             for (uint32_t i = 0; i < rsp.n_ops; i++) {
-                htp_usec += pd[i].usecs;
-
-                ggml_hexagon_dump_op_prof(shm_buf->sess->name, ops[i], pd[i]);
-
-                if (opt_profile == 3) {
-                    uint32_t op_duration = pd[i].cycles_stop - pd[i].cycles_start;
-
-                    for (uint32_t t = 0; t <= HTP_MAX_NTHREADS; t++) {
-                        while (trace_idx[t] < valid_cnt[t]) {
-                            const auto & e = trace_events[t * n_traces + trace_idx[t]];
-                            uint32_t offset = e.cycles - pd[i].cycles_start;
-                            if (offset >= 0x80000000) {
-                                trace_idx[t]++;
-                                continue;
-                            }
-                            if (offset > op_duration) {
-                                break;
-                            }
-                            bool is_stop = (e.info & 0x8000) != 0;
-                            uint16_t info = e.info & 0x7FFF;
-                            GGML_LOG_DEBUG("ggml-hex: %s trace-op %s: thread %u event %s info %u %s %u\n",
-                                           shm_buf->sess->c_name(), ops[i].op_name().c_str(), t, htp_event_name(e.id), info, is_stop ? "stop" : "start", e.cycles);
-                            trace_idx[t]++;
-                        }
-                    }
-                }
+                ggml_hexagon_dump_op_prof(shm_buf->sess->name, ops[i], pd[i], trace_events, n_traces, trace_idx, valid_cnt);
             }
 
-            char evt_str[256] = "";
-            if (opt_profile == 3) {
-                snprintf(evt_str, sizeof(evt_str), " evt [%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u]",
-                        rsp.n_traces[0], rsp.n_traces[1], rsp.n_traces[2], rsp.n_traces[3],
-                        rsp.n_traces[4], rsp.n_traces[5], rsp.n_traces[6], rsp.n_traces[7],
-                        rsp.n_traces[8], rsp.n_traces[9], rsp.n_traces[10]);
-            }
-
-            GGML_LOG_DEBUG("ggml-hex: %s profile-batch n-ops %u batch-dur-usec %lld htp-ops-usec %u%s\n",
-                           shm_buf->sess->c_name(), rsp.n_ops, (long long) batch_usec, htp_usec, evt_str);
+            ggml_hexagon_dump_batch_end_prof(shm_buf->sess->name, rsp, pd, trace_events, n_traces, trace_idx, valid_cnt);
         }
     }
 };

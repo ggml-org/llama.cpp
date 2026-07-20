@@ -20,11 +20,15 @@ trace_pattern = re.compile(
 )
 
 
-def normalize_event_name(evt_type):
+def normalize_event_name(evt_type, info=0):
     if evt_type == "HVX_COMP":
         return "V-COMP"
     if evt_type == "HMX_COMP":
         return "M-COMP"
+    if evt_type == "INIT":
+        if info == 1:
+            return "BUFF"
+        return "INIT"
     name = evt_type
     if name.startswith("HVX_") or name.startswith("HMX_"):
         name = name[4:]
@@ -316,7 +320,7 @@ def generate_perfetto_trace(filtered_ops, output_path):
         ts = e['ts_ns']
         dur = e['dur_ns']
 
-        norm_evt = normalize_event_name(evt)
+        norm_evt = normalize_event_name(evt, e['info'])
         if norm_evt == "DMA":
             track_key = (t, "DMA")
         elif t == 10:
@@ -343,7 +347,7 @@ def generate_perfetto_trace(filtered_ops, output_path):
         evt = e['event']
         slot = e['slot']
 
-        norm_evt = normalize_event_name(evt)
+        norm_evt = normalize_event_name(evt, e['info'])
         if norm_evt == "DMA":
             track_evt = "DMA"
             evt_id = 1
@@ -448,7 +452,7 @@ def generate_perfetto_trace(filtered_ops, output_path):
 
         # Emit Thread Trace Events
         for e in completed_events:
-            norm_name = normalize_event_name(e['event'])
+            norm_name = normalize_event_name(e['event'], e['info'])
             name = f"DMA {e['info']}" if norm_name == "DMA" else norm_name
 
             # Slice Begin
