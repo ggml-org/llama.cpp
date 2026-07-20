@@ -65,7 +65,7 @@
 	>
 		{#if renderMarkdown && currentConfig.renderUserContentAsMarkdown}
 			<div bind:this={messageElement}>
-				<MarkdownContent class="markdown-user-content -my-4" {content} />
+				<MarkdownContent class="markdown-user-content" {content} />
 			</div>
 		{:else}
 			<span bind:this={messageElement} class="text-md whitespace-pre-wrap">
