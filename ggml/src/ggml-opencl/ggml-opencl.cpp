@@ -17085,9 +17085,6 @@ static void ggml_cl_mul_mat_q8_0_f32_adreno(ggml_backend_t backend, const ggml_t
     cl_ulong offset1 = extra1->offset + src1->view_offs;
     cl_ulong offsetd = extrad->offset + dst->view_offs;
 
-    GGML_ASSERT(src1->view_offs == 0);
-    GGML_ASSERT(dst->view_offs == 0);
-
     const int  ne00 = src0->ne[0];
     const int  ne01 = src0->ne[1];
     const int  ne02 = src0->ne[2];
@@ -17148,9 +17145,9 @@ static void ggml_cl_mul_mat_q8_0_f32_adreno(ggml_backend_t backend, const ggml_t
         CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &q_img));
         CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_mem),   &extra0_q8_0->d));
         CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &b_img));
-        CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &extra1->offset));
+        CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offset1));
         CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_mem),   &extrad->data_device));
-        CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &extrad->offset));
+        CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &offsetd));
         CL_CHECK(clSetKernelArg(kernel,  6, sizeof(int),      &ne00));
         CL_CHECK(clSetKernelArg(kernel,  7, sizeof(int),      &ne01));
         CL_CHECK(clSetKernelArg(kernel,  8, sizeof(int),      &ne02));
@@ -18544,6 +18541,26 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
     int r3 = ne13/ne03;
 
     GGML_ASSERT(ne00 == ne10);
+
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+    // adreno GEMM/GEMV kernels do not support broadcast, assuming ne2 and ne3 are 1 for src1
+    // so we handle broadcast here
+    if ((ne12 > 1 || ne13 > 1) && ne02 == 1 && ne03 == 1 &&
+        src0t != GGML_TYPE_F16 && src0t != GGML_TYPE_F32) {
+        for (int i13 = 0; i13 < ne13; ++i13) {
+            for (int i12 = 0; i12 < ne12; ++i12) {
+                ggml_tensor s1 = *src1;
+                s1.ne[2] = 1; s1.ne[3] = 1;
+                s1.view_offs = src1->view_offs + (size_t)i12*nb12 + (size_t)i13*nb13;
+                ggml_tensor d = *dst;
+                d.ne[2] = 1; d.ne[3] = 1;
+                d.view_offs = dst->view_offs + (size_t)i12*nb2 + (size_t)i13*nb3;
+                ggml_cl_mul_mat(backend, src0, &s1, &d);
+            }
+        }
+        return;
+    }
+#endif
 
     int nth0 = 32;
     int nth1 = 1;
