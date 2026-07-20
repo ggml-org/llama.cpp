@@ -200,17 +200,19 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
 
 
 static __global__ void vocab_top_k_pack_keys(
-        const float * logits, uint64_t * keys, int n, int global_offset) {
-    const int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= n) {
+        const float * logits, uint64_t * keys, int64_t ncols, int64_t nrows, int32_t global_offset) {
+    const size_t i = (size_t) blockIdx.x * blockDim.x + threadIdx.x;
+    const size_t total = (size_t) ncols*(size_t) nrows;
+    if (i >= total) {
         return;
     }
+    const int64_t col = i % ncols;
     uint32_t bits = __float_as_uint(logits[i]);
     const uint32_t magnitude = bits & 0x7fffffffu;
     if (magnitude > 0x7f800000u) bits = 0xff800000u; // NaN -> -Inf
     if (magnitude == 0) bits = 0;                    // -0 -> +0
     const uint32_t ordered = (bits & 0x80000000u) ? ~bits : (bits ^ 0x80000000u);
-    keys[i] = (uint64_t) ordered << 32 | (0xffffffffu - (uint32_t) (global_offset + i));
+    keys[i] = (uint64_t) ordered << 32 | (0xffffffffu - (uint32_t) (global_offset + col));
 }
 
 bool ggml_cuda_vocab_top_k_device(
@@ -221,25 +223,31 @@ bool ggml_cuda_vocab_top_k_device(
     return false;
 #else
     if (src == nullptr || src->type != GGML_TYPE_F32 || !ggml_is_contiguous(src) ||
-            ggml_nrows(src) != 1 || k <= 0 || k > 256 || src->ne[0] < k) {
+            ggml_nrows(src) <= 0 || ggml_nrows(src) > INT32_MAX ||
+            k <= 0 || k > 256 || src->ne[0] < k || src->ne[0] > INT32_MAX) {
         return false;
     }
-    const int n = src->ne[0];
-    ggml_cuda_pool_alloc<uint64_t> keys(ctx.pool(), n);
-    ggml_cuda_pool_alloc<int> selected_values(ctx.pool(), k);
-    vocab_top_k_pack_keys<<<(n + 255) / 256, 256, 0, ctx.stream()>>>(
-        (const float *) src->data, keys.get(), n, global_offset);
+    const int64_t ncols = src->ne[0];
+    const int64_t nrows = ggml_nrows(src);
+    ggml_cuda_pool_alloc<uint64_t> keys(ctx.pool(), (size_t) ncols*nrows);
+    ggml_cuda_pool_alloc<int> selected_values(ctx.pool(), (size_t) k*nrows);
+    vocab_top_k_pack_keys<<<((size_t) ncols*nrows + 255) / 256, 256, 0, ctx.stream()>>>(
+        (const float *) src->data, keys.get(), ncols, nrows, global_offset);
     CUDA_CHECK(cudaGetLastError());
 
     const rocprim::counting_iterator<int> indices(0);
     size_t temp_bytes = 0;
     CUDA_CHECK((rocprim::topk_pairs<rocprim::default_config, true>(
         nullptr, temp_bytes, keys.get(), packed, indices, selected_values.get(),
-        (uint32_t) n, (uint32_t) k, rocprim::identity_decomposer{}, ctx.stream())));
+        (uint32_t) ncols, (uint32_t) k, rocprim::identity_decomposer{}, ctx.stream())));
     ggml_cuda_pool_alloc<uint8_t> temp(ctx.pool(), temp_bytes);
-    CUDA_CHECK((rocprim::topk_pairs<rocprim::default_config, true>(
-        temp.get(), temp_bytes, keys.get(), packed, indices, selected_values.get(),
-        (uint32_t) n, (uint32_t) k, rocprim::identity_decomposer{}, ctx.stream())));
+    for (int64_t row = 0; row < nrows; ++row) {
+        size_t row_temp_bytes = temp_bytes;
+        CUDA_CHECK((rocprim::topk_pairs<rocprim::default_config, true>(
+            temp.get(), row_temp_bytes, keys.get() + (size_t) row*ncols, packed + (size_t) row*k,
+            indices, selected_values.get() + (size_t) row*k,
+            (uint32_t) ncols, (uint32_t) k, rocprim::identity_decomposer{}, ctx.stream())));
+    }
     return true;
 #endif
 }

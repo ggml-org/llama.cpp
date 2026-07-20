@@ -2281,9 +2281,11 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
 }
 
 bool ggml_backend_meta_top_k(
-        ggml_backend_t backend, const ggml_tensor * tensor, int32_t k, int32_t * ids, float * values) {
+        ggml_backend_t backend, const ggml_tensor * tensor, int32_t k, int64_t output_stride,
+        int32_t * ids, float * values) {
     if (!ggml_backend_is_meta(backend) || tensor == nullptr || ids == nullptr || values == nullptr ||
-            tensor->type != GGML_TYPE_F32 || ggml_nrows(tensor) != 1 || k <= 0 || k > 256) {
+            tensor->type != GGML_TYPE_F32 || ggml_nrows(tensor) <= 0 ||
+            k <= 0 || k > 256 || output_stride < k) {
         return false;
     }
 
@@ -2309,7 +2311,7 @@ bool ggml_backend_meta_top_k(
     for (size_t j = 0; j < n_backends; ++j) {
         simple_tensors[j] = ggml_backend_meta_buffer_simple_tensor(tensor, j);
     }
-    return comm_vocab_top_k(backend_ctx->comm_ctx, simple_tensors.data(), k, ids, values);
+    return comm_vocab_top_k(backend_ctx->comm_ctx, simple_tensors.data(), k, output_stride, ids, values);
 }
 
 static const ggml_backend_i ggml_backend_meta_i = {

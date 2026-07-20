@@ -207,7 +207,8 @@ extern "C" {
     typedef void   (*ggml_backend_comm_free_t)(void * comm_ctx);
     typedef bool   (*ggml_backend_comm_allreduce_tensor_t)(void * comm_ctx, struct ggml_tensor ** tensors);
     typedef bool   (*ggml_backend_comm_vocab_top_k_t)(void * comm_ctx, struct ggml_tensor ** tensors,
-                                                       int32_t k, int32_t * ids, float * values);
+                                                       int32_t k, int64_t output_stride,
+                                                       int32_t * ids, float * values);
 
     // Split buffer type for tensor parallelism (old)
     typedef ggml_backend_buffer_type_t   (*ggml_backend_split_buffer_type_t)(int main_device, const float * tensor_split);
@@ -404,10 +405,11 @@ extern "C" {
     GGML_API ggml_backend_dev_t ggml_backend_meta_device(
         ggml_backend_dev_t * devs, size_t n_devs, ggml_backend_meta_get_split_state_t get_split_state, void * get_split_state_ud);
 
-    // Compute local TOP_K on every axis-0 shard and merge the compact results on the host.
-    // Initial restricted implementation supports one-row F32 tensors and k <= 256.
+    // Compute per-row local TOP_K on every axis-0 shard and merge compact results on the host.
+    // The initial implementation supports contiguous F32 tensors and k <= 256.
     GGML_API bool ggml_backend_meta_top_k(
-        ggml_backend_t backend, const struct ggml_tensor * tensor, int32_t k, int32_t * ids, float * values);
+        ggml_backend_t backend, const struct ggml_tensor * tensor, int32_t k, int64_t output_stride,
+        int32_t * ids, float * values);
 
     //
     // Utils

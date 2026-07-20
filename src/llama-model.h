@@ -663,6 +663,7 @@ struct llama_model {
     bool is_tensor_parallel_output_head(const ggml_tensor * tensor) const;
     bool is_tensor_parallel_vocab_output_head(const ggml_tensor * tensor) const;
     bool has_tensor_parallel_vocab_output() const;
+    bool tensor_parallel_vocab_output_supports_mtp() const;
 
     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const;
 

@@ -72,7 +72,7 @@ list of upstream debugging variables.
 | `HSA_OVERRIDE_GFX_VERSION=10.3.0` | Presents the V620 as the tested `gfx1030` target. | Retained for reproducibility; it may be unnecessary on a native `gfx1030` runtime. |
 | `HSA_NO_SCRATCH_RECLAIM=1` | Keeps HIP scratch allocations instead of reclaiming them between work. | Improves stability/consistency at the cost of retaining more GPU memory. |
 | `GGML_TP_SHARDED_OUTPUT=1` | Splits validated Qwen 35B/122B output heads along the embedding dimension, then FP32-all-reduces full logits. | Supports raw and MTP paths. Do not combine with `GGML_TP_VOCAB_OUTPUT`. |
-| `GGML_TP_VOCAB_OUTPUT=1` | Splits an eligible output head along vocabulary, selects local candidates, and exchanges only compact TOP_K results. | Raw decode only for now; requires RCCL, CPU sampling, finite `top_k <= 256`, and at most one output row. Do not combine with `GGML_TP_SHARDED_OUTPUT`. |
+| `GGML_TP_VOCAB_OUTPUT=1` | Splits an eligible output head along vocabulary, selects per-row local candidates, and exchanges only compact TOP_K results. | Supports raw and MTP CPU sampling with finite `top_k <= 256`; requires RCCL. Do not combine with `GGML_TP_SHARDED_OUTPUT`. |
 
 `GGML_CUDA_ALLREDUCE` may be left unset, in which case Linux currently tries
 RCCL first. Set it explicitly to `nccl` for reproducible runs and because the
@@ -85,7 +85,7 @@ Unrecognized values behave like `none` after a warning.
 |---|---|---|---:|---|
 | Mirrored (default) | Leave both TP output flags unset | Every rank computes the complete output head; no logits collective is needed. | Baseline | Supported |
 | Embedding-sharded | `GGML_TP_SHARDED_OUTPUT=1` | Every rank computes a partial contribution for the full vocabulary; FP32 all-reduce produces complete mirrored logits. | Moderate model-dependent gain | Supported on the validated Qwen 35B/122B paths |
-| Vocabulary-sharded | `GGML_TP_VOCAB_OUTPUT=1` and `GGML_CUDA_ALLREDUCE=nccl` | Every rank computes complete logits for its vocabulary slice; deterministic local TOP_K results are exchanged and merged. | **About 15% over mirrored** on the tested 27B model | MTP and multi-output/parallel-slot batching are not yet supported |
+| Vocabulary-sharded | `GGML_TP_VOCAB_OUTPUT=1` and `GGML_CUDA_ALLREDUCE=nccl` | Every rank computes complete logits for its vocabulary slice; deterministic per-row TOP_K results are exchanged and merged. | **About 15% over mirrored** on the tested 27B model | MTP is supported when its head shares `model.output`; `--parallel 4` is tested |
 
 The two sharding flags are alternatives, not layers. They split different axes
 of the same output matrix, so setting both is an error. The measured 15% result
@@ -326,7 +326,7 @@ the measured tradeoff on this system.
 
 ## Experimental vocabulary-parallel output
 
-`GGML_TP_VOCAB_OUTPUT=1` requests the more aggressive raw-decode experiment.
+`GGML_TP_VOCAB_OUTPUT=1` requests the more aggressive output-head experiment.
 Eligibility is determined once from model structure before weight placement;
 there is no model architecture or size allowlist. It is mutually exclusive with
 `GGML_TP_SHARDED_OUTPUT` and currently requires tensor split plus RCCL:
@@ -338,10 +338,11 @@ export GGML_CUDA_ALLREDUCE=nccl
 
 For the tested 27B model, the separate, untied output head is BF16. It is split
 on its vocabulary axis; with the 248,320-token vocabulary and four equal ranks,
-every GPU stores and computes 62,080 logits. Each rank converts its local logits to deterministic 64-bit keys,
-selects 256 candidates with rocPRIM, and performs one compact RCCL all-gather.
-Rank 0 merges the 1,024 candidates on the host. The existing CPU sampler then
-operates on the exact global top-256.
+every GPU stores and computes 62,080 logits per output row. Each rank converts
+its local logits to deterministic 64-bit keys, selects 256 candidates per row
+with rocPRIM, and performs one compact RCCL all-gather. Rank 0 merges the 1,024
+candidates for each row on the host. The existing CPU sampler then operates on
+the exact global top-256.
 
 The key ordering is descending logit followed by ascending global token ID.
 NaNs are treated as negative infinity and signed zero is canonicalized to
@@ -366,6 +367,22 @@ MODEL=/path/to/model.gguf ./scripts/rdna2-vocab-ab.sh
 The script preserves all CSV/stderr outputs under a timestamped directory in
 `~/llama-jobs` (override with `OUT_DIR`).
 
+A balanced six-run 512-token MTP comparison measured:
+
+| MTP output path | Mean decode | Draft acceptance |
+|---|---:|---:|
+| Mirrored head | 37.77 t/s | 329 / 544 (60.48%) |
+| Vocabulary-parallel compact head | **51.88 t/s** | 329 / 544 (60.48%) |
+
+The MTP gain is approximately **37.3%**, with identical output, accepted/generated
+counts, and mean draft length. A 6,010-token prompt completed at 770.9 prompt
+tokens/s and 51.45 decode tokens/s. Four concurrent MTP slots also completed
+without compact-selection or decode errors. Reproduce the balanced MTP test with:
+
+```bash
+MODEL=/path/to/model.gguf ./scripts/rdna2-vocab-mtp-ab.sh
+```
+
 At load time the feature activates only for a separate, untied, canonical 2-D
 `output.weight` whose vocabulary axis matches the tokenizer, whose output layer
 is assigned to the tensor-parallel meta device, whose slices are 128-aligned and
@@ -376,11 +393,13 @@ names.
 
 This initial mode is otherwise deliberately restricted:
 
-- at most one output row per decode call;
 - finite CPU `top_k` in the range 1-256 before active probability samplers;
 - no grammar, reasoning budget, logit bias, active repetition/DRY penalties,
-  mirostat, infill, adaptive-p, dense raw-logit API, backend sampler offload, or
-  MTP speculative decoding;
+  mirostat, infill, adaptive-p, or dense raw-logit API;
+- backend sampler offload is unavailable; `--spec-draft-backend-sampling`
+  automatically falls back to the compact CPU sampler;
+- MTP is admitted only when its shared head is absent or aliases `model.output`;
+  models with a distinct MTP head receive an explicit context error;
 - no generic collective fallback: failure to obtain the RCCL compact candidate
   provider is an explicit decode error.
 
