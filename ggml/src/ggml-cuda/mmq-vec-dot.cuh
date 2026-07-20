@@ -700,6 +700,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 
     const int i0 = (threadIdx.y / ntx) * rows_per_warp;
 
+#pragma unroll 1
     for (int k01 = 0; k01 < MMQ_TILE_NE_K; k01 += 4) {
         const int k0 = k00 + k01;
 
