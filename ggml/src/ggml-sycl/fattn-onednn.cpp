@@ -42,11 +42,7 @@ bool ggml_sycl_flash_attn_ext_onednn_supported(const ggml_tensor * dst) {
     // Optional KV-length ceiling (GGML_SYCL_FA_ONEDNN_MAX_KV, 0 = unlimited). Escape hatch:
     // very long sequences make the fused SDPA slow enough to risk the xe driver watchdog on
     // some stacks; past the cap we fall back to the native FA kernel instead.
-    static const int64_t max_kv = [] {
-        const char * v = getenv("GGML_SYCL_FA_ONEDNN_MAX_KV");
-        return v ? atoll(v) : (long long) 0;
-    }();
-    if (max_kv > 0 && K->ne[1] > max_kv) {
+    if (g_ggml_sycl_fa_onednn_max_kv > 0 && K->ne[1] > g_ggml_sycl_fa_onednn_max_kv) {
         return false;
     }
     // gate for the following cases
