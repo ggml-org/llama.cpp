@@ -532,9 +532,17 @@ class ConversationsStore {
 	 */
 	async updateCurrentNode(nodeId: string): Promise<void> {
 		if (!this.activeConversation) return;
+		const convId = this.activeConversation.id;
 
-		await DatabaseService.updateCurrentNode(this.activeConversation.id, nodeId);
-		this.activeConversation = { ...this.activeConversation, currNode: nodeId };
+		await DatabaseService.updateCurrentNode(convId, nodeId);
+		if (this.activeConversation?.id === convId) {
+			this.activeConversation = { ...this.activeConversation, currNode: nodeId };
+		}
+
+		const index = this.conversations.findIndex((c) => c.id === convId);
+		if (index !== -1) {
+			this.conversations[index] = { ...this.conversations[index], currNode: nodeId };
+		}
 	}
 
 	/**
