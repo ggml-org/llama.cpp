@@ -290,14 +290,17 @@ struct vk_command_pool {
 static std::mutex queue_mutex;
 
 struct vk_queue {
-    uint32_t queue_family_index;
+    // queue_family_index is uninitialized at struct creation; ggml_vk_create_queue
+    // must set it before any call to cmd_pool.init(). Value-initialize to 0 to
+    // prevent use of garbage memory if init() is called before assignment.
+    uint32_t queue_family_index = 0;
     vk::Queue queue;
 
     vk_command_pool cmd_pool;
 
     vk::PipelineStageFlags stage_flags;
 
-    bool transfer_only;
+    bool transfer_only = false;
 
     // copy everything except the cmd_pool
     void copyFrom(vk_queue &other) {
@@ -1042,6 +1045,24 @@ void vk_command_pool::init(vk_device& device, vk_queue *q_) {
     cmd_buffers.clear();
     q = q_;
 
+    // Defensive check: vk_queue::queue_family_index is a primitive uint32_t and
+    // is uninitialized at struct creation. Although ggml_vk_create_queue
+    // normally sets it before calling init, validation layers on some driver/
+    // platform combinations (notably AMDVLK on Windows with MoE models) can
+    // trigger this with VK_QUEUE_FAMILY_IGNORED (~0U). Log clearly so the
+    // root cause is visible in user logs; fall back to the compute queue's
+    // family index which is always set up before any vk_command_pool::init.
+    GGML_ASSERT(q != nullptr);
+    if (q->queue_family_index == VK_QUEUE_FAMILY_IGNORED) {
+        std::cerr << "ggml-vulkan: vk_command_pool::init got VK_QUEUE_FAMILY_IGNORED for queue_family_index, "
+                  << "falling back to compute queue family index" << std::endl;
+        if (device->compute_queue.queue_family_index != VK_QUEUE_FAMILY_IGNORED) {
+            q->queue_family_index = device->compute_queue.queue_family_index;
+        } else {
+            std::cerr << "ggml-vulkan: compute queue also has VK_QUEUE_FAMILY_IGNORED; cannot recover" << std::endl;
+            GGML_ASSERT(false && "vk_command_pool::init: no valid queue family index");
+        }
+    }
     vk::CommandPoolCreateInfo command_pool_create_info(
         vk::CommandPoolCreateFlags(VK_COMMAND_POOL_CREATE_TRANSIENT_BIT | VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT),
         q->queue_family_index);
