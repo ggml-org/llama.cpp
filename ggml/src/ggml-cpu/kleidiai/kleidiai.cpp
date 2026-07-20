@@ -1704,16 +1704,17 @@ class extra_buffer_type : ggml::cpu::extra_buffer_type {
             if (op->src[0]->buffer && op->src[0]->buffer->buft == ggml_backend_cpu_kleidiai_buffer_type()) {
                 return (ggml::cpu::tensor_traits *) op->src[0]->extra;
             } else {
-                // KleidiAI only provides kernels for Q4_0, Q8_0 and F32. A quantized weight of
-                // any other type (K-quants, IQ) executes on the generic ggml CPU kernels. This
-                // runs per node of a graph being computed, not in supports_op(), which the
-                // scheduler may call speculatively before any operator executes, so it fires
-                // only when a real fallback occurs. Warn once per process.
+                // KleidiAI only has kernels for Q4_0 and Q8_0. For a quantized weight of any
+                // other type (K-quants, IQ) it declines the op and returns nullptr below, so
+                // KleidiAI does not accelerate it. Another CPU backend may still take the op,
+                // and this can run during graph planning, so the message says what KleidiAI
+                // did rather than what ends up executing. Warn once per process.
                 if (ggml_is_quantized(op->src[0]->type) &&
                     op->src[0]->type != GGML_TYPE_Q4_0 && op->src[0]->type != GGML_TYPE_Q8_0) {
                     static std::atomic<bool> warned(false);
                     if (!warned.exchange(true)) {
-                        GGML_LOG_WARN("kleidiai: no kernels for tensor type %s; falling back to generic CPU kernels\n",
+                        GGML_LOG_WARN("kleidiai: no kernel for tensor type %s, not accelerated by KleidiAI "
+                                      "(kernels available for Q4_0 and Q8_0)\n",
                                       ggml_type_name(op->src[0]->type));
                     }
                 }
