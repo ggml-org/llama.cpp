@@ -838,10 +838,46 @@ enum llama_pooling_type llama_context::pooling_type() const {
     return cparams.pooling_type;
 }
 
+bool llama_context::materialize_vocab_dense_logits() {
+    if (!model.has_tensor_parallel_vocab_output()) {
+        return logits.data != nullptr;
+    }
+    if (!vocab_dense_logits.empty()) {
+        return true;
+    }
+    if (vocab_last_logits == nullptr || vocab_last_logits_rows == 0) {
+        LLAMA_LOG_ERROR("%s: no vocabulary-sharded logits are available for dense fallback\n", __func__);
+        return false;
+    }
+
+    const size_t n_vocab = model.vocab.n_tokens();
+    vocab_dense_logits.resize((size_t) vocab_last_logits_rows*n_vocab);
+    ggml_backend_tensor_get(vocab_last_logits,
+        vocab_dense_logits.data(), 0, vocab_dense_logits.size()*sizeof(float));
+
+    for (const swap_info & swap : vocab_dense_pending_swaps) {
+        if (swap.i0 >= vocab_last_logits_rows || swap.i1 >= vocab_last_logits_rows) {
+            LLAMA_LOG_ERROR("%s: invalid deferred output swap (%u, %u) for %u rows\n",
+                __func__, swap.i0, swap.i1, vocab_last_logits_rows);
+            vocab_dense_logits.clear();
+            return false;
+        }
+        for (size_t k = 0; k < n_vocab; ++k) {
+            std::swap(vocab_dense_logits[(size_t) swap.i0*n_vocab + k],
+                      vocab_dense_logits[(size_t) swap.i1*n_vocab + k]);
+        }
+    }
+    vocab_dense_pending_swaps.clear();
+    return true;
+}
+
 float * llama_context::get_logits() {
     if (model.has_tensor_parallel_vocab_output()) {
-        LLAMA_LOG_ERROR("%s: dense logits are unavailable with GGML_TP_VOCAB_OUTPUT\n", __func__);
-        return nullptr;
+        if (!materialize_vocab_dense_logits()) {
+            return nullptr;
+        }
+        output_reorder();
+        return vocab_dense_logits.data();
     }
     output_reorder();
 
@@ -878,19 +914,20 @@ int64_t llama_context::output_resolve_row(int32_t i) const {
 }
 
 float * llama_context::get_logits_ith(int32_t i) {
-    if (model.has_tensor_parallel_vocab_output()) {
-        LLAMA_LOG_ERROR("%s: dense logits are unavailable with GGML_TP_VOCAB_OUTPUT\n", __func__);
+    const bool vocab_output = model.has_tensor_parallel_vocab_output();
+    if (vocab_output && !materialize_vocab_dense_logits()) {
         return nullptr;
     }
     output_reorder();
 
     try {
-        if (logits.data == nullptr) {
+        float * data = vocab_output ? vocab_dense_logits.data() : logits.data;
+        if (data == nullptr) {
             throw std::runtime_error("no logits");
         }
 
         const int64_t j = output_resolve_row(i);
-        return logits.data + j*model.vocab.n_tokens();
+        return data + j*model.vocab.n_tokens();
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: invalid logits id %d, reason: %s\n", __func__, i, err.what());
 #ifndef NDEBUG
@@ -1746,6 +1783,11 @@ int llama_context::decode(const llama_batch & batch_inp) {
         return -1;
     }
 
+    vocab_last_logits = nullptr;
+    vocab_last_logits_rows = 0;
+    vocab_dense_logits.clear();
+    vocab_dense_pending_swaps.clear();
+
     const auto & vocab   = model.vocab;
     const auto & hparams = model.hparams;
 
@@ -1949,6 +1991,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
             if (vocab_head) {
                 GGML_ASSERT(sampling.logits.has_data() && sampling.candidates.has_data());
+                if (n_outputs_prev == 0 && n_outputs == n_outputs_all) {
+                    vocab_last_logits = t_logits;
+                    vocab_last_logits_rows = n_outputs;
+                }
                 const int32_t k = std::min<int32_t>(256, n_vocab);
                 float * sampled_logits = sampling.logits.data + n_outputs_prev*sampling.stride;
                 llama_token * sampled_ids = sampling.candidates.data + n_outputs_prev*sampling.stride;
@@ -2345,6 +2391,11 @@ void llama_context::output_reorder() {
     const uint64_t n_vocab = model.vocab.n_tokens();
     const uint64_t n_embd  = model.hparams.n_embd;
 
+    if (model.has_tensor_parallel_vocab_output() && vocab_dense_logits.empty()) {
+        vocab_dense_pending_swaps.insert(
+            vocab_dense_pending_swaps.end(), output_swaps.begin(), output_swaps.end());
+    }
+
     for (size_t s = 0; s < output_swaps.size(); ++s) {
         const uint64_t i0 = output_swaps[s].i0;
         const uint64_t i1 = output_swaps[s].i1;
@@ -2352,6 +2403,11 @@ void llama_context::output_reorder() {
         if (logits.size > 0) {
             for (uint64_t k = 0; k < n_vocab; k++) {
                 std::swap(logits.data[i0*n_vocab + k], logits.data[i1*n_vocab + k]);
+            }
+        }
+        if (!vocab_dense_logits.empty()) {
+            for (uint64_t k = 0; k < n_vocab; ++k) {
+                std::swap(vocab_dense_logits[i0*n_vocab + k], vocab_dense_logits[i1*n_vocab + k]);
             }
         }
 

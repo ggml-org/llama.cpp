@@ -72,7 +72,7 @@ list of upstream debugging variables.
 | `HSA_OVERRIDE_GFX_VERSION=10.3.0` | Presents the V620 as the tested `gfx1030` target. | Retained for reproducibility; it may be unnecessary on a native `gfx1030` runtime. |
 | `HSA_NO_SCRATCH_RECLAIM=1` | Keeps HIP scratch allocations instead of reclaiming them between work. | Improves stability/consistency at the cost of retaining more GPU memory. |
 | `GGML_TP_SHARDED_OUTPUT=1` | Splits validated Qwen 35B/122B output heads along the embedding dimension, then FP32-all-reduces full logits. | Supports raw and MTP paths. Do not combine with `GGML_TP_VOCAB_OUTPUT`. |
-| `GGML_TP_VOCAB_OUTPUT=1` | Splits an eligible output head along vocabulary, selects per-row local candidates, and exchanges only compact TOP_K results. | Supports raw and MTP CPU sampling with finite `top_k <= 256`; requires RCCL. Do not combine with `GGML_TP_SHARDED_OUTPUT`. |
+| `GGML_TP_VOCAB_OUTPUT=1` | Splits an eligible output head along vocabulary and exchanges compact per-row TOP_K results. | Fast path supports raw/MTP CPU sampling with finite `top_k <= 256`; grammar, penalties, and dense-logit callers materialize full sharded logits on demand. Requires RCCL. |
 
 `GGML_CUDA_ALLREDUCE` may be left unset, in which case Linux currently tries
 RCCL first. Set it explicitly to `nccl` for reproducible runs and because the
@@ -377,7 +377,9 @@ A balanced six-run 512-token MTP comparison measured:
 The MTP gain is approximately **37.3%**, with identical output, accepted/generated
 counts, and mean draft length. A 6,010-token prompt completed at 770.9 prompt
 tokens/s and 51.45 decode tokens/s. Four concurrent MTP slots also completed
-without compact-selection or decode errors. Reproduce the balanced MTP test with:
+without compact-selection or decode errors. A 6,017-token JSON-schema grammar
+request used the dense fallback and completed at 769.3 prompt tokens/s and 45.5
+decode tokens/s. Reproduce the balanced MTP test with:
 
 ```bash
 MODEL=/path/to/model.gguf ./scripts/rdna2-vocab-mtp-ab.sh
@@ -391,11 +393,9 @@ the model logs the reason once and retains mirrored placement. This allows
 additional architectures and sizes without claiming support based on model
 names.
 
-This initial mode is otherwise deliberately restricted:
+The fast compact path has these boundaries:
 
-- finite CPU `top_k` in the range 1-256 before active probability samplers;
-- no grammar, reasoning budget, logit bias, active repetition/DRY penalties,
-  mirostat, infill, adaptive-p, or dense raw-logit API;
+- finite CPU `top_k` in the range 1-256 must run before active probability samplers;
 - backend sampler offload is unavailable; `--spec-draft-backend-sampling`
   automatically falls back to the compact CPU sampler;
 - MTP is admitted only when its shared head is absent or aliases `model.output`;
@@ -403,10 +403,13 @@ This initial mode is otherwise deliberately restricted:
 - no generic collective fallback: failure to obtain the RCCL compact candidate
   provider is an explicit decode error.
 
-Unsupported sampler configurations fail with an incompatibility error rather
-than silently sampling from incomplete logits. Full-logit APIs return null with
-an error in this mode. These restrictions can be relaxed separately after each
-path gains an exact distributed implementation and its own A/B validation.
+When grammar, reasoning budget, logit bias, active penalties, mirostat, infill,
+adaptive-p, or a dense-logit API needs the complete vocabulary, the context
+materializes the split logits from the GPUs on demand for the current output
+rows. This preserves exact sampling and avoids dense `n_batch * n_vocab` host
+buffers, but that request gives back some of the compact path's speed. The
+common server sampler supports this fallback; direct low-level sampler users
+should request dense logits explicitly.
 
 ## Notes and caveats
 
