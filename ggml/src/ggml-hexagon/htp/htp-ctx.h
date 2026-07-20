@@ -19,7 +19,7 @@
 #endif
 #define HTP_MAX_MMAPS    16
 
-#define HTP_MAX_DIRTY_RANGES 4
+#define HTP_MAX_DIRTY_RANGES 16
 
 // Memory mapping
 struct htp_mmap {

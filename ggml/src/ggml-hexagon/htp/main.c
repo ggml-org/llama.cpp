@@ -953,13 +953,13 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_tensor *tens, u
         octx->dsts[i]    = dst;
         octx->dst_dma[i] = octx->ctx->dma; // FIXME: ? octx->ctx->dma_cached : octx->ctx->dma;
 
-        htp_tensor_make_dirty(octx->ctx, dst);
-
         FARF(HIGH, "prep-dst[%u] #%u: data %p size %u : %u:%u:%u:%u", i, dst_idx, (void*) dst->data, dst->size,
             dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
     }
 
     int status = execute_op(octx);
+
+    htp_tensor_dirty_all(octx->ctx, octx->dsts, HTP_OP_MAX_OUTPUTS);
 
     octx->src0_spad.src = NULL;
     octx->src1_spad.src = NULL;
