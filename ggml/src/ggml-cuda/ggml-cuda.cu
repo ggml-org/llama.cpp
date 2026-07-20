@@ -640,6 +640,14 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
     std::unique_lock<std::mutex> lock(ggml_cuda_lock);
     ggml_cuda_lock_cv.wait(lock, []{ return ggml_cuda_lock_counter.load(std::memory_order_relaxed) == 0; });
 
+    // release the producer-side q8_1 fusion buffers before the pools they were allocated from are
+    // destroyed, otherwise the pool destructor asserts on the outstanding allocations.
+#ifdef USE_CUDA_GRAPH
+    for (auto & entry : cuda_graphs) {
+        entry.second->q8_1_prequants.clear();
+    }
+#endif
+
     if (copy_event != nullptr) {
         CUDA_CHECK(cudaEventDestroy(copy_event));
     }
@@ -3044,7 +3052,28 @@ static bool ggml_cuda_can_fuse(const struct ggml_cgraph *                cgraph,
 }
 
 // try and fuse nodes and return the number of nodes to skip
-static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
+static bool ggml_cuda_norm_feeds_quant_mmvq(const ggml_cgraph * cgraph, int mul_idx,
+                                            const ggml_tensor * mul_out, int64_t & ncols_padded) {
+    if (ggml_nrows(mul_out) != 1 || mul_out->ne[0] % QK8_1 != 0) { // single-token only: one q8_1 row
+        return false;
+    }
+    for (int j = mul_idx + 1; j < cgraph->n_nodes; ++j) {
+        const ggml_tensor * n = cgraph->nodes[j];
+        if (n->op != GGML_OP_MUL_MAT && n->op != GGML_OP_MUL_MAT_ID) {
+            continue;
+        }
+        const ggml_tensor * s1 = n->src[1];
+        const bool matches = s1 == mul_out || (s1 && s1->view_src == mul_out);
+        if (matches && n->src[0] && ggml_is_quantized(n->src[0]->type) && s1->type == GGML_TYPE_F32) {
+            ncols_padded = GGML_PAD(mul_out->ne[0], MATRIX_ROW_PADDING);
+            return true;
+        }
+    }
+    return false;
+}
+
+static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i,
+                              std::vector<std::unique_ptr<ggml_cuda_q8_1_prequant>> * q8_1_owner) {
 
     static bool disable_fusion = getenv("GGML_CUDA_DISABLE_FUSION") != nullptr && std::atoi(getenv("GGML_CUDA_DISABLE_FUSION"));
     if (disable_fusion) {
@@ -3729,7 +3758,19 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     }
 
     if (ggml_cuda_can_fuse(cgraph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL }, {})) {
-        ggml_cuda_op_rms_norm_fused(*cuda_ctx, node, cgraph->nodes[i + 1]);
+        ggml_tensor * mul_out = cgraph->nodes[i + 1];
+
+        int64_t ncols_padded = 0;
+        if (q8_1_owner && ggml_cuda_norm_feeds_quant_mmvq(cgraph, i + 1, mul_out, ncols_padded)) {
+            const size_t buf_sz = (size_t) (ncols_padded / QK8_1) * sizeof(block_q8_1); // single row
+            auto pq = std::make_unique<ggml_cuda_q8_1_prequant>(cuda_ctx->pool(), buf_sz, mul_out->ne[0], ncols_padded);
+            ggml_cuda_op_rms_norm_fused_q8(*cuda_ctx, node, mul_out, pq->data, ncols_padded);
+            // hand the q8_1 buffer to the consuming mul_mat_vec_q via the tensor's extra field
+            mul_out->extra = pq.get();
+            q8_1_owner->push_back(std::move(pq));
+        } else {
+            ggml_cuda_op_rms_norm_fused(*cuda_ctx, node, mul_out);
+        }
         return 1;
     }
 
@@ -3773,6 +3814,21 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
     bool                         is_concurrent_event_active = false;
     ggml_cuda_concurrent_event * concurrent_event           = nullptr;
     bool                         should_launch_concurrent_events = false;
+
+    // Owner of the producer-side q8_1 fusion buffers for this evaluation. When CUDA graphs are used
+    // the buffers must outlive the capture and stay valid across replays, so the graph owns them and
+    // they are only cleared when we (re)capture. Without graphs the ops are dispatched every call, so
+    // a compute-local list that lives for this function is enough.
+#ifdef USE_CUDA_GRAPH
+    ggml_cuda_graph * q8_1_graph = cuda_ctx->cuda_graph(graph_key);
+    if (!use_cuda_graph || cuda_graph_update_required) {
+        q8_1_graph->q8_1_prequants.clear();
+    }
+    std::vector<std::unique_ptr<ggml_cuda_q8_1_prequant>> * q8_1_owner = &q8_1_graph->q8_1_prequants;
+#else
+    std::vector<std::unique_ptr<ggml_cuda_q8_1_prequant>>   q8_1_owner_storage;
+    std::vector<std::unique_ptr<ggml_cuda_q8_1_prequant>> * q8_1_owner = &q8_1_owner_storage;
+#endif
 
     const auto try_launch_concurrent_event = [&](const ggml_tensor * node) {
         if (stream_ctx.concurrent_events.find(node) != stream_ctx.concurrent_events.end()) {
@@ -3903,7 +3959,7 @@ static void ggml_cuda_graph_evaluate_and_capture(ggml_backend_cuda_context * cud
                     continue;
                 }
 
-                int nodes_to_skip = ggml_cuda_try_fuse(cuda_ctx, cgraph, i);
+                int nodes_to_skip = ggml_cuda_try_fuse(cuda_ctx, cgraph, i, q8_1_owner);
 
                 if (nodes_to_skip != 0) {
 #ifdef GGML_CUDA_DEBUG

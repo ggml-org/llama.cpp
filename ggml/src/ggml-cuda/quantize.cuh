@@ -64,3 +64,14 @@ void quantize_scatter_mmq_q8_1_cuda(const float *   x,
                                     int64_t         nrows_dst,
                                     int             n_expert_used,
                                     cudaStream_t    stream);
+
+static __device__ __forceinline__ void quantize_q8_1_val(const float v, const int64_t ib, const int iqs, block_q8_1 * y) {
+    const float amax = warp_reduce_max<QK8_1>(fabsf(v));
+    const float sum  = warp_reduce_sum<QK8_1>(v);
+
+    const float d = amax / 127.0f;
+    y[ib].qs[iqs] = amax == 0.0f ? 0 : roundf(v / d);
+    if (iqs == 0) {
+        y[ib].ds = make_half2(d, sum);
+    }
+}

@@ -1199,6 +1199,21 @@ struct ggml_tensor_extra_gpu {
     cudaEvent_t events[GGML_CUDA_MAX_DEVICES][GGML_CUDA_MAX_STREAMS]; // events for synchronizing multiple GPUs
 };
 
+// Producer-side q8_1 buffer for the rms_norm -> mul_mat_vec_q fusion: the fused norm writes q8_1
+// blocks into `buf`, and its address is stashed in the mul-output tensor's `extra` field so the
+// consuming mul_mat_vec_q can reuse it and skip its own quantize dispatch. Ownership lives with the
+// ggml_cuda_graph (or a compute-local list when graphs are disabled) so the buffer stays valid for
+// every replay of the captured graph.
+struct ggml_cuda_q8_1_prequant {
+    ggml_cuda_pool_alloc<char> buf;
+    void *  data;        // == buf.get(), stored so const consumers can read it
+    int64_t ne10;
+    int64_t ne10_padded;
+
+    ggml_cuda_q8_1_prequant(ggml_cuda_pool & pool, size_t size, int64_t ne10, int64_t ne10_padded)
+        : buf(pool, size), data(buf.get()), ne10(ne10), ne10_padded(ne10_padded) {}
+};
+
 
 #if (defined(GGML_CUDA_USE_GRAPHS) || defined(GGML_HIP_GRAPHS)) || defined(GGML_MUSA_GRAPHS)
 #define USE_CUDA_GRAPH
@@ -1229,6 +1244,9 @@ struct ggml_cuda_graph {
         size_t   node_src_nb[GGML_MAX_SRC][GGML_MAX_DIMS];
     };
     std::vector<node_properties> node_props;
+
+    // producer-side q8_1 buffers (rms_norm -> mul_mat_vec_q fusion), pinned for the graph's lifetime
+    std::vector<std::unique_ptr<ggml_cuda_q8_1_prequant>> q8_1_prequants;
 
     bool is_enabled() const {
         static const bool disable_cuda_graphs_due_to_env = (getenv("GGML_CUDA_DISABLE_GRAPHS") != nullptr);

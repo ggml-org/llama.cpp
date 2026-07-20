@@ -1220,12 +1220,28 @@ void ggml_cuda_mul_mat_vec_q(
     }
 
     const int64_t ne10_padded = GGML_PAD(ne10, MATRIX_ROW_PADDING);
-    ggml_cuda_pool_alloc<char> src1_q8_1(ctx.pool(), ne13*ne12 * ne11*ne10_padded * sizeof(block_q8_1)/QK8_1);
+
+    ggml_cuda_pool_alloc<char> src1_q8_1(ctx.pool());
+    const char * src1_q8_1_ptr = nullptr;
     {
-        const int64_t s11 = src1->nb[1] / ts_src1;
-        const int64_t s12 = src1->nb[2] / ts_src1;
-        const int64_t s13 = src1->nb[3] / ts_src1;
-        quantize_row_q8_1_cuda(src1_d, nullptr, src1_q8_1.get(), src0->type, ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream);
+        // A producer rms_norm may have already emitted the q8_1 blocks for this activation and stashed
+        // the buffer in its extra field (see ggml_cuda_q8_1_prequant); reuse it and skip the quantize.
+        // extra is only ever set on activations by that fusion, so it is null or our descriptor here.
+        const ggml_cuda_q8_1_prequant * pq = (const ggml_cuda_q8_1_prequant *) src1->extra;
+        if (pq == nullptr && src1->view_src) {
+            pq = (const ggml_cuda_q8_1_prequant *) src1->view_src->extra;
+        }
+        const bool single_token = ne11*ne12*ne13 == 1;
+        if (pq != nullptr && single_token && pq->ne10 == ne10 && pq->ne10_padded == ne10_padded) {
+            src1_q8_1_ptr = (const char *) pq->data;
+        } else {
+            src1_q8_1.alloc(ctx.pool(), ne13*ne12 * ne11*ne10_padded * sizeof(block_q8_1)/QK8_1);
+            src1_q8_1_ptr = src1_q8_1.get();
+            const int64_t s11 = src1->nb[1] / ts_src1;
+            const int64_t s12 = src1->nb[2] / ts_src1;
+            const int64_t s13 = src1->nb[3] / ts_src1;
+            quantize_row_q8_1_cuda(src1_d, nullptr, src1_q8_1.get(), src0->type, ne10, s11, s12, s13, ne10_padded, ne11, ne12, ne13, stream);
+        }
     }
 
     const int64_t s01 = src0->nb[1] / ts_src0;
@@ -1251,7 +1267,7 @@ void ggml_cuda_mul_mat_vec_q(
     const int64_t ids_stride = ids ? ids->nb[1] / ggml_type_size(ids->type) : 0;
 
     mul_mat_vec_q_switch_type(
-        src0->data, src0->type, src1_q8_1.get(), ids_d, fusion_local, dst_d, ne00,
+        src0->data, src0->type, src1_q8_1_ptr, ids_d, fusion_local, dst_d, ne00,
         ne01,              ncols_dst,     s01, stride_col_y,     stride_col_dst,
         ne02, nchannels_y, nchannels_dst, s02, stride_channel_y, stride_channel_dst,
         ne03,              ne3,           s03, s13,              s3,               ids_stride, stream);

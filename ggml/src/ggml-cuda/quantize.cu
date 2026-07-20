@@ -33,22 +33,8 @@ static __global__ void quantize_q8_1(
 
     ggml_cuda_pdl_sync();
     const float xi = i0 < ne00 ? x[i03*s03 + i02*s02 + i01*s01 + i00] : 0.0f;
-    float amax = fabsf(xi);
-    float sum = xi;
 
-    amax = warp_reduce_max<QK8_1>(amax);
-    sum  = warp_reduce_sum<QK8_1>(sum);
-
-    const float  d = amax / 127.0f;
-    const int8_t q = amax == 0.0f ? 0 : roundf(xi / d);
-
-    y[ib].qs[iqs] = q;
-
-    if (iqs > 0) {
-        return;
-    }
-
-    y[ib].ds = make_half2(d, sum);
+    quantize_q8_1_val(xi, ib, iqs, y);
 }
 
 __device__ __forceinline__ uint8_t compute_e8m0_scale(float amax) {
