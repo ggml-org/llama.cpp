@@ -2,6 +2,7 @@ import {
 	CODE_BLOCK_REGEXP,
 	LATEX_MATH_AND_CODE_PATTERN,
 	LATEX_LINEBREAK_REGEXP,
+	LATEX_TRIGGER_REGEXP,
 	MHCHEM_PATTERN_MAP
 } from '$lib/constants';
 
@@ -148,6 +149,15 @@ export function preprocessLaTeX(content: string): string {
 	// See also:
 	// https://github.com/danny-avila/LibreChat/blob/main/client/src/utils/latex.ts
 
+	// Every step below keys off a `$` or a backslash escape (\[ \] \( \) \ce{ \pu{).
+	// With neither present the protect/restore passes round-trip the input
+	// unchanged, so skip them: the step 2 scan is O(n^2) in line length and costs
+	// ~90ms on a 26KB single-line message that contains no math at all. This
+	// matters during streaming, where the whole message is reprocessed per frame.
+	if (!LATEX_TRIGGER_REGEXP.test(content)) {
+		return content;
+	}
+
 	// Step 0: Temporarily remove blockquote markers (>) to process LaTeX correctly
 	// Store the structure so we can restore it later
 	const blockquoteMarkers: Map<number, string> = new Map();
@@ -175,24 +185,31 @@ export function preprocessLaTeX(content: string): string {
 	const latexExpressions: string[] = [];
 
 	// Match \S...\[...\] and protect them and insert a line-break.
-	content = content.replace(/([\S].*?)\\\[([\s\S]*?)\\\](.*)/g, (match, group1, group2, group3) => {
-		// Check if there are characters following the formula (display-formula in a table-cell?)
-		if (group1.endsWith('\\')) {
-			return match; // Backslash before \[, do nothing.
-		}
-		const hasSuffix = /\S/.test(group3);
-		let optBreak;
+	// Guarded: with no `\[` present this pattern still probes every start offset,
+	// expanding `.*?` to the end of each line before failing - O(n^2) for nothing.
+	if (content.includes('\\[')) {
+		content = content.replace(
+			/([\S].*?)\\\[([\s\S]*?)\\\](.*)/g,
+			(match, group1, group2, group3) => {
+				// Check if there are characters following the formula (display-formula in a table-cell?)
+				if (group1.endsWith('\\')) {
+					return match; // Backslash before \[, do nothing.
+				}
+				const hasSuffix = /\S/.test(group3);
+				let optBreak;
 
-		if (hasSuffix) {
-			latexExpressions.push(`\\(${group2.trim()}\\)`); // Convert into inline.
-			optBreak = '';
-		} else {
-			latexExpressions.push(`\\[${group2}\\]`);
-			optBreak = '\n';
-		}
+				if (hasSuffix) {
+					latexExpressions.push(`\\(${group2.trim()}\\)`); // Convert into inline.
+					optBreak = '';
+				} else {
+					latexExpressions.push(`\\[${group2}\\]`);
+					optBreak = '\n';
+				}
 
-		return `${group1}${optBreak}<<LATEX_${latexExpressions.length - 1}>>${optBreak}${group3}`;
-	});
+				return `${group1}${optBreak}<<LATEX_${latexExpressions.length - 1}>>${optBreak}${group3}`;
+			}
+		);
+	}
 
 	// Match \(...\), \[...\], $$...$$ and protect them
 	content = content.replace(
