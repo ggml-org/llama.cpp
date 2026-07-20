@@ -23,6 +23,7 @@
 #include <exception>
 #include <memory>
 #include <filesystem>
+#include <cstdlib>
 #include <utility>
 #include <fstream>
 
@@ -38,6 +39,34 @@
 using json = nlohmann::ordered_json;
 
 constexpr int HTTP_POLLING_SECONDS = 1;
+
+static void server_force_vector_flash_attn(bool enable) {
+#if defined(_WIN32)
+    _putenv_s("GGML_CUDA_FA_FORCE_VEC", enable ? "1" : "");
+#else
+    if (enable) {
+        setenv("GGML_CUDA_FA_FORCE_VEC", "1", 1);
+    } else {
+        unsetenv("GGML_CUDA_FA_FORCE_VEC");
+    }
+#endif
+}
+
+struct server_scoped_vector_flash_attn {
+    explicit server_scoped_vector_flash_attn(bool enable) : reset(enable && getenv("GGML_CUDA_FA_FORCE_VEC") == nullptr) {
+        if (reset) {
+            server_force_vector_flash_attn(true);
+        }
+    }
+
+    ~server_scoped_vector_flash_attn() {
+        if (reset) {
+            server_force_vector_flash_attn(false);
+        }
+    }
+
+    const bool reset;
+};
 
 static uint32_t server_n_outputs_max(const common_params & params) {
     const uint32_t n_batch  = params.n_batch;
@@ -948,6 +977,11 @@ private:
     bool needs_reeval = false;
     int  n_parallel_user = 0;
 
+    // Work around AMD issue #20176 without disabling recurrent checkpoints.
+    // The first target decode after a restore uses vector flash attention.
+    bool checkpoint_fa_vec_fallback = false;
+    bool checkpoint_fa_vec_pending  = false;
+
     std::string model_name; // name of the loaded model, to be used by API
     std::set<std::string> model_aliases; // additional names for the model
     std::set<std::string> model_tags;    // informational tags
@@ -1377,9 +1411,11 @@ private:
         }
         SRV_TRC("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
 
-        // Context checkpoint restore is unsafe on AMD GPUs (issue #20176), including
-        // recurrent/hybrid Qwen models. It can leave flash attention with stale
-        // KV/state addresses and cause a GPU page fault after a later restore.
+        // AMD checkpoint restore can make the first large tile flash-attention graph
+        // fault (issue #20176). Recurrent/hybrid models need checkpoints to avoid
+        // expensive full prompt reprocessing, so use vector flash attention for
+        // exactly the first target decode after each restore. Keep the existing
+        // conservative disable for other model types.
         if (params_base.n_ctx_checkpoints > 0) {
             for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
                 ggml_backend_dev_t dev = ggml_backend_dev_get(i);
@@ -1390,9 +1426,15 @@ private:
                 if (name.find("AMD") != std::string::npos ||
                     name.find("Radeon") != std::string::npos ||
                     name.find("ROCm") != std::string::npos) {
-                    SRV_WRN("AMD GPU detected (%s) — disabling context checkpoints (issue #20176)\n",
-                            name.c_str());
-                    params_base.n_ctx_checkpoints = 0;
+                    if (llama_model_is_recurrent(model_tgt) || llama_model_is_hybrid(model_tgt)) {
+                        checkpoint_fa_vec_fallback = true;
+                        SRV_WRN("AMD GPU detected (%s) — checkpoints will use vector flash attention for the first decode after restore (issue #20176)\n",
+                                name.c_str());
+                    } else {
+                        SRV_WRN("AMD GPU detected (%s) — disabling context checkpoints (issue #20176)\n",
+                                name.c_str());
+                        params_base.n_ctx_checkpoints = 0;
+                    }
                     break;
                 }
             }
@@ -3407,6 +3449,10 @@ private:
                                         // restore the context checkpoint
                                         it->load_tgt(ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
                                         it->load_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                                        if (checkpoint_fa_vec_fallback) {
+                                            checkpoint_fa_vec_pending = true;
+                                            SLT_WRN(slot, "%s", "using vector flash attention for the first decode after checkpoint restore\n");
+                                        }
                                         // restore the draft's speculative state
                                         common_speculative_set_state(spec.get(), slot.id, it->data_spec);
 
@@ -3694,7 +3740,17 @@ private:
             n_empty_consecutive = 0;
         }
 
-        const int ret = llama_decode(ctx_tgt, batch_view);
+        const bool force_checkpoint_fa_vec = checkpoint_fa_vec_pending;
+
+        int ret;
+        {
+            server_scoped_vector_flash_attn force_fa_vec(force_checkpoint_fa_vec);
+            ret = llama_decode(ctx_tgt, batch_view);
+        }
+
+        if (force_checkpoint_fa_vec && ret == 0) {
+            checkpoint_fa_vec_pending = false;
+        }
 
         metrics.on_decoded(slots);
 

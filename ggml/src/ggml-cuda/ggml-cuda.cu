@@ -4187,10 +4187,15 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
 #ifdef USE_CUDA_GRAPH
     graph_key = ggml_cuda_graph_get_key(cgraph);
 
-    ggml_cuda_graph_set_enabled(cuda_ctx, graph_key);
+    // The server sets this for one graph after restoring an AMD recurrent
+    // checkpoint (issue #20176). Bypass graph replay so the temporary vector
+    // flash-attention selection is evaluated instead of reusing a tile graph.
+    const bool graph_enabled =
+        ggml_cuda_graph_set_enabled(cuda_ctx, graph_key) &&
+        getenv("GGML_CUDA_FA_FORCE_VEC") == nullptr;
 
     ggml_cuda_graph * graph = cuda_ctx->cuda_graph(graph_key);
-    if (graph->is_enabled()) {
+    if (graph_enabled) {
         const bool graph_compatible = ggml_cuda_graph_check_compability(cgraph);
         if (graph_compatible) {
             const bool properties_changed = ggml_cuda_graph_update_required(cuda_ctx, cgraph);
