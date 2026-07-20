@@ -6192,12 +6192,12 @@ kernel void kernel_fwht_f32(
     if (r >= args.nrows) {
         return;
     }
-    
+
     src += r * N;
     dst += r * N;
 
     const int lane = tiisg;
-    
+
     float reg[el_w];
     for (int i = 0; i < el_w; i++) {
         reg[i] = src[i * simd_size + lane] * scale;
@@ -6210,7 +6210,7 @@ kernel void kernel_fwht_f32(
             reg[j] = (lane & i) == 0 ? val2 + val : val2 - val;
         }
     }
-    
+
     for (int i = simd_size; i < N; i *= 2) {
         const int step = i / simd_size;
         for (int j = 0; j < el_w; j += (2 * step)) {
@@ -6222,7 +6222,7 @@ kernel void kernel_fwht_f32(
             }
         }
     }
-    
+
     for (int i = 0; i < el_w; i++) {
         dst[i*simd_size + lane] = reg[i];
     }
