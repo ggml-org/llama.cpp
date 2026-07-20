@@ -1748,9 +1748,9 @@ class ggml_webgpu_shader_lib {
     }
 
     webgpu_pipeline get_ssm_scan_pipeline(const ggml_webgpu_shader_lib_context & context,
-                                          bool                                  xbc_overlap,
-                                          bool                                  a_overlap,
-                                          bool                                  ids_overlap) {
+                                          bool                                   xbc_overlap,
+                                          bool                                   a_overlap,
+                                          bool                                   ids_overlap) {
         ggml_webgpu_ssm_scan_pipeline_key key = {};
         key.type                              = context.dst->type;
         key.d_state                           = (int) context.src0->ne[0];
@@ -2769,7 +2769,7 @@ class ggml_webgpu_shader_lib {
         decisions.q_tile = decisions.use_sg_matrix ? context.sg_mat_m : GGML_WEBGPU_FLASH_ATTN_TILE_Q_TILE;
 
         ggml_webgpu_flash_attn_pipeline_key key = {};
-        key.common = ggml_webgpu_flash_attn_make_common_pipeline_key(
+        key.common                              = ggml_webgpu_flash_attn_make_common_pipeline_key(
             context, decisions.use_sg_matrix ? context.sg_mat_k : 1u, kv_overlap);
         key.common.kv_direct = decisions.use_sg_matrix && key.common.kv_direct;
         key.use_sg_matrix    = decisions.use_sg_matrix;
@@ -2826,8 +2826,8 @@ class ggml_webgpu_shader_lib {
 
     webgpu_pipeline get_flash_attn_vec_pipeline(const ggml_webgpu_shader_lib_context & context, bool kv_overlap) {
         ggml_webgpu_flash_attn_vec_pipeline_key key = {};
-        key.common =
-            ggml_webgpu_flash_attn_make_common_pipeline_key(context, GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH, kv_overlap);
+        key.common = ggml_webgpu_flash_attn_make_common_pipeline_key(context, GGML_WEBGPU_FLASH_ATTN_TILE_KV_VEC_WIDTH,
+                                                                     kv_overlap);
 
         auto it = flash_attn_vec_pipelines.find(key);
         if (it != flash_attn_vec_pipelines.end()) {
