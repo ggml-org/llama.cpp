@@ -31,7 +31,7 @@ struct Params {
     offset_i: u32,
     offset_o: u32,
 
-    ne: u32,            // total output elements
+    ne: u32,
     channels: u32,
     batches: u32,
     dst_w: u32, dst_h: u32,

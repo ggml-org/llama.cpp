@@ -3199,7 +3199,6 @@ class ggml_webgpu_shader_lib {
     }
 
     // whcn selects the input layout: contiguous WHCN vs contiguous-channels CWHN
-    // (two shader variants, matching the CPU reference).
     webgpu_pipeline get_conv2d_dw_pipeline(const ggml_webgpu_shader_lib_context & context, bool whcn) {
         ggml_webgpu_conv2d_dw_pipeline_key key = {};
         key.weight_type                        = context.src0->type;

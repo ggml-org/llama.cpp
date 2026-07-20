@@ -979,7 +979,6 @@ static webgpu_encoded_op ggml_webgpu_conv_2d(webgpu_context & ctx,
 }
 
 // Same param/binding layout as conv_2d; the shader differs
-// (each output channel uses only its own input channel). src0=weight [KW,KH,1,C].
 static webgpu_encoded_op ggml_webgpu_conv_2d_dw(webgpu_context & ctx,
                                                 ggml_tensor *    src0,
                                                 ggml_tensor *    src1,
@@ -1027,7 +1026,7 @@ static webgpu_encoded_op ggml_webgpu_conv_2d_dw(webgpu_context & ctx,
     shader_lib_ctx.dst                            = dst;
     shader_lib_ctx.max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
 
-    // Input layout: contiguous -> WHCN, contiguous-channels -> CWHN (matches the CPU/Vulkan paths).
+    // Input layout: contiguous -> WHCN, contiguous-channels -> CWHN
     const bool      whcn      = ggml_is_contiguous(src1);
     webgpu_pipeline pipeline  = ctx->shader_lib->get_conv2d_dw_pipeline(shader_lib_ctx, whcn);
     auto *          decisions = static_cast<ggml_webgpu_generic_shader_decisions *>(pipeline.context.get());
@@ -4414,7 +4413,6 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
                           (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16);
             break;
         case GGML_OP_CONV_2D_DW:
-            // The kernel has WHCN (contiguous) and CWHN (contiguous-channels) variants only.
             supports_op = (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) &&
                           (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16) &&
                           (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16) &&
