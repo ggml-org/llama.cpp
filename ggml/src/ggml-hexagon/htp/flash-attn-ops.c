@@ -917,10 +917,10 @@ static void fa_o_store_thread_f32(unsigned int n, unsigned int i, void * data) {
     const uint32_t            kv_head    = args->kv_head;
     const uint32_t            ib3        = args->ib3;
 
-    for (size_t r = start; r < end; ++r) {
-        const size_t q_idx = fastdiv(r, &factx->div_G);
-        const size_t h_idx = fastmodulo(r, G, &factx->div_G);
+    size_t q_idx = fastdiv(start, &factx->div_G);
+    size_t h_idx = fastmodulo(start, G, &factx->div_G);
 
+    for (size_t r = start; r < end; ++r) {
         float * out = (float *) ((uint8_t *) dst->data + (kv_head * G + h_idx) * dst->nb[1] +
                                  (q_start + q_idx) * dst->nb[2] + ib3 * dst->nb[3]);
 
@@ -936,6 +936,12 @@ static void fa_o_store_thread_f32(unsigned int n, unsigned int i, void * data) {
             } else {
                 *(HVX_UVector *) (out + d * 32) = Q6_V_hi_W(vp);
             }
+        }
+
+        h_idx++;
+        if (h_idx == G) {
+            h_idx = 0;
+            q_idx++;
         }
     }
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_O_PROC, (uint16_t) (args->q_start * G + start));
@@ -965,10 +971,10 @@ static void fa_o_store_thread_f16(unsigned int n, unsigned int i, void * data) {
     const uint32_t            kv_head    = args->kv_head;
     const uint32_t            ib3        = args->ib3;
 
-    for (size_t r = start; r < end; ++r) {
-        const size_t q_idx = fastdiv(r, &factx->div_G);
-        const size_t h_idx = fastmodulo(r, G, &factx->div_G);
+    size_t q_idx = fastdiv(start, &factx->div_G);
+    size_t h_idx = fastmodulo(start, G, &factx->div_G);
 
+    for (size_t r = start; r < end; ++r) {
         __fp16 * out = (__fp16 *) ((uint8_t *) dst->data + (kv_head * G + h_idx) * dst->nb[1] +
                                    (q_start + q_idx) * dst->nb[2] + ib3 * dst->nb[3]);
 
@@ -986,6 +992,12 @@ static void fa_o_store_thread_f16(unsigned int n, unsigned int i, void * data) {
             } else {
                 *(HVX_UVector *) (out + d * 64) = Q6_V_hi_W(vp);
             }
+        }
+
+        h_idx++;
+        if (h_idx == G) {
+            h_idx = 0;
+            q_idx++;
         }
     }
     htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_O_PROC, (uint16_t) (args->q_start * G + start));
