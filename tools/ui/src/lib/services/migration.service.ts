@@ -23,15 +23,12 @@ import {
 	STORAGE_APP_NAME_DEPRECATED,
 	DB_APP_NAME_DEPRECATED,
 	CONFIG_LOCALSTORAGE_KEY,
-	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
 	IDXDB_TABLES,
 	IDXDB_STORES,
-	NEW_TO_DEPRECATED_MAP,
-	USER_OVERRIDES_LOCALSTORAGE_KEY
+	NEW_TO_DEPRECATED_MAP
 } from '$lib/constants';
 import { LEGACY_AGENTIC_REGEX, LEGACY_REASONING_TAGS } from '$lib/constants/agentic';
 import { SETTINGS_KEYS } from '$lib/constants/settings-keys';
-import { BuiltInTool, ToolSource } from '$lib/enums';
 import { MessageRole } from '$lib/enums';
 
 // Types
@@ -554,71 +551,6 @@ const mcpDefaultEnabledMigration: Migration = {
 	}
 };
 
-const JS_SANDBOX_ENABLED_MIGRATION_ID = 'js-sandbox-enabled-to-tool-toggle-v1';
-
-const LEGACY_JS_SANDBOX_ENABLED_KEY = 'jsSandboxEnabled';
-
-const jsSandboxEnabledMigration: Migration = {
-	id: JS_SANDBOX_ENABLED_MIGRATION_ID,
-	description:
-		'Migrate explicit `jsSandboxEnabled=false` user override to per-tool enabled state in Tools (non-destructive)',
-
-	async run(): Promise<void> {
-		// USER_OVERRIDES_LOCALSTORAGE_KEY records keys the user actively toggled, never defaults; membership signals a real opt-out vs. a default-stuck value.
-		let overrides: unknown;
-		try {
-			const raw = localStorage.getItem(USER_OVERRIDES_LOCALSTORAGE_KEY);
-			if (!raw) return;
-			overrides = JSON.parse(raw);
-		} catch {
-			return;
-		}
-		if (!Array.isArray(overrides) || !overrides.includes(LEGACY_JS_SANDBOX_ENABLED_KEY)) return;
-
-		let config: Record<string, unknown>;
-		try {
-			const raw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
-			if (raw === null) return;
-			const parsed: unknown = JSON.parse(raw);
-			if (typeof parsed !== 'object' || parsed === null) return;
-			config = parsed as Record<string, unknown>;
-		} catch {
-			return;
-		}
-
-		if (config[LEGACY_JS_SANDBOX_ENABLED_KEY] !== false) {
-			// Non-false values match the new default of enabled; no action needed.
-			return;
-		}
-
-		const sandboxKey = `${ToolSource.FRONTEND}:${BuiltInTool.RUN_JAVASCRIPT}`;
-
-		let disabled: unknown[];
-		try {
-			const raw = localStorage.getItem(DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY);
-			disabled = raw ? (JSON.parse(raw) as unknown[]) : [];
-		} catch {
-			disabled = [];
-		}
-		if (!Array.isArray(disabled)) disabled = [];
-
-		if (!disabled.includes(sandboxKey)) {
-			disabled.push(sandboxKey);
-			try {
-				localStorage.setItem(DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY, JSON.stringify(disabled));
-			} catch {
-				// best-effort
-				return;
-			}
-		}
-
-		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
-			console.log(
-				`[Migration] jsSandboxEnabled=false: pre-disabled ${sandboxKey} (legacy key preserved)`
-			);
-	}
-};
-
 const CONFIG_TYPES_MIGRATION_ID = 'config-type-normalization-v1';
 
 const configTypesMigration: Migration = {
@@ -739,7 +671,6 @@ const migrations: Migration[] = [
 	customJsonKeyMigration,
 	mcpDefaultEnabledMigration,
 	mcpDefaultOverridesMergeMigration,
-	jsSandboxEnabledMigration,
 	configTypesMigration
 ];
 
