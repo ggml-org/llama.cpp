@@ -68,6 +68,12 @@ static void usage(char ** argv) {
     printf("Usage: %s [-a/--arch arch] [-s/--seed seed] [-v/--verbose]\n", argv[0]);
 }
 
+static void diag_stage(const char * arch, const std::string & device, const std::string & config, const char * stage) {
+    fprintf(stderr, "\n[test-llama-archs diag] arch=%s device=%s config=%s stage=%s\n",
+            arch, device.c_str(), config.c_str(), stage);
+    fflush(stderr);
+}
+
 static std::vector<llama_token> get_tokens(const uint32_t n_tokens, const uint32_t n_vocab, const size_t seed){
     std::mt19937 gen(seed);
     std::uniform_int_distribution<> dis(0, n_vocab - 1);
@@ -577,6 +583,7 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
                 printf(template_row_cfg.c_str(),
                     llm_arch_name(arch), dc.label.c_str(), config_name.c_str());
                 fflush(stdout);
+                diag_stage(llm_arch_name(arch), dc.label, config_name, "row begin");
 
                 std::pair<llama_model_ptr, llama_context_ptr> model_and_ctx_dev;
                 std::vector<float> logits_dev;
@@ -586,12 +593,18 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
                 bool skip = !arch_supported(arch) || (dc.split_mode == LLAMA_SPLIT_MODE_TENSOR && dc.devs.empty());
                 if (!skip) {
                     if (logits_cpu.empty()) {
+                        diag_stage(llm_arch_name(arch), dc.label, config_name, "cpu model begin");
                         model_and_ctx_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {}, LLAMA_SPLIT_MODE_LAYER, encode);
+                        diag_stage(llm_arch_name(arch), dc.label, config_name, "cpu logits begin");
                         logits_cpu = get_logits(model_and_ctx_cpu.first.get(), model_and_ctx_cpu.second.get(), tokens, encode);
+                        diag_stage(llm_arch_name(arch), dc.label, config_name, "cpu logits end");
                     }
                     if (dc.split_mode != LLAMA_SPLIT_MODE_TENSOR || llm_arch_supports_sm_tensor(arch)) {
+                        diag_stage(llm_arch_name(arch), dc.label, config_name, "device model begin");
                         model_and_ctx_dev = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, dc.devs, dc.split_mode, encode);
+                        diag_stage(llm_arch_name(arch), dc.label, config_name, "device logits begin");
                         logits_dev = get_logits(model_and_ctx_dev.first.get(), model_and_ctx_dev.second.get(), tokens, encode);
+                        diag_stage(llm_arch_name(arch), dc.label, config_name, "device logits end");
                         const double nmse_val = nmse(logits_cpu, logits_dev);
                         snprintf(nmse_str, sizeof(nmse_str), "(%.2e)", nmse_val);
                         status_nmse = "\033[1;32mOK\033[0m";
@@ -601,20 +614,29 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
                         }
                     }
 
+                    diag_stage(llm_arch_name(arch), dc.label, config_name, "roundtrip tmpfile begin");
                     FILE * file = tmpfile(); // Can be null on Windows without administrator privileges.
+                    diag_stage(llm_arch_name(arch), dc.label, config_name, file != nullptr ? "roundtrip tmpfile ok" : "roundtrip tmpfile null");
                     // FIXME: when adding a tensor to a gguf_context a copy is made, this changes the pointer which the meta backend
                     //     in turn uses to map the tensors to their simple equivalents - this is fundamentally incompatible
                     if (file != nullptr && llama_model_saver_supports_arch(arch) && dc.split_mode != LLAMA_SPLIT_MODE_TENSOR) {
                         GGML_ASSERT(model_and_ctx_dev.first && model_and_ctx_dev.second);
+                        diag_stage(llm_arch_name(arch), dc.label, config_name, "roundtrip saver begin");
                         llama_model_saver ms = llama_model_saver(model_and_ctx_dev.first.get());
                         ms.add_kv_from_model();
+                        diag_stage(llm_arch_name(arch), dc.label, config_name, "roundtrip add tensors begin");
                         ms.add_tensors_from_model();
+                        diag_stage(llm_arch_name(arch), dc.label, config_name, "roundtrip save begin");
                         ms.save(file);
+                        diag_stage(llm_arch_name(arch), dc.label, config_name, "roundtrip rewind begin");
                         rewind(file);
 
+                        diag_stage(llm_arch_name(arch), dc.label, config_name, "roundtrip reload begin");
                         auto model_and_ctx_roundtrip = get_model_and_ctx(nullptr, file, seed, dc.devs, dc.split_mode, encode);
+                        diag_stage(llm_arch_name(arch), dc.label, config_name, "roundtrip logits begin");
                         const std::vector<float> logits_roundtrip = get_logits(
                             model_and_ctx_roundtrip.first.get(), model_and_ctx_roundtrip.second.get(), tokens, encode);
+                        diag_stage(llm_arch_name(arch), dc.label, config_name, "roundtrip logits end");
                         status_roundtrip = "\033[1;32mOK\033[0m";
                         GGML_ASSERT(logits_roundtrip.size() == logits_dev.size());
                         for (size_t i = 0; i < logits_roundtrip.size(); i++) {
@@ -624,12 +646,14 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
                                 break;
                             }
                         }
+                        diag_stage(llm_arch_name(arch), dc.label, config_name, "roundtrip compare end");
                     }
                 }
 
                 // log the results for this test case
                 printf(template_row_res.c_str(),
                     status_nmse.c_str(), nmse_str, status_roundtrip.c_str());
+                fflush(stdout);
             }
         }
     }
@@ -644,7 +668,7 @@ int main(int argc, char ** argv) {
 
     llm_arch arch = LLM_ARCH_UNKNOWN;
     size_t seed = rd();
-    ggml_log_level log_level = GGML_LOG_LEVEL_ERROR;
+    ggml_log_level log_level = GGML_LOG_LEVEL_INFO;
     std::string out;
 
     for (int i = 1; i < argc; i++) {
@@ -681,6 +705,11 @@ int main(int argc, char ** argv) {
                 return 1;
             }
         }
+    }
+    if (arch == LLM_ARCH_UNKNOWN) {
+        arch = LLM_ARCH_DEEPSEEK32;
+        fprintf(stderr, "[test-llama-archs diag] temporary CI diagnostic override: arch=deepseek32\n");
+        fflush(stderr);
     }
     printf("%s: using seed %zu\n", __func__, seed);
 
