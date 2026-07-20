@@ -25,6 +25,57 @@ function cacheResult(input: string, result: Record<string, unknown> | null): voi
 	partialJsonCache.set(input, result);
 }
 
+/**
+ * Re-close `toolArgsString` after discarding the final, still-incomplete member.
+ *
+ * Used when the normal closure produced invalid JSON because the tail is a bare
+ * key (`,"start_l`) or a key with no value yet (`,"start_line":`). Truncating at
+ * the last member separator that sits outside a string keeps every member that
+ * did arrive intact. Returns null when there is nothing to salvage.
+ */
+function dropTrailingPartialMember(toolArgsString: string, stack: ('{' | '[')[]): string | null {
+	let inString = false;
+	let escape = false;
+	let cutIndex = -1;
+	let depth = 0;
+
+	for (let i = 0; i < toolArgsString.length; i++) {
+		const ch = toolArgsString[i];
+
+		if (escape) {
+			escape = false;
+			continue;
+		}
+		if (ch === JSON_BACKSLASH && inString) {
+			escape = true;
+			continue;
+		}
+		if (ch === JSON_QUOTE) {
+			inString = !inString;
+			continue;
+		}
+		if (inString) continue;
+
+		if (ch === JSON_OBJECT_OPEN || ch === JSON_ARRAY_OPEN) depth++;
+		else if (ch === JSON_OBJECT_CLOSE || ch === JSON_ARRAY_CLOSE) depth--;
+		// Only separators in the outermost object delimit the members we keep.
+		else if (ch === ',' && depth === 1) cutIndex = i;
+	}
+
+	if (cutIndex === -1) {
+		// No complete member at all - the object is still just `{"pa`.
+		return stack.length > 0 && stack[0] === JSON_OBJECT_OPEN ? '{}' : null;
+	}
+
+	let completed = toolArgsString.slice(0, cutIndex);
+
+	for (let i = stack.length - 1; i >= 0; i--) {
+		completed += stack[i] === JSON_OBJECT_OPEN ? JSON_OBJECT_CLOSE : JSON_ARRAY_CLOSE;
+	}
+
+	return completed;
+}
+
 // Parse partial tool-arg JSON streamed token-by-token. Closes any
 // unterminated string and dangling open containers (in reverse order),
 // so parsers can still surface keys already received while the call
@@ -102,6 +153,25 @@ function scanPartialJson(toolArgsString: string): Record<string, unknown> | null
 			? (parsed as Record<string, unknown>)
 			: null;
 	} catch {
+		// A member that has arrived as a bare key so far (`,"start_l`, or
+		// `,"start_line":` with no value yet) closes into `{"a":1,"start_l"}`,
+		// which is invalid - so the whole object would vanish for as many
+		// frames as the key name takes to stream, blanking the UI between
+		// parameters. Drop that trailing partial member and keep the members
+		// already complete.
+		const withoutTrailingMember = dropTrailingPartialMember(toolArgsString, stack);
+
+		if (withoutTrailingMember !== null) {
+			try {
+				const parsed: unknown = JSON.parse(withoutTrailingMember);
+				if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+					return parsed as Record<string, unknown>;
+				}
+			} catch {
+				return null;
+			}
+		}
+
 		return null;
 	}
 }

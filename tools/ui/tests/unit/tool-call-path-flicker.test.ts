@@ -33,9 +33,9 @@ function streamPrefixes(argsBlob: string): string[] {
 describe('read_file header stability while streaming', () => {
 	const argsBlob = JSON.stringify({ path: FULL_PATH });
 
-	it('settles on the basename once the path is complete', () => {
+	it('shows the full path, matching write_file and edit_file', () => {
 		const meta = parseReadFileMeta(section('read_file', argsBlob));
-		expect(meta?.fileName).toBe('code.ts');
+		expect(meta?.filePath).toBe(FULL_PATH);
 	});
 
 	it('never shows a shrinking or non-monotonic header mid-stream', () => {
@@ -43,15 +43,12 @@ describe('read_file header stability while streaming', () => {
 
 		for (const prefix of streamPrefixes(argsBlob)) {
 			const meta = parseReadFileMeta(section('read_file', prefix));
-			if (meta?.fileName) seen.push(meta.fileName);
+			if (meta?.filePath) seen.push(meta.filePath);
 		}
 
-		// Each header must either extend the previous one or be the final
-		// basename. Anything else is a visible flicker.
-		const final = seen[seen.length - 1];
-		const flickers = seen.filter(
-			(value, i) => i > 0 && !value.startsWith(seen[i - 1]) && value !== final
-		);
+		// Rendering the raw path makes this strictly monotonic - every frame
+		// extends the previous one, with no transition at the end.
+		const flickers = seen.filter((value, i) => i > 0 && !value.startsWith(seen[i - 1]));
 
 		expect(flickers).toEqual([]);
 	});
@@ -67,6 +64,49 @@ describe('read_file header stability while streaming', () => {
 		// A language may go from "unknown" to the real one exactly once; more than
 		// two distinct values means the highlighter is thrashing.
 		expect(languages.size).toBeLessThanOrEqual(2);
+	});
+});
+
+describe('multi-param tool calls do not blank out between parameters', () => {
+	// While a *key name* streams (`,"start_l`), naive closure yields
+	// `{"path":"...","start_l"}` - invalid JSON. That made the parser return null
+	// for every such frame, so the whole block rendered empty between parameters.
+	const argsBlob = JSON.stringify({ path: FULL_PATH, start_line: 1, end_line: 40 });
+
+	it('keeps the path visible for every frame after it arrives', () => {
+		const prefixes = streamPrefixes(argsBlob);
+		const firstWithPath = prefixes.findIndex(
+			(p) => parseReadFileMeta(section('read_file', p))?.filePath
+		);
+
+		expect(firstWithPath).toBeGreaterThan(-1);
+
+		const blankFrames = prefixes
+			.slice(firstWithPath)
+			.map((p, i) => ({ i: i + firstWithPath, meta: parseReadFileMeta(section('read_file', p)) }))
+			.filter((row) => !row.meta?.filePath);
+
+		expect(blankFrames.map((row) => row.i)).toEqual([]);
+	});
+
+	it('still reports the final line range', () => {
+		const meta = parseReadFileMeta(section('read_file', argsBlob));
+
+		expect(meta?.lineRange).toEqual({ start: 1, end: 40 });
+		expect(meta?.filePath).toBe(FULL_PATH);
+	});
+
+	it('never shows a partially-streamed line range', () => {
+		// A range that appears then changes is the same class of flicker.
+		const ranges = new Set<string>();
+
+		for (const prefix of streamPrefixes(argsBlob)) {
+			const meta = parseReadFileMeta(section('read_file', prefix));
+			if (meta?.lineRange) ranges.add(`${meta.lineRange.start}-${meta.lineRange.end}`);
+		}
+
+		// Only the settled range should ever be displayed.
+		expect([...ranges]).toEqual(['1-40']);
 	});
 });
 
