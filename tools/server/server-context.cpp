@@ -1377,9 +1377,9 @@ private:
         }
         SRV_TRC("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
 
-        // Auto-disable context checkpoints on AMD GPUs (issue #20176),
-        // unless the model is recurrent/hybrid — those need checkpoints
-        // to avoid forced full prompt re-processing on every turn.
+        // Context checkpoint restore is unsafe on AMD GPUs (issue #20176), including
+        // recurrent/hybrid Qwen models. It can leave flash attention with stale
+        // KV/state addresses and cause a GPU page fault after a later restore.
         if (params_base.n_ctx_checkpoints > 0) {
             for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
                 ggml_backend_dev_t dev = ggml_backend_dev_get(i);
@@ -1390,14 +1390,9 @@ private:
                 if (name.find("AMD") != std::string::npos ||
                     name.find("Radeon") != std::string::npos ||
                     name.find("ROCm") != std::string::npos) {
-                    if (llama_model_is_recurrent(model_tgt) || llama_model_is_hybrid(model_tgt)) {
-                        SRV_WRN("AMD GPU detected (%s) — keeping checkpoints enabled for recurrent model\n",
-                                name.c_str());
-                    } else {
-                        SRV_WRN("AMD GPU detected (%s) — disabling context checkpoints (issue #20176)\n",
-                                name.c_str());
-                        params_base.n_ctx_checkpoints = 0;
-                    }
+                    SRV_WRN("AMD GPU detected (%s) — disabling context checkpoints (issue #20176)\n",
+                            name.c_str());
+                    params_base.n_ctx_checkpoints = 0;
                     break;
                 }
             }
