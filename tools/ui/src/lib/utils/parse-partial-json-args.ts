@@ -105,3 +105,27 @@ function scanPartialJson(toolArgsString: string): Record<string, unknown> | null
 		return null;
 	}
 }
+
+/**
+ * Name of the argument whose value may still be mid-flight, or `null` when the
+ * blob is already valid JSON and every value is final.
+ *
+ * Object keys arrive in order, so only the last one present can be truncated.
+ * Callers use this to avoid deriving stable display values (a basename, a
+ * highlight language) from a half-streamed string - doing so makes headers walk
+ * through every path segment and makes the highlighter swap grammars mid-render.
+ */
+export function truncatedArgKey(toolArgsString: string): string | null {
+	try {
+		JSON.parse(toolArgsString);
+
+		return null;
+	} catch {
+		const partial = parsePartialJsonArgs(toolArgsString);
+		if (!partial) return null;
+
+		const keys = Object.keys(partial);
+
+		return keys.length > 0 ? keys[keys.length - 1] : null;
+	}
+}

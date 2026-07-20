@@ -6,6 +6,7 @@
 import { BuiltInTool } from '$lib/enums';
 import { FILE_PATH_SEPARATOR_REGEX } from '$lib/constants';
 import { tryParseToolResultObject, type AgenticSection } from '$lib/utils';
+import { truncatedArgKey } from '$lib/utils/parse-partial-json-args';
 import { parseToolArgs } from './_shared';
 
 export type EditFileEdit = {
@@ -26,10 +27,19 @@ export function parseEditFileMeta(section: AgenticSection): EditFileMeta | null 
 	const args = parseToolArgs(BuiltInTool.EDIT_FILE, section, { partial: true });
 	if (!args) return null;
 
-	const rawPath = args.path ?? args.file_path ?? args.filePath;
+	const pathKey =
+		args.path != null ? 'path' : args.file_path != null ? 'file_path' : ('filePath' as const);
+	const rawPath = args[pathKey];
 	if (typeof rawPath !== 'string' || !rawPath) return null;
 
-	const fileName = rawPath.split(FILE_PATH_SEPARATOR_REGEX).pop() || rawPath;
+	// Matches read_file / write_file: a basename taken from a half-streamed path
+	// walks through every segment. This block renders `filePath` today, so the
+	// guard is here to keep the three parsers consistent rather than to fix a
+	// visible flicker.
+	const pathComplete = truncatedArgKey(section.toolArgs ?? '') !== pathKey;
+	const fileName = pathComplete
+		? rawPath.split(FILE_PATH_SEPARATOR_REGEX).pop() || rawPath
+		: rawPath;
 
 	// Filter the streamed edits array strictly: each entry must be an
 	// object with a non-empty `old_text`. Edits without an old_text

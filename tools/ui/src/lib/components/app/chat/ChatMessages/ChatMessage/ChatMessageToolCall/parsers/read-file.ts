@@ -10,6 +10,7 @@ import {
 	TEXT_LANGUAGE_PREFIX_REGEX
 } from '$lib/constants';
 import { getFileTypeByExtension, type AgenticSection } from '$lib/utils';
+import { truncatedArgKey } from '$lib/utils/parse-partial-json-args';
 import { parseToolArgs } from './_shared';
 
 export type ReadFileMeta = {
@@ -22,10 +23,18 @@ export function parseReadFileMeta(section: AgenticSection): ReadFileMeta | null 
 	const args = parseToolArgs(BuiltInTool.READ_FILE, section, { partial: true });
 	if (!args) return null;
 
-	const rawPath = args.path ?? args.file_path ?? args.filePath;
+	const pathKey =
+		args.path != null ? 'path' : args.file_path != null ? 'file_path' : ('filePath' as const);
+	const rawPath = args[pathKey];
 	if (typeof rawPath !== 'string' || !rawPath) return null;
 
-	const fileName = rawPath.split(FILE_PATH_SEPARATOR_REGEX).pop() || rawPath;
+	// While the path is still streaming, show it whole. Taking the basename of a
+	// partial path makes the header flicker through every segment in turn
+	// ("/Us" -> "Us", "/Users/za" -> "za", ...).
+	const pathComplete = truncatedArgKey(section.toolArgs ?? '') !== pathKey;
+	const fileName = pathComplete
+		? rawPath.split(FILE_PATH_SEPARATOR_REGEX).pop() || rawPath
+		: rawPath;
 
 	// Models emit range arguments under several aliases. Accept all to
 	// stay forgiving across prompt variations.
@@ -45,7 +54,9 @@ export function parseReadFileMeta(section: AgenticSection): ReadFileMeta | null 
 		}
 	}
 
-	const fileType = getFileTypeByExtension(fileName);
+	// Same reasoning for the language: a partial extension resolves to a different
+	// grammar every few tokens and re-highlights the whole block each time.
+	const fileType = pathComplete ? getFileTypeByExtension(fileName) : null;
 	const language = fileType ? fileType.replace(TEXT_LANGUAGE_PREFIX_REGEX, '') : DEFAULT_LANGUAGE;
 
 	return { fileName, lineRange, language };

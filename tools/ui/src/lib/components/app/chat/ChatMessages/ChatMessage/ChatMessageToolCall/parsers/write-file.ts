@@ -10,6 +10,7 @@ import {
 	TEXT_LANGUAGE_PREFIX_REGEX
 } from '$lib/constants';
 import { getFileTypeByExtension, tryParseToolResultObject, type AgenticSection } from '$lib/utils';
+import { truncatedArgKey } from '$lib/utils/parse-partial-json-args';
 import { parseToolArgs } from './_shared';
 
 export type WriteFileMeta = {
@@ -28,13 +29,22 @@ export function parseWriteFileMeta(section: AgenticSection): WriteFileMeta | nul
 
 	// Tool contracts drifted over time: some models emit `path`,
 	// others `file_path` / `filePath`. Accept all three.
-	const rawPath = args.path ?? args.file_path ?? args.filePath;
+	const pathKey =
+		args.path != null ? 'path' : args.file_path != null ? 'file_path' : ('filePath' as const);
+	const rawPath = args[pathKey];
 	if (typeof rawPath !== 'string' || !rawPath) return null;
 
-	const fileName = rawPath.split(FILE_PATH_SEPARATOR_REGEX).pop() || rawPath;
+	// Deriving the basename or the highlight language from a half-streamed path
+	// makes the header and the syntax highlighting thrash - hold off until the
+	// path value is closed. `content` streams after `path`, so this settles early.
+	const pathComplete = truncatedArgKey(section.toolArgs ?? '') !== pathKey;
+	const fileName = pathComplete
+		? rawPath.split(FILE_PATH_SEPARATOR_REGEX).pop() || rawPath
+		: rawPath;
 	const content = typeof args.content === 'string' ? args.content : '';
-	const language =
-		getFileTypeByExtension(rawPath)?.replace(TEXT_LANGUAGE_PREFIX_REGEX, '') ?? DEFAULT_LANGUAGE;
+	const language = pathComplete
+		? (getFileTypeByExtension(rawPath)?.replace(TEXT_LANGUAGE_PREFIX_REGEX, '') ?? DEFAULT_LANGUAGE)
+		: DEFAULT_LANGUAGE;
 
 	const resultObj = tryParseToolResultObject(section.toolResult);
 	const bytesWritten =
