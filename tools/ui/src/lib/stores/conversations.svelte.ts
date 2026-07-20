@@ -284,18 +284,13 @@ class ConversationsStore {
 
 			this.activeConversation = conversation;
 
-			if (conversation.currNode) {
-				const allMessages = await DatabaseService.getConversationMessages(convId);
-				const filteredMessages = filterByLeafNodeId(
-					allMessages,
-					conversation.currNode,
-					false
-				) as DatabaseMessage[];
-				this.activeMessages = filteredMessages;
-			} else {
-				const messages = await DatabaseService.getConversationMessages(convId);
-				this.activeMessages = messages;
-			}
+			// Resolve one path even without a currNode.
+			const allMessages = await DatabaseService.getConversationMessages(convId);
+			this.activeMessages = filterByLeafNodeId(
+				allMessages,
+				conversation.currNode ?? '',
+				false
+			) as DatabaseMessage[];
 
 			return true;
 		} catch (error) {
