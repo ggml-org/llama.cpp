@@ -2623,8 +2623,7 @@ static webgpu_encoded_op ggml_webgpu_glu(webgpu_context & ctx,
 
     const int split = (src1 != nullptr);
 
-    uint32_t offset_src0 =
-        (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src0) / ggml_type_size(src0->type));
+    uint32_t offset_src0 = (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src0) / ggml_type_size(src0->type));
     uint32_t offset_src1 =
         src1 != nullptr ? (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src1) / ggml_type_size(src1->type)) : 0;
     size_t merged_offset = 0;
@@ -2664,7 +2663,7 @@ static webgpu_encoded_op ggml_webgpu_glu(webgpu_context & ctx,
     };
 
     std::vector<wgpu::BindGroupEntry> entries;
-    uint32_t dst_binding = 1;
+    uint32_t                          dst_binding = 1;
     if (decisions->src_overlap) {
         entries.push_back(
             ggml_webgpu_make_bind_group_entry(0, ggml_webgpu_tensor_buf(src0), merged_offset, merged_size));
