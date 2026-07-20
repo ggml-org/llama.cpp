@@ -60,7 +60,7 @@ export const SETTINGS_KEYS = {
 	MCP_SERVERS: 'mcpServers',
 	MCP_REQUEST_TIMEOUT_SECONDS: 'mcpRequestTimeoutSeconds',
 	AGENTIC_MAX_TURNS: 'agenticMaxTurns',
-	SHOW_TOOL_CALL_IN_PROGRESS: 'showToolCallInProgress',
+	ALWAYS_SHOW_TOOL_CALL_CONTENT: 'alwaysShowToolCallContent',
 	// Performance
 	PRE_ENCODE_CONVERSATION: 'preEncodeConversation',
 	// Developer
