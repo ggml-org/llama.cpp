@@ -105,10 +105,10 @@ struct hmx_fa_vtcm_layout {
     size_t off_o_tiles[2];
     size_t off_k_fp16[2];
     size_t off_v_fp16[2];
-    size_t off_k_tiles;
-    size_t off_v_tiles[2];     // [1] allocated only when pipeline, else 0
-    size_t off_s_tiles;
-    size_t off_p_tiles;
+    size_t off_k_tiles[2];
+    size_t off_v_tiles[2];
+    size_t off_s_tiles[2];
+    size_t off_p_tiles[2];
     size_t off_d_tiles;
     size_t off_d_inv_l;
     size_t off_m_vec;
@@ -175,11 +175,14 @@ static inline void hmx_fa_vtcm_layout_build(struct hmx_fa_vtcm_layout * L,
 
     // Group B: Compute-only buffers
     size_t off_group_b = off_group_b_c;
-    VTCM_LAYOUT_ALLOC(off_group_b, off_k_tiles,       k_tile_size);
+    VTCM_LAYOUT_ALLOC(off_group_b, off_k_tiles[0],    k_tile_size);
+    VTCM_LAYOUT_ALLOC_OPTIONAL(off_group_b, off_k_tiles[1], k_tile_size, pipeline);
     VTCM_LAYOUT_ALLOC(off_group_b, off_v_tiles[0],    v_tile_size);
     VTCM_LAYOUT_ALLOC_OPTIONAL(off_group_b, off_v_tiles[1], v_tile_size, pipeline);
-    VTCM_LAYOUT_ALLOC(off_group_b, off_s_tiles,       s_tile_size);
-    VTCM_LAYOUT_ALLOC(off_group_b, off_p_tiles,       s_tile_size);
+    VTCM_LAYOUT_ALLOC(off_group_b, off_s_tiles[0],    s_tile_size);
+    VTCM_LAYOUT_ALLOC_OPTIONAL(off_group_b, off_s_tiles[1], s_tile_size, pipeline);
+    VTCM_LAYOUT_ALLOC(off_group_b, off_p_tiles[0],    s_tile_size);
+    VTCM_LAYOUT_ALLOC_OPTIONAL(off_group_b, off_p_tiles[1], s_tile_size, pipeline);
     VTCM_LAYOUT_ALLOC(off_group_b, off_s_rowmax,      col_vec_size);
     VTCM_LAYOUT_ALLOC(off_group_b, off_p_rowsum,      col_vec_size);
     VTCM_LAYOUT_ALLOC(off_group_b, off_row_bufs,      row_vec_size * 2 * n_threads);
