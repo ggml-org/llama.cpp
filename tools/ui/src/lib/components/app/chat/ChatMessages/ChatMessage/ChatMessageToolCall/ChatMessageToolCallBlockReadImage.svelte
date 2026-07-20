@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Eye } from '@lucide/svelte';
 	import { AttachmentType } from '$lib/enums';
+	import { ATTACHMENT_SAVED_REGEX } from '$lib/constants/agentic';
 	import type { DatabaseMessageExtra, DatabaseMessageExtraImageFile } from '$lib/types';
 	import { type AgenticSection } from '$lib/utils';
 	import { parseReadImageMeta } from './parsers/read-image';
@@ -24,7 +25,7 @@
 		const extras = section.toolResultExtras;
 		if (!extras || extras.length === 0) return null;
 		// Extract the attachment name from the cleaned result text
-		const match = section.toolResult?.match(/\[Attachment saved: ([^\]]+)\]/);
+		const match = section.toolResult?.match(ATTACHMENT_SAVED_REGEX);
 		if (!match) return null;
 		const attachmentName = match[1];
 		return extras.find(

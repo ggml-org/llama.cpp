@@ -1120,6 +1120,9 @@ static server_tool & find_tool(std::vector<std::unique_ptr<server_tool>> & tools
 //
 
 static constexpr size_t SERVER_TOOL_READ_IMAGE_MAX_SIZE = 16 * 1024 * 1024; // 16 MB
+static constexpr const char* SERVER_TOOL_READ_IMAGE_PREFIX_IMAGE = "Image: ";
+static constexpr const char* SERVER_TOOL_READ_IMAGE_PREFIX_SIZE = "Size: ";
+static constexpr const char* SERVER_TOOL_READ_IMAGE_PREFIX_MIME = "MIME: ";
 
 static std::string get_mime_from_extension(const std::string & path) {
     static const std::unordered_map<std::string, std::string> mime_map = {
@@ -1191,8 +1194,10 @@ struct server_tool_read_image : server_tool {
         return {
             {"plain_text_response",
                 string_format(
-                    "Image: %s\nSize: %zu bytes\nMIME: %s\n%s",
-                    path.c_str(), (size_t)file_size, mime.c_str(), data_uri.c_str())},
+                    "%s%s\n%s%zu bytes\n%s%s\n%s",
+                    SERVER_TOOL_READ_IMAGE_PREFIX_IMAGE, path.c_str(),
+                    SERVER_TOOL_READ_IMAGE_PREFIX_SIZE, (size_t)file_size,
+                    SERVER_TOOL_READ_IMAGE_PREFIX_MIME, mime.c_str(), data_uri.c_str())},
             {"path", path},
             {"mime", mime},
             {"size_bytes", (int)file_size},
