@@ -44,3 +44,6 @@ common_reasoning_budget_state common_reasoning_budget_get_state(const struct lla
 // Manually transition the reasoning budget sampler into the FORCING state.
 // Returns true if the transition occurred.
 bool common_reasoning_budget_force(struct llama_sampler * smpl);
+// get the current forced token if the sampler is in FORCING state
+// returns LLAMA_TOKEN_NULL if not in FORCING state
+llama_token common_reasoning_budget_get_forced_token(const struct llama_sampler * smpl);
