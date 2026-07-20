@@ -73,6 +73,12 @@ void quantize_row_q1_0_ref(const float * GGML_RESTRICT x, block_q1_0 * GGML_REST
 
 void quantize_row_q2_0_ref(const float * GGML_RESTRICT x, block_q2_0 * GGML_RESTRICT y, int64_t k) {
     static const int qk = QK2_0;
+// E8-inspired 2-bit lattice VQ. Per-128-head scale d = amax/2, then per
+// 8-element group round to the half-integer coset {-1.5,-0.5,0.5,1.5} and
+// pack 4 codes per byte. Matches nexusquant/core/e8_lattice.py r_half branch.
+void quantize_row_e8_2_ref(const float * GGML_RESTRICT x, block_e8_2 * GGML_RESTRICT y, int64_t k) {
+    static const int qk = QK_E8_2;
+    static const int qg = 8; // E8 lattice dimension
 
     assert(k % qk == 0);
 
@@ -105,6 +111,62 @@ void quantize_row_q2_0_ref(const float * GGML_RESTRICT x, block_q2_0 * GGML_REST
             const int byte_index = j / 4;
             const int bit_offset = (j % 4) * 2;
             y[i].qs[byte_index] |= ((uint8_t)q << bit_offset);
+        float amax = 0.0f;
+        for (int j = 0; j < qk; j++) {
+            const float v = fabsf(x[i*qk + j]);
+            if (amax < v) amax = v;
+        }
+
+        const float d  = amax / 2.0f;
+        const float id = d ? 1.0f/d : 0.0f;
+
+        y[i].d = GGML_FP32_TO_FP16(d);
+
+        for (int j = 0; j < qk*2/8; ++j) {
+            y[i].q[j] = 0;
+        }
+
+        for (int g = 0; g < qk/qg; g++) {
+            const float * xb = x + i*qk + g*qg;
+            float xn[8];
+            float r[8];
+
+            for (int j = 0; j < qg; j++) {
+                xn[j] = xb[j] * id;
+            }
+
+            // Round to nearest half-integer (Python: (x - 0.5).round() + 0.5)
+            for (int j = 0; j < qg; j++) {
+                r[j] = roundf(xn[j] - 0.5f) + 0.5f;
+                if (r[j] < -1.5f) r[j] = -1.5f;
+                else if (r[j] >  1.5f) r[j] =  1.5f;
+            }
+
+            // E8 even-sum parity fixup. Relaxed (dead) for the pure
+            // half-integer coset, kept for algorithmic fidelity.
+            float sum = 0.0f;
+            for (int j = 0; j < qg; j++) sum += r[j];
+            if (((int)(sum * 2.0f)) % 2 != 0) {
+                int best = 0;
+                float best_gap = -1.0f;
+                for (int j = 0; j < qg; j++) {
+                    const float gap = fabsf(xn[j] - r[j]);
+                    if (gap > best_gap) {
+                        best_gap = gap;
+                        best = j;
+                    }
+                }
+                r[best] += (xn[best] > r[best]) ? 1.0f : -1.0f;
+                if (r[best] < -1.5f) r[best] = -1.5f;
+                else if (r[best] >  1.5f) r[best] =  1.5f;
+            }
+
+            // Encode: {-1.5,-0.5,0.5,1.5} -> {0,1,2,3}, pack 4 codes per byte
+            for (int j = 0; j < qg; j++) {
+                const uint8_t code = (uint8_t)(r[j] + 1.5f);
+                const int bit = g*qg + j;
+                y[i].q[bit / 4] |= (uint8_t)(code << ((bit % 4) * 2));
+            }
         }
     }
 }
@@ -438,6 +500,9 @@ void dequantize_row_q1_0(const block_q1_0 * GGML_RESTRICT x, float * GGML_RESTRI
 
 void dequantize_row_q2_0(const block_q2_0 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
     static const int qk = QK2_0;
+void dequantize_row_e8_2(const block_e8_2 * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    static const int qk = QK_E8_2;
+    static const float lut[4] = {-1.5f, -0.5f, 0.5f, 1.5f};
 
     assert(k % qk == 0);
 
@@ -452,6 +517,9 @@ void dequantize_row_q2_0(const block_q2_0 * GGML_RESTRICT x, float * GGML_RESTRI
             const uint8_t q = (x[i].qs[byte_index] >> bit_offset) & 0x03;
             // 00=-1, 01=0, 10=+1, 11=+2
             y[i*qk + j] = ((int)q - 1) * d;
+        for (int j = 0; j < qk; j++) {
+            const uint8_t code = (x[i].q[j / 4] >> ((j % 4) * 2)) & 3;
+            y[i*qk + j] = d * lut[code];
         }
     }
 }
@@ -2124,6 +2192,22 @@ size_t quantize_q2_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, 
     }
     return nrow * row_size;
 }
+
+size_t quantize_e8_2(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
+    if (!quant_weights) {
+        quantize_row_e8_2_ref(src, dst, (int64_t)nrow*n_per_row);
+        return nrow * ggml_row_size(GGML_TYPE_E8_2, n_per_row);
+    }
+    size_t row_size = ggml_row_size(GGML_TYPE_E8_2, n_per_row);
+    char * qrow = (char *)dst;
+    for (int64_t row = 0; row < nrow; ++row) {
+        quantize_row_e8_2_ref(src, (block_e8_2*)qrow, n_per_row);
+        src += n_per_row;
+        qrow += row_size;
+    }
+    return nrow * row_size;
+}
+
 
 size_t quantize_q4_0(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrow, int64_t n_per_row, const float * quant_weights) {
     if (!quant_weights) {

@@ -190,6 +190,16 @@ typedef struct {
     uint8_t qs[QK2_0 / 4];   // 2 bits per element
 } block_q2_0;
 static_assert(sizeof(block_q2_0) == sizeof(ggml_half) + QK2_0 / 4, "wrong q2_0 block size/padding");
+#define QK_E8_2 128
+typedef struct {
+    ggml_half d;                    // per-head scale
+    uint8_t   q[QK_E8_2 * 2 / 8];  // 2-bit codes, 4 per byte
+} block_e8_2;
+static_assert(sizeof(block_e8_2) == sizeof(ggml_half) + QK_E8_2 * 2 / 8, "wrong e8_2 block size/padding");
+
+#define QR_E8_2 1
+#define QI_E8_2 (QK_E8_2 / (4 * QR_E8_2))
+// 34 bytes/block / 128 elems = 2.125 bits/elem
 
 #define QK4_0 32
 typedef struct {

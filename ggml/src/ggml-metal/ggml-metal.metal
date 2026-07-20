@@ -121,6 +121,33 @@ void dequantize_bf16_t4(device const bfloat4 * src, short il, thread type4 & reg
 #endif
 
 template <typename type4x4>
+// E8 lattice 2-bit: 128 elems/block, 2 bits/elem, per-head scale
+inline void dequantize_e8_2(device const block_e8_2 * xb, short il, thread type4x4 & reg) {
+    const float d = xb->d;
+    device const uint8_t * q = xb->q;
+    constant static float lut[4] = {-1.5h, -0.5h, 0.5h, 1.5h};
+    const short offset = il * 16;
+    for (int i = 0; i < 4; ++i) {
+        for (int j = 0; j < 4; ++j) {
+            const int elem = offset + i*4 + j;
+            const uint8_t code = (q[elem >> 2] >> ((elem & 3) << 1)) & 0x03;
+            reg[i][j] = d * lut[code];
+        }
+    }
+}
+
+inline void dequantize_e8_2_t4(device const block_e8_2 * xb, short il, thread type4 & reg) {
+    const float d = xb->d;
+    device const uint8_t * q = xb->q;
+    constant static float lut[4] = {-1.5h, -0.5h, 0.5h, 1.5h};
+    const short offset = il * 4;
+    for (int j = 0; j < 4; ++j) {
+        const int elem = offset + j;
+        const uint8_t code = (q[elem >> 2] >> ((elem & 3) << 1)) & 0x03;
+        reg[j] = d * lut[code];
+    }
+}
+
 void dequantize_q1_0(device const block_q1_0 * xb, short il, thread type4x4 & reg) {
     device const uint8_t * qs = xb->qs;
     const float d = xb->d;

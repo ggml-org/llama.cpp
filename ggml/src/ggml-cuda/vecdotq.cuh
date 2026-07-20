@@ -1320,3 +1320,36 @@ static __device__ __forceinline__ float vec_dot_iq4_xs_q8_1(
     const float d = __half2float(bq4->d) * __low2float(bq8_1[iqs/4].ds);
     return d * sumi;
 }
+
+#define VDR_E8_2_Q8_1_MMVQ 1
+#define VDR_E8_2_Q8_1_MMQ  4
+
+static __device__ __forceinline__ float vec_dot_e8_2_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_e8_2 * be8 = (const block_e8_2 *) vbq + kbx;
+    const float d = be8->d;
+
+    const block_q8_1 * bq8_1_chunk = bq8_1 + iqs;
+
+    const int offset = iqs * 8;
+    const uint8_t * q = be8->q + offset;
+
+    const int8_t lut[4] = {-3, -1, 1, 3};
+
+    int sumi = 0;
+#pragma unroll
+    for (int j = 0; j < 8; j++) {
+        const uint8_t byte_val = q[j];
+        int8_t e0 = lut[(byte_val >> 0) & 0x03];
+        int8_t e1 = lut[(byte_val >> 2) & 0x03];
+        int8_t e2 = lut[(byte_val >> 4) & 0x03];
+        int8_t e3 = lut[(byte_val >> 6) & 0x03];
+        int vi = (e0 & 0xFF) | ((e1 & 0xFF) << 8) | ((e2 & 0xFF) << 16) | ((e3 & 0xFF) << 24);
+        const int u = get_int_b4(bq8_1_chunk->qs, j);
+        sumi = ggml_cuda_dp4a(vi, u, sumi);
+    }
+
+    const float d8 = __low2float(bq8_1_chunk->ds);
+    return 0.5f * d * d8 * sumi;
+}
