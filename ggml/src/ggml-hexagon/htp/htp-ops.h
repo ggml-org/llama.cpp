@@ -84,6 +84,7 @@ enum htp_op_code {
     HTP_OP_ARGSORT,
     HTP_OP_SQR,
     HTP_OP_SQRT,
+    HTP_OP_CLAMP,
     HTP_OP_SUM_ROWS,
     HTP_OP_SSM_CONV,
     HTP_OP_REPEAT,

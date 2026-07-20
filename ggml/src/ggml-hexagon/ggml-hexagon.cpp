@@ -3478,6 +3478,7 @@ static htp_op_code op_remap_to_htp(const ggml_tensor * t) {
         case GGML_OP_SCALE:           return HTP_OP_SCALE;
         case GGML_OP_SQR:             return HTP_OP_SQR;
         case GGML_OP_SQRT:            return HTP_OP_SQRT;
+        case GGML_OP_CLAMP:           return HTP_OP_CLAMP;
         case GGML_OP_SOFT_MAX:        return HTP_OP_SOFTMAX;
         case GGML_OP_SSM_CONV:        return HTP_OP_SSM_CONV;
         case GGML_OP_GATED_DELTA_NET: return HTP_OP_GATED_DELTA_NET;
@@ -4131,6 +4132,10 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
 
         case GGML_OP_SQR:
         case GGML_OP_SQRT:
+            supp = ggml_hexagon_supported_unary(sess, op);
+            break;
+
+        case GGML_OP_CLAMP:
             supp = ggml_hexagon_supported_unary(sess, op);
             break;
 
