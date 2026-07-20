@@ -393,6 +393,11 @@ jobs:
     name: Create shared tags from digests
     needs: [prepare_matrices, push_to_registry, create_tag]
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
@@ -427,6 +432,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create tags from digests
+        id: create_tags
         shell: bash
         run: |
           set -euo pipefail
@@ -438,6 +444,7 @@ jobs:
           SRC_TAG="${{ needs.create_tag.outputs.source_tag }}"
           BUILD_DATE="${{ steps.build_date.outputs.date }}"
           COMMIT_SHA="${{ steps.checkout.outputs.commit }}"
+          echo "image_repo=${IMAGE_REPO}" >> "$GITHUB_OUTPUT"
           TAGS="${{ matrix.config.tag }}"
           ARCHES="${{ matrix.config.arches }}"
           DIGEST_GLOB="/tmp/digests/*.tsv"
@@ -504,6 +511,16 @@ jobs:
 
               echo "Creating ${merged_versioned_tag} from ${refs[*]}"
               docker buildx imagetools create "${annotations[@]}" --tag "${merged_versioned_tag}" "${refs[@]}"
+
+              if [[ "$tag_name" == "${TAGS%% *}" ]]; then
+                  local digest
+                  digest="$(docker buildx imagetools inspect "${merged_versioned_tag}" --format '{{.Manifest.Digest}}')"
+                  if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                      echo "Invalid digest for ${merged_versioned_tag}: ${digest}" >&2
+                      exit 1
+                  fi
+                  echo "${image_type}_digest=${digest}" >> "$GITHUB_OUTPUT"
+              fi
           }
 
           for tag in $TAGS; do
@@ -527,3 +544,24 @@ jobs:
           done
         env:
           GITHUB_REPOSITORY_OWNER: '${{ github.repository_owner }}'
+
+      - name: Attest full image
+        if: ${{ matrix.config.full }}
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ steps.create_tags.outputs.image_repo }}
+          subject-digest: ${{ steps.create_tags.outputs.full_digest }}
+
+      - name: Attest light image
+        if: ${{ matrix.config.light }}
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ steps.create_tags.outputs.image_repo }}
+          subject-digest: ${{ steps.create_tags.outputs.light_digest }}
+
+      - name: Attest server image
+        if: ${{ matrix.config.server }}
+        uses: actions/attest@v4
+        with:
+          subject-name: ${{ steps.create_tags.outputs.image_repo }}
+          subject-digest: ${{ steps.create_tags.outputs.server_digest }}
