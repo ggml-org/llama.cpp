@@ -36,8 +36,8 @@ static void flush_all_dcache(struct htp_context * ctx) {
 }
 
 static void l2flush_multi_worker(unsigned int n, unsigned int i, void * data) {
-    (void) n;
     struct l2flush_multi_task * task = (struct l2flush_multi_task *) data;
+    (void) n;
 
     const uint32_t gb_first = i * task->blocks_per_thread;
     uint32_t       gb_last  = gb_first + task->blocks_per_thread;
@@ -79,24 +79,22 @@ void htp_tensor_dirty_all(struct htp_context * ctx, const struct htp_tensor * co
 
     for (uint32_t i = 0; i < n; i++) {
         const struct htp_tensor * t = tensors[i];
-        if (!t) {
-            continue;
-        }
+        if (!t) continue;
 
         uint32_t t_start = t->data;
         uint32_t t_end   = t_start + t->size;
 
         bool merged = false;
-        for (int j = 0; j < HTP_MAX_DIRTY_RANGES; j++) {
+        for (uint32_t j = 0; j < HTP_MAX_DIRTY_RANGES; j++) {
             struct htp_dirty_range * r = &ctx->dirty_ranges[j];
-            if (r->start != 0) {
-                if (r->start <= t_end && t_start <= r->end) {
-                    uint32_t new_start = (t_start < r->start) ? t_start : r->start;
-                    uint32_t new_end   = (t_end > r->end) ? t_end : r->end;
-                    r->start = new_start;
-                    r->end   = new_end;
-                    merged = true;
-                }
+            if (!r->start) continue;
+
+            if (r->start <= t_end && t_start <= r->end) {
+                uint32_t new_start = (t_start < r->start) ? t_start : r->start;
+                uint32_t new_end   = (t_end > r->end)     ? t_end   : r->end;
+                r->start = new_start;
+                r->end   = new_end;
+                merged   = true;
             }
         }
 
@@ -109,17 +107,21 @@ void htp_tensor_dirty_all(struct htp_context * ctx, const struct htp_tensor * co
         return;
     }
 
-    int empty_indices[HTP_MAX_DIRTY_RANGES];
-    int n_empty = 0;
-    for (int j = 0; j < HTP_MAX_DIRTY_RANGES; j++) {
-        if (ctx->dirty_ranges[j].start == 0) {
-            empty_indices[n_empty++] = j;
+    uint32_t empty_indices[HTP_MAX_DIRTY_RANGES];
+    uint32_t active_indices[HTP_MAX_DIRTY_RANGES];
+    uint32_t n_active = 0;
+    uint32_t n_empty  = 0;
+    for (uint32_t j = 0; j < HTP_MAX_DIRTY_RANGES; j++) {
+        if (ctx->dirty_ranges[j].start) {
+            active_indices[n_active++] = j;
+        } else {
+            empty_indices[n_empty++]   = j;
         }
     }
 
     if (n_pending <= n_empty) {
         for (uint32_t i = 0; i < n_pending; i++) {
-            int idx = empty_indices[i];
+            uint32_t idx = empty_indices[i];
             struct htp_dirty_range * r = &ctx->dirty_ranges[idx];
             r->start = pending[i]->data;
             r->end   = pending[i]->data + pending[i]->size;
@@ -128,18 +130,10 @@ void htp_tensor_dirty_all(struct htp_context * ctx, const struct htp_tensor * co
         return;
     }
 
-    int active_indices[HTP_MAX_DIRTY_RANGES];
-    int n_active = 0;
-    for (int j = 0; j < HTP_MAX_DIRTY_RANGES; j++) {
-        if (ctx->dirty_ranges[j].start != 0) {
-            active_indices[n_active++] = j;
-        }
-    }
-
-    int n_evict = n_pending - n_empty;
-    uint64_t total_evict_size = 0;
-    for (int i = 0; i < n_evict; i++) {
-        int idx = active_indices[i];
+    uint32_t n_evict = n_pending - n_empty;
+    uint32_t total_evict_size = 0;
+    for (uint32_t i = 0; i < n_evict; i++) {
+        uint32_t idx = active_indices[i];
         struct htp_dirty_range * r = &ctx->dirty_ranges[idx];
         total_evict_size += r->end - r->start;
     }
@@ -161,8 +155,8 @@ void htp_tensor_dirty_all(struct htp_context * ctx, const struct htp_tensor * co
         task.n_ranges = n_evict;
 
         uint32_t block_acc = 0;
-        for (int i = 0; i < n_evict; i++) {
-            int idx = active_indices[i];
+        for (uint32_t i = 0; i < n_evict; i++) {
+            uint32_t idx = active_indices[i];
             struct htp_dirty_range * r = &ctx->dirty_ranges[idx];
 
             struct l2flush_range * rg = &task.ranges[i];
@@ -179,26 +173,26 @@ void htp_tensor_dirty_all(struct htp_context * ctx, const struct htp_tensor * co
         work_queue_run(ctx->work_queue, l2flush_multi_worker, &task, ctx->n_threads);
     } else {
         struct htp_thread_trace * tr = &ctx->trace[0];
-        for (int i = 0; i < n_evict; i++) {
-            int idx = active_indices[i];
+        htp_trace_event_start(tr, HTP_TRACE_EVT_L2FLUSH, 0);
+        for (uint32_t i = 0; i < n_evict; i++) {
+            uint32_t idx = active_indices[i];
             struct htp_dirty_range * r = &ctx->dirty_ranges[idx];
             uint32_t size = r->end - r->start;
-
-            htp_trace_event_start(tr, HTP_TRACE_EVT_L2FLUSH, 0);
             hex_l2flush((void *) (uintptr_t) r->start, size);
-            htp_trace_event_stop(tr, HTP_TRACE_EVT_L2FLUSH, 0);
         }
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_L2FLUSH, 0);
     }
 
-    for (int i = 0; i < n_evict; i++) {
-        int idx = active_indices[i];
+    for (uint32_t i = 0; i < n_evict; i++) {
+        uint32_t idx = active_indices[i];
         struct htp_dirty_range * r = &ctx->dirty_ranges[idx];
         r->start = pending[i]->data;
         r->end   = pending[i]->data + pending[i]->size;
         r->bi    = pending[i]->bi;
     }
-    for (int i = 0; i < n_empty; i++) {
-        int idx = empty_indices[i];
+
+    for (uint32_t i = 0; i < n_empty; i++) {
+        uint32_t idx = empty_indices[i];
         struct htp_dirty_range * r = &ctx->dirty_ranges[idx];
         r->start = pending[n_evict + i]->data;
         r->end   = pending[n_evict + i]->data + pending[n_evict + i]->size;
@@ -230,22 +224,26 @@ static inline bool is_tensor_dirty(struct htp_context * ctx, const struct htp_te
     uint32_t t_start = t->data;
     uint32_t t_end   = t_start + t->size;
 
-    for (int i = 0; i < HTP_MAX_DIRTY_RANGES; i++) {
+    for (uint32_t i = 0; i < HTP_MAX_DIRTY_RANGES; i++) {
         struct htp_dirty_range * r = &ctx->dirty_ranges[i];
-        if (r->start != 0) {
-            if (r->start < t_end && t_start < r->end) {
-                return true;
-            }
+        if (!r->start) continue;
+
+        if (r->start < t_end && t_start < r->end) {
+            return true;
         }
     }
     return false;
 }
 
 void htp_tensor_flush_all(struct htp_context * ctx, const struct htp_tensor * const * tensors, uint32_t n) {
+    const struct htp_tensor * dirty_tensors[HTP_OP_MAX_INPUTS];
+    uint32_t n_dirty = 0;
     uint64_t total_dirty = 0;
+
     for (uint32_t i = 0; i < n; i++) {
         const struct htp_tensor * t = tensors[i];
-        if (t && is_tensor_dirty(ctx, t)) {
+        if (t && (t->flags & HTP_TENSOR_COMPUTE) && is_tensor_dirty(ctx, t)) {
+            dirty_tensors[n_dirty++] = t;
             total_dirty += t->size;
         }
     }
@@ -265,11 +263,8 @@ void htp_tensor_flush_all(struct htp_context * ctx, const struct htp_tensor * co
         task.n_ranges = 0;
 
         uint32_t block_acc = 0;
-        for (uint32_t i = 0; i < n; i++) {
-            const struct htp_tensor * t = tensors[i];
-            if (!t || !is_tensor_dirty(ctx, t)) {
-                continue;
-            }
+        for (uint32_t i = 0; i < n_dirty; i++) {
+            const struct htp_tensor * t = dirty_tensors[i];
             make_tensor_clean(ctx, t);
 
             struct l2flush_range * rg = &task.ranges[task.n_ranges++];
@@ -288,11 +283,8 @@ void htp_tensor_flush_all(struct htp_context * ctx, const struct htp_tensor * co
     }
 
     struct htp_thread_trace * tr = &ctx->trace[0];
-    for (uint32_t i = 0; i < n; i++) {
-        const struct htp_tensor * t = tensors[i];
-        if (!t || !is_tensor_dirty(ctx, t)) {
-            continue;
-        }
+    for (uint32_t i = 0; i < n_dirty; i++) {
+        const struct htp_tensor * t = dirty_tensors[i];
         htp_trace_event_start(tr, HTP_TRACE_EVT_L2FLUSH, t->ti);
         hex_l2flush((void *) (uintptr_t) t->data, t->size);
         htp_trace_event_stop(tr, HTP_TRACE_EVT_L2FLUSH, t->ti);
