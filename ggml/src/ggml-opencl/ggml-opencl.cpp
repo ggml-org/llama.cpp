@@ -7284,11 +7284,6 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                        op->src[0]->type == GGML_TYPE_Q6_K) {
                 return op->src[1]->type == GGML_TYPE_F32 && ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1]);
             } else if (op->src[0]->type == GGML_TYPE_Q8_0) {
-                // ggml_cl_mul_mat_q8_0_f32_adreno now honors src1/dst view_offs (the
-                // activation sub-buffer starts at offset1 and the kernels take offsetd),
-                // so a broadcast q8_0 matmul (src1 batch > src0 batch, e.g. Qwen3.5-9B-UD
-                // / Qwen3.6-35B q8_0 GDN ssm_out) runs on GPU via the per-slice broadcast
-                // iteration in ggml_cl_mul_mat. No special-casing needed.
                 return op->src[1]->type == GGML_TYPE_F32;
             }
             return false;
