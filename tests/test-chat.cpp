@@ -1194,7 +1194,7 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
             }
         }
 
-        if (!use_reasoning_budget_path) {
+        if (!use_reasoning_budget_path && parser.params_.grammar_lazy) {
             // Legacy path: find triggers without thinking-awareness
             for (const auto & trigger : parser.params_.grammar_triggers) {
                 size_t      pos = std::string::npos;
@@ -4033,6 +4033,13 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect(message_assist)
             .run();
 
+        tst.test("Let me think</think>Hello, world!\nWhat's up?")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect_reasoning("Let me think")
+            .expect_content("Hello, world!\nWhat's up?")
+            .run();
+
         tst.test(
                "Let me check the time</think>\n\n"
                "<｜DSML｜tool_calls>\n"
@@ -4143,6 +4150,22 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
 
         tst.test(
+               "Free-form string</think>\n\n"
+               "<｜DSML｜tool_calls>\n"
+               "<｜DSML｜invoke name=\"get_time\">\n"
+               "<｜DSML｜parameter name=\"city\" string=\"true\">line one\n<city> & line two</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜tool_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .expect_reasoning("Free-form string")
+            .expect_tool_calls({
+                { "get_time", "{\"city\":\"line one\\n<city> & line two\"}", {} },
+            })
+            .run();
+
+        tst.test(
                "Still thinking\n\n"
                "<｜DSML｜tool_calls>\n"
                "<｜DSML｜invoke name=\"get_time\">\n"
@@ -4152,15 +4175,8 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .enable_thinking(true)
             .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
             .tools({ get_time_tool })
-            .expect_reasoning(
-               "Still thinking\n\n"
-               "<｜DSML｜tool_calls>\n"
-               "<｜DSML｜invoke name=\"get_time\">\n"
-               "<｜DSML｜parameter name=\"city\" string=\"true\">Tokyo</｜DSML｜parameter>\n"
-               "</｜DSML｜invoke>\n"
-               "</｜DSML｜tool_calls>")
-            .expect_content("")
-            .expect_tool_calls({})
+            .expect_reasoning("Still thinking")
+            .expect_tool_calls({ { "get_time", R"({"city": "Tokyo"})", {} } })
             .run();
 
         tst.test("world!\nWhat's up?")
@@ -4204,25 +4220,38 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                     "</｜DSML｜invoke>\n"
                     "</｜DSML｜tool_calls>");
 
-            expect_parse_error(
-                    "Duplicate required</think>\n\n"
-                    "<｜DSML｜tool_calls>\n"
-                    "<｜DSML｜invoke name=\"magic_int\">\n"
-                    "<｜DSML｜parameter name=\"ref\" string=\"false\">1</｜DSML｜parameter>\n"
-                    "<｜DSML｜parameter name=\"ref\" string=\"false\">2</｜DSML｜parameter>\n"
-                    "</｜DSML｜invoke>\n"
-                    "</｜DSML｜tool_calls>");
-
-            expect_parse_error(
-                    "Duplicate optional</think>\n\n"
-                    "<｜DSML｜tool_calls>\n"
-                    "<｜DSML｜invoke name=\"magic_int\">\n"
-                    "<｜DSML｜parameter name=\"ref\" string=\"false\">1</｜DSML｜parameter>\n"
-                    "<｜DSML｜parameter name=\"name\" string=\"true\">first</｜DSML｜parameter>\n"
-                    "<｜DSML｜parameter name=\"name\" string=\"true\">second</｜DSML｜parameter>\n"
-                    "</｜DSML｜invoke>\n"
-                    "</｜DSML｜tool_calls>");
         }
+
+        tst.test(
+               "Duplicate required</think>\n\n"
+               "<｜DSML｜tool_calls>\n"
+               "<｜DSML｜invoke name=\"magic_int\">\n"
+               "<｜DSML｜parameter name=\"ref\" string=\"false\">1</｜DSML｜parameter>\n"
+               "<｜DSML｜parameter name=\"ref\" string=\"false\">2</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜tool_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ magic_int_tool })
+            .expect_reasoning("Duplicate required")
+            .expect_tool_calls({ { "magic_int", R"({"ref": 2})", {} } })
+            .run();
+
+        tst.test(
+               "Duplicate optional</think>\n\n"
+               "<｜DSML｜tool_calls>\n"
+               "<｜DSML｜invoke name=\"magic_int\">\n"
+               "<｜DSML｜parameter name=\"ref\" string=\"false\">1</｜DSML｜parameter>\n"
+               "<｜DSML｜parameter name=\"name\" string=\"true\">first</｜DSML｜parameter>\n"
+               "<｜DSML｜parameter name=\"name\" string=\"true\">second</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜tool_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ magic_int_tool })
+            .expect_reasoning("Duplicate optional")
+            .expect_tool_calls({ { "magic_int", R"({"ref": 1, "name": "second"})", {} } })
+            .run();
 
         json many_required_schema = {
             { "type", "object" },
@@ -6159,6 +6188,13 @@ static void test_template_generation_prompt() {
         response_format_inputs.json_schema =
             R"({"type":"object","properties":{"answer":{"type":"string"}}})";
         auto response_format_params = common_chat_templates_apply(tmpls.get(), response_format_inputs);
+        if (response_format_params.grammar_lazy ||
+            response_format_params.grammar_triggers.size() != 1 ||
+            response_format_params.grammar_triggers[0].value != "\n\n<｜DSML｜tool_calls>" ||
+            response_format_params.thinking_end_tags != std::vector<std::string>{
+                "</think>", "\n\n<｜DSML｜tool_calls>" }) {
+            throw std::runtime_error("Unexpected DeepSeek V4 grammar or reasoning end configuration");
+        }
         const auto tools_pos = response_format_params.prompt.find("## Tools");
         const auto response_format_pos = response_format_params.prompt.find(
             "## Response Format:\n\nYou MUST strictly adhere to the following schema to reply:\n");
@@ -6240,10 +6276,10 @@ static void test_template_generation_prompt() {
         auto params = common_chat_templates_apply(tmpls.get(), inputs);
         assert_contains(params.prompt, "<｜Assistant｜><think>Need both</think>\n\n<｜DSML｜tool_calls>");
 
-        const auto time_pos    = params.prompt.find("<tool_result>time result</tool_result>");
         const auto weather_pos = params.prompt.find("<tool_result>weather result</tool_result>");
-        if (time_pos == std::string::npos || weather_pos == std::string::npos || time_pos > weather_pos) {
-            LOG_ERR("Expected tool results in tool-call order\nActual: %s\n", params.prompt.c_str());
+        const auto time_pos    = params.prompt.find("<tool_result>time result</tool_result>");
+        if (weather_pos == std::string::npos || time_pos == std::string::npos || weather_pos > time_pos) {
+            LOG_ERR("Expected tool results to preserve message order\nActual: %s\n", params.prompt.c_str());
             common_log_flush(common_log_main());
             throw std::runtime_error("Test failed");
         }

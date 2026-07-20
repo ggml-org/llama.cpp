@@ -297,9 +297,7 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
     bool is_tool_args  = node.tag == common_chat_peg_builder::TOOL_ARGS;
     bool is_arg_open   = node.tag == common_chat_peg_builder::TOOL_ARG_OPEN;
     bool is_arg_close  = node.tag == common_chat_peg_builder::TOOL_ARG_CLOSE;
-    bool is_arg_name         = node.tag == common_chat_peg_builder::TOOL_ARG_NAME ||
-                               node.tag == common_chat_peg_builder::TOOL_ARG_NAME_UNIQUE;
-    bool is_arg_name_unique  = node.tag == common_chat_peg_builder::TOOL_ARG_NAME_UNIQUE;
+    bool is_arg_name         = node.tag == common_chat_peg_builder::TOOL_ARG_NAME;
     bool is_arg_value        = node.tag == common_chat_peg_builder::TOOL_ARG_VALUE;
     bool is_arg_string_value = node.tag == common_chat_peg_builder::TOOL_ARG_STRING_VALUE;
 
@@ -308,7 +306,6 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
         current_tool          = &pending_tool_call.value();
         arg_count             = 0;
         args_buffer.clear();
-        unique_arg_names.clear();
         closing_quote_pending = false;
     }
 
@@ -351,16 +348,11 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
     }
 
     if (is_arg_name && current_tool) {
-        auto arg_name = std::string(trim(node.text));
-        if (is_arg_name_unique && !unique_arg_names.insert(arg_name).second) {
-            throw std::runtime_error("Duplicate tool argument: " + arg_name);
-        }
-
         std::string arg_entry;
         if (arg_count > 0) {
             arg_entry = ",";
         }
-        arg_entry += ordered_json(arg_name).dump() + ":";
+        arg_entry += ordered_json(trim(node.text)).dump() + ":";
         ++arg_count;
 
         auto & target = args_target();
