@@ -37,7 +37,11 @@ function dropTrailingPartialMember(toolArgsString: string, stack: ('{' | '[')[])
 	let inString = false;
 	let escape = false;
 	let cutIndex = -1;
-	let depth = 0;
+	const open: ('{' | '[')[] = [];
+	// Containers still open at `cutIndex`. Closing the caller's final stack
+	// instead would emit closers for containers that the truncation removed,
+	// producing something like `{"path":"x"}]}`.
+	let openAtCut: ('{' | '[')[] = [];
 
 	for (let i = 0; i < toolArgsString.length; i++) {
 		const ch = toolArgsString[i];
@@ -56,10 +60,13 @@ function dropTrailingPartialMember(toolArgsString: string, stack: ('{' | '[')[])
 		}
 		if (inString) continue;
 
-		if (ch === JSON_OBJECT_OPEN || ch === JSON_ARRAY_OPEN) depth++;
-		else if (ch === JSON_OBJECT_CLOSE || ch === JSON_ARRAY_CLOSE) depth--;
+		if (ch === JSON_OBJECT_OPEN || ch === JSON_ARRAY_OPEN) open.push(ch);
+		else if (ch === JSON_OBJECT_CLOSE || ch === JSON_ARRAY_CLOSE) open.pop();
 		// Only separators in the outermost object delimit the members we keep.
-		else if (ch === ',' && depth === 1) cutIndex = i;
+		else if (ch === ',' && open.length === 1) {
+			cutIndex = i;
+			openAtCut = [...open];
+		}
 	}
 
 	if (cutIndex === -1) {
@@ -69,8 +76,8 @@ function dropTrailingPartialMember(toolArgsString: string, stack: ('{' | '[')[])
 
 	let completed = toolArgsString.slice(0, cutIndex);
 
-	for (let i = stack.length - 1; i >= 0; i--) {
-		completed += stack[i] === JSON_OBJECT_OPEN ? JSON_OBJECT_CLOSE : JSON_ARRAY_CLOSE;
+	for (let i = openAtCut.length - 1; i >= 0; i--) {
+		completed += openAtCut[i] === JSON_OBJECT_OPEN ? JSON_OBJECT_CLOSE : JSON_ARRAY_CLOSE;
 	}
 
 	return completed;
@@ -135,9 +142,11 @@ function scanPartialJson(toolArgsString: string): Record<string, unknown> | null
 
 	let completed = toolArgsString;
 	if (escape) {
-		// Dangling escape at end of partial JSON: escape the trailing
-		// backslash as a literal so we can close the string cleanly.
-		completed += JSON_BACKSLASH;
+		// Dangling escape at the end of partial JSON: the sequence is half of
+		// an escape (`\` of a `\n`), so drop it. Keeping it as a literal
+		// backslash flashes a stray character on screen that turns into a
+		// newline once the next token lands.
+		completed = completed.slice(0, -1);
 	}
 	if (inString) completed += JSON_QUOTE;
 	if (!inString) completed = completed.replace(TRAILING_JSON_PUNCTUATION_REGEX, '');
