@@ -1064,7 +1064,7 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
                 for (int l = 0; l < tile_C::ne; ++l) {
                     const int i = i0 + n*tile_C::I + tile_C::get_i(l);
                     const int8_t * sc = (const int8_t *) (x_sc + i*sram_stride + k00/16);
-                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += C.x[l] * sc[k01/4] * x_df[i*sram_stride] * dB;
+                    sum[(j0/tile_C::J + n)*tile_C::ne + l] += ((float) C.x[l]) * sc[k01/4] * x_df[i*sram_stride] * dB;
                 }
             }
         }
@@ -1248,4 +1248,3 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
         }
     }
 }
-
