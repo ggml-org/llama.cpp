@@ -706,7 +706,7 @@ int main(int argc, char ** argv) {
             }
         }
     }
-    if (arch == LLM_ARCH_UNKNOWN) {
+    if (arch == LLM_ARCH_UNKNOWN && out.empty()) {
         arch = LLM_ARCH_DEEPSEEK32;
         fprintf(stderr, "[test-llama-archs diag] temporary CI diagnostic override: arch=deepseek32\n");
         fflush(stderr);
