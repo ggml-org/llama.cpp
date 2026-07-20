@@ -12,7 +12,8 @@ import {
 	Database,
 	Monitor as MonitorIcon,
 	Sun,
-	Moon
+	Moon,
+	Radio
 } from '@lucide/svelte';
 import type { Component } from 'svelte';
 import type {
@@ -36,7 +37,8 @@ export const SETTINGS_SECTION_TITLES = {
 	AGENTIC: 'Agentic',
 	TOOLS: 'Tools',
 	IMPORT_EXPORT: 'Import/Export',
-	DEVELOPER: 'Developer'
+	DEVELOPER: 'Developer',
+	REMOTE_ACCESS: 'Remote Access'
 } as const;
 
 const STANDALONE_SECTIONS: { title: SettingsSectionTitle; slug: string; icon: Component }[] = [
@@ -45,6 +47,11 @@ const STANDALONE_SECTIONS: { title: SettingsSectionTitle; slug: string; icon: Co
 		title: SETTINGS_SECTION_TITLES.IMPORT_EXPORT,
 		slug: SETTINGS_SECTION_SLUGS.IMPORT_EXPORT,
 		icon: Database
+	},
+	{
+		title: SETTINGS_SECTION_TITLES.REMOTE_ACCESS,
+		slug: SETTINGS_SECTION_SLUGS.REMOTE_ACCESS,
+		icon: Radio
 	}
 ];
 
