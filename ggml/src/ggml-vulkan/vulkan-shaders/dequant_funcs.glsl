@@ -143,6 +143,17 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
 }
 #endif
 
+#if defined(DATA_A_Q2_0)
+vec2 dequantize(uint ib, uint iqs, uint a_offset) {
+    const uint bits = uint(data_a[a_offset + ib].qs[iqs / 4u]) >> (2u * (iqs % 4u));
+    return vec2(bits & 3u, (bits >> 2u) & 3u) - 1.0f;
+}
+vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
+    const uint bits = uint(data_a[a_offset + ib].qs[iqs / 4u]);
+    return vec4(bits & 3u, (bits >> 2u) & 3u, (bits >> 4u) & 3u, bits >> 6u) - 1.0f;
+}
+#endif
+
 #if defined(DATA_A_IQ1_S)
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     const uint ib32 = iqs / 32;
@@ -480,12 +491,22 @@ vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
 #if defined(DATA_A_MXFP4)
 vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     const uint vui = uint(data_a[a_offset + ib].qs[iqs]);
+#ifdef USE_OCP_FP4
+    return vec2(unpackFloat2xfe2m1EXT(uint8_t(vui)));
+#else
     return vec2(kvalues_mxfp4[vui & 0xF], kvalues_mxfp4[vui >> 4]) * 0.5;
+#endif
 }
 vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
+#ifdef USE_OCP_FP4
+    const uint16_t vui = uint16_t(uint(data_a[a_offset + ib].qs[iqs]) |
+                                  uint(data_a[a_offset + ib].qs[iqs + 1]) << 8);
+    return vec4(unpackFloat4xfe2m1EXT(vui));
+#else
     vec2 v0 = dequantize(ib, iqs, a_offset);
     vec2 v1 = dequantize(ib, iqs + 1, a_offset);
     return vec4(v0.x, v0.y, v1.x, v1.y);
+#endif
 }
 #endif
 
@@ -495,16 +516,30 @@ vec2 dequantize(uint ib, uint iqs, uint a_offset) {
     const float d = ue4m3_to_fp32(data_a[a_offset + ib].d[sub]);
     const uint j = iqs & 7;
     const uint shift = (iqs & 8) >> 1; // 0 or 4
+#ifdef USE_OCP_FP4
+    const uint vui = uint(data_a_packed16[a_offset + ib].qs[(sub * 8u + j) / 2u]);
+    return vec2(bitcastExtractfe2m1EXT(unpack8(vui).xy, shift)) * d;
+#else
     const uint vui0 = uint(data_a[a_offset + ib].qs[sub * 8u + j]);
     const uint vui1 = uint(data_a[a_offset + ib].qs[sub * 8u + j + 1]);
     const uint qs0 = (vui0 >> shift) & 0xF;
     const uint qs1 = (vui1 >> shift) & 0xF;
     return vec2(float(kvalues_mxfp4[qs0]), float(kvalues_mxfp4[qs1])) * d * 0.5;
+#endif
 }
 vec4 dequantize4(uint ib, uint iqs, uint a_offset) {
+#ifdef USE_OCP_FP4
+    const uint sub = iqs >> 4;
+    const float d = ue4m3_to_fp32(data_a[a_offset + ib].d[sub]);
+    const uint j = iqs & 7;
+    const uint shift = (iqs & 8) >> 1; // 0 or 4
+    const uint vui = data_a_packed32[a_offset + ib].qs[(sub * 8u + j) / 4u];
+    return vec4(bitcastExtractfe2m1EXT(unpack8(vui), shift)) * d;
+#else
     const vec2 v0 = dequantize(ib, iqs, a_offset);
     const vec2 v1 = dequantize(ib, iqs + 2u, a_offset);
     return vec4(v0.x, v0.y, v1.x, v1.y);
+#endif
 }
 #endif
 
@@ -523,7 +558,7 @@ vec2 get_dm(uint ib, uint a_offset) {
 }
 #endif
 
-#if defined(DATA_A_Q4_0) || defined(DATA_A_Q5_0) || defined(DATA_A_Q8_0) || defined(DATA_A_IQ1_S) || defined(DATA_A_IQ2_XXS) || defined(DATA_A_IQ2_XS) || defined(DATA_A_IQ2_S) || defined(DATA_A_IQ3_XXS) || defined(DATA_A_IQ3_S) || defined(DATA_A_IQ4_XS) || defined(DATA_A_IQ4_NL)
+#if defined(DATA_A_Q2_0) || defined(DATA_A_Q4_0) || defined(DATA_A_Q5_0) || defined(DATA_A_Q8_0) || defined(DATA_A_IQ1_S) || defined(DATA_A_IQ2_XXS) || defined(DATA_A_IQ2_XS) || defined(DATA_A_IQ2_S) || defined(DATA_A_IQ3_XXS) || defined(DATA_A_IQ3_S) || defined(DATA_A_IQ4_XS) || defined(DATA_A_IQ4_NL)
 vec2 get_dm(uint ib, uint a_offset) {
     return vec2(float(data_a[a_offset + ib].d), 0);
 }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from pathlib import Path
 from typing import Callable, Iterable, TYPE_CHECKING
@@ -355,3 +356,106 @@ class HunyuanVLTextModel(HunYuanModel):
         self.gguf_writer.add_context_length(ctx_len)
 
         self.gguf_writer.add_rope_dimension_sections(list(self.rope_parameters["xdrope_section"]))
+
+
+@ModelBase.register("HYV3ForCausalLM")
+class HYV3Model(TextModel):
+    model_arch = gguf.MODEL_ARCH.HY_V3
+    supports_mtp_export = True
+
+    # Trunk layer count, stashed before indexing so the classmethod
+    # filter_tensors can identify the appended MTP block(s) (mirrors
+    # Step35Model).
+    _n_main_layers: int | None = None
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # NextN/MTP layers are appended past num_hidden_layers; extend the
+        # tensor map so the MTP block's tensors resolve to blk.<n>.* names.
+        n_nextn = int(self.hparams.get("num_nextn_predict_layers", 0))
+        if n_nextn > 0 and not self.no_mtp:
+            self.block_count += n_nextn
+            self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def index_tensors(self, remote_hf_model_id: str | None = None):
+        type(self)._n_main_layers = self.hparams["num_hidden_layers"]
+        return super().index_tensors(remote_hf_model_id=remote_hf_model_id)
+
+    def set_vocab(self):
+        self._set_vocab_gpt2()
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_expert_feed_forward_length(self.hparams["moe_intermediate_size"])
+        self.gguf_writer.add_expert_shared_feed_forward_length(
+            self.hparams["moe_intermediate_size"] * self.hparams.get("num_shared_experts", 1)
+        )
+        self.gguf_writer.add_expert_weights_norm(self.hparams.get("route_norm", True))
+        self.gguf_writer.add_expert_weights_scale(float(self.hparams.get("router_scaling_factor", 1.0)))
+        # sigmoid router with expert selection bias
+        self.gguf_writer.add_expert_gating_func(gguf.ExpertGatingFuncType.SIGMOID)
+
+        n_nextn = int(self.hparams.get("num_nextn_predict_layers", 0))
+        if n_nextn > 0 and not self.no_mtp:
+            self.gguf_writer.add_nextn_predict_layers(n_nextn)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        if (titem := super().filter_tensors(item)) is None:
+            return None
+        name, gen = titem
+
+        # HY V3 appends the MTP block(s) past num_hidden_layers.
+        assert cls._n_main_layers is not None
+        is_mtp = (m := re.match(r"model\.layers\.(\d+)\.", name)) is not None and int(m.group(1)) >= cls._n_main_layers
+
+        # --no-mtp: drop the appended MTP block(s) entirely.
+        if is_mtp and cls.no_mtp:
+            return None
+        # --mtp: keep ONLY MTP-block tensors plus the shared embeddings/norm/
+        # lm_head (so the resulting GGUF carries just the draft head).
+        if cls.mtp_only and not is_mtp and name not in (
+            "model.embed_tokens.weight", "model.norm.weight", "lm_head.weight",
+        ):
+            return None
+
+        # The MTP block's trailing final_layernorm (applied after the decoder
+        # block, before the shared LM head) maps to nextn.shared_head_norm.
+        if is_mtp:
+            name = name.replace(".final_layernorm.", ".shared_head.norm.")
+
+        return name, gen
+
+    _experts: list[dict[str, Tensor]] | None = None
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # merge the per-expert tensors into stacked 3d tensors
+        if name.startswith("model.layers.") and ".mlp.experts." in name:
+            n_experts = self.find_hparam(["num_local_experts", "num_experts"])
+            assert bid is not None
+
+            if self._experts is None:
+                self._experts = [{} for _ in range(self.block_count)]
+
+            self._experts[bid][name] = data_torch
+
+            if len(self._experts[bid]) >= n_experts * 3:
+                for w_name in ("down_proj", "gate_proj", "up_proj"):
+                    datas: list[Tensor] = []
+                    for xid in range(n_experts):
+                        ename = f"model.layers.{bid}.mlp.experts.{xid}.{w_name}.weight"
+                        datas.append(self._experts[bid][ename])
+                        del self._experts[bid][ename]
+
+                    merged = torch.stack(datas, dim=0)
+                    yield from super().modify_tensors(merged, f"model.layers.{bid}.mlp.experts.{w_name}.weight", bid)
+            return
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+        if self._experts is not None:
+            experts = [k for d in self._experts for k in d.keys()]
+            if experts:
+                raise ValueError(f"Unprocessed experts: {experts}")

@@ -1,12 +1,32 @@
-import { AgenticSectionType, ContinueIntentKind, MessageRole } from '$lib/enums';
-import { ATTACHMENT_SAVED_REGEX, NEWLINE_SEPARATOR } from '$lib/constants';
+import {
+	AgenticSectionType,
+	AttachmentType,
+	ContinueIntentKind,
+	MessageRole,
+	ToolResultKind
+} from '$lib/enums';
+import {
+	ATTACHMENT_SAVED_REGEX,
+	MARKDOWN_ATX_HEADING_REGEX,
+	MARKDOWN_BOLD_REGEX,
+	MARKDOWN_BLOCKQUOTE_REGEX,
+	MARKDOWN_CODE_FENCE_REGEX,
+	MARKDOWN_LINK_REGEX,
+	MARKDOWN_LIST_BULLET_REGEX,
+	MARKDOWN_LIST_NUMBERED_REGEX,
+	MARKDOWN_TABLE_SEPARATOR_REGEX,
+	NEWLINE,
+	REASONING_TAGS,
+	SEARCH_SUMMARY_SEPARATOR,
+	SEARCH_SUMMARY_TOTAL_REGEX,
+	TOOL_RESULT_JSON_OPEN_REGEX
+} from '$lib/constants';
 import type { ApiChatCompletionToolCall } from '$lib/types/api';
 import type {
 	DatabaseMessage,
 	DatabaseMessageExtra,
 	DatabaseMessageExtraImageFile
 } from '$lib/types/database';
-import { AttachmentType } from '$lib/enums';
 
 /**
  * Represents a parsed section of agentic content for display
@@ -18,6 +38,11 @@ export interface AgenticSection {
 	toolArgs?: string;
 	toolResult?: string;
 	toolResultExtras?: DatabaseMessageExtra[];
+	/** ID of the model-side tool call (matches tool_calls[i].id). Lets
+	 *  downstream consumers correlate a section with the agentic loop's
+	 *  currently-executing tool, e.g. to drive live-streaming UI state
+	 *  by matching against agenticStore.executingToolCallId. */
+	toolCallId?: string;
 	wasInterrupted?: boolean;
 }
 
@@ -81,7 +106,8 @@ function deriveSingleTurnSections(
 			toolName: tc.function?.name,
 			toolArgs: tc.function?.arguments,
 			toolResult: resultMsg?.content,
-			toolResultExtras: resultMsg?.extra
+			toolResultExtras: resultMsg?.extra,
+			toolCallId: tc.id
 		});
 	}
 
@@ -93,7 +119,8 @@ function deriveSingleTurnSections(
 			type: AgenticSectionType.TOOL_CALL_STREAMING,
 			content: '',
 			toolName: tc.function?.name,
-			toolArgs: tc.function?.arguments
+			toolArgs: tc.function?.arguments,
+			toolCallId: tc.id
 		});
 	}
 
@@ -159,6 +186,52 @@ export function deriveAgenticSections(
 }
 
 /**
+ * Build the raw text representation shown in the "raw output" view of an
+ * assistant message. Each section is formatted as it would appear in the
+ * model-facing transcript, joined by blank lines.
+ */
+export function buildAssistantRawOutput(sections: AgenticSection[]): string {
+	const parts: string[] = [];
+
+	for (const section of sections) {
+		switch (section.type) {
+			case AgenticSectionType.REASONING:
+			case AgenticSectionType.REASONING_PENDING:
+				parts.push(`${REASONING_TAGS.START}${NEWLINE}${section.content}${REASONING_TAGS.END}`);
+				break;
+
+			case AgenticSectionType.TEXT:
+				parts.push(section.content);
+				break;
+
+			case AgenticSectionType.TOOL_CALL:
+			case AgenticSectionType.TOOL_CALL_PENDING:
+			case AgenticSectionType.TOOL_CALL_STREAMING: {
+				const callObj: Record<string, unknown> = { name: section.toolName };
+
+				if (section.toolArgs) {
+					try {
+						callObj.arguments = JSON.parse(section.toolArgs);
+					} catch {
+						callObj.arguments = section.toolArgs;
+					}
+				}
+
+				parts.push(JSON.stringify(callObj, null, 2));
+
+				if (section.toolResult) {
+					parts.push(`${NEWLINE}${section.toolResult}`);
+				}
+
+				break;
+			}
+		}
+	}
+
+	return parts.join(`${NEWLINE}${NEWLINE}`);
+}
+
+/**
  * Collect consecutive tool messages starting at `startIndex`.
  */
 function collectToolMessages(messages: DatabaseMessage[], startIndex: number): DatabaseMessage[] {
@@ -176,13 +249,46 @@ function collectToolMessages(messages: DatabaseMessage[], startIndex: number): D
 }
 
 /**
+ * Split a tool-result blob into a list and an optional "Total matches: N"
+ * summary. Both file-glob and grep tools emit this format on the server:
+ *
+ *   <matches>
+ *   ---
+ *   Total matches: 42
+ *
+ * Returns the lines and exposes a callback for capturing the total so each
+ * caller can stash it on its own meta type without taking a return-tuple.
+ */
+export function splitSearchSummaryList(
+	text: string,
+	captureTotal: (n: number) => void
+): { lines: string[] } {
+	const separatorIndex = text.indexOf(SEARCH_SUMMARY_SEPARATOR);
+	const matchesText = separatorIndex === -1 ? text : text.slice(0, separatorIndex);
+	const summaryText =
+		separatorIndex === -1 ? '' : text.slice(separatorIndex + SEARCH_SUMMARY_SEPARATOR.length);
+
+	const totalMatch = summaryText.match(SEARCH_SUMMARY_TOTAL_REGEX);
+	if (totalMatch) {
+		captureTotal(parseInt(totalMatch[1], 10));
+	}
+
+	const lines = matchesText
+		.split(NEWLINE)
+		.map((line) => line.trim())
+		.filter((line) => line.length > 0);
+
+	return { lines };
+}
+
+/**
  * Parse tool result text into lines, matching image attachments by name.
  */
 export function parseToolResultWithImages(
 	toolResult: string,
 	extras?: DatabaseMessageExtra[]
 ): ToolResultLine[] {
-	const lines = toolResult.split(NEWLINE_SEPARATOR);
+	const lines = toolResult.split(NEWLINE);
 	return lines.map((line) => {
 		const match = line.match(ATTACHMENT_SAVED_REGEX);
 		if (!match || !extras) return { text: line };
@@ -195,6 +301,73 @@ export function parseToolResultWithImages(
 
 		return { text: line, image };
 	});
+}
+
+/**
+ * Pick a renderer tier for a tool's result content.
+ *
+ *   json     - trimmed content starts with `{` or `[` and parses cleanly.
+ *   markdown - content shows structural markdown markers (headers, code
+ *              fences, links, lists, blockquotes, tables) and should render
+ *              through MarkdownContent for proper formatting.
+ *   text     - everything else, rendered as plain text lines (with image
+ *              attachment resolution as a side effect).
+ */
+export function classifyToolResult(content: string | undefined): ToolResultKind {
+	if (!content) return ToolResultKind.TEXT;
+	const trimmed = content.trim();
+	if (!trimmed) return ToolResultKind.TEXT;
+
+	// Strongest signal: JSON object/array round-trips through JSON.parse.
+	if (TOOL_RESULT_JSON_OPEN_REGEX.test(trimmed)) {
+		try {
+			JSON.parse(trimmed);
+			return ToolResultKind.JSON;
+		} catch (error) {
+			console.error('[agentic] tool result looked like JSON but failed to parse:', error);
+		}
+	}
+
+	if (looksLikeMarkdown(trimmed)) return ToolResultKind.MARKDOWN;
+
+	return ToolResultKind.TEXT;
+}
+
+/**
+ * Heuristic detector for "is this content a markdown document rather than
+ * plain text?". True when at least one well-known structural marker shows
+ * up - headers, code fences, links, bold, lists, blockquotes, tables.
+ * Each marker is specific enough that plain tool-output prose rarely
+ * trips it, but plain text starting with `# 5` will - acceptable false
+ * positive for the gain in formatting for tool results like search
+ * summaries that come back already-mardown.
+ */
+function looksLikeMarkdown(content: string): boolean {
+	// Code fences are unambiguous - triple backticks or tildes at line start.
+	if (MARKDOWN_CODE_FENCE_REGEX.test(content)) return true;
+
+	const lines = content.split(NEWLINE);
+
+	for (const line of lines) {
+		if (MARKDOWN_ATX_HEADING_REGEX.test(line)) return true;
+		if (MARKDOWN_BLOCKQUOTE_REGEX.test(line)) return true;
+		if (MARKDOWN_LIST_BULLET_REGEX.test(line)) return true;
+		if (MARKDOWN_LIST_NUMBERED_REGEX.test(line)) return true;
+	}
+
+	// Inline structural markers anywhere in the body.
+	if (MARKDOWN_LINK_REGEX.test(content)) return true;
+	if (MARKDOWN_BOLD_REGEX.test(content)) return true;
+
+	// Tables: a pipe-bearing header line followed by a separator row.
+	if (lines.length >= 2) {
+		const head = lines[0];
+		const sep = lines[1];
+
+		if (head.includes('|') && MARKDOWN_TABLE_SEPARATOR_REGEX.test(sep)) return true;
+	}
+
+	return false;
 }
 
 /**

@@ -340,6 +340,7 @@ export class ChatService {
 			if (stream && conversationId) {
 				headers['X-Conversation-Id'] = streamIdentity(conversationId, options.model);
 			}
+
 			const response = await fetch(API_CHAT.COMPLETIONS, {
 				method: 'POST',
 				headers,
@@ -1011,7 +1012,7 @@ export class ChatService {
 	 *
 	 * @param response - The fetch Response object containing the JSON data
 	 * @param onComplete - Optional callback invoked when response is successfully parsed
-	 * @param onError - Optional callback invoked if an error occurs during parsing
+	 * @param onError - Optional callback invoked if an error occurs while parsing
 	 * @returns {Promise<string>} Promise that resolves to the generated content string
 	 * @throws {Error} if the response cannot be parsed or is malformed
 	 */

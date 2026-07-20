@@ -1,7 +1,7 @@
-import { JsonSchemaType, ToolCallType } from '$lib/enums';
+import { BuiltInTool, JsonSchemaType, ToolCallType } from '$lib/enums';
 import type { OpenAIToolDefinition } from '$lib/types';
 
-export const SANDBOX_TOOL_NAME = 'run_javascript';
+export const SANDBOX_TOOL_NAME = BuiltInTool.RUN_JAVASCRIPT;
 
 export const SANDBOX_TIMEOUT_MS_DEFAULT = 10000;
 
