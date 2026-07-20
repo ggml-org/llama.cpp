@@ -131,8 +131,11 @@ static void concat_T_sycl_non_cont(
   // Avoid oversubscribing device when there is not enough elements along the innermost dim to
   // fill a full SYCL_CONCAT_BLOCK_SIZE. For larger # of elements, the full SYCL_CONCAT_BLOCK_SIZE
   // is used.
+  // Env-overridable so fewer-core SKUs can try a narrower block without a rebuild.
+  static const int concat_block_env = ggml_sycl_get_env("GGML_SYCL_CONCAT_BLOCK_SIZE", SYCL_CONCAT_BLOCK_SIZE);
+  const int64_t concat_block = concat_block_env < WARP_SIZE ? (int64_t) WARP_SIZE : (int64_t) concat_block_env;
   const int64_t ne0_pad   = GGML_PAD(ne0, WARP_SIZE);
-  const int64_t block_ne0 = ne0_pad < SYCL_CONCAT_BLOCK_SIZE ? ne0_pad : (int64_t) SYCL_CONCAT_BLOCK_SIZE;
+  const int64_t block_ne0 = ne0_pad < concat_block ? ne0_pad : (int64_t) concat_block;
   sycl::range<3> blockDim(1, 1, block_ne0);
 
   stream->parallel_for(sycl::nd_range<3>(gridDim * blockDim, blockDim), [=](sycl::nd_item<3> item_ct1) {
