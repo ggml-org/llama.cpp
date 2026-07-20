@@ -127,6 +127,61 @@ struct common_sampler {
         llama_sampler_reset(chain);
     }
 
+    void validate_compact_sampling(size_t candidate_count) const {
+        auto reject = [](const char * reason) {
+            throw std::runtime_error(std::string("compact vocabulary sampling is incompatible with ") + reason);
+        };
+        if (grmr) reject("grammar");
+        if (rbudget) reject("reasoning budget");
+        if (params.has_logit_bias()) reject("logit bias");
+        if (params.mirostat != 0) reject("mirostat");
+        if (params.top_k <= 0 || (size_t) params.top_k > candidate_count) reject("top_k outside 1..256");
+        if (params.penalty_repeat != 1.0f || params.penalty_freq != 0.0f || params.penalty_present != 0.0f) {
+            reject("active repetition/frequency/presence penalties");
+        }
+        if (params.dry_multiplier != 0.0f) reject("active DRY penalty");
+
+        bool seen_top_k = false;
+        for (common_sampler_type type : params.samplers) {
+            switch (type) {
+                case COMMON_SAMPLER_TYPE_NONE:
+                    break;
+                case COMMON_SAMPLER_TYPE_PENALTIES:
+                    break; // validated as a no-op above
+                case COMMON_SAMPLER_TYPE_DRY:
+                    break; // validated as a no-op above
+                case COMMON_SAMPLER_TYPE_TOP_N_SIGMA:
+                    if (params.top_n_sigma > 0.0f) reject("top-n-sigma before compact top-k");
+                    break;
+                case COMMON_SAMPLER_TYPE_TOP_K:
+                    seen_top_k = true;
+                    break;
+                case COMMON_SAMPLER_TYPE_TYPICAL_P:
+                    if (params.typ_p < 1.0f && !seen_top_k) reject("typical-p before top-k");
+                    break;
+                case COMMON_SAMPLER_TYPE_TOP_P:
+                    if (params.top_p < 1.0f && !seen_top_k) reject("top-p before top-k");
+                    break;
+                case COMMON_SAMPLER_TYPE_MIN_P:
+                    if (params.min_p > 0.0f && !seen_top_k) reject("min-p before top-k");
+                    break;
+                case COMMON_SAMPLER_TYPE_XTC:
+                    if (params.xtc_probability > 0.0f && !seen_top_k) reject("XTC before top-k");
+                    break;
+                case COMMON_SAMPLER_TYPE_TEMPERATURE:
+                    if (!seen_top_k) reject("temperature before top-k");
+                    break;
+                case COMMON_SAMPLER_TYPE_INFILL:
+                    reject("infill sampling");
+                    break;
+                case COMMON_SAMPLER_TYPE_ADAPTIVE_P:
+                    reject("adaptive-p sampling");
+                    break;
+            }
+        }
+        if (!seen_top_k) reject("a chain without top-k");
+    }
+
     void set_logits(struct llama_context * ctx, int idx) {
         const float *       sampled_probs  = llama_get_sampled_probs_ith     (ctx, idx);
         const float *       sampled_logits = llama_get_sampled_logits_ith    (ctx, idx);
@@ -145,6 +200,9 @@ struct common_sampler {
             }
         } else if (sampled_logits) {
             const uint32_t sampled_logits_count = llama_get_sampled_logits_count_ith(ctx, idx);
+            if (sampled_logits_count < (uint32_t) n_vocab) {
+                validate_compact_sampling(sampled_logits_count);
+            }
             cur.resize(sampled_logits_count);
             for (uint32_t i = 0; i < sampled_logits_count; i++) {
                 cur[i] = llama_token_data{sampled_ids[i], sampled_logits[i], 0.0f};

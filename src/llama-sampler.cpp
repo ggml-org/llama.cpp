@@ -1,6 +1,7 @@
 #include "llama-sampler.h"
 
 #include "llama-impl.h"
+#include "llama-model.h"
 #include "llama-vocab.h"
 #include "llama-grammar.h"
 
@@ -816,6 +817,10 @@ llama_token llama_sampler_sample(struct llama_sampler * smpl, struct llama_conte
     }
 
     const llama_model * model = llama_get_model(ctx);
+    if (model->has_tensor_parallel_vocab_output() && sampled_logits != nullptr) {
+        LLAMA_LOG_ERROR("%s: direct sampler API is unsupported with compact vocabulary logits; use common sampling\n", __func__);
+        return LLAMA_TOKEN_NULL;
+    }
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
     const int n_vocab = llama_vocab_n_tokens(vocab);

@@ -542,6 +542,9 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
 
 bool llama_tensor_split_is_valid(
     int64_t n, int64_t granularity, const float * split, size_t n_devices, size_t rotation);
+bool llama_tensor_split_has_min_width(
+    int64_t n, int64_t granularity, int64_t min_width,
+    const float * split, size_t n_devices, size_t rotation);
 
 struct llama_model {
     llm_type type = LLM_TYPE_UNKNOWN;
@@ -627,6 +630,8 @@ struct llama_model {
     // after all model tensors and split parameters are available.
     mutable bool tp_sharded_output_initialized = false;
     mutable std::unordered_set<const ggml_tensor *> tp_sharded_output_heads;
+    mutable bool tp_vocab_output_initialized = false;
+    mutable std::unordered_set<const ggml_tensor *> tp_vocab_output_heads;
 
     // for keeping track of associated LoRA adapters
     std::unordered_set<llama_adapter_lora *> loras;
@@ -656,6 +661,8 @@ struct llama_model {
     llama_split_mode split_mode() const;
 
     bool is_tensor_parallel_output_head(const ggml_tensor * tensor) const;
+    bool is_tensor_parallel_vocab_output_head(const ggml_tensor * tensor) const;
+    bool has_tensor_parallel_vocab_output() const;
 
     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const;
 

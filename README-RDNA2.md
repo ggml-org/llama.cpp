@@ -288,6 +288,71 @@ the measured tradeoff on this system.
 - The implementation remains experimental and opt-in. Generic butterfly is a
   correct slower fallback when RCCL does not service a reduction.
 
+## Experimental vocabulary-parallel output
+
+`GGML_TP_VOCAB_OUTPUT=1` requests the more aggressive raw-decode experiment.
+Eligibility is determined once from model structure before weight placement;
+there is no model architecture or size allowlist. It is mutually exclusive with
+`GGML_TP_SHARDED_OUTPUT` and currently requires tensor split plus RCCL:
+
+```bash
+export GGML_TP_VOCAB_OUTPUT=1
+export GGML_CUDA_ALLREDUCE=nccl
+```
+
+For the tested 27B model, the separate, untied output head is BF16. It is split
+on its vocabulary axis; with the 248,320-token vocabulary and four equal ranks,
+every GPU stores and computes 62,080 logits. Each rank converts its local logits to deterministic 64-bit keys,
+selects 256 candidates with rocPRIM, and performs one compact RCCL all-gather.
+Rank 0 merges the 1,024 candidates on the host. The existing CPU sampler then
+operates on the exact global top-256.
+
+The key ordering is descending logit followed by ascending global token ID.
+NaNs are treated as negative infinity and signed zero is canonicalized to
+positive zero. This makes shard-boundary ties deterministic. Synthetic tests
+cover random logits, ties, all-equal inputs, infinities, NaNs, and signed zero
+for `k=20/256` and one to four rows.
+
+Two reverse-order five-repetition `llama-bench` comparisons measured:
+
+| Output path | Raw tg128 |
+|---|---:|
+| Mirrored BF16 head | 29.14 and 29.11 t/s |
+| Vocabulary-parallel compact head | **33.51 and 33.63 t/s** |
+
+The retained raw gain is approximately **15-16%**. Greedy 64/512-token server
+pairs produced identical responses. Reproduce the reverse-order comparison with:
+
+```bash
+MODEL=/path/to/model.gguf ./scripts/rdna2-vocab-ab.sh
+```
+
+The script preserves all CSV/stderr outputs under a timestamped directory in
+`~/llama-jobs` (override with `OUT_DIR`).
+
+At load time the feature activates only for a separate, untied, canonical 2-D
+`output.weight` whose vocabulary axis matches the tokenizer, whose output layer
+is assigned to the tensor-parallel meta device, whose slices are 128-aligned and
+at least 256 entries wide, and which has no output bias. If any predicate fails,
+the model logs the reason once and retains mirrored placement. This allows
+additional architectures and sizes without claiming support based on model
+names.
+
+This initial mode is otherwise deliberately restricted:
+
+- at most one output row per decode call;
+- finite CPU `top_k` in the range 1-256 before active probability samplers;
+- no grammar, reasoning budget, logit bias, active repetition/DRY penalties,
+  mirostat, infill, adaptive-p, dense raw-logit API, backend sampler offload, or
+  MTP speculative decoding;
+- no generic collective fallback: failure to obtain the RCCL compact candidate
+  provider is an explicit decode error.
+
+Unsupported sampler configurations fail with an incompatibility error rather
+than silently sampling from incomplete logits. Full-logit APIs return null with
+an error in this mode. These restrictions can be relaxed separately after each
+path gains an exact distributed implementation and its own A/B validation.
+
 ## Notes and caveats
 
 - Results are specific to four V620 cards, this PCIe topology, ROCm version,

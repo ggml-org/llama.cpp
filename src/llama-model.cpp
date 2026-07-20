@@ -424,6 +424,10 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     };
 
     auto get_tensor_config = [&]() -> tensor_config {
+        if (ud->model->has_tensor_parallel_vocab_output() &&
+                std::regex_match(tensor_name, pattern_output_weight)) {
+            return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_1);
+        }
         if (ud->model->is_tensor_parallel_output_head(tensor)) {
             return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_0);
         }
@@ -1711,9 +1715,10 @@ llama_split_mode llama_model::split_mode() const {
     return params.split_mode;
 }
 
-bool llama_tensor_split_is_valid(
-        int64_t n, int64_t granularity, const float * split, size_t n_devices, size_t rotation) {
-    if (n <= 0 || granularity <= 0 || n_devices < 2 || n % granularity != 0) {
+bool llama_tensor_split_has_min_width(
+        int64_t n, int64_t granularity, int64_t min_width,
+        const float * split, size_t n_devices, size_t rotation) {
+    if (n <= 0 || granularity <= 0 || min_width <= 0 || n_devices < 2 || n % granularity != 0) {
         return false;
     }
     rotation %= n_devices;
@@ -1737,15 +1742,25 @@ bool llama_tensor_split_is_valid(
     }
     if (low != n) return false;
     for (int64_t width : widths) {
-        if (width <= 0 || width % granularity != 0) return false;
+        if (width < min_width || width % granularity != 0) return false;
     }
     return true;
+}
+
+bool llama_tensor_split_is_valid(
+        int64_t n, int64_t granularity, const float * split, size_t n_devices, size_t rotation) {
+    return llama_tensor_split_has_min_width(n, granularity, 1, split, n_devices, rotation);
 }
 
 bool llama_model::is_tensor_parallel_output_head(const ggml_tensor * tensor) const {
     if (!tp_sharded_output_initialized) {
         tp_sharded_output_initialized = true;
         const char * enabled = getenv("GGML_TP_SHARDED_OUTPUT");
+        const char * vocab_enabled = getenv("GGML_TP_VOCAB_OUTPUT");
+        if (enabled != nullptr && strcmp(enabled, "1") == 0 &&
+                vocab_enabled != nullptr && strcmp(vocab_enabled, "1") == 0) {
+            throw std::runtime_error("GGML_TP_SHARDED_OUTPUT and GGML_TP_VOCAB_OUTPUT are mutually exclusive");
+        }
         const bool supported_model = type == LLM_TYPE_35B_A3B || type == LLM_TYPE_122B_A10B;
         if (enabled != nullptr && strcmp(enabled, "1") == 0 && params.split_mode == LLAMA_SPLIT_MODE_TENSOR &&
                 (arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE) && supported_model) {
@@ -1777,6 +1792,63 @@ bool llama_model::is_tensor_parallel_output_head(const ggml_tensor * tensor) con
         }
     }
     return tensor != nullptr && tp_sharded_output_heads.count(tensor) != 0;
+}
+
+bool llama_model::is_tensor_parallel_vocab_output_head(const ggml_tensor * tensor) const {
+    if (!tp_vocab_output_initialized) {
+        tp_vocab_output_initialized = true;
+        const char * enabled = getenv("GGML_TP_VOCAB_OUTPUT");
+        const char * sharded_enabled = getenv("GGML_TP_SHARDED_OUTPUT");
+        if (enabled != nullptr && strcmp(enabled, "1") == 0 &&
+                sharded_enabled != nullptr && strcmp(sharded_enabled, "1") == 0) {
+            throw std::runtime_error("GGML_TP_VOCAB_OUTPUT and GGML_TP_SHARDED_OUTPUT are mutually exclusive");
+        }
+        if (enabled != nullptr && strcmp(enabled, "1") == 0) {
+            const char * fallback_reason = nullptr;
+            const size_t ndev = get_split_state_ud.n_devices;
+            const char * allreduce = getenv("GGML_CUDA_ALLREDUCE");
+
+            if (params.split_mode != LLAMA_SPLIT_MODE_TENSOR) {
+                fallback_reason = "split mode is not tensor";
+            } else if (ndev < 2) {
+                fallback_reason = "fewer than two tensor-parallel devices";
+            } else if (devices.empty() || !devices[0].is_meta || pimpl->dev_output.dev != devices[0].dev) {
+                fallback_reason = "output head is not assigned to the tensor-parallel meta device";
+            } else if (output == nullptr) {
+                fallback_reason = "model has no output head";
+            } else if (output == tok_embd) {
+                fallback_reason = "output head is tied to token embeddings";
+            } else if (strcmp(output->name, "output.weight") != 0) {
+                fallback_reason = "main output tensor does not use the canonical output.weight role";
+            } else if (ggml_n_dims(output) != 2 || output->ne[0] <= 0 ||
+                    output->ne[1] != (int64_t) vocab.n_tokens()) {
+                fallback_reason = "output head is not a non-empty 2-D embedding-by-vocabulary matrix";
+            } else if (output_b != nullptr) {
+                fallback_reason = "output bias is not yet vocabulary-sharded";
+            } else if (allreduce == nullptr || strcmp(allreduce, "nccl") != 0) {
+                fallback_reason = "GGML_CUDA_ALLREDUCE=nccl is required for compact candidate exchange";
+            } else if (!llama_tensor_split_has_min_width(
+                    output->ne[1], 128, 256, tensor_split(), ndev, hparams.n_layer() % ndev)) {
+                fallback_reason = "vocabulary slices are invalid, unaligned, or smaller than 256 entries";
+            }
+
+            if (fallback_reason != nullptr) {
+                LLAMA_LOG_WARN("%s: GGML_TP_VOCAB_OUTPUT requested but unavailable: %s; using mirrored output\n",
+                    __func__, fallback_reason);
+            } else {
+                tp_vocab_output_heads.insert(output);
+                LLAMA_LOG_WARN("%s: experimental vocabulary-sharded tensor-parallel LM head %s across %zu devices; "
+                               "backend sampling and MTP are unsupported\n",
+                    __func__, output->name, ndev);
+            }
+        }
+    }
+    return tensor != nullptr && tp_vocab_output_heads.count(tensor) != 0;
+}
+
+bool llama_model::has_tensor_parallel_vocab_output() const {
+    is_tensor_parallel_vocab_output_head(output);
+    return !tp_vocab_output_heads.empty();
 }
 
 std::map<ggml_backend_buffer_type_t, size_t> llama_model::memory_breakdown() const {
