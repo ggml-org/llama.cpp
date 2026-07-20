@@ -8,7 +8,9 @@
 import { describe, expect, it } from 'vitest';
 import { parseReadFileMeta } from '../../src/lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/read-file';
 import { parseWriteFileMeta } from '../../src/lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/write-file';
-import { AgenticSectionType } from '../../src/lib/enums';
+import { parseEditFileMeta } from '../../src/lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/edit-file';
+import { computeLineDiff } from '../../src/lib/utils/compute-line-diff';
+import { AgenticSectionType, DiffLineKind } from '../../src/lib/enums';
 import type { AgenticSection } from '../../src/lib/utils';
 
 const FULL_PATH = '/Users/zach/Dev/llama.cpp/tools/ui/src/lib/utils/code.ts';
@@ -138,5 +140,105 @@ describe('write_file header stability while streaming', () => {
 		}
 
 		expect(languages.size).toBeLessThanOrEqual(2);
+	});
+});
+
+describe('edit_file diff stability while streaming', () => {
+	// `old_text` streams to completion before `new_text` begins. In that window the
+	// edit has a full old value and an empty new one, so a diff built from it shows
+	// every line as deleted - then snaps back as the replacement arrives.
+	const OLD = 'const a = 1;\nconst b = 2;\nconst c = 3;';
+	const NEW = 'const a = 10;\nconst b = 2;\nconst c = 30;';
+	const argsBlob = JSON.stringify({
+		path: '/src/thing.ts',
+		edits: [{ old_text: OLD, new_text: NEW }]
+	});
+
+	it('never renders an all-deletions diff mid-stream', () => {
+		const oldLineCount = OLD.split('\n').length;
+		const offenders: Array<{ at: number; removed: number; added: number }> = [];
+
+		for (let i = 1; i <= argsBlob.length; i++) {
+			const meta = parseEditFileMeta(section('edit_file', argsBlob.slice(0, i)));
+			if (!meta || meta.edits.length === 0) continue;
+
+			for (const edit of meta.edits) {
+				const diff = computeLineDiff(edit.oldText, edit.newText);
+				const removed = diff.filter((line) => line.kind === DiffLineKind.REMOVE).length;
+				const added = diff.filter((line) => line.kind === DiffLineKind.ADD).length;
+
+				// Every old line deleted and nothing added is the "snap" state.
+				if (removed >= oldLineCount && added === 0) {
+					offenders.push({ at: i, removed, added });
+				}
+			}
+		}
+
+		expect(offenders).toEqual([]);
+	});
+
+	it('still produces the correct final diff', () => {
+		const meta = parseEditFileMeta(section('edit_file', argsBlob));
+
+		expect(meta?.edits).toHaveLength(1);
+
+		const diff = computeLineDiff(meta!.edits[0].oldText, meta!.edits[0].newText);
+		const added = diff.filter((line) => line.kind === DiffLineKind.ADD).length;
+		const removed = diff.filter((line) => line.kind === DiffLineKind.REMOVE).length;
+
+		expect(added).toBe(2);
+		expect(removed).toBe(2);
+	});
+});
+
+describe('edit_file withholding does not swallow legitimate edits', () => {
+	it('renders a genuine deletion once the args are complete', () => {
+		const argsBlob = JSON.stringify({
+			path: '/src/thing.ts',
+			edits: [{ old_text: 'gone line one\ngone line two', new_text: '' }]
+		});
+		const meta = parseEditFileMeta(section('edit_file', argsBlob));
+
+		expect(meta?.edits).toHaveLength(1);
+
+		const diff = computeLineDiff(meta!.edits[0].oldText, meta!.edits[0].newText);
+		const removed = diff.filter((line) => line.kind === DiffLineKind.REMOVE).length;
+
+		expect(removed).toBe(2);
+		expect(diff.filter((line) => line.kind === DiffLineKind.ADD)).toHaveLength(0);
+	});
+
+	it('keeps completed edits visible while a later one streams', () => {
+		const full = JSON.stringify({
+			path: '/src/thing.ts',
+			edits: [
+				{ old_text: 'aaa', new_text: 'AAA' },
+				{ old_text: 'bbb', new_text: 'BBB' }
+			]
+		});
+
+		// Cut partway through the second edit's new_text.
+		const cut = full.indexOf('BBB');
+		const meta = parseEditFileMeta(section('edit_file', full.slice(0, cut)));
+
+		// The first edit is complete and must still render.
+		expect(meta?.edits.length).toBeGreaterThanOrEqual(1);
+		expect(meta?.edits[0]).toEqual({ oldText: 'aaa', newText: 'AAA' });
+	});
+
+	it('renders every edit once the call completes', () => {
+		const full = JSON.stringify({
+			path: '/src/thing.ts',
+			edits: [
+				{ old_text: 'aaa', new_text: 'AAA' },
+				{ old_text: 'bbb', new_text: 'BBB' }
+			]
+		});
+		const meta = parseEditFileMeta(section('edit_file', full));
+
+		expect(meta?.edits).toEqual([
+			{ oldText: 'aaa', newText: 'AAA' },
+			{ oldText: 'bbb', newText: 'BBB' }
+		]);
 	});
 });
