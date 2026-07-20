@@ -140,19 +140,26 @@ static void common_reasoning_budget_accept(struct llama_sampler * smpl, llama_to
     }
 }
 
-static void common_reasoning_budget_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
-    auto * ctx = (common_reasoning_budget_ctx *) smpl->ctx;
-
+static llama_token common_reasoning_budget_get_current_forced_token(const common_reasoning_budget_ctx * ctx) {
     if (ctx->state != REASONING_BUDGET_FORCING) {
-        // passthrough — don't modify logits
-        return;
+        return LLAMA_TOKEN_NULL;
     }
 
     if (ctx->force_pos >= ctx->forced_tokens.size()) {
-        return;
+        return LLAMA_TOKEN_NULL;
     }
 
-    const llama_token forced = ctx->forced_tokens[ctx->force_pos];
+    return ctx->forced_tokens[ctx->force_pos];
+}
+
+static void common_reasoning_budget_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
+    auto * ctx = (common_reasoning_budget_ctx *) smpl->ctx;
+
+    const llama_token forced = common_reasoning_budget_get_current_forced_token(ctx);
+    if (forced == LLAMA_TOKEN_NULL) {
+        // passthrough — don't modify logits
+        return;
+    }
 
     // set all logits to -inf except the forced token
     for (size_t i = 0; i < cur_p->size; i++) {
@@ -267,4 +274,14 @@ bool common_reasoning_budget_force(struct llama_sampler * smpl) {
     COM_TRC("%s", "forced into forcing state (manual transition)\n");
 
     return true;
+}
+
+llama_token common_reasoning_budget_get_forced_token(const struct llama_sampler * smpl) {
+    if (!smpl) {
+        return LLAMA_TOKEN_NULL;
+    }
+
+    const auto * ctx = (const common_reasoning_budget_ctx *) smpl->ctx;
+
+    return common_reasoning_budget_get_current_forced_token(ctx);
 }

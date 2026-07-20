@@ -395,12 +395,6 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
         params.backend_sampling = false;
     }
 
-    if (rbudget && params.backend_sampling) {
-        LOG_WRN("%s: backend sampling is not compatible with reasoning budget, disabling\n", __func__);
-
-        params.backend_sampling = false;
-    }
-
     auto * result = new common_sampler {
         /* .params  = */ params,
         /* .grmr    = */ grmr,
@@ -560,14 +554,28 @@ llama_token common_sampler_sample(struct common_sampler * gsmpl, struct llama_co
         if (id != LLAMA_TOKEN_NULL) {
             LOG_DBG("%s: Backend sampler selected token: '%d'. Will not run any CPU samplers\n", __func__, id);
 
-            GGML_ASSERT(!gsmpl->grmr    && "using grammar in combination with backend sampling is not supported");
-            GGML_ASSERT(!gsmpl->rbudget && "using reasoning budget in combination with backend sampling is not supported");
+            GGML_ASSERT(!gsmpl->grmr && "using grammar in combination with backend sampling is not supported");
+
+            if (gsmpl->rbudget && common_reasoning_budget_get_state(gsmpl->rbudget) == REASONING_BUDGET_FORCING) {
+                const llama_token forced = common_reasoning_budget_get_forced_token(gsmpl->rbudget);
+                if (forced != LLAMA_TOKEN_NULL) {
+                    id = forced;
+                    LOG_DBG("%s: Reasoning budget in FORCING. Overriding with forced token: '%d'\n", __func__, id);
+                }
+            }
 
             for (size_t i = 0; i < cur_p.size; ++i) {
                 if (cur_p.data[i].id == id) {
                     cur_p.selected = i;
                     break;
                 }
+            }
+
+            // forced token may not be in the backend's shortlist — insert it so
+            // cur_p remains internally consistent (selected != -1, token in candidates)
+            if (cur_p.selected < 0) {
+                gsmpl->cur.push_back({id, 0.0f, 0.0f});
+                cur_p = { gsmpl->cur.data(), gsmpl->cur.size(), (int)gsmpl->cur.size() - 1, false };
             }
 
             return id;
@@ -681,18 +689,24 @@ llama_token_data_array * common_sampler_get_candidates(struct common_sampler * g
 
     if (do_sort && !res->sorted) {
         // remember the selected token before sorting
-        const llama_token id = res->data[res->selected].id;
+        const bool has_selected = res->selected >= 0 && (size_t)res->selected < res->size;
+        const llama_token id = has_selected ? res->data[res->selected].id : LLAMA_TOKEN_NULL;
 
         std::sort(res->data, res->data + res->size, [](const llama_token_data & a, const llama_token_data & b) {
             return a.p > b.p;
         });
 
         // restore the selected token after sorting
-        for (size_t i = 0; i < res->size; ++i) {
-            if (res->data[i].id == id) {
-                res->selected = i;
-                break;
+        if (has_selected) {
+            res->selected = -1;
+            for (size_t i = 0; i < res->size; ++i) {
+                if (res->data[i].id == id) {
+                    res->selected = i;
+                    break;
+                }
             }
+        } else {
+            res->selected = -1;
         }
 
         res->sorted = true;
