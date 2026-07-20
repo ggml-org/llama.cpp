@@ -3150,7 +3150,10 @@ void iq2xs_init_impl(enum ggml_type type) {
     int * n_per_i = (int *)malloc(kmap_size*sizeof(int));
     GGML_ASSERT(n_per_i);
     int num_neighbors = 0, num_not_in_map = 0;
-#ifdef GGML_USE_OPENMP
+    // These parallel reductions currently lead to the following error when trying to compile
+    // with OpenMP and Emscripten:
+    //   "error: common symbols are not yet implemented for Wasm: .gomp_critical_user_.reduction.var"
+#if defined(GGML_USE_OPENMP) && !defined(__EMSCRIPTEN__)
     #pragma omp parallel reduction(+:num_neighbors,num_not_in_map)
 #endif
     {
@@ -3158,7 +3161,7 @@ void iq2xs_init_impl(enum ggml_type type) {
         GGML_ASSERT(dist2);
         int8_t pos[8];
         int i;
-#ifdef GGML_USE_OPENMP
+#if defined(GGML_USE_OPENMP) && !defined(__EMSCRIPTEN__)
         #pragma omp for schedule(dynamic, 64)
 #endif
         for (i = 0; i < kmap_size; ++i) {
@@ -3794,7 +3797,7 @@ void iq3xs_init_impl(int grid_size) {
     int * n_per_i = (int *)malloc(kmap_size*sizeof(int));
     GGML_ASSERT(n_per_i);
     int num_neighbors = 0, num_not_in_map = 0;
-#ifdef GGML_USE_OPENMP
+#if defined(GGML_USE_OPENMP) && !defined(__EMSCRIPTEN__)
     #pragma omp parallel reduction(+:num_neighbors,num_not_in_map)
 #endif
     {
@@ -3802,7 +3805,7 @@ void iq3xs_init_impl(int grid_size) {
         GGML_ASSERT(dist2);
         int8_t pos[4];
         int i;
-#ifdef GGML_USE_OPENMP
+#if defined(GGML_USE_OPENMP) && !defined(__EMSCRIPTEN__)
         #pragma omp for schedule(dynamic, 64)
 #endif
         for (i = 0; i < kmap_size; ++i) {
