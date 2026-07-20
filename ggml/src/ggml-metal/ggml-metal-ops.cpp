@@ -299,6 +299,10 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
             {
                 n_fuse = ggml_metal_op_unary(ctx, idx);
             } break;
+        case GGML_OP_SILU_BACK:
+            {
+                n_fuse = ggml_metal_op_silu_back(ctx, idx);
+            } break;
         case GGML_OP_GLU:
             {
                 n_fuse = ggml_metal_op_glu(ctx, idx);
@@ -3285,6 +3289,45 @@ int ggml_metal_op_bin(ggml_metal_op_t ctx, int idx) {
     }
 
     return n_fuse;
+}
+
+int ggml_metal_op_silu_back(ggml_metal_op_t ctx, int idx) {
+    ggml_tensor * op = ctx->node(idx);
+
+    ggml_metal_library_t lib = ctx->lib;
+    ggml_metal_encoder_t enc = ctx->enc;
+
+    GGML_ASSERT(op->src[0]->type == GGML_TYPE_F32);
+    GGML_ASSERT(op->src[1]->type == GGML_TYPE_F32);
+    GGML_ASSERT(op->type         == GGML_TYPE_F32);
+
+    GGML_ASSERT(ggml_is_contiguous(op->src[0]));
+    GGML_ASSERT(ggml_is_contiguous(op->src[1]));
+    GGML_ASSERT(ggml_is_contiguous(op));
+    GGML_ASSERT(ggml_are_same_shape(op->src[0], op->src[1]));
+
+    auto pipeline = ggml_metal_library_get_pipeline_silu_back(lib, op);
+
+    const int64_t ne = ggml_nelements(op);
+
+    ggml_metal_kargs_silu_back args = {
+        /*.ne =*/ ne,
+    };
+
+    int arg_idx{0};
+
+    ggml_metal_encoder_set_pipeline(enc, pipeline);
+    ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), arg_idx++);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), arg_idx++);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), arg_idx++);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op), arg_idx++);
+
+    const int nth = std::min<int64_t>(ggml_metal_pipeline_max_theads_per_threadgroup(pipeline), ne);
+    const int64_t n = (ne + nth - 1) / nth;
+
+    ggml_metal_encoder_dispatch_threadgroups(enc, n, 1, 1, nth, 1, 1);
+
+    return 1;
 }
 
 int ggml_metal_op_l2_norm(ggml_metal_op_t ctx, int idx) {

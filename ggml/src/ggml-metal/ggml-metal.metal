@@ -1255,6 +1255,20 @@ template [[host_name("kernel_unary_f32_f32_4")]] kernel kernel_unary_t kernel_un
 template [[host_name("kernel_unary_f16_f16")]]   kernel kernel_unary_t kernel_unary_impl<half,   half,   float>;
 template [[host_name("kernel_unary_f16_f16_4")]] kernel kernel_unary_t kernel_unary_impl<half4,  half4,  float4>;
 
+kernel void kernel_silu_back_f32(
+        constant ggml_metal_kargs_silu_back & args,
+        device const float * dy,
+        device const float * x,
+        device       float * dx,
+        uint gid [[thread_position_in_grid]]) {
+    if (gid >= args.ne) {
+        return;
+    }
+
+    const float s = 1.0f / (1.0f + exp(-x[gid]));
+    dx[gid] = dy[gid] * s * (1.0f + x[gid] * (1.0f - s));
+}
+
 // OP: 0 - add, 1 - sub, 2 - mul, 3 - div
 constant short FC_bin_op [[function_constant(FC_BIN + 0)]];
 constant short FC_bin_f  [[function_constant(FC_BIN + 1)]];

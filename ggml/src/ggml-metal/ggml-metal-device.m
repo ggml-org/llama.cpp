@@ -1103,6 +1103,14 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 default:
                     return false;
             }
+        case GGML_OP_SILU_BACK:
+            return (op->src[0]->type == GGML_TYPE_F32) &&
+                (op->src[1]->type == GGML_TYPE_F32) &&
+                (op->type == GGML_TYPE_F32) &&
+                ggml_is_contiguous(op->src[0]) &&
+                ggml_is_contiguous(op->src[1]) &&
+                ggml_is_contiguous(op) &&
+                ggml_are_same_shape(op->src[0], op->src[1]);
         case GGML_OP_GLU:
             switch (ggml_get_glu_op(op)) {
                 case GGML_GLU_OP_REGLU:
