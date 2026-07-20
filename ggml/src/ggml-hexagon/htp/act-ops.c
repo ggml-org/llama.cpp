@@ -65,6 +65,9 @@ struct htp_act_context {
     size_t                    src1_row_size;
     size_t                    dst_row_size;
 
+    size_t                    src0_row_stride;
+    size_t                    src1_row_stride;
+
     size_t                    src0_row_size_aligned;
     size_t                    src1_row_size_aligned;
     size_t                    dst_row_size_aligned;
@@ -666,6 +669,9 @@ static void glu_geglu_f32_per_thread(unsigned int nth, unsigned int ith, void * 
     size_t src1_row_size = actx->src1_row_size;
     size_t dst_row_size  = actx->dst_row_size;
 
+    size_t src0_row_stride = actx->src0_row_stride;
+    size_t src1_row_stride = actx->src1_row_stride;
+
     uint64_t t1, t2;
     t1 = HAP_perf_get_qtimer_count();
 
@@ -717,12 +723,12 @@ static void glu_geglu_f32_per_thread(unsigned int nth, unsigned int ith, void * 
             dma_make_ptr(data_dst, dst_spad_data + (spad_idx * dst_spad_half_size)),
             dst_row_size, dst_row_size_aligned, 0);
 
-        dma_queue_push_ddr_to_vtcm(dma_queue,
-            dma_make_ptr(src0_spad_data + (spad_idx * src0_spad_half_size), data_src0 + (ir * src0_row_size)),
-            src0_row_size_aligned, src0_row_size, block_size);
-        dma_queue_push_ddr_to_vtcm(dma_queue,
-            dma_make_ptr(src1_spad_data + (spad_idx * src1_spad_half_size), data_src1 + (ir * src1_row_size)),
-            src1_row_size_aligned, src1_row_size, block_size);
+        dma_queue_push(dma_queue,
+            dma_make_ptr(src0_spad_data + (spad_idx * src0_spad_half_size), data_src0 + (ir * src0_row_stride)),
+            src0_row_size_aligned, src0_row_stride, src0_row_size, block_size);
+        dma_queue_push(dma_queue,
+            dma_make_ptr(src1_spad_data + (spad_idx * src1_spad_half_size), data_src1 + (ir * src1_row_stride)),
+            src1_row_size_aligned, src1_row_stride, src1_row_size, block_size);
     }
 
     for (uint32_t ir = src0_start_row; ir < src0_end_row; ir += BLOCK) {
@@ -751,10 +757,10 @@ static void glu_geglu_f32_per_thread(unsigned int nth, unsigned int ith, void * 
         const uint32_t pref_block = (ir + BLOCK * 2);
         if (pref_block < src0_end_row) {
             const uint32_t pref_block_size = MIN(BLOCK, src0_end_row - pref_block);
-            dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(src0_spad, data_src0 + (pref_block * src0_row_size)),
-                                       src0_row_size_aligned, src0_row_size, pref_block_size);
-            dma_queue_push_ddr_to_vtcm(dma_queue, dma_make_ptr(src1_spad, data_src1 + (pref_block * src1_row_size)),
-                                       src1_row_size_aligned, src1_row_size, pref_block_size);
+            dma_queue_push(dma_queue, dma_make_ptr(src0_spad, data_src0 + (pref_block * src0_row_stride)),
+                                       src0_row_size_aligned, src0_row_stride, src0_row_size, pref_block_size);
+            dma_queue_push(dma_queue, dma_make_ptr(src1_spad, data_src1 + (pref_block * src1_row_stride)),
+                                       src1_row_size_aligned, src1_row_stride, src1_row_size, pref_block_size);
         }
     }
 
@@ -772,8 +778,15 @@ static int execute_op_activations_f32(struct htp_ops_context * octx) {
     const struct htp_tensor * src1 = octx->src[1];
     const struct htp_tensor * dst  = octx->dst;
 
-    if (((src0->ne[0] * SIZEOF_FP32) != src0->nb[1]) || ((dst->ne[0] * SIZEOF_FP32) != dst->nb[1])) {
+    const bool is_geglu = (octx->op == HTP_OP_GLU_GEGLU);
+
+    // GEGLU accepts row-contiguous src (nb[1] > ne[0]*4); other ops require full src contiguity.
+    if (!is_geglu && ((src0->ne[0] * SIZEOF_FP32) != src0->nb[1])) {
         FARF(ERROR, "Non-contiguous tensors are not supported at this time \n");
+        return HTP_STATUS_NO_SUPPORT;
+    }
+    if ((dst->ne[0] * SIZEOF_FP32) != dst->nb[1]) {
+        FARF(ERROR, "Non-contiguous dst is not supported at this time \n");
         return HTP_STATUS_NO_SUPPORT;
     }
 
@@ -812,9 +825,25 @@ static int execute_op_activations_f32(struct htp_ops_context * octx) {
     const uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
     const uint32_t n_threads  = MIN(octx->n_threads, src0_nrows);
 
-    size_t src0_row_size = src0->nb[1];
-    size_t src1_row_size = src1 ? src1->nb[1] : src0->nb[1];
-    size_t dst_row_size  = dst->nb[1];
+    // row_size   = bytes of useful data per row (what the kernel touches / what DMA copies)
+    // row_stride = bytes between successive rows in DDR (may exceed row_size for GEGLU non-contig src)
+    size_t src0_row_size, src1_row_size, dst_row_size;
+    size_t src0_row_stride, src1_row_stride;
+
+    if (is_geglu) {
+        const size_t nc_bytes = dst->ne[0] * SIZEOF_FP32;
+        src0_row_size   = nc_bytes;
+        src1_row_size   = nc_bytes;
+        dst_row_size    = nc_bytes;
+        src0_row_stride = src0->nb[1];
+        src1_row_stride = src1 ? src1->nb[1] : src0->nb[1];
+    } else {
+        src0_row_size   = src0->nb[1];
+        src1_row_size   = src1 ? src1->nb[1] : src0->nb[1];
+        dst_row_size    = dst->nb[1];
+        src0_row_stride = src0_row_size;
+        src1_row_stride = src1_row_size;
+    }
 
     const size_t src0_row_size_aligned = hex_round_up(src0_row_size, VLEN);
     const size_t src1_row_size_aligned = hex_round_up(src1_row_size, VLEN);
@@ -876,6 +905,9 @@ static int execute_op_activations_f32(struct htp_ops_context * octx) {
     actx.src0_row_size_aligned = src0_row_size_aligned;
     actx.src1_row_size_aligned = src1_row_size_aligned;
     actx.dst_row_size_aligned  = dst_row_size_aligned;
+
+    actx.src0_row_stride = src0_row_stride;
+    actx.src1_row_stride = src1_row_stride;
 
     actx.src0_spad_half_size = octx->src0_spad.size_per_thread / 2;
     actx.src1_spad_half_size = octx->src1_spad.size_per_thread / 2;

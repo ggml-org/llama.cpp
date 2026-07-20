@@ -3083,7 +3083,14 @@ static bool ggml_hexagon_supported_activations(const struct ggml_hexagon_session
         return false;
     }
 
-    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(dst)) {
+    // GEGLU handles a row-contiguous src (nb[1] may exceed ne[0]*sizeof(f32)) by tight strided DMA.
+    // Other activation ops still require full contiguity.
+    const bool is_geglu = (op->op == GGML_OP_GLU) && (ggml_get_glu_op(op) == GGML_GLU_OP_GEGLU);
+
+    if (is_geglu ? !ggml_is_contiguous_1(src0) : !ggml_is_contiguous(src0)) {
+        return false;
+    }
+    if (!ggml_is_contiguous(dst)) {
         return false;
     }
 
@@ -3094,7 +3101,7 @@ static bool ggml_hexagon_supported_activations(const struct ggml_hexagon_session
         if (!ggml_are_same_shape(src0, src1)) {
             return false;
         }
-        if (!ggml_is_contiguous(src1)) {
+        if (is_geglu ? !ggml_is_contiguous_1(src1) : !ggml_is_contiguous(src1)) {
             return false;
         }
     }
