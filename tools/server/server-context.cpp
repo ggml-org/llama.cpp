@@ -40,32 +40,45 @@ using json = nlohmann::ordered_json;
 
 constexpr int HTTP_POLLING_SECONDS = 1;
 
-static void server_force_vector_flash_attn(bool enable) {
+static void server_set_env(const char * name, const char * value) {
 #if defined(_WIN32)
-    _putenv_s("GGML_CUDA_FA_FORCE_VEC", enable ? "1" : "");
+    _putenv_s(name, value ? value : "");
 #else
-    if (enable) {
-        setenv("GGML_CUDA_FA_FORCE_VEC", "1", 1);
+    if (value) {
+        setenv(name, value, 1);
     } else {
-        unsetenv("GGML_CUDA_FA_FORCE_VEC");
+        unsetenv(name);
     }
 #endif
 }
 
-struct server_scoped_vector_flash_attn {
-    explicit server_scoped_vector_flash_attn(bool enable) : reset(enable && getenv("GGML_CUDA_FA_FORCE_VEC") == nullptr) {
-        if (reset) {
-            server_force_vector_flash_attn(true);
+struct server_scoped_checkpoint_flash_attn {
+    server_scoped_checkpoint_flash_attn(bool enable, uint64_t epoch) :
+        active(enable),
+        reset_vector(enable && getenv("GGML_CUDA_FA_FORCE_VEC") == nullptr) {
+        if (!active) {
+            return;
+        }
+        if (reset_vector) {
+            server_set_env("GGML_CUDA_FA_FORCE_VEC", "1");
+        }
+        epoch_value = std::to_string(epoch);
+        server_set_env("GGML_CUDA_CHECKPOINT_EPOCH", epoch_value.c_str());
+    }
+
+    ~server_scoped_checkpoint_flash_attn() {
+        if (!active) {
+            return;
+        }
+        server_set_env("GGML_CUDA_CHECKPOINT_EPOCH", nullptr);
+        if (reset_vector) {
+            server_set_env("GGML_CUDA_FA_FORCE_VEC", nullptr);
         }
     }
 
-    ~server_scoped_vector_flash_attn() {
-        if (reset) {
-            server_force_vector_flash_attn(false);
-        }
-    }
-
-    const bool reset;
+    const bool active;
+    const bool reset_vector;
+    std::string epoch_value;
 };
 
 static uint32_t server_n_outputs_max(const common_params & params) {
@@ -978,9 +991,11 @@ private:
     int  n_parallel_user = 0;
 
     // Work around AMD issue #20176 without disabling recurrent checkpoints.
-    // The first target decode after a restore uses vector flash attention.
+    // Reset HIP graphs and use vector flash attention for the first physical
+    // microbatch after a restore.
     bool checkpoint_fa_vec_fallback = false;
     bool checkpoint_fa_vec_pending  = false;
+    uint64_t checkpoint_fa_epoch    = 0;
 
     std::string model_name; // name of the loaded model, to be used by API
     std::set<std::string> model_aliases; // additional names for the model
@@ -1411,11 +1426,11 @@ private:
         }
         SRV_TRC("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
 
-        // AMD checkpoint restore can make the first large tile flash-attention graph
-        // fault (issue #20176). Recurrent/hybrid models need checkpoints to avoid
-        // expensive full prompt reprocessing, so use vector flash attention for
-        // exactly the first target decode after each restore. Keep the existing
-        // conservative disable for other model types.
+        // AMD checkpoint restore can make a later tile flash-attention graph fault
+        // (issue #20176). Recurrent/hybrid models need checkpoints to avoid
+        // expensive full prompt reprocessing, so invalidate cached HIP graphs and
+        // use vector flash attention for the first physical microbatch after each
+        // restore. Keep the conservative disable for other model types.
         if (params_base.n_ctx_checkpoints > 0) {
             for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
                 ggml_backend_dev_t dev = ggml_backend_dev_get(i);
@@ -1428,7 +1443,7 @@ private:
                     name.find("ROCm") != std::string::npos) {
                     if (llama_model_is_recurrent(model_tgt) || llama_model_is_hybrid(model_tgt)) {
                         checkpoint_fa_vec_fallback = true;
-                        SRV_WRN("AMD GPU detected (%s) — checkpoints will use vector flash attention for the first decode after restore (issue #20176)\n",
+                        SRV_WRN("AMD GPU detected (%s) — checkpoints will reset HIP graphs and use vector flash attention for the first microbatch after restore (issue #20176)\n",
                                 name.c_str());
                     } else {
                         SRV_WRN("AMD GPU detected (%s) — disabling context checkpoints (issue #20176)\n",
@@ -2926,7 +2941,12 @@ private:
         int32_t off_next = 0;
         int32_t n_batch = llama_n_batch(ctx_tgt);
         for (int32_t off = 0; off < batch.size(); off = off_next) {
-            const int32_t n_tokens = std::min(n_batch, batch.size() - off);
+            // Limit the vector fallback to one physical microbatch. The remaining
+            // prompt tokens can return to the fast kernel after graph invalidation.
+            const int32_t n_tokens_max = checkpoint_fa_vec_pending
+                ? std::min(n_batch, (int32_t) llama_n_ubatch(ctx_tgt))
+                : n_batch;
+            const int32_t n_tokens = std::min(n_tokens_max, batch.size() - off);
             try {
                 scoped_timer t(t_decode, n_decode);
                 // TODO @ngxson : maybe handle n_batch == 1 here instead of inside decode()
@@ -3451,7 +3471,8 @@ private:
                                         it->load_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
                                         if (checkpoint_fa_vec_fallback) {
                                             checkpoint_fa_vec_pending = true;
-                                            SLT_WRN(slot, "%s", "using vector flash attention for the first decode after checkpoint restore\n");
+                                            ++checkpoint_fa_epoch;
+                                            SLT_WRN(slot, "%s", "resetting HIP graphs and using vector flash attention for the first microbatch after checkpoint restore\n");
                                         }
                                         // restore the draft's speculative state
                                         common_speculative_set_state(spec.get(), slot.id, it->data_spec);
@@ -3744,7 +3765,7 @@ private:
 
         int ret;
         {
-            server_scoped_vector_flash_attn force_fa_vec(force_checkpoint_fa_vec);
+            server_scoped_checkpoint_flash_attn force_fa_vec(force_checkpoint_fa_vec, checkpoint_fa_epoch);
             ret = llama_decode(ctx_tgt, batch_view);
         }
 

@@ -4185,11 +4185,24 @@ static enum ggml_status ggml_backend_cuda_graph_compute(ggml_backend_t backend, 
     const void * graph_key = nullptr;
 
 #ifdef USE_CUDA_GRAPH
+    const char * checkpoint_epoch_env = getenv("GGML_CUDA_CHECKPOINT_EPOCH");
+    if (checkpoint_epoch_env != nullptr) {
+        char * end = nullptr;
+        const uint64_t checkpoint_epoch = strtoull(checkpoint_epoch_env, &end, 10);
+        if (end != checkpoint_epoch_env && *end == '\0' && checkpoint_epoch != 0 &&
+                checkpoint_epoch != cuda_ctx->checkpoint_epoch) {
+            GGML_LOG_DEBUG("%s: clearing CUDA graphs for checkpoint epoch %llu\n",
+                __func__, (unsigned long long) checkpoint_epoch);
+            cuda_ctx->cuda_graphs.clear();
+            cuda_ctx->checkpoint_epoch = checkpoint_epoch;
+        }
+    }
+
     graph_key = ggml_cuda_graph_get_key(cgraph);
 
-    // The server sets this for one graph after restoring an AMD recurrent
-    // checkpoint (issue #20176). Bypass graph replay so the temporary vector
-    // flash-attention selection is evaluated instead of reusing a tile graph.
+    // The server sets this for one physical microbatch after restoring an AMD
+    // recurrent checkpoint (issue #20176). Bypass graph replay so the temporary
+    // vector flash-attention selection is evaluated instead of reusing a tile graph.
     const bool graph_enabled =
         ggml_cuda_graph_set_enabled(cuda_ctx, graph_key) &&
         getenv("GGML_CUDA_FA_FORCE_VEC") == nullptr;

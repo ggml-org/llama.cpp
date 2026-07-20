@@ -421,11 +421,12 @@ should request dense logits explicitly.
 - Standard `llama-bench` reports raw decode and does not exercise MTP.
 - Server MTP results depend on prompt content, temperature, and draft
   acceptance.
-- On AMD recurrent/hybrid models, the first target decode after a context
-  checkpoint restore automatically uses the vector flash-attention kernel to
-  avoid the tile-kernel page fault tracked in upstream issue #20176. Later
-  prompt and generation decodes return to the normal fast kernel selection.
-  Checkpoints remain conservatively disabled for other AMD model types.
+- On AMD recurrent/hybrid models, a context checkpoint restore invalidates
+  cached HIP graphs and uses the vector flash-attention kernel for only the
+  first physical microbatch. Later microbatches return to normal fast kernel
+  selection. This avoids the delayed tile-kernel page fault tracked in upstream
+  issue #20176 without the long full-batch vector fallback. Checkpoints remain
+  conservatively disabled for other AMD model types.
 - Prompt caching was disabled for scaling tests. Production multi-turn behavior
   can differ substantially when prefixes are reused.
 - After any ROCm illegal-memory fault, reset the GPUs or reboot before trusting
