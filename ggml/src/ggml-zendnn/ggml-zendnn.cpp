@@ -31,6 +31,29 @@ zendnnl::common::data_type_t ggml_to_zendnn_type() {
 }
 
 /**
+ * Builds the matmul_params shared by ggml_zendnn_matmul() and ggml_zendnn_group_matmul():
+ * dtype selection plus, for Q8_0 weights, dynamic-quant setup. Callers still need to set
+ * quant_params.src_scale.dims themselves, since that depends on the batch size(s) in use.
+ */
+template <typename TA, typename TB, typename TC>
+static zendnnl::lowoha::matmul::matmul_params ggml_zendnn_make_matmul_params(ggml_backend_zendnn_context * ctx) {
+    zendnnl::lowoha::matmul::matmul_params params;
+    params.dtypes.src = ggml_to_zendnn_type<TB>();
+    params.dtypes.wei = ggml_to_zendnn_type<TA>();
+    params.dtypes.dst = ggml_to_zendnn_type<TC>();
+    params.num_threads = ctx->n_threads;
+
+    if constexpr (std::is_same_v<TA, block_q8_0>) {
+        params.dtypes.compute = zendnnl::common::data_type_t::s8;
+        params.dynamic_quant = true;
+        params.quant_params.src_scale.buff = nullptr;
+        params.quant_params.src_scale.dt   = zendnnl::common::data_type_t::bf16;
+        params.packing.pack_format_b = 1;
+    }
+    return params;
+}
+
+/**
  * ZenDNN matmul: computes C = B * A.
  *
  * - A: weights, shape (k, m), column-major (each column is a weight vector for one output).
@@ -47,22 +70,12 @@ static bool ggml_zendnn_matmul(ggml_backend_zendnn_context * ctx, int64_t m, int
                                const TA * A, int64_t lda, const TB * B, int64_t ldb, TC * C,
                                int64_t ldc) {
 
-    zendnnl::lowoha::matmul::matmul_params params;
-    params.dtypes.src = ggml_to_zendnn_type<TB>();
-    params.dtypes.wei = ggml_to_zendnn_type<TA>();
-    params.dtypes.dst = ggml_to_zendnn_type<TC>();
-    params.num_threads = ctx->n_threads;
+    zendnnl::lowoha::matmul::matmul_params params = ggml_zendnn_make_matmul_params<TA, TB, TC>(ctx);
 
     zendnnl::lowoha::matmul::matmul_batch_params_t batch_params;
 
     if constexpr (std::is_same_v<TA, block_q8_0>) {
-        params.dtypes.compute = zendnnl::common::data_type_t::s8;
-        const int64_t num_groups = k / QK8_0;
-        params.dynamic_quant = true;
-        params.quant_params.src_scale.buff = nullptr;
-        params.quant_params.src_scale.dt   = zendnnl::common::data_type_t::bf16;
-        params.quant_params.src_scale.dims = {n, num_groups};
-        params.packing.pack_format_b = 1;
+        params.quant_params.src_scale.dims = {n, k / QK8_0};
     }
 
     zendnnl::error_handling::status_t status = zendnnl::lowoha::matmul::matmul_direct(
@@ -223,6 +236,99 @@ struct mmid_row_mapping {
     int32_t i2;
 };
 
+/**
+ * ZenDNN batched matmul: computes C[i] = B[i] * A[i] for every active expert i via a single
+ * group_matmul_direct() call. Batched analogue of ggml_zendnn_matmul() - see its docs for the
+ * per-expert A/B/C shape convention. m and k are shared by every expert; n (batch size) varies
+ * per expert, hence the vector.
+ */
+template <typename TA, typename TB, typename TC>
+static bool ggml_zendnn_group_matmul(ggml_backend_zendnn_context * ctx, int64_t m, int64_t k,
+                                     const std::vector<int64_t> & n,
+                                     const std::vector<const void *> & A, int64_t lda,
+                                     const std::vector<const void *> & B, int64_t ldb,
+                                     const std::vector<void *> & C, int64_t ldc) {
+
+    const int n_experts = n.size();
+
+    zendnnl::lowoha::matmul::matmul_params base_params = ggml_zendnn_make_matmul_params<TA, TB, TC>(ctx);
+
+    std::vector<char>         layout(n_experts, 'r');
+    std::vector<bool>         trans_a(n_experts, false);
+    std::vector<bool>         trans_b(n_experts, true);
+    std::vector<int>          batch_m(n_experts);
+    std::vector<int>          batch_n(n_experts, m);
+    std::vector<int>          batch_k(n_experts, k);
+    std::vector<float>        alpha(n_experts, 1.0f);
+    std::vector<float>        beta(n_experts, 0.0f);
+    std::vector<const void *> bias(n_experts, nullptr);
+    std::vector<int>          lda_v(n_experts, lda);
+    std::vector<int>          ldb_v(n_experts, ldb);
+    std::vector<int>          ldc_v(n_experts, ldc);
+    std::vector<bool>         is_wei_const(n_experts, true);
+    std::vector<zendnnl::lowoha::matmul::matmul_params> params(n_experts, base_params);
+
+    for (int i = 0; i < n_experts; i++) {
+        batch_m[i] = n[i];
+
+        // src_scale.dims depends on this expert's row count, unlike the rest of base_params
+        if constexpr (std::is_same_v<TA, block_q8_0>) {
+            params[i].quant_params.src_scale.dims = {n[i], k / QK8_0};
+        }
+    }
+
+    zendnnl::error_handling::status_t status = zendnnl::lowoha::matmul::group_matmul_direct(
+        layout, trans_a, trans_b, batch_m, batch_n, batch_k, alpha,
+        B, ldb_v, A, lda_v, bias, beta,
+        C, ldc_v, is_wei_const, params);
+
+    if (status != zendnnl::error_handling::status_t::success) {
+        GGML_LOG_ERROR("%s, ZenDNN group matmul failed: status=%d\n", __func__, static_cast<int>(status));
+        return false;
+    }
+    return true;
+}
+
+static bool ggml_zendnn_group_gemm(ggml_backend_zendnn_context * ctx, int64_t m, int64_t k,
+                                    const std::vector<int64_t> & n,
+                                    const std::vector<const void *> & A, int64_t lda,
+                                    const std::vector<const void *> & B, int64_t ldb,
+                                    const std::vector<void *> & C, int64_t ldc,
+                                    int Atype, int Btype, int Ctype) {
+
+    assert(m >= 0);
+    for (size_t i = 0; i < n.size(); i++) {
+        assert(n[i] >= 0);
+    }
+    assert(k >= 0);
+    assert(lda >= k);
+    assert(ldb >= k);
+    assert(ldc >= m);
+
+    // categorize types
+    switch (Atype) {
+        case GGML_TYPE_F32:
+            if (Btype != GGML_TYPE_F32 || Ctype != GGML_TYPE_F32)
+                return false;
+            return ggml_zendnn_group_matmul<float, float, float>(ctx, m, k, n, A, lda, B, ldb, C, ldc);
+        case GGML_TYPE_BF16:
+            if (Btype != GGML_TYPE_BF16)
+                return false;
+            if (Ctype == GGML_TYPE_BF16)
+                return ggml_zendnn_group_matmul<ggml_bf16_t, ggml_bf16_t, ggml_bf16_t>(
+                    ctx, m, k, n, A, lda, B, ldb, C, ldc);
+            if (Ctype == GGML_TYPE_F32)
+                return ggml_zendnn_group_matmul<ggml_bf16_t, ggml_bf16_t, float>(ctx, m, k, n, A, lda, B, ldb, C, ldc);
+            return false;
+        case GGML_TYPE_Q8_0:
+            if (Btype != GGML_TYPE_F32 || Ctype != GGML_TYPE_F32)
+                return false;
+            return ggml_zendnn_group_matmul<block_q8_0, float, float>(ctx, m, k, n, A, lda, B, ldb, C, ldc);
+        default:
+            return false; // unsupported type
+    }
+}
+
 static void ggml_zendnn_compute_forward_mul_mat_id(
     ggml_backend_zendnn_context * ctx,
     ggml_tensor * dst) {
@@ -262,7 +368,8 @@ static void ggml_zendnn_compute_forward_mul_mat_id(
     std::vector<int64_t> matrix_row_counts(n_as, 0);
     std::vector<std::vector<mmid_row_mapping>> matrix_rows(n_as);
 
-    int64_t max_rows = 0;
+    int64_t total_rows = 0;
+    int     n_active_experts = 0;
     // group rows by expert (preprocessing step)
     for (int64_t iid1 = 0; iid1 < ids->ne[1]; ++iid1) {
         for (int id = 0; id < n_ids; ++id) {
@@ -270,66 +377,74 @@ static void ggml_zendnn_compute_forward_mul_mat_id(
 
             GGML_ASSERT(i02 >= 0 && i02 < n_as);
 
+            if (matrix_row_counts[i02] == 0) {
+                n_active_experts++;
+            }
             matrix_rows[i02].push_back({id, iid1});
             matrix_row_counts[i02]++;
-            if (matrix_row_counts[i02] > max_rows) {
-                max_rows = matrix_row_counts[i02];
-            }
+            total_rows++;
         }
     }
 
-    if (max_rows == 0) {
+    if (total_rows == 0) {
         return; // no rows to process
     }
 
     const size_t row_size = ggml_row_size(vec_dot_type, ne10);
-
-    // size for converting src1 rows to vec_dot_type if needed
-    const size_t nbw1 = row_size;
-    const size_t nbw2 = nbw1 * ne11;
-    const size_t nbw3 = nbw2 * ne12;
-    const size_t src1_conv_size = (src1->type != vec_dot_type && src0->type != GGML_TYPE_Q8_0) ? ne13 * nbw3 : 0;
 
     // For Q8_0, src1 is always F32; the gather buffer must hold F32 rows (ne10*4 bytes),
     // not Q8_0-encoded rows (row_size ≈ ne10/32*34 bytes) — they differ by ~4x.
     const size_t f32_row_size = (size_t)ne10 * sizeof(float);
     const size_t gather_row_size = (src0->type == GGML_TYPE_Q8_0) ? f32_row_size : row_size;
 
+    if (src1->type != vec_dot_type && src0->type != GGML_TYPE_Q8_0) {
+        GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    }
+
     // size for MoE gather/scatter buffers
-    const size_t wdata_cur_size = max_rows * gather_row_size;
-    const size_t dst_cur_size = max_rows * ggml_row_size(dst->type, ne01);
+    const size_t wdata_cur_size = total_rows * gather_row_size;
+    const size_t dst_cur_size = total_rows * ggml_row_size(dst->type, ne01);
 
     // allocate single buffer for all needs
-    const size_t total_size = src1_conv_size + wdata_cur_size + dst_cur_size;
+    const size_t total_size = wdata_cur_size + dst_cur_size;
     if (ctx->work_size < total_size) {
         ctx->work_data.reset(new char[total_size]);
         ctx->work_size = total_size;
     }
 
     // partition the buffer
-    char * work_data = ctx->work_data.get();
-    char * wdata_cur = work_data + src1_conv_size;
+    char * wdata_cur = ctx->work_data.get();
     char * dst_cur = wdata_cur + wdata_cur_size;
 
-    // ZenDNN requires FP32 for dynamic quantization, so conversion is skipped
-    if (src1->type != vec_dot_type && src0->type != GGML_TYPE_Q8_0) {
-        GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    // per-expert data collected during gather, handed to ggml_zendnn_group_gemm() as one batch
+    std::vector<int64_t>      expert_row_count(n_active_experts);
+    std::vector<const void *> batch_src(n_active_experts);
+    std::vector<const void *> batch_wei(n_active_experts);
+    std::vector<void *>       batch_dst(n_active_experts);
 
-        #pragma omp parallel for collapse(3) num_threads(ctx->n_threads) schedule(static)
-        for (int64_t i13 = 0; i13 < ne13; ++i13) {
-            for (int64_t i12 = 0; i12 < ne12; ++i12) {
-                for (int64_t i11 = 0; i11 < ne11; ++i11) {
-                    const float * src1_f32 = (float *)((char *)src1->data + i11*nb11 + i12*nb12 + i13*nb13);
-                    void * src1_conv = (char *)work_data + i11*nbw1 + i12*nbw2 + i13*nbw3;
-                    from_float(src1_f32, src1_conv, ne10);
-                }
+    // precompute per-expert buffer offsets and batch indices for the parallel loop below
+    std::vector<int64_t> expert_wdata_off(n_as, 0);
+    std::vector<int64_t> expert_dst_off(n_as, 0);
+    std::vector<int>     expert_batch_idx(n_as, -1);
+    {
+        int64_t w_off = 0;
+        int64_t d_off = 0;
+        int     batch_idx = 0;
+        for (int64_t cur_a = 0; cur_a < n_as; ++cur_a) {
+            if (matrix_row_counts[cur_a] == 0) {
+                continue;
             }
+            expert_wdata_off[cur_a] = w_off;
+            expert_dst_off[cur_a]   = d_off;
+            expert_batch_idx[cur_a] = batch_idx;
+            w_off += matrix_row_counts[cur_a] * gather_row_size;
+            d_off += matrix_row_counts[cur_a] * ggml_row_size(dst->type, ne01);
+            batch_idx++;
         }
     }
 
-    const void * wdata = (src1->type == vec_dot_type || src0->type == GGML_TYPE_Q8_0) ? src1->data : work_data;
-
-    // process each expert with gather -> gemm -> scatter pattern
+    // gather + inline-convert input rows into each expert's batch slot
+    #pragma omp parallel for num_threads(ctx->n_threads) schedule(static)
     for (int64_t cur_a = 0; cur_a < n_as; ++cur_a) {
         const int64_t cne1 = matrix_row_counts[cur_a];
 
@@ -337,42 +452,57 @@ static void ggml_zendnn_compute_forward_mul_mat_id(
             continue;
         }
 
-        const char * src0_cur = (const char *) src0->data + cur_a*nb02;
+        const int64_t w_off     = expert_wdata_off[cur_a];
+        const int64_t d_off     = expert_dst_off[cur_a];
+        const int     batch_idx = expert_batch_idx[cur_a];
 
-        // gather input rows for this expert
-        #pragma omp parallel for num_threads(ctx->n_threads) schedule(static)
         for (int64_t ir1 = 0; ir1 < cne1; ++ir1) {
             const mmid_row_mapping & row_mapping = matrix_rows[cur_a][ir1];
-            const int64_t id = row_mapping.i1;
+            const int64_t id  = row_mapping.i1;
             const int64_t i11 = id % ne11;
             const int64_t i12 = row_mapping.i2;
 
-            std::memcpy(
-                wdata_cur + ir1 * gather_row_size,
-                (const char *) wdata + (i11 + i12*ne11) * gather_row_size,
-                gather_row_size
-            );
+            const char * src_row = (const char *) src1->data + i11*nb11 + i12*nb12;
+            void *       dst_row = wdata_cur + w_off + ir1 * gather_row_size;
+
+            if (src1->type != vec_dot_type && src0->type != GGML_TYPE_Q8_0) {
+                from_float((const float *) src_row, dst_row, ne10);
+            } else {
+                // no conversion: src1 already matches vec_dot_type, or src0 is Q8_0, whose
+                // ZenDNN dynamic quantization requires the row to stay in F32
+                std::memcpy(dst_row, src_row, gather_row_size);
+            }
         }
 
-        // batched gemm for all tokens in this expert
-        if (!ggml_zendnn_gemm(ctx,
-                              ne01,       // m
-                              cne1,       // n
-                              ne10,       // k
-                              src0_cur,
-                              ne00,       // lda
-                              wdata_cur,
-                              ne10,       // ldb
-                              dst_cur,
-                              ne01,       // ldc
-                              src0->type,
-                              src0->type == GGML_TYPE_Q8_0 ? GGML_TYPE_F32 : vec_dot_type,
-                              dst->type)) {
-            GGML_ABORT("%s: ZenDNN gemm failed\n", __func__);
+        expert_row_count[batch_idx] = cne1;
+        batch_src[batch_idx]        = wdata_cur + w_off;
+        batch_wei[batch_idx]        = (const char *) src0->data + cur_a * nb02;
+        batch_dst[batch_idx]        = dst_cur + d_off;
+    }
+
+    if (!ggml_zendnn_group_gemm(ctx,
+                                ne01,             // m
+                                ne10,             // k
+                                expert_row_count, // n (per expert)
+                                batch_wei, ne00,  // A: weights, lda
+                                batch_src, ne10,  // B: input, ldb
+                                batch_dst, ne01,  // C: output, ldc
+                                src0->type,
+                                src0->type == GGML_TYPE_Q8_0 ? GGML_TYPE_F32 : vec_dot_type,
+                                dst->type))
+        GGML_ABORT("%s: ZenDNN group gemm failed\n", __func__);
+
+    // scatter output rows to destination
+    #pragma omp parallel for num_threads(ctx->n_threads) schedule(static)
+    for (int64_t cur_a = 0; cur_a < n_as; ++cur_a) {
+        const int64_t cne1 = matrix_row_counts[cur_a];
+
+        if (cne1 == 0) {
+            continue;
         }
 
-        // scatter output rows to destination
-        #pragma omp parallel for num_threads(ctx->n_threads) schedule(static)
+        const int64_t d_off = expert_dst_off[cur_a];
+
         for (int64_t ir1 = 0; ir1 < cne1; ++ir1) {
             const mmid_row_mapping & row_mapping = matrix_rows[cur_a][ir1];
             const int64_t id = row_mapping.i1;
@@ -381,7 +511,7 @@ static void ggml_zendnn_compute_forward_mul_mat_id(
 
             std::memcpy(
                 (char *) dst->data + i1*nb1 + i2*nb2,
-                dst_cur + ir1 * ggml_row_size(dst->type, ne01),
+                dst_cur + d_off + ir1 * ggml_row_size(dst->type, ne01),
                 ggml_row_size(dst->type, ne01)
             );
         }
@@ -591,22 +721,20 @@ static bool ggml_backend_zendnn_device_supports_op(ggml_backend_dev_t dev, const
                 if(K <= 256 || N <= 128 || M <= 96) {
                     return false;
                 }
+
+                // MUL_MAT_ID's gather+matmul+scatter approach favors a moderate expert count
+                if (op->op == GGML_OP_MUL_MAT_ID) {
+                    const int64_t n_experts = weights->ne[2];
+                    const int64_t max_experts = 32;
+                    if (n_experts > max_experts) {
+                        return false;
+                    }
+                }
             }
             else if (ne0 < min_batch || ne1 < min_batch || ne10 < min_batch) {
                 return false;
             }
 
-            // MUL_MAT_ID performs best with a moderate number of experts due to its
-            // gather + batched matmul + scatter approach. Future versions will leverage
-            // ZenDNN's grouped_gemm for better scalability with larger expert counts:
-            // https://github.com/amd/ZenDNN/blob/main/docs/operator/lowoha_group_gemm_operator.md
-            if (op->op == GGML_OP_MUL_MAT_ID) {
-                const int64_t n_experts = weights->ne[2];
-                const int64_t max_experts = 32;
-                if (n_experts > max_experts) {
-                    return false;
-                }
-            }
             switch (weights->type) {
                 case GGML_TYPE_F32:
                 case GGML_TYPE_BF16:
