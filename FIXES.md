@@ -137,7 +137,6 @@ A four-GPU tensor-split launch should start with:
 GGML_CUDA_ALLREDUCE=nccl \
 HSA_OVERRIDE_GFX_VERSION=10.3.0 \
 HSA_NO_SCRATCH_RECLAIM=1 \
-GGML_HIP_GRAPHS=1 \
 ./build/bin/llama-server \
   -m /path/to/model.gguf \
   -ngl all \
@@ -165,8 +164,9 @@ GGML_HIP_GRAPHS=1 \
 ```
 
 For a native `gfx1030` runtime, `HSA_OVERRIDE_GFX_VERSION` may not be necessary.
-It is retained in the tested V620 configuration. `GGML_HIP_GRAPHS=1` is also
-specified at runtime even though graph support is enabled at build time.
+It is retained in the tested V620 configuration. HIP graph support is selected
+by the `GGML_HIP_GRAPHS=ON` CMake option; a same-named shell export has no
+runtime effect and is intentionally omitted.
 
 Successful RCCL startup should not print:
 

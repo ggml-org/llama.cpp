@@ -22,6 +22,8 @@ runtime flags, and known limitations.
 
 The tested models were:
 
+- **Qwen3.6-27B MTP**, mixed `Q4_K_M` with a separate BF16 output head,
+  27.3B parameters and an 18.49 GB GGUF.
 - **Qwen3.6-35B-A3B MTP**, Unsloth Dynamic `Q4_K_M`, 35.5B total / 3B
   active parameters, 22.65 GB GGUF.
 - **Qwen3.5-122B-A10B MTP**, Unsloth Dynamic `Q4_K_M`, 124.6B total / 10B
@@ -37,15 +39,16 @@ Build this branch with:
 
 Important build options used by the helper:
 
-```text
--DGGML_HIP=ON
--DGGML_HIP_RCCL=ON
--DGGML_HIP_GRAPHS=ON
--DGGML_HIP_NO_VMM=ON
--DGGML_NATIVE=ON
--DAMDGPU_TARGETS=gfx1030
--DCMAKE_HIP_ARCHITECTURES=gfx1030
-```
+| CMake option | Purpose |
+|---|---|
+| `GGML_HIP=ON` | Build the HIP backend. |
+| `GGML_HIP_RCCL=ON` | Build and link RCCL collectives; required by vocabulary-parallel output. |
+| `GGML_HIP_GRAPHS=ON` | Compile HIP graph support; this is the setting that actually enables graphs. |
+| `GGML_HIP_ROCWMMA_FATTN=OFF` | Keep the newer-architecture rocWMMA attention path off for V620/RDNA2. |
+| `GGML_HIP_NO_VMM=ON` | Avoid the VMM path used by newer GPU configurations. |
+| `GGML_NATIVE=ON` | Optimize host code for this machine. |
+| `AMDGPU_TARGETS=gfx1030` | Compile HIP kernels for the V620/RDNA2 target. |
+| `CMAKE_HIP_ARCHITECTURES=gfx1030` | Pass the same architecture to CMake's HIP toolchain. |
 
 The benchmark environment was:
 
@@ -53,8 +56,42 @@ The benchmark environment was:
 export GGML_CUDA_ALLREDUCE=nccl
 export HSA_OVERRIDE_GFX_VERSION=10.3.0
 export HSA_NO_SCRATCH_RECLAIM=1
-export GGML_HIP_GRAPHS=1
 ```
+
+### Runtime environment quick reference
+
+These are the settings used by this branch's tested ROCm path, not an exhaustive
+list of upstream debugging variables.
+
+| Setting | What it does | Guidance |
+|---|---|---|
+| `GGML_CUDA_ALLREDUCE=nccl` | Uses RCCL/NCCL for tensor-parallel collectives. | Recommended for four V620s and **required** by `GGML_TP_VOCAB_OUTPUT`. |
+| `GGML_CUDA_ALLREDUCE=internal` | Uses the experimental internal collective when supported. | Mainly useful for two-device testing; not compatible with vocabulary-parallel output. |
+| `GGML_CUDA_ALLREDUCE=none` | Disables the backend collective and lets the meta backend use its generic butterfly fallback. | Debug/A-B option; slower here and not compatible with vocabulary-parallel output. |
+| `GGML_HIP_GRAPHS=1` as a shell variable | No runtime effect in the current implementation. | Harmless but redundant in older command examples; use the CMake option instead. |
+| `HSA_OVERRIDE_GFX_VERSION=10.3.0` | Presents the V620 as the tested `gfx1030` target. | Retained for reproducibility; it may be unnecessary on a native `gfx1030` runtime. |
+| `HSA_NO_SCRATCH_RECLAIM=1` | Keeps HIP scratch allocations instead of reclaiming them between work. | Improves stability/consistency at the cost of retaining more GPU memory. |
+| `GGML_TP_SHARDED_OUTPUT=1` | Splits validated Qwen 35B/122B output heads along the embedding dimension, then FP32-all-reduces full logits. | Supports raw and MTP paths. Do not combine with `GGML_TP_VOCAB_OUTPUT`. |
+| `GGML_TP_VOCAB_OUTPUT=1` | Splits an eligible output head along vocabulary, selects local candidates, and exchanges only compact TOP_K results. | Raw decode only for now; requires RCCL, CPU sampling, finite `top_k <= 256`, and at most one output row. Do not combine with `GGML_TP_SHARDED_OUTPUT`. |
+
+`GGML_CUDA_ALLREDUCE` may be left unset, in which case Linux currently tries
+RCCL first. Set it explicitly to `nccl` for reproducible runs and because the
+vocabulary-parallel eligibility check requires that exact selection.
+Unrecognized values behave like `none` after a warning.
+
+### Output-head modes and compatibility
+
+| Output mode | Environment | What happens | Raw decode | MTP / parallel slots |
+|---|---|---|---:|---|
+| Mirrored (default) | Leave both TP output flags unset | Every rank computes the complete output head; no logits collective is needed. | Baseline | Supported |
+| Embedding-sharded | `GGML_TP_SHARDED_OUTPUT=1` | Every rank computes a partial contribution for the full vocabulary; FP32 all-reduce produces complete mirrored logits. | Moderate model-dependent gain | Supported on the validated Qwen 35B/122B paths |
+| Vocabulary-sharded | `GGML_TP_VOCAB_OUTPUT=1` and `GGML_CUDA_ALLREDUCE=nccl` | Every rank computes complete logits for its vocabulary slice; deterministic local TOP_K results are exchanged and merged. | **About 15% over mirrored** on the tested 27B model | MTP and multi-output/parallel-slot batching are not yet supported |
+
+The two sharding flags are alternatives, not layers. They split different axes
+of the same output matrix, so setting both is an error. The measured 15% result
+is **vocabulary-sharded versus mirrored**, not vocabulary-sharded versus
+`GGML_TP_SHARDED_OUTPUT`. Combining both would require a separate 2-D tensor-
+parallel design with subgroup reductions and is future work.
 
 RCCL was confirmed active by the absence of the internal all-reduce and
 meta-backend butterfly fallback warnings.
@@ -136,7 +173,6 @@ four-GPU RCCL tensor split, flash attention, full GPU offload, F16 KV, batch
 GGML_CUDA_ALLREDUCE=nccl \
 HSA_OVERRIDE_GFX_VERSION=10.3.0 \
 HSA_NO_SCRATCH_RECLAIM=1 \
-GGML_HIP_GRAPHS=1 \
 ./build/bin/llama-bench \
   -m /path/to/model.gguf \
   -ngl 99 \
