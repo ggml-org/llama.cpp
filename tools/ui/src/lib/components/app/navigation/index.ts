@@ -115,6 +115,36 @@ export { default as SidebarNavigation } from './SidebarNavigation/SidebarNavigat
 export { default as SidebarNavigationConversationItem } from './SidebarNavigation/SidebarNavigationConversationItem.svelte';
 
 /**
+ * **SidebarNavigationSelectionBar** - Bulk action toolbar for selection mode
+ *
+ * Rendered above the conversation list when the sidebar enters selection mode.
+ * Hosts a master checkbox (with select-all / clear-all semantics over the
+ * currently-visible items), a selected-count caption, and bulk actions for
+ * pin/unpin, export, and delete. Delete uses
+ * {@link DialogConfirmation} before invoking the bulk store method.
+ *
+ * Pure-presentational; all operations are delegated via callbacks so the
+ * sidebar owns selection state and persistence.
+ *
+ * @example
+ * ```svelte
+ * <SidebarNavigationSelectionBar
+ *   selectedCount={selectedIds.size}
+ *   visibleCount={visibleConversations.length}
+ *   allVisibleSelected={...}
+ *   someVisibleSelected={...}
+ *   someSelectedPinned={...}
+ *   onSelectAllToggle={toggleSelectAll}
+ *   onBulkPinToggle={handleBulkPin}
+ *   onBulkExport={handleBulkExport}
+ *   onBulkDelete={handleBulkDelete}
+ *   onClose={exitSelectionMode}
+ * />
+ * ```
+ */
+export { default as SidebarNavigationSelectionBar } from './SidebarNavigation/SidebarNavigationSelectionBar.svelte';
+
+/**
  * **SidebarNavigationConversationList** - Grouped conversation list
  *
  * Pure-presentational list of conversations. Splits items into a Pinned

@@ -108,9 +108,6 @@ class ConversationsStore {
 		localStorage.setItem(REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY, this.pendingReasoningEffort);
 	}
 
-	/** Callback for title update confirmation dialog */
-	titleUpdateConfirmationCallback?: (currentTitle: string, newTitle: string) => Promise<boolean>;
-
 	/**
 	 * Callback for updating message content in chatStore.
 	 * Registered by chatStore to enable cross-store updates without circular dependency.
@@ -207,15 +204,6 @@ class ConversationsStore {
 			return this.activeMessages.splice(index, 1)[0];
 		}
 		return undefined;
-	}
-
-	/**
-	 * Sets the callback function for title update confirmations
-	 */
-	setTitleUpdateConfirmationCallback(
-		callback: (currentTitle: string, newTitle: string) => Promise<boolean>
-	): void {
-		this.titleUpdateConfirmationCallback = callback;
 	}
 
 	/**
@@ -387,6 +375,123 @@ class ConversationsStore {
 	}
 
 	/**
+	 * Deletes multiple conversations in sequence.
+	 * Mirrors deleteConversation() per-id; navigates to NEW_CHAT only if the
+	 * currently-open chat was among the deleted ones.
+	 * @param convIds - Conversation IDs to delete
+	 */
+	async bulkDeleteConversations(convIds: string[]): Promise<void> {
+		if (convIds.length === 0) return;
+
+		try {
+			const idsToRemove = new SvelteSet(convIds);
+			// Collect all descendants recursively so the local cache stays consistent
+			// even when deleteWithForks is omitted.
+			const queue = [...convIds];
+			while (queue.length > 0) {
+				const parentId = queue.pop()!;
+				for (const c of this.conversations) {
+					if (c.forkedFromConversationId === parentId && !idsToRemove.has(c.id)) {
+						idsToRemove.add(c.id);
+						queue.push(c.id);
+					}
+				}
+			}
+
+			const activeWasDeleted =
+				this.activeConversation !== null && idsToRemove.has(this.activeConversation.id);
+
+			await DatabaseService.bulkDeleteConversations([...idsToRemove]);
+
+			this.conversations = this.conversations.filter((c) => !idsToRemove.has(c.id));
+
+			if (activeWasDeleted) {
+				this.clearActiveConversation();
+				await goto(ROUTES.NEW_CHAT);
+			}
+
+			toast.success(
+				convIds.length === 1 ? 'Conversation deleted' : `${convIds.length} conversations deleted`
+			);
+		} catch (error) {
+			console.error('Failed to bulk delete conversations:', error);
+			toast.error('Failed to delete conversations');
+		}
+	}
+
+	/**
+	 * Toggles the pinned state of each conversation individually.
+	 * Mixed-pin selections are intentionally not normalised here; the bulk
+	 * action UI surfaces them as a disabled mixed-state instead.
+	 * @param convIds - Conversation IDs to toggle
+	 */
+	async bulkToggleConversationPin(convIds: string[]): Promise<void> {
+		if (convIds.length === 0) return;
+
+		try {
+			const updates = await DatabaseService.bulkToggleConversationPins(convIds);
+
+			const activeId = this.activeConversation?.id;
+			if (activeId && updates.has(activeId)) {
+				this.activeConversation = {
+					...this.activeConversation!,
+					pinned: updates.get(activeId)!
+				};
+			}
+			for (let i = 0; i < this.conversations.length; i++) {
+				const newPinned = updates.get(this.conversations[i].id);
+				if (newPinned !== undefined) this.conversations[i].pinned = newPinned;
+			}
+			this.conversations = [...this.conversations];
+
+			toast.success(
+				convIds.length === 1
+					? 'Conversation pin toggled'
+					: `Updated pin state for ${convIds.length} conversations`
+			);
+		} catch (error) {
+			console.error('Failed to bulk toggle pin:', error);
+			toast.error('Failed to update pin state');
+		}
+	}
+
+	/**
+	 * Bundles the given conversations into a single zip archive and triggers a
+	 * browser download (one JSONL file per conversation).
+	 * @param convIds - Conversation IDs to export
+	 */
+	async bulkExportConversations(convIds: string[]): Promise<void> {
+		if (convIds.length === 0) return;
+
+		try {
+			const fetched = await DatabaseService.getConversationsWithMessages(convIds);
+
+			const activeId = this.activeConversation?.id;
+			const overridden = fetched.get(activeId ?? '');
+			if (overridden && activeId) {
+				overridden.conv = { ...this.activeConversation! };
+			}
+
+			const exported = [...fetched.values()];
+			if (exported.length === 0) {
+				toast.error('No conversations to export');
+				return;
+			}
+
+			this.downloadConversationsArchive(exported);
+
+			toast.success(
+				exported.length === 1
+					? 'Conversation exported'
+					: `${exported.length} conversations exported`
+			);
+		} catch (error) {
+			console.error('Failed to bulk export conversations:', error);
+			toast.error('Failed to export conversations');
+		}
+	}
+
+	/**
 	 *
 	 *
 	 * Message Management
@@ -485,38 +590,6 @@ class ConversationsStore {
 	}
 
 	/**
-	 * Updates conversation title with optional confirmation dialog based on settings
-	 * @param convId - The conversation ID to update
-	 * @param newTitle - The new title content
-	 * @returns True if title was updated, false if cancelled
-	 */
-	async updateConversationTitleWithConfirmation(
-		convId: string,
-		newTitle: string
-	): Promise<boolean> {
-		try {
-			const currentConfig = config();
-
-			if (currentConfig.askForTitleConfirmation && this.titleUpdateConfirmationCallback) {
-				const conversation = await DatabaseService.getConversation(convId);
-				if (!conversation) return false;
-
-				const shouldUpdate = await this.titleUpdateConfirmationCallback(
-					conversation.name,
-					newTitle
-				);
-				if (!shouldUpdate) return false;
-			}
-
-			await this.updateConversationName(convId, newTitle);
-			return true;
-		} catch (error) {
-			console.error('Failed to update conversation title with confirmation:', error);
-			return false;
-		}
-	}
-
-	/**
 	 * Updates conversation lastModified timestamp and moves it to top of list
 	 */
 	updateConversationTimestamp(): void {
@@ -581,7 +654,7 @@ class ConversationsStore {
 					newFirstUserMessage.id !== currentFirstUserMessage.id ||
 					newFirstUserMessage.content.trim() !== currentFirstUserMessage.content.trim())
 			) {
-				await this.updateConversationTitleWithConfirmation(
+				await this.updateConversationName(
 					this.activeConversation.id,
 					generateConversationTitle(
 						newFirstUserMessage.content,
@@ -1162,6 +1235,10 @@ export const isConversationsInitialized = () => conversationsStore.isInitialized
 /**
  * Builds a flat tree of conversations with depth levels for nested forks.
  * Accepts a pre-filtered list so search filtering stays in the component.
+ *
+ * Output order matches the sidebar render exactly: pinned first, then
+ * unpinned by lastModified desc, with forks interleaved under their parents.
+ * Range-select / marquee in the sidebar rely on this alignment.
  */
 
 // Pinned conversations first, then by lastModified descending

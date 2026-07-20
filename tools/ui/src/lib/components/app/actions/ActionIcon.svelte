@@ -66,7 +66,14 @@
 		<Tooltip.Trigger>
 			<!-- prevent another nested button element -->
 			{#snippet child({ props })}
-				{@render button(props)}
+				{#if disabled}
+					<!-- disabled buttons have pointer-events:none; wrap in a span so the tooltip hover surface stays alive -->
+					<span {...props}>
+						{@render button({})}
+					</span>
+				{:else}
+					{@render button(props)}
+				{/if}
 			{/snippet}
 		</Tooltip.Trigger>
 
