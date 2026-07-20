@@ -693,7 +693,7 @@ jobs:
       matrix:
         include:
           - arch: 'x64'
-            openmp_dll: 'C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Redist\MSVC\14.51.36231\debug_nonredist\x64\Microsoft.VC145.OpenMP.LLVM\libomp140.x86_64.dll'
+            openmp_dll: 'C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\Llvm\x64\bin\libomp.dll'
           - arch: 'arm64'
             openmp_dll: 'C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\Llvm\ARM64\bin\libomp.dll'
 
