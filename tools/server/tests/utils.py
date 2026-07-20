@@ -116,6 +116,10 @@ class ServerProcess:
     gcp_compat: bool = False
     server_tools: str | None = None
     cors_origins: str | None = None
+    devices: str | None = None
+    rpc_servers: str | None = None
+    prefill_devices: List[str] | None = None
+    prefill_min_tokens: int | None = None
 
     # session variables
     process: subprocess.Popen | None = None
@@ -174,6 +178,10 @@ class ServerProcess:
             server_args.extend(["--models-preset", self.models_preset])
         if self.cors_origins:
             server_args.extend(["--cors-origins", self.cors_origins])
+        if self.rpc_servers:
+            server_args.extend(["--rpc", self.rpc_servers])
+        if self.devices:
+            server_args.extend(["--device", self.devices])
         if self.n_batch:
             server_args.extend(["--batch-size", self.n_batch])
         if self.n_ubatch:
@@ -182,6 +190,10 @@ class ServerProcess:
             server_args.extend(["--threads", self.n_threads])
         if self.n_gpu_layer:
             server_args.extend(["--n-gpu-layers", self.n_gpu_layer])
+        if self.prefill_devices:
+            server_args.extend(["--prefill-device", ";".join(self.prefill_devices)])
+        if self.prefill_min_tokens is not None:
+            server_args.extend(["--prefill-min-tokens", self.prefill_min_tokens])
         if self.server_continuous_batching:
             server_args.append("--cont-batching")
         if self.server_embeddings:

@@ -2480,6 +2480,27 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_DEVICE"));
     add_opt(common_arg(
+        {"--prefill-device"}, "<dev1,dev2;dev3,dev4;..>",
+        "semicolon-separated device groups for disaggregated prefill contexts\n"
+        "use --list-devices to see a list of available devices",
+        [](common_params & params, const std::string & value) {
+            params.devices_prefill.clear();
+            for (const auto & group : string_split<std::string>(value, ';')) {
+                params.devices_prefill.push_back(parse_device_list(group));
+            }
+        }
+    ).set_env("LLAMA_ARG_PREFILL_DEVICE").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--prefill-min-tokens"}, "N",
+        "minimum uncached prefix length for disaggregated prefill (default: 0)",
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("prefill-min-tokens must be non-negative");
+            }
+            params.n_prefill_min = value;
+        }
+    ).set_env("LLAMA_ARG_PREFILL_MIN_TOKENS").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"--list-devices"},
         "print list of available devices and exit",
         [](common_params &) {

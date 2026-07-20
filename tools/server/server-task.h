@@ -7,6 +7,7 @@
 #include <unordered_set>
 #include <list>
 #include <map>
+#include <memory>
 
 // TODO: prevent including the whole server-common.h as we only use server_tokens
 #include "server-common.h"
@@ -133,6 +134,8 @@ struct task_result_state {
         bool filter_tool_calls = false);
 };
 
+struct server_prompt_cache_state;
+
 struct server_task {
     int id = -1; // to be filled by server_queue
 
@@ -152,6 +155,16 @@ struct server_task {
     // used by SERVER_TASK_TYPE_INFERENCE
     task_params   params;
     server_tokens tokens;
+
+    // internal state used while a completion is delegated to a prefill context
+    bool prefill_attempted = false;
+    bool prefill_cancelled = false;
+    int32_t n_prefilled = 0;
+    int64_t t_prefill_start_us = 0;
+    int64_t t_prefill_us = 0;
+    size_t prefill_bytes = 0;
+    std::string prefill_error;
+    std::shared_ptr<server_prompt_cache_state> prefill_state;
 
     // only used by CLI, this allow tokenizing CLI inputs on server side
     // we need this because mtmd_context and vocab are not accessible outside of server_context
@@ -615,12 +628,23 @@ struct server_prompt_data {
     }
 };
 
+struct server_prompt_state_chunk {
+    llama_pos p0 = -1;
+    llama_pos p1 = -1;
+    std::vector<uint8_t> data;
+};
+
 struct server_prompt_cache_state {
     server_prompt prompt;
     server_prompt_data data;
+    std::vector<server_prompt_state_chunk> chunks;
 
     size_t size() const {
         size_t res = data.size();
+
+        for (const auto & chunk : chunks) {
+            res += chunk.data.size();
+        }
 
         for (const auto & ckpt : prompt.checkpoints) {
             res += ckpt.size();
@@ -628,6 +652,8 @@ struct server_prompt_cache_state {
 
         return res;
     }
+
+    bool load(server_prompt & prompt, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot);
 };
 
 struct server_prompt_cache {

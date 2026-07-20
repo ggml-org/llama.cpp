@@ -12,6 +12,7 @@
 #include "llama-ext.h"
 #include "llama.h"
 
+#include <algorithm>
 #include <cinttypes>
 #include <cmath>
 #include <cstring>
@@ -2520,15 +2521,45 @@ private:
     size_t size_written = 0;
 };
 
+static ggml_backend_t llama_io_backend_for(
+        const std::vector<ggml_backend_ptr> * backends, const ggml_tensor * tensor) {
+    if (backends == nullptr || tensor->buffer == nullptr) {
+        return nullptr;
+    }
+    ggml_backend_dev_t dev = ggml_backend_buft_get_device(ggml_backend_buffer_get_type(tensor->buffer));
+    if (dev == nullptr) {
+        return nullptr;
+    }
+    for (const auto & backend : *backends) {
+        if (ggml_backend_get_device(backend.get()) == dev) {
+            return backend.get();
+        }
+    }
+    return nullptr;
+}
+
 class llama_io_write_host : public llama_io_write_i {
 public:
     llama_io_write_host(
-            uint8_t * p, size_t len) : ptr(p), buf_size(len) {}
+            uint8_t * p, size_t len,
+            const std::vector<ggml_backend_ptr> * backends = nullptr) :
+        ptr(p), buf_size(len), backends(backends) {}
 
     ~llama_io_write_host() {
-        // TODO: add backend support to batch tensor_get? or some other way to speed this up
+        std::vector<ggml_backend_t> used;
         for (const auto & winfo : winfos) {
-            ggml_backend_tensor_get(winfo.tensor, winfo.ptr, winfo.offset, winfo.size);
+            ggml_backend_t backend = llama_io_backend_for(backends, winfo.tensor);
+            if (backend == nullptr) {
+                ggml_backend_tensor_get(winfo.tensor, winfo.ptr, winfo.offset, winfo.size);
+                continue;
+            }
+            ggml_backend_tensor_get_async(backend, winfo.tensor, winfo.ptr, winfo.offset, winfo.size);
+            if (std::find(used.begin(), used.end(), backend) == used.end()) {
+                used.push_back(backend);
+            }
+        }
+        for (ggml_backend_t backend : used) {
+            ggml_backend_synchronize(backend);
         }
     }
 
@@ -2571,6 +2602,7 @@ private:
         size_t offset;
     };
     std::vector<write_info> winfos;
+    const std::vector<ggml_backend_ptr> * backends = nullptr;
 };
 
 class llama_io_read_host : public llama_io_read_i {
@@ -2928,39 +2960,43 @@ size_t llama_context::state_set_data(const uint8_t * src, size_t size) {
 
 static constexpr uint32_t io_magic = 0xaf143cd8;
 
-size_t llama_context::state_seq_get_size(llama_seq_id seq_id, llama_state_seq_flags flags) {
+size_t llama_context::state_seq_get_size(llama_seq_id seq_id, llama_state_seq_flags flags, llama_pos p0, llama_pos p1) {
     llama_io_write_dummy io(flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE);
     try {
         io.write(&io_magic, sizeof(io_magic));
         io.write(&seq_id, sizeof(seq_id));
 
-        return state_seq_write_data(io, seq_id, flags);
+        return state_seq_write_data(io, seq_id, flags, p0, p1);
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: error getting state size: %s\n", __func__, err.what());
         return 0;
     }
 }
 
-size_t llama_context::state_seq_get_data(llama_seq_id seq_id, uint8_t * dst, size_t size, llama_state_seq_flags flags) {
+bool llama_context::state_seq_supports_position_ranges() const {
+    return memory && memory->state_supports_position_ranges();
+}
+
+size_t llama_context::state_seq_get_data(llama_seq_id seq_id, uint8_t * dst, size_t size, llama_state_seq_flags flags, llama_pos p0, llama_pos p1) {
     std::unique_ptr<llama_io_write_i> io;
     if (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE) {
         io = std::make_unique<llama_io_write_device>(dst, size, mem_storage[seq_id]);
     } else {
-        io = std::make_unique<llama_io_write_host>(dst, size);
+        io = std::make_unique<llama_io_write_host>(dst, size, &backends);
     }
 
     try {
         io->write(&io_magic, sizeof(io_magic));
         io->write(&seq_id, sizeof(seq_id));
 
-        return state_seq_write_data(*io, seq_id, flags);
+        return state_seq_write_data(*io, seq_id, flags, p0, p1);
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: error saving state: %s\n", __func__, err.what());
         return 0;
     }
 }
 
-size_t llama_context::state_seq_set_data(llama_seq_id seq_id, const uint8_t * src, size_t size, llama_state_seq_flags flags) {
+size_t llama_context::state_seq_set_data(llama_seq_id seq_id, const uint8_t * src, size_t size, llama_state_seq_flags flags, llama_pos p0, llama_pos p1) {
     std::unique_ptr<llama_io_read_i> io;
     if (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE) {
         // create a temporary io to read the magic and the src seq_id
@@ -2992,7 +3028,7 @@ size_t llama_context::state_seq_set_data(llama_seq_id seq_id, const uint8_t * sr
         llama_seq_id seq_id_read;
         io->read(&seq_id_read, sizeof(seq_id_read));
 
-        return state_seq_read_data(*io, seq_id, flags);
+        return state_seq_read_data(*io, seq_id, flags, p0, p1);
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: error loading state: %s\n", __func__, err.what());
         return 0;
@@ -3168,21 +3204,21 @@ size_t llama_context::state_read_data(llama_io_read_i & io) {
     return io.n_bytes();
 }
 
-size_t llama_context::state_seq_write_data(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
+size_t llama_context::state_seq_write_data(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags, llama_pos p0, llama_pos p1) {
     GGML_UNUSED(seq_id);
 
     if (memory) {
-        memory->state_write(io, seq_id, flags);
+        memory->state_write(io, seq_id, flags, p0, p1);
     }
 
     return io.n_bytes();
 }
 
-size_t llama_context::state_seq_read_data(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
+size_t llama_context::state_seq_read_data(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags, llama_pos p0, llama_pos p1) {
     GGML_UNUSED(seq_id);
 
     if (memory) {
-        memory->state_read(io, seq_id, flags);
+        memory->state_read(io, seq_id, flags, p0, p1);
     }
 
     return io.n_bytes();
@@ -4031,6 +4067,27 @@ size_t llama_state_seq_set_data_ext(llama_context * ctx, const uint8_t * src, si
     ctx->synchronize();
 
     return ctx->state_seq_set_data(seq_id, src, size, flags);
+}
+
+size_t llama_state_seq_get_size_range(llama_context * ctx, llama_seq_id seq_id, llama_state_seq_flags flags, llama_pos p0, llama_pos p1) {
+    GGML_ASSERT(seq_id >= 0);
+    return ctx->state_seq_get_size(seq_id, flags, p0, p1);
+}
+
+bool llama_state_seq_supports_position_ranges(const llama_context * ctx) {
+    return ctx->state_seq_supports_position_ranges();
+}
+
+size_t llama_state_seq_get_data_range(llama_context * ctx, uint8_t * dst, size_t size, llama_seq_id seq_id, llama_state_seq_flags flags, llama_pos p0, llama_pos p1) {
+    GGML_ASSERT(seq_id >= 0);
+    ctx->synchronize();
+    return ctx->state_seq_get_data(seq_id, dst, size, flags, p0, p1);
+}
+
+size_t llama_state_seq_set_data_range(llama_context * ctx, const uint8_t * src, size_t size, llama_seq_id seq_id, llama_state_seq_flags flags, llama_pos p0, llama_pos p1) {
+    GGML_ASSERT(seq_id >= 0);
+    ctx->synchronize();
+    return ctx->state_seq_set_data(seq_id, src, size, flags, p0, p1);
 }
 
 size_t llama_state_seq_save_file(llama_context * ctx, const char * filepath, llama_seq_id seq_id, const llama_token * tokens, size_t n_token_count) {
