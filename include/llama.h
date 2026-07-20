@@ -366,6 +366,29 @@ extern "C" {
         ggml_backend_sched_eval_callback cb_eval;
         void * cb_eval_user_data;
 
+        // number of hottest MoE experts to mlock per layer (total slots = N x
+        // num_moe_layers), ranked GLOBALLY across all layers inside their
+        // existing host-memory weight tensors, based on observed router usage
+        // (0 = disabled). No effect on experts offloaded to a non-host buffer.
+        // incompatible with a caller-supplied cb_eval, since only one eval
+        // callback can be installed at a time (a warning is logged and pinning
+        // is skipped in that case).
+        int32_t n_pin_hotexperts;
+
+        // hard cap, in bytes, on total memory mlock'd by n_pin_hotexperts across
+        // ALL layers combined (0 = unlimited). Because mlock() faults pages into
+        // RAM as part of locking them, leaving this at 0 with a large model/N
+        // can cause the OS to kill the process for memory exhaustion rather than
+        // n_pin_hotexperts simply having no effect -- setting an explicit budget
+        // that leaves headroom for the KV cache and compute buffers is strongly
+        // recommended whenever n_pin_hotexperts > 0.
+        uint64_t n_pin_hotexperts_budget_bytes;
+
+        // print hot-expert pinning stats to stderr every N router observations
+        // (0 = disabled, a final summary is still printed when the context is
+        // destroyed). Bypasses the log callback and writes directly with fprintf.
+        uint64_t n_pin_hotexperts_stats_interval;
+
         enum ggml_type type_k; // data type for K cache [EXPERIMENTAL]
         enum ggml_type type_v; // data type for V cache [EXPERIMENTAL]
 

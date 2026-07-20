@@ -1613,6 +1613,9 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.flash_attn_type   = params.flash_attn_type;
     cparams.cb_eval           = params.cb_eval;
     cparams.cb_eval_user_data = params.cb_eval_user_data;
+    cparams.n_pin_hotexperts  = params.n_pin_hotexperts;
+    cparams.n_pin_hotexperts_budget_bytes = params.n_pin_hotexperts_budget_mib * 1024ull * 1024ull;
+    cparams.n_pin_hotexperts_stats_interval = params.n_pin_hotexperts_stats_interval;
     cparams.offload_kqv       = !params.no_kv_offload;
     cparams.no_perf           = params.no_perf;
     cparams.op_offload        = !params.no_op_offload;
