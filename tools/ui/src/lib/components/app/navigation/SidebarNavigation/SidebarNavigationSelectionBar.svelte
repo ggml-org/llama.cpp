@@ -151,7 +151,9 @@
 	title="Delete {selectedCount} conversation{selectedCount === 1 ? '' : 's'}"
 	description="This action cannot be undone. The selected conversation{selectedCount === 1
 		? ''
-		: 's'} and {selectedCount === 1 ? 'its' : 'their'} messages will be permanently removed."
+		: 's'} and {selectedCount === 1
+		? 'its'
+		: 'their'} messages will be permanently removed, including any forks."
 	confirmText={selectedCount === 1 ? 'Delete' : `Delete ${selectedCount}`}
 	cancelText="Cancel"
 	variant="destructive"

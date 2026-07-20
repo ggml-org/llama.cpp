@@ -75,7 +75,7 @@ const TITLE_GENERATION_RADIO_OPTIONS: Array<{
 	}
 ];
 
-// Common shape shared between the two title-generation registry entries.
+// Common shape for the conversation title radio entry.
 const TITLE_GENERATION_BASE = {
 	type: SettingsFieldType.RADIO,
 	section: SETTINGS_SECTION_SLUGS.GENERAL,
@@ -767,6 +767,17 @@ const NON_UI_SETTINGS: SettingsEntry[] = [
 		defaultValue: '[]',
 		type: SettingsFieldType.INPUT,
 		sync: { serverKey: SETTINGS_KEYS.MCP_SERVERS, paramType: SyncableParameterType.STRING }
+	},
+	{
+		key: SETTINGS_KEYS.TITLE_GENERATION_USE_LLM,
+		label: 'Generate title with LLM',
+		help: 'Counterpart of the conversation title radio; stored and synced without a dedicated UI field.',
+		defaultValue: false,
+		type: SettingsFieldType.CHECKBOX,
+		sync: {
+			serverKey: SETTINGS_KEYS.TITLE_GENERATION_USE_LLM,
+			paramType: SyncableParameterType.BOOLEAN
+		}
 	}
 	// {
 	// 	key: SETTINGS_KEYS.PY_INTERPRETER_ENABLED,

@@ -237,7 +237,10 @@ export class DatabaseService {
 		let newParent = conv.forkedFromConversationId;
 		const visited = new Set<string>([parentId]);
 		while (newParent && excludeIds.has(newParent)) {
-			if (visited.has(newParent)) break;
+			if (visited.has(newParent)) {
+				newParent = undefined;
+				break;
+			}
 			visited.add(newParent);
 			const next =
 				prefetched?.get(newParent) ?? (await db[IDXDB_TABLES.conversations].get(newParent));
