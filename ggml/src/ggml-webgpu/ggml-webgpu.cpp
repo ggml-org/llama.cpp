@@ -3888,12 +3888,10 @@ static size_t ggml_backend_webgpu_buffer_type_get_alignment(ggml_backend_buffer_
     return dev_ctx->webgpu_global_ctx->capabilities.limits.minStorageBufferOffsetAlignment;
 }
 
-// maxBufferSize might be larger, but you can't bind more than
-// maxStorageBufferBindingSize to a single binding.
 static size_t ggml_backend_webgpu_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
     ggml_backend_webgpu_device_context * dev_ctx =
         static_cast<ggml_backend_webgpu_device_context *>(buft->device->context);
-    return dev_ctx->webgpu_global_ctx->capabilities.limits.maxStorageBufferBindingSize;
+    return dev_ctx->webgpu_global_ctx->capabilities.limits.maxBufferSize;
 }
 
 static size_t ggml_backend_webgpu_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft,
