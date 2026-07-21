@@ -142,8 +142,7 @@ static void ggml_webgpu_trace_bind_group_entry(const char * stage, const wgpu::B
 static void * const webgpu_ptr_base = (void *) (uintptr_t) 0x1000;  // NOLINT
 
 static size_t ggml_webgpu_tensor_offset(const ggml_tensor * tensor) {
-    const ggml_tensor * base_tensor = tensor->view_src ? tensor->view_src : tensor;
-    return (size_t) ((uintptr_t) base_tensor->data - (uintptr_t) webgpu_ptr_base) + tensor->view_offs;
+    return (size_t) ((uintptr_t) tensor->data - (uintptr_t) webgpu_ptr_base);
 }
 
 /* Struct definitions */
@@ -411,8 +410,7 @@ static void ggml_webgpu_create_buffer(wgpu::Device &    device,
 }
 
 static wgpu::Buffer ggml_webgpu_tensor_buf(const ggml_tensor * tensor) {
-    const ggml_tensor * base_tensor = tensor->view_src ? tensor->view_src : tensor;
-    ggml_backend_webgpu_buffer_context * ctx = (ggml_backend_webgpu_buffer_context *) base_tensor->buffer->context;
+    ggml_backend_webgpu_buffer_context * ctx = (ggml_backend_webgpu_buffer_context *) tensor->buffer->context;
     return ctx->buffer;
 }
 
