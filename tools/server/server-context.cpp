@@ -4624,6 +4624,23 @@ void server_routes::init_routes() {
         emit_type("k", res_task->kv_cache_type_k);
         emit_type("v", res_task->kv_cache_type_v);
 
+        const std::vector<double> token_bounds = {512,1024,2048,4096,6144,8192,12288,16384,24576,32768,49152,65536,98304,131072,196608,262144};
+        const std::vector<double> ttft_bounds  = {0.05,0.1,0.25,0.5,1,2,4,8,16,32,64};
+        const std::vector<double> gen_bounds   = {0.1,0.25,0.5,1,2,5,10,20,40,80};
+
+        render_histogram(prometheus, "prompt_tokens_size", "Distribution of prompt sizes in tokens.",
+            model_label, token_bounds, res_task->hist_prompt_tokens_buckets,
+            res_task->hist_prompt_tokens_count, res_task->hist_prompt_tokens_sum);
+        render_histogram(prometheus, "context_used_tokens", "Distribution of context used in tokens.",
+            model_label, token_bounds, res_task->hist_context_tokens_buckets,
+            res_task->hist_context_tokens_count, res_task->hist_context_tokens_sum);
+        render_histogram(prometheus, "time_to_first_token_seconds", "Distribution of prompt-eval (TTFT) latency in seconds.",
+            model_label, ttft_bounds, res_task->hist_ttft_buckets,
+            res_task->hist_ttft_count, res_task->hist_ttft_sum);
+        render_histogram(prometheus, "generation_latency_seconds", "Distribution of generation latency in seconds.",
+            model_label, gen_bounds, res_task->hist_gen_latency_buckets,
+            res_task->hist_gen_latency_count, res_task->hist_gen_latency_sum);
+
         res->headers["Process-Start-Time-Unix"] = std::to_string(res_task->t_start);
         res->content_type = "text/plain; version=0.0.4";
         res->status = 200;
