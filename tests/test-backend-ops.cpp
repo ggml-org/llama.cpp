@@ -4104,6 +4104,13 @@ struct test_gated_delta_net : public test_case {
         return VARS_TO_STR9(type, head_count, head_size, n_seq_tokens, n_seqs, v_repeat, permuted, kda, K);
     }
 
+    // Dominant cost: B * H * T * K * V multiply-adds, counted twice (mul + add).
+    // K = head_size, V = head_size * v_repeat.
+    uint64_t op_flops(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return (uint64_t)2 * n_seqs * head_count * n_seq_tokens * head_size * head_size * v_repeat;
+    }
+
     test_gated_delta_net(ggml_type type = GGML_TYPE_F32,
             int64_t head_count = 4, int64_t head_size = 16, int64_t n_seq_tokens = 1, int64_t n_seqs = 1,
             int v_repeat = 1, bool permuted = false, bool kda = false, int64_t K = 1)
@@ -4154,6 +4161,11 @@ struct test_gated_delta_net : public test_case {
                 init_tensor_uniform(t);
             }
         }
+    }
+
+    double max_nmse_err() override {
+        // Allow for the mixed bf16/fp16 Chunked BF16 CUDA kernel used by eligible cases.
+        return 5e-6;
     }
 };
 
@@ -9621,7 +9633,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 8, 32, 4, 2, 2, false, true));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64, 4, 2, 1, true,  true));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 16, 4, 2, 1, true,  true));
-    // chunked path: multi-chunk and non-multiple-of-chunk-size (chunk_size=64 GDN, 16 KDA)
+    // Recurrent path: multi-chunk and non-multiple-of-chunk-size (chunk_size=64 GDN, 16 KDA)
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64,  64, 1));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64, 127, 1));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64, 256, 1));
@@ -9632,6 +9644,23 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64,  64, 1, 1, false, true));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64,  33, 1, 1, false, true));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 64, 100, 1, 1, false, true));
+    // Chunked GDN BF16 path requires: K_dim==V_dim==128, !kda, K==1, n_tokens>=128 and %16==0,
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 8, 128, 128, 1));   // CHUNKED: K=V=128, T=128
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 512, 1));  // CHUNKED: H=32 K=V=128 T=512
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 2048, 1)); // CHUNKED multi-chunk
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128,  256, 4)); // CHUNKED batch=4
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32,  4, 128,  256, 4)); // CHUNKED low-head batch=4
+    // GQA chunked (v_repeat>1)
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 16, 128, 256, 1, /*v_repeat=*/2)); // 2x GQA (Qwen 3.6 35B-like)
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 16, 128, 512, 1, /*v_repeat=*/3)); // 3x GQA (Qwen 3.6 27B-like)
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 16, 128, 256, 4, /*v_repeat=*/2)); // 2x GQA batch=4
+    // Non-multiple-of-16 token
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 129, 1));                 // CHUNKED, 1 token in last chunk
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 143, 1));                 // CHUNKED, 15 tokens in last chunk
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 200, 1));                 // CHUNKED, T%16!=0
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 16, 128, 200, 1, /*v_repeat=*/2)); // CHUNKED 2x GQA, T%16!=0
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 16, 128, 143, 1, /*v_repeat=*/3)); // CHUNKED 3x GQA, partial chunk
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 300, 4));                 // CHUNKED batch=4, T%16!=0
 
     // K > 1: output keeps the last min(n_tokens, K) per-token snapshots, ordered most-recent-first
     // (slot 0 = final state, slot s = state s tokens back).
@@ -9996,6 +10025,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 128, 512, 1));  // 4h PP-512
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 128, 1024, 1)); // 4h PP-1024
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 64, 1, 1, false, true)); // KDA PP-64
+    // New: long-PP and B=4 (model-relevant; keep minimal)
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 2048, 1)); // PP-2048
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 4096, 1)); // PP-4096
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 2048, 4)); // B4 PP-2048
+    test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 4096, 4)); // B4 PP-4096
+
 
     // lightning_indexer
     for (int kv : { 256, 4096, 65536 }) {
