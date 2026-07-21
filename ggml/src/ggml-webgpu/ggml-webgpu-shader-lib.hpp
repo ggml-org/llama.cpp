@@ -65,7 +65,8 @@ template <typename T> inline void ggml_webgpu_hash_combine(size_t & seed, const 
 
 // Calculates base address of a tensor ignoring the fake base pointer
 inline uintptr_t ggml_webgpu_tensor_addr(const ggml_tensor * tensor) {
-    return (uintptr_t) tensor->data;
+    const ggml_tensor * base_tensor = tensor->view_src ? tensor->view_src : tensor;
+    return (uintptr_t) base_tensor->data + tensor->view_offs;
 }
 
 inline bool ggml_webgpu_tensor_equal(const ggml_tensor * a, const ggml_tensor * b) {
