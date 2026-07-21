@@ -388,10 +388,6 @@ static size_t ggml_webgpu_tensor_binding_size(webgpu_context & ctx, ggml_tensor 
     return ROUNDUP_POW2(ggml_nbytes(t) + ggml_webgpu_tensor_misalignment(ctx, t), WEBGPU_STORAGE_BUF_BINDING_MULT);
 }
 
-static wgpu::BindGroupEntry ggml_webgpu_make_tensor_bind_group_entry(webgpu_context & ctx,
-                                                                     uint32_t         binding,
-                                                                     ggml_tensor *    tensor);
-
 static bool ggml_webgpu_tensor_binding_overlap(webgpu_context & ctx, ggml_tensor * a, ggml_tensor * b) {
     if (ggml_webgpu_tensor_buf(a).Get() != ggml_webgpu_tensor_buf(b).Get()) {
         return false;
