@@ -13,12 +13,6 @@
 #ifndef GGML_SYCL_ESIMD_HPP
 #define GGML_SYCL_ESIMD_HPP
 
-#if defined(GGML_SYCL_ESIMD)
-
-#if !defined(__INTEL_LLVM_COMPILER)
-    #error "GGML_SYCL_ESIMD requires the Intel oneAPI (DPC++) compiler"
-#endif
-
 #include <sycl/ext/intel/esimd.hpp>
 
 #include "common.hpp"
@@ -263,7 +257,5 @@ template <> struct esimd_reorder_q_traits<GGML_TYPE_Q6_K> {
 };
 
 } // namespace ggml_sycl_esimd
-
-#endif // GGML_SYCL_ESIMD
 
 #endif // GGML_SYCL_ESIMD_HPP

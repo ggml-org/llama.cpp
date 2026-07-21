@@ -8,14 +8,9 @@
         #include <sycl/ext/oneapi/bfloat16.hpp>
         #define GGML_SYCL_DMMV_HAS_BF16
     #endif
-#endif
-
-#if defined(GGML_SYCL_ESIMD)
-    #if !defined(__INTEL_LLVM_COMPILER)
-        #error "GGML_SYCL_ESIMD requires the Intel oneAPI (DPC++) compiler"
-    #endif
     #include <sycl/ext/intel/esimd.hpp>
     #include "esimd.hpp"
+    #define GGML_SYCL_DMMV_HAS_ESIMD
 #endif
 
 static void convert_f16(const void * vx, const int64_t ib, const int iqs, dfloat2 & v){
@@ -1863,7 +1858,7 @@ static void dequantize_mul_mat_vec_q6_K_sycl(const void *vx, const float *y,
         });
 }
 
-#ifdef GGML_SYCL_ESIMD
+#ifdef GGML_SYCL_DMMV_HAS_ESIMD
 using ggml_sycl_esimd::GGML_SYCL_DMMV_ESIMD_WG_SIZE;
 
 // generic reordered dequantize-matvec: each work-group owns a pair of
@@ -1951,7 +1946,7 @@ static void dequantize_mul_mat_vec_q6_K_sycl_reorder_esimd(const void *vx, const
     });
 }
 
-#endif // GGML_SYCL_ESIMD
+#endif // GGML_SYCL_DMMV_HAS_ESIMD
 
 static void dequantize_mul_mat_vec_q4_K_sycl_reorder(const void *vx, const float *y,
                                                      float *dst, const int ncols,
@@ -2089,11 +2084,15 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
         case GGML_TYPE_Q4_K:
             if ((ggml_tensor_extra_gpu *) dst->src[0]->extra &&
                 ((ggml_tensor_extra_gpu *) dst->src[0]->extra)->optimized_feature.reorder) {
-#ifdef GGML_SYCL_ESIMD
-                dequantize_mul_mat_vec_q4_K_sycl_reorder_esimd(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
-#else
-                dequantize_mul_mat_vec_q4_K_sycl_reorder(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+#ifdef GGML_SYCL_DMMV_HAS_ESIMD
+                if (g_ggml_sycl_enable_esimd) {
+                    dequantize_mul_mat_vec_q4_K_sycl_reorder_esimd(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+                }
+                else
 #endif
+                {
+                    dequantize_mul_mat_vec_q4_K_sycl_reorder(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+                }
             } else {
                 dequantize_mul_mat_vec_q4_K_sycl(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
             }
@@ -2109,11 +2108,15 @@ void ggml_sycl_op_dequantize_mul_mat_vec(
         case GGML_TYPE_Q6_K:
             if ((ggml_tensor_extra_gpu *) dst->src[0]->extra &&
                 ((ggml_tensor_extra_gpu *) dst->src[0]->extra)->optimized_feature.reorder) {
-#ifdef GGML_SYCL_ESIMD
-                dequantize_mul_mat_vec_q6_K_sycl_reorder_esimd(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
-#else
-                dequantize_mul_mat_vec_q6_K_sycl_reorder(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+#ifdef GGML_SYCL_DMMV_HAS_ESIMD
+                if (g_ggml_sycl_enable_esimd) {
+                    dequantize_mul_mat_vec_q6_K_sycl_reorder_esimd(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+                }
+                else
 #endif
+                {
+                    dequantize_mul_mat_vec_q6_K_sycl_reorder(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
+                }
             } else {
                 dequantize_mul_mat_vec_q6_K_sycl(src0_dd_i, src1_ddf_i, dst_dd_i, ne00, row_diff, stream);
             }
