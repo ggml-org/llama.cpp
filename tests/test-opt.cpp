@@ -967,7 +967,6 @@ int main(void) {
                     case GGML_OPT_OPTIMIZER_TYPE_ADAMW_Q6_K:
                     case GGML_OPT_OPTIMIZER_TYPE_ADAMW_IQ4_NL:
                         GGML_ABORT("quantized optimizers do not use a backend optimizer op");
-                        break;
                     case GGML_OPT_OPTIMIZER_TYPE_COUNT: {
                         GGML_ABORT("fatal error");
                     }
