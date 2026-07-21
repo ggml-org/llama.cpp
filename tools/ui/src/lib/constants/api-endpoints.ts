@@ -3,7 +3,8 @@ export const API_MODELS = {
 	LOAD: '/models/load',
 	UNLOAD: '/models/unload',
 	SSE: '/models/sse',
-	DOWNLOAD: '/models'
+	DOWNLOAD: '/models',
+	DELETE: '/models'
 };
 
 // chat completion routes, the control route drives realtime inference (e.g. end reasoning)

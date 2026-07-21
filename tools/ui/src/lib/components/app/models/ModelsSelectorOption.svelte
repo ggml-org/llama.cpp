@@ -2,15 +2,19 @@
 	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import {
 		CircleAlert,
+		ExternalLink,
 		Heart,
 		HeartOff,
 		Info,
 		Loader2,
 		Power,
 		PowerOff,
-		RotateCw
+		RotateCw,
+		Trash2
 	} from '@lucide/svelte';
-	import { ActionIcon, ModelId } from '$lib/components/app';
+	import { goto } from '$app/navigation';
+	import { DialogConfirmation, ActionIcon, ModelId } from '$lib/components/app';
+	import { RouterService } from '$lib/services/router.service';
 	import ModelLoadHighlight from './ModelLoadHighlight.svelte';
 	import type { ModelOption } from '$lib/types/models';
 	import { ServerModelStatus } from '$lib/enums';
@@ -57,6 +61,13 @@
 	let loadProgress = $derived(isLoading ? modelsStore.getLoadProgress(option.model) : null);
 	let loadPercent = $derived(Math.round(modelLoadFraction(loadProgress) * 100));
 	let loadTitle = $derived(modelLoadProgressText(loadProgress));
+
+	let showDeleteConfirm = $state(false);
+	let modelDisplayName = $derived(option.name || option.model);
+	async function handleConfirmDelete() {
+		showDeleteConfirm = false;
+		await modelsStore.cancelDownload(option.model);
+	}
 </script>
 
 <div
@@ -118,6 +129,27 @@
 					onclick={() => onInfoClick(option.model)}
 				/>
 			{/if}
+
+			<!-- open the model's catalog page in the Model Hub (tag stripped) -->
+			<ActionIcon
+				iconSize="h-2.5 w-2.5"
+				icon={ExternalLink}
+				tooltip="Open in Model Hub"
+				class="h-3 w-3 hover:text-foreground"
+				onclick={() => {
+					const url = RouterService.fromModelId(option.model);
+					void goto(url);
+				}}
+			/>
+
+			<!-- delete this model from cache: server stashes partial + cached files via DELETE /models -->
+			<ActionIcon
+				iconSize="h-2.5 w-2.5"
+				icon={Trash2}
+				tooltip="Delete model"
+				class="h-3 w-3 hover:text-foreground"
+				onclick={() => (showDeleteConfirm = true)}
+			/>
 		</div>
 
 		{#if isLoading}
@@ -201,3 +233,17 @@
 		<ModelLoadHighlight percent={loadPercent} />
 	{/if}
 </div>
+
+<DialogConfirmation
+	bind:open={showDeleteConfirm}
+	title="Delete model"
+	description={isLoaded
+		? `Delete "${modelDisplayName}" from your cache? The model is currently loaded and will be stopped first.`
+		: `Delete "${modelDisplayName}" from your cache? Any partial or cached files will be removed from disk.`}
+	confirmText="Delete"
+	cancelText="Cancel"
+	variant="destructive"
+	icon={Trash2}
+	onConfirm={handleConfirmDelete}
+	onCancel={() => (showDeleteConfirm = false)}
+/>

@@ -33,8 +33,81 @@ export const HF_TASKS: Record<string, string> = {
 	'fill-mask': 'Fill Mask',
 	'automatic-speech-recognition': 'Speech Recognition',
 	'text-to-speech': 'Text to Speech',
-	'sentence-similarity': 'Sentence Similarity'
+	'sentence-similarity': 'Sentence Similarity',
+	'image-text-to-text': 'Image-Text-to-Text',
+	'image-to-text': 'Image-to-Text',
+	'text-to-image': 'Text-to-Image',
+	'text-to-video': 'Text-to-Video',
+	'image-to-video': 'Image-to-Video',
+	'video-to-video': 'Video-to-Video',
+	'feature-extraction': 'Feature Extraction',
+	'token-classification': 'Token Classification',
+	'text-classification': 'Text Classification',
+	'zero-shot-classification': 'Zero-Shot Classification',
+	translation: 'Translation',
+	summarization: 'Summarization',
+	'question-answering': 'Question Answering',
+	'image-classification': 'Image Classification',
+	'image-segmentation': 'Image Segmentation',
+	'object-detection': 'Object Detection',
+	'depth-estimation': 'Depth Estimation',
+	'image-feature-extraction': 'Image Feature Extraction',
+	'audio-classification': 'Audio Classification',
+	'audio-to-audio': 'Audio-to-Audio',
+	'voice-activity-detection': 'Voice Activity Detection',
+	'reinforcement-learning': 'Reinforcement Learning',
+	robotics: 'Robotics'
 };
+
+/**
+ * Best-effort readable label for an HF pipeline tag. Falls back to a
+ * title-cased version of the kebab-case `pipeline_tag` (e.g. `image-text-to-text`
+ * becomes `Image-Text-to-Text`) when we don't have an explicit entry above.
+ */
+function pipelineTagLabel(tag: string): string {
+	if (HF_TASKS[tag]) return HF_TASKS[tag];
+	return tag
+		.split('-')
+		.map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
+		.join('-');
+}
+
+/**
+ * Lucide icon name (string identifier, used to lazy-import the Svelte component)
+ * matching the HF pipeline_tag. Used for the filter chips on the model browser.
+ * Returns `null` for unknown tags so the consumer can render a generic icon.
+ */
+const HF_PIPELINE_ICONS: Record<string, string> = {
+	'text-generation': 'message-square',
+	conversational: 'message-circle',
+	'text2text-generation': 'message-square-more',
+	'fill-mask': 'replace',
+	summarization: 'list-collapse',
+	translation: 'languages',
+	'question-answering': 'help-circle',
+	'sentence-similarity': 'equal',
+	'feature-extraction': 'hash',
+	'image-text-to-text': 'image-plus',
+	'image-to-text': 'image',
+	'text-to-image': 'image',
+	'text-to-video': 'video',
+	'image-to-video': 'video',
+	'video-to-video': 'video',
+	'image-classification': 'image',
+	'image-segmentation': 'image',
+	'object-detection': 'scan',
+	'depth-estimation': 'layers',
+	'image-feature-extraction': 'image',
+	'automatic-speech-recognition': 'mic',
+	'text-to-speech': 'volume-2',
+	'audio-classification': 'mic',
+	'audio-to-audio': 'audio-lines',
+	'voice-activity-detection': 'mic'
+};
+
+function pipelineTagIcon(tag: string): string | null {
+	return HF_PIPELINE_ICONS[tag] ?? null;
+}
 
 export const HF_LIBRARIES: Record<string, string> = {
 	transformers: 'Transformers',
@@ -59,6 +132,18 @@ export class HuggingFaceService {
 
 	/** Available pipeline tasks with display labels */
 	static readonly TASKS: Record<string, string> = HF_TASKS;
+
+	/** Resolve a pipeline_tag to a human-readable label. */
+	static pipelineTagLabel(tag: string | null | undefined): string | null {
+		if (!tag) return null;
+		return pipelineTagLabel(tag);
+	}
+
+	/** Resolve a pipeline_tag to a lucide icon name, or null when unknown. */
+	static pipelineTagIcon(tag: string | null | undefined): string | null {
+		if (!tag) return null;
+		return pipelineTagIcon(tag);
+	}
 
 	/** Available library names with display labels */
 	static readonly LIBRARIES: Record<string, string> = HF_LIBRARIES;

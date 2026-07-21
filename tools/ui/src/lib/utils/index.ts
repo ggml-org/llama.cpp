@@ -9,7 +9,13 @@
 
 // API utilities
 export { getAuthHeaders, getJsonHeaders, sanitizeHeaders } from './api-headers';
-export { apiFetch, apiFetchWithParams, apiPost, type ApiFetchOptions } from './api-fetch';
+export {
+	apiDelete,
+	apiFetch,
+	apiFetchWithParams,
+	apiPost,
+	type ApiFetchOptions
+} from './api-fetch';
 export { validateApiKey } from './api-key-validation';
 
 // Attachment utilities
