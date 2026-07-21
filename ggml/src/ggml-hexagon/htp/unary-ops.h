@@ -51,6 +51,8 @@ static inline bool htp_op_is_unary(uint32_t opcode) {
         case HTP_OP_UNARY_NEG:
         case HTP_OP_UNARY_EXP:
         case HTP_OP_UNARY_SIGMOID:
+        case HTP_OP_UNARY_SILU:
+        case HTP_OP_UNARY_GELU:
         case HTP_OP_UNARY_SOFTPLUS:
         case HTP_OP_UNARY_TANH:
         case HTP_OP_L2_NORM:
