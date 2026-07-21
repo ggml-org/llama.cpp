@@ -4336,6 +4336,10 @@ static bool ggml_backend_buffer_is_webgpu(ggml_backend_buffer_t buffer) {
     return buffer != nullptr && buffer->buft->iface.get_name == ggml_backend_webgpu_buffer_type_get_name;
 }
 
+static ggml_backend_buffer_t ggml_webgpu_tensor_buffer(const ggml_tensor * tensor) {
+    return tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+}
+
 static bool ggml_webgpu_supported_qtype(ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q1_0:
@@ -4421,8 +4425,11 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
             supports_op = ((op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_Q8_0 ||
                             op->type == GGML_TYPE_Q4_0) &&
                            src0->type == GGML_TYPE_F32 && (src1->type == GGML_TYPE_I64 || src1->type == GGML_TYPE_I32));
-            if (supports_op && op->buffer != nullptr && !ggml_backend_buffer_is_webgpu(op->buffer)) {
-                supports_op = false;
+            if (supports_op) {
+                ggml_backend_buffer_t op_buffer = ggml_webgpu_tensor_buffer(op);
+                if (op_buffer != nullptr && !ggml_backend_buffer_is_webgpu(op_buffer)) {
+                    supports_op = false;
+                }
             }
             break;
         case GGML_OP_GET_ROWS:
