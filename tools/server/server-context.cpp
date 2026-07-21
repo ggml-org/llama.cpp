@@ -4529,6 +4529,8 @@ void server_routes::init_routes() {
         // cache-type series: value is always 1; the type is carried as a label so
         // Grafana can display which quantization is live per model. model_label is
         // "{model=\"...\"}" — splice the cache/type labels in before the closing brace.
+        prometheus << "# HELP llamacpp:kv_cache_type Live KV cache quantization type (value is always 1).\n"
+                   << "# TYPE llamacpp:kv_cache_type gauge\n";
         auto emit_type = [&](const char * cache, const std::string & type) {
             std::string labels = model_label;
             labels.pop_back(); // drop trailing '}'
@@ -4537,9 +4539,7 @@ void server_routes::init_routes() {
             labels += "\",type=\"";
             labels += type;
             labels += "\"}";
-            prometheus << "# HELP llamacpp:kv_cache_type Live KV cache quantization type (value is always 1).\n"
-                       << "# TYPE llamacpp:kv_cache_type gauge\n"
-                       << "llamacpp:kv_cache_type" << labels << " 1\n";
+            prometheus << "llamacpp:kv_cache_type" << labels << " 1\n";
         };
         emit_type("k", res_task->kv_cache_type_k);
         emit_type("v", res_task->kv_cache_type_v);
