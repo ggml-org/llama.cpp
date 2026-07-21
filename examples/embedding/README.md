@@ -21,6 +21,10 @@ llama-embedding.exe -m ./path/to/model --pooling mean --log-disable -p "Hello Wo
 The above command will output space-separated float values.
 
 ## extra parameters
+### --no-logits-for-embeddings
+
+Skip the vocabulary logits and LM head when extracting embeddings. This reduces compute and host output memory for causal models; backend sampler paths retain the logits graph.
+
 ### --embd-normalize $integer$
 | $integer$ | description         | formula |
 |-----------|---------------------|---------|

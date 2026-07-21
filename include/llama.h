@@ -376,7 +376,7 @@ extern "C" {
         void *              abort_callback_data;
 
         // Keep the booleans together and at the end of the struct to avoid misalignment during copy-by-value.
-        bool embeddings;  // if true, extract embeddings (together with logits)
+        bool embeddings;  // if true, extract embeddings (together with logits by default)
         bool offload_kqv; // offload the KQV ops (including the KV cache) to GPU
         bool no_perf;     // measure performance timings
         bool op_offload;  // offload host tensor operations to device
@@ -386,6 +386,8 @@ extern "C" {
         bool kv_unified;  // use a unified buffer across the input sequences when computing the attention
                           // try to disable when n_seq_max > 1 for improved performance when the sequences do not share a large prefix
                           // ref: https://github.com/ggml-org/llama.cpp/pull/14363
+        bool
+            no_logits_for_embeddings;  // if true, skip logits and the LM head for embeddings in default contexts without backend samplers
 
         // [EXPERIMENTAL]
         // backend sampler chain configuration (make sure the caller keeps the sampler chains alive)
@@ -1007,13 +1009,14 @@ extern "C" {
     // in the order they have appeared in the batch.
     // Rows: number of tokens for which llama_batch.logits[i] != 0
     // Cols: n_vocab
+    // Returns NULL if logits are disabled with llama_context_params.no_logits_for_embeddings.
     // TODO: deprecate in favor of llama_get_logits_ith() (ref: https://github.com/ggml-org/llama.cpp/pull/14853#issuecomment-3113143522)
     LLAMA_API float * llama_get_logits(struct llama_context * ctx);
 
     // Logits for the ith token. For positive indices, Equivalent to:
     // llama_get_logits(ctx) + ctx->output_ids[i]*n_vocab
     // Negative indices can be used to access logits in reverse order, -1 is the last logit.
-    // returns NULL for invalid ids.
+    // returns NULL for invalid ids or when logits are disabled with llama_context_params.no_logits_for_embeddings.
     LLAMA_API float * llama_get_logits_ith(struct llama_context * ctx, int32_t i);
 
     // Get all output token embeddings.

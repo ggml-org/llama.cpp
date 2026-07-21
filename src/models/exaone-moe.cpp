@@ -240,5 +240,5 @@ llama_model_exaone_moe::graph::graph(const llama_model & model, const llm_graph_
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 
-    ggml_build_forward_expand(gf, cur);
+    build_output();
 }

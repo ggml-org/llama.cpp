@@ -218,7 +218,7 @@ llama_model_mellum::graph<iswa>::graph(const llama_model & model, const llm_grap
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 
-    ggml_build_forward_expand(gf, cur);
+    build_output();
 }
 
 template struct llama_model_mellum::graph<false>;

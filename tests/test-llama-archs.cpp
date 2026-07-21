@@ -22,6 +22,10 @@
 #include <utility>
 #include <vector>
 
+static_assert(offsetof(llama_context_params, no_logits_for_embeddings) ==
+                  offsetof(llama_context_params, kv_unified) + sizeof(bool),
+              "new llama_context_params booleans must be appended after existing fields");
+
 // normalized mean squared error = mse(a, b) / mse(a, 0)
 static double nmse(const std::vector<float> & a, const std::vector<float> & b) {
     GGML_ASSERT(a.size() == b.size());
@@ -203,6 +207,10 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,      uint32_t(8));
     ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({n_embd_head/4, n_embd_head/4, n_embd_head/4, n_embd_head/4}));
     ms.add_kv(LLM_KV_TOKENIZER_MODEL,         "no_vocab");
+    if (arch == LLM_ARCH_BERT) {
+        // BERT requires a nonzero token type count even when the optional type embedding is absent.
+        ms.add_kv(LLM_KV_TOKENIZER_TOKEN_TYPE_COUNT, uint32_t(1));
+    }
     // ms.add_kv(LLM_KV_DENSE_2_FEAT_OUT,     n_embd);
     // ms.add_kv(LLM_KV_DENSE_3_FEAT_IN,      n_embd);
 
@@ -319,6 +327,218 @@ static std::vector<float> get_logits(
     }
     llama_batch_free(batch);
     return ret;
+}
+
+static std::vector<float> get_embeddings(llama_model *                    model,
+                                         llama_context *                  lctx,
+                                         const std::vector<llama_token> & tokens) {
+    const uint32_t n_embd   = llama_model_n_embd(model);
+    const uint32_t n_tokens = tokens.size();
+
+    llama_batch batch = llama_batch_init(n_tokens, 0, 1);
+    for (uint32_t pos = 0; pos < n_tokens; pos++) {
+        common_batch_add(batch, tokens[pos], pos, { 0 }, true);
+    }
+    batch.n_tokens = n_tokens;
+
+    if (llama_decode(lctx, batch) != 0) {
+        llama_batch_free(batch);
+        throw std::runtime_error("failed to decode embedding batch");
+    }
+
+    std::vector<float> ret;
+    ret.reserve(n_tokens * n_embd);
+    for (uint32_t i = 0; i < n_tokens; i++) {
+        const float * embd_ith = llama_get_embeddings_ith(lctx, i);
+        if (embd_ith == nullptr) {
+            llama_batch_free(batch);
+            throw std::runtime_error("failed to get embedding output");
+        }
+        ret.insert(ret.end(), embd_ith, embd_ith + n_embd);
+    }
+
+    llama_batch_free(batch);
+    return ret;
+}
+
+static std::vector<float> get_pooled_embedding(llama_model *                    model,
+                                               llama_context *                  lctx,
+                                               const std::vector<llama_token> & tokens) {
+    const uint32_t n_embd   = llama_model_n_embd(model);
+    const uint32_t n_tokens = tokens.size();
+
+    llama_batch batch = llama_batch_init(n_tokens, 0, 1);
+    for (uint32_t pos = 0; pos < n_tokens; pos++) {
+        common_batch_add(batch, tokens[pos], pos, { 0 }, true);
+    }
+    batch.n_tokens = n_tokens;
+
+    if (llama_decode(lctx, batch) != 0) {
+        llama_batch_free(batch);
+        throw std::runtime_error("failed to decode pooled embedding batch");
+    }
+
+    const float * embd = llama_get_embeddings_seq(lctx, 0);
+    if (embd == nullptr) {
+        llama_batch_free(batch);
+        throw std::runtime_error("failed to get pooled embedding output");
+    }
+
+    std::vector<float> ret(embd, embd + n_embd);
+    llama_batch_free(batch);
+    return ret;
+}
+
+struct graph_node_observer {
+    bool saw_result_output = false;
+};
+
+static bool observe_graph_node(ggml_tensor * tensor, bool ask, void * user_data) {
+    if (ask) {
+        auto * observer = static_cast<graph_node_observer *>(user_data);
+        observer->saw_result_output |= strcmp(tensor->name, "result_output") == 0;
+    }
+
+    return false;
+}
+
+static void test_embedding_no_logits(const llm_arch arch, const size_t seed) {
+    constexpr uint32_t n_tokens = 4;
+
+    gguf_context_ptr gguf_ctx      = get_gguf_ctx(arch, false);
+    auto             model_and_ctx = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {});
+    llama_model_ptr  model         = std::move(model_and_ctx.first);
+    model_and_ctx.second.reset();
+
+    llama_context_params params = llama_context_default_params();
+    params.n_ctx                = n_tokens;
+    params.n_batch              = n_tokens;
+    params.n_ubatch             = n_tokens;
+    params.embeddings           = true;
+    params.pooling_type         = LLAMA_POOLING_TYPE_NONE;
+
+    const std::vector<llama_token> tokens = get_tokens(n_tokens, 128, seed);
+
+    graph_node_observer observer_with_logits;
+    params.cb_eval           = observe_graph_node;
+    params.cb_eval_user_data = &observer_with_logits;
+    llama_context_ptr ctx_with_logits(llama_init_from_model(model.get(), params));
+    GGML_ASSERT(ctx_with_logits != nullptr);
+    const std::vector<float> embeddings_with_logits = get_embeddings(model.get(), ctx_with_logits.get(), tokens);
+    GGML_ASSERT(llama_get_logits(ctx_with_logits.get()) != nullptr);
+    GGML_ASSERT(observer_with_logits.saw_result_output);
+
+    params.no_logits_for_embeddings = true;
+    graph_node_observer observer_without_logits;
+    params.cb_eval_user_data = &observer_without_logits;
+    llama_context_ptr ctx_without_logits(llama_init_from_model(model.get(), params));
+    GGML_ASSERT(ctx_without_logits != nullptr);
+    const std::vector<float> embeddings_without_logits = get_embeddings(model.get(), ctx_without_logits.get(), tokens);
+    GGML_ASSERT(llama_get_logits(ctx_without_logits.get()) == nullptr);
+    GGML_ASSERT(llama_get_logits_ith(ctx_without_logits.get(), 0) == nullptr);
+    GGML_ASSERT(!observer_without_logits.saw_result_output);
+    GGML_ASSERT(embeddings_with_logits == embeddings_without_logits);
+
+    params.pooling_type             = LLAMA_POOLING_TYPE_LAST;
+    params.no_logits_for_embeddings = false;
+    params.cb_eval                  = nullptr;
+    params.cb_eval_user_data        = nullptr;
+    llama_context_ptr ctx_pooled_with_logits(llama_init_from_model(model.get(), params));
+    GGML_ASSERT(ctx_pooled_with_logits != nullptr);
+    const std::vector<float> pooled_with_logits =
+        get_pooled_embedding(model.get(), ctx_pooled_with_logits.get(), tokens);
+    GGML_ASSERT(llama_get_logits(ctx_pooled_with_logits.get()) != nullptr);
+
+    params.no_logits_for_embeddings = true;
+    llama_context_ptr ctx_pooled_without_logits(llama_init_from_model(model.get(), params));
+    GGML_ASSERT(ctx_pooled_without_logits != nullptr);
+    const std::vector<float> pooled_without_logits =
+        get_pooled_embedding(model.get(), ctx_pooled_without_logits.get(), tokens);
+    GGML_ASSERT(llama_get_logits(ctx_pooled_without_logits.get()) == nullptr);
+    GGML_ASSERT(pooled_with_logits == pooled_without_logits);
+
+    params.embeddings               = false;
+    params.no_logits_for_embeddings = false;
+    params.pooling_type             = LLAMA_POOLING_TYPE_NONE;
+    params.cb_eval                  = nullptr;
+    params.cb_eval_user_data        = nullptr;
+    llama_context_ptr ctx_generation_baseline(llama_init_from_model(model.get(), params));
+    GGML_ASSERT(ctx_generation_baseline != nullptr);
+    const std::vector<float> generation_logits_baseline =
+        get_logits(model.get(), ctx_generation_baseline.get(), tokens);
+
+    params.no_logits_for_embeddings = true;
+    llama_context_ptr ctx_generation_with_flag(llama_init_from_model(model.get(), params));
+    GGML_ASSERT(ctx_generation_with_flag != nullptr);
+    const std::vector<float> generation_logits_with_flag =
+        get_logits(model.get(), ctx_generation_with_flag.get(), tokens);
+    GGML_ASSERT(generation_logits_baseline == generation_logits_with_flag);
+}
+
+static void test_embedding_no_logits_without_lm_head(const llm_arch arch, const size_t seed) {
+    constexpr uint32_t n_tokens = 4;
+
+    gguf_context_ptr gguf_ctx      = get_gguf_ctx(arch, false);
+    auto             model_and_ctx = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {});
+    llama_model_ptr  model         = std::move(model_and_ctx.first);
+    model_and_ctx.second.reset();
+
+    llama_context_params params = llama_context_default_params();
+    params.n_ctx                = n_tokens;
+    params.n_batch              = n_tokens;
+    params.n_ubatch             = n_tokens;
+    params.embeddings           = true;
+    params.pooling_type         = LLAMA_POOLING_TYPE_NONE;
+
+    const std::vector<llama_token> tokens = get_tokens(n_tokens, 128, seed);
+
+    llama_context_ptr ctx_with_logits(llama_init_from_model(model.get(), params));
+    GGML_ASSERT(ctx_with_logits != nullptr);
+    const std::vector<float> embeddings_with_logits = get_embeddings(model.get(), ctx_with_logits.get(), tokens);
+    GGML_ASSERT(llama_get_logits(ctx_with_logits.get()) != nullptr);
+
+    params.no_logits_for_embeddings = true;
+    llama_context_ptr ctx_without_logits(llama_init_from_model(model.get(), params));
+    GGML_ASSERT(ctx_without_logits != nullptr);
+    const std::vector<float> embeddings_without_logits = get_embeddings(model.get(), ctx_without_logits.get(), tokens);
+    GGML_ASSERT(llama_get_logits(ctx_without_logits.get()) == nullptr);
+    GGML_ASSERT(embeddings_with_logits == embeddings_without_logits);
+}
+
+static void test_embedding_no_logits_with_backend_sampler(const size_t seed) {
+    constexpr uint32_t n_tokens = 1;
+
+    gguf_context_ptr gguf_ctx      = get_gguf_ctx(LLM_ARCH_QWEN3, false);
+    auto             model_and_ctx = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {});
+    llama_model_ptr  model         = std::move(model_and_ctx.first);
+    model_and_ctx.second.reset();
+
+    llama_sampler_ptr sampler_chain(llama_sampler_chain_init(llama_sampler_chain_default_params()));
+    llama_sampler_chain_add(sampler_chain.get(), llama_sampler_init_greedy());
+    std::vector<llama_sampler_seq_config> sampler_configs = {
+        {0, sampler_chain.get()}
+    };
+
+    llama_context_params params     = llama_context_default_params();
+    params.n_ctx                    = n_tokens;
+    params.n_batch                  = n_tokens;
+    params.n_ubatch                 = n_tokens;
+    params.embeddings               = true;
+    params.no_logits_for_embeddings = true;
+    params.pooling_type             = LLAMA_POOLING_TYPE_NONE;
+    params.samplers                 = sampler_configs.data();
+    params.n_samplers               = sampler_configs.size();
+
+    graph_node_observer observer;
+    params.cb_eval           = observe_graph_node;
+    params.cb_eval_user_data = &observer;
+    llama_context_ptr ctx(llama_init_from_model(model.get(), params));
+    GGML_ASSERT(ctx != nullptr);
+
+    const std::vector<llama_token> tokens = get_tokens(n_tokens, 128, seed);
+    get_embeddings(model.get(), ctx.get(), tokens);
+    GGML_ASSERT(llama_get_logits(ctx.get()) != nullptr);
+    GGML_ASSERT(observer.saw_result_output);
 }
 
 static bool moe_mandatory(const llm_arch arch) {
@@ -698,6 +918,11 @@ int main(int argc, char ** argv) {
         if (!out.empty()) {
             return save_models(arch, seed, log_level, out);
         }
+        test_embedding_no_logits(LLM_ARCH_QWEN3, seed);
+        test_embedding_no_logits(LLM_ARCH_LLAMA, seed);
+        test_embedding_no_logits_without_lm_head(LLM_ARCH_BERT, seed);
+        test_embedding_no_logits_without_lm_head(LLM_ARCH_LLAMA_EMBED, seed);
+        test_embedding_no_logits_with_backend_sampler(seed);
         return test_backends(arch, seed, log_level);
     } catch (const std::exception & err) {
         fprintf(stderr, "encountered runtime error: %s\n", err.what());

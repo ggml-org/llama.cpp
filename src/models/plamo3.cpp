@@ -189,7 +189,7 @@ llama_model_plamo3::graph<iswa>::graph(const llama_model & model, const llm_grap
     cur = build_lora_mm(model.output, cur, model.output_s);
     res->t_logits = cur;
 
-    ggml_build_forward_expand(gf, cur);
+    build_output();
 }
 
 // Explicit template instantiations

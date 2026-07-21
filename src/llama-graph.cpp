@@ -1371,7 +1371,20 @@ void llm_graph_context::cb(ggml_tensor * cur, const char * name, int il) const {
     }
 }
 
+bool llm_graph_context::should_build_logits() const {
+    return !llama_skip_logits_for_embeddings(cparams, !samplers.empty());
+}
 
+void llm_graph_context::build_output() const {
+    if (!should_build_logits()) {
+        res->t_logits = nullptr;
+    }
+
+    ggml_tensor * output = res->t_logits ? res->t_logits : res->t_embd;
+
+    GGML_ASSERT(output != nullptr);
+    ggml_build_forward_expand(gf, output);
+}
 
 ggml_tensor * llm_graph_context::build_cvec(
          ggml_tensor * cur,
