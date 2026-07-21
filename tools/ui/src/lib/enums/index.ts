@@ -6,10 +6,18 @@ export {
 	AttachmentItemVisibleWhen
 } from './attachment.enums';
 
-export { AgenticSectionType, ContinueIntentKind, ToolCallType } from './agentic.enums';
+export {
+	AgenticSectionType,
+	ContinueIntentKind,
+	DiffLineKind,
+	ToolResultKind,
+	ToolCallType
+} from './agentic.enums';
 
 export {
 	ChatMessageStatsView,
+	ChatMessageStatisticsMode,
+	StreamConnectionState,
 	ContentPartType,
 	ConversationSelectionMode,
 	ErrorDialogType,
@@ -62,6 +70,6 @@ export { ColorMode, HtmlInputType, McpPromptVariant, TooltipSide, UrlProtocol } 
 
 export { KeyboardKey } from './keyboard.enums';
 
-export { ToolSource, ToolPermissionDecision, ToolResponseField } from './tools.enums';
+export { BuiltInTool, ToolSource, ToolPermissionDecision, ToolResponseField } from './tools.enums';
 
 export { SplashOrientation } from './splash.enums';

@@ -60,6 +60,7 @@ enum htp_op_code {
     HTP_OP_MUL_MAT_ID,
     HTP_OP_MUL_MAT_QKV,
     HTP_OP_MUL_MAT_FFN,
+    HTP_OP_MUL_MAT_ADD,
     HTP_OP_RMS_NORM,
     HTP_OP_RMS_NORM_MUL,
     HTP_OP_UNARY_SILU,
@@ -96,6 +97,7 @@ enum htp_op_code {
     HTP_OP_PAD,
     HTP_OP_NORM,
     HTP_OP_CONCAT,
+    HTP_OP_CLAMP,
 
     HTP_OP_INVALID
 };
@@ -107,8 +109,7 @@ enum htp_op_code {
 #define HTP_OP_MAX_KERN_PARAMS 32
 
 #define HTP_OP_MAX_BUFS    16
-#define HTP_OP_MAX_REQS    256
-#define HTP_OP_MAX_TENSORS (HTP_OP_MAX_REQS * HTP_OP_MAX_INPUTS + HTP_OP_MAX_REQS)
+#define HTP_OP_MAX_TENSORS 8192 // must stay under 64K (uint16)
 
 #define HTP_OP_MAX_VMEM_DEFAULT (3355443200u)
 
@@ -116,16 +117,18 @@ enum htp_op_code {
 
 enum htp_tensor_flags {
     HTP_TENSOR_COMPUTE = (1U << 0), // Tensor buffer temporal compute data (not weights)
-    HTP_TENSOR_FLUSHED = (1U << 1)  // Tensor buffer has been flushed (set by the NPU)
+    HTP_TENSOR_DIRTY   = (1U << 1)  // Tensor buffer is dirty and needs to be flushed
 };
 
 // Tensor descriptor
 struct htp_tensor {
     uint32_t data;                 // Buffer offset in the messages, and data pointer on the NPU
+    uint32_t alias;                // Index of the canonical tensor for this memory buffer
     uint32_t size;                 // Data size in bytes
     uint32_t flags;                // Buffer / tensor flags
-    uint16_t type;                 // Data type
+    uint32_t type;                 // Data type
     uint16_t bi;                   // Buffer index
+    uint16_t ti;                   // Tensor index
     uint32_t ne[HTP_OP_MAX_DIMS];  // Number of elements
     uint32_t nb[HTP_OP_MAX_DIMS];  // Stride in bytes (see ggml.h ggml_tensor)
 };
@@ -168,6 +171,8 @@ enum htp_profiler_mode {
 
 enum htp_trace_event_id {
     HTP_TRACE_EVT_DMA                 = 0,
+    HTP_TRACE_EVT_L2FLUSH             = 1,
+    HTP_TRACE_EVT_INIT                = 2,
 
     HTP_TRACE_EVT_HVX_COMP            = 20,
     HTP_TRACE_EVT_HVX_A_QUANT         = 21,
@@ -175,6 +180,11 @@ enum htp_trace_event_id {
     HTP_TRACE_EVT_HVX_W_DEQUANT       = 23,
     HTP_TRACE_EVT_HVX_W_PREP          = 24,
     HTP_TRACE_EVT_HVX_O_PROC          = 25,
+    HTP_TRACE_EVT_HVX_FA_QK           = 26,
+    HTP_TRACE_EVT_HVX_FA_SFM          = 27,
+    HTP_TRACE_EVT_HVX_FA_Q_PREP       = 28,
+    HTP_TRACE_EVT_HVX_FA_K_PREP       = 29,
+    HTP_TRACE_EVT_HVX_FA_V_PREP       = 30,
 
     HTP_TRACE_EVT_HMX_COMP            = 40,
 };

@@ -14,15 +14,14 @@ export const SETTINGS_KEYS = {
 	SEND_ON_ENTER: 'sendOnEnter',
 	ENABLE_CONTINUE_GENERATION: 'enableContinueGeneration',
 	PDF_AS_IMAGE: 'pdfAsImage',
-	ASK_FOR_TITLE_CONFIRMATION: 'askForTitleConfirmation',
 	TITLE_GENERATION_USE_FIRST_LINE: 'titleGenerationUseFirstLine',
 	TITLE_GENERATION_USE_LLM: 'titleGenerationUseLLM',
 	TITLE_GENERATION_PROMPT: 'titleGenerationPrompt',
 	MAX_IMAGE_RESOLUTION: 'maxImageMPixels',
 	// Display
 	SHOW_MESSAGE_STATS: 'showMessageStats',
+	SHOW_AGENTIC_TURN_STATS: 'showAgenticTurnStats',
 	SHOW_THOUGHT_IN_PROGRESS: 'showThoughtInProgress',
-	KEEP_STATS_VISIBLE: 'keepStatsVisible',
 	AUTO_MIC_ON_EMPTY: 'autoMicOnEmpty',
 	RENDER_USER_CONTENT_AS_MARKDOWN: 'renderUserContentAsMarkdown',
 	DISABLE_AUTO_SCROLL: 'disableAutoScroll',
@@ -60,18 +59,15 @@ export const SETTINGS_KEYS = {
 	MCP_SERVERS: 'mcpServers',
 	MCP_REQUEST_TIMEOUT_SECONDS: 'mcpRequestTimeoutSeconds',
 	AGENTIC_MAX_TURNS: 'agenticMaxTurns',
-	ALWAYS_SHOW_AGENTIC_TURNS: 'alwaysShowAgenticTurns',
-	AGENTIC_MAX_TOOL_PREVIEW_LINES: 'agenticMaxToolPreviewLines',
-	SHOW_TOOL_CALL_IN_PROGRESS: 'showToolCallInProgress',
+	ALWAYS_SHOW_TOOL_CALL_CONTENT: 'alwaysShowToolCallContent',
 	// Performance
 	PRE_ENCODE_CONVERSATION: 'preEncodeConversation',
 	// Developer
 	DISABLE_REASONING_PARSING: 'disableReasoningParsing',
 	EXCLUDE_REASONING_FROM_CONTEXT: 'excludeReasoningFromContext',
-	ENABLE_THINKING: 'enableThinking',
 	SHOW_RAW_OUTPUT_SWITCH: 'showRawOutputSwitch',
-	// PY_INTERPRETER_ENABLED: 'pyInterpreterEnabled',
 	JS_SANDBOX_ENABLED: 'jsSandboxEnabled',
+	// PY_INTERPRETER_ENABLED: 'pyInterpreterEnabled',
 	CUSTOM_JSON: 'customJson',
 	CUSTOM_CSS: 'customCss'
 } as const;

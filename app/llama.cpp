@@ -50,6 +50,7 @@ struct command {
     std::vector<std::string> aliases;
     bool hidden;
     int (*func)(int, char **);
+    bool flags = false; // allow --name
 };
 
 #ifdef LLAMA_INSTALL_BUILD
@@ -69,9 +70,9 @@ static const command cmds[] = {
     {"fit-params",    "Compute parameters to fit a model in device memory", {},           true,          llama_fit_params   },
     {"quantize",      "Quantize a model",                                   {},           true,          llama_quantize     },
     {"perplexity",    "Compute model perplexity and KL divergence",         {},           true,          llama_perplexity   },
-    {"version",       "Show version",                                       {},           false,         version            },
-    {"licenses",      "Show third-party licenses",                          {"credits"},  false,         licenses           },
-    {"help",          "Show available commands",                            {},           false,         help               },
+    {"version",       "Show version",                                       {},           false,         version,           true },
+    {"licenses",      "Show third-party licenses",                          {"credits"},  false,         licenses,          true },
+    {"help",          "Show available commands",                            {},           false,         help,              true },
 };
 
 #undef UPDATE_HIDDEN
@@ -108,7 +109,10 @@ static int help(int argc, char ** argv) {
     return 0;
 }
 
-static bool matches(const std::string & arg, const command & cmd) {
+static bool matches(std::string arg, const command & cmd) {
+    if (cmd.flags && arg.size() > 2 && arg[0] == '-' && arg[1] == '-') {
+        arg.erase(0, 2);
+    }
     if (arg == cmd.name) {
         return true;
     }

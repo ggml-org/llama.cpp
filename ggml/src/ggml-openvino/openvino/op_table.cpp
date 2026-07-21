@@ -47,6 +47,7 @@ std::unordered_map<std::string, CreatorFunction> get_supported_ops() {
         {"GGML_UNARY_OP_TANH",      op::translate_1to1_match_1_input<v0::Tanh>     },
         {"GGML_OP_VIEW",            op::translate_view                             },
         {"GGML_GLU_OP_SWIGLU",      op::translate_glu_swiglu                       },
+        {"GGML_GLU_OP_SWIGLU_OAI",  op::translate_glu_swiglu_oai                   },
         {"GGML_GLU_OP_GEGLU",       op::translate_glu_geglu                        },
         {"GGML_OP_SET_ROWS",        op::translate_set_rows                         },
         {"GGML_OP_CPY",             op::translate_cpy                              },

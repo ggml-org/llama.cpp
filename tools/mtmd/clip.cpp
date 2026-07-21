@@ -1024,6 +1024,8 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
             GGML_ABORT("missing cgraph builder");
     }
 
+    builder->img_batch = &imgs;
+
     // TODO [QWEN_VIDEO]: improve this in the future
     builder->n_batch = imgs.entries.size();
 
@@ -1210,6 +1212,9 @@ struct clip_model_loader {
             {
                 std::vector<int> pinpoints;
                 get_arr_int(KEY_IMAGE_GRID_PINPOINTS, pinpoints, false);
+                if (pinpoints.size() % 2 != 0) {
+                    throw std::runtime_error(string_format("%s: image_grid_pinpoints must have an even number of elements, got %zu\n", __func__, pinpoints.size()));
+                }
                 if (!pinpoints.empty()) {
                     for (size_t i = 0; i < pinpoints.size(); i += 2) {
                         hparams.image_res_candidates.push_back({
@@ -1252,15 +1257,16 @@ struct clip_model_loader {
             }
 
             if (is_vision) {
-                int idx_mean = gguf_find_key(ctx_gguf.get(), KEY_IMAGE_MEAN);
-                int idx_std  = gguf_find_key(ctx_gguf.get(), KEY_IMAGE_STD);
-                GGML_ASSERT(idx_mean >= 0 && "image_mean not found");
-                GGML_ASSERT(idx_std >= 0  && "image_std not found");
-                const float * mean_data = (const float *) gguf_get_arr_data(ctx_gguf.get(), idx_mean);
-                const float * std_data  = (const float *) gguf_get_arr_data(ctx_gguf.get(), idx_std);
+                std::vector<float> image_mean;
+                std::vector<float> image_std;
+                get_arr_f32(KEY_IMAGE_MEAN, image_mean, false);
+                get_arr_f32(KEY_IMAGE_STD , image_std, false);
+                if (image_mean.size() < 3 || image_std.size() < 3) {
+                    throw std::runtime_error(string_format("%s: image_mean/image_std arrays must have at least 3 elements, got %zu and %zu\n", __func__, image_mean.size(), image_std.size()));
+                }
                 for (int i = 0; i < 3; ++i) {
-                    hparams.image_mean[i] = mean_data[i];
-                    hparams.image_std[i]  = std_data[i];
+                    hparams.image_mean[i] = image_mean[i];
+                    hparams.image_std[i]  = image_std[i];
                 }
             }
 
@@ -1576,7 +1582,16 @@ struct clip_model_loader {
                         get_u32(KEY_SAM_N_HEAD, hparams.sam_n_head, true);
                         get_u32(KEY_SAM_N_EMBD, hparams.sam_n_embd, true);
                         get_u32(KEY_ATTN_WINDOW_SIZE, hparams.attn_window_size, true);
+                        hparams.preproc_min_tiles = 2;
+                        if (model.proj_type == PROJECTOR_TYPE_DEEPSEEKOCR) {
+                            hparams.preproc_max_tiles = 9;
+                            hparams.preproc_tile_size = 640;
+                            // the CLIP/ViT body runs its layernorms at 1e-5 (the SAM stage uses 1e-6)
+                            hparams.eps = 1e-5f;
+                        }
                         if (model.proj_type == PROJECTOR_TYPE_DEEPSEEKOCR2) {
+                            hparams.preproc_max_tiles = 6;
+                            hparams.preproc_tile_size = 768;
                             // qwen2 encoder is GQA, requires KEY_N_HEAD_KV
                             get_u32(string_format(KEY_N_HEAD_KV, "vision"), hparams.n_head_kv);
                         }
@@ -1686,14 +1701,17 @@ struct clip_model_loader {
                 if (hparams.image_size > 65536) {
                     throw std::runtime_error(string_format("%s: image_size (%d) is too large (max 65536)\n", __func__, hparams.image_size));
                 }
-                if (hparams.patch_size <= 0) {
-                    throw std::runtime_error(string_format("%s: patch_size (%d) must be greater than 0\n", __func__, hparams.patch_size));
+                if (hparams.patch_size <= 0 || hparams.patch_size >= 65536) {
+                    throw std::runtime_error(string_format("%s: patch_size (%d) must be positive and less than 65536\n", __func__, hparams.patch_size));
                 }
                 if (hparams.n_embd <= 0) {
                     throw std::runtime_error(string_format("%s: n_embd (%d) must be greater than 0\n", __func__, hparams.n_embd));
                 }
                 if (hparams.image_max_pixels < hparams.image_min_pixels) {
                     throw std::runtime_error(string_format("%s: image_max_pixels (%d) is less than image_min_pixels (%d)\n", __func__, hparams.image_max_pixels, hparams.image_min_pixels));
+                }
+                if (hparams.n_merge < 0 || hparams.n_merge >= 65536) {
+                    throw std::runtime_error(string_format("%s: n_merge (%d) must be greater than 0 and less than 65536\n", __func__, hparams.n_merge));
                 }
             }
 
@@ -3067,6 +3085,29 @@ struct clip_model_loader {
         output = gguf_get_val_f32(ctx_gguf.get(), i);
     }
 
+    void get_arr_f32(const std::string & key, std::vector<float> & output, bool required = true) const {
+        const int i = gguf_find_key(ctx_gguf.get(), key.c_str());
+        if (i < 0) {
+            if (required) {
+                throw std::runtime_error("Key not found: " + key);
+            }
+            return;
+        }
+        const auto type = gguf_get_arr_type(ctx_gguf.get(), i);
+        if (type != GGUF_TYPE_FLOAT32) {
+            throw std::runtime_error(string_format("%s: array '%s' has type %d, expected %d (GGUF_TYPE_FLOAT32)\n", __func__, key.c_str(), type, GGUF_TYPE_FLOAT32));
+        }
+        const size_t n = gguf_get_arr_n(ctx_gguf.get(), i);
+        if (n > (size_t) std::numeric_limits<int>::max()) {
+            throw std::runtime_error(string_format("%s: array '%s' is too large (%zu elements)\n", __func__, key.c_str(), n));
+        }
+        output.resize(n);
+        const float * values = (const float *)gguf_get_arr_data(ctx_gguf.get(), i);
+        for (size_t j = 0; j < n; ++j) {
+            output[j] = values[j];
+        }
+    }
+
     void get_string(const std::string & key, std::string & output, bool required = true) const {
         const int i = gguf_find_key(ctx_gguf.get(), key.c_str());
         if (i < 0) {
@@ -3086,11 +3127,18 @@ struct clip_model_loader {
             }
             return;
         }
-        int n = gguf_get_arr_n(ctx_gguf.get(), i);
+        const auto type = gguf_get_arr_type(ctx_gguf.get(), i);
+        if (type != GGUF_TYPE_INT32) {
+            throw std::runtime_error(string_format("%s: array '%s' has type %d, expected %d (GGUF_TYPE_INT32)\n", __func__, key.c_str(), type, GGUF_TYPE_INT32));
+        }
+        const size_t n = gguf_get_arr_n(ctx_gguf.get(), i);
+        if (n > (size_t) std::numeric_limits<int>::max()) {
+            throw std::runtime_error(string_format("%s: array '%s' is too large (%zu elements)\n", __func__, key.c_str(), n));
+        }
         output.resize(n);
         const int32_t * values = (const int32_t *)gguf_get_arr_data(ctx_gguf.get(), i);
-        for (int i = 0; i < n; ++i) {
-            output[i] = values[i];
+        for (size_t j = 0; j < n; ++j) {
+            output[j] = values[j];
         }
     }
 
@@ -3214,6 +3262,9 @@ int clip_n_output_tokens_x(const clip_ctx * ctx, const clip_image_f32 * img) {
             return (img->nx() / params.patch_size) / 2;
         case PROJECTOR_TYPE_STEP3VL:
             return img->nx() / (params.patch_size * params.n_merge);
+        case PROJECTOR_TYPE_DEEPSEEKOCR:
+        case PROJECTOR_TYPE_DEEPSEEKOCR2:
+            return (img->nx() / params.patch_size) / 4;
         default:
             break;
     }
@@ -3364,8 +3415,8 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
             {
                 // dynamic size
                 int n_merge = ctx->model.hparams.n_merge;
-                int n_patches_x = img->nx() / patch_size / (n_merge > 0 ? n_merge : 1);
-                int n_patches_y = img->ny() / patch_size / (n_merge > 0 ? n_merge : 1);
+                int n_patches_x = img->nx() / patch_size / n_merge;
+                int n_patches_y = img->ny() / patch_size / n_merge;
                 if (ctx->model.token_embd_img_break) {
                     n_patches = n_patches_y * n_patches_x + n_patches_y - 1; // + one [IMG_BREAK] per row, except the last row
                 } else {
@@ -3423,10 +3474,17 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
             // E.g., 64x64 -> 16x16 patches
             n_patches /= 16;
 
-            // build_global_local_features adds image newlines and view separator
-            // Formula: h*(w+1) + 1 where h = w = sqrt(n_patches)
-            int h = static_cast<int>(std::sqrt(static_cast<float>(n_patches)));
-            n_patches = h * (h + 1) + 1;
+            if (img->add_viewsep) {
+                // global view: one image-newline per token-row + trailing view separator
+                const int h = static_cast<int>(std::sqrt(static_cast<float>(n_patches)));
+                n_patches = h * (h + 1) + 1;
+            } else if (img->ny() >= img->nx() && img->ny() % img->nx() == 0) {
+                // tile row: one image-newline per token-row
+                const int grid_w = img->ny() / img->nx();
+                const int tile_patches = img->nx() / (patch_size * 4); // patches per tile side (SAM divides by 4)
+                const int h = tile_patches;
+                n_patches = (tile_patches * grid_w + 1) * h;
+            }
         } break;
         case PROJECTOR_TYPE_HUNYUANVL:
             {
@@ -4066,7 +4124,10 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
         case PROJECTOR_TYPE_DEEPSEEKOCR:
         case PROJECTOR_TYPE_DEEPSEEKOCR2:
             {
-                GGML_ASSERT(pos_w == pos_h);
+                GGML_ASSERT(
+                    (pos_w == pos_h) // overview image
+                    || (pos_h >= pos_w && pos_h % pos_w == 0) // tile images
+                );
 
                 const int window = hparams.attn_window_size;
                 const int pos = pos_w;

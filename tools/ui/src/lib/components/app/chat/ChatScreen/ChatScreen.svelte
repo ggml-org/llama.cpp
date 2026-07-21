@@ -4,11 +4,10 @@
 		ChatScreenForm,
 		ChatMessages,
 		ChatScreenDragOverlay,
-		ChatScreenProcessingInfo,
+		ChatScreenStreamResumeStatus,
 		ServerLoadingSplash,
 		ChatScreenServerError
 	} from '$lib/components/app';
-	import { setProcessingInfoContext } from '$lib/contexts';
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
 	import { useChatScreenActiveModel } from '$lib/hooks/use-chat-screen-active-model.svelte';
 	import { useChatScreenDragAndDrop } from '$lib/hooks/use-chat-screen-drag-and-drop.svelte';
@@ -22,8 +21,7 @@
 		errorDialog,
 		isLoading,
 		isChatStreaming,
-		isEditing,
-		activeProcessingState
+		isEditing
 	} from '$lib/stores/chat.svelte';
 	import {
 		conversationsStore,
@@ -41,12 +39,6 @@
 
 	let { showCenteredEmpty = false } = $props();
 
-	setProcessingInfoContext({
-		get showProcessingInfo() {
-			return showProcessingInfo;
-		}
-	});
-
 	let disableAutoScroll = $derived(Boolean(config().disableAutoScroll) || isMobile.current);
 	let isMobileUserScrolledUp = $state(false);
 	let mobileScrollDownHint = $state(false);
@@ -62,11 +54,6 @@
 	let isServerLoading = $derived(serverLoading());
 	let hasPropsError = $derived(!!serverError());
 	let isCurrentConversationLoading = $derived(isLoading() || isChatStreaming());
-	let showProcessingInfo = $derived(
-		isCurrentConversationLoading ||
-			(config().keepStatsVisible && !!page.params.id) ||
-			activeProcessingState() !== null
-	);
 	let chatFormBottomPosition = $derived.by(() => {
 		if (!isMobile.current) return '1rem';
 		if (device.isStandalone) return '1.5rem';
@@ -281,6 +268,10 @@
 
 			<ChatScreenServerError />
 
+			{#if page.params.id}
+				<ChatScreenStreamResumeStatus />
+			{/if}
+
 			<div class="pointer-events-none flex flex-col gap-6 items-center w-full">
 				{#if (isMobile.current ? mobileScrollDownHint || isMobileUserScrolledUp : autoScroll.userScrolledUp) && page.url.hash.includes(ROUTES.CHAT) && page.params.id}
 					<ChatScreenActionScrollDown
@@ -292,10 +283,6 @@
 							});
 						}}
 					/>
-				{/if}
-
-				{#if showProcessingInfo}
-					<ChatScreenProcessingInfo />
 				{/if}
 			</div>
 

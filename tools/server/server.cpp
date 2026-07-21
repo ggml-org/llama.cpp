@@ -2,6 +2,7 @@
 #include "server-http.h"
 #include "server-models.h"
 #include "server-cors-proxy.h"
+#include "server-stream.h"
 #include "server-tools.h"
 
 #include "arg.h"
@@ -34,6 +35,19 @@ static inline void signal_handler(int signal) {
 
     shutdown_handler(signal);
 }
+
+// satisfies -Wmissing-declarations (used by llama command)
+int llama_server(int argc, char ** argv);
+
+// to be used via CLI (argc / argv are used by router mode only)
+int llama_server(common_params & params, int argc, char ** argv);
+void llama_server_terminate();
+void llama_server_terminate() {
+    if (shutdown_handler) {
+        shutdown_handler(0);
+    }
+}
+
 
 // wrapper function that handles exceptions and logs errors
 // this is to make sure handler_t never throws exceptions; instead, it returns an error response
@@ -71,9 +85,6 @@ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t 
     };
 }
 
-// satisfies -Wmissing-declarations
-int llama_server(int argc, char ** argv);
-
 int llama_server(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
 
@@ -82,6 +93,10 @@ int llama_server(int argc, char ** argv) {
 
     common_init();
 
+    // start the stream session manager GC right after common init, before any HTTP route can
+    // touch it. lifecycle is symmetric, stop_gc() runs in clean_up() before backend free
+    server_stream_session_manager_start();
+
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_SERVER)) {
         return 1;
     }
@@ -89,16 +104,26 @@ int llama_server(int argc, char ** argv) {
     llama_backend_init();
     llama_numa_init(params.numa);
 
+    return llama_server(params, argc, argv);
+}
+
+int llama_server(common_params & params, int argc, char ** argv) {
+    bool is_run_by_cli = (argv == nullptr);
+
     common_models_handler models_handler;
-    try {
-        models_handler = common_models_handler_init(params, LLAMA_EXAMPLE_SERVER);
-        if (common_models_handler_is_preset_repo(models_handler)) {
-            // apply the preset and start the server in router mode
-            common_models_handler_apply(models_handler, params);
+
+    // note: router mode also accepts -hf remote-preset, so we need to check that first
+    if (!is_run_by_cli && !params.model.hf_repo.empty()) {
+        try {
+            models_handler = common_models_handler_init(params, LLAMA_EXAMPLE_SERVER);
+            if (common_models_handler_is_preset_repo(models_handler)) {
+                // apply the preset and start the server in router mode
+                common_models_handler_apply(models_handler, params);
+            }
+        } catch (const std::exception & e) {
+            SRV_ERR("failed to fetch model metadata: %s\n", e.what());
+            return 1;
         }
-    } catch (const std::exception & e) {
-        SRV_ERR("failed to fetch model metadata: %s\n", e.what());
-        return 1;
     }
 
     // router server never loads a model and must not touch the GPU
@@ -119,7 +144,7 @@ int llama_server(int argc, char ** argv) {
         }
 
         if (params.n_parallel < 0) {
-            SRV_INF("%s", "n_parallel is set to auto, using n_parallel = 4 and kv_unified = true\n");
+            SRV_TRC("%s", "n_parallel is set to auto, using n_parallel = 4 and kv_unified = true\n");
 
             params.n_parallel = 4;
             params.kv_unified = true;
@@ -239,6 +264,29 @@ int llama_server(int argc, char ** argv) {
     ctx_http.get ("/slots",                    ex_wrapper(routes.get_slots));
     ctx_http.post("/slots/:id_slot",           ex_wrapper(routes.post_slots));
 
+    // resumable streaming, the conversation_id is the session identity end to end. router and
+    // child wire different handlers under the same paths: a child binds the local session
+    // factories, the router binds proxies that resolve the owning child through the
+    // conv_id -> model map
+    server_http_context::handler_t stream_get_h;
+    server_http_context::handler_t streams_lookup_h;
+    server_http_context::handler_t stream_delete_h;
+    if (is_router_server) {
+        stream_get_h     = models_routes->router_stream_get;
+        streams_lookup_h = models_routes->router_streams_lookup;
+        stream_delete_h  = models_routes->router_stream_delete;
+    } else {
+        stream_get_h     = server_stream_make_get_handler();
+        streams_lookup_h = server_stream_make_lookup_handler();
+        stream_delete_h  = server_stream_make_delete_handler();
+    }
+    ctx_http.get ("/v1/stream/:conv_id",       ex_wrapper(stream_get_h));
+    // POST /v1/streams/lookup with body {"conversation_ids": [...]}. you can only ask for ids
+    // you already own (the WebUI passes the convs visible in its sidebar). the server never
+    // lists ids it has not been asked about, so a random caller cannot enumerate live sessions
+    ctx_http.post("/v1/streams/lookup",        ex_wrapper(streams_lookup_h));
+    ctx_http.del ("/v1/stream/:conv_id",       ex_wrapper(stream_delete_h));
+
     // Google Cloud Platform (Vertex AI) compat
     ctx_http.register_gcp_compat();
 
@@ -255,14 +303,24 @@ int llama_server(int argc, char ** argv) {
         return res;
     };
 
+    if (params.cors_origins == "*" && params.api_keys.empty()) {
+        SRV_WRN("%s", "-----------------\n");
+        SRV_WRN("%s", "CORS is set to allow all origins ('*') and no API key is set\n");
+        SRV_WRN("%s", "this can be a security risk (cross-origin attacks)\n");
+        SRV_WRN("%s", "more info: https://github.com/ggml-org/llama.cpp/pull/25655\n");
+        SRV_WRN("%s", "-----------------\n");
+    }
+
     // CORS proxy (EXPERIMENTAL, only used by the Web UI for MCP)
+    std::vector<std::string> warn_names;
+    if (is_router_server) {
+        warn_names.push_back("router mode");
+    }
+
     if (params.ui_mcp_proxy) {
-        SRV_WRN("%s", "-----------------\n");
-        SRV_WRN("%s", "CORS proxy is enabled, do not expose server to untrusted environments\n");
-        SRV_WRN("%s", "This feature is EXPERIMENTAL and may be removed or changed in future versions\n");
-        SRV_WRN("%s", "-----------------\n");
         ctx_http.get ("/cors-proxy",      ex_wrapper(proxy_handler_get));
         ctx_http.post("/cors-proxy",      ex_wrapper(proxy_handler_post));
+        warn_names.push_back("MCP proxy (experimental)");
     } else {
         ctx_http.get ("/cors-proxy",      ex_wrapper(res_403));
         ctx_http.post("/cors-proxy",      ex_wrapper(res_403));
@@ -276,15 +334,22 @@ int llama_server(int argc, char ** argv) {
             SRV_ERR("tools setup failed: %s\n", e.what());
             return 1;
         }
-        SRV_WRN("%s", "-----------------\n");
-        SRV_WRN("%s", "Built-in tools are enabled, do not expose server to untrusted environments\n");
-        SRV_WRN("%s", "This feature is EXPERIMENTAL and may be changed in the future\n");
-        SRV_WRN("%s", "-----------------\n");
         ctx_http.get ("/tools",           ex_wrapper(tools.handle_get));
         ctx_http.post("/tools",           ex_wrapper(tools.handle_post));
+        warn_names.push_back("built-in tools (experimental)");
     } else {
         ctx_http.get ("/tools",           ex_wrapper(res_403));
         ctx_http.post("/tools",           ex_wrapper(res_403));
+    }
+
+    if (warn_names.size() > 0) {
+        SRV_WRN("%s", "-----------------\n");
+        SRV_WRN("%s", "the following feature(s) are enabled:\n");
+        for (const auto & name : warn_names) {
+            SRV_WRN("    %s\n", name.c_str());
+        }
+        SRV_WRN("%s", "do not expose the server to untrusted environments\n");
+        SRV_WRN("%s", "-----------------\n");
     }
 
     //
@@ -293,8 +358,9 @@ int llama_server(int argc, char ** argv) {
 
     if (child.is_child() && child.get_mode() == SERVER_CHILD_MODE_DOWNLOAD) {
         return child.run_download(params);
-    } else if (!is_router_server) {
+    } else if (!is_router_server && !is_run_by_cli) {
         // single-model mode (NOT spawned by router)
+        // if this is invoked by CLI, model downloading should be already handled
         try {
             common_models_handler_apply(models_handler, params);
         } catch (const std::exception & e) {
@@ -310,10 +376,12 @@ int llama_server(int argc, char ** argv) {
     std::function<void()> clean_up;
 
     if (is_router_server) {
-        SRV_INF("%s", "starting router server, no model will be loaded in this process\n");
+        SRV_INF("%s", "starting server in router mode. models will be automatically loaded on-demand\n");
 
         clean_up = [&models_routes]() {
             SRV_INF("%s: cleaning up before exit...\n", __func__);
+            // stop the session GC first, it finalizes live sessions and wakes pending readers
+            server_stream_session_manager_stop();
             if (models_routes.has_value()) {
                 models_routes->stopping.store(true); // maybe redundant, but just to be safe
                 models_routes->models.unload_all();
@@ -340,6 +408,8 @@ int llama_server(int argc, char ** argv) {
         // setup clean up function, to be called before exit
         clean_up = [&ctx_http, &ctx_server]() {
             SRV_INF("%s: cleaning up before exit...\n", __func__);
+            // stop the session GC first, it finalizes live sessions and wakes pending readers
+            server_stream_session_manager_stop();
             ctx_http.stop();
             ctx_server.terminate();
             llama_backend_free();
@@ -358,9 +428,6 @@ int llama_server(int argc, char ** argv) {
                 child.notify_to_router(server_state_to_str(state), payload);
             });
         }
-
-        // load the model
-        SRV_INF("%s", "loading model\n");
 
         if (!ctx_server.load_model(params)) {
             clean_up();
@@ -382,26 +449,26 @@ int llama_server(int argc, char ** argv) {
         };
     }
 
-    // TODO: refactor in common/console
+    // register signal handler if not running by CLI
+    if (!is_run_by_cli) {
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
-    struct sigaction sigint_action;
-    sigint_action.sa_handler = signal_handler;
-    sigemptyset (&sigint_action.sa_mask);
-    sigint_action.sa_flags = 0;
-    sigaction(SIGINT, &sigint_action, NULL);
-    sigaction(SIGTERM, &sigint_action, NULL);
+        struct sigaction sigint_action;
+        sigint_action.sa_handler = signal_handler;
+        sigemptyset (&sigint_action.sa_mask);
+        sigint_action.sa_flags = 0;
+        sigaction(SIGINT, &sigint_action, NULL);
+        sigaction(SIGTERM, &sigint_action, NULL);
 #elif defined (_WIN32)
-    auto console_ctrl_handler = +[](DWORD ctrl_type) -> BOOL {
-        return (ctrl_type == CTRL_C_EVENT) ? (signal_handler(SIGINT), true) : false;
-    };
-    SetConsoleCtrlHandler(reinterpret_cast<PHANDLER_ROUTINE>(console_ctrl_handler), true);
+        auto console_ctrl_handler = +[](DWORD ctrl_type) -> BOOL {
+            return (ctrl_type == CTRL_C_EVENT) ? (signal_handler(SIGINT), true) : false;
+        };
+        SetConsoleCtrlHandler(reinterpret_cast<PHANDLER_ROUTINE>(console_ctrl_handler), true);
 #endif
+    }
+
+    SRV_INF("listening on %s\n", ctx_http.listening_address.c_str());
 
     if (is_router_server) {
-        SRV_INF("router server is listening on %s\n", ctx_http.listening_address.c_str());
-        SRV_WRN("%s", "NOTE: router mode is experimental\n");
-        SRV_WRN("%s", "      it is not recommended to use this mode in untrusted environments\n");
-
         if (!params.models_preset_hf.empty()) {
             SRV_WRN(      "NOTE: using preset.ini from HF repo '%s'\n", params.models_preset_hf.c_str());
             SRV_WRN("%s", "      please only use presets that you can trust! Unknown presets may be unsafe\n");
@@ -414,8 +481,6 @@ int llama_server(int argc, char ** argv) {
         // when the HTTP server stops, clean up and exit
         clean_up();
     } else {
-        SRV_INF("server is listening on %s\n", ctx_http.listening_address.c_str());
-
         // optionally, notify router server that this instance is ready
         std::thread monitor_thread;
         if (child.is_child()) {

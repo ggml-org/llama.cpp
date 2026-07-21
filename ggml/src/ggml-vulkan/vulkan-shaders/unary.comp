@@ -42,7 +42,7 @@ float op_leaky_relu(float x) {
 }
 
 float op_step(float x) {
-    return x >= 0.0f ? 1.0f : 0.0f;
+    return x > 0.0f ? 1.0f : 0.0f;
 }
 
 float op_tanh(float x) {

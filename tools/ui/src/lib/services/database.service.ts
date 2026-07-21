@@ -3,6 +3,7 @@ import { findDescendantMessages, uuid, filterByLeafNodeId } from '$lib/utils';
 import { IDXDB_TABLES, IDXDB_STORES, STORAGE_APP_NAME } from '$lib/constants';
 import { MessageRole } from '$lib/enums';
 import type { McpServerOverride } from '$lib/types/database';
+import type { ExportedConversation } from '$lib/types/database';
 
 class LlamaUiDatabase extends Dexie {
 	[IDXDB_TABLES.conversations]!: EntityTable<DatabaseConversation, string>;
@@ -206,22 +207,106 @@ export class DatabaseService {
 						await db[IDXDB_TABLES.messages].where('convId').equals(forkId).delete();
 					}
 				} else {
-					// Reparent direct children to deleted conv's parent
-					const conv = await db[IDXDB_TABLES.conversations].get(id);
-					const newParent = conv?.forkedFromConversationId;
-					const directChildren = await db[IDXDB_TABLES.conversations]
-						.filter((c) => c.forkedFromConversationId === id)
-						.toArray();
-
-					for (const child of directChildren) {
-						await db[IDXDB_TABLES.conversations].update(child.id, {
-							forkedFromConversationId: newParent ?? undefined
-						});
-					}
+					await this.reparentDirectChildren(id);
 				}
 
 				await db[IDXDB_TABLES.conversations].delete(id);
 				await db[IDXDB_TABLES.messages].where('convId').equals(id).delete();
+			}
+		);
+	}
+
+	/**
+	 * Reparents direct children of `parentId` to the nearest surviving
+	 * ancestor (or promotes them to top-level when the immediate parent was
+	 * top-level). Walking skips any ancestor listed in `excludeIds`, since
+	 * those will be deleted in the same batch — leaving a grandchild pointing
+	 * at an `excludeIds` entry would orphan it. Children whose own id is in
+	 * `excludeIds` are dropped from the updates (the bulk-delete pass will
+	 * remove them). `prefetched` may carry a pre-fetched ancestor map to
+	 * avoid repeat reads inside a bulk transaction.
+	 */
+	private static async reparentDirectChildren(
+		parentId: string,
+		excludeIds: ReadonlySet<string> = new Set(),
+		prefetched?: ReadonlyMap<string, DatabaseConversation>
+	): Promise<void> {
+		const conv = prefetched?.get(parentId) ?? (await db[IDXDB_TABLES.conversations].get(parentId));
+		if (!conv) return;
+
+		let newParent = conv.forkedFromConversationId;
+		const visited = new Set<string>([parentId]);
+		while (newParent && excludeIds.has(newParent)) {
+			if (visited.has(newParent)) {
+				newParent = undefined;
+				break;
+			}
+			visited.add(newParent);
+			const next =
+				prefetched?.get(newParent) ?? (await db[IDXDB_TABLES.conversations].get(newParent));
+			if (!next) {
+				newParent = undefined;
+				break;
+			}
+			newParent = next.forkedFromConversationId;
+		}
+
+		const directChildren = await db[IDXDB_TABLES.conversations]
+			.filter((c) => c.forkedFromConversationId === parentId)
+			.toArray();
+
+		const updates: DatabaseConversation[] = [];
+		for (const child of directChildren) {
+			if (excludeIds.has(child.id)) continue;
+			updates.push({ ...child, forkedFromConversationId: newParent });
+		}
+		if (updates.length === 0) return;
+		await db[IDXDB_TABLES.conversations].bulkPut(updates);
+	}
+
+	/**
+	 * Deletes multiple conversations in a single transaction. Each deleted
+	 * conversation has its direct children reparented to the nearest surviving
+	 * ancestor (or promoted to top-level). Children also in `ids` are dropped
+	 * entirely rather than reparented.
+	 *
+	 * @param ids - Conversation IDs to delete
+	 */
+	static async bulkDeleteConversations(ids: string[]): Promise<void> {
+		const cleanIds = ids.filter((id): id is string => typeof id === 'string' && id.length > 0);
+		if (cleanIds.length === 0) return;
+		const idSet = new Set(cleanIds);
+
+		await db.transaction(
+			'rw',
+			[db[IDXDB_TABLES.conversations], db[IDXDB_TABLES.messages]],
+			async () => {
+				// Pre-load each to-delete conversation so the per-id reparent
+				// walk-up doesn't ping-pong the same ancestry chain.
+				const prefetched = new Map<string, DatabaseConversation>();
+				let frontier = [...cleanIds];
+				const requested = new Set<string>(frontier);
+				while (frontier.length > 0) {
+					const fetched = await db[IDXDB_TABLES.conversations].bulkGet(frontier);
+					frontier = [];
+					for (let i = 0; i < fetched.length; i++) {
+						const conv = fetched[i];
+						if (!conv || !conv.id) continue;
+						prefetched.set(conv.id, conv);
+						const ancestor = conv.forkedFromConversationId;
+						if (ancestor && !prefetched.has(ancestor) && !requested.has(ancestor)) {
+							frontier.push(ancestor);
+							requested.add(ancestor);
+						}
+					}
+				}
+
+				for (const id of cleanIds) {
+					await this.reparentDirectChildren(id, idSet, prefetched);
+				}
+
+				await db[IDXDB_TABLES.conversations].bulkDelete(cleanIds);
+				await db[IDXDB_TABLES.messages].where('convId').anyOf(cleanIds).delete();
 			}
 		);
 	}
@@ -320,6 +405,43 @@ export class DatabaseService {
 	}
 
 	/**
+	 * Loads multiple conversations with all of their messages in two bulk
+	 * reads. Missing conversations are silently omitted from the result.
+	 *
+	 * @param convIds - Conversation IDs to load
+	 * @returns Map of id -> { conv, messages }. Messages are sorted ascending by timestamp.
+	 */
+	static async getConversationsWithMessages(
+		convIds: string[]
+	): Promise<Map<string, ExportedConversation>> {
+		const result = new Map<string, ExportedConversation>();
+		const cleanIds = convIds.filter((id): id is string => typeof id === 'string' && id.length > 0);
+		if (cleanIds.length === 0) return result;
+
+		const [convs, allMessages] = await Promise.all([
+			db[IDXDB_TABLES.conversations].bulkGet(cleanIds),
+			db[IDXDB_TABLES.messages].where('convId').anyOf(cleanIds).toArray()
+		]);
+
+		const messagesByConv = new Map<string, DatabaseMessage[]>();
+		for (const msg of allMessages) {
+			const bucket = messagesByConv.get(msg.convId);
+			if (bucket) bucket.push(msg);
+			else messagesByConv.set(msg.convId, [msg]);
+		}
+
+		for (let i = 0; i < cleanIds.length; i++) {
+			const conv = convs[i];
+			if (!conv) continue;
+			const messages = (messagesByConv.get(conv.id) ?? []).sort(
+				(a, b) => a.timestamp - b.timestamp
+			);
+			result.set(conv.id, { conv, messages });
+		}
+		return result;
+	}
+
+	/**
 	 * Updates a conversation.
 	 *
 	 * @param id - Conversation ID
@@ -358,6 +480,38 @@ export class DatabaseService {
 		const newPinnedState = !conversation.pinned;
 		await this.updateConversation(id, { pinned: newPinnedState });
 		return newPinnedState;
+	}
+
+	/**
+	 * Toggles the pinned status of each conversation in `ids` inside a single
+	 * transaction. Treats `pinned === undefined` as `false`, matching the
+	 * semantics of {@link toggleConversationPin} where `!undefined` evaluates
+	 * to `true`. Returns the resulting pinned state for every id that was
+	 * updated; missing ids are omitted from the map.
+	 *
+	 * @param ids - Conversation IDs to toggle
+	 * @returns Map of id -> new pinned state
+	 */
+	static async bulkToggleConversationPins(ids: string[]): Promise<Map<string, boolean>> {
+		const cleanIds = ids.filter((id): id is string => typeof id === 'string' && id.length > 0);
+		const result = new Map<string, boolean>();
+		if (cleanIds.length === 0) return result;
+
+		const now = Date.now();
+		await db.transaction('rw', db[IDXDB_TABLES.conversations], async () => {
+			const convs = await db[IDXDB_TABLES.conversations].bulkGet(cleanIds);
+			const updates: DatabaseConversation[] = [];
+			for (let i = 0; i < cleanIds.length; i++) {
+				const conv = convs[i];
+				if (!conv) continue;
+				const newPinned = !conv.pinned;
+				updates.push({ ...conv, pinned: newPinned, lastModified: now });
+				result.set(cleanIds[i], newPinned);
+			}
+			if (updates.length === 0) return;
+			await db[IDXDB_TABLES.conversations].bulkPut(updates);
+		});
+		return result;
 	}
 
 	/**

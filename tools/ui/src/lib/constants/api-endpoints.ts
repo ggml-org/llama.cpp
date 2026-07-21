@@ -21,5 +21,11 @@ export const API_TOOLS = {
 	EXECUTE: '/tools'
 };
 
+// resumable stream routes, the conv::model identity is appended as a path segment
+export const API_STREAM = {
+	BASE: './v1/stream',
+	LOOKUP: './v1/streams/lookup'
+};
+
 /** CORS proxy endpoint path */
 export const CORS_PROXY_ENDPOINT = '/cors-proxy';
