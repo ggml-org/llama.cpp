@@ -583,13 +583,17 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
 
         # Fetch KleidiAI sources:
         include(FetchContent)
-        set(KLEIDIAI_GIT_REPOSITORY "https://github.com/ARM-software/kleidiai.git")
-        set(KLEIDIAI_GIT_TAG        "c6b34654b7654d43a0f808bca3dd1cbc38e2bac9")
+        set(KLEIDIAI_COMMIT_TAG "v1.26.0")
+        set(KLEIDIAI_DOWNLOAD_URL "https://github.com/ARM-software/kleidiai/releases/download/${KLEIDIAI_COMMIT_TAG}/kleidiai-${KLEIDIAI_COMMIT_TAG}-src.tar.gz")
+        set(KLEIDIAI_RELEASE_ARCHIVE_MD5  "d88795bf737ca52d31eff425eaa274e7")
 
         set(KLEIDIAI_FETCH_ARGS
-            GIT_REPOSITORY ${KLEIDIAI_GIT_REPOSITORY}
-            GIT_TAG        ${KLEIDIAI_GIT_TAG}
+            URL ${KLEIDIAI_DOWNLOAD_URL}
+            URL_HASH MD5=${KLEIDIAI_RELEASE_ARCHIVE_MD5}
         )
+        if (CMAKE_VERSION VERSION_GREATER_EQUAL "3.24")
+            list(APPEND KLEIDIAI_FETCH_ARGS DOWNLOAD_EXTRACT_TIMESTAMP NEW)
+        endif()
 
         if (CMAKE_VERSION VERSION_GREATER_EQUAL "3.28")
             FetchContent_Declare(KleidiAI_Download
