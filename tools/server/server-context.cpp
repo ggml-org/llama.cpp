@@ -949,6 +949,12 @@ private:
         mctx = nullptr;
     }
 
+    void reset_runtime_state() {
+        spec.reset();
+        slots.clear();
+        prompt_cache.reset();
+    }
+
     void handle_sleeping_state(bool new_state) {
         GGML_ASSERT(sleeping != new_state);
         if (new_state) {
@@ -993,6 +999,162 @@ private:
             });
         }
         return true;
+    }
+
+    void setup_runtime_state(common_params & params) {
+        if (!llama_memory_can_shift(llama_get_memory(ctx_tgt))) {
+            if (params.ctx_shift) {
+                params.ctx_shift = false;
+                SRV_WRN("%s\n", "ctx_shift is not supported by this context, it will be disabled");
+            }
+
+            if (params.n_cache_reuse) {
+                params.n_cache_reuse = 0;
+                SRV_WRN("%s\n", "cache_reuse is not supported by this context, it will be disabled");
+            }
+        }
+
+        if (llama_model_n_swa(model_tgt) == 0) {
+            if (params.swa_full) {
+                params.swa_full = false;
+                SRV_WRN("%s\n", "swa_full is not supported by this model, it will be disabled");
+            }
+        }
+
+        n_swa = params.swa_full ? 0 : llama_model_n_swa(model_tgt);
+
+        // Necessary similarity of prompt for slot selection
+        slot_prompt_similarity = params.slot_prompt_similarity;
+
+        const int n_ctx_train = llama_model_n_ctx_train(model_tgt);
+
+        int n_ctx_slot = llama_n_ctx_seq(ctx_tgt);
+        if (n_ctx_slot > n_ctx_train) {
+            SRV_WRN("the slot context (%d) exceeds the training context of the model (%d) - capping\n", n_ctx_slot, n_ctx_train);
+            n_ctx_slot = n_ctx_train;
+        }
+
+        slots.clear();
+
+        ctx_tgt_seq_rm_type = common_context_can_seq_rm(ctx_tgt);
+        if (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_NO) {
+            SRV_WRN("%s", "speculative decoding not supported by this context\n");
+        }
+
+        if (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL) {
+            SRV_TRC("%s", "speculative decoding will use checkpoints\n");
+        }
+
+        // setup slots
+        SRV_INF("initializing, n_slots = %d, n_ctx_slot = %d, kv_unified = '%s'\n",
+                params.n_parallel, n_ctx_slot, params.kv_unified ? "true" : "false");
+
+        // initialize slots
+        for (int i = 0; i < params.n_parallel; i++) {
+            slots.emplace_back();
+        }
+
+        // try speculative decoding
+        if (ctx_tgt_seq_rm_type != COMMON_CONTEXT_SEQ_RM_TYPE_NO) {
+            try {
+                spec.reset(common_speculative_init(params.speculative, params.n_parallel));
+            } catch (const std::exception & e) {
+                SRV_ERR("failed to initialize speculative decoding context: %s\n", e.what());
+            }
+        }
+
+        if (ctx_dft) {
+            ctx_dft_seq_rm_type = common_context_can_seq_rm(ctx_dft);
+        }
+
+        if (spec) {
+            SRV_TRC("%s", "speculative decoding context initialized\n");
+        } else {
+            spec_init.reset();
+            ctx_dft   = nullptr;
+            model_dft = nullptr;
+        }
+
+        for (int i = 0; i < params.n_parallel; i++) {
+            server_slot & slot = slots[i];
+
+            slot.id      = i;
+            slot.ctx_tgt = ctx_tgt;
+            slot.ctx_dft = ctx_dft;
+            slot.spec    = spec.get();
+            slot.n_ctx   = n_ctx_slot;
+
+            slot.mctx                   = mctx;
+            slot.prompt.tokens.has_mtmd = mctx != nullptr;
+
+            SLT_TRC(slot, "new slot, n_ctx = %d\n", slot.n_ctx);
+
+            slot.callback_on_release = [this](int id_slot) {
+                queue_tasks.pop_deferred_task(id_slot);
+            };
+
+            slot.reset();
+        }
+
+        {
+            const char * LLAMA_TRACE = getenv("LLAMA_TRACE");
+            trace = LLAMA_TRACE ? atoi(LLAMA_TRACE) : 0;
+
+            if (trace) {
+                SRV_WRN("LLAMA_TRACE = %d\n", trace);
+            }
+        }
+
+        {
+            const char * LLAMA_SERVER_SLOTS_DEBUG = getenv("LLAMA_SERVER_SLOTS_DEBUG");
+            slots_debug = LLAMA_SERVER_SLOTS_DEBUG ? atoi(LLAMA_SERVER_SLOTS_DEBUG) : 0;
+
+            if (slots_debug) {
+                SRV_WRN("LLAMA_SERVER_SLOTS_DEBUG = %d\n", slots_debug);
+            }
+        }
+
+        // the update_slots() logic will always submit a maximum of n_batch or n_parallel tokens
+        // note that n_batch can be > n_ctx (e.g. for non-causal attention models such as BERT where the KV cache is not used)
+        {
+            const int32_t n_batch = llama_n_batch(ctx_tgt);
+            batch.init(std::max(n_batch, params.n_parallel));
+        }
+
+        if (params.cache_ram_mib != 0) {
+            if (params.cache_ram_mib < 0) {
+                SRV_TRC("prompt cache is enabled, size limit: %s\n", "no limit");
+            } else {
+                SRV_TRC("prompt cache is enabled, size limit: %d MiB\n", params.cache_ram_mib);
+            }
+            SRV_TRC("%s", "use `--cache-ram 0` to disable the prompt cache\n");
+
+            prompt_cache = std::make_unique<server_prompt_cache>(params.cache_ram_mib, n_ctx);
+        } else {
+            SRV_TRC("%s", "prompt cache is disabled - use `--cache-ram N` to enable it\n");
+        }
+        SRV_TRC("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
+
+        if (params.n_ctx_checkpoints > 0) {
+            SRV_TRC("context checkpoints enabled, max = %d, min spacing = %d\n",
+                    params.n_ctx_checkpoints, params.checkpoint_min_step);
+        } else {
+            SRV_TRC("%s", "context checkpoints disabled\n");
+        }
+
+        if (!params.model_alias.empty()) {
+            // backward compat: use first alias as model name
+            model_name = *params.model_alias.begin();
+        } else if (!params.model.get_name().empty()) {
+            model_name = params.model.get_name();
+        } else {
+            // fallback: derive model name from file name
+            auto model_path = std::filesystem::path(params.model.path);
+            model_name = model_path.filename().string();
+        }
+
+        model_aliases = params.model_alias;
+        model_tags    = params.model_tags;
     }
 
     // load the model and initialize llama_context
@@ -1243,159 +1405,7 @@ private:
             }
         }
 
-        if (!llama_memory_can_shift(llama_get_memory(ctx_tgt))) {
-            if (params_base.ctx_shift) {
-                params_base.ctx_shift = false;
-                SRV_WRN("%s\n", "ctx_shift is not supported by this context, it will be disabled");
-            }
-
-            if (params_base.n_cache_reuse) {
-                params_base.n_cache_reuse = 0;
-                SRV_WRN("%s\n", "cache_reuse is not supported by this context, it will be disabled");
-            }
-        }
-
-        if (llama_model_n_swa(model_tgt) == 0) {
-            if (params_base.swa_full) {
-                params_base.swa_full = false;
-                SRV_WRN("%s\n", "swa_full is not supported by this model, it will be disabled");
-            }
-        }
-
-        n_swa = params_base.swa_full ? 0 : llama_model_n_swa(model_tgt);
-
-        // Necessary similarity of prompt for slot selection
-        slot_prompt_similarity = params_base.slot_prompt_similarity;
-
-        const int n_ctx_train = llama_model_n_ctx_train(model_tgt);
-
-        int n_ctx_slot = llama_n_ctx_seq(ctx_tgt);
-        if (n_ctx_slot > n_ctx_train) {
-            SRV_WRN("the slot context (%d) exceeds the training context of the model (%d) - capping\n", n_ctx_slot, n_ctx_train);
-            n_ctx_slot = n_ctx_train;
-        }
-
-        slots.clear();
-
-        ctx_tgt_seq_rm_type = common_context_can_seq_rm(ctx_tgt);
-        if (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_NO) {
-            SRV_WRN("%s", "speculative decoding not supported by this context\n");
-        }
-
-        if (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL) {
-            SRV_TRC("%s", "speculative decoding will use checkpoints\n");
-        }
-
-        // setup slots
-        SRV_INF("initializing, n_slots = %d, n_ctx_slot = %d, kv_unified = '%s'\n",
-                params_base.n_parallel, n_ctx_slot, params_base.kv_unified ? "true" : "false");
-
-        // initialize slots
-        for (int i = 0; i < params_base.n_parallel; i++) {
-            slots.emplace_back();
-        }
-
-        // try speculative decoding
-        if (ctx_tgt_seq_rm_type != COMMON_CONTEXT_SEQ_RM_TYPE_NO) {
-            try {
-                spec.reset(common_speculative_init(params_base.speculative, params_base.n_parallel));
-            } catch (const std::exception & e) {
-                SRV_ERR("failed to initialize speculative decoding context: %s\n", e.what());
-            }
-        }
-
-        if (ctx_dft) {
-            ctx_dft_seq_rm_type = common_context_can_seq_rm(ctx_dft);
-        }
-
-        if (spec) {
-            SRV_TRC("%s", "speculative decoding context initialized\n");
-        } else {
-            spec_init.reset();
-            ctx_dft   = nullptr;
-            model_dft = nullptr;
-        }
-
-        for (int i = 0; i < params_base.n_parallel; i++) {
-            server_slot & slot = slots[i];
-
-            slot.id      = i;
-            slot.ctx_tgt = ctx_tgt;
-            slot.ctx_dft = ctx_dft;
-            slot.spec    = spec.get();
-            slot.n_ctx   = n_ctx_slot;
-
-            slot.mctx                   = mctx;
-            slot.prompt.tokens.has_mtmd = mctx != nullptr;
-
-            SLT_TRC(slot, "new slot, n_ctx = %d\n", slot.n_ctx);
-
-            slot.callback_on_release = [this](int id_slot) {
-                queue_tasks.pop_deferred_task(id_slot);
-            };
-
-            slot.reset();
-        }
-
-        {
-            const char * LLAMA_TRACE = getenv("LLAMA_TRACE");
-            trace = LLAMA_TRACE ? atoi(LLAMA_TRACE) : 0;
-
-            if (trace) {
-                SRV_WRN("LLAMA_TRACE = %d\n", trace);
-            }
-        }
-
-        {
-            const char * LLAMA_SERVER_SLOTS_DEBUG = getenv("LLAMA_SERVER_SLOTS_DEBUG");
-            slots_debug = LLAMA_SERVER_SLOTS_DEBUG ? atoi(LLAMA_SERVER_SLOTS_DEBUG) : 0;
-
-            if (slots_debug) {
-                SRV_WRN("LLAMA_SERVER_SLOTS_DEBUG = %d\n", slots_debug);
-            }
-        }
-
-        // the update_slots() logic will always submit a maximum of n_batch or n_parallel tokens
-        // note that n_batch can be > n_ctx (e.g. for non-causal attention models such as BERT where the KV cache is not used)
-        {
-            const int32_t n_batch = llama_n_batch(ctx_tgt);
-            batch.init(std::max(n_batch, params_base.n_parallel));
-        }
-
-        if (params_base.cache_ram_mib != 0) {
-            if (params_base.cache_ram_mib < 0) {
-                SRV_TRC("prompt cache is enabled, size limit: %s\n", "no limit");
-            } else {
-                SRV_TRC("prompt cache is enabled, size limit: %d MiB\n", params_base.cache_ram_mib);
-            }
-            SRV_TRC("%s", "use `--cache-ram 0` to disable the prompt cache\n");
-
-            prompt_cache = std::make_unique<server_prompt_cache>(params_base.cache_ram_mib, n_ctx);
-        } else {
-            SRV_TRC("%s", "prompt cache is disabled - use `--cache-ram N` to enable it\n");
-        }
-        SRV_TRC("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
-
-        if (params_base.n_ctx_checkpoints > 0) {
-            SRV_TRC("context checkpoints enabled, max = %d, min spacing = %d\n",
-                    params_base.n_ctx_checkpoints, params_base.checkpoint_min_step);
-        } else {
-            SRV_TRC("%s", "context checkpoints disabled\n");
-        }
-
-        if (!params_base.model_alias.empty()) {
-            // backward compat: use first alias as model name
-            model_name = *params_base.model_alias.begin();
-        } else if (!params_base.model.get_name().empty()) {
-            model_name = params_base.model.get_name();
-        } else {
-            // fallback: derive model name from file name
-            auto model_path = std::filesystem::path(params_base.model.path);
-            model_name = model_path.filename().string();
-        }
-
-        model_aliases = params_base.model_alias;
-        model_tags    = params_base.model_tags;
+        setup_runtime_state(params_base);
 
         // propagate new defaults back to caller
         params = params_base;
@@ -1403,6 +1413,104 @@ private:
         if (!is_resume) {
             return init();
         }
+
+        if (callback_state) {
+            callback_state(SERVER_STATE_READY, {});
+        }
+
+        return true;
+    }
+
+    bool reload_context(common_params & params) {
+        load_progress_data load_progress_text  (this, "text_model");
+        load_progress_data load_progress_spec  (this, "spec_model");
+
+        // get only llama_context_params from input; other params are ignored
+        auto new_ctx_params = common_context_params_to_llama(params);
+
+        // merge existing common_params with new context params
+        common_overlay_context_params(params_base, new_ctx_params);
+        params_base.n_outputs_max = server_n_outputs_max(params_base);
+
+        const bool has_draft = params_base.speculative.has_dft();
+        const bool spec_mtp = std::find(params_base.speculative.types.begin(),
+                                        params_base.speculative.types.end(),
+                                        COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end();
+        const bool has_spec = has_draft || spec_mtp;
+
+        if (callback_state) {
+            std::vector<std::string> stages = {"text_model"};
+            if (has_spec) {
+                stages.push_back("spec_model");
+            }
+            load_progress_text.stages   = stages;
+            load_progress_spec.stages   = stages;
+
+            // trigger 0% progress
+            load_progress_callback(0.0f, &load_progress_text);
+        }
+
+        SRV_INF("reinitializing context for model '%s'\n", params_base.model.get_name().c_str());
+        SRV_TRC("local path '%s'\n", params_base.model.path.c_str());
+
+        // attach a progress callback
+        {
+            params_base.load_progress_callback = load_progress_callback;
+            params_base.load_progress_callback_user_data = &load_progress_text;
+        }
+
+        // NOTE: ideally, we are able to validate here that the new context
+        // is compatible with the existing device split before destroying the
+        // existing context/runtime state.
+        //
+        // we may need a new fit method that performs a partial fit (e.g. given
+        // existing model weights, fit context). however, we would still need to
+        // temporarily remove the existing context to allocate a new one.
+        //
+        // needs more thought. for now, i'm pushing responsibility for ensuring
+        // the new context fits to the caller.
+
+        reset_runtime_state();
+
+        // reinit ctx_tgt, keeping model_tgt in place
+        ctx_tgt = llama_init->reinit_context(params_base);
+        if (ctx_tgt == nullptr) {
+            SRV_ERR("%s\n", "failed to reinit context");
+            return false;
+        }
+
+        n_ctx = llama_n_ctx(ctx_tgt);
+
+        if (has_spec) {
+            // we're not loading a model, just context, so we report 0.0 and 1.0 manually
+            load_progress_callback(0.0f, &load_progress_spec);
+            load_progress_spec.t_last_load_progress_ms = 0;  // reset so internal cbs aren't delayed
+
+            {
+                common_params params_dft = common_base_params_to_speculative(params_base);
+
+                // progress callback
+                params_dft.load_progress_callback           = load_progress_callback;
+                params_dft.load_progress_callback_user_data = &load_progress_spec;
+
+                // TODO - speculative reinit_context
+                ctx_dft = spec_init->reinit_context(params_dft, model_tgt, ctx_tgt);
+                if (ctx_dft == nullptr) {
+                    SRV_ERR("%s", "failed to recreate MTP context\n");
+                    return false;
+                }
+
+                params_base.speculative.draft.ctx_tgt = ctx_tgt;
+                params_base.speculative.draft.ctx_dft = ctx_dft;
+            }
+
+            load_progress_callback(1.0f, &load_progress_spec);
+        }
+
+        setup_runtime_state(params_base);
+
+        // propagate new defaults back to caller
+        params = params_base;
 
         if (callback_state) {
             callback_state(SERVER_STATE_READY, {});

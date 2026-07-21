@@ -1664,6 +1664,39 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     return cparams;
 }
 
+void common_overlay_context_params(common_params & params, llama_context_params ctx) {
+    params.n_ctx             = ctx.n_ctx;
+    params.n_parallel        = ctx.n_seq_max;
+    params.n_outputs_max     = ctx.n_outputs_max;
+    params.n_batch           = ctx.n_batch;
+    params.n_ubatch          = ctx.n_ubatch;
+
+    params.cpuparams.n_threads       = ctx.n_threads;
+    params.cpuparams_batch.n_threads = ctx.n_threads_batch;
+
+    params.embedding         = ctx.embeddings;
+    params.rope_scaling_type = ctx.rope_scaling_type;
+    params.rope_freq_base    = ctx.rope_freq_base;
+    params.rope_freq_scale   = ctx.rope_freq_scale;
+    params.yarn_ext_factor   = ctx.yarn_ext_factor;
+    params.yarn_attn_factor  = ctx.yarn_attn_factor;
+    params.yarn_beta_fast    = ctx.yarn_beta_fast;
+    params.yarn_beta_slow    = ctx.yarn_beta_slow;
+    params.yarn_orig_ctx     = ctx.yarn_orig_ctx;
+    params.pooling_type      = ctx.pooling_type;
+    params.attention_type    = ctx.attention_type;
+    params.flash_attn_type   = ctx.flash_attn_type;
+    params.cb_eval           = ctx.cb_eval;
+    params.cb_eval_user_data = ctx.cb_eval_user_data;
+    params.no_kv_offload     = !ctx.offload_kqv;
+    params.no_perf           = ctx.no_perf;
+    params.no_op_offload     = !ctx.op_offload;
+    params.swa_full          = ctx.swa_full;
+    params.kv_unified        = ctx.kv_unified;
+    params.cache_type_k      = ctx.type_k;
+    params.cache_type_v      = ctx.type_v;
+}
+
 struct ggml_threadpool_params ggml_threadpool_params_from_cpu_params(const common_cpu_params & params) {
     struct ggml_threadpool_params tpp;
 
