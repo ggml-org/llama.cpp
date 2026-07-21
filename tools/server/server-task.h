@@ -543,6 +543,12 @@ struct server_task_result_metrics : server_task_result {
     uint64_t kv_cache_tokens = 0;
     uint64_t kv_cache_cells  = 0;
 
+    // KV cache byte footprint and live quantization types
+    uint64_t    kv_cache_k_bytes = 0;
+    uint64_t    kv_cache_v_bytes = 0;
+    std::string kv_cache_type_k;   // e.g. "f16", "q8_0"
+    std::string kv_cache_type_v;
+
     // while we can also use std::vector<server_slot> this requires copying the slot object which can be quite messy
     // therefore, we use json to temporarily store the slot.to_json() result
     json slots_data = json::array();

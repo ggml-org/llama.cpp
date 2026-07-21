@@ -2532,6 +2532,16 @@ private:
                     res->kv_cache_tokens = kv_cache_tokens;
                     res->kv_cache_cells  = (uint64_t) n_ctx;
 
+                    {
+                        size_t k_bytes = 0;
+                        size_t v_bytes = 0;
+                        llama_memory_kv_size_bytes(llama_get_memory(ctx_tgt), &k_bytes, &v_bytes);
+                        res->kv_cache_k_bytes = (uint64_t) k_bytes;
+                        res->kv_cache_v_bytes = (uint64_t) v_bytes;
+                    }
+                    res->kv_cache_type_k = ggml_type_name(params_base.cache_type_k);
+                    res->kv_cache_type_v = ggml_type_name(params_base.cache_type_v);
+
                     if (task.metrics_reset_bucket) {
                         metrics.reset_bucket();
                     }
