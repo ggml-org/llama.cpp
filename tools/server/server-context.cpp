@@ -54,6 +54,38 @@ static uint32_t server_n_outputs_max(const common_params & params) {
     return std::max<uint32_t>(1, std::min<uint64_t>(n_batch, n_outputs));
 }
 
+static void render_histogram(std::stringstream & out,
+                             const std::string & name,
+                             const std::string & help,
+                             const std::string & model_label,
+                             const std::vector<double> & bounds,
+                             const std::vector<uint64_t> & bucket_counts,
+                             uint64_t count,
+                             double sum) {
+    out << "# HELP llamacpp:" << name << " " << help << "\n";
+    out << "# TYPE llamacpp:" << name << " histogram\n";
+
+    // model_label is "{model=\"...\"}"; splice le=... before the closing brace.
+    auto with_le = [&](const std::string & le) {
+        std::string labels = model_label;
+        labels.pop_back();
+        labels += ",le=\"";
+        labels += le;
+        labels += "\"}";
+        return labels;
+    };
+
+    for (size_t i = 0; i < bounds.size(); ++i) {
+        std::ostringstream le;
+        le << bounds[i];
+        out << "llamacpp:" << name << "_bucket" << with_le(le.str())
+            << " " << bucket_counts[i] << "\n";
+    }
+    out << "llamacpp:" << name << "_bucket" << with_le("+Inf") << " " << count << "\n";
+    out << "llamacpp:" << name << "_sum"   << model_label << " " << sum   << "\n";
+    out << "llamacpp:" << name << "_count" << model_label << " " << count << "\n";
+}
+
 // state diagram: https://github.com/ggml-org/llama.cpp/pull/9283
 enum slot_state {
     SLOT_STATE_IDLE,
