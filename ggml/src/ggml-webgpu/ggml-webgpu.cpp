@@ -17,7 +17,9 @@
 #include <webgpu/webgpu_cpp.h>
 
 #include <atomic>
+#include <cstdio>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #ifdef GGML_WEBGPU_GPU_PROFILE
 #    include <iomanip>
@@ -95,6 +97,35 @@ static inline uint32_t ggml_webgpu_u32_from_f32(float value) {
 #define WEBGPU_STORAGE_BUF_BINDING_MULT          4    // a storage buffer binding size must be a multiple of 4
 
 /* End Constants */
+
+static bool ggml_webgpu_trace_nodes_enabled() {
+    static const bool enabled = []() {
+        const char * env = std::getenv("GGML_WEBGPU_TRACE_NODES");
+        return env != nullptr && std::strcmp(env, "0") != 0;
+    }();
+    return enabled;
+}
+
+static void ggml_webgpu_trace_node(const char * stage, int node_idx, const ggml_tensor * node) {
+    if (!ggml_webgpu_trace_nodes_enabled()) {
+        return;
+    }
+
+    fprintf(stderr,
+            "[ggml-webgpu trace] stage=%s node=%d op=%s name=%s type=%s ne=[%lld,%lld,%lld,%lld]\n",
+            stage, node_idx, ggml_op_name(node->op), node->name, ggml_type_name(node->type),
+            (long long) node->ne[0], (long long) node->ne[1], (long long) node->ne[2], (long long) node->ne[3]);
+    fflush(stderr);
+}
+
+static void ggml_webgpu_trace_graph(const char * stage, int n_nodes, uint32_t n_kernels) {
+    if (!ggml_webgpu_trace_nodes_enabled()) {
+        return;
+    }
+
+    fprintf(stderr, "[ggml-webgpu trace] stage=%s graph_nodes=%d pending_kernels=%u\n", stage, n_nodes, n_kernels);
+    fflush(stderr);
+}
 
 // This is a "fake" base pointer, since WebGPU buffers do not have pointers to
 // their locations.
@@ -3361,26 +3392,34 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
         ctx->active_compute_pass = ctx->active_command_encoder.BeginComputePass();
     }
 
+    ggml_webgpu_trace_graph("graph begin", cgraph->n_nodes, 0);
+
     while (node_idx < cgraph->n_nodes) {
+        ggml_webgpu_trace_node("encode begin", node_idx, cgraph->nodes[node_idx]);
         if (cgraph->nodes[node_idx]->op == GGML_OP_SET_ROWS) {
             contains_set_rows = true;
         }
         if (auto cmd = ggml_webgpu_encode(ctx, cgraph, node_idx, num_encoded_ops)) {
             commands.push_back(*cmd);
             num_batched_kernels += cmd.value().num_kernels;
+            ggml_webgpu_trace_node("encode end", node_idx, cgraph->nodes[node_idx]);
 #ifdef GGML_WEBGPU_GPU_PROFILE
             profile_pipeline_names.insert(profile_pipeline_names.end(), cmd->pipeline_names.begin(),
                                           cmd->pipeline_names.end());
 #endif
+        } else {
+            ggml_webgpu_trace_node("encode skipped", node_idx, cgraph->nodes[node_idx]);
         }
 
         if (num_batched_kernels >= ctx->global_ctx->command_submit_batch_size) {
+            ggml_webgpu_trace_graph("batch submit begin", cgraph->n_nodes, num_batched_kernels);
             if (ctx->active_compute_pass) {
                 ctx->active_compute_pass.End();
             }
             num_batched_kernels                = 0;
             wgpu::CommandBuffer batch_commands = ctx->active_command_encoder.Finish();
             ggml_backend_webgpu_submit_commands(ctx, batch_commands, num_inflight_batches);
+            ggml_webgpu_trace_graph("batch submit end", cgraph->n_nodes, num_batched_kernels);
 
             // reset state for next batch
             ctx->active_command_encoder = ctx->global_ctx->device.CreateCommandEncoder();
@@ -3411,8 +3450,10 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
     }
 
     if (num_batched_kernels > 0) {
+        ggml_webgpu_trace_graph("final submit begin", cgraph->n_nodes, num_batched_kernels);
         wgpu::CommandBuffer batch_commands = ctx->active_command_encoder.Finish();
         ggml_backend_webgpu_submit_commands(ctx, batch_commands, num_inflight_batches);
+        ggml_webgpu_trace_graph("final submit end", cgraph->n_nodes, 0);
         ctx->param_arena.reset();
         commands.clear();
     }
@@ -3427,6 +3468,7 @@ static ggml_status ggml_backend_webgpu_graph_compute(ggml_backend_t backend, str
     }
 
     WEBGPU_CPU_PROFILE_TOTAL_END(graph_compute, ctx->global_ctx);
+    ggml_webgpu_trace_graph("graph end", cgraph->n_nodes, 0);
     return GGML_STATUS_SUCCESS;
 }
 
