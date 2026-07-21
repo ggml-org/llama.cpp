@@ -31,6 +31,28 @@ to_fp32_nc_cuda_t ggml_get_to_fp32_nc_cuda(ggml_type type);
 to_fp16_nc_cuda_t ggml_get_to_fp16_nc_cuda(ggml_type type);
 to_bf16_nc_cuda_t ggml_get_to_bf16_nc_cuda(ggml_type type);
 
+// Set the Q4_DPT lookup table in device constant memory.
+void ggml_cuda_set_q4dpt_levels(const int8_t * levels, cudaStream_t stream);
+
+// Set the Q2_DPT lookup table in device constant memory.
+void ggml_cuda_set_q2dpt_levels(const int8_t * levels, cudaStream_t stream);
+
+// Set the IQ2_TQ per-tensor grid (64 bytes: 16 entries × 4 int8 levels).
+void ggml_cuda_set_iq2tq_grid(const void * grid, cudaStream_t stream);
+
+// Set the IQ3_TQ per-tensor grid (128 bytes: 16 entries × 8 int8 levels).
+void ggml_cuda_set_iq3tq_grid(const void * grid, cudaStream_t stream);
+
+
+// Set the IQ1_BN per-tensor codebook+scale (2064 bytes).
+void ggml_cuda_set_iq1bn_aux(const void * aux, cudaStream_t stream);
+
+// Set the Q3_KPT per-tensor levels (8 floats).
+void ggml_cuda_set_q3kpt_levels(const float * levels, cudaStream_t stream);
+
+// Set the Q2_KPT per-block levels pointer.
+void ggml_cuda_set_q2kpt_levels(const float * levels, size_t n_levels, cudaStream_t stream);
+
 template<typename dst_t, typename src_t>
  __host__ __device__ inline dst_t ggml_cuda_cast(src_t x) {
     if constexpr (std::is_same_v<dst_t, src_t>) {

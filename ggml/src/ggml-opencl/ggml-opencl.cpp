@@ -14314,7 +14314,7 @@ static bool ggml_cl_flash_attn_prepare_quantized_tensor(
                                         row_bytes, host_quant.data(), total_bytes);
 
     std::vector<float> host_f32(n);
-    ggml_get_type_traits(tensor->type)->to_float(host_quant.data(), host_f32.data(), n);
+    ggml_get_type_traits(tensor->type)->to_float(host_quant.data(), host_f32.data(), n, nullptr);
 
     const size_t bytes_per_elem = ggml_type_size(target_type);
     const size_t buffer_size = (size_t) n * bytes_per_elem;

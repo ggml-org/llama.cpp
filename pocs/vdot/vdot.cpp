@@ -285,8 +285,8 @@ int main(int argc, char** argv) {
         else {
             const auto * vdot = ggml_get_type_traits_cpu(funcs_cpu->vec_dot_type);
             vdot->from_float(y1.data(), q8.data(), kVecSize);
-            if (useQ4_1) funcs_cpu->vec_dot(kVecSize, &result, 0, q41.data(), 0, q8.data(), 0, 1);
-            else funcs_cpu->vec_dot(kVecSize, &result, 0, q40.data(), 0, q8.data(), 0, 1);
+            if (useQ4_1) funcs_cpu->vec_dot(kVecSize, &result, 0, q41.data(), 0, q8.data(), 0, 1, nullptr);
+            else funcs_cpu->vec_dot(kVecSize, &result, 0, q40.data(), 0, q8.data(), 0, 1, nullptr);
         }
         sumq += result;
         t2 = std::chrono::high_resolution_clock::now();

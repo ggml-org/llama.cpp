@@ -264,6 +264,7 @@ if (NOT LLAMA_SANITIZE_ADDRESS AND NOT GGML_SCHED_NO_REALLOC)
   llama_build_and_test(test-opt.cpp)
 endif()
 llama_build_and_test(test-backend-ops.cpp)
+target_include_directories(test-backend-ops PRIVATE ${CMAKE_SOURCE_DIR}/ggml/src)
 
 llama_build_and_test(test-model-load-cancel.cpp LABEL "model")
 llama_build_and_test(test-autorelease.cpp       LABEL "model")
@@ -286,6 +287,9 @@ if (NOT GGML_BACKEND_DL)
     llama_build_and_test(test-rope.cpp)
     llama_build_and_test(test-col2im-1d.cpp)
 endif()
+
+# Quantization laboratory - tests for 2.5 BPW proposals
+llama_build_and_test(test-quant-laboratory.cpp)
 
 # libmtmd
 set(LLAMA_TEST_NAME test-mtmd-c-api)

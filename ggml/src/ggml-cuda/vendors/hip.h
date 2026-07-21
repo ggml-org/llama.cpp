@@ -77,6 +77,8 @@
 #define cudaGetDeviceProperties hipGetDeviceProperties
 #define cudaGetErrorString hipGetErrorString
 #define cudaGetLastError hipGetLastError
+#define cudaGetSymbolAddress hipGetSymbolAddress
+#define cudaMemcpyToSymbolAsync hipMemcpyToSymbolAsync
 #define cudaHostRegister hipHostRegister
 #define cudaHostRegisterPortable hipHostRegisterPortable
 #define cudaHostRegisterReadOnly hipHostRegisterReadOnly
