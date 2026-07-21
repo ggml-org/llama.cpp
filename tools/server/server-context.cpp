@@ -2351,6 +2351,7 @@ private:
                     }
 
                     const int id_task = task.id;
+                    const std::string client_ip = task.remote_addr.empty() ? "unknown" : task.remote_addr;
 
                     server_slot * slot = get_available_slot(task);
 
@@ -2371,6 +2372,13 @@ private:
                         queue_tasks.defer(std::move(task));
                         break;
                     }
+
+                    // log client IP when task starts processing
+                    SRV_INF("%s task %d from %s (slot %d)\n",
+                        task.type == SERVER_TASK_TYPE_COMPLETION ? "completion" :
+                        task.type == SERVER_TASK_TYPE_INFILL ? "infill" :
+                        task.type == SERVER_TASK_TYPE_EMBEDDING ? "embedding" : "other",
+                        id_task, client_ip.c_str(), slot->id);
 
                     if (task.is_parent()) {
                         // try getting free slots for all child tasks
@@ -4090,6 +4098,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_completions_impl(
             server_task task = server_task(type);
 
             task.id = rd.get_new_id();
+            task.remote_addr = req.remote_addr; // store client IP
 
             task.tokens = std::move(inputs[i]);
             task.params = server_schema::eval_llama_cmpl_schema(
@@ -4969,8 +4978,9 @@ void server_routes::init_routes() {
             for (size_t i = 0; i < documents.size(); i++) {
                 auto tmp = format_prompt_rerank(ctx_server.model_tgt, ctx_server.vocab, ctx_server.mctx, query, documents[i]);
                 server_task task = server_task(SERVER_TASK_TYPE_RERANK);
-                task.id     = rd.get_new_id();
-                task.tokens = std::move(tmp);
+                task.id          = rd.get_new_id();
+                task.remote_addr = req.remote_addr; // store client IP
+                task.tokens      = std::move(tmp);
                 tasks.push_back(std::move(task));
             }
             rd.post_tasks(std::move(tasks));
@@ -5011,7 +5021,8 @@ void server_routes::init_routes() {
         auto & rd = res->rd;
         {
             server_task task(SERVER_TASK_TYPE_GET_LORA);
-            task.id = rd.get_new_id();
+            task.id          = rd.get_new_id();
+            task.remote_addr = req.remote_addr; // store client IP
             rd.post_task(std::move(task));
         }
 
@@ -5044,8 +5055,9 @@ void server_routes::init_routes() {
         auto & rd = res->rd;
         {
             server_task task(SERVER_TASK_TYPE_SET_LORA);
-            task.id = rd.get_new_id();
-            task.set_lora = parse_lora_request(body);
+            task.id          = rd.get_new_id();
+            task.remote_addr = req.remote_addr; // store client IP
+            task.set_lora    = parse_lora_request(body);
             rd.post_task(std::move(task));
         }
 
@@ -5102,7 +5114,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_slots_save(const ser
     auto & rd = res->rd;
     {
         server_task task(SERVER_TASK_TYPE_SLOT_SAVE);
-        task.id = rd.get_new_id();
+        task.id          = rd.get_new_id();
+        task.remote_addr = req.remote_addr; // store client IP
         task.slot_action.id_slot  = id_slot;
         task.slot_action.filename = filename;
         task.slot_action.filepath = filepath;
@@ -5138,7 +5151,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_slots_restore(const 
     auto & rd = res->rd;
     {
         server_task task(SERVER_TASK_TYPE_SLOT_RESTORE);
-        task.id = rd.get_new_id();
+        task.id          = rd.get_new_id();
+        task.remote_addr = req.remote_addr; // store client IP
         task.slot_action.id_slot  = id_slot;
         task.slot_action.filename = filename;
         task.slot_action.filepath = filepath;
@@ -5167,7 +5181,8 @@ std::unique_ptr<server_res_generator> server_routes::handle_slots_erase(const se
     auto & rd = res->rd;
     {
         server_task task(SERVER_TASK_TYPE_SLOT_ERASE);
-        task.id = rd.get_new_id();
+        task.id          = rd.get_new_id();
+        task.remote_addr = req.remote_addr; // store client IP
         task.slot_action.id_slot = id_slot;
         rd.post_task(std::move(task));
     }
@@ -5251,11 +5266,12 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
         for (size_t i = 0; i < tokenized_prompts.size(); i++) {
             server_task task = server_task(SERVER_TASK_TYPE_EMBEDDING);
 
-            task.id     = rd.get_new_id();
-            task.tokens = std::move(tokenized_prompts[i]);
+            task.id             = rd.get_new_id();
+            task.remote_addr    = req.remote_addr; // store client IP
+            task.tokens         = std::move(tokenized_prompts[i]);
 
             // OAI-compat
-            task.params.res_type = res_type;
+            task.params.res_type       = res_type;
             task.params.embd_normalize = embd_normalize;
 
             tasks.push_back(std::move(task));

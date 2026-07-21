@@ -1227,13 +1227,27 @@ server_http_res_ptr server_models::proxy_request(const server_http_req & req, co
     if (!req.query_string.empty()) {
         proxy_path += '?' + req.query_string;
     }
+
+    // Preserve original client IP when proxying to child server
+    std::map<std::string, std::string> forwarded_headers = req.headers;
+    std::string client_ip = req.remote_addr;
+    if (!client_ip.empty() && client_ip != "unknown") {
+        // Check if X-Forwarded-For already exists and append to it
+        auto existing_xff = forwarded_headers.find("X-Forwarded-For");
+        if (existing_xff != forwarded_headers.end()) {
+            forwarded_headers["X-Forwarded-For"] = existing_xff->second + ", " + client_ip;
+        } else {
+            forwarded_headers["X-Forwarded-For"] = client_ip;
+        }
+    }
+
     auto proxy = std::make_unique<server_http_proxy>(
             method,
             "http",
             CHILD_ADDR,
             meta->port,
             proxy_path,
-            req.headers,
+            forwarded_headers,
             req.body,
             req.files,
             req.should_stop,
@@ -1833,13 +1847,26 @@ void server_models_routes::init_routes() {
         }
         SRV_TRC("proxying stream resume to model %s on port %d, path=%s\n",
                 owner->name.c_str(), owner->port, child_path.c_str());
+
+        // Preserve original client IP when proxying to child server
+        std::map<std::string, std::string> forwarded_headers = req.headers;
+        std::string client_ip = req.remote_addr;
+        if (!client_ip.empty() && client_ip != "unknown") {
+            auto existing_xff = forwarded_headers.find("X-Forwarded-For");
+            if (existing_xff != forwarded_headers.end()) {
+                forwarded_headers["X-Forwarded-For"] = existing_xff->second + ", " + client_ip;
+            } else {
+                forwarded_headers["X-Forwarded-For"] = client_ip;
+            }
+        }
+
         auto proxy = std::make_unique<server_http_proxy>(
                 "GET",
                 "http",
                 CHILD_ADDR,
                 owner->port,
                 child_path,
-                req.headers,
+                forwarded_headers,
                 req.body,
                 req.files,
                 req.should_stop,

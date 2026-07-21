@@ -175,6 +175,9 @@ struct server_task {
     // used by SERVER_TASK_TYPE_SET_LORA
     std::map<int, float> set_lora; // mapping adapter ID -> scale
 
+    // client IP address for logging
+    std::string remote_addr;
+
     server_task() = default;
 
     server_task(server_task_type type) : type(type) {}

@@ -534,6 +534,38 @@ static std::string build_query_string(const httplib::Request & req) {
     return qs;
 }
 
+// Helper function to extract real client IP from proxy headers
+static std::string get_client_ip(const httplib::Request & req) {
+    // First, check X-Forwarded-For header (comma-separated list, first IP is original client)
+    auto x_forwarded_for = req.get_header_value("X-Forwarded-For");
+    if (!x_forwarded_for.empty()) {
+        // Get the first IP in the list (original client)
+        size_t comma_pos = x_forwarded_for.find(',');
+        if (comma_pos != std::string::npos) {
+            x_forwarded_for = x_forwarded_for.substr(0, comma_pos);
+        }
+        // Trim whitespace
+        x_forwarded_for.erase(0, x_forwarded_for.find_first_not_of(" \t"));
+        x_forwarded_for.erase(x_forwarded_for.find_last_not_of(" \t") + 1);
+        if (!x_forwarded_for.empty()) {
+            return x_forwarded_for;
+        }
+    }
+
+    // Check X-Real-IP header (single IP)
+    auto x_real_ip = req.get_header_value("X-Real-IP");
+    if (!x_real_ip.empty()) {
+        x_real_ip.erase(0, x_real_ip.find_first_not_of(" \t"));
+        x_real_ip.erase(x_real_ip.find_last_not_of(" \t") + 1);
+        if (!x_real_ip.empty()) {
+            return x_real_ip;
+        }
+    }
+
+    // Fall back to connection remote address
+    return req.remote_addr.empty() ? "unknown" : req.remote_addr;
+}
+
 // using unique_ptr for request to allow safe capturing in lambdas
 using server_http_req_ptr = std::unique_ptr<server_http_req>;
 
@@ -587,7 +619,8 @@ void server_http_context::get(const std::string & path, const server_http_contex
             build_query_string(req),
             req.body,
             {},
-            req.is_connection_closed
+            req.is_connection_closed,
+            get_client_ip(req)
         });
         server_http_res_ptr response = handler(*request);
         process_handler_response(std::move(request), response, res);
@@ -634,7 +667,8 @@ void server_http_context::post(const std::string & path, const server_http_conte
             build_query_string(req),
             body,
             std::move(files),
-            req.is_connection_closed
+            req.is_connection_closed,
+            get_client_ip(req)
         });
         server_http_res_ptr response = handler(*request);
         process_handler_response(std::move(request), response, res);
@@ -651,7 +685,8 @@ void server_http_context::del(const std::string & path, const server_http_contex
             build_query_string(req),
             req.body,
             {},
-            req.is_connection_closed
+            req.is_connection_closed,
+            get_client_ip(req)
         });
         server_http_res_ptr response = handler(*request);
         process_handler_response(std::move(request), response, res);
@@ -807,6 +842,7 @@ void server_http_context::register_gcp_compat() const {
                         payload.dump(),
                         {},
                         req.should_stop,
+                        req.remote_addr  // preserve client IP for GCP proxy
                     };
 
                     server_http_res_ptr internal_res = handlers.at(dispatch_path)(internal_req);
