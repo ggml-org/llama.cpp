@@ -17,17 +17,16 @@ export const SANDBOX_TOOL_DEFINITION: OpenAIToolDefinition = {
 	type: ToolCallType.FUNCTION,
 	function: {
 		name: SANDBOX_TOOL_NAME,
-		description:
-			'Execute JavaScript in a sandboxed browser worker (no DOM, no page access). ' +
-			'Top level await is supported. Use console.log to print intermediate values; ' +
-			'a top level return statement is captured as the result.\n' +
-			'\n' +
-			'Symbolic math via `nerdamer`: simplify, expand, factor, diff, integrate, ' +
-			'solve, laplace, ilt, limit, partfrac, gcd, lcm, roots, coeffs, numer, ' +
-			'pfactor, decimals, product, sum, mean, stdev, variance, median, erf, ' +
-			'plus constants pi, e, i.\n' +
-			'Query available functions at runtime: ' +
-			'Object.keys(nerdamer).filter(k => typeof nerdamer[k] === \'function\')',
+		description: `Execute JavaScript in a sandboxed browser worker (no DOM, no page access).
+Top level await is supported. Use console.log to print intermediate values;
+a top level return statement is captured as the result.
+
+Symbolic math via \`nerdamer\`: simplify, expand, factor, diff, integrate,
+solve, laplace, ilt, limit, partfrac, gcd, lcm, roots, coeffs, numer,
+pfactor, decimals, product, sum, mean, stdev, variance, median, erf,
+plus constants pi, e, i.
+Query available functions at runtime:
+Object.keys(nerdamer).filter(k => typeof nerdamer[k] === 'function')`,
 		parameters: {
 			type: JsonSchemaType.OBJECT,
 			properties: {

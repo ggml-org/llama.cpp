@@ -1,5 +1,10 @@
+/**
+ * nerdamer-prime.js downloaded from https://raw.githubusercontent.com/together-science/nerdamer-prime/refs/heads/main/all.min.js
+ * Upstream commit for all.min.js: https://github.com/together-science/nerdamer-prime/commit/fffcce3ebd74fefb51fcf90b613f088fcab4fd93
+ */
+import { NEWLINE } from '$lib/constants';
 import WORKER_SHIM from './sandbox-worker.js?raw';
-import NERDAMER_JS from './nerdamer-prime.js?raw';
+import NERDAMER_JS from '../vendors/nerdamer-prime.js?raw';
 
 /**
  * Harness loaded as srcdoc into a sandboxed iframe (allow-scripts only).
@@ -12,7 +17,7 @@ import NERDAMER_JS from './nerdamer-prime.js?raw';
  * symbolic computation (simplify, derivative, integrate, solve, etc.).
  */
 export const SANDBOX_HARNESS_HTML = `<!doctype html><script>
-const SHIM = ${JSON.stringify(NERDAMER_JS + '\n' + WORKER_SHIM)};
+const SHIM = ${JSON.stringify(NERDAMER_JS + NEWLINE + WORKER_SHIM)};
 addEventListener('message', (event) => {
 	const respond = (payload) => parent.postMessage(payload, '*');
 	let worker;
