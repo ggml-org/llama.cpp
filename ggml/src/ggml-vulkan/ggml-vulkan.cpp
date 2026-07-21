@@ -10263,13 +10263,15 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     // For prefill with quantized K/V, dequantize+transpose K/V once into a per-head-contiguous
     // f16 scratch and run the f16 FA path, instead of the coopmat1 shader re-dequantizing the
     // whole KV inside every Q-workgroup. The KV-cache view reaching FA is [0,2,1,3]-permuted but
-    // dense, so we require dense allocation (not ggml_is_contiguous) and block-contiguous dim0,
-    // and only engage where a fused dequant-transpose shader exists (q8_0). Prefill only
+    // dense, so we require dense allocation (not ggml_is_contiguous), block-contiguous dim0, and
+    // heads physically inner (nb[1] >= nb[2]) since the transpose shader assumes that source order.
+    // Only engages where a fused dequant-transpose shader exists (q8_0). Prefill only
     // (n_rows >= 64); measured neutral at shallow depth and up to ~2x at long context.
     const bool k_quant = k->type != GGML_TYPE_F16 && k->type != GGML_TYPE_BF16 && k->type != GGML_TYPE_F32;
     const bool v_quant = v->type != GGML_TYPE_F16 && v->type != GGML_TYPE_BF16 && v->type != GGML_TYPE_F32;
     const bool use_dequant_kv = k_quant && v_quant && neq1 >= 64 &&
                                 k->nb[0] == ggml_type_size(k->type) && v->nb[0] == ggml_type_size(v->type) &&
+                                k->nb[1] >= k->nb[2] && v->nb[1] >= v->nb[2] &&
                                 ggml_is_contiguously_allocated(k) && ggml_is_contiguously_allocated(v) &&
                                 (uint64_t)ggml_nelements(k) * sizeof(ggml_fp16_t) <= ctx->device->properties.limits.maxStorageBufferRange &&
                                 (uint64_t)ggml_nelements(v) * sizeof(ggml_fp16_t) <= ctx->device->properties.limits.maxStorageBufferRange &&
@@ -10307,10 +10309,6 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
         v_stride /= 4;
     }
 
-    // Effective K/V strides for the f16 scratch. The linear dequant preserves the source's
-    // PHYSICAL element order, so map each source byte-stride nb[i] to the f16 scratch:
-    // f16 elements = nb[i] / type_size * blck_size (stride in elements), *sizeof(f16) for bytes.
-    // This yields the correct strides for both the permuted-dense (model) and native (test) K/V.
     uint32_t nbk2_eff = (uint32_t)nbk2, nbk3_eff = (uint32_t)nbk3;
     uint32_t nbv2_eff = (uint32_t)nbv2, nbv3_eff = (uint32_t)nbv3;
     if (use_dequant_kv) {
