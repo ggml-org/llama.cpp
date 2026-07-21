@@ -7,6 +7,7 @@
 #include <unordered_set>
 #include <list>
 #include <map>
+#include <tuple>
 
 // TODO: prevent including the whole server-common.h as we only use server_tokens
 #include "server-common.h"
@@ -562,6 +563,9 @@ struct server_task_result_metrics : server_task_result {
     std::vector<uint64_t> hist_gen_latency_buckets;
     uint64_t              hist_gen_latency_count = 0;
     double                hist_gen_latency_sum   = 0.0;
+
+    // per-device VRAM (device name, free bytes, total bytes)
+    std::vector<std::tuple<std::string, uint64_t, uint64_t>> vram_devices;
 
     // while we can also use std::vector<server_slot> this requires copying the slot object which can be quite messy
     // therefore, we use json to temporarily store the slot.to_json() result

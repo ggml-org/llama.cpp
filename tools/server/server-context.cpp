@@ -2622,6 +2622,17 @@ private:
                     res->hist_gen_latency_count   = metrics.hist_gen_latency_seconds.count;
                     res->hist_gen_latency_sum     = metrics.hist_gen_latency_seconds.sum;
 
+                    for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+                        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+                        if (ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_GPU) {
+                            continue;
+                        }
+                        size_t free_b = 0, total_b = 0;
+                        ggml_backend_dev_memory(dev, &free_b, &total_b);
+                        res->vram_devices.emplace_back(ggml_backend_dev_name(dev),
+                                                       (uint64_t) free_b, (uint64_t) total_b);
+                    }
+
                     if (task.metrics_reset_bucket) {
                         metrics.reset_bucket();
                     }
@@ -4640,6 +4651,26 @@ void server_routes::init_routes() {
         render_histogram(prometheus, "generation_latency_seconds", "Distribution of generation latency in seconds.",
             model_label, gen_bounds, res_task->hist_gen_latency_buckets,
             res_task->hist_gen_latency_count, res_task->hist_gen_latency_sum);
+
+        // per-device VRAM gauges
+        if (!res_task->vram_devices.empty()) {
+            prometheus << "# HELP llamacpp:vram_free_bytes Free VRAM on the device.\n"
+                       << "# TYPE llamacpp:vram_free_bytes gauge\n";
+            for (const auto & d : res_task->vram_devices) {
+                std::string dev_label = model_label;
+                dev_label.pop_back();
+                dev_label += ",device=\"" + std::get<0>(d) + "\"}";
+                prometheus << "llamacpp:vram_free_bytes"  << dev_label << " " << std::get<1>(d) << "\n";
+            }
+            prometheus << "# HELP llamacpp:vram_total_bytes Total VRAM on the device.\n"
+                       << "# TYPE llamacpp:vram_total_bytes gauge\n";
+            for (const auto & d : res_task->vram_devices) {
+                std::string dev_label = model_label;
+                dev_label.pop_back();
+                dev_label += ",device=\"" + std::get<0>(d) + "\"}";
+                prometheus << "llamacpp:vram_total_bytes" << dev_label << " " << std::get<2>(d) << "\n";
+            }
+        }
 
         res->headers["Process-Start-Time-Unix"] = std::to_string(res_task->t_start);
         res->content_type = "text/plain; version=0.0.4";
