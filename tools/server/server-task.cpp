@@ -677,23 +677,42 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp_stream() {
     };
 
     if (oaicompat_msg.reasoning_content != "") {
-        const json output_item = json {
-            {"id",      oai_resp_reasoning_id},
-            {"summary", json::array()},
-            {"type",    "reasoning"},
-            {"content", json::array({ json {
-                {"text", oaicompat_msg.reasoning_content},
-                {"type", "reasoning_text"},
-            }})},
-            {"encrypted_content", ""},
-            {"status", "completed"},
+        const json reasoning_part = {
+            {"text", oaicompat_msg.reasoning_content},
+            {"type", "reasoning_text"},
         };
 
-        push_item_event("response.output_item.done", json {
-            {"type", "response.output_item.done"},
-            {"item", output_item},
-        });
+        const json output_item = {
+            {"id",                oai_resp_reasoning_id},
+            {"summary",           json::array()},
+            {"type",              "reasoning"},
+            {"content",           json::array({ reasoning_part })},
+            {"encrypted_content", ""},
+            {"status",            "completed"},
+        };
 
+        if (!thinking_block_done) {
+            push_item_event("response.reasoning_text.done", json {
+                {"type",          "response.reasoning_text.done"},
+                {"item_id",       oai_resp_reasoning_id},
+                {"content_index", 0},
+                {"text",          oaicompat_msg.reasoning_content},
+            });
+
+            push_item_event("response.content_part.done", json {
+                {"type",          "response.content_part.done"},
+                {"item_id",       oai_resp_reasoning_id},
+                {"content_index", 0},
+                {"part",          reasoning_part},
+            });
+
+            push_item_event("response.output_item.done", json {
+                {"type", "response.output_item.done"},
+                {"item", output_item},
+            });
+        }
+
+        // Always include it in the completed response snapshot.
         output.push_back(output_item);
     }
 
@@ -1043,10 +1062,12 @@ void server_task_result_cmpl_partial::update(task_result_state & state) {
         return; // begin marker only flushes headers, skip parsing
     }
     state.update_chat_msg(content, true, oaicompat_msg_diffs);
+    accumulated_reasoning_content = state.chat_msg.reasoning_content;
 
     // Copy current state for use in to_json_*() (reflects state BEFORE this chunk)
     thinking_block_started = state.thinking_block_started;
     text_block_started     = state.text_block_started;
+    thinking_block_done    = state.thinking_block_done;
 
     oai_resp_created       = state.oai_resp_created;
     oai_resp_id            = state.oai_resp_id;
@@ -1067,6 +1088,17 @@ void server_task_result_cmpl_partial::update(task_result_state & state) {
         if (!diff.reasoning_content_delta.empty() && !state.thinking_block_started) {
             state.thinking_block_started = true;
         }
+
+        const bool starts_next_item =
+            !diff.content_delta.empty() ||
+            !diff.tool_call_delta.name.empty();
+
+        if (starts_next_item &&
+            state.thinking_block_started &&
+            !state.thinking_block_done) {
+            state.thinking_block_done = true;
+        }
+
         if (!diff.content_delta.empty() && !state.text_block_started) {
             state.text_block_started = true;
         }
@@ -1298,14 +1330,65 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
                     }},
                 });
 
-                thinking_block_started = true;
+                push_item_event("response.content_part.added", json {
+                    {"type",          "response.content_part.added"},
+                    {"item_id",       oai_resp_reasoning_id},
+                    {"content_index", 0},
+                    {"part", json {
+                        {"type", "reasoning_text"},
+                        {"text", ""},
+                    }},
+                });
             }
 
             push_item_event("response.reasoning_text.delta", json {
                 {"type",          "response.reasoning_text.delta"},
                 {"delta",         diff.reasoning_content_delta},
                 {"item_id",       oai_resp_reasoning_id},
+                {"content_index", 0},
             });
+
+            thinking_block_started = true;
+        }
+
+        // Close reasoning responses if content or tool call deltas are non-empty
+        if (!diff.content_delta.empty() || !diff.tool_call_delta.name.empty()) {
+            if (thinking_block_started && !thinking_block_done) {
+                const json reasoning_part = {
+                    {"text", accumulated_reasoning_content},
+                    {"type", "reasoning_text"},
+                };
+
+                const json output_item = {
+                    {"id",                oai_resp_reasoning_id},
+                    {"summary",           json::array()},
+                    {"type",              "reasoning"},
+                    {"content",           json::array({ reasoning_part })},
+                    {"encrypted_content", ""},
+                    {"status",            "completed"},
+                };
+
+                push_item_event("response.reasoning_text.done", json {
+                    {"type",          "response.reasoning_text.done"},
+                    {"item_id",       oai_resp_reasoning_id},
+                    {"content_index", 0},
+                    {"text",          accumulated_reasoning_content},
+                });
+
+                push_item_event("response.content_part.done", json {
+                    {"type",          "response.content_part.done"},
+                    {"item_id",       oai_resp_reasoning_id},
+                    {"content_index", 0},
+                    {"part",          reasoning_part},
+                });
+
+                push_item_event("response.output_item.done", json {
+                    {"type", "response.output_item.done"},
+                    {"item", output_item},
+                });
+
+                thinking_block_done = true;
+            }
         }
 
         if (!diff.content_delta.empty()) {
