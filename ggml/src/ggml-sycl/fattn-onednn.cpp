@@ -230,7 +230,7 @@ void ggml_sycl_flash_attn_ext_onednn(ggml_backend_sycl_context & ctx, ggml_tenso
         auto sit = scale_cache.find(sckey);
         if (sit == scale_cache.end()) {
             scale_dev = sycl::malloc_device<sycl::half>(1, *stream);
-            stream->memcpy(scale_dev, &scale_h, sizeof(sycl::half)).wait();
+            stream->memcpy(scale_dev, &scale_h, sizeof(sycl::half));
             scale_cache.emplace(sckey, scale_dev);
         } else {
             scale_dev = sit->second;
