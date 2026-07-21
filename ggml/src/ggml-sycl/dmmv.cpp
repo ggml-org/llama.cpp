@@ -15,6 +15,7 @@
         #error "GGML_SYCL_ESIMD requires the Intel oneAPI (DPC++) compiler"
     #endif
     #include <sycl/ext/intel/esimd.hpp>
+    #include "esimd.hpp"
 #endif
 
 static void convert_f16(const void * vx, const int64_t ib, const int iqs, dfloat2 & v){
@@ -1863,22 +1864,22 @@ static void dequantize_mul_mat_vec_q6_K_sycl(const void *vx, const float *y,
 }
 
 #ifdef GGML_SYCL_ESIMD
-constexpr int GGML_SYCL_DMMV_ESIMD_WG_SIZE = 4;
+using ggml_sycl_esimd::GGML_SYCL_DMMV_ESIMD_WG_SIZE;
 
-ESIMD_INLINE static void dequantize_mul_mat_vec_q4_k_reorder_esimd(const void *vx,
-                                                       const float *y,
-                                                       float *dst,
-                                                       const int ncols,
-                                                       const int nrows,
-                                                       sycl::local_accessor<float, 1> lmem,
-                                                       const sycl::nd_item<1> &it) {
+// generic reordered dequantize-matvec: each work-group owns a pair of
+// consecutive output rows and updates one 32-wide accumulator per row
+template <ggml_type T>
+ESIMD_INLINE void dequantize_mul_mat_vec_reorder_esimd(
+        const void * vx, const float * y, float * dst,
+        const int ncols, const int nrows,
+        sycl::local_accessor<float, 1> lmem,
+        const sycl::nd_item<1> & it) {
     using namespace sycl::ext::intel::esimd;
+    using traits = ggml_sycl_esimd::esimd_reorder_q_traits<T>;
 
-    const int num_blocks_per_row = ncols / QK_K;
-    const size_t nb = (size_t)nrows * num_blocks_per_row;
-    const uint8_t * qs_base = (const uint8_t *)vx;
-    const uint8_t * scales_base = qs_base + nb * (QK_K / 2);
-    const sycl::half * dm_base = (const sycl::half *)(scales_base + nb * K_SCALE_SIZE);
+    const int    num_blocks_per_row = ncols / QK_K;
+    const size_t nb = (size_t) nrows * num_blocks_per_row;
+    const auto   ps = traits::make_ptrs(vx, nb);
 
     const int  tid      = it.get_local_id(0);
     const int  row_pair = it.get_group(0);
@@ -1889,96 +1890,13 @@ ESIMD_INLINE static void dequantize_mul_mat_vec_q4_k_reorder_esimd(const void *v
     simd<float, 32> acc0 = 0.0f;
     simd<float, 32> acc1 = 0.0f;
 
-    simd<uint8_t, 8> sc = 0;
-    simd<uint8_t, 8> m  = 0;
-
     for (int ib = tid; ib < num_blocks_per_row; ib += GGML_SYCL_DMMV_ESIMD_WG_SIZE) {
-        simd<float, 256> y_vec = block_load<float, 256>(y + (size_t)ib * QK_K);
+        simd<float, 256> y_vec = block_load<float, 256>(y + (size_t) ib * QK_K);
 
-        const size_t bi0 = (size_t)(row0 + 0) * num_blocks_per_row + ib;
-        const size_t bi1 = (size_t)(row0 + 1) * num_blocks_per_row + ib;
+        const size_t bi0 = (size_t) (row0 + 0) * num_blocks_per_row + ib;
+        const size_t bi1 = (size_t) (row0 + 1) * num_blocks_per_row + ib;
 
-        simd<uint8_t, 128> qs0     = block_load<uint8_t, 128>(qs_base + bi0 * (QK_K / 2));
-        simd<uint8_t, 128> qs1     = 0;
-        simd<uint8_t, 12>  scales0 = block_load<uint8_t, 12>(scales_base + bi0 * K_SCALE_SIZE);
-        simd<uint8_t, 12>  scales1 = 0;
-
-        const float dall0 = (float)dm_base[bi0 * 2 + 0];
-        const float dmin0 = (float)dm_base[bi0 * 2 + 1];
-        float dall1 = 0.0f;
-        float dmin1 = 0.0f;
-        if (has_row1) {
-            qs1     = block_load<uint8_t, 128>(qs_base + bi1 * (QK_K / 2));
-            scales1 = block_load<uint8_t, 12>(scales_base + bi1 * K_SCALE_SIZE);
-            dall1 = (float)dm_base[bi1 * 2 + 0];
-            dmin1 = (float)dm_base[bi1 * 2 + 1];
-        }
-
-        // unpack Q4_K scale/min codes (get_scale_min_k4 layout), vectorized, per-row
-        simd<float, 8> scale_f0, min_f0, scale_f1, min_f1;
-        {
-            simd<uint8_t, 4> scale_lo = scales0.select<4, 1>(0);
-            simd<uint8_t, 4> min_lo   = scales0.select<4, 1>(4);
-            simd<uint8_t, 4> hi_bits  = scales0.select<4, 1>(8);
-            sc.select<4, 1>(0) = scale_lo & simd<uint8_t, 4>(0x3F);
-            sc.select<4, 1>(4) = (hi_bits & simd<uint8_t, 4>(0x0F)) |
-                                 ((scale_lo >> simd<uint8_t, 4>(6)) << simd<uint8_t, 4>(4));
-            m.select<4, 1>(0)  = min_lo & simd<uint8_t, 4>(0x3F);
-            m.select<4, 1>(4)  = (hi_bits >> simd<uint8_t, 4>(4)) |
-                                 ((min_lo >> simd<uint8_t, 4>(6)) << simd<uint8_t, 4>(4));
-            scale_f0 = convert<float>(sc) * dall0;
-            min_f0   = convert<float>(m) * (-dmin0);
-        }
-        {
-            simd<uint8_t, 4> scale_lo = scales1.select<4, 1>(0);
-            simd<uint8_t, 4> min_lo   = scales1.select<4, 1>(4);
-            simd<uint8_t, 4> hi_bits  = scales1.select<4, 1>(8);
-            sc.select<4, 1>(0) = scale_lo & simd<uint8_t, 4>(0x3F);
-            sc.select<4, 1>(4) = (hi_bits & simd<uint8_t, 4>(0x0F)) |
-                                 ((scale_lo >> simd<uint8_t, 4>(6)) << simd<uint8_t, 4>(4));
-            m.select<4, 1>(0)  = min_lo & simd<uint8_t, 4>(0x3F);
-            m.select<4, 1>(4)  = (hi_bits >> simd<uint8_t, 4>(4)) |
-                                 ((min_lo >> simd<uint8_t, 4>(6)) << simd<uint8_t, 4>(4));
-            scale_f1 = convert<float>(sc) * dall1;
-            min_f1   = convert<float>(m) * (-dmin1);
-        }
-
-        simd<uint8_t, 128> qs_lo0 = qs0 & simd<uint8_t, 128>(0x0f);
-        simd<uint8_t, 128> qs_hi0 = qs0 >> simd<uint8_t, 128>(4);
-        simd<uint8_t, 128> qs_lo1 = qs1 & simd<uint8_t, 128>(0x0f);
-        simd<uint8_t, 128> qs_hi1 = qs1 >> simd<uint8_t, 128>(4);
-
-        // single fused dequant+MAC loop updating both rows each iteration
-        // the two acc chains are co-scheduled so FMA latency is overlapped
-        for (int sb = 0; sb < 8; sb += 2) {
-            const int q_offset = sb * 16;
-            simd<float, 32> y_lo = y_vec.select<32, 1>(sb * 32);
-            simd<float, 32> y_hi = y_vec.select<32, 1>((sb + 1) * 32);
-
-            const float scale0_lo = scale_f0[sb];
-            const float scale0_hi = scale_f0[sb + 1];
-            const float min0_lo   = min_f0[sb];
-            const float min0_hi   = min_f0[sb + 1];
-            const float scale1_lo = scale_f1[sb];
-            const float scale1_hi = scale_f1[sb + 1];
-            const float min1_lo   = min_f1[sb];
-            const float min1_hi   = min_f1[sb + 1];
-
-            simd<uint8_t, 32> q0_lo = qs_lo0.select<32, 1>(q_offset);
-            simd<uint8_t, 32> q0_hi = qs_hi0.select<32, 1>(q_offset);
-            simd<uint8_t, 32> q1_lo = qs_lo1.select<32, 1>(q_offset);
-            simd<uint8_t, 32> q1_hi = qs_hi1.select<32, 1>(q_offset);
-
-            simd<float, 32> deq0_lo = convert<float>(q0_lo) * scale0_lo + min0_lo;
-            simd<float, 32> deq0_hi = convert<float>(q0_hi) * scale0_hi + min0_hi;
-            simd<float, 32> deq1_lo = convert<float>(q1_lo) * scale1_lo + min1_lo;
-            simd<float, 32> deq1_hi = convert<float>(q1_hi) * scale1_hi + min1_hi;
-
-            acc0 += y_lo * deq0_lo;
-            acc1 += y_lo * deq1_lo;
-            acc0 += y_hi * deq0_hi;
-            acc1 += y_hi * deq1_hi;
-        }
+        traits::mac_pair(ps, bi0, ps, bi1, has_row1, y_vec, acc0, acc1);
     }
 
     lmem[tid * 2 + 0] = reduce<float>(acc0, std::plus<>{});
@@ -2006,136 +1924,14 @@ static void dequantize_mul_mat_vec_q4_K_sycl_reorder_esimd(const void *vx, const
     GGML_ASSERT(ncols % QK_K == 0);
     const int workgroups = (nrows + 1) / 2;
     stream->submit([&](sycl::handler &h) {
-        // Two partial sums per thread (one per output row of the pair).
         sycl::local_accessor<float, 1> lmem(sycl::range<1>(GGML_SYCL_DMMV_ESIMD_WG_SIZE * 2), h);
         h.parallel_for(
             sycl::nd_range<1>(sycl::range<1>((size_t)workgroups * GGML_SYCL_DMMV_ESIMD_WG_SIZE), sycl::range<1>(GGML_SYCL_DMMV_ESIMD_WG_SIZE)),
             [=](sycl::nd_item<1> it) [[intel::sycl_explicit_simd]] {
-                dequantize_mul_mat_vec_q4_k_reorder_esimd(
+                dequantize_mul_mat_vec_reorder_esimd<GGML_TYPE_Q4_K>(
                     vx, y, dst, ncols, nrows, lmem, it);
             });
     });
-}
-
-ESIMD_INLINE static void dequantize_mul_mat_vec_q6_k_reorder_esimd(const void *vx,
-                                                       const float *y,
-                                                       float *dst,
-                                                       const int ncols,
-                                                       const int nrows,
-                                                       sycl::local_accessor<float, 1> lmem,
-                                                       const sycl::nd_item<1> &it) {
-    using namespace sycl::ext::intel::esimd;
-
-    const int num_blocks_per_row = ncols / QK_K;
-    const size_t nb = (size_t)nrows * num_blocks_per_row;
-    const uint8_t * ql_base = (const uint8_t *)vx;
-    const uint8_t * qh_base = ql_base + nb * (QK_K / 2);
-    const int8_t * scales_base = (const int8_t *)(qh_base + nb * (QK_K / 4));
-    const sycl::half * d_base = (const sycl::half *)(scales_base + nb * (QK_K / 16));
-
-    const int  tid      = it.get_local_id(0);
-    const int  row_pair = it.get_group(0);
-    const int  row0     = row_pair * 2; // two consecutive output rows
-    const bool has_row1 = row0 + 1 < nrows;
-
-    // one 32-wide accumulator per output row (small footprint, no spill)
-    simd<float, 32> acc0 = 0.0f;
-    simd<float, 32> acc1 = 0.0f;
-
-    for (int ib = tid; ib < num_blocks_per_row; ib += GGML_SYCL_DMMV_ESIMD_WG_SIZE) {
-        simd<float, 256> y_vec = block_load<float, 256>(y + (size_t)ib * QK_K);
-
-        const size_t bi0 = (size_t)(row0 + 0) * num_blocks_per_row + ib;
-        const size_t bi1 = (size_t)(row0 + 1) * num_blocks_per_row + ib;
-
-        simd<uint8_t, 128> ql0    = block_load<uint8_t, 128>(ql_base + bi0 * (QK_K / 2));
-        simd<uint8_t, 128> ql1    = 0;
-        simd<uint8_t, 64>  qh0    = block_load<uint8_t, 64>(qh_base + bi0 * (QK_K / 4));
-        simd<uint8_t, 64>  qh1    = 0;
-        simd<int8_t, 16>   scale0 = block_load<int8_t, 16>(scales_base + bi0 * (QK_K / 16));
-        simd<int8_t, 16>   scale1 = 0;
-        if (has_row1) {
-            ql1    = block_load<uint8_t, 128>(ql_base + bi1 * (QK_K / 2));
-            qh1    = block_load<uint8_t, 64>(qh_base + bi1 * (QK_K / 4));
-            scale1 = block_load<int8_t, 16>(scales_base + bi1 * (QK_K / 16));
-        }
-
-        simd<float, 16> sc0 = convert<float>(scale0);
-        simd<float, 16> sc1 = convert<float>(scale1);
-        const float d0 = (float)d_base[bi0];
-        const float d1 = has_row1 ? (float)d_base[bi1] : 0.0f;
-
-        for (int im = 0; im < 2; ++im) {
-            simd<uint8_t, 32> ql_lo0 = ql0.select<32, 1>(64 * im);
-            simd<uint8_t, 32> ql_hi0 = ql0.select<32, 1>(64 * im + 32);
-            simd<uint8_t, 32> qh_bits0 = qh0.select<32, 1>(32 * im);
-            simd<uint8_t, 32> ql_lo1 = ql1.select<32, 1>(64 * im);
-            simd<uint8_t, 32> ql_hi1 = ql1.select<32, 1>(64 * im + 32);
-            simd<uint8_t, 32> qh_bits1 = qh1.select<32, 1>(32 * im);
-
-            // four quant groups, both rows interleaved per group
-            // reconstruct each 32-wide 6-bit group (matches dequantize_row_q6_K)
-            for (int g = 0; g < 4; ++g) {
-                simd<float, 32> y_g = y_vec.select<32, 1>(32 * (4 * im + g));
-
-                const float scale0_lo = sc0[8 * im + 2 * g + 0] * d0;
-                const float scale0_hi = sc0[8 * im + 2 * g + 1] * d0;
-                const float scale1_lo = sc1[8 * im + 2 * g + 0] * d1;
-                const float scale1_hi = sc1[8 * im + 2 * g + 1] * d1;
-
-                simd<float, 32> scale_vec0;
-                scale_vec0.select<16, 1>(0)  = scale0_lo;
-                scale_vec0.select<16, 1>(16) = scale0_hi;
-                simd<float, 32> scale_vec1;
-                scale_vec1.select<16, 1>(0)  = scale1_lo;
-                scale_vec1.select<16, 1>(16) = scale1_hi;
-
-                simd<uint8_t, 32> q0;
-                simd<uint8_t, 32> q1;
-                switch (g) {
-                    case 0:
-                        q0 = (ql_lo0 & simd<uint8_t, 32>(0x0F)) | ((qh_bits0 & simd<uint8_t, 32>(0x03)) << simd<uint8_t, 32>(4));
-                        q1 = (ql_lo1 & simd<uint8_t, 32>(0x0F)) | ((qh_bits1 & simd<uint8_t, 32>(0x03)) << simd<uint8_t, 32>(4));
-                        break;
-                    case 1:
-                        q0 = (ql_hi0 & simd<uint8_t, 32>(0x0F)) | ((qh_bits0 & simd<uint8_t, 32>(0x0C)) << simd<uint8_t, 32>(2));
-                        q1 = (ql_hi1 & simd<uint8_t, 32>(0x0F)) | ((qh_bits1 & simd<uint8_t, 32>(0x0C)) << simd<uint8_t, 32>(2));
-                        break;
-                    case 2:
-                        q0 = (ql_lo0 >> simd<uint8_t, 32>(4)) | (qh_bits0 & simd<uint8_t, 32>(0x30));
-                        q1 = (ql_lo1 >> simd<uint8_t, 32>(4)) | (qh_bits1 & simd<uint8_t, 32>(0x30));
-                        break;
-                    default:
-                        q0 = (ql_hi0 >> simd<uint8_t, 32>(4)) | ((qh_bits0 & simd<uint8_t, 32>(0xC0)) >> simd<uint8_t, 32>(2));
-                        q1 = (ql_hi1 >> simd<uint8_t, 32>(4)) | ((qh_bits1 & simd<uint8_t, 32>(0xC0)) >> simd<uint8_t, 32>(2));
-                        break;
-                }
-
-                simd<float, 32> deq0 = (convert<float>(q0) - 32.0f) * scale_vec0;
-                simd<float, 32> deq1 = (convert<float>(q1) - 32.0f) * scale_vec1;
-
-                acc0 += y_g * deq0;
-                acc1 += y_g * deq1;
-            }
-        }
-    }
-
-    lmem[tid * 2 + 0] = reduce<float>(acc0, std::plus<>{});
-    lmem[tid * 2 + 1] = reduce<float>(acc1, std::plus<>{});
-    it.barrier(sycl::access::fence_space::local_space);
-
-    if (tid == 0) {
-        float sum0 = 0.0f;
-        float sum1 = 0.0f;
-        for (int p = 0; p < GGML_SYCL_DMMV_ESIMD_WG_SIZE; ++p) {
-            sum0 += lmem[p * 2 + 0];
-            sum1 += lmem[p * 2 + 1];
-        }
-        dst[row0 + 0] = sum0;
-        if (has_row1) {
-            dst[row0 + 1] = sum1;
-        }
-    }
 }
 
 static void dequantize_mul_mat_vec_q6_K_sycl_reorder_esimd(const void *vx, const float *y,
@@ -2149,11 +1945,12 @@ static void dequantize_mul_mat_vec_q6_K_sycl_reorder_esimd(const void *vx, const
         h.parallel_for(
             sycl::nd_range<1>(sycl::range<1>((size_t)workgroups * GGML_SYCL_DMMV_ESIMD_WG_SIZE), sycl::range<1>(GGML_SYCL_DMMV_ESIMD_WG_SIZE)),
             [=](sycl::nd_item<1> it) [[intel::sycl_explicit_simd]] {
-                dequantize_mul_mat_vec_q6_k_reorder_esimd(
+                dequantize_mul_mat_vec_reorder_esimd<GGML_TYPE_Q6_K>(
                     vx, y, dst, ncols, nrows, lmem, it);
             });
     });
 }
+
 #endif // GGML_SYCL_ESIMD
 
 static void dequantize_mul_mat_vec_q4_K_sycl_reorder(const void *vx, const float *y,
