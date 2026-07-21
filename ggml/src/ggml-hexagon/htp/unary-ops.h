@@ -41,6 +41,7 @@ _Static_assert(sizeof(struct htp_unary_kernel_params) <= 128, "htp_unary_kernel_
 
 static inline bool htp_op_is_unary(uint32_t opcode) {
     switch (opcode) {
+        case HTP_OP_CLAMP:
         case HTP_OP_NORM:
         case HTP_OP_RMS_NORM:
         case HTP_OP_RMS_NORM_MUL:
