@@ -7,7 +7,10 @@
 #include "llama-batch.h"
 #include "llama-io.h"
 #include "llama-kv-cache.h"
+#include "llama-kv-cache-iswa.h"
 #include "llama-memory.h"
+#include "llama-memory-hybrid.h"
+#include "llama-memory-hybrid-iswa.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
 #include "llama-ext.h"
@@ -3736,10 +3739,33 @@ llama_memory_t llama_get_memory(const struct llama_context * ctx) {
 void llama_memory_kv_size_bytes(llama_memory_t mem, size_t * size_k, size_t * size_v) {
     size_t k = 0;
     size_t v = 0;
+
+    // sum a single plain KV cache into the running totals
+    auto add_kv = [&](llama_kv_cache * kv) {
+        if (kv) {
+            k += kv->size_k_bytes();
+            v += kv->size_v_bytes();
+        }
+    };
+    // an iswa cache is a base + swa pair of plain caches
+    auto add_iswa = [&](llama_kv_cache_iswa * iswa) {
+        if (iswa) {
+            add_kv(iswa->get_base());
+            add_kv(iswa->get_swa());
+        }
+    };
+
     if (auto * kv = dynamic_cast<llama_kv_cache *>(mem)) {
-        k = kv->size_k_bytes();
-        v = kv->size_v_bytes();
+        add_kv(kv);
+    } else if (auto * iswa = dynamic_cast<llama_kv_cache_iswa *>(mem)) {
+        add_iswa(iswa);
+    } else if (auto * hyb = dynamic_cast<llama_memory_hybrid *>(mem)) {
+        add_kv(hyb->get_mem_attn());
+    } else if (auto * hyb_iswa = dynamic_cast<llama_memory_hybrid_iswa *>(mem)) {
+        add_iswa(hyb_iswa->get_mem_attn());
     }
+    // recurrent-only memory has no attention KV cache -> stays 0
+
     if (size_k) { *size_k = k; }
     if (size_v) { *size_v = v; }
 }

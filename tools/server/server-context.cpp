@@ -4639,7 +4639,7 @@ void server_routes::init_routes() {
         const std::vector<double> ttft_bounds  = {0.05,0.1,0.25,0.5,1,2,4,8,16,32,64};
         const std::vector<double> gen_bounds   = {0.1,0.25,0.5,1,2,5,10,20,40,80};
 
-        render_histogram(prometheus, "prompt_tokens_size", "Distribution of prompt sizes in tokens.",
+        render_histogram(prometheus, "prompt_tokens_size", "Distribution of prompt tokens processed (excludes cache hits).",
             model_label, token_bounds, res_task->hist_prompt_tokens_buckets,
             res_task->hist_prompt_tokens_count, res_task->hist_prompt_tokens_sum);
         render_histogram(prometheus, "context_used_tokens", "Distribution of context used in tokens.",

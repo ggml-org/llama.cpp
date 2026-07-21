@@ -30,6 +30,11 @@ def test_kv_cache_bytes_and_type_present():
     assert "llamacpp:kv_cache_k_bytes" in text
     assert "llamacpp:kv_cache_v_bytes" in text
     assert 'llamacpp:kv_cache_type{' in text and 'cache="k"' in text
+    # Verify the K-cache value is > 0 for this attention model (not silent-zero)
+    k_lines = [l for l in text.splitlines() if l.startswith("llamacpp:kv_cache_k_bytes{") and "# " not in l]
+    assert k_lines, "No kv_cache_k_bytes metric line found"
+    k_value = float(k_lines[0].split()[-1])
+    assert k_value > 0, f"KV cache K bytes should be > 0 for attention model, got {k_value}"
 
 
 def test_histograms_have_bucket_sum_count():
