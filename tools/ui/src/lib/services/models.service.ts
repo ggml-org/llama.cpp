@@ -1,6 +1,15 @@
 import { ServerModelStatus } from '$lib/enums';
 import { apiFetch, apiPost, normalizeModelName } from '$lib/utils';
 import type { ParsedModelId } from '$lib/types/models';
+import type {
+	ApiModelListResponse,
+	ApiRouterModelsDownloadRequest,
+	ApiRouterModelsDownloadResponse,
+	ApiRouterModelsListResponse,
+	ApiRouterModelsLoadResponse,
+	ApiRouterModelsUnloadResponse
+} from '$lib/types/api';
+import type { DraftVariant } from '$lib/constants/model-id';
 import {
 	MODEL_QUANTIZATION_SEGMENT_RE,
 	MODEL_CUSTOM_QUANTIZATION_PREFIX_RE,
@@ -12,8 +21,16 @@ import {
 	MODEL_ID_ORG_SEPARATOR,
 	MODEL_ID_SEGMENT_SEPARATOR,
 	MODEL_ID_QUANTIZATION_SEPARATOR,
+	DRAFT_VARIANT_PREFIX_RE,
+	DRAFT_MTP_SUFFIX_RE,
 	API_MODELS
 } from '$lib/constants';
+
+/** Building block for the `<repo>:<tag>` string consumed by POST /models. */
+export interface GgufVariantTagInput {
+	quant: string;
+	variant: DraftVariant | null;
+}
 
 export class ModelsService {
 	/**
@@ -23,6 +40,49 @@ export class ModelsService {
 	 *
 	 *
 	 */
+
+	/**
+	 *
+	 *
+	 * Download
+	 *
+	 *
+	 */
+
+	/**
+	 * Trigger a model download from HuggingFace (ROUTER mode only).
+	 *
+	 * Sends a POST request to `/models` as introduced in
+	 * ggml-org/llama.cpp#23976. The response returns immediately; the actual
+	 * download runs in the background and tracks progress through `/models/sse`.
+	 * The server picks the file that matches the supplied tag (when present)
+	 * and additionally pulls mmproj / MTP sidecar weights as appropriate for
+	 * the model.
+	 *
+	 * @param hfRepoWithTag - HuggingFace repo id, optionally suffixed with
+	 *                        `:<tag>` (e.g. `ggml-org/gemma-3-4b-it-GGUF:Q4_K_M`
+	 *                        or `:IQ1_M-MTP` for an embedded-draft GGU).
+	 * @returns Server acknowledgement containing the success flag
+	 */
+	static async downloadModel(hfRepoWithTag: string): Promise<ApiRouterModelsDownloadResponse> {
+		const payload: ApiRouterModelsDownloadRequest = { model: hfRepoWithTag };
+		return apiPost<ApiRouterModelsDownloadResponse>(API_MODELS.DOWNLOAD, payload);
+	}
+
+	/**
+	 * Build the `<repo>:<tag>` string expected by POST /models from a parsed
+	 * filename quant + optional draft variant. Used by the model-hub download
+	 * dialog so callers don't have to know about the lombok suffix convention.
+	 *
+	 * @param repoId - HuggingFace repo id (e.g. `ggml-org/gemma-3-4b-it-GGUF`)
+	 * @param quant - Quantization token, may include `-MTP` suffix
+	 * @returns Repo id possibly suffixed with `:tag`
+	 */
+	static buildDownloadTag(repoId: string, quant: GgufVariantTagInput | null): string {
+		if (!quant) return repoId;
+		const tag = quant.variant ? `${quant.quant}-${quant.variant.toUpperCase()}` : quant.quant;
+		return `${repoId}:${tag}`;
+	}
 
 	/**
 	 * Fetch list of models from OpenAI-compatible endpoint.
@@ -125,6 +185,10 @@ export class ModelsService {
 	 * Handles conventions like:
 	 *   `<org>/<ModelName>-<Parameters>(-<ActivatedParameters>)(-<Tags>)(-<Quantization>):<Quantization>`
 	 *   `<ModelName>.<Quantization>` (dot-separated quantization, e.g. `model.Q4_K_M`)
+	 *   sidecar variant prefix: `<Variant>-<ModelName>.<Quantization>`
+	 *     (e.g. `mtp-Hy3-GGUF`, `dflash-Hy3-GGUF`, `mmproj-Hy3-GGUF`)
+	 *   embedded draft suffix: `<ModelName>-<Quantization>-mtp`
+	 *     (e.g. `Hy3-IQ1_M-mtp`, when the draft model is baked into the same GGUF)
 	 *
 	 * @param modelId - Raw model identifier string
 	 * @returns Structured {@link ParsedModelId} with all detected fields
@@ -137,12 +201,35 @@ export class ModelsService {
 			params: null,
 			activatedParams: null,
 			quantization: null,
+			variant: null,
 			tags: []
 		};
 
 		// strip directory path and weight extension so a bare `-m /path/file.gguf`
 		// parses like a clean repo id; the HF `org/model` form is preserved
-		const source = normalizeModelName(modelId).replace(MODEL_WEIGHT_EXTENSION_RE, '');
+		let source = normalizeModelName(modelId).replace(MODEL_WEIGHT_EXTENSION_RE, '');
+
+		// 0. Detect sidecar variant prefix (mtp-, dflash-, mmproj-) before any other
+		//    splitting so the inner id parses cleanly.
+		const prefixVariantMatch = source.match(DRAFT_VARIANT_PREFIX_RE);
+		if (prefixVariantMatch) {
+			result.variant = prefixVariantMatch[1].toLowerCase() as DraftVariant;
+			source = prefixVariantMatch[2];
+		} else {
+			// 0b. Detect `-mtp` suffix that signals an embedded draft model.
+			//     Only strip it when the segment preceding `-mtp` looks like a real
+			//     quant token, so a model literally named `MyModel-mtp` is not
+			//     mistaken for a draft-attached one.
+			const suffixMtpMatch = source.match(DRAFT_MTP_SUFFIX_RE);
+			if (suffixMtpMatch) {
+				const candidate = suffixMtpMatch[1];
+				const headSeg = candidate.split(MODEL_ID_SEGMENT_SEPARATOR).pop();
+				if (headSeg && MODEL_QUANTIZATION_SEGMENT_RE.test(headSeg)) {
+					result.variant = 'mtp';
+					source = candidate;
+				}
+			}
+		}
 
 		// 1. Extract colon-separated quantization (e.g. `model:Q4_K_M`)
 		const colonIdx = source.indexOf(MODEL_ID_QUANTIZATION_SEPARATOR);
