@@ -6,6 +6,7 @@
 #include "llama-impl.h"
 #include "llama-batch.h"
 #include "llama-io.h"
+#include "llama-kv-cache.h"
 #include "llama-memory.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
@@ -3730,6 +3731,17 @@ llama_memory_t llama_get_memory(const struct llama_context * ctx) {
     }
 
     return ctx->get_memory();
+}
+
+void llama_memory_kv_size_bytes(llama_memory_t mem, size_t * size_k, size_t * size_v) {
+    size_t k = 0;
+    size_t v = 0;
+    if (auto * kv = dynamic_cast<llama_kv_cache *>(mem)) {
+        k = kv->size_k_bytes();
+        v = kv->size_v_bytes();
+    }
+    if (size_k) { *size_k = k; }
+    if (size_v) { *size_v = v; }
 }
 
 float * llama_get_embeddings_nextn(llama_context * ctx) {
