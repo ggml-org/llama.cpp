@@ -18,7 +18,7 @@ using namespace cub;
 #define SSM_SSD_DT_BLOCK     256
 #define SSM_SSD_DT_MAX_ITEMS  32
 
-// Maximum tokens the SSD path supports — derived from the prepare_dt kernel block capacity.
+// Maximum tokens the SSD path supports, derived from the prepare_dt kernel block capacity.
 #define SSM_SSD_MAX_TOKENS (SSM_SSD_DT_BLOCK * SSM_SSD_DT_MAX_ITEMS)
 
 // Chunk size for chunked SSD. Caps matmul cost at O(chunk^2) per chunk.
@@ -362,53 +362,64 @@ __global__ void ssm_ssd_prepare_dt_kernel(
 
     const int items_per_thread = (n_tok + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
-    // Phase 1: parallel softplus, each thread accumulates a local sum
+    // Phase 1: softplus with interleaved distribution (t = i*BLOCK_SIZE + threadIdx.x).
+    // Each warp reads BLOCK_SIZE consecutive tokens, giving coalesced dt_raw loads
+    // (stride n_head between threads vs. items_per_thread*n_head in blocked layout).
     float local_vals[MAX_ITEMS];
-    float local_sum = 0.0f;
-
     for (int i = 0; i < items_per_thread; i++) {
-        const int t = threadIdx.x * items_per_thread + i;  // blocked distribution
+        const int t = i * BLOCK_SIZE + threadIdx.x;
         if (t < n_tok) {
             float val = dt_seq[h + t * dt_stride_tok];
             float sp = (val <= 20.0f) ? log1pf(expf(val)) : val;
             local_vals[i] = sp;
-            local_sum += sp;
             dt_sp_seq[t * n_head + h] = sp;
         } else {
             local_vals[i] = 0.0f;
         }
     }
 
-    // Phase 2: parallel prefix sum of per-thread totals
+    // Phase 2+3: per-step inclusive scan to build cs[] in token order.
+    // With interleaved distribution the per-thread total scan would not give token-order
+    // prefix sums, so we scan one BLOCK_SIZE slab at a time and carry a running total.
 #ifdef USE_CUB
     using BlockScan = cub::BlockScan<float, BLOCK_SIZE>;
     __shared__ typename BlockScan::TempStorage scan_temp;
-    float thread_inclusive;
-    BlockScan(scan_temp).InclusiveSum(local_sum, thread_inclusive);
-    float exclusive_prefix = thread_inclusive - local_sum;
-#else
-    // Fallback: sequential prefix sum in shared memory
-    __shared__ float sdata[BLOCK_SIZE];
-    sdata[threadIdx.x] = local_sum;
-    __syncthreads();
-    if (threadIdx.x == 0) {
-        for (int i = 1; i < BLOCK_SIZE && i * items_per_thread < n_tok; i++) {
-            sdata[i] += sdata[i - 1];
-        }
-    }
-    __syncthreads();
-    float exclusive_prefix = (threadIdx.x > 0) ? sdata[threadIdx.x - 1] : 0.0f;
-#endif
+    __shared__ float step_total;
 
-    // Phase 3: write cumsum = exclusive_prefix + local running sum
-    float running = exclusive_prefix;
+    float running = 0.0f;
     for (int i = 0; i < items_per_thread; i++) {
-        const int t = threadIdx.x * items_per_thread + i;
+        float inclusive;
+        BlockScan(scan_temp).InclusiveSum(local_vals[i], inclusive);
+        const int t = i * BLOCK_SIZE + threadIdx.x;
         if (t < n_tok) {
-            running += local_vals[i];
-            cs_seq[t * n_head + h] = running;
+            cs_seq[t * n_head + h] = running + inclusive;
         }
+        if (threadIdx.x == BLOCK_SIZE - 1) {
+            step_total = inclusive;
+        }
+        __syncthreads();
+        running += step_total;
     }
+#else
+    // Fallback: sequential prefix scan in shared memory, one slab at a time.
+    __shared__ float sdata[BLOCK_SIZE];
+    float running = 0.0f;
+    for (int i = 0; i < items_per_thread; i++) {
+        const int t = i * BLOCK_SIZE + threadIdx.x;
+        sdata[threadIdx.x] = local_vals[i];
+        __syncthreads();
+        if (threadIdx.x == 0) {
+            for (int j = 1; j < BLOCK_SIZE; j++) {
+                sdata[j] += sdata[j - 1];
+            }
+        }
+        __syncthreads();
+        if (t < n_tok) {
+            cs_seq[t * n_head + h] = running + sdata[threadIdx.x];
+        }
+        running += sdata[BLOCK_SIZE - 1];
+    }
+#endif
 }
 
 // Prepare SSD matmul inputs for one chunk: X_dt, B_weighted, C_scaled.
@@ -461,32 +472,20 @@ __global__ void ssm_ssd_pre_matmul_kernel(
         X_dt[d + t * head_dim + h * n_xdt + s * n_xdt * n_head] = (T_matmul)(x_val * dt_val);
     }
 
-    // Prepare B_weighted = B * decay_from_end for state update matmul.
+    // Prepare B_weighted and C_scaled together: both share the same index space (d_state * chunk_len)
+    // and the same cs_t load, so merging halves the cs[] global memory traffic.
     const int n_bw = d_state * chunk_len;
     if (idx < n_bw) {
         const int n = idx % d_state;
         const int t = idx / d_state;
 
         const float cs_t = cs[cs_seq_off + (chunk_offset + t) * n_head + h] - cs_base;
-        const float decay_from_end = __expf(A_h * (cs_last - cs_t));
 
         const float B_val = B[s * B_stride_seq + (chunk_offset + t) * B_stride_tok + g * d_state + n];
-
-        B_weighted[n + t * d_state + h * n_bw + s * n_bw * n_head] = (T_matmul)(B_val * decay_from_end);
-    }
-
-    // Prepare C_scaled = C * decay_to_pos for state contribution matmul.
-    const int n_cs = d_state * chunk_len;
-    if (idx < n_cs) {
-        const int n = idx % d_state;
-        const int t = idx / d_state;
-
-        const float cs_t = cs[cs_seq_off + (chunk_offset + t) * n_head + h] - cs_base;
-        const float decay_to_pos = __expf(A_h * cs_t);
+        B_weighted[n + t * d_state + h * n_bw + s * n_bw * n_head] = (T_matmul)(B_val * __expf(A_h * (cs_last - cs_t)));
 
         const float C_val = C_src[s * C_stride_seq + (chunk_offset + t) * C_stride_tok + g * d_state + n];
-
-        C_scaled[n + t * d_state + h * n_cs + s * n_cs * n_head] = C_val * decay_to_pos;
+        C_scaled[n + t * d_state + h * n_bw + s * n_bw * n_head] = C_val * __expf(A_h * cs_t);
     }
 
     // Materialize M = exp(A*(cs_out - cs_in)) * CB with causal mask.
@@ -550,12 +549,12 @@ __global__ void ssm_ssd_init_state_kernel(
         const int32_t * __restrict__ ids,      // {n_seqs}
         float * __restrict__ s_cur,            // {d_state, head_dim, n_head, n_seqs}
         const int state_size,                  // d_state * head_dim * n_head
-        const int s0_stride_seq) {             // elements between state rows
+        const int64_t s0_stride_seq) {         // elements between state rows
     const int s = blockIdx.y;
     const int idx = blockIdx.x * BLOCK_SIZE + threadIdx.x;
     if (idx >= state_size) return;
 
-    const float * s_src = src0 + ids[s] * s0_stride_seq;
+    const float * s_src = src0 + (int64_t)ids[s] * s0_stride_seq;
     s_cur[s * state_size + idx] = s_src[idx];
 }
 
@@ -566,7 +565,7 @@ static void ssm_scan_ssd_f32_cuda(
         ggml_backend_cuda_context & ctx,
         const float * src0_d, const float * src1_d, const float * src2_d, const float * src3_d,
         const float * src4_d, const float * src5_d, const int32_t * src6_d, float * dst_d,
-        const int s0_stride_seq,                                       // state (src0) stride between seqs
+        const int64_t s0_stride_seq,                                   // state (src0) stride between seqs
         const int x_stride_tok,  const int x_stride_seq,               // x (src1) strides
         const int dt_stride_tok, const int dt_stride_seq,              // dt (src2) strides
         const int A_stride,                                            // A (src3) stride between heads
@@ -795,6 +794,19 @@ void ggml_cuda_op_ssm_scan(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(src6->type == GGML_TYPE_I32);
     GGML_ASSERT(dst->type == GGML_TYPE_F32);
 
+    // Byte strides are narrowed to int for both scan and SSD paths.
+    GGML_ASSERT(src0->nb[2] <= (size_t)INT_MAX);
+    GGML_ASSERT(src0->nb[3] <= (size_t)INT_MAX);
+    GGML_ASSERT(src1->nb[2] <= (size_t)INT_MAX);
+    GGML_ASSERT(src1->nb[3] <= (size_t)INT_MAX);
+    GGML_ASSERT(src2->nb[1] <= (size_t)INT_MAX);
+    GGML_ASSERT(src2->nb[2] <= (size_t)INT_MAX);
+    GGML_ASSERT(src3->nb[1] <= (size_t)INT_MAX);
+    GGML_ASSERT(src4->nb[2] <= (size_t)INT_MAX);
+    GGML_ASSERT(src4->nb[3] <= (size_t)INT_MAX);
+    GGML_ASSERT(src5->nb[2] <= (size_t)INT_MAX);
+    GGML_ASSERT(src5->nb[3] <= (size_t)INT_MAX);
+
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
     // Mamba-2 with scalar A per head: use SSD matmul path for long sequences.
     // Requires NVIDIA Turing+ otherwise fallback to scan.
@@ -804,18 +816,23 @@ void ggml_cuda_op_ssm_scan(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
                       && n_t <= SSM_SSD_MAX_TOKENS
                       && GGML_CUDA_CC_IS_NVIDIA(cc)
                       && cc >= GGML_CUDA_CC_TURING
-                      && nr % 8 == 0;  // head_dim must be 8-aligned for cp.async 16-byte copies
+                      && nr % 8 == 0;  // cuBLAS requires 8-element (16-byte) alignment
 
     if (use_ssd) {
-        // Convert byte strides to element strides (all tensors are f32-contiguous on dim 0)
+        // ssm_ssd_init_state_kernel uses flat linear indexing within each sequence,
+        // so src0 must be fully contiguous across all inner dimensions.
+        // The scan path handles non-contiguous nb[2] via src0_nb2 but does not handle nb[1].
+        GGML_ASSERT(src0->nb[1] == nc         * sizeof(float));
+        GGML_ASSERT(src0->nb[2] == nc * nr    * sizeof(float));
+
         ssm_scan_ssd_f32_cuda(ctx,
             src0_d, src1_d, src2_d, src3_d, src4_d, src5_d, src6_d, dst_d,
-            src0->nb[3] / sizeof(float),
-            src1->nb[2] / sizeof(float), src1->nb[3] / sizeof(float),
-            src2->nb[1] / sizeof(float), src2->nb[2] / sizeof(float),
-            src3->nb[1] / sizeof(float),
-            src4->nb[2] / sizeof(float), src4->nb[3] / sizeof(float),
-            src5->nb[2] / sizeof(float), src5->nb[3] / sizeof(float),
+            (int64_t)(src0->nb[3] / sizeof(float)),
+            (int)(src1->nb[2] / sizeof(float)), (int)(src1->nb[3] / sizeof(float)),
+            (int)(src2->nb[1] / sizeof(float)), (int)(src2->nb[2] / sizeof(float)),
+            (int)(src3->nb[1] / sizeof(float)),
+            (int)(src4->nb[2] / sizeof(float)), (int)(src4->nb[3] / sizeof(float)),
+            (int)(src5->nb[2] / sizeof(float)), (int)(src5->nb[3] / sizeof(float)),
             s_off, nc, nr, nh, ng, n_t, n_s);
         return;
     }
