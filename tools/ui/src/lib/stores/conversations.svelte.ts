@@ -92,13 +92,13 @@ class ConversationsStore {
 	private lastNonOffEffort: ReasoningEffort | null = null;
 
 	/** Load reasoning effort default from localStorage */
-	private static loadReasoningEffortDefault(): ReasoningEffort | ReasoningEffort.OFF {
-		if (typeof globalThis.localStorage === 'undefined') return ReasoningEffort.OFF;
+	private static loadReasoningEffortDefault(): ReasoningEffort {
+		if (typeof globalThis.localStorage === 'undefined') return ReasoningEffort.MEDIUM;
 		try {
 			const raw = localStorage.getItem(REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY);
-			return (raw as ReasoningEffort | ReasoningEffort.OFF) || ReasoningEffort.OFF;
+			return (raw as ReasoningEffort | ReasoningEffort.OFF) || ReasoningEffort.MEDIUM;
 		} catch {
-			return ReasoningEffort.OFF;
+			return ReasoningEffort.MEDIUM;
 		}
 	}
 
