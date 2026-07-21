@@ -6,6 +6,7 @@ import re
 import argparse
 import statistics
 import logging
+import bisect
 from typing import Any, Dict, List, Optional
 
 from collections import defaultdict
@@ -30,7 +31,7 @@ op_pattern = re.compile(
 )
 
 trace_pattern = re.compile(
-    r"trace-op\s+(?P<op_name>[A-Z_0-9+]+):\s+thread\s+(?P<thread>\d+)\s+event\s+(?P<event>[A-Z_0-9\-]+)\s+info\s+(?P<info>\d+)\s+(?P<state>start|stop)\s+(?P<cycles>\d+)"
+    r"trace-evt\s+(?P<event>[A-Z_0-9\-]+):\s+thread\s+(?P<thread>\d+)\s+info\s+(?P<info>\d+)\s+(?P<state>start|stop)\s+(?P<cycles>\d+)"
 )
 
 logger = logging.getLogger("ggml-hexagon-profile")
@@ -50,9 +51,13 @@ def normalize_event_name(evt_type):
 
 
 class CycleUnwrapper:
-    def __init__(self):
-        self.last_raw = None
-        self.high_part = 0
+    def __init__(self, initial_val=None):
+        if initial_val is not None:
+            self.last_raw = initial_val & 0xFFFFFFFF
+            self.high_part = initial_val & 0xFFFFFFFF00000000
+        else:
+            self.last_raw = None
+            self.high_part = 0
 
     def unwrap(self, raw):
         if self.last_raw is None:
@@ -78,10 +83,12 @@ def parse_log(file_path, pmu_index=None):
         sys.exit(1)
 
     all_ops: List[Dict[str, Any]] = []
+    all_traces: List[Dict[str, Any]] = []
     current_op: Optional[Dict[str, Any]] = None
 
     timestamp_pattern = re.compile(r"^(?P<min>\d+)\.(?P<sec>\d+)\.(?P<ms>\d+)\.(?P<us>\d+)\s+[A-Z]\s+")
-    unwrapper = CycleUnwrapper()
+    unwrapper = None
+    trace_unwrapper = None
 
     for line in f:
         ts_match = timestamp_pattern.match(line)
@@ -100,6 +107,7 @@ def parse_log(file_path, pmu_index=None):
             if not prefix_match:
                 continue
 
+            names = parts[1]
             if len(parts) == 7:
                 dims, types, timings = parts[2], parts[3], parts[6]
             elif len(parts) == 6:
@@ -120,6 +128,7 @@ def parse_log(file_path, pmu_index=None):
             op_match = op_pattern.search(line)
             if op_match:
                 op_name = op_match.group('op_name')
+                names = ""
                 dims = op_match.group('dims').strip()
                 types = op_match.group('types').strip()
             else:
@@ -143,17 +152,29 @@ def parse_log(file_path, pmu_index=None):
                     evt_val = [int(x.strip()) for x in evt_raw.split(',')]
                 except ValueError:
                     evt_val = None
+            elif names.startswith("evt ["):
+                try:
+                    evt_val = [int(x.strip()) for x in names[5:-1].split(',')]
+                except ValueError:
+                    evt_val = None
 
             cycles_start_raw = op_match.group('start')
             unwrapped_cycles_start = None
-            if cycles_start_raw:
-                unwrapped_cycles_start = unwrapper.unwrap(int(cycles_start_raw))
+            if op_name == "OPBATCH":
+                if cycles_start_raw:
+                    unwrapped_cycles_start = int(cycles_start_raw)
+                    unwrapper = CycleUnwrapper(unwrapped_cycles_start)
+                    trace_unwrapper = CycleUnwrapper(unwrapped_cycles_start)
+            else:
+                if cycles_start_raw and unwrapper is not None:
+                    unwrapped_cycles_start = unwrapper.unwrap(int(cycles_start_raw))
 
             idx = line.find("profile-op ")
             op_text = line[idx + 11:].strip() if idx != -1 else line.strip()
 
             current_op = {
                 'name':         op_name,
+                'names':        names,
                 'dims':         dims,
                 'types':        types,
                 'op_text':      op_text,
@@ -170,19 +191,61 @@ def parse_log(file_path, pmu_index=None):
             continue
 
         trace_match = trace_pattern.search(line)
-        if trace_match and current_op:
-            if trace_match.group('op_name') == current_op['name']:
-                raw_cyc = int(trace_match.group('cycles'))
-                current_op['trace_events'].append({
-                    'thread': int(trace_match.group('thread')),
-                    'event':  trace_match.group('event'),
-                    'info':   int(trace_match.group('info')),
-                    'cycles': raw_cyc,
-                    'unwrapped_cycles': unwrapper.unwrap(raw_cyc),
-                    'state':  trace_match.group('state')
-                })
+        if trace_match:
+            raw_cyc = int(trace_match.group('cycles'))
+            unwrapped_cyc = None
+            if trace_unwrapper is not None:
+                unwrapped_cyc = trace_unwrapper.unwrap(raw_cyc)
+            all_traces.append({
+                'thread': int(trace_match.group('thread')),
+                'event':  trace_match.group('event'),
+                'info':   int(trace_match.group('info')),
+                'cycles': raw_cyc,
+                'unwrapped_cycles': unwrapped_cyc,
+                'state':  trace_match.group('state')
+            })
 
     f.close()
+
+    # Assign start/end cycles to all ops
+    for op in all_ops:
+        op['start_cycles'] = op['unwrapped_cycles_start']
+        op['end_cycles'] = op['start_cycles'] + op['cycles'] if op['start_cycles'] is not None else None
+
+    # Filter ops with valid start_cycles
+    valid_ops = [op for op in all_ops if op['start_cycles'] is not None and op['end_cycles'] is not None]
+
+    # Separate OPBATCH ops from other ops
+    opbatch_ops = [op for op in valid_ops if op['name'] == "OPBATCH"]
+    other_ops = [op for op in valid_ops if op['name'] != "OPBATCH"]
+
+    # Sort them by start_cycles to enable binary search
+    opbatch_ops.sort(key=lambda op: op['start_cycles'])
+    other_ops.sort(key=lambda op: op['start_cycles'])
+
+    opbatch_starts = [op['start_cycles'] for op in opbatch_ops]
+    other_starts = [op['start_cycles'] for op in other_ops]
+
+    # Map trace events to any operator whose cycles contain them
+    for e in all_traces:
+        cyc = e['unwrapped_cycles']
+        if cyc is None:
+            continue
+
+        # Map to OPBATCH
+        idx = bisect.bisect_right(opbatch_starts, cyc) - 1
+        if idx >= 0:
+            op = opbatch_ops[idx]
+            if op['start_cycles'] <= cyc <= op['end_cycles']:
+                op['trace_events'].append(e)
+
+        # Map to other ops
+        idx = bisect.bisect_right(other_starts, cyc) - 1
+        if idx >= 0:
+            op = other_ops[idx]
+            if op['start_cycles'] <= cyc <= op['end_cycles']:
+                op['trace_events'].append(e)
+
     return all_ops
 
 
@@ -457,7 +520,6 @@ def main():
         ops = ops[-args.tail:]
 
     if args.timeline:
-        logger.info(f"\n# ASCII Timing {args.timeline.capitalize()}\n")
         for op in ops:
             if args.timeline == "summary":
                 print_ascii_summary(op['name'], op['dims'], op['types'], op['usec'], op['cycles'], op['trace_events'], op.get('evt_val'))

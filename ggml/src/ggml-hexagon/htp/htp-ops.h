@@ -173,6 +173,7 @@ enum htp_trace_event_id {
     HTP_TRACE_EVT_DMA                 = 0,
     HTP_TRACE_EVT_L2FLUSH             = 1,
     HTP_TRACE_EVT_INIT                = 2,
+    HTP_TRACE_EVT_BUFF                = 3,
 
     HTP_TRACE_EVT_HVX_COMP            = 20,
     HTP_TRACE_EVT_HVX_A_QUANT         = 21,
@@ -226,9 +227,9 @@ struct htp_opbatch_rsp {
     uint32_t n_ops;      // Number of op profile descriptors
     uint32_t n_traces[HTP_MAX_NTHREADS + 1];
     uint32_t usecs;          // Number of usec
-    uint32_t cycles_start;   // Start cycle counter
-    uint32_t cycles_stop;    // Stop cycle counter
     uint32_t pad;            // align to 8 bytes
+    uint64_t cycles_start;   // Start cycle counter
+    uint64_t cycles_stop;    // Stop cycle counter
     // struct htp_prof_desc profs[];  -- dspqueue buf 0
 };
 

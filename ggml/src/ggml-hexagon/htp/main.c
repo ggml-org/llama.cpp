@@ -1011,20 +1011,18 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
         }
     }
 
-    htp_trace_event_start(&ctx->trace[0], HTP_TRACE_EVT_INIT, 0);
-
     // Clean cache at the start of the batch
+    htp_trace_event_start(&ctx->trace[0], HTP_TRACE_EVT_L2FLUSH, 0);
     qurt_mem_cache_clean((qurt_addr_t) 0, 0, QURT_MEM_CACHE_FLUSH_INVALIDATE_ALL, QURT_MEM_DCACHE);
     hex_l2fetch_block(ctx, ctx->footprint);
     memset(ctx->dirty_ranges, 0, sizeof(ctx->dirty_ranges));
+    htp_trace_event_stop(&ctx->trace[0], HTP_TRACE_EVT_L2FLUSH, 0);
 
-    htp_trace_event_start(&ctx->trace[0], HTP_TRACE_EVT_INIT, 1);
+    htp_trace_event_start(&ctx->trace[0], HTP_TRACE_EVT_BUFF, 0);
     prep_op_bufs(ctx, bufs, n_bufs);
-    htp_trace_event_stop(&ctx->trace[0], HTP_TRACE_EVT_INIT, 1);
+    htp_trace_event_stop(&ctx->trace[0], HTP_TRACE_EVT_BUFF, 0);
 
     prep_tensors(ctx, bufs, tens, n_tens);
-
-    htp_trace_event_stop(&ctx->trace[0], HTP_TRACE_EVT_INIT, 0);
 
     struct htp_ops_context *octx = &ctx->octx;
     memset(octx, 0, sizeof(*octx));
@@ -1078,8 +1076,8 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
     rsp.n_tensors    = n_tens;
     rsp.n_ops        = n_ops;
     rsp.usecs        = batch_prof.usecs;
-    rsp.cycles_start = (uint32_t) batch_prof.cycles_start;
-    rsp.cycles_stop  = (uint32_t) batch_prof.cycles_stop;
+    rsp.cycles_start = batch_prof.cycles_start;
+    rsp.cycles_stop  = batch_prof.cycles_stop;
 
     if (ctx->profiler == HTP_PROF_TRACE) {
         for (int t = 0; t <= HTP_MAX_NTHREADS; t++) {
