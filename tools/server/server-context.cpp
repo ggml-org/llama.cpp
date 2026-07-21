@@ -816,6 +816,28 @@ struct server_slot {
 // server_metrics
 //
 
+// minimal cumulative histogram: bounds are fixed upper edges; observe() bumps
+// every bucket whose bound >= value (cumulative form Prometheus expects).
+struct metric_histogram {
+    std::vector<double>   bounds;
+    std::vector<uint64_t> buckets; // cumulative counts, same length as bounds
+    uint64_t              count = 0;
+    double                sum   = 0.0;
+
+    explicit metric_histogram(std::vector<double> b)
+        : bounds(std::move(b)), buckets(bounds.size(), 0) {}
+
+    void observe(double value) {
+        count++;
+        sum += value;
+        for (size_t i = 0; i < bounds.size(); ++i) {
+            if (value <= bounds[i]) {
+                buckets[i]++;
+            }
+        }
+    }
+};
+
 struct server_metrics {
     int64_t t_start = 0;
 
@@ -845,6 +867,15 @@ struct server_metrics {
     uint64_t n_decode_total     = 0;
     uint64_t n_busy_slots_total = 0;
 
+    metric_histogram hist_prompt_tokens {
+        {512,1024,2048,4096,6144,8192,12288,16384,24576,32768,49152,65536,98304,131072,196608,262144}};
+    metric_histogram hist_context_tokens {
+        {512,1024,2048,4096,6144,8192,12288,16384,24576,32768,49152,65536,98304,131072,196608,262144}};
+    metric_histogram hist_ttft_seconds {
+        {0.05,0.1,0.25,0.5,1,2,4,8,16,32,64}};
+    metric_histogram hist_gen_latency_seconds {
+        {0.1,0.25,0.5,1,2,5,10,20,40,80}};
+
     void init() {
         t_start = ggml_time_us();
     }
@@ -858,6 +889,8 @@ struct server_metrics {
         n_prompt_tokens_cache_total     += slot.n_prompt_tokens_cache;
 
         n_tokens_max = std::max(n_tokens_max, (uint64_t) slot.prompt.n_tokens());
+        hist_prompt_tokens.observe((double) slot.n_prompt_tokens_processed);
+        hist_ttft_seconds.observe(slot.t_prompt_processing / 1.e3); // ms -> s
     }
 
     void on_prediction(const server_slot & slot) {
@@ -868,6 +901,8 @@ struct server_metrics {
 
         n_draft_total          += slot.n_draft_total;
         n_draft_accepted_total += slot.n_draft_accepted;
+        hist_context_tokens.observe((double) slot.prompt.n_tokens());
+        hist_gen_latency_seconds.observe(slot.t_token_generation / 1.e3); // ms -> s
     }
 
     void on_decoded(const std::vector<server_slot> & slots) {
@@ -2573,6 +2608,19 @@ private:
                     }
                     res->kv_cache_type_k = ggml_type_name(params_base.cache_type_k);
                     res->kv_cache_type_v = ggml_type_name(params_base.cache_type_v);
+
+                    res->hist_prompt_tokens_buckets = metrics.hist_prompt_tokens.buckets;
+                    res->hist_prompt_tokens_count   = metrics.hist_prompt_tokens.count;
+                    res->hist_prompt_tokens_sum     = metrics.hist_prompt_tokens.sum;
+                    res->hist_context_tokens_buckets = metrics.hist_context_tokens.buckets;
+                    res->hist_context_tokens_count   = metrics.hist_context_tokens.count;
+                    res->hist_context_tokens_sum     = metrics.hist_context_tokens.sum;
+                    res->hist_ttft_buckets = metrics.hist_ttft_seconds.buckets;
+                    res->hist_ttft_count   = metrics.hist_ttft_seconds.count;
+                    res->hist_ttft_sum     = metrics.hist_ttft_seconds.sum;
+                    res->hist_gen_latency_buckets = metrics.hist_gen_latency_seconds.buckets;
+                    res->hist_gen_latency_count   = metrics.hist_gen_latency_seconds.count;
+                    res->hist_gen_latency_sum     = metrics.hist_gen_latency_seconds.sum;
 
                     if (task.metrics_reset_bucket) {
                         metrics.reset_bucket();

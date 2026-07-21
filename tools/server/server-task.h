@@ -549,6 +549,20 @@ struct server_task_result_metrics : server_task_result {
     std::string kv_cache_type_k;   // e.g. "f16", "q8_0"
     std::string kv_cache_type_v;
 
+    // cumulative latency/size histograms (bucket arrays are cumulative counts)
+    std::vector<uint64_t> hist_prompt_tokens_buckets;
+    uint64_t              hist_prompt_tokens_count = 0;
+    double                hist_prompt_tokens_sum   = 0.0;
+    std::vector<uint64_t> hist_context_tokens_buckets;
+    uint64_t              hist_context_tokens_count = 0;
+    double                hist_context_tokens_sum   = 0.0;
+    std::vector<uint64_t> hist_ttft_buckets;
+    uint64_t              hist_ttft_count = 0;
+    double                hist_ttft_sum   = 0.0;
+    std::vector<uint64_t> hist_gen_latency_buckets;
+    uint64_t              hist_gen_latency_count = 0;
+    double                hist_gen_latency_sum   = 0.0;
+
     // while we can also use std::vector<server_slot> this requires copying the slot object which can be quite messy
     // therefore, we use json to temporarily store the slot.to_json() result
     json slots_data = json::array();
