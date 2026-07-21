@@ -329,7 +329,7 @@ int llama_server(common_params & params, int argc, char ** argv) {
     // EXPERIMENTAL built-in tools
     if (!params.server_tools.empty()) {
         try {
-            tools.setup(params.server_tools);
+            tools.setup(params.server_tools, params.server_tools_shell_command_whitelist);
         } catch (const std::exception & e) {
             SRV_ERR("tools setup failed: %s\n", e.what());
             return 1;
