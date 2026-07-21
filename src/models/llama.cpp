@@ -202,13 +202,47 @@ llama_model_llama::graph<embed>::graph(const llama_model & model, const llm_grap
                     LLM_NORM_RMS, il);
             cb(cur, "ffn_norm", il);
 
-            cur = build_ffn(cur,
-                    model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   model.layers[il].ffn_up_s,
+            ggml_tensor * ffn_norm = cur;
+
+            ggml_tensor * dense_out = build_ffn(ffn_norm,
+                    model.layers[il].ffn_up, model.layers[il].ffn_up_b, model.layers[il].ffn_up_s,
                     model.layers[il].ffn_gate, model.layers[il].ffn_gate_b, model.layers[il].ffn_gate_s,
                     model.layers[il].ffn_down, model.layers[il].ffn_down_b, model.layers[il].ffn_down_s,
                     NULL,
                     LLM_FFN_SILU, LLM_FFN_PAR, il);
-            cb(cur, "ffn_out", il);
+
+            cb(dense_out, "ffn_out", il);
+
+            cur = dense_out;
+
+            if (model.layers[il].ffn_moe_adapter_gate != nullptr)
+            {   
+                ggml_tensor * router_logits = build_lora_mm(
+                        model.layers[il].ffn_moe_adapter_gate, ffn_norm);
+                        
+                cb(router_logits, "ffn_moe_adapter_logits", il);
+
+                ggml_tensor * adapter_out = build_moe_ffn(
+                        dense_out,
+                        nullptr,
+                        model.layers[il].ffn_moe_adapter_down,
+                        nullptr,
+                        model.layers[il].ffn_moe_adapter_up,
+                        nullptr,
+                        n_expert,
+                        n_expert_used,
+                        LLM_FFN_GELU,
+                        true,
+                        hparams.expert_weights_scale,
+                        LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
+                        il,
+                        router_logits);
+                cb(adapter_out, "ffn_moe_adapter_out", il);
+
+                cur = ggml_add(ctx0, dense_out, adapter_out);
+                cb(cur, "ffn_out", il);
+            }
+
         } else {
             // MoE branch
             cur = build_norm(ffn_inp,

@@ -1,3 +1,6 @@
+# Local visualization files
+visual_structures.html
+
 # Extensions
 
 *.a
@@ -162,5 +165,14 @@ a.out.*
 AGENTS.local.md
 .pi/SYSTEM.md
 
+# Local Sparsetral validation
+local_modal_hf_logits.py
+/data/
+/offload/
+/hf-error.txt
+/hf-cpu.txt
+/models/sparsetral-minimal/model-*.safetensors
+
 contribution_plan.md
 sparsetral.gguf
+reflection.md
