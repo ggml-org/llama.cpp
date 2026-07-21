@@ -4332,6 +4332,10 @@ static bool ggml_backend_webgpu_device_supports_buft(ggml_backend_dev_t dev, ggm
     return buft->iface.get_name == ggml_backend_webgpu_buffer_type_get_name;
 }
 
+static bool ggml_backend_buffer_is_webgpu(ggml_backend_buffer_t buffer) {
+    return buffer != nullptr && buffer->buft->iface.get_name == ggml_backend_webgpu_buffer_type_get_name;
+}
+
 static bool ggml_webgpu_supported_qtype(ggml_type type) {
     switch (type) {
         case GGML_TYPE_Q1_0:
@@ -4417,6 +4421,9 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
             supports_op = ((op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_Q8_0 ||
                             op->type == GGML_TYPE_Q4_0) &&
                            src0->type == GGML_TYPE_F32 && (src1->type == GGML_TYPE_I64 || src1->type == GGML_TYPE_I32));
+            if (supports_op && op->buffer != nullptr && !ggml_backend_buffer_is_webgpu(op->buffer)) {
+                supports_op = false;
+            }
             break;
         case GGML_OP_GET_ROWS:
             if (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || ggml_webgpu_supported_qtype(src0->type)) {
