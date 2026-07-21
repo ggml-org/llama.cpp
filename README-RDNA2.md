@@ -421,14 +421,9 @@ should request dense logits explicitly.
 - Standard `llama-bench` reports raw decode and does not exercise MTP.
 - Server MTP results depend on prompt content, temperature, and draft
   acceptance.
-- On AMD recurrent/hybrid models, restored prompt state is never sent through
-  tile flash attention because of the page fault tracked in upstream issue
-  #20176. If the missing suffix is at most one eighth of the full prompt, cached
-  HIP graphs are invalidated and vector flash attention evaluates that suffix.
-  Larger suffixes skip checkpoint restore and use a clean tile-FA reprocess.
-  Generation returns to normal kernel selection in either case. This favors
-  stability while selecting the cheaper known-safe prompt path. Checkpoints
-  remain conservatively disabled for other AMD model types.
+- Context checkpoints are forcibly disabled on AMD GPUs because restored Qwen
+  checkpoints can crash flash attention (upstream issue #20176). This avoids GPU
+  faults but long branching conversations may reprocess more prompt tokens.
 - Prompt caching was disabled for scaling tests. Production multi-turn behavior
   can differ substantially when prefixes are reused.
 - After any ROCm illegal-memory fault, reset the GPUs or reboot before trusting

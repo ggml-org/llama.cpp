@@ -22,9 +22,7 @@
 #include <cinttypes>
 #include <exception>
 #include <memory>
-#include <map>
 #include <filesystem>
-#include <cstdlib>
 #include <utility>
 #include <fstream>
 
@@ -40,47 +38,6 @@
 using json = nlohmann::ordered_json;
 
 constexpr int HTTP_POLLING_SECONDS = 1;
-
-static void server_set_env(const char * name, const char * value) {
-#if defined(_WIN32)
-    _putenv_s(name, value ? value : "");
-#else
-    if (value) {
-        setenv(name, value, 1);
-    } else {
-        unsetenv(name);
-    }
-#endif
-}
-
-struct server_scoped_checkpoint_flash_attn {
-    server_scoped_checkpoint_flash_attn(bool enable, uint64_t epoch) :
-        active(enable),
-        reset_vector(enable && getenv("GGML_CUDA_FA_FORCE_VEC") == nullptr) {
-        if (!active) {
-            return;
-        }
-        if (reset_vector) {
-            server_set_env("GGML_CUDA_FA_FORCE_VEC", "1");
-        }
-        epoch_value = std::to_string(epoch);
-        server_set_env("GGML_CUDA_CHECKPOINT_EPOCH", epoch_value.c_str());
-    }
-
-    ~server_scoped_checkpoint_flash_attn() {
-        if (!active) {
-            return;
-        }
-        server_set_env("GGML_CUDA_CHECKPOINT_EPOCH", nullptr);
-        if (reset_vector) {
-            server_set_env("GGML_CUDA_FA_FORCE_VEC", nullptr);
-        }
-    }
-
-    const bool active;
-    const bool reset_vector;
-    std::string epoch_value;
-};
 
 static uint32_t server_n_outputs_max(const common_params & params) {
     const uint32_t n_batch  = params.n_batch;
@@ -991,15 +948,6 @@ private:
     bool needs_reeval = false;
     int  n_parallel_user = 0;
 
-    // Work around AMD issue #20176 without disabling recurrent checkpoints.
-    // Work around AMD issue #20176 without sending restored prompt state through
-    // tile flash attention. Small suffixes use vector FA; large suffixes are
-    // cleanly reprocessed with tile FA.
-    bool checkpoint_fa_vec_fallback = false;
-    bool checkpoint_fa_vec_pending  = false;
-    std::map<llama_seq_id, uint32_t> checkpoint_fa_vec_tokens_remaining;
-    uint64_t checkpoint_fa_epoch = 0;
-
     std::string model_name; // name of the loaded model, to be used by API
     std::set<std::string> model_aliases; // additional names for the model
     std::set<std::string> model_tags;    // informational tags
@@ -1429,11 +1377,9 @@ private:
         }
         SRV_TRC("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
 
-        // AMD checkpoint restore can make any later tile flash-attention graph fault
-        // (issue #20176). Recurrent/hybrid models need checkpoints to avoid
-        // expensive full prompt reprocessing. Restore small suffixes with vector
-        // FA after invalidating HIP graphs; cleanly reprocess large suffixes with
-        // tile FA. Keep the conservative disable for other model types.
+        // Context checkpoint restore is unsafe on AMD GPUs (issue #20176), including
+        // recurrent/hybrid Qwen models. It can leave flash attention with stale
+        // KV/state addresses and cause a GPU page fault after a later restore.
         if (params_base.n_ctx_checkpoints > 0) {
             for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
                 ggml_backend_dev_t dev = ggml_backend_dev_get(i);
@@ -1444,15 +1390,9 @@ private:
                 if (name.find("AMD") != std::string::npos ||
                     name.find("Radeon") != std::string::npos ||
                     name.find("ROCm") != std::string::npos) {
-                    if (llama_model_is_recurrent(model_tgt) || llama_model_is_hybrid(model_tgt)) {
-                        checkpoint_fa_vec_fallback = true;
-                        SRV_WRN("AMD GPU detected (%s) — restored prompt suffixes will use vector FA or clean tile-FA reprocessing (issue #20176)\n",
-                                name.c_str());
-                    } else {
-                        SRV_WRN("AMD GPU detected (%s) — disabling context checkpoints (issue #20176)\n",
-                                name.c_str());
-                        params_base.n_ctx_checkpoints = 0;
-                    }
+                    SRV_WRN("AMD GPU detected (%s) — disabling context checkpoints (issue #20176)\n",
+                            name.c_str());
+                    params_base.n_ctx_checkpoints = 0;
                     break;
                 }
             }
@@ -2944,10 +2884,7 @@ private:
         int32_t off_next = 0;
         int32_t n_batch = llama_n_batch(ctx_tgt);
         for (int32_t off = 0; off < batch.size(); off = off_next) {
-            // Restored prompts remain on vector FA until their missing suffix is
-            // consumed. Clean reprocessing retains the normal tile-FA path.
-            const int32_t n_tokens_max = n_batch;
-            const int32_t n_tokens = std::min(n_tokens_max, batch.size() - off);
+            const int32_t n_tokens = std::min(n_batch, batch.size() - off);
             try {
                 scoped_timer t(t_decode, n_decode);
                 // TODO @ngxson : maybe handle n_batch == 1 here instead of inside decode()
@@ -3466,37 +3403,16 @@ private:
 
                                     bool do_reset = it == slot.prompt.checkpoints.rend();
 
-                                    if (!do_reset && checkpoint_fa_vec_fallback) {
-                                        const uint32_t n_prompt_remaining = std::max<int64_t>(
-                                            0, (int64_t) slot.task->n_tokens() - it->n_tokens);
-                                        if (8ull*n_prompt_remaining > (uint64_t) slot.task->n_tokens()) {
-                                            SLT_WRN(slot, "checkpoint suffix is %u/%d prompt tokens; using a clean tile-FA reprocess\n",
-                                                n_prompt_remaining, slot.task->n_tokens());
-                                            do_reset = true;
-                                        }
-                                    }
-
                                     if (!do_reset) {
                                         // restore the context checkpoint
                                         it->load_tgt(ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
                                         it->load_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
-                                        if (checkpoint_fa_vec_fallback) {
-                                            checkpoint_fa_vec_pending = true;
-                                            ++checkpoint_fa_epoch;
-                                            SLT_WRN(slot, "%s", "resetting HIP graphs before vector restored-prompt evaluation\n");
-                                        }
                                         // restore the draft's speculative state
                                         common_speculative_set_state(spec.get(), slot.id, it->data_spec);
 
                                         pos_next = std::min(pos_next, std::max(it->pos_min + 1, it->pos_max));
                                         n_past   = std::min(slot.prompt.tokens.size_up_to_pos(pos_next), (size_t) it->n_tokens);
                                         n_past_common = std::min(n_past_common, (int) it->n_tokens);
-                                        if (checkpoint_fa_vec_fallback) {
-                                            const uint32_t n_prompt_remaining = slot.task->n_tokens() - n_past;
-                                            checkpoint_fa_vec_tokens_remaining[slot.id] += n_prompt_remaining;
-                                            SLT_WRN(slot, "checkpoint restore: keeping vector flash attention for %u prompt tokens\n",
-                                                n_prompt_remaining);
-                                        }
                                         SLT_WRN(slot, "restored context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_past = %d, size = %.3f MiB)\n", it->pos_min, it->pos_max, it->n_tokens, n_past, (float) it->size() / 1024 / 1024);
                                     }
 
@@ -3778,30 +3694,7 @@ private:
             n_empty_consecutive = 0;
         }
 
-        const bool force_checkpoint_fa_vec =
-            checkpoint_fa_vec_pending || !checkpoint_fa_vec_tokens_remaining.empty();
-
-        int ret;
-        {
-            server_scoped_checkpoint_flash_attn force_fa_vec(force_checkpoint_fa_vec, checkpoint_fa_epoch);
-            ret = llama_decode(ctx_tgt, batch_view);
-        }
-
-        if (force_checkpoint_fa_vec && ret == 0) {
-            checkpoint_fa_vec_pending = false;
-            for (int32_t i = 0; i < batch_view.n_tokens; ++i) {
-                for (int32_t j = 0; j < batch_view.n_seq_id[i]; ++j) {
-                    const llama_seq_id seq_id = batch_view.seq_id[i][j];
-                    auto it = checkpoint_fa_vec_tokens_remaining.find(seq_id);
-                    if (it == checkpoint_fa_vec_tokens_remaining.end()) {
-                        continue;
-                    }
-                    if (--it->second == 0) {
-                        checkpoint_fa_vec_tokens_remaining.erase(it);
-                    }
-                }
-            }
-        }
+        const int ret = llama_decode(ctx_tgt, batch_view);
 
         metrics.on_decoded(slots);
 

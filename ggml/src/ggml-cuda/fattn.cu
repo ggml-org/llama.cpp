@@ -6,8 +6,6 @@
 #include "fattn-wmma-f16.cuh"
 #include "fattn.cuh"
 
-#include <cstdlib>
-
 template <int DKQ, int DV, int ncols2>
 static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
@@ -460,13 +458,6 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     // For small batch sizes the vector kernel may be preferable over the kernels optimized for large batch sizes:
     // 192 satisfies % 64 == 0 but has no vec instance (DKQ != DV); force it onto the MMA path.
     const bool can_use_vector_kernel = Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 && K->ne[1] % FATTN_KQ_STRIDE == 0;
-
-    // The server uses this while evaluating a restored AMD recurrent prompt suffix
-    // (issue #20176). Check eligibility here so allocation sizing and dispatch
-    // select the same supported kernel.
-    if (can_use_vector_kernel && getenv("GGML_CUDA_FA_FORCE_VEC") != nullptr) {
-        return BEST_FATTN_KERNEL_VEC;
-    }
 
     // If Turing tensor cores are available, use them:
     if (turing_mma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
