@@ -3155,6 +3155,59 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 }
             }
         }
+
+        {
+            // StepFun trimming regression test (see https://github.com/ggml-org/llama.cpp/pull/25238)
+            auto tmpls = read_templates("models/templates/StepFun3.5-Flash.jinja");
+
+            common_chat_msg message_chatbot = simple_assist_msg("Let me check.\n\n", "I am thinking.\n\n");
+
+            {
+                common_chat_templates_inputs inputs;
+                inputs.messages              = { message_chatbot };
+                inputs.add_generation_prompt = true;
+
+                auto params = common_chat_templates_apply(tmpls.get(), inputs);
+
+                if (params.prompt.find("Let me check.\n\n") != std::string::npos) {
+                    throw std::runtime_error("StepFun 3.5: content not trimmed");
+                }
+
+                if (params.prompt.find("I am thinking.\n\n") != std::string::npos) {
+                    throw std::runtime_error("StepFun 3.5: reasoning_content not trimmed");
+                }
+            }
+
+            {
+                // Trimming must also reach typed (text) content parts, not just string content
+                // (see https://github.com/ggml-org/llama.cpp/pull/25238)
+                common_chat_msg message_parts;
+                message_parts.role          = "user";
+                message_parts.content_parts = {
+                    { /* .type = */ "text", /* .text = */ "First part.\n\n" },
+                    { /* .type = */ "media_marker", /* .text = */ "<__media__>" },
+                    { /* .type = */ "text", /* .text = */ "Second part.\n\n" },
+                };
+
+                common_chat_templates_inputs inputs;
+                inputs.messages              = { message_parts };
+                inputs.add_generation_prompt = true;
+
+                auto params = common_chat_templates_apply(tmpls.get(), inputs);
+
+                if (params.prompt.find("First part.\n\n") != std::string::npos ||
+                    params.prompt.find("Second part.\n\n") != std::string::npos) {
+                    throw std::runtime_error("StepFun 3.5: text content parts not trimmed");
+                }
+
+                // the trimmed text itself must still be present
+                if (params.prompt.find("First part.") == std::string::npos ||
+                    params.prompt.find("Second part.") == std::string::npos) {
+                    throw std::runtime_error("StepFun 3.5: text content parts missing after trim");
+                }
+            }
+        }
+
     }
 
     {
@@ -4653,9 +4706,16 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     // Format: <TOOLCALL>[{"name": "func", "arguments": {...}}]</TOOLCALL>
     {
         auto tst = peg_tester("models/templates/NVIDIA-Nemotron-Nano-v2.jinja", detailed_debug);
-        tst.test("<TOOLCALL>[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]</TOOLCALL>")
+        tst.test("I'm\nthinking\n</think>\n<TOOLCALL>[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]</TOOLCALL>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .tools({ special_function_tool })
-            .expect(message_assist_call)
+            .expect(message_assist_call_thoughts)
+            .run();
+
+        tst.test("I'm\nthinking\n</think>\n\n<TOOLCALL>[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]</TOOLCALL>\n")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(message_assist_call_thoughts)
             .run();
 
         // Continuation tests
@@ -5593,6 +5653,77 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_content("Hello, world!\nWhat's up?")
             .run();
     }
+
+    // MiniCPM5 - XML tool calls with <function name="..."><param name="...">...</param></function>
+    {
+        auto tst = peg_tester("models/templates/openbmb-MiniCPM5-1B.jinja", detailed_debug);
+
+        tst.test("Hello, world!\nWhat's up?")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist)
+            .run();
+
+        tst.test(R"(<function name="python"><param name="code">print('Hello, World!')</param></function>)")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ python_tool })
+            .expect_tool_calls({ { "python", R"#({"code": "print('Hello, World!')"})#", {} } })
+            .run();
+
+        tst.test(R"(<function name="empty_args"></function>)")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ empty_args_tool })
+            .expect(simple_assist_msg("", "", "empty_args", "{}"))
+            .run();
+
+        tst.test(R"(<function name="python"><param name="code">print('x')</param></function>)")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .parallel_tool_calls(true)
+            .tools({ python_tool })
+            .expect_tool_calls({ { "python", R"#({"code": "print('x')"})#", {} } })
+            .run();
+
+        // CDATA lets a string value carry characters that would otherwise close the tag.
+        tst.test(R"(<function name="html"><param name="markup"><![CDATA[<a href="/x">hi</a> </param>]]></param></function>)")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ html_tool })
+            .expect_tool_calls({ { "html", R"#({"markup": "<a href=\"/x\">hi</a> </param>"})#", {} } })
+            .run();
+
+        tst.test(R"(I'm thinking</think><function name="python"><param name="code">print('hey')</param></function>)")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ python_tool })
+            .expect_reasoning("I'm thinking")
+            .expect_tool_calls({ { "python", R"#({"code": "print('hey')"})#", {} } })
+            .run();
+
+        tst.test(R"(<function name="python"><param name="code">print('x')</param></function>
+<function name="python"><param name="code">print('y')</param></function>)")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .parallel_tool_calls(true)
+            .tools({ python_tool })
+            .expect_tool_calls({
+                { "python", R"#({"code": "print('x')"})#", {} },
+                { "python", R"#({"code": "print('y')"})#", {} },
+            })
+            .run();
+
+        tst.test(" thinking</think>Hello, world!\nWhat's up?")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .messages({ message_user, message_assist_prefill_reasoning })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_REASONING)
+            .expect_reasoning("I'm thinking")
+            .expect_content("Hello, world!\nWhat's up?")
+            .run();
+    }
 }
 
 static void test_template_generation_prompt() {
@@ -5740,6 +5871,13 @@ static void test_template_generation_prompt() {
         check(tmpls, continuation_content(),   "<｜Assistant｜><think>I'm thinking</think>Hello, ");
         check(tmpls, continuation_reasoning(), "<｜Assistant｜><think>I'm");
     }
+
+    {
+        auto tmpls = read_templates("models/templates/openbmb-MiniCPM5-1B.jinja");
+        check(tmpls, basic(),                  "<|im_start|>assistant\n<think>\n");
+        check(tmpls, continuation_content(),   "<|im_start|>assistant\n<think>\nI'm thinking\n</think>\n\nHello, ");
+        check(tmpls, continuation_reasoning(), "<|im_start|>assistant\n<think>\nI'm");
+    }
 }
 
 // Test the developer role to system workaround with a simple mock template
@@ -5777,6 +5915,71 @@ static void test_developer_role_to_system_workaround() {
             throw std::runtime_error("Test failed: system message not found in output");
         }
         LOG_ERR("Test 1 passed: developer role changed to system\n");
+    }
+}
+
+static void test_reasoning_budget_tokens_per_request() {
+    LOG_DBG("%s\n", __func__);
+    // Use Qwen3 template which has <think>...</think> reasoning markers.
+    // The autoparser detects them and sets thinking_start/end_tag, which enables
+    // the reasoning-budget code path in oaicompat_chat_params_parse.
+    auto tmpls = read_templates("models/templates/Qwen-Qwen3-0.6B.jinja");
+
+    server_chat_params opt;
+    opt.tmpls            = std::move(tmpls);
+    opt.use_jinja        = true;
+    opt.enable_thinking  = true;
+    opt.reasoning_budget = -1;
+    opt.reasoning_format = COMMON_REASONING_FORMAT_NONE;
+
+    // Body with per-request reasoning_budget_tokens=0 (suppress thinking).
+    json body = {
+        {"messages", json::array({json{{"role", "user"}, {"content", "hello"}}})},
+        {"reasoning_budget_tokens", 0},
+    };
+    std::vector<raw_buffer> out_files;
+    auto llama_params = oaicompat_chat_params_parse(body, opt, out_files);
+
+    // The per-request value must win over the server default (-1).
+    if (!llama_params.contains("reasoning_budget_tokens")) {
+        throw std::runtime_error("reasoning_budget_tokens missing from llama_params (thinking_end_tag may be empty for this template)");
+    }
+    int got = llama_params["reasoning_budget_tokens"].get<int>();
+    if (got != 0) {
+        throw std::runtime_error(std::string("Expected reasoning_budget_tokens=0, got ") + std::to_string(got));
+    }
+}
+
+static void test_reasoning_budget_message_per_request() {
+    LOG_DBG("%s\n", __func__);
+    // Same code path as test_reasoning_budget_tokens_per_request: the Qwen3 template's
+    // <think>...</think> markers enable the reasoning-budget block in oaicompat_chat_params_parse.
+    auto tmpls = read_templates("models/templates/Qwen-Qwen3-0.6B.jinja");
+
+    server_chat_params opt;
+    opt.tmpls                   = std::move(tmpls);
+    opt.use_jinja               = true;
+    opt.enable_thinking         = true;
+    opt.reasoning_budget        = -1;
+    opt.reasoning_format        = COMMON_REASONING_FORMAT_NONE;
+    opt.reasoning_budget_message = "server default";
+
+    // Body with a per-request reasoning_budget_message override.
+    const std::string per_request_message = "per-request message";
+    json body = {
+        {"messages", json::array({json{{"role", "user"}, {"content", "hello"}}})},
+        {"reasoning_budget_message", per_request_message},
+    };
+    std::vector<raw_buffer> out_files;
+    auto llama_params = oaicompat_chat_params_parse(body, opt, out_files);
+
+    // The per-request value must win over the server default.
+    if (!llama_params.contains("reasoning_budget_message")) {
+        throw std::runtime_error("reasoning_budget_message missing from llama_params (thinking_end_tag may be empty for this template)");
+    }
+    std::string got = llama_params["reasoning_budget_message"].get<std::string>();
+    if (got != per_request_message) {
+        throw std::runtime_error("Expected reasoning_budget_message='" + per_request_message + "', got '" + got + "'");
     }
 }
 
@@ -5937,6 +6140,8 @@ int main(int argc, char ** argv) {
         test_convert_responses_to_chatcmpl();
         test_developer_role_to_system_workaround();
         test_template_generation_prompt();
+        test_reasoning_budget_tokens_per_request();
+        test_reasoning_budget_message_per_request();
         test_template_output_peg_parsers(detailed_debug);
         std::cout << "\n[chat] All tests passed!" << '\n';
     }

@@ -230,6 +230,12 @@ def print_ascii_timeline(op_name, dims, types, usec, cycles, events, evt_val=Non
             char = 'Q'
         elif norm_evt == 'A-PREP':
             char = 'A'
+        elif norm_evt == 'Q-PREP':
+            char = 'q'
+        elif norm_evt == 'K-PREP':
+            char = 'k'
+        elif norm_evt == 'V-PREP':
+            char = 'v'
         elif norm_evt == 'W-DEQUANT':
             char = 'D'
         elif norm_evt == 'O-PROC':
@@ -452,15 +458,11 @@ def main():
 
     if args.timeline:
         logger.info(f"\n# ASCII Timing {args.timeline.capitalize()}\n")
-        printed_cnt = 0
         for op in ops:
             if args.timeline == "summary":
                 print_ascii_summary(op['name'], op['dims'], op['types'], op['usec'], op['cycles'], op['trace_events'], op.get('evt_val'))
             elif args.timeline == "diagram":
                 print_ascii_timeline(op['name'], op['dims'], op['types'], op['usec'], op['cycles'], op['trace_events'], op.get('evt_val'))
-            printed_cnt += 1
-            if printed_cnt >= args.top:
-                break
     else:
         generate_report(ops, args.top, overrides, args.sort, pmu_name=final_pmu_name)
 
