@@ -430,6 +430,10 @@ static size_t ggml_webgpu_tensor_binding_size(webgpu_context & ctx, ggml_tensor 
     return ROUNDUP_POW2(ggml_nbytes(t) + ggml_webgpu_tensor_misalignment(ctx, t), WEBGPU_STORAGE_BUF_BINDING_MULT);
 }
 
+static wgpu::BindGroupEntry ggml_webgpu_make_tensor_bind_group_entry(webgpu_context & ctx,
+                                                                     uint32_t         binding,
+                                                                     ggml_tensor *    tensor);
+
 static void ggml_webgpu_trace_tensor(const char * stage, const char * label, webgpu_context * ctx, ggml_tensor * tensor) {
     if (!ggml_webgpu_trace_nodes_enabled()) {
         return;
@@ -437,10 +441,16 @@ static void ggml_webgpu_trace_tensor(const char * stage, const char * label, web
 
     fprintf(stderr,
             "[ggml-webgpu trace] stage=%s tensor=%s ptr=%p op=%s name=%s type=%s ne=[%lld,%lld,%lld,%lld] "
-            "nb=[%zu,%zu,%zu,%zu]",
+            "nb=[%zu,%zu,%zu,%zu] data=%p view_src=%p view_offs=%zu buffer=%p",
             stage, label, (void *) tensor, ggml_op_name(tensor->op), tensor->name, ggml_type_name(tensor->type),
             (long long) tensor->ne[0], (long long) tensor->ne[1], (long long) tensor->ne[2],
-            (long long) tensor->ne[3], tensor->nb[0], tensor->nb[1], tensor->nb[2], tensor->nb[3]);
+            (long long) tensor->ne[3], tensor->nb[0], tensor->nb[1], tensor->nb[2], tensor->nb[3], tensor->data,
+            (void *) tensor->view_src, tensor->view_offs, (void *) tensor->buffer);
+
+    if (tensor->buffer != nullptr) {
+        fprintf(stderr, " buffer_name=%s buffer_size=%zu buffer_multi=%d", ggml_backend_buffer_name(tensor->buffer),
+                ggml_backend_buffer_get_size(tensor->buffer), ggml_backend_buffer_is_multi_buffer(tensor->buffer));
+    }
 
     if (ctx != nullptr) {
         fprintf(stderr, " offset=%zu align_offset=%zu binding_size=%zu misalignment=%zu",
@@ -450,6 +460,25 @@ static void ggml_webgpu_trace_tensor(const char * stage, const char * label, web
 
     fprintf(stderr, "\n");
     fflush(stderr);
+}
+
+static wgpu::BindGroupEntry ggml_webgpu_trace_make_tensor_bind_group_entry(webgpu_context & ctx,
+                                                                           uint32_t         binding,
+                                                                           ggml_tensor *    tensor,
+                                                                           const char *     label) {
+    if (ggml_webgpu_trace_nodes_enabled()) {
+        fprintf(stderr, "[ggml-webgpu trace] stage=make_tensor_entry begin tensor=%s binding=%u\n", label, binding);
+        fflush(stderr);
+    }
+
+    wgpu::BindGroupEntry entry = ggml_webgpu_make_tensor_bind_group_entry(ctx, binding, tensor);
+
+    if (ggml_webgpu_trace_nodes_enabled()) {
+        fprintf(stderr, "[ggml-webgpu trace] stage=make_tensor_entry end tensor=%s binding=%u\n", label, binding);
+        fflush(stderr);
+    }
+
+    return entry;
 }
 
 static bool ggml_webgpu_tensor_binding_overlap(webgpu_context & ctx, ggml_tensor * a, ggml_tensor * b) {
@@ -1521,11 +1550,10 @@ static std::optional<webgpu_encoded_op> ggml_webgpu_set_rows(webgpu_context & ct
         fprintf(stderr, "[ggml-webgpu trace] stage=set_rows entries begin\n");
         fflush(stderr);
     }
-    std::vector<wgpu::BindGroupEntry> entries = {
-        ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src),
-        ggml_webgpu_make_tensor_bind_group_entry(ctx, 1, idx),
-        ggml_webgpu_make_tensor_bind_group_entry(ctx, 2, dst),
-    };
+    std::vector<wgpu::BindGroupEntry> entries;
+    entries.push_back(ggml_webgpu_trace_make_tensor_bind_group_entry(ctx, 0, src, "src"));
+    entries.push_back(ggml_webgpu_trace_make_tensor_bind_group_entry(ctx, 1, idx, "idx"));
+    entries.push_back(ggml_webgpu_trace_make_tensor_bind_group_entry(ctx, 2, dst, "dst"));
     if (ggml_webgpu_trace_nodes_enabled()) {
         for (const auto & entry : entries) {
             ggml_webgpu_trace_bind_group_entry("set_rows entry", entry);
