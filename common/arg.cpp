@@ -527,8 +527,43 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
         }
     };
 
+    // when a sidecar type is requested, the draft repo resolves to its sidecar instead of a full model
+    const bool spec_sidecar_found = !plan_spec.mtp.local_path.empty() ||
+                                    !plan_spec.dflash.local_path.empty() ||
+                                    !plan_spec.eagle3.local_path.empty();
+    if (!plan_spec.mtp.local_path.empty() && !had_spec_url) {
+        tasks.emplace_back(plan_spec.mtp, opts, [&]() {
+            // only use the discovered MTP head when no draft path is set yet
+            if (params.speculative.draft.mparams.path.empty()) {
+                params.speculative.draft.mparams.path = hf_cache::finalize_file(plan_spec.mtp);
+            } else {
+                hf_cache::finalize_file(plan_spec.mtp);
+            }
+        });
+    }
+    if (!plan_spec.dflash.local_path.empty() && !had_spec_url) {
+        tasks.emplace_back(plan_spec.dflash, opts, [&]() {
+            // only use the discovered DFlash sidecar when no draft path is set yet
+            if (params.speculative.draft.mparams.path.empty()) {
+                params.speculative.draft.mparams.path = hf_cache::finalize_file(plan_spec.dflash);
+            } else {
+                hf_cache::finalize_file(plan_spec.dflash);
+            }
+        });
+    }
+    if (!plan_spec.eagle3.local_path.empty() && !had_spec_url) {
+        tasks.emplace_back(plan_spec.eagle3, opts, [&]() {
+            // only use the discovered Eagle3 sidecar when no draft path is set yet
+            if (params.speculative.draft.mparams.path.empty()) {
+                params.speculative.draft.mparams.path = hf_cache::finalize_file(plan_spec.eagle3);
+            } else {
+                hf_cache::finalize_file(plan_spec.eagle3);
+            }
+        });
+    }
+
     // handle plan_spec (e.g. --spec-draft-hf)
-    if (!plan_spec.model_files.empty() && !had_spec_url) {
+    if (!plan_spec.model_files.empty() && !had_spec_url && !spec_sidecar_found) {
         add_tasks(plan_spec.model_files, plan_spec.primary, params.speculative.draft.mparams);
         had_spec_url = true;
     }
