@@ -632,6 +632,13 @@ void server_res_spipe::on_complete() {
     if (!spipe || next_finished) {
         return;
     }
+    // an empty next_orig means set_next() never ran: the request failed before streaming
+    // started, typically a params validation throw. evict the session installed by set_req()
+    // so the failed request leaves nothing behind for discovery or replay
+    if (!next_orig) {
+        g_stream_sessions.evict(server_stream_conv_id_from_headers(req->headers));
+        return;
+    }
     std::string chunk;
     while (!spipe->is_cancelled()) {
         chunk.clear();
