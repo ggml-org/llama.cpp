@@ -411,18 +411,21 @@ static void ggml_webgpu_create_buffer(wgpu::Device &    device,
 }
 
 static wgpu::Buffer ggml_webgpu_tensor_buf(const ggml_tensor * tensor) {
-    ggml_backend_webgpu_buffer_context * ctx = (ggml_backend_webgpu_buffer_context *) tensor->buffer->context;
+    const ggml_tensor * base_tensor = tensor->view_src ? tensor->view_src : tensor;
+    ggml_backend_webgpu_buffer_context * ctx = (ggml_backend_webgpu_buffer_context *) base_tensor->buffer->context;
     return ctx->buffer;
 }
 
 static size_t ggml_webgpu_tensor_misalignment(webgpu_context & ctx, const ggml_tensor * t) {
-    size_t offset = ggml_webgpu_tensor_offset(t);
-    return offset & (ctx->global_ctx->capabilities.limits.minStorageBufferOffsetAlignment - 1);
+    const size_t offset    = ggml_webgpu_tensor_offset(t);
+    const size_t alignment = ctx->global_ctx->capabilities.limits.minStorageBufferOffsetAlignment;
+    return offset & (alignment - 1);
 }
 
 static size_t ggml_webgpu_tensor_align_offset(webgpu_context & ctx, const ggml_tensor * t) {
-    size_t offset = ggml_webgpu_tensor_offset(t);
-    return offset & ~(ctx->global_ctx->capabilities.limits.minStorageBufferOffsetAlignment - 1);
+    const size_t offset    = ggml_webgpu_tensor_offset(t);
+    const size_t alignment = ctx->global_ctx->capabilities.limits.minStorageBufferOffsetAlignment;
+    return offset & ~(alignment - 1);
 }
 
 static size_t ggml_webgpu_tensor_binding_size(webgpu_context & ctx, ggml_tensor * t) {
