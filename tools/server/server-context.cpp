@@ -54,6 +54,38 @@ static uint32_t server_n_outputs_max(const common_params & params) {
     return std::max<uint32_t>(1, std::min<uint64_t>(n_batch, n_outputs));
 }
 
+static void render_histogram(std::stringstream & out,
+                             const std::string & name,
+                             const std::string & help,
+                             const std::string & model_label,
+                             const std::vector<double> & bounds,
+                             const std::vector<uint64_t> & bucket_counts,
+                             uint64_t count,
+                             double sum) {
+    out << "# HELP llamacpp:" << name << " " << help << "\n";
+    out << "# TYPE llamacpp:" << name << " histogram\n";
+
+    // model_label is "{model=\"...\"}"; splice le=... before the closing brace.
+    auto with_le = [&](const std::string & le) {
+        std::string labels = model_label;
+        labels.pop_back();
+        labels += ",le=\"";
+        labels += le;
+        labels += "\"}";
+        return labels;
+    };
+
+    for (size_t i = 0; i < bounds.size(); ++i) {
+        std::ostringstream le;
+        le << bounds[i];
+        out << "llamacpp:" << name << "_bucket" << with_le(le.str())
+            << " " << bucket_counts[i] << "\n";
+    }
+    out << "llamacpp:" << name << "_bucket" << with_le("+Inf") << " " << count << "\n";
+    out << "llamacpp:" << name << "_sum"   << model_label << " " << sum   << "\n";
+    out << "llamacpp:" << name << "_count" << model_label << " " << count << "\n";
+}
+
 // state diagram: https://github.com/ggml-org/llama.cpp/pull/9283
 enum slot_state {
     SLOT_STATE_IDLE,
@@ -784,6 +816,28 @@ struct server_slot {
 // server_metrics
 //
 
+// minimal cumulative histogram: bounds are fixed upper edges; observe() bumps
+// every bucket whose bound >= value (cumulative form Prometheus expects).
+struct metric_histogram {
+    std::vector<double>   bounds;
+    std::vector<uint64_t> buckets; // cumulative counts, same length as bounds
+    uint64_t              count = 0;
+    double                sum   = 0.0;
+
+    explicit metric_histogram(std::vector<double> b)
+        : bounds(std::move(b)), buckets(bounds.size(), 0) {}
+
+    void observe(double value) {
+        count++;
+        sum += value;
+        for (size_t i = 0; i < bounds.size(); ++i) {
+            if (value <= bounds[i]) {
+                buckets[i]++;
+            }
+        }
+    }
+};
+
 struct server_metrics {
     int64_t t_start = 0;
 
@@ -813,6 +867,15 @@ struct server_metrics {
     uint64_t n_decode_total     = 0;
     uint64_t n_busy_slots_total = 0;
 
+    metric_histogram hist_prompt_tokens {
+        {512,1024,2048,4096,6144,8192,12288,16384,24576,32768,49152,65536,98304,131072,196608,262144}};
+    metric_histogram hist_context_tokens {
+        {512,1024,2048,4096,6144,8192,12288,16384,24576,32768,49152,65536,98304,131072,196608,262144}};
+    metric_histogram hist_ttft_seconds {
+        {0.05,0.1,0.25,0.5,1,2,4,8,16,32,64}};
+    metric_histogram hist_gen_latency_seconds {
+        {0.1,0.25,0.5,1,2,5,10,20,40,80}};
+
     void init() {
         t_start = ggml_time_us();
     }
@@ -826,6 +889,8 @@ struct server_metrics {
         n_prompt_tokens_cache_total     += slot.n_prompt_tokens_cache;
 
         n_tokens_max = std::max(n_tokens_max, (uint64_t) slot.prompt.n_tokens());
+        hist_prompt_tokens.observe((double) slot.n_prompt_tokens_processed);
+        hist_ttft_seconds.observe(slot.t_prompt_processing / 1.e3); // ms -> s
     }
 
     void on_prediction(const server_slot & slot) {
@@ -836,6 +901,8 @@ struct server_metrics {
 
         n_draft_total          += slot.n_draft_total;
         n_draft_accepted_total += slot.n_draft_accepted;
+        hist_context_tokens.observe((double) slot.prompt.n_tokens());
+        hist_gen_latency_seconds.observe(slot.t_token_generation / 1.e3); // ms -> s
     }
 
     void on_decoded(const std::vector<server_slot> & slots) {
@@ -2531,6 +2598,40 @@ private:
 
                     res->kv_cache_tokens = kv_cache_tokens;
                     res->kv_cache_cells  = (uint64_t) n_ctx;
+
+                    {
+                        size_t k_bytes = 0;
+                        size_t v_bytes = 0;
+                        llama_memory_kv_size_bytes(llama_get_memory(ctx_tgt), &k_bytes, &v_bytes);
+                        res->kv_cache_k_bytes = (uint64_t) k_bytes;
+                        res->kv_cache_v_bytes = (uint64_t) v_bytes;
+                    }
+                    res->kv_cache_type_k = ggml_type_name(params_base.cache_type_k);
+                    res->kv_cache_type_v = ggml_type_name(params_base.cache_type_v);
+
+                    res->hist_prompt_tokens_buckets = metrics.hist_prompt_tokens.buckets;
+                    res->hist_prompt_tokens_count   = metrics.hist_prompt_tokens.count;
+                    res->hist_prompt_tokens_sum     = metrics.hist_prompt_tokens.sum;
+                    res->hist_context_tokens_buckets = metrics.hist_context_tokens.buckets;
+                    res->hist_context_tokens_count   = metrics.hist_context_tokens.count;
+                    res->hist_context_tokens_sum     = metrics.hist_context_tokens.sum;
+                    res->hist_ttft_buckets = metrics.hist_ttft_seconds.buckets;
+                    res->hist_ttft_count   = metrics.hist_ttft_seconds.count;
+                    res->hist_ttft_sum     = metrics.hist_ttft_seconds.sum;
+                    res->hist_gen_latency_buckets = metrics.hist_gen_latency_seconds.buckets;
+                    res->hist_gen_latency_count   = metrics.hist_gen_latency_seconds.count;
+                    res->hist_gen_latency_sum     = metrics.hist_gen_latency_seconds.sum;
+
+                    for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+                        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+                        if (ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_GPU) {
+                            continue;
+                        }
+                        size_t free_b = 0, total_b = 0;
+                        ggml_backend_dev_memory(dev, &free_b, &total_b);
+                        res->vram_devices.emplace_back(ggml_backend_dev_name(dev),
+                                                       (uint64_t) free_b, (uint64_t) total_b);
+                    }
 
                     if (task.metrics_reset_bucket) {
                         metrics.reset_bucket();
@@ -4471,6 +4572,14 @@ void server_routes::init_routes() {
                     {"name",  "kv_cache_cells"},
                     {"help",  "Total KV cache capacity in tokens (n_ctx)."},
                     {"value",  res_task->kv_cache_cells}
+            },{
+                    {"name",  "kv_cache_k_bytes"},
+                    {"help",  "Bytes allocated for the K cache across all layers."},
+                    {"value",  res_task->kv_cache_k_bytes}
+            },{
+                    {"name",  "kv_cache_v_bytes"},
+                    {"help",  "Bytes allocated for the V cache across all layers."},
+                    {"value",  res_task->kv_cache_v_bytes}
             }}}
         };
 
@@ -4505,6 +4614,61 @@ void server_routes::init_routes() {
                 prometheus << "# HELP llamacpp:" << name << " " << help        << "\n"
                             << "# TYPE llamacpp:" << name << " " << type        << "\n"
                             << "llamacpp:"        << name << model_label << " " << value << "\n";
+            }
+        }
+
+        // cache-type series: value is always 1; the type is carried as a label so
+        // Grafana can display which quantization is live per model. model_label is
+        // "{model=\"...\"}" — splice the cache/type labels in before the closing brace.
+        prometheus << "# HELP llamacpp:kv_cache_type Live KV cache quantization type (value is always 1).\n"
+                   << "# TYPE llamacpp:kv_cache_type gauge\n";
+        auto emit_type = [&](const char * cache, const std::string & type) {
+            std::string labels = model_label;
+            labels.pop_back(); // drop trailing '}'
+            labels += ",cache=\"";
+            labels += cache;
+            labels += "\",type=\"";
+            labels += type;
+            labels += "\"}";
+            prometheus << "llamacpp:kv_cache_type" << labels << " 1\n";
+        };
+        emit_type("k", res_task->kv_cache_type_k);
+        emit_type("v", res_task->kv_cache_type_v);
+
+        const std::vector<double> token_bounds = {512,1024,2048,4096,6144,8192,12288,16384,24576,32768,49152,65536,98304,131072,196608,262144};
+        const std::vector<double> ttft_bounds  = {0.05,0.1,0.25,0.5,1,2,4,8,16,32,64};
+        const std::vector<double> gen_bounds   = {0.1,0.25,0.5,1,2,5,10,20,40,80};
+
+        render_histogram(prometheus, "prompt_tokens_size", "Distribution of prompt tokens processed (excludes cache hits).",
+            model_label, token_bounds, res_task->hist_prompt_tokens_buckets,
+            res_task->hist_prompt_tokens_count, res_task->hist_prompt_tokens_sum);
+        render_histogram(prometheus, "context_used_tokens", "Distribution of context used in tokens.",
+            model_label, token_bounds, res_task->hist_context_tokens_buckets,
+            res_task->hist_context_tokens_count, res_task->hist_context_tokens_sum);
+        render_histogram(prometheus, "time_to_first_token_seconds", "Distribution of prompt-eval (TTFT) latency in seconds.",
+            model_label, ttft_bounds, res_task->hist_ttft_buckets,
+            res_task->hist_ttft_count, res_task->hist_ttft_sum);
+        render_histogram(prometheus, "generation_latency_seconds", "Distribution of generation latency in seconds.",
+            model_label, gen_bounds, res_task->hist_gen_latency_buckets,
+            res_task->hist_gen_latency_count, res_task->hist_gen_latency_sum);
+
+        // per-device VRAM gauges
+        if (!res_task->vram_devices.empty()) {
+            prometheus << "# HELP llamacpp:vram_free_bytes Free VRAM on the device.\n"
+                       << "# TYPE llamacpp:vram_free_bytes gauge\n";
+            for (const auto & d : res_task->vram_devices) {
+                std::string dev_label = model_label;
+                dev_label.pop_back();
+                dev_label += ",device=\"" + std::get<0>(d) + "\"}";
+                prometheus << "llamacpp:vram_free_bytes"  << dev_label << " " << std::get<1>(d) << "\n";
+            }
+            prometheus << "# HELP llamacpp:vram_total_bytes Total VRAM on the device.\n"
+                       << "# TYPE llamacpp:vram_total_bytes gauge\n";
+            for (const auto & d : res_task->vram_devices) {
+                std::string dev_label = model_label;
+                dev_label.pop_back();
+                dev_label += ",device=\"" + std::get<0>(d) + "\"}";
+                prometheus << "llamacpp:vram_total_bytes" << dev_label << " " << std::get<2>(d) << "\n";
             }
         }
 

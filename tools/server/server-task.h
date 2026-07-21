@@ -7,6 +7,7 @@
 #include <unordered_set>
 #include <list>
 #include <map>
+#include <tuple>
 
 // TODO: prevent including the whole server-common.h as we only use server_tokens
 #include "server-common.h"
@@ -542,6 +543,29 @@ struct server_task_result_metrics : server_task_result {
     // current KV cache occupancy across all slots, vs. total capacity
     uint64_t kv_cache_tokens = 0;
     uint64_t kv_cache_cells  = 0;
+
+    // KV cache byte footprint and live quantization types
+    uint64_t    kv_cache_k_bytes = 0;
+    uint64_t    kv_cache_v_bytes = 0;
+    std::string kv_cache_type_k;   // e.g. "f16", "q8_0"
+    std::string kv_cache_type_v;
+
+    // cumulative latency/size histograms (bucket arrays are cumulative counts)
+    std::vector<uint64_t> hist_prompt_tokens_buckets;
+    uint64_t              hist_prompt_tokens_count = 0;
+    double                hist_prompt_tokens_sum   = 0.0;
+    std::vector<uint64_t> hist_context_tokens_buckets;
+    uint64_t              hist_context_tokens_count = 0;
+    double                hist_context_tokens_sum   = 0.0;
+    std::vector<uint64_t> hist_ttft_buckets;
+    uint64_t              hist_ttft_count = 0;
+    double                hist_ttft_sum   = 0.0;
+    std::vector<uint64_t> hist_gen_latency_buckets;
+    uint64_t              hist_gen_latency_count = 0;
+    double                hist_gen_latency_sum   = 0.0;
+
+    // per-device VRAM (device name, free bytes, total bytes)
+    std::vector<std::tuple<std::string, uint64_t, uint64_t>> vram_devices;
 
     // while we can also use std::vector<server_slot> this requires copying the slot object which can be quite messy
     // therefore, we use json to temporarily store the slot.to_json() result
