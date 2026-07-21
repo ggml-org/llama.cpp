@@ -11,9 +11,11 @@
 #define NSUBGROUPS 4
 #define SUBGROUP_SIZE 64
 
+// scales are transposed: consecutive codes of a row are `stride` apart
 inline void get_scale_min_k4(
     int j,
     global const uchar * q,
+    uint stride,
     uchar * d,
     uchar * m,
     uchar mask_d6,
@@ -21,11 +23,11 @@ inline void get_scale_min_k4(
     uchar mask_hi2
 ) {
     if (j < 4) {
-        *d = q[j]   & mask_d6;
-        *m = q[j+4] & mask_d6;
+        *d = q[j*stride]     & mask_d6;
+        *m = q[(j+4)*stride] & mask_d6;
     } else {
-        *d = (q[j+4] & mask_d4) | ((q[j-4] & mask_hi2) >> 2);
-        *m = ((q[j+4] >> 4) & mask_d4) | ((q[j]   & mask_hi2) >> 2);
+        *d = (q[(j+4)*stride] & mask_d4) | ((q[(j-4)*stride] & mask_hi2) >> 2);
+        *m = ((q[(j+4)*stride] >> 4) & mask_d4) | ((q[j*stride] & mask_hi2) >> 2);
     }
 }
 
@@ -232,7 +234,6 @@ kernel void kernel_gemv_noshuffle_q4_k_f32(
 
     uint LINE_STRIDE_A  = M / 2;
     uint BLOCK_STRIDE_A = NSUBGROUPS * M;
-    uint scales_per_row = (K / QK_K) * 12;
 
     private uint4     regA;
     private half2     regS;
@@ -248,12 +249,12 @@ kernel void kernel_gemv_noshuffle_q4_k_f32(
         half2 d   = src0_d[gid + sb * LINE_STRIDE_A];
         half2 dm  = src0_m[gid + sb * LINE_STRIDE_A];
 
-        global const uchar * sc0 = src0_s + 2 * gid * scales_per_row + sb * 12;
-        global const uchar * sc1 = src0_s + (2 * gid + 1) * scales_per_row + sb * 12;
+        global const uchar * sc0 = src0_s + sb * 12 * M + 2 * gid;
+        global const uchar * sc1 = sc0 + 1;
 
         uchar sv0, mn0, sv1, mn1;
-        get_scale_min_k4(j, sc0, &sv0, &mn0, mask_d6, mask_d4, mask_hi2);
-        get_scale_min_k4(j, sc1, &sv1, &mn1, mask_d6, mask_d4, mask_hi2);
+        get_scale_min_k4(j, sc0, M, &sv0, &mn0, mask_d6, mask_d4, mask_hi2);
+        get_scale_min_k4(j, sc1, M, &sv1, &mn1, mask_d6, mask_d4, mask_hi2);
 
         regS = convert_half2(convert_float2(d)  * convert_float2((uchar2)(sv0, sv1)));
         regM = convert_half2(convert_float2(dm) * convert_float2((uchar2)(mn0, mn1)));

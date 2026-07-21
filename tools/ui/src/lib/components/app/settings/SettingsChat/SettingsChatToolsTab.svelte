@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { ChevronDown, ChevronRight } from '@lucide/svelte';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import * as Collapsible from '$lib/components/ui/collapsible';
@@ -6,6 +7,8 @@
 	import { toolsStore } from '$lib/stores/tools.svelte';
 	import { permissionsStore } from '$lib/stores/permissions.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
+	import { getBuiltinToolUi } from '$lib/constants/built-in-tools';
+	import { ToolSource } from '$lib/enums/tools.enums';
 	import { SvelteSet } from 'svelte/reactivity';
 
 	let expandedGroups = new SvelteSet<string>();
@@ -41,7 +44,7 @@
 					<span class="inline-flex min-w-0 items-center gap-1.5 font-medium">
 						{#if group.source === 'mcp'}
 							<McpServerIdentity
-								iconClass="h-4 w-4"
+								iconClass={ICON_CLASS_DEFAULT}
 								iconRounded="rounded-sm"
 								showVersion={false}
 								displayName={group.label}
@@ -68,18 +71,29 @@
 
 						{#each group.tools as entry (entry.key)}
 							{@const toolName = entry.definition.function.name}
+							{@const builtinUi =
+								entry.source === ToolSource.BUILTIN || entry.source === ToolSource.FRONTEND
+									? getBuiltinToolUi(toolName)
+									: null}
+							{@const displayLabel = builtinUi?.label ?? toolName}
+							{@const IconComponent = builtinUi?.icon ?? null}
 							{@const isEnabled = toolsStore.isToolEnabled(entry.key)}
 							{@const permissionKey = entry.key}
 							{@const isAlwaysAllowed = permissionsStore.hasTool(permissionKey)}
 
 							<div class="flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/50">
-								<TruncatedText text={toolName} class="flex-1" showTooltip={true} />
+								<span class="flex min-w-0 flex-1 items-center gap-1.5">
+									{#if IconComponent}
+										<IconComponent class={ICON_CLASS_DEFAULT} />
+									{/if}
+									<TruncatedText text={displayLabel} class="min-w-0" showTooltip={true} />
+								</span>
 
 								<div class="flex w-16 shrink-0 justify-center">
 									<Checkbox
 										checked={isEnabled}
 										onCheckedChange={() => toolsStore.toggleTool(entry.key)}
-										class="h-4 w-4"
+										class={ICON_CLASS_DEFAULT}
 									/>
 								</div>
 
@@ -93,7 +107,7 @@
 												permissionsStore.allowTool(permissionKey);
 											}
 										}}
-										class="h-4 w-4"
+										class={ICON_CLASS_DEFAULT}
 									/>
 								</div>
 							</div>

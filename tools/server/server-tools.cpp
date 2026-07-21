@@ -289,7 +289,7 @@ struct server_tool_read_file : server_tool {
             {"function", {
                 {"name", name},
                 {"description", "Read the contents of a file. Optionally specify a 1-based line range. "
-                                "If append_loc is true, each line is prefixed with its line number (e.g. \"1\u2192 ...\")."},
+                                "If append_loc is true, each line is prefixed with its line number (e.g. \"1\u2192...\")."},
                 {"parameters", {
                     {"type", "object"},
                     {"properties", {
@@ -339,7 +339,7 @@ struct server_tool_read_file : server_tool {
 
             std::string out_line;
             if (append_loc) {
-                out_line = std::to_string(lineno) + "\u2192 " + line + "\n";
+                out_line = std::to_string(lineno) + "\u2192" + line + "\n";
             } else {
                 out_line = line + "\n";
             }

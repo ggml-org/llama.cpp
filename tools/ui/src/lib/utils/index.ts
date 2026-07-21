@@ -30,7 +30,12 @@ export {
 } from './branching';
 
 // Code
-export { highlightCode, detectIncompleteCodeBlock, type IncompleteCodeBlock } from './code';
+export {
+	highlightCode,
+	detectIncompleteCodeBlock,
+	trimCodePadding,
+	type IncompleteCodeBlock
+} from './code';
 
 // Config helpers
 export { setConfigValue, getConfigValue, configToParameterRecord } from './config-helpers';
@@ -39,7 +44,7 @@ export { setConfigValue, getConfigValue, configToParameterRecord } from './confi
 export { buildProxiedUrl, buildProxiedHeaders } from './cors-proxy';
 
 // URL utilities
-export { extractRootDomain, sanitizeExternalUrl } from './url';
+export { extractRootDomain, sanitizeExternalUrl, canonicalizeServerUrl } from './url';
 
 // Progress helpers
 export { modelLoadFraction, modelLoadProgressText } from './progress';
@@ -76,8 +81,7 @@ export {
 	formatJsonPretty,
 	formatTime,
 	formatPerformanceTime,
-	formatAttachmentText,
-	formatReasoningPreview
+	formatAttachmentText
 } from './formatters';
 
 // IME utilities
@@ -117,6 +121,10 @@ export { sanitizeKeyValuePairKey, sanitizeKeyValuePairValue } from './sanitize';
 // Image error fallback utilities
 export { getImageErrorFallbackHtml } from './image-error-fallback';
 
+// SSE-with-JSON stream iterator (used by built-in tool streaming, decoupled
+// from chat.service.ts which embeds its own SSE parser for resume support)
+export { parseSseJsonStream, type SseJsonEvent } from './sse';
+
 // MCP utilities
 export {
 	detectMcpTransportFromUrl,
@@ -153,11 +161,38 @@ export { parseHeadersToArray, serializeHeaders } from './headers';
 // Agentic content utilities (structured section derivation)
 export {
 	deriveAgenticSections,
+	buildAssistantRawOutput,
 	parseToolResultWithImages,
+	splitSearchSummaryList,
 	hasAgenticContent,
+	classifyToolResult,
 	type AgenticSection,
 	type ToolResultLine
 } from './agentic';
+
+// Line-level unified diff for tool result rendering (`edit_file` block)
+export { computeLineDiff, prefixFor, renderUnifiedDiff, type DiffLine } from './compute-line-diff';
+
+// Partial-incremental JSON parser for streaming tool arguments
+export { parsePartialJsonArgs } from './parse-partial-json-args';
+
+// `exec_shell_command` result parsing
+export { parseExecShellCommandError } from './parse-exec-shell-error';
+export {
+	parseExecShellCommandExitStatus,
+	isExitCodeSummaryLine,
+	type ExecShellExitStatus
+} from './parse-exec-shell-status';
+
+// Search-result parsing (web-search / fetch MCP tools)
+export {
+	SUPPORTED_WEB_SEARCH_TOOL_NAMES,
+	extractSearchResults,
+	extractSearchQuery,
+	faviconForUrl,
+	isWebSearchToolName,
+	type SearchResult
+} from './search-results';
 
 // Cache utilities
 export { TTLCache, ReactiveTTLMap, type TTLCacheOptions } from './cache-ttl';
@@ -184,6 +219,19 @@ export {
 	createTimeoutSignal,
 	withAbortSignal
 } from './abort';
+
+// Tool-call meta utilities. Parsers for each built-in tool live next to
+// their renderer family under
+// `src/lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/`.
+// This module only carries the helpers that genuinely cross tool
+// boundaries (currently: parsing the tool-result blob into a JSON
+// object).
+export { tryParseToolResultObject } from './tool-call-meta';
+
+// Per-tool UI metadata (label + icon) used by the tool-call chrome.
+// Re-exported through $lib/utils so renderer components can read the
+// label without depending on $lib/constants directly.
+export { getBuiltinToolUi, type BuiltinToolUiEntry } from '$lib/constants/built-in-tools';
 
 // Cryptography utilities
 
