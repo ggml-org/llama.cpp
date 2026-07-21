@@ -17,9 +17,7 @@
 #include <webgpu/webgpu_cpp.h>
 
 #include <atomic>
-#include <cstdio>
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 #ifdef GGML_WEBGPU_GPU_PROFILE
 #    include <iomanip>
@@ -103,7 +101,8 @@ static inline uint32_t ggml_webgpu_u32_from_f32(float value) {
 static void * const webgpu_ptr_base = (void *) (uintptr_t) 0x1000;  // NOLINT
 
 static size_t ggml_webgpu_tensor_offset(const ggml_tensor * tensor) {
-    return (size_t) ((uintptr_t) tensor->data - (uintptr_t) webgpu_ptr_base);
+    const ggml_tensor * base_tensor = tensor->view_src ? tensor->view_src : tensor;
+    return (size_t) ((uintptr_t) base_tensor->data - (uintptr_t) webgpu_ptr_base) + tensor->view_offs;
 }
 
 /* Struct definitions */
@@ -376,15 +375,13 @@ static wgpu::Buffer ggml_webgpu_tensor_buf(const ggml_tensor * tensor) {
 }
 
 static size_t ggml_webgpu_tensor_misalignment(webgpu_context & ctx, const ggml_tensor * t) {
-    const size_t offset    = ggml_webgpu_tensor_offset(t);
-    const size_t alignment = ctx->global_ctx->capabilities.limits.minStorageBufferOffsetAlignment;
-    return offset & (alignment - 1);
+    size_t offset = ggml_webgpu_tensor_offset(t);
+    return offset & (ctx->global_ctx->capabilities.limits.minStorageBufferOffsetAlignment - 1);
 }
 
 static size_t ggml_webgpu_tensor_align_offset(webgpu_context & ctx, const ggml_tensor * t) {
-    const size_t offset    = ggml_webgpu_tensor_offset(t);
-    const size_t alignment = ctx->global_ctx->capabilities.limits.minStorageBufferOffsetAlignment;
-    return offset & ~(alignment - 1);
+    size_t offset = ggml_webgpu_tensor_offset(t);
+    return offset & ~(ctx->global_ctx->capabilities.limits.minStorageBufferOffsetAlignment - 1);
 }
 
 static size_t ggml_webgpu_tensor_binding_size(webgpu_context & ctx, ggml_tensor * t) {
@@ -3727,10 +3724,12 @@ static size_t ggml_backend_webgpu_buffer_type_get_alignment(ggml_backend_buffer_
     return dev_ctx->webgpu_global_ctx->capabilities.limits.minStorageBufferOffsetAlignment;
 }
 
+// maxBufferSize might be larger, but you can't bind more than
+// maxStorageBufferBindingSize to a single binding.
 static size_t ggml_backend_webgpu_buffer_type_get_max_size(ggml_backend_buffer_type_t buft) {
     ggml_backend_webgpu_device_context * dev_ctx =
         static_cast<ggml_backend_webgpu_device_context *>(buft->device->context);
-    return dev_ctx->webgpu_global_ctx->capabilities.limits.maxBufferSize;
+    return dev_ctx->webgpu_global_ctx->capabilities.limits.maxStorageBufferBindingSize;
 }
 
 static size_t ggml_backend_webgpu_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft,

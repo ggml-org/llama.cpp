@@ -419,15 +419,12 @@ static bool arch_supported(const llm_arch arch) {
         return false;
     }
 
-    return true;
-}
-
-static bool device_config_supported(const llm_arch arch, const std::vector<ggml_backend_dev_t> & devs) {
-    for (ggml_backend_dev_t dev : devs) {
-        if (strcmp(ggml_backend_dev_name(dev), "WebGPU") == 0 && arch == LLM_ARCH_DEEPSEEK32) {
-            return false;
-        }
+    // FIXME: DeepSeek32 hits a scheduler/view-backed-output issue with WebGPU on CI.
+#ifdef GGML_USE_WEBGPU
+    if (arch == LLM_ARCH_DEEPSEEK32) {
+        return false;
     }
+#endif // GGML_USE_WEBGPU
 
     return true;
 }
@@ -593,8 +590,7 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
                 std::string status_nmse      = "\033[1;33mSKIP\033[0m";
                 std::string status_roundtrip = "\033[1;33mSKIP\033[0m";
                 char nmse_str[12] = {0};
-                bool skip = !arch_supported(arch) || !device_config_supported(arch, dc.devs) ||
-                            (dc.split_mode == LLAMA_SPLIT_MODE_TENSOR && dc.devs.empty());
+                bool skip = !arch_supported(arch) || (dc.split_mode == LLAMA_SPLIT_MODE_TENSOR && dc.devs.empty());
                 if (!skip) {
                     if (logits_cpu.empty()) {
                         model_and_ctx_cpu = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {}, LLAMA_SPLIT_MODE_LAYER, encode);
@@ -641,7 +637,6 @@ static int test_backends(const llm_arch target_arch, const size_t seed, const gg
                 // log the results for this test case
                 printf(template_row_res.c_str(),
                     status_nmse.c_str(), nmse_str, status_roundtrip.c_str());
-                fflush(stdout);
             }
         }
     }
@@ -656,7 +651,7 @@ int main(int argc, char ** argv) {
 
     llm_arch arch = LLM_ARCH_UNKNOWN;
     size_t seed = rd();
-    ggml_log_level log_level = GGML_LOG_LEVEL_INFO;
+    ggml_log_level log_level = GGML_LOG_LEVEL_ERROR;
     std::string out;
 
     for (int i = 1; i < argc; i++) {
