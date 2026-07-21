@@ -4955,6 +4955,8 @@ static bool ggml_backend_cuda_device_supports_cuda_host_buft(int device) {
     if (ggml_cuda_info().devices[device].integrated) {
         return false;
     }
+#else
+    GGML_UNUSED(device);
 #endif
 
     return ggml_backend_cuda_host_buffer_supported();
