@@ -2102,6 +2102,30 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_opt_step_sgd(ggm
     return res;
 }
 
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_training(ggml_metal_library_t lib, const ggml_tensor * op) {
+    const char * suffix = nullptr;
+    switch (op->op) {
+        case GGML_OP_OUT_PROD:                suffix = "out_prod_f32";                break;
+        case GGML_OP_OUT_PROD_ID:             suffix = "out_prod_id_f32";             break;
+        case GGML_OP_GET_ROWS_BACK:           suffix = "get_rows_back_f32";           break;
+        case GGML_OP_REPEAT_BACK:             suffix = "repeat_back_f32";             break;
+        case GGML_OP_RMS_NORM_BACK:           suffix = "rms_norm_back_f32";           break;
+        case GGML_OP_SOFT_MAX_BACK:           suffix = "soft_max_back_f32";           break;
+        case GGML_OP_CROSS_ENTROPY_LOSS:      suffix = "cross_entropy_loss_f32";      break;
+        case GGML_OP_CROSS_ENTROPY_LOSS_BACK: suffix = "cross_entropy_loss_back_f32"; break;
+        default: GGML_ABORT("fatal error");
+    }
+
+    char name[256];
+    snprintf(name, sizeof(name), "kernel_%s", suffix);
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res.pipeline) {
+        res = ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
+    }
+    return res;
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_memset(ggml_metal_library_t lib, const ggml_tensor *  op) {
     GGML_ASSERT(op->type == GGML_TYPE_I64);
 

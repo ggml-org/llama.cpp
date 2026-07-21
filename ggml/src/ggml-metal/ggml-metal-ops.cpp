@@ -469,6 +469,17 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
             {
                 n_fuse = ggml_metal_op_argmax(ctx, idx);
             } break;
+        case GGML_OP_OUT_PROD:
+        case GGML_OP_OUT_PROD_ID:
+        case GGML_OP_GET_ROWS_BACK:
+        case GGML_OP_REPEAT_BACK:
+        case GGML_OP_RMS_NORM_BACK:
+        case GGML_OP_SOFT_MAX_BACK:
+        case GGML_OP_CROSS_ENTROPY_LOSS:
+        case GGML_OP_CROSS_ENTROPY_LOSS_BACK:
+            {
+                n_fuse = ggml_metal_op_training(ctx, idx);
+            } break;
         case GGML_OP_OPT_STEP_ADAMW:
             {
                 n_fuse = ggml_metal_op_opt_step_adamw(ctx, idx);
@@ -4727,6 +4738,58 @@ int ggml_metal_op_tri(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         2);
 
     ggml_metal_encoder_dispatch_threadgroups(enc, ne01, ne02, ne03, nth, 1, 1);
+
+    return 1;
+}
+
+int ggml_metal_op_training(ggml_metal_op_t ctx, int idx) {
+    ggml_tensor * op = ctx->node(idx);
+
+    ggml_metal_library_t lib = ctx->lib;
+    ggml_metal_encoder_t enc = ctx->enc;
+
+    const ggml_tensor * src0 = op->src[0];
+    const ggml_tensor * src1 = op->src[1];
+    const ggml_tensor * shape0 = op->op == GGML_OP_CROSS_ENTROPY_LOSS_BACK ? op->src[1] : src0;
+    const int64_t kernel_ne = (op->op == GGML_OP_CROSS_ENTROPY_LOSS ||
+            op->op == GGML_OP_CROSS_ENTROPY_LOSS_BACK) ? ggml_nelements(shape0) : ggml_nelements(op);
+
+    float param = 0.0f;
+    if (op->op == GGML_OP_RMS_NORM_BACK || op->op == GGML_OP_SOFT_MAX_BACK) {
+        memcpy(&param, op->op_params, sizeof(param));
+    }
+
+    ggml_metal_kargs_training args = {
+        /*.ne   =*/ kernel_ne,
+        /*.ne00 =*/ (int32_t) shape0->ne[0],
+        /*.ne01 =*/ (int32_t) shape0->ne[1],
+        /*.ne02 =*/ (int32_t) shape0->ne[2],
+        /*.ne03 =*/ (int32_t) shape0->ne[3],
+        /*.ne10 =*/ src1 ? (int32_t) src1->ne[0] : 0,
+        /*.ne11 =*/ src1 ? (int32_t) src1->ne[1] : 0,
+        /*.ne12 =*/ src1 ? (int32_t) src1->ne[2] : 0,
+        /*.ne13 =*/ src1 ? (int32_t) src1->ne[3] : 0,
+        /*.ne0  =*/ (int32_t) op->ne[0],
+        /*.ne1  =*/ (int32_t) op->ne[1],
+        /*.ne2  =*/ (int32_t) op->ne[2],
+        /*.ne3  =*/ (int32_t) op->ne[3],
+        /*.param =*/ param,
+    };
+
+    auto pipeline = ggml_metal_library_get_pipeline_training(lib, op);
+
+    int ida = 0;
+    ggml_metal_encoder_set_pipeline(enc, pipeline);
+    ggml_metal_encoder_set_bytes(enc, &args, sizeof(args), ida++);
+    for (int i = 0; i < GGML_MAX_SRC && op->src[i]; ++i) {
+        ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op->src[i]), ida++);
+    }
+    ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op), ida++);
+
+    const int64_t ne = op->op == GGML_OP_CROSS_ENTROPY_LOSS ? 1 : ggml_nelements(op);
+    const int nth = std::min<int64_t>(ggml_metal_pipeline_max_theads_per_threadgroup(pipeline), std::max<int64_t>(1, ne));
+    const int64_t n = (ne + nth - 1)/nth;
+    ggml_metal_encoder_dispatch_threadgroups(enc, n, 1, 1, nth, 1, 1);
 
     return 1;
 }

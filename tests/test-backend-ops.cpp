@@ -33,6 +33,7 @@
 #include <ctime>
 #include <future>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <random>
@@ -2960,6 +2961,9 @@ struct test_cpy : public test_case {
     double max_nmse_err() override {
         if (type_src == type_dst) {
             return 0.0;
+        }
+        if (type_dst == GGML_TYPE_Q3_K || type_dst == GGML_TYPE_Q4_K) {
+            return 1e-4;
         }
         if (type_dst == GGML_TYPE_Q4_0 || type_dst == GGML_TYPE_Q4_1 || type_dst == GGML_TYPE_IQ4_NL ||
             type_dst == GGML_TYPE_Q5_0 || type_dst == GGML_TYPE_Q5_1 || type_dst == GGML_TYPE_Q8_0) {
@@ -6967,14 +6971,16 @@ struct test_flash_attn_ext : public test_case {
 struct test_cross_entropy_loss : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne;
+    const bool sparse_inf;
 
     std::string vars() override {
-        return VARS_TO_STR2(type, ne);
+        return VARS_TO_STR3(type, ne, sparse_inf);
     }
 
     test_cross_entropy_loss(ggml_type type = GGML_TYPE_F32,
-            std::array<int64_t, 4> ne = {10, 5, 4, 3})
-        : type(type), ne(ne) {}
+            std::array<int64_t, 4> ne = {10, 5, 4, 3},
+            bool sparse_inf = false)
+        : type(type), ne(ne), sparse_inf(sparse_inf) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * logits = ggml_new_tensor(ctx, type, 4, ne.data());
@@ -6985,9 +6991,10 @@ struct test_cross_entropy_loss : public test_case {
         // The labels are assumed to be constant -> no gradients.
         ggml_set_name(labels, "labels");
 
-        // Ensure labels add up to 1:
-        labels = ggml_soft_max(ctx, labels);
-        ggml_set_name(labels, "labels_normalized");
+        if (!sparse_inf) {
+            labels = ggml_soft_max(ctx, labels);
+            ggml_set_name(labels, "labels_normalized");
+        }
 
         ggml_tensor * out = ggml_cross_entropy_loss(ctx, logits, labels);
         ggml_set_name(out, "out");
@@ -6998,7 +7005,21 @@ struct test_cross_entropy_loss : public test_case {
     void initialize_tensors(ggml_context * ctx) override {
         // For larger abs. diffs between logits softmax is more linear, therefore more precise num. gradients.
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
-            init_tensor_uniform(t, -100.0f, 100.0f);
+            if (sparse_inf && strcmp(t->name, "labels") == 0) {
+                std::vector<float> data(ggml_nelements(t), 0.0f);
+                for (int64_t row = 1; row < ggml_nrows(t); row += 2) {
+                    data[row*t->ne[0]] = 1.0f;
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, ggml_nbytes(t));
+            } else if (sparse_inf && strcmp(t->name, "logits") == 0) {
+                std::vector<float> data(ggml_nelements(t), 0.5f);
+                for (int64_t row = 0; row < ggml_nrows(t); ++row) {
+                    data[(row + 1)*t->ne[0] - 1] = -std::numeric_limits<float>::infinity();
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, ggml_nbytes(t));
+            } else {
+                init_tensor_uniform(t, -100.0f, 100.0f);
+            }
         }
     }
 
@@ -7015,14 +7036,16 @@ struct test_cross_entropy_loss : public test_case {
 struct test_cross_entropy_loss_back : public test_case {
     const ggml_type type;
     const std::array<int64_t, 4> ne;
+    const bool sparse_inf;
 
     std::string vars() override {
-        return VARS_TO_STR2(type, ne);
+        return VARS_TO_STR3(type, ne, sparse_inf);
     }
 
     test_cross_entropy_loss_back(ggml_type type = GGML_TYPE_F32,
-            std::array<int64_t, 4> ne = {10, 5, 4, 3})
-        : type(type), ne(ne) {}
+            std::array<int64_t, 4> ne = {10, 5, 4, 3},
+            bool sparse_inf = false)
+        : type(type), ne(ne), sparse_inf(sparse_inf) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * grad = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
@@ -7034,14 +7057,35 @@ struct test_cross_entropy_loss_back : public test_case {
         ggml_tensor * labels = ggml_new_tensor(ctx, type, 4, ne.data());
         ggml_set_name(labels, "labels");
 
-        // Ensure labels add up to 1:
-        labels = ggml_soft_max(ctx, labels);
-        ggml_set_name(labels, "labels_normalized");
+        if (!sparse_inf) {
+            labels = ggml_soft_max(ctx, labels);
+            ggml_set_name(labels, "labels_normalized");
+        }
 
         ggml_tensor * out = ggml_cross_entropy_loss_back(ctx, grad, logits, labels);
         ggml_set_name(out, "out");
 
         return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (sparse_inf && strcmp(t->name, "labels") == 0) {
+                std::vector<float> data(ggml_nelements(t), 0.0f);
+                for (int64_t row = 1; row < ggml_nrows(t); row += 2) {
+                    data[row*t->ne[0]] = 1.0f;
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, ggml_nbytes(t));
+            } else if (sparse_inf && strcmp(t->name, "logits") == 0) {
+                std::vector<float> data(ggml_nelements(t), 0.5f);
+                for (int64_t row = 0; row < ggml_nrows(t); ++row) {
+                    data[(row + 1)*t->ne[0] - 1] = -std::numeric_limits<float>::infinity();
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, ggml_nbytes(t));
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
     }
 };
 
@@ -9632,8 +9676,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     test_cases.emplace_back(new test_cross_entropy_loss     (GGML_TYPE_F32, {   10, 5, 4, 3}));
     test_cases.emplace_back(new test_cross_entropy_loss     (GGML_TYPE_F32, {30000, 1, 1, 1}));
+    test_cases.emplace_back(new test_cross_entropy_loss     (GGML_TYPE_F32, {   10, 2, 1, 1}, true));
     test_cases.emplace_back(new test_cross_entropy_loss_back(GGML_TYPE_F32, {   10, 5, 4, 3}));
     test_cases.emplace_back(new test_cross_entropy_loss_back(GGML_TYPE_F32, {30000, 1, 1, 1}));
+    test_cases.emplace_back(new test_cross_entropy_loss_back(GGML_TYPE_F32, {   10, 2, 1, 1}, true));
 
     test_cases.emplace_back(new test_opt_step_adamw(GGML_TYPE_F32, {10, 5, 4, 3}));
     test_cases.emplace_back(new test_opt_step_sgd(GGML_TYPE_F32, {10, 5, 4, 3}));

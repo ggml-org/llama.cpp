@@ -4596,11 +4596,6 @@ static void ggml_compute_forward_out_prod_id_f32(
     // total dispatch slots: n_exp_used * n_tokens
     const int64_t n_slots = n_exp_used * n_tokens;
 
-    // slots per thread
-    const int64_t ds  = (n_slots + nth - 1) / nth;
-    const int64_t is0 = ds * ith;
-    const int64_t is1 = MIN(is0 + ds, n_slots);
-
     // strides for src0 (a): [cols, n_exp_used, n_tokens]
     const size_t a_nb_exp = src0->nb[1]; // stride per expert slot (cols * sizeof(float))
     const size_t a_nb_tok = src0->nb[2]; // stride per token
@@ -4612,7 +4607,7 @@ static void ggml_compute_forward_out_prod_id_f32(
     // stride for dst per expert: [cols, rows, n_expert]
     const size_t d_nb_exp = dst->nb[2];  // stride per expert
 
-    for (int64_t is = is0; is < is1; ++is) {
+    for (int64_t is = 0; is < n_slots; ++is) {
         const int64_t iexp = is / n_tokens;
         const int64_t itok = is % n_tokens;
 
@@ -4620,6 +4615,10 @@ static void ggml_compute_forward_out_prod_id_f32(
             + iexp * ids->nb[0] + itok * ids->nb[1]);
 
         GGML_ASSERT(eid >= 0 && eid < (int32_t)n_expert);
+        // all updates for an expert must be owned by one thread
+        if (eid % nth != ith) {
+            continue;
+        }
 
         const float * a_col = (const float *)((const char *)src0->data + iexp * a_nb_exp + itok * a_nb_tok);
         const float * b_col = (const float *)((const char *)src1->data + iexp * b_nb_exp + itok * b_nb_tok);
@@ -11631,6 +11630,12 @@ static void ggml_compute_forward_cross_entropy_loss_f32(
         const float * s0 = (const float *)((const char *) src0->data + i1*src0->nb[1]);
         const float * s1 = (const float *)((const char *) src1->data + i1*src1->nb[1]);
 
+        float labels_sum = 0.0f;
+        ggml_vec_sum_f32(nc, &labels_sum, s1);
+        if (labels_sum == 0.0f) {
+            continue;
+        }
+
 #ifndef NDEBUG
         for (int64_t i = 0; i < nc; ++i) {
             //printf("p[%d] = %f\n", i, p[i]);
@@ -11645,10 +11650,12 @@ static void ggml_compute_forward_cross_entropy_loss_f32(
         assert(sum_softmax >= 0.0);
 
         ggml_vec_add1_f32(nc, st, st, -sum_softmax);
-        ggml_vec_mul_f32(nc, st, st, s1);
-
         float sum_st = 0.0f;
-        ggml_vec_sum_f32(nc, &sum_st, st);
+        for (int64_t i = 0; i < nc; ++i) {
+            if (s1[i] != 0.0f) {
+                sum_st += st[i]*s1[i];
+            }
+        }
         sum_thread += sum_st;
 
 #ifndef NDEBUG
@@ -11723,6 +11730,13 @@ static void ggml_compute_forward_cross_entropy_loss_back_f32(
         const float * s0  = (const float *)((const char *) src0f->data + i1*src0f->nb[1]);
         const float * s1  = (const float *)((const char *) src1f->data + i1*src1f->nb[1]);
 
+        float labels_sum = 0.0f;
+        ggml_vec_sum_f32(nc, &labels_sum, s1);
+        if (labels_sum == 0.0f) {
+            ggml_vec_set_f32(nc, ds0, 0.0f);
+            continue;
+        }
+
 #ifndef NDEBUG
         for (int64_t i = 0; i < nc; ++i) {
             //printf("p[%d] = %f\n", i, p[i]);
@@ -11740,8 +11754,6 @@ static void ggml_compute_forward_cross_entropy_loss_back_f32(
 
         // grad(src0f) = (softmax(src0f) * sum(labels) - src1f) * grad / nr
         // Multiplying by sum(labels) ensures zero-label rows produce zero gradient.
-        float labels_sum = 0.0f;
-        ggml_vec_sum_f32(nc, &labels_sum, s1);
         ggml_vec_scale_f32(nc, ds0, labels_sum);
         ggml_vec_sub_f32(nc, ds0, ds0, s1);
         ggml_vec_scale_f32(nc, ds0, d_by_nr);
