@@ -18,7 +18,7 @@ export const SANDBOX_TOOL_DEFINITION: OpenAIToolDefinition = {
 	function: {
 		name: SANDBOX_TOOL_NAME,
 		description: `Execute JS in a sandboxed browser worker (no DOM/page access). Top-level await ok; console.log for intermediates; top-level return is captured as result.
-Symbolic/numeric math via \`nerdamer\` (pre-loaded, no require). Object.keys(nerdamer).filter(k=>typeof nerdamer[k]==='function') list functions.
+Symbolic/numeric math via \`nerdamer\` (pre-loaded, do not require, use it directly). Object.keys(nerdamer).filter(k=>typeof nerdamer[k]==='function') list functions.
 nerdamer('diff(sin(x)/x,x)') or nerdamer.diff('sin(x)/x','x') → Expression; convert with .toString()/.text()/.toTeX(), or .evaluate() (→ still Expression, then .toString()).
 nerdamer(expr,{x:2}) substitutes only; chain .evaluate() or pass 'numer' for numeric result.
 solve(expr,var)→Symbol[]; solveEquations([eq1,..])→[[var,val],..] pairs.
