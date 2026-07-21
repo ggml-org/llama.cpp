@@ -127,6 +127,16 @@ static void ggml_webgpu_trace_graph(const char * stage, int n_nodes, uint32_t n_
     fflush(stderr);
 }
 
+static void ggml_webgpu_trace_bind_group_entry(const char * stage, const wgpu::BindGroupEntry & entry) {
+    if (!ggml_webgpu_trace_nodes_enabled()) {
+        return;
+    }
+
+    fprintf(stderr, "[ggml-webgpu trace] stage=%s binding=%u offset=%llu size=%llu\n", stage, entry.binding,
+            (unsigned long long) entry.offset, (unsigned long long) entry.size);
+    fflush(stderr);
+}
+
 // This is a "fake" base pointer, since WebGPU buffers do not have pointers to
 // their locations.
 static void * const webgpu_ptr_base = (void *) (uintptr_t) 0x1000;  // NOLINT
@@ -419,6 +429,28 @@ static size_t ggml_webgpu_tensor_binding_size(webgpu_context & ctx, ggml_tensor 
     return ROUNDUP_POW2(ggml_nbytes(t) + ggml_webgpu_tensor_misalignment(ctx, t), WEBGPU_STORAGE_BUF_BINDING_MULT);
 }
 
+static void ggml_webgpu_trace_tensor(const char * stage, const char * label, webgpu_context * ctx, ggml_tensor * tensor) {
+    if (!ggml_webgpu_trace_nodes_enabled()) {
+        return;
+    }
+
+    fprintf(stderr,
+            "[ggml-webgpu trace] stage=%s tensor=%s ptr=%p op=%s name=%s type=%s ne=[%lld,%lld,%lld,%lld] "
+            "nb=[%zu,%zu,%zu,%zu]",
+            stage, label, (void *) tensor, ggml_op_name(tensor->op), tensor->name, ggml_type_name(tensor->type),
+            (long long) tensor->ne[0], (long long) tensor->ne[1], (long long) tensor->ne[2],
+            (long long) tensor->ne[3], tensor->nb[0], tensor->nb[1], tensor->nb[2], tensor->nb[3]);
+
+    if (ctx != nullptr) {
+        fprintf(stderr, " offset=%zu align_offset=%zu binding_size=%zu misalignment=%zu",
+                ggml_webgpu_tensor_offset(tensor), ggml_webgpu_tensor_align_offset(*ctx, tensor),
+                ggml_webgpu_tensor_binding_size(*ctx, tensor), ggml_webgpu_tensor_misalignment(*ctx, tensor));
+    }
+
+    fprintf(stderr, "\n");
+    fflush(stderr);
+}
+
 static bool ggml_webgpu_tensor_binding_overlap(webgpu_context & ctx, ggml_tensor * a, ggml_tensor * b) {
     if (ggml_webgpu_tensor_buf(a).Get() != ggml_webgpu_tensor_buf(b).Get()) {
         return false;
@@ -604,18 +636,44 @@ static webgpu_encoded_op ggml_backend_webgpu_build_multi(webgpu_context &       
         entries.push_back(ggml_webgpu_make_bind_group_entry(params_binding_num, ctx->param_arena.buffer, param_offset,
                                                             ctx->param_arena.slot_size));
 
+        if (ggml_webgpu_trace_nodes_enabled()) {
+            fprintf(stderr,
+                    "[ggml-webgpu trace] stage=build bind_group begin pipeline=%s dispatch=%zu entries=%zu "
+                    "param_offset=%zu param_size=%zu wg=[%u,%u]\n",
+                    dispatch.pipeline.name.c_str(), i, entries.size(), param_offset, param_size,
+                    dispatch.workgroups.first, dispatch.workgroups.second);
+            fflush(stderr);
+            for (const auto & entry : entries) {
+                ggml_webgpu_trace_bind_group_entry("build bind_group entry", entry);
+            }
+        }
+
         wgpu::BindGroupDescriptor bind_group_desc;
         bind_group_desc.layout     = dispatch.pipeline.pipeline.GetBindGroupLayout(0);
         bind_group_desc.entryCount = entries.size();
         bind_group_desc.entries    = entries.data();
         bind_group_desc.label      = dispatch.pipeline.name.c_str();
         bind_groups.push_back(ctx->global_ctx->device.CreateBindGroup(&bind_group_desc));
+        if (ggml_webgpu_trace_nodes_enabled()) {
+            fprintf(stderr, "[ggml-webgpu trace] stage=build bind_group end pipeline=%s dispatch=%zu\n",
+                    dispatch.pipeline.name.c_str(), i);
+            fflush(stderr);
+        }
         param_offsets.push_back(param_offset);
     }
 
     for (size_t i = 0; i < param_offsets.size(); i++) {
+        if (ggml_webgpu_trace_nodes_enabled()) {
+            fprintf(stderr, "[ggml-webgpu trace] stage=build write_params begin dispatch=%zu offset=%zu bytes=%zu\n", i,
+                    param_offsets[i], dispatches[i].params.size() * sizeof(uint32_t));
+            fflush(stderr);
+        }
         ctx->global_ctx->queue.WriteBuffer(ctx->param_arena.buffer, param_offsets[i], dispatches[i].params.data(),
                                            dispatches[i].params.size() * sizeof(uint32_t));
+        if (ggml_webgpu_trace_nodes_enabled()) {
+            fprintf(stderr, "[ggml-webgpu trace] stage=build write_params end dispatch=%zu\n", i);
+            fflush(stderr);
+        }
     }
 
 #ifdef GGML_WEBGPU_GPU_PROFILE
@@ -641,6 +699,11 @@ static webgpu_encoded_op ggml_backend_webgpu_build_multi(webgpu_context &       
     }
 #else
     for (size_t i = 0; i < dispatches.size(); i++) {
+        if (ggml_webgpu_trace_nodes_enabled()) {
+            fprintf(stderr, "[ggml-webgpu trace] stage=build encode_dispatch begin pipeline=%s dispatch=%zu\n",
+                    dispatches[i].pipeline.name.c_str(), i);
+            fflush(stderr);
+        }
         if (ctx->batch_compute_passes) {
             ctx->active_compute_pass.SetPipeline(dispatches[i].pipeline.pipeline);
             ctx->active_compute_pass.SetBindGroup(0, bind_groups[i]);
@@ -652,6 +715,11 @@ static webgpu_encoded_op ggml_backend_webgpu_build_multi(webgpu_context &       
             pass.SetBindGroup(0, bind_groups[i]);
             pass.DispatchWorkgroups(dispatches[i].workgroups.first, dispatches[i].workgroups.second, 1);
             pass.End();
+        }
+        if (ggml_webgpu_trace_nodes_enabled()) {
+            fprintf(stderr, "[ggml-webgpu trace] stage=build encode_dispatch end pipeline=%s dispatch=%zu\n",
+                    dispatches[i].pipeline.name.c_str(), i);
+            fflush(stderr);
         }
     }
 #endif
@@ -1387,9 +1455,22 @@ static std::optional<webgpu_encoded_op> ggml_webgpu_set_rows(webgpu_context & ct
                                                              ggml_tensor *    src,
                                                              ggml_tensor *    idx,
                                                              ggml_tensor *    dst) {
+    if (ggml_webgpu_trace_nodes_enabled()) {
+        fprintf(stderr, "[ggml-webgpu trace] stage=set_rows begin\n");
+        fflush(stderr);
+        ggml_webgpu_trace_tensor("set_rows tensor", "src", &ctx, src);
+        ggml_webgpu_trace_tensor("set_rows tensor", "idx", &ctx, idx);
+        ggml_webgpu_trace_tensor("set_rows tensor", "dst", &ctx, dst);
+    }
+
     // For set rows specifically, we need to check if src and idx are empty
     // tensors.
     if (ggml_is_empty(src) || ggml_is_empty(idx)) {
+        if (ggml_webgpu_trace_nodes_enabled()) {
+            fprintf(stderr, "[ggml-webgpu trace] stage=set_rows empty skip src_empty=%d idx_empty=%d\n",
+                    ggml_is_empty(src), ggml_is_empty(idx));
+            fflush(stderr);
+        }
         return std::nullopt;
     }
 
@@ -1399,10 +1480,22 @@ static std::optional<webgpu_encoded_op> ggml_webgpu_set_rows(webgpu_context & ct
     shader_lib_ctx.dst                            = dst;
     shader_lib_ctx.max_wg_size = ctx->global_ctx->capabilities.limits.maxComputeInvocationsPerWorkgroup;
 
+    if (ggml_webgpu_trace_nodes_enabled()) {
+        fprintf(stderr, "[ggml-webgpu trace] stage=set_rows pipeline begin\n");
+        fflush(stderr);
+    }
     webgpu_pipeline pipeline = ctx->shader_lib->get_set_rows_pipeline(shader_lib_ctx);
+    if (ggml_webgpu_trace_nodes_enabled()) {
+        fprintf(stderr, "[ggml-webgpu trace] stage=set_rows pipeline end pipeline=%s\n", pipeline.name.c_str());
+        fflush(stderr);
+    }
 
     auto * decisions = static_cast<ggml_webgpu_set_rows_shader_decisions *>(pipeline.context.get());
 
+    if (ggml_webgpu_trace_nodes_enabled()) {
+        fprintf(stderr, "[ggml-webgpu trace] stage=set_rows params begin\n");
+        fflush(stderr);
+    }
     std::vector<uint32_t> params = {
         (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src) / ggml_type_size(src->type)),
         (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, idx) / ggml_type_size(idx->type)),
@@ -1418,16 +1511,34 @@ static std::optional<webgpu_encoded_op> ggml_webgpu_set_rows(webgpu_context & ct
         // Shape of idx
         (uint32_t) (idx->ne[1]), (uint32_t) (idx->ne[2])
     };
+    if (ggml_webgpu_trace_nodes_enabled()) {
+        fprintf(stderr, "[ggml-webgpu trace] stage=set_rows params end count=%zu\n", params.size());
+        fflush(stderr);
+    }
 
+    if (ggml_webgpu_trace_nodes_enabled()) {
+        fprintf(stderr, "[ggml-webgpu trace] stage=set_rows entries begin\n");
+        fflush(stderr);
+    }
     std::vector<wgpu::BindGroupEntry> entries = {
         ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src),
         ggml_webgpu_make_tensor_bind_group_entry(ctx, 1, idx),
         ggml_webgpu_make_tensor_bind_group_entry(ctx, 2, dst),
     };
+    if (ggml_webgpu_trace_nodes_enabled()) {
+        for (const auto & entry : entries) {
+            ggml_webgpu_trace_bind_group_entry("set_rows entry", entry);
+        }
+        fprintf(stderr, "[ggml-webgpu trace] stage=set_rows entries end count=%zu\n", entries.size());
+        fflush(stderr);
+    }
 
     if (decisions->i64_idx) {
         entries.push_back(ggml_webgpu_make_bind_group_entry(3, ctx->set_rows_dev_error_buf, 0,
                                                             ctx->set_rows_dev_error_buf.GetSize()));
+        if (ggml_webgpu_trace_nodes_enabled()) {
+            ggml_webgpu_trace_bind_group_entry("set_rows error_entry", entries.back());
+        }
     }
 
     uint32_t threads;
@@ -1441,7 +1552,20 @@ static std::optional<webgpu_encoded_op> ggml_webgpu_set_rows(webgpu_context & ct
         threads = src->ne[0] * src->ne[1] * src->ne[2] * src->ne[3];
     }
     uint32_t wg_x = CEIL_DIV(threads, decisions->wg_size);
-    return ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x, 1);
+    if (ggml_webgpu_trace_nodes_enabled()) {
+        fprintf(stderr,
+                "[ggml-webgpu trace] stage=set_rows build begin pipeline=%s vec4=%d i64_idx=%d pair_blocks=%d "
+                "threads=%u wg_size=%u wg_x=%u\n",
+                pipeline.name.c_str(), decisions->vec4, decisions->i64_idx, decisions->pair_blocks, threads,
+                decisions->wg_size, wg_x);
+        fflush(stderr);
+    }
+    auto result = ggml_backend_webgpu_build(ctx, pipeline, params, entries, wg_x, 1);
+    if (ggml_webgpu_trace_nodes_enabled()) {
+        fprintf(stderr, "[ggml-webgpu trace] stage=set_rows build end pipeline=%s\n", pipeline.name.c_str());
+        fflush(stderr);
+    }
+    return result;
 }
 
 // Workgroup size is a common constant
