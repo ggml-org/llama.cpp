@@ -8,4 +8,8 @@ export class RouterService {
 	static settings(section: string): string {
 		return `${ROUTES.SETTINGS}/${section}`;
 	}
+
+	static model(modelId: string): string {
+		return ROUTES.MANAGE_MODEL.replace('[modelId]', encodeURIComponent(modelId));
+	}
 }

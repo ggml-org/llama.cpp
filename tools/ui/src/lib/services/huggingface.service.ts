@@ -57,7 +57,8 @@ export class HuggingFaceService {
 		downloads: 'Most Downloads',
 		likes: 'Most Likes',
 		trendingScore: 'Trending',
-		createdAt: 'Newest'
+		createdAt: 'Newest',
+		lastModified: 'Recently Updated'
 	};
 
 	// GGUF Model Searching

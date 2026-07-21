@@ -26,5 +26,7 @@ export const ROUTES = {
 	/** Search — mobile-only full-page conversation search. */
 	SEARCH: '#/search',
 	/** Model management — browse HuggingFace GGUF models. */
-	MANAGE_MODELS: '#/models'
+	MANAGE_MODELS: '#/models',
+	/** Model detail — for dynamic model URLs use RouterService. */
+	MANAGE_MODEL: '#/models/[modelId]'
 } as const;
