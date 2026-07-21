@@ -1313,7 +1313,6 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
                 {"type",          "response.reasoning_text.delta"},
                 {"delta",         diff.reasoning_content_delta},
                 {"item_id",       oai_resp_reasoning_id},
-                {"summary_index", 0},
             });
         }
 
