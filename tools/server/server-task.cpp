@@ -1290,14 +1290,17 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
                     {"type", "response.output_item.added"},
                     {"item", json {
                         {"id",                oai_resp_reasoning_id},
-                        {"summary", json::array({
+                        {"summary",           json::array()},
+                        {"type",              "reasoning"},
+                        {"content",           json::array()},
+                        /*
+                        {"content",           json::array({
                             json {
-                                {"type", "summary_text"},
+                                {"type", "reasoning_text"},
                                 {"text", ""},
                             }
                         })},
-                        {"type",              "reasoning"},
-                        {"content",           json::array()},
+                        */
                         {"encrypted_content", ""},
                         {"status",            "in_progress"},
                     }},
@@ -1306,8 +1309,8 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
                 thinking_block_started = true;
             }
 
-            push_item_event("response.reasoning_summary_text.delta", json {
-                {"type",          "response.reasoning_summary_text.delta"},
+            push_item_event("response.reasoning_text.delta", json {
+                {"type",          "response.reasoning_text.delta"},
                 {"delta",         diff.reasoning_content_delta},
                 {"item_id",       oai_resp_reasoning_id},
                 {"summary_index", 0},
