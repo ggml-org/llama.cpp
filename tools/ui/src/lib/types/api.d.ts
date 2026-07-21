@@ -128,6 +128,14 @@ export interface ApiModelsSseData {
 }
 
 /**
+ * Per-file size snapshot reported by the download_progress SSE envelope.
+ * Keys are file URLs, values are byte counters (done <= total).
+ */
+export interface ApiModelsDownloadProgressData {
+	progress: Record<string, { done: number; total: number }>;
+}
+
+/**
  * Event kind multiplexed on the /models/sse feed.
  * Only the status_* events carry a status payload, models_reload signals a
  * full list refresh, model_remove drops a row, download_* drive download UI.
@@ -139,7 +147,7 @@ export interface ApiModelsSseData {
 export interface ApiModelsSseEvent {
 	model: string;
 	event: ServerModelsSseEventType;
-	data: ApiModelsSseData;
+	data?: ApiModelsSseData | ApiModelsDownloadProgressData;
 }
 
 export interface ApiModelDetails {

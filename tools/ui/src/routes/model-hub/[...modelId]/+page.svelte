@@ -2,15 +2,17 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { browser } from '$app/environment';
-	import { Cpu, Download, ExternalLink, GitBranch, Heart, Package, X } from '@lucide/svelte';
+	import { Cpu, Download, ExternalLink, GitBranch, Heart, Package, X, Check } from '@lucide/svelte';
 	import {
 		ActionIcon,
 		Breadcrumb,
 		DialogModelDownload,
+		DownloadProgressBar,
 		MarkdownContent
 	} from '$lib/components/app';
 	import { ROUTES } from '$lib/constants';
-	import { HuggingFaceService } from '$lib/services';
+	import { HuggingFaceService, ModelsService } from '$lib/services';
+	import { modelsStore } from '$lib/stores/models.svelte';
 	import type { HfModelDetailInfo, HfModelSibling } from '$lib/types/huggingface';
 	import type { DraftVariant } from '$lib/constants/model-id';
 	import { fade } from 'svelte/transition';
@@ -144,9 +146,8 @@
 		<ActionIcon icon={X} tooltip="Close" onclick={handleClose} />
 	</div>
 
-	<!-- Sticky header -->
 	<div
-		class="sticky top-0 z-10 mt-4 mb-2 flex items-start gap-4 border-b border-border/40 bg-background/70 p-4 backdrop-blur md:justify-between md:px-8"
+		class="flex items-start gap-4 border-b border-border/40 bg-background/70 backdrop-blur md:justify-between"
 	>
 		<div class="min-w-0 flex-1">
 			<Breadcrumb items={[{ label: 'Models', href: ROUTES.MANAGE_MODELS }, { label: modelId }]} />
@@ -377,6 +378,21 @@
 												.replace(/^(?:mtp|dflash|mmproj)-/i, '')
 												.replace(/-mtp$/i, '')}
 											{@const label = meta?.quant ?? fallbackLabel}
+											{@const downloadTagInput = meta?.quant
+												? { quant: meta.quant, variant: meta.variant ?? null }
+												: null}
+											{@const hfRepoWithTag = ModelsService.buildDownloadTag(
+												modelId,
+												downloadTagInput
+											)}
+											{@const downloadProgress = modelsStore.getDownloadProgress(hfRepoWithTag)}
+											{@const isDownloading = modelsStore.isDownloadInProgress(hfRepoWithTag)}
+											{@const isFullyDownloaded = modelsStore.isModelDownloaded(hfRepoWithTag)}
+											{@const chipState = isDownloading
+												? 'downloading'
+												: isFullyDownloaded
+													? 'downloaded'
+													: 'idle'}
 											<button
 												type="button"
 												onclick={() =>
@@ -386,19 +402,49 @@
 														quant: meta?.quant ?? null,
 														variant: meta?.variant ?? null
 													})}
-												class="inline-flex cursor-pointer items-center gap-1 rounded-md border bg-background px-2 py-1 text-left font-mono text-xs transition-colors hover:border-primary/60 hover:bg-primary/5"
-												title={`Download ${file.path}`}
+												class="relative inline-flex cursor-pointer items-center gap-1 overflow-hidden rounded-md border bg-background px-2 py-1 text-left font-mono text-xs transition-colors hover:border-primary/60 hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-70"
+												class:border-foreground={isFullyDownloaded && !isDownloading}
+												class:bg-muted={isFullyDownloaded && !isDownloading}
+												title={chipState === 'downloading'
+													? `Downloading ${file.path}`
+													: chipState === 'downloaded'
+														? `Already downloaded: ${file.path}`
+														: `Download ${file.path}`}
+												disabled={isDownloading}
 											>
-												<span class="font-medium">{label}</span>
-												<span class="text-muted-foreground">
-													{formatFileSize(file.size ?? 0)}
-												</span>
-												{#if meta?.variant}
+												{#if isFullyDownloaded && !isDownloading}
+													<Check class="h-3 w-3 text-foreground/70" />
+												{/if}
+												{#if meta?.variant && meta.variantForm === 'prefix'}
 													<span
 														class="rounded bg-primary px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary-foreground"
 													>
 														{meta.variant}
 													</span>
+												{/if}
+												<span class="font-medium">{label}</span>
+												{#if meta?.variant && meta.variantForm === 'suffix'}
+													<span
+														class="rounded bg-primary px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-primary-foreground"
+													>
+														{meta.variant}
+													</span>
+												{/if}
+												<span class="text-muted-foreground">
+													{#if isDownloading && downloadProgress && downloadProgress.totalBytes > 0}
+														{Math.round(
+															(downloadProgress.downloadedBytes / downloadProgress.totalBytes) * 100
+														)}%
+													{:else}
+														{formatFileSize(file.size ?? 0)}
+													{/if}
+												</span>
+												{#if isDownloading && downloadProgress}
+													<DownloadProgressBar
+														overlay
+														downloadedBytes={downloadProgress.downloadedBytes}
+														totalBytes={downloadProgress.totalBytes}
+													/>
 												{/if}
 											</button>
 										{/each}
@@ -458,7 +504,6 @@
 		filePath={pendingDownload.filePath}
 		quant={pendingDownload.quant}
 		variant={pendingDownload.variant}
-		sizeBytes={pendingDownload.sizeBytes}
 		formattedSize={pendingDownload.sizeBytes !== null
 			? formatFileSize(pendingDownload.sizeBytes)
 			: ''}

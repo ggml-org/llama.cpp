@@ -141,8 +141,8 @@
 
 	<div class="sticky top-0 z-10 mt-4 mb-2 flex items-start gap-4 p-4 md:justify-between md:px-8">
 		<div class="flex-1">
-			<h1 class="text-lg font-semibold md:text-2xl">Model Hub</h1>
-			<p class="text-sm text-muted-foreground">Trending models from Hugging Face</p>
+			<h1 class="text-lg font-semibold md:text-2xl">Models</h1>
+			<p class="text-sm text-muted-foreground">Manage and download your models here</p>
 		</div>
 		<div class="w-64 shrink-0 md:w-72">
 			<SearchInput

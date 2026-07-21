@@ -137,6 +137,7 @@ export { DatabaseService } from './database.service';
  * @see modelsStore in stores/models.svelte.ts — primary consumer for reactive model state
  */
 export { ModelsService } from './models.service';
+export type { GgufVariantTagInput } from './models.service';
 
 /**
  * **PropsService** - Server properties and capabilities retrieval
@@ -364,3 +365,4 @@ export { MigrationService } from './migration.service';
  * @see manage-models page in routes/manage-models/+page.svelte — consumer UI
  */
 export { HuggingFaceService } from './huggingface.service';
+export type { GgufVariantForm } from './huggingface.service';
