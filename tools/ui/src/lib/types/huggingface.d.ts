@@ -106,8 +106,29 @@ export interface HfModelDetails {
 }
 
 export interface HfModelDetailInfo extends HfModelInfo {
+	/** Whether the model is gated (true/false/'auto') */
+	gated?: boolean | string;
+	/** Repository file listing mirrors of /api/models/{id}/tree/main */
+	siblings?: HfModelSibling[];
+	/** Author / organization (sometimes returned alongside siblings) */
+	author?: string;
 	/** Detailed model information (only present when full=true) */
 	details?: HfModelDetails;
+}
+
+/** A single entry in a model repository's file tree */
+export interface HfModelSibling {
+	/** Relative path of the file or directory within the repo */
+	path: string;
+	/** Blob SHA, if applicable */
+	rfilename?: string;
+	/** Size in bytes (omitted for directories) */
+	size?: number;
+	/** Whether this entry is a directory */
+	type?: 'file' | 'directory';
+	/** OID/hash for the blob */
+	oid?: string;
+	[key: string]: unknown;
 }
 
 // API Response

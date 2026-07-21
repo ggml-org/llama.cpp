@@ -1,4 +1,5 @@
 import type { ApiModelDataEntry, ApiModelDetails, ApiModelLoadStage } from '$lib/types/api';
+import type { DraftVariant } from '$lib/constants/model-id';
 
 export interface ModelModalities {
 	vision: boolean;
@@ -38,6 +39,7 @@ export interface ParsedModelId {
 	params: string | null;
 	activatedParams: string | null;
 	quantization: string | null;
+	variant: DraftVariant | null;
 	tags: string[];
 }
 

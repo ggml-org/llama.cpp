@@ -10,6 +10,6 @@ export class RouterService {
 	}
 
 	static model(modelId: string): string {
-		return ROUTES.MANAGE_MODEL.replace('[modelId]', encodeURIComponent(modelId));
+		return ROUTES.MANAGE_MODEL.replace('[modelId]', modelId);
 	}
 }

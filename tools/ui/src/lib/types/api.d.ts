@@ -515,6 +515,24 @@ export interface ApiRouterModelsUnloadResponse {
 }
 
 /**
+ * Request body for POST /models (PR #23976).
+ * `model` is a HuggingFace repo id, optionally suffixed with `:<tag>` to
+ * pin a quantization or variant file (e.g. `ggml-org/gemma-3-4b-it-GGUF:Q4_K_M`).
+ */
+export interface ApiRouterModelsDownloadRequest {
+	model: string;
+}
+
+/**
+ * Response from POST /models. The endpoint returns immediately; the
+ * download itself runs in the background and emits events on /models/sse.
+ */
+export interface ApiRouterModelsDownloadResponse {
+	success: boolean;
+	error?: { code: number; message: string; type: string };
+}
+
+/**
  * Entry returned by POST /v1/streams/lookup. The client passes the conv ids it owns in the body
  * and the server returns one entry per matching live or recently completed background streaming
  * session, keyed by conversation_id. The WebUI uses this at mount and on visibilitychange to

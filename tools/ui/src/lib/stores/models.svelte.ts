@@ -937,6 +937,39 @@ class ModelsStore {
 	}
 
 	/**
+	 * Trigger a model download from HuggingFace via POST /models
+	 * (ggml-org/llama.cpp#23976). The download runs in the background on the
+	 * server; the model appears in the list once the SSE feed reports a
+	 * models_reload event (handled automatically by subscribeStatus).
+	 *
+	 * @param repoWithTag - HuggingFace repo id, optionally suffixed with `:<tag>`
+	 *                      (e.g. `ggml-org/gemma-3-4b-it-GGUF:Q4_K_M`).
+	 * @param displayName - Friendly name shown toasts; falls back to repoWithTag.
+	 */
+	async downloadModel(repoWithTag: string, displayName?: string): Promise<void> {
+		if (!isRouterMode()) {
+			toast.error('Model downloads are only available in router mode');
+			return;
+		}
+
+		// feed must already be live so the resulting models_reload event refreshes the list
+		this.subscribeStatus();
+
+		const label = displayName ?? repoWithTag;
+		try {
+			const res = await ModelsService.downloadModel(repoWithTag);
+			if (res.success) {
+				toast.success(`Download started: ${label}`);
+			} else {
+				throw new Error(res.error?.message ?? 'Server rejected the download request');
+			}
+		} catch (error) {
+			toast.error(`Download failed: ${label}`);
+			throw error;
+		}
+	}
+
+	/**
 	 *
 	 *
 	 * Favorites
