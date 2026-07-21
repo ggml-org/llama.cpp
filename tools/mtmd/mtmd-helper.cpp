@@ -239,22 +239,22 @@ struct decode_embd_batch {
 };
 
 // Helper class to set non-causal attention via RAII
-class scoped_non_causal_attention {
+class scope_non_causal {
 public:
-    scoped_non_causal_attention(llama_context * context, bool enabled) : context_(context), enabled_(enabled) {
+    scope_non_causal(llama_context * context, bool enabled) : context_(context), enabled_(enabled) {
         if (enabled_) {
             // TODO @ngxson : need to make sure only one image is processed at a time, and n_ubatch must be enough to hold the image
             llama_set_causal_attn(context_, false);
         }
     }
-    ~scoped_non_causal_attention() {
+    ~scope_non_causal() {
         if (enabled_) {
             llama_set_causal_attn(context_, true);
         }
     }
 
-    scoped_non_causal_attention(const scoped_non_causal_attention &) = delete;
-    scoped_non_causal_attention & operator=(const scoped_non_causal_attention &) = delete;
+    scope_non_causal(const scope_non_causal &) = delete;
+    scope_non_causal & operator=(const scope_non_causal &) = delete;
 
 private:
     llama_context * context_;
@@ -311,7 +311,7 @@ int32_t mtmd_helper_decode_image_chunk(
     }
 
     const bool use_non_causal = mtmd_decode_use_non_causal(ctx, chunk);
-    const scoped_non_causal_attention scoped_non_causal_attn(lctx, use_non_causal);
+    const scope_non_causal non_causal(lctx, use_non_causal);
 
     while (i_batch < n_img_batches) { // split into batches
         int pos_offset = i_batch*n_batch;
