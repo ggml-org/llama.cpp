@@ -150,7 +150,6 @@ public:
 
     uint32_t get_n_rs_seq() const;
     const std::vector<uint32_t> & get_rs_idx() const;
-    void set_rs_valid_from_ubatches(const std::vector<llama_ubatch> & ubatches);
     void reset_rs_idx_for_ubatches(const std::vector<llama_ubatch> & ubatches);
 
 private:
@@ -163,7 +162,6 @@ private:
     const uint32_t n_rs_seq;
 
     std::vector<uint32_t> rs_idx;
-    std::vector<uint32_t> rs_valid;
 
     std::unique_ptr<llama_kv_cache_iswa> kv_raw;
     std::unique_ptr<llama_kv_cache>      kv_csa;
