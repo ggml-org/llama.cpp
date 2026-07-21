@@ -10276,7 +10276,9 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
                                 (uint64_t)ggml_nelements(k) * sizeof(ggml_fp16_t) <= ctx->device->properties.limits.maxStorageBufferRange &&
                                 (uint64_t)ggml_nelements(v) * sizeof(ggml_fp16_t) <= ctx->device->properties.limits.maxStorageBufferRange &&
                                 ctx->device->pipeline_dequant_transpose[k->type] != nullptr &&
-                                ctx->device->pipeline_dequant_transpose[v->type] != nullptr;
+                                ctx->device->pipeline_dequant_transpose[v->type] != nullptr &&
+                                // coopmat2 already decodes quant K/V during the matrix load, so the f16 scratch is pure overhead there
+                                !ctx->device->coopmat2;
     const ggml_type k_type_eff = use_dequant_kv ? GGML_TYPE_F16 : k->type;
     const ggml_type v_type_eff = use_dequant_kv ? GGML_TYPE_F16 : v->type;
 
