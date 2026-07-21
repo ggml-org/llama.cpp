@@ -109,3 +109,12 @@ export { default as ModelBadge } from './ModelBadge.svelte';
  * Respects the user's `showRawModelNames` setting.
  */
 export { default as ModelId } from './ModelId.svelte';
+
+/**
+ * **DownloadProgressBar** - Per-file byte progress bar (sse driven)
+ *
+ * Renders a determinate bar showing `downloadedBytes / totalBytes`. Pass
+ * `overlay` to render as a thin bottom-edge strip (matches the
+ * `ModelLoadHighlight` pattern used while models load).
+ */
+export { default as DownloadProgressBar } from './DownloadProgressBar.svelte';

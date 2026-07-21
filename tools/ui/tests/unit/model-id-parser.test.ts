@@ -11,6 +11,7 @@ describe('parseModelId', () => {
 			orgName: null,
 			params: null,
 			quantization: null,
+			variant: null,
 			raw: 'model-name-1',
 			tags: []
 		});
@@ -21,6 +22,7 @@ describe('parseModelId', () => {
 			orgName: 'org',
 			params: null,
 			quantization: null,
+			variant: null,
 			raw: 'org/model-name-2',
 			tags: []
 		});
@@ -104,6 +106,7 @@ describe('parseModelId', () => {
 			orgName: 'meta-llama',
 			params: '8B',
 			quantization: null,
+			variant: null,
 			raw: 'meta-llama/Llama-3.1-8B',
 			tags: []
 		});
@@ -114,6 +117,7 @@ describe('parseModelId', () => {
 			orgName: 'openai',
 			params: '120B',
 			quantization: 'MXFP4',
+			variant: null,
 			raw: 'openai/gpt-oss-120b-MXFP4',
 			tags: []
 		});
@@ -124,6 +128,7 @@ describe('parseModelId', () => {
 			orgName: 'openai',
 			params: '20B',
 			quantization: 'Q4_K_M',
+			variant: null,
 			raw: 'openai/gpt-oss-20b:Q4_K_M',
 			tags: []
 		});
@@ -134,6 +139,7 @@ describe('parseModelId', () => {
 			orgName: 'Qwen',
 			params: '30B',
 			quantization: 'BF16',
+			variant: null,
 			raw: 'Qwen/Qwen3-Coder-30B-A3B-Instruct-1M-BF16',
 			tags: ['Instruct', '1M']
 		});
@@ -146,6 +152,7 @@ describe('parseModelId', () => {
 			orgName: 'meta-llama',
 			params: '17B',
 			quantization: 'Q4_K_M',
+			variant: null,
 			raw: 'meta-llama/Llama-4-Scout-17B-16E-Instruct-Q4_K_M',
 			tags: ['16E', 'Instruct']
 		});
@@ -156,6 +163,7 @@ describe('parseModelId', () => {
 			orgName: 'MiniMaxAI',
 			params: null,
 			quantization: 'IQ4_XS',
+			variant: null,
 			raw: 'MiniMaxAI/MiniMax-M2-IQ4_XS',
 			tags: []
 		});
@@ -166,6 +174,7 @@ describe('parseModelId', () => {
 			orgName: 'MiniMaxAI',
 			params: null,
 			quantization: 'UD-Q3_K_XL',
+			variant: null,
 			raw: 'MiniMaxAI/MiniMax-M2-UD-Q3_K_XL',
 			tags: []
 		});
@@ -176,6 +185,7 @@ describe('parseModelId', () => {
 			orgName: 'mistralai',
 			params: '123B',
 			quantization: 'Q4_K_M',
+			variant: null,
 			raw: 'mistralai/Devstral-2-123B-Instruct-2512-Q4_K_M',
 			tags: ['Instruct', '2512']
 		});
@@ -186,6 +196,7 @@ describe('parseModelId', () => {
 			orgName: 'mistralai',
 			params: '24B',
 			quantization: 'Q8_0',
+			variant: null,
 			raw: 'mistralai/Devstral-Small-2-24B-Instruct-2512-Q8_0',
 			tags: ['Instruct', '2512']
 		});
@@ -196,6 +207,7 @@ describe('parseModelId', () => {
 			orgName: 'noctrex',
 			params: null,
 			quantization: 'MXFP4_MOE',
+			variant: null,
 			raw: 'noctrex/GLM-4.7-Flash-MXFP4_MOE',
 			tags: []
 		});
@@ -206,6 +218,7 @@ describe('parseModelId', () => {
 			orgName: 'Qwen',
 			params: null,
 			quantization: 'Q4_K_M',
+			variant: null,
 			raw: 'Qwen/Qwen3-Coder-Next-Q4_K_M',
 			tags: []
 		});
@@ -216,6 +229,7 @@ describe('parseModelId', () => {
 			orgName: 'openai',
 			params: '120B',
 			quantization: 'Q4_K_M',
+			variant: null,
 			raw: 'openai/gpt-oss-120b-Q4_K_M',
 			tags: []
 		});
@@ -226,6 +240,7 @@ describe('parseModelId', () => {
 			orgName: 'openai',
 			params: '20B',
 			quantization: 'F16',
+			variant: null,
 			raw: 'openai/gpt-oss-20b-F16',
 			tags: []
 		});
@@ -236,6 +251,7 @@ describe('parseModelId', () => {
 			orgName: null,
 			params: null,
 			quantization: 'Q4_K_M',
+			variant: null,
 			raw: 'nomic-embed-text-v2-moe.Q4_K_M',
 			tags: []
 		});

@@ -17,6 +17,13 @@ import {
 /** Variant flag in a GGUF filename (e.g. draft-mtp, diffusion-flash, multimodal projector). */
 export type GgufVariant = DraftVariant;
 
+/**
+ * Where the `mtp` / `dflash` / `mmproj` token sits in the filename.
+ * - `prefix`  sidecar file that lives next to the main weights, e.g. `mtp-Q4_0.gguf`
+ * - `suffix`  embedded draft baked into the main weights, e.g. `Hy3-IQ1_M-mtp.gguf`
+ */
+export type GgufVariantForm = 'prefix' | 'suffix';
+
 // Constants
 
 export const HF_TASKS: Record<string, string> = {
@@ -260,7 +267,9 @@ export class HuggingFaceService {
 		Q5_K_S: 5,
 		Q5_K_M: 5,
 		Q6_K: 6,
-		Q8_0: 8
+		Q8_0: 8,
+		F16: 16,
+		BF16: 16
 	};
 
 	/**
@@ -270,21 +279,28 @@ export class HuggingFaceService {
 	 * `mmproj-<name>.gguf`) or as the `-mtp` suffix when the draft model is
 	 * embedded in the same GGUF weight file.
 	 *
+	 * `variantForm` records which side of the filename the variant token sat
+	 * on so callers can render badges differently (e.g. prefix on the left of
+	 * the quant label, suffix appended to it).
 	 * `quant` is `null` for files that don't carry a bit-depth token
 	 * (e.g. `*-BF16.gguf`); `variant` is `null` if no draft/aux flag is present.
 	 * Returns `null` only when the filename doesn't end in `.gguf`.
 	 */
-	static extractQuantMeta(
-		filename: string
-	): { quant: string | null; variant: GgufVariant | null } | null {
+	static extractQuantMeta(filename: string): {
+		quant: string | null;
+		variant: GgufVariant | null;
+		variantForm: GgufVariantForm | null;
+	} | null {
 		if (!MODEL_WEIGHT_EXTENSION_RE.test(filename)) return null;
 
 		let source = filename.replace(MODEL_WEIGHT_EXTENSION_RE, '');
 		let variant: GgufVariant | null = null;
+		let variantForm: GgufVariantForm | null = null;
 
 		const prefixMatch = source.match(DRAFT_VARIANT_PREFIX_RE);
 		if (prefixMatch) {
 			variant = prefixMatch[1].toLowerCase() as GgufVariant;
+			variantForm = 'prefix';
 			source = prefixMatch[2];
 		} else {
 			const suffixMatch = source.match(DRAFT_MTP_SUFFIX_RE);
@@ -293,16 +309,21 @@ export class HuggingFaceService {
 				const headSeg = candidate.split(MODEL_ID_SEGMENT_SEPARATOR).pop();
 				if (headSeg && MODEL_QUANTIZATION_SEGMENT_RE.test(headSeg)) {
 					variant = 'mtp';
+					variantForm = 'suffix';
 					source = candidate;
 				}
 			}
 		}
 
+		// Scan dash-separated segments left-to-right for the first quant match.
+		// - For sidecars like `mtp-Q4_0-180MB.gguf` the quant is `Q4_0`.
+		// - For embedded MTP like `Hy3-IQ1_M-mtp.gguf` we have `Hy3-IQ1_M` and `IQ1_M` matches.
+		// - For main files like `Llama-3-8B-Q4_K_M.gguf` we land on the trailing quant.
 		const segments = source.split(MODEL_ID_SEGMENT_SEPARATOR);
-		const last = segments[segments.length - 1];
-		const quant = MODEL_QUANTIZATION_SEGMENT_RE.test(last) ? last.toUpperCase() : null;
+		const quantSeg = segments.find((seg) => MODEL_QUANTIZATION_SEGMENT_RE.test(seg));
+		const quant = quantSeg ? quantSeg.toUpperCase() : null;
 
-		return { quant, variant };
+		return { quant, variant, variantForm };
 	}
 
 	/**
