@@ -1614,14 +1614,12 @@ static std::string gbnf_excluding_grammar(const common_grammar_builder & builder
            const std::map<size_t, std::vector<uint32_t>> & buckets,
            const std::vector<uint32_t> & specific,
            const std::function<std::string(size_t)> & state_name) {
-            // every state is accepting and completing chars get no
-            // alternative, so a forbidden string can never be matched
-            std::string rhs = "|";
+            std::vector<std::string> alts;
             for (const auto & [d, chars] : buckets) {
-                rhs += " " + gbnf_char_class(chars, false) + " " + state_name(d) + " |";
+                alts.push_back(gbnf_char_class(chars, false) + " " + state_name(d));
             }
-            rhs += " " + gbnf_char_class(specific, true) + " " + state_name(0);
-            return rhs;
+            alts.push_back(gbnf_char_class(specific, true) + " " + state_name(0));
+            return string_join(alts, " | ");
         });
 }
 
