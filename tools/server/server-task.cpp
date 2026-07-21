@@ -1293,14 +1293,6 @@ json server_task_result_cmpl_partial::to_json_oaicompat_resp() {
                         {"summary",           json::array()},
                         {"type",              "reasoning"},
                         {"content",           json::array()},
-                        /*
-                        {"content",           json::array({
-                            json {
-                                {"type", "reasoning_text"},
-                                {"text", ""},
-                            }
-                        })},
-                        */
                         {"encrypted_content", ""},
                         {"status",            "in_progress"},
                     }},
