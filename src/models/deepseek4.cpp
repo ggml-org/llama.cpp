@@ -265,32 +265,6 @@ static ggml_tensor * dsv4_build_state_snapshot(
     return dsv4_join_deps(ctx, kv, score);
 }
 
-// Raw SWA K is stored once, but compressed K/masks can carry a stream axis.
-// Repeat raw K at graph build time before concatenating raw and compressed K.
-static ggml_tensor * dsv4_repeat_streams(ggml_context * ctx, ggml_tensor * t, int64_t n_stream) {
-    if (t->ne[3] == n_stream) {
-        return t;
-    }
-
-    GGML_ASSERT(t->ne[3] == 1);
-    return ggml_repeat_4d(ctx, t, t->ne[0], t->ne[1], t->ne[2], n_stream);
-}
-
-static ggml_tensor * dsv4_build_kq_zero_bias(
-        ggml_context * ctx,
-        const llama_cparams & cparams,
-        ggml_tensor * kq_mask,
-        int64_t n_head) {
-    if (!cparams.kv_unified || !cparams.flash_attn || kq_mask->ne[3] == 1) {
-        return nullptr;
-    }
-
-    // Keep multi-stream unified DSV4 on the explicit attention path.
-    ggml_tensor * res = ggml_new_tensor_4d(ctx, GGML_TYPE_F32,
-            kq_mask->ne[0], kq_mask->ne[1], n_head, kq_mask->ne[3]);
-    return ggml_fill(ctx, res, 0.0f);
-}
-
 static constexpr int64_t DSV4_CSA_RATIO  = 4;
 static constexpr int64_t DSV4_HCA_RATIO  = 128;
 
