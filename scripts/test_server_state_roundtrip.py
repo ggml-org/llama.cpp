@@ -64,6 +64,8 @@ class StateRoundtripTests(unittest.TestCase):
                 ("POST", "/completion"),
             ],
         )
+        self.assertEqual(calls[0][2]["prompt"], "What is the capital of France?")
+        self.assertEqual(calls[2][2]["prompt"], "What is the capital of Germany?")
         self.assertEqual(calls[0][2]["id_slot"], 1)
         self.assertEqual(calls[4][2]["id_slot"], 0)
         self.assertEqual(calls[5][2]["id_slot"], 1)

@@ -17,8 +17,8 @@ from typing import Any
 
 
 RequestJson = Callable[[str, str, dict[str, Any] | None], dict[str, Any]]
-FRANCE_PROMPT = "<s> What is the capital of France?"
-GERMANY_PROMPT = "<s> What is the capital of Germany?"
+FRANCE_PROMPT = "What is the capital of France?"
+GERMANY_PROMPT = "What is the capital of Germany?"
 
 
 def completion_payload(prompt: str, id_slot: int) -> dict[str, Any]:
