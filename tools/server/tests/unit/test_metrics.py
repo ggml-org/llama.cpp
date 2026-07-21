@@ -37,7 +37,7 @@ def test_histograms_have_bucket_sum_count():
     server.start()
     server.make_request("POST", "/completion", data={"prompt": "hello world", "n_predict": 8})
     text = _metrics_text()
-    for name in ["prompt_tokens_size", "time_to_first_token_seconds", "generation_latency_seconds"]:
+    for name in ["prompt_tokens_size", "context_used_tokens", "time_to_first_token_seconds", "generation_latency_seconds"]:
         assert f'llamacpp:{name}_bucket{{' in text, name
         assert f'llamacpp:{name}_sum' in text, name
         assert f'llamacpp:{name}_count' in text, name
@@ -45,7 +45,7 @@ def test_histograms_have_bucket_sum_count():
     inf_lines = [l for l in text.splitlines() if l.startswith("llamacpp:prompt_tokens_size_bucket") and 'le="+Inf"' in l]
     count_lines = [l for l in text.splitlines() if l.startswith("llamacpp:prompt_tokens_size_count")]
     assert inf_lines and count_lines
-    assert inf_lines[0].split()[-1] == count_lines[0].split()[-1]
+    assert float(inf_lines[0].split()[-1]) == float(count_lines[0].split()[-1])
 
 
 def test_vram_gauges_present_when_gpu():
