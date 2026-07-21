@@ -3438,6 +3438,28 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK_BUDGET_MESSAGE"));
     add_opt(common_arg(
+        {"--reasoning-budget-soft-ratio"}, "N",
+        "fraction of the reasoning budget consumed at which to inject a soft warning message before the hard cutoff: <= 0 disables, (0,1] enables (default: -1)",
+        [](common_params & params, const std::string & value) {
+            params.sampling.reasoning_budget_soft_ratio = std::stof(value);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK_BUDGET_SOFT_RATIO"));
+    add_opt(common_arg(
+        {"--reasoning-budget-soft-message"}, "MESSAGE",
+        "message injected at the soft reasoning budget threshold, before the hard cutoff (default: none)",
+        [](common_params & params, const std::string & value) {
+            params.sampling.reasoning_budget_soft_message = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK_BUDGET_SOFT_MESSAGE"));
+    add_opt(common_arg(
+        {"--reasoning-budget-intro-message"}, "MESSAGE",
+        string_format("message forced immediately when the reasoning block starts, announcing the token budget; use {budget} as a placeholder for the configured reasoning budget (default: '%s')",
+            params.sampling.reasoning_budget_intro_message.c_str()),
+        [](common_params & params, const std::string & value) {
+            params.sampling.reasoning_budget_intro_message = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK_BUDGET_INTRO_MESSAGE"));
+    add_opt(common_arg(
         {"--reasoning-preserve"},
         {"--no-reasoning-preserve"},
         "preserve reasoning trace in the full history, not just the last assistant message (default: template default)\n"

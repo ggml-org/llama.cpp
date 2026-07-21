@@ -299,6 +299,9 @@ struct server_chat_params {
     bool enable_thinking = true;
     int  reasoning_budget = -1;
     std::string reasoning_budget_message;
+    float       reasoning_budget_soft_ratio = -1.0f;
+    std::string reasoning_budget_soft_message;
+    std::string reasoning_budget_intro_message;
     std::string media_path;
     bool force_pure_content = false;
 };
