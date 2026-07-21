@@ -1364,8 +1364,23 @@ struct llm_tokenizer_plamo2 : llm_tokenizer {
             if (vocab.is_byte(token_id)) {
                 if (entry.text.length() == 6 && entry.text.substr(0, 3) == "<0x" && entry.text.back() == '>') {
                     std::string hex_str = entry.text.substr(3, 2);
-                    int byte_val = std::stoi(hex_str, nullptr, 16);
-                    bytes_[byte_val] = static_cast<llama_token>(token_id);
+                    // "<0xNN>": NN must be exactly two hex digits in [00,FF].
+                    // Without this guard "<0x-1>" parses to -1, so bytes_[-1] is
+                    // a heap out-of-bounds write, and a non-hex NN makes
+                    // std::stoi throw std::invalid_argument (uncaught -> abort).
+                    int byte_val = -1;
+                    try {
+                        size_t pos = 0;
+                        byte_val = std::stoi(hex_str, &pos, 16);
+                        if (pos != hex_str.size() || byte_val < 0 || byte_val > 255) {
+                            byte_val = -1;
+                        }
+                    } catch (const std::exception &) {
+                        byte_val = -1;
+                    }
+                    if (byte_val >= 0) {
+                        bytes_[byte_val] = static_cast<llama_token>(token_id);
+                    }
                 }
                 continue;
             }
