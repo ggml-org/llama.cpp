@@ -1,5 +1,5 @@
 import { ServerModelStatus } from '$lib/enums';
-import { apiFetch, apiPost, normalizeModelName } from '$lib/utils';
+import { apiFetch, apiDelete, apiPost, normalizeModelName } from '$lib/utils';
 import type { ParsedModelId } from '$lib/types/models';
 import type {
 	ApiModelListResponse,
@@ -67,6 +67,29 @@ export class ModelsService {
 	static async downloadModel(hfRepoWithTag: string): Promise<ApiRouterModelsDownloadResponse> {
 		const payload: ApiRouterModelsDownloadRequest = { model: hfRepoWithTag };
 		return apiPost<ApiRouterModelsDownloadResponse>(API_MODELS.DOWNLOAD, payload);
+	}
+
+	/**
+	 * Cancel an in-flight download or remove a previously downloaded/failed
+	 * entry from the server's model cache (ROUTER mode only).
+	 *
+	 * Sends DELETE `/models?model=<hfRepoWithTag>`:
+	 * - while a download is running, the child subprocess is asked to exit
+	 *   and any partial `.tmp` files are removed;
+	 * - once the entry has finished downloading or has failed, the cached
+	 *   files are removed from disk.
+	 *
+	 * The endpoint is idempotent only in the sense that calling it without
+	 * an existing model name yields a 4xx `is not found` error.
+	 *
+	 * @param hfRepoWithTag - HuggingFace repo id in the same `<repo>:<tag>`
+	 *                        format returned by `buildDownloadTag`.
+	 * @returns Server acknowledgement containing the success flag
+	 */
+	static async cancelDownload(hfRepoWithTag: string): Promise<ApiRouterModelsDownloadResponse> {
+		return apiDelete<ApiRouterModelsDownloadResponse>(API_MODELS.DELETE, {
+			model: hfRepoWithTag
+		});
 	}
 
 	/**

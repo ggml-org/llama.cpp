@@ -10,6 +10,7 @@
 		DownloadProgressBar,
 		MarkdownContent
 	} from '$lib/components/app';
+	import { onMount } from 'svelte';
 	import { ROUTES } from '$lib/constants';
 	import { HuggingFaceService, ModelsService } from '$lib/services';
 	import { modelsStore } from '$lib/stores/models.svelte';
@@ -33,6 +34,15 @@
 	}
 
 	let modelId = $derived(page.params.modelId ?? '');
+
+	// Warm the router-models cache so already-downloaded quants show their
+	// checkmark on hard refresh (otherwise `/v1/models` is never queried and
+	// `isModelDownloaded(...)` returns false for every chip). The dropdown
+	// already does this lazily, but landing on this page directly should
+	// behave the same.
+	onMount(() => {
+		void modelsStore.fetchRouterModels();
+	});
 	let modelInfo: HfModelDetailInfo | null = $state(null);
 	let siblings: HfModelSibling[] = $state([]);
 	let readme: string | null = $state(null);
@@ -388,11 +398,14 @@
 											{@const downloadProgress = modelsStore.getDownloadProgress(hfRepoWithTag)}
 											{@const isDownloading = modelsStore.isDownloadInProgress(hfRepoWithTag)}
 											{@const isFullyDownloaded = modelsStore.isModelDownloaded(hfRepoWithTag)}
+											{@const isFailed = modelsStore.hasFailedDownload(hfRepoWithTag)}
 											{@const chipState = isDownloading
 												? 'downloading'
 												: isFullyDownloaded
 													? 'downloaded'
-													: 'idle'}
+													: isFailed
+														? 'failed'
+														: 'idle'}
 											<button
 												type="button"
 												onclick={() =>
@@ -402,18 +415,27 @@
 														quant: meta?.quant ?? null,
 														variant: meta?.variant ?? null
 													})}
-												class="relative inline-flex cursor-pointer items-center gap-1 overflow-hidden rounded-md border bg-background px-2 py-1 text-left font-mono text-xs transition-colors hover:border-primary/60 hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-70"
-												class:border-foreground={isFullyDownloaded && !isDownloading}
-												class:bg-muted={isFullyDownloaded && !isDownloading}
+												class="relative inline-flex cursor-pointer items-center gap-1 overflow-hidden rounded-md border bg-background px-2 py-1 text-left font-mono text-xs transition-colors hover:border-primary/60 hover:bg-primary/5"
+												class:border-foreground={isFullyDownloaded && !isDownloading && !isFailed}
+												class:bg-muted={isFullyDownloaded && !isDownloading && !isFailed}
+												class:border-destructive={isFailed && !isDownloading}
 												title={chipState === 'downloading'
-													? `Downloading ${file.path}`
+													? `In progress: ${file.path}. Click to view cancel options.`
 													: chipState === 'downloaded'
 														? `Already downloaded: ${file.path}`
-														: `Download ${file.path}`}
-												disabled={isDownloading}
+														: chipState === 'failed'
+															? `Last attempt failed: ${file.path}. Click to delete partial files and retry.`
+															: `Download ${file.path}`}
 											>
 												{#if isFullyDownloaded && !isDownloading}
 													<Check class="h-3 w-3 text-foreground/70" />
+												{/if}
+												{#if isFailed && !isDownloading && !isFullyDownloaded}
+													<span
+														class="rounded bg-destructive px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-destructive-foreground"
+													>
+														Failed
+													</span>
 												{/if}
 												{#if meta?.variant && meta.variantForm === 'prefix'}
 													<span

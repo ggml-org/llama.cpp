@@ -1,7 +1,8 @@
 <script lang="ts">
 	import * as AlertDialog from '$lib/components/ui/alert-dialog';
-	import { Download, Loader2 } from '@lucide/svelte';
+	import { Download, Loader2, Trash2, TriangleAlert } from '@lucide/svelte';
 	import { KeyboardKey } from '$lib/enums';
+	import { DialogConfirmation } from '$lib/components/app';
 	import { ModelsService, type GgufVariantTagInput } from '$lib/services/models.service';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { DownloadProgressBar } from '$lib/components/app/models';
@@ -46,6 +47,28 @@
 	});
 
 	let inFlight = $derived(phase === 'starting' || phase === 'downloading');
+	// True when the previous SSE `download_failed` event left a recorded
+	// failure for the same <repo>:<tag>. The dialog swaps the Download button
+	// for a Delete-&-retry flow because POST /models rejects already-existing
+	// partial entries.
+	let previousFailure = $derived(modelsStore.hasFailedDownload(hfRepoWithTag));
+	let cancelling = $state(false);
+	let lastCancelError: string | null = $state(null);
+
+	// Whether the Delete button makes sense. Only show it when the model is
+	// registered with the server (i.e. it's a fully downloaded entry that
+	// shows up in /v1/models) — the dialog otherwise represents an in-flight
+	// download whose partial files are cleaned up automatically by the Retry
+	// path, so an explicit delete would just be redundant noise.
+	let canDelete = $derived(phase === 'finished' && modelsStore.isModelDownloaded(hfRepoWithTag));
+	let showDeleteConfirm = $state(false);
+	async function handleConfirmDelete() {
+		showDeleteConfirm = false;
+		await modelsStore.cancelDownload(hfRepoWithTag);
+		// Close the download dialog too — cancelling the underlying entry
+		// makes the rest of the wizard irrelevant.
+		onCancel();
+	}
 
 	// Reactive: while the SSE feed reports progress for our download, surface it.
 	// The downloadProgress map is deleted on download_finished/download_failed.
@@ -65,6 +88,8 @@
 	function handleOpenChange(newOpen: boolean) {
 		if (newOpen) {
 			lastError = null;
+			lastCancelError = null;
+			showDeleteConfirm = false;
 			phase = 'pending';
 			hasSeenProgress = false;
 			return;
@@ -77,12 +102,34 @@
 		phase = 'starting';
 		hasSeenProgress = false;
 		lastError = null;
+		lastCancelError = null;
+		showDeleteConfirm = false;
+		// Detect a previously-recorded failed attempt for the same <repo>:<tag>.
+		// The server's POST /models rejects already-existing entries, so we
+		// must remove the partial cached entry first before we can POST again.
+		if (modelsStore.hasFailedDownload(hfRepoWithTag)) {
+			await ModelsService.cancelDownload(hfRepoWithTag);
+		}
 		try {
 			await modelsStore.downloadModel(hfRepoWithTag, filePath);
 			phase = 'downloading';
 		} catch (error) {
 			lastError = error instanceof Error ? error.message : 'Failed to start download';
 			phase = 'pending';
+		}
+	}
+
+	async function cancel() {
+		if (cancelling) return;
+		cancelling = true;
+		lastCancelError = null;
+		try {
+			const ok = await modelsStore.cancelDownload(hfRepoWithTag);
+			if (!ok) {
+				lastCancelError = 'Cancel request failed. Try again in a moment.';
+			}
+		} finally {
+			cancelling = false;
 		}
 	}
 
@@ -128,7 +175,35 @@
 					Download runs in the background; this dialog tracks live progress.
 				{/if}
 			</AlertDialog.Description>
+
+			{#if previousFailure && phase === 'pending'}
+				<div
+					class="mt-2 flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs text-destructive"
+					role="status"
+				>
+					<TriangleAlert class="mt-0.5 h-4 w-4 shrink-0" />
+					<span>
+						A previous attempt for this tag failed and left partial files on disk. The server will
+						reject a fresh download until those files are removed. The Retry button below deletes
+						the partial files automatically.
+					</span>
+				</div>
+			{/if}
 		</AlertDialog.Header>
+
+		{#if canDelete}
+			<div class="flex justify-end">
+				<button
+					type="button"
+					onclick={() => (showDeleteConfirm = true)}
+					class="inline-flex items-center gap-1.5 rounded-md border border-destructive/40 px-2 py-1 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10 focus:outline-none focus-visible:ring-2 focus-visible:ring-destructive/50"
+					aria-label="Delete model from cache"
+				>
+					<Trash2 class="h-3.5 w-3.5" />
+					Delete from cache
+				</button>
+			</div>
+		{/if}
 
 		<div class="space-y-3 rounded-md border bg-muted/40 p-3 text-xs">
 			<div class="flex flex-col gap-1">
@@ -182,15 +257,29 @@
 		{#if lastError}
 			<p class="text-xs text-destructive">{lastError}</p>
 		{/if}
+		{#if lastCancelError}
+			<p class="text-xs text-destructive">{lastCancelError}</p>
+		{/if}
 
 		<AlertDialog.Footer>
-			<AlertDialog.Cancel disabled={inFlight} onclick={onCancel}>
-				{#if phase === 'finished'}Close{:else}Cancel{/if}
-			</AlertDialog.Cancel>
+			{#if phase === 'downloading'}
+				<AlertDialog.Action disabled={cancelling} onclick={cancel}>
+					{#if cancelling}
+						<Loader2 class="mr-1.5 h-4 w-4 animate-spin" />
+						Cancelling...
+					{:else}
+						Cancel download
+					{/if}
+				</AlertDialog.Action>
+			{:else}
+				<AlertDialog.Cancel disabled={inFlight} onclick={onCancel}>
+					{#if phase === 'finished'}Close{:else}Cancel{/if}
+				</AlertDialog.Cancel>
+			{/if}
 			{#if phase === 'pending'}
 				<AlertDialog.Action disabled={inFlight} onclick={trigger}>
 					<Download class="mr-1.5 h-4 w-4" />
-					Download
+					{previousFailure ? 'Retry download' : 'Download'}
 				</AlertDialog.Action>
 			{:else if phase === 'starting'}
 				<AlertDialog.Action disabled>
@@ -201,3 +290,15 @@
 		</AlertDialog.Footer>
 	</AlertDialog.Content>
 </AlertDialog.Root>
+
+<DialogConfirmation
+	bind:open={showDeleteConfirm}
+	title="Delete model"
+	description={`Remove "${hfRepoWithTag}" from your cache? Any cached files will be deleted from disk.`}
+	confirmText="Delete"
+	cancelText="Cancel"
+	variant="destructive"
+	icon={Trash2}
+	onConfirm={handleConfirmDelete}
+	onCancel={() => (showDeleteConfirm = false)}
+/>

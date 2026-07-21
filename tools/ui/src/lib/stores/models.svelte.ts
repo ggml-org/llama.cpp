@@ -65,6 +65,12 @@ class ModelsStore {
 	private statusReaderActive = false;
 	private loadProgress = new SvelteMap<string, ModelLoadProgress>();
 	private downloadProgress = new SvelteMap<string, ModelDownloadProgress>();
+	/**
+	 * `<repo>:<tag>` strings whose most recent download attempt ended in
+	 * failure (download_failed). Surfaced to the UI so chips can render a
+	 * "Failed" pill and so the dialog knows a POST needs a DELETE first.
+	 */
+	failedDownloads = $state<SvelteSet<string>>(new SvelteSet());
 	private statusWaiters = new Map<
 		string,
 		{ target: ServerModelStatus; resolve: () => void; reject: (e: Error) => void }
@@ -839,15 +845,23 @@ class ModelsStore {
 
 	/**
 	 * Drop the stored progress for the model and toast the outcome.
+	 * Marks failed entries so the UI can offer a delete-and-retry path.
 	 */
 	private applyDownloadFinished(event: ApiModelsSseEvent): void {
 		this.downloadProgress.delete(event.model);
 		const ok = event.event === ServerModelsSseEventType.DOWNLOAD_FINISHED;
 		if (ok) {
+			this.failedDownloads.delete(event.model);
 			toast.success(`Download finished: ${this.toDisplayName(event.model)}`);
 		} else {
+			this.failedDownloads.add(event.model);
 			toast.error(`Download failed: ${this.toDisplayName(event.model)}`);
 		}
+	}
+
+	/** Whether the most recent download attempt for the given entry ended in failure. */
+	hasFailedDownload(repoWithTag: string): boolean {
+		return this.failedDownloads.has(repoWithTag);
 	}
 
 	/**
@@ -1035,6 +1049,40 @@ class ModelsStore {
 	}
 
 	/**
+	 * Cancel an in-flight download or remove a previously downloaded/failed
+	 * model from the server cache (ROUTER mode only).
+	 *
+	 * Calls DELETE `/models?model=<name>`. The server kills the child
+	 * subprocess if the download is still running and unlinks any partial
+	 * `.tmp` files; otherwise it just `rm`s the cached files. The cached
+	 * row in `routerModels` is dropped either way via the SSE `model_remove`
+	 * event surfaced by `subscribeStatus()`.
+	 *
+	 * @param repoWithTag - HuggingFace repo id in `<repo>:<tag>` format.
+	 * @returns True on success.
+	 */
+	async cancelDownload(repoWithTag: string): Promise<boolean> {
+		if (!isRouterMode()) {
+			toast.error('Model downloads are only available in router mode');
+			return false;
+		}
+
+		this.subscribeStatus();
+		try {
+			const res = await ModelsService.cancelDownload(repoWithTag);
+			const ok = res.success === true;
+			if (ok) {
+				this.downloadProgress.delete(repoWithTag);
+				this.failedDownloads.delete(repoWithTag);
+			}
+			return ok;
+		} catch (error) {
+			toast.error(`Failed to cancel: ${error instanceof Error ? error.message : 'unknown error'}`);
+			return false;
+		}
+	}
+
+	/**
 	 *
 	 *
 	 * Favorites
@@ -1114,6 +1162,7 @@ class ModelsStore {
 		this.modelPropsCache.clear();
 		this.modelPropsFetching.clear();
 		this.downloadProgress.clear();
+		this.failedDownloads.clear();
 	}
 
 	/**
