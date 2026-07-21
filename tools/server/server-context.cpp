@@ -1477,6 +1477,7 @@ private:
                 /* reasoning_budget_soft_ratio */ params_base.sampling.reasoning_budget_soft_ratio,
                 /* reasoning_budget_soft_msg   */ params_base.sampling.reasoning_budget_soft_message,
                 /* reasoning_budget_intro_msg  */ params_base.sampling.reasoning_budget_intro_message,
+                /* reasoning_budget_grace_toks */ params_base.sampling.reasoning_budget_grace_tokens,
                 /* media_path            */ params_base.media_path,
                 /* force_pure_content    */ params_base.force_pure_content_parser
             };

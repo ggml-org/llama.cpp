@@ -1131,6 +1131,7 @@ json oaicompat_chat_params_parse(
             llama_params["reasoning_budget_soft_ratio"] = json_value(body, "reasoning_budget_soft_ratio", opt.reasoning_budget_soft_ratio);
             llama_params["reasoning_budget_soft_message"] = json_value(body, "reasoning_budget_soft_message", opt.reasoning_budget_soft_message);
             llama_params["reasoning_budget_intro_message"] = json_value(body, "reasoning_budget_intro_message", opt.reasoning_budget_intro_message);
+            llama_params["reasoning_budget_grace_tokens"] = json_value(body, "reasoning_budget_grace_tokens", opt.reasoning_budget_grace_tokens);
             llama_params["reasoning_control"] = json_value(body, "reasoning_control", false);
         }
     }

@@ -399,6 +399,10 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
             ctx.params.sampling.reasoning_budget_intro_forced = common_tokenize(ctx.vocab, message, false, true);
         }));
 
+    add((new field_num("reasoning_budget_grace_tokens", params.sampling.reasoning_budget_grace_tokens))
+        ->set_hard_limits(0, INT32_MAX)
+        ->set_desc("Once the reasoning budget is exhausted, wait up to this many tokens for a paragraph break before forcing the cutoff (0 = force immediately)"));
+
     add((new field_str("reasoning_budget_start_tag"))
         ->set_desc("Token string marking the start of the reasoning budget section")
         ->set_handler([&](field_eval_context & ctx, const json & data) {
@@ -570,14 +574,15 @@ task_params eval_llama_cmpl_schema(
     // debugging
     {
         auto budget = params.sampling.reasoning_budget_tokens;
-        SRV_DBG("reasoning budget: tokens=%d, generation_prompt='%s', start=%zu toks, end=%zu toks, forced=%zu toks, soft_ratio=%.2f, soft_forced=%zu toks, intro_forced=%zu toks\n",
+        SRV_DBG("reasoning budget: tokens=%d, generation_prompt='%s', start=%zu toks, end=%zu toks, forced=%zu toks, soft_ratio=%.2f, soft_forced=%zu toks, intro_forced=%zu toks, grace_tokens=%d\n",
                 budget, params.sampling.generation_prompt.c_str(),
                 params.sampling.reasoning_budget_start.size(),
                 params.sampling.reasoning_budget_end.size(),
                 params.sampling.reasoning_budget_forced.size(),
                 params.sampling.reasoning_budget_soft_ratio,
                 params.sampling.reasoning_budget_soft_forced.size(),
-                params.sampling.reasoning_budget_intro_forced.size());
+                params.sampling.reasoning_budget_intro_forced.size(),
+                params.sampling.reasoning_budget_grace_tokens);
     }
 
     return params;

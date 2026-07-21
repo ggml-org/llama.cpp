@@ -305,7 +305,8 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
             params.reasoning_budget_soft_forced,
             params.reasoning_budget_intro_forced,
             params.reasoning_budget_tokens < 0 ? INT_MAX : params.reasoning_budget_tokens,
-            params.reasoning_budget_soft_ratio);
+            params.reasoning_budget_soft_ratio,
+            params.reasoning_budget_grace_tokens);
 
         for (const auto & token : prefill_tokens) {
             llama_sampler_accept(rbudget, token);

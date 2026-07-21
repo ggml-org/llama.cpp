@@ -3460,6 +3460,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK_BUDGET_INTRO_MESSAGE"));
     add_opt(common_arg(
+        {"--reasoning-budget-grace-tokens"}, "N",
+        "once the reasoning budget is exhausted, wait up to N tokens for a paragraph break before forcing the cutoff, instead of forcing immediately (default: 0, disabled)",
+        [](common_params & params, int value) {
+            params.sampling.reasoning_budget_grace_tokens = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK_BUDGET_GRACE_TOKENS"));
+    add_opt(common_arg(
         {"--reasoning-preserve"},
         {"--no-reasoning-preserve"},
         "preserve reasoning trace in the full history, not just the last assistant message (default: template default)\n"
