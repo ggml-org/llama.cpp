@@ -21,10 +21,8 @@ self.onmessage = async (event) => {
 	const reply = { logs, result: null, error: null };
 	try {
 		const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-		// Inject `nerdamer` (from preloaded nerdamer-prime.js) into the execution context.
-		// User code can use: nerdamer(expr), nerdamer.solve(), nerdamer.derivative(),
-		// nerdamer.integrate(), nerdamer.expand(), nerdamer.factor(), nerdamer.simplify(),
-		// nerdamer.laplace(), nerdamer.limit(), nerdamer.series(), etc.
+		// The prelude bundled ahead of this shim defines self.nerdamer,
+		// passed into the execution scope as the `nerdamer` parameter.
 		const value = await new AsyncFunction('nerdamer', event.data.code)(self.nerdamer);
 		if (value !== undefined) reply.result = fmt(value);
 	} catch (err) {

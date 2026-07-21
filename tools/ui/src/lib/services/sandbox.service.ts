@@ -7,8 +7,22 @@ import {
 	SANDBOX_TOOL_NAME,
 	SANDBOX_TRUNCATION_NOTICE
 } from '$lib/constants';
-import { SANDBOX_HARNESS_HTML } from './sandbox-harness';
+import { buildSandboxHarness } from './sandbox-harness';
 import type { ToolExecutionResult } from '$lib/types';
+
+let harnessHtml: string | null = null;
+
+/**
+ * The nerdamer prelude lives in its own lazy chunk via `virtual:nerdamer`,
+ * keeping it out of the eagerly loaded bundle. Built once per session.
+ */
+async function getHarness(): Promise<string> {
+	if (harnessHtml === null) {
+		const { default: nerdamerJs } = await import('virtual:nerdamer');
+		harnessHtml = buildSandboxHarness(nerdamerJs);
+	}
+	return harnessHtml;
+}
 
 interface SandboxReply {
 	logs?: unknown;
@@ -45,19 +59,21 @@ export class SandboxService {
 	 * timeout or abort. Removing the iframe terminates the worker
 	 * at the browser level, so runaway code cannot outlive it.
 	 */
-	static executeTool(
+	static async executeTool(
 		toolName: string,
 		params: Record<string, unknown>,
 		signal?: AbortSignal
 	): Promise<ToolExecutionResult> {
 		if (toolName !== SANDBOX_TOOL_NAME) {
-			return Promise.resolve({ content: `Unknown frontend tool: ${toolName}`, isError: true });
+			return { content: `Unknown frontend tool: ${toolName}`, isError: true };
 		}
 
 		const code = typeof params.code === 'string' ? params.code : '';
 		if (!code) {
-			return Promise.resolve({ content: 'Missing required parameter: code', isError: true });
+			return { content: 'Missing required parameter: code', isError: true };
 		}
+
+		const harness = await getHarness();
 
 		const requested = Number(params.timeout_ms);
 		const timeoutMs =
@@ -69,7 +85,7 @@ export class SandboxService {
 			const iframe = document.createElement('iframe');
 			iframe.setAttribute('sandbox', 'allow-scripts');
 			iframe.style.display = 'none';
-			iframe.srcdoc = SANDBOX_HARNESS_HTML;
+			iframe.srcdoc = harness;
 
 			let settled = false;
 

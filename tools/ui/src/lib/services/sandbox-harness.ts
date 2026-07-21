@@ -1,23 +1,25 @@
-/**
- * nerdamer-prime.js downloaded from https://raw.githubusercontent.com/together-science/nerdamer-prime/refs/heads/main/all.min.js
- * Upstream commit for all.min.js: https://github.com/together-science/nerdamer-prime/commit/fffcce3ebd74fefb51fcf90b613f088fcab4fd93
- */
 import { NEWLINE } from '$lib/constants';
 import WORKER_SHIM from './sandbox-worker.js?raw';
-import NERDAMER_JS from '../vendors/nerdamer-prime.js?raw';
+
+/**
+ * CSP for the harness document, inherited by the blob worker. connect-src
+ * falls back to default-src, removing network egress for model and vendored
+ * code. 'unsafe-eval' is required by the worker's AsyncFunction constructor,
+ * 'unsafe-inline' by the inline script below, worker-src by the blob worker.
+ */
+const HARNESS_CSP = `default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; worker-src blob:`;
 
 /**
  * Harness loaded as srcdoc into a sandboxed iframe (allow-scripts only).
  * The opaque origin is the security boundary: no access to the app origin,
  * its storage or its API. The harness spawns a worker so model code never
  * runs on a main thread, which makes the parent timeout enforceable by
- * removing the iframe.
- *
- * nerdamer is preloaded in the worker, exposing the `nerdamer` global for
- * symbolic computation (simplify, derivative, integrate, solve, etc.).
+ * removing the iframe. The prelude runs in the worker before the shim,
+ * exposing globals such as `nerdamer` to model code.
  */
-export const SANDBOX_HARNESS_HTML = `<!doctype html><script>
-const SHIM = ${JSON.stringify(NERDAMER_JS + NEWLINE + WORKER_SHIM)};
+export function buildSandboxHarness(preludeJs: string): string {
+	return `<!doctype html><meta http-equiv="Content-Security-Policy" content="${HARNESS_CSP}"><script>
+const SHIM = ${JSON.stringify(preludeJs + NEWLINE + WORKER_SHIM)};
 addEventListener('message', (event) => {
 	const respond = (payload) => parent.postMessage(payload, '*');
 	let worker;
@@ -32,3 +34,4 @@ addEventListener('message', (event) => {
 	worker.postMessage({ code: event.data.code });
 });
 </script>`;
+}
