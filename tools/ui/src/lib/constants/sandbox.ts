@@ -17,16 +17,12 @@ export const SANDBOX_TOOL_DEFINITION: OpenAIToolDefinition = {
 	type: ToolCallType.FUNCTION,
 	function: {
 		name: SANDBOX_TOOL_NAME,
-		description: `Execute JavaScript in a sandboxed browser worker (no DOM, no page access).
-Top level await is supported. Use console.log to print intermediate values;
-a top level return statement is captured as the result.
-
-Symbolic math via \`nerdamer\`: simplify, expand, factor, diff, integrate,
-solve, laplace, ilt, limit, partfrac, gcd, lcm, roots, coeffs, numer,
-pfactor, decimals, product, sum, mean, stdev, variance, median, erf,
-plus constants pi, e, i.
-Query available functions at runtime:
-Object.keys(nerdamer).filter(k => typeof nerdamer[k] === 'function')`,
+		description: `Execute JS in a sandboxed browser worker (no DOM/page access). Top-level await ok; console.log for intermediates; top-level return is captured as result.
+Symbolic/numeric math via \`nerdamer\` (pre-loaded, no require). Object.keys(nerdamer).filter(k=>typeof nerdamer[k]==='function') list functions.
+nerdamer('diff(sin(x)/x,x)') or nerdamer.diff('sin(x)/x','x') → Expression; convert with .toString()/.text()/.toTeX(), or .evaluate() (→ still Expression, then .toString()).
+nerdamer(expr,{x:2}) substitutes only; chain .evaluate() or pass 'numer' for numeric result.
+solve(expr,var)→Symbol[]; solveEquations([eq1,..])→[[var,val],..] pairs.
+Functions: simplify/expand/factor(expr), diff(expr,var[,n]), integrate(expr,var), defint(expr,from,to,var), limit(expr,var,to), laplace(expr,t,s), ilt(expr,s,t), gcd/lcm(a,b), roots/coeffs/partfrac(expr,var), pfactor(n), numer/decimals/erf(expr), product/sum(expr,var,from,to), mean/median/stdev/variance(...vals)`,
 		parameters: {
 			type: JsonSchemaType.OBJECT,
 			properties: {
