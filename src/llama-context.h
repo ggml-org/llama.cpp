@@ -80,7 +80,6 @@ struct llama_context {
 
     float * get_logits();
     float * get_logits_ith(int32_t i);
-    bool materialize_vocab_dense_logits();
 
     float * get_embeddings();
     float * get_embeddings_ith(int32_t i);
@@ -344,13 +343,6 @@ private:
     };
 
     std::vector<swap_info> output_swaps;
-
-    // On-demand dense fallback for vocabulary-parallel requests whose sampler
-    // needs the complete vocabulary (for example grammar or active penalties).
-    const ggml_tensor * vocab_last_logits = nullptr;
-    uint32_t vocab_last_logits_rows = 0;
-    std::vector<float> vocab_dense_logits;
-    std::vector<swap_info> vocab_dense_pending_swaps;
 
     ggml_backend_sched_ptr sched;
 

@@ -120,7 +120,6 @@ struct common_sampler {
     std::vector<llama_token_data> cur;
 
     llama_token_data_array cur_p;
-    bool compact_fallback_logged = false;
 
     void reset() {
         prev.clear();
@@ -202,24 +201,7 @@ struct common_sampler {
         } else if (sampled_logits) {
             const uint32_t sampled_logits_count = llama_get_sampled_logits_count_ith(ctx, idx);
             if (sampled_logits_count < (uint32_t) n_vocab) {
-                try {
-                    validate_compact_sampling(sampled_logits_count);
-                } catch (const std::exception & err) {
-                    const float * dense_logits = llama_get_logits_ith(ctx, idx);
-                    if (dense_logits == nullptr) {
-                        throw;
-                    }
-                    if (!compact_fallback_logged) {
-                        LOG_WRN("%s: %s; materializing dense logits for this sampler\n", __func__, err.what());
-                        compact_fallback_logged = true;
-                    }
-                    cur.resize(n_vocab);
-                    for (llama_token token_id = 0; token_id < n_vocab; ++token_id) {
-                        cur[token_id] = llama_token_data{token_id, dense_logits[token_id], 0.0f};
-                    }
-                    cur_p = {cur.data(), cur.size(), -1, false};
-                    return;
-                }
+                validate_compact_sampling(sampled_logits_count);
             }
             cur.resize(sampled_logits_count);
             for (uint32_t i = 0; i < sampled_logits_count; i++) {
