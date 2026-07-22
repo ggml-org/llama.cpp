@@ -318,7 +318,6 @@ private:
         std::vector<uint32_t> logits_count;
         std::vector<uint32_t> probs_count;
         std::vector<uint32_t> candidates_count;
-        size_t stride = 0;
 
         // optimization
         std::vector<llama_token> token_ids_full_vocab;

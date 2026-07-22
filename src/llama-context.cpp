@@ -1014,7 +1014,7 @@ float * llama_context::get_sampled_probs_ith(int32_t idx) {
         if ((size_t) row >= sampling.probs_count.size() || sampling.probs_count[row] == 0) {
             return nullptr;
         }
-        return sampling.probs.data + row*sampling.stride;
+        return sampling.probs.data + row*model.vocab.n_tokens();
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: invalid backend sampled probs id %d, reason: %s\n", __func__, idx, err.what());
         return nullptr;
@@ -1033,7 +1033,7 @@ float * llama_context::get_sampled_logits_ith(int32_t idx) {
         if ((size_t) row >= sampling.logits_count.size() || sampling.logits_count[row] == 0) {
             return nullptr;
         }
-        return sampling.logits.data + row*sampling.stride;
+        return sampling.logits.data + row*model.vocab.n_tokens();
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: invalid backend sampled logits id %d, reason: %s\n", __func__, idx, err.what());
         return nullptr;
@@ -1048,7 +1048,7 @@ const llama_token * llama_context::get_sampled_candidates_ith(int32_t idx) {
         if (sampling.candidates.has_data() &&
             (size_t) row < sampling.candidates_count.size() &&
             sampling.candidates_count[row] > 0) {
-            return sampling.candidates.data + row*sampling.stride;
+            return sampling.candidates.data + row*model.vocab.n_tokens();
         }
     } catch (const std::exception & err) {
         // fallback to full vocab list
@@ -1790,6 +1790,12 @@ int llama_context::decode(const llama_batch & batch_inp) {
     const uint32_t n_tokens_all  = balloc->get_n_tokens();
     const uint32_t n_outputs_all = balloc->get_n_outputs();
 
+    if (model.has_tensor_parallel_vocab_output() && n_outputs_all > 1) {
+        LLAMA_LOG_ERROR("%s: GGML_TP_VOCAB_OUTPUT supports at most one output row (got %u)\n",
+            __func__, n_outputs_all);
+        return -1;
+    }
+
     if (output_all) {
         // require that all tokens are output
         if (n_outputs_all != n_tokens_all) {
@@ -1941,46 +1947,44 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
 
         // extract logits
-        const bool vocab_head = model.has_tensor_parallel_vocab_output();
-        if ((logits.data || vocab_head) && t_logits && n_outputs > 0 && needs_raw_logits(ubatch, sampling.samplers)) {
+        if (logits.data && t_logits && n_outputs > 0 && needs_raw_logits(ubatch, sampling.samplers)) {
             ggml_backend_t backend_res = ggml_backend_sched_get_tensor_backend(sched.get(), t_logits);
             GGML_ASSERT(backend_res != nullptr);
-            GGML_ASSERT(n_outputs_prev + n_outputs <= n_outputs_all);
+            GGML_ASSERT(logits.data != nullptr);
 
-            if (vocab_head) {
-                GGML_ASSERT(sampling.logits.has_data() && sampling.candidates.has_data());
-                const int32_t k = std::min<int32_t>(256, n_vocab);
-                float * sampled_logits = sampling.logits.data + n_outputs_prev*sampling.stride;
-                llama_token * sampled_ids = sampling.candidates.data + n_outputs_prev*sampling.stride;
-                if (!ggml_backend_meta_top_k(
-                        backend_res, t_logits, k, sampling.stride, sampled_ids, sampled_logits)) {
-                    LLAMA_LOG_ERROR("%s: vocabulary-sharded TOP_K failed\n", __func__);
-                    llama_pos pos_min[LLAMA_MAX_SEQ];
-                    std::fill_n(pos_min, LLAMA_MAX_SEQ, std::numeric_limits<llama_pos>::max());
-                    for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
-                        for (int32_t j = 0; j < ubatch.n_seq_id[i]; ++j) {
-                            const llama_seq_id seq_id = ubatch.seq_id[i][j];
-                            if (seq_id >= 0 && seq_id < LLAMA_MAX_SEQ) {
-                                pos_min[seq_id] = std::min(pos_min[seq_id], ubatch.pos[i]);
+            float * logits_out = logits.data + n_outputs_prev*n_vocab;
+
+            if (n_outputs) {
+                GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
+                GGML_ASSERT((n_outputs_prev + n_outputs)*n_vocab <= (int64_t) logits.size);
+
+                const bool vocab_head = model.has_tensor_parallel_vocab_output();
+                const bool vocab_top_k = vocab_head && n_outputs == 1 &&
+                    sampling.logits.has_data() && sampling.candidates.has_data();
+                if (vocab_top_k) {
+                    const int32_t k = std::min<int32_t>(256, n_vocab);
+                    float * sampled_logits = sampling.logits.data + n_outputs_prev*n_vocab;
+                    llama_token * sampled_ids = sampling.candidates.data + n_outputs_prev*n_vocab;
+                    if (!ggml_backend_meta_top_k(backend_res, t_logits, k, sampled_ids, sampled_logits)) {
+                        LLAMA_LOG_ERROR("%s: vocabulary-sharded TOP_K failed\n", __func__);
+                        llama_pos pos_min[LLAMA_MAX_SEQ];
+                        std::fill_n(pos_min, LLAMA_MAX_SEQ, std::numeric_limits<llama_pos>::max());
+                        for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+                            const llama_seq_id seq_id = ubatch.seq_id[i][0];
+                            pos_min[seq_id] = std::min(pos_min[seq_id], ubatch.pos[i]);
+                        }
+                        for (int s = 0; s < LLAMA_MAX_SEQ; ++s) {
+                            if (pos_min[s] != std::numeric_limits<llama_pos>::max()) {
+                                memory->seq_rm(s, pos_min[s], -1);
                             }
                         }
+                        return -3;
                     }
-                    for (int s = 0; s < LLAMA_MAX_SEQ; ++s) {
-                        if (pos_min[s] != std::numeric_limits<llama_pos>::max()) {
-                            memory->seq_rm(s, pos_min[s], -1);
-                        }
-                    }
-                    return -3;
+                    sampling.logits_count[n_outputs_prev] = k;
+                    sampling.candidates_count[n_outputs_prev] = k;
+                } else {
+                    ggml_backend_tensor_get_async(backend_res, t_logits, logits_out, 0, n_outputs*n_vocab*sizeof(float));
                 }
-                for (uint32_t row = 0; row < n_outputs; ++row) {
-                    sampling.logits_count[n_outputs_prev + row] = k;
-                    sampling.candidates_count[n_outputs_prev + row] = k;
-                }
-            } else {
-                GGML_ASSERT((n_outputs_prev + n_outputs)*n_vocab <= (int64_t) logits.size);
-                float * logits_out = logits.data + n_outputs_prev*n_vocab;
-                ggml_backend_tensor_get_async(
-                    backend_res, t_logits, logits_out, 0, n_outputs*n_vocab*sizeof(float));
             }
         }
 
@@ -2068,7 +2072,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
         // Copy backend sampling output if this ubatch produced any sampling tensors.
         if (has_samplers && (!res->t_sampled.empty() || !res->t_sampled_probs.empty() || !res->t_sampled_logits.empty())) {
             const auto seq_to_output_row = build_seq_to_output_row(ubatch, n_outputs_prev);
-            const auto stride = sampling.stride;
+            const auto stride = n_vocab;
 
             // async copy the sampling data from the backend to the host
             copy_tensor_async_ints(res->t_sampled, sampling.sampled, seq_to_output_row, sched.get());
@@ -2152,15 +2156,14 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     const auto n_vocab    = vocab.n_tokens();
     const auto n_embd     = hparams.n_embd;
     const auto n_embd_out = hparams.n_embd_out();
-    const bool vocab_sampling = model.has_tensor_parallel_vocab_output();
 
-    bool has_logits     = !vocab_sampling;
+    bool has_logits     = true;
     bool has_embd       = cparams.embeddings;
     bool has_embd_nextn = cparams.embeddings_nextn;
 
     // TODO: hacky enc-dec support
     if (model.arch == LLM_ARCH_T5) {
-        has_logits = !vocab_sampling;
+        has_logits = true;
         has_embd   = true;
     }
 
@@ -2184,13 +2187,13 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
         }
     }
 
-    // Allocate sampling outputs. Vocabulary-parallel mode only needs compact
-    // logits and candidate IDs; dense logits/probabilities are unavailable.
+    // Allocate compact sampling output buffers for backend samplers and for the
+    // restricted vocabulary-sharded host-merge path.
+    const bool vocab_sampling = model.has_tensor_parallel_vocab_output();
     const bool has_sampling = !sampling.samplers.empty() || vocab_sampling;
-    const size_t sampling_stride = vocab_sampling ? 256 : n_vocab;
     if (has_sampling) {
-        backend_float_count = (vocab_sampling ? 1 : 2) * sampling_stride * n_outputs_max;
-        backend_token_count = (vocab_sampling ? sampling_stride : 1 + sampling_stride) * n_outputs_max;
+        backend_float_count = 2 * n_vocab * n_outputs_max;      // logits + probs
+        backend_token_count = (1 + n_vocab) * n_outputs_max;    // sampled + candidates
     }
 
     if (output_ids.empty()) {
@@ -2262,19 +2265,16 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     }
 
     if (has_sampling) {
-        sampling.stride = sampling_stride;
-        sampling.logits = {(float *) (base + offset), sampling_stride * (size_t) n_outputs_max};
+        sampling.logits = {(float *) (base + offset), (size_t)(n_vocab*n_outputs_max)};
         offset += sampling.logits.size * sizeof(float);
 
-        sampling.probs = vocab_sampling ? buffer_view<float>{nullptr, 0} :
-            buffer_view<float>{(float *) (base + offset), sampling_stride * (size_t) n_outputs_max};
+        sampling.probs = {(float *) (base + offset), (size_t)(n_vocab*n_outputs_max)};
         offset += sampling.probs.size * sizeof(float);
 
-        sampling.sampled = vocab_sampling ? buffer_view<llama_token>{nullptr, 0} :
-            buffer_view<llama_token>{(llama_token *) (base + offset), (size_t) n_outputs_max};
+        sampling.sampled = {(llama_token *) (base + offset), (size_t)n_outputs_max};
         offset += sampling.sampled.size * sizeof(llama_token);
 
-        sampling.candidates = {(llama_token *) (base + offset), sampling_stride * (size_t) n_outputs_max};
+        sampling.candidates = {(llama_token *) (base + offset), (size_t)(n_vocab*n_outputs_max)};
         offset += sampling.candidates.size * sizeof(llama_token);
 
         // The count vectors keep track of the actual number of logits/probs/candidates
@@ -2288,11 +2288,8 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
         std::fill(sampling.probs_count.begin(),      sampling.probs_count.end(),      0);
         std::fill(sampling.candidates_count.begin(), sampling.candidates_count.end(), 0);
 
-        if (sampling.sampled.has_data()) {
-            std::fill_n(sampling.sampled.data, sampling.sampled.size, LLAMA_TOKEN_NULL);
-        }
+        std::fill_n(sampling.sampled.data, sampling.sampled.size, LLAMA_TOKEN_NULL);
     } else {
-        sampling.stride     = 0;
         sampling.logits     = {nullptr, 0};
         sampling.probs      = {nullptr, 0};
         sampling.sampled    = {nullptr, 0};
@@ -2377,28 +2374,28 @@ void llama_context::output_reorder() {
             }
         }
 
-        if (!sampling.samplers.empty() || model.has_tensor_parallel_vocab_output()) {
-            assert(sampling.logits.has_data());
-            assert(sampling.candidates.has_data());
-            assert(sampling.stride > 0);
+        if (!sampling.samplers.empty()) {
+            assert(sampling.logits.size > 0);
+            assert(sampling.probs.size > 0);
+            assert(sampling.candidates.size > 0);
+            assert(sampling.sampled.size > 0);
             assert(sampling.logits_count.size() > 0);
             assert(sampling.probs_count.size() > 0);
             assert(sampling.candidates_count.size() > 0);
 
-            for (size_t k = 0; k < sampling.stride; ++k) {
-                std::swap(sampling.logits.data[i0*sampling.stride + k],
-                          sampling.logits.data[i1*sampling.stride + k]);
-                std::swap(sampling.candidates.data[i0*sampling.stride + k],
-                          sampling.candidates.data[i1*sampling.stride + k]);
-                if (sampling.probs.has_data()) {
-                    std::swap(sampling.probs.data[i0*sampling.stride + k],
-                              sampling.probs.data[i1*sampling.stride + k]);
-                }
+            for (uint64_t k = 0; k < n_vocab; ++k) {
+                std::swap(sampling.logits.data[i0*n_vocab + k], sampling.logits.data[i1*n_vocab + k]);
             }
 
-            if (sampling.sampled.has_data()) {
-                std::swap(sampling.sampled.data[i0], sampling.sampled.data[i1]);
+            for (uint64_t k = 0; k < n_vocab; ++k) {
+                std::swap(sampling.probs.data[i0*n_vocab + k], sampling.probs.data[i1*n_vocab + k]);
             }
+
+            for (uint64_t k = 0; k < n_vocab; ++k) {
+                std::swap(sampling.candidates.data[i0*n_vocab + k], sampling.candidates.data[i1*n_vocab + k]);
+            }
+
+            std::swap(sampling.sampled.data[i0],     sampling.sampled.data[i1]);
             std::swap(sampling.logits_count[i0],     sampling.logits_count[i1]);
             std::swap(sampling.probs_count[i0],      sampling.probs_count[i1]);
             std::swap(sampling.candidates_count[i0], sampling.candidates_count[i1]);
@@ -3651,9 +3648,8 @@ llama_context * llama_init_from_model(
                        model->hparams.pooling_type, params.pooling_type);
     }
 
-    if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP && model->has_tensor_parallel_vocab_output() &&
-        !model->tensor_parallel_vocab_output_supports_mtp()) {
-        LLAMA_LOG_ERROR("%s: vocabulary-parallel MTP requires the MTP head to share model.output\n", __func__);
+    if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP && model->has_tensor_parallel_vocab_output()) {
+        LLAMA_LOG_ERROR("%s: MTP context is unsupported with GGML_TP_VOCAB_OUTPUT\n", __func__);
         return nullptr;
     }
 

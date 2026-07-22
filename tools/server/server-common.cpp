@@ -1256,13 +1256,7 @@ json format_response_rerank(
 std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int idx, size_t n_top) {
     std::vector<llama_token_data> cur;
 
-    const float * logits = llama_get_sampled_logits_ith(ctx, idx);
-    if (logits == nullptr) {
-        logits = llama_get_logits_ith(ctx, idx);
-    }
-    if (logits == nullptr) {
-        return {};
-    }
+    const auto * logits = llama_get_logits_ith(ctx, idx);
     const llama_token * sampled_ids = llama_get_sampled_candidates_ith(ctx, idx);
 
     const int n_logits = llama_get_sampled_logits_count_ith(ctx, idx);

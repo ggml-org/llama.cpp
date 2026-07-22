@@ -584,9 +584,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     };
 
     auto get_split_granularity = [&](int64_t blck_size, uint32_t il, const std::vector<std::pair<int64_t, uint32_t>> & segments) -> std::vector<int64_t> {
-        if (ud->model->is_tensor_parallel_output_head(tensor) ||
-                (ud->model->has_tensor_parallel_vocab_output() &&
-                 std::regex_match(tensor_name, pattern_output_weight))) {
+        if (ud->model->is_tensor_parallel_output_head(tensor)) {
             GGML_ASSERT(segments.size() == 1);
             return {std::lcm(blck_size, (int64_t) 128)};
         }
@@ -1840,7 +1838,7 @@ bool llama_model::is_tensor_parallel_vocab_output_head(const ggml_tensor * tenso
             } else {
                 tp_vocab_output_heads.insert(output);
                 LLAMA_LOG_WARN("%s: experimental vocabulary-sharded tensor-parallel LM head %s across %zu devices; "
-                               "backend sampler offload is unsupported\n",
+                               "backend sampling and MTP are unsupported\n",
                     __func__, output->name, ndev);
             }
         }
@@ -1851,18 +1849,6 @@ bool llama_model::is_tensor_parallel_vocab_output_head(const ggml_tensor * tenso
 bool llama_model::has_tensor_parallel_vocab_output() const {
     is_tensor_parallel_vocab_output_head(output);
     return !tp_vocab_output_heads.empty();
-}
-
-bool llama_model::tensor_parallel_vocab_output_supports_mtp() const {
-    if (!has_tensor_parallel_vocab_output()) {
-        return false;
-    }
-    for (const auto & layer : layers) {
-        if (layer.nextn.shared_head_head != nullptr && layer.nextn.shared_head_head != output) {
-            return false;
-        }
-    }
-    return true;
 }
 
 std::map<ggml_backend_buffer_type_t, size_t> llama_model::memory_breakdown() const {

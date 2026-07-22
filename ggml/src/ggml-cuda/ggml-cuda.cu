@@ -1071,62 +1071,46 @@ static bool ggml_backend_cuda_comm_allreduce_nccl(
 }
 
 static bool ggml_backend_cuda_comm_vocab_top_k(
-        void * comm_ctx_ptr, struct ggml_tensor ** tensors, int32_t k, int64_t output_stride,
-        int32_t * ids, float * values) {
+        void * comm_ctx_ptr, struct ggml_tensor ** tensors, int32_t k, int32_t * ids, float * values) {
     auto * comm_ctx = (ggml_backend_cuda_comm_context *) comm_ctx_ptr;
     const size_t n_backends = comm_ctx->backends.size();
     if (n_backends < 2 || n_backends > GGML_CUDA_MAX_DEVICES ||
-            comm_ctx->comms.size() != n_backends || tensors == nullptr || tensors[0] == nullptr ||
-            ids == nullptr || values == nullptr || k <= 0 || k > 256 || output_stride < k) {
+            comm_ctx->comms.size() != n_backends || tensors == nullptr ||
+            ids == nullptr || values == nullptr || k <= 0 || k > 256) {
         return false;
-    }
-    const int64_t nrows = ggml_nrows(tensors[0]);
-    if (nrows <= 0 || nrows > INT32_MAX || output_stride > INT64_MAX/nrows) {
-        return false;
-    }
-    const size_t local_count = (size_t) k*(size_t) nrows;
-    if (local_count > SIZE_MAX/n_backends) {
-        return false;
-    }
-
-    std::vector<int32_t> global_offsets(n_backends);
-    int64_t global_offset = 0;
-    for (size_t i = 0; i < n_backends; ++i) {
-        if (tensors[i] == nullptr || tensors[i]->type != GGML_TYPE_F32 ||
-                !ggml_is_contiguous(tensors[i]) || ggml_nrows(tensors[i]) != nrows ||
-                tensors[i]->ne[0] < k || tensors[i]->ne[0] > INT32_MAX ||
-                global_offset > INT32_MAX - tensors[i]->ne[0]) {
-            return false;
-        }
-        global_offsets[i] = (int32_t) global_offset;
-        global_offset += tensors[i]->ne[0];
     }
 
     ggml_cuda_pool_alloc<uint64_t> packed_dev[GGML_CUDA_MAX_DEVICES];
     ggml_cuda_pool_alloc<uint64_t> gathered_dev[GGML_CUDA_MAX_DEVICES];
+
+    int64_t global_offset = 0;
     for (size_t i = 0; i < n_backends; ++i) {
         auto * cuda_ctx = (ggml_backend_cuda_context *) comm_ctx->backends[i]->context;
         ggml_cuda_set_device(cuda_ctx->device);
-        packed_dev[i].pool = &cuda_ctx->pool();
-        gathered_dev[i].pool = &cuda_ctx->pool();
-        packed_dev[i].alloc(local_count);
-        gathered_dev[i].alloc(n_backends*local_count);
-
-        if (!ggml_cuda_vocab_top_k_device(
-                *cuda_ctx, tensors[i], k, global_offsets[i], packed_dev[i].get())) {
+        if (tensors[i] == nullptr || tensors[i]->type != GGML_TYPE_F32 ||
+                !ggml_is_contiguous(tensors[i]) || ggml_nrows(tensors[i]) != 1 || tensors[i]->ne[0] < k) {
             return false;
         }
+        packed_dev[i].pool = &cuda_ctx->pool();
+        gathered_dev[i].pool = &cuda_ctx->pool();
+        packed_dev[i].alloc(k);
+        gathered_dev[i].alloc(n_backends*k);
+
+        if (!ggml_cuda_vocab_top_k_device(*cuda_ctx, tensors[i], k, global_offset, packed_dev[i].get())) {
+            return false;
+        }
+        global_offset += tensors[i]->ne[0];
     }
 
     NCCL_CHECK(ncclGroupStart());
     for (size_t i = 0; i < n_backends; ++i) {
         auto * cuda_ctx = (ggml_backend_cuda_context *) comm_ctx->backends[i]->context;
-        NCCL_CHECK(ncclAllGather(packed_dev[i].get(), gathered_dev[i].get(), local_count,
+        NCCL_CHECK(ncclAllGather(packed_dev[i].get(), gathered_dev[i].get(), k,
                                  ncclUint64, comm_ctx->comms[i], cuda_ctx->stream()));
     }
     NCCL_CHECK(ncclGroupEnd());
 
-    std::vector<uint64_t> packed_host(n_backends*local_count);
+    std::vector<uint64_t> packed_host(n_backends*k);
     auto * root_ctx = (ggml_backend_cuda_context *) comm_ctx->backends[0]->context;
     ggml_cuda_set_device(root_ctx->device);
     CUDA_CHECK(cudaMemcpyAsync(packed_host.data(), gathered_dev[0].get(), packed_host.size()*sizeof(uint64_t),
@@ -1138,21 +1122,12 @@ static bool ggml_backend_cuda_comm_vocab_top_k(
         CUDA_CHECK(cudaStreamSynchronize(cuda_ctx->stream()));
     }
 
-    std::vector<uint64_t> row_candidates(n_backends*k);
-    for (int64_t row = 0; row < nrows; ++row) {
-        for (size_t rank = 0; rank < n_backends; ++rank) {
-            const uint64_t * src = packed_host.data() + (rank*nrows + row)*k;
-            memcpy(row_candidates.data() + rank*k, src, k*sizeof(uint64_t));
-        }
-        std::partial_sort(row_candidates.begin(), row_candidates.begin() + k,
-                          row_candidates.end(), std::greater<uint64_t>());
-        for (int32_t i = 0; i < k; ++i) {
-            const uint32_t ordered = (uint32_t) (row_candidates[i] >> 32);
-            const uint32_t bits = (ordered & 0x80000000u) ? (ordered ^ 0x80000000u) : ~ordered;
-            const size_t output_index = (size_t) row*(size_t) output_stride + i;
-            memcpy(&values[output_index], &bits, sizeof(float));
-            ids[output_index] = (int32_t) (0xffffffffu - (uint32_t) row_candidates[i]);
-        }
+    std::partial_sort(packed_host.begin(), packed_host.begin() + k, packed_host.end(), std::greater<uint64_t>());
+    for (int32_t i = 0; i < k; ++i) {
+        const uint32_t ordered = (uint32_t) (packed_host[i] >> 32);
+        const uint32_t bits = (ordered & 0x80000000u) ? (ordered ^ 0x80000000u) : ~ordered;
+        memcpy(&values[i], &bits, sizeof(values[i]));
+        ids[i] = (int32_t) (0xffffffffu - (uint32_t) packed_host[i]);
     }
     return true;
 }
