@@ -1598,7 +1598,7 @@ bool llama_model_loader::load_all_data(
                     size_t data_read = 0;  // Actual tensor data copied (excluding padding)
 
                     while (bytes_read < read_end - read_start) {
-                        size_t read_size = std::min<size_t>(LLAMA_FILE_IO_CHUNK_SIZE, read_end - read_start - bytes_read);
+                        size_t read_size = std::min<size_t>(buffer_size, read_end - read_start - bytes_read);
 
                         // Align the destination pointer within the pinned buffer
                         uintptr_t ptr_dest_aligned = (reinterpret_cast<uintptr_t>(host_ptrs[buffer_idx]) + alignment - 1) & ~(alignment - 1);
