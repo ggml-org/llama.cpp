@@ -30,10 +30,11 @@ int llama_download(int argc, char ** argv) {
         return 1;
     }
 
-    const bool has_source = !params.model.hf_repo.empty() || !params.model.url.empty() ||
-                            !params.model.path.empty()    || !params.model.docker_repo.empty();
+    const bool has_source = !params.model.hf_repo.empty() || !params.model.ms_repo.empty() ||
+                            !params.model.url.empty()     || !params.model.path.empty()    ||
+                            !params.model.docker_repo.empty();
     if (!has_source) {
-        fprintf(stderr, "error: no model source specified (use --hf-repo, --model-url, --model or --docker-repo)\n");
+        fprintf(stderr, "error: no model source specified (use --hf-repo, --ms-repo, --model-url, --model or --docker-repo)\n");
         return 1;
     }
 

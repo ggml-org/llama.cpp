@@ -1000,8 +1000,24 @@ std::vector<common_cached_model_info> common_list_cached_models() {
             split.prefix.find("dflash-") != std::string::npos) {
             continue;
         }
-        if (seen.insert(f.repo_id + ":" + split.tag).second) {
-            result.push_back({f.repo_id, split.tag});
+        if (seen.insert("hf:" + f.repo_id + ":" + split.tag).second) {
+            result.push_back({f.repo_id, split.tag, "hf"});
+        }
+    }
+
+    auto ms_files = ms_cache::get_cached_files();
+
+    for (const auto & f : ms_files) {
+        auto split = get_gguf_split_info(f.path);
+        if (split.index != 1 || split.tag.empty() ||
+            split.prefix.find("mmproj")  != std::string::npos ||
+            split.prefix.find("mtp-")    != std::string::npos ||
+            split.prefix.find("eagle3-") != std::string::npos ||
+            split.prefix.find("dflash-") != std::string::npos) {
+            continue;
+        }
+        if (seen.insert("ms:" + f.repo_id + ":" + split.tag).second) {
+            result.push_back({f.repo_id, split.tag, "ms"});
         }
     }
 
@@ -1014,7 +1030,10 @@ bool common_download_remove(const std::string & hf_repo_with_tag) {
     auto [repo_id, tag] = common_download_split_repo_tag(hf_repo_with_tag);
 
     if (tag.empty()) {
-        return hf_cache::remove_cached_repo(repo_id);
+        if (hf_cache::remove_cached_repo(repo_id)) {
+            return true;
+        }
+        return ms_cache::remove_cached_repo(repo_id);
     }
 
     std::string tag_upper = tag;
@@ -1022,72 +1041,88 @@ bool common_download_remove(const std::string & hf_repo_with_tag) {
         c = (char) std::toupper((unsigned char) c);
     }
 
-    auto files = hf_cache::get_cached_files(repo_id);
-    if (files.empty()) {
-        return false;
-    }
-
-    // collect snapshot entries whose tag matches
-    std::vector<fs::path> to_remove;
-    for (const auto & f : files) {
-        auto split = get_gguf_split_info(f.path);
-        if (split.tag == tag_upper) {
-            to_remove.emplace_back(f.local_path);
-        }
-    }
-
-    if (to_remove.empty()) {
-        return false;
-    }
-
-    // resolve blob paths from symlinks before deleting snapshot entries
-    std::vector<fs::path> blobs_to_check;
-    for (const auto & p : to_remove) {
-        std::error_code ec;
-        if (fs::is_symlink(p, ec)) {
-            auto target = fs::read_symlink(p, ec);
-            if (!ec) {
-                blobs_to_check.push_back((p.parent_path() / target).lexically_normal());
+    // try removing from a cache source (HF or MS), returns true if any file was removed
+    auto remove_from_cache = [&tag_upper](const auto & files, const std::string & repo_id, bool is_ms) -> bool {
+        // collect snapshot entries whose tag matches
+        std::vector<fs::path> to_remove;
+        for (const auto & f : files) {
+            auto split = get_gguf_split_info(f.path);
+            if (split.tag == tag_upper) {
+                to_remove.emplace_back(f.local_path);
             }
         }
-    }
 
-    // remove snapshot entries
-    for (const auto & p : to_remove) {
-        std::error_code ec;
-        fs::remove(p, ec);
-        if (ec) {
-            LOG_WRN("%s: failed to remove %s: %s\n", __func__, p.string().c_str(), ec.message().c_str());
+        if (to_remove.empty()) {
+            return false;
         }
-    }
 
-    if (blobs_to_check.empty()) {
-        return true;
-    }
-
-    // collect blobs still referenced by remaining snapshot entries
-    std::unordered_set<std::string> still_referenced;
-    for (const auto & f : hf_cache::get_cached_files(repo_id)) {
-        fs::path p(f.local_path);
-        std::error_code ec;
-        if (fs::is_symlink(p, ec)) {
-            auto target = fs::read_symlink(p, ec);
-            if (!ec) {
-                still_referenced.insert((p.parent_path() / target).lexically_normal().string());
-            }
-        }
-    }
-
-    // remove orphaned blobs
-    for (const auto & blob : blobs_to_check) {
-        if (still_referenced.find(blob.string()) == still_referenced.end()) {
+        // resolve blob paths from symlinks before deleting snapshot entries
+        std::vector<fs::path> blobs_to_check;
+        for (const auto & p : to_remove) {
             std::error_code ec;
-            fs::remove(blob, ec);
-            if (ec) {
-                LOG_WRN("%s: failed to remove blob %s: %s\n", __func__, blob.string().c_str(), ec.message().c_str());
+            if (fs::is_symlink(p, ec)) {
+                auto target = fs::read_symlink(p, ec);
+                if (!ec) {
+                    blobs_to_check.push_back((p.parent_path() / target).lexically_normal());
+                }
             }
         }
-    }
 
-    return true;
+        // remove snapshot entries
+        for (const auto & p : to_remove) {
+            std::error_code ec;
+            fs::remove(p, ec);
+            if (ec) {
+                LOG_WRN("%s: failed to remove %s: %s\n", __func__, p.string().c_str(), ec.message().c_str());
+            }
+        }
+
+        if (blobs_to_check.empty()) {
+            return true;
+        }
+
+        // collect blobs still referenced by remaining snapshot entries
+        std::unordered_set<std::string> still_referenced;
+        if (is_ms) {
+            for (const auto & f : ms_cache::get_cached_files(repo_id)) {
+                fs::path p(f.local_path);
+                std::error_code ec;
+                if (fs::is_symlink(p, ec)) {
+                    auto target = fs::read_symlink(p, ec);
+                    if (!ec) {
+                        still_referenced.insert((p.parent_path() / target).lexically_normal().string());
+                    }
+                }
+            }
+        } else {
+            for (const auto & f : hf_cache::get_cached_files(repo_id)) {
+                fs::path p(f.local_path);
+                std::error_code ec;
+                if (fs::is_symlink(p, ec)) {
+                    auto target = fs::read_symlink(p, ec);
+                    if (!ec) {
+                        still_referenced.insert((p.parent_path() / target).lexically_normal().string());
+                    }
+                }
+            }
+        }
+
+        // remove orphaned blobs
+        for (const auto & blob : blobs_to_check) {
+            if (still_referenced.find(blob.string()) == still_referenced.end()) {
+                std::error_code ec;
+                fs::remove(blob, ec);
+                if (ec) {
+                    LOG_WRN("%s: failed to remove blob %s: %s\n", __func__, blob.string().c_str(), ec.message().c_str());
+                }
+            }
+        }
+
+        return true;
+    };
+
+    bool hf_removed = remove_from_cache(hf_cache::get_cached_files(repo_id), repo_id, false);
+    bool ms_removed = remove_from_cache(ms_cache::get_cached_files(repo_id), repo_id, true);
+
+    return hf_removed || ms_removed;
 }
