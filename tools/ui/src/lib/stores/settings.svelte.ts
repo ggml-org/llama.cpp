@@ -400,22 +400,25 @@ class SettingsStore {
 			this.userOverrides.delete(key);
 		}
 
-		// Non-syncable ui settings (theme, api key, custom css...) are part of
-		// the admin baseline too: an explicit reset reapplies them all.
-		if (uiSettings) {
-			for (const [key, value] of Object.entries(uiSettings)) {
-				if (ParameterSyncService.canSyncParameter(key) || value === undefined) {
-					continue;
-				}
-
-				setConfigValue(this.config, key, value);
-
-				if (key === SETTINGS_KEYS.THEME) {
-					setMode(value as ColorMode);
-				}
-
-				this.userOverrides.delete(key);
+		// Non-syncable keys: reset is a full return to the instance state, the
+		// admin baseline value when defined, the factory default otherwise.
+		for (const key of Object.keys(SETTING_CONFIG_DEFAULT)) {
+			if (ParameterSyncService.canSyncParameter(key)) {
+				continue;
 			}
+
+			const value =
+				uiSettings && key in uiSettings && uiSettings[key] !== undefined
+					? uiSettings[key]
+					: getConfigValue(SETTING_CONFIG_DEFAULT, key);
+
+			setConfigValue(this.config, key, value);
+
+			if (key === SETTINGS_KEYS.THEME) {
+				setMode(value as ColorMode);
+			}
+
+			this.userOverrides.delete(key);
 		}
 
 		this.saveConfig();
