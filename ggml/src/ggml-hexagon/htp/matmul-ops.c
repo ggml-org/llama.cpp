@@ -15,6 +15,7 @@
 #include "hvx-utils.h"
 #include "hvx-dump.h"
 #include "hvx-arith.h"
+#include "hvx-reduce.h"
 
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
@@ -83,6 +84,8 @@ struct htp_mm_context {
 
     // Precomputed values
     uint32_t src0_nrows_per_thread;
+    uint32_t src0_row_size_padded;
+    uint32_t src1_nrows;
 
     struct fastdiv_values mm_div_ne12_ne1;
     struct fastdiv_values mm_div_ne1;
@@ -104,6 +107,7 @@ struct htp_mm_context {
     // Fields for scattered mapping & HMX support in MUL_MAT_ID
     const uint32_t * matrix_row_counts;
     const struct mmid_row_mapping * matrix_rows;
+    uint32_t mapping_stride;
 
     // Dynamic VTCM pointers allocated sequentially
     uint8_t * vtcm_src0;
@@ -154,8 +158,6 @@ static const uint8_t __attribute__((aligned(VLEN))) kvalues_mxfp4_lut[] = {
     0,    0, 0,    0, 0,    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0, 0,    0, 0,    0, 0,    0, 0,    0,
     0,    0, 0,    0, 0,    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,  0, 0, 0, 0,    0, 0,    0, 0,    0,
 };
-
-
 
 #define htp_matmul_tensors_preamble                                 \
     const struct htp_tensor * restrict src0 = octx->src[0];         \
@@ -1141,7 +1143,7 @@ static void hvx_mv_2d(unsigned int nth, unsigned int ith, void * data) {
     }
 }
 
-#define MMID_MATRIX_ROW(row_id, i1) matrix_rows[(row_id) * ids->ne[0] * ids->ne[1] + (i1)]
+#define MMID_MATRIX_ROW(row_id, i1) matrix_rows[(row_id) * mmctx->mapping_stride + (i1)]
 
 static void hvx_mm_id(unsigned int nth, unsigned int ith, void * data) {
     htp_matmul_preamble;
@@ -3346,12 +3348,10 @@ int op_matmul(struct htp_ops_context * octx) {
 
 static int hmx_mm_op_matmul_id(
     struct htp_ops_context * octx,
-    struct htp_mm_context * mmctx,
-    const uint32_t * matrix_row_counts,
-    const struct mmid_row_mapping * matrix_rows,
-    void * mapping_buf,
-    bool must_free_mapping
+    struct htp_mm_context * mmctx
 ) {
+    const uint32_t *                matrix_row_counts = mmctx->matrix_row_counts;
+    const struct mmid_row_mapping * matrix_rows       = mmctx->matrix_rows;
     htp_matmul_tensors_preamble;
     const struct htp_mm_kernel_params * kparams = (const struct htp_mm_kernel_params *) octx->kernel_params;
     const int n_ids = octx->src[2]->ne[0];
@@ -3369,28 +3369,24 @@ static int hmx_mm_op_matmul_id(
                                    nb11, nb12,
                                    nb1, nb2,
                                    (int) src0->nb[1], (int) src0->type,
-                                   matrix_rows, cur_a, n_ids * octx->src[2]->ne[1]);
+                                   matrix_rows, cur_a, mmctx->mapping_stride);
         if (ret != 0) {
             FARF(ERROR, "HMX matmul failed for expert %u, error %d\n", cur_a, ret);
-            if (must_free_mapping) free(mapping_buf);
             return HTP_STATUS_NO_SUPPORT;
         }
     }
 
-    if (must_free_mapping) free(mapping_buf);
     return HTP_STATUS_OK;
 }
 
 static int hvx_mm_matmul_id(
     struct htp_ops_context * octx,
     struct htp_mm_context * mmctx,
-    size_t src0_row_size_padded,
-    uint32_t src1_nrows,
-    worker_callback_t matmul_id_job_func,
-    void * mapping_buf,
-    bool must_free_mapping
+    work_queue_func_t hvx_mmid_task_func
 ) {
     htp_matmul_tensors_preamble;
+    const uint32_t src0_row_size_padded = mmctx->src0_row_size_padded;
+    const uint32_t src1_nrows           = mmctx->src1_nrows;
 
     struct htp_thread_trace * tr = &octx->ctx->trace[0];
     htp_trace_event_start(tr, HTP_TRACE_EVT_INIT, 0);
@@ -3403,7 +3399,7 @@ static int hvx_mm_matmul_id(
     const uint32_t nb = (ne10 + qk - 1) / qk;
     const uint32_t total_nb = src1_nrows * nb;
 
-    worker_callback_t quant_task_func;
+    work_queue_func_t quant_task_func;
     uint32_t n_quant_tasks = 1;
     if (src1_nrows < octx->n_threads) {
         n_quant_tasks = MIN(total_nb, octx->n_threads);
@@ -3439,7 +3435,6 @@ static int hvx_mm_matmul_id(
     // Make sure the reserved vtcm size is sufficient
     if (octx->ctx->vtcm_size < vtcm_size) {
         FARF(ERROR, "matmul-id-%s : current VTCM reservation %zu is too small, needed %zu\n", mmctx->type, octx->ctx->vtcm_size, vtcm_size);
-        if (must_free_mapping) free(mapping_buf);
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
 
@@ -3469,10 +3464,58 @@ static int hvx_mm_matmul_id(
 
     htp_trace_event_stop(tr, HTP_TRACE_EVT_INIT, 0);
 
-    worker_pool_run_func(octx->ctx->worker_pool, matmul_id_job_func, mmctx, octx->n_threads);
+    worker_pool_run_func(octx->ctx->worker_pool, hvx_mmid_task_func, mmctx, octx->n_threads);
 
-    if (must_free_mapping) free(mapping_buf);
     return HTP_STATUS_OK;
+}
+
+static inline void scan_expert_ids(
+    const struct htp_tensor * ids,
+    uint32_t n_ids,
+    uint32_t n_as,
+    uint32_t * counts,
+    struct mmid_row_mapping * matrix_rows,
+    uint32_t mapping_stride
+) {
+    const size_t ids_nb1 = ids->nb[1];
+    const size_t ids_nb0 = ids->nb[0];
+    const uint8_t * ids_data = (const uint8_t *) ids->data;
+
+    if (ids_nb0 == 4) {
+        // Contiguous expert IDs
+        for (uint32_t iid1 = 0; iid1 < ids->ne[1]; ++iid1) {
+            const int32_t * row_ptr = (const int32_t *) (ids_data + iid1 * ids_nb1);
+            for (uint32_t id = 0; id < n_ids; ++id) {
+                const int32_t i02 = row_ptr[id];
+                if (i02 < 0) {
+                    continue;
+                }
+                assert(i02 < n_as);
+
+                if (matrix_rows) {
+                    matrix_rows[i02 * mapping_stride + counts[i02]] = (struct mmid_row_mapping) { id, iid1 };
+                }
+                counts[i02] += 1;
+            }
+        }
+    } else {
+        // Strided fallback
+        for (uint32_t iid1 = 0; iid1 < ids->ne[1]; ++iid1) {
+            const int32_t * row_ptr = (const int32_t *) (ids_data + iid1 * ids_nb1);
+            for (uint32_t id = 0; id < n_ids; ++id) {
+                const int32_t i02 = *(const int32_t *) ((const uint8_t *) row_ptr + id * ids_nb0);
+                if (i02 < 0) {
+                    continue;
+                }
+                assert(i02 < n_as);
+
+                if (matrix_rows) {
+                    matrix_rows[i02 * mapping_stride + counts[i02]] = (struct mmid_row_mapping) { id, iid1 };
+                }
+                counts[i02] += 1;
+            }
+        }
+    }
 }
 
 int op_matmul_id(struct htp_ops_context * octx) {
@@ -3497,74 +3540,72 @@ int op_matmul_id(struct htp_ops_context * octx) {
     const uint32_t src0_nrows = ne01;  // per expert
     const uint32_t src1_nrows = ne11 * ne12 * ne13;
 
-    worker_callback_t quant_task_func;
-    worker_callback_t matmul_id_job_func = src1_nrows > 1 ? hvx_mm_id : hvx_mv_id;
-
-    // Compute src0_nrows_per_thread
-    mmctx->src0_nrows_per_thread  = (src0_nrows + octx->n_threads - 1) / octx->n_threads;
-    mmctx->src0_nrows_per_thread  = hex_round_up(mmctx->src0_nrows_per_thread, 32);
+    mmctx->src0_nrows_per_thread = (src0_nrows + octx->n_threads - 1) / octx->n_threads;
+    mmctx->src0_nrows_per_thread = hex_round_up(mmctx->src0_nrows_per_thread, 32);
 
     // row groups
     const int n_ids = ids->ne[0];  // n_expert_used
     const int n_as  = ne02;        // n_expert
 
-    size_t matrix_row_counts_size = n_as * sizeof(uint32_t);
-    size_t matrix_row_map_size    = n_as * ids->ne[0] * ids->ne[1] * sizeof(struct mmid_row_mapping);
-    const size_t total_map_size   = matrix_row_counts_size + matrix_row_map_size;
-
-    void * mapping_buf = NULL;
-    bool must_free_mapping = false;
-
-    if (octx->ctx->ddr_spad_base && total_map_size <= octx->ctx->ddr_spad_size) {
-        mapping_buf = octx->ctx->ddr_spad_base;
-    } else {
-        mapping_buf = memalign(128, total_map_size);
-        if (mapping_buf) {
-            must_free_mapping = true;
-        } else {
-            return HTP_STATUS_INTERNAL_ERR;
-        }
-    }
-
-    uint32_t *                matrix_row_counts = (uint32_t *) mapping_buf;
-    struct mmid_row_mapping * matrix_rows       = (struct mmid_row_mapping *) ((uint8_t *) mapping_buf + matrix_row_counts_size);
-
-    mmctx->matrix_row_counts = matrix_row_counts;
-    mmctx->matrix_rows       = matrix_rows;
-    mmctx->mm_div_ne11       = kparams->div_ne11;
-
-    if (hvx_mm_init_vec_dot(mmctx, src0->type) != 0) {
-        if (must_free_mapping) free(mapping_buf);
-        return HTP_STATUS_NO_SUPPORT;
-    }
+    uint8_t  * mapping_buf       = octx->ctx->ddr_spad_base;
+    uint32_t   mapping_stride    = 1;
+    uint32_t * matrix_row_counts = (uint32_t *) mapping_buf;
+    struct mmid_row_mapping * matrix_rows = NULL;
 
     if (src1_nrows > 1) {
-        // initialize matrix_row_counts and map
-        memset(matrix_row_counts, 0, n_as * sizeof(uint32_t));
+        const size_t matrix_row_counts_size = n_as * sizeof(uint32_t);
+        assert(octx->ctx->ddr_spad_size >= matrix_row_counts_size);
 
-        // group rows by src0 matrix
-        for (uint32_t iid1 = 0; iid1 < ids->ne[1]; ++iid1) {  // token idx
-            for (uint32_t id = 0; id < n_ids; ++id) {         // expert idx
-                const int32_t i02 = *(const int32_t *) ((const uint8_t *) ids->data + iid1 * ids->nb[1] + id * ids->nb[0]);
+        memset(matrix_row_counts, 0, matrix_row_counts_size);
 
-                if (i02 < 0) {
-                    continue;
-                }
-                assert(i02 < n_as);
+        hex_l2fetch_block((const void *) ids->data, ids->ne[1] * ids->nb[1]);
+        scan_expert_ids(ids, n_ids, n_as, matrix_row_counts, NULL, 0);
 
-                matrix_rows[i02 * n_ids * ids->ne[1] + matrix_row_counts[i02]] = (struct mmid_row_mapping) { id, iid1 };
-                matrix_row_counts[i02] += 1;
+        uint32_t max_count = hvx_reduce_max_i32((const uint8_t *) matrix_row_counts, n_as);
+        mapping_stride = max_count > 0 ? max_count : 1;
+
+        size_t matrix_row_map_size  = n_as * mapping_stride * sizeof(struct mmid_row_mapping);
+        const size_t total_map_size = matrix_row_counts_size + matrix_row_map_size;
+
+        if (total_map_size > octx->ctx->ddr_spad_size) {
+            mapping_buf = memalign(128, total_map_size);
+            if (!mapping_buf) {
+                return HTP_STATUS_INTERNAL_ERR;
             }
         }
+
+        matrix_row_counts = (uint32_t *) mapping_buf;
+        matrix_rows       = (struct mmid_row_mapping *) (mapping_buf + matrix_row_counts_size);
+
+        memset(matrix_row_counts, 0, n_as * sizeof(uint32_t));
+        scan_expert_ids(ids, n_ids, n_as, matrix_row_counts, matrix_rows, mapping_stride);
     }
+
+    mmctx->matrix_row_counts    = matrix_row_counts;
+    mmctx->matrix_rows          = matrix_rows;
+    mmctx->mapping_stride       = mapping_stride;
+    mmctx->mm_div_ne11          = kparams->div_ne11;
+    mmctx->src0_row_size_padded = src0_row_size_padded;
+    mmctx->src1_nrows           = src1_nrows;
 
     htp_trace_event_stop(tr, HTP_TRACE_EVT_INIT, 0);
 
+    int s;
     if (kparams->n_hmx) {
-        return hmx_mm_op_matmul_id(octx, mmctx, matrix_row_counts, matrix_rows, mapping_buf, must_free_mapping);
+        s = hmx_mm_op_matmul_id(octx, mmctx);
+    } else {
+        if (hvx_mm_init_vec_dot(mmctx, src0->type) == 0) {
+            s = hvx_mm_matmul_id(octx, mmctx, src1_nrows > 1 ? hvx_mm_id : hvx_mv_id);
+        } else {
+            s = HTP_STATUS_NO_SUPPORT;
+        }
     }
 
-    return hvx_mm_matmul_id(octx, mmctx, src0_row_size_padded, src1_nrows, matmul_id_job_func, mapping_buf, must_free_mapping);
+    if (mapping_buf != octx->ctx->ddr_spad_base) {
+        free(mapping_buf);
+    }
+
+    return s;
 }
 
 int op_matmul_qkv(struct htp_ops_context * octx) {
