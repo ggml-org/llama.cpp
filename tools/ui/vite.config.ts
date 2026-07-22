@@ -9,6 +9,7 @@ import { storybookTest } from '@storybook/addon-vitest/vitest-plugin';
 import { splashScreenPlugin } from './scripts/vite-plugin-splash-screen';
 import { buildInfoPlugin } from './scripts/vite-plugin-build-info';
 import { relativizeBasePlugin } from './scripts/vite-plugin-relativize-base';
+import { nerdamerPlugin } from './scripts/vite-plugin-nerdamer';
 import { playwright } from '@vitest/browser-playwright';
 import { SVELTEKIT_PWA_OPTIONS } from './src/lib/constants/pwa';
 
@@ -46,6 +47,7 @@ export default defineConfig({
 		SvelteKitPWA(SVELTEKIT_PWA_OPTIONS),
 		splashScreenPlugin(),
 		buildInfoPlugin(),
+		nerdamerPlugin(),
 		relativizeBasePlugin()
 	],
 
