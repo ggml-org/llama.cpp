@@ -479,6 +479,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.e_score_correction",                    # exaone-moe
             "model.layers.{bid}.block_sparse_moe.gate.e_score_correction",  # kimi
             "model.layers.{bid}.moe.router_bias",                           # step3.5 expert selection bias
+            "model.layers.{bid}.mlp.experts.e_score_correction",       # laguna
         ),
 
         # Feed-forward up
