@@ -7,12 +7,11 @@
 	import { untrack } from 'svelte';
 	import { onMount } from 'svelte';
 
-	import { SidebarNavigation, DialogConversationTitleUpdate } from '$lib/components/app';
+	import { SidebarNavigation } from '$lib/components/app';
 	import { PwaMetaTags, PwaRefreshAlert } from '$lib/components/pwa';
 	import { pwaAssetsHead } from 'virtual:pwa-assets/head';
 
 	import { chatStore } from '$lib/stores/chat.svelte';
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { isRouterMode, serverStore } from '$lib/stores/server.svelte';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
@@ -45,11 +44,6 @@
 		| undefined = $state();
 
 	let showBuildVersion = $derived(config()[SETTINGS_KEYS.SHOW_BUILD_VERSION] as boolean);
-
-	let titleUpdateDialogOpen = $state(false);
-	let titleUpdateCurrentTitle = $state('');
-	let titleUpdateNewTitle = $state('');
-	let titleUpdateResolve: ((value: boolean) => void) | null = null;
 
 	// Keep the hook object intact: destructuring needRefreshByStorage reads the getter once and freezes it
 	const pwa = usePwa();
@@ -133,24 +127,6 @@
 					});
 			}
 		});
-	}
-
-	function handleTitleUpdateCancel() {
-		titleUpdateDialogOpen = false;
-
-		if (titleUpdateResolve) {
-			titleUpdateResolve(false);
-			titleUpdateResolve = null;
-		}
-	}
-
-	function handleTitleUpdateConfirm() {
-		titleUpdateDialogOpen = false;
-
-		if (titleUpdateResolve) {
-			titleUpdateResolve(true);
-			titleUpdateResolve = null;
-		}
 	}
 
 	onMount(() => {
@@ -264,20 +240,6 @@
 	$effect(() => {
 		checkApiKey();
 	});
-
-	// Set up title update confirmation callback
-	$effect(() => {
-		conversationsStore.setTitleUpdateConfirmationCallback(
-			async (currentTitle: string, newTitle: string) => {
-				return new Promise<boolean>((resolve) => {
-					titleUpdateCurrentTitle = currentTitle;
-					titleUpdateNewTitle = newTitle;
-					titleUpdateResolve = resolve;
-					titleUpdateDialogOpen = true;
-				});
-			}
-		);
-	});
 </script>
 
 <svelte:head>
@@ -319,14 +281,6 @@
 	<ModeWatcher />
 
 	<Toaster richColors />
-
-	<DialogConversationTitleUpdate
-		bind:open={titleUpdateDialogOpen}
-		currentTitle={titleUpdateCurrentTitle}
-		newTitle={titleUpdateNewTitle}
-		onConfirm={handleTitleUpdateConfirm}
-		onCancel={handleTitleUpdateCancel}
-	/>
 </Tooltip.Provider>
 
 <!-- PWA update prompt + version -->

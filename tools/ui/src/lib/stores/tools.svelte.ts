@@ -5,7 +5,7 @@ import { HealthCheckStatus, JsonSchemaType, ToolCallType, ToolSource } from '$li
 import { config } from '$lib/stores/settings.svelte';
 import {
 	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
-	SANDBOX_TOOL_DEFINITION,
+	buildSandboxToolDefinition,
 	TOOL_GROUP_LABELS,
 	TOOL_SERVER_LABELS
 } from '$lib/constants';
@@ -143,7 +143,9 @@ class ToolsStore {
 	}
 
 	get frontendTools(): OpenAIToolDefinition[] {
-		return config().jsSandboxEnabled ? [SANDBOX_TOOL_DEFINITION] : [];
+		return config().jsSandboxEnabled
+			? [buildSandboxToolDefinition(!!config().symbolicMathEnabled)]
+			: [];
 	}
 
 	get customTools(): OpenAIToolDefinition[] {

@@ -138,6 +138,24 @@ static void scale_f32(const float * restrict src,
     }
 }
 
+static void clamp_f32(const float * restrict src,
+                      float * restrict dst,
+                      const uint32_t num_rows,
+                      const struct htp_unary_context * uctx) {
+    htp_unary_op_preamble;
+    float min = 0.f;
+    float max = 0.f;
+    memcpy(&min, &op_params[0], sizeof(float));
+    memcpy(&max, &op_params[1], sizeof(float));
+
+    for (uint32_t ir = 0; ir < num_rows; ir++) {
+        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * src0_row_size_aligned);
+        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
+
+        hvx_clamp_scalar_f32(dst_local, src_local, min, max, ne0);
+    }
+}
+
 static void rms_norm_f32(const float * restrict src,
                          float * restrict dst,
                          const uint32_t num_rows,
@@ -255,6 +273,39 @@ static void sigmoid_f32(const float * restrict src,
         uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
 
         hvx_sigmoid_f32_aa(dst_local, src_local, ne0);
+    }
+}
+
+// silu(x) = x * sigmoid(x)
+static void silu_f32(const float * restrict src,
+                     float * restrict dst,
+                     const uint32_t num_rows,
+                     const struct htp_unary_context * uctx) {
+    htp_unary_op_preamble;
+
+    for (uint32_t ir = 0; ir < num_rows; ir++) {
+        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * src0_row_size_aligned);
+        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
+
+        hvx_sigmoid_f32_aa(dst_local, src_local, ne0);
+        hvx_mul_f32_aaa(dst_local, src_local, dst_local, ne0);
+    }
+}
+
+// gelu(x) = x * sigmoid(1.702 * x)  (quick/sigmoid approximation, matches CPU GELU_QUICK reference)
+static void gelu_f32(const float * restrict src,
+                     float * restrict dst,
+                     const uint32_t num_rows,
+                     const struct htp_unary_context * uctx) {
+    htp_unary_op_preamble;
+
+    for (uint32_t ir = 0; ir < num_rows; ir++) {
+        const uint8_t * restrict src_local = (const uint8_t *)src + (ir * src0_row_size_aligned);
+        uint8_t * restrict dst_local       = (uint8_t *)dst + (ir * dst_row_size_aligned);
+
+        hvx_mul_scalar_f32(dst_local, src_local, 1.702f, ne0);
+        hvx_sigmoid_f32_aa(dst_local, dst_local, ne0);
+        hvx_mul_f32_aaa(dst_local, src_local, dst_local, ne0);
     }
 }
 
@@ -542,11 +593,14 @@ DEFINE_UNARY_TASK(norm,           false, false, norm_f32(src0_vtcm, dst_vtcm, bl
 DEFINE_UNARY_TASK(rms_norm,       false, false, rms_norm_f32(src0_vtcm, dst_vtcm, block_size, uctx))
 DEFINE_UNARY_TASK(rms_norm_mul,   true,  false, rms_norm_mul_f32(src0_vtcm, uctx->broadcast_weight ? (const float *) src1_vtcm_data : src1_vtcm, dst_vtcm, block_size, uctx))
 DEFINE_UNARY_TASK(scale,          false, false, scale_f32(src0_vtcm, dst_vtcm, block_size, uctx))
+DEFINE_UNARY_TASK(clamp,          false, false, clamp_f32(src0_vtcm, dst_vtcm, block_size, uctx))
 DEFINE_UNARY_TASK(sqr,            false, false, sqr_f32(src0_vtcm, dst_vtcm, block_size, uctx))
 DEFINE_UNARY_TASK(sqrt,           false, false, sqrt_f32(src0_vtcm, dst_vtcm, block_size, uctx))
 DEFINE_UNARY_TASK(unary_neg,      false, false, neg_f32(src0_vtcm, dst_vtcm, block_size, uctx))
 DEFINE_UNARY_TASK(unary_exp,      false, false, exp_f32(src0_vtcm, dst_vtcm, block_size, uctx))
 DEFINE_UNARY_TASK(unary_sigmoid,  false, false, sigmoid_f32(src0_vtcm, dst_vtcm, block_size, uctx))
+DEFINE_UNARY_TASK(unary_silu,     false, false, silu_f32(src0_vtcm, dst_vtcm, block_size, uctx))
+DEFINE_UNARY_TASK(unary_gelu,     false, false, gelu_f32(src0_vtcm, dst_vtcm, block_size, uctx))
 DEFINE_UNARY_TASK(unary_softplus, false, false, softplus_f32(src0_vtcm, dst_vtcm, block_size, uctx))
 DEFINE_UNARY_TASK(unary_tanh,     false, false, tanh_f32(src0_vtcm, dst_vtcm, block_size, uctx))
 DEFINE_UNARY_TASK(l2_norm,        false, false, l2_norm_f32(src0_vtcm, dst_vtcm, block_size, uctx))
@@ -681,6 +735,14 @@ static inline void tile_scale_f32(uint8_t * dst_vtcm, const uint8_t * src_vtcm, 
     hvx_scale_offset_f32_aa(dst_vtcm, src_vtcm, tw, scale, bias);
 }
 
+static inline void tile_clamp_f32(uint8_t * dst_vtcm, const uint8_t * src_vtcm, uint32_t tw, const int32_t * op_params) {
+    float min = 0.f;
+    float max = 0.f;
+    memcpy(&min, &op_params[0], sizeof(float));
+    memcpy(&max, &op_params[1], sizeof(float));
+    hvx_clamp_scalar_f32(dst_vtcm, src_vtcm, min, max, tw);
+}
+
 static inline void tile_unary_softplus_f32(uint8_t * dst_vtcm, const uint8_t * src_vtcm, uint32_t tw) {
     const float * restrict sf = (const float *) src_vtcm;
     float * restrict df       = (float *) dst_vtcm;
@@ -688,6 +750,19 @@ static inline void tile_unary_softplus_f32(uint8_t * dst_vtcm, const uint8_t * s
         float x = sf[i];
         df[i] = (x > 20.0f) ? x : logf(1.0f + expf(x));
     }
+}
+
+// silu(x) = x * sigmoid(x)
+static inline void tile_silu_f32(uint8_t * dst_vtcm, const uint8_t * src_vtcm, uint32_t tw) {
+    hvx_sigmoid_f32_aa(dst_vtcm, src_vtcm, tw);
+    hvx_mul_f32_aaa(dst_vtcm, src_vtcm, dst_vtcm, tw);
+}
+
+// gelu(x) = x * sigmoid(1.702 * x)  (quick/sigmoid approximation, matches CPU GELU_QUICK reference)
+static inline void tile_gelu_f32(uint8_t * dst_vtcm, const uint8_t * src_vtcm, uint32_t tw) {
+    hvx_mul_scalar_f32(dst_vtcm, src_vtcm, 1.702f, tw);
+    hvx_sigmoid_f32_aa(dst_vtcm, dst_vtcm, tw);
+    hvx_mul_f32_aaa(dst_vtcm, src_vtcm, dst_vtcm, tw);
 }
 
 // Triangular mask applied to one column tile. Boundary is an absolute column index, so
@@ -765,11 +840,14 @@ static inline void tri_apply_tile_f32(const uint8_t * restrict src, uint8_t * re
 }
 
 DEFINE_UNARY_TILED_TASK(scale,          false, tile_scale_f32(dst_vtcm, src_vtcm, tw, op_params))
+DEFINE_UNARY_TILED_TASK(clamp,          false, tile_clamp_f32(dst_vtcm, src_vtcm, tw, op_params))
 DEFINE_UNARY_TILED_TASK(sqr,            false, hvx_sqr_f32_aa(dst_vtcm, src_vtcm, tw))
 DEFINE_UNARY_TILED_TASK(sqrt,           false, hvx_sqrt_f32_aa(dst_vtcm, src_vtcm, tw))
 DEFINE_UNARY_TILED_TASK(unary_neg,      false, hvx_scale_f32_aa(dst_vtcm, src_vtcm, tw, -1.0f))
 DEFINE_UNARY_TILED_TASK(unary_exp,      false, hvx_exp_f32(dst_vtcm, src_vtcm, tw, false))
 DEFINE_UNARY_TILED_TASK(unary_sigmoid,  false, hvx_sigmoid_f32_aa(dst_vtcm, src_vtcm, tw))
+DEFINE_UNARY_TILED_TASK(unary_silu,     false, tile_silu_f32(dst_vtcm, src_vtcm, tw))
+DEFINE_UNARY_TILED_TASK(unary_gelu,     false, tile_gelu_f32(dst_vtcm, src_vtcm, tw))
 DEFINE_UNARY_TILED_TASK(unary_softplus, false, tile_unary_softplus_f32(dst_vtcm, src_vtcm, tw))
 DEFINE_UNARY_TILED_TASK(unary_tanh,     false, hvx_tanh_f32_aa(dst_vtcm, src_vtcm, tw))
 DEFINE_UNARY_TILED_TASK(tri,            true,  tri_apply_tile_f32(src_vtcm, dst_vtcm, tw, col, i01, ne0, tri_ttype))
@@ -787,11 +865,14 @@ static int execute_op_unary_f32(struct htp_ops_context * octx) {
         case HTP_OP_RMS_NORM:        op_type = "rmsnorm-f32";      break;
         case HTP_OP_RMS_NORM_MUL:    op_type = "rmsnorm-mul-f32";  break;
         case HTP_OP_SCALE:           op_type = "scale-f32";        break;
+        case HTP_OP_CLAMP:           op_type = "clamp-f32";        break;
         case HTP_OP_SQR:             op_type = "sqr-f32";          break;
         case HTP_OP_SQRT:            op_type = "sqrt-f32";         break;
         case HTP_OP_UNARY_NEG:       op_type = "neg-f32";          break;
         case HTP_OP_UNARY_EXP:       op_type = "exp-f32";          break;
         case HTP_OP_UNARY_SIGMOID:   op_type = "sigmoid-f32";      break;
+        case HTP_OP_UNARY_SILU:      op_type = "silu-f32";         break;
+        case HTP_OP_UNARY_GELU:      op_type = "gelu-f32";         break;
         case HTP_OP_UNARY_SOFTPLUS:  op_type = "softplus-f32";     break;
         case HTP_OP_UNARY_TANH:      op_type = "tanh-f32";         break;
         case HTP_OP_L2_NORM:         op_type = "l2norm-f32";       break;
@@ -882,11 +963,14 @@ static int execute_op_unary_f32(struct htp_ops_context * octx) {
         if (col_tile) {
             switch (octx->op) {
                 case HTP_OP_SCALE:           task_func = unary_task_f32_tiled_scale;          break;
+                case HTP_OP_CLAMP:           task_func = unary_task_f32_tiled_clamp;          break;
                 case HTP_OP_SQR:             task_func = unary_task_f32_tiled_sqr;            break;
                 case HTP_OP_SQRT:            task_func = unary_task_f32_tiled_sqrt;           break;
                 case HTP_OP_UNARY_NEG:       task_func = unary_task_f32_tiled_unary_neg;      break;
                 case HTP_OP_UNARY_EXP:       task_func = unary_task_f32_tiled_unary_exp;      break;
                 case HTP_OP_UNARY_SIGMOID:   task_func = unary_task_f32_tiled_unary_sigmoid;  break;
+                case HTP_OP_UNARY_SILU:      task_func = unary_task_f32_tiled_unary_silu;     break;
+                case HTP_OP_UNARY_GELU:      task_func = unary_task_f32_tiled_unary_gelu;     break;
                 case HTP_OP_UNARY_SOFTPLUS:  task_func = unary_task_f32_tiled_unary_softplus; break;
                 case HTP_OP_UNARY_TANH:      task_func = unary_task_f32_tiled_unary_tanh;     break;
                 case HTP_OP_TRI:             task_func = unary_task_f32_tiled_tri;            break;
@@ -898,11 +982,14 @@ static int execute_op_unary_f32(struct htp_ops_context * octx) {
                 case HTP_OP_RMS_NORM:        task_func = unary_task_f32_rms_norm;             break;
                 case HTP_OP_RMS_NORM_MUL:    task_func = unary_task_f32_rms_norm_mul;         break;
                 case HTP_OP_SCALE:           task_func = unary_task_f32_scale;                break;
+                case HTP_OP_CLAMP:           task_func = unary_task_f32_clamp;                break;
                 case HTP_OP_SQR:             task_func = unary_task_f32_sqr;                  break;
                 case HTP_OP_SQRT:            task_func = unary_task_f32_sqrt;                 break;
                 case HTP_OP_UNARY_NEG:       task_func = unary_task_f32_unary_neg;            break;
                 case HTP_OP_UNARY_EXP:       task_func = unary_task_f32_unary_exp;            break;
                 case HTP_OP_UNARY_SIGMOID:   task_func = unary_task_f32_unary_sigmoid;        break;
+                case HTP_OP_UNARY_SILU:      task_func = unary_task_f32_unary_silu;           break;
+                case HTP_OP_UNARY_GELU:      task_func = unary_task_f32_unary_gelu;           break;
                 case HTP_OP_UNARY_SOFTPLUS:  task_func = unary_task_f32_unary_softplus;       break;
                 case HTP_OP_UNARY_TANH:      task_func = unary_task_f32_unary_tanh;           break;
                 case HTP_OP_L2_NORM:         task_func = unary_task_f32_l2_norm;              break;

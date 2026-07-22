@@ -109,6 +109,15 @@ static void assert_contains(const std::string & haystack, const std::string & ne
     }
 }
 
+static void assert_not_contains(const std::string & haystack, const std::string & needle) {
+    if (haystack.find(needle) != std::string::npos) {
+        LOG_ERR("Expected NOT to contain: %s\n", needle.c_str());
+        LOG_ERR("Actual: %s\n", haystack.c_str());
+        common_log_flush(common_log_main());
+        throw std::runtime_error("Test failed");
+    }
+}
+
 static void assert_ends_with(const std::string & str, const std::string & suffix) {
     if (str.size() < suffix.size() ||
         str.compare(str.size() - suffix.size(), suffix.size(), suffix) != 0) {
@@ -4016,6 +4025,132 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
     }
 
+    // DeepSeek V4 tests - same DSML markup as V3.2, but the tool call block is named
+    // "tool_calls" and the non-thinking generation prompt ends in a bare </think>
+    // instead of an empty <think></think> pair.
+    {
+        auto tst = peg_tester("models/templates/deepseek-ai-DeepSeek-V4.jinja", detailed_debug);
+
+        // Pure content (non-thinking mode; generation prompt ends with </think>)
+        tst.test("Hello, world!\nWhat's up?")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist)
+            .run();
+
+        // Thinking + content
+        tst.test("I'm\nthinking</think>Hello, world!\nWhat's up?")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist_thoughts)
+            .run();
+
+        // Thinking + tool call (single, string param)
+        tst.test(
+               "Let me check the time</think>\n\n"
+               "<｜DSML｜tool_calls>\n"
+               "<｜DSML｜invoke name=\"get_time\">\n"
+               "<｜DSML｜parameter name=\"city\" string=\"true\">Tokyo</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜tool_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .expect(message_with_tool_calls_and_reasoning("get_time", R"({"city": "Tokyo"})", "Let me check the time"))
+            .run();
+
+        // Tool call without reasoning (non-thinking mode), integer param (string="false")
+        tst.test(
+               "<｜DSML｜tool_calls>\n"
+               "<｜DSML｜invoke name=\"special_function\">\n"
+               "<｜DSML｜parameter name=\"arg1\" string=\"false\">1</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜tool_calls>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+
+        // Multiple parallel tool calls with reasoning
+        tst.test(
+               "Calling both</think>\n\n"
+               "<｜DSML｜tool_calls>\n"
+               "<｜DSML｜invoke name=\"get_time\">\n"
+               "<｜DSML｜parameter name=\"city\" string=\"true\">Paris</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "<｜DSML｜invoke name=\"get_weather\">\n"
+               "<｜DSML｜parameter name=\"city\" string=\"true\">Paris</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜tool_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .parallel_tool_calls(true)
+            .tools({ get_time_tool, get_weather_tool })
+            .expect(message_with_reasoning_content_and_multiple_tool_calls(
+                "Calling both", "",
+                { { "get_time", R"({"city": "Paris"})" }, { "get_weather", R"({"city": "Paris"})" } }))
+            .run();
+
+        // Tool call with content before tool calls
+        tst.test(
+               "Thinking about it</think>"
+               "Let me call the function.\n\n"
+               "<｜DSML｜tool_calls>\n"
+               "<｜DSML｜invoke name=\"special_function\">\n"
+               "<｜DSML｜parameter name=\"arg1\" string=\"false\">1</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜tool_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect_reasoning("Thinking about it")
+            .expect_content("Let me call the function.")
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", {} },
+            })
+            .run();
+
+        // Tool call with multiple params (mixed types)
+        tst.test(
+               "Multi-arg call</think>\n\n"
+               "<｜DSML｜tool_calls>\n"
+               "<｜DSML｜invoke name=\"magic_int\">\n"
+               "<｜DSML｜parameter name=\"ref\" string=\"false\">42</｜DSML｜parameter>\n"
+               "<｜DSML｜parameter name=\"name\" string=\"true\">foo bar</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜tool_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ magic_int_tool })
+            .expect_reasoning("Multi-arg call")
+            .expect_tool_calls({
+                { "magic_int", R"({"ref": 42, "name": "foo bar"})", {} },
+            })
+            .run();
+
+        // Continuation tests
+        tst.test("world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .enable_thinking(true)
+            .messages({ message_user, message_assist_prefill_content })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_CONTENT)
+            .expect_reasoning("I'm thinking")
+            .expect_content("Hello, world!\nWhat's up?")
+            .run();
+
+        tst.test(" thinking</think>Hello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .enable_thinking(true)
+            .messages({ message_user, message_assist_prefill_reasoning })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_REASONING)
+            .expect_reasoning("I'm thinking")
+            .expect_content("Hello, world!\nWhat's up?")
+            .run();
+    }
+
     // GLM-4.6 tests - format: <tool_call>function_name\n<arg_key>...</arg_key>\n<arg_value>...</arg_value>\n</tool_call>
     {
         auto tst = peg_tester("models/templates/GLM-4.6.jinja", detailed_debug);
@@ -5918,6 +6053,144 @@ static void test_developer_role_to_system_workaround() {
     }
 }
 
+// Verify reasoning-trace retention rules in the DeepSeek-V4 template:
+// all traces are retained unless drop_thinking is true AND the conversation
+// has no tool calls, in which case only the last (after-final-user) trace is
+// kept and earlier ones are dropped.
+static void test_deepseek_v4_thinking_retention() {
+    LOG_DBG("%s\n", __func__);
+
+    auto tmpls = read_templates("models/templates/deepseek-ai-DeepSeek-V4.jinja");
+
+    common_chat_msg user_q1; user_q1.role = "user"; user_q1.content = "Question 1";
+    common_chat_msg user_q2; user_q2.role = "user"; user_q2.content = "Question 2";
+    common_chat_msg asst_a1 = simple_assist_msg("Answer 1", "thinking A1");
+    common_chat_msg asst_a2 = simple_assist_msg("Answer 2", "thinking A2");
+
+    common_chat_msg tool_assist = message_with_tool_calls("special_function", "{\"arg1\": 1}");
+    common_chat_msg tool_result; tool_result.role = "tool";
+    tool_result.tool_name = "special_function"; tool_result.tool_call_id = "0"; tool_result.content = "result";
+
+    // The template uses U+FF5C as the role separator and literal think tags
+    // for the reasoning block.
+    const std::string asst_marker   = "<\xef\xbd\x9c" "Assistant" "\xef\xbd\x9c>";
+    // Built via concatenation so the thinking tokens are not interpreted by
+    // tooling processing this source file.
+    const std::string think_start   = "<" "think" ">";
+    const std::string think_end     = "</" "think" ">";
+
+    const std::string think_a1      = asst_marker + think_start + "thinking A1" + think_end;
+    const std::string think_a2      = asst_marker + think_start + "thinking A2" + think_end;
+    const std::string asst_no_think = asst_marker + think_end;
+
+    auto render = [&](const std::vector<common_chat_msg> & messages, bool drop_thinking) {
+        common_chat_templates_inputs inputs;
+        inputs.messages = messages;
+        inputs.add_generation_prompt = false;
+        inputs.chat_template_kwargs["thinking"]     = "true";
+        inputs.chat_template_kwargs["drop_thinking"] = drop_thinking ? "true" : "false";
+        return common_chat_templates_apply(tmpls.get(), inputs).prompt;
+    };
+
+    // No tools, drop_thinking=false: all reasoning is retained.
+    {
+        auto prompt = render({ user_q1, asst_a1, user_q2, asst_a2 }, /* drop_thinking = */ false);
+        assert_contains(prompt, think_a1);
+        assert_contains(prompt, think_a2);
+    }
+
+    // No tools, drop_thinking=true: only the last reasoning trace is kept,
+    // earlier ones are dropped (the assistant block emits just the end token).
+    {
+        auto prompt = render({ user_q1, asst_a1, user_q2, asst_a2 }, /* drop_thinking = */ true);
+        assert_not_contains(prompt, think_a1);
+        assert_contains(prompt, think_a2);
+        // The dropped assistant turn still opens with the marker + bare end token.
+        assert_contains(prompt, asst_no_think + "Answer 1");
+    }
+
+    // Single assistant turn, drop_thinking=true: the only trace is the last
+    // one, so it must be retained even with drop_thinking set.
+    {
+        auto prompt = render({ user_q1, asst_a1 }, /* drop_thinking = */ true);
+        assert_contains(prompt, think_a1);
+    }
+
+    // Single assistant turn, drop_thinking=false: reasoning is retained.
+    {
+        auto prompt = render({ user_q1, asst_a1 }, /* drop_thinking = */ false);
+        assert_contains(prompt, think_a1);
+    }
+
+    // With tool calls, drop_thinking=true: tool presence forces all reasoning
+    // to be retained, including the pre-tool-call trace.
+    {
+        auto prompt = render({ user_q1, asst_a1, user_q2, tool_assist, tool_result, asst_a2 },
+                             /* drop_thinking = */ true);
+        assert_contains(prompt, think_a1);
+        assert_contains(prompt, think_a2);
+    }
+
+    // With tool calls, drop_thinking=false: all reasoning retained.
+    {
+        auto prompt = render({ user_q1, asst_a1, user_q2, tool_assist, tool_result, asst_a2 },
+                             /* drop_thinking = */ false);
+        assert_contains(prompt, think_a1);
+        assert_contains(prompt, think_a2);
+    }
+}
+
+// Verify that consecutive tool results are rendered in the tool call order of the
+// preceding assistant message (matched by tool call id), as required by the reference
+// DeepSeek-V4 implementation.
+static void test_deepseek_v4_tool_result_ordering() {
+    LOG_DBG("%s\n", __func__);
+
+    auto tmpls = read_templates("models/templates/deepseek-ai-DeepSeek-V4.jinja");
+
+    common_chat_msg user_q; user_q.role = "user"; user_q.content = "Question";
+
+    common_chat_msg assist_calls;
+    assist_calls.role = "assistant";
+    assist_calls.tool_calls.push_back({ "get_time",    "{\"city\": \"Paris\"}", "call_1" });
+    assist_calls.tool_calls.push_back({ "get_weather", "{\"city\": \"Paris\"}", "call_2" });
+
+    common_chat_msg time_result; time_result.role = "tool";
+    time_result.tool_name = "get_time"; time_result.tool_call_id = "call_1"; time_result.content = "12:00";
+    common_chat_msg weather_result; weather_result.role = "tool";
+    weather_result.tool_name = "get_weather"; weather_result.tool_call_id = "call_2"; weather_result.content = "sunny";
+
+    auto render = [&](const std::vector<common_chat_msg> & messages) {
+        common_chat_templates_inputs inputs;
+        inputs.messages = messages;
+        inputs.add_generation_prompt = false;
+        return common_chat_templates_apply(tmpls.get(), inputs).prompt;
+    };
+
+    // Results sent out of order are reordered to match the tool call order.
+    {
+        auto prompt = render({ user_q, assist_calls, weather_result, time_result });
+        assert_contains(prompt, "<tool_result>12:00</tool_result>\n\n<tool_result>sunny</tool_result>");
+    }
+
+    // Results already in call order stay put.
+    {
+        auto prompt = render({ user_q, assist_calls, time_result, weather_result });
+        assert_contains(prompt, "<tool_result>12:00</tool_result>\n\n<tool_result>sunny</tool_result>");
+    }
+
+    // Without tool call ids there is nothing to match against; order is preserved.
+    {
+        auto no_id_calls = assist_calls;
+        no_id_calls.tool_calls[0].id = "";
+        no_id_calls.tool_calls[1].id = "";
+        auto no_id_weather = weather_result; no_id_weather.tool_call_id = "";
+        auto no_id_time    = time_result;    no_id_time.tool_call_id = "";
+        auto prompt = render({ user_q, no_id_calls, no_id_weather, no_id_time });
+        assert_contains(prompt, "<tool_result>sunny</tool_result>\n\n<tool_result>12:00</tool_result>");
+    }
+}
+
 static void test_reasoning_budget_tokens_per_request() {
     LOG_DBG("%s\n", __func__);
     // Use Qwen3 template which has <think>...</think> reasoning markers.
@@ -6139,6 +6412,8 @@ int main(int argc, char ** argv) {
         test_tools_oaicompat_json_conversion();
         test_convert_responses_to_chatcmpl();
         test_developer_role_to_system_workaround();
+        test_deepseek_v4_thinking_retention();
+        test_deepseek_v4_tool_result_ordering();
         test_template_generation_prompt();
         test_reasoning_budget_tokens_per_request();
         test_reasoning_budget_message_per_request();
