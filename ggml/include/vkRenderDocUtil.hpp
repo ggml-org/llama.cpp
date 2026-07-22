@@ -5,6 +5,7 @@
 
 #include <stdexcept>
 #include <iostream>
+#include <memory>
 #include <string>
 
 #if defined(_WIN32) || defined(_WIN64)
@@ -73,23 +74,28 @@ public:
         // (e.g. under Nsight or a plain run) must not be fatal
         try
         {
-            DynamicLibrary lib(RENDERDOC_LIBRARY_NAME);
+            // Keep the library loaded while the API table is in use.  Unloading it
+            // here leaves m_api pointing at an invalid module.
+            m_library = std::make_unique<DynamicLibrary>(RENDERDOC_LIBRARY_NAME);
             using FuncType              = void (*)();
-            ::pRENDERDOC_GetAPI pGetApi = (::pRENDERDOC_GetAPI)lib.getFunction<FuncType>("RENDERDOC_GetAPI");
+            ::pRENDERDOC_GetAPI pGetApi = (::pRENDERDOC_GetAPI)m_library->getFunction<FuncType>("RENDERDOC_GetAPI");
             const int           ret     = pGetApi(eRENDERDOC_API_Version_1_1_2, (void**)&m_api);
 
-            if (ret == 1)
+            if (ret == 1 && m_api != nullptr)
             {
                 m_valid = true;
             }
             else
             {
                 std::cout << "RENDERDOC_GetAPI returned " << ret << " status, RenderDoc API not available" << std::endl;
+                m_api = nullptr;
+                m_library.reset();
             }
         }
         catch (const std::exception& e)
         {
             std::cout << e.what() << ", RenderDoc capture disabled" << std::endl;
+            m_library.reset();
         }
     }
 
@@ -104,19 +110,20 @@ public:
 
     void startFrame()
     {
-        if (!isValid())
+        if (!isValid() || m_api == nullptr)
             return;
         m_api->StartFrameCapture(nullptr, nullptr);
     }
     void endFrame()
     {
-        if (!isValid())
+        if (!isValid() || m_api == nullptr)
             return;
         m_api->EndFrameCapture(nullptr, nullptr);
     }
 
 private:
 
+    std::unique_ptr<DynamicLibrary> m_library;
     ::RENDERDOC_API_1_1_2* m_api   = nullptr;
     bool                   m_valid = false;
 };

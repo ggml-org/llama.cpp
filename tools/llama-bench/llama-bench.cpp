@@ -11,6 +11,7 @@
 #include <ctime>
 #include <iterator>
 #include <map>
+#include <memory>
 #include <numeric>
 #include <regex>
 #include <sstream>
@@ -27,6 +28,10 @@
 #include "ggml.h"
 #include "llama.h"
 #include "log.h"
+
+#ifdef GGML_USE_VULKAN
+#include "vkRenderDocUtil.hpp"
+#endif
 
 #ifdef _WIN32
 #    define WIN32_LEAN_AND_MEAN
@@ -374,6 +379,7 @@ struct cmd_params {
     bool                             verbose;
     bool                             progress;
     bool                             no_warmup;
+    int                              renderdoc_prefill_batch;
     output_formats                   output_format;
     output_formats                   output_format_stderr;
 };
@@ -420,6 +426,7 @@ static const cmd_params cmd_params_defaults = {
     /* verbose              */ false,
     /* progress             */ false,
     /* no_warmup            */ false,
+    /* renderdoc_prefill_batch */ 0,
     /* output_format        */ MARKDOWN,
     /* output_format_stderr */ NONE,
 };
@@ -440,6 +447,9 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -v, --verbose                               verbose output\n");
     printf("  --progress                                  print test progress indicators\n");
     printf("  --no-warmup                                 skip warmup runs before benchmarking\n");
+    printf("  --capture-prefill                           capture the complete prompt prefill with RenderDoc\n");
+    printf("  --capture-prefill-batch <n>                 capture the 1-based logical prompt batch n with RenderDoc\n");
+    printf("                                              (requires Vulkan)\n");
     printf("  -fitt, --fit-target <MiB>                   fit model to device memory with this margin per device in MiB (default: off)\n");
     printf("  -fitc, --fit-ctx <n>                        minimum ctx size for --fit-target (default: 0)\n");
     if (llama_supports_rpc()) {
@@ -1056,6 +1066,18 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 params.progress = true;
             } else if (arg == "--no-warmup") {
                 params.no_warmup = true;
+            } else if (arg == "--capture-prefill") {
+                params.renderdoc_prefill_batch = -1;
+            } else if (arg == "--capture-prefill-batch") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                params.renderdoc_prefill_batch = std::stoi(argv[i]);
+                if (params.renderdoc_prefill_batch < 1) {
+                    invalid_param = true;
+                    break;
+                }
             } else if (arg == "-fitt" || arg == "--fit-target") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -2165,7 +2187,14 @@ struct ctx_state {
     std::vector<uint8_t> buf; // the llama_context state buffer
 };
 
-static bool test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_threads) {
+static bool test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_threads, int renderdoc_prefill_batch = 0) {
+#ifndef GGML_USE_VULKAN
+    if (renderdoc_prefill_batch != 0) {
+        fprintf(stderr, "%s: RenderDoc prefill capture requires a Vulkan build\n", __func__);
+        return false;
+    }
+#endif
+
     llama_set_n_threads(ctx, n_threads, n_threads);
 
     const llama_model * model   = llama_get_model(ctx);
@@ -2174,24 +2203,75 @@ static bool test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_th
 
     std::vector<llama_token> tokens(n_batch);
 
-    int n_processed = 0;
+#ifdef GGML_USE_VULKAN
+    std::unique_ptr<RenderDocUtil> renderdoc;
+    bool capture_active = false;
+    if (renderdoc_prefill_batch != 0) {
+        renderdoc = std::make_unique<RenderDocUtil>();
+        if (renderdoc->isValid() && renderdoc_prefill_batch == -1) {
+            renderdoc->startFrame();
+            capture_active = true;
+        }
+    }
+#endif
+
+    int n_processed  = 0;
+    int logical_batch = 0;
 
     while (n_processed < n_prompt) {
-        int n_tokens = std::min(n_prompt - n_processed, n_batch);
-        tokens[0]    = n_processed == 0 && llama_vocab_get_add_bos(vocab) ? llama_vocab_bos(vocab) : std::rand() % n_vocab;
+        const int n_tokens = std::min(n_prompt - n_processed, n_batch);
+        tokens[0] = n_processed == 0 && llama_vocab_get_add_bos(vocab) ? llama_vocab_bos(vocab) : std::rand() % n_vocab;
         for (int i = 1; i < n_tokens; i++) {
             tokens[i] = std::rand() % n_vocab;
         }
+
+#ifdef GGML_USE_VULKAN
+        const bool capture_batch = renderdoc && renderdoc->isValid() &&
+            renderdoc_prefill_batch > 0 && logical_batch + 1 == renderdoc_prefill_batch;
+        if (capture_batch) {
+            renderdoc->startFrame();
+            capture_active = true;
+        }
+#endif
+
         common_batch batch = common_batch_get_one(ctx, tokens.data(), n_tokens);
         int res = llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get());
         if (res != 0) {
+#ifdef GGML_USE_VULKAN
+            if (capture_active) {
+                llama_synchronize(ctx);
+                renderdoc->endFrame();
+            }
+#endif
             fprintf(stderr, "%s: failed to decode prompt batch, res = %d\n", __func__, res);
             return false;
         }
+
         n_processed += n_tokens;
+        logical_batch++;
+
+#ifdef GGML_USE_VULKAN
+        if (capture_batch) {
+            llama_synchronize(ctx);
+            renderdoc->endFrame();
+            capture_active = false;
+        }
+#endif
     }
 
     llama_synchronize(ctx);
+#ifdef GGML_USE_VULKAN
+    if (capture_active) {
+        renderdoc->endFrame();
+    }
+#endif
+
+    if (renderdoc_prefill_batch > logical_batch) {
+        fprintf(stderr, "%s: requested logical batch %d, but prefill has only %d logical batches\n",
+                __func__, renderdoc_prefill_batch, logical_batch);
+        return false;
+    }
+
     return true;
 }
 
@@ -2488,7 +2568,7 @@ int llama_bench(int argc, char ** argv) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: prompt run %d/%d\n", params_idx, params_count,
                             i + 1, params.reps);
                 }
-                bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads);
+                bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads, params.renderdoc_prefill_batch);
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run prompt\n", __func__);
                     llama_free(ctx);
