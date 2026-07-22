@@ -544,6 +544,24 @@ static void common_params_fit_impl(
         if (global_surplus_cpu_moe > 0) {
             LOG_TRC("%s: with only dense weights in device memory there is a total surplus of %" PRId64 " MiB\n",
                 __func__, global_surplus_cpu_moe/MiB);
+            // warn: -cmoe/--cpu-moe will move MoE weights to system memory
+            // where compute is much slower on iGPU/UMA systems
+            for (size_t id = 0; id < nd; id++) {
+                if (ggml_backend_dev_type(devs[id]) == GGML_BACKEND_DEVICE_TYPE_IGPU) {
+                    LOG_WRN("%s: device %s is an integrated GPU with unified memory, "
+",
+                            __func__, ggml_backend_dev_name(devs[id]));
+                    LOG_WRN("%s: MoE weights moved to system memory will compute on the CPU, "
+",
+                            __func__);
+                    LOG_WRN("%s: consider omitting --cpu-moe and letting MoE experts stay on the GPU "
+",
+                            __func__);
+                    LOG_WRN("%s: for best performance on integrated GPUs\n",
+                            __func__);
+                    break;
+                }
+            }
         } else {
             LOG_TRC("%s: with only dense weights in device memory there is still a total deficit of %" PRId64 " MiB\n",
                 __func__, -global_surplus_cpu_moe/MiB);
