@@ -36,6 +36,7 @@ enum llm_graph_type {
     LLM_GRAPH_TYPE_ENCODER,
     LLM_GRAPH_TYPE_DECODER,
     LLM_GRAPH_TYPE_DECODER_MTP,
+    LLM_GRAPH_TYPE_TRAIN, // graph built for backward-pass (gradient) computation; architectures must avoid KV-cache writes for this type, since they are not supported by ggml's autodiff
 };
 
 enum llm_fused_op {
