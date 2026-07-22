@@ -1,0 +1,35 @@
+name: Audit CI Self-Hosted Runners
+
+on:
+  workflow_dispatch: # trigger manual audit when necessary
+  schedule:
+    - cron: '0 0 1 1,4,7,10 *' # automatically run every quarter
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - [self-hosted, Linux, X64, ggml-6-x86-vulkan-t4]
+          - [self-hosted, Linux, X64, ggml-8-x86-nvidia-a10]
+          - [self-hosted, Linux, X64, sg-hl1-ci-cpu-amd]
+          - [self-hosted, Linux, X64, sg-hl1-ci-nvidia-vulkan-cm]
+          - [self-hosted, Linux, ARM64, ggml-200-spark]
+          - [self-hosted, Linux, ARM64, ggml-201-spark]
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Audit
+        id: audit
+        run: |
+          bash ./ci/audit.sh
