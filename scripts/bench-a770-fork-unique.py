@@ -60,7 +60,7 @@ DEFAULT_MODELS = [
 ]
 
 FA_ROUTE_RE = re.compile(
-    r"GGML_SYCL_FA_ROUTE: route=(?P<route>VEC|TILE|XMX) "
+    r"GGML_SYCL_FA_ROUTE: route=(?P<route>VEC|TILE|XMX|Q8_GQA) "
     r"phase=(?P<phase>decode|prefill) q_tokens=(?P<q_tokens>\d+) "
     r"head_dim=(?P<head_dim>\d+) gqa=(?P<gqa>\d+) "
     r"type_k=(?P<type_k>\S+) type_v=(?P<type_v>\S+) "
@@ -75,6 +75,15 @@ FA_PROFILE_RE = re.compile(
     r"combine_us=(?P<combine_us>\d+) gqa=(?P<gqa>\d+) "
     r"repeated_packed_kv_bytes=(?P<repeated_packed_kv_bytes>\d+)"
 )
+GRAPH_PROFILE_RE = re.compile(
+    r"GGML_SYCL_GRAPH_PROFILE: graph_calls=(?P<graph_calls>\d+) "
+    r"direct_calls=(?P<direct_calls>\d+) nodes=(?P<nodes>\d+) "
+    r"prepare_us=(?P<prepare_us>\d+) record_us=(?P<record_us>\d+) "
+    r"finalize_calls=(?P<finalize_calls>\d+) finalize_us=(?P<finalize_us>\d+) "
+    r"update_calls=(?P<update_calls>\d+) update_fallbacks=(?P<update_fallbacks>\d+) "
+    r"update_us=(?P<update_us>\d+) submit_us=(?P<submit_us>\d+) "
+    r"wait_us=(?P<wait_us>\d+) direct_enqueue_us=(?P<direct_enqueue_us>\d+)"
+)
 
 
 
@@ -86,6 +95,7 @@ def _effective_env(env_extra: dict[str, str]) -> dict[str, str]:
         "GGML_SYCL_FA_XMX",
         "GGML_SYCL_FA_FORCE_VEC_STANDARD",
         "GGML_SYCL_FA_Q8_GQA_TILE",
+        "GGML_SYCL_FA_Q8_GQA_DIRECT",
         "GGML_SYCL_FA_PROFILE",
         "GGML_SYCL_Q8_KV_QUANTS_FIRST",
         "LLAMA_ENABLE_INNERQ",
@@ -573,6 +583,14 @@ def _parse_fa_profile_records(logs: str) -> list[dict[str, Any]]:
     return records
 
 
+def _parse_graph_profile_records(logs: str) -> list[dict[str, int]]:
+    """Parse aggregate SYCL graph lifecycle profile records."""
+    return [
+        {name: int(value) for name, value in match.groupdict().items()}
+        for match in GRAPH_PROFILE_RE.finditer(logs)
+    ]
+
+
 def _kv_bytes_per_element(kv_type: str) -> float:
     if kv_type == "f16":
         return 2.0
@@ -782,6 +800,9 @@ def run_product_cell(
             profile_records = _parse_fa_profile_records(
                 result.get("stdout", "") + "\n" + result.get("stderr", "")
             )
+            graph_profile_records = _parse_graph_profile_records(
+                result.get("stdout", "") + "\n" + result.get("stderr", "")
+            )
             sample_values: dict[str, float] = {}
             for metric_name, row in rows.items():
                 sample_values[f"{metric_name}_ts"] = (
@@ -799,6 +820,7 @@ def run_product_cell(
                 "stderr": result.get("stderr", ""),
                 "fa_route_records": route_records,
                 "fa_profile_records": profile_records,
+                "graph_profile_records": graph_profile_records,
             }
             sample_path = samples_dir / (
                 f"cell{cell_idx:02d}_{kv[0]}_{kv[1]}_d{depth}"

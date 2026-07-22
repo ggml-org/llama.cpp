@@ -57,6 +57,9 @@ class ProductCampaignTests(unittest.TestCase):
             "GGML_SYCL_FA_ROUTE: route=VEC phase=decode q_tokens=1 "
             "head_dim=128 gqa=4 type_k=q8_0 type_v=q8_0 "
             "k_quants_first=1 v_quants_first=1\n"
+            "GGML_SYCL_FA_ROUTE: route=Q8_GQA phase=decode q_tokens=1 "
+            "head_dim=128 gqa=8 type_k=q8_0 type_v=q8_0 "
+            "k_quants_first=1 v_quants_first=1\n"
         )
         self.assertEqual(
             HARNESS._parse_fa_route_records(logs),
@@ -78,6 +81,17 @@ class ProductCampaignTests(unittest.TestCase):
                     "q_tokens": 1,
                     "head_dim": 128,
                     "gqa": 4,
+                    "type_k": "q8_0",
+                    "type_v": "q8_0",
+                    "k_quants_first": True,
+                    "v_quants_first": True,
+                },
+                {
+                    "route": "Q8_GQA",
+                    "phase": "decode",
+                    "q_tokens": 1,
+                    "head_dim": 128,
+                    "gqa": 8,
                     "type_k": "q8_0",
                     "type_v": "q8_0",
                     "k_quants_first": True,
@@ -105,6 +119,34 @@ class ProductCampaignTests(unittest.TestCase):
                     "combine_us": 789,
                     "gqa": 4,
                     "repeated_packed_kv_bytes": 987654321,
+                }
+            ],
+        )
+
+    def test_parses_structured_graph_profile_records(self) -> None:
+        logs = (
+            "GGML_SYCL_GRAPH_PROFILE: graph_calls=128 direct_calls=0 nodes=16384 "
+            "prepare_us=100 record_us=2000 finalize_calls=1 finalize_us=20 "
+            "update_calls=127 update_fallbacks=0 update_us=3000 submit_us=400 "
+            "wait_us=500000 direct_enqueue_us=0\n"
+        )
+        self.assertEqual(
+            HARNESS._parse_graph_profile_records(logs),
+            [
+                {
+                    "graph_calls": 128,
+                    "direct_calls": 0,
+                    "nodes": 16384,
+                    "prepare_us": 100,
+                    "record_us": 2000,
+                    "finalize_calls": 1,
+                    "finalize_us": 20,
+                    "update_calls": 127,
+                    "update_fallbacks": 0,
+                    "update_us": 3000,
+                    "submit_us": 400,
+                    "wait_us": 500000,
+                    "direct_enqueue_us": 0,
                 }
             ],
         )
@@ -153,6 +195,7 @@ class ProductCampaignTests(unittest.TestCase):
             "GGML_SYCL_FA_XMX",
             "GGML_SYCL_FA_FORCE_VEC_STANDARD",
             "GGML_SYCL_FA_Q8_GQA_TILE",
+            "GGML_SYCL_FA_Q8_GQA_DIRECT",
             "GGML_SYCL_FA_PROFILE",
             "GGML_SYCL_Q8_KV_QUANTS_FIRST",
             "LLAMA_ENABLE_INNERQ",
@@ -228,7 +271,7 @@ class ProductCampaignTests(unittest.TestCase):
                 cell_idx=1,
             )
 
-    def test_product_argv_uses_supported_no_warmup_flag(self) -> None:
+    def test_product_argv_sets_fixed_product_shape(self) -> None:
         argv = HARNESS._product_bench_argv(
             Path("/tmp/bin"), "model.gguf", ("q8_0", "q8_0"), 4096
         )

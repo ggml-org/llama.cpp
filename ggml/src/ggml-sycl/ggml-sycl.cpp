@@ -14,6 +14,7 @@
 #include <assert.h>
 #include <atomic>
 #include <cinttypes>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -5028,6 +5029,54 @@ static ggml_status ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_contex
     return GGML_STATUS_SUCCESS;
 }
 
+static bool ggml_sycl_graph_profile_enabled() {
+    const char * value = getenv("GGML_SYCL_GRAPH_PROFILE");
+    return value != nullptr && strcmp(value, "1") == 0;
+}
+
+struct ggml_sycl_graph_profile {
+    std::atomic<uint64_t> graph_calls       = 0;
+    std::atomic<uint64_t> direct_calls      = 0;
+    std::atomic<uint64_t> nodes             = 0;
+    std::atomic<uint64_t> prepare_us        = 0;
+    std::atomic<uint64_t> record_us         = 0;
+    std::atomic<uint64_t> finalize_calls    = 0;
+    std::atomic<uint64_t> finalize_us       = 0;
+    std::atomic<uint64_t> update_calls      = 0;
+    std::atomic<uint64_t> update_fallbacks  = 0;
+    std::atomic<uint64_t> update_us         = 0;
+    std::atomic<uint64_t> submit_us         = 0;
+    std::atomic<uint64_t> wait_us           = 0;
+    std::atomic<uint64_t> direct_enqueue_us = 0;
+
+    ~ggml_sycl_graph_profile() {
+        if (!ggml_sycl_graph_profile_enabled()) {
+            return;
+        }
+        fprintf(
+            stderr,
+            "GGML_SYCL_GRAPH_PROFILE: graph_calls=%" PRIu64 " direct_calls=%" PRIu64
+            " nodes=%" PRIu64 " prepare_us=%" PRIu64 " record_us=%" PRIu64
+            " finalize_calls=%" PRIu64 " finalize_us=%" PRIu64
+            " update_calls=%" PRIu64 " update_fallbacks=%" PRIu64
+            " update_us=%" PRIu64 " submit_us=%" PRIu64
+            " wait_us=%" PRIu64 " direct_enqueue_us=%" PRIu64 "\n",
+            graph_calls.load(), direct_calls.load(), nodes.load(), prepare_us.load(), record_us.load(),
+            finalize_calls.load(), finalize_us.load(), update_calls.load(), update_fallbacks.load(),
+            update_us.load(), submit_us.load(), wait_us.load(), direct_enqueue_us.load());
+    }
+};
+
+static ggml_sycl_graph_profile & ggml_sycl_graph_profile_data() {
+    static ggml_sycl_graph_profile profile;
+    return profile;
+}
+
+static uint64_t ggml_sycl_elapsed_us(std::chrono::steady_clock::time_point start) {
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - start).count();
+}
+
 #ifdef GGML_SYCL_GRAPH
 static bool check_graph_compatibility(ggml_cgraph * cgraph) {
     if (ggml_sycl_info().device_count > 1) {
@@ -5104,6 +5153,9 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
     auto * sycl_ctx = static_cast<ggml_backend_sycl_context *>(backend->context);
     ggml_backend_sycl_device_context * dev_ctx = ggml_backend_sycl_device_context_from_backend(backend);
     ggml_backend_sycl_clear_pending_status(dev_ctx);
+    const bool graph_profile_enabled = ggml_sycl_graph_profile_enabled();
+    ggml_sycl_graph_profile * graph_profile =
+        graph_profile_enabled ? &ggml_sycl_graph_profile_data() : nullptr;
 
 #ifdef GGML_SYCL_GRAPH
     bool use_sycl_graph = !g_ggml_sycl_disable_graph && check_graph_compatibility(cgraph);
@@ -5111,7 +5163,13 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
         const bool graph_support = dpct::get_device(sycl_ctx->device).has(sycl::aspect::ext_oneapi_limited_graph);
         if (!graph_support) {
             GGML_SYCL_DEBUG("[SYCL-GRAPH] can not use graphs on device:%d\n", sycl_ctx->device);
+            const auto direct_start = std::chrono::steady_clock::now();
             const ggml_status status = ggml_backend_sycl_graph_compute_impl(sycl_ctx, dev_ctx, cgraph);
+            if (graph_profile != nullptr) {
+                graph_profile->direct_calls.fetch_add(1, std::memory_order_relaxed);
+                graph_profile->direct_enqueue_us.fetch_add(
+                    ggml_sycl_elapsed_us(direct_start), std::memory_order_relaxed);
+            }
             if (status != GGML_STATUS_SUCCESS) {
                 ggml_backend_sycl_record_failed_status(dev_ctx);
             }
@@ -5120,38 +5178,77 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
 
         // Scratch allocation may wait on the queue. Grow it before recording;
         // waiting while a queue is being captured is forbidden by oneAPI.
+        const auto prepare_start = std::chrono::steady_clock::now();
         ggml_sycl_graph_prepare_fattn_buffers(sycl_ctx, cgraph);
+        if (graph_profile != nullptr) {
+            graph_profile->prepare_us.fetch_add(
+                ggml_sycl_elapsed_us(prepare_start), std::memory_order_relaxed);
+        }
 
         sycl_ex::command_graph model_sycl_graph(*(sycl_ctx->stream()), {sycl_ex::property::graph::assume_buffer_outlives_graph{}});
 
+        const auto record_start = std::chrono::steady_clock::now();
         model_sycl_graph.begin_recording(*(sycl_ctx->stream()));
         const ggml_status graph_status = ggml_backend_sycl_graph_compute_impl(sycl_ctx, dev_ctx, cgraph);
         model_sycl_graph.end_recording();
+        if (graph_profile != nullptr) {
+            graph_profile->graph_calls.fetch_add(1, std::memory_order_relaxed);
+            graph_profile->nodes.fetch_add(cgraph->n_nodes, std::memory_order_relaxed);
+            graph_profile->record_us.fetch_add(
+                ggml_sycl_elapsed_us(record_start), std::memory_order_relaxed);
+        }
         if (graph_status != GGML_STATUS_SUCCESS) {
             ggml_backend_sycl_record_failed_status(dev_ctx);
             return graph_status;
         }
 
         const bool graph_update_support = dpct::get_device(sycl_ctx->device).has(sycl::aspect::ext_oneapi_graph);
+        const auto finalize_update_start = std::chrono::steady_clock::now();
         if (!sycl_ctx->exec_graph || !graph_update_support) {
             auto exec_graph = graph_update_support ? model_sycl_graph.finalize(sycl_ex::property::graph::updatable{}) :
                                                      model_sycl_graph.finalize();
             sycl_ctx->exec_graph = std::make_unique<
                 sycl_ex::command_graph<sycl_ex::graph_state::executable>>(exec_graph);
+            if (graph_profile != nullptr) {
+                graph_profile->finalize_calls.fetch_add(1, std::memory_order_relaxed);
+                graph_profile->finalize_us.fetch_add(
+                    ggml_sycl_elapsed_us(finalize_update_start), std::memory_order_relaxed);
+            }
         } else {
             try {
                 sycl_ctx->exec_graph->update(model_sycl_graph);
                 GGML_SYCL_DEBUG("[SYCL-GRAPH] update success\n");
+                if (graph_profile != nullptr) {
+                    graph_profile->update_calls.fetch_add(1, std::memory_order_relaxed);
+                    graph_profile->update_us.fetch_add(
+                        ggml_sycl_elapsed_us(finalize_update_start), std::memory_order_relaxed);
+                }
             } catch (sycl::exception const & e) {
                 GGML_SYCL_DEBUG("[SYCL-GRAPH] Exception when updating graph, %s\n", e.what());
                 auto exec_graph = model_sycl_graph.finalize({sycl_ex::property::graph::updatable{}});
                 sycl_ctx->exec_graph = std::make_unique<
                     sycl_ex::command_graph<sycl_ex::graph_state::executable>>(exec_graph);
+                if (graph_profile != nullptr) {
+                    graph_profile->update_calls.fetch_add(1, std::memory_order_relaxed);
+                    graph_profile->update_fallbacks.fetch_add(1, std::memory_order_relaxed);
+                    graph_profile->update_us.fetch_add(
+                        ggml_sycl_elapsed_us(finalize_update_start), std::memory_order_relaxed);
+                }
             }
         }
+        const auto submit_start = std::chrono::steady_clock::now();
         try {
             sycl_ctx->stream()->ext_oneapi_graph(*(sycl_ctx->exec_graph));
+            if (graph_profile != nullptr) {
+                graph_profile->submit_us.fetch_add(
+                    ggml_sycl_elapsed_us(submit_start), std::memory_order_relaxed);
+            }
+            const auto wait_start = std::chrono::steady_clock::now();
             sycl_ctx->stream()->wait();
+            if (graph_profile != nullptr) {
+                graph_profile->wait_us.fetch_add(
+                    ggml_sycl_elapsed_us(wait_start), std::memory_order_relaxed);
+            }
         } catch (sycl::exception const & e) {
             GGML_LOG_ERROR("%s: SYCL graph launch/wait failed: %s\n", __func__, e.what());
             ggml_backend_sycl_record_failed_exception(dev_ctx, e);
@@ -5160,7 +5257,13 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
     } else
 #endif
     {
+        const auto direct_start = std::chrono::steady_clock::now();
         const ggml_status status = ggml_backend_sycl_graph_compute_impl(sycl_ctx, dev_ctx, cgraph);
+        if (graph_profile != nullptr) {
+            graph_profile->direct_calls.fetch_add(1, std::memory_order_relaxed);
+            graph_profile->direct_enqueue_us.fetch_add(
+                ggml_sycl_elapsed_us(direct_start), std::memory_order_relaxed);
+        }
         if (status != GGML_STATUS_SUCCESS) {
             ggml_backend_sycl_record_failed_status(dev_ctx);
             return status;
