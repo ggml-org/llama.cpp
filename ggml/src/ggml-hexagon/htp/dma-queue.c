@@ -101,6 +101,4 @@ void dma_queue_alias_free(dma_queue_t q) {
     (void) q;
 }
 
-void dma_queue_flush(dma_queue_t q) {
-    while (dma_queue_pop(q).dst != NULL) ;
-}
+
