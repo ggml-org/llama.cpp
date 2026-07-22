@@ -2340,6 +2340,103 @@ private:
                 cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
     }
 
+    // Context checkpoints are appended to the slot save file, after the llama state
+    // payload. Without them, a restored slot loses the ability to partially reuse its
+    // cache on models that need a checkpoint to roll back to (SWA and hybrid/recurrent
+    // memory): the next divergent prompt then always triggers "forcing full prompt
+    // re-processing due to lack of cache data", even though the restored state is
+    // intact. Checkpoints cannot be recreated from the final state alone (a recurrent
+    // state cannot be rewound), so they have to travel with the save file.
+    static constexpr uint32_t SLOT_CKPT_MAGIC   = 0x504b4353; // "SCKP"
+    static constexpr uint32_t SLOT_CKPT_VERSION = 1;
+
+    static bool ckpt_read(std::ifstream & ifs, void * dst, size_t size) {
+        return bool(ifs.read((char *) dst, size));
+    }
+
+    static bool ckpt_read_buf(std::ifstream & ifs, std::vector<uint8_t> & buf) {
+        uint64_t n = 0;
+        // refuse absurd blob sizes (> 16 GiB) from a corrupted/truncated appendix
+        if (!ckpt_read(ifs, &n, sizeof(n)) || n > (1ull << 34)) {
+            return false;
+        }
+        buf.resize(n);
+        return n == 0 || ckpt_read(ifs, buf.data(), n);
+    }
+
+    static void ckpt_write(std::ofstream & ofs, const void * src, size_t size) {
+        ofs.write((const char *) src, size);
+    }
+
+    static void ckpt_write_buf(std::ofstream & ofs, const std::vector<uint8_t> & buf) {
+        const uint64_t n = buf.size();
+        ckpt_write(ofs, &n, sizeof(n));
+        if (n > 0) {
+            ckpt_write(ofs, buf.data(), n);
+        }
+    }
+
+    void save_slot_checkpoints(const std::string & filepath, const server_slot & slot) const {
+        std::ofstream ofs(filepath, std::ios::binary | std::ios::app);
+        if (!ofs) {
+            SRV_WRN("failed to append context checkpoints to '%s'\n", filepath.c_str());
+            return;
+        }
+        const uint32_t magic   = SLOT_CKPT_MAGIC;
+        const uint32_t version = SLOT_CKPT_VERSION;
+        const uint32_t count   = (uint32_t) slot.prompt.checkpoints.size();
+        ckpt_write(ofs, &magic,   sizeof(magic));
+        ckpt_write(ofs, &version, sizeof(version));
+        ckpt_write(ofs, &count,   sizeof(count));
+        for (const auto & cur : slot.prompt.checkpoints) {
+            ckpt_write(ofs, &cur.n_tokens, sizeof(cur.n_tokens));
+            ckpt_write(ofs, &cur.pos_min,  sizeof(cur.pos_min));
+            ckpt_write(ofs, &cur.pos_max,  sizeof(cur.pos_max));
+            ckpt_write_buf(ofs, cur.data_tgt);
+            ckpt_write_buf(ofs, cur.data_dft);
+            ckpt_write_buf(ofs, cur.data_spec);
+        }
+        SRV_INF("appended %u context checkpoint(s) to '%s'\n", count, filepath.c_str());
+    }
+
+    void load_slot_checkpoints(const std::string & filepath, size_t offset, server_slot & slot) const {
+        std::ifstream ifs(filepath, std::ios::binary);
+        if (!ifs || !ifs.seekg(offset)) {
+            return;
+        }
+        uint32_t magic   = 0;
+        uint32_t version = 0;
+        uint32_t count   = 0;
+        if (!ckpt_read(ifs, &magic, sizeof(magic)) || magic != SLOT_CKPT_MAGIC) {
+            return; // save file without a checkpoint appendix (older format) - nothing to do
+        }
+        if (!ckpt_read(ifs, &version, sizeof(version)) || version != SLOT_CKPT_VERSION ||
+            !ckpt_read(ifs, &count,   sizeof(count))   || count > 1024) {
+            SRV_WRN("invalid context checkpoint appendix in '%s' - ignored\n", filepath.c_str());
+            return;
+        }
+        std::list<common_prompt_checkpoint> checkpoints;
+        for (uint32_t i = 0; i < count; ++i) {
+            common_prompt_checkpoint cur;
+            cur.id_task = -1; // task ids are not meaningful across save/restore
+            if (!ckpt_read(ifs, &cur.n_tokens, sizeof(cur.n_tokens)) ||
+                !ckpt_read(ifs, &cur.pos_min,  sizeof(cur.pos_min))  ||
+                !ckpt_read(ifs, &cur.pos_max,  sizeof(cur.pos_max))  ||
+                !ckpt_read_buf(ifs, cur.data_tgt) ||
+                !ckpt_read_buf(ifs, cur.data_dft) ||
+                !ckpt_read_buf(ifs, cur.data_spec)) {
+                SRV_WRN("truncated context checkpoint appendix in '%s' - ignored\n", filepath.c_str());
+                return;
+            }
+            checkpoints.push_back(std::move(cur));
+        }
+        while (checkpoints.size() > (size_t) params_base.n_ctx_checkpoints) {
+            checkpoints.pop_front();
+        }
+        slot.prompt.checkpoints = std::move(checkpoints);
+        SRV_INF("restored %zu context checkpoint(s) from '%s'\n", slot.prompt.checkpoints.size(), filepath.c_str());
+    }
+
     void process_single_task(server_task && task) {
         switch (task.type) {
             case SERVER_TASK_TYPE_COMPLETION:
@@ -2535,6 +2632,12 @@ private:
                     const size_t token_count = tokens.size();
                     const size_t nwrite = llama_state_seq_save_file(ctx_tgt, filepath.c_str(), slot->id, tokens.data(), token_count);
 
+                    // append the context checkpoints so that a restore can preserve
+                    // partial cache reuse (see SLOT_RESTORE below)
+                    if (nwrite > 0) {
+                        save_slot_checkpoints(filepath, *slot);
+                    }
+
                     const int64_t t_end = ggml_time_us();
                     const double t_save_ms = (t_end - t_start) / 1000.0;
 
@@ -2580,6 +2683,13 @@ private:
                     tokens.resize(token_count);
                     slot->prompt.clear();
                     slot->prompt.tokens.insert(tokens);
+
+                    // restore the context checkpoints appended to the save file (if any):
+                    // slot->prompt.clear() above discarded the slot's checkpoints, and without
+                    // them SWA and hybrid/recurrent memory models cannot partially reuse the
+                    // restored cache on the next divergent prompt (nread is the end offset of
+                    // the llama state payload within the file)
+                    load_slot_checkpoints(filepath, nread, *slot);
 
                     const int64_t t_end = ggml_time_us();
                     const double t_restore_ms = (t_end - t_start) / 1000.0;
