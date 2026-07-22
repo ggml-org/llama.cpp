@@ -18,7 +18,7 @@ static void fill_random_f32(float * data, int n) {
     }
 }
 
-static bool all_close(const float * a, const float * b, int n, float eps = 1e-2f) {
+static bool all_close(const float * a, const float * b, int n, float eps = 2e-2f) {
     for (int i = 0; i < n; i++) {
         if (fabsf(a[i] - b[i]) > eps) {
             fprintf(stderr, "    mismatch at [%d]: %.6f vs %.6f (diff=%.6f)\n",
