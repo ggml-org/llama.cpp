@@ -98,6 +98,7 @@ class ServerProcess:
     spec_type: str | None = None
     spec_draft_n_min: int | None = None
     spec_draft_n_max: int | None = None
+    spec_type: str | None = None
     no_ui: bool | None = None
     jinja: bool | None = None
     reasoning_format: Literal['deepseek', 'none', 'nothink'] | None = None
@@ -162,6 +163,8 @@ class ServerProcess:
             server_args.extend(["--model-url", self.model_url])
         if self.model_draft:
             server_args.extend(["--model-draft", self.model_draft])
+        if self.spec_type:
+            server_args.extend(["--spec-type", self.spec_type])
         if self.model_hf_repo:
             server_args.extend(["--hf-repo", self.model_hf_repo])
         if self.model_hf_file:

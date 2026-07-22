@@ -187,7 +187,7 @@ int llama_server(common_params & params, int argc, char ** argv) {
 
         // proxy handlers
         // note: routes.get_health stays the same
-        routes.get_metrics                 = models_routes->proxy_get;
+        routes.get_metrics                 = models_routes->get_router_metrics;
         routes.post_props                  = models_routes->proxy_post;
         routes.post_completions            = models_routes->proxy_post;
         routes.post_completions_oai        = models_routes->proxy_post;
