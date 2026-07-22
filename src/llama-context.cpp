@@ -421,6 +421,7 @@ llama_context::llama_context(
         // TODO: move these checks to ggml_backend_sched
         // enabling pipeline parallelism in the scheduler increases memory usage, so it is only done when necessary
         bool pipeline_parallel =
+            cparams.n_seq_max > 1 &&
             model.n_devices() > 1 &&
             model.n_gpu_layers() > model.hparams.n_layer_all &&
             model.split_mode() == LLAMA_SPLIT_MODE_LAYER &&
