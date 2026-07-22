@@ -192,11 +192,6 @@ static bool turbo_fa_enabled() {
     return v != nullptr && strcmp(v, "1") == 0;
 }
 
-static bool q8_gqa_direct_enabled() {
-    const char * value = getenv("GGML_SYCL_FA_Q8_GQA_DIRECT");
-    return value != nullptr && strcmp(value, "1") == 0;
-}
-
 // Run a single-output graph on `backend`. `build` creates the graph (naming any
 // input tensors) and returns the output node; `set_inputs` uploads data after
 // allocation. Returns the output flattened to F32.
@@ -617,8 +612,8 @@ static void probe_flash_attn(ggml_backend_t cpu, ggml_backend_t sycl,
                             ggml_type kv_type, const char * name,
                             int64_t d, int64_t n_q, const char * path,
                             Exp exp, bool force,
-                            int64_t nh_q = 1, int64_t nh_kv = 1,
-                            int64_t n_kv = 256) {
+                            int64_t nh_q = 1, int64_t nh_kv = 1) {
+    const int64_t n_kv = 256;   // cached tokens (multiple of FATTN_KQ_STRIDE)
     // nh_q = number of Q heads; nh_kv = number of K/V heads (GQA: nh_kv <= nh_q, nh_q % nh_kv == 0).
     // The harness historically used nh_q == nh_kv == 1 (single-head, no GQA). Real models use
     // GQA ratios (4:1 llama/mistral, 8:1 Qwen3-Coder-30B-A3B); see probe driver for the
@@ -687,17 +682,12 @@ static void probe_flash_attn(ggml_backend_t cpu, ggml_backend_t sycl,
     };
 
     char label[256];
-    char kv_suffix[32] = "";
-    if (n_kv != 256) {
-        snprintf(kv_suffix, sizeof(kv_suffix), " kv=%d", (int) n_kv);
-    }
     const char * layout = q8_quants_first ? " quants-first" : "";
     if (nh_q == nh_kv) {
-        snprintf(label, sizeof(label), "flash_attn %s%s d=%d [%s nq=%d%s]",
-                 name, layout, (int) d, path, (int) n_q, kv_suffix);
+        snprintf(label, sizeof(label), "flash_attn %s%s d=%d [%s nq=%d]", name, layout, (int) d, path, (int) n_q);
     } else {
-        snprintf(label, sizeof(label), "flash_attn %s%s d=%d [%s nq=%d GQA %d:%d%s]",
-                 name, layout, (int) d, path, (int) n_q, (int) nh_q, (int) nh_kv, kv_suffix);
+        snprintf(label, sizeof(label), "flash_attn %s%s d=%d [%s nq=%d GQA %d:%d]",
+                 name, layout, (int) d, path, (int) n_q, (int) nh_q, (int) nh_kv);
     }
 
     const bool turbo_kv = kv_type == GGML_TYPE_TURBO2_0 || kv_type == GGML_TYPE_TURBO3_0 ||
@@ -1113,22 +1103,6 @@ int main() {
         const int64_t gqa_kv = 1;
         probe_fa_f16(cpu, sycl, 128, 1, "vec", gqa_q, gqa_kv);
         probe_flash_attn(cpu, sycl, GGML_TYPE_Q8_0, "q8_0", 128, 1, "vec", Exp::GATE, /*force=*/true, gqa_q, gqa_kv);
-    }
-
-    if (q8_gqa_direct_enabled()) {
-        printf("\n[6c] direct packed q8 GQA boundaries - GATE\n");
-        for (int64_t gqa_q : {2, 16}) {
-            probe_flash_attn(
-                cpu, sycl, GGML_TYPE_Q8_0, "q8_0", 128, 1, "direct",
-                Exp::GATE, /*force=*/true, gqa_q, 1);
-        }
-        for (int64_t n_kv : {4096, 16384}) {
-            for (int64_t gqa_q : {4, 8}) {
-                probe_flash_attn(
-                    cpu, sycl, GGML_TYPE_Q8_0, "q8_0", 128, 1, "direct",
-                    Exp::GATE, /*force=*/true, gqa_q, 1, n_kv);
-            }
-        }
     }
 
     // [7] d=256 FA stress probe — EXPLICITLY GATED. d=256 reproducibly HANGS the A770 SYCL FA
