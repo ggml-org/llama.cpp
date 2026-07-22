@@ -97,7 +97,7 @@ fn load_k_u32_at(byte_offset: u32) -> u32 {
     let hi = K[word_idx + 1u];
     return (lo >> shift) | (hi << (32u - shift));
 }
-#endif LOADERS_QUANTIZED_K
+#endif // LOADERS_QUANTIZED_K
 
 #ifdef LOADERS_QUANTIZED_V
 fn load_v_u16_at(byte_offset: u32) -> u32 {
@@ -116,7 +116,7 @@ fn load_v_u32_at(byte_offset: u32) -> u32 {
     let hi = V[word_idx + 1u];
     return (lo >> shift) | (hi << (32u - shift));
 }
-#endif LOADERS_QUANTIZED_V
+#endif // LOADERS_QUANTIZED_V
 
 #endif // U32_DEQUANT_HELPERS
 

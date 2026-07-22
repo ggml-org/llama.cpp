@@ -209,12 +209,12 @@ var<workgroup> mask_shmem: array<f32, KV_TILE>;
 #endif
 
 #if defined(K_DIRECT) || defined(V_DIRECT)
-// d cache for the quantized KV. several threads uses the same d,
-// so it is more efficient to cache it even with direct path.
+// Shared memory for scale factor (d) in quantized K/V. Multiple threads use the same value,
+// so caching it is more efficient, even on the direct path.
 var<workgroup> d_shmem: array<f32, kv_shmem_size / 32>;
 #endif
 
-// logic for kv_shmem
+// K/V shared memory handling
 #if !defined(K_DIRECT) || !defined(V_DIRECT)
 
 // we can reuse the same shmem for K and V since we only need one at a time
@@ -259,7 +259,7 @@ fn load_v_tile_block(local_x: u32, kv_count: u32, kv_tile: u32, v_head_offset: u
     }
 }
 #endif
-#endif // !K_DIRECT || !V_DIRECT
+#endif // !defined(K_DIRECT) || !defined(V_DIRECT)
 
 // Storage for row max and exp sum during online softmax
 fn calc_softmax_term(kv_idx: u32, slope: f32, has_bias: bool, apply_mask: bool) -> f32 {
@@ -359,7 +359,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
         }
 
 #ifdef K_DIRECT
-      // load only `d` of quantized block into shared memory in the direct path
+      // load only the scale factor (d) from each quantized block into shared memory on the direct path.
 #if defined(K_Q8_0)
         for (var j = local_id.x * 32; j < KV_TILE * HEAD_DIM_QK; j += WG_SIZE * 32) {
             let kv_row = kv_tile + j / HEAD_DIM_QK;
@@ -376,11 +376,11 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
             let d = f32(f16_from_u16(load_k_u16_at(block_byte_base)));
             d_shmem[j / 32] = d;
         }
-#endif // K_Q8_0 || K_Q4_0
+#endif
 #else
       // load k tile into shared memory
       load_k_tile_block(local_id.x, kv_count, kv_tile, k_head_offset);
-#endif // K_DIRECT
+#endif // defined(K_DIRECT)
 
         workgroupBarrier();
 
@@ -436,7 +436,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 #else
                         let idx = k_head_offset + (kv_tile + kv_idx) * params.stride_k1 + (i * 4u);
                         let kv = vec4<f32>(K[idx >> 2u]);
-#endif // K_Q8_0 || K_Q4_0
+#endif
 #else
                         let idx = kv_idx * HEAD_DIM_QK + (i * 4u);
                         let kv = vec4<f32>(
@@ -444,7 +444,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                             kv_shmem[idx + 1u],
                             kv_shmem[idx + 2u],
                             kv_shmem[idx + 3u]);
-#endif // K_DIRECT
+#endif // defined(K_DIRECT)
                         partial_sum += dot(qv, kv);
                     }
                   }
@@ -526,7 +526,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
           }
       }
 
-      
+
 #ifdef V_DIRECT
       // load only `d` of quantized block into shared memory in the direct path
 #if defined(V_Q8_0)
