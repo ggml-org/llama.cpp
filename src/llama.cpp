@@ -290,6 +290,8 @@ static std::pair<int, llama_model *> llama_model_load(struct gguf_context * meta
             return {-1, nullptr};
         }
 
+        model_ptr->own_tensor_split(std::max(model_ptr->devices.size(), model_ptr->get_split_state_ud.n_devices));
+
         auto * model = dynamic_cast<llama_model_base *>(model_ptr.get());
         if (model == nullptr) {
             GGML_ABORT("fatal error: model does not implement llama_model_base");
