@@ -14,11 +14,12 @@ export const SANDBOX_EMPTY_OUTPUT = '(no output)';
 export const SANDBOX_TRUNCATION_NOTICE = '[output truncated]';
 
 const NERDAMER_DESCRIPTION = `
-Symbolic/numeric math via \`nerdamer\` (pre-loaded, do not require, use it directly). Object.keys(nerdamer).filter(k=>typeof nerdamer[k]==='function') list functions.
+Symbolic/numeric math via \`nerdamer\` (pre-loaded, do not require, use it directly).
 nerdamer('diff(sin(x)/x,x)') or nerdamer.diff('sin(x)/x','x') → Expression; convert with .toString()/.text()/.toTeX(), or .evaluate() (→ still Expression, then .toString()).
 nerdamer(expr,{x:2}) substitutes only; chain .evaluate() or pass 'numer' for numeric result.
 solve(expr,var)→Symbol[]; solveEquations([eq1,..])→[[var,val],..] pairs.
-Functions: simplify/expand/factor(expr), diff(expr,var[,n]), integrate(expr,var), defint(expr,from,to,var), limit(expr,var,to), laplace(expr,t,s), ilt(expr,s,t), gcd/lcm(a,b), roots/coeffs/partfrac(expr,var), pfactor(n), numer/decimals/erf(expr), product/sum(expr,var,from,to), mean/median/stdev/variance(...vals)`;
+Functions: simplify/expand/factor(expr), diff(expr,var[,n]), integrate(expr,var), defint(expr,from,to,var), limit(expr,var,to), laplace(expr,t,s), ilt(expr,s,t), gcd/lcm(a,b), roots/coeffs/partfrac(expr,var), pfactor(n), numer/decimals/erf(expr), product/sum(expr,var,from,to), mean/median/stdev/variance(...vals).
+Object.keys(nerdamer).filter(k=>typeof nerdamer[k]==='function') lists all available functions. If you need a function not documented above, list them first — do not guess function names.`;
 
 /**
  * Build the sandbox tool definition. When `includeSymbolicMath` is true,
