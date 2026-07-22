@@ -80,25 +80,17 @@ class ConversationsStore {
 	/** Whether the store has been initialized */
 	isInitialized = $state(false);
 
-	/** Global (non-conversation-specific) thinking toggle default, derived from reasoning effort */
-	pendingThinkingEnabled = $state(false);
-
 	/** Global (non-conversation-specific) reasoning effort default */
-	pendingReasoningEffort = $state<ReasoningEffort | ReasoningEffort.OFF>(
-		ConversationsStore.loadReasoningEffortDefault()
-	);
+	pendingReasoningEffort = $state<ReasoningEffort>(ConversationsStore.loadReasoningEffortDefault());
 
-	/** Last non-off reasoning effort, restored when re-enabling thinking globally */
-	private lastNonOffEffort: ReasoningEffort | null = null;
-
-	/** Load reasoning effort default from localStorage */
-	private static loadReasoningEffortDefault(): ReasoningEffort | ReasoningEffort.OFF {
-		if (typeof globalThis.localStorage === 'undefined') return ReasoningEffort.OFF;
+	/** Load reasoning effort default from localStorage, DEFAULT defers to the server */
+	private static loadReasoningEffortDefault(): ReasoningEffort {
+		if (typeof globalThis.localStorage === 'undefined') return ReasoningEffort.DEFAULT;
 		try {
 			const raw = localStorage.getItem(REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY);
-			return (raw as ReasoningEffort | ReasoningEffort.OFF) || ReasoningEffort.OFF;
+			return (raw as ReasoningEffort) || ReasoningEffort.DEFAULT;
 		} catch {
-			return ReasoningEffort.OFF;
+			return ReasoningEffort.DEFAULT;
 		}
 	}
 
@@ -235,17 +227,10 @@ class ConversationsStore {
 		// servers without a per-conversation override to `mcpServers[i].enabled`,
 		// and only explicit toggles are stored on the conversation.
 
-		// Inherit global thinking/reasoning defaults into the new conversation
-		const thinkingEnabled = this.getThinkingEnabled();
-		conversation.thinkingEnabled = thinkingEnabled;
-		conversation.reasoningEffort =
-			this.pendingReasoningEffort === ReasoningEffort.OFF ? undefined : this.pendingReasoningEffort;
+		// Inherit the global reasoning default into the new conversation
+		conversation.reasoningEffort = this.pendingReasoningEffort;
 		await DatabaseService.updateConversation(conversation.id, {
-			thinkingEnabled,
-			reasoningEffort:
-				this.pendingReasoningEffort === ReasoningEffort.OFF
-					? undefined
-					: this.pendingReasoningEffort
+			reasoningEffort: this.pendingReasoningEffort
 		});
 
 		this.conversations = [conversation, ...this.conversations];
@@ -794,62 +779,20 @@ class ConversationsStore {
 	}
 
 	/**
-	 * Gets the effective thinking-enabled state for the active conversation.
-	 * Returns the conversation override if set, otherwise the global default.
-	 */
-	getThinkingEnabled(): boolean {
-		if (this.activeConversation) {
-			if (this.activeConversation.thinkingEnabled !== undefined) {
-				return this.activeConversation.thinkingEnabled;
-			}
-		}
-		return this.getReasoningEffort() !== ReasoningEffort.OFF;
-	}
-
-	/**
-	 * Sets the thinking-enabled state for the active conversation.
-	 * If no conversation exists, stores the global default.
-	 * @param enabled - The enabled state
-	 */
-	async setThinkingEnabled(enabled: boolean): Promise<void> {
-		if (!this.activeConversation) {
-			if (enabled) {
-				const effort = this.lastNonOffEffort ?? ReasoningEffort.LOW;
-				this.pendingReasoningEffort = effort;
-				this.saveReasoningEffortDefaults();
-			} else {
-				if (this.pendingReasoningEffort !== ReasoningEffort.OFF) {
-					this.lastNonOffEffort = this.pendingReasoningEffort;
-				}
-				this.pendingReasoningEffort = ReasoningEffort.OFF;
-				this.saveReasoningEffortDefaults();
-			}
-			return;
-		}
-
-		this.activeConversation = {
-			...this.activeConversation,
-			thinkingEnabled: enabled
-		};
-
-		await DatabaseService.updateConversation(this.activeConversation.id, {
-			thinkingEnabled: enabled
-		});
-
-		const convIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
-		if (convIndex !== -1) {
-			this.conversations[convIndex].thinkingEnabled = enabled;
-			this.conversations = [...this.conversations];
-		}
-	}
-
-	/**
 	 * Gets the effective reasoning effort for the active conversation.
 	 * Returns the conversation override if set, otherwise the global default.
+	 * DEFAULT means no override is sent and the server decides.
 	 */
-	getReasoningEffort(): ReasoningEffort | ReasoningEffort.OFF {
+	getReasoningEffort(): ReasoningEffort {
 		if (this.activeConversation) {
-			return this.activeConversation.reasoningEffort ?? this.pendingReasoningEffort;
+			if (this.activeConversation.reasoningEffort !== undefined) {
+				return this.activeConversation.reasoningEffort;
+			}
+			// conversations created before the tri-state store an explicit
+			// opt-out only as thinkingEnabled = false
+			if (this.activeConversation.thinkingEnabled === false) {
+				return ReasoningEffort.OFF;
+			}
 		}
 		return this.pendingReasoningEffort;
 	}
@@ -857,7 +800,7 @@ class ConversationsStore {
 	/**
 	 * Sets the reasoning effort for the active conversation.
 	 * If no conversation exists, stores the global default.
-	 * @param effort - The effort level ('low' | 'medium' | 'high' | 'max')
+	 * @param effort - The effort level ('default' | 'off' | 'low' | 'medium' | 'high' | 'max')
 	 */
 	async setReasoningEffort(effort: ReasoningEffort): Promise<void> {
 		if (!this.activeConversation) {
