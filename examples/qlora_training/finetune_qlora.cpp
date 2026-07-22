@@ -982,6 +982,7 @@ struct save_ctx {
     float                lora_alpha;
     int32_t              save_every;     // 0 = disabled
     int32_t              ubatch_per_ctx;
+    int64_t              window_offset;  // completed windows before this epoch call
     int64_t              last_saved;     // last window index at which we saved
     int64_t              epoch;
     int64_t              dataset_windows;
@@ -1004,9 +1005,9 @@ static void save_every_callback(
 
     // Log loss at every window boundary so we can see if/when it diverges.
     if (train && g_save_ctx) {
-        const int64_t window = ibatch / g_save_ctx->ubatch_per_ctx;
+        const int64_t window = g_save_ctx->window_offset + ibatch / g_save_ctx->ubatch_per_ctx;
         const int64_t ubatch_in_window = ibatch % g_save_ctx->ubatch_per_ctx;
-        if (ubatch_in_window == g_save_ctx->ubatch_per_ctx - 1) {
+        if (ibatch > 0 && ubatch_in_window == 0) {
             double loss = 0.0, loss_unc = 0.0;
             ggml_opt_result_loss(result, &loss, &loss_unc);
             fprintf(stderr, "\n[window %4ld] loss=%.4f ± %.4f\n", (long)window, loss, loss_unc);
@@ -1014,7 +1015,7 @@ static void save_every_callback(
     }
 
     if (!train || !g_save_ctx || g_save_ctx->save_every <= 0) return;
-    const int64_t window = ibatch / g_save_ctx->ubatch_per_ctx;
+    const int64_t window = g_save_ctx->window_offset + ibatch / g_save_ctx->ubatch_per_ctx;
     if (window > 0 && window != g_save_ctx->last_saved && window % g_save_ctx->save_every == 0) {
         g_save_ctx->last_saved = window;
         const std::string ckpt = *g_save_ctx->lora_out
@@ -1645,7 +1646,7 @@ int main(int argc, char ** argv) {
 
     save_ctx sctx {
         &lt, &params.lora_out, &arch, &params.model.path, lora_alpha,
-        params.save_every, ubatch_per_ctx, 0, 0, idata_split, n_ctx, params.shuffle_dataset
+        params.save_every, ubatch_per_ctx, 0, 0, 0, idata_split, n_ctx, params.shuffle_dataset
     };
     g_save_ctx = &sctx;
 
@@ -1684,6 +1685,7 @@ int main(int argc, char ** argv) {
 
     for (params.lr.epoch = epoch_start; params.lr.epoch < params.lr.epochs; ++params.lr.epoch) {
         const int64_t idata_start = params.lr.epoch == epoch_start ? window_start : 0;
+        sctx.window_offset = idata_start;
         sctx.last_saved = idata_start;
         sctx.epoch = params.lr.epoch + 1;
         llama_opt_epoch_range(ctx, dataset, result_train, result_eval, idata_start, idata_split,

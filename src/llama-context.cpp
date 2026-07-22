@@ -3564,10 +3564,10 @@ void llama_context::opt_epoch(
     int64_t idata = idata_start;
 
     int64_t t_loop_start = ggml_time_us();
-    int64_t ndata_in_loop = idata_split*ubatch_per_ctx;
+    int64_t ndata_in_loop = (idata_split - idata_start)*ubatch_per_ctx;
     for (; idata < idata_split; ++idata) {
         constexpr bool train = true;
-        const int64_t idata_in_loop = idata*ubatch_per_ctx;
+        const int64_t idata_in_loop = (idata - idata_start)*ubatch_per_ctx;
         const float reward = (g_reward_weights && idata < g_reward_weights_n)
                              ? g_reward_weights[idata] : 1.0f;
 
