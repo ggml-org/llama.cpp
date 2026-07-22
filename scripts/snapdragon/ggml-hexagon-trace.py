@@ -294,6 +294,7 @@ def generate_perfetto_trace(filtered_ops, trace_events, output_path):
     completed_events = []
     if trace_events:
         trace_events = sorted(trace_events, key=lambda e: e['unwrapped_cycles'])
+        one_usec_cycles = max(avg_freq_mhz, 1.0)
 
         active_starts = {}
         for e in trace_events:
@@ -305,6 +306,17 @@ def generate_perfetto_trace(filtered_ops, trace_events, output_path):
 
             key = (t, evt, info)
             if state == 'start':
+                # Handle missing stop (start followed by another start)
+                if key in active_starts:
+                    prev_start = active_starts[key]
+                    completed_events.append({
+                        'thread': t,
+                        'event': evt,
+                        'info': info,
+                        'start_cyc': prev_start,
+                        'end_cyc': prev_start + one_usec_cycles,
+                        'missing_stop': True,
+                    })
                 active_starts[key] = cyc
             elif state == 'stop':
                 if key in active_starts:
@@ -317,6 +329,28 @@ def generate_perfetto_trace(filtered_ops, trace_events, output_path):
                         'start_cyc': start_cyc,
                         'end_cyc': cyc,
                     })
+                else:
+                    # Handle missing start (stop without start)
+                    completed_events.append({
+                        'thread': t,
+                        'event': evt,
+                        'info': info,
+                        'start_cyc': cyc - one_usec_cycles,
+                        'end_cyc': cyc,
+                        'missing_start': True,
+                    })
+
+        # Clear remaining unmatched starts
+        for key, start_cyc in active_starts.items():
+            t, evt, info = key
+            completed_events.append({
+                'thread': t,
+                'event': evt,
+                'info': info,
+                'start_cyc': start_cyc,
+                'end_cyc': start_cyc + one_usec_cycles,
+                'missing_stop': True,
+            })
 
     completed_events.sort(key=lambda e: e['start_cyc'])
 
@@ -475,9 +509,17 @@ def generate_perfetto_trace(filtered_ops, trace_events, output_path):
         for e in completed_events:
             norm_name = normalize_event_name(e['event'], e['info'])
             name = f"DMA {e['info']}" if norm_name == "DMA" else norm_name
+            if e.get('missing_start') or e.get('missing_stop'):
+                name += "!"
+
+            debug_annots = []
+            if e.get('missing_start'):
+                debug_annots.append(make_debug_annotation("missing_start", string_val="true"))
+            if e.get('missing_stop'):
+                debug_annots.append(make_debug_annotation("missing_stop", string_val="true"))
 
             # Slice Begin
-            evt_begin = make_track_event(1, e['uuid'], name=name, category="trace")
+            evt_begin = make_track_event(1, e['uuid'], name=name, category="trace", debug_annotations=debug_annots if debug_annots else None)
             packet_begin = make_trace_packet(e['ts_ns'], track_event=evt_begin)
             write_trace_packet_to_file(f, packet_begin)
 
