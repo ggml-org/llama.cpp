@@ -8,20 +8,29 @@ import {
 	SANDBOX_TRUNCATION_NOTICE
 } from '$lib/constants';
 import { buildSandboxHarness } from './sandbox-harness';
+import { config } from '$lib/stores/settings.svelte';
 import type { ToolExecutionResult } from '$lib/types';
 
-let harnessHtml: string | null = null;
+/** Cached harnesses keyed by whether nerdamer is included. */
+const harnessCache: Record<string, string> = {};
 
 /**
- * The nerdamer prelude lives in its own lazy chunk via `virtual:nerdamer`,
- * keeping it out of the eagerly loaded bundle. Built once per session.
+ * Build the sandbox harness. When symbolic math is enabled, loads the
+ * nerdamer prelude lazily; otherwise builds a plain harness with an empty
+ * prelude. Cached per variant so toggling the setting is instant.
  */
 async function getHarness(): Promise<string> {
-	if (harnessHtml === null) {
-		const { default: nerdamerJs } = await import('virtual:nerdamer');
-		harnessHtml = buildSandboxHarness(nerdamerJs);
+	const enabled = !!config().symbolicMathEnabled;
+	const key = enabled ? 'nerdamer' : 'plain';
+	if (!harnessCache[key]) {
+		if (enabled) {
+			const { default: nerdamerJs } = await import('virtual:nerdamer');
+			harnessCache[key] = buildSandboxHarness(nerdamerJs);
+		} else {
+			harnessCache[key] = buildSandboxHarness('');
+		}
 	}
-	return harnessHtml;
+	return harnessCache[key];
 }
 
 interface SandboxReply {
