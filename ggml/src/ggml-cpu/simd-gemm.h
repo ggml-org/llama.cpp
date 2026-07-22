@@ -109,6 +109,109 @@ static void simd_gemm(
         C += N;
     }
 }
+#elif defined(GGML_SIMD) && defined(__ARM_FEATURE_SVE) && defined(__ARM_FEATURE_FMA)
+
+static constexpr int GEMM_RM = 4;
+
+template <int RM>
+static inline void sve_simd_gemm_ukernel(
+    float       * GGML_RESTRICT C,
+    const float * GGML_RESTRICT A,
+    const float * GGML_RESTRICT B,
+    int K, int N, int KN, svbool_t pg_rem)
+{
+    svfloat32_t acc0, acc1, acc2, acc3;
+    if constexpr (RM > 0) acc0 = svld1_f32(pg_rem, C + 0 * N);
+    if constexpr (RM > 1) acc1 = svld1_f32(pg_rem, C + 1 * N);
+    if constexpr (RM > 2) acc2 = svld1_f32(pg_rem, C + 2 * N);
+    if constexpr (RM > 3) acc3 = svld1_f32(pg_rem, C + 3 * N);
+
+    for (int kk = 0; kk < K; kk++) {
+        svfloat32_t Bv = svld1_f32(pg_rem, B + kk * N);
+        if constexpr (RM > 0) {
+            svfloat32_t p = svdup_n_f32(A[0 * K + kk]);
+            acc0 = svmad_f32_m(pg_rem, Bv, p, acc0);
+        }
+        if constexpr (RM > 1) {
+            svfloat32_t p = svdup_n_f32(A[1 * K + kk]);
+            acc1 = svmad_f32_m(pg_rem, Bv, p, acc1);
+        }
+        if constexpr (RM > 2) {
+            svfloat32_t p = svdup_n_f32(A[2 * K + kk]);
+            acc2 = svmad_f32_m(pg_rem, Bv, p, acc2);
+        }
+        if constexpr (RM > 3) {
+            svfloat32_t p = svdup_n_f32(A[3 * K + kk]);
+            acc3 = svmad_f32_m(pg_rem, Bv, p, acc3);
+        }
+    }
+
+    if constexpr (RM > 0) svst1_f32(pg_rem, C + 0 * N, acc0);
+    if constexpr (RM > 1) svst1_f32(pg_rem, C + 1 * N, acc1);
+    if constexpr (RM > 2) svst1_f32(pg_rem, C + 2 * N, acc2);
+    if constexpr (RM > 3) svst1_f32(pg_rem, C + 3 * N, acc3);
+}
+
+template <int RM>
+static inline void sve_simd_gemm_dispatch_tail(
+    float       * GGML_RESTRICT C,
+    const float * GGML_RESTRICT A,
+    const float * GGML_RESTRICT B,
+    int K, int N, int KN, int remaining_rows, svbool_t pg_rem)
+{
+    if constexpr (RM > 0) {
+        if (remaining_rows == RM) {
+            sve_simd_gemm_ukernel<RM>(C, A, B, K, N, KN, pg_rem);
+        } else {
+            sve_simd_gemm_dispatch_tail<RM - 1>(C, A, B, K, N, KN, remaining_rows, pg_rem);
+        }
+    }
+}
+
+static void simd_gemm(
+    float       * GGML_RESTRICT C,
+    const float * GGML_RESTRICT A,
+    const float * GGML_RESTRICT B,
+    int M, int K, int N)
+{
+    static bool warned = false;
+    if (!warned) {
+        // fprintf(stderr, "DEBUG: Using SVE optimized simd_gemm path (M=%d, K=%d, N=%d)\n", M, K, N);
+        warned = true;
+    }
+    const int KN = svcntw();
+    svbool_t pg = svptrue_b32();
+
+    int64_t ii = 0;
+    for (; ii + GEMM_RM <= M; ii += GEMM_RM) {
+        int64_t jj = 0;
+        for (; jj + KN <= N; jj += KN) {
+            sve_simd_gemm_ukernel<GEMM_RM>(C + jj, A, B + jj, K, N, KN, pg);
+        }
+        if (jj < N) {
+            int rem_n = N - (int)jj;
+            svbool_t pg_rem = svwhilelt_b32(0, rem_n);
+            sve_simd_gemm_ukernel<GEMM_RM>(C + jj, A, B + jj, K, N, KN, pg_rem);
+        }
+
+        A += GEMM_RM * K;
+        C += GEMM_RM * N;
+    }
+
+    int remaining_rows = M - (int)ii;
+    if (remaining_rows > 0) {
+        int64_t jj = 0;
+        for (; jj + KN <= N; jj += KN) {
+            sve_simd_gemm_dispatch_tail<GEMM_RM - 1>(C + jj, A, B + jj, K, N, KN, remaining_rows, pg);
+        }
+        if (jj < N) {
+            int rem_n = N - (int)jj;
+            svbool_t pg_rem = svwhilelt_b32(0, rem_n);
+            sve_simd_gemm_dispatch_tail<GEMM_RM - 1>(C + jj, A, B + jj, K, N, KN, remaining_rows, pg_rem);
+        }
+    }
+}
+
 #elif defined(GGML_SIMD) && defined(__riscv_v_intrinsic)
 // RM accumulators + 1 B vector = RM + 1 <= 8  =>  RM <= 7
 // Microkernel: C[RM x vl] += A[RM x K] * B[K x N]
