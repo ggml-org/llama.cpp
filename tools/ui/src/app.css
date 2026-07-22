@@ -193,6 +193,33 @@
 		-ms-overflow-style: none;
 		scrollbar-width: none;
 	}
+
+	.shimmer-text {
+		background: linear-gradient(
+			90deg,
+			var(--muted-foreground),
+			var(--foreground),
+			var(--muted-foreground)
+		);
+		background-size: 200% 100%;
+		background-clip: text;
+		-webkit-background-clip: text;
+		-webkit-text-fill-color: transparent;
+		font-weight: 500;
+		animation: shimmer 1s linear infinite;
+	}
+
+	@keyframes shimmer {
+		to {
+			background-position: -200% 0;
+		}
+	}
+
+	@media (prefers-reduced-motion: reduce) {
+		.shimmer-text {
+			animation: none;
+		}
+	}
 }
 
 .mermaidTooltip {

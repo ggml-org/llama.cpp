@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { AlertTriangle, Loader2, RefreshCw } from '@lucide/svelte';
 	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
 	import * as Alert from '$lib/components/ui/alert';
@@ -15,9 +16,9 @@
 	>
 		<Alert.Root variant={isLoadingModel ? 'default' : 'destructive'}>
 			{#if isLoadingModel}
-				<Loader2 class="h-4 w-4 animate-spin" />
+				<Loader2 class="{ICON_CLASS_DEFAULT} animate-spin" />
 			{:else}
-				<AlertTriangle class="h-4 w-4" />
+				<AlertTriangle class={ICON_CLASS_DEFAULT} />
 			{/if}
 
 			<Alert.Title class="flex items-center justify-between">

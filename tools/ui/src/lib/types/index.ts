@@ -128,6 +128,7 @@ export type {
 	MCPClientConfig,
 	MCPServerSettingsEntry,
 	MCPServerDisplayInfo,
+	RecommendedMCPServer,
 	MCPToolCall,
 	OpenAIToolDefinition,
 	ServerStatus,
