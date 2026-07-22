@@ -74,6 +74,20 @@ llama-server -m Qwen3-4B.gguf -md Qwen3-4B-DFlash.gguf \
 
 `--spec-draft-n-max` is clamped to the draft model's trained block size.
 
+Laguna DFlash drafters (for example `poolside/Laguna-XS-2.1-DFlash` for
+`poolside/Laguna-XS-2.1`) are supported through the same flow. Their GGUF is marked
+with `dflash.decoder_arch = laguna`, which switches the draft layers to the Laguna
+decoder contract (softplus attention gate, per-aux feature norms, context K/V through
+the input layernorm, causal noise block):
+
+```bash
+python convert_hf_to_gguf.py poolside/Laguna-XS-2.1-DFlash \
+    --target-model-dir poolside/Laguna-XS-2.1 --outtype bf16 --outfile Laguna-XS-2.1-DFlash.gguf
+
+llama-server -m Laguna-XS-2.1.gguf -md Laguna-XS-2.1-DFlash.gguf \
+    --spec-type draft-dflash --spec-draft-n-max 15 -fa on --jinja
+```
+
 See:
 
 - #22105
