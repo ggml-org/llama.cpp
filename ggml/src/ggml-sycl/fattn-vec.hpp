@@ -36,6 +36,7 @@ template <int D,
           int type_K,
           int type_V,
           bool q8_quants_first,
+          bool gqa_share,
           bool use_logit_softcap,
           int warp_size>  // D == head size
 static void flash_attn_ext_vec(const char* __restrict__ Q,
@@ -130,14 +131,18 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
         : get_dequantize_V<type_V, float, V_rows_per_thread>();
 #endif // GGML_SYCL_F16
 
-    const int ic0 = item_ct1.get_group(2) * ncols;  // Index of the Q/QKV column to work on.
+    const int ic0 = item_ct1.get_group(2) * (gqa_share ? 1 : ncols);
 
-    const int sequence  = item_ct1.get_group(0) / ne02;
-    const int head      = item_ct1.get_group(0) - sequence * ne02;
-    const int gqa_ratio = ne02 / ne12; // With grouped query attention there are > 1 Q matrices per K, V matrix.
-    Q += nb03*sequence + nb02* head              + nb01*ic0;
-    K += nb13*sequence + nb12*(head / gqa_ratio);
-    V += nb23*sequence + nb22*(head / gqa_ratio);
+    const int sequence = gqa_share
+        ? item_ct1.get_group(0) / (ne02 / ncols)
+        : item_ct1.get_group(0) / ne02;
+    const int head = gqa_share
+        ? item_ct1.get_group(0) * ncols - sequence * ne02
+        : item_ct1.get_group(0) - sequence * ne02;
+    const int gqa_ratio = ne02 / ne12;
+    Q += nb03 * sequence + nb02 * head + nb01 * ic0;
+    K += nb13 * sequence + nb12 * (head / gqa_ratio);
+    V += nb23 * sequence + nb22 * (head / gqa_ratio);
 
     const sycl::half * maskh = (const sycl::half *) (mask + nb33 * (sequence % ne33) + nb31 * ic0);
 
@@ -209,7 +214,7 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
             sycl::float2 * tmp_q_ds  = (sycl::float2 *) (tmp_q_i32 + D / sizeof(int));
 
             // Set memory to zero if out of bounds:
-            if (ncols > 1 && ic0 + j >= int(ne01.z())) {
+            if (!gqa_share && ncols > 1 && ic0 + j >= int(ne01.z())) {
 #pragma unroll
                 for (int i0 = 0; i0 < int(D/sizeof(int)); i0 += warp_size) {
                     const int i = i0 + item_ct1.get_local_id(2);
@@ -222,7 +227,7 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
                     tmp_q_ds[item_ct1.get_local_id(2)] = sycl::float2(0.0f, 0.0f);
                 }
             } else {
-                const float * Q_f = (const float *) (Q + j*nb01);
+                const float * Q_f = (const float *) (Q + j * (gqa_share ? nb02 : nb01));
                 constexpr int nthreads_quantize = D/sizeof(int) < warp_size ? D/sizeof(int) : warp_size;
 #pragma unroll
                 for (int i0 = 0; i0 < int(D/sizeof(int)); i0 += nthreads_quantize) {
@@ -257,7 +262,8 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
         const sycl::half2 scale_h2 = sycl::half2(scale, scale);
 #pragma unroll
         for (int j = 0; j < ncols; ++j) {
-            const sycl::float2 * Q_j = (const sycl::float2 *) (Q + j * nb01);
+            const sycl::float2 * Q_j =
+                (const sycl::float2 *) (Q + j * (gqa_share ? nb02 : nb01));
 #pragma unroll
             for (int i0 = 0; i0 < D/2; i0 += nthreads_KQ*cpy_ne) {
                 const int i = i0 + (nthreads_KQ == warp_size ? item_ct1.get_local_id(2) :
@@ -267,7 +273,7 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
                 sycl::float2 tmp[cpy_ne] = {
                     { 0.0f, 0.0f }
                 };
-                if (ncols == 1 || ic0 + j < int(ne01.z())) {
+                if (gqa_share || ncols == 1 || ic0 + j < int(ne01.z())) {
                     ggml_sycl_memcpy_1<cpy_nb>(tmp,            &Q_j[i]);
                     ggml_sycl_memcpy_1<cpy_nb>(tmp + cpy_ne/2, &Q_j[i + cpy_ne/2]);
                 }
@@ -280,11 +286,12 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
 #else
 #pragma unroll
         for (int j = 0; j < ncols; ++j) {
-            const sycl::float2 * Q_j = (const sycl::float2 *) (Q + j*nb01);
+            const sycl::float2 * Q_j =
+                (const sycl::float2 *) (Q + j * (gqa_share ? nb02 : nb01));
 #pragma unroll
             for (int i0 = 0; i0 < D/2; i0 += nthreads_KQ*cpy_ne) {
                 const int i = i0 + (nthreads_KQ == warp_size ? item_ct1.get_local_id(2) : item_ct1.get_local_id(2) % nthreads_KQ)*cpy_ne;
-                if (ncols == 1 || ic0 + j < int(ne01.z())) {
+                if (gqa_share || ncols == 1 || ic0 + j < int(ne01.z())) {
                     ggml_sycl_memcpy_1<cpy_nb>(&Q_reg[j][i0/nthreads_KQ],            &Q_j[i]);
                     ggml_sycl_memcpy_1<cpy_nb>(&Q_reg[j][i0/nthreads_KQ + cpy_ne/2], &Q_j[i + cpy_ne/2]);
                 }
@@ -322,16 +329,53 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
             const int i_KQ = item_ct1.get_local_id(1) * warp_size +
                              (nthreads_KQ == warp_size ? 0 : (item_ct1.get_local_id(2) & ~(nthreads_KQ - 1))) + i_KQ_0;
 
+            float shared_KQ[ncols] = {};
+            if constexpr (gqa_share) {
+                static_assert(
+                    D == 128 && type_K == GGML_TYPE_Q8_0 &&
+                    type_V == GGML_TYPE_Q8_0 && q8_quants_first);
+                const int lane = item_ct1.get_local_id(2) % nthreads_KQ;
+                const char * K_row = K + i_KQ * nb11;
+                const int8_t * K_quants = reinterpret_cast<const int8_t *>(K_row);
+                const sycl::half * K_scales =
+                    reinterpret_cast<const sycl::half *>(K_row + D);
+#pragma unroll
+                for (int k_KQ_0 = 0; k_KQ_0 < int(D / sizeof(int)); k_KQ_0 += nthreads_KQ) {
+                    const int k_KQ = k_KQ_0 + lane;
+                    const int ib = k_KQ / QI8_0;
+                    const int iqs = k_KQ % QI8_0;
+                    int K_qs;
+                    ggml_sycl_memcpy_1<sizeof(K_qs), 2>(
+                        &K_qs, K_quants + ib * QK8_0 + 4 * iqs);
+                    const float K_d = float(K_scales[ib]);
+#pragma unroll
+                    for (int j = 0; j < ncols; ++j) {
+                        shared_KQ[j] +=
+                            K_d * Q_ds[j][k_KQ_0 / nthreads_KQ].x() *
+                            ggml_sycl_dp4a(
+                                K_qs,
+                                Q_i32[j][k_KQ_0 / nthreads_KQ],
+                                0);
+                    }
+                }
+            }
+
 #pragma unroll
             for (int j = 0; j < ncols; ++j) {
-                float sum = vec_dot_KQ(K + i_KQ*nb11, Q_reg[j], Q_i32[j], Q_ds[j]);
+                float sum;
+                if constexpr (gqa_share) {
+                    sum = shared_KQ[j];
+                } else {
+                    sum = vec_dot_KQ(K + i_KQ * nb11, Q_reg[j], Q_i32[j], Q_ds[j]);
+                }
                 sum = warp_reduce_sum<nthreads_KQ>(sum);
 
                 if (use_logit_softcap) {
                     sum = logit_softcap * sycl::tanh(sum);
                 }
                 if (mask) {
-                    sum += slope * sycl::vec<sycl::half, 1>(maskh[j * ne11 + i_KQ])
+                    sum += slope * sycl::vec<sycl::half, 1>(
+                                       maskh[(gqa_share ? 0 : j * ne11) + i_KQ])
                                        .convert<float, sycl::rounding_mode::automatic>()[0];
                 }
 
@@ -432,7 +476,7 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
     }
 
     if (sinks && item_ct1.get_group(1) == 0) {
-        const float sink = ((const float *) sinks)[head];
+        const float sink = ((const float *) sinks)[head + (gqa_share ? item_ct1.get_local_id(1) : 0)];
 
 #pragma unroll
         for (int j0 = 0; j0 < ncols; j0 += nwarps) {
@@ -485,7 +529,7 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
 
 #pragma unroll
     for (int j_VKQ = 0; j_VKQ < ncols; ++j_VKQ) {
-        if (ncols > 1 && ic0 + j_VKQ >= int(ne01.z())) {
+        if (!gqa_share && ncols > 1 && ic0 + j_VKQ >= int(ne01.z())) {
             break;
         }
 
@@ -555,8 +599,10 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
                 if (item_ct1.get_group_range(1) == 1) {
                     dst_val /= KQ_sum[j_VKQ];
                 }
-                dst[(((sequence * int(ne01.z()) + ic0 + j_VKQ) * ne02 + head) * item_ct1.get_group_range(1) +
-                     item_ct1.get_group(1)) *
+                const int dst_token = ic0 + (gqa_share ? 0 : j_VKQ);
+                const int dst_head = head + (gqa_share ? j_VKQ : 0);
+                dst[(((sequence * int(ne01.z()) + dst_token) * ne02 + dst_head) *
+                     item_ct1.get_group_range(1) + item_ct1.get_group(1)) *
                         D +
                     i0 + tid] = dst_val;
             }
@@ -568,9 +614,16 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
 
     }
 
-    if (item_ct1.get_group_range(1) != 1 && tid < ncols && (ncols == 1 || ic0 + tid < int(ne01.z()))) {
-        dst_meta[((sequence * int(ne01.z()) + ic0 + tid) * ne02 + head) * item_ct1.get_group_range(1) +
-                 item_ct1.get_group(1)] = make_float2(KQ_max[tid], KQ_sum[tid]);
+    // One first-warp lane owns each GQA split-meta slot.
+    if (item_ct1.get_group_range(1) != 1 &&
+        item_ct1.get_local_id(1) == 0 &&
+        tid < ncols &&
+        (gqa_share || ncols == 1 || ic0 + tid < int(ne01.z()))) {
+        const int dst_token = ic0 + (gqa_share ? 0 : tid);
+        const int dst_head = head + (gqa_share ? tid : 0);
+        dst_meta[((sequence * int(ne01.z()) + dst_token) * ne02 + dst_head) *
+                 item_ct1.get_group_range(1) + item_ct1.get_group(1)] =
+            make_float2(KQ_max[tid], KQ_sum[tid]);
     }
 #else
     GGML_UNUSED_VARS(Q, K, V, mask, sinks, KV_max, dst, dst_meta, scale,
@@ -602,7 +655,7 @@ void ggml_sycl_flash_attn_ext_vec_case_impl(ggml_backend_sycl_context & ctx, ggm
 
     launch_fattn<D, cols_per_block, 1,
                  flash_attn_ext_vec<D, cols_per_block, type_K, type_V,
-                                    q8_quants_first, use_logit_softcap, warp_size>, warp_size>(
+                                    q8_quants_first, false, use_logit_softcap, warp_size>, warp_size>(
         ctx, dst, nwarps, nbytes_shared, D, need_f16_K, need_f16_V, false);
 }
 
@@ -640,6 +693,45 @@ template <int D>
 void ggml_sycl_flash_attn_ext_vec_case_q8_quants_first(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     static_assert(D == 128);
     ggml_sycl_flash_attn_ext_vec_case_dispatch<D, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, true>(ctx, dst);
+}
+
+template <int GQA>
+static void ggml_sycl_flash_attn_ext_vec_q8_gqa_impl(
+        ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    constexpr int D = 128;
+    constexpr int warp_size = WARP_16_SIZE;
+    const int cc = ggml_sycl_info().devices[ggml_sycl_get_device()].cc;
+    const int nthreads = ggml_sycl_fattn_vec_get_nthreads_host(cc);
+    const int nwarps = nthreads / warp_size;
+    constexpr size_t nbytes_shared = 0;
+
+    launch_fattn<D, 1, GQA,
+                 flash_attn_ext_vec<D, GQA, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0,
+                                    true, true, false, warp_size>, warp_size>(
+        ctx, dst, nwarps, nbytes_shared, D, false, false, false);
+}
+
+static void ggml_sycl_flash_attn_ext_vec_q8_gqa(
+        ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    const ggml_tensor * Q = dst->src[0];
+    const ggml_tensor * K = dst->src[1];
+    const int gqa_ratio = Q->ne[2] / K->ne[2];
+    switch (gqa_ratio) {
+        case 2:
+            ggml_sycl_flash_attn_ext_vec_q8_gqa_impl<2>(ctx, dst);
+            return;
+        case 4:
+            ggml_sycl_flash_attn_ext_vec_q8_gqa_impl<4>(ctx, dst);
+            return;
+        case 8:
+            ggml_sycl_flash_attn_ext_vec_q8_gqa_impl<8>(ctx, dst);
+            return;
+        case 16:
+            ggml_sycl_flash_attn_ext_vec_q8_gqa_impl<16>(ctx, dst);
+            return;
+        default:
+            GGML_ABORT("unsupported direct q8 GQA ratio");
+    }
 }
 
 #define DECL_FATTN_VEC_CASE(D, type_K, type_V)                              \

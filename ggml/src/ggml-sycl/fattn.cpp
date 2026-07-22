@@ -188,6 +188,7 @@ enum best_fattn_kernel {
     BEST_FATTN_KERNEL_VEC      = 100,
     BEST_FATTN_KERNEL_TILE     = 200,
     BEST_FATTN_KERNEL_XMX      = 300,
+    BEST_FATTN_KERNEL_Q8_GQA   = 400,
 };
 
 struct ggml_sycl_fattn_profile_bucket {
@@ -284,7 +285,8 @@ void ggml_sycl_fattn_profile_record(
 }
 
 static void ggml_sycl_log_fattn_route_once(best_fattn_kernel route, const ggml_tensor * dst) {
-    if (!ggml_sycl_fattn_profile_enabled() || route == BEST_FATTN_KERNEL_NONE) {
+    if (route == BEST_FATTN_KERNEL_NONE ||
+        (route != BEST_FATTN_KERNEL_Q8_GQA && !ggml_sycl_fattn_profile_enabled())) {
         return;
     }
 
@@ -301,6 +303,10 @@ static void ggml_sycl_log_fattn_route_once(best_fattn_kernel route, const ggml_t
             route_index = 2;
             route_name = "XMX";
             break;
+        case BEST_FATTN_KERNEL_Q8_GQA:
+            route_index = 3;
+            route_name = "Q8_GQA";
+            break;
         case BEST_FATTN_KERNEL_NONE:
             return;
     }
@@ -309,7 +315,7 @@ static void ggml_sycl_log_fattn_route_once(best_fattn_kernel route, const ggml_t
     const ggml_tensor * K = dst->src[1];
     const ggml_tensor * V = dst->src[2];
     const bool is_decode = Q->ne[1] == 1;
-    static std::atomic<bool> logged[3][2] = {};
+    static std::atomic<bool> logged[4][2] = {};
     if (logged[route_index][is_decode ? 0 : 1].exchange(true, std::memory_order_relaxed)) {
         return;
     }
@@ -462,6 +468,38 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
         return BEST_FATTN_KERNEL_VEC;
     }
     const bool can_use_vector_kernel = Q->ne[0] <= 512 && Q->ne[0] % 64 == 0 && K->ne[1] % FATTN_KQ_STRIDE == 0;
+    const char * q8_gqa_direct_env = getenv("GGML_SYCL_FA_Q8_GQA_DIRECT");
+    const bool q8_gqa_direct_enabled =
+        q8_gqa_direct_env != nullptr &&
+        q8_gqa_direct_env[0] != '\0' &&
+        !(q8_gqa_direct_env[0] == '0' && q8_gqa_direct_env[1] == '\0');
+    const bool direct_gqa_ratio =
+        gqa_ratio == 2 || gqa_ratio == 4 || gqa_ratio == 8 || gqa_ratio == 16;
+    const bool q8_gqa_direct =
+        q8_gqa_direct_enabled &&
+        Q->ne[0] == 128 &&
+        Q->ne[1] == 1 &&
+        K->ne[0] == 128 &&
+        V->ne[0] == 128 &&
+        K->type == GGML_TYPE_Q8_0 &&
+        V->type == GGML_TYPE_Q8_0 &&
+        direct_gqa_ratio &&
+        K->ne[1] % FATTN_KQ_STRIDE == 0 &&
+        Q->ne[3] == 1 &&
+        K->ne[3] == 1 &&
+        V->ne[3] == 1 &&
+        mask != nullptr &&
+        mask->type == GGML_TYPE_F16 &&
+        mask->nb[0] == sizeof(ggml_fp16_t) &&
+        mask->ne[3] == 1 &&
+        max_bias == 0.0f &&
+        logit_softcap == 0.0f &&
+        dst->src[4] == nullptr &&
+        ggml_sycl_tensor_is_kv_q8_quants_first(K) &&
+        ggml_sycl_tensor_is_kv_q8_quants_first(V);
+    if (q8_gqa_direct) {
+        return BEST_FATTN_KERNEL_Q8_GQA;
+    }
     // TILE's quantized staging uses the source-aware non-contiguous converter,
     // so both canonical and quants-first q8_0 rows are supported here.
     const bool force_q8_gqa_tile =
@@ -534,6 +572,9 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
             break;
         case BEST_FATTN_KERNEL_XMX:
             ggml_sycl_flash_attn_ext_xmx(ctx, dst);
+            break;
+        case BEST_FATTN_KERNEL_Q8_GQA:
+            ggml_sycl_flash_attn_ext_vec_q8_gqa(ctx, dst);
             break;
     }
 }
