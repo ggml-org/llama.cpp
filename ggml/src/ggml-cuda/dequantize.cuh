@@ -97,3 +97,20 @@ static __device__ __forceinline__ void dequantize_q8_0(const void * vx, const in
     v.x *= d;
     v.y *= d;
 }
+
+static __device__ __forceinline__ void dequantize_e8_2(const void * vx, const int64_t ib, const int iqs, float2 & v){
+    const block_e8_2 * x = (const block_e8_2 *) vx;
+
+    const float d = x[ib].d;
+    const uint8_t * q = x[ib].q;
+
+    const int e0 = iqs;
+    const int e1 = iqs + 1;
+
+    const uint8_t c0 = (q[e0 / 4] >> ((e0 % 4) * 2)) & 0x03;
+    const uint8_t c1 = (q[e1 / 4] >> ((e1 % 4) * 2)) & 0x03;
+
+    const float lut[4] = {-1.5f, -0.5f, 0.5f, 1.5f};
+    v.x = d * lut[c0];
+    v.y = d * lut[c1];
+}
