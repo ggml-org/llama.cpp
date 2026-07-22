@@ -2280,38 +2280,6 @@ static enum ggml_status ggml_backend_meta_graph_compute(ggml_backend_t backend, 
     return GGML_STATUS_SUCCESS;
 }
 
-bool ggml_backend_meta_top_k(
-        ggml_backend_t backend, const ggml_tensor * tensor, int32_t k, int32_t * ids, float * values) {
-    if (!ggml_backend_is_meta(backend) || tensor == nullptr || ids == nullptr || values == nullptr ||
-            tensor->type != GGML_TYPE_F32 || ggml_nrows(tensor) != 1 || k <= 0 || k > 256) {
-        return false;
-    }
-
-    auto * backend_ctx = (ggml_backend_meta_context *) backend->context;
-    const size_t n_backends = backend_ctx->backend_configs.size();
-    const ggml_backend_meta_split_state split_state =
-        ggml_backend_meta_get_split_state(tensor, /*assume_sync =*/ false);
-    if (split_state.axis != GGML_BACKEND_SPLIT_AXIS_0 || split_state.n_segments != 1 || split_state.nr[0] != 1) {
-        return false;
-    }
-
-    if (!backend_ctx->comm_ctx) {
-        return false;
-    }
-    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(
-        ggml_backend_get_device(backend_ctx->backend_configs[0].backend));
-    auto comm_vocab_top_k = (ggml_backend_comm_vocab_top_k_t)
-        ggml_backend_reg_get_proc_address(reg, "ggml_backend_comm_vocab_top_k");
-    if (comm_vocab_top_k == nullptr) {
-        return false;
-    }
-    std::vector<ggml_tensor *> simple_tensors(n_backends);
-    for (size_t j = 0; j < n_backends; ++j) {
-        simple_tensors[j] = ggml_backend_meta_buffer_simple_tensor(tensor, j);
-    }
-    return comm_vocab_top_k(backend_ctx->comm_ctx, simple_tensors.data(), k, ids, values);
-}
-
 static const ggml_backend_i ggml_backend_meta_i = {
     /* .get_name                = */ ggml_backend_meta_get_name,
     /* .free                    = */ ggml_backend_meta_free,

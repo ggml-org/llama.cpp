@@ -1,6 +1,5 @@
 #include "argsort.cuh"
 #include "top-k.cuh"
-#include "ggml-backend-impl.h"
 
 #ifdef GGML_CUDA_USE_CUB
 #    if defined(GGML_USE_HIP)
@@ -194,52 +193,5 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     argsort_f32_i32_cuda_bitonic(src0_d, tmp_dst, ncols, nrows, GGML_SORT_ORDER_DESC, stream);
     CUDA_CHECK(cudaMemcpy2DAsync(dst_d, k * sizeof(int), tmp_dst, ncols * sizeof(int), k * sizeof(int), nrows,
                                  cudaMemcpyDeviceToDevice, stream));
-#endif
-}
-
-
-
-static __global__ void vocab_top_k_pack_keys(
-        const float * logits, uint64_t * keys, int n, int global_offset) {
-    const int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= n) {
-        return;
-    }
-    uint32_t bits = __float_as_uint(logits[i]);
-    const uint32_t magnitude = bits & 0x7fffffffu;
-    if (magnitude > 0x7f800000u) bits = 0xff800000u; // NaN -> -Inf
-    if (magnitude == 0) bits = 0;                    // -0 -> +0
-    const uint32_t ordered = (bits & 0x80000000u) ? ~bits : (bits ^ 0x80000000u);
-    keys[i] = (uint64_t) ordered << 32 | (0xffffffffu - (uint32_t) (global_offset + i));
-}
-
-bool ggml_cuda_vocab_top_k_device(
-        ggml_backend_cuda_context & ctx, const ggml_tensor * src,
-        int32_t k, int32_t global_offset, uint64_t * packed) {
-#ifndef ROCPRIM_TOP_K_AVAILABLE
-    GGML_UNUSED(ctx); GGML_UNUSED(src); GGML_UNUSED(k); GGML_UNUSED(global_offset); GGML_UNUSED(packed);
-    return false;
-#else
-    if (src == nullptr || src->type != GGML_TYPE_F32 || !ggml_is_contiguous(src) ||
-            ggml_nrows(src) != 1 || k <= 0 || k > 256 || src->ne[0] < k) {
-        return false;
-    }
-    const int n = src->ne[0];
-    ggml_cuda_pool_alloc<uint64_t> keys(ctx.pool(), n);
-    ggml_cuda_pool_alloc<int> selected_values(ctx.pool(), k);
-    vocab_top_k_pack_keys<<<(n + 255) / 256, 256, 0, ctx.stream()>>>(
-        (const float *) src->data, keys.get(), n, global_offset);
-    CUDA_CHECK(cudaGetLastError());
-
-    const rocprim::counting_iterator<int> indices(0);
-    size_t temp_bytes = 0;
-    CUDA_CHECK((rocprim::topk_pairs<rocprim::default_config, true>(
-        nullptr, temp_bytes, keys.get(), packed, indices, selected_values.get(),
-        (uint32_t) n, (uint32_t) k, rocprim::identity_decomposer{}, ctx.stream())));
-    ggml_cuda_pool_alloc<uint8_t> temp(ctx.pool(), temp_bytes);
-    CUDA_CHECK((rocprim::topk_pairs<rocprim::default_config, true>(
-        temp.get(), temp_bytes, keys.get(), packed, indices, selected_values.get(),
-        (uint32_t) n, (uint32_t) k, rocprim::identity_decomposer{}, ctx.stream())));
-    return true;
 #endif
 }

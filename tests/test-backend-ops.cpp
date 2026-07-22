@@ -5956,17 +5956,6 @@ struct test_top_k : public test_case {
     }
 };
 
-// Keep opt-in large-vocabulary TOP_K perf graphs bounded. The generic perf
-// harness otherwise duplicates the small output node until it estimates 32 GiB
-// of work, creating tens of thousands of expensive selection nodes.
-struct test_top_k_perf : public test_top_k {
-    using test_top_k::test_top_k;
-
-    size_t op_size(ggml_tensor * t) override {
-        return std::max<size_t>(test_top_k::op_size(t), 32ULL << 30);
-    }
-};
-
 enum MoeGatingFunc {
     GATING_FUNC_SOFTMAX,
     GATING_FUNC_SIGMOID,
@@ -8816,17 +8805,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 8192, 512, 5120, {128, 1}, {1, 1}));
 #endif
 
-    // Opt-in exact-shape Qwen3.6 27B vocabulary-head projection benchmarks.
-    // These allocate up to 2.5 GiB and must not run in the default test suite.
-    if (getenv("GGML_TEST_VOCAB_SHARD")) {
-        for (int64_t rows : {1, 2, 4}) {
-            test_cases.emplace_back(new test_mul_mat(
-                    GGML_TYPE_BF16, GGML_TYPE_F32, 248320, rows, 5120, {1, 1}, {1, 1}));
-            test_cases.emplace_back(new test_mul_mat(
-                    GGML_TYPE_BF16, GGML_TYPE_F32,  62080, rows, 5120, {1, 1}, {1, 1}));
-        }
-    }
-
     for (ggml_type type_a : all_types) {
         for (int i = 1; i < 10; ++i) {
             test_cases.emplace_back(new test_mul_mat(type_a,    GGML_TYPE_F32, 16,  i, 256, { 1,  1}, {1, 1}));
@@ -9359,14 +9337,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // Qwen large-vocabulary sampling and rocPRIM partial-selection boundary.
     test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {248320, 1, 1, 1}, 20));
     test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {248320, 1, 1, 1}, 256));
-    if (getenv("GGML_TEST_VOCAB_SHARD")) {
-        for (int64_t rows : {1, 2, 4}) {
-            for (int64_t cols : {62080, 248320}) {
-                test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {cols, rows, 1, 1}, 20));
-                test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {cols, rows, 1, 1}, 256));
-            }
-        }
-    }
 
     // exhaustive top_k tests
     //for (int i = 1; i < 9999; ++i) {
@@ -9711,24 +9681,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 // Test cases for performance evaluation: should be representative of real-world use cases
 static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     std::vector<std::unique_ptr<test_case>> test_cases;
-
-    // Opt-in exact-shape Qwen3.6 27B vocabulary-head performance cases.
-    if (getenv("GGML_TEST_VOCAB_SHARD")) {
-        for (int64_t rows : {1, 2, 4}) {
-            test_cases.emplace_back(new test_mul_mat(
-                    GGML_TYPE_BF16, GGML_TYPE_F32, 248320, rows, 5120, {1, 1}, {1, 1}));
-            test_cases.emplace_back(new test_mul_mat(
-                    GGML_TYPE_BF16, GGML_TYPE_F32,  62080, rows, 5120, {1, 1}, {1, 1}));
-            for (int64_t cols : {80, 1024, 62080, 248320}) {
-                if (cols >= 20) {
-                    test_cases.emplace_back(new test_top_k_perf(GGML_TYPE_F32, {cols, rows, 1, 1}, 20));
-                }
-                if (cols >= 256) {
-                    test_cases.emplace_back(new test_top_k_perf(GGML_TYPE_F32, {cols, rows, 1, 1}, 256));
-                }
-            }
-        }
-    }
 
     // Conv2d: K=CRS=NPQ=4096 matmul performance
     uint32_t                        iwh_idx  = 0;

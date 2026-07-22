@@ -164,9 +164,6 @@ llama_context::llama_context(
     // Initialize backend samplers here so they are part of the sampling graph
     // before the reserve passes run later in this function. This avoids a later
     // re-reserve when graph nodes change.
-    if (model.has_tensor_parallel_vocab_output() && params.samplers != nullptr && params.n_samplers > 0) {
-        throw std::runtime_error("backend samplers are unsupported with GGML_TP_VOCAB_OUTPUT");
-    }
     if (params.samplers != nullptr && params.n_samplers > 0) {
         for (size_t i = 0; i < params.n_samplers; ++i) {
             const auto & config = params.samplers[i];
@@ -839,10 +836,6 @@ enum llama_pooling_type llama_context::pooling_type() const {
 }
 
 float * llama_context::get_logits() {
-    if (model.has_tensor_parallel_vocab_output()) {
-        LLAMA_LOG_ERROR("%s: dense logits are unavailable with GGML_TP_VOCAB_OUTPUT\n", __func__);
-        return nullptr;
-    }
     output_reorder();
 
     return logits.data;
@@ -878,10 +871,6 @@ int64_t llama_context::output_resolve_row(int32_t i) const {
 }
 
 float * llama_context::get_logits_ith(int32_t i) {
-    if (model.has_tensor_parallel_vocab_output()) {
-        LLAMA_LOG_ERROR("%s: dense logits are unavailable with GGML_TP_VOCAB_OUTPUT\n", __func__);
-        return nullptr;
-    }
     output_reorder();
 
     try {
@@ -1252,12 +1241,6 @@ bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
     }
 
     LLAMA_LOG_DEBUG("%s: seq_id = %d, sampler = %p\n", __func__, (int) seq_id, (void *) sampler);
-
-    if (sampler && model.has_tensor_parallel_vocab_output()) {
-        LLAMA_LOG_WARN("%s: backend sampling is not supported with GGML_TP_VOCAB_OUTPUT; using host sampling\n", __func__);
-        sampling.samplers.erase(seq_id);
-        return false;
-    }
 
     const bool can_offload =
         sampler &&
@@ -1790,12 +1773,6 @@ int llama_context::decode(const llama_batch & batch_inp) {
     const uint32_t n_tokens_all  = balloc->get_n_tokens();
     const uint32_t n_outputs_all = balloc->get_n_outputs();
 
-    if (model.has_tensor_parallel_vocab_output() && n_outputs_all > 1) {
-        LLAMA_LOG_ERROR("%s: GGML_TP_VOCAB_OUTPUT supports at most one output row (got %u)\n",
-            __func__, n_outputs_all);
-        return -1;
-    }
-
     if (output_all) {
         // require that all tokens are output
         if (n_outputs_all != n_tokens_all) {
@@ -1957,34 +1934,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
             if (n_outputs) {
                 GGML_ASSERT( n_outputs_prev + n_outputs <= n_outputs_all);
                 GGML_ASSERT((n_outputs_prev + n_outputs)*n_vocab <= (int64_t) logits.size);
-
-                const bool vocab_head = model.has_tensor_parallel_vocab_output();
-                const bool vocab_top_k = vocab_head && n_outputs == 1 &&
-                    sampling.logits.has_data() && sampling.candidates.has_data();
-                if (vocab_top_k) {
-                    const int32_t k = std::min<int32_t>(256, n_vocab);
-                    float * sampled_logits = sampling.logits.data + n_outputs_prev*n_vocab;
-                    llama_token * sampled_ids = sampling.candidates.data + n_outputs_prev*n_vocab;
-                    if (!ggml_backend_meta_top_k(backend_res, t_logits, k, sampled_ids, sampled_logits)) {
-                        LLAMA_LOG_ERROR("%s: vocabulary-sharded TOP_K failed\n", __func__);
-                        llama_pos pos_min[LLAMA_MAX_SEQ];
-                        std::fill_n(pos_min, LLAMA_MAX_SEQ, std::numeric_limits<llama_pos>::max());
-                        for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
-                            const llama_seq_id seq_id = ubatch.seq_id[i][0];
-                            pos_min[seq_id] = std::min(pos_min[seq_id], ubatch.pos[i]);
-                        }
-                        for (int s = 0; s < LLAMA_MAX_SEQ; ++s) {
-                            if (pos_min[s] != std::numeric_limits<llama_pos>::max()) {
-                                memory->seq_rm(s, pos_min[s], -1);
-                            }
-                        }
-                        return -3;
-                    }
-                    sampling.logits_count[n_outputs_prev] = k;
-                    sampling.candidates_count[n_outputs_prev] = k;
-                } else {
-                    ggml_backend_tensor_get_async(backend_res, t_logits, logits_out, 0, n_outputs*n_vocab*sizeof(float));
-                }
+                ggml_backend_tensor_get_async(backend_res, t_logits, logits_out, 0, n_outputs*n_vocab*sizeof(float));
             }
         }
 
@@ -2187,10 +2137,8 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
         }
     }
 
-    // Allocate compact sampling output buffers for backend samplers and for the
-    // restricted vocabulary-sharded host-merge path.
-    const bool vocab_sampling = model.has_tensor_parallel_vocab_output();
-    const bool has_sampling = !sampling.samplers.empty() || vocab_sampling;
+    // Allocate backend sampling output buffers if there are backend samplers configured.
+    const bool has_sampling = !sampling.samplers.empty();
     if (has_sampling) {
         backend_float_count = 2 * n_vocab * n_outputs_max;      // logits + probs
         backend_token_count = (1 + n_vocab) * n_outputs_max;    // sampled + candidates
@@ -3648,11 +3596,6 @@ llama_context * llama_init_from_model(
                        model->hparams.pooling_type, params.pooling_type);
     }
 
-    if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP && model->has_tensor_parallel_vocab_output()) {
-        LLAMA_LOG_ERROR("%s: MTP context is unsupported with GGML_TP_VOCAB_OUTPUT\n", __func__);
-        return nullptr;
-    }
-
     if (params.ctx_type == LLAMA_CONTEXT_TYPE_MTP &&
         model->hparams.n_layer_nextn == 0) {
         LLAMA_LOG_WARN("%s: context type MTP requested but model doesn't contain MTP layers\n", __func__);
@@ -3763,10 +3706,6 @@ float * llama_get_logits(llama_context * ctx) {
 
 float * llama_get_logits_ith(llama_context * ctx, int32_t i) {
     ctx->synchronize();
-
-    if (ctx->get_model().has_tensor_parallel_vocab_output()) {
-        return ctx->get_logits_ith(i);
-    }
 
     float * res = nullptr;
 

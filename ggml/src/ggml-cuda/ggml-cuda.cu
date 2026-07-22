@@ -1069,68 +1069,6 @@ static bool ggml_backend_cuda_comm_allreduce_nccl(
 
     return true;
 }
-
-static bool ggml_backend_cuda_comm_vocab_top_k(
-        void * comm_ctx_ptr, struct ggml_tensor ** tensors, int32_t k, int32_t * ids, float * values) {
-    auto * comm_ctx = (ggml_backend_cuda_comm_context *) comm_ctx_ptr;
-    const size_t n_backends = comm_ctx->backends.size();
-    if (n_backends < 2 || n_backends > GGML_CUDA_MAX_DEVICES ||
-            comm_ctx->comms.size() != n_backends || tensors == nullptr ||
-            ids == nullptr || values == nullptr || k <= 0 || k > 256) {
-        return false;
-    }
-
-    ggml_cuda_pool_alloc<uint64_t> packed_dev[GGML_CUDA_MAX_DEVICES];
-    ggml_cuda_pool_alloc<uint64_t> gathered_dev[GGML_CUDA_MAX_DEVICES];
-
-    int64_t global_offset = 0;
-    for (size_t i = 0; i < n_backends; ++i) {
-        auto * cuda_ctx = (ggml_backend_cuda_context *) comm_ctx->backends[i]->context;
-        ggml_cuda_set_device(cuda_ctx->device);
-        if (tensors[i] == nullptr || tensors[i]->type != GGML_TYPE_F32 ||
-                !ggml_is_contiguous(tensors[i]) || ggml_nrows(tensors[i]) != 1 || tensors[i]->ne[0] < k) {
-            return false;
-        }
-        packed_dev[i].pool = &cuda_ctx->pool();
-        gathered_dev[i].pool = &cuda_ctx->pool();
-        packed_dev[i].alloc(k);
-        gathered_dev[i].alloc(n_backends*k);
-
-        if (!ggml_cuda_vocab_top_k_device(*cuda_ctx, tensors[i], k, global_offset, packed_dev[i].get())) {
-            return false;
-        }
-        global_offset += tensors[i]->ne[0];
-    }
-
-    NCCL_CHECK(ncclGroupStart());
-    for (size_t i = 0; i < n_backends; ++i) {
-        auto * cuda_ctx = (ggml_backend_cuda_context *) comm_ctx->backends[i]->context;
-        NCCL_CHECK(ncclAllGather(packed_dev[i].get(), gathered_dev[i].get(), k,
-                                 ncclUint64, comm_ctx->comms[i], cuda_ctx->stream()));
-    }
-    NCCL_CHECK(ncclGroupEnd());
-
-    std::vector<uint64_t> packed_host(n_backends*k);
-    auto * root_ctx = (ggml_backend_cuda_context *) comm_ctx->backends[0]->context;
-    ggml_cuda_set_device(root_ctx->device);
-    CUDA_CHECK(cudaMemcpyAsync(packed_host.data(), gathered_dev[0].get(), packed_host.size()*sizeof(uint64_t),
-                               cudaMemcpyDeviceToHost, root_ctx->stream()));
-    CUDA_CHECK(cudaStreamSynchronize(root_ctx->stream()));
-    for (size_t i = 1; i < n_backends; ++i) {
-        auto * cuda_ctx = (ggml_backend_cuda_context *) comm_ctx->backends[i]->context;
-        ggml_cuda_set_device(cuda_ctx->device);
-        CUDA_CHECK(cudaStreamSynchronize(cuda_ctx->stream()));
-    }
-
-    std::partial_sort(packed_host.begin(), packed_host.begin() + k, packed_host.end(), std::greater<uint64_t>());
-    for (int32_t i = 0; i < k; ++i) {
-        const uint32_t ordered = (uint32_t) (packed_host[i] >> 32);
-        const uint32_t bits = (ordered & 0x80000000u) ? (ordered ^ 0x80000000u) : ~ordered;
-        memcpy(&values[i], &bits, sizeof(values[i]));
-        ids[i] = (int32_t) (0xffffffffu - (uint32_t) packed_host[i]);
-    }
-    return true;
-}
 #endif // GGML_USE_NCCL
 
 // Run the internal AR pipeline.  Returns false on unsupported / failed input
@@ -5360,11 +5298,6 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
     if (strcmp(name, "ggml_backend_comm_allreduce_tensor") == 0) {
         return (void *)ggml_backend_cuda_comm_allreduce_tensor;
     }
-#ifdef GGML_USE_NCCL
-    if (strcmp(name, "ggml_backend_comm_vocab_top_k") == 0) {
-        return (void *)ggml_backend_cuda_comm_vocab_top_k;
-    }
-#endif
     if (strcmp(name, "ggml_backend_register_host_buffer") == 0) {
         return (void *)ggml_backend_cuda_register_host_buffer;
     }
