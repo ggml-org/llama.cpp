@@ -49,6 +49,7 @@ Before submitting your PR:
 - If you are a new contributor
     - Limit your open PRs to 1
     - Do not submit trivial fixes (e.g. typos, formatting changes)
+- If your changes include code from external sources, you must obtain explicit acknowledgement from the original author
 
 After submitting your PR:
 - Expect requests for modifications to ensure the code meets llama.cpp's standards for quality and long-term maintainability
