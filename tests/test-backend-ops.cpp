@@ -4464,6 +4464,8 @@ struct test_mul_mat_mmq_fusion : public test_case {
         return "MUL_MAT_MMQ_FUSION";
     }
 
+    bool run_whole_graph() override { return true; }
+
     ggml_tensor * build_scale_id(
             ggml_context * ctx, ggml_tensor * scale, ggml_tensor * ids, ggml_tensor * out) {
         ggml_tensor * s = ggml_reshape_3d(ctx, scale, 1, n_mats, 1);
@@ -4526,6 +4528,17 @@ struct test_mul_mat_mmq_fusion : public test_case {
             ggml_free(ctx);
             return test_status_t::SKIPPED;
         }
+
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            if (!ggml_backend_supports_op(backend1, t)) {
+                test_result result(ggml_backend_name(backend1), current_op_name, vars(), "test",
+                                   false, false, "not supported");
+                print_test_result_locked(output_printer, result);
+                ggml_free(ctx);
+                return test_status_t::NOT_SUPPORTED;
+            }
+        }
+
         ggml_build_forward_expand(graph, out);
 
         ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend1);
@@ -4568,17 +4581,22 @@ struct test_mul_mat_mmq_fusion : public test_case {
         ggml_backend_synchronize(backend_fused);
 
         ggml_status status_fused;
-        {
-            scoped_environment_variable enable_fusion("GGML_CUDA_FUSE_WS", "1");
-            scoped_environment_variable disable_fusion("GGML_CUDA_NO_FUSE_WS", nullptr);
-            status_fused = ggml_backend_graph_compute(backend_fused, graph_fused);
-        }
-
         ggml_status status_unfused;
         {
-            scoped_environment_variable enable_fusion("GGML_CUDA_FUSE_WS", nullptr);
-            scoped_environment_variable disable_fusion("GGML_CUDA_NO_FUSE_WS", "1");
-            status_unfused = ggml_backend_graph_compute(backend1, graph);
+            static std::mutex fusion_env_mutex;
+            std::lock_guard<std::mutex> lock(fusion_env_mutex);
+
+            {
+                scoped_environment_variable enable_fusion("GGML_CUDA_FUSE_WS", "1");
+                scoped_environment_variable disable_fusion("GGML_CUDA_NO_FUSE_WS", nullptr);
+                status_fused = ggml_backend_graph_compute(backend_fused, graph_fused);
+            }
+
+            {
+                scoped_environment_variable enable_fusion("GGML_CUDA_FUSE_WS", nullptr);
+                scoped_environment_variable disable_fusion("GGML_CUDA_NO_FUSE_WS", "1");
+                status_unfused = ggml_backend_graph_compute(backend1, graph);
+            }
         }
 
         std::vector<float> data_unfused(ggml_nelements(out));
