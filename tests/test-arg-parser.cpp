@@ -117,6 +117,26 @@ static void test(void) {
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
     assert(params.cpuparams.n_threads == 1234);
 
+    // non-positive thread counts resolve to the number of math CPUs
+    // ref: https://github.com/ggml-org/llama.cpp/issues/19110
+    argv = {"binary_name", "-t", "-1"};
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+    assert(params.cpuparams.n_threads == common_cpu_get_num_math());
+
+    argv = {"binary_name", "-t", "0"};
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+    assert(params.cpuparams.n_threads == common_cpu_get_num_math());
+
+    // non-positive -tb/-td inherit the CPU params of -t
+    argv = {"binary_name", "-t", "2", "-tb", "-1"};
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
+    assert(params.cpuparams.n_threads == 2);
+    assert(params.cpuparams_batch.n_threads == 2);
+
+    argv = {"binary_name", "-t", "3", "-td", "-1"};
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_SPECULATIVE));
+    assert(params.speculative.draft.cpuparams.n_threads == 3);
+
     argv = {"binary_name", "--verbose"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
     assert(params.verbosity > 1);
