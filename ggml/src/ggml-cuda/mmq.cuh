@@ -420,6 +420,7 @@ static __host__ int ggml_cuda_mmq_get_nbytes_shared_x(const ggml_cuda_mmq_config
 #include "mmq-load-tiles.cuh"
 #include "mmq-vec-dot.cuh"
 
+// Returns 1.0f if no scale; scalar scale[0] for dense; scale[expert] for MoE via ids
 static __device__ __forceinline__ float mmq_x_scale_factor(
         const mmq_x_scale_epilogue & xs, const int dst_col) {
     if (!xs.scale) {

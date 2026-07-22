@@ -5,6 +5,7 @@
 
 #include <cstdint>
 
+// Set x_scale and related fields in mmq_args based on the provided ids tensor and fusion arguments.
 static void mmq_args_set_x_scale(
         mmq_args & args, const ggml_tensor * ids, const ggml_cuda_mm_fusion_args_host * fusion) {
     if (!fusion || !fusion->x_scale) {

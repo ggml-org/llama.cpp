@@ -1817,7 +1817,7 @@ static bool ggml_cuda_should_fuse_mul_mat_mmq(const ggml_tensor * mm) {
         return false;
     }
 
-    if (mm->op == GGML_OP_MUL_MAT) {
+    if (mm->op == GGML_OP_MUL_MAT) { // check for MMQ in dense models 
         const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
         return mm->ne[1] > 1 &&
             !ggml_cuda_should_use_mmvf(src0->type, cc, src0->ne, src0->nb, mm->ne[1]) &&
@@ -1826,7 +1826,7 @@ static bool ggml_cuda_should_fuse_mul_mat_mmq(const ggml_tensor * mm) {
             ggml_cuda_should_use_mmq(src0->type, cc, mm->ne[1], /*n_experts=*/0);
     }
 
-    if (mm->op == GGML_OP_MUL_MAT_ID) {
+    if (mm->op == GGML_OP_MUL_MAT_ID) { // check for MMQ in MoE models 
         const int64_t n_tokens = mm->src[1]->ne[2];
         const bool use_mmvq = n_tokens <= MMVQ_MAX_BATCH_SIZE &&
             ggml_is_quantized(src0->type) && n_tokens <= get_mmvq_mmid_max_batch(src0->type, cc);
@@ -3777,12 +3777,14 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
             fusion_data.x_bias  = bias;
             fusion_data.x_scale = scale;
 
+            // Check environment variables to toggle WS_Fusion for MMQ. If GGML_CUDA_FUSE_WS is set and GGML_CUDA_NO_FUSE_WS is not set, enable fusion.
             auto ggml_cuda_fuse_ws_mmq_enabled = []() -> bool {
                 const bool enabled  = getenv("GGML_CUDA_FUSE_WS") != nullptr;
                 const bool disabled = getenv("GGML_CUDA_NO_FUSE_WS") != nullptr;
                 return enabled && !disabled;
             };
-
+            
+            // Check if add the MMQ fused node to the graph.
             if (!with_bias && ggml_cuda_fuse_ws_mmq_enabled() && ggml_cuda_should_fuse_mul_mat_mmq(mm_node)){
                 ggml_cuda_mul_mat_q(*cuda_ctx, src0, src1, ids, out_node, &fusion_data);
                 fused_mul_mat_vec = true;
