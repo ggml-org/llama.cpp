@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { SandboxService } from '$lib/services/sandbox.service';
 import { SANDBOX_TOOL_NAME } from '$lib/constants';
 
@@ -9,6 +9,14 @@ const run = (code: string, timeoutMs?: number) =>
 	});
 
 describe('sandbox service', () => {
+	beforeEach(async () => {
+		const { settingsStore } = await import('$lib/stores/settings.svelte');
+		settingsStore.config = {
+			...settingsStore.config,
+			symbolicMathEnabled: true
+		};
+	});
+
 	it('executes plain JavaScript', async () => {
 		const reply = await run('return 1 + 1;');
 		expect(reply.isError).toBe(false);
