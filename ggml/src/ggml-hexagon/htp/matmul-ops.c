@@ -3469,6 +3469,34 @@ static int hvx_mm_matmul_id(
     return HTP_STATUS_OK;
 }
 
+static inline void scan_expert_ids_n(
+    const struct htp_tensor * ids,
+    const uint32_t n_ids,
+    uint32_t n_as,
+    uint32_t * counts,
+    struct mmid_row_mapping * matrix_rows,
+    uint32_t mapping_stride
+) {
+    const size_t ids_nb1 = ids->nb[1];
+    const uint8_t * ids_data = (const uint8_t *) ids->data;
+
+    for (uint32_t iid1 = 0; iid1 < ids->ne[1]; ++iid1) {
+        const int32_t * row_ptr = (const int32_t *) (ids_data + iid1 * ids_nb1);
+        for (uint32_t id = 0; id < n_ids; ++id) {
+            const int32_t i02 = row_ptr[id];
+            if (i02 < 0) {
+                continue;
+            }
+            assert(i02 < n_as);
+
+            if (matrix_rows) {
+                matrix_rows[i02 * mapping_stride + counts[i02]] = (struct mmid_row_mapping) { id, iid1 };
+            }
+            counts[i02] += 1;
+        }
+    }
+}
+
 static inline void scan_expert_ids(
     const struct htp_tensor * ids,
     uint32_t n_ids,
@@ -3477,29 +3505,19 @@ static inline void scan_expert_ids(
     struct mmid_row_mapping * matrix_rows,
     uint32_t mapping_stride
 ) {
-    const size_t ids_nb1 = ids->nb[1];
     const size_t ids_nb0 = ids->nb[0];
-    const uint8_t * ids_data = (const uint8_t *) ids->data;
 
     if (ids_nb0 == 4) {
-        // Contiguous expert IDs
-        for (uint32_t iid1 = 0; iid1 < ids->ne[1]; ++iid1) {
-            const int32_t * row_ptr = (const int32_t *) (ids_data + iid1 * ids_nb1);
-            for (uint32_t id = 0; id < n_ids; ++id) {
-                const int32_t i02 = row_ptr[id];
-                if (i02 < 0) {
-                    continue;
-                }
-                assert(i02 < n_as);
-
-                if (matrix_rows) {
-                    matrix_rows[i02 * mapping_stride + counts[i02]] = (struct mmid_row_mapping) { id, iid1 };
-                }
-                counts[i02] += 1;
-            }
+        switch (n_ids) {
+            case 8:  scan_expert_ids_n(ids, 8,     n_as, counts, matrix_rows, mapping_stride); break;
+            case 4:  scan_expert_ids_n(ids, 4,     n_as, counts, matrix_rows, mapping_stride); break;
+            case 2:  scan_expert_ids_n(ids, 2,     n_as, counts, matrix_rows, mapping_stride); break;
+            default: scan_expert_ids_n(ids, n_ids, n_as, counts, matrix_rows, mapping_stride); break;
         }
     } else {
         // Strided fallback
+        const size_t ids_nb1 = ids->nb[1];
+        const uint8_t * ids_data = (const uint8_t *) ids->data;
         for (uint32_t iid1 = 0; iid1 < ids->ne[1]; ++iid1) {
             const int32_t * row_ptr = (const int32_t *) (ids_data + iid1 * ids_nb1);
             for (uint32_t id = 0; id < n_ids; ++id) {
