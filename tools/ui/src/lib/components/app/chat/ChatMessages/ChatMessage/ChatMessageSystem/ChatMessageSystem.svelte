@@ -157,10 +157,7 @@
 						>
 							{#if currentConfig.renderUserContentAsMarkdown}
 								<div bind:this={messageElement} class={isExpanded ? 'cursor-text' : ''}>
-									<MarkdownContent
-										class="markdown-system-content -my-4"
-										content={message.content}
-									/>
+									<MarkdownContent class="markdown-system-content" content={message.content} />
 								</div>
 							{:else}
 								<span
