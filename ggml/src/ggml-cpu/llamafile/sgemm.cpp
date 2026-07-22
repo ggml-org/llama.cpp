@@ -2329,7 +2329,7 @@ class tinyBLAS_Q0_PPC {
         mc = 32;
         nc = 32;
         kc = 32;
-        n_chunk = 32
+        n_chunk = 32;
     #endif
         int64_t n_aligned = 0;
         if (n % n_chunk == 0) {
