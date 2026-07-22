@@ -121,8 +121,9 @@ template <> struct esimd_reorder_q_traits<GGML_TYPE_Q4_K> {
         simd<uint8_t, 128> qs_lo_b = qs_b & simd<uint8_t, 128>(0x0f);
         simd<uint8_t, 128> qs_hi_b = qs_b >> simd<uint8_t, 128>(4);
 
-        // single fused dequant+MAC loop updating both accumulators each iteration;
+        // single fused dequant+MAC loop updating both accumulators each iteration
         // the two acc chains are co-scheduled so FMA latency is overlapped
+#pragma unroll
         for (int sb = 0; sb < 8; sb += 2) {
             const int q_offset = sb * 16;
             simd<float, 32> y_lo = y_vec.select<32, 1>(sb * 32);
@@ -200,6 +201,7 @@ template <> struct esimd_reorder_q_traits<GGML_TYPE_Q6_K> {
         const float d_a = (float) pa.d[bia];
         const float d_b = has_b ? (float) pb.d[bib] : 0.0f;
 
+#pragma unroll
         for (int im = 0; im < 2; ++im) {
             simd<uint8_t, 32> ql_lo_a   = ql_a.select<32, 1>(64 * im);
             simd<uint8_t, 32> ql_hi_a   = ql_a.select<32, 1>(64 * im + 32);
@@ -210,6 +212,7 @@ template <> struct esimd_reorder_q_traits<GGML_TYPE_Q6_K> {
 
             // four quant groups, both blocks interleaved per group
             // reconstruct each 32-wide 6-bit group (matches dequantize_row_q6_K)
+#pragma unroll
             for (int g = 0; g < 4; ++g) {
                 simd<float, 32> y_g = y_vec.select<32, 1>(32 * (4 * im + g));
 
