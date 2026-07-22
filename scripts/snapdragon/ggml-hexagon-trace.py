@@ -124,9 +124,9 @@ def parse_log(file_path):
             idx = line.find("profile-op ")
             op_text = line[idx + 11:].strip() if idx != -1 else line.strip()
 
-            evt_str = op_match.group('evt') if ('evt' in op_match.groupdict() and op_match.group('evt')) else None
-            if names.startswith("evt ["):
-                evt_str = names[4:].strip("[]")
+            evt_str = None
+            if types.startswith("evt-cnt "):
+                evt_str = types[8:].strip()
 
             current_op = {
                 'name':         op_name,

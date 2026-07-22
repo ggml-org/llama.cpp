@@ -180,8 +180,8 @@ static void ggml_hexagon_dump_batch_prof(const std::string & sess_name, const ht
                 rsp.n_traces[8], rsp.n_traces[9], rsp.n_traces[10]);
     }
 
-    GGML_LOG_DEBUG("ggml-hex: %s profile-op OPBATCH|%s|n-ops %u|----|----|----|usec %u cycles %llu start %llu mhz %.1f\n",
-                   sess_name.c_str(), evt_str, rsp.n_ops, rsp.usecs, (unsigned long long) batch_cycles, (unsigned long long) rsp.cycles_start, batch_mhz);
+    GGML_LOG_DEBUG("ggml-hex: %s profile-op OPBATCH|----|n-ops %u|%s|----|----|usec %u cycles %llu start %llu mhz %.1f\n",
+                   sess_name.c_str(), rsp.n_ops, evt_str, rsp.usecs, (unsigned long long) batch_cycles, (unsigned long long) rsp.cycles_start, batch_mhz);
 }
 
 static void ggml_hexagon_dump_trace_events(const std::string & sess_name, const htp_opbatch_rsp & rsp,

@@ -147,14 +147,10 @@ def parse_log(file_path, pmu_index=None):
 
             evt_raw = op_match.group('evt') if 'evt' in op_match.groupdict() else None
             evt_val = None
-            if evt_raw:
+            evt_val = None
+            if types.startswith("evt-cnt "):
                 try:
-                    evt_val = [int(x.strip()) for x in evt_raw.split(',')]
-                except ValueError:
-                    evt_val = None
-            elif names.startswith("evt ["):
-                try:
-                    evt_val = [int(x.strip()) for x in names[5:-1].split(',')]
+                    evt_val = [int(x.strip()) for x in types[8:].split(',')]
                 except ValueError:
                     evt_val = None
 
@@ -249,94 +245,181 @@ def parse_log(file_path, pmu_index=None):
     return all_ops
 
 
-def print_ascii_timeline(op_name, dims, types, usec, cycles, events, evt_val=None):
-    evt_str = ""
-    if evt_val:
-        evt_str = " - evt [" + ",".join(str(x) for x in evt_val) + "]"
+def print_bubbles_timeline(op):
+    op_name = op['name']
+    dims = op['dims']
+    types = op['types']
+    usec = op['usec']
+    cycles = op['cycles']
+    events = op['trace_events']
     logger.info("=" * 100)
-    logger.info(f"{op_name} ({dims} : {types}) - {usec} usec {cycles} cycles{evt_str}")
+    logger.info(f"{op_name} ({dims} : {types}) - {usec} usec {cycles} cycles")
     logger.info("=" * 100)
 
-    events = sorted(events, key=lambda e: e['cycles'])
     if not events:
         logger.info("  No trace events recorded.")
         return
 
-    min_cycles = events[0]['cycles']
+    # Identify start and end cycles for this operator
+    op_start = op['start_cycles']
+    op_end = op['end_cycles']
+    if op_start is None or op_end is None:
+        logger.info("  Cannot analyze bubbles: missing start/end cycle counts.")
+        return
 
-    logger.info("Cycles      %-30s" % "EventDetails" + " ".join(f"T{i:<2}" for i in range(10)) + " HMX")
-    logger.info("-" * 100)
+    batch_duration = op_end - op_start
+    if batch_duration <= 0:
+        logger.info("  Cannot analyze bubbles: batch duration is 0.")
+        return
 
-    thread_stacks = [[] for _ in range(11)]
-
+    # Group events by (thread, track_type)
+    tracks = defaultdict(list)
     for e in events:
         t = e['thread']
-        if t < 0 or t > 10:
-            continue
+        is_dma = (normalize_event_name(e['event']) == 'DMA')
+        track_type = 'dma' if is_dma else 'compute'
+        tracks[(t, track_type)].append(e)
 
-        if e['cycles'] >= min_cycles:
-            rel_cycles = e['cycles'] - min_cycles
-        else:
-            rel_cycles = (e['cycles'] + 0x100000000) - min_cycles
+    active_threads = sorted(list(set(t for (t, track_type) in tracks.keys())))
+    if not active_threads:
+        logger.info("  No active threads in trace.")
+        return
 
-        state = e['state']
-        evt_type = e['event']
+    bubble_threshold = 10000  # 10k cycles
 
-        # Determine char representing the event
-        norm_evt = normalize_event_name(evt_type)
-        char = '?'
-        if norm_evt == 'V-COMP':
-            char = 'V'
-        elif norm_evt == 'M-COMP':
-            char = 'H'
-        elif norm_evt == 'A-QUANT':
-            char = 'Q'
-        elif norm_evt == 'A-PREP':
-            char = 'A'
-        elif norm_evt == 'Q-PREP':
-            char = 'q'
-        elif norm_evt == 'K-PREP':
-            char = 'k'
-        elif norm_evt == 'V-PREP':
-            char = 'v'
-        elif norm_evt == 'W-DEQUANT':
-            char = 'D'
-        elif norm_evt == 'O-PROC':
-            char = 'O'
-        elif norm_evt == 'W-PREP':
-            char = 'P'
-        elif norm_evt == 'DMA':
-            char = 'M'
+    thread_stats = {}
+    for t in active_threads:
+        thread_stats[t] = {
+            'compute_idle_cycles': batch_duration,
+            'compute_idle_pct': 100.0,
+            'compute_bubbles': [],
 
-        if state == 'start':
-            thread_stacks[t].append(char)
-        elif state == 'stop':
-            if thread_stacks[t]:
-                if thread_stacks[t][-1] == char:
-                    thread_stacks[t].pop()
-                elif char in thread_stacks[t]:
-                    thread_stacks[t].remove(char)
-                else:
-                    thread_stacks[t].pop()
+            'dma_idle_cycles': batch_duration,
+            'dma_idle_pct': 100.0,
+            'dma_bubbles': []
+        }
 
-        cols = []
-        for i in range(11):
-            if thread_stacks[i]:
-                cols.append(f"[{thread_stacks[i][-1]}]")
+    total_compute_idle_pct = 0.0
+    total_dma_idle_pct = 0.0
+
+    for t in active_threads:
+        for track_type in ['compute', 'dma']:
+            key = (t, track_type)
+            track_events = tracks.get(key, [])
+
+            if not track_events:
+                gaps = [(op_start, op_end)]
+                idle_cycles = batch_duration
             else:
-                cols.append(" | ")
+                track_events = sorted(track_events, key=lambda e: e.get('unwrapped_cycles') or e['cycles'])
 
-        evt_desc = f"T{t}: {evt_type} {state} ({e['info']})"
-        logger.info(f"{rel_cycles:10d}  %-30s" % evt_desc + " ".join(cols[:10]) + "  " + cols[10])
+                active_intervals = []
+                active_count = 0
+                curr_start = None
+
+                for e in track_events:
+                    cyc = e.get('unwrapped_cycles') or e['cycles']
+                    cyc = max(op_start, min(op_end, cyc))
+                    state = e['state']
+
+                    if state == 'start':
+                        if active_count == 0:
+                            curr_start = cyc
+                        active_count += 1
+                    elif state == 'stop':
+                        if active_count > 0:
+                            active_count -= 1
+                            if active_count == 0:
+                                active_intervals.append((curr_start, cyc))
+                        else:
+                            active_intervals.append((op_start, cyc))
+
+                if active_count > 0 and curr_start is not None:
+                    active_intervals.append((curr_start, op_end))
+
+                # Merge intervals
+                active_intervals.sort(key=lambda x: x[0])
+                merged_intervals = []
+                for start, end in active_intervals:
+                    if not merged_intervals:
+                        merged_intervals.append([start, end])
+                    else:
+                        last_start, last_end = merged_intervals[-1]
+                        if start <= last_end:
+                            merged_intervals[-1][1] = max(last_end, end)
+                        else:
+                            merged_intervals.append([start, end])
+
+                # Calculate gaps
+                gaps = []
+                curr_time = op_start
+                for start, end in merged_intervals:
+                    if start > curr_time:
+                        gaps.append((curr_time, start))
+                    curr_time = max(curr_time, end)
+                if curr_time < op_end:
+                    gaps.append((curr_time, op_end))
+
+                idle_cycles = sum(end - start for start, end in gaps)
+
+            idle_pct = (idle_cycles / batch_duration) * 100.0
+
+            bubbles = []
+            for start, end in gaps:
+                dur = end - start
+                if dur >= bubble_threshold:
+                    bubbles.append((start, end, dur))
+
+            if track_type == 'compute':
+                thread_stats[t]['compute_idle_cycles'] = idle_cycles
+                thread_stats[t]['compute_idle_pct'] = idle_pct
+                thread_stats[t]['compute_bubbles'] = bubbles
+                total_compute_idle_pct += idle_pct
+            else:
+                thread_stats[t]['dma_idle_cycles'] = idle_cycles
+                thread_stats[t]['dma_idle_pct'] = idle_pct
+                thread_stats[t]['dma_bubbles'] = bubbles
+                total_dma_idle_pct += idle_pct
+
+    avg_compute_idle = total_compute_idle_pct / len(active_threads)
+    avg_dma_idle = total_dma_idle_pct / len(active_threads)
+
+    logger.info("  Combined Idle Statistics:")
+    logger.info(f"    Active Threads   : {', '.join(str(t) for t in active_threads)}")
+    logger.info(f"    Avg Thread Compute IDLE : {avg_compute_idle:.1f}%")
+    logger.info(f"    Avg Thread DMA IDLE     : {avg_dma_idle:.1f}%")
     logger.info("-" * 100)
 
+    logger.info("  Per-Thread Idle Analysis:")
+    for t in active_threads:
+        stats = thread_stats[t]
+        thread_name = f"Thread {t:<2} (HVX)" if t != 10 else f"Thread 10 (HMX)"
+        logger.info(f"    {thread_name} -> Compute Idle: {stats['compute_idle_pct']:.1f}% | DMA Idle: {stats['dma_idle_pct']:.1f}%")
 
-def print_ascii_summary(op_name, dims, types, usec, cycles, events, evt_val=None):
-    evt_str = ""
-    if evt_val:
-        evt_str = " - evt [" + ",".join(str(x) for x in evt_val) + "]"
+    all_bubbles = []
+    for t in active_threads:
+        stats = thread_stats[t]
+        for start, end, dur in stats['compute_bubbles']:
+            pct = (dur / batch_duration) * 100.0
+            all_bubbles.append((dur, f"Thread {t} Compute: bubble of {dur} cycles ({pct:.1f}%) at {start - op_start} to {end - op_start}"))
+        for start, end, dur in stats['dma_bubbles']:
+            pct = (dur / batch_duration) * 100.0
+            all_bubbles.append((dur, f"Thread {t} DMA    : bubble of {dur} cycles ({pct:.1f}%) at {start - op_start} to {end - op_start}"))
+
+    if all_bubbles:
+        logger.info("-" * 100)
+        logger.info(f"  Significant Bubbles (>= {bubble_threshold} cycles):")
+        all_bubbles.sort(key=lambda x: x[0], reverse=True)
+        for dur, desc in all_bubbles[:15]:
+            logger.info(f"    {desc}")
+    else:
+        logger.info("-" * 100)
+        logger.info(f"  No significant bubbles detected (all idle gaps < {bubble_threshold} cycles).")
+
+
+def print_ascii_summary(op_name, dims, types, usec, cycles, events):
     logger.info("=" * 100)
-    logger.info(f"{op_name} ({dims} : {types}) - {usec} usec {cycles} cycles{evt_str}")
+    logger.info(f"{op_name} ({dims} : {types}) - {usec} usec {cycles} cycles")
     logger.info("=" * 100)
 
     events = sorted(events, key=lambda e: e['cycles'])
@@ -478,8 +561,8 @@ def main():
     parser.add_argument("--pmu-index", type=int)
     parser.add_argument("--pmu-name", type=str)
     parser.add_argument("--width", action='append', default=['dims:40'], help="Override column width, e.g. --width dims:50")
-    parser.add_argument("--timeline", type=str, nargs='?', const='summary', choices=["summary", "diagram"],
-                        help="Output ASCII art event summary or timing diagram (default: summary)")
+    parser.add_argument("--timeline", type=str, nargs='?', const='summary', choices=["summary", "bubbles"],
+                        help="Output ASCII art event summary or thread idle bubble analysis (default: summary)")
     parser.add_argument("--filter", type=str, help="Regex filter matching against the original profile-op line")
 
     group = parser.add_mutually_exclusive_group()
@@ -522,9 +605,9 @@ def main():
     if args.timeline:
         for op in ops:
             if args.timeline == "summary":
-                print_ascii_summary(op['name'], op['dims'], op['types'], op['usec'], op['cycles'], op['trace_events'], op.get('evt_val'))
-            elif args.timeline == "diagram":
-                print_ascii_timeline(op['name'], op['dims'], op['types'], op['usec'], op['cycles'], op['trace_events'], op.get('evt_val'))
+                print_ascii_summary(op['name'], op['dims'], op['types'], op['usec'], op['cycles'], op['trace_events'])
+            elif args.timeline == "bubbles":
+                print_bubbles_timeline(op)
     else:
         generate_report(ops, args.top, overrides, args.sort, pmu_name=final_pmu_name)
 
