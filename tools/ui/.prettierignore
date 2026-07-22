@@ -16,3 +16,6 @@ build/
 /build/
 /.svelte-kit/
 test-results
+
+# Vendored third party sources, kept byte identical to upstream
+src/lib/vendors/
