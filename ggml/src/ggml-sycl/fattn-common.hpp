@@ -9,6 +9,7 @@
 
 #include "ggml.h"
 
+#include <chrono>
 #include <cstdint>
 #include <cmath>
 #include <float.h>
@@ -57,6 +58,18 @@ typedef void (*fattn_kernel_t)(
     const int32_t nb31,
     const int32_t nb32,
     const int64_t nb33);
+
+bool ggml_sycl_fattn_profile_enabled();
+
+void ggml_sycl_fattn_profile_record(
+    bool tile_route,
+    bool quants_first,
+    uint64_t conversion_us,
+    uint64_t conversion_bytes,
+    uint64_t stage1_us,
+    uint64_t combine_us,
+    uint64_t gqa_ratio,
+    uint64_t repeated_packed_kv_bytes);
 
 typedef float (*vec_dot_KQ_t)(
     const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8 , const void * __restrict__ Q_ds);
@@ -1075,6 +1088,30 @@ void launch_fattn(
     const int id  = ggml_sycl_get_device();
     const int nsm = ggml_sycl_info().devices[id].nsm;
 
+    // Profiling synchronizes the queue and is intentionally limited to q8 decode.
+    using profile_clock = std::chrono::steady_clock;
+    const bool profile =
+        ggml_sycl_fattn_profile_enabled() &&
+        Q->ne[1] == 1 &&
+        K->type == GGML_TYPE_Q8_0 &&
+        V->type == GGML_TYPE_Q8_0;
+    profile_clock::time_point profile_start;
+    profile_clock::time_point profile_after_conversion;
+    profile_clock::time_point profile_after_stage1;
+    uint64_t profile_conversion_bytes = 0;
+    if (profile) {
+        main_stream->wait_and_throw();
+        profile_start = profile_clock::now();
+        if (need_f16_K) {
+            profile_conversion_bytes +=
+                ggml_nbytes(K) + ggml_nelements(K) * sizeof(sycl::half);
+        }
+        if (need_f16_V && !V_is_K_view) {
+            profile_conversion_bytes +=
+                ggml_nbytes(V) + ggml_nelements(V) * sizeof(sycl::half);
+        }
+    }
+
     ggml_sycl_fattn_alloc        K_f16(fbuf.K);
     ggml_sycl_fattn_alloc        V_f16(fbuf.V);
     ggml_sycl_pool_alloc<int>    KV_max(pool);
@@ -1151,6 +1188,10 @@ void launch_fattn(
             }
             V_data = (char *) V_f16.ptr;
         }
+    }
+    if (profile) {
+        main_stream->wait_and_throw();
+        profile_after_conversion = profile_clock::now();
     }
 
     const int ntiles_x     = ((Q->ne[1] + ncols1 - 1) / ncols1);
@@ -1284,6 +1325,10 @@ void launch_fattn(
         mask ? mask->ne[2] : 0, mask ? mask->ne[3] : 0, mask ? mask->nb[1] : 0, mask ? mask->nb[2] : 0,
         mask ? mask->nb[3] : 0);
     SYCL_CHECK(0);
+    if (profile) {
+        main_stream->wait_and_throw();
+        profile_after_stage1 = profile_clock::now();
+    }
 
     if (stream_k) {
         if (ntiles_total % blocks_num.x != 0) { // Fixup is only needed if the SMs work on fractional tiles.
@@ -1329,4 +1374,25 @@ void launch_fattn(
         });
     }
     SYCL_CHECK(0);
+    if (profile) {
+        main_stream->wait_and_throw();
+        const profile_clock::time_point profile_after_combine = profile_clock::now();
+        // Bytes beyond one packed KV read quantify GQA duplication without KV-head sharing.
+        const uint64_t packed_kv_bytes = ggml_nbytes(K) + ggml_nbytes(V);
+        const bool quants_first =
+            ggml_sycl_tensor_is_kv_q8_quants_first(K) ||
+            ggml_sycl_tensor_is_kv_q8_quants_first(V);
+        ggml_sycl_fattn_profile_record(
+            need_f16_K || need_f16_V,
+            quants_first,
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                profile_after_conversion - profile_start).count(),
+            profile_conversion_bytes,
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                profile_after_stage1 - profile_after_conversion).count(),
+            std::chrono::duration_cast<std::chrono::microseconds>(
+                profile_after_combine - profile_after_stage1).count(),
+            gqa_ratio,
+            packed_kv_bytes * (gqa_ratio - 1));
+    }
 }

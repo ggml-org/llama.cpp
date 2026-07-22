@@ -22,6 +22,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <mutex>
 
 
 #define FATTN_VEC_CASE(D, type_K, type_V)                                                                        \
@@ -189,12 +190,101 @@ enum best_fattn_kernel {
     BEST_FATTN_KERNEL_XMX      = 300,
 };
 
-static void ggml_sycl_log_fattn_route_once(best_fattn_kernel route, const ggml_tensor * dst) {
-    static const bool trace_enabled = [] {
-        const char * value = getenv("GGML_SYCL_FA_ROUTE_TRACE");
+struct ggml_sycl_fattn_profile_bucket {
+    uint64_t launches = 0;
+    uint64_t conversion_us = 0;
+    uint64_t conversion_bytes = 0;
+    uint64_t stage1_us = 0;
+    uint64_t combine_us = 0;
+    uint64_t gqa_ratio = 0;
+    uint64_t repeated_packed_kv_bytes = 0;
+};
+
+class ggml_sycl_fattn_profile_collector {
+public:
+    ~ggml_sycl_fattn_profile_collector() {
+        for (int route = 0; route < 2; ++route) {
+            for (int layout = 0; layout < 2; ++layout) {
+                const ggml_sycl_fattn_profile_bucket & bucket = buckets[route][layout];
+                if (bucket.launches == 0) {
+                    continue;
+                }
+                fprintf(
+                    stderr,
+                    "GGML_SYCL_FA_PROFILE: route=%s layout=%s launches=%llu "
+                    "conversion_us=%llu conversion_bytes=%llu stage1_us=%llu "
+                    "combine_us=%llu gqa=%llu repeated_packed_kv_bytes=%llu\n",
+                    route == 0 ? "VEC" : "TILE",
+                    layout == 0 ? "canonical" : "quants-first",
+                    (unsigned long long) bucket.launches,
+                    (unsigned long long) bucket.conversion_us,
+                    (unsigned long long) bucket.conversion_bytes,
+                    (unsigned long long) bucket.stage1_us,
+                    (unsigned long long) bucket.combine_us,
+                    (unsigned long long) bucket.gqa_ratio,
+                    (unsigned long long) bucket.repeated_packed_kv_bytes);
+            }
+        }
+        fflush(stderr);
+    }
+
+    void record(
+        bool tile_route,
+        bool quants_first,
+        uint64_t conversion_us,
+        uint64_t conversion_bytes,
+        uint64_t stage1_us,
+        uint64_t combine_us,
+        uint64_t gqa_ratio,
+        uint64_t repeated_packed_kv_bytes) {
+        std::lock_guard<std::mutex> lock(mutex);
+        ggml_sycl_fattn_profile_bucket & bucket =
+            buckets[tile_route ? 1 : 0][quants_first ? 1 : 0];
+        bucket.launches++;
+        bucket.conversion_us += conversion_us;
+        bucket.conversion_bytes += conversion_bytes;
+        bucket.stage1_us += stage1_us;
+        bucket.combine_us += combine_us;
+        bucket.gqa_ratio = gqa_ratio;
+        bucket.repeated_packed_kv_bytes += repeated_packed_kv_bytes;
+    }
+
+private:
+    std::mutex mutex;
+    ggml_sycl_fattn_profile_bucket buckets[2][2] = {};
+};
+
+bool ggml_sycl_fattn_profile_enabled() {
+    static const bool enabled = [] {
+        const char * value = getenv("GGML_SYCL_FA_PROFILE");
         return value != nullptr && value[0] != '\0' && !(value[0] == '0' && value[1] == '\0');
     }();
-    if (!trace_enabled || route == BEST_FATTN_KERNEL_NONE) {
+    return enabled;
+}
+
+void ggml_sycl_fattn_profile_record(
+    bool tile_route,
+    bool quants_first,
+    uint64_t conversion_us,
+    uint64_t conversion_bytes,
+    uint64_t stage1_us,
+    uint64_t combine_us,
+    uint64_t gqa_ratio,
+    uint64_t repeated_packed_kv_bytes) {
+    static ggml_sycl_fattn_profile_collector collector;
+    collector.record(
+        tile_route,
+        quants_first,
+        conversion_us,
+        conversion_bytes,
+        stage1_us,
+        combine_us,
+        gqa_ratio,
+        repeated_packed_kv_bytes);
+}
+
+static void ggml_sycl_log_fattn_route_once(best_fattn_kernel route, const ggml_tensor * dst) {
+    if (!ggml_sycl_fattn_profile_enabled() || route == BEST_FATTN_KERNEL_NONE) {
         return;
     }
 

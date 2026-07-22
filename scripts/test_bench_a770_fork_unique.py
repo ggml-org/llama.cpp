@@ -86,6 +86,29 @@ class ProductCampaignTests(unittest.TestCase):
             ],
         )
 
+    def test_parses_structured_fa_profile_records(self) -> None:
+        logs = (
+            "GGML_SYCL_FA_PROFILE: route=VEC layout=quants-first launches=4096 "
+            "conversion_us=0 conversion_bytes=0 stage1_us=123456 combine_us=789 "
+            "gqa=4 repeated_packed_kv_bytes=987654321\n"
+        )
+        self.assertEqual(
+            HARNESS._parse_fa_profile_records(logs),
+            [
+                {
+                    "route": "VEC",
+                    "layout": "quants-first",
+                    "launches": 4096,
+                    "conversion_us": 0,
+                    "conversion_bytes": 0,
+                    "stage1_us": 123456,
+                    "combine_us": 789,
+                    "gqa": 4,
+                    "repeated_packed_kv_bytes": 987654321,
+                }
+            ],
+        )
+
     def test_product_argv_uses_supported_no_warmup_flag(self) -> None:
         argv = HARNESS._product_bench_argv(
             Path("/tmp/bin"), "model.gguf", ("f16", "f16"), 0
@@ -130,6 +153,7 @@ class ProductCampaignTests(unittest.TestCase):
             "GGML_SYCL_FA_XMX",
             "GGML_SYCL_FA_FORCE_VEC_STANDARD",
             "GGML_SYCL_FA_Q8_GQA_TILE",
+            "GGML_SYCL_FA_PROFILE",
             "GGML_SYCL_Q8_KV_QUANTS_FIRST",
             "LLAMA_ENABLE_INNERQ",
             "TURBO_LAYER_ADAPTIVE",

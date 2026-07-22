@@ -67,6 +67,15 @@ FA_ROUTE_RE = re.compile(
     r"k_quants_first=(?P<k_quants_first>[01]) "
     r"v_quants_first=(?P<v_quants_first>[01])"
 )
+FA_PROFILE_RE = re.compile(
+    r"GGML_SYCL_FA_PROFILE: route=(?P<route>VEC|TILE) "
+    r"layout=(?P<layout>canonical|quants-first) "
+    r"launches=(?P<launches>\d+) conversion_us=(?P<conversion_us>\d+) "
+    r"conversion_bytes=(?P<conversion_bytes>\d+) stage1_us=(?P<stage1_us>\d+) "
+    r"combine_us=(?P<combine_us>\d+) gqa=(?P<gqa>\d+) "
+    r"repeated_packed_kv_bytes=(?P<repeated_packed_kv_bytes>\d+)"
+)
+
 
 
 
@@ -77,7 +86,7 @@ def _effective_env(env_extra: dict[str, str]) -> dict[str, str]:
         "GGML_SYCL_FA_XMX",
         "GGML_SYCL_FA_FORCE_VEC_STANDARD",
         "GGML_SYCL_FA_Q8_GQA_TILE",
-        "GGML_SYCL_FA_ROUTE_TRACE",
+        "GGML_SYCL_FA_PROFILE",
         "GGML_SYCL_Q8_KV_QUANTS_FIRST",
         "LLAMA_ENABLE_INNERQ",
         "TURBO_LAYER_ADAPTIVE",
@@ -543,6 +552,27 @@ def _parse_fa_route_records(logs: str) -> list[dict[str, Any]]:
     return records
 
 
+def _parse_fa_profile_records(logs: str) -> list[dict[str, Any]]:
+    """Parse aggregate SYCL q8 FlashAttention profile records."""
+    records: list[dict[str, Any]] = []
+    for match in FA_PROFILE_RE.finditer(logs):
+        groups = match.groupdict()
+        records.append(
+            {
+                "route": groups["route"],
+                "layout": groups["layout"],
+                "launches": int(groups["launches"]),
+                "conversion_us": int(groups["conversion_us"]),
+                "conversion_bytes": int(groups["conversion_bytes"]),
+                "stage1_us": int(groups["stage1_us"]),
+                "combine_us": int(groups["combine_us"]),
+                "gqa": int(groups["gqa"]),
+                "repeated_packed_kv_bytes": int(groups["repeated_packed_kv_bytes"]),
+            }
+        )
+    return records
+
+
 def _kv_bytes_per_element(kv_type: str) -> float:
     if kv_type == "f16":
         return 2.0
@@ -749,6 +779,9 @@ def run_product_cell(
             route_records = _parse_fa_route_records(
                 result.get("stdout", "") + "\n" + result.get("stderr", "")
             )
+            profile_records = _parse_fa_profile_records(
+                result.get("stdout", "") + "\n" + result.get("stderr", "")
+            )
             sample_values: dict[str, float] = {}
             for metric_name, row in rows.items():
                 sample_values[f"{metric_name}_ts"] = (
@@ -765,6 +798,7 @@ def run_product_cell(
                 "stdout": result.get("stdout", ""),
                 "stderr": result.get("stderr", ""),
                 "fa_route_records": route_records,
+                "fa_profile_records": profile_records,
             }
             sample_path = samples_dir / (
                 f"cell{cell_idx:02d}_{kv[0]}_{kv[1]}_d{depth}"
@@ -786,6 +820,7 @@ def run_product_cell(
                         "stdout": result.get("stdout", ""),
                         "stderr": result.get("stderr", ""),
                         "fa_route_records": route_records,
+                        "fa_profile_records": profile_records,
                     },
                     sort_keys=True,
                 )
