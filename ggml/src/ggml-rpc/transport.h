@@ -21,6 +21,10 @@ struct socket_t {
     void get_caps(uint8_t * local_caps);
     void update_caps(const uint8_t * remote_caps);
 
+    // Boolean to skip the SET_TENSOR_HASH dedup probe on this connection. We do this if no cache is present (e.g. RPC connections). 
+    void set_skip_tensor_hash(bool v);
+    bool skip_tensor_hash() const;
+
     static socket_ptr create_server(const char * host, int port);
     static socket_ptr connect(const char * host, int port);
 

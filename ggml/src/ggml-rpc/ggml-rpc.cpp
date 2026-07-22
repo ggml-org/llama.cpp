@@ -83,11 +83,16 @@ struct rpc_msg_hello_req {
     uint8_t conn_caps[RPC_CONN_CAPS_SIZE];
 };
 
+
+// SET_TENSOR_HASH dedup probe: prevents endless probing when no cache is present
+enum {
+    RPC_HELLO_FLAG_NO_CACHE = 1 << 0,
+};
 struct rpc_msg_hello_rsp {
     uint8_t major;
     uint8_t minor;
     uint8_t patch;
-    uint8_t padding;
+    uint8_t flags;
     uint8_t conn_caps[RPC_CONN_CAPS_SIZE];
 };
 
@@ -343,6 +348,8 @@ static bool negotiate_hello(const std::shared_ptr<socket_t> & sock) {
     }
 
     sock->update_caps(response.conn_caps);
+    // If the server has no tensor cache, skip the SET_TENSOR_HASH probe
+    sock->set_skip_tensor_hash((response.flags & RPC_HELLO_FLAG_NO_CACHE) != 0);
     return true;
 }
 
@@ -465,7 +472,7 @@ static enum ggml_status ggml_backend_rpc_buffer_init_tensor(ggml_backend_buffer_
 static void ggml_backend_rpc_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     ggml_backend_rpc_buffer_context * ctx = (ggml_backend_rpc_buffer_context *)buffer->context;
     rpc_tensor rpc_tensor = serialize_tensor(tensor);
-    if (size > HASH_THRESHOLD) {
+    if (size > HASH_THRESHOLD && !ctx->sock->skip_tensor_hash()) {
         rpc_msg_set_tensor_hash_req request;
         request.tensor = rpc_tensor;
         request.offset = offset;
@@ -866,7 +873,11 @@ void rpc_server::hello(rpc_msg_hello_rsp & response) {
     response.major = RPC_PROTO_MAJOR_VERSION;
     response.minor = RPC_PROTO_MINOR_VERSION;
     response.patch = RPC_PROTO_PATCH_VERSION;
-    LOG_DBG("[%s] version: %d.%d.%d\n", __func__, response.major, response.minor, response.patch);
+    if (cache_dir == nullptr) {
+        // No tensor cache — no SET_TENSOR_HASH probe
+        response.flags |= RPC_HELLO_FLAG_NO_CACHE;
+    }
+    LOG_DBG("[%s] version: %d.%d.%d, flags: 0x%x\n", __func__, response.major, response.minor, response.patch, response.flags);
 }
 
 bool rpc_server::get_alloc_size(const rpc_msg_get_alloc_size_req & request, rpc_msg_get_alloc_size_rsp & response) {
