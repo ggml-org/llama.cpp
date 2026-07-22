@@ -3,19 +3,19 @@
 ## 2026-07-22 P5 descendant revalidation (supersedes global q8_0 recommendation)
 
 The original R1/R2 record below is retained as historical evidence. A stricter
-five-repeat revalidation at `cadcd039` used the source-pinned P5 JIT build,
+five-repeat final-candidate revalidation at `d7a2bcf1d` used the source-pinned P5 JIT build,
 native completion token IDs, token hashes, completion counts, target
 probabilities where the server returned them, and the server's accepted-draft
 contract otherwise.
 
 | KV | prompt | target-only tg | ngram-mod+map-k4v tg | speedup | target-exact |
 |---|---|---:|---:|---:|---|
-| q8_0 | code_edit | 21.68 | 89.91 | 4.15x | yes |
-| q8_0 | multi_turn | 22.05 | 55.16 | 2.50x | yes |
-| q8_0 | free_prose | 21.84 | 36.11 | 1.65x | **no** |
-| f16 | code_edit | 21.51 | 90.01 | 4.18x | yes |
-| f16 | multi_turn | 21.69 | 54.59 | 2.52x | yes |
-| f16 | free_prose | 21.53 | 246.37 | 11.44x | yes |
+| q8_0 | code_edit | 21.61 | 89.81 | 4.15x | yes |
+| q8_0 | multi_turn | 22.01 | 55.12 | 2.50x | yes |
+| q8_0 | free_prose | 21.78 | 35.98 | 1.65x | **no** |
+| f16 | code_edit | 21.52 | 90.19 | 4.19x | yes |
+| f16 | multi_turn | 21.70 | 54.63 | 2.52x | yes |
+| f16 | free_prose | 21.53 | 246.65 | 11.46x | yes |
 
 All recorded internal verifier invariants passed. The q8_0 `free_prose` arm,
 however, produced four distinct hashes across five deterministic repetitions
@@ -27,12 +27,12 @@ suite supports global speculation with f16 KV, but that does not replace q8_0
 as the deep-context production KV default.
 
 The hostile `NMATCH=4 NMIN=4 NMAX=64` gate also passed. With q8_0, target-only
-ran at 21.81 t/s, unguarded speculation fell to 15.30 t/s, and
+ran at 21.82 t/s, unguarded speculation fell to 15.30 t/s, and
 `--spec-ngram-mod-dead-off 3` tripped once per warmup/repetition and recovered
-to 27.87 t/s. All hostile hashes matched target-only. Durable raw summaries,
+to 27.83 t/s. All hostile hashes matched target-only. Durable raw summaries,
 rejection positions, accepted/drafted counts, target-evaluation counts, and
 the adjudication are under
-`results/p5-post-campaign/phase6-speculation/`.
+`results/p5-post-campaign/phase6-speculation/` and `phase7-final/`.
 
 Reproducible benchmark of speculative decoding (`--spec-type`) × KV cache type
 on the Intel Arc A770, implementing recommendation **R1** of the fork-perf

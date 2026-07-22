@@ -576,3 +576,72 @@ sha256sum --quiet -c SHA256SUMS
 7. Preserve FA scratch pre-growth before graph capture.
 8. Reuse the paired harness for future claims; unpaired or contended A770
    numbers are not promotion evidence.
+
+## Post-P5 performance campaign - 2026-07-22
+
+The ordered post-P5 campaign ran from source base `d66649dae` and produced a
+clean final candidate at binary source commit `d7a2bcf1d`. It retained the P5
+behavioral state. No new backend default cleared every promotion gate.
+
+### Final candidate matrix
+
+The clean Release-JIT candidate used oneAPI 2026.0, IGC 2.36.3,
+compute-runtime 26.22.38646.4-1.1, Level Zero loader 1.28.6-1.1, i915, graph
+support, and per-kernel device-code split. Each cell alternated the held and
+final binaries six times, discarded repetition zero, and retained five pairs.
+
+| Model | Depth | pp512 paired median | tg128 paired median | tg128 held/final |
+|---|---:|---:|---:|---:|
+| Mistral | 0 | -0.317% | +0.019% | 24.601 / 24.597 |
+| Mistral | 4096 | +0.066% | -0.064% | 17.932 / 17.920 |
+| Mistral | 8192 | -0.017% | +0.029% | 14.119 / 14.138 |
+| Mistral | 16384 | -0.129% | +0.010% | 9.931 / 9.933 |
+| Llama-3.1 | 0 | +0.093% | +0.010% | 23.605 / 23.561 |
+| Llama-3.1 | 4096 | +0.004% | -0.080% | 17.372 / 17.362 |
+| Llama-3.1 | 8192 | -0.028% | +0.115% | 13.810 / 13.813 |
+| Llama-3.1 | 16384 | -0.081% | -0.094% | 9.767 / 9.760 |
+
+All cells were valid, every protected regression stayed well inside -2%, and
+both harness-level pre/post kernel-log deltas were empty.
+
+The final correctness binary reported
+`0 GATE-FAIL, 0 XPASS, 6 xfail, 0 SKIP`. It covered standard f16/q8_0 VEC and
+TILE at D64/D128, GQA 4:1 and 8:1, layout-aware q8_0 copies, and the known
+turbo2 FA xfails. Its startup log confirmed the retained effective state:
+Level Zero enabled, graph disabled only by the harness, standard VEC force off,
+and q8 GQA TILE force off. The canonical state protocol saved 12 tokens and
+836,576 bytes, restored the same counts across slots, and reproduced the
+original continuation. The final kernel log query found no new i915 hang,
+reset, fault, or wedge.
+
+### Post-P5 decisions
+
+| Arm | Verdict | Reason |
+|---|---|---|
+| Quants-first plus TILE | killed as a composition | Slower than either single mechanism at deep cells |
+| Direct packed-q8 GQA stage 1 | killed and reverted | d16384 +7.59% missed its 20% keep gate; d4096 was -1.84% |
+| Global graph/batching policy | no default | No one policy cleared +10% at every depth and parallel shape |
+| Mutable Level Zero command lists | no-go before integration | Driver lacks kernel-argument mutation |
+| Dense ROPE fusion | no-go before integration | 0% passed the production donor predicate; SET_ROWS destinations were q8_0 |
+| Regular SYCL q8 prefetch | killed and reverted | All four engaged arms missed +3% and deep tg regressed about 1% |
+| Global q8_0 speculation | not promoted | Copy-heavy prompts were exact, but free prose produced four hashes |
+
+The direct-kernel candidate/revert pair is `2d53f3b25` / `0bb42498e`. The
+prefetch candidate/revert pair is `4dba2654c` / `cadcd0393`. Gate-only arms did
+not mutate backend behavior and therefore required no synthetic revert commit.
+Successful route, submission, ROPE, and speculative evidence tooling remains
+in history.
+
+The final speculative oracle reproduced the product split. With canonical
+q8_0 KV, `ngram-mod,ngram-map-k4v` was 4.15x on `code_edit` and 2.50x on
+`multi_turn`, with exact target-only hashes, but 1.65x on `free_prose` with
+four hashes across five deterministic repetitions. Global q8_0 speculation
+therefore remains off. Controlled q8_0 copy-heavy classes may opt in. The
+fixed f16 suite was target-exact and exceeded 1.5x in every class. The hostile
+hard-off gate was also exact: target-only 21.82 t/s, unguarded 15.30 t/s, and
+dead-off-3 27.83 t/s with six observed trips.
+
+Durable post-P5 evidence is under
+`scripts/perf/results/p5-post-campaign/`. The final build provenance, complete
+CMake cache, matrix adjudication, correctness log, state result, speculative
+summaries, and killed-arm ledger are in `phase7-final*`.
