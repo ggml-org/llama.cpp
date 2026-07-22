@@ -1377,9 +1377,9 @@ private:
         }
         SRV_TRC("%s", "for more info see https://github.com/ggml-org/llama.cpp/pull/16391\n");
 
-        // Context checkpoint restore is unsafe on AMD GPUs (issue #20176), including
-        // recurrent/hybrid Qwen models. It can leave flash attention with stale
-        // KV/state addresses and cause a GPU page fault after a later restore.
+        // Honor the explicit checkpoint count on every backend. AMD restore remains
+        // experimental (issue #20176), so warn when the user enables it but do
+        // not silently override --ctx-checkpoints.
         if (params_base.n_ctx_checkpoints > 0) {
             for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
                 ggml_backend_dev_t dev = ggml_backend_dev_get(i);
@@ -1390,9 +1390,8 @@ private:
                 if (name.find("AMD") != std::string::npos ||
                     name.find("Radeon") != std::string::npos ||
                     name.find("ROCm") != std::string::npos) {
-                    SRV_WRN("AMD GPU detected (%s) — disabling context checkpoints (issue #20176)\n",
-                            name.c_str());
-                    params_base.n_ctx_checkpoints = 0;
+                    SRV_WRN("AMD GPU detected (%s) — context checkpoints explicitly enabled (max=%d, issue #20176); use --ctx-checkpoints 0 to disable\n",
+                            name.c_str(), params_base.n_ctx_checkpoints);
                     break;
                 }
             }
