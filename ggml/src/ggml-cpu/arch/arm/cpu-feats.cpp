@@ -8,6 +8,22 @@
 #include <sys/sysctl.h>
 #endif
 
+#if !defined(HWCAP_FPHP)
+#define HWCAP_FPHP (1 << 9)
+#endif
+
+#if !defined(HWCAP_ASIMDHP)
+#define HWCAP_ASIMDHP (1 << 10)
+#endif
+
+#if !defined(HWCAP_ASIMDDP)
+#define HWCAP_ASIMDDP (1 << 20)
+#endif
+
+#if !defined(HWCAP_SVE)
+#define HWCAP_SVE (1 << 22)
+#endif
+
 #if !defined(HWCAP2_SVE2)
 #define HWCAP2_SVE2 (1 << 1)
 #endif
@@ -23,7 +39,7 @@
 struct aarch64_features {
     // has_neon not needed, aarch64 has NEON guaranteed
     bool has_dotprod     = false;
-    bool has_fp16_va     = false;
+    bool has_fp16        = false;
     bool has_sve         = false;
     bool has_sve2        = false;
     bool has_i8mm        = false;
@@ -36,7 +52,7 @@ struct aarch64_features {
         uint32_t hwcap2 = getauxval(AT_HWCAP2);
 
         has_dotprod = !!(hwcap & HWCAP_ASIMDDP);
-        has_fp16_va = !!(hwcap & HWCAP_FPHP);
+        has_fp16    = !!(hwcap & HWCAP_FPHP) && !!(hwcap & HWCAP_ASIMDHP);
         has_sve     = !!(hwcap & HWCAP_SVE);
         has_sve2    = !!(hwcap2 & HWCAP2_SVE2);
         has_i8mm    = !!(hwcap2 & HWCAP2_I8MM);
@@ -75,7 +91,7 @@ static int ggml_backend_cpu_aarch64_score() {
     score += 1<<1;
 #endif
 #ifdef GGML_USE_FP16_VECTOR_ARITHMETIC
-    if (!af.has_fp16_va) { return 0; }
+    if (!af.has_fp16) { return 0; }
     score += 1<<2;
 #endif
 #ifdef GGML_USE_SVE
