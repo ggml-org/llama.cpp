@@ -355,6 +355,30 @@ struct ggml_webgpu_conv2d_pipeline_key_hash {
     }
 };
 
+// Same type fields as conv2d plus the input layout (WHCN vs CWHN).
+struct ggml_webgpu_conv2d_dw_pipeline_key {
+    ggml_type weight_type;
+    ggml_type input_type;
+    ggml_type output_type;
+    bool      whcn;
+
+    bool operator==(const ggml_webgpu_conv2d_dw_pipeline_key & other) const {
+        return weight_type == other.weight_type && input_type == other.input_type && output_type == other.output_type &&
+               whcn == other.whcn;
+    }
+};
+
+struct ggml_webgpu_conv2d_dw_pipeline_key_hash {
+    size_t operator()(const ggml_webgpu_conv2d_dw_pipeline_key & key) const {
+        size_t seed = 0;
+        ggml_webgpu_hash_combine(seed, key.weight_type);
+        ggml_webgpu_hash_combine(seed, key.input_type);
+        ggml_webgpu_hash_combine(seed, key.output_type);
+        ggml_webgpu_hash_combine(seed, key.whcn);
+        return seed;
+    }
+};
+
 /** Im2Col **/
 struct ggml_webgpu_im2col_pipeline_key {
     ggml_type input_type;
@@ -1210,6 +1234,8 @@ class ggml_webgpu_shader_lib {
         soft_max_pipelines;
     std::unordered_map<ggml_webgpu_conv2d_pipeline_key, webgpu_pipeline, ggml_webgpu_conv2d_pipeline_key_hash>
         conv2d_pipelines;
+    std::unordered_map<ggml_webgpu_conv2d_dw_pipeline_key, webgpu_pipeline, ggml_webgpu_conv2d_dw_pipeline_key_hash>
+        conv2d_dw_pipelines;
     std::unordered_map<ggml_webgpu_im2col_pipeline_key, webgpu_pipeline, ggml_webgpu_im2col_pipeline_key_hash>
         im2col_pipelines;
 
@@ -3170,6 +3196,50 @@ class ggml_webgpu_shader_lib {
         pipeline.context         = decisions;
         conv2d_pipelines[key]    = pipeline;
         return conv2d_pipelines[key];
+    }
+
+    // whcn selects the input layout: contiguous WHCN vs contiguous-channels CWHN
+    webgpu_pipeline get_conv2d_dw_pipeline(const ggml_webgpu_shader_lib_context & context, bool whcn) {
+        ggml_webgpu_conv2d_dw_pipeline_key key = {};
+        key.weight_type                        = context.src0->type;
+        key.input_type                         = context.src1->type;
+        key.output_type                        = context.dst->type;
+        key.whcn                               = whcn;
+
+        auto it = conv2d_dw_pipelines.find(key);
+        if (it != conv2d_dw_pipelines.end()) {
+            return it->second;
+        }
+
+        std::vector<std::string> defines;
+        std::string              variant = whcn ? "conv_2d_dw_whcn" : "conv_2d_dw_cwhn";
+
+        auto push_type_defines = [&](const char * prefix, ggml_type type) {
+            std::string s_prefix = prefix;
+            if (type == GGML_TYPE_F32) {
+                defines.push_back(s_prefix + "_F32");
+            } else if (type == GGML_TYPE_F16) {
+                defines.push_back(s_prefix + "_F16");
+            } else {
+                GGML_ABORT("Unsupported type for CONV_2D_DW shader");
+            }
+        };
+
+        push_type_defines("WEIGHT", key.weight_type);
+        push_type_defines("INPUT", key.input_type);
+        push_type_defines("OUTPUT", key.output_type);
+        if (whcn) {
+            defines.push_back("WHCN");
+        }
+        defines.push_back(std::string("WG_SIZE=") + std::to_string(context.max_wg_size));
+
+        auto processed           = preprocessor.preprocess(wgsl_conv2d_dw, defines);
+        auto decisions           = std::make_shared<ggml_webgpu_generic_shader_decisions>();
+        decisions->wg_size       = context.max_wg_size;
+        webgpu_pipeline pipeline = ggml_webgpu_create_pipeline(device, processed, variant);
+        pipeline.context         = decisions;
+        conv2d_dw_pipelines[key] = pipeline;
+        return conv2d_dw_pipelines[key];
     }
 
     webgpu_pipeline get_im2col_pipeline(const ggml_webgpu_shader_lib_context & context) {
