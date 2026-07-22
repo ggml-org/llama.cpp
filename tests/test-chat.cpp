@@ -6188,6 +6188,9 @@ static void test_deepseek_v4_tool_result_ordering() {
         auto no_id_time    = time_result;    no_id_time.tool_call_id = "";
         auto prompt = render({ user_q, no_id_calls, no_id_weather, no_id_time });
         assert_contains(prompt, "<tool_result>sunny</tool_result>\n\n<tool_result>12:00</tool_result>");
+    }
+}
+
 static void test_reasoning_budget_tokens_per_request() {
     LOG_DBG("%s\n", __func__);
     // Use Qwen3 template which has <think>...</think> reasoning markers.
