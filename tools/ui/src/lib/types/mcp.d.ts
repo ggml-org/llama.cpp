@@ -281,6 +281,11 @@ export interface ToolCallParams {
 export interface ToolExecutionResult {
 	content: string;
 	isError: boolean;
+	awaitingUser?: {
+		kind: string;
+		requestID: string;
+		payload: Record<string, unknown>;
+	};
 }
 
 export interface ServerBuiltinToolInfo {

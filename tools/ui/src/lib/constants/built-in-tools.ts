@@ -10,6 +10,7 @@
 import type { Component } from 'svelte';
 import {
 	Braces,
+	CircleHelp,
 	Clock,
 	FilePen,
 	FilePlus,
@@ -46,6 +47,7 @@ export const BUILTIN_TOOL_UI: Readonly<Record<BuiltInTool, BuiltinToolUiEntry>> 
 		label: 'Run command',
 		source: ToolSource.BUILTIN
 	},
+	[BuiltInTool.QUESTION]: { icon: CircleHelp, label: 'Question', source: ToolSource.BUILTIN },
 	[BuiltInTool.RUN_JAVASCRIPT]: {
 		icon: Braces,
 		label: 'Run JavaScript',

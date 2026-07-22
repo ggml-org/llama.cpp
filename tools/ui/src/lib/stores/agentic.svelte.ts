@@ -59,6 +59,10 @@ import type {
 	AgenticToolCallList,
 	AgenticFlowCallbacks,
 	AgenticFlowOptions,
+	AgenticInteractiveRequest,
+	AgenticInteractiveResolution,
+	AgenticQuestionAnswers,
+	AgenticQuestionPrompt,
 	SteeringMessage
 } from '$lib/types/agentic';
 import type {
@@ -135,13 +139,13 @@ function toAgenticMessages(messages: ApiChatMessageData[]): AgenticMessage[] {
 
 class AgenticStore {
 	private _sessions = new SvelteMap<string, AgenticSession>();
-	/** Dedicated reactive state for pending permission requests (ensures immediate UI updates) */
-	private _pendingPermissions = new SvelteMap<
+	/** Dedicated reactive state for pending interactive requests (ensures immediate UI updates) */
+	private _pendingPermissions = new SvelteMap<string, AgenticInteractiveRequest | null>();
+	/** Non-reactive: stores resolve functions for pending interactive request Promises */
+	private _permissionResolvers = new Map<
 		string,
-		{ toolName: string; serverLabel: string } | null
+		(resolution: AgenticInteractiveResolution) => void
 	>();
-	/** Non-reactive: stores resolve functions for pending permission Promises */
-	private _permissionResolvers = new Map<string, (decision: ToolPermissionDecision) => void>();
 
 	/** Dedicated reactive state for pending continue requests (turn limit reached) */
 	private _pendingContinueRequests = new SvelteMap<string, boolean>();
@@ -211,9 +215,7 @@ class AgenticStore {
 		return this._sessions.get(conversationId)?.executingToolCallId ?? null;
 	}
 
-	pendingPermissionRequest(
-		conversationId: string
-	): { toolName: string; serverLabel: string } | null {
+	pendingPermissionRequest(conversationId: string): AgenticInteractiveRequest | null {
 		return this._pendingPermissions.get(conversationId) ?? null;
 	}
 
@@ -229,11 +231,11 @@ class AgenticStore {
 		}
 	}
 
-	resolvePermission(conversationId: string, decision: ToolPermissionDecision): void {
+	resolvePermission(conversationId: string, resolution: AgenticInteractiveResolution): void {
 		const resolver = this._permissionResolvers.get(conversationId);
 		if (resolver) {
 			this._permissionResolvers.delete(conversationId);
-			resolver(decision);
+			resolver(resolution);
 		}
 	}
 
@@ -314,7 +316,7 @@ class AgenticStore {
 			return ToolPermissionDecision.ONCE;
 		}
 
-		this._pendingPermissions.set(conversationId, { toolName, serverLabel });
+		this._pendingPermissions.set(conversationId, { kind: 'permission', toolName, serverLabel });
 
 		return new Promise<ToolPermissionDecision>((resolve) => {
 			if (signal?.aborted) {
@@ -322,9 +324,19 @@ class AgenticStore {
 				resolve(ToolPermissionDecision.DENY);
 				return;
 			}
+			const handleAbort = () => {
+				const resolver = this._permissionResolvers.get(conversationId);
+				if (resolver) {
+					this._permissionResolvers.delete(conversationId);
+					this._pendingPermissions.set(conversationId, null);
+					resolve(ToolPermissionDecision.DENY);
+				}
+			};
 
-			this._permissionResolvers.set(conversationId, (decision) => {
+			this._permissionResolvers.set(conversationId, (resolution) => {
+				signal?.removeEventListener('abort', handleAbort);
 				this._pendingPermissions.set(conversationId, null);
+				const decision = Array.isArray(resolution) ? ToolPermissionDecision.DENY : resolution;
 				if (decision === ToolPermissionDecision.ALWAYS && permissionKey) {
 					permissionsStore.allowTool(permissionKey);
 				} else if (decision === ToolPermissionDecision.ALWAYS_SERVER) {
@@ -341,18 +353,45 @@ class AgenticStore {
 				resolve(decision);
 			});
 
-			signal?.addEventListener(
-				'abort',
-				() => {
-					const resolver = this._permissionResolvers.get(conversationId);
-					if (resolver) {
-						this._permissionResolvers.delete(conversationId);
-						this._pendingPermissions.set(conversationId, null);
-						resolve(ToolPermissionDecision.DENY);
-					}
-				},
-				{ once: true }
-			);
+			signal?.addEventListener('abort', handleAbort, { once: true });
+		});
+	}
+
+	private async requestQuestion(
+		conversationId: string,
+		requestID: string,
+		questions: AgenticQuestionPrompt[],
+		signal?: AbortSignal
+	): Promise<AgenticQuestionAnswers | null> {
+		this._pendingPermissions.set(conversationId, {
+			kind: 'question',
+			toolName: BuiltInTool.QUESTION,
+			requestID,
+			questions
+		});
+
+		return new Promise<AgenticQuestionAnswers | null>((resolve) => {
+			if (signal?.aborted) {
+				this._pendingPermissions.set(conversationId, null);
+				resolve(null);
+				return;
+			}
+			const handleAbort = () => {
+				const resolver = this._permissionResolvers.get(conversationId);
+				if (resolver) {
+					this._permissionResolvers.delete(conversationId);
+					this._pendingPermissions.set(conversationId, null);
+					resolve(null);
+				}
+			};
+
+			this._permissionResolvers.set(conversationId, (resolution) => {
+				signal?.removeEventListener('abort', handleAbort);
+				this._pendingPermissions.set(conversationId, null);
+				resolve(Array.isArray(resolution) ? resolution : null);
+			});
+
+			signal?.addEventListener('abort', handleAbort, { once: true });
 		});
 	}
 
@@ -772,13 +811,11 @@ class AgenticStore {
 				const toolName = toolCall.function.name;
 				const serverLabel = toolsStore.getToolServerLabel(toolName);
 
-				// Ask for permission before executing the tool
-				const permission = await this.requestPermission(
-					conversationId,
-					toolName,
-					serverLabel,
-					signal
-				);
+				// The question tool is itself an interactive request, so it does not need a separate allow prompt.
+				const permission =
+					toolName === BuiltInTool.QUESTION
+						? ToolPermissionDecision.ONCE
+						: await this.requestPermission(conversationId, toolName, serverLabel, signal);
 
 				// Yield to allow Svelte to flush the UI update (hide permission dialog)
 				await new Promise((r) => setTimeout(r, 0));
@@ -835,7 +872,41 @@ class AgenticStore {
 							result = accumulated;
 						} else if (toolSource === ToolSource.BUILTIN) {
 							const args = this.parseToolArguments(toolCall.function.arguments);
-							const executionResult = await ToolsService.executeTool(toolName, args, signal);
+							let executionResult = await ToolsService.executeTool(toolName, args, signal);
+
+							if (
+								toolName === BuiltInTool.QUESTION &&
+								executionResult.awaitingUser?.kind === 'question'
+							) {
+								const rawQuestions = executionResult.awaitingUser.payload.questions;
+								if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) {
+									throw new Error('question tool returned an invalid questions payload');
+								}
+
+								const answers = await this.requestQuestion(
+									conversationId,
+									executionResult.awaitingUser.requestID,
+									rawQuestions as AgenticQuestionPrompt[],
+									signal
+								);
+
+								await new Promise((r) => setTimeout(r, 0));
+								if (signal?.aborted) {
+									this.updateSession(conversationId, { executingToolCallId: null });
+									onFlowComplete?.(this.buildFinalTimings(capturedTimings, agenticTimings));
+									return;
+								}
+
+								executionResult = await ToolsService.executeTool(
+									toolName,
+									{
+										...args,
+										request_id: executionResult.awaitingUser.requestID,
+										...(answers ? { answers } : { rejected: true })
+									},
+									signal
+								);
+							}
 
 							result = executionResult.content;
 
@@ -1070,8 +1141,11 @@ export function agenticPendingPermissionRequest(conversationId: string) {
 	return agenticStore.pendingPermissionRequest(conversationId);
 }
 
-export function agenticResolvePermission(conversationId: string, decision: ToolPermissionDecision) {
-	agenticStore.resolvePermission(conversationId, decision);
+export function agenticResolvePermission(
+	conversationId: string,
+	resolution: AgenticInteractiveResolution
+) {
+	agenticStore.resolvePermission(conversationId, resolution);
 }
 
 export function agenticPendingContinueRequest(conversationId: string) {

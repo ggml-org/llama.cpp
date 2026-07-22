@@ -33,5 +33,6 @@ export enum BuiltInTool {
 	FILE_GLOB_SEARCH = 'file_glob_search',
 	GREP_SEARCH = 'grep_search',
 	EXEC_SHELL_COMMAND = 'exec_shell_command',
+	QUESTION = 'question',
 	RUN_JAVASCRIPT = 'run_javascript'
 }
