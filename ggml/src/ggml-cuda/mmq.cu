@@ -140,12 +140,8 @@ void ggml_cuda_mul_mat_q(
             const int64_t s12 = src1->nb[2] / ts_src1;
             const int64_t s13 = src1->nb[3] / ts_src1;
             if (use_native_fp4) {
-                static constexpr uintptr_t align_float8 = 32;
-                const bool use_aligned_float8 =
-                    ((uintptr_t) src1_d % align_float8) == 0 &&
-                    src1->nb[1] % align_float8 == 0 &&
-                    src1->nb[2] % align_float8 == 0 &&
-                    src1->nb[3] % align_float8 == 0;
+                static constexpr size_t align_float8 = 32;
+                const bool use_aligned_float8 = ggml_cuda_is_aligned(src1, align_float8);
                 static_assert(sizeof(block_fp4_mmq) == 4 * sizeof(block_q8_1));
                 quantize_mmq_fp4_cuda(src1_d, nullptr, src1_q8_1.get(), src1_scale.ptr, src0->type, use_aligned_float8, ne10, s11, s12, s13, ne10_padded,
                                         ne11, ne12, ne13, stream);
@@ -218,12 +214,8 @@ void ggml_cuda_mul_mat_q(
         const int64_t s13 = src1->nb[3] / ts_src1;
 
         if (use_native_fp4) {
-            static constexpr uintptr_t align_float8 = 32;
-            const bool use_aligned_float8 =
-                ((uintptr_t) src1_d % align_float8) == 0 &&
-                src1->nb[1] % align_float8 == 0 &&
-                src1->nb[2] % align_float8 == 0 &&
-                src1->nb[3] % align_float8 == 0;
+            static constexpr size_t align_float8 = 32;
+            const bool use_aligned_float8 = ggml_cuda_is_aligned(src1, align_float8);
             if (dedup_bcast) {
                 quantize_scatter_mmq_fp4_cuda(src1_d, ids_src1.get(), src1_q8_1.get(), src1_scale.ptr, src0->type, use_aligned_float8, ne10,
                                         /*stride_token=*/s12, ne10_padded, ne12, ne11_flat, n_expert_used, stream);
