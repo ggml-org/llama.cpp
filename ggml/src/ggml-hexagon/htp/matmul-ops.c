@@ -3556,9 +3556,9 @@ int op_matmul_id(struct htp_ops_context * octx) {
         const size_t matrix_row_counts_size = n_as * sizeof(uint32_t);
         assert(octx->ctx->ddr_spad_size >= matrix_row_counts_size);
 
-        memset(matrix_row_counts, 0, matrix_row_counts_size);
-
         hex_l2fetch_block((const void *) ids->data, ids->ne[1] * ids->nb[1]);
+
+        memset(matrix_row_counts, 0, matrix_row_counts_size);
         scan_expert_ids(ids, n_ids, n_as, matrix_row_counts, NULL, 0);
 
         uint32_t max_count = hvx_reduce_max_i32((const uint8_t *) matrix_row_counts, n_as);
