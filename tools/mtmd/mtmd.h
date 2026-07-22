@@ -98,6 +98,9 @@ struct mtmd_context_params {
     int image_min_tokens; // minimum number of tokens for image input (default: read from metadata)
     int image_max_tokens; // maximum number of tokens for image input (default: read from metadata)
 
+    // MiniCPM-V 4.6: ViT downsample mode (4 or 16); -1 = use model default
+    int downsample_mode;
+
     // callback function passed over to mtmd proper
     ggml_backend_sched_eval_callback cb_eval;
     void * cb_eval_user_data;

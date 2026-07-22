@@ -154,6 +154,7 @@ struct mtmd_cli_context {
         mparams.warmup           = params.warmup;
         mparams.image_min_tokens = params.image_min_tokens;
         mparams.image_max_tokens = params.image_max_tokens;
+        mparams.downsample_mode  = params.downsample_mode;
         if (std::getenv("MTMD_DEBUG_GRAPH") != nullptr) {
             mparams.cb_eval_user_data = &cb_data;
             mparams.cb_eval = common_debug_cb_eval;

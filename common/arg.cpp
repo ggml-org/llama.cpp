@@ -2242,6 +2242,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples(mmproj_examples).set_env("LLAMA_ARG_IMAGE_MAX_TOKENS"));
     add_opt(common_arg(
+        {"--downsample-mode"}, "N",
+        "MiniCPM-V 4.6 ViT downsample mode (4 or 16), default: 16 (model default)",
+        [](common_params & params, int value) {
+            if (value != 4 && value != 16) {
+                throw std::invalid_argument("downsample mode must be 4 or 16");
+            }
+            params.downsample_mode = value;
+        }
+    ).set_examples(mmproj_examples).set_env("LLAMA_ARG_DOWNSAMPLE_MODE"));
+    add_opt(common_arg(
         {"--mtmd-batch-max-tokens"}, "N",
         string_format("maximum number of image tokens per batch when encoding images (default: %d)", params.mtmd_batch_max_tokens),
         [](common_params & params, int value) {
