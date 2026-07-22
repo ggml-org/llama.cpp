@@ -1,19 +1,6 @@
 #ifndef GGML_SYCL_FATTN_VEC_HPP
 #define GGML_SYCL_FATTN_VEC_HPP
 
-#ifndef GGML_SYCL_Q8_PREFETCH_DISTANCE
-#define GGML_SYCL_Q8_PREFETCH_DISTANCE 0
-#endif
-
-#ifndef GGML_SYCL_Q8_PREFETCH_HINT
-#define GGML_SYCL_Q8_PREFETCH_HINT 1
-#endif
-
-#include <sycl/sycl.hpp>
-#include <sycl/ext/oneapi/work_group_static.hpp>
-#if GGML_SYCL_Q8_PREFETCH_DISTANCE > 0
-#include <sycl/ext/oneapi/experimental/prefetch.hpp>
-#endif
 #include <iostream>
 #include <iomanip>
 
@@ -43,20 +30,6 @@ static constexpr int ggml_sycl_fattn_vec_get_nthreads_device() {
 #endif // __clang__
 
 
-#if GGML_SYCL_Q8_PREFETCH_DISTANCE > 0
-static __dpct_inline__ void ggml_sycl_q8_prefetch(const char * ptr, size_t bytes) {
-    namespace sycl_exp = sycl::ext::oneapi::experimental;
-#if GGML_SYCL_Q8_PREFETCH_HINT == 1
-    sycl_exp::prefetch((void *) ptr, bytes, sycl_exp::properties{sycl_exp::prefetch_hint_L1});
-#elif GGML_SYCL_Q8_PREFETCH_HINT == 2
-    sycl_exp::prefetch((void *) ptr, bytes, sycl_exp::properties{sycl_exp::prefetch_hint_L2});
-#elif GGML_SYCL_Q8_PREFETCH_HINT == 3
-    sycl_exp::prefetch((void *) ptr, bytes, sycl_exp::properties{sycl_exp::prefetch_hint_L1_nt});
-#elif GGML_SYCL_Q8_PREFETCH_HINT == 4
-    sycl_exp::prefetch((void *) ptr, bytes, sycl_exp::properties{sycl_exp::prefetch_hint_L2_nt});
-#endif
-}
-#endif
 
 template <int D,
           int ncols,
@@ -334,20 +307,6 @@ static void flash_attn_ext_vec(const char* __restrict__ Q,
              // Increment pointers after each loop:
          K += item_ct1.get_group_range(1) * nthreads * nb11, V += item_ct1.get_group_range(1) * nthreads * nb21,
              maskh += item_ct1.get_group_range(1) * nthreads) {
-        // Distance is measured in complete outer-loop iterations. Each work-item
-        // prefetches one logical q8_0 K row and one V row for its future token.
-#if GGML_SYCL_Q8_PREFETCH_DISTANCE > 0
-        if constexpr (type_K == GGML_TYPE_Q8_0 && type_V == GGML_TYPE_Q8_0 && !q8_quants_first) {
-            constexpr size_t q8_row_bytes = D / QK8_0 * sizeof(block_q8_0);
-            const int tid = item_ct1.get_local_id(1) * warp_size + item_ct1.get_local_id(2);
-            const int prefetch_tokens =
-                GGML_SYCL_Q8_PREFETCH_DISTANCE * item_ct1.get_group_range(1) * nthreads;
-            if (k_VKQ_0 + prefetch_tokens + tid < k_VKQ_max) {
-                ggml_sycl_q8_prefetch(K + (prefetch_tokens + tid) * nb11, q8_row_bytes);
-                ggml_sycl_q8_prefetch(V + (prefetch_tokens + tid) * nb21, q8_row_bytes);
-            }
-        }
-#endif
 
         // Calculate KQ tile and keep track of new maximum KQ values:
         float KQ_reg[ncols]={}; // KQ in registers.
