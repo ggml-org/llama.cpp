@@ -131,6 +131,10 @@ if (CUDAToolkit_FOUND)
 
     add_compile_definitions(GGML_CUDA_PEER_MAX_BATCH_SIZE=${GGML_CUDA_PEER_MAX_BATCH_SIZE})
 
+    if (CMAKE_CUDA_ARCHITECTURES MATCHES "(^|;)12[0-9]a(-real|-virtual)?($|;)")
+        add_compile_definitions(GGML_CUDA_HAS_BLACKWELL_TARGET)
+    endif()
+
     if (GGML_CUDA_GRAPHS)
         add_compile_definitions(GGML_CUDA_USE_GRAPHS)
     endif()

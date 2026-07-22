@@ -194,6 +194,19 @@ void llama_model_saver::add_kv_from_model() {
     // add_kv(LLM_KV_GENERAL_SAMPLING_MIROSTAT_TAU,     ???);
     // add_kv(LLM_KV_GENERAL_SAMPLING_MIROSTAT_ETA,     ???);
     add_kv(LLM_KV_GENERAL_NAME,                      model->name);
+
+    if (!model->act_policy.per_tensor.empty()) {
+        std::vector<std::string> tensor_names;
+        std::vector<int8_t> values;
+        tensor_names.reserve(model->act_policy.per_tensor.size());
+        values.reserve(model->act_policy.per_tensor.size());
+        for (const auto & [name, prec_a8] : model->act_policy.per_tensor) {
+            tensor_names.push_back(name);
+            values.push_back(prec_a8 ? 1 : 0);
+        }
+        add_kv(LLM_KV_GENERAL_TENSOR_EXTRA_NAME, tensor_names);
+        gguf_set_arr_data(gguf_ctx, llm_kv(LLM_KV_GENERAL_TENSOR_EXTRA_ALLOW_PREC_A8).c_str(), GGUF_TYPE_BOOL, values.data(), values.size());
+    }
     // add_kv(LLM_KV_GENERAL_AUTHOR,                    ???);
     // add_kv(LLM_KV_GENERAL_VERSION,                   ???);
     // add_kv(LLM_KV_GENERAL_URL,                       ???);

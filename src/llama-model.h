@@ -17,6 +17,7 @@
 struct llama_cparams;
 struct llama_ubatch;
 struct llama_model_loader;
+struct ggml_tensor;
 
 // available models
 enum llm_type {
@@ -540,6 +541,17 @@ struct llama_meta_device_get_split_state_userdata {
 
 struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const struct ggml_tensor * tensor, void * userdata);
 
+// Per-tensor activation precision from GGUF, unlisted tensors default to native (4-bit) activations.
+struct llama_act_policy {
+    std::unordered_map<std::string, bool> per_tensor;
+
+    bool wants_prec_a8(const ggml_tensor * w) const;
+};
+
+inline bool llama_act_policy_prec_a8(const llama_act_policy * policy, const ggml_tensor * w) {
+    return policy && policy->wants_prec_a8(w);
+}
+
 struct llama_model {
     llm_type type = LLM_TYPE_UNKNOWN;
     llm_arch arch = LLM_ARCH_UNKNOWN;
@@ -548,6 +560,9 @@ struct llama_model {
 
     llama_hparams hparams = {};
     llama_vocab   vocab;
+
+    // per-tensor activation precision policy 
+    llama_act_policy act_policy;
 
     // for classifier models
     std::vector<std::string> classifier_labels;

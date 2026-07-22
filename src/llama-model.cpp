@@ -1032,6 +1032,60 @@ struct llama_model::impl {
     std::vector<float> tensor_split_owned;
 };
 
+bool llama_act_policy::wants_prec_a8(const ggml_tensor * w) const {
+    if (!w) {
+        return false;
+    }
+
+    const auto it = per_tensor.find(w->name);
+    if (it != per_tensor.end()) {
+        return it->second;
+    }
+
+    return false;
+}
+
+static bool load_act_policy_arr(
+        llama_model_loader & ml,
+        const std::string & key_tensor,
+        const std::string & key_value,
+        llama_act_policy & policy) {
+    std::vector<std::string> tensor_names;
+    if (!ml.get_arr(key_tensor, tensor_names, false)) {
+        return false;
+    }
+
+    const gguf_context * ctx = ml.metadata;
+    const int kid = gguf_find_key(ctx, key_value.c_str());
+    if (kid < 0 || gguf_get_kv_type(ctx, kid) != GGUF_TYPE_ARRAY) {
+        throw std::runtime_error(format("missing %s array", key_value.c_str()));
+    }
+    if (gguf_get_arr_type(ctx, kid) != GGUF_TYPE_BOOL) {
+        throw std::runtime_error(format("%s must be a bool array", key_value.c_str()));
+    }
+
+    const size_t n_values = gguf_get_arr_n(ctx, kid);
+    if (n_values != tensor_names.size()) {
+        throw std::runtime_error(format(
+            "%s tensor/value length mismatch (%zu vs %zu)",
+            key_tensor.c_str(), tensor_names.size(), n_values));
+    }
+
+    const int8_t * values = (const int8_t *) gguf_get_arr_data(ctx, kid);
+    for (size_t i = 0; i < n_values; ++i) {
+        policy.per_tensor.emplace(tensor_names[i], values[i] != 0);
+    }
+
+    return true;
+}
+
+static void load_act_policy(llama_model_loader & ml, llama_act_policy & policy) {
+    load_act_policy_arr(ml,
+            ml.llm_kv(LLM_KV_GENERAL_TENSOR_EXTRA_NAME),
+            ml.llm_kv(LLM_KV_GENERAL_TENSOR_EXTRA_ALLOW_PREC_A8),
+            policy);
+}
+
 llama_model::llama_model(const llama_model_params & params) : params(params), pimpl(std::make_unique<impl>()) {
     if (params.tensor_split != nullptr) {
         // llama_model_params stores tensor_split as a borrowed pointer, but the model
@@ -1082,6 +1136,10 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_CAUSAL,        hparams.causal_attn,     false);
     ml.get_key(LLM_KV_POOLING_TYPE,            hparams.pooling_type,    false);
     ml.get_key(LLM_KV_BLOCK_COUNT,             hparams.n_layer_all);
+
+    // per-tensor activation precision policy 
+    load_act_policy(ml, act_policy);
+
     ml.get_key(LLM_KV_EXPERT_COUNT,            hparams.n_expert,        false);
     ml.get_key(LLM_KV_EXPERT_USED_COUNT,       hparams.n_expert_used,   false);
     ml.get_key(LLM_KV_EXPERT_GROUP_COUNT,      hparams.n_expert_groups, false);

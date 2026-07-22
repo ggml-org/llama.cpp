@@ -436,6 +436,7 @@ extern "C" {
     // precision
     enum ggml_prec {
         GGML_PREC_DEFAULT =  0, // stored as ggml_tensor.op_params, 0 by default
+        GGML_PREC_A8      =  1, // request at least 8-bit activations
         GGML_PREC_F32     = 10,
     };
 
