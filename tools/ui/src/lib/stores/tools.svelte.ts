@@ -143,7 +143,9 @@ class ToolsStore {
 	}
 
 	get frontendTools(): OpenAIToolDefinition[] {
-		return config().jsSandboxEnabled ? [buildSandboxToolDefinition(!!config().symbolicMathEnabled)] : [];
+		return config().jsSandboxEnabled
+			? [buildSandboxToolDefinition(!!config().symbolicMathEnabled)]
+			: [];
 	}
 
 	get customTools(): OpenAIToolDefinition[] {
