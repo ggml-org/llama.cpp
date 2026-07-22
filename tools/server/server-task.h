@@ -116,12 +116,17 @@ struct task_result_state {
     bool thinking_block_started = false;
     bool text_block_started = false;
 
+    // for emitting OpenAI Responses streaming API reasoning done event
+    bool thinking_block_done = false;
+
     // for OpenAI Responses streaming API
     bool oai_resp_created = false;
     const std::string oai_resp_id;
     const std::string oai_resp_reasoning_id;
     const std::string oai_resp_message_id;
     std::string oai_resp_fc_id; // function call ID for current args delta
+
+    uint64_t oai_seq_num = 0;
 
     task_result_state(const common_chat_parser_params & chat_parser_params);
 
@@ -375,6 +380,9 @@ struct server_task_result_cmpl_final : server_task_result {
     std::string oai_resp_id;
     std::string oai_resp_reasoning_id;
     std::string oai_resp_message_id;
+    uint64_t * oai_seq_num_ptr = nullptr;
+
+    bool thinking_block_done = false;
 
     virtual bool is_stop() override {
         return true; // in stream mode, final responses are considered stop
@@ -389,6 +397,8 @@ struct server_task_result_cmpl_final : server_task_result {
         oai_resp_id = state.oai_resp_id;
         oai_resp_reasoning_id = state.oai_resp_reasoning_id;
         oai_resp_message_id = state.oai_resp_message_id;
+        oai_seq_num_ptr = &state.oai_seq_num;
+        thinking_block_done = state.thinking_block_done;
     }
 
     json to_json_non_oaicompat();
@@ -439,6 +449,9 @@ struct server_task_result_cmpl_partial : server_task_result {
     // Streaming state copied from task_result_state for this chunk
     bool thinking_block_started = false;
     bool text_block_started     = false;
+    bool thinking_block_done    = false;
+
+    std::string accumulated_reasoning_content;
 
     // for OpenAI Responses API
     bool oai_resp_created = false;
@@ -446,6 +459,7 @@ struct server_task_result_cmpl_partial : server_task_result {
     std::string oai_resp_reasoning_id;
     std::string oai_resp_message_id;
     std::string oai_resp_fc_id;
+    uint64_t * oai_seq_num_ptr = nullptr;
 
     // for Anthropic API: track if any reasoning content has been generated
     bool anthropic_has_reasoning = false;

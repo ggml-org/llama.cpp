@@ -217,26 +217,34 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
             } else if (exists_and_is_array(item, "summary") &&
                 exists_and_is_string(item, "type") &&
                 item.at("type") == "reasoning") {
-                // #responses_create-input-input_item_list-item-reasoning
 
-                if (!exists_and_is_array(item, "content")) {
-                    throw std::invalid_argument("item['content'] is not an array");
+                std::string reasoning_text;
+
+                if (exists_and_is_array(item, "content") && !item.at("content").empty()) {
+                    if (!exists_and_is_string(item.at("content")[0], "text")) {
+                        throw std::invalid_argument("item['content']['text'] is not a string");
+                    }
+                    reasoning_text = item.at("content")[0].at("text").get<std::string>();
+                } else if (!item.at("summary").empty()) {
+                    for (const auto & summary_item : item.at("summary")) {
+                        if (exists_and_is_string(summary_item, "text")) {
+                            reasoning_text += summary_item.at("text").get<std::string>();
+                        }
+                    }
                 }
-                if (item.at("content").empty()) {
-                    throw std::invalid_argument("item['content'] is empty");
-                }
-                if (!exists_and_is_string(item.at("content")[0], "text")) {
-                    throw std::invalid_argument("item['content']['text'] is not a string");
+
+                if (reasoning_text.empty()) {
+                    continue;
                 }
 
                 if (merge_prev) {
                     auto & prev_msg = chatcmpl_messages.back();
-                    prev_msg["reasoning_content"] = item.at("content")[0].at("text");
+                    prev_msg["reasoning_content"] = reasoning_text;
                 } else {
                     chatcmpl_messages.push_back(json {
                         {"role", "assistant"},
                         {"content", json::array()},
-                        {"reasoning_content", item.at("content")[0].at("text")},
+                        {"reasoning_content", reasoning_text},
                     });
                 }
             } else {
@@ -281,6 +289,34 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
     if (response_body.contains("max_output_tokens")) {
         chatcmpl_body.erase("max_output_tokens");
         chatcmpl_body["max_tokens"] = response_body["max_output_tokens"];
+    }
+
+    if (response_body.contains("text")) {
+        const json & text = response_body.at("text");
+        if (!text.is_object()) {
+            throw std::invalid_argument("'text' must be an object");
+        }
+
+        chatcmpl_body.erase("text");
+        if (text.contains("format")) {
+            const json & format = text.at("format");
+            if (!format.is_object()) {
+                throw std::invalid_argument("'text.format' must be an object");
+            }
+
+            const std::string type = json_value(format, "type", std::string());
+            if (type == "json_schema") {
+                chatcmpl_body["response_format"] = {
+                    {"type", "json_schema"},
+                    {"json_schema", format},
+                };
+                chatcmpl_body["response_format"]["json_schema"].erase("type");
+            } else if (type == "json_object" || type == "text") {
+                chatcmpl_body["response_format"] = format;
+            } else if (!type.empty()) {
+                throw std::invalid_argument("'text.format.type' must be one of 'text', 'json_object', or 'json_schema'");
+            }
+        }
     }
 
     return chatcmpl_body;
