@@ -15,6 +15,7 @@
 #include "hvx-utils.h"
 #include "hex-dma.h"
 #include "hex-profile.h"
+#include "htp-vtcm.h"
 
 struct htp_im2col_context {
     struct htp_ops_context * octx;
@@ -23,7 +24,34 @@ struct htp_im2col_context {
     uint32_t pe_rows_per_thread;                   // N*OH rows per worker
     uint32_t pe_src_row_bytes;                     // one output row's source: IC*KH*IW*4, rounded 256
     uint32_t pe_dst_row_bytes;                     // one output row's dst: OW*patch_stride*2, rounded 256
+
+    // Patch-embed DMA path VTCM ping-pong.
+    uint8_t * pe_vtcm_src;                         // base of the 2x src buffers region
+    uint8_t * pe_vtcm_dst;                         // base of the 2x dst buffers region
+    uint32_t  pe_src_size_per_thread;              // 2 * pe_src_row_bytes
+    uint32_t  pe_dst_size_per_thread;              // 2 * pe_dst_row_bytes
 };
+
+// Per-op VTCM layout for the patch-embed DMA path
+struct htp_im2col_vtcm_layout {
+    size_t off_src;
+    size_t off_dst;
+    size_t src_bytes_per_thread;
+    size_t dst_bytes_per_thread;
+    size_t total_bytes;
+};
+
+static inline void htp_im2col_vtcm_layout_build(struct htp_im2col_vtcm_layout * L,
+                                                size_t                          src_row_bytes,
+                                                size_t                          dst_row_bytes,
+                                                uint32_t                        n_threads) {
+    L->src_bytes_per_thread = 2 * src_row_bytes;
+    L->dst_bytes_per_thread = 2 * dst_row_bytes;
+
+    L->off_src     = 0;
+    L->off_dst     = L->off_src + L->src_bytes_per_thread * n_threads;
+    L->total_bytes = L->off_dst + L->dst_bytes_per_thread * n_threads;
+}
 
 #define IM2COL_PATCHEMBED_BODY(FNAME, DST_CTYPE, COPY_FN, SPLAT_FN, DST_ELEM, TAG)                        \
     static void FNAME(unsigned int nth, unsigned int ith, void * data) {                                  \
@@ -108,7 +136,7 @@ struct htp_im2col_context {
 IM2COL_PATCHEMBED_BODY(im2col_patchembed_thread, __fp16, hvx_copy_f16_f32_uu, hvx_splat_f16_u, sizeof(__fp16), "f32-f16")
 IM2COL_PATCHEMBED_BODY(im2col_patchembed_f32_thread, float, hvx_copy_f32_uu, hvx_splat_f32_u, sizeof(float), "f32-f32")
 
-#define IM2COL_PATCHEMBED_DMA_BODY(FNAME, DST_CTYPE, COPY_FN, SPLAT_FN, DST_ELEM, TAG)                                \
+#define IM2COL_PATCHEMBED_DMA_BODY(FNAME, DST_CTYPE, COPY_FN, SPLAT_FN, DST_ELEM, TAG)                               \
     static void FNAME(unsigned int nth, unsigned int ith, void * data) {                                             \
         struct htp_im2col_context * ictx        = (struct htp_im2col_context *) data;                                \
         struct htp_ops_context *    octx        = ictx->octx;                                                        \
@@ -122,8 +150,8 @@ IM2COL_PATCHEMBED_BODY(im2col_patchembed_f32_thread, float, hvx_copy_f32_uu, hvx
         const float * restrict src_data = (const float *) src1->data;                                                \
         DST_CTYPE * restrict dst_data   = (DST_CTYPE *) dst->data;                                                   \
         dma_queue *    dmaq             = octx->ctx->dma[ith];                                                       \
-        uint8_t *      src_base         = octx->src1_spad.data + ith * octx->src1_spad.size_per_thread;              \
-        uint8_t *      dst_base         = octx->dst_spad.data + ith * octx->dst_spad.size_per_thread;                \
+        uint8_t *      src_base         = ictx->pe_vtcm_src + ith * ictx->pe_src_size_per_thread;                    \
+        uint8_t *      dst_base         = ictx->pe_vtcm_dst + ith * ictx->pe_dst_size_per_thread;                    \
         float *        srcb             = (float *) src_base;                                                        \
         DST_CTYPE *    dstb             = (DST_CTYPE *) dst_base;                                                    \
         const uint32_t nrows            = N * OH;                                                                    \
@@ -214,20 +242,18 @@ static bool im2col_patchembed_dma_fits(struct htp_ops_context *    octx,
     const uint32_t dst_elem = (octx->dst->type == HTP_TYPE_F16) ? sizeof(__fp16) : sizeof(float);
     ictx->pe_dst_row_bytes  = hex_round_up(OW * patch_stride * dst_elem, 256);
 
-    // 2 src + 2 dst buffers per thread (ping-pong).
-    const uint64_t per_thread = 2ull * ictx->pe_src_row_bytes + 2ull * ictx->pe_dst_row_bytes;
-    const uint64_t total      = per_thread * n_threads;
-    if (total > octx->ctx->vtcm_size) {
+    // 2 src + 2 dst buffers per thread (ping-pong), src region first then dst.
+    struct htp_im2col_vtcm_layout L;
+    htp_im2col_vtcm_layout_build(&L, ictx->pe_src_row_bytes, ictx->pe_dst_row_bytes, n_threads);
+    if (L.total_bytes > octx->ctx->vtcm_size) {
         return false;
     }
 
-    // src buffers first, then dst buffers, in vtcm.
-    octx->src1_spad.size_per_thread = 2 * ictx->pe_src_row_bytes;
-    octx->src1_spad.size            = octx->src1_spad.size_per_thread * n_threads;
-    octx->src1_spad.data            = octx->ctx->vtcm_base;
-    octx->dst_spad.size_per_thread  = 2 * ictx->pe_dst_row_bytes;
-    octx->dst_spad.size             = octx->dst_spad.size_per_thread * n_threads;
-    octx->dst_spad.data             = octx->src1_spad.data + octx->src1_spad.size;
+    uint8_t * const base        = octx->ctx->vtcm_base;
+    ictx->pe_vtcm_src           = VTCM_LAYOUT_PTR(uint8_t, base, L.off_src);
+    ictx->pe_vtcm_dst           = VTCM_LAYOUT_PTR(uint8_t, base, L.off_dst);
+    ictx->pe_src_size_per_thread = (uint32_t) L.src_bytes_per_thread;
+    ictx->pe_dst_size_per_thread = (uint32_t) L.dst_bytes_per_thread;
     return true;
 }
 
