@@ -296,6 +296,7 @@ struct lora_merge_ctx {
     // input base model + adapters
     file_input base_model;
     std::vector<std::unique_ptr<file_input>> adapters;
+    ggml_type out_type;
 
     // for computing merged tensor
     int n_threads;
