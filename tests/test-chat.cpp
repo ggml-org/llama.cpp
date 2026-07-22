@@ -1898,6 +1898,41 @@ static void test_convert_responses_to_chatcmpl() {
 
         assert_equals(false, result.contains("tools"));
     }
+
+    // Test function_call_output output arrays accept text-like content blocks
+    {
+        json input = json::parse(R"({
+            "input": [
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": [
+                        {
+                            "type": "output_text",
+                            "text": "Sunny"
+                        },
+                        {
+                            "type": "text",
+                            "text": "Warm"
+                        }
+                    ]
+                }
+            ],
+            "model": "test-model"
+        })");
+
+        json result = server_chat_convert_responses_to_chatcmpl(input);
+
+        assert_equals((size_t) 1, result.at("messages").size());
+        const auto & msg = result.at("messages")[0];
+        assert_equals(std::string("tool"), msg.at("role").get<std::string>());
+        assert_equals(std::string("call_1"), msg.at("tool_call_id").get<std::string>());
+        assert_equals((size_t) 2, msg.at("content").size());
+        assert_equals(std::string("text"), msg.at("content")[0].at("type").get<std::string>());
+        assert_equals(std::string("Sunny"), msg.at("content")[0].at("text").get<std::string>());
+        assert_equals(std::string("text"), msg.at("content")[1].at("type").get<std::string>());
+        assert_equals(std::string("Warm"), msg.at("content")[1].at("text").get<std::string>());
+    }
 }
 
 // Shared LFM2 parser cases - all variants use one output format and parser
