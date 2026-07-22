@@ -2087,7 +2087,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_t enc = ctx->enc;
 
     const int32_t hint = ggml_get_op_params_i32(op, 1);
-    
+
     if (hint == GGML_HINT_SRC0_IS_HADAMARD) {
         if (op->src[1]->type == GGML_TYPE_F32 &&
             op->type == GGML_TYPE_F32 &&
