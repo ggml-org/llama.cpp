@@ -973,6 +973,11 @@ bool rpc_server::free_buffer(const rpc_msg_free_buffer_req & request) {
         GGML_LOG_ERROR("[%s] buffer not found\n", __func__);
         return false;
     }
+    // Discard all cached graphs to avoid use-after-free in graph_recompute,
+    // since their nodes may hold pointers to the buffer being freed.
+    for (auto & sg : stored_graphs) {
+        sg.graph = nullptr;
+    }
     ggml_backend_buffer_free(buffer);
     buffers.erase(buffer);
     return true;
@@ -1375,7 +1380,6 @@ bool rpc_server::graph_compute(const std::vector<uint8_t> & input) {
         int64_t id;
         memcpy(&id, &nodes[i], sizeof(id));
         graph->nodes[i] = create_node(id, ctx, tensor_ptrs, tensor_map);
-
         // Check if create_node failed for a *non-zero* ID.
         // If id was 0, create_node returning nullptr is expected.
         // If id was non-zero and create_node returned nullptr, it indicates a deserialization error.
