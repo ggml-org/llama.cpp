@@ -2501,6 +2501,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_MLOCK"));
     add_opt(common_arg(
+        {"--lazy-experts"},
+        "do not populate routed MoE expert tensors when mapping the model; let each expert fault in\n"
+        "on demand the first time it is routed to. Lets a model whose experts do not fit in RAM run\n"
+        "off the page cache, at the cost of paging during generation. mmap only.",
+        [](common_params & params) {
+            params.lazy_experts = true;
+        }
+    ).set_env("LLAMA_ARG_LAZY_EXPERTS"));
+    add_opt(common_arg(
         {"--mmap"},
         {"--no-mmap"},
         string_format("whether to memory-map model. (if mmap disabled, slower load but may reduce pageouts if not using mlock) (default: %s)", params.use_mmap ? "enabled" : "disabled"),

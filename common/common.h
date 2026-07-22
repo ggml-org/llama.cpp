@@ -583,6 +583,7 @@ struct common_params {
     bool no_op_offload     = false; // globally disable offload host tensor operations to device
     bool no_extra_bufts    = false; // disable extra buffer types (used for weight repacking)
     bool no_host           = false; // bypass host buffer allowing extra buffers to be used
+    bool lazy_experts      = false; // mmap: fault routed MoE expert tensors in on demand instead of up front
 
     bool single_turn       = false; // single turn chat conversation
 
