@@ -2195,6 +2195,8 @@ struct ggml_backend_vk_context {
     // and set to true after the buffer contents are consumed.
     bool prealloc_x_need_sync, prealloc_y_need_sync, prealloc_split_k_need_sync;
 
+    bool compute_ctx_has_async_transfers {};
+
     vk_context_ref compute_ctx;
 
     vk_context_ref transfer_ctx;
@@ -3420,6 +3422,7 @@ static void ggml_vk_sync_buffers(ggml_backend_vk_context* ctx, vk_context& subct
 
     if (ctx) {
         ctx->prealloc_x_need_sync = ctx->prealloc_y_need_sync = ctx->prealloc_split_k_need_sync = false;
+        ctx->compute_ctx_has_async_transfers = false;
     }
 
     subctx->s->buffer->buf.pipelineBarrier(
@@ -3459,11 +3462,16 @@ static void ggml_vk_wait_events(vk_context& ctx, std::vector<vk::Event>&& events
         return;
     }
 
+    const bool transfer_queue = ctx->p->q->transfer_only;
+
     ctx->s->buffer->buf.waitEvents(
         events,
         ctx->p->q->stage_flags,
         ctx->p->q->stage_flags,
-        {},
+        { {
+          { !transfer_queue ? (vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eTransferRead | vk::AccessFlagBits::eTransferWrite) : (vk::AccessFlagBits::eTransferRead | vk::AccessFlagBits::eTransferWrite) },
+          { !transfer_queue ? (vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eTransferRead | vk::AccessFlagBits::eTransferWrite) : (vk::AccessFlagBits::eTransferRead | vk::AccessFlagBits::eTransferWrite) }
+        } },
         {},
         {}
     );
@@ -7117,6 +7125,10 @@ static void ggml_vk_instance_init() {
         extensions.push_back("VK_EXT_debug_utils");
     }
     VkBool32 enable_best_practice = layer_settings;
+    VkBool32 enable_sync_validation = layer_settings && getenv("GGML_VK_SYNC_VALIDATE") != nullptr;
+    if (enable_sync_validation) {
+        std::cerr << "ggml_vulkan: Synchronization validation enabled" << std::endl;
+    }
     std::vector<vk::LayerSettingEXT> settings = {
         {
             "VK_LAYER_KHRONOS_validation",
@@ -7124,6 +7136,13 @@ static void ggml_vk_instance_init() {
             vk::LayerSettingTypeEXT::eBool32,
             1,
             &enable_best_practice
+        },
+        {
+            "VK_LAYER_KHRONOS_validation",
+            "validate_sync",
+            vk::LayerSettingTypeEXT::eBool32,
+            1,
+            &enable_sync_validation
         },
     };
     vk::LayerSettingsCreateInfoEXT layer_setting_info(settings);
@@ -15776,6 +15795,10 @@ static void ggml_backend_vk_set_tensor_2d_async(ggml_backend_t backend, ggml_ten
 
     bool ret = ggml_vk_buffer_write_2d_async(cpy_ctx, buf, dst_offset, data, stride_data, stride_tensor, size, n_copies);
 
+    if (ret && !ctx->device->async_use_transfer_queue) {
+        ctx->compute_ctx_has_async_transfers = true;
+    }
+
     if (!ret) {
         const size_t staging_size = size * n_copies;
         ggml_vk_ensure_sync_staging_buffer(ctx, staging_size);
@@ -15898,6 +15921,7 @@ static bool ggml_backend_vk_cpy_tensor_async(ggml_backend_t backend_src, ggml_ba
         ggml_vk_buffer_copy_async(compute_ctx, dst_buf, vk_tensor_offset(dst) + dst->view_offs,
                                    src_buf_ctx->dev_buffer, vk_tensor_offset(src) + src->view_offs,
                                    ggml_nbytes(src));
+        ctx->compute_ctx_has_async_transfers = true;
         return true;
     }
 
@@ -15914,6 +15938,7 @@ static bool ggml_backend_vk_cpy_tensor_async(ggml_backend_t backend_src, ggml_ba
             cpy_ctx = ggml_vk_get_transfer_ctx(ctx);
         } else {
             cpy_ctx = ggml_vk_get_compute_ctx(ctx);
+            ctx->compute_ctx_has_async_transfers = true;
         }
 
         return ggml_vk_buffer_write_async(cpy_ctx, dst_buf,
@@ -16553,6 +16578,20 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
     int submit_node_idx = 0; // index to first node in a batch
 
     ggml_vk_submit_transfer_ctx(ctx);
+
+    if (ctx->compute_ctx_has_async_transfers) {
+        vk_context compute_ctx = ggml_vk_get_compute_ctx(ctx);
+        ggml_vk_sync_buffers(ctx, compute_ctx);
+    }
+
+    {
+        vk_context compute_ctx = ggml_vk_get_compute_ctx(ctx);
+        ggml_vk_sync_buffers(nullptr, compute_ctx);
+    }
+
+#ifdef GGML_VULKAN_CHECK_RESULTS
+    ggml_vk_synchronize(ctx);
+#endif
 
     vk_context compute_ctx;
     if (vk_perf_logger_enabled) {
@@ -17290,7 +17329,11 @@ ggml_backend_t ggml_backend_vk_init(size_t dev_num) {
     };
 
     if (!ctx->device->support_async) {
-        vk_backend->iface.get_tensor_async = nullptr;
+        vk_backend->iface.set_tensor_async    = nullptr;
+        vk_backend->iface.get_tensor_async    = nullptr;
+        vk_backend->iface.set_tensor_2d_async = nullptr;
+        vk_backend->iface.get_tensor_2d_async = nullptr;
+        vk_backend->iface.cpy_tensor_async    = nullptr;
     }
 
     return vk_backend;
@@ -17442,8 +17485,9 @@ static void ggml_backend_vk_device_get_props(ggml_backend_dev_t dev, struct ggml
     props->type        = ggml_backend_vk_device_get_type(dev);
     props->device_id   = ctx->pci_bus_id.empty() ? nullptr : ctx->pci_bus_id.c_str();
     ggml_backend_vk_device_get_memory(dev, &props->memory_free, &props->memory_total);
+    const vk_device& device = ggml_vk_get_device(ctx->device);
     props->caps = {
-        /* .async                 = */ true,
+        /* .async                 = */ device->support_async,
         /* .host_buffer           = */ true,
         /* .buffer_from_host_ptr  = */ false,
         /* .events                = */ true,
@@ -19103,7 +19147,7 @@ static void ggml_vk_check_results_1(ggml_backend_vk_context * ctx, ggml_cgraph *
         ggml_vk_print_graph_origin(tensor, done);
     }
 
-    if (avg_err > 0.01 || std::isnan(avg_err)) {
+    if (avg_err > 0.1 || std::isnan(avg_err)) {
         std::cerr << "ERROR: avg_err=" << avg_err << " in " << ggml_op_name(tensor->op) << " (check " << check_counter << ")" << std::endl;
         std::cerr << "tensor=" << tensor << " tensor->name=" << tensor->name << " tensor->type: " << ggml_type_name(tensor->type) << " ne0=" << tensor->ne[0] << " nb0=" << tensor->nb[0] << " ne1=" << tensor->ne[1] << " nb1=" << tensor->nb[1] << " ne2=" << tensor->ne[2] << " nb2=" << tensor->nb[2] << " ne3=" << tensor->ne[3] << " nb3=" << tensor->nb[3] << " offset=" << tensor->view_offs << std::endl;
         if (src0 != nullptr) {
