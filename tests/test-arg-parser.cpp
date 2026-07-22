@@ -132,6 +132,53 @@ static void test(void) {
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_SPECULATIVE));
     assert(params.speculative.draft.n_max == 123);
 
+    common_params reasoning_params;
+    argv = {
+        "binary_name",
+        "--model", "model_file.gguf",
+        "--reasoning-temp", "1.25",
+        "--reasoning-top-k", "17",
+        "--reasoning-presence-penalty", "-0.2",
+        "--reasoning-frequency-penalty", "0.4",
+        "--reasoning-dry-multiplier", "0.8",
+        "--reasoning-xtc-probability", "0.3",
+        "--reasoning-xtc-threshold", "0.2",
+        "--reasoning-min-keep", "3",
+    };
+    assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), reasoning_params, LLAMA_EXAMPLE_COMPLETION));
+    assert(reasoning_params.sampling.reasoning_temp == 1.25f);
+    assert(reasoning_params.sampling.reasoning_top_k == 17);
+    assert(reasoning_params.sampling.reasoning_penalty_present == -0.2f);
+    assert(reasoning_params.sampling.reasoning_penalty_freq == 0.4f);
+    assert(reasoning_params.sampling.reasoning_dry_multiplier == 0.8f);
+    assert(reasoning_params.sampling.reasoning_xtc_probability == 0.3f);
+    assert(reasoning_params.sampling.reasoning_xtc_threshold == 0.2f);
+    assert(reasoning_params.sampling.reasoning_min_keep == 3);
+    assert(reasoning_params.sampling.reasoning_sampling != 0);
+
+    {
+        const auto ctx_arg = common_params_parser_init(reasoning_params, LLAMA_EXAMPLE_COMPLETION);
+        std::unordered_set<std::string> reasoning_args;
+        for (const auto & opt : ctx_arg.options) {
+            const auto opt_args = opt.get_args();
+            reasoning_args.insert(opt_args.begin(), opt_args.end());
+        }
+
+        const std::vector<std::string> removed_args = {
+            "--reasoning-mirostat",
+            "--reasoning-mirostat-ent",
+            "--reasoning-mirostat-tau",
+            "--reasoning-mirostat-lr",
+            "--reasoning-mirostat-eta",
+            "--reasoning-adaptive-target",
+            "--reasoning-adaptive-decay",
+            "--reasoning-seed",
+        };
+        for (const auto & arg : removed_args) {
+            assert(reasoning_args.find(arg) == reasoning_args.end());
+        }
+    }
+
     // multi-value args (CSV)
     argv = {"binary_name", "--lora", "file1.gguf,\"file2,2.gguf\",\"file3\"\"3\"\".gguf\",file4\".gguf"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));

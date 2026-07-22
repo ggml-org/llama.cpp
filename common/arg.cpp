@@ -1882,6 +1882,169 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_sampling());
     add_opt(common_arg(
+        {"--reasoning-temp"}, "N",
+        "temperature override while inside the reasoning block; uses the existing sampling chain with continuous RNG and history state (default: inherit)",
+        [](common_params & params, const std::string & value) {
+            params.sampling.reasoning_temp = std::max(std::stof(value), 0.0f);
+            params.sampling.reasoning_sampling |= COMMON_PARAMS_SAMPLING_CONFIG_TEMP;
+        }
+    ).set_sampling());
+    add_opt(common_arg(
+        {"--reasoning-top-k"}, "N",
+        "top-k override while inside the reasoning block (default: inherit)",
+        [](common_params & params, int value) {
+            params.sampling.reasoning_top_k = value;
+            params.sampling.reasoning_sampling |= COMMON_PARAMS_SAMPLING_CONFIG_TOP_K;
+        }
+    ).set_sampling());
+    add_opt(common_arg(
+        {"--reasoning-top-p"}, "N",
+        "top-p override while inside the reasoning block (default: inherit)",
+        [](common_params & params, const std::string & value) {
+            params.sampling.reasoning_top_p = std::stof(value);
+            params.sampling.reasoning_sampling |= COMMON_PARAMS_SAMPLING_CONFIG_TOP_P;
+        }
+    ).set_sampling());
+    add_opt(common_arg(
+        {"--reasoning-min-p"}, "N",
+        "min-p override while inside the reasoning block (default: inherit)",
+        [](common_params & params, const std::string & value) {
+            params.sampling.reasoning_min_p = std::stof(value);
+            params.sampling.reasoning_sampling |= COMMON_PARAMS_SAMPLING_CONFIG_MIN_P;
+        }
+    ).set_sampling());
+    add_opt(common_arg(
+        {"--reasoning-top-n-sigma"}, "N",
+        "top-n-sigma override while inside the reasoning block (default: inherit)",
+        [](common_params & params, const std::string & value) {
+            params.sampling.reasoning_top_n_sigma = std::stof(value);
+            params.sampling.reasoning_sampling |= COMMON_PARAMS_SAMPLING_CONFIG_TOP_N_SIGMA;
+        }
+    ).set_sampling());
+    add_opt(common_arg(
+        {"--reasoning-xtc-probability"}, "N",
+        "XTC probability override while inside the reasoning block (default: inherit)",
+        [](common_params & params, const std::string & value) {
+            params.sampling.reasoning_xtc_probability = std::stof(value);
+            params.sampling.reasoning_sampling |= COMMON_PARAMS_SAMPLING_CONFIG_XTC_PROBABILITY;
+        }
+    ).set_sampling());
+    add_opt(common_arg(
+        {"--reasoning-xtc-threshold"}, "N",
+        "XTC threshold override while inside the reasoning block (default: inherit)",
+        [](common_params & params, const std::string & value) {
+            params.sampling.reasoning_xtc_threshold = std::stof(value);
+            params.sampling.reasoning_sampling |= COMMON_PARAMS_SAMPLING_CONFIG_XTC_THRESHOLD;
+        }
+    ).set_sampling());
+    add_opt(common_arg(
+        {"--reasoning-typical-p"}, "N",
+        "locally typical sampling override while inside the reasoning block (default: inherit)",
+        [](common_params & params, const std::string & value) {
+            params.sampling.reasoning_typ_p = std::stof(value);
+            params.sampling.reasoning_sampling |= COMMON_PARAMS_SAMPLING_CONFIG_TYPICAL_P;
+        }
+    ).set_sampling());
+    add_opt(common_arg(
+        {"--reasoning-dynatemp-range"}, "N",
+        "dynamic temperature range override while inside the reasoning block (default: inherit)",
+        [](common_params & params, const std::string & value) {
+            params.sampling.reasoning_dynatemp_range = std::stof(value);
+            params.sampling.reasoning_sampling |= COMMON_PARAMS_SAMPLING_CONFIG_DYNATEMP_RANGE;
+        }
+    ).set_sampling());
+    add_opt(common_arg(
+        {"--reasoning-dynatemp-exp", "--reasoning-dynatemp-exponent"}, "N",
+        "dynamic temperature exponent override while inside the reasoning block (default: inherit)",
+        [](common_params & params, const std::string & value) {
+            params.sampling.reasoning_dynatemp_exponent = std::stof(value);
+            params.sampling.reasoning_sampling |= COMMON_PARAMS_SAMPLING_CONFIG_DYNATEMP_EXPONENT;
+        }
+    ).set_sampling());
+    add_opt(common_arg(
+        {"--reasoning-repeat-last-n"}, "N",
+        "repeat history override while inside the reasoning block (default: inherit)",
+        [](common_params & params, int value) {
+            if (value < -1) {
+                throw std::runtime_error(string_format("error: invalid reasoning-repeat-last-n = %d\n", value));
+            }
+            params.sampling.reasoning_penalty_last_n = value;
+            params.sampling.n_prev = std::max(params.sampling.n_prev, value);
+            params.sampling.reasoning_sampling |= COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_LAST_N;
+        }
+    ).set_sampling());
+    add_opt(common_arg(
+        {"--reasoning-repeat-penalty"}, "N",
+        "repeat-penalty override while inside the reasoning block (default: inherit)",
+        [](common_params & params, const std::string & value) {
+            params.sampling.reasoning_penalty_repeat = std::stof(value);
+            params.sampling.reasoning_sampling |= COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_REPEAT;
+        }
+    ).set_sampling());
+    add_opt(common_arg(
+        {"--reasoning-presence-penalty"}, "N",
+        "presence penalty override while inside the reasoning block (default: inherit)",
+        [](common_params & params, const std::string & value) {
+            params.sampling.reasoning_penalty_present = std::stof(value);
+            params.sampling.reasoning_sampling |= COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_PRESENT;
+        }
+    ).set_sampling());
+    add_opt(common_arg(
+        {"--reasoning-frequency-penalty"}, "N",
+        "frequency penalty override while inside the reasoning block (default: inherit)",
+        [](common_params & params, const std::string & value) {
+            params.sampling.reasoning_penalty_freq = std::stof(value);
+            params.sampling.reasoning_sampling |= COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_FREQ;
+        }
+    ).set_sampling());
+    add_opt(common_arg(
+        {"--reasoning-dry-multiplier"}, "N",
+        "DRY multiplier override while inside the reasoning block (default: inherit)",
+        [](common_params & params, const std::string & value) {
+            params.sampling.reasoning_dry_multiplier = std::stof(value);
+            params.sampling.reasoning_sampling |= COMMON_PARAMS_SAMPLING_CONFIG_DRY_MULTIPLIER;
+        }
+    ).set_sampling());
+    add_opt(common_arg(
+        {"--reasoning-dry-base"}, "N",
+        "DRY base override while inside the reasoning block (default: inherit)",
+        [](common_params & params, const std::string & value) {
+            const float base = std::stof(value);
+            if (base < 1.0f) {
+                return;
+            }
+            params.sampling.reasoning_dry_base = base;
+            params.sampling.reasoning_sampling |= COMMON_PARAMS_SAMPLING_CONFIG_DRY_BASE;
+        }
+    ).set_sampling());
+    add_opt(common_arg(
+        {"--reasoning-dry-allowed-length"}, "N",
+        "DRY allowed length override while inside the reasoning block (default: inherit)",
+        [](common_params & params, int value) {
+            params.sampling.reasoning_dry_allowed_length = value;
+            params.sampling.reasoning_sampling |= COMMON_PARAMS_SAMPLING_CONFIG_DRY_ALLOWED_LEN;
+        }
+    ).set_sampling());
+    add_opt(common_arg(
+        {"--reasoning-dry-penalty-last-n"}, "N",
+        "DRY history override while inside the reasoning block (default: inherit)",
+        [](common_params & params, int value) {
+            if (value < -1) {
+                throw std::runtime_error(string_format("error: invalid reasoning-dry-penalty-last-n = %d\n", value));
+            }
+            params.sampling.reasoning_dry_penalty_last_n = value;
+            params.sampling.reasoning_sampling |= COMMON_PARAMS_SAMPLING_CONFIG_DRY_PENALTY_LAST_N;
+        }
+    ).set_sampling());
+    add_opt(common_arg(
+        {"--reasoning-min-keep"}, "N",
+        "minimum candidate count override while inside the reasoning block (default: inherit)",
+        [](common_params & params, int value) {
+            params.sampling.reasoning_min_keep = value;
+            params.sampling.reasoning_sampling |= COMMON_PARAMS_SAMPLING_CONFIG_MIN_KEEP;
+        }
+    ).set_sampling());
+    add_opt(common_arg(
         {"--top-nsigma", "--top-n-sigma"}, "N",
         string_format("top-n-sigma sampling (default: %.2f, -1.0 = disabled)", params.sampling.top_n_sigma),
         [](common_params & params, const std::string & value) {

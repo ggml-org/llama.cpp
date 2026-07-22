@@ -13,6 +13,7 @@
 #include "common.h"
 #include "ggml.h"
 #include "log.h"
+#include "server-schema.h"
 
 #include <algorithm>
 #include <exception>
@@ -5983,6 +5984,81 @@ static void test_reasoning_budget_message_per_request() {
     }
 }
 
+static void test_reasoning_sampling_per_request() {
+    common_params params_base;
+    const json body = {
+        {"reasoning_temp", 1.25f},
+        {"reasoning_top_k", 17},
+        {"reasoning_top_p", 0.82f},
+        {"reasoning_min_p", 0.03f},
+        {"reasoning_xtc_probability", 0.25f},
+        {"reasoning_xtc_threshold", 0.15f},
+        {"reasoning_typical_p", params_base.sampling.typ_p},
+        {"reasoning_dynatemp_range", nullptr},
+        {"reasoning_repeat_last_n", -1},
+        {"reasoning_repeat_penalty", 1.08f},
+        {"reasoning_frequency_penalty", -0.2f},
+        {"reasoning_presence_penalty", 0.4f},
+        {"reasoning_dry_penalty_last_n", -1},
+        {"reasoning_min_keep", 3},
+    };
+    const std::vector<llama_logit_bias> logit_bias_eog;
+
+    auto params = server_schema::eval_llama_cmpl_schema(
+        nullptr, params_base, 4096, logit_bias_eog, body);
+
+    assert_equals(1.25f, params.sampling.reasoning_temp);
+    assert_equals(17, params.sampling.reasoning_top_k);
+    assert_equals(0.82f, params.sampling.reasoning_top_p);
+    assert_equals(0.03f, params.sampling.reasoning_min_p);
+    assert_equals(0.25f, params.sampling.reasoning_xtc_probability);
+    assert_equals(0.15f, params.sampling.reasoning_xtc_threshold);
+    assert_equals(params_base.sampling.typ_p, params.sampling.reasoning_typ_p);
+    assert_equals(4096, params.sampling.reasoning_penalty_last_n);
+    assert_equals(1.08f, params.sampling.reasoning_penalty_repeat);
+    assert_equals(-0.2f, params.sampling.reasoning_penalty_freq);
+    assert_equals(0.4f, params.sampling.reasoning_penalty_present);
+    assert_equals(4096, params.sampling.reasoning_dry_penalty_last_n);
+    assert_equals(3, params.sampling.reasoning_min_keep);
+
+    const uint64_t expected =
+        COMMON_PARAMS_SAMPLING_CONFIG_TEMP |
+        COMMON_PARAMS_SAMPLING_CONFIG_TOP_K |
+        COMMON_PARAMS_SAMPLING_CONFIG_TOP_P |
+        COMMON_PARAMS_SAMPLING_CONFIG_MIN_P |
+        COMMON_PARAMS_SAMPLING_CONFIG_XTC_PROBABILITY |
+        COMMON_PARAMS_SAMPLING_CONFIG_XTC_THRESHOLD |
+        COMMON_PARAMS_SAMPLING_CONFIG_TYPICAL_P |
+        COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_LAST_N |
+        COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_REPEAT |
+        COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_FREQ |
+        COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_PRESENT |
+        COMMON_PARAMS_SAMPLING_CONFIG_DRY_PENALTY_LAST_N |
+        COMMON_PARAMS_SAMPLING_CONFIG_MIN_KEEP;
+    assert_equals(expected, params.sampling.reasoning_sampling);
+
+    task_params schema_params;
+    const auto schema = server_schema::make_llama_cmpl_schema(params_base, schema_params);
+    const std::vector<std::string> removed_fields = {
+        "reasoning_mirostat",
+        "reasoning_mirostat_tau",
+        "reasoning_mirostat_eta",
+        "reasoning_adaptive_target",
+        "reasoning_adaptive_decay",
+        "reasoning_seed",
+    };
+    for (const auto & removed : removed_fields) {
+        const bool found = std::any_of(schema.begin(), schema.end(), [&](const auto & field) {
+            return std::any_of(field->name.begin(), field->name.end(), [&](const char * name) {
+                return removed == name;
+            });
+        });
+        if (found) {
+            throw std::runtime_error("removed reasoning field is still present in the server schema: " + removed);
+        }
+    }
+}
+
 static void test_msg_diffs_compute() {
     LOG_DBG("%s\n", __func__);
     {
@@ -6142,6 +6218,7 @@ int main(int argc, char ** argv) {
         test_template_generation_prompt();
         test_reasoning_budget_tokens_per_request();
         test_reasoning_budget_message_per_request();
+        test_reasoning_sampling_per_request();
         test_template_output_peg_parsers(detailed_debug);
         std::cout << "\n[chat] All tests passed!" << '\n';
     }

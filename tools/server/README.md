@@ -128,6 +128,26 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--top-k N` | top-k sampling (default: 40, 0 = disabled)<br/>(env: LLAMA_ARG_TOP_K) |
 | `--top-p N` | top-p sampling (default: 0.95, 1.0 = disabled) |
 | `--min-p N` | min-p sampling (default: 0.05, 0.0 = disabled) |
+| `--reasoning-temp N` | temperature override while inside the reasoning block; uses the existing sampling chain with continuous RNG and history state (default: inherit) |
+| `--reasoning-top-k N` | top-k override while inside the reasoning block (default: inherit) |
+| `--reasoning-top-p N` | top-p override while inside the reasoning block (default: inherit) |
+| `--reasoning-min-p N` | min-p override while inside the reasoning block (default: inherit) |
+| `--reasoning-top-n-sigma N` | top-n-sigma override while inside the reasoning block (default: inherit) |
+| `--reasoning-xtc-probability N` | XTC probability override while inside the reasoning block (default: inherit) |
+| `--reasoning-xtc-threshold N` | XTC threshold override while inside the reasoning block (default: inherit) |
+| `--reasoning-typical-p N` | locally typical sampling override while inside the reasoning block (default: inherit) |
+| `--reasoning-dynatemp-range N` | dynamic temperature range override while inside the reasoning block (default: inherit) |
+| `--reasoning-dynatemp-exp, --reasoning-dynatemp-exponent N` | dynamic temperature exponent override while inside the reasoning block (default: inherit) |
+| `--reasoning-repeat-last-n N` | repeat history override while inside the reasoning block (default: inherit) |
+| `--reasoning-repeat-penalty N` | repeat-penalty override while inside the reasoning block (default: inherit) |
+| `--reasoning-presence-penalty N` | presence penalty override while inside the reasoning block (default: inherit) |
+| `--reasoning-frequency-penalty N` | frequency penalty override while inside the reasoning block (default: inherit) |
+| `--reasoning-dry-multiplier N` | DRY multiplier override while inside the reasoning block (default: inherit) |
+| `--reasoning-dry-base N` | DRY base override while inside the reasoning block (default: inherit) |
+| `--reasoning-dry-allowed-length N` | DRY allowed length override while inside the reasoning block (default: inherit) |
+| `--reasoning-dry-penalty-last-n N` | DRY history override while inside the reasoning block (default: inherit) |
+| `--reasoning-min-keep N` | minimum candidate count override while inside the reasoning block (default: inherit) |
+| `--reasoning-preserve, --no-reasoning-preserve` | preserve reasoning trace in the full history, not just the last assistant message (default: template default)<br/>compatible with certain templates having 'supports_preserve_reasoning' capability<br/>example: https://docs.z.ai/guides/capabilities/thinking-mode#preserved-thinking<br/>(env: LLAMA_ARG_REASONING_PRESERVE) |
 | `--top-nsigma, --top-n-sigma N` | top-n-sigma sampling (default: -1.00, -1.0 = disabled) |
 | `--xtc-probability N` | xtc probability (default: 0.00, 0.0 = disabled) |
 | `--xtc-threshold N` | xtc threshold (default: 0.10, 1.0 = disabled) |
@@ -292,6 +312,10 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--spec-default` | enable default speculative decoding config |
 
 <!-- HELP_END -->
+
+## Reasoning sampling overrides
+
+Supported `--reasoning-*` options switch parameter values in the existing sampler chain while generation is inside a reasoning block. Unset options inherit their base values. RNG, token histories, Mirostat state and adaptive-p state remain continuous. Seed, sampler ordering, Mirostat configuration and adaptive-p configuration cannot vary by reasoning section.
 
 Note: If both command line argument and environment variable are both set for the same param, the argument will take precedence over env var.
 
@@ -512,6 +536,8 @@ These words will not be included in the completion, so make sure to add them to 
 `n_probs`: If greater than 0, the response also contains the probabilities of top N tokens for each generated token given the sampling settings. Note that for temperature < 0 the tokens are sampled greedily but token probabilities are still being calculated via a simple softmax of the logits without considering any other sampler settings. Default: `0`
 
 `min_keep`: If greater than 0, force samplers to return N possible tokens at minimum. Default: `0`
+
+`reasoning_*`: Supported reasoning overrides switch parameter values in the existing sampler chain while generation is inside the model's reasoning (thinking) block; outside of it the base values above are used. RNG, token histories, Mirostat state and adaptive-p state remain continuous. Unset reasoning values inherit their base values. Seed, sampler ordering, Mirostat configuration and adaptive-p configuration cannot vary by reasoning section. Supported fields are `reasoning_temp` (alias `reasoning_temperature`), `reasoning_top_k`, `reasoning_top_p`, `reasoning_min_p`, `reasoning_top_n_sigma`, `reasoning_xtc_probability`, `reasoning_xtc_threshold`, `reasoning_typical_p`, `reasoning_dynatemp_range`, `reasoning_dynatemp_exponent`, `reasoning_repeat_last_n`, `reasoning_repeat_penalty`, `reasoning_presence_penalty`, `reasoning_frequency_penalty`, `reasoning_dry_multiplier`, `reasoning_dry_base`, `reasoning_dry_allowed_length`, `reasoning_dry_penalty_last_n` and `reasoning_min_keep`. The overrides require the reasoning start/end tags to be known: on `/v1/chat/completions` they are picked up automatically from chat templates with thinking support, while `/completion` requests must also provide `reasoning_budget_start_tag` and `reasoning_budget_end_tag`; without tags the overrides are ignored (a warning is logged). Default: inherit
 
 `t_max_predict_ms`: Set a time limit in milliseconds for the prediction (a.k.a. text-generation) phase. The timeout will trigger if the generation takes more than the specified time (measured since the first token was generated) and if a new-line character has already been generated. Useful for FIM applications. Default: `0`, which is disabled.
 

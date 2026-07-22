@@ -1,6 +1,7 @@
 #include "server-schema.h"
 
 #include "json-schema-to-grammar.h"
+#include "log.h"
 
 namespace server_schema {
 
@@ -189,6 +190,75 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
 
     add((new field_bool("post_sampling_probs", params.post_sampling_probs))
         ->set_desc("Return probabilities of top n_probs tokens after applying the sampling chain"));
+
+    add((new field_num("reasoning_temp", params.sampling.reasoning_temp))
+        ->set_limits(0.0f, std::numeric_limits<float>::infinity())
+        ->add_alias("reasoning_temperature")
+        ->set_desc("Temperature override inside reasoning blocks; uses the existing sampling chain with continuous RNG and history state"));
+
+    add((new field_num("reasoning_top_k", params.sampling.reasoning_top_k))
+        ->set_limits(0, INT32_MAX)
+        ->set_desc("Top-k override inside reasoning blocks"));
+
+    add((new field_num("reasoning_top_p", params.sampling.reasoning_top_p))
+        ->set_limits(0.0f, 1.0f)
+        ->set_desc("Top-p override inside reasoning blocks"));
+
+    add((new field_num("reasoning_min_p", params.sampling.reasoning_min_p))
+        ->set_limits(0.0f, 1.0f)
+        ->set_desc("Min-p override inside reasoning blocks"));
+
+    add((new field_num("reasoning_top_n_sigma", params.sampling.reasoning_top_n_sigma))
+        ->set_desc("Top-n-sigma override inside reasoning blocks"));
+
+    add((new field_num("reasoning_xtc_probability", params.sampling.reasoning_xtc_probability))
+        ->set_limits(0.0f, 1.0f)
+        ->set_desc("XTC probability override inside reasoning blocks"));
+
+    add((new field_num("reasoning_xtc_threshold", params.sampling.reasoning_xtc_threshold))
+        ->set_limits(0.0f, 1.0f)
+        ->set_desc("XTC threshold override inside reasoning blocks"));
+
+    add((new field_num("reasoning_typical_p", params.sampling.reasoning_typ_p))
+        ->set_desc("Locally typical sampling override inside reasoning blocks"));
+
+    add((new field_num("reasoning_dynatemp_range", params.sampling.reasoning_dynatemp_range))
+        ->set_desc("Dynamic temperature range override inside reasoning blocks"));
+
+    add((new field_num("reasoning_dynatemp_exponent", params.sampling.reasoning_dynatemp_exponent))
+        ->set_desc("Dynamic temperature exponent override inside reasoning blocks"));
+
+    add((new field_num("reasoning_repeat_last_n", params.sampling.reasoning_penalty_last_n))
+        ->set_hard_limits(-1, INT32_MAX)
+        ->set_desc("Repeat history override inside reasoning blocks"));
+
+    add((new field_num("reasoning_repeat_penalty", params.sampling.reasoning_penalty_repeat))
+        ->set_desc("Repeat penalty override inside reasoning blocks"));
+
+    add((new field_num("reasoning_frequency_penalty", params.sampling.reasoning_penalty_freq))
+        ->set_desc("Frequency penalty override inside reasoning blocks"));
+
+    add((new field_num("reasoning_presence_penalty", params.sampling.reasoning_penalty_present))
+        ->set_desc("Presence penalty override inside reasoning blocks"));
+
+    add((new field_num("reasoning_dry_multiplier", params.sampling.reasoning_dry_multiplier))
+        ->set_desc("DRY multiplier override inside reasoning blocks"));
+
+    add((new field_num("reasoning_dry_base", params.sampling.reasoning_dry_base))
+        ->set_limits(1.0f, std::numeric_limits<float>::infinity())
+        ->set_desc("DRY base override inside reasoning blocks"));
+
+    add((new field_num("reasoning_dry_allowed_length", params.sampling.reasoning_dry_allowed_length))
+        ->set_hard_limits(0, INT32_MAX)
+        ->set_desc("DRY allowed length override inside reasoning blocks"));
+
+    add((new field_num("reasoning_dry_penalty_last_n", params.sampling.reasoning_dry_penalty_last_n))
+        ->set_hard_limits(-1, INT32_MAX)
+        ->set_desc("DRY history override inside reasoning blocks"));
+
+    add((new field_num("reasoning_min_keep", params.sampling.reasoning_min_keep))
+        ->set_hard_limits(0, INT32_MAX)
+        ->set_desc("Minimum candidate count override inside reasoning blocks"));
 
     //
     // Speculative decoding params
@@ -536,6 +606,50 @@ task_params eval_llama_cmpl_schema(
 
         if (params.sampling.dry_penalty_last_n == -1) {
             params.sampling.dry_penalty_last_n = n_ctx_slot;
+        }
+
+        auto enable_reasoning_override = [&](const char * name, uint64_t flag) {
+            auto it = data.find(name);
+            if (it != data.end() && !it->is_null()) {
+                params.sampling.reasoning_sampling |= flag;
+            }
+        };
+
+        enable_reasoning_override("reasoning_temp",               COMMON_PARAMS_SAMPLING_CONFIG_TEMP);
+        enable_reasoning_override("reasoning_temperature",        COMMON_PARAMS_SAMPLING_CONFIG_TEMP);
+        enable_reasoning_override("reasoning_top_k",              COMMON_PARAMS_SAMPLING_CONFIG_TOP_K);
+        enable_reasoning_override("reasoning_top_p",              COMMON_PARAMS_SAMPLING_CONFIG_TOP_P);
+        enable_reasoning_override("reasoning_min_p",              COMMON_PARAMS_SAMPLING_CONFIG_MIN_P);
+        enable_reasoning_override("reasoning_top_n_sigma",        COMMON_PARAMS_SAMPLING_CONFIG_TOP_N_SIGMA);
+        enable_reasoning_override("reasoning_xtc_probability",    COMMON_PARAMS_SAMPLING_CONFIG_XTC_PROBABILITY);
+        enable_reasoning_override("reasoning_xtc_threshold",      COMMON_PARAMS_SAMPLING_CONFIG_XTC_THRESHOLD);
+        enable_reasoning_override("reasoning_typical_p",          COMMON_PARAMS_SAMPLING_CONFIG_TYPICAL_P);
+        enable_reasoning_override("reasoning_dynatemp_range",     COMMON_PARAMS_SAMPLING_CONFIG_DYNATEMP_RANGE);
+        enable_reasoning_override("reasoning_dynatemp_exponent",  COMMON_PARAMS_SAMPLING_CONFIG_DYNATEMP_EXPONENT);
+        enable_reasoning_override("reasoning_repeat_last_n",      COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_LAST_N);
+        enable_reasoning_override("reasoning_repeat_penalty",     COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_REPEAT);
+        enable_reasoning_override("reasoning_frequency_penalty",  COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_FREQ);
+        enable_reasoning_override("reasoning_presence_penalty",   COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_PRESENT);
+        enable_reasoning_override("reasoning_dry_multiplier",     COMMON_PARAMS_SAMPLING_CONFIG_DRY_MULTIPLIER);
+        enable_reasoning_override("reasoning_dry_base",           COMMON_PARAMS_SAMPLING_CONFIG_DRY_BASE);
+        enable_reasoning_override("reasoning_dry_allowed_length", COMMON_PARAMS_SAMPLING_CONFIG_DRY_ALLOWED_LEN);
+        enable_reasoning_override("reasoning_dry_penalty_last_n", COMMON_PARAMS_SAMPLING_CONFIG_DRY_PENALTY_LAST_N);
+        enable_reasoning_override("reasoning_min_keep",           COMMON_PARAMS_SAMPLING_CONFIG_MIN_KEEP);
+
+        if ((params.sampling.reasoning_sampling & COMMON_PARAMS_SAMPLING_CONFIG_PENALTY_LAST_N) &&
+            params.sampling.reasoning_penalty_last_n == -1) {
+            params.sampling.reasoning_penalty_last_n = n_ctx_slot;
+        }
+        if ((params.sampling.reasoning_sampling & COMMON_PARAMS_SAMPLING_CONFIG_DRY_PENALTY_LAST_N) &&
+            params.sampling.reasoning_dry_penalty_last_n == -1) {
+            params.sampling.reasoning_dry_penalty_last_n = n_ctx_slot;
+        }
+
+        if (params.sampling.reasoning_sampling &&
+            (params.sampling.reasoning_budget_start.empty() || params.sampling.reasoning_budget_end.empty())) {
+            LOG_WRN("%s: reasoning_* sampling overrides are set but no reasoning start/end tags are available "
+                    "(chat template without thinking tags, or missing reasoning_budget_start_tag/reasoning_budget_end_tag); "
+                    "the overrides will have no effect\n", __func__);
         }
 
         // if "reasoning_format" is not provided, its handler will not be called, we will need to handle it here
