@@ -3777,7 +3777,13 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
             fusion_data.x_bias  = bias;
             fusion_data.x_scale = scale;
 
-            if (ggml_cuda_should_fuse_mul_mat_mmq(mm_node)) {
+            auto ggml_cuda_fuse_ws_mmq_enabled = []() -> bool {
+                const bool enabled  = getenv("GGML_CUDA_FUSE_WS") != nullptr;
+                const bool disabled = getenv("GGML_CUDA_NO_FUSE_WS") != nullptr;
+                return enabled && !disabled;
+            };
+
+            if (!with_bias && ggml_cuda_fuse_ws_mmq_enabled() && ggml_cuda_should_fuse_mul_mat_mmq(mm_node)){
                 ggml_cuda_mul_mat_q(*cuda_ctx, src0, src1, ids, out_node, &fusion_data);
                 fused_mul_mat_vec = true;
                 fused_node_count  = n_ops;
