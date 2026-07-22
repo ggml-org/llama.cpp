@@ -23,16 +23,19 @@ Config via environment:
   CTX            context size (default 16384)
   THREADS        CPU threads (default 12)
   REPEATS        measured runs per prompt, median reported (default 2)
-  MODE           'baseline' (6-arm sweep) | 'deadoff' (R2 A/B) (default baseline)
-  KV             KV cache type for MODE=deadoff (default q8_0)
+  MODE           'baseline' (6-arm sweep) | 'deadoff' | 'stress' (default baseline)
+  KV             KV cache type for MODE=deadoff/stress (default q8_0)
   SETVARS        oneAPI setvars.sh (default /opt/intel/oneapi/setvars.sh)
   HEALTH_TIMEOUT seconds to wait for /health (default 180)
   REQ_TIMEOUT    per-request HTTP timeout seconds (default 300)
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import os
+import re
 import shlex
 import signal
 import statistics
@@ -79,14 +82,22 @@ def build_arms() -> list[dict[str, Any]]:
 
     Each arm: {name, kv, spec_label, extra:[server flags]}.
     """
-    if MODE == "deadoff":
+    if MODE in {"deadoff", "stress"}:
         common = ["--spec-type", "ngram-mod", *NGRAM_MOD_PARAMS]
-        return [
+        arms = [
             {"name": f"deadoff0-{KV}", "kv": KV, "spec_label": "ngram-mod (dead-off 0)",
              "extra": [*common, "--spec-ngram-mod-dead-off", "0"]},
             {"name": f"deadoff3-{KV}", "kv": KV, "spec_label": "ngram-mod (dead-off 3)",
              "extra": [*common, "--spec-ngram-mod-dead-off", "3"]},
         ]
+        if MODE == "stress":
+            arms.insert(0, {
+                "name": f"none-{KV}",
+                "kv": KV,
+                "spec_label": "none",
+                "extra": ["--spec-type", "none"],
+            })
+        return arms
     # baseline: {none, ngram-mod, ngram-mod+ngram-map-k4v} x {q8_0, f16}
     spec_variants = [
         ("none", "none", ["--spec-type", "none"]),
@@ -148,17 +159,10 @@ def wait_health(timeout: float) -> bool:
     return False
 
 
-def post_chat(messages: list[dict[str, str]], max_tokens: int) -> dict[str, Any]:
-    payload = {
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "temperature": 0,
-        "stream": False,
-        "cache_prompt": False,
-    }
+def post_json(path: str, payload: dict[str, Any]) -> dict[str, Any]:
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
-        f"{BASE}/v1/chat/completions",
+        f"{BASE}{path}",
         data=body,
         headers={"Content-Type": "application/json"},
         method="POST",
@@ -167,31 +171,81 @@ def post_chat(messages: list[dict[str, str]], max_tokens: int) -> dict[str, Any]
         return json.loads(resp.read().decode("utf-8"))
 
 
-def extract_text(resp: dict[str, Any]) -> str:
-    choices = resp.get("choices") or []
-    if not choices:
-        return ""
-    msg = choices[0].get("message") or {}
-    content = msg.get("content")
-    return content if isinstance(content, str) else ""
+def apply_chat_template(messages: list[dict[str, str]]) -> str:
+    response = post_json("/apply-template", {"messages": messages})
+    prompt = response.get("prompt")
+    if not isinstance(prompt, str):
+        raise ValueError("/apply-template did not return a prompt string")
+    return prompt
+
+
+def post_completion(prompt: str, n_predict: int) -> dict[str, Any]:
+    return post_json("/completion", {
+        "prompt": prompt,
+        "n_predict": n_predict,
+        "temperature": 0,
+        "seed": 123,
+        "stream": False,
+        "cache_prompt": False,
+        "return_tokens": True,
+        "n_probs": 1,
+        "post_sampling_probs": False,
+    })
+
+
+def analyze_native_response(resp: dict[str, Any]) -> dict[str, Any]:
+    tokens = resp.get("tokens")
+    probs = resp.get("completion_probabilities")
+    if not isinstance(tokens, list) or not all(isinstance(token, int) for token in tokens):
+        raise ValueError("/completion did not return integer token IDs")
+    if not isinstance(probs, list) or len(probs) != len(tokens):
+        raise ValueError("/completion probability rows do not match returned tokens")
+
+    failures: list[dict[str, Any]] = []
+    for index, (token, row) in enumerate(zip(tokens, probs)):
+        logprob = row.get("logprob") if isinstance(row, dict) else None
+        top = row.get("top_logprobs") if isinstance(row, dict) else None
+        top_id = top[0].get("id") if isinstance(top, list) and top and isinstance(top[0], dict) else None
+        if not isinstance(logprob, (int, float)) or not math.isfinite(logprob):
+            failures.append({"index": index, "token": token, "reason": "nonfinite_target_logprob"})
+        elif row.get("id") != token or (top_id is not None and top_id != token):
+            failures.append({
+                "index": index,
+                "token": token,
+                "target_argmax": top_id,
+                "reason": "generated_token_not_target_argmax",
+            })
+
+    token_bytes = json.dumps(tokens, separators=(",", ":")).encode("ascii")
+    return {
+        "token_ids": tokens,
+        "token_sha256": hashlib.sha256(token_bytes).hexdigest(),
+        "content_sha256": hashlib.sha256(str(resp.get("content", "")).encode("utf-8")).hexdigest(),
+        "verifier_rows": len(probs),
+        "verifier_invariant_ok": not failures,
+        "verifier_failures": failures,
+    }
 
 
 def run_prompt(prompt: dict[str, Any]) -> dict[str, Any]:
     n_predict = int(prompt.get("n_predict", 256))
     messages = prompt.get("messages") or [{"role": "user", "content": prompt.get("prompt", "")}]
+    formatted_prompt = apply_chat_template(messages)
     runs: list[dict[str, Any]] = []
     last_text = ""
     for _ in range(REPEATS):
         t0 = time.perf_counter()
-        resp = post_chat(messages, n_predict)
+        resp = post_completion(formatted_prompt, n_predict)
         elapsed = time.perf_counter() - t0
         timings = resp.get("timings") or {}
-        usage = resp.get("usage") or {}
-        last_text = extract_text(resp)
-        completion_tokens = usage.get("completion_tokens")
+        evidence = analyze_native_response(resp)
+        last_text = resp.get("content") if isinstance(resp.get("content"), str) else ""
+        completion_tokens = timings.get("predicted_n")
+        if not isinstance(completion_tokens, int):
+            completion_tokens = len(evidence["token_ids"])
         tg = timings.get("predicted_per_second")
-        if tg is None and isinstance(completion_tokens, int) and elapsed > 0:
-            tg = completion_tokens / elapsed  # wall-clock fallback
+        if tg is None and elapsed > 0:
+            tg = completion_tokens / elapsed
         draft_n = timings.get("draft_n")
         draft_acc = timings.get("draft_n_accepted")
         accept_rate = (draft_acc / draft_n) if (draft_n and draft_acc is not None) else None
@@ -200,10 +254,12 @@ def run_prompt(prompt: dict[str, Any]) -> dict[str, Any]:
             "pp": timings.get("prompt_per_second"),
             "elapsed_s": elapsed,
             "completion_tokens": completion_tokens,
-            "prompt_tokens": usage.get("prompt_tokens"),
+            "prompt_tokens": timings.get("prompt_n"),
             "draft_n": draft_n,
             "draft_n_accepted": draft_acc,
+            "target_evaluations": completion_tokens + (draft_n - draft_acc if draft_n and draft_acc is not None else 0),
             "accept_rate": accept_rate,
+            **evidence,
         })
     tgs = [r["tg"] for r in runs if isinstance(r["tg"], (int, float))]
     pps = [r["pp"] for r in runs if isinstance(r["pp"], (int, float))]
@@ -216,29 +272,53 @@ def run_prompt(prompt: dict[str, Any]) -> dict[str, Any]:
         "pp_median": statistics.median(pps) if pps else None,
         "accept_rate_median": statistics.median(accs) if accs else None,
         "draft_reported": any(r["draft_n"] is not None for r in runs),
+        "all_verifier_invariants_ok": all(r["verifier_invariant_ok"] for r in runs),
         "completion_tokens": runs[-1]["completion_tokens"],
         "text_preview": last_text[:160].replace("\n", " "),
     }
 
 
+def parse_rejection_records(text: str) -> list[dict[str, int]]:
+    pattern = re.compile(r"task\s+(\d+)\s+\|\s+accepted\s+(\d+)/(\d+)\s+draft tokens")
+    generated_by_task: dict[int, int] = {}
+    records: list[dict[str, int]] = []
+    for match in pattern.finditer(text):
+        task, accepted, drafted = (int(value) for value in match.groups())
+        generated = generated_by_task.get(task, 0)
+        if accepted < drafted:
+            records.append({
+                "task": task,
+                "accepted": accepted,
+                "drafted": drafted,
+                "rejection_position": generated + accepted,
+            })
+        generated_by_task[task] = generated + accepted + 1
+    return records
+
+
 def scan_log(logpath: Path) -> dict[str, Any]:
-    """Best-effort: pull the flash-attn init line and any draft-acceptance lines."""
+    """Best-effort: pull FA, draft-acceptance, and hard-off trace lines."""
     fa_lines: list[str] = []
     acc_lines: list[str] = []
+    hard_off_lines: list[str] = []
     try:
         text = logpath.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return {"fa_lines": [], "acceptance_lines": []}
+        return {"fa_lines": [], "acceptance_lines": [], "hard_off_lines": [], "rejection_records": []}
     for line in text.splitlines():
         low = line.lower()
         if ("flash" in low or "fattn" in low or "flash_attn" in low) and "warn" not in low:
             fa_lines.append(line.strip())
         if "draft acceptance" in low or "statistics" in low:
             acc_lines.append(line.strip())
-    # de-dup, cap
-    fa_lines = list(dict.fromkeys(fa_lines))[:8]
-    acc_lines = acc_lines[-12:]
-    return {"fa_lines": fa_lines, "acceptance_lines": acc_lines}
+        if "dead ngram-mod fires" in low and "disabling for seq" in low:
+            hard_off_lines.append(line.strip())
+    return {
+        "fa_lines": list(dict.fromkeys(fa_lines))[:8],
+        "acceptance_lines": acc_lines[-12:],
+        "hard_off_lines": hard_off_lines,
+        "rejection_records": parse_rejection_records(text),
+    }
 
 
 def start_server(arm: dict[str, Any], logpath: Path) -> subprocess.Popen:
@@ -292,8 +372,8 @@ def run_arm(arm: dict[str, Any], prompts: list[dict[str, Any]]) -> dict[str, Any
         print("  warmup...", flush=True)
         try:
             wp = prompts[0]
-            post_chat(wp.get("messages") or [{"role": "user", "content": wp.get("prompt", "")}],
-                      int(wp.get("n_predict", 256)))
+            messages = wp.get("messages") or [{"role": "user", "content": wp.get("prompt", "")}]
+            post_completion(apply_chat_template(messages), int(wp.get("n_predict", 256)))
         except Exception as e:  # noqa: BLE001 - warmup failures are non-fatal
             print(f"  warmup error (continuing): {e}", flush=True)
         results = []
