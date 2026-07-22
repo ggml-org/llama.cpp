@@ -1859,14 +1859,20 @@ ggml_tensor * llama_kv_cache::build_rope_shift(
         tmp = ggml_cast(ctx, cur, GGML_TYPE_F32);
 
         // rotate back
-        tmp = llama_mul_mat_hadamard(ctx, tmp, rot);
+        // rot is only built when the cache uses the K rotation scheme (attn_rot_k);
+        // a standard quantized K cache reaches this branch with rot == nullptr
+        if (rot) {
+            tmp = llama_mul_mat_hadamard(ctx, tmp, rot);
+        }
 
         tmp = ggml_rope_ext(ctx, tmp,
                 shift, factors, n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
                 yarn_ext_factor, yarn_attn_factor, yarn_beta_fast, yarn_beta_slow);
 
         // rotate fwd
-        tmp = llama_mul_mat_hadamard(ctx, tmp, rot);
+        if (rot) {
+            tmp = llama_mul_mat_hadamard(ctx, tmp, rot);
+        }
 
         tmp = ggml_cpy(ctx, tmp, cur);
     } else {
