@@ -5,6 +5,9 @@
 #include <vector>
 #include <cstdio>
 
+// 64 MiB balances memory usage and I/O efficiency for NVMe drives.
+static constexpr size_t LLAMA_FILE_IO_CHUNK_SIZE = 64 * 1024 * 1024;
+
 struct llama_file;
 struct llama_mmap;
 struct llama_mlock;

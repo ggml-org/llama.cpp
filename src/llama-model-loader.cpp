@@ -1440,7 +1440,7 @@ bool llama_model_loader::load_all_data(
 
     // Buffer size: balance between memory usage and I/O efficiency
     // 64MB works well for NVMe drives
-    const size_t buffer_size = alignment != 1 ? 64 * 1024 * 1024 + 2 * alignment : 1 * 1024 * 1024;
+    const size_t buffer_size = alignment != 1 ? LLAMA_FILE_IO_CHUNK_SIZE + 2 * alignment : 1 * 1024 * 1024;
 
     std::vector<ggml_backend_buffer_t> host_buffers;
     std::vector<ggml_backend_event_t> events;
@@ -1598,7 +1598,7 @@ bool llama_model_loader::load_all_data(
                     size_t data_read = 0;  // Actual tensor data copied (excluding padding)
 
                     while (bytes_read < read_end - read_start) {
-                        size_t read_size = std::min<size_t>(buffer_size, read_end - read_start - bytes_read);
+                        size_t read_size = std::min<size_t>(LLAMA_FILE_IO_CHUNK_SIZE, read_end - read_start - bytes_read);
 
                         // Align the destination pointer within the pinned buffer
                         uintptr_t ptr_dest_aligned = (reinterpret_cast<uintptr_t>(host_ptrs[buffer_idx]) + alignment - 1) & ~(alignment - 1);
