@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "source_commit": "0bb42498e",
+  "held_stack": {
+    "oneapi": "2026.0.0.20260331",
+    "igc": "2.36.3",
+    "compute_runtime": "26.22.38646.4-1.1",
+    "level_zero_loader": "1.28.6-1.1",
+    "device": "Intel Arc A770 DG2/acm-g10",
+    "driver": "i915"
+  },
+  "probe": {
+    "binary": "build-campaign-jit/bin/sycl-mutable-command-list-probe",
+    "spirv": "build-campaign-jit/ggml/src/ggml-sycl/sycl-mutable-command-list-probe.spv",
+    "extension": "ZE_experimental_mutable_command_list",
+    "extension_version_raw": 65537,
+    "extension_version": "1.1",
+    "mutable_command_flags_raw": 62,
+    "supported_mutations": {
+      "kernel_arguments": false,
+      "group_count": true,
+      "group_size": true,
+      "global_offset": true,
+      "signal_event": true,
+      "wait_events": true,
+      "kernel_instruction": false,
+      "graph_arguments": false
+    },
+    "requested_iterations": 100,
+    "executed_iterations": 0,
+    "exit_code": 1,
+    "error": "driver lacks required argument, group-count, or event mutation flags"
+  },
+  "adjudication": {
+    "verdict": "NO_GO",
+    "implementation_authorized": false,
+    "reason": "The driver advertises the mutable command-list extension but does not advertise ZE_MUTABLE_COMMAND_EXP_FLAG_KERNEL_ARGUMENTS. The required pointer/buffer and scalar argument updates therefore cannot be expressed. Group-count and event mutation alone cannot preserve exact per-token replay semantics, so the capability gate fails before iteration 1.",
+    "backend_level_zero_edits": false,
+    "followup_design_review_required": false
+  },
+  "safety": {
+    "new_i915_hang_reset_fault": false,
+    "notes": "The post-probe kernel log contained no new i915 hang, reset, or fault. An earlier host OOM during the Advisor experiment is unrelated to this bounded Level Zero probe."
+  }
+}

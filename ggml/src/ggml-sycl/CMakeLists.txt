@@ -129,6 +129,40 @@ if (GGML_SYCL_SUPPORT_LEVEL_ZERO)
     endif()
 endif()
 
+if (GGML_SYCL_SUPPORT_LEVEL_ZERO AND ZE_LOADER_LIB AND LEVEL_ZERO_INCLUDE_DIR)
+    get_filename_component(GGML_SYCL_COMPILER_BIN_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    find_program(GGML_SYCL_OPENCL_CLANG
+                 NAMES clang
+                 HINTS "${GGML_SYCL_COMPILER_BIN_DIR}/compiler"
+                 NO_DEFAULT_PATH)
+    find_program(GGML_SYCL_LLVM_SPIRV NAMES llvm-spirv)
+    if (GGML_SYCL_OPENCL_CLANG AND GGML_SYCL_LLVM_SPIRV)
+        set(MUTABLE_PROBE_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/sycl-mutable-command-list-probe.cl")
+        set(MUTABLE_PROBE_BITCODE "${CMAKE_CURRENT_BINARY_DIR}/sycl-mutable-command-list-probe.bc")
+        set(MUTABLE_PROBE_SPIRV "${CMAKE_CURRENT_BINARY_DIR}/sycl-mutable-command-list-probe.spv")
+        add_custom_command(
+            OUTPUT "${MUTABLE_PROBE_SPIRV}"
+            BYPRODUCTS "${MUTABLE_PROBE_BITCODE}"
+            COMMAND "${GGML_SYCL_OPENCL_CLANG}" -cc1 -triple spir64 -cl-std=CL2.0
+                    -finclude-default-header -emit-llvm-bc "${MUTABLE_PROBE_SOURCE}"
+                    -o "${MUTABLE_PROBE_BITCODE}"
+            COMMAND "${GGML_SYCL_LLVM_SPIRV}" "${MUTABLE_PROBE_BITCODE}" -o "${MUTABLE_PROBE_SPIRV}"
+            DEPENDS "${MUTABLE_PROBE_SOURCE}"
+            VERBATIM)
+        add_executable(sycl-mutable-command-list-probe EXCLUDE_FROM_ALL
+                       sycl-mutable-command-list-probe.cpp)
+        target_include_directories(sycl-mutable-command-list-probe PRIVATE "${LEVEL_ZERO_INCLUDE_DIR}")
+        target_link_libraries(sycl-mutable-command-list-probe PRIVATE "${ZE_LOADER_LIB}")
+        target_compile_definitions(
+            sycl-mutable-command-list-probe
+            PRIVATE MUTABLE_PROBE_SPIRV_PATH="${MUTABLE_PROBE_SPIRV}")
+        add_custom_target(sycl-mutable-command-list-probe-spirv DEPENDS "${MUTABLE_PROBE_SPIRV}")
+        add_dependencies(sycl-mutable-command-list-probe sycl-mutable-command-list-probe-spirv)
+    else()
+        message(STATUS "Mutable command-list probe disabled: OpenCL clang or llvm-spirv not found")
+    endif()
+endif()
+
 # Link against oneDNN
 set(GGML_SYCL_DNNL 0)
 if(GGML_SYCL_DNN)
