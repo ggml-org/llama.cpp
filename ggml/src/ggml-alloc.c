@@ -641,9 +641,10 @@ static void ggml_gallocr_allocate_node(ggml_gallocr_t galloc, struct ggml_tensor
                     continue;
                 }
 
-                // outputs cannot be reused
-                if (parent->flags & GGML_TENSOR_FLAG_OUTPUT || (parent->view_src != NULL && parent->view_src->flags & GGML_TENSOR_FLAG_OUTPUT)) {
-                    AT_PRINTF("not reusing parent %s for %s as it is an output\n", parent->name, node->name);
+                // outputs and no-alloc-free tensors cannot be reused
+                if (parent->flags & (GGML_TENSOR_FLAG_OUTPUT | GGML_TENSOR_FLAG_NO_ALLOC_FREE) ||
+                    (parent->view_src != NULL && parent->view_src->flags & (GGML_TENSOR_FLAG_OUTPUT | GGML_TENSOR_FLAG_NO_ALLOC_FREE))) {
+                    AT_PRINTF("not reusing parent %s for %s as it is an output or no-alloc-free\n", parent->name, node->name);
                     continue;
                 }
 
@@ -691,6 +692,11 @@ static void ggml_gallocr_free_node(ggml_gallocr_t galloc, struct ggml_tensor * n
     // graph outputs are never freed
     if (node->flags & GGML_TENSOR_FLAG_OUTPUT) {
         AT_PRINTF("not freeing output %s\n", node->name);
+        return;
+    }
+
+    if (node->flags & GGML_TENSOR_FLAG_NO_ALLOC_FREE) {
+        AT_PRINTF("not freeing no-alloc-free %s\n", node->name);
         return;
     }
 

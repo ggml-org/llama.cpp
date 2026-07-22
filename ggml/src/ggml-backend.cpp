@@ -1505,8 +1505,14 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
         }
     }
 
+    // unconditionally recreate the flag if any node has NO_ALLOC_FREE set
+    bool has_no_alloc_free = false;
+    for (int i = 0; i < sched->graph.n_nodes && !has_no_alloc_free; i++) {
+        has_no_alloc_free |= (sched->graph.nodes[i]->flags & GGML_TENSOR_FLAG_NO_ALLOC_FREE) != 0;
+    }
+
     // allocate graph
-    if (backend_ids_changed || !ggml_gallocr_alloc_graph(sched->galloc, &sched->graph)) {
+    if (backend_ids_changed || has_no_alloc_free || !ggml_gallocr_alloc_graph(sched->galloc, &sched->graph)) {
 #ifndef NDEBUG
         GGML_LOG_DEBUG("%s: failed to allocate graph, reserving (backend_ids_changed = %d)\n", __func__, backend_ids_changed);
 #endif
