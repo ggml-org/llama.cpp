@@ -413,8 +413,8 @@ kernel void kernel_gemv_noshuffle_q4_k_f32_glu(
         global const uchar * sc0 = SS + 2 * gid * scales_per_row + sb * 12;                    \
         global const uchar * sc1 = SS + (2 * gid + 1) * scales_per_row + sb * 12;              \
         uchar sv0, mn0, sv1, mn1;                                                              \
-        get_scale_min_k4(j, sc0, &sv0, &mn0, mask_d6, mask_d4, mask_hi2);                      \
-        get_scale_min_k4(j, sc1, &sv1, &mn1, mask_d6, mask_d4, mask_hi2);                      \
+        get_scale_min_k4(j, sc0, 1, &sv0, &mn0, mask_d6, mask_d4, mask_hi2);                      \
+        get_scale_min_k4(j, sc1, 1, &sv1, &mn1, mask_d6, mask_d4, mask_hi2);                      \
         regS = convert_half2(convert_float2(d)  * convert_float2((uchar2)(sv0, sv1)));         \
         regM = convert_half2(convert_float2(dm) * convert_float2((uchar2)(mn0, mn1)));         \
         if (slid < 4) {                                                                        \
@@ -521,8 +521,8 @@ kernel void kernel_gemv_noshuffle_q4_k_f32_splitk(
         global const uchar * sc0 = src0_s + 2 * gid * scales_per_row + sb * 12;
         global const uchar * sc1 = src0_s + (2 * gid + 1) * scales_per_row + sb * 12;
         uchar sv0, mn0, sv1, mn1;
-        get_scale_min_k4(j, sc0, &sv0, &mn0, mask_d6, mask_d4, mask_hi2);
-        get_scale_min_k4(j, sc1, &sv1, &mn1, mask_d6, mask_d4, mask_hi2);
+        get_scale_min_k4(j, sc0, 1, &sv0, &mn0, mask_d6, mask_d4, mask_hi2);
+        get_scale_min_k4(j, sc1, 1, &sv1, &mn1, mask_d6, mask_d4, mask_hi2);
         regS = convert_half2(convert_float2(d)  * convert_float2((uchar2)(sv0, sv1)));
         regM = convert_half2(convert_float2(dm) * convert_float2((uchar2)(mn0, mn1)));
         if (slid < 4) {
@@ -695,8 +695,8 @@ kernel void kernel_gemv_noshuffle_q4_k_f32_mc3(
         global const uchar * sc1 = src0_s + (2 * gid + 1) * scales_per_row + sb * 12;
 
         uchar sv0, mn0, sv1, mn1;
-        get_scale_min_k4(j, sc0, &sv0, &mn0, mask_d6, mask_d4, mask_hi2);
-        get_scale_min_k4(j, sc1, &sv1, &mn1, mask_d6, mask_d4, mask_hi2);
+        get_scale_min_k4(j, sc0, 1, &sv0, &mn0, mask_d6, mask_d4, mask_hi2);
+        get_scale_min_k4(j, sc1, 1, &sv1, &mn1, mask_d6, mask_d4, mask_hi2);
 
         regS = convert_half2(convert_float2(d)  * convert_float2((uchar2)(sv0, sv1)));
         regM = convert_half2(convert_float2(dm) * convert_float2((uchar2)(mn0, mn1)));
