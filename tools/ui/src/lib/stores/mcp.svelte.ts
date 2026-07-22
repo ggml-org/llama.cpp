@@ -375,7 +375,11 @@ class MCPStore {
 		return this.connections;
 	}
 
-	getServerLabel(server: MCPServerDisplayInfo): string {
+	/**
+	 * Resolves the raw label for a server: server-reported title or name when
+	 * the health check succeeded, user-defined name, then URL as last resort.
+	 */
+	#serverBaseLabel(server: MCPServerDisplayInfo): string {
 		const healthState = this.getHealthCheckState(server.id);
 
 		if (healthState?.status === HealthCheckStatus.SUCCESS)
@@ -383,6 +387,23 @@ class MCPStore {
 				healthState.serverInfo?.title || healthState.serverInfo?.name || server.name || server.url
 			);
 		return server.url;
+	}
+
+	/**
+	 * Returns the display label for a server, suffixed with a positional
+	 * counter when several configured servers resolve to the same base label
+	 * (e.g. two endpoints of the same host reporting an identical name).
+	 * Numbering follows config order, so it is stable across renders.
+	 */
+	getServerLabel(server: MCPServerDisplayInfo): string {
+		const label = this.#serverBaseLabel(server);
+		const twins = this.getServers().filter((s) => this.#serverBaseLabel(s) === label);
+
+		if (twins.length < 2) return label;
+
+		const position = twins.findIndex((s) => s.id === server.id);
+
+		return position < 0 ? label : `${label} (${position + 1})`;
 	}
 
 	getServerById(serverId: string): MCPServerSettingsEntry | undefined {
