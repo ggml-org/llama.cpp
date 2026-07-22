@@ -1,0 +1,978 @@
+{#--------TOOL RENDERING FUNCTIONS---------#}
+
+{%- macro json_schema_to_typescript(schema, indent="", indent_factor=2, schema_root=none, ref_ns=none) -%}
+	{%- if schema_root is none -%}
+		{%- set _root = schema -%}
+	{%- else -%}
+		{%- set _root = schema_root -%}
+	{%- endif -%}
+	{%- if ref_ns is none -%}
+		{%- set _rns = namespace(chain=[]) -%}
+	{%- else -%}
+		{%- set _rns = ref_ns -%}
+	{%- endif -%}
+
+	{%- set ADDITIONAL_JSON_KEYS = ['format', 'maxItems', 'maximum', 'minItems', 'minimum', 'pattern', 'minLength', 'maxLength', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf', 'uniqueItems', 'minProperties', 'maxProperties'] -%}
+
+	{# ---------- Non-object schema ---------- #}
+	{%- if schema is not mapping -%}
+		{{- 'any' -}}
+
+	{# ---------- $ref (in-document JSON Pointer only) ---------- #}
+	{%- elif schema.get('$ref') is string -%}
+		{%- set refstr = schema['$ref'] -%}
+		{%- if refstr in _rns.chain -%}
+			{{- 'any' -}}
+		{%- elif not refstr.startswith('#/') -%}
+			{{- 'any' -}}
+		{%- else -%}
+			{%- set segs = refstr[2:].split('/') -%}
+			{%- set ns_p = namespace(n=_root) -%}
+			{%- for raw_seg in segs -%}
+				{%- set seg = raw_seg | replace('~1', '/') | replace('~0', '~') -%}
+				{%- if ns_p.n is mapping and seg in ns_p.n -%}
+					{%- set ns_p.n = ns_p.n[seg] -%}
+				{%- elif ns_p.n is sequence and ns_p.n is not string and seg == (seg | int | string) -%}
+					{%- set ns_p.n = ns_p.n[seg | int] -%}
+				{%- else -%}
+					{%- set ns_p.n = none -%}
+				{%- endif -%}
+			{%- endfor -%}
+			{%- if ns_p.n is mapping -%}
+				{%- set _rns2 = namespace(chain=_rns.chain + [refstr]) -%}
+				{{- json_schema_to_typescript(ns_p.n, indent, indent_factor, _root, _rns2) -}}
+			{%- else -%}
+				{{- 'any' -}}
+			{%- endif -%}
+		{%- endif -%}
+
+	{# ---------- Composition ---------- #}
+	{%- elif schema.get('anyOf') is sequence and schema.anyOf is not string -%}
+		{%- set nsb = namespace(parts=[]) -%}
+		{%- for br in schema.anyOf -%}
+			{%- set t = json_schema_to_typescript(br, indent, indent_factor, _root, _rns) -%}
+			{%- set nsb.parts = nsb.parts + ['(' ~ t ~ ')'] -%}
+		{%- endfor -%}
+		{{- nsb.parts | join(' | ') -}}
+
+	{%- elif schema.get('oneOf') is sequence and schema.oneOf is not string -%}
+		{%- set nsb = namespace(parts=[]) -%}
+		{%- for br in schema.oneOf -%}
+			{%- set t = json_schema_to_typescript(br, indent, indent_factor, _root, _rns) -%}
+			{%- set nsb.parts = nsb.parts + ['(' ~ t ~ ')'] -%}
+		{%- endfor -%}
+		{{- nsb.parts | join(' | ') -}}
+
+	{%- elif schema.get('allOf') is sequence and schema.allOf is not string -%}
+		{%- set nsb = namespace(parts=[]) -%}
+		{%- for br in schema.allOf -%}
+			{%- set t = json_schema_to_typescript(br, indent, indent_factor, _root, _rns) -%}
+			{%- set nsb.parts = nsb.parts + ['(' ~ t ~ ')'] -%}
+		{%- endfor -%}
+		{{- nsb.parts | join(' & ') -}}
+
+	{# ---------- type as array (union) — explicit members (no Jinja combine filter) #}
+	{%- elif schema.get('type') is sequence and schema.type is not string -%}
+		{%- set nsu = namespace(bits=[]) -%}
+		{%- for tname in schema.type -%}
+			{%- if tname == 'null' -%}
+				{%- set frag = 'null' -%}
+			{%- elif tname == 'string' -%}
+				{%- if 'const' in schema -%}
+					{%- set frag = json_schema_to_typescript({'type': 'string', 'const': schema.const}, indent, indent_factor, _root, _rns) -%}
+				{%- elif schema.get('enum') -%}
+					{%- set frag = json_schema_to_typescript({'type': 'string', 'enum': schema.enum, 'format': schema.get('format')}, indent, indent_factor, _root, _rns) -%}
+				{%- elif schema.get('format', '') in ['date-time', 'date'] -%}
+					{%- set frag = 'Date' -%}
+				{%- else -%}
+					{%- set frag = 'string' -%}
+				{%- endif -%}
+			{%- elif tname in ['number', 'integer', 'int', 'float'] -%}
+				{%- if 'const' in schema -%}
+					{%- set frag = json_schema_to_typescript({'type': tname, 'const': schema.const}, indent, indent_factor, _root, _rns) -%}
+				{%- else -%}
+					{%- set frag = json_schema_to_typescript({'type': tname, 'enum': schema.get('enum')}, indent, indent_factor, _root, _rns) -%}
+				{%- endif -%}
+			{%- elif tname == 'boolean' -%}
+				{%- if 'const' in schema -%}
+					{%- set frag = json_schema_to_typescript({'type': 'boolean', 'const': schema.const}, indent, indent_factor, _root, _rns) -%}
+				{%- else -%}
+					{%- set frag = 'boolean' -%}
+				{%- endif -%}
+			{%- elif tname in ['object', 'dict'] -%}
+				{%- if schema.get('additionalProperties') is defined -%}
+					{%- set sub_o = {'type': 'object', 'properties': schema.get('properties') or {}, 'required': schema.get('required') or [], 'additionalProperties': schema.additionalProperties} -%}
+				{%- else -%}
+					{%- set sub_o = {'type': 'object', 'properties': schema.get('properties') or {}, 'required': schema.get('required') or []} -%}
+				{%- endif -%}
+				{%- set frag = json_schema_to_typescript(sub_o, indent, indent_factor, _root, _rns) -%}
+			{%- elif tname == 'array' -%}
+				{%- if schema.get('prefixItems') is sequence and schema.prefixItems is not string -%}
+					{%- set sub_a = {'type': 'array', 'prefixItems': schema.prefixItems} -%}
+				{%- elif 'items' in schema -%}
+					{%- set sub_a = {'type': 'array', 'items': schema['items']} -%}
+				{%- else -%}
+					{%- set sub_a = {'type': 'array'} -%}
+				{%- endif -%}
+				{%- set frag = json_schema_to_typescript(sub_a, indent, indent_factor, _root, _rns) -%}
+			{%- else -%}
+				{%- set frag = 'any' -%}
+			{%- endif -%}
+			{%- set nsu.bits = nsu.bits + ['(' ~ frag ~ ')'] -%}
+		{%- endfor -%}
+		{{- nsu.bits | join(' | ') -}}
+
+	{%- else -%}
+		{%- set ty_raw = schema.get("type") -%}
+		{%- set ty = "object" if ty_raw == "dict" else ty_raw -%}
+
+		{# ---------- const / enum without explicit type ---------- #}
+		{%- if 'const' in schema and ty is none and not (schema.get('properties') is mapping) -%}
+			{%- set c = schema.const -%}
+			{%- if c is string -%}
+				{{- '"' ~ c ~ '"' -}}
+			{%- elif c is boolean -%}
+				{{- 'true' if c else 'false' -}}
+			{%- elif c is integer or c is float -%}
+				{{- c | string -}}
+			{%- elif c is none -%}
+				{{- 'null' -}}
+			{%- else -%}
+				{{- 'any' -}}
+			{%- endif -%}
+
+		{%- elif schema.get('enum') and ty is none and not (schema.get('properties') is mapping) -%}
+			{%- set ns = namespace(enum = []) -%}
+			{%- for en in schema.enum -%}
+				{%- if en is string -%}
+					{%- set ns.enum = ns.enum + ['"' ~ en ~ '"'] -%}
+				{%- else -%}
+					{%- set ns.enum = ns.enum + [en | string] -%}
+				{%- endif -%}
+			{%- endfor -%}
+			{{- ns.enum | join(' | ') -}}
+
+		{# ---------------- OBJECT (JSON "object" or Python-style "dict", or inferred) ---------------- #}
+		{%- elif ty == "object" or (ty is none and schema.get('properties') is mapping) -%}
+			{{- "{\n" -}}
+
+			{%- set ns = namespace(pairs=[]) -%}
+			{%- for k, v in schema.get("properties", {}).items() -%}
+				{%- set ns.pairs = ns.pairs + [(k, v)] -%}
+			{%- endfor -%}
+
+			{%- if schema.get("additionalProperties") is defined -%}
+				{%- if schema.additionalProperties == true -%}
+					{%- set ns.pairs = ns.pairs + [['[key: string]', {'type': 'any'}]] -%}
+				{%- elif schema.additionalProperties is mapping -%}
+					{%- set ns.pairs = ns.pairs + [['[key: string]', schema.additionalProperties]] -%}
+				{%- endif -%}
+			{%- endif -%}
+
+			{%- set props = ns.pairs -%}
+			{%- set required = schema.get("required", []) + ['[key: string]'] -%}
+
+			{%- for key, val in props -%}
+				{%- if val.get("description") is string -%}
+					{%- for line in val['description'].split('\n') -%}
+						{%- if line.strip() -%}
+							{{- indent + '// ' + line + '\n' -}}
+						{%- endif -%}
+					{%- endfor -%}
+				{%- endif -%}
+
+				{%- for add_key, add_val in val.items() if add_key in ADDITIONAL_JSON_KEYS and add_val is not none -%}
+					{%- if add_val is string -%}
+						{{- indent + '// ' + add_key + ': "' + add_val + '"' + '\n'  -}}
+					{%- else -%}
+						{{- indent + '// ' + add_key + ': ' ~ add_val ~ '\n' -}}
+					{%- endif -%}
+				{%- endfor -%}
+
+				{%- set type_str = json_schema_to_typescript(val, indent + (' ' * indent_factor), indent_factor, _root, _rns) -%}
+
+				{{- indent + key + ('' if key in required else '?') + ': ' + type_str + ',' -}}
+
+				{%- if "default" in val or "defalut_value" in val -%}
+					{%- set default = val.get("default", val.get("defalut_value")) -%}
+					{%- if default is string -%}
+						{{- ' // default: "' + default + '"' -}}
+					{%- else -%}
+						{{- ' // default: ' ~ default | string -}}
+					{%- endif -%}
+				{%- endif -%}
+
+				{{- "\n" -}}
+			{%- endfor -%}
+
+			{{- indent[:-2] + '}' -}}
+
+		{# ---------------- STRING ---------------- #}
+		{%- elif ty == "string" -%}
+			{%- if 'const' in schema -%}
+				{%- if schema.const is string -%}
+					{{- '"' ~ schema.const ~ '"' -}}
+				{%- elif schema.const is boolean -%}
+					{{- 'true' if schema.const else 'false' -}}
+				{%- elif schema.const is integer or schema.const is float -%}
+					{{- schema.const | string -}}
+				{%- elif schema.const is none -%}
+					{{- 'null' -}}
+				{%- else -%}
+					{{- 'any' -}}
+				{%- endif -%}
+			{%- elif schema.get("enum") -%}
+				{%- set ns = namespace(enum = []) -%}
+				{%- for en in schema['enum'] if en is string -%}
+					{%- set ns.enum = ns.enum + ['"' ~ en ~ '"'] -%}
+				{%- endfor -%}
+				{{- ns.enum | join(' | ') -}}
+			{%- elif schema.get("format", "") in ['date-time', 'date'] -%}
+				{{- 'Date' -}}
+			{%- else -%}
+				{{- 'string' -}}
+			{%- endif -%}
+
+		{# ---------------- NUMBER / INTEGER / FLOAT ---------------- #}
+		{%- elif (ty or '') in ["number", "integer", "int", "float"] -%}
+			{%- if 'const' in schema -%}
+				{%- if schema.const is string -%}
+					{{- '"' ~ schema.const ~ '"' -}}
+				{%- elif schema.const is boolean -%}
+					{{- 'true' if schema.const else 'false' -}}
+				{%- elif schema.const is integer or schema.const is float -%}
+					{{- schema.const | string -}}
+				{%- elif schema.const is none -%}
+					{{- 'null' -}}
+				{%- else -%}
+					{{- 'any' -}}
+				{%- endif -%}
+			{%- elif schema.get("enum") -%}
+				{{- schema.enum | join(' | ') -}}
+			{%- elif ty in ["integer", "int"] -%}
+				{{- 'integer' -}}
+			{%- else -%}
+				{{- 'number' -}}
+			{%- endif -%}
+
+		{# ---------------- BOOLEAN ---------------- #}
+		{%- elif ty == "boolean" -%}
+			{%- if 'const' in schema and schema.const is boolean -%}
+				{{- 'true' if schema.const else 'false' -}}
+			{%- else -%}
+				{{- 'boolean' -}}
+			{%- endif -%}
+
+		{# ---------------- NULL ---------------- #}
+		{%- elif ty == "null" -%}
+			{{- 'null' -}}
+
+		{# ---------------- ARRAY ---------------- #}
+		{%- elif ty == "array" -%}
+			{%- if schema.get('prefixItems') is sequence and schema.prefixItems is not string -%}
+				{%- set nst = namespace(bits=[]) -%}
+				{%- for ps in schema.prefixItems -%}
+					{%- set nst.bits = nst.bits + [json_schema_to_typescript(ps, indent, indent_factor, _root, _rns)] -%}
+				{%- endfor -%}
+				{{- '[' ~ (nst.bits | join(', ')) ~ ']' -}}
+			{%- elif schema.get('items') is sequence and schema.get('items') is not string and schema.get('items') is not mapping -%}
+				{%- set nst = namespace(bits=[]) -%}
+				{%- for ps in schema['items'] -%}
+					{%- set nst.bits = nst.bits + [json_schema_to_typescript(ps, indent, indent_factor, _root, _rns)] -%}
+				{%- endfor -%}
+				{{- '[' ~ (nst.bits | join(', ')) ~ ']' -}}
+			{%- elif schema.get('items') is mapping -%}
+				{# TS: postfix [] binds tighter than | — wrap element type so (A|B)[] not A|(B[]) #}
+				{%- set el = json_schema_to_typescript(schema['items'], indent, indent_factor, _root, _rns) -%}
+				{{- '(' ~ el ~ ')[]' -}}
+			{%- else -%}
+				{{- 'Array<any>' -}}
+			{%- endif -%}
+
+		{%- elif schema.get('not') is mapping -%}
+			{{- 'unknown' -}}
+
+		{# ---------------- FALLBACK ---------------- #}
+		{%- else -%}
+			{{- 'any' -}}
+		{%- endif -%}
+	{%- endif -%}
+{%- endmacro -%}
+
+{#---------------------------------------------------------------
+  render_tool_namespace
+  Renders a namespace and its tool definitions in TypeScript style
+  Each tool’s parameters are converted via json_schema_to_typescript()
+  Whitespace-trimmed with '-' modifiers
+----------------------------------------------------------------#}
+
+{%- macro render_tool_namespace(namespace_name, tools) -%}
+	{%- set ns = namespace(sections = ['namespace ' ~ namespace_name ~ ' {']) -%}
+
+	{%- for tool in tools -%}
+		{%- set ns_tool = namespace(content_lines=[]) -%}
+
+		{# ---------- TOOL DESCRIPTION ---------- #}
+		{%- if tool.get('description') -%}
+			{%- for line in tool['description'].split('\n') -%}
+				{%- if line.strip() -%}
+					{%- set ns_tool.content_lines = ns_tool.content_lines + ['// ' ~ line] -%}
+				{%- endif -%}
+			{%- endfor -%}
+		{%- endif -%}
+
+		{# ---------- TOOL SIGNATURE ---------- #}
+		{%- set main_body = "" -%}
+		{%- set params = tool.get("parameters") -%}
+		{%- if params and params.get("properties") -%}
+			{%- set param_type = json_schema_to_typescript(params, "  ") -%}
+			{%- set main_body = 'type ' ~ tool.name ~ ' = (_: ' ~ param_type ~ ') => ' -%}
+		{%- else -%}
+			{%- set main_body = 'type ' ~ tool.name ~ ' = () => ' -%}
+		{%- endif -%}
+
+		{# ---------- RETURN TYPE ---------- #}
+		{%- set return_params = tool.get("return_parameters") -%}
+		{%- if return_params and return_params.get("properties") -%}
+			{%- set return_type = json_schema_to_typescript(return_params, "  ") -%}
+			{%- set main_body = main_body ~ return_type -%}
+		{%- else -%}
+			{%- set main_body = main_body ~ 'any' -%}
+		{%- endif -%}
+
+		{%- set main_body = main_body ~ ';\n' -%}
+
+		{%- set ns_tool.content_lines = ns_tool.content_lines + [main_body] -%}
+
+		{# ---------- ADD TOOL TO SECTIONS ---------- #}
+		{%- set ns.sections = ns.sections + [ns_tool.content_lines | join('\n')] -%}
+	{%- endfor -%}
+
+	{%- set ns.sections = ns.sections + ['} // namespace ' ~ namespace_name] -%}
+
+	{{- ns.sections | join('\n') -}}
+{%- endmacro -%}
+
+
+{# ---------------- TOOL EXAMPLES RENDERING ---------------- #}
+
+{%- macro align_json_order_to_schema(json_obj, json_schema) -%}
+    {%- set ns = namespace(result=none, kv_list=[]) -%}
+
+    {%- if json_schema.get('anyOf') is sequence and json_schema.anyOf is not string and json_schema.anyOf | length > 0 and 'type' not in json_schema -%}
+        {{- align_json_order_to_schema(json_obj, json_schema.anyOf[0]) -}}
+
+    {%- elif json_schema.get('oneOf') is sequence and json_schema.oneOf is not string and json_schema.oneOf | length > 0 and 'type' not in json_schema -%}
+        {{- align_json_order_to_schema(json_obj, json_schema.oneOf[0]) -}}
+
+    {%- elif 'type' not in json_schema -%}
+        {%- if json_obj is string or json_obj is boolean -%}
+            {%- set ns.result = json_obj | tojson(ensure_ascii=False) -%}
+        {%- else -%}
+            {%- set ns.result = json_obj -%}
+        {%- endif -%}
+
+    {%- elif json_schema.get('type') in ['object', 'dict'] -%}
+        {%- set key_set = json_obj.keys() if json_obj is mapping else [] -%}
+        {%- set properties = json_schema.get('properties', {}) -%}
+
+        {%- for key, prop_schema in properties.items() -%}
+            {%- if key in key_set -%}
+                {%- set item = json_obj[key] -%}
+                {%- if item is mapping or (prop_schema.get('type') == 'array') -%}
+                    {%- set aligned_item = align_json_order_to_schema(item, prop_schema) -%}
+                {%- elif item is string or item is boolean -%}
+                    {%- set aligned_item = item | tojson(ensure_ascii=False) -%}
+                {%- else -%}
+                    {%- set aligned_item = item -%}
+                {%- endif -%}
+                {%- set ns.kv_list = ns.kv_list + [(key, aligned_item)] -%}
+            {%- endif -%}
+        {%- endfor -%}
+
+        {%- set new_obj = ns.kv_list -%}
+        {{- '{' -}}
+        {%- set ns_new_obj = namespace(result = []) -%}
+        {%- for key, val in new_obj -%}
+            {%- set ns_new_obj.result = ns_new_obj.result + ['"' ~ key ~ '": ' ~ val] -%}
+        {%- endfor -%}
+        {{- ns_new_obj.result | join(', ') -}}
+        {{- '}' -}}
+
+    {%- elif json_schema.get('type') == 'array' -%}
+        {%- if json_obj is iterable and not json_obj is string -%}
+            {%- set item_schema = json_schema.get('items', {}) -%}
+            {%- set ns.result = [] -%}
+            {%- for item in json_obj -%}
+                {%- set ns.result = ns.result + [align_json_order_to_schema(item, item_schema)] -%}
+            {%- endfor -%}
+            {{- '[' -}}
+            {{- ns.result | join(', ') -}}
+            {{- ']' -}}
+        {%- else -%}
+            {%- if json_obj is string or json_obj is boolean -%}
+                {{- json_obj | tojson(ensure_ascii=False) -}}
+            {%- else -%}
+                {{- json_obj -}}
+            {%- endif -%}
+        {%- endif -%}
+
+    {%- else -%}
+        {%- if json_obj is string or json_obj is boolean -%}
+            {{- json_obj | tojson(ensure_ascii=False) -}}
+        {%- else -%}
+            {{- json_obj -}}
+        {%- endif -%}
+    {%- endif -%}
+{%- endmacro -%}
+
+
+{%- macro render_examples(functions) -%}
+    {%- set ns_prompt = namespace(prompt="\n\n") -%}
+    {%- set indent = "  " -%}
+    {%- if functions | length > 0 and functions | selectattr("few_shot_examples") | list | length > 0 -%}
+        {%- set ns_prompt.prompt = ns_prompt.prompt + '//Examples:' -%}
+        {%- for function in functions -%}
+            
+            {%- if function.few_shot_examples -%}
+                {%- for example in function.few_shot_examples -%}
+                    {%- if (
+                        function.parameters is defined and 
+                        function.parameters.properties is defined) -%}
+                        {%- set params = align_json_order_to_schema(example['params'], function['parameters']) -%}
+                    {%- else -%}
+                        {%- set params = example['params'] | tojson(ensure_ascii=False) -%}
+                    {%- endif -%}
+                    {%- set call = '{"name": "' ~ function['name'] ~ '", "arguments": ' ~ params ~ '}' -%}
+                    {%- set ns_prompt.prompt = ns_prompt.prompt + '\n//' + indent + example.request | tojson(ensure_ascii=False) + ' -> ' ~ call -%}
+                {%- endfor -%}
+            {%- endif -%}
+        {%- endfor -%}
+    {%- endif -%}
+
+    {{- ns_prompt.prompt -}}
+{%- endmacro -%}
+
+
+{#- ----------- MESSAGE RENDERING HELPER FUNCTIONS ------------ -#}
+
+
+{%- macro prepare_devsystem(devsystem, add_tokens) -%}
+    {%- if add_tokens.role_sep not in devsystem or add_tokens.message_sep not in devsystem -%}
+        {%- set devsystem = (
+                devsystem | 
+                replace('<|role_sep|>', '<|role_sep|>\n') | 
+                replace('<|message_sep|>', '<|message_sep|>\n\n')
+            )
+        -%}
+    {%- endif -%}
+    {{- devsystem -}}
+{%- endmacro -%}
+
+{%- macro render_role_message(message, role=none, add_message_sep_token=True) -%}
+    {%- if not role -%}
+        {%- set role = message["role"] -%}
+    {%- endif -%}
+
+    {%- set message_content = message['content'] if message['content'] is not none else '' -%}
+    {%- if message_content is not string -%}
+        {%- set message_content = message_content | tojson(ensure_ascii=False) -%}
+    {%- endif -%}
+
+    {%- if message.get('embed_files', []) -%}
+        {%- set ns_embed_result = namespace(result_text = message_content) -%}
+            {%- for f in message.embed_files[::-1] -%}
+                {%- set tokenized = (
+                    add_tokens.file_start ~
+                    ('{"id": ' ~ (f.id | string | tojson(ensure_ascii=False)) ~ ', "name": ' ~ (f.name | string | tojson(ensure_ascii=False)) ~ ', "type": ' ~ (f.type | string | tojson(ensure_ascii=False)) ~ '}') ~
+                    (add_tokens[f.type] if f.type != 'doc' else (f.content | default(''))) ~
+                    add_tokens.file_end
+                    ) -%}
+                {%- if message.get("file_placeholders", False) -%}
+                    {%- set placeholder = '<file_placeholder_' ~ f.id ~ '>' -%}
+                    {%- set ns_embed_result.result_text = ns_embed_result.result_text | replace(placeholder, tokenized) -%}
+                {%- else -%}
+                    {%- set ns_embed_result.result_text = tokenized + ns_embed_result.result_text -%}
+                {%- endif -%}
+            {%- endfor -%}
+
+        {%- set message_final_content = ns_embed_result.result_text -%}
+    {%- else -%}
+        {%- set message_final_content = message_content -%}
+    {%- endif -%}
+                
+    {{- role + (add_tokens.role_sep if role else '') + message_final_content + (add_tokens.message_sep if add_message_sep_token else "") -}}
+
+{%- endmacro -%}
+
+
+{%- macro render_function_descriptions(message) -%}
+    {%- if 'function_descriptions' not in message -%}
+        {{- raise_exception("no 'function_descriptions' field provided for function description role!!!") -}}
+    {%- endif -%}
+
+    {%- set function_ids = message['function_descriptions'] -%}
+
+    {%- set ns_current_tools = namespace(tools=[]) -%}
+    {%- for idx in function_ids -%}
+        {%- set ns_lookup = namespace(found=none) -%}
+        {%- for _k, _v in FUNCTION_ID2DESCRIPTION_PAIRS -%}
+            {%- if _k == idx -%}{%- set ns_lookup.found = _v -%}{%- endif -%}
+        {%- endfor -%}
+        {%- set ns_current_tools.tools = ns_current_tools.tools + [ns_lookup.found] -%}
+    {%- endfor -%}
+
+    {%- set content = render_tool_namespace('functions', ns_current_tools.tools) + render_examples(ns_current_tools.tools) -%}
+
+    {{- render_role_message({'role': 'function descriptions', 'content': content}) -}}
+{%- endmacro -%}
+
+
+
+{#- ----- GCML PARAMETER RENDERING ----- -#}
+{%- macro render_gcml_parameter(name, value) -%}
+    {%- if value is string -%}
+        {{- '<｜GCML｜parameter name="' ~ name ~ '" string="true">' ~ value ~ '</｜GCML｜parameter>' -}}
+    {%- else -%}
+        {{- '<｜GCML｜parameter name="' ~ name ~ '" string="false">' ~ (value | tojson(ensure_ascii=False)) ~ '</｜GCML｜parameter>' -}}
+    {%- endif -%}
+{%- endmacro -%}
+
+
+{#- ----- GCML INVOKE RENDERING ----- -#}
+{%- macro render_gcml_invoke(call) -%}
+    {%- set inner = call -%}
+    {%- if inner.function -%}
+        {%- set inner = inner.function -%}
+    {%- endif -%}
+    {%- set args = inner.get('arguments', {}) -%}
+    {%- if args is string -%}
+        {{- raise_exception("v5: function call arguments must be a dict (got string). Parse JSON before passing to chat_template.") -}}
+    {%- endif -%}
+
+    {{- '<｜GCML｜invoke name="' ~ inner['name'] ~ '">\n' -}}
+    {%- if args -%}
+        {%- set ns_params = namespace(lines=[]) -%}
+        {%- for k, v in args.items() -%}
+            {%- set ns_params.lines = ns_params.lines + [render_gcml_parameter(k, v)] -%}
+        {%- endfor -%}
+        {{- ns_params.lines | join('\n') -}}
+        {{- '\n' -}}
+    {%- endif -%}
+    {{- '</｜GCML｜invoke>' -}}
+{%- endmacro -%}
+
+
+{#- ----- GCML TOOL_CALLS BLOCK ----- -#}
+{%- macro render_gcml_tool_calls(calls) -%}
+    {%- set ns_inv = namespace(blocks=[]) -%}
+    {%- for call in calls -%}
+        {%- set ns_inv.blocks = ns_inv.blocks + [render_gcml_invoke(call)] -%}
+    {%- endfor -%}
+    {{- '<｜GCML｜tool_calls>\n' -}}
+    {{- ns_inv.blocks | join('\n') -}}
+    {{- '\n</｜GCML｜tool_calls>' -}}
+{%- endmacro -%}
+
+
+{#- ----- FUNCTION_RESPONSE PAIRED-TAG RENDERING (asymmetric with FC by design) ----- -#}
+{%- macro render_function_response(name, item) -%}
+    {%- if item is mapping -%}
+        {%- set ns_strip = namespace(pairs=[]) -%}
+        {%- for k, v in item.items() -%}
+            {%- if k != 'id' -%}
+                {%- set ns_strip.pairs = ns_strip.pairs + [(k, v)] -%}
+            {%- endif -%}
+        {%- endfor -%}
+        {%- set ns_body = namespace(parts=[]) -%}
+        {%- for k, v in ns_strip.pairs -%}
+            {%- set ns_body.parts = ns_body.parts + ['"' ~ k ~ '": ' ~ (v | tojson(ensure_ascii=False))] -%}
+        {%- endfor -%}
+        {%- set body = '{' ~ (ns_body.parts | join(', ')) ~ '}' -%}
+    {%- elif item is string -%}
+        {%- set body = item -%}
+    {%- else -%}
+        {%- set body = item | tojson(ensure_ascii=False) -%}
+    {%- endif -%}
+    {{- '<function_response name="' ~ name ~ '">' ~ body ~ '</function_response>' -}}
+{%- endmacro -%}
+
+
+{%- macro render_function_responses(content, names) -%}
+    {%- if content is iterable and content is not string and content is not mapping -%}
+        {%- set items = content -%}
+    {%- elif content is none -%}
+        {%- set items = [] -%}
+    {%- else -%}
+        {%- set items = [content] -%}
+    {%- endif -%}
+
+    {%- if (items | length) != (names | length) -%}
+        {{- raise_exception("FR items count " ~ (items | length) ~ " != preceding tool calls count " ~ (names | length)) -}}
+    {%- endif -%}
+
+    {%- set ns_resp = namespace(blocks=[]) -%}
+    {%- for idx in range(items | length) -%}
+        {%- set ns_resp.blocks = ns_resp.blocks + [render_function_response(names[idx], items[idx])] -%}
+    {%- endfor -%}
+    {{- ns_resp.blocks | join('\n') -}}
+{%- endmacro -%}
+
+
+{#- ----- DEFAULT DEVSYSTEM ----- -#}
+
+{%- set DEVSYSTEM = "Вызов функций: последовательный
+Безопасность: соответствует законодательству РФ.
+Текущая дата: " ~ current_date ~ "
+Ограничение знаний: Декабрь, 2025.
+Ты сделан на базе нейросети GigaChat." -%}
+
+
+{#- --------- RENDERING STARTS HERE --------- -#}
+
+{#- ----- TOOL PREPARATION ----- -#}
+
+{%- set add_tokens = namespace(
+    role_sep="<|role_sep|>\n", 
+    message_sep="<|message_sep|>\n\n",
+    file_start="<|file|>",
+    file_end="<|/file|>",
+    image="[image_token]",
+    audio="[audio_token]",
+    video="[video_image_token]",
+    video_audio="[video_audio_token]"
+) -%}
+
+{%- if tools -%}
+    {%- set ns = namespace(id2desc_tools_pairs = [], name2desc_tools_pairs=[], id_keys=[], name_keys=[]) -%}
+    {%- for item in tools -%}
+        {#- Unwrap nested {"function": {...}} -#}
+        {%- set item = item["function"] if "function" in item else item -%}
+
+        {%- set id_key = item.id if item.id is defined else item.name -%}
+        {%- set name_key = item.name -%}
+
+        {%- set ns.id2desc_tools_pairs = ns.id2desc_tools_pairs + [(id_key, item)] -%}
+        {%- set ns.name2desc_tools_pairs = ns.name2desc_tools_pairs + [(name_key, item)] -%}
+        {%- if id_key not in ns.id_keys -%}{%- set ns.id_keys = ns.id_keys + [id_key] -%}{%- endif -%}
+        {%- if name_key not in ns.name_keys -%}{%- set ns.name_keys = ns.name_keys + [name_key] -%}{%- endif -%}
+    {%- endfor -%}
+
+    {%- set FUNCTION_ID2DESCRIPTION_PAIRS = ns.id2desc_tools_pairs -%}
+    {%- set FUNCTION_ID_KEYS = ns.id_keys -%}
+    {%- set FUNCTION_NAME_KEYS = ns.name_keys -%}
+{%- else -%}
+    {%- set FUNCTION_ID2DESCRIPTION_PAIRS = [] -%}
+    {%- set FUNCTION_ID_KEYS = [] -%}
+    {%- set FUNCTION_NAME_KEYS = [] -%}
+{%- endif -%}
+
+
+{#- ---------- HELPER FLAGS ----------- -#}
+
+{#- -----KWARGS FROM CHAT_TEMPLATE ---- -#}
+{%- if reasoning is not defined -%}
+    {%- set reasoning = False -%}
+{%- endif -%}
+
+{%- if use_devsystem is not defined -%}
+    {%- set use_devsystem = True -%}
+{%- endif -%}
+
+{%- if use_suggester is not defined -%}
+    {%- set use_suggester = True -%}
+{%- endif -%}
+
+{%- if use_system is not defined -%}
+    {%- set use_system = True -%}
+{%- endif -%}
+
+{%- if drop_history_thinking is not defined -%}
+    {%- set drop_history_thinking = True -%}
+{%- endif -%}
+
+{%- set ns_history = namespace(last_user_idx=-1) -%}
+{%- for m in messages -%}
+    {%- if m['role'] == 'user' -%}
+        {%- set ns_history.last_user_idx = loop.index0 -%}
+    {%- endif -%}
+{%- endfor -%}
+
+
+
+{#- ----- DIALOG STRUCTURE CHECKERS ---- -#}
+{%- set ns_roles = namespace(current_assistant_role='reasoning') -%}
+{%-set ns_role_presence = namespace(
+    has_available_functions=False, 
+    has_function_descriptions=False,
+    has_devsystem=False
+) -%}
+{%- for message in messages -%}
+    {%- if message["role"] == "available functions" -%}
+        {%- set ns_role_presence.has_available_functions = True -%}
+    {%- endif -%}
+
+    {%- if message["role"] == "function descriptions" -%}
+        {%- set ns_role_presence.has_function_descriptions = True -%}
+    {%- endif -%}
+
+    {%- if message["role"] in  ["developer system", "developer_system"] -%}
+        {%- set ns_role_presence.has_devsystem = True -%}
+    {%- endif -%}
+
+{%- endfor -%}
+
+
+{#- ----- RENDER BOS TOKEN ----- -#}
+{{- bos_token -}}
+
+
+{#- ----- INCLUDE DEFAULT DEVSYSTEM/ EXLUDE DEVSYSTEM ----- -#}
+
+{%- if not ns_role_presence.has_devsystem and use_devsystem -%}
+    {%- set devsystem_content = (
+        prepare_devsystem(default_devsystem, add_tokens)
+        if default_devsystem is defined
+        else prepare_devsystem(DEVSYSTEM, add_tokens) 
+    )-%}
+
+    {{- render_role_message({"role": "developer system", "content": devsystem_content}) -}}
+
+{%- elif ns_role_presence.has_devsystem and not use_devsystem -%}
+    {#- Assuming devsystem message comes 1st -#}
+    {%- set messages = messages[1:] -%}
+
+{%- elif ns_role_presence.has_devsystem and use_devsystem -%}
+    {#- Assuming devsystem message comes 1st -#}
+
+    {%- set devsystem_content = prepare_devsystem(messages[0]['content'], add_tokens) -%}
+    {{- render_role_message({"role": "developer system", "content": devsystem_content}) -}}
+    {%- set messages = messages[1:] -%}
+{%- endif -%}
+
+
+{#- ----- RENDER SYSTEM (inject empty one if missing) ----- -#}
+{%- if messages and messages[0]['role'] == 'system' -%}
+    {{- render_role_message(messages[0]) -}}
+    {%- set messages = messages[1:] -%}
+{%- elif use_system -%}
+    {{- render_role_message({"role": "system", "content": ""}) -}}
+{%- endif -%}
+
+{%- set ns_state = namespace(skip_remaining=0, previous_tool_names=[], emitted_auto_fd=False) -%}
+
+
+{#- ----- MAIN MESSAGE LOOP ----- -#}
+{%- for message in messages -%}
+
+    {%- if ns_state.skip_remaining > 0 -%}
+        {%- set ns_state.skip_remaining = ns_state.skip_remaining - 1 -%}
+
+    {#- ----- REASONING - LEGACY ROLE NOT SUPPORTED IN v5 ----- -#}
+    {%- elif message['role'] in ['reasoning', 'assistant reasoning', 'assistant thinking']  -%}
+        {{- raise_exception(
+            "chatml v5: standalone 'reasoning' / 'assistant reasoning' / 'assistant thinking' role is not supported. "
+            "Put reasoning text into assistant.reasoning_content on the corresponding assistant message instead."
+        ) -}}
+
+
+    {#- ----- AVAILABLE FUNCTIONS AS ROLE ----- -#}
+    {%- elif message['role'] == 'available functions' -%}
+        {{- render_role_message(message) -}}
+    
+
+    {#- ----- FUNCTION DESCRIPTIONS MESSAGE ----- -#}
+    {%- elif message['role'] == 'function descriptions' -%}
+        {{- render_function_descriptions(message) -}}
+
+
+    {#- ----- FUNCTION CALL MESSAGE (orphan) ----- -#}
+    {%- elif message['role'] in ['function call', 'reasoning function call'] -%}
+        {{- raise_exception("v5: encountered orphan '" ~ message['role'] ~ "' role without a preceding 'assistant' message. v5 layout requires FC to follow assistant.") -}}
+
+
+    {#- ----- FUNCTION RESULT (paired-tag rendering with names from previous FC) -----
+       Aggregates a run of consecutive function-result messages (native
+       `function result`/`function results` and openai-style `tool`/`function`)
+       into a single block, flattening list contents — mirrors the SFT
+       `_preprocess_dial_v5` function-result aggregation. Items are matched
+       positionally against the preceding tool-call names, so parallel calls
+       resolve to one <function_response> per call. -#}
+    {%- elif message['role'] in ['function result', 'function results', 'tool', 'function'] -%}
+        {%- if not ns_state.previous_tool_names -%}
+            {{- raise_exception("v5: 'function result' without preceding tool calls — no names available for rendering.") -}}
+        {%- endif -%}
+        {%- set ns_fr = namespace(vals=[], skip=0, stopped=False) -%}
+        {%- set _c0 = message['content'] -%}
+        {%- if _c0 is iterable and _c0 is not string and _c0 is not mapping -%}
+            {%- for it in _c0 -%}
+                {%- set ns_fr.vals = ns_fr.vals + [it] -%}
+            {%- endfor -%}
+        {%- else -%}
+            {%- set ns_fr.vals = ns_fr.vals + [_c0] -%}
+        {%- endif -%}
+        {%- for k in range(loop.index0 + 1, messages | length) -%}
+            {%- if not ns_fr.stopped -%}
+                {%- if messages[k]['role'] in ['function result', 'function results', 'tool', 'function'] -%}
+                    {%- set _ck = messages[k]['content'] -%}
+                    {%- if _ck is iterable and _ck is not string and _ck is not mapping -%}
+                        {%- for it in _ck -%}
+                            {%- set ns_fr.vals = ns_fr.vals + [it] -%}
+                        {%- endfor -%}
+                    {%- else -%}
+                        {%- set ns_fr.vals = ns_fr.vals + [_ck] -%}
+                    {%- endif -%}
+                    {%- set ns_fr.skip = ns_fr.skip + 1 -%}
+                {%- else -%}
+                    {%- set ns_fr.stopped = True -%}
+                {%- endif -%}
+            {%- endif -%}
+        {%- endfor -%}
+        {%- set ns_state.skip_remaining = ns_fr.skip -%}
+        {%- set fr_body = render_function_responses(ns_fr.vals, ns_state.previous_tool_names) -%}
+        {{- render_role_message({'role': 'function result', 'content': fr_body}) -}}
+        {#- ----- SUGGESTER AFTER FUNCTION RESULT ----- -#}
+        {%- if not ns_role_presence.has_available_functions and use_suggester -%}
+            {%- if message.functions is defined and message.functions -%}
+                {{- render_role_message({"role": "available functions", "content": message.functions}) -}}
+            {%- else -%}
+                {{- render_role_message({"role": "available functions", "content": (FUNCTION_NAME_KEYS) or []}) -}}
+            {%- endif -%}
+        {%- endif -%}
+
+
+    {#- ----- USER MESSAGE ----- -#}
+    {%- elif message['role'] == 'user' -%}
+        {#- ----- AUTO FD INSERTION (train-order parity) ----- -#}
+        {%- if not ns_role_presence.has_function_descriptions and tools and not ns_state.emitted_auto_fd -%}
+            {{- render_function_descriptions(
+                {
+                    "role": "function descriptions",
+                    "function_descriptions": FUNCTION_ID_KEYS
+                }
+            ) -}}
+            {%- set ns_state.emitted_auto_fd = True -%}
+        {%- endif -%}
+        {{- render_role_message(message, role='user') -}}
+        {#- ----- SWITCHING ASSISTANT ROLE AFTER USER QUERY ----- -#}
+        {%- set ns_roles.current_assistant_role = 'reasoning' -%}
+        {#- ----- SUGGESTER USAGE ----- -#}
+        {%- if not ns_role_presence.has_available_functions and use_suggester -%}
+            {%- if message.functions is defined and message.functions -%}
+                {{- render_role_message({"role": "available functions", "content": message.functions}) -}}
+            {%- else -%}
+                {{- render_role_message({"role": "available functions", "content": (FUNCTION_NAME_KEYS) or []}) -}}
+            {%- endif -%}
+        {%- endif -%}
+
+    {#- ----- ASSISTANT MESSAGE — chatml v5 COMPOSITE (think + text + tool_calls) ----- -#}
+    {%- elif message['role'] == 'assistant' -%}
+        {%- set ns_think = namespace(text='', present=False) -%}
+        {%- if message.reasoning_content is defined and message.reasoning_content is not none -%}
+            {%- if drop_history_thinking and loop.index0 < ns_history.last_user_idx -%}
+            {%- else -%}
+                {%- set ns_think.text = message.reasoning_content -%}
+                {%- set ns_think.present = True -%}
+            {%- endif -%}
+        {%- endif -%}
+        {%- if ns_think.present and ns_think.text and ns_think.text is not string -%}
+            {%- set ns_think.text = ns_think.text | tojson(ensure_ascii=False) -%}
+        {%- endif -%}
+
+        {%- set ns_inline = namespace(tool_calls=[]) -%}
+        {%- if message.tool_calls is defined and message.tool_calls -%}
+            {%- for tc in message.tool_calls -%}
+                {%- set ns_inline.tool_calls = ns_inline.tool_calls + [tc] -%}
+            {%- endfor -%}
+        {%- elif message.function_call is defined and message.function_call -%}
+            {%- set ns_inline.tool_calls = ns_inline.tool_calls + [message.function_call] -%}
+        {%- endif -%}
+
+        {%- set ns_la = namespace(tool_calls=[], skip_count=0, stopped=False) -%}
+        {%- for k in range(loop.index0 + 1, messages | length) -%}
+            {%- if not ns_la.stopped -%}
+                {%- if messages[k]['role'] == 'function call' -%}
+                    {%- set fc_content = messages[k]['content'] -%}
+                    {%- if fc_content is mapping -%}
+                        {%- set ns_la.tool_calls = ns_la.tool_calls + [fc_content] -%}
+                    {%- elif fc_content is iterable and fc_content is not string -%}
+                        {%- for c in fc_content -%}
+                            {%- set ns_la.tool_calls = ns_la.tool_calls + [c] -%}
+                        {%- endfor -%}
+                    {%- endif -%}
+                    {%- set ns_la.skip_count = ns_la.skip_count + 1 -%}
+                {%- else -%}
+                    {%- set ns_la.stopped = True -%}
+                {%- endif -%}
+            {%- endif -%}
+        {%- endfor -%}
+
+        {%- set ns_combined = namespace(calls=[]) -%}
+        {%- for tc in ns_inline.tool_calls -%}
+            {%- set ns_combined.calls = ns_combined.calls + [tc] -%}
+        {%- endfor -%}
+        {%- for tc in ns_la.tool_calls -%}
+            {%- set ns_combined.calls = ns_combined.calls + [tc] -%}
+        {%- endfor -%}
+
+        {%- set ns_state.skip_remaining = ns_la.skip_count -%}
+
+        {%- set ns_text = namespace(value=message.content if message.content is not none else '') -%}
+        {%- if ns_text.value is not string -%}
+            {%- set ns_text.value = ns_text.value | tojson(ensure_ascii=False) -%}
+        {%- endif -%}
+
+        {%- set ns_parts = namespace(blocks=[]) -%}
+        {%- if ns_think.present -%}
+            {%- set ns_parts.blocks = ns_parts.blocks + ['<think>' ~ ns_think.text ~ '</think>'] -%}
+        {%- endif -%}
+        {%- if ns_text.value -%}
+            {%- set ns_parts.blocks = ns_parts.blocks + [ns_text.value] -%}
+        {%- endif -%}
+        {%- if ns_combined.calls -%}
+            {%- set gcml_block = render_gcml_tool_calls(ns_combined.calls) -%}
+            {%- set ns_parts.blocks = ns_parts.blocks + [gcml_block] -%}
+
+            {%- set ns_names_update = namespace(vals=[]) -%}
+            {%- for c in ns_combined.calls -%}
+                {%- set inner = c.function if c.function is defined else c -%}
+                {%- set ns_names_update.vals = ns_names_update.vals + [inner['name']] -%}
+            {%- endfor -%}
+            {%- set ns_state.previous_tool_names = ns_names_update.vals -%}
+        {%- endif -%}
+
+        {#- Reasoning-only turns (<think> without text or tool_calls) are forbidden. -#}
+        {%- if ns_think.present and not ns_text.value and not ns_combined.calls -%}
+            {{- raise_exception("chatml v5: assistant turn must not contain only <think>...</think>. Add response text and/or tool_calls.") -}}
+        {%- endif -%}
+
+        {%- set composite_content = ns_parts.blocks | join('\n\n') -%}
+
+        {%- set ns_roles.current_assistant_role = 'assistant' -%}
+        {%- set last_effective_idx = loop.index0 + ns_la.skip_count -%}
+        {%- set is_final_assistant = (last_effective_idx == (messages | length - 1)) and not add_generation_prompt -%}
+
+        {{- render_role_message({'role': 'assistant', 'content': composite_content}, none, False) -}}
+        {%- if is_final_assistant -%}
+            {{- eos_token -}}
+        {%- else -%}
+            {{- add_tokens.message_sep -}}
+        {%- endif -%}
+
+
+    {#- ----- OTHER MESSAGES ----- -#}
+    {%- else -%}
+        {{- render_role_message(message) -}}
+    {%- endif -%}
+
+    {#- ----- GENERATION PROMPT (forces <think> when reasoning=True) ----- -#}
+    {%- if loop.last and add_generation_prompt and message['role'] not in [
+        'assistant', 'function call', 'reasoning', 'assistant reasoning', 'assistant thinking', 'reasoning function call'
+    ] -%}
+        {%- if reasoning -%}
+            {{- 'assistant' + add_tokens.role_sep + '<think>' -}}
+        {%- else -%}
+            {{- 'assistant' + add_tokens.role_sep -}}
+        {%- endif -%}
+    {%- endif -%}
+{%- endfor -%}
