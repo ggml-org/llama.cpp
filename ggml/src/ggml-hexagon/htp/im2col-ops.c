@@ -14,6 +14,7 @@
 #include "htp-ops.h"
 #include "hvx-utils.h"
 #include "hex-dma.h"
+#include "hex-profile.h"
 
 struct htp_im2col_context {
     struct htp_ops_context * octx;
@@ -24,73 +25,94 @@ struct htp_im2col_context {
     uint32_t pe_dst_row_bytes;                     // one output row's dst: OW*patch_stride*2, rounded 256
 };
 
-#define IM2COL_PATCHEMBED_BODY(FNAME, DST_CTYPE, COPY_FN, DST_ELEM, TAG)                                             \
-    static void FNAME(unsigned int nth, unsigned int ith, void * data) {                                             \
-        struct htp_im2col_context * ictx        = (struct htp_im2col_context *) data;                                \
-        struct htp_ops_context *    octx        = ictx->octx;                                                        \
-        const struct htp_tensor * restrict src1 = octx->src[1];                                                      \
-        const struct htp_tensor * restrict dst  = octx->dst;                                                         \
-        const int32_t  s0                       = octx->op_params[0];                                                \
-        const int32_t  s1                       = octx->op_params[1];                                                \
-        const int32_t  p0                       = octx->op_params[2];                                                \
-        const int32_t  p1                       = octx->op_params[3];                                                \
-        const int32_t  d0                       = octx->op_params[4];                                                \
-        const int32_t  d1                       = octx->op_params[5];                                                \
-        const uint32_t N                        = src1->ne[3];                                                       \
-        const uint32_t IC                       = src1->ne[2];                                                       \
-        const uint32_t IH                       = src1->ne[1];                                                       \
-        const uint32_t IW                       = src1->ne[0];                                                       \
-        const uint32_t KH                       = octx->src[0]->ne[1];                                               \
-        const uint32_t KW                       = octx->src[0]->ne[0];                                               \
-        const uint32_t OH                       = dst->ne[2];                                                        \
-        const uint32_t OW                       = dst->ne[1];                                                        \
-        const uint32_t patch_stride             = IC * KH * KW;                                                      \
-        const float * restrict src_data         = (const float *) src1->data;                                        \
-        DST_CTYPE * restrict dst_data           = (DST_CTYPE *) dst->data;                                           \
-        const uint32_t npatches                 = N * OH * OW;                                                       \
-        const uint32_t patch_start              = ictx->npatches_per_thread * ith;                                   \
-        const uint32_t patch_end                = MIN(patch_start + ictx->npatches_per_thread, npatches);            \
-        if (patch_start >= patch_end) {                                                                              \
-            return;                                                                                                  \
-        }                                                                                                            \
-        for (uint32_t p = patch_start; p < patch_end; p++) {                                                         \
-            const uint32_t iow             = p % OW;                                                                 \
-            const uint32_t ioh             = (p / OW) % OH;                                                          \
-            const uint32_t in              = p / (OW * OH);                                                          \
-            DST_CTYPE * restrict dst_patch = dst_data + (uint64_t) p * patch_stride;                                 \
-            for (uint32_t iic = 0; iic < IC; iic++) {                                                                \
-                const float * restrict src_plane = src_data + ((uint64_t) in * IC + iic) * IH * IW;                  \
-                for (uint32_t ikh = 0; ikh < KH; ikh++) {                                                            \
-                    const int32_t iih            = (int32_t) ioh * s1 + (int32_t) ikh * d1 - p1;                     \
-                    DST_CTYPE * restrict out_run = dst_patch + iic * (KH * KW) + ikh * KW;                           \
-                    if (iih < 0 || iih >= (int32_t) IH) {                                                            \
-                        memset(out_run, 0, KW * (DST_ELEM));                                                         \
-                        continue;                                                                                    \
-                    }                                                                                                \
-                    const int32_t iiw0             = (int32_t) iow * s0 - p0;                                        \
-                    const float * restrict src_run = src_plane + (uint64_t) iih * IW + iiw0;                         \
-                    if (d0 == 1 && iiw0 >= 0 && iiw0 + (int32_t) KW <= (int32_t) IW) {                               \
-                        COPY_FN((uint8_t *) out_run, (const uint8_t *) src_run, KW);                                 \
-                        continue;                                                                                    \
-                    }                                                                                                \
-                    for (uint32_t ikw = 0; ikw < KW; ikw++) {                                                        \
-                        const int32_t iiw = (int32_t) iow * s0 + (int32_t) ikw * d0 - p0;                            \
-                        out_run[ikw]      = (iiw < 0 || iiw >= (int32_t) IW) ?                                       \
-                                                (DST_CTYPE) 0.0f :                                                   \
-                                                (DST_CTYPE) src_plane[(uint64_t) iih * IW + iiw];                    \
-                    }                                                                                                \
-                }                                                                                                    \
-            }                                                                                                        \
-        }                                                                                                            \
+#define IM2COL_PATCHEMBED_BODY(FNAME, DST_CTYPE, COPY_FN, SPLAT_FN, DST_ELEM, TAG)                        \
+    static void FNAME(unsigned int nth, unsigned int ith, void * data) {                                  \
+        struct htp_im2col_context * ictx        = (struct htp_im2col_context *) data;                     \
+        struct htp_ops_context *    octx        = ictx->octx;                                             \
+        struct htp_thread_trace * restrict tr   = &octx->ctx->trace[ith];                                 \
+        const struct htp_tensor * restrict src1 = octx->src[1];                                           \
+        const struct htp_tensor * restrict dst  = octx->dst;                                              \
+        const int32_t  s0                       = octx->op_params[0];                                     \
+        const int32_t  s1                       = octx->op_params[1];                                     \
+        const int32_t  p0                       = octx->op_params[2];                                     \
+        const int32_t  p1                       = octx->op_params[3];                                     \
+        const int32_t  d0                       = octx->op_params[4];                                     \
+        const int32_t  d1                       = octx->op_params[5];                                     \
+        const uint32_t N                        = src1->ne[3];                                            \
+        const uint32_t IC                       = src1->ne[2];                                            \
+        const uint32_t IH                       = src1->ne[1];                                            \
+        const uint32_t IW                       = src1->ne[0];                                            \
+        const uint32_t KH                       = octx->src[0]->ne[1];                                    \
+        const uint32_t KW                       = octx->src[0]->ne[0];                                    \
+        const uint32_t OH                       = dst->ne[2];                                             \
+        const uint32_t OW                       = dst->ne[1];                                             \
+        const uint32_t patch_stride             = IC * KH * KW;                                           \
+        const float * restrict src_data         = (const float *) src1->data;                             \
+        DST_CTYPE * restrict dst_data           = (DST_CTYPE *) dst->data;                                \
+        const uint32_t npatches                 = N * OH * OW;                                            \
+        const uint32_t patch_start              = ictx->npatches_per_thread * ith;                        \
+        const uint32_t patch_end                = MIN(patch_start + ictx->npatches_per_thread, npatches); \
+        if (patch_start >= patch_end) {                                                                   \
+            return;                                                                                       \
+        }                                                                                                 \
+        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, patch_start);                                   \
+        for (uint32_t p = patch_start; p < patch_end; p++) {                                              \
+            const uint32_t iow             = p % OW;                                                      \
+            const uint32_t ioh             = (p / OW) % OH;                                               \
+            const uint32_t in              = p / (OW * OH);                                               \
+            DST_CTYPE * restrict dst_patch = dst_data + (uint64_t) p * patch_stride;                      \
+            for (uint32_t iic = 0; iic < IC; iic++) {                                                     \
+                const float * restrict src_plane = src_data + ((uint64_t) in * IC + iic) * IH * IW;       \
+                for (uint32_t ikh = 0; ikh < KH; ikh++) {                                                 \
+                    const int32_t iih            = (int32_t) ioh * s1 + (int32_t) ikh * d1 - p1;          \
+                    DST_CTYPE * restrict out_run = dst_patch + iic * (KH * KW) + ikh * KW;                \
+                    if (iih < 0 || iih >= (int32_t) IH) {                                                 \
+                        SPLAT_FN(out_run, 0.0f, KW);                                                      \
+                        continue;                                                                         \
+                    }                                                                                     \
+                    const int32_t iiw0             = (int32_t) iow * s0 - p0;                             \
+                    const float * restrict src_run = src_plane + (uint64_t) iih * IW + iiw0;              \
+                    if (d0 == 1) {                                                                        \
+                        /* contiguous source run: [lo,hi) is in-bounds, tails are zero pad */             \
+                        const int32_t lo = iiw0 < 0 ? -iiw0 : 0;                                          \
+                        int32_t       hi = (int32_t) IW - iiw0;                                           \
+                        if (hi > (int32_t) KW) {                                                          \
+                            hi = (int32_t) KW;                                                            \
+                        }                                                                                 \
+                        if (hi <= lo) {                                                                   \
+                            SPLAT_FN(out_run, 0.0f, KW);                                                  \
+                        } else {                                                                          \
+                            if (lo > 0) {                                                                 \
+                                SPLAT_FN(out_run, 0.0f, (uint32_t) lo);                                   \
+                            }                                                                             \
+                            COPY_FN((uint8_t *) (out_run + lo), (const uint8_t *) (src_run + lo),         \
+                                    (uint32_t) (hi - lo));                                                \
+                            if (hi < (int32_t) KW) {                                                      \
+                                SPLAT_FN(out_run + hi, 0.0f, (KW - (uint32_t) hi));                       \
+                            }                                                                             \
+                        }                                                                                 \
+                        continue;                                                                         \
+                    }                                                                                     \
+                    for (uint32_t ikw = 0; ikw < KW; ikw++) {                                             \
+                        const int32_t iiw = (int32_t) iow * s0 + (int32_t) ikw * d0 - p0;                 \
+                        out_run[ikw]      = (iiw < 0 || iiw >= (int32_t) IW) ?                            \
+                                                (DST_CTYPE) 0.0f :                                        \
+                                                (DST_CTYPE) src_plane[(uint64_t) iih * IW + iiw];         \
+                    }                                                                                     \
+                }                                                                                         \
+            }                                                                                             \
+        }                                                                                                 \
+        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, patch_start);                                    \
     }
 
-IM2COL_PATCHEMBED_BODY(im2col_patchembed_thread, __fp16, hvx_copy_f16_f32_uu, sizeof(__fp16), "f32-f16")
-IM2COL_PATCHEMBED_BODY(im2col_patchembed_f32_thread, float, hvx_copy_f32_uu, sizeof(float), "f32-f32")
+IM2COL_PATCHEMBED_BODY(im2col_patchembed_thread, __fp16, hvx_copy_f16_f32_uu, hvx_splat_f16_u, sizeof(__fp16), "f32-f16")
+IM2COL_PATCHEMBED_BODY(im2col_patchembed_f32_thread, float, hvx_copy_f32_uu, hvx_splat_f32_u, sizeof(float), "f32-f32")
 
-#define IM2COL_PATCHEMBED_DMA_BODY(FNAME, DST_CTYPE, COPY_FN, DST_ELEM, TAG)                                         \
+#define IM2COL_PATCHEMBED_DMA_BODY(FNAME, DST_CTYPE, COPY_FN, SPLAT_FN, DST_ELEM, TAG)                                \
     static void FNAME(unsigned int nth, unsigned int ith, void * data) {                                             \
         struct htp_im2col_context * ictx        = (struct htp_im2col_context *) data;                                \
         struct htp_ops_context *    octx        = ictx->octx;                                                        \
+        struct htp_thread_trace * restrict tr   = &octx->ctx->trace[ith];                                            \
         const struct htp_tensor * restrict src1 = octx->src[1];                                                      \
         const struct htp_tensor * restrict dst  = octx->dst;                                                         \
         const uint32_t N = src1->ne[3], IC = src1->ne[2], IH = src1->ne[1], IW = src1->ne[0];                        \
@@ -127,6 +149,7 @@ IM2COL_PATCHEMBED_BODY(im2col_patchembed_f32_thread, float, hvx_copy_f32_uu, siz
             }                                                                                                        \
             for (uint32_t i = 0; i < IC * KH; i++)                                                                   \
                 dma_queue_pop(dmaq);                                                                                 \
+            htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, r);                                                    \
             for (uint32_t iow = 0; iow < OW; iow++) {                                                                \
                 DST_CTYPE * dst_patch = dstb + (uint64_t) iow * patch_stride;                                        \
                 for (uint32_t ikh = 0; ikh < KH; ikh++) {                                                            \
@@ -134,7 +157,7 @@ IM2COL_PATCHEMBED_BODY(im2col_patchembed_f32_thread, float, hvx_copy_f32_uu, siz
                     for (uint32_t iic = 0; iic < IC; iic++) {                                                        \
                         DST_CTYPE * out_run = dst_patch + iic * (KH * KW) + ikh * KW;                                \
                         if (iih < 0 || iih >= (int32_t) IH) {                                                        \
-                            memset(out_run, 0, KW * (DST_ELEM));                                                     \
+                            SPLAT_FN(out_run, 0.0f, KW);                                                             \
                             continue;                                                                                \
                         }                                                                                            \
                         const float * src_run = srcb + ((uint64_t) (iic * KH + ikh)) * IW + (uint64_t) iow * KW;     \
@@ -142,6 +165,7 @@ IM2COL_PATCHEMBED_BODY(im2col_patchembed_f32_thread, float, hvx_copy_f32_uu, siz
                     }                                                                                                \
                 }                                                                                                    \
             }                                                                                                        \
+            htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, r);                                                     \
             DST_CTYPE * ddr_row = dst_data + ((uint64_t) (in * OH + ioh) * OW) * patch_stride;                       \
             dma_queue_push_vtcm_to_ddr(dmaq, dma_make_ptr((uint8_t *) ddr_row, (uint8_t *) dstb),                    \
                                        OW * patch_stride * (DST_ELEM), OW * patch_stride * (DST_ELEM), 1);           \
@@ -149,8 +173,8 @@ IM2COL_PATCHEMBED_BODY(im2col_patchembed_f32_thread, float, hvx_copy_f32_uu, siz
         }                                                                                                            \
     }
 
-IM2COL_PATCHEMBED_DMA_BODY(im2col_patchembed_dma_thread,     __fp16, hvx_copy_f16_f32_uu, sizeof(__fp16), "pe-dma-f16")
-IM2COL_PATCHEMBED_DMA_BODY(im2col_patchembed_dma_f32_thread, float,  hvx_copy_f32_uu,     sizeof(float),  "pe-dma-f32")
+IM2COL_PATCHEMBED_DMA_BODY(im2col_patchembed_dma_thread,     __fp16, hvx_copy_f16_f32_uu, hvx_splat_f16_u, sizeof(__fp16), "pe-dma-f16")
+IM2COL_PATCHEMBED_DMA_BODY(im2col_patchembed_dma_f32_thread, float,  hvx_copy_f32_uu,     hvx_splat_f32_u, sizeof(float),  "pe-dma-f32")
 
 static bool im2col_use_patchembed_dma(const struct htp_ops_context * octx) {
     const int32_t s0 = octx->op_params[0], s1 = octx->op_params[1];
@@ -238,9 +262,9 @@ int op_im2col(struct htp_ops_context * octx) {
         if (pth > 0 && im2col_patchembed_dma_fits(octx, &ictx, pth)) {
             ictx.pe_rows_per_thread = (nrows + pth - 1) / pth;
             if (dst->type == HTP_TYPE_F16) {
-                worker_pool_run_func(octx->ctx->worker_pool, im2col_patchembed_dma_thread, &ictx, pth);
+                work_queue_run(octx->ctx->work_queue, im2col_patchembed_dma_thread, &ictx, pth);
             } else {
-                worker_pool_run_func(octx->ctx->worker_pool, im2col_patchembed_dma_f32_thread, &ictx, pth);
+                work_queue_run(octx->ctx->work_queue, im2col_patchembed_dma_f32_thread, &ictx, pth);
             }
             return HTP_STATUS_OK;
         }
@@ -248,9 +272,9 @@ int op_im2col(struct htp_ops_context * octx) {
     }
 
     if (dst->type == HTP_TYPE_F16) {
-        worker_pool_run_func(octx->ctx->worker_pool, im2col_patchembed_thread, &ictx, n_threads);
+        work_queue_run(octx->ctx->work_queue, im2col_patchembed_thread, &ictx, n_threads);
     } else {
-        worker_pool_run_func(octx->ctx->worker_pool, im2col_patchembed_f32_thread, &ictx, n_threads);
+        work_queue_run(octx->ctx->work_queue, im2col_patchembed_f32_thread, &ictx, n_threads);
     }
     return HTP_STATUS_OK;
 }
