@@ -85,5 +85,22 @@ $MAIN -no-cnv --model $WORK_PATH/ggml-model-split-500M-00001-of-00002.gguf -p "I
 echo PASS
 echo
 
+# 6c. Verify split shard files were generated
+ls $WORK_PATH/ggml-model-split-500M-*.gguf
+echo PASS
+echo
+
+# 7. Split with very small size strategy
+$SPLIT --split-max-size 1M $WORK_PATH/ggml-model-merge.gguf $WORK_PATH/ggml-model-split-1M
+echo PASS
+echo
+
+# 7b. Test the sharded model is loading properly
+FIRST_SHARD=$(ls $WORK_PATH/ggml-model-split-1M-*.gguf | head -n 1)
+
+$MAIN -no-cnv --model $FIRST_SHARD -p "I believe the meaning of life is" --n-predict 16
+echo PASS
+echo
+
 # Clean up
 rm -f $WORK_PATH/ggml-model-split*.gguf $WORK_PATH/ggml-model-merge*.gguf

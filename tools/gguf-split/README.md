@@ -7,4 +7,8 @@ CLI to split / merge GGUF files.
 - `--split`: split GGUF to multiple GGUF, default operation.
 - `--split-max-size`: max size per split in `M` or `G`, f.ex. `500M` or `2G`.
 - `--split-max-tensors`: maximum tensors in each split: default(128)
+### Example
+
+```bash
+./llama-gguf-split --split-max-size 500M model.gguf split-model
 - `--merge`: merge multiple GGUF to a single GGUF. You only need to specify the name of the first GGUF to merge, the name of the merged GGUF, and the CLI will find the other GGUFs it needs within the same folder.
