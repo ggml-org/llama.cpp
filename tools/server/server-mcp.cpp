@@ -27,7 +27,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
-#include <sys/select.h>
+#include <poll.h>
 #endif
 
 using json = nlohmann::ordered_json;
@@ -663,7 +663,7 @@ json server_mcp_instance::send_rpc(const json & request, int timeout_ms) {
             return {{"error", {{"code", -32603}, {"message", "request timed out"}}}};
         }
 
-        // Drain any complete lines already buffered before blocking on select/peek
+        // Drain any complete lines already buffered before blocking on poll/peek
         if (read_message(resp)) {
             if (!proc) {
                 return {{"error", {{"code", -32603}, {"message", "process not running"}}}};
@@ -722,20 +722,18 @@ json server_mcp_instance::send_rpc(const json & request, int timeout_ms) {
             return {{"error", {{"code", -32603}, {"message", "process exited"}}}};
         }
 #else
-        fd_set rfds;
-        FD_ZERO(&rfds);
-        FD_SET(proc->stdout_fd, &rfds);
-        struct timeval tv;
+        // poll instead of select: stdout_fd can exceed FD_SETSIZE on servers with many open descriptors
         auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
         if (remaining.count() <= 0) {
             return {{"error", {{"code", -32603}, {"message", "request timed out"}}}};
         }
-        long tv_usec = remaining.count() * 1000;
-        if (tv_usec > 50 * 1000) tv_usec = 50 * 1000;
-        tv.tv_sec = 0;
-        tv.tv_usec = tv_usec;
-        int sel = select(proc->stdout_fd + 1, &rfds, NULL, NULL, &tv);
-        if (sel > 0 && FD_ISSET(proc->stdout_fd, &rfds)) {
+        int slice_ms = remaining.count() > 50 ? 50 : (int) remaining.count();
+        struct pollfd pfd;
+        pfd.fd = proc->stdout_fd;
+        pfd.events = POLLIN;
+        pfd.revents = 0;
+        int sel = poll(&pfd, 1, slice_ms);
+        if (sel > 0 && (pfd.revents & (POLLIN | POLLHUP | POLLERR))) {
             if (read_message(resp)) {
                 if (!proc) {
                     return {{"error", {{"code", -32603}, {"message", "process not running"}}}};
@@ -764,7 +762,7 @@ json server_mcp_instance::send_rpc(const json & request, int timeout_ms) {
                 }
                 continue;
             }
-            return {{"error", {{"code", -32603}, {"message", "select failed"}}}};
+            return {{"error", {{"code", -32603}, {"message", "poll failed"}}}};
         }
 #endif
         // Deadline is checked at the top of the next iteration
