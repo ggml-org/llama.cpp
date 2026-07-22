@@ -5029,6 +5029,111 @@ static ggml_status ggml_backend_sycl_graph_compute_impl(ggml_backend_sycl_contex
     return GGML_STATUS_SUCCESS;
 }
 
+static bool ggml_sycl_rope_fusion_profile_enabled() {
+    const char * value = getenv("GGML_SYCL_ROPE_FUSION_PROFILE");
+    return value != nullptr && strcmp(value, "1") == 0;
+}
+
+struct ggml_sycl_rope_fusion_profile {
+    std::atomic<uint64_t> graph_calls             = 0;
+    std::atomic<uint64_t> rope_nodes              = 0;
+    std::atomic<uint64_t> structural_matches      = 0;
+    std::atomic<uint64_t> eligible_matches        = 0;
+    std::atomic<uint64_t> decode_eligible_matches = 0;
+    std::atomic<uint64_t> batched_eligible_matches = 0;
+    std::atomic<uint64_t> eligible_index_rows     = 0;
+    std::atomic<uint64_t> reject_ne3              = 0;
+    std::atomic<uint64_t> reject_set_rows_type    = 0;
+    std::atomic<uint64_t> reject_index_type       = 0;
+    std::atomic<uint64_t> reject_view_shape       = 0;
+    std::atomic<uint64_t> reject_rope_mode        = 0;
+
+    ~ggml_sycl_rope_fusion_profile() {
+        if (!ggml_sycl_rope_fusion_profile_enabled()) {
+            return;
+        }
+        fprintf(
+            stderr,
+            "GGML_SYCL_ROPE_FUSION_PROFILE: graph_calls=%" PRIu64 " rope_nodes=%" PRIu64
+            " structural_matches=%" PRIu64 " eligible_matches=%" PRIu64
+            " decode_eligible_matches=%" PRIu64 " batched_eligible_matches=%" PRIu64
+            " eligible_index_rows=%" PRIu64 " reject_ne3=%" PRIu64
+            " reject_set_rows_type=%" PRIu64 " reject_index_type=%" PRIu64
+            " reject_view_shape=%" PRIu64 " reject_rope_mode=%" PRIu64 "\n",
+            graph_calls.load(), rope_nodes.load(), structural_matches.load(), eligible_matches.load(),
+            decode_eligible_matches.load(), batched_eligible_matches.load(), eligible_index_rows.load(),
+            reject_ne3.load(), reject_set_rows_type.load(), reject_index_type.load(),
+            reject_view_shape.load(), reject_rope_mode.load());
+    }
+};
+
+static ggml_sycl_rope_fusion_profile & ggml_sycl_rope_fusion_profile_data() {
+    static ggml_sycl_rope_fusion_profile profile;
+    return profile;
+}
+
+static bool ggml_sycl_rope_view_set_rows_eligible(
+        const ggml_cgraph * cgraph, int node_idx, ggml_sycl_rope_fusion_profile & profile) {
+    const ggml_tensor * rope     = cgraph->nodes[node_idx + 0];
+    const ggml_tensor * view     = cgraph->nodes[node_idx + 1];
+    const ggml_tensor * set_rows = cgraph->nodes[node_idx + 2];
+
+    if (rope->src[0]->ne[3] != 1) {
+        profile.reject_ne3.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    if (set_rows->type != GGML_TYPE_F32 && set_rows->type != GGML_TYPE_F16) {
+        profile.reject_set_rows_type.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    if (set_rows->src[1]->type != GGML_TYPE_I64) {
+        profile.reject_index_type.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    if (!ggml_is_contiguous(view) || view->ne[0] != rope->ne[0] * rope->ne[1]) {
+        profile.reject_view_shape.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    const int mode = ((const int32_t *) rope->op_params)[2];
+    if (mode != GGML_ROPE_TYPE_NORMAL && mode != GGML_ROPE_TYPE_NEOX && mode != GGML_ROPE_TYPE_MROPE) {
+        profile.reject_rope_mode.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    return true;
+}
+
+static void ggml_sycl_profile_rope_fusion(const ggml_cgraph * cgraph) {
+    if (!ggml_sycl_rope_fusion_profile_enabled()) {
+        return;
+    }
+
+    ggml_sycl_rope_fusion_profile & profile = ggml_sycl_rope_fusion_profile_data();
+    profile.graph_calls.fetch_add(1, std::memory_order_relaxed);
+    for (int node_idx = 0; node_idx < cgraph->n_nodes; ++node_idx) {
+        if (cgraph->nodes[node_idx]->op == GGML_OP_ROPE) {
+            profile.rope_nodes.fetch_add(1, std::memory_order_relaxed);
+        }
+        if (node_idx + 2 >= cgraph->n_nodes ||
+            !ggml_can_fuse_subgraph(
+                cgraph, node_idx, { GGML_OP_ROPE, GGML_OP_VIEW, GGML_OP_SET_ROWS }, { node_idx + 2 }) ||
+            !ggml_check_edges(cgraph, node_idx, { { 1, 0, 0 }, { 2, 0, 1 } })) {
+            continue;
+        }
+        profile.structural_matches.fetch_add(1, std::memory_order_relaxed);
+        if (!ggml_sycl_rope_view_set_rows_eligible(cgraph, node_idx, profile)) {
+            continue;
+        }
+        const uint64_t index_rows = ggml_nelements(cgraph->nodes[node_idx + 2]->src[1]);
+        profile.eligible_matches.fetch_add(1, std::memory_order_relaxed);
+        profile.eligible_index_rows.fetch_add(index_rows, std::memory_order_relaxed);
+        if (index_rows == 1) {
+            profile.decode_eligible_matches.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            profile.batched_eligible_matches.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+}
+
 static bool ggml_sycl_graph_profile_enabled() {
     const char * value = getenv("GGML_SYCL_GRAPH_PROFILE");
     return value != nullptr && strcmp(value, "1") == 0;
@@ -5153,6 +5258,7 @@ static ggml_status ggml_backend_sycl_graph_compute(ggml_backend_t backend, ggml_
     auto * sycl_ctx = static_cast<ggml_backend_sycl_context *>(backend->context);
     ggml_backend_sycl_device_context * dev_ctx = ggml_backend_sycl_device_context_from_backend(backend);
     ggml_backend_sycl_clear_pending_status(dev_ctx);
+    ggml_sycl_profile_rope_fusion(cgraph);
     const bool graph_profile_enabled = ggml_sycl_graph_profile_enabled();
     ggml_sycl_graph_profile * graph_profile =
         graph_profile_enabled ? &ggml_sycl_graph_profile_data() : nullptr;
