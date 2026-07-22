@@ -237,7 +237,6 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                 head < params.n_head_log2),
         params.max_bias > 0.0);
 
-    // Q_TILE * HEAD_DIM_QK
     for (var elem_idx = local_id.x; elem_idx < Q_TILE * HEAD_DIM_QK; elem_idx += WG_SIZE) {
         let q_tile_row = elem_idx / HEAD_DIM_QK;
         let q_col = elem_idx % HEAD_DIM_QK;
@@ -270,6 +269,8 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
             local_scores[slot] = FLOAT_MIN;
         }
 
+        // The tile path stages K/V in shared memory so each tile can be reused across
+        // Q_TILE query rows. It therefore does not use the direct path.
 #ifndef K_DIRECT
         load_k_tile_block(local_id.x, kv_count, kv_tile, k_head_offset);
 #endif
@@ -332,7 +333,9 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
         }
 
         workgroupBarrier();
-
+        
+        // The tile path stages K/V in shared memory so each tile can be reused across
+        // Q_TILE query rows. It therefore does not use the direct path.
 #ifndef V_DIRECT
         load_v_tile_block(local_id.x, kv_count, kv_tile, v_head_offset);
 #endif

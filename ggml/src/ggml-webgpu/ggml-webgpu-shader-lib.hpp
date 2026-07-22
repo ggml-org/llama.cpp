@@ -584,6 +584,8 @@ inline void ggml_webgpu_flash_attn_hash_common_pipeline_key(size_t &            
     ggml_webgpu_hash_combine(seed, key.dst_type);
     ggml_webgpu_hash_combine(seed, key.head_dim_qk);
     ggml_webgpu_hash_combine(seed, key.head_dim_v);
+    ggml_webgpu_hash_combine(seed, key.k_direct);
+    ggml_webgpu_hash_combine(seed, key.v_direct);
     ggml_webgpu_hash_combine(seed, key.kv_overlap);
     ggml_webgpu_hash_combine(seed, key.has_mask);
     ggml_webgpu_hash_combine(seed, key.has_sinks);
