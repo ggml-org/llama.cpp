@@ -79,6 +79,7 @@ jobs:
             -G "Ninja" \
             -DCMAKE_BUILD_TYPE=Release \
             -DGGML_WEBGPU=ON \
+            -DGGML_OPENMP=OFF \
             -DLLAMA_OPENSSL=OFF \
             -DEMDAWNWEBGPU_DIR=emdawnwebgpu_pkg
 
