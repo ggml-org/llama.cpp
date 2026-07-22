@@ -52,6 +52,8 @@ if(EMSCRIPTEN)
         target_link_options(ggml-webgpu INTERFACE "--use-port=${EMDAWNWEBGPU_DIR}/emdawnwebgpu.port.py")
     endif()
 
+    target_link_options(ggml-webgpu INTERFACE "-sMIN_WEBGL_VERSION=0" "-sMAX_WEBGL_VERSION=0")
+
     if (GGML_WEBGPU_JSPI)
         target_compile_options(ggml-webgpu PRIVATE "-fwasm-exceptions")
         target_link_options(ggml-webgpu INTERFACE "-sJSPI" "-fwasm-exceptions")
