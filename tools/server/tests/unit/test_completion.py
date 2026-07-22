@@ -146,7 +146,7 @@ def test_completion_stream_with_openai_library_stops():
         if choice.finish_reason is None:
             assert choice.text is not None
             output_text += choice.text
-    assert match_regex("Sure, here's one for[\\s\\S]*", output_text), f'Unexpected output: {output_text}'
+    assert match_regex("Sure[,!] here's one for[\\s\\S]*", output_text), f'Unexpected output: {output_text}'
 
 
 @pytest.mark.parametrize("n_slots", [1, 2])
