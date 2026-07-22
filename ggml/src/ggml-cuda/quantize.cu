@@ -244,7 +244,7 @@ static __global__ void quantize_mmq_nvfp4(
         for (int k = 0; k < QK_NVFP4_SUB; ++k) {
             const float v = vals[k] * inv_col_scale;
             const uint8_t q = ggml_cuda_float_to_fp4_e2m1(v, inv_scale_err);
-            const float err_diff = fabsf(v) - fabsf(kvalues_mxfp4[q & 0x7]) * subblock_scale;
+            const float err_diff = fabsf(v) - fabsf(kvalues_fp4[q & 0x7]) * subblock_scale;
             best_err = fmaf(err_diff, err_diff, best_err);
         }
 #endif // CUDART_VERSION >= 12080
@@ -266,7 +266,7 @@ static __global__ void quantize_mmq_nvfp4(
             for (int k = 0; k < QK_NVFP4_SUB; ++k) {
                 const float v = vals[k] * inv_col_scale;
                 const uint8_t q = ggml_cuda_float_to_fp4_e2m1(v, test_inv_scale);
-                const float err_diff = fabsf(v) - fabsf(kvalues_mxfp4[q & 0x7]) * test_scale;
+                const float err_diff = fabsf(v) - fabsf(kvalues_fp4[q & 0x7]) * test_scale;
                 cur_err = fmaf(err_diff, err_diff, cur_err);
             }
 #endif // CUDART_VERSION >= 12080
