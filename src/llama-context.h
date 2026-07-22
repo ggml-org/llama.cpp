@@ -195,6 +195,7 @@ struct llama_context {
 
     void opt_init(struct llama_model * model, struct llama_opt_params lopt_params);
     void opt_reset(bool recreate);
+    void opt_dataset_shuffle(ggml_opt_dataset_t dataset, int64_t idata);
 
     // TODO: more flexible combinations of logical/physical batch size and context size
     void opt_epoch(

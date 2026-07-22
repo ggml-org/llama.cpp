@@ -95,7 +95,7 @@ Use the same model, dataset, context size, and validation split as the original 
   --save-every 10 --epochs 3
 ```
 
-Checkpoint GGUFs contain the LoRA weights and training position. Optimizer moments are not stored, so the optimizer starts fresh after resume. Older checkpoints without embedded position metadata are supported when their original `.epochE.ckptW.gguf` filename is preserved. Mid-epoch resume is not supported with `--shuffle-dataset` because checkpoint files do not contain the shuffled permutation.
+Checkpoint GGUFs contain the LoRA weights and training position. Optimizer moments are not stored, so the optimizer starts fresh after resume. Older checkpoints without embedded position metadata are supported when their original `.epochE.ckptW.gguf` filename is preserved. With `--shuffle-dataset`, completed epoch shuffles are replayed deterministically before continuing at the next window after W.
 
 ### VRAM vs. step-time tradeoff
 

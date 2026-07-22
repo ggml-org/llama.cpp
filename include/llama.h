@@ -1600,6 +1600,12 @@ extern "C" {
     // When recreate is true, drop optimizer state while preserving model weights.
     LLAMA_API void llama_opt_reset(struct llama_context * lctx, bool recreate);
 
+    // Shuffle the first idata dataset entries with the optimizer RNG, or all entries if idata is negative.
+    LLAMA_API void llama_opt_dataset_shuffle(
+            struct llama_context * lctx,
+            ggml_opt_dataset_t     dataset,
+            int64_t                idata);
+
     // weights: array of floats, one per dataset window (indexed by idata), already normalized to [0,1].
     // n_weights: length of the array.
     // Pass NULL/0 to disable (equivalent to all-ones, i.e. standard SFT).

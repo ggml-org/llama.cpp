@@ -3375,6 +3375,11 @@ void llama_context::opt_reset(bool recreate) {
     }
 }
 
+void llama_context::opt_dataset_shuffle(ggml_opt_dataset_t dataset, int64_t idata) {
+    GGML_ASSERT(opt_ctx);
+    ggml_opt_dataset_shuffle(opt_ctx, dataset, idata);
+}
+
 void llama_context::opt_epoch_iter(
         ggml_opt_dataset_t               dataset,
         ggml_opt_result_t                result,
@@ -3546,7 +3551,7 @@ void llama_context::opt_epoch(
     GGML_ASSERT(idata_start <= idata_split);
     GGML_ASSERT(idata_split <= ndata);
 
-    if (shuffle && idata_start == 0 && idata_split > 1) {
+    if (shuffle && idata_split > 1) {
         ggml_opt_dataset_shuffle(opt_ctx, dataset, idata_split);
     }
 
@@ -4257,6 +4262,13 @@ void llama_opt_init(struct llama_context * ctx, struct llama_model * model, stru
 
 void llama_opt_reset(struct llama_context * ctx, bool recreate) {
     ctx->opt_reset(recreate);
+}
+
+void llama_opt_dataset_shuffle(
+        struct llama_context * ctx,
+        ggml_opt_dataset_t     dataset,
+        int64_t                idata) {
+    ctx->opt_dataset_shuffle(dataset, idata);
 }
 
 void llama_opt_epoch(

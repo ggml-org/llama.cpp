@@ -1624,19 +1624,17 @@ int main(int argc, char ** argv) {
                     __func__, (long) window_start, (long) idata_split);
             return 1;
         }
-        if (window_start > 0 && window_start < idata_split &&
-            (resume_state.shuffle || params.shuffle_dataset)) {
-            LOG_ERR("%s: cannot resume a shuffled dataset in the middle of an epoch because checkpoints do not store the permutation\n",
-                    __func__);
+        if (resume_state.has_metadata && resume_state.shuffle != params.shuffle_dataset) {
+            LOG_ERR("%s: checkpoint shuffle setting does not match --shuffle-dataset\n", __func__);
             return 1;
         }
         if (window_start == idata_split) {
             ++epoch_start;
             window_start = 0;
         }
-        LOG_INF("%s: resuming SFT at epoch %u/%u, window %ld/%ld; optimizer state starts fresh\n",
-                __func__, epoch_start + 1, params.lr.epochs,
-                (long) window_start, (long) idata_split);
+        LOG_INF("%s: resuming SFT at epoch %u/%u after window %ld; next window is %ld/%ld; optimizer state starts fresh\n",
+                __func__, epoch_start + 1, params.lr.epochs, (long) window_start,
+                (long) window_start + 1, (long) idata_split);
     }
 
     ggml_opt_result_t result_train = ggml_opt_result_init();
@@ -1650,6 +1648,18 @@ int main(int argc, char ** argv) {
         params.save_every, ubatch_per_ctx, 0, 0, idata_split, n_ctx, params.shuffle_dataset
     };
     g_save_ctx = &sctx;
+
+    if (resume_requested && params.shuffle_dataset && epoch_start > 0) {
+        for (unsigned epoch = 0; epoch < epoch_start; ++epoch) {
+            llama_opt_dataset_shuffle(ctx, dataset, idata_split);
+            if (params.optimizer_restart_every > 0 &&
+                epoch + 1 < params.lr.epochs &&
+                (epoch + 1) % params.optimizer_restart_every == 0) {
+                llama_opt_reset(ctx, true);
+            }
+        }
+        LOG_INF("%s: replayed %u completed epoch shuffle(s)\n", __func__, epoch_start);
+    }
 
     const int64_t total_windows = ggml_opt_dataset_ndata(dataset);
     LOG_INF("%s: starting QLoRA training — rank=%d alpha=%.1f epochs=%d loss=%s\n",
@@ -1674,12 +1684,12 @@ int main(int argc, char ** argv) {
 
     for (params.lr.epoch = epoch_start; params.lr.epoch < params.lr.epochs; ++params.lr.epoch) {
         const int64_t idata_start = params.lr.epoch == epoch_start ? window_start : 0;
-        sctx.last_saved = 0;  // reset per-epoch window counter
+        sctx.last_saved = idata_start;
         sctx.epoch = params.lr.epoch + 1;
         llama_opt_epoch_range(ctx, dataset, result_train, result_eval, idata_start, idata_split,
                               cb_train,
                               ggml_opt_epoch_callback_progress_bar,
-                              params.shuffle_dataset && idata_start == 0);
+                              params.shuffle_dataset);
         fprintf(stderr, "\n");
 
         // Per-epoch loss summary
