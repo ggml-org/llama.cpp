@@ -49,6 +49,43 @@ class ProductCampaignTests(unittest.TestCase):
         self.assertEqual(selected["pp512"], rows[3])
         self.assertEqual(selected["tg128"], rows[4])
 
+    def test_parses_structured_fa_route_records(self) -> None:
+        logs = (
+            "GGML_SYCL_FA_ROUTE: route=TILE phase=prefill q_tokens=512 "
+            "head_dim=128 gqa=4 type_k=q8_0 type_v=q8_0 "
+            "k_quants_first=0 v_quants_first=0\n"
+            "GGML_SYCL_FA_ROUTE: route=VEC phase=decode q_tokens=1 "
+            "head_dim=128 gqa=4 type_k=q8_0 type_v=q8_0 "
+            "k_quants_first=1 v_quants_first=1\n"
+        )
+        self.assertEqual(
+            HARNESS._parse_fa_route_records(logs),
+            [
+                {
+                    "route": "TILE",
+                    "phase": "prefill",
+                    "q_tokens": 512,
+                    "head_dim": 128,
+                    "gqa": 4,
+                    "type_k": "q8_0",
+                    "type_v": "q8_0",
+                    "k_quants_first": False,
+                    "v_quants_first": False,
+                },
+                {
+                    "route": "VEC",
+                    "phase": "decode",
+                    "q_tokens": 1,
+                    "head_dim": 128,
+                    "gqa": 4,
+                    "type_k": "q8_0",
+                    "type_v": "q8_0",
+                    "k_quants_first": True,
+                    "v_quants_first": True,
+                },
+            ],
+        )
+
     def test_product_argv_uses_supported_no_warmup_flag(self) -> None:
         argv = HARNESS._product_bench_argv(
             Path("/tmp/bin"), "model.gguf", ("f16", "f16"), 0

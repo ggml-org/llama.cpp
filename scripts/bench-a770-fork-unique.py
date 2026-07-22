@@ -59,6 +59,16 @@ DEFAULT_MODELS = [
     ("qwen3-coder-30b-a3b", "gguf/Qwen3-Coder-30B-A3B-UD-Q3_K_XL/Qwen3-Coder-30B-A3B-Instruct-UD-Q3_K_XL.gguf"),
 ]
 
+FA_ROUTE_RE = re.compile(
+    r"GGML_SYCL_FA_ROUTE: route=(?P<route>VEC|TILE|XMX) "
+    r"phase=(?P<phase>decode|prefill) q_tokens=(?P<q_tokens>\d+) "
+    r"head_dim=(?P<head_dim>\d+) gqa=(?P<gqa>\d+) "
+    r"type_k=(?P<type_k>\S+) type_v=(?P<type_v>\S+) "
+    r"k_quants_first=(?P<k_quants_first>[01]) "
+    r"v_quants_first=(?P<v_quants_first>[01])"
+)
+
+
 
 def _effective_env(env_extra: dict[str, str]) -> dict[str, str]:
     env = os.environ.copy()
@@ -67,6 +77,7 @@ def _effective_env(env_extra: dict[str, str]) -> dict[str, str]:
         "GGML_SYCL_FA_XMX",
         "GGML_SYCL_FA_FORCE_VEC_STANDARD",
         "GGML_SYCL_FA_Q8_GQA_TILE",
+        "GGML_SYCL_FA_ROUTE_TRACE",
         "GGML_SYCL_Q8_KV_QUANTS_FIRST",
         "LLAMA_ENABLE_INNERQ",
         "TURBO_LAYER_ADAPTIVE",
@@ -511,6 +522,27 @@ def _select_product_rows(
     }
 
 
+def _parse_fa_route_records(logs: str) -> list[dict[str, Any]]:
+    """Parse structured one-time SYCL FlashAttention route records."""
+    records: list[dict[str, Any]] = []
+    for match in FA_ROUTE_RE.finditer(logs):
+        groups = match.groupdict()
+        records.append(
+            {
+                "route": groups["route"],
+                "phase": groups["phase"],
+                "q_tokens": int(groups["q_tokens"]),
+                "head_dim": int(groups["head_dim"]),
+                "gqa": int(groups["gqa"]),
+                "type_k": groups["type_k"],
+                "type_v": groups["type_v"],
+                "k_quants_first": groups["k_quants_first"] == "1",
+                "v_quants_first": groups["v_quants_first"] == "1",
+            }
+        )
+    return records
+
+
 def _kv_bytes_per_element(kv_type: str) -> float:
     if kv_type == "f16":
         return 2.0
@@ -714,6 +746,9 @@ def run_product_cell(
             print(label, flush=True)
             result = run(argv, arm_env, timeout_s)
             rows = _select_product_rows(parse_bench(result.get("stdout", "")))
+            route_records = _parse_fa_route_records(
+                result.get("stdout", "") + "\n" + result.get("stderr", "")
+            )
             sample_values: dict[str, float] = {}
             for metric_name, row in rows.items():
                 sample_values[f"{metric_name}_ts"] = (
@@ -729,6 +764,7 @@ def run_product_cell(
                 "tg128_ts": sample_values["tg128_ts"],
                 "stdout": result.get("stdout", ""),
                 "stderr": result.get("stderr", ""),
+                "fa_route_records": route_records,
             }
             sample_path = samples_dir / (
                 f"cell{cell_idx:02d}_{kv[0]}_{kv[1]}_d{depth}"
@@ -749,6 +785,7 @@ def run_product_cell(
                         "selected_rows": rows,
                         "stdout": result.get("stdout", ""),
                         "stderr": result.get("stderr", ""),
+                        "fa_route_records": route_records,
                     },
                     sort_keys=True,
                 )

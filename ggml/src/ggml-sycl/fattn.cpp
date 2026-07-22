@@ -19,6 +19,8 @@
 #include "fattn-vec.hpp"
 #include "fattn-xmx.hpp"
 #include "fattn.hpp"
+#include <atomic>
+#include <cstdio>
 #include <cstdlib>
 
 
@@ -186,6 +188,62 @@ enum best_fattn_kernel {
     BEST_FATTN_KERNEL_TILE     = 200,
     BEST_FATTN_KERNEL_XMX      = 300,
 };
+
+static void ggml_sycl_log_fattn_route_once(best_fattn_kernel route, const ggml_tensor * dst) {
+    static const bool trace_enabled = [] {
+        const char * value = getenv("GGML_SYCL_FA_ROUTE_TRACE");
+        return value != nullptr && value[0] != '\0' && !(value[0] == '0' && value[1] == '\0');
+    }();
+    if (!trace_enabled || route == BEST_FATTN_KERNEL_NONE) {
+        return;
+    }
+
+    int route_index = 0;
+    const char * route_name = "VEC";
+    switch (route) {
+        case BEST_FATTN_KERNEL_VEC:
+            break;
+        case BEST_FATTN_KERNEL_TILE:
+            route_index = 1;
+            route_name = "TILE";
+            break;
+        case BEST_FATTN_KERNEL_XMX:
+            route_index = 2;
+            route_name = "XMX";
+            break;
+        case BEST_FATTN_KERNEL_NONE:
+            return;
+    }
+
+    const ggml_tensor * Q = dst->src[0];
+    const ggml_tensor * K = dst->src[1];
+    const ggml_tensor * V = dst->src[2];
+    const bool is_decode = Q->ne[1] == 1;
+    static std::atomic<bool> logged[3][2] = {};
+    if (logged[route_index][is_decode ? 0 : 1].exchange(true, std::memory_order_relaxed)) {
+        return;
+    }
+
+    const bool K_quants_first =
+        K->type == GGML_TYPE_Q8_0 && ggml_sycl_tensor_is_kv_q8_quants_first(K);
+    const bool V_quants_first =
+        V->type == GGML_TYPE_Q8_0 && ggml_sycl_tensor_is_kv_q8_quants_first(V);
+    // llama-bench suppresses GGML_LOG_INFO in JSON mode; trace output must bypass its callback.
+    fprintf(
+        stderr,
+        "GGML_SYCL_FA_ROUTE: route=%s phase=%s q_tokens=%lld head_dim=%lld gqa=%lld "
+        "type_k=%s type_v=%s k_quants_first=%d v_quants_first=%d\n",
+        route_name,
+        is_decode ? "decode" : "prefill",
+        (long long) Q->ne[1],
+        (long long) K->ne[0],
+        (long long) (Q->ne[2] / K->ne[2]),
+        ggml_type_name(K->type),
+        ggml_type_name(V->type),
+        K_quants_first ? 1 : 0,
+        V_quants_first ? 1 : 0);
+    fflush(stderr);
+}
 
 static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const ggml_tensor * dst) {
     GGML_UNUSED(device);
@@ -372,7 +430,10 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
 
 void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     ggml_sycl_set_device(ctx.device);
-    switch (ggml_sycl_get_best_fattn_kernel(ggml_sycl_get_device(), dst)) {
+    const best_fattn_kernel route =
+        ggml_sycl_get_best_fattn_kernel(ggml_sycl_get_device(), dst);
+    ggml_sycl_log_fattn_route_once(route, dst);
+    switch (route) {
         case BEST_FATTN_KERNEL_NONE:
             GGML_ABORT("Not support Flash-Attention");
         case BEST_FATTN_KERNEL_TILE:
