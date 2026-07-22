@@ -108,10 +108,10 @@ def handle_tools_call(params, req_id):
         return {
             "jsonrpc": "2.0",
             "id": req_id,
-            "error": {"code": -32601, "message": f"Unknown tool: {tool_name}"}
+            "error": {"code": -32602, "message": f"Unknown tool: {tool_name}"}
         }
 
-def handle_shutdown(params, req_id):
+def handle_ping(params, req_id):
     return {
         "jsonrpc": "2.0",
         "id": req_id,
@@ -122,7 +122,7 @@ HANDLERS = {
     "initialize": handle_initialize,
     "tools/list": handle_tools_list,
     "tools/call": handle_tools_call,
-    "shutdown": handle_shutdown,
+    "ping": handle_ping,
 }
 
 def main():
@@ -142,6 +142,10 @@ def main():
         method = request.get("method")
         req_id = request.get("id")
         params = request.get("params", {})
+
+        # JSON-RPC 2.0: a message without an id is a notification and must not receive a response
+        if req_id is None:
+            continue
 
         handler = HANDLERS.get(method)
         if handler:

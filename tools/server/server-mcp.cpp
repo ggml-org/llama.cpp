@@ -99,7 +99,9 @@ struct server_mcp_instance::process_handle {
     HANDLE hStdinWrite;
     HANDLE hStdoutRead;
 #else
-    pid_t pid;
+    // mutable: is_alive() is const but reaps the child, and a reaped pid must be
+    // invalidated immediately so it is never signalled again after the OS recycles it
+    mutable pid_t pid;
     int stdin_fd;
     int stdout_fd;
 #endif
@@ -134,18 +136,26 @@ void server_mcp_instance::process_handle::terminate_process() {
     if (stdin_fd >= 0) { ::close(stdin_fd); stdin_fd = -1; }
     if (stdout_fd >= 0) { ::close(stdout_fd); stdout_fd = -1; }
     if (pid > 0) {
+        bool reaped = false;
         kill(pid, SIGTERM);
         // wait a bit, then force kill
         for (int i = 0; i < 10; i++) {
             int status = 0;
             pid_t ret = waitpid(pid, &status, WNOHANG);
-            if (ret == pid) break;
-            if (ret == -1 && errno == ECHILD) break; // already reaped
+            if (ret == pid) { reaped = true; break; }
+            if (ret == -1 && errno == ECHILD) { reaped = true; break; } // already reaped
             if (ret == -1 && errno == EINTR) continue; // retry
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
-        kill(pid, SIGKILL); // ignore ESRCH
-        waitpid(pid, nullptr, WNOHANG); // ignore errors
+        // Only signal again if the child was NOT reaped above: once waitpid() has
+        // succeeded the pid is free for reuse, and kill()ing it could hit an
+        // unrelated process that the OS has since given the same pid.
+        if (!reaped) {
+            kill(pid, SIGKILL); // ignore ESRCH
+            // Blocking wait: SIGKILL cannot be caught or ignored, so this cannot
+            // hang. A WNOHANG here would usually race the kill and leak a zombie.
+            while (waitpid(pid, nullptr, 0) == -1 && errno == EINTR) {}
+        }
         pid = -1;
     }
 #endif
@@ -170,11 +180,14 @@ bool server_mcp_instance::process_handle::is_alive() const {
             int status = 0;
             pid_t wp = waitpid(pid, &status, WNOHANG);
             if (wp == pid) {
-                // Child is a zombie; treat as dead
+                // Child is a zombie; it is now reaped, so invalidate the pid to
+                // keep terminate_process() from signalling a recycled pid later
+                pid = -1;
                 return false;
             }
             if (wp == -1 && errno == ECHILD) {
                 // Already reaped by someone else; treat as dead
+                pid = -1;
                 return false;
             }
             // Process exists and is not a zombie
@@ -198,33 +211,101 @@ bool server_mcp_instance::process_handle::is_alive() const {
 //
 
 #if defined(_WIN32)
-static std::string quote_windows_arg(const std::string & arg) {
-    if (!arg.empty() && arg.find_first_of(" \t\"") == std::string::npos) {
+// MCP config strings are UTF-8 (they come out of a JSON document). The ANSI
+// CreateProcessA/STARTUPINFOA family reinterprets them in the active code page,
+// which mangles any non-ASCII command, argument, cwd or env value - so the whole
+// spawn path uses the wide variants and converts explicitly.
+static std::wstring utf8_to_wide(const std::string & s) {
+    if (s.empty()) {
+        return std::wstring();
+    }
+    int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), (int) s.size(), NULL, 0);
+    if (n <= 0) {
+        return std::wstring();
+    }
+    std::wstring w((size_t) n, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.data(), (int) s.size(), &w[0], n);
+    return w;
+}
+
+static std::wstring quote_windows_arg(const std::wstring & arg) {
+    if (!arg.empty() && arg.find_first_of(L" \t\"") == std::wstring::npos) {
         return arg;
     }
 
-    std::string result;
-    result.push_back('"');
+    std::wstring result;
+    result.push_back(L'"');
 
     size_t backslashes = 0;
-    for (char c : arg) {
-        if (c == '\\') {
+    for (wchar_t c : arg) {
+        if (c == L'\\') {
             ++backslashes;
             continue;
         }
 
-        if (c == '"') {
-            result.append(backslashes * 2 + 1, '\\');
+        if (c == L'"') {
+            result.append(backslashes * 2 + 1, L'\\');
         } else {
-            result.append(backslashes, '\\');
+            result.append(backslashes, L'\\');
         }
         backslashes = 0;
         result.push_back(c);
     }
 
-    result.append(backslashes * 2, '\\');
-    result.push_back('"');
+    result.append(backslashes * 2, L'\\');
+    result.push_back(L'"');
     return result;
+}
+
+static bool search_path_ext(const std::wstring & name, const wchar_t * ext, std::wstring & out) {
+    wchar_t buf[MAX_PATH * 4];
+    const DWORD cap = (DWORD) (sizeof(buf) / sizeof(buf[0]));
+    DWORD n = SearchPathW(NULL, name.c_str(), ext, cap, buf, NULL);
+    if (n > 0 && n < cap) {
+        out.assign(buf, n);
+        return true;
+    }
+    return false;
+}
+
+// CreateProcess only ever appends ".exe" to an extensionless command and never
+// consults PATHEXT, so a "command": "npx" entry (npm ships npx.cmd, never
+// npx.exe) fails on Windows while working on POSIX, where execvp() does a full
+// PATH search. Resolve the command ourselves so both platforms accept the same
+// Cursor-format config.
+static std::wstring resolve_windows_command(const std::wstring & command) {
+    std::wstring found;
+
+    // exact match first (absolute/relative path, or a command that already has an extension)
+    if (search_path_ext(command, NULL, found)) {
+        return found;
+    }
+
+    std::wstring pathext;
+    DWORD need = GetEnvironmentVariableW(L"PATHEXT", NULL, 0);
+    if (need > 0) {
+        pathext.resize(need);
+        DWORD got = GetEnvironmentVariableW(L"PATHEXT", &pathext[0], need);
+        pathext.resize(got);
+    }
+    if (pathext.empty()) {
+        pathext = L".COM;.EXE;.BAT;.CMD";
+    }
+
+    for (size_t start = 0; start <= pathext.size(); ) {
+        size_t sep = pathext.find(L';', start);
+        std::wstring ext = pathext.substr(start, sep == std::wstring::npos ? std::wstring::npos : sep - start);
+        if (!ext.empty() && search_path_ext(command, ext.c_str(), found)) {
+            return found;
+        }
+        if (sep == std::wstring::npos) {
+            break;
+        }
+        start = sep + 1;
+    }
+
+    // give up and let CreateProcessW report the error
+    return command;
 }
 #endif
 
@@ -233,7 +314,8 @@ static bool spawn_process_stdio(
     const std::vector<std::string> & args,
     const std::map<std::string, std::string> & env,
     const std::string & cwd,
-    std::unique_ptr<server_mcp_instance::process_handle> & out_proc
+    std::unique_ptr<server_mcp_instance::process_handle> & out_proc,
+    std::string & out_err
 ) {
     out_proc = std::make_unique<server_mcp_instance::process_handle>();
 #if defined(_WIN32)
@@ -241,8 +323,12 @@ static bool spawn_process_stdio(
     HANDLE hStdinRead = NULL, hStdinWrite = NULL;
     HANDLE hStdoutRead = NULL, hStdoutWrite = NULL;
 
-    if (!CreatePipe(&hStdoutRead, &hStdoutWrite, &sa, 0)) return false;
-    if (!CreatePipe(&hStdinRead, &hStdinWrite, &sa, 0)) {
+    // 1 MiB rather than the ~4 KiB system default: a large tools/call request
+    // should not have to interleave with the child draining its stdin
+    const DWORD pipe_buf_size = 1024 * 1024;
+
+    if (!CreatePipe(&hStdoutRead, &hStdoutWrite, &sa, pipe_buf_size)) return false;
+    if (!CreatePipe(&hStdinRead, &hStdinWrite, &sa, pipe_buf_size)) {
         CloseHandle(hStdoutRead);
         CloseHandle(hStdoutWrite);
         return false;
@@ -262,14 +348,50 @@ static bool spawn_process_stdio(
         return false;
     }
 
-    std::string cmdline = quote_windows_arg(command);
-    for (const auto & a : args) {
-        cmdline.push_back(' ');
-        cmdline += quote_windows_arg(a);
+    const std::wstring wcommand = resolve_windows_command(utf8_to_wide(command));
+    const std::wstring wcwd     = utf8_to_wide(cwd);
+
+    // A .cmd/.bat target is not a PE image, and CreateProcess only falls back to
+    // the command interpreter implicitly when lpApplicationName is NULL - which it
+    // is not here - so route batch targets through ComSpec explicitly.
+    // NOTE: cmd.exe re-parses this command line with its own rules (the mechanism
+    // behind CVE-2024-24576). Arguments come from the operator-controlled MCP
+    // config, never from model or client input.
+    bool is_batch = false;
+    {
+        // only look at the final component, so a dot in a directory name
+        // (e.g. "C:\tools\node.js\npx") is not mistaken for an extension
+        size_t sep = wcommand.find_last_of(L"\\/");
+        size_t dot = wcommand.find_last_of(L'.');
+        if (dot != std::wstring::npos && (sep == std::wstring::npos || dot > sep)) {
+            std::wstring ext = wcommand.substr(dot);
+            for (wchar_t & c : ext) {
+                if (c >= L'A' && c <= L'Z') c = (wchar_t) (c - L'A' + L'a');
+            }
+            is_batch = (ext == L".cmd" || ext == L".bat");
+        }
     }
 
-    STARTUPINFOA si = {};
-    si.cb = sizeof(STARTUPINFOA);
+    std::wstring app;
+    std::wstring cmdline;
+    if (is_batch) {
+        wchar_t comspec[MAX_PATH];
+        DWORD n = GetEnvironmentVariableW(L"ComSpec", comspec, MAX_PATH);
+        app = (n > 0 && n < MAX_PATH) ? std::wstring(comspec, n) : std::wstring(L"cmd.exe");
+        cmdline  = quote_windows_arg(app);
+        cmdline += L" /c ";
+        cmdline += quote_windows_arg(wcommand);
+    } else {
+        app     = wcommand;
+        cmdline = quote_windows_arg(wcommand);
+    }
+    for (const auto & a : args) {
+        cmdline.push_back(L' ');
+        cmdline += quote_windows_arg(utf8_to_wide(a));
+    }
+
+    STARTUPINFOW si = {};
+    si.cb = sizeof(STARTUPINFOW);
     si.dwFlags = STARTF_USESTDHANDLES;
     si.hStdInput = hStdinRead;
     si.hStdOutput = hStdoutWrite;
@@ -277,50 +399,64 @@ static bool spawn_process_stdio(
 
     PROCESS_INFORMATION pi = {};
 
-    std::string env_block;
+    std::wstring env_block;
     if (!env.empty()) {
         // merge with parent env
         env_block.reserve(4096);
         // Get parent environment block
-        LPCH parent_env = GetEnvironmentStringsA();
+        LPWCH parent_env = GetEnvironmentStringsW();
         if (parent_env) {
-            for (char *p = parent_env; *p; p += strlen(p) + 1) {
-                std::string s = p;
-                size_t eq = s.find('=');
-                if (eq != std::string::npos && eq > 0) {
-                    std::string key = s.substr(0, eq);
+            for (wchar_t *p = parent_env; *p; p += wcslen(p) + 1) {
+                std::wstring s = p;
+                size_t eq = s.find(L'=');
+                if (eq != std::wstring::npos && eq > 0) {
+                    std::string key;
+                    {
+                        std::wstring wkey = s.substr(0, eq);
+                        int n = WideCharToMultiByte(CP_UTF8, 0, wkey.data(), (int) wkey.size(), NULL, 0, NULL, NULL);
+                        if (n > 0) {
+                            key.resize((size_t) n);
+                            WideCharToMultiByte(CP_UTF8, 0, wkey.data(), (int) wkey.size(), &key[0], n, NULL, NULL);
+                        }
+                    }
                     if (env.find(key) == env.end()) {
                         env_block.append(s);
-                        env_block.push_back('\0');
+                        env_block.push_back(L'\0');
                     }
                 }
             }
-            FreeEnvironmentStringsA(parent_env);
+            FreeEnvironmentStringsW(parent_env);
         }
         for (const auto & e : env) {
-            env_block.append(e.first);
-            env_block.push_back('=');
-            env_block.append(e.second);
-            env_block.push_back('\0');
+            env_block.append(utf8_to_wide(e.first));
+            env_block.push_back(L'=');
+            env_block.append(utf8_to_wide(e.second));
+            env_block.push_back(L'\0');
         }
-        env_block.push_back('\0');
+        env_block.push_back(L'\0');
     }
 
-    BOOL ok = CreateProcessA(
-        NULL,
+    BOOL ok = CreateProcessW(
+        app.empty() ? NULL : app.c_str(),
         &cmdline[0],
         NULL, NULL, TRUE,
-        CREATE_NO_WINDOW,
-        env_block.empty() ? NULL : env_block.data(),
-        cwd.empty() ? NULL : cwd.c_str(),
+        CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
+        env_block.empty() ? NULL : (LPVOID) env_block.data(),
+        wcwd.empty() ? NULL : wcwd.c_str(),
         &si, &pi
     );
+    const DWORD spawn_err = ok ? 0 : GetLastError();
 
     CloseHandle(hStdinRead);
     CloseHandle(hStdoutWrite);
     if (!ok) {
         CloseHandle(hStdoutRead);
         CloseHandle(hStdinWrite);
+        // distinguish "not found" from "bad image", "access denied", bad cwd, ...
+        out_err = "CreateProcess failed with error " + std::to_string((unsigned long) spawn_err);
+        if (spawn_err == ERROR_FILE_NOT_FOUND || spawn_err == ERROR_PATH_NOT_FOUND) {
+            out_err += " (command not found in PATH/PATHEXT)";
+        }
         return false;
     }
 
@@ -334,6 +470,7 @@ static bool spawn_process_stdio(
     int stdout_pipe[2] = {-1, -1};
 
     if (pipe(stdin_pipe) != 0 || pipe(stdout_pipe) != 0) {
+        out_err = std::string("pipe() failed: ") + strerror(errno);
         if (stdin_pipe[0] >= 0) { close(stdin_pipe[0]); close(stdin_pipe[1]); }
         if (stdout_pipe[0] >= 0) { close(stdout_pipe[0]); close(stdout_pipe[1]); }
         return false;
@@ -353,6 +490,7 @@ static bool spawn_process_stdio(
         } while (ret < 0 && errno == EINTR);
 
         if (ret < 0) {
+            out_err = std::string("fcntl(FD_CLOEXEC) failed: ") + strerror(errno);
             close(stdin_pipe[0]); close(stdin_pipe[1]);
             close(stdout_pipe[0]); close(stdout_pipe[1]);
             return false;
@@ -365,10 +503,24 @@ static bool spawn_process_stdio(
         close(stdin_pipe[1]);
         close(stdout_pipe[0]);
 
-        dup2(stdin_pipe[0], STDIN_FILENO);
-        dup2(stdout_pipe[1], STDOUT_FILENO);
-        close(stdin_pipe[0]);
-        close(stdout_pipe[1]);
+        // If llama-server was started with fd 0 or 1 closed, pipe() can hand back
+        // the very fd we are about to dup2() onto. dup2(fd, fd) is a no-op that
+        // does NOT clear FD_CLOEXEC, and the close() that follows would then
+        // destroy the descriptor we just installed. Install each end explicitly.
+        auto install_fd = [](int fd, int target) {
+            if (fd != target) {
+                dup2(fd, target);
+                close(fd);
+                return;
+            }
+            // fd is already the target: keep it, but it must survive execvp()
+            int fl = fcntl(fd, F_GETFD);
+            if (fl >= 0) {
+                fcntl(fd, F_SETFD, fl & ~FD_CLOEXEC);
+            }
+        };
+        install_fd(stdin_pipe[0], STDIN_FILENO);
+        install_fd(stdout_pipe[1], STDOUT_FILENO);
 
         if (!cwd.empty() && chdir(cwd.c_str()) != 0) {
             _exit(127);
@@ -428,6 +580,7 @@ static bool spawn_process_stdio(
     }
 
     if (pid < 0) {
+        out_err = std::string("fork() failed: ") + strerror(errno);
         close(stdin_pipe[0]); close(stdin_pipe[1]);
         close(stdout_pipe[0]); close(stdout_pipe[1]);
         return false;
@@ -440,9 +593,16 @@ static bool spawn_process_stdio(
     // Check if child exited immediately (e.g., command not found)
     {
         int status = 0;
-        pid_t ret = waitpid(pid, &status, WNOHANG | WUNTRACED);
+        // plain WNOHANG: WUNTRACED would also report a merely *stopped* child,
+        // and status is never decoded here, so a stop would be misread as an exit
+        pid_t ret = waitpid(pid, &status, WNOHANG);
         if (ret == pid) {
-            // Child exited immediately
+            // Child exited immediately - most often execvp() failing with _exit(127)
+            if (WIFEXITED(status) && WEXITSTATUS(status) == 127) {
+                out_err = "command not found or not executable";
+            } else {
+                out_err = "process exited immediately";
+            }
             close(stdin_pipe[1]);
             close(stdout_pipe[0]);
             out_proc->pid = -1;
@@ -482,8 +642,12 @@ bool server_mcp_instance::spawn(const server_mcp_server_config & config) {
         terminate();
     }
     error.clear();
-    if (!spawn_process_stdio(config.command, config.args, config.env, config.cwd, proc)) {
+    std::string spawn_err;
+    if (!spawn_process_stdio(config.command, config.args, config.env, config.cwd, proc, spawn_err)) {
         error = "failed to spawn MCP server: " + config.command;
+        if (!spawn_err.empty()) {
+            error += " (" + spawn_err + ")";
+        }
         return false;
     }
     timeout_ms = config.timeout_ms;
@@ -584,41 +748,81 @@ bool server_mcp_instance::read_message(json & out) {
 bool server_mcp_instance::write_message(const json & msg) {
     if (!proc) return false;
     std::string data = msg.dump() + "\n";
-#if defined(_WIN32)
-    DWORD total_written = 0;
-    while (total_written < data.size()) {
-        DWORD written = 0;
-        BOOL ok = WriteFile(proc->hStdinWrite, data.data() + total_written, (DWORD)(data.size() - total_written), &written, NULL);
-        if (!ok || written == 0) {
-            return false;
-        }
-        total_written += written;
-    }
-    return true;
-#else
     size_t total = 0;
+
+    // Bound the write by the same budget the caller gives a request: a child that
+    // stops draining its stdin must never park this thread - it holds the instance
+    // mutex, so a permanent block here would also wedge terminate() and shutdown.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+
+#if defined(_WIN32)
+    // A blocking WriteFile on a full pipe waits for the child with no way to
+    // cancel it, so switch the handle to non-blocking and poll it instead.
+    DWORD nowait = PIPE_NOWAIT;
+    SetNamedPipeHandleState(proc->hStdinWrite, &nowait, NULL, NULL);
+
+    while (total < data.size()) {
+        DWORD written = 0;
+        BOOL ok = WriteFile(proc->hStdinWrite, data.data() + total, (DWORD) (data.size() - total), &written, NULL);
+        if (ok && written > 0) {
+            total += written;
+            continue;
+        }
+        if (!ok) {
+            DWORD err = GetLastError();
+            // ERROR_NO_DATA is what a PIPE_NOWAIT handle reports for "pipe full"
+            if (err != ERROR_NO_DATA && err != ERROR_PIPE_BUSY) {
+                break;
+            }
+        }
+        if (std::chrono::steady_clock::now() >= deadline) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+#else
     while (total < data.size()) {
         ssize_t n = write(proc->stdin_fd, data.data() + total, data.size() - total);
-        if (n < 0) {
-            if (errno == EINTR) continue;
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                // Retry a few times with small delays instead of hard failure
-                for (int retry = 0; retry < 10; ++retry) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                    n = write(proc->stdin_fd, data.data() + total, data.size() - total);
-                    if (n >= 0) { total += n; break; }
-                    if (errno != EAGAIN && errno != EWOULDBLOCK) return false;
-                }
-                if (n < 0) return false;
-                continue;
-            }
-            return false;
+        if (n > 0) {
+            total += (size_t) n;
+            continue;
         }
-        if (n == 0) return false;
-        total += n;
+        if (n == 0) break;
+        if (errno == EINTR) continue;
+        if (errno != EAGAIN && errno != EWOULDBLOCK) break;
+
+        // Pipe is full. Wait for room against the deadline rather than a fixed
+        // 10x1ms budget, which is far too tight for a legitimately large frame.
+        auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) break;
+        auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+        int slice_ms = remaining.count() > 50 ? 50 : (int) remaining.count();
+
+        struct pollfd pfd;
+        pfd.fd      = proc->stdin_fd;
+        pfd.events  = POLLOUT;
+        pfd.revents = 0;
+        int pr = poll(&pfd, 1, slice_ms);
+        if (pr < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) break;
     }
-    return true;
 #endif
+
+    if (total == data.size()) {
+        return true;
+    }
+
+    // A partial write leaves a truncated JSON line in the child's stdin: its next
+    // readline() would splice the fragment onto the following request, so every
+    // later exchange on this instance is desynced. The stream is unrecoverable -
+    // drop the process and let the manager respawn it on the next call.
+    if (total > 0) {
+        SRV_WRN("MCP server '%s': partial write (%zu/%zu bytes), dropping desynced process\n",
+                server_name.c_str(), total, data.size());
+        terminate();
+    }
+    return false;
 }
 
 json server_mcp_instance::send_rpc(const json & request, int timeout_ms) {
@@ -652,73 +856,56 @@ json server_mcp_instance::send_rpc(const json & request, int timeout_ms) {
             return {{"error", {{"code", -32603}, {"message", "instance is terminating"}}}};
         }
 
-        // Check if process is still alive
-        if (!proc->is_alive()) {
-            return {{"error", {{"code", -32603}, {"message", "process died"}}}};
-        }
-
-        // Check deadline before blocking
+        // Evaluated once per iteration, and honoured on every path below: a child
+        // that streams an endless run of non-matching messages keeps read_message()
+        // returning true, so the "keep waiting" paths must not skip this check.
         auto now = std::chrono::steady_clock::now();
-        if (now >= deadline) {
-            return {{"error", {{"code", -32603}, {"message", "request timed out"}}}};
-        }
+        const bool expired = now >= deadline;
 
-        // Drain any complete lines already buffered before blocking on poll/peek
+        // Drain buffered/pending lines BEFORE the liveness check. read_message()
+        // also pulls whatever is still sitting in the pipe, so a child that answered
+        // and then exited still gets its response delivered, instead of having it
+        // discarded as "process died".
         if (read_message(resp)) {
             if (!proc) {
                 return {{"error", {{"code", -32603}, {"message", "process not running"}}}};
             }
             if (request_has_id && !resp.contains("id")) {
                 // Notification or malformed response - keep waiting for actual response
+                if (expired) {
+                    return {{"error", {{"code", -32603}, {"message", "request timed out"}}}};
+                }
                 continue;
             }
             if (request_has_id && resp.contains("id") && resp["id"] != request_id) {
                 // Out-of-order response - keep waiting
+                if (expired) {
+                    return {{"error", {{"code", -32603}, {"message", "request timed out"}}}};
+                }
                 continue;
             }
             return resp;
         }
 
-        // Try to read with a small timeout
+        if (expired) {
+            return {{"error", {{"code", -32603}, {"message", "request timed out"}}}};
+        }
+
+        // Check if process is still alive
+        if (!proc->is_alive()) {
+            return {{"error", {{"code", -32603}, {"message", "process died"}}}};
+        }
+
+        // Wait for the child to produce something; the drain at the top of the loop
+        // is what actually parses it, so there is no response handling down here.
 #if defined(_WIN32)
-        // On Windows, check for data availability without waiting for process exit
         DWORD available = 0;
         if (PeekNamedPipe(proc->hStdoutRead, NULL, 0, NULL, &available, NULL) && available > 0) {
-            if (read_message(resp)) {
-                if (!proc) {
-                    return {{"error", {{"code", -32603}, {"message", "process not running"}}}};
-                }
-                if (request_has_id && !resp.contains("id")) {
-                    // Notification or malformed response - keep waiting for actual response
-                    continue;
-                }
-                if (request_has_id && resp.contains("id") && resp["id"] != request_id) {
-                    // Out-of-order response - keep waiting
-                    continue;
-                }
-                return resp;
-            }
-        } else {
-            // Avoid busy-looping when the pipe is idle
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
         }
-        // Check if process exited
+        // Avoid busy-looping when the pipe is idle
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
         if (WaitForSingleObject(proc->hProcess, 0) == WAIT_OBJECT_0) {
-            // Process exited, try one more read
-            if (read_message(resp)) {
-                if (!proc) {
-                    return {{"error", {{"code", -32603}, {"message", "process not running"}}}};
-                }
-                if (request_has_id && !resp.contains("id")) {
-                    // Notification or malformed response - keep waiting
-                    continue;
-                }
-                if (request_has_id && resp.contains("id") && resp["id"] != request_id) {
-                    // Out-of-order response - keep waiting
-                    continue;
-                }
-                return resp;
-            }
             return {{"error", {{"code", -32603}, {"message", "process exited"}}}};
         }
 #else
@@ -733,26 +920,24 @@ json server_mcp_instance::send_rpc(const json & request, int timeout_ms) {
         pfd.events = POLLIN;
         pfd.revents = 0;
         int sel = poll(&pfd, 1, slice_ms);
-        if (sel > 0 && (pfd.revents & (POLLIN | POLLHUP | POLLERR))) {
-            if (read_message(resp)) {
-                if (!proc) {
-                    return {{"error", {{"code", -32603}, {"message", "process not running"}}}};
-                }
-                if (request_has_id && !resp.contains("id")) {
-                    // Notification or malformed response - keep waiting for actual response
-                    continue;
-                }
-                if (request_has_id && resp.contains("id") && resp["id"] != request_id) {
-                    // Out-of-order response - keep waiting
-                    continue;
-                }
-                return resp;
+        if (sel > 0) {
+            if (pfd.revents & POLLIN) {
+                // readable: let the drain at the top of the loop consume it
+                continue;
             }
-            // Data was available but read_message failed; check if child died
-            int status = 0;
-            pid_t wp = waitpid(proc->pid, &status, WNOHANG);
-            if (wp == proc->pid || (wp == -1 && errno == ECHILD)) {
-                return {{"error", {{"code", -32603}, {"message", "process exited"}}}};
+            if (pfd.revents & (POLLHUP | POLLERR | POLLNVAL)) {
+                // EOF or error with nothing left to read. poll() reports these
+                // immediately and forever, so looping here would burn a core until
+                // the deadline. If the child is gone say so; if it is still running
+                // with its stdout closed, no response can ever arrive - fail fast.
+                const pid_t child = proc->pid;
+                int status = 0;
+                pid_t wp = waitpid(child, &status, WNOHANG);
+                if (wp == child || (wp == -1 && errno == ECHILD)) {
+                    proc->pid = -1; // reaped: never signal this pid again
+                    return {{"error", {{"code", -32603}, {"message", "process exited"}}}};
+                }
+                return {{"error", {{"code", -32603}, {"message", "child closed stdout"}}}};
             }
         } else if (sel < 0) {
             if (errno == EINTR) {
@@ -849,7 +1034,13 @@ json server_mcp_instance::call_tool(const std::string & tool_name, const json & 
     if (!initialized) {
         list_tools(); // ensure initialized
         if (!initialized) {
-            return {{"error", {{"code", -32603}, {"message", "initialization failed: " + error}}}};
+            // The child is alive but unusable: nothing else tears such an instance
+            // down, so without this every later call re-pays the full handshake
+            // timeout while holding this instance's mutex. Drop it and let
+            // get_or_create() respawn on the next call.
+            const std::string init_err = error; // terminate() clears error
+            terminate();
+            return {{"error", {{"code", -32603}, {"message", "initialization failed: " + init_err}}}};
         }
     }
 
@@ -920,57 +1111,79 @@ std::shared_ptr<server_mcp_instance> server_mcp_manager::get_or_create(const std
         return nullptr;
     }
 
-    std::lock_guard<std::mutex> lock(mutex);
+    std::shared_ptr<server_mcp_instance> existing;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
 
-    // Prune expired cooldowns
-    auto now = std::chrono::steady_clock::now();
-    for (auto it = dead_servers.begin(); it != dead_servers.end(); ) {
-        if (now >= it->second) {
-            it = dead_servers.erase(it);
-        } else {
-            ++it;
-        }
-    }
-
-    // Check cooldown first
-    auto dead_it = dead_servers.find(server_name);
-    if (dead_it != dead_servers.end() && now < dead_it->second) {
-        return nullptr;
-    }
-
-    // Find existing global instance for this server
-    auto it = global_instances.find(server_name);
-    if (it != global_instances.end()) {
-        auto & inst = it->second;
-        if (!inst->is_alive()) {
-            // respawn if dead - move the old instance out so its destruction
-            // (which may block ~500ms in terminate_process) does not hold the manager lock
-            auto old_inst = std::move(it->second);
-            global_instances.erase(it);
-
-            auto cfg_it = std::find_if(configs.begin(), configs.end(),
-                [&](const server_mcp_server_config & c) { return c.name == server_name; });
-            if (cfg_it != configs.end()) {
-                if (!old_inst->spawn(*cfg_it)) {
-                    // failed to respawn, create a new one
-                    dead_servers[server_name] = now + std::chrono::seconds(5);
-                    return do_spawn(server_name);
-                }
-                if (!old_inst->is_alive()) {
-                    // Spawned but process died immediately (e.g. bad binary)
-                    dead_servers[server_name] = now + std::chrono::seconds(5);
-                    return do_spawn(server_name);
-                }
-                // Do NOT call list_tools() under manager lock; let call_tool() lazy-init
-                global_instances[server_name] = std::move(old_inst);
-                return global_instances[server_name];
+        // Prune expired cooldowns
+        auto now = std::chrono::steady_clock::now();
+        for (auto it = dead_servers.begin(); it != dead_servers.end(); ) {
+            if (now >= it->second) {
+                it = dead_servers.erase(it);
+            } else {
+                ++it;
             }
-            // config not found, old_inst destroyed outside lock
-        } else {
-            return inst;
         }
+
+        // Check cooldown first
+        auto dead_it = dead_servers.find(server_name);
+        if (dead_it != dead_servers.end() && now < dead_it->second) {
+            return nullptr;
+        }
+
+        // Find existing global instance for this server
+        auto it = global_instances.find(server_name);
+        if (it == global_instances.end()) {
+            return do_spawn(server_name);
+        }
+        existing = it->second;
     }
 
+    // Probe liveness WITHOUT the manager lock: is_alive() takes the per-instance
+    // mutex, which an in-flight send_rpc() holds for up to timeout_ms. Holding the
+    // manager lock across that would serialize every MCP server - and every /tools
+    // request - behind one slow tool call.
+    if (existing->is_alive()) {
+        return existing;
+    }
+
+    // Dead: re-acquire and re-check before mutating the map, since another thread
+    // may have replaced this instance while the lock was released.
+    std::lock_guard<std::mutex> lock(mutex);
+    auto now = std::chrono::steady_clock::now();
+
+    auto it = global_instances.find(server_name);
+    if (it == global_instances.end()) {
+        return do_spawn(server_name);
+    }
+    if (it->second != existing) {
+        // someone else already respawned it
+        return it->second;
+    }
+
+    // respawn - move the old instance out so its destruction
+    // (which may block ~500ms in terminate_process) does not hold the manager lock
+    auto old_inst = std::move(it->second);
+    global_instances.erase(it);
+
+    auto cfg_it = std::find_if(configs.begin(), configs.end(),
+        [&](const server_mcp_server_config & c) { return c.name == server_name; });
+    if (cfg_it != configs.end()) {
+        if (!old_inst->spawn(*cfg_it)) {
+            // failed to respawn, create a new one
+            dead_servers[server_name] = now + std::chrono::seconds(5);
+            return do_spawn(server_name);
+        }
+        if (!old_inst->is_alive()) {
+            // Spawned but process died immediately (e.g. bad binary)
+            dead_servers[server_name] = now + std::chrono::seconds(5);
+            return do_spawn(server_name);
+        }
+        // Do NOT call list_tools() under manager lock; let call_tool() lazy-init
+        global_instances[server_name] = std::move(old_inst);
+        return global_instances[server_name];
+    }
+    // config not found, old_inst destroyed outside lock
     return do_spawn(server_name);
 }
 

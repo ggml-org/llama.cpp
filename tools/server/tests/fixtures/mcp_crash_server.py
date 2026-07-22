@@ -93,6 +93,10 @@ def main():
         req_id = request.get("id")
         params = request.get("params", {})
 
+        # JSON-RPC 2.0: a message without an id is a notification and must not receive a response
+        if req_id is None:
+            continue
+
         handler = HANDLERS.get(method)
         if handler:
             response = handler(params, req_id)
