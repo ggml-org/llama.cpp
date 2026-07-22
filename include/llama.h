@@ -1616,6 +1616,18 @@ extern "C" {
             ggml_opt_epoch_callback   callback_eval,
             bool                      shuffle);
 
+    // Train on [idata_start, idata_split), then evaluate on [idata_split, ndata).
+    LLAMA_API void llama_opt_epoch_range(
+            struct llama_context    * lctx,
+            ggml_opt_dataset_t        dataset,
+            ggml_opt_result_t         result_train,
+            ggml_opt_result_t         result_eval,
+            int64_t                   idata_start,
+            int64_t                   idata_split,
+            ggml_opt_epoch_callback   callback_train,
+            ggml_opt_epoch_callback   callback_eval,
+            bool                      shuffle);
+
 #ifdef __cplusplus
 }
 #endif

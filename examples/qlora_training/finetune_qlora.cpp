@@ -727,12 +727,142 @@ static std::string basename_from_path(const std::string & p) {
     return p.substr(pos + 1);
 }
 
+struct checkpoint_state {
+    std::string mode;
+    int64_t     epoch           = 0;
+    int64_t     window          = 0;
+    int64_t     step            = 0;
+    int64_t     dataset_windows = -1;
+    int64_t     context_length  = -1;
+    bool        shuffle         = false;
+    bool        has_metadata    = false;
+    float       alpha           = 0.0f;
+    bool        has_alpha       = false;
+};
+
+static bool parse_checkpoint_number(
+        const std::string & path,
+        size_t              begin,
+        size_t              end,
+        int64_t           & value) {
+    if (begin >= end) return false;
+
+    const std::string number = path.substr(begin, end - begin);
+    char * number_end = nullptr;
+    errno = 0;
+    const long long parsed = strtoll(number.c_str(), &number_end, 10);
+    if (errno != 0 || number_end != number.c_str() + number.size() || parsed < 0) return false;
+
+    value = (int64_t) parsed;
+    return true;
+}
+
+static bool checkpoint_state_from_filename(
+        const std::string & path,
+        const std::string & mode,
+        checkpoint_state  & state) {
+    const size_t suffix = path.rfind(".gguf");
+    if (suffix == std::string::npos || suffix + 5 != path.size()) return false;
+
+    if (mode == "sft") {
+        const size_t epoch_tag = path.rfind(".epoch", suffix);
+        const size_t ckpt_tag  = path.rfind(".ckpt",  suffix);
+        if (epoch_tag == std::string::npos || ckpt_tag == std::string::npos || epoch_tag >= ckpt_tag) return false;
+        if (!parse_checkpoint_number(path, epoch_tag + 6, ckpt_tag, state.epoch)) return false;
+        if (!parse_checkpoint_number(path, ckpt_tag + 5, suffix, state.window)) return false;
+    } else {
+        const size_t ckpt_tag = path.rfind(".ckpt", suffix);
+        if (ckpt_tag == std::string::npos) return false;
+        if (!parse_checkpoint_number(path, ckpt_tag + 5, suffix, state.step)) return false;
+    }
+
+    state.mode = mode;
+    return true;
+}
+
+static bool gguf_get_i64(const gguf_context * gctx, const char * key, int64_t & value) {
+    const int64_t key_id = gguf_find_key(gctx, key);
+    if (key_id < 0) return false;
+
+    switch (gguf_get_kv_type(gctx, key_id)) {
+        case GGUF_TYPE_UINT32: value = gguf_get_val_u32(gctx, key_id); return true;
+        case GGUF_TYPE_INT32:  value = gguf_get_val_i32(gctx, key_id); return true;
+        case GGUF_TYPE_UINT64: {
+            const uint64_t val = gguf_get_val_u64(gctx, key_id);
+            if (val > INT64_MAX) return false;
+            value = (int64_t) val;
+            return true;
+        }
+        case GGUF_TYPE_INT64: value = gguf_get_val_i64(gctx, key_id); return true;
+        default: return false;
+    }
+}
+
+static bool load_checkpoint_state(
+        const std::string & path,
+        const std::string & expected_mode,
+        checkpoint_state  & state) {
+    ggml_context * ctx_meta = nullptr;
+    const gguf_init_params params = { true, &ctx_meta };
+    gguf_context * gctx = gguf_init_from_file(expand_tilde(path).c_str(), params);
+    if (!gctx) {
+        LOG_ERR("%s: cannot open checkpoint %s\n", __func__, path.c_str());
+        return false;
+    }
+
+    const int64_t mode_id = gguf_find_key(gctx, "training.checkpoint.mode");
+    if (mode_id >= 0 && gguf_get_kv_type(gctx, mode_id) == GGUF_TYPE_STRING) {
+        state.mode = gguf_get_val_str(gctx, mode_id);
+        state.has_metadata = true;
+        gguf_get_i64(gctx, "training.checkpoint.epoch", state.epoch);
+        gguf_get_i64(gctx, "training.checkpoint.window", state.window);
+        gguf_get_i64(gctx, "training.checkpoint.step", state.step);
+        gguf_get_i64(gctx, "training.dataset.windows", state.dataset_windows);
+        gguf_get_i64(gctx, "training.context_length", state.context_length);
+
+        const int64_t shuffle_id = gguf_find_key(gctx, "training.dataset.shuffle");
+        if (shuffle_id >= 0 && gguf_get_kv_type(gctx, shuffle_id) == GGUF_TYPE_BOOL) {
+            state.shuffle = gguf_get_val_bool(gctx, shuffle_id);
+        }
+    }
+
+    const int64_t alpha_id = gguf_find_key(gctx, "adapter.lora.alpha");
+    if (alpha_id >= 0 && gguf_get_kv_type(gctx, alpha_id) == GGUF_TYPE_FLOAT32) {
+        state.alpha = gguf_get_val_f32(gctx, alpha_id);
+        state.has_alpha = true;
+    }
+
+    gguf_free(gctx);
+    ggml_free(ctx_meta);
+
+    if (!state.has_metadata && !checkpoint_state_from_filename(path, expected_mode, state)) {
+        LOG_ERR("%s: %s has no checkpoint metadata and its filename does not contain a checkpoint position\n",
+                __func__, path.c_str());
+        return false;
+    }
+    if (state.mode != expected_mode) {
+        LOG_ERR("%s: checkpoint mode is %s, expected %s\n",
+                __func__, state.mode.c_str(), expected_mode.c_str());
+        return false;
+    }
+    if (state.mode == "sft" && state.epoch <= 0) {
+        LOG_ERR("%s: invalid checkpoint epoch %ld\n", __func__, (long) state.epoch);
+        return false;
+    }
+    if (state.window < 0 || state.step < 0) {
+        LOG_ERR("%s: checkpoint contains a negative training position\n", __func__);
+        return false;
+    }
+    return true;
+}
+
 static void save_adapter(
         const lora_tensors & lt,
         const std::string  & out_path,
         const std::string  & arch,
         float                alpha,
-        const std::string  & base_model_path) {
+        const std::string  & base_model_path,
+        const checkpoint_state * checkpoint = nullptr) {
 
     // Build output GGUF context
     struct gguf_context * gctx = gguf_init_empty();
@@ -743,6 +873,17 @@ static void save_adapter(
     gguf_set_val_str(gctx, "adapter.type",          "lora");
     gguf_set_val_f32(gctx, "adapter.lora.alpha",    alpha);
     gguf_set_val_str(gctx, "adapter.base_model",    basename_from_path(base_model_path).c_str());
+
+    if (checkpoint) {
+        gguf_set_val_u32(gctx, "training.checkpoint.version", 1);
+        gguf_set_val_str(gctx, "training.checkpoint.mode", checkpoint->mode.c_str());
+        gguf_set_val_i64(gctx, "training.checkpoint.epoch", checkpoint->epoch);
+        gguf_set_val_i64(gctx, "training.checkpoint.window", checkpoint->window);
+        gguf_set_val_i64(gctx, "training.checkpoint.step", checkpoint->step);
+        gguf_set_val_i64(gctx, "training.dataset.windows", checkpoint->dataset_windows);
+        gguf_set_val_i64(gctx, "training.context_length", checkpoint->context_length);
+        gguf_set_val_bool(gctx, "training.dataset.shuffle", checkpoint->shuffle);
+    }
 
     // Register tensors
     for (const auto & kv : lt.ab) {
@@ -842,7 +983,10 @@ struct save_ctx {
     int32_t              save_every;     // 0 = disabled
     int32_t              ubatch_per_ctx;
     int64_t              last_saved;     // last window index at which we saved
-    int32_t              epoch;
+    int64_t              epoch;
+    int64_t              dataset_windows;
+    int64_t              context_length;
+    bool                 shuffle;
 };
 
 // TLS pointer set before each epoch so the static callback can access it.
@@ -876,7 +1020,15 @@ static void save_every_callback(
         const std::string ckpt = *g_save_ctx->lora_out
             + ".epoch" + std::to_string(g_save_ctx->epoch)
             + ".ckpt" + std::to_string(window) + ".gguf";
-        save_adapter(*g_save_ctx->lt, ckpt, *g_save_ctx->arch, g_save_ctx->lora_alpha, *g_save_ctx->base_model_path);
+        checkpoint_state state;
+        state.mode            = "sft";
+        state.epoch           = g_save_ctx->epoch;
+        state.window          = window;
+        state.dataset_windows = g_save_ctx->dataset_windows;
+        state.context_length  = g_save_ctx->context_length;
+        state.shuffle         = g_save_ctx->shuffle;
+        save_adapter(*g_save_ctx->lt, ckpt, *g_save_ctx->arch, g_save_ctx->lora_alpha,
+                     *g_save_ctx->base_model_path, &state);
         fprintf(stderr, "\n");
         LOG_INF("save_every_callback: checkpoint saved -> %s (window %ld)\n", ckpt.c_str(), (long)window);
     }
@@ -1028,14 +1180,21 @@ static int run_grpo_mode(
         llama_context    * ctx,
         lora_tensors     & lt,
         const std::string & arch,
-    float              lora_alpha,
-    const std::string & base_model_path) {
+        float               lora_alpha,
+        const std::string & base_model_path,
+        const checkpoint_state * resume) {
 
     const int32_t n_ctx    = llama_n_ctx(ctx);
     const int32_t n_gen    = params.grpo_n_gen;
     const int32_t n_steps  = params.grpo_n_steps;
     const float   temp     = params.grpo_temperature;
     const int32_t max_tok  = params.grpo_max_tokens;
+
+    if (resume && resume->context_length >= 0 && resume->context_length != n_ctx) {
+        LOG_ERR("%s: checkpoint context length is %ld, current context length is %d\n",
+                __func__, (long) resume->context_length, n_ctx);
+        return 1;
+    }
 
     std::mt19937 rng(params.sampling.seed != LLAMA_DEFAULT_SEED
                      ? params.sampling.seed : 42);
@@ -1061,7 +1220,12 @@ static int run_grpo_mode(
     ipc_emit("[QLORA:READY]");
 
     float last_loss = 0.0f;
-    int   step      = 0;
+    int   step      = resume ? (int) resume->step : 0;
+
+    if (resume) {
+        LOG_INF("%s: resuming GRPO after step %d/%d; optimizer state starts fresh\n",
+                __func__, step, n_steps);
+    }
 
     while (step < n_steps && !g_grpo_stop) {
 
@@ -1210,7 +1374,11 @@ static int run_grpo_mode(
         // ── Optional checkpoint ───────────────────────────────────────────
         if (params.save_every > 0 && step % params.save_every == 0) {
             std::string ckpt = params.lora_out + ".ckpt" + std::to_string(step) + ".gguf";
-            save_adapter(lt, ckpt, arch, lora_alpha, base_model_path);
+            checkpoint_state state;
+            state.mode           = "grpo";
+            state.step           = step;
+            state.context_length = n_ctx;
+            save_adapter(lt, ckpt, arch, lora_alpha, base_model_path, &state);
             char buf[512];
             snprintf(buf, sizeof(buf), "[QLORA:CHECKPOINT] %s", ckpt.c_str());
             ipc_emit(buf);
@@ -1245,6 +1413,25 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    checkpoint_state resume_state;
+    const bool resume_requested = !params.lora_resume.empty();
+    if (resume_requested) {
+        if (!params.lora_adapters.empty()) {
+            LOG_ERR("%s: --resume cannot be combined with --lora\n", __func__);
+            return 1;
+        }
+        const std::string mode = params.grpo_mode ? "grpo" : "sft";
+        if (!load_checkpoint_state(params.lora_resume, mode, resume_state)) return 1;
+        if (mode == "grpo" && resume_state.step > INT32_MAX) {
+            LOG_ERR("%s: checkpoint step is too large\n", __func__);
+            return 1;
+        }
+        common_adapter_lora_info adapter_info;
+        adapter_info.path  = params.lora_resume;
+        adapter_info.scale = 1.0f;
+        params.lora_adapters.push_back(adapter_info);
+    }
+
     // Force settings required for training
     params.use_mmap     = false;
     params.cache_type_k = GGML_TYPE_F32;
@@ -1255,8 +1442,15 @@ int main(int argc, char ** argv) {
     // Flash attention has no backward implementation; force standard attention for training.
     params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
 
-    const float lora_alpha = (params.lora_alpha > 0.0f)
+    float lora_alpha = (params.lora_alpha > 0.0f)
         ? params.lora_alpha : (float) params.lora_rank;
+    if (resume_requested && resume_state.has_alpha) {
+        if (params.lora_alpha > 0.0f && std::abs(params.lora_alpha - resume_state.alpha) > 1e-6f) {
+            LOG_WRN("%s: ignoring --lora-alpha %.3f; checkpoint alpha is %.3f\n",
+                    __func__, (double) params.lora_alpha, (double) resume_state.alpha);
+        }
+        lora_alpha = resume_state.alpha;
+    }
     const auto targets = split_csv(params.lora_targets);
 
     // --- Step 1: Discover tensor shapes from model GGUF (no model load yet) ---
@@ -1296,7 +1490,7 @@ int main(int argc, char ** argv) {
         adapter_info.scale = 1.0f;
         params.lora_adapters.push_back(adapter_info);
     } else {
-        LOG_INF("%s: resuming training from existing LoRA adapter: %s\n",
+        LOG_INF("%s: loading existing LoRA adapter: %s\n",
                 __func__, params.lora_adapters.back().path.c_str());
     }
 
@@ -1352,7 +1546,8 @@ int main(int argc, char ** argv) {
     // In GRPO mode the dataset comes from Python via stdin/stdout — skip file loading.
     auto tmpls = common_chat_templates_init(model, "");
     if (params.grpo_mode) {
-        int rc = run_grpo_mode(params, model, ctx, lt, arch, lora_alpha, params.model.path);
+        int rc = run_grpo_mode(params, model, ctx, lt, arch, lora_alpha, params.model.path,
+                               resume_requested ? &resume_state : nullptr);
         if (lt.buf) ggml_backend_buffer_free(lt.buf);
         if (lt.ctx) ggml_free(lt.ctx);
         llama_backend_free();
@@ -1404,13 +1599,56 @@ int main(int argc, char ** argv) {
                 __func__, (long) ndata);
     }
 
+    unsigned epoch_start = 0;
+    int64_t window_start = 0;
+    if (resume_requested) {
+        if ((uint64_t) resume_state.epoch > UINT32_MAX) {
+            LOG_ERR("%s: checkpoint epoch is too large\n", __func__);
+            return 1;
+        }
+        epoch_start  = (unsigned) resume_state.epoch - 1;
+        window_start = resume_state.window;
+
+        if (resume_state.context_length >= 0 && resume_state.context_length != n_ctx) {
+            LOG_ERR("%s: checkpoint context length is %ld, current context length is %d\n",
+                    __func__, (long) resume_state.context_length, n_ctx);
+            return 1;
+        }
+        if (resume_state.dataset_windows >= 0 && resume_state.dataset_windows != idata_split) {
+            LOG_ERR("%s: checkpoint has %ld training windows, current dataset has %ld\n",
+                    __func__, (long) resume_state.dataset_windows, (long) idata_split);
+            return 1;
+        }
+        if (window_start > idata_split) {
+            LOG_ERR("%s: checkpoint window %ld exceeds the %ld training windows in this dataset\n",
+                    __func__, (long) window_start, (long) idata_split);
+            return 1;
+        }
+        if (window_start > 0 && window_start < idata_split &&
+            (resume_state.shuffle || params.shuffle_dataset)) {
+            LOG_ERR("%s: cannot resume a shuffled dataset in the middle of an epoch because checkpoints do not store the permutation\n",
+                    __func__);
+            return 1;
+        }
+        if (window_start == idata_split) {
+            ++epoch_start;
+            window_start = 0;
+        }
+        LOG_INF("%s: resuming SFT at epoch %u/%u, window %ld/%ld; optimizer state starts fresh\n",
+                __func__, epoch_start + 1, params.lr.epochs,
+                (long) window_start, (long) idata_split);
+    }
+
     ggml_opt_result_t result_train = ggml_opt_result_init();
     ggml_opt_result_t result_eval  = ggml_opt_result_init();
 
     const int32_t n_ubatch       = llama_n_ubatch(ctx);
     const int32_t ubatch_per_ctx = (n_ubatch > 0) ? (n_ctx / n_ubatch) : 1;
 
-    save_ctx sctx { &lt, &params.lora_out, &arch, &params.model.path, lora_alpha, params.save_every, ubatch_per_ctx, 0, 0 };
+    save_ctx sctx {
+        &lt, &params.lora_out, &arch, &params.model.path, lora_alpha,
+        params.save_every, ubatch_per_ctx, 0, 0, idata_split, n_ctx, params.shuffle_dataset
+    };
     g_save_ctx = &sctx;
 
     const int64_t total_windows = ggml_opt_dataset_ndata(dataset);
@@ -1434,13 +1672,14 @@ int main(int argc, char ** argv) {
         ? save_every_callback
         : ggml_opt_epoch_callback_progress_bar;
 
-    for (params.lr.epoch = 0; params.lr.epoch < params.lr.epochs; ++params.lr.epoch) {
+    for (params.lr.epoch = epoch_start; params.lr.epoch < params.lr.epochs; ++params.lr.epoch) {
+        const int64_t idata_start = params.lr.epoch == epoch_start ? window_start : 0;
         sctx.last_saved = 0;  // reset per-epoch window counter
         sctx.epoch = params.lr.epoch + 1;
-        llama_opt_epoch(ctx, dataset, result_train, result_eval, idata_split,
-                        cb_train,
-                        ggml_opt_epoch_callback_progress_bar,
-                        params.shuffle_dataset);
+        llama_opt_epoch_range(ctx, dataset, result_train, result_eval, idata_start, idata_split,
+                              cb_train,
+                              ggml_opt_epoch_callback_progress_bar,
+                              params.shuffle_dataset && idata_start == 0);
         fprintf(stderr, "\n");
 
         // Per-epoch loss summary

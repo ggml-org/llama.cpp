@@ -4240,6 +4240,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) { params.lora_out = value; }
     ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
     add_opt(common_arg(
+        {"--resume"}, "FNAME",
+        "resume QLoRA training from a checkpoint GGUF created by --save-every",
+        [](common_params & params, const std::string & value) { params.lora_resume = value; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
         {"--train-file"}, "FNAME",
         "JSONL training dataset (fields: messages|prompt+response|text)",
         [](common_params & params, const std::string & value) { params.train_file = value; }

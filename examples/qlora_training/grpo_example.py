@@ -240,6 +240,8 @@ def run_grpo(args: argparse.Namespace):
 
     if args.lora:
         cmd += ["--lora", args.lora]
+    if args.resume:
+        cmd += ["--resume", args.resume]
 
     if args.save_every > 0:
         cmd += ["--save-every", str(args.save_every)]
@@ -376,7 +378,9 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--model",       required=True,          help="Base GGUF model path")
     p.add_argument("--lora-out",    required=True,          help="Output adapter GGUF path")
-    p.add_argument("--lora",        default=None,           help="Resume from existing adapter GGUF")
+    init = p.add_mutually_exclusive_group()
+    init.add_argument("--lora",   default=None, help="Initialize weights from an adapter GGUF")
+    init.add_argument("--resume", default=None, help="Resume from a --save-every checkpoint GGUF")
     p.add_argument("--binary",      default=str(default_bin), help="Path to llama-finetune-qlora binary")
     p.add_argument("--rank",        type=int,   default=16,   help="LoRA rank")
     p.add_argument("--n-steps",     type=int,   default=200,  help="Number of GRPO steps")

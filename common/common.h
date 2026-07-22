@@ -611,6 +611,7 @@ struct common_params {
     float       lora_alpha         = 0.0f;            // LoRA alpha (0 = use rank value)
     std::string lora_targets       = "attn_q,attn_output,ffn_gate,ffn_up,ffn_down"; // comma-separated substrings to match trainable tensors
     std::string lora_out           = "adapter.gguf";  // output adapter GGUF path
+    std::string lora_resume        = "";              // QLoRA checkpoint GGUF to resume
     std::string train_file         = "";              // JSONL training dataset path
     int32_t dataset_threads        = 0;               // dataset loading workers (0 = physical CPU cores)
     int32_t save_every             = 0;     // save checkpoint every N optimizer steps (0 = disabled)

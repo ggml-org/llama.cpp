@@ -78,16 +78,8 @@ static __global__ void opt_step_adamw_q8_0(
         }
     }
 
-    const unsigned mask = 0xffffffff;
-    float m_max = fabsf(m_new);
-    float v_max = fabsf(v_new);
-    for (int offset = QK8_0/2; offset > 0; offset /= 2) {
-        m_max = fmaxf(m_max, __shfl_down_sync(mask, m_max, offset));
-        v_max = fmaxf(v_max, __shfl_down_sync(mask, v_max, offset));
-    }
-
-    const float m_d = __shfl_sync(mask, m_max, 0)/127.0f;
-    const float v_d = __shfl_sync(mask, v_max, 0)/127.0f;
+    const float m_d = warp_reduce_max(fabsf(m_new))/127.0f;
+    const float v_d = warp_reduce_max(fabsf(v_new))/127.0f;
     g_m[ib].d = __float2half(m_d);
     g_v[ib].d = __float2half(v_d);
     const int m_q = m_d ? (int) roundf(m_new/m_d) : 0;
