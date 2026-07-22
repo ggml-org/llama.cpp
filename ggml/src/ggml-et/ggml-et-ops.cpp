@@ -749,7 +749,7 @@ bool ggml_et_op_mul_mat(ggml_backend_et_device_context * dev_ctx,
 
     } else if (node->type == GGML_TYPE_F32 && node->src[0]->type == GGML_TYPE_F32 &&
                node->src[1]->type == GGML_TYPE_F32 && node->ne[0] % 16 == 0 && node->src[0]->ne[0] % 16 == 0 &&
-               node->src[0]->ne[1] % 16 == 0 && node->src[1]->ne[0] != 1) {  // GEMV is faster with the generic path
+               node->src[0]->ne[1] % 16 == 0 && node->src[1]->ne[1] != 1) {  // GEMV (n=1) is faster with the generic path
 
         kernel_name    = "mul_mat_f32_matrix_engine";
         src0_type_name = "F32";
