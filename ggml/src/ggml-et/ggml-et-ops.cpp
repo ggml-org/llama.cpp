@@ -732,8 +732,18 @@ bool ggml_et_op_mul_mat(ggml_backend_et_device_context * dev_ctx,
         src0_type_name = "Q4_0";
 
     } else if (node->type == GGML_TYPE_F32 && node->src[0]->type == GGML_TYPE_Q8_0 &&
+               node->src[1]->type == GGML_TYPE_F32 &&
+               node->src[1]->ne[1] >= 47 &&      // N >= 47
+               node->src[0]->ne[1] % 16 == 0 &&  // M % TILE_M
+               node->src[0]->ne[0] % 32 == 0) {  // K % BLOCK_K (Q8_0 block)
+
+        // Handles both unfused and fused MUL_MAT+ADD (bias preloaded into TenC/VRF).
+        kernel_name    = "mul_mat_Q8_0_matrix_engine";
+        src0_type_name = "Q8_0";
+
+    } else if (node->type == GGML_TYPE_F32 && node->src[0]->type == GGML_TYPE_Q8_0 &&
                node->src[1]->type == GGML_TYPE_F32) {
-        kernel_name    = "mul_mat_Q8_0";
+        kernel_name    = "mul_mat_Q8_0";  // N < 47, or M % 16 != 0 or K % 32 != 0
         src0_type_name = "Q8_0";
 
     } else if (node->type == GGML_TYPE_F32 && node->src[0]->type == GGML_TYPE_F16 &&
