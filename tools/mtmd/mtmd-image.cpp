@@ -639,7 +639,7 @@ mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_ll
 
     if (!has_slices) {
         // skip slicing logic
-        const bool is_4x = (hparams.downsample_mode == 4);
+        const bool is_4x = is_minicpmv4_6 && hparams.n_merge == 2;
         res.overview_size = is_4x
             ? get_best_resize(original_size, slice_size, patch_size, true)
             : clip_image_size{slice_size, slice_size};
@@ -696,7 +696,7 @@ mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_ll
         const float ratio = (float)original_width * original_height / (slice_size * slice_size);
         const int multiple = fmin(ceil(ratio), max_slice_nums);
 
-        const bool is_4x = (hparams.downsample_mode == 4);
+        const bool is_4x = is_minicpmv4_6 && hparams.n_merge == 2;
         if (is_4x && multiple <= 1) {
             auto best_size_upscaled = get_best_resize(original_size, slice_size, patch_size, true);
             res.overview_size = best_size_upscaled;

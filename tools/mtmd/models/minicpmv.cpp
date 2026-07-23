@@ -114,7 +114,7 @@ ggml_cgraph * clip_graph_minicpmv::build() {
 }
 
 ggml_cgraph * clip_graph_minicpmv4_6::build() {
-    const bool is_4x = (hparams.downsample_mode == 4);
+    const bool is_4x = hparams.n_merge == 2;
     const int n_pos  = n_patches;
     const int half_h = n_patches_y / 2;
     const int half_w = n_patches_x / 2;

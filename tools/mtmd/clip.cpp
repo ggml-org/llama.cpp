@@ -209,13 +209,6 @@ struct clip_ctx {
         if (ctx_params.image_max_tokens > 0) {
             model.hparams.custom_image_max_tokens = ctx_params.image_max_tokens;
         }
-        if (ctx_params.downsample_mode > 0) {
-            model.hparams.downsample_mode = ctx_params.downsample_mode;
-        }
-
-        if (model.proj_type == PROJECTOR_TYPE_MINICPMV4_6) {
-            GGML_ASSERT(model.hparams.downsample_mode == 4 || model.hparams.downsample_mode == 16);
-        }
 
         backend_ptrs.push_back(backend_cpu);
         backend_buft.push_back(ggml_backend_get_default_buffer_type(backend_cpu));
@@ -1318,6 +1311,7 @@ struct clip_model_loader {
                         // ViT merger 2x2 + final merger 2x2 = 4x spatial merge per dimension
                         hparams.n_merge = 4;
                         get_u32(KEY_PROJ_SCALE_FACTOR, hparams.n_merge, false);
+                        GGML_ASSERT(hparams.n_merge == 2 || hparams.n_merge == 4);
 
                         // borrow wa_layer_indexes for vit_merger insertion point
                         std::vector<int> wa_layer_indexes_vec;
@@ -3309,9 +3303,7 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
             } break;
         case PROJECTOR_TYPE_MINICPMV4_6:
             {
-                // ViT merger 4x + final merger 4x = 16x total spatial downsample
-                // 4x mode: skip vit_merger, final merger 2x2 only
-                n_patches = (params.downsample_mode == 4) ? (n_patches / 4) : (n_patches / 16);
+                n_patches /= params.n_merge * params.n_merge;
             } break;
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
@@ -3672,7 +3664,7 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
             } break;
         case PROJECTOR_TYPE_MINICPMV4_6:
             {
-                const bool is_4x = (hparams.downsample_mode == 4);
+                const bool is_4x = hparams.n_merge == 2;
 
                 // SigLIP position buckets (same as resampler path)
                 std::vector<int32_t> positions(pos_h * pos_w);
