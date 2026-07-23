@@ -145,7 +145,6 @@ def parse_log(file_path, pmu_index=None):
                 except (ValueError, IndexError):
                     pmu_val = None
 
-            evt_raw = op_match.group('evt') if 'evt' in op_match.groupdict() else None
             evt_val = None
             evt_val = None
             if types.startswith("evt-cnt "):
@@ -393,7 +392,7 @@ def print_bubbles_timeline(op):
     logger.info("  Per-Thread Idle Analysis:")
     for t in active_threads:
         stats = thread_stats[t]
-        thread_name = f"Thread {t:<2} (HVX)" if t != 10 else f"Thread 10 (HMX)"
+        thread_name = f"Thread {t:<2} (HVX)" if t != 10 else "Thread 10 (HMX)"
         logger.info(f"    {thread_name} -> Compute Idle: {stats['compute_idle_pct']:.1f}% | DMA Idle: {stats['dma_idle_pct']:.1f}%")
 
     all_bubbles = []
