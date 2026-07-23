@@ -1419,25 +1419,32 @@ struct test_case {
             initialize_tensors(ctx_weights.get());
         }
 
-        // Optional exact generic-versus-top10 comparison on the same initialized
-        // tensors and backend. Disable GPU graphs for this focused test so the
-        // host-side helper selector is evaluated for both executions.
+        // Optional exact baseline-versus-experiment comparison on the same
+        // initialized tensors and backend. Disable GPU graphs for this focused
+        // test so the host-side selector is evaluated for both executions.
         bool exact_ab_ok = true;
-        if (current_op_name == "MUL_MAT_ID" && getenv("GGML_TEST_MMID_TOP10_AB") != nullptr) {
-            const char * original_selector_ptr = getenv("GGML_CUDA_MMID_TOP10");
+        const bool top10_ab = getenv("GGML_TEST_MMID_TOP10_AB") != nullptr;
+        const bool compact_ab = getenv("GGML_TEST_MMQ_COMPACT_AB") != nullptr;
+        if (current_op_name == "MUL_MAT_ID" && (top10_ab || compact_ab)) {
+            const char * selector_name = compact_ab ? "GGML_CUDA_MMQ_COMPACT_IDS" : "GGML_CUDA_MMID_TOP10";
+            const char * experiment_name = compact_ab ? "compact MMQ" : "top10";
+            if (getenv("GGML_CUDA_DISABLE_GRAPHS") == nullptr) {
+                printf("exact A/B requires GGML_CUDA_DISABLE_GRAPHS at process start ");
+                exact_ab_ok = false;
+            }
+            const char * original_selector_ptr = getenv(selector_name);
             const bool had_original_selector = original_selector_ptr != nullptr;
             const std::string original_selector = had_original_selector ? original_selector_ptr : "";
 
-            test_set_env("GGML_CUDA_DISABLE_GRAPHS", "1");
-            test_set_env("GGML_CUDA_MMID_TOP10", nullptr);
-            ggml_status status = ggml_backend_graph_compute(backend1, gf);
+            test_set_env(selector_name, nullptr);
+            ggml_status status = exact_ab_ok ? ggml_backend_graph_compute(backend1, gf) : GGML_STATUS_FAILED;
             ggml_backend_synchronize(backend1);
             std::vector<uint8_t> generic(ggml_nbytes(out));
             if (status == GGML_STATUS_SUCCESS) {
                 ggml_backend_tensor_get(out, generic.data(), 0, generic.size());
             }
 
-            test_set_env("GGML_CUDA_MMID_TOP10", "1");
+            test_set_env(selector_name, "1");
             status = status == GGML_STATUS_SUCCESS ? ggml_backend_graph_compute(backend1, gf) : status;
             ggml_backend_synchronize(backend1);
             std::vector<uint8_t> specialized(ggml_nbytes(out));
@@ -1446,14 +1453,14 @@ struct test_case {
             }
 
             if (had_original_selector) {
-                test_set_env("GGML_CUDA_MMID_TOP10", original_selector.c_str());
+                test_set_env(selector_name, original_selector.c_str());
             } else {
-                test_set_env("GGML_CUDA_MMID_TOP10", nullptr);
+                test_set_env(selector_name, nullptr);
             }
 
             exact_ab_ok = status == GGML_STATUS_SUCCESS && generic == specialized;
             if (!exact_ab_ok) {
-                printf("exact generic/top10 output mismatch ");
+                printf("exact generic/%s output mismatch ", experiment_name);
             }
         }
 
