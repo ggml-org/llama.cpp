@@ -11,11 +11,41 @@
 
 #include <cstddef>
 #include <cstring>
+#include <limits>
 #include <map>
 #include <stdexcept>
 #include <unordered_map>
+#include <vector>
 
-using llama_buf_map = std::unordered_map<uint32_t, ggml_backend_buffer_t>;
+struct llama_buf_range {
+    uint32_t idx;
+    size_t first;
+    size_t last;
+    ggml_backend_buffer_t buf;
+};
+
+using llama_buf_map = std::vector<llama_buf_range>;
+
+static inline void llama_buf_map_add(llama_buf_map & bufs, uint32_t idx, ggml_backend_buffer_t buf, size_t first = 0, size_t last = std::numeric_limits<size_t>::max()) {
+    bufs.push_back({ idx, first, last, buf });
+}
+
+static inline ggml_backend_buffer_t llama_buf_map_first(const llama_buf_map & bufs) {
+    return bufs.empty() ? nullptr : bufs.front().buf;
+}
+
+static inline ggml_backend_buffer_t llama_buf_map_find(const llama_buf_map & bufs, uint32_t idx, size_t offs, size_t size) {
+    if (offs + size < offs) {
+        return nullptr;
+    }
+    const size_t end = offs + size;
+    for (const llama_buf_range & range : bufs) {
+        if (range.idx == idx && offs >= range.first && end <= range.last) {
+            return range.buf;
+        }
+    }
+    return nullptr;
+}
 
 // lists of buffer types used for each layer
 using buft_list_t = std::vector<std::pair<ggml_backend_dev_t, ggml_backend_buffer_type_t>>;
