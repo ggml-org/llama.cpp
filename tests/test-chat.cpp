@@ -6013,6 +6013,27 @@ static void test_template_generation_prompt() {
         check(tmpls, continuation_content(),   "<|im_start|>assistant\n<think>\nI'm thinking\n</think>\n\nHello, ");
         check(tmpls, continuation_reasoning(), "<|im_start|>assistant\n<think>\nI'm");
     }
+
+    {
+        // A template that reads the flat `thinking` field directly (the vLLM-style
+        // reasoning alias) should still render prior-turn reasoning even though
+        // llama.cpp populates `reasoning_content`. This exercises the generic
+        // reasoning_content -> thinking alias applied for every template, with no
+        // template-specific copy loop.
+        const std::string mock_template =
+            "{%- for message in messages -%}\n"
+            "  {{- '<|' + message.role + '|>' -}}\n"
+            "  {%- if message.thinking -%}{{- '<think>' + message.thinking + '</think>' -}}{%- endif -%}\n"
+            "  {{- message.content -}}\n"
+            "{%- endfor -%}";
+        auto tmpls = common_chat_templates_ptr(
+            common_chat_templates_init(/* model= */ nullptr, mock_template));
+
+        common_chat_templates_inputs inputs;
+        inputs.messages = { message_user, message_assist_thoughts };
+        auto params     = common_chat_templates_apply(tmpls.get(), inputs);
+        assert_contains(params.prompt, "<think>I'm\nthinking</think>");
+    }
 }
 
 // Test the developer role to system workaround with a simple mock template

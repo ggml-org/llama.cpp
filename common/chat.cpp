@@ -882,6 +882,29 @@ static void foreach_parameter(const json &                                      
     }
 }
 
+// Expose the canonical `reasoning_content` under the flat `thinking` alias that
+// some chat templates read directly (e.g. gpt-oss, LFM2, and the growing set of
+// vLLM-style templates that adopted `thinking` as the reasoning field). This is a
+// non-destructive alias: it only adds `thinking` when a string `reasoning_content`
+// is present and `thinking` is not already set, so templates that ignore the field
+// are unaffected.
+static json common_chat_alias_reasoning_as_thinking(const json & messages) {
+    if (!messages.is_array()) {
+        return messages;
+    }
+    json aliased = json::array();
+    for (auto msg : messages) {
+        if (msg.is_object()
+            && msg.contains("reasoning_content")
+            && msg.at("reasoning_content").is_string()
+            && !msg.contains("thinking")) {
+            msg["thinking"] = msg.at("reasoning_content");
+        }
+        aliased.push_back(std::move(msg));
+    }
+    return aliased;
+}
+
 static std::string common_chat_template_direct_apply_impl(
     const common_chat_template & tmpl,
     const autoparser::generation_params & inputs,
@@ -891,7 +914,8 @@ static std::string common_chat_template_direct_apply_impl(
     jinja::context ctx(tmpl.source());
 
     nlohmann::ordered_json inp = nlohmann::ordered_json{
-        {"messages", messages_override.has_value() ? *messages_override : inputs.messages},
+        {"messages", common_chat_alias_reasoning_as_thinking(
+                         messages_override.has_value() ? *messages_override : inputs.messages)},
         {"bos_token", tmpl.bos_token()},
         {"eos_token", tmpl.eos_token()},
         {"enable_thinking", inputs.enable_thinking},
