@@ -41,6 +41,11 @@ int llama_cli(int argc, char ** argv) {
         return 1;
     }
 
+    // apply the --prio process priority setting; failure is non-fatal
+    if (!set_process_priority(params.cpuparams.priority)) {
+        LOG_WRN("%s: failed to set process priority\n", __func__);
+    }
+
 #if defined (__unix__) || (defined (__APPLE__) && defined (__MACH__))
     struct sigaction sigint_action;
     sigint_action.sa_handler = signal_handler;
