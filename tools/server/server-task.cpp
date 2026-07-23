@@ -449,8 +449,6 @@ json server_task_result_cmpl_final::to_json_oaicompat() {
     json finish_reason = "length";
     if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
         finish_reason = "stop";
-    } else if (stop == STOP_TYPE_REPETITION) {
-        finish_reason = "repetition";
     }
     json res = json {
         {"choices",            json::array({
@@ -491,8 +489,6 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat() {
     }
     if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
         finish_reason = msg.tool_calls.empty() ? "stop" : "tool_calls";
-    } else if (stop == STOP_TYPE_REPETITION) {
-        finish_reason = "repetition";
     }
 
     json choice {
@@ -535,8 +531,6 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat_stream() {
     std::string finish_reason = "length";
     if (stop == STOP_TYPE_WORD || stop == STOP_TYPE_EOS) {
         finish_reason = oaicompat_msg.tool_calls.empty() ? "stop" : "tool_calls";
-    } else if (stop == STOP_TYPE_REPETITION) {
-        finish_reason = "repetition";
     }
 
     json deltas = json::array();
