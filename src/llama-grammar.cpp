@@ -438,9 +438,13 @@ const char * llama_grammar_parser::parse_alternates(
         bool                is_nested) {
     llama_grammar_rule rule;
     const char * pos = parse_sequence(src, rule_name, rule, is_nested);
-    while (*pos == '|') {
+    while (true) {
+        const char * next = parse_space(pos, true);
+        if (*next != '|') {
+            break;
+        }
         rule.push_back({LLAMA_GRETYPE_ALT, 0});
-        pos = parse_space(pos + 1, true);
+        pos = parse_space(next + 1, true);
         pos = parse_sequence(pos, rule_name, rule, is_nested);
     }
     rule.push_back({LLAMA_GRETYPE_END, 0});
