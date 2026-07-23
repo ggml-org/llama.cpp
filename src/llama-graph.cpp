@@ -1228,45 +1228,50 @@ void llm_graph_result::set_inputs(const llama_ubatch * ubatch) {
 }
 
 void llm_graph_result::set_outputs(const llm_graph_params & params) {
+    auto set_output = [](ggml_tensor * t) {
+        ggml_set_output(t);
+        GGML_ASSERT(t->view_src == nullptr && "views cannot be outputs");
+    };
+
     if (t_logits != nullptr) {
-        ggml_set_output(t_logits);
+        set_output(t_logits);
     }
     if (t_embd != nullptr) {
-        ggml_set_output(t_embd);
+        set_output(t_embd);
     }
     if (t_embd_pooled != nullptr) {
-        ggml_set_output(t_embd_pooled);
+        set_output(t_embd_pooled);
     }
     if (t_h_nextn != nullptr) {
-        ggml_set_output(t_h_nextn);
+        set_output(t_h_nextn);
     }
     {
         const auto & embeddings_layer_inp = params.cparams.embeddings_layer_inp;
         for (size_t il = 0; il < embeddings_layer_inp.size(); ++il) {
             if (embeddings_layer_inp[il]) {
                 GGML_ASSERT(t_layer_inp[il] != nullptr && "layer input tensor is null");
-                ggml_set_output(t_layer_inp[il]);
+                set_output(t_layer_inp[il]);
             }
         }
     }
     for (auto & [seq_id, t] : t_sampled) {
         if (t != nullptr) {
-            ggml_set_output(t);
+            set_output(t);
         }
     }
     for (auto & [seq_id, t] : t_sampled_probs) {
         if (t != nullptr) {
-            ggml_set_output(t);
+            set_output(t);
         }
     }
     for (auto & [seq_id, t] : t_sampled_logits) {
         if (t != nullptr) {
-            ggml_set_output(t);
+            set_output(t);
         }
     }
     for (auto & [seq_id, t] : t_candidates) {
         if (t != nullptr) {
-            ggml_set_output(t);
+            set_output(t);
         }
     }
 }
