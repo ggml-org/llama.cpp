@@ -263,6 +263,10 @@ static void llama_log_softmax(float * array, size_t size) {
 */
 
 static void llama_sampler_temp_impl(llama_token_data_array * cur_p, float temp) {
+    if (cur_p->size == 0) {
+        return;
+    }
+
     if (temp <= 0.0f) {
         // find the token with the highest logit and set the rest to -inf
         size_t max_i = 0;
