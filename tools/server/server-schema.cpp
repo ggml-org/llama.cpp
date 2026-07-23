@@ -539,10 +539,12 @@ task_params eval_llama_cmpl_schema(
         f->eval(ctx, data);
     }
 
+    params.repetition_detection.enabled = params_base.repetition_detection_enabled;
+
     // post-processing
     {
         const auto & repetition = params.repetition_detection;
-        if (repetition.min_pattern_size > repetition.max_pattern_size) {
+        if (repetition.max_pattern_size > 0 && repetition.min_pattern_size > repetition.max_pattern_size) {
             throw std::invalid_argument("repetition_detection.min_pattern_size must not exceed max_pattern_size");
         }
         if (repetition.max_pattern_size > 0 && repetition.min_count < 2) {

@@ -1812,7 +1812,7 @@ private:
 
         slot.generated_text += token_str;
         const auto & repetition = slot.task->params.repetition_detection;
-        if (repetition.max_pattern_size > 0) {
+        if (repetition.enabled && repetition.max_pattern_size > 0) {
             slot.repetition_tokens.push_back(result.tok);
 
             const size_t max_tail = (size_t) repetition.max_pattern_size * repetition.min_count;
@@ -1943,7 +1943,7 @@ private:
         }
 
         // Keep this after the standard stop checks so their existing priority is preserved.
-        if (slot.has_next_token && server_check_sequence_repetition(
+        if (slot.has_next_token && slot.task->params.repetition_detection.enabled && server_check_sequence_repetition(
                     slot.repetition_tokens, slot.task->params.repetition_detection)) {
             slot.stop           = STOP_TYPE_REPETITION;
             slot.has_next_token = false;

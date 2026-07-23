@@ -501,6 +501,8 @@ struct common_params {
     struct common_params_vocoder     vocoder;
     struct common_params_diffusion   diffusion;
 
+    bool repetition_detection_enabled = false;
+
     struct common_params_model model;
 
     std::set<std::string> model_alias;     // model aliases                                                 // NOLINT

@@ -49,9 +49,10 @@ enum stop_type {
 };
 
 struct repetition_detection_params {
-    int32_t max_pattern_size = 0;
-    int32_t min_pattern_size = 0;
-    int32_t min_count        = 0;
+    bool    enabled          = false;
+    int32_t max_pattern_size = 1024;
+    int32_t min_pattern_size = 16;
+    int32_t min_count        = 4;
 };
 
 bool server_check_sequence_repetition(
