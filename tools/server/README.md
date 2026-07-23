@@ -71,6 +71,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-ctk, --cache-type-k TYPE` | KV cache data type for K<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_CACHE_TYPE_K) |
 | `-ctv, --cache-type-v TYPE` | KV cache data type for V<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_CACHE_TYPE_V) |
 | `-dt, --defrag-thold N` | KV cache defragmentation threshold (DEPRECATED)<br/>(env: LLAMA_ARG_DEFRAG_THOLD) |
+| `--rpc SERVERS` | comma-separated list of RPC servers (host:port)<br/>(env: LLAMA_ARG_RPC) |
 | `--mlock` | DEPRECATED in favor of `--load-mode`: mmap + force system to keep model in RAM rather than swapping or compressing<br/>(env: LLAMA_ARG_MLOCK) |
 | `--mmap, --no-mmap` | DEPRECATED in favor of `--load-mode`: whether to memory-map model. (if mmap disabled, slower load but may reduce pageouts if not using mlock)<br/>(env: LLAMA_ARG_MMAP) |
 | `-dio, --direct-io, -ndio, --no-direct-io` | DEPRECATED in favor of `--load-mode`: use DirectIO if available<br/>(env: LLAMA_ARG_DIO) |
@@ -526,6 +527,8 @@ These words will not be included in the completion, so make sure to add them to 
 `timings_per_token`: Include prompt processing and text generation speed information in each response.  Default: `false`
 
 `return_progress`: Include prompt processing progress in `stream` mode. The progress will be contained inside `prompt_progress` with 4 values: `total`, `cache`, `processed`, and `time_ms`. The overall progress is `processed/total`, while the actual timed progress is `(processed-cache)/(total-cache)`. The `time_ms` field contains the elapsed time in milliseconds since prompt processing started. Default: `false`
+
+`sse_ping_interval`: Interval in seconds between SSE comment pings emitted while the stream stays silent, keeping the connection observable during long prompt processing. Overrides the server `--sse-ping-interval` setting for this request, `-1` disables pings. Default: server setting
 
 `post_sampling_probs`: Returns the probabilities of top `n_probs` tokens after applying sampling chain.
 
@@ -1236,8 +1239,6 @@ print(completion.choices[0].text)
 
 Given a ChatML-formatted json description in `messages`, it returns the predicted completion. Both synchronous and streaming mode are supported, so scripted and interactive applications work fine. While no strong claims of compatibility with OpenAI API spec is being made, in our experience it suffices to support many apps. Only models with a [supported chat template](https://github.com/ggml-org/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template) can be used optimally with this endpoint. By default, the ChatML template will be used.
 
-If model supports multimodal, you can input the media file via `image_url` content part. We support both base64 and remote URL as input. See OAI documentation for more.
-
 *Options:*
 
 See [OpenAI Chat Completions API documentation](https://platform.openai.com/docs/api-reference/chat). llama.cpp `/completion`-specific features such as `mirostat` are also supported.
@@ -1255,6 +1256,19 @@ The `response_format` parameter supports both plain JSON output (e.g. `{"type": 
 `parse_tool_calls`: Whether to parse the generated tool call.
 
 `parallel_tool_calls` : Whether to enable parallel/multiple tool calls (only supported on some models, verification is based on jinja template).
+
+For multimodal input (typed content, `messages[i].content[j]`):
+- If `type == "image_url"`:
+    - `image_url.url` can be a remote URL, base64 (raw or URI-encoded via `data:image/...;base64`) or path to local file
+    - Accepts formats supported by `stb_image` (jpeg, png, tga, bmp, gif, ...)
+- If `type == "input_audio"`:
+    - Either `input_audio.data` or `input_audio.url` can be specified, can be a remote URL, raw base64 or path to local file
+    - Accepts formats supported by `miniaudio` (mp3, wav, flac)
+    - `input_audio.format` will be ignored, the file format will be determined automatically
+- If `type == "input_video"`:
+    - Either `input_video.data` or `input_video.url` can be specified, can be a remote URL, raw base64 or path to local file
+    - Accepts formats supported by `ffmpeg`
+- Note: for local file, make sure to set `--media-path`. File path must be prefixed by `file://`
 
 *Examples:*
 
@@ -1450,6 +1464,36 @@ See [OpenAI Embeddings API documentation](https://platform.openai.com/docs/api-r
           "encoding_format": "float"
   }'
   ```
+
+### POST `/v1/responses/input_tokens`: Token Counting
+
+Similar to [Response input token counts API](https://developers.openai.com/api/reference/python/resources/responses/subresources/input_tokens/methods/count).
+
+Example response:
+
+```json
+{
+  "object": "response.input_tokens",
+  "input_tokens": 11
+}
+```
+
+### POST `/v1/chat/completions/input_tokens`: Token Counting
+
+Similar to [Response input token counts API](https://developers.openai.com/api/reference/python/resources/responses/subresources/input_tokens/methods/count), but accepts a chat completion body as input.
+
+Note: This is not an official OAI endpoint, but is added for completeness and convenience.
+
+Example response:
+
+```json
+{
+  "object": "response.input_tokens",
+  "input_tokens": 11
+}
+```
+
+## Anthropic-compatible API Endpoints
 
 ### POST `/v1/messages`: Anthropic-compatible Messages API
 
@@ -1748,6 +1792,20 @@ The `status` object can be:
 }
 ```
 
+Note: for "downloading" state, there can be multiple files be downloading in parallel
+
+```json
+"status": {
+  "value": "downloading",
+  "progress": {
+    "https://...model.gguf": {
+      "done": 195963406,
+      "total": 219307424
+    }
+  }
+}
+```
+
 ### POST `/models/load`: Load a model
 
 Load a model
@@ -1781,6 +1839,135 @@ Payload:
   "model": "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M",
 }
 ```
+
+Response:
+
+```json
+{
+  "success": true
+}
+```
+
+### GET `/models/sse`: Real-time events
+
+Example events:
+
+```js
+{
+  "model": "...",
+  "event": "model_status",
+  "data": {
+    "status": "loading"
+  }
+}
+
+{
+  "model": "...",
+  "event": "download_progress",
+  "data": {
+    // note: there can be multiple files being downloaded in parallel
+    "https://...model.gguf": {
+      "done": 195963406,
+      "total": 219307424
+    }
+  }
+}
+
+{
+  "model": "...",
+  "event": "model_status",
+  "data": {
+    "status": "loading",
+    "progress": {
+      "stages": ["text_model", "spec_model", "mmproj_model"],
+      "current": "text_model",
+      "value": 0.5
+    }
+  }
+}
+// note for "loading" status:
+// - subsequent events will follow the same order of "stages" list
+// - mmap is may report incorrect progress on some platforms; if you need exact progress, use --no-mmap
+
+{
+  "model": "...",
+  "event": "model_status",
+  "data": {
+    "status": "loaded",
+    "info": {
+      // note: only include info on first load
+      // waking up from sleep doesn't have this
+    }
+  }
+}
+
+{
+  "model": "...",
+  "event": "model_status",
+  "data": {
+    "status": "sleeping"
+  }
+}
+
+{
+  "model": "...",
+  "event": "model_remove"
+}
+
+// special event: reload of the list of all models
+{
+  "model": "*",
+  "event": "models_reload"
+}
+```
+
+### POST `/models`: Download new model
+
+Trigger a new download (non-blocking), the progress can be tracked via SSE endpoint `/models/sse`
+
+To cancel model downloading, send an event to `/models/unload`
+
+Download procedure:
+- Send POST request to `/models`
+- Subscribe to `/models/sse` for updates
+- On downloading completed, you will receive either `download_finished` or `download_failed` event
+- Call GET `/models` to trigger model list update. If the download success, you should see the new model in the list
+
+Payload:
+
+```json
+{
+  "model": "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M",
+}
+```
+
+Response (download is started in the background):
+
+```json
+{
+  "success": true
+}
+```
+
+Response (error, cannot start the download):
+
+```json
+{
+  "error": {
+    "code": 400,
+    "message": "model validation failed, unable to download",
+    "type": "invalid_request_error"
+  }
+}
+```
+
+### DELETE `/models`: Delete a model from cache
+
+IMPORTANT: only model stored in cache can be deleted. You cannot delete models in a preset.
+
+Model name must be passed via query param: `?model={name}`
+
+If delete success, it will send an SSE event of type `model_remove`
 
 Response:
 
