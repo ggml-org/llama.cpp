@@ -772,16 +772,12 @@ struct llm_graph_params {
             return false;
         }
 
-        return
-            cparams.embeddings              == other.cparams.embeddings              &&
-            cparams.embeddings_nextn        == other.cparams.embeddings_nextn        &&
-            cparams.embeddings_nextn_masked == other.cparams.embeddings_nextn_masked &&
-            cparams.causal_attn             == other.cparams.causal_attn             &&
-            arch  == other.arch  &&
-            gtype == other.gtype &&
-            cvec  == other.cvec  &&
-            loras == other.loras &&
-            cross == other.cross;
+        return cparams.embeddings == other.cparams.embeddings &&
+               cparams.no_logits_for_embeddings == other.cparams.no_logits_for_embeddings &&
+               cparams.embeddings_nextn == other.cparams.embeddings_nextn &&
+               cparams.embeddings_nextn_masked == other.cparams.embeddings_nextn_masked &&
+               cparams.causal_attn == other.cparams.causal_attn && arch == other.arch && gtype == other.gtype &&
+               cvec == other.cvec && loras == other.loras && cross == other.cross;
     }
 };
 
@@ -941,6 +937,9 @@ struct llm_graph_context {
     virtual ~llm_graph_context() = default;
 
     void cb(ggml_tensor * cur, const char * name, int il) const;
+
+    bool should_build_logits() const;
+    void build_output() const;
 
     //
     // common

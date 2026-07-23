@@ -197,7 +197,7 @@ llama_model_plamo2::graph::graph(const llama_model & model, const llm_graph_para
 
     res->t_logits = cur;
 
-    ggml_build_forward_expand(gf, cur);
+    build_output();
 }
 
 ggml_tensor * llama_model_plamo2::graph::build_plamo2_attn_layer(llm_graph_input_attn_kv * inp,

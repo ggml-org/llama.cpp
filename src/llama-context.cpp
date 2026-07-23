@@ -114,6 +114,7 @@ llama_context::llama_context(
     cparams.yarn_beta_fast          = params.yarn_beta_fast   >= 0.0f ? params.yarn_beta_fast   : hparams.yarn_beta_fast;
     cparams.yarn_beta_slow          = params.yarn_beta_slow   >= 0.0f ? params.yarn_beta_slow   : hparams.yarn_beta_slow;
     cparams.embeddings              = params.embeddings;
+    cparams.no_logits_for_embeddings = params.no_logits_for_embeddings;
     cparams.embeddings_nextn        = false;
     cparams.embeddings_nextn_masked = false;
     cparams.offload_kqv             = params.offload_kqv;
@@ -868,13 +869,13 @@ int64_t llama_context::output_resolve_row(int32_t i) const {
 }
 
 float * llama_context::get_logits_ith(int32_t i) {
+    if (logits.data == nullptr) {
+        return nullptr;
+    }
+
     output_reorder();
 
     try {
-        if (logits.data == nullptr) {
-            throw std::runtime_error("no logits");
-        }
-
         const int64_t j = output_resolve_row(i);
         return logits.data + j*model.vocab.n_tokens();
     } catch (const std::exception & err) {
@@ -2083,13 +2084,14 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     const auto n_embd     = hparams.n_embd;
     const auto n_embd_out = hparams.n_embd_out();
 
-    bool has_logits     = true;
+    const bool skip_logits = llama_skip_logits_for_embeddings(cparams, !sampling.samplers.empty());
+
+    bool has_logits     = !skip_logits;
     bool has_embd       = cparams.embeddings;
     bool has_embd_nextn = cparams.embeddings_nextn;
 
     // TODO: hacky enc-dec support
     if (model.arch == LLM_ARCH_T5) {
-        has_logits = true;
         has_embd   = true;
     }
 
@@ -3463,42 +3465,43 @@ void llama_context::opt_epoch(
 
 llama_context_params llama_context_default_params() {
     llama_context_params result = {
-        /*.n_ctx                       =*/ 512,
-        /*.n_batch                     =*/ 2048,
-        /*.n_ubatch                    =*/ 512,
-        /*.n_seq_max                   =*/ 1,
-        /*.n_rs_seq                    =*/ 0,
-        /*.n_outputs_max               =*/ 0,
-        /*.n_threads                   =*/ GGML_DEFAULT_N_THREADS, // TODO: better default
-        /*.n_threads_batch             =*/ GGML_DEFAULT_N_THREADS,
-        /*.ctx_type                    =*/ LLAMA_CONTEXT_TYPE_DEFAULT,
-        /*.rope_scaling_type           =*/ LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED,
-        /*.pooling_type                =*/ LLAMA_POOLING_TYPE_UNSPECIFIED,
-        /*.attention_type              =*/ LLAMA_ATTENTION_TYPE_UNSPECIFIED,
-        /*.flash_attn_type             =*/ LLAMA_FLASH_ATTN_TYPE_AUTO,
-        /*.rope_freq_base              =*/ 0.0f,
-        /*.rope_freq_scale             =*/ 0.0f,
-        /*.yarn_ext_factor             =*/ -1.0f,
-        /*.yarn_attn_factor            =*/ -1.0f,
-        /*.yarn_beta_fast              =*/ -1.0f,
-        /*.yarn_beta_slow              =*/ -1.0f,
-        /*.yarn_orig_ctx               =*/ 0,
-        /*.defrag_thold                =*/ -1.0f,
-        /*.cb_eval                     =*/ nullptr,
-        /*.cb_eval_user_data           =*/ nullptr,
-        /*.type_k                      =*/ GGML_TYPE_F16,
-        /*.type_v                      =*/ GGML_TYPE_F16,
-        /*.abort_callback              =*/ nullptr,
-        /*.abort_callback_data         =*/ nullptr,
-        /*.embeddings                  =*/ false,
-        /*.offload_kqv                 =*/ true,
-        /*.no_perf                     =*/ true,
-        /*.op_offload                  =*/ true,
-        /*.swa_full                    =*/ true,
-        /*.kv_unified                  =*/ false,
-        /*.sampler                     =*/ nullptr,
-        /*.n_sampler                   =*/ 0,
-        /*.ctx_other                   =*/ nullptr,
+        /*.n_ctx                       =*/512,
+        /*.n_batch                     =*/2048,
+        /*.n_ubatch                    =*/512,
+        /*.n_seq_max                   =*/1,
+        /*.n_rs_seq                    =*/0,
+        /*.n_outputs_max               =*/0,
+        /*.n_threads                   =*/GGML_DEFAULT_N_THREADS,  // TODO: better default
+        /*.n_threads_batch             =*/GGML_DEFAULT_N_THREADS,
+        /*.ctx_type                    =*/LLAMA_CONTEXT_TYPE_DEFAULT,
+        /*.rope_scaling_type           =*/LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED,
+        /*.pooling_type                =*/LLAMA_POOLING_TYPE_UNSPECIFIED,
+        /*.attention_type              =*/LLAMA_ATTENTION_TYPE_UNSPECIFIED,
+        /*.flash_attn_type             =*/LLAMA_FLASH_ATTN_TYPE_AUTO,
+        /*.rope_freq_base              =*/0.0f,
+        /*.rope_freq_scale             =*/0.0f,
+        /*.yarn_ext_factor             =*/-1.0f,
+        /*.yarn_attn_factor            =*/-1.0f,
+        /*.yarn_beta_fast              =*/-1.0f,
+        /*.yarn_beta_slow              =*/-1.0f,
+        /*.yarn_orig_ctx               =*/0,
+        /*.defrag_thold                =*/-1.0f,
+        /*.cb_eval                     =*/nullptr,
+        /*.cb_eval_user_data           =*/nullptr,
+        /*.type_k                      =*/GGML_TYPE_F16,
+        /*.type_v                      =*/GGML_TYPE_F16,
+        /*.abort_callback              =*/nullptr,
+        /*.abort_callback_data         =*/nullptr,
+        /*.embeddings                  =*/false,
+        /*.offload_kqv                 =*/true,
+        /*.no_perf                     =*/true,
+        /*.op_offload                  =*/true,
+        /*.swa_full                    =*/true,
+        /*.kv_unified                  =*/false,
+        /*.no_logits_for_embeddings    =*/false,
+        /*.sampler                     =*/nullptr,
+        /*.n_sampler                   =*/0,
+        /*.ctx_other                   =*/nullptr,
     };
 
     return result;

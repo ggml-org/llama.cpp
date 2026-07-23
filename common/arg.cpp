@@ -2190,6 +2190,12 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             else { throw std::invalid_argument("invalid value"); }
         }
     ).set_examples({LLAMA_EXAMPLE_EMBEDDING}));
+    add_opt(common_arg({ "--no-logits-for-embeddings" },
+                       "skip raw logits and the LM head when extracting embeddings without backend samplers",
+                       [](common_params & params) { params.no_logits_for_embeddings = true; })
+                .set_examples(
+                    { LLAMA_EXAMPLE_EMBEDDING, LLAMA_EXAMPLE_RETRIEVAL, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_DEBUG })
+                .set_env("LLAMA_ARG_NO_LOGITS_FOR_EMBEDDINGS"));
     add_opt(common_arg(
         {"--rope-scaling"}, "{none,linear,yarn}",
         "RoPE frequency scaling method, defaults to linear unless specified by the model",
