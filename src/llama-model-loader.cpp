@@ -1416,6 +1416,7 @@ bool llama_model_loader::load_all_data(
         struct ggml_context * ctx,
         llama_buf_map & bufs,
         llama_mlocks * lmlocks,
+        bool use_staged_mmap_uploads,
         llama_progress_callback progress_callback,
         void * progress_callback_user_data) {
     if (files.empty()) {
@@ -1447,10 +1448,9 @@ bool llama_model_loader::load_all_data(
     std::vector<void *> host_ptrs;
     size_t buffer_idx = 0; // buffer to use for async loads
     ggml_backend_t upload_backend = [&](const char * func) -> ggml_backend_t {
-        if (use_mmap || check_tensors) {
+        if (check_tensors || (use_mmap && !use_staged_mmap_uploads)) {
             return nullptr;
         }
-        // When not using mmaped io use async uploads from pinned memory to GPU memory.
         // First determine if the backend supports the necessary features for async uploads.
         auto * buf = bufs.count(0) ? bufs.at(0) : nullptr;
         if (!buf) {
@@ -1463,6 +1463,11 @@ bool llama_model_loader::load_all_data(
         if (!dev) {
             LLAMA_LOG_DEBUG("%s: no device found for buffer type %s for async uploads\n", func,
                 ggml_backend_buft_name(buft));
+            return nullptr;
+        }
+        if (use_mmap && ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_IGPU) {
+            LLAMA_LOG_DEBUG("%s: device %s is not an integrated GPU for staged mmap uploads\n", func,
+                ggml_backend_dev_name(dev));
             return nullptr;
         }
 
@@ -1520,6 +1525,10 @@ bool llama_model_loader::load_all_data(
         return backend;
     }(__func__);
 
+    if (use_mmap && use_staged_mmap_uploads && !upload_backend) {
+        LLAMA_LOG_DEBUG("%s: staged mmap uploads unavailable, using synchronous fallback\n", __func__);
+    }
+
     if (upload_backend) {
         LLAMA_LOG_DEBUG("%s: using async uploads for device %s, buffer type %s, backend %s\n", __func__,
             ggml_backend_dev_name(ggml_backend_get_device(upload_backend)),
@@ -1567,6 +1576,22 @@ bool llama_model_loader::load_all_data(
                 auto & mmap_used = mmaps_used[weight->idx];
                 mmap_used.first  = std::min(mmap_used.first,  weight->offs);
                 mmap_used.second = std::max(mmap_used.second, weight->offs + n_size);
+            } else if (upload_backend && !ggml_backend_buffer_is_host(cur->buffer)) {
+                const auto & file = files.at(weight->idx);
+                file->seek(weight->offs, SEEK_SET);
+                size_t data_copied = 0;
+                while (data_copied < n_size) {
+                    const size_t chunk_size = std::min(buffer_size, n_size - data_copied);
+
+                    ggml_backend_event_synchronize(events[buffer_idx]);
+                    file->read_raw_unsafe(host_ptrs[buffer_idx], chunk_size);
+                    ggml_backend_tensor_set_async(
+                        upload_backend, cur, host_ptrs[buffer_idx], data_copied, chunk_size);
+                    ggml_backend_event_record(events[buffer_idx], upload_backend);
+
+                    data_copied += chunk_size;
+                    buffer_idx = (buffer_idx + 1) % n_buffers;
+                }
             } else {
                 ggml_backend_tensor_set(cur, data, 0, n_size);
             }

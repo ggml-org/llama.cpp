@@ -1517,7 +1517,15 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         }
     }
 
-    ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
+    const auto can_stage_mmap = [](const auto & layer) {
+        ggml_backend_dev_props props;
+        ggml_backend_dev_get_props(layer.dev, &props);
+        return props.type == GGML_BACKEND_DEVICE_TYPE_IGPU &&
+            props.caps.async && props.caps.host_buffer && props.caps.events;
+    };
+    const bool use_staged_mmap_uploads = !use_mlock && !params.check_tensors && can_stage_mmap(pimpl->dev_output) &&
+        std::all_of(pimpl->dev_layer.begin(), pimpl->dev_layer.end(), can_stage_mmap);
+    ml.init_mappings(!use_staged_mmap_uploads, use_mlock ? &pimpl->mlock_mmaps : nullptr);
     pimpl->mappings.reserve(ml.mappings.size());
 
     // create the backend buffers
@@ -1641,7 +1649,8 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
 
     // load tensor data
     for (auto & [ctx, buf_map] : ctx_buf_maps) {
-        if (!ml.load_all_data(ctx, buf_map, use_mlock ? &pimpl->mlock_mmaps : NULL, params.progress_callback, params.progress_callback_user_data)) {
+        if (!ml.load_all_data(ctx, buf_map, use_mlock ? &pimpl->mlock_mmaps : NULL, use_staged_mmap_uploads,
+            params.progress_callback, params.progress_callback_user_data)) {
             return false;
         }
     }
