@@ -1937,7 +1937,7 @@ static __global__ void flash_attn_ext_f16(
 }
 
 constexpr bool ggml_cuda_flash_attn_ext_mma_f16_may_use_top_k(const int DKQ, const int DV, const int ncols1, const int ncols2) {
-    return DKQ == 576 && DV == 512 && ncols1 == 1 && ncols2 == 16;
+    return (DKQ == 576 && DV == 512 && ncols1 == 1 && ncols2 == 16) || (DKQ == 512 && DV == 512 && ncols1 == 1 && ncols2 == 8);
 }
 
 extern bool ggml_cuda_flash_attn_ext_mma_f16_shall_use_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
