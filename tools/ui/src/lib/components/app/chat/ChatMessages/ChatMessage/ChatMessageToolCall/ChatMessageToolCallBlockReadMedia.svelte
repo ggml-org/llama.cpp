@@ -2,7 +2,7 @@
 	import { Eye } from '@lucide/svelte';
 	import { AttachmentType } from '$lib/enums';
 	import { ATTACHMENT_SAVED_REGEX } from '$lib/constants/agentic';
-	import type { DatabaseMessageExtra, DatabaseMessageExtraImageFile } from '$lib/types';
+	import type { DatabaseMessageExtra, DatabaseMessageExtraImageFile, DatabaseMessageExtraAudioFile } from '$lib/types';
 	import { type AgenticSection } from '$lib/utils';
 	import { parseReadMediaMeta } from './parsers/read-media';
 	import ToolCallBlock from './ToolCallBlock.svelte';
@@ -29,10 +29,13 @@
 		if (!match) return null;
 		const attachmentName = match[1];
 		return extras.find(
-			(e): e is DatabaseMessageExtraImageFile =>
-				e.type === AttachmentType.IMAGE && e.name === attachmentName
+			(e): e is DatabaseMessageExtraImageFile | DatabaseMessageExtraAudioFile =>
+				(e.type === AttachmentType.IMAGE || e.type === AttachmentType.AUDIO) &&
+				e.name === attachmentName
 		) ?? null;
 	});
+
+	const isAudio = $derived(mediaAttachment?.type === AttachmentType.AUDIO);
 </script>
 
 <ToolCallBlock {section} {open} {isStreaming} meta={readMediaMeta} {onToggle}>
@@ -44,14 +47,23 @@
 	{#snippet children(_meta, _ctx)}
 		{#if section.toolResult}
 			{#if mediaAttachment}
-				<div class="mt-2">
-					<img
-						src={mediaAttachment.base64Url}
-						alt={readMediaMeta?.fileName ?? 'media'}
-						class="max-h-[60vh] max-w-full rounded-lg object-contain shadow-lg"
-						loading="lazy"
-					/>
-				</div>
+				{#if isAudio}
+					<div class="mt-2">
+						<audio controls class="w-full rounded-lg">
+							<source src={mediaAttachment.base64Url} type={readMediaMeta?.mimeType ?? 'audio/mpeg'} />
+							Your browser does not support the audio element.
+						</audio>
+					</div>
+				{:else}
+					<div class="mt-2">
+						<img
+							src={mediaAttachment.base64Url}
+							alt={readMediaMeta?.fileName ?? 'media'}
+							class="max-h-[60vh] max-w-full rounded-lg object-contain shadow-lg"
+							loading="lazy"
+						/>
+					</div>
+				{/if}
 			{:else}
 				<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">
 					Media attachment not found in message extras

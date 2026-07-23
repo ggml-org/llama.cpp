@@ -10,8 +10,9 @@
 	import {
 		classifyToolResult,
 		formatJsonPretty,
-		parseToolResultWithImages,
-		type AgenticSection
+		parseToolResultWithMedia,
+		type AgenticSection,
+		type ToolResultLine
 	} from '$lib/utils';
 	import { getBuiltinToolUi } from '$lib/constants/built-in-tools';
 	import type { DatabaseMessageExtra } from '$lib/types';
@@ -29,8 +30,8 @@
 
 	const title = $derived(getBuiltinToolUi(section.toolName)?.label ?? section.toolName ?? '');
 	const outputKind = $derived(classifyToolResult(section.toolResult));
-	const parsedLines = $derived(
-		section.toolResult ? parseToolResultWithImages(section.toolResult, attachments) : []
+	const parsedLines: ToolResultLine[] = $derived(
+		section.toolResult ? parseToolResultWithMedia(section.toolResult, attachments) : []
 	);
 </script>
 
@@ -103,14 +104,23 @@
 							<div class="font-mono text-[11px] leading-relaxed whitespace-pre-wrap">
 								{line.text}
 							</div>
-							{#if line.image}
-								<img
-									src={line.image.base64Url}
-									alt={line.image.name}
-									class="mt-2 mb-2 h-auto max-w-full rounded-lg"
-									loading="lazy"
-								/>
-							{/if}
+							{#if line.media}
+								{#if line.media.type === 'AUDIO'}
+									<div class="mt-2 mb-2">
+										<audio controls class="w-full rounded-lg">
+											<source src={line.media.base64Url} type={line.media.mimeType ?? 'audio/mpeg'} />
+											Your browser does not support the audio element.
+										</audio>
+									</div>
+								{:else}
+									<img
+										src={line.media.base64Url}
+										alt={line.media.name}
+										class="mt-2 mb-2 h-auto max-w-full rounded-lg"
+										loading="lazy"
+									/>
+									{/if}
+								{/if}
 						{/each}
 					</div>
 				{/if}
