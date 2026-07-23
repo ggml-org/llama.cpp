@@ -1256,7 +1256,7 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             total_size_org += tensor_size;
             total_size_new += new_size;
 
-            // update the gguf meta data as we go
+            // update the gguf metadata as we go
             gguf_set_tensor_type(ctx_outs[cur_split].get(), metadata[i].name.c_str(), new_type);
             GGML_ASSERT(gguf_get_tensor_size(ctx_outs[cur_split].get(), gguf_find_tensor(ctx_outs[cur_split].get(), metadata[i].name.c_str())) == new_size);
             gguf_set_tensor_data(ctx_outs[cur_split].get(), metadata[i].name.c_str(), new_data);
@@ -1264,6 +1264,10 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             // write tensor data + padding
             fout.write((const char *) new_data, new_size);
             zeros(fout, GGML_PAD(new_size, align) - new_size);
+
+            // unmap the tensor to free memory
+            if (ml.use_mmap) { ml.unmap_weight(weight); }
+
         } // no --dry-run
     } // main loop
 
