@@ -156,6 +156,7 @@ int llama_completion(int argc, char ** argv) {
 
     // note: the time for chat template initialization is not negligible:
     auto chat_templates = common_chat_templates_init(model, params.chat_template);
+    const bool template_supports_thinking = params.use_jinja && common_chat_templates_support_enable_thinking(chat_templates.get());
 
     // start measuring performance timings from here
     llama_perf_context_reset(ctx);
@@ -303,9 +304,12 @@ int llama_completion(int argc, char ** argv) {
 
             if (!params.system_prompt.empty() || !params.prompt.empty()) {
                 common_chat_templates_inputs inputs;
-                inputs.use_jinja = g_params->use_jinja;
                 inputs.messages = chat_msgs;
                 inputs.add_generation_prompt = !params.prompt.empty();
+                inputs.use_jinja = params.use_jinja;
+                inputs.reasoning_format = params.reasoning_format;
+                inputs.enable_thinking = params.enable_reasoning != 0 && template_supports_thinking;
+                inputs.chat_template_kwargs = params.default_template_kwargs;
                 inputs.force_pure_content = params.force_pure_content_parser;
 
                 prompt = common_chat_templates_apply(chat_templates.get(), inputs).prompt;
