@@ -271,10 +271,14 @@ export class ChatService {
 		const reasoningBudgetTokens =
 			enableThinking && reasoningEffort ? (REASONING_EFFORT_TOKENS[reasoningEffort] ?? -1) : -1;
 
-		requestBody.chat_template_kwargs = {
-			...(requestBody.chat_template_kwargs ?? {}),
-			enable_thinking: enableThinking
-		};
+		// an explicit user choice injects the kwarg, otherwise it is omitted so
+		// the server default applies (--reasoning flag or chat template)
+		if (enableThinking !== undefined) {
+			requestBody.chat_template_kwargs = {
+				...(requestBody.chat_template_kwargs ?? {}),
+				enable_thinking: enableThinking
+			};
+		}
 
 		if (reasoningBudgetTokens >= 0) {
 			requestBody.thinking_budget_tokens = reasoningBudgetTokens;

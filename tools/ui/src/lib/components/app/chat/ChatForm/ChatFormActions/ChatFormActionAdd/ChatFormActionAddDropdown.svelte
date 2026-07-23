@@ -71,7 +71,9 @@
 
 <div class="flex items-center gap-1 {className}">
 	<DropdownMenu.Root bind:open={dropdownOpen}>
-		<Tooltip.Root>
+		<!-- ignoreNonKeyboardFocus prevents the tooltip from flashing when the
+		     menu closes and focus returns to the trigger -->
+		<Tooltip.Root ignoreNonKeyboardFocus>
 			<Tooltip.Trigger>
 				{#snippet child({ props })}
 					<DropdownMenu.Trigger
