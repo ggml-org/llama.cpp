@@ -6695,18 +6695,25 @@ struct test_roll : public test_case {
     const int shift1;
     const int shift3;
     const int shift4;
+    const bool permute;
 
     std::string vars() override {
-        return VARS_TO_STR4(shift0, shift1, shift3, shift4);
+        return VARS_TO_STR5(shift0, shift1, shift3, shift4, permute);
     }
 
-    test_roll(int shift0 = 3, int shift1 = -2, int shift3 = 1, int shift4 = -1)
-        : shift0(shift0), shift1(shift1), shift3(shift3), shift4(shift4) {}
+    test_roll(int shift0 = 3, int shift1 = -2, int shift3 = 1, int shift4 = -1, bool permute = false)
+        : shift0(shift0), shift1(shift1), shift3(shift3), shift4(shift4), permute(permute) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         int64_t ne[4] = {10, 5, 4, 3};
         ggml_tensor * a = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
         ggml_set_name(a, "a");
+
+        if (permute) {
+            // ggml_roll only requires nb[0] == type size, so a permuted src is valid
+            a = ggml_permute(ctx, a, 0, 2, 1, 3);
+            ggml_set_name(a, "a_permuted");
+        }
 
         ggml_tensor * out = ggml_roll(ctx, a, shift0, shift1, shift3, shift4);
         ggml_set_name(out, "out");
@@ -9409,6 +9416,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_pad_reflect_1d());
     test_cases.emplace_back(new test_pad_reflect_1d(GGML_TYPE_F32, {3000, 384, 4, 1}));
     test_cases.emplace_back(new test_roll());
+    test_cases.emplace_back(new test_roll(3, -2, 1, -1, true));
     test_cases.emplace_back(new test_arange());
     test_cases.emplace_back(new test_arange(GGML_TYPE_F32, 0.0f, 1048576.0f, 1.0f));
     test_cases.emplace_back(new test_timestep_embedding());
