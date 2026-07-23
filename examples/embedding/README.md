@@ -59,3 +59,15 @@ The above command will output space-separated float values.
 ```powershell
 llama-embedding.exe -p 'Castle<#sep#>Stronghold<#sep#>Dog<#sep#>Cat' --pooling mean --embd-separator '<#sep#>' --embd-normalize 2  --embd-output-format '' -m './path/to/model.gguf' --n-gpu-layers 99 --log-disable 2>/dev/null
 ```
+
+## late-interaction (ColBERT) models
+
+ColBERT-style models emit one embedding vector **per token** instead of a single pooled vector. Convert and run them with `--pooling none`:
+
+```bash
+./llama-embedding -m ./path/to/colbert-model.gguf --pooling none --embd-normalize -1 -p "Hello World!" 2>/dev/null
+```
+
+For sentence-transformers exports that store the final projection as a Dense module directly after the transformer (e.g. [PyLate](https://github.com/lightonai/pylate) models such as [GTE-ModernColBERT-v1](https://huggingface.co/lightonai/GTE-ModernColBERT-v1)), `convert_hf_to_gguf.py` detects the Dense module via `modules.json` automatically and the projection is applied in-graph: each token row is emitted at the projected width (`llama_model_n_embd_out()`, e.g. 128) rather than the hidden size.
+
+Query/document marker tokens, query expansion, and MaxSim scoring are the responsibility of the client application.
