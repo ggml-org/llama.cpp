@@ -113,7 +113,7 @@ int llama_server(common_params & params, int argc, char ** argv) {
     common_models_handler models_handler;
 
     // note: router mode also accepts -hf remote-preset, so we need to check that first
-    if (!is_run_by_cli && !params.model.hf_repo.empty()) {
+    if (!is_run_by_cli && (!params.model.hf_repo.empty() || !params.model.ms_repo.empty())) {
         try {
             models_handler = common_models_handler_init(params, LLAMA_EXAMPLE_SERVER);
             if (common_models_handler_is_preset_repo(models_handler)) {
@@ -128,7 +128,8 @@ int llama_server(common_params & params, int argc, char ** argv) {
 
     // router server never loads a model and must not touch the GPU
     const bool is_router_server = params.model.path.empty()
-                               && params.model.hf_repo.empty();
+                               && params.model.hf_repo.empty()
+                               && params.model.ms_repo.empty();
 
     // skip device enumeration so the CUDA primary context stays uncreated
     common_params_print_info(params, !is_router_server);

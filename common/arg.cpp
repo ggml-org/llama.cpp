@@ -360,6 +360,7 @@ common_models_handler common_models_handler_init(const common_params & params, l
     common_download_hf_plan plan;
     common_download_hf_plan plan_spec;
     common_download_hf_plan plan_voc;
+    common_download_ms_plan plan_ms;
     common_download_opts opts;
 
     const bool spec_type_draft_mtp = std::find(params.speculative.types.begin(),
@@ -410,7 +411,11 @@ common_models_handler common_models_handler_init(const common_params & params, l
         plan_voc = common_download_get_hf_plan(params.vocoder.model, opts);
     }
 
-    return common_models_handler{plan, plan_spec, plan_voc, opts};
+    if (!params.model.ms_repo.empty()) {
+        plan_ms = common_download_get_ms_plan(params.model, opts);
+    }
+
+    return common_models_handler{plan, plan_spec, plan_voc, plan_ms, opts};
 }
 
 bool common_models_handler_is_preset_repo(const common_models_handler & handler) {
@@ -461,6 +466,7 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
     auto & plan      = handler.plan;
     auto & plan_spec = handler.plan_spec;
     auto & plan_voc  = handler.plan_voc;
+    auto & plan_ms   = handler.plan_ms;
 
     auto opts = handler.opts; // copy
     opts.callback = callback;
@@ -646,6 +652,67 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
         });
     }
 
+
+    // handle ms_plan tasks
+    // MS authenticates via a cookie, so attach it only to MS tasks (keep HF tasks on bearer)
+    common_download_opts ms_opts = opts;
+    if (!params.model.ms_repo.empty() && !opts.bearer_token.empty()) {
+        ms_opts.headers.emplace_back("Cookie", "m_session_id=" + opts.bearer_token);
+    }
+    auto add_ms_tasks = [&ms_opts, &tasks](const ms_cache::ms_files  & model_files,
+                                           const ms_cache::ms_file    & primary,
+                                           common_params_model        & model) {
+        for (size_t i = 0; i < model_files.size(); ++i) {
+            auto & model_file = model_files[i];
+            bool is_primary = (model_file.path == primary.path);
+            tasks.emplace_back(model_file, ms_opts, [&model_file, &is_primary, &model]() {
+                if (is_primary) {
+                    // the primary file is the first split (00001-of), use it as model path
+                    model.path = ms_cache::finalize_file(model_file);
+                } else {
+                    ms_cache::finalize_file(model_file);
+                }
+            });
+        }
+    };
+    if (!plan_ms.model_files.empty()) {
+        add_ms_tasks(plan_ms.model_files, plan_ms.primary, params.model);
+    }
+    if (!plan_ms.mmproj.local_path.empty()) {
+        tasks.emplace_back(plan_ms.mmproj, ms_opts, [&]() {
+            params.mmproj.path = ms_cache::finalize_file(plan_ms.mmproj);
+        });
+    }
+    if (!plan_ms.mtp.local_path.empty() && !had_spec_url) {
+        tasks.emplace_back(plan_ms.mtp, ms_opts, [&]() {
+            // only fall back to the discovered MTP head when no draft was explicitly provided
+            if (params.speculative.draft.mparams.empty()) {
+                params.speculative.draft.mparams.path = ms_cache::finalize_file(plan_ms.mtp);
+            } else {
+                ms_cache::finalize_file(plan_ms.mtp);
+            }
+        });
+    }
+    if (!plan_ms.dflash.local_path.empty() && !had_spec_url) {
+        tasks.emplace_back(plan_ms.dflash, ms_opts, [&]() {
+            // only fall back to the discovered DFlash sidecar when no draft was explicitly provided
+            if (params.speculative.draft.mparams.empty()) {
+                params.speculative.draft.mparams.path = ms_cache::finalize_file(plan_ms.dflash);
+            } else {
+                ms_cache::finalize_file(plan_ms.dflash);
+            }
+        });
+    }
+    if (!plan_ms.eagle3.local_path.empty() && !had_spec_url) {
+        tasks.emplace_back(plan_ms.eagle3, ms_opts, [&]() {
+            // only fall back to the discovered Eagle3 sidecar when no draft was explicitly provided
+            if (params.speculative.draft.mparams.empty()) {
+                params.speculative.draft.mparams.path = ms_cache::finalize_file(plan_ms.eagle3);
+            } else {
+                ms_cache::finalize_file(plan_ms.eagle3);
+            }
+        });
+    }
     // run all tasks in parallel
     if (!params.offline) {
         // if duplicated files are found, only download once (but still call on_done for each task)
@@ -714,6 +781,13 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
                 throw std::invalid_argument(string_format(
                     "error while handling environment variable \"%s\": %s\n\n", opt.env, e.what()));
             }
+        }
+    }
+
+    // ModelScope authentication token (passed as a cookie, reusing hf_token as the carrier)
+    if (params.hf_token.empty()) {
+        if (const char * ms_token = std::getenv("MS_TOKEN")) {
+            params.hf_token = ms_token;
         }
     }
 
@@ -1344,7 +1418,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             auto models = common_list_cached_models();
             printf("number of models in cache: %zu\n", models.size());
             for (size_t i = 0; i < models.size(); i++) {
-                printf("%4zu. %s\n", i + 1, models[i].to_string().c_str());
+                printf("%4zu. [%s] %s\n", i + 1, models[i].source.c_str(), models[i].to_string().c_str());
             }
             exit(0);
         }
@@ -2907,6 +2981,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.model.hf_file = value;
         }
     ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_DOWNLOAD, LLAMA_EXAMPLE_TOKENIZE}).set_env("LLAMA_ARG_HF_FILE"));
+    add_opt(common_arg(
+        {"-ms", "-msr", "--ms-repo"}, "<user>/<model>[:quant]",
+        "ModelScope model repository; quant is optional, case-insensitive, default to Q4_K_M, or falls back to the first file in the repo if Q4_K_M doesn't exist.\n"
+        "mmproj is also downloaded automatically if available. to disable, add --no-mmproj\n"
+        "example: Qwen/Qwen3-0.6B-GGUF:Q4_K_M\n"
+        "(default: unused)",
+        [](common_params & params, const std::string & value) {
+            params.model.ms_repo = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_DOWNLOAD}).set_env("LLAMA_ARG_MS_REPO"));
     add_opt(common_arg(
         {"-hfv", "-hfrv", "--hf-repo-v"}, "<user>/<model>[:quant]",
         "Hugging Face model repository for the vocoder model (default: unused)",

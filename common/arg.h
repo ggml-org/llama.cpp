@@ -135,6 +135,7 @@ struct common_models_handler {
     common_download_hf_plan plan;
     common_download_hf_plan plan_spec;
     common_download_hf_plan plan_voc;
+    common_download_ms_plan plan_ms;
     common_download_opts opts;
 };
 
