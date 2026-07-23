@@ -192,6 +192,17 @@ static void test_top_n_sigma(const std::vector<float> & probs, const std::vector
     tester.check();
 }
 
+static void test_p_less(const std::vector<float> & probs, const std::vector<float> & probs_expected) {
+    sampler_tester tester(probs, probs_expected);
+
+    DUMP(&tester.cur_p);
+    tester.apply(llama_sampler_init_p_less());
+    tester.apply(llama_sampler_init_dist(0));
+    DUMP(&tester.cur_p);
+
+    tester.check();
+}
+
 static void test_sampler_queue(const size_t n_vocab, const std::string & samplers_sequence, const int top_k, const float top_p, const float min_p
 ) {
     sampler_tester tester(n_vocab);
@@ -301,6 +312,7 @@ static void test_perf() {
     BENCH(llama_sampler_init_top_k  (40),                     data, 32);
     BENCH(llama_sampler_init_top_p  (0.8f, 1),                data, 32);
     BENCH(llama_sampler_init_min_p  (0.2f, 1),                data, 32);
+    BENCH(llama_sampler_init_p_less (),                       data, 32);
     BENCH(llama_sampler_init_typical(0.5f, 1),                data, 32);
     BENCH(llama_sampler_init_xtc    (1.0f, 0.1f, 1, 1),       data, 32);
 }
@@ -364,6 +376,12 @@ int main(void) {
     test_top_n_sigma({0.1f, 0.2f, 0.3f, 0.4f}, {0.1f, 0.2f, 0.3f, 0.4f}, 0.00f); // top_n_sigma == 0 now represents a no-op rather than greedy decoding as of PR#13345
     test_top_n_sigma({0.1f, 0.2f, 0.3f, 0.4f}, {0.1f, 0.2f, 0.3f, 0.4f}, 3.00f);
 
+    // threshold = 0.225; mathematically safe cutoff. Keeps 0.25 and 0.30.
+    test_p_less({0.1f, 0.15f, 0.2f, 0.25f, 0.3f}, {0.45454545f, 0.54545455f});
+    
+    // threshold = 0.20; uniform distribution keeps all tokens
+    test_p_less({0.2f, 0.2f, 0.2f, 0.2f, 0.2f}, {0.2f, 0.2f, 0.2f, 0.2f, 0.2f});
+    
     test_sampler_queue(10000, "k", 10000, 1.0f, 1.0f);
     test_sampler_queue(10000, "k",     1, 1.0f, 1.0f);
     test_sampler_queue(10000, "p", 10000, 1.0f, 1.0f);

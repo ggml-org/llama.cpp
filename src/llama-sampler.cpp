@@ -2877,10 +2877,10 @@ static void llama_sampler_p_less_apply(struct llama_sampler * /*smpl*/, llama_to
         p_less_threshold += cur_p->data[i].p * cur_p->data[i].p;
     }
 
-    // Apply thresholding (keep tokens where probability >= threshold)
+    // Apply thresholding with a small epsilon to prevent floating-point rounding errors
     size_t mut_size = 0;
     for (size_t i = 0; i < cur_p->size; ++i) {
-        if (cur_p->data[i].p >= p_less_threshold) {
+        if (cur_p->data[i].p >= (p_less_threshold - 1e-5f)) {
             cur_p->data[mut_size++] = cur_p->data[i];
         }
     }
