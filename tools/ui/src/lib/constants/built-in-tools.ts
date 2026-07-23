@@ -29,7 +29,7 @@ export interface BuiltinToolUiEntry {
 
 export const BUILTIN_TOOL_UI: Readonly<Record<BuiltInTool, BuiltinToolUiEntry>> = {
 	[BuiltInTool.READ_FILE]: { icon: FileText, label: 'Read file', source: ToolSource.BUILTIN },
-	[BuiltInTool.READ_IMAGE]: { icon: Eye, label: 'Read image', source: ToolSource.BUILTIN },
+	[BuiltInTool.READ_MEDIA]: { icon: Eye, label: 'Read media', source: ToolSource.BUILTIN },
 	[BuiltInTool.EDIT_FILE]: { icon: FilePen, label: 'Edit file', source: ToolSource.BUILTIN },
 	[BuiltInTool.WRITE_FILE]: { icon: FilePlus, label: 'Write file', source: ToolSource.BUILTIN },
 	[BuiltInTool.FILE_GLOB_SEARCH]: {

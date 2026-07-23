@@ -1116,13 +1116,13 @@ static server_tool & find_tool(std::vector<std::unique_ptr<server_tool>> & tools
 }
 
 //
-// read_image: read an image file and return base64-encoded data with metadata
+// read_media: read a media file (image or audio) and return base64-encoded data with metadata
 //
 
-static constexpr size_t SERVER_TOOL_READ_IMAGE_MAX_SIZE = 16 * 1024 * 1024; // 16 MB
-static constexpr const char* SERVER_TOOL_READ_IMAGE_PREFIX_IMAGE = "Image: ";
-static constexpr const char* SERVER_TOOL_READ_IMAGE_PREFIX_SIZE = "Size: ";
-static constexpr const char* SERVER_TOOL_READ_IMAGE_PREFIX_MIME = "MIME: ";
+static constexpr size_t SERVER_TOOL_READ_MEDIA_MAX_SIZE = 16 * 1024 * 1024; // 16 MB
+static constexpr const char* SERVER_TOOL_READ_MEDIA_PREFIX_FILE = "File: ";
+static constexpr const char* SERVER_TOOL_READ_MEDIA_PREFIX_SIZE = "Size: ";
+static constexpr const char* SERVER_TOOL_READ_MEDIA_PREFIX_MIME = "MIME: ";
 
 static std::string get_mime_from_extension(const std::string & path) {
     static const std::unordered_map<std::string, std::string> mime_map = {
@@ -1140,10 +1140,10 @@ static std::string get_mime_from_extension(const std::string & path) {
     return (it != mime_map.end()) ? it->second : "application/octet-stream";
 }
 
-struct server_tool_read_image : server_tool {
-    server_tool_read_image() {
-        name = "read_image";
-        display_name = "Read image file";
+struct server_tool_read_media : server_tool {
+    server_tool_read_media() {
+        name = "read_media";
+        display_name = "Read media file";
         permission_write = false;
     }
 
@@ -1152,11 +1152,11 @@ struct server_tool_read_image : server_tool {
             {"type", "function"},
             {"function", {
                 {"name", name},
-                {"description", "Read an image file from disk and return it as base64-encoded data with metadata."},
+                {"description", "Read a media file (audio, image) from disk and return it as base64-encoded data with metadata."},
                 {"parameters", {
                     {"type", "object"},
                     {"properties", {
-                        {"path", {{"type", "string"}, {"description", "Absolute path to the image file."}}},
+                        {"path", {{"type", "string"}, {"description", "Absolute path to the media file."}}},
                     }},
                     {"required", json::array({"path"})},
                 }},
@@ -1173,10 +1173,10 @@ struct server_tool_read_image : server_tool {
         if (!io->file_size(path, file_size)) {
             return {{"error", "cannot stat file: " + path}};
         }
-        if (file_size > SERVER_TOOL_READ_IMAGE_MAX_SIZE) {
+        if (file_size > SERVER_TOOL_READ_MEDIA_MAX_SIZE) {
             return {{"error", string_format(
-                "image too large (%zu bytes, max %zu)",
-                (size_t)file_size, SERVER_TOOL_READ_IMAGE_MAX_SIZE)}};
+                "media file too large (%zu bytes, max %zu)",
+                (size_t)file_size, SERVER_TOOL_READ_MEDIA_MAX_SIZE)}};
         }
 
         std::string content;
@@ -1188,16 +1188,18 @@ struct server_tool_read_image : server_tool {
         std::string b64  = base64::encode(content.data(), content.size());
 
         // Return as plain_text_response with a data URI line so the UI can
-        // extract it as an image attachment (via extractBase64Attachments)
+        // extract it as an attachment (via extractBase64Attachments)
+        // and replace it with some placeholder
         std::string data_uri = "data:" + mime + ";base64," + b64;
 
         return {
             {"plain_text_response",
                 string_format(
                     "%s%s\n%s%zu bytes\n%s%s\n%s",
-                    SERVER_TOOL_READ_IMAGE_PREFIX_IMAGE, path.c_str(),
-                    SERVER_TOOL_READ_IMAGE_PREFIX_SIZE, (size_t)file_size,
-                    SERVER_TOOL_READ_IMAGE_PREFIX_MIME, mime.c_str(), data_uri.c_str())},
+                    SERVER_TOOL_READ_MEDIA_PREFIX_FILE, path.c_str(),
+                    SERVER_TOOL_READ_MEDIA_PREFIX_SIZE, (size_t)file_size,
+                    SERVER_TOOL_READ_MEDIA_PREFIX_MIME, mime.c_str(),
+                    data_uri.c_str())},
             {"path", path},
             {"mime", mime},
             {"size_bytes", (int)file_size},
@@ -1219,7 +1221,7 @@ static std::vector<std::unique_ptr<server_tool>> build_tools() {
     tools.push_back(std::make_unique<server_tool_write_file>());
     tools.push_back(std::make_unique<server_tool_edit_file>());
     tools.push_back(std::make_unique<server_tool_get_datetime>());
-    tools.push_back(std::make_unique<server_tool_read_image>());
+    tools.push_back(std::make_unique<server_tool_read_media>());
     return tools;
 }
 
