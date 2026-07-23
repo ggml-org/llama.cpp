@@ -698,7 +698,24 @@ ggml_tensor * llama_model_deepseek4::graph::build_csa_lid_attention(
     ggml_tensor * kq_mask = ggml_concat(ctx0, raw_mask, csa_mask, 0);
     cb(kq_mask, "csa_lid_kq_mask", il);
 
-    ggml_tensor * out = build_attn_mha(q, k_all, k_all, nullptr, kq_mask, sinks, nullptr, kq_scale, il);
+    ggml_tensor * top_k_all = nullptr;
+    if (csa_k->ne[2] >= 8192) {
+        // recover indices of non-masked SWA cells from raw_mask
+        ggml_tensor * raw_mask_f32 = ggml_cast(ctx0, raw_mask, GGML_TYPE_F32);
+        ggml_tensor * top_k_swa = ggml_cont(ctx0, ggml_top_k(ctx0, raw_mask_f32, GGML_PAD(hparams.n_swa, 256)));
+        cb(top_k_swa, "top_k_swa", il);
+
+        // offset values of top_k by raw_mask row length
+        ggml_tensor * top_k_f32 = ggml_cast(ctx0, top_k, GGML_TYPE_F32);
+        top_k_f32 = ggml_scale_bias(ctx0, top_k_f32, 1.0f, 1.0f*raw_mask->ne[0]);
+        ggml_tensor * top_k_offset = ggml_cast(ctx0, top_k_f32, GGML_TYPE_I32);
+        cb(top_k_offset, "top_k_offset", il);
+
+        // merge top_k_swa and top_k_offset
+        top_k_all = ggml_concat(ctx0, top_k_swa, top_k_offset, 0);
+    }
+
+    ggml_tensor * out = build_attn_mha(q, k_all, k_all, nullptr, kq_mask, sinks, nullptr, top_k_all, kq_scale, il);
     if (k_rot) {
         out = llama_mul_mat_hadamard(ctx0, out, k_rot);
     }
@@ -753,7 +770,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_hca_attention(
     ggml_tensor * kq_mask = ggml_concat(ctx0, raw_mask, hca_mask, 0);
     cb(kq_mask, "hca_kq_mask", il);
 
-    ggml_tensor * out = build_attn_mha(q, k_all, k_all, nullptr, kq_mask, sinks, nullptr, kq_scale, il);
+    ggml_tensor * out = build_attn_mha(q, k_all, k_all, nullptr, kq_mask, sinks, nullptr, nullptr, kq_scale, il);
     if (k_rot) {
         out = llama_mul_mat_hadamard(ctx0, out, k_rot);
     }
@@ -789,7 +806,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_raw_attention(
 
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
 
-    ggml_tensor * out = build_attn_mha(q, k, k, nullptr, kq_mask, sinks, nullptr, kq_scale, il);
+    ggml_tensor * out = build_attn_mha(q, k, k, nullptr, kq_mask, sinks, nullptr, nullptr, kq_scale, il);
     if (k_rot) {
         out = llama_mul_mat_hadamard(ctx0, out, k_rot);
     }
