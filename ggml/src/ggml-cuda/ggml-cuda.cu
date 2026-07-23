@@ -684,11 +684,21 @@ struct ggml_cuda_pool_vmm : public ggml_cuda_pool {
 
 std::unique_ptr<ggml_cuda_pool> ggml_backend_cuda_context::new_pool_for_device(int                  device,
                                                                                [[maybe_unused]] int stream_no) {
-#if defined(GGML_USE_VMM)
+#if defined(GGML_USE_VMM) && !defined(GGML_USE_HIP)
     if (ggml_cuda_info().devices[device].vmm) {
         return std::unique_ptr<ggml_cuda_pool>(new ggml_cuda_pool_vmm(device));
     }
-#endif // defined(GGML_USE_VMM)
+#endif // defined(GGML_USE_VMM) && !defined(GGML_USE_HIP)
+#if defined(GGML_USE_HIP) && defined(GGML_USE_VMM)
+    static bool warned = false;
+    if (!warned) {
+        warned = true;
+        fprintf(stderr, "%s: HIP VMM support compiled but disabled at runtime; "
+                        "hipMemSetAccess is not reliable on this platform, "
+                        "falling back to legacy memory pool\n", GGML_CUDA_NAME);
+        fflush(stderr);
+    }
+#endif // defined(GGML_USE_HIP) && defined(GGML_USE_VMM)
     return std::unique_ptr<ggml_cuda_pool>(new ggml_cuda_pool_leg(device));
 }
 
