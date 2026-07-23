@@ -1350,18 +1350,22 @@ struct test_case {
 
         // check if the backends support the ops
         bool supported = true;
+        std::string unsupported_str;
         for (ggml_backend_t backend : {backend1, backend2}) {
             for (ggml_tensor * t = ggml_get_first_tensor(ctx.get()); t != NULL; t = ggml_get_next_tensor(ctx.get(), t)) {
                 if (!ggml_backend_supports_op(backend, t)) {
                     supported = false;
-                    break;
+                    if (unsupported_str.empty()) {
+                        unsupported_str = std::string(ggml_backend_name(backend));
+                    } else {
+                        unsupported_str += ", " + std::string(ggml_backend_name(backend));
+                    }
                 }
             }
         }
 
         if (!supported) {
-            // Create test result for unsupported operation
-            test_result result(ggml_backend_name(backend1), current_op_name, vars(), "test",
+            test_result result(unsupported_str, current_op_name, vars(), "test",
                              false, false, "not supported");
 
             print_test_result_locked(output_printer, result);
