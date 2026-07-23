@@ -329,6 +329,9 @@ static void llama_adapter_lora_init_impl(llama_model & model, const char * path_
         // device buft and device ctx
         const auto * model_tensor = model.get_tensor(name.c_str());
         if (!model_tensor) {
+            if (model.moe_stream() && name.find("_exps.") != std::string::npos) {
+                throw std::runtime_error("LoRA tensor '" + name + "' targets an SSD-streamed expert tensor, which is not supported");
+            }
             throw std::runtime_error("LoRA tensor '" + name + "' does not exist in base model (hint: maybe wrong base model?)");
         }
 

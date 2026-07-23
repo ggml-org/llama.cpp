@@ -4,6 +4,7 @@
 #include "llama-model.h"
 #include "llama-batch.h"
 #include "llama-cparams.h"
+#include "llama-moe-stream.h"
 
 #include "llama-kv-cache.h"
 #include "llama-kv-cache-iswa.h"
@@ -1357,6 +1358,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     loras            (params.loras),
     mctx             (params.mctx),
     cross            (params.cross),
+    mstream          (params.mstream),
     samplers         (params.samplers),
     cb_func          (params.cb),
     res              (params.res),
@@ -1414,15 +1416,20 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
           ggml_tensor * w,   // ggml_tensor * as
           ggml_tensor * cur, // ggml_tensor * b
           ggml_tensor * ids,
-          ggml_tensor * w_s) const {
+          ggml_tensor * w_s,
+          ggml_tensor * ids_scale) const {
     ggml_tensor * res = ggml_mul_mat_id(ctx0, w, cur, ids);
 
     if (w_s) {
+        // w_s always covers all experts, so index it with the original expert ids
+        //   even when the GEMM ids are remapped cache slots (MoE streaming)
+        ggml_tensor * ids_s = ids_scale ? ids_scale : ids;
+
         const int64_t n_expert = w_s->ne[0];
         const int64_t n_tokens = cur->ne[2];
         ggml_tensor * s = ggml_reshape_3d(ctx0, w_s, 1, n_expert, 1);
         s = ggml_repeat_4d(ctx0, s, 1, n_expert, n_tokens, 1);
-        s = ggml_get_rows(ctx0, s, ids);
+        s = ggml_get_rows(ctx0, s, ids_s);
         res = ggml_mul(ctx0, res, s);
     }
     for (const auto & lora : *loras) {
@@ -1960,6 +1967,45 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     //call early so that topk-moe can be used
     ggml_build_forward_expand(gf, weights);
 
+    // MoE expert streaming: make the selected experts cache-resident and remap the ids fed to the
+    //   expert GEMMs to cache slots; the routing itself (weights, scales, biases) keeps the original ids
+    llama_moe_stream_layer * msl = mstream ? mstream->layer(il) : nullptr;
+    if (msl && !msl->matches(gate_exps, up_exps, down_exps, gate_up_exps)) {
+        msl = nullptr; // a different expert group of the same layer (e.g. grovemoe chexps), not streamed
+    }
+
+    // a ubatch can touch more distinct experts than the cache holds; the expert GEMMs then run in
+    //   waves of at most stream_wave_cap experts, the pairs of the other waves masked to zero and the
+    //   wave outputs summed. n_touch_max caps at n_expert, so each expert is loaded at most once per
+    //   ubatch regardless of batch size - wave splitting bounds prefill I/O to one sweep of them.
+    uint32_t n_stream_waves  = 1;
+    uint32_t stream_wave_cap = 0;
+    if (msl) {
+        // worst-case distinct experts: n_expert_used per token, but never more than n_expert total
+        const uint64_t n_touch_max = std::min<uint64_t>((uint64_t) n_expert, (uint64_t) n_tokens*n_expert_used);
+        if (n_touch_max > msl->n_slots) {
+            // the cache must hold three sets at once: this wave's experts, the next wave's preloaded
+            //   experts (so its loads overlap this wave's compute), and n_expert_used parking slots
+            //   the masked-out pairs GEMM against (Metal needs a slot at most once per token row).
+            //   so cap + cap + n_expert_used = n_slots -> cap = (n_slots - n_expert_used)/2
+            stream_wave_cap = msl->n_slots > (uint32_t) n_expert_used ? (msl->n_slots - (uint32_t) n_expert_used)/2 : 0;
+            if (stream_wave_cap < (uint32_t) n_expert_used) {
+                // a wave must fit at least n_expert_used experts, i.e. n_slots >= 3*n_expert_used
+                GGML_ABORT("MoE expert streaming: multi-pass expert GEMMs need an expert cache of at least "
+                           "3*n_expert_used slots (have %u, need %u); increase --moe-stream-cache or reduce -ub",
+                        msl->n_slots, 3*(uint32_t) n_expert_used);
+            }
+            n_stream_waves = (uint32_t) ((n_touch_max + stream_wave_cap - 1)/stream_wave_cap); // ceil(n_touch_max/cap)
+        }
+    }
+
+    ggml_tensor * ids_gemm = selected_experts;
+    if (msl && n_stream_waves == 1) {
+        ggml_tensor * ids_cont = ggml_cont(ctx0, selected_experts); // top_k output is a view
+        ids_gemm = ggml_map_custom1(ctx0, ids_cont, llama_moe_stream_remap, 1, msl);
+        cb(ids_gemm, "ffn_moe_topk_stream", il);
+    }
+
     cur = ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens);
 
     if (weight_before_ffn) {
@@ -1969,12 +2015,15 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         cb(cur, "ffn_moe_weighted", il);
     }
 
+    // the expert GEMM pipeline: run once normally, or once per wave under multi-pass prefill;
+    //   biases and per-expert scales are always indexed by the original selected_experts
+    auto build_expert_gemms = [&](ggml_tensor * cur, ggml_tensor * ids_gemm) -> ggml_tensor * {
     ggml_tensor * up = nullptr;
     ggml_tensor * experts = nullptr;
 
     if (gate_up_exps) {
         // merged gate_up path: one mul_mat_id, then split into gate and up views
-        ggml_tensor * gate_up = build_lora_mm_id(gate_up_exps, cur, selected_experts, up_exps_s); // [n_ff*2, n_expert_used, n_tokens]
+        ggml_tensor * gate_up = build_lora_mm_id(gate_up_exps, cur, ids_gemm, up_exps_s, selected_experts); // [n_ff*2, n_expert_used, n_tokens]
         cb(gate_up, "ffn_moe_gate_up", il);
 
         if (up_exps_s) {
@@ -1993,7 +2042,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         cb(up, "ffn_moe_up", il);
     } else {
         // separate gate and up path
-        up = build_lora_mm_id(up_exps, cur, selected_experts, up_exps_s); // [n_ff, n_expert_used, n_tokens]
+        up = build_lora_mm_id(up_exps, cur, ids_gemm, up_exps_s, selected_experts); // [n_ff, n_expert_used, n_tokens]
         cb(up, "ffn_moe_up", il);
 
         if (up_exps_s) {
@@ -2006,7 +2055,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         }
 
         if (gate_exps) {
-            cur = build_lora_mm_id(gate_exps, cur, selected_experts, gate_exps_s); // [n_ff, n_expert_used, n_tokens]
+            cur = build_lora_mm_id(gate_exps, cur, ids_gemm, gate_exps_s, selected_experts); // [n_ff, n_expert_used, n_tokens]
             cb(cur, "ffn_moe_gate", il);
         } else {
             cur = up;
@@ -2095,7 +2144,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             GGML_ABORT("fatal error");
     }
 
-    experts = build_lora_mm_id(down_exps, cur, selected_experts, down_exps_s); // [n_embd, n_expert_used, n_tokens]
+    experts = build_lora_mm_id(down_exps, cur, ids_gemm, down_exps_s, selected_experts); // [n_embd, n_expert_used, n_tokens]
     cb(experts, "ffn_moe_down", il);
 
     if (down_exps_s) {
@@ -2105,6 +2154,45 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     if (down_exps_b) {
         experts = ggml_add_id(ctx0, experts, down_exps_b, selected_experts);
         cb(experts, "ffn_moe_down_biased", il);
+    }
+
+    return experts;
+    }; // build_expert_gemms
+
+    ggml_tensor * experts = nullptr;
+
+    if (msl && n_stream_waves > 1) {
+        ggml_tensor * ids_cont = ggml_cont(ctx0, selected_experts);
+
+        for (uint32_t w = 0; w < n_stream_waves; w++) {
+            ggml_tensor * args[2] = { ids_cont, nullptr };
+            int n_args = 1;
+            if (experts != nullptr) {
+                // ordering token: forces this wave's ids op to run after the previous wave's GEMMs
+                //   consumed their slots; a 1-element view keeps the cross-backend copy tiny
+                args[1] = ggml_view_1d(ctx0, experts, 1, 0);
+                n_args  = 2;
+            }
+            ggml_tensor * ids_w = ggml_custom_4d(ctx0, GGML_TYPE_I32,
+                    ids_cont->ne[0], ids_cont->ne[1], 1, 1,
+                    args, n_args, llama_moe_stream_wave_ids, 1, msl->wave_userdata(w, stream_wave_cap));
+            cb(ids_w, "ffn_moe_wave_ids", il);
+
+            ggml_tensor * e_w = build_expert_gemms(cur, ids_w);
+
+            ggml_tensor * margs[2] = { ids_cont, ids_w };
+            ggml_tensor * mask_w = ggml_custom_4d(ctx0, GGML_TYPE_F32,
+                    1, n_expert_used, n_tokens, 1,
+                    margs, 2, llama_moe_stream_wave_mask, 1, msl->wave_userdata(w, stream_wave_cap));
+            cb(mask_w, "ffn_moe_wave_mask", il);
+
+            e_w = ggml_mul(ctx0, e_w, mask_w); // zero the pairs that belong to other waves
+
+            experts = experts == nullptr ? e_w : ggml_add(ctx0, experts, e_w);
+            ggml_build_forward_expand(gf, experts);
+        }
+    } else {
+        experts = build_expert_gemms(cur, ids_gemm);
     }
 
     if (!weight_before_ffn) {
