@@ -725,6 +725,15 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				}
 			},
 			{
+				key: SETTINGS_KEYS.SYMBOLIC_MATH_ENABLED,
+				label: 'Symbolic math (nerdamer)',
+				help: 'Pre-load nerdamer in the sandbox for symbolic computation: simplify, diff, integrate, solve, and more. Requires "JavaScript sandbox tool" to be enabled.',
+				defaultValue: false,
+				type: SettingsFieldType.CHECKBOX,
+				section: SETTINGS_SECTION_SLUGS.DEVELOPER,
+				dependsOn: SETTINGS_KEYS.JS_SANDBOX_ENABLED
+			},
+			{
 				key: SETTINGS_KEYS.CUSTOM_JSON,
 				label: 'Custom JSON',
 				help: 'Custom JSON parameters to send to the API. Must be valid JSON format.',

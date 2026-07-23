@@ -3084,7 +3084,10 @@ static bool ggml_hexagon_supported_activations(const struct ggml_hexagon_session
         return false;
     }
 
-    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(dst)) {
+    if (!ggml_is_contiguous_1(src0)) {
+        return false;
+    }
+    if (!ggml_is_contiguous(dst)) {
         return false;
     }
 
@@ -3095,7 +3098,7 @@ static bool ggml_hexagon_supported_activations(const struct ggml_hexagon_session
         if (!ggml_are_same_shape(src0, src1)) {
             return false;
         }
-        if (!ggml_is_contiguous(src1)) {
+        if (!ggml_is_contiguous_1(src1)) {
             return false;
         }
     }
@@ -4152,12 +4155,10 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
                 case GGML_UNARY_OP_SIGMOID:
                 case GGML_UNARY_OP_SOFTPLUS:
                 case GGML_UNARY_OP_TANH:
-                    supp = ggml_hexagon_supported_unary(sess, op);
-                    break;
                 case GGML_UNARY_OP_SILU:
                 case GGML_UNARY_OP_GELU:
                 case GGML_UNARY_OP_GELU_QUICK:
-                    supp = ggml_hexagon_supported_activations(sess, op);
+                    supp = ggml_hexagon_supported_unary(sess, op);
                     break;
                 default:
                     break;

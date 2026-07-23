@@ -2373,9 +2373,12 @@ class ChatStore {
 
 		if (currentConfig.excludeReasoningFromContext) apiOptions.excludeReasoningFromContext = true;
 
-		apiOptions.enableThinking = conversationsStore.getThinkingEnabled();
+		// an explicit reasoning choice overrides the server default, DEFAULT sends nothing
 		const effort = conversationsStore.getReasoningEffort();
-		if (effort !== ReasoningEffort.OFF) apiOptions.reasoningEffort = effort;
+		if (effort !== ReasoningEffort.DEFAULT) {
+			apiOptions.enableThinking = effort !== ReasoningEffort.OFF;
+			if (effort !== ReasoningEffort.OFF) apiOptions.reasoningEffort = effort;
+		}
 
 		if (hasValue(currentConfig.temperature))
 			apiOptions.temperature = Number(currentConfig.temperature);
