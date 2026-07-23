@@ -11216,3 +11216,144 @@ kernel void kernel_count_equal(
 typedef decltype(kernel_count_equal<int32_t>) kernel_count_equal_t;
 
 template [[host_name("kernel_count_equal_i32")]] kernel kernel_count_equal_t kernel_count_equal<int32_t>;
+
+constexpr constant short LI_N_EMBD = 128;
+constexpr constant short LI_N_HEAD = 64;
+constexpr constant short LI_N_KEY_SIMDGROUP = 8;
+constexpr constant short LI_N_SIMDGROUP = 8;
+constexpr constant short LI_N_BATCH_TG = 8;
+
+// Keep one 64-key K tile resident in simdgroup matrix registers while processing
+// several queries. Q is staged eight heads at a time to preserve GPU occupancy.
+kernel void kernel_lightning_indexer_f16(
+        constant ggml_metal_kargs_lightning_indexer & args,
+        device const char * q,
+        device const char * k,
+        device const char * w,
+        device const char * m,
+        device       char * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort  tiitg[[thread_index_in_threadgroup]],
+        ushort  tiisg[[thread_index_in_simdgroup]],
+        ushort  sgitg[[simdgroup_index_in_threadgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+    constexpr short n_embd8 = LI_N_EMBD/8;
+    constexpr short n_embd4 = LI_N_EMBD/4;
+    constexpr short n_head_tile = 8;
+    constexpr short n_key_tg = LI_N_KEY_SIMDGROUP*LI_N_SIMDGROUP;
+
+    const int i_stream = tgpig.z;
+    const int i_kv = args.kv_offset + tgpig.x*n_key_tg + sgitg*LI_N_KEY_SIMDGROUP;
+
+    device const char * k_base = k + i_kv*args.nbk2 + i_stream*args.nbk3;
+
+    simdgroup_half8x8 mk[n_embd8];
+
+    FOR_UNROLL (short i = 0; i < n_embd8; ++i) {
+        simdgroup_load(mk[i], (device const half *) k_base + 8*i, args.nbk2/sizeof(half), 0, true);
+    }
+
+    threadgroup half  q_shared[n_head_tile*LI_N_EMBD];
+    threadgroup float w_shared[n_head_tile];
+    threadgroup float qk_shared[LI_N_SIMDGROUP*n_head_tile*LI_N_KEY_SIMDGROUP];
+
+    const int i_batch_0 = tgpig.y*LI_N_BATCH_TG;
+    const int n_batch = min((int) LI_N_BATCH_TG, args.n_batch - i_batch_0);
+
+    for (short ib = 0; ib < n_batch; ++ib) {
+        const int i_batch = i_batch_0 + ib;
+        device const char * q_base = q + i_batch*args.nbq2 + i_stream*args.nbq3;
+        device const char * w_base = w + i_batch*args.nbw1 + i_stream*args.nbw3;
+
+        float score = 0.0f;
+
+        FOR_UNROLL (short i_head = 0; i_head < LI_N_HEAD; i_head += n_head_tile) {
+            for (short i = tiitg; i < n_head_tile*n_embd4; i += ntg.x*ntg.y) {
+                const short ih = i/n_embd4;
+                const short i4 = i - ih*n_embd4;
+                device const float4 * q4 = (device const float4 *) (q_base + (i_head + ih)*args.nbq1);
+                *(threadgroup half4 *) (q_shared + ih*LI_N_EMBD + 4*i4) = half4(q4[i4]);
+            }
+
+            if (tiitg < n_head_tile) {
+                w_shared[tiitg] = *((device const float *) (w_base + (i_head + tiitg)*sizeof(float)));
+            }
+
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+
+            simdgroup_float8x8 mqk = make_filled_simdgroup_matrix<float, 8>(0.0f);
+
+            FOR_UNROLL (short i = 0; i < n_embd8; ++i) {
+                simdgroup_half8x8 mq;
+                simdgroup_load(mq, q_shared + 8*i, LI_N_EMBD, 0, false);
+                simdgroup_multiply_accumulate(mqk, mq, mk[i], mqk);
+            }
+
+            threadgroup float * qk = qk_shared + sgitg*n_head_tile*LI_N_KEY_SIMDGROUP;
+            simdgroup_store(mqk, qk, LI_N_KEY_SIMDGROUP, 0, false);
+            simdgroup_barrier(mem_flags::mem_threadgroup);
+
+            if (tiisg < LI_N_KEY_SIMDGROUP) {
+                FOR_UNROLL (short ih = 0; ih < n_head_tile; ++ih) {
+                    score += max(qk[ih*LI_N_KEY_SIMDGROUP + tiisg], 0.0f)*w_shared[ih];
+                }
+            }
+
+            threadgroup_barrier(mem_flags::mem_threadgroup);
+        }
+
+        if (tiisg < LI_N_KEY_SIMDGROUP) {
+            const int ik = i_kv + tiisg;
+            device const half * mask = (device const half *) (m + i_batch*args.nbm1 + (i_stream % args.mask_ne3)*args.nbm3);
+            device float * out = (device float *) (dst + i_batch*args.nb1 + i_stream*args.nb3);
+            out[ik] = score + float(mask[ik]);
+        }
+    }
+}
+
+kernel void kernel_lightning_indexer_f16_tail(
+        constant ggml_metal_kargs_lightning_indexer & args,
+        device const char * q,
+        device const char * k,
+        device const char * w,
+        device const char * m,
+        device       char * dst,
+        uint3  tgpig[[threadgroup_position_in_grid]],
+        ushort tiisg[[thread_index_in_simdgroup]]) {
+    const int i_batch  = tgpig.y;
+    const int i_stream = tgpig.z;
+    const int n_key = args.n_kv - args.kv_offset;
+
+    device const char * q_base = q + i_batch*args.nbq2 + i_stream*args.nbq3;
+    device const char * k_base = k + args.kv_offset*args.nbk2 + i_stream*args.nbk3;
+    device const char * w_base = w + i_batch*args.nbw1 + i_stream*args.nbw3;
+
+    float4 k4[LI_N_KEY_SIMDGROUP];
+    float score[LI_N_KEY_SIMDGROUP] = { 0.0f };
+
+    for (short ik = 0; ik < n_key; ++ik) {
+        device const half4 * row = (device const half4 *) (k_base + ik*args.nbk2);
+        k4[ik] = float4(row[tiisg]);
+    }
+
+    FOR_UNROLL (short ih = 0; ih < LI_N_HEAD; ++ih) {
+        device const float4 * row = (device const float4 *) (q_base + ih*args.nbq1);
+        const float4 q4 = row[tiisg];
+        const float weight = *((device const float *) (w_base + ih*sizeof(float)));
+
+        for (short ik = 0; ik < n_key; ++ik) {
+            float qk = simd_sum(dot(q4, k4[ik]));
+            score[ik] += max(qk, 0.0f)*weight;
+        }
+    }
+
+    if (tiisg == 0) {
+        device const half * mask = (device const half *) (m + i_batch*args.nbm1 + (i_stream % args.mask_ne3)*args.nbm3);
+        device float * out = (device float *) (dst + i_batch*args.nb1 + i_stream*args.nb3);
+
+        for (short ik = 0; ik < n_key; ++ik) {
+            const int i = args.kv_offset + ik;
+            out[i] = score[ik] + float(mask[i]);
+        }
+    }
+}
