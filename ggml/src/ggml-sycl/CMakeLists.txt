@@ -199,9 +199,20 @@ if (GGML_SYCL_DEVICE_ARCH)
         -fsycl-targets=spir64_gen
         "SHELL:-Xsycl-target-backend=spir64_gen \"-device ${GGML_SYCL_DEVICE_ARCH}\""
     )
+
+    # Pass through parallel job (process) count for parallelising the
+    # `llvm-foreach -- ocloc` invocation for compiling AOT device images.
+    include(ProcessorCount)
+    ProcessorCount(_ggml_sycl_nproc)
+    if (_ggml_sycl_nproc LESS 1)
+        set(_ggml_sycl_nproc 1)
+    endif()
+    set(GGML_SYCL_MAX_PARALLEL_LINK_JOBS ${_ggml_sycl_nproc} CACHE STRING
+        "Parallel ocloc jobs for spir64_gen AOT device-image lowering")
     target_link_options(
         ggml-sycl PRIVATE
         -fsycl-targets=spir64_gen
         "SHELL:-Xsycl-target-backend=spir64_gen \"-device ${GGML_SYCL_DEVICE_ARCH}\""
+        -fsycl-max-parallel-link-jobs=${GGML_SYCL_MAX_PARALLEL_LINK_JOBS}
     )
 endif()
