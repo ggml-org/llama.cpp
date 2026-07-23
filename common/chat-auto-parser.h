@@ -313,6 +313,7 @@ struct analyze_tools : analyze_base {
                   const analyze_reasoning &    reasoning);
 
     common_peg_parser build_parser(parser_build_context & ctx) const override;
+    common_peg_parser build_parser(parser_build_context & ctx, bool allow_content_before_tools, bool force_tool_calls) const;
 
   private:
     // Extract tool calling 'haystack' for further analysis and delegate further analysis based on format
@@ -362,9 +363,9 @@ struct analyze_tools : analyze_base {
     void extract_call_id_markers();
 
     // Per-format tool parser builders
-    common_peg_parser build_tool_parser_json_native(parser_build_context & ctx) const;
-    common_peg_parser build_tool_parser_tag_json(parser_build_context & ctx) const;
-    common_peg_parser build_tool_parser_tag_tagged(parser_build_context & ctx) const;
+    common_peg_parser build_tool_parser_json_native(parser_build_context & ctx, bool allow_content_before_tools, bool force_tool_calls) const;
+    common_peg_parser build_tool_parser_tag_json(parser_build_context & ctx, bool allow_content_before_tools, bool force_tool_calls) const;
+    common_peg_parser build_tool_parser_tag_tagged(parser_build_context & ctx, bool allow_content_before_tools, bool force_tool_calls) const;
 
     // Shared helper: builds func_parser from open+call_id+args, handling atomic wrapping and close.
     // atomic_peek: if present, used as the peek expression in the third atomicity branch.
