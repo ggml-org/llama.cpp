@@ -16,7 +16,7 @@
 		isExitCodeSummaryLine,
 		parseExecShellCommandError,
 		parseExecShellCommandExitStatus,
-		parseToolResultWithImages,
+		parseToolResultWithMedia,
 		type AgenticSection,
 		type ExecShellExitStatus,
 		type ToolResultLine
@@ -51,7 +51,7 @@
 	);
 
 	const parsedLines: ToolResultLine[] = $derived(
-		section.toolResult ? parseToolResultWithImages(section.toolResult, attachments) : []
+		section.toolResult ? parseToolResultWithMedia(section.toolResult, attachments) : []
 	);
 
 	// Drop the trailing "[exit code: N]" line - rendered as a colored
@@ -200,10 +200,10 @@
 			>
 				{#each outputLines as line, i (i)}
 					<div class="font-mono text-[11px] leading-relaxed whitespace-pre-wrap">{line.text}</div>
-					{#if line.image}
+					{#if line.media}
 						<img
-							src={line.image.base64Url}
-							alt={line.image.name}
+							src={line.media.base64Url}
+							alt={line.media.name}
 							class="mt-2 mb-2 h-auto max-w-full rounded-lg"
 							loading="lazy"
 						/>

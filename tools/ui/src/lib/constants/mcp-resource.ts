@@ -1,7 +1,8 @@
-import { MimeTypeImage } from '$lib/enums';
+import { MimeTypeAudio, MimeTypeImage } from '$lib/enums';
 
 // File extension patterns for resource type detection
 export const IMAGE_FILE_EXTENSION_REGEX = /\.(png|jpg|jpeg|gif|svg|webp)$/i;
+export const AUDIO_FILE_EXTENSION_REGEX = /\.(mp3|wav|ogg|flac|m4a|opus)$/i;
 export const CODE_FILE_EXTENSION_REGEX =
 	/\.(js|ts|json|yaml|yml|xml|html|css|py|rs|go|java|cpp|c|h|rb|sh|toml)$/i;
 export const TEXT_FILE_EXTENSION_REGEX = /\.(txt|md|log)$/i;
@@ -52,4 +53,22 @@ export const IMAGE_MIME_TO_EXTENSION: Record<string, string> = {
 	[MimeTypeImage.PNG]: 'png',
 	[MimeTypeImage.GIF]: 'gif',
 	[MimeTypeImage.WEBP]: 'webp'
+} as const;
+
+/**
+ * Mapping from audio MIME types to file extensions.
+ * Used for generating attachment filenames from MIME types.
+ */
+export const AUDIO_MIME_TO_EXTENSION: Record<string, string> = {
+	[MimeTypeAudio.MP3_MPEG]: 'mp3',
+	[MimeTypeAudio.MP3]: 'mp3',
+	[MimeTypeAudio.MP4]: 'm4a',
+	[MimeTypeAudio.WAV]: 'wav',
+	[MimeTypeAudio.WAVE]: 'wav',
+	[MimeTypeAudio.X_WAV]: 'wav',
+	[MimeTypeAudio.X_WAVE]: 'wav',
+	[MimeTypeAudio.VND_WAVE]: 'wav',
+	[MimeTypeAudio.X_PN_WAV]: 'wav',
+	[MimeTypeAudio.WEBM]: 'webm',
+	[MimeTypeAudio.WEBM_OPUS]: 'opus'
 } as const;

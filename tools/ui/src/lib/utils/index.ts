@@ -162,7 +162,7 @@ export { parseHeadersToArray, serializeHeaders } from './headers';
 export {
 	deriveAgenticSections,
 	buildAssistantRawOutput,
-	parseToolResultWithImages,
+	parseToolResultWithMedia,
 	splitSearchSummaryList,
 	hasAgenticContent,
 	classifyToolResult,

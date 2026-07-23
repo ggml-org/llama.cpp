@@ -1126,6 +1126,7 @@ static constexpr const char* SERVER_TOOL_READ_MEDIA_PREFIX_MIME = "MIME: ";
 
 static std::string get_mime_from_extension(const std::string & path) {
     static const std::unordered_map<std::string, std::string> mime_map = {
+        // Images
         {".png",  "image/png"},
         {".jpg",  "image/jpeg"},
         {".jpeg", "image/jpeg"},
@@ -1134,6 +1135,13 @@ static std::string get_mime_from_extension(const std::string & path) {
         {".tiff", "image/tiff"},
         {".tif",  "image/tiff"},
         {".gif",  "image/gif"},
+        // Audio
+        {".mp3",  "audio/mpeg"},
+        {".wav",  "audio/wav"},
+        {".ogg",  "audio/ogg"},
+        {".flac", "audio/flac"},
+        {".m4a",  "audio/mp4"},
+        {".opus", "audio/opus"},
     };
     auto ext = fs::path(path).extension().string();
     auto it = mime_map.find(ext);

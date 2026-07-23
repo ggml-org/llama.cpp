@@ -34,9 +34,11 @@ import { isAbortError } from '$lib/utils';
 import { DEFAULT_AGENTIC_CONFIG, NEWLINE } from '$lib/constants';
 import {
 	IMAGE_MIME_TO_EXTENSION,
+	AUDIO_MIME_TO_EXTENSION,
 	DATA_URI_BASE64_REGEX,
 	MCP_ATTACHMENT_NAME_PREFIX,
-	DEFAULT_IMAGE_EXTENSION
+	DEFAULT_IMAGE_EXTENSION,
+	AUDIO_FILE_EXTENSION_REGEX
 } from '$lib/constants';
 import {
 	AttachmentType,
@@ -1030,6 +1032,17 @@ class AgenticStore {
 				return `[Attachment saved: ${name}]`;
 			}
 
+			if (mimeType.startsWith('audio/')) {
+				attachments.push({
+					type: AttachmentType.AUDIO,
+					name,
+					mimeType,
+					base64Url: trimmedLine
+				});
+
+				return `[Attachment saved: ${name}]`;
+			}
+
 			return line;
 		});
 
@@ -1037,6 +1050,11 @@ class AgenticStore {
 	}
 
 	private buildAttachmentName(mimeType: string, index: number): string {
+		if (mimeType.startsWith('audio/')) {
+			const extension = AUDIO_MIME_TO_EXTENSION[mimeType] ?? 'mp3';
+			return `${MCP_ATTACHMENT_NAME_PREFIX}-${Date.now()}-${index}.${extension}`;
+		}
+
 		const extension = IMAGE_MIME_TO_EXTENSION[mimeType] ?? DEFAULT_IMAGE_EXTENSION;
 
 		return `${MCP_ATTACHMENT_NAME_PREFIX}-${Date.now()}-${index}.${extension}`;
