@@ -153,7 +153,6 @@ var<workgroup> p_shmem: array<f16, Q_TILE * KV_TILE>;
 
 #define QUANT_SHMEM kv_shmem
 #define QUANT_OUT_TYPE f16
-#include "quant_inner_loops.tmpl"
 #include "flash_attn_quant_staging.tmpl"
 
 #if !defined(K_Q4_0) && !defined(K_Q8_0)
@@ -270,7 +269,9 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
             local_scores[slot] = FLOAT_MIN;
         }
 
-#ifndef KV_DIRECT
+        // The tile path stages K/V in shared memory so each tile can be reused across
+        // Q_TILE query rows. It therefore does not use the direct path.
+#ifndef K_DIRECT
         load_k_tile_block(local_id.x, kv_count, kv_tile, k_head_offset);
 #endif
 
@@ -332,8 +333,10 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
         }
 
         workgroupBarrier();
-
-#ifndef KV_DIRECT
+        
+        // The tile path stages K/V in shared memory so each tile can be reused across
+        // Q_TILE query rows. It therefore does not use the direct path.
+#ifndef V_DIRECT
         load_v_tile_block(local_id.x, kv_count, kv_tile, v_head_offset);
 #endif
 
