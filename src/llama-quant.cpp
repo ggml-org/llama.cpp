@@ -2,6 +2,7 @@
 #include "llama-model.h"
 #include "llama-model-loader.h"
 #include "llama-ext.h"
+#include "llama.h"
 
 #include <algorithm>
 #include <cmath>
@@ -876,15 +877,15 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     // mmap consistently increases speed on Linux, and also increases speed on Windows with
     // hot cache. It may cause a slowdown on macOS, possibly related to free memory.
 #if defined(__linux__) || defined(_WIN32)
-    constexpr bool use_mmap = true;
+    constexpr llama_load_mode load_mode = LLAMA_LOAD_MODE_MMAP;
 #else
-    constexpr bool use_mmap = false;
+    constexpr llama_load_mode load_mode = LLAMA_LOAD_MODE_NONE;
 #endif
 
     const llama_model_kv_override * kv_overrides = params->kv_overrides;
     std::vector<std::string> splits = {};
     llama_model_loader ml(/*metadata*/ nullptr, /*set_tensor_data*/ nullptr, /*set_tensor_data_ud*/ nullptr,
-        fname_inp, splits, /*file*/ nullptr, use_mmap, /*use_direct_io*/ false, /*check_tensors*/ true, /*no_alloc*/ false, kv_overrides, nullptr);
+        fname_inp, splits, /*file*/ nullptr, /*load_mode*/ load_mode, /*check_tensors*/ true, /*no_alloc*/ false, kv_overrides, nullptr);
     ml.init_mappings(false); // no prefetching
 
     auto mparams = llama_model_default_params();
