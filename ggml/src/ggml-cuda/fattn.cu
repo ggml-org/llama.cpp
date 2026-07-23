@@ -500,6 +500,12 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         return BEST_FATTN_KERNEL_MMA_F16;
     }
 
+    // AMD WMMA is always faster than the tile kernel if the full tile width of 16 can be utilized.
+    // MMA path is always faster than WMMA path when headsize allows for it.
+    if ((amd_wmma_available(cc) && gqa_opt_applies && Q->ne[0] <= 128) && Q->ne[0] != 40 && Q->ne[0] != 72 && Q->ne[1] * gqa_ratio_eff > 8) {
+        return BEST_FATTN_KERNEL_MMA_F16;
+    }
+
     // Use the WMMA kernel if possible:
     if (ggml_cuda_should_use_wmma_fattn(cc) && K->ne[1] % FATTN_KQ_STRIDE == 0 && Q->ne[0] != 40 && Q->ne[0] != 72 && Q->ne[0] != 192 && Q->ne[0] != 512 && Q->ne[0] != 576) {
         if (can_use_vector_kernel && Q->ne[1] <= 2) {
@@ -519,11 +525,6 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         if ((Q->ne[0] <= 256 && Q->ne[1] * gqa_ratio_eff > 64)) {
             return BEST_FATTN_KERNEL_MMA_F16;
         }
-    }
-
-    // AMD WMMA is always faster than the tile kernel if the full tile width of 16 can be utilized.
-    if ((amd_wmma_available(cc) && gqa_opt_applies && Q->ne[0] <= 128) && Q->ne[0] != 40 && Q->ne[0] != 72 && Q->ne[1] * gqa_ratio_eff > 8) {
-        return BEST_FATTN_KERNEL_MMA_F16;
     }
 
     // If there are no tensor cores available, use the generic tile kernel:
