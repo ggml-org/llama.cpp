@@ -120,3 +120,4 @@
 /SECURITY.md                            @ggerganov
 /build-xcframework.sh                   @danbev
 requirements*.txt                       @CISC
+/skills                                 @ngxson
