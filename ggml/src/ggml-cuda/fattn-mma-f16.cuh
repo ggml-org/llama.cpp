@@ -2000,6 +2000,7 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
     using fattn_kernel_ptr_t = fattn_kernel_t;
 #endif // defined(GGML_USE_HIP)
     fattn_kernel_t fattn_kernel;
+    bool top_k_usage = false;
 
     if (logit_softcap == 0.0f) {
         constexpr bool use_logit_softcap = false;
@@ -2008,6 +2009,7 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
                 constexpr bool use_top_k = true;
                 fattn_kernel = flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, use_logit_softcap, V_is_K_view, use_top_k>;
                 FATTN_SET_SHARED_MEMORY_LIMIT(fattn_kernel, id, nbytes_shared_total);
+                top_k_usage = true;
             } else {
                 constexpr bool use_top_k = false;
                 fattn_kernel = flash_attn_ext_f16<DKQ, DV, ncols1, ncols2, use_logit_softcap, V_is_K_view, use_top_k>;
@@ -2026,7 +2028,7 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
     }
 
     launch_fattn<DV, ncols1, ncols2>
-        (ctx, dst, fattn_kernel, nwarps, nbytes_shared_total, nbatch_fa, true, true, true, warp_size_host);
+        (ctx, dst, fattn_kernel, nwarps, nbytes_shared_total, nbatch_fa, true, true, true, top_k_usage, warp_size_host);
 }
 
 
