@@ -787,6 +787,7 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
             }
         }
 
+        // TODO: remove this check after deprecating --mmap|mlock|dio
         auto has_arg = [&](std::initializer_list<const char *> names) {
             return std::any_of(names.begin(), names.end(), [&](const char * name) {
                 return seen_args.count(name);
