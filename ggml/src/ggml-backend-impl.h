@@ -83,6 +83,9 @@ extern "C" {
     GGML_API ggml_backend_buffer_t ggml_backend_multi_buffer_alloc_buffer(ggml_backend_buffer_t * buffers, size_t n_buffers);
     GGML_API bool                  ggml_backend_buffer_is_multi_buffer(ggml_backend_buffer_t buffer);
     GGML_API void                  ggml_backend_multi_buffer_set_usage(ggml_backend_buffer_t buffer, enum ggml_backend_buffer_usage usage);
+    // resolve the physical sub-buffer whose memory range contains addr (NULL if none); sub-buffers have a
+    // usable context/get_base, the multi-buffer wrapper does not, so backends need this to find the real buffer
+    GGML_API ggml_backend_buffer_t ggml_backend_multi_buffer_get_buffer(ggml_backend_buffer_t buffer, const void * addr);
 
     //
     // Backend (meta)
