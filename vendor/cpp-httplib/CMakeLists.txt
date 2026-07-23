@@ -182,6 +182,13 @@ if(LLAMA_BUILD_BORINGSSL OR LLAMA_BUILD_LIBRESSL)
     endif()
 endif()
 
+# MSVC at /O2 miscompiles the LibreSSL bignum on Windows x64, producing RSA results that vary
+# between runs (ssl_err 0x4FFF086 first or last octet invalid) and break the TLS handshake.
+# Force /Od on the crypto math target until LibreSSL or MSVC ships a fix.
+if(LLAMA_BUILD_LIBRESSL AND CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    target_compile_options(crypto_obj PRIVATE /Od)
+endif()
+
 if (CPPHTTPLIB_OPENSSL_SUPPORT)
     target_compile_definitions(${TARGET} PUBLIC CPPHTTPLIB_OPENSSL_SUPPORT) # used in server.cpp
     if (APPLE AND CMAKE_SYSTEM_NAME STREQUAL "Darwin")
