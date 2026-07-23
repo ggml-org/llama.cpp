@@ -1,0 +1,78 @@
+---
+name: add-new-model
+description: Guided workflow for adding a new model architecture to llama.cpp. Use when the user wants to add/port a new model architecture.
+---
+
+# Add a new model architecture to llama.cpp
+
+This skill walks a contributor through adding a new model architecture. AI-generated code is permitted in this project, so you may write full implementations for the steps below rather than only pointing at patterns - but follow `AGENTS.md`'s AI usage policy throughout:
+
+- The contributor is 100% responsible for every line, however it was produced. They must be able to explain and defend any part of it to a reviewer. Check in with them as you go (don't silently generate everything and hand over a finished diff) so they actually absorb what was written.
+- Before writing code, make sure the contributor owns the design choices for this architecture (which reference model to follow, how non-standard bits like RoPE variants or MoE routing should be handled) - AI accelerates a design the contributor has already made, it doesn't make the design for them.
+- Disclosure is mandatory: any AI-meaningful contribution must be disclosed per the PR template. Remind the contributor of this before they open the PR.
+- Never write the PR description, commit message, GitHub issue/discussion post, or reviewer replies - those must come from the contributor. If asked to commit on their behalf, use `Assisted-by:` (never `Co-authored-by:`) and only after explicit confirmation.
+- If the requested change looks large or introduces a new pattern not covered here, pause and tell the user this kind of change is likely to need prior discussion with maintainers before a PR.
+- Keep the PR self-contained. If the work would require a lot of unconventional changes outside the new model file(s) (e.g. touching shared graph-building code, the sampler, or core APIs in ways other models don't), STOP and tell the contributor to open a discussion/issue first - invasive or excessive changes get closed without full review.
+- Do not bundle unrelated work into this PR - see Step 4 and Step 5 below for the specifics on multimodal and chat-template/parsing work.
+- Never hack around RoPE with a custom sin/cos implementation. Several past PRs tried this and were closed. If the existing `ggml_rope_ext` (see Step 2's RoPE tips) genuinely cannot express what this model needs, the contributor should open an issue to discuss it with maintainers first - not send a PR with a custom RoPE implementation.
+
+Before starting, read `CONTRIBUTING.md`, `AGENTS.md` and `docs/development/HOWTO-add-model.md` if they are not already in context. Also run `git log --oneline -- src/models` and look at at least 3 recent PRs that added a model (their merge commits/diffs) - this shows current convention more reliably than the docs, which can lag behind.
+
+## Step 0 - Scope and dedup check
+
+Ask the contributor:
+1. Which model (HF repo id or name)? Is it text-only or does it have a multimodal (vision/audio) encoder?
+2. Do they already have the HF `config.json`/weights available locally?
+3. Have they checked for an existing PR/issue on this model? Suggest `gh search issues "<model name>"` and `gh search prs "<model name>"` in the `ggml-org/llama.cpp` repo. If an existing PR covers it, the contributor should comment there and collaborate rather than open a duplicate (per CONTRIBUTING.md's AI Usage Policy).
+4. What existing supported architecture is this model closest to (e.g. "Llama-like with sliding window", "MoE like DBRX", "BERT-style encoder")?
+
+If the contributor doesn't know the closest reference architecture, you may grep `conversion/*.py` and `src/models/*.cpp` for architectures with a similar config shape (layer count, head count, MoE expert count, norm placement) and suggest 1-2 candidates - but let the contributor confirm the choice rather than picking one yourself; this choice is a design decision they need to own.
+
+Do not proceed to Step 1 until the contributor has answered these and named a reference architecture.
+
+## Step 1 - Convert the model to GGUF
+
+Follow HOWTO-add-model.md section 1 for the actual touch points (conversion class registration, `constants.py`, `tensor_mapping.py`, etc.) - don't re-derive them here, read them from the doc.
+
+Skill-specific addition: for each touch point, show the contributor the equivalent code in the reference architecture they named in Step 0 before writing the new version, and check that they understand what's different about their model (e.g. non-standard tensor shapes, extra hparams) rather than just copying the pattern silently.
+
+## Step 2 - Define the architecture in llama.cpp
+
+Follow HOWTO-add-model.md section 2 for the actual touch points (`llm_arch` enum, `LLM_ARCH_NAMES`, hparam loading, RoPE type case, etc.), including its "Tips and tricks" section for `ggml_rope_ext` gotchas.
+
+Skill-specific addition: never hack around RoPE with a custom sin/cos implementation - see the RoPE rule above.
+
+## Step 3 - Build the GGML graph
+
+Follow HOWTO-add-model.md section 3 for the actual touch points (`src/models/<name>.cpp` struct, `llama_model_mapping` registration, etc.).
+
+Skill-specific addition: before writing `src/models/<name>.cpp`, read at least 10 other files under `src/models/` (pick a mix, not just the one reference architecture) to confirm the struct layout, naming, and style you're about to write actually matches current convention - the pattern drifts over time and the HOWTO doc can lag behind it.
+
+## Step 4 - Optional: multimodal encoder
+
+Only do this if the contributor flagged a vision/audio encoder in Step 0. Follow HOWTO-add-model.md section 4 and `docs/multimodal.md` for the actual touch points (`MmprojModel` subclass, `clip.cpp`, `mtmd.cpp`, encoder graph in `tools/mtmd/models`, etc.).
+
+Skill-specific addition, and read this carefully: **multimodal encoder support almost always belongs in its own, separate PR from the base text-model support**, not the same one. If the encoder is a near-exact reuse of an existing implementation (e.g. siglip/pixtral/qwen with just a new projector), a combined PR may be acceptable - confirm with the contributor first. But if the encoder implementation is at all non-trivial (new preprocessor, new graph, non-standard projector), STOP and tell the contributor to land the text model first, then open a dedicated follow-up PR for the encoder. Do not let this decision pass silently - call it out explicitly to the contributor before writing any `clip.cpp`/`mtmd.cpp` code.
+
+## Step 5 - Optional: chat template / parsing support
+
+Only do this if the model needs a new built-in chat template (`src/llama-chat.cpp`) or a new output parser (see `docs/development/parsing.md` and `docs/autoparser.md`). If either is needed beyond what a user-supplied Jinja template already covers, treat it as its own dedicated follow-up PR, not part of the base model-support PR - call this out explicitly to the contributor rather than silently bundling it in.
+
+## Validation checklist
+
+Reference: `examples/model-conversion/README.md`.
+
+1. Convert to GGUF, then inspect/run both the original and converted tensors.
+2. Run logits verification (original vs converted). If this model is a new version of an already-supported family, verify the *previous* version still passes logits verification first - numerical differences may be pre-existing, not caused by the new work.
+3. Quantize (including QAT variants if relevant) and re-verify.
+4. Run perplexity evaluation (simple and full).
+5. Sanity-check across `tools/cli`, `tools/completion`, `tools/imatrix`, `tools/quantize`, and `tools/server`.
+6. CPU backend first; other backends (CUDA, Metal, ...) can be separate follow-up PRs per `CONTRIBUTING.md`.
+7. Re-review every changed file against the coding/naming guidelines in `AGENTS.md` (and `CONTRIBUTING.md`'s "Coding guidelines"/"Naming guidelines" sections) - this is a separate pass from functional testing and is just as important: no forced line-wrapping, no unicode punctuation, minimal/non-redundant comments, `snake_case` naming, matching indentation/brace style, etc.
+
+## Before opening a PR
+
+- Confirm the contributor can explain every changed line to a reviewer and is prepared to be asked about any of it - this is required regardless of how much of the code was AI-generated.
+- Confirm they did a comprehensive manual review of the full diff, not just a skim.
+- Fill in the AI-disclosure section of `.github/pull_request_template.md` describing how AI was used (do not omit or understate this).
+- Do not write the PR description, commit message, GitHub issue/discussion text, or any reviewer replies yourself - the contributor writes these.
