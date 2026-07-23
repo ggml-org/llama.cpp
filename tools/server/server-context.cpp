@@ -199,6 +199,7 @@ struct server_slot {
     std::string  generated_text;
     std::string  debug_generated_text;
     llama_tokens generated_tokens;
+    llama_tokens repetition_tokens;
 
     std::vector<completion_token_output> generated_token_probs;
 
@@ -310,6 +311,7 @@ struct server_slot {
             spec_ckpt.clear();
         }
         generated_tokens.clear();
+        repetition_tokens.clear();
         generated_token_probs.clear();
         json_schema = json();
 
@@ -1809,6 +1811,17 @@ private:
         slot.sampled = result.tok;
 
         slot.generated_text += token_str;
+        const auto & repetition = slot.task->params.repetition_detection;
+        if (repetition.max_pattern_size > 0) {
+            slot.repetition_tokens.push_back(result.tok);
+
+            const size_t max_tail = (size_t) repetition.max_pattern_size * repetition.min_count;
+            if (slot.repetition_tokens.size() > max_tail) {
+                slot.repetition_tokens.erase(
+                        slot.repetition_tokens.begin(),
+                        slot.repetition_tokens.begin() + (slot.repetition_tokens.size() - max_tail));
+            }
+        }
         if (slot.task->params.return_tokens) {
             slot.generated_tokens.push_back(result.tok);
         }
@@ -1927,6 +1940,15 @@ private:
             slot.has_next_token = false;
 
             SLT_DBG(slot, "%s", "stopped by EOS\n");
+        }
+
+        // Keep this after the standard stop checks so their existing priority is preserved.
+        if (slot.has_next_token && server_check_sequence_repetition(
+                    slot.repetition_tokens, slot.task->params.repetition_detection)) {
+            slot.stop           = STOP_TYPE_REPETITION;
+            slot.has_next_token = false;
+
+            SLT_INF(slot, "stopped by repetition detection, n_decoded = %d\n", slot.n_decoded);
         }
 
         SLT_DBG(slot, "n_decoded = %d, n_remaining = %d, next token: %5d '%s'\n", slot.n_decoded, slot.n_remaining, result.tok, token_str.c_str());

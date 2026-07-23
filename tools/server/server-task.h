@@ -45,7 +45,18 @@ enum stop_type {
     STOP_TYPE_EOS,
     STOP_TYPE_WORD,
     STOP_TYPE_LIMIT,
+    STOP_TYPE_REPETITION,
 };
+
+struct repetition_detection_params {
+    int32_t max_pattern_size = 0;
+    int32_t min_pattern_size = 0;
+    int32_t min_count        = 0;
+};
+
+bool server_check_sequence_repetition(
+        const llama_tokens & tokens,
+        const repetition_detection_params & params);
 
 struct task_params {
     bool stream          = false;
@@ -77,6 +88,7 @@ struct task_params {
 
     struct common_params_sampling sampling;
     struct common_params_speculative speculative;
+    repetition_detection_params repetition_detection;
 
     // response formatting
     bool               verbose  = false;
