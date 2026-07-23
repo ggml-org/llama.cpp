@@ -388,6 +388,25 @@ static void test_view_inplace() {
     GGML_ASSERT(backend.context->allocated_total() <= 24);
 }
 
+static void test_output_view_lifetime() {
+    dummy_backend backend      = dummy_backend_init(SIZE_MAX);
+    auto [ctx, graph, ctx_ptr] = make_context();
+
+    ggml_tensor * x[5];
+    x[0] = make_input_1d(ctx, 4);
+    x[1] = ggml_scale(ctx, x[0], 2.0f);
+    x[2] = ggml_reshape_2d(ctx, x[1], 2, 2);
+    x[3] = ggml_sum(ctx, x[2]);
+    x[4] = ggml_pad(ctx, x[3], 3, 0, 0, 0);
+    assign_names(ctx);
+
+    ggml_set_output(x[2]);
+    ggml_gallocr_ptr galloc = allocate_graph(graph, x[4], &backend.buffer_type);
+    check_all_allocated(graph);
+    check_max_size(ctx);
+    GGML_ASSERT(!memory_overlap(x[2], x[4]));
+}
+
 static void test_reuse_and_free() {
     dummy_backend backend      = dummy_backend_init(40);
     auto [ctx, graph, ctx_ptr] = make_context();
@@ -597,6 +616,7 @@ int main() {
     run("test_not_enough_chunks", test_not_enough_chunks);
     run("test_fill_leftover_space", test_fill_leftover_space);
     run("test_view_inplace", test_view_inplace);
+    run("test_output_view_lifetime", test_output_view_lifetime);
     run("test_reuse_and_free", test_reuse_and_free);
     run("test_merge_free_block(32)", []() { test_merge_free_block(32); });
     run("test_merge_free_block(SIZE_MAX)", []() { test_merge_free_block(SIZE_MAX); });

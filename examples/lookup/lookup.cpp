@@ -3,9 +3,11 @@
 #include "common.h"
 #include "ngram-cache.h"
 #include "sampling.h"
+#include "speculative.h"
 #include "log.h"
 #include "llama.h"
 
+#include <algorithm>
 #include <clocale>
 #include <cstdint>
 #include <cstdio>
@@ -26,6 +28,10 @@ int main(int argc, char ** argv){
 
     // max. number of additional tokens to draft if match is found
     const int n_draft = params.speculative.draft.n_max;
+
+    const auto output_limits = common_speculative_get_output_limits(params.n_batch, params.n_parallel, n_draft);
+    params.n_outputs_max = output_limits.total;
+    params.n_sampling_outputs_per_seq_max = output_limits.per_seq;
 
     // init llama.cpp
     llama_backend_init();

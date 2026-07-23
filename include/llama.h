@@ -344,6 +344,7 @@ extern "C" {
         uint32_t n_seq_max;         // max number of sequences (i.e. distinct states for recurrent models)
         uint32_t n_rs_seq;          // number of recurrent-state snapshots per seq for rollback (0 = no rollback) [EXPERIMENTAL]
         uint32_t n_outputs_max;     // max outputs in a ubatch (0 = n_batch)
+        uint32_t n_sampling_outputs_per_seq_max; // max outputs per sequence with backend sampling (0 = n_outputs_max)
         int32_t  n_threads;         // number of threads to use for generation
         int32_t  n_threads_batch;   // number of threads to use for batch processing
 
@@ -1044,6 +1045,9 @@ extern "C" {
     //
 
     // Get the backend sampled token for the ith token.
+    // With multiple outputs, sampler state advances when the token is accepted,
+    // not when it is read through this function.
+    // When accepting multiple outputs, accept a contiguous prefix in output order.
     // Returns LLAMA_TOKEN_NULL if no token was sampled.
     LLAMA_API llama_token llama_get_sampled_token_ith(struct llama_context * ctx, int32_t i);
 
@@ -1257,9 +1261,12 @@ extern "C" {
         // [EXPERIMENTAL]
         // backend sampling interface:
 
-        // return true if the backend supports all ops needed by the sampler
+        // return true if the backend supports all ops needed by the sampler and the requested output mode
         // note: call once per sampler
-        bool (*backend_init)(struct llama_sampler * smpl, ggml_backend_buffer_type_t buft);
+        bool (*backend_init)(
+                struct llama_sampler       * smpl,
+                ggml_backend_buffer_type_t   buft,
+                uint32_t                     n_outputs_per_seq_max);
 
         // call after .backend_apply()
         void (*backend_accept)(
@@ -1277,6 +1284,9 @@ extern "C" {
 
         // called before graph execution to set inputs for the current ubatch
         void (*backend_set_input)(struct llama_sampler * smpl);
+
+        // called before rebuilding a sampling graph to clear graph-owned tensor references
+        void (*backend_reset)(struct llama_sampler * smpl);
     };
 
     struct llama_sampler {
@@ -1486,6 +1496,7 @@ extern "C" {
     LLAMA_API uint32_t llama_sampler_get_seed(const struct llama_sampler * smpl);
 
     /// @details Sample and accept a token from the idx-th output of the last evaluation
+    // For multiple outputs from one sampler, call this function in output order without gaps.
     //
     // Shorthand for:
     //    const auto * logits = llama_get_logits_ith(ctx, idx);

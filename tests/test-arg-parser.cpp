@@ -1,7 +1,9 @@
 #include "arg.h"
 #include "common.h"
 #include "download.h"
+#include "speculative.h"
 
+#include <limits>
 #include <string>
 #include <vector>
 #include <sstream>
@@ -12,6 +14,34 @@
 
 static void test(void) {
     common_params params;
+
+    auto assert_output_limits = [](int32_t n_batch, int32_t n_parallel, int32_t n_draft,
+                                   int32_t total, int32_t per_seq) {
+        const auto limits = common_speculative_get_output_limits(n_batch, n_parallel, n_draft);
+        assert(limits.total == total);
+        assert(limits.per_seq == per_seq);
+    };
+
+    assert_output_limits(16, 2,  3, 8, 4);
+    assert_output_limits(16, 2, -1, 2, 1);
+    assert_output_limits( 6, 2,  3, 6, 4);
+    assert_output_limits( 2, 1,  3, 2, 2);
+    assert_output_limits(
+            std::numeric_limits<int32_t>::max(),
+            std::numeric_limits<int32_t>::max(),
+            std::numeric_limits<int32_t>::max(),
+            std::numeric_limits<int32_t>::max(),
+            std::numeric_limits<int32_t>::max());
+
+    {
+        common_params base;
+        base.n_parallel = 4;
+        base.n_sampling_outputs_per_seq_max = 8;
+
+        const auto draft = common_base_params_to_speculative(base);
+        assert(draft.n_outputs_max == 4);
+        assert(draft.n_sampling_outputs_per_seq_max == 1);
+    }
 
     printf("test-arg-parser: make sure there is no duplicated arguments in any examples\n\n");
     for (int ex = 0; ex < LLAMA_EXAMPLE_COUNT; ex++) {
