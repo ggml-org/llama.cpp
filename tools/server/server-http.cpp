@@ -1,7 +1,6 @@
 #include "common.h"
 #include "http.h"
 #include "server-http.h"
-#include "server-stream.h"
 #include "server-common.h"
 #include "ui.h"
 
@@ -46,6 +45,16 @@ static void log_server_request(const httplib::Request & req, const httplib::Resp
 
     SRV_DBG("request:  %s\n", req.body.c_str());
     SRV_DBG("response: %s\n", res.body.c_str());
+}
+
+// returns true if the Origin header value's host is localhost / 127.0.0.1 / ::1 (any port)
+static bool origin_is_localhost(const std::string & origin) {
+    try {
+        const std::string host = common_http_parse_url(origin).host;
+        return host == "localhost" || host == "127.0.0.1" || host == "::1";
+    } catch (const std::exception &) {
+        return false;
+    }
 }
 
 // For Google Cloud Platform deployment compatibility
@@ -267,13 +276,26 @@ bool server_http_context::init(const common_params & params) {
     };
 
     // register server middlewares
-    srv->set_pre_routing_handler([middleware_validate_api_key, middleware_server_state](const httplib::Request & req, httplib::Response & res) {
-        res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
+    srv->set_pre_routing_handler([&params, middleware_validate_api_key, middleware_server_state](const httplib::Request & req, httplib::Response & res) {
+        if (params.cors_credentials && params.cors_origins == "*") {
+            // special case: echo back the Origin header to allow any origin to access the server with credentials
+            res.set_header("Access-Control-Allow-Origin", req.get_header_value("Origin"));
+        } else if (params.cors_origins == "localhost") {
+            // special case: only reflect the Origin header if it is a localhost origin
+            std::string origin = req.get_header_value("Origin");
+            if (!origin.empty() && origin_is_localhost(origin)) {
+                res.set_header("Access-Control-Allow-Origin", origin);
+            } else if (!origin.empty()) {
+                SRV_WRN("(CORS) skip non-localhost origin: %s\n", origin.c_str());
+            }
+        } else {
+            res.set_header("Access-Control-Allow-Origin", params.cors_origins);
+        }
         // If this is OPTIONS request, skip validation because browsers don't include Authorization header
         if (req.method == "OPTIONS") {
-            res.set_header("Access-Control-Allow-Credentials", "true");
-            res.set_header("Access-Control-Allow-Methods",     "GET, POST");
-            res.set_header("Access-Control-Allow-Headers",     "*");
+            res.set_header("Access-Control-Allow-Credentials", params.cors_credentials ? "true" : "false");
+            res.set_header("Access-Control-Allow-Methods",     params.cors_methods);
+            res.set_header("Access-Control-Allow-Headers",     params.cors_headers);
             res.set_content("", "text/html"); // blank response, no data
             return httplib::Server::HandlerResponse::Handled; // skip further processing
         }
@@ -530,33 +552,20 @@ static void process_handler_response(server_http_req_ptr && request, server_http
             std::string chunk;
             const bool has_next = response->next(chunk);
             if (!chunk.empty()) {
-                // mirror into the ring buffer first, the session must reflect every SSE chunk
-                // whether or not the wire write below succeeds
-                if (response->spipe) {
-                    response->spipe->write(chunk.data(), chunk.size());
-                }
                 if (!sink.write(chunk.data(), chunk.size())) {
-                    // peer is gone, stop the wire path here
                     return false;
                 }
                 SRV_DBG("http: streamed chunk: %s\n", chunk.c_str());
             }
             if (!has_next) {
-                // producer reached its natural end on the wire, a later close() skips the drain
-                if (response->spipe) {
-                    response->spipe->done();
-                }
                 sink.done();
                 SRV_DBG("%s", "http: stream ended\n");
             }
             return has_next;
         };
         const auto on_complete = [request = q_ptr, response = r_ptr](bool) mutable {
-            // on a dropped peer, close() drains the rest of the generation into the ring buffer
-            if (response->spipe) {
-                response->spipe->close();
-            }
-            response.reset(); // spipe destructor finalizes the session if attached
+            response->on_complete();
+            response.reset();
             request.reset();
         };
         res.set_chunked_content_provider(content_type, chunked_content_provider, on_complete);
@@ -564,6 +573,7 @@ static void process_handler_response(server_http_req_ptr && request, server_http
         res.status = response->status;
         set_headers(res, response->headers);
         res.set_content(response->data, response->content_type);
+        response->on_complete();
     }
 }
 

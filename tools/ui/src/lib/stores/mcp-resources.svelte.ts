@@ -16,7 +16,7 @@ import {
 	MCP_RESOURCE_ATTACHMENT_ID_PREFIX,
 	MCP_RESOURCE_CACHE_MAX_ENTRIES,
 	MCP_RESOURCE_CACHE_TTL_MS,
-	NEWLINE_SEPARATOR,
+	NEWLINE,
 	RESOURCE_UNKNOWN_TYPE,
 	BINARY_CONTENT_LABEL
 } from '$lib/constants';
@@ -587,7 +587,7 @@ class MCPResourceStore {
 					name: resourceName,
 					uri: attachment.resource.uri,
 					serverName: attachment.resource.serverName,
-					content: contentParts.join(NEWLINE_SEPARATOR),
+					content: contentParts.join(NEWLINE),
 					mimeType: attachment.resource.mimeType
 				});
 			}

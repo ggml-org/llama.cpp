@@ -126,15 +126,15 @@ It is opt in via the `X-Conversation-Id` header on `POST /v1/chat/completions`. 
 
 The feature lives entirely in `server-stream.{h,cpp}` and rests on three types:
 
-- `stream_session`: a bounded ring buffer (4 MiB cap, oldest bytes drop first) plus a condvar. `append` pushes raw SSE bytes, `read_from` drains from any offset and blocks for live bytes or finalize, `finalize` wakes readers, `cancel` stops the producer. One conv maps to at most one live session.
+- `stream_session`: a bounded ring buffer (4 MiB cap, oldest bytes drop first) plus a condvar. `append` pushes raw SSE bytes, `read_from` drains from any offset and blocks for live bytes or finalize, `finalize` wakes readers, `cancel` sets the flag the producer polls. One conv maps to at most one live session.
 - `stream_session_manager`: a file-static singleton (`g_stream_sessions`) inside `server-stream.cpp`, owns all sessions keyed by conv id, enforces the one conv one session invariant via `create_or_replace`, and runs a GC thread that drops completed sessions past their TTL. Exposed to main only through `server_stream_session_manager_start/stop`.
 - `stream_pipe_producer` / `stream_pipe_consumer`: the write and read ends. The producer owns the session lifetime and finalizes it on destruction; the consumer is read only and never finalizes, so a reader detaching cannot kill a running generation.
 
-The implementation is hidden in `server-stream.cpp` (pimpl). The header exposes only the route handler factories, `server_stream_session_attach_pipe`, `server_stream_aware_should_stop`, `server_stream_conv_id_from_headers` and the GC lifecycle; the session, manager and consumer types stay in the `.cpp`.
+The implementation is hidden in `server-stream.cpp` (pimpl). The header exposes only the route handler factories, the `server_res_spipe` response base, `server_stream_conv_id_from_headers` and the GC lifecycle; the session, manager, consumer and the `server_stream_create_spipe` factory stay in the `.cpp`.
 
-Producer side: `server_res_generator` attaches a producer pipe when the header is present. The HTTP content provider mirrors every chunk into the ring before writing it to the socket. While a pipe is attached, `server_stream_aware_should_stop` ignores peer disconnect, so a dropped socket does not stop generation: only an explicit `DELETE` does. When the peer leaves early, `on_complete` calls `close()`, which drains the rest of the generation into the ring on the http worker.
+Producer side: `server_res_generator` extends `server_res_spipe`, which keeps all spipe logic out of the generic `server_http_res`. `set_req` attaches a producer when the header is present, and the wrapped `next` tees each chunk into the ring before the socket, so a chunk lost to a dead wire is already buffered. While attached, `should_stop` ignores peer disconnect: only a `DELETE` stops generation. On an early peer drop, `on_complete` drains the tail into the ring on the http worker.
 
-Lifetime safety: the producer pipe holds a shared `alive` flag also captured by the session cancel hook. `~server_res_generator` calls `cleanup()` to clear that hook while the reader is still alive, so a `cancel` arriving during teardown can never call `stop()` on a freed response. This ordering is the most fragile part of the feature: finalizing or destroying the producer before `cleanup()` runs reintroduces a use after free.
+Lifetime safety: the session holds no back reference to the response, so `spipe` is a plain `unique_ptr` touched only by the http worker. `cancel` raises an atomic the producer polls; the producer finalizes the session from its destructor, which also runs `~server_response_reader::stop()` to cancel the generation at the queue level. A `DELETE` stops work by raising the flag and letting the worker unwind.
 
 Consumer side: `GET /v1/stream/<conv_id>?from=N` opens a `text/event-stream` that replays buffered bytes from offset `N` and blocks for live bytes, so the browser reattaches like a fresh EventSource. An offset below the dropped prefix returns 400.
 
@@ -234,6 +234,29 @@ That requires `JSON.stringify` when formatted to message content:
     "content": "{\"error\":\"cannot open this file\"}"
 }
 ```
+
+Set `stream: true` in the request body to stream a tool's output as it runs, instead of waiting for it to finish. Only certain tools accept this (for ex. `exec_shell_command`);
+returns 404 if tool doesn't support it.
+
+Response is SSE stream, one `data: <json>` line per chunk:
+
+```json
+{"chunk": "hello\n"}
+```
+
+followed by a final event once the tool returns:
+
+```json
+{"done": true}
+```
+
+or, if `invoke()` threw:
+
+```json
+{"done": true, "error": "..."}
+```
+
+There is no `[DONE]` sentinel (unlike `/chat/completions`), the stream ends after the `done`
 
 ### Router mode: how child <--> router communicates
 

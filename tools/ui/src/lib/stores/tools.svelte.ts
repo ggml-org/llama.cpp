@@ -5,7 +5,7 @@ import { HealthCheckStatus, JsonSchemaType, ToolCallType, ToolSource } from '$li
 import { config } from '$lib/stores/settings.svelte';
 import {
 	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
-	SANDBOX_TOOL_DEFINITION,
+	buildSandboxToolDefinition,
 	TOOL_GROUP_LABELS,
 	TOOL_SERVER_LABELS
 } from '$lib/constants';
@@ -143,7 +143,9 @@ class ToolsStore {
 	}
 
 	get frontendTools(): OpenAIToolDefinition[] {
-		return config().jsSandboxEnabled ? [SANDBOX_TOOL_DEFINITION] : [];
+		return config().jsSandboxEnabled
+			? [buildSandboxToolDefinition(!!config().symbolicMathEnabled)]
+			: [];
 	}
 
 	get customTools(): OpenAIToolDefinition[] {
@@ -412,7 +414,8 @@ class ToolsStore {
 		tools: { name: string; description?: string }[];
 	}[] {
 		const result: ReturnType<ToolsStore['getMcpToolsFromHealthChecks']> = [];
-		for (const server of mcpStore.visibleMcpServers) {
+		for (const server of mcpStore.getServers()) {
+			if (!server.enabled) continue;
 			const health = mcpStore.getHealthCheckState(server.id);
 			if (health.status === HealthCheckStatus.SUCCESS && health.tools.length > 0) {
 				result.push({

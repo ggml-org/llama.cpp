@@ -105,6 +105,24 @@ def test_tools_builtin_edit_file_rejects_non_unique_old_text():
             os.remove(log_path)
 
 
+def test_tools_builtin_exec_shell_command_stream():
+    global server
+    server.start()
+
+    events = list(server.make_stream_request("POST", "/tools", data={
+        "tool": "exec_shell_command",
+        "params": {"command": "echo hello"},
+        "stream": True,
+    }))
+
+    assert len(events) >= 2
+    assert events[-1]["done"] is True
+    assert not events[-1].get("error")
+    chunks = "".join(e["chunk"] for e in events[:-1])
+    assert "hello" in chunks
+    assert "[exit code: 0]" in chunks
+
+
 def test_tools_builtin_edit_file_rejects_overlapping_edits():
     global server
     server.start()

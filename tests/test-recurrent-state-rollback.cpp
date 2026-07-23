@@ -20,7 +20,7 @@ static llama_context * make_ctx(const common_params & params, llama_model * mode
 static bool decode_tokens(llama_context * ctx, const std::vector<llama_token> & tokens, uint32_t count) {
     llama_batch batch = llama_batch_init(count, 0, 1);
     for (uint32_t pos = 0; pos < count; ++pos) {
-        common_batch_add(batch, tokens[pos], pos, { 0 }, false);
+        common_batch_add(batch, tokens[pos], pos, { 0 }, pos + 1 == count);
     }
     const bool ok = llama_decode(ctx, batch) == 0;
     llama_batch_free(batch);
@@ -79,7 +79,12 @@ int main(int argc, char ** argv) {
         return 0;
     }
 
-    std::vector<llama_token> tokens = common_tokenize(ctx_src, "The quick brown fox jumps", true);
+    std::vector<llama_token> tokens;
+    if (llama_vocab_type(vocab) == LLAMA_VOCAB_TYPE_NONE) {
+        tokens = { 1, 2, 3, 4, 5, 6, 7, 8, 9 };
+    } else {
+        tokens = common_tokenize(ctx_src, "The quick brown fox jumps", true);
+    }
     const uint32_t n_rs_seq = llama_n_rs_seq(ctx_src);
     if (tokens.size() > n_rs_seq + 1) {
         tokens.resize(n_rs_seq + 1);

@@ -369,12 +369,13 @@ class NomicBertModel(BertModel):
         return super().filter_tensors(item)
 
     def modify_tensors(self, data_torch: torch.Tensor, name: str, bid: int | None) -> Iterable[tuple[str, torch.Tensor]]:
-        n_experts = self.find_hparam(["num_local_experts", "num_experts"])
         if "mlp.experts.mlp.w1" in name:
+            n_experts = self.find_hparam(["num_local_experts", "num_experts"])
             data_torch = data_torch.view(n_experts, self.hparams["n_inner"], self.hparams["n_embd"])
             name += ".weight"
 
         if "mlp.experts.mlp.w2" in name:
+            n_experts = self.find_hparam(["num_local_experts", "num_experts"])
             data_torch = data_torch.view(n_experts, self.hparams["n_inner"], self.hparams["n_embd"])
             data_torch = data_torch.transpose(1, 2)
             name += ".weight"
