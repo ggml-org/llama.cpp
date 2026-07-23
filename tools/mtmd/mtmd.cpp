@@ -393,6 +393,12 @@ struct mtmd_context {
         projector_type proj = clip_get_projector_type(ctx_v);
 
         switch (proj) {
+            case PROJECTOR_TYPE_INKLING:
+                {
+                    // renderer opens each image part with <|content_image|>; block framing comes from the template
+                    img_beg = "<|content_image|>";
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_inkling>(ctx_v);
+                } break;
             case PROJECTOR_TYPE_MLP:
             case PROJECTOR_TYPE_MLP_NORM:
             case PROJECTOR_TYPE_LDP:
@@ -663,6 +669,13 @@ struct mtmd_context {
 
         // set preprocessor
         switch (proj) {
+            case PROJECTOR_TYPE_INKLING:
+                {
+                    // <|content_audio_input|> ... <|audio_end|>, matching the renderer's audio framing
+                    aud_beg = "<|content_audio_input|>";
+                    aud_end = "<|audio_end|>";
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_inkling>(ctx_a);
+                } break;
             case PROJECTOR_TYPE_QWEN2A:
             case PROJECTOR_TYPE_QWEN25O:
                 {
@@ -1179,23 +1192,35 @@ struct mtmd_tokenizer {
                 }
 
                 size_t n_tokens = 0;
-                for (auto & e : preproc_out.entries) {
-                    n_tokens += clip_n_output_tokens(ctx->ctx_v, &e);
-                    if (clip_model_n_temporal_merge(ctx->ctx_v) == 2) {
-                        // [QWEN_VIDEO] pair input is merged to the same embd, so only count as one image
-                        break;
+                if (ctx->proj_type_v() == PROJECTOR_TYPE_INKLING) {
+                    GGML_ASSERT(preproc_out.entries.size() % 2 == 0);
+                    n_tokens = preproc_out.entries.size() / 2;
+                } else {
+                    for (auto & e : preproc_out.entries) {
+                        n_tokens += clip_n_output_tokens(ctx->ctx_v, &e);
+                        if (clip_model_n_temporal_merge(ctx->ctx_v) == 2) {
+                            // [QWEN_VIDEO] pair input is merged to the same embd, so only count as one image
+                            break;
+                        }
                     }
                 }
 
                 mtmd_image_tokens_ptr image_tokens(new mtmd_image_tokens);
 
                 // [QWEN_VIDEO] improve this in the future
-                image_tokens->n_temporal_merge = clip_model_n_temporal_merge(ctx->ctx_v);
+                // Inkling's pair is internal to each patch; it must not merge consecutive user bitmaps as video frames.
+                image_tokens->n_temporal_merge = ctx->proj_type_v() == PROJECTOR_TYPE_INKLING
+                    ? 2
+                    : clip_model_n_temporal_merge(ctx->ctx_v);
 
                 if (mtmd_decode_use_mrope(ctx)) {
                     // for Qwen2VL, we need this information for M-RoPE decoding positions
                     image_tokens->nx = clip_n_output_tokens_x(ctx->ctx_v, &preproc_out.entries[0]);
                     image_tokens->ny = clip_n_output_tokens_y(ctx->ctx_v, &preproc_out.entries[0]);
+                } else if (ctx->proj_type_v() == PROJECTOR_TYPE_INKLING) {
+                    // n_tokens() multiplies 1x1 by the number of temporal groups.
+                    image_tokens->nx = 1;
+                    image_tokens->ny = 1;
                 } else {
                     // other models, we only need the total number of tokens
                     image_tokens->nx = n_tokens;

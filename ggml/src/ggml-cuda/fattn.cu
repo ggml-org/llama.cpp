@@ -392,6 +392,14 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
     const int cc = ggml_cuda_info().devices[device].cc;
 
+    // banded bias lives in the F16 MMA loop; F32 K/V keeps the dedicated FP32 warp kernel
+    if (dst->op == GGML_OP_FLASH_ATTN_EXT_BANDED &&
+        dst->src[5]->type == GGML_TYPE_F32 && K->type != GGML_TYPE_F32 && V->type != GGML_TYPE_F32 &&
+        dst->src[5]->ne[3] == Q->ne[3] &&
+        turing_mma_available(cc) && (Q->ne[0] == 64 || Q->ne[0] == 128) && V->ne[0] == Q->ne[0]) {
+        return BEST_FATTN_KERNEL_MMA_F16;
+    }
+
     switch (K->ne[0]) {
         case  40:
         case  64:
@@ -544,7 +552,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 }
 
 size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * dst) {
-    GGML_ASSERT(dst->op == GGML_OP_FLASH_ATTN_EXT);
+    GGML_ASSERT(dst->op == GGML_OP_FLASH_ATTN_EXT || dst->op == GGML_OP_FLASH_ATTN_EXT_BANDED);
 
     const ggml_tensor * K = dst->src[1];
     const ggml_tensor * V = dst->src[2];

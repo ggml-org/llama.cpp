@@ -268,8 +268,17 @@ class ModelBase:
                             data_gen = lambda data=data_torch: LazyTorchTensor.from_eager(data)  # noqa: E731
                         else:
                             data_gen = lambda data=data_torch: data  # noqa: E731
+                    # the index maps each tensor to one shard; a duplicate would silently overwrite it
+                    if weight_map and name in weight_map and weight_map[name] != part_name:
+                        raise ValueError(
+                            f"tensor '{name}' found in '{part_name}' but the index assigns "
+                            f"it to '{weight_map[name]}'; refusing to load a wrong-shard copy")
                     if titem := self.filter_tensors((name, data_gen)):
                         tname, tgen = titem
+                        if tname in tensors:
+                            raise ValueError(
+                                f"duplicate tensor '{tname}' found in multiple model parts; "
+                                f"refusing to silently overwrite")
                         tensors[tname] = tgen
 
         # verify tensor name presence and identify potentially missing files
@@ -537,6 +546,20 @@ class ModelBase:
                 else:
                     raise NotImplementedError(f"Quant format {quant_format!r} for method {quant_method!r} is not yet supported")
             elif quant_method == "modelopt":
+                # Stacked-expert NVFP4 checkpoints (e.g. Inkling-NVFP4) store experts as
+                # w13_weight/w2_weight with .scale/.scale2/.input_amax/.original_shape
+                # auxiliaries; the main tensors do not end in .weight, so the NVFP4 path
+                # below would silently skip them. Reject them with a clear error.
+                stacked_expert_aux = [
+                    n for n in self.model_tensors
+                    if n.endswith((".scale2", ".input_amax", ".original_shape"))
+                ]
+                if stacked_expert_aux:
+                    raise NotImplementedError(
+                        "This checkpoint stores quantized experts in the stacked ModelOpt NVFP4 layout "
+                        f"({len(stacked_expert_aux)} auxiliary tensors like {stacked_expert_aux[0]!r}), "
+                        "which is not supported yet. Convert from the unquantized (BF16) checkpoint instead."
+                    )
                 # Mixed-precision ModelOpt models: NVFP4 tensors are handled by
                 # _generate_nvfp4_tensors; FP8 tensors have 1D weight_scale and
                 # are dequantized here. k/v scale tensors are unused.
@@ -1023,6 +1046,14 @@ class ModelBase:
 
     def write(self):
         self.prepare_tensors()
+        # zero tensors means the shards were never discovered, yet a metadata-only GGUF logs success
+        n_written = sum(len(shard) for shard in self.gguf_writer.tensors)
+        if n_written == 0:
+            raise ValueError(
+                "no tensors were written: the model shards could not be found. "
+                "Check that the safetensors filenames are discoverable (they must "
+                "start with 'model') or that model.safetensors exists."
+            )
         self.prepare_metadata(vocab_only=False)
         self.gguf_writer.write_header_to_file(path=self.fname_out)
         self.gguf_writer.write_kv_data_to_file()

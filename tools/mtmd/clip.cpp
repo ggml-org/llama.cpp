@@ -869,6 +869,10 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
     std::unique_ptr<clip_graph> builder;
 
     switch (ctx->proj_type()) {
+        case PROJECTOR_TYPE_INKLING:
+            {
+                builder = std::make_unique<clip_graph_inkling>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_GEMMA3:
         case PROJECTOR_TYPE_IDEFICS3:
         case PROJECTOR_TYPE_LFM2:
@@ -1277,6 +1281,21 @@ struct clip_model_loader {
 
             // model-specific params
             switch (model.proj_type) {
+                case PROJECTOR_TYPE_INKLING:
+                    {
+                        if (is_vision) {
+                            hparams.image_resize_algo = RESIZE_ALGO_BICUBIC_PILLOW;
+                            hparams.image_resize_pad  = PAD_NONE;
+                            hparams.warmup_image_size = hparams.patch_size;
+                        } else {
+                            hparams.audio_chunk_len   = 0;
+                            hparams.audio_sample_rate = 16000;
+                            hparams.audio_n_fft       = 1600;
+                            hparams.audio_window_len  = 1600;
+                            hparams.audio_hop_len     = 800;
+                            hparams.warmup_audio_size = 4;
+                        }
+                    } break;
                 case PROJECTOR_TYPE_MLP:
                 case PROJECTOR_TYPE_MLP_NORM:
                 case PROJECTOR_TYPE_LDP:
@@ -1856,7 +1875,8 @@ struct clip_model_loader {
         model.position_embeddings = get_tensor(string_format(TN_POS_EMBD, prefix), false);
 
         const bool has_standard_layers = (
-            model.proj_type != PROJECTOR_TYPE_GEMMA3NV);
+            model.proj_type != PROJECTOR_TYPE_GEMMA3NV &&
+            model.proj_type != PROJECTOR_TYPE_INKLING);
 
         // layers
         const int n_layers_to_load = has_standard_layers ? hparams.n_layer : 0;
@@ -1942,6 +1962,23 @@ struct clip_model_loader {
 
 
         switch (model.proj_type) {
+            case PROJECTOR_TYPE_INKLING:
+                {
+                    if (model.modality == CLIP_MODALITY_VISION) {
+                        model.inkling_hmlp_layers.resize(hparams.n_layer);
+                        for (int il = 0; il < hparams.n_layer; ++il) {
+                            auto & layer = model.inkling_hmlp_layers[il];
+                            layer.linear_w = get_tensor(string_format(TN_INKLING_HMLP_LINEAR, il));
+                            layer.norm_w = il + 1 < hparams.n_layer
+                                ? get_tensor(string_format(TN_INKLING_HMLP_NORM, il))
+                                : nullptr;
+                        }
+                        model.inkling_hmlp_final_norm_w = get_tensor(TN_INKLING_HMLP_FINAL_NORM);
+                    } else {
+                        model.inkling_dmel_embd_w       = get_tensor(TN_INKLING_DMEL_EMBD);
+                        model.inkling_dmel_final_norm_w = get_tensor(TN_INKLING_DMEL_FINAL_NORM);
+                    }
+                } break;
             case PROJECTOR_TYPE_MLP:
             case PROJECTOR_TYPE_MLP_NORM:
                 {
@@ -2906,6 +2943,11 @@ struct clip_model_loader {
             LOG_INF("%s: warmup with audio size = %d\n", __func__, hparams.warmup_audio_size);
         }
         batch.entries.push_back(img);
+        // One logical Inkling vision patch always contains two adjacent temporal slices (including warmup reserve).
+        if (ctx_clip.model.modality == CLIP_MODALITY_VISION &&
+                ctx_clip.model.proj_type == PROJECTOR_TYPE_INKLING) {
+            batch.entries.push_back(img);
+        }
         return batch;
     }
 
@@ -3303,6 +3345,16 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
     projector_type proj = ctx->proj_type();
 
     switch (proj) {
+        case PROJECTOR_TYPE_INKLING:
+            {
+                if (ctx->model.modality == CLIP_MODALITY_AUDIO) {
+                    // One dMel row is one soft audio token.
+                    n_patches = img->nx();
+                } else {
+                    // Batch entries are temporal slices; each pair emits one token.
+                    n_patches = 1;
+                }
+            } break;
         case PROJECTOR_TYPE_MLP:
         case PROJECTOR_TYPE_MLP_NORM:
         case PROJECTOR_TYPE_JANUS_PRO:
@@ -3675,6 +3727,10 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
 
     // set input per projector
     switch (ctx->model.proj_type) {
+        case PROJECTOR_TYPE_INKLING:
+            {
+                // inp_raw is the only graph input.
+            } break;
         case PROJECTOR_TYPE_MINICPMV:
             {
                 // inspired from siglip:
@@ -4551,6 +4607,10 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
 
 int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
     switch (ctx->model.proj_type) {
+        case PROJECTOR_TYPE_INKLING:
+            return ctx->model.modality == CLIP_MODALITY_AUDIO
+                ? ctx->model.inkling_dmel_final_norm_w->ne[0]
+                : ctx->model.inkling_hmlp_final_norm_w->ne[0];
         case PROJECTOR_TYPE_LDP:
             return ctx->model.mm_model_block_1_block_2_1_b->ne[0];
         case PROJECTOR_TYPE_LDPV2:
