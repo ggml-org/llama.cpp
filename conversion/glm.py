@@ -204,9 +204,32 @@ class Glm4MoeModel(TextModel):
 @ModelBase.register("Glm4MoeLiteForCausalLM")
 class Glm4MoeLiteModel(DeepseekV2Model):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK2
+    skip_mtp = False
 
     def set_vocab(self):
         return self._set_vocab_glm()
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        num_hidden_layers = self.hparams["num_hidden_layers"]
+        self.num_nextn_predict_layers = self.hparams.get("num_nextn_predict_layers", 0)
+        self.skip_mtp = self.no_mtp or self.num_nextn_predict_layers == 0
+
+        if self.skip_mtp:
+            self.block_count = num_hidden_layers
+        else:
+            self.block_count = num_hidden_layers + self.num_nextn_predict_layers
+
+        self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        if self.skip_mtp:
+            return
+
+        self.gguf_writer.add_nextn_predict_layers(self.num_nextn_predict_layers)
 
 
 @ModelBase.register("GlmMoeDsaForCausalLM")
