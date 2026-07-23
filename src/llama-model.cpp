@@ -1518,7 +1518,7 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         }
     }
 
-    ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
+    ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr, params.lazy_experts);
     pimpl->mappings.reserve(ml.mappings.size());
 
     // create the backend buffers
@@ -2330,6 +2330,7 @@ llama_model_params llama_model_default_params() {
         /*.use_extra_bufts             =*/ true,
         /*.no_host                     =*/ false,
         /*.no_alloc                    =*/ false,
+        /*.lazy_experts                =*/ false,
     };
 
     return result;

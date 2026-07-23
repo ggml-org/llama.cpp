@@ -185,7 +185,9 @@ struct llama_model_loader {
 
     void done_getting_tensors(bool partial = false) const;
 
-    void init_mappings(bool prefetch = true, llama_mlocks * mlock_mmaps = nullptr);
+    // lazy_experts: when true (and prefetching), routed MoE expert weight tensors are NOT populated
+    //               up front; only non-expert regions are prefetched and experts fault in on demand.
+    void init_mappings(bool prefetch = true, llama_mlocks * mlock_mmaps = nullptr, bool lazy_experts = false);
 
     void get_mapping_range(size_t * first, size_t * last, void ** addr, int idx, ggml_context * ctx) const;
 
