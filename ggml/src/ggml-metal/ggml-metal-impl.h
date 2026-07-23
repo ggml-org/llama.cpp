@@ -1157,7 +1157,7 @@ typedef struct {
     int32_t  len;
 } ggml_metal_kargs_argsort_merge;
 
-typedef struct  {
+typedef struct {
     int32_t nrows;
 } ggml_metal_kargs_fwht;
 

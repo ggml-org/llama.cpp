@@ -6202,7 +6202,6 @@ kernel void kernel_fwht_f32(
     for (int i = 0; i < el_w; i++) {
         reg[i] = src[i * simd_size + lane] * scale;
     }
-1
     for (int i = 1; i < simd_size; i *= 2) {
         for (int j = 0; j < el_w; j++) {
             const float val = reg[j];
@@ -6233,7 +6232,6 @@ template [[host_name("kernel_fwht_f32_64")]] kernel kernel_fwht_t kernel_fwht_f3
 template [[host_name("kernel_fwht_f32_128")]] kernel kernel_fwht_t kernel_fwht_f32<128>;
 template [[host_name("kernel_fwht_f32_256")]] kernel kernel_fwht_t kernel_fwht_f32<256>;
 template [[host_name("kernel_fwht_f32_512")]] kernel kernel_fwht_t kernel_fwht_f32<512>;
-
 
 constant bool FC_flash_attn_ext_pad_has_mask [[function_constant(FC_FLASH_ATTN_EXT_PAD + 0)]];
 

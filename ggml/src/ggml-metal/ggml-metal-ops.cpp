@@ -1979,7 +1979,7 @@ int ggml_metal_op_pool_1d(ggml_metal_op_t ctx, int idx) {
     return 1;
 }
 
-//supported FWHT sizes, must stay in sync with the
+// supported FWHT sizes, must stay in sync with the
 // kernel_fwht_f32_<N> templates in ggml-metal.metal
 static bool ggml_metal_fwht_supported_size(int64_t n) {
     return n == 64 || n == 128 || n == 256 || n == 512;
@@ -1997,7 +1997,7 @@ int ggml_metal_op_fwht(ggml_metal_op_t ctx, int idx) {
     const int64_t nrows = ggml_nrows(src1);
 
     ggml_metal_kargs_fwht args = {
-        /*.nrows = */ (int32_t) nrows,
+        /*.nrows = */ nrows,
     };
 
     auto pipeline = ggml_metal_library_get_pipeline_fwht(lib, n);
@@ -2018,7 +2018,6 @@ int ggml_metal_op_fwht(ggml_metal_op_t ctx, int idx) {
 
     return 1;
 }
-
 
 int ggml_metal_op_pool_2d(ggml_metal_op_t ctx, int idx) {
     ggml_tensor * op = ctx->node(idx);
