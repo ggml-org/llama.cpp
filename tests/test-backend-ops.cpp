@@ -8992,6 +8992,17 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_MXFP4, GGML_TYPE_F32, 32, 2, false, 2880, 32, 2880));
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_0, GGML_TYPE_F32, 32, 2, false, 2880, 32, 2880));
 
+    // Laguna S.2 uses 256 experts and routes each token to 10 experts. Cover
+    // wave32 padded-16 routing, odd token counts, MMQ J tails, and both the
+    // broadcast gate/up and expert-specific down-projection activation layouts.
+    for (ggml_type type_a : {GGML_TYPE_Q4_K, GGML_TYPE_Q6_K}) {
+        for (bool b : {false, true}) {
+            for (int n : {1, 9, 63, 64, 65, 255, 256}) {
+                test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 256, 10, b, 128, n, 256));
+            }
+        }
+    }
+
     for (ggml_type type_a : all_types) {
         test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 4, 2, false, 64, 16, 3*ggml_blck_size(type_a)));
     }
@@ -9826,6 +9837,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
                 test_cases.emplace_back(new test_mul_mat(type_a, type_b, 4096, bs, 14336, {1,  1}, {1, 1}));
             }
         }
+    }
+
+    // Laguna S.2 four-way tensor-split expert shapes.
+    for (int bs : {1, 8, 64, 256}) {
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_K, GGML_TYPE_F32, 256, 10, true,  256, bs, 3072));
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_K, GGML_TYPE_F32, 256, 10, false, 768, bs, 1024));
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q6_K, GGML_TYPE_F32, 256, 10, false, 768, bs, 1024));
     }
 
     // qwen3-30b-a3b

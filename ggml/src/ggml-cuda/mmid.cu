@@ -60,8 +60,11 @@ static __global__ void mm_ids_helper(
         }
     } else {
         // Implementation optimized for specific numbers of experts used:
-        static_assert(n_expert_used == 6 || warp_size % n_expert_used == 0, "bad n_expert_used");
-        const int neu_padded = n_expert_used == 6 ? 8 : n_expert_used; // Padded to next higher power of 2.
+        constexpr int neu_padded =
+            n_expert_used_template == 6  ? 8  :
+            n_expert_used_template == 10 ? 16 :
+            n_expert_used_template;
+        static_assert(warp_size % neu_padded == 0, "bad padded n_expert_used");
         for (int it0 = 0; it0 < n_tokens; it0 += warp_size/neu_padded) {
             const int it = it0 + threadIdx.x / neu_padded;
 
@@ -156,6 +159,16 @@ void ggml_cuda_launch_mm_ids_helper(
         case  8:
             launch_mm_ids_helper< 8>(ids, ids_src1, ids_dst, expert_bounds, n_experts, n_tokens, n_expert_used, nchannels_y, si1, sis1, write_inverse, stream);
             break;
+        case 10: {
+            static const bool top10_enabled = getenv("GGML_CUDA_MMID_TOP10") != nullptr;
+            const int id = ggml_cuda_get_device();
+            const int warp_size = ggml_cuda_info().devices[id].warp_size;
+            if (top10_enabled && warp_size == 32) {
+                launch_mm_ids_helper<10>(ids, ids_src1, ids_dst, expert_bounds, n_experts, n_tokens, n_expert_used, nchannels_y, si1, sis1, write_inverse, stream);
+            } else {
+                launch_mm_ids_helper< 0>(ids, ids_src1, ids_dst, expert_bounds, n_experts, n_tokens, n_expert_used, nchannels_y, si1, sis1, write_inverse, stream);
+            }
+        } break;
         case 16:
             launch_mm_ids_helper<16>(ids, ids_src1, ids_dst, expert_bounds, n_experts, n_tokens, n_expert_used, nchannels_y, si1, sis1, write_inverse, stream);
             break;
