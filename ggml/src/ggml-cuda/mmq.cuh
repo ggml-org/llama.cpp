@@ -462,10 +462,12 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 
             if constexpr (type == GGML_TYPE_NVFP4) {
                 if (y_scale_used) {
-                    dst[ids_dst[j]*stride + i] = y_scale[j] * sum[(j0/nwarps) * (I/warp_size) + i0/warp_size];
+                    dst[ids_dst[j]*stride + i] =
+                        y_scale[j] * sum[(j0/nwarps) * (I/warp_size) + i0/warp_size] *
+                        mmq_x_scale_factor(xs, ids_dst[j]);
                 } else {
                     dst[ids_dst[j]*stride + i] =
-                sum[(j0/nwarps) * (I/warp_size) + i0/warp_size] * mmq_x_scale_factor(xs, ids_dst[j]);
+                        sum[(j0/nwarps) * (I/warp_size) + i0/warp_size] * mmq_x_scale_factor(xs, ids_dst[j]);
                 }
             } else {
                 dst[ids_dst[j]*stride + i] = sum[(j0/nwarps) * (I/warp_size) + i0/warp_size];
@@ -516,10 +518,12 @@ static __device__ __forceinline__ void ggml_cuda_mmq_write_back_mma(
 
                 if constexpr (type == GGML_TYPE_NVFP4) {
                     if (y_scale_used) {
-                        dst[ids_dst[j]*stride + i] = y_scale[j] * sum[(j0/tile_C::J + n)*tile_C::ne + l];
+                        dst[ids_dst[j]*stride + i] =
+                            y_scale[j] * sum[(j0/tile_C::J + n)*tile_C::ne + l] *
+                            mmq_x_scale_factor(xs, ids_dst[j]);
                     } else {
                         dst[ids_dst[j]*stride + i] =
-                    sum[(j0/tile_C::J + n)*tile_C::ne + l] * mmq_x_scale_factor(xs, ids_dst[j]);
+                            sum[(j0/tile_C::J + n)*tile_C::ne + l] * mmq_x_scale_factor(xs, ids_dst[j]);
                     }
                 } else {
                     dst[ids_dst[j]*stride + i] = sum[(j0/tile_C::J + n)*tile_C::ne + l];
