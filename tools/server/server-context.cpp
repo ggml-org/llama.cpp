@@ -1001,8 +1001,31 @@ private:
         return true;
     }
 
+    static struct mtmd_context_params build_mtmd_context_params(common_params & params) {
+        mtmd_context_params mparams = mtmd_context_params_default();
+
+        std::string & mmproj_path = params.mmproj.path;
+        const bool has_mmproj = !mmproj_path.empty();
+        if (!has_mmproj) {
+            return mparams;
+        }
+
+        mparams.use_gpu          = params.mmproj_use_gpu;
+        mparams.print_timings    = false;
+        mparams.n_threads        = params.cpuparams.n_threads;
+        mparams.flash_attn_type  = params.flash_attn_type;
+        mparams.warmup           = params.warmup;
+        mparams.image_min_tokens = params.image_min_tokens;
+        mparams.image_max_tokens = params.image_max_tokens;
+        mparams.batch_max_tokens = params.mtmd_batch_max_tokens;
+        mparams.media_marker     = get_media_marker();
+
+        return mparams;
+    }
+
     void setup_runtime_state(common_params & params) {
-        if (!llama_memory_can_shift(llama_get_memory(ctx_tgt))) {
+        bool has_mmproj = !params.mmproj.path.empty();
+        if (!llama_memory_can_shift(llama_get_memory(ctx_tgt)) || has_mmproj) {
             if (params.ctx_shift) {
                 params.ctx_shift = false;
                 SRV_WRN("%s\n", "ctx_shift is not supported by this context, it will be disabled");
@@ -1197,21 +1220,10 @@ private:
         SRV_TRC("local path '%s'\n", params.model.path.c_str());
 
         std::string & mmproj_path = params_base.mmproj.path;
-        mtmd_context_params mparams = mtmd_context_params_default();
-        if (has_mmproj) {
-            mparams.use_gpu          = params_base.mmproj_use_gpu;
-            mparams.print_timings    = false;
-            mparams.n_threads        = params_base.cpuparams.n_threads;
-            mparams.flash_attn_type  = params_base.flash_attn_type;
-            mparams.warmup           = params_base.warmup;
-            mparams.image_min_tokens = params_base.image_min_tokens;
-            mparams.image_max_tokens = params_base.image_max_tokens;
-            mparams.batch_max_tokens = params_base.mtmd_batch_max_tokens;
-            mparams.media_marker     = get_media_marker();
-            // progress callback
-            mparams.progress_callback           = load_progress_callback;
-            mparams.progress_callback_user_data = &load_progress_mmproj;
-        }
+        mtmd_context_params mparams = build_mtmd_context_params(params_base);
+        // progress callback
+        mparams.progress_callback           = load_progress_callback;
+        mparams.progress_callback_user_data = &load_progress_mmproj;
 
         // optionally get the memory usage of mmproj
         if (has_mmproj && params_base.fit_params) {
@@ -1393,16 +1405,6 @@ private:
                 return false;
             }
             SRV_INF("loaded multimodal model, '%s'\n", mmproj_path.c_str());
-
-            if (params_base.ctx_shift) {
-                params_base.ctx_shift = false;
-                SRV_WRN("%s\n", "ctx_shift is not supported by multimodal, it will be disabled");
-            }
-
-            if (params_base.n_cache_reuse) {
-                params_base.n_cache_reuse = 0;
-                SRV_WRN("%s\n", "cache_reuse is not supported by multimodal, it will be disabled");
-            }
         }
 
         setup_runtime_state(params_base);
@@ -1511,6 +1513,161 @@ private:
 
         // propagate new defaults back to caller
         params = params_base;
+
+        if (callback_state) {
+            callback_state(SERVER_STATE_READY, {});
+        }
+
+        return true;
+    }
+
+    bool reload_mmproj(common_params & params) {
+        load_progress_data load_progress_mmproj(this, "mmproj_model");
+
+        std::string & mmproj_path = params.mmproj.path;
+        bool has_mmproj_old = mctx != nullptr;
+        bool has_mmproj_new = !mmproj_path.empty();
+
+        // if we have an mmproj, merge config with params_base
+        mtmd_context_params mparams = build_mtmd_context_params(params);
+        if (has_mmproj_new) {
+            // TODO: I'm not sure applying all of these in reverse is quite correct
+            // flash_attn_type, for example, impacts main/speculative model context
+            // ... and I'm not sure how to handle the case where we don't have a new
+            //     mmproj. Leaving params_base as-is feels more correct.
+            params_base.mmproj.path           = mmproj_path;
+            params_base.mmproj_use_gpu        = mparams.use_gpu;
+            params_base.cpuparams.n_threads   = mparams.n_threads;
+            params_base.flash_attn_type       = mparams.flash_attn_type;
+            params_base.warmup                = mparams.warmup;
+            params_base.image_min_tokens      = mparams.image_min_tokens;
+            params_base.image_max_tokens      = mparams.image_max_tokens;
+            params_base.mtmd_batch_max_tokens = mparams.batch_max_tokens;
+        }
+
+        // progress callback
+        mparams.progress_callback           = load_progress_callback;
+        mparams.progress_callback_user_data = &load_progress_mmproj;
+
+        if (callback_state && has_mmproj_new) {
+            std::vector<std::string> stages = {"mmproj_model"};
+            load_progress_mmproj.stages = stages;
+
+            // trigger 0% progress
+            load_progress_callback(0.0f, &load_progress_mmproj);
+        }
+
+        // NOTE: like reload_context, we do not validate that the new memory requirements
+        // are compatible with the existing device split before destroying the existing
+        // state. Future improvement.
+
+        reset_runtime_state();
+
+        if (has_mmproj_old) {
+            mtmd_free(mctx);
+            mctx = nullptr;
+
+            SRV_INF("%s: unloaded existing multimodal model\n", __func__);
+        }
+
+        if (has_mmproj_new) {
+            if (callback_state) {
+                callback_state(SERVER_STATE_LOADING, {{"stage", "mmproj_model"}});
+            }
+
+            mctx = mtmd_init_from_file(mmproj_path.c_str(), model_tgt, mparams);
+            if (mctx == nullptr) {
+                SRV_ERR("%s: failed to load multimodal model, '%s'\n", __func__, mmproj_path.c_str());
+                return false;
+            }
+            SRV_INF("%s: loaded multimodal model, '%s'\n", __func__, mmproj_path.c_str());
+        }
+
+        setup_runtime_state(params_base);
+
+        if (callback_state) {
+            callback_state(SERVER_STATE_READY, {});
+        }
+
+        return true;
+    }
+
+    bool reload_speculative(common_params & params) {
+        load_progress_data load_progress_spec  (this, "spec_model");
+
+        const bool has_draft_new = params.speculative.has_dft();
+        const bool spec_mtp_new = std::find(params.speculative.types.begin(),
+                                        params.speculative.types.end(),
+                                        COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
+        const bool has_spec_new = has_draft_new || spec_mtp_new;
+        const bool has_spec_old = spec_init != nullptr;
+
+        // if we have a speculative model, persist new config. otherwise, clear old
+        common_params params_dft;
+        if (has_spec_new) {
+            params_base.speculative               = params.speculative;
+            params_base.speculative.draft.ctx_tgt = nullptr;
+            params_base.speculative.draft.ctx_dft = nullptr;
+
+            params_dft = common_base_params_to_speculative(params_base);
+            // progress callback
+            params_dft.load_progress_callback           = load_progress_callback;
+            params_dft.load_progress_callback_user_data = &load_progress_spec;
+        } else {
+            params_base.speculative = {};
+        }
+
+        if (callback_state) {
+            std::vector<std::string> stages = {"spec_model"};
+            load_progress_spec.stages   = stages;
+        }
+
+        // NOTE: like reload_context, we do not validate that the new memory requirements
+        // are compatible with the existing device split before destroying the existing
+        // state. Future improvement.
+
+        reset_runtime_state();
+
+        if (has_spec_old) {
+            spec_init.reset();
+            model_dft = nullptr;
+            ctx_dft   = nullptr;
+
+            SRV_INF("%s: unloaded existing speculative decoder\n", __func__);
+        }
+
+        if (has_spec_new) {
+            GGML_ASSERT(model_tgt != nullptr);
+            GGML_ASSERT(ctx_tgt != nullptr);
+
+            // spec_mtp doesn't use load a model internally, so we report 0.0 and 1.0 manually
+            load_progress_callback(0.0f, &load_progress_spec);
+            load_progress_spec.t_last_load_progress_ms = 0;  // reset so internal cbs aren't delayed
+
+            {
+                spec_init = common_speculative_init_from_params(params_dft, model_tgt, ctx_tgt);
+                model_dft = spec_init->model();
+                ctx_dft   = spec_init->context();
+
+                if (has_draft_new && model_dft == nullptr) {
+                    SRV_ERR("%s: failed to load draft model, '%s'\n", __func__, params_dft.model.path.c_str());
+                    return false;
+                }
+
+                if (ctx_dft == nullptr) {
+                    SRV_ERR("%s: failed to create MTP context\n", __func__);
+                    return false;
+                }
+
+                // persist speculative model/ctx to params_base
+                params_base.speculative.draft.ctx_tgt = ctx_tgt;
+                params_base.speculative.draft.ctx_dft = ctx_dft;
+            }
+
+            load_progress_callback(1.0f, &load_progress_spec);
+        }
+
+        setup_runtime_state(params_base);
 
         if (callback_state) {
             callback_state(SERVER_STATE_READY, {});
