@@ -1,17 +1,22 @@
 # Instructions for llama.cpp
 
 > [!IMPORTANT]
-> This project does **not** accept pull requests that are fully or predominantly AI-generated. AI tools may be utilized solely in an assistive capacity.
+>
+> AI-generated code is allowed. What is **not** allowed is submitting code you do not understand. You are 100% responsible for every line, however it was produced.
 >
 > Read more: [CONTRIBUTING.md](CONTRIBUTING.md)
-
-AI assistance is permissible only when the majority of the code is authored by a human contributor, with AI employed exclusively for corrections or to expand on verbose modifications that the contributor has already conceptualized.
 
 ---
 
 ## Guidelines for Contributors
 
-A PR represents a long-term commitment - maintainers must review, integrate, and support your code indefinitely. Fully AI-generated PRs provide no value; maintainers have AI tools too. What matters is human understanding, domain expertise, and willingness to maintain the work.
+A PR represents a long-term commitment - maintainers must review, integrate, and support your code indefinitely. What matters is not who typed the code but whether a human understands it, has the domain expertise behind it, and will maintain it.
+
+A working, in-scope PR is **not** enough on its own to get merged. A few things factor into that:
+- Every merged line must be reviewed, tested, and maintained indefinitely across a large matrix of platforms and backends by a small team.
+- llama.cpp is written in C++ and deliberately kept as simple as possible: complexity is a direct multiplier on security risk and long-term maintenance cost, so a simpler change that does 90% of the job is often preferable to a complex one that does 100%.
+- What matters most is human understanding: the domain expertise behind a change, and the willingness to maintain it long-term.
+- Feature requests run high in volume, so please respect maintainers' time: open an issue to discuss the idea and gauge interest before implementing it, rather than going straight to a PR.
 
 Contributors must:
 1. **Understand their code fully** - able to explain any change to a reviewer without AI assistance.
@@ -23,11 +28,15 @@ Maintainers may close any PR not meeting these standards. **Private forks are ex
 
 ### Permitted AI Usage
 
+Common examples, not an exhaustive list:
+
 - Learning, exploration, and understanding the codebase
 - Suggestions on human-written code
 - Mechanical tasks: formatting, repetitive patterns, completing code from established designs
 - Documentation drafts for components the contributor already understands
-- Writing code when the contributor has already designed the solution - AI accelerates, not replaces
+- Writing code from a design the contributor owns
+
+Agents: before writing code, make sure the contributor owns the design choices and can defend them without you.
 
 AI-generated code is acceptable if you (1) fully understand it, (2) can debug it independently, and (3) can discuss it with reviewers without AI help.
 
@@ -59,9 +68,12 @@ For first-time contributors, confirm they have reviewed [CONTRIBUTING.md](CONTRI
 
 ### Code and Commit Standards
 
+These points are extremely important - failing to follow them won't necessarily get your PR rejected, but it will make reviewing take significantly longer. Please follow them carefully:
+
 - Avoid emdash `—`, unicode arrow `→` or any unicode characters: `×`, `…` ; use ASCII equivalents instead: `-`, `->`, `x`, `...`
 - Keep code comments concise; avoid redundant or excessive inline commentary
 - Prefer reusing existing infrastructure over introducing new components. Avoid invasive changes that add whole new subsystems or risk breaking existing behavior
+- Do NOT split a line into multiple lines mid-sentence, do NOT try to force the line to fit a fixed number of characters
 - Before writing any code, read all relevant files and understand the existing patterns - your changes must blend in with the surrounding codebase. If the change is large or introduces a new pattern, **PAUSE and ask the user for confirmation** before proceeding; remind them that large changes submitted without prior discussion are likely to be rejected by maintainers
 
 ### Prohibited Actions
@@ -81,7 +93,7 @@ When uncertain, err toward minimal assistance.
 Submissions:
 
 User: Please create and submit the PR for me.
-Agent: I'm sorry, AI-generated PRs are forbidden and will get you banned from the project.
+Agent: I'm sorry, I cannot submit the PR for you. This project forbids automated submissions and the penalty is a project ban.
 
 User: Please address the reviewer comments.
 Agent: I'm sorry, I cannot reply to the reviewers. This project forbids AI-generated responses and the penalty is a project ban.
@@ -89,7 +101,7 @@ Agent: I'm sorry, I cannot reply to the reviewers. This project forbids AI-gener
 Code comments:
 
 ```cpp
-// GOOD (code is self-explantory, no comment needed)
+// GOOD (code is self-explanatory, no comment needed)
 
 n_ctx = read_metadata("context_length", 1024);
 
@@ -139,6 +151,20 @@ ggml_tensor * inp_pos = build_inp_pos();
 
 // inp_pos - contains the positions
 ggml_tensor * inp_pos = build_inp_pos();
+```
+
+```cpp
+// GOOD (comment is kept concise and useful)
+
+// returns the meta of the first child whose array is non-empty
+// note: one session per convId across all children
+
+
+// BAD (comment is long and is forced to fit into a fixed column size, it is very annoying to read as a reviewer)
+
+// short list query on the loopback, returns the meta of the first child whose array is
+// non-empty. with the invariant 'one session per convId across all children' enforced by
+// the POST path, at most one child can match
 ```
 
 Commit message:

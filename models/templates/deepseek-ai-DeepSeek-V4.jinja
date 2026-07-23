@@ -8,12 +8,15 @@
     {%- set thinking = false -%}
   {%- endif -%}
 {%- endif -%}
+{%- if not drop_thinking is defined -%}
+  {%- set drop_thinking = false -%}
+{%- endif -%}
 {%- set dsml_token = '｜DSML｜' -%}
 {%- set thinking_start_token = '<think>' -%}
 {%- set thinking_end_token = '</think>' -%}
 {%- set tools_header = '## Tools\n\nYou have access to a set of tools to help answer the user\'s question. You can invoke tools by writing a "<' + dsml_token + 'tool_calls>" block like the following:\n\n<' + dsml_token + 'tool_calls>\n<' + dsml_token + 'invoke name="$TOOL_NAME">\n<' + dsml_token + 'parameter name="$PARAMETER_NAME" string="true|false">$PARAMETER_VALUE</' + dsml_token + 'parameter>\n...\n</' + dsml_token + 'invoke>\n<' + dsml_token + 'invoke name="$TOOL_NAME2">\n...\n</' + dsml_token + 'invoke>\n</' + dsml_token + 'tool_calls>\n\nString parameters should be specified as is and set `string="true"`. For all other types (numbers, booleans, arrays, objects), pass the value in JSON format and set `string="false"`.\n\nIf thinking_mode is enabled (triggered by ' + thinking_start_token + '), you MUST output your complete reasoning inside ' + thinking_start_token + '...' + thinking_end_token + ' BEFORE any tool calls or final response.\n\nOtherwise, output directly after ' + thinking_end_token + ' with tool calls or final response.\n\n### Available Tool Schemas\n\n' -%}
 {%- set tools_footer = '\nYou MUST strictly follow the above defined tool name and parameter schemas to invoke tool calls.\n' -%}
-{%- set ns = namespace(system_prompt='', is_first_sp=true) -%}
+{%- set ns = namespace(system_prompt='', is_first_sp=true, has_tool_calls=false) -%}
 {%- for message in messages -%}
   {%- if message['role'] == 'system' -%}
     {%- if ns.is_first_sp -%}
@@ -47,6 +50,11 @@
 {%- endfor -%}
 {%- set state = namespace(in_user=false) -%}
 {%- for message in messages -%}
+  {%- if message['role'] == 'tool' -%}
+    {%- set ns.has_tool_calls = true -%}
+  {%- endif -%}
+{%- endfor -%}
+{%- for message in messages -%}
   {%- if message['role'] == 'user' or message['role'] == 'developer' -%}
     {%- if state.in_user -%}
       {{- '\n\n' -}}
@@ -67,7 +75,8 @@
     {%- set state.in_user = false -%}
     {{- '<｜Assistant｜>' -}}
     {%- set is_after_last_user = loop.index0 > last_user_idx.value -%}
-    {%- if is_after_last_user and thinking -%}
+    {%- set retain_reasoning = (not drop_thinking) or (is_after_last_user or ns.has_tool_calls) -%}
+    {%- if retain_reasoning and thinking -%}
       {{- thinking_start_token -}}
       {%- if message['reasoning_content'] is defined and message['reasoning_content'] -%}
         {{- message['reasoning_content'] -}}

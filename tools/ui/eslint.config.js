@@ -59,7 +59,8 @@ export default ts.config(
 			'.svelte-kit/**',
 			'test-results/**',
 			'.storybook/**/*',
-			'src/lib/services/sandbox-worker.js'
+			'src/lib/services/sandbox-worker.js',
+			'src/lib/vendors/**'
 		]
 	},
 	storybook.configs['flat/recommended']
