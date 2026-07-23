@@ -98,7 +98,6 @@ class LazyBase(ABC, metaclass=LazyMeta):
 
     @staticmethod
     def _recurse_apply(o: Any, fn: Callable[[Any], Any]) -> Any:
-        # TODO: dict and set
         if isinstance(o, (list, tuple)):
             L = []
             for item in o:
@@ -106,6 +105,8 @@ class LazyBase(ABC, metaclass=LazyMeta):
             if isinstance(o, tuple):
                 L = tuple(L)
             return L
+        elif isinstance(o, dict):
+            return {k: LazyBase._recurse_apply(v, fn) for k, v in o.items()}
         elif isinstance(o, LazyBase):
             return fn(o)
         else:
@@ -119,11 +120,11 @@ class LazyBase(ABC, metaclass=LazyMeta):
             args = ((use_self,) if use_self is not None else ()) + args
 
             meta_args = LazyBase._recurse_apply(args, lambda t: t._meta)
-            # TODO: maybe handle tensors in kwargs too
+            meta_kwargs = LazyBase._recurse_apply(kwargs, lambda t: t._meta)
 
             if isinstance(meta_noop, bool) and not meta_noop:
                 try:
-                    res = fn(*meta_args, **kwargs)
+                    res = fn(*meta_args, **meta_kwargs)
                 except NotImplementedError:
                     # running some operations on PyTorch's Meta tensors can cause this exception
                     res = None
@@ -159,7 +160,8 @@ class LazyBase(ABC, metaclass=LazyMeta):
                 # non-tensor return likely relies on the contents of the args
                 # (e.g. the result of torch.equal)
                 eager_args = cls.to_eager(args)
-                return fn(*eager_args, **kwargs)
+                eager_kwargs = cls.to_eager(kwargs)
+                return fn(*eager_args, **eager_kwargs)
         return wrapped_fn
 
     @classmethod
@@ -172,6 +174,7 @@ class LazyBase(ABC, metaclass=LazyMeta):
 
             assert _t._func is not None
             _t._args = cls._recurse_apply(_t._args, simple_to_eager)
+            _t._kwargs = cls._recurse_apply(_t._kwargs, simple_to_eager)
             _t._data = _t._func(*_t._args, **_t._kwargs)
             # sanity check
             assert _t._data is not None
