@@ -33,6 +33,11 @@
 	import { SETTINGS_KEYS } from '$lib/constants';
 
 	let { children } = $props();
+
+	let alwaysShowSidebarOnDesktop = $derived(config().alwaysShowSidebarOnDesktop);
+	let isDesktop = $derived(!isMobile.current);
+	let sidebarOpen = $state(false);
+	let mounted = $state(false);
 	let innerHeight = $state<number | undefined>();
 	let innerWidth = $state(browser ? window.innerWidth : 0);
 
