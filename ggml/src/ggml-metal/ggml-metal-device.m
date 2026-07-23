@@ -1030,7 +1030,36 @@ void ggml_metal_device_event_free(ggml_metal_device_t dev, ggml_metal_event_t ev
 
 void ggml_metal_device_event_synchronize(ggml_metal_device_t dev, ggml_metal_event_t ev) {
     id<MTLSharedEvent> event = ev->obj;
-    const bool res = [event waitUntilSignaledValue:atomic_load_explicit(&ev->value, memory_order_relaxed) timeoutMS:60000];
+
+    bool res = false;
+    if (@available(macOS 12.0, iOS 15.0, *)) {
+        res = [event waitUntilSignaledValue:atomic_load_explicit(&ev->value, memory_order_relaxed) timeoutMS:60000];
+    } else {
+        const uint64_t value = atomic_load_explicit(&ev->value, memory_order_relaxed);
+        if (event.signaledValue >= value) {
+            res = true;
+        } else {
+            // fallback for older macOS/iOS
+            static MTLSharedEventListener * listener = nil;
+            static dispatch_once_t onceToken;
+            dispatch_once(&onceToken, ^{
+                listener = [[MTLSharedEventListener alloc] init];
+            });
+
+            dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+            [event notifyListener:listener atValue:value block:^(id<MTLSharedEvent> _event, uint64_t val) {
+                GGML_UNUSED(_event);
+                GGML_UNUSED(val);
+                dispatch_semaphore_signal(sem);
+            }];
+
+            dispatch_time_t timeout = dispatch_time(DISPATCH_TIME_NOW, 60LL * NSEC_PER_SEC);
+            res = (dispatch_semaphore_wait(sem, timeout) == 0);
+
+            dispatch_release(sem);
+        }
+    }
+
     if (!res) {
         GGML_ABORT("%s: failed to wait for event\n", __func__);
     }
