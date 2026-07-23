@@ -45,45 +45,35 @@ int main(int argc, char ** argv) {
 
     const llama_vocab * vocab = llama_model_get_vocab(model_tgt);
 
-    // load the draft model
-    llama_model_ptr model_dft;
-    llama_context_ptr ctx_dft;
+    // load the draft model using the shared common helpers
+    common_speculative_init_result_ptr spec_init;
+    llama_model   * model_dft = nullptr;
+    llama_context * ctx_dft   = nullptr;
 
-    // TODO: simplify this logic
     {
-        const auto & params_spec = params.speculative.draft;
+        common_params params_dft = common_base_params_to_speculative(params);
 
-        auto params_dft = params;
+        spec_init = common_speculative_init_from_params(params_dft, model_tgt, ctx_tgt);
+        model_dft = spec_init->model();
+        ctx_dft   = spec_init->context();
 
-        params_dft.devices      = params_spec.devices;
-        params_dft.model        = params_spec.mparams;
-        params_dft.n_gpu_layers = params_spec.n_gpu_layers;
-
-        if (params_spec.cpuparams.n_threads > 0) {
-            params_dft.cpuparams.n_threads       = params.speculative.draft.cpuparams.n_threads;
-            params_dft.cpuparams_batch.n_threads = params.speculative.draft.cpuparams_batch.n_threads;
-        }
-
-        params_dft.tensor_buft_overrides = params.speculative.draft.tensor_buft_overrides;
-
-        auto mparams_dft = common_model_params_to_llama(params_dft);
-
-        model_dft.reset(llama_model_load_from_file(params_dft.model.path.c_str(), mparams_dft));
-        if (model_dft == nullptr) {
+        if (params.speculative.has_dft() && model_dft == nullptr) {
             LOG_ERR("failed to load draft model, '%s'\n", params_dft.model.path.c_str());
             return 1;
         }
 
-        auto cparams = common_context_params_to_llama(params_dft);
-        ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams));
+        if (ctx_dft == nullptr) {
+            LOG_ERR("%s: failed to create draft/MTP context\n", __func__);
+            return 1;
+        }
 
         params.speculative.draft.ctx_tgt = ctx_tgt;
-        params.speculative.draft.ctx_dft = ctx_dft.get();
+        params.speculative.draft.ctx_dft = ctx_dft;
     }
 
     // check if the context supports partial sequence removal
     const bool use_ckpt_tgt = (common_context_can_seq_rm(ctx_tgt)       == COMMON_CONTEXT_SEQ_RM_TYPE_FULL);
-    const bool use_ckpt_dft = (common_context_can_seq_rm(ctx_dft.get()) == COMMON_CONTEXT_SEQ_RM_TYPE_FULL);
+    const bool use_ckpt_dft = (common_context_can_seq_rm(ctx_dft) == COMMON_CONTEXT_SEQ_RM_TYPE_FULL);
 
     if (use_ckpt_tgt) {
         LOG_INF("speculative decoding will use checkpoints (context does not support partial sequence removal)\n");
@@ -131,7 +121,7 @@ int main(int argc, char ** argv) {
 
     // eval the prompt
     llama_decode(ctx_tgt,       llama_batch_get_one(inp.data(), inp.size() - 1));
-    llama_decode(ctx_dft.get(), llama_batch_get_one(inp.data(), inp.size() - 1));
+    llama_decode(ctx_dft, llama_batch_get_one(inp.data(), inp.size() - 1));
 
     // note: keep the last token separate!
     llama_token id_last = inp.back();
@@ -175,7 +165,7 @@ int main(int argc, char ** argv) {
                     llama_memory_seq_pos_max(llama_get_memory(ctx_tgt), seq_id));
 
             if (use_ckpt_dft) {
-                ckpt.update_dft(ctx_dft.get(), seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                ckpt.update_dft(ctx_dft, seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
             }
 
             // generate a new draft
@@ -201,9 +191,9 @@ int main(int argc, char ** argv) {
             }
 
             {
-                ckpt.load_dft(ctx_dft.get(), seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                ckpt.load_dft(ctx_dft, seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
 
-                llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), seq_id, ckpt.pos_max + 1, -1);
+                llama_memory_seq_rm(llama_get_memory(ctx_dft), seq_id, ckpt.pos_max + 1, -1);
             }
         } else {
             // we have a previous (partial) draft to reuse from checkpoint restoration
@@ -228,9 +218,9 @@ int main(int argc, char ** argv) {
         }
 
         // evaluate the same batch with the draft model
-        {
-            // TODO: extend to support MTP, Eagle, etc. See server code for reference
-            llama_decode(ctx_dft.get(), batch_tgt);
+        if (!common_speculative_process(spec, batch_tgt)) {
+            LOG_ERR("%s: failed to process speculative batch\n", __func__);
+            return 1;
         }
 
         // only save the sampler sampler state if we use checkpoints
@@ -267,9 +257,9 @@ int main(int argc, char ** argv) {
             }
 
             {
-                ckpt.load_dft(ctx_dft.get(), seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                ckpt.load_dft(ctx_dft, seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
 
-                llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), seq_id, ckpt.pos_max + 1, -1);
+                llama_memory_seq_rm(llama_get_memory(ctx_dft), seq_id, ckpt.pos_max + 1, -1);
             }
 
             prompt_tgt.resize(ckpt.n_tokens);
@@ -321,7 +311,7 @@ int main(int argc, char ** argv) {
             LOG_DBG("clear kv cache from any extra tokens, n_past = %d\n", n_past);
 
             llama_memory_seq_rm(llama_get_memory(ctx_tgt),       seq_id, n_past, -1);
-            llama_memory_seq_rm(llama_get_memory(ctx_dft.get()), seq_id, n_past, -1);
+            llama_memory_seq_rm(llama_get_memory(ctx_dft), seq_id, n_past, -1);
         }
 
         if ((params.n_predict >= 0 && n_predict > params.n_predict) || has_eos) {
