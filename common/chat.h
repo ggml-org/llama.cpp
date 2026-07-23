@@ -279,6 +279,9 @@ struct common_chat_params {
     std::vector<std::string>            preserved_tokens;
     std::vector<std::string>            additional_stops;
     std::string                         parser;
+    // If a complete parse reports NEED_MORE in lenient streaming mode, retry without
+    // leniency so EOF can be used as a real boundary by parsers that opt in.
+    bool                                strict_eof_on_complete = false;
     common_chat_msg_delimiters          message_delimiters;
 };
 
@@ -294,11 +297,13 @@ struct common_chat_parser_params {
     bool                    is_continuation      = false;
     bool                    echo                 = false;  // Include assistant prefilled msg in output
     bool                    debug                = false;  // Enable debug output for PEG parser
+    bool                    strict_eof_on_complete = false;
     common_peg_arena        parser               = {};
     common_chat_parser_params() = default;
     common_chat_parser_params(const common_chat_params & chat_params) {
-        format  = chat_params.format;
-        generation_prompt = chat_params.generation_prompt;
+        format                 = chat_params.format;
+        generation_prompt      = chat_params.generation_prompt;
+        strict_eof_on_complete = chat_params.strict_eof_on_complete;
     }
 };
 
