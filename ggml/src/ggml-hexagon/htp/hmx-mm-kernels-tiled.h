@@ -767,23 +767,25 @@ static void core_mma_chunk_fp16(__fp16 *restrict c, const __fp16 *restrict a, co
 
 // output : fp16 -> f32p
 
-static void transfer_output_chunk_fp16_to_fp32(
+static void transfer_output_chunk_fp16_to_fp32_col_chunk(
     float *restrict dst,
     const float *restrict src2,
     const __fp16 *restrict vtcm_src,
     uint32_t start_row,
     uint32_t n_rows,
-    uint32_t n_cols,
+    uint32_t c_len,
+    uint32_t total_n_cols,
     uint32_t dst_stride,
     uint32_t src2_stride,
     uint32_t dst_cols
 ) {
-    assert(n_cols % HTP_MM_HMX_TILE_N_COLS == 0);
-    const size_t tile_row_stride = (n_cols / HTP_MM_HMX_TILE_N_COLS) * HTP_MM_HMX_TILE_N_ELMS;
+    assert(c_len % HTP_MM_HMX_TILE_N_COLS == 0);
+    assert(total_n_cols % HTP_MM_HMX_TILE_N_COLS == 0);
+    const size_t tile_row_stride = (total_n_cols / HTP_MM_HMX_TILE_N_COLS) * HTP_MM_HMX_TILE_N_ELMS;
 
     const HVX_Vector one = hvx_vec_splat_f16(1.0);
 
-    const size_t limit_c         = hex_smin(n_cols, dst_cols);
+    const size_t limit_c         = hex_smin(c_len, dst_cols);
     const size_t limit_c_aligned = (limit_c & ~31);
 
     for (size_t r = 0; r < n_rows; r += 2) {
@@ -846,6 +848,22 @@ static void transfer_output_chunk_fp16_to_fp32(
             }
         }
     }
+}
+
+static inline void transfer_output_chunk_fp16_to_fp32(
+    float *restrict dst,
+    const float *restrict src2,
+    const __fp16 *restrict vtcm_src,
+    uint32_t start_row,
+    uint32_t n_rows,
+    uint32_t n_cols,
+    uint32_t dst_stride,
+    uint32_t src2_stride,
+    uint32_t dst_cols
+) {
+    transfer_output_chunk_fp16_to_fp32_col_chunk(
+        dst, src2, vtcm_src, start_row, n_rows, n_cols, n_cols, dst_stride, src2_stride, dst_cols
+    );
 }
 
 typedef struct {

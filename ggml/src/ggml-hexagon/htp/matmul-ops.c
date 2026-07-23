@@ -2356,11 +2356,76 @@ static void dequantize_tiled_weight_chunk_to_fp16_tiles(
     }
 }
 
+typedef struct {
+    float *dst;
+    const float *src2;
+    const __fp16 *vtcm_src;
+    uint32_t n_rows;
+    uint32_t n_cols;
+    uint32_t dst_stride;
+    uint32_t src2_stride;
+    uint32_t dst_cols;
+    struct fastdiv_values n_threads_div;
+    struct htp_thread_trace *traces;
+    struct htp_context *ctx;
+} output_transfer_col_chunk_state_t;
+
+static void transfer_output_chunk_col_chunk_worker_fn(unsigned int n, unsigned int i, void *data) {
+    (void) n;
+    output_transfer_col_chunk_state_t *st = (output_transfer_col_chunk_state_t *) data;
+    struct htp_thread_trace * tr = &st->traces[i];
+
+    uint32_t n_blocks = st->n_cols / 32;
+    uint32_t b_first = fastdiv(n_blocks * i, &st->n_threads_div);
+    uint32_t b_last  = fastdiv(n_blocks * (i + 1), &st->n_threads_div);
+    uint32_t c_first = b_first * 32;
+    uint32_t c_last  = b_last * 32;
+    uint32_t c_len   = c_last - c_first;
+
+    if (c_len == 0) return;
+
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_O_PROC, c_first);
+
+    float *dst = st->dst + c_first;
+    const float *src2 = st->src2 ? (st->src2 + c_first) : NULL;
+    const __fp16 *vtcm_src = st->vtcm_src + b_first * HTP_MM_HMX_TILE_N_ELMS;
+
+    int chunk_dst_cols = (int)st->dst_cols - (int)c_first;
+    if (chunk_dst_cols > 0) {
+        transfer_output_chunk_fp16_to_fp32_col_chunk(
+            dst, src2, vtcm_src, 0, st->n_rows, c_len, st->n_cols,
+            st->dst_stride, st->src2_stride, (uint32_t)chunk_dst_cols
+        );
+    }
+
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_O_PROC, c_first);
+}
+
 static void transfer_output_chunk_threaded(struct htp_context *ctx, float *dst, const float *src2, const __fp16 *vtcm_src,
                                               int n_rows, int n_cols, int dst_stride, uint32_t src2_stride, int dst_cols, int n_threads) {
     assert(n_cols % HTP_MM_HMX_TILE_N_COLS == 0);
 
     if (n_rows <= 0) return;
+
+    uint32_t n_blocks = (uint32_t)n_cols / 32;
+    if (n_threads > 1 && n_blocks >= (uint32_t)n_threads) {
+        struct fastdiv_values n_threads_div = init_fastdiv_values(n_threads);
+        output_transfer_col_chunk_state_t col_state;
+        col_state.dst = dst;
+        col_state.src2 = src2;
+        col_state.vtcm_src = vtcm_src;
+        col_state.n_rows = (uint32_t)n_rows;
+        col_state.n_cols = (uint32_t)n_cols;
+        col_state.dst_stride = (uint32_t)dst_stride;
+        col_state.src2_stride = src2_stride;
+        col_state.dst_cols = (uint32_t)dst_cols;
+        col_state.n_threads_div = n_threads_div;
+        col_state.traces = ctx->trace;
+        col_state.ctx = ctx;
+
+        worker_pool_run_func(ctx->worker_pool, transfer_output_chunk_col_chunk_worker_fn, &col_state, n_threads);
+        return;
+    }
 
     size_t n_tot_chunks      = n_rows;
     size_t n_chunks_per_task = (n_threads == 1) ? n_tot_chunks : hmx_ceil_div(n_rows, n_threads);
