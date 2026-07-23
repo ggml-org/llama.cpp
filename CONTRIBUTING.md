@@ -12,6 +12,8 @@ The project differentiates between 3 levels of contributors:
 >
 > AI-generated code is allowed. You are 100% responsible for every line, however it was produced.
 >
+> Undisclosed AI usage may result in your account being permanently banned from contributing to the project.
+>
 > Detailed information regarding permissible and restricted uses of AI can be found in the [AGENTS.md](AGENTS.md) file.
 
 If AI is used to generate any portion of the code, contributors must adhere to the following requirements:
