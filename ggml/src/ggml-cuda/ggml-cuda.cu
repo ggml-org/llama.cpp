@@ -2520,6 +2520,16 @@ static bool ggml_cuda_graph_check_compability(ggml_cgraph * cgraph) {
             }
         }
 
+        // Chunked GDN allocates scratch via ggml_cuda_pool_alloc; on pool_leg those addresses can
+        // be freed/reused between capture and replay, corrupting the baked-in kernel pointers.
+        // Decode is unaffected (T=1 is ineligible)
+        if (ggml_cuda_gdn_op_is_chunked(node)) {
+            use_cuda_graph = false;
+#ifndef NDEBUG
+            GGML_LOG_DEBUG("%s: disabling CUDA graphs due to chunked GATED_DELTA_NET\n", __func__);
+#endif
+        }
+
         if (!use_cuda_graph) {
             break;
         }
@@ -2645,6 +2655,13 @@ static int ggml_cuda_try_gdn_cache_fusion(
     // the kernel skips the snapshot tail, so the gdn output must not be a graph output
     if (gdn->op != GGML_OP_GATED_DELTA_NET || gdn->type != GGML_TYPE_F32 ||
         (gdn->flags & GGML_TENSOR_FLAG_OUTPUT)) {
+        return 0;
+    }
+
+    // The GDN chunked prefill  writes its recurrent state to the gdn output and does not
+    // support scattering directly into the snapshot cache. Skip fusion for chunked GDN ops 
+    // is faster with output to snapshot copy. Decode and fallback recurrent (T < 128) do fuse.
+    if (ggml_cuda_gdn_op_is_chunked(gdn)) {
         return 0;
     }
 
