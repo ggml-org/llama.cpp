@@ -70,6 +70,35 @@ inline void cpy_blck_f32_q1_0(const char * cxi, char * cdsti) {
     }
 }
 
+inline void cpy_blck_f32_q2_0(const char * cxi, char * cdsti) {
+    const float * xi   = (const float *) cxi;
+    block_q2_0 *  dsti = (block_q2_0 *) cdsti;
+
+    float amax = 0.0f;
+
+    for (int j = 0; j < QK2_0; ++j) {
+        amax = sycl::fmax(amax, sycl::fabs((float) xi[j]));
+    }
+
+    const float d  = amax;
+    const float id = d > 0.0f ? 1.0f / d : 0.0f;
+
+    dsti->d = d;
+
+    for (int j = 0; j < QK2_0 / 4; ++j) {
+        dsti->qs[j] = 0;
+    }
+
+    for (int j = 0; j < QK2_0; ++j) {
+        int q = (int) sycl::round((float) (xi[j] * id)) + 1;
+        q = dpct::max(0, dpct::min(3, q));
+
+        const int byte_index = j / 4;
+        const int bit_offset = (j % 4) * 2;
+        dsti->qs[byte_index] |= (uint8_t) q << bit_offset;
+    }
+}
+
 inline int best_index_mxfp4(const float x, const float e) {
     int best_index = 0;
     float best_err = sycl::fabs((float) (kvalues_mxfp4[0] * e - x));
