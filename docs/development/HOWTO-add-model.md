@@ -136,6 +136,14 @@ Note:
 
 ## Tips and tricks
 
+### Prefer conversion-time tensor modifications over graph-time ones
+
+If the model contains constant modifications of tensors in the graph (for example, `norm(1 + weight)`) or performs tensor permutations/chunking, perform the modifications during conversion rather than in the graph code. This keeps the inference graph simpler and avoids extra runtime ops.
+
+Examples:
+- Gemma 3 folds the `1 +` of its `norm(1 + weight)` normalization into the weights at conversion time, so the graph just does a plain RMS norm.
+- Qwen3-Next applies its tensor permutation during conversion (in `modify_tensors`), so the graph can consume the already-permuted weights directly.
+
 ### Working with ggml_rope_ext
 
 PyTorch implementations usually prefer explicitly calculating `freq_cis`/`sin`/`cos` components. However, in llama.cpp, most RoPE operations can be handled via `ggml_rope_ext`, which does not require a sin/cos matrix. This saves memory while allowing the GGML RoPE kernel to be fused with other ops.
