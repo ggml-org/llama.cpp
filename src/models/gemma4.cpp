@@ -23,6 +23,7 @@ void llama_model_gemma4::load_arch_hparams(llama_model_loader & ml) {
         case 30: type = LLM_TYPE_26B_A4B; break;
         case 35: type = LLM_TYPE_E2B; break;
         case 42: type = LLM_TYPE_E4B; break;
+        case 48: type = LLM_TYPE_12B; break;
         case 60: type = LLM_TYPE_31B; break;
         default: type = LLM_TYPE_UNKNOWN;
     }
