@@ -124,6 +124,7 @@ enum common_sampler_type {
     COMMON_SAMPLER_TYPE_PENALTIES   = 10,
     COMMON_SAMPLER_TYPE_TOP_N_SIGMA = 11,
     COMMON_SAMPLER_TYPE_ADAPTIVE_P  = 12,
+    COMMON_SAMPLER_TYPE_P_LESS      = 13,
 };
 
 // dimensionality reduction methods, used by cvector-generator
@@ -164,6 +165,7 @@ enum common_params_sampling_config : uint64_t {
     COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT        = 1 << 9,
     COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT_TAU    = 1 << 10,
     COMMON_PARAMS_SAMPLING_CONFIG_MIROSTAT_ETA    = 1 << 11,
+    COMMON_PARAMS_SAMPLING_CONFIG_P_LESS          = 1 << 12,
 };
 
 enum common_speculative_type {
@@ -247,6 +249,7 @@ struct common_params_sampling {
     float   top_n_sigma        = -1.00f; // -1.0 = disabled
     float   mirostat_tau       = 5.00f;  // target entropy
     float   mirostat_eta       = 0.10f;  // learning rate
+    bool    p_less             = false;  // p-less sampling
     bool    ignore_eos         = false;
     bool    no_perf            = false;  // disable performance metrics
     bool    timing_per_token   = false;
@@ -263,6 +266,7 @@ struct common_params_sampling {
         COMMON_SAMPLER_TYPE_TYPICAL_P,
         COMMON_SAMPLER_TYPE_TOP_P,
         COMMON_SAMPLER_TYPE_MIN_P,
+        COMMON_SAMPLER_TYPE_P_LESS,
         COMMON_SAMPLER_TYPE_XTC,
         COMMON_SAMPLER_TYPE_TEMPERATURE,
     };

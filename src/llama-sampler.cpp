@@ -2852,6 +2852,124 @@ struct llama_sampler * llama_sampler_init_top_n_sigma(float n) {
     );
 }
 
+// p-less
+
+struct llama_sampler_p_less : public llama_sampler_backend {
+    // No additional state variables are needed for P-less
+};
+
+static const char * llama_sampler_p_less_name(const struct llama_sampler * smpl) {
+    auto * sctx = (llama_sampler_p_less *) smpl->ctx;
+    return sctx->get_name();
+}
+
+static void llama_sampler_p_less_apply(struct llama_sampler * /*smpl*/, llama_token_data_array * cur_p) {
+    if (cur_p->size == 0) {
+        return;
+    }
+
+    // Populate cur_p->data[i].p using the built-in softmax
+    llama_sampler_softmax_impl(cur_p, false);
+
+    // Calculate the P-less threshold (sum of squared probabilities)
+    float p_less_threshold = 0.0f;
+    for (size_t i = 0; i < cur_p->size; ++i) {
+        p_less_threshold += cur_p->data[i].p * cur_p->data[i].p;
+    }
+
+    // Apply thresholding (keep tokens where probability >= threshold)
+    size_t mut_size = 0;
+    for (size_t i = 0; i < cur_p->size; ++i) {
+        if (cur_p->data[i].p >= p_less_threshold) {
+            cur_p->data[mut_size++] = cur_p->data[i];
+        }
+    }
+    
+    cur_p->size = mut_size;
+    cur_p->sorted = false;
+}
+
+static struct llama_sampler * llama_sampler_p_less_clone(const struct llama_sampler * /*smpl*/) {
+    return llama_sampler_init_p_less();
+}
+
+static void llama_sampler_p_less_free(struct llama_sampler * smpl) {
+    delete (llama_sampler_p_less *) smpl->ctx;
+}
+
+static bool llama_sampler_p_less_backend_init(
+        struct llama_sampler       * smpl,
+        ggml_backend_buffer_type_t   buft) {
+    auto * sctx = (llama_sampler_p_less *) smpl->ctx;
+
+    // Check if the backend supports the ggml ops we are about to use[cite: 1]
+    const bool res = llama_sampler_backend_support(smpl, buft);
+
+    sctx->init(res);
+
+    return res;
+}
+
+static void llama_sampler_p_less_backend_apply(
+        struct llama_sampler      * smpl,
+        struct ggml_context       * ctx,
+        struct ggml_cgraph        * gf,
+        struct llama_sampler_data * data) {
+    GGML_UNUSED(smpl);
+
+    // Calculate softmax probabilities
+    struct ggml_tensor * probs = ggml_soft_max(ctx, data->logits);
+    ggml_set_name(probs, "p_less_probs");
+
+    // Square the probabilities (probs * probs)
+    struct ggml_tensor * probs_sq = ggml_mul(ctx, probs, probs);
+    ggml_set_name(probs_sq, "p_less_probs_sq");
+
+    // Sum the squared probabilities to obtain the threshold
+    struct ggml_tensor * threshold = ggml_sum(ctx, probs_sq);
+    ggml_set_name(threshold, "p_less_threshold");
+
+    // Subtract threshold from probabilities
+    struct ggml_tensor * sub = ggml_sub(ctx, probs, threshold);
+    
+    // Create a mask where probabilities below threshold are 0 (discard), and others are 1 (keep)
+    struct ggml_tensor * mask = ggml_step(ctx, sub);
+    ggml_set_name(mask, "p_less_mask");
+
+    // Apply -INFINITY bias for masked-out tokens
+    // log(1) = 0 (keep), log(0) = -INF (discard)
+    struct ggml_tensor * p_less_bias = ggml_log(ctx, mask);
+    ggml_set_name(p_less_bias, "p_less_bias");
+
+    // Apply the bias back to the initial logits
+    data->logits = ggml_add(ctx, data->logits, p_less_bias);
+    ggml_set_name(data->logits, "p_less_logits");
+
+    GGML_UNUSED(gf);
+}
+
+static struct llama_sampler_i llama_sampler_p_less_i = {
+    /* .name              = */ llama_sampler_p_less_name,
+    /* .accept            = */ nullptr,
+    /* .apply             = */ llama_sampler_p_less_apply,
+    /* .reset             = */ nullptr,
+    /* .clone             = */ llama_sampler_p_less_clone,
+    /* .free              = */ llama_sampler_p_less_free,
+    /* .backend_init      = */ llama_sampler_p_less_backend_init,
+    /* .backend_accept    = */ nullptr,
+    /* .backend_apply     = */ llama_sampler_p_less_backend_apply,
+    /* .backend_set_input = */ nullptr,
+};
+
+struct llama_sampler * llama_sampler_init_p_less() {
+    return llama_sampler_init(
+        /* .iface = */ &llama_sampler_p_less_i,
+        /* .ctx   = */ new llama_sampler_p_less {
+            ("p-less")
+        }
+    );
+}
+
 // DRY
 
 struct llama_sampler_dry {
