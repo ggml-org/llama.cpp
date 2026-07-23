@@ -30,13 +30,21 @@ function trimCodePadding(code: string): string {
 	return code.replace(TRIM_LEADING_PADDING_REGEX, '').replace(TRIM_TRAILING_PADDING_REGEX, '');
 }
 
+function escapeCode(code: string): string {
+	return code.replace(AMPERSAND_REGEX, '&amp;').replace(LT_REGEX, '&lt;').replace(GT_REGEX, '&gt;');
+}
+
 /**
  * Highlights code using highlight.js
  * @param code - The code to highlight
  * @param language - The programming language
+ * @param autoDetect - Fall back to `highlightAuto` when `language` is unknown.
+ *   Callers rendering a still-streaming block should pass false: auto-detection
+ *   costs ~38ms per call and re-guesses on every chunk, so the language (and
+ *   therefore the whole highlight) flickers as the block grows.
  * @returns HTML string with syntax highlighting
  */
-export function highlightCode(code: string, language: string): string {
+export function highlightCode(code: string, language: string, autoDetect = true): string {
 	if (!code) return '';
 
 	const trimmed = trimCodePadding(code);
@@ -47,15 +55,14 @@ export function highlightCode(code: string, language: string): string {
 
 		if (isSupported) {
 			return hljs.highlight(trimmed, { language: lang }).value;
-		} else {
+		} else if (autoDetect) {
 			return hljs.highlightAuto(trimmed).value;
+		} else {
+			return escapeCode(trimmed);
 		}
 	} catch {
 		// Fallback to escaped plain text
-		return trimmed
-			.replace(AMPERSAND_REGEX, '&amp;')
-			.replace(LT_REGEX, '&lt;')
-			.replace(GT_REGEX, '&gt;');
+		return escapeCode(trimmed);
 	}
 }
 

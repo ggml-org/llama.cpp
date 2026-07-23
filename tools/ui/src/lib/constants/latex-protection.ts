@@ -28,6 +28,14 @@ export const LATEX_MATH_AND_CODE_PATTERN =
 /** Regex to capture the content of a $$...\\\\...$$ block (display-formula with line-break) */
 export const LATEX_LINEBREAK_REGEXP = /\$\$([\s\S]*?\\\\[\s\S]*?)\$\$/;
 
+/**
+ * Cheap gate for `preprocessLaTeX`. Every transformation it performs is triggered
+ * by a `$` (inline/display math, currency escaping) or a backslash escape
+ * (`\(`, `\[`, `\ce{`, `\pu{`). Text containing neither is returned untouched, so
+ * this lets the caller skip the whole protect/restore pipeline.
+ */
+export const LATEX_TRIGGER_REGEXP = /[$\\]/;
+
 /** map from mchem-regexp to replacement */
 export const MHCHEM_PATTERN_MAP: readonly [RegExp, string][] = [
 	[/(\s)\$\\ce{/g, '$1$\\\\ce{'],
