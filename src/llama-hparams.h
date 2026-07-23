@@ -7,7 +7,7 @@
 
 // bump if necessary
 #define LLAMA_MAX_LAYERS  512
-#define LLAMA_MAX_EXPERTS 512 // Qwen3 Next
+#define LLAMA_MAX_EXPERTS 1024 // gemma-4-120b-a12b (656 experts)
 
 enum llama_expert_gating_func_type {
     LLAMA_EXPERT_GATING_FUNC_TYPE_NONE           = 0,
