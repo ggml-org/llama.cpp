@@ -192,6 +192,19 @@ Maintainers reserve the right to decline review or close pull requests for any r
 
 - For changes in server, please make sure to refer to the [server development documentation](./tools/server/README-dev.md)
 
+# New GGML Backends
+
+- Add yourself to [CODEOWNERS](CODEOWNERS) to claim ownership of the backend.
+- Follow the [coding guidelines](#coding-guidelines).
+- In your PR description, include a section showcasing the performance improvements. Use `llama-bench` for this.
+- If possible, provide the necessary CI workflow (and hardware) to test your changes (see [ci/README.md](https://github.com/ggml-org/llama.cpp/tree/master/ci)).
+- If you need to add third-party dependencies, extra files, or extra headers:
+  - Download/link the required files via CMake as a build step.
+  - Otherwise, ensure that the files are licensed under MIT; same as llama.cpp. And keep these extras as minimal as possible.
+- Keep your initial implementation minimal to the `GGML_OP_MUL_MAT` operator with support only for `GGML_TYPE_F32`.
+  - Once your backend is approved and upstream, you can create more PRs to introduce further support.
+  - This is to reduce the amount of time and effort required for review, and ensure you understand the basics of the GGML backend system.
+
 # Documentation
 
 - Documentation is a community effort
