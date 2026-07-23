@@ -1011,9 +1011,12 @@ static bool ggml_backend_cuda_comm_allreduce_nccl(
         GGML_ASSERT(ggml_is_contiguously_allocated(tensors[i]));
     }
 
-    // For small tensors, simply reduce them as FP32.
+    // For small tensors, simply reduce them as FP32. Output logits can also
+    // require FP32 explicitly because reduced-precision accumulation can alter
+    // close token rankings.
     // The following heuristic for how "small" a tensor should be is based on RTX 4090s connected via 16x PCIe 4.0.
-    if ((n_backends <= 2 && ne < 32768) || (n_backends == 3 && ne < 131072) || (n_backends >= 4 && ne < 262144)) {
+    const bool force_fp32 = (tensors[0]->flags & GGML_TENSOR_FLAG_FORCE_FP32_ALLREDUCE) != 0;
+    if (force_fp32 || (n_backends <= 2 && ne < 32768) || (n_backends == 3 && ne < 131072) || (n_backends >= 4 && ne < 262144)) {
         for (size_t i = 0; i < n_backends; ++i) {
             if ((tensors[i]->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
                 ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *) comm_ctx->backends[i]->context;
@@ -1159,6 +1162,7 @@ static void ggml_backend_cuda_comm_init_internal(ggml_backend_cuda_comm_context 
     ret->ar_pipeline = ggml_cuda_ar_pipeline_init(ret->dev_ids.data(), ret->dev_ids.size());
     if (ret->ar_pipeline) {
         ret->try_allreduce = ggml_backend_cuda_comm_try_allreduce_internal;
+        GGML_LOG_INFO("using internal AllReduce across %zu devices\n", ret->dev_ids.size());
         return;
     }
 
@@ -1185,6 +1189,7 @@ static void ggml_backend_cuda_comm_init_nccl(ggml_backend_cuda_comm_context * re
     ncclResult_t rc = ncclCommInitAll(ret->comms.data(), (int) n, ret->dev_ids.data());
     if (rc == ncclSuccess) {
         ret->try_allreduce = ggml_backend_cuda_comm_try_allreduce_nccl;
+        GGML_LOG_INFO("using RCCL/NCCL AllReduce across %zu devices\n", n);
         return;
     }
 

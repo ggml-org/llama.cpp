@@ -424,6 +424,10 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     };
 
     auto get_tensor_config = [&]() -> tensor_config {
+        if (ud->model->is_tensor_parallel_output_head(tensor)) {
+            return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_0);
+        }
+
         // standard attention
         if (std::regex_match(tensor_name, pattern_q_weight) || std::regex_match(tensor_name, pattern_kv_weight)) {
             return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_1, "attn_output.weight", "ssm_out.weight");
@@ -491,13 +495,14 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
         }
 
         // output
+        // mirror the output projection on every device so that the full logits are
+        // available locally; enables backend (GPU) sampling with tensor split at the
+        // cost of a slightly larger memory footprint and redundant output matmul.
         if (std::regex_match(tensor_name, pattern_output_weight)) {
-            return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_1);
+            return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_MIRRORED);
         }
         if (std::regex_match(tensor_name, pattern_output_bias)) {
-            const ggml_tensor * output_weight = ud->model->get_tensor("output.weight");
-            GGML_ASSERT(output_weight != nullptr);
-            return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_0);
+            return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_MIRRORED);
         }
 
         // everything else
@@ -575,6 +580,11 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     };
 
     auto get_split_granularity = [&](int64_t blck_size, uint32_t il, const std::vector<std::pair<int64_t, uint32_t>> & segments) -> std::vector<int64_t> {
+        if (ud->model->is_tensor_parallel_output_head(tensor)) {
+            GGML_ASSERT(segments.size() == 1);
+            return {std::lcm(blck_size, (int64_t) 128)};
+        }
+
         // for better performance it may make sense to round up blck_size to a higher power of 2 so that more efficient kernels can be used
         if (hparams.is_recr(il)) {
             // linear attention
@@ -1699,6 +1709,74 @@ uint32_t llama_model::n_gpu_layers() const {
 
 llama_split_mode llama_model::split_mode() const {
     return params.split_mode;
+}
+
+bool llama_tensor_split_is_valid(
+        int64_t n, int64_t granularity, const float * split, size_t n_devices, size_t rotation) {
+    if (n <= 0 || granularity <= 0 || n_devices < 2 || n % granularity != 0) {
+        return false;
+    }
+    rotation %= n_devices;
+    std::vector<float> scan(n_devices, 0.0f);
+    for (size_t j = 0; j < n_devices; ++j) {
+        scan[j] = split ? split[(j + rotation) % n_devices] : 0.0f;
+        if (j > 0) scan[j] += scan[j - 1];
+    }
+
+    std::vector<int64_t> widths(n_devices, 0);
+    int64_t low = 0;
+    for (size_t j = 0; j < n_devices; ++j) {
+        int64_t high = n;
+        if (j + 1 < n_devices) {
+            high = scan.back() == 0.0f ? n * (j + 1) / n_devices :
+                (int64_t) (n * scan[j] / scan.back());
+            high -= high % granularity;
+        }
+        widths[(j + rotation) % n_devices] = high - low;
+        low = high;
+    }
+    if (low != n) return false;
+    for (int64_t width : widths) {
+        if (width <= 0 || width % granularity != 0) return false;
+    }
+    return true;
+}
+
+bool llama_model::is_tensor_parallel_output_head(const ggml_tensor * tensor) const {
+    if (!tp_sharded_output_initialized) {
+        tp_sharded_output_initialized = true;
+        const char * enabled = getenv("GGML_TP_SHARDED_OUTPUT");
+        const bool supported_model = type == LLM_TYPE_35B_A3B || type == LLM_TYPE_122B_A10B;
+        if (enabled != nullptr && strcmp(enabled, "1") == 0 && params.split_mode == LLAMA_SPLIT_MODE_TENSOR &&
+                (arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE) && supported_model) {
+            const size_t ndev = get_split_state_ud.n_devices;
+            auto valid_split = [&](const ggml_tensor * head, size_t rotation) {
+                if (head == nullptr || head == tok_embd || ggml_n_dims(head) != 2 ||
+                        head->ne[1] != (int64_t) vocab.n_tokens() || ndev < 2) {
+                    return false;
+                }
+                const int64_t granularity = std::lcm((int64_t) ggml_blck_size(head->type), (int64_t) 128);
+                return llama_tensor_split_is_valid(head->ne[0], granularity, tensor_split(), ndev, rotation);
+            };
+
+            if (valid_split(output, hparams.n_layer() % ndev)) tp_sharded_output_heads.insert(output);
+            for (size_t il = 0; il < layers.size(); ++il) {
+                size_t il_eff = 0;
+                for (size_t il_prev = 0; il_prev < il; ++il_prev) {
+                    il_eff += hparams.is_recr(il_prev) == hparams.is_recr(il) &&
+                              hparams.is_swa (il_prev) == hparams.is_swa (il);
+                }
+                if (valid_split(layers[il].nextn.shared_head_head, il_eff % ndev)) {
+                    tp_sharded_output_heads.insert(layers[il].nextn.shared_head_head);
+                }
+            }
+            for (const ggml_tensor * head : tp_sharded_output_heads) {
+                LLAMA_LOG_WARN("%s: experimental sharded tensor-parallel LM head %s across %zu devices\n",
+                    __func__, head->name, ndev);
+            }
+        }
+    }
+    return tensor != nullptr && tp_sharded_output_heads.count(tensor) != 0;
 }
 
 std::map<ggml_backend_buffer_type_t, size_t> llama_model::memory_breakdown() const {

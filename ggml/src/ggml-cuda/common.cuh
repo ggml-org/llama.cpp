@@ -111,6 +111,14 @@
 #    define GGML_CUDA_USE_CUB
 #endif  // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11070
 
+// use hipCUB as a CUB-compatible replacement on AMD (lifts e.g. the 1024-column
+// TOP_K/ARGSORT limit, needed for backend sampling over large vocabularies)
+#if defined(GGML_USE_HIP) && defined(__has_include)
+#    if __has_include(<hipcub/hipcub.hpp>)
+#        define GGML_CUDA_USE_CUB
+#    endif
+#endif
+
 // PDL host-side support (cudaLaunchKernelEx) requires CUDART >= 11.8.
 // However, this has been bugged in CTK < 12.3 for MSVC builds, see
 // https://github.com/ggml-org/llama.cpp/pull/22522#discussion_r3302393293

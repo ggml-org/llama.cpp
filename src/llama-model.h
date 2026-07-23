@@ -540,6 +540,9 @@ struct llama_meta_device_get_split_state_userdata {
 
 struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const struct ggml_tensor * tensor, void * userdata);
 
+bool llama_tensor_split_is_valid(
+    int64_t n, int64_t granularity, const float * split, size_t n_devices, size_t rotation);
+
 struct llama_model {
     llm_type type = LLM_TYPE_UNKNOWN;
     llm_arch arch = LLM_ARCH_UNKNOWN;
@@ -620,6 +623,11 @@ struct llama_model {
     // for quantize-stats only
     std::vector<std::pair<std::string, struct ggml_tensor *>> tensors_by_name;
 
+    // Immutable opt-in tensor-parallel LM-head selection, initialized lazily
+    // after all model tensors and split parameters are available.
+    mutable bool tp_sharded_output_initialized = false;
+    mutable std::unordered_set<const ggml_tensor *> tp_sharded_output_heads;
+
     // for keeping track of associated LoRA adapters
     std::unordered_set<llama_adapter_lora *> loras;
 
@@ -646,6 +654,8 @@ struct llama_model {
 
     uint32_t n_gpu_layers() const;
     llama_split_mode split_mode() const;
+
+    bool is_tensor_parallel_output_head(const ggml_tensor * tensor) const;
 
     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const;
 

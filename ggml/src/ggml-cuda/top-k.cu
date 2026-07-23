@@ -2,15 +2,100 @@
 #include "top-k.cuh"
 
 #ifdef GGML_CUDA_USE_CUB
-#    include <cub/cub.cuh>
-#    if (CCCL_MAJOR_VERSION >= 3 && CCCL_MINOR_VERSION >= 2)
+#    if defined(GGML_USE_HIP)
+#        include <hipcub/hipcub.hpp>
+namespace cub = hipcub;
+#        if defined(__has_include)
+#            if __has_include(<rocprim/device/device_topk.hpp>)
+#                include <rocprim/block/block_radix_sort.hpp>
+#                include <rocprim/device/device_topk.hpp>
+#                include <rocprim/iterator/counting_iterator.hpp>
+#                define ROCPRIM_TOP_K_AVAILABLE
+#            endif
+#        endif
+#    else
+#        include <cub/cub.cuh>
+#    endif
+#    if !defined(GGML_USE_HIP) && (CCCL_MAJOR_VERSION >= 3 && CCCL_MINOR_VERSION >= 2)
 #        define CUB_TOP_K_AVAILABLE
 #        include <cuda/iterator>
 using namespace cub;
 #    endif  // CCCL_MAJOR_VERSION >= 3 && CCCL_MINOR_VERSION >= 2
 #endif      // GGML_CUDA_USE_CUB
 
-#ifdef CUB_TOP_K_AVAILABLE
+#ifdef ROCPRIM_TOP_K_AVAILABLE
+
+static constexpr int ROCPRIM_TOP_K_SORT_BLOCK = 256;
+
+static int next_power_of_2(int x) {
+    int n = 1;
+    while (n < x) {
+        n *= 2;
+    }
+    return n;
+}
+
+static __global__ void top_k_rocprim_sort_candidates(
+        const float * keys_in,
+        const int *   values_in,
+        int *         values_out,
+        int           k) {
+    using block_sort = rocprim::block_radix_sort<float, ROCPRIM_TOP_K_SORT_BLOCK, 1, int>;
+    __shared__ typename block_sort::storage_type storage;
+
+    const int row = blockIdx.x;
+    const int tid = threadIdx.x;
+    float keys[1] = {tid < k ? keys_in[row * k + tid] : -INFINITY};
+    int values[1] = {tid < k ? values_in[row * k + tid] : INT_MAX};
+    block_sort().sort_desc(keys, values, storage);
+    if (tid < k) {
+        values_out[row * k + tid] = values[0];
+    }
+}
+
+static void top_k_rocprim(
+        ggml_cuda_pool & pool,
+        const float *    src,
+        int *            dst,
+        int              ncols,
+        int              nrows,
+        int              k,
+        cudaStream_t     stream) {
+    GGML_ASSERT(k > 0 && k <= ROCPRIM_TOP_K_SORT_BLOCK);
+
+    ggml_cuda_pool_alloc<float> selected_keys_alloc(pool, (size_t) k * nrows);
+    ggml_cuda_pool_alloc<int>   selected_vals_alloc(pool, (size_t) k * nrows);
+    float * selected_keys = selected_keys_alloc.get();
+    int *   selected_vals = selected_vals_alloc.get();
+
+    const rocprim::counting_iterator<int> indices(0);
+    size_t temp_storage_bytes = 0;
+    const hipError_t query_status = rocprim::topk_pairs<rocprim::default_config, true>(
+        nullptr, temp_storage_bytes, src, selected_keys, indices, selected_vals, (uint32_t) ncols, (uint32_t) k,
+        rocprim::identity_decomposer{}, stream);
+    CUDA_CHECK(query_status);
+
+    ggml_cuda_pool_alloc<uint8_t> temp_storage_alloc(pool, temp_storage_bytes);
+    void * temp_storage = temp_storage_alloc.get();
+
+    for (int row = 0; row < nrows; ++row) {
+        size_t row_storage_bytes = temp_storage_bytes;
+        const hipError_t status = rocprim::topk_pairs<rocprim::default_config, true>(
+            temp_storage, row_storage_bytes,
+            src + (size_t) row * ncols,
+            selected_keys + (size_t) row * k,
+            indices,
+            selected_vals + (size_t) row * k,
+            (uint32_t) ncols, (uint32_t) k, rocprim::identity_decomposer{}, stream);
+        CUDA_CHECK(status);
+    }
+
+    top_k_rocprim_sort_candidates<<<nrows, ROCPRIM_TOP_K_SORT_BLOCK, 0, stream>>>(
+        selected_keys, selected_vals, dst, k);
+    CUDA_CHECK(cudaGetLastError());
+}
+
+#elif defined(CUB_TOP_K_AVAILABLE)
 
 static void top_k_cub(ggml_cuda_pool & pool,
                       const float *    src,
@@ -63,6 +148,13 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int64_t    nrows = ggml_nrows(src0);
     const int64_t    k     = dst->ne[0];
     ggml_cuda_pool & pool  = ctx.pool();
+#ifdef ROCPRIM_TOP_K_AVAILABLE
+    if (k <= ROCPRIM_TOP_K_SORT_BLOCK) {
+        top_k_rocprim(pool, src0_d, dst_d, ncols, nrows, k, stream);
+        return;
+    }
+    // Fall through to the full argsort path for unusually large K.
+#endif
 #ifdef CUB_TOP_K_AVAILABLE
     // TODO: Switch to `DeviceSegmentedTopK` for multi-row TopK once implemented
     // https://github.com/NVIDIA/cccl/issues/6391
