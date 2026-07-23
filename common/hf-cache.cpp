@@ -210,7 +210,7 @@ static nl::json api_get(const std::string & url,
         LOG_WRN("%s: invalid token, authentication disabled\n", __func__);
     }
 
-    if (auto res = cli.Get(parts.path, headers)) {
+    if (auto res = common_http_request_with_ipv4_fallback(cli, [&] { return cli.Get(parts.path, headers); })) {
         auto body = res->body;
 
         if (res->status == 200) {
