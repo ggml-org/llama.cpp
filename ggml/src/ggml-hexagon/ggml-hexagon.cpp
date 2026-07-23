@@ -1662,7 +1662,7 @@ void ggml_hexagon_session::flush_pending(bool all) {
         const uint32_t timeo = opt_oppoll ? 0 : DSPQUEUE_TIMEOUT;
 
         int err = dspqueue_read(this->queue, &flags, 1, &n_dbufs, &dbuf, sizeof(rsp), &rsp_size, (uint8_t *) &rsp, timeo);
-        if (err == AEE_EEXPIRED) {
+        if (err == AEE_EEXPIRED || err == AEE_EWOULDBLOCK) {
             continue;
         }
 
