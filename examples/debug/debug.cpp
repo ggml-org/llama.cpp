@@ -79,7 +79,7 @@ struct output_data {
             data_size   = n_floats;
             type_suffix = "-embeddings";
 
-            if (params.embd_normalize >= 0) {
+            if (params.embd_normalize != COMMON_EMBD_NORM_NONE) {
                 embd_norm.resize(n_floats);
                 for (int i = 0; i < n_embd_count; i++) {
                     common_embd_normalize(embd_raw+i*n_embd, embd_norm.data()+i*n_embd, n_embd, params.embd_normalize);
