@@ -544,7 +544,11 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_ssm_scan(ggml_me
 
     const int nsg = (ne00 + 31)/32;
 
-    snprintf(base, 256, "kernel_ssm_scan_%s", ggml_type_name(op->src[0]->type));
+    const bool use_group_kernel = op->src[3]->ne[0] == 1 && op->src[1]->ne[2] == 1 &&
+        (ne00 == 128 || ne00 == 256);
+
+    snprintf(base, 256, "kernel_ssm_scan%s_%s",
+            use_group_kernel ? "_group" : "", ggml_type_name(op->src[0]->type));
     snprintf(name, 256, "%s_nsg=%d", base, nsg);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
@@ -552,12 +556,14 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_ssm_scan(ggml_me
         res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
     }
 
-    // Shared memory layout:
-    // - sgptg * NW floats for partial sums (nsg * 32)
-    // - sgptg floats for shared_x_dt (nsg)
-    // - sgptg floats for shared_dA (nsg)
-    // Total: nsg * (32 + 2) floats
-    res.smem = (32 + 2)*sizeof(float)*nsg;
+    if (!use_group_kernel) {
+        // Shared memory layout:
+        // - sgptg * NW floats for partial sums (nsg * 32)
+        // - sgptg floats for shared_x_dt (nsg)
+        // - sgptg floats for shared_dA (nsg)
+        // Total: nsg * (32 + 2) floats
+        res.smem = (32 + 2)*sizeof(float)*nsg;
+    }
 
     return res;
 }
