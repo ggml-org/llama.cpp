@@ -57,6 +57,9 @@ llama-cli -hf ggml-org/gemma-3-1b-it-GGUF
 llama-server -hf ggml-org/gemma-3-1b-it-GGUF
 ```
 
+> [!TIP]
+> If you're behind a corporate proxy, set the `HTTP_PROXY` and `HTTPS_PROXY` environment variables before running commands that download models (e.g. `export HTTPS_PROXY=http://proxy.example.com:8080`).
+
 ## Description
 
 The main goal of `llama.cpp` is to enable LLM inference with minimal setup and state-of-the-art performance on a wide
