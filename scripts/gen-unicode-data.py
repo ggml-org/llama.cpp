@@ -1,3 +1,9 @@
+# /// script
+# dependencies = [
+#   "requests",
+# ]
+# ///
+
 from __future__ import annotations
 
 import array
