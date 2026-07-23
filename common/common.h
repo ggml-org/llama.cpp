@@ -469,6 +469,17 @@ struct common_params {
     float   yarn_beta_slow        = -1.0f; // YaRN high correction dim
     int32_t yarn_orig_ctx         =     0; // YaRN original context length
 
+    // number of hottest MoE experts to mlock in place per layer, based on observed
+    // router usage, ranked GLOBALLY across all layers (total slots = N x num_moe_layers,
+    // 0 = disabled). See --pin-hotexperts.
+    int32_t n_pin_hotexperts      =     0;
+    // hard cap in MiB on total memory locked by n_pin_hotexperts, across all layers
+    // combined (0 = unlimited, NOT recommended -- see --pin-hotexperts-budget-mib).
+    uint64_t n_pin_hotexperts_budget_mib = 0;
+    // print hot-expert pinning stats to stderr every N router observations (0 = only
+    // at teardown). See --pin-hotexperts-stats-interval.
+    uint64_t n_pin_hotexperts_stats_interval = 200;
+
     // offload params
     std::vector<ggml_backend_dev_t> devices; // devices to use for offloading
 

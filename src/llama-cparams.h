@@ -61,5 +61,13 @@ struct llama_cparams {
     ggml_backend_sched_eval_callback cb_eval;
     void * cb_eval_user_data;
 
+    // --pin-hotexperts N: number of hottest MoE experts to mlock per layer, ranked
+    // GLOBALLY across all layers (total slots = N x num_moe_layers, 0 = disabled)
+    int32_t n_pin_hotexperts;
+    // hard cap in bytes on total memory locked by n_pin_hotexperts, across all layers (0 = unlimited)
+    uint64_t n_pin_hotexperts_budget_bytes;
+    // print pinning stats to stderr every N router observations (0 = only at context teardown)
+    uint64_t n_pin_hotexperts_stats_interval;
+
     llama_context * ctx_other;
 };

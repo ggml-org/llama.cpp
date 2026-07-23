@@ -3,6 +3,7 @@
 #include "ggml.h"
 #include "llama-arch.h"
 #include "llama-graph.h"
+#include "llama-hot-experts.h"
 #include "llama-impl.h"
 #include "llama-batch.h"
 #include "llama-io.h"
@@ -136,6 +137,22 @@ llama_context::llama_context(
 
     cparams.cb_eval           = params.cb_eval;
     cparams.cb_eval_user_data = params.cb_eval_user_data;
+    cparams.n_pin_hotexperts  = params.n_pin_hotexperts;
+    cparams.n_pin_hotexperts_budget_bytes = params.n_pin_hotexperts_budget_bytes;
+    cparams.n_pin_hotexperts_stats_interval = params.n_pin_hotexperts_stats_interval;
+
+    if (cparams.n_pin_hotexperts > 0) {
+        if (cparams.cb_eval != nullptr) {
+            LLAMA_LOG_WARN("%s: --pin-hotexperts requires the eval callback slot, but a custom cb_eval "
+                            "was already supplied; hot-expert pinning is disabled\n", __func__);
+        } else {
+            hot_experts = std::make_unique<llama_hot_expert_cache>(
+                model, cparams.n_pin_hotexperts, cparams.n_pin_hotexperts_budget_bytes,
+                cparams.n_pin_hotexperts_stats_interval);
+            cparams.cb_eval           = llama_hot_expert_cache::eval_callback;
+            cparams.cb_eval_user_data = hot_experts.get();
+        }
+    }
 
     cparams.ctx_other = nullptr;
 
@@ -3486,6 +3503,9 @@ llama_context_params llama_context_default_params() {
         /*.defrag_thold                =*/ -1.0f,
         /*.cb_eval                     =*/ nullptr,
         /*.cb_eval_user_data           =*/ nullptr,
+        /*.n_pin_hotexperts            =*/ 0,
+        /*.n_pin_hotexperts_budget_bytes=*/ 0,
+        /*.n_pin_hotexperts_stats_interval=*/ 200,
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,
         /*.abort_callback              =*/ nullptr,
