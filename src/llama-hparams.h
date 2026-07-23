@@ -52,8 +52,9 @@ struct llama_hparams {
     uint32_t n_embd;
     uint32_t n_layer_all;
     uint32_t n_layer_nextn = 0;
+    uint32_t n_layer_nextn_per_head = 1; // nextn blocks consumed by one draft head (>1 = multi-block MTP step)
     uint32_t n_expert = 0;
-    uint32_t n_expert_used = 0;
+    uint32_t n_expert_used_impl = 0;
     uint32_t n_rel_attn_bkts = 0;
 
     // TODO: this needs to be reworked
@@ -83,10 +84,15 @@ struct llama_hparams {
     std::array<uint32_t, LLAMA_MAX_LAYERS> n_head_kv_arr;
     std::array<uint32_t, LLAMA_MAX_LAYERS> n_ff_arr;
 
+    // per-layer expert feed-forward size; scalar impl as broadcast fallback
+    std::array<uint32_t, LLAMA_MAX_LAYERS> n_ff_exp_arr;
+    // per-layer top-k routing; scalar impl as broadcast fallback
+    std::array<uint32_t, LLAMA_MAX_LAYERS> n_expert_used_arr;
+
     uint32_t n_layer_dense_lead = 0;
     uint32_t n_lora_q           = 0;
     uint32_t n_lora_kv          = 0;
-    uint32_t n_ff_exp           = 0;
+    uint32_t n_ff_exp_impl      = 0;
     uint32_t n_ff_shexp         = 0;
     uint32_t n_ff_chexp         = 0;
     uint32_t n_expert_shared    = 0;
@@ -312,6 +318,12 @@ struct llama_hparams {
     uint32_t n_head_kv(uint32_t il = 0) const;
 
     uint32_t n_ff(uint32_t il = 0) const;
+
+    // per-layer expert feed-forward size; falls back to n_ff_exp_impl when array entry is 0
+    uint32_t n_ff_exp(uint32_t il = 0) const;
+
+    // per-layer top-k expert routing count; falls back to n_expert_used_impl when array entry is 0
+    uint32_t n_expert_used(uint32_t il = 0) const;
 
     uint32_t n_gqa(uint32_t il = 0) const;
 

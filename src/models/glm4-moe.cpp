@@ -1,13 +1,13 @@
 #include "models.h"
 
 void llama_model_glm4_moe::load_arch_hparams(llama_model_loader & ml) {
-    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,     hparams.n_ff_exp);
+    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,     hparams.n_ff_exp_impl);
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,    hparams.f_norm_rms_eps);
     ml.get_key_or_arr(LLM_KV_ROPE_DIMENSION_SECTIONS, hparams.rope_sections, 4, false);
 
     // MoE parameters
     ml.get_key(LLM_KV_EXPERT_COUNT,                hparams.n_expert);
-    ml.get_key(LLM_KV_EXPERT_USED_COUNT,           hparams.n_expert_used);
+    ml.get_key(LLM_KV_EXPERT_USED_COUNT,           hparams.n_expert_used_impl);
     ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,         hparams.n_expert_shared);
     ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,   hparams.n_layer_dense_lead, false);
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale, false);
@@ -37,7 +37,7 @@ void llama_model_glm4_moe::load_arch_tensors(llama_model_loader &) {
 
 
     GGML_ASSERT(hparams.n_expert > 0 && "n_expert must be > 0 for GLM4_MOE MoE layers");
-    GGML_ASSERT(hparams.n_expert_used > 0 && "n_expert_used must be > 0 for GLM4_MOE MoE layers");
+    GGML_ASSERT(hparams.n_expert_used_impl > 0 && "n_expert_used must be > 0 for GLM4_MOE MoE layers");
 
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, 0);
 
@@ -86,7 +86,7 @@ void llama_model_glm4_moe::load_arch_tensors(llama_model_loader &) {
             layer.ffn_exp_probs_b = create_tensor(tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias", i), { n_expert }, flags);
 
             // MoE branch
-            const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
+            const int64_t n_ff_exp = hparams.n_ff_exp_impl ? hparams.n_ff_exp_impl : n_ff / n_expert_used;
 
             layer.ffn_gate_exps = create_tensor(
                 tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), { n_embd, n_ff_exp, n_expert }, flags);

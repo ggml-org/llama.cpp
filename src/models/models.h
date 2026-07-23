@@ -1387,9 +1387,16 @@ struct llama_model_nemotron_h : public llama_model_base {
 
     struct graph : public llm_build_mamba_base {
         graph(const llama_model & model, const llm_graph_params & params);
-        ggml_tensor * build_ffn_layer(ggml_tensor * cur, const llama_model & model, int il);
-        ggml_tensor * build_attention_layer(ggml_tensor * cur, llm_graph_input_attn_kv * inp_attn,
+        // static so they can also be reused from graph_mtp (which does not derive from graph)
+        static ggml_tensor * build_ffn_layer(llm_graph_context & self, ggml_tensor * cur, const llama_model & model, int il);
+        static ggml_tensor * build_attention_layer(llm_graph_context & self, ggml_tensor * cur, llm_graph_input_attn_kv * inp_attn,
             const llama_model & model, int64_t n_embd_head, int il);
+    };
+
+    // LLM_GRAPH_TYPE_DECODER_MTP: Puzzle's MTP step is two appended blocks
+    // (blk.n_layer = attention, blk.n_layer+1 = moe) run serially as one step.
+    struct graph_mtp : public llm_graph_context {
+        graph_mtp(const llama_model & model, const llm_graph_params & params);
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
@@ -1400,7 +1407,8 @@ struct llama_model_nemotron_h_moe : public llama_model_nemotron_h {
     llama_model_nemotron_h_moe(const struct llama_model_params & params) : llama_model_nemotron_h(params) {}
     // reuse load_arch_hparams and load_arch_tensors from llama_model_nemotron_h
 
-    using graph = llama_model_nemotron_h::graph;
+    using graph     = llama_model_nemotron_h::graph;
+    using graph_mtp = llama_model_nemotron_h::graph_mtp;
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
