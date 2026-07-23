@@ -1001,8 +1001,31 @@ private:
         return true;
     }
 
+    static struct mtmd_context_params build_mtmd_context_params(common_params & params) {
+        mtmd_context_params mparams = mtmd_context_params_default();
+
+        std::string & mmproj_path = params.mmproj.path;
+        const bool has_mmproj = !mmproj_path.empty();
+        if (!has_mmproj) {
+            return mparams;
+        }
+
+        mparams.use_gpu          = params.mmproj_use_gpu;
+        mparams.print_timings    = false;
+        mparams.n_threads        = params.cpuparams.n_threads;
+        mparams.flash_attn_type  = params.flash_attn_type;
+        mparams.warmup           = params.warmup;
+        mparams.image_min_tokens = params.image_min_tokens;
+        mparams.image_max_tokens = params.image_max_tokens;
+        mparams.batch_max_tokens = params.mtmd_batch_max_tokens;
+        mparams.media_marker     = get_media_marker();
+
+        return mparams;
+    }
+
     void setup_runtime_state(common_params & params) {
-        if (!llama_memory_can_shift(llama_get_memory(ctx_tgt))) {
+        bool has_mmproj = !params.mmproj.path.empty();
+        if (!llama_memory_can_shift(llama_get_memory(ctx_tgt)) || has_mmproj) {
             if (params.ctx_shift) {
                 params.ctx_shift = false;
                 SRV_WRN("%s\n", "ctx_shift is not supported by this context, it will be disabled");
@@ -1197,21 +1220,10 @@ private:
         SRV_TRC("local path '%s'\n", params.model.path.c_str());
 
         std::string & mmproj_path = params_base.mmproj.path;
-        mtmd_context_params mparams = mtmd_context_params_default();
-        if (has_mmproj) {
-            mparams.use_gpu          = params_base.mmproj_use_gpu;
-            mparams.print_timings    = false;
-            mparams.n_threads        = params_base.cpuparams.n_threads;
-            mparams.flash_attn_type  = params_base.flash_attn_type;
-            mparams.warmup           = params_base.warmup;
-            mparams.image_min_tokens = params_base.image_min_tokens;
-            mparams.image_max_tokens = params_base.image_max_tokens;
-            mparams.batch_max_tokens = params_base.mtmd_batch_max_tokens;
-            mparams.media_marker     = get_media_marker();
-            // progress callback
-            mparams.progress_callback           = load_progress_callback;
-            mparams.progress_callback_user_data = &load_progress_mmproj;
-        }
+        mtmd_context_params mparams = build_mtmd_context_params(params_base);
+        // progress callback
+        mparams.progress_callback           = load_progress_callback;
+        mparams.progress_callback_user_data = &load_progress_mmproj;
 
         // optionally get the memory usage of mmproj
         if (has_mmproj && params_base.fit_params) {
@@ -1393,16 +1405,6 @@ private:
                 return false;
             }
             SRV_INF("loaded multimodal model, '%s'\n", mmproj_path.c_str());
-
-            if (params_base.ctx_shift) {
-                params_base.ctx_shift = false;
-                SRV_WRN("%s\n", "ctx_shift is not supported by multimodal, it will be disabled");
-            }
-
-            if (params_base.n_cache_reuse) {
-                params_base.n_cache_reuse = 0;
-                SRV_WRN("%s\n", "cache_reuse is not supported by multimodal, it will be disabled");
-            }
         }
 
         setup_runtime_state(params_base);
@@ -1511,6 +1513,74 @@ private:
 
         // propagate new defaults back to caller
         params = params_base;
+
+        if (callback_state) {
+            callback_state(SERVER_STATE_READY, {});
+        }
+
+        return true;
+    }
+
+    // unload an existing mmproj and/or load a new one
+    bool reload_mmproj(common_params & params) {
+        load_progress_data load_progress_mmproj(this, "mmproj_model");
+
+        std::string & mmproj_path = params.mmproj.path;
+        bool has_mmproj_old = mctx != nullptr;
+        bool has_mmproj_new = !mmproj_path.empty();
+
+        // if we have an mmproj, merge config with params_base
+        mtmd_context_params mparams = build_mtmd_context_params(params);
+        if (has_mmproj_new) {
+            params_base.mmproj.path           = mmproj_path;
+            params_base.mmproj_use_gpu        = mparams.use_gpu;
+            params_base.cpuparams.n_threads   = mparams.n_threads;
+            params_base.flash_attn_type       = mparams.flash_attn_type;
+            params_base.warmup                = mparams.warmup;
+            params_base.image_min_tokens      = mparams.image_min_tokens;
+            params_base.image_max_tokens      = mparams.image_max_tokens;
+            params_base.mtmd_batch_max_tokens = mparams.batch_max_tokens;
+        }
+
+        // progress callback
+        mparams.progress_callback           = load_progress_callback;
+        mparams.progress_callback_user_data = &load_progress_mmproj;
+
+        if (callback_state) {
+            std::vector<std::string> stages = {"mmproj_model"};
+            load_progress_mmproj.stages = stages;
+
+            // trigger 0% progress
+            load_progress_callback(0.0f, &load_progress_mmproj);
+        }
+
+        // NOTE: like reload_context, we do not validate that the new memory requirements
+        // are compatible with the existing device split before destroying the existing
+        // state. Future improvement.
+
+        reset_runtime_state();
+
+        if (has_mmproj_old) {
+            mtmd_free(mctx);
+            mctx = nullptr;
+
+            SRV_INF("%s: unloaded existing multimodal model\n", __func__);
+        }
+
+        if (has_mmproj_new) {
+            if (callback_state) {
+                callback_state(SERVER_STATE_LOADING, {{"stage", "mmproj_model"}});
+            }
+
+            mctx = mtmd_init_from_file(mmproj_path.c_str(), model_tgt, mparams);
+            if (mctx == nullptr) {
+                SRV_ERR("failed to load multimodal model, '%s'\n", mmproj_path.c_str());
+                return false;
+            }
+            SRV_INF("%s: loaded multimodal model, '%s'\n", __func__, mmproj_path.c_str());
+        }
+
+        setup_runtime_state(params_base);
 
         if (callback_state) {
             callback_state(SERVER_STATE_READY, {});
