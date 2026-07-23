@@ -9140,12 +9140,24 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
 }
 
 // Device tuning
+// Upper bound on n for a step to be treated as decode-like rather than batched.
+// A speculative-decode step evaluates n = 1 + n_draft tokens; common draft widths
+// sit well inside this. Prefill uses far larger n and is unaffected.
+static constexpr uint32_t MMVQ_MAX_DECODE_LIKE_N = 8;
+
 static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_t n, uint32_t k, ggml_type src0_type) {
     if (device->mmvq_mode == 1) {
         return true;
     } else if (device->mmvq_mode == -1) {
         return false;
     }
+
+    const bool is_k_quant =
+        src0_type == GGML_TYPE_Q2_K ||
+        src0_type == GGML_TYPE_Q3_K ||
+        src0_type == GGML_TYPE_Q4_K ||
+        src0_type == GGML_TYPE_Q5_K ||
+        src0_type == GGML_TYPE_Q6_K;
 
     // q6_k only has 2-byte alignment which makes it somewhat problematic,
     // using MMVQ is only a win on Intel.
@@ -9154,8 +9166,18 @@ static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_
         return false;
     }
 
-    // MMVQ is generally good for batches
-    if (n > 1) {
+    // MMVQ is generally good for batches.
+    //
+    // A speculative-decode step is the exception: it evaluates only
+    // n = 1 + n_draft tokens, and typical draft widths are small. At those n the
+    // Q8_1 quantization of the activations does not amortize, and it perturbs the
+    // logits enough that the draft and the target disagree on tokens they should
+    // agree on, which lowers draft acceptance.
+    //
+    // The per-vendor heuristics below predate speculative decoding and were only
+    // ever reached at n == 1. Let decode-like n reach them too, so each vendor's
+    // existing small-k thresholds apply; none of those thresholds are changed here.
+    if (n > MMVQ_MAX_DECODE_LIKE_N) {
         return true;
     }
 
@@ -9186,7 +9208,9 @@ static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_
         case GGML_TYPE_Q8_0:
             return device->architecture == vk_device_architecture::AMD_GCN;
         default:
-            return true;
+            // For k-quants the extra Q8_1 quantization does not pay for itself at
+            // small k; plain DMMV is faster.
+            return !is_k_quant || k >= 4096;
         }
     case VK_VENDOR_ID_INTEL:
         if (device->architecture == vk_device_architecture::INTEL_XE2) {
