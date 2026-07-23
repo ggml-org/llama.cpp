@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
+#include <unordered_map>
 
 static bool common_imatrix_load_legacy(const std::string & fname, common_imatrix & imatrix) {
     std::ifstream in(fname, std::ios::binary);
@@ -110,33 +111,72 @@ bool common_imatrix_load(const std::string & fname, common_imatrix & imatrix) {
         }
     }
 
-    imatrix.has_metadata = (datasets_key != -1 && chunk_count_key != -1 && chunk_size_key != -1);
-    imatrix.chunk_count  = (chunk_count_key != -1) ? gguf_get_val_u32(ctx_gguf, chunk_count_key) : 0;
-    imatrix.chunk_size   = (chunk_size_key  != -1) ? gguf_get_val_u32(ctx_gguf, chunk_size_key)  : 0;
+    imatrix.has_metadata = datasets_key != -1 && chunk_count_key != -1 && chunk_size_key != -1;
+    imatrix.chunk_count  = chunk_count_key != -1 ? gguf_get_val_u32(ctx_gguf, chunk_count_key) : 0;
+    imatrix.chunk_size   = chunk_size_key  != -1 ? gguf_get_val_u32(ctx_gguf, chunk_size_key)  : 0;
 
+    // stats schema: maps file-order positions to canonical metric indices
+    const int64_t schema_idx = gguf_find_key(ctx_gguf, LLM_KV_IMATRIX_STATS_SCHEMA);
+    const std::unordered_map<std::string, int> default_schema_map = {
+        {"sum_sq", 0}, {"mean", 1}, {"elements", 2}, {"std_deviation", 3}, {"skewness", 4},
+        {"kurtosis", 5}, {"gain", 6}, {"h_norm", 7}, {"l2_dist", 8}, {"cossim", 9}, {"pearson", 10}, {"covariance", 11}
+    };
+    std::vector<int> stats_indices;
+    if (schema_idx >= 0) {
+        const int64_t n_schema = gguf_get_arr_n(ctx_gguf, schema_idx);
+        for (int64_t i = 0; i < n_schema; ++i) {
+            const std::string key = gguf_get_arr_str(ctx_gguf, schema_idx, i);
+            auto it = default_schema_map.find(key);
+            stats_indices.push_back(it != default_schema_map.end() ? it->second : -1);
+        }
+    } else {
+        for (size_t i = 0; i < default_schema_map.size(); ++i) {
+            stats_indices.push_back((int) i);
+        }
+    }
+
+    // store canonical schema names in order
+    imatrix.stats_schema.resize(default_schema_map.size());
+    for (const auto & [name, idx] : default_schema_map) {
+        imatrix.stats_schema[idx] = name;
+    }
+
+    const std::string in_sum_suffix{ ".in_sum" };
     const std::string in_sum2_suffix{ ".in_sum2" };
     const std::string counts_suffix{ ".counts" };
+    const std::string stats_suffix{ ".stats" };
 
-    std::map<std::string, std::pair<struct ggml_tensor *, struct ggml_tensor *>> sums_counts_for;
+    struct sum_tensors {
+        struct ggml_tensor * in_sum  = nullptr;
+        struct ggml_tensor * in_sum2 = nullptr;
+        struct ggml_tensor * counts  = nullptr;
+        struct ggml_tensor * stats  = nullptr;
+    };
 
+    std::map<std::string, sum_tensors> sums_counts_for;
     for (struct ggml_tensor * cur = ggml_get_first_tensor(ctx); cur; cur = ggml_get_next_tensor(ctx, cur)) {
         std::string name = cur->name;
-
         if (name.empty()) { continue; }
 
-        if (string_remove_suffix(name, in_sum2_suffix)) {
-            sums_counts_for[std::move(name)].first = cur;
+        if (string_remove_suffix(name, in_sum_suffix)) {
+            sums_counts_for[std::move(name)].in_sum = cur;
+        } else if (string_remove_suffix(name, in_sum2_suffix)) {
+            sums_counts_for[std::move(name)].in_sum2 = cur;
         } else if (string_remove_suffix(name, counts_suffix)) {
-            sums_counts_for[std::move(name)].second = cur;
+            sums_counts_for[std::move(name)].counts = cur;
+        } else if (string_remove_suffix(name, stats_suffix)) {
+            sums_counts_for[std::move(name)].stats = cur;
         }
     }
 
     for (const auto & sc : sums_counts_for) {
         const std::string &        name    = sc.first;
-        const struct ggml_tensor * in_sum2 = sc.second.first;
-        const struct ggml_tensor * counts  = sc.second.second;
+        const struct ggml_tensor * in_sum  = sc.second.in_sum;
+        const struct ggml_tensor * in_sum2 = sc.second.in_sum2;
+        const struct ggml_tensor * counts  = sc.second.counts;
+        const struct ggml_tensor * stats  = sc.second.stats;
 
-        if (!in_sum2 || !counts) {
+        if (!in_sum2 || !counts || (in_sum != nullptr && ggml_nelements(in_sum) != ggml_nelements(in_sum2))) {
             LOG_ERR("%s: mismatched sums and counts for %s\n", __func__, name.c_str());
             gguf_free(ctx_gguf);
             ggml_free(ctx);
@@ -156,6 +196,24 @@ bool common_imatrix_load(const std::string & fname, common_imatrix & imatrix) {
         e.counts.resize(ncounts);
         for (int64_t j = 0; j < ncounts; ++j) {
             e.counts[j] = std::lround(((const float *) counts->data)[j]);
+        }
+
+        if (in_sum && ggml_nelements(in_sum) == nval) {
+            e.activations.resize(nval);
+            for (int64_t j = 0; j < nval; ++j) {
+                e.activations[j] = ((const float *) in_sum->data)[j];
+            }
+        }
+
+        if (stats && stats->type == GGML_TYPE_F32) {
+            e.stats.resize(default_schema_map.size(), 0.0f);
+            const auto * stats_data = (const float *) stats->data;
+            const int64_t n_stats = ggml_nelements(stats);
+            for (int64_t j = 0; j < (int64_t) stats_indices.size() && j < n_stats; ++j) {
+                if (stats_indices[j] >= 0 && stats_indices[j] < (int) e.stats.size()) {
+                    e.stats[stats_indices[j]] = stats_data[j];
+                }
+            }
         }
     }
 
