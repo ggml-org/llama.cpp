@@ -52,11 +52,29 @@ Skill-specific addition: before writing `src/models/<name>.cpp`, read at least 1
 
 Only do this if the contributor flagged a vision/audio encoder in Step 0. Follow HOWTO-add-model.md section 4 and `docs/multimodal.md` for the actual touch points (`MmprojModel` subclass, `clip.cpp`, `mtmd.cpp`, encoder graph in `tools/mtmd/models`, etc.).
 
-Skill-specific addition, and read this carefully: **multimodal encoder support almost always belongs in its own, separate PR from the base text-model support**, not the same one. If the encoder is a near-exact reuse of an existing implementation (e.g. siglip/pixtral/qwen with just a new projector), a combined PR may be acceptable - confirm with the contributor first. But if the encoder implementation is at all non-trivial (new preprocessor, new graph, non-standard projector), STOP and tell the contributor to land the text model first, then open a dedicated follow-up PR for the encoder. Do not let this decision pass silently - call it out explicitly to the contributor before writing any `clip.cpp`/`mtmd.cpp` code.
+Skill-specific addition, and read this carefully: **whether the multimodal encoder can be bundled into the same PR as the base text-model support depends on how conventional the change is.** It's OK to bundle it if the encoder support is conventional - i.e. no new infra or logic is needed, it's just a new cgraph reusing existing preprocessing/projector machinery (e.g. siglip/pixtral/qwen with just a new projector). If it requires anything beyond that - a new preprocessor, non-standard projector logic, or changes to shared `libmtmd` infra/logic - STOP, tell the contributor this is non-conventional, and have them land the text model first with the encoder as a dedicated follow-up PR. Do not let this decision pass silently - call it out explicitly to the contributor before writing any `clip.cpp`/`mtmd.cpp` code.
 
 ## Step 5 - Optional: chat template / parsing support
 
 Only do this if the model needs a new built-in chat template (`src/llama-chat.cpp`) or a new output parser (see `docs/development/parsing.md` and `docs/autoparser.md`). If either is needed beyond what a user-supplied Jinja template already covers, treat it as its own dedicated follow-up PR, not part of the base model-support PR - call this out explicitly to the contributor rather than silently bundling it in.
+
+## Common pitfalls (from past PR reviews)
+
+These recur often enough in review comments on past add-model PRs that they're worth checking proactively, not just waiting for a reviewer to catch them:
+
+- Don't validate the same hparam/config assumption in both the Python conversion script and the C++ load path - pick one layer to own the check, duplicating it just adds maintenance surface.
+- Optional hparams that are genuinely absent from some configs (e.g. a shared-expert count) should be read with an explicit optional/fallback accessor, not assumed present.
+- Hparams that are actually load-bearing (the model produces wrong output or crashes without them, e.g. `sliding_window_pattern`, norm-eps) must hard-error if missing, not silently fall back to a default.
+- Don't bake a default chat template into the C++ binary - inject it into the GGUF at conversion time instead, since one `llm_arch` can be reused by multiple fine-tunes with different templates, and a baked-in C++ default fails silently for those.
+- Before writing a dedicated tool-call/output parser, check whether the existing autoparser already handles the template (`llama-debug-template-parser <jinja>` shows what it detects).
+- Marking a custom EOS/closing-tag token as `eot` at conversion time isn't always sufficient - in long/agentic generations a model can emit the closing sequence as literal text instead of the token, so generation never stops on EOG and raw text leaks past the parser. Verify this case, not just the token path.
+- If reusing or aliasing an existing pre-tokenizer for convenience, justify and test that choice explicitly - silent reuse is an easy source of subtle tokenizer bugs.
+- Watch for excessive graph splits caused by building per-layer view/index tensors inside the layer loop - hoist tensors that don't vary per layer out of the loop (relevant if you hit `GGML_SCHED_MAX_SPLIT_INPUTS`).
+- A custom KQ mask fed into flash attention must match FA's expected dtype - cast it to F16 before passing it to `build_attn_mha` when FA is enabled.
+- When padding a custom KV-cache size to an alignment (e.g. `GGML_PAD(..., 256)`), apply the padding after all other size adjustments, not before - otherwise later logic can un-align it again.
+- For non-standard cache/SWA (sliding-window-attention) semantics, override the dedicated hook (e.g. `llama_model_n_swa()`) rather than mutating hparams to fake the behavior - hparams may be read elsewhere for unrelated purposes.
+- Don't ship unfinished or unverified speculative-decoding (e.g. MTP) scaffolding in the base model PR - if it hasn't actually been confirmed to work, pull it out and land it as its own follow-up.
+- Conversion code should call into the base class's existing hparam logic (e.g. `super().set_gguf_parameters()`) rather than re-deriving it - large blocks of code that duplicate what `TextModel`/`MmprojModel` already provide will get flagged as redundant.
 
 ## Validation checklist
 
@@ -68,7 +86,7 @@ Reference: `examples/model-conversion/README.md`.
 4. Run perplexity evaluation (simple and full).
 5. Sanity-check across `tools/cli`, `tools/completion`, `tools/imatrix`, `tools/quantize`, and `tools/server`.
 6. CPU backend first; other backends (CUDA, Metal, ...) can be separate follow-up PRs per `CONTRIBUTING.md`.
-7. Re-review every changed file against the coding/naming guidelines in `AGENTS.md` (and `CONTRIBUTING.md`'s "Coding guidelines"/"Naming guidelines" sections) - this is a separate pass from functional testing and is just as important: no forced line-wrapping, no unicode punctuation, minimal/non-redundant comments, `snake_case` naming, matching indentation/brace style, etc.
+7. Re-review every changed file against the coding/naming guidelines in `AGENTS.md` (and `CONTRIBUTING.md`'s "Coding guidelines"/"Naming guidelines" sections) - this is a separate pass from functional testing and is just as important: no forced line-wrapping, no unicode punctuation, minimal/non-redundant comments, `snake_case` naming (`kebab-case` for file names), matching indentation/brace style, etc.
 
 ## Before opening a PR
 

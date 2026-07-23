@@ -45,6 +45,8 @@ class MyModel(MmprojModel):
 
 Add an enum entry in `MODEL_ARCH`, the model human friendly name in `MODEL_ARCH_NAMES` and the GGUF tensor names in `MODEL_TENSORS`.
 
+NOTE: Pick the GGUF arch string (and the matching `src/models/<name>.cpp` filename, see section 3) carefully up front, following existing naming conventions. Once GGUF files are published under a given arch string, renaming it later breaks the community's existing files, so this is not something to leave for cleanup in a follow-up PR.
+
 Example for `falcon` model:
 ```python
     MODEL_ARCH.FALCON: [
@@ -101,6 +103,7 @@ The model params and tensors layout must be defined in `llama.cpp` source files:
     - You may also need to update `LLM_KV_NAMES`, `LLM_TENSOR_NAMES` and `LLM_TENSOR_INFOS`
 3. Add any non-standard metadata loading in the `llama_model_loader` constructor in `src/llama-model-loader.cpp`.
 4. If the model has a RoPE operation, add a case for the architecture in `llama_model_rope_type` function in `src/llama-model.cpp`.
+5. Check for other places that switch/iterate over every `llm_arch` value, e.g. `src/llama-model-saver.cpp` and any mandatory-hparam lists (such as which archs require MoE metadata). Grep for `LLM_ARCH_` usages to find them. Missing one of these is a common cause of CI test failures (e.g. `test-llama-archs`) after adding a new arch.
 
 NOTE: The dimensions in `ggml` are typically in the reverse order of the `pytorch` dimensions.
 
