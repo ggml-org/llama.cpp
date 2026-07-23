@@ -3612,6 +3612,19 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
+        {"--gpu-heartbeat"}, "SECONDS",
+        string_format("submit GPU heartbeat every N seconds to prevent driver VRAM eviction "
+                       "on headless GPUs (default: %d; disables --sleep-idle-seconds)",
+                       params.gpu_heartbeat_seconds),
+        [](common_params & params, const std::string & value) {
+            int val = std::stoi(value);
+            if (val < 1) {
+                throw std::invalid_argument("--gpu-heartbeat must be >= 1");
+            }
+            params.gpu_heartbeat_seconds = val;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"--simple-io"},
         "use basic IO for better compatibility in subprocesses and limited consoles",
         [](common_params & params) {

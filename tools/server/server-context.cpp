@@ -1408,6 +1408,10 @@ private:
         queue_tasks.on_sleeping_state([this](bool sleeping) {
             handle_sleeping_state(sleeping);
         });
+        queue_tasks.on_heartbeat([this]() {
+            // Touch GPU backends to prevent driver VRAM eviction
+            llama_synchronize(ctx_tgt);
+        });
 
         metrics.init();
 
@@ -3943,7 +3947,11 @@ bool server_context::load_model(common_params & params) {
 
 void server_context::start_loop() {
     auto & params = impl->params_base;
-    impl->queue_tasks.start_loop(params.sleep_idle_seconds * 1000);
+    int64_t sleep_ms = params.sleep_idle_seconds * 1000;
+    if (params.gpu_heartbeat_seconds > 0) {
+        sleep_ms = -1;  // --gpu-heartbeat disables idle sleep
+    }
+    impl->queue_tasks.start_loop(sleep_ms, params.gpu_heartbeat_seconds * 1000);
 }
 
 void server_context::terminate() {
