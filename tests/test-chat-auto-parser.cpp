@@ -1965,6 +1965,7 @@ struct role_marker_case {
     std::string template_file;
     std::string expected_user_start;
     std::string expected_assistant_start;
+    std::string expected_tool_response_start;
 };
 
 static void test_role_markers_all_templates(testing & t) {
@@ -1975,93 +1976,93 @@ static void test_role_markers_all_templates(testing & t) {
     // markers it detected first.
     const std::vector<role_marker_case> cases = {
         // ChatML family: <|im_start|>{role} ... <|im_end|>
-        { "Bielik-11B-v3.0-Instruct.jinja",                  "<|im_start|>user",       "<|im_start|>assistant"      },
-        { "HuggingFaceTB-SmolLM3-3B.jinja",                  "<|im_start|>user",       "<|im_start|>assistant"      },
-        { "MiMo-VL.jinja",                                   "<|im_start|>user",       "<|im_start|>assistant"      },
-        { "NousResearch-Hermes-2-Pro-Llama-3-8B-tool_use.jinja", "<|im_start|>user",   "<|im_start|>assistant"      },
-        { "NousResearch-Hermes-3-Llama-3.1-8B-tool_use.jinja",   "<|im_start|>user",   "<|im_start|>assistant"      },
-        { "NVIDIA-Nemotron-3-Nano-30B-A3B-BF16.jinja",       "<|im_start|>user",       "<|im_start|>assistant"      },
-        { "Qwen3.5-4B.jinja",                                "<|im_start|>user",       "<|im_start|>assistant"      },
-        { "Qwen3-Coder.jinja",                               "<|im_start|>user",       "<|im_start|>assistant"      },
-        { "Qwen-Qwen2.5-7B-Instruct.jinja",                  "<|im_start|>user",       "<|im_start|>assistant"      },
-        { "Qwen-Qwen3-0.6B.jinja",                           "<|im_start|>user",       "<|im_start|>assistant"      },
-        { "Qwen-QwQ-32B.jinja",                              "<|im_start|>user",       "<|im_start|>assistant"      },
-        { "StepFun3.5-Flash.jinja",                          "<|im_start|>user",       "<|im_start|>assistant"      },
+        { "Bielik-11B-v3.0-Instruct.jinja", "<|im_start|>user", "<|im_start|>assistant", "<|im_start|>user\n<|function_output|>" },
+        { "HuggingFaceTB-SmolLM3-3B.jinja", "<|im_start|>user", "<|im_start|>assistant", "<|im_start|>user" },
+        { "MiMo-VL.jinja", "<|im_start|>user", "<|im_start|>assistant", "<|im_start|>user\n<tool_response>" },
+        { "NousResearch-Hermes-2-Pro-Llama-3-8B-tool_use.jinja", "<|im_start|>user", "<|im_start|>assistant", "<|im_start|>tool\n<tool_response>" },
+        { "NousResearch-Hermes-3-Llama-3.1-8B-tool_use.jinja", "<|im_start|>user", "<|im_start|>assistant", "<|im_start|>tool\n<tool_response>" },
+        { "NVIDIA-Nemotron-3-Nano-30B-A3B-BF16.jinja", "<|im_start|>user", "<|im_start|>assistant", "<|im_start|>user\n<tool_response>" },
+        { "Qwen3.5-4B.jinja", "<|im_start|>user", "<|im_start|>assistant", "" },
+        { "Qwen3-Coder.jinja", "<|im_start|>user", "<|im_start|>assistant", "<|im_start|>user\n<tool_response>" },
+        { "Qwen-Qwen2.5-7B-Instruct.jinja", "<|im_start|>user", "<|im_start|>assistant", "<|im_start|>user\n<tool_response>" },
+        { "Qwen-Qwen3-0.6B.jinja", "<|im_start|>user", "<|im_start|>assistant", "<|im_start|>user\n<tool_response>" },
+        { "Qwen-QwQ-32B.jinja", "<|im_start|>user", "<|im_start|>assistant", "<|im_start|>user\n<tool_response>" },
+        { "StepFun3.5-Flash.jinja", "<|im_start|>user", "<|im_start|>assistant", "<|im_start|>tool_response\n<tool_response>" },
 
         // DeepSeek family
-        { "deepseek-ai-DeepSeek-R1-Distill-Llama-8B.jinja",  "<｜User｜>",                "<｜Assistant｜>"             },
-        { "deepseek-ai-DeepSeek-R1-Distill-Qwen-32B.jinja",  "<｜User｜>",                "<｜Assistant｜>"             },
-        { "deepseek-ai-DeepSeek-V3.1.jinja",                 "<｜User｜>",                "<｜Assistant｜>"             },
-        { "llama-cpp-deepseek-r1.jinja",                     "<｜User｜>",                "<｜Assistant｜>"             },
+        { "deepseek-ai-DeepSeek-R1-Distill-Llama-8B.jinja", "<｜User｜>", "<｜Assistant｜>", "<｜tool▁outputs▁begin｜><｜tool▁output▁begin｜>" },
+        { "deepseek-ai-DeepSeek-R1-Distill-Qwen-32B.jinja", "<｜User｜>", "<｜Assistant｜>", "<｜tool▁outputs▁begin｜><｜tool▁output▁begin｜>" },
+        { "deepseek-ai-DeepSeek-V3.1.jinja", "<｜User｜>", "<｜Assistant｜>", "<｜tool▁output▁begin｜>" },
+        { "llama-cpp-deepseek-r1.jinja", "<｜User｜>", "<｜Assistant｜>", "<｜tool▁outputs▁begin｜>\n<｜tool▁output▁begin｜>" },
 
         // Llama 3 header family
-        { "meetkai-functionary-medium-v3.1.jinja",           "<|start_header_id|>user<|end_header_id|>", "<|start_header_id|>assistant<|end_header_id|>" },
-        { "meta-llama-Llama-3.1-8B-Instruct.jinja",          "<|start_header_id|>user<|end_header_id|>", "<|start_header_id|>assistant<|end_header_id|>" },
-        { "meta-llama-Llama-3.2-3B-Instruct.jinja",          "<|start_header_id|>user<|end_header_id|>", "<|start_header_id|>assistant<|end_header_id|>" },
-        { "meta-llama-Llama-3.3-70B-Instruct.jinja",         "<|start_header_id|>user<|end_header_id|>", "<|start_header_id|>assistant<|end_header_id|>" },
+        { "meetkai-functionary-medium-v3.1.jinja", "<|start_header_id|>user<|end_header_id|>", "<|start_header_id|>assistant<|end_header_id|>", "<|start_header_id|>ipython<|end_header_id|>" },
+        { "meta-llama-Llama-3.1-8B-Instruct.jinja", "<|start_header_id|>user<|end_header_id|>", "<|start_header_id|>assistant<|end_header_id|>", "<|start_header_id|>ipython<|end_header_id|>\n\n\"" },
+        { "meta-llama-Llama-3.2-3B-Instruct.jinja", "<|start_header_id|>user<|end_header_id|>", "<|start_header_id|>assistant<|end_header_id|>", "<|start_header_id|>ipython<|end_header_id|>\n\n\"" },
+        { "meta-llama-Llama-3.3-70B-Instruct.jinja", "<|start_header_id|>user<|end_header_id|>", "<|start_header_id|>assistant<|end_header_id|>", "<|start_header_id|>ipython<|end_header_id|>\n\n\"" },
         // fireworks-ai forces a trailing assistant header even without add_generation_prompt,
         // so the marker is absorbed into the common suffix and assistant_start is detected as empty.
-        { "fireworks-ai-llama-3-firefunction-v2.jinja",      "<|start_header_id|>user<|end_header_id|>", "<|start_header_id|>assistant<|end_header_id|>" },
+        { "fireworks-ai-llama-3-firefunction-v2.jinja", "<|start_header_id|>user<|end_header_id|>", "<|start_header_id|>assistant<|end_header_id|>", "<|eot_id|><|start_header_id|>tool<|end_header_id|>" },
 
         // Phi/GLM/Apriel-style: <|user|> / <|assistant|>
-        { "microsoft-Phi-3.5-mini-instruct.jinja",           "<|user|>",               "<|assistant|>"              },
-        { "GLM-4.6.jinja",                                   "<|user|>",               "<|assistant|>"              },
-        { "unsloth-Apriel-1.5.jinja",                        "<|user|>",               "<|assistant|>"              },
-        { "GLM-4.7-Flash.jinja",                             "<|user|>",                 "<|assistant|>"                },
+        { "microsoft-Phi-3.5-mini-instruct.jinja", "<|user|>", "<|assistant|>", "" },
+        { "GLM-4.6.jinja", "<|user|>", "<|assistant|>", "<|observation|>\n<tool_response>" },
+        { "unsloth-Apriel-1.5.jinja", "<|user|>", "<|assistant|>", "<|tool_result|>" },
+        { "GLM-4.7-Flash.jinja", "<|user|>", "<|assistant|>", "<|observation|><tool_response>" },
 
         // Gemma 2: <start_of_turn>{user|model}
-        { "google-gemma-2-2b-it.jinja",                      "<start_of_turn>user",    "<start_of_turn>model"       },
+        { "google-gemma-2-2b-it.jinja", "<start_of_turn>user", "<start_of_turn>model", "" },
 
         // IBM Granite
-        { "ibm-granite-granite-3.3-2B-Instruct.jinja",       "<|start_of_role|>user<|end_of_role|>", "<|start_of_role|>assistant<|end_of_role|>" },
-        { "ibm-granite-granite-4.0.jinja",                   "<|start_of_role|>user<|end_of_role|>", "<|start_of_role|>assistant<|end_of_role|>" },
+        { "ibm-granite-granite-3.3-2B-Instruct.jinja", "<|start_of_role|>user<|end_of_role|>", "<|start_of_role|>assistant<|end_of_role|>", "<|start_of_role|>tool<|end_of_role|>" },
+        { "ibm-granite-granite-4.0.jinja", "<|start_of_role|>user<|end_of_role|>", "<|start_of_role|>assistant<|end_of_role|>", "<|start_of_role|>user<|end_of_role|>\n<tool_response>" },
 
         // Cohere R-series
         { "CohereForAI-c4ai-command-r7b-12-2024-tool_use.jinja",
-            "<|START_OF_TURN_TOKEN|><|USER_TOKEN|>", "<|START_RESPONSE|>" },
+            "<|START_OF_TURN_TOKEN|><|USER_TOKEN|>", "<|START_RESPONSE|>" , "" },
         { "CohereForAI-c4ai-command-r-plus-tool_use.jinja",
-            "<|START_OF_TURN_TOKEN|><|USER_TOKEN|>", "<|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>" },
+            "<|START_OF_TURN_TOKEN|><|USER_TOKEN|>", "<|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|>" , "<|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|><results>" },
 
         // Mistral: assistant content follows [/INST] immediately, no header
-        { "mistralai-Mistral-Nemo-Instruct-2407.jinja",      "[INST]",                   "" },
-        { "Mistral-Small-3.2-24B-Instruct-2506.jinja",       "[INST]",                   "" },
+        { "mistralai-Mistral-Nemo-Instruct-2407.jinja", "[INST]", "", "" },
+        { "Mistral-Small-3.2-24B-Instruct-2506.jinja", "[INST]", "", "" },
 
         // Apertus uses <|user_start|> / <|assistant_start|> but the user diff
         // carries the preceding <|assistant_end|> from the previous turn.
-        { "Apertus-8B-Instruct.jinja",                       "<|user_start|>", "<|assistant_start|>" },
+        { "Apertus-8B-Instruct.jinja", "<|user_start|>", "<|assistant_start|>", "[" },
 
         // Apriel 1.6 wraps the assistant body with <|begin_assistant|>, but
         // <|begin_assistant|> is also the detected reasoning start, so the
         // assistant_start is trimmed back to the preceding newline.
-        { "Apriel-1.6-15b-Thinker-fixed.jinja",              "<|begin_user|>", "<|begin_assistant|>" },
+        { "Apriel-1.6-15b-Thinker-fixed.jinja", "<|begin_user|>", "<|begin_assistant|>", "<|end|>\n<|begin_tool_result|>" },
 
         // ByteDance Seed-OSS: <seed:bos>{role}
-        { "ByteDance-Seed-OSS.jinja",                        "<seed:bos>user",         "<seed:bos>assistant"        },
+        { "ByteDance-Seed-OSS.jinja", "<seed:bos>user", "<seed:bos>assistant", "<seed:bos>tool" },
 
         // GigaChat 3.1: {role}<|role_sep|>
-        { "GigaChat3.1-10B-A1.8B.jinja",                     "user<|role_sep|>",       "assistant<|role_sep|>"      },
+        { "GigaChat3.1-10B-A1.8B.jinja", "user<|role_sep|>", "assistant<|role_sep|>", "function result<|role_sep|>" },
 
         // MiniMax M2: ]~b]{user|ai}
-        { "MiniMax-M2.jinja",                                "]~b]user",               "]~b]ai"                     },
+        { "MiniMax-M2.jinja", "]~b]user", "]~b]ai", "" },
 
         // HunYuan V3: <｜hy_User:opensource｜> / <｜hy_Assistant:opensource｜>
         { "tencent-Hy3.jinja",                               "<｜hy_User:opensource｜>", "<｜hy_Assistant:opensource｜>" },
 
         // Nemotron Nano v2: <SPECIAL_11>{User|Assistant}; assistant marker
         // is followed by a prefilled <think> block that gets included.
-        { "NVIDIA-Nemotron-Nano-v2.jinja",                   "<SPECIAL_11>User",       "<SPECIAL_11>Assistant" },
+        { "NVIDIA-Nemotron-Nano-v2.jinja", "<SPECIAL_11>User", "<SPECIAL_11>Assistant", "A_ASST_MSG\n<SPECIAL_12>\n<SPECIAL_11>User\n<TOOL_RESPONSE>[" },
 
         // Reka Edge: "human: " / "assistant: " — but the rendered preamble
         // depends on enable_thinking, which currently confuses the user-start
         // diff and trims the marker down. Lock in the observed value.
-        { "Reka-Edge.jinja",                                 "human:",                     "assistant:"       },
+        { "Reka-Edge.jinja", "human:", "assistant:", "human: <tool_response>" },
 
         // RWKV-world chat preset: "User: " / "Assistant: "
-        { "llama-cpp-rwkv-world.jinja",                      "User:",               "Assistant:"              },
+        { "llama-cpp-rwkv-world.jinja", "User:", "Assistant:", "" },
 
         // Upstage Solar 100B: <|begin|>{role}... but reasoning marker absorbs
         // the "<|begin|>assistant" prefix from assistant_start.
-        { "upstage-Solar-Open-100B.jinja",                   "<|begin|>user<|content|>", "<|begin|>assistant"           },
+        { "upstage-Solar-Open-100B.jinja", "<|begin|>user<|content|>", "<|begin|>assistant", "<|end|><|begin|>tool<|tool_response|><|tool_response:begin|><|tool_response:name|><|tool_response:result|>" },
     };
 
     for (const auto & c : cases) {
@@ -2071,6 +2072,7 @@ static void test_role_markers_all_templates(testing & t) {
             ap.analyze_template(tmpl);
             t.assert_equal("user_start",      c.expected_user_start,      ap.user_start);
             t.assert_equal("assistant_start", c.expected_assistant_start, ap.assistant_start);
+            t.assert_equal("tool_response_start", c.expected_tool_response_start, ap.tool_response_start);
         });
     }
 }
