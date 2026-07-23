@@ -192,9 +192,10 @@ struct tool_format_analysis {
 };
 
 struct tool_function_analysis {
-    std::string name_prefix;  // e.g., "<function=", "\"name\": \"", "functions."
-    std::string name_suffix;  // e.g., ">", "\"", ":0"
-    std::string close;        // e.g., "</function>", "" (for tag-based)
+    std::string name_prefix;     // e.g., "<function=", "\"name\": \"", "functions."
+    std::string name_suffix;     // e.g., ">", "\"", ":0"
+    std::string args_separator;  // e.g., "<tool_sep>" (marker between function name and arguments)
+    std::string close;           // e.g., "</function>", "" (for tag-based)
 };
 
 struct tool_arguments_analysis {
@@ -205,6 +206,7 @@ struct tool_arguments_analysis {
     std::string value_prefix;  // e.g., "", "<arg_value>", ""
     std::string value_suffix;  // e.g., "</param>", "</arg_value>", ""
     std::string separator;     // e.g., "", "\n", ","
+    bool tolerate_intertag_whitespace = false; // Laguna: accept optional whitespace between arg tags
 };
 
 struct tool_id_analysis {
@@ -387,6 +389,7 @@ struct autoparser {
 
     // Preserved tokens for tokenizer (union of all non-empty markers)
     std::vector<std::string> preserved_tokens;
+    std::vector<std::string> additional_stops;  // literal stop strings (e.g. Laguna </assistant>) caught however tokenized
 
     autoparser() = default;
 

@@ -1,6 +1,7 @@
 import { base } from '$app/paths';
 import { error } from '@sveltejs/kit';
 import { browser } from '$app/environment';
+import { AUTHORIZATION_HEADER, BEARER_PREFIX } from '$lib/constants';
 import { config } from '$lib/stores/settings.svelte';
 
 /**
@@ -24,7 +25,7 @@ export async function validateApiKey(fetch: typeof globalThis.fetch): Promise<vo
 	try {
 		const headers: Record<string, string> = {
 			'Content-Type': 'application/json',
-			Authorization: `Bearer ${apiKey}`
+			[AUTHORIZATION_HEADER]: `${BEARER_PREFIX}${apiKey}`
 		};
 
 		const response = await fetch(`${base}/props`, { headers });

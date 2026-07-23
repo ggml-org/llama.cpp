@@ -248,6 +248,17 @@ static __dpct_inline__ T op_leaky_relu(T x, float negative_slope) {
 }
 
 template<typename T>
+static __dpct_inline__ T op_xielu(T x, float alpha_n, float alpha_p, float beta, float eps) {
+    const float xi        = static_cast<float>(x);
+    const float gate_pos  = (xi > 0.0f);
+    const float y_pos     = alpha_p * xi * xi + beta * xi;
+    const float min_v_eps = sycl::fmin(xi, eps);
+    const float y_neg     = (sycl::expm1(min_v_eps) - xi) * alpha_n + beta * xi;
+    const float out       = gate_pos * y_pos + (1.0f - gate_pos) * y_neg;
+    return static_cast<T>(out);
+}
+
+template<typename T>
 static __dpct_inline__ T op_sqr(T x) {
     return x * x;
 }
@@ -356,6 +367,13 @@ template<typename T>
 static void unary_op_leaky_relu_kernel(const T * x, T * dst, const int k, float negative_slope, const sycl::nd_item<1> &item_ct1) {
     SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
         dst[i] = op_leaky_relu(x[i], negative_slope);
+    }
+}
+
+template<typename T>
+static void unary_op_xielu_kernel(const T * x, T * dst, const int k, float alpha_n, float alpha_p, float beta, float eps, const sycl::nd_item<1> &item_ct1) {
+    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
+        dst[i] = op_xielu(x[i], alpha_n, alpha_p, beta, eps);
     }
 }
 
@@ -836,6 +854,23 @@ static inline void ggml_sycl_op_clamp(ggml_backend_sycl_context & ctx, ggml_tens
         }, min_val, max_val);
 }
 
+static inline void ggml_sycl_op_xielu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    const float alpha_n = ggml_get_op_params_f32(dst, 1);
+    const float alpha_p = ggml_get_op_params_f32(dst, 2);
+    const float beta    = ggml_get_op_params_f32(dst, 3);
+    const float eps     = ggml_get_op_params_f32(dst, 4);
+    ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
+        [](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream, float alpha_n_arg, float alpha_p_arg, float beta_arg, float eps_arg) {
+            const int num_blocks = ceil_div(k_elements, SYCL_RELU_BLOCK_SIZE);
+            stream->parallel_for(
+                sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(SYCL_RELU_BLOCK_SIZE),
+                                  sycl::range<1>(SYCL_RELU_BLOCK_SIZE)),
+                [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                    unary_op_xielu_kernel(src, dst_ptr, k_elements, alpha_n_arg, alpha_p_arg, beta_arg, eps_arg, item_ct1);
+                });
+        }, alpha_n, alpha_p, beta, eps);
+}
+
 static inline void ggml_sycl_op_floor(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     ggml_sycl_detail::ggml_sycl_op_unary(ctx, dst, [](auto x) {
         return op_floor(x);
@@ -1151,6 +1186,11 @@ void ggml_sycl_sqr(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 void ggml_sycl_clamp(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_op_clamp(ctx, dst);
+}
+
+void ggml_sycl_xielu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
+    ggml_sycl_op_xielu(ctx, dst);
 }
 
 void ggml_sycl_sgn(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {

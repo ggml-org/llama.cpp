@@ -15,7 +15,6 @@ import type { DatabaseMessage, DatabaseMessageExtra, McpServerOverride } from '.
 export interface AgenticConfig {
 	enabled: boolean;
 	maxTurns: number;
-	maxToolPreviewLines: number;
 }
 
 /**
@@ -70,6 +69,11 @@ export interface AgenticSession {
 	lastError: Error | null;
 	streamingToolCall: { name: string; arguments: string } | null;
 	pendingPermissionRequest: { toolName: string; serverLabel: string } | null;
+	/** ID of the tool call whose output is currently being streamed back
+	 *  (e.g. exec_shell_command outputting to /tools?stream=true). Lets the
+	 *  matching tool renderer flip into live-update mode while chunks
+	 *  arrive; cleared when the tool's terminal event lands. */
+	executingToolCallId: string | null;
 }
 
 /**
@@ -107,6 +111,15 @@ export interface AgenticFlowCallbacks {
 		content: string,
 		extras?: DatabaseMessageExtra[]
 	) => Promise<DatabaseMessage>;
+	/** Update an already-created tool result message. Used while a streaming
+	 *  tool (e.g. exec_shell_command) accumulates output chunks before its
+	 *  terminal event; the same message is rewritten in place so the chat UI
+	 *  sees the partial output live. */
+	updateToolResultMessage?: (
+		messageId: string,
+		content: string,
+		extras?: DatabaseMessageExtra[]
+	) => Promise<void>;
 	/** Create a new assistant message for the next agentic turn */
 	createAssistantMessage?: () => Promise<DatabaseMessage>;
 	/** Entire agentic flow is complete */

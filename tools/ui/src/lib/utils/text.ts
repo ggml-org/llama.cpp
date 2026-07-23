@@ -1,4 +1,4 @@
-import { NEWLINE_SEPARATOR } from '$lib/constants';
+import { NEWLINE } from '$lib/constants';
 
 /**
  * Returns a shortened preview of the provided content capped at the given length.
@@ -14,7 +14,7 @@ export function getPreviewText(content: string, max = 150): string {
  */
 export function generateConversationTitle(content: string, useFirstLine: boolean = false): string {
 	if (useFirstLine) {
-		const firstLine = content.split(NEWLINE_SEPARATOR).find((line) => line.trim().length > 0);
+		const firstLine = content.split(NEWLINE).find((line) => line.trim().length > 0);
 		return firstLine ? firstLine.trim() : content.trim();
 	}
 

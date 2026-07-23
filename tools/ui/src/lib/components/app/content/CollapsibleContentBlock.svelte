@@ -1,12 +1,8 @@
 <script lang="ts">
-	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
+	import ChevronDown from '@lucide/svelte/icons/chevron-down';
 	import * as Collapsible from '$lib/components/ui/collapsible/index.js';
-	import { buttonVariants } from '$lib/components/ui/button/index.js';
-	import { Card } from '$lib/components/ui/card';
-	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
-	import { useThrottle } from '$lib/hooks/use-throttle.svelte';
-	import { formatReasoningPreview } from '$lib/utils';
-	import { config } from '$lib/stores/settings.svelte';
+	import { cn } from '$lib/components/ui/utils';
 	import type { Snippet } from 'svelte';
 	import type { Component } from 'svelte';
 
@@ -15,11 +11,11 @@
 		class?: string;
 		icon?: Component;
 		iconClass?: string;
-		title: string;
+		iconUrl?: string | null;
+		title?: string;
+		titleSnippet?: Snippet;
 		subtitle?: string;
-		preview?: string;
-		rawContent?: string;
-		isStreaming?: boolean;
+		shimmerTitle?: boolean;
 		onToggle?: () => void;
 		children: Snippet;
 	}
@@ -28,45 +24,18 @@
 		open = $bindable(false),
 		class: className = '',
 		icon: IconComponent,
-		iconClass = 'h-4 w-4',
-		title,
+		iconClass = ICON_CLASS_DEFAULT,
+		iconUrl = null,
+		title = '',
+		titleSnippet,
 		subtitle,
-		preview,
-		rawContent,
-		isStreaming = false,
+		shimmerTitle = false,
 		onToggle,
 		children
 	}: Props = $props();
 
-	let contentContainer: HTMLDivElement | undefined = $state();
-
-	const showThoughtInProgress = $derived(config().showThoughtInProgress as boolean);
-
-	let previewKey = useThrottle(() => rawContent ?? preview ?? '', 500);
-	let displayedPreview = $state('');
-	let displayedOverflow = $state(0);
-
-	$effect(() => {
-		void previewKey.key;
-		const content = rawContent ?? preview ?? '';
-		const result = formatReasoningPreview(content);
-		displayedPreview = result.preview;
-		displayedOverflow = result.overflow;
-	});
-
-	const autoScroll = createAutoScrollController();
-
-	$effect(() => {
-		autoScroll.setContainer(contentContainer);
-	});
-
-	$effect(() => {
-		// Only auto-scroll when open and streaming
-		autoScroll.updateInterval(open && isStreaming);
-	});
-
-	function handleScroll() {
-		autoScroll.handleScroll();
+	function hideBrokenIcon(event: Event) {
+		(event.currentTarget as HTMLImageElement).style.display = 'none';
 	}
 </script>
 
@@ -76,59 +45,54 @@
 		open = value;
 		onToggle?.();
 	}}
-	class="{className} my-0!"
+	class={cn('group/collapsible', 'my-0!', className)}
 >
-	<Card class="gap-0 border-muted bg-muted/30 py-0">
-		<Collapsible.Trigger class="flex w-full cursor-pointer items-start justify-between gap-2 p-3">
-			<div class="flex min-w-0 items-center gap-2">
-				<div class="flex items-center gap-2 text-muted-foreground">
-					{#if IconComponent}
-						<IconComponent class={iconClass} />
-					{/if}
+	<Collapsible.Trigger
+		class={cn(
+			'flex w-full cursor-pointer items-start justify-between gap-2 text-left',
+			'py-1.5 pr-1'
+		)}
+	>
+		<div class="flex min-w-0 items-start gap-2 text-muted-foreground">
+			{#if iconUrl}
+				<img
+					src={iconUrl}
+					alt=""
+					class={cn('shrink-0 rounded-sm  mt-0.75', iconClass)}
+					onerror={hideBrokenIcon}
+				/>
+			{:else if IconComponent}
+				<IconComponent class={cn('shrink-0 text-muted-foreground/60 mt-0.75', iconClass)} />
+			{/if}
 
-					<span class="font-mono text-sm font-medium">{title}</span>
-
-					{#if subtitle}
-						<span class="text-xs italic">{subtitle}</span>
-					{/if}
-				</div>
-
-				{#if displayedPreview && !showThoughtInProgress}
-					<div class="flex min-w-0 items-baseline justify-between gap-2">
-						<div class="w-3/4 truncate text-xs text-muted-foreground/80">
-							{displayedPreview}
-						</div>
-						{#if displayedOverflow > 0}
-							<span class="shrink-0 text-xs text-muted-foreground/60"
-								>{displayedOverflow}+ chars</span
-							>
-						{/if}
-					</div>
+			<span class={cn('text-sm font-medium', shimmerTitle ? 'shimmer-text' : 'text-foreground/80')}>
+				{#if titleSnippet}
+					{@render titleSnippet()}
+				{:else}
+					{title}
 				{/if}
-			</div>
+			</span>
 
-			<div
-				class={buttonVariants({
-					variant: 'ghost',
-					size: 'sm',
-					class: 'h-6 w-6 p-0 text-muted-foreground hover:text-foreground'
-				})}
-			>
-				<ChevronsUpDownIcon class="h-4 w-4" />
+			{#if subtitle}
+				<span class="text-xs italic text-muted-foreground/70">{subtitle}</span>
+			{/if}
+		</div>
 
-				<span class="sr-only">Toggle content</span>
-			</div>
-		</Collapsible.Trigger>
+		<ChevronDown
+			class={cn(
+				'size-4 shrink-0 text-muted-foreground/60 transition-all duration-150 ease-out opacity-0 group-hover/collapsible:opacity-100 mt-0.75',
+				open && 'rotate-180'
+			)}
+		/>
 
-		<Collapsible.Content>
-			<div
-				bind:this={contentContainer}
-				class="overflow-y-auto border-t border-muted px-3 pb-3"
-				onscroll={handleScroll}
-				style="min-height: var(--min-message-height); max-height: var(--max-message-height);"
-			>
+		<span class="sr-only">Toggle content</span>
+	</Collapsible.Trigger>
+
+	<Collapsible.Content>
+		<div class="pl-1.5 grid min-w-0" style="min-height: var(--min-message-height);">
+			<div class="min-w-0 border-l border-muted-foreground/20 pl-4 pb-2 my-2">
 				{@render children()}
 			</div>
-		</Collapsible.Content>
-	</Card>
+		</div>
+	</Collapsible.Content>
 </Collapsible.Root>

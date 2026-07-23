@@ -10,6 +10,10 @@
 #elif defined(cl_qcom_subgroup_shuffle)
 #pragma OPENCL EXTENSION cl_qcom_subgroup_shuffle : enable
 #define HAS_SUBGROUP_SHUFFLE 1
+// Adreno compilers that expose only cl_qcom_subgroup_shuffle do not declare the KHR
+// name, so calling it is an implicit declaration and the program fails to build.
+// Route it to the qcom builtin.
+#define sub_group_shuffle_xor(val, mask) qcom_sub_group_shuffle_xor((val), (mask), CLK_SUB_GROUP_SHUFFLE_WIDTH_WAVE_SIZE_QCOM, 0.0f)
 #endif
 
 // Flash attention: Q=f32, K=q8_0, V=q8_0.

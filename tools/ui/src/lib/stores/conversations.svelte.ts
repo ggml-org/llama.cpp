@@ -23,7 +23,8 @@ import { browser } from '$app/environment';
 import { toast } from 'svelte-sonner';
 import { DatabaseService } from '$lib/services/database.service';
 import { MigrationService } from '$lib/services/migration.service';
-import { config, settingsStore } from '$lib/stores/settings.svelte';
+import { config } from '$lib/stores/settings.svelte';
+import { mcpStore } from '$lib/stores/mcp.svelte';
 import { filterByLeafNodeId, findLeafNode, generateConversationTitle } from '$lib/utils';
 import type { McpServerOverride } from '$lib/types/database';
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate';
@@ -46,7 +47,6 @@ import {
 	ISO_TIME_SEPARATOR_REPLACEMENT,
 	NON_ALPHANUMERIC_REGEX,
 	MULTIPLE_UNDERSCORE_REGEX,
-	SETTINGS_KEYS,
 	REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY
 } from '$lib/constants';
 
@@ -80,50 +80,17 @@ class ConversationsStore {
 	/** Whether the store has been initialized */
 	isInitialized = $state(false);
 
-	/** Pending MCP server overrides for new conversations (before first message) */
-	pendingMcpServerOverrides = $state<McpServerOverride[]>(ConversationsStore.loadMcpDefaults());
-
-	/** Global (non-conversation-specific) thinking toggle default, derived from reasoning effort */
-	pendingThinkingEnabled = $state(false);
-
 	/** Global (non-conversation-specific) reasoning effort default */
-	pendingReasoningEffort = $state<ReasoningEffort | ReasoningEffort.OFF>(
-		ConversationsStore.loadReasoningEffortDefault()
-	);
+	pendingReasoningEffort = $state<ReasoningEffort>(ConversationsStore.loadReasoningEffortDefault());
 
-	/** Last non-off reasoning effort, restored when re-enabling thinking globally */
-	private lastNonOffEffort: ReasoningEffort | null = null;
-
-	private static loadMcpDefaults(): McpServerOverride[] {
-		const raw = config()[SETTINGS_KEYS.MCP_DEFAULT_SERVER_OVERRIDES];
-		if (typeof raw !== 'string' || raw.length === 0) return [];
-		try {
-			const parsed = JSON.parse(raw);
-			if (!Array.isArray(parsed)) return [];
-			return parsed.filter(
-				(o: unknown) => typeof o === 'object' && o !== null && 'serverId' in o && 'enabled' in o
-			) as McpServerOverride[];
-		} catch {
-			return [];
-		}
-	}
-
-	private saveMcpDefaults(): void {
-		const plain = this.pendingMcpServerOverrides.map((o) => ({
-			serverId: o.serverId,
-			enabled: o.enabled
-		}));
-		settingsStore.updateConfig(SETTINGS_KEYS.MCP_DEFAULT_SERVER_OVERRIDES, JSON.stringify(plain));
-	}
-
-	/** Load reasoning effort default from localStorage */
-	private static loadReasoningEffortDefault(): ReasoningEffort | ReasoningEffort.OFF {
-		if (typeof globalThis.localStorage === 'undefined') return ReasoningEffort.OFF;
+	/** Load reasoning effort default from localStorage, DEFAULT defers to the server */
+	private static loadReasoningEffortDefault(): ReasoningEffort {
+		if (typeof globalThis.localStorage === 'undefined') return ReasoningEffort.DEFAULT;
 		try {
 			const raw = localStorage.getItem(REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY);
-			return (raw as ReasoningEffort | ReasoningEffort.OFF) || ReasoningEffort.OFF;
+			return (raw as ReasoningEffort) || ReasoningEffort.DEFAULT;
 		} catch {
-			return ReasoningEffort.OFF;
+			return ReasoningEffort.DEFAULT;
 		}
 	}
 
@@ -132,9 +99,6 @@ class ConversationsStore {
 		if (typeof globalThis.localStorage === 'undefined') return;
 		localStorage.setItem(REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY, this.pendingReasoningEffort);
 	}
-
-	/** Callback for title update confirmation dialog */
-	titleUpdateConfirmationCallback?: (currentTitle: string, newTitle: string) => Promise<boolean>;
 
 	/**
 	 * Callback for updating message content in chatStore.
@@ -162,11 +126,6 @@ class ConversationsStore {
 
 		try {
 			await MigrationService.runAllMigrations();
-
-			// Re-read defaults after migrations: a migration may have populated
-			// the settings config (e.g. moved legacy MCP overrides into it).
-			this.pendingMcpServerOverrides = ConversationsStore.loadMcpDefaults();
-
 			await this.loadConversations();
 			this.isInitialized = true;
 		} catch (error) {
@@ -240,15 +199,6 @@ class ConversationsStore {
 	}
 
 	/**
-	 * Sets the callback function for title update confirmations
-	 */
-	setTitleUpdateConfirmationCallback(
-		callback: (currentTitle: string, newTitle: string) => Promise<boolean>
-	): void {
-		this.titleUpdateConfirmationCallback = callback;
-	}
-
-	/**
 	 *
 	 *
 	 * Conversation CRUD
@@ -273,30 +223,14 @@ class ConversationsStore {
 		const conversationName = name || `Chat ${new Date().toLocaleString()}`;
 		const conversation = await DatabaseService.createConversation(conversationName);
 
-		if (this.pendingMcpServerOverrides.length > 0) {
-			// Deep clone to plain objects (Svelte 5 $state uses Proxies which can't be cloned to IndexedDB)
-			const plainOverrides = this.pendingMcpServerOverrides.map((o) => ({
-				serverId: o.serverId,
-				enabled: o.enabled
-			}));
-			conversation.mcpServerOverrides = plainOverrides;
-			await DatabaseService.updateConversation(conversation.id, {
-				mcpServerOverrides: plainOverrides
-			});
-			this.pendingMcpServerOverrides = [];
-		}
+		// No MCP override list is seeded: getAllMcpServerOverrides resolves
+		// servers without a per-conversation override to `mcpServers[i].enabled`,
+		// and only explicit toggles are stored on the conversation.
 
-		// Inherit global thinking/reasoning defaults into the new conversation
-		const thinkingEnabled = this.getThinkingEnabled();
-		conversation.thinkingEnabled = thinkingEnabled;
-		conversation.reasoningEffort =
-			this.pendingReasoningEffort === ReasoningEffort.OFF ? undefined : this.pendingReasoningEffort;
+		// Inherit the global reasoning default into the new conversation
+		conversation.reasoningEffort = this.pendingReasoningEffort;
 		await DatabaseService.updateConversation(conversation.id, {
-			thinkingEnabled,
-			reasoningEffort:
-				this.pendingReasoningEffort === ReasoningEffort.OFF
-					? undefined
-					: this.pendingReasoningEffort
+			reasoningEffort: this.pendingReasoningEffort
 		});
 
 		this.conversations = [conversation, ...this.conversations];
@@ -321,7 +255,6 @@ class ConversationsStore {
 				return false;
 			}
 
-			this.pendingMcpServerOverrides = [];
 			this.activeConversation = conversation;
 
 			if (conversation.currNode) {
@@ -351,7 +284,6 @@ class ConversationsStore {
 		this.activeConversation = null;
 		this.activeMessages = [];
 		// reload defaults so new chats inherit persisted state
-		this.pendingMcpServerOverrides = ConversationsStore.loadMcpDefaults();
 		this.pendingReasoningEffort = ConversationsStore.loadReasoningEffortDefault();
 	}
 
@@ -424,6 +356,123 @@ class ConversationsStore {
 		} catch (error) {
 			console.error('Failed to delete all conversations:', error);
 			toast.error('Failed to delete conversations');
+		}
+	}
+
+	/**
+	 * Deletes multiple conversations in sequence.
+	 * Mirrors deleteConversation() per-id; navigates to NEW_CHAT only if the
+	 * currently-open chat was among the deleted ones.
+	 * @param convIds - Conversation IDs to delete
+	 */
+	async bulkDeleteConversations(convIds: string[]): Promise<void> {
+		if (convIds.length === 0) return;
+
+		try {
+			const idsToRemove = new SvelteSet(convIds);
+			// Collect all descendants recursively so the local cache stays consistent
+			// even when deleteWithForks is omitted.
+			const queue = [...convIds];
+			while (queue.length > 0) {
+				const parentId = queue.pop()!;
+				for (const c of this.conversations) {
+					if (c.forkedFromConversationId === parentId && !idsToRemove.has(c.id)) {
+						idsToRemove.add(c.id);
+						queue.push(c.id);
+					}
+				}
+			}
+
+			const activeWasDeleted =
+				this.activeConversation !== null && idsToRemove.has(this.activeConversation.id);
+
+			await DatabaseService.bulkDeleteConversations([...idsToRemove]);
+
+			this.conversations = this.conversations.filter((c) => !idsToRemove.has(c.id));
+
+			if (activeWasDeleted) {
+				this.clearActiveConversation();
+				await goto(ROUTES.NEW_CHAT);
+			}
+
+			toast.success(
+				convIds.length === 1 ? 'Conversation deleted' : `${convIds.length} conversations deleted`
+			);
+		} catch (error) {
+			console.error('Failed to bulk delete conversations:', error);
+			toast.error('Failed to delete conversations');
+		}
+	}
+
+	/**
+	 * Toggles the pinned state of each conversation individually.
+	 * Mixed-pin selections are intentionally not normalised here; the bulk
+	 * action UI surfaces them as a disabled mixed-state instead.
+	 * @param convIds - Conversation IDs to toggle
+	 */
+	async bulkToggleConversationPin(convIds: string[]): Promise<void> {
+		if (convIds.length === 0) return;
+
+		try {
+			const updates = await DatabaseService.bulkToggleConversationPins(convIds);
+
+			const activeId = this.activeConversation?.id;
+			if (activeId && updates.has(activeId)) {
+				this.activeConversation = {
+					...this.activeConversation!,
+					pinned: updates.get(activeId)!
+				};
+			}
+			for (let i = 0; i < this.conversations.length; i++) {
+				const newPinned = updates.get(this.conversations[i].id);
+				if (newPinned !== undefined) this.conversations[i].pinned = newPinned;
+			}
+			this.conversations = [...this.conversations];
+
+			toast.success(
+				convIds.length === 1
+					? 'Conversation pin toggled'
+					: `Updated pin state for ${convIds.length} conversations`
+			);
+		} catch (error) {
+			console.error('Failed to bulk toggle pin:', error);
+			toast.error('Failed to update pin state');
+		}
+	}
+
+	/**
+	 * Bundles the given conversations into a single zip archive and triggers a
+	 * browser download (one JSONL file per conversation).
+	 * @param convIds - Conversation IDs to export
+	 */
+	async bulkExportConversations(convIds: string[]): Promise<void> {
+		if (convIds.length === 0) return;
+
+		try {
+			const fetched = await DatabaseService.getConversationsWithMessages(convIds);
+
+			const activeId = this.activeConversation?.id;
+			const overridden = fetched.get(activeId ?? '');
+			if (overridden && activeId) {
+				overridden.conv = { ...this.activeConversation! };
+			}
+
+			const exported = [...fetched.values()];
+			if (exported.length === 0) {
+				toast.error('No conversations to export');
+				return;
+			}
+
+			this.downloadConversationsArchive(exported);
+
+			toast.success(
+				exported.length === 1
+					? 'Conversation exported'
+					: `${exported.length} conversations exported`
+			);
+		} catch (error) {
+			console.error('Failed to bulk export conversations:', error);
+			toast.error('Failed to export conversations');
 		}
 	}
 
@@ -526,38 +575,6 @@ class ConversationsStore {
 	}
 
 	/**
-	 * Updates conversation title with optional confirmation dialog based on settings
-	 * @param convId - The conversation ID to update
-	 * @param newTitle - The new title content
-	 * @returns True if title was updated, false if cancelled
-	 */
-	async updateConversationTitleWithConfirmation(
-		convId: string,
-		newTitle: string
-	): Promise<boolean> {
-		try {
-			const currentConfig = config();
-
-			if (currentConfig.askForTitleConfirmation && this.titleUpdateConfirmationCallback) {
-				const conversation = await DatabaseService.getConversation(convId);
-				if (!conversation) return false;
-
-				const shouldUpdate = await this.titleUpdateConfirmationCallback(
-					conversation.name,
-					newTitle
-				);
-				if (!shouldUpdate) return false;
-			}
-
-			await this.updateConversationName(convId, newTitle);
-			return true;
-		} catch (error) {
-			console.error('Failed to update conversation title with confirmation:', error);
-			return false;
-		}
-	}
-
-	/**
 	 * Updates conversation lastModified timestamp and moves it to top of list
 	 */
 	updateConversationTimestamp(): void {
@@ -622,7 +639,7 @@ class ConversationsStore {
 					newFirstUserMessage.id !== currentFirstUserMessage.id ||
 					newFirstUserMessage.content.trim() !== currentFirstUserMessage.content.trim())
 			) {
-				await this.updateConversationTitleWithConfirmation(
+				await this.updateConversationName(
 					this.activeConversation.id,
 					generateConversationTitle(
 						newFirstUserMessage.content,
@@ -642,29 +659,41 @@ class ConversationsStore {
 	 */
 
 	/**
-	 * Gets MCP server override for a specific server in the active conversation.
-	 * Falls back to pending overrides if no active conversation exists.
-	 * @param serverId - The server ID to check
-	 * @returns The override if set, undefined if using global setting
+	 * Resolve the default enabled value for a server: its own `enabled`
+	 * flag in `mcpServers`, so the global on/off state lives in one place.
 	 */
-	getMcpServerOverride(serverId: string): McpServerOverride | undefined {
-		if (this.activeConversation) {
-			return this.activeConversation.mcpServerOverrides?.find(
-				(o: McpServerOverride) => o.serverId === serverId
-			);
-		}
-		return this.pendingMcpServerOverrides.find((o) => o.serverId === serverId);
+	#getDefaultOverride(serverId: string): McpServerOverride | undefined {
+		const server = mcpStore.getServers().find((s) => s.id === serverId);
+		if (!server) return undefined;
+		return { serverId, enabled: server.enabled };
 	}
 
 	/**
-	 * Get all MCP server overrides for the current conversation.
-	 * Returns pending overrides if no active conversation.
+	 * Gets the effective MCP server override for a specific server.
+	 * A per-conversation override wins when present; a server without one
+	 * resolves to its `mcpServers[i].enabled` default.
+	 * @param serverId - The server ID to check
+	 * @returns The effective override, undefined if no matching server
+	 */
+	getMcpServerOverride(serverId: string): McpServerOverride | undefined {
+		const override = this.activeConversation?.mcpServerOverrides?.find(
+			(o: McpServerOverride) => o.serverId === serverId
+		);
+		if (override) return override;
+		return this.#getDefaultOverride(serverId);
+	}
+
+	/**
+	 * Gets the effective override list for the current conversation:
+	 * one entry per configured server, resolved per server. The stored
+	 * per-conversation list is sparse and only holds explicit toggles.
 	 */
 	getAllMcpServerOverrides(): McpServerOverride[] {
-		if (this.activeConversation?.mcpServerOverrides) {
-			return this.activeConversation.mcpServerOverrides;
-		}
-		return this.pendingMcpServerOverrides;
+		const overrides = this.activeConversation?.mcpServerOverrides;
+		return mcpStore.getServers().map((s) => {
+			const override = overrides?.find((o: McpServerOverride) => o.serverId === s.id);
+			return { serverId: s.id, enabled: override?.enabled ?? s.enabled };
+		});
 	}
 
 	/**
@@ -679,13 +708,16 @@ class ConversationsStore {
 
 	/**
 	 * Sets or removes MCP server override for the active conversation.
-	 * If no conversation exists, stores as pending override.
+	 * If no conversation exists, persists `enabled` onto `mcpServers[i].enabled`
+	 * (the single source of truth for new-chat defaults).
 	 * @param serverId - The server ID to override
-	 * @param enabled - The enabled state, or undefined to remove override
+	 * @param enabled - The enabled state, or undefined to remove per-conversation override
 	 */
 	async setMcpServerOverride(serverId: string, enabled: boolean | undefined): Promise<void> {
 		if (!this.activeConversation) {
-			this.setPendingMcpServerOverride(serverId, enabled);
+			if (enabled !== undefined) {
+				mcpStore.updateServer(serverId, { enabled });
+			}
 			return;
 		}
 
@@ -730,29 +762,6 @@ class ConversationsStore {
 	}
 
 	/**
-	 * Sets or removes a pending MCP server override (for new conversations).
-	 */
-	private setPendingMcpServerOverride(serverId: string, enabled: boolean | undefined): void {
-		if (enabled === undefined) {
-			this.pendingMcpServerOverrides = this.pendingMcpServerOverrides.filter(
-				(o) => o.serverId !== serverId
-			);
-		} else {
-			const existingIndex = this.pendingMcpServerOverrides.findIndex(
-				(o) => o.serverId === serverId
-			);
-			if (existingIndex >= 0) {
-				const newOverrides = [...this.pendingMcpServerOverrides];
-				newOverrides[existingIndex] = { serverId, enabled };
-				this.pendingMcpServerOverrides = newOverrides;
-			} else {
-				this.pendingMcpServerOverrides = [...this.pendingMcpServerOverrides, { serverId, enabled }];
-			}
-		}
-		this.saveMcpDefaults();
-	}
-
-	/**
 	 * Toggles MCP server enabled state for the active conversation.
 	 * @param serverId - The server ID to toggle
 	 */
@@ -770,70 +779,20 @@ class ConversationsStore {
 	}
 
 	/**
-	 * Clears all pending MCP server overrides.
-	 */
-	clearPendingMcpServerOverrides(): void {
-		this.pendingMcpServerOverrides = [];
-		this.saveMcpDefaults();
-	}
-
-	/**
-	 * Gets the effective thinking-enabled state for the active conversation.
-	 * Returns the conversation override if set, otherwise the global default.
-	 */
-	getThinkingEnabled(): boolean {
-		if (this.activeConversation) {
-			if (this.activeConversation.thinkingEnabled !== undefined) {
-				return this.activeConversation.thinkingEnabled;
-			}
-		}
-		return this.getReasoningEffort() !== ReasoningEffort.OFF;
-	}
-
-	/**
-	 * Sets the thinking-enabled state for the active conversation.
-	 * If no conversation exists, stores the global default.
-	 * @param enabled - The enabled state
-	 */
-	async setThinkingEnabled(enabled: boolean): Promise<void> {
-		if (!this.activeConversation) {
-			if (enabled) {
-				const effort = this.lastNonOffEffort ?? ReasoningEffort.LOW;
-				this.pendingReasoningEffort = effort;
-				this.saveReasoningEffortDefaults();
-			} else {
-				if (this.pendingReasoningEffort !== ReasoningEffort.OFF) {
-					this.lastNonOffEffort = this.pendingReasoningEffort;
-				}
-				this.pendingReasoningEffort = ReasoningEffort.OFF;
-				this.saveReasoningEffortDefaults();
-			}
-			return;
-		}
-
-		this.activeConversation = {
-			...this.activeConversation,
-			thinkingEnabled: enabled
-		};
-
-		await DatabaseService.updateConversation(this.activeConversation.id, {
-			thinkingEnabled: enabled
-		});
-
-		const convIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
-		if (convIndex !== -1) {
-			this.conversations[convIndex].thinkingEnabled = enabled;
-			this.conversations = [...this.conversations];
-		}
-	}
-
-	/**
 	 * Gets the effective reasoning effort for the active conversation.
 	 * Returns the conversation override if set, otherwise the global default.
+	 * DEFAULT means no override is sent and the server decides.
 	 */
-	getReasoningEffort(): ReasoningEffort | ReasoningEffort.OFF {
+	getReasoningEffort(): ReasoningEffort {
 		if (this.activeConversation) {
-			return this.activeConversation.reasoningEffort ?? this.pendingReasoningEffort;
+			if (this.activeConversation.reasoningEffort !== undefined) {
+				return this.activeConversation.reasoningEffort;
+			}
+			// conversations created before the tri-state store an explicit
+			// opt-out only as thinkingEnabled = false
+			if (this.activeConversation.thinkingEnabled === false) {
+				return ReasoningEffort.OFF;
+			}
 		}
 		return this.pendingReasoningEffort;
 	}
@@ -841,7 +800,7 @@ class ConversationsStore {
 	/**
 	 * Sets the reasoning effort for the active conversation.
 	 * If no conversation exists, stores the global default.
-	 * @param effort - The effort level ('low' | 'medium' | 'high' | 'max')
+	 * @param effort - The effort level ('default' | 'off' | 'low' | 'medium' | 'high' | 'max')
 	 */
 	async setReasoningEffort(effort: ReasoningEffort): Promise<void> {
 		if (!this.activeConversation) {
@@ -1219,6 +1178,10 @@ export const isConversationsInitialized = () => conversationsStore.isInitialized
 /**
  * Builds a flat tree of conversations with depth levels for nested forks.
  * Accepts a pre-filtered list so search filtering stays in the component.
+ *
+ * Output order matches the sidebar render exactly: pinned first, then
+ * unpinned by lastModified desc, with forks interleaved under their parents.
+ * Range-select / marquee in the sidebar rely on this alignment.
  */
 
 // Pinned conversations first, then by lastModified descending

@@ -301,43 +301,50 @@ llama_model_deepseek32::graph::graph(const llama_model & model, const llm_graph_
                 indexer_q = ggml_view_4d(ctx0, indexer_q, indexer_q->ne[0], indexer_q->ne[1], indexer_q->ne[2]/n_stream, n_stream, indexer_q->nb[1], indexer_q->nb[2], indexer_q->nb[3]/n_stream, 0);
                 indexer_weights = ggml_view_4d(ctx0, indexer_weights, indexer_weights->ne[0], indexer_weights->ne[1]/n_stream, indexer_weights->ne[2], n_stream, indexer_weights->nb[1], indexer_weights->nb[2]/n_stream, indexer_weights->nb[3]/n_stream, 0);
 
-                // calculate indexer kq
-                indexer_q = ggml_permute(ctx0, indexer_q, 0, 2, 1, 3);
-                cb(indexer_q, "indexer_q", il);
-                indexer_k = ggml_permute(ctx0, indexer_k, 0, 2, 1, 3);
-                cb(indexer_k, "indexer_k", il);
-
-                ggml_tensor * indexer_kq = ggml_mul_mat(ctx0, indexer_k, indexer_q);
-                cb(indexer_kq, "indexer_kq", il);
-
-                // ReLU requires contiguous tensors
-                indexer_kq = ggml_cont(ctx0, ggml_permute(ctx0, indexer_kq, 2, 1, 0, 3));
-                cb(indexer_kq, "indexer_kq", il);
-
-                // apply ReLU
-                ggml_tensor * indexer_score = ggml_relu(ctx0, indexer_kq);
-                cb(indexer_score, "indexer_score", il);
-
                 // pre-scale weights to avoid scaling operations on huge indexer_score tensor
                 indexer_weights = ggml_scale(ctx0, indexer_weights, 1.0f / sqrtf(float(n_embd_indexer_head * n_indexer_head)));
                 cb(indexer_weights, "indexer_weights", il);
 
-                // multiply scores by indexer weights
-                indexer_score = ggml_mul(ctx0, indexer_score, indexer_weights);
-                cb(indexer_score, "indexer_score", il);
+                ggml_tensor * indexer_score = nullptr;
+                if (cparams.fused_lid) {
+                    indexer_score = ggml_lightning_indexer(ctx0, indexer_q, indexer_k, indexer_weights, inp_attn_dsa->get_kq_mask_lid());
+                    cb(indexer_score, "indexer_score", il);
+                    res->add_fused_node({LLM_FUSED_OP_LIGHTNING_INDEXER, indexer_score, il});
+                } else {
+                    // calculate indexer kq
+                    indexer_q = ggml_permute(ctx0, indexer_q, 0, 2, 1, 3);
+                    cb(indexer_q, "indexer_q", il);
+                    indexer_k = ggml_permute(ctx0, indexer_k, 0, 2, 1, 3);
+                    cb(indexer_k, "indexer_k", il);
 
-                // sum by q n_indexer_head dimension
-                indexer_score = ggml_sum_rows(ctx0, indexer_score);
-                cb(indexer_score, "indexer_score", il);
+                    ggml_tensor * indexer_kq = ggml_mul_mat(ctx0, indexer_k, indexer_q);
+                    cb(indexer_kq, "indexer_kq", il);
 
-                // permute result to match KQ mask
-                indexer_score = ggml_cont(ctx0, ggml_permute(ctx0, indexer_score, 2, 1, 0, 3));
-                cb(indexer_score, "indexer_score", il);
+                    // ReLU requires contiguous tensors
+                    indexer_kq = ggml_cont(ctx0, ggml_permute(ctx0, indexer_kq, 2, 1, 0, 3));
+                    cb(indexer_kq, "indexer_kq", il);
 
-                // mask indexer scores
-                ggml_tensor * indexer_kq_mask = inp_attn_dsa->get_kq_mask_lid();
-                indexer_score = ggml_add(ctx0, indexer_score, indexer_kq_mask);
-                cb(indexer_score, "indexer_score", il);
+                    // apply ReLU
+                    indexer_score = ggml_relu(ctx0, indexer_kq);
+                    cb(indexer_score, "indexer_score", il);
+
+                    // multiply scores by indexer weights
+                    indexer_score = ggml_mul(ctx0, indexer_score, indexer_weights);
+                    cb(indexer_score, "indexer_score", il);
+
+                    // sum by q n_indexer_head dimension
+                    indexer_score = ggml_sum_rows(ctx0, indexer_score);
+                    cb(indexer_score, "indexer_score", il);
+
+                    // permute result to match KQ mask
+                    indexer_score = ggml_cont(ctx0, ggml_permute(ctx0, indexer_score, 2, 1, 0, 3));
+                    cb(indexer_score, "indexer_score", il);
+
+                    // mask indexer scores
+                    ggml_tensor * indexer_kq_mask = inp_attn_dsa->get_kq_mask_lid();
+                    indexer_score = ggml_add(ctx0, indexer_score, indexer_kq_mask);
+                    cb(indexer_score, "indexer_score", il);
+                }
 
                 // get indices of top k indexer scores
                 uint32_t n_top_k = indexer_score->ne[0] < n_indexer_top_k ? indexer_score->ne[0] : n_indexer_top_k;
