@@ -49,6 +49,9 @@ void main() {
             if (tmpmax[col] < tmpmax[col + s]) {
                 tmpmax[col] = tmpmax[col + s];
                 tmp[col] = tmp[col + s];
+            } else if (tmpmax[col] == tmpmax[col + s] && tmp[col + s] < tmp[col]) {
+                // keep the smallest index on ties (first-occurrence wins)
+                tmp[col] = tmp[col + s];
             }
         }
         barrier();
