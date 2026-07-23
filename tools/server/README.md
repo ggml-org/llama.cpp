@@ -680,6 +680,9 @@ The same as [the embedding example](../embedding) does.
 
 This endpoint also supports multimodal embeddings. See the documentation for the `/completions` endpoint for details on how to send a multimodal prompt.
 
+> [!IMPORTANT]
+> **Embedding ubatch limitation**: In `--embedding` mode with pooling, inputs are NOT split into ubatch-sized chunks. The entire input must fit within a single physical batch (`--ubatch-size`). You must set `--ubatch-size` to at least your maximum expected input length (else causes an HTTP 500 error).
+
 *Options:*
 
 `content`: Set the text to process.
@@ -697,6 +700,9 @@ This endpoint also supports multimodal embeddings. See the documentation for the
 
 Similar to https://jina.ai/reranker/ but might change in the future.
 Requires a reranker model (such as [bge-reranker-v2-m3](https://huggingface.co/BAAI/bge-reranker-v2-m3)) and the `--embedding --pooling rank` options.
+
+> [!IMPORTANT]
+> **Reranker ubatch limitation**: Since rerankers operate in `--embedding` mode with pooling, inputs are NOT split into ubatch-sized chunks. The entire input (query + document) must fit within a single physical batch (`--ubatch-size`). You must set `--ubatch-size` to at least your maximum expected input length (else causes an HTTP 500 error).
 
 *Options:*
 

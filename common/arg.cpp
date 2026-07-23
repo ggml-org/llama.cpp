@@ -1536,7 +1536,12 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_env("LLAMA_ARG_BATCH"));
     add_opt(common_arg(
         {"-ub", "--ubatch-size"}, "N",
-        string_format("physical maximum batch size (default: %d)", params.n_ubatch),
+        string_format("physical maximum batch size (default: %d)%s", params.n_ubatch,
+            ex == LLAMA_EXAMPLE_SERVER
+                ? "\nNote: In --embeddings mode with pooling, the entire input must fit within --ubatch-size."
+                  "\nSet --ubatch-size to at least your maximum expected input length."
+                  "\nUnlike normal inference, inputs are NOT split into ubatch-sized chunks." 
+                : ""),
         [](common_params & params, int value) {
             params.n_ubatch = value;
         }
