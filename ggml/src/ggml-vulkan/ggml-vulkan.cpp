@@ -9186,7 +9186,7 @@ static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_
         case GGML_TYPE_Q8_0:
             return device->architecture == vk_device_architecture::AMD_GCN;
         default:
-            return true;
+            return !device->uma;
         }
     case VK_VENDOR_ID_INTEL:
         if (device->architecture == vk_device_architecture::INTEL_XE2) {
