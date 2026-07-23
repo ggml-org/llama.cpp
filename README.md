@@ -529,6 +529,7 @@ To learn more about model quantization, [read this documentation](tools/quantize
 - [cli](tools/cli/README.md)
 - [completion](tools/completion/README.md)
 - [server](tools/server/README.md)
+- [function calling](docs/function-calling.md)
 - [GBNF grammars](grammars/README.md)
 
 #### Development documentation
