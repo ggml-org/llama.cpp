@@ -6486,7 +6486,8 @@ ggml_backend_t ggml_backend_sycl_init(int device) {
         /* .guid    = */ ggml_backend_sycl_guid(),
         /* .iface   = */ ggml_backend_sycl_interface,
         /* .device  = */ ggml_backend_reg_dev_get(ggml_backend_sycl_reg(), device),
-        /* .context = */ ctx
+        /* .context  = */ ctx,
+        /* .profiler = */ nullptr,
     };
 
     return sycl_backend;

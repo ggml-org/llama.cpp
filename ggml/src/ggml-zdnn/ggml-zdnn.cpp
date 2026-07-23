@@ -503,7 +503,8 @@ static ggml_backend_t ggml_backend_zdnn_device_init(ggml_backend_dev_t dev, cons
         /* .guid       = */ ggml_backend_zdnn_guid(),
         /* .iface      = */ ggml_backend_zdnn_i,
         /* .device     = */ dev,
-        /* .context    = */ ctx
+        /* .context    = */ ctx,
+        /* .profiler   = */ NULL,
     };
 
     return backend;
