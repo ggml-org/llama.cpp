@@ -1595,6 +1595,10 @@ struct clip_model_loader {
                             // qwen2 encoder is GQA, requires KEY_N_HEAD_KV
                             get_u32(string_format(KEY_N_HEAD_KV, "vision"), hparams.n_head_kv);
                         }
+                        // unlimited-ocr shares the v1 projector but tiles up to 32
+                        get_u32(KEY_PREPROC_MIN_TILES, hparams.preproc_min_tiles, false);
+                        get_u32(KEY_PREPROC_MAX_TILES, hparams.preproc_max_tiles, false);
+                        GGML_ASSERT(hparams.preproc_min_tiles <= hparams.preproc_max_tiles);
                      } break;
                 case PROJECTOR_TYPE_HUNYUANVL:
                     {
@@ -1742,6 +1746,9 @@ struct clip_model_loader {
                 }
                 if (hparams.image_max_pixels > 0) {
                     LOG_INF("%s: image_max_pixels:   %d%s\n", __func__, hparams.image_max_pixels, hparams.custom_image_max_tokens > 0 ? " (custom value)" : "");
+                }
+                if (hparams.preproc_max_tiles > 0) {
+                    LOG_INF("%s: preproc_tiles:      %d - %d\n", __func__, hparams.preproc_min_tiles, hparams.preproc_max_tiles);
                 }
             } else if (is_audio) {
                 LOG_INF("\n--- audio hparams ---\n");
