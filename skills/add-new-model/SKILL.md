@@ -81,7 +81,7 @@ These recur often enough in review comments on past add-model PRs that they're w
 Reference: `examples/model-conversion/README.md`.
 
 1. Convert to GGUF, then inspect/run both the original and converted tensors.
-2. Run logits verification (original vs converted). If this model is a new version of an already-supported family, verify the *previous* version still passes logits verification first - numerical differences may be pre-existing, not caused by the new work.
+2. Run logits verification (original vs converted). If this model is a new version of an already-supported family, verify the *previous* version still passes logits verification first - numerical differences may be pre-existing, not caused by the new work. The tools to perform full logits validation are available in `examples/model-conversion`.
 3. Quantize (including QAT variants if relevant) and re-verify.
 4. Run perplexity evaluation (simple and full).
 5. Sanity-check across `tools/cli`, `tools/completion`, `tools/imatrix`, `tools/quantize`, and `tools/server`.

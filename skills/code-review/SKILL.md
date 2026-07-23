@@ -91,6 +91,7 @@ See the `add-new-model` skill and `docs/development/HOWTO-add-model.md` for the 
 - New kernels are expected to come with concrete perf data (throughput across realistic tensor shapes), not just correctness.
 - Don't have a backend mutate the cgraph as a shortcut - that's an unresolved architectural question, not something to slip in.
 - Expect this to need two maintainer approvals; that's normal for `ggml/` changes, not a sign something is wrong.
+- For CUDA: Avoid excessively templating kernels, only add this where it shows visible performance gain. 
 
 ## Public API (`include/llama.h`)
 
