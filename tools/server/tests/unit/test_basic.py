@@ -61,6 +61,10 @@ def test_server_slots():
     assert server.n_ctx is not None and server.n_slots is not None
     assert res.body[0]["n_ctx"] == server.n_ctx / server.n_slots
     assert "params" not in res.body[0]
+    assert res.body[0]["state_name"] == "idle"
+    assert res.body[0]["state"] == 0
+    assert "pp_progress" not in res.body[0]
+    assert "tg_tps" not in res.body[0]
 
 
 def test_load_split_model():
