@@ -75,6 +75,9 @@ int main(int argc, char ** argv) {
         }
 
         auto cparams = common_context_params_to_llama(params_dft);
+        cparams.n_rs_seq  = 0;
+        cparams.ctx_other = ctx_tgt;
+
         ctx_dft.reset(llama_init_from_model(model_dft.get(), cparams));
 
         params.speculative.draft.ctx_tgt = ctx_tgt;
@@ -129,9 +132,24 @@ int main(int argc, char ** argv) {
     // target model sampling context
     common_sampler_ptr smpl(common_sampler_init(model_tgt, params.sampling));
 
+    // init the speculator before prompt eval so implementations can configure the target context
+    const auto & params_spec = params.speculative;
+
+    struct common_speculative * spec = common_speculative_init(params.speculative, 1);
+
     // eval the prompt
-    llama_decode(ctx_tgt,       llama_batch_get_one(inp.data(), inp.size() - 1));
-    llama_decode(ctx_dft.get(), llama_batch_get_one(inp.data(), inp.size() - 1));
+    llama_batch batch_prompt = llama_batch_init(llama_n_batch(ctx_tgt), 0, 1);
+    for (size_t i = 0; i + 1 < inp.size(); ++i) {
+        common_batch_add(batch_prompt, inp[i], i, { seq_id }, false);
+    }
+    llama_decode(ctx_tgt, batch_prompt);
+    if (!common_speculative_process(spec, batch_prompt)) {
+        LOG_ERR("%s: failed to process speculative prompt batch\n", __func__);
+        llama_batch_free(batch_prompt);
+        common_speculative_free(spec);
+        return 1;
+    }
+    llama_batch_free(batch_prompt);
 
     // note: keep the last token separate!
     llama_token id_last = inp.back();
@@ -141,11 +159,6 @@ int main(int argc, char ** argv) {
     prompt_tgt.reserve(llama_n_ctx(ctx_tgt));
 
     int n_past = inp.size() - 1;
-
-    // init the speculator
-    const auto & params_spec = params.speculative;
-
-    struct common_speculative * spec = common_speculative_init(params.speculative, 1);
 
     common_speculative_begin(spec, seq_id, prompt_tgt);
 
@@ -227,10 +240,9 @@ int main(int argc, char ** argv) {
             llama_decode(ctx_tgt, batch_tgt);
         }
 
-        // evaluate the same batch with the draft model
-        {
-            // TODO: extend to support MTP, Eagle, etc. See server code for reference
-            llama_decode(ctx_dft.get(), batch_tgt);
+        if (!common_speculative_process(spec, batch_tgt)) {
+            LOG_ERR("%s: failed to process speculative batch\n", __func__);
+            break;
         }
 
         // only save the sampler sampler state if we use checkpoints
