@@ -3957,6 +3957,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_P_MIN"));
     add_opt(common_arg(
+        {"--spec-draft-adaptive-length-threshold"}, "N",
+        string_format("minimum consecutive successes/failues before increasing/decreasing the size of the generated draft by one up to draft-n-max/min. note: draft-n-min must be at least 1 (default: %d, 0 = disabled)", (int)params.speculative.draft.adaptive_length_threshold),
+        [](common_params & params, int value) {
+            params.speculative.draft.adaptive_length_threshold = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_ADAPTIVE_LENGTH_THRESHOLD"));
+    add_opt(common_arg(
+        {"--spec-draft-adaptive-length-bias"}, "N",
+        string_format("in adaptive draft length a success is defined as the target model accepting the full draft minus N tokens (default: %d)", (int)params.speculative.draft.adaptive_length_threshold),
+        [](common_params & params, int value) {
+            params.speculative.draft.adaptive_length_bias = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_ADAPTIVE_LENGTH_BIAS"));
+    add_opt(common_arg(
         {"--spec-draft-backend-sampling"},
         {"--no-spec-draft-backend-sampling"},
         string_format("offload draft sampling to the backend (default: %s)",
