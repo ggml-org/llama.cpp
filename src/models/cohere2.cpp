@@ -82,7 +82,7 @@ llama_model_cohere2::graph::graph(const llama_model & model, const llm_graph_par
         // self-attention
         {
             // rope freq factors for 128k context
-            ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
+            ggml_tensor * rope_factors = model.get_rope_factors(cparams, pos_max, il);
 
             // compute Q and K and RoPE them
             auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,

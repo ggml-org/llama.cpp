@@ -27,6 +27,9 @@ struct llama_ubatch {
         return n_pos >= 3;
     }
 
+    // largest token position in the ubatch (max over all sequences)
+    int32_t pos_max() const;
+
     uint32_t b_equal_seqs; // note: this is a boolean, but we use an int32_t for alignment
                            //       otherwise address sanitizer complains
     // TODO: whole_seqs for embeddings?

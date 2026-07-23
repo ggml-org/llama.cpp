@@ -119,7 +119,7 @@ llama_model_exaone4::graph<iswa>::graph(const llama_model & model, const llm_gra
 
         // self-attention
         {
-            ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
+            ggml_tensor * rope_factors = model.get_rope_factors(cparams, pos_max, il);
 
             auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
                     n_embd_head, n_head, n_head_kv, il);

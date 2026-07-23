@@ -232,7 +232,7 @@ llama_model_eagle3::graph<false>::graph(const llama_model & model, const llm_gra
         Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
         // rope freq factors, returns nullptr if not available
-        ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
+        ggml_tensor * rope_factors = model.get_rope_factors(cparams, pos_max, il);
 
         // RoPE
         Qcur = ggml_rope_ext(

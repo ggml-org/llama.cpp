@@ -94,7 +94,7 @@ llama_model_phi3::graph<iswa>::graph(const llama_model & model, const llm_graph_
         // self-attention
         {
             // rope freq factors for 128k context
-            ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
+            ggml_tensor * rope_factors = model.get_rope_factors(cparams, pos_max, il);
 
             ggml_tensor* attn_norm_output = build_norm(inpL,
                     model.layers[il].attn_norm,

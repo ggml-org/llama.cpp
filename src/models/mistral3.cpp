@@ -128,7 +128,7 @@ llama_model_mistral3::graph::graph(const llama_model & model, const llm_graph_pa
         // self-attention
         {
             // rope freq factors for llama3; may return nullptr for llama2 and other models
-            ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
+            ggml_tensor * rope_factors = model.get_rope_factors(cparams, pos_max, il);
 
             // compute Q and K and RoPE them
             auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
