@@ -8,6 +8,7 @@
 #include "ngram-map.h"
 #include "ngram-mod.h"
 #include "sampling.h"
+#include "http.h"
 
 #include "../src/llama-ext.h" // staging API: llama_set_embeddings_nextn / llama_get_embeddings_nextn_ith (used by MTP)
 
@@ -17,6 +18,11 @@
 #include <iomanip>
 #include <map>
 #include <cinttypes>
+#include <sstream>
+#include <string>
+#include <vector>
+
+#include <nlohmann/json.hpp>
 
 #define SPC_DBG(fmt, ...) LOG_DBG("spec %12.*s: " fmt, 12, __func__, __VA_ARGS__)
 #define SPC_TRC(fmt, ...) LOG_TRC("spec %12.*s: " fmt, 12, __func__, __VA_ARGS__)
@@ -34,6 +40,7 @@ const std::map<std::string, common_speculative_type> common_speculative_type_fro
     {"draft-eagle3",  COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3},
     {"draft-mtp",     COMMON_SPECULATIVE_TYPE_DRAFT_MTP},
     {"draft-dflash",  COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH},
+    {"draft-remote",  COMMON_SPECULATIVE_TYPE_DRAFT_REMOTE},
     {"ngram-simple",  COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE},
     {"ngram-map-k",   COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K},
     {"ngram-map-k4v", COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V},
@@ -2077,6 +2084,245 @@ struct common_speculative_impl_ngram_cache : public common_speculative_impl {
     }
 };
 
+// Remote draft model via llama-server /completion endpoint
+struct common_speculative_impl_remote_draft : public common_speculative_impl {
+    common_params_speculative_draft params;
+
+    // Reusable HTTP client - created once in constructor, reused for every draft() call
+    httplib::Client *http_cli = nullptr;
+    common_http_url url_parts;
+
+    // Per-sequence state for anchor-based context windowing.
+    std::vector<int32_t> context_start_idx;
+
+    common_speculative_impl_remote_draft(
+            const common_params_speculative & p, uint32_t n_seq)
+        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_REMOTE, n_seq)
+        , params(p.draft)
+        , context_start_idx(n_seq, 0)
+    {
+
+        // Parse URL once and create the HTTP client for reuse
+        try {
+            url_parts = common_http_parse_url(params.api_url);
+        } catch (const std::exception &e) {
+            SPC_ERR("failed to parse draft API URL '%s': %s\n", params.api_url.c_str(), e.what());
+            return;
+        }
+
+        std::string base_url = url_parts.scheme + "://" + common_http_format_host(url_parts.host) + ":" + std::to_string(url_parts.port);
+        http_cli = new httplib::Client(base_url);
+        http_cli->set_follow_location(true);
+        http_cli->set_read_timeout(params.timeout_seconds, 0);
+        http_cli->set_tcp_nodelay(true);
+
+        // Set default headers once on the client
+        http_cli->set_default_headers({
+            {"Content-Type", "application/json"},
+        });
+
+        SPC_TRC("%s", "adding speculative implementation 'draft-remote'\n");
+        SPC_TRC("- url=%s, n_max=%d, context_limit=%d\n",
+                this->params.api_url.c_str(),
+                this->params.n_max, this->params.context_limit);
+    }
+
+    ~common_speculative_impl_remote_draft() {
+        delete http_cli;
+    }
+
+    void begin(llama_seq_id seq_id, const llama_tokens & /*prompt*/) override {
+        // Reset context windowing state for the given sequence at the start of each new generation
+        context_start_idx[seq_id] = 0;
+    }
+
+    bool process(const llama_batch & /*batch*/) override {
+        // noop
+        return true;
+    }
+
+    void draft(common_speculative_draft_params_vec & dparams) override {
+        // Wrap entire method in try-catch to prevent server crashes
+        try {
+            if (!this->params.ctx_tgt) {
+                SPC_DBG("%s", "ctx_tgt is null, skipping");
+                return;
+            }
+
+        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
+            auto & dp = dparams[seq_id];
+            if (!dp.drafting) {
+                continue;
+            }
+
+            auto & result = *dp.result;
+            result.clear();
+
+            const auto & prompt = *dp.prompt;
+            if (prompt.empty()) {
+                continue;
+            }
+
+            // As the conversation grows, we incrementally add to the history portion.
+            // When history exceeds max_history, we shift context_start_idx forward, then grow again
+            const int32_t limit        = params.context_limit;
+            const int32_t n_keep       = limit / 4;         // system prompt anchor
+            const int32_t max_history  = limit / 2;         // max dynamic history budget
+            const int32_t reset_to     = limit / 4;         // history size after shift
+            const int32_t prompt_size  = (int32_t) prompt.size();
+
+            // Edge case: prompt smaller than anchor, just send everything
+            if (prompt_size <= n_keep) {
+                // Nothing to shift, use full prompt
+            } else {
+                // Calculate current history size (tokens after anchor, starting from context_start_idx)
+                const int32_t history_start = std::max(context_start_idx[seq_id], n_keep);
+                const int32_t current_history = prompt_size - history_start;
+
+                if (current_history > max_history) {
+                    // History exceeded max, shift forward to shrink it to reset_to
+                    context_start_idx[seq_id] = prompt_size - reset_to;
+                    if (context_start_idx[seq_id] < n_keep) {
+                        context_start_idx[seq_id] = n_keep;
+                    }
+                }
+                // Else: within budget, keep context_start_idx as-is (incremental growth)
+            }
+
+            // Build the context tokens: anchor + dynamic history
+            const int32_t history_start = std::max(context_start_idx[seq_id], n_keep);
+            nlohmann::json prompt_array = nlohmann::json::array();
+
+            // Add anchor (system prompt prefix)
+            for (int32_t i = 0; i < n_keep && i < prompt_size; ++i) {
+                prompt_array.push_back(prompt[i]);
+            }
+
+            // Add dynamic history portion
+            for (int32_t i = history_start; i < prompt_size; ++i) {
+                prompt_array.push_back(prompt[i]);
+            }
+
+            if (prompt_array.empty()) {
+                continue;
+            }
+
+            // Append the last sampled token
+            prompt_array.push_back(dp.id_last);
+
+            // Build JSON request for native /completion endpoint
+            nlohmann::json req;
+            req["prompt"] = prompt_array;
+            req["n_predict"] = params.n_max;
+            req["stream"] = true;
+            req["keep_alive"] = true;
+            // Use native /completion  endpoint
+            std::string path = "/completion";
+
+            SPC_DBG("sending POST to %s%s\n", common_http_show_masked_url(url_parts).c_str(), path.c_str());
+
+            // Make streaming POST request using the reusable HTTP client
+            auto res = http_cli->Post(path, req.dump(), "application/json");
+            if (!res || res->status != 200) {
+                SPC_ERR("HTTP request failed with status %d\n", res ? res->status : 0);
+                continue;
+            }
+
+            // Parse SSE streaming response
+            // Each SSE data line contains JSON with a "tokens" array of token IDs
+            std::string body = res->body;
+
+            std::istringstream stream(body);
+            std::string line;
+
+            while (std::getline(stream, line)) {
+                // Remove trailing \r if present
+                if (!line.empty() && line.back() == '\r') {
+                    line.pop_back();
+                }
+
+                // Skip empty lines and SSE comments
+                if (line.empty() || line[0] == ':') {
+                    continue;
+                }
+
+                // Parse "data: {...}" lines
+                if (line.rfind("data:", 0) != 0) {
+                    continue;
+                }
+
+                std::string data = line.substr(5);
+
+                // Check for [DONE]
+                if (data == "[DONE]") {
+                    break;
+                }
+
+                try {
+                    auto j = nlohmann::json::parse(data, nullptr, false);
+
+                    // Extract "tokens" array from native /completion stream response
+                    if (j.contains("tokens") && j["tokens"].is_array()) {
+                        for (auto & token : j["tokens"]) {
+                            if (token.is_number_integer()) {
+                                llama_token t = token.get<llama_token>();
+                                result.push_back(t);
+                                SPC_DBG("received token: %d\n", t);
+                            }
+                        }
+                    }
+
+                    // Check for "stop" field indicating end of generation
+                    if (j.contains("stop") && j["stop"].is_boolean() && j["stop"].get<bool>()) {
+                        break;
+                    }
+                } catch (...) {
+                    SPC_DBG("%s", "JSON parse error, skipping line");
+                    continue;
+                }
+
+                // Stop if we have collected enough tokens
+                if ((int) result.size() >= params.n_max) {
+                    break;
+                }
+            }
+
+            if (result.empty()) {
+                SPC_DBG("%s", "(no tokens received)");
+                continue;
+            }
+
+            // Truncate to n_max if we got too many tokens
+            if ((int) result.size() > params.n_max) {
+                result.resize(params.n_max);
+            }
+
+            // Check minimum tokens requirement (require at least 2 tokens)
+            if ((int) result.size() < 2) {
+                SPC_DBG("draft too short (%d < 2), clearing", (int) result.size());
+                result.clear();
+            }
+
+            if (!result.empty()) {
+                SPC_DBG("drafted %zu tokens from remote model", result.size());
+            }
+        }
+        } catch (const std::exception & e) {
+            SPC_ERR("draft exception: %s\n", e.what());
+        } catch (...) {
+            SPC_ERR("%s", "draft exception (unknown)\n");
+        }
+    }
+
+    void accept(llama_seq_id /*seq_id*/, uint16_t /*n_accepted*/, bool /*is_other*/) override {
+        // noop
+    }
+
+    bool need_embd() const override {
+        return false;
+    }
+};
+
 struct common_speculative {
     common_speculative_draft_params_vec dparams;
 
@@ -2145,6 +2391,7 @@ std::string common_speculative_type_to_str(common_speculative_type type) {
         case COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3:  return "draft-eagle3";
         case COMMON_SPECULATIVE_TYPE_DRAFT_MTP:     return "draft-mtp";
         case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH:  return "draft-dflash";
+        case COMMON_SPECULATIVE_TYPE_DRAFT_REMOTE:  return "draft-remote";
         case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:  return "ngram-simple";
         case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K:   return "ngram-map-k";
         case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V: return "ngram-map-k4v";
@@ -2214,6 +2461,9 @@ int32_t common_speculative_n_max(const common_params_speculative * spec) {
                 break;
             case COMMON_SPECULATIVE_TYPE_NGRAM_CACHE:
                 n_max = std::max(n_max, (int32_t) 8);
+                break;
+            case COMMON_SPECULATIVE_TYPE_DRAFT_REMOTE:
+                n_max = std::max(n_max, std::max(0, spec->draft.n_max));
                 break;
             case COMMON_SPECULATIVE_TYPE_NONE:
             case COMMON_SPECULATIVE_TYPE_COUNT:
@@ -2350,9 +2600,10 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         bool has_ngram_map_k   = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K));
         bool has_ngram_map_k4v = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V));
         bool has_ngram_mod     = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_NGRAM_MOD));
+        bool has_draft_remote  = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_REMOTE)) && params.is_draft_remote();
 
         // when adding a new type - update here the logic above
-        static_assert(COMMON_SPECULATIVE_TYPE_COUNT == 10);
+        static_assert(COMMON_SPECULATIVE_TYPE_COUNT == 11);
 
         // this list here defines the priority of the speculators
         // the one with highest priority are listed first
@@ -2384,6 +2635,9 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         }
         if (has_draft_dflash) {
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH, params));
+        }
+        if (has_draft_remote) {
+            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_REMOTE, params));
         }
     }
 
@@ -2450,6 +2704,10 @@ common_speculative * common_speculative_init(common_params_speculative & params,
                         params.ngram_cache.lookup_cache_static,
                         params.ngram_cache.lookup_cache_dynamic);
                 impls.push_back(std::make_unique<common_speculative_impl_ngram_cache>(state));
+                break;
+            }
+            case COMMON_SPECULATIVE_TYPE_DRAFT_REMOTE: {
+                impls.push_back(std::make_unique<common_speculative_impl_remote_draft>(config.params, n_seq));
                 break;
             }
             default:

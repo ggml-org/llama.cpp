@@ -3972,6 +3972,24 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_MODEL"));
     add_opt(common_arg(
+        {"--spec-draft-model-url"}, "URL",
+        "URL for remote draft model using OpenAI API format (e.g., http://localhost:8080/v1) (default: unused)",
+        [](common_params & params, const std::string & value) {
+            params.speculative.draft.api_url = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_SPEC_DRAFT_MODEL_URL"));
+    add_opt(common_arg(
+        {"--spec-draft-context-limit"}, "N",
+        string_format("maximum context tokens to send to remote draft model, used for anchor-based windowing (default: %d)",
+            params.speculative.draft.context_limit),
+        [](common_params & params, int value) {
+            if (value < 1) {
+                throw std::invalid_argument("context limit must be at least 1");
+            }
+            params.speculative.draft.context_limit = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"--spec-type"}, common_speculative_all_types_str(),
         string_format("comma-separated list of types of speculative decoding to use (default: %s)\n",
             common_speculative_type_name_str(params.speculative.types).c_str()),
