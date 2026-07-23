@@ -24,7 +24,7 @@ Identify what actually changed and which area checklists below apply. Run `git d
 - `tools/server/` -> **Server**
 - anything else, plus all of the above -> **General** (always runs)
 
-Always run the **Scope and quick-reject gate**, the **Security review**, and the **General** checklist. Run each area checklist whose paths were touched. Tell the user which checklists you're running and why.
+Always run the **Scope and quick-reject gate**, the **Security review**, and the **General** checklist. Run each area checklist whose paths were touched. Additionally, if the diff introduces a new component, subsystem, or piece of infrastructure (a new file/class/module, a new abstraction, or hand-rolled machinery), run the **Approach and design** review. Tell the user which checklists you're running and why.
 
 ## Scope and quick-reject gate (always)
 
@@ -53,6 +53,17 @@ Mandatory on every review; any finding here is **blocking**. Rule of thumb: GGUF
 - **Server JSON ints:** clamp client-supplied integers (token/discard counts, offsets) to non-negative and an upper bound before they reach index/pointer arithmetic.
 - **RPC-deserialized fields:** treat every field (type/buffer/data/ne/nb/op_params) as hostile - validate before use. Null/zero buffers skipping validation, attacker data pointers, out-of-range type indices, and negative strides sign-extending past a corner-only assert all give arbitrary read/write.
 - **Lifetime/UAF:** flag stored raw pointers to caller/temporary storage, cached pointers to buffers a later free releases, async ops whose source may drop before completion, and structures not invalidated on free/realloc. Null-check conditionally-built or "not required" tensors before dereferencing.
+
+## Approach and design (when a new component/infra is introduced)
+
+Run this whenever the diff adds a new component, subsystem, or piece of infrastructure. Reviews too often stop at "does it work" - a diff can be correct and still be the wrong approach, and a messy design costs more long-term than a bug. Evaluate the *approach*, not just the behavior; raising a cleaner one is a high-value finding, not a nit. If you see a better design, describe it concretely rather than just calling the current one bad.
+
+- **Simpler approach upstream:** the biggest win is often a different data model or design that removes whole subsystems, not tweaks to the code as written. Complexity must be justified by the problem, not by the first thing that worked.
+- **Reuse over reinvention:** grep for an existing helper, library, object, or mechanism before adding a new one. Reimplementing what the codebase already has reintroduces solved bugs and adds maintenance surface.
+- **Clear ownership/lifetime:** prefer RAII and obvious ownership over manual liveness flags, hand-tracked pointers, and "is it still alive?" checks - manual lifetime tracking is a recurring source of subtle bugs.
+- **Right-sized machinery:** flag redundant, overkill, or heavier-than-needed primitives and abstractions; use the minimum the design actually needs.
+- **Right structure and fit:** a new type should earn its place (split it if it serves two roles); follow existing patterns, idioms, and naming, and avoid constructs the project shuns.
+- **Root cause vs symptom:** fixes layered on fixes signal a design to correct, not guard around.
 
 ## New model / architecture
 
