@@ -261,6 +261,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 <details>
 <summary>Infrastructure</summary>
 
+- [AI Badgr](https://aibadgr.com/gpu/launch?template=llama-cpp) - Launch llama.cpp Server on routed GPU capacity with an OpenAI-compatible endpoint
 - [Paddler](https://github.com/intentee/paddler) - Open-source LLMOps platform for hosting and scaling AI in your own infrastructure
 - [GPUStack](https://github.com/gpustack/gpustack) - Manage GPU clusters for running LLMs
 - [llama_cpp_canister](https://github.com/onicai/llama_cpp_canister) - llama.cpp as a smart contract on the Internet Computer, using WebAssembly
