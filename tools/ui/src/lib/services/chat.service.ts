@@ -255,6 +255,7 @@ export class ChatService {
 			}),
 			stream,
 			return_progress: stream ? true : undefined,
+			sse_ping_interval: stream ? 1 : undefined,
 			tools: tools && tools.length > 0 ? tools : undefined
 		};
 
@@ -270,10 +271,14 @@ export class ChatService {
 		const reasoningBudgetTokens =
 			enableThinking && reasoningEffort ? (REASONING_EFFORT_TOKENS[reasoningEffort] ?? -1) : -1;
 
-		requestBody.chat_template_kwargs = {
-			...(requestBody.chat_template_kwargs ?? {}),
-			enable_thinking: enableThinking
-		};
+		// an explicit user choice injects the kwarg, otherwise it is omitted so
+		// the server default applies (--reasoning flag or chat template)
+		if (enableThinking !== undefined) {
+			requestBody.chat_template_kwargs = {
+				...(requestBody.chat_template_kwargs ?? {}),
+				enable_thinking: enableThinking
+			};
+		}
 
 		if (reasoningBudgetTokens >= 0) {
 			requestBody.thinking_budget_tokens = reasoningBudgetTokens;
@@ -339,6 +344,7 @@ export class ChatService {
 			if (stream && conversationId) {
 				headers['X-Conversation-Id'] = streamIdentity(conversationId, options.model);
 			}
+
 			const response = await fetch(API_CHAT.COMPLETIONS, {
 				method: 'POST',
 				headers,
@@ -1010,7 +1016,7 @@ export class ChatService {
 	 *
 	 * @param response - The fetch Response object containing the JSON data
 	 * @param onComplete - Optional callback invoked when response is successfully parsed
-	 * @param onError - Optional callback invoked if an error occurs during parsing
+	 * @param onError - Optional callback invoked if an error occurs while parsing
 	 * @returns {Promise<string>} Promise that resolves to the generated content string
 	 * @throws {Error} if the response cannot be parsed or is malformed
 	 */

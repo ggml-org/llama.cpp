@@ -24,8 +24,10 @@ export const MODEL_CUSTOM_QUANTIZATION_PREFIX_RE = /^UD$/i;
 
 /**
  * Matches a parameter-count segment, e.g. `7B`, `1.5b`, `120M`.
+ * The optional leading `E` covers effective-parameter sizes, e.g. Gemma's
+ * `E2B`/`E4B` (MatFormer models sized by resident params).
  */
-export const MODEL_PARAMS_RE = /^\d+(\.\d+)?[BbMmKkTt]$/;
+export const MODEL_PARAMS_RE = /^[Ee]?\d+(\.\d+)?[BbMmKkTt]$/;
 
 /**
  * Matches an activated-parameter-count segment, e.g. `A10B`, `a2.4b`.
@@ -37,3 +39,8 @@ export const MODEL_ACTIVATED_PARAMS_RE = /^[Aa]\d+(\.\d+)?[BbMmKkTt]$/;
  * Container format segments to exclude from tags (every model uses these).
  */
 export const MODEL_IGNORED_SEGMENTS = new Set(['GGUF', 'GGML']);
+
+/**
+ * Matches a trailing weight file extension, e.g. `model.gguf` -> `model`.
+ */
+export const MODEL_WEIGHT_EXTENSION_RE = /\.(gguf|ggml)$/i;

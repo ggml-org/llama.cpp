@@ -23,6 +23,8 @@ std::string common_speculative_type_to_str(enum common_speculative_type type);
 // return the max number of draft tokens based on the speculative parameters
 int32_t common_speculative_n_max(const common_params_speculative * spec);
 
+common_params common_base_params_to_speculative(const common_params & params);
+
 common_speculative * common_speculative_init(common_params_speculative & params, uint32_t n_seq);
 
 void common_speculative_free(common_speculative * spec);
@@ -80,3 +82,19 @@ struct common_speculative_deleter {
 };
 
 typedef std::unique_ptr<common_speculative, common_speculative_deleter> common_speculative_ptr;
+
+struct common_speculative_init_result {
+    common_speculative_init_result(common_params & params, llama_model * model_tgt, llama_context * ctx_tgt);
+    ~common_speculative_init_result();
+
+    llama_model   * model();
+    llama_context * context();
+
+private:
+    struct impl;
+    std::unique_ptr<impl> pimpl;
+};
+
+using common_speculative_init_result_ptr = std::unique_ptr<common_speculative_init_result>;
+
+common_speculative_init_result_ptr common_speculative_init_from_params(common_params & params, llama_model * model_tgt, llama_context * ctx_tgt);

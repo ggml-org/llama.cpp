@@ -68,6 +68,7 @@
 
 		<AlertDialog.Footer>
 			<AlertDialog.Cancel onclick={onCancel}>Cancel</AlertDialog.Cancel>
+
 			<AlertDialog.Action
 				onclick={onConfirm}
 				class="bg-destructive text-white hover:bg-destructive/80"

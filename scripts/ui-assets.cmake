@@ -186,6 +186,12 @@ function(hf_download version out_var out_resolved)
 
     set(archive "${UI_BINARY_DIR}/dist.tar.gz")
 
+    # Use HF_TOKEN to benefit from higher rate limits
+    set(auth_headers "")
+    if(DEFINED ENV{HF_TOKEN} AND NOT "$ENV{HF_TOKEN}" STREQUAL "")
+        list(APPEND auth_headers "HTTPHEADER" "Authorization: Bearer $ENV{HF_TOKEN}")
+    endif()
+
     set(candidates "")
     if(NOT "${version}" STREQUAL "")
         list(APPEND candidates "${version}")
@@ -198,7 +204,7 @@ function(hf_download version out_var out_resolved)
         message(STATUS "UI: downloading from ${resolved}: ${base}/dist.tar.gz")
 
         file(DOWNLOAD "${base}/dist.tar.gz?download=true" "${archive}"
-            STATUS status TIMEOUT 300
+            STATUS status TIMEOUT 300 ${auth_headers}
         )
         list(GET status 0 rc)
         if(NOT rc EQUAL 0)
@@ -208,7 +214,7 @@ function(hf_download version out_var out_resolved)
         endif()
 
         file(DOWNLOAD "${base}/dist.tar.gz.sha256?download=true" "${archive}.sha256"
-            STATUS status TIMEOUT 30
+            STATUS status TIMEOUT 30 ${auth_headers}
         )
         list(GET status 0 rc)
         if(NOT rc EQUAL 0)

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { tick } from 'svelte';
 	import * as Card from '$lib/components/ui/card';
 	import { Skeleton } from '$lib/components/ui/skeleton';
@@ -32,7 +33,9 @@
 	let isHealthChecking = $derived(healthState.status === HealthCheckStatus.CONNECTING);
 	let isConnected = $derived(healthState.status === HealthCheckStatus.SUCCESS);
 	let isError = $derived(healthState.status === HealthCheckStatus.ERROR);
-	let showSkeleton = $derived(isIdle || isHealthChecking);
+	// Disabled servers stay IDLE (no startup health check), so the body
+	// skeleton only applies while a check is running or expected to run.
+	let showSkeleton = $derived(isHealthChecking || (isIdle && server.enabled));
 	let errorMessage = $derived(
 		healthState.status === HealthCheckStatus.ERROR ? healthState.message : undefined
 	);
@@ -132,7 +135,7 @@
 			{#if showSkeleton}
 				<div class="space-y-2">
 					<div class="flex items-center gap-2">
-						<Skeleton class="h-4 w-4 rounded" />
+						<Skeleton class="{ICON_CLASS_DEFAULT} rounded" />
 						<Skeleton class="h-3 w-24" />
 					</div>
 					<div class="flex flex-wrap gap-1.5">
@@ -144,7 +147,7 @@
 
 				<div class="space-y-1.5">
 					<div class="flex items-center gap-2">
-						<Skeleton class="h-4 w-4 rounded" />
+						<Skeleton class="{ICON_CLASS_DEFAULT} rounded" />
 						<Skeleton class="h-3 w-32" />
 					</div>
 				</div>
