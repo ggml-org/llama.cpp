@@ -2,8 +2,13 @@
 #include "sumrows.cuh"
 
 #ifdef GGML_CUDA_USE_CUB
+#ifdef GGML_HIP_USE_HIPCUB
+#include <hipcub/hipcub.hpp>
+namespace cub = hipcub;
+#else
 #include <cub/cub.cuh>
-using namespace cub;
+#endif  // GGML_HIP_USE_HIPCUB
+using cub::DeviceReduce;
 #endif  // GGML_CUDA_USE_CUB
 
 #include <cstdint>

@@ -117,6 +117,9 @@
 #define cudaStreamNonBlocking hipStreamNonBlocking
 #define cudaStreamPerThread hipStreamPerThread
 #define cudaStreamSynchronize hipStreamSynchronize
+#define cudaStreamIsCapturing hipStreamIsCapturing
+#define cudaStreamCaptureStatus hipStreamCaptureStatus
+#define cudaStreamCaptureStatusNone hipStreamCaptureStatusNone
 #define cudaStreamWaitEvent hipStreamWaitEvent
 #define cudaGraphExec_t hipGraphExec_t
 #define cudaGraphNode_t hipGraphNode_t

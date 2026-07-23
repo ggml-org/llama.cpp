@@ -1,10 +1,19 @@
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11070
 #define USE_CUB
+#elif defined(GGML_USE_HIP) && !defined(GGML_HIP_NO_HIPCUB) && __has_include(<hipcub/hipcub.hpp>)
+#define USE_CUB
+#define GGML_HIP_USE_HIPCUB_SSM
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11070
 
 #ifdef USE_CUB
+#ifdef GGML_HIP_USE_HIPCUB_SSM
+#include <hipcub/hipcub.hpp>
+namespace cub = hipcub;
+#else
 #include <cub/cub.cuh>
-using namespace cub;
+#endif  // GGML_HIP_USE_HIPCUB_SSM
+using cub::BlockLoad;
+using cub::BlockStore;
 #endif // USE_CUB
 
 #include "ssm-scan.cuh"

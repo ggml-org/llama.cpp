@@ -109,6 +109,13 @@
 
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11070
 #    define GGML_CUDA_USE_CUB
+#elif defined(GGML_USE_HIP) && !defined(GGML_HIP_NO_HIPCUB) && __has_include(<hipcub/hipcub.hpp>)
+// hipCUB provides a CUB-compatible interface over rocPRIM (hipcub:: namespace).
+// Without it, argsort/top_k on rows > 1024 fall back to the CPU backend — for DSA
+// models (DeepSeek-V4) that puts the per-token indexer top_k on the CPU, with cost
+// growing with context depth.
+#    define GGML_CUDA_USE_CUB
+#    define GGML_HIP_USE_HIPCUB
 #endif  // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11070
 
 // PDL host-side support (cudaLaunchKernelEx) requires CUDART >= 11.8.

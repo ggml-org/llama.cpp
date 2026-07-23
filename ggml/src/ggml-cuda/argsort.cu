@@ -1,12 +1,19 @@
 #include "argsort.cuh"
 
 #ifdef GGML_CUDA_USE_CUB
-#    include <cub/cub.cuh>
+#    ifdef GGML_HIP_USE_HIPCUB
+#    include <hipcub/hipcub.hpp>
+namespace cub = hipcub;
+#    else
+#        include <cub/cub.cuh>
+#    endif  // GGML_HIP_USE_HIPCUB
 #    if (CCCL_MAJOR_VERSION >= 3 && CCCL_MINOR_VERSION >= 1)
 #        define STRIDED_ITERATOR_AVAILABLE
 #        include <cuda/iterator>
 #    endif
-using namespace cub;
+using cub::DeviceRadixSort;
+using cub::DeviceSegmentedRadixSort;
+using cub::DeviceSegmentedSort;
 #endif  // GGML_CUDA_USE_CUB
 
 static __global__ void init_indices(int * indices, const int ncols, const int nrows) {

@@ -5,7 +5,12 @@
 #include "ggml.h"
 
 #ifdef GGML_CUDA_USE_CUB
-#   include <cub/cub.cuh>
+#    ifdef GGML_HIP_USE_HIPCUB
+#    include <hipcub/hipcub.hpp>
+namespace cub = hipcub;
+#    else
+#        include <cub/cub.cuh>
+#    endif  // GGML_HIP_USE_HIPCUB
 #endif // GGML_CUDA_USE_CUB
 
 template<typename T, int BLOCK_SIZE>
