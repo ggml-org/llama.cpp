@@ -1061,6 +1061,118 @@ struct server_tool_get_datetime : server_tool {
     }
 };
 
+//
+// question: request answers from the user before continuing
+//
+
+struct server_tool_question : server_tool {
+    server_tool_question() {
+        name = "question";
+        display_name = "Question";
+        permission_write = false;
+    }
+
+    json get_definition() const override {
+        return {
+            {"type", "function"},
+            {"function", {
+                {"name", name},
+                {"description", "Ask the user one or more clarifying questions before continuing. Use this when a concrete user choice or answer is needed to proceed."},
+                {"parameters", {
+                    {"type", "object"},
+                    {"properties", {
+                        {"questions", {
+                            {"type", "array"},
+                            {"description", "Questions to ask"},
+                            {"items", {
+                                {"type", "object"},
+                                {"properties", {
+                                    {"question", {{"type", "string"}, {"description", "Complete question"}}},
+                                    {"header",   {{"type", "string"}, {"description", "Very short label (max 30 chars)"}}},
+                                    {"options", {
+                                        {"type", "array"},
+                                        {"description", "Available choices"},
+                                        {"items", {
+                                            {"type", "object"},
+                                            {"properties", {
+                                                {"label",       {{"type", "string"}, {"description", "Display text (1-5 words, concise)"}}},
+                                                {"description", {{"type", "string"}, {"description", "Explanation of choice"}}},
+                                            }},
+                                            {"required", json::array({"label", "description"})},
+                                        }},
+                                    }},
+                                    {"multiple", {{"type", "boolean"}, {"description", "Allow selecting multiple choices"}}},
+                                    {"custom",   {{"type", "boolean"}, {"description", "Allow typing a custom answer (default: true)"}}},
+                                }},
+                                {"required", json::array({"question", "header"})},
+                            }},
+                        }},
+                    }},
+                    {"required", json::array({"questions"})},
+                }},
+            }},
+        };
+    }
+
+    json invoke(json params, server_tool::stream *) const override {
+        if (!params.contains("questions") || !params.at("questions").is_array() || params.at("questions").empty()) {
+            return {{"error", "question requires a non-empty questions array"}};
+        }
+
+        if (json_value(params, "rejected", false)) {
+            return {
+                {"status", "completed"},
+                {"plain_text_response", "The user dismissed this question."},
+                {"is_error", true},
+            };
+        }
+
+        if (!params.contains("answers")) {
+            const std::string request_id = "question-" + random_string();
+            json payload = {
+                {"request_id", request_id},
+                {"questions", params.at("questions")},
+            };
+            return {
+                {"status", "awaiting_user"},
+                {"kind", "question"},
+                {"request_id", request_id},
+                {"payload", std::move(payload)},
+            };
+        }
+
+        const json & answers = params.at("answers");
+        if (!answers.is_array()) {
+            return {{"error", "question answers must be an array"}};
+        }
+
+        const json & questions = params.at("questions");
+        std::vector<std::string> formatted;
+        formatted.reserve(questions.size());
+        for (size_t i = 0; i < questions.size(); ++i) {
+            const auto & question = questions.at(i);
+            const std::string question_text = json_value(question, "question", std::string("Question"));
+            std::vector<std::string> values;
+            if (i < answers.size() && answers.at(i).is_array()) {
+                for (const auto & item : answers.at(i)) {
+                    if (item.is_string()) {
+                        values.push_back(item.get<std::string>());
+                    }
+                }
+            }
+            formatted.push_back("\"" + question_text + "\"=\"" +
+                (values.empty() ? "Unanswered" : string_join(values, ", ")) + "\"");
+        }
+
+        return {
+            {"status", "completed"},
+            {"plain_text_response",
+                "User has answered your questions: " + string_join(formatted, ", ") +
+                ". You can now continue with the user's answers in mind."},
+        };
+    }
+};
+
 struct server_tool_stream_result : server_task_result {
     std::string chunk;
     bool done = false;
@@ -1127,6 +1239,7 @@ static std::vector<std::unique_ptr<server_tool>> build_tools() {
     tools.push_back(std::make_unique<server_tool_write_file>());
     tools.push_back(std::make_unique<server_tool_edit_file>());
     tools.push_back(std::make_unique<server_tool_get_datetime>());
+    tools.push_back(std::make_unique<server_tool_question>());
     return tools;
 }
 
