@@ -476,6 +476,20 @@ static inline void __attribute__((always_inline)) flush_to_l2(const void * addr,
         : "x31", "memory");
 }
 
+// Flush an arbitrary number of lines to L2, working around the 16-line cap of a
+// single FlushVA by issuing multiple flushes. Use this whenever nlines may exceed 16.
+static inline void __attribute__((always_inline)) flush_to_l2_multi(const void * addr, uint64_t nlines, uint64_t stride) {
+    const char * p = (const char *) addr;
+    while (nlines > 16) {
+        flush_to_l2(p, 16, stride);
+        p += 16 * stride;
+        nlines -= 16;
+    }
+    if (nlines) {
+        flush_to_l2(p, nlines, stride);
+    }
+}
+
 // Evict nlines cache lines at stride apart starting at addr from L1 to L2.
 // Uses EvictVA (CSR 0x89F).  Unlike flush_to_l2, this guarantees the line is
 // NOT present in L1 after the operation - subsequent loads will miss and go
