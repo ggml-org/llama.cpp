@@ -959,15 +959,29 @@ static __global__ void mul_mat_q(
             }
 
             // __syncthreads(); // There is no previous tile that could cause a race condition.
+            const int valid_j = min(J, col_diff - jt*J);
+            if (valid_j == J) {
 #pragma unroll
-            for (int j0 = 0; j0 < J; j0 += nwarps*warp_size) {
-                const int j = j0 + threadIdx.y*warp_size + threadIdx.x;
+                for (int j0 = 0; j0 < J; j0 += nwarps*warp_size) {
+                    const int j = j0 + threadIdx.y*warp_size + threadIdx.x;
 
-                if (j0 + nwarps*warp_size > J && j >= J) {
-                    break;
+                    if (j0 + nwarps*warp_size > J && j >= J) {
+                        break;
+                    }
+
+                    ids_dst_shared[j] = ids_dst[col_low + jt*J + j];
                 }
+            } else {
+#pragma unroll
+                for (int j0 = 0; j0 < J; j0 += nwarps*warp_size) {
+                    const int j = j0 + threadIdx.y*warp_size + threadIdx.x;
 
-                ids_dst_shared[j] = ids_dst[col_low + jt*J + j];
+                    if (j0 + nwarps*warp_size > J && j >= J) {
+                        break;
+                    }
+
+                    ids_dst_shared[j] = j < valid_j ? ids_dst[col_low + jt*J + j] : 0;
+                }
             }
             __syncthreads();
         }
@@ -1038,15 +1052,29 @@ static __global__ void mul_mat_q(
             }
 
             __syncthreads();
+            const int valid_j = min(J, col_diff - jt*J);
+            if (valid_j == J) {
 #pragma unroll
-            for (int j0 = 0; j0 < J; j0 += nwarps*warp_size) {
-                const int j = j0 + threadIdx.y*warp_size + threadIdx.x;
+                for (int j0 = 0; j0 < J; j0 += nwarps*warp_size) {
+                    const int j = j0 + threadIdx.y*warp_size + threadIdx.x;
 
-                if (j0 + nwarps*warp_size > J && j >= J) {
-                    break;
+                    if (j0 + nwarps*warp_size > J && j >= J) {
+                        break;
+                    }
+
+                    ids_dst_shared[j] = ids_dst[col_low + jt*J + j];
                 }
+            } else {
+#pragma unroll
+                for (int j0 = 0; j0 < J; j0 += nwarps*warp_size) {
+                    const int j = j0 + threadIdx.y*warp_size + threadIdx.x;
 
-                ids_dst_shared[j] = ids_dst[col_low + jt*J + j];
+                    if (j0 + nwarps*warp_size > J && j >= J) {
+                        break;
+                    }
+
+                    ids_dst_shared[j] = j < valid_j ? ids_dst[col_low + jt*J + j] : 0;
+                }
             }
             __syncthreads();
         }
@@ -1245,9 +1273,16 @@ static __global__ void mul_mat_q_stream_k_fixup(
     const int col_low  = expert_bounds[zt + 0];
     const int col_high = expert_bounds[zt + 1];
     const int col_diff = col_high - col_low;
+    const int valid_j  = min(J, col_diff - jt*J);
 
-    for (int j = threadIdx.y*warp_size + threadIdx.x; j < J; j += nwarps*warp_size) {
-        ids_dst_shared[j] = ids_dst[col_low + jt*J + j];
+    if (valid_j == J) {
+        for (int j = threadIdx.y*warp_size + threadIdx.x; j < J; j += nwarps*warp_size) {
+            ids_dst_shared[j] = ids_dst[col_low + jt*J + j];
+        }
+    } else {
+        for (int j = threadIdx.y*warp_size + threadIdx.x; j < J; j += nwarps*warp_size) {
+            ids_dst_shared[j] = j < valid_j ? ids_dst[col_low + jt*J + j] : 0;
+        }
     }
     __syncthreads();
 
@@ -1255,7 +1290,7 @@ static __global__ void mul_mat_q_stream_k_fixup(
     dst += offset_dst;
 
     const int i_max = nrows_x  - it*I - 1;
-    const int j_max = col_diff - jt*J - 1;
+    const int j_max = valid_j - 1;
     if (fallback && i > i_max) {
         return;
     }
