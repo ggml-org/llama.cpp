@@ -4675,6 +4675,22 @@ static enum ggml_backend_dev_type ggml_backend_cuda_device_get_type(ggml_backend
         : GGML_BACKEND_DEVICE_TYPE_GPU;
 }
 
+static bool ggml_backend_cuda_host_buffer_supported() {
+    return getenv("GGML_CUDA_NO_PINNED") == nullptr;
+}
+
+static bool ggml_backend_cuda_device_supports_cuda_host_buft(int device) {
+#if defined(GGML_USE_HIP)
+    if (ggml_cuda_info().devices[device].integrated) {
+        return false;
+    }
+#else
+    GGML_UNUSED(device);
+#endif
+
+    return ggml_backend_cuda_host_buffer_supported();
+}
+
 static void ggml_backend_cuda_device_get_props(ggml_backend_dev_t dev, ggml_backend_dev_props * props) {
     ggml_backend_cuda_device_context * ctx = (ggml_backend_cuda_device_context *)dev->context;
 
@@ -4684,7 +4700,7 @@ static void ggml_backend_cuda_device_get_props(ggml_backend_dev_t dev, ggml_back
     props->device_id   = ctx->pci_bus_id.empty() ? nullptr : ctx->pci_bus_id.c_str();
     ggml_backend_cuda_device_get_memory(dev, &props->memory_free, &props->memory_total);
 
-    bool host_buffer = getenv("GGML_CUDA_NO_PINNED") == nullptr;
+    bool host_buffer = ggml_backend_cuda_host_buffer_supported();
 #ifdef GGML_CUDA_NO_PEER_COPY
     bool events = false;
 #else
@@ -4712,6 +4728,10 @@ static ggml_backend_buffer_type_t ggml_backend_cuda_device_get_buffer_type(ggml_
 
 static ggml_backend_buffer_type_t ggml_backend_cuda_device_get_host_buffer_type(ggml_backend_dev_t dev) {
     GGML_UNUSED(dev);
+    if (!ggml_backend_cuda_host_buffer_supported()) {
+        return nullptr;
+    }
+
     return ggml_backend_cuda_host_buffer_type();
 }
 
@@ -5163,7 +5183,10 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
 static bool ggml_backend_cuda_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
     ggml_backend_cuda_device_context * dev_ctx = (ggml_backend_cuda_device_context *) dev->context;
     const bool integrated = ggml_cuda_info().devices[dev_ctx->device].integrated;
-    return (ggml_backend_buft_is_cuda(buft) && buft->device == dev) || (integrated && ggml_backend_buft_is_cuda_host(buft));
+    return (ggml_backend_buft_is_cuda(buft) && buft->device == dev) ||
+        (integrated &&
+         ggml_backend_buft_is_cuda_host(buft) &&
+         ggml_backend_cuda_device_supports_cuda_host_buft(dev_ctx->device));
 }
 
 static int64_t get_op_batch_size(const ggml_tensor * op) {
