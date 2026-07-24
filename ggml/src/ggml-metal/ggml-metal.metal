@@ -1480,6 +1480,36 @@ template [[host_name("kernel_repeat_bf16")]] kernel kernel_repeat_t kernel_repea
 template [[host_name("kernel_repeat_i32")]] kernel kernel_repeat_t kernel_repeat<int>;
 template [[host_name("kernel_repeat_i16")]] kernel kernel_repeat_t kernel_repeat<short>;
 
+kernel void kernel_repeat_back_f32(
+        constant ggml_metal_kargs_repeat & args,
+        device const char * src0,
+        device       char * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+    const int i3 = tgpig.z;
+    const int i2 = tgpig.y;
+    const int i1 = tgpig.x;
+
+    device char * dst_ptr = dst + i3*args.nb3 + i2*args.nb2 + i1*args.nb1;
+
+    for (int i0 = tpitg.x; i0 < args.ne0; i0 += ntg.x) {
+        float sum = 0.0f;
+
+        for (int i03 = i3; i03 < args.ne03; i03 += args.ne3) {
+            for (int i02 = i2; i02 < args.ne02; i02 += args.ne2) {
+                for (int i01 = i1; i01 < args.ne01; i01 += args.ne1) {
+                    for (int i00 = i0; i00 < args.ne00; i00 += args.ne0) {
+                        sum += *((device const float *) (src0 + i03*args.nb03 + i02*args.nb02 + i01*args.nb01 + i00*args.nb00));
+                    }
+                }
+            }
+        }
+
+        *((device float *) (dst_ptr + i0*args.nb0)) = sum;
+    }
+}
+
 template<typename T>
 kernel void kernel_reglu(
         constant ggml_metal_kargs_glu & args,
