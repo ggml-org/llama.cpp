@@ -7,7 +7,6 @@
 	import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants';
 	import { REASONING_TAGS } from '$lib/constants/agentic';
 	import { MessageRole, AttachmentType, AgenticSectionType } from '$lib/enums';
-	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
 	import {
 		ChatMessageAssistant,
 		ChatMessageUser,
@@ -328,7 +327,7 @@
 	}
 </script>
 
-<div use:fadeInView class="chat-message">
+<div class="chat-message">
 	{#if message.role === MessageRole.SYSTEM}
 		<ChatMessageSystem
 			bind:textareaElement
