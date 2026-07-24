@@ -476,6 +476,8 @@ These words will not be included in the completion, so make sure to add them to 
 
 `repeat_last_n`: Last n tokens to consider for penalizing repetition. Default: `64`, where `0` is disabled and `-1` is ctx-size.
 
+`repetition_detection`: Stop generation when the output tail contains an exact, contiguous token pattern repeated a configured number of times. The object accepts `min_pattern_size`, `max_pattern_size`, and `min_count`. Detection is disabled when `max_pattern_size` is `0` (the default); when enabled, `min_count` must be at least `2` and `min_pattern_size` must not exceed `max_pattern_size`. Unlike repetition penalties, this check does not alter token probabilities. Example: `{"min_pattern_size": 3, "max_pattern_size": 64, "min_count": 5}`.
+
 `presence_penalty`: Repeat alpha presence penalty. Default: `0.0`, which is disabled.
 
 `frequency_penalty`: Repeat alpha frequency penalty. Default: `0.0`, which is disabled.

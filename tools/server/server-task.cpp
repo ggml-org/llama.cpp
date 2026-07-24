@@ -10,7 +10,39 @@
 #include "speculative.h"
 #include "server-common.h"
 
+#include <algorithm>
+
 using json = nlohmann::ordered_json;
+
+bool server_check_sequence_repetition(
+        const llama_tokens & tokens,
+        const repetition_detection_params & params) {
+    const int32_t min_size = params.min_pattern_size > 0 ? params.min_pattern_size : 1;
+    if (params.max_pattern_size <= 0 || params.min_count < 2 || min_size > params.max_pattern_size) {
+        return false;
+    }
+
+    for (int32_t pattern_size = min_size; pattern_size <= params.max_pattern_size; ++pattern_size) {
+        const size_t required = (size_t) pattern_size * params.min_count;
+        if (required > tokens.size()) {
+            return false;
+        }
+
+        const size_t tail = tokens.size() - pattern_size;
+        bool matches = true;
+        for (int32_t repetition = 1; repetition < params.min_count; ++repetition) {
+            const size_t previous = tail - (size_t) pattern_size * repetition;
+            if (!std::equal(tokens.begin() + tail, tokens.end(), tokens.begin() + previous)) {
+                matches = false;
+                break;
+            }
+        }
+        if (matches) {
+            return true;
+        }
+    }
+    return false;
+}
 
 //
 // task_params
@@ -43,6 +75,11 @@ json task_params::to_json(bool only_metrics) const {
         return json {
             {"seed",                      sampling.seed},
             {"temperature",               sampling.temp},
+            {"repetition_detection", {
+                {"max_pattern_size", repetition_detection.max_pattern_size},
+                {"min_pattern_size", repetition_detection.min_pattern_size},
+                {"min_count",        repetition_detection.min_count},
+            }},
             {"dynatemp_range",            sampling.dynatemp_range},
             {"dynatemp_exponent",         sampling.dynatemp_exponent},
             {"top_k",                     sampling.top_k},
@@ -93,6 +130,11 @@ json task_params::to_json(bool only_metrics) const {
     return json {
         {"seed",                      sampling.seed},
         {"temperature",               sampling.temp},
+        {"repetition_detection", {
+            {"max_pattern_size", repetition_detection.max_pattern_size},
+            {"min_pattern_size", repetition_detection.min_pattern_size},
+            {"min_count",        repetition_detection.min_count},
+        }},
         {"dynatemp_range",            sampling.dynatemp_range},
         {"dynatemp_exponent",         sampling.dynatemp_exponent},
         {"top_k",                     sampling.top_k},
@@ -274,10 +316,11 @@ json result_prompt_progress::to_json() const {
 
 static inline std::string stop_type_to_str(stop_type type) {
     switch (type) {
-        case STOP_TYPE_EOS:   return "eos";
-        case STOP_TYPE_WORD:  return "word";
-        case STOP_TYPE_LIMIT: return "limit";
-        default:              return "none";
+        case STOP_TYPE_EOS:        return "eos";
+        case STOP_TYPE_WORD:       return "word";
+        case STOP_TYPE_LIMIT:      return "limit";
+        case STOP_TYPE_REPETITION: return "repetition";
+        default:                   return "none";
     }
 }
 

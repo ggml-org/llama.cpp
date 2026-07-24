@@ -75,6 +75,18 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         ->set_hard_limits(-1, std::numeric_limits<int64_t>::max())
         ->set_desc("Set a time limit in milliseconds for the prediction phase. The timeout triggers if generation exceeds this time (measured since the first token) and a newline has been generated. Useful for FIM applications"));
 
+    add((new field_nested("repetition_detection"))
+        ->add_subfield((new field_num("max_pattern_size", params.repetition_detection.max_pattern_size))
+            ->set_hard_limits(0, INT32_MAX)
+            ->set_desc("Maximum repeated token pattern size (0 = disabled)"))
+        ->add_subfield((new field_num("min_pattern_size", params.repetition_detection.min_pattern_size))
+            ->set_hard_limits(0, INT32_MAX)
+            ->set_desc("Minimum repeated token pattern size (0 = 1)"))
+        ->add_subfield((new field_num("min_count", params.repetition_detection.min_count))
+            ->set_hard_limits(0, INT32_MAX)
+            ->set_desc("Minimum number of consecutive pattern repetitions"))
+        ->set_desc("Stop generation when an exact token pattern repeats at the output tail"));
+
     add((new field_json("response_fields"))
         ->set_desc("A list of response fields to return. Missing fields are omitted without error. Fields with a slash are unnested (e.g. generation_settings/n_predict moves n_predict to the root)")
         ->set_handler([&](field_eval_context & ctx, const json & data) {
@@ -527,8 +539,18 @@ task_params eval_llama_cmpl_schema(
         f->eval(ctx, data);
     }
 
+    params.repetition_detection.enabled = params_base.repetition_detection_enabled;
+
     // post-processing
     {
+        const auto & repetition = params.repetition_detection;
+        if (repetition.max_pattern_size > 0 && repetition.min_pattern_size > repetition.max_pattern_size) {
+            throw std::invalid_argument("repetition_detection.min_pattern_size must not exceed max_pattern_size");
+        }
+        if (repetition.max_pattern_size > 0 && repetition.min_count < 2) {
+            throw std::invalid_argument("repetition_detection.min_count must be at least 2 when enabled");
+        }
+
         if (params.sampling.penalty_last_n == -1) {
             // note: should be the slot's context and not the full context, but it's ok
             params.sampling.penalty_last_n = n_ctx_slot;

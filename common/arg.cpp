@@ -4175,6 +4175,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SERVER}));
 
+    add_opt(common_arg(
+        {"--repetition-detection"},
+        {"--no-repetition-detection"},
+        "enable exact generated-token repetition detection",
+        [](common_params & params, bool value) {
+            params.repetition_detection_enabled = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+
     //
     // TTS params
     //
