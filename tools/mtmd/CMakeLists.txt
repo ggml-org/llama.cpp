@@ -51,6 +51,7 @@ add_library(mtmd
             models/mobilenetv5.cpp
             models/youtuvl.cpp
             models/yasa2.cpp
+            models/parakeet.cpp
             )
 
 set_target_properties(mtmd PROPERTIES

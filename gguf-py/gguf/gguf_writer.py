@@ -1337,6 +1337,9 @@ class GGUFWriter:
     def add_audio_stack_factor(self, value: int) -> None:
         self.add_uint32(Keys.ClipAudio.Projector.STACK_FACTOR, value)
 
+    def add_audio_subsampling_factor(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.SUBSAMPLING_FACTOR, value)
+
     def add_audio_chunk_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipAudio.CHUNK_SIZE, value)
 

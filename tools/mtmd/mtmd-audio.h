@@ -111,6 +111,21 @@ struct mtmd_audio_preprocessor_qwen3a : mtmd_audio_preprocessor {
     mtmd_audio_cache cache;
 };
 
+struct mtmd_audio_preprocessor_parakeet : mtmd_audio_preprocessor {
+    mtmd_audio_preprocessor_parakeet(clip_ctx * ctx) : mtmd_audio_preprocessor(ctx) { }
+    void initialize() override;
+    bool preprocess(const float * samples, size_t n_samples, std::vector<mtmd_audio_mel> & output) override;
+
+  private:
+    mtmd_audio_cache cache;
+
+    static void worker_thread(int ith, const float * window_func, int window_size,
+                              const std::vector<float> & samples, int n_samples,
+                              int frame_size, int frame_step, int n_threads,
+                              int n_fft_bins,
+                              const mtmd_audio_cache & cache, mtmd_audio_mel & mel);
+};
+
 //
 // streaming ISTFT - converts spectrogram frames back to audio one frame at a time
 //
