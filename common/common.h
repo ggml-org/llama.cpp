@@ -962,6 +962,10 @@ void common_batch_add(
     const std::vector<llama_seq_id> & seq_ids,
                                bool   logits);
 
+// create a single-sequence batch from a list of tokens
+// last token always have output_logits set to true
+llama_batch_ext_ptr common_batch_ext_get_one(struct llama_context * ctx, const llama_tokens & tokens);
+
 // decodes a single batch of tokens for a prompt and manages session tokens
 //
 // Note: We save state before the last token so that we can replay it to ensure
@@ -969,7 +973,7 @@ void common_batch_add(
 // tokens from memory, so this approach works across all model architectures.
 bool common_prompt_batch_decode(
               struct llama_context * ctx,
-    const std::vector<llama_token> & all_tokens,
+                const llama_tokens & all_tokens,
                                int   n_new,
                                int & n_past,
                                int   n_batch,
