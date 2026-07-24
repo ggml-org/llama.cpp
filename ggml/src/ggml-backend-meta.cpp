@@ -1660,15 +1660,11 @@ struct ggml_backend_meta_context {
     void *                               comm_ctx       = nullptr;
     ggml_backend_comm_allreduce_tensor_t comm_allreduce = nullptr;
 
-    // Sync-fallback scratch for set_tensor_async on layouts the chunk-by-chunk path can't handle:
-    // multi-segment splits, and PARTIAL axis (per-device 1/N scaling needs the whole tensor).
-    // Sequentially-arriving chunks accumulate here, then dispatch via the sync set_tensor path
-    // once the last byte is in.
-    struct fallback_accum {
+    struct async_set_accum {
         const ggml_tensor *  tensor = nullptr;
         std::vector<uint8_t> data;
     };
-    fallback_accum accum;
+    async_set_accum async_set;
 
     ggml_backend_meta_context(ggml_backend_dev_t meta_dev, const char * params) {
         const size_t n_devs = ggml_backend_meta_dev_n_devs(meta_dev);
@@ -1733,32 +1729,24 @@ static void ggml_backend_meta_set_tensor_async(ggml_backend_t backend, ggml_tens
     const size_t n_backends = ggml_backend_meta_n_backends(backend);
     GGML_ASSERT(ggml_is_contiguous(tensor));
 
-    if (size == 0) {
-        return;
-    }
-
     const ggml_backend_meta_split_state split_state = ggml_backend_meta_get_split_state(tensor, /*assume_sync =*/ false);
-    // Multi-segment and PARTIAL cannot be dispatched chunk-by-chunk. Pass the whole tensor
-    // through if we already have it, otherwise buffer sequentially-arriving chunks until the
-    // last byte, then dispatch via the sync set_tensor path which handles those layouts.
     if (split_state.n_segments != 1 || split_state.nr[0] != 1 || split_state.axis == GGML_BACKEND_SPLIT_AXIS_PARTIAL) {
         const size_t total = ggml_nbytes(tensor);
         if (offset == 0 && size == total) {
             ggml_backend_tensor_set(tensor, data, 0, size);
             return;
         }
-        ggml_backend_meta_context * be_ctx = (ggml_backend_meta_context *) backend->context;
-        auto & acc = be_ctx->accum;
-        if (acc.tensor != tensor) {
-            acc.tensor = tensor;
-            acc.data.assign(total, 0);
+        ggml_backend_meta_context * ctx = (ggml_backend_meta_context *) backend->context;
+        auto & accum = ctx->async_set;
+        if (accum.tensor != tensor) {
+            accum.tensor = tensor;
+            accum.data.resize(total);
         }
-        GGML_ASSERT(offset + size <= acc.data.size());
-        memcpy(acc.data.data() + offset, data, size);
-        if (offset + size == acc.data.size()) {
-            ggml_backend_tensor_set(tensor, acc.data.data(), 0, acc.data.size());
-            acc.tensor = nullptr;
-            std::vector<uint8_t>().swap(acc.data);
+        GGML_ASSERT(offset + size <= accum.data.size());
+        memcpy(accum.data.data() + offset, data, size);
+        if (offset + size == total) {
+            ggml_backend_tensor_set(tensor, accum.data.data(), 0, total);
+            accum = {};
         }
         return;
     }
@@ -1769,6 +1757,7 @@ static void ggml_backend_meta_set_tensor_async(ggml_backend_t backend, ggml_tens
         case GGML_BACKEND_SPLIT_AXIS_2: {
             // Exploit that tensors are contiguous to splice it with simple tensors as "chunks".
             const size_t chunk_size_full = tensor->nb[split_state.axis + 1];
+            // Loader chunks may start or end mid-row.
             // Per-device dispatch for a single row's column range [col_off, col_off + len).
             // Used for the unaligned head/tail when the chunk doesn't land on row boundaries.
             auto write_partial_row = [&](int64_t R, size_t col_off, size_t len, const char * src) {
@@ -1843,7 +1832,7 @@ static void ggml_backend_meta_set_tensor_async(ggml_backend_t backend, ggml_tens
             }
         } break;
         default: {
-            GGML_ABORT("fatal error: meta set_tensor_async unhandled split axis %d", (int) split_state.axis);
+            GGML_ABORT("fatal error");
         }
     }
 }
