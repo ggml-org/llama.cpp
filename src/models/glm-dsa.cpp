@@ -385,7 +385,8 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par
                 prev_top_k = top_k;
                 cb(top_k, "top_k", il);
             } else {
-                // "shared" indexer layer - reuse from previous
+                // "shared" indexer layer - reuse top-k from a previous full layer
+                GGML_ASSERT(prev_top_k != nullptr && "shared indexer layer must follow a previous full indexer layer");
                 top_k = prev_top_k;
                 cb(top_k, "top_k", il);
             }
