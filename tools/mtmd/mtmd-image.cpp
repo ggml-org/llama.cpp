@@ -933,6 +933,26 @@ mtmd_image_preproc_out mtmd_image_preprocessor_longest_edge::preprocess(const cl
 }
 
 //
+// mtmd_image_preprocessor_minicpmv
+//
+
+mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_minicpmv::get_slice_instructions(const clip_image_size & original_size) {
+    if (hparams.n_merge == 2) {
+        const int   slice_size = hparams.image_size;
+        const float ratio      = (float)original_size.width * original_size.height / (slice_size * slice_size);
+        if (ratio <= 1.0f) {
+            mtmd_image_preprocessor_llava_uhd::slice_instructions inst;
+            const int patch_size = hparams.patch_size * hparams.n_merge;
+            inst.overview_size = get_best_resize(original_size, slice_size, patch_size, true);
+            inst.refined_size  = clip_image_size{0, 0};
+            inst.grid_size     = clip_image_size{0, 0};
+            return inst;
+        }
+    }
+    return mtmd_image_preprocessor_llava_uhd::get_slice_instructions(original_size);
+}
+
+//
 // mtmd_image_preprocessor_lfm2
 //
 
