@@ -13,7 +13,7 @@
 
 	const gauge = useContextGauge();
 
-	let cardEl: HTMLElement | null = null;
+	let cardEl = $state<HTMLElement | null>(null);
 
 	// Any press outside the card and outside the dial closes the card.
 	// Presses on the dial are excluded because the dial handles its own
