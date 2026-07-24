@@ -2,29 +2,112 @@
 
 #include <sheredom/subprocess.h>
 
+#include <atomic>
+#include <chrono>
 #include <cstdio>
-#include <cstring>
 #include <fstream>
+#include <functional>
+#include <sstream>
+#include <thread>
 
 #if defined(_WIN32)
+#  include <io.h>
 #  include <windows.h>
 #else
+#  include <errno.h>
+#  include <fcntl.h>
+#  include <poll.h>
+#  include <unistd.h>
 extern char ** environ;
 #endif
+
+// read NDJSON lines from a child pipe, calling on_line per line until `running` clears, EOF/error, or on_line returns false.
+// polled, not blocking: a grandchild can inherit the pipe's write end and hold it open (terminate() kills only the direct child), so a blocking read would hang teardown on an EOF that never comes.
+static void mcp_pump_ndjson(FILE * f, std::atomic<bool> & running,
+                            const std::function<bool(std::string &&)> & on_line) {
+    if (!f) {
+        return;
+    }
+    const int poll_ms = 50;
+#if defined(_WIN32)
+    HANDLE h = (HANDLE) _get_osfhandle(_fileno(f));
+#else
+    int fd = fileno(f);
+    int fl = fcntl(fd, F_GETFL, 0);
+    if (fl >= 0) {
+        fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+    }
+#endif
+    std::string buf;
+    char        chunk[4096];
+    while (running.load()) {
+        size_t n = 0;
+#if defined(_WIN32)
+        DWORD avail = 0;
+        if (!PeekNamedPipe(h, NULL, 0, NULL, &avail, NULL)) {
+            break; // pipe broken / child gone
+        }
+        if (avail == 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(poll_ms));
+            continue;
+        }
+        DWORD to_read = avail < (DWORD) sizeof(chunk) ? avail : (DWORD) sizeof(chunk);
+        DWORD got     = 0;
+        if (!ReadFile(h, chunk, to_read, &got, NULL) || got == 0) {
+            break;
+        }
+        n = (size_t) got;
+#else
+        struct pollfd pfd;
+        pfd.fd      = fd;
+        pfd.events  = POLLIN;
+        pfd.revents = 0;
+        int pr      = poll(&pfd, 1, poll_ms);
+        if (pr < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            break;
+        }
+        if (pr == 0) {
+            continue; // timeout -> re-check running
+        }
+        if (pfd.revents & (POLLERR | POLLNVAL)) {
+            break;
+        }
+        ssize_t r = read(fd, chunk, sizeof(chunk));
+        if (r < 0) {
+            if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
+                continue;
+            }
+            break;
+        }
+        if (r == 0) {
+            break; // EOF: child (and any pipe writers) closed the stream
+        }
+        n = (size_t) r;
+#endif
+        buf.append(chunk, n);
+        size_t pos;
+        while ((pos = buf.find('\n')) != std::string::npos) {
+            std::string line = buf.substr(0, pos);
+            buf.erase(0, pos + 1);
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+            if (line.empty()) {
+                continue;
+            }
+            if (!on_line(std::move(line))) {
+                return;
+            }
+        }
+    }
+}
 
 //
 // server_mcp_server_config
 //
-
-std::vector<server_mcp_server_config> server_mcp_server_config::parse_from_file(const std::string & path) {
-    std::ifstream f(path);
-    if (!f) {
-        throw std::runtime_error("failed to open MCP config file: " + path);
-    }
-    json j;
-    f >> j;
-    return parse_cursor_format(j);
-}
 
 std::vector<server_mcp_server_config> server_mcp_server_config::parse_from_json(const std::string & json_str) {
     return parse_cursor_format(json::parse(json_str));
@@ -107,8 +190,7 @@ json server_mcp_transport::send_rpc(const json & request, const std::function<bo
             }
             continue; // skip malformed frame
         }
-        // a message without an id is a notification; a mismatched id is a stale reply from an
-        // earlier timed-out request (ids are monotonic, so it can never match a future one)
+        // no id: a notification. mismatched id: a stale reply from a timed-out request (ids are monotonic, never a future one)
         if (!has_id || (reply.contains("id") && reply.at("id") == request.at("id"))) {
             return reply;
         }
@@ -227,15 +309,91 @@ struct server_mcp_stdio::process_handle {
     FILE * err = nullptr; // child stderr
 };
 
+#if defined(_WIN32)
+// config strings are UTF-8 (from JSON) and subprocess.h converts them with CP_UTF8, so inputs must be UTF-8, not the active code page
+static std::wstring windows_utf8_to_wide(const std::string & s) {
+    if (s.empty()) {
+        return std::wstring();
+    }
+    int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), (int) s.size(), NULL, 0);
+    if (n <= 0) {
+        return std::wstring();
+    }
+    std::wstring w((size_t) n, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.data(), (int) s.size(), &w[0], n);
+    return w;
+}
+
+static std::string windows_wide_to_utf8(const wchar_t * s, int len /* -1 for NUL-terminated */) {
+    int n = WideCharToMultiByte(CP_UTF8, 0, s, len, NULL, 0, NULL, NULL);
+    if (n <= 0) {
+        return std::string();
+    }
+    std::string out((size_t) n, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, s, len, &out[0], n, NULL, NULL);
+    if (len == -1 && !out.empty() && out.back() == '\0') {
+        out.pop_back(); // drop the terminator WideCharToMultiByte counts for -1
+    }
+    return out;
+}
+#endif
+
+static std::string mcp_resolve_command(const std::string & command) {
+#if defined(_WIN32)
+    // For Windows: make sure we handle ".exe" correctly, as well as UTF-8
+    std::wstring wcmd = windows_utf8_to_wide(command);
+    wchar_t      buf[MAX_PATH * 4];
+    const DWORD  cap = (DWORD) (sizeof(buf) / sizeof(buf[0]));
+
+    auto search = [&](const wchar_t * ext) -> std::string {
+        DWORD n = SearchPathW(NULL, wcmd.c_str(), ext, cap, buf, NULL);
+        return (n > 0 && n < cap) ? windows_wide_to_utf8(buf, (int) n) : std::string();
+    };
+
+    std::string found = search(NULL); // exact path / already-extensioned / .exe on PATH
+    if (!found.empty()) {
+        return found;
+    }
+
+    std::wstring pathext;
+    DWORD        need = GetEnvironmentVariableW(L"PATHEXT", NULL, 0);
+    if (need > 0) {
+        pathext.resize(need);
+        DWORD got = GetEnvironmentVariableW(L"PATHEXT", &pathext[0], need);
+        pathext.resize(got);
+    }
+    if (pathext.empty()) {
+        pathext = L".COM;.EXE;.BAT;.CMD";
+    }
+    for (size_t start = 0; start <= pathext.size();) {
+        size_t       sep = pathext.find(L';', start);
+        std::wstring ext = pathext.substr(start, sep == std::wstring::npos ? std::wstring::npos : sep - start);
+        if (!ext.empty()) {
+            found = search(ext.c_str());
+            if (!found.empty()) {
+                return found;
+            }
+        }
+        if (sep == std::wstring::npos) {
+            break;
+        }
+        start = sep + 1;
+    }
+    return command; // give up and let subprocess.h report the spawn error
+#else
+    return command;
+#endif // _WIN32
+}
+
 static std::vector<std::string> mcp_parent_env() {
     std::vector<std::string> env;
 #if defined(_WIN32)
-    LPCH block = GetEnvironmentStringsA();
+    LPWCH block = GetEnvironmentStringsW();
     if (block) {
-        for (LPCH e = block; *e; e += strlen(e) + 1) {
-            env.emplace_back(e);
+        for (LPWCH e = block; *e; e += wcslen(e) + 1) {
+            env.emplace_back(windows_wide_to_utf8(e, -1));
         }
-        FreeEnvironmentStringsA(block);
+        FreeEnvironmentStringsW(block);
     }
 #else
     if (environ) {
@@ -266,6 +424,8 @@ static std::vector<std::string> mcp_build_env(const std::map<std::string, std::s
 server_mcp_stdio::server_mcp_stdio(const server_mcp_server_config & config) : config(config) {
     name = config.name;
     timeout_ms = config.timeout_ms;
+    // bound the reply queue: send_rpc only drains during a call, so unsolicited notifications would otherwise grow it without limit
+    from_server.max_size = 65536;
 }
 
 server_mcp_stdio::~server_mcp_stdio() {
@@ -274,7 +434,7 @@ server_mcp_stdio::~server_mcp_stdio() {
 
 bool server_mcp_stdio::start() {
     std::vector<std::string> argv_s;
-    argv_s.push_back(config.command);
+    argv_s.push_back(mcp_resolve_command(config.command));
     argv_s.insert(argv_s.end(), config.args.begin(), config.args.end());
 
     int options = subprocess_option_no_window | subprocess_option_search_user_path;
@@ -327,33 +487,77 @@ bool server_mcp_stdio::is_alive() const {
 }
 
 void server_mcp_stdio::reader_loop() {
-    std::string buf;
-    char chunk[4096];
-    for (;;) {
-        size_t n = fread(chunk, 1, sizeof(chunk), proc->out);
-        if (n == 0) {
-            break; // EOF or error
-        }
-        buf.append(chunk, n);
-
-        size_t pos;
-        while ((pos = buf.find('\n')) != std::string::npos) {
-            std::string line = buf.substr(0, pos);
-            buf.erase(0, pos + 1);
-            if (!line.empty() && line.back() == '\r') {
-                line.pop_back();
-            }
-            if (line.empty()) {
-                continue;
-            }
-            if (!from_server.write(std::move(line))) {
-                return; // consumer gone
-            }
-        }
-    }
+    mcp_pump_ndjson(proc->out, running, [this](std::string && line) {
+        return from_server.write(std::move(line)); // false => consumer gone, stop
+    });
     running.store(false);
     to_server.close_write();   // stop the writer
     from_server.close_write(); // EOF to any waiting caller
+}
+
+// write all of `data` to child stdin, non-blocking and polled so teardown never hangs (a grandchild can hold the read end of a full pipe open). returns false on error/close/shutdown.
+static bool mcp_write_all(FILE * f, const std::string & data, std::atomic<bool> & running) {
+    if (!f) {
+        return false;
+    }
+    size_t total = 0;
+#if defined(_WIN32)
+    HANDLE h      = (HANDLE) _get_osfhandle(_fileno(f));
+    DWORD  nowait = PIPE_NOWAIT;
+    SetNamedPipeHandleState(h, &nowait, NULL, NULL);
+    while (total < data.size() && running.load()) {
+        DWORD written = 0;
+        BOOL  ok      = WriteFile(h, data.data() + total, (DWORD) (data.size() - total), &written, NULL);
+        if (ok && written > 0) {
+            total += written;
+            continue;
+        }
+        if (!ok) {
+            DWORD err = GetLastError();
+            if (err != ERROR_NO_DATA && err != ERROR_PIPE_BUSY) {
+                return false;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+#else
+    int fd = fileno(f);
+    int fl = fcntl(fd, F_GETFL, 0);
+    if (fl >= 0) {
+        fcntl(fd, F_SETFL, fl | O_NONBLOCK);
+    }
+    while (total < data.size() && running.load()) {
+        ssize_t n = write(fd, data.data() + total, data.size() - total);
+        if (n > 0) {
+            total += (size_t) n;
+            continue;
+        }
+        if (n == 0) {
+            return false;
+        }
+        if (errno == EINTR) {
+            continue;
+        }
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            return false;
+        }
+        struct pollfd pfd;
+        pfd.fd      = fd;
+        pfd.events  = POLLOUT;
+        pfd.revents = 0;
+        int pr      = poll(&pfd, 1, 50);
+        if (pr < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return false;
+        }
+        if (pfd.revents & (POLLERR | POLLNVAL | POLLHUP)) {
+            return false;
+        }
+    }
+#endif
+    return total == data.size();
 }
 
 void server_mcp_stdio::writer_loop() {
@@ -361,8 +565,8 @@ void server_mcp_stdio::writer_loop() {
     std::string msg;
     while (to_server.read(msg, should_stop)) {
         msg.push_back('\n');
-        if (fwrite(msg.data(), 1, msg.size(), proc->in) != msg.size() || fflush(proc->in) != 0) {
-            break; // child gone
+        if (!mcp_write_all(proc->in, msg, running)) {
+            break; // child gone or shutting down
         }
     }
     running.store(false);
@@ -372,35 +576,18 @@ void server_mcp_stdio::writer_loop() {
 
 void server_mcp_stdio::errlog_loop() {
     static constexpr size_t ERR_TAIL_MAX = 4096;
-    std::string buf;
-    char chunk[4096];
-    for (;;) {
-        size_t n = fread(chunk, 1, sizeof(chunk), proc->err);
-        if (n == 0) {
-            break;
+    // drain stderr (an undrained pipe blocks the child):
+    // log it, and keep a bounded tail for reporting when the server dies
+    mcp_pump_ndjson(proc->err, running, [this](std::string && line) {
+        SRV_DBG("MCP '%s' stderr: %s\n", name.c_str(), line.c_str());
+        std::lock_guard<std::mutex> lk(err_mu);
+        err_tail += line;
+        err_tail += '\n';
+        if (err_tail.size() > ERR_TAIL_MAX) {
+            err_tail.erase(0, err_tail.size() - ERR_TAIL_MAX);
         }
-        buf.append(chunk, n);
-
-        size_t pos;
-        while ((pos = buf.find('\n')) != std::string::npos) {
-            std::string line = buf.substr(0, pos);
-            buf.erase(0, pos + 1);
-            if (!line.empty() && line.back() == '\r') {
-                line.pop_back();
-            }
-            if (line.empty()) {
-                continue;
-            }
-            SRV_DBG("MCP '%s' stderr: %s\n", name.c_str(), line.c_str());
-
-            std::lock_guard<std::mutex> lk(err_mu);
-            err_tail += line;
-            err_tail += '\n';
-            if (err_tail.size() > ERR_TAIL_MAX) {
-                err_tail.erase(0, err_tail.size() - ERR_TAIL_MAX);
-            }
-        }
-    }
+        return true;
+    });
 }
 
 void server_mcp_stdio::join_pumps() {
@@ -427,9 +614,6 @@ void server_mcp_stdio::join_pumps() {
 //
 
 static constexpr int MCP_COOLDOWN_SECONDS = 5;
-
-server_mcp::server_mcp(std::vector<server_mcp_server_config> configs)
-    : configs(std::move(configs)) {}
 
 server_mcp::~server_mcp() {
     shutdown();
@@ -464,7 +648,35 @@ const server_mcp_server_config * server_mcp::find_config(const std::string & nam
     return nullptr;
 }
 
-void server_mcp::start() {
+void server_mcp::start(const common_params & params) {
+    auto append = [this](const std::string & json_str) {
+        try {
+            auto parsed = server_mcp_server_config::parse_from_json(json_str);
+            if (parsed.empty()) {
+                SRV_WRN("%s", "MCP config: no servers found in JSON\n");
+            }
+            configs.insert(configs.end(), std::make_move_iterator(parsed.begin()), std::make_move_iterator(parsed.end()));
+        } catch (const std::exception & e) {
+            throw std::runtime_error(std::string("failed to parse MCP config JSON: ") + e.what());
+        }
+    };
+    if (!params.mcp_servers_config.empty()) {
+        std::ifstream f = fs_open_ifstream(params.mcp_servers_config, std::ios::in);
+        if (!f) {
+            throw std::runtime_error("failed to open MCP config file: " + params.mcp_servers_config);
+        }
+        std::stringstream ss;
+        ss << f.rdbuf();
+        append(ss.str());
+    }
+    if (!params.mcp_servers_json.empty()) {
+        append(params.mcp_servers_json);
+    }
+
+    if (configs.empty()) {
+        return;
+    }
+
     auto should_stop = [this]() { return stopping.load(); };
 
     std::vector<server_mcp_tool_def> discovered;

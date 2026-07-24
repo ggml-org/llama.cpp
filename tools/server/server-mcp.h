@@ -24,8 +24,7 @@ struct server_mcp_server_config {
     std::string cwd;
     int timeout_ms = 30000; // per-tool-call timeout
 
-    // from_file/from_json throw on I/O or parse errors; a missing "mcpServers" yields an empty list, and entries without a "command" are skipped
-    static std::vector<server_mcp_server_config> parse_from_file(const std::string & path);
+    // throw on parse errors; missing "mcpServers" yields an empty list; entries without a "command" are skipped
     static std::vector<server_mcp_server_config> parse_from_json(const std::string & json_str);
     static std::vector<server_mcp_server_config> parse_cursor_format(const json & j);
 };
@@ -44,8 +43,8 @@ struct server_mcp_tool_def {
 //   caller --send_rpc--> to_server   --[writer]--> framing --> server
 //   caller <--send_rpc-- from_server <--[reader]-- framing <-- server
 //
-// Each queue item is one complete serialized JSON message
-// A subclass owns the byte I/O and framing (stdio: NDJSON); the base owns json (parse/dump) and the JSON-RPC session (handshake, id correlation).
+// each queue item is one complete serialized JSON message.
+// subclass owns byte I/O and framing; base owns JSON and the JSON-RPC session (handshake, id correlation).
 //
 
 struct server_mcp_transport {
@@ -70,7 +69,7 @@ struct server_mcp_transport {
                    const std::function<bool()> & should_stop);
 
 protected:
-    // per-transport, not shared: send_rpc() holds it across the wait for a reply, so a shared lock would stall every server behind one slow call all members below are touched only under it
+    // per-transport: send_rpc() holds it across the reply wait, so sharing it would stall every server behind one slow call. guards all members below.
     std::mutex rpc_mutex;
     uint64_t next_id = 1; // reset to 1 per (re)spawn
     bool initialized = false;
@@ -79,11 +78,11 @@ protected:
 
     // both assume rpc_mutex is already held by the public caller
     bool ensure_init(const std::function<bool()> & should_stop); // initialize handshake, once
-    json send_rpc(const json & request, const std::function<bool()> & should_stop); // returns the reply, or an {"error": ...} object
+    json send_rpc(const json & request, const std::function<bool()> & should_stop); // returns the reply or an {"error": ...}
 };
 
 //
-// server_mcp_stdio: child process, NDJSON JSON-RPC over stdio (stderr inherited)
+// server_mcp_stdio: child process, NDJSON JSON-RPC over stdio (stderr drained to the debug log)
 //
 
 struct server_mcp_stdio : server_mcp_transport {
@@ -120,32 +119,40 @@ private:
 
 //
 // server_mcp
-// manager lives inside main_server(); declare it before the HTTP context so it outlives every /tools handler.
+// declare before the HTTP context so it outlives every /tools handler.
 //
 
 class server_mcp {
 public:
-    explicit server_mcp(std::vector<server_mcp_server_config> configs);
+    server_mcp() = default;
     ~server_mcp();
 
-    // spawn each server once, list its tools, shut it down. failures are logged, not fatal.
-    void start();
+    // parse the MCP config from params (file and/or inline JSON),
+    // then spawn each server once,  list its tools, and shut it down
+    // throws on config parse errors; spawn failures are logged.
+    void start(const common_params & params);
+
+    // true until start() has parsed at least one server from the config
+    bool empty() const { return configs.empty(); }
 
     std::vector<server_mcp_tool_def> list_tools() const;
 
-    // lazily (re)spawns the transport. returns the MCP result or an {"error": ...} object. should_stop is OR-ed with the manager's cancel flag.
+    // lazily (re)spawns the transport. returns the MCP result or an {"error": ...}. should_stop is OR-ed with the manager's cancel flag.
     json call_tool(const std::string & server_name,
                    const std::string & tool_name,
                    const json & arguments,
                    const std::function<bool()> & should_stop = nullptr);
 
     // flip the cancel flag so in-flight calls return; blocking teardown is in the destructor. call before the HTTP server drains.
+    // note: multiple calls are idempotent
     void shutdown();
 
 private:
     std::vector<server_mcp_server_config> configs;
 
     mutable std::mutex mutex; // guards transports, dead_servers, registry
+
+    // shared_ptr: call_tool() hands a transport to the caller and drops the lock for the blocking RPC, so a concurrent evict/respawn must not destroy it mid-call
     std::map<std::string, std::shared_ptr<server_mcp_transport>> transports;
     std::map<std::string, std::chrono::steady_clock::time_point> dead_servers; // spawn-failure cooldown
     std::vector<server_mcp_tool_def> registry;

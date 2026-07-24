@@ -393,6 +393,10 @@ struct server_pipe {
     std::atomic<bool> writer_closed{false};
     std::atomic<bool> reader_closed{false};
 
+    // 0 = unbounded (default)
+    // > 0, write() drops the oldest item once the queue is full
+    size_t max_size = 0;
+
     void close_write() {
         writer_closed.store(true, std::memory_order_relaxed);
         cv.notify_all();
@@ -427,6 +431,11 @@ struct server_pipe {
         std::lock_guard<std::mutex> lk(mutex);
         if (reader_closed.load()) {
             return false; // broken pipe
+        }
+        if (max_size > 0) {
+            while (queue.size() >= max_size) {
+                queue.pop(); // drop oldest to stay bounded
+            }
         }
         queue.push(std::move(data));
         cv.notify_one();
