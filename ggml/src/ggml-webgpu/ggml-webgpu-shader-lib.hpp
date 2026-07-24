@@ -73,11 +73,6 @@ inline bool ggml_webgpu_tensor_equal(const ggml_tensor * a, const ggml_tensor * 
     return a->buffer == b->buffer && ggml_webgpu_tensor_addr(a) == ggml_webgpu_tensor_addr(b);
 }
 
-inline bool ggml_webgpu_tensor_overlap(const ggml_tensor * a, const ggml_tensor * b) {
-    return a->buffer == b->buffer && ggml_webgpu_tensor_addr(a) < ggml_webgpu_tensor_addr(b) + ggml_nbytes(b) &&
-           ggml_webgpu_tensor_addr(b) < ggml_webgpu_tensor_addr(a) + ggml_nbytes(a);
-}
-
 struct ggml_webgpu_shader_lib_context {
     ggml_tensor * src0;
     ggml_tensor * src1;
