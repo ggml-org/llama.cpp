@@ -6062,6 +6062,71 @@ struct test_topk_moe : public test_case {
     }
 };
 
+struct test_moe_weighted_reduction : public test_case {
+    const int64_t n_embd;
+    const int64_t n_expert_used;
+    const int64_t n_tokens;
+    const bool unaligned_experts;
+    const bool with_expert_scale;
+
+    test_moe_weighted_reduction(
+            int64_t n_embd, int64_t n_expert_used, int64_t n_tokens,
+            bool unaligned_experts = false, bool with_expert_scale = false) :
+        n_embd(n_embd), n_expert_used(n_expert_used), n_tokens(n_tokens),
+        unaligned_experts(unaligned_experts), with_expert_scale(with_expert_scale) {}
+
+    std::string vars() override {
+        return VARS_TO_STR5(n_embd, n_expert_used, n_tokens, unaligned_experts, with_expert_scale);
+    }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MOE_WEIGHTED_REDUCTION";
+    }
+
+    bool run_whole_graph() override { return true; }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * experts;
+        if (unaligned_experts) {
+            ggml_tensor * storage = ggml_new_tensor_1d(
+                ctx, GGML_TYPE_F32, n_embd * n_expert_used * n_tokens + 1);
+            ggml_set_name(storage, "experts_storage");
+            experts = ggml_view_3d(ctx, storage, n_embd, n_expert_used, n_tokens,
+                n_embd * sizeof(float), n_embd * n_expert_used * sizeof(float), sizeof(float));
+        } else {
+            experts = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd, n_expert_used, n_tokens);
+        }
+        ggml_set_name(experts, "experts");
+        ggml_tensor * weights = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 1, n_expert_used, n_tokens);
+        ggml_set_name(weights, "weights");
+
+        ggml_tensor * scaled = experts;
+        if (with_expert_scale) {
+            ggml_tensor * expert_scale = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 1, n_expert_used, n_tokens);
+            ggml_set_name(expert_scale, "expert_scale");
+            scaled = ggml_mul(ctx, experts, expert_scale);
+            ggml_set_name(scaled, "scaled_experts");
+        }
+
+        ggml_tensor * weighted = ggml_mul(ctx, scaled, weights);
+        ggml_set_name(weighted, "weighted_experts");
+
+        std::vector<ggml_tensor *> views(n_expert_used);
+        for (int64_t expert = 0; expert < n_expert_used; ++expert) {
+            views[expert] = ggml_view_2d(
+                ctx, weighted, n_embd, n_tokens, weighted->nb[2], expert * weighted->nb[1]);
+        }
+
+        ggml_tensor * out = views[0];
+        for (int64_t expert = 1; expert < n_expert_used; ++expert) {
+            out = ggml_add(ctx, out, views[expert]);
+        }
+        ggml_set_name(out, "moe_weighted_reduction");
+        return out;
+    }
+};
+
 struct test_mul_mat_vec_fusion : public test_case {
     const ggml_type type;
     const ggml_glu_op glu_op;
@@ -9604,6 +9669,25 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             }
         }
     }
+
+    // Exercise every per-k templated dispatch, including scalar/vector and scaled/unscaled variants.
+    test_cases.emplace_back(new test_moe_weighted_reduction(63,  2, 17));
+    test_cases.emplace_back(new test_moe_weighted_reduction(256, 3, 33));
+    test_cases.emplace_back(new test_moe_weighted_reduction(256, 4, 33));
+    test_cases.emplace_back(new test_moe_weighted_reduction(256, 4, 33, true));
+    test_cases.emplace_back(new test_moe_weighted_reduction(63,  5, 17, false, true));
+    test_cases.emplace_back(new test_moe_weighted_reduction(256, 6, 33, true));
+    test_cases.emplace_back(new test_moe_weighted_reduction(256, 7, 33, false, true));
+    test_cases.emplace_back(new test_moe_weighted_reduction(2048, 8, 128));
+    test_cases.emplace_back(new test_moe_weighted_reduction(2048, 8, 128, false, true));
+    test_cases.emplace_back(new test_moe_weighted_reduction(63,  4, 17,  true,  true));
+    // n_expert_used in 9..15 exercises the runtime-k (dynk) kernels: float4 + scalar, scaled + unscaled.
+    test_cases.emplace_back(new test_moe_weighted_reduction(2048, 9,  65));                // f32x4 dynk, unscaled
+    test_cases.emplace_back(new test_moe_weighted_reduction(2048, 15, 40, false, true));   // f32x4 dynk, scaled (max fusable k: 31-node subgraph)
+    test_cases.emplace_back(new test_moe_weighted_reduction(256,  9,  48, true,  false));  // scalar dynk (unaligned), unscaled
+    test_cases.emplace_back(new test_moe_weighted_reduction(63,   12, 33, true,  true));   // scalar dynk (n_embd%4!=0), scaled
+    // n_expert_used > 15 exceeds ggml_can_fuse_subgraph's 32-node limit: must fall back cleanly (no crash).
+    test_cases.emplace_back(new test_moe_weighted_reduction(2048, 16, 32, false, true));   // not fused; correctness via the per-op path
 
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 1, 1));
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 16, 1, 1));
