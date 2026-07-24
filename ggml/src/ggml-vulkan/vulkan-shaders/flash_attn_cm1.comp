@@ -64,7 +64,9 @@ shared ACC_TYPE slope[Br];
 
 void main() {
 #ifdef NEEDS_INIT_IQ_SHMEM
-    init_iq_shmem(gl_WorkGroupSize);
+    if (fa_type_needs_shmem(FaTypeK) || fa_type_needs_shmem(FaTypeV)) {
+        init_iq_shmem(gl_WorkGroupSize);
+    }
 #endif
 
     init_indices();

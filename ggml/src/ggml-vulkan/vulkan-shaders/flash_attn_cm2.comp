@@ -46,6 +46,7 @@ float16_t faDecodeK(const decodeBufFA_K bl_in, const uint blockCoords[2], const 
         case FA_TYPE_Q5_0: return dequantFuncQ5_0(decodeBufQ5_0(bl_in), blockCoords, coordInBlock);
         case FA_TYPE_Q5_1: return dequantFuncQ5_1(decodeBufQ5_1(bl_in), blockCoords, coordInBlock);
         case FA_TYPE_Q8_0: return dequantFuncQ8_0(decodeBufQ8_0(bl_in), blockCoords, coordInBlock);
+        case FA_TYPE_IQ4_NL: return dequantFuncIQ4_NL(decodeBufIQ4_NL(bl_in), blockCoords, coordInBlock);
         case FA_TYPE_Q1_0: return dequantFuncQ1_0(decodeBufQ1_0(bl_in), blockCoords, coordInBlock);
         default: return float16_t(0);
     }
@@ -59,6 +60,7 @@ float16_t faDecodeV(const decodeBufFA_V bl_in, const uint blockCoords[2], const 
         case FA_TYPE_Q5_0: return dequantFuncQ5_0(decodeBufQ5_0(bl_in), blockCoords, coordInBlock);
         case FA_TYPE_Q5_1: return dequantFuncQ5_1(decodeBufQ5_1(bl_in), blockCoords, coordInBlock);
         case FA_TYPE_Q8_0: return dequantFuncQ8_0(decodeBufQ8_0(bl_in), blockCoords, coordInBlock);
+        case FA_TYPE_IQ4_NL: return dequantFuncIQ4_NL(decodeBufIQ4_NL(bl_in), blockCoords, coordInBlock);
         case FA_TYPE_Q1_0: return dequantFuncQ1_0(decodeBufQ1_0(bl_in), blockCoords, coordInBlock);
         default: return float16_t(0);
     }
@@ -67,26 +69,28 @@ float16_t faDecodeV(const decodeBufFA_V bl_in, const uint blockCoords[2], const 
 // V=4 vector decode for K/V; dispatches to per-format _v decoders.
 f16vec4 faDecodeKVector(const decodeBufFA_K bl_in, const uint blockCoords[2], const uint coordInBlock[2]) {
     switch (FaTypeK) {
-        case 0u: return f16vec4(decodeBufF32(bl_in).block);
-        case 2u: return dequantFuncQ4_0_v(decodeBufQ4_0(bl_in), blockCoords, coordInBlock);
-        case 3u: return dequantFuncQ4_1_v(decodeBufQ4_1(bl_in), blockCoords, coordInBlock);
-        case 6u: return dequantFuncQ5_0_v(decodeBufQ5_0(bl_in), blockCoords, coordInBlock);
-        case 7u: return dequantFuncQ5_1_v(decodeBufQ5_1(bl_in), blockCoords, coordInBlock);
-        case 8u: return dequantFuncQ8_0_v(decodeBufQ8_0(bl_in), blockCoords, coordInBlock);
-        case 41u: return dequantFuncQ1_0_v(decodeBufQ1_0(bl_in), blockCoords, coordInBlock);
+        case FA_TYPE_F32: return f16vec4(decodeBufF32(bl_in).block);
+        case FA_TYPE_Q4_0: return dequantFuncQ4_0_v(decodeBufQ4_0(bl_in), blockCoords, coordInBlock);
+        case FA_TYPE_Q4_1: return dequantFuncQ4_1_v(decodeBufQ4_1(bl_in), blockCoords, coordInBlock);
+        case FA_TYPE_Q5_0: return dequantFuncQ5_0_v(decodeBufQ5_0(bl_in), blockCoords, coordInBlock);
+        case FA_TYPE_Q5_1: return dequantFuncQ5_1_v(decodeBufQ5_1(bl_in), blockCoords, coordInBlock);
+        case FA_TYPE_Q8_0: return dequantFuncQ8_0_v(decodeBufQ8_0(bl_in), blockCoords, coordInBlock);
+        case FA_TYPE_IQ4_NL: return dequantFuncIQ4_NL_v(decodeBufIQ4_NL(bl_in), blockCoords, coordInBlock);
+        case FA_TYPE_Q1_0: return dequantFuncQ1_0_v(decodeBufQ1_0(bl_in), blockCoords, coordInBlock);
         default: return f16vec4(0);
     }
 }
 
 f16vec4 faDecodeVVector(const decodeBufFA_V bl_in, const uint blockCoords[2], const uint coordInBlock[2]) {
     switch (FaTypeV) {
-        case 0u: return f16vec4(decodeBufF32(bl_in).block);
-        case 2u: return dequantFuncQ4_0_v(decodeBufQ4_0(bl_in), blockCoords, coordInBlock);
-        case 3u: return dequantFuncQ4_1_v(decodeBufQ4_1(bl_in), blockCoords, coordInBlock);
-        case 6u: return dequantFuncQ5_0_v(decodeBufQ5_0(bl_in), blockCoords, coordInBlock);
-        case 7u: return dequantFuncQ5_1_v(decodeBufQ5_1(bl_in), blockCoords, coordInBlock);
-        case 8u: return dequantFuncQ8_0_v(decodeBufQ8_0(bl_in), blockCoords, coordInBlock);
-        case 41u: return dequantFuncQ1_0_v(decodeBufQ1_0(bl_in), blockCoords, coordInBlock);
+        case FA_TYPE_F32: return f16vec4(decodeBufF32(bl_in).block);
+        case FA_TYPE_Q4_0: return dequantFuncQ4_0_v(decodeBufQ4_0(bl_in), blockCoords, coordInBlock);
+        case FA_TYPE_Q4_1: return dequantFuncQ4_1_v(decodeBufQ4_1(bl_in), blockCoords, coordInBlock);
+        case FA_TYPE_Q5_0: return dequantFuncQ5_0_v(decodeBufQ5_0(bl_in), blockCoords, coordInBlock);
+        case FA_TYPE_Q5_1: return dequantFuncQ5_1_v(decodeBufQ5_1(bl_in), blockCoords, coordInBlock);
+        case FA_TYPE_Q8_0: return dequantFuncQ8_0_v(decodeBufQ8_0(bl_in), blockCoords, coordInBlock);
+        case FA_TYPE_IQ4_NL: return dequantFuncIQ4_NL_v(decodeBufIQ4_NL(bl_in), blockCoords, coordInBlock);
+        case FA_TYPE_Q1_0: return dequantFuncQ1_0_v(decodeBufQ1_0(bl_in), blockCoords, coordInBlock);
         default: return f16vec4(0);
     }
 }
@@ -169,6 +173,12 @@ ACC_TYPE perElemOpNonGqaSplitKStoreCol0(const in uint32_t r, const in uint32_t c
 }
 
 void main() {
+#ifdef NEEDS_INIT_IQ_SHMEM
+    if (fa_type_needs_shmem(FaTypeK) || fa_type_needs_shmem(FaTypeV)) {
+        init_iq_shmem(gl_WorkGroupSize);
+    }
+#endif
+
     init_indices();
 
     tensorLayoutNV<2, gl_CooperativeMatrixClampModeConstantNV> tensorLayoutQ = createTensorLayoutNV(2, gl_CooperativeMatrixClampModeConstantNV);
