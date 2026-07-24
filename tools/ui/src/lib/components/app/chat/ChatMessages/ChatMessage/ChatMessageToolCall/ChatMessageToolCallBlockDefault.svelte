@@ -29,11 +29,10 @@
 	let { section, open, isStreaming, attachments, onToggle }: Props = $props();
 
 	const title = $derived(getBuiltinToolUi(section.toolName)?.label ?? section.toolName ?? '');
-
-	const parsedLines: ToolResultLine[] = $derived(
+	const outputKind = $derived(classifyToolResult(section.toolResult));
+	const parsedLines = $derived(
 		section.toolResult ? parseToolResultWithImages(section.toolResult, attachments) : []
 	);
-	const outputKind = $derived(classifyToolResult(section.toolResult));
 </script>
 
 <ToolCallBlock {section} {open} {isStreaming} meta={null} {title} {onToggle}>

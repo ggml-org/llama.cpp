@@ -145,9 +145,22 @@ const doEscapeMhchem = false;
  * preprocessLaTeX("Price: $10. The equation is \\(x^2\\).")
  * // → "Price: $10. The equation is $x^2$."
  */
+/** Bounded cache for preprocessLaTeX results. */
+const LATEX_CACHE_MAX_SIZE = 64;
+const latexCache = new Map<string, string>();
+
 export function preprocessLaTeX(content: string): string {
 	// See also:
 	// https://github.com/danny-avila/LibreChat/blob/main/client/src/utils/latex.ts
+
+	// Memoize on the input string. During streaming the prefix before an
+	// incomplete code block stays the same across multiple tokens, so the
+	// full protect/restore pipeline would re-run unnecessarily.
+	const cached = latexCache.get(content);
+	if (cached) return cached;
+
+	// Save original before the function mutates `content` through steps 0-8
+	const originalContent = content;
 
 	// Every step below keys off a `$` or a backslash escape (\[ \] \( \) \ce{ \pu{).
 	// With neither present the protect/restore passes round-trip the input
@@ -155,6 +168,10 @@ export function preprocessLaTeX(content: string): string {
 	// ~90ms on a 26KB single-line message that contains no math at all. This
 	// matters during streaming, where the whole message is reprocessed per frame.
 	if (!LATEX_TRIGGER_REGEXP.test(content)) {
+		if (latexCache.size >= LATEX_CACHE_MAX_SIZE) {
+			latexCache.delete(latexCache.keys().next().value!);
+		}
+		latexCache.set(originalContent, content);
 		return content;
 	}
 
@@ -282,6 +299,11 @@ export function preprocessLaTeX(content: string): string {
 		});
 		content = restoredLines.join('\n');
 	}
+
+	if (latexCache.size >= LATEX_CACHE_MAX_SIZE) {
+		latexCache.delete(latexCache.keys().next().value!);
+	}
+	latexCache.set(originalContent, content);
 
 	return content;
 }
