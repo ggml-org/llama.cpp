@@ -11,7 +11,8 @@ from unittest import mock
 
 MODULE_PATH = Path(__file__).parent / "perf" / "bench_spec.py"
 SPEC = importlib.util.spec_from_file_location("bench_spec", MODULE_PATH)
-assert SPEC is not None and SPEC.loader is not None
+if SPEC is None or SPEC.loader is None:
+    raise RuntimeError(f"cannot load bench_spec harness: {MODULE_PATH}")
 BENCH_SPEC = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = BENCH_SPEC
 SPEC.loader.exec_module(BENCH_SPEC)

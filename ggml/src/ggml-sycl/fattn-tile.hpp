@@ -1088,7 +1088,7 @@ static void launch_fattn_tile_switch_ncols1(ggml_backend_sycl_context & ctx, ggm
                 const int nbatch_fa = ggml_sycl_fattn_tile_get_nbatch_fa(DKQ, DV, cols_per_block, cc);
                 launch_fattn<DV, cols_per_block/ncols2, ncols2,
                     flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size, type_K>, warp_size>
-                    (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false);
+                    (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false, true);
                 return;
             }
         }
@@ -1099,7 +1099,7 @@ static void launch_fattn_tile_switch_ncols1(ggml_backend_sycl_context & ctx, ggm
                 const int nbatch_fa = ggml_sycl_fattn_tile_get_nbatch_fa(DKQ, DV, cols_per_block, cc);
                 launch_fattn<DV, cols_per_block/ncols2, ncols2,
                     flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size, type_K>, warp_size>
-                    (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false);
+                    (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false, true);
                 return;
             }
         }
@@ -1110,7 +1110,7 @@ static void launch_fattn_tile_switch_ncols1(ggml_backend_sycl_context & ctx, ggm
                 const int nbatch_fa = ggml_sycl_fattn_tile_get_nbatch_fa(DKQ, DV, cols_per_block, cc);
                 launch_fattn<DV, cols_per_block/ncols2, ncols2,
                     flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size, type_K>, warp_size>
-                    (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false);
+                    (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false, true);
                 return;
             }
         }
@@ -1123,7 +1123,7 @@ static void launch_fattn_tile_switch_ncols1(ggml_backend_sycl_context & ctx, ggm
             const int nbatch_fa = ggml_sycl_fattn_tile_get_nbatch_fa(DKQ, DV, cols_per_block, cc);
             launch_fattn<DV, cols_per_block/ncols2, ncols2,
                 flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size, type_K>, warp_size>
-                (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false);
+                (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false, true);
             return;
         }
     }
@@ -1134,7 +1134,7 @@ static void launch_fattn_tile_switch_ncols1(ggml_backend_sycl_context & ctx, ggm
         const int nbatch_fa = ggml_sycl_fattn_tile_get_nbatch_fa(DKQ, DV, cols_per_block, cc);
         launch_fattn<DV, cols_per_block/ncols2, ncols2,
             flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size, type_K>, warp_size>
-            (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false);
+            (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false, true);
         return;
     }
 
@@ -1144,7 +1144,7 @@ static void launch_fattn_tile_switch_ncols1(ggml_backend_sycl_context & ctx, ggm
         const int nbatch_fa = ggml_sycl_fattn_tile_get_nbatch_fa(DKQ, DV, cols_per_block, cc);
         launch_fattn<DV, cols_per_block/ncols2, ncols2,
             flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size, type_K>, warp_size>
-            (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false);
+            (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false, true);
         return;
     }
 

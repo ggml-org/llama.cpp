@@ -1058,7 +1058,8 @@ static void lauch_kernel(
 template <int DV, int ncols1, int ncols2, fattn_kernel_t fattn_kernel, int warp_size>
 void launch_fattn(
     ggml_backend_sycl_context & ctx, ggml_tensor * dst, const int nwarps, const size_t nbytes_shared,
-    const int nbatch_fa, const bool need_f16_K, const bool need_f16_V, const bool stream_k) {
+    const int nbatch_fa, const bool need_f16_K, const bool need_f16_V, const bool stream_k,
+    const bool tile_route) {
 
     constexpr int ncols = ncols1 * ncols2;
 
@@ -1383,7 +1384,7 @@ void launch_fattn(
             ggml_sycl_tensor_is_kv_q8_quants_first(K) ||
             ggml_sycl_tensor_is_kv_q8_quants_first(V);
         ggml_sycl_fattn_profile_record(
-            need_f16_K || need_f16_V,
+            tile_route,
             quants_first,
             std::chrono::duration_cast<std::chrono::microseconds>(
                 profile_after_conversion - profile_start).count(),

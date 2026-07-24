@@ -279,6 +279,7 @@ def prepare_state(
     ctx_per_slot: int,
     request_timeout: float,
     health_timeout: float,
+    render_node: str,
 ) -> str | None:
     if depth == 0:
         return None
@@ -286,7 +287,7 @@ def prepare_state(
     state_path = state_dir / filename
     if state_path.is_file() and state_path.stat().st_size > 0:
         return filename
-    check_sole_tenancy("/dev/dri/renderD128")
+    check_sole_tenancy(render_node)
     base_url = f"http://127.0.0.1:{port}"
     command = server_command(server_bin, model, state_dir, port, parallel, ctx_per_slot)
     log_path = state_dir / f"prepare-depth-{depth}-p{parallel}.log"
@@ -456,10 +457,9 @@ def main() -> int:
     before_faults = dmesg_faults(since)
     for parallel in parallels:
         for depth in depths:
-            print(f"[state p={parallel} d={depth}]", flush=True)
             prepare_state(
                 server_bin, model, state_dir, depth, parallel, args.port, args.ctx_per_slot,
-                args.request_timeout, args.health_timeout,
+                args.request_timeout, args.health_timeout, args.render_node,
             )
 
     samples: list[dict[str, Any]] = []
