@@ -53,7 +53,7 @@ To see what it might look like visually, here's an old demo of an interactive se
 https://user-images.githubusercontent.com/271616/225014776-1d567049-ad71-4ef2-b050-55b0b3b9274c.mp4
 
 ## Cross-compile CLI using Android NDK
-It's possible to build `llama.cpp` for Android on your host system via CMake and the Android NDK. If you are interested in this path, ensure you already have an environment prepared to cross-compile programs for Android (i.e., install the Android SDK). Note that, unlike desktop environments, the Android environment ships with a limited set of native libraries, and so only those libraries are available to CMake when building with the Android NDK (see: https://developer.android.com/ndk/guides/stable_apis.)
+It's possible to build `llama.cpp` for Android on your host system via CMake and the Android NDK. If you are interested in this path, ensure you already have an environment prepared to cross-compile programs for Android (i.e., install the Android SDK/NDK and set `ANDROID_NDK` to the NDK root). Note that, unlike desktop environments, the Android environment ships with a limited set of native libraries, and so only those libraries are available to CMake when building with the Android NDK (see: https://developer.android.com/ndk/guides/stable_apis.)
 
 Once you're ready and have cloned `llama.cpp`, invoke the following in the project directory:
 
@@ -62,18 +62,22 @@ $ cmake \
   -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK/build/cmake/android.toolchain.cmake \
   -DANDROID_ABI=arm64-v8a \
   -DANDROID_PLATFORM=android-28 \
-  -DCMAKE_C_FLAGS="-march=armv8.7a" \
-  -DCMAKE_CXX_FLAGS="-march=armv8.7a" \
+  -DGGML_NATIVE=OFF \
   -DGGML_OPENMP=OFF \
   -DGGML_LLAMAFILE=OFF \
+  -DLLAMA_OPENSSL=OFF \
   -B build-android
 ```
 
 Notes:
+  - `GGML_NATIVE=OFF` is required for cross-compilation because the host CPU is not the Android target CPU
   - While later versions of Android NDK ship with OpenMP, it must still be installed by CMake as a dependency, which is not supported at this time
   - `llamafile` does not appear to support Android devices (see: https://github.com/Mozilla-Ocho/llamafile/issues/325)
+  - `LLAMA_OPENSSL=OFF` avoids depending on OpenSSL, which is not part of the Android NDK stable native API set
 
-The above command should configure `llama.cpp` with the most performant options for modern devices. Even if your device is not running `armv8.7a`, `llama.cpp` includes runtime checks for available CPU features it can use.
+The above command configures a portable Android `arm64-v8a` build. Do not add a global `-march` flag unless you intentionally want to raise the baseline instruction set for every compiled source.
+
+For optional KleidiAI acceleration on Android `arm64-v8a`, see the [Arm KleidiAI section in build.md](./build.md#arm-kleidiai).
 
 Feel free to adjust the Android ABI for your target. Once the project is configured:
 
