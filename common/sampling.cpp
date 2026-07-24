@@ -302,11 +302,28 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
             params.reasoning_budget_start,
             params.reasoning_budget_end,
             params.reasoning_budget_forced,
-            params.reasoning_budget_tokens < 0 ? INT_MAX : params.reasoning_budget_tokens);
+            params.reasoning_budget_soft_forced,
+            params.reasoning_budget_intro_forced,
+            params.reasoning_budget_tokens < 0 ? INT_MAX : params.reasoning_budget_tokens,
+            params.reasoning_budget_soft_ratio,
+            params.reasoning_budget_grace_tokens);
 
         for (const auto & token : prefill_tokens) {
             llama_sampler_accept(rbudget, token);
             LOG_DBG("%s: reasoning-budget accepted prefill token (%d)\n", __func__, token);
+
+            // Some chat templates bake the start tag (and trailing text, e.g. a
+            // newline right after "<think>") directly into the prefill. If that
+            // activates a forcing state here, any further prefill tokens are
+            // already-fixed prompt text, not live model output - feeding them
+            // in would be misread as the model having already emitted the start
+            // of the forced sequence, silently skipping ahead in it.
+            const auto state = common_reasoning_budget_get_state(rbudget);
+            if (state == REASONING_BUDGET_INTRO_FORCING ||
+                state == REASONING_BUDGET_SOFT_FORCING ||
+                state == REASONING_BUDGET_FORCING) {
+                break;
+            }
         }
     }
 

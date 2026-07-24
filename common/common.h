@@ -291,6 +291,16 @@ struct common_params_sampling {
     std::string              reasoning_budget_message;         // message injected before end tag when budget exhausted
     bool                     reasoning_control = false;        // create the budget sampler on demand so reasoning can be ended at runtime
 
+    float                     reasoning_budget_soft_ratio   = -1.0f; // <= 0 = disabled, (0,1] = fraction of budget at which to warn
+    std::vector<llama_token>  reasoning_budget_soft_forced;         // tokenized soft warning message (no end tag)
+    std::string               reasoning_budget_soft_message;        // soft warning message injected at the soft threshold
+
+    std::vector<llama_token>  reasoning_budget_intro_forced;        // tokenized intro message forced when the block starts (empty = disabled)
+    std::string               reasoning_budget_intro_message =      // intro message announcing the budget; supports a {budget} placeholder
+        "I'll keep this reasoning under {budget} tokens, so I'll stay focused and efficient. ";
+
+    int32_t                  reasoning_budget_grace_tokens = 0;    // <= 0 = force immediately, N>0 = wait up to N tokens for a paragraph break
+
     bool backend_sampling = false;
 
     bool has_logit_bias() const {

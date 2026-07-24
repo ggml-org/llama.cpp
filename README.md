@@ -1,3 +1,129 @@
+# llama-mindcontrol
+
+<img width="4753" height="1897" alt="Mindcontrol for Llama.cpp" src="https://github.com/user-attachments/assets/4c200417-100d-4153-89b1-17ddbe8e5dee" />
+
+A `llama.cpp` fork that extends the reasoning-budget sampler with staged, in-context budget signaling.
+
+## Problem
+### "But, wait..."
+
+Reasoning models generate an unbounded `<think>` block prior to their final answer, and the length and quality of that block are sensitive to sampling parameters. At the temperature and top-p/top-k settings needed to avoid degenerate, low-entropy output elsewhere in generation, the reasoning block is prone to failure modes that are distinct from ordinary sampling artifacts:
+
+- **Repetition loops** — the sampler re-enters a previously visited distribution over reasoning tokens, producing near-identical spans of text with no new information content.
+- **Non-convergent revision** — the model repeatedly re-opens a conclusion it has already reached (recurring "wait, actually..." / "but hold on..." transitions) without a stopping condition ever becoming more probable than continuing.
+- **Unbounded length** — absent an explicit stopping signal, nothing in the token distribution guarantees termination; the reasoning block can consume arbitrary context budget before (or without) closing.
+
+<img width="600" height="auto" alt="Overly-verbose reasoning chain" src="https://github.com/user-attachments/assets/d45acc3f-e713-4a27-81fb-0573f0a1967f" />
+
+
+The standard/naive mitigation is a hard token-count cutoff enforced by the sampler: once N tokens have been generated inside the reasoning block, `</think>` is forced regardless of position in the sequence. This bounds worst-case length but does not address any of the above — the cutoff has no dependency on the model's actual generation state and truncates at whatever token index it happens to hit, including mid-token-sequence for a partial word, mid-clause, or mid-computation. It suppresses the symptom (unbounded length) without altering the sampling behavior that produces the loop or the non-convergence in the first place.
+
+## Mechanism
+
+This fork adds a state machine around the existing hard-cutoff sampler, with two additional stages that inject fixed text into the reasoning stream at defined points:
+
+1. **Intro stage** — on entry to the reasoning block, a fixed message stating the token budget is inserted (templated via a `{budget}` placeholder), e.g. `"I'm allowed to think for 512 tokens, so my reasoning should be concise. Let me start by"`. This gives the model an explicit, in-context reference for its own generation length before reasoning begins.
+2. **Soft-warning stage** — at a configurable fraction of the budget (default 0.5), the sampler waits for the next newline boundary and inserts a fixed message indicating the budget is half-consumed, e.g. `"I've used up half of my thinking budget, let me start working towards a conclusion"`.
+3. **Hard-stop stage with grace period** — once the budget is exhausted, the sampler enters a pending state and waits up to a configurable number of grace tokens for a paragraph boundary (two consecutive newlines) before inserting a fixed closing message and terminating the reasoning block. If no paragraph boundary occurs within the grace period, the cutoff is forced immediately. Total output length remains bounded by `budget + grace_tokens` in all cases.
+
+<img width="2920" height="2547" alt="Mindcontrol in Action" src="https://github.com/user-attachments/assets/8f394c77-1812-4e4e-bd7c-13a8c8695edc" />
+
+Injected text is only inserted at newline or paragraph boundaries, not mid-token or mid-sentence. If the model emits its own `</think>` before a forced stage would trigger, the natural close takes precedence.
+
+Each stage is opt-in and independently configurable via `LLAMA_ARG_THINK_BUDGET_*` environment variables at server startup, or as per-request overrides in the API call itself:
+
+| Environment variable | Purpose |
+| --- | --- |
+| `LLAMA_ARG_THINK_BUDGET` | Token budget for the reasoning block (existing upstream variable) |
+| `LLAMA_ARG_THINK_BUDGET_INTRO_MESSAGE` | Templated intro message, supports a `{budget}` placeholder |
+| `LLAMA_ARG_THINK_BUDGET_SOFT_RATIO` | Fraction of budget at which the soft warning fires (e.g. `0.7`) |
+| `LLAMA_ARG_THINK_BUDGET_SOFT_MESSAGE` | Templated soft-warning message |
+| `LLAMA_ARG_THINK_BUDGET_MESSAGE` | Templated hard-stop closing message |
+| `LLAMA_ARG_THINK_BUDGET_GRACE_TOKENS` | How long to wait for a paragraph break before forcing the hard stop |
+
+Default values preserve upstream's existing hard-cutoff behavior; the new stages are disabled unless configured.
+
+Planned follow-up work: generalize this mechanism into a configurable reasoning template/grammar, rather than a fixed set of budget-based checkpoints.
+
+## Quick start
+
+Configuration is set via `LLAMA_ARG_THINK_BUDGET_*` environment variables, and can be overridden per-request in the API call — see [server API docs](tools/server/README.md) for the request-level parameters.
+
+### Apple Silicon
+
+Docker on macOS cannot pass the GPU through to a container, so there is no Metal-accelerated Docker image. Build natively instead, following upstream's [build guide](docs/build.md) (Metal is enabled by default on Apple Silicon):
+
+```sh
+git clone https://github.com/laurencehardman/llama-mindcontrol
+cd llama-mindcontrol
+cmake -B build
+cmake --build build --config Release -j
+
+LLAMA_ARG_THINK_BUDGET="350" \
+LLAMA_ARG_THINK_BUDGET_SOFT_RATIO="0.7" \
+LLAMA_ARG_THINK_BUDGET_GRACE_TOKENS="64" \
+./build/bin/llama-server -m /path/to/your-model.gguf
+```
+
+### AMD64 + NVIDIA CUDA
+
+A pre-built Docker image is provided. Example `docker-compose.yml`:
+
+```yaml
+services:
+  llama-server:
+    image: ghcr.io/laurencehardman/llama-mindcontrol:cuda
+    gpus: all
+    ports:
+      - "8080:8080"
+    volumes:
+      - ${MODEL_DIR:-./models}:/models:ro
+    environment:
+      LLAMA_ARG_THINK_BUDGET: "350"
+      LLAMA_ARG_THINK_BUDGET_INTRO_MESSAGE: " I have {budget} tokens to reason through this - that's enough room to work through it carefully, so I'll think it through step by step rather than rushing to a conclusion."
+      LLAMA_ARG_THINK_BUDGET_MESSAGE: " [!!NOTE TO SELF] I've used all of my thinking budget, I am now going to wrap up and provide the user their answer."
+      LLAMA_ARG_THINK_BUDGET_SOFT_RATIO: "0.7"
+      LLAMA_ARG_THINK_BUDGET_SOFT_MESSAGE: " [!NOTE TO SELF] I'm partway through my budget - I should start consolidating toward an answer, but I still have room to finish the important points."
+    command:
+      - "--model"
+      - "/models/your-model.gguf"
+```
+
+```sh
+MODEL_DIR=/path/to/models docker compose up
+```
+
+Requires the [nvidia-container-toolkit](https://github.com/NVIDIA/nvidia-container-toolkit) on the host.
+
+`llama-server` exposes the standard OpenAI-compatible API at `http://localhost:8080`. See the upstream documentation below for other configuration options.
+
+Test it out:
+
+```sh
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "local-model",
+    "stream": true,
+    "messages": [
+      {"role": "user", "content": "Explain how Flash Attention works."}
+    ],
+
+    "reasoning_budget_tokens": 350,
+    "reasoning_budget_message": "I have reached my reasoning budget - I have enough here to answer now.",
+
+    "reasoning_budget_soft_ratio": 0.7,
+    "reasoning_budget_soft_message": "I am partway through my budget - I should start consolidating toward an answer, but I still have room to finish the important points.",
+
+    "reasoning_budget_intro_message": "I have {budget} tokens to reason through this - that is enough room to work through it carefully, so I will think it through step by step rather than rushing to a conclusion.",
+
+    "reasoning_budget_grace_tokens": 50,
+
+    "reasoning_control": true
+  }'
+```
+
+---
 # llama.cpp
 
 ![llama](https://raw.githubusercontent.com/ggml-org/llama.brand/refs/heads/master/cover/llama-cpp/cover-llama-cpp-dark.svg)
