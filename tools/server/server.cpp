@@ -89,8 +89,7 @@ int llama_server(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
 
 #ifndef _WIN32
-    // Ignore SIGPIPE so the server does not crash if an MCP child exits while we are writing to
-    // its stdin; the write returns EPIPE, which the MCP writer treats as the child being gone.
+    // Ignore SIGPIPE so the server does not crash if an MCP child exits while we are writing to its stdin
     signal(SIGPIPE, SIG_IGN);
 #endif
 
@@ -338,7 +337,7 @@ int llama_server(common_params & params, int argc, char ** argv) {
     try {
         mcp_mgr.start(params);
     } catch (const std::exception & e) {
-        SRV_ERR("MCP config parsing failed: %s\n", e.what());
+        SRV_ERR("MCP starting failed: %s\n", e.what());
         return 1;
     }
 

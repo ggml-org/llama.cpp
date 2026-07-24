@@ -5,7 +5,6 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
-#include <cstring>
 #include <fstream>
 #include <functional>
 #include <sstream>
@@ -651,8 +650,15 @@ const server_mcp_server_config * server_mcp::find_config(const std::string & nam
 
 void server_mcp::start(const common_params & params) {
     auto append = [this](const std::string & json_str) {
-        auto parsed = server_mcp_server_config::parse_from_json(json_str);
-        configs.insert(configs.end(), std::make_move_iterator(parsed.begin()), std::make_move_iterator(parsed.end()));
+        try {
+            auto parsed = server_mcp_server_config::parse_from_json(json_str);
+            if (parsed.empty()) {
+                SRV_WRN("%s", "MCP config: no servers found in JSON\n");
+            }
+            configs.insert(configs.end(), std::make_move_iterator(parsed.begin()), std::make_move_iterator(parsed.end()));
+        } catch (const std::exception & e) {
+            throw std::runtime_error(std::string("failed to parse MCP config JSON: ") + e.what());
+        }
     };
     if (!params.mcp_servers_config.empty()) {
         std::ifstream f = fs_open_ifstream(params.mcp_servers_config, std::ios::in);
