@@ -2063,6 +2063,33 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
             {
                 res = nullptr;
             } break;
+        case LLM_ARCH_DEEPSEEK2OCR:
+            {
+                // one full cache: the REFERENCE mask keeps the prefix visible, iswa would evict it.
+                // an F16 V cache truncates enough to garble dense-table OCR (HF attends in F32).
+                ggml_type type_v = params.type_v;
+                if (hparams.swa_type == LLAMA_SWA_TYPE_REFERENCE && type_v == GGML_TYPE_F16) {
+                    type_v = GGML_TYPE_F32;
+                    LLAMA_LOG_WARN("%s: promoting V cache type to f32 for R-SWA (pass a quantized -ctv to override)\n", __func__);
+                }
+                res = new llama_kv_cache(
+                        *this,
+                        hparams,
+                        params.type_k,
+                        type_v,
+                        !cparams.flash_attn,
+                        cparams.offload_kqv,
+                        cparams.kv_unified,
+                        cparams.n_ctx_seq,
+                        cparams.n_seq_max,
+                        1,
+                        hparams.n_swa,
+                        hparams.swa_type,
+                        nullptr,
+                        nullptr,
+                        nullptr,
+                        nullptr);
+            } break;
         case LLM_ARCH_DEEPSEEK32:
             {
                 res = new llama_kv_cache_dsa(
@@ -2383,6 +2410,11 @@ int32_t llama_model_n_swa(const llama_model * model) {
     // dsv4 kv-cache has SWA but it cannot be used as a rollback because of
     // other compression ratios, so we return 0 here
     if (model->arch == LLM_ARCH_DEEPSEEK4) {
+        return 0;
+    }
+    // deepseek2-ocr R-SWA runs on a full cache that never evicts, so no SWA
+    // cache-invalidation applies
+    if (model->arch == LLM_ARCH_DEEPSEEK2OCR) {
         return 0;
     }
     return model->hparams.n_swa;

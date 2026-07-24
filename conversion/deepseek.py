@@ -355,9 +355,9 @@ class DeepseekV2Model(TextModel):
 
         self.gguf_writer.add_rope_dimension_count(hparams["qk_rope_head_dim"])
 
-        # Unlimited-OCR sliding window; written for metadata, the decoder ignores it (full MHA)
+        # Unlimited-OCR R-SWA sliding window; the deepseek2-ocr decoder reads it
         if is_ocr:
-            sliding_window = hparams.get("sliding_window_size") or hparams.get("sliding_window")
+            sliding_window = hparams.get("sliding_window_size", hparams.get("sliding_window"))
             if sliding_window:
                 self.gguf_writer.add_sliding_window(sliding_window)
 
