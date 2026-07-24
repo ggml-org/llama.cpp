@@ -48,9 +48,9 @@ void llama_model_glm_dsa::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,        hparams.n_expert_shared);
 
     // DSA parameters
-    ml.get_key(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,  hparams.indexer_n_head);
-    ml.get_key(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,  hparams.indexer_head_size);
-    ml.get_key(LLM_KV_ATTENTION_INDEXER_TOP_K,       hparams.indexer_top_k);
+    ml.get_key(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT, hparams.indexer_n_head);
+    ml.get_key(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH, hparams.indexer_head_size);
+    ml.get_key(LLM_KV_ATTENTION_INDEXER_TOP_K,      hparams.indexer_top_k);
 
     // Expert gating function (GLM-4.5 uses sigmoid)
     ml.get_key(LLM_KV_EXPERT_GATING_FUNC,          hparams.expert_gating_func, false);
