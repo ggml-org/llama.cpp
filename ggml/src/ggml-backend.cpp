@@ -1793,6 +1793,26 @@ ggml_backend_sched_t ggml_backend_sched_new(
     return sched;
 }
 
+static void ggml_backend_sched_grow_hash_set(ggml_backend_sched_t sched, size_t new_graph_size) {
+    const size_t new_size = ggml_hash_size(new_graph_size);
+    if (new_size <= sched->hash_set.size) {
+        return;
+    }
+
+    ggml_hash_set_free(&sched->hash_set);
+    free(sched->hv_tensor_backend_ids);
+    free(sched->hv_tensor_copies);
+
+    sched->hash_set = ggml_hash_set_new(new_graph_size);
+    sched->hv_tensor_backend_ids = (int *) malloc(sched->hash_set.size * sizeof(sched->hv_tensor_backend_ids[0]));
+    sched->hv_tensor_copies      = (ggml_tensor **) malloc(sched->hash_set.size * sched->n_backends * sched->n_copies * sizeof(struct ggml_tensor *));
+    GGML_ASSERT(sched->hv_tensor_backend_ids);
+    GGML_ASSERT(sched->hv_tensor_copies);
+
+    memset(sched->hv_tensor_backend_ids, -1, sched->hash_set.size * sizeof(sched->hv_tensor_backend_ids[0]));
+    memset(sched->hv_tensor_copies,       0, sched->hash_set.size * sched->n_backends * sched->n_copies * sizeof(struct ggml_tensor *));
+}
+
 void ggml_backend_sched_free(ggml_backend_sched_t sched) {
     if (sched == NULL) {
         return;
@@ -1863,8 +1883,9 @@ bool ggml_backend_sched_reserve(ggml_backend_sched_t sched, struct ggml_cgraph *
 
 bool ggml_backend_sched_alloc_graph(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
     GGML_ASSERT(sched);
-    GGML_ASSERT((int)sched->hash_set.size >= graph->n_nodes + graph->n_leafs);
     GGML_ASSERT(!sched->is_alloc);
+
+    ggml_backend_sched_grow_hash_set(sched, graph->n_nodes + graph->n_leafs);
 
     sched->cur_copy = sched->next_copy;
     sched->next_copy = (sched->next_copy + 1) % sched->n_copies;
