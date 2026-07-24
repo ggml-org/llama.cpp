@@ -44,3 +44,26 @@ export const MODEL_IGNORED_SEGMENTS = new Set(['GGUF', 'GGML']);
  * Matches a trailing weight file extension, e.g. `model.gguf` -> `model`.
  */
 export const MODEL_WEIGHT_EXTENSION_RE = /\.(gguf|ggml)$/i;
+
+/**
+ * Auxiliary / draft variant segments that show up in GGUF filenames and HF repo IDs.
+ * - `mtp`     multi-token-prediction draft model
+ * - `dflash`  diffusion-flash draft
+ * - `mmproj`  multimodal projector sidecar
+ */
+export type DraftVariant = 'mtp' | 'dflash' | 'mmproj';
+
+/**
+ * Sidecar prefix that wraps an existing model id with a draft/aux variant,
+ * e.g. `mtp-<name>.gguf`, `dflash-<name>.gguf`, `mmproj-<name>.gguf`.
+ * Captures the bare variant token for typed lookup.
+ */
+export const DRAFT_VARIANT_PREFIX_RE = /^(mtp|dflash|mmproj)-(.*)$/i;
+
+/**
+ * Trailing `-mtp` suffix that marks a GGUF carrying an embedded MTP draft model
+ * in the same weight file, e.g. `Hy3-IQ1_M-mtp.gguf`. The captured prefix is
+ * the candidate model id with the suffix stripped; the caller decides whether
+ * the prefix actually looks like a quantized model before applying it.
+ */
+export const DRAFT_MTP_SUFFIX_RE = /^(.*)-mtp$/i;

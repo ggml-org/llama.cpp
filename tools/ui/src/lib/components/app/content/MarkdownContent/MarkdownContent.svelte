@@ -85,6 +85,12 @@
 		content: string;
 		class?: string;
 		disableMath?: boolean;
+		/**
+		 * When true, raw HTML in the source is rendered as HTML rather than
+		 * rendered as literal text. Defaults to false so untrusted chat input
+		 * is treated as plaintext; opt-in only for trusted sources (HF README).
+		 */
+		allowRawHtml?: boolean;
 	}
 
 	interface MarkdownBlock {
@@ -93,7 +99,13 @@
 		contentHash?: string;
 	}
 
-	let { content, attachments, class: className = '', disableMath = false }: Props = $props();
+	let {
+		content,
+		attachments,
+		class: className = '',
+		disableMath = false,
+		allowRawHtml = false
+	}: Props = $props();
 
 	let containerRef = $state<HTMLDivElement>();
 	let renderedBlocks = $state<MarkdownBlock[]>([]);
@@ -143,6 +155,7 @@
 
 	let processor = $derived(() => {
 		void attachments;
+		void allowRawHtml;
 		// eslint-disable-next-line @typescript-eslint/no-explicit-any
 		let proc: any = remark().use(remarkGfm); // GitHub Flavored Markdown
 
@@ -152,8 +165,13 @@
 
 		proc = proc
 			.use(remarkBreaks) // Convert line breaks to <br>
-			.use(remarkLiteralHtml) // Treat raw HTML as literal text with preserved indentation
 			.use(remarkRehype); // Convert Markdown AST to rehype
+
+		// Default: keep raw HTML as literal text so chat markdown stays safe.
+		// Trusted sources (e.g. HF README) opt in via allowRawHtml.
+		if (!allowRawHtml) {
+			proc = proc.use(remarkLiteralHtml);
+		}
 
 		if (!disableMath) {
 			proc = proc.use(rehypeKatex); // Render math using KaTeX

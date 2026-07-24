@@ -64,6 +64,13 @@ class ModelsStore {
 	private statusAbort: AbortController | null = null;
 	private statusReaderActive = false;
 	private loadProgress = new SvelteMap<string, ModelLoadProgress>();
+	private downloadProgress = new SvelteMap<string, ModelDownloadProgress>();
+	/**
+	 * `<repo>:<tag>` strings whose most recent download attempt ended in
+	 * failure (download_failed). Surfaced to the UI so chips can render a
+	 * "Failed" pill and so the dialog knows a POST needs a DELETE first.
+	 */
+	failedDownloads = $state<SvelteSet<string>>(new SvelteSet());
 	private statusWaiters = new Map<
 		string,
 		{ target: ServerModelStatus; resolve: () => void; reject: (e: Error) => void }
@@ -688,6 +695,7 @@ class ModelsStore {
 		this.statusAbort?.abort();
 		this.statusAbort = null;
 		this.loadProgress.clear();
+		this.downloadProgress.clear();
 	}
 
 	/**
@@ -695,6 +703,34 @@ class ModelsStore {
 	 */
 	getLoadProgress(modelId: string): ModelLoadProgress | null {
 		return this.loadProgress.get(modelId) ?? null;
+	}
+
+	/**
+	 * Current download progress (size in bytes) for a model identifier
+	 * (i.e. the `<repo>:<tag>` string sent to POST /models), or null when
+	 * no download is being reported by the /models/sse feed.
+	 */
+	getDownloadProgress(repoWithTag: string): ModelDownloadProgress | null {
+		return this.downloadProgress.get(repoWithTag) ?? null;
+	}
+
+	/**
+	 * True when the /models/sse feed reports an active download for the
+	 * given `<repo>:<tag>` identifier. Cleared on download_finished /
+	 * download_failed.
+	 */
+	isDownloadInProgress(repoWithTag: string): boolean {
+		return this.downloadProgress.has(repoWithTag);
+	}
+
+	/**
+	 * True when the given `<repo>:<tag>` identifier is already a fully
+	 * downloaded model registered with the server (i.e. it shows up in the
+	 * /v1/models router list). Used by the model-hub detail view to mark
+	 * chips that would be a no-op re-download.
+	 */
+	isModelDownloaded(name: string): boolean {
+		return this.routerModels.some((m) => m.id === name);
 	}
 
 	/**
@@ -781,8 +817,51 @@ class ModelsStore {
 				this.removeRouterModel(event.model);
 				break;
 			case ServerModelsSseEventType.DOWNLOAD_PROGRESS:
+				this.applyDownloadProgress(event);
+				break;
+			case ServerModelsSseEventType.DOWNLOAD_FINISHED:
+			case ServerModelsSseEventType.DOWNLOAD_FAILED:
+				this.applyDownloadFinished(event);
 				break;
 		}
+	}
+
+	/**
+	 * Bucket the per-file byte counts from a `download_progress` envelope.
+	 * Total = sum of `total` across files (plan size), downloaded sum of `done`.
+	 */
+	private applyDownloadProgress(event: ApiModelsSseEvent): void {
+		const data = event.data;
+		const progress: Record<string, { done: number; total: number }> =
+			data && 'progress' in data ? (data.progress ?? {}) : {};
+		let downloaded = 0;
+		let total = 0;
+		for (const file of Object.values(progress)) {
+			downloaded += file?.done ?? 0;
+			total += file?.total ?? 0;
+		}
+		this.downloadProgress.set(event.model, { downloadedBytes: downloaded, totalBytes: total });
+	}
+
+	/**
+	 * Drop the stored progress for the model and toast the outcome.
+	 * Marks failed entries so the UI can offer a delete-and-retry path.
+	 */
+	private applyDownloadFinished(event: ApiModelsSseEvent): void {
+		this.downloadProgress.delete(event.model);
+		const ok = event.event === ServerModelsSseEventType.DOWNLOAD_FINISHED;
+		if (ok) {
+			this.failedDownloads.delete(event.model);
+			toast.success(`Download finished: ${this.toDisplayName(event.model)}`);
+		} else {
+			this.failedDownloads.add(event.model);
+			toast.error(`Download failed: ${this.toDisplayName(event.model)}`);
+		}
+	}
+
+	/** Whether the most recent download attempt for the given entry ended in failure. */
+	hasFailedDownload(repoWithTag: string): boolean {
+		return this.failedDownloads.has(repoWithTag);
 	}
 
 	/**
@@ -937,6 +1016,73 @@ class ModelsStore {
 	}
 
 	/**
+	 * Trigger a model download from HuggingFace via POST /models
+	 * (ggml-org/llama.cpp#23976). The download runs in the background on the
+	 * server; the model appears in the list once the SSE feed reports a
+	 * models_reload event (handled automatically by subscribeStatus).
+	 *
+	 * @param repoWithTag - HuggingFace repo id, optionally suffixed with `:<tag>`
+	 *                      (e.g. `ggml-org/gemma-3-4b-it-GGUF:Q4_K_M`).
+	 * @param displayName - Friendly name shown toasts; falls back to repoWithTag.
+	 */
+	async downloadModel(repoWithTag: string, displayName?: string): Promise<void> {
+		if (!isRouterMode()) {
+			toast.error('Model downloads are only available in router mode');
+			return;
+		}
+
+		// feed must already be live so the resulting models_reload event refreshes the list
+		this.subscribeStatus();
+
+		const label = displayName ?? repoWithTag;
+		try {
+			const res = await ModelsService.downloadModel(repoWithTag);
+			if (res.success) {
+				toast.success(`Download started: ${label}`);
+			} else {
+				throw new Error(res.error?.message ?? 'Server rejected the download request');
+			}
+		} catch (error) {
+			toast.error(`Download failed: ${label}`);
+			throw error;
+		}
+	}
+
+	/**
+	 * Cancel an in-flight download or remove a previously downloaded/failed
+	 * model from the server cache (ROUTER mode only).
+	 *
+	 * Calls DELETE `/models?model=<name>`. The server kills the child
+	 * subprocess if the download is still running and unlinks any partial
+	 * `.tmp` files; otherwise it just `rm`s the cached files. The cached
+	 * row in `routerModels` is dropped either way via the SSE `model_remove`
+	 * event surfaced by `subscribeStatus()`.
+	 *
+	 * @param repoWithTag - HuggingFace repo id in `<repo>:<tag>` format.
+	 * @returns True on success.
+	 */
+	async cancelDownload(repoWithTag: string): Promise<boolean> {
+		if (!isRouterMode()) {
+			toast.error('Model downloads are only available in router mode');
+			return false;
+		}
+
+		this.subscribeStatus();
+		try {
+			const res = await ModelsService.cancelDownload(repoWithTag);
+			const ok = res.success === true;
+			if (ok) {
+				this.downloadProgress.delete(repoWithTag);
+				this.failedDownloads.delete(repoWithTag);
+			}
+			return ok;
+		} catch (error) {
+			toast.error(`Failed to cancel: ${error instanceof Error ? error.message : 'unknown error'}`);
+			return false;
+		}
+	}
+
+	/**
 	 *
 	 *
 	 * Favorites
@@ -1015,6 +1161,8 @@ class ModelsStore {
 		this.modelLoadingStates.clear();
 		this.modelPropsCache.clear();
 		this.modelPropsFetching.clear();
+		this.downloadProgress.clear();
+		this.failedDownloads.clear();
 	}
 
 	/**

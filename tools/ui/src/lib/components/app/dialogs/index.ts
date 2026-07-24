@@ -92,6 +92,39 @@ export { default as DialogExportSettings } from './DialogExportSettings.svelte';
 export { default as DialogConfirmation } from './DialogConfirmation.svelte';
 
 /**
+ * **DialogModelDownload** - Confirmation dialog for downloading a model file
+ *
+ * Triggered when the user clicks a quantization chip in the model-hub detail
+ * view. Asks the user to confirm the download before posting to the server's
+ * `/models` endpoint (introduced in ggml-org/llama.cpp#23976). The actual
+ * download runs server-side in the background and tracks progress through the
+ * `/models/sse` feed.
+ *
+ * **Architecture:**
+ * - Uses ShadCN AlertDialog to block until the user decides
+ * - Surfaces the resolved `<repo>:<tag>` request body so the user sees what
+ *   will be reported to the server
+ * - Disables the action button while the request is in flight and shows the
+ *   server error message inline if the server rejects the request
+ *
+ * @example
+ * ```svelte
+ * <DialogModelDownload
+ *   bind:open={pendingDownload}
+ *   repoId={repo}
+ *   filePath={file.path}
+ *   quant={meta?.quant ?? null}
+ *   variant={meta?.variant ?? null}
+ *   sizeBytes={file.size ?? null}
+ *   formattedSize={formatFileSize(file.size ?? 0)}
+ *   onConfirm={() => (pendingDownload = false)}
+ *   onCancel={() => (pendingDownload = false)}
+ * />
+ * ```
+ */
+export { default as DialogModelDownload } from './DialogModelDownload.svelte';
+
+/**
  * **DialogConversationRename** - Rename a conversation
  *
  * Modal dialog for renaming a conversation. Replaces the prior

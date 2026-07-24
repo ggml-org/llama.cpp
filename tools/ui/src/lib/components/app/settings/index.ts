@@ -60,6 +60,12 @@ export { default as SettingsChatImportExportSection } from './SettingsChat/Setti
 export { default as SettingsMcpServers } from './SettingsMcpServers.svelte';
 
 /**
+ * Model Hub page.
+ * Displays trending and recommended GGUF models from Hugging Face with detail page.
+ */
+export { default as SettingsModels } from './SettingsModels.svelte';
+
+/**
  * Form fields renderer for individual settings. Generates appropriate input
  * components based on field type (text, number, select, checkbox, textarea).
  * Handles validation, help text display, and parameter source indicators.

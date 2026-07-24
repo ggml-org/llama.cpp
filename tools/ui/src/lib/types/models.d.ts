@@ -1,4 +1,5 @@
 import type { ApiModelDataEntry, ApiModelDetails, ApiModelLoadStage } from '$lib/types/api';
+import type { DraftVariant } from '$lib/constants/model-id';
 
 export interface ModelModalities {
 	vision: boolean;
@@ -25,6 +26,11 @@ export interface ModelOption {
  * Lives only while a load runs, driven by the /models/sse feed.
  * stage is absent until the feed reports its first stage.
  */
+export interface ModelDownloadProgress {
+	downloadedBytes: number;
+	totalBytes: number;
+}
+/** Per-byte download progress for one in-flight model download (sse). */
 export interface ModelLoadProgress {
 	stages: ApiModelLoadStage[];
 	current: ApiModelLoadStage;
@@ -38,6 +44,7 @@ export interface ParsedModelId {
 	params: string | null;
 	activatedParams: string | null;
 	quantization: string | null;
+	variant: DraftVariant | null;
 	tags: string[];
 }
 
