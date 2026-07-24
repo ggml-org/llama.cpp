@@ -1088,7 +1088,7 @@ json oaicompat_chat_params_parse(
 
     // Parse also the OAI "reasoning_effort": "none" specific value
     if (body.contains("reasoning_effort")) {
-        std::string reasoning_effort = body.at("reasoning_effort").get<std::string>();
+        auto reasoning_effort = json_value(body, "reasoning_effort", std::string(""));
         if (reasoning_effort == "none") {
             inputs.enable_thinking = false;
         } // other reasoning_effort values are model-specific and not yet handled
