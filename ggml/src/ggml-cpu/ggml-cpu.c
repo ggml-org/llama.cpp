@@ -3815,6 +3815,14 @@ int ggml_cpu_has_sme2(void) {
 #endif
 }
 
+int ggml_cpu_has_lasx(void) {
+#if defined(__loongarch_asx)
+    return 1;
+#else
+    return 0;
+#endif
+}
+
 void ggml_cpu_init(void) {
     // needed to initialize ggml_time
     {
