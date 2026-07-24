@@ -89,7 +89,7 @@ struct common_speculative_init_result {
 
     llama_model   * model();
     llama_context * context();
-
+    llama_context * reinit_context(common_params & params, llama_model * model_tgt, llama_context * ctx_tgt);
 private:
     struct impl;
     std::unique_ptr<impl> pimpl;

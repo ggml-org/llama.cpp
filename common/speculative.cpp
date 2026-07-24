@@ -2326,6 +2326,59 @@ llama_context * common_speculative_init_result::context() {
     return pimpl->context.get();
 }
 
+llama_context * common_speculative_init_result::reinit_context(
+    common_params & params,
+      llama_model * model_tgt,
+    llama_context * ctx_tgt) {
+    const bool has_draft = params.speculative.has_dft();
+    const bool spec_mtp = std::find(params.speculative.types.begin(),
+                                    params.speculative.types.end(),
+                                    COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
+    GGML_ASSERT(has_draft || spec_mtp);
+
+    auto cparams = common_context_params_to_llama(params);
+    if (spec_mtp) {
+        cparams.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+    }
+
+    cparams.n_rs_seq  = 0;
+    cparams.ctx_other = ctx_tgt;
+
+    // clear existing context
+    pimpl->context.reset();
+
+    std::string model_path;
+    if (has_draft) {
+        llama_model * model_dft = pimpl->model.get();
+        GGML_ASSERT(model_dft);
+
+        model_path = params.speculative.draft.mparams.path;
+        LOG_TRC("%s: reinitializing context for draft model '%s'\n", __func__, model_path.c_str());
+
+        llama_context * ctx_dft = llama_init_from_model(model_dft, cparams);
+        if (ctx_dft == nullptr) {
+            LOG_ERR("%s: failed to reinit MTP context\n", __func__);
+            return nullptr;
+        }
+
+        pimpl->context.reset(ctx_dft);
+    } else if (spec_mtp) {
+        model_path = params.model.path;
+
+        LOG_TRC("%s: reinitializing MTP draft context against the target model '%s'\n", __func__, model_path.c_str());
+
+        llama_context * ctx_dft = llama_init_from_model(model_tgt, cparams);
+        if (ctx_dft == nullptr) {
+            LOG_ERR("%s: failed to reinit MTP context\n", __func__);
+            return nullptr;
+        }
+
+        pimpl->context.reset(ctx_dft);
+    }
+
+    return pimpl->context.get();
+}
+
 common_speculative_init_result_ptr common_speculative_init_from_params(common_params & params, llama_model * model_tgt, llama_context * ctx_tgt) {
     return std::make_unique<common_speculative_init_result>(params, model_tgt, ctx_tgt);
 }

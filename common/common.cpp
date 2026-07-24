@@ -1226,6 +1226,7 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
             params.tensor_split,
             params.tensor_buft_overrides.data(),
             params.fit_params_target.data(),
+            params.fit_params_overhead_per_ctx.data(),
             params.fit_params_min_ctx,
             params.verbosity >= LOG_LEVEL_DEBUG ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
     }
@@ -1262,10 +1263,6 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
         pimpl->lora.emplace_back(std::move(lora)); // copy to list of loaded adapters
     }
 
-    // updates params.sampling
-    // TODO: fix naming
-    common_init_sampler_from_model(model, params.sampling);
-
     if (params.sampling.ignore_eos && llama_vocab_eos(vocab) == LLAMA_TOKEN_NULL) {
         COM_WRN("%s", "vocab does not have an EOS token, ignoring --ignore-eos\n");
         params.sampling.ignore_eos = false;
@@ -1285,6 +1282,18 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
                 params.sampling.logit_bias.end(),
                 params.sampling.logit_bias_eog.begin(), params.sampling.logit_bias_eog.end());
     }
+
+    init_context_inner(params);
+}
+
+llama_context * common_init_result::init_context_inner(common_params & params) {
+    llama_model * model = pimpl->model.get();
+
+    auto cparams = common_context_params_to_llama(params);
+
+    // updates params.sampling
+    // TODO: fix naming
+    common_init_sampler_from_model(model, params.sampling);
 
     //if (params.sampling.penalty_last_n == -1) {
     //    LOG_TRC("%s: setting penalty_last_n to ctx_size = %d\n", __func__, llama_n_ctx(lctx));
@@ -1313,10 +1322,15 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
     llama_context * lctx = llama_init_from_model(model, cparams);
     if (lctx == NULL) {
         COM_ERR("failed to create context with model '%s'\n", params.model.path.c_str());
-        return;
+        return NULL;
     }
 
     pimpl->context.reset(lctx);
+
+    // persist resolved context size back to params
+    params.n_ctx = llama_n_ctx(lctx);
+
+    return lctx;
 }
 
 llama_model * common_init_result::model() {
@@ -1344,24 +1358,9 @@ std::vector<llama_adapter_lora_ptr> & common_init_result::lora() {
     return pimpl->lora;
 }
 
-common_init_result_ptr common_init_from_params(common_params & params, bool model_only) {
-    common_init_result_ptr res(new common_init_result(params, model_only));
-
-    llama_model * model = res->model();
-    if (model == NULL) {
-        COM_ERR("failed to load model '%s'\n", params.model.path.c_str());
-        return res;
-    }
-
-    if (model_only) {
-        return res;
-    }
-
-    llama_context * lctx = res->context();
-    if (lctx == NULL) {
-        COM_ERR("failed to create context with model '%s'\n", params.model.path.c_str());
-        return res;
-    }
+void common_init_result::finalize_and_warmup(common_params & params) {
+    llama_model * model = pimpl->model.get();
+    llama_context * lctx = pimpl->context.get();
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
@@ -1376,7 +1375,7 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
 
         const auto cvec = common_control_vector_load(params.control_vectors);
         if (cvec.n_embd == -1) {
-            return res;
+            return;
         }
 
         int err = llama_set_adapter_cvec(
@@ -1387,7 +1386,7 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
                 params.control_vector_layer_start,
                 params.control_vector_layer_end);
         if (err) {
-            return res;
+            return;
         }
     }
 
@@ -1411,7 +1410,7 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
         }
 
         if (!ok) {
-            return res;
+            return;
         }
     }
 
@@ -1454,8 +1453,50 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
         llama_perf_context_reset(lctx);
 
         // reset samplers to reset RNG state after warmup to the seeded state
-        res->reset_samplers();
+        reset_samplers();
     }
+}
+
+llama_context * common_init_result::reinit_context(common_params & params) {
+    llama_model * model = pimpl->model.get();
+    GGML_ASSERT(model);
+
+    // reset samplers and context
+    pimpl->samplers.clear();
+    pimpl->samplers_seq_config.clear();
+    pimpl->context.reset();
+
+    llama_context * lctx = init_context_inner(params);
+    if (lctx == NULL) {
+        COM_ERR("%s", "failed to reinitialize context\n");
+        return NULL;
+    }
+
+    finalize_and_warmup(params);
+
+    return lctx;
+}
+
+common_init_result_ptr common_init_from_params(common_params & params, bool model_only) {
+    common_init_result_ptr res(new common_init_result(params, model_only));
+
+    llama_model * model = res->model();
+    if (model == NULL) {
+        COM_ERR("failed to load model '%s'\n", params.model.path.c_str());
+        return res;
+    }
+
+    if (model_only) {
+        return res;
+    }
+
+    llama_context * lctx = res->context();
+    if (lctx == NULL) {
+        COM_ERR("failed to create context with model '%s'\n", params.model.path.c_str());
+        return res;
+    }
+
+    res->finalize_and_warmup(params);
 
     return res;
 }
@@ -1621,6 +1662,39 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.type_v = params.cache_type_v;
 
     return cparams;
+}
+
+void common_overlay_context_params(common_params & params, llama_context_params ctx) {
+    params.n_ctx             = ctx.n_ctx;
+    params.n_parallel        = ctx.n_seq_max;
+    params.n_outputs_max     = ctx.n_outputs_max;
+    params.n_batch           = ctx.n_batch;
+    params.n_ubatch          = ctx.n_ubatch;
+
+    params.cpuparams.n_threads       = ctx.n_threads;
+    params.cpuparams_batch.n_threads = ctx.n_threads_batch;
+
+    params.embedding         = ctx.embeddings;
+    params.rope_scaling_type = ctx.rope_scaling_type;
+    params.rope_freq_base    = ctx.rope_freq_base;
+    params.rope_freq_scale   = ctx.rope_freq_scale;
+    params.yarn_ext_factor   = ctx.yarn_ext_factor;
+    params.yarn_attn_factor  = ctx.yarn_attn_factor;
+    params.yarn_beta_fast    = ctx.yarn_beta_fast;
+    params.yarn_beta_slow    = ctx.yarn_beta_slow;
+    params.yarn_orig_ctx     = ctx.yarn_orig_ctx;
+    params.pooling_type      = ctx.pooling_type;
+    params.attention_type    = ctx.attention_type;
+    params.flash_attn_type   = ctx.flash_attn_type;
+    params.cb_eval           = ctx.cb_eval;
+    params.cb_eval_user_data = ctx.cb_eval_user_data;
+    params.no_kv_offload     = !ctx.offload_kqv;
+    params.no_perf           = ctx.no_perf;
+    params.no_op_offload     = !ctx.op_offload;
+    params.swa_full          = ctx.swa_full;
+    params.kv_unified        = ctx.kv_unified;
+    params.cache_type_k      = ctx.type_k;
+    params.cache_type_v      = ctx.type_v;
 }
 
 struct ggml_threadpool_params ggml_threadpool_params_from_cpu_params(const common_cpu_params & params) {
