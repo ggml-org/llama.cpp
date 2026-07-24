@@ -10,7 +10,7 @@
 		gaugeTriggerKeydown,
 		gaugeTriggerLeave,
 		gaugeTriggerPointerDown
-	} from './context-gauge-popup.svelte';
+	} from '$lib/stores/context-gauge-popup.svelte';
 
 	const gauge = useContextGauge();
 

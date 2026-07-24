@@ -6,14 +6,17 @@
 // whole time the card is open.
 // Mouse pointers open on hover with a short grace delay to travel from
 // dial to card; touch pointers toggle on tap.
+import {
+	CONTEXT_GAUGE_CARD_HALF_WIDTH_PX,
+	CONTEXT_GAUGE_CLOSE_GRACE_MS,
+	CONTEXT_GAUGE_DIAL_GAP_PX,
+	CONTEXT_GAUGE_EDGE_MARGIN_PX
+} from '$lib/constants';
+
 let closeTimer: ReturnType<typeof setTimeout> | undefined;
 let lastPointerType = '';
 
 export const gaugePopup = $state({ open: false, centerX: 0, bottom: 0 });
-
-const CARD_HALF_WIDTH = 128; // half of the w-64 card
-const EDGE_MARGIN = 8;
-const DIAL_GAP = 8;
 
 function openFrom(trigger: HTMLElement): void {
 	clearTimeout(closeTimer);
@@ -22,10 +25,10 @@ function openFrom(trigger: HTMLElement): void {
 		const frameRect = frame.getBoundingClientRect();
 		const triggerRect = trigger.getBoundingClientRect();
 		const centerX = triggerRect.left + triggerRect.width / 2 - frameRect.left;
-		const min = CARD_HALF_WIDTH + EDGE_MARGIN;
-		const max = frameRect.width - CARD_HALF_WIDTH - EDGE_MARGIN;
+		const min = CONTEXT_GAUGE_CARD_HALF_WIDTH_PX + CONTEXT_GAUGE_EDGE_MARGIN_PX;
+		const max = frameRect.width - CONTEXT_GAUGE_CARD_HALF_WIDTH_PX - CONTEXT_GAUGE_EDGE_MARGIN_PX;
 		gaugePopup.centerX = Math.min(Math.max(centerX, min), Math.max(min, max));
-		gaugePopup.bottom = frameRect.bottom - triggerRect.top + DIAL_GAP;
+		gaugePopup.bottom = frameRect.bottom - triggerRect.top + CONTEXT_GAUGE_DIAL_GAP_PX;
 	}
 	gaugePopup.open = true;
 }
@@ -83,5 +86,5 @@ function scheduleClose(): void {
 	clearTimeout(closeTimer);
 	closeTimer = setTimeout(() => {
 		gaugePopup.open = false;
-	}, 150);
+	}, CONTEXT_GAUGE_CLOSE_GRACE_MS);
 }

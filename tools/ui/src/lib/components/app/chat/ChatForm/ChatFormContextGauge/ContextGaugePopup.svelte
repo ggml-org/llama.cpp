@@ -9,7 +9,7 @@
 		gaugeCardEnter,
 		gaugeCardLeave,
 		gaugePopupClose
-	} from './context-gauge-popup.svelte';
+	} from '$lib/stores/context-gauge-popup.svelte';
 
 	const gauge = useContextGauge();
 
