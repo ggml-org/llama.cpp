@@ -88,17 +88,7 @@ layout (binding = 6) readonly buffer MO {uint32_t data_mask_opt[];};
 #define BINDING_IDX_K 0
 #define BINDING_IDX_V 1
 
-// FaTypeK / FaTypeV spec constant values. These mirror enum ggml_type so the
-// host can pass the type directly. Keep in sync with ggml.h.
-#define FA_TYPE_F32   0u
-#define FA_TYPE_F16   1u
-#define FA_TYPE_Q4_0  2u
-#define FA_TYPE_Q4_1  3u
-#define FA_TYPE_Q5_0  6u
-#define FA_TYPE_Q5_1  7u
-#define FA_TYPE_Q8_0  8u
-#define FA_TYPE_BF16 30u
-#define FA_TYPE_Q1_0 41u
+#include "ggml_type_ids.glsl"
 
 #if defined(BFLOAT16)
 #define O_TYPE float
@@ -113,15 +103,15 @@ layout (binding = 6) readonly buffer MO {uint32_t data_mask_opt[];};
 // and bypasses the dequant path entirely. Quants follow their ggml block sizes.
 uint fa_block_elems(uint ty) {
     switch (ty) {
-        case FA_TYPE_F32:  return 4u;
-        case FA_TYPE_F16:  return 1u;
-        case FA_TYPE_Q4_0: return uint(QUANT_K_Q4_0);
-        case FA_TYPE_Q4_1: return uint(QUANT_K_Q4_1);
-        case FA_TYPE_Q5_0: return uint(QUANT_K_Q5_0);
-        case FA_TYPE_Q5_1: return uint(QUANT_K_Q5_1);
-        case FA_TYPE_Q8_0: return uint(QUANT_K_Q8_0);
-        case FA_TYPE_BF16: return 1u;
-        case FA_TYPE_Q1_0: return uint(QUANT_K_Q1_0); // cm2-only, harmless elsewhere
+        case GGML_TYPE_F32:  return 4u;
+        case GGML_TYPE_F16:  return 1u;
+        case GGML_TYPE_Q4_0: return uint(QUANT_K_Q4_0);
+        case GGML_TYPE_Q4_1: return uint(QUANT_K_Q4_1);
+        case GGML_TYPE_Q5_0: return uint(QUANT_K_Q5_0);
+        case GGML_TYPE_Q5_1: return uint(QUANT_K_Q5_1);
+        case GGML_TYPE_Q8_0: return uint(QUANT_K_Q8_0);
+        case GGML_TYPE_BF16: return 1u;
+        case GGML_TYPE_Q1_0: return uint(QUANT_K_Q1_0); // cm2-only, harmless elsewhere
         default:           return 1u;
     }
 }
@@ -131,11 +121,11 @@ uint fa_block_elems(uint ty) {
 // of int32s per 32-element block on the MMQ K path: ints_per_block == 8 / R.
 uint fa_quant_r_mmq(uint ty) {
     switch (ty) {
-        case FA_TYPE_Q4_0: return uint(QUANT_R_Q4_0);
-        case FA_TYPE_Q4_1: return uint(QUANT_R_Q4_1);
-        case FA_TYPE_Q5_0: return uint(QUANT_R_Q5_0);
-        case FA_TYPE_Q5_1: return uint(QUANT_R_Q5_1);
-        case FA_TYPE_Q8_0: return uint(QUANT_R_Q8_0);
+        case GGML_TYPE_Q4_0: return uint(QUANT_R_Q4_0);
+        case GGML_TYPE_Q4_1: return uint(QUANT_R_Q4_1);
+        case GGML_TYPE_Q5_0: return uint(QUANT_R_Q5_0);
+        case GGML_TYPE_Q5_1: return uint(QUANT_R_Q5_1);
+        case GGML_TYPE_Q8_0: return uint(QUANT_R_Q8_0);
         default:           return 1u;
     }
 }
@@ -147,8 +137,8 @@ uint fa_quant_r_mmq(uint ty) {
 #define BLOCK_SIZE_V fa_block_elems(FaTypeV)
 // F16 reads f16 elements directly from the binding; everything else routes
 // through dequantize4 / the MMQ helpers to unpack from the packed block layout.
-#define USE_DECODE_K (FaTypeK != FA_TYPE_F16)
-#define USE_DECODE_V (FaTypeV != FA_TYPE_F16)
+#define USE_DECODE_K (FaTypeK != GGML_TYPE_F16)
+#define USE_DECODE_V (FaTypeV != GGML_TYPE_F16)
 
 #define CEIL_DIV(a, b) (((a) + (b) - 1) / (b))
 

@@ -28,7 +28,7 @@ void main() {
         uint16_t qs = data_a[ib].qs[4 * ib32 + l];
         const uint sign7 = qs >> 9;
         const uint sign8 = sign7 | (bitCount(sign7) << 7); // parity bit
-        const uvec2 grid = iq2xs_grid[qs & 511];
+        const uvec2 grid = iq2_grid[qs & 511];
         const u8vec4 grid0 = unpack8(grid.x);
         const u8vec4 grid1 = unpack8(grid.y);
         data_b[b_idx + 8 * l + 0] = D_TYPE(db[l/2] * grid0.x * ((sign8 & 1) != 0 ? -1.0 : 1.0));

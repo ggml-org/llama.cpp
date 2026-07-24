@@ -31,7 +31,7 @@ void main() {
         const uint qs = data_a[ib].qs[iqs];
         const uint gidx = qs | ((qh << (8 - l)) & 256);
         const uint8_t signs = data_a[ib].signs[iqs / 2] >> (4 * (l & 1));
-        const u8vec4 grid = unpack8(iq3s_grid[gidx]);
+        const u8vec4 grid = unpack8(iq3_grid[gidx]);
         data_b[b_idx + 4 * l + 0] = D_TYPE(db * grid.x * ((signs & 1) != 0 ? -1.0 : 1.0));
         data_b[b_idx + 4 * l + 1] = D_TYPE(db * grid.y * ((signs & 2) != 0 ? -1.0 : 1.0));
         data_b[b_idx + 4 * l + 2] = D_TYPE(db * grid.z * ((signs & 4) != 0 ? -1.0 : 1.0));
