@@ -9,9 +9,15 @@
 #define JSON_ASSERT GGML_ASSERT
 #include <nlohmann/json.hpp>
 
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <cinttypes>
+#include <functional>
+#include <mutex>
+#include <queue>
 #include <string>
 #include <vector>
-#include <cinttypes>
 
 using json = nlohmann::ordered_json;
 
@@ -376,3 +382,54 @@ server_tokens format_prompt_rerank(
         mtmd_context * mctx,
         const std::string & query,
         const std::string & doc);
+
+// simple implementation of a pipe
+// used for streaming data between threads
+template<typename T>
+struct server_pipe {
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::queue<T> queue;
+    std::atomic<bool> writer_closed{false};
+    std::atomic<bool> reader_closed{false};
+
+    void close_write() {
+        writer_closed.store(true, std::memory_order_relaxed);
+        cv.notify_all();
+    }
+
+    void close_read() {
+        reader_closed.store(true, std::memory_order_relaxed);
+        cv.notify_all();
+    }
+
+    bool read(T & output, const std::function<bool()> & should_stop) {
+        std::unique_lock<std::mutex> lk(mutex);
+        constexpr auto poll_interval = std::chrono::milliseconds(500);
+        while (true) {
+            if (!queue.empty()) {
+                output = std::move(queue.front());
+                queue.pop();
+                return true;
+            }
+            if (writer_closed.load()) {
+                return false; // clean EOF
+            }
+            if (should_stop()) {
+                close_read(); // signal broken pipe to writer
+                return false; // cancelled / reader no longer alive
+            }
+            cv.wait_for(lk, poll_interval);
+        }
+    }
+
+    bool write(T && data) {
+        std::lock_guard<std::mutex> lk(mutex);
+        if (reader_closed.load()) {
+            return false; // broken pipe
+        }
+        queue.push(std::move(data));
+        cv.notify_one();
+        return true;
+    }
+};
