@@ -240,6 +240,7 @@ static clip_flash_attn_type mtmd_get_clip_flash_attn_type(enum llama_flash_attn_
 mtmd_context_params mtmd_context_params_default() {
     mtmd_context_params params {
         /* use_gpu           */ true,
+        /* device            */ nullptr,
         /* print_timings     */ true,
         /* n_threads         */ 4,
         /* image_marker      */ nullptr,
@@ -340,6 +341,7 @@ struct mtmd_context {
 
         clip_context_params ctx_clip_params {
             /* use_gpu           */ ctx_params.use_gpu,
+            /* device            */ ctx_params.device,
             /* flash_attn_type   */ mtmd_get_clip_flash_attn_type(ctx_params.flash_attn_type),
             /* image_min_tokens  */ ctx_params.image_min_tokens,
             /* image_max_tokens  */ ctx_params.image_max_tokens,
