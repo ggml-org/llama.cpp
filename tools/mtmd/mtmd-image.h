@@ -74,7 +74,6 @@ struct mtmd_image_preprocessor_llava_uhd : mtmd_image_preprocessor {
         std::vector<slice_coordinates> slices;
     };
 
-    // LFM2 override this function to implement its custom slicing logic
     virtual slice_instructions get_slice_instructions(const clip_image_size & original_size);
 
     struct slice_output {
@@ -110,11 +109,6 @@ private:
     clip_image_size get_best_grid(const int max_slice_nums, const int multiple, const float log_ratio);
 };
 
-struct mtmd_image_preprocessor_minicpmv : mtmd_image_preprocessor_llava_uhd {
-    using mtmd_image_preprocessor_llava_uhd::mtmd_image_preprocessor_llava_uhd;
-    slice_instructions get_slice_instructions(const clip_image_size & original_size) override;
-};
-
 // downscale or upscale the input image to fixed size
 struct mtmd_image_preprocessor_fixed_size : mtmd_image_preprocessor {
     mtmd_image_preprocessor_fixed_size(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
@@ -133,6 +127,12 @@ struct mtmd_image_preprocessor_dyn_size : mtmd_image_preprocessor {
 struct mtmd_image_preprocessor_longest_edge : mtmd_image_preprocessor {
     mtmd_image_preprocessor_longest_edge(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
     mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
+};
+
+// custom llava-uhd slicing logic for MiniCPM-V
+struct mtmd_image_preprocessor_minicpmv : mtmd_image_preprocessor_llava_uhd {
+    using mtmd_image_preprocessor_llava_uhd::mtmd_image_preprocessor_llava_uhd;
+    slice_instructions get_slice_instructions(const clip_image_size & original_size) override;
 };
 
 // custom llava-uhd slicing logic for LFM2
