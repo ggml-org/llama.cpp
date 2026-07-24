@@ -149,6 +149,12 @@ public:
     void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) const override;
     void state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1, llama_state_seq_flags flags = 0) override;
 
+    void state_write(
+            llama_io_write_i      & io,
+            llama_seq_id            seq_id,
+            llama_state_seq_flags   flags,
+            bool                    include_swa_masked) const;
+
     //
     // llama_kv_cache specific API
     //

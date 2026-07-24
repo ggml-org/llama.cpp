@@ -1955,6 +1955,14 @@ ggml_cgraph * llama_kv_cache::build_graph_shift(llm_graph_result * res, llama_co
 }
 
 void llama_kv_cache::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
+    state_write(io, seq_id, flags, false);
+}
+
+void llama_kv_cache::state_write(
+        llama_io_write_i      & io,
+        llama_seq_id            seq_id,
+        llama_state_seq_flags   flags,
+        bool                    include_swa_masked) const {
     // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
     if (other) {
         return;
@@ -1982,7 +1990,7 @@ void llama_kv_cache::state_write(llama_io_write_i & io, llama_seq_id seq_id, lla
             add_cell = add_cell && (seq_id == -1 || cells.seq_has(i, seq_id));
 
             // check the cell is not SWA-masked
-            if (add_cell && seq_id != -1) {
+            if (add_cell && seq_id != -1 && !include_swa_masked) {
                 const bool is_masked = llama_hparams::is_masked_swa(n_swa, swa_type, cells.pos_get(i), cells.seq_pos_max(seq_id));
 
                 add_cell = !is_masked;
@@ -2312,7 +2320,8 @@ bool llama_kv_cache::state_read_meta(llama_io_read_i & io, uint32_t strm, uint32
             sinfo.idxs[0][i] = i;
         }
 
-        head = 0;
+        // Full-state restore compacts the cells into [0, cell_count).
+        head = cell_count;
     }
 
     return true;
