@@ -7,7 +7,7 @@
 	import { getMessageEditContext } from '$lib/contexts';
 	import { KeyboardKey, MessageRole } from '$lib/enums';
 	import { config } from '$lib/stores/settings.svelte';
-	import { isIMEComposing } from '$lib/utils';
+	import { autoResizeTextarea, isIMEComposing } from '$lib/utils';
 
 	interface Props {
 		class?: string;
@@ -91,6 +91,11 @@
 			resizeObserver.disconnect();
 		};
 	});
+	$effect(() => {
+		if (editCtx.isEditing && textareaElement) {
+			autoResizeTextarea(textareaElement);
+		}
+	});
 
 	function toggleExpand() {
 		isExpanded = !isExpanded;
@@ -105,11 +110,15 @@
 	{#if editCtx.isEditing}
 		<div class="w-full max-w-[80%]">
 			<textarea
+				style="max-height: var(--max-message-height);"
 				bind:this={textareaElement}
 				value={editCtx.editedContent}
 				class="min-h-[60px] w-full resize-none rounded-2xl px-3 py-2 text-sm {INPUT_CLASSES}"
 				onkeydown={handleEditKeydown}
-				oninput={(e) => editCtx.setContent(e.currentTarget.value)}
+				oninput={(e) => {
+					autoResizeTextarea(e.currentTarget);
+					editCtx.setContent(e.currentTarget.value);
+				}}
 				placeholder="Edit system message..."
 			></textarea>
 
