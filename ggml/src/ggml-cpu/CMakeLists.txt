@@ -566,6 +566,14 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
     elseif (CMAKE_SYSTEM_PROCESSOR MATCHES "wasm")
         message(STATUS "Wasm detected")
         list (APPEND GGML_CPU_SOURCES ggml-cpu/arch/wasm/quants.c)
+    elseif (GGML_SYSTEM_ARCH STREQUAL "e2k")
+        message(STATUS "e2k detected")
+        list(APPEND GGML_CPU_SOURCES
+            ggml-cpu/arch/e2k/quants.c
+            ggml-cpu/arch/e2k/cpu-feats.cpp
+            )
+        list(APPEND ARCH_FLAGS -mno-f16c)
+        ggml_add_cpu_backend_features(${GGML_CPU_NAME} e2k ${ARCH_DEFINITIONS})
     else()
         message(WARNING "Unknown CPU architecture. Falling back to generic implementations.")
         list(APPEND ARCH_FLAGS -DGGML_CPU_GENERIC)
