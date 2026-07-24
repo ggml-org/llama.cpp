@@ -1997,7 +1997,7 @@ int ggml_metal_op_fwht(ggml_metal_op_t ctx, int idx) {
     const int64_t nrows = ggml_nrows(src1);
 
     ggml_metal_kargs_fwht args = {
-        /*.nrows = */ nrows,
+        /*.nrows = */ (int32_t) nrows,
     };
 
     auto pipeline = ggml_metal_library_get_pipeline_fwht(lib, n);
