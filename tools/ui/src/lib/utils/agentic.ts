@@ -304,11 +304,15 @@ export function parseToolResultWithImages(
 	toolResult: string,
 	extras?: DatabaseMessageExtra[]
 ): ToolResultLine[] {
-	// Cache key includes extras length so we recompute when attachments change.
-	const extrasKey = extras?.length ?? 0;
-	const cacheKey = `${extrasKey}:${toolResult}`;
+	// Cache key includes image attachment names so we recompute when
+	// attachments change, even if the count stays the same.
+	const imageNames = (extras ?? [])
+		.filter((e): e is DatabaseMessageExtraImageFile => e.type === AttachmentType.IMAGE)
+		.map((e) => e.name)
+		.join(NEWLINE);
+	const cacheKey = `${imageNames}:${toolResult}`;
 	const cached = toolResultLinesCache.get(cacheKey);
-	if (cached) return cached;
+	if (cached !== undefined) return cached;
 
 	const lines = toolResult.split(NEWLINE);
 	const result = lines.map((line) => {

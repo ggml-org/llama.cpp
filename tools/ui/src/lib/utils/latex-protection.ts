@@ -179,7 +179,7 @@ export function preprocessLaTeX(content: string): string {
 	// incomplete code block stays the same across multiple tokens, so the
 	// full protect/restore pipeline would re-run unnecessarily.
 	const cached = latexCache.get(content);
-	if (cached) return cached;
+	if (cached !== undefined) return cached;
 
 	// Save original before the function mutates `content` through steps 0-8
 	const originalContent = content;
