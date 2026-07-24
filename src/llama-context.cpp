@@ -1,3 +1,5 @@
+﻿// TurboPrefill by Trykhlieb
+// Base: ggml-org/llama.cpp b10068
 #include "llama-context.h"
 
 #include "ggml.h"
@@ -14,6 +16,7 @@
 
 #include <cinttypes>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -1762,6 +1765,65 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
     GGML_ASSERT((cparams.causal_attn || cparams.n_ubatch >= n_tokens_all) && "non-causal attention requires n_ubatch >= n_tokens");
 
+    // TurboPrefill eligibility for this logical batch.
+    const uint32_t turboprefill_threshold = 2 * cparams.n_ubatch;
+
+    const llama_batch & batch = balloc->get_batch();
+
+    bool turboprefill_requested = false;
+    const char * turboprefill_env = std::getenv("TURBOPREFILL");
+    turboprefill_requested =
+            turboprefill_env != nullptr &&
+            std::strcmp(turboprefill_env, "0") != 0 &&
+            std::strcmp(turboprefill_env, "false") != 0 &&
+            std::strcmp(turboprefill_env, "off") != 0;
+
+    bool turboprefill_enabled =
+            turboprefill_requested &&
+            n_tokens_all >= turboprefill_threshold &&
+            n_outputs_all <= cparams.n_seq_max &&
+            !cparams.embeddings &&
+            cparams.causal_attn &&
+            cparams.pipeline_parallel &&
+            model.split_mode() == LLAMA_SPLIT_MODE_LAYER &&
+            model.n_devices() > 1;
+
+    if (turboprefill_enabled && n_outputs_all > 1) {
+        std::vector<int32_t> seq_token_count(n_seq_max, 0);
+
+        for (uint32_t i = 0; i < n_tokens_all; ++i) {
+            const int ns = batch.n_seq_id ? batch.n_seq_id[i] : 1;
+
+            for (int32_t s = 0; s < ns; ++s) {
+                const llama_seq_id seq_id = batch.seq_id ? batch.seq_id[i][s] : 0;
+                seq_token_count[seq_id]++;
+            }
+        }
+
+        for (uint32_t seq_id = 0; seq_id < n_seq_max; ++seq_id) {
+            if (seq_token_count[seq_id] == 1) {
+                turboprefill_enabled = false;
+                break;
+            }
+        }
+    }
+
+    turboprefill.begin_batch(turboprefill_enabled, n_tokens_all, cparams.n_ubatch);
+    if (n_tokens_all >= turboprefill_threshold) {
+        LLAMA_LOG_INFO(
+                "%s: TurboPrefill requested=%d active=%d n_tokens=%u n_ubatch=%u full_ubatches=%u devices=%d pipeline=%d split_mode=%d embeddings_nextn=%d\n",
+                __func__,
+                (int) turboprefill_requested,
+                (int) turboprefill.enabled,
+                n_tokens_all,
+                cparams.n_ubatch,
+                turboprefill.n_full_ubatches,
+                (int) model.n_devices(),
+                (int) cparams.pipeline_parallel,
+                (int) model.split_mode(),
+                (int) cparams.embeddings_nextn);
+    }
+
     if (t_compute_start_us == 0) {
         t_compute_start_us = ggml_time_us();
     }
@@ -1852,6 +1914,8 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
 
         ggml_status status;
+
+        turboprefill.stage_for_ubatch(ubatch.n_tokens, cparams.n_ubatch);
 
         const auto * res = process_ubatch(ubatch, ctx_type_to_graph_type(cparams.ctx_type), mctx.get(), status);
 
@@ -2010,7 +2074,11 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
         n_outputs_prev += n_outputs;
         n_tokens_prev  += ubatch.n_tokens;
+        turboprefill.finish_ubatch();
     } while (mctx->next());
+
+    // The scheduler only reads turboprefill.stage while processing one ubatch graph.
+    turboprefill.finish_batch();
 
     // set to total number of outputs in the batch, for use in llama_get_logits_ith
     n_outputs = n_outputs_all;
@@ -2454,7 +2522,9 @@ ggml_status llama_context::graph_compute(
         set_n_threads_fn.second(set_n_threads_fn.first, n_threads);
     }
 
-    auto status = ggml_backend_sched_graph_compute_async(sched.get(), gf);
+    auto status = turboprefill.stage != 0
+            ? ggml_backend_sched_graph_compute_async_turboprefill(sched.get(), gf, turboprefill.stage)
+            : ggml_backend_sched_graph_compute_async(sched.get(), gf);
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: ggml_backend_sched_graph_compute_async failed with error %d\n", __func__, status);
     }
