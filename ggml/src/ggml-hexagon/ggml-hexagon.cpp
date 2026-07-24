@@ -18,6 +18,7 @@
 #include <unordered_map>
 #include <regex>
 #include <queue>
+#include <deque>
 #include <algorithm>
 
 #ifdef _WIN32
@@ -68,7 +69,6 @@ static size_t opt_mbuf    = 1ul * 1024 * 1024 * 1024; // max buffer size
 static int    opt_etm     = 0;
 static int    opt_verbose = 0;
 static int    opt_profile = 0; // profiling mode (0-disabled, 1-basic, 2-pmu)
-static int    opt_hostbuf = 1; // hostbuf ON by default
 
 static int    opt_mm_select = 3; // 3 = HMX -> Tiled -> Flat -> CPU, 2 = Tiled -> Flat -> CPU, 1 = Flat -> CPU
 static int    opt_fa_select = 2; // 2 = HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU (unsupported)
@@ -297,6 +297,7 @@ struct ggml_hexagon_session {
     void release() noexcept(true);
 
     void enqueue_op(const htp_opnode & node);
+    void enqueue_cpy(const ggml_tensor * src, ggml_tensor * dst);
     void flush(bool all = true);
 
     void flush_pending(bool all = false);
@@ -1192,7 +1193,7 @@ struct ggml_hexagon_opbatch {
 
 
 
-    std::vector<ggml_tensor>         temp_tensors; // temporary copy/repack tensors
+    std::deque<ggml_tensor>          temp_tensors; // temporary copy/repack tensors
 
     unsigned int n_bufs;     // num buffers in the batch
     unsigned int n_tens;     // num tensors ...
@@ -1659,6 +1660,21 @@ void ggml_hexagon_session::enqueue_op(const htp_opnode & node) {
         flush_batch();
     }
     op_batch->add_op(node);
+}
+
+void ggml_hexagon_session::enqueue_cpy(const ggml_tensor * src, ggml_tensor * dst) {
+    ggml_tensor op_tensor = *dst;
+    op_tensor.op = GGML_OP_CPY;
+    op_tensor.src[0] = const_cast<ggml_tensor *>(src);
+
+    htp_opnode test_node(&op_tensor, {}, HTP_OP_CPY);
+    if (!op_batch->fit_op(test_node)) {
+        flush_batch();
+    }
+
+    op_batch->temp_tensors.push_back(op_tensor);
+    test_node.node = &op_batch->temp_tensors.back();
+    op_batch->add_op(test_node);
 }
 
 // Flush HTP response queue i.e wait for all outstanding requests to complete
@@ -3890,17 +3906,7 @@ static bool ggml_backend_hexagon_cpy_tensor_async(ggml_backend_t backend_src, gg
     }
 
     auto sess = static_cast<ggml_hexagon_session *>(backend_dst->context);
-
-    // Create a temporary ggml_tensor to represent the CPY operation
-    ggml_tensor op_tensor = *dst;
-    op_tensor.op = GGML_OP_CPY;
-    op_tensor.src[0] = const_cast<ggml_tensor *>(src);
-
-    sess->op_batch->temp_tensors.push_back(op_tensor);
-    ggml_tensor * p_tensor = &sess->op_batch->temp_tensors.back();
-
-    htp_opnode node(p_tensor, {}, HTP_OP_CPY);
-    sess->enqueue_op(node);
+    sess->enqueue_cpy(src, dst);
 
     return true;
 }
@@ -3981,7 +3987,7 @@ static void ggml_backend_hexagon_device_get_props(ggml_backend_dev_t dev, struct
     ggml_backend_hexagon_device_get_memory(dev, &props->memory_free, &props->memory_total);
     props->caps = {
         /* .async                 = */ true,
-        /* .host_buffer           = */ (bool) opt_hostbuf,
+        /* .host_buffer           = */ true,
         /* .buffer_from_host_ptr  = */ false,
         /* .events                = */ false,
     };
@@ -3993,9 +3999,6 @@ static ggml_backend_buffer_type_t ggml_backend_hexagon_device_get_buffer_type(gg
 }
 
 static ggml_backend_buffer_type_t ggml_backend_hexagon_device_get_host_buffer_type(ggml_backend_dev_t dev) {
-    if (!opt_hostbuf) {
-        return NULL;
-    }
     auto sess = static_cast<ggml_hexagon_session *>(dev->context);
     return &sess->host_buffer_type;
 }
@@ -4285,7 +4288,7 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
 
 static bool ggml_backend_hexagon_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
     auto s0 = static_cast<ggml_hexagon_session *>(dev->context);
-    if (opt_hostbuf && buft == &s0->host_buffer_type) {
+    if (buft == &s0->host_buffer_type) {
         return true;
     }
     if (buft->iface.get_alignment != ggml_backend_hexagon_buffer_type_get_alignment) {
@@ -4419,7 +4422,6 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
                   "please update hexagon_type to match ggml_type");
 
     const char * str_verbose  = getenv("GGML_HEXAGON_VERBOSE");
-    const char * str_hostbuf  = getenv("GGML_HEXAGON_HOSTBUF");
     const char * str_opstage  = getenv("GGML_HEXAGON_OPSTAGE");
     const char * str_opbatch  = getenv("GGML_HEXAGON_OPBATCH");
     const char * str_opqueue  = getenv("GGML_HEXAGON_OPQUEUE");
@@ -4470,7 +4472,6 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
 
     opt_opfilter  = str_opfilter ? new std::regex(str_opfilter, RE_ICASE) : NULL;
     opt_verbose   = str_verbose  ? atoi(str_verbose)                      : 0;
-    opt_hostbuf   = str_hostbuf  ? atoi(str_hostbuf)                      : opt_hostbuf;
     opt_opstage   = str_opstage  ? strtoul(str_opstage, NULL, 0)          : opt_opstage;
     opt_opbatch   = str_opbatch  ? strtoul(str_opbatch, NULL, 0)          : opt_opbatch;
     opt_opqueue   = str_opqueue  ? strtoul(str_opqueue, NULL, 0)          : opt_opqueue;
@@ -4484,7 +4485,6 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     opt_mm_select = str_mm_select ? atoi(str_mm_select)                   : opt_mm_select;
     opt_fa_select = str_fa_select ? atoi(str_fa_select)                   : opt_fa_select;
     opt_ndev      = str_ndev     ? strtoul(str_ndev, NULL, 0)             : opt_ndev;
-    opt_hostbuf   = str_hostbuf  ? atoi(str_hostbuf)                      : opt_hostbuf;
     opt_mbuf      = str_mbuf     ? strtoul(str_mbuf, NULL, 0) * MiB       : opt_mbuf;
     opt_vmem      = str_vmem     ? strtoul(str_vmem, NULL, 0) * MiB       : opt_vmem;
 
