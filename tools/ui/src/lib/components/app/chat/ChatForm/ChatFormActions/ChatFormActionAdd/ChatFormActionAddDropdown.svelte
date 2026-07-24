@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { Plus, File, MessageSquare, Zap, FolderOpen } from '@lucide/svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -11,7 +12,8 @@
 	} from '$lib/constants';
 	import {
 		ChatFormActionAddToolsSubmenu,
-		ChatFormActionAddMcpServersSubmenu
+		ChatFormActionAddMcpServersSubmenu,
+		ChatFormActionAddReasoningSubmenu
 	} from '$lib/components/app';
 	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
 
@@ -82,7 +84,7 @@
 					>
 						<span class="sr-only">{ATTACHMENT_TOOLTIP_TEXT}</span>
 
-						<Plus class="h-4 w-4" />
+						<Plus class={ICON_CLASS_DEFAULT} />
 					</DropdownMenu.Trigger>
 				{/snippet}
 			</Tooltip.Trigger>
@@ -92,10 +94,14 @@
 			</Tooltip.Content>
 		</Tooltip.Root>
 
-		<DropdownMenu.Content align="start" class="w-48">
+		<DropdownMenu.Content align="start" class="w-52">
+			<ChatFormActionAddReasoningSubmenu />
+
+			<DropdownMenu.Separator />
+
 			<DropdownMenu.Sub>
 				<DropdownMenu.SubTrigger class="flex cursor-pointer items-center gap-2">
-					<File class="h-4 w-4" />
+					<File class={ICON_CLASS_DEFAULT} />
 
 					<span>Add files</span>
 				</DropdownMenu.SubTrigger>
@@ -108,7 +114,7 @@
 								class="{item.class ?? ''} flex cursor-pointer items-center gap-2"
 								onclick={() => attachmentMenu.callbacks[item.action]()}
 							>
-								<item.icon class="h-4 w-4" />
+								<item.icon class={ICON_CLASS_DEFAULT} />
 
 								<span>{item.label}</span>
 							</DropdownMenu.Item>
@@ -121,7 +127,7 @@
 												class="{item.class ?? ''} flex items-center gap-2"
 												disabled
 											>
-												<item.icon class="h-4 w-4" />
+												<item.icon class={ICON_CLASS_DEFAULT} />
 
 												<span>{item.label}</span>
 											</DropdownMenu.Item>
@@ -142,7 +148,7 @@
 				class="flex cursor-pointer items-center gap-2"
 				onclick={onSystemPromptClick}
 			>
-				<MessageSquare class="h-4 w-4" />
+				<MessageSquare class={ICON_CLASS_DEFAULT} />
 
 				<span>System Message</span>
 			</DropdownMenu.Item>
@@ -158,7 +164,7 @@
 					class="flex cursor-pointer items-center gap-2"
 					onclick={onMcpPromptClick}
 				>
-					<Zap class="h-4 w-4" />
+					<Zap class={ICON_CLASS_DEFAULT} />
 
 					<span>MCP Prompt</span>
 				</DropdownMenu.Item>
@@ -169,7 +175,7 @@
 					class="flex cursor-pointer items-center gap-2"
 					onclick={onMcpResourcesClick}
 				>
-					<FolderOpen class="h-4 w-4" />
+					<FolderOpen class={ICON_CLASS_DEFAULT} />
 
 					<span>MCP Resources</span>
 				</DropdownMenu.Item>

@@ -155,9 +155,13 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_MXFP4_MOE     = 38, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_NVFP4         = 39, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q1_0          = 40, // except 1d tensors
+        LLAMA_FTYPE_MOSTLY_Q2_0          = 41, // except 1d tensors
 
         LLAMA_FTYPE_GUESSED = 1024, // not specified in the model file
     };
+
+    // Get the model file type (quantization) as a string, e.g. "Q8_0" or "Q4_K - Medium"
+    LLAMA_API const char * llama_ftype_name(enum llama_ftype ftype);
 
     enum llama_rope_scaling_type {
         LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED = -1,
@@ -605,6 +609,9 @@ extern "C" {
 
     // Get a string describing the model type
     LLAMA_API int32_t llama_model_desc(const struct llama_model * model, char * buf, size_t buf_size);
+
+    // Get the model file type (quantization), e.g. LLAMA_FTYPE_MOSTLY_Q8_0
+    LLAMA_API enum llama_ftype llama_model_ftype(const struct llama_model * model);
 
     // Returns the total size of all the tensors in the model in bytes
     LLAMA_API uint64_t llama_model_size(const struct llama_model * model);
@@ -1559,6 +1566,16 @@ extern "C" {
     // always returns true
     LLAMA_API bool llama_opt_param_filter_all(const struct ggml_tensor * tensor, void * userdata);
 
+    enum llama_lora_qat_type {
+        LLAMA_LORA_QAT_TYPE_NONE,
+        LLAMA_LORA_QAT_TYPE_Q3_K,
+        LLAMA_LORA_QAT_TYPE_Q4_K,
+        LLAMA_LORA_QAT_TYPE_Q4_0,
+        LLAMA_LORA_QAT_TYPE_MXFP4,
+        LLAMA_LORA_QAT_TYPE_Q6_K,
+        LLAMA_LORA_QAT_TYPE_Q8_0,
+    };
+
     struct llama_opt_params {
         uint32_t n_ctx_train; // assumed context size post training, use context size specified in llama_context if 0
 
@@ -1569,17 +1586,25 @@ extern "C" {
         void * get_opt_pars_ud;                     // userdata for calculating optimizer parameters
 
         enum ggml_opt_optimizer_type optimizer_type;
+        enum llama_lora_qat_type     lora_qat_type;
 
         // Gradient checkpointing: mark every Nth forward graph node as persistent so the
         // allocator cannot reuse its memory during backward.  Reduces peak activation VRAM
         // at the cost of ~0 extra compute (activations are kept, not recomputed).
         // Set to 0 (default) to disable.  Good values: 32–64 nodes ≈ every 1–2 transformer layers.
         int32_t grad_checkpoint_interval;
+
     };
 
     LLAMA_API void llama_opt_init(struct llama_context * lctx, struct llama_model * model, struct llama_opt_params lopt_params);
     // When recreate is true, drop optimizer state while preserving model weights.
     LLAMA_API void llama_opt_reset(struct llama_context * lctx, bool recreate);
+
+    // Shuffle the first idata dataset entries with the optimizer RNG, or all entries if idata is negative.
+    LLAMA_API void llama_opt_dataset_shuffle(
+            struct llama_context * lctx,
+            ggml_opt_dataset_t     dataset,
+            int64_t                idata);
 
     // weights: array of floats, one per dataset window (indexed by idata), already normalized to [0,1].
     // n_weights: length of the array.
@@ -1592,6 +1617,18 @@ extern "C" {
             ggml_opt_dataset_t        dataset,
             ggml_opt_result_t         result_train,
             ggml_opt_result_t         result_eval,
+            int64_t                   idata_split,
+            ggml_opt_epoch_callback   callback_train,
+            ggml_opt_epoch_callback   callback_eval,
+            bool                      shuffle);
+
+    // Train on [idata_start, idata_split), then evaluate on [idata_split, ndata).
+    LLAMA_API void llama_opt_epoch_range(
+            struct llama_context    * lctx,
+            ggml_opt_dataset_t        dataset,
+            ggml_opt_result_t         result_train,
+            ggml_opt_result_t         result_eval,
+            int64_t                   idata_start,
             int64_t                   idata_split,
             ggml_opt_epoch_callback   callback_train,
             ggml_opt_epoch_callback   callback_eval,

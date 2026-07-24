@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
@@ -13,7 +14,7 @@
 
 	let { class: className = '', onclick }: Props = $props();
 
-	let mcpServers = $derived(mcpStore.getServersSorted().filter((s) => s.enabled));
+	let mcpServers = $derived(mcpStore.getServers().filter((s) => s.enabled));
 	let enabledMcpServersForChat = $derived(
 		mcpServers.filter((s) => conversationsStore.isMcpServerEnabledForChat(s.id) && s.url.trim())
 	);
@@ -50,7 +51,7 @@
 	>
 		<Tooltip.Root>
 			<Tooltip.Trigger>
-				<McpLogo class="h-4 w-4" />
+				<McpLogo class={ICON_CLASS_DEFAULT} />
 			</Tooltip.Trigger>
 
 			<Tooltip.Content>
@@ -68,7 +69,7 @@
 							<img
 								src={favicon.url}
 								alt=""
-								class="h-4 w-4"
+								class={ICON_CLASS_DEFAULT}
 								onerror={(e) => {
 									(e.currentTarget as HTMLImageElement).style.display = 'none';
 								}}

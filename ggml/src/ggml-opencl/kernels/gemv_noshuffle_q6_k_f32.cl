@@ -288,6 +288,11 @@ kernel void kernel_gemv_noshuffle_q6_K_f32(
 
     if (grp == 0) {
         dst = (global float*)((global char*)dst + offsetd);
-        vstore2(total_sum, 0, &(dst[gid * 2]));
+        // Guard the two output rows. The x-grid is padded to CEIL_DIV(ne01/2,64)*64,
+        // so when ne01 is not a multiple of 128 the tail row-pairs run past row ne01
+        // and would overrun dst into the adjacent tensor (garbage downstream).
+        // No-op / byte-identical when ne01 % 128 == 0 (no padding).
+        if (gid * 2 + 0 < ne01) dst[gid * 2 + 0] = total_sum.s0;
+        if (gid * 2 + 1 < ne01) dst[gid * 2 + 1] = total_sum.s1;
     }
 }

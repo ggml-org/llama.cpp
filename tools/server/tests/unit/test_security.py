@@ -91,7 +91,7 @@ def test_openai_library_correct_api_key():
     ("localhost", "Access-Control-Allow-Origin", "localhost"),
     ("web.mydomain.fr", "Access-Control-Allow-Origin", "web.mydomain.fr"),
     ("origin", "Access-Control-Allow-Credentials", "true"),
-    ("web.mydomain.fr", "Access-Control-Allow-Methods", "GET, POST"),
+    ("web.mydomain.fr", "Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS"),
     ("web.mydomain.fr", "Access-Control-Allow-Headers", "*"),
 ])
 def test_cors_options(origin: str, cors_header: str, cors_header_value: str):
@@ -105,6 +105,70 @@ def test_cors_options(origin: str, cors_header: str, cors_header_value: str):
     assert res.status_code == 200
     assert cors_header in res.headers
     assert res.headers[cors_header] == cors_header_value
+
+
+@pytest.mark.parametrize("origin", [
+    "http://localhost",
+    "http://localhost:8080",
+    "http://127.0.0.1",
+    "http://127.0.0.1:3000",
+    "http://[::1]",
+    "http://[::1]:3000",
+])
+def test_cors_origins_localhost_reflects(origin: str):
+    global server
+    server = ServerPreset.router()
+    server.cors_origins = "localhost"
+    server.start()
+    res = server.make_request("OPTIONS", "/completions", headers={
+        "Origin": origin,
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "Authorization",
+    })
+    assert res.status_code == 200
+    assert res.headers["Access-Control-Allow-Origin"] == origin
+
+
+@pytest.mark.parametrize("origin", [
+    "http://web.mydomain.fr",
+    "http://evil.com",
+    "http://notlocalhost",
+    "http://localhost.evil.com",
+])
+def test_cors_origins_localhost_rejects(origin: str):
+    global server
+    server = ServerPreset.router()
+    server.cors_origins = "localhost"
+    server.start()
+    res = server.make_request("OPTIONS", "/completions", headers={
+        "Origin": origin,
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "Authorization",
+    })
+    assert res.status_code == 200
+    assert "Access-Control-Allow-Origin" not in res.headers
+
+
+def test_cors_origins_defaults_to_localhost_with_tools_enabled():
+    global server
+    server = ServerPreset.router()
+    server.server_tools = "all"
+    server.start()
+    res = server.make_request("OPTIONS", "/completions", headers={
+        "Origin": "http://localhost:8080",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "Authorization",
+    })
+    assert res.status_code == 200
+    assert res.headers["Access-Control-Allow-Origin"] == "http://localhost:8080"
+
+    res = server.make_request("OPTIONS", "/completions", headers={
+        "Origin": "http://evil.com",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "Authorization",
+    })
+    assert res.status_code == 200
+    assert "Access-Control-Allow-Origin" not in res.headers
 
 
 def test_cors_proxy_only_forwards_explicit_proxy_headers():

@@ -37,6 +37,10 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
     add((new field_bool("return_progress", params.return_progress))
         ->set_desc("Include prompt processing progress events in stream mode"));
 
+    add((new field_num("sse_ping_interval", params.sse_ping_interval))
+        ->set_hard_limits(-1, INT32_MAX)
+        ->set_desc("Interval in seconds between SSE comment pings emitted while the stream stays silent, -1 disables pings"));
+
     add((new field_num("n_predict", params.n_predict))
         ->set_hard_limits(-1, INT32_MAX)
         ->add_alias("max_completion_tokens")
@@ -504,6 +508,7 @@ task_params eval_llama_cmpl_schema(
     params.n_cache_reuse = params_base.n_cache_reuse;
     params.cache_prompt  = params_base.cache_prompt;
     params.antiprompt    = params_base.antiprompt;
+    params.sse_ping_interval = params_base.sse_ping_interval;
 
     // enabling this will output extra debug information in the HTTP responses from the server
     params.verbose       = params_base.verbosity > 9;
@@ -563,10 +568,16 @@ static void handle_with_catch(const char * name, std::function<void()> func) {
     }
 }
 
+// treat a null value as absent so clients can send null to request the server default
+static bool has_value(const json & data, const char * n) {
+    auto it = data.find(n);
+    return it != data.end() && !it->is_null();
+}
+
 template <typename T>
 void field_num<T>::eval(field_eval_context & ctx, const json & data) {
     for (const auto & n : name) {
-        if (data.contains(n)) {
+        if (has_value(data, n)) {
             handle_with_catch(n, [&]() {
                 if (custom_handler) {
                 custom_handler(ctx, data);
@@ -588,7 +599,7 @@ void field_num<T>::eval(field_eval_context & ctx, const json & data) {
 void field_str::eval(field_eval_context & ctx, const json & data) {
     GGML_ASSERT(custom_handler);
     for (const auto & n : name) {
-        if (data.contains(n)) {
+        if (has_value(data, n)) {
             handle_with_catch(n, [&]() {
                 custom_handler(ctx, data);
             });
@@ -599,7 +610,7 @@ void field_str::eval(field_eval_context & ctx, const json & data) {
 
 void field_bool::eval(field_eval_context & ctx, const json & data) {
     for (const auto & n : name) {
-        if (data.contains(n)) {
+        if (has_value(data, n)) {
             handle_with_catch(n, [&]() {
                 if (custom_handler) {
                     custom_handler(ctx, data);
@@ -615,7 +626,7 @@ void field_bool::eval(field_eval_context & ctx, const json & data) {
 void field_json::eval(field_eval_context & ctx, const json & data) {
     GGML_ASSERT(custom_handler);
     for (const auto & n : name) {
-        if (data.contains(n)) {
+        if (has_value(data, n)) {
             handle_with_catch(n, [&]() {
                 custom_handler(ctx, data);
             });

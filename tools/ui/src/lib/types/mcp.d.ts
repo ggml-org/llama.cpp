@@ -174,7 +174,6 @@ export interface HealthCheckParams {
 	id: string;
 	enabled: boolean;
 	url: string;
-	requestTimeoutSeconds: number;
 	headers?: string;
 	useProxy?: boolean;
 }
@@ -209,16 +208,41 @@ export type MCPToolCall = {
 	};
 };
 
-export type MCPServerSettingsEntry = {
+/**
+ * Minimum fields needed to display or identify an MCP server.
+ */
+export interface MCPServerDisplayInfo {
 	id: string;
-	enabled: boolean;
-	url: string;
-	requestTimeoutSeconds: number;
-	headers?: string;
 	name?: string;
+	url: string;
+}
+
+export type MCPServerSettingsEntry = MCPServerDisplayInfo & {
+	enabled: boolean;
+	headers?: string;
 	iconUrl?: string;
 	useProxy?: boolean;
 };
+
+/**
+ * Pre-defined recommended MCP server shown to the user in picker UIs.
+ * Intentionally minimal: rendering must never trigger a network call to
+ * the upstream server until the user explicitly adds it.
+ */
+export interface RecommendedMCPServer {
+	id: string;
+	name: string;
+	description: string;
+	url: string;
+	/** Local asset path (e.g. "/recommended-mcp/exa.ico") for the card favicon. Used regardless of theme. */
+	iconUrl?: string;
+	/** Light-theme favicon (e.g. "/recommended-mcp/github-light.png"). Preferred over `iconUrl` when paired with `iconUrlDark`. */
+	iconUrlLight?: string;
+	/** Dark-theme favicon (e.g. "/recommended-mcp/github-dark.png"). Preferred over `iconUrl` when paired with `iconUrlLight`. */
+	iconUrlDark?: string;
+	/** When true, picking this recommendation also flips the form's "Authorization" switch on so the user can paste a Bearer token right away. */
+	needsAuthorization?: boolean;
+}
 
 export interface MCPHostManagerConfig {
 	servers: MCPClientConfig['servers'];

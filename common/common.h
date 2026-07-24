@@ -14,6 +14,7 @@
 #include <vector>
 #include <map>
 #include <algorithm>
+#include <fstream>
 
 #if defined(_WIN32) && !defined(_WIN32_WINNT)
 #define _WIN32_WINNT 0x0A00
@@ -105,6 +106,7 @@ enum llama_example {
     LLAMA_EXAMPLE_RESULTS,
     LLAMA_EXAMPLE_EXPORT_GRAPH_OPS,
     LLAMA_EXAMPLE_DOWNLOAD,
+    LLAMA_EXAMPLE_TOKENIZE,
 
     LLAMA_EXAMPLE_COUNT,
 };
@@ -609,11 +611,14 @@ struct common_params {
     float       lora_alpha         = 0.0f;            // LoRA alpha (0 = use rank value)
     std::string lora_targets       = "attn_q,attn_output,ffn_gate,ffn_up,ffn_down"; // comma-separated substrings to match trainable tensors
     std::string lora_out           = "adapter.gguf";  // output adapter GGUF path
+    std::string lora_resume        = "";              // QLoRA checkpoint GGUF to resume
     std::string train_file         = "";              // JSONL training dataset path
+    int32_t dataset_threads        = 0;               // dataset loading workers (0 = physical CPU cores)
     int32_t save_every             = 0;     // save checkpoint every N optimizer steps (0 = disabled)
     int32_t lora_freeze_layers     = 0;     // do not apply LoRA to the first N transformer layers
     int32_t grad_checkpoint_interval = 0;  // gradient checkpointing interval to reduce peak VRAM (0 = disabled)
     int32_t optimizer_restart_every = 0;   // reset optimizer state every N epochs (0 = disabled)
+    std::string lora_qat             = "none"; // none, q3_k, q4_k, q4_0, mxfp4, q6_k, q8_0
     bool    train_on_prompt        = false; // include prompt tokens in training loss (default: response tokens only)
     bool    shuffle_dataset        = false; // shuffle dataset windows at the start of each epoch
 
@@ -650,6 +655,14 @@ struct common_params {
     std::string api_prefix    = "";                                                                         // NOLINT
     std::string chat_template = "";                                                                         // NOLINT
     bool use_jinja = true;                                                                                  // NOLINT
+
+    // server CORS params
+    std::string cors_origins = "*";
+    std::string cors_methods = "GET, POST, DELETE, OPTIONS";
+    std::string cors_headers = "*";
+    bool cors_credentials = true;
+    bool cors_origins_explicit = false; // for --agent option
+
     bool enable_chat_template = true;
     bool force_pure_content_parser = false;
     common_reasoning_format reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
@@ -663,6 +676,9 @@ struct common_params {
     std::string ssl_file_cert = "";                                                                         // NOLINT
 
     std::map<std::string, std::string> default_template_kwargs;
+
+    // CLI params
+    std::string server_base; // if set, connect to this server instead of starting a new one
 
     // UI configs
     bool ui = true;
@@ -732,6 +748,12 @@ struct common_params {
 
     // batched-bench params
     bool batched_bench_output_jsonl = false;
+
+    // tokenize params
+    bool tokenize_ids        = false; // if true, only print the token IDs
+    bool tokenize_stdin      = false; // if true, read the prompt from stdin
+    bool tokenize_no_bos     = false; // if true, do not add the BOS token
+    bool tokenize_show_count = false; // if true, print the total token count
 
     // common params
     std::string out_file; // output filename for all example programs
@@ -1088,7 +1110,7 @@ inline llama_model_tensor_buft_override llm_ffn_exps_cpu_override() {
 
 ggml_opt_dataset_t common_opt_dataset_init(struct llama_context * ctx, const std::vector<llama_token> & tokens, int64_t stride);
 
-// "adamw" or "sgd" (case insensitive)
+// "adamw", "adamw_f16", "adamw_q8_0", "adamw_q6_k", "adamw_iq4_nl", or "sgd" (case insensitive)
 enum ggml_opt_optimizer_type common_opt_get_optimizer(const char *);
 
 //
@@ -1097,6 +1119,9 @@ enum ggml_opt_optimizer_type common_opt_get_optimizer(const char *);
 
 struct common_prompt_checkpoint {
     int64_t n_tokens;
+
+    // (optional) id of the task that created the checkpoint
+    int id_task = -1;
 
     llama_pos pos_min;
     llama_pos pos_max;

@@ -58,13 +58,16 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <clocale>
 #include <cmath>
 #include <cstring>
 #include <fstream>
 #include <random>
+#include <set>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -91,6 +94,21 @@ static std::vector<std::string> split_csv(const std::string & s) {
         if (!tok.empty()) out.push_back(tok);
     }
     return out;
+}
+
+static int64_t train_split_from_val_fraction(int64_t ndata, float val_split) {
+    if (ndata <= 0) {
+        return 0;
+    }
+    if (val_split <= 0.0f) {
+        return ndata;
+    }
+    if (val_split >= 1.0f) {
+        return 0;
+    }
+
+    const int64_t split = (int64_t) (ndata * (1.0f - val_split));
+    return std::max<int64_t>(1, split);
 }
 
 static std::string preview_text(const std::string & s, size_t max_len = 240) {
@@ -164,6 +182,72 @@ struct training_sample {
     float                    reward;   // reward/score weight (1.0 = neutral, 0.0 = ignore)
 };
 
+struct tokenization_request {
+    std::string prompt;
+    std::string response;
+    float reward = 1.0f;
+};
+
+struct jsonl_input_line {
+    std::string text;
+    int lineno;
+};
+
+struct jsonl_load_result {
+    tokenization_request request;
+    training_sample      sample;
+    bool                 parsed = false;
+    bool                 valid = false;
+};
+
+static size_t physical_core_count() {
+#ifdef __linux__
+    std::ifstream cpuinfo("/proc/cpuinfo");
+    if (cpuinfo.is_open()) {
+        std::set<std::pair<int, int>> cores;
+        int package_id = -1;
+        int core_id = -1;
+        std::string line;
+
+        auto add_core = [&] {
+            if (package_id >= 0 && core_id >= 0) {
+                cores.insert({ package_id, core_id });
+            }
+            package_id = -1;
+            core_id = -1;
+        };
+
+        while (std::getline(cpuinfo, line)) {
+            if (line.empty()) {
+                add_core();
+                continue;
+            }
+
+            const size_t colon = line.find(':');
+            if (colon == std::string::npos) continue;
+            const std::string key = line.substr(0, colon);
+            if (key.find("physical id") != std::string::npos) {
+                package_id = std::stoi(line.substr(colon + 1));
+            } else if (key.find("core id") != std::string::npos) {
+                core_id = std::stoi(line.substr(colon + 1));
+            }
+        }
+        add_core();
+
+        if (!cores.empty()) {
+            return cores.size();
+        }
+    }
+#endif
+
+    return std::max(1u, std::thread::hardware_concurrency());
+}
+
+static size_t dataset_worker_count(int32_t requested, size_t n_lines) {
+    const size_t n_workers = requested > 0 ? (size_t) requested : physical_core_count();
+    return std::min(n_lines, n_workers);
+}
+
 // Apply a very simple ChatML fallback template when the model has no template.
 static std::string apply_chatml(const std::vector<common_chat_msg> & msgs) {
     std::string out;
@@ -183,8 +267,9 @@ static std::string apply_chatml(const std::vector<common_chat_msg> & msgs) {
 
 static std::vector<training_sample> load_jsonl(
         const std::string & path,
-        llama_context      * ctx,
-        common_chat_templates * tmpls) {
+        const llama_vocab  * vocab,
+        common_chat_templates * tmpls,
+        int32_t              n_threads) {
 
     std::ifstream f(path);
     if (!f.is_open()) {
@@ -193,6 +278,7 @@ static std::vector<training_sample> load_jsonl(
     }
 
     std::vector<training_sample> samples;
+    std::vector<jsonl_input_line> lines;
     std::string line;
     int lineno = 0;
     bool logged_preview = false;
@@ -201,21 +287,39 @@ static std::vector<training_sample> load_jsonl(
         ++lineno;
         if (line.empty()) continue;
 
-        nlohmann::json j;
-        try { j = nlohmann::json::parse(line); }
-        catch (...) {
-            LOG_WRN("%s: skipping invalid JSON on line %d\n", __func__, lineno);
-            continue;
-        }
+        lines.push_back({ std::move(line), lineno });
+    }
 
-        float reward = 1.0f;
-        if      (j.contains("reward")) reward = j["reward"].get<float>();
-        else if (j.contains("score"))  reward = j["score"].get<float>();
+    std::vector<jsonl_load_result> results(lines.size());
+    std::atomic<size_t> next_line { 0 };
+    const size_t n_workers = dataset_worker_count(n_threads, lines.size());
+    std::vector<std::thread> workers;
+    workers.reserve(n_workers);
 
-        std::string prompt_text;
-        std::string response_text;
+    for (size_t worker = 0; worker < n_workers; ++worker) {
+        workers.emplace_back([&] {
+            for (;;) {
+                const size_t i = next_line.fetch_add(1);
+                if (i >= lines.size()) break;
 
-        if (j.contains("messages")) {
+                const jsonl_input_line & input = lines[i];
+                jsonl_load_result & result = results[i];
+
+                nlohmann::json j;
+                try { j = nlohmann::json::parse(input.text); }
+                catch (...) {
+                    LOG_WRN("%s: skipping invalid JSON on line %d\n", __func__, input.lineno);
+                    continue;
+                }
+
+                float reward = 1.0f;
+                if      (j.contains("reward")) reward = j["reward"].get<float>();
+                else if (j.contains("score"))  reward = j["score"].get<float>();
+
+                std::string prompt_text;
+                std::string response_text;
+
+                if (j.contains("messages")) {
             // chat format — apply template
             std::vector<common_chat_msg> msgs;
             for (const auto & m : j["messages"]) {
@@ -243,7 +347,7 @@ static std::vector<training_sample> load_jsonl(
             }
             if (last_asst_idx < 0) {
                 // No assistant turn: nothing to train on.
-                LOG_DBG("%s: skipping line %d: no assistant turn\n", __func__, lineno);
+                LOG_DBG("%s: skipping line %d: no assistant turn\n", __func__, input.lineno);
                 continue;
             }
             last_assistant_content = msgs[last_asst_idx].content_parts.empty()
@@ -300,10 +404,10 @@ static std::vector<training_sample> load_jsonl(
                     if (marker_pos != std::string::npos) {
                         response_text = last_assistant_content + marked_text.substr(marker_pos + marker.size());
                         LOG_WRN("%s: line %d full chat render is not prefixed by prompt render; using marker-derived response suffix\n",
-                                __func__, lineno);
+                                __func__, input.lineno);
                     } else {
                         LOG_WRN("%s: line %d could not derive template response suffix; using raw assistant content\n",
-                                __func__, lineno);
+                                __func__, input.lineno);
                         response_text = last_assistant_content;
                     }
                 }
@@ -314,41 +418,55 @@ static std::vector<training_sample> load_jsonl(
                 prompt_text   = "";
                 response_text = apply_chatml(all_msgs);
             }
-        } else if (j.contains("prompt") && j.contains("response")) {
+                } else if (j.contains("prompt") && j.contains("response")) {
             response_text = j["response"].get<std::string>();
             prompt_text = j["prompt"].get<std::string>();
-        } else if (j.contains("text")) {
+                } else if (j.contains("text")) {
             response_text = j["text"].get<std::string>();
-        } else {
-            LOG_WRN("%s: unknown format on line %d, skipping\n", __func__, lineno);
-            continue;
-        }
+                } else {
+                    LOG_WRN("%s: unknown format on line %d, skipping\n", __func__, input.lineno);
+                    continue;
+                }
 
-        // Tokenize template-rendered text with special parsing so chat markers
-        // match the inference path used by llama-cli --jinja.
-        auto tok_prompt   = common_tokenize(ctx, prompt_text,   /*add_special=*/true,  /*parse_special=*/true);
-        auto tok_response = common_tokenize(ctx, response_text, /*add_special=*/false, /*parse_special=*/true);
+                result.parsed = true;
+                result.request = {std::move(prompt_text), std::move(response_text), reward};
 
-        if (tok_prompt.empty() && tok_response.empty()) continue;
+                const tokenization_request & request = result.request;
+                auto tok_prompt = common_tokenize(vocab, request.prompt, /*add_special=*/true, /*parse_special=*/true);
+                auto tok_response = common_tokenize(vocab, request.response, /*add_special=*/false, /*parse_special=*/true);
+                if (tok_prompt.empty() && tok_response.empty()) continue;
 
+                training_sample & sample = result.sample;
+                sample.reward = request.reward;
+                sample.tokens.insert(sample.tokens.end(), tok_prompt.begin(), tok_prompt.end());
+                sample.tokens.insert(sample.tokens.end(), tok_response.begin(), tok_response.end());
+                sample.is_label.resize(sample.tokens.size(), false);
+                for (size_t j = tok_prompt.size(); j < sample.tokens.size(); ++j) {
+                    sample.is_label[j] = true;
+                }
+                result.valid = true;
+            }
+        });
+    }
+    for (std::thread & worker : workers) worker.join();
+
+    samples.reserve(results.size());
+    size_t n_requests = 0;
+    for (size_t i = 0; i < results.size(); ++i) {
+        const jsonl_load_result & result = results[i];
+        if (result.parsed) ++n_requests;
+        if (!result.valid) continue;
         if (!logged_preview) {
             logged_preview = true;
-            LOG_INF("%s: first prompt preview: \"%s\"\n", __func__, preview_text(prompt_text).c_str());
-            LOG_INF("%s: first response preview: \"%s\"\n", __func__, preview_text(response_text).c_str());
-            LOG_INF("%s: first sample tokens: prompt=%zu response=%zu\n", __func__, tok_prompt.size(), tok_response.size());
+            LOG_INF("%s: first prompt preview: \"%s\"\n", __func__, preview_text(result.request.prompt).c_str());
+            LOG_INF("%s: first response preview: \"%s\"\n", __func__, preview_text(result.request.response).c_str());
+            const size_t prompt_tokens = result.sample.tokens.size() - std::count(result.sample.is_label.begin(), result.sample.is_label.end(), true);
+            LOG_INF("%s: first sample tokens: prompt=%zu response=%zu\n", __func__, prompt_tokens, result.sample.tokens.size() - prompt_tokens);
         }
-
-        training_sample s;
-        s.reward = reward;
-        s.tokens.insert(s.tokens.end(), tok_prompt.begin(),   tok_prompt.end());
-        s.tokens.insert(s.tokens.end(), tok_response.begin(), tok_response.end());
-        s.is_label.resize(s.tokens.size(), false);
-        // Only response tokens contribute to the loss
-        for (size_t i = tok_prompt.size(); i < s.tokens.size(); ++i) {
-            s.is_label[i] = true;
-        }
-        samples.push_back(std::move(s));
+        samples.push_back(std::move(results[i].sample));
     }
+
+    LOG_INF("%s: tokenized %zu input lines with %zu workers\n", __func__, n_requests, n_workers);
 
     LOG_INF("%s: loaded %zu samples from %s\n", __func__, samples.size(), path.c_str());
     return samples;
@@ -589,6 +707,16 @@ static bool lora_param_filter(const struct ggml_tensor * t, void * /*ud*/) {
     return false;
 }
 
+static enum llama_lora_qat_type lora_qat_type_from_string(const std::string & type) {
+    if (type == "q3_k") return  LLAMA_LORA_QAT_TYPE_Q3_K;
+    if (type == "q4_k") return  LLAMA_LORA_QAT_TYPE_Q4_K;
+    if (type == "q4_0") return  LLAMA_LORA_QAT_TYPE_Q4_0;
+    if (type == "mxfp4") return LLAMA_LORA_QAT_TYPE_MXFP4;
+    if (type == "q6_k") return  LLAMA_LORA_QAT_TYPE_Q6_K;
+    if (type == "q8_0") return  LLAMA_LORA_QAT_TYPE_Q8_0;
+    return LLAMA_LORA_QAT_TYPE_NONE;
+}
+
 // ---------------------------------------------------------------------------
 // Save adapter GGUF
 // ---------------------------------------------------------------------------
@@ -599,12 +727,142 @@ static std::string basename_from_path(const std::string & p) {
     return p.substr(pos + 1);
 }
 
+struct checkpoint_state {
+    std::string mode;
+    int64_t     epoch           = 0;
+    int64_t     window          = 0;
+    int64_t     step            = 0;
+    int64_t     dataset_windows = -1;
+    int64_t     context_length  = -1;
+    bool        shuffle         = false;
+    bool        has_metadata    = false;
+    float       alpha           = 0.0f;
+    bool        has_alpha       = false;
+};
+
+static bool parse_checkpoint_number(
+        const std::string & path,
+        size_t              begin,
+        size_t              end,
+        int64_t           & value) {
+    if (begin >= end) return false;
+
+    const std::string number = path.substr(begin, end - begin);
+    char * number_end = nullptr;
+    errno = 0;
+    const long long parsed = strtoll(number.c_str(), &number_end, 10);
+    if (errno != 0 || number_end != number.c_str() + number.size() || parsed < 0) return false;
+
+    value = (int64_t) parsed;
+    return true;
+}
+
+static bool checkpoint_state_from_filename(
+        const std::string & path,
+        const std::string & mode,
+        checkpoint_state  & state) {
+    const size_t suffix = path.rfind(".gguf");
+    if (suffix == std::string::npos || suffix + 5 != path.size()) return false;
+
+    if (mode == "sft") {
+        const size_t epoch_tag = path.rfind(".epoch", suffix);
+        const size_t ckpt_tag  = path.rfind(".ckpt",  suffix);
+        if (epoch_tag == std::string::npos || ckpt_tag == std::string::npos || epoch_tag >= ckpt_tag) return false;
+        if (!parse_checkpoint_number(path, epoch_tag + 6, ckpt_tag, state.epoch)) return false;
+        if (!parse_checkpoint_number(path, ckpt_tag + 5, suffix, state.window)) return false;
+    } else {
+        const size_t ckpt_tag = path.rfind(".ckpt", suffix);
+        if (ckpt_tag == std::string::npos) return false;
+        if (!parse_checkpoint_number(path, ckpt_tag + 5, suffix, state.step)) return false;
+    }
+
+    state.mode = mode;
+    return true;
+}
+
+static bool gguf_get_i64(const gguf_context * gctx, const char * key, int64_t & value) {
+    const int64_t key_id = gguf_find_key(gctx, key);
+    if (key_id < 0) return false;
+
+    switch (gguf_get_kv_type(gctx, key_id)) {
+        case GGUF_TYPE_UINT32: value = gguf_get_val_u32(gctx, key_id); return true;
+        case GGUF_TYPE_INT32:  value = gguf_get_val_i32(gctx, key_id); return true;
+        case GGUF_TYPE_UINT64: {
+            const uint64_t val = gguf_get_val_u64(gctx, key_id);
+            if (val > INT64_MAX) return false;
+            value = (int64_t) val;
+            return true;
+        }
+        case GGUF_TYPE_INT64: value = gguf_get_val_i64(gctx, key_id); return true;
+        default: return false;
+    }
+}
+
+static bool load_checkpoint_state(
+        const std::string & path,
+        const std::string & expected_mode,
+        checkpoint_state  & state) {
+    ggml_context * ctx_meta = nullptr;
+    const gguf_init_params params = { true, &ctx_meta };
+    gguf_context * gctx = gguf_init_from_file(expand_tilde(path).c_str(), params);
+    if (!gctx) {
+        LOG_ERR("%s: cannot open checkpoint %s\n", __func__, path.c_str());
+        return false;
+    }
+
+    const int64_t mode_id = gguf_find_key(gctx, "training.checkpoint.mode");
+    if (mode_id >= 0 && gguf_get_kv_type(gctx, mode_id) == GGUF_TYPE_STRING) {
+        state.mode = gguf_get_val_str(gctx, mode_id);
+        state.has_metadata = true;
+        gguf_get_i64(gctx, "training.checkpoint.epoch", state.epoch);
+        gguf_get_i64(gctx, "training.checkpoint.window", state.window);
+        gguf_get_i64(gctx, "training.checkpoint.step", state.step);
+        gguf_get_i64(gctx, "training.dataset.windows", state.dataset_windows);
+        gguf_get_i64(gctx, "training.context_length", state.context_length);
+
+        const int64_t shuffle_id = gguf_find_key(gctx, "training.dataset.shuffle");
+        if (shuffle_id >= 0 && gguf_get_kv_type(gctx, shuffle_id) == GGUF_TYPE_BOOL) {
+            state.shuffle = gguf_get_val_bool(gctx, shuffle_id);
+        }
+    }
+
+    const int64_t alpha_id = gguf_find_key(gctx, "adapter.lora.alpha");
+    if (alpha_id >= 0 && gguf_get_kv_type(gctx, alpha_id) == GGUF_TYPE_FLOAT32) {
+        state.alpha = gguf_get_val_f32(gctx, alpha_id);
+        state.has_alpha = true;
+    }
+
+    gguf_free(gctx);
+    ggml_free(ctx_meta);
+
+    if (!state.has_metadata && !checkpoint_state_from_filename(path, expected_mode, state)) {
+        LOG_ERR("%s: %s has no checkpoint metadata and its filename does not contain a checkpoint position\n",
+                __func__, path.c_str());
+        return false;
+    }
+    if (state.mode != expected_mode) {
+        LOG_ERR("%s: checkpoint mode is %s, expected %s\n",
+                __func__, state.mode.c_str(), expected_mode.c_str());
+        return false;
+    }
+    if (state.mode == "sft" && state.epoch <= 0) {
+        LOG_ERR("%s: invalid checkpoint epoch %ld\n", __func__, (long) state.epoch);
+        return false;
+    }
+    if (state.window < 0 || state.step < 0) {
+        LOG_ERR("%s: checkpoint contains a negative training position\n", __func__);
+        return false;
+    }
+    return true;
+}
+
 static void save_adapter(
         const lora_tensors & lt,
         const std::string  & out_path,
         const std::string  & arch,
         float                alpha,
-        const std::string  & base_model_path) {
+        const std::string  & base_model_path,
+        const checkpoint_state * checkpoint = nullptr) {
 
     // Build output GGUF context
     struct gguf_context * gctx = gguf_init_empty();
@@ -615,6 +873,17 @@ static void save_adapter(
     gguf_set_val_str(gctx, "adapter.type",          "lora");
     gguf_set_val_f32(gctx, "adapter.lora.alpha",    alpha);
     gguf_set_val_str(gctx, "adapter.base_model",    basename_from_path(base_model_path).c_str());
+
+    if (checkpoint) {
+        gguf_set_val_u32(gctx, "training.checkpoint.version", 1);
+        gguf_set_val_str(gctx, "training.checkpoint.mode", checkpoint->mode.c_str());
+        gguf_set_val_i64(gctx, "training.checkpoint.epoch", checkpoint->epoch);
+        gguf_set_val_i64(gctx, "training.checkpoint.window", checkpoint->window);
+        gguf_set_val_i64(gctx, "training.checkpoint.step", checkpoint->step);
+        gguf_set_val_i64(gctx, "training.dataset.windows", checkpoint->dataset_windows);
+        gguf_set_val_i64(gctx, "training.context_length", checkpoint->context_length);
+        gguf_set_val_bool(gctx, "training.dataset.shuffle", checkpoint->shuffle);
+    }
 
     // Register tensors
     for (const auto & kv : lt.ab) {
@@ -713,8 +982,12 @@ struct save_ctx {
     float                lora_alpha;
     int32_t              save_every;     // 0 = disabled
     int32_t              ubatch_per_ctx;
+    int64_t              window_offset;  // completed windows before this epoch call
     int64_t              last_saved;     // last window index at which we saved
-    int32_t              epoch;
+    int64_t              epoch;
+    int64_t              dataset_windows;
+    int64_t              context_length;
+    bool                 shuffle;
 };
 
 // TLS pointer set before each epoch so the static callback can access it.
@@ -732,9 +1005,9 @@ static void save_every_callback(
 
     // Log loss at every window boundary so we can see if/when it diverges.
     if (train && g_save_ctx) {
-        const int64_t window = ibatch / g_save_ctx->ubatch_per_ctx;
+        const int64_t window = g_save_ctx->window_offset + ibatch / g_save_ctx->ubatch_per_ctx;
         const int64_t ubatch_in_window = ibatch % g_save_ctx->ubatch_per_ctx;
-        if (ubatch_in_window == g_save_ctx->ubatch_per_ctx - 1) {
+        if (ibatch > 0 && ubatch_in_window == 0) {
             double loss = 0.0, loss_unc = 0.0;
             ggml_opt_result_loss(result, &loss, &loss_unc);
             fprintf(stderr, "\n[window %4ld] loss=%.4f ± %.4f\n", (long)window, loss, loss_unc);
@@ -742,13 +1015,21 @@ static void save_every_callback(
     }
 
     if (!train || !g_save_ctx || g_save_ctx->save_every <= 0) return;
-    const int64_t window = ibatch / g_save_ctx->ubatch_per_ctx;
+    const int64_t window = g_save_ctx->window_offset + ibatch / g_save_ctx->ubatch_per_ctx;
     if (window > 0 && window != g_save_ctx->last_saved && window % g_save_ctx->save_every == 0) {
         g_save_ctx->last_saved = window;
         const std::string ckpt = *g_save_ctx->lora_out
             + ".epoch" + std::to_string(g_save_ctx->epoch)
             + ".ckpt" + std::to_string(window) + ".gguf";
-        save_adapter(*g_save_ctx->lt, ckpt, *g_save_ctx->arch, g_save_ctx->lora_alpha, *g_save_ctx->base_model_path);
+        checkpoint_state state;
+        state.mode            = "sft";
+        state.epoch           = g_save_ctx->epoch;
+        state.window          = window;
+        state.dataset_windows = g_save_ctx->dataset_windows;
+        state.context_length  = g_save_ctx->context_length;
+        state.shuffle         = g_save_ctx->shuffle;
+        save_adapter(*g_save_ctx->lt, ckpt, *g_save_ctx->arch, g_save_ctx->lora_alpha,
+                     *g_save_ctx->base_model_path, &state);
         fprintf(stderr, "\n");
         LOG_INF("save_every_callback: checkpoint saved -> %s (window %ld)\n", ckpt.c_str(), (long)window);
     }
@@ -900,14 +1181,21 @@ static int run_grpo_mode(
         llama_context    * ctx,
         lora_tensors     & lt,
         const std::string & arch,
-    float              lora_alpha,
-    const std::string & base_model_path) {
+        float               lora_alpha,
+        const std::string & base_model_path,
+        const checkpoint_state * resume) {
 
     const int32_t n_ctx    = llama_n_ctx(ctx);
     const int32_t n_gen    = params.grpo_n_gen;
     const int32_t n_steps  = params.grpo_n_steps;
     const float   temp     = params.grpo_temperature;
     const int32_t max_tok  = params.grpo_max_tokens;
+
+    if (resume && resume->context_length >= 0 && resume->context_length != n_ctx) {
+        LOG_ERR("%s: checkpoint context length is %ld, current context length is %d\n",
+                __func__, (long) resume->context_length, n_ctx);
+        return 1;
+    }
 
     std::mt19937 rng(params.sampling.seed != LLAMA_DEFAULT_SEED
                      ? params.sampling.seed : 42);
@@ -920,6 +1208,7 @@ static int run_grpo_mode(
         /*.get_opt_pars             =*/common_opt_lr_pars,
         /*.get_opt_pars_ud          =*/&params.lr,
         /*.optimizer_type           =*/params.optimizer,
+        /*.lora_qat_type            =*/lora_qat_type_from_string(params.lora_qat),
         /*.grad_checkpoint_interval =*/params.grad_checkpoint_interval,
     };
     llama_opt_init(ctx, model, lopt_params);
@@ -932,7 +1221,12 @@ static int run_grpo_mode(
     ipc_emit("[QLORA:READY]");
 
     float last_loss = 0.0f;
-    int   step      = 0;
+    int   step      = resume ? (int) resume->step : 0;
+
+    if (resume) {
+        LOG_INF("%s: resuming GRPO after step %d/%d; optimizer state starts fresh\n",
+                __func__, step, n_steps);
+    }
 
     while (step < n_steps && !g_grpo_stop) {
 
@@ -1081,7 +1375,11 @@ static int run_grpo_mode(
         // ── Optional checkpoint ───────────────────────────────────────────
         if (params.save_every > 0 && step % params.save_every == 0) {
             std::string ckpt = params.lora_out + ".ckpt" + std::to_string(step) + ".gguf";
-            save_adapter(lt, ckpt, arch, lora_alpha, base_model_path);
+            checkpoint_state state;
+            state.mode           = "grpo";
+            state.step           = step;
+            state.context_length = n_ctx;
+            save_adapter(lt, ckpt, arch, lora_alpha, base_model_path, &state);
             char buf[512];
             snprintf(buf, sizeof(buf), "[QLORA:CHECKPOINT] %s", ckpt.c_str());
             ipc_emit(buf);
@@ -1116,6 +1414,25 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    checkpoint_state resume_state;
+    const bool resume_requested = !params.lora_resume.empty();
+    if (resume_requested) {
+        if (!params.lora_adapters.empty()) {
+            LOG_ERR("%s: --resume cannot be combined with --lora\n", __func__);
+            return 1;
+        }
+        const std::string mode = params.grpo_mode ? "grpo" : "sft";
+        if (!load_checkpoint_state(params.lora_resume, mode, resume_state)) return 1;
+        if (mode == "grpo" && resume_state.step > INT32_MAX) {
+            LOG_ERR("%s: checkpoint step is too large\n", __func__);
+            return 1;
+        }
+        common_adapter_lora_info adapter_info;
+        adapter_info.path  = params.lora_resume;
+        adapter_info.scale = 1.0f;
+        params.lora_adapters.push_back(adapter_info);
+    }
+
     // Force settings required for training
     params.use_mmap     = false;
     params.cache_type_k = GGML_TYPE_F32;
@@ -1126,8 +1443,15 @@ int main(int argc, char ** argv) {
     // Flash attention has no backward implementation; force standard attention for training.
     params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
 
-    const float lora_alpha = (params.lora_alpha > 0.0f)
+    float lora_alpha = (params.lora_alpha > 0.0f)
         ? params.lora_alpha : (float) params.lora_rank;
+    if (resume_requested && resume_state.has_alpha) {
+        if (params.lora_alpha > 0.0f && std::abs(params.lora_alpha - resume_state.alpha) > 1e-6f) {
+            LOG_WRN("%s: ignoring --lora-alpha %.3f; checkpoint alpha is %.3f\n",
+                    __func__, (double) params.lora_alpha, (double) resume_state.alpha);
+        }
+        lora_alpha = resume_state.alpha;
+    }
     const auto targets = split_csv(params.lora_targets);
 
     // --- Step 1: Discover tensor shapes from model GGUF (no model load yet) ---
@@ -1167,7 +1491,7 @@ int main(int argc, char ** argv) {
         adapter_info.scale = 1.0f;
         params.lora_adapters.push_back(adapter_info);
     } else {
-        LOG_INF("%s: resuming training from existing LoRA adapter: %s\n",
+        LOG_INF("%s: loading existing LoRA adapter: %s\n",
                 __func__, params.lora_adapters.back().path.c_str());
     }
 
@@ -1223,13 +1547,15 @@ int main(int argc, char ** argv) {
     // In GRPO mode the dataset comes from Python via stdin/stdout — skip file loading.
     auto tmpls = common_chat_templates_init(model, "");
     if (params.grpo_mode) {
-        int rc = run_grpo_mode(params, model, ctx, lt, arch, lora_alpha, params.model.path);
+        int rc = run_grpo_mode(params, model, ctx, lt, arch, lora_alpha, params.model.path,
+                               resume_requested ? &resume_state : nullptr);
         if (lt.buf) ggml_backend_buffer_free(lt.buf);
         if (lt.ctx) ggml_free(lt.ctx);
         llama_backend_free();
         return rc;
     }
-    auto samples = load_jsonl(params.train_file, ctx, tmpls.get());
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+    auto samples = load_jsonl(params.train_file, vocab, tmpls.get(), params.dataset_threads);
     if (samples.empty()) {
         LOG_ERR("%s: no training samples loaded\n", __func__);
         return 1;
@@ -1257,15 +1583,59 @@ int main(int argc, char ** argv) {
         /*.get_opt_pars             =*/common_opt_lr_pars,
         /*.get_opt_pars_ud          =*/&params.lr,
         /*.optimizer_type           =*/params.optimizer,
+        /*.lora_qat_type            =*/lora_qat_type_from_string(params.lora_qat),
         /*.grad_checkpoint_interval =*/params.grad_checkpoint_interval,
     };
     llama_opt_init(ctx, model, lopt_params);
 
-    const int64_t idata_split = ggml_opt_dataset_ndata(dataset) * (1.0f - params.val_split);
+    const int64_t ndata = ggml_opt_dataset_ndata(dataset);
+    const int64_t idata_split = train_split_from_val_fraction(ndata, params.val_split);
     if (idata_split <= 0) {
         LOG_ERR("%s: no training windows after val split (ndata=%ld val_split=%.3f)\n",
-                __func__, (long) ggml_opt_dataset_ndata(dataset), (double) params.val_split);
+                __func__, (long) ndata, (double) params.val_split);
         return 1;
+    }
+    if (params.val_split > 0.0f && idata_split == ndata) {
+        LOG_WRN("%s: validation split skipped because dataset has only %ld training window(s)\n",
+                __func__, (long) ndata);
+    }
+
+    unsigned epoch_start = 0;
+    int64_t window_start = 0;
+    if (resume_requested) {
+        if ((uint64_t) resume_state.epoch > UINT32_MAX) {
+            LOG_ERR("%s: checkpoint epoch is too large\n", __func__);
+            return 1;
+        }
+        epoch_start  = (unsigned) resume_state.epoch - 1;
+        window_start = resume_state.window;
+
+        if (resume_state.context_length >= 0 && resume_state.context_length != n_ctx) {
+            LOG_ERR("%s: checkpoint context length is %ld, current context length is %d\n",
+                    __func__, (long) resume_state.context_length, n_ctx);
+            return 1;
+        }
+        if (resume_state.dataset_windows >= 0 && resume_state.dataset_windows != idata_split) {
+            LOG_ERR("%s: checkpoint has %ld training windows, current dataset has %ld\n",
+                    __func__, (long) resume_state.dataset_windows, (long) idata_split);
+            return 1;
+        }
+        if (window_start > idata_split) {
+            LOG_ERR("%s: checkpoint window %ld exceeds the %ld training windows in this dataset\n",
+                    __func__, (long) window_start, (long) idata_split);
+            return 1;
+        }
+        if (resume_state.has_metadata && resume_state.shuffle != params.shuffle_dataset) {
+            LOG_ERR("%s: checkpoint shuffle setting does not match --shuffle-dataset\n", __func__);
+            return 1;
+        }
+        if (window_start == idata_split) {
+            ++epoch_start;
+            window_start = 0;
+        }
+        LOG_INF("%s: resuming SFT at epoch %u/%u after window %ld; next window is %ld/%ld; optimizer state starts fresh\n",
+                __func__, epoch_start + 1, params.lr.epochs, (long) window_start,
+                (long) window_start + 1, (long) idata_split);
     }
 
     ggml_opt_result_t result_train = ggml_opt_result_init();
@@ -1274,8 +1644,23 @@ int main(int argc, char ** argv) {
     const int32_t n_ubatch       = llama_n_ubatch(ctx);
     const int32_t ubatch_per_ctx = (n_ubatch > 0) ? (n_ctx / n_ubatch) : 1;
 
-    save_ctx sctx { &lt, &params.lora_out, &arch, &params.model.path, lora_alpha, params.save_every, ubatch_per_ctx, 0, 0 };
+    save_ctx sctx {
+        &lt, &params.lora_out, &arch, &params.model.path, lora_alpha,
+        params.save_every, ubatch_per_ctx, 0, 0, 0, idata_split, n_ctx, params.shuffle_dataset
+    };
     g_save_ctx = &sctx;
+
+    if (resume_requested && params.shuffle_dataset && epoch_start > 0) {
+        for (unsigned epoch = 0; epoch < epoch_start; ++epoch) {
+            llama_opt_dataset_shuffle(ctx, dataset, idata_split);
+            if (params.optimizer_restart_every > 0 &&
+                epoch + 1 < params.lr.epochs &&
+                (epoch + 1) % params.optimizer_restart_every == 0) {
+                llama_opt_reset(ctx, true);
+            }
+        }
+        LOG_INF("%s: replayed %u completed epoch shuffle(s)\n", __func__, epoch_start);
+    }
 
     const int64_t total_windows = ggml_opt_dataset_ndata(dataset);
     LOG_INF("%s: starting QLoRA training — rank=%d alpha=%.1f epochs=%d loss=%s\n",
@@ -1298,13 +1683,15 @@ int main(int argc, char ** argv) {
         ? save_every_callback
         : ggml_opt_epoch_callback_progress_bar;
 
-    for (params.lr.epoch = 0; params.lr.epoch < params.lr.epochs; ++params.lr.epoch) {
-        sctx.last_saved = 0;  // reset per-epoch window counter
+    for (params.lr.epoch = epoch_start; params.lr.epoch < params.lr.epochs; ++params.lr.epoch) {
+        const int64_t idata_start = params.lr.epoch == epoch_start ? window_start : 0;
+        sctx.window_offset = idata_start;
+        sctx.last_saved = idata_start;
         sctx.epoch = params.lr.epoch + 1;
-        llama_opt_epoch(ctx, dataset, result_train, result_eval, idata_split,
-                        cb_train,
-                        ggml_opt_epoch_callback_progress_bar,
-                        params.shuffle_dataset);
+        llama_opt_epoch_range(ctx, dataset, result_train, result_eval, idata_start, idata_split,
+                              cb_train,
+                              ggml_opt_epoch_callback_progress_bar,
+                              params.shuffle_dataset);
         fprintf(stderr, "\n");
 
         // Per-epoch loss summary

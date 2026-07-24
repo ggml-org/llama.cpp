@@ -61,10 +61,12 @@ Trains LoRA adapters on a quantized GGUF model.
 |---|---|---|
 | `--model` | *(required)* | Path to quantized GGUF model |
 | `--train-file` | *(required)* | JSONL training dataset |
+| `-dthr` / `--dataset-threads` | physical CPU cores | JSONL parse, template, and tokenization worker threads |
 | `--lora-rank` | `16` | LoRA rank r |
 | `--lora-alpha` | `0` (= rank) | LoRA alpha; effective scale = alpha/rank |
 | `--lora-targets` | see below | Comma-separated internal tensor name substrings |
 | `--lora-out` | `adapter.gguf` | Output adapter GGUF path (supports `~`) |
+| `--resume` | *(none)* | Resume weights and training position from a `--save-every` checkpoint |
 | `--save-every` | `0` | Save checkpoint every N dataset windows (0 = end only) |
 | `--freeze-layers` | `0` | Skip LoRA on first N transformer layers (blk.0..N-1); backward already pruned automatically |
 | `--grad-checkpoint` | `0` | Mark every Nth forward node persistent to reduce activation VRAM; good values: 32–64 |
@@ -78,6 +80,22 @@ Trains LoRA adapters on a quantized GGUF model.
 | `-ngl` | `999` | GPU layers to offload |
 | `-lr` / `--learning-rate` | `1e-4` | AdamW learning rate |
 | `--seed` | `42` | Random seed for LoRA init |
+
+### Resume from a checkpoint
+
+Use the same model, dataset, context size, and validation split as the original run. `--epochs` is the total target epoch count, not the number of additional epochs.
+
+```bash
+./build/bin/llama-finetune-qlora \
+  --model ~/qwen3-1.7b-q4_k_m.gguf \
+  --train-file data/train.jsonl \
+  --resume ~/adapter.gguf.epoch1.ckpt10.gguf \
+  --lora-out ~/adapter.gguf \
+  -c 4096 -b 4096 -ub 512 \
+  --save-every 10 --epochs 3
+```
+
+Checkpoint GGUFs contain the LoRA weights and training position. Optimizer moments are not stored, so the optimizer starts fresh after resume. Older checkpoints without embedded position metadata are supported when their original `.epochE.ckptW.gguf` filename is preserved. With `--shuffle-dataset`, completed epoch shuffles are replayed deterministically before continuing at the next window after W.
 
 ### VRAM vs. step-time tradeoff
 
@@ -179,7 +197,7 @@ Resume from a checkpoint:
 ```bash
 python3 examples/qlora_training/grpo_example.py \
     --model ~/qwen3-1.7b-q4_k_m.gguf \
-    --lora     ~/grpo-adapter.ckpt50.gguf \
+    --resume   ~/grpo-adapter.ckpt50.gguf \
     --lora-out ~/grpo-adapter.gguf
 ```
 
@@ -305,9 +323,9 @@ Gradients propagate through all layers that have LoRA adapters. Use `--freeze-la
 | `ggml/src/ggml.c` | Backward graph fixes: `GET_ROWS` 3D, `SET_ROWS`, `MUL_MAT_ID`, `SSM_SCAN/CONV`, `FLASH_ATTN_EXT` all stop gradient; inplace-op assert → warn+skip |
 | `src/llama-context.cpp` | `opt_init`: scheduler and graph sized with inflated capacity before `ggml_opt_init`; `opt_epoch_iter`: per-ubatch timing instrumentation; reward scaling via `g_reward_weights` TLS |
 | `src/llama-adapter.cpp` | Repack-buft fallback for LoRA tensors: tries device-native buft before CPU |
-| `common/common.h` | Added `save_every`, `lora_freeze_layers`, `grad_checkpoint_interval`, `train_on_prompt`, `shuffle_dataset` fields |
-| `common/arg.cpp` | Added `--save-every`, `--freeze-layers`, `--grad-checkpoint`, `--train-on-prompt`, `--shuffle-dataset` arguments |
-| `include/llama.h` | Added `llama_opt_set_reward_weights()`; `grad_checkpoint_interval` in `llama_opt_params`; `shuffle` param in `llama_opt_epoch` |
+| `common/common.h` | Added `save_every`, `lora_resume`, `lora_freeze_layers`, `grad_checkpoint_interval`, `train_on_prompt`, `shuffle_dataset` fields |
+| `common/arg.cpp` | Added `--save-every`, `--resume`, `--freeze-layers`, `--grad-checkpoint`, `--train-on-prompt`, `--shuffle-dataset` arguments |
+| `include/llama.h` | Added `llama_opt_set_reward_weights()` and `llama_opt_epoch_range()`; `grad_checkpoint_interval` in `llama_opt_params`; `shuffle` param in `llama_opt_epoch` |
 | `ggml/src/ggml-cuda/out-prod.cu` | `OUT_PROD` with quantized src0 (dequantize on GPU + cuBLAS); `OUT_PROD_ID` for MoE backward |
 | `ggml/src/ggml-cuda/ggml-cuda.cu` | `supports_op` for quantized `OUT_PROD` and `OUT_PROD_ID`; CPU-resident ids fix in `mul_mat_id` |
 | `ggml/include/ggml-opt.h` | Added `grad_checkpoint_interval` to `ggml_opt_params` |

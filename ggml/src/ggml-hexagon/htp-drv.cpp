@@ -1,13 +1,8 @@
-// sample drv interface
-
-#pragma clang diagnostic ignored "-Wgnu-anonymous-struct"
-#pragma clang diagnostic ignored "-Wmissing-prototypes"
-#pragma clang diagnostic ignored "-Wsign-compare"
-
 #include <filesystem>
 #include <set>
 #include <sstream>
 #include <string>
+
 #ifdef _WIN32
 #   define WIN32_LEAN_AND_MEAN
 #   ifndef NOMINMAX
@@ -16,9 +11,17 @@
 #   include <windows.h>
 #   include <winevt.h>
 #else
-#    include <dlfcn.h>
-#    include <unistd.h>
+#   include <dlfcn.h>
+#   include <unistd.h>
 #endif
+
+#pragma clang diagnostic ignored "-Wgnu-anonymous-struct"
+#pragma clang diagnostic ignored "-Wmissing-prototypes"
+#pragma clang diagnostic ignored "-Wsign-compare"
+#pragma clang diagnostic ignored "-Wlanguage-extension-token"
+#pragma clang diagnostic ignored "-Wmicrosoft-enum-value"
+#pragma clang diagnostic ignored "-Wnested-anon-types"
+
 #include "ggml-impl.h"
 #include "htp-drv.h"
 #include "libdl.h"
@@ -359,7 +362,7 @@ int htpdrv_init() {
     return AEE_SUCCESS;
 }
 
-domain * get_domain(int domain_id) {
+domain * htpdrv_get_domain(int domain_id) {
     int i    = 0;
     int size = sizeof(supported_domains) / sizeof(domain);
 
@@ -372,7 +375,7 @@ domain * get_domain(int domain_id) {
     return NULL;
 }
 
-int get_hex_arch_ver(int domain, int * arch) {
+int htpdrv_get_arch(int domain, int * arch) {
     if (!remote_handle_control_pfn) {
         GGML_LOG_ERROR("ggml-hex: remote_handle_control is not supported on this device\n");
         return AEE_EUNSUPPORTEDAPI;
@@ -394,25 +397,7 @@ int get_hex_arch_ver(int domain, int * arch) {
         return err;
     }
 
-    switch (arch_ver.capability & 0xff) {
-        case 0x68:
-            *arch = 68;
-            return 0;
-        case 0x69:
-            *arch = 69;
-            return 0;
-        case 0x73:
-            *arch = 73;
-            return 0;
-        case 0x75:
-            *arch = 75;
-            return 0;
-        case 0x79:
-            *arch = 79;
-            return 0;
-        case 0x81:
-            *arch = 81;
-            return 0;
-    }
-    return -1;
+    uint32_t val = arch_ver.capability & 0xff;
+    *arch = (int) ((val >> 4) * 10 + (val & 0x0f));
+    return 0;
 }

@@ -18,6 +18,7 @@ __all__ = [
 
 TEXT_MODEL_MAP: dict[str, str] = {
     "AfmoeForCausalLM": "afmoe",
+    "LagunaForCausalLM": "laguna",
     "ApertusForCausalLM": "llama",
     "ArceeForCausalLM": "llama",
     "ArcticForCausalLM": "arctic",
@@ -31,6 +32,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "BertForSequenceClassification": "bert",
     "BertModel": "bert",
     "BitnetForCausalLM": "bitnet",
+    "BitNetForCausalLM": "bitnet",
     "BloomForCausalLM": "bloom",
     "BloomModel": "bloom",
     "CamembertModel": "bert",
@@ -106,6 +108,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "HunYuanDenseV1ForCausalLM": "hunyuan",
     "HunYuanMoEV1ForCausalLM": "hunyuan",
     "HunYuanVLForConditionalGeneration": "hunyuan",
+    "HYV3ForCausalLM": "hunyuan",
     "IQuestCoderForCausalLM": "llama",
     "InternLM2ForCausalLM": "internlm",
     "InternLM3ForCausalLM": "internlm",

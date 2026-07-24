@@ -1,0 +1,25 @@
+#version 450
+
+#include "types.glsl"
+#include "generic_unary_head.glsl"
+#include "dequant_funcs.glsl"
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+void main() {
+    if (gl_LocalInvocationID.x != 0) return;
+
+    const uint idx = gl_WorkGroupID.z * 262144 + gl_WorkGroupID.y * 512 + gl_WorkGroupID.x * QUANT_K;
+    if (idx >= p.ne) return;
+
+    const uint src_idx = get_aoffset() + src0_idx_quant(idx, QUANT_K);
+    const uint dst_idx = get_doffset() + dst_idx(idx);
+
+    for (uint j = 0; j < QUANT_K; j += 2) {
+        vec2 v = dequantize(src_idx, j, 0);
+        const vec2 dm = get_dm(src_idx, 0);
+        v = v*dm.x + dm.y;
+        data_d[dst_idx + j] = D_TYPE(v.x);
+        data_d[dst_idx + j + 1] = D_TYPE(v.y);
+    }
+}
