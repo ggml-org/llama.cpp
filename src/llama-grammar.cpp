@@ -10,7 +10,16 @@
 #include <set>
 #include <stdexcept>
 
-#define MAX_REPETITION_THRESHOLD 2000
+#define MAX_REPETITION_THRESHOLD_DEFAULT 2000
+
+static uint64_t get_max_repetition_threshold() {
+    const char * env = getenv("LLAMA_GRAMMAR_MAX_REPETITIONS");
+    if (env) {
+        uint64_t val = strtoull(env, nullptr, 10);
+        return val > 0 ? val : MAX_REPETITION_THRESHOLD_DEFAULT;
+    }
+    return MAX_REPETITION_THRESHOLD_DEFAULT;
+}
 //
 // helpers
 //
@@ -491,7 +500,7 @@ const char * llama_grammar_parser::parse_sequence(
             total_rules = min_times;
         }
 
-        if (n_prev_rules * total_rules >= MAX_REPETITION_THRESHOLD) {
+        if (n_prev_rules * total_rules >= get_max_repetition_threshold()) {
             throw std::runtime_error("number of rules that are going to be repeated multiplied by the new repetition exceeds sane defaults, please reduce the number of repetitions or rule complexity");
         }
 
@@ -649,7 +658,8 @@ const char * llama_grammar_parser::parse_sequence(
                 throw std::runtime_error(std::string("expecting ',' at ") + pos);
             }
             bool has_max = max_times != UINT64_MAX;
-            if (min_times > MAX_REPETITION_THRESHOLD || (has_max && max_times > MAX_REPETITION_THRESHOLD)) {
+            const uint64_t max_rep = get_max_repetition_threshold();
+            if (min_times > max_rep || (has_max && max_times > max_rep)) {
                 throw std::runtime_error(std::string("number of repetitions exceeds sane defaults, please reduce the number of repetitions"));
             }
             handle_repetitions(min_times, max_times);
