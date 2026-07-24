@@ -77,6 +77,7 @@ json task_params::to_json(bool only_metrics) const {
             {"generation_prompt",         chat_parser_params.generation_prompt},
             {"samplers",                  samplers},
             {"speculative.types",         common_speculative_type_name_str(speculative.types)},
+            {"speculative.n_max",         speculative.draft.n_max},
             {"timings_per_token",         timings_per_token},
             {"post_sampling_probs",       post_sampling_probs},
             {"backend_sampling",          sampling.backend_sampling},
@@ -134,6 +135,7 @@ json task_params::to_json(bool only_metrics) const {
         {"generation_prompt",         chat_parser_params.generation_prompt},
         {"samplers",                  samplers},
         {"speculative.types",         common_speculative_type_name_str(speculative.types)},
+        {"speculative.n_max",         speculative.draft.n_max},
         {"timings_per_token",         timings_per_token},
         {"post_sampling_probs",       post_sampling_probs},
         {"backend_sampling",          sampling.backend_sampling},
@@ -252,9 +254,12 @@ json result_timings::to_json() const {
         {"predicted_per_second",   predicted_per_second},
     };
 
-    if (draft_n > 0) {
+    if (speculative) {
+        base["draft_attempts"] = draft_attempts;
+        base["draft_empty"] = draft_empty;
         base["draft_n"] = draft_n;
         base["draft_n_accepted"] = draft_n_accepted;
+        base["draft_verification_steps"] = draft_verification_steps;
     }
 
     return base;

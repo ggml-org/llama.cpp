@@ -194,13 +194,14 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
     // Speculative decoding params
     //
 
-    // TODO: to keep things simple, we disable speculative parameter adjustments for now
-#if 0
-    // TODO: for now, be able to adjust only the draft-model based speculative parameters
+    // Allow request-level draft caps without rebuilding or reloading the resident
+    // target/draft contexts. Zero disables speculation for this request.
     add((new field_num("speculative.n_max", params.speculative.draft.n_max))
-        ->set_hard_limits(0, INT32_MAX)
-        ->set_desc("Maximum number of tokens to draft during speculative decoding"));
+        ->set_hard_limits(0, params_base.speculative.draft.n_max)
+        ->set_desc("Maximum draft tokens for this request (0 disables speculation)"));
 
+    // TODO: to keep things simple, other speculative adjustments remain disabled for now
+#if 0
     add((new field_num("speculative.n_min", params.speculative.draft.n_min))
         ->set_hard_limits(0, INT32_MAX)
         ->set_desc("Minimum number of draft tokens to use for speculative decoding");
