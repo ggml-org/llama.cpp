@@ -156,8 +156,11 @@ class MiniCPMV4_6VisionModel(MmprojModel):
         # (mapped to PROJECTOR_TYPE_MINICPMV4_6).
         self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.MINICPMV4_6)
 
-        # ViT merger 2x2 + final merger 2x2 = 4x spatial merge per dimension; used for slice alignment
-        self.gguf_writer.add_vision_projector_scale_factor(4)
+        downsample_mode = self.preprocessor_config.get("downsample_mode", "16x")
+        if downsample_mode not in {"4x", "16x"}:
+            raise ValueError(f"Unsupported downsample mode: {downsample_mode}")
+        self.gguf_writer.add_vision_projector_scale_factor(
+            2 if downsample_mode == "4x" else 4)
 
         # borrow wa_layer_indexes for vit_merger insertion point
         insert_layer_id = int(self.global_config.get(
