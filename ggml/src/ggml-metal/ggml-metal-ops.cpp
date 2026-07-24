@@ -2040,6 +2040,16 @@ int ggml_metal_op_pool_2d(ggml_metal_op_t ctx, int idx) {
     return 1;
 }
 
+// defense in depth: a missing Metal kernel should be a clear, actionable abort instead of
+// a null-pipeline dereference deep in the encoder (ggml_metal_library_compile_pipeline
+// already logs the underlying MTLLibraryErrorDomain error before returning a nil pipeline)
+static void ggml_metal_op_mul_mat_check_pipeline(const ggml_metal_pipeline_with_params & pipeline, const ggml_tensor * op) {
+    if (!pipeline.pipeline) {
+        GGML_ABORT("%s: no Metal kernel for op = %s, src0 type = %s, src1 type = %s",
+                __func__, ggml_op_name(op->op), ggml_type_name(op->src[0]->type), ggml_type_name(op->src[1]->type));
+    }
+}
+
 int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
     ggml_tensor * op = ctx->node(idx);
 
@@ -2140,6 +2150,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         };
 
         auto pipeline = ggml_metal_library_get_pipeline_mul_mv_ext(lib, op, nsg, nxpsg, r1ptg);
+        ggml_metal_op_mul_mat_check_pipeline(pipeline, op);
 
         ggml_metal_kargs_mul_mv_ext args = {
             /*.ne00  =*/ ne00,
@@ -2187,6 +2198,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         //}
 
         auto pipeline = ggml_metal_library_get_pipeline_mul_mm(lib, op);
+        ggml_metal_op_mul_mat_check_pipeline(pipeline, op);
 
         ggml_metal_kargs_mul_mm args = {
             /*.ne00 =*/ ne00,
@@ -2222,6 +2234,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
         ggml_metal_encoder_dispatch_threadgroups(enc, ((ne11 + nr1 - 1) / nr1), ((ne01 + nr0 - 1) / nr0), ne12 * ne13, 32, nsg, 1);
     } else {
         auto pipeline = ggml_metal_library_get_pipeline_mul_mv(lib, op);
+        ggml_metal_op_mul_mat_check_pipeline(pipeline, op);
 
         const int nr0 = pipeline.nr0;
         const int nr1 = pipeline.nr1;
@@ -2382,6 +2395,7 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
 
         {
             auto pipeline = ggml_metal_library_get_pipeline_mul_mm_id(lib, op);
+            ggml_metal_op_mul_mat_check_pipeline(pipeline, op);
 
             ggml_metal_kargs_mul_mm_id args = {
                 /*.ne00  =*/ ne00,
@@ -2418,6 +2432,7 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
         }
     } else {
         auto pipeline = ggml_metal_library_get_pipeline_mul_mv_id(lib, op);
+        ggml_metal_op_mul_mat_check_pipeline(pipeline, op);
 
         const int nr0 = pipeline.nr0;
         const int nr1 = pipeline.nr1;
