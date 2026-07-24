@@ -13,7 +13,9 @@ on:
       '**/*.hpp',
       '**/*.c',
       '**/*.cpp',
-      '**/*.wgsl'
+      '**/*.wgsl',
+      '**/*.tmpl',
+      'ggml/src/ggml-webgpu/wgsl-shaders/embed_wgsl.py'
     ]
 
   pull_request:
@@ -26,7 +28,9 @@ on:
       '**/*.hpp',
       '**/*.c',
       '**/*.cpp',
-      '**/*.wgsl'
+      '**/*.wgsl',
+      '**/*.tmpl',
+      'ggml/src/ggml-webgpu/wgsl-shaders/embed_wgsl.py'
     ]
 
 concurrency:
