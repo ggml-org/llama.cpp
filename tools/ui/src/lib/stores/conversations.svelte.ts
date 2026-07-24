@@ -1126,11 +1126,11 @@ class ConversationsStore {
 	/**
 	 * Imports conversations from provided data (without file picker)
 	 * @param data - Array of conversation data with messages
-	 * @returns Import result with counts
+	 * @returns The conversations written to the database and the ones skipped
 	 */
 	async importConversationsData(
 		data: ExportedConversations
-	): Promise<{ imported: number; skipped: number }> {
+	): Promise<{ imported: DatabaseConversation[]; skipped: DatabaseConversation[] }> {
 		const result = await DatabaseService.importConversations(data);
 		await this.loadConversations();
 		return result;

@@ -201,9 +201,17 @@
 				.snapshot(fullImportData)
 				.filter((item) => selectedIds.has(item.conv.id));
 
-			await conversationsStore.importConversationsData(selectedData);
+			const { imported, skipped } = await conversationsStore.importConversationsData(selectedData);
 
-			importedConversations = selectedConversations;
+			// A conversation already in the database is left untouched, so the summary
+			// lists what was written and the toast accounts for the rest.
+			if (skipped.length > 0) {
+				toast.info(
+					`Skipped ${skipped.length} conversation${skipped.length === 1 ? '' : 's'} already in your library`
+				);
+			}
+
+			importedConversations = imported;
 			showImportSummary = true;
 			showExportSummary = false;
 			showImportDialog = false;
