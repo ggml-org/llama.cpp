@@ -131,7 +131,7 @@ function escapeBrackets(text: string): string {
 			} else if (squareBracket != null) {
 				return `${LATEX_DISPLAY_DELIMITER}${squareBracket}${LATEX_DISPLAY_DELIMITER}`;
 			} else if (roundBracket != null) {
-				return `${LATEX_DISPLAY_DELIMITER}${roundBracket}${LATEX_INLINE_DELIMITER}`;
+				return `${LATEX_INLINE_DELIMITER}${roundBracket}${LATEX_INLINE_DELIMITER}`;
 			}
 
 			return match;
@@ -291,7 +291,7 @@ export function preprocessLaTeX(content: string): string {
 		// that are preceded by a backslash, e.g.
 		// `Definitions\\(also called macros)` (title of chapter 20 in The TeXbook).
 		.replace(LATEX_INLINE_CONVERT_REGEXP, (_, formula: string) => {
-			return `${LATEX_DISPLAY_DELIMITER}${formula}${LATEX_INLINE_DELIMITER}`;
+			return `${LATEX_INLINE_DELIMITER}${formula}${LATEX_INLINE_DELIMITER}`;
 		}) // inline
 		.replace(
 			// Using the look‑behind pattern `(?<!\\)` we skip matches
