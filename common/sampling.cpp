@@ -7,6 +7,9 @@
 
 #include "ggml.h"
 
+//Llama ENGINE
+#include <cstdio>
+
 #include <algorithm>
 #include <cctype>
 #include <climits>
@@ -14,6 +17,8 @@
 #include <cstring>
 #include <unordered_map>
 #include <vector>
+
+struct common_params_sampling; // Forward declaration 
 
 // the ring buffer works similarly to std::deque, but with a fixed capacity
 // TODO: deduplicate with llama-impl.h
@@ -184,10 +189,31 @@ std::string common_params_sampling::print() const {
     return std::string(result);
 }
 
-struct common_sampler * common_sampler_init(const struct llama_model * model, struct common_params_sampling & params) {
+
+//  ENGINE - SAFETY GUARD CLAUSES (SAMPLING SANITIZATION)
+void common_params_sampling_validate(struct common_params_sampling & params) {  
+    if (params.mirostat == 1 || params.mirostat == 2) {
+        if (params.mirostat_tau < 0.0f) {
+            std::fprintf(stderr, "%s: warning: 'mirostat_tau' deve ser positivo (recebido %.2f). Resetando para o padrão (5.0).\n", __func__, params.mirostat_tau);
+            params.mirostat_tau = 5.0f;
+        }
+        if (params.mirostat_eta < 0.0f) {
+            std::fprintf(stderr, "%s: warning: 'mirostat_eta' deve ser positivo (recebido %.2f). Resetando para o padrão (0.1).\n", __func__, params.mirostat_eta);
+            params.mirostat_eta = 0.1f;
+        }
+    }
+    if (params.penalty_last_n < -1) {
+        std::fprintf(stderr, "%s: warning: 'penalty_last_n' inválido (recebido %d). Desativando penalidade (0).\n", __func__, params.penalty_last_n);
+        params.penalty_last_n = 0;
+    }
+}
+    struct common_sampler * common_sampler_init(const struct llama_model * model, struct common_params_sampling & params) {
+    
+
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
     llama_sampler_chain_params lparams = llama_sampler_chain_default_params();
+
 
     lparams.no_perf = params.no_perf;
 
