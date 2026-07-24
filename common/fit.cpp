@@ -175,7 +175,8 @@ common_device_memory_data_vec common_get_device_memory_data(
 static void common_params_fit_impl(
         const char * path_model, struct llama_model_params * mparams, struct llama_context_params * cparams,
         float * tensor_split, struct llama_model_tensor_buft_override * tensor_buft_overrides,
-        size_t * margins_s, uint32_t n_ctx_min, enum ggml_log_level log_level) {
+        const size_t * margins_base_s, const size_t * margins_per_ctx_s, uint32_t n_ctx_min, 
+        enum ggml_log_level log_level) {
     if (mparams->split_mode == LLAMA_SPLIT_MODE_TENSOR) {
         throw common_params_fit_exception("llama_params_fit is not implemented for SPLIT_MODE_TENSOR, abort");
     }
@@ -194,13 +195,23 @@ static void common_params_fit_impl(
     const dmds_t dmds_full = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
     const size_t nd = devs.size(); // number of devices
 
-    std::vector<int64_t> margins; // this function uses int64_t rather than size_t for memory sizes to more conveniently handle deficits
-    margins.reserve(nd);
+    std::vector<int64_t> margins_base; // this function uses int64_t rather than size_t for memory sizes to more conveniently handle deficits
+    margins_base.reserve(nd);
     if (nd == 0) {
-        margins.push_back(margins_s[0]);
+        margins_base.push_back(margins_base_s[0]);
     } else {
         for (size_t id = 0; id < nd; id++) {
-            margins.push_back(margins_s[id]);
+            margins_base.push_back(margins_base_s[id]);
+        }
+    }
+
+    std::vector<int64_t> margins_per_ctx;
+    margins_per_ctx.reserve(nd);
+    if (nd == 0) {
+        margins_per_ctx.push_back(margins_per_ctx_s ? margins_per_ctx_s[0] : 0);
+    } else {
+        for (size_t id = 0; id < nd; id++) {
+            margins_per_ctx.push_back(margins_per_ctx_s ? margins_per_ctx_s[id] : 0);
         }
     }
 
@@ -228,15 +239,18 @@ static void common_params_fit_impl(
     std::vector<int64_t> projected_free_per_device;
     projected_free_per_device.reserve(nd);
 
+    // n_ctx used by initial measurement
+    const uint32_t n_ctx_initial = cparams->n_ctx == 0 ? hp_nct : cparams->n_ctx;
+
     if (nd == 0) {
-        sum_projected_used = dmds_full.back().mb.total();
+        sum_projected_used = dmds_full.back().mb.total() + margins_per_ctx.back() * n_ctx_initial;
         sum_free           = dmds_full.back().total;
         sum_projected_free = sum_free - sum_projected_used;
         LOG_TRC("%s: projected to use %" PRId64 " MiB of host memory vs. %" PRId64 " MiB of total host memory\n",
             __func__, sum_projected_used/MiB, sum_free/MiB);
-        if (sum_projected_free >= margins[0]) {
+        if (sum_projected_free >= margins_base[0]) {
             LOG_TRC("%s: will leave %" PRId64 " >= %" PRId64 " MiB of system memory, no changes needed\n",
-                __func__, sum_projected_free/MiB, margins[0]/MiB);
+                __func__, sum_projected_free/MiB, margins_base[0]/MiB);
             return;
         }
     } else {
@@ -246,7 +260,7 @@ static void common_params_fit_impl(
         for (size_t id = 0; id < nd; id++) {
             const llama_device_memory_data & dmd = dmds_full[id];
 
-            const int64_t projected_used = dmd.mb.total();
+            const int64_t projected_used = dmd.mb.total() + margins_per_ctx[id] * n_ctx_initial;
             const int64_t projected_free = dmd.free - projected_used;
             projected_free_per_device.push_back(projected_free);
 
@@ -257,22 +271,22 @@ static void common_params_fit_impl(
 
             if (nd > 1) {
                 LOG_TRC("%s:   - %s: %6" PRId64 " total, %6" PRId64 " used, %6" PRId64 " free vs. target of %6" PRId64 "\n",
-                    __func__, dev_names[id].c_str(), dmd.total/MiB, projected_used/MiB, projected_free/MiB, margins[id]/MiB);
+                    __func__, dev_names[id].c_str(), dmd.total/MiB, projected_used/MiB, projected_free/MiB, margins_base[id]/MiB);
             }
         }
         assert(sum_free >= 0 && sum_projected_used >= 0);
         LOG_TRC("%s: projected to use %" PRId64 " MiB of device memory vs. %" PRId64 " MiB of free device memory\n",
             __func__, sum_projected_used/MiB, sum_free/MiB);
         if (nd == 1) {
-            if (projected_free_per_device[0] >= margins[0]) {
+            if (projected_free_per_device[0] >= margins_base[0]) {
                 LOG_TRC("%s: will leave %" PRId64 " >= %" PRId64 " MiB of free device memory, no changes needed\n",
-                    __func__, projected_free_per_device[0]/MiB, margins[0]/MiB);
+                    __func__, projected_free_per_device[0]/MiB, margins_base[0]/MiB);
                 return;
             }
         } else {
             bool changes_needed = false;
             for (size_t id = 0; id < nd; id++) {
-                if (projected_free_per_device[id] < margins[id]) {
+                if (projected_free_per_device[id] < margins_base[id]) {
                     changes_needed = true;
                     break;
                 }
@@ -289,16 +303,16 @@ static void common_params_fit_impl(
     {
         int64_t global_surplus = sum_projected_free;
         if (nd == 0) {
-            global_surplus -= margins[0];
+            global_surplus -= margins_base[0];
         } else {
             for (size_t id = 0; id < nd; id++) {
-                global_surplus -= margins[id];
+                global_surplus -= margins_base[id];
             }
         }
         if (global_surplus < 0) {
             if (nd <= 1) {
                 LOG_TRC("%s: cannot meet free memory target of %" PRId64 " MiB, need to reduce device memory by %" PRId64 " MiB\n",
-                    __func__, margins[0]/MiB, -global_surplus/MiB);
+                    __func__, margins_base[0]/MiB, -global_surplus/MiB);
             } else {
                 LOG_TRC(
                     "%s: cannot meet free memory targets on all devices, need to use %" PRId64 " MiB less in total\n",
@@ -308,10 +322,10 @@ static void common_params_fit_impl(
                 if (hp_nct > n_ctx_min) {
                     int64_t sum_used_target = sum_free;
                     if (nd == 0) {
-                        sum_used_target -= margins[0];
+                        sum_used_target -= margins_base[0];
                     } else {
                         for (size_t id = 0; id < nd; id++) {
-                            sum_used_target -= margins[id];
+                            sum_used_target -= margins_base[id];
                         }
                     }
                     if (nd > 1) {
@@ -328,10 +342,12 @@ static void common_params_fit_impl(
                     cparams->n_ctx = n_ctx_min;
                     const dmds_t dmds_min_ctx = common_get_device_memory_data_impl(path_model, mparams, cparams, devs, hp_ngl, hp_nct, hp_nex, log_level);
                     if (nd == 0) {
-                        sum_projected_used_min_ctx = dmds_min_ctx.back().mb.total();
+                        sum_projected_used_min_ctx = dmds_min_ctx.back().mb.total() 
+                            + margins_per_ctx.back() * n_ctx_min;
                     } else {
                         for (size_t id = 0; id < nd; id++) {
-                            sum_projected_used_min_ctx += dmds_min_ctx[id].mb.total();
+                            sum_projected_used_min_ctx += dmds_min_ctx[id].mb.total()
+                                + margins_per_ctx[id] * n_ctx_min;
                         }
                     }
                     if (sum_used_target > sum_projected_used_min_ctx) {
@@ -537,7 +553,7 @@ static void common_params_fit_impl(
 
         for (size_t id = 0; id < nd; id++) {
             global_surplus_cpu_moe += dmds_cpu_moe[id].free;
-            global_surplus_cpu_moe -= int64_t(dmds_cpu_moe[id].mb.total()) + margins[id];
+            global_surplus_cpu_moe -= int64_t(dmds_cpu_moe[id].mb.total()) + margins_base[id];
         }
 
         if (global_surplus_cpu_moe > 0) {
@@ -556,7 +572,7 @@ static void common_params_fit_impl(
     std::vector<int64_t> targets; // maximum acceptable memory use per device
     targets.reserve(nd);
     for (size_t id = 0; id < nd; id++) {
-        targets.push_back(dmds_full[id].free - margins[id]);
+        targets.push_back(dmds_full[id].free - margins_base[id] - margins_per_ctx[id] * cparams->n_ctx);
         LOG_TRC("%s: id=%zu, target=%" PRId64 " MiB\n", __func__, id, targets[id]/MiB);
     }
 
@@ -791,13 +807,14 @@ enum common_params_fit_status common_fit_params(
         llama_context_params * cparams,
         float * tensor_split,
         llama_model_tensor_buft_override * tensor_buft_overrides,
-        size_t * margins,
+        size_t * margins_base,
+        size_t * margins_per_ctx,
         uint32_t n_ctx_min,
         ggml_log_level log_level) {
     const int64_t t0_us = llama_time_us();
     common_params_fit_status status = COMMON_PARAMS_FIT_STATUS_SUCCESS;
     try {
-        common_params_fit_impl(path_model, mparams, cparams, tensor_split, tensor_buft_overrides, margins, n_ctx_min, log_level);
+        common_params_fit_impl(path_model, mparams, cparams, tensor_split, tensor_buft_overrides, margins_base, margins_per_ctx, n_ctx_min, log_level);
         LOG_TRC("%s: successfully fit params to free device memory\n", __func__);
     } catch (const common_params_fit_exception & e) {
         LOG_WRN("%s: failed to fit params to free device memory: %s\n", __func__, e.what());
