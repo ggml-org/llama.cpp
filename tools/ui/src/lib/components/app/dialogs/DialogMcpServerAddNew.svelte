@@ -15,6 +15,7 @@
 		REDACTED_HEADERS
 	} from '$lib/constants';
 	import { browser } from '$app/environment';
+	import { HealthCheckStatus } from '$lib/enums';
 
 	interface Props {
 		open: boolean;
@@ -24,6 +25,17 @@
 	let { open = $bindable(), onOpenChange }: Props = $props();
 
 	let newServerUrl = $state('');
+	let newServerName = $state('');
+	let nameAutoFilled = $state('');
+	let nameTouched = $state(false);
+
+	const previewHealthId = `${MCP_SERVER_ID_PREFIX}-preview`;
+	let previewRun = 0;
+
+	function handleNameChange(value: string) {
+		newServerName = value;
+		nameTouched = true;
+	}
 	let newServerHeaders = $state('');
 	let newServerUseProxy = $state(false);
 
@@ -115,6 +127,43 @@
 		}
 	});
 
+	// Debounced preview handshake: once the URL is valid and stable, fetch the
+	// server-reported name to prefill the display name field. A manual edit
+	// freezes the autofill for good, and failures stay silent.
+	$effect(() => {
+		const url = newServerUrl.trim();
+		const headers = newServerHeaders.trim();
+		const useProxy = newServerUseProxy;
+
+		if (!open || newServerUrlError || !url) return;
+
+		const run = ++previewRun;
+		const timer = setTimeout(async () => {
+			await mcpStore.runHealthCheck({
+				id: previewHealthId,
+				enabled: false,
+				url,
+				headers: headers || undefined,
+				useProxy
+			});
+
+			if (run !== previewRun) return;
+
+			const state = mcpStore.getHealthCheckState(previewHealthId);
+
+			if (state.status !== HealthCheckStatus.SUCCESS) return;
+
+			const autoName = state.serverInfo?.title || state.serverInfo?.name || '';
+
+			if (autoName && !nameTouched) {
+				newServerName = autoName;
+				nameAutoFilled = autoName;
+			}
+		}, 600);
+
+		return () => clearTimeout(timer);
+	});
+
 	let hasSelection = $derived(selectedRecommendationId !== null);
 
 	let unconfiguredRecommendations = $derived.by(() => {
@@ -146,6 +195,11 @@
 	function handleOpenChange(value: boolean) {
 		if (!value) {
 			newServerUrl = '';
+			newServerName = '';
+			nameAutoFilled = '';
+			nameTouched = false;
+			previewRun++;
+			mcpStore.clearHealthCheck(previewHealthId);
 			newServerHeaders = '';
 			newServerUseProxy = false;
 			newServerWantsAuthorization = false;
@@ -163,6 +217,12 @@
 			id: newServerId,
 			enabled: true,
 			url: newServerUrl.trim(),
+			// A name equal to the autofilled server-reported one is not a
+			// customization: keep following the automatic label.
+			displayName:
+				newServerName.trim() && newServerName.trim() !== nameAutoFilled.trim()
+					? newServerName.trim()
+					: undefined,
 			headers: newServerHeaders.trim() || undefined,
 			useProxy: newServerUseProxy
 		});
@@ -210,6 +270,8 @@
 			<div class="space-y-4 py-4">
 				<McpServerForm
 					url={newServerUrl}
+					name={newServerName}
+					onNameChange={handleNameChange}
 					headers={newServerHeaders}
 					useProxy={newServerUseProxy}
 					onUrlChange={(v) => (newServerUrl = v)}

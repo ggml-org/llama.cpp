@@ -148,6 +148,7 @@ class MCPStore {
 				enabled: Boolean((entry as { enabled?: unknown })?.enabled),
 				url,
 				name: (entry as { name?: string })?.name,
+				displayName: (entry as { displayName?: string })?.displayName,
 				headers: headers || undefined,
 				useProxy: Boolean((entry as { useProxy?: unknown })?.useProxy)
 			} satisfies MCPServerSettingsEntry;
@@ -376,17 +377,20 @@ class MCPStore {
 	}
 
 	/**
-	 * Resolves the raw label for a server: server-reported title or name when
-	 * the health check succeeded, user-defined name, then URL as last resort.
+	 * Resolves the raw label for a server: user-defined display name first,
+	 * then server-reported title or name when the health check succeeded,
+	 * then the configured name (admin baseline or legacy data), then URL.
 	 */
 	#serverBaseLabel(server: MCPServerDisplayInfo): string {
+		if (server.displayName) return server.displayName;
+
 		const healthState = this.getHealthCheckState(server.id);
 
 		if (healthState?.status === HealthCheckStatus.SUCCESS)
 			return (
 				healthState.serverInfo?.title || healthState.serverInfo?.name || server.name || server.url
 			);
-		return server.url;
+		return server.name || server.url;
 	}
 
 	/**
@@ -538,6 +542,7 @@ class MCPStore {
 			enabled: serverData.enabled,
 			url: serverData.url.trim(),
 			name: serverData.name,
+			displayName: serverData.displayName,
 			headers: serverData.headers?.trim() || undefined,
 			useProxy: serverData.useProxy
 		};
