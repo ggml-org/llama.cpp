@@ -322,6 +322,56 @@ function(ggml_add_backend backend)
     endif()
 endfunction()
 
+# Computes the "-march=<baseline><tags>" flag for a GGML_CPU_ALL_VARIANTS ARM
+# variant from the currently-set GGML_INTERNAL_<FEAT> flags. Defined here (the
+# parent scope of ggml-cpu/, which is pulled in below via add_subdirectory) so
+# it is visible both to the compiler-support probe in
+# ggml_add_cpu_backend_variant() and to ggml_add_cpu_backend_variant_impl() in
+# ggml-cpu/CMakeLists.txt, keeping the two in sync as new ISA extensions are added.
+macro(ggml_compute_arm_all_variants_march_flag out_march_flag)
+    # Begin with the lowest baseline
+    set(ARM_MCPU "armv8-a")
+    set(ARCH_TAGS "")
+    set(ARCH_DEFINITIONS "")
+
+    # When a feature is selected, bump the MCPU to the first
+    # version that supported it
+    if (GGML_INTERNAL_DOTPROD)
+        set(ARM_MCPU "armv8.2-a")
+        set(ARCH_TAGS "${ARCH_TAGS}+dotprod")
+        list(APPEND ARCH_DEFINITIONS GGML_USE_DOTPROD)
+    endif()
+    if (GGML_INTERNAL_FP16_VECTOR_ARITHMETIC)
+        set(ARM_MCPU "armv8.2-a")
+        set(ARCH_TAGS "${ARCH_TAGS}+fp16")
+        list(APPEND ARCH_DEFINITIONS GGML_USE_FP16_VECTOR_ARITHMETIC)
+    endif()
+    if (GGML_INTERNAL_SVE)
+        set(ARM_MCPU "armv8.2-a")
+        set(ARCH_TAGS "${ARCH_TAGS}+sve")
+        list(APPEND ARCH_DEFINITIONS GGML_USE_SVE)
+    endif()
+    if (GGML_INTERNAL_MATMUL_INT8)
+        set(ARM_MCPU "armv8.6-a")
+        set(ARCH_TAGS "${ARCH_TAGS}+i8mm")
+        list(APPEND ARCH_DEFINITIONS GGML_USE_MATMUL_INT8)
+    endif()
+    if (GGML_INTERNAL_SVE2)
+        set(ARM_MCPU "armv8.6-a")
+        set(ARCH_TAGS "${ARCH_TAGS}+sve2")
+        list(APPEND ARCH_DEFINITIONS GGML_USE_SVE2)
+    endif()
+    if (GGML_INTERNAL_NOSVE)
+        set(ARCH_TAGS "${ARCH_TAGS}+nosve")
+    endif()
+    if (GGML_INTERNAL_SME)
+        set(ARM_MCPU "armv9.2-a")
+        set(ARCH_TAGS "${ARCH_TAGS}+sme")
+        list(APPEND ARCH_DEFINITIONS GGML_USE_SME)
+    endif()
+    set(${out_march_flag} "-march=${ARM_MCPU}${ARCH_TAGS}")
+endmacro()
+
 function(ggml_add_cpu_backend_variant tag_name)
     set(GGML_CPU_TAG_NAME ${tag_name})
     # other: OPENMP LLAMAFILE CPU_HBM
@@ -341,6 +391,19 @@ function(ggml_add_cpu_backend_variant tag_name)
         foreach (feat ${ARGN})
             set(GGML_INTERNAL_${feat} ON)
         endforeach()
+
+        if (GGML_CPU_ALL_VARIANTS)
+            # Not every compiler version supports every ARM ISA extension
+            # (e.g. GCC < 14 rejects "+sme"). Probe the exact -march= string
+            # this variant would be built with and skip it if the compiler
+            # rejects it, instead of failing the whole build.
+            ggml_compute_arm_all_variants_march_flag(GGML_CPU_VARIANT_MARCH_FLAG)
+            check_cxx_compiler_flag("${GGML_CPU_VARIANT_MARCH_FLAG}" GGML_CPU_VARIANT_${tag_name}_SUPPORTED)
+            if (NOT GGML_CPU_VARIANT_${tag_name}_SUPPORTED)
+                message(STATUS "Skipping CPU backend variant '${tag_name}': compiler does not support '${GGML_CPU_VARIANT_MARCH_FLAG}'")
+                return()
+            endif()
+        endif()
     elseif (GGML_SYSTEM_ARCH STREQUAL "PowerPC")
         foreach (feat ${ARGN})
             set(GGML_INTERNAL_${feat} ON)
