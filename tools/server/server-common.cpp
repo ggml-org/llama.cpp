@@ -441,7 +441,7 @@ void server_tokens::keep_first(size_t n) {
             // note that the case where we keep a full image at the end is allowed:
             //   tokens[n - 1] == LLAMA_TOKEN_NULL && tokens[n] != LLAMA_TOKEN_NULL
             if (tokens[n - 1] == LLAMA_TOKEN_NULL && tokens[n] == LLAMA_TOKEN_NULL) {
-                find_chunk(n - 1); // will throw an error if the token is not begin-of-chunk
+                find_chunk(n); // will throw an error if the cut is not at a chunk boundary
             }
         }
         // remove all image chunks that are not used anymore

@@ -28,6 +28,11 @@ def get_img_url(id: str) -> str:
         response = requests.get(IMG_URL_1)
         response.raise_for_status() # Raise an exception for bad status codes
         return base64.b64encode(response.content).decode("utf-8")
+    elif id == "IMG_BASE64_1X1":
+        return (
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
+            "+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )
     else:
         return id
 
@@ -144,6 +149,32 @@ def test_vision_completion(prompt, image_data, success, re_content):
         assert match_regex(re_content, content)
     else:
         assert res.status_code != 200
+
+
+def test_vision_completion_rejects_partial_media_keep():
+    global server
+    server.n_ctx = 512
+    server.n_slots = 1
+    server.n_predict = 1
+    server.start()
+    payload = {
+        "temperature": 0.0,
+        "top_k": 1,
+        "cache_prompt": True,
+        "n_predict": 1,
+        "prompt": {
+            JSON_PROMPT_STRING_KEY: "alpha beta gamma delta epsilon <__media__>",
+            JSON_MULTIMODAL_KEY: [ get_img_url("IMG_BASE64_1X1") ],
+        },
+    }
+
+    priming_res = server.make_request("POST", "/completion", data=payload)
+    assert priming_res.status_code == 200
+
+    res = server.make_request("POST", "/completion", data=payload)
+    assert res.status_code != 200
+    assert "error" in res.body
+    assert "Chunk not found" in res.body["error"]["message"]
 
 
 @pytest.mark.parametrize(
