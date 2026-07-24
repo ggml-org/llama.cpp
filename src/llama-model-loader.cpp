@@ -7,8 +7,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <cinttypes>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <future>
 #include <regex>
@@ -1438,9 +1440,26 @@ bool llama_model_loader::load_all_data(
         alignment = std::max(file->read_alignment(), alignment);
     }
 
-    // Buffer size: balance between memory usage and I/O efficiency
-    // 64MB works well for NVMe drives
-    const size_t buffer_size = alignment != 1 ? 64 * 1024 * 1024 + 2 * alignment : 1 * 1024 * 1024;
+    // Buffer size: balance between pinned-memory use, I/O efficiency, and
+    // host-to-device command overhead. Keep the established defaults, but allow
+    // large multi-GPU models to use fewer, larger asynchronous uploads.
+    size_t buffer_size = alignment != 1 ? 64 * MiB + 2 * alignment : 1 * MiB;
+    size_t buffer_size_override_mib = 0;
+    if (const char * env = getenv("LLAMA_MODEL_LOAD_BUFFER_MB")) {
+        bool decimal = *env != '\0';
+        for (const char * p = env; *p != '\0'; ++p) {
+            decimal = decimal && *p >= '0' && *p <= '9';
+        }
+        errno = 0;
+        char * end = nullptr;
+        const unsigned long long value = decimal ? strtoull(env, &end, 10) : 0;
+        if (decimal && errno == 0 && end != env && *end == '\0' && value >= 1 && value <= 1024) {
+            buffer_size_override_mib = size_t(value);
+            buffer_size = buffer_size_override_mib * MiB + (alignment != 1 ? 2 * alignment : 0);
+        } else {
+            LLAMA_LOG_WARN("%s: ignoring invalid LLAMA_MODEL_LOAD_BUFFER_MB (expected decimal 1..1024)\n", __func__);
+        }
+    }
 
     std::vector<ggml_backend_buffer_t> host_buffers;
     std::vector<ggml_backend_event_t> events;
@@ -1525,6 +1544,10 @@ bool llama_model_loader::load_all_data(
             ggml_backend_dev_name(ggml_backend_get_device(upload_backend)),
             ggml_backend_buft_name(ggml_backend_buffer_get_type(bufs.at(0))),
             ggml_backend_name(upload_backend));
+        if (buffer_size_override_mib > 0) {
+            LLAMA_LOG_INFO("%s: async upload staging: %zu MiB x %zu buffers\n",
+                    __func__, buffer_size_override_mib, n_buffers);
+        }
     }
 
     for (struct ggml_tensor * cur = ggml_get_first_tensor(ctx); cur != NULL; cur = ggml_get_next_tensor(ctx, cur)) {
