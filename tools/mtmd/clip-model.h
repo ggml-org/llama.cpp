@@ -397,6 +397,10 @@ struct clip_model {
     ggml_tensor * mm_0_b = nullptr;
     ggml_tensor * mm_2_w = nullptr;
     ggml_tensor * mm_2_b = nullptr;
+    ggml_tensor * mm_merge_fc1_w = nullptr;   // minimax-m3
+    ggml_tensor * mm_merge_fc1_b = nullptr;
+    ggml_tensor * mm_merge_fc2_w = nullptr;
+    ggml_tensor * mm_merge_fc2_b = nullptr;
 
     ggml_tensor * image_newline = nullptr;
     ggml_tensor * view_seperator = nullptr;
