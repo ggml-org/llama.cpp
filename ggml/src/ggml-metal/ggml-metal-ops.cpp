@@ -2065,7 +2065,9 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
 
     // find the break-even point where the matrix-matrix kernel becomes more efficient compared
     // to the matrix-vector kernel
-    const int ne11_mm_min = 8;
+    // for Q4_0 the mat-mv kernels are compute-bound and scale ~linearly with the batch size,
+    // so hand over to the 64x8 mul_mm tiles earlier
+    const int ne11_mm_min = op->src[0]->type == GGML_TYPE_Q4_0 ? 4 : 8;
 
     // first try to use small-batch mat-mv kernels
     // these should be efficient for BS [2, ~8]
@@ -2078,7 +2080,6 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
            op->src[0]->type == GGML_TYPE_BF16 ||
            op->src[0]->type == GGML_TYPE_Q1_0 ||
            op->src[0]->type == GGML_TYPE_Q2_0 ||
-           op->src[0]->type == GGML_TYPE_Q4_0 ||
            op->src[0]->type == GGML_TYPE_Q4_1 ||
            op->src[0]->type == GGML_TYPE_Q5_0 ||
            op->src[0]->type == GGML_TYPE_Q5_1 ||
@@ -2086,6 +2087,11 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
            op->src[0]->type == GGML_TYPE_MXFP4 ||
            op->src[0]->type == GGML_TYPE_IQ4_NL ||
            false) && (ne11 >= 2 && ne11 <= 8)
+         ) ||
+         (
+          (
+           op->src[0]->type == GGML_TYPE_Q4_0 ||
+           false) && (ne11 >= 2 && ne11 <= ne11_mm_min)
          ) ||
          (
           (
