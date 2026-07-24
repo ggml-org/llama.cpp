@@ -127,6 +127,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_GROVEMOE,         "grovemoe"         },
     { LLM_ARCH_APERTUS,          "apertus"          },
     { LLM_ARCH_MINIMAX_M2,       "minimax-m2"       },
+    { LLM_ARCH_MINIMAX_M3,       "minimax-m3"       },
     { LLM_ARCH_COGVLM,           "cogvlm"           },
     { LLM_ARCH_RND1,             "rnd1"             },
     { LLM_ARCH_PANGU_EMBED,      "pangu-embedded"   },
@@ -397,6 +398,10 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_ATTN_POST_NORM,                         "blk.%d.post_attention_norm" },
     { LLM_TENSOR_ATTN_Q_NORM,                            "blk.%d.attn_q_norm" },
     { LLM_TENSOR_ATTN_K_NORM,                            "blk.%d.attn_k_norm" },
+    { LLM_TENSOR_ATTN_INDEX_Q,                           "blk.%d.attn_index_q" },
+    { LLM_TENSOR_ATTN_INDEX_K,                           "blk.%d.attn_index_k" },
+    { LLM_TENSOR_ATTN_INDEX_Q_NORM,                      "blk.%d.attn_index_q_norm" },
+    { LLM_TENSOR_ATTN_INDEX_K_NORM,                      "blk.%d.attn_index_k_norm" },
     { LLM_TENSOR_ATTN_GATE,                              "blk.%d.attn_gate" },
     { LLM_TENSOR_FFN_POST_NORM,                          "blk.%d.post_ffw_norm" },
     { LLM_TENSOR_FFN_POST_NORM_1,                        "blk.%d.post_ffw_norm_1" },
@@ -763,6 +768,11 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_FFN_NORM_EXPS,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_ATTN_Q_NORM,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_ATTN_K_NORM,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    // minimax-m3 sparse-attn indexer: unused (GGML_OP_NONE) so the loader skips it
+    {LLM_TENSOR_ATTN_INDEX_Q,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_NONE}},
+    {LLM_TENSOR_ATTN_INDEX_K,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_NONE}},
+    {LLM_TENSOR_ATTN_INDEX_Q_NORM,          {LLM_TENSOR_LAYER_REPEATING, GGML_OP_NONE}},
+    {LLM_TENSOR_ATTN_INDEX_K_NORM,          {LLM_TENSOR_LAYER_REPEATING, GGML_OP_NONE}},
     {LLM_TENSOR_LAYER_OUT_NORM,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_LAYER_OUT_SCALE,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
     {LLM_TENSOR_ATTN_Q_A_NORM,              {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
@@ -1000,6 +1010,7 @@ bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
         case LLM_ARCH_LFM2:
         case LLM_ARCH_LFM2MOE:
         case LLM_ARCH_MINIMAX_M2:
+        case LLM_ARCH_MINIMAX_M3:
         case LLM_ARCH_MISTRAL4:
         case LLM_ARCH_KIMI_LINEAR:
             return false;

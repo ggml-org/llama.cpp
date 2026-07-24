@@ -527,6 +527,7 @@ class MODEL_ARCH(IntEnum):
     APERTUS          = auto()
     COGVLM           = auto()
     MINIMAXM2        = auto()
+    MINIMAXM3        = auto()
     RND1             = auto()
     PANGU_EMBED      = auto()
     MISTRAL3         = auto()
@@ -615,6 +616,10 @@ class MODEL_TENSOR(IntEnum):
     MOE_LATENT_UP        = auto() # nemotron 3 super
     ATTN_Q_NORM          = auto()
     ATTN_K_NORM          = auto()
+    ATTN_INDEX_Q         = auto() # minimax-m3 sparse-attn indexer (unused)
+    ATTN_INDEX_K         = auto()
+    ATTN_INDEX_Q_NORM    = auto()
+    ATTN_INDEX_K_NORM    = auto()
     LAYER_OUT_NORM       = auto()
     LAYER_OUT_SCALE      = auto()
     PER_LAYER_TOKEN_EMBD = auto() # gemma3n
@@ -1109,6 +1114,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.GROVEMOE:         "grovemoe",
     MODEL_ARCH.APERTUS:          "apertus",
     MODEL_ARCH.MINIMAXM2:        "minimax-m2",
+    MODEL_ARCH.MINIMAXM3:        "minimax-m3",
     MODEL_ARCH.COGVLM:           "cogvlm",
     MODEL_ARCH.RND1:             "rnd1",
     MODEL_ARCH.PANGU_EMBED:      "pangu-embedded",
@@ -1167,6 +1173,10 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.ATTN_GATE:                 "blk.{bid}.attn_gate",
     MODEL_TENSOR.ATTN_Q_NORM:               "blk.{bid}.attn_q_norm",
     MODEL_TENSOR.ATTN_K_NORM:               "blk.{bid}.attn_k_norm",
+    MODEL_TENSOR.ATTN_INDEX_Q:              "blk.{bid}.attn_index_q",
+    MODEL_TENSOR.ATTN_INDEX_K:              "blk.{bid}.attn_index_k",
+    MODEL_TENSOR.ATTN_INDEX_Q_NORM:         "blk.{bid}.attn_index_q_norm",
+    MODEL_TENSOR.ATTN_INDEX_K_NORM:         "blk.{bid}.attn_index_k_norm",
     MODEL_TENSOR.ATTN_OUT_NORM:             "blk.{bid}.attn_output_norm",
     MODEL_TENSOR.ATTN_POST_NORM:            "blk.{bid}.post_attention_norm",
     MODEL_TENSOR.FFN_GATE_INP:              "blk.{bid}.ffn_gate_inp",
@@ -4162,6 +4172,30 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_UP_EXP,
         MODEL_TENSOR.FFN_EXP_PROBS_B,
     ],
+    MODEL_ARCH.MINIMAXM3: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_UP,
+    ],
     MODEL_ARCH.COGVLM: [
         MODEL_TENSOR.TOKEN_EMBD,
         MODEL_TENSOR.OUTPUT_NORM,
@@ -4188,6 +4222,10 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ATTN_Q_NORM,
         MODEL_TENSOR.ATTN_K,
         MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_INDEX_Q,
+        MODEL_TENSOR.ATTN_INDEX_K,
+        MODEL_TENSOR.ATTN_INDEX_Q_NORM,
+        MODEL_TENSOR.ATTN_INDEX_K_NORM,
         MODEL_TENSOR.ATTN_V,
         MODEL_TENSOR.ATTN_OUT,
         MODEL_TENSOR.FFN_NORM,

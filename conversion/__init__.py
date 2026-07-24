@@ -158,6 +158,8 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "MiniCPMForCausalLM": "minicpm",
     "MiniCPMV4_6ForConditionalGeneration": "minicpm",
     "MiniMaxM2ForCausalLM": "minimax",
+    "MiniMaxM3SparseForCausalLM": "minimax",
+    "MiniMaxM3SparseForConditionalGeneration": "minimax",
     "Ministral3ForCausalLM": "mistral3",
     "Mistral3ForConditionalGeneration": "mistral3",
     "MistralForCausalLM": "llama",
