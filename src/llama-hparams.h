@@ -229,7 +229,7 @@ struct llama_hparams {
 
     // Indexer is "full" (1) or "shared" (0)
     // Shared indexers reuse top-k from previous full layer
-    std::array<uint32_t, LLAMA_MAX_LAYERS> is_indexer_full_impl = {};
+    std::array<uint32_t, LLAMA_MAX_LAYERS> is_indexer_full_impl;
 
     // DeepSeek-V4
     uint32_t dsv4_o_group_count        = 0;
