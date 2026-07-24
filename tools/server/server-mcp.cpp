@@ -21,12 +21,8 @@
 extern char ** environ;
 #endif
 
-// Read NDJSON lines from a child pipe (stdout or stderr), invoking on_line for each complete
-// line, until `running` clears, EOF, an error, or on_line returns false. The read is polled with
-// a short timeout instead of blocking, so teardown (which clears `running`) is never held hostage
-// by a process the MCP server spawned that inherited the pipe's write end and keeps it open --
-// subprocess_terminate() only SIGKILLs the direct child, so a surviving grandchild would leave a
-// blocking read waiting forever for an EOF that never comes.
+// read NDJSON lines from a child pipe, calling on_line per line until `running` clears, EOF/error, or on_line returns false.
+// polled, not blocking: a grandchild can inherit the pipe's write end and hold it open (terminate() kills only the direct child), so a blocking read would hang teardown on an EOF that never comes.
 static void mcp_pump_ndjson(FILE * f, std::atomic<bool> & running,
                             const std::function<bool(std::string &&)> & on_line) {
     if (!f) {
@@ -204,8 +200,7 @@ json server_mcp_transport::send_rpc(const json & request, const std::function<bo
             }
             continue; // skip malformed frame
         }
-        // a message without an id is a notification; a mismatched id is a stale reply from an
-        // earlier timed-out request (ids are monotonic, so it can never match a future one)
+        // no id: a notification. mismatched id: a stale reply from a timed-out request (ids are monotonic, never a future one)
         if (!has_id || (reply.contains("id") && reply.at("id") == request.at("id"))) {
             return reply;
         }
@@ -325,10 +320,8 @@ struct server_mcp_stdio::process_handle {
 };
 
 #if defined(_WIN32)
-// MCP config strings are UTF-8 (they come from a JSON document) and the vendored subprocess.h
-// spawns via CreateProcessW after a CP_UTF8 -> wide conversion, so everything handed to it -- env
-// included -- must be UTF-8, never the active code page.
-static std::wstring mcp_utf8_to_wide(const std::string & s) {
+// config strings are UTF-8 (from JSON) and subprocess.h converts them with CP_UTF8, so inputs must be UTF-8, not the active code page
+static std::wstring windows_utf8_to_wide(const std::string & s) {
     if (s.empty()) {
         return std::wstring();
     }
@@ -341,7 +334,7 @@ static std::wstring mcp_utf8_to_wide(const std::string & s) {
     return w;
 }
 
-static std::string mcp_wide_to_utf8(const wchar_t * s, int len /* -1 for NUL-terminated */) {
+static std::string windows_wide_to_utf8(const wchar_t * s, int len /* -1 for NUL-terminated */) {
     int n = WideCharToMultiByte(CP_UTF8, 0, s, len, NULL, 0, NULL, NULL);
     if (n <= 0) {
         return std::string();
@@ -353,19 +346,18 @@ static std::string mcp_wide_to_utf8(const wchar_t * s, int len /* -1 for NUL-ter
     }
     return out;
 }
+#endif
 
-// CreateProcess (subprocess.h passes lpApplicationName = NULL) only appends ".exe" to an
-// extensionless command and never consults PATHEXT, so a "command": "npx" (npm ships npx.cmd,
-// never npx.exe) fails on Windows though it works on POSIX, where posix_spawnp does a PATH search.
-// Resolve through PATHEXT ourselves so both platforms accept the same Cursor-format config.
-static std::string mcp_resolve_command_windows(const std::string & command) {
-    std::wstring wcmd = mcp_utf8_to_wide(command);
+static std::string mcp_resolve_command(const std::string & command) {
+#if defined(_WIN32)
+    // For Windows: make sure we handle ".exe" correctly, as well as UTF-8
+    std::wstring wcmd = windows_utf8_to_wide(command);
     wchar_t      buf[MAX_PATH * 4];
     const DWORD  cap = (DWORD) (sizeof(buf) / sizeof(buf[0]));
 
     auto search = [&](const wchar_t * ext) -> std::string {
         DWORD n = SearchPathW(NULL, wcmd.c_str(), ext, cap, buf, NULL);
-        return (n > 0 && n < cap) ? mcp_wide_to_utf8(buf, (int) n) : std::string();
+        return (n > 0 && n < cap) ? windows_wide_to_utf8(buf, (int) n) : std::string();
     };
 
     std::string found = search(NULL); // exact path / already-extensioned / .exe on PATH
@@ -398,8 +390,10 @@ static std::string mcp_resolve_command_windows(const std::string & command) {
         start = sep + 1;
     }
     return command; // give up and let subprocess.h report the spawn error
-}
+#else
+    return command;
 #endif // _WIN32
+}
 
 static std::vector<std::string> mcp_parent_env() {
     std::vector<std::string> env;
@@ -407,7 +401,7 @@ static std::vector<std::string> mcp_parent_env() {
     LPWCH block = GetEnvironmentStringsW();
     if (block) {
         for (LPWCH e = block; *e; e += wcslen(e) + 1) {
-            env.emplace_back(mcp_wide_to_utf8(e, -1));
+            env.emplace_back(windows_wide_to_utf8(e, -1));
         }
         FreeEnvironmentStringsW(block);
     }
@@ -440,8 +434,7 @@ static std::vector<std::string> mcp_build_env(const std::map<std::string, std::s
 server_mcp_stdio::server_mcp_stdio(const server_mcp_server_config & config) : config(config) {
     name = config.name;
     timeout_ms = config.timeout_ms;
-    // bound the reply queue: a server that streams unsolicited notifications while no request is
-    // in flight would otherwise grow it without limit (send_rpc only drains during a call)
+    // bound the reply queue: send_rpc only drains during a call, so unsolicited notifications would otherwise grow it without limit
     from_server.max_size = 65536;
 }
 
@@ -451,11 +444,7 @@ server_mcp_stdio::~server_mcp_stdio() {
 
 bool server_mcp_stdio::start() {
     std::vector<std::string> argv_s;
-#if defined(_WIN32)
-    argv_s.push_back(mcp_resolve_command_windows(config.command));
-#else
-    argv_s.push_back(config.command);
-#endif
+    argv_s.push_back(mcp_resolve_command(config.command));
     argv_s.insert(argv_s.end(), config.args.begin(), config.args.end());
 
     int options = subprocess_option_no_window | subprocess_option_search_user_path;
@@ -516,9 +505,7 @@ void server_mcp_stdio::reader_loop() {
     from_server.close_write(); // EOF to any waiting caller
 }
 
-// Write all of `data` to the child's stdin without letting teardown hang: non-blocking write,
-// polled for writability, bailing if `running` clears (e.g. the child died but a grandchild holds
-// the stdin read end, leaving a full pipe with no reader). Returns false on error/close/shutdown.
+// write all of `data` to child stdin, non-blocking and polled so teardown never hangs (a grandchild can hold the read end of a full pipe open). returns false on error/close/shutdown.
 static bool mcp_write_all(FILE * f, const std::string & data, std::atomic<bool> & running) {
     if (!f) {
         return false;
@@ -599,10 +586,8 @@ void server_mcp_stdio::writer_loop() {
 
 void server_mcp_stdio::errlog_loop() {
     static constexpr size_t ERR_TAIL_MAX = 4096;
-    // stderr is the MCP server's only diagnostic channel: stdout is reserved for the JSON-RPC
-    // stream, so anything the server wants to log goes here. Drain it (an undrained stderr pipe
-    // would eventually block the child), forward it to the debug log, and keep a bounded tail for
-    // reporting when the server dies.
+    // drain stderr (an undrained pipe blocks the child):
+    // log it, and keep a bounded tail for reporting when the server dies
     mcp_pump_ndjson(proc->err, running, [this](std::string && line) {
         SRV_DBG("MCP '%s' stderr: %s\n", name.c_str(), line.c_str());
         std::lock_guard<std::mutex> lk(err_mu);

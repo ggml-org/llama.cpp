@@ -393,10 +393,8 @@ struct server_pipe {
     std::atomic<bool> writer_closed{false};
     std::atomic<bool> reader_closed{false};
 
-    // 0 = unbounded (default; streaming consumers must not lose data). When > 0, write()
-    // drops the oldest item once the queue is full, bounding memory for consumers that only
-    // care about the latest items (e.g. an MCP session where unread notifications pile up
-    // between requests). Set it before any concurrent use.
+    // 0 = unbounded (default)
+    // > 0, write() drops the oldest item once the queue is full
     size_t max_size = 0;
 
     void close_write() {

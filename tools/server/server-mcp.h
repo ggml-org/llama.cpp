@@ -24,7 +24,7 @@ struct server_mcp_server_config {
     std::string cwd;
     int timeout_ms = 30000; // per-tool-call timeout
 
-    // from_file/from_json throw on I/O or parse errors; a missing "mcpServers" yields an empty list, and entries without a "command" are skipped
+    // throw on I/O or parse errors; missing "mcpServers" yields an empty list; entries without a "command" are skipped
     static std::vector<server_mcp_server_config> parse_from_file(const std::string & path);
     static std::vector<server_mcp_server_config> parse_from_json(const std::string & json_str);
     static std::vector<server_mcp_server_config> parse_cursor_format(const json & j);
@@ -44,8 +44,8 @@ struct server_mcp_tool_def {
 //   caller --send_rpc--> to_server   --[writer]--> framing --> server
 //   caller <--send_rpc-- from_server <--[reader]-- framing <-- server
 //
-// Each queue item is one complete serialized JSON message
-// A subclass owns the byte I/O and framing (stdio: NDJSON); the base owns json (parse/dump) and the JSON-RPC session (handshake, id correlation).
+// each queue item is one complete serialized JSON message.
+// subclass owns byte I/O and framing; base owns JSON and the JSON-RPC session (handshake, id correlation).
 //
 
 struct server_mcp_transport {
@@ -70,7 +70,7 @@ struct server_mcp_transport {
                    const std::function<bool()> & should_stop);
 
 protected:
-    // per-transport, not shared: send_rpc() holds it across the wait for a reply, so a shared lock would stall every server behind one slow call all members below are touched only under it
+    // per-transport: send_rpc() holds it across the reply wait, so sharing it would stall every server behind one slow call. guards all members below.
     std::mutex rpc_mutex;
     uint64_t next_id = 1; // reset to 1 per (re)spawn
     bool initialized = false;
@@ -79,11 +79,11 @@ protected:
 
     // both assume rpc_mutex is already held by the public caller
     bool ensure_init(const std::function<bool()> & should_stop); // initialize handshake, once
-    json send_rpc(const json & request, const std::function<bool()> & should_stop); // returns the reply, or an {"error": ...} object
+    json send_rpc(const json & request, const std::function<bool()> & should_stop); // returns the reply or an {"error": ...}
 };
 
 //
-// server_mcp_stdio: child process, NDJSON JSON-RPC over stdio (stderr inherited)
+// server_mcp_stdio: child process, NDJSON JSON-RPC over stdio (stderr drained to the debug log)
 //
 
 struct server_mcp_stdio : server_mcp_transport {
@@ -120,7 +120,7 @@ private:
 
 //
 // server_mcp
-// manager lives inside main_server(); declare it before the HTTP context so it outlives every /tools handler.
+// declare before the HTTP context so it outlives every /tools handler.
 //
 
 class server_mcp {
@@ -133,7 +133,7 @@ public:
 
     std::vector<server_mcp_tool_def> list_tools() const;
 
-    // lazily (re)spawns the transport. returns the MCP result or an {"error": ...} object. should_stop is OR-ed with the manager's cancel flag.
+    // lazily (re)spawns the transport. returns the MCP result or an {"error": ...}. should_stop is OR-ed with the manager's cancel flag.
     json call_tool(const std::string & server_name,
                    const std::string & tool_name,
                    const json & arguments,
