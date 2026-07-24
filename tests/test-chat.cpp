@@ -2849,6 +2849,17 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect(message_assist)
             .run();
 
+        // JSON output schema
+        tst.test(
+                "I need to output the invoice details in JSON<|END_THINKING|>"
+                "<|START_TEXT|>{\"amount\": 123.45, \"date\": \"2025-12-03\"}<|END_TEXT|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .json_schema(invoice_schema)
+            .tools({ special_function_tool })
+            .expect_reasoning("I need to output the invoice details in JSON")
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
+                .run();
+
         // Single tool call with reasoning.
         tst.test(
                "I'm\nthinking<|END_THINKING|>"

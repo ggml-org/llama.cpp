@@ -283,6 +283,15 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
         chatcmpl_body["max_tokens"] = response_body["max_output_tokens"];
     }
 
+    if (response_body.contains("reasoning")) {
+        // Only "effort" is handled so far
+        const json & reasoning = response_body.at("reasoning");
+        if (reasoning.contains("effort")) {
+            chatcmpl_body["reasoning_effort"] = reasoning.at("effort");
+        }
+        chatcmpl_body.erase("reasoning");
+    }
+
     return chatcmpl_body;
 }
 
