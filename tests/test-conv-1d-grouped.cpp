@@ -1,0 +1,177 @@
+// Test for ggml_conv_1d_grouped
+//
+// Verifies grouped 1D convolution by comparing against manual per-group computation.
+
+#include "ggml.h"
+#include "ggml-backend.h"
+#include "ggml-cpu.h"
+
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cmath>
+#include <vector>
+
+static void fill_random_f32(float * data, int n) {
+    for (int i = 0; i < n; i++) {
+        data[i] = ((float)rand() / RAND_MAX) * 2.0f - 1.0f;
+    }
+}
+
+static bool all_close(const float * a, const float * b, int n, float eps = 2e-2f) {
+    for (int i = 0; i < n; i++) {
+        if (fabsf(a[i] - b[i]) > eps) {
+            fprintf(stderr, "    mismatch at [%d]: %.6f vs %.6f (diff=%.6f)\n",
+                    i, a[i], b[i], fabsf(a[i] - b[i]));
+            return false;
+        }
+    }
+    return true;
+}
+
+// Compute grouped conv1d on CPU naively for reference
+// kernel (F16): [K, IC_G, OC], input (F32): [L, IC, N], output: [OL, OC, N]
+static void conv1d_grouped_ref(
+        const ggml_fp16_t * kernel, const float * input, float * output,
+        int K, int IC, int OC, int L, int N, int groups, int stride, int padding) {
+    int IC_G = IC / groups;
+    int OC_G = OC / groups;
+    int OL = (L + 2 * padding - K) / stride + 1;
+
+    memset(output, 0, (size_t)OL * OC * N * sizeof(float));
+
+    for (int n = 0; n < N; n++) {
+        for (int g = 0; g < groups; g++) {
+            for (int oc = 0; oc < OC_G; oc++) {
+                int oc_global = g * OC_G + oc;
+                for (int ol = 0; ol < OL; ol++) {
+                    float sum = 0.0f;
+                    for (int ic = 0; ic < IC_G; ic++) {
+                        for (int k = 0; k < K; k++) {
+                            int il = ol * stride + k - padding;
+                            if (il >= 0 && il < L) {
+                                int ic_global = g * IC_G + ic;
+                                // kernel: [K, IC_G, OC] -> k + ic * K + oc_global * (IC_G * K)
+                                float w = ggml_fp16_to_fp32(kernel[k + ic * K + oc_global * (IC_G * K)]);
+                                // input: [L, IC, N] -> il + ic_global * L + n * (IC * L)
+                                float x = input[il + ic_global * L + n * (IC * L)];
+                                sum += w * x;
+                            }
+                        }
+                    }
+                    // output: [OL, OC, N] -> ol + oc_global * OL + n * (OC * OL)
+                    output[ol + oc_global * OL + n * (OC * OL)] = sum;
+                }
+            }
+        }
+    }
+}
+
+static bool run_test(const char * label, int IC, int OC, int K, int L, int groups, int stride, int padding,
+                     enum ggml_type kernel_type = GGML_TYPE_F16) {
+    printf("  TEST: %s (IC=%d OC=%d K=%d L=%d G=%d s=%d p=%d) kernel=%s\n",
+           label, IC, OC, K, L, groups, stride, padding,
+           ggml_type_name(kernel_type));
+
+    int IC_G = IC / groups;
+    int OL = (L + 2 * padding - K) / stride + 1;
+
+    size_t ctx_size = 256 * 1024 * 1024;
+    struct ggml_init_params params = {
+        /*.mem_size   =*/ ctx_size,
+        /*.mem_buffer =*/ NULL,
+        /*.no_alloc   =*/ false,
+    };
+    struct ggml_context * ctx = ggml_init(params);
+
+    // generate kernel data
+    std::vector<float> kernel_f32(K * IC_G * OC);
+    fill_random_f32(kernel_f32.data(), K * IC_G * OC);
+
+    // kernel for op: [K, IC_G, OC] and reference (F16)
+    struct ggml_tensor * a = ggml_new_tensor_3d(ctx, kernel_type, K, IC_G, OC);
+    std::vector<ggml_fp16_t> kernel_f16(K * IC_G * OC);
+    for (int i = 0; i < K * IC_G * OC; i++) {
+        if (kernel_type == GGML_TYPE_BF16) {
+            ggml_bf16_t b = ggml_fp32_to_bf16(kernel_f32[i]);
+            ((ggml_bf16_t *)a->data)[i] = b;
+            kernel_f16[i] = ggml_fp32_to_fp16(ggml_bf16_to_fp32(b));
+        } else {
+            kernel_f16[i] = ggml_fp32_to_fp16(kernel_f32[i]);
+        }
+    }
+    if (kernel_type != GGML_TYPE_BF16) {
+        memcpy(a->data, kernel_f16.data(), K * IC_G * OC * sizeof(ggml_fp16_t));
+    }
+
+    // generate reference input once (F32)
+    std::vector<float> input_f32(L * IC);
+    fill_random_f32(input_f32.data(), L * IC);
+
+    // input for op: [L, IC]
+    struct ggml_tensor * b = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, L, IC);
+    memcpy(b->data, input_f32.data(), L * IC * sizeof(float));
+
+    // reference
+    std::vector<float> ref(OL * OC);
+    conv1d_grouped_ref(kernel_f16.data(), input_f32.data(), ref.data(),
+                       K, IC, OC, L, 1, groups, stride, padding);
+
+    // ggml
+    struct ggml_tensor * result = ggml_conv_1d_grouped(ctx, a, b, stride, padding, 1, groups);
+
+    struct ggml_cgraph * gf = ggml_new_graph(ctx);
+    ggml_build_forward_expand(gf, result);
+
+    ggml_backend_t backend = ggml_backend_cpu_init();
+    ggml_backend_graph_compute(backend, gf);
+
+    bool ok = true;
+
+    if (result->ne[0] != OL || result->ne[1] != OC) {
+        fprintf(stderr, "    FAIL: shape [%lld, %lld], expected [%d, %d]\n",
+                (long long)result->ne[0], (long long)result->ne[1], OL, OC);
+        ok = false;
+    }
+
+    if (ok) {
+        ok = all_close((float *)result->data, ref.data(), OL * OC);
+    }
+
+    printf("    %s\n", ok ? "PASS" : "FAIL");
+
+    ggml_backend_free(backend);
+    ggml_free(ctx);
+    return ok;
+}
+
+int main(void) {
+    srand(42);
+
+    printf("Testing ggml_conv_1d_grouped\n\n");
+
+    int n_pass = 0, n_fail = 0;
+
+    struct { const char * label; int IC, OC, K, L, G, s, p; } scenarios[] = {
+        { "groups=1 (standard conv1d)", 128, 256, 3, 32,  1, 1, 0 },
+        { "ZAYA1-8B exact params",      1280, 1280, 2, 16,  10, 1, 0 },
+        { "small 2 groups",             4, 4, 2, 8,    2, 1, 0 },
+        { "with padding",               8, 8, 2, 16,   4, 1, 1 },
+        { "IC != OC",                   12, 6, 3, 10,  3, 1, 0 },
+        { "stride=2",                   8, 8, 2, 16,   4, 2, 0 },
+        { "longer sequence",            1280, 1280, 2, 128, 10, 1, 0 },
+    };
+
+    enum ggml_type kernel_types[] = { GGML_TYPE_F16, GGML_TYPE_BF16 };
+    for (auto kt : kernel_types) {
+        if (kt != GGML_TYPE_F16) {
+            printf("\n--- %s ---\n\n", ggml_type_name(kt));
+        }
+        for (auto &s : scenarios) {
+            if (run_test(s.label, s.IC, s.OC, s.K, s.L, s.G, s.s, s.p, kt)) { n_pass++; } else { n_fail++; }
+        }
+    }
+
+    printf("\nResult: %d passed, %d failed\n", n_pass, n_fail);
+    return n_fail > 0 ? 1 : 0;
+}

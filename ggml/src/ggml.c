@@ -4527,10 +4527,16 @@ struct ggml_tensor * ggml_conv_1d(
         int                   d0) {
     struct ggml_tensor * im2col = ggml_im2col(ctx, a, b, s0, 0, p0, 0, d0, 0, false, a->type == GGML_TYPE_BF16 ? GGML_TYPE_F32 : GGML_TYPE_F16); // [N, OL, IC * K]
 
+    // convert BF16 kernel to F32 for mul_mat compatibility
+    struct ggml_tensor * a_op = ggml_reshape_2d(ctx, a, (a->ne[0] * a->ne[1]), a->ne[2]); // [OC, IC * K]
+    if (a->type == GGML_TYPE_BF16) {
+        a_op = ggml_cpy(ctx, a_op, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, a_op->ne[0], a_op->ne[1]));
+    }
+
     struct ggml_tensor * result =
         ggml_mul_mat(ctx,
                 ggml_reshape_2d(ctx, im2col, im2col->ne[0], (im2col->ne[2] * im2col->ne[1])), // [N, OL, IC * K] => [N*OL, IC * K]
-                ggml_reshape_2d(ctx, a, (a->ne[0] * a->ne[1]), a->ne[2]));                    // [OC，IC, K] => [OC, IC * K]
+                a_op);                                                                         // [OC, IC * K]
 
     result = ggml_reshape_3d(ctx, result, im2col->ne[1], a->ne[2], im2col->ne[2]); // [N, OC, OL]
 
@@ -4577,6 +4583,63 @@ struct ggml_tensor * ggml_conv_1d_dw_ph(
         int                   s0,
         int                   d0) {
     return ggml_conv_1d_dw(ctx, a, b, s0, a->ne[0] / 2, d0);
+}
+
+// ggml_conv_1d_grouped
+
+struct ggml_tensor * ggml_conv_1d_grouped(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        struct ggml_tensor  * b,
+        int                   s0,
+        int                   p0,
+        int                   d0,
+        int                   groups) {
+    GGML_ASSERT(groups > 0);
+
+    const int64_t OC   = a->ne[2];   // total output channels
+    const int64_t IC_G = a->ne[1];   // input channels per group (kernel dim)
+    const int64_t IC   = b->ne[1];   // total input channels
+
+    GGML_ASSERT(IC % groups == 0);
+    GGML_ASSERT(OC % groups == 0);
+    GGML_ASSERT(IC_G == IC / groups);
+
+    // degenerate cases: fall back to existing implementations
+    if (groups == 1) {
+        return ggml_conv_1d(ctx, a, b, s0, p0, d0);
+    }
+    if (groups == IC && groups == OC) {
+        return ggml_conv_1d_dw(ctx, a, b, s0, p0, d0);
+    }
+
+    const int64_t OC_G = OC / groups;
+
+    struct ggml_tensor * result = NULL;
+
+    for (int g = 0; g < groups; g++) {
+        // slice kernel for group g: [K, IC_G, OC_G]
+        struct ggml_tensor * a_g = ggml_view_3d(ctx, a,
+            a->ne[0], IC_G, OC_G,
+            a->nb[1], a->nb[2],
+            g * OC_G * a->nb[2]);
+
+        // slice input for group g: [L, IC_G, N]
+        struct ggml_tensor * b_g = ggml_view_3d(ctx, b,
+            b->ne[0], IC_G, b->ne[2],
+            b->nb[1], b->nb[2],
+            g * IC_G * b->nb[1]);
+
+        struct ggml_tensor * out_g = ggml_conv_1d(ctx, a_g, b_g, s0, p0, d0);
+
+        if (result == NULL) {
+            result = out_g;
+        } else {
+            result = ggml_concat(ctx, result, out_g, 1);
+        }
+    }
+
+    return result;
 }
 
 // ggml_col2im_1d
