@@ -217,6 +217,21 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     set_tests_properties(test-recurrent-state-rollback PROPERTIES
         FIXTURES_REQUIRED generate-models
     )
+
+    # test-reload-context: exercises server_context::reload_context against the
+    # generated qwen35-dense fixture. Linked against server-context (like
+    # test-chat) because it drives the server runtime directly.
+    llama_build(test-reload-context.cpp get-model.cpp)
+    target_include_directories(test-reload-context PRIVATE ${PROJECT_SOURCE_DIR}/tools/server)
+    target_link_libraries(test-reload-context PRIVATE server-context)
+    llama_test(
+        test-reload-context
+        LABEL main
+        ARGS -m "${MODEL_DIR}/qwen35-dense.gguf" -c 64 -np 1 -ngl 0
+    )
+    set_tests_properties(test-reload-context PROPERTIES
+        FIXTURES_REQUIRED generate-models
+    )
 endif()
 
 llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp)
