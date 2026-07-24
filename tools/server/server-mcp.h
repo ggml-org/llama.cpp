@@ -4,7 +4,6 @@
 
 #include <atomic>
 #include <chrono>
-#include <fstream>
 #include <functional>
 #include <map>
 #include <memory>
@@ -128,15 +127,13 @@ public:
     server_mcp() = default;
     ~server_mcp();
 
-    // parse Cursor-format JSON and append the servers it declares; throws on parse errors
-    void init(std::ifstream file); // reads the whole stream, then forwards to init(json_str)
-    void init(const std::string & json_str);
+    // parse the MCP config from params (file and/or inline JSON),
+    // then spawn each server once,  list its tools, and shut it down
+    // throws on config parse errors; spawn failures are logged.
+    void start(const common_params & params);
 
-    // true until init() has added at least one server
+    // true until start() has parsed at least one server from the config
     bool empty() const { return configs.empty(); }
-
-    // spawn each server once, list its tools, shut it down. failures are logged, not fatal.
-    void start();
 
     std::vector<server_mcp_tool_def> list_tools() const;
 
@@ -147,7 +144,7 @@ public:
                    const std::function<bool()> & should_stop = nullptr);
 
     // flip the cancel flag so in-flight calls return; blocking teardown is in the destructor. call before the HTTP server drains.
-    // multiple calls are idempotent
+    // note: multiple calls are idempotent
     void shutdown();
 
 private:

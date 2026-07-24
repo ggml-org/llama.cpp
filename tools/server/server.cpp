@@ -163,6 +163,9 @@ int llama_server(common_params & params, int argc, char ** argv) {
         params.model_alias.insert(model_name);
     }
 
+    // note: this is guaranteed to out-live ctx_http and tools
+    server_mcp mcp_mgr;
+
     // struct that contains llama context and inference
     server_context ctx_server;
 
@@ -332,24 +335,11 @@ int llama_server(common_params & params, int argc, char ** argv) {
         ctx_http.post("/cors-proxy",      ex_wrapper(res_403));
     }
 
-    server_mcp mcp_mgr;
-    {
-        try {
-            if (!params.mcp_servers_config.empty()) {
-                mcp_mgr.init(fs_open_ifstream(params.mcp_servers_config, std::ios::in));
-            }
-            if (!params.mcp_servers_json.empty()) {
-                mcp_mgr.init(params.mcp_servers_json);
-            }
-        } catch (const std::exception & e) {
-            SRV_ERR("MCP config parsing failed: %s\n", e.what());
-            return 1;
-        }
-        try {
-            mcp_mgr.start();
-        } catch (const std::exception & e) {
-            SRV_WRN("MCP starting failed: %s\n", e.what());
-        }
+    try {
+        mcp_mgr.start(params);
+    } catch (const std::exception & e) {
+        SRV_ERR("MCP config parsing failed: %s\n", e.what());
+        return 1;
     }
 
     if (!params.server_tools.empty() || !mcp_mgr.empty()) {

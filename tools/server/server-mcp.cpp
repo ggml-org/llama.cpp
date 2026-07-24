@@ -616,20 +616,6 @@ void server_mcp_stdio::join_pumps() {
 
 static constexpr int MCP_COOLDOWN_SECONDS = 5;
 
-void server_mcp::init(std::ifstream file) {
-    if (!file) {
-        throw std::runtime_error("failed to open MCP config file");
-    }
-    std::stringstream ss;
-    ss << file.rdbuf();
-    init(ss.str());
-}
-
-void server_mcp::init(const std::string & json_str) {
-    auto parsed = server_mcp_server_config::parse_from_json(json_str);
-    configs.insert(configs.end(), std::make_move_iterator(parsed.begin()), std::make_move_iterator(parsed.end()));
-}
-
 server_mcp::~server_mcp() {
     shutdown();
 
@@ -663,7 +649,24 @@ const server_mcp_server_config * server_mcp::find_config(const std::string & nam
     return nullptr;
 }
 
-void server_mcp::start() {
+void server_mcp::start(const common_params & params) {
+    auto append = [this](const std::string & json_str) {
+        auto parsed = server_mcp_server_config::parse_from_json(json_str);
+        configs.insert(configs.end(), std::make_move_iterator(parsed.begin()), std::make_move_iterator(parsed.end()));
+    };
+    if (!params.mcp_servers_config.empty()) {
+        std::ifstream f = fs_open_ifstream(params.mcp_servers_config, std::ios::in);
+        if (!f) {
+            throw std::runtime_error("failed to open MCP config file: " + params.mcp_servers_config);
+        }
+        std::stringstream ss;
+        ss << f.rdbuf();
+        append(ss.str());
+    }
+    if (!params.mcp_servers_json.empty()) {
+        append(params.mcp_servers_json);
+    }
+
     if (configs.empty()) {
         return;
     }
