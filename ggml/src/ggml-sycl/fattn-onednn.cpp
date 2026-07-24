@@ -2,11 +2,13 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
 #include "fattn-onednn.hpp"
 #include "fattn-tile.hpp"
+#include "convert.hpp"
 
 // set minimum query length to treat as prefill (32)
 #define GGML_SYCL_FA_ONEDNN_MIN_Q 32
@@ -33,10 +35,30 @@ bool ggml_sycl_flash_attn_ext_onednn_supported(const ggml_tensor * dst) {
     const ggml_tensor * mask  = dst->src[3];
     const ggml_tensor * sinks = dst->src[4];
 
-    // gate for f16 KV only for now
-    // need to implement quantized KV
+    // F16 KV: native SDPA at any KV length.
+    // Non-F16: dequant to F16 then SDPA at prefill lengths. Only the
+    // standard quantized KV cache types (Q4_0-Q8_0) and F32 are accepted
+    // because their to_fp16_sycl conversion is verified. BF16 and IQ*
+    // are excluded: BF16 needs a strided conversion kernel that does not
+    // exist yet; IQ types are model-weight-only quants with no dequant
+    // registration and are never used as KV caches.
     if (K->type != GGML_TYPE_F16 || V->type != GGML_TYPE_F16) {
-        return false;
+        auto kt = K->type, vt = V->type;
+        bool k_ok = kt == GGML_TYPE_F32 || kt == GGML_TYPE_Q4_0 || kt == GGML_TYPE_Q4_1 ||
+                    kt == GGML_TYPE_Q5_0 || kt == GGML_TYPE_Q5_1 || kt == GGML_TYPE_Q8_0;
+        bool v_ok = vt == GGML_TYPE_F32 || vt == GGML_TYPE_Q4_0 || vt == GGML_TYPE_Q4_1 ||
+                    vt == GGML_TYPE_Q5_0 || vt == GGML_TYPE_Q5_1 || vt == GGML_TYPE_Q8_0;
+        if (!k_ok || !v_ok) {
+            return false;
+        }
+        if (Q->ne[1] < 32 || K->ne[1] < 1024) {
+            return false;
+        }
+        for (const ggml_tensor * t : {K, V}) {
+            if (t->type == GGML_TYPE_F16 && t->nb[1] % (t->ne[0] * 2) != 0) {
+                return false;
+            }
+        }
     }
     // gate for the following cases
     // 1. if the oneDNN graph Add node has no input --> skip
@@ -199,13 +221,101 @@ void ggml_sycl_flash_attn_ext_onednn(ggml_backend_sycl_context & ctx, ggml_tenso
     dnnl::engine    eng    = ctx.engine_dnnl(stream);
     dnnl::stream    strm   = ctx.stream_dnnl(stream);
 
-    // cont/cast inputs to contiguous f16 (head-major) -- the layout the fast systolic path wants.
-    ggml_sycl_pool_alloc<sycl::half> Qf(ctx.pool(), (size_t) H   * q   * d);
-    ggml_sycl_pool_alloc<sycl::half> Kf(ctx.pool(), (size_t) Hkv * seq * d);
-    ggml_sycl_pool_alloc<sycl::half> Vf(ctx.pool(), (size_t) Hkv * seq * d);
-    cont_to_f16_sycl<float>     ((const char *) Q->data, Qf.get(), d, q,   H,   mb, Q->nb[1], Q->nb[2], Q->nb[3], stream);
-    cont_to_f16_sycl<sycl::half>((const char *) K->data, Kf.get(), d, seq, Hkv, mb, K->nb[1], K->nb[2], K->nb[3], stream);
-    cont_to_f16_sycl<sycl::half>((const char *) V->data, Vf.get(), d, seq, Hkv, mb, V->nb[1], V->nb[2], V->nb[3], stream);
+    // Q: always f32 -- copy to dense f16.
+    ggml_sycl_pool_alloc<sycl::half> Qf(ctx.pool(), (size_t) H * q * d);
+    cont_to_f16_sycl<float>((const char *) Q->data, Qf.get(), d, q, H, mb, Q->nb[1], Q->nb[2], Q->nb[3], stream);
+
+    // K/V: use pool-alloc for both F16 and dequant paths.
+    sycl::half * K_ptr = nullptr;
+    sycl::half * V_ptr = nullptr;
+    std::optional<ggml_sycl_pool_alloc<sycl::half>> Kf_pool;
+    std::optional<ggml_sycl_pool_alloc<sycl::half>> Vf_pool;
+
+    if (K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16) {
+        Kf_pool.emplace(ctx.pool(), (size_t) Hkv * seq * d);
+        Vf_pool.emplace(ctx.pool(), (size_t) Hkv * seq * d);
+        cont_to_f16_sycl<sycl::half>((const char *) K->data, Kf_pool->get(), d, seq, Hkv, mb, K->nb[1], K->nb[2], K->nb[3], stream);
+        cont_to_f16_sycl<sycl::half>((const char *) V->data, Vf_pool->get(), d, seq, Hkv, mb, V->nb[1], V->nb[2], V->nb[3], stream);
+        K_ptr = Kf_pool->get();
+        V_ptr = Vf_pool->get();
+    } else if (ggml_is_quantized(K->type)) {
+        // Quantized K/V: dequant to dense F16 using pool, same lifetime as F16 path.
+        Kf_pool.emplace(ctx.pool(), ggml_nelements(K));
+        K_ptr = Kf_pool->get();
+        {
+            const char * K_data = (const char *)K->data;
+            const bool k_non_dense = ((int64_t)K->ne[1] * K->nb[1] != K->nb[2]) && K->ne[2] > 1;
+            const bool k_gemma = k_non_dense &&
+                ((int64_t)K->nb[2] < (int64_t)K->ne[1] * (int64_t)K->nb[1]);
+            if (ggml_is_contiguously_allocated(K) && !k_non_dense) {
+                to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(K->type, dst);
+                to_fp16(K_data, K_ptr, ggml_nelements(K), stream);
+            } else {
+                const size_t bs = ggml_blck_size(K->type);
+                const size_t ts = ggml_type_size(K->type);
+                to_fp16_nc_sycl_t to_fp16 = ggml_get_to_fp16_nc_sycl(K->type);
+                int64_t s01, s02, s03;
+                if (k_gemma) {
+                    const int64_t blk_per_row = (int64_t)K->ne[0] / bs;
+                    s01 = (int64_t)Hkv * blk_per_row;
+                    s02 = blk_per_row;
+                    s03 = (int64_t)K->ne[1] * s01;
+                } else {
+                    s01 = (int64_t)K->nb[1] / ts;
+                    s02 = (int64_t)K->nb[2] / ts;
+                    s03 = (int64_t)K->nb[3] / ts;
+                }
+                to_fp16(K_data, K_ptr,
+                        K->ne[0], K->ne[1], K->ne[2], K->ne[3],
+                        s01, s02, s03, stream);
+            }
+        }
+        // Quantized V: always dequant separately. Even when K and V share
+        // the same underlying allocation (V is a view of K with the same
+        // data pointer), their logical values differ because the quantized
+        // elements at different positions/offsets represent different K/V
+        // data. Master's F16 path also never aliases K and V.
+        Vf_pool.emplace(ctx.pool(), ggml_nelements(V));
+        V_ptr = Vf_pool->get();
+        {
+            const char * V_data = (const char *)V->data;
+            const bool v_non_dense = ((int64_t)V->ne[1] * V->nb[1] != V->nb[2]) && V->ne[2] > 1;
+            const bool v_gemma = v_non_dense &&
+                ((int64_t)V->nb[2] < (int64_t)V->ne[1] * (int64_t)V->nb[1]);
+            if (ggml_is_contiguously_allocated(V) && !v_non_dense) {
+                to_fp16_sycl_t to_fp16 = ggml_get_to_fp16_sycl(V->type, dst);
+                to_fp16(V_data, V_ptr, ggml_nelements(V), stream);
+            } else {
+                const size_t bs = ggml_blck_size(V->type);
+                const size_t ts = ggml_type_size(V->type);
+                to_fp16_nc_sycl_t to_fp16 = ggml_get_to_fp16_nc_sycl(V->type);
+                int64_t s01, s02, s03;
+                if (v_gemma) {
+                    const int64_t blk_per_row = (int64_t)V->ne[0] / bs;
+                    s01 = (int64_t)V->ne[2] * blk_per_row;
+                    s02 = blk_per_row;
+                    s03 = (int64_t)V->ne[1] * s01;
+                } else {
+                    s01 = (int64_t)V->nb[1] / ts;
+                    s02 = (int64_t)V->nb[2] / ts;
+                    s03 = (int64_t)V->nb[3] / ts;
+                }
+                to_fp16(V_data, V_ptr,
+                        V->ne[0], V->ne[1], V->ne[2], V->ne[3],
+                        s01, s02, s03, stream);
+            }
+        }
+    } else {
+        // F32: strided copy to dense F16 via cont_to_f16_sycl<float>.
+        Kf_pool.emplace(ctx.pool(), ggml_nelements(K));
+        K_ptr = Kf_pool->get();
+        cont_to_f16_sycl<float>((const char *) K->data, K_ptr, K->ne[0], K->ne[1], K->ne[2], K->ne[3],
+                                K->nb[1], K->nb[2], K->nb[3], stream);
+        Vf_pool.emplace(ctx.pool(), ggml_nelements(V));
+        V_ptr = Vf_pool->get();
+        cont_to_f16_sycl<float>((const char *) V->data, V_ptr, V->ne[0], V->ne[1], V->ne[2], V->ne[3],
+                                V->nb[1], V->nb[2], V->nb[3], stream);
+    }
 
     // divide-by-(1/scale) reproduces ggml's score *= kq_scale on the proven probe graph.
     const sycl::half scale_h = (sycl::half) (1.0f / kq_scale);
@@ -230,8 +340,8 @@ void ggml_sycl_flash_attn_ext_onednn(ggml_backend_sycl_context & ctx, ggml_tenso
 
     auto id2ptr = [&](size_t r) -> void * {
         if (r == E.id_q)     return Qf.get();
-        if (r == E.id_k)     return Kf.get();
-        if (r == E.id_v)     return Vf.get();
+        if (r == E.id_k)     return K_ptr;
+        if (r == E.id_v)     return V_ptr;
         if (r == E.id_scale) return scbuf.get();
         if (r == E.id_mask)  return (void *) mask->data;
         return nullptr;
@@ -245,16 +355,11 @@ void ggml_sycl_flash_attn_ext_onednn(ggml_backend_sycl_context & ctx, ggml_tenso
     E.cp.execute(strm, ti, {to});
 
     permute_sdpa_out_sycl(outf.get(), (float *) dst->data, mb, H, q, d, stream);
-    // Single device: no sync is required, and actually PP perf is ~6% > wait_and_throw() (tested on llama-3.1-8b & qwen3.6-27b, both Q8_0, with Arc B70).
-    // Any future multi-GPU refactor MUST re-measure this single-device path and keep the best
-    // single-device PP speed. Otherwise (multiple devices/streams can race the reuse):
-    if (ggml_sycl_info().device_count > 1) {
-        // cont_to_f16 -> oneDNN execute -> permute is async on this stream, but the
-        // pool_alloc*s above free their device buffers at host return. Without this wait the next
-        // scheduler op re-acquires those bytes while the GPU is still computing the SDPA, turning
-        // it into garbage and collapsing multi-turn output to a single repeated token ("GGGGG...").
-        stream->wait_and_throw();
-    }
+    // cont_to_f16 -> oneDNN execute -> permute is async on this stream, but the
+    // pool_alloc*s above free their device buffers at host return. Without this wait the next
+    // scheduler op re-acquires those bytes while the GPU is still computing the SDPA, turning
+    // it into garbage and collapsing multi-turn output to a single repeated token ("GGGGG...").
+    stream->wait_and_throw();
 }
 catch (const std::exception & e) {
     // any oneDNN/SYCL failure is non-fatal: fall back to the existing kernel (strictly additive).

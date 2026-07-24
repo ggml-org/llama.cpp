@@ -97,9 +97,10 @@ static void ggml_sycl_flash_attn_ext_vec(ggml_backend_sycl_context & ctx, ggml_t
 enum best_fattn_kernel {
     BEST_FATTN_KERNEL_NONE     =   0,
     BEST_FATTN_KERNEL_VEC      = 100,
-    BEST_FATTN_KERNEL_ONEDNN   = 150, // added enum for onednn==150
+    BEST_FATTN_KERNEL_ONEDNN   = 150, // oneDNN SDPA: native F16 (PR #25222)
     BEST_FATTN_KERNEL_TILE     = 200,
 };
+
 
 static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const ggml_tensor * dst) {
     GGML_UNUSED(device);
@@ -115,6 +116,7 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     const ggml_tensor * K     = dst->src[1];
     const ggml_tensor * V     = dst->src[2];
     const ggml_tensor * mask  = dst->src[3];
+    const ggml_tensor * sinks = dst->src[4];
 
     const int gqa_ratio = Q->ne[2] / K->ne[2];
     GGML_ASSERT(Q->ne[2] % K->ne[2] == 0);
@@ -122,7 +124,20 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     float max_bias = 0.0f;
     memcpy(&max_bias, (const float *) KQV->op_params + 1, sizeof(float));
 
+    float logit_softcap = 0.0f;
+    memcpy(&logit_softcap, (const float *) KQV->op_params + 2, sizeof(float));
+
     bool gqa_opt_applies = gqa_ratio >= 2 && mask && max_bias == 0.0f && K->ne[1] % FATTN_KQ_STRIDE == 0;
+
+    // XMX-accelerated path: oneDNN SDPA (native F16 and dequant+non-F16).
+    // ONEDNN requires min 32 query tokens — short-circuit decode to avoid
+    // calling _supported() on every decode FA call.
+    if (Q->ne[1] >= 32
+        && ggml_sycl_flash_attn_ext_onednn_supported(dst)) {
+        return BEST_FATTN_KERNEL_ONEDNN;
+    }
+
+
     for (const ggml_tensor * t : {Q, K, V, mask}) {
         if (t == nullptr || ggml_is_quantized(t->type)) {
             continue;
@@ -170,6 +185,7 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     switch (K->type) {
         case GGML_TYPE_F32:
         case GGML_TYPE_F16:
+        case GGML_TYPE_BF16:
             break;
         case GGML_TYPE_Q4_1:
         case GGML_TYPE_Q5_0:
@@ -188,8 +204,11 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
         return BEST_FATTN_KERNEL_NONE;
     }
 
-    // For small batch sizes the vector kernel may be preferable over the kernels optimized for large batch sizes:
-    const bool can_use_vector_kernel = Q->ne[0] <= 512 && Q->ne[0] % 64 == 0 && K->ne[1] % FATTN_KQ_STRIDE == 0;
+    // For small batch sizes the vector kernel may be preferable over the kernels optimized for large batch sizes.
+    // BF16 is excluded: the VEC kernel has no BF16 template (it needs GGML_SYCL_FA_ALL_QUANTS for non-F16/Q4_0/Q8_0).
+    const bool has_bf16 = (K->type == GGML_TYPE_BF16 || V->type == GGML_TYPE_BF16);
+    const bool can_use_vector_kernel = Q->ne[0] <= 512 && Q->ne[0] % 64 == 0 && K->ne[1] % FATTN_KQ_STRIDE == 0
+        && !has_bf16;
 
     // Fused-XMX path: oneDNN Graph SDPA (flash attention). Strictly
     // additive -- taken only when statically supported, otherwise falls through to VEC/TILE below.
@@ -216,7 +235,9 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
 
 void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     ggml_sycl_set_device(ctx.device);
-    switch (ggml_sycl_get_best_fattn_kernel(ggml_sycl_get_device(), dst)) {
+
+    const best_fattn_kernel fk = ggml_sycl_get_best_fattn_kernel(ggml_sycl_get_device(), dst);
+    switch (fk) {
         case BEST_FATTN_KERNEL_NONE:
             GGML_ABORT("Not support Flash-Attention");
         case BEST_FATTN_KERNEL_ONEDNN:
@@ -233,6 +254,7 @@ void ggml_sycl_flash_attn_ext(ggml_backend_sycl_context & ctx, ggml_tensor * dst
             ggml_sycl_flash_attn_ext_vec(ctx, dst);
             break;
     }
+
 }
 
 bool ggml_sycl_flash_attn_ext_supported(int device, const ggml_tensor * dst) {
