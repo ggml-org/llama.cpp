@@ -38,7 +38,7 @@ struct server_tools {
     std::atomic<int> res_id{0};
 
     void setup(const std::vector<std::string> & enabled_tools,
-               server_mcp * mcp_mgr);
+               server_mcp & mcp_mgr);
 
     server_http_context::handler_t handle_get;
     server_http_context::handler_t handle_post;

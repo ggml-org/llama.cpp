@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <fstream>
 #include <functional>
 #include <map>
 #include <memory>
@@ -24,8 +25,7 @@ struct server_mcp_server_config {
     std::string cwd;
     int timeout_ms = 30000; // per-tool-call timeout
 
-    // throw on I/O or parse errors; missing "mcpServers" yields an empty list; entries without a "command" are skipped
-    static std::vector<server_mcp_server_config> parse_from_file(const std::string & path);
+    // throw on parse errors; missing "mcpServers" yields an empty list; entries without a "command" are skipped
     static std::vector<server_mcp_server_config> parse_from_json(const std::string & json_str);
     static std::vector<server_mcp_server_config> parse_cursor_format(const json & j);
 };
@@ -125,8 +125,15 @@ private:
 
 class server_mcp {
 public:
-    explicit server_mcp(std::vector<server_mcp_server_config> configs);
+    server_mcp() = default;
     ~server_mcp();
+
+    // parse Cursor-format JSON and append the servers it declares; throws on parse errors
+    void init(std::ifstream file); // reads the whole stream, then forwards to init(json_str)
+    void init(const std::string & json_str);
+
+    // true until init() has added at least one server
+    bool empty() const { return configs.empty(); }
 
     // spawn each server once, list its tools, shut it down. failures are logged, not fatal.
     void start();
@@ -140,6 +147,7 @@ public:
                    const std::function<bool()> & should_stop = nullptr);
 
     // flip the cancel flag so in-flight calls return; blocking teardown is in the destructor. call before the HTTP server drains.
+    // multiple calls are idempotent
     void shutdown();
 
 private:

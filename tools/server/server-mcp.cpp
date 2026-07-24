@@ -8,6 +8,7 @@
 #include <cstring>
 #include <fstream>
 #include <functional>
+#include <sstream>
 #include <thread>
 
 #if defined(_WIN32)
@@ -108,16 +109,6 @@ static void mcp_pump_ndjson(FILE * f, std::atomic<bool> & running,
 //
 // server_mcp_server_config
 //
-
-std::vector<server_mcp_server_config> server_mcp_server_config::parse_from_file(const std::string & path) {
-    std::ifstream f(path);
-    if (!f) {
-        throw std::runtime_error("failed to open MCP config file: " + path);
-    }
-    json j;
-    f >> j;
-    return parse_cursor_format(j);
-}
 
 std::vector<server_mcp_server_config> server_mcp_server_config::parse_from_json(const std::string & json_str) {
     return parse_cursor_format(json::parse(json_str));
@@ -625,8 +616,19 @@ void server_mcp_stdio::join_pumps() {
 
 static constexpr int MCP_COOLDOWN_SECONDS = 5;
 
-server_mcp::server_mcp(std::vector<server_mcp_server_config> configs)
-    : configs(std::move(configs)) {}
+void server_mcp::init(std::ifstream file) {
+    if (!file) {
+        throw std::runtime_error("failed to open MCP config file");
+    }
+    std::stringstream ss;
+    ss << file.rdbuf();
+    init(ss.str());
+}
+
+void server_mcp::init(const std::string & json_str) {
+    auto parsed = server_mcp_server_config::parse_from_json(json_str);
+    configs.insert(configs.end(), std::make_move_iterator(parsed.begin()), std::make_move_iterator(parsed.end()));
+}
 
 server_mcp::~server_mcp() {
     shutdown();
@@ -662,6 +664,10 @@ const server_mcp_server_config * server_mcp::find_config(const std::string & nam
 }
 
 void server_mcp::start() {
+    if (configs.empty()) {
+        return;
+    }
+
     auto should_stop = [this]() { return stopping.load(); };
 
     std::vector<server_mcp_tool_def> discovered;
