@@ -457,10 +457,10 @@ std::string string_format(const char * fmt, ...) {
 std::string string_strip(const std::string & str) {
     size_t start = 0;
     size_t end = str.size();
-    while (start < end && std::isspace(str[start])) {
+    while (start < end && std::isspace((unsigned char)(str[start]))) {
         start++;
     }
-    while (end > start && std::isspace(str[end - 1])) {
+    while (end > start && std::isspace((unsigned char)(str[end - 1]))) {
         end--;
     }
     return str.substr(start, end - start);
