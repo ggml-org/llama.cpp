@@ -196,8 +196,8 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
 
     // Allow request-level draft caps without rebuilding or reloading the resident
     // target/draft contexts. Zero disables speculation for this request.
-    add((new field_num("speculative.n_max", params.speculative.draft.n_max))
-        ->set_hard_limits(0, params_base.speculative.draft.n_max)
+    add((new field_num("speculative.n_max", params.speculative_n_max))
+        ->set_hard_limits(0, common_speculative_n_max(&params_base.speculative))
         ->set_desc("Maximum draft tokens for this request (0 disables speculation)"));
 
     // TODO: to keep things simple, other speculative adjustments remain disabled for now

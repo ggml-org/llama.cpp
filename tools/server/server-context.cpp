@@ -438,7 +438,10 @@ struct server_slot {
         }
 
         // Per-request cap; zero keeps the loaded speculator resident but skips it.
-        n_draft_max = std::min(n_draft_max, task->params.speculative.draft.n_max);
+        // An omitted override (-1) preserves the configured speculator defaults.
+        if (task->params.speculative_n_max >= 0) {
+            n_draft_max = std::min(n_draft_max, task->params.speculative_n_max);
+        }
 
         SLT_DBG(*this, "max possible draft: %d\n", n_draft_max);
 
@@ -4665,7 +4668,8 @@ void server_routes::init_routes() {
         GGML_UNUSED(ctx_server);
 
         task_params tparams;
-        tparams.sampling = params.sampling;
+        tparams.sampling    = params.sampling;
+        tparams.speculative = params.speculative;
         json default_generation_settings_for_props = json {
             { "params", tparams.to_json(true) },
             { "n_ctx",  meta->slot_n_ctx },

@@ -77,6 +77,7 @@ struct task_params {
 
     struct common_params_sampling sampling;
     struct common_params_speculative speculative;
+    int32_t speculative_n_max = -1; // per-request cap; -1 preserves configured speculator defaults
 
     // response formatting
     bool               verbose  = false;
