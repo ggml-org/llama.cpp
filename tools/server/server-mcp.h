@@ -1,15 +1,5 @@
 #pragma once
 
-// Experimental MCP (Model Context Protocol) client support for llama-server.
-// See MCP_SERVER_SPEC.md for the behavioral contract.
-//
-//   server_mcp           - manager, owns the configured servers and their tools
-//   server_mcp_transport - one MCP server session (abstract), JSON-RPC 2.0
-//   server_mcp_stdio     - child process speaking NDJSON JSON-RPC over stdio
-//
-// Blocking I/O lives on the transport's worker threads; callers touch only the in-process queues.
-// Shutdown is RAII and blocking (~server_mcp joins everything), so no async-signal-safe path is needed.
-
 #include "server-common.h"
 
 #include <atomic>
@@ -49,20 +39,21 @@ struct server_mcp_tool_def {
 };
 
 //
-// server_mcp_transport: one MCP server session over a message conduit.
+// server_mcp_transport: one MCP server session.
 //
-//   caller --send_rpc--> to_server   --[writer thread]--> server stdin
-//   caller <--send_rpc-- from_server <--[reader thread]-- server stdout
+//   caller --send_rpc--> to_server   --[writer]--> framing --> server
+//   caller <--send_rpc-- from_server <--[reader]-- framing <-- server
 //
-// The base runs the JSON-RPC session; a subclass only pumps I/O into/out of the two queues.
+// Each queue item is one complete serialized JSON message
+// A subclass owns the byte I/O and framing (stdio: NDJSON); the base owns json (parse/dump) and the JSON-RPC session (handshake, id correlation).
 //
 
 struct server_mcp_transport {
     std::string name;
     int timeout_ms = 30000;
 
-    server_pipe<json> to_server;
-    server_pipe<json> from_server;
+    server_pipe<std::string> to_server;   // serialized messages we send to the server
+    server_pipe<std::string> from_server; // serialized messages read from the server
 
     virtual ~server_mcp_transport() = default;
 
@@ -79,8 +70,7 @@ struct server_mcp_transport {
                    const std::function<bool()> & should_stop);
 
 protected:
-    // per-transport, not shared: send_rpc() holds it across the wait for a reply, so a shared lock would stall every server behind one slow call
-    // all members below are touched only under it
+    // per-transport, not shared: send_rpc() holds it across the wait for a reply, so a shared lock would stall every server behind one slow call all members below are touched only under it
     std::mutex rpc_mutex;
     uint64_t next_id = 1; // reset to 1 per (re)spawn
     bool initialized = false;
@@ -111,8 +101,8 @@ private:
     struct process_handle;
     std::unique_ptr<process_handle> proc;
 
-    std::thread reader; // child stdout -> NDJSON framing -> from_server
-    std::thread writer; // to_server -> child stdin
+    std::thread reader; // child stdout -> NDJSON de-framing -> from_server
+    std::thread writer; // to_server -> NDJSON framing -> child stdin
     std::thread errlog; // child stderr -> debug log (must be drained or the child blocks)
 
     // cleared by close() or by the reader on stdout EOF; read without rpc_mutex

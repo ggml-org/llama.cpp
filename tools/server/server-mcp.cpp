@@ -86,7 +86,7 @@ static std::string rpc_error_message(const json & resp) {
 }
 
 json server_mcp_transport::send_rpc(const json & request, const std::function<bool()> & should_stop) {
-    if (!to_server.write(json(request))) {
+    if (!to_server.write(request.dump())) {
         return {{"error", {{"code", -32603}, {"message", "transport closed"}}}};
     }
 
@@ -96,8 +96,17 @@ json server_mcp_transport::send_rpc(const json & request, const std::function<bo
         return (should_stop && should_stop()) || std::chrono::steady_clock::now() >= deadline;
     };
 
-    json reply;
-    while (from_server.read(reply, stop)) {
+    std::string frame;
+    while (from_server.read(frame, stop)) {
+        json reply;
+        try {
+            reply = json::parse(frame);
+        } catch (...) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                break;
+            }
+            continue; // skip malformed frame
+        }
         // a message without an id is a notification; a mismatched id is a stale reply from an
         // earlier timed-out request (ids are monotonic, so it can never match a future one)
         if (!has_id || (reply.contains("id") && reply.at("id") == request.at("id"))) {
@@ -139,7 +148,8 @@ bool server_mcp_transport::ensure_init(const std::function<bool()> & should_stop
     }
 
     // notifications/initialized: no id, no reply expected
-    to_server.write({{"jsonrpc", "2.0"}, {"method", "notifications/initialized"}});
+    json notif = {{"jsonrpc", "2.0"}, {"method", "notifications/initialized"}};
+    to_server.write(notif.dump());
 
     initialized = true;
     return true;
@@ -336,13 +346,7 @@ void server_mcp_stdio::reader_loop() {
             if (line.empty()) {
                 continue;
             }
-            json msg;
-            try {
-                msg = json::parse(line);
-            } catch (...) {
-                continue; // skip malformed line
-            }
-            if (!from_server.write(std::move(msg))) {
+            if (!from_server.write(std::move(line))) {
                 return; // consumer gone
             }
         }
@@ -354,11 +358,10 @@ void server_mcp_stdio::reader_loop() {
 
 void server_mcp_stdio::writer_loop() {
     auto should_stop = [this] { return !running.load(); };
-    json msg;
+    std::string msg;
     while (to_server.read(msg, should_stop)) {
-        std::string data = msg.dump();
-        data.push_back('\n');
-        if (fwrite(data.data(), 1, data.size(), proc->in) != data.size() || fflush(proc->in) != 0) {
+        msg.push_back('\n');
+        if (fwrite(msg.data(), 1, msg.size(), proc->in) != msg.size() || fflush(proc->in) != 0) {
             break; // child gone
         }
     }
