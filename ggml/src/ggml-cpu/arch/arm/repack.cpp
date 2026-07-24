@@ -9,25 +9,11 @@
 #include "simd-mappings.h"
 #include "traits.h"
 
-/* #region Added by KI */
-#include <arm_sve.h>    // SVE intrinsics
-#include <arm_fp16.h>   // for fp16 support
-#include <atomic>       // for debug statements
-// check if SVE enabled
-// #if defined(__ARM_FEATURE_SVE)
-// #warning SVE_ENABLED
-// #else
-// #warning SVE_DISABLED
-// #endif
-
-/* #endregion  */
-
 #include <cmath>
 #include <cstring>
 #include <cassert>
 #include <cstdlib> // for qsort
 #include <cstdio>  // for GGML_ASSERT
-
 
 #define GGML_CPU_CLANG_WORKAROUND
 #include "../../repack.h"
@@ -61,90 +47,57 @@ static inline void decode_q_Kx8_6bit_scales(const uint8_t * scales_in, int16x8_t
     memcpy(out_scales, scales_u32, 8);
 }
 #endif
+
 #if defined(__aarch64__) && defined(__ARM_FEATURE_SVE)
-/**
- * This function is meant to decode subblock scales and mins
- * from block_q4_Kx8.scales[96], i.e. the repacked format, and
- * this gives you exactly one row worth of scales and mins meaning,
- * exactly one subblock, for 8 rows, hence the Kx8.
- * 
- * scales_in is the pointer to the first subblock for each row.
- */
-static inline void decode_q_Kx8_6bit_scales_sve(
-    const uint8_t* scales_in,   // scales & mins come in as uint8_t 
-    svint16_t*     out_mins,    // mins stored as int16x8_t
-    int8_t*        out_scales   // scales stored as int8_t[8]
-){
-    constexpr uint32_t kmask1= 0x3f3f3f3f;  // keep lower 6 bits of each byte
-    constexpr uint32_t kmask2= 0x0f0f0f0f;  // keep lower 4 bits of each byte
-    constexpr uint32_t kmask3= 0x03030303;  // keep lower 2 bits of each byte
-    constexpr uint8_t scales_size= 12;
 
-    /* The packed 12 bytes will have the scales and mins
-    of first subblock but for all 8 rows, hence do extraction
-    in general purpose registers and only vectorize the final 
-    output.
-     */
-    uint32_t sm[3];     
-    // first  4 bytes contain only scales
-    // second 4 bytes contain only mins
-    // last   4 bytes contain scales & mins
-    memcpy(sm, scales_in, scales_size);     // copy 12 bytes
+static inline uint32_t load_u32_unaligned(const void * p) {
+    uint32_t v;
+    memcpy(&v, p, sizeof(v));
+    return v;
+}
 
-    /* ---- MINS ---- */
-    // mins 0 to 3: lower 6bits in each byte of sm[1]
-    const uint32_t mins_0_3= sm[1] & kmask1;
-    // mins 4 to 7: lower nibble comes from sm[2]>>4;
-    // higher nibble comes from sm[1]>>6 but shifted to 4:5
-    const uint32_t mins_4_7= ( (sm[2]>>4) & kmask2 ) |
-        ( ( (sm[1]>>6) & kmask3 ) << 4 );
-    // with this, we have also implicitly converted all the
-    // mins to uint8_t. Each uint32_t above contains 4 mins
+static inline void decode_q_Kx8_6bit_scales_sve_reg(
+    const uint8_t * GGML_RESTRICT scales_in,
+    svint16_t    * GGML_RESTRICT out_mins,
+    svint16_t    * GGML_RESTRICT out_scales
+) {
+    constexpr uint32_t kmask1 = 0x3f3f3f3f;
+    constexpr uint32_t kmask2 = 0x0f0f0f0f;
+    constexpr uint32_t kmask3 = 0x03030303;
 
-    // pack them
-    uint32_t mins_packed[2]= {mins_0_3, mins_4_7};
+    const uint32_t sm0 = load_u32_unaligned(scales_in + 0);
+    const uint32_t sm1 = load_u32_unaligned(scales_in + 4);
+    const uint32_t sm2 = load_u32_unaligned(scales_in + 8);
+    const uint32_t mins_0_3 =sm1 & kmask1;
+    const uint32_t mins_4_7 = ((sm2 >> 4) & kmask2) | (((sm1 >> 6) & kmask3) << 4);
 
-    // now we have 8 mins, which we load into 16x8 slots
-    svuint16_t mins_u16= svld1ub_u16(svptrue_b16(), (const uint8_t*)mins_packed);
-    // reinterpret as uint8_t's and load.
+    const uint32_t scales_0_3 = sm0 & kmask1;
 
-    // reinterpret as signed 16-bit ints now.
-    *out_mins= svreinterpret_s16_u16(mins_u16);
+    const uint32_t scales_4_7 = (sm2 & kmask2) | (((sm0 >> 6) & kmask3) << 4);
 
-    /* ---- SCALES ---- */
-    // scales 0...3: lower 6-bits of sm[0]
-    // scales 4...7: low nibble from sm[2], 
-    // high bits from sm[0]>>6
-    uint32_t scales_u32[2];
-    scales_u32[0]= sm[0] & kmask1;
-    scales_u32[1]= (sm[2] & kmask2) |
-        ( ( (sm[0]>>6) & kmask3) << 4);
-    
-    // copy scales_u32 which contains 8 uint8_t's now to outscales
-    memcpy(out_scales, scales_u32, 8);
+    const uint64_t mins_packed = (uint64_t) mins_0_3 | ((uint64_t) mins_4_7 << 32);
+
+    const uint64_t scales_packed = (uint64_t) scales_0_3 | ((uint64_t) scales_4_7 << 32);
+    const svbool_t pg16_8 = svwhilelt_b16((uint64_t) 0, (uint64_t) 8);
+    const svuint16_t mins_u16 =svld1ub_u16(pg16_8, (const uint8_t *) &mins_packed);
+    const svuint16_t scales_u16 = svld1ub_u16(pg16_8, (const uint8_t *) &scales_packed);
+    *out_mins   = svreinterpret_s16_u16(mins_u16);
+    *out_scales = svreinterpret_s16_u16(scales_u16);
 }
 
 // widening operation
-static inline svfloat32_t load_f16x4_as_f32_sve128(
-    const __fp16 * p,
-    svbool_t pg32
-) {
-    const svuint32_t bits =
-        svld1uh_u32(pg32, (const uint16_t*)p);
-
-    return svcvt_f32_f16_x(
-        pg32,
-        svreinterpret_f16_u32(bits)
-    );
+static inline svfloat32_t load_f16x4_as_f32_sve128(const __fp16 * p,svbool_t pg32)
+{
+    const svuint32_t bits = svld1uh_u32(pg32, (const uint16_t*)p);
+    return svcvt_f32_f16_x(pg32,svreinterpret_f16_u32(bits));
 }
+
 // duplicating operation
 static inline svint8_t load_dup_q8x8_sve128(const int8_t * p) {
     uint64_t bits;
     memcpy(&bits, p, sizeof(bits));
     return svreinterpret_s8_u64(svdup_n_u64(bits));
 }
-
-
 #endif
 
 
@@ -806,20 +759,18 @@ void ggml_gemv_q4_K_8x4_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
     ggml_gemv_q4_K_8x4_q8_K_generic(n, s, bs, vx, vy, nr, nc);
 }
 
-void ggml_gemv_q4_K_8x8_q8_K(
-    int                        n,   // dot-product dimension, no.of cols in computation
-    float * GGML_RESTRICT      s,   // output vector [nc x 1]
-    size_t                     bs,  // block size / stride
-    const void * GGML_RESTRICT vx,  // matrix (quantized, q4_K) [nc x n]
-    const void * GGML_RESTRICT vy,  // vector (quantized, q8_K) [n x 1]
-    int                        nr,  // [unused] 
-    int                        nc   // number of rows in matrix
-) {
+void ggml_gemv_q4_K_8x8_q8_K(int                        n,
+                             float * GGML_RESTRICT      s,
+                             size_t                     bs,
+                             const void * GGML_RESTRICT vx,
+                             const void * GGML_RESTRICT vy,
+                             int                        nr,
+                             int                        nc) {
     constexpr int qk = QK_K;
     const int     nb = n / qk;
 
-    constexpr int ncols_interleaved = 8;    // actually number of rows!
-    constexpr int blocklen          = 8;    
+    constexpr int ncols_interleaved = 8;
+    constexpr int blocklen          = 8;
 
     assert(n % qk == 0);
     assert(nc % ncols_interleaved == 0);
@@ -828,44 +779,13 @@ void ggml_gemv_q4_K_8x8_q8_K(
     UNUSED(ncols_interleaved);
     UNUSED(blocklen);
 
-    
-    static std::atomic<bool> printed{false};
-    if (!printed.exchange(true)) {
-
-    #if defined(__ARM_FEATURE_SVE) && defined(GGML_SVE)
-        if (svcntw() == 4) {
-            printf("[ggml_gemv_q4_K_8x8_q8_K] ENTERED SVE-128 PATH\n");
-        } else if (svcntw() == 8) {
-            printf("[ggml_gemv_q4_K_8x8_q8_K] ENTERED SVE-256 PATH\n");
-        } else {
-            printf(
-                "[ggml_gemv_q4_K_8x8_q8_K] ENTERED SVE PATH "
-                "(unexpected svcntw=%ld)\n",
-                (long) svcntw()
-            );
-        }
-
-    #elif defined(__ARM_NEON)
-        printf("[ggml_gemv_q4_K_8x8_q8_K] ENTERED NEON PATH\n");
-    #else
-        printf("[ggml_gemv_q4_K_8x8_q8_K] ENTERED SCALAR PATH\n");
-    #endif
-        fflush(stdout);
-    }
 
 
-/* #region Added by KI */
 #if defined(__aarch64__) && defined(__ARM_FEATURE_SVE)
 
-// vector vy as block_q8_K array (ptr)
 const block_q8_K* GGML_RESTRICT q8_ptr_sve= (const block_q8_K*) vy;
 
-/* Different Paths for different vector lengths */
 if(svcntw()==4){    // 128-bit SVE path
-    if(!printed.exchange(true)){
-        printf("[ggml_gemv_q4_K_8x8_q8_K] ENTERED SVE-128 PATH\n");
-    }
-    // predicates
     const svbool_t pg8 = svptrue_b8();
     const svbool_t pg16= svptrue_b16();
     const svbool_t pg32= svptrue_b32();
@@ -876,16 +796,14 @@ if(svcntw()==4){    // 128-bit SVE path
 
     for(int x=0; x<nc/ncols_interleaved; x++){  // iterate through rows 8 at time
         // pointer to current row-block of things [8 x QK_K elements]
-        const block_q4_Kx8* GGML_RESTRICT q4_ptr= (const block_q4_Kx8*)vx
-            + (x*nb);
+        const block_q4_Kx8* GGML_RESTRICT q4_ptr= (const block_q4_Kx8*)vx + (x*nb);
         
         // reinitialize to zero [accumulators for row 8*x to 8*x+7]
         acc_f32_0 = svdup_n_f32(0.0f);  // 4 x 32 
-        acc_f32_1 = svdup_n_f32(0.0f);  // 4 x 32
+        acc_f32_1 = svdup_n_f32(0.0f); 
 
         for(int b=0; b<nb; b++){    // iterate through columns QK_K at a time
             // Load all 8 q4_K global scales as float32, using 2 float32x4 [svfloat32_t]
-            // Look at the docs for more detailed mathematics behind it.
             // d0 d1 d2 d3
             svfloat32_t q4_d_0= load_f16x4_as_f32_sve128((const __fp16*)q4_ptr[b].d, pg32);
             // d4 d5 d6 d7
@@ -900,34 +818,26 @@ if(svcntw()==4){    // 128-bit SVE path
             // Load the q8_K scale, single float broadcasted to all 4 slots
             svfloat32_t q8_d= svdup_n_f32(q8_ptr_sve[b].d);
             
-            // Calculate d4*d8 [multiply global scales]
             svfloat32_t sb_scale_0= svmul_f32_x(pg32, q4_d_0, q8_d);
             svfloat32_t sb_scale_1= svmul_f32_x(pg32, q4_d_1, q8_d);
-            // calculate dmin4*d8 [multiply global min q4_K with q8_K global scale]
             svfloat32_t sb_min_0= svmul_f32_x(pg32, q4_dmin_0, q8_d);
             svfloat32_t sb_min_1= svmul_f32_x(pg32, q4_dmin_1, q8_d);
 
-            // Accumulators for subblock processing [2 sb per iteration]
-            // lower subblock   [each thing contains 4-int32's]
-            // 4x4 = 16 int32_t's
             svint32_t acc_lo_0;  
             svint32_t acc_lo_1;
             svint32_t acc_lo_2;
             svint32_t acc_lo_3;
-            // higher subblock
             svint32_t acc_hi_0;
             svint32_t acc_hi_1;
             svint32_t acc_hi_2;
             svint32_t acc_hi_3;
 
-            // bias accumulator and bsums
             svint32_t bias_acc_0= svdup_n_s32(0);
             svint32_t bias_acc_1= svdup_n_s32(0);
 
             svint16_t bsums_a= svld1_s16(pg16, q8_ptr_sve[b].bsums);
             svint16_t bsums_b= svld1_s16(pg16, q8_ptr_sve[b].bsums + 8);
-            svint16_t bsums  = svadd_s16_x(pg16, svuzp1_s16(bsums_a, bsums_b),
-                                                svuzp2_s16(bsums_a, bsums_b));
+            svint16_t bsums  = svadd_s16_x(pg16, svuzp1_s16(bsums_a, bsums_b),svuzp2_s16(bsums_a, bsums_b));
             
             int16_t bsums_arr[8];
             svst1_s16(pg16, bsums_arr, bsums);
@@ -935,7 +845,6 @@ if(svcntw()==4){    // 128-bit SVE path
             // process 64 elements at once, which is iterate
             // in terms of 2 q4_k subblocks
             for(int sb=0; sb<QK_K/64; sb++){
-                // Reinitialize the subblocks [to all zeros]
                 acc_lo_0= svdup_n_s32(0); acc_lo_1= svdup_n_s32(0);
                 acc_lo_2= svdup_n_s32(0); acc_lo_3= svdup_n_s32(0);
 
@@ -945,38 +854,14 @@ if(svcntw()==4){    // 128-bit SVE path
                 // load the subblock scales and mins [for 2 subblocks]
                 // 8 rows -> 8 uint8_t per subblock converted to int16_t
                 // MINS [for q4_K subblock pairs]
-                svint16_t q4sb_min_0;
-                svint16_t q4sb_min_1;
-                // SCALES [for q4_K subblock pairs]
-                svint16_t q4sb_scale_0;
-                svint16_t q4sb_scale_1;
-                
-                // temp arrays for this
-                int8_t aux_q4sb[8];
-                
-                // Decode scale and min 0 [scope blocks put to reuse 
-                // offset]. Loop unrolling NEON code.
-                {
-                    const int offset= sb*24;
-                    decode_q_Kx8_6bit_scales_sve(
-                        &q4_ptr[b].scales[offset],
-                        &q4sb_min_0,
-                        aux_q4sb
-                    );
-                    // s16 widening load: different than one inside 
-                    // decode function, that is u16 widening load
-                    q4sb_scale_0= svld1sb_s16(pg16, aux_q4sb);
-                }{
-                    // move 12 bytes ahead for next row scales
-                    const int offset= sb*24+12;
-                    decode_q_Kx8_6bit_scales_sve(
-                        &q4_ptr[b].scales[offset],
-                        &q4sb_min_1,
-                        aux_q4sb
-                    );
-                    q4sb_scale_1= svld1sb_s16(pg16, aux_q4sb);
-                }
-                
+               svint16_t q4sb_min_0, q4sb_min_1;
+                svint16_t q4sb_scale_0, q4sb_scale_1;
+
+                const uint8_t * GGML_RESTRICT sc =
+                    q4_ptr[b].scales + sb * 24;
+
+                decode_q_Kx8_6bit_scales_sve_reg(sc,&q4sb_min_0,&q4sb_scale_0);
+                decode_q_Kx8_6bit_scales_sve_reg(sc + 12,&q4sb_min_1,&q4sb_scale_1);
                 // move two q4_K subblock per sb iteration
                 // in repacked, that corresponds to 4*(8*QK_K/(2*16))
                 // = QK_K bytes forward.
@@ -1206,9 +1091,6 @@ if(svcntw()==4){    // 128-bit SVE path
     return;
 
 }else if (svcntw()==8) {   // 256-bit SVE path
-    if(!printed.exchange(true)){
-        printf("[ggml_gemv_q4_K_8x8_q8_K] ENTERED SVE-256 PATH\n");
-    }
     // 8 f32 lanes == ncols_interleaved: the _0/_1 pairs collapse to singles,
     // and cp (2 rows) becomes cq (4 rows) -> 2 iterations instead of 4.
     const svbool_t  pg8    = svptrue_b8();            // 32 byte-lanes
@@ -1248,17 +1130,15 @@ if(svcntw()==4){    // 128-bit SVE path
                 svint32_t acc_hi_0 = svdup_n_s32(0), acc_hi_1 = svdup_n_s32(0);
 
                 // ---- decode 2 subblocks' scales/mins (8 rows each, in low 8 lanes) ----
-                svint16_t q4sb_min_0, q4sb_min_1, q4sb_scale_0, q4sb_scale_1;
-                int8_t aux_q4sb[8];
-                {
-                    decode_q_Kx8_6bit_scales_sve(&q4_ptr[b].scales[sb * 24], &q4sb_min_0, aux_q4sb);
-                    q4sb_scale_0 = svld1sb_s16(pg16_8, aux_q4sb);
-                }
-                {
-                    decode_q_Kx8_6bit_scales_sve(&q4_ptr[b].scales[sb * 24 + 12], &q4sb_min_1, aux_q4sb);
-                    q4sb_scale_1 = svld1sb_s16(pg16_8, aux_q4sb);
-                }
+                svint16_t q4sb_min_0, q4sb_min_1;
+                svint16_t q4sb_scale_0, q4sb_scale_1;
 
+                const uint8_t * GGML_RESTRICT sc =
+                    q4_ptr[b].scales + sb * 24;
+
+                decode_q_Kx8_6bit_scales_sve_reg(sc,&q4sb_min_0,&q4sb_scale_0);
+
+                decode_q_Kx8_6bit_scales_sve_reg(sc + 12,&q4sb_min_1,&q4sb_scale_1);
                 // ---- q8 activations: unchanged code; svdup now fills 4 doubleword lanes ----
                 const int8_t * q8_base = q8_ptr_sve[b].qs + sb * 64;
                 svint8_t q8_0 = svreinterpret_s8_u64(svdup_n_u64(*(const uint64_t *)(q8_base + 0*8)));
@@ -1327,24 +1207,19 @@ if(svcntw()==4){    // 128-bit SVE path
                 svint32_t mins1 = svunpklo_s32(q4sb_min_1);
                 bias_acc = svmla_s32_x(pg32, bias_acc, bsums_lo_w, mins0);
                 bias_acc = svmla_s32_x(pg32, bias_acc, bsums_hi_w, mins1);
-            }  // for sb
+            }
 
             acc_f32 = svmls_f32_x(pg32, acc_f32, svcvt_f32_s32_x(pg32, bias_acc), sb_min);
-        }  // for b
+        }
 
         svst1_f32(pg32, s + x * ncols_interleaved, acc_f32);   // one 8-wide store
-    }  // for x
-    return;
-}  // svcntw() == 8
-
-return;
-#endif // defined(__aarch64__) && defined(__ARM_FEATURE_SVE) && defined(__ARM_FEATURE_SVE2)
-/* #endregion */    
-
-#if defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
-    if(printed.exchange(true)){
-        printf("[ggml_gemv_q4_K_8x8_q8_K] ENTERED NEON PATH\n");
     }
+    return;
+} 
+
+#endif // defined(__aarch64__) && defined(__ARM_FEATURE_SVE)
+ 
+#if defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
     constexpr int    col_pairs = ncols_interleaved / 2;
     const uint8x16_t m4b       = vdupq_n_u8(0x0f);
 
@@ -1475,10 +1350,6 @@ return;
     }  // for x
     return;
 #endif  // defined(__aarch64__) && defined(__ARM_NEON) && defined(__ARM_FEATURE_DOTPROD)
-
-    if(!printed.exchange(true)){
-        printf("[ggml_gemv_q4_K_8x8_q8_K] ENTERED SCALAR PATH\n");
-    }
     ggml_gemv_q4_K_8x8_q8_K_generic(n, s, bs, vx, vy, nr, nc);
 }
 
