@@ -400,13 +400,9 @@
 
 <style>
 	/*
-	 * Native lazy rendering: the browser skips layout and paint for
-	 * messages outside the viewport. The auto keyword in
-	 * contain-intrinsic-size reuses the last rendered size once known,
-	 * keeping the scrollbar stable; 500px is the placeholder estimate
-	 * for messages that have never been rendered. The DOM stays
-	 * complete, so component state, find-in-page, and text selection
-	 * are unaffected. Browsers without support ignore both properties.
+	 * The browser skips layout and paint for messages outside the
+	 * viewport. contain-intrinsic-size reuses the last rendered size
+	 * once known; 500px sizes messages that have never been rendered.
 	 */
 	.chat-message {
 		content-visibility: auto;

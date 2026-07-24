@@ -84,13 +84,11 @@ export class AutoScrollController {
 	}
 
 	/**
-	 * Scrolls the container to the bottom instantly. Instant behavior avoids
-	 * overlapping smooth animations when called repeatedly during streaming,
-	 * which reads as an elastic bump near the bottom of the conversation.
+	 * Scrolls the container to the bottom instantly.
 	 */
-	scrollToBottom(behavior: ScrollBehavior = 'auto'): void {
+	scrollToBottom(): void {
 		if (this._disabled || !this._container) return;
-		this._container.scrollTo({ top: this._container.scrollHeight, behavior });
+		this._container.scrollTop = this._container.scrollHeight;
 	}
 
 	/**
