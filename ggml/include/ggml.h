@@ -2437,6 +2437,7 @@ extern "C" {
             struct ggml_tensor * a,
             struct ggml_tensor * sinks);
 
+    // provide explicit K/V indices to allow sparse attention calculation
     GGML_API void ggml_flash_attn_ext_add_top_k(
             struct ggml_tensor * a,
             struct ggml_tensor * top_k);
