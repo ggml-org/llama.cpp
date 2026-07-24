@@ -48,7 +48,7 @@
 
 #include "kernels.h"
 
-#include "kai_common.h"
+#include "kai/kai_common.h"
 
 #define GGML_COMMON_DECL_CPP
 #include "ggml-common.h"
