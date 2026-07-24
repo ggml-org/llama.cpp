@@ -28,7 +28,8 @@ static void mcp_pump_ndjson(FILE * f, std::atomic<bool> & running,
     if (!f) {
         return;
     }
-    const int poll_ms = 50;
+    const int    poll_ms  = 50;
+    const size_t max_line = 8 * 1024 * 1024; // drop any single NDJSON line larger than this, so a child that never emits '\n' can't grow buf without bound
 #if defined(_WIN32)
     HANDLE h = (HANDLE) _get_osfhandle(_fileno(f));
 #else
@@ -39,6 +40,7 @@ static void mcp_pump_ndjson(FILE * f, std::atomic<bool> & running,
     }
 #endif
     std::string buf;
+    bool        skipping = false; // discarding an over-long line until its terminating newline
     char        chunk[4096];
     while (running.load()) {
         size_t n = 0;
@@ -88,6 +90,20 @@ static void mcp_pump_ndjson(FILE * f, std::atomic<bool> & running,
         n = (size_t) r;
 #endif
         buf.append(chunk, n);
+
+        // resync after an over-long, unterminated line: discard bytes until the next newline
+        if (skipping) {
+            size_t nl = buf.find('\n');
+            if (nl == std::string::npos) {
+                if (buf.size() > max_line) {
+                    buf.clear(); // stay bounded while waiting for a terminator
+                }
+                continue;
+            }
+            buf.erase(0, nl + 1);
+            skipping = false;
+        }
+
         size_t pos;
         while ((pos = buf.find('\n')) != std::string::npos) {
             std::string line = buf.substr(0, pos);
@@ -101,6 +117,13 @@ static void mcp_pump_ndjson(FILE * f, std::atomic<bool> & running,
             if (!on_line(std::move(line))) {
                 return;
             }
+        }
+
+        // a partial line already larger than the cap and still no newline: drop it to avoid unbounded growth
+        if (buf.size() > max_line) {
+            SRV_WRN("MCP: dropping oversized line (> %zu bytes) from child pipe\n", max_line);
+            buf.clear();
+            skipping = true;
         }
     }
 }
@@ -235,11 +258,6 @@ bool server_mcp_transport::ensure_init(const std::function<bool()> & should_stop
 
     initialized = true;
     return true;
-}
-
-bool server_mcp_transport::handshake(const std::function<bool()> & should_stop) {
-    std::lock_guard<std::mutex> lock(rpc_mutex);
-    return ensure_init(should_stop);
 }
 
 std::vector<server_mcp_tool_def> server_mcp_transport::list_tools(const std::function<bool()> & should_stop) {
@@ -486,6 +504,18 @@ bool server_mcp_stdio::is_alive() const {
     return running.load();
 }
 
+std::string server_mcp_stdio::diagnostics() {
+    std::string out = last_error;
+    std::lock_guard<std::mutex> lk(err_mu);
+    if (!err_tail.empty()) {
+        if (!out.empty()) {
+            out += "; ";
+        }
+        out += "last stderr: " + err_tail;
+    }
+    return out;
+}
+
 void server_mcp_stdio::reader_loop() {
     mcp_pump_ndjson(proc->out, running, [this](std::string && line) {
         return from_server.write(std::move(line)); // false => consumer gone, stop
@@ -518,7 +548,9 @@ static bool mcp_write_all(FILE * f, const std::string & data, std::atomic<bool> 
                 return false;
             }
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        // backpressure (pipe full) is rare for small JSON-RPC frames; sleep rather than spin.
+        // no writable-wait exists for a PIPE_NOWAIT anonymous pipe, so this polls like the POSIX poll() path.
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 #else
     int fd = fileno(f);
@@ -614,6 +646,7 @@ void server_mcp_stdio::join_pumps() {
 //
 
 static constexpr int MCP_COOLDOWN_SECONDS = 5;
+static constexpr int MCP_WARMUP_TIMEOUT_SECONDS = 10; // cap per-server tool discovery at startup
 
 server_mcp::~server_mcp() {
     shutdown();
@@ -655,7 +688,14 @@ void server_mcp::start(const common_params & params) {
             if (parsed.empty()) {
                 SRV_WRN("%s", "MCP config: no servers found in JSON\n");
             }
-            configs.insert(configs.end(), std::make_move_iterator(parsed.begin()), std::make_move_iterator(parsed.end()));
+            for (auto & p : parsed) {
+                // names must be unique across both config sources: get_or_create / find_config key on the name
+                if (find_config(p.name)) {
+                    SRV_WRN("MCP config: duplicate server name '%s', skipping\n", p.name.c_str());
+                    continue;
+                }
+                configs.push_back(std::move(p));
+            }
         } catch (const std::exception & e) {
             throw std::runtime_error(std::string("failed to parse MCP config JSON: ") + e.what());
         }
@@ -677,15 +717,18 @@ void server_mcp::start(const common_params & params) {
         return;
     }
 
-    auto should_stop = [this]() { return stopping.load(); };
-
     std::vector<server_mcp_tool_def> discovered;
     for (const auto & cfg : configs) {
         auto t = create_transport(cfg);
         if (!t->start()) {
-            SRV_WRN("MCP warmup: failed to spawn '%s'\n", cfg.name.c_str());
+            SRV_WRN("MCP warmup: failed to spawn '%s': %s\n", cfg.name.c_str(), t->diagnostics().c_str());
             continue;
         }
+        // bound warmup per server so an unresponsive one can't stall startup for the full per-call timeout
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(MCP_WARMUP_TIMEOUT_SECONDS);
+        auto should_stop = [this, deadline]() {
+            return stopping.load() || std::chrono::steady_clock::now() >= deadline;
+        };
         auto tools = t->list_tools(should_stop);
         SRV_INF("MCP warmup: '%s' discovered %zu tools\n", cfg.name.c_str(), tools.size());
         discovered.insert(discovered.end(), tools.begin(), tools.end());
@@ -740,6 +783,7 @@ std::shared_ptr<server_mcp_transport> server_mcp::get_or_create(const std::strin
             if (it->second->is_alive()) {
                 return it->second;
             }
+            SRV_WRN("MCP '%s' is no longer alive: %s\n", name.c_str(), it->second->diagnostics().c_str());
             to_close.push_back(std::move(it->second));
             transports.erase(it);
         }
@@ -751,6 +795,7 @@ std::shared_ptr<server_mcp_transport> server_mcp::get_or_create(const std::strin
                 transports[name] = fresh;
                 result = fresh;
             } else {
+                SRV_WRN("MCP '%s': failed to start: %s\n", name.c_str(), fresh->diagnostics().c_str());
                 to_close.push_back(std::move(fresh));
                 dead_servers[name] = now + std::chrono::seconds(MCP_COOLDOWN_SECONDS);
             }

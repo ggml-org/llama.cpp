@@ -60,7 +60,9 @@ struct server_mcp_transport {
     virtual void close() = 0; // blocking and idempotent
     virtual bool is_alive() const = 0; // never blocks behind an in-flight send_rpc()
 
-    bool handshake(const std::function<bool()> & should_stop);
+    // human-readable diagnostics for logging when the transport fails/dies
+    // (example: last RPC error, plus any transport-specific detail)
+    virtual std::string diagnostics() { return last_error; }
 
     std::vector<server_mcp_tool_def> list_tools(const std::function<bool()> & should_stop);
 
@@ -92,6 +94,7 @@ struct server_mcp_stdio : server_mcp_transport {
     bool start() override;
     void close() override;
     bool is_alive() const override;
+    std::string diagnostics() override;
 
 private:
     server_mcp_server_config config;

@@ -419,7 +419,7 @@ struct server_pipe {
             if (writer_closed.load()) {
                 return false; // clean EOF
             }
-            if (should_stop()) {
+            if (should_stop && should_stop()) { // a null should_stop means "never stop"
                 close_read(); // signal broken pipe to writer
                 return false; // cancelled / reader no longer alive
             }
