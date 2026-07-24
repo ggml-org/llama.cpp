@@ -365,7 +365,9 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
                             Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             }
         }
-        if (il == n_layer - 1 && inp_out_ids) {
+        // when unmasked nextn embeddings are requested, t_h_nextn must keep all rows,
+        // so the early output masking has to be skipped (it is applied after the final norm instead)
+        if (il == n_layer - 1 && inp_out_ids && (!cparams.embeddings_nextn || cparams.embeddings_nextn_masked)) {
             cur   = ggml_get_rows(ctx0, cur, inp_out_ids);
             inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
         }
@@ -424,6 +426,14 @@ llama_model_deepseek2::graph::graph(const llama_model & model, const llm_graph_p
     cur = inpL;
 
     cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
+
+    // post-norm hidden state feeds the NextN/MTP draft head (GLM_DSA and friends)
+    cb(cur, "h_nextn", -1);
+    res->t_h_nextn = cur;
+
+    if (cparams.embeddings_nextn && !cparams.embeddings_nextn_masked && inp_out_ids) {
+        cur = ggml_get_rows(ctx0, cur, inp_out_ids);
+    }
 
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
