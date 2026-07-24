@@ -140,6 +140,10 @@ bool llama_memory_hybrid_iswa::get_can_shift() const {
     return mem_attn->get_can_shift();
 }
 
+llama_memory_kv_cache_stats llama_memory_hybrid_iswa::get_kv_cache_stats() const {
+    return mem_attn->get_kv_cache_stats();
+}
+
 void llama_memory_hybrid_iswa::clear(bool data) {
     mem_attn->clear(data);
     mem_recr->clear(data);
