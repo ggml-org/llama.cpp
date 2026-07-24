@@ -712,8 +712,11 @@ extern "C" {
                       bool data);
 
 
-    // Preserves InnerQ calibration across chunk clears; non-KV memory types
-    // fall back to a normal full data clear.
+    // Clears the data buffers while preserving per-cache InnerQ calibration
+    // (TurboQuant runtime scale_inv tensor). For KV caches this is a
+    // chunk-reset that does NOT zero the InnerQ scale tensor; for non-KV
+    // memory implementations it falls back to llama_memory_clear(mem, true)
+    // and therefore also clears metadata.
     LLAMA_API void llama_memory_clear_data_only(
             llama_memory_t mem);
     // Removes all tokens that belong to the specified sequence and have positions in [p0, p1)

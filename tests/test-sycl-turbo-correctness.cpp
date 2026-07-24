@@ -62,9 +62,14 @@ static int set_innerq_env(const char * value) {
 #if defined(_WIN32)
     return _putenv_s("LLAMA_ENABLE_INNERQ", value != nullptr ? value : "");
 #else
-    return value != nullptr
-        ? setenv("LLAMA_ENABLE_INNERQ", value, 1)
-        : unsetenv("LLAMA_ENABLE_INNERQ");
+    if (value != nullptr) {
+        return setenv("LLAMA_ENABLE_INNERQ", value, 1);
+    } else {
+        // unsetenv returns void on POSIX (BSD/macOS) but int on glibc;
+        // split into an if/else to stay portable across all targets.
+        unsetenv("LLAMA_ENABLE_INNERQ");
+        return 0;
+    }
 #endif
 }
 
@@ -1358,13 +1363,8 @@ int main() {
         // --- Case 5: null out_scales. Must return without writes / segfault. ---
         {
             std::vector<float> probe_one(1 * 128, 0.25f);
-            float sentinel = -42.0f;
             ggml_innerq_compute_k_squared_profile(probe_one.data(), 1, 128, nullptr);
-            if (sentinel != -42.0f) {
-                printf("   [8b] FAIL: null out_scales corrupted stack (sentinel = %f)\n",
-                       (double) sentinel);
-                ++k2_failures;
-            }
+            // Reaching here without a crash is the contract.
         }
         // --- Case 6: null probe, valid out_scales, n_probe=1. Expect all 1.0f. ---
         {
@@ -1477,13 +1477,8 @@ int main() {
             // Test 4: null out_scales on SYCL wrapper. Must not crash.
             {
                 std::vector<float> probe_one(1 * 128, 0.25f);
-                float sentinel_sycl = -42.0f;
                 ggml_innerq_compute_k_squared_profile_sycl(probe_one.data(), 1, 128, nullptr);
-                if (sentinel_sycl != -42.0f) {
-                    printf("   [8c] FAIL: sycl null out_scales corrupted stack (sentinel = %f)\n",
-                           (double) sentinel_sycl);
-                    ++k3_failures;
-                }
+                // Reaching here without a crash is the contract.
             }
             // Test 5: null probe on SYCL wrapper, valid out_scales, n_probe=1.
             {

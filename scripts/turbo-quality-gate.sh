@@ -42,7 +42,11 @@ esac
 
 # Per-stage tempdir for captured stdout/stderr.
 STAGE_LOG_DIR="$(mktemp -d -t turbo-gate.XXXXXX)"
-trap 'if [ "${PRESERVE_LOGS:-0}" = "1" ]; then printf "  [preserved logs at %s]\n" "$STAGE_LOG_DIR" >&2; else rm -rf "$STAGE_LOG_DIR"; fi' EXIT
+if [ -z "$STAGE_LOG_DIR" ] || [ ! -d "$STAGE_LOG_DIR" ]; then
+  echo "ERROR: failed to create temporary directory for stage logs" >&2
+  exit 1
+fi
+trap 'if [ "${PRESERVE_LOGS:-0}" = "1" ]; then printf "  [preserved logs at %s]\n" "$STAGE_LOG_DIR" >&2; else [ -n "$STAGE_LOG_DIR" ] && rm -rf "$STAGE_LOG_DIR"; fi' EXIT
 
 FAIL_COUNT=0
 SKIP_COUNT=0
@@ -316,7 +320,11 @@ echo "    timeouts:      $TIMEOUT_COUNT"
 [ -n "$FAIL_MESSAGES" ] && printf '  issues:%b\n' "$FAIL_MESSAGES"
 echo "========================================"
 
-# Exit code: strict mode exits nonzero on any FAIL, any forbidden SKIP,
+# Exit code policy:
+#   FAIL_COUNT > 0      -> 1   (and PRESERVE_LOGS=1 so logs survive)
+#   TIMEOUT_COUNT > 0   -> 124 (timeout sentinel; PRESERVE_LOGS=1)
+#   STRICT=1, SKIP > 0  -> 2   (forbidden-skip sentinel; PRESERVE_LOGS=1)
+#   otherwise           -> 0
 PRESERVE_LOGS=0
 if [ "$FAIL_COUNT" -gt 0 ]; then
   PRESERVE_LOGS=1

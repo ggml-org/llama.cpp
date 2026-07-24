@@ -794,11 +794,20 @@ void llama_kv_cache::do_clear(bool data, bool reset_innerq) {
     if (turbo_innerq_scale_inv != nullptr && turbo_innerq_scale_inv->buffer != nullptr && (data || reset_innerq)) {
         LLAMA_LOG_DEBUG("%s: a2a3c-init2-pre: turbo_innerq_scale_inv=%p reset_innerq=%d\n",
                         __func__, (void *)turbo_innerq_scale_inv, (int)reset_innerq);
-        const llama_turbo_innerq_runtime_snapshot snap = turbo_innerq_runtime.peek();
-        const float * src = snap.scale_inv.data();
         float restore[LLAMA_TURBO_INNERQ_CHANNELS];
-        for (int i = 0; i < LLAMA_TURBO_INNERQ_CHANNELS; i++) {
-            restore[i] = reset_innerq ? 1.0f : src[i];
+        if (reset_innerq) {
+            // Full reset path: skip peek() so we never take the runtime
+            // mutex or copy 128 floats just to discard them. The runtime
+            // reset happens via turbo_innerq_runtime.reset() below.
+            for (int i = 0; i < LLAMA_TURBO_INNERQ_CHANNELS; i++) {
+                restore[i] = 1.0f;
+            }
+        } else {
+            const llama_turbo_innerq_runtime_snapshot snap = turbo_innerq_runtime.peek();
+            const float * src = snap.scale_inv.data();
+            for (int i = 0; i < LLAMA_TURBO_INNERQ_CHANNELS; i++) {
+                restore[i] = src[i];
+            }
         }
         ggml_backend_tensor_set(turbo_innerq_scale_inv, restore, 0, LLAMA_TURBO_INNERQ_CHANNELS * sizeof(float));
         LLAMA_LOG_DEBUG("%s: a2a3c-init2-done\n", __func__);
