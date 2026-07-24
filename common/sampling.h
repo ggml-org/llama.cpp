@@ -37,7 +37,10 @@ struct common_sampler;
 // llama_sampler API overloads
 
 // note: can mutate params in some cases
-struct common_sampler * common_sampler_init(const struct llama_model * model, struct common_params_sampling & params);
+struct common_sampler * common_sampler_init(
+        const struct llama_model * model,
+        struct common_params_sampling & params,
+        int32_t n_ctx = 0);
 
 void common_sampler_free(struct common_sampler * gsmpl);
 

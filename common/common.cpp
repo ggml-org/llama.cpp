@@ -1300,8 +1300,9 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
     pimpl->samplers.resize(cparams.n_seq_max);
     pimpl->samplers_seq_config.resize(cparams.n_seq_max);
 
+    const int32_t n_ctx = cparams.n_ctx > 0 ? (int32_t) cparams.n_ctx : llama_model_n_ctx_train(model);
     for (int i = 0; i < (int) cparams.n_seq_max; ++i) {
-        pimpl->samplers[i].reset(common_sampler_init(model, params.sampling));
+        pimpl->samplers[i].reset(common_sampler_init(model, params.sampling, n_ctx));
         pimpl->samplers_seq_config[i] = { i, common_sampler_get(pimpl->samplers[i].get()) };
     }
 
