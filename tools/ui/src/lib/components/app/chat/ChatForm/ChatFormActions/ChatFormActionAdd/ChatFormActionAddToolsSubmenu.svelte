@@ -64,14 +64,14 @@
 			{/if}
 		{:else}
 			<div class="max-h-80 overflow-y-auto p-2 pr-1">
-				{#each toolsPanel.activeGroups as group (group.label)}
-					{@const isExpanded = toolsPanel.expandedGroups.has(group.label)}
+				{#each toolsPanel.activeGroups as group (group.key)}
+					{@const isExpanded = toolsPanel.expandedGroups.has(group.key)}
 					{@const checked = toolsPanel.isGroupChecked(group)}
 					{@const favicon = toolsPanel.getFavicon(group)}
 
 					<Collapsible.Root
 						open={isExpanded}
-						onOpenChange={() => toolsPanel.toggleGroupExpanded(group.label)}
+						onOpenChange={() => toolsPanel.toggleGroupExpanded(group.key)}
 					>
 						<div class="flex items-center gap-1">
 							<Collapsible.Trigger
@@ -109,7 +109,7 @@
 										<Checkbox
 											{...props}
 											{checked}
-											onCheckedChange={() => toolsPanel.toggleGroupByLabel(group.label)}
+											onCheckedChange={() => toolsPanel.toggleGroupByKey(group.key)}
 											class="mr-2 {ICON_CLASS_DEFAULT} shrink-0"
 										/>
 									{/snippet}
