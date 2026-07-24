@@ -1218,4 +1218,8 @@ typedef struct {
     int64_t  np;
 } ggml_metal_kargs_opt_step_sgd;
 
+typedef struct {
+    int64_t ne;
+} ggml_metal_kargs_silu_back;
+
 #endif // GGML_METAL_IMPL
