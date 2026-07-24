@@ -23,7 +23,7 @@ class MiniMaxM2Model(TextModel):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
         # merge expert weights
-        if 'experts' in name:
+        if "block_sparse_moe.experts." in name:
             n_experts = self.find_hparam(["num_local_experts", "num_experts"])
             assert bid is not None
 
@@ -50,5 +50,39 @@ class MiniMaxM2Model(TextModel):
 
             del self._experts_cache[bid]
             return
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("MiniMaxM3SparseForCausalLM", "MiniMaxM3SparseForConditionalGeneration")
+class MiniMaxM3Model(MiniMaxM2Model):
+    model_arch = gguf.MODEL_ARCH.MINIMAXM3
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        self.gguf_writer.add_expert_shared_count(self.find_hparam(["n_shared_experts"]))
+        self.gguf_writer.add_expert_weights_scale(self.find_hparam(["routed_scaling_factor"]))
+        self.gguf_writer.add_expert_weights_norm(True)
+
+        sac = self.find_hparam(["sparse_attention_config"])
+        self.gguf_writer.add_indexer_head_count(sac["sparse_num_index_heads"])
+        self.gguf_writer.add_indexer_key_length(sac["sparse_index_dim"])
+        self.gguf_writer.add_indexer_top_k(sac["sparse_topk_blocks"])
+        self.gguf_writer.add_indexer_block_size(sac["sparse_block_size"])
+        self.gguf_writer.add_indexer_local_blocks(sac["sparse_local_block"])
+
+        moe_layer_freq = self.find_hparam(["moe_layer_freq"])
+        n_dense = 0
+        for v in moe_layer_freq:
+            if v == 0:
+                n_dense += 1
+            else:
+                break
+        self.gguf_writer.add_leading_dense_block_count(n_dense)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None):
+        # Gemma-style (1 + w) RMSNorm: bake the +1 in so llama.cpp can use plain RMSNorm
+        if name.endswith("norm.weight"):
+            data_torch = data_torch + 1.0
 
         yield from super().modify_tensors(data_torch, name, bid)
