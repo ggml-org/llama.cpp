@@ -1,7 +1,8 @@
 import { base } from '$app/paths';
 import { error } from '@sveltejs/kit';
 import { browser } from '$app/environment';
-import { AUTHORIZATION_HEADER, BEARER_PREFIX } from '$lib/constants';
+import { AUTHORIZATION_HEADER, BEARER_PREFIX, CONTENT_TYPE_HEADER } from '$lib/constants';
+import { MimeTypeApplication } from '$lib/enums';
 import { config } from '$lib/stores/settings.svelte';
 
 /**
@@ -17,7 +18,7 @@ export async function validateApiKey(fetch: typeof globalThis.fetch): Promise<vo
 
 	try {
 		const headers: Record<string, string> = {
-			'Content-Type': 'application/json'
+			[CONTENT_TYPE_HEADER]: MimeTypeApplication.JSON
 		};
 
 		// Probe /props even without a stored key: on a server started with

@@ -16,6 +16,8 @@ import { DatabaseService } from '$lib/services/database.service';
 import { ChatService } from '$lib/services/chat.service';
 import { streamIdentity } from '$lib/utils/stream-identity';
 import { getAuthHeaders } from '$lib/utils/api-headers';
+import { CONTENT_TYPE_HEADER } from '$lib/constants';
+import { MimeTypeApplication } from '$lib/enums';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { config } from '$lib/stores/settings.svelte';
 import { agenticStore } from '$lib/stores/agentic.svelte';
@@ -208,7 +210,7 @@ class ChatStore {
 			// POST the one conv id we are probing
 			listResp = await fetch(`./v1/streams/lookup`, {
 				method: 'POST',
-				headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+				headers: { ...getAuthHeaders(), [CONTENT_TYPE_HEADER]: MimeTypeApplication.JSON },
 				body: JSON.stringify({ conversation_ids: [convId] })
 			});
 		} catch (e) {
@@ -672,7 +674,7 @@ class ChatStore {
 		try {
 			const resp = await fetch('./v1/streams/lookup', {
 				method: 'POST',
-				headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+				headers: { ...getAuthHeaders(), [CONTENT_TYPE_HEADER]: MimeTypeApplication.JSON },
 				body: JSON.stringify({ conversation_ids: lookupIds })
 			});
 			if (!resp.ok) return;
