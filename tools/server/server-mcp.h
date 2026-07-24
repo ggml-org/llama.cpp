@@ -117,6 +117,10 @@ private:
     // cleared by close() or by the reader on stdout EOF; read without rpc_mutex
     std::atomic<bool> running{false};
 
+    // bounded tail of the child's stderr, for diagnostics when it dies
+    std::mutex err_mu;
+    std::string err_tail;
+
     void reader_loop();
     void writer_loop();
     void errlog_loop();

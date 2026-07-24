@@ -227,13 +227,35 @@ void server_mcp_stdio::writer_loop() {
 }
 
 void server_mcp_stdio::errlog_loop() {
+    static constexpr size_t ERR_TAIL_MAX = 4096;
+    std::string buf;
     char chunk[4096];
     for (;;) {
         size_t n = fread(chunk, 1, sizeof(chunk), proc->err);
         if (n == 0) {
             break;
         }
-        SRV_DBG("MCP '%s' stderr: %.*s", name.c_str(), (int) n, chunk);
+        buf.append(chunk, n);
+
+        size_t pos;
+        while ((pos = buf.find('\n')) != std::string::npos) {
+            std::string line = buf.substr(0, pos);
+            buf.erase(0, pos + 1);
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+            if (line.empty()) {
+                continue;
+            }
+            SRV_DBG("MCP '%s' stderr: %s\n", name.c_str(), line.c_str());
+
+            std::lock_guard<std::mutex> lk(err_mu);
+            err_tail += line;
+            err_tail += '\n';
+            if (err_tail.size() > ERR_TAIL_MAX) {
+                err_tail.erase(0, err_tail.size() - ERR_TAIL_MAX);
+            }
+        }
     }
 }
 
