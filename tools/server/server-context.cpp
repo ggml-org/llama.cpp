@@ -286,6 +286,8 @@ struct server_slot {
     std::function<void(int /* id_slot */)> callback_on_release;
 
     // Speculative decoding stats
+    int32_t n_draft_attempts = 0;   // Draft generation calls for this slot
+    int32_t n_draft_empty = 0;      // Calls that returned no draft tokens
     int32_t n_draft_total = 0;      // Total draft tokens generated
     int32_t n_draft_accepted = 0;   // Draft tokens actually accepted
     int32_t n_draft_verif_steps = 0; // Total draft token verification steps by the target model
@@ -314,6 +316,8 @@ struct server_slot {
         json_schema = json();
 
         // clear speculative decoding stats
+        n_draft_attempts = 0;
+        n_draft_empty = 0;
         n_draft_total = 0;
         n_draft_accepted = 0;
         n_draft_verif_steps = 0;
@@ -433,6 +437,12 @@ struct server_slot {
             n_draft_max = std::min(n_draft_max, n_remaining - 1);
         }
 
+        // Per-request cap; zero keeps the loaded speculator resident but skips it.
+        // An omitted override (-1) preserves the configured speculator defaults.
+        if (task->params.speculative_n_max >= 0) {
+            n_draft_max = std::min(n_draft_max, task->params.speculative_n_max);
+        }
+
         SLT_DBG(*this, "max possible draft: %d\n", n_draft_max);
 
         return n_draft_max;
@@ -528,10 +538,15 @@ struct server_slot {
         timings.predicted_per_token_ms = t_token_generation / n_decoded;
         timings.predicted_per_second   = 1e3 / t_token_generation * n_decoded;
 
-        // Add speculative metrics
-        if (n_draft_total > 0) {
-            timings.draft_n          = n_draft_total;
-            timings.draft_n_accepted = n_draft_accepted;
+        // Add speculative metrics even when drafting returned empty, so callers can
+        // distinguish disabled speculation from silent target-only fallback.
+        if (can_speculate()) {
+            timings.speculative              = true;
+            timings.draft_attempts           = n_draft_attempts;
+            timings.draft_empty              = n_draft_empty;
+            timings.draft_n                  = n_draft_total;
+            timings.draft_n_accepted         = n_draft_accepted;
+            timings.draft_verification_steps = n_draft_verif_steps;
         }
 
         return timings;
@@ -642,6 +657,8 @@ struct server_slot {
                     draft_ratio, n_draft_accepted, n_draft_total, mean_acc_len);
             SLT_TRC(*this,
                     "     acc per pos = (%s)\n", acceptance_rates_per_pos.c_str());
+        } else if (can_speculate()) {
+            SLT_INF(*this, "draft activity = 0 tokens (%d attempts, %d empty)\n", n_draft_attempts, n_draft_empty);
         }
 
         common_speculative_print_stats(spec);
@@ -3074,6 +3091,8 @@ private:
             auto & draft = slot.spec_draft;
             auto & ckpt  = slot.spec_ckpt;
 
+            slot.n_draft_attempts += 1;
+            slot.n_draft_empty += draft.empty();
             slot.n_draft_total += draft.size();
 
             // TODO: avoid restoring the draft context and re-evaluating the drafted tokens when not needed [TAG_SPEC_AVOID_DRAFT_REEVAL]
@@ -4649,7 +4668,8 @@ void server_routes::init_routes() {
         GGML_UNUSED(ctx_server);
 
         task_params tparams;
-        tparams.sampling = params.sampling;
+        tparams.sampling    = params.sampling;
+        tparams.speculative = params.speculative;
         json default_generation_settings_for_props = json {
             { "params", tparams.to_json(true) },
             { "n_ctx",  meta->slot_n_ctx },

@@ -542,6 +542,16 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
         return src_ss[0];
     };
 
+    // SUM_ROWS over an axis-0 split produces one partial scalar per row and
+    // backend. Synchronizing those partials yields the mirrored global sum.
+    auto handle_sum_rows = [&](const std::vector<ggml_backend_meta_split_state> & src_ss) -> ggml_backend_meta_split_state {
+        if (src_ss[0].axis == GGML_BACKEND_SPLIT_AXIS_0) {
+            GGML_ASSERT(tensor->src[0]->type == GGML_TYPE_F32 && tensor->type == GGML_TYPE_F32);
+            return {assume_sync ? GGML_BACKEND_SPLIT_AXIS_MIRRORED : GGML_BACKEND_SPLIT_AXIS_PARTIAL, {0}, {1}, 1};
+        }
+        return handle_per_row(src_ss);
+    };
+
     // Some ops broadcast the src1 data across src0:
     auto handle_bin_bcast = [&](const std::vector<ggml_backend_meta_split_state> & src_ss) -> ggml_backend_meta_split_state {
         if (src_ss[0].axis >= 0 && src_ss[0].axis < GGML_MAX_DIMS &&
@@ -855,7 +865,9 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
             case GGML_OP_SUM: {
                 split_state = handle_generic(src_ss, /*scalar_only =*/ true);
             } break;
-            case GGML_OP_SUM_ROWS:
+            case GGML_OP_SUM_ROWS: {
+                split_state = handle_sum_rows(src_ss);
+            } break;
             case GGML_OP_CUMSUM:
             case GGML_OP_MEAN:
             case GGML_OP_ARGMAX:
@@ -1227,8 +1239,7 @@ static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(ggml_backend_m
             }
         }
 
-        if (tensor->flags & GGML_TENSOR_FLAG_FORCE_FP32_ALLREDUCE) {
-            GGML_ASSERT(tensor->op == GGML_OP_MUL_MAT);
+        if ((tensor->flags & GGML_TENSOR_FLAG_FORCE_FP32_ALLREDUCE) && tensor->op == GGML_OP_MUL_MAT) {
             GGML_ASSERT(tensor->src[0] != nullptr && tensor->src[1] != nullptr);
             const ggml_backend_meta_split_state weight_ss =
                 ggml_backend_meta_get_split_state(stc, tensor->src[0], /*assume_sync =*/ false);
