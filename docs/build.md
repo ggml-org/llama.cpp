@@ -354,7 +354,7 @@ You can download it from your Linux distro's package manager or from here: [ROCm
 
 - Using `CMake` for Linux (assuming a gfx1030-compatible AMD GPU):
   ```bash
-  HIPCXX="$(hipconfig -l)/clang" HIP_PATH="$(hipconfig -R)" \
+  HIPCXX="$(hipconfig -l)/clang" ROCM_PATH="$(hipconfig -R)" \
       cmake -S . -B build -DGGML_HIP=ON -DGPU_TARGETS=gfx1030 -DCMAKE_BUILD_TYPE=Release \
       && cmake --build build --config Release -- -j 16
   ```
