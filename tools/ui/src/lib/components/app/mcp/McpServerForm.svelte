@@ -17,6 +17,10 @@
 	interface Props {
 		url: string;
 		headers: string;
+		name?: string;
+		onNameChange?: (name: string) => void;
+		/** Shown in the empty display name field, e.g. the current automatic label. */
+		namePlaceholder?: string;
 		useProxy?: boolean;
 		onUrlChange: (url: string) => void;
 		onHeadersChange: (headers: string) => void;
@@ -44,6 +48,9 @@
 	let {
 		url,
 		headers,
+		name = '',
+		onNameChange,
+		namePlaceholder = 'Name reported by the server',
 		useProxy = false,
 		onUrlChange,
 		onHeadersChange,
@@ -154,6 +161,20 @@
 		{#if urlError}
 			<p class="mt-1.5 text-xs text-destructive">{urlError}</p>
 		{/if}
+	</div>
+
+	<div class="mb-4">
+		<label for="server-name-{id}" class="mb-2 block text-xs font-medium select-none">
+			Display name
+		</label>
+
+		<Input
+			id="server-name-{id}"
+			type="text"
+			placeholder={namePlaceholder}
+			value={name}
+			oninput={(e) => onNameChange?.(e.currentTarget.value)}
+		/>
 	</div>
 
 	<label class="flex items-center gap-2 cursor-pointer select-none">

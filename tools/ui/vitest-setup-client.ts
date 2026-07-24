@@ -6,9 +6,13 @@ import { beforeEach, vi } from 'vitest';
 // Mock fetch for API calls during client tests.
 // In test environment there is no backend server, so we intercept
 // the specific endpoints the app uses and return valid mock data.
-beforeEach(() => {
-	const originalFetch = globalThis.fetch;
+// The passthrough target is captured once at module load: capturing it
+// inside beforeEach grabs the previous test's spy (vi.spyOn returns the
+// existing spy), making the default branch recurse on itself as soon as
+// a test fetches a URL outside the mocked set.
+const originalFetch = globalThis.fetch.bind(globalThis);
 
+beforeEach(() => {
 	vi.spyOn(globalThis, 'fetch').mockImplementation(
 		async (input: RequestInfo | URL, init?: RequestInit) => {
 			const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;

@@ -214,6 +214,8 @@ export type MCPToolCall = {
 export interface MCPServerDisplayInfo {
 	id: string;
 	name?: string;
+	/** User-defined display name, takes precedence over every automatic label. */
+	displayName?: string;
 	url: string;
 }
 

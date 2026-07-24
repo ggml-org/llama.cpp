@@ -282,6 +282,7 @@ class ToolsStore {
 			if (!group) {
 				group = {
 					source: entry.source,
+					key: groupKey,
 					label: this.groupLabel(entry),
 					serverId: entry.serverId,
 					tools: []

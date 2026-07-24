@@ -14,11 +14,11 @@
 	let expandedGroups = new SvelteSet<string>();
 	let groups = $derived(toolsStore.toolGroups);
 
-	function toggleExpanded(label: string) {
-		if (expandedGroups.has(label)) {
-			expandedGroups.delete(label);
+	function toggleExpanded(key: string) {
+		if (expandedGroups.has(key)) {
+			expandedGroups.delete(key);
 		} else {
-			expandedGroups.add(label);
+			expandedGroups.add(key);
 		}
 	}
 </script>
@@ -27,9 +27,9 @@
 	<div class="py-8 text-center text-sm text-muted-foreground">No tools available</div>
 {:else}
 	<div class="space-y-2">
-		{#each groups as group (group.label)}
-			{@const isExpanded = expandedGroups.has(group.label)}
-			<Collapsible.Root open={isExpanded} onOpenChange={() => toggleExpanded(group.label)}>
+		{#each groups as group (group.key)}
+			{@const isExpanded = expandedGroups.has(group.key)}
+			<Collapsible.Root open={isExpanded} onOpenChange={() => toggleExpanded(group.key)}>
 				<Collapsible.Trigger
 					class="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-muted/50"
 				>
