@@ -1,6 +1,16 @@
 #include "server-mcp.h"
 
+#include <sheredom/subprocess.h>
+
+#include <cstdio>
+#include <cstring>
 #include <fstream>
+
+#if defined(_WIN32)
+#  include <windows.h>
+#else
+extern char ** environ;
+#endif
 
 //
 // server_mcp_server_config
@@ -54,6 +64,197 @@ std::vector<server_mcp_server_config> server_mcp_server_config::parse_cursor_for
 
     return result;
 }
+
+
+//
+// server_mcp_stdio
+//
+
+struct server_mcp_stdio::process_handle {
+    subprocess_s sp;
+    FILE * in  = nullptr; // child stdin
+    FILE * out = nullptr; // child stdout
+    FILE * err = nullptr; // child stderr
+};
+
+static std::vector<std::string> mcp_parent_env() {
+    std::vector<std::string> env;
+#if defined(_WIN32)
+    LPCH block = GetEnvironmentStringsA();
+    if (block) {
+        for (LPCH e = block; *e; e += strlen(e) + 1) {
+            env.emplace_back(e);
+        }
+        FreeEnvironmentStringsA(block);
+    }
+#else
+    if (environ) {
+        for (char ** e = environ; *e; ++e) {
+            env.emplace_back(*e);
+        }
+    }
+#endif
+    return env;
+}
+
+// parent env with the config overrides applied, in "KEY=VALUE" form
+static std::vector<std::string> mcp_build_env(const std::map<std::string, std::string> & overrides) {
+    std::vector<std::string> env;
+    for (auto & e : mcp_parent_env()) {
+        size_t eq = e.find('=');
+        std::string key = eq == std::string::npos ? e : e.substr(0, eq);
+        if (overrides.find(key) == overrides.end()) {
+            env.push_back(e);
+        }
+    }
+    for (auto & [k, v] : overrides) {
+        env.push_back(k + "=" + v);
+    }
+    return env;
+}
+
+server_mcp_stdio::server_mcp_stdio(const server_mcp_server_config & config) : config(config) {
+    name = config.name;
+    timeout_ms = config.timeout_ms;
+}
+
+server_mcp_stdio::~server_mcp_stdio() {
+    join_pumps();
+}
+
+bool server_mcp_stdio::start() {
+    std::vector<std::string> argv_s;
+    argv_s.push_back(config.command);
+    argv_s.insert(argv_s.end(), config.args.begin(), config.args.end());
+
+    int options = subprocess_option_no_window | subprocess_option_search_user_path;
+    std::vector<std::string> envp_s;
+    if (config.env.empty()) {
+        options |= subprocess_option_inherit_environment;
+    } else {
+        envp_s = mcp_build_env(config.env);
+    }
+
+    auto to_ptrs = [](std::vector<std::string> & v) {
+        std::vector<const char *> p;
+        p.reserve(v.size() + 1);
+        for (auto & s : v) {
+            p.push_back(s.c_str());
+        }
+        p.push_back(nullptr);
+        return p;
+    };
+    auto argv = to_ptrs(argv_s);
+    auto envp = to_ptrs(envp_s);
+
+    auto handle = std::make_unique<process_handle>();
+    int rc = subprocess_create_ex(argv.data(), options,
+                                  config.env.empty() ? nullptr : envp.data(),
+                                  config.cwd.empty() ? nullptr : config.cwd.c_str(),
+                                  &handle->sp);
+    if (rc != 0) {
+        SRV_WRN("MCP '%s': failed to spawn '%s'\n", config.name.c_str(), config.command.c_str());
+        return false;
+    }
+    handle->in  = subprocess_stdin(&handle->sp);
+    handle->out = subprocess_stdout(&handle->sp);
+    handle->err = subprocess_stderr(&handle->sp);
+
+    proc = std::move(handle);
+    running.store(true);
+    reader = std::thread([this] { reader_loop(); });
+    writer = std::thread([this] { writer_loop(); });
+    errlog = std::thread([this] { errlog_loop(); });
+    return true;
+}
+
+void server_mcp_stdio::close() {
+    join_pumps();
+}
+
+bool server_mcp_stdio::is_alive() const {
+    return running.load();
+}
+
+void server_mcp_stdio::reader_loop() {
+    std::string buf;
+    char chunk[4096];
+    for (;;) {
+        size_t n = fread(chunk, 1, sizeof(chunk), proc->out);
+        if (n == 0) {
+            break; // EOF or error
+        }
+        buf.append(chunk, n);
+
+        size_t pos;
+        while ((pos = buf.find('\n')) != std::string::npos) {
+            std::string line = buf.substr(0, pos);
+            buf.erase(0, pos + 1);
+            if (!line.empty() && line.back() == '\r') {
+                line.pop_back();
+            }
+            if (line.empty()) {
+                continue;
+            }
+            json msg;
+            try {
+                msg = json::parse(line);
+            } catch (...) {
+                continue; // skip malformed line
+            }
+            if (!from_server.write(std::move(msg))) {
+                return; // consumer gone
+            }
+        }
+    }
+    running.store(false);
+    to_server.close_write();   // stop the writer
+    from_server.close_write(); // EOF to any waiting caller
+}
+
+void server_mcp_stdio::writer_loop() {
+    auto should_stop = [this] { return !running.load(); };
+    json msg;
+    while (to_server.read(msg, should_stop)) {
+        std::string data = msg.dump();
+        data.push_back('\n');
+        if (fwrite(data.data(), 1, data.size(), proc->in) != data.size() || fflush(proc->in) != 0) {
+            break; // child gone
+        }
+    }
+    running.store(false);
+    from_server.close_write();
+}
+
+void server_mcp_stdio::errlog_loop() {
+    char chunk[4096];
+    for (;;) {
+        size_t n = fread(chunk, 1, sizeof(chunk), proc->err);
+        if (n == 0) {
+            break;
+        }
+        SRV_DBG("MCP '%s' stderr: %.*s", name.c_str(), (int) n, chunk);
+    }
+}
+
+void server_mcp_stdio::join_pumps() {
+    if (!proc) {
+        return;
+    }
+    running.store(false);
+    to_server.close_write();   // wake the writer if it waits for a message
+    from_server.close_write(); // wake any caller waiting for a reply
+
+    subprocess_terminate(&proc->sp); // child death unblocks the blocked fread/fwrite
+
+    if (writer.joinable()) writer.join();
+    if (reader.joinable()) reader.join();
+    if (errlog.joinable()) errlog.join();
+
+    subprocess_destroy(&proc->sp); // safe now: no thread touches the FILE* anymore
+    proc.reset();
+}
+
 
 //
 // server_mcp

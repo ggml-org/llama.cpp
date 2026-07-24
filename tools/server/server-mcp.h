@@ -112,12 +112,14 @@ private:
 
     std::thread reader; // child stdout -> NDJSON framing -> from_server
     std::thread writer; // to_server -> child stdin
+    std::thread errlog; // child stderr -> debug log (must be drained or the child blocks)
 
     // cleared by close() or by the reader on stdout EOF; read without rpc_mutex
     std::atomic<bool> running{false};
 
     void reader_loop();
     void writer_loop();
+    void errlog_loop();
     void join_pumps();
 };
 
