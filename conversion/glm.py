@@ -237,6 +237,9 @@ class GlmMoeDsaModel(DeepseekV2Model):
         self.gguf_writer.add_indexer_head_count(self.hparams["index_n_heads"])
         self.gguf_writer.add_indexer_key_length(self.hparams["index_head_dim"])
         self.gguf_writer.add_indexer_top_k(self.hparams["index_topk"])
+        if (indexer_types := self.hparams.get("indexer_types")) is not None:
+            indexer_types = [t == "full" for t in indexer_types]
+            self.gguf_writer.add_indexer_types(indexer_types)
 
 
 @ModelBase.register("SolarOpenForCausalLM")

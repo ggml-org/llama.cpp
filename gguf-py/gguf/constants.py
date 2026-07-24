@@ -200,6 +200,7 @@ class Keys:
             HEAD_COUNT = "{arch}.attention.indexer.head_count"
             KEY_LENGTH = "{arch}.attention.indexer.key_length"
             TOP_K      = "{arch}.attention.indexer.top_k"
+            TYPES      = "{arch}.attention.indexer.types"
 
     class HyperConnection:
         COUNT                = "{arch}.hyper_connection.count"
