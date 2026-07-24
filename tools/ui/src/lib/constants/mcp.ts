@@ -68,6 +68,9 @@ export const BEARER_PREFIX = 'Bearer ';
 /** Canonical casing for the Authorization header (RFC 7235) */
 export const AUTHORIZATION_HEADER = 'Authorization';
 
+/** Content-Type HTTP header name */
+export const CONTENT_TYPE_HEADER = 'Content-Type';
+
 /** Header names whose values should be redacted in diagnostic logs */
 export const REDACTED_HEADERS = new Set([
 	'authorization',
