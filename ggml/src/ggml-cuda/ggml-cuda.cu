@@ -1809,6 +1809,34 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
     return use_mul_mat_vec_q;
 }
 
+static bool ggml_cuda_should_fuse_mul_mat_mmq(const ggml_tensor * mm) {
+    const ggml_tensor * src0 = mm->src[0];
+    const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+
+    if (src0->type != GGML_TYPE_NVFP4) {
+        return false;
+    }
+
+    if (mm->op == GGML_OP_MUL_MAT) { // check for MMQ in dense models 
+        const int warp_size = ggml_cuda_info().devices[ggml_cuda_get_device()].warp_size;
+        return mm->ne[1] > 1 &&
+            !ggml_cuda_should_use_mmvf(src0->type, cc, src0->ne, src0->nb, mm->ne[1]) &&
+            !ggml_cuda_should_use_mmf(src0->type, cc, warp_size, src0->ne, src0->nb, mm->ne[1], /*mul_mat_id=*/false) &&
+            !ggml_cuda_should_use_mmvq(src0->type, cc, mm->ne[1]) &&
+            ggml_cuda_should_use_mmq(src0->type, cc, mm->ne[1], /*n_experts=*/0);
+    }
+
+    if (mm->op == GGML_OP_MUL_MAT_ID) { // check for MMQ in MoE models 
+        const int64_t n_tokens = mm->src[1]->ne[2];
+        const bool use_mmvq = n_tokens <= MMVQ_MAX_BATCH_SIZE &&
+            ggml_is_quantized(src0->type) && n_tokens <= get_mmvq_mmid_max_batch(src0->type, cc);
+        return mm->ne[2] > 1 && !use_mmvq &&
+            ggml_cuda_should_use_mmq(src0->type, cc, mm->src[1]->ne[2], src0->ne[2]);
+    }
+
+    return false;
+}
+
 static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     GGML_TENSOR_BINARY_OP_LOCALS
 
@@ -3748,6 +3776,13 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
             ggml_cuda_mm_fusion_args_host fusion_data{};
             fusion_data.x_bias  = bias;
             fusion_data.x_scale = scale;
+
+            if (!with_bias && ggml_cuda_should_fuse_mul_mat_mmq(mm_node)) {
+                ggml_cuda_mul_mat_q(*cuda_ctx, src0, src1, ids, out_node, &fusion_data);
+                fused_mul_mat_vec = true;
+                fused_node_count  = n_ops;
+                break;
+            }
 
             if (ggml_cuda_should_fuse_mul_mat_vec_q(mm_node)) {
                 ggml_cuda_mul_mat_vec_q(*cuda_ctx, src0, src1, ids, out_node, &fusion_data);

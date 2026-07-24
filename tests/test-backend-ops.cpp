@@ -4411,6 +4411,87 @@ static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats) {
     }
 }
 
+// GGML_TYPE_NVFP4 MMQ + weight-scale epilogue
+struct test_mul_mat_mmq_fusion : public test_case {
+    const bool use_id;
+    const int64_t m;
+    const int64_t n;
+    const int64_t k;
+    const int n_mats;
+    const int n_used;
+
+    test_mul_mat_mmq_fusion(
+            bool use_id, int64_t m = 32, int64_t n = 64, int64_t k = 256, int n_mats = 16, int n_used = 8)
+        : use_id(use_id), m(m), n(n), k(k), n_mats(n_mats), n_used(n_used) {
+        GGML_ASSERT(n_used <= n_mats);
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR6(use_id, m, n, k, n_mats, n_used);
+    }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "MUL_MAT_MMQ_FUSION";
+    }
+
+    bool run_whole_graph() override { return true; }
+    bool use_weight_context() override { return use_id; }
+
+    double max_nmse_err() override {
+        return 5e-4;
+    }
+
+    double max_nmse_err(ggml_backend_t backend) override {
+        if (backend_has_feature(backend, "BLACKWELL_NATIVE_FP4")) {
+            return 2e-2;
+        }
+        return max_nmse_err();
+    }
+
+    ggml_tensor * build_scale_id(
+            ggml_context * ctx, ggml_tensor * scale, ggml_tensor * ids, ggml_tensor * out) {
+        ggml_tensor * s = ggml_reshape_3d(ctx, scale, 1, n_mats, 1);
+        s = ggml_repeat_4d(ctx, s, 1, n_mats, m, 1);
+        s = ggml_get_rows(ctx, s, ids);
+        return ggml_mul(ctx, out, s);
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        GGML_ASSERT(!use_weight_context());
+        return build_graph(ctx, nullptr);
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx, ggml_context * ctx_weights) override {
+        if (!use_id) {
+            ggml_tensor * weights = ggml_new_tensor_2d(ctx, GGML_TYPE_NVFP4, k, n);
+            ggml_tensor * input   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, m);
+            ggml_tensor * scale   = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 1);
+
+            return ggml_mul(ctx, ggml_mul_mat(ctx, weights, input), scale);
+        }
+
+        GGML_ASSERT(ctx_weights);
+        ggml_tensor * weights = ggml_new_tensor_3d(ctx_weights, GGML_TYPE_NVFP4, k, n, n_mats);
+        ggml_tensor * input   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, k, n_used, m);
+        ggml_tensor * ids     = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, n_mats, m);
+        if (n_used != n_mats) {
+            ids = ggml_view_2d(ctx, ids, n_used, m, ids->nb[1], 0);
+        }
+        ggml_tensor * scale   = ggml_new_tensor_1d(ctx_weights, GGML_TYPE_F32, n_mats);
+
+        return build_scale_id(ctx, scale, ids, ggml_mul_mat_id(ctx, weights, input, ids));
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        if (use_id) {
+            init_mul_mat_id_tensors(ctx, n_mats);
+        } else {
+            test_case::initialize_tensors(ctx);
+        }
+    }
+};
+
 // GGML_OP_MUL_MAT_ID
 struct test_mul_mat_id : public test_case {
     const ggml_type type_a;
@@ -8018,6 +8099,23 @@ static const ggml_type other_types[] = {
 static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     std::vector<std::unique_ptr<test_case>> test_cases;
     std::default_random_engine rng(0);
+
+    test_cases.emplace_back(new test_mul_mat_mmq_fusion(false));
+    test_cases.emplace_back(new test_mul_mat_mmq_fusion(true));
+    for (bool use_id : { false, true }) {
+        test_cases.emplace_back(new test_mul_mat_mmq_fusion(use_id, 11,  256, 4096));
+        test_cases.emplace_back(new test_mul_mat_mmq_fusion(use_id, 11, 4096,  256));
+    }
+    for (int64_t m : { 2, 4, 12 }) {
+        test_cases.emplace_back(new test_mul_mat_mmq_fusion(false, m, 8192, 2048));
+        test_cases.emplace_back(new test_mul_mat_mmq_fusion(false, m,   32, 2048));
+        test_cases.emplace_back(new test_mul_mat_mmq_fusion(false, m, 4096, 2048));
+        test_cases.emplace_back(new test_mul_mat_mmq_fusion(false, m, 2048, 4096));
+        test_cases.emplace_back(new test_mul_mat_mmq_fusion(false, m,  512, 2048));
+        test_cases.emplace_back(new test_mul_mat_mmq_fusion(false, m, 2048,  512));
+        test_cases.emplace_back(new test_mul_mat_mmq_fusion(true,  m,  512, 2048, 256, 8));
+        test_cases.emplace_back(new test_mul_mat_mmq_fusion(true,  m, 2048,  512, 256, 8));
+    }
 
     // unary ops
     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
