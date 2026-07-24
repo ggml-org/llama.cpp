@@ -2312,7 +2312,8 @@ bool llama_kv_cache::state_read_meta(llama_io_read_i & io, uint32_t strm, uint32
             sinfo.idxs[0][i] = i;
         }
 
-        head = 0;
+        // Full-state restore compacts the cells into [0, cell_count).
+        head = cell_count;
     }
 
     return true;
