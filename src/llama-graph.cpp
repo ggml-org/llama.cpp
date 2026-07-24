@@ -2099,7 +2099,26 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             GGML_ABORT("fatal error");
     }
 
-    experts = build_lora_mm_id(down_exps, cur, selected_experts, down_exps_s); // [n_embd, n_expert_used, n_tokens]
+    if (arch == LLM_ARCH_LAGUNA) {
+        // Laguna can produce post-SwiGLU expert activations around 1e6. Backends
+        // that stage MUL_MAT_ID activations or Q8_1 block sums as f16 can overflow
+        // even though the source tensor is finite. Normalize each expert/token
+        // column for the down projection, then restore its magnitude. A power-of-2
+        // target of 8192 also bounds any 32-value block sum below the f16 limit.
+        const float f16_safe = 8192.0f;
+        ggml_tensor * col_sum = ggml_sum_rows(ctx0, ggml_sqr(ctx0, cur));
+        col_sum->flags |= GGML_TENSOR_FLAG_FORCE_FP32_ALLREDUCE;
+        ggml_tensor * col_l2 = ggml_sqrt(ctx0, col_sum);
+        col_l2 = ggml_clamp(ctx0, col_l2, 1e-8f, 1e30f);
+        ggml_tensor * col_scale = ggml_scale(ctx0, col_l2, 1.0f/f16_safe);
+        ggml_tensor * cur_safe = ggml_div(ctx0, cur, col_scale);
+        experts = build_lora_mm_id(down_exps, cur_safe, selected_experts, down_exps_s);
+        // Keep restoration as MUL with a mirrored tensor so tensor-parallel MoE
+        // scheduling can delay its allreduce through routing and expert aggregation.
+        experts = ggml_mul(ctx0, experts, col_scale);
+    } else {
+        experts = build_lora_mm_id(down_exps, cur, selected_experts, down_exps_s);
+    }
     cb(experts, "ffn_moe_down", il);
 
     if (down_exps_s) {
