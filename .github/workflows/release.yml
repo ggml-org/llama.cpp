@@ -1547,6 +1547,8 @@ jobs:
     # https://docs.github.com/en/actions/security-for-github-actions/security-guides/automatic-token-authentication#modifying-the-permissions-for-the-github_token
     permissions:
         contents: write # for creating release
+        id-token: write
+        attestations: write
 
     runs-on: ubuntu-slim
 
@@ -1638,6 +1640,11 @@ jobs:
         id: package_ui
         run: |
           tar -czvf release/llama-${{ steps.tag.outputs.name }}-ui.tar.gz --transform "s,^\.,llama-${{ steps.tag.outputs.name }}," -C ./ui-dist .
+
+      - name: Attest release artifacts
+        uses: actions/attest@v4
+        with:
+          subject-path: 'release/*'
 
       - name: Create release
         id: create_release
