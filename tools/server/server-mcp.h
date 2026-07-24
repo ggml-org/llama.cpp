@@ -87,8 +87,9 @@ protected:
     std::string last_error;
     std::vector<server_mcp_tool_def> tools;
 
-    // returns the matching reply, or an {"error": ...} object
-    json send_rpc(const json & request, const std::function<bool()> & should_stop);
+    // both assume rpc_mutex is already held by the public caller
+    bool ensure_init(const std::function<bool()> & should_stop); // initialize handshake, once
+    json send_rpc(const json & request, const std::function<bool()> & should_stop); // returns the reply, or an {"error": ...} object
 };
 
 //

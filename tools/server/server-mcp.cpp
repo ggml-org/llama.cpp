@@ -67,6 +67,146 @@ std::vector<server_mcp_server_config> server_mcp_server_config::parse_cursor_for
 
 
 //
+// server_mcp_transport
+//
+
+static constexpr const char * MCP_PROTOCOL_VERSION = "2024-11-05";
+
+static std::string rpc_error_message(const json & resp) {
+    if (resp.contains("error")) {
+        const json & e = resp.at("error");
+        if (e.is_object()) {
+            return e.value("message", "unknown error");
+        }
+        if (e.is_string()) {
+            return e.get<std::string>();
+        }
+    }
+    return "unknown error";
+}
+
+json server_mcp_transport::send_rpc(const json & request, const std::function<bool()> & should_stop) {
+    if (!to_server.write(json(request))) {
+        return {{"error", {{"code", -32603}, {"message", "transport closed"}}}};
+    }
+
+    const bool has_id = request.contains("id");
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+    auto stop = [&]() {
+        return (should_stop && should_stop()) || std::chrono::steady_clock::now() >= deadline;
+    };
+
+    json reply;
+    while (from_server.read(reply, stop)) {
+        // a message without an id is a notification; a mismatched id is a stale reply from an
+        // earlier timed-out request (ids are monotonic, so it can never match a future one)
+        if (!has_id || (reply.contains("id") && reply.at("id") == request.at("id"))) {
+            return reply;
+        }
+        if (std::chrono::steady_clock::now() >= deadline) {
+            break; // a flood of notifications must not outrun the deadline
+        }
+    }
+
+    if (should_stop && should_stop()) {
+        return {{"error", {{"code", -32603}, {"message", "cancelled"}}}};
+    }
+    if (std::chrono::steady_clock::now() >= deadline) {
+        return {{"error", {{"code", -32603}, {"message", "request timed out"}}}};
+    }
+    return {{"error", {{"code", -32603}, {"message", "transport closed"}}}};
+}
+
+bool server_mcp_transport::ensure_init(const std::function<bool()> & should_stop) {
+    if (initialized) {
+        return true;
+    }
+
+    json init_req = {
+        {"jsonrpc", "2.0"},
+        {"id", next_id++},
+        {"method", "initialize"},
+        {"params", {
+            {"protocolVersion", MCP_PROTOCOL_VERSION},
+            {"capabilities", json::object()},
+            {"clientInfo", {{"name", "llama.cpp"}, {"version", "1.0"}}},
+        }},
+    };
+    json resp = send_rpc(init_req, should_stop);
+    if (!resp.contains("result")) {
+        last_error = "initialize failed: " + rpc_error_message(resp);
+        return false;
+    }
+
+    // notifications/initialized: no id, no reply expected
+    to_server.write({{"jsonrpc", "2.0"}, {"method", "notifications/initialized"}});
+
+    initialized = true;
+    return true;
+}
+
+bool server_mcp_transport::handshake(const std::function<bool()> & should_stop) {
+    std::lock_guard<std::mutex> lock(rpc_mutex);
+    return ensure_init(should_stop);
+}
+
+std::vector<server_mcp_tool_def> server_mcp_transport::list_tools(const std::function<bool()> & should_stop) {
+    std::lock_guard<std::mutex> lock(rpc_mutex);
+    if (!ensure_init(should_stop)) {
+        return {};
+    }
+    if (!tools.empty()) {
+        return tools;
+    }
+
+    json req = {{"jsonrpc", "2.0"}, {"id", next_id++}, {"method", "tools/list"}};
+    json resp = send_rpc(req, should_stop);
+    if (!resp.contains("result")) {
+        last_error = "tools/list failed: " + rpc_error_message(resp);
+        return {};
+    }
+
+    const json & result = resp.at("result");
+    if (result.contains("tools") && result.at("tools").is_array()) {
+        for (const auto & t : result.at("tools")) {
+            server_mcp_tool_def def;
+            def.server_name = name;
+            def.name = t.value("name", "");
+            def.description = t.value("description", "");
+            if (t.contains("inputSchema")) {
+                def.input_schema = t.at("inputSchema");
+            }
+            tools.push_back(std::move(def));
+        }
+    }
+    return tools;
+}
+
+json server_mcp_transport::call_tool(const std::string & tool_name,
+                                     const json & arguments,
+                                     const std::function<bool()> & should_stop) {
+    std::lock_guard<std::mutex> lock(rpc_mutex);
+    if (!ensure_init(should_stop)) {
+        return {{"error", last_error}};
+    }
+
+    json req = {
+        {"jsonrpc", "2.0"},
+        {"id", next_id++},
+        {"method", "tools/call"},
+        {"params", {{"name", tool_name}, {"arguments", arguments}}},
+    };
+    json resp = send_rpc(req, should_stop);
+    if (resp.contains("error")) {
+        return resp;
+    }
+    if (resp.contains("result")) {
+        return resp.at("result");
+    }
+    return {{"error", {{"code", -32603}, {"message", "invalid response"}}}};
+}
+
+//
 // server_mcp_stdio
 //
 
@@ -223,7 +363,8 @@ void server_mcp_stdio::writer_loop() {
         }
     }
     running.store(false);
-    from_server.close_write();
+    to_server.close_read();    // fail fast on any further send_rpc write
+    from_server.close_write(); // wake any caller waiting for a reply
 }
 
 void server_mcp_stdio::errlog_loop() {
