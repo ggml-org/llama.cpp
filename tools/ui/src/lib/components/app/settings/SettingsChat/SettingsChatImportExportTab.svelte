@@ -159,8 +159,10 @@
 		try {
 			const input = document.createElement('input');
 
+			// No `accept` filter: iOS resolves each entry to a UTI and has none for
+			// `.jsonl`, which greys out exported conversations in the file picker.
+			// `parseImportFile` detects the format from the file contents instead.
 			input.type = HtmlInputType.FILE;
-			input.accept = `${FileExtensionText.JSON},${FileExtensionText.JSONL},${FileExtensionText.ZIP}`;
 
 			input.onchange = async (e) => {
 				const file = (e.target as HTMLInputElement)?.files?.[0];

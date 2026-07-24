@@ -30,7 +30,6 @@ import type { McpServerOverride } from '$lib/types/database';
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate';
 import {
 	MessageRole,
-	HtmlInputType,
 	FileExtensionText,
 	MimeTypeText,
 	MimeTypeApplication,
@@ -47,7 +46,8 @@ import {
 	ISO_TIME_SEPARATOR_REPLACEMENT,
 	NON_ALPHANUMERIC_REGEX,
 	MULTIPLE_UNDERSCORE_REGEX,
-	REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY
+	REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY,
+	ZIP_MAGIC
 } from '$lib/constants';
 
 import { ROUTES } from '$lib/constants/routes';
@@ -977,27 +977,47 @@ class ConversationsStore {
 	}
 
 	/**
-	 * Parses an import file into conversations, accepting the current `.jsonl` and
-	 * `.zip` formats as well as the legacy `.json` format.
+	 * Reports whether the text is the JSONL session format, whose first non-empty
+	 * line is a `type: 'session'` record. A legacy JSON export starts with an
+	 * array or an object that has no such discriminator.
+	 * @param text - The file contents
+	 */
+	private isSessionsJsonl(text: string): boolean {
+		const trimmed = text.trimStart();
+		const lineEnd = trimmed.indexOf('\n');
+		const firstLine = lineEnd === -1 ? trimmed : trimmed.slice(0, lineEnd);
+
+		try {
+			return JSON.parse(firstLine).type === 'session';
+		} catch {
+			// Not a standalone JSON record, so not the JSONL format.
+			return false;
+		}
+	}
+
+	/**
+	 * Parses an import file into conversations, accepting the current JSONL and
+	 * ZIP formats as well as the legacy JSON format. The format comes from the
+	 * contents, so an import works whatever the file is named.
 	 * @param file - The user-selected file
 	 * @returns The parsed conversations with their messages
 	 */
 	async parseImportFile(file: File): Promise<ExportedConversation[]> {
-		const name = file.name.toLowerCase();
+		const bytes = new Uint8Array(await file.arrayBuffer());
 
-		if (name.endsWith(FileExtensionText.ZIP)) {
-			const entries = unzipSync(new Uint8Array(await file.arrayBuffer()));
+		if (ZIP_MAGIC.every((byte, index) => bytes[index] === byte)) {
+			const entries = unzipSync(bytes);
 			const sessions: ExportedConversation[] = [];
-			for (const [entryName, bytes] of Object.entries(entries)) {
+			for (const [entryName, entryBytes] of Object.entries(entries)) {
 				if (!entryName.toLowerCase().endsWith(FileExtensionText.JSONL)) continue;
-				sessions.push(...this.parseSessionsJsonl(strFromU8(bytes)));
+				sessions.push(...this.parseSessionsJsonl(strFromU8(entryBytes)));
 			}
 			return sessions;
 		}
 
-		const text = await file.text();
+		const text = strFromU8(bytes);
 
-		if (name.endsWith(FileExtensionText.JSONL)) {
+		if (this.isSessionsJsonl(text)) {
 			return this.parseSessionsJsonl(text);
 		}
 
@@ -1101,65 +1121,6 @@ class ConversationsStore {
 		const messages = await DatabaseService.getConversationMessages(convId);
 
 		this.downloadConversationFile({ conv: conversation, messages });
-	}
-
-	/**
-	 * Imports conversations from a JSON file
-	 * Opens file picker and processes the selected file
-	 * @returns The list of imported conversations
-	 */
-	async importConversations(): Promise<DatabaseConversation[]> {
-		return new Promise((resolve, reject) => {
-			const input = document.createElement('input');
-			input.type = HtmlInputType.FILE;
-			input.accept = FileExtensionText.JSON;
-
-			input.onchange = async (e) => {
-				const file = (e.target as HTMLInputElement)?.files?.[0];
-
-				if (!file) {
-					reject(new Error('No file selected'));
-					return;
-				}
-
-				try {
-					const text = await file.text();
-					const parsedData = JSON.parse(text);
-					let importedData: ExportedConversations;
-
-					if (Array.isArray(parsedData)) {
-						importedData = parsedData;
-					} else if (
-						parsedData &&
-						typeof parsedData === 'object' &&
-						'conv' in parsedData &&
-						'messages' in parsedData
-					) {
-						importedData = [parsedData];
-					} else {
-						throw new Error('Invalid file format');
-					}
-
-					const result = await DatabaseService.importConversations(importedData);
-					toast.success(`Imported ${result.imported} conversation(s), skipped ${result.skipped}`);
-
-					await this.loadConversations();
-
-					const importedConversations = (
-						Array.isArray(importedData) ? importedData : [importedData]
-					).map((item) => item.conv);
-
-					resolve(importedConversations);
-				} catch (err: unknown) {
-					const message = err instanceof Error ? err.message : 'Unknown error';
-					console.error('Failed to import conversations:', err);
-					toast.error('Import failed', { description: message });
-					reject(new Error(`Import failed: ${message}`));
-				}
-			};
-
-			input.click();
-		});
 	}
 
 	/**
