@@ -257,11 +257,19 @@ bool llama_kv_cache_iswa::get_can_shift() const {
 }
 
 void llama_kv_cache_iswa::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
+    state_write(io, seq_id, flags, false);
+}
+
+void llama_kv_cache_iswa::state_write(
+        llama_io_write_i      & io,
+        llama_seq_id            seq_id,
+        llama_state_seq_flags   flags,
+        bool                    include_swa_masked) const {
     if ((flags & LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY) == 0) {
-        kv_base->state_write(io, seq_id, flags);
+        kv_base->state_write(io, seq_id, flags, include_swa_masked);
     }
 
-    kv_swa->state_write(io, seq_id, flags);
+    kv_swa->state_write(io, seq_id, flags, include_swa_masked);
 }
 
 void llama_kv_cache_iswa::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {

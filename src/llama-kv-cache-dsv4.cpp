@@ -1368,7 +1368,9 @@ void llama_kv_cache_dsv4::state_write(llama_io_write_i & io, llama_seq_id seq_id
     io.write(&version, sizeof(version));
     io.write(&mode,    sizeof(mode));
 
-    kv_raw->state_write(io, seq_id, flags);
+    // DeepSeek4 compressor updates require the complete raw SWA history after
+    // a sequence state is restored into another stream.
+    kv_raw->state_write(io, seq_id, flags, true);
 
     if (!partial_only) {
         const llama_pos pos_max = seq_id >= 0 ? kv_raw->seq_pos_max(seq_id) : -1;
