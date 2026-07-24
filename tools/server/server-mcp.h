@@ -151,6 +151,8 @@ private:
     std::vector<server_mcp_server_config> configs;
 
     mutable std::mutex mutex; // guards transports, dead_servers, registry
+
+    // shared_ptr: call_tool() hands a transport to the caller and drops the lock for the blocking RPC, so a concurrent evict/respawn must not destroy it mid-call
     std::map<std::string, std::shared_ptr<server_mcp_transport>> transports;
     std::map<std::string, std::chrono::steady_clock::time_point> dead_servers; // spawn-failure cooldown
     std::vector<server_mcp_tool_def> registry;
