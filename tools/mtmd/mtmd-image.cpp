@@ -639,10 +639,7 @@ mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_ll
 
     if (!has_slices) {
         // skip slicing logic
-        const bool is_4x = is_minicpmv4_6 && hparams.n_merge == 2;
-        res.overview_size = is_4x
-            ? get_best_resize(original_size, slice_size, patch_size, true)
-            : clip_image_size{slice_size, slice_size};
+        res.overview_size = clip_image_size{slice_size, slice_size};
         res.refined_size  = clip_image_size{0, 0};
         res.grid_size     = clip_image_size{0, 0};
 
@@ -695,15 +692,6 @@ mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_ll
         const float log_ratio = log((float)original_width / original_height);
         const float ratio = (float)original_width * original_height / (slice_size * slice_size);
         const int multiple = fmin(ceil(ratio), max_slice_nums);
-
-        const bool is_4x = is_minicpmv4_6 && hparams.n_merge == 2;
-        if (is_4x && multiple <= 1) {
-            auto best_size_upscaled = get_best_resize(original_size, slice_size, patch_size, true);
-            res.overview_size = best_size_upscaled;
-            res.grid_size     = clip_image_size{0, 0};
-            res.refined_size  = clip_image_size{0, 0};
-            return res;
-        }
 
         auto best_grid   = get_best_grid(max_slice_nums, multiple, log_ratio);
         auto refine_size = get_refine_size(original_size, best_grid, slice_size, patch_size, true);
@@ -879,6 +867,24 @@ clip_image_size mtmd_image_preprocessor_llava_uhd::get_best_grid(const int max_s
         }
     }
     return best_grid;
+}
+
+mtmd_image_preprocessor_llava_uhd::slice_instructions mtmd_image_preprocessor_minicpmv::get_slice_instructions(const clip_image_size & original_size) {
+    auto inst = mtmd_image_preprocessor_llava_uhd::get_slice_instructions(original_size);
+    if (hparams.n_merge != 2) {
+        return inst;
+    }
+
+    const int slice_size = hparams.image_size;
+    const float ratio = (float)original_size.width * original_size.height / (slice_size * slice_size);
+    if (ratio <= 1.0f) {
+        const int patch_size = hparams.patch_size * hparams.n_merge;
+        inst.overview_size = get_best_resize(original_size, slice_size, patch_size, true);
+        inst.refined_size  = clip_image_size{0, 0};
+        inst.grid_size     = clip_image_size{0, 0};
+        inst.slices.clear();
+    }
+    return inst;
 }
 
 //

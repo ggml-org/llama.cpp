@@ -58,9 +58,7 @@ struct mtmd_image_preprocessor {
  * NOTE: for the ordering of overview, set "ov_img_first" on the mtmd_context
  */
 struct mtmd_image_preprocessor_llava_uhd : mtmd_image_preprocessor {
-    mtmd_image_preprocessor_llava_uhd(const clip_ctx * ctx) :
-        mtmd_image_preprocessor(ctx),
-        is_minicpmv4_6(clip_get_projector_type(ctx) == PROJECTOR_TYPE_MINICPMV4_6) {}
+    mtmd_image_preprocessor_llava_uhd(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
     mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
 
     struct slice_coordinates {
@@ -85,11 +83,10 @@ struct mtmd_image_preprocessor_llava_uhd : mtmd_image_preprocessor {
     };
     slice_output slice_image(const clip_image_u8 & img, const slice_instructions & inst);
 
-private:
-    const bool is_minicpmv4_6;
-
+protected:
     clip_image_size get_best_resize(const clip_image_size & original_size, int scale_resolution, int patch_size, bool allow_upscale = false);
 
+private:
     clip_image_size resize_maintain_aspect_ratio(const clip_image_size & orig, const clip_image_size & target_max);
 
     /**
@@ -111,6 +108,11 @@ private:
     int ensure_divide(int length, int patch_size);
     clip_image_size get_refine_size(const clip_image_size & original_size, const clip_image_size & grid, int scale_resolution, int patch_size, bool allow_upscale = false);
     clip_image_size get_best_grid(const int max_slice_nums, const int multiple, const float log_ratio);
+};
+
+struct mtmd_image_preprocessor_minicpmv : mtmd_image_preprocessor_llava_uhd {
+    using mtmd_image_preprocessor_llava_uhd::mtmd_image_preprocessor_llava_uhd;
+    slice_instructions get_slice_instructions(const clip_image_size & original_size) override;
 };
 
 // downscale or upscale the input image to fixed size
