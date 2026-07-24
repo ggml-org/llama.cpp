@@ -1239,8 +1239,7 @@ static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(ggml_backend_m
             }
         }
 
-        if (tensor->flags & GGML_TENSOR_FLAG_FORCE_FP32_ALLREDUCE) {
-            GGML_ASSERT(tensor->op == GGML_OP_MUL_MAT);
+        if ((tensor->flags & GGML_TENSOR_FLAG_FORCE_FP32_ALLREDUCE) && tensor->op == GGML_OP_MUL_MAT) {
             GGML_ASSERT(tensor->src[0] != nullptr && tensor->src[1] != nullptr);
             const ggml_backend_meta_split_state weight_ss =
                 ggml_backend_meta_get_split_state(stc, tensor->src[0], /*assume_sync =*/ false);
