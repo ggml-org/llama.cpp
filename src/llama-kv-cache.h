@@ -112,7 +112,8 @@ public:
                llama_memory_t   mem_other,
         const layer_filter_cb & filter,
         const  layer_reuse_cb & reuse,
-        const  layer_share_cb & share);
+        const  layer_share_cb & share,
+                         bool   mla = false);
 
     ~llama_kv_cache() = default;
 
@@ -157,6 +158,7 @@ public:
     uint32_t get_n_stream() const;
 
     bool get_has_shift() const;
+    bool get_is_mla()    const;
 
     ggml_type type_k() const;
     ggml_type type_v() const;
@@ -220,6 +222,7 @@ public:
 private:
     const llama_model & model;
     const llama_hparams & hparams;
+    const bool is_mla;
 
     struct kv_layer {
         // layer index in the model
@@ -363,6 +366,7 @@ public:
     //
 
     uint32_t get_n_kv() const;
+    bool get_is_mla() const;
 
     ggml_type type_k() const;
     ggml_type type_v() const;

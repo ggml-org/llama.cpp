@@ -77,8 +77,9 @@ llama_kv_cache::llama_kv_cache(
            llama_memory_t   mem_other,
     const layer_filter_cb & filter,
     const  layer_reuse_cb & reuse,
-    const  layer_share_cb & share) :
-    model(model), hparams(hparams), v_trans(v_trans),
+    const  layer_share_cb & share,
+                     bool   mla) :
+    model(model), hparams(hparams), is_mla(mla || hparams.is_mla()), v_trans(v_trans),
     n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type),
     other(static_cast<llama_kv_cache *>(mem_other)),
     v_cells_impl(other ? other->v_cells_impl : std::make_shared<llama_kv_cells_vec>()),
@@ -157,8 +158,6 @@ llama_kv_cache::llama_kv_cache(
         LLAMA_LOG_WARN("%s: the V embeddings have different sizes across layers and FA is not enabled - padding V cache to %d\n",
                 __func__, hparams.n_embd_v_gqa_max());
     }
-
-    const bool is_mla = hparams.is_mla();
 
     for (uint32_t il = 0; il < n_layer; il++) {
         if (!hparams.has_kv(il)) {
@@ -1189,6 +1188,10 @@ uint32_t llama_kv_cache::get_n_stream() const {
     return n_stream;
 }
 
+bool llama_kv_cache::get_is_mla() const {
+    return is_mla;
+}
+
 bool llama_kv_cache::get_has_shift() const {
     bool result = false;
 
@@ -1264,6 +1267,9 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
     const int32_t ikv = map_layer_ids.at(il);
 
     auto * v = layers[ikv].v;
+    if (v == nullptr) {
+        return nullptr;
+    }
 
     const uint64_t kv_size      = get_size();
     const uint64_t n_embd_v_gqa = v->ne[0];
@@ -2565,6 +2571,10 @@ const llama_ubatch & llama_kv_cache_context::get_ubatch() const {
 
 uint32_t llama_kv_cache_context::get_n_kv() const {
     return n_kv;
+}
+
+bool llama_kv_cache_context::get_is_mla() const {
+    return kv->get_is_mla();
 }
 
 ggml_type llama_kv_cache_context::type_k() const {

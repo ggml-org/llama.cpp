@@ -22,6 +22,7 @@ public:
             uint32_t        ratio,
             uint32_t        state_size,
             uint32_t        n_embd_state,
+            uint32_t        n_rs_seq,
             const char    * name,
         const llama_memory_i::layer_filter_cb & filter);
 
@@ -29,17 +30,21 @@ public:
     void seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst);
     void apply_copies(const stream_copy_info & sc_info) const;
 
-    uint32_t get_ratio()    const;
+    uint32_t get_ratio()      const;
     uint32_t get_state_size() const;
-    uint32_t get_n_stream() const;
+    uint32_t get_n_stream()   const;
+    uint32_t get_n_rs_seq()   const;
+    uint32_t get_n_rows()     const;
 
     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const;
 
     void state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const;
     void state_read (llama_io_read_i  & io, llama_seq_id seq_id, llama_state_seq_flags flags);
 
-    ggml_tensor * get_kv   (ggml_context * ctx, int32_t il) const;
-    ggml_tensor * get_score(ggml_context * ctx, int32_t il) const;
+    ggml_tensor * get_kv      (ggml_context * ctx, int32_t il) const;
+    ggml_tensor * get_score   (ggml_context * ctx, int32_t il) const;
+    ggml_tensor * get_kv_all  (ggml_context * ctx, int32_t il) const;
+    ggml_tensor * get_score_all(ggml_context * ctx, int32_t il) const;
 
     ggml_tensor * cpy_kv   (ggml_context * ctx, ggml_tensor * cur, ggml_tensor * idxs, int32_t il) const;
     ggml_tensor * cpy_score(ggml_context * ctx, ggml_tensor * cur, ggml_tensor * idxs, int32_t il) const;
@@ -59,6 +64,7 @@ private:
     const uint32_t state_size;
     const uint32_t n_embd_state;
     const uint32_t n_stream;
+    const uint32_t n_rs_seq;
 
     std::vector<std::pair<ggml_context_ptr, ggml_backend_buffer_ptr>> ctxs_bufs;
 
@@ -93,6 +99,7 @@ public:
                      uint32_t   n_seq_max,
                      uint32_t   n_ubatch,
                      uint32_t   n_pad,
+                     uint32_t   n_rs_seq,
         const layer_filter_cb & filter,
         const  layer_reuse_cb & reuse);
 
@@ -141,6 +148,10 @@ public:
     llama_dsv4_comp_state * get_hca_state() const;
     llama_dsv4_comp_state * get_lid_state() const;
 
+    uint32_t get_n_rs_seq() const;
+    const std::vector<uint32_t> & get_rs_idx() const;
+    void reset_rs_idx_for_ubatches(const std::vector<llama_ubatch> & ubatches);
+
 private:
     llama_hparams hparams_raw;
     llama_hparams hparams_csa;
@@ -148,6 +159,9 @@ private:
     llama_hparams hparams_lid;
 
     const uint32_t n_seq_max;
+    const uint32_t n_rs_seq;
+
+    std::vector<uint32_t> rs_idx;
 
     std::unique_ptr<llama_kv_cache_iswa> kv_raw;
     std::unique_ptr<llama_kv_cache>      kv_csa;
@@ -267,6 +281,17 @@ public:
         // destination row ids for deterministic ring-state updates.
         std::vector<int32_t> state_persist_src_idxs;
         std::vector<int32_t> state_persist_dst_idxs;
+
+        // Device-side rollback restore copies snapshot planes back to the
+        // current compressor-state plane before the graph reads it.
+        std::vector<int32_t> state_restore_src_idxs;
+        std::vector<int32_t> state_restore_dst_idxs;
+
+        // Device-side rollback snapshots copy rows from the graph-local
+        // [persistent_state | current_ubatch_scratch] tensor into rollback
+        // planes after the graph has computed current-token compressor state.
+        std::vector<int32_t> state_snapshot_src_idxs;
+        std::vector<int32_t> state_snapshot_dst_idxs;
 
         // Flattened source row ids used for state-backed commits. Source rows
         // index the graph-local [persistent_state | current_ubatch_scratch]
