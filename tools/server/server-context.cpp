@@ -172,6 +172,8 @@ struct server_slot {
     common_speculative * spec;
 
     llama_tokens spec_draft;
+    int issue_23268_spec_rollback_streak = 0;
+    bool issue_23268_spec_disabled_this_turn = false;
     llama_tokens spec_prompt;
     std::vector<int32_t> spec_i_batch;
     common_prompt_checkpoint spec_ckpt;
@@ -309,6 +311,7 @@ struct server_slot {
             spec_i_batch.clear();
             spec_ckpt.clear();
         }
+        issue_23268_spec_disabled_this_turn = false;
         generated_tokens.clear();
         generated_token_probs.clear();
         json_schema = json();
@@ -420,7 +423,7 @@ struct server_slot {
     int get_n_draft_max() const {
         GGML_ASSERT(task);
 
-        if (!can_speculate()) {
+        if (!can_speculate() || issue_23268_spec_disabled_this_turn) {
             return 0;
         }
 
@@ -2944,6 +2947,9 @@ private:
                 if (n_draft_max > 0) {
                     GGML_ASSERT(slot.can_speculate());
 
+                    SLT_DBG(slot, "[issue#23268] PRE_DRAFT: spec_draft.empty() = %s, n_past = %d\n",
+                            slot.spec_draft.empty() ? "yes" : "no", slot.prompt.n_tokens());
+
                     if (!slot.spec_draft.empty()) {
                         // we have a previous (partial) draft to reuse
                         if (use_ckpt_tgt) {
@@ -3763,6 +3769,8 @@ private:
 
             slot.n_decoded += 1;
 
+            slot.issue_23268_spec_rollback_streak = 0;
+
             if (slot.n_decoded == 1) {
                 slot.t_start_generation = t_now;
                 slot.t_print_last = t_now;
@@ -3801,6 +3809,8 @@ private:
                 return;
             }
 
+            constexpr int issue_23268_spec_stuck_threshold = 3;
+
             // save the original draft size
             const size_t n_draft = slot.spec_draft.size();
 
@@ -3813,6 +3823,8 @@ private:
 
                 GGML_ASSERT(slot.spec_i_batch.size() == n_draft + 1);
                 auto accepted = common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft);
+
+                const int32_t issue_23268_fail_batch_idx = slot.spec_i_batch[accepted.size() - 1];
                 slot.spec_i_batch.clear();
 
                 GGML_ASSERT(accepted.size() >= 1);
@@ -3831,7 +3843,34 @@ private:
                         }
 
                         // partial acceptance is not supported by the context -> truncate the draft and restore the state
+                        // issue #23268: too many no-progress rollbacks in a row -> report, then escape the loop by
+                        // dropping the unstable correction token so the matched prefix commits on the next step.
+                        if (++slot.issue_23268_spec_rollback_streak > issue_23268_spec_stuck_threshold) {
+                            const size_t      fail_idx    = accepted.size() - 1;
+                            const llama_token tok_draft   = slot.spec_draft[fail_idx];
+                            const llama_token tok_sampled = accepted.back();
+                            const float *     logits      = llama_get_logits_ith(slot.ctx_tgt, issue_23268_fail_batch_idx);
+                            SLT_WRN(slot,
+                                "[issue#23268] STUCK speculative loop: %d consecutive checkpoint restores with no progress "
+                                "(matched %zu/%zu draft tokens), diverging at draft index %zu: "
+                                "draft %d ('%s', logit %.4f) vs sampled %d ('%s', logit %.4f). "
+                                "Applying mitigation to force progress - please report with server logs at "
+                                "https://github.com/ggml-org/llama.cpp/issues/23268\n",
+                                slot.issue_23268_spec_rollback_streak, fail_idx, slot.spec_draft.size(), fail_idx,
+                                tok_draft,   common_token_to_piece(slot.ctx_tgt, tok_draft).c_str(),   logits[tok_draft],
+                                tok_sampled, common_token_to_piece(slot.ctx_tgt, tok_sampled).c_str(), logits[tok_sampled]);
+
+                            if (accepted.size() == 1) {
+                                slot.issue_23268_spec_disabled_this_turn = true;
+                            }
+
+                            accepted.pop_back();
+                        }
+
                         slot.spec_draft = std::move(accepted);
+
+                        SLT_DBG(slot, "[issue#23268] ROLLBACK: streak = %d, spec_draft = %zu tokens\n",
+                                slot.issue_23268_spec_rollback_streak, slot.spec_draft.size());
 
                         const auto & ckpt = slot.spec_ckpt;
 
@@ -3861,6 +3900,12 @@ private:
                 }
 
                 common_speculative_accept(spec.get(), slot.id, accepted.size() - 1);
+
+                if (slot.issue_23268_spec_rollback_streak > issue_23268_spec_stuck_threshold) {
+                    SLT_INF(slot, "[issue#23268] recovered from stuck speculative loop after %d iterations\n",
+                            slot.issue_23268_spec_rollback_streak);
+                }
+                slot.issue_23268_spec_rollback_streak = 0;
 
                 slot.spec_draft = std::move(accepted);
             }
