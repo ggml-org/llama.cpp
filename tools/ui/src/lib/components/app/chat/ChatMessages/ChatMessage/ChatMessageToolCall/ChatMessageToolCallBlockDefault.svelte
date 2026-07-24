@@ -11,8 +11,7 @@
 		classifyToolResult,
 		formatJsonPretty,
 		parseToolResultWithImages,
-		type AgenticSection,
-		type ToolResultLine
+		type AgenticSection
 	} from '$lib/utils';
 	import { getBuiltinToolUi } from '$lib/constants/built-in-tools';
 	import type { DatabaseMessageExtra } from '$lib/types';

@@ -3,7 +3,7 @@
 // streaming text tokens trigger redundant JSON.parse calls on unchanged
 // tool call data.
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { deriveAgenticSections } from '$lib/utils/agentic';
 import type { ApiChatCompletionToolCall } from '$lib/types/api';
 import type { DatabaseMessage } from '$lib/types/database';
