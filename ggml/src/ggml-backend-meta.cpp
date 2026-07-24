@@ -10,9 +10,13 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <functional>
+#include <future>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <string>
 #include <tuple>
@@ -1314,6 +1318,34 @@ static enum ggml_status ggml_backend_meta_buffer_init_tensor(ggml_backend_buffer
 
 static void ggml_backend_meta_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     const size_t n_bufs = ggml_backend_meta_buffer_n_bufs(buffer);
+    static const bool parallel_set_enabled = getenv("GGML_META_PARALLEL_SET") != nullptr;
+    const bool parallel_set =
+        parallel_set_enabled &&
+        ggml_backend_buffer_get_usage(buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS &&
+        size >= 1024*1024;
+    if (parallel_set) {
+        static std::once_flag log_once;
+        std::call_once(log_once, [&] {
+            GGML_LOG_INFO("meta backend weight uploads: parallel across %zu devices\n", n_bufs);
+        });
+    }
+
+    auto run_setters = [&](std::vector<std::function<void()>> & setters) {
+        if (!parallel_set || setters.size() <= 1) {
+            for (auto & setter : setters) {
+                setter();
+            }
+            return;
+        }
+        std::vector<std::future<void>> futures;
+        futures.reserve(setters.size());
+        for (auto & setter : setters) {
+            futures.emplace_back(std::async(std::launch::async, std::move(setter)));
+        }
+        for (auto & future : futures) {
+            future.get();
+        }
+    };
     const ggml_backend_meta_split_state split_state = ggml_backend_meta_get_split_state(tensor, /*assume_sync =*/ false);
     GGML_ASSERT(ggml_is_contiguous(tensor) || split_state.axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED);
 
@@ -1337,16 +1369,22 @@ static void ggml_backend_meta_buffer_set_tensor(ggml_backend_buffer_t buffer, gg
             const int64_t blck_size = ggml_blck_size(tensor->type);
             for (size_t s = 0; s < split_state.n_segments; s++) {
                 for (size_t r = 0; r < split_state.nr[s]; r++) {
+                    std::vector<std::function<void()>> setters;
+                    setters.reserve(n_bufs);
                     for (size_t j = 0; j < n_bufs; j++) {
                         ggml_tensor * simple_tensor = ggml_backend_meta_buffer_simple_tensor(tensor, j);
                         GGML_ASSERT(split_state.ne[s*n_bufs + j] % blck_size == 0);
                         const size_t nbytes = split_state.ne[s*n_bufs + j]/blck_size * tensor->nb[0];
-                        ggml_backend_tensor_set_2d(simple_tensor, (const char *) data + offset_data,
-                            simple_offsets[j] + row_start * simple_tensor->nb[1], nbytes,
-                            row_count, simple_tensor->nb[1], tensor->nb[1]);
+                        const char * src = (const char *) data + offset_data;
+                        const size_t dst_offset = simple_offsets[j] + row_start * simple_tensor->nb[1];
+                        setters.emplace_back([=] {
+                            ggml_backend_tensor_set_2d(simple_tensor, src, dst_offset, nbytes,
+                                row_count, simple_tensor->nb[1], tensor->nb[1]);
+                        });
                         offset_data       += nbytes;
                         simple_offsets[j] += nbytes;
                     }
+                    run_setters(setters);
                 }
             }
             GGML_ASSERT(offset_data*row_count == size);
@@ -1363,15 +1401,21 @@ static void ggml_backend_meta_buffer_set_tensor(ggml_backend_buffer_t buffer, gg
 
         for (size_t s = 0; s < split_state.n_segments; s++) {
             for (size_t r = 0; r < split_state.nr[s]; r++) {
+                std::vector<std::function<void()>> setters;
+                setters.reserve(n_bufs);
                 for (size_t j = 0; j < n_bufs; j++) {
                     ggml_tensor * simple_tensor = ggml_backend_meta_buffer_simple_tensor(tensor, j);
                     const size_t nbytes = split_state.ne[s*n_bufs + j] * tensor->nb[1];
-                    ggml_backend_tensor_set_2d(simple_tensor, (const char *) data + offset_data,
-                        simple_offsets[j] + row_start * simple_tensor->nb[2], nbytes,
-                        row_count, simple_tensor->nb[2], tensor->nb[2]);
+                    const char * src = (const char *) data + offset_data;
+                    const size_t dst_offset = simple_offsets[j] + row_start * simple_tensor->nb[2];
+                    setters.emplace_back([=] {
+                        ggml_backend_tensor_set_2d(simple_tensor, src, dst_offset, nbytes,
+                            row_count, simple_tensor->nb[2], tensor->nb[2]);
+                    });
                     offset_data       += nbytes;
                     simple_offsets[j] += nbytes;
                 }
+                run_setters(setters);
             }
         }
         GGML_ASSERT(offset_data*row_count == size);
@@ -1389,23 +1433,33 @@ static void ggml_backend_meta_buffer_set_tensor(ggml_backend_buffer_t buffer, gg
             const int64_t i_start =  offset        /chunk_size_full;
             const int64_t i_stop  = (offset + size)/chunk_size_full;
             size_t offset_j = 0;
+            std::vector<std::function<void()>> setters;
+            setters.reserve(n_bufs);
             for (size_t j = 0; j < n_bufs; j++) {
                 ggml_tensor * simple_tensor = ggml_backend_meta_buffer_simple_tensor(tensor, j);
                 const size_t chunk_size_j = simple_tensor->nb[split_state.axis + 1];
                 if (chunk_size_j == 0) {
                     continue;
                 }
+                const char * src = (const char *) data + offset_j;
                 const size_t simple_offset = i_start * chunk_size_j;
-                ggml_backend_tensor_set_2d(simple_tensor, (const char *) data + offset_j, simple_offset, chunk_size_j, i_stop - i_start, chunk_size_j, chunk_size_full);
+                setters.emplace_back([=] {
+                    ggml_backend_tensor_set_2d(simple_tensor, src, simple_offset, chunk_size_j,
+                        i_stop - i_start, chunk_size_j, chunk_size_full);
+                });
                 offset_j += chunk_size_j;
             }
             GGML_ASSERT(offset_j == chunk_size_full);
+            run_setters(setters);
         } break;
         case GGML_BACKEND_SPLIT_AXIS_MIRRORED: {
+            std::vector<std::function<void()>> setters;
+            setters.reserve(n_bufs);
             for (size_t j = 0; j < n_bufs; j++) {
                 ggml_tensor * simple_tensor = ggml_backend_meta_buffer_simple_tensor(tensor, j);
-                ggml_backend_tensor_set(simple_tensor, data, offset, size);
+                setters.emplace_back([=] { ggml_backend_tensor_set(simple_tensor, data, offset, size); });
             }
+            run_setters(setters);
         } break;
         case GGML_BACKEND_SPLIT_AXIS_PARTIAL: {
             GGML_ASSERT(tensor->type == GGML_TYPE_F32);
@@ -1415,10 +1469,13 @@ static void ggml_backend_meta_buffer_set_tensor(ggml_backend_buffer_t buffer, gg
             for (int64_t i = 0; i < ne; i++) {
                 tmp.push_back(((const float *) data)[i] / n_bufs);
             }
+            std::vector<std::function<void()>> setters;
+            setters.reserve(n_bufs);
             for (size_t j = 0; j < n_bufs; j++) {
                 ggml_tensor * simple_tensor = ggml_backend_meta_buffer_simple_tensor(tensor, j);
-                ggml_backend_tensor_set(simple_tensor, tmp.data(), offset, size);
+                setters.emplace_back([=, &tmp] { ggml_backend_tensor_set(simple_tensor, tmp.data(), offset, size); });
             }
+            run_setters(setters);
         } break;
         default: {
             GGML_ABORT("fatal error");
