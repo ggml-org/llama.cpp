@@ -127,7 +127,18 @@ static void concat_T_sycl_non_cont(
     int64_t ne2, int64_t ne3, uint64_t nb0, uint64_t nb1, uint64_t nb2,
     uint64_t nb3, int32_t dim) {
   sycl::range<3> gridDim(ne3, ne2, ne1);
-  stream->parallel_for(sycl::nd_range<3>(gridDim, sycl::range<3>(1, 1, 1)), [=](sycl::nd_item<3> item_ct1) {
+
+  // Avoid oversubscribing device when there is not enough elements along the innermost dim to
+  // fill a full SYCL_CONCAT_BLOCK_SIZE. For larger # of elements, the full SYCL_CONCAT_BLOCK_SIZE
+  // is used.
+  // Env-overridable so fewer-core SKUs can try a narrower block without a rebuild.
+  static const int concat_block_env = ggml_sycl_get_env("GGML_SYCL_CONCAT_BLOCK_SIZE", SYCL_CONCAT_BLOCK_SIZE);
+  const int64_t concat_block = concat_block_env < WARP_SIZE ? (int64_t) WARP_SIZE : (int64_t) concat_block_env;
+  const int64_t ne0_pad   = GGML_PAD(ne0, WARP_SIZE);
+  const int64_t block_ne0 = ne0_pad < concat_block ? ne0_pad : (int64_t) concat_block;
+  sycl::range<3> blockDim(1, 1, block_ne0);
+
+  stream->parallel_for(sycl::nd_range<3>(gridDim * blockDim, blockDim), [=](sycl::nd_item<3> item_ct1) {
       int64_t i3 = item_ct1.get_group(0);
       int64_t i2 = item_ct1.get_group(1);
       int64_t i1 = item_ct1.get_group(2);
