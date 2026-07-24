@@ -307,6 +307,13 @@ static __dpct_inline__ T op_trunc(T x) {
 }
 
 template<typename T, typename F>
+static void unary_op_flat_kernel(const T * x, T * dst, const int k, const sycl::nd_item<1> & item_ct1, F func) {
+    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
+        dst[i] = func(x[i]);
+    }
+}
+
+template<typename T, typename F>
 static void unary_op_generic_kernel(
         const T * x,
         T * dst,
@@ -317,18 +324,25 @@ static void unary_op_generic_kernel(
         const sycl::nd_item<1> & item_ct1,
         F func) {
 
-        (void) ne3;
+    (void) ne3;
+    // 32-bit index math: k is int, so every logical index fits u32. 64-bit
+    // integer div/mod is emulated on Xe and dominates this kernel otherwise;
+    // byte offsets are widened back to size_t only for the final address math.
+    const uint32_t une0 = (uint32_t) ne0;
+    const uint32_t une1 = (uint32_t) ne1;
+    const uint32_t une2 = (uint32_t) ne2;
     SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
-        const int64_t i0 =  i % ne0;
-        const int64_t i1 = (i / ne0)        % ne1;
-        const int64_t i2 = (i / (ne0*ne1))  % ne2;
-        const int64_t i3 =  i / (ne0*ne1*ne2);
+        uint32_t t = (uint32_t) i;
+        const uint32_t i0 = t % une0; t /= une0;
+        const uint32_t i1 = t % une1; t /= une1;
+        const uint32_t i2 = t % une2; t /= une2;
+        const uint32_t i3 = t;
 
         const char * src_base = (const char *) x;
         char       * dst_base = (char *) dst;
 
-        const T * srcp = (const T *)(src_base + i0*nb0  + i1*nb1  + i2*nb2  + i3*nb3 );
-        T *       dstp = (T *)(dst_base + i0*nbd0 + i1*nbd1 + i2*nbd2 + i3*nbd3);
+        const T * srcp = (const T *)(src_base + (size_t) i0*nb0  + (size_t) i1*nb1  + (size_t) i2*nb2  + (size_t) i3*nb3 );
+        T *       dstp = (T *)(dst_base + (size_t) i0*nbd0 + (size_t) i1*nbd1 + (size_t) i2*nbd2 + (size_t) i3*nbd3);
 
         *dstp = func(*srcp);
     }
@@ -609,24 +623,37 @@ static inline void ggml_sycl_op_unary(
     const size_t  nbd2 = dst->nb[2];
     const size_t  nbd3 = dst->nb[3];
 
+    // Hot unary ops (FFN/GDN silu, sigmoid, ...) run on contiguous tensors;
+    // skip the strided index math entirely for them.
+    const bool contiguous = ggml_is_contiguous(src0) && ggml_is_contiguous(dst);
+
     ggml_sycl_detail::dispatch_ggml_sycl_op_unary(ctx, dst,
         [=](const auto* src, auto* dst_ptr, int k_elements, queue_ptr stream) {
 
             const int num_blocks = ceil_div(k_elements, 256);
 
-            stream->parallel_for(
-                sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(256),
-                                  sycl::range<1>(256)),
-                [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                    unary_op_generic_kernel(
-                        src, dst_ptr, k_elements,
-                        ne0, ne1, ne2, ne3,
-                        nb0, nb1, nb2, nb3,
-                        nbd0, nbd1, nbd2, nbd3,
-                        item_ct1,
-                        func
-                    );
-                });
+            if (contiguous) {
+                stream->parallel_for(
+                    sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(256),
+                                      sycl::range<1>(256)),
+                    [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                        unary_op_flat_kernel(src, dst_ptr, k_elements, item_ct1, func);
+                    });
+            } else {
+                stream->parallel_for(
+                    sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(256),
+                                      sycl::range<1>(256)),
+                    [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                        unary_op_generic_kernel(
+                            src, dst_ptr, k_elements,
+                            ne0, ne1, ne2, ne3,
+                            nb0, nb1, nb2, nb3,
+                            nbd0, nbd1, nbd2, nbd3,
+                            item_ct1,
+                            func
+                        );
+                    });
+            }
         });
 }
 
