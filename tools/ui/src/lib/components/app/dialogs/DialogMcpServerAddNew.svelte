@@ -29,7 +29,6 @@
 	let nameAutoFilled = $state('');
 	let nameTouched = $state(false);
 
-	const previewHealthId = `${MCP_SERVER_ID_PREFIX}-preview`;
 	let previewRun = 0;
 
 	function handleNameChange(value: string) {
@@ -138,18 +137,23 @@
 		if (!open || newServerUrlError || !url) return;
 
 		const run = ++previewRun;
+		// One throwaway id per run: concurrent previews (URL typed, then the
+		// bearer token pasted) would poison each other's shared health state.
+		const previewId = `${MCP_SERVER_ID_PREFIX}-preview-${run}`;
 		const timer = setTimeout(async () => {
 			await mcpStore.runHealthCheck({
-				id: previewHealthId,
+				id: previewId,
 				enabled: false,
 				url,
 				headers: headers || undefined,
 				useProxy
 			});
 
-			if (run !== previewRun) return;
+			const state = mcpStore.getHealthCheckState(previewId);
 
-			const state = mcpStore.getHealthCheckState(previewHealthId);
+			mcpStore.clearHealthCheck(previewId);
+
+			if (run !== previewRun) return;
 
 			if (state.status !== HealthCheckStatus.SUCCESS) return;
 
@@ -199,7 +203,6 @@
 			nameAutoFilled = '';
 			nameTouched = false;
 			previewRun++;
-			mcpStore.clearHealthCheck(previewHealthId);
 			newServerHeaders = '';
 			newServerUseProxy = false;
 			newServerWantsAuthorization = false;
