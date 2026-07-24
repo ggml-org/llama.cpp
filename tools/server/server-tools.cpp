@@ -1120,6 +1120,10 @@ static std::vector<std::unique_ptr<server_tool>> build_tools() {
 
 void server_tools::setup(const std::vector<std::string> & enabled_tools) {
     if (!enabled_tools.empty()) {
+        if (!common_subproc::is_supported()) {
+            throw std::runtime_error("subprocess is not enabled on this build");
+        }
+
         std::unordered_set<std::string> enabled_set(enabled_tools.begin(), enabled_tools.end());
         auto all_tools = build_tools();
 

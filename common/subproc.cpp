@@ -1,4 +1,16 @@
+#include "common.h"
+
 #include "subproc.h"
+
+bool common_subproc::is_supported() {
+#ifdef LLAMA_SUBPROCESS
+    return true;
+#else
+    return false;
+#endif
+}
+
+#ifdef LLAMA_SUBPROCESS
 
 static std::vector<char *> to_cstr_vec(const std::vector<std::string> & v) {
     std::vector<char *> r;
@@ -78,3 +90,46 @@ int common_subproc::join() {
     }
     return exit_code;
 }
+
+#else // !LLAMA_SUBPROCESS
+
+common_subproc::~common_subproc() = default;
+
+bool common_subproc::create(
+        const std::vector<std::string> &,
+        int,
+        const std::vector<std::string> &,
+        const char *) {
+    GGML_UNUSED(proc);
+    GGML_UNUSED(is_created);
+    return false;
+}
+
+bool common_subproc::has_handle() const {
+    return false;
+}
+
+bool common_subproc::alive() {
+    return false;
+}
+
+FILE * common_subproc::stdin_file() {
+    return nullptr;
+}
+
+FILE * common_subproc::stdout_file() {
+    return nullptr;
+}
+
+FILE * common_subproc::stderr_file() {
+    return nullptr;
+}
+
+void common_subproc::terminate() {
+}
+
+int common_subproc::join() {
+    return -1;
+}
+
+#endif // LLAMA_SUBPROCESS

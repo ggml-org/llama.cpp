@@ -1,10 +1,19 @@
 #pragma once
 
-#include <sheredom/subprocess.h>
-
 #include <cstdio>
 #include <string>
 #include <vector>
+
+#ifdef LLAMA_SUBPROCESS
+#include <sheredom/subprocess.h>
+#else
+// dummy values to allow compilation when subprocess is disabled
+struct subprocess_s {};
+static constexpr int subprocess_option_no_window = 0;
+static constexpr int subprocess_option_combined_stdout_stderr = 0;
+static constexpr int subprocess_option_inherit_environment = 0;
+static constexpr int subprocess_option_search_user_path = 0;
+#endif
 
 // RAII-style wrapper around https://github.com/sheredom/subprocess.h,
 // exposing method calls instead of free functions operating on subprocess_s.
@@ -24,6 +33,9 @@ struct common_subproc {
             const char * cwd = nullptr);
 
     bool alive();
+
+    // true if LLAMA_SUBPROCESS was enabled at build time; when false, create() always fails
+    static bool is_supported();
 
     FILE * stdin_file();
     FILE * stdout_file();

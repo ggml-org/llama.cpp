@@ -1529,6 +1529,10 @@ static std::optional<server_model_meta> resolve_child_for_conv(
 }
 
 void server_models_routes::init_routes() {
+    if (!common_subproc::is_supported()) {
+        throw std::runtime_error("subprocess is not enabled on this build");
+    }
+
     this->get_router_props = [this](const server_http_req & req) {
         std::string name = req.get_param("model");
         if (name.empty()) {
