@@ -78,7 +78,6 @@
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
 	import type { DatabaseMessageExtra } from '$lib/types/database';
 	import { config } from '$lib/stores/settings.svelte';
-	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
 
 	interface Props {
 		attachments?: DatabaseMessageExtra[];
@@ -828,7 +827,7 @@
 		: ''}"
 >
 	{#each renderedBlocks as block (block.id)}
-		<div class="markdown-block" data-block-id={block.id} use:fadeInView={{ skipIfVisible: true }}>
+		<div class="markdown-block" data-block-id={block.id}>
 			{@html block.html}
 		</div>
 	{/each}

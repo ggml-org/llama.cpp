@@ -7,7 +7,6 @@
 	import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants';
 	import { REASONING_TAGS } from '$lib/constants/agentic';
 	import { MessageRole, AttachmentType, AgenticSectionType } from '$lib/enums';
-	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
 	import {
 		ChatMessageAssistant,
 		ChatMessageUser,
@@ -328,7 +327,7 @@
 	}
 </script>
 
-<div use:fadeInView class="chat-message">
+<div class="chat-message">
 	{#if message.role === MessageRole.SYSTEM}
 		<ChatMessageSystem
 			bind:textareaElement
@@ -398,3 +397,15 @@
 		/>
 	{/if}
 </div>
+
+<style>
+	/*
+	 * The browser skips layout and paint for messages outside the
+	 * viewport. contain-intrinsic-size reuses the last rendered size
+	 * once known; 500px sizes messages that have never been rendered.
+	 */
+	.chat-message {
+		content-visibility: auto;
+		contain-intrinsic-size: auto 500px;
+	}
+</style>
