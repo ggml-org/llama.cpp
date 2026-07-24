@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <unordered_set>
 #include <functional>
+#include <memory>
 
 namespace fs = std::filesystem;
 
@@ -24,7 +25,7 @@ json server_tool::to_json() const {
     return {
         {"display_name", display_name},
         {"tool", name},
-        {"type", "builtin"},
+        {"type", type()},
         {"permissions", json{
             {"write", permission_write}
         }},
@@ -1102,6 +1103,60 @@ struct server_tools_res : server_http_res {
     }
 };
 
+//
+// server_mcp_tool: exposes one tool from a running MCP server as a server_tool.
+// Invocation delegates to server_mcp::call_tool, which lazily (re)spawns the transport.
+//
+struct server_mcp_tool : server_tool {
+    std::string        server_name;
+    std::string        tool_name;
+    server_mcp_tool_def def;
+    // non-owning: the manager is owned by a shared_ptr in llama_server() and outlives every tool
+    // invocation (the HTTP server is drained before it is destroyed in clean_up())
+    server_mcp * mcp_mgr = nullptr;
+
+    server_mcp_tool(server_mcp_tool_def d, server_mcp * mgr)
+        : server_name(d.server_name)
+        , tool_name(d.name)
+        , def(std::move(d))
+        , mcp_mgr(mgr)
+    {
+        name = server_name + "_" + tool_name;
+        display_name = name;
+        permission_write = false;
+        support_stream = false;
+    }
+
+    std::string type() const override { return "mcp"; }
+
+    json get_definition() const override {
+        json schema = def.input_schema;
+        if (schema.is_null() || !schema.is_object()) {
+            schema = json::object();
+        }
+        return {
+            {"type", "function"},
+            {"function", {
+                {"name", name},
+                {"description", def.description},
+                {"parameters", schema},
+            }},
+        };
+    }
+
+    json invoke(json params, server_tool::stream * st) const override {
+        if (!mcp_mgr) {
+            return {{"error", "MCP manager not available"}};
+        }
+        // pass the caller's liveness through so a disconnect cancels the in-flight RPC
+        std::function<bool()> should_stop = nullptr;
+        if (st) {
+            should_stop = [st]() { return !st->alive(); };
+        }
+        return mcp_mgr->call_tool(server_name, tool_name, params, should_stop);
+    }
+};
+
 static server_tool & find_tool(std::vector<std::unique_ptr<server_tool>> & tools, const std::string & name, bool require_stream) {
     for (auto & t : tools) {
         if (t->name == name) {
@@ -1130,7 +1185,8 @@ static std::vector<std::unique_ptr<server_tool>> build_tools() {
     return tools;
 }
 
-void server_tools::setup(const std::vector<std::string> & enabled_tools) {
+void server_tools::setup(const std::vector<std::string> & enabled_tools,
+                         server_mcp * mcp_mgr) {
     if (!enabled_tools.empty()) {
         std::unordered_set<std::string> enabled_set(enabled_tools.begin(), enabled_tools.end());
         auto all_tools = build_tools();
@@ -1158,6 +1214,30 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools) {
             if (enabled_set.count(t->name) > 0 || enabled_set.count("all") > 0) {
                 tools.push_back(std::move(t));
             }
+        }
+    }
+
+    // append MCP tools (discovered during warmup), skipping any that collide with a built-in
+    // or another MCP tool of the same "<server>_<tool>" name
+    if (mcp_mgr) {
+        std::unordered_set<std::string> seen_names;
+        for (auto & t : tools) {
+            seen_names.insert(t->name);
+        }
+        size_t n_added = 0;
+        for (const auto & def : mcp_mgr->list_tools()) {
+            std::string mcp_name = def.server_name + "_" + def.name;
+            if (seen_names.count(mcp_name)) {
+                SRV_WRN("MCP tool \"%s\" from server \"%s\" collides with an existing tool, skipping\n",
+                    mcp_name.c_str(), def.server_name.c_str());
+                continue;
+            }
+            seen_names.insert(mcp_name);
+            tools.push_back(std::make_unique<server_mcp_tool>(def, mcp_mgr));
+            n_added++;
+        }
+        if (n_added > 0) {
+            SRV_INF("Added %zu MCP tools\n", n_added);
         }
     }
 
