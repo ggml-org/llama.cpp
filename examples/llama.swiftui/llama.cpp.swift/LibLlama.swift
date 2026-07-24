@@ -319,7 +319,9 @@ actor LlamaContext {
             result.deallocate()
         }
         let nTokens = llama_token_to_piece(vocab, token, result, 8, 0, false)
-
+        if nTokens == Int32.min {
+            return []
+        }
         if nTokens < 0 {
             let newResult = UnsafeMutablePointer<Int8>.allocate(capacity: Int(-nTokens))
             newResult.initialize(repeating: Int8(0), count: Int(-nTokens))

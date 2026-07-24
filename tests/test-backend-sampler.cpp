@@ -8,6 +8,7 @@
 #undef NDEBUG
 #endif
 
+#include <limits>
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
@@ -248,6 +249,9 @@ struct test_context {
         std::string piece;
         piece.resize(piece.capacity());  // using string internal cache, 15 bytes + '\n'
         const int n_chars = llama_token_to_piece(vocab, token, &piece[0], piece.size(), 0, special);
+        if (n_chars == std::numeric_limits<int32_t>::min()) {
+            throw std::runtime_error("Token to piece failed: supplied token is invalid");
+        }
         if (n_chars < 0) {
             piece.resize(-n_chars);
             int check = llama_token_to_piece(vocab, token, &piece[0], piece.size(), 0, special);
