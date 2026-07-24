@@ -1,0 +1,37 @@
+# OTel Collector agent — runs on the Fedora GPU host, ships directly to Mimir.
+# Deploy as a systemd service alongside llama-server. See README-metrics.md.
+receivers:
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: llama-server
+          scrape_interval: 15s
+          static_configs:
+            - targets: ['127.0.0.1:8081', '127.0.0.1:8082']  # one per rung — set to your ports
+  hostmetrics:
+    collection_interval: 15s
+    scrapers: { cpu: {}, memory: {}, load: {}, filesystem: {}, network: {} }
+  dcgm:
+    collection_interval: 15s
+    # Requires the nvidia-dcgm service AND an otelcol-contrib build.
+    # Fallback (core distro / no DCGM): delete this receiver and add a prometheus
+    # scrape job for nvidia_gpu_exporter instead.
+
+processors:
+  resourcedetection:
+    detectors: [system]
+    system: { hostname_sources: [os] }
+  batch: {}
+
+exporters:
+  prometheusremotewrite:
+    endpoint: "http://<mimir-host>:9009/api/v1/push"
+    external_labels: { host: "<gpuhost>" }
+    # headers: { X-Scope-OrgID: "<tenant>" }   # required only if Mimir is multi-tenant
+
+service:
+  pipelines:
+    metrics:
+      receivers: [prometheus, hostmetrics, dcgm]
+      processors: [resourcedetection, batch]
+      exporters: [prometheusremotewrite]
