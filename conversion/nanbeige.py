@@ -29,4 +29,3 @@ class NanbeigeModel(LlamaModel):
         skip_loop_final_norm = bool(hparams.get("skip_loop_final_norm", False))
         self.gguf_writer.add_skip_loop_final_norm(skip_loop_final_norm)
         logger.info(f"gguf: skip_loop_final_norm = {skip_loop_final_norm}")
-
