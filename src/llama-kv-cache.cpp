@@ -2054,7 +2054,12 @@ void llama_kv_cache::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama
 
         bool res = true;
         res = res && state_read_meta(io, strm, cell_count, sinfo, seq_id);
-        res = res && state_read_data(io, strm, cell_count, sinfo);
+
+        try {
+            res = res && state_read_data(io, strm, cell_count, sinfo);
+        } catch (...) {
+            res = false;
+        }
 
         if (!res) {
             if (seq_id == -1) {

@@ -1083,6 +1083,7 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_CAUSAL,        hparams.causal_attn,     false);
     ml.get_key(LLM_KV_POOLING_TYPE,            hparams.pooling_type,    false);
     ml.get_key(LLM_KV_BLOCK_COUNT,             hparams.n_layer_all);
+    GGML_ASSERT(hparams.n_layer_all > 0 && hparams.n_layer_all <= LLAMA_MAX_LAYERS);
     ml.get_key(LLM_KV_EXPERT_COUNT,            hparams.n_expert,        false);
     ml.get_key(LLM_KV_EXPERT_USED_COUNT,       hparams.n_expert_used,   false);
     ml.get_key(LLM_KV_EXPERT_GROUP_COUNT,      hparams.n_expert_groups, false);
