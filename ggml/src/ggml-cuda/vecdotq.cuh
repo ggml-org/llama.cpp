@@ -109,6 +109,9 @@ static __device__ __forceinline__ uint32_t unpack_ksigns(const uint8_t v) {
 #define VDR_Q1_0_Q8_1_MMVQ 1  // Process one 32-element chunk at a time for parallelism
 #define VDR_Q1_0_Q8_1_MMQ  4  // Q1_0 has 128 bits (4 ints) per block
 
+#define VDR_Q2_0_Q8_1_MMVQ 1  // Process one 32-element chunk at a time for parallelism
+#define VDR_Q2_0_Q8_1_MMQ  2  // Q2_0 group 64: 128 bits (4 ints) per block, 2 32-element chunks
+
 #define VDR_Q4_0_Q8_1_MMVQ 2
 #define VDR_Q4_0_Q8_1_MMQ  4
 
@@ -720,6 +723,64 @@ static __device__ __forceinline__ float vec_dot_q1_0_q8_1(
     // Apply Q1_0's single scale and this chunk's Q8_1 scale
     const float d8 = __low2float(bq8_1_chunk->ds);
     return d1 * d8 * sumi;
+}
+
+static __device__ __forceinline__ float vec_dot_q2_0_q8_1(
+    const void * __restrict__ vbq, const block_q8_1 * __restrict__ bq8_1, const int & kbx, const int & iqs) {
+
+    const block_q2_0 * bq2_0 = (const block_q2_0 *) vbq + kbx;
+
+    // Q2_0 (group 64): 64 elements with ONE scale, 2 bits per element (4 elements per byte)
+    // Q8_1: 32 elements per block with individual scales
+    // iqs selects which of the 2 chunks of 32 elements to process (0-1)
+
+    const float d2 = bq2_0->d;
+
+    // Process only the chunk specified by iqs
+    const block_q8_1 * bq8_1_chunk = bq8_1 + iqs;
+
+    // Load 64 bits (8 bytes) for this chunk from Q2_0: bytes [8*iqs, 8*iqs+8)
+    const int offset = iqs * 8;
+    const int v0 = bq2_0->qs[offset + 0] | (bq2_0->qs[offset + 1] << 8) |
+                   (bq2_0->qs[offset + 2] << 16) | (bq2_0->qs[offset + 3] << 24);
+    const int v1 = bq2_0->qs[offset + 4] | (bq2_0->qs[offset + 5] << 8) |
+                   (bq2_0->qs[offset + 6] << 16) | (bq2_0->qs[offset + 7] << 24);
+
+    // Unpack 32 2-bit codes into 8 int32s, each holding 4 signed int8 symbols in {-1,0,1,2}.
+    // Stored code c in {0,1,2,3} -> symbol s = c - 1.
+    int vi_bytes[8];
+#pragma unroll
+    for (int j = 0; j < 4; ++j) {
+        const int shift = j * 8;
+        const int codes = (v0 >> shift) & 0xFF;
+        const int c0 = ((codes >> 0) & 0x3) - 1;
+        const int c1 = ((codes >> 2) & 0x3) - 1;
+        const int c2 = ((codes >> 4) & 0x3) - 1;
+        const int c3 = ((codes >> 6) & 0x3) - 1;
+        vi_bytes[j] = (c0 & 0xFF) | ((c1 & 0xFF) << 8) | ((c2 & 0xFF) << 16) | ((c3 & 0xFF) << 24);
+    }
+#pragma unroll
+    for (int j = 0; j < 4; ++j) {
+        const int shift = j * 8;
+        const int codes = (v1 >> shift) & 0xFF;
+        const int c0 = ((codes >> 0) & 0x3) - 1;
+        const int c1 = ((codes >> 2) & 0x3) - 1;
+        const int c2 = ((codes >> 4) & 0x3) - 1;
+        const int c3 = ((codes >> 6) & 0x3) - 1;
+        vi_bytes[4 + j] = (c0 & 0xFF) | ((c1 & 0xFF) << 8) | ((c2 & 0xFF) << 16) | ((c3 & 0xFF) << 24);
+    }
+
+    // Compute dot product for this 32-element chunk
+    int sumi = 0;
+#pragma unroll
+    for (int j = 0; j < 8; ++j) {
+        const int u = get_int_b4(bq8_1_chunk->qs, j);
+        sumi = ggml_cuda_dp4a(vi_bytes[j], u, sumi);
+    }
+
+    // Apply Q2_0's single scale and this chunk's Q8_1 scale
+    const float d8 = __low2float(bq8_1_chunk->ds);
+    return d2 * d8 * sumi;
 }
 
 static __device__ __forceinline__ float vec_dot_q4_0_q8_1(
