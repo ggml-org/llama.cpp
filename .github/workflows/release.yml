@@ -693,7 +693,9 @@ jobs:
       matrix:
         include:
           - arch: 'x64'
+            openmp_dll: 'C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\Llvm\x64\bin\libomp.dll'
           - arch: 'arm64'
+            openmp_dll: 'C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\Llvm\ARM64\bin\libomp.dll'
 
     steps:
       - name: Clone
@@ -739,7 +741,7 @@ jobs:
       - name: Pack artifacts
         id: pack_artifacts
         run: |
-          Copy-Item "C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Redist\MSVC\14.51.36231\debug_nonredist\${{ matrix.arch }}\Microsoft.VC145.OpenMP.LLVM\libomp140.${{ matrix.arch == 'x64' && 'x86_64' || 'aarch64' }}.dll" .\build\bin\Release\
+          Copy-Item "${{ matrix.openmp_dll }}" .\build\bin\Release\
           7z a -snl llama-bin-win-cpu-${{ matrix.arch }}.zip .\build\bin\Release\*
 
       - name: Upload artifacts
