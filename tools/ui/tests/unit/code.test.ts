@@ -79,4 +79,25 @@ describe('highlightCode', () => {
 		const framed = highlightCode('\nfunction foo() {}\n', 'javascript');
 		expect(framed).toBe(trimmed);
 	});
+
+	it('auto-detects an unknown language by default', () => {
+		const html = highlightCode('const answer = 42;', 'not-a-language');
+		expect(html).toContain('hljs-');
+	});
+
+	it('escapes instead of auto-detecting when autoDetect is false', () => {
+		const html = highlightCode('const answer = 42;', 'not-a-language', false);
+		expect(html).not.toContain('hljs-');
+		expect(html).toBe('const answer = 42;');
+	});
+
+	it('still highlights a known language when autoDetect is false', () => {
+		const html = highlightCode('const answer = 42;', 'javascript', false);
+		expect(html).toContain('hljs-');
+	});
+
+	it('escapes html metacharacters when falling back to plain text', () => {
+		const html = highlightCode('<script>a && b</script>', 'not-a-language', false);
+		expect(html).toBe('&lt;script&gt;a &amp;&amp; b&lt;/script&gt;');
+	});
 });

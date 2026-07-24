@@ -89,10 +89,15 @@
 	</Collapsible.Trigger>
 
 	<Collapsible.Content>
-		<div class="pl-1.5 grid min-w-0" style="min-height: var(--min-message-height);">
-			<div class="min-w-0 border-l border-muted-foreground/20 pl-4 pb-2 my-2">
-				{@render children()}
+		<!-- Collapsible.Content renders its children unconditionally and only sets
+		     `hidden`, so a closed block would keep re-rendering its whole body on
+		     every streamed token. Gate on `open` so collapsed content costs nothing. -->
+		{#if open}
+			<div class="pl-1.5 grid min-w-0" style="min-height: var(--min-message-height);">
+				<div class="min-w-0 border-l border-muted-foreground/20 pl-4 pb-2 my-2">
+					{@render children()}
+				</div>
 			</div>
-		</div>
+		{/if}
 	</Collapsible.Content>
 </Collapsible.Root>

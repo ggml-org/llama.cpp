@@ -169,8 +169,21 @@ class ConversationsStore {
 	 * Updates a message at a specific index in active messages
 	 */
 	updateMessageAtIndex(index: number, updates: Partial<DatabaseMessage>): void {
-		if (index !== -1 && this.activeMessages[index]) {
-			this.activeMessages[index] = { ...this.activeMessages[index], ...updates };
+		const message = index === -1 ? undefined : this.activeMessages[index];
+
+		if (!message) return;
+
+		// Assign field by field rather than replacing the object. Replacing it
+		// changes the array slot, which invalidates every consumer that merely
+		// walks the list - notably ChatMessages.displayMessages, which rebuilds
+		// entries for every message in the conversation. Deep $state proxies make
+		// per-field writes fine-grained, so only readers of the changed field wake.
+		const target = message as unknown as Record<string, unknown>;
+
+		for (const [key, value] of Object.entries(updates)) {
+			if (target[key] !== value) {
+				target[key] = value;
+			}
 		}
 	}
 
