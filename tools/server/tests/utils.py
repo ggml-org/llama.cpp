@@ -116,6 +116,8 @@ class ServerProcess:
     gcp_compat: bool = False
     server_tools: str | None = None
     cors_origins: str | None = None
+    mcp_servers_config: str | None = None
+    mcp_servers_json: str | None = None
 
     # session variables
     process: subprocess.Popen | None = None
@@ -265,6 +267,10 @@ class ServerProcess:
             server_args.append("--ui-mcp-proxy")
         if self.server_tools:
             server_args.extend(["--tools", self.server_tools])
+        if self.mcp_servers_config:
+            server_args.extend(["--mcp-servers-config", self.mcp_servers_config])
+        if self.mcp_servers_json:
+            server_args.extend(["--mcp-servers-json", self.mcp_servers_json])
         if self.backend_sampling:
             server_args.append("--backend_sampling")
         if self.gcp_compat:
@@ -500,6 +506,9 @@ class ServerPreset:
             if callable(method) and name != "load_all"
         ]
         for server in servers:
+            # Skip router / no-model presets: they have nothing to download
+            if server.model_file is None and server.model_hf_repo is None:
+                continue
             server.offline = False
             server.start()
             server.stop()

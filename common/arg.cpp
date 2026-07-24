@@ -850,7 +850,11 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         params.kv_overrides.back().key[0] = 0;
     }
 
-    if (!params.server_tools.empty() && !params.cors_origins_explicit) {
+    // MCP servers register the same live POST /tools endpoint as --tools (see the
+    // has_tools handling in server.cpp), so they must get the same CORS default -
+    // otherwise an MCP-only config would leave it wide open to any origin.
+    const bool has_mcp_servers = !params.mcp_servers_config.empty() || !params.mcp_servers_json.empty();
+    if ((!params.server_tools.empty() || has_mcp_servers) && !params.cors_origins_explicit) {
         LOG_WRN("server tools are enabled, using localhost as default CORS origin (change via --cors-origins)\n");
         params.cors_origins = "localhost";
     }
@@ -3261,6 +3265,22 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.server_tools = parse_csv_row(value);
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TOOLS"));
+    add_opt(common_arg(
+        {"--mcp-servers-config"}, "PATH",
+        "experimental: path to JSON file with MCP server definitions (Cursor-compatible format) - do not enable in untrusted environments (default: none)\n"
+        "note: for security reasons, this will limit --cors-origins to localhost by default",
+        [](common_params & params, const std::string & value) {
+            params.mcp_servers_config = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MCP_SERVERS_CONFIG"));
+    add_opt(common_arg(
+        {"--mcp-servers-json"}, "JSON",
+        "experimental: inline JSON with MCP server definitions (Cursor-compatible format) - do not enable in untrusted environments (default: none)\n"
+        "note: for security reasons, this will limit --cors-origins to localhost by default",
+        [](common_params & params, const std::string & value) {
+            params.mcp_servers_json = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MCP_SERVERS_JSON"));
     add_opt(common_arg(
         {"-ag", "--agent"},
         {"-no-ag", "--no-agent"},

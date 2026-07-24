@@ -4,6 +4,7 @@
 #include "server-cors-proxy.h"
 #include "server-stream.h"
 #include "server-tools.h"
+#include "server-mcp.h"
 
 #include "arg.h"
 #include "build-info.h"
@@ -87,6 +88,12 @@ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t 
 
 int llama_server(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
+
+#ifndef _WIN32
+    // Ignore SIGPIPE so the server does not crash if an MCP child exits
+    // while we are writing to its stdin.
+    signal(SIGPIPE, SIG_IGN);
+#endif
 
     // own arguments required by this example
     common_params params;
@@ -326,10 +333,48 @@ int llama_server(common_params & params, int argc, char ** argv) {
         ctx_http.post("/cors-proxy",      ex_wrapper(res_403));
     }
 
-    // EXPERIMENTAL built-in tools
-    if (!params.server_tools.empty()) {
+    // EXPERIMENTAL built-in tools and MCP servers
+    std::vector<server_mcp_server_config> mcp_configs;
+    std::shared_ptr<server_mcp_manager> mcp_mgr;
+    bool has_tools = !params.server_tools.empty();
+    bool has_mcp = !params.mcp_servers_config.empty() || !params.mcp_servers_json.empty();
+
+    if (has_mcp) {
         try {
-            tools.setup(params.server_tools);
+            if (!params.mcp_servers_config.empty()) {
+                auto file_configs = server_mcp_server_config::parse_from_file(params.mcp_servers_config);
+                mcp_configs.insert(mcp_configs.end(), file_configs.begin(), file_configs.end());
+            }
+            if (!params.mcp_servers_json.empty()) {
+                auto json_configs = server_mcp_server_config::parse_from_json(params.mcp_servers_json);
+                mcp_configs.insert(mcp_configs.end(), json_configs.begin(), json_configs.end());
+            }
+        } catch (const std::exception & e) {
+            SRV_ERR("MCP config parsing failed: %s\n", e.what());
+            return 1;
+        }
+
+        if (!mcp_configs.empty()) {
+            mcp_mgr = std::make_shared<server_mcp_manager>(std::move(mcp_configs));
+            SRV_WRN("%s", "-----------------\n");
+            SRV_WRN("%s", "MCP servers are enabled, do not expose server to untrusted environments\n");
+            SRV_WRN("%s", "This feature is EXPERIMENTAL and may be changed in the future\n");
+            SRV_WRN("%s", "-----------------\n");
+
+            // Warmup: spawn each MCP server, list tools, then shutdown
+            try {
+                mcp_mgr->warmup();
+            } catch (const std::exception & e) {
+                SRV_WRN("MCP warmup failed: %s\n", e.what());
+            }
+
+            has_tools = true;
+        }
+    }
+
+    if (has_tools) {
+        try {
+            tools.setup(params.server_tools, mcp_mgr);
         } catch (const std::exception & e) {
             SRV_ERR("tools setup failed: %s\n", e.what());
             return 1;
@@ -378,13 +423,16 @@ int llama_server(common_params & params, int argc, char ** argv) {
     if (is_router_server) {
         SRV_INF("%s", "starting server in router mode. models will be automatically loaded on-demand\n");
 
-        clean_up = [&models_routes]() {
+        clean_up = [&models_routes, &mcp_mgr]() {
             SRV_INF("%s: cleaning up before exit...\n", __func__);
             // stop the session GC first, it finalizes live sessions and wakes pending readers
             server_stream_session_manager_stop();
             if (models_routes.has_value()) {
                 models_routes->stopping.store(true); // maybe redundant, but just to be safe
                 models_routes->models.unload_all();
+            }
+            if (mcp_mgr) {
+                mcp_mgr->close_all();
             }
             llama_backend_free();
         };
@@ -401,17 +449,26 @@ int llama_server(common_params & params, int argc, char ** argv) {
                 // important to disconnect any SSE clients
                 models_routes->stopping.store(true);
             }
+            // must happen before the HTTP server drains: an in-flight MCP tool call would
+            // otherwise hold its handler thread until the RPC times out, and close_all()
+            // (which sets these flags) only runs afterwards, in clean_up()
+            if (mcp_mgr) {
+                mcp_mgr->begin_shutdown();
+            }
             ctx_http.stop();
         };
 
     } else {
         // setup clean up function, to be called before exit
-        clean_up = [&ctx_http, &ctx_server]() {
+        clean_up = [&ctx_http, &ctx_server, &mcp_mgr]() {
             SRV_INF("%s: cleaning up before exit...\n", __func__);
             // stop the session GC first, it finalizes live sessions and wakes pending readers
             server_stream_session_manager_stop();
             ctx_http.stop();
             ctx_server.terminate();
+            if (mcp_mgr) {
+                mcp_mgr->close_all();
+            }
             llama_backend_free();
         };
 
@@ -444,6 +501,12 @@ int llama_server(common_params & params, int argc, char ** argv) {
         SRV_INF("%s", "model loaded\n");
 
         shutdown_handler = [&](int) {
+            // must happen before the HTTP server drains: an in-flight MCP tool call would
+            // otherwise hold its handler thread until the RPC times out, and close_all()
+            // (which sets these flags) only runs afterwards, in clean_up()
+            if (mcp_mgr) {
+                mcp_mgr->begin_shutdown();
+            }
             // this will unblock start_loop()
             ctx_server.terminate();
         };
