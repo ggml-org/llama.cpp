@@ -64,12 +64,10 @@ static int set_innerq_env(const char * value) {
 #else
     if (value != nullptr) {
         return setenv("LLAMA_ENABLE_INNERQ", value, 1);
-    } else {
-        // unsetenv returns void on POSIX (BSD/macOS) but int on glibc;
-        // split into an if/else to stay portable across all targets.
-        unsetenv("LLAMA_ENABLE_INNERQ");
-        return 0;
     }
+    // POSIX requires unsetenv() to return int; capture it explicitly so
+    // call sites that treat nonzero as failure see the real status.
+    return unsetenv("LLAMA_ENABLE_INNERQ");
 #endif
 }
 
