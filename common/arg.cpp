@@ -1926,6 +1926,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_sampling());
     add_opt(common_arg(
+        {"--p-less"},
+        string_format("p-less sampling (default: %s)", params.sampling.p_less ? "enabled" : "disabled"),
+        [](common_params & params) {
+            params.sampling.p_less = true;
+            params.sampling.user_sampling_config |= common_params_sampling_config::COMMON_PARAMS_SAMPLING_CONFIG_P_LESS;
+        }
+    ).set_sampling());
+    add_opt(common_arg(
         {"--xtc-probability"}, "N",
         string_format("xtc probability (default: %.2f, 0.0 = disabled)", (double)params.sampling.xtc_probability),
         [](common_params & params, const std::string & value) {
