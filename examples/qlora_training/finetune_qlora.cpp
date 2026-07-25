@@ -1434,7 +1434,7 @@ int main(int argc, char ** argv) {
     }
 
     // Force settings required for training
-    params.use_mmap     = false;
+    params.load_mode    = LLAMA_LOAD_MODE_NONE;
     params.cache_type_k = GGML_TYPE_F32;
     params.cache_type_v = GGML_TYPE_F32;
     // Warmup runs inference with PARAM-flagged tensors which causes a segfault;
