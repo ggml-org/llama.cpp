@@ -90,6 +90,11 @@ set_source_files_properties(../ggml-cuda/template-instances/mmq-instance-q4_k.cu
 set_source_files_properties(../ggml-cuda/template-instances/mmq-instance-q6_k.cu PROPERTIES
     COMPILE_DEFINITIONS "GGML_HIP_RDNA2_Q6_K_MMQ_WIDE_LDS=1")
 
+# Q5_K uses the same aligned LDS window at J=64, where its synthetic RDNA2
+# sweep has a clear win; the J<64 scalar path remains selected in device code.
+set_source_files_properties(../ggml-cuda/template-instances/mmq-instance-q5_k.cu PROPERTIES
+    COMPILE_DEFINITIONS "GGML_HIP_RDNA2_Q5_K_MMQ_WIDE_LDS=1")
+
 ggml_add_backend_library(ggml-hip
                          ${GGML_HEADERS_ROCM}
                          ${GGML_SOURCES_ROCM}

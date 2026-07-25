@@ -832,6 +832,7 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
 
     #if defined(GGML_USE_HIP) && defined(RDNA2) && \
     ((defined(GGML_HIP_RDNA2_Q4_K_MMQ_WIDE_LDS) && GGML_HIP_RDNA2_Q4_K_MMQ_WIDE_LDS) || \
+     (defined(GGML_HIP_RDNA2_Q5_K_MMQ_WIDE_LDS) && GGML_HIP_RDNA2_Q5_K_MMQ_WIDE_LDS) || \
      (defined(GGML_HIP_RDNA2_Q6_K_MMQ_WIDE_LDS) && GGML_HIP_RDNA2_Q6_K_MMQ_WIDE_LDS))
     extern __shared__ int4 data_mul_mat_q_aligned[];
     int * data_mul_mat_q = reinterpret_cast<int *>(data_mul_mat_q_aligned);
@@ -967,6 +968,7 @@ static __global__ void mul_mat_q(
     // For MoE the correct indices are loaded from ids_dst.
     #if defined(GGML_USE_HIP) && defined(RDNA2) && \
     ((defined(GGML_HIP_RDNA2_Q4_K_MMQ_WIDE_LDS) && GGML_HIP_RDNA2_Q4_K_MMQ_WIDE_LDS) || \
+     (defined(GGML_HIP_RDNA2_Q5_K_MMQ_WIDE_LDS) && GGML_HIP_RDNA2_Q5_K_MMQ_WIDE_LDS) || \
      (defined(GGML_HIP_RDNA2_Q6_K_MMQ_WIDE_LDS) && GGML_HIP_RDNA2_Q6_K_MMQ_WIDE_LDS))
     extern __shared__ int4 ids_dst_shared_aligned[]; // Stored at beginning of shared memory.
     int * ids_dst_shared = reinterpret_cast<int *>(ids_dst_shared_aligned);

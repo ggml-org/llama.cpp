@@ -17,6 +17,9 @@ using namespace ggml_cuda_mma;
 #ifndef GGML_HIP_RDNA2_Q6_K_MMQ_WIDE_LDS
 #define GGML_HIP_RDNA2_Q6_K_MMQ_WIDE_LDS 0
 #endif
+#ifndef GGML_HIP_RDNA2_Q5_K_MMQ_WIDE_LDS
+#define GGML_HIP_RDNA2_Q5_K_MMQ_WIDE_LDS 0
+#endif
 
 template <ggml_type type, int J, bool fallback> static __device__ __forceinline__ void ggml_cuda_mmq_vec_dot_q4_0_q8_1_dp4a(
         const int * __restrict__ x, const int * __restrict__ y, float * __restrict__ sum, const int k00) {
@@ -1001,9 +1004,32 @@ template <ggml_type type, int J, bool fallback> static __device__ __forceinline_
 
                 const uint8_t * sc = ((const uint8_t *) &x_sc[i * (MMQ_TILE_NE_K/8) + i/8 + k00/32]) + 2*(k01/16);
 
-                sum[j0/nwarps*I/warp_size + i0/warp_size] += vec_dot_q5_K_q8_1_impl_mmq(
-                    &x_qs[i*(QR5_K*MMQ_TILE_NE_K + 1) + k0], &y_qs[j*MMQ_TILE_Y_K + k01], sc, sc+8,
-                    x_dm[i], &y_ds[j*MMQ_TILE_Y_K + k01/QI8_1]);
+#if defined(GGML_USE_HIP) && defined(RDNA2) && GGML_HIP_RDNA2_Q5_K_MMQ_WIDE_LDS
+                // Q5_K loses slightly for J=32 but wins substantially at the
+                // J=64 MMQ tile used by larger prompt/prefill batches.
+                if constexpr (J >= 64) {
+                    constexpr int max_cpy = ggml_cuda_get_max_cpy_bytes();
+                    constexpr int mcpy_int = max_cpy / sizeof(int);
+                    constexpr int u_ints = QR5_K * VDR_Q5_K_Q8_1_MMQ;
+                    static_assert(max_cpy == 16 && u_ints == 16 && J % mcpy_int == 0,
+                                  "unexpected Q5_K MMQ LDS window alignment");
+
+                    alignas(16) int u[u_ints];
+#pragma unroll
+                    for (int l0 = 0; l0 < u_ints / mcpy_int; ++l0) {
+                        ggml_cuda_memcpy_1<max_cpy>(u + l0 * mcpy_int,
+                                                     &y_qs[j*MMQ_TILE_Y_K + k01 + l0 * mcpy_int]);
+                    }
+                    sum[j0/nwarps*I/warp_size + i0/warp_size] += vec_dot_q5_K_q8_1_impl_mmq(
+                        &x_qs[i*(QR5_K*MMQ_TILE_NE_K + 1) + k0], u, sc, sc+8,
+                        x_dm[i], &y_ds[j*MMQ_TILE_Y_K + k01/QI8_1]);
+                } else
+#endif
+                {
+                    sum[j0/nwarps*I/warp_size + i0/warp_size] += vec_dot_q5_K_q8_1_impl_mmq(
+                        &x_qs[i*(QR5_K*MMQ_TILE_NE_K + 1) + k0], &y_qs[j*MMQ_TILE_Y_K + k01], sc, sc+8,
+                        x_dm[i], &y_ds[j*MMQ_TILE_Y_K + k01/QI8_1]);
+                }
             }
         }
     }
