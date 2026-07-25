@@ -162,9 +162,9 @@
 ```bash
 # Normal smoke test (missing binaries)
 $ LLAMA=/nonexistent CORRECTNESS_BIN=/nonexistent bash scripts/turbo-quality-gate.sh
-FAIL | 0.1 correctness (LLAMA_TEST_TURBO_FA=0) (reason=binary missing at /nonexistent)
-SKIP | 1 perplexity (turbo3 vs q8_0, -fa on) (MODEL unset (non-strict))
-SKIP | 2 context-scaling ratio (MODEL or WIKI unset (non-strict))
+FAIL | 0.1 correctness (LLAMA_TEST_TURBO_FA=0) (reason=binary missing at /nonexistent, log=-)
+FAIL | 1 perplexity (turbo3 vs q8_0, -fa on) (reason=binary missing at /nonexistent/llama-perplexity, log=-)
+FAIL | 2 context-scaling ratio (reason=binary missing at /nonexistent/llama-perplexity, log=-)
 
 # Portability test (thread 5 verification)
 $ TMPDIR="/tmp/has spaces/" PATH="$FAKE_BIN:$PATH" bash -c '...'
