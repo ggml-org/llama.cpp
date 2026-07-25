@@ -41,7 +41,7 @@ case "${TURBO_QUALITY_STRICT:-0}" in
 esac
 
 # Per-stage tempdir for captured stdout/stderr.
-STAGE_LOG_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t turbo-gate.XXXXXX)"
+STAGE_LOG_DIR="$(mktemp -d 2>/dev/null || mktemp -d "${TMPDIR:-/tmp}/turbo-gate.XXXXXX")"
 if [ -z "$STAGE_LOG_DIR" ] || [ ! -d "$STAGE_LOG_DIR" ]; then
   echo "ERROR: failed to create temporary directory for stage logs" >&2
   exit 1
@@ -159,17 +159,15 @@ stage_correctness() {
         emit_summary "$stage_label2" "FAIL" "$log2" "harness GATE-FAIL non-zero or missing summary"
         return
       fi
-      if [ "$STRICT" = "1" ]; then
-        local xfail_n2 skip_n2 xpass_n2
-        xfail_n2=$(grep -ioE '[0-9]+ xfail' "$log2" | grep -oE '[0-9]+' | head -1 || echo 0)
-        skip_n2=$(grep -ioE '[0-9]+ skip' "$log2" | grep -oE '[0-9]+' | head -1 || echo 0)
-        xpass_n2=$(grep -ioE '[0-9]+ xpass' "$log2" | grep -oE '[0-9]+' | head -1 || echo 0)
-        if [ "${xfail_n2:-0}" -gt 0 ] || [ "${skip_n2:-0}" -gt 0 ] || [ "${xpass_n2:-0}" -gt 0 ]; then
-          FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label2}: strict mode forbids xfail/skip/xpass (xfail=$xfail_n2 skip=$skip_n2 xpass=$xpass_n2)"
-          FAIL_COUNT=$((FAIL_COUNT+1))
-          emit_summary "$stage_label2" "FAIL" "$log2" "strict mode: xfail=$xfail_n2 skip=$skip_n2 xpass=$xpass_n2"
-          return
-        fi
+      local xfail_n2 skip_n2 xpass_n2
+      xfail_n2=$(grep -ioE '[0-9]+ xfail' "$log2" | grep -oE '[0-9]+' | head -1 || echo 0)
+      skip_n2=$(grep -ioE '[0-9]+ skip' "$log2" | grep -oE '[0-9]+' | head -1 || echo 0)
+      xpass_n2=$(grep -ioE '[0-9]+ xpass' "$log2" | grep -oE '[0-9]+' | head -1 || echo 0)
+      if [ "${xfail_n2:-0}" -gt 0 ] || [ "${skip_n2:-0}" -gt 0 ] || [ "${xpass_n2:-0}" -gt 0 ]; then
+        FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label2}: strict mode forbids xfail/skip/xpass (xfail=$xfail_n2 skip=$skip_n2 xpass=$xpass_n2)"
+        FAIL_COUNT=$((FAIL_COUNT+1))
+        emit_summary "$stage_label2" "FAIL" "$log2" "strict mode: xfail=$xfail_n2 skip=$skip_n2 xpass=$xpass_n2"
+        return
       fi
       emit_summary "$stage_label2" "PASS" "$log2" ""
     else
