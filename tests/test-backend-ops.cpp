@@ -45,17 +45,6 @@
 #include <vector>
 #include <unordered_map>
 
-static void test_set_env(const char * name, const char * value) {
-#ifdef _WIN32
-    _putenv_s(name, value ? value : "");
-#else
-    if (value) {
-        setenv(name, value, 1);
-    } else {
-        unsetenv(name);
-    }
-#endif
-}
 
 #ifdef __EMSCRIPTEN__
 #   define N_THREADS 1
@@ -1419,51 +1408,6 @@ struct test_case {
             initialize_tensors(ctx_weights.get());
         }
 
-        // Optional exact baseline-versus-experiment comparison on the same
-        // initialized tensors and backend. Disable GPU graphs for this focused
-        // test so the host-side selector is evaluated for both executions.
-        bool exact_ab_ok = true;
-        const bool top10_ab = getenv("GGML_TEST_MMID_TOP10_AB") != nullptr;
-        const bool compact_ab = getenv("GGML_TEST_MMQ_COMPACT_AB") != nullptr;
-        if (current_op_name == "MUL_MAT_ID" && (top10_ab || compact_ab)) {
-            const char * selector_name = compact_ab ? "GGML_CUDA_MMQ_COMPACT_IDS" : "GGML_CUDA_MMID_TOP10";
-            const char * experiment_name = compact_ab ? "compact MMQ" : "top10";
-            if (getenv("GGML_CUDA_DISABLE_GRAPHS") == nullptr) {
-                printf("exact A/B requires GGML_CUDA_DISABLE_GRAPHS at process start ");
-                exact_ab_ok = false;
-            }
-            const char * original_selector_ptr = getenv(selector_name);
-            const bool had_original_selector = original_selector_ptr != nullptr;
-            const std::string original_selector = had_original_selector ? original_selector_ptr : "";
-
-            test_set_env(selector_name, nullptr);
-            ggml_status status = exact_ab_ok ? ggml_backend_graph_compute(backend1, gf) : GGML_STATUS_FAILED;
-            ggml_backend_synchronize(backend1);
-            std::vector<uint8_t> generic(ggml_nbytes(out));
-            if (status == GGML_STATUS_SUCCESS) {
-                ggml_backend_tensor_get(out, generic.data(), 0, generic.size());
-            }
-
-            test_set_env(selector_name, "1");
-            status = status == GGML_STATUS_SUCCESS ? ggml_backend_graph_compute(backend1, gf) : status;
-            ggml_backend_synchronize(backend1);
-            std::vector<uint8_t> specialized(ggml_nbytes(out));
-            if (status == GGML_STATUS_SUCCESS) {
-                ggml_backend_tensor_get(out, specialized.data(), 0, specialized.size());
-            }
-
-            if (had_original_selector) {
-                test_set_env(selector_name, original_selector.c_str());
-            } else {
-                test_set_env(selector_name, nullptr);
-            }
-
-            exact_ab_ok = status == GGML_STATUS_SUCCESS && generic == specialized;
-            if (!exact_ab_ok) {
-                printf("exact generic/%s output mismatch ", experiment_name);
-            }
-        }
-
         // compare
         struct callback_userdata {
             bool   ok;
@@ -1548,7 +1492,7 @@ struct test_case {
                                                                fused_nodes_to_verify.size());
 
         // Create test result
-        bool        test_passed = ud.ok && cmp_ok && exact_ab_ok;
+        bool        test_passed = ud.ok && cmp_ok;
         std::string error_msg   = test_passed ? "" : (!cmp_ok ? "compare failed" : "test failed");
         test_result result(ggml_backend_name(backend1), current_op_name, vars(), "test", supported, test_passed,
                            error_msg);

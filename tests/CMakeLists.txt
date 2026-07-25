@@ -264,6 +264,14 @@ if (NOT LLAMA_SANITIZE_ADDRESS AND NOT GGML_SCHED_NO_REALLOC)
   llama_build_and_test(test-opt.cpp)
 endif()
 llama_build_and_test(test-backend-ops.cpp)
+
+# Synthetic graph-level benchmarks for gfx1030/RDNA2 quantized matmul tuning.
+# They are manual benchmarks rather than CTests because timing is device-dependent.
+if (GGML_HIP)
+    llama_build(test-mmvq-rdna2.cpp)
+    llama_build(test-mmid-rdna2.cpp)
+endif()
+
 llama_build_and_test(test-tensor-split.cpp)
 target_include_directories(test-tensor-split PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src)
 

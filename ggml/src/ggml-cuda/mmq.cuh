@@ -830,7 +830,14 @@ static __device__ __forceinline__ void mul_mat_q_process_tile(
     constexpr ggml_cuda_mmq_vec_dot_t    vec_dot    = ggml_cuda_mmq_get_vec_dot<type, J, fallback>();
     constexpr ggml_cuda_mmq_write_back_t write_back = ggml_cuda_mmq_get_write_back<type, J, fallback>();
 
+    #if defined(GGML_USE_HIP) && defined(RDNA2) && \
+    ((defined(GGML_HIP_RDNA2_Q4_K_MMQ_WIDE_LDS) && GGML_HIP_RDNA2_Q4_K_MMQ_WIDE_LDS) || \
+     (defined(GGML_HIP_RDNA2_Q6_K_MMQ_WIDE_LDS) && GGML_HIP_RDNA2_Q6_K_MMQ_WIDE_LDS))
+    extern __shared__ int4 data_mul_mat_q_aligned[];
+    int * data_mul_mat_q = reinterpret_cast<int *>(data_mul_mat_q_aligned);
+#else
     extern __shared__ int data_mul_mat_q[];
+#endif
     int * tile_y = data_mul_mat_q + J;
     int * tile_x = tile_y + GGML_PAD(J*MMQ_TILE_Y_K, nwarps*warp_size);
 
@@ -958,7 +965,14 @@ static __global__ void mul_mat_q(
     // Initialize the ids for writing back data with just the index.
     // For regular matrix multiplications this is never changed.
     // For MoE the correct indices are loaded from ids_dst.
+    #if defined(GGML_USE_HIP) && defined(RDNA2) && \
+    ((defined(GGML_HIP_RDNA2_Q4_K_MMQ_WIDE_LDS) && GGML_HIP_RDNA2_Q4_K_MMQ_WIDE_LDS) || \
+     (defined(GGML_HIP_RDNA2_Q6_K_MMQ_WIDE_LDS) && GGML_HIP_RDNA2_Q6_K_MMQ_WIDE_LDS))
+    extern __shared__ int4 ids_dst_shared_aligned[]; // Stored at beginning of shared memory.
+    int * ids_dst_shared = reinterpret_cast<int *>(ids_dst_shared_aligned);
+#else
     extern __shared__ int ids_dst_shared[]; // Stored at beginning of shared memory.
+#endif
 #pragma unroll
     for (int j0 = 0; j0 < J; j0 += nwarps*warp_size) {
         const int j = j0 + threadIdx.y*warp_size + threadIdx.x;
@@ -1401,8 +1415,7 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     bool compact_ids =
         args.ids_dst != nullptr &&
         !ggml_cuda_mmq_get_stream_k(type, J, fallback, cc) &&
-        GGML_CUDA_CC_IS_RDNA2(cc) &&
-        getenv("GGML_CUDA_MMQ_COMPACT_IDS") != nullptr;
+        GGML_CUDA_CC_IS_RDNA2(cc);
 
     int compact_capacity = 0;
     dim3 block_nums = block_nums_xy_tiling;

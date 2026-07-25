@@ -82,6 +82,14 @@ else()
         ../ggml-cuda/template-instances/fattn-vec-instance-bf16-bf16.cu)
 endif()
 
+# The RDNA2 Q4_K/Q6_K MMQ variants use aligned 128-bit LDS activation loads.
+# Compile them only into their own template instances; device code additionally
+# guards the path with RDNA2, so other HIP targets retain their existing paths.
+set_source_files_properties(../ggml-cuda/template-instances/mmq-instance-q4_k.cu PROPERTIES
+    COMPILE_DEFINITIONS "GGML_HIP_RDNA2_Q4_K_MMQ_WIDE_LDS=1")
+set_source_files_properties(../ggml-cuda/template-instances/mmq-instance-q6_k.cu PROPERTIES
+    COMPILE_DEFINITIONS "GGML_HIP_RDNA2_Q6_K_MMQ_WIDE_LDS=1")
+
 ggml_add_backend_library(ggml-hip
                          ${GGML_HEADERS_ROCM}
                          ${GGML_SOURCES_ROCM}

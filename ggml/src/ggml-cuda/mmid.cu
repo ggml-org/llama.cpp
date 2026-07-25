@@ -160,10 +160,10 @@ void ggml_cuda_launch_mm_ids_helper(
             launch_mm_ids_helper< 8>(ids, ids_src1, ids_dst, expert_bounds, n_experts, n_tokens, n_expert_used, nchannels_y, si1, sis1, write_inverse, stream);
             break;
         case 10: {
-            const bool top10_enabled = getenv("GGML_CUDA_MMID_TOP10") != nullptr;
             const int id = ggml_cuda_get_device();
+            const int cc = ggml_cuda_info().devices[id].cc;
             const int warp_size = ggml_cuda_info().devices[id].warp_size;
-            if (top10_enabled && warp_size == 32) {
+            if (GGML_CUDA_CC_IS_RDNA2(cc) && warp_size == 32) {
                 launch_mm_ids_helper<10>(ids, ids_src1, ids_dst, expert_bounds, n_experts, n_tokens, n_expert_used, nchannels_y, si1, sis1, write_inverse, stream);
             } else {
                 launch_mm_ids_helper< 0>(ids, ids_src1, ids_dst, expert_bounds, n_experts, n_tokens, n_expert_used, nchannels_y, si1, sis1, write_inverse, stream);
