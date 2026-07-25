@@ -21,7 +21,7 @@ vendor = {
     f"https://raw.githubusercontent.com/yhirose/cpp-httplib/{HTTPLIB_VERSION}/split.py":  "split.py",
     f"https://raw.githubusercontent.com/yhirose/cpp-httplib/{HTTPLIB_VERSION}/LICENSE":   "vendor/cpp-httplib/LICENSE",
 
-    "https://raw.githubusercontent.com/sheredom/subprocess.h/b49c56e9fe214488493021017bf3954b91c7c1f5/subprocess.h": "vendor/sheredom/subprocess.h",
+    "https://raw.githubusercontent.com/sheredom/subprocess.h/8671cee1fc09f11a70ce3782a0ee13177c3aa387/subprocess.h": "vendor/sheredom/subprocess.h",
 }
 
 for url, filename in vendor.items():

@@ -148,6 +148,7 @@ class MCPStore {
 				enabled: Boolean((entry as { enabled?: unknown })?.enabled),
 				url,
 				name: (entry as { name?: string })?.name,
+				displayName: (entry as { displayName?: string })?.displayName,
 				headers: headers || undefined,
 				useProxy: Boolean((entry as { useProxy?: unknown })?.useProxy)
 			} satisfies MCPServerSettingsEntry;
@@ -375,14 +376,38 @@ class MCPStore {
 		return this.connections;
 	}
 
-	getServerLabel(server: MCPServerDisplayInfo): string {
+	/**
+	 * Resolves the raw label for a server: user-defined display name first,
+	 * then server-reported title or name when the health check succeeded,
+	 * then the configured name (admin baseline or legacy data), then URL.
+	 */
+	#serverBaseLabel(server: MCPServerDisplayInfo): string {
+		if (server.displayName) return server.displayName;
+
 		const healthState = this.getHealthCheckState(server.id);
 
 		if (healthState?.status === HealthCheckStatus.SUCCESS)
 			return (
 				healthState.serverInfo?.title || healthState.serverInfo?.name || server.name || server.url
 			);
-		return server.url;
+		return server.name || server.url;
+	}
+
+	/**
+	 * Returns the display label for a server, suffixed with a positional
+	 * counter when several configured servers resolve to the same base label
+	 * (e.g. two endpoints of the same host reporting an identical name).
+	 * Numbering follows config order, so it is stable across renders.
+	 */
+	getServerLabel(server: MCPServerDisplayInfo): string {
+		const label = this.#serverBaseLabel(server);
+		const twins = this.getServers().filter((s) => this.#serverBaseLabel(s) === label);
+
+		if (twins.length < 2) return label;
+
+		const position = twins.findIndex((s) => s.id === server.id);
+
+		return position < 0 ? label : `${label} (${position + 1})`;
 	}
 
 	getServerById(serverId: string): MCPServerSettingsEntry | undefined {
@@ -517,6 +542,7 @@ class MCPStore {
 			enabled: serverData.enabled,
 			url: serverData.url.trim(),
 			name: serverData.name,
+			displayName: serverData.displayName,
 			headers: serverData.headers?.trim() || undefined,
 			useProxy: serverData.useProxy
 		};
