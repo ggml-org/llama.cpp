@@ -609,6 +609,7 @@ struct server_tool_exec_shell_command : server_tool {
         static const std::string general_desc = "Execute a shell command and return its output (stdout and stderr combined).";
         static const std::string wl_desc = string_format(
             " Only whitelisted programs may be run."
+            " Programs currently on the whitelist can be listed with the `list_shell_commands` tool."
             " Commands must not contain any of these characters: \"%s\"",
             shell_command_delims
         );
@@ -694,6 +695,39 @@ struct server_tool_exec_shell_command : server_tool {
         }
 
         return {{"plain_text_response", text_output}};
+    }
+};
+
+//
+// list_shell_commands: list currently available shell commands
+//
+
+struct server_tool_list_shell_commands : server_tool {
+    server_tool_list_shell_commands() {
+        name = "list_shell_commands";
+        display_name = "List shell commands";
+        permission_write = false;
+    }
+
+    json get_definition() const override {
+        return {
+            {"type", "function"},
+            {"function", {
+                {"name", name},
+                {"description", "List all programs currently available for use with the `exec_shell_command` tool."}
+            }},
+        };
+    }
+
+    json invoke(json params, server_tool::stream *) const override {
+        (void)params;   // Unused.
+        std::ostringstream output_text;
+        if (s_shell_command_whitelist && !s_shell_command_whitelist->empty()) {
+            for (auto p : *s_shell_command_whitelist) output_text << p << '\n';
+        } else {
+            output_text << "All programs available to this process' user account are available to you.\n";
+        }
+        return {{"plain_text_response", output_text.str()}};
     }
 };
 
@@ -1222,6 +1256,12 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools, const s
             if (enabled_set.count(t->name) > 0 || enabled_set.count("all") > 0) {
                 tools.push_back(std::move(t));
             }
+        }
+
+        // build strictly conditional tools (not manually togglable with parameter)
+        if (s_shell_command_whitelist && !s_shell_command_whitelist->empty()) {
+            // Only useful when the whitelist is enabled.
+            tools.push_back(std::move(std::make_unique<server_tool_list_shell_commands>()));
         }
     }
 
