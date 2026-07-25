@@ -91,9 +91,7 @@ static void get_rows_thread_f32_f32_dma(unsigned int nth, unsigned int ith, void
             memcpy(&i01_val, (const void *)src1_addr, sizeof(int64_t));
         }
 
-        if (i01_val < 0 || (uint64_t)i01_val >= ne01) {
-            continue;
-        }
+        assert(i01_val >= 0 && (uint64_t)i01_val < ne01);
         uint32_t i01 = (uint32_t)i01_val;
 
         const uintptr_t src0_ptr = octx->src[0]->data + i01*nb01 + i11*nb02 + i12*nb03;
@@ -148,9 +146,7 @@ static void get_rows_thread_f32_f32_hvx(unsigned int nth, unsigned int ith, void
             memcpy(&i01_val, (const void *)src1_addr, sizeof(int64_t));
         }
 
-        if (i01_val < 0 || (uint64_t)i01_val >= ne01) {
-            continue;
-        }
+        assert(i01_val >= 0 && (uint64_t)i01_val < ne01);
         uint32_t i01 = (uint32_t)i01_val;
 
         const uint32_t offset = chunk_idx * chunk_size;
@@ -200,9 +196,7 @@ static void get_rows_thread_q8_0_f32(unsigned int nth, unsigned int ith, void *d
             memcpy(&i01_val, (const void *)src1_addr, sizeof(int64_t));
         }
 
-        if (i01_val < 0 || (uint64_t)i01_val >= ne01) {
-            continue;
-        }
+        assert(i01_val >= 0 && (uint64_t)i01_val < ne01);
         uint32_t i01 = (uint32_t)i01_val;
 
         const uint32_t i02 = i11 % ne02;
@@ -212,6 +206,21 @@ static void get_rows_thread_q8_0_f32(unsigned int nth, unsigned int ith, void *d
         float *      dst_ptr  = (float *)      ((uint8_t *)       octx->dst->data  + i10*nb1  + i11*nb2  + i12*nb3);
 
         hvx_dequantize_row_q8_0_f32(dst_ptr, src0_ptr, ne00);
+
+        // Reference scalar dequantization to find mismatches
+        const block_q8_0 * src_blocks = (const block_q8_0 *) src0_ptr;
+        for (uint32_t b = 0; b < ne00 / 32; ++b) {
+            float d = GGML_FP16_TO_FP32(src_blocks[b].d);
+            for (uint32_t el = 0; el < 32; ++el) {
+                float ref_val = src_blocks[b].qs[el] * d;
+                float actual_val = dst_ptr[b * 32 + el];
+                float diff = fabsf(ref_val - actual_val);
+                if (diff > 0.0001f) {
+                    FARF(ALWAYS, "MISMATCH: task=%u, block=%u, el=%u, d=%f, qs=%d, ref=%f, act=%f, diff=%f\n",
+                         i, b, el, d, (int)src_blocks[b].qs[el], ref_val, actual_val, diff);
+                }
+            }
+        }
     }
 
     qt = HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - qt);
