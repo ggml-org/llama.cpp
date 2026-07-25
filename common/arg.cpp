@@ -3263,9 +3263,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TOOLS"));
     add_opt(common_arg(
         {"--whitelist-shell-commands"}, "CMD1,CMD2,...",
-        "VERY experimental: this does not currently sanitize commands in any of the ways it should!\n"
-        "arguments are unlimited; applies to all commands chained, but not those invoked within a permitted command's execution\n"
-        "this is a white list, used only if exec_shell_command was specified with --tools.",
+        "experimental: comma separated list of programs to allow when using the exec_shell_command tool. (default: all allowed)\n"
+        "whitelisted programs may easily bypass all restriction, so choose your programs carefully\n"
+        "currently disallows (most) special symbols interpreted by the shell, including pipes\n"
+        "note: this provides no protection against variation in your shell's command resolution",
         [](common_params & params, const std::string & value) {
             params.server_tools_shell_command_whitelist = parse_csv_row(value);
             for (auto const & i : params.server_tools_shell_command_whitelist) {
