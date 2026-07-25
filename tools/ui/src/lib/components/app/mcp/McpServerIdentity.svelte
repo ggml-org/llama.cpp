@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { ExternalLink } from '@lucide/svelte';
 	import { Badge } from '$lib/components/ui/badge';
+	import { McpLogo } from '$lib/components/app/mcp';
 	import { TruncatedText } from '$lib/components/app/misc';
 	import { sanitizeExternalUrl } from '$lib/utils';
 	import type { MCPServerInfo } from '$lib/types';
@@ -34,20 +35,15 @@
 
 <span class="flex min-w-0 items-center gap-1.5">
 	{#if faviconUrl}
-		<img
-			src={faviconUrl}
-			alt=""
-			class={['shrink-0', iconRounded, iconClass]}
-			onerror={(e) => {
-				(e.currentTarget as HTMLImageElement).style.display = 'none';
-			}}
-		/>
+		<img src={faviconUrl} alt="" class={['shrink-0 text-foreground', iconRounded, iconClass]} />
+	{:else}
+		<McpLogo class={['shrink-0 text-foreground', iconRounded, iconClass].join(' ')} />
 	{/if}
 
 	<TruncatedText text={displayName ?? ''} class={nameClass ?? ''} />
 
 	{#if showVersion && serverInfo?.version}
-		<Badge variant="secondary" class="h-4 min-w-0 shrink px-1 text-[10px]">
+		<Badge variant="secondary" class="h-4 max-w-24 min-w-0 shrink px-1 text-[10px]">
 			<TruncatedText text={`v${serverInfo.version}`} />
 		</Badge>
 	{/if}

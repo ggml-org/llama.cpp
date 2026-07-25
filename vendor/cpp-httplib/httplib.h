@@ -8,8 +8,8 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.47.0"
-#define CPPHTTPLIB_VERSION_NUM "0x002f00"
+#define CPPHTTPLIB_VERSION "0.50.1"
+#define CPPHTTPLIB_VERSION_NUM "0x003201"
 
 #ifdef _WIN32
 #if defined(_WIN32_WINNT) && _WIN32_WINNT < 0x0A00
@@ -309,7 +309,6 @@ using socket_t = int;
 #include <array>
 #include <atomic>
 #include <cassert>
-#include <cctype>
 #include <chrono>
 #include <climits>
 #include <condition_variable>
@@ -540,6 +539,21 @@ make_unique(std::size_t n) {
   return std::unique_ptr<T>(new RT[n]);
 }
 
+// Locale-independent ASCII character classification. The <cctype>
+// counterparts (std::isalnum, std::isdigit, ...) consult the global C locale,
+// so e.g. std::isalnum(0xC5) can return true once an embedder calls
+// setlocale(). HTTP grammars are defined over ASCII, so raw bytes must be
+// classified without regard to the locale.
+inline bool is_ascii_digit(char c) { return '0' <= c && c <= '9'; }
+
+inline bool is_ascii_alpha(char c) {
+  return ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z');
+}
+
+inline bool is_ascii_alnum(char c) {
+  return is_ascii_digit(c) || is_ascii_alpha(c);
+}
+
 namespace case_ignore {
 
 inline unsigned char to_lower(int c) {
@@ -661,7 +675,7 @@ inline from_chars_result<T> from_chars(const char *first, const char *last,
   for (; p != last; ++p) {
     char c = *p;
     int digit = -1;
-    if ('0' <= c && c <= '9') {
+    if (is_ascii_digit(c)) {
       digit = c - '0';
     } else if ('a' <= c && c <= 'z') {
       digit = c - 'a' + 10;
@@ -686,18 +700,70 @@ inline from_chars_result<T> from_chars(const char *first, const char *last,
   return {p, std::errc{}};
 }
 
-// from_chars for double (simple wrapper for strtod)
+// from_chars for double (hand-written, locale-independent)
+//
+// The only double consumed by this library is the HTTP quality value, whose
+// grammar is (RFC 9110 12.4.2):
+//   qvalue = ( "0" [ "." 0*3DIGIT ] ) / ( "1" [ "." 0*3("0") ] )
+// i.e. a non-negative decimal with no sign, exponent, "inf"/"nan", or wide
+// magnitude. So this parser recognizes exactly  1*DIGIT [ "." *DIGIT ]  with
+// '.' always the decimal separator (std::strtod would instead read it from the
+// global C locale, mis-parsing q-values once an embedder calls
+// setlocale(LC_ALL, "") into a comma-decimal locale). The caller range-checks
+// the result to [0, 1], so inputs outside that range need not be distinguished
+// here. Allocation-free, single pass, and free of the overflow/rounding edge
+// cases that exponent and wide-range handling would introduce.
 inline from_chars_result<double> from_chars(const char *first, const char *last,
                                             double &value) {
-  std::string s(first, last);
-  char *endptr = nullptr;
-  errno = 0;
-  value = std::strtod(s.c_str(), &endptr);
-  if (endptr == s.c_str()) { return {first, std::errc::invalid_argument}; }
-  if (errno == ERANGE) {
-    return {first + (endptr - s.c_str()), std::errc::result_out_of_range};
+  value = 0.0;
+  const char *p = first;
+
+  // Each 1eN is exactly representable, so a single final division by the
+  // matching entry yields a correctly-rounded result.
+  static const double powers_of_ten[] = {
+      1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8, 1e9,
+      1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18};
+  const int max_frac_digits =
+      static_cast<int>(sizeof(powers_of_ten) / sizeof(powers_of_ten[0])) - 1;
+
+  // Accumulate digits into a 64-bit integer and remember how many were
+  // fractional. Two independent caps keep this bounded and safe:
+  //   * accumulation saturates before mantissa could overflow uint64_t, and
+  //   * frac_digits is capped at max_frac_digits so it is always a valid index
+  //     into powers_of_ten (without this an input like "0.000...0" would never
+  //     grow mantissa, so the saturation cap alone would not bound it).
+  // Both caps only drop digits far beyond the precision a q-value needs; any
+  // value they would change is well outside [0, 1] and rejected by the caller.
+  uint64_t mantissa = 0;
+  int frac_digits = 0;
+  bool seen_digit = false;
+
+  const uint64_t limit = ((std::numeric_limits<uint64_t>::max)() - 9) / 10;
+  auto accumulate = [&](char c) {
+    if (mantissa <= limit) {
+      mantissa = mantissa * 10 + static_cast<uint64_t>(c - '0');
+      return true;
+    }
+    return false;
+  };
+
+  for (; p != last && is_ascii_digit(*p); ++p) {
+    seen_digit = true;
+    accumulate(*p);
   }
-  return {first + (endptr - s.c_str()), std::errc{}};
+
+  if (p != last && *p == '.') {
+    ++p;
+    for (; p != last && is_ascii_digit(*p); ++p) {
+      seen_digit = true;
+      if (frac_digits < max_frac_digits && accumulate(*p)) { ++frac_digits; }
+    }
+  }
+
+  if (!seen_digit) { return {first, std::errc::invalid_argument}; }
+
+  value = static_cast<double>(mantissa) / powers_of_ten[frac_digits];
+  return {p, std::errc{}};
 }
 
 inline bool parse_port(const char *s, size_t len, int &port) {
@@ -751,8 +817,8 @@ inline bool parse_url(const std::string &url, UrlComponents &uc) {
       // IPv6 host must be [a-fA-F0-9:]+ only
       if (uc.host.empty()) { return false; }
       for (auto c : uc.host) {
-        if (!((c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') ||
-              (c >= '0' && c <= '9') || c == ':')) {
+        if (!(is_ascii_digit(c) || (c >= 'a' && c <= 'f') ||
+              (c >= 'A' && c <= 'F') || c == ':')) {
           return false;
         }
       }
@@ -1489,7 +1555,9 @@ public:
 
 class ThreadPool final : public TaskQueue {
 public:
-  explicit ThreadPool(size_t n, size_t max_n = 0, size_t mqr = 0);
+  explicit ThreadPool(
+      size_t n, size_t max_n = 0, size_t mqr = 0,
+      time_t idle_timeout_sec = CPPHTTPLIB_THREAD_POOL_IDLE_TIMEOUT);
   ThreadPool(const ThreadPool &) = delete;
   ~ThreadPool() override = default;
 
@@ -1504,6 +1572,7 @@ private:
   size_t base_thread_count_;
   size_t max_thread_count_;
   size_t max_queued_requests_;
+  time_t idle_timeout_sec_;
   size_t idle_thread_count_;
 
   bool shutdown_;
@@ -1627,6 +1696,35 @@ make_multipart_content_provider(const UploadFormDataItems &items,
                                 const std::string &boundary);
 
 } // namespace detail
+
+bool is_valid_multipart_boundary(const std::string &boundary);
+
+// Serializer for multipart/form-data request bodies. The boundary is owned
+// by the writer so that per-part framing and the final terminator always
+// agree. Field names and filenames are escaped following the WHATWG HTML
+// standard ('"' -> %22, CR -> %0D, LF -> %0A); CR and LF are also escaped
+// in content types.
+class MultipartFormDataWriter {
+public:
+  MultipartFormDataWriter();
+  // precondition: is_valid_multipart_boundary(boundary)
+  explicit MultipartFormDataWriter(std::string boundary);
+
+  const std::string &boundary() const;
+  std::string content_type() const;
+
+  // In-memory items -> whole body (known length)
+  std::string serialize(const UploadFormDataItems &items) const;
+  size_t content_length(const UploadFormDataItems &items) const;
+
+  // Per-part framing for streaming via a content provider
+  std::string item_begin(const UploadFormData &item) const;
+  static std::string item_end();
+  std::string finish() const;
+
+private:
+  std::string boundary_;
+};
 
 class Server {
 public:
@@ -2121,6 +2219,7 @@ public:
   Result Get(const std::string &path, const Headers &headers, DownloadProgress progress = nullptr);
   Result Get(const std::string &path, const Headers &headers, ContentReceiver content_receiver, DownloadProgress progress = nullptr);
   Result Get(const std::string &path, const Headers &headers, ResponseHandler response_handler, ContentReceiver content_receiver, DownloadProgress progress = nullptr);
+  Result Get(const std::string &path, const Params &params, DownloadProgress progress = nullptr);
   Result Get(const std::string &path, const Params &params, const Headers &headers, DownloadProgress progress = nullptr);
   Result Get(const std::string &path, const Params &params, const Headers &headers, ContentReceiver content_receiver, DownloadProgress progress = nullptr);
   Result Get(const std::string &path, const Params &params, const Headers &headers, ResponseHandler response_handler, ContentReceiver content_receiver, DownloadProgress progress = nullptr);
@@ -2504,6 +2603,7 @@ public:
   Result Get(const std::string &path, const Headers &headers, DownloadProgress progress = nullptr);
   Result Get(const std::string &path, const Headers &headers, ContentReceiver content_receiver, DownloadProgress progress = nullptr);
   Result Get(const std::string &path, const Headers &headers, ResponseHandler response_handler, ContentReceiver content_receiver, DownloadProgress progress = nullptr);
+  Result Get(const std::string &path, const Params &params, DownloadProgress progress = nullptr);
   Result Get(const std::string &path, const Params &params, const Headers &headers, DownloadProgress progress = nullptr);
   Result Get(const std::string &path, const Params &params, const Headers &headers, ContentReceiver content_receiver, DownloadProgress progress = nullptr);
   Result Get(const std::string &path, const Params &params, const Headers &headers, ResponseHandler response_handler, ContentReceiver content_receiver, DownloadProgress progress = nullptr);
@@ -2826,13 +2926,6 @@ private:
 #endif
 
   friend class ClientImpl;
-
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-private:
-  bool verify_host(X509 *server_cert) const;
-  bool verify_host_with_subject_alt_name(X509 *server_cert) const;
-  bool verify_host_with_common_name(X509 *server_cert) const;
-#endif
 };
 #endif // CPPHTTPLIB_SSL_ENABLED
 
@@ -2852,9 +2945,7 @@ template <size_t N> inline constexpr size_t str_len(const char (&)[N]) {
 }
 
 inline bool is_numeric(const std::string &str) {
-  return !str.empty() &&
-         std::all_of(str.cbegin(), str.cend(),
-                     [](unsigned char c) { return std::isdigit(c); });
+  return !str.empty() && std::all_of(str.cbegin(), str.cend(), is_ascii_digit);
 }
 
 inline size_t get_header_value_u64(const Headers &headers,

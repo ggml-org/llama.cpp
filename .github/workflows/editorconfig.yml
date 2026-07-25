@@ -1,0 +1,24 @@
+name: EditorConfig Checker
+
+on:
+  workflow_dispatch: # allows manual triggering
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  editorconfig:
+    runs-on: [self-hosted, fast]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: editorconfig-checker/action-editorconfig-checker@840e866d93b8e032123c23bac69dece044d4d84c # v2.2.0
+        with:
+          version: v3.0.3
+      - run: editorconfig-checker

@@ -19,16 +19,22 @@ int llama_batched_bench(int argc, char ** argv);
 int llama_fit_params(int argc, char ** argv);
 int llama_quantize(int argc, char ** argv);
 int llama_perplexity(int argc, char ** argv);
+int llama_download(int argc, char ** argv);
 
-// hands the update over to the install script, which downloads and swaps the binary
+// Self-update is only supported for binaries built with llama-install.sh
 static int llama_update(int argc, char ** argv) {
     (void) argc;
     (void) argv;
 
+#ifdef LLAMA_INSTALL_BUILD
 #if defined(_WIN32)
     return system("powershell -NoProfile -ExecutionPolicy Bypass -Command \"irm https://llama.app/install.ps1 | iex\"");
 #else
     return system("curl -fsSL https://llama.app/install.sh | sh");
+#endif
+#else
+    printf("Updates are available only when installed from https://llama.app\n");
+    return 1;
 #endif
 }
 
@@ -44,22 +50,32 @@ struct command {
     std::vector<std::string> aliases;
     bool hidden;
     int (*func)(int, char **);
+    bool flags = false; // allow --name
 };
 
+#ifdef LLAMA_INSTALL_BUILD
+#define UPDATE_HIDDEN false
+#else
+#define UPDATE_HIDDEN true
+#endif
+
 static const command cmds[] = {
-    {"serve",         "HTTP API server",                                    {"server"},   false, llama_server       },
-    {"cli",           "Command-line interactive interface",                 {"client"},   false, llama_cli          },
-    {"update",        "Update llama to the latest release",                 {},           false, llama_update       },
-    {"completion",    "Text completion",                                    {"complete"}, true,  llama_completion   },
-    {"bench",         "Benchmark prompt processing and text generation",    {},           true,  llama_bench        },
-    {"batched-bench", "Benchmark batched decoding performance",             {},           true,  llama_batched_bench},
-    {"fit-params",    "Compute parameters to fit a model in device memory", {},           true,  llama_fit_params   },
-    {"quantize",      "Quantize a model",                                   {},           true,  llama_quantize     },
-    {"perplexity",    "Compute model perplexity and KL divergence",         {},           true,  llama_perplexity   },
-    {"version",       "Show version",                                       {},           false, version            },
-    {"licenses",      "Show third-party licenses",                          {"credits"},  false, licenses           },
-    {"help",          "Show available commands",                            {},           false, help               },
+    {"serve",         "HTTP API server",                                    {"server"},   false,         llama_server       },
+    {"cli",           "Command-line interactive interface",                 {"client"},   false,         llama_cli          },
+    {"update",        "Update llama to the latest release",                 {},           UPDATE_HIDDEN, llama_update       },
+    {"download",      "Download a model",                                   {"get"},      false,         llama_download     },
+    {"completion",    "Text completion",                                    {"complete"}, true,          llama_completion   },
+    {"bench",         "Benchmark prompt processing and text generation",    {},           true,          llama_bench        },
+    {"batched-bench", "Benchmark batched decoding performance",             {},           true,          llama_batched_bench},
+    {"fit-params",    "Compute parameters to fit a model in device memory", {},           true,          llama_fit_params   },
+    {"quantize",      "Quantize a model",                                   {},           true,          llama_quantize     },
+    {"perplexity",    "Compute model perplexity and KL divergence",         {},           true,          llama_perplexity   },
+    {"version",       "Show version",                                       {},           false,         version,           true },
+    {"licenses",      "Show third-party licenses",                          {"credits"},  false,         licenses,          true },
+    {"help",          "Show available commands",                            {},           false,         help,              true },
 };
+
+#undef UPDATE_HIDDEN
 
 static int version(int argc, char ** argv) {
     printf("%s\n", llama_build_info());
@@ -93,7 +109,10 @@ static int help(int argc, char ** argv) {
     return 0;
 }
 
-static bool matches(const std::string & arg, const command & cmd) {
+static bool matches(std::string arg, const command & cmd) {
+    if (cmd.flags && arg.size() > 2 && arg[0] == '-' && arg[1] == '-') {
+        arg.erase(0, 2);
+    }
     if (arg == cmd.name) {
         return true;
     }

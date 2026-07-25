@@ -40,8 +40,8 @@ if (WIN32)
         set(CMAKE_CXX_COMPILER "icx")
         set(CMAKE_CXX_COMPILER_ID "IntelLLVM")
     endif()
-    # Level Zero SDK path for Windows (only when GGML_SYCL_SUPPORT_LEVEL_ZERO is enabled)
-    if(GGML_SYCL_SUPPORT_LEVEL_ZERO)
+    # Level Zero SDK path for Windows (only when GGML_SYCL_SUPPORT_LEVEL_ZERO_API is enabled)
+    if(GGML_SYCL_SUPPORT_LEVEL_ZERO_API)
         if(DEFINED ENV{LEVEL_ZERO_V1_SDK_PATH})
             set(LEVEL_ZERO_V1_SDK_PATH $ENV{LEVEL_ZERO_V1_SDK_PATH})
             if(EXISTS "${LEVEL_ZERO_V1_SDK_PATH}")
@@ -113,8 +113,8 @@ endif()
 
 message(STATUS "GGML_SYCL_DEVICE_CODE_SPLIT ${GGML_SYCL_DEVICE_CODE_SPLIT}")
 
-message(STATUS "GGML_SYCL_SUPPORT_LEVEL_ZERO ${GGML_SYCL_SUPPORT_LEVEL_ZERO}")
-if (GGML_SYCL_SUPPORT_LEVEL_ZERO)
+message(STATUS "GGML_SYCL_SUPPORT_LEVEL_ZERO_API ${GGML_SYCL_SUPPORT_LEVEL_ZERO_API}")
+if (GGML_SYCL_SUPPORT_LEVEL_ZERO_API)
     # Link against Level Zero loader for direct device memory allocation.
     # Avoids sycl::malloc_device triggering DMA-buf/TTM system RAM staging
     # in the xe kernel driver during multi-GPU inference.
@@ -122,7 +122,7 @@ if (GGML_SYCL_SUPPORT_LEVEL_ZERO)
     find_library(ZE_LOADER_LIB ze_loader HINTS ${ONEAPI_ROOT}/lib ${LEVEL_ZERO_V1_SDK_LIB_PATH} ENV LD_LIBRARY_PATH)
     if(ZE_LOADER_LIB AND LEVEL_ZERO_INCLUDE_DIR)
         target_link_libraries(ggml-sycl PRIVATE ${ZE_LOADER_LIB})
-        target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_SUPPORT_LEVEL_ZERO)
+        target_compile_definitions(ggml-sycl PRIVATE GGML_SYCL_SUPPORT_LEVEL_ZERO_API)
         message(STATUS "Level Zero loader found: ${ZE_LOADER_LIB}")
         message(STATUS "Level Zero headers found: ${LEVEL_ZERO_INCLUDE_DIR}")
     else()
@@ -130,7 +130,7 @@ if (GGML_SYCL_SUPPORT_LEVEL_ZERO)
     endif()
 endif()
 
-if (GGML_SYCL_SUPPORT_LEVEL_ZERO AND ZE_LOADER_LIB AND LEVEL_ZERO_INCLUDE_DIR)
+if (GGML_SYCL_SUPPORT_LEVEL_ZERO_API AND ZE_LOADER_LIB AND LEVEL_ZERO_INCLUDE_DIR)
     get_filename_component(GGML_SYCL_COMPILER_BIN_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
     find_program(GGML_SYCL_OPENCL_CLANG
                  NAMES clang

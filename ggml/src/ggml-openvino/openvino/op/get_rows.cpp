@@ -18,16 +18,9 @@ namespace op {
 OutputVector translate_get_rows(const NodeContext & context) {
     num_inputs_check(context, 2, 2);
 
-    int op_case = context.get_op_case();
-
     Output<Node> res;
-    auto data = context.get_input(0);
-    auto indices = context.get_input(1);
-
-    if (op_case == 2) {
-        // The input comes from a VIEW
-        indices = process_view_input(context, 1);
-    }
+    auto data = process_view_input_new(context, 0);
+    auto indices = process_view_input_new(context, 1);
 
     // data[1,b,x,y] ind[1,1,b,x'] test-backend-ops case
     // data[x,y] ind[1,1,1,x'] normal case

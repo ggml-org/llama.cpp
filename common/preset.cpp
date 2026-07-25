@@ -7,6 +7,7 @@
 #include <fstream>
 #include <sstream>
 #include <filesystem>
+#include <regex>
 
 static std::string rm_leading_dashes(const std::string & str) {
     size_t pos = 0;
@@ -16,46 +17,21 @@ static std::string rm_leading_dashes(const std::string & str) {
     return str.substr(pos);
 }
 
-// only allow a subset of args for remote presets for security reasons
-// do not add more args unless absolutely necessary
-// args that output to files are strictly prohibited
-static std::set<std::string> get_remote_preset_whitelist(const std::map<std::string, common_arg> & key_to_opt) {
-    static const std::set<std::string> allowed_options = {
-        "model-url",
-        "hf-repo",
-        "hf-repo-draft",
-        "hf-repo-v", // vocoder
-        "hf-file-v", // vocoder
-        "mmproj-url",
-        "pooling",
-        "jinja",
-        "batch-size",
-        "ubatch-size",
-        "cache-reuse",
-        "chat-template-kwargs",
-        "mmap",
-        // note: sampling params are automatically allowed by default
-        // negated args will be added automatically if the positive arg is specified above
-    };
-
-    std::set<std::string> allowed_keys;
-
-    for (const auto & it : key_to_opt) {
-        const std::string & key = it.first;
-        const common_arg & opt = it.second;
-        if (allowed_options.find(key) != allowed_options.end() || opt.is_sampling) {
-            allowed_keys.insert(key);
-            // also add variant keys (args without leading dashes and env vars)
-            for (const auto & arg : opt.get_args()) {
-                allowed_keys.insert(rm_leading_dashes(arg));
-            }
-            for (const auto & env : opt.get_env()) {
-                allowed_keys.insert(env);
-            }
+static std::string canonical_tag(const std::string & tag) {
+    static const std::regex re_tag("[-.]([A-Z0-9_]+)$", std::regex::icase);
+    std::smatch m;
+    if (std::regex_search(tag, m, re_tag)) {
+        std::string canon = m[1].str();
+        for (char & c : canon) {
+            c = (char) std::toupper((unsigned char) c);
         }
+        return canon;
     }
-
-    return allowed_keys;
+    std::string upper = tag;
+    for (char & c : upper) {
+        c = (char) std::toupper((unsigned char) c);
+    }
+    return upper;
 }
 
 std::vector<std::string> common_preset::to_args(const std::string & bin_path) const {
@@ -300,16 +276,10 @@ static std::string parse_bool_arg(const common_arg & arg, const std::string & ke
     return value;
 }
 
-common_preset_context::common_preset_context(llama_example ex, bool only_remote_allowed)
+common_preset_context::common_preset_context(llama_example ex)
         : ctx_params(common_params_parser_init(default_params, ex)) {
     common_params_add_preset_options(ctx_params.options);
     key_to_opt = get_map_key_opt(ctx_params);
-
-    // setup allowed keys if only_remote_allowed is true
-    if (only_remote_allowed) {
-        filter_allowed_keys = true;
-        allowed_keys = get_remote_preset_whitelist(key_to_opt);
-    }
 }
 
 common_presets common_preset_context::load_from_ini(const std::string & path, common_preset & global) const {
@@ -318,11 +288,18 @@ common_presets common_preset_context::load_from_ini(const std::string & path, co
 
     for (auto section : ini_data) {
         common_preset preset;
-        if (section.first.empty()) {
-            preset.name = COMMON_PRESET_DEFAULT_NAME;
-        } else {
-            preset.name = section.first;
+        std::string section_name = section.first.empty() ? std::string(COMMON_PRESET_DEFAULT_NAME) : section.first;
+        if (section_name != "*" && section_name != COMMON_PRESET_DEFAULT_NAME) {
+            auto colon_idx = section_name.rfind(':');
+            if (colon_idx != std::string::npos) {
+                std::string tag       = section_name.substr(colon_idx + 1);
+                std::string canon_tag = canonical_tag(tag);
+                if (canon_tag != tag) {
+                    section_name = section_name.substr(0, colon_idx + 1) + canon_tag;
+                }
+            }
         }
+        preset.name = section_name;
         LOG_DBG("loading preset: %s\n", preset.name.c_str());
         for (const auto & [key, value] : section.second) {
             if (key == "version") {

@@ -10,6 +10,8 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 
+#include "ggml.h"
+
 #include "concat.hpp"
 
 static inline size_t elem_size(ggml_type t) {
@@ -192,11 +194,29 @@ void ggml_sycl_op_concat(ggml_backend_sycl_context & ctx, ggml_tensor *dst) {
     case GGML_TYPE_F32:
         concat_impl_sycl<float>(ctx, dst);
         break;
+    case GGML_TYPE_F16:
+        concat_impl_sycl<sycl::half>(ctx, dst);
+        break;
+#ifdef GGML_SYCL_HAS_BF16
+    case GGML_TYPE_BF16:
+        concat_impl_sycl<sycl::ext::oneapi::bfloat16>(ctx, dst);
+        break;
+#endif
     case GGML_TYPE_I32:
         concat_impl_sycl<int32_t>(ctx, dst);
         break;
+    case GGML_TYPE_I16:
+        concat_impl_sycl<int16_t>(ctx, dst);
+        break;
+    case GGML_TYPE_I64:
+        concat_impl_sycl<int64_t>(ctx, dst);
+        break;
+    case GGML_TYPE_I8:
+        concat_impl_sycl<int8_t>(ctx, dst);
+        break;
     default:
-    GGML_ASSERT(false && "ggml_sycl_op_concat: unsupported type");
+        fprintf(stderr, "%s: unsupported types: dst: %s\n", __func__, ggml_type_name(dst->type));
+        GGML_ASSERT(false);
     break;
     }
 }
