@@ -37,9 +37,9 @@ void usage(const char * argv0) {
             "Usage: %s -m model.gguf --mmproj mmproj.gguf --vla vla.gguf \\\n"
             "  --image image.jpg --prompt '<image>\\n...' --state state.bin [options]\n\n"
             "Options:\n"
-            "  --noise FILE          optional f32 [horizon, action_dim] noise\n"
+            "  --noise FILE          optional f32 [control_horizon, control_dim] noise\n"
             "  --embodiment-id N      embodiment index (default: 0)\n"
-            "  --output FILE          write actions as raw f32; otherwise print them\n"
+            "  --output FILE          write controls as raw f32; otherwise print them\n"
             "  --ctx-size N           libllama context size (default: 4096)\n"
             "  --batch-size N         prompt batch size (default: 512)\n"
             "  --cpu                  run libllama and VLA on CPU\n"
@@ -285,7 +285,11 @@ int main(int argc, char ** argv) {
             result = mtmd_encode_chunk(mtmd_ctx.get(), chunk);
             if (result == 0) {
                 llama_pos new_n_past = n_past;
-                result = mtmd_helper_decode_image_chunk(
+                mtmd_helper_decode_params decode_params = mtmd_helper_decode_params_default();
+                decode_params.output_all = true;
+                decode_params.callback = collect_hidden;
+                decode_params.callback_user_data = &collector;
+                result = mtmd_helper_decode_image_chunk_ex(
                         mtmd_ctx.get(),
                         lctx,
                         chunk,
@@ -294,9 +298,7 @@ int main(int argc, char ** argv) {
                         0,
                         cli.n_batch,
                         &new_n_past,
-                        true,
-                        collect_hidden,
-                        &collector);
+                        decode_params);
                 n_past = new_n_past;
             }
         } else {
@@ -314,8 +316,8 @@ int main(int argc, char ** argv) {
         return 1;
     }
     const int64_t n_tokens = (int64_t) collector.data.size() / n_embd;
-    std::vector<float> actions(
-            (size_t) vla_action_horizon(vla_ctx.get()) * vla_action_dim(vla_ctx.get()));
+    std::vector<float> controls(
+            (size_t) vla_control_horizon(vla_ctx.get()) * vla_control_dim(vla_ctx.get()));
     vla_input input = {
         /*.embeddings    =*/ collector.data.data(),
         /*.n_tokens      =*/ n_tokens,
@@ -327,24 +329,24 @@ int main(int argc, char ** argv) {
         /*.embodiment_id =*/ cli.embodiment_id,
     };
     vla_output output = {
-        /*.actions  =*/ actions.data(),
-        /*.capacity =*/ (int64_t) actions.size(),
+        /*.controls =*/ controls.data(),
+        /*.capacity =*/ (int64_t) controls.size(),
     };
     if (!vla_predict(vla_ctx.get(), &input, &output)) {
         return 1;
     }
 
     if (!cli.output_path.empty()) {
-        if (!write_f32(cli.output_path, actions)) {
+        if (!write_f32(cli.output_path, controls)) {
             std::fprintf(stderr, "failed to write %s\n", cli.output_path.c_str());
             return 1;
         }
     } else {
-        const int64_t action_dim = vla_action_dim(vla_ctx.get());
-        for (int64_t t = 0; t < vla_action_horizon(vla_ctx.get()); ++t) {
+        const int64_t control_dim = vla_control_dim(vla_ctx.get());
+        for (int64_t t = 0; t < vla_control_horizon(vla_ctx.get()); ++t) {
             std::printf("%lld", (long long) t);
-            for (int64_t d = 0; d < action_dim; ++d) {
-                std::printf(" %.9g", actions[(size_t) t * action_dim + d]);
+            for (int64_t d = 0; d < control_dim; ++d) {
+                std::printf(" %.9g", controls[(size_t) t * control_dim + d]);
             }
             std::printf("\n");
         }

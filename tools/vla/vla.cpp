@@ -50,8 +50,8 @@ bool vla_metadata_load(const char * path, vla_metadata & metadata) {
     metadata.architecture     = gguf_string(ctx, "general.architecture");
     metadata.model_type       = gguf_string(ctx, "vla.model_type");
     metadata.state_dim        = gguf_u32(ctx, "vla.state_dim");
-    metadata.action_dim       = gguf_u32(ctx, "vla.action_dim");
-    metadata.action_horizon   = gguf_u32(ctx, "vla.action_horizon");
+    metadata.control_dim      = gguf_u32(ctx, "vla.control_dim");
+    metadata.control_horizon  = gguf_u32(ctx, "vla.control_horizon");
     metadata.conditioning_dim = gguf_u32(ctx, "vla.conditioning_dim");
     metadata.n_embodiments    = gguf_u32(ctx, "vla.n_embodiments");
     gguf_free(ctx);
@@ -65,8 +65,8 @@ bool vla_metadata_load(const char * path, vla_metadata & metadata) {
         std::fprintf(stderr, "vla: missing vla.model_type\n");
         return false;
     }
-    if (metadata.state_dim <= 0 || metadata.action_dim <= 0 ||
-            metadata.action_horizon <= 0 || metadata.conditioning_dim <= 0 ||
+    if (metadata.state_dim <= 0 || metadata.control_dim <= 0 ||
+            metadata.control_horizon <= 0 || metadata.conditioning_dim <= 0 ||
             metadata.n_embodiments <= 0) {
         std::fprintf(stderr, "vla: invalid common dimensions in GGUF metadata\n");
         return false;
@@ -114,8 +114,8 @@ vla_context * vla_init_from_file(
     }
 
     if (model->state_dim() != metadata.state_dim ||
-            model->action_dim() != metadata.action_dim ||
-            model->action_horizon() != metadata.action_horizon ||
+            model->control_dim() != metadata.control_dim ||
+            model->control_horizon() != metadata.control_horizon ||
             model->conditioning_dim() != metadata.conditioning_dim ||
             model->n_embodiments() != metadata.n_embodiments) {
         std::fprintf(stderr, "vla: model factory dimensions do not match common metadata\n");
@@ -139,12 +139,12 @@ int64_t vla_state_dim(const vla_context * ctx) {
     return ctx && ctx->model ? ctx->model->state_dim() : 0;
 }
 
-int64_t vla_action_dim(const vla_context * ctx) {
-    return ctx && ctx->model ? ctx->model->action_dim() : 0;
+int64_t vla_control_dim(const vla_context * ctx) {
+    return ctx && ctx->model ? ctx->model->control_dim() : 0;
 }
 
-int64_t vla_action_horizon(const vla_context * ctx) {
-    return ctx && ctx->model ? ctx->model->action_horizon() : 0;
+int64_t vla_control_horizon(const vla_context * ctx) {
+    return ctx && ctx->model ? ctx->model->control_horizon() : 0;
 }
 
 int64_t vla_conditioning_dim(const vla_context * ctx) {
@@ -163,11 +163,11 @@ bool vla_predict(vla_context * ctx, const vla_input * input, vla_output * output
             input->n_embd != ctx->model->conditioning_dim() ||
             !input->state || input->n_state != ctx->model->state_dim() ||
             (input->noise && input->n_noise !=
-                ctx->model->action_horizon() * ctx->model->action_dim()) ||
+                ctx->model->control_horizon() * ctx->model->control_dim()) ||
             input->embodiment_id < 0 ||
             input->embodiment_id >= ctx->model->n_embodiments() ||
-            !output->actions ||
-            output->capacity < ctx->model->action_horizon() * ctx->model->action_dim()) {
+            !output->controls ||
+            output->capacity < ctx->model->control_horizon() * ctx->model->control_dim()) {
         std::fprintf(stderr, "vla: invalid prediction input or output dimensions\n");
         return false;
     }

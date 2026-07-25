@@ -389,9 +389,9 @@ static action_head_model * action_head_load(const char * gguf_path, const vla_co
     }
 
     // ---- hparams (dims come from GGUF metadata written by the convert script) ----
-    m->action_dim   = kv_u32(g, "vla.action_dim", 80);
+    m->action_dim   = kv_u32(g, "vla.control_dim", 80);
     m->state_dim    = kv_u32(g, "vla.state_dim", 80);
-    m->horizon      = kv_u32(g, "vla.action_horizon", 30);
+    m->horizon      = kv_u32(g, "vla.control_horizon", 30);
     m->num_steps    = kv_u32(g, "mra.num_inference_timesteps", 4);
     m->num_buckets  = kv_u32(g, "mra.num_timestep_buckets", 1000);
     m->n_layers     = kv_u32(g, "mra.dit_layers", 16);
@@ -759,11 +759,11 @@ public:
         return model_->state_dim;
     }
 
-    int64_t action_dim() const override {
+    int64_t control_dim() const override {
         return model_->action_dim;
     }
 
-    int64_t action_horizon() const override {
+    int64_t control_horizon() const override {
         return model_->horizon;
     }
 
@@ -783,7 +783,7 @@ public:
                 input.state,
                 input.noise,
                 input.embodiment_id,
-                output.actions);
+                output.controls);
     }
 
 private:

@@ -9,8 +9,8 @@
 // matching PyTorch implementation:
 //   vl_embs.bin      [S, cross_dim]   (S inferred from file size)
 //   state.bin        [state_dim]
-//   noise.bin        [horizon, action_dim]
-//   actions_ref.bin  [horizon, action_dim]
+//   noise.bin        [control_horizon, control_dim]
+//   controls_ref.bin [control_horizon, control_dim] (or pass an explicit path)
 //
 // Pass criteria (CUDA backend): MAE < 1e-4 and max|diff| < 5e-3.
 
@@ -44,13 +44,23 @@ static bool read_f32_file(const std::string & path, std::vector<float> & out) {
 
 int main(int argc, char ** argv) {
     if (argc < 3) {
-        std::fprintf(stderr, "usage: %s <vla.gguf> <reference-dir>\n", argv[0]);
+        std::fprintf(stderr, "usage: %s <vla.gguf> <reference-dir> [controls-reference] [--cpu]\n", argv[0]);
         return 1;
     }
     const std::string gguf_path = argv[1];
     const std::string ref_dir   = argv[2];
+    std::string controls_path = ref_dir + "/controls_ref.bin";
+    bool use_gpu = true;
+    for (int i = 3; i < argc; ++i) {
+        if (std::string(argv[i]) == "--cpu") {
+            use_gpu = false;
+        } else {
+            controls_path = argv[i];
+        }
+    }
 
     vla_context_params params = vla_context_params_default();
+    params.use_gpu = use_gpu;
     vla_context * ctx = vla_init_from_file(gguf_path.c_str(), nullptr, params);
     if (!ctx) {
         std::fprintf(stderr, "FAIL: model load\n");
@@ -59,14 +69,14 @@ int main(int argc, char ** argv) {
 
     const int64_t cross_dim = vla_conditioning_dim(ctx);
     const int64_t state_dim = vla_state_dim(ctx);
-    const int64_t action_dim = vla_action_dim(ctx);
-    const int64_t horizon = vla_action_horizon(ctx);
+    const int64_t control_dim = vla_control_dim(ctx);
+    const int64_t horizon = vla_control_horizon(ctx);
 
     std::vector<float> vl, state, noise, ref;
     if (!read_f32_file(ref_dir + "/vl_embs.bin", vl) ||
         !read_f32_file(ref_dir + "/state.bin", state) ||
         !read_f32_file(ref_dir + "/noise.bin", noise) ||
-        !read_f32_file(ref_dir + "/actions_ref.bin", ref)) {
+        !read_f32_file(controls_path, ref)) {
         vla_free(ctx);
         return 1;
     }
@@ -80,20 +90,20 @@ int main(int argc, char ** argv) {
     const int64_t S = (int64_t) vl.size() / cross_dim;
 
     if ((int64_t) state.size() != state_dim ||
-        (int64_t) noise.size() != horizon * action_dim ||
-        (int64_t) ref.size()   != horizon * action_dim) {
+        (int64_t) noise.size() != horizon * control_dim ||
+        (int64_t) ref.size()   != horizon * control_dim) {
         std::fprintf(stderr, "FAIL: bad input sizes (state=%zu noise=%zu ref=%zu)\n",
                      state.size(), noise.size(), ref.size());
         vla_free(ctx);
         return 1;
     }
 
-    std::printf("test-vla: type=%s S=%lld cross=%lld state=%lld horizon=%lld action=%lld\n",
+    std::printf("test-vla: type=%s S=%lld cross=%lld state=%lld horizon=%lld control=%lld\n",
                 vla_model_type(ctx),
                 (long long) S, (long long) cross_dim, (long long) state_dim,
-                (long long) horizon, (long long) action_dim);
+                (long long) horizon, (long long) control_dim);
 
-    std::vector<float> out((size_t) horizon * action_dim, 0.0f);
+    std::vector<float> out((size_t) horizon * control_dim, 0.0f);
     const int embodiment_id = 0;
     vla_input input = {
         /*.embeddings    =*/ vl.data(),
@@ -106,7 +116,7 @@ int main(int argc, char ** argv) {
         /*.embodiment_id =*/ embodiment_id,
     };
     vla_output output = {
-        /*.actions  =*/ out.data(),
+        /*.controls =*/ out.data(),
         /*.capacity =*/ (int64_t) out.size(),
     };
     if (!vla_predict(ctx, &input, &output)) {
@@ -126,7 +136,7 @@ int main(int argc, char ** argv) {
 
     std::printf("MAE      = %.3e\n", mae);
     std::printf("max|diff|= %.3e  (at [%zu][%zu]: got %.6f, ref %.6f)\n",
-                max_abs, max_idx / action_dim, max_idx % action_dim,
+                max_abs, max_idx / control_dim, max_idx % control_dim,
                 out[max_idx], ref[max_idx]);
 
     // print a few sample values

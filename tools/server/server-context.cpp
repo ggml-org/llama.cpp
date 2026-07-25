@@ -16,6 +16,9 @@
 #include "speculative.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
+#ifdef LLAMA_SERVER_VLA
+#include "vla.h"
+#endif
 
 #include <algorithm>
 #include <cstddef>
@@ -167,6 +170,9 @@ struct server_slot {
     // multimodal
     mtmd_context * mctx = nullptr;
     mtmd::batch_ptr mbatch = nullptr;
+
+    // VLA per-token final hidden states, row-major.
+    std::vector<float> vla_conditioning;
 
     // speculative decoding
     common_speculative * spec;
@@ -329,6 +335,7 @@ struct server_slot {
 
         // clear multimodal state
         mbatch.reset();
+        vla_conditioning.clear();
     }
 
     void init_sampler() const {
@@ -371,6 +378,9 @@ struct server_slot {
     bool can_split() const {
         GGML_ASSERT(task);
 
+        if (task->type == SERVER_TASK_TYPE_VLA_PREDICTION) {
+            return true;
+        }
         return
             !task->need_embd() ||
             (llama_get_memory(ctx_tgt) && llama_pooling_type(ctx_tgt) == LLAMA_POOLING_TYPE_LAST);
@@ -689,6 +699,26 @@ struct server_slot {
         other.init_sampler();
     }
 
+    int append_vla_conditioning(const llama_batch & decoded_batch) {
+        if (!task || task->type != SERVER_TASK_TYPE_VLA_PREDICTION) {
+            return 0;
+        }
+        const int32_t n_embd = llama_model_n_embd_out(llama_get_model(ctx_tgt));
+        for (int32_t i = 0; i < decoded_batch.n_tokens; ++i) {
+            if (!decoded_batch.logits[i] ||
+                    decoded_batch.n_seq_id[i] == 0 ||
+                    decoded_batch.seq_id[i][0] != id) {
+                continue;
+            }
+            const float * values = llama_get_embeddings_ith(ctx_tgt, i);
+            if (!values) {
+                return 1;
+            }
+            vla_conditioning.insert(vla_conditioning.end(), values, values + n_embd);
+        }
+        return 0;
+    }
+
     // returns 0 on success
     // caller need to update prompt.tokens after a successful call to keep track of the processing progress
     int process_mtmd_chunk(size_t idx, size_t & n_tokens_out) {
@@ -701,29 +731,32 @@ struct server_slot {
             if (mbatch) {
                 float * embd = mtmd_batch_get_output_embd(mbatch.get(), chunk.get());
                 if (embd) {
-                    void * cb_data = spec;
+                    struct callback_data {
+                        common_speculative * spec;
+                        server_slot * slot;
+                    } cb_data = {spec, this};
                     static auto cb = [](llama_batch batch, void * user_data) {
-                        common_speculative * spec = static_cast<common_speculative *>(user_data);
-                        if (!common_speculative_process(spec, batch)) {
+                        auto * data = static_cast<callback_data *>(user_data);
+                        if (data->spec && !common_speculative_process(data->spec, batch)) {
                             return 1;
                         }
-                        return 0;
+                        return data->slot->append_vla_conditioning(batch);
                     };
 
                     llama_pos new_n_past; // unused for now
-                    res = mtmd_helper_decode_image_chunk(
-                        mctx,
-                        ctx_tgt,
-                        chunk.get(),
-                        embd,
-                        prompt.tokens.pos_next(),
-                        id,
-                        llama_n_batch(ctx_tgt),
-                        &new_n_past,
-                        false,
-                        cb,
-                        cb_data
-                    );
+                    if (task->type == SERVER_TASK_TYPE_VLA_PREDICTION) {
+                        mtmd_helper_decode_params dparams = mtmd_helper_decode_params_default();
+                        dparams.output_all = true;
+                        dparams.callback = cb;
+                        dparams.callback_user_data = &cb_data;
+                        res = mtmd_helper_decode_image_chunk_ex(
+                            mctx, ctx_tgt, chunk.get(), embd, prompt.tokens.pos_next(), id,
+                            llama_n_batch(ctx_tgt), &new_n_past, dparams);
+                    } else {
+                        res = mtmd_helper_decode_image_chunk(
+                            mctx, ctx_tgt, chunk.get(), embd, prompt.tokens.pos_next(), id,
+                            llama_n_batch(ctx_tgt), &new_n_past, cb, &cb_data);
+                    }
                     if (res != 0) {
                         SLT_ERR(*this, "failed to decode mtmd chunk, idx = %zu, res = %d\n", idx, res);
                         return -1;
@@ -890,6 +923,10 @@ private:
 
     llama_context * ctx_tgt = nullptr;
 
+#ifdef LLAMA_SERVER_VLA
+    vla_context * vctx = nullptr;
+#endif
+
     server_batch batch;
 
     llama_model   * model_dft = nullptr;
@@ -935,6 +972,10 @@ private:
     int64_t t_last_load_progress_ms = 0;
 
     void destroy() {
+#ifdef LLAMA_SERVER_VLA
+        vla_free(vctx);
+        vctx = nullptr;
+#endif
         spec.reset();
         spec_init.reset();
 
@@ -1002,6 +1043,9 @@ private:
         load_progress_data load_progress_text  (this, "text_model");
         load_progress_data load_progress_mmproj(this, "mmproj_model");
         load_progress_data load_progress_spec  (this, "spec_model");
+#ifdef LLAMA_SERVER_VLA
+        load_progress_data load_progress_vla   (this, "vla_model");
+#endif
 
         const bool is_resume = sleeping;
 
@@ -1009,11 +1053,17 @@ private:
         params_base.n_outputs_max = server_n_outputs_max(params_base);
 
         const bool has_mmproj = !params.mmproj.path.empty();
+        const bool has_vla = !params.vla_model_path.empty();
         const bool has_draft = params.speculative.has_dft();
         const bool spec_mtp = std::find(params_base.speculative.types.begin(),
                                         params_base.speculative.types.end(),
                                         COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end();
         const bool has_spec = has_draft || spec_mtp;
+
+        if (has_vla) {
+            params_base.embedding = true;
+            params_base.pooling_type = LLAMA_POOLING_TYPE_NONE;
+        }
 
         if (callback_state) {
             std::vector<std::string> stages = {"text_model"};
@@ -1023,9 +1073,15 @@ private:
             if (has_mmproj) {
                 stages.push_back("mmproj_model");
             }
+            if (has_vla) {
+                stages.push_back("vla_model");
+            }
             load_progress_text.stages   = stages;
             load_progress_mmproj.stages = stages;
             load_progress_spec.stages   = stages;
+#ifdef LLAMA_SERVER_VLA
+            load_progress_vla.stages    = stages;
+#endif
 
             // trigger 0% progress
             load_progress_callback(0.0f, &load_progress_text);
@@ -1222,6 +1278,26 @@ private:
                 params_base.n_cache_reuse = 0;
                 SRV_WRN("%s\n", "cache_reuse is not supported by multimodal, it will be disabled");
             }
+        }
+
+        if (has_vla) {
+#ifdef LLAMA_SERVER_VLA
+            if (callback_state) {
+                callback_state(SERVER_STATE_LOADING, {{"stage", "vla_model"}});
+            }
+            vla_context_params vparams = vla_context_params_default();
+            vparams.use_gpu = params_base.n_gpu_layers != 0;
+            vparams.n_threads = params_base.cpuparams.n_threads;
+            vctx = vla_init_from_file(params_base.vla_model_path.c_str(), model_tgt, vparams);
+            if (vctx == nullptr) {
+                SRV_ERR("failed to load VLA model, '%s'\n", params_base.vla_model_path.c_str());
+                return false;
+            }
+            SRV_INF("loaded VLA model, '%s'\n", params_base.vla_model_path.c_str());
+#else
+            SRV_ERR("%s\n", "VLA model requested but this build has LLAMA_BUILD_VLA=OFF");
+            return false;
+#endif
         }
 
         if (!llama_memory_can_shift(llama_get_memory(ctx_tgt))) {
@@ -2135,6 +2211,60 @@ private:
         queue_results.send(std::move(res));
     }
 
+    void send_vla_prediction(server_slot & slot) {
+#ifdef LLAMA_SERVER_VLA
+        if (!vctx) {
+            send_error(slot, "VLA model is not loaded", ERROR_TYPE_NOT_SUPPORTED);
+            return;
+        }
+        const int64_t conditioning_dim = vla_conditioning_dim(vctx);
+        if (conditioning_dim <= 0 ||
+                slot.vla_conditioning.empty() ||
+                (int64_t) slot.vla_conditioning.size() % conditioning_dim != 0) {
+            send_error(slot, "invalid VLA conditioning buffer", ERROR_TYPE_SERVER);
+            return;
+        }
+
+        const int64_t control_dim = vla_control_dim(vctx);
+        const int64_t control_horizon = vla_control_horizon(vctx);
+        std::vector<float> controls((size_t) control_dim * control_horizon);
+        vla_input input = {
+            /*.embeddings    =*/ slot.vla_conditioning.data(),
+            /*.n_tokens      =*/ (int64_t) slot.vla_conditioning.size() / conditioning_dim,
+            /*.n_embd        =*/ conditioning_dim,
+            /*.state         =*/ slot.task->params.vla_state.data(),
+            /*.n_state       =*/ (int64_t) slot.task->params.vla_state.size(),
+            /*.noise         =*/ slot.task->params.vla_noise.empty() ? nullptr : slot.task->params.vla_noise.data(),
+            /*.n_noise       =*/ (int64_t) slot.task->params.vla_noise.size(),
+            /*.embodiment_id =*/ slot.task->params.vla_embodiment_id,
+        };
+        vla_output output = {
+            /*.controls =*/ controls.data(),
+            /*.capacity =*/ (int64_t) controls.size(),
+        };
+
+        const int64_t started = ggml_time_us();
+        if (!vla_predict(vctx, &input, &output)) {
+            send_error(slot, "VLA prediction failed", ERROR_TYPE_SERVER);
+            return;
+        }
+
+        auto res = std::make_unique<server_task_result_vla>();
+        res->id = slot.task->id;
+        res->index = slot.task->index;
+        res->controls = std::move(controls);
+        res->control_dim = (int32_t) control_dim;
+        res->control_horizon = (int32_t) control_horizon;
+        res->n_tokens = (int32_t) input.n_tokens;
+        res->prediction_ms = (ggml_time_us() - started) / 1000.0;
+        res->model = model_name;
+        res->model_type = vla_model_type(vctx);
+        queue_results.send(std::move(res));
+#else
+        send_error(slot, "VLA support is not built", ERROR_TYPE_NOT_SUPPORTED);
+#endif
+    }
+
     void send_embedding(const server_slot & slot, const llama_batch & batch) {
         auto res = std::make_unique<server_task_result_embd>();
         res->id        = slot.task->id;
@@ -2347,6 +2477,7 @@ private:
             case SERVER_TASK_TYPE_INFILL:
             case SERVER_TASK_TYPE_EMBEDDING:
             case SERVER_TASK_TYPE_RERANK:
+            case SERVER_TASK_TYPE_VLA_PREDICTION:
                 {
                     // special case: if input is provided via CLI, tokenize it first
                     // otherwise, no need to tokenize as it's already done inside the HTTP thread
@@ -3709,12 +3840,26 @@ private:
                 }
             }
 
+            if (slot.task && slot.task->type == SERVER_TASK_TYPE_VLA_PREDICTION &&
+                    slot.append_vla_conditioning(batch_view) != 0) {
+                send_error(slot, "failed to collect VLA conditioning", ERROR_TYPE_SERVER);
+                slot.release();
+                return;
+            }
+
             if (!is_inside_view(slot.i_batch)) {
                 // the required token not in this sub-batch, skip
                 return;
             }
 
             if (slot.state == SLOT_STATE_DONE_PROMPT) {
+                if (slot.task->type == SERVER_TASK_TYPE_VLA_PREDICTION) {
+                    send_vla_prediction(slot);
+                    slot.release();
+                    slot.i_batch = -1;
+                    return;
+                }
+
                 if (slot.task->type == SERVER_TASK_TYPE_EMBEDDING) {
                     // prompt evaluated for embedding
                     send_embedding(slot, batch_view);
@@ -3967,6 +4112,22 @@ server_context_meta server_context::get_meta() const {
 
     const char * ftype_name = llama_ftype_name(llama_model_ftype(impl->model_tgt));
 
+#ifdef LLAMA_SERVER_VLA
+    const bool has_vla = impl->vctx != nullptr;
+    const char * vla_type = has_vla ? vla_model_type(impl->vctx) : "";
+    const int32_t vla_state = has_vla ? (int32_t) vla_state_dim(impl->vctx) : 0;
+    const int32_t vla_control = has_vla ? (int32_t) vla_control_dim(impl->vctx) : 0;
+    const int32_t vla_horizon = has_vla ? (int32_t) vla_control_horizon(impl->vctx) : 0;
+    const int32_t vla_embodiments = has_vla ? (int32_t) vla_n_embodiments(impl->vctx) : 0;
+#else
+    const bool has_vla = false;
+    const char * vla_type = "";
+    const int32_t vla_state = 0;
+    const int32_t vla_control = 0;
+    const int32_t vla_horizon = 0;
+    const int32_t vla_embodiments = 0;
+#endif
+
     return server_context_meta {
         /* build_info             */ std::string(llama_build_info()),
         /* model_name             */ impl->model_name,
@@ -3974,6 +4135,12 @@ server_context_meta server_context::get_meta() const {
         /* model_tags             */ impl->model_tags,
         /* model_path             */ impl->params_base.model.path,
         /* has_mtmd               */ impl->mctx != nullptr,
+        /* has_vla                */ has_vla,
+        /* vla_model_type         */ vla_type,
+        /* vla_state_dim          */ vla_state,
+        /* vla_control_dim        */ vla_control,
+        /* vla_control_horizon    */ vla_horizon,
+        /* vla_n_embodiments      */ vla_embodiments,
         /* has_inp_image          */ impl->chat_params.allow_image,
         /* has_inp_audio          */ impl->chat_params.allow_audio,
         /* has_inp_video          */ impl->chat_params.allow_video,
@@ -4548,6 +4715,14 @@ void server_routes::init_routes() {
                 {"video",  meta->has_inp_video},
                 {"audio",  meta->has_inp_audio},
             } },
+            { "vla",                         json {
+                {"enabled",         meta->has_vla},
+                {"model_type",      meta->vla_model_type},
+                {"state_dim",       meta->vla_state_dim},
+                {"control_dim",     meta->vla_control_dim},
+                {"control_horizon", meta->vla_control_horizon},
+                {"n_embodiments",   meta->vla_n_embodiments},
+            } },
             { "media_marker",                get_media_marker() },
             { "endpoint_slots",              params.endpoint_slots },
             { "endpoint_props",              params.endpoint_props },
@@ -4835,6 +5010,14 @@ void server_routes::init_routes() {
         bool ctx_server; // do NOT delete this line
         GGML_UNUSED(ctx_server);
 
+        json capabilities = {"completion"};
+        if (meta->has_mtmd) {
+            capabilities.push_back("multimodal");
+        }
+        if (meta->has_vla) {
+            capabilities.push_back("vla");
+        }
+
         json models = {
             {"models", {
                 {
@@ -4846,7 +5029,7 @@ void server_routes::init_routes() {
                     {"type", "model"},
                     {"description", ""},
                     {"tags", {""}},
-                    {"capabilities", meta->has_mtmd ? json({"completion","multimodal"}) : json({"completion"})},
+                    {"capabilities", capabilities},
                     {"parameters", ""},
                     {"details", {
                         {"parent_model", ""},
@@ -4929,6 +5112,10 @@ void server_routes::init_routes() {
 
     this->post_embeddings_oai = [this](const server_http_req & req) {
         return handle_embeddings_impl(req, TASK_RESPONSE_TYPE_OAI_EMBD);
+    };
+
+    this->post_vla_predictions = [this](const server_http_req & req) {
+        return handle_vla_predictions_impl(req);
     };
 
     this->post_rerank = [this](const server_http_req & req) {
@@ -5290,6 +5477,120 @@ std::unique_ptr<server_res_generator> server_routes::handle_embeddings_impl(cons
         ? format_embeddings_response_oaicompat(body, meta->model_name, responses, use_base64)
         : json(responses);
     res->ok(root);
+    return res;
+}
+
+std::unique_ptr<server_res_generator> server_routes::handle_vla_predictions_impl(const server_http_req & req) {
+    auto res = create_response();
+    if (!meta->has_vla) {
+        res->error(format_error_response(
+                "This server does not have a VLA model loaded. Start it with `--vla-model <gguf>`",
+                ERROR_TYPE_NOT_SUPPORTED));
+        return res;
+    }
+
+    const json body = json::parse(req.body);
+    json prompt;
+    if (body.contains("input")) {
+        prompt = body.at("input");
+    } else if (body.contains("content")) {
+        prompt = body.at("content");
+    } else {
+        res->error(format_error_response("\"input\" or \"content\" must be provided", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+
+    auto parse_float_array = [&](const char * name, bool required, std::vector<float> & output) {
+        if (!body.contains(name)) {
+            return !required;
+        }
+        const json & value = body.at(name);
+        if (!value.is_array()) {
+            return false;
+        }
+        for (const auto & item : value) {
+            if (item.is_array()) {
+                for (const auto & nested : item) {
+                    if (!nested.is_number()) {
+                        return false;
+                    }
+                    output.push_back(nested.get<float>());
+                }
+            } else {
+                if (!item.is_number()) {
+                    return false;
+                }
+                output.push_back(item.get<float>());
+            }
+        }
+        return true;
+    };
+
+    std::vector<float> state;
+    std::vector<float> noise;
+    if (!parse_float_array("state", true, state)) {
+        res->error(format_error_response("\"state\" must be an array of numbers", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+    if (!parse_float_array("noise", false, noise)) {
+        res->error(format_error_response("\"noise\" must be an array of numbers", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+    if ((int32_t) state.size() != meta->vla_state_dim) {
+        res->error(format_error_response(
+                string_format("\"state\" must contain %d values", meta->vla_state_dim),
+                ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+    const int64_t expected_noise = (int64_t) meta->vla_control_horizon * meta->vla_control_dim;
+    if (!noise.empty() && (int64_t) noise.size() != expected_noise) {
+        res->error(format_error_response(
+                string_format("\"noise\" must contain %lld values", (long long) expected_noise),
+                ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+
+    if (body.contains("embodiment_id") && !body.at("embodiment_id").is_number_integer()) {
+        res->error(format_error_response("\"embodiment_id\" must be an integer", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+    int32_t embodiment_id = json_value(body, "embodiment_id", 0);
+    if (embodiment_id < 0 || embodiment_id >= meta->vla_n_embodiments) {
+        res->error(format_error_response(
+                string_format("\"embodiment_id\" must be in [0, %d)", meta->vla_n_embodiments),
+                ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+
+    auto tokenized_prompts = tokenize_input_prompts(ctx_server.vocab, ctx_server.mctx, prompt, true, true);
+    if (tokenized_prompts.size() != 1) {
+        res->error(format_error_response("VLA predictions require exactly one input", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+    if (tokenized_prompts[0].empty()) {
+        res->error(format_error_response("Input content cannot be empty", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    }
+
+    server_task task(SERVER_TASK_TYPE_VLA_PREDICTION);
+    task.id = res->rd.get_new_id();
+    task.tokens = std::move(tokenized_prompts[0]);
+    task.params.cache_prompt = false;
+    task.params.vla_state = std::move(state);
+    task.params.vla_noise = std::move(noise);
+    task.params.vla_embodiment_id = embodiment_id;
+    res->rd.post_task(std::move(task));
+
+    auto result = res->rd.next(req.should_stop);
+    if (!result) {
+        return res;
+    }
+    if (result->is_error()) {
+        res->error(result->to_json());
+        return res;
+    }
+    GGML_ASSERT(dynamic_cast<server_task_result_vla *>(result.get()) != nullptr);
+    res->ok(result->to_json());
     return res;
 }
 

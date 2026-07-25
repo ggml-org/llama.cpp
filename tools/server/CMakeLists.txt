@@ -30,6 +30,11 @@ endif()
 target_include_directories(${TARGET} PRIVATE ../mtmd)
 target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
 target_link_libraries(${TARGET} PUBLIC llama-common mtmd ${CMAKE_THREAD_LIBS_INIT})
+if (LLAMA_BUILD_VLA)
+    target_include_directories(${TARGET} PRIVATE ../vla)
+    target_link_libraries(${TARGET} PUBLIC vla)
+    target_compile_definitions(${TARGET} PUBLIC LLAMA_SERVER_VLA)
+endif()
 
 # llama-server-impl: server logic, reusable by app
 

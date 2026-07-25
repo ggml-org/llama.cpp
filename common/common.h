@@ -599,6 +599,9 @@ struct common_params {
     int image_max_tokens = -1;
     int mtmd_batch_max_tokens = 1024;
 
+    // Vision-language-control component
+    std::string vla_model_path = "";
+
     // finetune
     struct lr_opt lr;
     enum ggml_opt_optimizer_type optimizer = GGML_OPT_OPTIMIZER_TYPE_ADAMW;

@@ -19,6 +19,12 @@ struct server_context_meta {
     std::set<std::string> model_tags;
     std::string model_path;
     bool has_mtmd;
+    bool has_vla;
+    std::string vla_model_type;
+    int32_t vla_state_dim;
+    int32_t vla_control_dim;
+    int32_t vla_control_horizon;
+    int32_t vla_n_embodiments;
     bool has_inp_image;
     bool has_inp_audio;
     bool has_inp_video;
@@ -150,6 +156,7 @@ struct server_routes {
     server_http_context::handler_t post_detokenize;
     server_http_context::handler_t post_embeddings;
     server_http_context::handler_t post_embeddings_oai;
+    server_http_context::handler_t post_vla_predictions;
     server_http_context::handler_t post_rerank;
     server_http_context::handler_t get_lora_adapters;
     server_http_context::handler_t post_lora_adapters;
@@ -168,6 +175,7 @@ private:
     std::unique_ptr<server_res_generator> handle_slots_restore(const server_http_req & req, int id_slot);
     std::unique_ptr<server_res_generator> handle_slots_erase(const server_http_req &, int id_slot);
     std::unique_ptr<server_res_generator> handle_embeddings_impl(const server_http_req & req, task_response_type res_type);
+    std::unique_ptr<server_res_generator> handle_vla_predictions_impl(const server_http_req & req);
     std::unique_ptr<server_res_generator> handle_count_tokens(const llama_vocab * vocab, mtmd_context * mctx, const server_http_req & req, task_response_type res_type);
 
     // using unique_ptr to allow late initialization of const

@@ -263,7 +263,15 @@ private:
 };
 
 // Helper function for decoding an image whose embeddings have already been calculated
-int32_t mtmd_helper_decode_image_chunk(
+mtmd_helper_decode_params mtmd_helper_decode_params_default(void) {
+    return {
+        /*.output_all         =*/ false,
+        /*.callback           =*/ nullptr,
+        /*.callback_user_data =*/ nullptr,
+    };
+}
+
+int32_t mtmd_helper_decode_image_chunk_ex(
         mtmd_context * ctx,
         struct llama_context * lctx,
         const mtmd_input_chunk * chunk,
@@ -272,9 +280,7 @@ int32_t mtmd_helper_decode_image_chunk(
         llama_seq_id seq_id,
         int32_t n_batch,
         llama_pos * new_n_past,
-        bool embd_logits,
-        mtmd_helper_post_decode_callback callback,
-        void * user_data) {
+        mtmd_helper_decode_params params) {
     GGML_ASSERT(n_batch > 0);
     auto chunk_type = mtmd_input_chunk_get_type(chunk);
     const char * name = chunk_type == MTMD_INPUT_CHUNK_TYPE_IMAGE ? "image" : "audio";
@@ -291,7 +297,7 @@ int32_t mtmd_helper_decode_image_chunk(
     int32_t i_batch = 0;
     int32_t n_img_batches = (n_tokens + n_batch - 1) / n_batch;
     decode_embd_batch batch_embd(encoded_embd, n_tokens, n_pos_per_embd, n_mmproj_embd);
-    batch_embd.logits_value = embd_logits;
+    batch_embd.logits_value = params.output_all;
 
     if (mtmd_decode_use_mrope(ctx)) {
         if (chunk_type == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
@@ -330,8 +336,8 @@ int32_t mtmd_helper_decode_image_chunk(
             return ret;
         }
 
-        if (callback != nullptr) {
-            ret = callback(batch_embd_view, user_data);
+        if (params.callback != nullptr) {
+            ret = params.callback(batch_embd_view, params.callback_user_data);
             if (ret != 0) {
                 LOG_ERR("post-decode callback failed\n");
                 return ret;
@@ -347,6 +353,24 @@ int32_t mtmd_helper_decode_image_chunk(
     *new_n_past = n_past;
 
     return 0;
+}
+
+int32_t mtmd_helper_decode_image_chunk(
+        mtmd_context * ctx,
+        struct llama_context * lctx,
+        const mtmd_input_chunk * chunk,
+        float * encoded_embd,
+        llama_pos n_past,
+        llama_seq_id seq_id,
+        int32_t n_batch,
+        llama_pos * new_n_past,
+        mtmd_helper_post_decode_callback callback,
+        void * user_data) {
+    mtmd_helper_decode_params params = mtmd_helper_decode_params_default();
+    params.callback = callback;
+    params.callback_user_data = user_data;
+    return mtmd_helper_decode_image_chunk_ex(
+            ctx, lctx, chunk, encoded_embd, n_past, seq_id, n_batch, new_n_past, params);
 }
 
 int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
@@ -408,7 +432,7 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
         LOG_INF("%s slice encoded in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
 
         float * embd = mtmd_get_output_embd(ctx);
-        ret = mtmd_helper_decode_image_chunk(ctx, lctx, chunk, embd, n_past, seq_id, n_batch, new_n_past, false, nullptr, nullptr);
+        ret = mtmd_helper_decode_image_chunk(ctx, lctx, chunk, embd, n_past, seq_id, n_batch, new_n_past, nullptr, nullptr);
         if (ret != 0) {
             LOG_ERR("failed to decode %s\n", name);
             llama_batch_free(text_batch);

@@ -1509,6 +1509,30 @@ json server_task_result_embd::to_json_oaicompat() {
 }
 
 //
+// server_task_result_vla
+//
+json server_task_result_vla::to_json() {
+    json rows = json::array();
+    for (int32_t t = 0; t < control_horizon; ++t) {
+        json row = json::array();
+        for (int32_t d = 0; d < control_dim; ++d) {
+            row.push_back(controls[(size_t) t * control_dim + d]);
+        }
+        rows.push_back(std::move(row));
+    }
+    return json {
+        {"object", "vla.prediction"},
+        {"model", model},
+        {"model_type", model_type},
+        {"controls", std::move(rows)},
+        {"control_dim", control_dim},
+        {"control_horizon", control_horizon},
+        {"tokens_evaluated", n_tokens},
+        {"timings", {{"prediction_ms", prediction_ms}}},
+    };
+}
+
+//
 // server_task_result_rerank
 //
 json server_task_result_rerank::to_json() {

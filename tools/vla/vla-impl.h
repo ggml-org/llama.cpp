@@ -13,8 +13,8 @@ public:
     virtual const char * model_type() const = 0;
 
     virtual int64_t state_dim() const = 0;
-    virtual int64_t action_dim() const = 0;
-    virtual int64_t action_horizon() const = 0;
+    virtual int64_t control_dim() const = 0;
+    virtual int64_t control_horizon() const = 0;
     virtual int64_t conditioning_dim() const = 0;
     virtual int64_t n_embodiments() const = 0;
 
@@ -25,8 +25,8 @@ struct vla_metadata {
     std::string architecture;
     std::string model_type;
     int64_t     state_dim;
-    int64_t     action_dim;
-    int64_t     action_horizon;
+    int64_t     control_dim;
+    int64_t     control_horizon;
     int64_t     conditioning_dim;
     int64_t     n_embodiments;
 };

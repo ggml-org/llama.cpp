@@ -7,7 +7,7 @@ common ``general.architecture=vla`` metadata.
 Usage (from llama.cpp root):
     PYTHONPATH=gguf-py python3 tools/vla/convert_hf_to_vla_gguf.py \\
         --model /path/to/MiniCPM-RobotManip \\
-        --output vla-f32.gguf --action-horizon 30
+        --output vla-f32.gguf --control-horizon 30
 """
 
 from __future__ import annotations
@@ -235,9 +235,9 @@ def _infer_hparams(
 
 def _add_metadata(writer: GGUFWriter, hp: ActionHeadHParams) -> None:
     writer.add_string("vla.model_type", "minicpm_robot")
-    writer.add_uint32("vla.action_dim", hp.action_dim)
+    writer.add_uint32("vla.control_dim", hp.action_dim)
     writer.add_uint32("vla.state_dim", hp.state_dim)
-    writer.add_uint32("vla.action_horizon", hp.action_horizon)
+    writer.add_uint32("vla.control_horizon", hp.action_horizon)
     writer.add_uint32("vla.conditioning_dim", hp.cross_attention_dim)
     writer.add_uint32("vla.n_embodiments", hp.max_num_embodiments)
 
@@ -287,7 +287,7 @@ def convert_minicpm_robot(
     print(
         f"Inferred: layers={hp.dit_layers} hidden={hp.dit_hidden} "
         f"heads={hp.dit_heads}x{hp.dit_head_dim} cross={hp.cross_attention_dim} "
-        f"action/state={hp.action_dim}/{hp.state_dim} horizon={hp.action_horizon} "
+        f"control/state={hp.action_dim}/{hp.state_dim} horizon={hp.action_horizon} "
         f"n_emb={hp.max_num_embodiments} future={hp.n_future_tokens} "
         f"pred={hp.prediction_type} proprio={hp.proprio_inject}"
     )
@@ -382,7 +382,7 @@ def main() -> None:
     parser.add_argument("--model-type", default=None,
                         help="converter registry key; inferred from config.json by default")
     parser.add_argument("--output", required=True)
-    parser.add_argument("--action-horizon", type=int, default=30)
+    parser.add_argument("--control-horizon", type=int, default=30)
     parser.add_argument("--prediction-type", default="clean_action")
     parser.add_argument("--proprio-inject", default="concat")
     parser.add_argument("--num-inference-timesteps", type=int, default=4)
@@ -404,7 +404,7 @@ def main() -> None:
     converter(
         src,
         args.output,
-        action_horizon=args.action_horizon,
+        action_horizon=args.control_horizon,
         prediction_type=args.prediction_type,
         proprio_inject=args.proprio_inject,
         num_inference_timesteps=args.num_inference_timesteps,

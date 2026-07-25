@@ -42,7 +42,7 @@ struct vla_input {
     const float * state;
     int64_t       n_state;
 
-    // Optional row-major [horizon, action_dim] denoising noise.
+    // Optional row-major [control_horizon, control_dim] denoising noise.
     const float * noise;
     int64_t       n_noise;
 
@@ -50,8 +50,8 @@ struct vla_input {
 };
 
 struct vla_output {
-    // Caller-owned row-major [horizon, action_dim] buffer.
-    float * actions;
+    // Caller-owned row-major [control_horizon, control_dim] buffer.
+    float * controls;
     int64_t capacity;
 };
 
@@ -68,8 +68,8 @@ VLA_API void vla_free(struct vla_context * ctx);
 
 VLA_API const char * vla_model_type(const struct vla_context * ctx);
 VLA_API int64_t vla_state_dim(const struct vla_context * ctx);
-VLA_API int64_t vla_action_dim(const struct vla_context * ctx);
-VLA_API int64_t vla_action_horizon(const struct vla_context * ctx);
+VLA_API int64_t vla_control_dim(const struct vla_context * ctx);
+VLA_API int64_t vla_control_horizon(const struct vla_context * ctx);
 VLA_API int64_t vla_conditioning_dim(const struct vla_context * ctx);
 VLA_API int64_t vla_n_embodiments(const struct vla_context * ctx);
 
