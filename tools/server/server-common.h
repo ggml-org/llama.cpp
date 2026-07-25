@@ -407,7 +407,9 @@ struct server_pipe {
         cv.notify_all();
     }
 
-    bool read(T & output, const std::function<bool()> & should_stop) {
+    // close_on_stop = true: should_stop means the reader is gone for good, so the writer is told the pipe is broken.
+    // close_on_stop = false: should_stop is a per-read deadline and further reads still come, so the pipe stays usable.
+    bool read(T & output, const std::function<bool()> & should_stop, bool close_on_stop = true) {
         std::unique_lock<std::mutex> lk(mutex);
         constexpr auto poll_interval = std::chrono::milliseconds(500);
         while (true) {
@@ -420,8 +422,10 @@ struct server_pipe {
                 return false; // clean EOF
             }
             if (should_stop && should_stop()) { // a null should_stop means "never stop"
-                close_read(); // signal broken pipe to writer
-                return false; // cancelled / reader no longer alive
+                if (close_on_stop) {
+                    close_read(); // signal broken pipe to writer
+                }
+                return false; // cancelled / deadline reached
             }
             cv.wait_for(lk, poll_interval);
         }

@@ -223,7 +223,7 @@ json server_mcp_transport::send_rpc(const json & request, const std::function<bo
     };
 
     std::string frame;
-    while (from_server.read(frame, stop)) {
+    while (from_server.read(frame, stop, false)) {
         json reply;
         try {
             reply = json::parse(frame);
@@ -660,6 +660,7 @@ void server_mcp_stdio::join_pumps() {
     if (reader.joinable()) reader.join();
     if (errlog.joinable()) errlog.join();
 
+    subprocess_join(&proc->sp, nullptr); // reap the child: destroy() never waits, so the pid would stay a zombie for the process lifetime
     subprocess_destroy(&proc->sp); // safe now: no thread touches the FILE* anymore
     proc.reset();
 }

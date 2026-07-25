@@ -1140,13 +1140,8 @@ struct server_mcp_tool : server_tool {
         };
     }
 
-    json invoke(json params, server_tool::stream * st) const override {
-        // pass the caller's liveness through so a disconnect cancels the in-flight RPC
-        std::function<bool()> should_stop = nullptr;
-        if (st) {
-            should_stop = [st]() { return !st->alive(); };
-        }
-        return mcp_mgr.call_tool(server_name, tool_name, params, should_stop);
+    json invoke(json params, server_tool::stream *) const override {
+        return mcp_mgr.call_tool(server_name, tool_name, params);
     }
 };
 
