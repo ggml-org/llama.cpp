@@ -17,6 +17,10 @@
 
 namespace fs = std::filesystem;
 
+
+static const std::vector<std::string> *s_shell_command_whitelist;
+
+
 //
 // internal helpers
 //

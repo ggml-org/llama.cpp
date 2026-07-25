@@ -40,5 +40,3 @@ struct server_tools {
     server_http_context::handler_t handle_get;
     server_http_context::handler_t handle_post;
 };
-
-static const std::vector<std::string> *s_shell_command_whitelist;
