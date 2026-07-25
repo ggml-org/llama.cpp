@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -52,7 +53,7 @@ struct common_subproc {
 
 private:
     subprocess_s proc {};
-    bool is_created = false;
+    std::atomic<bool> is_created{false};
 
     bool has_handle() const;
 };
