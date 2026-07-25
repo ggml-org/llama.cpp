@@ -7,9 +7,9 @@
 - **File touched**: `scripts/turbo-quality-gate.sh`
 
 ## Branch State
-- **PR HEAD**: `0a9b2c7fd` (after merge with master + additional fixes)
-- **Merge commits**: `94b2458f9` (merge origin/master), `0a9b2c7fd` (additional fixes)
-- **Fix branch**: `p324-quality-gate-fixes`
+- **Branch**: `p324-quality-gate-fixes`
+- **Merge commit**: `94b2458f9` (merge origin/master)
+- **Additional fixes**: `0a9b2c7fd` (collapse STRICT guard, portable mktemp)
 
 ## Methodology
 1. Fetched master into `p324-quality-gate-fixes` (PR #31's branch).
