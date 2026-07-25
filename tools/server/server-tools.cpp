@@ -638,25 +638,22 @@ struct server_tool_exec_shell_command : server_tool {
             for (auto const & s : *s_shell_command_whitelist) {
                 if (!command.compare(0, s.length(), s)) {
                     // Command string starts with the whitelisted string.
-                    const auto shell_delim = *std::find_if(command.begin(), command.end(), [](const char t){
-                        for (const char *ref = shell_command_delims; *ref; ref++) {
-                            if (t == *ref) return t;
-                        }
-                        return '\0';
-                    });
-                    if (shell_delim) {
-                        std::ostringstream msg;
-                        msg << "Command rejected! It contains at least one unsafe character ('" << shell_delim << "') from the unsafe list: \"" << shell_command_delims << '\"';
+                    // Check for disallowed symbols.
+                    for (char c : command) if (strchr(shell_command_delims, c)) {
                         return {{
-                            "plain_text_response",
-                            msg.str()
+                            "error",
+                            string_format(
+                                "Command rejected! It contains at least one character (specifically '%c') from the unsafe list: \"%s\"",
+                                c, shell_command_delims
+                            )
                         }};
                     }
+                    // No disallowed symbols.
                     whitelisted = true;
                     break;
                 }
             }
-            if (!whitelisted) return {{"plain_text_response", "Command rejected! Not permitted by whitelist."}};
+            if (!whitelisted) return {{"error", "Command rejected! Program is not permitted by whitelist."}};
         }
 
         auto io = make_tools_io(params);
