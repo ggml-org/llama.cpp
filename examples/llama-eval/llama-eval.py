@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import ast
 import json
 import os
 import re
@@ -18,6 +19,8 @@ import requests
 from tqdm import tqdm
 import random
 from math import sqrt
+
+from eval_sandbox import Sandbox, resolve_python
 
 
 @dataclass
@@ -107,11 +110,108 @@ B) {B}
 C) {C}
 D) {D}
 """,
+    "humaneval": """Complete the following Python function.
+
+```python
+{question}
+```
+
+Reply with the complete function in a single ```python code block, including the \
+signature and any imports it needs. Do not include tests, example usage, or explanation.
+""",
+    "classeval": """Complete the following Python class.
+
+```python
+{question}
+```
+
+Reply with the complete class in a single ```python code block: keep the class name \
+and every method signature exactly as given, implement every method body, and include \
+any imports the class needs. Do not include tests, example usage, or explanation.
+""",
 }
+
+# Suites graded by running the generated code instead of matching its text.
+# The venv is provisioned from the dataset's own import inventory, so it only
+# ever carries what the suite actually needs.
+CODE_SUITES = {"humaneval", "classeval"}
+
+# Import name -> pip name, for the cases where they differ. Anything not listed
+# is assumed to install under the name it imports as.
+PIP_NAMES = {
+    "bs4": "beautifulsoup4",
+    "PIL": "pillow",
+    "docx": "python-docx",
+    "fitz": "pymupdf",
+    "sklearn": "scikit-learn",
+    "yaml": "PyYAML",
+    "cv2": "opencv-python-headless",
+    "PyPDF2": "pypdf2",
+    "Levenshtein": "levenshtein",
+    "dateutil": "python-dateutil",
+    "attr": "attrs",
+    "OpenSSL": "pyOpenSSL",
+    "serial": "pyserial",
+    "Crypto": "pycryptodome",
+}
+
+# Overridden by --dataset-source; lets a suite be pointed at a patched copy
+# (local .jsonl or a HuggingFace repo) without touching the loader.
+DATASET_SOURCE: Optional[str] = None
 
 
 class BaseDataset(ABC):
     questions: List[Dict]
+
+    # -- code-suite hooks -------------------------------------------------
+    # Only consulted when the exec grader is active. They let a suite own how
+    # its generated code is assembled and scored, which differs a lot: one
+    # HumanEval problem is a single function judged by one assert, whereas one
+    # ClassEval task is a whole class judged by many independent test methods.
+
+    def required_packages(self) -> List[str]:
+        """Third-party pip packages the suite's tests need."""
+        return []
+
+    def provision_steps(self) -> List[str]:
+        """Python snippets run once at venv build time, with network access."""
+        return []
+
+    def preferred_python(self) -> Optional[str]:
+        """Interpreter the suite's dependencies need, if not the current one."""
+        return None
+
+    def configure_python(self, python: str):
+        """Told which interpreter the sandbox will use, before it is built.
+
+        Lets a suite adapt its package set to what that version can actually
+        install.
+        """
+
+    def default_exec_timeout(self) -> float:
+        """Per-task wall-clock limit that suits this suite's workload."""
+        return 15.0
+
+    def sandbox_env(self) -> Dict[str, str]:
+        """Extra env for every run; '{venv}' expands to the venv path."""
+        return {}
+
+    def extract(self, response: str, question: Dict) -> str:
+        """Pull the candidate code out of a chat reply."""
+        return extract_code(response)
+
+    def build_program(self, question: Dict, completion: str,
+                      seed: Optional[int] = None) -> str:
+        """Assemble the program whose exit status decides pass/fail."""
+        raise NotImplementedError
+
+    def interpret(self, result: Any, question: Dict) -> Tuple[bool, Dict[str, Any]]:
+        """Turn an ExecResult into (passed, detail-for-the-log)."""
+        return result.passed, {
+            "status": result.status,
+            "reason": result.summary(),
+            "duration": round(result.duration, 3),
+        }
 
     @abstractmethod
     def get_question(self, index: int) -> Dict:
@@ -186,6 +286,10 @@ class EvalState:
             self.dataset = Gsm8kDataset()
         elif self.dataset_type == "gpqa":
             self.dataset = GpqaDataset(variant="diamond", seed=seed)
+        elif self.dataset_type == "humaneval":
+            self.dataset = HumanEvalDataset(source=DATASET_SOURCE)
+        elif self.dataset_type == "classeval":
+            self.dataset = ClassEvalDataset(source=DATASET_SOURCE)
         else:
             raise ValueError(f"Unknown dataset type: {self.dataset_type}")
 
@@ -263,20 +367,42 @@ class EvalState:
 
             self.correct = sum(1 for c in self.task_states.get("cases", {}).values() if c.get("correct", False))
 
+    def _display_pair(self, task_state: TaskState) -> Tuple[str, str]:
+        """The (expected, answer) columns, kept narrow for code suites.
+
+        There the gold value is a whole JSON test harness and the answer is a
+        whole function, so show the task id and the failure cause instead.
+        """
+        if self.dataset_type not in CODE_SUITES:
+            return (
+                task_state.expected,
+                task_state.answer if task_state.answer else "N/A",
+            )
+        try:
+            expected = json.loads(task_state.expected)["task_id"]
+        except (ValueError, KeyError, TypeError):
+            expected = self.dataset_type
+        reason = (task_state.grader_log or {}).get("reason", "")
+        if task_state.correct:
+            reason = "ok"
+        return expected, (reason[:28] or "N/A")
+
     def print_progress(self, task_state: TaskState, total_tasks: int, n_correct: int = 0):
-        display_answer = task_state.answer if task_state.answer else "N/A"
+        display_expected, display_answer = self._display_pair(task_state)
         display_tokens = str(task_state.tokens) if task_state.tokens is not None else "N/A"
         display_tps = f"{task_state.tps_gen:.1f}" if task_state.tps_gen is not None else "N/A"
         display_t_gen = f"{task_state.t_gen_ms/1000:.1f}" if task_state.t_gen_ms is not None else "N/A"
         display_server = task_state.server_name if task_state.server_name else "N/A"
         success_ratio = n_correct / self.processed if self.processed > 0 else 0.0
-        first_line = task_state.question_text.split('\n')[0]
+        first_line = next(
+            (ln for ln in task_state.question_text.split('\n') if ln.strip()), ""
+        )
         truncated_question = first_line[:43]
         if len(first_line) > 43:
             truncated_question += "..."
         else:
             truncated_question = truncated_question.ljust(43) + "..."
-        print(f"{self.processed:3}/{total_tasks:3}  {task_state.task_id:<20} {self.dataset_type.upper()}   {truncated_question:<40}    {task_state.expected:<10} {display_answer:<10} {display_tokens:<6} {display_tps:<6} {display_t_gen:<8} {'✓' if task_state.correct else '✗'}  [{n_correct:3}/{self.processed:3}, {success_ratio:.3f}]  {display_server}")
+        print(f"{self.processed:3}/{total_tasks:3}  {task_state.task_id:<20} {self.dataset_type.upper()}   {truncated_question:<40}    {display_expected:<16} {display_answer:<28} {display_tokens:<6} {display_tps:<6} {display_t_gen:<8} {'✓' if task_state.correct else '✗'}  [{n_correct:3}/{self.processed:3}, {success_ratio:.3f}]  {display_server}")
 
     def print_summary(self):
         if self.total == 0:
@@ -974,6 +1100,480 @@ class GpqaDataset(BaseDataset):
             D=question["shuffled_answers"][3]
         )
 
+FENCE_RE = re.compile(r"```[ \t]*([A-Za-z0-9_+-]*)[ \t]*\n(.*?)(?:```|\Z)", re.DOTALL)
+
+RESULT_MARKER = "__LLAMA_EVAL__"
+
+# gensim publishes no wheel past cp313 and its Cython-generated C no longer
+# compiles (it still uses PyLongObject.ob_digit, removed in 3.12). ClassEval
+# touches exactly two gensim APIs, both pure Python upstream, so on 3.14+ they
+# are provided directly rather than losing the two tasks that need them.
+GENSIM_SHIM = {
+    "__init__.py": (
+        '"""Minimal stand-in for the two gensim entry points ClassEval uses."""\n'
+        "from . import utils, matutils  # noqa: F401\n"
+    ),
+    "utils.py": (
+        "import re, html\n"
+        "RE_ENTITY = re.compile(r'&(#?)([xX]?)(\\w{1,8});')\n"
+        "def decode_htmlentities(text):\n"
+        "    return RE_ENTITY.sub(lambda m: html.unescape(m.group(0)), text)\n"
+    ),
+    "matutils.py": (
+        "import numpy as np\n"
+        "def unitvec(vec, norm='l2', return_norm=False):\n"
+        "    v = np.asarray(vec, dtype=float)\n"
+        "    n = float(np.sum(np.abs(v))) if norm == 'l1' "
+        "else float(np.sqrt(np.sum(v ** 2)))\n"
+        "    if n == 0.0:\n"
+        "        return (v, 1.0) if return_norm else v\n"
+        "    out = v / n\n"
+        "    return (out, n) if return_norm else out\n"
+    ),
+}
+
+# Runs before the suite's test code. Some tasks end with the usual
+# `if __name__ == "__main__": unittest.main()`, and unittest.main() exits the
+# process -- which would kill the reporting harness appended after it.
+UNITTEST_PROLOGUE = '''
+import unittest as _ut_pre
+_ut_pre.main = lambda *a, **k: None
+'''
+
+# Appended to suites whose tasks are judged by many independent unit tests, so
+# a partially-correct answer can be scored as such instead of just pass/fail.
+# Discovers TestCase subclasses from the module namespace rather than trusting a
+# dataset field to name them.
+UNITTEST_RUNNER = f'''
+
+if True:
+    import json as _json, os as _os, unittest as _ut
+    _loader = _ut.TestLoader()
+    _suite = _ut.TestSuite()
+    for _c in [v for v in list(globals().values())
+               if isinstance(v, type) and issubclass(v, _ut.TestCase)
+               and v is not _ut.TestCase]:
+        _suite.addTests(_loader.loadTestsFromTestCase(_c))
+    with open(_os.devnull, "w") as _null:
+        _res = _ut.TextTestRunner(stream=_null, verbosity=0).run(_suite)
+    _bad = {{t.id() for t, _ in _res.failures}} | {{t.id() for t, _ in _res.errors}}
+    _total = _res.testsRun
+    print("{RESULT_MARKER}" + _json.dumps({{
+        "total": _total,
+        "passed": _total - len(_bad),
+        "failed": sorted(_bad),
+        "first_error": (_res.failures + _res.errors)[0][1].strip().splitlines()[-1]
+                       if (_res.failures or _res.errors) else None,
+    }}))
+'''
+
+
+def parse_test_report(stdout: str) -> Optional[Dict[str, Any]]:
+    """Read the JSON line emitted by UNITTEST_RUNNER, if the program got that far."""
+    for line in reversed(stdout.splitlines()):
+        if line.startswith(RESULT_MARKER):
+            try:
+                return json.loads(line[len(RESULT_MARKER):])
+            except ValueError:
+                return None
+    return None
+
+
+def extract_code(response: str, entry_point: Optional[str] = None,
+                 class_name: Optional[str] = None) -> str:
+    """Pull the candidate program out of a chat reply.
+
+    Prefers a fenced block that actually defines the thing being asked for,
+    since models like to emit a usage example or a test in a second block.
+    """
+    if not response:
+        return ""
+
+    if class_name:
+        wanted = rf"^\s*class\s+{re.escape(class_name)}\s*[:\(]"
+    elif entry_point:
+        wanted = rf"^\s*(?:async\s+)?def\s+{re.escape(entry_point)}\s*\("
+    else:
+        wanted = None
+
+    blocks = [(lang.lower(), body) for lang, body in FENCE_RE.findall(response)]
+    if blocks:
+        py = [b for lang, b in blocks if lang in ("python", "py", "python3", "")]
+        candidates = py or [b for _, b in blocks]
+        if wanted:
+            defining = [b for b in candidates if re.search(wanted, b, re.M)]
+            if defining:
+                return defining[-1].strip("\n")
+        return candidates[0].strip("\n")
+
+    # No fence at all: some models just emit bare code.
+    return response.strip("\n")
+
+
+def _import_preamble(prompt: str) -> str:
+    """The import lines from the original stub.
+
+    A chat model often returns just the function and drops the imports that the
+    stub had above it; replaying them keeps that from being scored as a failure.
+    """
+    lines = []
+    for line in prompt.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(("import ", "from ")) and not line.startswith((" ", "\t")):
+            lines.append(stripped)
+    return "\n".join(lines)
+
+
+def build_program(question: Dict, completion: str, seed: Optional[int] = 0) -> str:
+    """Assemble the full program that decides pass/fail for one problem."""
+    entry_point = question["entry_point"]
+    code = completion
+
+    # If the model returned only a body (no signature), graft it onto the stub.
+    if not re.search(rf"^\s*(?:async\s+)?def\s+{re.escape(entry_point)}\s*\(", code, re.M):
+        body = completion if completion.startswith((" ", "\t")) else \
+            "\n".join("    " + ln for ln in completion.splitlines())
+        code = question["prompt"] + "\n" + body
+
+    # HumanEval/38, /50 and /53 draw their test inputs from the *global* unseeded
+    # RNG. A correct solution always passes, but a subtly wrong one can flip
+    # between runs -- which makes A/B comparisons of two models noisy. Seeding
+    # here fixes the inputs without changing what the model is asked to compute.
+    prologue = f"import random; random.seed({seed})" if seed is not None else ""
+
+    return "\n\n".join(part for part in [
+        _import_preamble(question["prompt"]),
+        code,
+        question["test"],
+        prologue,
+        f"check({entry_point})",
+    ] if part)
+
+
+def pass_at_k(n: int, c: int, k: int) -> float:
+    """Unbiased pass@k estimator from the Codex paper (arXiv:2107.03374).
+
+    n samples drawn, c of them correct. Computed as 1 - C(n-c,k)/C(n,k) via a
+    product so it stays stable for large n.
+    """
+    if n - c < k:
+        return 1.0
+    prod = 1.0
+    for i in range(n - c + 1, n + 1):
+        prod *= 1.0 - k / i
+    return 1.0 - prod
+
+
+class HumanEvalDataset(BaseDataset):
+    """OpenAI HumanEval, 164 hand-written Python problems.
+
+    Every problem in this suite imports only from the standard library, so the
+    execution venv needs no pip installs at all -- see `required_packages`.
+    """
+
+    HF_REPO = "openai/openai_humaneval"
+
+    def __init__(self, source: Optional[str] = None, split: str = "test"):
+        self.source = source or self.HF_REPO
+        self.split = split
+        self.questions: List[Dict] = []
+        self._load_dataset()
+
+    def _load_dataset(self):
+        print(f"Loading HumanEval dataset (source: {self.source})...")
+
+        local = Path(self.source)
+        if local.exists():
+            rows = [json.loads(ln) for ln in local.read_text().splitlines() if ln.strip()]
+        else:
+            from datasets import load_dataset
+            rows = [dict(r) for r in load_dataset(self.source, split=self.split)]
+
+        required = {"task_id", "prompt", "entry_point", "test"}
+        for row in rows:
+            missing = required - row.keys()
+            if missing:
+                raise ValueError(
+                    f"{self.source}: record {row.get('task_id', '?')} is missing {sorted(missing)}"
+                )
+            row["dataset_type"] = "humaneval"
+            self.questions.append(row)
+
+        print(f"HumanEval dataset loaded: {len(self.questions)} problems")
+
+    def required_packages(self) -> List[str]:
+        """Third-party pip packages this suite needs. Derived, not hardcoded."""
+        return sorted(third_party_imports(
+            "\n".join(q["prompt"] + "\n" + q["test"] for q in self.questions)
+        ))
+
+    def extract(self, response: str, question: Dict) -> str:
+        return extract_code(response, question.get("entry_point"))
+
+    def build_program(self, question: Dict, completion: str,
+                      seed: Optional[int] = None) -> str:
+        return build_program(question, completion, seed=seed)
+
+    def get_question(self, index: int) -> Dict:
+        return self.questions[index]
+
+    def get_question_text(self, question: Dict) -> str:
+        return question["prompt"]
+
+    def get_answer(self, question: Dict) -> str:
+        # The "gold answer" for a code suite is the harness that judges it.
+        # Carried as JSON so it survives the state file and --resume.
+        return json.dumps({
+            "task_id": question["task_id"],
+            "entry_point": question["entry_point"],
+            "prompt": question["prompt"],
+            "test": question["test"],
+        })
+
+    def get_prompt(self, question: Dict) -> str:
+        return TEMPLATE_REGISTRY["humaneval"].format(
+            question=self.get_question_text(question).rstrip(),
+        )
+
+
+class ClassEvalDataset(BaseDataset):
+    """ClassEval: 100 class-level Python generation tasks.
+
+    A task is a whole class judged by several independent unittest classes, so
+    it is scored twice -- class level (every test passes) and method level
+    (what fraction of tests passed), matching the upstream protocol.
+    """
+
+    HF_REPO = "ilintar/ClassEval"
+
+    def __init__(self, source: Optional[str] = None):
+        self.source = source or self.HF_REPO
+        self.questions: List[Dict] = []
+        self._gensim_shim = False
+        self._load_dataset()
+
+    def _load_dataset(self):
+        print(f"Loading ClassEval dataset (source: {self.source})...")
+
+        local = Path(self.source)
+        if local.exists():
+            text = local.read_text()
+            rows = (json.loads(text) if local.suffix == ".json"
+                    else [json.loads(ln) for ln in text.splitlines() if ln.strip()])
+        else:
+            from datasets import load_dataset
+            rows = [dict(r) for r in load_dataset(self.source, split="test")]
+
+        required = {"task_id", "skeleton", "test", "class_name"}
+        for row in rows:
+            missing = required - row.keys()
+            if missing:
+                raise ValueError(
+                    f"{self.source}: record {row.get('task_id', '?')} is missing {sorted(missing)}"
+                )
+            row["dataset_type"] = "classeval"
+            # Denominator for the method-level score when the program dies
+            # before the runner can report (syntax error, bad import, timeout).
+            row["n_tests"] = _count_test_methods(row["test"])
+            self.questions.append(row)
+
+        print(f"ClassEval dataset loaded: {len(self.questions)} classes, "
+              f"{sum(q['n_tests'] for q in self.questions)} test methods")
+
+    # Dependencies that no import statement mentions, so scanning the source
+    # cannot find them. They must be declared or the suite silently loses tests.
+    EXTRA_PACKAGES = [
+        # ClassEval_44 selects the parser by *string*: BeautifulSoup(html,
+        # 'lxml'). Without it bs4 raises FeatureNotFound and that task drops
+        # from 23/23 to 7/23. It happens to arrive via python-docx today, but
+        # relying on someone else's transitive dependency is not a plan.
+        "lxml",
+        # Hard requirement of gensim, listed explicitly for the same reason.
+        "scipy",
+    ]
+
+    def configure_python(self, python: str):
+        """gensim stops at cp313, so on 3.14+ swap it for a small local shim."""
+        try:
+            r = subprocess.run(
+                [python, "-c", "import sys; print('%d.%d' % sys.version_info[:2])"],
+                capture_output=True, text=True, timeout=60,
+            )
+            major, minor = (int(x) for x in r.stdout.strip().split("."))
+        except Exception:
+            return
+        self._gensim_shim = (major, minor) >= (3, 14)
+
+    def required_packages(self) -> List[str]:
+        blob = "\n\n".join(
+            "\n\n".join(_as_text(q.get(f)) for f in
+                        ("skeleton", "test", "solution_code", "import_statement"))
+            for q in self.questions
+        )
+        found = {PIP_NAMES.get(m, m) for m in third_party_imports(blob)}
+        found |= set(self.EXTRA_PACKAGES)
+        if self._gensim_shim:
+            found.discard("gensim")
+        return sorted(found)
+
+    # Exactly what the suite's nltk tasks need, ~33 MB. These are the current
+    # names: the dataset asks for 'punkt' and 'averaged_perceptron_tagger',
+    # which nltk has since renamed. Seeding the legacy names as well is not
+    # harmless -- with a network available nltk treats them as satisfied and
+    # then re-fetches the modern ones anyway, tripling the download.
+    NLTK_CORPORA = ("punkt_tab", "averaged_perceptron_tagger_eng", "wordnet")
+
+    def provision_steps(self) -> List[str]:
+        steps = []
+
+        if any("nltk" in _as_text(q.get("skeleton")) + _as_text(q.get("test"))
+               for q in self.questions):
+            # Pre-seed the corpora so test time never needs the network.
+            steps.append(
+                "import os, nltk\n"
+                "target = os.path.join(os.environ['SANDBOX_VENV'], 'nltk_data')\n"
+                "os.makedirs(target, exist_ok=True)\n"
+                f"for corpus in {self.NLTK_CORPORA!r}:\n"
+                "    nltk.download(corpus, download_dir=target, quiet=True)\n"
+            )
+
+        if self._gensim_shim:
+            steps.append(
+                "import os, sysconfig\n"
+                "pkg = os.path.join(sysconfig.get_paths()['purelib'], 'gensim')\n"
+                "os.makedirs(pkg, exist_ok=True)\n"
+                f"files = {GENSIM_SHIM!r}\n"
+                "for name, body in files.items():\n"
+                "    open(os.path.join(pkg, name), 'w').write(body)\n"
+                "import gensim.utils, gensim.matutils\n"  # fail loudly if broken
+            )
+
+        return steps
+
+    def sandbox_env(self) -> Dict[str, str]:
+        # $HOME is a tmpfs under the strongest isolation tier, so the corpora
+        # have to be found inside the venv, which stays mounted.
+        return {"NLTK_DATA": "{venv}/nltk_data"}
+
+    def preferred_python(self) -> Optional[str]:
+        # gensim has no wheel for 3.14 and its generated C no longer compiles
+        # there (it still uses PyLongObject.ob_digit). 3.13 is the newest
+        # interpreter that takes the whole dependency set.
+        return "3.13"
+
+    def default_exec_timeout(self) -> float:
+        # These tasks do real work -- the slowest reference solution takes ~6 s
+        # (a BFS puzzle solver), and importing pandas or loading an nltk corpus
+        # costs seconds on its own.
+        return 30.0
+
+    def extract(self, response: str, question: Dict) -> str:
+        return extract_code(response, class_name=question.get("class_name"))
+
+    def build_program(self, question: Dict, completion: str,
+                      seed: Optional[int] = None) -> str:
+        prologue = f"import random; random.seed({seed})" if seed is not None else ""
+        return "\n\n".join(part for part in [
+            _as_text(question.get("import_statement")),
+            UNITTEST_PROLOGUE,
+            completion,
+            question["test"],
+            prologue,
+            UNITTEST_RUNNER,
+        ] if part)
+
+    def interpret(self, result: Any, question: Dict) -> Tuple[bool, Dict[str, Any]]:
+        # The denominator is what the task *should* run, taken from the dataset.
+        # Using the observed count would let a class that fails to even import
+        # score 0/0 and quietly shrink the total, inflating the method rate.
+        expected = question.get("n_tests", 0)
+
+        report = parse_test_report(result.stdout)
+        if report is None:
+            # never reached the runner -- syntax error, bad import or timeout
+            return False, {
+                "status": result.status if result.status != "ok" else "no-report",
+                "reason": result.summary(),
+                "tests_total": expected,
+                "tests_passed": 0,
+                "duration": round(result.duration, 3),
+            }
+
+        total, passed = report.get("total", 0) or expected, report.get("passed", 0)
+        ok = total > 0 and passed == total
+        return ok, {
+            "status": "ok" if ok else "failed",
+            "reason": "ok" if ok else (report.get("first_error")
+                                       or f"{passed}/{total} tests passed")[:200],
+            "tests_total": total,
+            "tests_passed": passed,
+            "duration": round(result.duration, 3),
+        }
+
+    def get_question(self, index: int) -> Dict:
+        return self.questions[index]
+
+    def get_question_text(self, question: Dict) -> str:
+        return question["skeleton"]
+
+    def get_answer(self, question: Dict) -> str:
+        return json.dumps({
+            "task_id": question["task_id"],
+            "class_name": question["class_name"],
+            "import_statement": _as_text(question.get("import_statement")),
+            "test": question["test"],
+            "n_tests": question["n_tests"],
+        })
+
+    def get_prompt(self, question: Dict) -> str:
+        return TEMPLATE_REGISTRY["classeval"].format(
+            question=self.get_question_text(question).rstrip(),
+        )
+
+
+def _as_text(value: Any) -> str:
+    """Some dataset fields arrive as a list of lines rather than a blob."""
+    if not value:
+        return ""
+    if isinstance(value, (list, tuple)):
+        return "\n".join(str(v) for v in value)
+    return str(value)
+
+
+def _count_test_methods(test_code: str) -> int:
+    """How many `def test_*` a task's test suite defines."""
+    try:
+        tree = ast.parse(test_code)
+    except SyntaxError:
+        return len(re.findall(r"^\s*def\s+test\w*\s*\(", test_code, re.M))
+    return sum(
+        1
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name.startswith("test")
+    )
+
+
+def third_party_imports(source: str) -> set:
+    """Top-level modules imported by `source` that are not in the stdlib."""
+    import ast
+
+    mods = set()
+    for chunk in source.split("\n\n"):
+        try:
+            tree = ast.parse(chunk)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                mods.update(a.name.split(".")[0] for a in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                mods.add(node.module.split(".")[0])
+
+    stdlib = set(sys.stdlib_module_names)
+    return {m for m in mods if m and m not in stdlib}
+
+
 class Grader:
     def __init__(
         self,
@@ -981,14 +1581,28 @@ class Grader:
         grader_script: Optional[str] = None,
         grader_model_name: Optional[str] = None,
         grader_server_url: str = "",
-        dataset_type: str = "aime"
+        dataset_type: str = "aime",
+        sandbox: Optional[Sandbox] = None,
+        exec_timeout: float = 15.0,
+        exec_seed: Optional[int] = 0,
+        dataset: Optional[BaseDataset] = None,
     ):
         self.grader_type = grader_type
         self.grader_script = grader_script
         self.grader_model_name = grader_model_name
         self.grader_server_url = grader_server_url
         self.dataset_type = dataset_type
+        self.sandbox = sandbox
+        self.exec_timeout = exec_timeout
+        self.exec_seed = exec_seed
+        self.dataset = dataset
         self.pattern = self._get_pattern()
+        # grading runs on the worker pool, so per-run exec detail is per-thread
+        self._local = threading.local()
+
+    @property
+    def last_exec(self) -> Dict[str, Any]:
+        return getattr(self._local, "exec_info", {})
 
     def _get_pattern(self) -> Optional[str]:
         if self.grader_type == "regex":
@@ -1102,6 +1716,28 @@ Please provide only the extracted answer, nothing else. If there is no clear ans
         lines = response.split('\n')
         return '\n'.join(lines[-max_lines:]) if len(lines) > max_lines else response
 
+    def _grade_exec(self, gold: str, pred: str) -> Tuple[bool, Optional[str]]:
+        """Grade by running the generated code against the suite's own tests.
+
+        `gold` is the JSON harness produced by the dataset's get_answer(); the
+        dataset owns how the program is assembled and how its result is read.
+        """
+        if self.sandbox is None or self.dataset is None:
+            raise ValueError("exec grader requires a sandbox and a dataset")
+
+        question = json.loads(gold)
+        completion = self.dataset.extract(pred, question)
+        if not completion.strip():
+            self._local.exec_info = {"status": "empty", "reason": "no code in reply"}
+            return False, None
+
+        program = self.dataset.build_program(question, completion, seed=self.exec_seed)
+        result = self.sandbox.run(program, timeout=self.exec_timeout)
+        passed, detail = self.dataset.interpret(result, question)
+
+        self._local.exec_info = detail
+        return passed, completion
+
     def grade(self, gold: str, pred: str, problem: str = "") -> Tuple[bool, Optional[str]]:
         """Grade the response"""
         if self.grader_type == "regex":
@@ -1110,6 +1746,8 @@ Please provide only the extracted answer, nothing else. If there is no clear ans
             return self._grade_cli(gold, pred)
         elif self.grader_type == "llm":
             return self._grade_llm(gold, pred, problem)
+        elif self.grader_type == "exec":
+            return self._grade_exec(gold, pred)
         else:
             raise ValueError(f"Unknown grader type: {self.grader_type}")
 
@@ -1208,15 +1846,22 @@ class Processor:
                 eval_state.dump()
                 return task_state
 
-            result_truncated = self.grader._truncate_response(result, max_lines=10)
-            is_correct, answer = self.grader.grade(expected, result_truncated, prompt)
+            # Text graders only ever look at the tail of a reply, but the exec
+            # grader needs the whole thing -- the code block is not at the end.
+            if self.grader.grader_type == "exec":
+                graded_text = result
+            else:
+                graded_text = self.grader._truncate_response(result, max_lines=10)
+            is_correct, answer = self.grader.grade(expected, graded_text, prompt)
 
             grader_log = {
-                "pred": result_truncated,
+                "pred": graded_text,
                 "grader_type": self.grader.grader_type
             }
             if self.grader.grader_type == "regex" and self.grader.pattern:
                 grader_log["pattern"] = self.grader.pattern
+            if self.grader.grader_type == "exec":
+                grader_log.update(self.grader.last_exec)
 
             task_state.correct = is_correct
             task_state.answer = answer
@@ -1342,6 +1987,85 @@ class Processor:
         eval_state.print_summary()
         eval_state.dump()
 
+def preflight_sandbox(sandbox: Sandbox):
+    """Catch host policies that would fail problems for non-model reasons.
+
+    A FIPS-enforcing OpenSSL makes hashlib.md5() raise, which would sink
+    HumanEval/162 no matter what the model generated.
+    """
+    probe = sandbox.run("import hashlib; hashlib.md5(b'x').hexdigest()", timeout=15)
+    if not probe.passed:
+        print(f"Warning: md5 is unavailable in the execution venv "
+              f"({probe.summary(120)}). Problems that hash with md5 will fail "
+              f"regardless of the model -- this is a host policy, not a model result.")
+
+
+def print_pass_at_k(eval_state: "EvalState"):
+    """Report pass@k plus a breakdown of how the failures failed.
+
+    Each chunk is one full pass over the suite, so running --n_cases at a
+    multiple of the dataset size gives n samples per problem for free.
+    """
+    cases = eval_state.task_states.get("cases", {})
+    if not cases:
+        return
+
+    by_problem: Dict[int, List[bool]] = {}
+    reasons: Dict[str, int] = {}
+    for case in cases.values():
+        by_problem.setdefault(case.get("problem_idx", 0), []).append(
+            bool(case.get("correct", False))
+        )
+        if not case.get("correct", False):
+            status = (case.get("grader_log") or {}).get("status", case.get("status", "?"))
+            reasons[status] = reasons.get(status, 0) + 1
+
+    n = min(len(v) for v in by_problem.values())
+    n_problems = len(by_problem)
+
+    print(f"\n{'=' * 60}")
+    print(f"  {eval_state.dataset_type}: {n_problems} problems, {n} sample(s) each")
+    print(f"{'=' * 60}")
+
+    for k in sorted({1, 5, 10, 100, n}):
+        if k > n:
+            continue
+        score = sum(
+            pass_at_k(len(v), sum(v), k) for v in by_problem.values()
+        ) / n_problems
+        print(f"  pass@{k:<4d} {score:.4f}")
+
+    if n == 1:
+        solved = sum(1 for v in by_problem.values() if v[0])
+        lo, hi = wilson_interval(solved, n_problems)
+        print(f"  {solved}/{n_problems} solved   95% CI [{lo:.4f}, {hi:.4f}]")
+
+    # Suites judged by many unit tests per task also get a partial-credit score,
+    # which separates "generated nothing usable" from "got most of it right".
+    # A case that never reached the grader (truncated generation, HTTP error)
+    # still owes its tests to the denominator, so fall back to the count the
+    # dataset recorded in the gold blob -- otherwise those tests silently
+    # disappear and the rate is computed against a smaller total.
+    t_total = t_passed = 0
+    for case in cases.values():
+        log = case.get("grader_log") or {}
+        if "tests_total" in log:
+            t_total += log["tests_total"]
+        else:
+            try:
+                t_total += json.loads(case.get("expected") or "{}").get("n_tests", 0)
+            except ValueError:
+                pass
+        t_passed += log.get("tests_passed", 0)
+    if t_total:
+        print(f"\n  test methods passed  {t_passed}/{t_total}  ({t_passed / t_total:.4f})")
+
+    if reasons:
+        print("\n  failures by cause:")
+        for status, count in sorted(reasons.items(), key=lambda kv: -kv[1]):
+            print(f"    {status:<12s} {count}")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Simplified evaluation tool for llama.cpp"
@@ -1362,8 +2086,15 @@ def main():
         "--dataset",
         type=str,
         default="aime",
-        choices=["aime", "aime2025", "aime2026", "gsm8k", "gpqa"],
+        choices=["aime", "aime2025", "aime2026", "gsm8k", "gpqa", "humaneval", "classeval"],
         help="Dataset type (default: aime)"
+    )
+    parser.add_argument(
+        "--dataset-source",
+        type=str,
+        default=None,
+        help="Override the dataset location: a local .jsonl path or a HuggingFace "
+             "repo id (e.g. a patched HumanEval). Default: the suite's canonical repo"
     )
     parser.add_argument(
         "--n_cases",
@@ -1433,9 +2164,37 @@ def main():
     parser.add_argument(
         "--grader-type",
         type=str,
-        default="llm",
-        choices=["regex", "cli", "llm"],
-        help="Grader type: regex, cli, or llm (default: llm)"
+        default=None,
+        choices=["regex", "cli", "llm", "exec"],
+        help="Grader type: regex, cli, llm, or exec (default: exec for code suites, "
+             "llm otherwise). 'exec' runs the generated code against the suite tests "
+             "in a sandboxed venv"
+    )
+    parser.add_argument(
+        "--exec-timeout",
+        type=float,
+        default=None,
+        help="Per-problem wall-clock limit for the exec grader, in seconds "
+             "(default: per-suite, 15s for humaneval, 30s for classeval)"
+    )
+    parser.add_argument(
+        "--exec-seed",
+        type=int,
+        default=0,
+        help="Seed the global RNG before running each test, so suites whose tests "
+             "draw random inputs score reproducibly (default: 0). Use -1 to leave "
+             "the RNG unseeded, matching the stock upstream harness"
+    )
+    parser.add_argument(
+        "--sandbox-python",
+        type=str,
+        default=None,
+        help="Base interpreter used to build the execution venv (default: this one)"
+    )
+    parser.add_argument(
+        "--rebuild-sandbox",
+        action="store_true",
+        help="Discard and re-provision the cached execution venv"
     )
     parser.add_argument(
         "--grader-script",
@@ -1462,6 +2221,18 @@ def main():
     )
 
     args = parser.parse_args()
+
+    global DATASET_SOURCE
+    DATASET_SOURCE = args.dataset_source
+
+    # Code suites are graded by execution; everything else keeps the llm default.
+    if args.grader_type is None:
+        args.grader_type = "exec" if args.dataset in CODE_SUITES else "llm"
+
+    if args.grader_type == "exec" and args.dataset not in CODE_SUITES:
+        print(f"Error: --grader-type exec is only meaningful for code suites "
+              f"({', '.join(sorted(CODE_SUITES))}), not '{args.dataset}'")
+        sys.exit(1)
 
     # Parse server URLs and thread counts
     server_urls = [u.strip() for u in args.server.split(",") if u.strip()]
@@ -1577,6 +2348,36 @@ def main():
 
         eval_state.print_all_tasks()
 
+    # The execution venv is derived from the dataset, so it is built only once
+    # the dataset is known -- true on both the fresh and the resume path.
+    if args.grader_type == "exec":
+        dataset = eval_state.dataset
+
+        base_python = args.sandbox_python
+        if not base_python and dataset.preferred_python():
+            want = dataset.preferred_python()
+            base_python = resolve_python(want)
+            if base_python:
+                print(f"[sandbox] using Python {want} for {eval_state.dataset_type} "
+                      f"({base_python})")
+
+        dataset.configure_python(base_python or sys.executable)
+
+        sandbox = Sandbox(
+            name=eval_state.dataset_type,
+            packages=dataset.required_packages(),
+            provision=dataset.provision_steps(),
+            env=dataset.sandbox_env(),
+            base_python=base_python,
+        )
+        sandbox.ensure(force=args.rebuild_sandbox)
+        preflight_sandbox(sandbox)
+        grader.sandbox = sandbox
+        grader.dataset = dataset
+        grader.exec_timeout = (args.exec_timeout if args.exec_timeout is not None
+                               else dataset.default_exec_timeout())
+        grader.exec_seed = None if args.exec_seed < 0 else args.exec_seed
+
     processor = Processor(
         server_configs=server_configs,
         grader=grader,
@@ -1585,6 +2386,10 @@ def main():
     )
 
     processor.evaluate(eval_state, verbose=args.verbose, resume=resume)
+
+    if args.grader_type == "exec":
+        print_pass_at_k(eval_state)
+
     print(f"\nEval state dumped to {args.output}")
 
 if __name__ == "__main__":
