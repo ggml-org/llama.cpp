@@ -189,7 +189,7 @@ This endpoint is intended to be used internally by the Web UI and subject to cha
 Get a list of tools, each tool has these fields:
 - `tool` (string): the ID name of the tool, to be used in POST call. Example: `read_file`
 - `display_name` (string): the name to be displayed on UI. Example: `Read file`
-- `type` (string): always be `"builtin"` for now
+- `type` (string): `"builtin"` for a built-in tool, or `"mcp"` for a tool exposed by an MCP server
 - `permissions` (object): a mapping string --> boolean that indicates the permission required by this tool. This is useful for the UI to ask the user before calling the tool. For now, the only permission supported is `"write"`
 - `definition` (object): the OAI-compat definition of this tool
 
@@ -199,7 +199,7 @@ Invoke a tool call, request body is a JSON object with:
 - `tool` (string): the name of the tool
 - `params` (object): a mapping from argument name (string) to argument value
 
-Returns JSON object. There are two response formats:
+Returns JSON object. There are two response formats (MCP tools use the same two formats: their result content is concatenated into `plain_text_response`, and RPC or tool errors are surfaced as the `error` string):
 
 Format 1: Plain text. The text will be placed into a field called `plain_text_response`, example:
 

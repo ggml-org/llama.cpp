@@ -191,6 +191,26 @@ static std::string rpc_error_message(const json & resp) {
     return "unknown error";
 }
 
+// normalize an MCP tools/call result to the /tools contract (see README-dev.md):
+// concat text parts of result.content[], and surface an isError result
+static json mcp_result_to_response(const json & result) {
+    std::string text;
+    if (result.contains("content") && result.at("content").is_array()) {
+        for (const auto & part : result.at("content")) {
+            if (part.is_object() && part.value("type", "") == "text") {
+                if (!text.empty()) {
+                    text += "\n";
+                }
+                text += part.value("text", "");
+            }
+        }
+    }
+    if (result.is_object() && result.value("isError", false)) {
+        return {{"error", text.empty() ? "MCP tool returned an error" : text}};
+    }
+    return {{"plain_text_response", text}};
+}
+
 json server_mcp_transport::send_rpc(const json & request, const std::function<bool()> & should_stop) {
     if (!to_server.write(request.dump())) {
         return {{"error", {{"code", -32603}, {"message", "transport closed"}}}};
@@ -308,12 +328,12 @@ json server_mcp_transport::call_tool(const std::string & tool_name,
     };
     json resp = send_rpc(req, should_stop);
     if (resp.contains("error")) {
-        return resp;
+        return {{"error", rpc_error_message(resp)}};
     }
     if (resp.contains("result")) {
-        return resp.at("result");
+        return mcp_result_to_response(resp.at("result"));
     }
-    return {{"error", {{"code", -32603}, {"message", "invalid response"}}}};
+    return {{"error", "invalid response from MCP server"}};
 }
 
 //
