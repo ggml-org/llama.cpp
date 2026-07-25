@@ -63,7 +63,7 @@ def handle_tools_call(params, req_id):
         return {
             "jsonrpc": "2.0",
             "id": req_id,
-            "error": {"code": -32601, "message": f"Unknown tool: {tool_name}"}
+            "error": {"code": -32602, "message": f"Unknown tool: {tool_name}"}
         }
 
 HANDLERS = {
@@ -91,6 +91,10 @@ def main():
         method = request.get("method")
         req_id = request.get("id")
         params = request.get("params", {})
+
+        # JSON-RPC 2.0: a message without an id is a notification and must not receive a response
+        if req_id is None:
+            continue
 
         handler = HANDLERS.get(method)
         if handler:

@@ -4,7 +4,7 @@ Tests for MCP server integration via the /tools endpoint.
 
 Invariants verified:
 1. MCP tools appear in /tools listing when configured
-2. MCP tools use <server>:<tool> naming
+2. MCP tools use <server>_<tool> naming
 3. MCP tools can be invoked and return correct results
 4. Misconfigured MCP servers do not crash the server
 5. Multiple MCP servers can be configured simultaneously

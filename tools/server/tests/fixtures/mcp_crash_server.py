@@ -67,7 +67,7 @@ def handle_tools_call(params, req_id):
         return {
             "jsonrpc": "2.0",
             "id": req_id,
-            "error": {"code": -32601, "message": f"Unknown tool: {tool_name}"}
+            "error": {"code": -32602, "message": f"Unknown tool: {tool_name}"}
         }
 
 HANDLERS = {

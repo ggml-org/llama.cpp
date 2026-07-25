@@ -66,7 +66,7 @@ def handle_tools_call(params, req_id):
         response = {
             "jsonrpc": "2.0",
             "id": req_id,
-            "error": {"code": -32601, "message": f"Unknown tool: {tool_name}"}
+            "error": {"code": -32602, "message": f"Unknown tool: {tool_name}"}
         }
         return response
 
@@ -74,11 +74,6 @@ HANDLERS = {
     "initialize": handle_initialize,
     "tools/list": handle_tools_list,
     "tools/call": handle_tools_call,
-}
-
-# notifications have no id and don't expect a response
-NOTIFICATION_HANDLERS = {
-    "notifications/initialized": lambda params, req_id: None,
 }
 
 def main():
@@ -100,9 +95,8 @@ def main():
         req_id = request.get("id")
         params = request.get("params", {})
 
-        # Check notification handlers first (no response expected)
-        if not req_id and method in NOTIFICATION_HANDLERS:
-            NOTIFICATION_HANDLERS[method](params, req_id)
+        # JSON-RPC 2.0: a message without an id is a notification and must not receive a response
+        if req_id is None:
             continue
 
         handler = HANDLERS.get(method)
