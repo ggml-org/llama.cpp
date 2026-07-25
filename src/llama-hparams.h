@@ -232,6 +232,10 @@ struct llama_hparams {
     // MSA stores its indexer keys in the main KV cache (k_idx tensors);
     bool indexer_kv = false;
 
+    // Indexer is "full" (1) or "shared" (0)
+    // Shared indexers reuse top-k from previous full layer
+    std::array<uint32_t, LLAMA_MAX_LAYERS> is_indexer_full_impl;
+
     // DeepSeek-V4
     uint32_t dsv4_o_group_count        = 0;
     uint32_t dsv4_o_lora_rank          = 0;
@@ -306,6 +310,8 @@ struct llama_hparams {
     bool is_swa_any() const;
 
     bool is_swa(uint32_t il) const;
+
+    bool is_indexer_full(uint32_t il) const;
 
     void set_recr_pattern(uint32_t n_pattern, bool dense_first = false);
 

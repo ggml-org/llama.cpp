@@ -852,7 +852,7 @@ void server_models::load(const std::string & name, const load_options & opts) {
         //                so that we can use stdout for commands and stderr for logging
         int options = subprocess_option_no_window | subprocess_option_combined_stdout_stderr;
         inst.subproc->sproc.emplace();
-        int result = subprocess_create_ex(argv.data(), options, envp.data(), &inst.subproc->get());
+        int result = subprocess_create_ex(argv.data(), options, envp.data(), nullptr, &inst.subproc->get());
         if (result != 0) {
             throw std::runtime_error("failed to spawn server instance");
         }

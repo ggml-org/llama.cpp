@@ -7,6 +7,7 @@
 #include <regex>
 #include <thread>
 #include <chrono>
+#include <ctime>
 #include <atomic>
 #include <cstring>
 #include <climits>
@@ -1048,16 +1049,42 @@ struct server_tool_get_datetime : server_tool {
             {"type", "function"},
             {"function", {
                 {"name", name},
-                {"description", "Returns the current date and time"},
+                {"description", "Returns the current date and time in UTC"},
+                {"parameters", {
+                    {"type", "object"},
+                    {"properties", {
+                        {"format", {
+                            {"type", "string"},
+                            {"description",
+                                "strftime()-style format string for the output (default: \"%Y-%m-%dT%H:%M:%SZ\", "
+                                "e.g. ISO 8601). Choose your own format if you need something else, "
+                                "e.g. \"%A, %B %d %Y\" for a human-readable date."},
+                        }},
+                    }},
+                }},
             }},
         };
     }
 
-    json invoke(json, server_tool::stream *) const override {
-        auto now = std::chrono::system_clock::now();
-        auto time = std::chrono::system_clock::to_time_t(now);
+    json invoke(json params, server_tool::stream *) const override {
+        std::string format = json_value(params, "format", std::string("%Y-%m-%dT%H:%M:%SZ"));
 
-        return {{"result", std::ctime(&time)}};
+        auto now  = std::chrono::system_clock::now();
+        auto time = std::chrono::system_clock::to_time_t(now);
+        std::tm tm_utc;
+#ifdef _WIN32
+        gmtime_s(&tm_utc, &time);
+#else
+        gmtime_r(&time, &tm_utc);
+#endif
+
+        char buf[256];
+        size_t len = std::strftime(buf, sizeof(buf), format.c_str(), &tm_utc);
+        if (len == 0) {
+            return {{"error", "invalid format string"}};
+        }
+
+        return {{"result", std::string(buf, len)}};
     }
 };
 
