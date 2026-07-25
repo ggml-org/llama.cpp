@@ -2340,93 +2340,106 @@ private:
                 cur.pos_max, cur.n_tokens, (float) cur.size() / 1024 / 1024);
     }
 
-    // Context checkpoints are appended to the slot save file, after the llama state
-    // payload. Without them, a restored slot loses the ability to partially reuse its
-    // cache on models that need a checkpoint to roll back to (SWA and hybrid/recurrent
-    // memory): the next divergent prompt then always triggers "forcing full prompt
-    // re-processing due to lack of cache data", even though the restored state is
-    // intact. Checkpoints cannot be recreated from the final state alone (a recurrent
-    // state cannot be rewound), so they have to travel with the save file.
+    // checkpoints are appended to the slot save file, after the llama state payload
+    // they cannot be recreated from the final state alone (a recurrent state cannot be rewound)
     static constexpr uint32_t SLOT_CKPT_MAGIC   = 0x504b4353; // "SCKP"
     static constexpr uint32_t SLOT_CKPT_VERSION = 1;
 
-    static bool ckpt_read(std::ifstream & ifs, void * dst, size_t size) {
-        return bool(ifs.read((char *) dst, size));
+    static bool ckpt_read(std::ifstream & ifs, void * dst, size_t size, size_t & n_read) {
+        if (!ifs.read((char *) dst, size)) {
+            return false;
+        }
+        n_read += size;
+        return true;
     }
 
-    static bool ckpt_read_buf(std::ifstream & ifs, std::vector<uint8_t> & buf) {
+    static bool ckpt_read_buf(std::ifstream & ifs, std::vector<uint8_t> & buf, size_t & n_read) {
         uint64_t n = 0;
-        // refuse absurd blob sizes (> 16 GiB) from a corrupted/truncated appendix
-        if (!ckpt_read(ifs, &n, sizeof(n)) || n > (1ull << 34)) {
+        // 16 GiB cap, in case the size field itself is corrupted
+        if (!ckpt_read(ifs, &n, sizeof(n), n_read) || n > (1ull << 34)) {
             return false;
         }
         buf.resize(n);
-        return n == 0 || ckpt_read(ifs, buf.data(), n);
+        return n == 0 || ckpt_read(ifs, buf.data(), n, n_read);
     }
 
-    static void ckpt_write(std::ofstream & ofs, const void * src, size_t size) {
+    static void ckpt_write(std::ofstream & ofs, const void * src, size_t size, size_t & n_written) {
         ofs.write((const char *) src, size);
+        n_written += size;
     }
 
-    static void ckpt_write_buf(std::ofstream & ofs, const std::vector<uint8_t> & buf) {
+    static void ckpt_write_buf(std::ofstream & ofs, const std::vector<uint8_t> & buf, size_t & n_written) {
         const uint64_t n = buf.size();
-        ckpt_write(ofs, &n, sizeof(n));
+        ckpt_write(ofs, &n, sizeof(n), n_written);
         if (n > 0) {
-            ckpt_write(ofs, buf.data(), n);
+            ckpt_write(ofs, buf.data(), n, n_written);
         }
     }
 
-    void save_slot_checkpoints(const std::string & filepath, const server_slot & slot) const {
+    size_t save_slot_checkpoints(const std::string & filepath, const server_slot & slot) const {
+        if (slot.prompt.checkpoints.empty()) {
+            return 0; // keep the file byte-identical to the previous format
+        }
         std::ofstream ofs(filepath, std::ios::binary | std::ios::app);
         if (!ofs) {
             SRV_WRN("failed to append context checkpoints to '%s'\n", filepath.c_str());
-            return;
+            return 0;
         }
+        size_t n_written = 0;
         const uint32_t magic   = SLOT_CKPT_MAGIC;
         const uint32_t version = SLOT_CKPT_VERSION;
         const uint32_t count   = (uint32_t) slot.prompt.checkpoints.size();
-        ckpt_write(ofs, &magic,   sizeof(magic));
-        ckpt_write(ofs, &version, sizeof(version));
-        ckpt_write(ofs, &count,   sizeof(count));
+        ckpt_write(ofs, &magic,   sizeof(magic),   n_written);
+        ckpt_write(ofs, &version, sizeof(version), n_written);
+        ckpt_write(ofs, &count,   sizeof(count),   n_written);
         for (const auto & cur : slot.prompt.checkpoints) {
-            ckpt_write(ofs, &cur.n_tokens, sizeof(cur.n_tokens));
-            ckpt_write(ofs, &cur.pos_min,  sizeof(cur.pos_min));
-            ckpt_write(ofs, &cur.pos_max,  sizeof(cur.pos_max));
-            ckpt_write_buf(ofs, cur.data_tgt);
-            ckpt_write_buf(ofs, cur.data_dft);
-            ckpt_write_buf(ofs, cur.data_spec);
+            ckpt_write(ofs, &cur.n_tokens, sizeof(cur.n_tokens), n_written);
+            ckpt_write(ofs, &cur.pos_min,  sizeof(cur.pos_min),  n_written);
+            ckpt_write(ofs, &cur.pos_max,  sizeof(cur.pos_max),  n_written);
+            ckpt_write_buf(ofs, cur.data_tgt,  n_written);
+            ckpt_write_buf(ofs, cur.data_dft,  n_written);
+            ckpt_write_buf(ofs, cur.data_spec, n_written);
         }
-        SRV_INF("appended %u context checkpoint(s) to '%s'\n", count, filepath.c_str());
+        ofs.flush();
+        if (!ofs) {
+            SRV_WRN("failed to append context checkpoints to '%s' - the appendix is incomplete\n", filepath.c_str());
+            return 0;
+        }
+        SRV_INF("appended %u context checkpoint(s) (%.3f MiB) to '%s'\n",
+                count, (float) n_written / 1024 / 1024, filepath.c_str());
+        return n_written;
     }
 
-    void load_slot_checkpoints(const std::string & filepath, size_t offset, server_slot & slot) const {
+    // returns the number of bytes consumed, 0 if there is no usable appendix
+    size_t load_slot_checkpoints(const std::string & filepath, size_t offset, server_slot & slot) const {
         std::ifstream ifs(filepath, std::ios::binary);
         if (!ifs || !ifs.seekg(offset)) {
-            return;
+            return 0;
         }
+        size_t n_read = 0;
         uint32_t magic   = 0;
         uint32_t version = 0;
         uint32_t count   = 0;
-        if (!ckpt_read(ifs, &magic, sizeof(magic)) || magic != SLOT_CKPT_MAGIC) {
-            return; // save file without a checkpoint appendix (older format) - nothing to do
+        if (!ckpt_read(ifs, &magic, sizeof(magic), n_read) || magic != SLOT_CKPT_MAGIC) {
+            return 0; // save file written without an appendix
         }
-        if (!ckpt_read(ifs, &version, sizeof(version)) || version != SLOT_CKPT_VERSION ||
-            !ckpt_read(ifs, &count,   sizeof(count))   || count > 1024) {
+        if (!ckpt_read(ifs, &version, sizeof(version), n_read) || version != SLOT_CKPT_VERSION ||
+            !ckpt_read(ifs, &count,   sizeof(count),   n_read) || count > 1024) {
             SRV_WRN("invalid context checkpoint appendix in '%s' - ignored\n", filepath.c_str());
-            return;
+            return 0;
         }
         std::list<common_prompt_checkpoint> checkpoints;
         for (uint32_t i = 0; i < count; ++i) {
             common_prompt_checkpoint cur;
             cur.id_task = -1; // task ids are not meaningful across save/restore
-            if (!ckpt_read(ifs, &cur.n_tokens, sizeof(cur.n_tokens)) ||
-                !ckpt_read(ifs, &cur.pos_min,  sizeof(cur.pos_min))  ||
-                !ckpt_read(ifs, &cur.pos_max,  sizeof(cur.pos_max))  ||
-                !ckpt_read_buf(ifs, cur.data_tgt) ||
-                !ckpt_read_buf(ifs, cur.data_dft) ||
-                !ckpt_read_buf(ifs, cur.data_spec)) {
+            if (!ckpt_read(ifs, &cur.n_tokens, sizeof(cur.n_tokens), n_read) ||
+                !ckpt_read(ifs, &cur.pos_min,  sizeof(cur.pos_min),  n_read) ||
+                !ckpt_read(ifs, &cur.pos_max,  sizeof(cur.pos_max),  n_read) ||
+                !ckpt_read_buf(ifs, cur.data_tgt,  n_read) ||
+                !ckpt_read_buf(ifs, cur.data_dft,  n_read) ||
+                !ckpt_read_buf(ifs, cur.data_spec, n_read)) {
                 SRV_WRN("truncated context checkpoint appendix in '%s' - ignored\n", filepath.c_str());
-                return;
+                return 0;
             }
             checkpoints.push_back(std::move(cur));
         }
@@ -2435,6 +2448,7 @@ private:
         }
         slot.prompt.checkpoints = std::move(checkpoints);
         SRV_INF("restored %zu context checkpoint(s) from '%s'\n", slot.prompt.checkpoints.size(), filepath.c_str());
+        return n_read;
     }
 
     void process_single_task(server_task && task) {
@@ -2632,10 +2646,9 @@ private:
                     const size_t token_count = tokens.size();
                     const size_t nwrite = llama_state_seq_save_file(ctx_tgt, filepath.c_str(), slot->id, tokens.data(), token_count);
 
-                    // append the context checkpoints so that a restore can preserve
-                    // partial cache reuse (see SLOT_RESTORE below)
+                    size_t nwrite_ckpt = 0;
                     if (nwrite > 0) {
-                        save_slot_checkpoints(filepath, *slot);
+                        nwrite_ckpt = save_slot_checkpoints(filepath, *slot);
                     }
 
                     const int64_t t_end = ggml_time_us();
@@ -2647,7 +2660,7 @@ private:
                     res->filename = filename;
                     res->is_save  = true;
                     res->n_tokens = token_count;
-                    res->n_bytes  = nwrite;
+                    res->n_bytes  = nwrite + nwrite_ckpt;
                     res->t_ms     = t_save_ms;
                     queue_results.send(std::move(res));
                 } break;
@@ -2684,12 +2697,8 @@ private:
                     slot->prompt.clear();
                     slot->prompt.tokens.insert(tokens);
 
-                    // restore the context checkpoints appended to the save file (if any):
-                    // slot->prompt.clear() above discarded the slot's checkpoints, and without
-                    // them SWA and hybrid/recurrent memory models cannot partially reuse the
-                    // restored cache on the next divergent prompt (nread is the end offset of
-                    // the llama state payload within the file)
-                    load_slot_checkpoints(filepath, nread, *slot);
+                    // nread is the end offset of the llama state payload within the file
+                    const size_t nread_ckpt = load_slot_checkpoints(filepath, nread, *slot);
 
                     const int64_t t_end = ggml_time_us();
                     const double t_restore_ms = (t_end - t_start) / 1000.0;
@@ -2700,7 +2709,7 @@ private:
                     res->filename = filename;
                     res->is_save  = false;
                     res->n_tokens = token_count;
-                    res->n_bytes  = nread;
+                    res->n_bytes  = nread + nread_ckpt;
                     res->t_ms     = t_restore_ms;
                     queue_results.send(std::move(res));
                 } break;
