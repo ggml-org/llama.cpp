@@ -166,7 +166,7 @@ static void msa_block_mask_op(struct ggml_tensor * dst, int ith, int nth, void *
             for (int bk = 0; bk < nblk; ++bk) {
                 // a block is selectable if it has a visible token or is locally forced
                 valid[bk] = !msa_score_masked(bs_col[bk]) || bias_col[bk] > 0.0f;
-                rank [bk] = bs_col[bk] + bias_col[bk];
+                rank [bk] = bias_col[bk] > 0.0f ? bias_col[bk] : bs_col[bk];
                 ord  [bk] = bk;
             }
 

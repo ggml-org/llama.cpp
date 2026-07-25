@@ -186,7 +186,7 @@ uint32_t llama_hparams::n_embd_k_idx(uint32_t il) const {
     }
     if (il < n_layer_dense_lead) {
         return 0; // leading dense layers carry no indexer
-    } 
+    }
     return indexer_head_size; // 128
 }
 
