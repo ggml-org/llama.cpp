@@ -202,6 +202,13 @@ stage_ppl() {
   local log_q="$STAGE_LOG_DIR/ppl-q8.log"
   local rc_t rc_q ppl_turbo_valid ppl_q8_valid ppl_limit
 
+  if [ ! -x "$LLAMA/llama-perplexity" ]; then
+    FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: llama-perplexity binary missing or not executable at $LLAMA/llama-perplexity"
+    FAIL_COUNT=$((FAIL_COUNT+1))
+    emit_summary "$stage_label" "FAIL" "-" "binary missing at $LLAMA/llama-perplexity"
+    return
+  fi
+
   if [ -z "$MODEL" ] || [ ! -f "$MODEL" ]; then
     if [ "$STRICT" = "1" ]; then
       FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: MODEL env var unset or file not found"
@@ -277,6 +284,13 @@ stage_scaling() {
   local log_t="$STAGE_LOG_DIR/scaling-turbo.log"
   local log_q="$STAGE_LOG_DIR/scaling-q8.log"
   local rc_t rc_q ratio
+
+  if [ ! -x "$LLAMA/llama-perplexity" ]; then
+    FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: llama-perplexity binary missing or not executable at $LLAMA/llama-perplexity"
+    FAIL_COUNT=$((FAIL_COUNT+1))
+    emit_summary "$stage_label" "FAIL" "-" "binary missing at $LLAMA/llama-perplexity"
+    return
+  fi
 
   if [ -z "$MODEL" ] || [ ! -f "$MODEL" ] || [ -z "$WIKI" ] || [ ! -f "$WIKI" ]; then
     if [ "$STRICT" = "1" ]; then
