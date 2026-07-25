@@ -3161,9 +3161,7 @@ get_multimap_value(const Map &m, const std::string &key, size_t id) {
 
 void set_header(Headers &headers, const std::string &key,
                        const std::string &val) {
-  if (fields::is_field_name(key) && fields::is_field_value(val)) {
-    headers.emplace(key, val);
-  }
+  if (fields::is_field_valid(key, val)) { headers.emplace(key, val); }
 }
 
 bool read_headers(Stream &strm, Headers &headers) {
@@ -3370,8 +3368,46 @@ ReadContentResult read_content_chunked(Stream &strm, T &x,
 }
 
 bool is_chunked_transfer_encoding(const Headers &headers) {
-  return case_ignore::equal(
-      get_header_value(headers, "Transfer-Encoding", "", 0), "chunked");
+  // RFC 9112 6.1: a message is framed with the chunked coding when "chunked"
+  // is the final transfer coding. A single field value may list several
+  // codings ("gzip, chunked"), and the list may be split across multiple
+  // Transfer-Encoding header lines (RFC 9110 5.3). Match the last coding token
+  // case-insensitively rather than comparing the whole value against "chunked".
+  //
+  // Security: reading a chunked message as unframed leaves its body in the
+  // socket, where a keep-alive connection parses it as a smuggled request.
+  // Headers is an unordered_multimap whose iteration order for duplicate keys
+  // is not portable, so when there is more than one Transfer-Encoding line we
+  // cannot tell which coding is truly final. In that ambiguous case we fail
+  // safe by treating the message as chunked (a mis-parse just closes the
+  // connection, whereas the opposite error enables smuggling).
+  auto rng = headers.equal_range("Transfer-Encoding");
+
+  size_t line_count = 0;
+  bool chunked_present = false;
+  bool last_line_ends_with_chunked = false;
+
+  for (auto it = rng.first; it != rng.second; ++it) {
+    line_count++;
+    const auto &value = it->second;
+
+    std::string last_coding;
+    bool line_has_chunked = false;
+    split(value.data(), value.data() + value.size(), ',',
+          [&](const char *b, const char *e) {
+            last_coding.assign(b, e);
+            if (case_ignore::equal(last_coding, "chunked")) {
+              line_has_chunked = true;
+            }
+          });
+
+    if (line_has_chunked) { chunked_present = true; }
+    last_line_ends_with_chunked = case_ignore::equal(last_coding, "chunked");
+  }
+
+  if (line_count == 0) { return false; }
+  if (line_count == 1) { return last_line_ends_with_chunked; }
+  return chunked_present;
 }
 
 template <typename T, typename U>
@@ -3488,6 +3524,13 @@ bool read_content(Stream &strm, T &x, size_t payload_max_length, int &status,
 
 ssize_t write_request_line(Stream &strm, const std::string &method,
                                   const std::string &path) {
+  // A request target must not carry CR/LF (or other control octets); otherwise
+  // a value smuggled into it splits the request line and injects headers or a
+  // whole request. The same field-value check already guards header values in
+  // check_and_write_headers and the request target in
+  // perform_websocket_handshake; apply it here too.
+  if (!fields::is_field_value(path)) { return -1; }
+
   std::string s = method;
   s += ' ';
   s += path;
@@ -3507,6 +3550,13 @@ ssize_t write_response_line(Stream &strm, int status) {
 ssize_t write_headers(Stream &strm, const Headers &headers) {
   ssize_t write_len = 0;
   for (const auto &x : headers) {
+    // Skip fields with invalid names or values to prevent response splitting
+    // via CR/LF injection, matching set_header(). The client validates request
+    // headers up front in check_and_write_headers, but the server passes
+    // res.headers straight to this writer, and res.headers is a public field
+    // an application can populate directly with request-derived values.
+    if (!fields::is_field_valid(x.first, x.second)) { continue; }
+
     std::string s;
     s = x.first;
     s += ": ";
@@ -3707,10 +3757,7 @@ write_content_chunked(Stream &strm, const ContentProvider &content_provider,
       for (const auto &kv : *trailer) {
         // Skip fields with invalid names or values to prevent response
         // splitting via CR/LF injection, matching set_header().
-        if (!fields::is_field_name(kv.first) ||
-            !fields::is_field_value(kv.second)) {
-          continue;
-        }
+        if (!fields::is_field_valid(kv.first, kv.second)) { continue; }
         std::string field_line = kv.first + ": " + kv.second + "\r\n";
         if (!write_data(strm, field_line.data(), field_line.size())) {
           ok = false;
@@ -4079,6 +4126,13 @@ public:
             break;
           }
 
+          // Check header count limit
+          if (header_count_ >= CPPHTTPLIB_HEADER_MAX_COUNT) {
+            is_valid_ = false;
+            return false;
+          }
+          header_count_++;
+
           const auto header = buf_head(pos);
 
           if (!parse_header(header.data(), header.data() + header.size(),
@@ -4194,6 +4248,7 @@ private:
     file_.filename.clear();
     file_.content_type.clear();
     file_.headers.clear();
+    header_count_ = 0;
   }
 
   bool start_with_case_ignore(const std::string &a, const char *b,
@@ -4247,6 +4302,7 @@ private:
   size_t state_ = 0;
   bool is_valid_ = false;
   FormData file_;
+  size_t header_count_ = 0;
 
   // Buffer
   bool start_with(const std::string &a, size_t spos, size_t epos,
@@ -4907,6 +4963,10 @@ bool is_field_content(const std::string &s) {
 
 bool is_field_value(const std::string &s) { return is_field_content(s); }
 
+bool is_field_valid(const std::string &name, const std::string &value) {
+  return is_field_name(name) && is_field_value(value);
+}
+
 } // namespace fields
 
 bool perform_websocket_handshake(Stream &strm, const std::string &host,
@@ -4921,9 +4981,7 @@ bool perform_websocket_handshake(Stream &strm, const std::string &host,
 
   // Validate user-provided headers
   for (const auto &h : headers) {
-    if (!fields::is_field_name(h.first) || !fields::is_field_value(h.second)) {
-      return false;
-    }
+    if (!fields::is_field_valid(h.first, h.second)) { return false; }
   }
 
   // Generate random Sec-WebSocket-Key
@@ -5042,9 +5100,31 @@ std::string hash_to_hex(const unsigned char (&hash)[N]) {
 }
 } // namespace
 
+#ifdef CPPHTTPLIB_MBEDTLS_V4
+// Mbed TLS 4.x provides hashing (and TLS RNG) via PSA Crypto, which must be
+// initialized once. PSA state is process-global; do not free it.
+bool ensure_mbedtls_psa_crypto() {
+  static std::once_flag once;
+  static bool ok = false;
+  std::call_once(once, []() { ok = (psa_crypto_init() == PSA_SUCCESS); });
+  return ok;
+}
+
+bool psa_hash(psa_algorithm_t alg, const std::string &s,
+                     unsigned char *out, size_t out_size) {
+  if (!ensure_mbedtls_psa_crypto()) { return false; }
+  size_t olen = 0;
+  return psa_hash_compute(alg, reinterpret_cast<const uint8_t *>(s.data()),
+                          s.size(), out, out_size, &olen) == PSA_SUCCESS &&
+         olen == out_size;
+}
+#endif
+
 std::string MD5(const std::string &s) {
   unsigned char hash[16];
-#ifdef CPPHTTPLIB_MBEDTLS_V3
+#ifdef CPPHTTPLIB_MBEDTLS_V4
+  if (!psa_hash(PSA_ALG_MD5, s, hash, sizeof(hash))) { return {}; }
+#elif defined(CPPHTTPLIB_MBEDTLS_V3)
   mbedtls_md5(reinterpret_cast<const unsigned char *>(s.c_str()), s.size(),
               hash);
 #else
@@ -5056,7 +5136,9 @@ std::string MD5(const std::string &s) {
 
 std::string SHA_256(const std::string &s) {
   unsigned char hash[32];
-#ifdef CPPHTTPLIB_MBEDTLS_V3
+#ifdef CPPHTTPLIB_MBEDTLS_V4
+  if (!psa_hash(PSA_ALG_SHA_256, s, hash, sizeof(hash))) { return {}; }
+#elif defined(CPPHTTPLIB_MBEDTLS_V3)
   mbedtls_sha256(reinterpret_cast<const unsigned char *>(s.c_str()), s.size(),
                  hash, 0);
 #else
@@ -5068,7 +5150,9 @@ std::string SHA_256(const std::string &s) {
 
 std::string SHA_512(const std::string &s) {
   unsigned char hash[64];
-#ifdef CPPHTTPLIB_MBEDTLS_V3
+#ifdef CPPHTTPLIB_MBEDTLS_V4
+  if (!psa_hash(PSA_ALG_SHA_512, s, hash, sizeof(hash))) { return {}; }
+#elif defined(CPPHTTPLIB_MBEDTLS_V3)
   mbedtls_sha512(reinterpret_cast<const unsigned char *>(s.c_str()), s.size(),
                  hash, 0);
 #else
@@ -6949,8 +7033,7 @@ template <typename T>
 bool check_and_write_headers(Stream &strm, Headers &headers,
                                     T header_writer, Error &error) {
   for (const auto &h : headers) {
-    if (!detail::fields::is_field_name(h.first) ||
-        !detail::fields::is_field_value(h.second)) {
+    if (!detail::fields::is_field_valid(h.first, h.second)) {
       error = Error::InvalidHeaders;
       return false;
     }
@@ -8348,25 +8431,25 @@ get_client_ip(const std::string &x_forwarded_for,
   // caller can fall back to the connection-level remote address.
   if (ip_list.empty()) { return std::string(); }
 
-  for (size_t i = 0; i < ip_list.size(); ++i) {
-    auto ip = ip_list[i];
+  // Each hop appends the address it received the request from, so the rightmost
+  // entries are the ones written by our own infrastructure while the leftmost
+  // are whatever the original client chose to send. Walk from the right and
+  // skip trusted proxies; the first address that is not a trusted proxy is the
+  // furthest point still attributable to a real hop, i.e. the client. Scanning
+  // from the left instead lets a client forge an arbitrary address by following
+  // it with a trusted proxy's address, which the left-to-right scan then
+  // returned as the client.
+  for (size_t i = ip_list.size(); i-- > 0;) {
+    const auto &ip = ip_list[i];
 
     auto is_trusted_proxy =
         std::any_of(trusted_proxies.begin(), trusted_proxies.end(),
                     [&](const std::string &proxy) { return ip == proxy; });
 
-    if (is_trusted_proxy) {
-      if (i == 0) {
-        // If the trusted proxy is the first IP, there's no preceding client IP
-        return ip;
-      } else {
-        // Return the IP immediately before the trusted proxy
-        return ip_list[i - 1];
-      }
-    }
+    if (!is_trusted_proxy) { return ip; }
   }
 
-  // If no trusted proxy is found, return the first IP in the list
+  // Every hop was a trusted proxy; fall back to the first entry.
   return ip_list.front();
 }
 
@@ -8436,7 +8519,14 @@ Server::process_request(Stream &strm, const std::string &remote_addr,
     connection_closed = true;
   }
 
-  if (!trusted_proxies_.empty() && req.has_header("X-Forwarded-For")) {
+  // Only honor X-Forwarded-For if the peer on the actual TCP connection is
+  // itself a trusted proxy. Otherwise any direct client could spoof
+  // remote_addr simply by sending an arbitrary X-Forwarded-For header.
+  auto is_trusted_peer = std::any_of(
+      trusted_proxies_.begin(), trusted_proxies_.end(),
+      [&](const std::string &proxy) { return proxy == remote_addr; });
+
+  if (is_trusted_peer && req.has_header("X-Forwarded-For")) {
     auto x_forwarded_for = req.get_header_value("X-Forwarded-For");
     auto derived = get_client_ip(x_forwarded_for, trusted_proxies_);
     req.remote_addr = derived.empty() ? remote_addr : derived;
@@ -8643,13 +8733,19 @@ Server::process_request(Stream &strm, const std::string &remote_addr,
 
   // Drain any unconsumed framed body to prevent request smuggling on
   // keep-alive. Without framing there is no body to drain — reading would
-  // consume the next request (issue #2450).
+  // consume the next request (issue #2450). If the response has committed the
+  // connection to close, there is no next request to protect.
   if (!req.body_consumed_ && detail::has_framed_body(req)) {
-    int dummy_status;
-    if (!detail::read_content(
-            strm, req, payload_max_length_, dummy_status, nullptr,
-            [](const char *, size_t, size_t, size_t) { return true; }, false)) {
+    if (res.get_header_value("Connection") == "close") {
       connection_closed = true;
+    } else {
+      int dummy_status;
+      if (!detail::read_content(
+              strm, req, payload_max_length_, dummy_status, nullptr,
+              [](const char *, size_t, size_t, size_t) { return true; },
+              false)) {
+        connection_closed = true;
+      }
     }
   }
 
@@ -9210,9 +9306,8 @@ ClientImpl::open_stream(const std::string &method, const std::string &path,
     handle.body_reader_.content_length = content_length;
   }
 
-  auto transfer_encoding =
-      handle.response->get_header_value("Transfer-Encoding");
-  handle.body_reader_.chunked = (transfer_encoding == "chunked");
+  handle.body_reader_.chunked =
+      detail::is_chunked_transfer_encoding(handle.response->headers);
 
   auto content_encoding = handle.response->get_header_value("Content-Encoding");
   if (!content_encoding.empty()) {
@@ -9541,8 +9636,8 @@ bool ClientImpl::create_redirect_client(
 
   // Clean up request headers that are host/client specific
   // Remove headers that should not be carried over to new host
-  auto headers_to_remove =
-      std::vector<std::string>{"Host", "Proxy-Authorization", "Authorization"};
+  auto headers_to_remove = std::vector<std::string>{
+      "Host", "Proxy-Authorization", "Authorization", "Cookie", "Cookie2"};
 
   for (const auto &header_name : headers_to_remove) {
     auto it = req.headers.find(header_name);
@@ -9796,7 +9891,14 @@ bool ClientImpl::write_request(Stream &strm, Request &req,
     }
 
     // Write request line and headers
-    detail::write_request_line(bstrm, req.method, path_with_query);
+    if (detail::write_request_line(bstrm, req.method, path_with_query) < 0) {
+      // A rejected target (e.g. CR/LF smuggled in via a decoded redirect
+      // Location under set_path_encode(false)) must fail the request cleanly
+      // instead of emitting a request-line-less, header-injecting request.
+      error = Error::Write;
+      output_error_log(error, &req);
+      return false;
+    }
     if (!detail::check_and_write_headers(bstrm, req.headers, header_writer_,
                                          error)) {
       output_error_log(error, &req);
@@ -13893,6 +13995,13 @@ struct MbedTlsSession {
   std::string hostname;     // For client: set via set_sni
   std::string sni_hostname; // For server: received from client via SNI callback
 
+  // Mbed TLS has no SSL_peek() equivalent, so is_peer_closed() must probe with
+  // a real 1-byte mbedtls_ssl_read(). If that probe lands on application data
+  // (e.g. a response that arrived while this side was still in its post-write
+  // check), the byte is pushed back here and served by the next read().
+  unsigned char peeked_byte = 0;
+  bool has_peeked_byte = false;
+
   MbedTlsSession() { mbedtls_ssl_init(&ssl); }
 
   ~MbedTlsSession() { mbedtls_ssl_free(&ssl); }
@@ -13925,6 +14034,20 @@ ErrorCode map_mbedtls_error(int ret, int &out_errno) {
     return ErrorCode::CertVerifyFailed;
   }
   return ErrorCode::Fatal;
+}
+
+// A TLS 1.3 NewSessionTicket (signaled by default on Mbed TLS 4.x) is a
+// non-fatal notification delivered between records, not an error and not
+// application data, so I/O calls that see it should just be retried. Kept in
+// one helper so the retry loops keep an intact "do { } while (...)" instead of
+// splitting the closing brace across an #if.
+bool mbedtls_is_session_ticket(int ret) {
+#if defined(MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET)
+  return ret == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET;
+#else
+  (void)ret;
+  return false;
+#endif
 }
 
 // BIO-like send callback for Mbed TLS
@@ -13978,8 +14101,10 @@ int mbedtls_net_recv_cb(void *ctx, unsigned char *buf, size_t len) {
 // MbedTlsContext constructor/destructor implementations
 MbedTlsContext::MbedTlsContext() {
   mbedtls_ssl_config_init(&conf);
+#ifndef CPPHTTPLIB_MBEDTLS_V4
   mbedtls_entropy_init(&entropy);
   mbedtls_ctr_drbg_init(&ctr_drbg);
+#endif
   mbedtls_x509_crt_init(&ca_chain);
   mbedtls_x509_crt_init(&own_cert);
   mbedtls_pk_init(&own_key);
@@ -13989,8 +14114,10 @@ MbedTlsContext::~MbedTlsContext() {
   mbedtls_pk_free(&own_key);
   mbedtls_x509_crt_free(&own_cert);
   mbedtls_x509_crt_free(&ca_chain);
+#ifndef CPPHTTPLIB_MBEDTLS_V4
   mbedtls_ctr_drbg_free(&ctr_drbg);
   mbedtls_entropy_free(&entropy);
+#endif
   mbedtls_ssl_config_free(&conf);
 }
 
@@ -14064,6 +14191,14 @@ ctx_t create_client_context() {
 
   ctx->is_server = false;
 
+#ifdef CPPHTTPLIB_MBEDTLS_V4
+  // Mbed TLS 4.x draws randomness from PSA Crypto; just ensure it is ready.
+  if (!detail::ensure_mbedtls_psa_crypto()) {
+    delete ctx;
+    return nullptr;
+  }
+  int ret;
+#else
   // Seed the random number generator
   const char *pers = "httplib_client";
   int ret = mbedtls_ctr_drbg_seed(
@@ -14074,6 +14209,7 @@ ctx_t create_client_context() {
     delete ctx;
     return nullptr;
   }
+#endif
 
   // Set up SSL config for client
   ret = mbedtls_ssl_config_defaults(&ctx->conf, MBEDTLS_SSL_IS_CLIENT,
@@ -14085,8 +14221,10 @@ ctx_t create_client_context() {
     return nullptr;
   }
 
-  // Set random number generator
+#ifndef CPPHTTPLIB_MBEDTLS_V4
+  // Set random number generator (Mbed TLS 4.x uses the PSA RNG implicitly)
   mbedtls_ssl_conf_rng(&ctx->conf, mbedtls_ctr_drbg_random, &ctx->ctr_drbg);
+#endif
 
   // Default: verify peer certificate
   mbedtls_ssl_conf_authmode(&ctx->conf, MBEDTLS_SSL_VERIFY_REQUIRED);
@@ -14108,6 +14246,14 @@ ctx_t create_server_context() {
 
   ctx->is_server = true;
 
+#ifdef CPPHTTPLIB_MBEDTLS_V4
+  // Mbed TLS 4.x draws randomness from PSA Crypto; just ensure it is ready.
+  if (!detail::ensure_mbedtls_psa_crypto()) {
+    delete ctx;
+    return nullptr;
+  }
+  int ret;
+#else
   // Seed the random number generator
   const char *pers = "httplib_server";
   int ret = mbedtls_ctr_drbg_seed(
@@ -14118,6 +14264,7 @@ ctx_t create_server_context() {
     delete ctx;
     return nullptr;
   }
+#endif
 
   // Set up SSL config for server
   ret = mbedtls_ssl_config_defaults(&ctx->conf, MBEDTLS_SSL_IS_SERVER,
@@ -14129,8 +14276,10 @@ ctx_t create_server_context() {
     return nullptr;
   }
 
-  // Set random number generator
+#ifndef CPPHTTPLIB_MBEDTLS_V4
+  // Set random number generator (Mbed TLS 4.x uses the PSA RNG implicitly)
   mbedtls_ssl_conf_rng(&ctx->conf, mbedtls_ctr_drbg_random, &ctx->ctr_drbg);
+#endif
 
   // Default: don't verify client
   mbedtls_ssl_conf_authmode(&ctx->conf, MBEDTLS_SSL_VERIFY_NONE);
@@ -14290,7 +14439,7 @@ bool set_client_cert_pem(ctx_t ctx, const char *cert, const char *key,
       password ? reinterpret_cast<const unsigned char *>(password) : nullptr;
   size_t pwd_len = password ? strlen(password) : 0;
 
-#ifdef CPPHTTPLIB_MBEDTLS_V3
+#if defined(CPPHTTPLIB_MBEDTLS_V3) && !defined(CPPHTTPLIB_MBEDTLS_V4)
   ret = mbedtls_pk_parse_key(
       &mctx->own_key, reinterpret_cast<const unsigned char *>(key_str.c_str()),
       key_str.size() + 1, pwd, pwd_len, mbedtls_ctr_drbg_random,
@@ -14305,7 +14454,10 @@ bool set_client_cert_pem(ctx_t ctx, const char *cert, const char *key,
     return false;
   }
 
-  // Verify that the certificate and private key match
+  // Verify that the certificate and private key match.
+  // Mbed TLS 4.x: mbedtls_pk_check_pair() reports a spurious mismatch for
+  // PSA-backed keys, so skip it and let the handshake surface a real mismatch.
+#ifndef CPPHTTPLIB_MBEDTLS_V4
 #ifdef CPPHTTPLIB_MBEDTLS_V3
   ret = mbedtls_pk_check_pair(&mctx->own_cert.pk, &mctx->own_key,
                               mbedtls_ctr_drbg_random, &mctx->ctr_drbg);
@@ -14316,6 +14468,7 @@ bool set_client_cert_pem(ctx_t ctx, const char *cert, const char *key,
     impl::mbedtls_last_error() = ret;
     return false;
   }
+#endif
 
   ret = mbedtls_ssl_conf_own_cert(&mctx->conf, &mctx->own_cert, &mctx->own_key);
   if (ret != 0) {
@@ -14339,7 +14492,7 @@ bool set_client_cert_file(ctx_t ctx, const char *cert_path,
   }
 
   // Parse private key file
-#ifdef CPPHTTPLIB_MBEDTLS_V3
+#if defined(CPPHTTPLIB_MBEDTLS_V3) && !defined(CPPHTTPLIB_MBEDTLS_V4)
   ret = mbedtls_pk_parse_keyfile(&mctx->own_key, key_path, password,
                                  mbedtls_ctr_drbg_random, &mctx->ctr_drbg);
 #else
@@ -14350,7 +14503,9 @@ bool set_client_cert_file(ctx_t ctx, const char *cert_path,
     return false;
   }
 
-  // Verify that the certificate and private key match
+  // Verify that the certificate and private key match.
+  // Mbed TLS 4.x: see set_client_cert() — skip the spurious check_pair.
+#ifndef CPPHTTPLIB_MBEDTLS_V4
 #ifdef CPPHTTPLIB_MBEDTLS_V3
   ret = mbedtls_pk_check_pair(&mctx->own_cert.pk, &mctx->own_key,
                               mbedtls_ctr_drbg_random, &mctx->ctr_drbg);
@@ -14361,6 +14516,7 @@ bool set_client_cert_file(ctx_t ctx, const char *cert_path,
     impl::mbedtls_last_error() = ret;
     return false;
   }
+#endif
 
   ret = mbedtls_ssl_conf_own_cert(&mctx->conf, &mctx->own_cert, &mctx->own_key);
   if (ret != 0) {
@@ -14455,7 +14611,10 @@ TlsError connect(session_t session) {
   }
 
   auto msession = static_cast<impl::MbedTlsSession *>(session);
-  int ret = mbedtls_ssl_handshake(&msession->ssl);
+  int ret;
+  do {
+    ret = mbedtls_ssl_handshake(&msession->ssl);
+  } while (impl::mbedtls_is_session_ticket(ret));
 
   if (ret == 0) {
     err.code = ErrorCode::Success;
@@ -14499,6 +14658,8 @@ bool connect_nonblocking(session_t session, socket_t sock,
 
   int ret;
   while ((ret = mbedtls_ssl_handshake(&msession->ssl)) != 0) {
+    // Non-fatal TLS 1.3 ticket; retry immediately.
+    if (impl::mbedtls_is_session_ticket(ret)) { continue; }
     if (ret == MBEDTLS_ERR_SSL_WANT_READ) {
       if (detail::select_read(sock, timeout_sec, timeout_usec) > 0) {
         continue;
@@ -14546,8 +14707,28 @@ ssize_t read(session_t session, void *buf, size_t len, TlsError &err) {
   }
 
   auto msession = static_cast<impl::MbedTlsSession *>(session);
-  int ret =
-      mbedtls_ssl_read(&msession->ssl, static_cast<unsigned char *>(buf), len);
+
+  // Serve a byte consumed by the is_peer_closed() probe before reading more.
+  if (msession->has_peeked_byte) {
+    if (len == 0) { return 0; }
+    auto p = static_cast<unsigned char *>(buf);
+    p[0] = msession->peeked_byte;
+    msession->has_peeked_byte = false;
+    size_t n = 1;
+    // Top up with any already-decrypted bytes without risking a block.
+    if (len > 1 && mbedtls_ssl_get_bytes_avail(&msession->ssl) > 0) {
+      int extra = mbedtls_ssl_read(&msession->ssl, p + 1, len - 1);
+      if (extra > 0) { n += static_cast<size_t>(extra); }
+    }
+    err.code = ErrorCode::Success;
+    return static_cast<ssize_t>(n);
+  }
+
+  int ret;
+  do {
+    ret = mbedtls_ssl_read(&msession->ssl, static_cast<unsigned char *>(buf),
+                           len);
+  } while (impl::mbedtls_is_session_ticket(ret));
 
   if (ret > 0) {
     err.code = ErrorCode::Success;
@@ -14576,8 +14757,11 @@ ssize_t write(session_t session, const void *buf, size_t len,
   }
 
   auto msession = static_cast<impl::MbedTlsSession *>(session);
-  int ret = mbedtls_ssl_write(&msession->ssl,
-                              static_cast<const unsigned char *>(buf), len);
+  int ret;
+  do {
+    ret = mbedtls_ssl_write(&msession->ssl,
+                            static_cast<const unsigned char *>(buf), len);
+  } while (impl::mbedtls_is_session_ticket(ret));
 
   if (ret > 0) {
     err.code = ErrorCode::Success;
@@ -14599,7 +14783,8 @@ int pending(const_session_t session) {
   if (!session) { return 0; }
   auto msession =
       static_cast<impl::MbedTlsSession *>(const_cast<void *>(session));
-  return static_cast<int>(mbedtls_ssl_get_bytes_avail(&msession->ssl));
+  return static_cast<int>(mbedtls_ssl_get_bytes_avail(&msession->ssl)) +
+         (msession->has_peeked_byte ? 1 : 0);
 }
 
 void shutdown(session_t session, bool graceful) {
@@ -14625,24 +14810,34 @@ bool is_peer_closed(session_t session, socket_t sock) {
   if (!session || sock == INVALID_SOCKET) { return true; }
   auto msession = static_cast<impl::MbedTlsSession *>(session);
 
-  // Check if there's already decrypted data available in the TLS buffer
-  // If so, the connection is definitely alive
-  if (mbedtls_ssl_get_bytes_avail(&msession->ssl) > 0) { return false; }
+  // Check if there's already decrypted or pushed-back data available.
+  // If so, the connection is definitely alive.
+  if (msession->has_peeked_byte ||
+      mbedtls_ssl_get_bytes_avail(&msession->ssl) > 0) {
+    return false;
+  }
 
   // Set socket to non-blocking to avoid blocking on read
   detail::set_nonblocking(sock, true);
   auto cleanup =
       detail::scope_exit([&]() { detail::set_nonblocking(sock, false); });
 
-  // Try a 1-byte read to check connection status
-  // Note: This will consume the byte if data is available, but for the
-  // purpose of checking if peer is closed, this should be acceptable
-  // since we're only called when we expect the connection might be closing
+  // Probe with a 1-byte read (Mbed TLS has no peek API). If the probe lands
+  // on application data — e.g. a response that already arrived — push the
+  // byte back so the next read() delivers it instead of losing it.
   unsigned char buf;
-  int ret = mbedtls_ssl_read(&msession->ssl, &buf, 1);
+  int ret;
+  do {
+    ret = mbedtls_ssl_read(&msession->ssl, &buf, 1);
+  } while (impl::mbedtls_is_session_ticket(ret));
 
   // If we got data or WANT_READ (would block), connection is alive
-  if (ret > 0 || ret == MBEDTLS_ERR_SSL_WANT_READ) { return false; }
+  if (ret > 0) {
+    msession->peeked_byte = buf;
+    msession->has_peeked_byte = true;
+    return false;
+  }
+  if (ret == MBEDTLS_ERR_SSL_WANT_READ) { return false; }
 
   // If we get a peer close notify or a connection reset, the peer is closed
   return ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY ||
@@ -15049,7 +15244,7 @@ bool update_server_cert(ctx_t ctx, const char *cert_pem,
   }
 
   // Parse private key PEM
-#ifdef CPPHTTPLIB_MBEDTLS_V3
+#if defined(CPPHTTPLIB_MBEDTLS_V3) && !defined(CPPHTTPLIB_MBEDTLS_V4)
   ret = mbedtls_pk_parse_key(
       &mbed_ctx->own_key, reinterpret_cast<const unsigned char *>(key_pem),
       strlen(key_pem) + 1,

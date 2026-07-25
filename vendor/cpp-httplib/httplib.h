@@ -8,8 +8,8 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.50.1"
-#define CPPHTTPLIB_VERSION_NUM "0x003201"
+#define CPPHTTPLIB_VERSION "0.51.0"
+#define CPPHTTPLIB_VERSION_NUM "0x003300"
 
 #ifdef _WIN32
 #if defined(_WIN32_WINNT) && _WIN32_WINNT < 0x0A00
@@ -420,18 +420,26 @@ using socket_t = int;
 #endif // CPPHTTPLIB_OPENSSL_SUPPORT
 
 #ifdef CPPHTTPLIB_MBEDTLS_SUPPORT
-#include <mbedtls/ctr_drbg.h>
-#include <mbedtls/entropy.h>
+// version.h defines MBEDTLS_VERSION_MAJOR (on 2.x/3.x/4.x alike); it is pulled
+// in with this first include group so the version gating below can use it.
 #include <mbedtls/error.h>
-#include <mbedtls/md5.h>
 #include <mbedtls/net_sockets.h>
 #include <mbedtls/oid.h>
 #include <mbedtls/pk.h>
+#include <mbedtls/ssl.h>
+#include <mbedtls/version.h>
+#include <mbedtls/x509_crt.h>
+#if MBEDTLS_VERSION_MAJOR >= 4
+// Mbed TLS 4.x moved hashing/RNG to PSA Crypto and removed these headers.
+#include <psa/crypto.h>
+#else
+#include <mbedtls/ctr_drbg.h>
+#include <mbedtls/entropy.h>
+#include <mbedtls/md5.h>
 #include <mbedtls/sha1.h>
 #include <mbedtls/sha256.h>
 #include <mbedtls/sha512.h>
-#include <mbedtls/ssl.h>
-#include <mbedtls/x509_crt.h>
+#endif
 #ifdef _WIN32
 #include <wincrypt.h>
 #ifdef _MSC_VER
@@ -444,7 +452,11 @@ using socket_t = int;
 #endif
 #endif
 
-// Mbed TLS 3.x API compatibility
+// Mbed TLS version API compatibility. Note: V4 implies V3 (both defined on
+// 4.x), so version-specific 3.x-only code must check V3 && !V4.
+#if MBEDTLS_VERSION_MAJOR >= 4
+#define CPPHTTPLIB_MBEDTLS_V4
+#endif
 #if MBEDTLS_VERSION_MAJOR >= 3
 #define CPPHTTPLIB_MBEDTLS_V3
 #endif
@@ -696,7 +708,7 @@ inline from_chars_result<T> from_chars(const char *first, const char *last,
     return {first, std::errc::invalid_argument};
   }
 
-  value = negative ? -result : result;
+  value = negative ? T(0) - result : result;
   return {p, std::errc{}};
 }
 
@@ -2957,7 +2969,18 @@ inline size_t get_header_value_u64(const Headers &headers,
   std::advance(it, static_cast<ssize_t>(id));
   if (it != rng.second) {
     if (is_numeric(it->second)) {
-      return static_cast<size_t>(std::strtoull(it->second.data(), nullptr, 10));
+      // Parse at size_t width so an out-of-range Content-Length is reported
+      // rather than silently saturated/truncated (a value above 2^32 would
+      // otherwise wrap to a small framing length on 32-bit builds). Flag it
+      // and return SIZE_MAX so the existing oversized-value guards reject it.
+      size_t val = 0;
+      const auto &s = it->second;
+      auto r = from_chars(s.data(), s.data() + s.size(), val);
+      if (r.ec == std::errc::result_out_of_range) {
+        is_invalid_value = true;
+        return (std::numeric_limits<size_t>::max)();
+      }
+      return val;
     } else {
       is_invalid_value = true;
     }
@@ -3403,6 +3426,7 @@ bool is_obs_text(char c);
 bool is_field_vchar(char c);
 bool is_field_content(const std::string &s);
 bool is_field_value(const std::string &s);
+bool is_field_valid(const std::string &name, const std::string &value);
 
 } // namespace fields
 } // namespace detail
@@ -3422,8 +3446,11 @@ namespace impl {
 // setup callbacks (cast ctx_t to tls::impl::MbedTlsContext*).
 struct MbedTlsContext {
   mbedtls_ssl_config conf;
+#ifndef CPPHTTPLIB_MBEDTLS_V4
+  // Mbed TLS 4.x uses PSA Crypto's internal RNG; no explicit entropy/DRBG.
   mbedtls_entropy_context entropy;
   mbedtls_ctr_drbg_context ctr_drbg;
+#endif
   mbedtls_x509_crt ca_chain;
   mbedtls_x509_crt own_cert;
   mbedtls_pk_context own_key;
