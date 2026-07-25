@@ -729,6 +729,12 @@ static bool ggml_backend_zendnn_device_supports_op(ggml_backend_dev_t dev, const
                     if (n_experts > max_experts) {
                         return false;
                     }
+
+                    // fall back once the average rows per expert (N / n_experts) is too thin
+                    // to amortize each per-expert GEMM's overhead
+                    if (N / n_experts <= 32) {
+                        return false;
+                    }
                 }
             }
             else if (ne0 < min_batch || ne1 < min_batch || ne10 < min_batch) {
