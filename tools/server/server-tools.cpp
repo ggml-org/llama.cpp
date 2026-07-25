@@ -1263,12 +1263,18 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools, const s
                     }};
 
                     auto done = std::make_unique<server_tool_stream_result>();
+                    json result;
                     try {
-                        tool.invoke(params, &st);
+                        result = tool.invoke(params, &st);
                     } catch (const std::exception & e) {
                         done->error_msg = e.what();
                     } catch (...) {
                         done->error_msg = "An unknown error occurred";
+                    }
+                    // Use the return value as fallback if no exception was thrown
+                    if (result.contains("error") && done->error_msg.empty()) {
+                        // assert(result["error"].is_string());
+                        done->error_msg = result.at("error").get<std::string>();
                     }
                     done->id    = st.id;
                     done->done  = true;
