@@ -88,6 +88,11 @@ static server_http_context::handler_t ex_wrapper(server_http_context::handler_t 
 int llama_server(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
 
+#ifndef _WIN32
+    // Ignore SIGPIPE so the server does not crash if an MCP child exits while we are writing to its stdin
+    signal(SIGPIPE, SIG_IGN);
+#endif
+
     // own arguments required by this example
     common_params params;
 
@@ -156,6 +161,9 @@ int llama_server(common_params & params, int argc, char ** argv) {
     if (params.model_alias.empty() && !model_name.empty()) {
         params.model_alias.insert(model_name);
     }
+
+    // note: this is guaranteed to out-live ctx_http and tools
+    server_mcp mcp_mgr;
 
     // struct that contains llama context and inference
     server_context ctx_server;
@@ -326,17 +334,28 @@ int llama_server(common_params & params, int argc, char ** argv) {
         ctx_http.post("/cors-proxy",      ex_wrapper(res_403));
     }
 
-    // EXPERIMENTAL built-in tools
-    if (!params.server_tools.empty()) {
+    try {
+        mcp_mgr.start(params);
+    } catch (const std::exception & e) {
+        SRV_ERR("MCP starting failed: %s\n", e.what());
+        return 1;
+    }
+
+    if (!params.server_tools.empty() || !mcp_mgr.empty()) {
         try {
-            tools.setup(params.server_tools);
+            tools.setup(params.server_tools, mcp_mgr);
         } catch (const std::exception & e) {
             SRV_ERR("tools setup failed: %s\n", e.what());
             return 1;
         }
         ctx_http.get ("/tools",           ex_wrapper(tools.handle_get));
         ctx_http.post("/tools",           ex_wrapper(tools.handle_post));
-        warn_names.push_back("built-in tools (experimental)");
+        if (!params.server_tools.empty()) {
+            warn_names.push_back("built-in tools (experimental)");
+        }
+        if (!mcp_mgr.empty()) {
+            warn_names.push_back("MCP servers (experimental)");
+        }
     } else {
         ctx_http.get ("/tools",           ex_wrapper(res_403));
         ctx_http.post("/tools",           ex_wrapper(res_403));
@@ -378,7 +397,7 @@ int llama_server(common_params & params, int argc, char ** argv) {
     if (is_router_server) {
         SRV_INF("%s", "starting server in router mode. models will be automatically loaded on-demand\n");
 
-        clean_up = [&models_routes]() {
+        clean_up = [&models_routes, &mcp_mgr]() {
             SRV_INF("%s: cleaning up before exit...\n", __func__);
             // stop the session GC first, it finalizes live sessions and wakes pending readers
             server_stream_session_manager_stop();
@@ -386,6 +405,7 @@ int llama_server(common_params & params, int argc, char ** argv) {
                 models_routes->stopping.store(true); // maybe redundant, but just to be safe
                 models_routes->models.unload_all();
             }
+            mcp_mgr.shutdown();
             llama_backend_free();
         };
 
@@ -401,17 +421,19 @@ int llama_server(common_params & params, int argc, char ** argv) {
                 // important to disconnect any SSE clients
                 models_routes->stopping.store(true);
             }
+            mcp_mgr.shutdown();
             ctx_http.stop();
         };
 
     } else {
         // setup clean up function, to be called before exit
-        clean_up = [&ctx_http, &ctx_server]() {
+        clean_up = [&ctx_http, &ctx_server, &mcp_mgr]() {
             SRV_INF("%s: cleaning up before exit...\n", __func__);
             // stop the session GC first, it finalizes live sessions and wakes pending readers
             server_stream_session_manager_stop();
             ctx_http.stop();
             ctx_server.terminate();
+            mcp_mgr.shutdown();
             llama_backend_free();
         };
 
@@ -444,6 +466,7 @@ int llama_server(common_params & params, int argc, char ** argv) {
         SRV_INF("%s", "model loaded\n");
 
         shutdown_handler = [&](int) {
+            mcp_mgr.shutdown();
             // this will unblock start_loop()
             ctx_server.terminate();
         };
