@@ -132,6 +132,7 @@ void mtmd_helper_image_get_decoder_pos(const mtmd_image_tokens * chunks, llama_p
 struct decode_embd_batch {
     int n_pos_per_embd;
     int n_mmproj_embd;
+    int8_t logits_value = false; // default: no per-token output (upstream behavior)
     std::vector<llama_pos>      pos;
     std::vector<llama_pos>      pos_view; // used by mrope
     std::vector<int32_t>        n_seq_id;
@@ -164,7 +165,7 @@ struct decode_embd_batch {
             batch.pos     [i] = pos_0 + i;
             batch.n_seq_id[i] = 1;
             batch.seq_id  [i] = seq_id_0.data();
-            batch.logits  [i] = false;
+            batch.logits  [i] = logits_value;
         }
     }
 
@@ -182,7 +183,7 @@ struct decode_embd_batch {
         for (int i = 0; i < batch.n_tokens; i++) {
             batch.n_seq_id[i] = 1;
             batch.seq_id  [i] = seq_id_0.data();
-            batch.logits  [i] = false;
+            batch.logits  [i] = logits_value;
         }
     }
 
@@ -199,7 +200,7 @@ struct decode_embd_batch {
         for (int i = 0; i < batch.n_tokens; i++) {
             batch.n_seq_id[i] = 1;
             batch.seq_id  [i] = seq_id_0.data();
-            batch.logits  [i] = false;
+            batch.logits  [i] = logits_value;
         }
     }
 
@@ -271,6 +272,7 @@ int32_t mtmd_helper_decode_image_chunk(
         llama_seq_id seq_id,
         int32_t n_batch,
         llama_pos * new_n_past,
+        bool embd_logits,
         mtmd_helper_post_decode_callback callback,
         void * user_data) {
     GGML_ASSERT(n_batch > 0);
@@ -289,6 +291,7 @@ int32_t mtmd_helper_decode_image_chunk(
     int32_t i_batch = 0;
     int32_t n_img_batches = (n_tokens + n_batch - 1) / n_batch;
     decode_embd_batch batch_embd(encoded_embd, n_tokens, n_pos_per_embd, n_mmproj_embd);
+    batch_embd.logits_value = embd_logits;
 
     if (mtmd_decode_use_mrope(ctx)) {
         if (chunk_type == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
@@ -405,7 +408,7 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
         LOG_INF("%s slice encoded in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
 
         float * embd = mtmd_get_output_embd(ctx);
-        ret = mtmd_helper_decode_image_chunk(ctx, lctx, chunk, embd, n_past, seq_id, n_batch, new_n_past, nullptr, nullptr);
+        ret = mtmd_helper_decode_image_chunk(ctx, lctx, chunk, embd, n_past, seq_id, n_batch, new_n_past, false, nullptr, nullptr);
         if (ret != 0) {
             LOG_ERR("failed to decode %s\n", name);
             llama_batch_free(text_batch);

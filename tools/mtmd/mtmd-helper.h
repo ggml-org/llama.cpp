@@ -95,6 +95,8 @@ typedef int32_t (*mtmd_helper_post_decode_callback)(struct llama_batch batch, vo
 
 // helper function to decode an image whose embeddings have already been calculated
 // this helper will handle batching and pre/post decoding setup (for ex. gemma 3 requires non-causal attention)
+// embd_logits: if true, request per-token outputs for all image/audio tokens (needed to collect
+//              hidden states via llama_get_embeddings_ith). Default callers should pass false.
 // ret 0 on success, -1 on chunk not being a valid image chunk, 1 on decode failure
 MTMD_API int32_t mtmd_helper_decode_image_chunk(mtmd_context * ctx,
                                                 struct llama_context * lctx,
@@ -104,6 +106,7 @@ MTMD_API int32_t mtmd_helper_decode_image_chunk(mtmd_context * ctx,
                                                 llama_seq_id seq_id,
                                                 int32_t n_batch,
                                                 llama_pos * new_n_past,
+                                                bool embd_logits,
                                                 mtmd_helper_post_decode_callback callback,
                                                 void * user_data);
 

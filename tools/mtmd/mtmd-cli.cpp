@@ -351,6 +351,7 @@ static int eval_message(mtmd_cli_context & ctx, common_chat_msg & msg) {
                         0, // seq_id
                         ctx.n_batch,
                         &new_n_past,
+                        false, // embd_logits
                         nullptr, // callback
                         nullptr  // user_data
                     );

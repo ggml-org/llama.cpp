@@ -720,6 +720,7 @@ struct server_slot {
                         id,
                         llama_n_batch(ctx_tgt),
                         &new_n_past,
+                        false,
                         cb,
                         cb_data
                     );
