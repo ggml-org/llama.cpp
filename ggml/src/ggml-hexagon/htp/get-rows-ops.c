@@ -12,7 +12,6 @@
 #include "ggml-common.h"
 #include "htp-ctx.h"
 #include "htp-ops.h"
-#include "htp-ops.h"
 #include "hvx-utils.h"
 #include "hvx-quant.h"
 
@@ -25,6 +24,8 @@ struct get_rows_context {
     struct fastdiv_values get_rows_div_ne10;
     struct fastdiv_values get_rows_div_ne10_ne11;
     struct fastdiv_values get_rows_div_chunks_per_row;
+    struct fastdiv_values get_rows_div_ne02;
+    struct fastdiv_values get_rows_div_ne03;
 };
 
 #define get_rows_preamble \
@@ -57,7 +58,16 @@ struct get_rows_context {
                                                \
     const uint32_t nr = ne10 * ne11 * ne12;
 
-static void get_rows_thread_f32_f32_dma(unsigned int nth, unsigned int ith, void *data) {
+static inline uint32_t get_row_size_bytes(int type, uint32_t ne00) {
+    switch (type) {
+        case HTP_TYPE_F32:  return ne00 * 4;
+        case HTP_TYPE_F16:  return ne00 * 2;
+        case HTP_TYPE_Q8_0: return (ne00 / 32) * 34;
+        default:            return 0;
+    }
+}
+
+static void get_rows_thread_dma(unsigned int nth, unsigned int ith, void *data) {
     struct get_rows_context * grctx = (struct get_rows_context *)data;
     struct htp_ops_context * octx = grctx->octx;
     get_rows_preamble;
@@ -72,6 +82,7 @@ static void get_rows_thread_f32_f32_dma(unsigned int nth, unsigned int ith, void
     const uint32_t ir1 = MIN(ir0 + dr, grctx->total_tasks);
 
     const bool is_i32 = (octx->src[1]->type == HTP_TYPE_I32);
+    const uint32_t row_size_bytes = get_row_size_bytes(octx->src[0]->type, ne00);
 
     dma_queue * dma_queue = octx->ctx->dma[ith];
     for (uint32_t i = ir0; i < ir1; ++i) {
@@ -94,21 +105,26 @@ static void get_rows_thread_f32_f32_dma(unsigned int nth, unsigned int ith, void
         assert(i01_val >= 0 && (uint64_t)i01_val < ne01);
         uint32_t i01 = (uint32_t)i01_val;
 
-        const uintptr_t src0_ptr = octx->src[0]->data + i01*nb01 + i11*nb02 + i12*nb03;
+        const uint32_t q02 = fastdiv(i11, &grctx->get_rows_div_ne02);
+        const uint32_t i02 = i11 - q02 * ne02;
+        const uint32_t q03 = fastdiv(i12, &grctx->get_rows_div_ne03);
+        const uint32_t i03 = i12 - q03 * ne03;
+
+        const uintptr_t src0_ptr = octx->src[0]->data + i01*nb01 + i02*nb02 + i03*nb03;
         const uintptr_t dst_ptr  = octx->dst->data    + i10*nb1  + i11*nb2  + i12*nb3;
 
-        while (!dma_queue_push(dma_queue, dma_make_ptr((void *)dst_ptr, (const void *)src0_ptr), nb1, nb01, ne00 * sizeof(float), 1)) {
+        while (!dma_queue_push(dma_queue, dma_make_ptr((void *)dst_ptr, (const void *)src0_ptr), nb1, nb01, row_size_bytes, 1)) {
             dma_queue_pop(dma_queue);
         }
     }
     dma_queue_flush(dma_queue);
 
     qt = HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - qt);
-    FARF(HIGH, "get-rows-f32-f32-dma %d/%d: %ux%ux%ux%u (%u:%u) x %ux%ux%ux%u -> %ux%ux%ux%u usec %u\n", ith, nth,
+    FARF(HIGH, "get-rows-dma %d/%d: %ux%ux%ux%u (%u:%u) x %ux%ux%ux%u -> %ux%ux%ux%u usec %u\n", ith, nth,
          ne00, ne01, ne02, ne03, ir0, ir1, ne10, ne11, ne12, ne13, ne0, ne1, ne2, ne3, (unsigned) qt);
 }
 
-static void get_rows_thread_f32_f32_hvx(unsigned int nth, unsigned int ith, void *data) {
+static void get_rows_thread_hvx(unsigned int nth, unsigned int ith, void *data) {
     struct get_rows_context * grctx = (struct get_rows_context *)data;
     struct htp_ops_context * octx = grctx->octx;
     get_rows_preamble;
@@ -123,6 +139,7 @@ static void get_rows_thread_f32_f32_hvx(unsigned int nth, unsigned int ith, void
     const uint32_t ir1 = MIN(ir0 + dr, grctx->total_tasks);
 
     const bool is_i32 = (octx->src[1]->type == HTP_TYPE_I32);
+    const uint32_t type = octx->src[0]->type;
 
     const uint32_t chunks_per_row = grctx->chunks_per_row;
     const uint32_t chunk_size     = grctx->chunk_size;
@@ -149,89 +166,41 @@ static void get_rows_thread_f32_f32_hvx(unsigned int nth, unsigned int ith, void
         assert(i01_val >= 0 && (uint64_t)i01_val < ne01);
         uint32_t i01 = (uint32_t)i01_val;
 
-        const uint32_t offset = chunk_idx * chunk_size;
-        if (offset < ne00) {
-            const uint32_t copy_size = MIN(chunk_size, ne00 - offset);
-            const uintptr_t src0_ptr = octx->src[0]->data + i01*nb01 + i11*nb02 + i12*nb03 + offset * sizeof(float);
-            const uintptr_t dst_ptr  = octx->dst->data    + i10*nb1  + i11*nb2  + i12*nb3  + offset * sizeof(float);
-            hvx_copy_f32_uu((uint8_t *)dst_ptr, (const uint8_t *)src0_ptr, copy_size);
-        }
-    }
+        const uint32_t q02 = fastdiv(i11, &grctx->get_rows_div_ne02);
+        const uint32_t i02 = i11 - q02 * ne02;
+        const uint32_t q03 = fastdiv(i12, &grctx->get_rows_div_ne03);
+        const uint32_t i03 = i12 - q03 * ne03;
 
-    qt = HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - qt);
-    FARF(HIGH, "get-rows-f32-f32-hvx %d/%d: %ux%ux%ux%u (%u:%u) x %ux%ux%ux%u -> %ux%ux%ux%u usec %u\n", ith, nth,
-         ne00, ne01, ne02, ne03, ir0, ir1, ne10, ne11, ne12, ne13, ne0, ne1, ne2, ne3, (unsigned) qt);
-}
-
-static void get_rows_thread_q8_0_f32(unsigned int nth, unsigned int ith, void *data) {
-    struct get_rows_context * grctx = (struct get_rows_context *)data;
-    struct htp_ops_context * octx = grctx->octx;
-    get_rows_preamble;
-
-    uint64_t qt = HAP_perf_get_qtimer_count();
-
-    const uint32_t dr  = grctx->tasks_per_thread;
-    const uint32_t ir0 = dr * ith;
-    if (ir0 >= grctx->total_tasks) {
-        return;
-    }
-    const uint32_t ir1 = MIN(ir0 + dr, grctx->total_tasks);
-
-    const bool is_i32 = (octx->src[1]->type == HTP_TYPE_I32);
-
-    for (uint32_t i = ir0; i < ir1; ++i) {
-        const uint32_t i12 = fastdiv(i, &grctx->get_rows_div_ne10_ne11);
-        const uint32_t rem = i - i12 * ne11 * ne10;
-        const uint32_t i11 = fastdiv(rem, &grctx->get_rows_div_ne10);
-        const uint32_t i10 = rem - i11 * ne10;
-
-        const uintptr_t src1_addr = octx->src[1]->data + i10*nb10 + i11*nb11 + i12*nb12;
-
-        int64_t i01_val = 0;
-        if (is_i32) {
-            int32_t i01_32;
-            memcpy(&i01_32, (const void *)src1_addr, sizeof(int32_t));
-            i01_val = i01_32;
+        if (type == HTP_TYPE_F32) {
+            const uint32_t offset = chunk_idx * chunk_size;
+            if (offset < ne00) {
+                const uint32_t copy_size = MIN(chunk_size, ne00 - offset);
+                const uintptr_t src0_ptr = octx->src[0]->data + i01*nb01 + i02*nb02 + i03*nb03 + offset * sizeof(float);
+                const uintptr_t dst_ptr  = octx->dst->data    + i10*nb1  + i11*nb2  + i12*nb3  + offset * sizeof(float);
+                hvx_copy_f32_uu((uint8_t *)dst_ptr, (const uint8_t *)src0_ptr, copy_size);
+            }
         } else {
-            memcpy(&i01_val, (const void *)src1_addr, sizeof(int64_t));
-        }
-
-        assert(i01_val >= 0 && (uint64_t)i01_val < ne01);
-        uint32_t i01 = (uint32_t)i01_val;
-
-        const uint32_t i02 = i11 % ne02;
-        const uint32_t i03 = i12 % ne03;
-
-        const void * src0_ptr = (const void *)((const uint8_t *) octx->src[0]->data + i01*nb01 + i02*nb02 + i03*nb03);
-        float *      dst_ptr  = (float *)      ((uint8_t *)       octx->dst->data  + i10*nb1  + i11*nb2  + i12*nb3);
-
-        hvx_dequantize_row_q8_0_f32(dst_ptr, src0_ptr, ne00);
-
-        // Reference scalar dequantization to find mismatches
-        const block_q8_0 * src_blocks = (const block_q8_0 *) src0_ptr;
-        for (uint32_t b = 0; b < ne00 / 32; ++b) {
-            float d = GGML_FP16_TO_FP32(src_blocks[b].d);
-            for (uint32_t el = 0; el < 32; ++el) {
-                float ref_val = src_blocks[b].qs[el] * d;
-                float actual_val = dst_ptr[b * 32 + el];
-                float diff = fabsf(ref_val - actual_val);
-                if (diff > 0.0001f) {
-                    FARF(ALWAYS, "MISMATCH: task=%u, block=%u, el=%u, d=%f, qs=%d, ref=%f, act=%f, diff=%f\n",
-                         i, b, el, d, (int)src_blocks[b].qs[el], ref_val, actual_val, diff);
-                }
+            const void * src0_ptr = (const void *)((const uint8_t *) octx->src[0]->data + i01*nb01 + i02*nb02 + i03*nb03);
+            float *      dst_ptr  = (float *)      ((uint8_t *)       octx->dst->data  + i10*nb1  + i11*nb2  + i12*nb3);
+            if (type == HTP_TYPE_Q8_0) {
+                hvx_dequantize_row_q8_0_f32(dst_ptr, src0_ptr, ne00);
+            } else if (type == HTP_TYPE_F16) {
+                hvx_dequantize_row_f16_f32(dst_ptr, src0_ptr, ne00);
             }
         }
     }
 
     qt = HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - qt);
-    FARF(HIGH, "get-rows-q8_0-f32 %d/%d: %ux%ux%ux%u (%u:%u) x %ux%ux%ux%u -> %ux%ux%ux%u usec %u\n", ith, nth,
+    FARF(HIGH, "get-rows-hvx type=%d %d/%d: %ux%ux%ux%u (%u:%u) x %ux%ux%ux%u -> %ux%ux%ux%u usec %u\n", type, ith, nth,
          ne00, ne01, ne02, ne03, ir0, ir1, ne10, ne11, ne12, ne13, ne0, ne1, ne2, ne3, (unsigned) qt);
 }
 
 int op_get_rows(struct htp_ops_context * octx) {
     get_rows_preamble;
 
-    if (octx->src[0]->type != HTP_TYPE_F32 && octx->src[0]->type != HTP_TYPE_Q8_0) {
+    if (octx->src[0]->type != HTP_TYPE_F32 &&
+        octx->src[0]->type != HTP_TYPE_F16 &&
+        octx->src[0]->type != HTP_TYPE_Q8_0) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
@@ -251,20 +220,13 @@ int op_get_rows(struct htp_ops_context * octx) {
     grctx.octx = octx;
     grctx.get_rows_div_ne10      = init_fastdiv_values(octx->src[1]->ne[0]);
     grctx.get_rows_div_ne10_ne11 = init_fastdiv_values(octx->src[1]->ne[0] * octx->src[1]->ne[1]);
-
-    if (octx->src[0]->type == HTP_TYPE_Q8_0) {
-        grctx.total_tasks = nr;
-        const uint32_t n_threads = MIN(nr, octx->n_threads);
-        grctx.tasks_per_thread = (nr + n_threads - 1) / n_threads;
-
-        worker_pool_run_func(octx->ctx->worker_pool, get_rows_thread_q8_0_f32, &grctx, n_threads);
-        return HTP_STATUS_OK;
-    }
+    grctx.get_rows_div_ne02      = init_fastdiv_values(octx->src[0]->ne[2]);
+    grctx.get_rows_div_ne03      = init_fastdiv_values(octx->src[0]->ne[3]);
 
     const uint32_t nb00 = octx->src[0]->nb[0];
     const uint32_t nb0  = octx->dst->nb[0];
 
-    const bool can_use_dma = (nb00 == sizeof(float)) && (nb0 == sizeof(float));
+    const bool can_use_dma = (octx->src[0]->type == octx->dst->type) && (nb01 == nb1);
     const bool use_dma = can_use_dma && (ne00 >= 2048);
 
     if (use_dma) {
@@ -276,13 +238,13 @@ int op_get_rows(struct htp_ops_context * octx) {
         const uint32_t n_threads = MIN(nr, octx->n_threads);
         grctx.tasks_per_thread = (nr + n_threads - 1) / n_threads;
 
-        worker_pool_run_func(octx->ctx->worker_pool, get_rows_thread_f32_f32_dma, &grctx, n_threads);
+        worker_pool_run_func(octx->ctx->worker_pool, get_rows_thread_dma, &grctx, n_threads);
     } else {
         uint32_t chunks_per_row = 1;
         uint32_t chunk_size = ne00;
         uint32_t total_tasks = nr;
 
-        if (nr < octx->n_threads) {
+        if (octx->src[0]->type == HTP_TYPE_F32 && nr < octx->n_threads) {
             const uint32_t min_chunk_size = 1024;
             uint32_t max_chunks = ne00 / min_chunk_size;
             if (max_chunks == 0) {
@@ -301,7 +263,7 @@ int op_get_rows(struct htp_ops_context * octx) {
         const uint32_t n_threads = MIN(total_tasks, octx->n_threads);
         grctx.tasks_per_thread = (total_tasks + n_threads - 1) / n_threads;
 
-        worker_pool_run_func(octx->ctx->worker_pool, get_rows_thread_f32_f32_hvx, &grctx, n_threads);
+        worker_pool_run_func(octx->ctx->worker_pool, get_rows_thread_hvx, &grctx, n_threads);
     }
     return HTP_STATUS_OK;
 }
