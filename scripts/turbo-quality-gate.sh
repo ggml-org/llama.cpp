@@ -146,6 +146,7 @@ stage_correctness() {
       FAIL_COUNT=$((FAIL_COUNT+1))
       emit_summary "$stage_label" "FAIL" "$log" "harness exited $rc"
     fi
+    return
   fi
 
   if [ "$STRICT" = "1" ]; then
