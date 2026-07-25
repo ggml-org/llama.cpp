@@ -62,7 +62,11 @@ struct server_mcp_transport {
 
     // human-readable diagnostics for logging when the transport fails/dies
     // (example: last RPC error, plus any transport-specific detail)
-    virtual std::string diagnostics() { return last_error; }
+    // may run on a different thread than send_rpc(), so last_error is read under rpc_mutex
+    virtual std::string diagnostics() {
+        std::lock_guard<std::mutex> lock(rpc_mutex);
+        return last_error;
+    }
 
     std::vector<server_mcp_tool_def> list_tools(const std::function<bool()> & should_stop);
 

@@ -505,7 +505,11 @@ bool server_mcp_stdio::is_alive() const {
 }
 
 std::string server_mcp_stdio::diagnostics() {
-    std::string out = last_error;
+    std::string out;
+    {
+        std::lock_guard<std::mutex> lock(rpc_mutex); // last_error is written by send_rpc's callers
+        out = last_error;
+    }
     std::lock_guard<std::mutex> lk(err_mu);
     if (!err_tail.empty()) {
         if (!out.empty()) {
