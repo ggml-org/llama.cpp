@@ -180,7 +180,13 @@ bool ggml_cuda_should_use_mmf(enum ggml_type type, int cc, int warp_size, const 
 
     switch (type) {
         case GGML_TYPE_F32:
+#ifdef GGML_CUDA_DISABLE_TF32
+            // The F32 tile path computes via tf32 MMA; strict-FP32 builds
+            // must fall back to mmvf or cuBLAS SGEMM.
+            return false;
+#else
             return ampere_mma_available(cc) || amd_mfma_available(cc);
+#endif // GGML_CUDA_DISABLE_TF32
         case GGML_TYPE_F16:
             return volta_mma_available(cc) || turing_mma_available(cc) || amd_wmma_available(cc) || amd_mfma_available(cc);
         case GGML_TYPE_BF16:

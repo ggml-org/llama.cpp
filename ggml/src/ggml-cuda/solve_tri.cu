@@ -73,7 +73,11 @@ static void solve_tri_f32_cublas(ggml_backend_cuda_context & ctx,
                                     CUBLAS_DIAG_NON_UNIT, k, n, &alpha, A_ptrs_dev, n, X_ptrs_dev, k, total_batches));
 
     // revert to standard mode from common.cuh
+#ifdef GGML_CUDA_DISABLE_TF32
+    CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(id), CUBLAS_DEFAULT_MATH));
+#else
     CUBLAS_CHECK(cublasSetMathMode(ctx.cublas_handle(id), CUBLAS_TF32_TENSOR_OP_MATH));
+#endif // GGML_CUDA_DISABLE_TF32
 
     GGML_UNUSED_VARS(s12, s13);
 }

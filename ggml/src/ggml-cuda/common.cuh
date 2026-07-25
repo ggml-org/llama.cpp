@@ -1491,7 +1491,11 @@ struct ggml_backend_cuda_context {
         if (cublas_handles[device] == nullptr) {
             ggml_cuda_set_device(device);
             CUBLAS_CHECK(cublasCreate(&cublas_handles[device]));
+#ifdef GGML_CUDA_DISABLE_TF32
+            CUBLAS_CHECK(cublasSetMathMode(cublas_handles[device], CUBLAS_DEFAULT_MATH));
+#else
             CUBLAS_CHECK(cublasSetMathMode(cublas_handles[device], CUBLAS_TF32_TENSOR_OP_MATH));
+#endif // GGML_CUDA_DISABLE_TF32
         }
         return cublas_handles[device];
     }

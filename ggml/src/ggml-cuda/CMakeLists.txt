@@ -143,6 +143,10 @@ if (CUDAToolkit_FOUND)
         add_compile_definitions(GGML_CUDA_FORCE_CUBLAS)
     endif()
 
+    if (GGML_CUDA_DISABLE_TF32)
+        add_compile_definitions(GGML_CUDA_DISABLE_TF32)
+    endif()
+
     if (GGML_CUDA_NO_VMM)
         add_compile_definitions(GGML_CUDA_NO_VMM)
     endif()
