@@ -53,6 +53,27 @@ SKIP_COUNT=0
 TIMEOUT_COUNT=0
 FAIL_MESSAGES=""
 
+# run_timeout <seconds> <cmd...> - portable wall-clock cap.
+# GNU coreutils `timeout` is not installed by default on macOS (and `gtimeout`
+# only exists when coreutils is present), yet the gate must stay portable. When
+# neither binary is found we run the command directly instead of aborting the
+# stage with "command not found"; when one IS present we use it so a device-lost
+# SYCL hang fails fast (exit 124) instead of stalling CI forever.
+TIMEOUT_CMD=""
+if command -v timeout >/dev/null 2>&1; then
+    TIMEOUT_CMD="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then
+    TIMEOUT_CMD="gtimeout"
+fi
+run_timeout() {
+    local secs="$1"; shift
+    if [ -n "$TIMEOUT_CMD" ]; then
+        "$TIMEOUT_CMD" "$secs" "$@"
+    else
+        "$@"
+    fi
+}
+
 # emit_summary: deterministic one-line per stage
 emit_summary() {
   local stage="$1" status="$2" log="$3" reason="$4"
@@ -91,7 +112,7 @@ stage_correctness() {
     return
   fi
 
-  if timeout 180 env ONEAPI_DEVICE_SELECTOR="${ONEAPI_DEVICE_SELECTOR:-level_zero:0}" "$CORRECTNESS_BIN" >"$log" 2>&1; then
+  if run_timeout 180 env ONEAPI_DEVICE_SELECTOR="${ONEAPI_DEVICE_SELECTOR:-level_zero:0}" "$CORRECTNESS_BIN" >"$log" 2>&1; then
     grep -qE '^== summary: 0 GATE-FAIL,' "$log" || {
       FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: harness did not report 0 GATE-FAIL"
       FAIL_COUNT=$((FAIL_COUNT+1))
@@ -114,7 +135,7 @@ stage_correctness() {
   if [ "$STRICT" = "1" ]; then
     local stage_label2="0.2 correctness (LLAMA_TEST_TURBO_FA=1)"
     local log2="$STAGE_LOG_DIR/correctness-b.log"
-    if timeout 180 env ONEAPI_DEVICE_SELECTOR="${ONEAPI_DEVICE_SELECTOR:-level_zero:0}" \
+    if run_timeout 180 env ONEAPI_DEVICE_SELECTOR="${ONEAPI_DEVICE_SELECTOR:-level_zero:0}" \
          LLAMA_TEST_TURBO_FA=1 "$CORRECTNESS_BIN" >"$log2" 2>&1; then
       grep -qE '^== summary: 0 GATE-FAIL,' "$log2" || {
         FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label2}: harness did not report 0 GATE-FAIL"
@@ -179,10 +200,10 @@ stage_ppl() {
     return
   fi
 
-  timeout 600 "$LLAMA/llama-perplexity" -m "$MODEL" -f "$WIKI" -c 512 \
+  run_timeout 600 "$LLAMA/llama-perplexity" -m "$MODEL" -f "$WIKI" -c 512 \
     -ctk turbo3 -ctv turbo3 -fa on --chunks 8 -ngl 99 >"$log_t" 2>&1
   rc_t=$?
-  timeout 600 "$LLAMA/llama-perplexity" -m "$MODEL" -f "$WIKI" -c 512 \
+  run_timeout 600 "$LLAMA/llama-perplexity" -m "$MODEL" -f "$WIKI" -c 512 \
     -ctk q8_0 -ctv q8_0 -fa on --chunks 8 -ngl 99 >"$log_q" 2>&1
   rc_q=$?
 
@@ -249,10 +270,10 @@ stage_scaling() {
     return
   fi
 
-  timeout 600 "$LLAMA/llama-perplexity" -m "$MODEL" -f "$WIKI" -c 4096 \
+  run_timeout 600 "$LLAMA/llama-perplexity" -m "$MODEL" -f "$WIKI" -c 4096 \
     -ctk turbo3 -ctv turbo3 -fa on --chunks 4 -ngl 99 >"$log_t" 2>&1
   rc_t=$?
-  timeout 600 "$LLAMA/llama-perplexity" -m "$MODEL" -f "$WIKI" -c 4096 \
+  run_timeout 600 "$LLAMA/llama-perplexity" -m "$MODEL" -f "$WIKI" -c 4096 \
     -ctk q8_0 -ctv q8_0 -fa on --chunks 4 -ngl 99 >"$log_q" 2>&1
   rc_q=$?
 
