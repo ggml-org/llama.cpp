@@ -10,11 +10,11 @@
 
 #include "hex-dma.h"
 #include "hvx-utils.h"
+#include "hvx-quant.h"
 
 #define GGML_COMMON_DECL_C
 #include "ggml-common.h"
 #include "htp-ctx.h"
-#include "htp-ops.h"
 #include "htp-ops.h"
 
 #define set_rows_preamble                      \
@@ -62,7 +62,6 @@ static void set_rows_thread_f32_f32(unsigned int nth, unsigned int ith, void *da
 
     uint64_t qt = HAP_perf_get_qtimer_count();
 
-    // parallelize by rows of src0
     const uint32_t dr  = srctx->src0_nrows_per_thread;
     const uint32_t ir0 = dr * ith;
     if (ir0 >= nr) {
@@ -81,16 +80,23 @@ static void set_rows_thread_f32_f32(unsigned int nth, unsigned int ith, void *da
 
                 const uintptr_t src1_addr = octx->src[1]->data + i10*nb10 + i11*nb11 + i12*nb12;
 
-                uint32_t i1 = is_i32 ? *(int32_t *)src1_addr : *(int64_t *)src1_addr;
-                if (i1 >= ne1) {
-                    // ignore invalid indices
+                int64_t i1_val = 0;
+                if (is_i32) {
+                    int32_t i1_32;
+                    memcpy(&i1_32, (const void *)src1_addr, sizeof(int32_t));
+                    i1_val = i1_32;
+                } else {
+                    memcpy(&i1_val, (const void *)src1_addr, sizeof(int64_t));
+                }
+
+                if (i1_val < 0 || (uint64_t)i1_val >= ne1) {
                     continue;
                 }
+                uint32_t i1 = (uint32_t)i1_val;
 
                 const uintptr_t src0_ptr = octx->src[0]->data + i*nb01 + i02*nb02 + i03*nb03;
                 const uintptr_t dst_ptr  = octx->dst->data  + i1*nb1 + i02*nb2  + i03*nb3;
 
-                // copy row
                 hvx_copy_f32_uu((uint8_t *)dst_ptr, (const uint8_t *)src0_ptr, ne00);
             }
         }
@@ -109,7 +115,6 @@ static void set_rows_thread_f16_f32(unsigned int nth, unsigned int ith, void *da
 
     uint64_t qt = HAP_perf_get_qtimer_count();
 
-    // parallelize by rows of src0
     const uint32_t dr  = srctx->src0_nrows_per_thread;
     const uint32_t ir0 = dr * ith;
     if (ir0 >= nr) {
@@ -128,11 +133,19 @@ static void set_rows_thread_f16_f32(unsigned int nth, unsigned int ith, void *da
 
                 const uintptr_t src1_addr = octx->src[1]->data + i10*nb10 + i11*nb11 + i12*nb12;
 
-                uint32_t i1 = is_i32 ? *(int32_t *)src1_addr : *(int64_t *)src1_addr;
-                if (i1 >= ne1) {
-                    // ignore invalid indices
+                int64_t i1_val = 0;
+                if (is_i32) {
+                    int32_t i1_32;
+                    memcpy(&i1_32, (const void *)src1_addr, sizeof(int32_t));
+                    i1_val = i1_32;
+                } else {
+                    memcpy(&i1_val, (const void *)src1_addr, sizeof(int64_t));
+                }
+
+                if (i1_val < 0 || (uint64_t)i1_val >= ne1) {
                     continue;
                 }
+                uint32_t i1 = (uint32_t)i1_val;
 
                 const uint8_t* src0_ptr = (const uint8_t *) octx->src[0]->data + i*nb01 + i02*nb02 + i03*nb03;
                 uint8_t*       dst_ptr  = (uint8_t *)       octx->dst->data  + i1*nb1 + i02*nb2  + i03*nb3;
@@ -147,6 +160,61 @@ static void set_rows_thread_f16_f32(unsigned int nth, unsigned int ith, void *da
          ne00, ne01, ne02, ne03, ir0, ir1, ne10, ne11, ne12, ne13, ne0, ne1, ne2, ne3, (unsigned) qt);
 }
 
+static void set_rows_thread_q8_0_f32(unsigned int nth, unsigned int ith, void *data) {
+    struct htp_set_rows_context * srctx = (struct htp_set_rows_context *)data;
+    struct htp_ops_context * octx = srctx->octx;
+
+    set_rows_preamble;
+
+    uint64_t qt = HAP_perf_get_qtimer_count();
+
+    const uint32_t dr  = srctx->src0_nrows_per_thread;
+    const uint32_t ir0 = dr * ith;
+    if (ir0 >= nr) {
+        return;
+    }
+    const uint32_t ir1 = (ir0 + dr < nr) ? (ir0 + dr) : nr;
+
+    const bool is_i32 = (octx->src[1]->type == HTP_TYPE_I32);
+
+    for (uint32_t i03 = 0; i03 < ne03; ++i03) {
+        const uint32_t i12 = fastmodulo(i03, ne12, &srctx->div_ne12);
+
+        for (uint32_t i02 = 0; i02 < ne02; ++i02) {
+            const uint32_t i11 = fastmodulo(i02, ne11, &srctx->div_ne11);
+
+            for (uint32_t i = ir0; i < ir1; ++i) {
+                const uint32_t i10 = i;
+
+                const uintptr_t src1_addr = octx->src[1]->data + i10*nb10 + i11*nb11 + i12*nb12;
+
+                int64_t i1_val = 0;
+                if (is_i32) {
+                    int32_t i1_32;
+                    memcpy(&i1_32, (const void *)src1_addr, sizeof(int32_t));
+                    i1_val = i1_32;
+                } else {
+                    memcpy(&i1_val, (const void *)src1_addr, sizeof(int64_t));
+                }
+
+                if (i1_val < 0 || (uint64_t)i1_val >= ne1) {
+                    continue;
+                }
+                uint32_t i1 = (uint32_t)i1_val;
+
+                const float* src0_ptr = (const float *)((const uint8_t *) octx->src[0]->data + i*nb01 + i02*nb02 + i03*nb03);
+                uint8_t*     dst_ptr  = (uint8_t *)       octx->dst->data  + i1*nb1 + i02*nb2  + i03*nb3;
+
+                hvx_quantize_row_q8_0_f32(dst_ptr, src0_ptr, ne00);
+            }
+        }
+    }
+
+    qt = HAP_perf_qtimer_count_to_us(HAP_perf_get_qtimer_count() - qt);
+    FARF(HIGH, "set-rows-q8_0-f32 %d/%d: %ux%ux%ux%u (%u:%u) x %ux%ux%ux%u -> %ux%ux%ux%u usec %u\n", ith, nth,
+         ne00, ne01, ne02, ne03, ir0, ir1, ne10, ne11, ne12, ne13, ne0, ne1, ne2, ne3, (unsigned) qt);
+}
+
 int op_set_rows(struct htp_ops_context * octx) {
     set_rows_preamble;
 
@@ -156,7 +224,7 @@ int op_set_rows(struct htp_ops_context * octx) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
-    if (octx->dst->type != HTP_TYPE_F32 && octx->dst->type != HTP_TYPE_F16) {
+    if (octx->dst->type != HTP_TYPE_F32 && octx->dst->type != HTP_TYPE_F16 && octx->dst->type != HTP_TYPE_Q8_0) {
         return HTP_STATUS_NO_SUPPORT;
     }
 
@@ -181,6 +249,9 @@ int op_set_rows(struct htp_ops_context * octx) {
         break;
     case HTP_TYPE_F16:
         worker_pool_run_func(octx->ctx->worker_pool, set_rows_thread_f16_f32, &srctx, n_threads);
+        break;
+    case HTP_TYPE_Q8_0:
+        worker_pool_run_func(octx->ctx->worker_pool, set_rows_thread_q8_0_f32, &srctx, n_threads);
         break;
     default:
         return HTP_STATUS_NO_SUPPORT;
