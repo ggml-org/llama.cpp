@@ -41,7 +41,7 @@ case "${TURBO_QUALITY_STRICT:-0}" in
 esac
 
 # Per-stage tempdir for captured stdout/stderr.
-STAGE_LOG_DIR="$(mktemp -d -t turbo-gate.XXXXXX)"
+STAGE_LOG_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t turbo-gate.XXXXXX)"
 if [ -z "$STAGE_LOG_DIR" ] || [ ! -d "$STAGE_LOG_DIR" ]; then
   echo "ERROR: failed to create temporary directory for stage logs" >&2
   exit 1
@@ -52,6 +52,27 @@ FAIL_COUNT=0
 SKIP_COUNT=0
 TIMEOUT_COUNT=0
 FAIL_MESSAGES=""
+
+# run_timeout <seconds> <cmd...> - portable wall-clock cap.
+# GNU coreutils `timeout` is not installed by default on macOS (and `gtimeout`
+# only exists when coreutils is present), yet the gate must stay portable. When
+# neither binary is found we run the command directly instead of aborting the
+# stage with "command not found"; when one IS present we use it so a device-lost
+# SYCL hang fails fast (exit 124) instead of stalling CI forever.
+TIMEOUT_CMD=""
+if command -v timeout >/dev/null 2>&1; then
+    TIMEOUT_CMD="timeout"
+elif command -v gtimeout >/dev/null 2>&1; then
+    TIMEOUT_CMD="gtimeout"
+fi
+run_timeout() {
+    local secs="$1"; shift
+    if [ -n "$TIMEOUT_CMD" ]; then
+        "$TIMEOUT_CMD" "$secs" "$@"
+    else
+        "$@"
+    fi
+}
 
 # emit_summary: deterministic one-line per stage
 emit_summary() {
@@ -66,12 +87,12 @@ emit_summary() {
   esac
 }
 
-# stage_correctness - runs the test-sycl-turbo-correctness harness, which
-# exercises every FA pathway (including turbo-FA when the harness is built
-# with GGML_SYCL_FA_ALL_QUANTS). In strict mode, also runs a second pass
-# with LLAMA_TEST_TURBO_FA=1 to opt into the turbo-FA path.
+# stage_correctness - runs the test-sycl-turbo-correctness harness. The first
+# pass defaults LLAMA_TEST_TURBO_FA to 0 (preserves any inherited override). In
+# strict mode, also runs a second pass with LLAMA_TEST_TURBO_FA=1 to exercise
+# the turbo-FA path.
 stage_correctness() {
-  local stage_label="0.1 correctness (LLAMA_TEST_TURBO_FA=0)"
+  local stage_label="0.1 correctness (LLAMA_TEST_TURBO_FA=${LLAMA_TEST_TURBO_FA:-0})"
   local log="$STAGE_LOG_DIR/correctness-a.log"
 
   if [ "$CORRECTNESS_BIN" = "skip" ]; then
@@ -93,23 +114,26 @@ stage_correctness() {
     return
   fi
 
-  if timeout 180 env ONEAPI_DEVICE_SELECTOR="${ONEAPI_DEVICE_SELECTOR:-level_zero:0}" "$CORRECTNESS_BIN" >"$log" 2>&1; then
-    # Strict mode requires a fully clean run: 0 GATE-FAIL, 0 XPASS, 0 xfail, 0 SKIP.
-    # Non-strict mode only requires 0 GATE-FAIL; xfail/skip counts may be nonzero.
+  if run_timeout 180 env ONEAPI_DEVICE_SELECTOR="${ONEAPI_DEVICE_SELECTOR:-level_zero:0}" "$CORRECTNESS_BIN" >"$log" 2>&1; then
+    grep -qE '^== summary: 0 GATE-FAIL,' "$log" || {
+      FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: harness did not report 0 GATE-FAIL"
+      FAIL_COUNT=$((FAIL_COUNT+1))
+      emit_summary "$stage_label" "FAIL" "$log" "harness GATE-FAIL non-zero or missing summary"
+      return
+    }
+    # In strict mode, nonzero xfail/skip/xpass counts also fail the stage.
+    # Harness emits: "== summary: <G> GATE-FAIL, <P> XPASS (promote to GATE!), <X> xfail (expected-broken), <S> SKIP =="
     if [ "$STRICT" = "1" ]; then
-      is_strict_clean_run "$log" || {
-        FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: harness did not report a fully clean run in strict mode"
+      local xfail_n skip_n xpass_n
+      xfail_n=$(grep -ioE '[0-9]+ xfail' "$log" | grep -oE '[0-9]+' | head -1 || echo 0)
+      skip_n=$(grep -ioE '[0-9]+ skip' "$log" | grep -oE '[0-9]+' | head -1 || echo 0)
+      xpass_n=$(grep -ioE '[0-9]+ xpass' "$log" | grep -oE '[0-9]+' | head -1 || echo 0)
+      if [ "${xfail_n:-0}" -gt 0 ] || [ "${skip_n:-0}" -gt 0 ] || [ "${xpass_n:-0}" -gt 0 ]; then
+        FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: strict mode forbids xfail/skip/xpass (xfail=$xfail_n skip=$skip_n xpass=$xpass_n)"
         FAIL_COUNT=$((FAIL_COUNT+1))
-        emit_summary "$stage_label" "FAIL" "$log" "harness GATE-FAIL/XPASS/xfail/SKIP non-zero in strict"
+        emit_summary "$stage_label" "FAIL" "$log" "strict mode: xfail=$xfail_n skip=$skip_n xpass=$xpass_n"
         return
-      }
-    else
-      grep -qE '^== summary: 0 GATE-FAIL,' "$log" || {
-        FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: harness did not report 0 GATE-FAIL"
-        FAIL_COUNT=$((FAIL_COUNT+1))
-        emit_summary "$stage_label" "FAIL" "$log" "harness GATE-FAIL non-zero or missing summary"
-        return
-      }
+      fi
     fi
     emit_summary "$stage_label" "PASS" "$log" ""
   else
@@ -117,35 +141,35 @@ stage_correctness() {
     if [ "$rc" = "124" ]; then
       TIMEOUT_COUNT=$((TIMEOUT_COUNT+1))
       emit_summary "$stage_label" "124" "$log" ""
-      return
     else
       FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: harness exited $rc"
       FAIL_COUNT=$((FAIL_COUNT+1))
       emit_summary "$stage_label" "FAIL" "$log" "harness exited $rc"
-      return
     fi
   fi
 
   if [ "$STRICT" = "1" ]; then
     local stage_label2="0.2 correctness (LLAMA_TEST_TURBO_FA=1)"
     local log2="$STAGE_LOG_DIR/correctness-b.log"
-    if timeout 180 env ONEAPI_DEVICE_SELECTOR="${ONEAPI_DEVICE_SELECTOR:-level_zero:0}" \
+    if run_timeout 180 env ONEAPI_DEVICE_SELECTOR="${ONEAPI_DEVICE_SELECTOR:-level_zero:0}" \
          LLAMA_TEST_TURBO_FA=1 "$CORRECTNESS_BIN" >"$log2" 2>&1; then
-      # Strict mode requires a fully clean run on the turbo-FA second pass too.
+      if ! grep -qE '^== summary: 0 GATE-FAIL,' "$log2"; then
+        FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label2}: harness did not report 0 GATE-FAIL"
+        FAIL_COUNT=$((FAIL_COUNT+1))
+        emit_summary "$stage_label2" "FAIL" "$log2" "harness GATE-FAIL non-zero or missing summary"
+        return
+      fi
       if [ "$STRICT" = "1" ]; then
-        is_strict_clean_run "$log2" || {
-          FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label2}: harness did not report a fully clean run in strict mode"
+        local xfail_n2 skip_n2 xpass_n2
+        xfail_n2=$(grep -ioE '[0-9]+ xfail' "$log2" | grep -oE '[0-9]+' | head -1 || echo 0)
+        skip_n2=$(grep -ioE '[0-9]+ skip' "$log2" | grep -oE '[0-9]+' | head -1 || echo 0)
+        xpass_n2=$(grep -ioE '[0-9]+ xpass' "$log2" | grep -oE '[0-9]+' | head -1 || echo 0)
+        if [ "${xfail_n2:-0}" -gt 0 ] || [ "${skip_n2:-0}" -gt 0 ] || [ "${xpass_n2:-0}" -gt 0 ]; then
+          FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label2}: strict mode forbids xfail/skip/xpass (xfail=$xfail_n2 skip=$skip_n2 xpass=$xpass_n2)"
           FAIL_COUNT=$((FAIL_COUNT+1))
-          emit_summary "$stage_label2" "FAIL" "$log2" "harness GATE-FAIL/XPASS/xfail/SKIP non-zero in strict"
+          emit_summary "$stage_label2" "FAIL" "$log2" "strict mode: xfail=$xfail_n2 skip=$skip_n2 xpass=$xpass_n2"
           return
-        }
-      else
-        grep -qE '^== summary: 0 GATE-FAIL,' "$log2" || {
-          FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label2}: harness did not report 0 GATE-FAIL"
-          FAIL_COUNT=$((FAIL_COUNT+1))
-          emit_summary "$stage_label2" "FAIL" "$log2" "harness GATE-FAIL non-zero or missing summary"
-          return
-        }
+        fi
       fi
       emit_summary "$stage_label2" "PASS" "$log2" ""
     else
@@ -153,19 +177,16 @@ stage_correctness() {
       if [ "$rc2" = "124" ]; then
         TIMEOUT_COUNT=$((TIMEOUT_COUNT+1))
         emit_summary "$stage_label2" "124" "$log2" ""
-        return
       else
         FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label2}: harness exited $rc2"
         FAIL_COUNT=$((FAIL_COUNT+1))
         emit_summary "$stage_label2" "FAIL" "$log2" "harness exited $rc2"
-        return
       fi
     fi
   fi
 }
 
-# validate_numeric <label> <value> - returns 0 if the value is non-empty and a
-# positive decimal number, 1 otherwise. Print a warning on failure.
+# validate_numeric <label> <value> - returns 0 if numeric, 1 if missing/non-numeric
 validate_numeric() {
   local label="$1" val="$2"
   if [ -z "$val" ] || ! printf '%s' "$val" | grep -qE '^[0-9]+(\.[0-9]+)?$'; then
@@ -175,28 +196,12 @@ validate_numeric() {
   return 0
 }
 
-# is_strict_clean_run <log> - returns 0 if the harness summary line reports
-# 0 GATE-FAIL, 0 XPASS, 0 xfail, 0 SKIP (a fully clean run for strict mode).
-is_strict_clean_run() {
-  local log="$1"
-  grep -qE '^== summary: 0 GATE-FAIL, 0 XPASS,' "$log" \
-    && ! grep -qE '^== summary: 0 GATE-FAIL, 0 XPASS, [0-9]+ xfail,' "$log" \
-    && ! grep -qE '^== summary: 0 GATE-FAIL, 0 XPASS, [0-9]+ xfail, [0-9]+ SKIP' "$log"
-}
-
 # stage_ppl - perplexity check. -fa on is mandatory.
 stage_ppl() {
   local stage_label="1 perplexity (turbo3 vs q8_0, -fa on)"
   local log_t="$STAGE_LOG_DIR/ppl-turbo.log"
   local log_q="$STAGE_LOG_DIR/ppl-q8.log"
-  local rc_t rc_q ppl_limit
-
-  if [ ! -x "$LLAMA/llama-perplexity" ]; then
-    FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: llama-perplexity binary missing or not executable at $LLAMA/llama-perplexity"
-    FAIL_COUNT=$((FAIL_COUNT+1))
-    emit_summary "$stage_label" "FAIL" "-" "binary missing at $LLAMA/llama-perplexity"
-    return
-  fi
+  local rc_t rc_q ppl_turbo_valid ppl_q8_valid ppl_limit
 
   if [ -z "$MODEL" ] || [ ! -f "$MODEL" ]; then
     if [ "$STRICT" = "1" ]; then
@@ -222,10 +227,10 @@ stage_ppl() {
     return
   fi
 
-  timeout 600 "$LLAMA/llama-perplexity" -m "$MODEL" -f "$WIKI" -c 512 \
+  run_timeout 600 "$LLAMA/llama-perplexity" -m "$MODEL" -f "$WIKI" -c 512 \
     -ctk turbo3 -ctv turbo3 -fa on --chunks 8 -ngl 99 >"$log_t" 2>&1
   rc_t=$?
-  timeout 600 "$LLAMA/llama-perplexity" -m "$MODEL" -f "$WIKI" -c 512 \
+  run_timeout 600 "$LLAMA/llama-perplexity" -m "$MODEL" -f "$WIKI" -c 512 \
     -ctk q8_0 -ctv q8_0 -fa on --chunks 8 -ngl 99 >"$log_q" 2>&1
   rc_q=$?
 
@@ -274,13 +279,6 @@ stage_scaling() {
   local log_q="$STAGE_LOG_DIR/scaling-q8.log"
   local rc_t rc_q ratio
 
-  if [ ! -x "$LLAMA/llama-perplexity" ]; then
-    FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: llama-perplexity binary missing or not executable at $LLAMA/llama-perplexity"
-    FAIL_COUNT=$((FAIL_COUNT+1))
-    emit_summary "$stage_label" "FAIL" "-" "binary missing at $LLAMA/llama-perplexity"
-    return
-  fi
-
   if [ -z "$MODEL" ] || [ ! -f "$MODEL" ] || [ -z "$WIKI" ] || [ ! -f "$WIKI" ]; then
     if [ "$STRICT" = "1" ]; then
       FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: MODEL or WIKI unset"
@@ -293,10 +291,10 @@ stage_scaling() {
     return
   fi
 
-  timeout 600 "$LLAMA/llama-perplexity" -m "$MODEL" -f "$WIKI" -c 4096 \
+  run_timeout 600 "$LLAMA/llama-perplexity" -m "$MODEL" -f "$WIKI" -c 4096 \
     -ctk turbo3 -ctv turbo3 -fa on --chunks 4 -ngl 99 >"$log_t" 2>&1
   rc_t=$?
-  timeout 600 "$LLAMA/llama-perplexity" -m "$MODEL" -f "$WIKI" -c 4096 \
+  run_timeout 600 "$LLAMA/llama-perplexity" -m "$MODEL" -f "$WIKI" -c 4096 \
     -ctk q8_0 -ctv q8_0 -fa on --chunks 4 -ngl 99 >"$log_q" 2>&1
   rc_q=$?
 

@@ -597,8 +597,8 @@ static void probe_mul_mat(ggml_backend_t cpu, ggml_backend_t sycl,
 // (4) The actual KV-cache path: flash attention with quantized/turbo K/V.
 //
 // `force` controls how the SYCL run treats the supports_op() check:
-//   force=true  (f16/q8_0): bypass the check and exercise the kernel directly.
-//               These KV types are genuinely supported, so forcing == running.
+//   force=true  (q8_0):     bypass the check and exercise the kernel directly.
+//               q8_0 KV is genuinely supported, so forcing == running (the f16 baseline uses probe_fa_f16).
 //   force=false (turbo):    CONSULT ggml_sycl_flash_attn_ext_supported. The
 //               chain accepts turbo KV for D=128 (routes to VEC, see fattn.cpp)
 //               but the VEC turbo kernel is fragile on the A770 -- a buggy
@@ -716,7 +716,7 @@ static void probe_flash_attn(ggml_backend_t cpu, ggml_backend_t sycl,
         }, &cpu_ok);
     if (!cpu_ok) { skip(label, "CPU lacks F16 FA reference"); return; }
 
-    // Test: K/V on SYCL. force=true bypasses supports_op (f16/q8_0 are
+    // Test: K/V on SYCL. force=true bypasses supports_op (q8_0 is
     // supported); for turbo (force=false) we let the chain decide and SKIP
     // if any node is unsupported -- never force past a veto on the A770.
     bool sok = true;
