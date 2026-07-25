@@ -92,13 +92,19 @@
 - **Verdict**: REAL BUG (at the time of review). The description was ahead
   of the diff.
 - **Resolution**: Not a false alarm - the mismatch was real at review time.
-  After merging master (94b2458f9) and applying additional fixes
-  (0a9b2c7fd), all five described changes are now present in the file:
-  1. mktemp portability at line 44
-  2. Strict-mode numeric parsing at lines 127-131, 163-167
+  The initial reply incorrectly claimed all five described changes were
+  present, but the `is_strict_clean_run` helper was removed during the
+  merge with master (it was logically broken). The PR description has been
+  rewritten to accurately describe the current state:
+  1. mktemp portability at line 44 (verified with TMPDIR containing spaces)
+  2. Strict-mode numeric parsing replaces the removed helper
+     (lines 127-131, 163-167)
   3. Early-return at lines 119-136
   4. -x checks at the top of `stage_ppl` and `stage_scaling`
   5. METRIC_VALID removal in `validate_numeric` (lines 188-196)
+  A correction reply was posted to thread 6 acknowledging the initial
+  reply was misleading and pointing to the rewritten PR description.
+
 
 ## Smoke-Test Evidence
 
