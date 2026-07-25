@@ -27,7 +27,7 @@
 8. Pushed to origin.
 9. Listed unresolved threads via `gh-resolve list 31`.
 10. Posted substantive per-thread replies citing file:line + commit SHA.
-11. Resolved all 6 threads via `gh-resolve resolve <thread_id>`.
+11. Resolved all 7 threads via `gh-resolve resolve <thread_id>`.
 
 ## Verdict Summary
 
@@ -38,9 +38,10 @@
 | 3 | PRRT_kwDOTGTyNs6Tt-tL | copilot | Real bug | Fixed by 0a9b2c7fd |
 | 4 | PRRT_kwDOTGTyNs6Tt-tQ | copilot | Real bug | Fixed by master merge |
 | 5 | PRRT_kwDOTGTyNs6Tt-tZ | copilot | Real bug | Fixed by 0a9b2c7fd |
-| 6 | PRRT_kwDOTGTyNs6TuCWN | copilot | Real bug | Fixed by merge + additional commits |
+| 6 | PRRT_kwDOTGTyNs6TuCWN | copilot | Real bug | Resolved by PR body rewrite |
+| 7 | PRRT_kwDOTGTyNs6TuFJ2 | copilot | Real bug | Fixed by 44b728c07 |
 
-**Total real bugs: 6 | False alarms: 0**
+**Total real bugs: 7 | False alarms: 0**
 
 ## Detailed Thread Analysis
 
@@ -105,6 +106,23 @@
   A correction reply was posted to thread 6 acknowledging the initial
   reply was misleading and pointing to the rewritten PR description.
 
+### Thread 7 (PRRT_kwDOTGTyNs6TuFJ2) - copilot
+- **Claim**: When the first correctness pass times out or exits non-zero
+  (the `run_timeout ...` else-branch), the function does not `return`,
+  so strict mode will still run the second (LLAMA_TEST_TURBO_FA=1) pass
+  against a configuration that already failed. Wastes up to another 180s
+  and can mask the primary failure reason.
+- **Verdict**: REAL BUG. Verified against current code: the else-branch
+  at lines 139-149 had no `return`, so the function fell through to the
+  strict second-pass block at line 151.
+- **Resolution**: Fixed in commit 44b728c07. Added explicit `return` inside
+  the outer `else`, after the inner rc classification (line 149). The
+  outer `fi` closes the `if run_timeout ... then ... else` block, so
+  the `return` only fires on first-pass failure, not on success.
+  Verified with a fake executable:
+  - TURBO_QUALITY_STRICT=1 + exit 1: exactly 1 invocation
+  - TURBO_QUALITY_STRICT=1 + clean summary: exactly 2 invocations
+    (second with LLAMA_TEST_TURBO_FA=1)
 
 ## Smoke-Test Evidence
 
@@ -123,6 +141,20 @@ OK: directory created via fallback
 # Parse check
 $ bash -n scripts/turbo-quality-gate.sh
 PARSE OK
+
+# Invocation-count test (thread 7 verification)
+# Failing fake: strict mode skips second pass
+$ TURBO_QUALITY_STRICT=1 CORRECTNESS_BIN="$FAKE_BIN/test-sycl-turbo-correctness" \
+    LLAMA=/nonexistent MODEL=/dummy WIKI=/dummy bash scripts/turbo-quality-gate.sh
+PASS | 0.1 correctness (LLAMA_TEST_TURBO_FA=0) | FAIL | harness exited 1
+Invocations: 1  (second pass skipped)
+
+# Clean-success fake: strict mode runs both passes
+$ TURBO_QUALITY_STRICT=1 CORRECTNESS_BIN="$FAKE_BIN/test-sycl-turbo-correctness" \
+    LLAMA=/nonexistent MODEL=/dummy WIKI=/dummy bash scripts/turbo-quality-gate.sh
+PASS | 0.1 correctness (LLAMA_TEST_TURBO_FA=0)
+PASS | 0.2 correctness (LLAMA_TEST_TURBO_FA=1)
+Invocations: 2  (second with LLAMA_TEST_TURBO_FA=1)
 ```
 
 ## Commands Used
