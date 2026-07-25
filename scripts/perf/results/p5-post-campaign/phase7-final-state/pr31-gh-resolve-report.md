@@ -11,7 +11,7 @@
 - **Branch**: `p324-quality-gate-fixes`
 - **Merge commit**: `94b2458f9` (merge origin/master)
 - **Additional fixes**: `0a9b2c7fd` (collapse STRICT guard, portable mktemp)
-- **Other commits**: `44b728c07` (return after first-pass failure), `18186b98e` (add -x guard for llama-perplexity), `664394431` (explicit defaults, remove unused locals)
+- **Other commits**: `44b728c07` (return after first-pass failure), `18186b98e` (add -x guard for llama-perplexity), `664394431` (explicit defaults, remove unused locals), `19eeb9d01` (move -x guard after MODEL/WIKI validation)
 
 ## Methodology
 1. Fetched master into `p324-quality-gate-fixes` (PR #31's branch).
@@ -29,7 +29,7 @@
 8. Pushed to origin.
 9. Listed unresolved threads via `gh-resolve list 31`.
 10. Posted substantive per-thread replies citing file:line + commit SHA.
-11. Resolved all 12 threads via `gh-resolve resolve <thread_id>`.
+11. Resolved all 13 threads via `gh-resolve resolve <thread_id>`.
 
 ## Verdict Summary
 
@@ -47,8 +47,9 @@
 | 10 | PRRT_kwDOTGTyNs6TuGpf | coderabbitai | Real doc nit | Fixed in this commit |
 | 11 | PRRT_kwDOTGTyNs6TuIDu | copilot | Real bug | Fixed by 664394431 |
 | 12 | PRRT_kwDOTGTyNs6TuIvP | copilot | Real bug | Fixed by 664394431 |
+| 13 | PRRT_kwDOTGTyNs6TuLjU | copilot | Real bug | Fixed by 19eeb9d01 |
 
-**Total real bugs: 12 | False alarms: 0**
+**Total real bugs: 13 | False alarms: 0**
 
 ## Detailed Thread Analysis
 
@@ -108,7 +109,7 @@
   2. Strict-mode numeric parsing replaces the removed helper
      (lines 127-131, 163-167)
   3. Early-return at lines 119-136
-  4. -x checks at the top of `stage_ppl` and `stage_scaling`
+  4. -x checks after MODEL/WIKI validation, before invocation (in stage_ppl and stage_scaling)
   5. METRIC_VALID removal in `validate_numeric` (lines 188-196)
   A correction reply was posted to thread 6 acknowledging the initial
   reply was misleading and pointing to the rewritten PR description.
@@ -141,10 +142,10 @@
   -x guards were lost during the conflict resolution with master (took
   theirs everywhere).
 - **Resolution**: Fixed in commit 18186b98e. Added `if [ ! -x "$LLAMA/llama-perplexity" ]`
-  guard at the start of both `stage_ppl` (after local declarations, before
-  MODEL/WIKI validation) and `stage_scaling`. Wording matches the original
-  implementation at commit 419aed4e2. Verified with LLAMA=/nonexistent +
-  dummy MODEL/WIKI files.
+  guard at the start of both `stage_ppl` and `stage_scaling`. Wording
+  matches the original implementation at commit 419aed4e2. (Note:
+  Thread 13 later identified that the guard placement was wrong and
+  the guard was moved after MODEL/WIKI validation.)
 
 ### Thread 9 (PRRT_kwDOTGTyNs6TuGpd) - coderabbitai
 - **Claim**: "File touched" entry understates the current PR scope. Should
@@ -157,7 +158,7 @@
 - **Claim**: Fenced code blocks should have a language specified (MD040).
 - **Verdict**: REAL DOC NIT. Markdownlint warning.
 - **Resolution**: Added `bash` language identifier to the Smoke-Test Evidence
-  fence (line 134).
+  fence.
 
 ### Thread 11 (PRRT_kwDOTGTyNs6TuIDu) - copilot
 - **Claim**: The `|| echo 0` fallback in grep pipelines is ineffective
@@ -185,12 +186,35 @@
   `ppl_q8_valid` from the `local` declaration in `stage_ppl`. Shellcheck
   is now clean (zero warnings).
 
+### Thread 13 (PRRT_kwDOTGTyNs6TuLjU) - copilot
+- **Claim**: The new `llama-perplexity` executable check runs before the
+  MODEL/WIKI skip logic. In non-strict mode this can turn what would have
+  been a SKIP (MODEL/WIKI unset) into a FAIL just because llama-perplexity
+  isn't built, which regresses the documented 'SKIP allowed' behavior.
+- **Verdict**: REAL BUG. Verified: with LLAMA=/nonexistent and no MODEL/WIKI
+  set, the gate now produces FAIL for PPL/scaling instead of SKIP.
+- **Resolution**: Fixed in commit 19eeb9d01. Moved the
+  `if [ ! -x "$LLAMA/llama-perplexity" ]` guard from before the MODEL/WIKI
+  validation to after both validation blocks, just before the first
+  `run_timeout` invocation in both `stage_ppl` and `stage_scaling`.
+  Verified with two smoke cases:
+  - LLAMA=/nonexistent (unset inputs, non-strict): PPL/scaling SKIP
+  - LLAMA=/nonexistent MODEL=/tmp/dummy_model WIKI=/tmp/dummy_wiki:
+    PPL/scaling FAIL with "binary missing at /nonexistent/llama-perplexity"
+
 ## Smoke-Test Evidence
 
 ```bash
-# Normal smoke test (missing binaries, post-guard output)
-$ LLAMA=/nonexistent CORRECTNESS_BIN=/nonexistent bash scripts/turbo-quality-gate.sh
-FAIL | 0.1 correctness (LLAMA_TEST_TURBO_FA=0) (reason=binary missing at /nonexistent, log=-)
+# Normal smoke test (unset inputs, non-strict: PPL/scaling should SKIP)
+$ LLAMA=/nonexistent bash scripts/turbo-quality-gate.sh
+FAIL | 0.1 correctness (LLAMA_TEST_TURBO_FA=0) (reason=binary missing at /home/svnbjrn/llama-p324-quality-gate-fixes/build-port/bin/test-sycl-turbo-correctness, log=-)
+SKIP | 1 perplexity (turbo3 vs q8_0, -fa on) (MODEL unset (non-strict))
+SKIP | 2 context-scaling ratio (MODEL or WIKI unset (non-strict))
+
+# Missing-binary guard test (dummy inputs + missing LLAMA: should FAIL)
+$ touch /tmp/dummy_model /tmp/dummy_wiki
+$ LLAMA=/nonexistent MODEL=/tmp/dummy_model WIKI=/tmp/dummy_wiki bash scripts/turbo-quality-gate.sh
+FAIL | 0.1 correctness (LLAMA_TEST_TURBO_FA=0) (reason=binary missing at /home/svnbjrn/llama-p324-quality-gate-fixes/build-port/bin/test-sycl-turbo-correctness, log=-)
 FAIL | 1 perplexity (turbo3 vs q8_0, -fa on) (reason=binary missing at /nonexistent/llama-perplexity, log=-)
 FAIL | 2 context-scaling ratio (reason=binary missing at /nonexistent/llama-perplexity, log=-)
 
@@ -222,14 +246,6 @@ Invocations recorded: 1  (second pass skipped correctly)
 $ TURBO_QUALITY_STRICT=1 CORRECTNESS_BIN="$FAKE_BIN/test-sycl-turbo-correctness" \
     LLAMA=/nonexistent MODEL=/dummy WIKI=/dummy bash scripts/turbo-quality-gate.sh > /dev/null
 Invocations recorded: 2  (second with LLAMA_TEST_TURBO_FA=1)
-
-# Missing-binary guard test (thread 8 verification)
-# Dummy MODEL/WIKI files present, but LLAMA points to nonexistent dir.
-$ touch /tmp/dummy_model /tmp/dummy_wiki
-$ LLAMA=/nonexistent MODEL=/tmp/dummy_model WIKI=/tmp/dummy_wiki bash scripts/turbo-quality-gate.sh
-FAIL | 1 perplexity (turbo3 vs q8_0, -fa on) (reason=binary missing at /nonexistent/llama-perplexity, log=-)
-FAIL | 2 context-scaling ratio (reason=binary missing at /nonexistent/llama-perplexity, log=-)
-# Both stage_ppl and stage_scaling guards fire correctly.
 
 # Focused malformed-summary test (thread 11 verification)
 # Fake summary omits xfail count but includes nonzero skip.
@@ -276,5 +292,5 @@ gh-resolve list 31  # no unresolved threads
 
 ## Follow-up Actions
 - PR #31 is mergeable (CLEAN). The user can merge it into master directly.
-- All 12 review threads have been resolved.
+- All 13 review threads have been resolved.
 - Shellcheck is clean (zero warnings after Thread 12 fix).
