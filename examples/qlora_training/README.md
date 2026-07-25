@@ -21,7 +21,21 @@ cmake --build build -j$(nproc)
 cmake --build build --target llama-finetune-qlora -j$(nproc)
 # If llama-adapter.cpp or llama-context.cpp changed, rebuild all:
 cmake --build build -j$(nproc)
+
+# ROCm build:
+./ROCm-build.sh
+
+# Optional: compile for a specific AMD GPU architecture:
+GPU_TARGETS=gfx1100 ./ROCm-build.sh
+
+# Incremental ROCm rebuild:
+cmake --build build-rocm --target llama-finetune-qlora -j$(nproc)
 ```
+
+The ROCm build supports the same SFT, reward-weighted SFT, GRPO, resume,
+checkpointing, LoRA QAT, partial offload, and optimizer modes as the CUDA build.
+HIP compiles the shared `ggml-cuda` training kernels, including quantized
+`OUT_PROD`, `OUT_PROD_ID`, and device-resident Q8 AdamW state.
 
 ---
 
@@ -306,7 +320,7 @@ Gradients propagate through all layers that have LoRA adapters. Use `--freeze-la
 | ✅ Done | **BOS separators** — insert BOS between concatenated samples | Correct cross-sample boundaries | Implemented |
 | ✅ Done | **Per-epoch loss summary** — log train/val loss after each epoch | Observability | Implemented |
 | ✅ Done | **`MUL_MAT_ID` backward** — LoRA on MoE dense FFN layers; `OUT_PROD_ID` for scattered outer product | Unlocks Mixtral/Nemotron-MoE | Implemented |
-| ✅ Done | **Quantized `OUT_PROD`** — dequantize on GPU + cuBLAS for backward matmul | Full GPU training (no CPU fallback) | Implemented |
+| Done | **Quantized `OUT_PROD`** - dequantize on GPU + cuBLAS/hipBLAS for backward matmul | Full GPU training (no CPU fallback) | Implemented |
 | ✅ Done | **Reuse `ctx_compute_opt`** — allocate tensor metadata context once, `ggml_reset()` across ubatches | Eliminate ~0.5 s/step overhead | Implemented |
 | ❌ Skip | **Static training graphs** — KV mask shape changes per ubatch (`n_kv` grows); graph topology not static | Would need KV cache redesign | Not feasible |
 | Low | **`SSM_SCAN/CONV` backward** — enable LoRA on Mamba SSM layers | Unlocks NemotronH SSM layers | Planned |
@@ -326,7 +340,7 @@ Gradients propagate through all layers that have LoRA adapters. Use `--freeze-la
 | `common/common.h` | Added `save_every`, `lora_resume`, `lora_freeze_layers`, `grad_checkpoint_interval`, `train_on_prompt`, `shuffle_dataset` fields |
 | `common/arg.cpp` | Added `--save-every`, `--resume`, `--freeze-layers`, `--grad-checkpoint`, `--train-on-prompt`, `--shuffle-dataset` arguments |
 | `include/llama.h` | Added `llama_opt_set_reward_weights()` and `llama_opt_epoch_range()`; `grad_checkpoint_interval` in `llama_opt_params`; `shuffle` param in `llama_opt_epoch` |
-| `ggml/src/ggml-cuda/out-prod.cu` | `OUT_PROD` with quantized src0 (dequantize on GPU + cuBLAS); `OUT_PROD_ID` for MoE backward |
+| `ggml/src/ggml-cuda/out-prod.cu` | Shared CUDA/HIP `OUT_PROD` with quantized src0 (dequantize on GPU + cuBLAS/hipBLAS); `OUT_PROD_ID` for MoE backward |
 | `ggml/src/ggml-cuda/ggml-cuda.cu` | `supports_op` for quantized `OUT_PROD` and `OUT_PROD_ID`; CPU-resident ids fix in `mul_mat_id` |
 | `ggml/include/ggml-opt.h` | Added `grad_checkpoint_interval` to `ggml_opt_params` |
 | `ggml/src/ggml-opt.cpp` | Gradient checkpointing: marks every Nth forward node `GGML_TENSOR_FLAG_OUTPUT` before backward build |
