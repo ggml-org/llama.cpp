@@ -66,6 +66,8 @@ def test_completion_stream(prompt: str, n_predict: int, re_content: str, n_promp
             assert server.n_predict is not None
             assert data["generation_settings"]["n_predict"] == min(n_predict, server.n_predict)
             assert data["generation_settings"]["seed"] == server.seed
+            assert "adaptive_target" in data["generation_settings"]
+            assert "adaptive_decay" in data["generation_settings"]
             assert match_regex(re_content, content)
         else:
             assert len(data["tokens"]) > 0
