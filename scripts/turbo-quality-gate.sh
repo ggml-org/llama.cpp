@@ -41,7 +41,7 @@ case "${TURBO_QUALITY_STRICT:-0}" in
 esac
 
 # Per-stage tempdir for captured stdout/stderr.
-STAGE_LOG_DIR="$(mktemp -d -t turbo-gate.XXXXXX)"
+STAGE_LOG_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t turbo-gate.XXXXXX)"
 if [ -z "$STAGE_LOG_DIR" ] || [ ! -d "$STAGE_LOG_DIR" ]; then
   echo "ERROR: failed to create temporary directory for stage logs" >&2
   exit 1
@@ -87,10 +87,12 @@ emit_summary() {
   esac
 }
 
-# stage_correctness - always uses -fa on. In strict mode, also runs a
-# second pass with LLAMA_TEST_TURBO_FA=1 to exercise the turbo-FA path.
+# stage_correctness - runs the test-sycl-turbo-correctness harness. The first
+# pass defaults LLAMA_TEST_TURBO_FA to 0 (preserves any inherited override). In
+# strict mode, also runs a second pass with LLAMA_TEST_TURBO_FA=1 to exercise
+# the turbo-FA path.
 stage_correctness() {
-  local stage_label="0.1 correctness (LLAMA_TEST_TURBO_FA=0)"
+  local stage_label="0.1 correctness (LLAMA_TEST_TURBO_FA=${LLAMA_TEST_TURBO_FA:-0})"
   local log="$STAGE_LOG_DIR/correctness-a.log"
 
   if [ "$CORRECTNESS_BIN" = "skip" ]; then
@@ -118,7 +120,21 @@ stage_correctness() {
       FAIL_COUNT=$((FAIL_COUNT+1))
       emit_summary "$stage_label" "FAIL" "$log" "harness GATE-FAIL non-zero or missing summary"
       return
-    }
+    fi
+    # In strict mode, nonzero xfail/skip/xpass counts also fail the stage.
+    # Harness emits: "== summary: <G> GATE-FAIL, <P> XPASS (promote to GATE!), <X> xfail (expected-broken), <S> SKIP =="
+    if [ "$STRICT" = "1" ]; then
+      local xfail_n skip_n xpass_n
+      xfail_n=$(grep -ioE '[0-9]+ xfail' "$log" | grep -oE '[0-9]+' | head -1 || echo 0)
+      skip_n=$(grep -ioE '[0-9]+ skip' "$log" | grep -oE '[0-9]+' | head -1 || echo 0)
+      xpass_n=$(grep -ioE '[0-9]+ xpass' "$log" | grep -oE '[0-9]+' | head -1 || echo 0)
+      if [ "${xfail_n:-0}" -gt 0 ] || [ "${skip_n:-0}" -gt 0 ] || [ "${xpass_n:-0}" -gt 0 ]; then
+        FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: strict mode forbids xfail/skip/xpass (xfail=$xfail_n skip=$skip_n xpass=$xpass_n)"
+        FAIL_COUNT=$((FAIL_COUNT+1))
+        emit_summary "$stage_label" "FAIL" "$log" "strict mode: xfail=$xfail_n skip=$skip_n xpass=$xpass_n"
+        return
+      fi
+    fi
     emit_summary "$stage_label" "PASS" "$log" ""
   else
     local rc=$?
@@ -137,12 +153,24 @@ stage_correctness() {
     local log2="$STAGE_LOG_DIR/correctness-b.log"
     if run_timeout 180 env ONEAPI_DEVICE_SELECTOR="${ONEAPI_DEVICE_SELECTOR:-level_zero:0}" \
          LLAMA_TEST_TURBO_FA=1 "$CORRECTNESS_BIN" >"$log2" 2>&1; then
-      grep -qE '^== summary: 0 GATE-FAIL,' "$log2" || {
+      if ! grep -qE '^== summary: 0 GATE-FAIL,' "$log2"; then
         FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label2}: harness did not report 0 GATE-FAIL"
         FAIL_COUNT=$((FAIL_COUNT+1))
         emit_summary "$stage_label2" "FAIL" "$log2" "harness GATE-FAIL non-zero or missing summary"
         return
-      }
+      fi
+      if [ "$STRICT" = "1" ]; then
+        local xfail_n2 skip_n2 xpass_n2
+        xfail_n2=$(grep -ioE '[0-9]+ xfail' "$log2" | grep -oE '[0-9]+' | head -1 || echo 0)
+        skip_n2=$(grep -ioE '[0-9]+ skip' "$log2" | grep -oE '[0-9]+' | head -1 || echo 0)
+        xpass_n2=$(grep -ioE '[0-9]+ xpass' "$log2" | grep -oE '[0-9]+' | head -1 || echo 0)
+        if [ "${xfail_n2:-0}" -gt 0 ] || [ "${skip_n2:-0}" -gt 0 ] || [ "${xpass_n2:-0}" -gt 0 ]; then
+          FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label2}: strict mode forbids xfail/skip/xpass (xfail=$xfail_n2 skip=$skip_n2 xpass=$xpass_n2)"
+          FAIL_COUNT=$((FAIL_COUNT+1))
+          emit_summary "$stage_label2" "FAIL" "$log2" "strict mode: xfail=$xfail_n2 skip=$skip_n2 xpass=$xpass_n2"
+          return
+        fi
+      fi
       emit_summary "$stage_label2" "PASS" "$log2" ""
     else
       local rc2=$?
@@ -158,15 +186,14 @@ stage_correctness() {
   fi
 }
 
-# validate_numeric <label> <value> - sets METRIC_VALID
+# validate_numeric <label> <value> - returns 0 if numeric, 1 if missing/non-numeric
 validate_numeric() {
   local label="$1" val="$2"
   if [ -z "$val" ] || ! printf '%s' "$val" | grep -qE '^[0-9]+(\.[0-9]+)?$'; then
     echo "    [warn] $label missing or non-numeric: '$val'" >&2
-    METRIC_VALID=0
-    return
+    return 1
   fi
-  METRIC_VALID=1
+  return 0
 }
 
 # stage_ppl - perplexity check. -fa on is mandatory.
@@ -224,13 +251,7 @@ stage_ppl() {
 
   PPL_TURBO=$(grep "Final" "$log_t" | grep -oE 'PPL = [0-9.]+' | grep -oE '[0-9.]+' | tail -1)
   PPL_Q8=$(grep "Final" "$log_q" | grep -oE 'PPL = [0-9.]+' | grep -oE '[0-9.]+' | tail -1)
-  METRIC_VALID=0
-  validate_numeric "PPL_TURBO" "$PPL_TURBO"
-  ppl_turbo_valid=$METRIC_VALID
-  METRIC_VALID=0
-  validate_numeric "PPL_Q8" "$PPL_Q8"
-  ppl_q8_valid=$METRIC_VALID
-  if [ "$ppl_turbo_valid" != "1" ] || [ "$ppl_q8_valid" != "1" ]; then
+  if ! validate_numeric "PPL_TURBO" "$PPL_TURBO" || ! validate_numeric "PPL_Q8" "$PPL_Q8"; then
     PRESERVE_LOGS=1
     FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: final PPL missing or non-numeric (logs=$log_t + $log_q)"
     FAIL_COUNT=$((FAIL_COUNT+1))
@@ -295,13 +316,7 @@ stage_scaling() {
   TURBO_TPS=$(grep "prompt eval" "$log_t" | grep -oE '[0-9.]+ tokens per second' | grep -oE '[0-9.]+' | tail -1)
   Q8_TPS=$(grep "prompt eval" "$log_q" | grep -oE '[0-9.]+ tokens per second' | grep -oE '[0-9.]+' | tail -1)
 
-  METRIC_VALID=0
-  validate_numeric "TURBO_TPS" "$TURBO_TPS"
-  local tps_turbo_valid=$METRIC_VALID
-  METRIC_VALID=0
-  validate_numeric "Q8_TPS" "$Q8_TPS"
-  local tps_q8_valid=$METRIC_VALID
-  if [ "$tps_turbo_valid" != "1" ] || [ "$tps_q8_valid" != "1" ] || \
+  if ! validate_numeric "TURBO_TPS" "$TURBO_TPS" || ! validate_numeric "Q8_TPS" "$Q8_TPS" || \
      ! awk -v q="$Q8_TPS" 'BEGIN { exit !(q > 0) }'; then
     PRESERVE_LOGS=1
     FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: prefill t/s missing, non-numeric, or q8_0 is zero (logs=$log_t + $log_q)"
