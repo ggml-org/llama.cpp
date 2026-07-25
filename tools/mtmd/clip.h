@@ -24,12 +24,14 @@ struct clip_image_size {
         return !(*this == other);
     }
     int area() const {
+        // avoid overflow when computing area
+        GGML_ASSERT(width  >= 0 && width  <= 46000);
+        GGML_ASSERT(height >= 0 && height <= 46000);
         return width * height;
     }
 };
 
 struct clip_image_f32;
-struct clip_image_u8_batch;
 struct clip_image_f32_batch;
 
 enum clip_modality {
@@ -52,6 +54,8 @@ struct clip_context_params {
     ggml_backend_sched_eval_callback cb_eval;
     void * cb_eval_user_data;
     bool no_alloc;
+    mtmd_progress_callback progress_callback;
+    void * progress_callback_user_data;
 };
 
 struct clip_init_result {
@@ -63,41 +67,21 @@ struct clip_init_result clip_init(const char * fname, struct clip_context_params
 
 void clip_free(struct clip_ctx * ctx);
 
-int32_t clip_get_image_size (const struct clip_ctx * ctx);
-int32_t clip_get_patch_size (const struct clip_ctx * ctx);
-int32_t clip_get_hidden_size(const struct clip_ctx * ctx);
-
 // TODO: should be enum, not string
 const char * clip_patch_merge_type(const struct clip_ctx * ctx);
 
-int clip_n_output_tokens(const struct clip_ctx * ctx, struct clip_image_f32 * img);
+int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img);
 
 // for M-RoPE, this will be the number of token positions in X and Y directions
 // for other models, X will be the total number of tokens and Y will be 1
-int clip_n_output_tokens_x(const struct clip_ctx * ctx, struct clip_image_f32 * img);
-int clip_n_output_tokens_y(const struct clip_ctx * ctx, struct clip_image_f32 * img);
+int clip_n_output_tokens_x(const clip_ctx * ctx, const clip_image_f32 * img);
+int clip_n_output_tokens_y(const clip_ctx * ctx, const clip_image_f32 * img);
 
 // this should be equal to the embedding dimension of the text model
 int clip_n_mmproj_embd(const struct clip_ctx * ctx);
 
-struct clip_image_size      * clip_image_size_init(void);
-struct clip_image_u8        * clip_image_u8_init (void);
-struct clip_image_f32       * clip_image_f32_init(void);
-struct clip_image_f32_batch * clip_image_f32_batch_init(void); // only used by libllava
-
-void clip_image_size_free (struct clip_image_size * img_size);
-void clip_image_u8_free (struct clip_image_u8  * img);
-void clip_image_f32_free(struct clip_image_f32 * img);
-void clip_image_u8_batch_free (struct clip_image_u8_batch  * batch);
-void clip_image_f32_batch_free(struct clip_image_f32_batch * batch);
-
-// use for accessing underlay data of clip_image_f32_batch
-size_t clip_image_f32_batch_n_images(const struct clip_image_f32_batch * batch); // equivalent to batch->size()
-size_t clip_image_f32_batch_nx(const struct clip_image_f32_batch * batch, int idx); // equivalent to batch[idx]->nx
-size_t clip_image_f32_batch_ny(const struct clip_image_f32_batch * batch, int idx); // equivalent to batch[idx]->ny
-struct clip_image_f32 * clip_image_f32_get_img(const struct clip_image_f32_batch * batch, int idx); // equivalent to batch[idx]->data
-
-bool clip_image_encode      (struct clip_ctx * ctx, int n_threads, struct clip_image_f32 * img, std::vector<float> & out_vec);
+// TODO: remove clip_image_encode() and always use batched version
+bool clip_image_encode      (struct clip_ctx * ctx, int n_threads, const clip_image_f32 * img, std::vector<float> & out_vec);
 bool clip_image_batch_encode(struct clip_ctx * ctx, int n_threads, const struct clip_image_f32_batch * imgs, std::vector<float> & out_batch_embd);
 
 bool clip_is_llava(const struct clip_ctx * ctx);

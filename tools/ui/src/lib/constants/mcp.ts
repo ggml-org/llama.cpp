@@ -51,6 +51,9 @@ export const EXPECTED_THEMED_ICON_PAIR_COUNT = 2;
 /** CORS proxy URL query parameter name */
 export const CORS_PROXY_URL_PARAM = 'url';
 
+/** Header prefix for headers that should be forwarded by the CORS proxy */
+export const CORS_PROXY_HEADER_PREFIX = 'x-llama-server-proxy-header-';
+
 /** Number of trailing characters to keep visible when partially redacting mcp-session-id */
 export const MCP_SESSION_ID_VISIBLE_CHARS = 5;
 
@@ -58,6 +61,15 @@ export const MCP_SESSION_ID_VISIBLE_CHARS = 5;
 export const MCP_PARTIAL_REDACT_HEADERS = new Map<string, number>([
 	['mcp-session-id', MCP_SESSION_ID_VISIBLE_CHARS]
 ]);
+
+/** Bearer scheme prefix used for Authorization headers (RFC 6750) */
+export const BEARER_PREFIX = 'Bearer ';
+
+/** Canonical casing for the Authorization header (RFC 7235) */
+export const AUTHORIZATION_HEADER = 'Authorization';
+
+/** Content-Type HTTP header name */
+export const CONTENT_TYPE_HEADER = 'Content-Type';
 
 /** Header names whose values should be redacted in diagnostic logs */
 export const REDACTED_HEADERS = new Set([
@@ -84,3 +96,8 @@ export const MCP_TRANSPORT_ICONS: Record<MCPTransportType, Component> = {
 	[MCPTransportType.STREAMABLE_HTTP]: Globe,
 	[MCPTransportType.SSE]: Radio
 };
+
+/** Standard SSE endpoint path indicators */
+export const MCP_SSE_ENDPOINT = '/sse';
+export const MCP_SSE_ENDPOINT_SLASH = '/sse/';
+export const MCP_SSE_ENDPOINT_QUERY = '/sse?';

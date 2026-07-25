@@ -496,6 +496,12 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                     "[!\"#$%&'()*+,\\-./:;<=>?@\\[\\\\\\]^_`{|}~][A-Za-z]+|[^\\r\\n\\p{L}\\p{P}\\p{S}]?[\\p{L}\\p{M}]+| ?[\\p{P}\\p{S}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
                 };
                 break;
+            case LLAMA_VOCAB_PRE_TYPE_LAGUNA:
+                regex_exprs = {
+                    "[^\\n]+|[\\n]+",
+                    "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
+                };
+                break;
             case LLAMA_VOCAB_PRE_TYPE_EXAONE_MOE:
                 regex_exprs = {
                     // original regex from tokenizer.json
@@ -887,9 +893,6 @@ struct llm_tokenizer_ugm : llm_tokenizer {
             // blob containing XOR-compressed compact double array (XCDA) entries
             uint32_t xcda_blob_size = *(const uint32_t *) &precompiled_charsmap[0];
             charsmap_offset += sizeof(xcda_blob_size);
-            if (xcda_blob_size + charsmap_offset >= precompiled_charsmap.size()) {
-                throw std::runtime_error("Index out of array bounds in precompiled charsmap!");
-            }
 
             // Next xcda_blob_size bytes contain entries of XOR-compressed compact
             // double array (XCDA). Each entry is bit-packed into a 32-bit integer.
@@ -1205,7 +1208,15 @@ private:
                 throw std::runtime_error("Index out of array bounds in precompiled charsmap!");
             }
             const char * prefix_replacement = &(tokenizer.prefix_replacements)[longest_prefix_offset];
-            return { prefix_replacement, strlen(prefix_replacement), longest_prefix_length };
+            size_t max_len = tokenizer.prefix_replacements_size - longest_prefix_offset;
+            size_t repl_len = 0;
+            while (repl_len < max_len && prefix_replacement[repl_len] != '\0') {
+                repl_len++;
+            }
+            if (repl_len == max_len) {
+                throw std::runtime_error("Unterminated string in precompiled charsmap!");
+            }
+            return { prefix_replacement, repl_len, longest_prefix_length };
         }
 
         // check if the input prefix contains a valid sequence of UTF-8 code units
@@ -1319,6 +1330,9 @@ struct llm_tokenizer_rwkv_session {
                 if (node->has_value) {
                     token_id = node->value;
                     token_length = position + 1;
+                }
+                if (position + 1 >= text.size()) {
+                    break;
                 }
                 node = node->traverse(text[++position]);
             }
@@ -2018,11 +2032,18 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 const size_t n_precompiled_charsmap = gguf_get_arr_n(ctx, precompiled_charsmap_keyidx);
                 const char * pc = (const char *) gguf_get_arr_data(ctx, precompiled_charsmap_keyidx);
                 precompiled_charsmap.assign(pc, pc + n_precompiled_charsmap);
+                if (precompiled_charsmap.size() < sizeof(uint32_t)) {
+                    throw std::runtime_error("precompiled_charsmap too small for xcda_blob_size header!");
+                }
+                uint32_t * xcda_blob_size = (uint32_t *) &precompiled_charsmap[0];
+#if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+                *xcda_blob_size = __builtin_bswap32(*xcda_blob_size);
+#endif
+                if (*xcda_blob_size + sizeof(uint32_t) >= precompiled_charsmap.size()) {
+                    throw std::runtime_error("Index out of array bounds in precompiled charsmap!");
+                }
 #if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
                 // correct endianness of data in precompiled_charsmap binary blob
-                uint32_t * xcda_blob_size = (uint32_t *) &precompiled_charsmap[0];
-                *xcda_blob_size = __builtin_bswap32(*xcda_blob_size);
-                assert(*xcda_blob_size + sizeof(uint32_t) < n_precompiled_charsmap);
                 size_t xcda_array_size = *xcda_blob_size / sizeof(uint32_t);
                 uint32_t * xcda_array = (uint32_t *) &precompiled_charsmap[sizeof(uint32_t)];
                 for (size_t i = 0; i < xcda_array_size; ++i) {
@@ -2333,6 +2354,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             } else if (
                 tokenizer_pre == "afmoe") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_AFMOE;
+                clean_spaces = false;
+            } else if (
+                tokenizer_pre == "laguna") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_LAGUNA;
                 clean_spaces = false;
             } else if (
                 tokenizer_pre == "minimax-m2") {
@@ -2847,6 +2872,11 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
 
             LLAMA_LOG_INFO("%s: printing all EOG tokens:\n", __func__);
             for (auto tid : special_eog_ids) {
+                if (tid < 0 || tid >= (llama_token) id_to_token.size()) {
+                    LLAMA_LOG_WARN("%s: EOG token id %d is out of range (vocab size %zu), skipping\n",
+                            __func__, tid, id_to_token.size());
+                    continue;
+                }
                 auto & text = id_to_token[tid].text;
 
                 LLAMA_LOG_INFO("%s:   - %d ('%s')\n", __func__, tid, text.c_str());
@@ -2881,6 +2911,9 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             llama_token s_id = LLAMA_TOKEN_NULL;
 
             for (auto tid : special_eog_ids) {
+                if (tid < 0 || tid >= (llama_token) id_to_token.size()) {
+                    continue;
+                }
                 const auto & text = id_to_token[tid].text;
                 if (text == "<|tool_response>") {
                     has_tool_response = true;
@@ -4010,7 +4043,11 @@ int llama_vocab::find_bpe_rank(const std::string & token_left, const std::string
 }
 
 std::vector<std::string> llama_vocab::get_bpe_merges() const {
-    std::vector<std::string> result(pimpl->bpe_ranks.size());
+    int max_rank = -1;
+    for (const auto & pair : pimpl->bpe_ranks) {
+        max_rank = std::max(max_rank, pair.second);
+    }
+    std::vector<std::string> result(max_rank + 1);
 
     for (const auto & pair : pimpl->bpe_ranks) {
         result[pair.second] = pair.first.first + " " + pair.first.second;

@@ -124,7 +124,7 @@ class Glm4MoeModel(TextModel):
                 self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
             )
         self.gguf_writer.add_rope_dimension_count(
-            int(rope_dim * self.hparams.get("partial_rotary_factor", 0.5))
+            int(rope_dim * self.rope_parameters.get("partial_rotary_factor", 0.5))
         )
 
         # MoE parameters - Use only routed expert count (shared experts handled separately)
@@ -226,7 +226,7 @@ class GlmMoeDsaModel(DeepseekV2Model):
         super().set_gguf_parameters()
 
         rope_dim = self.hparams["qk_rope_head_dim"]
-        partial_rotary_factor = self.hparams.get("partial_rotary_factor", 1.0)
+        partial_rotary_factor = self.rope_parameters.get("partial_rotary_factor", 1.0)
         self.gguf_writer.add_rope_dimension_count(int(rope_dim * partial_rotary_factor))
 
         # NextN/MTP prediction layers
@@ -237,6 +237,9 @@ class GlmMoeDsaModel(DeepseekV2Model):
         self.gguf_writer.add_indexer_head_count(self.hparams["index_n_heads"])
         self.gguf_writer.add_indexer_key_length(self.hparams["index_head_dim"])
         self.gguf_writer.add_indexer_top_k(self.hparams["index_topk"])
+        if (indexer_types := self.hparams.get("indexer_types")) is not None:
+            indexer_types = [t == "full" for t in indexer_types]
+            self.gguf_writer.add_indexer_types(indexer_types)
 
 
 @ModelBase.register("SolarOpenForCausalLM")

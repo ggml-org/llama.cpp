@@ -1,0 +1,45 @@
+name: Check Pre-Tokenizer Hashes
+
+on:
+    push:
+        paths:
+            - 'conversion/base.py'
+            - 'convert_hf_to_gguf_update.py'
+    pull_request:
+        paths:
+            - 'conversion/base.py'
+            - 'convert_hf_to_gguf_update.py'
+
+jobs:
+    pre-tokenizer-hashes:
+        runs-on: [self-hosted, fast]
+
+        steps:
+        - name: Checkout repository
+          uses: actions/checkout@v6
+
+        - name: Set up Python
+          uses: actions/setup-python@v6
+          with:
+              python-version: '3.11'
+
+        - name: Install Python dependencies
+          run: |
+              python3 -m venv .venv
+              .venv/bin/pip install -r requirements/requirements-convert_hf_to_gguf_update.txt
+
+        - name: Update pre-tokenizer hashes
+          run: |
+              cp conversion/base.py /tmp
+              .venv/bin/python convert_hf_to_gguf_update.py --check-missing
+
+        - name: Check if committed pre-tokenizer hashes matches generated version
+          run: |
+              if ! diff -q conversion/base.py /tmp/base.py; then
+                  echo "Model pre-tokenizer hashes (in conversion/base.py) do not match generated hashes (from convert_hf_to_gguf_update.py)."
+                  echo "To fix: run ./convert_hf_to_gguf_update.py and commit the updated conversion/base.py along with your changes"
+                  echo "Differences found:"
+                  diff conversion/base.py /tmp/base.py || true
+                  exit 1
+              fi
+              echo "Model pre-tokenizer hashes are up to date."

@@ -557,6 +557,10 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
                 GGML_LOG_ERROR("%s: encountered bad_alloc error while reading key %" PRIi64 "\n", __func__, i);
                 ok = false;
             }
+            if (ok && key.empty()) {
+                GGML_LOG_ERROR("%s: key %" PRIi64 " is empty\n", __func__, i);
+                ok = false;
+            }
             for (size_t j = 0; ok && j < ctx->kv.size(); ++j) {
                 if (key == ctx->kv[j].key) {
                     GGML_LOG_ERROR("%s: duplicate key '%s' for tensors %zu and %" PRIi64 " \n", __func__, key.c_str(), j, i);
@@ -1180,6 +1184,11 @@ size_t gguf_get_tensor_offset(const struct gguf_context * ctx, int64_t tensor_id
 const char * gguf_get_tensor_name(const struct gguf_context * ctx, int64_t tensor_id) {
     GGML_ASSERT(tensor_id >= 0 && tensor_id < gguf_get_n_tensors(ctx));
     return ctx->info[tensor_id].t.name;
+}
+
+const int64_t * gguf_get_tensor_ne(const struct gguf_context * ctx, int64_t tensor_id) {
+    GGML_ASSERT(tensor_id >= 0 && tensor_id < gguf_get_n_tensors(ctx));
+    return ctx->info[tensor_id].t.ne;
 }
 
 enum ggml_type gguf_get_tensor_type(const struct gguf_context * ctx, int64_t tensor_id) {
