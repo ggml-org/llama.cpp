@@ -4,12 +4,14 @@
 - **PR**: #31 - `p324-quality-gate-fixes` -> `master`
 - **Title**: `fix(quality-gate): harden correctness/PPL/scaling checks against stale review`
 - **State**: Open, mergeable (CLEAN)
-- **File touched**: `scripts/turbo-quality-gate.sh`
+- **Primary file touched**: `scripts/turbo-quality-gate.sh`
+- **Files changed**: `scripts/turbo-quality-gate.sh`, this resolution report
 
 ## Branch State
 - **Branch**: `p324-quality-gate-fixes`
 - **Merge commit**: `94b2458f9` (merge origin/master)
 - **Additional fixes**: `0a9b2c7fd` (collapse STRICT guard, portable mktemp)
+- **Other commits**: `44b728c07` (return after first-pass failure), `18186b98e` (add -x guard for llama-perplexity)
 
 ## Methodology
 1. Fetched master into `p324-quality-gate-fixes` (PR #31's branch).
@@ -27,7 +29,7 @@
 8. Pushed to origin.
 9. Listed unresolved threads via `gh-resolve list 31`.
 10. Posted substantive per-thread replies citing file:line + commit SHA.
-11. Resolved all 7 threads via `gh-resolve resolve <thread_id>`.
+11. Resolved all 10 threads via `gh-resolve resolve <thread_id>`.
 
 ## Verdict Summary
 
@@ -40,8 +42,11 @@
 | 5 | PRRT_kwDOTGTyNs6Tt-tZ | copilot | Real bug | Fixed by 0a9b2c7fd |
 | 6 | PRRT_kwDOTGTyNs6TuCWN | copilot | Real bug | Resolved by PR body rewrite |
 | 7 | PRRT_kwDOTGTyNs6TuFJ2 | copilot | Real bug | Fixed by 44b728c07 |
+| 8 | PRRT_kwDOTGTyNs6TuGI0 | copilot | Real bug | Fixed by 18186b98e |
+| 9 | PRRT_kwDOTGTyNs6TuGpd | coderabbitai | Real doc nit | Fixed in this commit |
+| 10 | PRRT_kwDOTGTyNs6TuGpf | coderabbitai | Real doc nit | Fixed in this commit |
 
-**Total real bugs: 7 | False alarms: 0**
+**Total real bugs: 10 | False alarms: 0**
 
 ## Detailed Thread Analysis
 
@@ -124,9 +129,37 @@
   - TURBO_QUALITY_STRICT=1 + clean summary: exactly 2 invocations
     (second with LLAMA_TEST_TURBO_FA=1)
 
+### Thread 8 (PRRT_kwDOTGTyNs6TuGI0) - copilot
+- **Claim**: Report claims early-return behavior and -x checks for
+  llama-perplexity, but stage_correctness falls through after failed first
+  pass and there are no -x checks before invoking "$LLAMA/llama-perplexity"
+  in stage_ppl/stage_scaling.
+- **Verdict**: REAL BUG (split verdict). The early-return half was valid
+  at review time (fixed by 44b728c07). The -x half was also valid: the
+  -x guards were lost during the conflict resolution with master (took
+  theirs everywhere).
+- **Resolution**: Fixed in commit 18186b98e. Added `if [ ! -x "$LLAMA/llama-perplexity" ]`
+  guard at the start of both `stage_ppl` (after local declarations, before
+  MODEL/WIKI validation) and `stage_scaling`. Wording matches the original
+  implementation at commit 419aed4e2. Verified with LLAMA=/nonexistent +
+  dummy MODEL/WIKI files.
+
+### Thread 9 (PRRT_kwDOTGTyNs6TuGpd) - coderabbitai
+- **Claim**: "File touched" entry understates the current PR scope. Should
+  list both changed files or rename to "Primary file touched".
+- **Verdict**: REAL DOC NIT. Easy fix.
+- **Resolution**: Renamed to "Primary file touched" and added "Files changed"
+  entry listing both `scripts/turbo-quality-gate.sh` and this resolution report.
+
+### Thread 10 (PRRT_kwDOTGTyNs6TuGpf) - coderabbitai
+- **Claim**: Fenced code blocks should have a language specified (MD040).
+- **Verdict**: REAL DOC NIT. Markdownlint warning.
+- **Resolution**: Added `bash` language identifier to the Smoke-Test Evidence
+  fence (line 134).
+
 ## Smoke-Test Evidence
 
-```
+```bash
 # Normal smoke test (missing binaries)
 $ LLAMA=/nonexistent CORRECTNESS_BIN=/nonexistent bash scripts/turbo-quality-gate.sh
 FAIL | 0.1 correctness (LLAMA_TEST_TURBO_FA=0) (reason=binary missing at /nonexistent)
@@ -143,18 +176,28 @@ $ bash -n scripts/turbo-quality-gate.sh
 PARSE OK
 
 # Invocation-count test (thread 7 verification)
-# Failing fake: strict mode skips second pass
-$ TURBO_QUALITY_STRICT=1 CORRECTNESS_BIN="$FAKE_BIN/test-sycl-turbo-correctness" \
-    LLAMA=/nonexistent MODEL=/dummy WIKI=/dummy bash scripts/turbo-quality-gate.sh
-PASS | 0.1 correctness (LLAMA_TEST_TURBO_FA=0) | FAIL | harness exited 1
-Invocations: 1  (second pass skipped)
+# Only the invocation count is asserted (not full gate output,
+# since MODEL/WIKI /dummy files may fail later checks).
+# Fake harness: logs each invocation, then either exits 1 or prints
+# a clean summary and exits 0.
 
-# Clean-success fake: strict mode runs both passes
+# Failing fake (exit 1): strict mode must skip the second pass.
 $ TURBO_QUALITY_STRICT=1 CORRECTNESS_BIN="$FAKE_BIN/test-sycl-turbo-correctness" \
-    LLAMA=/nonexistent MODEL=/dummy WIKI=/dummy bash scripts/turbo-quality-gate.sh
-PASS | 0.1 correctness (LLAMA_TEST_TURBO_FA=0)
-PASS | 0.2 correctness (LLAMA_TEST_TURBO_FA=1)
-Invocations: 2  (second with LLAMA_TEST_TURBO_FA=1)
+    LLAMA=/nonexistent MODEL=/dummy WIKI=/dummy bash scripts/turbo-quality-gate.sh > /dev/null
+Invocations recorded: 1  (second pass skipped correctly)
+
+# Clean-summary fake (exit 0): strict mode must run both passes.
+$ TURBO_QUALITY_STRICT=1 CORRECTNESS_BIN="$FAKE_BIN/test-sycl-turbo-correctness" \
+    LLAMA=/nonexistent MODEL=/dummy WIKI=/dummy bash scripts/turbo-quality-gate.sh > /dev/null
+Invocations recorded: 2  (second with LLAMA_TEST_TURBO_FA=1)
+
+# Missing-binary guard test (thread 8 verification)
+# Dummy MODEL/WIKI files present, but LLAMA points to nonexistent dir.
+$ touch /tmp/dummy_model /tmp/dummy_wiki
+$ LLAMA=/nonexistent MODEL=/tmp/dummy_model WIKI=/tmp/dummy_wiki bash scripts/turbo-quality-gate.sh
+FAIL | 1 perplexity (turbo3 vs q8_0, -fa on) (reason=binary missing at /nonexistent/llama-perplexity)
+FAIL | 2 context-scaling ratio (reason=binary missing at /nonexistent/llama-perplexity)
+# Both stage_ppl and stage_scaling guards fire correctly.
 ```
 
 ## Commands Used
@@ -188,5 +231,4 @@ gh-resolve list 31  # no unresolved threads
 
 ## Follow-up Actions
 - PR #31 is mergeable (CLEAN). The user can merge it into master directly.
-- All 8 review threads on the previous PR (#28) were already resolved in
-  the prior session; PR #31's threads are now also fully resolved.
+- All 10 review threads have been resolved.
