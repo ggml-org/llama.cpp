@@ -591,6 +591,13 @@ static constexpr size_t SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE = 16 * 10
 static constexpr int    SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_TIMEOUT     = 60;        // seconds
 
 struct server_tool_exec_shell_command : server_tool {
+
+#ifdef _WIN32
+    static constexpr const char *shell_command_delims = "%!|";
+#else
+    static constexpr const char *shell_command_delims = ";`<>*$()&!|";
+#endif
+
     server_tool_exec_shell_command() {
         name = "exec_shell_command";
         display_name = "Execute shell command";
@@ -599,11 +606,17 @@ struct server_tool_exec_shell_command : server_tool {
     }
 
     json get_definition() const override {
+        static const std::string general_desc = "Execute a shell command and return its output (stdout and stderr combined).";
+        static const std::string wl_desc = string_format(
+            " Only whitelisted programs may be run."
+            " Commands must not contain any of these characters: \"%s\"",
+            shell_command_delims
+        );
         return {
             {"type", "function"},
             {"function", {
                 {"name", name},
-                {"description", "Execute a shell command and return its output (stdout and stderr combined)."},
+                {"description", ( s_shell_command_whitelist && !s_shell_command_whitelist->empty() ? general_desc + wl_desc : general_desc ).c_str() },
                 {"parameters", {
                     {"type", "object"},
                     {"properties", {
@@ -627,10 +640,8 @@ struct server_tool_exec_shell_command : server_tool {
 
 #ifdef _WIN32
         std::vector<std::string> args = {"cmd", "/c", command};
-        static constexpr char *shell_command_delims = "%!|";
 #else
         std::vector<std::string> args = {"sh", "-c", command};
-        static constexpr char *shell_command_delims = ";`<>*$()&!|";
 #endif
 
         if (!s_shell_command_whitelist->empty()) {
