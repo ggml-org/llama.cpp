@@ -1711,14 +1711,14 @@ ggml_tensor * llm_graph_context::build_ffn(
             } break;
         case LLM_FFN_SWIGLU_OAI_MOE:
             if (gate && type_gate == LLM_FFN_PAR) {
-                //Same constants as LLM_FFN_SWIGLU_OAI_MOE
+                // same alpha/limit constants as gpt-oss
                 const float alpha = 1.702f;
                 const float limit = 7.0f;
                 cur = ggml_swiglu_oai(ctx0, cur, tmp, alpha, limit);
                 cb(cur, "ffn_swiglu_oai", il);
                 type_gate = LLM_FFN_SEQ;
             } else {
-                GGML_ABORT("LLM_FFN_SWIGLU_OAI requires a parallel gate");
+                GGML_ABORT("LLM_FFN_SWIGLU_OAI_MOE requires a parallel gate");
             } break;
         case LLM_FFN_GEGLU:
             {

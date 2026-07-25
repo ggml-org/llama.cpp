@@ -418,6 +418,39 @@ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
         p1 = std::numeric_limits<llama_pos>::max();
     }
 
+    // empty range - nothing to remove
+    if (p0 >= p1) {
+        return true;
+    }
+
+    // MSA anchors block selection to absolute cache slots (slot == position). Tail trim and full removal preserve this invariant, but removing a prefix
+    // or middle range would free slots while later cells survive, desynchronizing the indexer cache. Reject such removals before modifying the cache.
+    if (msa_strict_slots) {
+        for (llama_seq_id sid = 0; sid < (llama_seq_id) seq_to_stream.size(); ++sid) {
+            if (seq_id >= 0 && sid != seq_id) {
+                continue;
+            }
+
+            const auto & cells = v_cells[seq_to_stream[sid]];
+
+            const llama_pos pmin = cells.seq_pos_min(sid);
+            const llama_pos pmax = cells.seq_pos_max(sid);
+
+            if (pmin < 0) {
+                continue;   // empty sequence
+            }
+
+            const bool overlaps    = p0 <= pmax && p1 > pmin;   // the range removes something
+            const bool leaves_tail = p1 <= pmax;                // cells beyond the range survive
+
+            if (overlaps && leaves_tail) {
+                LLAMA_LOG_WARN("%s: MSA: partial (non-suffix) removal [%d, %d) for seq %d is not supported "
+                        "(block selection is anchored to cache slots) - rejected\n", __func__, p0, p1, sid);
+                return false;
+            }
+        }
+    }
+
     if (seq_id >= 0) {
         auto & cells = v_cells[seq_to_stream[seq_id]];
         auto & head  = v_heads[seq_to_stream[seq_id]];
@@ -1024,22 +1057,50 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
 
         const auto & cells = v_cells[seq_to_stream[seq_id]];
 
-        uint32_t head_cur = v_heads[seq_to_stream[seq_id]];
-
-        // MSA block selection assumes slot == logical position (append-only streams), which Head-based placement can technically violate after tail trims
-        if (msa_strict_slots) {
-            head_cur = 0;
+        if (n_tokens > cells.size()) {
+            LLAMA_LOG_ERROR("%s: n_tokens = %d > size = %u\n", __func__, n_tokens, cells.size());
+            return { };
         }
+
+        // MSA block selection assumes slot == logical position (append-only streams).
+        if (msa_strict_slots) {
+            for (uint32_t ii = 0; ii < n_tokens; ++ii) {
+                const llama_pos pos = ubatch.pos[s*n_tokens + ii];
+
+                if (pos < 0 || (uint64_t) pos >= cells.size()) {
+                    LLAMA_LOG_WARN("%s: MSA: position %d is outside the cache range [0, %u)\n",
+                            __func__, pos, cells.size());
+                    return { };
+                }
+
+                const uint32_t idx = (uint32_t) pos;
+
+                if (!cells.is_empty(idx)) {
+                    LLAMA_LOG_WARN("%s: MSA: required slot %u is already occupied (stream %u)\n",
+                            __func__, idx, seq_to_stream[seq_id]);
+                    return { };
+                }
+
+                // strictly increasing positions, rules out duplicates and, for contiguous requests, is tightened to exact adjacency
+                if (!res.idxs[s].empty() && (cont ? idx != res.idxs[s].back() + 1
+                                                  : idx <= res.idxs[s].back())) {
+                    LLAMA_LOG_WARN("%s: MSA: token positions are not %s within the ubatch\n",
+                            __func__, cont ? "contiguous" : "strictly increasing");
+                    return { };
+                }
+
+                res.idxs[s].push_back(idx);
+            }
+
+            continue;
+        }
+
+        uint32_t head_cur = v_heads[seq_to_stream[seq_id]];
 
         // if we have enough unused cells before the current head ->
         //   better to start searching from the beginning of the cache, hoping to fill it
         if (head_cur > cells.get_used() + 2*n_tokens) {
             head_cur = 0;
-        }
-
-        if (n_tokens > cells.size()) {
-            LLAMA_LOG_ERROR("%s: n_tokens = %d > size = %u\n", __func__, n_tokens, cells.size());
-            return { };
         }
 
         uint32_t n_tested = 0;
@@ -1200,7 +1261,8 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & 
             LLAMA_LOG_DEBUG("%s: purging positions [%d, %d] of sequence %d from KV cache\n",
                     __func__, cells.seq_pos_min(s), seq_pos_max_rm[s], s);
 
-            seq_rm(s, cells.seq_pos_min(s), seq_pos_max_rm[s] + 1);
+            // under MSA strict slots this path should be unreachable, since strict MSA placement never selects occupied cells
+            GGML_ASSERT(seq_rm(s, cells.seq_pos_min(s), seq_pos_max_rm[s] + 1));
         }
     }
 
