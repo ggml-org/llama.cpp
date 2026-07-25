@@ -112,7 +112,7 @@ llama_kv_cache::llama_kv_cache(
         auto it = ctx_map.find(buft);
         if (it == ctx_map.end()) {
             ggml_init_params params = {
-                /*.mem_size   =*/ size_t(3u*(1 + n_stream)*n_layer*ggml_tensor_overhead()),
+                /*.mem_size   =*/ size_t(3u*(1 + n_stream)*n_layer*ggml_tensor_overhead()), //Reserve tensor metadata for up to 3 tensors per layer (K, V, and optional K_idx), plus one view per tensor per stream.
                 /*.mem_buffer =*/ NULL,
                 /*.no_alloc   =*/ true,
             };
@@ -309,23 +309,24 @@ llama_kv_cache::llama_kv_cache(
     }
 
     {
-        const size_t memory_size_k = size_k_bytes();
-        const size_t memory_size_v = size_v_bytes();
+        const size_t memory_size_k     = size_k_bytes();
+        const size_t memory_size_v     = size_v_bytes();
         const size_t memory_size_k_idx = size_k_idx_bytes();
         const size_t memory_size_total = memory_size_k + memory_size_v + memory_size_k_idx;
 
+        constexpr float mib = 1024.0f * 1024.0f;
+
+        const std::string k_log = format(", K (%s): %7.2f MiB", ggml_type_name(type_k), (float) memory_size_k / mib);
+        const std::string v_log = format(", V (%s): %7.2f MiB", ggml_type_name(type_v), (float) memory_size_v / mib);
+
+        std::string k_idx_log;
         if (memory_size_k_idx > 0) {
-            LLAMA_LOG_INFO("%s: size = %7.2f MiB (%6u cells, %3d layers, %2u/%u seqs), K (%s): %7.2f MiB, V (%s): %7.2f MiB, K_idx (%s): %7.2f MiB\n", __func__,
-                (float)memory_size_total / (1024.0f * 1024.0f), kv_size, (int) layers.size(), n_seq_max, n_stream,
-                ggml_type_name(type_k), (float)memory_size_k / (1024.0f * 1024.0f),
-                ggml_type_name(type_v), (float)memory_size_v / (1024.0f * 1024.0f),
-                ggml_type_name(GGML_TYPE_F32), (float)memory_size_k_idx / (1024.0f * 1024.0f));
-        } else {
-            LLAMA_LOG_INFO("%s: size = %7.2f MiB (%6u cells, %3d layers, %2u/%u seqs), K (%s): %7.2f MiB, V (%s): %7.2f MiB\n", __func__,
-                (float)memory_size_total / (1024.0f * 1024.0f), kv_size, (int) layers.size(), n_seq_max, n_stream,
-                ggml_type_name(type_k), (float)memory_size_k / (1024.0f * 1024.0f),
-                ggml_type_name(type_v), (float)memory_size_v / (1024.0f * 1024.0f));
+            k_idx_log = format(", K_idx (%s): %7.2f MiB", ggml_type_name(GGML_TYPE_F32), (float) memory_size_k_idx / mib);
         }
+
+        LLAMA_LOG_INFO("%s: size = %7.2f MiB (%6u cells, %3d layers, %2u/%u seqs)%s%s%s\n", __func__,
+                (float) memory_size_total / mib, kv_size, (int) layers.size(), n_seq_max, n_stream,
+                k_log.c_str(), v_log.c_str(), k_idx_log.c_str());
     }
 
     // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
