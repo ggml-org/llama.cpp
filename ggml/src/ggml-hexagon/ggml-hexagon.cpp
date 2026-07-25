@@ -213,6 +213,8 @@ static inline bool ggml_hexagon_is_repack_type(enum ggml_type type) {
            type == GGML_TYPE_MXFP4;
 }
 
+static bool ggml_hexagon_is_repack_tensor(const struct ggml_tensor * t);
+
 static inline bool ggml_hexagon_is_hmx_weight_type(enum ggml_type type) {
     return type == GGML_TYPE_F16 || type == GGML_TYPE_F32 || ggml_hexagon_is_repack_type(type);
 }
@@ -940,6 +942,11 @@ static void ggml_backend_hexagon_buffer_set_tensor(ggml_backend_buffer_t buffer,
 
     HEX_VERBOSE("ggml-hex: %s set-tensor %s : data %p offset %zu size %zu\n", sess->c_name(), tensor->name, data, offset, size);
 
+    if (!ggml_hexagon_is_repack_tensor(tensor)) {
+        memcpy((char *) tensor->data + offset, data, size);
+        return;
+    }
+
     switch (tensor->type) {
         case GGML_TYPE_Q4_0:
             GGML_ASSERT(offset == 0);
@@ -987,6 +994,11 @@ static void ggml_backend_hexagon_buffer_get_tensor(ggml_backend_buffer_t buffer,
     auto sess = sbuf->sess;
 
     HEX_VERBOSE("ggml-hex: %s get-tensor %s : data %p offset %zu size %zu\n", sess->c_name(), tensor->name, data, offset, size);
+
+    if (!ggml_hexagon_is_repack_tensor(tensor)) {
+        memcpy(data, (const char *) tensor->data + offset, size);
+        return;
+    }
 
     switch (tensor->type) {
         case GGML_TYPE_Q4_0:
@@ -1129,7 +1141,7 @@ static size_t ggml_backend_hexagon_buffer_type_get_alignment(ggml_backend_buffer
 }
 
 static size_t ggml_backend_hexagon_buffer_type_get_alloc_size(ggml_backend_buffer_type_t buft, const struct ggml_tensor * t) {
-    if (ggml_hexagon_is_repack_type(t->type)) {
+    if (ggml_hexagon_is_repack_tensor(t)) {
         int64_t ne0 = hex_round_up(t->ne[0], 32);
         int64_t ne1 = hex_round_up(t->ne[1], 32);
         int64_t ne2 = t->ne[2];
@@ -1178,6 +1190,24 @@ static bool ggml_backend_buffer_is_hexagon(const struct ggml_backend_buffer * b)
     return b->buft->iface.get_alignment == ggml_backend_hexagon_buffer_type_get_alignment;
 }
 
+static bool ggml_hexagon_is_repack_tensor(const struct ggml_tensor * t) {
+    if (!t || !ggml_hexagon_is_repack_type(t->type)) {
+        return false;
+    }
+    if (t->buffer) {
+        if (!ggml_backend_buffer_is_hexagon(t->buffer)) {
+            return false;
+        }
+        if (ggml_backend_buffer_is_host(t->buffer)) {
+            return false;
+        }
+        if (ggml_backend_buffer_get_usage(t->buffer) != GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
+            return false;
+        }
+    }
+    return true;
+}
+
 struct ggml_hexagon_opbatch {
     ggml_hexagon_session*            sess;
 
@@ -1190,8 +1220,6 @@ struct ggml_hexagon_opbatch {
     std::unordered_map<int, int>                b_map; // buffer fd   to index
     std::unordered_map<const ggml_tensor*, int> t_map; // tensor ptr  to index
     std::unordered_multimap<void*, int>         d_map; // tensor data to index
-
-
 
     std::deque<ggml_tensor>          temp_tensors; // temporary copy/repack tensors
 
@@ -1269,12 +1297,10 @@ struct ggml_hexagon_opbatch {
         return bi;
     }
 
-
-
     bool same_shape(const htp_tensor * h, const ggml_tensor * t) const {
         int64_t ne0 = t->ne[0];
         int64_t ne1 = t->ne[1];
-        const bool is_repack = ggml_backend_buffer_is_hexagon(t->buffer) && ggml_hexagon_is_repack_type(t->type);
+        const bool is_repack = ggml_hexagon_is_repack_tensor(t);
         if (is_repack) {
             ne0 = hex_round_up(ne0, 32);
             ne1 = hex_round_up(ne1, 32);
@@ -1319,7 +1345,7 @@ struct ggml_hexagon_opbatch {
         h.data  = t_offset;
         h.type  = t->type;
 
-        const bool is_repack = ggml_backend_buffer_is_hexagon(t->buffer) && ggml_hexagon_is_repack_type(t->type);
+        const bool is_repack = ggml_hexagon_is_repack_tensor(t);
         if (is_repack) {
             h.ne[0] = hex_round_up(t->ne[0], 32);
             h.ne[1] = hex_round_up(t->ne[1], 32);
@@ -2825,6 +2851,14 @@ static void ggml_hexagon_precompute_fused_ffn_params(
     }
 }
 
+static bool ggml_hexagon_tensor_is_host(const struct ggml_hexagon_session * sess, const struct ggml_tensor * t) {
+    return t && t->buffer && t->buffer->buft == &sess->host_buffer_type;
+}
+
+static bool ggml_hexagon_tensor_is_non_host(const struct ggml_hexagon_session * sess, const struct ggml_tensor * t) {
+    return t && t->buffer && t->buffer->buft != &sess->host_buffer_type;
+}
+
 static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * sess, const struct ggml_tensor * dst) {
     const struct ggml_tensor * src0 = dst->src[0];
     const struct ggml_tensor * src1 = dst->src[1];
@@ -2856,8 +2890,8 @@ static bool ggml_hexagon_supported_mul_mat(const struct ggml_hexagon_session * s
                 return false;  // no broadcasting (for now)
             }
 
-            // src0 (weights) must be repacked
-            if (src0->buffer && !ggml_backend_buffer_is_hexagon(src0->buffer)) {
+            // src0 (weights) must be repacked (default non-host buffer)
+            if (ggml_hexagon_tensor_is_host(sess, src0)) {
                 return false;
             }
             break;
@@ -2917,8 +2951,8 @@ static bool ggml_hexagon_supported_mul_mat_id(const struct ggml_hexagon_session 
                 return false;
             }
 
-            // src0 (weights) must be repacked
-            if (src0->buffer && !ggml_backend_buffer_is_hexagon(src0->buffer)) {
+            // src0 (weights) must be repacked (default non-host buffer)
+            if (ggml_hexagon_tensor_is_host(sess, src0)) {
                 return false;
             }
             break;
@@ -3159,7 +3193,7 @@ static bool ggml_hexagon_supported_softmax(const struct ggml_hexagon_session * s
 static bool ggml_hexagon_supported_set_rows(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
     const struct ggml_tensor * src0 = op->src[0]; // values
     const struct ggml_tensor * src1 = op->src[1]; // indices
-    const struct ggml_tensor * dst  = op;
+    const struct ggml_tensor * dst  = op->src[2] ? op->src[2] : op;
 
     if (src0->type != GGML_TYPE_F32) {
         return false;
@@ -3169,7 +3203,7 @@ static bool ggml_hexagon_supported_set_rows(const struct ggml_hexagon_session * 
         return false;
     }
 
-    if (dst->type != GGML_TYPE_F16) {
+    if (dst->type != GGML_TYPE_F16 && dst->type != GGML_TYPE_Q8_0) {
         return false;
     }
 
@@ -3183,7 +3217,7 @@ static bool ggml_hexagon_supported_get_rows(const struct ggml_hexagon_session * 
     const struct ggml_tensor * src1 = op->src[1]; // indices
     const struct ggml_tensor * dst  = op;
 
-    if (src0->type != GGML_TYPE_F32) {
+    if (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_Q8_0) {
         return false;
     }
 
