@@ -123,6 +123,62 @@ def test_tools_builtin_exec_shell_command_stream():
     assert "[exit code: 0]" in chunks
 
 
+def test_tools_builtin_exec_shell_command_rejected_whitelist():
+    global server
+    old = server.whitelist_shell_commands
+    try:
+        server.whitelist_shell_commands = ["printf"]
+        server.start()
+
+        # Attempt to call a valid program that should be disallowed.
+        # The command must be safe even if the whitelist malfunctions.
+        events = list(server.make_stream_request("POST", "/tools", data={
+            "tool": "exec_shell_command",
+            "params": {"command": "echo is not allowed by whitelist"},
+            "stream": True,
+        }))
+
+        last = events[-1]
+        assert last.get("done") is True
+        err = last.get("error")
+        assert err is not None
+        assert err.lower().startswith("command rejected!")
+        assert "program" in err.lower(), \
+                f"Expected 'Program' in error message, but got: '{err}'"
+    finally:
+        server.whitelist_shell_commands = old
+
+
+def test_tools_builtin_exec_shell_command_rejected_unsafe_symbols():
+    global server
+    old = server.whitelist_shell_commands
+    try:
+        server.whitelist_shell_commands = ["printf"]
+        server.start()
+
+        # Call command that should trigger the (shell-specific) unsafe symbol blacklist.
+        # The command must be safe even if the whitelist malfunctions.
+        events = list(server.make_stream_request("POST", "/tools", data={
+            "tool": "exec_shell_command",
+            "params": {"command": "printf is allowed | echo is not"},
+            "stream": True,
+        }))
+
+        last = events[-1]
+        assert last.get("done") is True
+        err = last.get("error")
+        assert err is not None
+        assert err.lower().startswith("command rejected!")
+        assert "program" not in err.lower(), (
+            'Error message for use of unsafe symbols uses the term "program".'
+            ' This violates the terminology paradigm and may confuse the LLM.'
+        )
+        assert "unsafe list" in err.lower(), \
+                f"Expected 'unsafe list' in error message, but got: '{err}'"
+    finally:
+        server.whitelist_shell_commands = old
+
+
 def test_tools_builtin_edit_file_rejects_overlapping_edits():
     global server
     server.start()
