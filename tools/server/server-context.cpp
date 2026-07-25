@@ -2081,9 +2081,9 @@ private:
         queue_results.send(std::move(res));
     }
 
-    // Gate slot save/restore/erase on slot content (does it hold media),
-    // not model capability: a multimodal model may hold a pure-text slot.
-    bool check_slot_no_media(const server_slot & slot, const int id_task) {
+    // Gate erase on slot content (does it hold media), not model capability:
+    // a multimodal model may hold a pure-text slot.
+    bool check_slot_no_media_for_erase(const server_slot & slot, const int id_task) {
         if (slot.prompt.tokens.has_media()) {
             send_error(id_task,
                 "This operation is not supported while the slot holds image/audio tokens (a pure-text prefix is supported)",
@@ -2586,9 +2586,6 @@ private:
                         send_error(task, "Invalid slot ID", ERROR_TYPE_INVALID_REQUEST);
                         break;
                     }
-                    if (!check_slot_no_media(*slot, task.id)) {
-                        break;
-                    }
                     if (slot->is_processing()) {
                         // if requested slot is unavailable, we defer this task for processing later
                         SRV_DBG("requested slot is unavailable, defer task, id_task = %d\n", task.id);
@@ -2601,9 +2598,37 @@ private:
                     std::string filename = task.slot_action.filename;
                     std::string filepath = task.slot_action.filepath;
 
-                    const llama_tokens tokens = slot->prompt.tokens.get_text_tokens();
+                    std::vector<uint8_t> media_state;
+                    try {
+                        media_state = slot->prompt.tokens.serialize_media_state();
+                    } catch (const std::exception & err) {
+                        send_error(task, err.what(), ERROR_TYPE_NOT_SUPPORTED);
+                        break;
+                    }
+
+                    const llama_tokens tokens = media_state.empty()
+                        ? slot->prompt.tokens.get_text_tokens()
+                        : slot->prompt.tokens.get_tokens_for_save();
                     const size_t token_count = tokens.size();
-                    const size_t nwrite = llama_state_seq_save_file(ctx_tgt, filepath.c_str(), slot->id, tokens.data(), token_count);
+                    size_t nwrite = llama_state_seq_save_file(
+                        ctx_tgt, filepath.c_str(), slot->id, tokens.data(), token_count);
+                    if (nwrite == 0) {
+                        send_error(task, "Unable to save slot", ERROR_TYPE_SERVER);
+                        break;
+                    }
+
+                    if (!media_state.empty()) {
+                        std::ofstream file(filepath, std::ios::binary | std::ios::app);
+                        file.write(reinterpret_cast<const char *>(media_state.data()), media_state.size());
+                        file.close();
+                        if (!file) {
+                            std::error_code ec;
+                            std::filesystem::remove(filepath, ec);
+                            send_error(task, "Unable to save image tokens", ERROR_TYPE_SERVER);
+                            break;
+                        }
+                        nwrite += media_state.size();
+                    }
 
                     const int64_t t_end = ggml_time_us();
                     const double t_save_ms = (t_end - t_start) / 1000.0;
@@ -2648,8 +2673,42 @@ private:
                         break;
                     }
                     tokens.resize(token_count);
-                    slot->prompt.clear();
-                    slot->prompt.tokens.insert(tokens);
+                    try {
+                        server_tokens restored(tokens, mctx != nullptr);
+
+                        std::ifstream file(filepath, std::ios::binary | std::ios::ate);
+                        if (!file) {
+                            throw std::runtime_error("Unable to open slot save file");
+                        }
+                        const std::streamoff file_size = file.tellg();
+                        if (file_size < 0 || static_cast<size_t>(file_size) < nread) {
+                            throw std::runtime_error("Invalid slot save file size");
+                        }
+
+                        if (static_cast<size_t>(file_size) > nread) {
+                            std::vector<uint8_t> media_state(static_cast<size_t>(file_size) - nread);
+                            file.seekg(static_cast<std::streamoff>(nread), std::ios::beg);
+                            file.read(reinterpret_cast<char *>(media_state.data()), media_state.size());
+                            if (!file) {
+                                throw std::runtime_error("Unable to read server tokens state");
+                            }
+                            restored = server_tokens::deserialize_media_state(
+                                tokens, mctx != nullptr, media_state.data(), media_state.size());
+                            nread = static_cast<size_t>(file_size);
+                        }
+
+                        if (!restored.validate(ctx_tgt)) {
+                            throw std::runtime_error("Invalid tokens in slot save file");
+                        }
+
+                        slot->prompt.clear();
+                        slot->prompt.tokens = std::move(restored);
+                    } catch (const std::exception & err) {
+                        llama_memory_seq_rm(llama_get_memory(ctx_tgt), slot->id, -1, -1);
+                        slot->prompt.clear();
+                        send_error(task, std::string("Unable to restore slot: ") + err.what(), ERROR_TYPE_INVALID_REQUEST);
+                        break;
+                    }
 
                     const int64_t t_end = ggml_time_us();
                     const double t_restore_ms = (t_end - t_start) / 1000.0;
@@ -2672,8 +2731,7 @@ private:
                         send_error(task, "Invalid slot ID", ERROR_TYPE_INVALID_REQUEST);
                         break;
                     }
-                    // Gate on slot content, consistent with save/restore.
-                    if (!check_slot_no_media(*slot, task.id)) {
+                    if (!check_slot_no_media_for_erase(*slot, task.id)) {
                         break;
                     }
                     if (slot->is_processing()) {

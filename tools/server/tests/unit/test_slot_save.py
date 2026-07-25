@@ -2,6 +2,7 @@ import pytest
 from utils import *
 import base64
 import requests
+import struct
 
 server = ServerPreset.tinyllama2()
 
@@ -103,14 +104,12 @@ def test_slot_erase():
 #
 # Multimodal server (mmproj loaded) slot save/restore.
 #
-# Regression coverage for issue #21133: slot save/restore/erase must be gated on
-# the slot's CONTENT (does it actually hold image/audio tokens) rather than the
-# model's CAPABILITY (is an mmproj loaded). A pure-text slot on a multimodal
-# server must save/restore/erase normally; a slot that actually holds an image
-# must be rejected with ERROR_TYPE_NOT_SUPPORTED (HTTP 501).
+# A pure-text slot on a multimodal server and a slot containing images must
+# both support save/restore. Erase remains gated on the slot's content.
 #
 
 IMG_URL_CAT = "https://huggingface.co/ggml-org/tinygemma3-GGUF/resolve/main/test/91_cat.png"
+IMG_URL_TRUCK = "https://huggingface.co/ggml-org/tinygemma3-GGUF/resolve/main/test/11_truck.png"
 
 
 def _get_img_base64(url: str) -> str:
@@ -171,11 +170,232 @@ def test_slot_save_restore_text_only_on_multimodal(mmproj_server):
     assert res.status_code == 200
 
 
-def test_slot_save_rejected_when_slot_holds_image(mmproj_server):
+def test_slot_save_restore_with_image(mmproj_server):
+    server = mmproj_server
+    # the SWA cache cannot be rolled back after a restore (checkpoints are not
+    # part of the save file), which would force full re-processing and hide the
+    # prefix reuse being verified below; use the full-size SWA cache instead
+    server.swa_full = True
+    server.start()
+
+    prompt_cat = {
+        "prompt_string": "What is this: <__media__>\n",
+        "multimodal_data": [_get_img_base64(IMG_URL_CAT)],
+    }
+    res = server.make_request("POST", "/completions", data={
+        "temperature": 0.0,
+        "top_k": 1,
+        "id_slot": 1,
+        "cache_prompt": True,
+        "prompt": prompt_cat,
+    })
+    assert res.status_code == 200
+    content_cat = res.body["content"]
+    prompt_n_full = res.body["timings"]["prompt_n"]
+    assert res.body["timings"]["cache_n"] == 0
+    assert prompt_n_full > 32  # text plus image tokens are all processed
+
+    # erase remains gated on media content
+    res = server.make_request("POST", "/slots/1?action=erase")
+    assert res.status_code == 501
+    assert res.body["error"]["type"] == "not_supported_error"
+
+    res = server.make_request("POST", "/slots/1?action=save", data={
+        "filename": "mm_slot_image.bin",
+    })
+    assert res.status_code == 200
+    n_saved = res.body["n_saved"]
+    n_written = res.body["n_written"]
+    assert n_saved > 0
+    assert n_written > 0
+
+    res = server.make_request("POST", "/slots/0?action=restore", data={
+        "filename": "mm_slot_image.bin",
+    })
+    assert res.status_code == 200
+    assert res.body["n_restored"] == n_saved
+    assert res.body["n_read"] == n_written
+
+    # a different image must not reuse the restored image tokens; only the
+    # text prefix before the image is common
+    res = server.make_request("POST", "/completions", data={
+        "temperature": 0.0,
+        "top_k": 1,
+        "id_slot": 0,
+        "cache_prompt": True,
+        "prompt": {
+            "prompt_string": "What is this: <__media__>\n",
+            "multimodal_data": [_get_img_base64(IMG_URL_TRUCK)],
+        },
+    })
+    assert res.status_code == 200
+    cache_n = res.body["timings"]["cache_n"]
+    assert cache_n < 16
+    assert res.body["timings"]["prompt_n"] == prompt_n_full - cache_n
+
+    # restore again and resend the same image: the image tokens must be
+    # reused and greedy sampling must reproduce the original content
+    res = server.make_request("POST", "/slots/0?action=restore", data={
+        "filename": "mm_slot_image.bin",
+    })
+    assert res.status_code == 200
+    assert res.body["n_restored"] == n_saved
+
+    res = server.make_request("POST", "/completions", data={
+        "temperature": 0.0,
+        "top_k": 1,
+        "id_slot": 0,
+        "cache_prompt": True,
+        "prompt": prompt_cat,
+    })
+    assert res.status_code == 200
+    assert res.body["timings"]["cache_n"] == prompt_n_full - 1
+    assert res.body["timings"]["prompt_n"] == 1
+    assert res.body["content"] == content_cat
+
+
+def test_slot_save_restore_with_two_images(mmproj_server):
+    server = mmproj_server
+    server.swa_full = True
+    server.n_ctx = 2048  # two images need more than the default 512 per slot
+    server.start()
+
+    prompt = {
+        "prompt_string": "A: <__media__> B: <__media__>\n",
+        "multimodal_data": [_get_img_base64(IMG_URL_CAT), _get_img_base64(IMG_URL_TRUCK)],
+    }
+    res = server.make_request("POST", "/completions", data={
+        "temperature": 0.0,
+        "top_k": 1,
+        "id_slot": 1,
+        "cache_prompt": True,
+        "prompt": prompt,
+    })
+    assert res.status_code == 200
+    content = res.body["content"]
+    prompt_n_full = res.body["timings"]["prompt_n"]
+    assert prompt_n_full > 64
+
+    res = server.make_request("POST", "/slots/1?action=save", data={
+        "filename": "mm_slot_two_images.bin",
+    })
+    assert res.status_code == 200
+    n_saved = res.body["n_saved"]
+
+    res = server.make_request("POST", "/slots/0?action=restore", data={
+        "filename": "mm_slot_two_images.bin",
+    })
+    assert res.status_code == 200
+    assert res.body["n_restored"] == n_saved
+
+    res = server.make_request("POST", "/completions", data={
+        "temperature": 0.0,
+        "top_k": 1,
+        "id_slot": 0,
+        "cache_prompt": True,
+        "prompt": prompt,
+    })
+    assert res.status_code == 200
+    assert res.body["timings"]["cache_n"] == prompt_n_full - 1
+    assert res.body["timings"]["prompt_n"] == 1
+    assert res.body["content"] == content
+
+
+def test_slot_save_restore_with_image_across_restart(mmproj_server):
+    server = mmproj_server
+    server.swa_full = True
+    server.start()
+
+    prompt_cat = {
+        "prompt_string": "What is this: <__media__>\n",
+        "multimodal_data": [_get_img_base64(IMG_URL_CAT)],
+    }
+    res = server.make_request("POST", "/completions", data={
+        "temperature": 0.0,
+        "top_k": 1,
+        "id_slot": 0,
+        "cache_prompt": True,
+        "prompt": prompt_cat,
+    })
+    assert res.status_code == 200
+    content = res.body["content"]
+    prompt_n_full = res.body["timings"]["prompt_n"]
+
+    res = server.make_request("POST", "/slots/0?action=save", data={
+        "filename": "mm_slot_restart.bin",
+    })
+    assert res.status_code == 200
+    n_saved = res.body["n_saved"]
+
+    # restart the server with the same model and mmproj: the saved file must
+    # restore in the new process and the image KV must be reused
+    server.stop()
+    server.start()
+
+    res = server.make_request("POST", "/slots/0?action=restore", data={
+        "filename": "mm_slot_restart.bin",
+    })
+    assert res.status_code == 200
+    assert res.body["n_restored"] == n_saved
+
+    res = server.make_request("POST", "/completions", data={
+        "temperature": 0.0,
+        "top_k": 1,
+        "id_slot": 0,
+        "cache_prompt": True,
+        "prompt": prompt_cat,
+    })
+    assert res.status_code == 200
+    assert res.body["timings"]["cache_n"] == prompt_n_full - 1
+    assert res.body["timings"]["prompt_n"] == 1
+    assert res.body["content"] == content
+
+
+def test_slot_restore_media_file_without_mmproj(mmproj_server):
     server = mmproj_server
     server.start()
 
-    # Process a prompt that actually contains an image on slot 1.
+    res = server.make_request("POST", "/completions", data={
+        "temperature": 0.0,
+        "top_k": 1,
+        "id_slot": 0,
+        "cache_prompt": True,
+        "prompt": {
+            "prompt_string": "What is this: <__media__>\n",
+            "multimodal_data": [_get_img_base64(IMG_URL_CAT)],
+        },
+    })
+    assert res.status_code == 200
+
+    res = server.make_request("POST", "/slots/0?action=save", data={
+        "filename": "mm_slot_no_mmproj.bin",
+    })
+    assert res.status_code == 200
+
+    # restart the same model without the mmproj: restoring the media file must
+    # fail gracefully and leave the slot usable
+    server.stop()
+    server.no_mmproj = True
+    server.start()
+
+    res = server.make_request("POST", "/slots/0?action=restore", data={
+        "filename": "mm_slot_no_mmproj.bin",
+    })
+    assert res.status_code == 400
+    assert "Cannot restore image tokens without an mmproj" in res.body["error"]["message"]
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": "The quick brown fox",
+        "id_slot": 0,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+
+
+def test_slot_restore_corrupt_media_trailer(mmproj_server):
+    server = mmproj_server
+    server.start()
+
     res = server.make_request("POST", "/completions", data={
         "temperature": 0.0,
         "top_k": 1,
@@ -183,18 +403,98 @@ def test_slot_save_rejected_when_slot_holds_image(mmproj_server):
         "cache_prompt": True,
         "prompt": {
             "prompt_string": "What is this: <__media__>\n",
-            "multimodal_data": [ _get_img_base64(IMG_URL_CAT) ],
+            "multimodal_data": [_get_img_base64(IMG_URL_CAT)],
         },
     })
     assert res.status_code == 200
 
-    # Saving a slot that holds image tokens must be rejected (HTTP 501,
-    # not_supported_error).
     res = server.make_request("POST", "/slots/1?action=save", data={
-        "filename": "mm_slot_image.bin",
+        "filename": "mm_slot_corrupt.bin",
     })
-    assert res.status_code != 200
-    assert res.body["error"]["type"] == "not_supported_error"
+    assert res.status_code == 200
+
+    # truncate the media trailer by one byte
+    path = os.path.join("tmp", "mm_slot_corrupt.bin")
+    with open(path, "r+b") as f:
+        f.seek(0, os.SEEK_END)
+        f.truncate(f.tell() - 1)
+
+    res = server.make_request("POST", "/slots/0?action=restore", data={
+        "filename": "mm_slot_corrupt.bin",
+    })
+    assert res.status_code == 400
+    assert "Unexpected end of server tokens state" in res.body["error"]["message"]
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": "The quick brown fox",
+        "id_slot": 0,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
+
+
+def test_slot_restore_media_trailer_without_image_id(mmproj_server):
+    server = mmproj_server
+    server.start()
+
+    res = server.make_request("POST", "/completions", data={
+        "temperature": 0.0,
+        "top_k": 1,
+        "id_slot": 1,
+        "cache_prompt": True,
+        "prompt": {
+            "prompt_string": "What is this: <__media__>\n",
+            "multimodal_data": [_get_img_base64(IMG_URL_CAT)],
+        },
+    })
+    assert res.status_code == 200
+
+    res = server.make_request("POST", "/slots/1?action=save", data={
+        "filename": "mm_slot_empty_image_id.bin",
+    })
+    assert res.status_code == 200
+
+    path = os.path.join("tmp", "mm_slot_empty_image_id.bin")
+    with open(path, "rb") as f:
+        data = bytearray(f.read())
+
+    trailer_start = data.rfind(struct.pack("=I", 0x53544D4D))
+    assert trailer_start >= 0
+    # trailer: magic(4) version(4) n_media(4), then per image: start_idx(4) chunk_size(4) chunk blob
+    trailer_header_size = 12  # magic, version, n_media
+    start_idx_field_size = 4
+    chunk_size_field_size = 4
+    # chunk blob (mtmd serialization v1): version(8) type(4) n_text_tokens(8) has_image(1)
+    #   nx(4) ny(4) pos(4) image_idx(4) n_temporal_merge(4) id_size(8) id bytes ...
+    blob_header_size = 41  # version, type, n_text_tokens, has_image, nx, ny, pos, image_idx, n_temporal_merge
+    id_size_field_size = 8
+
+    chunk_size_offset = trailer_start + trailer_header_size + start_idx_field_size
+    blob_start = chunk_size_offset + chunk_size_field_size
+    id_size_offset = blob_start + blob_header_size
+    id_size = struct.unpack_from("=Q", data, id_size_offset)[0]
+    assert id_size > 0
+    struct.pack_into("=Q", data, id_size_offset, 0)
+    id_offset = id_size_offset + id_size_field_size
+    del data[id_offset:id_offset + id_size]
+    chunk_size = struct.unpack_from("=I", data, chunk_size_offset)[0]
+    struct.pack_into("=I", data, chunk_size_offset, chunk_size - id_size)
+
+    with open(path, "wb") as f:
+        f.write(data)
+
+    res = server.make_request("POST", "/slots/0?action=restore", data={
+        "filename": "mm_slot_empty_image_id.bin",
+    })
+    assert res.status_code == 400
+    assert "Image ID is missing in server tokens state" in res.body["error"]["message"]
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": "The quick brown fox",
+        "id_slot": 0,
+        "cache_prompt": True,
+    })
+    assert res.status_code == 200
 
 
 def test_slot_erase_text_only_on_multimodal(mmproj_server):

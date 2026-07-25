@@ -203,8 +203,12 @@ public:
 
     // for compatibility with speculative decoding, ctx shift, slot save/load
     const llama_tokens & get_tokens() const;
+    const llama_tokens & get_tokens_for_save() const;
 
     llama_tokens get_text_tokens() const;
+
+    std::vector<uint8_t> serialize_media_state() const;
+    static server_tokens deserialize_media_state(const llama_tokens & tokens, bool has_mtmd, const uint8_t * data, size_t size);
 
     // for compatibility with speculative decoding
     void set_token(llama_pos pos, llama_token id);
