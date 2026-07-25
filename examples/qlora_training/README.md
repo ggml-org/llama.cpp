@@ -28,9 +28,25 @@ cmake --build build -j$(nproc)
 # Optional: compile for a specific AMD GPU architecture:
 GPU_TARGETS=gfx1100 ./ROCm-build.sh
 
+# Radeon 680M (gfx1035, unsupported test configuration):
+# ROCm's packaged rocBLAS kernels target gfx1030, so use a separate build.
+BUILD_DIR=build-rocm-gfx1030 GPU_TARGETS=gfx1030 ./ROCm-build.sh
+
 # Incremental ROCm rebuild:
 cmake --build build-rocm --target llama-finetune-qlora -j$(nproc)
 ```
+
+Run the Radeon 680M compatibility build with:
+
+```bash
+HSA_OVERRIDE_GFX_VERSION=10.3.0 \
+GGML_CUDA_DISABLE_GRAPHS=1 \
+./build-rocm-gfx1030/bin/llama-finetune-qlora ...
+```
+
+The Radeon 680M is not in AMD's supported ROCm GPU matrix. This compatibility
+mode is intended for local testing and uses the packaged gfx1030 rocBLAS
+kernels. Do not combine gfx1030 and gfx1035 objects in one build directory.
 
 The ROCm build supports the same SFT, reward-weighted SFT, GRPO, resume,
 checkpointing, LoRA QAT, partial offload, and optimizer modes as the CUDA build.

@@ -987,7 +987,12 @@ void ggml_opt_alloc(ggml_opt_context_t opt_ctx, bool backward) {
             graph = opt_ctx->gb_grad;
         } break;
         case GGML_OPT_BUILD_TYPE_OPT: {
-            graph = ggml_opt_optimizer_state_type(opt_ctx->optimizer) == GGML_TYPE_COUNT ? opt_ctx->gb_opt : opt_ctx->gb_grad;
+            const bool has_device_q8_step =
+                opt_ctx->optimizer == GGML_OPT_OPTIMIZER_TYPE_ADAMW_Q8_0 &&
+                !opt_ctx->bufs_momenta.empty();
+            graph = ggml_opt_optimizer_state_type(opt_ctx->optimizer) == GGML_TYPE_COUNT || has_device_q8_step
+                ? opt_ctx->gb_opt
+                : opt_ctx->gb_grad;
         } break;
     }
     GGML_ASSERT(graph);
@@ -1073,7 +1078,7 @@ void ggml_opt_eval(ggml_opt_context_t opt_ctx, ggml_opt_result_t result) {
         const ggml_opt_optimizer_params & opt_pars = opt_ctx->get_opt_pars(opt_ctx->get_opt_pars_ud);
         ggml_opt_step_adamw_quantized(opt_ctx, opt_pars);
     }
-    opt_ctx->iter += opt_ctx->allocated_graph == opt_ctx->gb_opt;
+    opt_ctx->iter += do_optimizer_step;
     opt_ctx->opt_i = (opt_ctx->opt_i + 1) % opt_ctx->opt_period;
 
     if (!opt_ctx->static_graphs) {
