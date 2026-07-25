@@ -41,6 +41,10 @@ struct common_subproc {
     FILE * stdout_file();
     FILE * stderr_file();
 
+    // close stdin and detach it from the process, so a later join()/destroy() won't double-close it;
+    // use this after writing all input to signal EOF to the child while it's still running
+    void close_stdin();
+
     void terminate();
 
     // wait for the process to exit, release the underlying handle and return its exit code

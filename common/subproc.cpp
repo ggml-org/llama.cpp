@@ -1,5 +1,3 @@
-#include "common.h"
-
 #include "subproc.h"
 
 bool common_subproc::is_supported() {
@@ -75,6 +73,13 @@ FILE * common_subproc::stderr_file() {
     return is_created ? subprocess_stderr(&proc) : nullptr;
 }
 
+void common_subproc::close_stdin() {
+    if (is_created && proc.stdin_file) {
+        fclose(proc.stdin_file);
+        proc.stdin_file = nullptr;
+    }
+}
+
 void common_subproc::terminate() {
     if (has_handle()) {
         subprocess_terminate(&proc);
@@ -100,8 +105,8 @@ bool common_subproc::create(
         int,
         const std::vector<std::string> &,
         const char *) {
-    GGML_UNUSED(proc);
-    GGML_UNUSED(is_created);
+    (void)(proc);
+    (void)(is_created);
     return false;
 }
 
@@ -123,6 +128,9 @@ FILE * common_subproc::stdout_file() {
 
 FILE * common_subproc::stderr_file() {
     return nullptr;
+}
+
+void common_subproc::close_stdin() {
 }
 
 void common_subproc::terminate() {
