@@ -634,10 +634,14 @@ ggml_metal_rsets_t ggml_metal_rsets_init(ggml_metal_device_t dev) {
 #endif
     });
 
-    // workaround for residency set memory not being released if no GPU operation occurs
-    // https://developer.apple.com/forums/thread/839089
-    // https://github.com/ggml-org/llama.cpp/issues/25937
-    ggml_metal_dummy_work(dev);
+#if defined(GGML_METAL_HAS_RESIDENCY_SETS)
+    if (@available(macOS 15.0, iOS 18.0, tvOS 18.0, visionOS 2.0, *)) {
+        // workaround for residency set memory not being released if no GPU operation occurs
+        // https://developer.apple.com/forums/thread/839089
+        // https://github.com/ggml-org/llama.cpp/issues/25937
+        ggml_metal_dummy_work(dev);
+    }
+#endif
 
     return res;
 }
