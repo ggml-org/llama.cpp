@@ -207,14 +207,14 @@
 ```bash
 # Normal smoke test (unset inputs, non-strict: PPL/scaling should SKIP)
 $ LLAMA=/nonexistent bash scripts/turbo-quality-gate.sh
-FAIL | 0.1 correctness (LLAMA_TEST_TURBO_FA=0) (reason=binary missing at /home/svnbjrn/llama-p324-quality-gate-fixes/build-port/bin/test-sycl-turbo-correctness, log=-)
+FAIL | 0.1 correctness (LLAMA_TEST_TURBO_FA=0) (reason=binary missing at <build>/bin/test-sycl-turbo-correctness, log=-)
 SKIP | 1 perplexity (turbo3 vs q8_0, -fa on) (MODEL unset (non-strict))
 SKIP | 2 context-scaling ratio (MODEL or WIKI unset (non-strict))
 
 # Missing-binary guard test (dummy inputs + missing LLAMA: should FAIL)
 $ touch /tmp/dummy_model /tmp/dummy_wiki
 $ LLAMA=/nonexistent MODEL=/tmp/dummy_model WIKI=/tmp/dummy_wiki bash scripts/turbo-quality-gate.sh
-FAIL | 0.1 correctness (LLAMA_TEST_TURBO_FA=0) (reason=binary missing at /home/svnbjrn/llama-p324-quality-gate-fixes/build-port/bin/test-sycl-turbo-correctness, log=-)
+FAIL | 0.1 correctness (LLAMA_TEST_TURBO_FA=0) (reason=binary missing at <build>/bin/test-sycl-turbo-correctness, log=-)
 FAIL | 1 perplexity (turbo3 vs q8_0, -fa on) (reason=binary missing at /nonexistent/llama-perplexity, log=-)
 FAIL | 2 context-scaling ratio (reason=binary missing at /nonexistent/llama-perplexity, log=-)
 
