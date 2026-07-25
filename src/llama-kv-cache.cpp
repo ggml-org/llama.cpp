@@ -1777,20 +1777,20 @@ void llama_kv_cache::set_input_kq_mask_sparse(ggml_tensor * dst, const llama_uba
     const int64_t n_strm   = dst->ne[3];
 
     GGML_ASSERT(n_head_t == (int64_t) n_head_val);
-    GGML_ASSERT(n_strm == (int64_t) n_stream);
 
     const uint32_t total_blocks     = hp.n_ctx_train / block_size;
     const uint32_t regular_end      = total_blocks - (total_blocks % num_local_blocks);
 
+    // n_strm is the number of streams in the current ubatch (dst->ne[3]); map each
+    // token to its cache stream via seq_to_stream[seq_id], as in set_input_kq_mask
     for (int64_t s = 0; s < n_strm; ++s) {
-        const auto & cells = v_cells[seq_to_stream.empty() ? 0 : s];
-
         for (int64_t it = 0; it < n_tps; ++it) {
             const uint32_t i_token = (uint32_t)(s * n_tps + it);
             if (i_token >= ubatch->n_tokens) break;
 
             const llama_pos    p1     = ubatch->pos[i_token];
             const llama_seq_id seq_id = ubatch->seq_id[i_token][0];
+            const auto & cells = v_cells[seq_to_stream[seq_id]];
             const uint32_t     q_blk  = (uint32_t) p1 / block_size;
             const uint32_t     q_win  = q_blk / num_local_blocks;
 
