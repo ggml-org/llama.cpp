@@ -208,12 +208,6 @@ stage_ppl() {
   local log_q="$STAGE_LOG_DIR/ppl-q8.log"
   local rc_t rc_q ppl_limit
 
-  if [ ! -x "$LLAMA/llama-perplexity" ]; then
-    FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: llama-perplexity binary missing or not executable at $LLAMA/llama-perplexity"
-    FAIL_COUNT=$((FAIL_COUNT+1))
-    emit_summary "$stage_label" "FAIL" "-" "binary missing at $LLAMA/llama-perplexity"
-    return
-  fi
 
   if [ -z "$MODEL" ] || [ ! -f "$MODEL" ]; then
     if [ "$STRICT" = "1" ]; then
@@ -236,6 +230,12 @@ stage_ppl() {
       SKIP_COUNT=$((SKIP_COUNT+1))
       emit_summary "$stage_label" "SKIP" "-" "WIKI unset (non-strict; no auto-download by design)"
     fi
+    return
+  fi
+  if [ ! -x "$LLAMA/llama-perplexity" ]; then
+    FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: llama-perplexity binary missing or not executable at $LLAMA/llama-perplexity"
+    FAIL_COUNT=$((FAIL_COUNT+1))
+    emit_summary "$stage_label" "FAIL" "-" "binary missing at $LLAMA/llama-perplexity"
     return
   fi
 
@@ -291,12 +291,6 @@ stage_scaling() {
   local log_q="$STAGE_LOG_DIR/scaling-q8.log"
   local rc_t rc_q ratio
 
-  if [ ! -x "$LLAMA/llama-perplexity" ]; then
-    FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: llama-perplexity binary missing or not executable at $LLAMA/llama-perplexity"
-    FAIL_COUNT=$((FAIL_COUNT+1))
-    emit_summary "$stage_label" "FAIL" "-" "binary missing at $LLAMA/llama-perplexity"
-    return
-  fi
 
   if [ -z "$MODEL" ] || [ ! -f "$MODEL" ] || [ -z "$WIKI" ] || [ ! -f "$WIKI" ]; then
     if [ "$STRICT" = "1" ]; then
@@ -307,6 +301,12 @@ stage_scaling() {
       SKIP_COUNT=$((SKIP_COUNT+1))
       emit_summary "$stage_label" "SKIP" "-" "MODEL or WIKI unset (non-strict)"
     fi
+    return
+  fi
+  if [ ! -x "$LLAMA/llama-perplexity" ]; then
+    FAIL_MESSAGES="$FAIL_MESSAGES\n  - ${stage_label}: llama-perplexity binary missing or not executable at $LLAMA/llama-perplexity"
+    FAIL_COUNT=$((FAIL_COUNT+1))
+    emit_summary "$stage_label" "FAIL" "-" "binary missing at $LLAMA/llama-perplexity"
     return
   fi
 
