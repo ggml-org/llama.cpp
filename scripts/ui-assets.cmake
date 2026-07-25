@@ -288,6 +288,16 @@ function(emit_files dist_dir)
         RESULT_VARIABLE rc
     )
     if(NOT rc EQUAL 0)
+        if(NOT BUILD_UI AND NOT HF_ENABLED)
+            message(WARNING "UI: could not embed assets from ${dist_dir}; UI provisioning is disabled, building without an embedded UI")
+            execute_process(
+                COMMAND "${LLAMA_UI_EMBED}" "${UI_CPP}" "${UI_H}"
+                RESULT_VARIABLE rc
+            )
+            if(rc EQUAL 0)
+                return()
+            endif()
+        endif()
         message(FATAL_ERROR "UI: llama-ui-embed failed (${rc})")
     endif()
 endfunction()
