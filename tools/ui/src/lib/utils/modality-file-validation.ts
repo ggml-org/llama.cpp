@@ -161,9 +161,3 @@ export function generateModalityErrorMessage(
 
 	return message;
 }
-
-/**
- * Generate file input accept string based on model modalities
- * @param capabilities - The modality capabilities to check against
- * @returns Accept string for HTML file input element
- */

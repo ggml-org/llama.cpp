@@ -7,6 +7,9 @@ export const EXPORT_CONV_NAME_SUFFIX_MAX_LENGTH = 20;
 // Characters to keep in the ISO timestamp. 19 keeps 2026-01-01T00:00:00
 export const ISO_TIMESTAMP_SLICE_LENGTH = 19;
 
+// Producer marker carried by the session record of a JSONL export
+export const SESSION_HARNESS = 'llama.app';
+
 // Replacements for making the conversation title filename-friendly
 export const NON_ALPHANUMERIC_REGEX = /[^a-z0-9]/gi;
 export const EXPORT_CONV_NONALNUM_REPLACEMENT = '_';

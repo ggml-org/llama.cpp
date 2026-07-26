@@ -27,6 +27,8 @@ export {
 	ReasoningFormat
 } from './chat.enums';
 
+export { SessionRecordType } from './conversation-import.enums';
+
 export { ReasoningEffort } from './reasoning-effort.enums';
 
 export {
