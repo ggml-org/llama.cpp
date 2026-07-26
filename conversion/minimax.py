@@ -58,6 +58,11 @@ class MiniMaxM2Model(TextModel):
 class MiniMaxM3Model(MiniMaxM2Model):
     model_arch = gguf.MODEL_ARCH.MINIMAXM3
 
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        if ".indexer." in new_name:
+            return gguf.GGMLQuantizationType.F32
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
 
