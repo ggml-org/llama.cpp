@@ -54,6 +54,7 @@
 #include "htp/flash-attn-ops.h"
 #include "htp/unary-ops.h"
 #include "htp/get-rows-ops.h"
+#include "htp/set-rows-ops.h"
 #include "htp_iface.h"
 #include "htp-drv.h"
 
@@ -245,6 +246,14 @@ static void ggml_hexagon_precompute_get_rows_params(
     const struct ggml_tensor * src1,
     const struct ggml_tensor * dst,
     struct htp_get_rows_kernel_params * kparams
+);
+
+static void ggml_hexagon_precompute_set_rows_params(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * src0,
+    const struct ggml_tensor * src1,
+    const struct ggml_tensor * dst,
+    struct htp_set_rows_kernel_params * kparams
 );
 
 static void ggml_hexagon_precompute_fused_qkv_params(
@@ -2785,6 +2794,31 @@ static void ggml_hexagon_precompute_get_rows_params(
     kparams->vtcm_size = vtcm_layout.total_bytes;
 }
 
+static void ggml_hexagon_precompute_set_rows_params(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * src0, // values
+    const struct ggml_tensor * src1, // indices
+    const struct ggml_tensor * dst,  // destination
+    struct htp_set_rows_kernel_params * kparams
+) {
+    memset(kparams, 0, sizeof(*kparams));
+
+    const uint32_t nr = src0->ne[1];
+
+    kparams->n_threads = (std::min)((uint32_t)sess->n_threads, nr);
+    kparams->tasks_per_thread = (nr + kparams->n_threads - 1) / kparams->n_threads;
+    kparams->total_tasks = nr;
+
+    kparams->div_ne11 = init_fastdiv_values(src1->ne[1]);
+    kparams->div_ne12 = init_fastdiv_values(src1->ne[2]);
+    kparams->div_tasks_per_thread = init_fastdiv_values(kparams->tasks_per_thread);
+    kparams->div_ne02 = init_fastdiv_values(src0->ne[2]);
+
+    struct htp_set_rows_vtcm_layout vtcm_layout;
+    htp_set_rows_vtcm_layout_build(&vtcm_layout, dst->type, src0->ne[0], kparams->n_threads);
+    kparams->vtcm_size = vtcm_layout.total_bytes;
+}
+
 static void ggml_hexagon_precompute_fused_qkv_params(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * src0, // Wk
@@ -3267,6 +3301,10 @@ static bool ggml_hexagon_supported_set_rows(const struct ggml_hexagon_session * 
     const struct ggml_tensor * src1 = op->src[1]; // indices
     const struct ggml_tensor * dst  = op->src[2] ? op->src[2] : op;
 
+    if (src0->ne[0] < 32) {
+        return false;
+    }
+
     if (src0->type != GGML_TYPE_F32) {
         return false;
     }
@@ -3275,7 +3313,7 @@ static bool ggml_hexagon_supported_set_rows(const struct ggml_hexagon_session * 
         return false;
     }
 
-    if (dst->type != GGML_TYPE_F16 && dst->type != GGML_TYPE_Q8_0) {
+    if (dst->type != GGML_TYPE_F32 && dst->type != GGML_TYPE_F16 && dst->type != GGML_TYPE_Q8_0) {
         return false;
     }
 
@@ -3288,6 +3326,10 @@ static bool ggml_hexagon_supported_get_rows(const struct ggml_hexagon_session * 
     const struct ggml_tensor * src0 = op->src[0]; // values
     const struct ggml_tensor * src1 = op->src[1]; // indices
     const struct ggml_tensor * dst  = op;
+
+    if (src0->ne[0] < 32) {
+        return false;
+    }
 
     if (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16 && src0->type != GGML_TYPE_Q8_0) {
         return false;
@@ -3846,6 +3888,11 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
                 ggml_hexagon_precompute_get_rows_params(sess,
                     node.node->src[0], node.node->src[1], node.dst(),
                     (struct htp_get_rows_kernel_params *)node.kernel_params
+                );
+            } else if (node.opcode == HTP_OP_SET_ROWS) {
+                ggml_hexagon_precompute_set_rows_params(sess,
+                    node.node->src[0], node.node->src[1], node.dst(),
+                    (struct htp_set_rows_kernel_params *)node.kernel_params
                 );
             }
             computed_nodes.push_back(std::move(node));
