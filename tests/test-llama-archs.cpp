@@ -419,9 +419,9 @@ static bool arch_supported(const llm_arch arch) {
         return false;
     }
 
-    // FIXME: DeepSeek32 hits a scheduler/view-backed-output issue with WebGPU on CI.
+    // FIXME: these hit scheduler/view-backed-output issues with WebGPU on CI.
 #ifdef GGML_USE_WEBGPU
-    if (arch == LLM_ARCH_DEEPSEEK32) {
+    if (arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_GLM_DSA) {
         return false;
     }
 #endif // GGML_USE_WEBGPU
