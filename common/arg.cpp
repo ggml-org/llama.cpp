@@ -793,9 +793,20 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
                 return seen_args.count(name);
             });
         };
-        if (has_arg({"-lm", "--load-mode"}) &&
-            has_arg({"--mlock", "--mmap", "--no-mmap", "-dio", "--direct-io", "-ndio", "--no-direct-io"})) {
+        const bool has_load_mode = has_arg({"-lm", "--load-mode"});
+        const bool has_legacy_load_mode_arg =
+            has_arg({"--mlock", "--mmap", "--no-mmap", "-dio", "--direct-io", "-ndio", "--no-direct-io"});
+
+        if (has_load_mode && has_legacy_load_mode_arg) {
             LOG_WRN("DEPRECATED: `--load-mode` and `--mlock`/`--mmap`/`--direct-io` should not be combined; only the last flag on the command line will take effect\n");
+        }
+
+        if (!has_load_mode &&
+            has_arg({"--mlock"}) &&
+            has_arg({"--no-mmap"}) &&
+            !has_arg({"--mmap", "-dio", "--direct-io"})) {
+            LOG_WRN("DEPRECATED: --mlock with --no-mmap is deprecated. use --load-mode mlock-no-mmap instead\n");
+            params.load_mode = LLAMA_LOAD_MODE_MLOCK_NO_MMAP;
         }
     };
 
@@ -2519,7 +2530,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--no-mmap"},
         "DEPRECATED in favor of `--load-mode`: whether to memory-map model. (if mmap disabled, slower load but may reduce pageouts if not using mlock)",
         [](common_params & params, bool value) {
-            LOG_WRN("DEPRECATED: --mmap and --no-mmap are deprecated. use --load-mode mmap instead\n");
+            LOG_WRN("DEPRECATED: --mmap and --no-mmap are deprecated. use --load-mode %s instead\n", value ? "mmap" : "none");
             params.load_mode = value ? LLAMA_LOAD_MODE_MMAP : LLAMA_LOAD_MODE_NONE;
         }
     ).set_env("LLAMA_ARG_MMAP"));
@@ -2538,11 +2549,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "- none: no special loading mode\n"
         "- mmap: memory-map model (if mmap disabled, slower load but may reduce pageouts if not using mlock)\n"
         "- mlock: mmap + force system to keep model in RAM rather than swapping or compressing\n"
+        "- mlock-no-mmap: load into host buffers and force them to stay in RAM\n"
         "- dio: use DirectIO if available\n",
         [](common_params & params, const std::string & value) {
             /**/ if (value == "none")  { params.load_mode = LLAMA_LOAD_MODE_NONE;      }
             else if (value == "mmap")  { params.load_mode = LLAMA_LOAD_MODE_MMAP;      }
             else if (value == "mlock") { params.load_mode = LLAMA_LOAD_MODE_MLOCK;     }
+            else if (value == "mlock-no-mmap") { params.load_mode = LLAMA_LOAD_MODE_MLOCK_NO_MMAP; }
             else if (value == "dio")   { params.load_mode = LLAMA_LOAD_MODE_DIRECT_IO; }
             else { throw std::invalid_argument("invalid value"); }
         }
