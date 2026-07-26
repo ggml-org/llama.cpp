@@ -1602,6 +1602,20 @@ json server_task_result_slot_erase::to_json() {
 }
 
 //
+// server_task_result_slot_clone
+//
+json server_task_result_slot_clone::to_json() {
+    return json {
+        { "id_slot",        id_slot },
+        { "id_slot_target", id_slot_target },
+        { "n_cloned",       n_tokens },
+        { "timings", {
+            { "clone_ms", t_ms }
+        }},
+    };
+}
+
+//
 // server_task_result_get_lora
 //
 
