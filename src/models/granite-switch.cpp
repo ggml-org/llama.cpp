@@ -53,7 +53,9 @@ void llama_model_granite_switch::load_arch_hparams(llama_model_loader & ml) {
 
     // extra single-head attention layer at the END (index n_real) holds the router
     // K/V. reusing n_layer_nextn keeps n_layer() == n_real, so the regular layers
-    // keep their indices and the KV cache shift/defrag skips the router layer
+    // keep their indices and the KV cache shift/defrag skips the router layer.
+    // n_layer_nextn is repurposed here (no MTP): it leaks as 1 into the
+    // llama_model_n_layer_nextn() getter and a re-saved nextn_predict_layers
     const uint32_t n_real = hparams.n_layer();
     if (n_real >= LLAMA_MAX_LAYERS) {
         throw std::runtime_error(format("graniteswitch: block count %u exceeds LLAMA_MAX_LAYERS", n_real));
