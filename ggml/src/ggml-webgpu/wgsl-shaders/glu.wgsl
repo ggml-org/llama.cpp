@@ -93,6 +93,26 @@ struct Params {
     limit: f32,
 }
 
+#ifdef SRC_OVERLAP
+@group(0) @binding(0)
+var<storage, read_write> merged_src: array<DataType>;
+
+@group(0) @binding(1)
+var<storage, read_write> dst: array<DataType>;
+
+@group(0) @binding(2)
+var<uniform> params: Params;
+
+fn a_value(base: u32) -> DataType {
+    return merged_src[base];
+}
+
+fn b_value(base: u32) -> DataType {
+    return merged_src[base];
+}
+
+#else
+
 @group(0) @binding(0)
 var<storage, read_write> src0: array<DataType>;
 
@@ -131,6 +151,7 @@ fn b_value(base: u32) -> DataType {
     return src1[base];
 }
 
+#endif
 #endif
 
 @compute @workgroup_size(WG_SIZE)
