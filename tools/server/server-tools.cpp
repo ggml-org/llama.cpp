@@ -597,9 +597,11 @@ static constexpr int    SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_TIMEOUT     = 60;    
 struct server_tool_exec_shell_command : server_tool {
 
 #ifdef _WIN32
-    static constexpr const char *shell_command_delims = ";%<>*$&!|";
+    // Asterisks seem safe, since they can not begin the command string (unless whitelisted).
+    static constexpr const char *shell_command_delims = ";%<>$&!|";
 #else
-    static constexpr const char *shell_command_delims = ";`<>*$()&!|";
+    // Asterisks and exclamation marks seem safe, since they can not begin the command string (unless whitelisted).
+    static constexpr const char *shell_command_delims = ";`<>$()&|";
 #endif
 
     server_tool_exec_shell_command() {
