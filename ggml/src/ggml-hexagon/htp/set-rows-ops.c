@@ -97,11 +97,8 @@ static void set_rows_thread_##TYPE_NAME##_##IDX_TYPE(unsigned int nth, unsigned 
                        vtcm_layout->src0_spad_half_size, src0_row_size, src0_row_size, 1);                       \
     }                                                                                                            \
     for (uint32_t step = 0; step < total_steps; ++step) {                                                        \
-        const uint32_t spad_idx = step & 1;                                                                      \
-        void * dst_spad = vtcm_dst  + spad_idx * vtcm_layout->dst_spad_half_size;                                \
-        void * src_spad = vtcm_src0 + spad_idx * vtcm_layout->src0_spad_half_size;                               \
-        dma_queue_pop(dma_queue);                                                                                \
-        dma_queue_pop(dma_queue);                                                                                \
+        void * dst_spad = (void *) dma_queue_pop(dma_queue).src;                                                 \
+        void * src_spad = (void *) dma_queue_pop(dma_queue).dst;                                                 \
         uint32_t i_step = fastmodulo(step, nrows_per_thread, &kparams->div_tasks_per_thread);                    \
         uint32_t tmp = fastdiv(step, &kparams->div_tasks_per_thread);                                            \
         uint32_t i02 = fastmodulo(tmp, ne02, &kparams->div_ne02);                                                \
