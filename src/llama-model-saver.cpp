@@ -214,8 +214,8 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,        hparams.n_ff_exp);
     add_kv(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_shexp);
     add_kv(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, hparams.n_ff_chexp);
-    add_kv(LLM_KV_SWIGLU_CLAMP_EXP,                  hparams.swiglu_clamp_exp);
-    add_kv(LLM_KV_SWIGLU_CLAMP_SHEXP,                hparams.swiglu_clamp_shexp);
+    add_kv(LLM_KV_SWIGLU_CLAMP_EXP,                  hparams.swiglu_clamp_exp, true);
+    add_kv(LLM_KV_SWIGLU_CLAMP_SHEXP,                hparams.swiglu_clamp_shexp, true);
     add_kv(LLM_KV_USE_PARALLEL_RESIDUAL,             hparams.use_par_res);
     // add_kv(LLM_KV_TENSOR_DATA_LAYOUT,                ???);
     add_kv(LLM_KV_EXPERT_COUNT,                      hparams.n_expert);
@@ -283,6 +283,17 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,           hparams.indexer_top_k);
     add_kv(LLM_KV_ATTENTION_INDEXER_TYPES,           hparams.is_indexer_full_impl, true);
     add_kv(LLM_KV_ATTENTION_RECURRENT_LAYERS,        hparams.is_recr_impl, true);
+
+    if (model->arch == LLM_ARCH_DEEPSEEK4) {
+        add_kv(LLM_KV_ATTENTION_OUTPUT_GROUP_COUNT,         hparams.dsv4_o_group_count);
+        add_kv(LLM_KV_ATTENTION_OUTPUT_LORA_RANK,           hparams.dsv4_o_lora_rank);
+        add_kv(LLM_KV_ATTENTION_COMPRESS_ROPE_FREQ_BASE,    hparams.dsv4_compress_rope_base);
+        add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS,            hparams.dsv4_compress_ratios, true);
+        add_kv(LLM_KV_HYPER_CONNECTION_COUNT,               hparams.dsv4_hc_mult);
+        add_kv(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, hparams.dsv4_hc_sinkhorn_iters);
+        add_kv(LLM_KV_HYPER_CONNECTION_EPSILON,             hparams.dsv4_hc_eps);
+        add_kv(LLM_KV_HASH_LAYER_COUNT,                     hparams.dsv4_hash_layer_count);
+    }
 
     const float rope_scaling_factor = hparams.rope_freq_scale_train == 1.0f ? 0.0f : 1.0f/hparams.rope_freq_scale_train;
 
@@ -400,6 +411,9 @@ void llama_model_saver::add_tensors_from_model() {
     add_tensor(model->output_norm_enc);
     add_tensor(model->output_s);
     add_tensor(model->output_in_s);
+    add_tensor(model->hc_head_fn);
+    add_tensor(model->hc_head_base);
+    add_tensor(model->hc_head_scale);
     add_tensor(model->cls);
     add_tensor(model->cls_b);
     add_tensor(model->cls_out);
