@@ -589,6 +589,9 @@ struct server_prompt {
 
     std::list<common_prompt_checkpoint> checkpoints;
 
+    using checkpoint_iterator       = std::list<common_prompt_checkpoint>::iterator;
+    using const_checkpoint_iterator = std::list<common_prompt_checkpoint>::const_iterator;
+
     void clear() {
         tokens.clear();
         checkpoints.clear();
@@ -597,6 +600,11 @@ struct server_prompt {
     int n_tokens() const {
         return tokens.size();
     }
+
+    checkpoint_iterator find_reusable_checkpoint(int64_t n_tokens_lcp, int64_t n_tokens_new);
+    const_checkpoint_iterator find_reusable_checkpoint(int64_t n_tokens_lcp, int64_t n_tokens_new) const;
+
+    int64_t reusable_prefix_tokens(int64_t n_tokens_lcp, int64_t n_tokens_new, bool state_exact) const;
 
     server_prompt clone() const {
         return server_prompt {
@@ -650,7 +658,14 @@ struct server_prompt_cache {
 
     server_prompt_cache_state * alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_drft);
 
-    bool load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_main, llama_context * ctx_drft, int32_t id_slot);
+    bool load(
+            server_prompt & prompt,
+            const server_tokens & tokens_new,
+            llama_context * ctx_main,
+            llama_context * ctx_drft,
+            int32_t id_slot,
+            bool state_exact,
+            int64_t min_reuse_gain);
 
     void update();
 };

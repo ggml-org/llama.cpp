@@ -10,6 +10,10 @@
 #include "speculative.h"
 #include "server-common.h"
 
+#include <algorithm>
+#include <cinttypes>
+#include <iterator>
+
 using json = nlohmann::ordered_json;
 
 //
@@ -1656,6 +1660,38 @@ size_t server_prompt_cache::n_tokens() const {
     return res;
 }
 
+server_prompt::checkpoint_iterator server_prompt::find_reusable_checkpoint(
+        int64_t n_tokens_lcp,
+        int64_t n_tokens_new) {
+    auto it = std::find_if(checkpoints.rbegin(), checkpoints.rend(), [&](const auto & checkpoint) {
+        return checkpoint.n_tokens <= n_tokens_lcp && checkpoint.n_tokens < n_tokens_new;
+    });
+
+    return it == checkpoints.rend() ? checkpoints.end() : std::prev(it.base());
+}
+
+server_prompt::const_checkpoint_iterator server_prompt::find_reusable_checkpoint(
+        int64_t n_tokens_lcp,
+        int64_t n_tokens_new) const {
+    auto it = std::find_if(checkpoints.rbegin(), checkpoints.rend(), [&](const auto & checkpoint) {
+        return checkpoint.n_tokens <= n_tokens_lcp && checkpoint.n_tokens < n_tokens_new;
+    });
+
+    return it == checkpoints.rend() ? checkpoints.end() : std::prev(it.base());
+}
+
+int64_t server_prompt::reusable_prefix_tokens(
+        int64_t n_tokens_lcp,
+        int64_t n_tokens_new,
+        bool state_exact) const {
+    if (!state_exact || (n_tokens_lcp == n_tokens() && n_tokens_lcp < n_tokens_new)) {
+        return n_tokens_lcp;
+    }
+
+    const auto it = find_reusable_checkpoint(n_tokens_lcp, n_tokens_new);
+    return it == checkpoints.end() ? 0 : it->n_tokens;
+}
+
 server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & prompt, size_t state_size_tgt, size_t state_size_dft) {
     // first check if the current state is contained fully in the cache
     for (auto it = states.begin(); it != states.end(); ++it) {
@@ -1738,13 +1774,24 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
     return &states.back();
 }
 
-bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot) {
+bool server_prompt_cache::load(
+        server_prompt & prompt,
+        const server_tokens & tokens_new,
+        llama_context * ctx_tgt,
+        llama_context * ctx_dft,
+        int32_t id_slot,
+        bool state_exact,
+        int64_t min_reuse_gain) {
     const int lcp_best = prompt.tokens.get_common_prefix(tokens_new);
 
     float f_keep_best = prompt.tokens.size() > 0 ? float(lcp_best) / prompt.tokens.size() : -1.0f; // empty slot: any cache entry wins
     float sim_best    = float(lcp_best) / tokens_new.size();
+    int64_t reuse_best = prompt.reusable_prefix_tokens(lcp_best, tokens_new.size(), state_exact);
+    const int64_t reuse_base = reuse_best;
+    const bool empty_slot = prompt.tokens.empty();
 
-    SRV_TRC(" - looking for better prompt, base f_keep = %.3f, sim = %.3f\n", f_keep_best, sim_best);
+    SRV_TRC(" - looking for better prompt, base f_keep = %.3f, sim = %.3f, reusable = %" PRId64 "\n",
+            f_keep_best, sim_best, reuse_best);
 
     auto it_best = states.end();
 
@@ -1754,22 +1801,30 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
 
         const float f_keep_cur = float(lcp_cur) / it->prompt.tokens.size();
         const float sim_cur    = float(lcp_cur) / tokens_new.size();
+        const int64_t reuse_cur = it->prompt.reusable_prefix_tokens(lcp_cur, tokens_new.size(), state_exact);
 
-        // don't trash large prompts
-        if (f_keep_cur < 0.25f) {
-            continue;
+        bool is_better = false;
+        if (state_exact) {
+            const int64_t reuse_gain = reuse_cur - reuse_base;
+
+            is_better = reuse_cur > reuse_best && (empty_slot || reuse_gain >= min_reuse_gain);
+        } else {
+            // don't trash large prompts when their state can be rolled back directly
+            is_better = f_keep_cur >= 0.25f && f_keep_best < f_keep_cur && sim_best < sim_cur;
         }
 
-        if (f_keep_best < f_keep_cur && sim_best < sim_cur) {
+        if (is_better) {
             f_keep_best = f_keep_cur;
             sim_best    = sim_cur;
+            reuse_best  = reuse_cur;
 
             it_best = it;
         }
     }
 
     if (it_best != states.end()) {
-        SRV_TRC(" - found better prompt with f_keep = %.3f, sim = %.3f\n", f_keep_best, sim_best);
+        SRV_TRC(" - found better prompt with f_keep = %.3f, sim = %.3f, reusable = %" PRId64 "\n",
+                f_keep_best, sim_best, reuse_best);
 
         {
             auto & data = it_best->data.main;
