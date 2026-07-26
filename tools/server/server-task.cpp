@@ -63,6 +63,8 @@ json task_params::to_json(bool only_metrics) const {
             {"mirostat",                  sampling.mirostat},
             {"mirostat_tau",              sampling.mirostat_tau},
             {"mirostat_eta",              sampling.mirostat_eta},
+            {"adaptive_target",           sampling.adaptive_target},
+            {"adaptive_decay",            sampling.adaptive_decay},
             {"max_tokens",                n_predict},
             {"n_predict",                 n_predict}, // TODO: deduplicate?
             {"n_keep",                    n_keep},
@@ -114,6 +116,8 @@ json task_params::to_json(bool only_metrics) const {
         {"mirostat",                  sampling.mirostat},
         {"mirostat_tau",              sampling.mirostat_tau},
         {"mirostat_eta",              sampling.mirostat_eta},
+        {"adaptive_target",           sampling.adaptive_target},
+        {"adaptive_decay",            sampling.adaptive_decay},
         {"stop",                      antiprompt},
         {"max_tokens",                n_predict},
         {"n_predict",                 n_predict}, // TODO: deduplicate?
