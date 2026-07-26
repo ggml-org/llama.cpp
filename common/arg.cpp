@@ -3421,6 +3421,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_ENDPOINT_METRICS"));
     add_opt(common_arg(
+        {"--memory"},
+        string_format("enable the /memory endpoint reporting per-device memory usage (default: %s)", params.endpoint_memory ? "enabled" : "disabled"),
+        [](common_params & params) {
+            params.endpoint_memory = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_ENDPOINT_MEMORY"));
+    add_opt(common_arg(
         {"--props"},
         string_format("enable changing global properties via POST /props (default: %s)", params.endpoint_props ? "enabled" : "disabled"),
         [](common_params & params) {
