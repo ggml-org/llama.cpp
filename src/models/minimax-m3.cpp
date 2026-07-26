@@ -467,7 +467,7 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                                 ggml_reshape_3d(ctx0, bm, 1, nblk, n_tps*Hd),
                                 blk, nblk, n_tps*Hd, 1);
                         bmx = ggml_reshape_3d(ctx0, bmx, n_kv, n_tps, Hd);
-                        ggml_tensor * mask4 = ggml_add_inplace(ctx0, bmx, km_s);
+                        ggml_tensor * mask4 = ggml_add(ctx0, bmx, km_s);
                         mask4 = ggml_reshape_4d(ctx0, mask4, n_kv, n_tps, 1, Hd);
                         cb(mask4, "msa_mask4", il);
 
