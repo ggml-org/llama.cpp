@@ -37,8 +37,11 @@ void llama_model_granite_switch::load_arch_hparams(llama_model_loader & ml) {
     ml.get_arr(LLM_KV_ADAPTER_TOKEN_IDS_ACTIVATE,   token_ids);
     ml.get_arr(LLM_KV_ADAPTER_TOKEN_IDS_SUBSTITUTE, substitute_ids);
 
-    GGML_ASSERT(token_ids.size() == n_adapters);
-    GGML_ASSERT(substitute_ids.size() == n_adapters);
+    if (token_ids.size() != n_adapters || substitute_ids.size() != n_adapters) {
+        throw std::runtime_error(format(
+            "graniteswitch: adapter token id arrays (%zu activate, %zu substitute) do not match adapter count %u",
+            token_ids.size(), substitute_ids.size(), n_adapters));
+    }
 
     adapter_token_to_slot.clear();
     adapter_token_to_substitute.clear();
@@ -52,7 +55,9 @@ void llama_model_granite_switch::load_arch_hparams(llama_model_loader & ml) {
     // K/V. reusing n_layer_nextn keeps n_layer() == n_real, so the regular layers
     // keep their indices and the KV cache shift/defrag skips the router layer
     const uint32_t n_real = hparams.n_layer();
-    GGML_ASSERT(n_real < LLAMA_MAX_LAYERS);
+    if (n_real >= LLAMA_MAX_LAYERS) {
+        throw std::runtime_error(format("graniteswitch: block count %u exceeds LLAMA_MAX_LAYERS", n_real));
+    }
     hparams.router_layer  = (int32_t) n_real;
     hparams.n_layer_all   = n_real + 1;
     hparams.n_layer_nextn = 1;
