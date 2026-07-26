@@ -5,20 +5,19 @@ Fast, lightweight, pure C/C++ HTTP server based on [httplib](https://github.com/
 Set of LLM REST APIs and a web UI to interact with llama.cpp.
 
 **Features:**
-
-- LLM inference of F16 and quantized models on GPU and CPU
-- [OpenAI API](https://github.com/openai/openai-openapi) compatible chat completions, responses, and embeddings routes
-- [Anthropic Messages API](https://docs.anthropic.com/en/api/messages) compatible chat completions
-- Reranking endpoint (https://github.com/ggml-org/llama.cpp/pull/9510)
-- Parallel decoding with multi-user support
-- Continuous batching
-- Multimodal ([documentation](../../docs/multimodal.md)) / with OpenAI-compatible API support
-- Monitoring endpoints
-- Schema-constrained JSON response format
-- Prefilling of assistant messages similar to the Claude API
-- [Function calling](../../docs/function-calling.md) / tool use for ~any model
-- Speculative decoding
-- Easy-to-use web UI
+ * LLM inference of F16 and quantized models on GPU and CPU
+ * [OpenAI API](https://github.com/openai/openai-openapi) compatible chat completions, responses, and embeddings routes
+ * [Anthropic Messages API](https://docs.anthropic.com/en/api/messages) compatible chat completions
+ * Reranking endpoint (https://github.com/ggml-org/llama.cpp/pull/9510)
+ * Parallel decoding with multi-user support
+ * Continuous batching
+ * Multimodal ([documentation](../../docs/multimodal.md)) / with OpenAI-compatible API support
+ * Monitoring endpoints
+ * Schema-constrained JSON response format
+ * Prefilling of assistant messages similar to the Claude API
+ * [Function calling](../../docs/function-calling.md) / tool use for ~any model
+ * Speculative decoding
+ * Easy-to-use web UI
 
 For the full list of features, please refer to [server's changelog](https://github.com/ggml-org/llama.cpp/issues/9291)
 
@@ -30,273 +29,274 @@ For the full list of features, please refer to [server's changelog](https://gith
 
 ### Common params
 
-| Argument                                                         | Explanation                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `-h, --help, --usage`                                            | print usage and exit                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `--version`                                                      | show version and build info                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `-cl, --cache-list`                                              | show list of models in cache                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `--completion-bash`                                              | print source-able bash completion script for llama.cpp                                                                                                                                                                                                                                                                                                                                                                                     |
-| `-t, --threads N`                                                | number of CPU threads to use during generation (default: -1)<br/>(env: LLAMA_ARG_THREADS)                                                                                                                                                                                                                                                                                                                                                  |
-| `-tb, --threads-batch N`                                         | number of threads to use during batch and prompt processing (default: same as --threads)                                                                                                                                                                                                                                                                                                                                                   |
-| `-C, --cpu-mask M`                                               | CPU affinity mask: arbitrarily long hex. Complements cpu-range (default: "")                                                                                                                                                                                                                                                                                                                                                               |
-| `-Cr, --cpu-range lo-hi`                                         | range of CPUs for affinity. Complements --cpu-mask                                                                                                                                                                                                                                                                                                                                                                                         |
-| `--cpu-strict <0\|1>`                                            | use strict CPU placement (default: 0)                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `--prio N`                                                       | set process/thread priority : low(-1), normal(0), medium(1), high(2), realtime(3) (default: 0)                                                                                                                                                                                                                                                                                                                                             |
-| `--poll <0...100>`                                               | use polling level to wait for work (0 - no polling, default: 50)                                                                                                                                                                                                                                                                                                                                                                           |
-| `-Cb, --cpu-mask-batch M`                                        | CPU affinity mask: arbitrarily long hex. Complements cpu-range-batch (default: same as --cpu-mask)                                                                                                                                                                                                                                                                                                                                         |
-| `-Crb, --cpu-range-batch lo-hi`                                  | ranges of CPUs for affinity. Complements --cpu-mask-batch                                                                                                                                                                                                                                                                                                                                                                                  |
-| `--cpu-strict-batch <0\|1>`                                      | use strict CPU placement (default: same as --cpu-strict)                                                                                                                                                                                                                                                                                                                                                                                   |
-| `--prio-batch N`                                                 | set process/thread priority : 0-normal, 1-medium, 2-high, 3-realtime (default: 0)                                                                                                                                                                                                                                                                                                                                                          |
-| `--poll-batch <0\|1>`                                            | use polling to wait for work (default: same as --poll)                                                                                                                                                                                                                                                                                                                                                                                     |
-| `-c, --ctx-size N`                                               | size of the prompt context (default: 0, 0 = loaded from model)<br/>(env: LLAMA_ARG_CTX_SIZE)                                                                                                                                                                                                                                                                                                                                               |
-| `-n, --predict, --n-predict N`                                   | number of tokens to predict (default: -1, -1 = infinity)<br/>(env: LLAMA_ARG_N_PREDICT)                                                                                                                                                                                                                                                                                                                                                    |
-| `-b, --batch-size N`                                             | logical maximum batch size (default: 2048)<br/>(env: LLAMA_ARG_BATCH)                                                                                                                                                                                                                                                                                                                                                                      |
-| `-ub, --ubatch-size N`                                           | physical maximum batch size (default: 512)<br/>(env: LLAMA_ARG_UBATCH)                                                                                                                                                                                                                                                                                                                                                                     |
-| `--keep N`                                                       | number of tokens to keep from the initial prompt (default: 0, -1 = all)                                                                                                                                                                                                                                                                                                                                                                    |
-| `--swa-full`                                                     | use full-size SWA cache (default: false)<br/>[(more info)](https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)<br/>(env: LLAMA_ARG_SWA_FULL)                                                                                                                                                                                                                                                                         |
-| `-fa, --flash-attn [on\|off\|auto]`                              | set Flash Attention use ('on', 'off', or 'auto', default: 'auto')<br/>(env: LLAMA_ARG_FLASH_ATTN)                                                                                                                                                                                                                                                                                                                                          |
-| `--perf, --no-perf`                                              | whether to enable internal libllama performance timings (default: false)<br/>(env: LLAMA_ARG_PERF)                                                                                                                                                                                                                                                                                                                                         |
-| `-e, --escape, --no-escape`                                      | whether to process escapes sequences (\n, \r, \t, \', \", \\) (default: true)                                                                                                                                                                                                                                                                                                                                                              |
-| `--rope-scaling {none,linear,yarn}`                              | RoPE frequency scaling method, defaults to linear unless specified by the model<br/>(env: LLAMA_ARG_ROPE_SCALING_TYPE)                                                                                                                                                                                                                                                                                                                     |
-| `--rope-scale N`                                                 | RoPE context scaling factor, expands context by a factor of N<br/>(env: LLAMA_ARG_ROPE_SCALE)                                                                                                                                                                                                                                                                                                                                              |
-| `--rope-freq-base N`                                             | RoPE base frequency, used by NTK-aware scaling (default: loaded from model)<br/>(env: LLAMA_ARG_ROPE_FREQ_BASE)                                                                                                                                                                                                                                                                                                                            |
-| `--rope-freq-scale N`                                            | RoPE frequency scaling factor, expands context by a factor of 1/N<br/>(env: LLAMA_ARG_ROPE_FREQ_SCALE)                                                                                                                                                                                                                                                                                                                                     |
-| `--yarn-orig-ctx N`                                              | YaRN: original context size of model (default: 0 = model training context size)<br/>(env: LLAMA_ARG_YARN_ORIG_CTX)                                                                                                                                                                                                                                                                                                                         |
-| `--yarn-ext-factor N`                                            | YaRN: extrapolation mix factor (default: -1.00, 0.0 = full interpolation)<br/>(env: LLAMA_ARG_YARN_EXT_FACTOR)                                                                                                                                                                                                                                                                                                                             |
-| `--yarn-attn-factor N`                                           | YaRN: scale sqrt(t) or attention magnitude (default: -1.00)<br/>(env: LLAMA_ARG_YARN_ATTN_FACTOR)                                                                                                                                                                                                                                                                                                                                          |
-| `--yarn-beta-slow N`                                             | YaRN: high correction dim or alpha (default: -1.00)<br/>(env: LLAMA_ARG_YARN_BETA_SLOW)                                                                                                                                                                                                                                                                                                                                                    |
-| `--yarn-beta-fast N`                                             | YaRN: low correction dim or beta (default: -1.00)<br/>(env: LLAMA_ARG_YARN_BETA_FAST)                                                                                                                                                                                                                                                                                                                                                      |
-| `-kvo, --kv-offload, -nkvo, --no-kv-offload`                     | whether to enable KV cache offloading (default: enabled)<br/>(env: LLAMA_ARG_KV_OFFLOAD)                                                                                                                                                                                                                                                                                                                                                   |
-| `--repack, -nr, --no-repack`                                     | whether to enable weight repacking (default: enabled)<br/>(env: LLAMA_ARG_REPACK)                                                                                                                                                                                                                                                                                                                                                          |
-| `--no-host`                                                      | bypass host buffer allowing extra buffers to be used<br/>(env: LLAMA_ARG_NO_HOST)                                                                                                                                                                                                                                                                                                                                                          |
-| `-ctk, --cache-type-k TYPE`                                      | KV cache data type for K<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_CACHE_TYPE_K)                                                                                                                                                                                                                                                                                     |
-| `-ctv, --cache-type-v TYPE`                                      | KV cache data type for V<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_CACHE_TYPE_V)                                                                                                                                                                                                                                                                                     |
-| `-dt, --defrag-thold N`                                          | KV cache defragmentation threshold (DEPRECATED)<br/>(env: LLAMA_ARG_DEFRAG_THOLD)                                                                                                                                                                                                                                                                                                                                                          |
-| `--rpc SERVERS`                                                  | comma-separated list of RPC servers (host:port)<br/>(env: LLAMA_ARG_RPC)                                                                                                                                                                                                                                                                                                                                                                   |
-| `--mlock`                                                        | DEPRECATED in favor of `--load-mode`: mmap + force system to keep model in RAM rather than swapping or compressing<br/>(env: LLAMA_ARG_MLOCK)                                                                                                                                                                                                                                                                                              |
-| `--mmap, --no-mmap`                                              | DEPRECATED in favor of `--load-mode`: whether to memory-map model. (if mmap disabled, slower load but may reduce pageouts if not using mlock)<br/>(env: LLAMA_ARG_MMAP)                                                                                                                                                                                                                                                                    |
-| `-dio, --direct-io, -ndio, --no-direct-io`                       | DEPRECATED in favor of `--load-mode`: use DirectIO if available<br/>(env: LLAMA_ARG_DIO)                                                                                                                                                                                                                                                                                                                                                   |
-| `-lm, --load-mode MODE`                                          | model loading mode (default: mmap)<br/>- none: no special loading mode<br/>- mmap: memory-map model (if mmap disabled, slower load but may reduce pageouts if not using mlock)<br/>- mlock: force system to keep model in RAM rather than swapping or compressing<br/>- mmap+mlock: mmap + force system to keep model in RAM rather than swapping or compressing<br/>- dio: use DirectIO if available<br/><br/>(env: LLAMA_ARG_LOAD_MODE)  |
-| `--numa TYPE`                                                    | attempt optimizations that help on some NUMA systems<br/>- distribute: spread execution evenly over all nodes<br/>- isolate: only spawn threads on CPUs on the node that execution started on<br/>- numactl: use the CPU map provided by numactl<br/>if run without this previously, it is recommended to drop the system page cache before using this<br/>see https://github.com/ggml-org/llama.cpp/issues/1437<br/>(env: LLAMA_ARG_NUMA) |
-| `-dev, --device <dev1,dev2,..>`                                  | comma-separated list of devices to use for offloading (none = don't offload)<br/>use --list-devices to see a list of available devices<br/>(env: LLAMA_ARG_DEVICE)                                                                                                                                                                                                                                                                         |
-| `--list-devices`                                                 | print list of available devices and exit                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `-ot, --override-tensor <tensor name pattern>=<buffer type>,...` | override tensor buffer type<br/>(env: LLAMA_ARG_OVERRIDE_TENSOR)                                                                                                                                                                                                                                                                                                                                                                           |
-| `-cmoe, --cpu-moe`                                               | keep all Mixture of Experts (MoE) weights in the CPU<br/>(env: LLAMA_ARG_CPU_MOE)                                                                                                                                                                                                                                                                                                                                                          |
-| `-ncmoe, --n-cpu-moe N`                                          | keep the Mixture of Experts (MoE) weights of the first N layers in the CPU<br/>(env: LLAMA_ARG_N_CPU_MOE)                                                                                                                                                                                                                                                                                                                                  |
-| `-ngl, --gpu-layers, --n-gpu-layers N`                           | max. number of layers to store in VRAM, either an exact number, 'auto', or 'all' (default: auto)<br/>(env: LLAMA_ARG_N_GPU_LAYERS)                                                                                                                                                                                                                                                                                                         |
-| `-sm, --split-mode {none,layer,row,tensor}`                      | how to split the model across multiple GPUs, one of:<br/>- none: use one GPU only<br/>- layer (default): split layers and KV across GPUs (pipelined)<br/>- row: split weight across GPUs by rows (parallelized)<br/>- tensor: split weights and KV across GPUs (parallelized, EXPERIMENTAL)<br/>(env: LLAMA_ARG_SPLIT_MODE)                                                                                                                |
-| `-ts, --tensor-split N0,N1,N2,...`                               | fraction of the model to offload to each GPU, comma-separated list of proportions, e.g. 3,1<br/>(env: LLAMA_ARG_TENSOR_SPLIT)                                                                                                                                                                                                                                                                                                              |
-| `-mg, --main-gpu INDEX`                                          | the GPU to use for the model (with split-mode = none), or for intermediate results and KV (with split-mode = row) (default: 0)<br/>(env: LLAMA_ARG_MAIN_GPU)                                                                                                                                                                                                                                                                               |
-| `-fit, --fit [on\|off]`                                          | whether to adjust unset arguments to fit in device memory ('on' or 'off', default: 'on')<br/>(env: LLAMA_ARG_FIT)                                                                                                                                                                                                                                                                                                                          |
-| `-fitt, --fit-target MiB0,MiB1,MiB2,...`                         | target margin per device for --fit, comma-separated list of values, single value is broadcast across all devices, default: 1024<br/>(env: LLAMA_ARG_FIT_TARGET)                                                                                                                                                                                                                                                                            |
-| `-fitc, --fit-ctx N`                                             | minimum ctx size that can be set by --fit option, default: 4096<br/>(env: LLAMA_ARG_FIT_CTX)                                                                                                                                                                                                                                                                                                                                               |
-| `--check-tensors`                                                | check model tensor data for invalid values (default: false)                                                                                                                                                                                                                                                                                                                                                                                |
-| `--override-kv KEY=TYPE:VALUE,...`                               | advanced option to override model metadata by key. to specify multiple overrides, either use comma-separated values.<br/>types: int, float, bool, str. example: --override-kv tokenizer.ggml.add_bos_token=bool:false,tokenizer.ggml.add_eos_token=bool:false                                                                                                                                                                              |
-| `--op-offload, --no-op-offload`                                  | whether to offload host tensor operations to device (default: true)                                                                                                                                                                                                                                                                                                                                                                        |
-| `--lora FNAME`                                                   | path to LoRA adapter (use comma-separated values to load multiple adapters)                                                                                                                                                                                                                                                                                                                                                                |
-| `--lora-scaled FNAME:SCALE,...`                                  | path to LoRA adapter with user defined scaling (format: FNAME:SCALE,...)<br/>note: use comma-separated values                                                                                                                                                                                                                                                                                                                              |
-| `--control-vector FNAME`                                         | add a control vector<br/>note: use comma-separated values to add multiple control vectors                                                                                                                                                                                                                                                                                                                                                  |
-| `--control-vector-scaled FNAME:SCALE,...`                        | add a control vector with user defined scaling SCALE<br/>note: use comma-separated values (format: FNAME:SCALE,...)                                                                                                                                                                                                                                                                                                                        |
-| `--control-vector-layer-range START END`                         | layer range to apply the control vector(s) to, start and end inclusive                                                                                                                                                                                                                                                                                                                                                                     |
-| `-m, --model FNAME`                                              | model path to load<br/>(env: LLAMA_ARG_MODEL)                                                                                                                                                                                                                                                                                                                                                                                              |
-| `-mu, --model-url MODEL_URL`                                     | model download url (default: unused)<br/>(env: LLAMA_ARG_MODEL_URL)                                                                                                                                                                                                                                                                                                                                                                        |
-| `-dr, --docker-repo [<repo>/]<model>[:quant]`                    | Docker Hub model repository. repo is optional, default to ai/. quant is optional, default to :latest.<br/>example: gemma3<br/>(default: unused)<br/>(env: LLAMA_ARG_DOCKER_REPO)                                                                                                                                                                                                                                                           |
-| `-hf, -hfr, --hf-repo <user>/<model>[:quant]`                    | Hugging Face model repository; quant is optional, case-insensitive, default to Q4_K_M, or falls back to the first file in the repo if Q4_K_M doesn't exist.<br/>mmproj is also downloaded automatically if available. to disable, add --no-mmproj<br/>example: ggml-org/GLM-4.7-Flash-GGUF:Q4_K_M<br/>(default: unused)<br/>(env: LLAMA_ARG_HF_REPO)                                                                                       |
-| `-hff, --hf-file FILE`                                           | Hugging Face model file. If specified, it will override the quant in --hf-repo (default: unused)<br/>(env: LLAMA_ARG_HF_FILE)                                                                                                                                                                                                                                                                                                              |
-| `-hfv, -hfrv, --hf-repo-v <user>/<model>[:quant]`                | Hugging Face model repository for the vocoder model (default: unused)<br/>(env: LLAMA_ARG_HF_REPO_V)                                                                                                                                                                                                                                                                                                                                       |
-| `-hffv, --hf-file-v FILE`                                        | Hugging Face model file for the vocoder model (default: unused)<br/>(env: LLAMA_ARG_HF_FILE_V)                                                                                                                                                                                                                                                                                                                                             |
-| `-hft, --hf-token TOKEN`                                         | Hugging Face access token (default: value from HF_TOKEN environment variable)<br/>(env: HF_TOKEN)                                                                                                                                                                                                                                                                                                                                          |
-| `--log-disable`                                                  | Log disable                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `--log-file FNAME`                                               | Log to file<br/>(env: LLAMA_ARG_LOG_FILE)                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `--log-colors [on\|off\|auto]`                                   | Set colored logging ('on', 'off', or 'auto', default: 'auto')<br/>'auto' enables colors when output is to a terminal<br/>(env: LLAMA_ARG_LOG_COLORS)                                                                                                                                                                                                                                                                                       |
-| `-v, --verbose, --log-verbose`                                   | Set verbosity level to infinity (i.e. log all messages, useful for debugging)                                                                                                                                                                                                                                                                                                                                                              |
-| `--offline`                                                      | Offline mode: forces use of cache, prevents network access<br/>(env: LLAMA_ARG_OFFLINE)                                                                                                                                                                                                                                                                                                                                                    |
-| `-lv, --verbosity, --log-verbosity N`                            | Set the verbosity threshold. Messages with a higher verbosity will be ignored. Values:<br/> - 0: generic output<br/> - 1: error<br/> - 2: warning<br/> - 3: info<br/> - 4: trace (more info)<br/> - 5: debug<br/>(default: 3)<br/><br/>(env: LLAMA_ARG_LOG_VERBOSITY)                                                                                                                                                                      |
-| `--log-prefix, --no-log-prefix`                                  | Enable prefix in log messages<br/>(env: LLAMA_ARG_LOG_PREFIX)                                                                                                                                                                                                                                                                                                                                                                              |
-| `--log-timestamps, --no-log-timestamps`                          | Enable timestamps in log messages<br/>(env: LLAMA_ARG_LOG_TIMESTAMPS)                                                                                                                                                                                                                                                                                                                                                                      |
-| `--spec-draft-type-k, -ctkd, --cache-type-k-draft TYPE`          | KV cache data type for K for the draft model<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_SPEC_DRAFT_CACHE_TYPE_K)                                                                                                                                                                                                                                                      |
-| `--spec-draft-type-v, -ctvd, --cache-type-v-draft TYPE`          | KV cache data type for V for the draft model<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_SPEC_DRAFT_CACHE_TYPE_V)                                                                                                                                                                                                                                                      |
+| Argument | Explanation |
+| -------- | ----------- |
+| `-h, --help, --usage` | print usage and exit |
+| `--version` | show version and build info |
+| `-cl, --cache-list` | show list of models in cache |
+| `--completion-bash` | print source-able bash completion script for llama.cpp |
+| `-t, --threads N` | number of CPU threads to use during generation (default: -1)<br/>(env: LLAMA_ARG_THREADS) |
+| `-tb, --threads-batch N` | number of threads to use during batch and prompt processing (default: same as --threads) |
+| `-C, --cpu-mask M` | CPU affinity mask: arbitrarily long hex. Complements cpu-range (default: "") |
+| `-Cr, --cpu-range lo-hi` | range of CPUs for affinity. Complements --cpu-mask |
+| `--cpu-strict <0\|1>` | use strict CPU placement (default: 0) |
+| `--prio N` | set process/thread priority : low(-1), normal(0), medium(1), high(2), realtime(3) (default: 0) |
+| `--poll <0...100>` | use polling level to wait for work (0 - no polling, default: 50) |
+| `-Cb, --cpu-mask-batch M` | CPU affinity mask: arbitrarily long hex. Complements cpu-range-batch (default: same as --cpu-mask) |
+| `-Crb, --cpu-range-batch lo-hi` | ranges of CPUs for affinity. Complements --cpu-mask-batch |
+| `--cpu-strict-batch <0\|1>` | use strict CPU placement (default: same as --cpu-strict) |
+| `--prio-batch N` | set process/thread priority : 0-normal, 1-medium, 2-high, 3-realtime (default: 0) |
+| `--poll-batch <0\|1>` | use polling to wait for work (default: same as --poll) |
+| `-c, --ctx-size N` | size of the prompt context (default: 0, 0 = loaded from model)<br/>(env: LLAMA_ARG_CTX_SIZE) |
+| `-n, --predict, --n-predict N` | number of tokens to predict (default: -1, -1 = infinity)<br/>(env: LLAMA_ARG_N_PREDICT) |
+| `-b, --batch-size N` | logical maximum batch size (default: 2048)<br/>(env: LLAMA_ARG_BATCH) |
+| `-ub, --ubatch-size N` | physical maximum batch size (default: 512)<br/>(env: LLAMA_ARG_UBATCH) |
+| `--keep N` | number of tokens to keep from the initial prompt (default: 0, -1 = all) |
+| `--swa-full` | use full-size SWA cache (default: false)<br/>[(more info)](https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)<br/>(env: LLAMA_ARG_SWA_FULL) |
+| `-fa, --flash-attn [on\|off\|auto]` | set Flash Attention use ('on', 'off', or 'auto', default: 'auto')<br/>(env: LLAMA_ARG_FLASH_ATTN) |
+| `--perf, --no-perf` | whether to enable internal libllama performance timings (default: false)<br/>(env: LLAMA_ARG_PERF) |
+| `-e, --escape, --no-escape` | whether to process escapes sequences (\n, \r, \t, \', \", \\) (default: true) |
+| `--rope-scaling {none,linear,yarn}` | RoPE frequency scaling method, defaults to linear unless specified by the model<br/>(env: LLAMA_ARG_ROPE_SCALING_TYPE) |
+| `--rope-scale N` | RoPE context scaling factor, expands context by a factor of N<br/>(env: LLAMA_ARG_ROPE_SCALE) |
+| `--rope-freq-base N` | RoPE base frequency, used by NTK-aware scaling (default: loaded from model)<br/>(env: LLAMA_ARG_ROPE_FREQ_BASE) |
+| `--rope-freq-scale N` | RoPE frequency scaling factor, expands context by a factor of 1/N<br/>(env: LLAMA_ARG_ROPE_FREQ_SCALE) |
+| `--yarn-orig-ctx N` | YaRN: original context size of model (default: 0 = model training context size)<br/>(env: LLAMA_ARG_YARN_ORIG_CTX) |
+| `--yarn-ext-factor N` | YaRN: extrapolation mix factor (default: -1.00, 0.0 = full interpolation)<br/>(env: LLAMA_ARG_YARN_EXT_FACTOR) |
+| `--yarn-attn-factor N` | YaRN: scale sqrt(t) or attention magnitude (default: -1.00)<br/>(env: LLAMA_ARG_YARN_ATTN_FACTOR) |
+| `--yarn-beta-slow N` | YaRN: high correction dim or alpha (default: -1.00)<br/>(env: LLAMA_ARG_YARN_BETA_SLOW) |
+| `--yarn-beta-fast N` | YaRN: low correction dim or beta (default: -1.00)<br/>(env: LLAMA_ARG_YARN_BETA_FAST) |
+| `-kvo, --kv-offload, -nkvo, --no-kv-offload` | whether to enable KV cache offloading (default: enabled)<br/>(env: LLAMA_ARG_KV_OFFLOAD) |
+| `--repack, -nr, --no-repack` | whether to enable weight repacking (default: enabled)<br/>(env: LLAMA_ARG_REPACK) |
+| `--no-host` | bypass host buffer allowing extra buffers to be used<br/>(env: LLAMA_ARG_NO_HOST) |
+| `-ctk, --cache-type-k TYPE` | KV cache data type for K<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_CACHE_TYPE_K) |
+| `-ctv, --cache-type-v TYPE` | KV cache data type for V<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_CACHE_TYPE_V) |
+| `-dt, --defrag-thold N` | KV cache defragmentation threshold (DEPRECATED)<br/>(env: LLAMA_ARG_DEFRAG_THOLD) |
+| `--rpc SERVERS` | comma-separated list of RPC servers (host:port)<br/>(env: LLAMA_ARG_RPC) |
+| `--mlock` | DEPRECATED in favor of `--load-mode`: mmap + force system to keep model in RAM rather than swapping or compressing<br/>(env: LLAMA_ARG_MLOCK) |
+| `--mmap, --no-mmap` | DEPRECATED in favor of `--load-mode`: whether to memory-map model. (if mmap disabled, slower load but may reduce pageouts if not using mlock)<br/>(env: LLAMA_ARG_MMAP) |
+| `-dio, --direct-io, -ndio, --no-direct-io` | DEPRECATED in favor of `--load-mode`: use DirectIO if available<br/>(env: LLAMA_ARG_DIO) |
+| `-lm, --load-mode MODE` | model loading mode (default: mmap)<br/>- none: no special loading mode<br/>- mmap: memory-map model (if mmap disabled, slower load but may reduce pageouts if not using mlock)<br/>- mlock: force system to keep model in RAM rather than swapping or compressing<br/>- mmap+mlock: mmap + force system to keep model in RAM rather than swapping or compressing<br/>- dio: use DirectIO if available<br/><br/>(env: LLAMA_ARG_LOAD_MODE) |
+| `--numa TYPE` | attempt optimizations that help on some NUMA systems<br/>- distribute: spread execution evenly over all nodes<br/>- isolate: only spawn threads on CPUs on the node that execution started on<br/>- numactl: use the CPU map provided by numactl<br/>if run without this previously, it is recommended to drop the system page cache before using this<br/>see https://github.com/ggml-org/llama.cpp/issues/1437<br/>(env: LLAMA_ARG_NUMA) |
+| `-dev, --device <dev1,dev2,..>` | comma-separated list of devices to use for offloading (none = don't offload)<br/>use --list-devices to see a list of available devices<br/>(env: LLAMA_ARG_DEVICE) |
+| `--list-devices` | print list of available devices and exit |
+| `-ot, --override-tensor <tensor name pattern>=<buffer type>,...` | override tensor buffer type<br/>(env: LLAMA_ARG_OVERRIDE_TENSOR) |
+| `-cmoe, --cpu-moe` | keep all Mixture of Experts (MoE) weights in the CPU<br/>(env: LLAMA_ARG_CPU_MOE) |
+| `-ncmoe, --n-cpu-moe N` | keep the Mixture of Experts (MoE) weights of the first N layers in the CPU<br/>(env: LLAMA_ARG_N_CPU_MOE) |
+| `-ngl, --gpu-layers, --n-gpu-layers N` | max. number of layers to store in VRAM, either an exact number, 'auto', or 'all' (default: auto)<br/>(env: LLAMA_ARG_N_GPU_LAYERS) |
+| `-sm, --split-mode {none,layer,row,tensor}` | how to split the model across multiple GPUs, one of:<br/>- none: use one GPU only<br/>- layer (default): split layers and KV across GPUs (pipelined)<br/>- row: split weight across GPUs by rows (parallelized)<br/>- tensor: split weights and KV across GPUs (parallelized, EXPERIMENTAL)<br/>(env: LLAMA_ARG_SPLIT_MODE) |
+| `-ts, --tensor-split N0,N1,N2,...` | fraction of the model to offload to each GPU, comma-separated list of proportions, e.g. 3,1<br/>(env: LLAMA_ARG_TENSOR_SPLIT) |
+| `-mg, --main-gpu INDEX` | the GPU to use for the model (with split-mode = none), or for intermediate results and KV (with split-mode = row) (default: 0)<br/>(env: LLAMA_ARG_MAIN_GPU) |
+| `-fit, --fit [on\|off]` | whether to adjust unset arguments to fit in device memory ('on' or 'off', default: 'on')<br/>(env: LLAMA_ARG_FIT) |
+| `-fitt, --fit-target MiB0,MiB1,MiB2,...` | target margin per device for --fit, comma-separated list of values, single value is broadcast across all devices, default: 1024<br/>(env: LLAMA_ARG_FIT_TARGET) |
+| `-fitc, --fit-ctx N` | minimum ctx size that can be set by --fit option, default: 4096<br/>(env: LLAMA_ARG_FIT_CTX) |
+| `--check-tensors` | check model tensor data for invalid values (default: false) |
+| `--override-kv KEY=TYPE:VALUE,...` | advanced option to override model metadata by key. to specify multiple overrides, either use comma-separated values.<br/>types: int, float, bool, str. example: --override-kv tokenizer.ggml.add_bos_token=bool:false,tokenizer.ggml.add_eos_token=bool:false |
+| `--op-offload, --no-op-offload` | whether to offload host tensor operations to device (default: true) |
+| `--lora FNAME` | path to LoRA adapter (use comma-separated values to load multiple adapters) |
+| `--lora-scaled FNAME:SCALE,...` | path to LoRA adapter with user defined scaling (format: FNAME:SCALE,...)<br/>note: use comma-separated values |
+| `--control-vector FNAME` | add a control vector<br/>note: use comma-separated values to add multiple control vectors |
+| `--control-vector-scaled FNAME:SCALE,...` | add a control vector with user defined scaling SCALE<br/>note: use comma-separated values (format: FNAME:SCALE,...) |
+| `--control-vector-layer-range START END` | layer range to apply the control vector(s) to, start and end inclusive |
+| `-m, --model FNAME` | model path to load<br/>(env: LLAMA_ARG_MODEL) |
+| `-mu, --model-url MODEL_URL` | model download url (default: unused)<br/>(env: LLAMA_ARG_MODEL_URL) |
+| `-dr, --docker-repo [<repo>/]<model>[:quant]` | Docker Hub model repository. repo is optional, default to ai/. quant is optional, default to :latest.<br/>example: gemma3<br/>(default: unused)<br/>(env: LLAMA_ARG_DOCKER_REPO) |
+| `-hf, -hfr, --hf-repo <user>/<model>[:quant]` | Hugging Face model repository; quant is optional, case-insensitive, default to Q4_K_M, or falls back to the first file in the repo if Q4_K_M doesn't exist.<br/>mmproj is also downloaded automatically if available. to disable, add --no-mmproj<br/>example: ggml-org/GLM-4.7-Flash-GGUF:Q4_K_M<br/>(default: unused)<br/>(env: LLAMA_ARG_HF_REPO) |
+| `-hff, --hf-file FILE` | Hugging Face model file. If specified, it will override the quant in --hf-repo (default: unused)<br/>(env: LLAMA_ARG_HF_FILE) |
+| `-hfv, -hfrv, --hf-repo-v <user>/<model>[:quant]` | Hugging Face model repository for the vocoder model (default: unused)<br/>(env: LLAMA_ARG_HF_REPO_V) |
+| `-hffv, --hf-file-v FILE` | Hugging Face model file for the vocoder model (default: unused)<br/>(env: LLAMA_ARG_HF_FILE_V) |
+| `-hft, --hf-token TOKEN` | Hugging Face access token (default: value from HF_TOKEN environment variable)<br/>(env: HF_TOKEN) |
+| `--log-disable` | Log disable |
+| `--log-file FNAME` | Log to file<br/>(env: LLAMA_ARG_LOG_FILE) |
+| `--log-colors [on\|off\|auto]` | Set colored logging ('on', 'off', or 'auto', default: 'auto')<br/>'auto' enables colors when output is to a terminal<br/>(env: LLAMA_ARG_LOG_COLORS) |
+| `-v, --verbose, --log-verbose` | Set verbosity level to infinity (i.e. log all messages, useful for debugging) |
+| `--offline` | Offline mode: forces use of cache, prevents network access<br/>(env: LLAMA_ARG_OFFLINE) |
+| `-lv, --verbosity, --log-verbosity N` | Set the verbosity threshold. Messages with a higher verbosity will be ignored. Values:<br/> - 0: generic output<br/> - 1: error<br/> - 2: warning<br/> - 3: info<br/> - 4: trace (more info)<br/> - 5: debug<br/>(default: 3)<br/><br/>(env: LLAMA_ARG_LOG_VERBOSITY) |
+| `--log-prefix, --no-log-prefix` | Enable prefix in log messages<br/>(env: LLAMA_ARG_LOG_PREFIX) |
+| `--log-timestamps, --no-log-timestamps` | Enable timestamps in log messages<br/>(env: LLAMA_ARG_LOG_TIMESTAMPS) |
+| `--spec-draft-type-k, -ctkd, --cache-type-k-draft TYPE` | KV cache data type for K for the draft model<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_SPEC_DRAFT_CACHE_TYPE_K) |
+| `--spec-draft-type-v, -ctvd, --cache-type-v-draft TYPE` | KV cache data type for V for the draft model<br/>allowed values: f32, f16, bf16, q8_0, q4_0, q4_1, iq4_nl, q5_0, q5_1<br/>(default: f16)<br/>(env: LLAMA_ARG_SPEC_DRAFT_CACHE_TYPE_V) |
+
 
 ### Sampling params
 
-| Argument                                 | Explanation                                                                                                                                                                                                    |
-| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--samplers SAMPLERS`                    | samplers that will be used for generation in the order, separated by ';'<br/>(default: penalties;dry;top_n_sigma;top_k;typ_p;top_p;min_p;xtc;temperature)                                                      |
-| `-s, --seed SEED`                        | RNG seed (default: -1, use random seed for -1)                                                                                                                                                                 |
-| `--sampler-seq, --sampling-seq SEQUENCE` | simplified sequence for samplers that will be used (default: edskypmxt)                                                                                                                                        |
-| `--ignore-eos`                           | ignore end of stream token and continue generating (implies --logit-bias EOS-inf)                                                                                                                              |
-| `--temp, --temperature N`                | temperature (default: 0.80)                                                                                                                                                                                    |
-| `--top-k N`                              | top-k sampling (default: 40, 0 = disabled)<br/>(env: LLAMA_ARG_TOP_K)                                                                                                                                          |
-| `--top-p N`                              | top-p sampling (default: 0.95, 1.0 = disabled)                                                                                                                                                                 |
-| `--min-p N`                              | min-p sampling (default: 0.05, 0.0 = disabled)                                                                                                                                                                 |
-| `--top-nsigma, --top-n-sigma N`          | top-n-sigma sampling (default: -1.00, -1.0 = disabled)                                                                                                                                                         |
-| `--xtc-probability N`                    | xtc probability (default: 0.00, 0.0 = disabled)                                                                                                                                                                |
-| `--xtc-threshold N`                      | xtc threshold (default: 0.10, 1.0 = disabled)                                                                                                                                                                  |
-| `--typical, --typical-p N`               | locally typical sampling, parameter p (default: 1.00, 1.0 = disabled)                                                                                                                                          |
-| `--repeat-last-n N`                      | last n tokens to consider for penalize (default: 64, 0 = disabled, -1 = ctx_size)                                                                                                                              |
-| `--repeat-penalty N`                     | penalize repeat sequence of tokens (default: 1.00, 1.0 = disabled)                                                                                                                                             |
-| `--presence-penalty N`                   | repeat alpha presence penalty (default: 0.00, 0.0 = disabled)                                                                                                                                                  |
-| `--frequency-penalty N`                  | repeat alpha frequency penalty (default: 0.00, 0.0 = disabled)                                                                                                                                                 |
-| `--dry-multiplier N`                     | set DRY sampling multiplier (default: 0.00, 0.0 = disabled)                                                                                                                                                    |
-| `--dry-base N`                           | set DRY sampling base value (default: 1.75)                                                                                                                                                                    |
-| `--dry-allowed-length N`                 | set allowed length for DRY sampling (default: 2)                                                                                                                                                               |
-| `--dry-penalty-last-n N`                 | set DRY penalty for the last n tokens (default: -1, 0 = disable, -1 = context size)                                                                                                                            |
-| `--dry-sequence-breaker STRING`          | add sequence breaker for DRY sampling, clearing out default breakers ('\n', ':', '"', '\*') in the process; use "none" to not use any sequence breakers                                                        |
-| `--adaptive-target N`                    | adaptive-p: select tokens near this probability (valid range 0.0 to 1.0; negative = disabled) (default: -1.00)<br/>[(more info)](https://github.com/ggml-org/llama.cpp/pull/17927)                             |
-| `--adaptive-decay N`                     | adaptive-p: decay rate for target adaptation over time. lower values are more reactive, higher values are more stable.<br/>(valid range 0.0 to 0.99) (default: 0.90)                                           |
-| `--dynatemp-range N`                     | dynamic temperature range (default: 0.00, 0.0 = disabled)                                                                                                                                                      |
-| `--dynatemp-exp N`                       | dynamic temperature exponent (default: 1.00)                                                                                                                                                                   |
-| `--mirostat N`                           | use Mirostat sampling.<br/>Top K, Nucleus and Locally Typical samplers are ignored if used.<br/>(default: 0, 0 = disabled, 1 = Mirostat, 2 = Mirostat 2.0)                                                     |
-| `--mirostat-lr N`                        | Mirostat learning rate, parameter eta (default: 0.10)                                                                                                                                                          |
-| `--mirostat-ent N`                       | Mirostat target entropy, parameter tau (default: 5.00)                                                                                                                                                         |
-| `-l, --logit-bias TOKEN_ID(+/-)BIAS`     | modifies the likelihood of token appearing in the completion,<br/>i.e. `--logit-bias 15043+1` to increase likelihood of token ' Hello',<br/>or `--logit-bias 15043-1` to decrease likelihood of token ' Hello' |
-| `--grammar GRAMMAR`                      | BNF-like grammar to constrain generations (see samples in grammars/ dir)                                                                                                                                       |
-| `--grammar-file FNAME`                   | file to read grammar from                                                                                                                                                                                      |
-| `-j, --json-schema SCHEMA`               | JSON schema to constrain generations (https://json-schema.org/), e.g. `{}` for any JSON object<br/>For schemas w/ external $refs, use --grammar + example/json_schema_to_grammar.py instead                    |
-| `-jf, --json-schema-file FILE`           | File containing a JSON schema to constrain generations (https://json-schema.org/), e.g. `{}` for any JSON object<br/>For schemas w/ external $refs, use --grammar + example/json_schema_to_grammar.py instead  |
-| `-bs, --backend-sampling`                | enable backend sampling (experimental) (default: disabled)<br/>(env: LLAMA_ARG_BACKEND_SAMPLING)                                                                                                               |
+| Argument | Explanation |
+| -------- | ----------- |
+| `--samplers SAMPLERS` | samplers that will be used for generation in the order, separated by ';'<br/>(default: penalties;dry;top_n_sigma;top_k;typ_p;top_p;min_p;xtc;temperature) |
+| `-s, --seed SEED` | RNG seed (default: -1, use random seed for -1) |
+| `--sampler-seq, --sampling-seq SEQUENCE` | simplified sequence for samplers that will be used (default: edskypmxt) |
+| `--ignore-eos` | ignore end of stream token and continue generating (implies --logit-bias EOS-inf) |
+| `--temp, --temperature N` | temperature (default: 0.80) |
+| `--top-k N` | top-k sampling (default: 40, 0 = disabled)<br/>(env: LLAMA_ARG_TOP_K) |
+| `--top-p N` | top-p sampling (default: 0.95, 1.0 = disabled) |
+| `--min-p N` | min-p sampling (default: 0.05, 0.0 = disabled) |
+| `--top-nsigma, --top-n-sigma N` | top-n-sigma sampling (default: -1.00, -1.0 = disabled) |
+| `--xtc-probability N` | xtc probability (default: 0.00, 0.0 = disabled) |
+| `--xtc-threshold N` | xtc threshold (default: 0.10, 1.0 = disabled) |
+| `--typical, --typical-p N` | locally typical sampling, parameter p (default: 1.00, 1.0 = disabled) |
+| `--repeat-last-n N` | last n tokens to consider for penalize (default: 64, 0 = disabled, -1 = ctx_size) |
+| `--repeat-penalty N` | penalize repeat sequence of tokens (default: 1.00, 1.0 = disabled) |
+| `--presence-penalty N` | repeat alpha presence penalty (default: 0.00, 0.0 = disabled) |
+| `--frequency-penalty N` | repeat alpha frequency penalty (default: 0.00, 0.0 = disabled) |
+| `--dry-multiplier N` | set DRY sampling multiplier (default: 0.00, 0.0 = disabled) |
+| `--dry-base N` | set DRY sampling base value (default: 1.75) |
+| `--dry-allowed-length N` | set allowed length for DRY sampling (default: 2) |
+| `--dry-penalty-last-n N` | set DRY penalty for the last n tokens (default: -1, 0 = disable, -1 = context size) |
+| `--dry-sequence-breaker STRING` | add sequence breaker for DRY sampling, clearing out default breakers ('\n', ':', '"', '*') in the process; use "none" to not use any sequence breakers |
+| `--adaptive-target N` | adaptive-p: select tokens near this probability (valid range 0.0 to 1.0; negative = disabled) (default: -1.00)<br/>[(more info)](https://github.com/ggml-org/llama.cpp/pull/17927) |
+| `--adaptive-decay N` | adaptive-p: decay rate for target adaptation over time. lower values are more reactive, higher values are more stable.<br/>(valid range 0.0 to 0.99) (default: 0.90) |
+| `--dynatemp-range N` | dynamic temperature range (default: 0.00, 0.0 = disabled) |
+| `--dynatemp-exp N` | dynamic temperature exponent (default: 1.00) |
+| `--mirostat N` | use Mirostat sampling.<br/>Top K, Nucleus and Locally Typical samplers are ignored if used.<br/>(default: 0, 0 = disabled, 1 = Mirostat, 2 = Mirostat 2.0) |
+| `--mirostat-lr N` | Mirostat learning rate, parameter eta (default: 0.10) |
+| `--mirostat-ent N` | Mirostat target entropy, parameter tau (default: 5.00) |
+| `-l, --logit-bias TOKEN_ID(+/-)BIAS` | modifies the likelihood of token appearing in the completion,<br/>i.e. `--logit-bias 15043+1` to increase likelihood of token ' Hello',<br/>or `--logit-bias 15043-1` to decrease likelihood of token ' Hello' |
+| `--grammar GRAMMAR` | BNF-like grammar to constrain generations (see samples in grammars/ dir) |
+| `--grammar-file FNAME` | file to read grammar from |
+| `-j, --json-schema SCHEMA` | JSON schema to constrain generations (https://json-schema.org/), e.g. `{}` for any JSON object<br/>For schemas w/ external $refs, use --grammar + example/json_schema_to_grammar.py instead |
+| `-jf, --json-schema-file FILE` | File containing a JSON schema to constrain generations (https://json-schema.org/), e.g. `{}` for any JSON object<br/>For schemas w/ external $refs, use --grammar + example/json_schema_to_grammar.py instead |
+| `-bs, --backend-sampling` | enable backend sampling (experimental) (default: disabled)<br/>(env: LLAMA_ARG_BACKEND_SAMPLING) |
+
 
 ### Server-specific params
 
-| Argument                                                                                                                         | Explanation                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| -------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `-lcs, --lookup-cache-static FNAME`                                                                                              | path to static lookup cache to use for lookup decoding (not updated by generation)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `-lcd, --lookup-cache-dynamic FNAME`                                                                                             | path to dynamic lookup cache to use for lookup decoding (updated by generation)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `-ctxcp, --ctx-checkpoints, --swa-checkpoints N`                                                                                 | max number of context checkpoints to create per slot (default: 32)[(more info)](https://github.com/ggml-org/llama.cpp/pull/15293)<br/>(env: LLAMA_ARG_CTX_CHECKPOINTS)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `-cms, --checkpoint-min-step N`                                                                                                  | minimum spacing between context checkpoints in tokens (default: 8192, 0 = no minimum)<br/>(env: LLAMA_ARG_CHECKPOINT_MIN_SPACING_NT)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `-cram, --cache-ram N`                                                                                                           | set the maximum cache size in MiB (default: 8192, -1 - no limit, 0 - disable)[(more info)](https://github.com/ggml-org/llama.cpp/pull/16391)<br/>(env: LLAMA_ARG_CACHE_RAM)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `-kvu, --kv-unified, -no-kvu, --no-kv-unified`                                                                                   | use single unified KV buffer shared across all sequences (default: enabled if number of slots is auto)<br/>(env: LLAMA_ARG_KV_UNIFIED)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `--cache-idle-slots, --no-cache-idle-slots`                                                                                      | save idle slots to the prompt cache on new task, and clear them when using unified KV (default: enabled, requires cache-ram)<br/>(env: LLAMA_ARG_CACHE_IDLE_SLOTS)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `--context-shift, --no-context-shift`                                                                                            | whether to use context shift on infinite text generation (default: disabled)<br/>(env: LLAMA_ARG_CONTEXT_SHIFT)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `-r, --reverse-prompt PROMPT`                                                                                                    | halt generation at PROMPT, return control in interactive mode                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `-sp, --special`                                                                                                                 | special tokens output enabled (default: false)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `--warmup, --no-warmup`                                                                                                          | whether to perform warmup with an empty run (default: enabled)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `--spm-infill`                                                                                                                   | use Suffix/Prefix/Middle pattern for infill (instead of Prefix/Suffix/Middle) as some models prefer this. (default: disabled)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `--pooling {none,mean,cls,last,rank}`                                                                                            | pooling type for embeddings, use model default if unspecified<br/>(env: LLAMA_ARG_POOLING)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `-np, --parallel N`                                                                                                              | number of server slots (default: -1, -1 = auto)<br/>(env: LLAMA_ARG_N_PARALLEL)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `-cb, --cont-batching, -nocb, --no-cont-batching`                                                                                | whether to enable continuous batching (a.k.a dynamic batching) (default: enabled)<br/>(env: LLAMA_ARG_CONT_BATCHING)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `-mm, --mmproj FILE`                                                                                                             | path to a multimodal projector file. see tools/mtmd/README.md<br/>note: if -hf is used, this argument can be omitted<br/>(env: LLAMA_ARG_MMPROJ)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `-mmu, --mmproj-url URL`                                                                                                         | URL to a multimodal projector file. see tools/mtmd/README.md<br/>(env: LLAMA_ARG_MMPROJ_URL)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `--mmproj-auto, --no-mmproj, --no-mmproj-auto`                                                                                   | whether to use multimodal projector file (if available), useful when using -hf (default: enabled)<br/>(env: LLAMA_ARG_MMPROJ_AUTO)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `--mmproj-offload, --no-mmproj-offload`                                                                                          | whether to enable GPU offloading for multimodal projector (default: enabled)<br/>(env: LLAMA_ARG_MMPROJ_OFFLOAD)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `--image-min-tokens N`                                                                                                           | minimum number of tokens each image can take, only used by vision models with dynamic resolution (default: read from model)<br/>(env: LLAMA_ARG_IMAGE_MIN_TOKENS)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `--image-max-tokens N`                                                                                                           | maximum number of tokens each image can take, only used by vision models with dynamic resolution (default: read from model)<br/>(env: LLAMA_ARG_IMAGE_MAX_TOKENS)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `--mtmd-batch-max-tokens N`                                                                                                      | maximum number of image tokens per batch when encoding images (default: 1024)<br/>(env: LLAMA_ARG_MTMD_BATCH_MAX_TOKENS)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `-a, --alias STRING`                                                                                                             | set model name aliases, comma-separated (to be used by API)<br/>(env: LLAMA_ARG_ALIAS)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `--tags STRING`                                                                                                                  | set model tags, comma-separated (informational, not used for routing)<br/>(env: LLAMA_ARG_TAGS)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `--embd-normalize N`                                                                                                             | normalisation for embeddings (default: 2) (-1=none, 0=max absolute int16, 1=taxicab, 2=euclidean, >2=p-norm)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `--host HOST`                                                                                                                    | ip address to listen, or bind to an UNIX socket if the address ends with .sock (default: 127.0.0.1)<br/>(env: LLAMA_ARG_HOST)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `--port PORT`                                                                                                                    | port to listen (default: 8080)<br/>(env: LLAMA_ARG_PORT)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `--reuse-port`                                                                                                                   | allow multiple sockets to bind to the same port (default: disabled)<br/>(env: LLAMA_ARG_REUSE_PORT)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `--path PATH`                                                                                                                    | path to serve static files from (default: )<br/>(env: LLAMA_ARG_STATIC_PATH)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `--cors-origins ORIGINS`                                                                                                         | comma-separated list of allowed origins for CORS (default: \*)<br/>if set to special value 'localhost', reflect the Origin header only if it is localhost<br/>(env: LLAMA_ARG_CORS_ORIGINS)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `--cors-methods METHODS`                                                                                                         | comma-separated list of allowed methods for CORS (default: GET, POST, DELETE, OPTIONS)<br/>(env: LLAMA_ARG_CORS_METHODS)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `--cors-headers HEADERS`                                                                                                         | comma-separated list of allowed headers for CORS (default: \*)<br/>(env: LLAMA_ARG_CORS_HEADERS)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `--cors-credentials, --no-cors-credentials`                                                                                      | whether to allow credentials for CORS (default: enabled)<br/>note: if this is enabled and --cors-origins is set to \* (default), the Origin header will be echoed back, and credentials will always be allowed<br/>(env: LLAMA_ARG_CORS_CREDENTIALS)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `--api-prefix PREFIX`                                                                                                            | prefix path the server serves from, without the trailing slash (default: )<br/>(env: LLAMA_ARG_API_PREFIX)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `--ui-config, --webui-config JSON`                                                                                               | JSON that provides default UI settings (overrides UI defaults)<br/>(env: LLAMA_ARG_UI_CONFIG)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `--ui-config-file, --webui-config-file PATH`                                                                                     | JSON file that provides default UI settings (overrides UI defaults)<br/>(env: LLAMA_ARG_UI_CONFIG_FILE)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `--ui-mcp-proxy, --webui-mcp-proxy, --no-ui-mcp-proxy, --no-webui-mcp-proxy`                                                     | experimental: whether to enable MCP CORS proxy - do not enable in untrusted environments (default: disabled)<br/>(env: LLAMA_ARG_UI_MCP_PROXY)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `--tools TOOL1,TOOL2,...`                                                                                                        | experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)<br/>specify "all" to enable all tools<br/>available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, get_datetime<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_TOOLS)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `-ag, --agent, -no-ag, --no-agent`                                                                                               | whether to enable CORS proxy and all built-in tools - do not enable in untrusted environments (default: disabled)<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_AGENT)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `--ui, --webui, --no-ui, --no-webui`                                                                                             | whether to enable the Web UI (default: enabled)<br/>(env: LLAMA_ARG_UI)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `--embedding, --embeddings`                                                                                                      | restrict to only support embedding use case; use only with dedicated embedding models (default: disabled)<br/>(env: LLAMA_ARG_EMBEDDINGS)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `--rerank, --reranking`                                                                                                          | enable reranking endpoint on server (default: disabled)<br/>(env: LLAMA_ARG_RERANKING)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `--api-key KEY`                                                                                                                  | API key to use for authentication, multiple keys can be provided as a comma-separated list (default: none)<br/>(env: LLAMA_API_KEY)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `--api-key-file FNAME`                                                                                                           | path to file containing API keys, one per line; lines starting with a hash are treated as comments (default: none)<br/>(env: LLAMA_ARG_API_KEY_FILE)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `--ssl-key-file FNAME`                                                                                                           | path to file a PEM-encoded SSL private key<br/>(env: LLAMA_ARG_SSL_KEY_FILE)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `--ssl-cert-file FNAME`                                                                                                          | path to file a PEM-encoded SSL certificate<br/>(env: LLAMA_ARG_SSL_CERT_FILE)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `--chat-template-kwargs STRING`                                                                                                  | sets additional params for the json template parser, must be a valid json object string, e.g. '{"key1":"value1","key2":"value2"}'<br/>(env: LLAMA_ARG_CHAT_TEMPLATE_KWARGS)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `-to, --timeout N`                                                                                                               | server read/write timeout in seconds (default: 3600)<br/>(env: LLAMA_ARG_TIMEOUT)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `--sse-ping-interval N`                                                                                                          | server SSE ping interval in seconds (-1 = disabled, default: 30)<br/>(env: LLAMA_ARG_SSE_PING_INTERVAL)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `--threads-http N`                                                                                                               | number of threads used to process HTTP requests (default: -1)<br/>(env: LLAMA_ARG_THREADS_HTTP)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `--cache-prompt, --no-cache-prompt`                                                                                              | whether to enable prompt caching (default: enabled)<br/>(env: LLAMA_ARG_CACHE_PROMPT)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `--cache-reuse N`                                                                                                                | min chunk size to attempt reusing from the cache via KV shifting, requires prompt caching to be enabled (default: 0)<br/>[(card)](https://ggml.ai/f0.png)<br/>(env: LLAMA_ARG_CACHE_REUSE)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `--metrics`                                                                                                                      | enable prometheus compatible metrics endpoint (default: disabled)<br/>(env: LLAMA_ARG_ENDPOINT_METRICS)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `--props`                                                                                                                        | enable changing global properties via POST /props (default: disabled)<br/>(env: LLAMA_ARG_ENDPOINT_PROPS)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `--slots, --no-slots`                                                                                                            | expose slots monitoring endpoint (default: enabled)<br/>(env: LLAMA_ARG_ENDPOINT_SLOTS)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `--slot-save-path PATH`                                                                                                          | path to save slot kv cache (default: disabled)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `--media-path PATH`                                                                                                              | directory for loading local media files; files can be accessed via file:// URLs using relative paths (default: disabled)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `--models-dir PATH`                                                                                                              | directory containing models for the router server (default: disabled)<br/>(env: LLAMA_ARG_MODELS_DIR)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `--models-preset PATH`                                                                                                           | path to INI file containing model presets for the router server (default: disabled)<br/>(env: LLAMA_ARG_MODELS_PRESET)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `--models-max N`                                                                                                                 | for router server, maximum number of models to load simultaneously (default: 4, 0 = unlimited)<br/>(env: LLAMA_ARG_MODELS_MAX)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `--models-autoload, --no-models-autoload`                                                                                        | for router server, whether to automatically load models (default: enabled)<br/>(env: LLAMA_ARG_MODELS_AUTOLOAD)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `--jinja, --no-jinja`                                                                                                            | whether to use jinja template engine for chat (default: enabled)<br/>(env: LLAMA_ARG_JINJA)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `--reasoning-format FORMAT`                                                                                                      | controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:<br/>- none: leaves thoughts unparsed in `message.content`<br/>- deepseek: puts thoughts in `message.reasoning_content`<br/>- deepseek-legacy: keeps `<think>` tags in `message.content` while also populating `message.reasoning_content`<br/>(default: auto)<br/>(env: LLAMA_ARG_THINK)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `-rea, --reasoning [on\|off\|auto]`                                                                                              | Use reasoning/thinking in the chat ('on', 'off', or 'auto', default: 'auto' (detect from template))<br/>(env: LLAMA_ARG_REASONING)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `--reasoning-budget N`                                                                                                           | token budget for thinking: -1 for unrestricted, 0 for immediate end, N>0 for token budget (default: -1)<br/>(env: LLAMA_ARG_THINK_BUDGET)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `--reasoning-budget-message MESSAGE`                                                                                             | message injected before the end-of-thinking tag when reasoning budget is exhausted (default: none)<br/>(env: LLAMA_ARG_THINK_BUDGET_MESSAGE)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `--reasoning-preserve, --no-reasoning-preserve`                                                                                  | preserve reasoning trace in the full history, not just the last assistant message (default: template default)<br/>compatible with certain templates having 'supports_preserve_reasoning' capability<br/>example: https://docs.z.ai/guides/capabilities/thinking-mode#preserved-thinking<br/>(env: LLAMA_ARG_REASONING_PRESERVE)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `--chat-template JINJA_TEMPLATE`                                                                                                 | set custom jinja chat template (default: template taken from model's metadata)<br/>if suffix/prefix are specified, template will be disabled<br/>only commonly used templates are accepted (unless --jinja is set before this flag):<br/>list of built-in templates:<br/>bailing, bailing-think, bailing2, chatglm3, chatglm4, chatml, command-r, deepseek, deepseek-ocr, deepseek2, deepseek3, exaone-moe, exaone3, exaone4, falcon3, gemma, gigachat, glmedge, gpt-oss, granite, granite-4.0, granite-4.1, grok-2, hunyuan-dense, hunyuan-moe, hunyuan-vl, kimi-k2, llama2, llama2-sys, llama2-sys-bos, llama2-sys-strip, llama3, llama4, megrez, minicpm, mistral-v1, mistral-v3, mistral-v3-tekken, mistral-v7, mistral-v7-tekken, monarch, openchat, orion, pangu-embedded, phi3, phi4, rwkv-world, seed_oss, smolvlm, solar-open, vicuna, vicuna-orca, yandex, zephyr<br/>(env: LLAMA_ARG_CHAT_TEMPLATE)           |
-| `--chat-template-file JINJA_TEMPLATE_FILE`                                                                                       | set custom jinja chat template file (default: template taken from model's metadata)<br/>if suffix/prefix are specified, template will be disabled<br/>only commonly used templates are accepted (unless --jinja is set before this flag):<br/>list of built-in templates:<br/>bailing, bailing-think, bailing2, chatglm3, chatglm4, chatml, command-r, deepseek, deepseek-ocr, deepseek2, deepseek3, exaone-moe, exaone3, exaone4, falcon3, gemma, gigachat, glmedge, gpt-oss, granite, granite-4.0, granite-4.1, grok-2, hunyuan-dense, hunyuan-moe, hunyuan-vl, kimi-k2, llama2, llama2-sys, llama2-sys-bos, llama2-sys-strip, llama3, llama4, megrez, minicpm, mistral-v1, mistral-v3, mistral-v3-tekken, mistral-v7, mistral-v7-tekken, monarch, openchat, orion, pangu-embedded, phi3, phi4, rwkv-world, seed_oss, smolvlm, solar-open, vicuna, vicuna-orca, yandex, zephyr<br/>(env: LLAMA_ARG_CHAT_TEMPLATE_FILE) |
-| `--skip-chat-parsing, --no-skip-chat-parsing`                                                                                    | force a pure content parser, even if a Jinja template is specified; model will output everything in the content section, including any reasoning and/or tool calls (default: disabled)<br/>(env: LLAMA_ARG_SKIP_CHAT_PARSING)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `--prefill-assistant, --no-prefill-assistant`                                                                                    | whether to prefill the assistant's response if the last message is an assistant message (default: prefill enabled)<br/>when this flag is set, if the last message is an assistant message then it will be treated as a full message and not prefilled<br/><br/>(env: LLAMA_ARG_PREFILL_ASSISTANT)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `-sps, --slot-prompt-similarity SIMILARITY`                                                                                      | how much the prompt of a request must match the prompt of a slot in order to use that slot (default: 0.10, 0.0 = disabled)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `--lora-init-without-apply`                                                                                                      | load LoRA adapters without applying them (apply later via POST /lora-adapters) (default: disabled)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `--sleep-idle-seconds SECONDS`                                                                                                   | number of seconds of idleness after which the server will sleep (default: -1; -1 = disabled)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `--log-prompts-dir PATH`                                                                                                         | Log prompts to directory (auto-created if not present; only used for debugging, default: disabled)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `--spec-draft-hf, -hfd, -hfrd, --hf-repo-draft <user>/<model>[:quant]`                                                           | Same as --hf-repo, but for the draft model (default: unused)<br/>(env: LLAMA_ARG_SPEC_DRAFT_HF_REPO)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `--spec-draft-threads, -td, --threads-draft N`                                                                                   | number of threads to use during generation (default: same as --threads)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `--spec-draft-threads-batch, -tbd, --threads-batch-draft N`                                                                      | number of threads to use during batch and prompt processing (default: same as --threads-draft)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `--spec-draft-cpu-mask, -Cd, --cpu-mask-draft M`                                                                                 | Draft model CPU affinity mask. Complements cpu-range-draft (default: same as --cpu-mask)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `--spec-draft-cpu-range, -Crd, --cpu-range-draft lo-hi`                                                                          | Ranges of CPUs for affinity. Complements --cpu-mask-draft                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `--spec-draft-cpu-strict, --cpu-strict-draft <0\|1>`                                                                             | Use strict CPU placement for draft model (default: same as --cpu-strict)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `--spec-draft-prio, --prio-draft N`                                                                                              | set draft process/thread priority : 0-normal, 1-medium, 2-high, 3-realtime (default: 0)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `--spec-draft-poll, --poll-draft <0\|1>`                                                                                         | Use polling to wait for draft model work (default: same as --poll)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `--spec-draft-cpu-mask-batch, -Cbd, --cpu-mask-batch-draft M`                                                                    | Draft model CPU affinity mask. Complements cpu-range-draft (default: same as --cpu-mask)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `--spec-draft-cpu-strict-batch, --cpu-strict-batch-draft <0\|1>`                                                                 | Use strict CPU placement for draft model (default: --cpu-strict-draft)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `--spec-draft-prio-batch, --prio-batch-draft N`                                                                                  | set draft process/thread priority : 0-normal, 1-medium, 2-high, 3-realtime (default: 0)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `--spec-draft-poll-batch, --poll-batch-draft <0\|1>`                                                                             | Use polling to wait for draft model work (default: --poll-draft)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `--spec-draft-override-tensor, -otd, --override-tensor-draft <tensor name pattern>=<buffer type>,...`                            | override tensor buffer type for draft model                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `--spec-draft-cpu-moe, -cmoed, --cpu-moe-draft`                                                                                  | keep all Mixture of Experts (MoE) weights in the CPU for the draft model<br/>(env: LLAMA_ARG_SPEC_DRAFT_CPU_MOE)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `--spec-draft-n-cpu-moe, --spec-draft-ncmoe, -ncmoed, --n-cpu-moe-draft N`                                                       | keep the Mixture of Experts (MoE) weights of the first N layers in the CPU for the draft model<br/>(env: LLAMA_ARG_SPEC_DRAFT_N_CPU_MOE)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `--spec-draft-n-max N`                                                                                                           | number of tokens to draft for speculative decoding (default: 3)<br/>(env: LLAMA_ARG_SPEC_DRAFT_N_MAX)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `--spec-draft-n-min N`                                                                                                           | minimum number of draft tokens to use for speculative decoding (default: 0)<br/>(env: LLAMA_ARG_SPEC_DRAFT_N_MIN)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `--spec-draft-p-split, --draft-p-split P`                                                                                        | speculative decoding split probability (default: 0.10)<br/>(env: LLAMA_ARG_SPEC_DRAFT_P_SPLIT)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `--spec-draft-p-min, --draft-p-min P`                                                                                            | minimum speculative decoding probability (greedy) (default: 0.00)<br/>(env: LLAMA_ARG_SPEC_DRAFT_P_MIN)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `--spec-draft-backend-sampling, --no-spec-draft-backend-sampling`                                                                | offload draft sampling to the backend (default: enabled)<br/>(env: LLAMA_ARG_SPEC_DRAFT_BACKEND_SAMPLING)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `--spec-draft-device, -devd, --device-draft <dev1,dev2,..>`                                                                      | comma-separated list of devices to use for offloading the draft model (none = don't offload)<br/>use --list-devices to see a list of available devices                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `--spec-draft-ngl, -ngld, --gpu-layers-draft, --n-gpu-layers-draft N`                                                            | max. number of draft model layers to store in VRAM, either an exact number, 'auto', or 'all' (default: auto)<br/>(env: LLAMA_ARG_N_GPU_LAYERS_DRAFT)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `--spec-draft-model, -md, --model-draft FNAME`                                                                                   | draft model for speculative decoding (default: unused)<br/>(env: LLAMA_ARG_SPEC_DRAFT_MODEL)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `--spec-type none,draft-simple,draft-eagle3,draft-mtp,draft-dflash,ngram-simple,ngram-map-k,ngram-map-k4v,ngram-mod,ngram-cache` | comma-separated list of types of speculative decoding to use (default: none)<br/><br/>(env: LLAMA_ARG_SPEC_TYPE)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `--spec-ngram-mod-n-min N`                                                                                                       | minimum number of ngram tokens to use for ngram-based speculative decoding (default: 48)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `--spec-ngram-mod-n-max N`                                                                                                       | maximum number of ngram tokens to use for ngram-based speculative decoding (default: 64)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `--spec-ngram-mod-n-match N`                                                                                                     | ngram-mod lookup length (default: 24)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `--spec-ngram-simple-size-n N`                                                                                                   | ngram size N for ngram-simple speculative decoding, length of lookup n-gram (default: 12)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `--spec-ngram-simple-size-m N`                                                                                                   | ngram size M for ngram-simple speculative decoding, length of draft m-gram (default: 48)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `--spec-ngram-simple-min-hits N`                                                                                                 | minimum hits for ngram-simple speculative decoding (default: 1)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `--spec-ngram-map-k-size-n N`                                                                                                    | ngram size N for ngram-map-k speculative decoding, length of lookup n-gram (default: 12)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `--spec-ngram-map-k-size-m N`                                                                                                    | ngram size M for ngram-map-k speculative decoding, length of draft m-gram (default: 48)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `--spec-ngram-map-k-min-hits N`                                                                                                  | minimum hits for ngram-map-k speculative decoding (default: 1)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `--spec-ngram-map-k4v-size-n N`                                                                                                  | ngram size N for ngram-map-k4v speculative decoding, length of lookup n-gram (default: 12)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `--spec-ngram-map-k4v-size-m N`                                                                                                  | ngram size M for ngram-map-k4v speculative decoding, length of draft m-gram (default: 48)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `--spec-ngram-map-k4v-min-hits N`                                                                                                | minimum hits for ngram-map-k4v speculative decoding (default: 1)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `--draft, --draft-n, --draft-max N`                                                                                              | the argument has been removed. use --spec-draft-n-max or --spec-ngram-mod-n-max<br/>(env: LLAMA_ARG_DRAFT_MAX)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `--draft-min, --draft-n-min N`                                                                                                   | the argument has been removed. use --spec-draft-n-min or --spec-ngram-mod-n-min<br/>(env: LLAMA_ARG_DRAFT_MIN)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `--spec-ngram-size-n N`                                                                                                          | the argument has been removed. use the respective --spec-ngram-\*-size-n or --spec-ngram-mod-n-match                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `--spec-ngram-size-m N`                                                                                                          | the argument has been removed. use the respective --spec-ngram-\*-size-m                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `--spec-ngram-min-hits N`                                                                                                        | the argument has been removed. use the respective --spec-ngram-\*-min-hits                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `-mv, --model-vocoder FNAME`                                                                                                     | vocoder model for audio generation (default: unused)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `--tts-use-guide-tokens`                                                                                                         | Use guide tokens to improve TTS word recall                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `--embd-gemma-default`                                                                                                           | use default EmbeddingGemma model (note: can download weights from the internet)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `--fim-qwen-1.5b-default`                                                                                                        | use default Qwen 2.5 Coder 1.5B (note: can download weights from the internet)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `--fim-qwen-3b-default`                                                                                                          | use default Qwen 2.5 Coder 3B (note: can download weights from the internet)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `--fim-qwen-7b-default`                                                                                                          | use default Qwen 2.5 Coder 7B (note: can download weights from the internet)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `--fim-qwen-7b-spec`                                                                                                             | use Qwen 2.5 Coder 7B + 0.5B draft for speculative decoding (note: can download weights from the internet)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `--fim-qwen-14b-spec`                                                                                                            | use Qwen 2.5 Coder 14B + 0.5B draft for speculative decoding (note: can download weights from the internet)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `--fim-qwen-30b-default`                                                                                                         | use default Qwen 3 Coder 30B A3B Instruct (note: can download weights from the internet)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `--gpt-oss-20b-default`                                                                                                          | use gpt-oss-20b (note: can download weights from the internet)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `--gpt-oss-120b-default`                                                                                                         | use gpt-oss-120b (note: can download weights from the internet)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `--vision-gemma-4b-default`                                                                                                      | use Gemma 3 4B QAT (note: can download weights from the internet)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `--vision-gemma-12b-default`                                                                                                     | use Gemma 3 12B QAT (note: can download weights from the internet)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `--spec-default`                                                                                                                 | enable default speculative decoding config                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Argument | Explanation |
+| -------- | ----------- |
+| `-lcs, --lookup-cache-static FNAME` | path to static lookup cache to use for lookup decoding (not updated by generation) |
+| `-lcd, --lookup-cache-dynamic FNAME` | path to dynamic lookup cache to use for lookup decoding (updated by generation) |
+| `-ctxcp, --ctx-checkpoints, --swa-checkpoints N` | max number of context checkpoints to create per slot (default: 32)[(more info)](https://github.com/ggml-org/llama.cpp/pull/15293)<br/>(env: LLAMA_ARG_CTX_CHECKPOINTS) |
+| `-cms, --checkpoint-min-step N` | minimum spacing between context checkpoints in tokens (default: 8192, 0 = no minimum)<br/>(env: LLAMA_ARG_CHECKPOINT_MIN_SPACING_NT) |
+| `-cram, --cache-ram N` | set the maximum cache size in MiB (default: 8192, -1 - no limit, 0 - disable)[(more info)](https://github.com/ggml-org/llama.cpp/pull/16391)<br/>(env: LLAMA_ARG_CACHE_RAM) |
+| `-kvu, --kv-unified, -no-kvu, --no-kv-unified` | use single unified KV buffer shared across all sequences (default: enabled if number of slots is auto)<br/>(env: LLAMA_ARG_KV_UNIFIED) |
+| `--cache-idle-slots, --no-cache-idle-slots` | save idle slots to the prompt cache on new task, and clear them when using unified KV (default: enabled, requires cache-ram)<br/>(env: LLAMA_ARG_CACHE_IDLE_SLOTS) |
+| `--context-shift, --no-context-shift` | whether to use context shift on infinite text generation (default: disabled)<br/>(env: LLAMA_ARG_CONTEXT_SHIFT) |
+| `-r, --reverse-prompt PROMPT` | halt generation at PROMPT, return control in interactive mode |
+| `-sp, --special` | special tokens output enabled (default: false) |
+| `--warmup, --no-warmup` | whether to perform warmup with an empty run (default: enabled) |
+| `--spm-infill` | use Suffix/Prefix/Middle pattern for infill (instead of Prefix/Suffix/Middle) as some models prefer this. (default: disabled) |
+| `--pooling {none,mean,cls,last,rank}` | pooling type for embeddings, use model default if unspecified<br/>(env: LLAMA_ARG_POOLING) |
+| `-np, --parallel N` | number of server slots (default: -1, -1 = auto)<br/>(env: LLAMA_ARG_N_PARALLEL) |
+| `-cb, --cont-batching, -nocb, --no-cont-batching` | whether to enable continuous batching (a.k.a dynamic batching) (default: enabled)<br/>(env: LLAMA_ARG_CONT_BATCHING) |
+| `-mm, --mmproj FILE` | path to a multimodal projector file. see tools/mtmd/README.md<br/>note: if -hf is used, this argument can be omitted<br/>(env: LLAMA_ARG_MMPROJ) |
+| `-mmu, --mmproj-url URL` | URL to a multimodal projector file. see tools/mtmd/README.md<br/>(env: LLAMA_ARG_MMPROJ_URL) |
+| `--mmproj-auto, --no-mmproj, --no-mmproj-auto` | whether to use multimodal projector file (if available), useful when using -hf (default: enabled)<br/>(env: LLAMA_ARG_MMPROJ_AUTO) |
+| `--mmproj-offload, --no-mmproj-offload` | whether to enable GPU offloading for multimodal projector (default: enabled)<br/>(env: LLAMA_ARG_MMPROJ_OFFLOAD) |
+| `--image-min-tokens N` | minimum number of tokens each image can take, only used by vision models with dynamic resolution (default: read from model)<br/>(env: LLAMA_ARG_IMAGE_MIN_TOKENS) |
+| `--image-max-tokens N` | maximum number of tokens each image can take, only used by vision models with dynamic resolution (default: read from model)<br/>(env: LLAMA_ARG_IMAGE_MAX_TOKENS) |
+| `--mtmd-batch-max-tokens N` | maximum number of image tokens per batch when encoding images (default: 1024)<br/>(env: LLAMA_ARG_MTMD_BATCH_MAX_TOKENS) |
+| `-a, --alias STRING` | set model name aliases, comma-separated (to be used by API)<br/>(env: LLAMA_ARG_ALIAS) |
+| `--tags STRING` | set model tags, comma-separated (informational, not used for routing)<br/>(env: LLAMA_ARG_TAGS) |
+| `--embd-normalize N` | normalisation for embeddings (default: 2) (-1=none, 0=max absolute int16, 1=taxicab, 2=euclidean, >2=p-norm) |
+| `--host HOST` | ip address to listen, or bind to an UNIX socket if the address ends with .sock (default: 127.0.0.1)<br/>(env: LLAMA_ARG_HOST) |
+| `--port PORT` | port to listen (default: 8080)<br/>(env: LLAMA_ARG_PORT) |
+| `--reuse-port` | allow multiple sockets to bind to the same port (default: disabled)<br/>(env: LLAMA_ARG_REUSE_PORT) |
+| `--path PATH` | path to serve static files from (default: )<br/>(env: LLAMA_ARG_STATIC_PATH) |
+| `--cors-origins ORIGINS` | comma-separated list of allowed origins for CORS (default: *)<br/>if set to special value 'localhost', reflect the Origin header only if it is localhost<br/>(env: LLAMA_ARG_CORS_ORIGINS) |
+| `--cors-methods METHODS` | comma-separated list of allowed methods for CORS (default: GET, POST, DELETE, OPTIONS)<br/>(env: LLAMA_ARG_CORS_METHODS) |
+| `--cors-headers HEADERS` | comma-separated list of allowed headers for CORS (default: *)<br/>(env: LLAMA_ARG_CORS_HEADERS) |
+| `--cors-credentials, --no-cors-credentials` | whether to allow credentials for CORS (default: enabled)<br/>note: if this is enabled and --cors-origins is set to * (default), the Origin header will be echoed back, and credentials will always be allowed<br/>(env: LLAMA_ARG_CORS_CREDENTIALS) |
+| `--api-prefix PREFIX` | prefix path the server serves from, without the trailing slash (default: )<br/>(env: LLAMA_ARG_API_PREFIX) |
+| `--ui-config, --webui-config JSON` | JSON that provides default UI settings (overrides UI defaults)<br/>(env: LLAMA_ARG_UI_CONFIG) |
+| `--ui-config-file, --webui-config-file PATH` | JSON file that provides default UI settings (overrides UI defaults)<br/>(env: LLAMA_ARG_UI_CONFIG_FILE) |
+| `--ui-mcp-proxy, --webui-mcp-proxy, --no-ui-mcp-proxy, --no-webui-mcp-proxy` | experimental: whether to enable MCP CORS proxy - do not enable in untrusted environments (default: disabled)<br/>(env: LLAMA_ARG_UI_MCP_PROXY) |
+| `--tools TOOL1,TOOL2,...` | experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)<br/>specify "all" to enable all tools<br/>available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, get_datetime<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_TOOLS) |
+| `-ag, --agent, -no-ag, --no-agent` | whether to enable CORS proxy and all built-in tools - do not enable in untrusted environments (default: disabled)<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_AGENT) |
+| `--ui, --webui, --no-ui, --no-webui` | whether to enable the Web UI (default: enabled)<br/>(env: LLAMA_ARG_UI) |
+| `--embedding, --embeddings` | restrict to only support embedding use case; use only with dedicated embedding models (default: disabled)<br/>(env: LLAMA_ARG_EMBEDDINGS) |
+| `--rerank, --reranking` | enable reranking endpoint on server (default: disabled)<br/>(env: LLAMA_ARG_RERANKING) |
+| `--api-key KEY` | API key to use for authentication, multiple keys can be provided as a comma-separated list (default: none)<br/>(env: LLAMA_API_KEY) |
+| `--api-key-file FNAME` | path to file containing API keys, one per line; lines starting with a hash are treated as comments (default: none)<br/>(env: LLAMA_ARG_API_KEY_FILE) |
+| `--ssl-key-file FNAME` | path to file a PEM-encoded SSL private key<br/>(env: LLAMA_ARG_SSL_KEY_FILE) |
+| `--ssl-cert-file FNAME` | path to file a PEM-encoded SSL certificate<br/>(env: LLAMA_ARG_SSL_CERT_FILE) |
+| `--chat-template-kwargs STRING` | sets additional params for the json template parser, must be a valid json object string, e.g. '{"key1":"value1","key2":"value2"}'<br/>(env: LLAMA_ARG_CHAT_TEMPLATE_KWARGS) |
+| `-to, --timeout N` | server read/write timeout in seconds (default: 3600)<br/>(env: LLAMA_ARG_TIMEOUT) |
+| `--sse-ping-interval N` | server SSE ping interval in seconds (-1 = disabled, default: 30)<br/>(env: LLAMA_ARG_SSE_PING_INTERVAL) |
+| `--threads-http N` | number of threads used to process HTTP requests (default: -1)<br/>(env: LLAMA_ARG_THREADS_HTTP) |
+| `--cache-prompt, --no-cache-prompt` | whether to enable prompt caching (default: enabled)<br/>(env: LLAMA_ARG_CACHE_PROMPT) |
+| `--cache-reuse N` | min chunk size to attempt reusing from the cache via KV shifting, requires prompt caching to be enabled (default: 0)<br/>[(card)](https://ggml.ai/f0.png)<br/>(env: LLAMA_ARG_CACHE_REUSE) |
+| `--metrics` | enable prometheus compatible metrics endpoint (default: disabled)<br/>(env: LLAMA_ARG_ENDPOINT_METRICS) |
+| `--props` | enable changing global properties via POST /props (default: disabled)<br/>(env: LLAMA_ARG_ENDPOINT_PROPS) |
+| `--slots, --no-slots` | expose slots monitoring endpoint (default: enabled)<br/>(env: LLAMA_ARG_ENDPOINT_SLOTS) |
+| `--slot-save-path PATH` | path to save slot kv cache (default: disabled) |
+| `--media-path PATH` | directory for loading local media files; files can be accessed via file:// URLs using relative paths (default: disabled) |
+| `--models-dir PATH` | directory containing models for the router server (default: disabled)<br/>(env: LLAMA_ARG_MODELS_DIR) |
+| `--models-preset PATH` | path to INI file containing model presets for the router server (default: disabled)<br/>(env: LLAMA_ARG_MODELS_PRESET) |
+| `--models-max N` | for router server, maximum number of models to load simultaneously (default: 4, 0 = unlimited)<br/>(env: LLAMA_ARG_MODELS_MAX) |
+| `--models-autoload, --no-models-autoload` | for router server, whether to automatically load models (default: enabled)<br/>(env: LLAMA_ARG_MODELS_AUTOLOAD) |
+| `--jinja, --no-jinja` | whether to use jinja template engine for chat (default: enabled)<br/>(env: LLAMA_ARG_JINJA) |
+| `--reasoning-format FORMAT` | controls whether thought tags are allowed and/or extracted from the response, and in which format they're returned; one of:<br/>- none: leaves thoughts unparsed in `message.content`<br/>- deepseek: puts thoughts in `message.reasoning_content`<br/>- deepseek-legacy: keeps `<think>` tags in `message.content` while also populating `message.reasoning_content`<br/>(default: auto)<br/>(env: LLAMA_ARG_THINK) |
+| `-rea, --reasoning [on\|off\|auto]` | Use reasoning/thinking in the chat ('on', 'off', or 'auto', default: 'auto' (detect from template))<br/>(env: LLAMA_ARG_REASONING) |
+| `--reasoning-budget N` | token budget for thinking: -1 for unrestricted, 0 for immediate end, N>0 for token budget (default: -1)<br/>(env: LLAMA_ARG_THINK_BUDGET) |
+| `--reasoning-budget-message MESSAGE` | message injected before the end-of-thinking tag when reasoning budget is exhausted (default: none)<br/>(env: LLAMA_ARG_THINK_BUDGET_MESSAGE) |
+| `--reasoning-preserve, --no-reasoning-preserve` | preserve reasoning trace in the full history, not just the last assistant message (default: template default)<br/>compatible with certain templates having 'supports_preserve_reasoning' capability<br/>example: https://docs.z.ai/guides/capabilities/thinking-mode#preserved-thinking<br/>(env: LLAMA_ARG_REASONING_PRESERVE) |
+| `--chat-template JINJA_TEMPLATE` | set custom jinja chat template (default: template taken from model's metadata)<br/>if suffix/prefix are specified, template will be disabled<br/>only commonly used templates are accepted (unless --jinja is set before this flag):<br/>list of built-in templates:<br/>bailing, bailing-think, bailing2, chatglm3, chatglm4, chatml, command-r, deepseek, deepseek-ocr, deepseek2, deepseek3, exaone-moe, exaone3, exaone4, falcon3, gemma, gigachat, glmedge, gpt-oss, granite, granite-4.0, granite-4.1, grok-2, hunyuan-dense, hunyuan-moe, hunyuan-vl, kimi-k2, llama2, llama2-sys, llama2-sys-bos, llama2-sys-strip, llama3, llama4, megrez, minicpm, mistral-v1, mistral-v3, mistral-v3-tekken, mistral-v7, mistral-v7-tekken, monarch, openchat, orion, pangu-embedded, phi3, phi4, rwkv-world, seed_oss, smolvlm, solar-open, vicuna, vicuna-orca, yandex, zephyr<br/>(env: LLAMA_ARG_CHAT_TEMPLATE) |
+| `--chat-template-file JINJA_TEMPLATE_FILE` | set custom jinja chat template file (default: template taken from model's metadata)<br/>if suffix/prefix are specified, template will be disabled<br/>only commonly used templates are accepted (unless --jinja is set before this flag):<br/>list of built-in templates:<br/>bailing, bailing-think, bailing2, chatglm3, chatglm4, chatml, command-r, deepseek, deepseek-ocr, deepseek2, deepseek3, exaone-moe, exaone3, exaone4, falcon3, gemma, gigachat, glmedge, gpt-oss, granite, granite-4.0, granite-4.1, grok-2, hunyuan-dense, hunyuan-moe, hunyuan-vl, kimi-k2, llama2, llama2-sys, llama2-sys-bos, llama2-sys-strip, llama3, llama4, megrez, minicpm, mistral-v1, mistral-v3, mistral-v3-tekken, mistral-v7, mistral-v7-tekken, monarch, openchat, orion, pangu-embedded, phi3, phi4, rwkv-world, seed_oss, smolvlm, solar-open, vicuna, vicuna-orca, yandex, zephyr<br/>(env: LLAMA_ARG_CHAT_TEMPLATE_FILE) |
+| `--skip-chat-parsing, --no-skip-chat-parsing` | force a pure content parser, even if a Jinja template is specified; model will output everything in the content section, including any reasoning and/or tool calls (default: disabled)<br/>(env: LLAMA_ARG_SKIP_CHAT_PARSING) |
+| `--prefill-assistant, --no-prefill-assistant` | whether to prefill the assistant's response if the last message is an assistant message (default: prefill enabled)<br/>when this flag is set, if the last message is an assistant message then it will be treated as a full message and not prefilled<br/><br/>(env: LLAMA_ARG_PREFILL_ASSISTANT) |
+| `-sps, --slot-prompt-similarity SIMILARITY` | how much the prompt of a request must match the prompt of a slot in order to use that slot (default: 0.10, 0.0 = disabled) |
+| `--lora-init-without-apply` | load LoRA adapters without applying them (apply later via POST /lora-adapters) (default: disabled) |
+| `--sleep-idle-seconds SECONDS` | number of seconds of idleness after which the server will sleep (default: -1; -1 = disabled) |
+| `--log-prompts-dir PATH` | Log prompts to directory (auto-created if not present; only used for debugging, default: disabled) |
+| `--spec-draft-hf, -hfd, -hfrd, --hf-repo-draft <user>/<model>[:quant]` | Same as --hf-repo, but for the draft model (default: unused)<br/>(env: LLAMA_ARG_SPEC_DRAFT_HF_REPO) |
+| `--spec-draft-threads, -td, --threads-draft N` | number of threads to use during generation (default: same as --threads) |
+| `--spec-draft-threads-batch, -tbd, --threads-batch-draft N` | number of threads to use during batch and prompt processing (default: same as --threads-draft) |
+| `--spec-draft-cpu-mask, -Cd, --cpu-mask-draft M` | Draft model CPU affinity mask. Complements cpu-range-draft (default: same as --cpu-mask) |
+| `--spec-draft-cpu-range, -Crd, --cpu-range-draft lo-hi` | Ranges of CPUs for affinity. Complements --cpu-mask-draft |
+| `--spec-draft-cpu-strict, --cpu-strict-draft <0\|1>` | Use strict CPU placement for draft model (default: same as --cpu-strict) |
+| `--spec-draft-prio, --prio-draft N` | set draft process/thread priority : 0-normal, 1-medium, 2-high, 3-realtime (default: 0) |
+| `--spec-draft-poll, --poll-draft <0\|1>` | Use polling to wait for draft model work (default: same as --poll) |
+| `--spec-draft-cpu-mask-batch, -Cbd, --cpu-mask-batch-draft M` | Draft model CPU affinity mask. Complements cpu-range-draft (default: same as --cpu-mask) |
+| `--spec-draft-cpu-strict-batch, --cpu-strict-batch-draft <0\|1>` | Use strict CPU placement for draft model (default: --cpu-strict-draft) |
+| `--spec-draft-prio-batch, --prio-batch-draft N` | set draft process/thread priority : 0-normal, 1-medium, 2-high, 3-realtime (default: 0) |
+| `--spec-draft-poll-batch, --poll-batch-draft <0\|1>` | Use polling to wait for draft model work (default: --poll-draft) |
+| `--spec-draft-override-tensor, -otd, --override-tensor-draft <tensor name pattern>=<buffer type>,...` | override tensor buffer type for draft model |
+| `--spec-draft-cpu-moe, -cmoed, --cpu-moe-draft` | keep all Mixture of Experts (MoE) weights in the CPU for the draft model<br/>(env: LLAMA_ARG_SPEC_DRAFT_CPU_MOE) |
+| `--spec-draft-n-cpu-moe, --spec-draft-ncmoe, -ncmoed, --n-cpu-moe-draft N` | keep the Mixture of Experts (MoE) weights of the first N layers in the CPU for the draft model<br/>(env: LLAMA_ARG_SPEC_DRAFT_N_CPU_MOE) |
+| `--spec-draft-n-max N` | number of tokens to draft for speculative decoding (default: 3)<br/>(env: LLAMA_ARG_SPEC_DRAFT_N_MAX) |
+| `--spec-draft-n-min N` | minimum number of draft tokens to use for speculative decoding (default: 0)<br/>(env: LLAMA_ARG_SPEC_DRAFT_N_MIN) |
+| `--spec-draft-p-split, --draft-p-split P` | speculative decoding split probability (default: 0.10)<br/>(env: LLAMA_ARG_SPEC_DRAFT_P_SPLIT) |
+| `--spec-draft-p-min, --draft-p-min P` | minimum speculative decoding probability (greedy) (default: 0.00)<br/>(env: LLAMA_ARG_SPEC_DRAFT_P_MIN) |
+| `--spec-draft-backend-sampling, --no-spec-draft-backend-sampling` | offload draft sampling to the backend (default: enabled)<br/>(env: LLAMA_ARG_SPEC_DRAFT_BACKEND_SAMPLING) |
+| `--spec-draft-device, -devd, --device-draft <dev1,dev2,..>` | comma-separated list of devices to use for offloading the draft model (none = don't offload)<br/>use --list-devices to see a list of available devices |
+| `--spec-draft-ngl, -ngld, --gpu-layers-draft, --n-gpu-layers-draft N` | max. number of draft model layers to store in VRAM, either an exact number, 'auto', or 'all' (default: auto)<br/>(env: LLAMA_ARG_N_GPU_LAYERS_DRAFT) |
+| `--spec-draft-model, -md, --model-draft FNAME` | draft model for speculative decoding (default: unused)<br/>(env: LLAMA_ARG_SPEC_DRAFT_MODEL) |
+| `--spec-type none,draft-simple,draft-eagle3,draft-mtp,draft-dflash,ngram-simple,ngram-map-k,ngram-map-k4v,ngram-mod,ngram-cache` | comma-separated list of types of speculative decoding to use (default: none)<br/><br/>(env: LLAMA_ARG_SPEC_TYPE) |
+| `--spec-ngram-mod-n-min N` | minimum number of ngram tokens to use for ngram-based speculative decoding (default: 48) |
+| `--spec-ngram-mod-n-max N` | maximum number of ngram tokens to use for ngram-based speculative decoding (default: 64) |
+| `--spec-ngram-mod-n-match N` | ngram-mod lookup length (default: 24) |
+| `--spec-ngram-simple-size-n N` | ngram size N for ngram-simple speculative decoding, length of lookup n-gram (default: 12) |
+| `--spec-ngram-simple-size-m N` | ngram size M for ngram-simple speculative decoding, length of draft m-gram (default: 48) |
+| `--spec-ngram-simple-min-hits N` | minimum hits for ngram-simple speculative decoding (default: 1) |
+| `--spec-ngram-map-k-size-n N` | ngram size N for ngram-map-k speculative decoding, length of lookup n-gram (default: 12) |
+| `--spec-ngram-map-k-size-m N` | ngram size M for ngram-map-k speculative decoding, length of draft m-gram (default: 48) |
+| `--spec-ngram-map-k-min-hits N` | minimum hits for ngram-map-k speculative decoding (default: 1) |
+| `--spec-ngram-map-k4v-size-n N` | ngram size N for ngram-map-k4v speculative decoding, length of lookup n-gram (default: 12) |
+| `--spec-ngram-map-k4v-size-m N` | ngram size M for ngram-map-k4v speculative decoding, length of draft m-gram (default: 48) |
+| `--spec-ngram-map-k4v-min-hits N` | minimum hits for ngram-map-k4v speculative decoding (default: 1) |
+| `--draft, --draft-n, --draft-max N` | the argument has been removed. use --spec-draft-n-max or --spec-ngram-mod-n-max<br/>(env: LLAMA_ARG_DRAFT_MAX) |
+| `--draft-min, --draft-n-min N` | the argument has been removed. use --spec-draft-n-min or --spec-ngram-mod-n-min<br/>(env: LLAMA_ARG_DRAFT_MIN) |
+| `--spec-ngram-size-n N` | the argument has been removed. use the respective --spec-ngram-*-size-n or --spec-ngram-mod-n-match |
+| `--spec-ngram-size-m N` | the argument has been removed. use the respective --spec-ngram-*-size-m |
+| `--spec-ngram-min-hits N` | the argument has been removed. use the respective --spec-ngram-*-min-hits |
+| `-mv, --model-vocoder FNAME` | vocoder model for audio generation (default: unused) |
+| `--tts-use-guide-tokens` | Use guide tokens to improve TTS word recall |
+| `--embd-gemma-default` | use default EmbeddingGemma model (note: can download weights from the internet) |
+| `--fim-qwen-1.5b-default` | use default Qwen 2.5 Coder 1.5B (note: can download weights from the internet) |
+| `--fim-qwen-3b-default` | use default Qwen 2.5 Coder 3B (note: can download weights from the internet) |
+| `--fim-qwen-7b-default` | use default Qwen 2.5 Coder 7B (note: can download weights from the internet) |
+| `--fim-qwen-7b-spec` | use Qwen 2.5 Coder 7B + 0.5B draft for speculative decoding (note: can download weights from the internet) |
+| `--fim-qwen-14b-spec` | use Qwen 2.5 Coder 14B + 0.5B draft for speculative decoding (note: can download weights from the internet) |
+| `--fim-qwen-30b-default` | use default Qwen 3 Coder 30B A3B Instruct (note: can download weights from the internet) |
+| `--gpt-oss-20b-default` | use gpt-oss-20b (note: can download weights from the internet) |
+| `--gpt-oss-120b-default` | use gpt-oss-120b (note: can download weights from the internet) |
+| `--vision-gemma-4b-default` | use Gemma 3 4B QAT (note: can download weights from the internet) |
+| `--vision-gemma-12b-default` | use Gemma 3 12B QAT (note: can download weights from the internet) |
+| `--spec-default` | enable default speculative decoding config |
 
 <!-- HELP_END -->
 
 Note: If both command line argument and environment variable are both set for the same param, the argument will take precedence over env var.
 
 For boolean options like `--mmap` or `--kv-offload`, the environment variable is handled as shown in this example:
-
 - `LLAMA_ARG_MMAP=true` means enabled, other accepted values are: `1`, `on`, `enabled`
 - `LLAMA_ARG_MMAP=false` means disabled, other accepted values are: `0`, `off`, `disabled`
 - If `LLAMA_ARG_NO_MMAP` is present (no matter the value), it means disabling mmap
@@ -305,26 +305,25 @@ Example usage of docker compose with environment variables:
 
 ```yml
 services:
-    llamacpp-server:
-        image: ghcr.io/ggml-org/llama.cpp:server
-        ports:
-            - 8080:8080
-        volumes:
-            - ./models:/models
-        environment:
-            # alternatively, you can use "LLAMA_ARG_MODEL_URL" to download the model
-            LLAMA_ARG_MODEL: /models/my_model.gguf
-            LLAMA_ARG_CTX_SIZE: 4096
-            LLAMA_ARG_N_PARALLEL: 2
-            LLAMA_ARG_ENDPOINT_METRICS: 1
-            LLAMA_ARG_PORT: 8080
+  llamacpp-server:
+    image: ghcr.io/ggml-org/llama.cpp:server
+    ports:
+      - 8080:8080
+    volumes:
+      - ./models:/models
+    environment:
+      # alternatively, you can use "LLAMA_ARG_MODEL_URL" to download the model
+      LLAMA_ARG_MODEL: /models/my_model.gguf
+      LLAMA_ARG_CTX_SIZE: 4096
+      LLAMA_ARG_N_PARALLEL: 2
+      LLAMA_ARG_ENDPOINT_METRICS: 1
+      LLAMA_ARG_PORT: 8080
 ```
 
 ### Multimodal support
 
 Multimodal support was added in [#12898](https://github.com/ggml-org/llama.cpp/pull/12898) and is currently an experimental feature.
 It is currently available in the following endpoints:
-
 - The OAI-compatible chat endpoint.
 - The non-OAI-compatible completions endpoint.
 - The non-OAI-compatible embeddings endpoint.
@@ -343,12 +342,12 @@ To use this feature, start the server with `--tools all`. You can also enable on
 
 - Using `CMake`:
 
-    ```bash
-    cmake -B build
-    cmake --build build --config Release -t llama-server
-    ```
+  ```bash
+  cmake -B build
+  cmake --build build --config Release -t llama-server
+  ```
 
-    Binary is at `./build/bin/llama-server`
+  Binary is at `./build/bin/llama-server`
 
 ## Build with SSL
 
@@ -356,10 +355,10 @@ To use this feature, start the server with `--tools all`. You can also enable on
 
 - Using `CMake`:
 
-    ```bash
-    cmake -B build -DLLAMA_OPENSSL=ON
-    cmake --build build --config Release -t llama-server
-    ```
+  ```bash
+  cmake -B build -DLLAMA_OPENSSL=ON
+  cmake --build build --config Release -t llama-server
+  ```
 
 ## Quick Start
 
@@ -409,11 +408,11 @@ This endpoint is public (no API key check). `/v1/health` also works.
 **Response format**
 
 - HTTP status code 503
-    - Body: `{"error": {"code": 503, "message": "Loading model", "type": "unavailable_error"}}`
-    - Explanation: the model is still being loaded.
+  - Body: `{"error": {"code": 503, "message": "Loading model", "type": "unavailable_error"}}`
+  - Explanation: the model is still being loaded.
 - HTTP status code 200
-    - Body: `{"status": "ok" }`
-    - Explanation: the model is successfully loaded and the server is ready.
+  - Body: `{"status": "ok" }`
+  - Explanation: the model is successfully loaded and the server is ready.
 
 ### POST `/completion`: Given a `prompt`, it returns the predicted completion.
 
@@ -421,27 +420,27 @@ This endpoint is public (no API key check). `/v1/health` also works.
 >
 > This endpoint is **not** OAI-compatible. For OAI-compatible client, use `/v1/completions` instead.
 
-_Options:_
+*Options:*
 
 `prompt`: Provide the prompt for this completion as a string or as an array of strings or numbers representing tokens. Internally, if `cache_prompt` is `true`, the prompt is compared to the previous completion and only the "unseen" suffix is evaluated. A `BOS` token is inserted at the start, if all of the following conditions are true:
 
-- The prompt is a string or an array with the first element given as a string
-- The model's `tokenizer.ggml.add_bos_token` metadata is `true`
+  - The prompt is a string or an array with the first element given as a string
+  - The model's `tokenizer.ggml.add_bos_token` metadata is `true`
 
 These input shapes and data type are allowed for `prompt`:
 
-- Single string: `"string"`
-- Single sequence of tokens: `[12, 34, 56]`
-- Mixed tokens and strings: `[12, 34, "string", 56, 78]`
-- A JSON object which optionally contains multimodal data: `{ "prompt_string": "string", "multimodal_data": ["base64"] }`
+  - Single string: `"string"`
+  - Single sequence of tokens: `[12, 34, 56]`
+  - Mixed tokens and strings: `[12, 34, "string", 56, 78]`
+  - A JSON object which optionally contains multimodal data: `{ "prompt_string": "string", "multimodal_data": ["base64"] }`
 
 Multiple prompts are also supported. In this case, the completion result will be an array.
 
-- Only strings: `["string1", "string2"]`
-- Strings, JSON objects, and sequences of tokens: `["string1", [12, 34, 56], { "prompt_string": "string", "multimodal_data": ["base64"]}]`
-- Mixed types: `[[12, 34, "string", 56, 78], [12, 34, 56], "string", { "prompt_string": "string" }]`
+  - Only strings: `["string1", "string2"]`
+  - Strings, JSON objects, and sequences of tokens: `["string1", [12, 34, 56], { "prompt_string": "string", "multimodal_data": ["base64"]}]`
+  - Mixed types: `[[12, 34, "string", 56, 78], [12, 34, 56], "string", { "prompt_string": "string" }]`
 
-Note for `multimodal_data` in JSON object prompts. This should be an array of strings, containing base64 encoded multimodal data such as images and audio. There must be an identical number of MTMD media markers in the string prompt element which act as placeholders for the data provided to this parameter. The multimodal data files will be substituted in order. The marker string (e.g. `<__media__>`) can be found by calling `mtmd_default_marker()` defined in [the MTMD C API](https://github.com/ggml-org/llama.cpp/blob/5fd160bbd9d70b94b5b11b0001fd7f477005e4a0/tools/mtmd/mtmd.h#L87). A client _must not_ specify this field unless the server has the multimodal capability. Clients should check `/models` or `/v1/models` for the `multimodal` capability before a multimodal request.
+Note for `multimodal_data` in JSON object prompts. This should be an array of strings, containing base64 encoded multimodal data such as images and audio. There must be an identical number of MTMD media markers in the string prompt element which act as placeholders for the data provided to this parameter. The multimodal data files will be substituted in order. The marker string (e.g. `<__media__>`) can be found by calling `mtmd_default_marker()` defined in [the MTMD C API](https://github.com/ggml-org/llama.cpp/blob/5fd160bbd9d70b94b5b11b0001fd7f477005e4a0/tools/mtmd/mtmd.h#L87). A client *must not* specify this field unless the server has the multimodal capability. Clients should check `/models` or `/v1/models` for the `multimodal` capability before a multimodal request.
 
 `temperature`: Adjust the randomness of the generated text. Default: `0.8`
 
@@ -449,7 +448,7 @@ Note for `multimodal_data` in JSON object prompts. This should be an array of st
 
 `dynatemp_exponent`: Dynamic temperature exponent. Default: `1.0`
 
-`top_k`: Limit the next token selection to the K most probable tokens. Default: `40`
+`top_k`: Limit the next token selection to the K most probable tokens.  Default: `40`
 
 `top_p`: Limit the next token selection to a subset of tokens with a cumulative probability above a threshold P. Default: `0.95`
 
@@ -485,7 +484,7 @@ These words will not be included in the completion, so make sure to add them to 
 
 `dry_base`: Set the DRY repetition penalty base value. Default: `1.75`
 
-`dry_allowed_length`: Tokens that extend repetition beyond this receive exponentially increasing penalty: multiplier \* base ^ (length of repeating sequence before token - allowed length). Default: `2`
+`dry_allowed_length`: Tokens that extend repetition beyond this receive exponentially increasing penalty: multiplier * base ^ (length of repeating sequence before token - allowed length). Default: `2`
 
 `dry_penalty_last_n`: How many tokens to scan for repetitions. Default: `-1`, where `0` is disabled and `-1` is context size.
 
@@ -499,15 +498,15 @@ These words will not be included in the completion, so make sure to add them to 
 
 `mirostat_tau`: Set the Mirostat target entropy, parameter tau. Default: `5.0`
 
-`mirostat_eta`: Set the Mirostat learning rate, parameter eta. Default: `0.1`
+`mirostat_eta`: Set the Mirostat learning rate, parameter eta.  Default: `0.1`
 
-`grammar`: Set grammar for grammar-based sampling. Default: no grammar
+`grammar`: Set grammar for grammar-based sampling.  Default: no grammar
 
-`json_schema`: Set a JSON schema for grammar-based sampling (e.g. `{"items": {"type": "string"}, "minItems": 10, "maxItems": 100}` of a list of strings, or `{}` for any JSON). See [tests](../../tests/test-json-schema-to-grammar.cpp) for supported features. Default: no JSON schema.
+`json_schema`: Set a JSON schema for grammar-based sampling (e.g. `{"items": {"type": "string"}, "minItems": 10, "maxItems": 100}` of a list of strings, or `{}` for any JSON). See [tests](../../tests/test-json-schema-to-grammar.cpp) for supported features.  Default: no JSON schema.
 
-`seed`: Set the random number generator (RNG) seed. Default: `-1`, which is a random seed.
+`seed`: Set the random number generator (RNG) seed.  Default: `-1`, which is a random seed.
 
-`ignore_eos`: Ignore end of stream token and continue generating. Default: `false`
+`ignore_eos`: Ignore end of stream token and continue generating.  Default: `false`
 
 `logit_bias`: Modify the likelihood of a token appearing in the generated text completion. For example, use `"logit_bias": [[15043,1.0]]` to increase the likelihood of the token 'Hello', or `"logit_bias": [[15043,-1.0]]` to decrease its likelihood. Setting the value to false, `"logit_bias": [[15043,false]]` ensures that the token `Hello` is never produced. The tokens can also be represented as strings, e.g. `[["Hello, World!",-0.5]]` will reduce the likelihood of all the individual tokens that represent the string `Hello, World!`, just like the `presence_penalty` does. For compatibility with the OpenAI API, a JSON object {"<string or token id>": bias, ...} can also be passed. Default: `[]`
 
@@ -517,7 +516,7 @@ These words will not be included in the completion, so make sure to add them to 
 
 `t_max_predict_ms`: Set a time limit in milliseconds for the prediction (a.k.a. text-generation) phase. The timeout will trigger if the generation takes more than the specified time (measured since the first token was generated) and if a new-line character has already been generated. Useful for FIM applications. Default: `0`, which is disabled.
 
-`id_slot`: Assign the completion task to an specific slot. If is -1 the task will be assigned to a Idle slot. Default: `-1`
+`id_slot`: Assign the completion task to an specific slot. If is -1 the task will be assigned to a Idle slot.  Default: `-1`
 
 `cache_prompt`: Re-use KV cache from a previous request if possible. This way the common prefix does not have to be re-processed, only the suffix that differs between the requests. Because (depending on the backend) the logits are **not** guaranteed to be bit-for-bit identical for different batch sizes (prompt processing vs. token generation) enabling this option can cause nondeterministic results. Default: `true`
 
@@ -525,7 +524,7 @@ These words will not be included in the completion, so make sure to add them to 
 
 `samplers`: The order the samplers should be applied in. An array of strings representing sampler type names. If a sampler is not set, it will not be used. If a sampler is specified more than once, it will be applied multiple times. Default: `["dry", "top_k", "typ_p", "top_p", "min_p", "xtc", "temperature"]` - these are all the available values.
 
-`timings_per_token`: Include prompt processing and text generation speed information in each response. Default: `false`
+`timings_per_token`: Include prompt processing and text generation speed information in each response.  Default: `false`
 
 `return_progress`: Include prompt processing progress in `stream` mode. The progress will be contained inside `prompt_progress` with 4 values: `total`, `cache`, `processed`, and `time_ms`. The overall progress is `processed/total`, while the actual timed progress is `(processed-cache)/(total-cache)`. The `time_ms` field contains the elapsed time in milliseconds since prompt processing started. Default: `false`
 
@@ -542,55 +541,53 @@ These words will not be included in the completion, so make sure to add them to 
 - Note: In streaming mode (`stream`), only `content`, `tokens` and `stop` will be returned until end of completion. Responses are sent using the [Server-sent events](https://html.spec.whatwg.org/multipage/server-sent-events.html) standard. Note: the browser's `EventSource` interface cannot be used due to its lack of `POST` request support.
 
 - `completion_probabilities`: An array of token probabilities for each completion. The array's length is `n_predict`. Each item in the array has a nested array `top_logprobs`. It contains at **maximum** `n_probs` elements:
-
-    ```
-    {
-      "content": "<the generated completion text>",
-      "tokens": [ generated token ids if requested ],
+  ```
+  {
+    "content": "<the generated completion text>",
+    "tokens": [ generated token ids if requested ],
+    ...
+    "probs": [
+      {
+        "id": <token id>,
+        "logprob": float,
+        "token": "<most likely token>",
+        "bytes": [int, int, ...],
+        "top_logprobs": [
+          {
+            "id": <token id>,
+            "logprob": float,
+            "token": "<token text>",
+            "bytes": [int, int, ...],
+          },
+          {
+            "id": <token id>,
+            "logprob": float,
+            "token": "<token text>",
+            "bytes": [int, int, ...],
+          },
+          ...
+        ]
+      },
+      {
+        "id": <token id>,
+        "logprob": float,
+        "token": "<most likely token>",
+        "bytes": [int, int, ...],
+        "top_logprobs": [
+          ...
+        ]
+      },
       ...
-      "probs": [
-        {
-          "id": <token id>,
-          "logprob": float,
-          "token": "<most likely token>",
-          "bytes": [int, int, ...],
-          "top_logprobs": [
-            {
-              "id": <token id>,
-              "logprob": float,
-              "token": "<token text>",
-              "bytes": [int, int, ...],
-            },
-            {
-              "id": <token id>,
-              "logprob": float,
-              "token": "<token text>",
-              "bytes": [int, int, ...],
-            },
-            ...
-          ]
-        },
-        {
-          "id": <token id>,
-          "logprob": float,
-          "token": "<most likely token>",
-          "bytes": [int, int, ...],
-          "top_logprobs": [
-            ...
-          ]
-        },
-        ...
-      ]
-    },
-    ```
-
-    Please note that if `post_sampling_probs` is set to `true`:
+    ]
+  },
+  ```
+  Please note that if `post_sampling_probs` is set to `true`:
     - `logprob` will be replaced with `prob`, with the value between 0.0 and 1.0
     - `top_logprobs` will be replaced with `top_probs`. Each element contains:
-        - `id`: token ID
-        - `token`: token in string
-        - `bytes`: token in bytes
-        - `prob`: token probability, with the value between 0.0 and 1.0
+      - `id`: token ID
+      - `token`: token in string
+      - `bytes`: token in bytes
+      - `prob`: token probability, with the value between 0.0 and 1.0
     - Number of elements in `top_probs` may be less than `n_probs`
 
 - `content`: Completion result as a string (excluding `stopping_word` if any). In case of streaming mode, will contain the next token as a string.
@@ -600,54 +597,53 @@ These words will not be included in the completion, so make sure to add them to 
 - `model`: The model alias (for model path, please use `/props` endpoint)
 - `prompt`: The processed `prompt` (special tokens may be added)
 - `stop_type`: Indicating whether the completion has stopped. Possible values are:
-    - `none`: Generating (not stopped)
-    - `eos`: Stopped because it encountered the EOS token
-    - `limit`: Stopped because `n_predict` tokens were generated before stop words or EOS was encountered
-    - `word`: Stopped due to encountering a stopping word from `stop` JSON array provided
+  - `none`: Generating (not stopped)
+  - `eos`: Stopped because it encountered the EOS token
+  - `limit`: Stopped because `n_predict` tokens were generated before stop words or EOS was encountered
+  - `word`: Stopped due to encountering a stopping word from `stop` JSON array provided
 - `stopping_word`: The stopping word encountered which stopped the generation (or "" if not stopped due to a stopping word)
 - `timings`: Hash of timing information about the completion such as the number of tokens `predicted_per_second`
 - `tokens_cached`: Number of tokens from the prompt which could be re-used from previous completion
 - `tokens_evaluated`: Number of tokens evaluated in total from the prompt
 - `truncated`: Boolean indicating if the context size was exceeded during generation, i.e. the number of tokens provided in the prompt (`tokens_evaluated`) plus tokens generated (`tokens predicted`) exceeded the context size (`n_ctx`)
 
+
 ### POST `/tokenize`: Tokenize a given text
 
-_Options:_
+*Options:*
 
 `content`: (Required) The text to tokenize.
 
-`add_special`: (Optional) Boolean indicating if special tokens, i.e. `BOS`, should be inserted. Default: `false`
+`add_special`: (Optional) Boolean indicating if special tokens, i.e. `BOS`, should be inserted.  Default: `false`
 
-`parse_special`: (Optional) Boolean indicating if special tokens should be tokenized. When `false` special tokens are treated as plaintext. Default: `true`
+`parse_special`: (Optional) Boolean indicating if special tokens should be tokenized. When `false` special tokens are treated as plaintext.  Default: `true`
 
-`with_pieces`: (Optional) Boolean indicating whether to return token pieces along with IDs. Default: `false`
+`with_pieces`: (Optional) Boolean indicating whether to return token pieces along with IDs.  Default: `false`
 
 **Response:**
 
 Returns a JSON object with a `tokens` field containing the tokenization result. The `tokens` array contains either just token IDs or objects with `id` and `piece` fields, depending on the `with_pieces` parameter. The piece field is a string if the piece is valid unicode or a list of bytes otherwise.
 
-If `with_pieces` is `false`:
 
+If `with_pieces` is `false`:
 ```json
 {
-    "tokens": [123, 456, 789]
+  "tokens": [123, 456, 789]
 }
 ```
 
 If `with_pieces` is `true`:
-
 ```json
 {
-    "tokens": [
-        { "id": 123, "piece": "Hello" },
-        { "id": 456, "piece": " world" },
-        { "id": 789, "piece": "!" }
-    ]
+  "tokens": [
+    {"id": 123, "piece": "Hello"},
+    {"id": 456, "piece": " world"},
+    {"id": 789, "piece": "!"}
+  ]
 }
 ```
 
 With input 'á' (utf8 hex: C3 A1) on tinyllama/stories260k
-
 ```
 {
   "tokens": [
@@ -659,7 +655,7 @@ With input 'á' (utf8 hex: C3 A1) on tinyllama/stories260k
 
 ### POST `/detokenize`: Convert tokens to text
 
-_Options:_
+*Options:*
 
 `tokens`: Set the tokens to detokenize.
 
@@ -667,7 +663,7 @@ _Options:_
 
 Uses the server's prompt template formatting functionality to convert chat messages to a single string expected by a chat model as input, but does not perform inference. Instead, the prompt string is returned in the `prompt` field of the JSON response. The prompt can then be modified as desired (for example, to insert "Sure!" at the beginning of the model's response) before sending to `/completion` to generate the chat response.
 
-_Options:_
+*Options:*
 
 `messages`: (Required) Chat turns in the same format as `/v1/chat/completions`.
 
@@ -685,12 +681,11 @@ The same as [the embedding example](../embedding) does.
 
 This endpoint also supports multimodal embeddings. See the documentation for the `/completions` endpoint for details on how to send a multimodal prompt.
 
-_Options:_
+*Options:*
 
 `content`: Set the text to process.
 
 `embd_normalize`: Normalization for pooled embeddings. Can be one of the following values:
-
 ```
   -1: No normalization
    0: Max absolute
@@ -704,19 +699,18 @@ _Options:_
 Similar to https://jina.ai/reranker/ but might change in the future.
 Requires a reranker model (such as [bge-reranker-v2-m3](https://huggingface.co/BAAI/bge-reranker-v2-m3)) and the `--embedding --pooling rank` options.
 
-_Options:_
+*Options:*
 
 `query`: The query against which the documents will be ranked.
 
 `documents`: An array strings representing the documents to be ranked.
 
-_Aliases:_
+*Aliases:*
+  - `/rerank`
+  - `/v1/rerank`
+  - `/v1/reranking`
 
-- `/rerank`
-- `/v1/rerank`
-- `/v1/reranking`
-
-_Examples:_
+*Examples:*
 
 ```shell
 curl http://127.0.0.1:8012/v1/rerank \
@@ -737,12 +731,12 @@ curl http://127.0.0.1:8012/v1/rerank \
 
 Takes a prefix and a suffix and returns the predicted completion as stream.
 
-_Options:_
+*Options:*
 
 - `input_prefix`: Set the prefix of the code to infill.
 - `input_suffix`: Set the suffix of the code to infill.
-- `input_extra`: Additional context inserted before the FIM prefix.
-- `prompt`: Added after the `FIM_MID` token
+- `input_extra`:  Additional context inserted before the FIM prefix.
+- `prompt`:       Added after the `FIM_MID` token
 
 `input_extra` is array of `{"filename": string, "text": string}` objects.
 
@@ -775,78 +769,83 @@ By default, it is read-only. To make POST request to change global properties, y
 
 ```json
 {
-    "default_generation_settings": {
-        "id": 0,
-        "id_task": -1,
-        "n_ctx": 1024,
-        "speculative": false,
-        "is_processing": false,
-        "params": {
-            "n_predict": -1,
-            "seed": 4294967295,
-            "temperature": 0.800000011920929,
-            "dynatemp_range": 0.0,
-            "dynatemp_exponent": 1.0,
-            "top_k": 40,
-            "top_p": 0.949999988079071,
-            "min_p": 0.05000000074505806,
-            "xtc_probability": 0.0,
-            "xtc_threshold": 0.10000000149011612,
-            "typical_p": 1.0,
-            "repeat_last_n": 64,
-            "repeat_penalty": 1.0,
-            "presence_penalty": 0.0,
-            "frequency_penalty": 0.0,
-            "dry_multiplier": 0.0,
-            "dry_base": 1.75,
-            "dry_allowed_length": 2,
-            "dry_penalty_last_n": -1,
-            "dry_sequence_breakers": ["\n", ":", "\"", "*"],
-            "mirostat": 0,
-            "mirostat_tau": 5.0,
-            "mirostat_eta": 0.10000000149011612,
-            "stop": [],
-            "max_tokens": -1,
-            "n_keep": 0,
-            "n_discard": 0,
-            "ignore_eos": false,
-            "stream": true,
-            "n_probs": 0,
-            "min_keep": 0,
-            "grammar": "",
-            "samplers": [
-                "dry",
-                "top_k",
-                "typ_p",
-                "top_p",
-                "min_p",
-                "xtc",
-                "temperature"
-            ],
-            "speculative.n_max": 16,
-            "speculative.n_min": 5,
-            "speculative.p_min": 0.8999999761581421,
-            "timings_per_token": false
-        },
-        "prompt": "",
-        "next_token": {
-            "has_next_token": true,
-            "has_new_line": false,
-            "n_remain": -1,
-            "n_decoded": 0,
-            "stopping_word": ""
-        }
+  "default_generation_settings": {
+    "id": 0,
+    "id_task": -1,
+    "n_ctx": 1024,
+    "speculative": false,
+    "is_processing": false,
+    "params": {
+      "n_predict": -1,
+      "seed": 4294967295,
+      "temperature": 0.800000011920929,
+      "dynatemp_range": 0.0,
+      "dynatemp_exponent": 1.0,
+      "top_k": 40,
+      "top_p": 0.949999988079071,
+      "min_p": 0.05000000074505806,
+      "xtc_probability": 0.0,
+      "xtc_threshold": 0.10000000149011612,
+      "typical_p": 1.0,
+      "repeat_last_n": 64,
+      "repeat_penalty": 1.0,
+      "presence_penalty": 0.0,
+      "frequency_penalty": 0.0,
+      "dry_multiplier": 0.0,
+      "dry_base": 1.75,
+      "dry_allowed_length": 2,
+      "dry_penalty_last_n": -1,
+      "dry_sequence_breakers": [
+        "\n",
+        ":",
+        "\"",
+        "*"
+      ],
+      "mirostat": 0,
+      "mirostat_tau": 5.0,
+      "mirostat_eta": 0.10000000149011612,
+      "stop": [],
+      "max_tokens": -1,
+      "n_keep": 0,
+      "n_discard": 0,
+      "ignore_eos": false,
+      "stream": true,
+      "n_probs": 0,
+      "min_keep": 0,
+      "grammar": "",
+      "samplers": [
+        "dry",
+        "top_k",
+        "typ_p",
+        "top_p",
+        "min_p",
+        "xtc",
+        "temperature"
+      ],
+      "speculative.n_max": 16,
+      "speculative.n_min": 5,
+      "speculative.p_min": 0.8999999761581421,
+      "timings_per_token": false
     },
-    "total_slots": 1,
-    "model_path": "../models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
-    "chat_template": "...",
-    "chat_template_caps": {},
-    "modalities": {
-        "vision": false
-    },
-    "media_marker": "<__media_YoNhud46VdDqbuFmKYEO9PY7A4ARzRfg__>",
-    "build_info": "b(build number)-(build commit hash)",
-    "is_sleeping": false
+    "prompt": "",
+    "next_token": {
+      "has_next_token": true,
+      "has_new_line": false,
+      "n_remain": -1,
+      "n_decoded": 0,
+      "stopping_word": ""
+    }
+  },
+  "total_slots": 1,
+  "model_path": "../models/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf",
+  "chat_template": "...",
+  "chat_template_caps": {},
+  "modalities": {
+    "vision": false
+  },
+  "media_marker": "<__media_YoNhud46VdDqbuFmKYEO9PY7A4ARzRfg__>",
+  "build_info": "b(build number)-(build commit hash)",
+  "is_sleeping": false
 }
 ```
 
@@ -862,21 +861,21 @@ By default, it is read-only. To make POST request to change global properties, y
 
 To use this endpoint with POST method, you need to start server with `--props`
 
-_Options:_
+*Options:*
 
 - None yet
 
 ### POST `/embeddings`: non-OpenAI-compatible embeddings API
 
-This endpoint supports all poolings, including `--pooling none`. When the pooling is `none`, the responses will contain the _unnormalized_ embeddings for _all_ input tokens. For all other pooling types, only the pooled embeddings are returned, normalized using Euclidean norm.
+This endpoint supports all poolings, including `--pooling none`. When the pooling is `none`, the responses will contain the *unnormalized* embeddings for *all* input tokens. For all other pooling types, only the pooled embeddings are returned, normalized using Euclidean norm.
 
 Note that the response format of this endpoint is different from `/v1/embeddings`.
 
-_Options:_
+*Options:*
 
 Same as the `/v1/embeddings` endpoint.
 
-_Examples:_
+*Examples:*
 
 Same as the `/v1/embeddings` endpoint.
 
@@ -919,136 +918,136 @@ If query param `?fail_on_no_slot=1` is set, this endpoint will respond with stat
 
 ```json
 [
-    {
-        "id": 0,
-        "id_task": 135,
-        "n_ctx": 65536,
-        "speculative": false,
-        "is_processing": true,
-        "params": {
-            "n_predict": -1,
-            "seed": 4294967295,
-            "temperature": 0.800000011920929,
-            "dynatemp_range": 0.0,
-            "dynatemp_exponent": 1.0,
-            "top_k": 40,
-            "top_p": 0.949999988079071,
-            "min_p": 0.05000000074505806,
-            "top_n_sigma": -1.0,
-            "xtc_probability": 0.0,
-            "xtc_threshold": 0.10000000149011612,
-            "typical_p": 1.0,
-            "repeat_last_n": 64,
-            "repeat_penalty": 1.0,
-            "presence_penalty": 0.0,
-            "frequency_penalty": 0.0,
-            "dry_multiplier": 0.0,
-            "dry_base": 1.75,
-            "dry_allowed_length": 2,
-            "dry_penalty_last_n": 131072,
-            "mirostat": 0,
-            "mirostat_tau": 5.0,
-            "mirostat_eta": 0.10000000149011612,
-            "max_tokens": -1,
-            "n_keep": 0,
-            "n_discard": 0,
-            "ignore_eos": false,
-            "stream": true,
-            "n_probs": 0,
-            "min_keep": 0,
-            "chat_format": "GPT-OSS",
-            "reasoning_format": "none",
-            "reasoning_in_content": false,
-            "generation_prompt": "",
-            "samplers": [
-                "penalties",
-                "dry",
-                "top_k",
-                "typ_p",
-                "top_p",
-                "min_p",
-                "xtc",
-                "temperature"
-            ],
-            "speculative.n_max": 16,
-            "speculative.n_min": 0,
-            "speculative.p_min": 0.75,
-            "timings_per_token": false,
-            "post_sampling_probs": false,
-            "lora": []
-        },
-        "next_token": {
-            "has_next_token": true,
-            "has_new_line": false,
-            "n_remain": -1,
-            "n_decoded": 0
-        }
+  {
+    "id": 0,
+    "id_task": 135,
+    "n_ctx": 65536,
+    "speculative": false,
+    "is_processing": true,
+    "params": {
+      "n_predict": -1,
+      "seed": 4294967295,
+      "temperature": 0.800000011920929,
+      "dynatemp_range": 0.0,
+      "dynatemp_exponent": 1.0,
+      "top_k": 40,
+      "top_p": 0.949999988079071,
+      "min_p": 0.05000000074505806,
+      "top_n_sigma": -1.0,
+      "xtc_probability": 0.0,
+      "xtc_threshold": 0.10000000149011612,
+      "typical_p": 1.0,
+      "repeat_last_n": 64,
+      "repeat_penalty": 1.0,
+      "presence_penalty": 0.0,
+      "frequency_penalty": 0.0,
+      "dry_multiplier": 0.0,
+      "dry_base": 1.75,
+      "dry_allowed_length": 2,
+      "dry_penalty_last_n": 131072,
+      "mirostat": 0,
+      "mirostat_tau": 5.0,
+      "mirostat_eta": 0.10000000149011612,
+      "max_tokens": -1,
+      "n_keep": 0,
+      "n_discard": 0,
+      "ignore_eos": false,
+      "stream": true,
+      "n_probs": 0,
+      "min_keep": 0,
+      "chat_format": "GPT-OSS",
+      "reasoning_format": "none",
+      "reasoning_in_content": false,
+      "generation_prompt": "",
+      "samplers": [
+        "penalties",
+        "dry",
+        "top_k",
+        "typ_p",
+        "top_p",
+        "min_p",
+        "xtc",
+        "temperature"
+      ],
+      "speculative.n_max": 16,
+      "speculative.n_min": 0,
+      "speculative.p_min": 0.75,
+      "timings_per_token": false,
+      "post_sampling_probs": false,
+      "lora": []
     },
-    {
-        "id": 1,
-        "id_task": 0,
-        "n_ctx": 65536,
-        "speculative": false,
-        "is_processing": true,
-        "params": {
-            "n_predict": -1,
-            "seed": 4294967295,
-            "temperature": 0.800000011920929,
-            "dynatemp_range": 0.0,
-            "dynatemp_exponent": 1.0,
-            "top_k": 40,
-            "top_p": 0.949999988079071,
-            "min_p": 0.05000000074505806,
-            "top_n_sigma": -1.0,
-            "xtc_probability": 0.0,
-            "xtc_threshold": 0.10000000149011612,
-            "typical_p": 1.0,
-            "repeat_last_n": 64,
-            "repeat_penalty": 1.0,
-            "presence_penalty": 0.0,
-            "frequency_penalty": 0.0,
-            "dry_multiplier": 0.0,
-            "dry_base": 1.75,
-            "dry_allowed_length": 2,
-            "dry_penalty_last_n": 131072,
-            "mirostat": 0,
-            "mirostat_tau": 5.0,
-            "mirostat_eta": 0.10000000149011612,
-            "max_tokens": -1,
-            "n_keep": 0,
-            "n_discard": 0,
-            "ignore_eos": false,
-            "stream": true,
-            "n_probs": 0,
-            "min_keep": 0,
-            "chat_format": "GPT-OSS",
-            "reasoning_format": "none",
-            "reasoning_in_content": false,
-            "generation_prompt": "",
-            "samplers": [
-                "penalties",
-                "dry",
-                "top_k",
-                "typ_p",
-                "top_p",
-                "min_p",
-                "xtc",
-                "temperature"
-            ],
-            "speculative.n_max": 16,
-            "speculative.n_min": 0,
-            "speculative.p_min": 0.75,
-            "timings_per_token": false,
-            "post_sampling_probs": false,
-            "lora": []
-        },
-        "next_token": {
-            "has_next_token": true,
-            "has_new_line": true,
-            "n_remain": -1,
-            "n_decoded": 136
-        }
+    "next_token": {
+      "has_next_token": true,
+      "has_new_line": false,
+      "n_remain": -1,
+      "n_decoded": 0
     }
+  },
+  {
+    "id": 1,
+    "id_task": 0,
+    "n_ctx": 65536,
+    "speculative": false,
+    "is_processing": true,
+    "params": {
+      "n_predict": -1,
+      "seed": 4294967295,
+      "temperature": 0.800000011920929,
+      "dynatemp_range": 0.0,
+      "dynatemp_exponent": 1.0,
+      "top_k": 40,
+      "top_p": 0.949999988079071,
+      "min_p": 0.05000000074505806,
+      "top_n_sigma": -1.0,
+      "xtc_probability": 0.0,
+      "xtc_threshold": 0.10000000149011612,
+      "typical_p": 1.0,
+      "repeat_last_n": 64,
+      "repeat_penalty": 1.0,
+      "presence_penalty": 0.0,
+      "frequency_penalty": 0.0,
+      "dry_multiplier": 0.0,
+      "dry_base": 1.75,
+      "dry_allowed_length": 2,
+      "dry_penalty_last_n": 131072,
+      "mirostat": 0,
+      "mirostat_tau": 5.0,
+      "mirostat_eta": 0.10000000149011612,
+      "max_tokens": -1,
+      "n_keep": 0,
+      "n_discard": 0,
+      "ignore_eos": false,
+      "stream": true,
+      "n_probs": 0,
+      "min_keep": 0,
+      "chat_format": "GPT-OSS",
+      "reasoning_format": "none",
+      "reasoning_in_content": false,
+      "generation_prompt": "",
+      "samplers": [
+        "penalties",
+        "dry",
+        "top_k",
+        "typ_p",
+        "top_p",
+        "min_p",
+        "xtc",
+        "temperature"
+      ],
+      "speculative.n_max": 16,
+      "speculative.n_min": 0,
+      "speculative.p_min": 0.75,
+      "timings_per_token": false,
+      "post_sampling_probs": false,
+      "lora": []
+    },
+    "next_token": {
+      "has_next_token": true,
+      "has_new_line": true,
+      "n_remain": -1,
+      "n_decoded": 136
+    }
+  }
 ]
 ```
 
@@ -1058,27 +1057,27 @@ If query param `?fail_on_no_slot=1` is set, this endpoint will respond with stat
 
 This endpoint is only accessible if `--metrics` is set.
 
-In _router mode_ the query param `?model={model_id}` has to be set. This endpoint will respond with status code 400 `model name is missing from the request` if not set.
+In *router mode* the query param `?model={model_id}` has to be set. This endpoint will respond with status code 400 `model name is missing from the request` if not set.
 
 #### Available metrics
 
-| Metric                                    | Type    | Description                                           |
-| ----------------------------------------- | ------- | ----------------------------------------------------- |
-| `llamacpp:prompt_tokens_total`            | Counter | Number of prompt tokens processed.                    |
-| `llamacpp:prompt_seconds_total`           | Counter | Prompt process time in seconds.                       |
-| `llamacpp:prompt_tokens_seconds`          | Gauge   | Average prompt throughput in tokens/s.                |
-| `llamacpp:tokens_predicted_total`         | Counter | Number of generation tokens processed.                |
-| `llamacpp:tokens_predicted_seconds_total` | Counter | Predict process time in seconds.                      |
-| `llamacpp:predicted_tokens_seconds`       | Gauge   | Average generation throughput in tokens/s.            |
-| `llamacpp:requests_processing`            | Gauge   | Number of requests processing.                        |
-| `llamacpp:requests_deferred`              | Gauge   | Number of requests deferred.                          |
-| `llamacpp:n_tokens_max`                   | Counter | High watermark of the context size observed.          |
-| `llamacpp:n_decode_total`                 | Counter | Total Number of llama_decode() calls.                 |
-| `llamacpp:n_busy_slots_per_decode`        | Gauge   | Average number of busy slots per llama_decode() call. |
+| Metric | Type | Description |
+| ------ | ---------------------- | ----------- |
+| `llamacpp:prompt_tokens_total` | Counter | Number of prompt tokens processed. |
+| `llamacpp:prompt_seconds_total` | Counter | Prompt process time in seconds. |
+| `llamacpp:prompt_tokens_seconds` | Gauge | Average prompt throughput in tokens/s. |
+| `llamacpp:tokens_predicted_total` | Counter | Number of generation tokens processed. |
+| `llamacpp:tokens_predicted_seconds_total` | Counter | Predict process time in seconds. |
+| `llamacpp:predicted_tokens_seconds` | Gauge | Average generation throughput in tokens/s. |
+| `llamacpp:requests_processing` | Gauge | Number of requests processing. |
+| `llamacpp:requests_deferred` | Gauge | Number of requests deferred. |
+| `llamacpp:n_tokens_max` | Counter | High watermark of the context size observed. |
+| `llamacpp:n_decode_total` | Counter | Total Number of llama_decode() calls. |
+| `llamacpp:n_busy_slots_per_decode` | Gauge | Average number of busy slots per llama_decode() call. |
 
 ### POST `/slots/{id_slot}?action=save`: Save the prompt cache of the specified slot to a file.
 
-_Options:_
+*Options:*
 
 `filename`: Name of the file to save the slot's prompt cache. The file will be saved in the directory specified by the `--slot-save-path` server parameter.
 
@@ -1098,7 +1097,7 @@ _Options:_
 
 ### POST `/slots/{id_slot}?action=restore`: Restore the prompt cache of the specified slot from a file.
 
-_Options:_
+*Options:*
 
 `filename`: Name of the file to restore the slot's prompt cache from. The file should be located in the directory specified by the `--slot-save-path` server parameter.
 
@@ -1166,8 +1165,8 @@ To know the `id` of the adapter, use GET `/lora-adapters`
 
 ```json
 [
-    { "id": 0, "scale": 0.2 },
-    { "id": 1, "scale": 0.8 }
+  {"id": 0, "scale": 0.2},
+  {"id": 1, "scale": 0.8}
 ]
 ```
 
@@ -1209,13 +1208,13 @@ Example:
 
 Given an input `prompt`, it returns the predicted completion. Streaming mode is also supported. While no strong claims of compatibility with OpenAI API spec is being made, in our experience it suffices to support many apps.
 
-_Options:_
+*Options:*
 
 See [OpenAI Completions API documentation](https://platform.openai.com/docs/api-reference/completions).
 
 llama.cpp `/completion`-specific features such as `mirostat` are supported.
 
-_Examples:_
+*Examples:*
 
 Example usage with `openai` python library:
 
@@ -1240,7 +1239,7 @@ print(completion.choices[0].text)
 
 Given a ChatML-formatted json description in `messages`, it returns the predicted completion. Both synchronous and streaming mode are supported, so scripted and interactive applications work fine. While no strong claims of compatibility with OpenAI API spec is being made, in our experience it suffices to support many apps. Only models with a [supported chat template](https://github.com/ggml-org/llama.cpp/wiki/Templates-supported-by-llama_chat_apply_template) can be used optimally with this endpoint. By default, the ChatML template will be used.
 
-_Options:_
+*Options:*
 
 See [OpenAI Chat Completions API documentation](https://platform.openai.com/docs/api-reference/chat). llama.cpp `/completion`-specific features such as `mirostat` are also supported.
 
@@ -1261,7 +1260,6 @@ The `response_format` parameter supports both plain JSON output (e.g. `{"type": 
 `parallel_tool_calls` : Whether to enable parallel/multiple tool calls (only supported on some models, verification is based on jinja template).
 
 For multimodal input (typed content, `messages[i].content[j]`):
-
 - If `type == "image_url"`:
     - `image_url.url` can be a remote URL, base64 (raw or URI-encoded via `data:image/...;base64`) or path to local file
     - Accepts formats supported by `stb_image` (jpeg, png, tga, bmp, gif, ...)
@@ -1274,7 +1272,7 @@ For multimodal input (typed content, `messages[i].content[j]`):
     - Accepts formats supported by `ffmpeg`
 - Note: for local file, make sure to set `--media-path`. File path must be prefixed by `file://`
 
-_Examples:_
+*Examples:*
 
 You can use either Python `openai` library with appropriate checkpoints:
 
@@ -1318,13 +1316,13 @@ curl http://localhost:8080/v1/chat/completions \
 }'
 ```
 
-_Tool call support_
+*Tool call support*
 
 [OpenAI-style function calling](https://platform.openai.com/docs/guides/function-calling) is supported with the `--jinja` flag (and may require a `--chat-template-file` override to get the right tool-use compatible Jinja template; worst case, `--chat-template chatml` may also work).
 
 **See our [Function calling](../../docs/function-calling.md) docs** for more details, supported native tool call styles (generic tool call style is used as fallback) / examples of use.
 
-_Timings and context usage_
+*Timings and context usage*
 
 The response contains a `timings` object, for example:
 
@@ -1368,7 +1366,7 @@ The response also includes a standard `usage` object:
 }
 ```
 
-_Reasoning support_
+*Reasoning support*
 
 The server supports parsing and returning reasoning via the `reasoning_content` field, similar to Deepseek API.
 
@@ -1378,7 +1376,7 @@ Reasoning input (preserve reasoning in history) is also supported by some specif
 
 Acts on an in-flight completion identified by its `id` (the `id` field streamed back by `/v1/chat/completions`). The request is processed in parallel with the SSE stream, so the client sends it while still reading tokens.
 
-_Options:_
+*Options:*
 
 `id`: (Required) The chat completion id to act on. A completion that has already finished matches nothing and the call is a no-op.
 
@@ -1392,11 +1390,11 @@ Returns a JSON object with a boolean `success` field, and an optional `message` 
 
 ### POST `/v1/responses`: OpenAI-compatible Responses API
 
-_Options:_
+*Options:*
 
 See [OpenAI Responses API documentation](https://platform.openai.com/docs/api-reference/responses).
 
-_Examples:_
+*Examples:*
 
 You can use either Python `openai` library with appropriate checkpoints:
 
@@ -1432,41 +1430,42 @@ curl http://localhost:8080/v1/responses \
 
 This endpoint works by converting Responses request into Chat Completions request.
 
+
 ### POST `/v1/embeddings`: OpenAI-compatible embeddings API
 
 This endpoint requires that the model uses a pooling different than type `none`. The embeddings are normalized using the Eucledian norm.
 
-_Options:_
+*Options:*
 
 See [OpenAI Embeddings API documentation](https://platform.openai.com/docs/api-reference/embeddings).
 
-_Examples:_
+*Examples:*
 
 - input as string
 
-    ```shell
-    curl http://localhost:8080/v1/embeddings \
-    -H "Content-Type: application/json" \
-    -H "Authorization: Bearer no-key" \
-    -d '{
-            "input": "hello",
-            "model":"GPT-4",
-            "encoding_format": "float"
-    }'
-    ```
+  ```shell
+  curl http://localhost:8080/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer no-key" \
+  -d '{
+          "input": "hello",
+          "model":"GPT-4",
+          "encoding_format": "float"
+  }'
+  ```
 
 - `input` as string array
 
-    ```shell
-    curl http://localhost:8080/v1/embeddings \
-    -H "Content-Type: application/json" \
-    -H "Authorization: Bearer no-key" \
-    -d '{
-            "input": ["hello", "world"],
-            "model":"GPT-4",
-            "encoding_format": "float"
-    }'
-    ```
+  ```shell
+  curl http://localhost:8080/v1/embeddings \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer no-key" \
+  -d '{
+          "input": ["hello", "world"],
+          "model":"GPT-4",
+          "encoding_format": "float"
+  }'
+  ```
 
 ### POST `/v1/responses/input_tokens`: Token Counting
 
@@ -1476,8 +1475,8 @@ Example response:
 
 ```json
 {
-    "object": "response.input_tokens",
-    "input_tokens": 11
+  "object": "response.input_tokens",
+  "input_tokens": 11
 }
 ```
 
@@ -1491,8 +1490,8 @@ Example response:
 
 ```json
 {
-    "object": "response.input_tokens",
-    "input_tokens": 11
+  "object": "response.input_tokens",
+  "input_tokens": 11
 }
 ```
 
@@ -1502,7 +1501,7 @@ Example response:
 
 Given a list of `messages`, returns the assistant's response. Streaming is supported via Server-Sent Events. While no strong claims of compatibility with the Anthropic API spec are made, in our experience it suffices to support many apps.
 
-_Options:_
+*Options:*
 
 See [Anthropic Messages API documentation](https://docs.anthropic.com/en/api/messages). Tool use requires `--jinja` flag.
 
@@ -1528,7 +1527,7 @@ See [Anthropic Messages API documentation](https://docs.anthropic.com/en/api/mes
 
 `tool_choice`: Tool selection mode (`{"type": "auto"}`, `{"type": "any"}`, or `{"type": "tool", "name": "..."}`)
 
-_Examples:_
+*Examples:*
 
 ```shell
 curl http://localhost:8080/v1/messages \
@@ -1550,7 +1549,7 @@ Counts the number of tokens in a request without generating a response.
 
 Accepts the same parameters as `/v1/messages`. The `max_tokens` parameter is not required.
 
-_Example:_
+*Example:*
 
 ```shell
 curl http://localhost:8080/v1/messages/count_tokens \
@@ -1563,10 +1562,10 @@ curl http://localhost:8080/v1/messages/count_tokens \
   }'
 ```
 
-_Response:_
+*Response:*
 
 ```json
-{ "input_tokens": 10 }
+{"input_tokens": 10}
 ```
 
 ## Server built-in tools
@@ -1590,7 +1589,6 @@ llama-server
 ### Model sources
 
 There are 3 possible sources for model files:
-
 1. Cached models (controlled by the `LLAMA_CACHE` environment variable)
 2. Custom model directory (set via the `--models-dir` argument)
 3. Custom preset (set via the `--models-preset` argument)
@@ -1601,7 +1599,7 @@ By default, the router looks for models in the cache. You can add Hugging Face m
 llama-server -hf <user>/<model>:<tag>
 ```
 
-_The server must be restarted after adding a new model._
+*The server must be restarted after adding a new model.*
 
 Alternatively, you can point the router to a local directory containing your GGUF files using `--models-dir`. Example command:
 
@@ -1691,13 +1689,11 @@ model = /Users/abc/my-awesome-model-Q4_K_M.gguf
 Note: some arguments are controlled by router (e.g., host, port, API key, HF repo, model alias). They will be removed or overwritten upon loading.
 
 The precedence rule for preset options is as follows:
-
 1. **Command-line arguments** passed to `llama-server` (highest priority)
 2. **Model-specific options** defined in the preset file (e.g. `[ggml-org/MY-MODEL...]`)
 3. **Global options** defined in the preset file (`[*]`)
 
 We also offer additional options that are exclusive to presets (these aren't treated as command-line arguments):
-
 - `load-on-startup` (boolean): Controls whether the model loads automatically when the server starts
 - `stop-timeout` (int, seconds): After requested unload, wait for this many seconds before forcing termination (default: 10)
 
@@ -1709,13 +1705,13 @@ For **POST** endpoints (`/v1/chat/completions`, `/v1/completions`, `/infill`, et
 
 ```json
 {
-    "model": "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M",
-    "messages": [
-        {
-            "role": "user",
-            "content": "hello"
-        }
-    ]
+  "model": "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M",
+  "messages": [
+    {
+      "role": "user",
+      "content": "hello"
+    }
+  ]
 }
 ```
 
@@ -1755,7 +1751,6 @@ Listing all models in cache. The model metadata will also include a field to ind
 ```
 
 Note:
-
 1. Adding `?reload=1` to the query params will refresh the list of models. The behavior is as follow:
     - If a model is running but updated or removed from the source, it will be unloaded
     - If a model is not running, it will be added or updated according to the source
@@ -1818,12 +1813,11 @@ Note: for "downloading" state, there can be multiple files be downloading in par
 Load a model
 
 Payload:
-
 - `model`: name of the model to be loaded.
 
 ```json
 {
-    "model": "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M"
+  "model": "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M"
 }
 ```
 
@@ -1831,9 +1825,10 @@ Response:
 
 ```json
 {
-    "success": true
+  "success": true
 }
 ```
+
 
 ### POST `/models/unload`: Unload a model
 
@@ -1843,7 +1838,7 @@ Payload:
 
 ```json
 {
-    "model": "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M"
+  "model": "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M",
 }
 ```
 
@@ -1851,7 +1846,7 @@ Response:
 
 ```json
 {
-    "success": true
+  "success": true
 }
 ```
 
@@ -1935,7 +1930,6 @@ Trigger a new download (non-blocking), the progress can be tracked via SSE endpo
 To cancel model downloading, send an event to `/models/unload`
 
 Download procedure:
-
 - Send POST request to `/models`
 - Subscribe to `/models/sse` for updates
 - On downloading completed, you will receive either `download_finished` or `download_failed` event
@@ -1945,7 +1939,7 @@ Payload:
 
 ```json
 {
-    "model": "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M"
+  "model": "ggml-org/gemma-3-4b-it-GGUF:Q4_K_M",
 }
 ```
 
@@ -1953,7 +1947,7 @@ Response (download is started in the background):
 
 ```json
 {
-    "success": true
+  "success": true
 }
 ```
 
@@ -1961,11 +1955,11 @@ Response (error, cannot start the download):
 
 ```json
 {
-    "error": {
-        "code": 400,
-        "message": "model validation failed, unable to download",
-        "type": "invalid_request_error"
-    }
+  "error": {
+    "code": 400,
+    "message": "model validation failed, unable to download",
+    "type": "invalid_request_error"
+  }
 }
 ```
 
@@ -1981,7 +1975,7 @@ Response:
 
 ```json
 {
-    "success": true
+  "success": true
 }
 ```
 
@@ -2010,7 +2004,6 @@ When the server enters sleep mode, the model and its associated memory (includin
 The sleeping status can be retrieved from the `GET /props` endpoint (or `/props?model=(model_name)` in router mode).
 
 Note that the following endpoints are exempt from being considered as incoming tasks. They do not trigger model reloading and do not reset the idle timer:
-
 - `GET /health`
 - `GET /props`
 - `GET /models`
@@ -2048,7 +2041,7 @@ Apart from error types supported by OAI, we also have custom types that are spec
 }
 ```
 
-**When the server receives invalid grammar via \*/completions endpoint**
+**When the server receives invalid grammar via */completions endpoint**
 
 ```json
 {
