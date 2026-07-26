@@ -269,6 +269,7 @@ MMPROJ_MODEL_MAP: dict[str, str] = {
     "Gemma4UnifiedForConditionalGeneration": "gemma",
     "Glm4vForConditionalGeneration": "qwen3vl",
     "Glm4vMoeForConditionalGeneration": "qwen3vl",
+    "Glm5vForConditionalGeneration": "kimivl",
     "GlmOcrForConditionalGeneration": "qwen3vl",
     "GlmasrModel": "ultravox",
     "Granite4VisionForConditionalGeneration": "granite",
