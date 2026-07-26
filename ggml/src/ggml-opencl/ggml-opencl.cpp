@@ -18346,12 +18346,40 @@ static void ggml_cl_mul_mat_q4_k_f32_adreno(ggml_backend_t backend, const ggml_t
         // reduce pass) fills the CUs. Gate is M<=2560: the tiny M<=1024 ones only
         // break even (the reduce dispatch eats the kernel win), but the big-K M=2560
         // cases (ffn_down, attn_output) make the per-call win dwarf the reduce, and
-        // are byte-identical. Default ON, opt-out GGML_OPENCL_Q4K_GEMV_SPLITK=0.
-        // ffn_gate/up (large M) fill the CUs already and are excluded.
-        static const bool splitk_wg_env = []{
+        // are byte-identical. ffn_gate/up (large M) fill the CUs already and are excluded.
+        //
+        // DEVICE-GATED. Split-K buys GPU time by spending an extra kernel LAUNCH (the
+        // reduce), so it only pays where launches are cheap. That is a per-device
+        // property and it does not travel from the X2-90 this was tuned on. Measured
+        // with one binary, env A/B (tg32, GGML_OPENCL_Q4K_GEMV_SPLITK=0/1):
+        //
+        //     X2-90   +3.36%   gemma-4 E4B      (the number this gate was built on)
+        //     840      -1.3%   Qwen3.5-4B-Q4_K_M   14.00 -> 13.85
+        //     850     -20.0%   Qwen3-1.7B-Q4_K_M    6.97 -> 5.58  (6 interleaved reps)
+        //
+        // The kernel is not the problem. On the 850 split-K makes the GPU strictly
+        // faster -- total busy 537 -> 485 ms, this GEMV 43.7 -> 34.0 us/call (-22%) --
+        // and still costs a fifth of decode, because the +3696 reduce dispatches cost
+        // ~550 us of HOST round-trip each against 2.7 us of GPU work (~200x; that part
+        // is ~95% host-bound at decode). The 840 pays the same tax at ~42 us/dispatch.
+        // Break-even needs launch cost below the ~9.7 us/call the split actually saves,
+        // so this is not a "the 850 is slow" adjustment that a faster part would fix --
+        // the 840 is 13x cheaper per launch and still loses.
+        //
+        // Enabled where it is measured to win, i.e. X2E. X1E is UNMEASURED and therefore
+        // excluded; widen once there is an X1-85 datapoint. The env still forces either
+        // way so every device stays measurable.
+        static const bool splitk_env_set = []{
             const char * e = std::getenv("GGML_OPENCL_Q4K_GEMV_SPLITK");
-            return !e || e[0] == '\0' || e[0] != '0';   // default ON, opt-out =0
+            return e && e[0] != '\0';
         }();
+        static const bool splitk_env_on = []{
+            const char * e = std::getenv("GGML_OPENCL_Q4K_GEMV_SPLITK");
+            return !(e && e[0] == '0');
+        }();
+        const bool splitk_wg_env = splitk_env_set
+            ? splitk_env_on
+            : (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E);
         // Gate: small-M decode GEMVs that under-fill the 16 CUs even with the wide
         // intra-WG split (all 16 subgroups land on one CU). M<=2560 covers Kcur/Vcur
         // (M=1024), Qcur (2048), attn_output + ffn_down (2560). The tiny ones
