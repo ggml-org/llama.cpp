@@ -37,7 +37,7 @@ ggml_cgraph * clip_graph_minimax_m3::build() {
 
     const int batch_size = 1;
     const int n_pos      = n_patches;
-    const int merge      = 2;
+    const int merge      = hparams.n_merge;
 
     // patch embedding
     ggml_tensor * inp_raw = build_inp_raw();
@@ -48,8 +48,8 @@ ggml_cgraph * clip_graph_minimax_m3::build() {
     // spatial merge
     {
         inp = ggml_permute(ctx0, inp, 1, 2, 0, 3);
-        inp = ggml_cont_4d(ctx0, inp, n_embd * 2, n_patches_x / 2, n_patches_y, batch_size);
-        inp = ggml_reshape_4d(ctx0, inp, n_embd * 2, n_patches_x / 2, 2, batch_size * (n_patches_y / 2));
+        inp = ggml_cont_4d(ctx0, inp, n_embd * merge, n_patches_x / merge, n_patches_y, batch_size);
+        inp = ggml_reshape_4d(ctx0, inp, n_embd * merge, n_patches_x / merge, merge, batch_size * (n_patches_y / merge));
         inp = ggml_permute(ctx0, inp, 0, 2, 1, 3);
         inp = ggml_cont_3d(ctx0, inp, n_embd, n_patches_x * n_patches_y, batch_size);
     }

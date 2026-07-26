@@ -3897,17 +3897,18 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
             } break;
         case PROJECTOR_TYPE_MINIMAX_M3:
             {
+                const int n_merge = hparams.n_merge;
                 const int gh = image_size_height / patch_size;
                 const int gw = image_size_width  / patch_size;
                 std::vector<int32_t> pos_h, pos_w;
                 pos_h.reserve(gh * gw);
                 pos_w.reserve(gh * gw);
-                for (int bh = 0; bh < gh / 2; bh++)
-                for (int bw = 0; bw < gw / 2; bw++)
-                for (int mh = 0; mh < 2; mh++)
-                for (int mw = 0; mw < 2; mw++) {
-                    pos_h.push_back(bh * 2 + mh);
-                    pos_w.push_back(bw * 2 + mw);
+                for (int bh = 0; bh < gh / n_merge; bh++)
+                for (int bw = 0; bw < gw / n_merge; bw++)
+                for (int mh = 0; mh < n_merge; mh++)
+                for (int mw = 0; mw < n_merge; mw++) {
+                    pos_h.push_back(bh * n_merge + mh);
+                    pos_w.push_back(bw * n_merge + mw);
                 }
                 set_input_i32("minimax_pos_h", pos_h);
                 set_input_i32("minimax_pos_w", pos_w);
