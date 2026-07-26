@@ -78,7 +78,7 @@ class ChatStore {
 	// true while the active conversation streams reasoning content but no visible content yet
 	isReasoning = $state(false);
 	// resumable stream connection state for the active conversation
-	// streaming -> bytes flowing normally, resuming -> waiting on /v1/stream/:id reconnect, lost -> unrecoverable
+	// streaming -> bytes flowing normally, resuming -> waiting on /v1/stream reconnect, lost -> unrecoverable
 	streamConnectionState = $state<StreamConnectionState>(StreamConnectionState.STREAMING);
 	chatLoadingStates = new SvelteMap<string, boolean>();
 	chatReasoningStates = new SvelteMap<string, boolean>();
@@ -263,7 +263,7 @@ class ChatStore {
 		const id = streamId || streamIdentity(convId, selectedModelName());
 		let response: Response;
 		try {
-			response = await fetch(`./v1/stream/${encodeURIComponent(id)}?from=0`, {
+			response = await fetch(`./v1/stream?conv_id=${encodeURIComponent(id)}&from=0`, {
 				headers: getAuthHeaders()
 			});
 		} catch (e) {
@@ -444,7 +444,7 @@ class ChatStore {
 		if (this.chatLoadingStates.get(convId)) return;
 		// concurrency guard: another discover may already be running for this conv (typical race
 		// between mount and visibilitychange on tab switch). a second concurrent fetch on the same
-		// /v1/stream/<id> would duplicate every byte into the DB message, this guard bounces it
+		// /v1/stream would duplicate every byte into the DB message, this guard bounces it
 		if (this.discoveringConvs.has(convId)) return;
 		this.discoveringConvs.add(convId);
 

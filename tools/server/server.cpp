@@ -288,12 +288,14 @@ int llama_server(common_params & params, int argc, char ** argv) {
         streams_lookup_h = server_stream_make_lookup_handler();
         stream_delete_h  = server_stream_make_delete_handler();
     }
-    ctx_http.get ("/v1/stream/:conv_id",       ex_wrapper(stream_get_h));
+    // the conv id travels in the query string because it can embed a model name containing
+    // slashes (org/repo), which the decoded path would split before the param is captured
+    ctx_http.get ("/v1/stream",                ex_wrapper(stream_get_h));
     // POST /v1/streams/lookup with body {"conversation_ids": [...]}. you can only ask for ids
     // you already own (the WebUI passes the convs visible in its sidebar). the server never
     // lists ids it has not been asked about, so a random caller cannot enumerate live sessions
     ctx_http.post("/v1/streams/lookup",        ex_wrapper(streams_lookup_h));
-    ctx_http.del ("/v1/stream/:conv_id",       ex_wrapper(stream_delete_h));
+    ctx_http.del ("/v1/stream",                ex_wrapper(stream_delete_h));
 
     // Google Cloud Platform (Vertex AI) compat
     ctx_http.register_gcp_compat();

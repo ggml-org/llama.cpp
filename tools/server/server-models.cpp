@@ -1813,7 +1813,7 @@ void server_models_routes::init_routes() {
     };
 
     this->router_stream_get = [this](const server_http_req & req) {
-        // GET /v1/stream/<conv_id>?from=N. resolve the owning child from the conv_id -> model
+        // GET /v1/stream?conv_id=<id>&from=N. resolve the owning child from the conv_id -> model
         // map, 404 when nothing maps
         auto res = std::make_unique<server_http_res>();
         std::string conv_id = req.get_param("conv_id");
@@ -1827,9 +1827,9 @@ void server_models_routes::init_routes() {
             return res;
         }
         std::string from = req.get_param("from");
-        std::string child_path = "/v1/stream/" + encode_qs(conv_id);
+        std::string child_path = "/v1/stream?conv_id=" + encode_qs(conv_id);
         if (!from.empty()) {
-            child_path += "?from=" + from;
+            child_path += "&from=" + from;
         }
         SRV_TRC("proxying stream resume to model %s on port %d, path=%s\n",
                 owner->name.c_str(), owner->port, child_path.c_str());
@@ -1909,7 +1909,7 @@ void server_models_routes::init_routes() {
     };
 
     this->router_stream_delete = [this](const server_http_req & req) {
-        // DELETE /v1/stream/<conv_id>. resolve the owning child via the map and forward only to
+        // DELETE /v1/stream?conv_id=<id>. resolve the owning child via the map and forward only to
         // it, evict_and_cancel is idempotent on the child
         auto res = std::make_unique<server_http_res>();
         std::string conv_id = req.get_param("conv_id");
@@ -1917,7 +1917,7 @@ void server_models_routes::init_routes() {
             res_err(res, format_error_response("Missing conversation id in path", ERROR_TYPE_INVALID_REQUEST));
             return res;
         }
-        std::string child_path = "/v1/stream/" + encode_qs(conv_id);
+        std::string child_path = "/v1/stream?conv_id=" + encode_qs(conv_id);
         auto owner = resolve_child_for_conv(models, conv_id);
         if (owner.has_value()) {
             httplib::Client cli(CHILD_ADDR, owner->port);

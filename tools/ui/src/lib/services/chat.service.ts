@@ -512,7 +512,7 @@ export class ChatService {
 		if (!conversationId) return;
 		try {
 			const id = streamIdentity(conversationId, model);
-			await fetch(`${API_STREAM.BASE}/${encodeURIComponent(id)}`, {
+			await fetch(`${API_STREAM.BASE}?conv_id=${encodeURIComponent(id)}`, {
 				method: 'DELETE',
 				headers: getAuthHeaders()
 			});
@@ -614,7 +614,7 @@ export class ChatService {
 		const state = ChatService.getStreamState(conversationId);
 		const from = state?.bytesReceived ?? 0;
 		const id = streamIdentity(conversationId, model);
-		const url = `${API_STREAM.BASE}/${encodeURIComponent(id)}?from=${from}`;
+		const url = `${API_STREAM.BASE}?conv_id=${encodeURIComponent(id)}&from=${from}`;
 		return await fetch(url, { method: 'GET', signal, headers: getAuthHeaders() });
 	}
 
