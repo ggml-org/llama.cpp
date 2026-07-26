@@ -13,6 +13,13 @@
 
 	const gauge = useContextGauge();
 
+	// The gauge hook wraps a processing state instance that only follows the
+	// live stream while its own monitoring flag is set, so the card instance
+	// starts monitoring like the dial does.
+	$effect(() => {
+		gauge.startMonitoring();
+	});
+
 	let cardEl = $state<HTMLElement | null>(null);
 
 	// Any press outside the card and outside the dial closes the card.
@@ -44,7 +51,7 @@
 	<div
 		role="status"
 		bind:this={cardEl}
-		class="absolute z-50 w-64 -translate-x-1/2 rounded-lg border border-border/50 bg-popover p-3 text-popover-foreground shadow-lg"
+		class="absolute z-50 w-64 -translate-x-1/2 rounded-lg border border-border/50 bg-popover p-3 text-sm text-popover-foreground shadow-lg ring-1 ring-foreground/10"
 		style="left: {gaugePopup.centerX}px; bottom: {gaugePopup.bottom}px"
 		onpointerenter={gaugeCardEnter}
 		onpointerleave={gaugeCardLeave}
