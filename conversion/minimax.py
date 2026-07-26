@@ -129,12 +129,12 @@ class MiniMaxM3VisionModel(MmprojModel):
                 yield (base + suffix, data_torch[:, :, t, ...])
             return
 
-        # Permute ViT q/k. HF [Ta Ha Wa | Tb Hb Wb | pad] reorder to [Ta Tb | Ha Hb | Wa Wb | pad]. 
+        # Permute ViT q/k. HF [Ta Ha Wa | Tb Hb Wb | pad] reorder to [Ta Tb | Ha Hb | Wa Wb | pad].
         for new_name, tensor in super().modify_tensors(data_torch, name, bid):
             if ".attn_q." in new_name or ".attn_k." in new_name:
                 tensor = self._permute_vit_qk(tensor, new_name)
             yield new_name, tensor
-            
+
     def _permute_vit_qk(self, t: "Tensor", new_name: str) -> "Tensor":
         n_head = self.hparams_vision["num_attention_heads"]
         d_head = t.shape[0] // n_head
@@ -145,14 +145,14 @@ class MiniMaxM3VisionModel(MmprojModel):
                 list(range(ah, 2 * ah))       + list(range(half + ah,   half + 2*ah)) +
                 list(range(2 * ah, 3 * ah))   + list(range(half + 2*ah, half + 3*ah)) +
                 list(range(2 * half, d_head)))
-                
+
         assert axis_dim % 2 == 0
         assert 3 * axis_dim <= d_head
         assert len(perm) == d_head
         assert sorted(perm) == list(range(d_head)), "perm is not a bijection of d_head"
         assert t.shape[0] == n_head * d_head, f"{new_name}: {t.shape[0]} != {n_head}*{d_head}"
         assert d_head == 80
-        
+
         idx = torch.tensor(perm, dtype=torch.long)
         if t.ndim == 2:
             return t.reshape(n_head, d_head, t.shape[1])[:, idx, :].reshape(t.shape)

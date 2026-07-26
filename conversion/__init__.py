@@ -287,7 +287,7 @@ MMPROJ_MODEL_MAP: dict[str, str] = {
     "LlavaForConditionalGeneration": "llava",
     "MERaLiON2ForConditionalGeneration": "ultravox",
     "MiMoV2ForCausalLM": "mimo",
-    "MiniMaxM3SparseForConditionalGeneration": "minimax", 
+    "MiniMaxM3SparseForConditionalGeneration": "minimax",
     "MiniCPMV4_6ForConditionalGeneration": "minicpm",
     "Mistral3ForConditionalGeneration": "llava",
     "NemotronH_Nano_VL_V2": "nemotron",

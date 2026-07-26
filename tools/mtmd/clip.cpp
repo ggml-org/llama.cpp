@@ -3899,19 +3899,16 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
             {
                 const int gh = image_size_height / patch_size;
                 const int gw = image_size_width  / patch_size;
-                std::vector<int32_t> pos_t, pos_h, pos_w;
-                pos_t.reserve(gh * gw);
+                std::vector<int32_t> pos_h, pos_w;
                 pos_h.reserve(gh * gw);
                 pos_w.reserve(gh * gw);
                 for (int bh = 0; bh < gh / 2; bh++)
                 for (int bw = 0; bw < gw / 2; bw++)
                 for (int mh = 0; mh < 2; mh++)
                 for (int mw = 0; mw < 2; mw++) {
-                    pos_t.push_back(0);
                     pos_h.push_back(bh * 2 + mh);
                     pos_w.push_back(bw * 2 + mw);
                 }
-                set_input_i32("minimax_pos_t", pos_t);
                 set_input_i32("minimax_pos_h", pos_h);
                 set_input_i32("minimax_pos_w", pos_w);
             } break;
