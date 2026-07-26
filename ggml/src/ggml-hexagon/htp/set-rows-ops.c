@@ -19,6 +19,7 @@
 
 #include "htp-ctx.h"
 #include "htp-ops.h"
+#include "htp-tensor.h"
 #include "htp/set-rows-ops.h"
 
 #define set_rows_preamble                      \
@@ -58,15 +59,6 @@ struct set_rows_context {
     uint8_t * vtcm_base;
 };
 
-static inline uint32_t get_row_size_bytes(int type, uint32_t ne00) {
-    switch (type) {
-        case 0: return (ne00 * 4);       // HTP_TYPE_F32
-        case 1: return (ne00 * 2);       // HTP_TYPE_F16
-        case 8: return (ne00 / 32) * 34; // HTP_TYPE_Q8_0
-        default: return 0;
-    }
-}
-
 #define SET_ROWS_THREAD_HVX_FN(TYPE_NAME, IDX_TYPE, COMPUTE_EXPR)                                                \
 static void set_rows_thread_##TYPE_NAME##_##IDX_TYPE(unsigned int nth, unsigned int ith, void *data) {           \
     struct set_rows_context * srctx = (struct set_rows_context *)data;                                           \
@@ -85,7 +77,7 @@ static void set_rows_thread_##TYPE_NAME##_##IDX_TYPE(unsigned int nth, unsigned 
     uint8_t * vtcm_src0 = srctx->vtcm_base + vtcm_layout->off_src0 + ith * vtcm_layout->src0_bytes_per_thread;   \
     uint8_t * vtcm_dst  = srctx->vtcm_base + vtcm_layout->off_dst  + ith * vtcm_layout->dst_bytes_per_thread;    \
     const uint32_t src0_row_size = ne00 * sizeof(float);                                                         \
-    const uint32_t dst_row_size  = get_row_size_bytes(octx->dst->type, ne00);                                    \
+    const uint32_t dst_row_size  = htp_tensor_get_row_size(octx->dst->type, ne00);                               \
     const uint32_t nrows_per_thread = ir1 - ir0;                                                                 \
     const uint32_t total_steps = ne03 * ne02 * nrows_per_thread;                                                 \
     for (uint32_t step = 0, spad_idx = 0; step < total_steps && spad_idx < 2; ++step, spad_idx++) {              \
