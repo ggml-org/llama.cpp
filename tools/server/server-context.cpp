@@ -2654,6 +2654,15 @@ private:
                         queue_tasks.defer(std::move(task));
                         break;
                     }
+                    // GUARDIA ctx_shift: con KV shifting o context shift attivi le
+                    // celle condivise per riferimento si sposterebbero per TUTTI i
+                    // rami -> corruzione silenziosa cross-ramo. Rifiuto esplicito.
+                    if (params_base.ctx_shift || params_base.n_cache_reuse > 0) {
+                        send_error(task, "clone_to is incompatible with --ctx-shift/--cache-reuse "
+                                         "(shared KV cells would shift across branches)",
+                                   ERROR_TYPE_NOT_SUPPORTED);
+                        break;
+                    }
                     const size_t n_tokens = slot->prompt.tokens.size();
                     if (n_tokens == 0) {
                         send_error(task, "Source slot is empty, nothing to clone", ERROR_TYPE_INVALID_REQUEST);
