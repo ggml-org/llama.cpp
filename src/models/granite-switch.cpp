@@ -135,7 +135,7 @@ public:
     void set_input(const llama_ubatch * ubatch) override;
 
     ggml_tensor * sub_tokens  = nullptr; // I32 [n_tokens] adapter-substituted token ids
-    ggml_tensor * router_ksig = nullptr; // F32 [n_tokens] router K signal (±gain)
+    ggml_tensor * router_ksig = nullptr; // F32 [n_tokens] router K signal (+/-gain)
     ggml_tensor * router_vval = nullptr; // F32 [n_tokens] router V value (adapter slot / 0)
     ggml_tensor * router_q    = nullptr; // F32 [n_tokens] router Q value (constant 1.0)
 
