@@ -2112,10 +2112,10 @@ struct clip_model_loader {
                     model.mm_2_w = get_tensor(string_format(TN_LLAVA_PROJ, 2, "weight"));
                     model.mm_2_b = get_tensor(string_format(TN_LLAVA_PROJ, 2, "bias"));
                     // 2x2 merge MLP: mm.merge.fc1 -> gelu -> mm.merge.fc2
-                    model.mm_merge_fc1_w = get_tensor(string_format(TN_MM_MERGE_FC1, "weight"));
-                    model.mm_merge_fc1_b = get_tensor(string_format(TN_MM_MERGE_FC1, "bias"));
-                    model.mm_merge_fc2_w = get_tensor(string_format(TN_MM_MERGE_FC2, "weight"));
-                    model.mm_merge_fc2_b = get_tensor(string_format(TN_MM_MERGE_FC2, "bias"));
+                    model.mm_merger_fc1_w = get_tensor(string_format(TN_MM_MERGER_FC1, "weight"));
+                    model.mm_merger_fc1_b = get_tensor(string_format(TN_MM_MERGER_FC1, "bias"));
+                    model.mm_merger_fc2_w = get_tensor(string_format(TN_MM_MERGER_FC2, "weight"));
+                    model.mm_merger_fc2_b = get_tensor(string_format(TN_MM_MERGER_FC2, "bias"));
                 } break;
             case PROJECTOR_TYPE_STEP3VL:
                 {
@@ -4616,7 +4616,7 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
         case PROJECTOR_TYPE_GLM_EDGE:
             return ctx->model.mm_model_mlp_3_w->ne[1];
         case PROJECTOR_TYPE_MINIMAX_M3:
-            return ctx->model.mm_merge_fc2_b->ne[0];
+            return ctx->model.mm_merger_fc2_b->ne[0];
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN25VL:
         case PROJECTOR_TYPE_EXAONE4_5:

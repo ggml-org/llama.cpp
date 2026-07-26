@@ -33,7 +33,7 @@ ggml_cgraph * clip_graph_minimax_m3::build() {
     GGML_ASSERT(model.class_embedding == nullptr);
     GGML_ASSERT(model.patch_embeddings_0 && model.patch_embeddings_1);
     GGML_ASSERT(model.mm_1_w && model.mm_2_w);
-    GGML_ASSERT(model.mm_merge_fc1_w && model.mm_merge_fc2_w);
+    GGML_ASSERT(model.mm_merger_fc1_w && model.mm_merger_fc2_w);
 
     const int batch_size = 1;
     const int n_pos      = n_patches;
@@ -75,9 +75,9 @@ ggml_cgraph * clip_graph_minimax_m3::build() {
     const int64_t proj = emb->ne[0];
     emb = ggml_reshape_2d(ctx0, emb, proj * merge * merge, n_pos / (merge * merge));
 
-    emb = build_ffn(emb, model.mm_merge_fc1_w, model.mm_merge_fc1_b,
+    emb = build_ffn(emb, model.mm_merger_fc1_w, model.mm_merger_fc1_b,
                     nullptr, nullptr,
-                    model.mm_merge_fc2_w, model.mm_merge_fc2_b, FFN_GELU_ERF, -1);
+                    model.mm_merger_fc2_w, model.mm_merger_fc2_b, FFN_GELU_ERF, -1);
 
     ggml_build_forward_expand(gf, emb);
     return gf;

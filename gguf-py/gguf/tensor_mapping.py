@@ -1838,11 +1838,11 @@ class TensorNameMap:
             "visual.downsample", # glm4v
         ),
 
-        MODEL_TENSOR.V_MM_MERGE_FC1: (
+        MODEL_TENSOR.V_MM_MERGER_FC1: (
             "patch_merge_mlp.linear_1", # minimax-m3
         ),
 
-        MODEL_TENSOR.V_MM_MERGE_FC2: (
+        MODEL_TENSOR.V_MM_MERGER_FC2: (
             "patch_merge_mlp.linear_2", # minimax-m3
         ),
 
