@@ -12,6 +12,7 @@
 #include "ggml-common.h"
 #include "htp-ctx.h"
 #include "htp-ops.h"
+#include "htp-tensor.h"
 #include "hvx-utils.h"
 #include "hvx-quant.h"
 #include "get-rows-ops.h"
@@ -54,15 +55,6 @@ struct get_rows_context {
                                                \
     const uint32_t nr = ne10 * ne11 * ne12;
 
-static inline uint32_t get_row_size_bytes(int type, uint32_t ne00) {
-    switch (type) {
-        case HTP_TYPE_F32:  return ne00 * 4;
-        case HTP_TYPE_F16:  return ne00 * 2;
-        case HTP_TYPE_Q8_0: return (ne00 / 32) * 34;
-        default:            return 0;
-    }
-}
-
 #define GET_ROWS_THREAD_DMA_FN(IDX_TYPE)                                                                               \
 static void get_rows_thread_dma_##IDX_TYPE(unsigned int nth, unsigned int ith, void *data) {                           \
     struct get_rows_context * grctx = (struct get_rows_context *)data;                                                 \
@@ -75,7 +67,7 @@ static void get_rows_thread_dma_##IDX_TYPE(unsigned int nth, unsigned int ith, v
         return;                                                                                                        \
     }                                                                                                                  \
     const uint32_t ir1 = MIN(ir0 + dr, kparams->total_tasks);                                                          \
-    const uint32_t row_size_bytes = get_row_size_bytes(octx->src[0]->type, ne00);                                      \
+    const uint32_t row_size_bytes = htp_tensor_get_row_size(octx->src[0]->type, ne00);                                 \
     dma_queue * dma_queue = octx->ctx->dma[ith];                                                                       \
     for (uint32_t i = ir0; i < ir1; ++i) {                                                                             \
         const uint32_t i12 = fastdiv(i, &kparams->div_ne10_ne11);                                                      \
@@ -121,7 +113,7 @@ static void get_rows_thread_hvx_##TYPE_NAME##_##IDX_TYPE(unsigned int nth, unsig
     const struct htp_get_rows_vtcm_layout * vtcm_layout = &grctx->vtcm_layout;                                         \
     uint8_t * vtcm_src0 = grctx->vtcm_base + vtcm_layout->off_src0 + ith * vtcm_layout->src0_bytes_per_thread;         \
     uint8_t * vtcm_dst  = grctx->vtcm_base + vtcm_layout->off_dst  + ith * vtcm_layout->dst_bytes_per_thread;          \
-    const uint32_t src0_row_size = get_row_size_bytes(octx->src[0]->type, ne00);                                       \
+    const uint32_t src0_row_size = htp_tensor_get_row_size(octx->src[0]->type, ne00);                                  \
     const uint32_t dst_row_size  = ne00 * sizeof(float);                                                               \
     for (uint32_t step = 0, spad_idx = 0; step < ir1 - ir0 && spad_idx < 2; ++step, spad_idx++) {                      \
         const uint32_t i = ir0 + step;                                                                                 \

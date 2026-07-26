@@ -2035,7 +2035,8 @@ static bool ggml_hexagon_flash_attn_is_hmx_eligible(
         return false;
     }
 
-    if (k->type != GGML_TYPE_F16 || v->type != GGML_TYPE_F16) {
+    if ((k->type != GGML_TYPE_F16 && k->type != GGML_TYPE_Q8_0) ||
+        (v->type != GGML_TYPE_F16 && v->type != GGML_TYPE_Q8_0)) {
         return false;
     }
 
@@ -2187,8 +2188,10 @@ static bool ggml_hexagon_supported_flash_attn_ext(const struct ggml_hexagon_sess
     const struct ggml_tensor * src4 = op->src[4];
     const struct ggml_tensor * dst  = op;
 
-    // Check for F16 support only as requested
-    if ((src0->type != GGML_TYPE_F16 && src0->type != GGML_TYPE_F32) || src1->type != GGML_TYPE_F16 || src2->type != GGML_TYPE_F16) {
+    // Check for F16/Q8_0 support
+    if ((src0->type != GGML_TYPE_F16 && src0->type != GGML_TYPE_F32) ||
+        (src1->type != GGML_TYPE_F16 && src1->type != GGML_TYPE_Q8_0) ||
+        (src2->type != GGML_TYPE_F16 && src2->type != GGML_TYPE_Q8_0)) {
         return false;
     }
 
