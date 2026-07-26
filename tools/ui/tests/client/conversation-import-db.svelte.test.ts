@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { DatabaseService } from '$lib/services/database.service';
+import { MessageRole, MessageType } from '$lib/enums';
 import type { ExportedConversation } from '$lib/types/database';
 
 function makeSession(id: string): ExportedConversation {
@@ -9,9 +10,9 @@ function makeSession(id: string): ExportedConversation {
 			{
 				id: `${id}-msg`,
 				convId: id,
-				type: 'text',
+				type: MessageType.TEXT,
 				timestamp: 0,
-				role: 'user',
+				role: MessageRole.USER,
 				content: `hello from ${id}`,
 				parent: null,
 				children: []

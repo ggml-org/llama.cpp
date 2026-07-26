@@ -33,7 +33,8 @@ import {
 	FileExtensionText,
 	MimeTypeText,
 	MimeTypeApplication,
-	ReasoningEffort
+	ReasoningEffort,
+	SessionRecordType
 } from '$lib/enums';
 import {
 	ISO_DATE_TIME_SEPARATOR,
@@ -47,6 +48,8 @@ import {
 	NON_ALPHANUMERIC_REGEX,
 	MULTIPLE_UNDERSCORE_REGEX,
 	REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY,
+	NEWLINE,
+	SESSION_HARNESS,
 	ZIP_MAGIC
 } from '$lib/constants';
 
@@ -914,30 +917,35 @@ class ConversationsStore {
 
 	/**
 	 * Serializes a session (a conversation with its messages) as JSONL.
-	 * The first line is the session header (a `type: 'session'` record carrying the
-	 * conversation properties); each subsequent line is a single message.
+	 * The first line is the session header (a `SessionRecordType.SESSION` record
+	 * carrying the conversation properties); each subsequent line is a single message.
 	 * @param data - The exported conversation payload
 	 * @returns The JSONL string (one record per line)
 	 */
 	serializeSessionToJsonl(data: ExportedConversation): string {
 		const { conv, messages } = data;
 
-		const sessionLine = JSON.stringify({ type: 'session', harness: 'llama.app', ...conv });
+		const sessionLine = JSON.stringify({
+			type: SessionRecordType.SESSION,
+			harness: SESSION_HARNESS,
+			...conv
+		});
 		const messageLines = messages.map((message: DatabaseMessage) => {
 			// `toolCalls` is stored as a JSON string; drop it when empty, otherwise parse it.
 			const { toolCalls, ...rest } = message;
 			const normalized = toolCalls ? { ...rest, toolCalls: JSON.parse(toolCalls) } : rest;
 
-			return JSON.stringify({ type: 'message', message: normalized });
+			return JSON.stringify({ type: SessionRecordType.MESSAGE, message: normalized });
 		});
 
-		return [sessionLine, ...messageLines].join('\n');
+		return [sessionLine, ...messageLines].join(NEWLINE);
 	}
 
 	/**
 	 * Parses the JSONL session format produced by {@link serializeSessionToJsonl}.
-	 * A `type: 'session'` line starts a new session; following `type: 'message'`
-	 * lines are appended to it. Supports multiple sessions in a single file.
+	 * A `SessionRecordType.SESSION` line starts a new session; following
+	 * `SessionRecordType.MESSAGE` lines are appended to it. Supports multiple
+	 * sessions in a single file.
 	 * @param text - The JSONL file contents
 	 * @returns The parsed conversations with their messages
 	 */
@@ -945,20 +953,20 @@ class ConversationsStore {
 		const sessions: ExportedConversation[] = [];
 		let current: ExportedConversation | null = null;
 
-		for (const line of text.split('\n')) {
+		for (const line of text.split(NEWLINE)) {
 			const trimmed = line.trim();
 			if (!trimmed) continue;
 
 			const record = JSON.parse(trimmed);
 
-			if (record.type === 'session') {
+			if (record.type === SessionRecordType.SESSION) {
 				// Drop the discriminator and harness marker; the rest is the conversation.
 				const conv = { ...record };
 				delete conv.type;
 				delete conv.harness;
 				current = { conv: conv as DatabaseConversation, messages: [] };
 				sessions.push(current);
-			} else if (record.type === 'message') {
+			} else if (record.type === SessionRecordType.MESSAGE) {
 				if (!current) {
 					throw new Error('Invalid JSONL: message record before any session record');
 				}
@@ -978,17 +986,17 @@ class ConversationsStore {
 
 	/**
 	 * Reports whether the text is the JSONL session format, whose first non-empty
-	 * line is a `type: 'session'` record. A legacy JSON export starts with an
-	 * array or an object that has no such discriminator.
+	 * line is a `SessionRecordType.SESSION` record. A legacy JSON export starts
+	 * with an array or an object that has no such discriminator.
 	 * @param text - The file contents
 	 */
 	private isSessionsJsonl(text: string): boolean {
 		const trimmed = text.trimStart();
-		const lineEnd = trimmed.indexOf('\n');
+		const lineEnd = trimmed.indexOf(NEWLINE);
 		const firstLine = lineEnd === -1 ? trimmed : trimmed.slice(0, lineEnd);
 
 		try {
-			return JSON.parse(firstLine).type === 'session';
+			return JSON.parse(firstLine).type === SessionRecordType.SESSION;
 		} catch {
 			// Not a standalone JSON record, so not the JSONL format.
 			return false;

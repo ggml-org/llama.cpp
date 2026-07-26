@@ -1,5 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { zipSync, strToU8 } from 'fflate';
+import { MessageRole, MessageType } from '$lib/enums';
+import { NEWLINE } from '$lib/constants';
 import type { ExportedConversation } from '$lib/types/database';
 
 let conversationsStore: typeof import('$lib/stores/conversations.svelte').conversationsStore;
@@ -35,9 +37,9 @@ function makeSession(id: string): ExportedConversation {
 			{
 				id: `${id}-msg`,
 				convId: id,
-				type: 'text',
+				type: MessageType.TEXT,
 				timestamp: 0,
-				role: 'user',
+				role: MessageRole.USER,
 				content: `hello from ${id}`,
 				parent: null,
 				children: []
@@ -65,7 +67,7 @@ describe('conversationsStore.parseImportFile', () => {
 	it('imports several sessions from one JSONL file', async () => {
 		const jsonl = [makeSession('a'), makeSession('b')]
 			.map((session) => conversationsStore.serializeSessionToJsonl(session))
-			.join('\n');
+			.join(NEWLINE);
 
 		const sessions = await conversationsStore.parseImportFile(new File([jsonl], 'export.txt'));
 
