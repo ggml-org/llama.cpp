@@ -1,6 +1,6 @@
 #include "server-mcp.h"
 
-#include <sheredom/subprocess.h>
+#include "subproc.h"
 
 #include <atomic>
 #include <chrono>
@@ -341,7 +341,7 @@ json server_mcp_transport::call_tool(const std::string & tool_name,
 //
 
 struct server_mcp_stdio::process_handle {
-    subprocess_s sp;
+    common_subproc sp;
     FILE * in  = nullptr; // child stdin
     FILE * out = nullptr; // child stdout
     FILE * err = nullptr; // child stderr
@@ -483,30 +483,15 @@ bool server_mcp_stdio::start() {
         envp_s = mcp_build_env(config.env);
     }
 
-    auto to_ptrs = [](std::vector<std::string> & v) {
-        std::vector<const char *> p;
-        p.reserve(v.size() + 1);
-        for (auto & s : v) {
-            p.push_back(s.c_str());
-        }
-        p.push_back(nullptr);
-        return p;
-    };
-    auto argv = to_ptrs(argv_s);
-    auto envp = to_ptrs(envp_s);
-
     auto handle = std::make_unique<process_handle>();
-    int rc = subprocess_create_ex(argv.data(), options,
-                                  config.env.empty() ? nullptr : envp.data(),
-                                  config.cwd.empty() ? nullptr : config.cwd.c_str(),
-                                  &handle->sp);
-    if (rc != 0) {
+    bool ok = handle->sp.create(argv_s, options, envp_s, config.cwd.empty() ? nullptr : config.cwd.c_str());
+    if (!ok) {
         SRV_WRN("MCP '%s': failed to spawn '%s'\n", config.name.c_str(), config.command.c_str());
         return false;
     }
-    handle->in  = subprocess_stdin(&handle->sp);
-    handle->out = subprocess_stdout(&handle->sp);
-    handle->err = subprocess_stderr(&handle->sp);
+    handle->in  = handle->sp.stdin_file();
+    handle->out = handle->sp.stdout_file();
+    handle->err = handle->sp.stderr_file();
 
     proc = std::move(handle);
     running.store(true);
@@ -654,14 +639,13 @@ void server_mcp_stdio::join_pumps() {
     to_server.close_write();   // wake the writer if it waits for a message
     from_server.close_write(); // wake any caller waiting for a reply
 
-    subprocess_terminate(&proc->sp); // child death unblocks the blocked fread/fwrite
+    proc->sp.terminate(); // child death unblocks the blocked fread/fwrite
 
     if (writer.joinable()) writer.join();
     if (reader.joinable()) reader.join();
     if (errlog.joinable()) errlog.join();
 
-    subprocess_join(&proc->sp, nullptr); // reap the child: destroy() never waits, so the pid would stay a zombie for the process lifetime
-    subprocess_destroy(&proc->sp); // safe now: no thread touches the FILE* anymore
+    proc->sp.join(); // reap the child: never waiting would leave the pid a zombie for the process lifetime
     proc.reset();
 }
 

@@ -8,10 +8,10 @@
 #include "preset.h"
 #include "download.h"
 #include "http.h"
+#include "subproc.h"
 
 #include <cpp-httplib/httplib.h> // TODO: remove this once we use HTTP client from download.h
 #include <optional>
-#include <sheredom/subprocess.h>
 
 #include <functional>
 #include <optional>
@@ -49,43 +49,24 @@ extern char **environ;
 #define CHILD_ADDR "127.0.0.1"
 
 struct server_subproc {
-    std::optional<subprocess_s> sproc; // empty while in DOWNLOADING state
+    common_subproc sproc; // not yet spawned while in DOWNLOADING state
     std::atomic<bool> stopped{false}; // set to cancel a download or signal child process exit
 
-    subprocess_s & get() {
-        GGML_ASSERT(sproc.has_value() && "subprocess not initialized");
-        return sproc.value();
-    }
-
     bool is_alive() {
-        return sproc.has_value() && subprocess_alive(&sproc.value());
+        return sproc.alive();
     }
 
     void request_exit() {
-        if (sproc.has_value()) {
-            FILE * stdin_file = subprocess_stdin(&sproc.value());
-            if (stdin_file) {
-                fprintf(stdin_file, "%s\n", CMD_ROUTER_TO_CHILD_EXIT);
-                fflush(stdin_file);
-            }
+        FILE * stdin_file = sproc.stdin_file();
+        if (stdin_file) {
+            fprintf(stdin_file, "%s\n", CMD_ROUTER_TO_CHILD_EXIT);
+            fflush(stdin_file);
         }
         stopped.store(true, std::memory_order_relaxed);
     }
 
     void terminate() {
-        if (!sproc.has_value()) {
-            return;
-        }
-#if defined(_WIN32)
-        if (sproc->hProcess == NULL) {
-            return;
-        }
-#else
-        if (sproc->child <= 0) {
-            return;
-        }
-#endif
-        subprocess_terminate(&sproc.value());
+        sproc.terminate();
     }
 };
 
@@ -711,18 +692,6 @@ std::optional<server_model_meta> server_models::get_meta(const std::string & nam
     return std::nullopt;
 }
 
-// helper to convert vector<string> to char **
-// pointers are only valid as long as the original vector is valid
-static std::vector<char *> to_char_ptr_array(const std::vector<std::string> & vec) {
-    std::vector<char *> result;
-    result.reserve(vec.size() + 1);
-    for (const auto & s : vec) {
-        result.push_back(const_cast<char*>(s.c_str()));
-    }
-    result.push_back(nullptr);
-    return result;
-}
-
 std::vector<server_model_meta> server_models::get_all_meta() {
     std::unique_lock<std::mutex> lk(mutex);
     if (need_reload) {
@@ -845,15 +814,10 @@ void server_models::load(const std::string & name, const load_options & opts) {
         }
         inst.meta.args = child_args; // save for debugging
 
-        std::vector<char *> argv = to_char_ptr_array(child_args);
-        std::vector<char *> envp = to_char_ptr_array(child_env);
-
         // TODO @ngxson : maybe separate stdout and stderr in the future
         //                so that we can use stdout for commands and stderr for logging
         int options = subprocess_option_no_window | subprocess_option_combined_stdout_stderr;
-        inst.subproc->sproc.emplace();
-        int result = subprocess_create_ex(argv.data(), options, envp.data(), nullptr, &inst.subproc->get());
-        if (result != 0) {
+        if (!inst.subproc->sproc.create(child_args, options, child_env)) {
             throw std::runtime_error("failed to spawn server instance");
         }
     }
@@ -867,8 +831,8 @@ void server_models::load(const std::string & name, const load_options & opts) {
         stop_timeout = inst.meta.stop_timeout,
         child_mode = opts.mode
     ]() {
-        FILE * stdin_file = subprocess_stdin(&child_proc->get());
-        FILE * stdout_file = subprocess_stdout(&child_proc->get()); // combined stdout/stderr
+        FILE * stdin_file = child_proc->sproc.stdin_file();
+        FILE * stdout_file = child_proc->sproc.stdout_file(); // combined stdout/stderr
 
         std::thread log_thread([&]() {
             // read stdout/stderr and forward to main server log
@@ -942,9 +906,7 @@ void server_models::load(const std::string & name, const load_options & opts) {
         }
 
         // get the exit code
-        int exit_code = 0;
-        subprocess_join(&child_proc->get(), &exit_code);
-        subprocess_destroy(&child_proc->get());
+        int exit_code = child_proc->sproc.join();
 
         // update status and exit code
         if (child_mode == SERVER_CHILD_MODE_DOWNLOAD) {
@@ -1567,6 +1529,10 @@ static std::optional<server_model_meta> resolve_child_for_conv(
 }
 
 void server_models_routes::init_routes() {
+    if (!common_subproc::is_supported()) {
+        throw std::runtime_error("subprocess is not enabled on this build");
+    }
+
     this->get_router_props = [this](const server_http_req & req) {
         std::string name = req.get_param("model");
         if (name.empty()) {

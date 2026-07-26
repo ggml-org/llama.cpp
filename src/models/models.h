@@ -1902,6 +1902,29 @@ struct llama_model_minimax_m2 : public llama_model_base {
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
+struct msa_params {
+    int blk;
+    int topk_blocks;
+    int local;
+};
+
+struct llama_model_minimax_m3 : public llama_model_base {
+    llama_model_minimax_m3(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+    msa_params msa_p;
+    struct graph : public llm_graph_context {
+        graph(const llama_model & model, const llm_graph_params & params);
+
+        ggml_tensor * build_attn_msa_fa(
+                ggml_tensor * q_cur,   // [D, HQ, S] f32
+                ggml_tensor * k,       // [D, n_keys, 1, C]  C = HKV or HKV*n_stream
+                ggml_tensor * v,       // [D, n_keys, 1, C]
+                ggml_tensor * mask,    // [n_keys, R, 1, C] f16, R = HQ*T/(Gp*C)
+                int64_t Gp, float kq_scale, int il) const;
+    };
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
 
 struct llama_model_cogvlm : public llama_model_base {
     llama_model_cogvlm(const struct llama_model_params & params) : llama_model_base(params) {}

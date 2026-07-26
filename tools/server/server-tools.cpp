@@ -1,6 +1,6 @@
 #include "server-tools.h"
 
-#include <sheredom/subprocess.h>
+#include "subproc.h"
 
 #include <filesystem>
 #include <fstream>
@@ -138,15 +138,14 @@ public:
             const std::function<bool(const std::string &)> & on_chunk = nullptr) const override {
         exec_result res;
 
-        subprocess_s proc;
-        auto argv = to_cstr_vec(args);
+        common_subproc proc;
 
         int options = subprocess_option_no_window
                     | subprocess_option_combined_stdout_stderr
                     | subprocess_option_inherit_environment
                     | subprocess_option_search_user_path;
 
-        if (subprocess_create(argv.data(), options, &proc) != 0) {
+        if (!proc.create(args, options)) {
             res.output = "failed to spawn process";
             return res;
         }
@@ -159,14 +158,14 @@ public:
             while (!done.load()) {
                 if (std::chrono::steady_clock::now() >= deadline) {
                     timed_out.store(true);
-                    subprocess_terminate(&proc);
+                    proc.terminate();
                     return;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
         });
 
-        FILE * f = subprocess_stdout(&proc);
+        FILE * f = proc.stdout_file();
         std::string output;
         bool truncated = false;
         if (f) {
@@ -177,7 +176,7 @@ public:
                     if (output.size() + len <= max_output) {
                         output.append(buf, len);
                         if (on_chunk && !on_chunk(std::string(buf, len))) {
-                            subprocess_terminate(&proc);
+                            proc.terminate();
                             break;
                         }
                     } else {
@@ -195,8 +194,7 @@ public:
             timeout_thread.join();
         }
 
-        subprocess_join(&proc, &res.exit_code);
-        subprocess_destroy(&proc);
+        res.exit_code = proc.join();
 
         res.output    = output;
         res.timed_out = timed_out.load();
@@ -207,16 +205,6 @@ public:
     }
 
 private:
-    static std::vector<char *> to_cstr_vec(const std::vector<std::string> & v) {
-        std::vector<char *> r;
-        r.reserve(v.size() + 1);
-        for (const auto & s : v) {
-            r.push_back(const_cast<char *>(s.c_str()));
-        }
-        r.push_back(nullptr);
-        return r;
-    }
-
     static const std::unordered_set<std::string> & junk_dir_names() {
         static const std::unordered_set<std::string> names = {
             ".git", ".svn", ".hg", "node_modules", "__pycache__",
@@ -1203,6 +1191,10 @@ static std::vector<std::unique_ptr<server_tool>> build_tools() {
 void server_tools::setup(const std::vector<std::string> & enabled_tools,
                          server_mcp & mcp_mgr) {
     if (!enabled_tools.empty()) {
+        if (!common_subproc::is_supported()) {
+            throw std::runtime_error("subprocess is not enabled on this build");
+        }
+
         std::unordered_set<std::string> enabled_set(enabled_tools.begin(), enabled_tools.end());
         auto all_tools = build_tools();
 
