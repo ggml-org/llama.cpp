@@ -97,6 +97,9 @@ class ChatStore {
 	private attachingConvs = new SvelteSet<string>();
 	// pending resume retry timers while an owning model loads, one per conv
 	private resumeRetryTimers = new SvelteMap<string, ReturnType<typeof setTimeout>>();
+	// convs whose resume waits on a model load: their loading state belongs to the retry loop,
+	// so discoverActiveStream must not treat it as a live send and bail
+	private resumePendingConvs = new SvelteSet<string>();
 	// in-flight discoverActiveStream guard, keyed by conv id
 	private discoveringConvs = new SvelteSet<string>();
 	private abortControllers = new SvelteMap<string, AbortController>();
@@ -441,10 +444,19 @@ class ChatStore {
 		}
 	}
 
+	/**
+	 * Model frozen at send time for a stream awaiting resume, from the persisted stream state.
+	 * The load progress indicator targets it after a reload, when the message row has no model
+	 * yet and the dropdown selection may not be restored.
+	 */
+	getResumeModel(convId: string): string | null {
+		return ChatService.getStreamState(convId)?.model ?? null;
+	}
+
 	async discoverActiveStream(convId: string): Promise<void> {
 		if (!convId) return;
 		if (this.chatStreamingStates.has(convId)) return;
-		if (this.chatLoadingStates.get(convId)) return;
+		if (this.chatLoadingStates.get(convId) && !this.resumePendingConvs.has(convId)) return;
 		// concurrency guard: another discover may already be running for this conv (typical race
 		// between mount and visibilitychange on tab switch). a second concurrent fetch on the same
 		// /v1/stream would duplicate every byte into the DB message, this guard bounces it
@@ -477,6 +489,10 @@ class ChatStore {
 			// keeps the retry loop invisible while the owning model is still loading (503)
 			const status = await ChatService.probeResumeStatus(streamId);
 			if (status === 503) {
+				// make the wait visible: the empty assistant row persisted at send time renders
+				// the processing info, whose model load percentage flows from the models feed
+				this.resumePendingConvs.add(convId);
+				this.setChatLoading(convId, true);
 				if (!this.resumeRetryTimers.has(convId)) {
 					this.resumeRetryTimers.set(
 						convId,
@@ -487,6 +503,10 @@ class ChatStore {
 					);
 				}
 				return;
+			}
+			if (this.resumePendingConvs.delete(convId) && status !== 200) {
+				// the wait is over without a session to attach, drop the visible loading state
+				this.setChatLoading(convId, false);
 			}
 			if (status === 0) {
 				// transient network failure, the next mount or visibility change retries
@@ -1496,7 +1516,7 @@ class ChatStore {
 		// detached drain keeps producing tokens until eos or max_tokens. use the frozen identity
 		// captured when the session started, not the live dropdown
 		const streamStateForStop = this.chatStreamingStates.get(convId);
-		const modelForStop = streamStateForStop?.model;
+		const modelForStop = streamStateForStop?.model ?? ChatService.getStreamState(convId)?.model;
 		void ChatService.cancelServerStream(convId, modelForStop);
 		// an explicit stop leaves nothing to resume and kills a pending resume retry
 		ChatService.clearStreamState(convId);
@@ -1505,6 +1525,7 @@ class ChatStore {
 			clearTimeout(retryTimer);
 			this.resumeRetryTimers.delete(convId);
 		}
+		this.resumePendingConvs.delete(convId);
 		this.abortRequest(convId);
 		this.setChatLoading(convId, false);
 		this.clearChatStreaming(convId);
