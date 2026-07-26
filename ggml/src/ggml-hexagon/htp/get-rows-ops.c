@@ -142,17 +142,14 @@ static void get_rows_thread_##TYPE_NAME##_##IDX_TYPE(unsigned int nth, unsigned 
     }                                                                                                                  \
     for (uint32_t step = 0; step < ir1 - ir0; ++step) {                                                                \
         const uint32_t i = ir0 + step;                                                                                 \
-        const uint32_t spad_idx = step & 1;                                                                            \
+        void * dst_spad = (void *) dma_queue_pop(dma_queue).src;                                                       \
+        void * src_spad = (void *) dma_queue_pop(dma_queue).dst;                                                       \
         const uint32_t row_idx   = fastdiv(i, &kparams->div_chunks_per_row);                                           \
         const uint32_t chunk_idx = i - row_idx * chunks_per_row;                                                       \
         const uint32_t i12 = fastdiv(row_idx, &kparams->div_ne10_ne11);                                                \
         const uint32_t rem = row_idx - i12 * ne11 * ne10;                                                              \
         const uint32_t i11 = fastdiv(rem, &kparams->div_ne10);                                                         \
         const uint32_t i10 = rem - i11 * ne10;                                                                         \
-        void * dst_spad = vtcm_dst  + spad_idx * vtcm_layout->dst_spad_half_size;                                      \
-        void * src_spad = vtcm_src0 + spad_idx * vtcm_layout->src0_spad_half_size;                                     \
-        dma_queue_pop(dma_queue);                                                                                      \
-        dma_queue_pop(dma_queue);                                                                                      \
         htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, i);                                                          \
         COMPUTE_EXPR;                                                                                                  \
         htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, i);                                                           \
