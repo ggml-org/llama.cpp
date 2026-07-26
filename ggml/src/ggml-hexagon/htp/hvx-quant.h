@@ -61,23 +61,17 @@ static inline void hvx_quantize_row_q8_0_f32(void * restrict dst_ptr, const floa
         HVX_Vector vx23_i16 = hvx_vec_i16_from_hf_rnd_sat(vx23_hf);
         HVX_Vector vx_i8    = Q6_Vb_vpack_VhVh_sat(vx23_i16, vx01_i16);
 
-        const uint16_t * s16_01 = (const uint16_t *) &vd01_hf;
-        const uint16_t * s16_23 = (const uint16_t *) &vd23_hf;
-        dst[i + 0].d = s16_01[0];
-        dst[i + 1].d = s16_01[1];
-        dst[i + 2].d = s16_23[0];
-        dst[i + 3].d = s16_23[1];
+        hvx_vec_store_u(&dst[i + 0].d, 2, vd01_hf);
+        hvx_vec_store_u(dst[i + 0].qs, 32, vx_i8);
 
-        const uint64_t * q64 = (const uint64_t *) &vx_i8;
-        uint64_t * d0 = (uint64_t *) dst[i + 0].qs;
-        uint64_t * d1 = (uint64_t *) dst[i + 1].qs;
-        uint64_t * d2 = (uint64_t *) dst[i + 2].qs;
-        uint64_t * d3 = (uint64_t *) dst[i + 3].qs;
+        hvx_vec_store_u(&dst[i + 1].d, 2, Q6_V_vror_VR(vd01_hf, 64));
+        hvx_vec_store_u(dst[i + 1].qs, 32, Q6_V_vror_VR(vx_i8, 32));
 
-        d0[0] = q64[0];  d0[1] = q64[1];  d0[2] = q64[2];  d0[3] = q64[3];
-        d1[0] = q64[4];  d1[1] = q64[5];  d1[2] = q64[6];  d1[3] = q64[7];
-        d2[0] = q64[8];  d2[1] = q64[9];  d2[2] = q64[10]; d2[3] = q64[11];
-        d3[0] = q64[12]; d3[1] = q64[13]; d3[2] = q64[14]; d3[3] = q64[15];
+        hvx_vec_store_u(&dst[i + 2].d, 2, vd23_hf);
+        hvx_vec_store_u(dst[i + 2].qs, 32, Q6_V_vror_VR(vx_i8, 64));
+
+        hvx_vec_store_u(&dst[i + 3].d, 2, Q6_V_vror_VR(vd23_hf, 64));
+        hvx_vec_store_u(dst[i + 3].qs, 32, Q6_V_vror_VR(vx_i8, 96));
     }
 
     for (; i < nb; i++) {
@@ -98,9 +92,7 @@ static inline void hvx_quantize_row_q8_0_f32(void * restrict dst_ptr, const floa
         HVX_Vector v_i16 = hvx_vec_i16_from_hf_rnd_sat(v_scaled_hf);
         HVX_Vector v_i8  = Q6_Vb_vpack_VhVh_sat(zero, v_i16);
 
-        const uint64_t * q64 = (const uint64_t *) &v_i8;
-        uint64_t * d_qs = (uint64_t *) dst[i].qs;
-        d_qs[0] = q64[0]; d_qs[1] = q64[1]; d_qs[2] = q64[2]; d_qs[3] = q64[3];
+        hvx_vec_store_u(dst[i].qs, 32, v_i8);
     }
 }
 
