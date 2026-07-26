@@ -134,12 +134,24 @@ private:
     // proxy_request forwards a POST carrying an X-Conversation-Id. best effort: a stale entry just
     // makes the child answer not found and the client recovers. owns its lock, one mutex per struct
     struct conv_model_tracker {
-        void remember(const std::string & conv_id, const std::string & model) {
+        // returns the ticket of this registration, 0 when nothing was registered. erasing or
+        // replacing the entry invalidates the ticket, which is how a stop cancels a request
+        // parked in the model load wait
+        uint64_t remember(const std::string & conv_id, const std::string & model) {
             if (conv_id.empty() || model.empty()) {
-                return;
+                return 0;
             }
             std::lock_guard<std::mutex> lock(mu);
-            map[conv_id] = model;
+            uint64_t ticket = next_ticket++;
+            map[conv_id] = { model, ticket };
+            return ticket;
+        }
+
+        // false means a stop erased the entry or a newer request replaced it
+        bool alive(const std::string & conv_id, uint64_t ticket) {
+            std::lock_guard<std::mutex> lock(mu);
+            auto it = map.find(conv_id);
+            return it != map.end() && it->second.ticket == ticket;
         }
 
         std::optional<std::string> lookup(const std::string & conv_id) {
@@ -151,7 +163,7 @@ private:
             if (it == map.end()) {
                 return std::nullopt;
             }
-            return it->second;
+            return it->second.model;
         }
 
         void forget(const std::string & conv_id) {
@@ -163,8 +175,13 @@ private:
         }
 
       private:
-        std::mutex                                   mu;
-        std::unordered_map<std::string, std::string> map;
+        struct entry_t {
+            std::string model;
+            uint64_t    ticket;
+        };
+        std::mutex                               mu;
+        uint64_t                                 next_ticket = 1;
+        std::unordered_map<std::string, entry_t> map;
     };
 
     common_preset_context ctx_preset;
