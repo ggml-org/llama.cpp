@@ -36,8 +36,12 @@ class ModelSpec:
     # the HF reference strips in result.md; drop it before scoring to match.
     strip_grounding: bool = False
     # v2/Unlimited loop on hard tiles; DRY caps it the way HF's
-    # no_repeat_ngram_size does. v1 scores fine without it.
+    # no_repeat_ngram_size does. v1 scores fine without it. Keep the penalty
+    # weak (long allowed length, small window) or it garbles the legitimate
+    # repetition in dense HTML tables.
     dry: bool = False
+    dry_allowed_length: int = 2
+    dry_penalty_last_n: int = -1
 
 
 @dataclass
@@ -89,7 +93,10 @@ MODELS = {
         n_predict=4096,
         n_ctx=16384,
         strip_grounding=True,
+        # mirror the HF reference's no_repeat_ngram_size=35 / ngram_window=128
         dry=True,
+        dry_allowed_length=35,
+        dry_penalty_last_n=128,
     ),
 }
 
@@ -134,9 +141,10 @@ CASES = [
         model_key="unlimited", label="single-view scan",
         image="tools/mtmd/test-1.jpeg",
         ground_truth="tools/mtmd/tests/test-1-ground-truth.txt",
-        # HF reference: Unlimited-OCR scoring (gundam, bf16) on this image/ground-truth.
-        # Decoder runs full MHA, not R-SWA; the band absorbs that gap + bf16 variance.
-        hf_cer=0.1869, hf_chrf=75.23, cer_tol=0.06, chrf_tol=6.0,
+        # HF reference: release config (original bf16 weights, R-SWA, CUDA) on this
+        # image/ground-truth. llama.cpp runs R-SWA (n_swa>0 -> LLAMA_SWA_TYPE_REFERENCE)
+        # in the decoder, matching the regime the weights were trained under.
+        hf_cer=0.1591, hf_chrf=77.48, cer_tol=0.04, chrf_tol=5.0,
     ),
 ]
 
@@ -214,8 +222,8 @@ def run_mtmd_cli(spec: "ModelSpec", model_path, mmproj_path, image_path, bin_pat
         cmd += [
             "--dry-multiplier", "0.8",
             "--dry-base", "1.75",
-            "--dry-allowed-length", "2",
-            "--dry-penalty-last-n", "-1",
+            "--dry-allowed-length", str(spec.dry_allowed_length),
+            "--dry-penalty-last-n", str(spec.dry_penalty_last_n),
             "--dry-sequence-breaker", "none",
         ]
     if spec.n_ctx is not None:
