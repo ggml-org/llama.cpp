@@ -22,13 +22,6 @@ class OnyxModel(TextModel):
         super().set_gguf_parameters()
         hparams = self.hparams
 
-        self.gguf_writer.add_context_length(hparams["max_position_embeddings"])
-        self.gguf_writer.add_head_count(hparams["num_attention_heads"])
-        self.gguf_writer.add_head_count_kv(hparams["num_key_value_heads"])
-        self.gguf_writer.add_key_length(hparams["head_dim"])
-        self.gguf_writer.add_value_length(hparams["head_dim"])
-        self.gguf_writer.add_layer_norm_rms_eps(hparams["rms_norm_eps"])
-        self.gguf_writer.add_rope_freq_base(self.rope_parameters["rope_theta"])
         self.gguf_writer.add_final_logit_softcapping(hparams["final_logit_softcapping"])
 
         # SWA + NoPE: [SW, SW, SW, Full], NoPE used on Full layers.
