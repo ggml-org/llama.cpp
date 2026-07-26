@@ -5,6 +5,7 @@
 #include "common.h"
 #include "download.h"
 #include "json-schema-to-grammar.h"
+#include "llama.h"
 #include "log.h"
 #include "sampling.h"
 #include "speculative.h"
@@ -785,6 +786,17 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
                     arg.c_str(), e.what(), opt.to_string().c_str()));
             }
         }
+
+        // TODO: remove this check after deprecating --mmap|mlock|dio
+        auto has_arg = [&](std::initializer_list<const char *> names) {
+            return std::any_of(names.begin(), names.end(), [&](const char * name) {
+                return seen_args.count(name);
+            });
+        };
+        if (has_arg({"-lm", "--load-mode"}) &&
+            has_arg({"--mlock", "--mmap", "--no-mmap", "-dio", "--direct-io", "-ndio", "--no-direct-io"})) {
+            LOG_WRN("DEPRECATED: `--load-mode` and `--mlock`/`--mmap`/`--direct-io` should not be combined; only the last flag on the command line will take effect\n");
+        }
     };
 
     // parse all CLI args now, so that -hf is available below for remote preset resolution
@@ -838,8 +850,9 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         params.kv_overrides.back().key[0] = 0;
     }
 
-    if (!params.server_tools.empty() && !params.cors_origins_explicit) {
-        LOG_WRN("server tools are enabled, using localhost as default CORS origin (change via --cors-origins)\n");
+    const bool mcp_enabled = !params.mcp_servers_config.empty() || !params.mcp_servers_json.empty();
+    if ((!params.server_tools.empty() || mcp_enabled) && !params.cors_origins_explicit) {
+        LOG_WRN("server tools or MCP servers are enabled, using localhost as default CORS origin (change via --cors-origins)\n");
         params.cors_origins = "localhost";
     }
 
@@ -2495,27 +2508,45 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     }
     add_opt(common_arg(
         {"--mlock"},
-        "force system to keep model in RAM rather than swapping or compressing",
+        "DEPRECATED in favor of `--load-mode`: mmap + force system to keep model in RAM rather than swapping or compressing",
         [](common_params & params) {
-            params.use_mlock = true;
+            LOG_WRN("DEPRECATED: --mlock is deprecated. use --load-mode mlock instead\n");
+            params.load_mode = LLAMA_LOAD_MODE_MLOCK;
         }
     ).set_env("LLAMA_ARG_MLOCK"));
     add_opt(common_arg(
         {"--mmap"},
         {"--no-mmap"},
-        string_format("whether to memory-map model. (if mmap disabled, slower load but may reduce pageouts if not using mlock) (default: %s)", params.use_mmap ? "enabled" : "disabled"),
+        "DEPRECATED in favor of `--load-mode`: whether to memory-map model. (if mmap disabled, slower load but may reduce pageouts if not using mlock)",
         [](common_params & params, bool value) {
-            params.use_mmap = value;
+            LOG_WRN("DEPRECATED: --mmap and --no-mmap are deprecated. use --load-mode mmap instead\n");
+            params.load_mode = value ? LLAMA_LOAD_MODE_MMAP : LLAMA_LOAD_MODE_NONE;
         }
     ).set_env("LLAMA_ARG_MMAP"));
     add_opt(common_arg(
         {"-dio", "--direct-io"},
         {"-ndio", "--no-direct-io"},
-        string_format("use DirectIO if available. (default: %s)", params.use_direct_io ? "enabled" : "disabled"),
+        "DEPRECATED in favor of `--load-mode`: use DirectIO if available",
         [](common_params & params, bool value) {
-            params.use_direct_io = value;
+            LOG_WRN("DEPRECATED: --direct-io and --no-direct-io are deprecated. use --load-mode dio instead\n");
+            params.load_mode = value ? LLAMA_LOAD_MODE_DIRECT_IO : LLAMA_LOAD_MODE_NONE;
         }
     ).set_env("LLAMA_ARG_DIO"));
+    add_opt(common_arg(
+        {"-lm", "--load-mode"}, "MODE",
+        "model loading mode (default: mmap)\n"
+        "- none: no special loading mode\n"
+        "- mmap: memory-map model (if mmap disabled, slower load but may reduce pageouts if not using mlock)\n"
+        "- mlock: mmap + force system to keep model in RAM rather than swapping or compressing\n"
+        "- dio: use DirectIO if available\n",
+        [](common_params & params, const std::string & value) {
+            /**/ if (value == "none")  { params.load_mode = LLAMA_LOAD_MODE_NONE;      }
+            else if (value == "mmap")  { params.load_mode = LLAMA_LOAD_MODE_MMAP;      }
+            else if (value == "mlock") { params.load_mode = LLAMA_LOAD_MODE_MLOCK;     }
+            else if (value == "dio")   { params.load_mode = LLAMA_LOAD_MODE_DIRECT_IO; }
+            else { throw std::invalid_argument("invalid value"); }
+        }
+    ).set_env("LLAMA_ARG_LOAD_MODE"));
     add_opt(common_arg(
         {"--numa"}, "TYPE",
         "attempt optimizations that help on some NUMA systems\n"
@@ -3231,6 +3262,22 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.server_tools = parse_csv_row(value);
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_TOOLS"));
+    add_opt(common_arg(
+        {"--mcp-servers-config"}, "PATH",
+        "experimental: path to JSON file with MCP server definitions (Cursor-compatible format) - do not enable in untrusted environments (default: none)\n"
+        "note: for security reasons, this will limit --cors-origins to localhost by default",
+        [](common_params & params, const std::string & value) {
+            params.mcp_servers_config = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MCP_SERVERS_CONFIG"));
+    add_opt(common_arg(
+        {"--mcp-servers-json"}, "JSON",
+        "experimental: inline JSON with MCP server definitions (Cursor-compatible format) - do not enable in untrusted environments (default: none)\n"
+        "note: for security reasons, this will limit --cors-origins to localhost by default",
+        [](common_params & params, const std::string & value) {
+            params.mcp_servers_json = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MCP_SERVERS_JSON"));
     add_opt(common_arg(
         {"-ag", "--agent"},
         {"-no-ag", "--no-agent"},

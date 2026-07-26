@@ -99,8 +99,9 @@
 	function checkApiKey() {
 		const apiKey = config().apiKey;
 
-		// No API key configured — server doesn't require auth, no need to validate.
-		// This mirrors the early return in validateApiKey() to avoid redundant /props requests.
+		// Without a stored key there is nothing to re-validate here; the keyless
+		// 401 case is handled by validateApiKey() at navigation time, and the
+		// reload below must never fire in a keyless loop.
 		if (!apiKey || apiKey.trim() === '') {
 			return;
 		}

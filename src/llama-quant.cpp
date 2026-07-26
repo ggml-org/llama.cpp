@@ -2,6 +2,7 @@
 #include "llama-model.h"
 #include "llama-model-loader.h"
 #include "llama-ext.h"
+#include "llama.h"
 
 #include <algorithm>
 #include <cmath>
@@ -876,15 +877,15 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
     // mmap consistently increases speed on Linux, and also increases speed on Windows with
     // hot cache. It may cause a slowdown on macOS, possibly related to free memory.
 #if defined(__linux__) || defined(_WIN32)
-    constexpr bool use_mmap = true;
+    constexpr llama_load_mode load_mode = LLAMA_LOAD_MODE_MMAP;
 #else
-    constexpr bool use_mmap = false;
+    constexpr llama_load_mode load_mode = LLAMA_LOAD_MODE_NONE;
 #endif
 
     const llama_model_kv_override * kv_overrides = params->kv_overrides;
     std::vector<std::string> splits = {};
     llama_model_loader ml(/*metadata*/ nullptr, /*set_tensor_data*/ nullptr, /*set_tensor_data_ud*/ nullptr,
-        fname_inp, splits, /*file*/ nullptr, use_mmap, /*use_direct_io*/ false, /*check_tensors*/ true, /*no_alloc*/ false, kv_overrides, nullptr);
+        fname_inp, splits, /*file*/ nullptr, /*load_mode*/ load_mode, /*check_tensors*/ true, /*no_alloc*/ false, kv_overrides, nullptr);
     ml.init_mappings(false); // no prefetching
 
     auto mparams = llama_model_default_params();
@@ -1354,6 +1355,7 @@ llama_model * llama_quant_model_from_metadata(const llama_quant_model_desc * des
     model->hparams.n_embd_head_k_full = desc->n_embd_head_k;
     model->hparams.n_embd_head_v_full = desc->n_embd_head_v;
     model->hparams.n_layer_all        = desc->n_layer;
+    GGML_ASSERT(desc->n_layer > 0 && desc->n_layer <= LLAMA_MAX_LAYERS);
     model->hparams.n_expert           = desc->n_expert;
 
     for (uint32_t i = 0; i < desc->n_layer; i++) {

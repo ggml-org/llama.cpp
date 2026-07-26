@@ -70,7 +70,12 @@
 	async function startEditing() {
 		isEditing = true;
 		await tick();
-		editFormRef?.setInitialValues(server.url, server.headers || '', server.useProxy || false);
+		editFormRef?.setInitialValues(
+			server.url,
+			server.headers || '',
+			server.useProxy || false,
+			displayName
+		);
 	}
 
 	function cancelEditing() {
@@ -81,9 +86,12 @@
 		}
 	}
 
-	function saveEditing(url: string, headers: string, useProxy: boolean) {
+	function saveEditing(url: string, headers: string, useProxy: boolean, name?: string) {
 		onUpdate({
 			url: url,
+			// undefined = prefill untouched, keep any existing custom name;
+			// empty string = field cleared, back to the automatic label
+			displayName: name === undefined ? server.displayName : name.trim() || undefined,
 			headers: headers || undefined,
 			useProxy: useProxy
 		});
@@ -106,6 +114,7 @@
 			serverId={server.id}
 			serverUrl={server.url}
 			serverUseProxy={server.useProxy}
+			serverLabel={displayName}
 			onSave={saveEditing}
 			onCancel={cancelEditing}
 		/>

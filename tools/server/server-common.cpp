@@ -1086,6 +1086,14 @@ json oaicompat_chat_params_parse(
         throw std::invalid_argument("invalid type for \"enable_thinking\" (expected boolean, got string)");
     }
 
+    // Parse also the OAI "reasoning_effort": "none" specific value
+    if (body.contains("reasoning_effort")) {
+        auto reasoning_effort = json_value(body, "reasoning_effort", std::string(""));
+        if (reasoning_effort == "none") {
+            inputs.enable_thinking = false;
+        } // other reasoning_effort values are model-specific and not yet handled
+    }
+
     inputs.force_pure_content = opt.force_pure_content;
 
     // Apply chat template to the list of messages
@@ -1123,10 +1131,10 @@ json oaicompat_chat_params_parse(
             reasoning_budget = opt.reasoning_budget;
         }
 
-        if (!chat_params.thinking_end_tag.empty()) {
+        if (!chat_params.thinking_end_tags.empty()) {
             llama_params["reasoning_budget_tokens"] = reasoning_budget;
             llama_params["reasoning_budget_start_tag"] = chat_params.thinking_start_tag;
-            llama_params["reasoning_budget_end_tag"] = chat_params.thinking_end_tag;
+            llama_params["reasoning_budget_end_tags"] = chat_params.thinking_end_tags;
             llama_params["reasoning_budget_message"] = json_value(body, "reasoning_budget_message", opt.reasoning_budget_message);
             llama_params["reasoning_control"] = json_value(body, "reasoning_control", false);
         }
