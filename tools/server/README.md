@@ -215,6 +215,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--cache-prompt, --no-cache-prompt` | whether to enable prompt caching (default: enabled)<br/>(env: LLAMA_ARG_CACHE_PROMPT) |
 | `--cache-reuse N` | min chunk size to attempt reusing from the cache via KV shifting, requires prompt caching to be enabled (default: 0)<br/>[(card)](https://ggml.ai/f0.png)<br/>(env: LLAMA_ARG_CACHE_REUSE) |
 | `--metrics` | enable prometheus compatible metrics endpoint (default: disabled)<br/>(env: LLAMA_ARG_ENDPOINT_METRICS) |
+| `--memory` | enable the /memory endpoint reporting per-device memory usage (default: disabled)<br/>(env: LLAMA_ARG_ENDPOINT_MEMORY) |
 | `--props` | enable changing global properties via POST /props (default: disabled)<br/>(env: LLAMA_ARG_ENDPOINT_PROPS) |
 | `--slots, --no-slots` | expose slots monitoring endpoint (default: enabled)<br/>(env: LLAMA_ARG_ENDPOINT_SLOTS) |
 | `--slot-save-path PATH` | path to save slot kv cache (default: disabled) |
@@ -1085,6 +1086,40 @@ In *router mode* the query param `?model={model_id}` has to be set. This endpoin
 | `llamacpp:spec_decode_num_accepted_tokens_total` | Counter | Total draft tokens accepted by the target model (0 when spec-decode is off). |
 | `llamacpp:spec_decode_num_drafts_total` | Counter | Total speculative decoding verification steps (0 when spec-decode is off). |
 | `llamacpp:spec_decode_num_accepted_tokens_per_pos_total` | Counter | Accepted tokens per draft position (labeled `position="N"`; absent when spec-decode is off or before the first completed speculative request). |
+| `llamacpp:model_n_layer` | Gauge | Number of layers in the model. |
+| `llamacpp:memory_mmproj_bytes` | Gauge | Memory allocated for the multimodal projector, in bytes. Present only when one is loaded. |
+| `llamacpp:memory_model_bytes` | Gauge | Memory allocated for the model weights, in bytes. |
+| `llamacpp:memory_context_bytes` | Gauge | Memory allocated for the context, in bytes. |
+| `llamacpp:memory_compute_bytes` | Gauge | Memory allocated for compute buffers, in bytes. |
+| `llamacpp:memory_total_bytes` | Gauge | Total memory of the device, in bytes. |
+| `llamacpp:memory_free_bytes` | Gauge | Free memory of the device, in bytes. |
+
+The `memory_*` metrics carry a `device` label holding the backend's own device name, the same name `--device` and `--list-devices` use:
+
+```
+llamacpp:memory_model_bytes{device="CUDA0"} 17825792000
+llamacpp:memory_model_bytes{device="Host"} 13191648
+```
+
+They report the same figures as the memory breakdown printed on exit at trace verbosity (`-lv 4`). `Host` covers the host buffer types, and buffer types belonging to none of the model's devices (such as `CPU_REPACK`) are reported under their own name. `memory_total_bytes` and `memory_free_bytes` come from the backend and describe the whole device, not this process, so they are only present on real devices.
+
+### GET `/memory`: Get the per-device memory breakdown as JSON
+
+The same figures as the `memory_*` metrics above, for API consumers. Requires `--memory`.
+
+**Response format**
+
+```json
+{
+  "n_layer": 12,
+  "data": [
+    {"name": "MTL0", "model": 83349984, "context": 0, "compute": 22559744, "total": 22906503168, "free": 22800187392},
+    {"name": "Host", "model": 13191648, "context": 500640, "compute": 3684352}
+  ]
+}
+```
+
+`n_layer` is the model's layer count. One entry per device, then the host, then any buffer types belonging to none of the model's devices. All memory values are bytes. With a multimodal projector loaded (`--mmproj`), rows also carry `mmproj`, its memory on that device. `total` and `free` describe the whole device and are only present on real devices.
 
 ### POST `/slots/{id_slot}?action=save`: Save the prompt cache of the specified slot to a file.
 

@@ -72,29 +72,18 @@ static std::vector<llama_device_memory_data> common_get_device_memory_data_impl(
     const size_t nd = llama_model_n_devices(model);
     std::vector<llama_device_memory_data> ret(nd + 1);
 
-    llama_memory_breakdown memory_breakdown = llama_get_memory_breakdown(ctx);
-
-    for (const auto & [buft, mb] : memory_breakdown) {
-        if (ggml_backend_buft_is_host(buft)) {
-            ret.back().mb.model   += mb.model;
-            ret.back().mb.context += mb.context;
-            ret.back().mb.compute += mb.compute;
-            continue;
-        }
-
-        ggml_backend_dev_t dev = ggml_backend_buft_get_device(buft);
-        if (!dev) {
-            continue;
-        }
-        for (size_t i = 0; i < nd; i++) {
-            if (dev == llama_model_get_device(model, i)) {
-                ret[i].mb.model   += mb.model;
-                ret[i].mb.context += mb.context;
-                ret[i].mb.compute += mb.compute;
-                break;
-            }
-        }
+    // rows are the model devices in order, then the host, then leftover buffer types (dropped here)
+    const std::vector<common_memory_breakdown_row> rows = common_memory_breakdown_get(ctx);
+    GGML_ASSERT(rows.size() >= nd + 1 && !rows[nd].is_device);
+    for (size_t i = 0; i < nd; i++) {
+        GGML_ASSERT(rows[i].name == ggml_backend_dev_name(llama_model_get_device(model, i)));
+        ret[i].mb.model   = rows[i].mem.model;
+        ret[i].mb.context = rows[i].mem.context;
+        ret[i].mb.compute = rows[i].mem.compute;
     }
+    ret.back().mb.model   = rows[nd].mem.model;
+    ret.back().mb.context = rows[nd].mem.context;
+    ret.back().mb.compute = rows[nd].mem.compute;
 
     {
         ggml_backend_dev_t cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
@@ -110,9 +99,8 @@ static std::vector<llama_device_memory_data> common_get_device_memory_data_impl(
     for (size_t i = 0; i < nd; i++) {
         ggml_backend_dev_t dev = llama_model_get_device(model, i);
 
-        size_t free;
-        size_t total;
-        ggml_backend_dev_memory(dev, &free, &total);
+        size_t free  = static_cast<size_t>(rows[i].mem.free);
+        size_t total = static_cast<size_t>(rows[i].mem.total);
 
         // Some non-GPU accelerator backends, such as BLAS, report 0/0 and rely on
         // the host-memory fallback. For GPU-like backends, keep 0/0 so --fit does
@@ -814,27 +802,16 @@ enum common_params_fit_status common_fit_params(
     return status;
 }
 
-void common_memory_breakdown_print(const struct llama_context * ctx) {
-    //const auto & devices = ctx->get_model().devices;
+std::vector<common_memory_breakdown_row> common_memory_breakdown_get(const struct llama_context * ctx) {
     const auto * model = llama_get_model(ctx);
 
     std::vector<ggml_backend_dev_t> devices;
+    devices.reserve(llama_model_n_devices(model));
     for (int i = 0; i < llama_model_n_devices(model); i++) {
         devices.push_back(llama_model_get_device(model, i));
     }
 
     llama_memory_breakdown memory_breakdown = llama_get_memory_breakdown(ctx);
-
-    std::vector<std::array<std::string, 9>> table_data;
-    table_data.reserve(devices.size());
-    const std::string template_header = "%s: | %s | %s   %s    %s   %s   %s   %s    %s |\n";
-    const std::string template_gpu    = "%s: | %s | %s = %s + (%s = %s + %s + %s) + %s |\n";
-    const std::string template_other  = "%s: | %s | %s   %s    %s = %s + %s + %s    %s |\n";
-
-    table_data.push_back({template_header, "memory breakdown [MiB]", "total", "free", "self", "model", "context", "compute", "unaccounted"});
-
-    constexpr size_t MiB = 1024 * 1024;
-    const std::vector<std::string> desc_prefixes_strip = {"NVIDIA ", "GeForce ", "Tesla ", "AMD ", "Radeon ", "Instinct "};
 
     // track seen buffer types to avoid double counting:
     std::set<ggml_backend_buffer_type_t> seen_buffer_types;
@@ -872,72 +849,105 @@ void common_memory_breakdown_print(const struct llama_context * ctx) {
         }
     }
 
-    // print memory breakdown for each device:
+    std::vector<common_memory_breakdown_row> rows;
+    rows.reserve(devices.size() + 1);
+
     for (size_t i = 0; i < devices.size(); i++) {
-        ggml_backend_dev_t dev = devices[i];
-        llama_memory_breakdown_data mb = mb_dev[i];
+        size_t free;
+        size_t total;
+        ggml_backend_dev_memory(devices[i], &free, &total);
 
-        const std::string name = ggml_backend_dev_name(dev);
-        std::string desc = ggml_backend_dev_description(dev);
-        for (const std::string & prefix : desc_prefixes_strip) {
-            if (desc.length() >= prefix.length() && desc.substr(0, prefix.length()) == prefix) {
-                desc = desc.substr(prefix.length());
-            }
-        }
-
-        size_t free, total;
-        ggml_backend_dev_memory(dev, &free, &total);
-
-        const size_t self = mb.model + mb.context + mb.compute;
-        const int64_t unaccounted = static_cast<int64_t>(total) - static_cast<int64_t>(free) - static_cast<int64_t>(self);
-
-        table_data.push_back({
-            template_gpu,
-            "  - " + name + " (" + desc + ")",
-            std::to_string(total / MiB),
-            std::to_string(free / MiB),
-            std::to_string(self / MiB),
-            std::to_string(mb.model / MiB),
-            std::to_string(mb.context / MiB),
-            std::to_string(mb.compute / MiB),
-            std::to_string(unaccounted / static_cast<int64_t>(MiB))});
+        common_memory_breakdown_row row;
+        row.name        = ggml_backend_dev_name(devices[i]);
+        row.description = ggml_backend_dev_description(devices[i]);
+        row.is_device   = true;
+        row.mem.total   = static_cast<int64_t>(total);
+        row.mem.free    = static_cast<int64_t>(free);
+        row.mem.model   = mb_dev[i].model;
+        row.mem.context = mb_dev[i].context;
+        row.mem.compute = mb_dev[i].compute;
+        rows.push_back(std::move(row));
     }
 
-    // print memory breakdown for host:
     {
-        const size_t self = mb_host.model + mb_host.context + mb_host.compute;
-        table_data.push_back({
-            template_other,
-            "  - Host",
-            "", // total
-            "", // free
-            std::to_string(self / MiB),
-            std::to_string(mb_host.model / MiB),
-            std::to_string(mb_host.context / MiB),
-            std::to_string(mb_host.compute / MiB),
-            ""}); // unaccounted
+        common_memory_breakdown_row row;
+        row.name        = "Host";
+        row.mem.model   = mb_host.model;
+        row.mem.context = mb_host.context;
+        row.mem.compute = mb_host.compute;
+        rows.push_back(std::move(row));
     }
 
-    // print memory breakdown for all remaining buffer types:
     for (const auto & buft_mb : memory_breakdown) {
         ggml_backend_buffer_type_t          buft = buft_mb.first;
         const llama_memory_breakdown_data & mb   = buft_mb.second;
         if (seen_buffer_types.count(buft) == 1) {
             continue;
         }
-        const std::string name = ggml_backend_buft_name(buft);
-        const size_t self = mb.model + mb.context + mb.compute;
-        table_data.push_back({
-            template_other,
-            "  - " + name,
-            "", // total
-            "", // free
-            std::to_string(self / MiB),
-            std::to_string(mb.model / MiB),
-            std::to_string(mb.context / MiB),
-            std::to_string(mb.compute / MiB),
-            ""}); // unaccounted
+        common_memory_breakdown_row row;
+        row.name        = ggml_backend_buft_name(buft);
+        row.mem.model   = mb.model;
+        row.mem.context = mb.context;
+        row.mem.compute = mb.compute;
+        rows.push_back(std::move(row));
         seen_buffer_types.insert(buft);
+    }
+
+    return rows;
+}
+
+void common_memory_breakdown_print(const struct llama_context * ctx) {
+    const std::vector<common_memory_breakdown_row> rows = common_memory_breakdown_get(ctx);
+
+    std::vector<std::array<std::string, 9>> table_data;
+    table_data.reserve(rows.size() + 1);
+    const std::string template_header = "%s: | %s | %s   %s    %s   %s   %s   %s    %s |\n";
+    const std::string template_gpu    = "%s: | %s | %s = %s + (%s = %s + %s + %s) + %s |\n";
+    const std::string template_other  = "%s: | %s | %s   %s    %s = %s + %s + %s    %s |\n";
+
+    table_data.push_back({template_header, "memory breakdown [MiB]", "total", "free", "self", "model", "context", "compute", "unaccounted"});
+
+    constexpr size_t MiB = 1024 * 1024;
+    const std::vector<std::string> desc_prefixes_strip = {"NVIDIA ", "GeForce ", "Tesla ", "AMD ", "Radeon ", "Instinct "};
+
+    for (const common_memory_breakdown_row & row : rows) {
+        const common_device_memory_data & mem = row.mem;
+
+        const size_t self = mem.model + mem.context + mem.compute;
+
+        if (!row.is_device) {
+            table_data.push_back({
+                template_other,
+                "  - " + row.name,
+                "", // total
+                "", // free
+                std::to_string(self / MiB),
+                std::to_string(mem.model / MiB),
+                std::to_string(mem.context / MiB),
+                std::to_string(mem.compute / MiB),
+                ""}); // unaccounted
+            continue;
+        }
+
+        std::string desc = row.description;
+        for (const std::string & prefix : desc_prefixes_strip) {
+            if (desc.length() >= prefix.length() && desc.substr(0, prefix.length()) == prefix) {
+                desc = desc.substr(prefix.length());
+            }
+        }
+
+        const int64_t unaccounted = mem.total - mem.free - static_cast<int64_t>(self);
+
+        table_data.push_back({
+            template_gpu,
+            "  - " + row.name + " (" + desc + ")",
+            std::to_string(mem.total / static_cast<int64_t>(MiB)),
+            std::to_string(mem.free  / static_cast<int64_t>(MiB)),
+            std::to_string(self / MiB),
+            std::to_string(mem.model / MiB),
+            std::to_string(mem.context / MiB),
+            std::to_string(mem.compute / MiB),
+            std::to_string(unaccounted / static_cast<int64_t>(MiB))});
     }
 
     for (size_t j = 1; j < table_data[0].size(); j++) {
