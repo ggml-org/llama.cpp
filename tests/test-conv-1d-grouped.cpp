@@ -68,9 +68,9 @@ static void conv1d_grouped_ref(
 }
 
 static bool run_test(const char * label, int IC, int OC, int K, int L, int groups, int stride, int padding,
-                     enum ggml_type kernel_type = GGML_TYPE_F16) {
-    printf("  TEST: %s (IC=%d OC=%d K=%d L=%d G=%d s=%d p=%d) kernel=%s\n",
-           label, IC, OC, K, L, groups, stride, padding,
+                     enum ggml_type kernel_type = GGML_TYPE_F16, int N = 1) {
+    printf("  TEST: %s (IC=%d OC=%d K=%d L=%d N=%d G=%d s=%d p=%d) kernel=%s\n",
+           label, IC, OC, K, L, N, groups, stride, padding,
            ggml_type_name(kernel_type));
 
     int IC_G = IC / groups;
@@ -104,18 +104,18 @@ static bool run_test(const char * label, int IC, int OC, int K, int L, int group
         memcpy(a->data, kernel_f16.data(), K * IC_G * OC * sizeof(ggml_fp16_t));
     }
 
-    // generate reference input once (F32)
-    std::vector<float> input_f32(L * IC);
-    fill_random_f32(input_f32.data(), L * IC);
+    // generate reference input (F32)
+    std::vector<float> input_f32(L * IC * N);
+    fill_random_f32(input_f32.data(), L * IC * N);
 
-    // input for op: [L, IC]
-    struct ggml_tensor * b = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, L, IC);
-    memcpy(b->data, input_f32.data(), L * IC * sizeof(float));
+    // input for op: [L, IC, N]
+    struct ggml_tensor * b = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, L, IC, N);
+    memcpy(b->data, input_f32.data(), L * IC * N * sizeof(float));
 
     // reference
-    std::vector<float> ref(OL * OC);
+    std::vector<float> ref(OL * OC * N);
     conv1d_grouped_ref(kernel_f16.data(), input_f32.data(), ref.data(),
-                       K, IC, OC, L, 1, groups, stride, padding);
+                       K, IC, OC, L, N, groups, stride, padding);
 
     // ggml
     struct ggml_tensor * result = ggml_conv_1d_grouped(ctx, a, b, stride, padding, 1, groups);
@@ -128,14 +128,14 @@ static bool run_test(const char * label, int IC, int OC, int K, int L, int group
 
     bool ok = true;
 
-    if (result->ne[0] != OL || result->ne[1] != OC) {
-        fprintf(stderr, "    FAIL: shape [%lld, %lld], expected [%d, %d]\n",
-                (long long)result->ne[0], (long long)result->ne[1], OL, OC);
+    if (result->ne[0] != OL || result->ne[1] != OC || result->ne[2] != N) {
+        fprintf(stderr, "    FAIL: shape [%lld, %lld, %lld], expected [%d, %d, %d]\n",
+                (long long)result->ne[0], (long long)result->ne[1], (long long)result->ne[2], OL, OC, N);
         ok = false;
     }
 
     if (ok) {
-        ok = all_close((float *)result->data, ref.data(), OL * OC);
+        ok = all_close((float *)result->data, ref.data(), OL * OC * N);
     }
 
     printf("    %s\n", ok ? "PASS" : "FAIL");
@@ -152,14 +152,15 @@ int main(void) {
 
     int n_pass = 0, n_fail = 0;
 
-    struct { const char * label; int IC, OC, K, L, G, s, p; } scenarios[] = {
-        { "groups=1 (standard conv1d)", 128, 256, 3, 32,  1, 1, 0 },
-        { "ZAYA1-8B exact params",      1280, 1280, 2, 16,  10, 1, 0 },
-        { "small 2 groups",             4, 4, 2, 8,    2, 1, 0 },
-        { "with padding",               8, 8, 2, 16,   4, 1, 1 },
-        { "IC != OC",                   12, 6, 3, 10,  3, 1, 0 },
-        { "stride=2",                   8, 8, 2, 16,   4, 2, 0 },
-        { "longer sequence",            1280, 1280, 2, 128, 10, 1, 0 },
+    struct { const char * label; int IC, OC, K, L, G, s, p; int N; } scenarios[] = {
+        { "groups=1 (standard conv1d)", 128, 256, 3, 32,  1, 1, 0, 1 },
+        { "ZAYA1-8B exact params",      1280, 1280, 2, 16,  10, 1, 0, 1 },
+        { "small 2 groups",             4, 4, 2, 8,    2, 1, 0, 1 },
+        { "with padding",               8, 8, 2, 16,   4, 1, 1, 1 },
+        { "IC != OC",                   12, 6, 3, 10,  3, 1, 0, 1 },
+        { "stride=2",                   8, 8, 2, 16,   4, 2, 0, 1 },
+        { "longer sequence",            1280, 1280, 2, 128, 10, 1, 0, 1 },
+        { "depthwise (groups==IC==OC)", 8, 8, 3, 16,   8, 1, 0, 1 },
     };
 
     enum ggml_type kernel_types[] = { GGML_TYPE_F16, GGML_TYPE_BF16 };
@@ -168,7 +169,7 @@ int main(void) {
             printf("\n--- %s ---\n\n", ggml_type_name(kt));
         }
         for (auto &s : scenarios) {
-            if (run_test(s.label, s.IC, s.OC, s.K, s.L, s.G, s.s, s.p, kt)) { n_pass++; } else { n_fail++; }
+            if (run_test(s.label, s.IC, s.OC, s.K, s.L, s.G, s.s, s.p, kt, s.N)) { n_pass++; } else { n_fail++; }
         }
     }
 
