@@ -1,4 +1,5 @@
 import json
+import socket
 import threading
 import time
 from urllib.parse import quote
@@ -95,3 +96,58 @@ def test_stream_stop_during_model_load():
     assert "cancelled" in json.dumps(thread_error[0].body)
     res = server.make_request("GET", f"/v1/stream?{QS}&from=0")
     assert res.status_code == 404
+
+
+def test_stream_resumes_after_reload_during_model_load():
+    global server
+    server.start()
+
+    # raw socket client so the connection can be dropped mid load like a page reload
+    body = json.dumps({
+        "model": MODEL,
+        "stream": True,
+        "max_tokens": 16,
+        "messages": [{"role": "user", "content": "hello"}],
+    })
+    request = (
+        f"POST /v1/chat/completions HTTP/1.1\r\n"
+        f"Host: {server.server_host}:{server.server_port}\r\n"
+        f"Content-Type: application/json\r\n"
+        f"X-Conversation-Id: {STREAM_ID}\r\n"
+        f"Content-Length: {len(body)}\r\n"
+        f"Connection: close\r\n\r\n{body}"
+    )
+    sock = socket.create_connection((server.server_host, server.server_port))
+    sock.sendall(request.encode())
+
+    # drop the client while the model loads, poll aggressively to catch the window
+    saw_loading = False
+    saw_503 = False
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        res = server.make_request("GET", "/models")
+        status = next(m["status"]["value"] for m in res.body["data"] if m["id"] == MODEL)
+        if status == "loading":
+            saw_loading = True
+            break
+        if status == "loaded":
+            break
+        time.sleep(0.002)
+    sock.close()
+    if not saw_loading:
+        pytest.skip("load window too short to be observed on this machine")
+
+    # while the model loads the resume route answers retry later, then the session appears,
+    # receives the whole generation despite the dead client, and replays from the beginning
+    deadline = time.time() + 60.0
+    replay = None
+    while time.time() < deadline:
+        res = server.make_request("GET", f"/v1/stream?{QS}&from=0")
+        if res.status_code == 503:
+            saw_503 = True
+        elif res.status_code == 200 and "data: " in str(res.body):
+            replay = res
+            break
+        time.sleep(0.1)
+    assert saw_503, "resume during the load did not answer 503"
+    assert replay is not None, "session never became resumable after the client disconnect"

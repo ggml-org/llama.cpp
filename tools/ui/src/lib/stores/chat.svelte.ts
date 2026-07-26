@@ -14,6 +14,7 @@
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { DatabaseService } from '$lib/services/database.service';
 import { ChatService } from '$lib/services/chat.service';
+import { STREAM_RESUME_RETRY_MS } from '$lib/constants/api-endpoints';
 import { streamIdentity } from '$lib/utils/stream-identity';
 import { getAuthHeaders } from '$lib/utils/api-headers';
 import { CONTENT_TYPE_HEADER } from '$lib/constants';
@@ -94,6 +95,8 @@ class ChatStore {
 	// off when one conv finishes while another is still streaming. mirrors chatLoadingStates
 	// in scope but tracks the attach + tee replay path specifically
 	private attachingConvs = new SvelteSet<string>();
+	// pending resume retry timers while an owning model loads, one per conv
+	private resumeRetryTimers = new SvelteMap<string, ReturnType<typeof setTimeout>>();
 	// in-flight discoverActiveStream guard, keyed by conv id
 	private discoveringConvs = new SvelteSet<string>();
 	private abortControllers = new SvelteMap<string, AbortController>();
@@ -468,6 +471,30 @@ class ChatStore {
 			// still have a live session matching that identity (we just lost the bytes mid stream). retry
 			// with the frozen identity, the server probe inside attachServerStream tells us if it exists
 			if (!localState) {
+				return;
+			}
+			// quiet status probe first: a full attach flips the loading UI on every try, probing
+			// keeps the retry loop invisible while the owning model is still loading (503)
+			const status = await ChatService.probeResumeStatus(streamId);
+			if (status === 503) {
+				if (!this.resumeRetryTimers.has(convId)) {
+					this.resumeRetryTimers.set(
+						convId,
+						setTimeout(() => {
+							this.resumeRetryTimers.delete(convId);
+							void this.discoverActiveStream(convId);
+						}, STREAM_RESUME_RETRY_MS)
+					);
+				}
+				return;
+			}
+			if (status === 0) {
+				// transient network failure, the next mount or visibility change retries
+				return;
+			}
+			if (status !== 200) {
+				// the session is gone (stopped, TTL expired), nothing to resume anymore
+				ChatService.clearStreamState(convId);
 				return;
 			}
 			await this.attachServerStream(convId, streamId);
@@ -1471,6 +1498,13 @@ class ChatStore {
 		const streamStateForStop = this.chatStreamingStates.get(convId);
 		const modelForStop = streamStateForStop?.model;
 		void ChatService.cancelServerStream(convId, modelForStop);
+		// an explicit stop leaves nothing to resume and kills a pending resume retry
+		ChatService.clearStreamState(convId);
+		const retryTimer = this.resumeRetryTimers.get(convId);
+		if (retryTimer !== undefined) {
+			clearTimeout(retryTimer);
+			this.resumeRetryTimers.delete(convId);
+		}
 		this.abortRequest(convId);
 		this.setChatLoading(convId, false);
 		this.clearChatStreaming(convId);
