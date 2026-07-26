@@ -3,6 +3,7 @@
 #include "ggml-alloc.h"
 #include "ggml.h"
 #include "gguf.h"
+#include "ggml-qfx32.h"
 #include "llama-hparams.h"
 #include "llama.h"
 
@@ -758,6 +759,8 @@ llama_model_loader::llama_model_loader(
             case GGML_TYPE_NVFP4:   ftype = LLAMA_FTYPE_MOSTLY_NVFP4;   break;
             case GGML_TYPE_Q1_0:    ftype = LLAMA_FTYPE_MOSTLY_Q1_0;    break;
             case GGML_TYPE_Q2_0:    ftype = LLAMA_FTYPE_MOSTLY_Q2_0;    break;
+            case GGML_TYPE_QFX16:   ftype = LLAMA_FTYPE_MOSTLY_QFX16;   break;
+            case GGML_TYPE_QFX32:   ftype = LLAMA_FTYPE_MOSTLY_QFX32;   break;
             default:
                 {
                     LLAMA_LOG_WARN("%s: unknown type %s\n", __func__, ggml_type_name(type_max));
@@ -1397,6 +1400,26 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
     if (check_tensors && !ggml_validate_row_data(cur->type, cur->data, ggml_nbytes(cur))) {
         throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
     }
+
+    // QFX32: Optional dequant-on-load (opt-in via GGML_QFX32_DEQUANT=1).
+    // Default: streaming mode (smaller RAM, slower inference).
+    // With env var: decode to f32 at load time (2x RAM, native f32 speed).
+    if (cur->type == GGML_TYPE_QFX32 && getenv("GGML_QFX32_DEQUANT")) {
+        const int64_t nelements = ggml_nelements(cur);
+        const size_t f32_nbytes = nelements * sizeof(float);
+
+        float * f32_buf = (float *)malloc(f32_nbytes);
+        if (f32_buf) {
+            dequantize_row_qfx32(cur->data, f32_buf, nelements);
+
+            cur->data = f32_buf;
+            cur->type = GGML_TYPE_F32;
+            cur->nb[0] = sizeof(float);
+            for (int d = 1; d < GGML_MAX_DIMS; d++) {
+                cur->nb[d] = cur->nb[d-1] * cur->ne[d-1];
+            }
+        }
+    }
 }
 
 bool llama_model_loader::load_all_data(
@@ -1659,6 +1682,30 @@ bool llama_model_loader::load_all_data(
     if (validation_failed) {
         throw std::runtime_error("found tensors with invalid data");
     }
+
+    // QFX32: Optional dequant-on-load (opt-in via GGML_QFX32_DEQUANT=1).
+    // Default: streaming mode (smaller RAM, slower inference).
+    // With GGML_QFX32_DEQUANT=1: decode to f32 (2x RAM, native f32 speed).
+    if (getenv("GGML_QFX32_DEQUANT")) {
+    for (ggml_tensor * cur = ggml_get_first_tensor(ctx); cur; cur = ggml_get_next_tensor(ctx, cur)) {
+        if (cur->type == GGML_TYPE_QFX32 && cur->data) {
+            const int64_t nelements = ggml_nelements(cur);
+            const size_t f32_nbytes = nelements * sizeof(float);
+
+            float * f32_buf = (float *)malloc(f32_nbytes);
+            if (f32_buf) {
+                dequantize_row_qfx32(cur->data, f32_buf, nelements);
+
+                cur->data = f32_buf;
+                cur->type = GGML_TYPE_F32;
+                cur->nb[0] = sizeof(float);
+                for (int d = 1; d < GGML_MAX_DIMS; d++) {
+                    cur->nb[d] = cur->nb[d-1] * cur->ne[d-1];
+                }
+            }
+        }
+    }
+    } // end GGML_QFX32_DEQUANT
 
     // check if this is the last call and do final cleanup
     if (size_done >= size_data) {

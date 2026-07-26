@@ -11216,3 +11216,371 @@ kernel void kernel_count_equal(
 typedef decltype(kernel_count_equal<int32_t>) kernel_count_equal_t;
 
 template [[host_name("kernel_count_equal_i32")]] kernel kernel_count_equal_t kernel_count_equal<int32_t>;
+// QFX32 Metal Kernel — Planar-Interleaved Z-RLE Dequant (GET_ROWS)
+// Author: Derek Hinch | QomputeAI 2026
+//
+// Matches GGML dispatch signature: (args, src0, src1, dst, tgpig, tiitg, ntg)
+// Each thread decodes one block of 256 weights from the Z-RLE stream.
+// ═══════════════════════════════════════════════════════════════════════════
+
+#define QFX32_BLOCK_SIZE  256
+#define QFX32_MAX_STREAM  576
+#define QFX32_ZRLE_ESCAPE_BYTE 0xFF
+
+struct block_qfx32_metal {
+    uint8_t  anchor;
+    uint16_t stream_len;
+    uint8_t  delta_stream[QFX32_MAX_STREAM];
+};
+
+kernel void kernel_get_rows_qfx32(
+        constant ggml_metal_kargs_get_rows & args,
+        device const void * src0,
+        device const void * src1,
+        device       void * dst,
+        uint3               tgpig[[threadgroup_position_in_grid]],
+        ushort              tiitg[[thread_index_in_threadgroup]],
+        ushort3             ntg  [[threads_per_threadgroup]]) {
+
+    // Each threadgroup handles one row-fetch request
+    // tgpig.x encodes (iw0 * ne10 + i10), tgpig.y = i11, tgpig.z = i12
+    const int32_t iw0 = tgpig.x / args.ne10;
+    const int32_t i10 = tgpig.x % args.ne10;
+    const int32_t i11 = tgpig.y;
+    const int32_t i12 = tgpig.z;
+
+    const int32_t r = ((const device int32_t *) ((const device char *) src1 + i12*args.nb12 + i11*args.nb11 + i10*args.nb10))[0];
+    const int32_t i02 = i11;
+    const int32_t i03 = i12;
+
+    device const block_qfx32_metal * row_blocks = (device const block_qfx32_metal *)
+        ((const device char *) src0 + i03*args.nb03 + i02*args.nb02 + r*args.nb01);
+    device float * out_row = (device float *) ((device char *) dst + i12*args.nb3 + i11*args.nb2 + i10*args.nb1);
+
+    const int blocks_per_row = (args.ne00 + QFX32_BLOCK_SIZE - 1) / QFX32_BLOCK_SIZE;
+
+    // Each thread in the threadgroup handles blocks in a strided pattern
+    for (int b = iw0 * (int)ntg.x + (int)tiitg; b < blocks_per_row; b += (int)ntg.x) {
+        device const block_qfx32_metal * blk = &row_blocks[b];
+        const int block_n = min((int)QFX32_BLOCK_SIZE, (int)(args.ne00 - b * QFX32_BLOCK_SIZE));
+        const int n_bytes = block_n * 4;
+
+        // Decode Z-RLE → planar bytes
+        uint8_t planar[1024];
+        uint8_t state = blk->anchor;
+        int sp = 0;
+        int wi = 0;
+        planar[wi++] = state;
+
+        while (sp < (int)blk->stream_len && wi < n_bytes) {
+            uint8_t bv = blk->delta_stream[sp++];
+            if (bv == QFX32_ZRLE_ESCAPE_BYTE && sp < (int)blk->stream_len) {
+                uint8_t count = blk->delta_stream[sp++];
+                if (count == 0) {
+                    state = (state + 0xFF) & 0xFF;
+                    planar[wi++] = state;
+                } else {
+                    for (int rr = 0; rr < (int)count && wi < n_bytes; rr++)
+                        planar[wi++] = state;
+                }
+            } else {
+                state = (state + bv) & 0xFF;
+                planar[wi++] = state;
+            }
+        }
+        while (wi < n_bytes) planar[wi++] = state;
+
+        // Deplanarize → f32
+        for (int i = 0; i < block_n; i++) {
+            uint32_t word = ((uint32_t)planar[i] << 24) |
+                            ((uint32_t)planar[block_n + i] << 16) |
+                            ((uint32_t)planar[2*block_n + i] << 8) |
+                            ((uint32_t)planar[3*block_n + i]);
+            out_row[b * QFX32_BLOCK_SIZE + i] = as_type<float>(word);
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// QFX16 Metal Kernel — Z-RLE BF16 Dequant (GET_ROWS)
+// ═══════════════════════════════════════════════════════════════════════════
+
+#define QFX16_BLOCK_SIZE  256
+#define QFX16_MAX_STREAM  512
+#define QFX16_ZRLE_ESCAPE_BYTE 0xFF
+
+struct block_qfx16_metal {
+    uint8_t  anchor;
+    uint16_t stream_len;
+    uint8_t  delta_stream[QFX16_MAX_STREAM];
+};
+
+kernel void kernel_get_rows_qfx16(
+        constant ggml_metal_kargs_get_rows & args,
+        device const void * src0,
+        device const void * src1,
+        device       void * dst,
+        uint3               tgpig[[threadgroup_position_in_grid]],
+        ushort              tiitg[[thread_index_in_threadgroup]],
+        ushort3             ntg  [[threads_per_threadgroup]]) {
+
+    const int32_t iw0 = tgpig.x / args.ne10;
+    const int32_t i10 = tgpig.x % args.ne10;
+    const int32_t i11 = tgpig.y;
+    const int32_t i12 = tgpig.z;
+
+    const int32_t r = ((const device int32_t *) ((const device char *) src1 + i12*args.nb12 + i11*args.nb11 + i10*args.nb10))[0];
+    const int32_t i02 = i11;
+    const int32_t i03 = i12;
+
+    device const block_qfx16_metal * row_blocks = (device const block_qfx16_metal *)
+        ((const device char *) src0 + i03*args.nb03 + i02*args.nb02 + r*args.nb01);
+    device float * out_row = (device float *) ((device char *) dst + i12*args.nb3 + i11*args.nb2 + i10*args.nb1);
+
+    const int blocks_per_row = (args.ne00 + QFX16_BLOCK_SIZE - 1) / QFX16_BLOCK_SIZE;
+
+    for (int b = iw0 * (int)ntg.x + (int)tiitg; b < blocks_per_row; b += (int)ntg.x) {
+        device const block_qfx16_metal * blk = &row_blocks[b];
+        const int block_n = min((int)QFX16_BLOCK_SIZE, (int)(args.ne00 - b * QFX16_BLOCK_SIZE));
+
+        // Decode Z-RLE → BF16 values → f32
+        uint8_t state = blk->anchor;
+        int sp = 0;
+        int wi = 0;
+        int byte_half = 1; // 1 = anchor was high byte, expecting low next
+        uint8_t high_byte = state;
+
+        while (sp < (int)blk->stream_len && wi < block_n) {
+            uint8_t bv = blk->delta_stream[sp++];
+            if (bv == QFX16_ZRLE_ESCAPE_BYTE && sp < (int)blk->stream_len) {
+                uint8_t count = blk->delta_stream[sp++];
+                if (count == 0) {
+                    state = (state + 0xFF) & 0xFF;
+                    if (byte_half == 0) { high_byte = state; byte_half = 1; }
+                    else {
+                        uint32_t f32bits = ((uint32_t)high_byte << 24) | ((uint32_t)state << 16);
+                        out_row[b * QFX16_BLOCK_SIZE + wi++] = as_type<float>(f32bits);
+                        byte_half = 0;
+                    }
+                } else {
+                    // Zero run: repeated BF16 value
+                    uint32_t f32bits = ((uint32_t)high_byte << 24) | ((uint32_t)state << 16);
+                    float w_val = as_type<float>(f32bits);
+                    for (int rr = 0; rr < (int)count && wi < block_n; rr++) {
+                        if (byte_half == 0) { high_byte = state; byte_half = 1; }
+                        else {
+                            out_row[b * QFX16_BLOCK_SIZE + wi++] = w_val;
+                            byte_half = 0;
+                        }
+                    }
+                }
+            } else {
+                state = (state + bv) & 0xFF;
+                if (byte_half == 0) { high_byte = state; byte_half = 1; }
+                else {
+                    uint32_t f32bits = ((uint32_t)high_byte << 24) | ((uint32_t)state << 16);
+                    out_row[b * QFX16_BLOCK_SIZE + wi++] = as_type<float>(f32bits);
+                    byte_half = 0;
+                }
+            }
+        }
+        // Fill remaining with zeros (shouldn't happen in lossless)
+        while (wi < block_n) {
+            out_row[b * QFX16_BLOCK_SIZE + wi++] = 0.0f;
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// QFX32 MUL_MV Kernel — uses threadgroup shared memory for decode buffer
+//
+// Strategy: Thread 0 in the SIMD group decodes the Z-RLE block into
+// threadgroup memory (1024 bytes → 256 floats). Then ALL threads in the
+// SIMD group perform the dot product in parallel on the decoded floats.
+// This avoids the per-thread stack overflow issue.
+//
+// With 1 SIMD group (32 threads), each thread handles 8 of the 256 floats
+// for the dot product after the sequential decode step.
+// ═══════════════════════════════════════════════════════════════════════════
+
+kernel void kernel_mul_mv_qfx32_f32(
+        constant ggml_metal_kargs_mul_mv & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        threadgroup  char * shmem [[threadgroup(0)]],
+        uint3  tgpig [[threadgroup_position_in_grid]],
+        ushort tiisg [[thread_index_in_simdgroup]],
+        ushort sgitg [[simdgroup_index_in_threadgroup]]) {
+
+    const int r0 = tgpig.x;  // output row
+    const int r1 = tgpig.y;
+    const int im = tgpig.z;
+
+    const uint i12 = im % args.ne12;
+    const uint i13 = im / args.ne12;
+
+    const uint64_t offset0 = r0*args.nb01 + (i12/args.r2)*args.nb02 + (i13/args.r3)*args.nb03;
+    const uint64_t offset1 = r1*args.nb11 + i12*args.nb12 + i13*args.nb13;
+
+    device const block_qfx32_metal * row_blocks = (device const block_qfx32_metal *)(src0 + offset0);
+    device const float * y = (device const float *)(src1 + offset1);
+
+    const int nb = (args.ne00 + QFX32_BLOCK_SIZE - 1) / QFX32_BLOCK_SIZE;
+
+    // Use threadgroup memory for decoded floats (256 floats = 1024 bytes per block)
+    threadgroup uint8_t * tg_planar = (threadgroup uint8_t *)shmem;
+    threadgroup float * decoded = (threadgroup float *)(shmem + 1024);
+
+    float sumf = 0.0f;
+
+    for (int b = 0; b < nb; b++) {
+        device const block_qfx32_metal * blk = &row_blocks[b];
+        const int block_n = min((int)QFX32_BLOCK_SIZE, (int)(args.ne00 - b * QFX32_BLOCK_SIZE));
+        const int n_bytes = block_n * 4;
+
+        // Thread 0 decodes the Z-RLE block into threadgroup memory
+        if (tiisg == 0) {
+            uint8_t state = blk->anchor;
+            int sp = 0;
+            int wi = 0;
+            tg_planar[wi++] = state;
+
+            while (sp < (int)blk->stream_len && wi < n_bytes) {
+                uint8_t bv = blk->delta_stream[sp++];
+                if (bv == QFX32_ZRLE_ESCAPE_BYTE && sp < (int)blk->stream_len) {
+                    uint8_t count = blk->delta_stream[sp++];
+                    if (count == 0) {
+                        state = (state + 0xFF) & 0xFF;
+                        tg_planar[wi++] = state;
+                    } else {
+                        for (int rr = 0; rr < (int)count && wi < n_bytes; rr++)
+                            tg_planar[wi++] = state;
+                    }
+                } else {
+                    state = (state + bv) & 0xFF;
+                    tg_planar[wi++] = state;
+                }
+            }
+            while (wi < n_bytes) tg_planar[wi++] = state;
+
+            // Deplanarize → f32 into threadgroup memory
+            for (int i = 0; i < block_n; i++) {
+                uint32_t word = ((uint32_t)tg_planar[i] << 24) |
+                                ((uint32_t)tg_planar[block_n + i] << 16) |
+                                ((uint32_t)tg_planar[2*block_n + i] << 8) |
+                                ((uint32_t)tg_planar[3*block_n + i]);
+                decoded[i] = as_type<float>(word);
+            }
+        }
+
+        // Barrier: wait for thread 0 to finish decoding
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        // All 32 threads compute partial dot products (8 elements each)
+        device const float * inp = y + b * QFX32_BLOCK_SIZE;
+        float partial = 0.0f;
+        for (int i = tiisg; i < block_n; i += 32) {
+            partial += decoded[i] * inp[i];
+        }
+        sumf += partial;
+    }
+
+    // SIMD reduction
+    float total = simd_sum(sumf);
+
+    if (tiisg == 0) {
+        ((device float *)dst)[r0 + r1*args.ne0 + im*args.ne0*args.ne1] = total;
+    }
+}
+
+// QFX16 MUL_MV with threadgroup decode
+kernel void kernel_mul_mv_qfx16_f32(
+        constant ggml_metal_kargs_mul_mv & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        threadgroup  char * shmem [[threadgroup(0)]],
+        uint3  tgpig [[threadgroup_position_in_grid]],
+        ushort tiisg [[thread_index_in_simdgroup]],
+        ushort sgitg [[simdgroup_index_in_threadgroup]]) {
+
+    const int r0 = tgpig.x;
+    const int r1 = tgpig.y;
+    const int im = tgpig.z;
+
+    const uint i12 = im % args.ne12;
+    const uint i13 = im / args.ne12;
+
+    const uint64_t offset0 = r0*args.nb01 + (i12/args.r2)*args.nb02 + (i13/args.r3)*args.nb03;
+    const uint64_t offset1 = r1*args.nb11 + i12*args.nb12 + i13*args.nb13;
+
+    device const block_qfx16_metal * row_blocks = (device const block_qfx16_metal *)(src0 + offset0);
+    device const float * y = (device const float *)(src1 + offset1);
+
+    const int nb = (args.ne00 + QFX16_BLOCK_SIZE - 1) / QFX16_BLOCK_SIZE;
+    threadgroup uint8_t * tg_planar = (threadgroup uint8_t *)shmem;
+    threadgroup float * decoded = (threadgroup float *)(shmem + 1024);
+
+    float sumf = 0.0f;
+
+    for (int b = 0; b < nb; b++) {
+        device const block_qfx16_metal * blk = &row_blocks[b];
+        const int block_n = min((int)QFX16_BLOCK_SIZE, (int)(args.ne00 - b * QFX16_BLOCK_SIZE));
+
+        // Thread 0 decodes QFX16 block → f32 into shared memory
+        if (tiisg == 0) {
+            uint8_t state = blk->anchor;
+            int sp = 0;
+            int wi = 0;
+            int byte_half = 1;
+            uint8_t high_byte = state;
+
+            while (sp < (int)blk->stream_len && wi < block_n) {
+                uint8_t bv = blk->delta_stream[sp++];
+                if (bv == QFX16_ZRLE_ESCAPE_BYTE && sp < (int)blk->stream_len) {
+                    uint8_t count = blk->delta_stream[sp++];
+                    if (count == 0) {
+                        state = (state + 0xFF) & 0xFF;
+                        if (byte_half == 0) { high_byte = state; byte_half = 1; }
+                        else {
+                            uint32_t f32bits = ((uint32_t)high_byte << 24) | ((uint32_t)state << 16);
+                            decoded[wi++] = as_type<float>(f32bits);
+                            byte_half = 0;
+                        }
+                    } else {
+                        uint32_t f32bits = ((uint32_t)high_byte << 24) | ((uint32_t)state << 16);
+                        float w_val = as_type<float>(f32bits);
+                        for (int rr = 0; rr < (int)count && wi < block_n; rr++) {
+                            if (byte_half == 0) { high_byte = state; byte_half = 1; }
+                            else { decoded[wi++] = w_val; byte_half = 0; }
+                        }
+                    }
+                } else {
+                    state = (state + bv) & 0xFF;
+                    if (byte_half == 0) { high_byte = state; byte_half = 1; }
+                    else {
+                        uint32_t f32bits = ((uint32_t)high_byte << 24) | ((uint32_t)state << 16);
+                        decoded[wi++] = as_type<float>(f32bits);
+                        byte_half = 0;
+                    }
+                }
+            }
+            while (wi < block_n) decoded[wi++] = 0.0f;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        device const float * inp = y + b * QFX16_BLOCK_SIZE;
+        float partial = 0.0f;
+        for (int i = tiisg; i < block_n; i += 32) {
+            partial += decoded[i] * inp[i];
+        }
+        sumf += partial;
+    }
+
+    float total = simd_sum(sumf);
+    if (tiisg == 0) {
+        ((device float *)dst)[r0 + r1*args.ne0 + im*args.ne0*args.ne1] = total;
+    }
+}

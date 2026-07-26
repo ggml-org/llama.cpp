@@ -2,6 +2,8 @@
 #include "llama-model.h"
 #include "llama-model-loader.h"
 #include "llama-ext.h"
+#include "ggml-qfx16.h"
+#include "ggml-qfx32.h"
 #include "llama.h"
 
 #include <algorithm>
@@ -471,6 +473,18 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
         } else {
             new_type = GGML_TYPE_Q8_0;
         }
+    } else if (ftype == LLAMA_FTYPE_MOSTLY_QFX16) {
+        if (tensor->ne[0] < 256) {
+            new_type = GGML_TYPE_BF16;
+        } else {
+            new_type = GGML_TYPE_QFX16;
+        }
+    } else if (ftype == LLAMA_FTYPE_MOSTLY_QFX32) {
+        if (tensor->ne[0] < 256) {
+            new_type = GGML_TYPE_F32;
+        } else {
+            new_type = GGML_TYPE_QFX32;
+        }
     } else if (category == tensor_category::TOKEN_EMBD) {
         if (qs.params->token_embedding_type < GGML_TYPE_COUNT) {
             new_type = qs.params->token_embedding_type;
@@ -808,6 +822,8 @@ ggml_type llama_ftype_get_default_type(llama_ftype ftype) {
         case LLAMA_FTYPE_MOSTLY_Q2_0: return GGML_TYPE_Q2_0;
 
         case LLAMA_FTYPE_MOSTLY_MXFP4_MOE: return GGML_TYPE_MXFP4;
+        case LLAMA_FTYPE_MOSTLY_QFX16: return GGML_TYPE_QFX16;
+        case LLAMA_FTYPE_MOSTLY_QFX32: return GGML_TYPE_QFX32;
 
         // K-quants
         case LLAMA_FTYPE_MOSTLY_Q2_K_S:

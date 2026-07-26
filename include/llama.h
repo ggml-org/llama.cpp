@@ -157,6 +157,9 @@ extern "C" {
         LLAMA_FTYPE_MOSTLY_Q1_0          = 40, // except 1d tensors
         LLAMA_FTYPE_MOSTLY_Q2_0          = 41, // except 1d tensors
 
+
+        LLAMA_FTYPE_MOSTLY_QFX16         = 45, // QomputeAI: Transition-encoded BF16 (LOSSLESS, 8-16 bpw)
+        LLAMA_FTYPE_MOSTLY_QFX32         = 46, // QomputeAI: Planar transition-encoded F32 (LOSSLESS, 18.36 bpw)
         LLAMA_FTYPE_GUESSED = 1024, // not specified in the model file
     };
 

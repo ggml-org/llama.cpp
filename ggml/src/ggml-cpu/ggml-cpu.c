@@ -11,6 +11,8 @@
 #include "unary-ops.h"
 #include "binary-ops.h"
 #include "vec.h"
+#include "ggml-qfx16.h"
+#include "ggml-qfx32.h"
 #include "ops.h"
 #include "ggml.h"
 #include "common.h"
@@ -234,6 +236,18 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_q2_0,
         .vec_dot                  = ggml_vec_dot_q2_0_q8_0,
         .vec_dot_type             = GGML_TYPE_Q8_0,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_QFX16] = {
+        .from_float               = quantize_row_qfx16,
+        .vec_dot                  = ggml_vec_dot_qfx16_f32_cpu,
+        .vec_dot_type             = GGML_TYPE_F32,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_QFX32] = {
+        .from_float               = quantize_row_qfx32,
+        .vec_dot                  = ggml_vec_dot_qfx32_f32_cpu,
+        .vec_dot_type             = GGML_TYPE_F32,
         .nrows                    = 1,
     },
     [GGML_TYPE_Q4_0] = {
