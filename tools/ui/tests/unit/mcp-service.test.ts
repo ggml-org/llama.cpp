@@ -154,6 +154,32 @@ describe('MCPService', () => {
 		});
 	});
 
+	it('DELETE request with CORS proxy should return a fake 200 response', async () => {
+		const logs: MCPConnectionLog[] = [];
+		const fetchMock = vi.fn();
+
+		vi.stubGlobal('fetch', fetchMock);
+
+		const config: MCPServerConfig = {
+			url: 'https://example.com/mcp',
+			transport: MCPTransportType.STREAMABLE_HTTP,
+			useProxy: true
+		};
+
+		const controller = createDiagnosticFetch(config, (log) => logs.push(log), {}, true);
+
+		const response = await controller.fetch(
+			'http://localhost:8080/cors-proxy?url=https%3A%2F%2Fexample.com%2Fmcp',
+			{ method: 'DELETE' }
+		);
+
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(response.status).toBe(200);
+		expect(logs.at(-1)?.details).toMatchObject({
+			response: { status: 200, isFake: true }
+		});
+	});
+
 	it('partially redacts mcp-session-id in diagnostic request and response logs', async () => {
 		const logs: MCPConnectionLog[] = [];
 		const response = new Response('{}', {

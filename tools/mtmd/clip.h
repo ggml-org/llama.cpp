@@ -54,6 +54,8 @@ struct clip_context_params {
     ggml_backend_sched_eval_callback cb_eval;
     void * cb_eval_user_data;
     bool no_alloc;
+    mtmd_progress_callback progress_callback;
+    void * progress_callback_user_data;
 };
 
 struct clip_init_result {

@@ -59,10 +59,12 @@ void ggml_sycl_host_free(void* ptr);
 
 
 extern int g_ggml_sycl_debug;
-extern int g_ggml_sycl_disable_optimize;
+extern int g_ggml_sycl_enable_optimize;
+extern int g_ggml_sycl_enable_fusion;
 extern int g_ggml_sycl_prioritize_dmmv;
 extern int g_ggml_sycl_enable_flash_attention;
 extern int g_ggml_sycl_dev2dev_memcpy;
+extern int g_ggml_sycl_fa_onednn;
 
 
 #if defined(__clang__) && __has_builtin(__builtin_expect)
