@@ -200,8 +200,8 @@ class Keys:
             HEAD_COUNT = "{arch}.attention.indexer.head_count"
             KEY_LENGTH = "{arch}.attention.indexer.key_length"
             TOP_K      = "{arch}.attention.indexer.top_k"
-            BLOCK_SIZE   = "{arch}.attention.indexer.block_size"    #MSA
-            LOCAL_BLOCKS = "{arch}.attention.indexer.local_blocks"  #MSA
+            BLOCK_SIZE   = "{arch}.attention.indexer.block_size"    # MSA
+            LOCAL_BLOCKS = "{arch}.attention.indexer.local_blocks"  # MSA
             TYPES      = "{arch}.attention.indexer.types"
 
     class HyperConnection:

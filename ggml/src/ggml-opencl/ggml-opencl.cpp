@@ -12772,7 +12772,7 @@ static void ggml_opencl_op_rms_norm_fused(ggml_backend_t backend, ggml_tensor * 
     ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
 
     cl_ulong offset0 = extra0->offset + src0->view_offs;
-    cl_ulong offset1 = extra1->offset + src0->view_offs;
+    cl_ulong offset1 = extra1->offset + src1->view_offs;
     cl_ulong offsetd = extrad->offset + dst->view_offs;
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;

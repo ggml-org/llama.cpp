@@ -1902,9 +1902,9 @@ struct llama_model_minimax_m2 : public llama_model_base {
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
-struct msa_params { 
-    int blk; 
-    int topk_blocks; 
+struct msa_params {
+    int blk;
+    int topk_blocks;
     int local;
 };
 

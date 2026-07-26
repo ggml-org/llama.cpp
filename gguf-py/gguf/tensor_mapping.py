@@ -1290,8 +1290,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.INDEXER_Q_NORM: (
             "model.layers.{bid}.self_attn.index_q_norm", # MSA
-        ),     
-
+        ),
 
         ############################################################################
         # TODO: these do not belong to block_mappings_cfg - move them to mappings_cfg
