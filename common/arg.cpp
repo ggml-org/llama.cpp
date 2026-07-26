@@ -2508,7 +2508,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     }
     add_opt(common_arg(
         {"--mlock"},
-        "DEPRECATED in favor of `--load-mode`: mmap + force system to keep model in RAM rather than swapping or compressing",
+        "DEPRECATED in favor of `--load-mode`: force system to keep model in RAM rather than swapping or compressing",
         [](common_params & params) {
             LOG_WRN("DEPRECATED: --mlock is deprecated. use --load-mode mlock instead\n");
             params.load_mode = LLAMA_LOAD_MODE_MLOCK;
