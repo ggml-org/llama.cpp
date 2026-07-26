@@ -1838,6 +1838,14 @@ class TensorNameMap:
             "visual.downsample", # glm4v
         ),
 
+        MODEL_TENSOR.V_MM_MERGER_FC1: (
+            "patch_merge_mlp.linear_1", # minimax-m3
+        ),
+
+        MODEL_TENSOR.V_MM_MERGER_FC2: (
+            "patch_merge_mlp.linear_2", # minimax-m3
+        ),
+
         MODEL_TENSOR.V_DS_NORM: (
             "model.visual.deepstack_merger_list.{bid}.norm", # deepstack in qwen3vl
         ),

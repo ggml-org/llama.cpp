@@ -463,6 +463,13 @@ struct mtmd_context {
                     img_end = "<|vision_end|>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
                 } break;
+            case PROJECTOR_TYPE_MINIMAX_M3:
+                {
+                    // ]<]start of image[>[ ... (image embeddings) ... ]<]end of image[>[
+                    img_beg = "]<]start of image[>[";
+                    img_end = "]<]end of image[>[";
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
+                } break;
             case PROJECTOR_TYPE_YOUTUVL:
                 {
                     // <|vision_start|> ... (image embeddings) ... <|vision_end|>
