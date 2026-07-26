@@ -57,6 +57,7 @@ class MiniMaxM2Model(TextModel):
 @ModelBase.register("MiniMaxM3SparseForCausalLM", "MiniMaxM3SparseForConditionalGeneration")
 class MiniMaxM3Model(MiniMaxM2Model):
     model_arch = gguf.MODEL_ARCH.MINIMAXM3
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
 
