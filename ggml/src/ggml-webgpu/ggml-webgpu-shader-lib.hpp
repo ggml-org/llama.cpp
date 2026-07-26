@@ -133,9 +133,10 @@ struct ggml_webgpu_ssm_scan_pipeline_key {
     int  type;
     int  d_state;
     bool xbc_overlap;
+    bool bc_overlap;
 
     bool operator==(const ggml_webgpu_ssm_scan_pipeline_key & other) const {
-        return type == other.type && d_state == other.d_state && xbc_overlap == other.xbc_overlap;
+        return type == other.type && d_state == other.d_state && xbc_overlap == other.xbc_overlap && bc_overlap == other.bc_overlap;
     }
 };
 
@@ -145,6 +146,7 @@ struct ggml_webgpu_ssm_scan_pipeline_key_hash {
         ggml_webgpu_hash_combine(seed, key.type);
         ggml_webgpu_hash_combine(seed, key.d_state);
         ggml_webgpu_hash_combine(seed, key.xbc_overlap);
+        ggml_webgpu_hash_combine(seed, key.bc_overlap);
         return seed;
     }
 };
@@ -153,6 +155,7 @@ struct ggml_webgpu_ssm_scan_shader_decisions {
     uint32_t wg_size;
     uint32_t tokens_per_tile;
     bool     xbc_overlap = false;
+    bool     bc_overlap = false;
 };
 
 /** Argsort **/
@@ -1772,6 +1775,7 @@ class ggml_webgpu_shader_lib {
         key.d_state                           = (int) context.src0->ne[0];
         key.xbc_overlap                       = ggml_webgpu_tensor_overlap(context.src1, context.src4) &&
                                                 ggml_webgpu_tensor_overlap(context.src1, context.src5);
+        key.bc_overlap                        = ggml_webgpu_tensor_overlap(context.src4, context.src5);
 
         auto it = ssm_scan_pipelines.find(key);
         if (it != ssm_scan_pipelines.end()) {
@@ -1805,6 +1809,8 @@ class ggml_webgpu_shader_lib {
 
         if (key.xbc_overlap) {
             defines.push_back("XBC_OVERLAP");
+        } else if (key.bc_overlap) {
+            defines.push_back("BC_OVERLAP");
         }
 
         variant += "_d" + std::to_string(key.d_state);
@@ -1814,6 +1820,7 @@ class ggml_webgpu_shader_lib {
         decisions->wg_size         = wg_size;
         decisions->tokens_per_tile = tokens_per_tile;
         decisions->xbc_overlap     = key.xbc_overlap;
+        decisions->bc_overlap      = key.bc_overlap;
         webgpu_pipeline pipeline   = ggml_webgpu_create_pipeline(device, processed, variant);
         pipeline.context           = decisions;
         ssm_scan_pipelines[key]    = pipeline;

@@ -52,6 +52,14 @@ struct Params {
 @group(0) @binding(4) var<storage, read_write> ids: array<i32>;
 @group(0) @binding(5) var<storage, read_write> dst: array<f32>;
 @group(0) @binding(6) var<uniform> params: Params;
+#elif defined BC_OVERLAP
+@group(0) @binding(1) var<storage, read_write> x: array<f32>;
+@group(0) @binding(2) var<storage, read_write> dt: array<f32>;
+@group(0) @binding(3) var<storage, read_write> A: array<f32>;
+@group(0) @binding(4) var<storage, read_write> B_C_merged: array<f32>;
+@group(0) @binding(5) var<storage, read_write> ids: array<i32>;
+@group(0) @binding(6) var<storage, read_write> dst: array<f32>;
+@group(0) @binding(7) var<uniform> params: Params;
 #else
 @group(0) @binding(1) var<storage, read_write> x: array<f32>;
 @group(0) @binding(2) var<storage, read_write> dt: array<f32>;
@@ -131,6 +139,8 @@ fn main(
             let c_idx = params.offset_C + tid + g * params.stride_C1 + token * params.stride_C2 + i3 * params.stride_C3;
 #ifdef XBC_OVERLAP
             let s = s_prev * dA + x_B_C_merged[b_idx] * x_dt;
+#elif defined BC_OVERLAP
+            let s = s_prev * dA + B_C_merged[b_idx] * x_dt;
 #else
             let s = s_prev * dA + B[b_idx] * x_dt;
 #endif
@@ -139,6 +149,8 @@ fn main(
 #ifdef USE_SUBGROUP_REDUCTION
 #ifdef XBC_OVERLAP
             let subgroup_partial = subgroupAdd(s * x_B_C_merged[c_idx]);
+#elif defined BC_OVERLAP
+            let subgroup_partial = subgroupAdd(s * B_C_merged[c_idx]);
 #else
             let subgroup_partial = subgroupAdd(s * C[c_idx]);
 #endif
@@ -148,6 +160,8 @@ fn main(
 #else
 #ifdef XBC_OVERLAP
             shared_reduce[reduce_idx] = s * x_B_C_merged[c_idx];
+#elif defined BC_OVERLAP
+            shared_reduce[reduce_idx] = s * B_C_merged[c_idx];
 #else
             shared_reduce[reduce_idx] = s * C[c_idx];
 #endif

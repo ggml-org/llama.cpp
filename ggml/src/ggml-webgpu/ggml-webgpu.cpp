@@ -1197,6 +1197,7 @@ static webgpu_encoded_op ggml_webgpu_ssm_scan(webgpu_context & ctx,
     webgpu_pipeline pipeline    = ctx->shader_lib->get_ssm_scan_pipeline(shader_lib_ctx);
     auto *          decisions   = static_cast<ggml_webgpu_ssm_scan_shader_decisions *>(pipeline.context.get());
     const bool      xbc_overlap = decisions->xbc_overlap;
+    const bool      bc_overlap  = decisions->bc_overlap;
 
     uint32_t offset_x        = (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src1) / ggml_type_size(src1->type));
     uint32_t offset_B        = (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src4) / ggml_type_size(src4->type));
@@ -1209,6 +1210,13 @@ static webgpu_encoded_op ggml_webgpu_ssm_scan(webgpu_context & ctx,
         xbc_bind_offset = merged_range.offset;
         xbc_bind_size   = merged_range.size;
         offset_x        = ggml_webgpu_tensor_merged_element_offset(src1, merged_range);
+        offset_B        = ggml_webgpu_tensor_merged_element_offset(src4, merged_range);
+        offset_C        = ggml_webgpu_tensor_merged_element_offset(src5, merged_range);
+    } else if (bc_overlap) {
+        const ggml_webgpu_merged_binding_range merged_range =
+            ggml_webgpu_tensor_merged_binding_range(ctx, { src4, src5 });
+        xbc_bind_offset = merged_range.offset;
+        xbc_bind_size   = merged_range.size;
         offset_B        = ggml_webgpu_tensor_merged_element_offset(src4, merged_range);
         offset_C        = ggml_webgpu_tensor_merged_element_offset(src5, merged_range);
     }
@@ -1264,6 +1272,14 @@ static webgpu_encoded_op ggml_webgpu_ssm_scan(webgpu_context & ctx,
         entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, 3, src3));
         entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, 4, src6));
         entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, 5, dst));
+    } else if (bc_overlap) {
+        entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, 1, src1));
+        entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, 2, src2));
+        entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, 3, src3));
+        entries.push_back(
+            ggml_webgpu_make_bind_group_entry(4, ggml_webgpu_tensor_buf(src4), xbc_bind_offset, xbc_bind_size));
+        entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, 5, src6));
+        entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, 6, dst));
     } else {
         entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, 1, src1));
         entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, 2, src2));
