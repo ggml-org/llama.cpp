@@ -64,6 +64,15 @@ void llama_model_granite_switch::load_arch_tensors(llama_model_loader &) {
 
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
+    // substitute ids index tok_embd rows directly; range-check against n_vocab
+    for (const auto & kv : adapter_token_to_substitute) {
+        const llama_token sub = kv.second;
+        if (sub < 0 || (int64_t) sub >= n_vocab) {
+            throw std::runtime_error(format(
+                "graniteswitch: substitute token id %d out of range [0, %d)", sub, (int) n_vocab));
+        }
+    }
+
     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
     output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
     if (output == NULL) {
