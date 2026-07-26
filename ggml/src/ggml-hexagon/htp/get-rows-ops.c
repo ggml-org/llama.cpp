@@ -55,8 +55,8 @@ struct get_rows_context {
                                                \
     const uint32_t nr = ne10 * ne11 * ne12;
 
-#define GET_ROWS_THREAD_DMA_FN(IDX_TYPE)                                                                               \
-static void get_rows_thread_dma_##IDX_TYPE(unsigned int nth, unsigned int ith, void *data) {                           \
+#define GET_ROWS_THREAD_ST_FN(IDX_TYPE)                                                                                \
+static void get_rows_thread_st_##IDX_TYPE(unsigned int nth, unsigned int ith, void *data) {                            \
     struct get_rows_context * grctx = (struct get_rows_context *)data;                                                 \
     struct htp_ops_context * octx = grctx->octx;                                                                       \
     const struct htp_get_rows_kernel_params * kparams = grctx->kparams;                                                \
@@ -91,11 +91,11 @@ static void get_rows_thread_dma_##IDX_TYPE(unsigned int nth, unsigned int ith, v
     dma_queue_flush(dma_queue);                                                                                        \
 }
 
-GET_ROWS_THREAD_DMA_FN(int32_t)
-GET_ROWS_THREAD_DMA_FN(int64_t)
+GET_ROWS_THREAD_ST_FN(int32_t)
+GET_ROWS_THREAD_ST_FN(int64_t)
 
-#define GET_ROWS_THREAD_HVX_FN(TYPE_NAME, IDX_TYPE, COMPUTE_EXPR)                                                      \
-static void get_rows_thread_hvx_##TYPE_NAME##_##IDX_TYPE(unsigned int nth, unsigned int ith, void *data) {             \
+#define GET_ROWS_THREAD_DT_FN(TYPE_NAME, IDX_TYPE, COMPUTE_EXPR)                                                       \
+static void get_rows_thread_##TYPE_NAME##_##IDX_TYPE(unsigned int nth, unsigned int ith, void *data) {                 \
     struct get_rows_context * grctx = (struct get_rows_context *)data;                                                 \
     struct htp_ops_context * octx = grctx->octx;                                                                       \
     const struct htp_get_rows_kernel_params * kparams = grctx->kparams;                                                \
@@ -184,7 +184,7 @@ static void get_rows_thread_hvx_##TYPE_NAME##_##IDX_TYPE(unsigned int nth, unsig
     dma_queue_flush(dma_queue);                                                                                        \
 }
 
-GET_ROWS_THREAD_HVX_FN(f32, int32_t, {
+GET_ROWS_THREAD_DT_FN(f32, int32_t, {
     const uint32_t offset = chunk_idx * chunk_size;
     if (offset < ne00) {
         const uint32_t copy_size = MIN(chunk_size, ne00 - offset);
@@ -192,7 +192,7 @@ GET_ROWS_THREAD_HVX_FN(f32, int32_t, {
     }
 })
 
-GET_ROWS_THREAD_HVX_FN(f32, int64_t, {
+GET_ROWS_THREAD_DT_FN(f32, int64_t, {
     const uint32_t offset = chunk_idx * chunk_size;
     if (offset < ne00) {
         const uint32_t copy_size = MIN(chunk_size, ne00 - offset);
@@ -200,19 +200,19 @@ GET_ROWS_THREAD_HVX_FN(f32, int64_t, {
     }
 })
 
-GET_ROWS_THREAD_HVX_FN(f16, int32_t, {
+GET_ROWS_THREAD_DT_FN(f16, int32_t, {
     hvx_dequantize_row_f16_f32((float *)dst_spad, src_spad, ne00);
 })
 
-GET_ROWS_THREAD_HVX_FN(f16, int64_t, {
+GET_ROWS_THREAD_DT_FN(f16, int64_t, {
     hvx_dequantize_row_f16_f32((float *)dst_spad, src_spad, ne00);
 })
 
-GET_ROWS_THREAD_HVX_FN(q8_0, int32_t, {
+GET_ROWS_THREAD_DT_FN(q8_0, int32_t, {
     hvx_dequantize_row_q8_0_f32((float *)dst_spad, src_spad, ne00);
 })
 
-GET_ROWS_THREAD_HVX_FN(q8_0, int64_t, {
+GET_ROWS_THREAD_DT_FN(q8_0, int64_t, {
     hvx_dequantize_row_q8_0_f32((float *)dst_spad, src_spad, ne00);
 })
 
@@ -247,26 +247,18 @@ int op_get_rows(struct htp_ops_context * octx) {
 
     const bool is_i32 = (octx->src[1]->type == HTP_TYPE_I32);
 
+    work_queue_func_t q_func = NULL;
     if (kparams->use_dma) {
-        work_queue_func_t dma_worker = (work_queue_func_t)(is_i32 ? get_rows_thread_dma_int32_t : get_rows_thread_dma_int64_t);
-        work_queue_run(octx->ctx->work_queue, dma_worker, &grctx, kparams->n_threads);
+        q_func = (work_queue_func_t)(is_i32 ? get_rows_thread_st_int32_t : get_rows_thread_st_int64_t);
     } else {
-        work_queue_func_t hvx_worker = NULL;
         switch (octx->src[0]->type) {
-            case HTP_TYPE_F32:
-                hvx_worker = (work_queue_func_t)(is_i32 ? get_rows_thread_hvx_f32_int32_t : get_rows_thread_hvx_f32_int64_t);
-                break;
-            case HTP_TYPE_F16:
-                hvx_worker = (work_queue_func_t)(is_i32 ? get_rows_thread_hvx_f16_int32_t : get_rows_thread_hvx_f16_int64_t);
-                break;
-            case HTP_TYPE_Q8_0:
-                hvx_worker = (work_queue_func_t)(is_i32 ? get_rows_thread_hvx_q8_0_int32_t : get_rows_thread_hvx_q8_0_int64_t);
-                break;
-            default:
-                return HTP_STATUS_NO_SUPPORT;
+            case HTP_TYPE_F32:  q_func = (work_queue_func_t)(is_i32 ? get_rows_thread_f32_int32_t  : get_rows_thread_f32_int64_t);  break;
+            case HTP_TYPE_F16:  q_func = (work_queue_func_t)(is_i32 ? get_rows_thread_f16_int32_t  : get_rows_thread_f16_int64_t);  break;
+            case HTP_TYPE_Q8_0: q_func = (work_queue_func_t)(is_i32 ? get_rows_thread_q8_0_int32_t : get_rows_thread_q8_0_int64_t); break;
+            default:            return HTP_STATUS_NO_SUPPORT;
         }
-
-        work_queue_run(octx->ctx->work_queue, hvx_worker, &grctx, kparams->n_threads);
     }
+
+    work_queue_run(octx->ctx->work_queue, q_func, &grctx, kparams->n_threads);
     return HTP_STATUS_OK;
 }
