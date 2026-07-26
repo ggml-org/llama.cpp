@@ -25,6 +25,82 @@ python3 llama-eval.py \
   --grader-type regex
 ```
 
+## Agentic suite
+
+`--dataset agentic` is a different shape from the other code suites. It runs
+**SACB** (Simple Agent Coding Benchmark), hosted at
+[`ilintar/SACB`](https://huggingface.co/datasets/ilintar/SACB) -- 60 tasks over
+three hand-written repositories, in Python and TypeScript. Rather than
+answering one prompt, the model is given a small but real repository, a
+deliberately narrow tool set, and a bug report, and drives its own multi-turn
+conversation until it declares itself finished. It is then graded by running a
+test suite it was never allowed to see.
+
+```bash
+python3 llama-eval.py \
+  --server http://localhost:8033 --model my-model \
+  --dataset agentic --threads 1 --temperature 0
+```
+
+### The tools
+
+| tool | purpose |
+|---|---|
+| `list_files` | enumerate the tree |
+| `read_file` | read, with 1-based line numbers and optional line-range narrowing |
+| `search` | regular-expression search across the repository |
+| `edit_lines` | replace an inclusive line range |
+| `edit_replace` | replace an exact snippet, which must be unique |
+| `write_file` | write a whole file |
+| `lint` | run the language's linter and type checker |
+| `finish` | declare the change complete |
+
+Three constraints are deliberate:
+
+**There is no shell and no way to run the tests.** The only feedback channel is
+`lint`. A syntax or type error can be driven out mechanically; a logic error has
+to be reasoned about. A harness that lets an agent iterate against the test
+suite measures something closer to search than to understanding.
+
+**There are two edit tools**, one line-addressed and one content-addressed.
+Which one a model reaches for, and whether it keeps line numbers straight after
+its own earlier edit, is itself a signal.
+
+**The tests never touch the working tree.** They are held outside it and copied
+into a throwaway copy only after the agent has stopped, so they can be neither
+read nor edited. Every tool path is resolved and confinement-checked against the
+repository root, so a symlink planted inside the tree cannot reach outside it.
+
+### Scoring
+
+A task is **resolved** when every test that was failing now passes *and* nothing
+that was already passing broke. Both sets are derived by running the tests twice
+when the corpus is built -- once against the defective tree and once against the
+reference fix -- never hand-written, so a task whose defect no test exercises is
+rejected rather than shipped.
+
+Because many tasks contain several independent defects, the fraction of target
+tests passed is reported alongside, which separates "fixed two of the three
+faults" from "changed nothing". Process metrics are reported too: turns, tool
+calls, rejected calls, edits, and the peak conversation size.
+
+### Dependencies
+
+Nothing here is installed unless you select this suite, and then only for the
+language you actually run. `--agentic-lang python` provisions ruff and mypy;
+`--agentic-lang typescript` provisions the TypeScript compiler and uses node's
+own test runner. Neither touches the other, and no other suite touches either.
+
+### Useful flags
+
+| flag | meaning |
+|---|---|
+| `--agentic-lang` | restrict to one language, and provision only its toolchain |
+| `--agentic-max-turns` | give up after this many assistant turns (default 50) |
+| `--agentic-max-tokens` | cap generation per turn (default 2048); bounds a model that falls into a repetition loop |
+| `--agentic-context-limit` | abandon an episode once its context exceeds this many tokens |
+
+
 ## Code suites (HumanEval, ClassEval)
 
 `--dataset humaneval` runs the 164 OpenAI HumanEval problems; `--dataset

@@ -134,7 +134,11 @@ any imports the class needs. Do not include tests, example usage, or explanation
 # Suites graded by running the generated code instead of matching its text.
 # The venv is provisioned from the dataset's own import inventory, so it only
 # ever carries what the suite actually needs.
-CODE_SUITES = {"humaneval", "classeval"}
+CODE_SUITES = {"humaneval", "classeval", "agentic"}
+
+# Suites where the model drives its own multi-turn tool loop rather than
+# answering a single prompt. The Processor hands the whole episode over.
+AGENTIC_SUITES = {"agentic"}
 
 # Import name -> pip name, for the cases where they differ. Anything not listed
 # is assumed to install under the name it imports as.
@@ -158,6 +162,9 @@ PIP_NAMES = {
 # Overridden by --dataset-source; lets a suite be pointed at a patched copy
 # (local .jsonl or a HuggingFace repo) without touching the loader.
 DATASET_SOURCE: Optional[str] = None
+
+# Extra construction options for the agentic suite, set from the CLI.
+AGENTIC_OPTS: Dict[str, Any] = {}
 
 
 class BaseDataset(ABC):
@@ -290,6 +297,8 @@ class EvalState:
             self.dataset = HumanEvalDataset(source=DATASET_SOURCE)
         elif self.dataset_type == "classeval":
             self.dataset = ClassEvalDataset(source=DATASET_SOURCE)
+        elif self.dataset_type == "agentic":
+            self.dataset = AgenticDataset(source=DATASET_SOURCE, **AGENTIC_OPTS)
         else:
             raise ValueError(f"Unknown dataset type: {self.dataset_type}")
 
@@ -1531,6 +1540,103 @@ class ClassEvalDataset(BaseDataset):
         )
 
 
+class AgenticDataset(BaseDataset):
+    """Multi-turn tool-driven repair tasks over a small real repository.
+
+    The other code suites answer one prompt. Here the model is handed a tool
+    set and drives its own conversation, so the Processor delegates the whole
+    episode rather than making a single request.
+
+    Everything language-specific is imported lazily and provisioned per
+    language, so selecting the Python tasks never installs a node toolchain --
+    and running any other suite installs none of it.
+    """
+
+    HF_REPO = "ilintar/SACB"
+    is_agentic = True
+
+    def __init__(self, source: Optional[str] = None, lang: Optional[str] = None,
+                 max_turns: int = 50, context_limit: Optional[int] = None,
+                 max_tokens: int = 2048):
+        self.source = source or self.HF_REPO
+        self.lang_filter = lang
+        self.max_turns = max_turns
+        self.context_limit = context_limit
+        self.max_tokens = max_tokens
+        self._sandboxes: Dict[str, Any] = {}
+        self._load_dataset()
+
+    def _load_dataset(self):
+        # imported here rather than at module scope so the other suites never
+        # pay for it, in import time or in dependencies
+        import agentic_eval as ae
+        self.ae = ae
+
+        print(f"Loading agentic dataset (source: {self.source})...")
+        path = Path(self.source)
+        if path.exists():
+            rows = [json.loads(line) for line in path.read_text().splitlines()
+                    if line.strip()]
+        else:
+            from datasets import load_dataset
+            rows = [dict(r) for r in load_dataset(self.source, split="test")]
+
+        if self.lang_filter:
+            rows = [r for r in rows if r.get("lang") == self.lang_filter]
+        if not rows:
+            raise ValueError(
+                f"no agentic tasks in {self.source}"
+                + (f" for language {self.lang_filter!r}" if self.lang_filter else ""))
+
+        self.tasks = [ae.AgenticTask.from_record(r) for r in rows]
+        self.languages = sorted({t.lang for t in self.tasks})
+        print(f"Agentic dataset loaded: {len(self.tasks)} tasks "
+              f"({', '.join(self.languages)})")
+
+    # -- BaseDataset surface --------------------------------------------
+
+    def __len__(self) -> int:
+        return len(self.tasks)
+
+    def get_question(self, index: int) -> Dict:
+        return {"index": index}
+
+    def get_question_text(self, question: Dict) -> str:
+        task = self.tasks[question["index"]]
+        first = task.instruction.strip().splitlines()[0]
+        return f"[{task.task_id}] {first}"
+
+    def get_answer(self, question: Dict) -> str:
+        task = self.tasks[question["index"]]
+        return json.dumps({"task_id": task.task_id, "index": question["index"]})
+
+    def get_prompt(self, question: Dict) -> str:
+        return self.ae.user_prompt(self.tasks[question["index"]])
+
+    def default_exec_timeout(self) -> float:
+        return 90.0
+
+    def required_packages(self) -> List[str]:
+        return []          # provisioned per language instead, see prepare()
+
+    # -- agentic surface -------------------------------------------------
+
+    def prepare(self, base_python: Optional[str] = None, force: bool = False):
+        """Provision one sandbox per language present in the selected tasks."""
+        for lang in self.languages:
+            sandbox = self.ae.make_sandbox(lang, Sandbox, base_python=base_python)
+            sandbox.ensure(force=force)
+            self._sandboxes[lang] = sandbox
+        return self._sandboxes
+
+    def run(self, index: int, chat) -> Dict[str, Any]:
+        task = self.tasks[index]
+        return self.ae.run_task(
+            task, chat, self._sandboxes[task.lang],
+            max_turns=self.max_turns, context_limit=self.context_limit,
+            test_timeout=self.default_exec_timeout())
+
+
 def _as_text(value: Any) -> str:
     """Some dataset fields arrive as a list of lines rather than a blob."""
     if not value:
@@ -1825,6 +1931,10 @@ class Processor:
             problem_idx=problem_idx,
         )
 
+        if getattr(eval_state.dataset, "is_agentic", False):
+            return self._process_agentic_case(
+                server_config, eval_state, i, task_id, task_state)
+
         try:
             response, tokens, tps_gen, t_gen_ms, finish_reason = self._make_request(server_config, eval_state, prompt)
             result = response["choices"][0]["message"]["content"]
@@ -1880,6 +1990,84 @@ class Processor:
         except Exception as e:
             task_state.status = f"error: {str(e)}"
 
+        return task_state
+
+    def _agentic_chat(self, server_config: ServerConfig, eval_state: EvalState):
+        """A chat callable for agentic_eval: messages + tools in, response out."""
+        url = f"{server_config.url}/v1/chat/completions"
+
+        def chat(messages, tools):
+            data = {
+                "model": self.model_name if self.model_name else "llama",
+                "messages": messages,
+                "tools": tools,
+                "tool_choice": "auto",
+            }
+            # Cap each turn. A model that falls into a repetition loop would
+            # otherwise generate until the context runs out, burning the whole
+            # run's wall clock on one turn; capped, it costs a single turn and
+            # the episode carries on.
+            per_turn = getattr(eval_state.dataset, "max_tokens", 0)
+            if self.n_predict and self.n_predict > 0:
+                data["max_tokens"] = self.n_predict
+            elif per_turn:
+                data["max_tokens"] = per_turn
+            for key in ("temperature", "top_k", "top_p", "min_p"):
+                value = eval_state.sampling_config.get(key)
+                if value is not None:
+                    data[key] = value
+            response = requests.post(url, headers={"Content-Type": "application/json"},
+                                     json=data, timeout=1800)
+            response.raise_for_status()
+            return response.json()
+
+        return chat
+
+    def _process_agentic_case(
+        self, server_config: ServerConfig, eval_state: EvalState, i: int,
+        task_id: str, task_state: TaskState
+    ) -> TaskState:
+        """Run one whole tool-driven episode and grade the tree it leaves behind."""
+        try:
+            result = eval_state.dataset.run(
+                i, self._agentic_chat(server_config, eval_state))
+        except Exception as e:
+            # Record the failure rather than only marking the in-memory state.
+            # Without this the case is persisted as "pending" and the summary
+            # quietly counts a smaller denominator, so a run where most
+            # episodes crashed reports a high score over the few that survived.
+            task_state.status = f"error: {type(e).__name__}: {e}"
+            eval_state.add_result(
+                task_id, task_state.prompt, task_state.expected,
+                task_state.status, None,
+                {"error": f"{type(e).__name__}: {e}", "resolved": False},
+                False, task_state.status, 0, None, None, None,
+                server_config.name, task_state.chunk_idx, i,
+            )
+            eval_state.dump()
+            return task_state
+
+        episode = result.get("episode", {})
+        task_state.tokens = episode.get("completion_tokens", 0)
+        task_state.correct = bool(result["resolved"])
+        task_state.answer = ", ".join(result.get("changed_files", [])) or None
+        task_state.grader_log = result
+        task_state.status = "ok"
+        task_state.response = (
+            f"stop={episode.get('stop_reason')} turns={episode.get('turns')} "
+            f"calls={episode.get('tool_calls')} edits={episode.get('edits')} "
+            f"errors={episode.get('tool_errors')} nudges={episode.get('nudges')} "
+            f"peak_ctx={episode.get('peak_context')}\n"
+            f"changed: {task_state.answer or '(nothing)'}"
+        )
+
+        eval_state.add_result(
+            task_id, task_state.prompt, task_state.expected, task_state.response,
+            task_state.answer, result, task_state.correct, "ok",
+            task_state.tokens, None, None, None, server_config.name,
+            task_state.chunk_idx, i,
+        )
+        eval_state.dump()
         return task_state
 
     @staticmethod
@@ -2086,7 +2274,8 @@ def main():
         "--dataset",
         type=str,
         default="aime",
-        choices=["aime", "aime2025", "aime2026", "gsm8k", "gpqa", "humaneval", "classeval"],
+        choices=["aime", "aime2025", "aime2026", "gsm8k", "gpqa", "humaneval",
+                 "classeval", "agentic"],
         help="Dataset type (default: aime)"
     )
     parser.add_argument(
@@ -2215,6 +2404,34 @@ def main():
         help="Model name for LLM grader (default: same as main model)"
     )
     parser.add_argument(
+        "--agentic-lang",
+        type=str,
+        default=None,
+        choices=["python", "typescript"],
+        help="Restrict the agentic suite to one language. Only that language's "
+             "toolchain is then provisioned."
+    )
+    parser.add_argument(
+        "--agentic-max-turns",
+        type=int,
+        default=50,
+        help="Maximum assistant turns per agentic episode (default: 50)"
+    )
+    parser.add_argument(
+        "--agentic-max-tokens",
+        type=int,
+        default=2048,
+        help="Cap on generated tokens per agentic turn (default: 2048). Bounds "
+             "a model that falls into a repetition loop."
+    )
+    parser.add_argument(
+        "--agentic-context-limit",
+        type=int,
+        default=None,
+        help="Abandon an agentic episode once its context exceeds this many "
+             "tokens (default: no limit)"
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help="Resume from existing eval state"
@@ -2222,8 +2439,14 @@ def main():
 
     args = parser.parse_args()
 
-    global DATASET_SOURCE
+    global DATASET_SOURCE, AGENTIC_OPTS
     DATASET_SOURCE = args.dataset_source
+    AGENTIC_OPTS = {
+        "lang": args.agentic_lang,
+        "max_turns": args.agentic_max_turns,
+        "context_limit": args.agentic_context_limit,
+        "max_tokens": args.agentic_max_tokens,
+    }
 
     # Code suites are graded by execution; everything else keeps the llm default.
     if args.grader_type is None:
@@ -2350,7 +2573,11 @@ def main():
 
     # The execution venv is derived from the dataset, so it is built only once
     # the dataset is known -- true on both the fresh and the resume path.
-    if args.grader_type == "exec":
+    if args.grader_type == "exec" and getattr(eval_state.dataset, "is_agentic", False):
+        # One venv per language in the selected tasks, rather than one per suite
+        eval_state.dataset.prepare(base_python=args.sandbox_python,
+                                   force=args.rebuild_sandbox)
+    elif args.grader_type == "exec":
         dataset = eval_state.dataset
 
         base_python = args.sandbox_python
