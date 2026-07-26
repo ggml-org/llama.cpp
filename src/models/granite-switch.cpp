@@ -14,7 +14,8 @@ void llama_model_granite_switch::load_arch_hparams(llama_model_loader & ml) {
     hparams.rope_finetuned = rope_finetuned;
 
     switch (hparams.n_layer()) {
-        case 40: type = LLM_TYPE_3B; break;
+        case 40: type = hparams.n_embd == 4096 ? LLM_TYPE_8B : LLM_TYPE_3B; break;
+        case 64: type = LLM_TYPE_30B; break;
         default: type = LLM_TYPE_UNKNOWN;
     }
 
