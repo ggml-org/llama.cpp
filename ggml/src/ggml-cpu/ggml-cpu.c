@@ -13,6 +13,7 @@
 #include "vec.h"
 #include "ggml-qfx16.h"
 #include "ggml-qfx32.h"
+#include "ggml-qfxq.h"
 #include "ops.h"
 #include "ggml.h"
 #include "common.h"

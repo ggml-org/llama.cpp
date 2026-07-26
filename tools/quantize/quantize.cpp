@@ -36,6 +36,7 @@ static const std::vector<quant_option> QUANT_OPTIONS = {
     { "Q2_0",     LLAMA_FTYPE_MOSTLY_Q2_0,     " 2.25 bpw quantization (group 64)",  },
     { "QFX16",    LLAMA_FTYPE_MOSTLY_QFX16,    " 8-16 bpw LOSSLESS BF16 transitions (QomputeAI)", },
     { "QFX32",    LLAMA_FTYPE_MOSTLY_QFX32,    " 18.36 bpw LOSSLESS F32 planar transitions (QomputeAI)", },
+    { "QFXQ",     LLAMA_FTYPE_MOSTLY_QFXQ,     " 8.09 bpw Q5_Q wavelet-lifted int8 (QomputeAI)", },
     { "Q4_0",     LLAMA_FTYPE_MOSTLY_Q4_0,     " 4.34G, +0.4685 ppl @ Llama-3-8B",  },
     { "Q4_1",     LLAMA_FTYPE_MOSTLY_Q4_1,     " 4.78G, +0.4511 ppl @ Llama-3-8B",  },
     { "MXFP4_MOE",LLAMA_FTYPE_MOSTLY_MXFP4_MOE," MXFP4 MoE",  },

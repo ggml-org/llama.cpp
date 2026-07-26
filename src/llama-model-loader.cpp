@@ -761,6 +761,7 @@ llama_model_loader::llama_model_loader(
             case GGML_TYPE_Q2_0:    ftype = LLAMA_FTYPE_MOSTLY_Q2_0;    break;
             case GGML_TYPE_QFX16:   ftype = LLAMA_FTYPE_MOSTLY_QFX16;   break;
             case GGML_TYPE_QFX32:   ftype = LLAMA_FTYPE_MOSTLY_QFX32;   break;
+            case GGML_TYPE_QFXQ:    ftype = LLAMA_FTYPE_MOSTLY_QFXQ;    break;
             default:
                 {
                     LLAMA_LOG_WARN("%s: unknown type %s\n", __func__, ggml_type_name(type_max));
@@ -1255,6 +1256,11 @@ struct ggml_tensor * llama_model_loader::create_tensor(
     }
 
     ggml_tensor * t_meta = get_tensor_meta(tn.str().c_str());
+
+    // QFXQ -> Q8_0 promotion: identical block layout enables native Metal Q8_0 kernels
+    if (t_meta && t_meta->type == GGML_TYPE_QFXQ) {
+        t_meta->type = GGML_TYPE_Q8_0;
+    }
 
     // QFX32 dequant-on-load: override metadata type so buffer allocation
     // uses f32 sizing and the tensor gets assigned to the GPU buffer.
