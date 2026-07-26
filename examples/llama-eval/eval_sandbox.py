@@ -22,6 +22,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import venv
 from dataclasses import dataclass
 from pathlib import Path
@@ -94,14 +95,25 @@ def resolve_python(spec: Optional[str]) -> Optional[str]:
     return shutil.which(spec) or shutil.which(f"python{spec}")
 
 
-def _detect_isolation() -> str:
-    """Pick the strongest isolation tier this host supports, once."""
+def _detect_isolation(probe_python: Optional[str] = None,
+                      ro_binds: Sequence[Path] = ()) -> str:
+    """Pick the strongest isolation tier this host supports, once.
+
+    The probe must run the *same* interpreter the suite will, with the same
+    binds. Probing a bare sys.executable silently downgrades the tier whenever
+    this tool is itself run from a venv under $HOME -- which is the usual case,
+    since it needs `datasets`. bwrap tmpfs-mounts the home directory, the
+    interpreter disappears, the probe fails, and the sandbox falls back to a
+    tier that does not hide $HOME at all. Nothing about the results looks wrong
+    when that happens, so it has to be got right here.
+    """
+    py = probe_python or sys.executable
     probe = "import sys; sys.exit(0)"
 
     if shutil.which("bwrap"):
         try:
             r = subprocess.run(
-                _bwrap_argv(Path.cwd(), [sys.executable, "-I", "-c", probe]),
+                _bwrap_argv(Path.cwd(), [py, "-I", "-c", probe], ro_binds=ro_binds),
                 capture_output=True, timeout=20,
             )
             if r.returncode == 0:
@@ -120,7 +132,7 @@ def _detect_isolation() -> str:
         ):
             try:
                 r = subprocess.run(
-                    [*argv, sys.executable, "-I", "-c", probe],
+                    [*argv, py, "-I", "-c", probe],
                     capture_output=True, timeout=20,
                 )
                 if r.returncode == 0:
@@ -189,16 +201,25 @@ def _nproc_ceiling() -> int:
     return max(current * 2, 1024)
 
 
-def _apply_rlimits(timeout: float, with_nproc: bool):
+def _apply_rlimits(timeout: float, with_nproc: bool,
+                   as_bytes: Optional[int] = LIMIT_AS_BYTES):
     def _preexec():
         os.setsid()
         cpu = int(timeout) + LIMIT_CPU_SECONDS_SLACK
         limits = [
             (resource.RLIMIT_CPU, (cpu, cpu)),
-            (resource.RLIMIT_AS, (LIMIT_AS_BYTES, LIMIT_AS_BYTES)),
             (resource.RLIMIT_FSIZE, (LIMIT_FSIZE_BYTES, LIMIT_FSIZE_BYTES)),
             (resource.RLIMIT_CORE, (0, 0)),
         ]
+        # RLIMIT_AS caps reserved address space, not resident memory, so it is
+        # the wrong instrument for any runtime that reserves a large region up
+        # front and commits little of it. Node's TypeScript type-stripping goes
+        # through WebAssembly, which reserves multiple gigabytes per instance
+        # and dies at 4 GiB with an out-of-memory error that looks like a bug
+        # in the code under test. Suites needing such a runtime raise or drop
+        # it; the wall-clock timeout and RLIMIT_FSIZE still bound a runaway.
+        if as_bytes:
+            limits.append((resource.RLIMIT_AS, (as_bytes, as_bytes)))
         # Only in the no-namespace fallback: with bwrap/unshare the PID
         # namespace already contains a fork bomb, and clamping NPROC there
         # makes clone(CLONE_NEWUSER) fail outright with EAGAIN.
@@ -225,6 +246,7 @@ class Sandbox:
         isolation: Optional[str] = None,
         provision: Optional[Sequence[str]] = None,
         env: Optional[Dict[str, str]] = None,
+        address_space_limit: Optional[int] = LIMIT_AS_BYTES,
     ):
         self.name = name
         self.packages = sorted(set(packages or []))
@@ -237,6 +259,8 @@ class Sandbox:
         # time must live inside the venv, because $HOME is a tmpfs in the
         # strongest isolation tier and anything under it disappears.
         self.env = dict(env or {})
+        # None drops the RLIMIT_AS cap entirely -- see _apply_rlimits
+        self.address_space_limit = address_space_limit
         self.cache_root = Path(cache_root or DEFAULT_CACHE_ROOT)
         self.base_python = base_python or sys.executable
         self.venv_dir = self.cache_root / f"{name}-venv"
@@ -255,7 +279,15 @@ class Sandbox:
     @property
     def isolation(self) -> str:
         if self._isolation is None:
-            self._isolation = _detect_isolation()
+            if self._python:
+                py = str(self._python)
+                roots = [self.venv_dir, *(self._base_prefix or [])]
+            else:
+                # probed before the venv exists: still bind the interpreter's
+                # own tree, or the probe fails for the wrong reason
+                py = sys.executable
+                roots = self._detect_base_prefix(Path(py))
+            self._isolation = _detect_isolation(py, roots)
         return self._isolation
 
     def _stamp_path(self) -> Path:
@@ -401,46 +433,53 @@ class Sandbox:
 
     # -- execution -------------------------------------------------------
 
-    def run(self, code: str, timeout: float = 15.0,
-            env: Optional[Dict[str, str]] = None) -> ExecResult:
-        """Run `code` to completion in the sandbox. Exit 0 == passed."""
-        import time
+    def _isolate(self, argv: Sequence[str], workdir: Path,
+                 ro_binds: Sequence[Path] = ()) -> List[str]:
+        """Wrap a command in the strongest isolation tier this host supports."""
+        if self.isolation == "bwrap":
+            # the venv, and the base interpreter tree it symlinks into, must
+            # stay visible through the tmpfs that hides $HOME
+            return _bwrap_argv(
+                workdir, argv,
+                ro_binds=[self.venv_dir, *(self._base_prefix or []), *ro_binds],
+            )
+        if self.isolation in UNSHARE_ARGV:
+            return [*UNSHARE_ARGV[self.isolation], *argv]
+        return list(argv)
 
-        workdir = Path(tempfile.mkdtemp(prefix=f"{self.name}-", dir="/tmp"))
+    def _base_env(self, workdir: Path) -> Dict[str, str]:
+        env = {
+            "PATH": "/usr/bin:/bin",
+            "HOME": str(workdir),
+            "TMPDIR": str(workdir),
+            "LC_ALL": "C.UTF-8",
+            "PYTHONHASHSEED": "0",
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "OMP_NUM_THREADS": "1",
+        }
+        env.update(self._resolved_env())
+        return env
+
+    def run_argv(self, argv: Sequence[str], workdir: Path,
+                 timeout: float = 15.0, env: Optional[Dict[str, str]] = None,
+                 ro_binds: Sequence[Path] = ()) -> ExecResult:
+        """Run an arbitrary command in `workdir`, which stays writable.
+
+        Unlike run(), the caller owns the directory and it survives the call.
+        That is what a multi-step agent needs: its edits have to persist across
+        many tool invocations before anything is graded. Taking an argv rather
+        than a source string is what lets a suite drive a linter or a test
+        runner for a language other than Python.
+        """
+        run_env = self._base_env(workdir)
+        if env:
+            run_env.update(env)
+
+        started = time.monotonic()
         try:
-            prog = workdir / "candidate.py"
-            prog.write_text(code)
-
-            inner = [str(self.python), "-I", "-B", str(prog)]
-            if self.isolation == "bwrap":
-                # the venv, and the base interpreter tree it symlinks into, must
-                # stay visible through the tmpfs that hides $HOME
-                argv = _bwrap_argv(
-                    workdir, inner,
-                    ro_binds=[self.venv_dir, *(self._base_prefix or [])],
-                )
-            elif self.isolation in UNSHARE_ARGV:
-                argv = [*UNSHARE_ARGV[self.isolation], *inner]
-            else:
-                argv = inner
-
-            run_env = {
-                "PATH": "/usr/bin:/bin",
-                "HOME": str(workdir),
-                "TMPDIR": str(workdir),
-                "LC_ALL": "C.UTF-8",
-                "PYTHONHASHSEED": "0",
-                "PYTHONDONTWRITEBYTECODE": "1",
-                "OPENBLAS_NUM_THREADS": "1",
-                "OMP_NUM_THREADS": "1",
-            }
-            run_env.update(self._resolved_env())
-            if env:
-                run_env.update(env)
-
-            started = time.monotonic()
             proc = subprocess.Popen(
-                argv,
+                self._isolate(argv, workdir, ro_binds),
                 cwd=str(workdir),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
@@ -448,21 +487,35 @@ class Sandbox:
                 text=True,
                 errors="replace",
                 env=run_env,
-                preexec_fn=_apply_rlimits(timeout, with_nproc=self.isolation == "rlimit"),
+                preexec_fn=_apply_rlimits(timeout,
+                                          with_nproc=self.isolation == "rlimit",
+                                          as_bytes=self.address_space_limit),
             )
-            try:
-                out, err = proc.communicate(timeout=timeout)
-                duration = time.monotonic() - started
-            except subprocess.TimeoutExpired:
-                _kill_tree(proc)
-                out, err = proc.communicate()
-                return ExecResult(False, "timeout", out or "", err or "",
-                                  None, time.monotonic() - started)
+        except Exception as e:  # sandbox itself misbehaved
+            return ExecResult(False, "error", "", f"{type(e).__name__}: {e}")
 
-            if proc.returncode == 0:
-                return ExecResult(True, "ok", out, err, 0, duration)
-            return ExecResult(False, "failed", out, err, proc.returncode, duration)
+        try:
+            out, err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_tree(proc)
+            out, err = proc.communicate()
+            return ExecResult(False, "timeout", out or "", err or "",
+                              None, time.monotonic() - started)
 
+        duration = time.monotonic() - started
+        if proc.returncode == 0:
+            return ExecResult(True, "ok", out, err, 0, duration)
+        return ExecResult(False, "failed", out, err, proc.returncode, duration)
+
+    def run(self, code: str, timeout: float = 15.0,
+            env: Optional[Dict[str, str]] = None) -> ExecResult:
+        """Run `code` to completion in the sandbox. Exit 0 == passed."""
+        workdir = Path(tempfile.mkdtemp(prefix=f"{self.name}-", dir="/tmp"))
+        try:
+            prog = workdir / "candidate.py"
+            prog.write_text(code)
+            return self.run_argv([str(self.python), "-I", "-B", str(prog)],
+                                 workdir, timeout=timeout, env=env)
         except Exception as e:  # sandbox itself misbehaved
             return ExecResult(False, "error", "", f"{type(e).__name__}: {e}")
         finally:
