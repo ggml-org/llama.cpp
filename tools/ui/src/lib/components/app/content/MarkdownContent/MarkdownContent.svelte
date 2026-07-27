@@ -487,12 +487,15 @@
 			// the slice that was parsed, so ids and hashes stay stable.
 			const documentIndex = prefixBlocks.length + index;
 
-			// In append mode, reuse previous blocks if unchanged
+			// In append mode, reuse previous blocks if unchanged. Recompute
+			// endOffset from the current (rebased) node: a block reused from the
+			// incomplete-code-block branch never carried one, and the commit loop
+			// stops at the first block without it.
 			if (appendMode && documentIndex < previousBlockCount) {
 				const prevBlock = renderedBlocks[documentIndex];
 				const currentHash = getMdastNodeHash(child, documentIndex);
 				if (prevBlock?.contentHash === currentHash) {
-					nextBlocks.push(prevBlock);
+					nextBlocks.push({ ...prevBlock, endOffset: blockEndOffset(child) });
 
 					continue;
 				}

@@ -119,7 +119,14 @@ const BOUNDARY_SENSITIVE_DOCS: Array<[string, string]> = [
 	['list item continuation', '- item\n  continued\n\nAfter.'],
 	// The hard case: a definition at the END of the document changes how an
 	// EARLIER paragraph renders, so committing that paragraph early is wrong.
-	['link reference definition', 'See [foo] here.\n\nMore text.\n\n[foo]: /url\n']
+	['link reference definition', 'See [foo] here.\n\nMore text.\n\n[foo]: /url\n'],
+	// Prose, then a fence that CLOSES mid-stream, then more prose. Exercises the
+	// hand-off from the incomplete-code-block branch back to the standard path,
+	// where reused blocks must re-acquire an endOffset for the commit loop.
+	[
+		'prose then closed fence then prose',
+		'Intro paragraph before any code.\n\n```ts\nconst a = 1;\nconst b = a + 1;\n```\n\nMiddle prose after the fence.\n\n```js\nlet c = 3;\n```\n\nClosing paragraph.'
+	]
 ];
 
 describe('MarkdownContent streaming matches one-shot rendering', () => {
