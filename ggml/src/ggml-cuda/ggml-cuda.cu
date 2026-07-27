@@ -2701,6 +2701,86 @@ static int ggml_cuda_try_gdn_cache_fusion(
     return skip;
 }
 
+static int ggml_cuda_try_moe_weighted_sum_fusion(
+        ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int node_idx) {
+    ggml_tensor * first_mul = cgraph->nodes[node_idx];
+    if (first_mul->op != GGML_OP_MUL || first_mul->type != GGML_TYPE_F32 ||
+            first_mul->ne[1] < 2 || first_mul->ne[1] > 15 ||
+            first_mul->ne[2] < 1 || first_mul->ne[3] != 1) {
+        return 0;
+    }
+
+    int n_muls = 1;
+    ggml_tensor * weighted = first_mul;
+    if (node_idx + 1 < cgraph->n_nodes &&
+            cgraph->nodes[node_idx + 1]->op == GGML_OP_MUL &&
+            cgraph->nodes[node_idx + 1]->src[0] == first_mul &&
+            ggml_are_same_shape(cgraph->nodes[node_idx + 1], first_mul)) {
+        weighted = cgraph->nodes[node_idx + 1];
+        n_muls = 2;
+    }
+
+    const int n_experts = weighted->ne[1];
+    const int view_idx = node_idx + n_muls;
+    const int add_idx = view_idx + n_experts;
+    const int n_nodes = n_muls + n_experts + n_experts - 1;
+    if (node_idx + n_nodes > cgraph->n_nodes) {
+        return 0;
+    }
+
+    for (int e = 0; e < n_experts; ++e) {
+        const ggml_tensor * view = cgraph->nodes[view_idx + e];
+        if (view->op != GGML_OP_VIEW || view->view_src != weighted ||
+                view->view_offs != size_t(e) * weighted->nb[1] ||
+                view->ne[0] != weighted->ne[0] || view->ne[1] != weighted->ne[2] ||
+                view->ne[2] != 1 || view->ne[3] != 1) {
+            return 0;
+        }
+    }
+
+    for (int e = 1; e < n_experts; ++e) {
+        const ggml_tensor * add = cgraph->nodes[add_idx + e - 1];
+        const ggml_tensor * lhs = e == 1 ? cgraph->nodes[view_idx] : cgraph->nodes[add_idx + e - 2];
+        const ggml_tensor * rhs = cgraph->nodes[view_idx + e];
+        if (add->op != GGML_OP_ADD || add->src[0] != lhs || add->src[1] != rhs) {
+            return 0;
+        }
+    }
+
+    const ggml_tensor * experts = first_mul->src[0];
+    const ggml_tensor * scale   = n_muls == 2 ? first_mul->src[1] : nullptr;
+    const ggml_tensor * weights = n_muls == 2 ? weighted->src[1] : first_mul->src[1];
+    ggml_tensor * output = cgraph->nodes[node_idx + n_nodes - 1];
+
+    if (experts->type != GGML_TYPE_F32 || weights->type != GGML_TYPE_F32 ||
+            (scale && scale->type != GGML_TYPE_F32) ||
+            !ggml_is_contiguous(experts) || !ggml_is_contiguous(weights) ||
+            (scale && !ggml_is_contiguous(scale)) || !ggml_is_contiguous(output) ||
+            weights->ne[0] != 1 || weights->ne[1] != n_experts || weights->ne[2] != experts->ne[2] ||
+            (scale && (scale->ne[0] != 1 || scale->ne[1] != n_experts || scale->ne[2] != experts->ne[2]))) {
+        return 0;
+    }
+
+    std::vector<ggml_op> ops(n_nodes);
+    for (int j = 0; j < n_muls; ++j) {
+        ops[j] = GGML_OP_MUL;
+    }
+    for (int j = 0; j < n_experts; ++j) {
+        ops[n_muls + j] = GGML_OP_VIEW;
+    }
+    for (int j = 0; j < n_experts - 1; ++j) {
+        ops[n_muls + n_experts + j] = GGML_OP_ADD;
+    }
+
+    const int out_node = node_idx + n_nodes - 1;
+    if (!ggml_can_fuse_subgraph(cgraph, node_idx, n_nodes, ops.data(), &out_node, 1)) {
+        return 0;
+    }
+
+    ggml_cuda_op_moe_weighted_sum(*cuda_ctx, experts, scale, weights, output);
+    return n_nodes - 1;
+}
+
 static bool ggml_cuda_topk_moe_fusion(const struct ggml_cgraph * cgraph, int node_idx, ggml_cuda_topk_moe_args & args) {
     args.sigmoid         = false;
     args.sqrt_softplus   = false;
@@ -3149,6 +3229,13 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
     }
 
     ggml_tensor * node = cgraph->nodes[i];
+
+    if (node->op == GGML_OP_MUL) {
+        const int nodes_to_skip = ggml_cuda_try_moe_weighted_sum_fusion(cuda_ctx, cgraph, i);
+        if (nodes_to_skip > 0) {
+            return nodes_to_skip;
+        }
+    }
 
     // gated_delta_net -> cpy: scatter recurrent-state snapshots into the cache
     if (node->op == GGML_OP_GATED_DELTA_NET) {

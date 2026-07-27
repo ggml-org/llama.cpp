@@ -542,6 +542,136 @@ void ggml_cuda_op_fused_mul(ggml_backend_cuda_context & ctx, ggml_tensor * dst, 
     }
 }
 
+template <int n_experts, bool has_scale>
+static __global__ void k_moe_weighted_sum(
+        const float * __restrict__ experts,
+        const float * __restrict__ scale,
+        const float * __restrict__ weights,
+        float * __restrict__ dst,
+        const int n_embd) {
+    ggml_cuda_pdl_lc();
+
+    const int i = blockIdx.x * blockDim.x + threadIdx.x;
+    const int t = blockIdx.y;
+
+    if (i >= n_embd) {
+        return;
+    }
+
+    const size_t expert_base = size_t(t) * n_experts * n_embd + i;
+    const size_t factor_base = size_t(t) * n_experts;
+
+    ggml_cuda_pdl_sync();
+
+    float value = experts[expert_base];
+    if constexpr (has_scale) {
+        value = __fmul_rn(value, scale[factor_base]);
+    }
+    float sum = __fmul_rn(value, weights[factor_base]);
+
+#pragma unroll
+    for (int e = 1; e < n_experts; ++e) {
+        value = experts[expert_base + size_t(e) * n_embd];
+        if constexpr (has_scale) {
+            value = __fmul_rn(value, scale[factor_base + e]);
+        }
+        value = __fmul_rn(value, weights[factor_base + e]);
+        sum = __fadd_rn(sum, value);
+    }
+
+    dst[size_t(t) * n_embd + i] = sum;
+}
+
+template <bool has_scale>
+static void launch_moe_weighted_sum(
+        const float * experts,
+        const float * scale,
+        const float * weights,
+        float * dst,
+        const int n_embd,
+        const int n_tokens,
+        const int n_experts,
+        cudaStream_t stream) {
+    const dim3 block_dims(256, 1, 1);
+    const dim3 block_nums((n_embd + block_dims.x - 1) / block_dims.x, n_tokens, 1);
+    const ggml_cuda_kernel_launch_params launch_params(block_nums, block_dims, 0, stream);
+
+#define GGML_CUDA_LAUNCH_MOE_WEIGHTED_SUM(N) \
+    ggml_cuda_kernel_launch(k_moe_weighted_sum<N, has_scale>, launch_params, experts, scale, weights, dst, n_embd)
+
+    switch (n_experts) {
+        case 2:  GGML_CUDA_LAUNCH_MOE_WEIGHTED_SUM(2);  break;
+        case 3:  GGML_CUDA_LAUNCH_MOE_WEIGHTED_SUM(3);  break;
+        case 4:  GGML_CUDA_LAUNCH_MOE_WEIGHTED_SUM(4);  break;
+        case 5:  GGML_CUDA_LAUNCH_MOE_WEIGHTED_SUM(5);  break;
+        case 6:  GGML_CUDA_LAUNCH_MOE_WEIGHTED_SUM(6);  break;
+        case 7:  GGML_CUDA_LAUNCH_MOE_WEIGHTED_SUM(7);  break;
+        case 8:  GGML_CUDA_LAUNCH_MOE_WEIGHTED_SUM(8);  break;
+        case 9:  GGML_CUDA_LAUNCH_MOE_WEIGHTED_SUM(9);  break;
+        case 10: GGML_CUDA_LAUNCH_MOE_WEIGHTED_SUM(10); break;
+        case 11: GGML_CUDA_LAUNCH_MOE_WEIGHTED_SUM(11); break;
+        case 12: GGML_CUDA_LAUNCH_MOE_WEIGHTED_SUM(12); break;
+        case 13: GGML_CUDA_LAUNCH_MOE_WEIGHTED_SUM(13); break;
+        case 14: GGML_CUDA_LAUNCH_MOE_WEIGHTED_SUM(14); break;
+        case 15: GGML_CUDA_LAUNCH_MOE_WEIGHTED_SUM(15); break;
+        default: GGML_ABORT("unsupported number of experts");
+    }
+
+#undef GGML_CUDA_LAUNCH_MOE_WEIGHTED_SUM
+}
+
+void ggml_cuda_op_moe_weighted_sum(
+        ggml_backend_cuda_context & ctx,
+        const ggml_tensor * experts,
+        const ggml_tensor * scale,
+        const ggml_tensor * weights,
+        ggml_tensor * dst) {
+    GGML_ASSERT(experts->type == GGML_TYPE_F32);
+    GGML_ASSERT(weights->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(scale == nullptr || scale->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_is_contiguous(experts));
+    GGML_ASSERT(ggml_is_contiguous(weights));
+    GGML_ASSERT(ggml_is_contiguous(dst));
+    GGML_ASSERT(scale == nullptr || ggml_is_contiguous(scale));
+
+    const int n_embd    = experts->ne[0];
+    const int n_experts = experts->ne[1];
+    const int n_tokens  = experts->ne[2];
+
+    const auto overlaps = [](const ggml_tensor * a, const ggml_tensor * b) {
+        const uintptr_t a_begin = (uintptr_t) a->data;
+        const uintptr_t a_end   = a_begin + ggml_nbytes(a);
+        const uintptr_t b_begin = (uintptr_t) b->data;
+        const uintptr_t b_end   = b_begin + ggml_nbytes(b);
+        return a_begin < b_end && b_begin < a_end;
+    };
+
+    const bool needs_tmp =
+            overlaps(dst, experts) || overlaps(dst, weights) || (scale && overlaps(dst, scale));
+    ggml_cuda_pool_alloc<float> tmp(ctx.pool());
+    float * dst_ptr = (float *) dst->data;
+    if (needs_tmp) {
+        dst_ptr = tmp.alloc(ggml_nelements(dst));
+    }
+
+    if (scale) {
+        launch_moe_weighted_sum<true>(
+                (const float *) experts->data, (const float *) scale->data, (const float *) weights->data,
+                dst_ptr,
+                n_embd, n_tokens, n_experts, ctx.stream());
+    } else {
+        launch_moe_weighted_sum<false>(
+                (const float *) experts->data, nullptr, (const float *) weights->data,
+                dst_ptr,
+                n_embd, n_tokens, n_experts, ctx.stream());
+    }
+
+    if (needs_tmp) {
+        CUDA_CHECK(cudaMemcpyAsync(dst->data, dst_ptr, ggml_nbytes(dst), cudaMemcpyDeviceToDevice, ctx.stream()));
+    }
+}
+
 void ggml_cuda_op_repeat_back(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
 
