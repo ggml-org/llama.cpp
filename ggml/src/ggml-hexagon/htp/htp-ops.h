@@ -215,6 +215,7 @@ struct htp_opbatch_req {
     uint32_t n_ops;       // Number of ops
     uint32_t n_traces;    // Number of trace descriptors per thread
     uint32_t pad;         // unused
+    uint64_t seq;         // Sequence number
     // struct htp_buf_desc  bufs[];    -- dspqueue buf 0
     // struct htp_tensor    tensors[]; -- dspqueue buf 0
     // struct htp_op_desc   ops[];     -- dspqueue buf 0
@@ -231,6 +232,7 @@ struct htp_opbatch_rsp {
     uint32_t pad;            // align to 8 bytes
     uint64_t cycles_start;   // Start cycle counter
     uint64_t cycles_stop;    // Stop cycle counter
+    uint64_t seq;            // Sequence number
     // struct htp_prof_desc profs[];  -- dspqueue buf 0
 };
 
