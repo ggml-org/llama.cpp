@@ -3337,6 +3337,7 @@ void llm_graph_context::build_pooling(
 
     switch (pooling_type) {
         case LLAMA_POOLING_TYPE_NONE:
+        case LLAMA_POOLING_TYPE_MEAN_CUMULATIVE:
             {
                 cur = inp;
             } break;

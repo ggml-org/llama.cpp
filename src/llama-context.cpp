@@ -927,6 +927,134 @@ float * llama_context::get_embeddings_seq(llama_seq_id seq_id) {
     return it->second.data();
 }
 
+uint64_t llama_context::pooling_seq_get_count(llama_seq_id seq_id) const {
+    if (cparams.pooling_type != LLAMA_POOLING_TYPE_MEAN_CUMULATIVE) {
+        return 0;
+    }
+
+    const auto it = embd_seq_cumulative.find(seq_id);
+    return it == embd_seq_cumulative.end() ? 0 : it->second.count;
+}
+
+namespace {
+
+constexpr uint32_t cumulative_pooling_magic   = 0x43504d4c; // "LMPC"
+constexpr uint32_t cumulative_pooling_version = 1;
+constexpr size_t cumulative_pooling_header_size =
+    sizeof(uint32_t) * 3 + sizeof(uint64_t);
+
+}
+
+size_t llama_context::pooling_seq_get_size(llama_seq_id seq_id) const {
+    if (cparams.pooling_type != LLAMA_POOLING_TYPE_MEAN_CUMULATIVE) {
+        return 0;
+    }
+
+    const auto it = embd_seq_cumulative.find(seq_id);
+    if (it == embd_seq_cumulative.end() || it->second.count == 0) {
+        return 0;
+    }
+
+    return cumulative_pooling_header_size
+        + it->second.sum.size() * sizeof(float);
+}
+
+size_t llama_context::pooling_seq_get_data(
+        llama_seq_id seq_id,
+        uint8_t * dst,
+        size_t size) const {
+    const auto it = embd_seq_cumulative.find(seq_id);
+    const size_t expected = pooling_seq_get_size(seq_id);
+    if (expected == 0 || dst == nullptr || size < expected) {
+        return 0;
+    }
+
+    const uint32_t dimension =
+        static_cast<uint32_t>(it->second.sum.size());
+    size_t offset = 0;
+    const auto write = [&](const void * src, size_t count) {
+        std::memcpy(dst + offset, src, count);
+        offset += count;
+    };
+    write(&cumulative_pooling_magic, sizeof(cumulative_pooling_magic));
+    write(&cumulative_pooling_version, sizeof(cumulative_pooling_version));
+    write(&dimension, sizeof(dimension));
+    write(&it->second.count, sizeof(it->second.count));
+    write(it->second.sum.data(), it->second.sum.size() * sizeof(float));
+
+    GGML_ASSERT(offset == expected);
+    return offset;
+}
+
+size_t llama_context::pooling_seq_set_data(
+        llama_seq_id seq_id,
+        const uint8_t * src,
+        size_t size) {
+    if (cparams.pooling_type != LLAMA_POOLING_TYPE_MEAN_CUMULATIVE
+        || src == nullptr
+        || seq_id < 0
+        || seq_id >= static_cast<llama_seq_id>(
+            cparams.kv_unified ? LLAMA_MAX_SEQ : cparams.n_seq_max)
+        || size < cumulative_pooling_header_size) {
+        return 0;
+    }
+
+    uint32_t magic = 0;
+    uint32_t version = 0;
+    uint32_t dimension = 0;
+    uint64_t count = 0;
+    size_t offset = 0;
+    const auto read = [&](void * dst, size_t bytes) {
+        std::memcpy(dst, src + offset, bytes);
+        offset += bytes;
+    };
+    read(&magic, sizeof(magic));
+    read(&version, sizeof(version));
+    read(&dimension, sizeof(dimension));
+    read(&count, sizeof(count));
+
+    const uint32_t expected_dimension = model.hparams.n_embd_out();
+    if (magic != cumulative_pooling_magic
+        || version != cumulative_pooling_version
+        || dimension != expected_dimension
+        || count == 0) {
+        return 0;
+    }
+
+    const size_t expected =
+        cumulative_pooling_header_size
+        + static_cast<size_t>(dimension) * sizeof(float);
+    if (size != expected) {
+        return 0;
+    }
+
+    cumulative_pooling_state restored;
+    restored.count = count;
+    restored.sum.resize(dimension);
+    read(restored.sum.data(), restored.sum.size() * sizeof(float));
+    GGML_ASSERT(offset == expected);
+
+    std::vector<float> mean(dimension);
+    for (size_t i = 0; i < restored.sum.size(); ++i) {
+        if (!std::isfinite(restored.sum[i])) {
+            return 0;
+        }
+        mean[i] = restored.sum[i] / static_cast<float>(restored.count);
+        if (!std::isfinite(mean[i])) {
+            return 0;
+        }
+    }
+
+    embd_seq_cumulative[seq_id] = std::move(restored);
+    embd_seq[seq_id] = std::move(mean);
+    return expected;
+}
+
+void llama_context::pooling_seq_rm(llama_seq_id seq_id) {
+    embd_seq_cumulative.erase(seq_id);
+    embd_seq.erase(seq_id);
+}
+
 float * llama_context::get_embeddings_nextn() {
     output_reorder();
 
@@ -1396,6 +1524,11 @@ int llama_context::encode(const llama_batch & batch_inp) {
         return -1;
     }
 
+    if (cparams.pooling_type == LLAMA_POOLING_TYPE_MEAN_CUMULATIVE) {
+        LLAMA_LOG_ERROR("%s: cumulative mean pooling is supported only by llama_decode\n", __func__);
+        return -1;
+    }
+
     const auto & hparams = model.hparams;
 
     // eagle3/DFlash: features as encoder input, and non-draft paths fall back to model's input dim
@@ -1481,6 +1614,7 @@ int llama_context::encode(const llama_batch & batch_inp) {
 
         switch (cparams.pooling_type) {
             case LLAMA_POOLING_TYPE_NONE:
+            case LLAMA_POOLING_TYPE_MEAN_CUMULATIVE:
                 {
                     // extract token embeddings
                     GGML_ASSERT(embd.data != nullptr);
@@ -1767,8 +1901,12 @@ int llama_context::decode(const llama_batch & batch_inp) {
     }
     n_queued_tokens += n_tokens_all;
 
-    // TODO: this clear of the buffer can easily be forgotten - need something better
-    embd_seq.clear();
+    // Batch-local pooling replaces the previous output. Cumulative pooling
+    // retains per-sequence state until the caller explicitly removes or
+    // restores it.
+    if (cparams.pooling_type != LLAMA_POOLING_TYPE_MEAN_CUMULATIVE) {
+        embd_seq.clear();
+    }
     output_swaps.clear();
 
     sched_reserve();
@@ -1921,6 +2059,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
             switch (cparams.pooling_type) {
                 case LLAMA_POOLING_TYPE_NONE:
+                case LLAMA_POOLING_TYPE_MEAN_CUMULATIVE:
                     {
                         // extract token embeddings
                         GGML_ASSERT(embd.data != nullptr);
@@ -2059,6 +2198,16 @@ int llama_context::decode(const llama_batch & batch_inp) {
             for (uint32_t i = 0; i < n_outputs; ++i) {
                 output_ids[out_ids[i]] = i;
             }
+        }
+    }
+
+    if (cparams.pooling_type == LLAMA_POOLING_TYPE_MEAN_CUMULATIVE) {
+        // The backend copies above are asynchronous. Wait once, after every
+        // ubatch has succeeded, then update the accumulator transactionally.
+        synchronize();
+        if (!accumulate_cumulative_pooling(balloc->get_batch())) {
+            LLAMA_LOG_ERROR("%s: failed to update cumulative mean pooling state\n", __func__);
+            return -3;
         }
     }
 
@@ -2327,6 +2476,91 @@ void llama_context::output_reorder() {
     }
 
     output_swaps.clear();
+}
+
+bool llama_context::accumulate_cumulative_pooling(const llama_batch & batch) {
+    if (cparams.pooling_type != LLAMA_POOLING_TYPE_MEAN_CUMULATIVE
+        || !embd.has_data()
+        || batch.n_tokens <= 0
+        || static_cast<uint32_t>(batch.n_tokens) != n_outputs) {
+        return false;
+    }
+
+    const size_t dimension = model.hparams.n_embd_out();
+    std::map<llama_seq_id, cumulative_pooling_state> pending;
+
+    const auto pending_state = [&](llama_seq_id seq_id) -> cumulative_pooling_state * {
+        auto it = pending.find(seq_id);
+        if (it != pending.end()) {
+            return &it->second;
+        }
+
+        const auto existing = embd_seq_cumulative.find(seq_id);
+        cumulative_pooling_state state;
+        if (existing != embd_seq_cumulative.end()) {
+            state = existing->second;
+        } else {
+            state.sum.assign(dimension, 0.0f);
+        }
+        if (state.sum.size() != dimension) {
+            return nullptr;
+        }
+        return &pending.emplace(seq_id, std::move(state)).first->second;
+    };
+
+    for (int32_t token = 0; token < batch.n_tokens; ++token) {
+        const int32_t row = output_ids[token];
+        if (row < 0 || static_cast<uint32_t>(row) >= n_outputs) {
+            return false;
+        }
+        const float * embedding = embd.data + static_cast<size_t>(row) * dimension;
+        for (size_t component = 0; component < dimension; ++component) {
+            if (!std::isfinite(embedding[component])) {
+                return false;
+            }
+        }
+
+        const int32_t n_seq_id = batch.n_seq_id ? batch.n_seq_id[token] : 1;
+        for (int32_t s = 0; s < n_seq_id; ++s) {
+            const llama_seq_id seq_id = batch.seq_id ? batch.seq_id[token][s] : 0;
+            if (seq_id < 0
+                || seq_id >= static_cast<llama_seq_id>(
+                    cparams.kv_unified ? LLAMA_MAX_SEQ : cparams.n_seq_max)) {
+                return false;
+            }
+
+            cumulative_pooling_state * state = pending_state(seq_id);
+            if (state == nullptr || state->count == std::numeric_limits<uint64_t>::max()) {
+                return false;
+            }
+            for (size_t component = 0; component < dimension; ++component) {
+                state->sum[component] += embedding[component];
+                if (!std::isfinite(state->sum[component])) {
+                    return false;
+                }
+            }
+            ++state->count;
+        }
+    }
+
+    // Commit only after every output row and sequence membership validates.
+    for (auto & [seq_id, state] : pending) {
+        if (state.count == 0) {
+            return false;
+        }
+
+        std::vector<float> mean(dimension);
+        for (size_t component = 0; component < dimension; ++component) {
+            mean[component] = state.sum[component] / static_cast<float>(state.count);
+            if (!std::isfinite(mean[component])) {
+                return false;
+            }
+        }
+        embd_seq_cumulative[seq_id] = std::move(state);
+        embd_seq[seq_id] = std::move(mean);
+    }
+
+    return true;
 }
 
 //
@@ -3713,6 +3947,43 @@ float * llama_get_embeddings_seq(llama_context * ctx, llama_seq_id seq_id) {
     ctx->synchronize();
 
     return ctx->get_embeddings_seq(seq_id);
+}
+
+uint64_t llama_pooling_seq_get_count(llama_context * ctx, llama_seq_id seq_id) {
+    ctx->synchronize();
+
+    return ctx->pooling_seq_get_count(seq_id);
+}
+
+size_t llama_pooling_seq_get_size(llama_context * ctx, llama_seq_id seq_id) {
+    ctx->synchronize();
+
+    return ctx->pooling_seq_get_size(seq_id);
+}
+
+size_t llama_pooling_seq_get_data(
+        llama_context * ctx,
+        uint8_t * dst,
+        size_t size,
+        llama_seq_id seq_id) {
+    ctx->synchronize();
+
+    return ctx->pooling_seq_get_data(seq_id, dst, size);
+}
+
+size_t llama_pooling_seq_set_data(
+        llama_context * ctx,
+        const uint8_t * src,
+        size_t size,
+        llama_seq_id seq_id) {
+    ctx->synchronize();
+
+    return ctx->pooling_seq_set_data(seq_id, src, size);
+}
+
+void llama_pooling_seq_rm(llama_context * ctx, llama_seq_id seq_id) {
+    ctx->synchronize();
+    ctx->pooling_seq_rm(seq_id);
 }
 
 void llama_set_embeddings_nextn(llama_context * ctx, bool value, bool masked) {

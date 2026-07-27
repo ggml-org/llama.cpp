@@ -84,6 +84,11 @@ struct llama_context {
     float * get_embeddings();
     float * get_embeddings_ith(int32_t i);
     float * get_embeddings_seq(llama_seq_id seq_id);
+    uint64_t pooling_seq_get_count(llama_seq_id seq_id) const;
+    size_t pooling_seq_get_size(llama_seq_id seq_id) const;
+    size_t pooling_seq_get_data(llama_seq_id seq_id, uint8_t * dst, size_t size) const;
+    size_t pooling_seq_set_data(llama_seq_id seq_id, const uint8_t * src, size_t size);
+    void pooling_seq_rm(llama_seq_id seq_id);
 
     float * get_embeddings_nextn();
     float * get_embeddings_nextn_ith(int32_t i);
@@ -230,6 +235,8 @@ private:
     // map the output row index `i` to batch index
     int64_t output_resolve_row(int32_t i) const;
 
+    bool accumulate_cumulative_pooling(const llama_batch & batch);
+
     // async-copy enabled layer-input tensors (per cparams.output_layer_inp)
     // from backend into host-side embd_layer_inp buffers
     void extract_layer_inputs(const llm_graph_result * res, size_t token_offset, size_t n_tokens);
@@ -292,7 +299,7 @@ private:
     buffer_view<float> logits = {nullptr, 0};
 
     // embeddings output (2-dimensional array: [n_outputs][n_embd])
-    // populated only when pooling_type == LLAMA_POOLING_TYPE_NONE
+    // populated for per-token and cumulative-mean pooling
     buffer_view<float> embd = {nullptr, 0};
 
     // hidden state required by the nextn layers (2-dimensional array: [n_outputs][n_embd])
@@ -326,6 +333,15 @@ private:
     // sequence embeddings output (map of [n_embd] vectors)
     // populated only when pooling_type != LLAMA_POOLING_TYPE_NONE
     std::map<llama_seq_id, std::vector<float>> embd_seq;
+
+    struct cumulative_pooling_state {
+        uint64_t count = 0;
+        std::vector<float> sum;
+    };
+
+    // Exact FP32 sum/count, retained across decode calls only for
+    // LLAMA_POOLING_TYPE_MEAN_CUMULATIVE.
+    std::map<llama_seq_id, cumulative_pooling_state> embd_seq_cumulative;
 
     // reuse the batch_allocr to avoid unnecessary memory allocations
     std::unique_ptr<llama_batch_allocr> balloc;

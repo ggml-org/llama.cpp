@@ -2183,11 +2183,12 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_sampling().set_env("LLAMA_ARG_BACKEND_SAMPLING"));
     add_opt(common_arg(
-        {"--pooling"}, "{none,mean,cls,last,rank}",
+        {"--pooling"}, "{none,mean,mean-cumulative,cls,last,rank}",
         "pooling type for embeddings, use model default if unspecified",
         [](common_params & params, const std::string & value) {
             /**/ if (value == "none") { params.pooling_type = LLAMA_POOLING_TYPE_NONE; }
             else if (value == "mean") { params.pooling_type = LLAMA_POOLING_TYPE_MEAN; }
+            else if (value == "mean-cumulative") { params.pooling_type = LLAMA_POOLING_TYPE_MEAN_CUMULATIVE; }
             else if (value == "cls")  { params.pooling_type = LLAMA_POOLING_TYPE_CLS;  }
             else if (value == "last") { params.pooling_type = LLAMA_POOLING_TYPE_LAST; }
             else if (value == "rank") { params.pooling_type = LLAMA_POOLING_TYPE_RANK; }

@@ -278,6 +278,10 @@ set_tests_properties(test-state-restore-fragmented PROPERTIES FIXTURES_REQUIRED 
 llama_build_and_test(test-save-load-state.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
 set_tests_properties(test-save-load-state PROPERTIES FIXTURES_REQUIRED test-download-model)
 
+# Exact FP32 cumulative mean pooling and opaque pooling-state checkpoints.
+llama_build_and_test(test-cumulative-pooling.cpp LABEL "model" ARGS "${MODEL_DEST}")
+set_tests_properties(test-cumulative-pooling PROPERTIES FIXTURES_REQUIRED test-download-model)
+
 if (NOT GGML_BACKEND_DL)
     # these tests use the backends directly and cannot be built with dynamic loading
     llama_build_and_test(test-barrier.cpp)

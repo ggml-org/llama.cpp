@@ -179,6 +179,9 @@ extern "C" {
         LLAMA_POOLING_TYPE_CLS  = 2,
         LLAMA_POOLING_TYPE_LAST = 3,
         LLAMA_POOLING_TYPE_RANK = 4, // used by reranking models to attach the classification head to the graph
+        // Exact FP32 mean over all token embeddings decoded for each sequence.
+        // Unlike MEAN, the accumulator persists across llama_decode() calls.
+        LLAMA_POOLING_TYPE_MEAN_CUMULATIVE = 5,
     };
 
     enum llama_attention_type {
@@ -1046,6 +1049,46 @@ extern "C" {
     // when pooling_type == LLAMA_POOLING_TYPE_RANK, returns float[n_cls_out] with the rank(s) of the sequence
     // otherwise: float[n_embd] (1-dimensional)
     LLAMA_API float * llama_get_embeddings_seq(struct llama_context * ctx, llama_seq_id seq_id);
+
+    // Cumulative pooling state API.
+    //
+    // These functions operate only when pooling_type is
+    // LLAMA_POOLING_TYPE_MEAN_CUMULATIVE. The state is independent from the
+    // model memory state: callers that roll back, copy, or remove model memory
+    // must perform the corresponding pooling-state operation.
+    //
+    // Get the number of token embeddings accumulated for a sequence.
+    // Returns 0 when no cumulative state exists.
+    LLAMA_API uint64_t llama_pooling_seq_get_count(
+            struct llama_context * ctx,
+                    llama_seq_id   seq_id);
+
+    // Get the exact size needed to snapshot cumulative pooling state.
+    // Returns 0 when no cumulative state exists or cumulative pooling is off.
+    LLAMA_API size_t llama_pooling_seq_get_size(
+            struct llama_context * ctx,
+                    llama_seq_id   seq_id);
+
+    // Copy opaque cumulative pooling state into dst.
+    // Returns the bytes written, or 0 on failure.
+    LLAMA_API size_t llama_pooling_seq_get_data(
+            struct llama_context * ctx,
+                         uint8_t * dst,
+                          size_t   size,
+                    llama_seq_id   seq_id);
+
+    // Restore opaque cumulative pooling state into dest_seq_id.
+    // Returns the bytes consumed, or 0 on failure.
+    LLAMA_API size_t llama_pooling_seq_set_data(
+            struct llama_context * ctx,
+                   const uint8_t * src,
+                          size_t   size,
+                    llama_seq_id   dest_seq_id);
+
+    // Remove cumulative pooling state for a sequence.
+    LLAMA_API void llama_pooling_seq_rm(
+            struct llama_context * ctx,
+                    llama_seq_id   seq_id);
 
     //
     // backend sampling API [EXPERIMENTAL]
