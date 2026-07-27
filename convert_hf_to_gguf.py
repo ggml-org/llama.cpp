@@ -184,7 +184,10 @@ def main() -> None:
     if args.remote:
         hf_repo_id = args.model
         from huggingface_hub import snapshot_download
-        # "*.model" covers tokenizer.model and tiktoken.model; "*.py" is needed\n        # because several converters call AutoTokenizer with trust_remote_code=True,\n        # which resolves tokenizer code from the model directory.\n        allowed_patterns = ["LICENSE", "*.json", "*.md", "*.txt", "*.model", "*.py"]
+        # "*.model" covers tokenizer.model and tiktoken.model; "*.py" is needed
+        # because several converters call AutoTokenizer with trust_remote_code=True,
+        # which resolves tokenizer code from the model directory.
+        allowed_patterns = ["LICENSE", "*.json", "*.md", "*.txt", "*.model", "*.py"]
         if args.sentence_transformers_dense_modules:
             # include sentence-transformers dense modules safetensors files
             allowed_patterns.append("*.safetensors")
