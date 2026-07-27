@@ -21,7 +21,11 @@ export const API_TOOLS = {
 	EXECUTE: '/tools'
 };
 
-// resumable stream routes, the conv::model identity is appended as a path segment
+// resumable stream routes, the conv::model identity travels as the conv_id query param
+// because model names can contain slashes that a path segment cannot carry
+// resume retry cadence while the owning model is still loading (server answers 503)
+export const STREAM_RESUME_RETRY_MS = 2000;
+
 export const API_STREAM = {
 	BASE: './v1/stream',
 	LOOKUP: './v1/streams/lookup'

@@ -272,10 +272,8 @@ int llama_server(common_params & params, int argc, char ** argv) {
     ctx_http.get ("/slots",                    ex_wrapper(routes.get_slots));
     ctx_http.post("/slots/:id_slot",           ex_wrapper(routes.post_slots));
 
-    // resumable streaming, the conversation_id is the session identity end to end. router and
-    // child wire different handlers under the same paths: a child binds the local session
-    // factories, the router binds proxies that resolve the owning child through the
-    // conv_id -> model map
+    // resumable streaming: a child binds the local session factories, the router binds
+    // proxies that resolve the owning child, see server-stream.h
     server_http_context::handler_t stream_get_h;
     server_http_context::handler_t streams_lookup_h;
     server_http_context::handler_t stream_delete_h;
@@ -288,12 +286,9 @@ int llama_server(common_params & params, int argc, char ** argv) {
         streams_lookup_h = server_stream_make_lookup_handler();
         stream_delete_h  = server_stream_make_delete_handler();
     }
-    ctx_http.get ("/v1/stream/:conv_id",       ex_wrapper(stream_get_h));
-    // POST /v1/streams/lookup with body {"conversation_ids": [...]}. you can only ask for ids
-    // you already own (the WebUI passes the convs visible in its sidebar). the server never
-    // lists ids it has not been asked about, so a random caller cannot enumerate live sessions
+    ctx_http.get ("/v1/stream",                ex_wrapper(stream_get_h));
     ctx_http.post("/v1/streams/lookup",        ex_wrapper(streams_lookup_h));
-    ctx_http.del ("/v1/stream/:conv_id",       ex_wrapper(stream_delete_h));
+    ctx_http.del ("/v1/stream",                ex_wrapper(stream_delete_h));
 
     // Google Cloud Platform (Vertex AI) compat
     ctx_http.register_gcp_compat();
