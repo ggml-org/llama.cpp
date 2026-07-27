@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import {
 		CircleAlert,
 		Heart,
@@ -121,7 +122,7 @@
 
 		{#if isLoading}
 			<div class="flex w-4 items-center justify-center [@media(pointer:coarse)]:w-5">
-				<Loader2 class="h-4 w-4 animate-spin text-muted-foreground" />
+				<Loader2 class="{ICON_CLASS_DEFAULT} animate-spin text-muted-foreground" />
 			</div>
 		{:else if isFailed}
 			<div class="flex w-4 items-center justify-center [@media(pointer:coarse)]:w-auto">

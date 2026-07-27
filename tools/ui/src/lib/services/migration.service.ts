@@ -28,7 +28,7 @@ import {
 	NEW_TO_DEPRECATED_MAP
 } from '$lib/constants';
 import { LEGACY_AGENTIC_REGEX, LEGACY_REASONING_TAGS } from '$lib/constants/agentic';
-import { SETTINGS_KEYS } from '$lib/constants/settings-registry';
+import { SETTINGS_KEYS } from '$lib/constants/settings-keys';
 import { MessageRole } from '$lib/enums';
 
 // Types
