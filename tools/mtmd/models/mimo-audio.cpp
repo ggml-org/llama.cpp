@@ -40,6 +40,7 @@ ggml_cgraph * clip_graph_mimo_audio::build() {
 
     // encoder_skip_layer_id=3 (1-indexed) -> capture output of layer index 2
     const int skip_capture_il = 2;
+    GGML_ASSERT(n_layer > skip_capture_il);
     ggml_tensor * skip_hidden = nullptr;
     opts.callback_layer_out = [&](ggml_tensor * layer_cur, int il) {
         if (il == skip_capture_il) {
