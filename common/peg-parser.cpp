@@ -3,10 +3,10 @@
 #include "common.h"
 #include "json-schema-to-grammar.h"
 #include "log.h"
+#include "trie.h"
 #include "unicode.h"
 
 #include <algorithm>
-#include <deque>
 #include <initializer_list>
 #include <map>
 #include <memory>
@@ -31,154 +31,6 @@ const char * common_peg_parse_result_type_name(common_peg_parse_result_type type
 static bool is_hex_digit(const char c) {
     return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
 }
-
-// Trie for matching multiple literals.
-// This is used in common_peg_until_parser and to build a GBNF exclusion grammar
-struct trie {
-    struct node {
-        std::map<uint32_t, size_t> children;  // Use uint32_t to store Unicode codepoints
-        bool is_word;
-    };
-
-    std::vector<node> nodes;
-
-    trie(const std::vector<std::string> & words) {
-      create_node(); // root node
-      for (const auto & w : words) {
-          insert(w);
-      }
-    }
-
-    enum match_result { NO_MATCH, PARTIAL_MATCH, COMPLETE_MATCH };
-
-    // Check if a delimiter starts at the given position
-    match_result check_at(std::string_view sv, size_t start_pos) const {
-        size_t current = 0; // Start at root
-        size_t pos = start_pos;
-
-        // LOG_DBG("%s: checking at pos %zu, sv='%s'\n", __func__, start_pos, std::string(sv).c_str());
-
-        while (pos < sv.size()) {
-            auto result = common_parse_utf8_codepoint(sv, pos);
-            if (result.status != utf8_parse_result::SUCCESS) {
-                break;
-            }
-
-            auto it = nodes[current].children.find(result.codepoint);
-            if (it == nodes[current].children.end()) {
-                // Can't continue matching
-                return match_result{match_result::NO_MATCH};
-            }
-
-            current = it->second;
-            pos += result.bytes_consumed;
-
-            // Check if we've matched a complete word
-            if (nodes[current].is_word) {
-                return match_result{match_result::COMPLETE_MATCH};
-            }
-        }
-
-        // Reached end of input while still in the trie (not at root)
-        if (current != 0) {
-            // We're in the middle of a potential match
-            return match_result{match_result::PARTIAL_MATCH};
-        }
-
-        // Reached end at root (no match)
-        return match_result{match_result::NO_MATCH};
-    }
-
-  private:
-    size_t create_node() {
-        size_t index = nodes.size();
-        nodes.emplace_back();
-        return index;
-    }
-
-    void insert(const std::string & word) {
-        size_t current = 0;
-        size_t pos     = 0;
-        while (pos < word.length()) {
-            auto result = common_parse_utf8_codepoint(word, pos);
-            if (result.status != utf8_parse_result::SUCCESS) {
-                break;
-            }
-
-            uint32_t ch = result.codepoint;
-            pos += result.bytes_consumed;
-
-            auto it = nodes[current].children.find(ch);
-            if (it == nodes[current].children.end()) {
-                size_t child = create_node();
-                nodes[current].children[ch] = child;
-                current = child;
-            } else {
-                current = it->second;
-            }
-        }
-        nodes[current].is_word = true;
-    }
-};
-
-// Aho-Corasick automaton
-struct aho_corasick {
-    trie                t;
-    std::vector<size_t> fail;      // failure links
-    std::vector<size_t> order;     // states in BFS order
-    std::vector<bool>   terminal;  // match states (directly or via a suffix link)
-    std::set<uint32_t>  alphabet;  // every character with a transition
-
-    aho_corasick(const std::vector<std::string> & strings) : t(strings) {
-        const auto & nodes = t.nodes;
-        const size_t n = nodes.size();
-
-        fail.assign(n, 0);
-        order.reserve(n);
-
-        std::deque<size_t> queue{ 0 };
-        while (!queue.empty()) {
-            size_t u = queue.front();
-            queue.pop_front();
-            order.push_back(u);
-            for (const auto & [ch, v] : nodes[u].children) {
-                if (u != 0) {
-                    size_t f = fail[u];
-                    while (f && nodes[f].children.find(ch) == nodes[f].children.end()) {
-                        f = fail[f];
-                    }
-                    auto it = nodes[f].children.find(ch);
-                    fail[v] = (it != nodes[f].children.end() && it->second != v) ? it->second : 0;
-                }
-                queue.push_back(v);
-            }
-        }
-
-        terminal.assign(n, false);
-        for (size_t u : order) {
-            terminal[u] = nodes[u].is_word || (u != 0 && terminal[fail[u]]);
-        }
-
-        for (const auto & node : nodes) {
-            for (const auto & [ch, v] : node.children) {
-                alphabet.insert(ch);
-            }
-        }
-    }
-
-    size_t num_states()          const { return t.nodes.size(); }
-    bool   is_terminal(size_t s) const { return terminal[s]; }
-
-    // follow failure links until a transition on `ch` exists.
-    size_t next(size_t state, uint32_t ch) const {
-        const auto & nodes = t.nodes;
-        while (state && nodes[state].children.find(ch) == nodes[state].children.end()) {
-            state = fail[state];
-        }
-        auto it = nodes[state].children.find(ch);
-        return it != nodes[state].children.end() ? it->second : 0;
-    }
-};
 
 static std::pair<uint32_t, size_t> parse_hex_escape(const std::string & str, size_t pos, int hex_count) {
     if (pos + hex_count > str.length()) {
@@ -797,7 +649,7 @@ struct parser_executor {
     }
 
     common_peg_parse_result operator()(const common_peg_until_parser & p) const {
-        trie matcher(p.delimiters);
+        common_trie matcher(p.delimiters);
 
         // Scan input and check for delimiters
         size_t pos = start_pos;
@@ -824,12 +676,12 @@ struct parser_executor {
             // Check if a delimiter starts at this position
             auto match = matcher.check_at(ctx.input, pos);
 
-            if (match == trie::COMPLETE_MATCH) {
+            if (match == common_trie::COMPLETE_MATCH) {
                 // Found a complete delimiter, return everything before it
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start_pos, pos);
             }
 
-            if (match == trie::PARTIAL_MATCH) {
+            if (match == common_trie::PARTIAL_MATCH) {
                 // Found a partial match extending to end of input, return everything before it
                 return common_peg_parse_result(COMMON_PEG_PARSE_RESULT_SUCCESS, start_pos, pos);
             }
@@ -1559,7 +1411,7 @@ static std::string gbnf_ac_grammar(
                                     const std::map<size_t, std::vector<uint32_t>> &,
                                     const std::vector<uint32_t> &,
                                     const std::function<std::string(size_t)> &)> & build_rule) {
-    aho_corasick ac(strings);
+    common_aho_corasick ac(strings);
 
     auto state_name = [&](size_t s) -> std::string {
         if (s == 0) {

@@ -266,7 +266,7 @@ static void dequantize_mul_mat_vec_q2_k(const void *__restrict__ vx,
 
     const int row = item_ct1.get_group(2) * item_ct1.get_local_range(1) +
                     item_ct1.get_local_id(1);
-    if (row > nrows) return;
+    if (row >= nrows) return;
 
     const int num_blocks_per_row = ncols / QK_K;
     const int ib0 = row*num_blocks_per_row;
@@ -387,7 +387,7 @@ static void dequantize_mul_mat_vec_q2_k_reorder(const void *__restrict__ vx,
 
     const int row = item_ct1.get_group(2) * item_ct1.get_local_range(1) +
                     item_ct1.get_local_id(1);
-    if (row > nrows) return;
+    if (row >= nrows) return;
 
     const int num_blocks_per_row = ncols / QK_K;
     const int ib0 = row*num_blocks_per_row;
@@ -483,7 +483,7 @@ static void dequantize_mul_mat_vec_q3_k(const void *__restrict__ vx,
 
     const int row = item_ct1.get_group(2) * item_ct1.get_local_range(1) +
                     item_ct1.get_local_id(1);
-    if (row > nrows) return;
+    if (row >= nrows) return;
 
     const int num_blocks_per_row = ncols / QK_K;
     const int ib0 = row*num_blocks_per_row;
@@ -595,7 +595,7 @@ static void dequantize_mul_mat_vec_q3_k_reorder(const void *__restrict__ vx,
 
     const int row = item_ct1.get_group(2) * item_ct1.get_local_range(1) +
                     item_ct1.get_local_id(1);
-    if (row > nrows) return;
+    if (row >= nrows) return;
 
     const int num_blocks_per_row = ncols / QK_K;
     const int ib0 = row*num_blocks_per_row;
@@ -693,7 +693,7 @@ static void dequantize_mul_mat_vec_q4_k(const void *__restrict__ vx,
 
     const int row = item_ct1.get_group(2) * item_ct1.get_local_range(1) +
                     item_ct1.get_local_id(1);
-    if (row > nrows) return;
+    if (row >= nrows) return;
     const int num_blocks_per_row = ncols / QK_K;
     const int ib0 = row*num_blocks_per_row;
 
@@ -841,7 +841,7 @@ static void dequantize_mul_mat_vec_q4_k_reorder(const void *__restrict__ vx,
 
     const int row = item_ct1.get_group(2) * item_ct1.get_local_range(1) +
                     item_ct1.get_local_id(1);
-    if (row > nrows) return;
+    if (row >= nrows) return;
     const int num_blocks_per_row = ncols / QK_K;
     const int ib0 = row*num_blocks_per_row;
 
@@ -994,10 +994,12 @@ static void dequantize_mul_mat_vec_q4_k_reorder(const void *__restrict__ vx,
 static void dequantize_mul_mat_vec_q5_k(const void *__restrict__ vx,
                                         const float *__restrict__ yy,
                                         float *__restrict__ dst,
-                                        const int ncols,
+                                        const int ncols, int nrows,
                                         const sycl::nd_item<3> &item_ct1) {
 
-    const int row = item_ct1.get_group(2);
+    const int row = item_ct1.get_group(2) * item_ct1.get_local_range(1) +
+                    item_ct1.get_local_id(1);
+    if (row >= nrows) return;
     const int num_blocks_per_row = ncols / QK_K;
     const int ib0 = row*num_blocks_per_row;
 
@@ -1126,7 +1128,9 @@ static void dequantize_mul_mat_vec_q5_k_reorder(const void *__restrict__ vx,
                                                 const int ncols, int nrows,
                                                 const sycl::nd_item<3> &item_ct1) {
 
-    const int row = item_ct1.get_group(2);
+    const int row = item_ct1.get_group(2) * item_ct1.get_local_range(1) +
+                    item_ct1.get_local_id(1);
+    if (row >= nrows) return;
     const int num_blocks_per_row = ncols / QK_K;
     const int ib0 = row*num_blocks_per_row;
 
@@ -1148,19 +1152,13 @@ static void dequantize_mul_mat_vec_q5_k_reorder(const void *__restrict__ vx,
     const int tid = item_ct1.get_local_id(2) / 2; // 0...15
     const int ix = item_ct1.get_local_id(2) % 2;
 
-    const int il  = tid/4;     // 0...3
-    const int ir  = tid - 4*il;// 0...3
+    const int il_base = tid/4;      // 0...3
+    const int ir  = tid - 4*il_base;// 0...3
     const int n   = 2;
 
-    const int im = il/2;  // 0 or 1. 0 computes 0,32 + 128,160, 1 computes 64,96 + 192,224
-    const int in = il%2;
+    const int in = il_base%2;
 
     const int l0 = n*(2*ir + in);
-    const int q_offset = 32*im + l0;
-    const int y_offset = 64*im + l0;
-
-    const uint8_t hm1  = 1 << (2*im);
-    const uint8_t hm2  = hm1 << 4;
 
     uint16_t aux[4];
     const uint8_t * sc = (const uint8_t *)aux;
@@ -1171,52 +1169,60 @@ static void dequantize_mul_mat_vec_q5_k_reorder(const void *__restrict__ vx,
     for (int i = ix; i < num_blocks_per_row; i += 2) {
         const int bi = ib0 + i;
 
-        const uint8_t * ql1 = qs_base + bi * (QK_K / 2) + q_offset;
         const uint8_t * qh  = qh_base + bi * (QK_K / 8) + l0;
-        const float   * y1  = yy + i*QK_K + y_offset;
-        const float   * y2  = y1 + 128;
-
         const sycl::half2 dm_val = dm_base[bi];
         const float dall = dm_val[0];
         const float dmin = dm_val[1];
 
-        const uint16_t * a = (const uint16_t *)(scales_base + bi * K_SCALE_SIZE);
-        aux[0] = a[im+0] & kmask1;
-        aux[1] = a[im+2] & kmask1;
-        aux[2] = ((a[im+4] >> 0) & kmask2) | ((a[im+0] & kmask3) >> 2);
-        aux[3] = ((a[im+4] >> 4) & kmask2) | ((a[im+2] & kmask3) >> 2);
+        for (int im = 0; im < 2; ++im) {
+            const int q_offset = 32*im + l0;
+            const int y_offset = 64*im + l0;
 
-        sycl::float4 sum = {0.f, 0.f, 0.f, 0.f};
-        float smin = 0;
-        const uint16_t * q1 = (const uint16_t *)ql1;
-        const uint16_t * q2 = q1 + 32;
-        q16[0] = q1[0] & 0x0f0f;
-        q16[1] = q1[8] & 0x0f0f;
-        q16[2] = (q1[0] >> 4) & 0x0f0f;
-        q16[3] = (q1[8] >> 4) & 0x0f0f;
-        q16[4] = q2[0] & 0x0f0f;
-        q16[5] = q2[8] & 0x0f0f;
-        q16[6] = (q2[0] >> 4) & 0x0f0f;
-        q16[7] = (q2[8] >> 4) & 0x0f0f;
-        for (int l = 0; l < n; ++l) {
-            sum.x() +=
-                y1[l + 0] * (q4[l + 0] + (qh[l + 0] & (hm1 << 0) ? 16 : 0)) +
-                y1[l + 16] * (q4[l + 2] + (qh[l + 16] & (hm1 << 0) ? 16 : 0));
-            sum.y() +=
-                y1[l + 32] * (q4[l + 4] + (qh[l + 0] & (hm1 << 1) ? 16 : 0)) +
-                y1[l + 48] * (q4[l + 6] + (qh[l + 16] & (hm1 << 1) ? 16 : 0));
-            sum.z() +=
-                y2[l + 0] * (q4[l + 8] + (qh[l + 0] & (hm2 << 0) ? 16 : 0)) +
-                y2[l + 16] * (q4[l + 10] + (qh[l + 16] & (hm2 << 0) ? 16 : 0));
-            sum.w() +=
-                y2[l + 32] * (q4[l + 12] + (qh[l + 0] & (hm2 << 1) ? 16 : 0)) +
-                y2[l + 48] * (q4[l + 14] + (qh[l + 16] & (hm2 << 1) ? 16 : 0));
-            smin += (y1[l] + y1[l+16]) * sc[2] + (y1[l+32] + y1[l+48]) * sc[3]
-                  + (y2[l] + y2[l+16]) * sc[6] + (y2[l+32] + y2[l+48]) * sc[7];
+            const uint8_t hm1  = 1 << (2*im);
+            const uint8_t hm2  = hm1 << 4;
+
+            const uint8_t * ql1 = qs_base + bi * (QK_K / 2) + q_offset;
+            const float   * y1  = yy + i*QK_K + y_offset;
+            const float   * y2  = y1 + 128;
+
+            const uint16_t * a = (const uint16_t *)(scales_base + bi * K_SCALE_SIZE);
+            aux[0] = a[im+0] & kmask1;
+            aux[1] = a[im+2] & kmask1;
+            aux[2] = ((a[im+4] >> 0) & kmask2) | ((a[im+0] & kmask3) >> 2);
+            aux[3] = ((a[im+4] >> 4) & kmask2) | ((a[im+2] & kmask3) >> 2);
+
+            sycl::float4 sum = {0.f, 0.f, 0.f, 0.f};
+            float smin = 0;
+            const uint16_t * q1 = (const uint16_t *)ql1;
+            const uint16_t * q2 = q1 + 32;
+            q16[0] = q1[0] & 0x0f0f;
+            q16[1] = q1[8] & 0x0f0f;
+            q16[2] = (q1[0] >> 4) & 0x0f0f;
+            q16[3] = (q1[8] >> 4) & 0x0f0f;
+            q16[4] = q2[0] & 0x0f0f;
+            q16[5] = q2[8] & 0x0f0f;
+            q16[6] = (q2[0] >> 4) & 0x0f0f;
+            q16[7] = (q2[8] >> 4) & 0x0f0f;
+            for (int l = 0; l < n; ++l) {
+                sum.x() +=
+                    y1[l + 0] * (q4[l + 0] + (qh[l + 0] & (hm1 << 0) ? 16 : 0)) +
+                    y1[l + 16] * (q4[l + 2] + (qh[l + 16] & (hm1 << 0) ? 16 : 0));
+                sum.y() +=
+                    y1[l + 32] * (q4[l + 4] + (qh[l + 0] & (hm1 << 1) ? 16 : 0)) +
+                    y1[l + 48] * (q4[l + 6] + (qh[l + 16] & (hm1 << 1) ? 16 : 0));
+                sum.z() +=
+                    y2[l + 0] * (q4[l + 8] + (qh[l + 0] & (hm2 << 0) ? 16 : 0)) +
+                    y2[l + 16] * (q4[l + 10] + (qh[l + 16] & (hm2 << 0) ? 16 : 0));
+                sum.w() +=
+                    y2[l + 32] * (q4[l + 12] + (qh[l + 0] & (hm2 << 1) ? 16 : 0)) +
+                    y2[l + 48] * (q4[l + 14] + (qh[l + 16] & (hm2 << 1) ? 16 : 0));
+                smin += (y1[l] + y1[l+16]) * sc[2] + (y1[l+32] + y1[l+48]) * sc[3]
+                      + (y2[l] + y2[l+16]) * sc[6] + (y2[l+32] + y2[l+48]) * sc[7];
+            }
+            tmp += dall * (sum.x() * sc[0] + sum.y() * sc[1] + sum.z() * sc[4] +
+                           sum.w() * sc[5]) -
+                   dmin * smin;
         }
-        tmp += dall * (sum.x() * sc[0] + sum.y() * sc[1] + sum.z() * sc[4] +
-                       sum.w() * sc[5]) -
-               dmin * smin;
     }
 #else
     // The reordered Q5_K layout is only produced for QK_K == 256.
@@ -1241,7 +1247,7 @@ static void dequantize_mul_mat_vec_q6_k(const void * __restrict__ vx, const floa
 
     const int row = item_ct1.get_group(2) * item_ct1.get_local_range(1) +
                     item_ct1.get_local_id(1);
-    if (row > nrows) return;
+    if (row >= nrows) return;
 
     const int num_blocks_per_row = ncols / QK_K;
     const int ib0 = row*num_blocks_per_row;
@@ -1358,7 +1364,7 @@ static void dequantize_mul_mat_vec_q6_k_reorder(const void * __restrict__ vx, co
 
     const int row = item_ct1.get_group(2) * item_ct1.get_local_range(1) +
                     item_ct1.get_local_id(1);
-    if (row > nrows) return;
+    if (row >= nrows) return;
 
     const int num_blocks_per_row = ncols / QK_K;
     const int ib0 = row*num_blocks_per_row;
@@ -1831,11 +1837,14 @@ static void dequantize_mul_mat_vec_q5_K_sycl(const void *vx, const float *y,
                                              const int nrows,
                                              dpct::queue_ptr stream) {
     GGML_ASSERT(ncols % QK_K == 0);
-    const sycl::range<3> block_dims(1, 1, WARP_SIZE);
+    const int ny = 2 / K_QUANTS_PER_ITERATION;
+    const int block_num_y = (nrows + ny - 1) / ny;
+    const sycl::range<3> block_nums(1, 1, block_num_y);
+    const sycl::range<3> block_dims(1, ny, WARP_SIZE);
     stream->parallel_for(
-        sycl::nd_range<3>(sycl::range<3>(1, 1, nrows) * block_dims, block_dims),
+        sycl::nd_range<3>(block_nums * block_dims, block_dims),
         [=](sycl::nd_item<3> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-            dequantize_mul_mat_vec_q5_k(vx, y, dst, ncols, item_ct1);
+            dequantize_mul_mat_vec_q5_k(vx, y, dst, ncols, nrows, item_ct1);
         });
 }
 

@@ -1,4 +1,10 @@
 export const AUTO_SCROLL_INTERVAL = 100;
+// Conversation landing: the page keeps growing after the first bottom pin
+// without DOM mutations (content-visibility size realizations, syntax
+// highlight passes), so the pin repeats every frame until the height holds
+// for this many consecutive frames, bounded by the time cap below.
+export const LANDING_STABLE_FRAMES = 10;
+export const LANDING_SETTLE_MAX_MS = 1000;
 // Chat main view: tight threshold because scroll-here events come from
 // discrete assistant-message appends.
 export const AUTO_SCROLL_AT_BOTTOM_THRESHOLD = 10;

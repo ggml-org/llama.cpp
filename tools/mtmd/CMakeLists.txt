@@ -1,7 +1,14 @@
 # mtmd
 
-set(MTMD_VIDEO ON CACHE BOOL "enable video support in mtmd (requires ffmpeg binary in PATH)")
+set(MTMD_VIDEO_HELP "enable video support in mtmd (requires ffmpeg binary in PATH)")
+
+set(MTMD_VIDEO ON CACHE BOOL "${MTMD_VIDEO_HELP}")
 # TODO: add MTMD_VIDEO_METHOD in the future to select between ffmpeg and other backends
+
+if (MTMD_VIDEO AND NOT LLAMA_SUBPROCESS)
+    message(STATUS "Disabling MTMD_VIDEO because LLAMA_SUBPROCESS is OFF")
+    set(MTMD_VIDEO OFF CACHE BOOL "${MTMD_VIDEO_HELP}" FORCE)
+endif()
 
 find_package(Threads REQUIRED)
 
@@ -40,6 +47,7 @@ add_library(mtmd
             models/paddleocr.cpp
             models/pixtral.cpp
             models/qwen2vl.cpp
+            models/minimax-m3.cpp
             models/qwen3vl.cpp
             models/mimovl.cpp
             models/qwen3a.cpp

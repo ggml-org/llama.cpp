@@ -37,9 +37,9 @@
 
 <Dialog.Root bind:open>
 	<Dialog.Portal>
-		<Dialog.Overlay class="z-[1000000]" />
+		<Dialog.Overlay class="z-1000000" />
 
-		<Dialog.Content class="z-[1000001] max-w-2xl">
+		<Dialog.Content class="z-1000001 max-w-2xl">
 			<Dialog.Header>
 				<Dialog.Title>
 					Select Conversations to {mode === 'export' ? 'Export' : 'Import'}
@@ -58,6 +58,7 @@
 
 			<ConversationSelection
 				bind:this={conversationSelectionRef}
+				isOpen={open}
 				{conversations}
 				{messageCountMap}
 				{mode}

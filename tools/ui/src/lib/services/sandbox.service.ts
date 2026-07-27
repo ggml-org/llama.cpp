@@ -7,8 +7,31 @@ import {
 	SANDBOX_TOOL_NAME,
 	SANDBOX_TRUNCATION_NOTICE
 } from '$lib/constants';
-import { SANDBOX_HARNESS_HTML } from './sandbox-harness';
+import { buildSandboxHarness } from './sandbox-harness';
+import { config } from '$lib/stores/settings.svelte';
 import type { ToolExecutionResult } from '$lib/types';
+
+/** Cached harnesses keyed by whether nerdamer is included. */
+const harnessCache: Record<string, string> = {};
+
+/**
+ * Build the sandbox harness. When symbolic math is enabled, loads the
+ * nerdamer prelude lazily; otherwise builds a plain harness with an empty
+ * prelude. Cached per variant so toggling the setting is instant.
+ */
+async function getHarness(): Promise<string> {
+	const enabled = !!config().symbolicMathEnabled;
+	const key = enabled ? 'nerdamer' : 'plain';
+	if (!harnessCache[key]) {
+		if (enabled) {
+			const { default: nerdamerJs } = await import('virtual:nerdamer');
+			harnessCache[key] = buildSandboxHarness(nerdamerJs);
+		} else {
+			harnessCache[key] = buildSandboxHarness('');
+		}
+	}
+	return harnessCache[key];
+}
 
 interface SandboxReply {
 	logs?: unknown;
@@ -45,19 +68,21 @@ export class SandboxService {
 	 * timeout or abort. Removing the iframe terminates the worker
 	 * at the browser level, so runaway code cannot outlive it.
 	 */
-	static executeTool(
+	static async executeTool(
 		toolName: string,
 		params: Record<string, unknown>,
 		signal?: AbortSignal
 	): Promise<ToolExecutionResult> {
 		if (toolName !== SANDBOX_TOOL_NAME) {
-			return Promise.resolve({ content: `Unknown frontend tool: ${toolName}`, isError: true });
+			return { content: `Unknown frontend tool: ${toolName}`, isError: true };
 		}
 
 		const code = typeof params.code === 'string' ? params.code : '';
 		if (!code) {
-			return Promise.resolve({ content: 'Missing required parameter: code', isError: true });
+			return { content: 'Missing required parameter: code', isError: true };
 		}
+
+		const harness = await getHarness();
 
 		const requested = Number(params.timeout_ms);
 		const timeoutMs =
@@ -69,7 +94,7 @@ export class SandboxService {
 			const iframe = document.createElement('iframe');
 			iframe.setAttribute('sandbox', 'allow-scripts');
 			iframe.style.display = 'none';
-			iframe.srcdoc = SANDBOX_HARNESS_HTML;
+			iframe.srcdoc = harness;
 
 			let settled = false;
 
