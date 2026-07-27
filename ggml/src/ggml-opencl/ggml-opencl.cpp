@@ -18366,9 +18366,11 @@ static void ggml_cl_mul_mat_q4_k_f32_adreno(ggml_backend_t backend, const ggml_t
         // so this is not a "the 850 is slow" adjustment that a faster part would fix --
         // the 840 is 13x cheaper per launch and still loses.
         //
-        // Enabled where it is measured to win, i.e. X2E. X1E is UNMEASURED and therefore
-        // excluded; widen once there is an X1-85 datapoint. The env still forces either
-        // way so every device stays measurable.
+        // Enabled where it is measured to win, i.e. X2E only. The X1-85 was measured
+        // afterwards and is NOT a win either: Qwen3.5-4B-Q4_K_M tg32, split-K off
+        // 17.98/18.10/18.19 vs on 18.03/17.91/17.97 = -0.7%, so X1E stays excluded on
+        // evidence rather than on absence of it. Do not widen this without a NEW
+        // measurement. The env still forces either way so every device stays measurable.
         static const bool splitk_env_set = []{
             const char * e = std::getenv("GGML_OPENCL_Q4K_GEMV_SPLITK");
             return e && e[0] != '\0';
