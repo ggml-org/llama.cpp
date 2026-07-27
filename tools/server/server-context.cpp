@@ -217,9 +217,13 @@ struct server_slot {
 
     server_prompt prompt;
 
-    bool prompt_save(server_prompt_cache & prompt_cache) const {
+    server_prompt_cache_state * prompt_save(
+            server_prompt_cache & prompt_cache,
+            const server_tokens * tokens_new = nullptr,
+            bool state_exact = false,
+            const server_prompt_cache_state * state_protected = nullptr) const {
         if (prompt.tokens.size() == 0) {
-            return false;
+            return nullptr;
         }
 
         const size_t cur_size_tgt =           llama_state_seq_get_size_ext(ctx_tgt, id, LLAMA_STATE_SEQ_FLAGS_NONE);
@@ -232,23 +236,46 @@ struct server_slot {
 
         auto * cur = prompt_cache.alloc(prompt, cur_size_tgt, cur_size_dft);
         if (cur == nullptr) {
-            return false;
+            return nullptr;
         }
 
-        llama_state_seq_get_data_ext(ctx_tgt, cur->data.main.data(), cur_size_tgt, id, LLAMA_STATE_SEQ_FLAGS_NONE);
+        const size_t n_tgt = llama_state_seq_get_data_ext(
+                ctx_tgt,
+                cur->data.main.data(),
+                cur_size_tgt,
+                id,
+                LLAMA_STATE_SEQ_FLAGS_NONE);
+        if (n_tgt != cur_size_tgt) {
+            SLT_ERR(*this, "failed to save main prompt state: expected %zu bytes, wrote %zu\n", cur_size_tgt, n_tgt);
+            prompt_cache.discard(cur);
+            return nullptr;
+        }
+
         if (ctx_dft) {
-            llama_state_seq_get_data_ext(ctx_dft, cur->data.drft.data(), cur_size_dft, id, LLAMA_STATE_SEQ_FLAGS_NONE);
+            const size_t n_dft = llama_state_seq_get_data_ext(
+                    ctx_dft,
+                    cur->data.drft.data(),
+                    cur_size_dft,
+                    id,
+                    LLAMA_STATE_SEQ_FLAGS_NONE);
+            if (n_dft != cur_size_dft) {
+                SLT_ERR(*this, "failed to save draft prompt state: expected %zu bytes, wrote %zu\n", cur_size_dft, n_dft);
+                prompt_cache.discard(cur);
+                return nullptr;
+            }
         }
 
-        return true;
+        if (!prompt_cache.finalize(cur, tokens_new, state_exact, state_protected)) {
+            return nullptr;
+        }
+
+        return cur;
     }
 
     bool prompt_load(
             server_prompt_cache & prompt_cache,
-            const server_tokens & tokens,
-            bool state_exact,
-            int64_t min_reuse_gain) {
-        bool res = prompt_cache.load(prompt, tokens, ctx_tgt, ctx_dft, id, state_exact, min_reuse_gain);
+            server_prompt_cache_state * state) {
+        bool res = prompt_cache.load(prompt, state, ctx_tgt, ctx_dft, id);
         if (!res) {
             SLT_WRN(*this, "%s", "failed to load prompt from cache\n");
         }
@@ -1619,21 +1646,51 @@ private:
         }
 
         if (ret) {
-            update_cache = update_cache && prompt_cache;
+            server_prompt_cache_state * state_selected = nullptr;
+            bool state_exact = false;
 
-            // cache prompts only for completion tasks
-            update_cache = update_cache && task.type == SERVER_TASK_TYPE_COMPLETION;
+            const bool can_update_cache =
+                    prompt_cache &&
+                    task.type == SERVER_TASK_TYPE_COMPLETION;
+
+            if (can_update_cache) {
+                state_exact = ctx_tgt_state_exact();
+                const int64_t min_reuse_gain = std::max<int64_t>(1, params_base.checkpoint_min_step / 2);
+                state_selected = prompt_cache->find_better(
+                        ret->prompt,
+                        task.tokens,
+                        state_exact,
+                        min_reuse_gain);
+
+                const int lcp_live = ret->prompt.tokens.get_common_prefix(task.tokens);
+                const bool extends_live =
+                        !ret->prompt.tokens.empty() &&
+                        lcp_live == ret->prompt.n_tokens();
+
+                // A direct append can continue in the live slot without a host
+                // round-trip. A better saved branch still requires a state swap.
+                update_cache = state_selected != nullptr || (update_cache && !extends_live);
+            } else {
+                update_cache = false;
+            }
 
             if (update_cache) {
                 SRV_TRC("%s", "updating prompt cache\n");
 
                 const int64_t t_start = ggml_time_us();
 
-                ret->prompt_save(*prompt_cache);
+                auto * state_saved = ret->prompt_save(
+                        *prompt_cache,
+                        &task.tokens,
+                        state_exact,
+                        state_selected);
 
-                const int64_t min_reuse_gain = std::max<int64_t>(1, params_base.checkpoint_min_step / 2);
-                if (!ret->prompt_load(*prompt_cache, task.tokens, ctx_tgt_state_exact(), min_reuse_gain)) {
-                    ret->prompt_clear();
+                if (!ret->prompt_load(*prompt_cache, state_selected)) {
+                    // The active state was serialized before the switch. Restore
+                    // it if the selected cache entry could not be loaded.
+                    if (state_saved == nullptr || !ret->prompt_load(*prompt_cache, state_saved)) {
+                        ret->prompt_clear();
+                    }
                 }
 
                 prompt_cache->update();

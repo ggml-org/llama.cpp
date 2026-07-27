@@ -656,16 +656,31 @@ struct server_prompt_cache {
 
     size_t n_tokens() const;
 
-    server_prompt_cache_state * alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_drft);
+    server_prompt_cache_state * find_better(
+            const server_prompt & prompt,
+            const server_tokens & tokens_new,
+            bool state_exact,
+            int64_t min_reuse_gain);
+
+    server_prompt_cache_state * alloc(
+            const server_prompt & prompt,
+            size_t state_size_main,
+            size_t state_size_drft);
+
+    bool finalize(
+            server_prompt_cache_state * state_new,
+            const server_tokens * tokens_new = nullptr,
+            bool state_exact = false,
+            const server_prompt_cache_state * state_protected = nullptr);
 
     bool load(
             server_prompt & prompt,
-            const server_tokens & tokens_new,
+            server_prompt_cache_state * state,
             llama_context * ctx_main,
             llama_context * ctx_drft,
-            int32_t id_slot,
-            bool state_exact,
-            int64_t min_reuse_gain);
+            int32_t id_slot);
+
+    void discard(server_prompt_cache_state * state);
 
     void update();
 };
