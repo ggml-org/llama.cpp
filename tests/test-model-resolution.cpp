@@ -24,6 +24,8 @@
 #include <cinttypes>
 #include <climits>
 #include <cstdarg>
+#include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <future>
@@ -39,9 +41,13 @@
 
 #include "http.h"
 
-#include <cassert>
-
-#undef NDEBUG
+// independent of NDEBUG, so the checks stay alive in Release builds
+#define REQUIRE(x) do {                                                       \
+    if (!(x)) {                                                               \
+        fprintf(stderr, "%s:%d: REQUIRE(%s) failed\n", __FILE__, __LINE__, #x); \
+        std::abort();                                                         \
+    }                                                                         \
+} while (0)
 
 // download.h is pre-included above, so its declarations stay global; rename
 // every function it declares for the whole TU, otherwise ADL on their global
@@ -58,15 +64,18 @@
 
 namespace dl_test {
 
-// the listing served by the monkey patched hf_cache below
-static ::hf_cache::hf_files g_files;
+// the listings served by the monkey patched hf_cache below, keyed by repo id,
+// so common_models_handler_init resolves its main, draft and vocoder plans
+// exactly as in production
+static std::map<std::string, ::hf_cache::hf_files> g_repos;
 
 namespace hf_cache {
     using ::hf_cache::hf_file;
     using ::hf_cache::hf_files;
 
-    static hf_files get_repo_files(const std::string & /*repo_id*/, const std::string & /*token*/) {
-        return g_files;
+    static hf_files get_repo_files(const std::string & repo_id, const std::string & /*token*/) {
+        auto it = g_repos.find(repo_id);
+        return it != g_repos.end() ? it->second : hf_files{};
     }
 
     static hf_files get_cached_files(const std::string & /*repo_id*/ = {}) {
@@ -92,14 +101,14 @@ int common_download_file_single(const std::string & url, const std::string & pat
 } // namespace dl_test
 
 // build a synthetic listing from repo-relative paths
-static hf_cache::hf_files repo(const std::vector<std::string> & paths) {
+static hf_cache::hf_files repo(const std::string & repo_id, const std::vector<std::string> & paths) {
     hf_cache::hf_files files;
     for (const auto & p : paths) {
         hf_cache::hf_file f;
         f.path       = p;
-        f.url        = "https://hf.test/repo/resolve/main/" + p;
-        f.local_path = "/tmp/hf-test/" + p;
-        f.repo_id    = "test/repo";
+        f.url        = "https://hf.test/" + repo_id + "/resolve/main/" + p;
+        f.local_path = "/tmp/hf-test/" + repo_id + "/" + p;
+        f.repo_id    = repo_id;
         files.push_back(f);
     }
     return files;
@@ -170,6 +179,24 @@ static const std::vector<std::string> vendors = {
     "BlackSheep-24B.Q8_0.gguf",
 };
 
+// every speculative sidecar type at the same quant
+static const std::vector<std::string> trio = {
+    "model-Q8_0.gguf",
+    "mtp-model-Q8_0.gguf",
+    "dflash-model-Q8_0.gguf",
+    "eagle3-model-Q8_0.gguf",
+};
+
+static const std::vector<std::string> dflash_only = {
+    "model-Q8_0.gguf",
+    "dflash-model-Q8_0.gguf",
+};
+
+static const std::vector<std::string> eagle3_only = {
+    "model-Q8_0.gguf",
+    "eagle3-model-Q8_0.gguf",
+};
+
 //
 // static helpers, reached directly through the namespace include
 //
@@ -178,30 +205,31 @@ static void test_statics() {
     printf("test-model-resolution: static helpers\n");
 
     // quant bits extraction on real world namings
-    assert(dl_test::extract_quant_bits("model-Q8_0.gguf")                   == 8);
-    assert(dl_test::extract_quant_bits("model-UD-Q2_K_XL.gguf")             == 2);
-    assert(dl_test::extract_quant_bits("model.i1-Q6_K.gguf")                == 6);
-    assert(dl_test::extract_quant_bits("model-BF16.gguf")                   == 16);
-    assert(dl_test::extract_quant_bits("model-MXFP4-00001-of-00002.gguf")   == 4);
+    REQUIRE(dl_test::extract_quant_bits("model-Q8_0.gguf")                 == 8);
+    REQUIRE(dl_test::extract_quant_bits("model-UD-Q2_K_XL.gguf")           == 2);
+    REQUIRE(dl_test::extract_quant_bits("model.i1-Q6_K.gguf")              == 6);
+    REQUIRE(dl_test::extract_quant_bits("model-BF16.gguf")                 == 16);
+    REQUIRE(dl_test::extract_quant_bits("model-MXFP4-00001-of-00002.gguf") == 4);
 
     // sidecar keywords are never a model, wherever they appear in the name
-    assert(dl_test::gguf_filename_is_model("model-Q8_0.gguf"));
-    assert(!dl_test::gguf_filename_is_model("mtp-model-Q8_0.gguf"));
-    assert(!dl_test::gguf_filename_is_model("model-mtp-Q8_0.gguf"));
-    assert(!dl_test::gguf_filename_is_model("dflash-model-Q8_0.gguf"));
-    assert(!dl_test::gguf_filename_is_model("eagle3-model-Q8_0.gguf"));
-    assert(!dl_test::gguf_filename_is_model("mmproj-model-Q8_0.gguf"));
-    assert(!dl_test::gguf_filename_is_model("model.txt"));
+    REQUIRE(dl_test::gguf_filename_is_model("model-Q8_0.gguf"));
+    REQUIRE(!dl_test::gguf_filename_is_model("mtp-model-Q8_0.gguf"));
+    REQUIRE(!dl_test::gguf_filename_is_model("model-mtp-Q8_0.gguf"));
+    REQUIRE(!dl_test::gguf_filename_is_model("dflash-model-Q8_0.gguf"));
+    REQUIRE(!dl_test::gguf_filename_is_model("eagle3-model-Q8_0.gguf"));
+    REQUIRE(!dl_test::gguf_filename_is_model("mmproj-model-Q8_0.gguf"));
+    REQUIRE(!dl_test::gguf_filename_is_model("model.txt"));
 
     // the sibling picker honors an exact tag over quant proximity
-    auto files = repo({"mtp-model-BF16.gguf", "mtp-model-Q4_0.gguf", "mtp-model-Q8_0.gguf"});
-    assert(dl_test::find_best_sibling(files, "model-Q8_0.gguf", "mtp-", "Q4_0").path == "mtp-model-Q4_0.gguf");
-    assert(dl_test::find_best_sibling(files, "model-Q8_0.gguf", "mtp-").path        == "mtp-model-Q8_0.gguf");
+    auto files = repo("test/repo", {"mtp-model-BF16.gguf", "mtp-model-Q4_0.gguf", "mtp-model-Q8_0.gguf"});
+    REQUIRE(dl_test::find_best_sibling(files, "model-Q8_0.gguf", "mtp-", "Q4_0").path == "mtp-model-Q4_0.gguf");
+    REQUIRE(dl_test::find_best_sibling(files, "model-Q8_0.gguf", "mtp-").path        == "mtp-model-Q8_0.gguf");
 }
 
 //
 // table-driven plan resolution through the real entry point,
-// each case replayed on permutations of the listing to assert determinism
+// each case replayed on permutations of the listing to assert determinism,
+// except the cases that legitimately depend on the listing order
 //
 
 struct plan_case {
@@ -209,37 +237,80 @@ struct plan_case {
     const std::vector<std::string> & files;
     const char * hf_repo;
     const char * hf_file;
-    bool sidecars; // request mmproj + mtp + dflash + eagle3
+    bool sidecars;        // request mmproj + mtp + dflash + eagle3
+    bool order_dependent; // the expected pick depends on the listing order
     const char * primary;
-    size_t       model_files;
+    std::vector<std::string> model_files;
     const char * mmproj;
     const char * mtp;
     const char * dflash;
+    const char * eagle3;
 };
 
 static const plan_case plan_cases[] = {
     // exact tag picks the matching primary, sidecars follow the tag
-    {"flat exact tag",       flat,    "test/repo:Q8_0",   "", true,  "model-Q8_0.gguf",   1, "mmproj-model-Q8_0.gguf", "mtp-model-Q8_0.gguf",  "dflash-model-Q8_0.gguf"},
-    // no tag falls back to the default preference
-    {"flat default",         flat,    "test/repo",        "", false, "model-Q4_K_M.gguf", 1, "",                       "",                     ""},
-    // no tag and no default match falls back to the first model, never a sidecar
-    {"unsloth fallback",     unsloth, "test/repo",        "", true,  "model-UD-Q8_K_XL.gguf", 1, "mmproj-BF16.gguf",  "",                     ""},
+    {"flat exact tag", flat, "test/repo:Q8_0", "", true, false,
+     "model-Q8_0.gguf", {"model-Q8_0.gguf"},
+     "mmproj-model-Q8_0.gguf", "mtp-model-Q8_0.gguf", "dflash-model-Q8_0.gguf", ""},
+
+    // no tag falls back to the default quant preference
+    {"flat default", flat, "test/repo", "", false, false,
+     "model-Q4_K_M.gguf", {"model-Q4_K_M.gguf"},
+     "", "", "", ""},
+
+    // no tag and no default match falls back to the first model in the listing
+    {"unsloth fallback", unsloth, "test/repo", "", true, true,
+     "model-UD-Q8_K_XL.gguf", {"model-UD-Q8_K_XL.gguf"},
+     "mmproj-BF16.gguf", "", "", ""},
+
     // explicit hf_file picks that exact file
-    {"flat hf_file",         flat,    "test/repo",        "model-BF16.gguf", false, "model-BF16.gguf", 1, "",         "",                     ""},
+    {"flat hf_file", flat, "test/repo", "model-BF16.gguf", false, false,
+     "model-BF16.gguf", {"model-BF16.gguf"},
+     "", "", "", ""},
+
     // missing hf_file resolves nothing
-    {"flat missing hf_file", flat,    "test/repo",        "nope.gguf", false, "",                0, "",               "",                     ""},
+    {"flat missing hf_file", flat, "test/repo", "nope.gguf", false, false,
+     "", {},
+     "", "", "", ""},
+
     // a sharded primary brings all its parts, a subdir primary finds the root sidecar
-    {"subdir shards",        subdir,  "test/repo:Q3_K_M", "", true,  "Q3_K_M/model-Q3_K_M-00001-of-00003.gguf", 3, "mmproj-model-f16.gguf", "model-mtp-Q8_0.gguf", ""},
-    // a tag with no matching full model still resolves the requested sidecar
-    {"hole tag sidecar",     hole,    "test/repo:Q4_0",   "", true,  "",                  0, "",                       "mtp-model-Q4_0.gguf",  "dflash-model-Q8_0.gguf"},
+    {"subdir shards", subdir, "test/repo:Q3_K_M", "", true, false,
+     "Q3_K_M/model-Q3_K_M-00001-of-00003.gguf",
+     {"Q3_K_M/model-Q3_K_M-00001-of-00003.gguf",
+      "Q3_K_M/model-Q3_K_M-00002-of-00003.gguf",
+      "Q3_K_M/model-Q3_K_M-00003-of-00003.gguf"},
+     "mmproj-model-f16.gguf", "model-mtp-Q8_0.gguf", "", ""},
+
+    // a tag with no matching full model still resolves the requested sidecars
+    {"hole tag sidecar", hole, "test/repo:Q4_0", "", true, false,
+     "", {},
+     "", "mtp-model-Q4_0.gguf", "dflash-model-Q8_0.gguf", ""},
+
     // the same tag without a requested sidecar resolves nothing
-    {"hole tag alone",       hole,    "test/repo:Q4_0",   "", false, "",                  0, "",                       "",                     ""},
-    // no tag anchors the sidecar on the primary quant
-    {"hole default anchor",  hole,    "test/repo",        "", true,  "model-Q4_K_M.gguf", 1, "",                       "mtp-model-Q4_0.gguf",  ""},
+    {"hole tag alone", hole, "test/repo:Q4_0", "", false, false,
+     "", {},
+     "", "", "", ""},
+
+    // no tag anchors the sidecars on the primary quant
+    {"hole default anchor", hole, "test/repo", "", true, false,
+     "model-Q4_K_M.gguf", {"model-Q4_K_M.gguf"},
+     "", "mtp-model-Q4_0.gguf", "dflash-model-Q8_0.gguf", ""},
+
     // the mtp- keyword is case sensitive, a suffix -MTP file is not discovered
-    {"unsloth suffix mtp",   unsloth, "test/repo:Q8_K_XL", "", true, "model-UD-Q8_K_XL.gguf", 1, "mmproj-BF16.gguf",  "",                     ""},
-    // vendor prefixes and the dot quant convention both match the tag
-    {"vendor prefix",        vendors, "test/repo:Q8_0",   "", false, "TheDrummer_Model-24B-v4.1-Q8_0.gguf", 1, "",   "",                     ""},
+    {"unsloth suffix mtp", unsloth, "test/repo:Q8_K_XL", "", true, false,
+     "model-UD-Q8_K_XL.gguf", {"model-UD-Q8_K_XL.gguf"},
+     "mmproj-BF16.gguf", "", "", ""},
+
+    // vendor prefixes and the dot quant convention both match the tag,
+    // first match wins between two files at the same quant
+    {"vendor prefix", vendors, "test/repo:Q8_0", "", false, true,
+     "TheDrummer_Model-24B-v4.1-Q8_0.gguf", {"TheDrummer_Model-24B-v4.1-Q8_0.gguf"},
+     "", "", "", ""},
+
+    // every sidecar type resolves at the tag
+    {"trio exact tag", trio, "test/repo:Q8_0", "", true, false,
+     "model-Q8_0.gguf", {"model-Q8_0.gguf"},
+     "", "mtp-model-Q8_0.gguf", "dflash-model-Q8_0.gguf", "eagle3-model-Q8_0.gguf"},
 };
 
 static void check_plan(const plan_case & c) {
@@ -251,15 +322,28 @@ static void check_plan(const plan_case & c) {
 
     auto plan = dl_test::common_download_get_hf_plan(model_ref(c.hf_repo, c.hf_file), opts);
 
-    assert(plan.primary.path         == c.primary);
-    assert(plan.model_files.size()   == c.model_files);
-    assert(plan.mmproj.path          == c.mmproj);
-    assert(plan.mtp.path             == c.mtp);
-    assert(plan.dflash.path          == c.dflash);
+    REQUIRE(plan.primary.path == c.primary);
+    REQUIRE(plan.mmproj.path  == c.mmproj);
+    REQUIRE(plan.mtp.path     == c.mtp);
+    REQUIRE(plan.dflash.path  == c.dflash);
+    REQUIRE(plan.eagle3.path  == c.eagle3);
+
+    // the exact shard set, order insensitive, with the primary as first split
+    std::vector<std::string> actual;
+    for (const auto & f : plan.model_files) {
+        actual.push_back(f.path);
+    }
+    std::sort(actual.begin(), actual.end());
+    auto expected = c.model_files;
+    std::sort(expected.begin(), expected.end());
+    REQUIRE(actual == expected);
+    if (!expected.empty()) {
+        REQUIRE(plan.primary.path == expected.front());
+    }
 
     // invariant: the primary is never a sidecar file
     if (!plan.primary.path.empty()) {
-        assert(dl_test::gguf_filename_is_model(plan.primary.path));
+        REQUIRE(dl_test::gguf_filename_is_model(plan.primary.path));
     }
 }
 
@@ -267,48 +351,40 @@ static void test_plan_resolution() {
     printf("test-model-resolution: plan resolution on %zu cases\n", sizeof(plan_cases) / sizeof(plan_cases[0]));
 
     for (const auto & c : plan_cases) {
-        auto files = repo(c.files);
+        auto files = repo("test/repo", c.files);
 
         // invariant: the resolution is insensitive to the listing order
         for (size_t rot = 0; rot < files.size(); ++rot) {
-            dl_test::g_files = files;
-            std::rotate(dl_test::g_files.begin(), dl_test::g_files.begin() + rot, dl_test::g_files.end());
-            if (rot % 2 == 1) {
-                std::reverse(dl_test::g_files.begin(), dl_test::g_files.end());
-            }
-            // the no-tag default resolution is the documented exception: it
-            // legitimately depends on the listing order for its fallback pick
-            if (std::string(c.hf_repo).find(':') == std::string::npos && rot > 0) {
+            if (c.order_dependent && rot > 0) {
                 continue;
+            }
+            dl_test::g_repos["test/repo"] = files;
+            std::rotate(dl_test::g_repos["test/repo"].begin(),
+                        dl_test::g_repos["test/repo"].begin() + rot,
+                        dl_test::g_repos["test/repo"].end());
+            if (rot % 2 == 1) {
+                std::reverse(dl_test::g_repos["test/repo"].begin(), dl_test::g_repos["test/repo"].end());
             }
             check_plan(c);
         }
     }
+    dl_test::g_repos.clear();
 }
 
 //
-// end-to-end assembly: real CLI parsing, real handler, monkey patched listing,
-// downloads skipped by flipping offline between init and apply
+// end-to-end assembly: real CLI parsing, real handler init on the mapped fake
+// cache, downloads skipped by flipping offline between init and apply
 //
 
-static void assemble(std::vector<std::string> argv,
-                     ::common_params & params,
-                     const std::vector<std::string> & files_main,
-                     const std::vector<std::string> & files_spec) {
+static void assemble(std::vector<std::string> argv, ::common_params & params) {
     std::vector<char *> cargv;
     for (auto & a : argv) {
         cargv.push_back(const_cast<char *>(a.c_str()));
     }
     bool ok = dl_test::common_params_parse((int) cargv.size(), cargv.data(), params, LLAMA_EXAMPLE_SERVER);
-    assert(ok);
+    REQUIRE(ok);
 
-    dl_test::g_files = repo(files_main);
     auto handler = dl_test::common_models_handler_init(params, LLAMA_EXAMPLE_SERVER);
-    if (!params.speculative.draft.mparams.hf_repo.empty()) {
-        // the draft plan resolves against its own repo listing
-        dl_test::g_files = repo(files_spec);
-        handler.plan_spec = dl_test::common_download_get_hf_plan(params.speculative.draft.mparams, handler.opts);
-    }
 
     // skip the network execution, on_done still wires the params
     params.offline = true;
@@ -318,55 +394,91 @@ static void assemble(std::vector<std::string> argv,
 static void test_task_assembly() {
     printf("test-model-resolution: end-to-end assembly\n");
 
+    dl_test::g_repos["test/main"]   = repo("test/main",   flat);
+    dl_test::g_repos["test/hole"]   = repo("test/hole",   hole);
+    dl_test::g_repos["test/trio"]   = repo("test/trio",   trio);
+    dl_test::g_repos["test/dflash"] = repo("test/dflash", dflash_only);
+    dl_test::g_repos["test/eagle3"] = repo("test/eagle3", eagle3_only);
+    dl_test::g_repos["test/small"]  = repo("test/small",  {"draft-model-Q4_K_M.gguf"});
+    dl_test::g_repos["test/preset"] = repo("test/preset", {"preset.ini", "model-Q8_0.gguf"});
+
     {
         // plain -hf wires the model and its mmproj, nothing speculative
         ::common_params params;
-        assemble({"server", "-hf", "test/repo:Q8_0"}, params, flat, {});
-        assert(params.model.path  == "/tmp/hf-test/model-Q8_0.gguf");
-        assert(params.mmproj.path == "/tmp/hf-test/mmproj-model-Q8_0.gguf");
-        assert(params.speculative.draft.mparams.path.empty());
+        assemble({"server", "-hf", "test/main:Q8_0"}, params);
+        REQUIRE(params.model.path  == "/tmp/hf-test/test/main/model-Q8_0.gguf");
+        REQUIRE(params.mmproj.path == "/tmp/hf-test/test/main/mmproj-model-Q8_0.gguf");
+        REQUIRE(params.speculative.draft.mparams.path.empty());
+    }
+    {
+        // --no-mmproj disables the mmproj discovery
+        ::common_params params;
+        assemble({"server", "-hf", "test/main:Q8_0", "--no-mmproj"}, params);
+        REQUIRE(params.mmproj.path.empty());
+    }
+    {
+        // an explicit --mmproj wins over the discovery
+        ::common_params params;
+        assemble({"server", "-hf", "test/main:Q8_0", "--mmproj", "/local/mmproj.gguf"}, params);
+        REQUIRE(params.mmproj.path == "/local/mmproj.gguf");
     }
     {
         // -hf with a spec type wires the sidecar of the main repo as fallback draft
         ::common_params params;
-        assemble({"server", "-hf", "test/repo:Q8_0", "--spec-type", "draft-mtp"}, params, flat, {});
-        assert(params.speculative.draft.mparams.path == "/tmp/hf-test/mtp-model-Q8_0.gguf");
+        assemble({"server", "-hf", "test/main:Q8_0", "--spec-type", "draft-mtp"}, params);
+        REQUIRE(params.speculative.draft.mparams.path == "/tmp/hf-test/test/main/mtp-model-Q8_0.gguf");
     }
     {
         // -hfd with a spec type wires the draft repo sidecar at its tag,
         // not its full model, and suppresses the main repo fallback
         ::common_params params;
-        assemble({"server", "-hf", "test/repo:Q8_0", "-hfd", "test/repo:Q4_0", "--spec-type", "draft-mtp"}, params, hole, hole);
-        assert(params.speculative.draft.mparams.path == "/tmp/hf-test/mtp-model-Q4_0.gguf");
+        assemble({"server", "-hf", "test/hole:Q8_0", "-hfd", "test/hole:Q4_0", "--spec-type", "draft-mtp"}, params);
+        REQUIRE(params.speculative.draft.mparams.path == "/tmp/hf-test/test/hole/mtp-model-Q4_0.gguf");
     }
     {
         // an explicit -md file wins over the sidecar resolution
         ::common_params params;
-        assemble({"server", "-hf", "test/repo:Q8_0", "-hfd", "test/repo", "-md", "mtp-model-BF16.gguf", "--spec-type", "draft-mtp"}, params, flat, flat);
-        assert(params.speculative.draft.mparams.path == "/tmp/hf-test/mtp-model-BF16.gguf");
+        assemble({"server", "-hf", "test/main:Q8_0", "-hfd", "test/main", "-md", "mtp-model-BF16.gguf", "--spec-type", "draft-mtp"}, params);
+        REQUIRE(params.speculative.draft.mparams.path == "/tmp/hf-test/test/main/mtp-model-BF16.gguf");
     }
     {
-        // -hfd without a spec type auto-selects the type from the shipped sidecars, mtp first
+        // -hfd without a spec type auto-selects the type, mtp first when all ship
         ::common_params params;
-        assemble({"server", "-hf", "test/repo:Q8_0", "-hfd", "test/repo:Q8_0"}, params, flat, flat);
-        assert(params.speculative.types == std::vector<enum common_speculative_type>{COMMON_SPECULATIVE_TYPE_DRAFT_MTP});
-        assert(params.speculative.draft.mparams.path == "/tmp/hf-test/mtp-model-Q8_0.gguf");
+        assemble({"server", "-hf", "test/main:Q8_0", "-hfd", "test/trio:Q8_0"}, params);
+        REQUIRE(params.speculative.types == std::vector<enum common_speculative_type>{COMMON_SPECULATIVE_TYPE_DRAFT_MTP});
+        REQUIRE(params.speculative.draft.mparams.path == "/tmp/hf-test/test/trio/mtp-model-Q8_0.gguf");
+    }
+    {
+        // auto-selection with only a dflash sidecar
+        ::common_params params;
+        assemble({"server", "-hf", "test/main:Q8_0", "-hfd", "test/dflash:Q8_0"}, params);
+        REQUIRE(params.speculative.types == std::vector<enum common_speculative_type>{COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH});
+        REQUIRE(params.speculative.draft.mparams.path == "/tmp/hf-test/test/dflash/dflash-model-Q8_0.gguf");
+    }
+    {
+        // auto-selection with only an eagle3 sidecar
+        ::common_params params;
+        assemble({"server", "-hf", "test/main:Q8_0", "-hfd", "test/eagle3:Q8_0"}, params);
+        REQUIRE(params.speculative.types == std::vector<enum common_speculative_type>{COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3});
+        REQUIRE(params.speculative.draft.mparams.path == "/tmp/hf-test/test/eagle3/eagle3-model-Q8_0.gguf");
     }
     {
         // -hfd on a repo without sidecars keeps resolving a full model as draft
         ::common_params params;
-        assemble({"server", "-hf", "test/repo:Q8_0", "-hfd", "test/draft"}, params, flat, {"draft-model-Q4_K_M.gguf"});
-        assert(params.speculative.types == std::vector<enum common_speculative_type>{COMMON_SPECULATIVE_TYPE_NONE});
-        assert(params.speculative.draft.mparams.path == "/tmp/hf-test/draft-model-Q4_K_M.gguf");
+        assemble({"server", "-hf", "test/main:Q8_0", "-hfd", "test/small"}, params);
+        REQUIRE(params.speculative.types == std::vector<enum common_speculative_type>{COMMON_SPECULATIVE_TYPE_NONE});
+        REQUIRE(params.speculative.draft.mparams.path == "/tmp/hf-test/test/small/draft-model-Q4_K_M.gguf");
     }
     {
         // a preset repo wires the preset and clears the model for router mode
         ::common_params params;
-        assemble({"server", "-hf", "test/repo"}, params, {"preset.ini", "model-Q8_0.gguf"}, {});
-        assert(params.models_preset == "/tmp/hf-test/preset.ini");
-        assert(params.model.path.empty());
-        assert(params.model.hf_repo.empty());
+        assemble({"server", "-hf", "test/preset"}, params);
+        REQUIRE(params.models_preset == "/tmp/hf-test/test/preset/preset.ini");
+        REQUIRE(params.model.path.empty());
+        REQUIRE(params.model.hf_repo.empty());
     }
+
+    dl_test::g_repos.clear();
 }
 
 int main(void) {
