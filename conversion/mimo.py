@@ -314,6 +314,8 @@ class MiMoV2VisionAudioModel(MmprojModel):
             gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.A_MM_CODE_EMBD] + ".weight",
         ):
             return gguf.GGMLQuantizationType.F32
+        if ("encoder.conv" in name or "encoder.down_sample_layer" in name) and name.endswith(".weight"):
+            return gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
     @classmethod
