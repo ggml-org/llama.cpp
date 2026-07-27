@@ -466,6 +466,7 @@ struct server_slot {
             for (auto token : spec_draft) {
                 add_ok &= batch.add(this->id, token, pos0++, true);
             }
+
         }
 
         GGML_ASSERT(add_ok && "batch must be large enough to hold the sampled and draft tokens");
@@ -1012,7 +1013,8 @@ private:
         const bool spec_mtp = std::find(params_base.speculative.types.begin(),
                                         params_base.speculative.types.end(),
                                         COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end();
-        const bool has_spec = has_draft || spec_mtp;
+        const bool has_remote_draft = params.speculative.is_draft_remote();
+        const bool has_spec = has_draft || spec_mtp || has_remote_draft;
 
         if (callback_state) {
             std::vector<std::string> stages = {"text_model"};
@@ -1081,7 +1083,7 @@ private:
 
         // optionally reserve VRAM for the draft / MTP context before fitting the target model
         if (params_base.fit_params) {
-            if (has_spec) {
+            if (has_spec && !has_remote_draft) {
                 // MTP draft context lives on the target model, only context+compute are new
                 bool measure_model_bytes = has_draft;
 
@@ -1163,7 +1165,8 @@ private:
 
         add_bos_token = llama_vocab_get_add_bos(vocab);
 
-        if (has_spec) {
+        // For remote draft, ctx_tgt is already set in draft.ctx_tgt (shared field)
+        if (has_spec && !has_remote_draft) {
             // spec_mtp doesn't use load a model internally, so we report 0.0 and 1.0 manually
             load_progress_callback(0.0f, &load_progress_spec);
             load_progress_spec.t_last_load_progress_ms = 0;  // reset so internal cbs aren't delayed
@@ -1273,6 +1276,11 @@ private:
         // initialize slots
         for (int i = 0; i < params_base.n_parallel; i++) {
             slots.emplace_back();
+        }
+
+        // For remote draft, set ctx_tgt since there's no local draft model to provide it
+        if (has_remote_draft) {
+            params_base.speculative.draft.ctx_tgt = ctx_tgt;
         }
 
         // try speculative decoding
@@ -3812,10 +3820,22 @@ private:
                 common_sampler_ptr smpl_save(common_sampler_clone(slot.smpl.get()));
 
                 GGML_ASSERT(slot.spec_i_batch.size() == n_draft + 1);
+
                 auto accepted = common_sampler_sample_and_accept_n(slot.smpl.get(), slot.ctx_tgt, slot.spec_i_batch, slot.spec_draft);
                 slot.spec_i_batch.clear();
 
                 GGML_ASSERT(accepted.size() >= 1);
+
+                // track acceptance stats for every verification step (before checkpoint restore early return)
+                slot.n_draft_accepted += accepted.size() - 1;
+                slot.n_draft_verif_steps += 1;
+
+                if (slot.n_accepted_per_pos.empty()) {
+                    slot.n_accepted_per_pos.resize(common_speculative_n_max(&params_base.speculative), 0);
+                }
+                for (size_t i = 0; i < accepted.size() - 1 && i < slot.n_accepted_per_pos.size(); ++i) {
+                    slot.n_accepted_per_pos[i]++;
+                }
 
                 const uint32_t n_rollback = slot.spec_draft.size() + 1 - accepted.size();
 
@@ -3870,17 +3890,6 @@ private:
             const auto ids = std::move(slot.spec_draft);
 
             slot.t_token_generation = std::max<int64_t>(1, t_now - slot.t_start_generation) / 1e3;
-
-            // update how many tokens out of those tested were accepted
-            slot.n_draft_accepted += ids.size() - 1;
-            slot.n_draft_verif_steps += 1;
-
-            if (slot.n_accepted_per_pos.empty()) {
-                slot.n_accepted_per_pos.resize(common_speculative_n_max(&params_base.speculative), 0);
-            }
-            for (size_t i = 0; i < ids.size() - 1 && i < slot.n_accepted_per_pos.size(); ++i) {
-                slot.n_accepted_per_pos[i]++;
-            }
 
             // add accepted tokens to the prompt
             slot.prompt.tokens.keep_first(slot.prompt.n_tokens() - n_draft);
