@@ -170,6 +170,24 @@ AGENTIC_OPTS: Dict[str, Any] = {}
 class BaseDataset(ABC):
     questions: List[Dict]
 
+    # -- agentic hooks ----------------------------------------------------
+    # A suite that drives its own multi-turn tool conversation sets this, and
+    # the Processor hands it the whole episode instead of making one request.
+
+    is_agentic: bool = False
+
+    def prepare(self, base_python: Optional[str] = None, force: bool = False) -> None:
+        """Provision whatever the suite needs before any task runs.
+
+        Single-shot suites are provisioned from required_packages() instead, so
+        this is a no-op for them.
+        """
+
+    def run(self, index: int, chat) -> Dict[str, Any]:
+        """Drive one episode to completion and return its scored result."""
+        raise NotImplementedError(
+            f"{type(self).__name__} does not drive its own conversation")
+
     # -- code-suite hooks -------------------------------------------------
     # Only consulted when the exec grader is active. They let a suite own how
     # its generated code is assembled and scored, which differs a lot: one
@@ -281,6 +299,13 @@ class EvalState:
         self.processed = 0
         self.total_time: float = 0.0
         self._lock = threading.Lock()
+
+    @property
+    def loaded_dataset(self) -> BaseDataset:
+        """The dataset, once loaded. Raises rather than handing back None."""
+        if self.dataset is None:
+            raise RuntimeError("dataset not loaded; call load_dataset() first")
+        return self.dataset
 
     def load_dataset(self, seed: int = 1234):
         if self.dataset_type == "aime":
@@ -1931,7 +1956,7 @@ class Processor:
             problem_idx=problem_idx,
         )
 
-        if getattr(eval_state.dataset, "is_agentic", False):
+        if eval_state.loaded_dataset.is_agentic:
             return self._process_agentic_case(
                 server_config, eval_state, i, task_id, task_state)
 
@@ -2029,7 +2054,7 @@ class Processor:
     ) -> TaskState:
         """Run one whole tool-driven episode and grade the tree it leaves behind."""
         try:
-            result = eval_state.dataset.run(
+            result = eval_state.loaded_dataset.run(
                 i, self._agentic_chat(server_config, eval_state))
         except Exception as e:
             # Record the failure rather than only marking the in-memory state.
@@ -2573,37 +2598,38 @@ def main():
 
     # The execution venv is derived from the dataset, so it is built only once
     # the dataset is known -- true on both the fresh and the resume path.
-    if args.grader_type == "exec" and getattr(eval_state.dataset, "is_agentic", False):
-        # One venv per language in the selected tasks, rather than one per suite
-        eval_state.dataset.prepare(base_python=args.sandbox_python,
-                                   force=args.rebuild_sandbox)
-    elif args.grader_type == "exec":
-        dataset = eval_state.dataset
+    if args.grader_type == "exec":
+        dataset = eval_state.loaded_dataset
 
-        base_python = args.sandbox_python
-        if not base_python and dataset.preferred_python():
+        if dataset.is_agentic:
+            # One venv per language in the selected tasks, not one per suite
+            dataset.prepare(base_python=args.sandbox_python,
+                            force=args.rebuild_sandbox)
+        else:
+            base_python = args.sandbox_python
             want = dataset.preferred_python()
-            base_python = resolve_python(want)
-            if base_python:
-                print(f"[sandbox] using Python {want} for {eval_state.dataset_type} "
-                      f"({base_python})")
+            if not base_python and want:
+                base_python = resolve_python(want)
+                if base_python:
+                    print(f"[sandbox] using Python {want} for "
+                          f"{eval_state.dataset_type} ({base_python})")
 
-        dataset.configure_python(base_python or sys.executable)
+            dataset.configure_python(base_python or sys.executable)
 
-        sandbox = Sandbox(
-            name=eval_state.dataset_type,
-            packages=dataset.required_packages(),
-            provision=dataset.provision_steps(),
-            env=dataset.sandbox_env(),
-            base_python=base_python,
-        )
-        sandbox.ensure(force=args.rebuild_sandbox)
-        preflight_sandbox(sandbox)
-        grader.sandbox = sandbox
-        grader.dataset = dataset
-        grader.exec_timeout = (args.exec_timeout if args.exec_timeout is not None
-                               else dataset.default_exec_timeout())
-        grader.exec_seed = None if args.exec_seed < 0 else args.exec_seed
+            sandbox = Sandbox(
+                name=eval_state.dataset_type,
+                packages=dataset.required_packages(),
+                provision=dataset.provision_steps(),
+                env=dataset.sandbox_env(),
+                base_python=base_python,
+            )
+            sandbox.ensure(force=args.rebuild_sandbox)
+            preflight_sandbox(sandbox)
+            grader.sandbox = sandbox
+            grader.dataset = dataset
+            grader.exec_timeout = (args.exec_timeout if args.exec_timeout is not None
+                                   else dataset.default_exec_timeout())
+            grader.exec_seed = None if args.exec_seed < 0 else args.exec_seed
 
     processor = Processor(
         server_configs=server_configs,
