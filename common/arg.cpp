@@ -595,6 +595,11 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
         });
     }
 
+    // a wired draft sidecar counts as an explicit draft for the main plan fallback below
+    if (spec_sidecar_found) {
+        had_spec_url = true;
+    }
+
     // handle plan_spec (e.g. --spec-draft-hf)
     if (!plan_spec.model_files.empty() && !had_spec_url && !spec_sidecar_found) {
         add_tasks(plan_spec.model_files, plan_spec.primary, params.speculative.draft.mparams);
