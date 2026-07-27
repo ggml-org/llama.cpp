@@ -2649,7 +2649,8 @@ ggml_tensor * llm_graph_context::build_attn(
         ggml_tensor * sinks,
         ggml_tensor * v_mla, // TODO: remove
             float     kq_scale,
-            int       il) const {
+            int       il,
+            bool      store_kv) const {
     GGML_ASSERT(v_mla == nullptr);
 
     if (inp->self_k_rot) {
@@ -2671,12 +2672,23 @@ ggml_tensor * llm_graph_context::build_attn(
     const auto * mctx_cur = inp->mctx;
 
     // store to KV cache
-    {
+    if (store_kv) {
         const auto & k_idxs = inp->get_k_idxs();
         const auto & v_idxs = inp->get_v_idxs();
 
-        ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il));
-        ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il));
+        ggml_tensor * k_store = mctx_cur->cpy_k(ctx0, k_cur, k_idxs, il);
+        ggml_tensor * v_store = mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il);
+
+        ggml_build_forward_expand(gf, k_store);
+        ggml_build_forward_expand(gf, v_store);
+
+        // enforce dependency of attention on cpy_k and cpy_v
+        ggml_tensor * k_store_view = ggml_view_1d(ctx0, k_store, 1, 0);
+        ggml_tensor * v_store_view = ggml_view_1d(ctx0, v_store, 1, 0);
+        ggml_tensor * dummy_dep    = ggml_add(ctx0, k_store_view, v_store_view);
+        ggml_tensor * dummy_dep_f32 = ggml_cast(ctx0, dummy_dep, GGML_TYPE_F32);
+        ggml_tensor * dummy_zero   = ggml_scale(ctx0, dummy_dep_f32, 0.0f);
+        q_cur = ggml_add(ctx0, q_cur, dummy_zero);
     }
 
     ggml_tensor * kq_mask = inp->get_kq_mask();

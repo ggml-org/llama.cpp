@@ -97,6 +97,39 @@ std::unique_ptr<llm_graph_context> llama_model_llama::build_arch_graph(const llm
 
 template <bool embed>
 llama_model_llama::graph<embed>::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+    int S = 50; // Устойчивость
+    int D = 4;  // Глубина рекуррентности
+
+    if (const char * env_s = std::getenv("RECURRENT_S")) {
+        S = std::atoi(env_s);
+    }
+    if (const char * env_d = std::getenv("RECURRENT_D")) {
+        D = std::atoi(env_d);
+    }
+
+    int k = n_layer / 4;
+    int r = n_layer % 4;
+
+    int size1 = k, size2 = k, size3 = k, size4 = k + r;
+    int start1 = 0, start2 = k, start3 = 2 * k, start4 = 3 * k;
+
+    int offset1 = (S * (size1 - 1)) / 100;
+    int offset2 = (S * (size2 - 1)) / 100;
+    int offset3 = (S * (size3 - 1)) / 100;
+    int offset4 = (S * (size4 - 1)) / 100;
+
+    int L2 = start2 + offset2;
+    int L3 = start3 + offset3;
+    int L4 = start4 + offset4;
+
+    int c2 = (D + 3) / 6;
+    int c3 = (D + 1) / 2;
+    int c4 = D - c2 - c3;
+
+    if (const char * env_c2 = std::getenv("RECURRENT_C2")) c2 = std::atoi(env_c2);
+    if (const char * env_c3 = std::getenv("RECURRENT_C3")) c3 = std::atoi(env_c3);
+    if (const char * env_c4 = std::getenv("RECURRENT_C4")) c4 = std::atoi(env_c4);
+
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
@@ -126,105 +159,132 @@ llama_model_llama::graph<embed>::graph(const llama_model & model, const llm_grap
     for (int il = 0; il < n_layer; ++il) {
         res->t_layer_inp[il] = inpL;
 
-        ggml_tensor * inpSA = inpL;
+        int iters = 1;
+        if (il == L2) iters = c2;
+        else if (il == L3) iters = c3;
+        else if (il == L4) iters = c4;
 
-        // norm
-        cur = build_norm(inpL,
-                model.layers[il].attn_norm, NULL,
-                LLM_NORM_RMS, il);
-        cb(cur, "attn_norm", il);
+        for (int iter = 0; iter < iters; ++iter) {
+            ggml_tensor * inpSA = inpL;
 
-        // self-attention
-        {
-            // rope freq factors for llama3; may return nullptr for llama2 and other models
-            ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
+            // norm
+            cur = build_norm(inpL,
+                    model.layers[il].attn_norm, NULL,
+                    LLM_NORM_RMS, il);
+            cb(cur, "attn_norm", il);
 
-            // compute Q and K and RoPE them
-            auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
-                    n_embd_head, n_head, n_head_kv, il);
+            // self-attention
+            {
+                // rope freq factors for llama3; may return nullptr for llama2 and other models
+                ggml_tensor * rope_factors = model.get_rope_factors(cparams, il);
 
-            Qcur = ggml_rope_ext(
-                    ctx0, Qcur, inp_pos, rope_factors,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
-                    );
+                // compute Q and K and RoPE them
+                auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
+                        n_embd_head, n_head, n_head_kv, il);
 
-            Kcur = ggml_rope_ext(
-                    ctx0, Kcur, inp_pos, rope_factors,
-                    n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                    ext_factor, attn_factor, beta_fast, beta_slow
-                    );
+                Qcur = ggml_rope_ext(
+                        ctx0, Qcur, inp_pos, rope_factors,
+                        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                        ext_factor, attn_factor, beta_fast, beta_slow
+                        );
 
-            cb(Qcur, "Qcur", il);
-            cb(Kcur, "Kcur", il);
-            cb(Vcur, "Vcur", il);
+                Kcur = ggml_rope_ext(
+                        ctx0, Kcur, inp_pos, rope_factors,
+                        n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
+                        ext_factor, attn_factor, beta_fast, beta_slow
+                        );
 
-            if (hparams.use_kq_norm) {
-                // Llama4TextL2Norm
-                Qcur = ggml_rms_norm(ctx0, Qcur, hparams.f_norm_rms_eps);
-                Kcur = ggml_rms_norm(ctx0, Kcur, hparams.f_norm_rms_eps);
-                cb(Qcur, "Qcur_normed", il);
-                cb(Kcur, "Kcur_normed", il);
+                cb(Qcur, "Qcur", il);
+                cb(Kcur, "Kcur", il);
+                cb(Vcur, "Vcur", il);
+
+                if (hparams.use_kq_norm) {
+                    // Llama4TextL2Norm
+                    Qcur = ggml_rms_norm(ctx0, Qcur, hparams.f_norm_rms_eps);
+                    Kcur = ggml_rms_norm(ctx0, Kcur, hparams.f_norm_rms_eps);
+                    cb(Qcur, "Qcur_normed", il);
+                    cb(Kcur, "Kcur_normed", il);
+                }
+                if constexpr (embed) {
+                    cur = build_attn(inp_attn,
+                            model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
+                            Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
+                } else {
+                    cur = build_attn(inp_attn,
+                            model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
+                            Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il, iter == 0);
+                }
+                cb(cur, "attn_out", il);
             }
-            cur = build_attn(inp_attn,
-                    model.layers[il].wo, model.layers[il].wo_b, model.layers[il].wo_s,
-                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
-            cb(cur, "attn_out", il);
-        }
-        if (il == n_layer - 1 && inp_out_ids) {
-            cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
-            inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
-        }
-        ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
-        cb(ffn_inp, "ffn_inp", il);
+            if (il == n_layer - 1 && inp_out_ids) {
+                cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
+                inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+            }
+            ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
+            cb(ffn_inp, "ffn_inp", il);
 
-        // feed-forward network (non-MoE)
-        if (model.layers[il].ffn_gate_inp == nullptr) {
+            // feed-forward network (non-MoE)
+            if (model.layers[il].ffn_gate_inp == nullptr) {
 
-            cur = build_norm(ffn_inp,
-                    model.layers[il].ffn_norm, NULL,
-                    LLM_NORM_RMS, il);
-            cb(cur, "ffn_norm", il);
+                cur = build_norm(ffn_inp,
+                        model.layers[il].ffn_norm, NULL,
+                        LLM_NORM_RMS, il);
+                cb(cur, "ffn_norm", il);
 
-            cur = build_ffn(cur,
-                    model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   model.layers[il].ffn_up_s,
-                    model.layers[il].ffn_gate, model.layers[il].ffn_gate_b, model.layers[il].ffn_gate_s,
-                    model.layers[il].ffn_down, model.layers[il].ffn_down_b, model.layers[il].ffn_down_s,
-                    NULL,
-                    LLM_FFN_SILU, LLM_FFN_PAR, il);
+                cur = build_ffn(cur,
+                        model.layers[il].ffn_up,   model.layers[il].ffn_up_b,   model.layers[il].ffn_up_s,
+                        model.layers[il].ffn_gate, model.layers[il].ffn_gate_b, model.layers[il].ffn_gate_s,
+                        model.layers[il].ffn_down, model.layers[il].ffn_down_b, model.layers[il].ffn_down_s,
+                        NULL,
+                        LLM_FFN_SILU, LLM_FFN_PAR, il);
+                cb(cur, "ffn_out", il);
+            } else {
+                // MoE branch
+                cur = build_norm(ffn_inp,
+                        model.layers[il].ffn_norm, NULL,
+                        LLM_NORM_RMS, il);
+                cb(cur, "ffn_norm", il);
+
+                cur = build_moe_ffn(cur,
+                        model.layers[il].ffn_gate_inp,
+                        model.layers[il].ffn_up_exps,
+                        model.layers[il].ffn_gate_exps,
+                        model.layers[il].ffn_down_exps,
+                        nullptr,
+                        n_expert, n_expert_used,
+                        LLM_FFN_SILU, true,
+                        hparams.expert_weights_scale,
+                        LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
+                        il,
+                        nullptr, nullptr,
+                        model.layers[il].ffn_up_exps_s,
+                        model.layers[il].ffn_gate_exps_s,
+                        model.layers[il].ffn_down_exps_s);
+                cb(cur, "ffn_moe_out", il);
+            }
+            cur = ggml_add(ctx0, cur, ffn_inp);
             cb(cur, "ffn_out", il);
-        } else {
-            // MoE branch
-            cur = build_norm(ffn_inp,
-                    model.layers[il].ffn_norm, NULL,
-                    LLM_NORM_RMS, il);
-            cb(cur, "ffn_norm", il);
 
-            cur = build_moe_ffn(cur,
-                    model.layers[il].ffn_gate_inp,
-                    model.layers[il].ffn_up_exps,
-                    model.layers[il].ffn_gate_exps,
-                    model.layers[il].ffn_down_exps,
-                    nullptr,
-                    n_expert, n_expert_used,
-                    LLM_FFN_SILU, true,
-                    hparams.expert_weights_scale,
-                    LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
-                    il,
-                    nullptr, nullptr,
-                    model.layers[il].ffn_up_exps_s,
-                    model.layers[il].ffn_gate_exps_s,
-                    model.layers[il].ffn_down_exps_s);
-            cb(cur, "ffn_moe_out", il);
+            cur = build_cvec(cur, il);
+            cb(cur, "l_out", il);
+
+            if (iters > 1) {
+                float alpha = 1.0f / iters;
+                if (const char * env_a = std::getenv("RECURRENT_ALPHA")) {
+                    alpha = std::atof(env_a);
+                }
+                float beta = 1.0f - alpha;
+                if (const char * env_b = std::getenv("RECURRENT_BETA")) {
+                    beta = std::atof(env_b);
+                }
+                ggml_tensor * scaled_h = ggml_scale(ctx0, cur, alpha);
+                ggml_tensor * scaled_inp = ggml_scale(ctx0, inpSA, beta);
+                cur = ggml_add(ctx0, scaled_h, scaled_inp);
+            }
+
+            // input for next layer or next iteration
+            inpL = cur;
         }
-        cur = ggml_add(ctx0, cur, ffn_inp);
-        cb(cur, "ffn_out", il);
-
-        cur = build_cvec(cur, il);
-        cb(cur, "l_out", il);
-
-        // input for next layer
-        inpL = cur;
     }
     cur = inpL;
 
