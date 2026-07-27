@@ -2011,24 +2011,29 @@ struct clip_model_loader {
                 } break;
             case PROJECTOR_TYPE_MINICPMV4_6:
                 {
+                    const bool merger_required = hparams.n_merge == 4;
+                    auto get_merger_tensor = [&](const std::string & name, bool required = true) {
+                        return get_tensor(name, merger_required && required);
+                    };
+
                     // ViT merger: window self-attention
-                    model.vit_merger_ln1_w     = get_tensor(string_format(TN_VIT_MERGER_LN1, "weight"));
-                    model.vit_merger_ln1_b     = get_tensor(string_format(TN_VIT_MERGER_LN1, "bias"));
-                    model.vit_merger_attn_q_w  = get_tensor(string_format(TN_VIT_MERGER_ATTN_Q, "weight"));
-                    model.vit_merger_attn_q_b  = get_tensor(string_format(TN_VIT_MERGER_ATTN_Q, "bias"), false);
-                    model.vit_merger_attn_k_w  = get_tensor(string_format(TN_VIT_MERGER_ATTN_K, "weight"));
-                    model.vit_merger_attn_k_b  = get_tensor(string_format(TN_VIT_MERGER_ATTN_K, "bias"), false);
-                    model.vit_merger_attn_v_w  = get_tensor(string_format(TN_VIT_MERGER_ATTN_V, "weight"));
-                    model.vit_merger_attn_v_b  = get_tensor(string_format(TN_VIT_MERGER_ATTN_V, "bias"), false);
-                    model.vit_merger_attn_o_w  = get_tensor(string_format(TN_VIT_MERGER_ATTN_O, "weight"));
-                    model.vit_merger_attn_o_b  = get_tensor(string_format(TN_VIT_MERGER_ATTN_O, "bias"), false);
+                    model.vit_merger_ln1_w     = get_merger_tensor(string_format(TN_VIT_MERGER_LN1, "weight"));
+                    model.vit_merger_ln1_b     = get_merger_tensor(string_format(TN_VIT_MERGER_LN1, "bias"));
+                    model.vit_merger_attn_q_w  = get_merger_tensor(string_format(TN_VIT_MERGER_ATTN_Q, "weight"));
+                    model.vit_merger_attn_q_b  = get_merger_tensor(string_format(TN_VIT_MERGER_ATTN_Q, "bias"), false);
+                    model.vit_merger_attn_k_w  = get_merger_tensor(string_format(TN_VIT_MERGER_ATTN_K, "weight"));
+                    model.vit_merger_attn_k_b  = get_merger_tensor(string_format(TN_VIT_MERGER_ATTN_K, "bias"), false);
+                    model.vit_merger_attn_v_w  = get_merger_tensor(string_format(TN_VIT_MERGER_ATTN_V, "weight"));
+                    model.vit_merger_attn_v_b  = get_merger_tensor(string_format(TN_VIT_MERGER_ATTN_V, "bias"), false);
+                    model.vit_merger_attn_o_w  = get_merger_tensor(string_format(TN_VIT_MERGER_ATTN_O, "weight"));
+                    model.vit_merger_attn_o_b  = get_merger_tensor(string_format(TN_VIT_MERGER_ATTN_O, "bias"), false);
                     // ViT merger: MLP downsample
-                    model.vit_merger_ds_ln_w   = get_tensor(string_format(TN_VIT_MERGER_DS_LN, "weight"));
-                    model.vit_merger_ds_ln_b   = get_tensor(string_format(TN_VIT_MERGER_DS_LN, "bias"));
-                    model.vit_merger_ds_up_w   = get_tensor(string_format(TN_VIT_MERGER_DS_UP, "weight"));
-                    model.vit_merger_ds_up_b   = get_tensor(string_format(TN_VIT_MERGER_DS_UP, "bias"), false);
-                    model.vit_merger_ds_down_w = get_tensor(string_format(TN_VIT_MERGER_DS_DOWN, "weight"));
-                    model.vit_merger_ds_down_b = get_tensor(string_format(TN_VIT_MERGER_DS_DOWN, "bias"), false);
+                    model.vit_merger_ds_ln_w   = get_merger_tensor(string_format(TN_VIT_MERGER_DS_LN, "weight"));
+                    model.vit_merger_ds_ln_b   = get_merger_tensor(string_format(TN_VIT_MERGER_DS_LN, "bias"));
+                    model.vit_merger_ds_up_w   = get_merger_tensor(string_format(TN_VIT_MERGER_DS_UP, "weight"));
+                    model.vit_merger_ds_up_b   = get_merger_tensor(string_format(TN_VIT_MERGER_DS_UP, "bias"), false);
+                    model.vit_merger_ds_down_w = get_merger_tensor(string_format(TN_VIT_MERGER_DS_DOWN, "weight"));
+                    model.vit_merger_ds_down_b = get_merger_tensor(string_format(TN_VIT_MERGER_DS_DOWN, "bias"), false);
                     // Final Merger (DownsampleMLP)
                     model.mm_input_norm_w = get_tensor(TN_MM_INP_NORM);
                     model.mm_input_norm_b = get_tensor(TN_MM_INP_NORM_B, false);
