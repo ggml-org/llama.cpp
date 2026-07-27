@@ -539,6 +539,13 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
         }
     };
 
+    // an explicit draft file selection (e.g. -md with -hfd) disables the sidecar resolution of the draft repo
+    if (!params.speculative.draft.mparams.hf_file.empty()) {
+        plan_spec.mtp    = {};
+        plan_spec.dflash = {};
+        plan_spec.eagle3 = {};
+    }
+
     // infer the speculative type from the sidecar shipped by the draft repo when none is requested
     if (spec_types_is_default(params)) {
         if (!plan_spec.mtp.local_path.empty()) {
@@ -586,6 +593,11 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
                 hf_cache::finalize_file(plan_spec.eagle3);
             }
         });
+    }
+
+    // a wired draft sidecar counts as an explicit draft for the main plan fallback below
+    if (spec_sidecar_found) {
+        had_spec_url = true;
     }
 
     // handle plan_spec (e.g. --spec-draft-hf)
@@ -1047,6 +1059,31 @@ static std::vector<ggml_backend_dev_t> parse_device_list(const std::string & val
         devices.push_back(nullptr);
     }
     return devices;
+}
+
+void common_print_available_devices() {
+    constexpr size_t MiB = 1024 * 1024;
+    std::vector<ggml_backend_dev_t> devices;
+
+    ggml_backend_load_all();
+
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        auto * dev = ggml_backend_dev_get(i);
+        if (ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+            devices.push_back(dev);
+        }
+    }
+    printf("Available devices:\n");
+
+    if (devices.empty()) {
+        printf("  (none)\n");
+        return;
+    }
+    for (auto * dev : devices) {
+        size_t free, total;
+        ggml_backend_dev_memory(dev, &free, &total);
+        printf("  %s: %s (%zu MiB, %zu MiB free)\n", ggml_backend_dev_name(dev), ggml_backend_dev_description(dev), total / MiB, free / MiB);
+    }
 }
 
 static void add_rpc_devices(const std::string & servers) {
@@ -2508,7 +2545,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     }
     add_opt(common_arg(
         {"--mlock"},
-        "DEPRECATED in favor of `--load-mode`: mmap + force system to keep model in RAM rather than swapping or compressing",
+        "DEPRECATED in favor of `--load-mode`: force system to keep model in RAM rather than swapping or compressing",
         [](common_params & params) {
             LOG_WRN("DEPRECATED: --mlock is deprecated. use --load-mode mlock instead\n");
             params.load_mode = LLAMA_LOAD_MODE_MLOCK;
@@ -2537,13 +2574,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "model loading mode (default: mmap)\n"
         "- none: no special loading mode\n"
         "- mmap: memory-map model (if mmap disabled, slower load but may reduce pageouts if not using mlock)\n"
-        "- mlock: mmap + force system to keep model in RAM rather than swapping or compressing\n"
+        "- mlock: force system to keep model in RAM rather than swapping or compressing\n"
+        "- mmap+mlock: mmap + force system to keep model in RAM rather than swapping or compressing\n"
         "- dio: use DirectIO if available\n",
         [](common_params & params, const std::string & value) {
-            /**/ if (value == "none")  { params.load_mode = LLAMA_LOAD_MODE_NONE;      }
-            else if (value == "mmap")  { params.load_mode = LLAMA_LOAD_MODE_MMAP;      }
-            else if (value == "mlock") { params.load_mode = LLAMA_LOAD_MODE_MLOCK;     }
-            else if (value == "dio")   { params.load_mode = LLAMA_LOAD_MODE_DIRECT_IO; }
+            /**/ if (value == "none")       { params.load_mode = LLAMA_LOAD_MODE_NONE;       }
+            else if (value == "mmap")       { params.load_mode = LLAMA_LOAD_MODE_MMAP;       }
+            else if (value == "mlock")      { params.load_mode = LLAMA_LOAD_MODE_MLOCK;      }
+            else if (value == "mmap+mlock") { params.load_mode = LLAMA_LOAD_MODE_MMAP_MLOCK; }
+            else if (value == "dio")        { params.load_mode = LLAMA_LOAD_MODE_DIRECT_IO;  }
             else { throw std::invalid_argument("invalid value"); }
         }
     ).set_env("LLAMA_ARG_LOAD_MODE"));
@@ -2574,20 +2613,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--list-devices"},
         "print list of available devices and exit",
         [](common_params &) {
-            ggml_backend_load_all();
-            std::vector<ggml_backend_dev_t> devices;
-            for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
-                auto * dev = ggml_backend_dev_get(i);
-                if (ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) {
-                    devices.push_back(dev);
-                }
-            }
-            printf("Available devices:\n");
-            for (auto * dev : devices) {
-                size_t free, total;
-                ggml_backend_dev_memory(dev, &free, &total);
-                printf("  %s: %s (%zu MiB, %zu MiB free)\n", ggml_backend_dev_name(dev), ggml_backend_dev_description(dev), total / 1024 / 1024, free / 1024 / 1024);
-            }
+            common_print_available_devices();
             exit(0);
         }
     ));
