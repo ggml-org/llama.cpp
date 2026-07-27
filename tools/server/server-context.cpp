@@ -2628,8 +2628,8 @@ private:
                 {
                     const int id_slot   = task.slot_action.id_slot;
                     const int id_target = task.slot_action.id_slot_target;
-                    // controllo esplicito: get_slot_by_id fa wrap-around per
-                    // design, ma per la clonazione un id fuori range e' un errore
+                    // explicit range check: get_slot_by_id wraps around by
+                    // design, but for cloning an out-of-range id is an error
                     if (id_slot < 0 || id_slot >= (int) slots.size()
                             || id_target < 0 || id_target >= (int) slots.size()) {
                         send_error(task, "Invalid slot ID (out of range)", ERROR_TYPE_INVALID_REQUEST);
@@ -2649,14 +2649,14 @@ private:
                         break;
                     }
                     if (slot->is_processing() || target->is_processing()) {
-                        // slot occupato: si ritenta piu' tardi, come save/restore
+                        // slot busy: defer and retry later, same as save/restore
                         SRV_DBG("requested slot is unavailable, defer task, id_task = %d\n", task.id);
                         queue_tasks.defer(std::move(task));
                         break;
                     }
-                    // GUARDIA ctx_shift: con KV shifting o context shift attivi le
-                    // celle condivise per riferimento si sposterebbero per TUTTI i
-                    // rami -> corruzione silenziosa cross-ramo. Rifiuto esplicito.
+                    // ctx_shift guard: with KV shifting or cache reuse active,
+                    // cells shared by reference would be shifted for ALL
+                    // branches -> silent cross-branch corruption. Reject it.
                     if (params_base.ctx_shift || params_base.n_cache_reuse > 0) {
                         send_error(task, "clone_to is incompatible with --ctx-shift/--cache-reuse "
                                          "(shared KV cells would shift across branches)",
@@ -2671,10 +2671,10 @@ private:
 
                     const int64_t t_start = ggml_time_us();
 
-                    // clone KV senza ricalcolo: la sequenza del target viene
-                    // cancellata e sostituita con RIFERIMENTI alle celle KV del
-                    // source (seq_cp); il prompt clonato permette al prossimo
-                    // task sul target di trovare il prefisso in cache.
+                    // clone the KV without recomputation: the target sequence
+                    // is erased and replaced with REFERENCES to the source KV
+                    // cells (seq_cp); the cloned prompt lets the next task on
+                    // the target find the prefix in cache.
                     common_context_seq_rm(ctx_tgt, target->id, -1, -1);
                     common_context_seq_cp(ctx_tgt, slot->id, target->id, -1, -1);
                     if (ctx_dft) {
@@ -4573,8 +4573,8 @@ void server_routes::init_routes() {
 
         std::string action = req.get_param("action");
 
-        // kvclone: clonazione KV fra slot dello stesso server, nessun I/O su
-        // disco -> NON richiede --slot-save-path
+        // clone_to copies the KV between slots of the same server with no
+        // disk I/O, so it does NOT require --slot-save-path
         if (action == "clone_to") {
             return handle_slots_clone_to(req, id_slot);
         }
@@ -5277,7 +5277,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_slots_erase(const se
 std::unique_ptr<server_res_generator> server_routes::handle_slots_clone_to(const server_http_req & req, int id_slot) {
     auto res = create_response();
 
-    // target da query param (?action=clone_to&target=N), fallback body {"target": N}
+    // target from query param (?action=clone_to&target=N), fallback to body {"target": N}
     std::string target_str = req.get_param("target");
     if (target_str.empty() && !req.body.empty()) {
         try {
