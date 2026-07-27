@@ -44,8 +44,6 @@ static llama_tokens generate_tokens(llama_context * ctx, llama_sampler * smpl, i
         n_past++;
     }
 
-    llama_synchronize(ctx);
-
     return result;
 }
 
