@@ -860,6 +860,9 @@ static inline void mmap_buf(struct htp_context *ctx, struct htp_buf_desc *b) {
             return;
         }
     }
+
+    FARF(ERROR, "mmap failed : exceeded mapping capacity limit of %u", HTP_MAX_MMAPS);
+    abort();
 }
 
 static void prep_op_bufs(struct htp_context *ctx, struct htp_buf_desc *bufs, uint32_t n_bufs) {

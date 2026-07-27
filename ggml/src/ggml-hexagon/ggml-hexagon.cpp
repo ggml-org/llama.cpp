@@ -4086,11 +4086,13 @@ static bool ggml_backend_hexagon_cpy_tensor_async(ggml_backend_t backend_src, gg
         return false;
     }
 
+    // FIXME: add support for proper lazy-mmap of the src tensor
     if (backend_src->context != backend_dst->context) {
         return false;
     }
 
     auto sess = static_cast<ggml_hexagon_session *>(backend_dst->context);
+    HEX_VERBOSE("ggml-hex: %s cpy-tensor-async %s -> %s size %zu\n", sess->name.c_str(), src->name, dst->name, ggml_nbytes(src));
     sess->enqueue_cpy(src, dst);
 
     return true;
@@ -4103,7 +4105,7 @@ struct ggml_backend_hexagon_event {
 
 static ggml_backend_event_t ggml_backend_hexagon_device_event_new(ggml_backend_dev_t dev) {
     ggml_backend_hexagon_event * hex_event = new ggml_backend_hexagon_event();
-    HEX_VERBOSE("ggml-hex: device %s event-new : event %p\n", ggml_backend_dev_name(dev), (void *)hex_event);
+    HEX_VERBOSE("ggml-hex: %s event-new : event %p\n", ggml_backend_dev_name(dev), (void *)hex_event);
 
     return new ggml_backend_event {
         /* .device  = */ dev,
@@ -4119,7 +4121,7 @@ static void ggml_backend_hexagon_device_event_free(ggml_backend_dev_t dev, ggml_
     }
 
     ggml_backend_hexagon_event * hex_event = (ggml_backend_hexagon_event *)event->context;
-    HEX_VERBOSE("ggml-hex: device %s event-free : event %p\n", ggml_backend_dev_name(dev), (void *)hex_event);
+    HEX_VERBOSE("ggml-hex: %s event-free : event %p\n", ggml_backend_dev_name(dev), (void *)hex_event);
     delete hex_event;
     delete event;
 }
