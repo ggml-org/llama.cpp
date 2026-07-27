@@ -3755,6 +3755,15 @@ static int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph 
                 fused_node_count  = n_ops;
                 break;
             }
+            const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+            if (!with_bias && op == GGML_OP_MUL_MAT_ID && src0->type == GGML_TYPE_NVFP4 &&
+                    blackwell_mma_available(cc) &&
+                    ggml_cuda_should_use_mmq(src0->type, cc, src1->ne[2], src0->ne[2])) {
+                ggml_cuda_mul_mat_q(*cuda_ctx, src0, src1, ids, out_node, &fusion_data);
+                fused_mul_mat_vec = true;
+                fused_node_count  = n_ops;
+                break;
+            }
         }
         if (fused_mul_mat_vec) {
             break;
