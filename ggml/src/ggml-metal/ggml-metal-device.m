@@ -557,7 +557,7 @@ struct ggml_metal_rsets {
     dispatch_group_t d_group;
 };
 
-
+#if defined(GGML_METAL_HAS_RESIDENCY_SETS)
 static void ggml_metal_dummy_work(ggml_metal_device_t dev) {
     if (dev->mtl_queue == nil) {
         return;
@@ -580,6 +580,7 @@ static void ggml_metal_dummy_work(ggml_metal_device_t dev) {
         [buf release];
     }
 }
+#endif
 
 ggml_metal_rsets_t ggml_metal_rsets_init(ggml_metal_device_t dev) {
     ggml_metal_rsets_t res = calloc(1, sizeof(struct ggml_metal_rsets));
