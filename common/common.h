@@ -583,7 +583,8 @@ struct common_params {
     bool no_extra_bufts    = false; // disable extra buffer types (used for weight repacking)
     bool no_host           = false; // bypass host buffer allowing extra buffers to be used
 
-    bool single_turn       = false; // single turn chat conversation
+    bool single_turn             = false; // single turn chat conversation
+    bool ignore_api_samplers     = false; // ignore sampler settings from API requests, always use CLI defaults
 
     ggml_type cache_type_k = GGML_TYPE_F16; // KV cache data type for the K
     ggml_type cache_type_v = GGML_TYPE_F16; // KV cache data type for the V
