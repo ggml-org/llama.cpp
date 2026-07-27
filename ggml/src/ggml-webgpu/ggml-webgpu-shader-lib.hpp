@@ -136,7 +136,8 @@ struct ggml_webgpu_ssm_scan_pipeline_key {
     bool bc_overlap;
 
     bool operator==(const ggml_webgpu_ssm_scan_pipeline_key & other) const {
-        return type == other.type && d_state == other.d_state && xbc_overlap == other.xbc_overlap && bc_overlap == other.bc_overlap;
+        return type == other.type && d_state == other.d_state && xbc_overlap == other.xbc_overlap &&
+               bc_overlap == other.bc_overlap;
     }
 };
 
@@ -155,7 +156,7 @@ struct ggml_webgpu_ssm_scan_shader_decisions {
     uint32_t wg_size;
     uint32_t tokens_per_tile;
     bool     xbc_overlap = false;
-    bool     bc_overlap = false;
+    bool     bc_overlap  = false;
 };
 
 /** Argsort **/
@@ -3004,7 +3005,7 @@ class ggml_webgpu_shader_lib {
         key.glu_op                       = ggml_get_glu_op(context.dst);
         key.type                         = context.dst->type;
         key.split                        = (context.src1 != nullptr);
-        key.src_overlap                  = (context.src1 != nullptr && ggml_webgpu_tensor_overlap(context.src0, context.src1));
+        key.src_overlap = (context.src1 != nullptr && ggml_webgpu_tensor_overlap(context.src0, context.src1));
 
         auto it = glu_pipelines.find(key);
         if (it != glu_pipelines.end()) {

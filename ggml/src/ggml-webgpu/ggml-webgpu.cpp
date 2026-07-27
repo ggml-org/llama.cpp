@@ -2700,10 +2700,11 @@ static webgpu_encoded_op ggml_webgpu_glu(webgpu_context & ctx,
 
     const int split = (src1 != nullptr);
 
-    uint32_t offset_src0   =                   (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src0) / ggml_type_size(src0->type));
-    uint32_t offset_src1   = src1 != nullptr ? (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src1) / ggml_type_size(src1->type)) : 0;
-    size_t   merged_offset = 0;
-    size_t   merged_size   = 0;
+    uint32_t offset_src0 = (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src0) / ggml_type_size(src0->type));
+    uint32_t offset_src1 =
+        (src1 != nullptr ? (uint32_t) (ggml_webgpu_tensor_misalignment(ctx, src1) / ggml_type_size(src1->type)) : 0);
+    size_t merged_offset = 0;
+    size_t merged_size   = 0;
     if (decisions->src_overlap) {
         const ggml_webgpu_merged_binding_range merged_range =
             ggml_webgpu_tensor_merged_binding_range(ctx, { src0, src1 });
@@ -2744,8 +2745,7 @@ static webgpu_encoded_op ggml_webgpu_glu(webgpu_context & ctx,
             ggml_webgpu_make_bind_group_entry(0, ggml_webgpu_tensor_buf(src0), merged_offset, merged_size));
         entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, 1, dst));
     } else {
-        entries.push_back(
-            ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src0));
+        entries.push_back(ggml_webgpu_make_tensor_bind_group_entry(ctx, 0, src0));
         uint32_t dst_binding = 1;
         if (split) {
             dst_binding = 2;
