@@ -1134,10 +1134,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
             const int32_t n = (int32_t) dp.n_past;
 
-            int32_t n_draft = params.n_max;
-            if (dp.n_max > 0) {
-                n_draft = std::min(n_draft, dp.n_max);
-            }
+            const int32_t n_draft = params.n_max;
 
             const int32_t n_block_tokens = n_draft + (is_dspark ? 0 : 1);
             i_block_beg[seq_id] = batch.n_tokens;
