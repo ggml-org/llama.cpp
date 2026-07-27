@@ -1081,6 +1081,7 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
     rsp.usecs        = batch_prof.usecs;
     rsp.cycles_start = batch_prof.cycles_start;
     rsp.cycles_stop  = batch_prof.cycles_stop;
+    rsp.seq          = req->seq;
 
     if (ctx->profiler == HTP_PROF_TRACE) {
         for (int t = 0; t <= HTP_MAX_NTHREADS; t++) {
