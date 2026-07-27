@@ -268,9 +268,6 @@ llama_build_and_test(test-backend-ops.cpp)
 llama_build_and_test(test-model-load-cancel.cpp LABEL "model")
 llama_build_and_test(test-autorelease.cpp       LABEL "model")
 llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
-if (APPLE)
-  llama_build_and_test(test-memory-release.cpp  LABEL "model")
-endif()
 
 # Test for state restore with fragmented KV cache
 # Requires a model, uses same args pattern as test-thread-safety
@@ -280,6 +277,12 @@ set_tests_properties(test-state-restore-fragmented PROPERTIES FIXTURES_REQUIRED 
 # Test state save/load functionality
 llama_build_and_test(test-save-load-state.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
 set_tests_properties(test-save-load-state PROPERTIES FIXTURES_REQUIRED test-download-model)
+
+# Test for residency set release
+# Disabled by default (see test file, run manually with LLAMACPP_TEST_MODELFILE set)
+# if (APPLE)
+#   llama_build_and_test(test-rset-release.cpp LABEL "model")
+# endif()
 
 if (NOT GGML_BACKEND_DL)
     # these tests use the backends directly and cannot be built with dynamic loading
