@@ -5,16 +5,19 @@ void llama_model_nanbeige::load_arch_hparams(llama_model_loader & ml) {
 
     uint32_t n_loops_u = 1;
     ml.get_key(LLM_KV_NUM_LOOPS, n_loops_u, false);
-    n_loops = n_loops_u < 1 ? 1 : (int) n_loops_u;
+    GGML_ASSERT(n_loops_u >= 1);
 
     skip_loop_final_norm = false;
     ml.get_key(LLM_KV_SKIP_LOOP_FINAL_NORM, skip_loop_final_norm, false);
 
     n_layer_phys = (int) hparams.n_layer();
 
+    // Bound-check before casting: signed int mul can overflow and bypass the guard.
+    GGML_ASSERT((size_t) n_layer_phys * (size_t) n_loops_u <= (size_t) LLAMA_MAX_LAYERS);
+    n_loops = (int) n_loops_u;
+
     // Expand logical layer count before load_tensors() allocates layers / KV.
     if (n_loops > 1) {
-        GGML_ASSERT(n_layer_phys * n_loops <= (int) LLAMA_MAX_LAYERS);
         for (int j = 1; j < n_loops; ++j) {
             for (int i = 0; i < n_layer_phys; ++i) {
                 const int dst = i + j * n_layer_phys;
@@ -25,7 +28,7 @@ void llama_model_nanbeige::load_arch_hparams(llama_model_loader & ml) {
                 hparams.is_recr_impl[dst]  = hparams.is_recr_impl[i];
             }
         }
-        hparams.n_layer_all = (uint32_t) (n_layer_phys * n_loops);
+        hparams.n_layer_all = (uint32_t) ((size_t) n_layer_phys * (size_t) n_loops);
     }
 
     type = LLM_TYPE_UNKNOWN;
@@ -179,4 +182,3 @@ llama_model_nanbeige::graph::graph(const llama_model & model, const llm_graph_pa
 
     ggml_build_forward_expand(gf, cur);
 }
-
