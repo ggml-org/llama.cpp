@@ -2508,7 +2508,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     }
     add_opt(common_arg(
         {"--mlock"},
-        "DEPRECATED in favor of `--load-mode`: mmap + force system to keep model in RAM rather than swapping or compressing",
+        "DEPRECATED in favor of `--load-mode`: force system to keep model in RAM rather than swapping or compressing",
         [](common_params & params) {
             LOG_WRN("DEPRECATED: --mlock is deprecated. use --load-mode mlock instead\n");
             params.load_mode = LLAMA_LOAD_MODE_MLOCK;
@@ -2537,13 +2537,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "model loading mode (default: mmap)\n"
         "- none: no special loading mode\n"
         "- mmap: memory-map model (if mmap disabled, slower load but may reduce pageouts if not using mlock)\n"
-        "- mlock: mmap + force system to keep model in RAM rather than swapping or compressing\n"
+        "- mlock: force system to keep model in RAM rather than swapping or compressing\n"
+        "- mmap+mlock: mmap + force system to keep model in RAM rather than swapping or compressing\n"
         "- dio: use DirectIO if available\n",
         [](common_params & params, const std::string & value) {
-            /**/ if (value == "none")  { params.load_mode = LLAMA_LOAD_MODE_NONE;      }
-            else if (value == "mmap")  { params.load_mode = LLAMA_LOAD_MODE_MMAP;      }
-            else if (value == "mlock") { params.load_mode = LLAMA_LOAD_MODE_MLOCK;     }
-            else if (value == "dio")   { params.load_mode = LLAMA_LOAD_MODE_DIRECT_IO; }
+            /**/ if (value == "none")       { params.load_mode = LLAMA_LOAD_MODE_NONE;       }
+            else if (value == "mmap")       { params.load_mode = LLAMA_LOAD_MODE_MMAP;       }
+            else if (value == "mlock")      { params.load_mode = LLAMA_LOAD_MODE_MLOCK;      }
+            else if (value == "mmap+mlock") { params.load_mode = LLAMA_LOAD_MODE_MMAP_MLOCK; }
+            else if (value == "dio")        { params.load_mode = LLAMA_LOAD_MODE_DIRECT_IO;  }
             else { throw std::invalid_argument("invalid value"); }
         }
     ).set_env("LLAMA_ARG_LOAD_MODE"));
