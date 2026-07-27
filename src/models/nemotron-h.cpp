@@ -178,7 +178,7 @@ llama_model_nemotron_h::graph::graph(const llama_model & model, const llm_graph_
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 
-    ggml_build_forward_expand(gf, cur);
+    build_output();
 }
 
 ggml_tensor * llama_model_nemotron_h::graph::build_attention_layer(ggml_tensor *             cur,

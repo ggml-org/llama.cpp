@@ -32,6 +32,7 @@ struct llama_cparams {
     float yarn_beta_slow;
 
     bool embeddings;
+    bool no_logits_for_embeddings;
     bool embeddings_nextn;        // also extract the hidden state before the final output norm
     bool embeddings_nextn_masked; // extract for only rows where batch.logits != 0
     bool causal_attn;
@@ -63,3 +64,8 @@ struct llama_cparams {
 
     llama_context * ctx_other;
 };
+
+inline bool llama_skip_logits_for_embeddings(const llama_cparams & cparams, bool has_backend_samplers) {
+    return cparams.embeddings && cparams.no_logits_for_embeddings && cparams.ctx_type == LLAMA_CONTEXT_TYPE_DEFAULT &&
+           !has_backend_samplers;
+}

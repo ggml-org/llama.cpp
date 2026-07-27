@@ -236,14 +236,16 @@ llama_model_llama::graph<embed>::graph(const llama_model & model, const llm_grap
     res->t_embd = cur;
 
     if constexpr (!embed) {
-        // lm_head
-        cur = build_lora_mm(model.output, cur, model.output_s);
+        if (should_build_logits()) {
+            // lm_head
+            cur = build_lora_mm(model.output, cur, model.output_s);
 
-        cb(cur, "result_output", -1);
-        res->t_logits = cur;
+            cb(cur, "result_output", -1);
+            res->t_logits = cur;
+        }
     }
 
-    ggml_build_forward_expand(gf, cur);
+    build_output();
 }
 
 template struct llama_model_llama::graph<false>;

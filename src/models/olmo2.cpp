@@ -203,7 +203,7 @@ llama_model_olmo2::graph<iswa>::graph(const llama_model & model, const llm_graph
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 
-    ggml_build_forward_expand(gf, cur);
+    build_output();
 }
 
 // Explicit template instantiations

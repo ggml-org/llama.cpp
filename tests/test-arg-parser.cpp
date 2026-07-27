@@ -126,6 +126,13 @@ static void test(void) {
     assert(params.n_predict == 6789);
     assert(params.n_batch == 9090);
 
+    common_params embedding_params;
+    argv = { "binary_name", "-m", "model_file.gguf", "--no-logits-for-embeddings" };
+    assert(true ==
+           common_params_parse(argv.size(), list_str_to_char(argv).data(), embedding_params, LLAMA_EXAMPLE_EMBEDDING));
+    assert(embedding_params.no_logits_for_embeddings);
+    assert(common_context_params_to_llama(embedding_params).no_logits_for_embeddings);
+
     // --draft cannot be used outside llama-speculative
     argv = {"binary_name", "--spec-draft-n-max", "123"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_SPECULATIVE));

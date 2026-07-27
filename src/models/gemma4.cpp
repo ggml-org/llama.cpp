@@ -432,7 +432,7 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
     // apply logits bias if needed (e.g. for gemma4_unified patch)
     // this is to mirror the suppress_tokens patch on transformers, to avoid model from outputing <image|> and <audio|> tokens (which is a known issue related to the checkpoint)
     // TODO: maybe handle this inside the sampling system in the future
-    if (!model.vocab.get_suppress_tokens().empty()) {
+    if (should_build_logits() && !model.vocab.get_suppress_tokens().empty()) {
         auto inp_bias = std::make_unique<llm_graph_input_logits_bias>(model.vocab);
         inp_bias->logits_bias = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, inp_bias->arr.size());
         cur = ggml_add(ctx0, cur, inp_bias->logits_bias);
@@ -442,7 +442,7 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 
-    ggml_build_forward_expand(gf, cur);
+    build_output();
 }
 
 // equivalent to get_per_layer_inputs() in python code
