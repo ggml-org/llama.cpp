@@ -55,9 +55,143 @@ void llama_model_onyx::load_arch_tensors(llama_model_loader &) {
     }
 }
 
-llama_model_onyx::graph::graph(const llama_model & /*model*/, const llm_graph_params & params)
+llama_model_onyx::graph::graph(const llama_model & model, const llm_graph_params & params)
     : llm_graph_context(params) {
-    GGML_ABORT("onyx: build_arch_graph not implemented yet");
+    const int64_t n_embd_head = hparams.n_embd_head_v();
+    GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
+
+    ggml_tensor * cur;
+    ggml_tensor * inpL;
+
+    inpL = build_inp_embd(model.tok_embd);
+
+    // OnyxNormalizedEmbedding applies scaleless RMSNorm to token embeddings
+    inpL = build_norm(inpL, NULL, NULL, LLM_NORM_RMS, -1);
+    cb(inpL, "inp_embd_normed", -1);
+
+    ggml_tensor * inp_pos = build_inp_pos();
+    auto * inp_attn = build_attn_inp_kv_iswa();
+    ggml_tensor * inp_out_ids = build_inp_out_ids();
+
+    const float kq_scale = 1.0f / sqrtf(float(n_embd_head));
+
+    for (int il = 0; il < n_layer; ++il) {
+        const float freq_base_l  = model.get_rope_freq_base (cparams, il);
+        const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
+
+        ggml_tensor * inpSA = inpL;
+
+        const bool use_rope = hparams.n_no_rope_layer_step > 0 &&
+                              (il + 1) % hparams.n_no_rope_layer_step != 0;
+
+        // pre-attention norm (weight+1 folded at conversion time)
+        cur = build_norm(inpL, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
+        cb(cur, "attn_norm", il);
+
+        // self-attention: attention output gate around SDPA (afmoe.cpp:147-191)
+        {
+            ggml_tensor * attn_inp = cur;  // save input for gate computation
+
+            auto [Qcur, Kcur, Vcur] = build_qkv(model.layers[il], cur,
+                    n_embd_head, n_head, n_head_kv, il);
+
+            // gate = wqkv_gate @ attn_inp (from pre-attn hidden state)
+            ggml_tensor * gate = build_lora_mm(model.layers[il].wqkv_gate, attn_inp);
+            cb(gate, "attn_gate_proj", il);
+
+            // QK-norm. attn_q_norm weight was synthesized at conversion to broadcast
+            // qk_scale_factor across head_dim; attn_k_norm is identity (ones).
+            Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, NULL, LLM_NORM_RMS, il);
+            Kcur = build_norm(Kcur, model.layers[il].attn_k_norm, NULL, LLM_NORM_RMS, il);
+            cb(Qcur, "Qcur_normed", il);
+            cb(Kcur, "Kcur_normed", il);
+
+            if (use_rope) {
+                Qcur = ggml_rope_ext(
+                        ctx0, Qcur, inp_pos, nullptr,
+                        n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
+                        ext_factor, attn_factor, beta_fast, beta_slow);
+                cb(Qcur, "Qcur_rope", il);
+
+                Kcur = ggml_rope_ext(
+                        ctx0, Kcur, inp_pos, nullptr,
+                        n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
+                        ext_factor, attn_factor, beta_fast, beta_slow);
+                cb(Kcur, "Kcur_rope", il);
+            }
+
+            // SDPA. wo is deferred; the gate goes between attn_out and o_proj.
+            cur = build_attn(inp_attn,
+                    NULL, NULL, NULL,
+                    Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
+            cb(cur, "attn_out", il);
+
+            gate = ggml_sigmoid(ctx0, gate);
+            cb(gate, "attn_gate_sig", il);
+            cur = ggml_mul(ctx0, cur, gate);
+            cb(cur, "attn_gated", il);
+
+            cur = build_lora_mm(model.layers[il].wo, cur, model.layers[il].wo_s);
+            cb(cur, "attn_o_proj", il);
+        }
+
+        // post-attention norm
+        cur = build_norm(cur, model.layers[il].attn_post_norm, NULL, LLM_NORM_RMS, il);
+        cb(cur, "attn_post_norm", il);
+
+        if (il == n_layer - 1 && inp_out_ids) {
+            cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
+            inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+        }
+
+        ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
+        cb(ffn_inp, "ffn_inp", il);
+
+        // pre-FFN norm
+        cur = build_norm(ffn_inp, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
+        cb(cur, "ffn_norm", il);
+
+        // SwiGLU dense FFN
+        cur = build_ffn(cur,
+                model.layers[il].ffn_up,   NULL, NULL,
+                model.layers[il].ffn_gate, NULL, NULL,
+                model.layers[il].ffn_down, NULL, NULL,
+                NULL,
+                LLM_FFN_SILU, LLM_FFN_PAR, il);
+        cb(cur, "ffn_out", il);
+
+        // post-FFN norm
+        cur = build_norm(cur, model.layers[il].ffn_post_norm, NULL, LLM_NORM_RMS, il);
+        cb(cur, "ffn_post_norm", il);
+
+        cur = ggml_add(ctx0, cur, ffn_inp);
+        cur = build_cvec(cur, il);
+        cb(cur, "l_out", il);
+
+        inpL = cur;
+    }
+
+    cur = inpL;
+
+    // final norm
+    cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
+    cb(cur, "result_norm", -1);
+    res->t_embd = cur;
+
+    // lm_head. output_multiplier is already folded into the weight at conversion.
+    cur = build_lora_mm(model.output, cur, model.output_s);
+
+    // Final logit tanh softcap (from gemma3.cpp).
+    if (hparams.f_final_logit_softcapping) {
+        cur = ggml_scale(ctx0, cur, 1.0f / hparams.f_final_logit_softcapping);
+        cur = ggml_tanh(ctx0, cur);
+        cur = ggml_scale(ctx0, cur, hparams.f_final_logit_softcapping);
+    }
+
+    cb(cur, "result_output", -1);
+    res->t_logits = cur;
+
+    ggml_build_forward_expand(gf, cur);
 }
 
 std::unique_ptr<llm_graph_context> llama_model_onyx::build_arch_graph(const llm_graph_params & params) const {
