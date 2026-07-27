@@ -1,6 +1,5 @@
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <unordered_map>
@@ -216,26 +215,16 @@ void ggml_sycl_flash_attn_ext_onednn(ggml_backend_sycl_context & ctx, ggml_tenso
 
     // divide-by-(1/scale) reproduces ggml's score *= kq_scale on the proven probe graph.
     //
-    // The scale upload must not be an async memcpy from a stack local: on the in-order queue
-    // the copy waits behind the K/V staging kernels, and once those take long enough
-    // (n_kv >= ~26k on B70) the frame is recycled before the copy runs, feeding the SDPA a
-    // garbage scale (output collapses to a repeated token). Cache one device scalar per
-    // (device, value) -- the scale is constant per model -- and upload it synchronously once.
+    // The scale must not be uploaded with an async memcpy from a stack local: on the in-order
+    // queue that copy waits behind the K/V staging kernels, and once those take long enough
+    // (n_kv >= ~26k on B70) the host frame is recycled before the copy runs, feeding the SDPA a
+    // garbage scale (output collapses to a repeated token). Write the scalar from a kernel
+    // instead -- the value is captured into the command, so no host memory has to outlive the
+    // call, and the enqueue stays async.
     const sycl::half scale_h = (sycl::half) (1.0f / kq_scale);
-    static std::unordered_map<std::string, sycl::half *> scale_cache;
-    char sckey[64];
-    snprintf(sckey, sizeof(sckey), "%d:%a", ggml_sycl_get_device(), (double) (float) scale_h);
-    sycl::half * scale_dev;
-    {
-        auto sit = scale_cache.find(sckey);
-        if (sit == scale_cache.end()) {
-            scale_dev = sycl::malloc_device<sycl::half>(1, *stream);
-            stream->memcpy(scale_dev, &scale_h, sizeof(sycl::half));
-            scale_cache.emplace(sckey, scale_dev);
-        } else {
-            scale_dev = sit->second;
-        }
-    }
+    ggml_sycl_pool_alloc<sycl::half> scbuf(ctx.pool(), 1);
+    sycl::half * const scale_dev = scbuf.get();
+    stream->single_task([=]() { *scale_dev = scale_h; });
 
     ggml_sycl_pool_alloc<sycl::half> outf(ctx.pool(), (size_t) H * q * d);   // f16 contiguous SDPA out [mb,H,q,d]
 
