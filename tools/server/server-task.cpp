@@ -1738,7 +1738,28 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
     return &states.back();
 }
 
+// how many tokens of a cached prompt could actually be reused if we restored it.
+// without a rollback-capable memory module (hybrid/recurrent), the restored state
+// is usable only up to its newest context checkpoint at or below the divergence
+// point - that checkpoint is what the caller falls back to instead of
+// reprocessing the prompt from scratch
+static int64_t server_prompt_cache_n_reusable(const server_prompt_cache_state & state, int lcp) {
+    int64_t res = 0;
+
+    for (const auto & ckpt : state.prompt.checkpoints) {
+        if (ckpt.n_tokens <= lcp) {
+            res = std::max(res, ckpt.n_tokens);
+        }
+    }
+
+    return res;
+}
+
 bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_tgt, llama_context * ctx_dft, int32_t id_slot) {
+    // minimum salvage before we accept consuming a cached entry despite a low
+    // f_keep - restoring costs a state copy, so a tiny salvage is not worth it
+    constexpr int64_t n_reuse_min = 4096;
+
     const int lcp_best = prompt.tokens.get_common_prefix(tokens_new);
 
     float f_keep_best = prompt.tokens.size() > 0 ? float(lcp_best) / prompt.tokens.size() : -1.0f; // empty slot: any cache entry wins
@@ -1757,12 +1778,26 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
 
         SRV_TRC("   - prompt with length %7zu, lcp = %7d, f_keep = %.3f, sim = %.3f\n", it->prompt.tokens.size(), lcp_cur, f_keep_cur, sim_cur);
 
-        // don't trash large prompts
-        if (f_keep_cur < 0.25f) {
+        // don't consume a large cached prompt for a marginal salvage: restoring an
+        // entry removes it from the cache (states.erase() below).
+        //
+        // an entry that still carries a context checkpoint at or below the
+        // divergence point is worth taking even at a low f_keep - for
+        // hybrid/recurrent memory that checkpoint is the difference between
+        // resuming from the prefix and reprocessing the whole prompt
+        // ref: https://github.com/ggml-org/llama.cpp/issues/22746
+        if (f_keep_cur < 0.25f &&
+                server_prompt_cache_n_reusable(*it, lcp_cur) < n_reuse_min) {
             continue;
         }
 
-        if (f_keep_best < f_keep_cur && sim_best < sim_cur) {
+        // prefer whichever entry covers most of the new prompt, i.e. saves the
+        // most work. the slot's own prompt was already stored by prompt_save()
+        // before we got here, so picking a candidate can never lose it -
+        // requiring the candidate to also beat the slot's f_keep would reject
+        // useful entries whenever the slot happens to hold a small unrelated
+        // prompt, whose f_keep is then trivially high
+        if (sim_best < sim_cur) {
             f_keep_best = f_keep_cur;
             sim_best    = sim_cur;
 
