@@ -2658,7 +2658,7 @@ private:
                     // cells shared by reference would be shifted for ALL
                     // branches -> silent cross-branch corruption. Reject it.
                     if (params_base.ctx_shift || params_base.n_cache_reuse > 0) {
-                        send_error(task, "clone_to is incompatible with --ctx-shift/--cache-reuse "
+                        send_error(task, "clone_to is incompatible with --context-shift/--cache-reuse "
                                          "(shared KV cells would shift across branches)",
                                    ERROR_TYPE_NOT_SUPPORTED);
                         break;
@@ -5317,6 +5317,7 @@ std::unique_ptr<server_res_generator> server_routes::handle_slots_clone_to(const
         return res;
     }
 
+    GGML_ASSERT(dynamic_cast<server_task_result_slot_clone *>(result.get()) != nullptr);
     res->ok(result->to_json());
     return res;
 }

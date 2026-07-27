@@ -1151,8 +1151,8 @@ Unlike `save`/`restore`, this action performs no disk I/O and therefore does **n
 
 *Notes:*
 
-- Returns HTTP 400 if either slot ID is out of range, if source and target are the same slot, or if the source slot is empty (nothing to clone).
-- Not supported with `--ctx-shift` or `--cache-reuse`: the cloned cells are shared by reference, so shifting or reusing them would silently corrupt all branches (HTTP 501).
+- Returns HTTP 400 if either slot ID is out of range, if source and target are the same slot, if the source slot is empty (nothing to clone), or if `target` is missing/invalid.
+- Not supported with `--context-shift` or `--cache-reuse`: the cloned cells are shared by reference, so shifting or reusing them would silently corrupt all branches (HTTP 501).
 - The clone has point-in-time semantics: the target receives the source state as it is at clone time. Clone while the trunk is idle; further generation on either slot afterwards diverges independently.
 
 ### GET `/lora-adapters`: Get list of all LoRA adapters

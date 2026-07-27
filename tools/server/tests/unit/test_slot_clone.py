@@ -31,13 +31,25 @@ def test_slot_clone_to():
     assert res.status_code == 200
     n_prompt_full = res.body["timings"]["prompt_n"]
     assert n_prompt_full > 0  # all tokens are processed
+    n_predicted = res.body["tokens_predicted"]
 
-    # Clone the KV cache of slot 0 into slot 1
+    # Occupy slot 1 with a different prompt: cloning must replace its state
+    res = server.make_request("POST", "/completion", data={
+        "prompt": "What is the capital of Germany?",
+        "id_slot": 1,
+        "cache_prompt": True,
+        "n_predict": 8,
+    })
+    assert res.status_code == 200
+
+    # Clone the KV cache of slot 0 into slot 1 (target already occupied)
     res = server.make_request("POST", "/slots/0?action=clone_to&target=1")
     assert res.status_code == 200
     assert res.body["id_slot"] == 0
     assert res.body["id_slot_target"] == 1
-    assert res.body["n_cloned"] > 0
+    # n_cloned is the exact source slot state: prompt + generated tokens,
+    # minus the last sampled token which is returned but not cached in the slot
+    assert res.body["n_cloned"] == n_prompt_full + n_predicted - 1
     assert "clone_ms" in res.body["timings"]
 
     # A short suffix on slot 1 should reuse the cloned prefix:
@@ -101,3 +113,56 @@ def test_slot_clone_to_empty_source():
     res = server.make_request("POST", "/slots/1?action=clone_to&target=0")
     assert res.status_code == 400
     assert res.body["error"]["type"] == "invalid_request_error"
+
+
+def test_slot_clone_to_target_in_body():
+    global server
+    server.start()
+
+    # Process a prompt on slot 0
+    res = server.make_request("POST", "/completion", data={
+        "prompt": LONG_TEXT,
+        "id_slot": 0,
+        "cache_prompt": True,
+        "n_predict": 8,
+    })
+    assert res.status_code == 200
+
+    # target passed in the request body instead of the query string
+    res = server.make_request("POST", "/slots/0?action=clone_to", data={
+        "target": 1,
+    })
+    assert res.status_code == 200
+    assert res.body["id_slot"] == 0
+    assert res.body["id_slot_target"] == 1
+    assert res.body["n_cloned"] > 0
+
+    # The cloned prefix is reused on slot 1
+    res = server.make_request("POST", "/completion", data={
+        "prompt": LONG_TEXT + " The end.",
+        "id_slot": 1,
+        "cache_prompt": True,
+        "n_predict": 8,
+    })
+    assert res.status_code == 200
+    assert res.body["timings"]["prompt_n"] < 8  # only the suffix is processed
+
+
+def test_slot_clone_to_ctx_shift_not_supported():
+    global server
+    server.enable_ctx_shift = True
+    server.start()
+
+    # Process a prompt on slot 0
+    res = server.make_request("POST", "/completion", data={
+        "prompt": LONG_TEXT,
+        "id_slot": 0,
+        "cache_prompt": True,
+        "n_predict": 8,
+    })
+    assert res.status_code == 200
+
+    # clone_to is rejected with context shift enabled (HTTP 501)
+    res = server.make_request("POST", "/slots/0?action=clone_to&target=1")
+    assert res.status_code == 501
+    assert res.body["error"]["type"] == "not_supported_error"
