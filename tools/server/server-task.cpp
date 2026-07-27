@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cinttypes>
 #include <iterator>
+#include <limits>
 
 using json = nlohmann::ordered_json;
 
@@ -1692,6 +1693,91 @@ int64_t server_prompt::reusable_prefix_tokens(
     return it == checkpoints.end() ? 0 : it->n_tokens;
 }
 
+static std::list<common_prompt_checkpoint> prompt_cache_select_checkpoints(
+        const std::list<common_prompt_checkpoint> & checkpoints,
+        size_t budget,
+        size_t & size_selected) {
+    size_selected = 0;
+
+    size_t size_all = 0;
+    for (const auto & checkpoint : checkpoints) {
+        size_all += checkpoint.size();
+    }
+
+    if (size_all <= budget) {
+        size_selected = size_all;
+        return checkpoints;
+    }
+
+    std::vector<const common_prompt_checkpoint *> candidates;
+    candidates.reserve(checkpoints.size());
+
+    for (const auto & checkpoint : checkpoints) {
+        candidates.push_back(&checkpoint);
+    }
+
+    std::vector<bool> selected(candidates.size(), false);
+    size_t n_selected = 0;
+    size_t remaining  = budget;
+
+    // Prefer the newest checkpoint first, then spread the remaining selections
+    // across the prompt instead of filling the budget with adjacent snapshots.
+    while (true) {
+        size_t best = candidates.size();
+        uint64_t best_distance = 0;
+
+        for (size_t i = 0; i < candidates.size(); ++i) {
+            if (selected[i] || candidates[i]->size() > remaining) {
+                continue;
+            }
+
+            uint64_t distance = std::numeric_limits<uint64_t>::max();
+
+            if (n_selected == 0) {
+                distance = candidates[i]->n_tokens >= 0 ? (uint64_t) candidates[i]->n_tokens : 0;
+            } else {
+                for (size_t j = 0; j < candidates.size(); ++j) {
+                    if (!selected[j]) {
+                        continue;
+                    }
+
+                    const int64_t lhs = candidates[i]->n_tokens;
+                    const int64_t rhs = candidates[j]->n_tokens;
+                    const uint64_t cur = lhs >= rhs ? (uint64_t) (lhs - rhs) : (uint64_t) (rhs - lhs);
+                    distance = std::min(distance, cur);
+                }
+            }
+
+            if (best == candidates.size() ||
+                    distance > best_distance ||
+                    (distance == best_distance && candidates[i]->n_tokens > candidates[best]->n_tokens)) {
+                best = i;
+                best_distance = distance;
+            }
+        }
+
+        if (best == candidates.size()) {
+            break;
+        }
+
+        selected[best] = true;
+        ++n_selected;
+
+        const size_t checkpoint_size = candidates[best]->size();
+        size_selected += checkpoint_size;
+        remaining -= checkpoint_size;
+    }
+
+    std::list<common_prompt_checkpoint> result;
+    for (size_t i = 0; i < candidates.size(); ++i) {
+        if (selected[i]) {
+            result.push_back(*candidates[i]);
+        }
+    }
+
+    return result;
+}
+
 server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & prompt, size_t state_size_tgt, size_t state_size_dft) {
     // first check if the current state is contained fully in the cache
     for (auto it = states.begin(); it != states.end(); ++it) {
@@ -1703,18 +1789,19 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
         }
     }
 
-    // calculate checkpoints size to see if it will fit with the prompt
+    // Checkpoints improve rollback coverage, but the exact prompt state remains
+    // useful without them and must take priority in the cache budget.
     size_t checkpoints_size = 0;
     for (const auto & ckpt : prompt.checkpoints) {
         checkpoints_size += ckpt.size();
     }
 
-    const size_t state_size_new = state_size_tgt + state_size_dft + checkpoints_size;
+    const size_t state_size_base = state_size_tgt + state_size_dft;
 
-    // skip over-limit entries to avoid disturbing the cache
-    if (limit_size > 0 && state_size_new > limit_size) {
-        SRV_WRN(" - prompt state size %.3f MiB exceeds cache size limit %.3f MiB, skipping\n",
-                state_size_new / (1024.0 * 1024.0), limit_size / (1024.0 * 1024.0));
+    // The exact state itself cannot be reduced safely.
+    if (limit_size > 0 && state_size_base > limit_size) {
+        SRV_WRN(" - prompt base state size %.3f MiB exceeds cache size limit %.3f MiB, skipping\n",
+                state_size_base / (1024.0 * 1024.0), limit_size / (1024.0 * 1024.0));
         return nullptr;
     }
 
@@ -1731,21 +1818,42 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
         }
     }
 
-    if (limit_size > 0) {
-        // make room before allocating the new vectors to avoid breaching the limit
-        while (!states.empty() && size() + state_size_new > limit_size) {
-            SRV_WRN(" - making room for prompt cache entry, removing oldest entry (size = %.3f MiB)\n",
-                    states.front().size() / (1024.0 * 1024.0));
-
-            states.pop_front();
-        }
-    }
-
+    server_tokens tokens_cache;
+    std::list<common_prompt_checkpoint> checkpoints_cache;
     std::vector<uint8_t> state_data_tgt;
     std::vector<uint8_t> state_data_dft;
 
-    // check if we can allocate enough memory for the new state
     try {
+        const size_t checkpoint_budget =
+            limit_size > 0 ? limit_size - state_size_base : std::numeric_limits<size_t>::max();
+
+        size_t checkpoints_size_selected = 0;
+        checkpoints_cache = prompt_cache_select_checkpoints(
+                prompt.checkpoints,
+                checkpoint_budget,
+                checkpoints_size_selected);
+
+        if (checkpoints_cache.size() != prompt.checkpoints.size()) {
+            SRV_WRN(" - prompt checkpoints require %.3f MiB, retaining %zu/%zu (%.3f MiB) within cache budget\n",
+                    checkpoints_size / (1024.0 * 1024.0),
+                    checkpoints_cache.size(),
+                    prompt.checkpoints.size(),
+                    checkpoints_size_selected / (1024.0 * 1024.0));
+        }
+
+        const size_t state_size_new = state_size_base + checkpoints_size_selected;
+
+        if (limit_size > 0) {
+            // Make room before allocating the new vectors to avoid breaching the limit.
+            while (!states.empty() && size() + state_size_new > limit_size) {
+                SRV_WRN(" - making room for prompt cache entry, removing oldest entry (size = %.3f MiB)\n",
+                        states.front().size() / (1024.0 * 1024.0));
+
+                states.pop_front();
+            }
+        }
+
+        tokens_cache = prompt.tokens.clone();
         state_data_tgt.resize(state_size_tgt);
         state_data_dft.resize(state_size_dft);
     } catch (const std::bad_alloc & e) {
@@ -1762,8 +1870,8 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
 
     states.push_back({
         /*.prompt =*/ {
-            /*.tokens      =*/ prompt.tokens.clone(),
-            /*.checkpoints =*/ prompt.checkpoints,
+            /*.tokens      =*/ std::move(tokens_cache),
+            /*.checkpoints =*/ std::move(checkpoints_cache),
         },
         /*.data   =*/ {
             /*.main =*/ std::move(state_data_tgt),
