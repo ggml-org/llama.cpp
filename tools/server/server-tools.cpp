@@ -597,11 +597,21 @@ static constexpr int    SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_TIMEOUT     = 60;    
 struct server_tool_exec_shell_command : server_tool {
 
 #ifdef _WIN32
-    // Asterisks seem safe, since they can not begin the command string (unless whitelisted).
-    static constexpr const char *shell_command_delims = ";%<>$&!|";
+    // These symbols are never allowed anywhere in the command string:
+    static constexpr const char *shell_symbol_blacklist = "%<>$&!";
+    // Safe because they can not begin command string (unless whitelisted): "*"
+    // Separate (potential) command segments:
+    static constexpr const char *shell_cmd_delims = "|;";
+    // Isolate executables (from arguments/segments):
+    static constexpr const char *shell_delims     = "|;" " \t\n";
 #else
-    // Asterisks and exclamation marks seem safe, since they can not begin the command string (unless whitelisted).
-    static constexpr const char *shell_command_delims = ";`<>$()&|";
+    // These symbols are never allowed anywhere in the command string:
+    static constexpr const char *shell_symbol_blacklist = "`<>$()&";
+    // Safe because they can not begin command string (unless whitelisted): "*!"
+    // Separate (potential) command segments:
+    static constexpr const char *shell_cmd_delims = "|;";
+    // Isolate executables (from arguments/segments):
+    static constexpr const char *shell_delims     = "|;" " \t\n";
 #endif
 
     server_tool_exec_shell_command() {
@@ -617,7 +627,7 @@ struct server_tool_exec_shell_command : server_tool {
             " Only whitelisted programs may be run."
             " Programs currently on the whitelist can be listed with the `list_shell_commands` tool."
             " Commands must not contain any of these characters: \"%s\"",
-            shell_command_delims
+            shell_symbol_blacklist
         );
         return {
             {"type", "function"},
@@ -652,26 +662,46 @@ struct server_tool_exec_shell_command : server_tool {
 #endif
 
         if (!s_shell_command_whitelist->empty()) {
-            bool whitelisted = false;
-            for (auto const & s : *s_shell_command_whitelist) {
-                if (!command.compare(0, s.length(), s)) {
-                    // Command string starts with the whitelisted string.
+            // Iterate through potential segment of commands.
+            const char *cur = command.data();
+            static const auto ssbl_len = strlen(shell_symbol_blacklist);
+            do {
+                // Skip irrelevant symbols.
+                cur += strspn(cur, shell_delims);
+                // Mostly to avoid confusing error message when command string is all whitespace.
+                if (cur >= command.data() + command.length()) break;
+
+                // Check whether beginning of potential segment matches a string (program name) in the whitelist.
+                bool whitelisted = false;
+                for (auto const & s : *s_shell_command_whitelist) {
+                    // Check against size of whitelist entry, to prevent matching prefix.
+                    if (
+                        s.length() < strcspn(cur, shell_delims)
+                        || memcmp(cur, s.data(), s.length())
+                    ) continue;
+                    // Command segment matches whitelist entry.
+
                     // Check for disallowed symbols.
-                    for (char c : command) if (strchr(shell_command_delims, c)) {
-                        return {{
-                            "error",
-                            string_format(
-                                "Command rejected! It contains at least one character (specifically '%c') from the unsafe list: \"%s\"",
-                                c, shell_command_delims
-                            )
-                        }};
+                    for (
+                        const char *c = cur,
+                            * const cc = c + strcspn(c, shell_cmd_delims);
+                        c < cc; ++c
+                    ) if (memchr(shell_symbol_blacklist, *c, ssbl_len)) {
+                        return {{"error", string_format(
+                            "Command rejected!"
+                            " It contains at least one character (specifically '%c') from the unsafe list: \"%s\"",
+                            *c, shell_symbol_blacklist
+                        )}};
                     }
                     // No disallowed symbols.
-                    whitelisted = true;
-                    break;
+                    whitelisted = true; break;
                 }
-            }
-            if (!whitelisted) return {{"error", "Command rejected! Program is not permitted by whitelist."}};
+                if (!whitelisted) return {{"error", string_format(
+                    "Command rejected! Program is not permitted by whitelist: \"%.*s\"",
+                    (int)strcspn(cur, shell_delims), cur
+                )}};
+                // Potential segment seems safe.
+            } while (*(cur += strcspn(cur, shell_cmd_delims))); // End on first null.
         }
 
         auto io = make_tools_io(params);
