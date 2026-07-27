@@ -2272,6 +2272,57 @@ struct llama_model_mimo2 : public llama_model_base {
 };
 
 
+struct llama_model_kimi_k3 : public llama_model_base {
+    llama_model_kimi_k3(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+
+    struct graph : public llm_build_delta_net_base {
+        graph(const llama_model & model, const llm_graph_params & params);
+
+        const llama_model & model;
+
+        // Cross-layer residual attention (K3's `_apply_attn_res`).
+        //
+        // `src` holds the block-residual checkpoints, one [n_embd, n_token] slab
+        // per checkpoint, packed as [n_embd, n_ckpt, n_token] so that:
+        //   - ggml_rms_norm reduces over ne0 = n_embd (scores all slabs at once)
+        //   - ggml_dsv4_hc_pre reduces over ne1 = n_ckpt (the weighted sum)
+        // Both requirements are satisfied by the same layout, which is why this
+        // needs no transpose of the (large) stack.
+        // Each checkpoint is kept as its own [n_embd, 1, n_token] tensor and the
+        // [n_embd, n_ckpt, n_token] stack is materialised with ggml_concat only when
+        // the set changes (8 times per forward pass for the real model). A single
+        // preallocated buffer would be cheaper, but a bare ggml_new_tensor leaf has
+        // no backing buffer - ggml-alloc only allocates tensors that are op outputs.
+        std::vector<ggml_tensor *> ckpts;
+        ggml_tensor * stack_cache   = nullptr;
+        int           stack_cache_n = -1;
+
+        void          res_push(ggml_tensor * cur, int64_t n_embd, int64_t n_tokens);
+        ggml_tensor * res_stack(int64_t n_embd, int64_t n_tokens);
+        ggml_tensor * res_mix(ggml_tensor * cur, ggml_tensor * score_w,
+                              int64_t n_embd, int64_t n_tokens, int il);
+
+        ggml_tensor * build_kda_layer(ggml_tensor * cur, const llama_layer & layer,
+                                      llm_graph_input_rs * inp_rs,
+                                      int64_t d_conv, int64_t head_dim, int64_t n_head_kda,
+                                      int64_t d_inner, int64_t n_seq_tokens, int64_t n_seqs, int il);
+
+        ggml_tensor * build_mla_layer(ggml_tensor * cur, const llama_layer & layer,
+                                      llm_graph_input_attn_k  * inp_attn_k,
+                                      llm_graph_input_attn_kv * inp_attn_kv,
+                                      int64_t n_embd_head_k_mla, int64_t n_embd_head_v_mla,
+                                      int64_t kv_lora_rank, int64_t n_embd_head_qk_rope,
+                                      int64_t n_embd_head_qk_nope, float kq_scale, int il);
+
+        ggml_tensor * build_latent_moe(ggml_tensor * cur, const llama_layer & layer,
+                                       int64_t n_embd_latent, int il);
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
 struct llama_model_kimi_linear : public llama_model_base {
     llama_model_kimi_linear(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
