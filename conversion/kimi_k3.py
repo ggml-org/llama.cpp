@@ -332,7 +332,8 @@ class KimiK3Model(TextModel):
 
         # -exp(A_log) is folded here so the graph does not have to
         if name.endswith(".A_log"):
-            data_torch = -torch.exp(data_torch)
+            n_head = self.hparams["num_attention_heads"]
+            data_torch = -torch.exp(data_torch.float()[:n_head])
 
         # dt_bias -> the name SSM_DT's mapping expects
         if name.endswith(".dt_bias"):
