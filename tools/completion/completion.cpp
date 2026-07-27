@@ -176,11 +176,6 @@ int llama_completion(int argc, char ** argv) {
     struct ggml_threadpool_params tpp =
             ggml_threadpool_params_from_cpu_params(params.cpuparams);
 
-    if (!set_process_priority(params.cpuparams.priority)) {
-        LOG_ERR("%s: error: failed to set process priority\n", __func__);
-        return 1;
-    }
-
     struct ggml_threadpool * threadpool_batch = NULL;
     if (!ggml_threadpool_params_match(&tpp, &tpp_batch)) {
         threadpool_batch = ggml_threadpool_new_fn(&tpp_batch);
