@@ -295,8 +295,13 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
         }
     }
 
-    // reasoning budget sampler (skip when budget is unlimited unless a lazy grammar is active, which needs rbudget for thinking-block suppression)
-    if (!params.reasoning_budget_start.empty() && !params.reasoning_budget_end.empty() && (params.grammar_lazy || params.reasoning_budget_tokens >= 0 || params.reasoning_control)) {
+    // reasoning budget sampler. The master switch (reasoning_budget_enabled) gates the
+    // budget/soft/intro/grace mechanism and the manual reasoning_control endpoint - both are
+    // "thought control" features. It does not gate grammar_lazy's own need for this sampler,
+    // which is an unrelated grammar/tool-calling concern (suppressing grammar constraints while
+    // inside a thinking block), not part of the budget-forcing mechanism itself.
+    const bool reasoning_budget_active = params.reasoning_budget_enabled && (params.reasoning_budget_tokens >= 0 || params.reasoning_control);
+    if (!params.reasoning_budget_start.empty() && !params.reasoning_budget_end.empty() && (params.grammar_lazy || reasoning_budget_active)) {
         rbudget = common_reasoning_budget_init(
             vocab,
             params.reasoning_budget_start,
