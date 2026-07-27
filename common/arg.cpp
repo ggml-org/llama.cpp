@@ -3264,8 +3264,8 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--whitelist-shell-commands"}, "CMD1,CMD2,...",
         "experimental: comma separated list of programs to allow when using the exec_shell_command tool. (default: all allowed)\n"
+        "currently disallows (most) special symbols interpreted by the shell\n"
         "whitelisted programs may easily bypass all restriction, so choose your programs carefully\n"
-        "currently disallows (most) special symbols interpreted by the shell, including pipes\n"
         "note: this provides no protection against variation in your shell's command resolution",
         [](common_params & params, const std::string & value) {
             params.server_tools_shell_command_whitelist = parse_csv_row(value);
