@@ -376,6 +376,12 @@ class Keys:
         CONV_KERNEL_SIZE    = "clip.audio.conv_kernel_size"
         MAX_POS_EMB         = "clip.audio.max_pos_emb"
         FEATURE_LAYERS      = "clip.audio.feature_layer" # Granite Speech Plus
+        RVQ_NUM_QUANTIZERS  = "clip.audio.rvq.num_quantizers"
+        RVQ_CODEBOOK_SIZE   = "clip.audio.rvq.codebook_size"
+        WA_PATTERN_MODE     = "clip.audio.wa_pattern_mode" # per-layer -1 (full) / 0 (windowed)
+        WINDOW_SIZE         = "clip.audio.window_size"
+        LOCAL_BLOCK_COUNT   = "clip.audio.local_block_count" # mimo-v2.5: input_local_transformer layer count
+        LOCAL_GROUP_SIZE    = "clip.audio.local_group_size"  # mimo-v2.5: input_local_transformer grouping size
 
         class Attention:
             HEAD_COUNT      = "clip.audio.attention.head_count"
@@ -945,6 +951,9 @@ class MODEL_TENSOR(IntEnum):
     A_ENC_FFN_SCALE_1     = auto() # gemma3n
     A_ENC_FFN_GATE_1      = auto() # lfm2, gemma3n
     A_ENC_FFN_DOWN_1      = auto() # lfm2, gemma3n
+    A_ENC_DOWNSAMPLE_CONV = auto() # mimo-audio-tokenizer: post-transformer downsample conv
+    A_ENC_DOWNSAMPLE_NORM = auto() # mimo-audio-tokenizer: post-transformer downsample norm
+    A_ENC_RVQ_CODEBOOK    = auto() # mimo-audio-tokenizer: residual vector quantizer codebook, per quantizer index
     A_MMPROJ              = auto()
     A_MMPROJ_FC           = auto()
     A_MM_NORM_PRE         = auto()
@@ -953,6 +962,17 @@ class MODEL_TENSOR(IntEnum):
     A_MM_HARD_EMB_NORM    = auto() # gemma3n
     A_MM_SOFT_EMB_NORM    = auto() # gemma3n
     A_MM_INP_PROJ         = auto() # gemma3n
+    A_MM_CODE_EMBD        = auto() # mimo: text-side RVQ code embedding table ("text codebook"), merged 3D [n_channels, vocab, dim]
+    A_MM_LOCAL_ATTN_Q     = auto() # mimo: input_local_transformer (LLM-side connector)
+    A_MM_LOCAL_ATTN_K     = auto()
+    A_MM_LOCAL_ATTN_V     = auto()
+    A_MM_LOCAL_ATTN_OUT   = auto()
+    A_MM_LOCAL_FFN_GATE   = auto()
+    A_MM_LOCAL_FFN_UP     = auto()
+    A_MM_LOCAL_FFN_DOWN   = auto()
+    A_MM_LOCAL_LN1        = auto()
+    A_MM_LOCAL_LN2        = auto()
+    A_MM_LOCAL_NORM       = auto() # final norm after all input_local_transformer layers
     A_PER_DIM_K_SCALE     = auto() # gemma4
     A_PER_DIM_SCALE       = auto() # gemma4
     # nextn/mtp
@@ -1532,6 +1552,9 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.A_ENC_FFN_UP_1:            "a.blk.{bid}.ffn_up_1",
     MODEL_TENSOR.A_ENC_FFN_GATE_1:          "a.blk.{bid}.ffn_gate_1",
     MODEL_TENSOR.A_ENC_FFN_DOWN_1:          "a.blk.{bid}.ffn_down_1",
+    MODEL_TENSOR.A_ENC_DOWNSAMPLE_CONV:     "a.downsample.conv",
+    MODEL_TENSOR.A_ENC_DOWNSAMPLE_NORM:     "a.downsample.norm",
+    MODEL_TENSOR.A_ENC_RVQ_CODEBOOK:        "a.rvq.codebook",
     MODEL_TENSOR.A_MMPROJ:                  "mm.a.mlp.{bid}",
     MODEL_TENSOR.A_MMPROJ_FC:               "mm.a.fc",
     MODEL_TENSOR.A_MM_NORM_PRE:             "mm.a.norm_pre",
@@ -1540,6 +1563,17 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.A_MM_SOFT_EMB_NORM:        "mm.a.soft_emb_norm",         # gemma3n
     MODEL_TENSOR.A_MM_EMBEDDING:            "mm.a.embedding",             # gemma3n
     MODEL_TENSOR.A_MM_HARD_EMB_NORM:        "mm.a.hard_emb_norm",         # gemma3n
+    MODEL_TENSOR.A_MM_CODE_EMBD:            "mm.a.code_embd",
+    MODEL_TENSOR.A_MM_LOCAL_ATTN_Q:         "mm.a.local_blk.{bid}.attn_q",
+    MODEL_TENSOR.A_MM_LOCAL_ATTN_K:         "mm.a.local_blk.{bid}.attn_k",
+    MODEL_TENSOR.A_MM_LOCAL_ATTN_V:         "mm.a.local_blk.{bid}.attn_v",
+    MODEL_TENSOR.A_MM_LOCAL_ATTN_OUT:       "mm.a.local_blk.{bid}.attn_out",
+    MODEL_TENSOR.A_MM_LOCAL_FFN_GATE:       "mm.a.local_blk.{bid}.ffn_gate",
+    MODEL_TENSOR.A_MM_LOCAL_FFN_UP:         "mm.a.local_blk.{bid}.ffn_up",
+    MODEL_TENSOR.A_MM_LOCAL_FFN_DOWN:       "mm.a.local_blk.{bid}.ffn_down",
+    MODEL_TENSOR.A_MM_LOCAL_LN1:            "mm.a.local_blk.{bid}.ln1",
+    MODEL_TENSOR.A_MM_LOCAL_LN2:            "mm.a.local_blk.{bid}.ln2",
+    MODEL_TENSOR.A_MM_LOCAL_NORM:           "mm.a.local_norm",
     MODEL_TENSOR.A_PER_DIM_K_SCALE:         "a.blk.{bid}.per_dim_k_scale", # gemma4
     MODEL_TENSOR.A_PER_DIM_SCALE:           "a.blk.{bid}.per_dim_scale",   # gemma4
     # lfm2 audio
@@ -1741,10 +1775,24 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.A_ENC_FFN_UP_1,
         MODEL_TENSOR.A_ENC_FFN_GATE_1,
         MODEL_TENSOR.A_ENC_FFN_DOWN_1,
+        MODEL_TENSOR.A_ENC_DOWNSAMPLE_CONV,
+        MODEL_TENSOR.A_ENC_DOWNSAMPLE_NORM,
+        MODEL_TENSOR.A_ENC_RVQ_CODEBOOK,
         MODEL_TENSOR.A_MMPROJ,
         MODEL_TENSOR.A_MMPROJ_FC,
         MODEL_TENSOR.A_MM_NORM_PRE,
         MODEL_TENSOR.A_MM_NORM_MID,
+        MODEL_TENSOR.A_MM_CODE_EMBD,
+        MODEL_TENSOR.A_MM_LOCAL_ATTN_Q,
+        MODEL_TENSOR.A_MM_LOCAL_ATTN_K,
+        MODEL_TENSOR.A_MM_LOCAL_ATTN_V,
+        MODEL_TENSOR.A_MM_LOCAL_ATTN_OUT,
+        MODEL_TENSOR.A_MM_LOCAL_FFN_GATE,
+        MODEL_TENSOR.A_MM_LOCAL_FFN_UP,
+        MODEL_TENSOR.A_MM_LOCAL_FFN_DOWN,
+        MODEL_TENSOR.A_MM_LOCAL_LN1,
+        MODEL_TENSOR.A_MM_LOCAL_LN2,
+        MODEL_TENSOR.A_MM_LOCAL_NORM,
         MODEL_TENSOR.A_ENC_NORM_CONV,
         MODEL_TENSOR.A_ENC_LINEAR_POS,
         MODEL_TENSOR.A_ENC_POS_BIAS_U,
@@ -4804,6 +4852,7 @@ class VisionProjectorType:
     MINICPMV4_6    = "minicpmv4_6"
     GRANITE_SPEECH = "granite_speech"  # audio
     MIMOVL         = "mimovl"
+    MIMO_AUDIO     = "mimo_audio"
     GRANITE4_VISION = "granite4_vision"
 
 

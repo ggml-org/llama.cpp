@@ -1350,6 +1350,24 @@ class GGUFWriter:
     def add_audio_num_mel_bins(self, value: int) -> None:
         self.add_uint32(Keys.ClipAudio.NUM_MEL_BINS, value)
 
+    def add_audio_rvq_num_quantizers(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.RVQ_NUM_QUANTIZERS, value)
+
+    def add_audio_rvq_codebook_size(self, values: Sequence[int]) -> None:
+        self.add_array(Keys.ClipAudio.RVQ_CODEBOOK_SIZE, values)
+
+    def add_audio_wa_pattern_mode(self, modes: Sequence[int]) -> None:
+        self.add_array(Keys.ClipAudio.WA_PATTERN_MODE, modes)
+
+    def add_audio_window_size(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.WINDOW_SIZE, value)
+
+    def add_audio_local_block_count(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.LOCAL_BLOCK_COUNT, value)
+
+    def add_audio_local_group_size(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.LOCAL_GROUP_SIZE, value)
+
     def add_audio_stack_factor(self, value: int) -> None:
         self.add_uint32(Keys.ClipAudio.Projector.STACK_FACTOR, value)
 

@@ -340,6 +340,11 @@ ggml_tensor * clip_graph::build_vit(
         auto & layer = model.layers[il];
         ggml_tensor * cur = inpL; // inpL = residual, cur = hidden_states
 
+        ggml_tensor * attn_mask = opts.attn_mask;
+        if (opts.attn_mask_layers.size() > (size_t) il) {
+            attn_mask = opts.attn_mask_layers[il];
+        }
+
         // layernorm1
         cur = build_norm(cur, layer.ln_1_w, layer.ln_1_b, norm_t, eps, il);
         cb(cur, "layer_inp_normed", il);
@@ -452,7 +457,7 @@ ggml_tensor * clip_graph::build_vit(
 
             // build_attn returns a flat 2D [n_embd, n_pos*B]
             cur = build_attn(layer.o_w, layer.o_b,
-                Qcur, Kcur, Vcur, opts.attn_mask, kq_scale, il);
+                Qcur, Kcur, Vcur, attn_mask, kq_scale, il);
             cb(cur, "attn_out", il);
         }
 
@@ -470,6 +475,10 @@ ggml_tensor * clip_graph::build_vit(
         cur = ggml_add(ctx0, cur, inpL);
 
         inpL = cur; // inpL = residual, cur = hidden_states
+
+        if (opts.callback_layer_out) {
+            opts.callback_layer_out(cur, il);
+        }
 
         cb(cur, "ffn_inp", il);
 
@@ -519,7 +528,7 @@ ggml_tensor * clip_graph::build_vit(
     }
 
     // post-layernorm
-    if (model.post_ln_w) {
+    if (model.post_ln_w && !opts.skip_post_ln) {
         inpL = build_norm(inpL, model.post_ln_w, model.post_ln_b, norm_t, eps, -1);
     }
 
@@ -1011,6 +1020,10 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
         case PROJECTOR_TYPE_QWEN3A:
             {
                 builder = std::make_unique<clip_graph_qwen3a>(ctx, img);
+            } break;
+        case PROJECTOR_TYPE_MIMO_AUDIO:
+            {
+                builder = std::make_unique<clip_graph_mimo_audio>(ctx, img);
             } break;
         case PROJECTOR_TYPE_YOUTUVL:
             {
@@ -1574,6 +1587,45 @@ struct clip_model_loader {
                         hparams.audio_n_fft        = 400;
                         hparams.audio_window_len   = 400;
                         hparams.audio_hop_len      = 160;
+                    } break;
+                case PROJECTOR_TYPE_MIMO_AUDIO:
+                    {
+                        get_u32(KEY_A_RVQ_NUM_QUANTIZERS, hparams.rvq_num_quantizers, false);
+                        get_arr_int(KEY_A_RVQ_CODEBOOK_SIZE, hparams.rvq_codebook_size, false);
+                        if (hparams.rvq_num_quantizers <= 0) {
+                            throw std::runtime_error(string_format("%s: mimo_audio: missing %s\n", __func__, KEY_A_RVQ_NUM_QUANTIZERS));
+                        }
+                        if ((int) hparams.rvq_codebook_size.size() != hparams.rvq_num_quantizers) {
+                            throw std::runtime_error(string_format(
+                                "%s: mimo_audio: %s length (%zu) must equal %s (%d)\n", __func__,
+                                KEY_A_RVQ_CODEBOOK_SIZE, hparams.rvq_codebook_size.size(),
+                                KEY_A_RVQ_NUM_QUANTIZERS, hparams.rvq_num_quantizers));
+                        }
+                        hparams.ffn_op = FFN_GELU_ERF; // PyTorch F.gelu default (approximate="none")
+                        hparams.rope_theta = 10000.0f;
+
+                        // audio preprocessing params (mel spectrogram)
+                        hparams.audio_sample_rate = 24000;
+                        hparams.audio_n_fft       = 960;
+                        hparams.audio_window_len  = 960;
+                        hparams.audio_hop_len     = 240;
+
+                        get_u32(KEY_A_ATTN_WINDOW_SIZE, hparams.attn_window_size);
+                        std::vector<int> wa_pattern;
+                        get_arr_int(KEY_A_WA_PATTERN_MODE, wa_pattern, true);
+                        if ((int) wa_pattern.size() != hparams.n_layer) {
+                            throw std::runtime_error(string_format(
+                                "%s: mimo_audio: %s length (%zu) must equal n_layer (%d)\n", __func__,
+                                KEY_A_WA_PATTERN_MODE, wa_pattern.size(), hparams.n_layer));
+                        }
+                        hparams.wa_pattern_mode.assign(wa_pattern.begin(), wa_pattern.end());
+
+                        get_u32(KEY_A_LOCAL_BLOCK_COUNT, hparams.audio_local_n_layer);
+                        get_u32(KEY_A_LOCAL_GROUP_SIZE, hparams.audio_local_group_size);
+                        if (hparams.audio_local_group_size <= 0) {
+                            throw std::runtime_error(string_format(
+                                "%s: mimo_audio: %s must be > 0\n", __func__, KEY_A_LOCAL_GROUP_SIZE));
+                        }
                     } break;
                 case PROJECTOR_TYPE_PADDLEOCR:
                     {
@@ -2443,6 +2495,54 @@ struct clip_model_loader {
                     model.mm_1_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 1, "bias"));
                     model.mm_2_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 2, "weight"));
                     model.mm_2_b = get_tensor(string_format(TN_MM_AUDIO_MLP, 2, "bias"));
+                } break;
+            case PROJECTOR_TYPE_MIMO_AUDIO:
+                {
+                    model.conv1d_1_w = get_tensor(string_format(TN_CONV1D, 1, "weight"));
+                    model.conv1d_1_b = get_tensor(string_format(TN_CONV1D, 1, "bias"));
+                    model.conv1d_2_w = get_tensor(string_format(TN_CONV1D, 2, "weight"));
+                    model.conv1d_2_b = get_tensor(string_format(TN_CONV1D, 2, "bias"));
+                    model.downsample_conv_w = get_tensor(string_format(TN_A_DOWNSAMPLE_CONV, "weight"));
+                    model.downsample_norm_w = get_tensor(string_format(TN_A_DOWNSAMPLE_NORM, "weight"));
+                    model.downsample_norm_b = get_tensor(string_format(TN_A_DOWNSAMPLE_NORM, "bias"));
+                    model.rvq_codebook   = get_tensor(string_format(TN_A_RVQ_CODEBOOK, "weight"), false);
+                    model.mm_a_code_embd = get_tensor(string_format(TN_MM_A_CODE_EMBD, "weight"), false);
+                    if (!model.rvq_codebook || !model.mm_a_code_embd) {
+                        throw std::runtime_error(string_format("%s: mimo_audio: missing %s or %s\n", __func__,
+                            TN_A_RVQ_CODEBOOK, TN_MM_A_CODE_EMBD));
+                    }
+                    // hparams.rvq_codebook_size comes from GGUF metadata and is independent of the
+                    // tensors' actual shapes - bound it so codebook/code_embd views built from it
+                    // (mimo-audio.cpp) can never read past either tensor's allocated bins/vocab.
+                    for (int32_t bins : hparams.rvq_codebook_size) {
+                        if (bins <= 0 || bins > model.rvq_codebook->ne[1] || bins > model.mm_a_code_embd->ne[1]) {
+                            throw std::runtime_error(string_format(
+                                "%s: mimo_audio: %s entry (%d) out of range for codebook/code_embd tensors\n",
+                                __func__, KEY_A_RVQ_CODEBOOK_SIZE, bins));
+                        }
+                    }
+
+                    // LLM-side connector: input_local_transformer + projection
+                    model.mm_a_local_layers.resize(hparams.audio_local_n_layer);
+                    for (int il = 0; il < hparams.audio_local_n_layer; il++) {
+                        auto & layer = model.mm_a_local_layers[il];
+                        layer.q_w    = get_tensor(string_format(TN_MM_A_LOCAL_ATTN_Q,   il, "weight"));
+                        layer.q_b    = get_tensor(string_format(TN_MM_A_LOCAL_ATTN_Q,   il, "bias"));
+                        layer.k_w    = get_tensor(string_format(TN_MM_A_LOCAL_ATTN_K,   il, "weight"));
+                        layer.k_b    = get_tensor(string_format(TN_MM_A_LOCAL_ATTN_K,   il, "bias"));
+                        layer.v_w    = get_tensor(string_format(TN_MM_A_LOCAL_ATTN_V,   il, "weight"));
+                        layer.v_b    = get_tensor(string_format(TN_MM_A_LOCAL_ATTN_V,   il, "bias"));
+                        layer.o_w    = get_tensor(string_format(TN_MM_A_LOCAL_ATTN_OUT, il, "weight"));
+                        layer.ff_gate_w = get_tensor(string_format(TN_MM_A_LOCAL_FFN_GATE, il, "weight"));
+                        layer.ff_up_w   = get_tensor(string_format(TN_MM_A_LOCAL_FFN_UP,   il, "weight"));
+                        layer.ff_down_w = get_tensor(string_format(TN_MM_A_LOCAL_FFN_DOWN, il, "weight"));
+                        layer.ln_1_w = get_tensor(string_format(TN_MM_A_LOCAL_LN1, il, "weight"));
+                        layer.ln_2_w = get_tensor(string_format(TN_MM_A_LOCAL_LN2, il, "weight"));
+                    }
+                    model.mm_a_local_norm_w = get_tensor(string_format(TN_MM_A_LOCAL_NORM, "weight"));
+
+                    model.mm_1_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 1, "weight"));
+                    model.mm_2_w = get_tensor(string_format(TN_MM_AUDIO_MLP, 2, "weight"));
                 } break;
             case PROJECTOR_TYPE_VOXTRAL:
                 {
@@ -3549,6 +3649,15 @@ int clip_n_output_tokens(const clip_ctx * ctx, const clip_image_f32 * img) {
             {
                 n_patches = img->nx();  // no downsampling: one token per raw waveform frame
             } break;
+        case PROJECTOR_TYPE_MIMO_AUDIO:
+            {
+                // conv1(s=1) + conv2(s=2) -> RVQ-encoder downsample conv(k=2,s=2)
+                int n = img->nx();
+                n = (n - 1) / 2 + 1;         // conv1 + conv2
+                n = (n - 2) / 2 + 1;         // downsample conv
+                const int group_size = params.audio_local_group_size;
+                n_patches = (n + group_size - 1) / group_size;
+            } break;
         case PROJECTOR_TYPE_GRANITE_SPEECH:
             {
                 const int ws = ctx->model.hparams.audio_proj_window_size;
@@ -4376,6 +4485,58 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
                     set_input_f32("pos_emb", pos_emb);
                 }
             } break;
+        case PROJECTOR_TYPE_MIMO_AUDIO:
+            {
+                GGML_ASSERT(imgs.entries.size() == 1);
+                const int n_frames = imgs.entries.front().nx();
+                const int n_pos    = (n_frames - 1) / 2 + 1; // matches conv1(s=1)+conv2(s=2) output length
+
+                std::vector<int32_t> positions(n_pos);
+                for (int i = 0; i < n_pos; i++) {
+                    positions[i] = i;
+                }
+                set_input_i32("mimo_audio_positions", positions);
+
+                const int window = hparams.attn_window_size;
+                GGML_ASSERT(window > 0);
+
+                const float neg_inf = std::numeric_limits<float>::lowest();
+                std::vector<float> full_mask((size_t) n_pos * n_pos);
+                std::vector<float> window_mask((size_t) n_pos * n_pos);
+                for (int q = 0; q < n_pos; q++) {
+                    for (int k = 0; k < n_pos; k++) {
+                        const bool causal_ok = k <= q;
+                        full_mask[(size_t) q * n_pos + k]   = causal_ok ? 0.0f : neg_inf;
+                        window_mask[(size_t) q * n_pos + k] = (causal_ok && (q - k) <= window) ? 0.0f : neg_inf;
+                    }
+                }
+                set_input_f32("mimo_audio_full_mask", full_mask);
+                set_input_f32("mimo_audio_window_mask", window_mask);
+
+                // input_local_transformer: block-diagonal mask + in-group positions
+                {
+                    const int n_pos_ds   = (n_pos - 2) / 2 + 1; // matches downsample conv (k=2,s=2,p=0)
+                    const int group_size = hparams.audio_local_group_size;
+                    GGML_ASSERT(group_size > 0);
+                    const int n_groups = (n_pos_ds + group_size - 1) / group_size;
+                    const int n_padded = n_groups * group_size;
+
+                    std::vector<int32_t> local_positions(n_padded);
+                    for (int i = 0; i < n_padded; i++) {
+                        local_positions[i] = i % group_size;
+                    }
+                    set_input_i32("mimo_audio_local_positions", local_positions);
+
+                    std::vector<float> local_mask((size_t) n_padded * n_padded);
+                    for (int q = 0; q < n_padded; q++) {
+                        for (int k = 0; k < n_padded; k++) {
+                            const bool same_group = (q / group_size) == (k / group_size);
+                            local_mask[(size_t) q * n_padded + k] = same_group ? 0.0f : neg_inf;
+                        }
+                    }
+                    set_input_f32("mimo_audio_local_mask", local_mask);
+                }
+            } break;
         case PROJECTOR_TYPE_LFM2A:
             {
                 GGML_ASSERT(imgs.entries.size() == 1);
@@ -4678,6 +4839,8 @@ int clip_n_mmproj_embd(const struct clip_ctx * ctx) {
             return ctx->model.qf_proj_blocks.size() * ctx->model.hparams.projection_dim;
         case PROJECTOR_TYPE_GLM4V:
             return ctx->model.mm_ffn_down_w->ne[1];
+        case PROJECTOR_TYPE_MIMO_AUDIO:
+            return ctx->model.mm_2_w->ne[1];
         default:
             GGML_ABORT("Unknown projector type");
     }

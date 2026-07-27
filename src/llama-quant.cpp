@@ -359,6 +359,10 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     quantize &= name.find(".patch_embd")    == std::string::npos;
     quantize &= name.find(".patch_merger")  == std::string::npos;
 
+    // audio codebook
+    quantize &= name.find("a.rvq.codebook")  == std::string::npos;
+    quantize &= name.find("mm.a.code_embd")  == std::string::npos;
+
     return quantize;
 }
 
