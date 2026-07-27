@@ -84,7 +84,7 @@ def test_stream_stop_during_model_load():
         time.sleep(0.002)
     if not saw_loading:
         t.join()
-        pytest.skip("load window too short to be observed on this machine")
+        pytest.skip(reason="load window too short to be observed on this machine")
 
     # a stop during the load cancels the parked request instead of leaving an orphan
     res = server.make_request("DELETE", f"/v1/stream?{QS}")
@@ -135,7 +135,7 @@ def test_stream_resumes_after_reload_during_model_load():
         time.sleep(0.002)
     sock.close()
     if not saw_loading:
-        pytest.skip("load window too short to be observed on this machine")
+        pytest.skip(reason="load window too short to be observed on this machine")
 
     # while the model loads the resume route answers retry later, then the session appears,
     # receives the whole generation despite the dead client, and replays from the beginning
