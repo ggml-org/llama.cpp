@@ -1,6 +1,6 @@
 #include "server-tools.h"
 
-#include <sheredom/subprocess.h>
+#include "subproc.h"
 
 #include <filesystem>
 #include <fstream>
@@ -10,10 +10,10 @@
 #include <ctime>
 #include <atomic>
 #include <cstring>
-#include <climits>
 #include <algorithm>
 #include <unordered_set>
 #include <functional>
+#include <memory>
 
 namespace fs = std::filesystem;
 
@@ -29,7 +29,7 @@ json server_tool::to_json() const {
     return {
         {"display_name", display_name},
         {"tool", name},
-        {"type", "builtin"},
+        {"type", type()},
         {"permissions", json{
             {"write", permission_write}
         }},
@@ -142,15 +142,14 @@ public:
             const std::function<bool(const std::string &)> & on_chunk = nullptr) const override {
         exec_result res;
 
-        subprocess_s proc;
-        auto argv = to_cstr_vec(args);
+        common_subproc proc;
 
         int options = subprocess_option_no_window
                     | subprocess_option_combined_stdout_stderr
                     | subprocess_option_inherit_environment
                     | subprocess_option_search_user_path;
 
-        if (subprocess_create(argv.data(), options, &proc) != 0) {
+        if (!proc.create(args, options)) {
             res.output = "failed to spawn process";
             return res;
         }
@@ -163,14 +162,14 @@ public:
             while (!done.load()) {
                 if (std::chrono::steady_clock::now() >= deadline) {
                     timed_out.store(true);
-                    subprocess_terminate(&proc);
+                    proc.terminate();
                     return;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
         });
 
-        FILE * f = subprocess_stdout(&proc);
+        FILE * f = proc.stdout_file();
         std::string output;
         bool truncated = false;
         if (f) {
@@ -181,7 +180,7 @@ public:
                     if (output.size() + len <= max_output) {
                         output.append(buf, len);
                         if (on_chunk && !on_chunk(std::string(buf, len))) {
-                            subprocess_terminate(&proc);
+                            proc.terminate();
                             break;
                         }
                     } else {
@@ -199,8 +198,7 @@ public:
             timeout_thread.join();
         }
 
-        subprocess_join(&proc, &res.exit_code);
-        subprocess_destroy(&proc);
+        res.exit_code = proc.join();
 
         res.output    = output;
         res.timed_out = timed_out.load();
@@ -211,16 +209,6 @@ public:
     }
 
 private:
-    static std::vector<char *> to_cstr_vec(const std::vector<std::string> & v) {
-        std::vector<char *> r;
-        r.reserve(v.size() + 1);
-        for (const auto & s : v) {
-            r.push_back(const_cast<char *>(s.c_str()));
-        }
-        r.push_back(nullptr);
-        return r;
-    }
-
     static const std::unordered_set<std::string> & junk_dir_names() {
         static const std::unordered_set<std::string> names = {
             ".git", ".svn", ".hg", "node_modules", "__pycache__",
@@ -1235,6 +1223,49 @@ struct server_tools_res : server_http_res {
     }
 };
 
+//
+// server_mcp_tool: exposes one tool from a running MCP server as a server_tool.
+//
+struct server_mcp_tool : server_tool {
+    std::string server_name;
+    std::string tool_name;
+    server_mcp_tool_def def;
+    server_mcp & mcp_mgr;
+
+    server_mcp_tool(server_mcp_tool_def d, server_mcp & mgr)
+        : server_name(d.server_name)
+        , tool_name(d.name)
+        , def(std::move(d))
+        , mcp_mgr(mgr)
+    {
+        name = server_name + "_" + tool_name;
+        display_name = name;
+        permission_write = false;
+        support_stream = false;
+    }
+
+    std::string type() const override { return "mcp"; }
+
+    json get_definition() const override {
+        json schema = def.input_schema;
+        if (schema.is_null() || !schema.is_object()) {
+            schema = json::object();
+        }
+        return {
+            {"type", "function"},
+            {"function", {
+                {"name", name},
+                {"description", def.description},
+                {"parameters", schema},
+            }},
+        };
+    }
+
+    json invoke(json params, server_tool::stream *) const override {
+        return mcp_mgr.call_tool(server_name, tool_name, params);
+    }
+};
+
 static server_tool & find_tool(std::vector<std::unique_ptr<server_tool>> & tools, const std::string & name, bool require_stream) {
     for (auto & t : tools) {
         if (t->name == name) {
@@ -1263,8 +1294,14 @@ static std::vector<std::unique_ptr<server_tool>> build_tools() {
     return tools;
 }
 
-void server_tools::setup(const std::vector<std::string> & enabled_tools, const std::vector<std::string> & shell_command_whitelist) {
+void server_tools::setup(const std::vector<std::string> & enabled_tools,
+                         server_mcp & mcp_mgr,
+                         const std::vector<std::string> & shell_command_whitelist) {
     if (!enabled_tools.empty()) {
+        if (!common_subproc::is_supported()) {
+            throw std::runtime_error("subprocess is not enabled on this build");
+        }
+
         std::unordered_set<std::string> enabled_set(enabled_tools.begin(), enabled_tools.end());
         s_shell_command_whitelist = &shell_command_whitelist;
         auto all_tools = build_tools();
@@ -1298,6 +1335,29 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools, const s
         if (s_shell_command_whitelist && !s_shell_command_whitelist->empty()) {
             // Only useful when the whitelist is enabled.
             tools.push_back(std::move(std::make_unique<server_tool_list_shell_commands>()));
+        }
+    }
+
+    // append MCP tools, skipping any that collide with a built-in or another MCP tool of the same "<server>_<tool>" name
+    if (!mcp_mgr.empty()) {
+        std::unordered_set<std::string> seen_names;
+        for (auto & t : tools) {
+            seen_names.insert(t->name);
+        }
+        size_t n_added = 0;
+        for (const auto & def : mcp_mgr.list_tools()) {
+            std::string mcp_name = def.server_name + "_" + def.name;
+            if (seen_names.count(mcp_name)) {
+                SRV_WRN("MCP tool \"%s\" from server \"%s\" collides with an existing tool, skipping\n",
+                    mcp_name.c_str(), def.server_name.c_str());
+                continue;
+            }
+            seen_names.insert(mcp_name);
+            tools.push_back(std::make_unique<server_mcp_tool>(def, mcp_mgr));
+            n_added++;
+        }
+        if (n_added > 0) {
+            SRV_INF("Added %zu MCP tools\n", n_added);
         }
     }
 

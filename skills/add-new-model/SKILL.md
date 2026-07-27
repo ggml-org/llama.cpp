@@ -76,6 +76,7 @@ These recur often enough in review comments on past add-model PRs that they're w
 - Don't ship unfinished or unverified speculative-decoding (e.g. MTP) scaffolding in the base model PR - if it hasn't actually been confirmed to work, pull it out and land it as its own follow-up.
 - Conversion code should call into the base class's existing hparam logic (e.g. `super().set_gguf_parameters()`) rather than re-deriving it - large blocks of code that duplicate what `TextModel`/`MmprojModel` already provide will get flagged as redundant.
 - Do constant tensor modifications (e.g. `norm(1 + weight)`) and permutations/chunking at conversion time, not in the graph - see HOWTO-add-model.md's "Prefer conversion-time tensor modifications" tip (Gemma 3 folds its `1 +` into the weights, Qwen3-Next permutes in `modify_tensors`). Doing these at runtime in the graph is very likely to be rejected as over-complicated; if you genuinely can't do it at conversion time, open a discussion first explaining why rather than implementing it in the graph.
+  - Exception: a plain `weight * scale` with a constant scale is usually better applied at inference time instead of being folded into the weight at conversion. The scale conceptually applies to the activation, not the weight, so folding it in can hurt numerical stability, and it shifts the weight's value range in a way that can make quantization worse.
 
 ## Validation checklist
 

@@ -144,6 +144,8 @@ Examples:
 - Gemma 3 folds the `1 +` of its `norm(1 + weight)` normalization into the weights at conversion time, so the graph just does a plain RMS norm.
 - Qwen3-Next applies its tensor permutation during conversion (in `modify_tensors`), so the graph can consume the already-permuted weights directly.
 
+Exception: a plain `weight * scale` with a constant scale is usually better left to inference time rather than folded into the weight at conversion. The scale conceptually applies to the activation, not the weight, so folding it into the weight can hurt numerical stability, and it shifts the weight's value range in a way that can make quantization worse. In this case, write the scale to GGUF as its own metadata key (e.g. `%s.attention.output_scale`, `%s.attention.value_scale`, `%s.embedding_scale`) and apply it in the graph, instead of pre-multiplying the weight tensor during conversion.
+
 ### Working with ggml_rope_ext
 
 PyTorch implementations usually prefer explicitly calculating `freq_cis`/`sin`/`cos` components. However, in llama.cpp, most RoPE operations can be handled via `ggml_rope_ext`, which does not require a sin/cos matrix. This saves memory while allowing the GGML RoPE kernel to be fused with other ops.

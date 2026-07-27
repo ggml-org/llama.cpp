@@ -14,12 +14,15 @@ export const SANDBOX_EMPTY_OUTPUT = '(no output)';
 export const SANDBOX_TRUNCATION_NOTICE = '[output truncated]';
 
 const NERDAMER_DESCRIPTION = `
-Symbolic/numeric math via \`nerdamer\` (pre-loaded, do not require, use it directly).
-nerdamer('diff(sin(x)/x,x)') or nerdamer.diff('sin(x)/x','x') → Expression; convert with .toString()/.text()/.toTeX(), or .evaluate() (→ still Expression, then .toString()).
-nerdamer(expr,{x:2}) substitutes only; chain .evaluate() or pass 'numer' for numeric result.
-solve(expr,var)→Symbol[]; solveEquations([eq1,..])→[[var,val],..] pairs.
-Functions: simplify/expand/factor(expr), diff(expr,var[,n]), integrate(expr,var), defint(expr,from,to,var), limit(expr,var,to), laplace(expr,t,s), ilt(expr,s,t), gcd/lcm(a,b), roots/coeffs/partfrac(expr,var), pfactor(n), numer/decimals/erf(expr), product/sum(expr,var,from,to), mean/median/stdev/variance(...vals).
-Object.keys(nerdamer).filter(k=>typeof nerdamer[k]==='function') lists all available functions. If you need a function not documented above, list them first — do not guess function names.`;
+Symbolic/numeric math via \`nerdamer\`
+nerdamer(expr,subs?,opts?)/nerdamer.func(...)→Expression Format via .text(fmt?) (fmt: 'decimals'|'fractions'|'scientific') eval via .evaluate(subs?)
+nerdamer(expr,{x:2}) substitutes numeric via opts 'numer' or .evaluate()
+simplify/expand/factor(expr) div/gcd/lcm(...) coeffs/partfrac(expr,var)
+diff/integrate(expr,var) defint(expr,lo,hi,var?) sum/product(expr,var,lo,hi) limit(expr,var,pt)
+solve(expr,var) solveEquations([eq1,eq2],[var1,var2])
+polarform/rectform/arg/realpart/imagpart(z)
+set/get Var/Constant(name,val?) setFunction(name,[params],body)
+IMPORTANT:Identifier 'nerdamer' has already been declared, use it directly`;
 
 /**
  * Build the sandbox tool definition. When `includeSymbolicMath` is true,

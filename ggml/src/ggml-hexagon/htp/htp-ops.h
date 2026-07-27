@@ -98,6 +98,7 @@ enum htp_op_code {
     HTP_OP_NORM,
     HTP_OP_CONCAT,
     HTP_OP_CLAMP,
+    HTP_OP_IM2COL,
 
     HTP_OP_INVALID
 };

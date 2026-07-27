@@ -726,6 +726,72 @@ bool mtmd_audio_preprocessor_qwen3a::preprocess(const float *                 sa
 }
 
 //
+// mtmd_audio_preprocessor_mimo_audio
+//
+// Matches torchaudio.transforms.MelSpectrogram(power=1.0, center=True) followed by
+// log(clip(spec, min=1e-7)): HTK mel scale, no Slaney area norm, magnitude (not power)
+// spectrogram, natural log, reflect-padded by n_fft/2 on each side.
+//
+
+void mtmd_audio_preprocessor_mimo_audio::initialize() {
+    cache.fill_sin_cos_table(hparams.audio_n_fft);
+    cache.fill_hann_window(hparams.audio_window_len, true);
+    cache.fill_mel_filterbank_matrix(
+        hparams.n_mel_bins, hparams.audio_n_fft, hparams.audio_sample_rate,
+        0.0f, hparams.audio_sample_rate / 2.0f,
+        /*slaney_area_norm=*/ false,
+        /*scale=*/ 1.0f,
+        /*use_htk=*/ true
+    );
+}
+
+bool mtmd_audio_preprocessor_mimo_audio::preprocess(const float *                 samples,
+                                                    size_t                        n_samples,
+                                                    std::vector<mtmd_audio_mel> & output) {
+    if (n_samples == 0) {
+        return false;
+    }
+
+    GGML_ASSERT(!cache.sin_vals.empty());
+    GGML_ASSERT(!cache.cos_vals.empty());
+    GGML_ASSERT(!cache.filters.data.empty());
+
+    const int pad = hparams.audio_n_fft / 2;
+
+    std::vector<float> padded(n_samples + 2 * pad, 0.0f);
+    for (int i = 0; i < pad; i++) {
+        int src = pad - i;
+        padded[i] = (src < (int)n_samples) ? samples[src] : 0.0f;
+    }
+    std::copy(samples, samples + n_samples, padded.begin() + pad);
+    for (int i = 0; i < pad; i++) {
+        int src = (int)n_samples - 2 - i;
+        padded[n_samples + pad + i] = (src >= 0) ? samples[src] : 0.0f;
+    }
+
+    filter_params params;
+    params.n_mel            = hparams.n_mel_bins;
+    params.n_fft_bins       = 1 + (hparams.audio_n_fft / 2);
+    params.hann_window_size = hparams.audio_window_len;
+    params.hop_length       = hparams.audio_hop_len;
+    params.sample_rate      = hparams.audio_sample_rate;
+    params.no_padding       = true; // reflect padding already applied above
+    params.use_natural_log  = true;
+    params.use_magnitude    = true;
+    params.mel_floor        = 1e-7f;
+    params.norm_per_feature = false;
+
+    mtmd_audio_mel out;
+    bool ok = log_mel_spectrogram(padded.data(), (int)padded.size(), 4, params, cache, out);
+    if (!ok) {
+        return false;
+    }
+
+    output.push_back(std::move(out));
+    return true;
+}
+
+//
 // mtmd_audio_preprocessor_conformer
 //
 
