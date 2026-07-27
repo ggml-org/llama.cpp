@@ -124,6 +124,14 @@ struct clip_hparams {
     int32_t audio_window_len  = -1;
     int32_t audio_hop_len     = -1;
 
+    // mimo-audio-tokenizer: residual vector quantizer
+    int32_t rvq_num_quantizers = 0;
+    std::vector<int32_t> rvq_codebook_size; // per-quantizer bin count (ragged, e.g. 1024/1024/256/128x17)
+
+    // mimo-v2.5: LLM-side connector (input_local_transformer)
+    int32_t audio_local_n_layer = 0;
+    int32_t audio_local_group_size = 0;
+
     // legacy
     bool has_llava_projector = false;
     int minicpmv_version = 0;
@@ -536,6 +544,20 @@ struct clip_model {
     ggml_tensor * mm_norm_pre_w = nullptr;
     ggml_tensor * mm_norm_pre_b = nullptr;
     ggml_tensor * mm_norm_mid_w = nullptr;
+
+    // mimo-audio-tokenizer: post-transformer downsample + RVQ codebook
+    ggml_tensor * downsample_conv_w = nullptr; // no bias
+    ggml_tensor * downsample_norm_w = nullptr;
+    ggml_tensor * downsample_norm_b = nullptr;
+    ggml_tensor * rvq_codebook = nullptr; // merged 3D [n_q, max_bins, dim]
+
+    // mimo-v2.5: text-side RVQ code embedding ("text codebook")
+    ggml_tensor * mm_a_code_embd = nullptr; // merged 3D [n_channels, vocab, dim]
+
+    // mimo-v2.5: LLM-side connector (input_local_transformer, separate from the
+    // audio_tokenizer's own encoder `layers`)
+    std::vector<clip_layer> mm_a_local_layers;
+    ggml_tensor * mm_a_local_norm_w = nullptr;
 
     // qwen3a
     ggml_tensor * conv2d_1_w = nullptr;
