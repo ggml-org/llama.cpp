@@ -42,14 +42,14 @@ static const int32_t hmx_transpose_scatter_offsets[32] __attribute__((aligned(VL
 // Full range: start_row=0, end_row=n_cols.
 static inline void hmx_interleave_rows_to_tiles(__fp16 * restrict vtcm_dst,
                                             const __fp16 * restrict vtcm_src,
-                                            int n_cols,
-                                            int k,
-                                            int src_stride,
-                                            int start_row,
-                                            int end_row) {
+                                            uint32_t n_cols,
+                                            uint32_t k,
+                                            size_t src_stride,
+                                            uint32_t start_row,
+                                            uint32_t end_row) {
     assert(k % HMX_FP16_TILE_N_COLS == 0);
 
-    const int            n_k_tiles     = k / HMX_FP16_TILE_N_COLS;
+    const uint32_t       n_k_tiles     = k / HMX_FP16_TILE_N_COLS;
     const HVX_Vector     v_scat_base   = hvx_vmem(hmx_transpose_scatter_offsets);
     const HVX_Vector     v_scat_step   = Q6_V_vsplat_R(4);
     const HVX_VectorPred q_mask64      = Q6_Q_vsetq_R(64);
@@ -65,14 +65,14 @@ static inline void hmx_interleave_rows_to_tiles(__fp16 * restrict vtcm_dst,
 
     if (pair_scatter) {
         // Step c by 64 fp16 (two K-tiles per scatter), advance dst by 2 tiles per iter.
-        const int    c_step      = 2 * HMX_FP16_TILE_N_COLS;
-        const size_t c_byte_step = (size_t) c_step * sizeof(__fp16);
-        const size_t dst_step    = 2 * (size_t) HMX_FP16_TILE_N_ELMS;
-        const int    n_c_iters   = k / c_step;
+        const uint32_t c_step      = 2 * HMX_FP16_TILE_N_COLS;
+        const size_t   c_byte_step = (size_t) c_step * sizeof(__fp16);
+        const size_t   dst_step    = 2 * (size_t) HMX_FP16_TILE_N_ELMS;
+        const uint32_t n_c_iters   = k / c_step;
 
-        for (int r = start_row; r < end_row; r += 2) {
-            const int        ct             = r / HMX_FP16_TILE_N_ROWS;
-            const int        local_r        = r % HMX_FP16_TILE_N_ROWS;
+        for (uint32_t r = start_row; r < end_row; r += 2) {
+            const uint32_t   ct             = r / HMX_FP16_TILE_N_ROWS;
+            const uint32_t   local_r        = r % HMX_FP16_TILE_N_ROWS;
             const bool       next_row_valid = (r + 1) < end_row && (r + 1) < n_cols;
             const HVX_Vector v_off0         = Q6_Vw_vadd_VwVw(v_scat_base, Q6_V_vsplat_R(local_r * 4));
             const HVX_Vector v_off1         = Q6_Vw_vadd_VwVw(v_off0, v_scat_step);
@@ -86,7 +86,7 @@ static inline void hmx_interleave_rows_to_tiles(__fp16 * restrict vtcm_dst,
             assert(c_byte_step % 128 == 0);
 
             if (p1) {
-                for (int i = 0; i < n_c_iters; ++i) {
+                for (uint32_t i = 0; i < n_c_iters; ++i) {
                     HVX_Vector v0 = hvx_vmem(p0); p0 += c_byte_step;
                     HVX_Vector v1 = hvx_vmem(p1); p1 += c_byte_step;
                     Q6_vscatter_RMVwV((size_t) tile_base, pair_region, v_off0, v0);
@@ -95,7 +95,7 @@ static inline void hmx_interleave_rows_to_tiles(__fp16 * restrict vtcm_dst,
                 }
             } else {
                 const HVX_Vector vzero = Q6_V_vzero();
-                for (int i = 0; i < n_c_iters; ++i) {
+                for (uint32_t i = 0; i < n_c_iters; ++i) {
                     HVX_Vector v0 = hvx_vmem(p0); p0 += c_byte_step;
                     Q6_vscatter_RMVwV((size_t) tile_base, pair_region, v_off0, v0);
                     Q6_vscatter_RMVwV((size_t) tile_base, pair_region, v_off1, vzero);
@@ -105,14 +105,14 @@ static inline void hmx_interleave_rows_to_tiles(__fp16 * restrict vtcm_dst,
         }
     } else {
         // Fallback: scatter one K-tile per call (region 2047, masked).
-        const int    c_step      = HMX_FP16_TILE_N_COLS;
-        const size_t c_byte_step = (size_t) c_step * sizeof(__fp16);
-        const size_t dst_step    = (size_t) HMX_FP16_TILE_N_ELMS;
-        const int    n_c_iters   = k / c_step;
+        const uint32_t c_step      = HMX_FP16_TILE_N_COLS;
+        const size_t   c_byte_step = (size_t) c_step * sizeof(__fp16);
+        const size_t   dst_step    = (size_t) HMX_FP16_TILE_N_ELMS;
+        const uint32_t n_c_iters   = k / c_step;
 
-        for (int r = start_row; r < end_row; r += 2) {
-            const int        ct             = r / HMX_FP16_TILE_N_ROWS;
-            const int        local_r        = r % HMX_FP16_TILE_N_ROWS;
+        for (uint32_t r = start_row; r < end_row; r += 2) {
+            const uint32_t   ct             = r / HMX_FP16_TILE_N_ROWS;
+            const uint32_t   local_r        = r % HMX_FP16_TILE_N_ROWS;
             const bool       next_row_valid = (r + 1) < end_row && (r + 1) < n_cols;
             const HVX_Vector v_off0         = Q6_Vw_vadd_VwVw(v_scat_base, Q6_V_vsplat_R(local_r * 4));
             const HVX_Vector v_off1         = Q6_Vw_vadd_VwVw(v_off0, v_scat_step);
@@ -122,7 +122,7 @@ static inline void hmx_interleave_rows_to_tiles(__fp16 * restrict vtcm_dst,
             const uint8_t * p1 = next_row_valid ? (const uint8_t *) (vtcm_src + (r + 1) * src_stride) : NULL;
 
             if (p1) {
-                for (int i = 0; i < n_c_iters; ++i) {
+                for (uint32_t i = 0; i < n_c_iters; ++i) {
                     HVX_Vector v0 = hvx_vmemu(p0); p0 += c_byte_step;
                     HVX_Vector v1 = hvx_vmemu(p1); p1 += c_byte_step;
                     Q6_vscatter_QRMVwV(q_mask64, (size_t) tile_base, single_region, v_off0, v0);
@@ -131,7 +131,7 @@ static inline void hmx_interleave_rows_to_tiles(__fp16 * restrict vtcm_dst,
                 }
             } else {
                 const HVX_Vector vzero = Q6_V_vzero();
-                for (int i = 0; i < n_c_iters; ++i) {
+                for (uint32_t i = 0; i < n_c_iters; ++i) {
                     HVX_Vector v0 = hvx_vmemu(p0); p0 += c_byte_step;
                     Q6_vscatter_QRMVwV(q_mask64, (size_t) tile_base, single_region, v_off0, v0);
                     Q6_vscatter_QRMVwV(q_mask64, (size_t) tile_base, single_region, v_off1, vzero);
@@ -148,24 +148,24 @@ static inline void hmx_interleave_rows_to_tiles(__fp16 * restrict vtcm_dst,
 // Full range: start_row=0, end_row=n_rows.
 static inline void hmx_interleave_cols_to_tiles(__fp16 * restrict tiles_out,
                                             const __fp16 * restrict src,
-                                            int n_rows,
-                                            int head_dim,
-                                            int src_stride,
-                                            int n_row_tiles,
-                                            int start_row,
-                                            int end_row) {
+                                            uint32_t n_rows,
+                                            uint32_t head_dim,
+                                            size_t src_stride,
+                                            uint32_t n_row_tiles,
+                                            uint32_t start_row,
+                                            uint32_t end_row) {
     __builtin_assume(head_dim > 0);
     const size_t tile_stride_elms = (size_t) n_row_tiles * HMX_FP16_TILE_N_ELMS;
 
-    for (int r = start_row; r < end_row; r += 2) {
+    for (uint32_t r = start_row; r < end_row; r += 2) {
         const bool next_row_valid = (r + 1) < end_row && (r + 1) < n_rows;
 
         const HVX_Vector * pv_in0 = (const HVX_Vector *) (src + r * src_stride);
         const HVX_Vector * pv_in1 = next_row_valid ? (const HVX_Vector *) (src + (r + 1) * src_stride) : NULL;
 
         // Row-pair invariants hoisted out of the c loop.
-        const int r0      = r / HMX_FP16_TILE_N_ROWS;
-        const int r1_half = (r % HMX_FP16_TILE_N_ROWS) / 2;
+        const uint32_t r0      = r / HMX_FP16_TILE_N_ROWS;
+        const uint32_t r1_half = (r % HMX_FP16_TILE_N_ROWS) / 2;
 
         // tb0 starts at tile (c0=0, r0); tb1 at the adjacent dim-tile (c0=1, r0).
         // Each c step (+= 64) advances both by 2 dim-tiles worth of fp16.
@@ -174,7 +174,7 @@ static inline void hmx_interleave_cols_to_tiles(__fp16 * restrict tiles_out,
         const size_t tb_step = 2 * tile_stride_elms;
 
         if (pv_in1) {
-            for (int c = 0; c < head_dim; c += 64) {
+            for (uint32_t c = 0; c < head_dim; c += 64) {
                 HVX_Vector     v0             = *pv_in0++;
                 HVX_Vector     v1             = *pv_in1++;
                 HVX_VectorPair vp             = Q6_W_vshuff_VVR(v1, v0, -2);
@@ -185,7 +185,7 @@ static inline void hmx_interleave_cols_to_tiles(__fp16 * restrict tiles_out,
             }
         } else {
             const HVX_Vector vzero = Q6_V_vzero();
-            for (int c = 0; c < head_dim; c += 64) {
+            for (uint32_t c = 0; c < head_dim; c += 64) {
                 HVX_Vector     v0             = *pv_in0++;
                 HVX_VectorPair vp             = Q6_W_vshuff_VVR(vzero, v0, -2);
                 ((HVX_Vector *) tb0)[r1_half] = Q6_V_lo_W(vp);
@@ -196,5 +196,27 @@ static inline void hmx_interleave_cols_to_tiles(__fp16 * restrict tiles_out,
         }
     }
 }
+
+// --- HMX inline asm macros for load-store packetization ---
+#define HMX_LOAD_MPY_F16(act, wt, range) \
+    "{\n" \
+    "    activation.hf = mxmem(" act ", " range ")\n" \
+    "    weight.hf = mxmem(" wt ", " range ")\n" \
+    "}\n"
+
+#define HMX_LOAD_MPY_DEEP_F16(act, wt, range) \
+    "{\n" \
+    "    activation.hf = mxmem(" act ", " range "):deep\n" \
+    "    weight.hf = mxmem(" wt ", " range ")\n" \
+    "}\n"
+
+#define HMX_STORE_AFTER_F16(out, scale_reg) \
+    "mxmem(" out ", " scale_reg "):after.hf = acc\n"
+
+#define HMX_SET_BIAS(scales) \
+    "bias = mxmem2(" scales ")\n"
+
+#define HMX_CLRACC_F16() \
+    "mxclracc.hf\n"
 
 #endif // HMX_UTILS_H

@@ -109,6 +109,15 @@ static void assert_contains(const std::string & haystack, const std::string & ne
     }
 }
 
+static void assert_not_contains(const std::string & haystack, const std::string & needle) {
+    if (haystack.find(needle) != std::string::npos) {
+        LOG_ERR("Expected NOT to contain: %s\n", needle.c_str());
+        LOG_ERR("Actual: %s\n", haystack.c_str());
+        common_log_flush(common_log_main());
+        throw std::runtime_error("Test failed");
+    }
+}
+
 static void assert_ends_with(const std::string & str, const std::string & suffix) {
     if (str.size() < suffix.size() ||
         str.compare(str.size() - suffix.size(), suffix.size(), suffix) != 0) {
@@ -1135,7 +1144,7 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
         // budget sampler inhibits grammar application while inside thinking blocks —
         // triggers inside <think>...</think> are suppressed.
         bool use_reasoning_budget_path = false;
-        if (parser.params_.grammar_lazy && !parser.params_.thinking_end_tag.empty()) {
+        if (parser.params_.grammar_lazy && !parser.params_.thinking_end_tags.empty()) {
             use_reasoning_budget_path = true;
             for (const auto & trigger : parser.params_.grammar_triggers) {
                 if (trigger.type != COMMON_GRAMMAR_TRIGGER_TYPE_WORD) {
@@ -1153,7 +1162,7 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
             // Walk through full_input tracking thinking state; only match triggers
             // when outside thinking blocks.
             const auto & think_start = parser.params_.thinking_start_tag;
-            const auto & think_end   = parser.params_.thinking_end_tag;
+            const auto & think_ends  = parser.params_.thinking_end_tags;
 
             bool in_thinking = false;
             for (size_t i = 0; i < full_input.size(); ++i) {
@@ -1163,12 +1172,14 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
                     i += think_start.size() - 1;
                     continue;
                 }
-                if (in_thinking && full_input.compare(i, think_end.size(), think_end) == 0) {
-                    in_thinking = false;
-                    i += think_end.size() - 1;
-                    continue;
-                }
                 if (in_thinking) {
+                    for (const auto & think_end : think_ends) {
+                        if (full_input.compare(i, think_end.size(), think_end) == 0) {
+                            in_thinking = false;
+                            i += think_end.size() - 1;
+                            break;
+                        }
+                    }
                     continue;
                 }
                 // Outside thinking — check if any trigger word starts here
@@ -1562,37 +1573,112 @@ static void test_msgs_oaicompat_json_conversion() {
     }
 }
 
-static void test_split_by_role() {
+static void test_msg_token_delimiters_split() {
     LOG_DBG("%s\n", __func__);
 
+    // Delimiters that share a leading token, distinguished by the second token,
+    // to exercise the per-position token matching.
+    const common_chat_msg_delimiters delims = {
+        { { COMMON_CHAT_ROLE_USER,      "", { 10, 11 } },
+          { COMMON_CHAT_ROLE_ASSISTANT, "", { 10, 12 } } }
+    };
+
     // Empty inputs
-    assert_equals<size_t>(0, common_chat_split_by_role("", {}).size());
-    assert_equals<size_t>(0, common_chat_split_by_role("hello", {}).size());
-    assert_equals<size_t>(0, common_chat_split_by_role("", { { "user", "<|user|>" } }).size());
+    assert_equals<size_t>(0, common_chat_msg_delimiters{}.split({}).spans.size());
+    assert_equals<size_t>(0, common_chat_msg_delimiters{}.split({ 10, 11 }).spans.size());
+    assert_equals<size_t>(0, delims.split({}).spans.size());
 
-    // Multi-role conversation, no leading/trailing content
+    // No delimiters match -> no spans
+    assert_equals<size_t>(0, delims.split({ 100, 101, 102 }).spans.size());
+
+    // Multi-role conversation: <user>Hi<assistant>Hello<user>Bye
     {
-        const std::string prompt = "<|user|>Hi<|assistant|>Hello<|user|>Bye";
-        const auto splits = common_chat_split_by_role(prompt, {
-            { "user",      "<|user|>"      },
-            { "assistant", "<|assistant|>" },
-        });
-        assert_equals<size_t>(3, splits.size());
+        const llama_tokens tokens = {
+            10, 11,            // <user>
+            100, 101,          // Hi
+            10, 12,            // <assistant>
+            200, 201, 202,     // Hello
+            10, 11,            // <user>
+            300, 301,          // Bye
+        };
 
-        assert_equals<std::string>("user", splits[0].role);
-        assert_equals<size_t>(0, splits[0].pos);
-        assert_equals<size_t>(10, splits[0].len);
-        assert_equals<std::string>("<|user|>Hi", prompt.substr(splits[0].pos, splits[0].len));
+        const auto result = delims.split(tokens);
+        const auto & spans = result.spans;
+        assert_equals<size_t>(3, spans.size());
 
-        assert_equals<std::string>("assistant", splits[1].role);
-        assert_equals<size_t>(10, splits[1].pos);
-        assert_equals<size_t>(18, splits[1].len);
-        assert_equals<std::string>("<|assistant|>Hello", prompt.substr(splits[1].pos, splits[1].len));
+        assert_equals(COMMON_CHAT_ROLE_USER, spans[0].role);
+        assert_equals<size_t>(0, spans[0].pos);
+        assert_equals<size_t>(4, spans[0].len);
 
-        assert_equals<std::string>("user", splits[2].role);
-        assert_equals<size_t>(28, splits[2].pos);
-        assert_equals<size_t>(11, splits[2].len);
-        assert_equals<std::string>("<|user|>Bye", prompt.substr(splits[2].pos, splits[2].len));
+        assert_equals(COMMON_CHAT_ROLE_ASSISTANT, spans[1].role);
+        assert_equals<size_t>(4, spans[1].pos);
+        assert_equals<size_t>(5, spans[1].len);
+
+        assert_equals(COMMON_CHAT_ROLE_USER, spans[2].role);
+        assert_equals<size_t>(9, spans[2].pos);
+        assert_equals<size_t>(4, spans[2].len);
+
+        // is_user_start() is true at the token position where a user span begins
+        assert_equals(true,  result.is_user_start(0));
+        assert_equals(false, result.is_user_start(4));  // assistant span
+        assert_equals(true,  result.is_user_start(9));
+    }
+
+    // Content before the first delimiter is not captured as a span
+    {
+        const llama_tokens tokens = {
+            500, 501,    // leading content (dropped)
+            10, 11,      // <user>
+            100,         // Hi
+        };
+
+        const auto spans = delims.split(tokens).spans;
+        assert_equals<size_t>(1, spans.size());
+        assert_equals(COMMON_CHAT_ROLE_USER, spans[0].role);
+        assert_equals<size_t>(2, spans[0].pos);
+        assert_equals<size_t>(3, spans[0].len);
+    }
+
+    // Skipped regions (media chunks) are jumped over but still count as span content
+    {
+        const llama_tokens tokens = {
+            10, 11,             // <user>
+            LLAMA_TOKEN_NULL,   // media chunk (3 tokens)
+            LLAMA_TOKEN_NULL,
+            LLAMA_TOKEN_NULL,
+            100,                // Hi
+            10, 12,             // <assistant>
+        };
+
+        const std::map<size_t, size_t> skips = { { 2, 3 } };
+
+        const auto spans = delims.split(tokens, skips).spans;
+        assert_equals<size_t>(2, spans.size());
+
+        assert_equals(COMMON_CHAT_ROLE_USER, spans[0].role);
+        assert_equals<size_t>(0, spans[0].pos);
+        assert_equals<size_t>(6, spans[0].len);
+
+        assert_equals(COMMON_CHAT_ROLE_ASSISTANT, spans[1].role);
+        assert_equals<size_t>(6, spans[1].pos);
+        assert_equals<size_t>(2, spans[1].len);
+    }
+
+    // A delimiter sequence inside a skipped region is not matched
+    {
+        const llama_tokens tokens = {
+            10, 11,      // <user>
+            10, 12,      // skipped region that happens to contain delimiter tokens
+            100,         // Hi
+        };
+
+        const std::map<size_t, size_t> skips = { { 2, 2 } };
+
+        const auto spans = delims.split(tokens, skips).spans;
+        assert_equals<size_t>(1, spans.size());
+        assert_equals(COMMON_CHAT_ROLE_USER, spans[0].role);
+        assert_equals<size_t>(0, spans[0].pos);
+        assert_equals<size_t>(5, spans[0].len);
     }
 }
 
@@ -2765,6 +2851,17 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect(message_assist)
             .run();
 
+        // JSON output schema
+        tst.test(
+                "I need to output the invoice details in JSON<|END_THINKING|>"
+                "<|START_TEXT|>{\"amount\": 123.45, \"date\": \"2025-12-03\"}<|END_TEXT|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .json_schema(invoice_schema)
+            .tools({ special_function_tool })
+            .expect_reasoning("I need to output the invoice details in JSON")
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
+                .run();
+
         // Single tool call with reasoning.
         tst.test(
                "I'm\nthinking<|END_THINKING|>"
@@ -3080,6 +3177,59 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 }
             }
         }
+
+        {
+            // StepFun trimming regression test (see https://github.com/ggml-org/llama.cpp/pull/25238)
+            auto tmpls = read_templates("models/templates/StepFun3.5-Flash.jinja");
+
+            common_chat_msg message_chatbot = simple_assist_msg("Let me check.\n\n", "I am thinking.\n\n");
+
+            {
+                common_chat_templates_inputs inputs;
+                inputs.messages              = { message_chatbot };
+                inputs.add_generation_prompt = true;
+
+                auto params = common_chat_templates_apply(tmpls.get(), inputs);
+
+                if (params.prompt.find("Let me check.\n\n") != std::string::npos) {
+                    throw std::runtime_error("StepFun 3.5: content not trimmed");
+                }
+
+                if (params.prompt.find("I am thinking.\n\n") != std::string::npos) {
+                    throw std::runtime_error("StepFun 3.5: reasoning_content not trimmed");
+                }
+            }
+
+            {
+                // Trimming must also reach typed (text) content parts, not just string content
+                // (see https://github.com/ggml-org/llama.cpp/pull/25238)
+                common_chat_msg message_parts;
+                message_parts.role          = "user";
+                message_parts.content_parts = {
+                    { /* .type = */ "text", /* .text = */ "First part.\n\n" },
+                    { /* .type = */ "media_marker", /* .text = */ "<__media__>" },
+                    { /* .type = */ "text", /* .text = */ "Second part.\n\n" },
+                };
+
+                common_chat_templates_inputs inputs;
+                inputs.messages              = { message_parts };
+                inputs.add_generation_prompt = true;
+
+                auto params = common_chat_templates_apply(tmpls.get(), inputs);
+
+                if (params.prompt.find("First part.\n\n") != std::string::npos ||
+                    params.prompt.find("Second part.\n\n") != std::string::npos) {
+                    throw std::runtime_error("StepFun 3.5: text content parts not trimmed");
+                }
+
+                // the trimmed text itself must still be present
+                if (params.prompt.find("First part.") == std::string::npos ||
+                    params.prompt.find("Second part.") == std::string::npos) {
+                    throw std::runtime_error("StepFun 3.5: text content parts missing after trim");
+                }
+            }
+        }
+
     }
 
     {
@@ -3888,6 +4038,132 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
     }
 
+    // DeepSeek V4 tests - same DSML markup as V3.2, but the tool call block is named
+    // "tool_calls" and the non-thinking generation prompt ends in a bare </think>
+    // instead of an empty <think></think> pair.
+    {
+        auto tst = peg_tester("models/templates/deepseek-ai-DeepSeek-V4.jinja", detailed_debug);
+
+        // Pure content (non-thinking mode; generation prompt ends with </think>)
+        tst.test("Hello, world!\nWhat's up?")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist)
+            .run();
+
+        // Thinking + content
+        tst.test("I'm\nthinking</think>Hello, world!\nWhat's up?")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist_thoughts)
+            .run();
+
+        // Thinking + tool call (single, string param)
+        tst.test(
+               "Let me check the time</think>\n\n"
+               "<｜DSML｜tool_calls>\n"
+               "<｜DSML｜invoke name=\"get_time\">\n"
+               "<｜DSML｜parameter name=\"city\" string=\"true\">Tokyo</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜tool_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .expect(message_with_tool_calls_and_reasoning("get_time", R"({"city": "Tokyo"})", "Let me check the time"))
+            .run();
+
+        // Tool call without reasoning (non-thinking mode), integer param (string="false")
+        tst.test(
+               "<｜DSML｜tool_calls>\n"
+               "<｜DSML｜invoke name=\"special_function\">\n"
+               "<｜DSML｜parameter name=\"arg1\" string=\"false\">1</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜tool_calls>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+
+        // Multiple parallel tool calls with reasoning
+        tst.test(
+               "Calling both</think>\n\n"
+               "<｜DSML｜tool_calls>\n"
+               "<｜DSML｜invoke name=\"get_time\">\n"
+               "<｜DSML｜parameter name=\"city\" string=\"true\">Paris</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "<｜DSML｜invoke name=\"get_weather\">\n"
+               "<｜DSML｜parameter name=\"city\" string=\"true\">Paris</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜tool_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .parallel_tool_calls(true)
+            .tools({ get_time_tool, get_weather_tool })
+            .expect(message_with_reasoning_content_and_multiple_tool_calls(
+                "Calling both", "",
+                { { "get_time", R"({"city": "Paris"})" }, { "get_weather", R"({"city": "Paris"})" } }))
+            .run();
+
+        // Tool call with content before tool calls
+        tst.test(
+               "Thinking about it</think>"
+               "Let me call the function.\n\n"
+               "<｜DSML｜tool_calls>\n"
+               "<｜DSML｜invoke name=\"special_function\">\n"
+               "<｜DSML｜parameter name=\"arg1\" string=\"false\">1</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜tool_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect_reasoning("Thinking about it")
+            .expect_content("Let me call the function.")
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", {} },
+            })
+            .run();
+
+        // Tool call with multiple params (mixed types)
+        tst.test(
+               "Multi-arg call</think>\n\n"
+               "<｜DSML｜tool_calls>\n"
+               "<｜DSML｜invoke name=\"magic_int\">\n"
+               "<｜DSML｜parameter name=\"ref\" string=\"false\">42</｜DSML｜parameter>\n"
+               "<｜DSML｜parameter name=\"name\" string=\"true\">foo bar</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜tool_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ magic_int_tool })
+            .expect_reasoning("Multi-arg call")
+            .expect_tool_calls({
+                { "magic_int", R"({"ref": 42, "name": "foo bar"})", {} },
+            })
+            .run();
+
+        // Continuation tests
+        tst.test("world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .enable_thinking(true)
+            .messages({ message_user, message_assist_prefill_content })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_CONTENT)
+            .expect_reasoning("I'm thinking")
+            .expect_content("Hello, world!\nWhat's up?")
+            .run();
+
+        tst.test(" thinking</think>Hello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .enable_thinking(true)
+            .messages({ message_user, message_assist_prefill_reasoning })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_REASONING)
+            .expect_reasoning("I'm thinking")
+            .expect_content("Hello, world!\nWhat's up?")
+            .run();
+    }
+
     // GLM-4.6 tests - format: <tool_call>function_name\n<arg_key>...</arg_key>\n<arg_value>...</arg_value>\n</tool_call>
     {
         auto tst = peg_tester("models/templates/GLM-4.6.jinja", detailed_debug);
@@ -4578,9 +4854,16 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     // Format: <TOOLCALL>[{"name": "func", "arguments": {...}}]</TOOLCALL>
     {
         auto tst = peg_tester("models/templates/NVIDIA-Nemotron-Nano-v2.jinja", detailed_debug);
-        tst.test("<TOOLCALL>[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]</TOOLCALL>")
+        tst.test("I'm\nthinking\n</think>\n<TOOLCALL>[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]</TOOLCALL>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .tools({ special_function_tool })
-            .expect(message_assist_call)
+            .expect(message_assist_call_thoughts)
+            .run();
+
+        tst.test("I'm\nthinking\n</think>\n\n<TOOLCALL>[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]</TOOLCALL>\n")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(message_assist_call_thoughts)
             .run();
 
         // Continuation tests
@@ -5022,14 +5305,14 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         tst.test("Hello, world!\nWhat's up?").tools({ special_function_tool }).expect(message_assist).expect_reconstruction().run();
 
         tst.test(
-             "```json\n\"42\" \n```")
+             "```json\n\"42\"\n```")
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .json_schema(const_schema)
             .expect_content(R"("42")")
             .run();
 
         tst.test(
-             "\"42\" \n")
+             "\"42\"\n")
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .json_schema(const_schema)
             .expect_content(R"("42")")
@@ -5518,6 +5801,77 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_content("Hello, world!\nWhat's up?")
             .run();
     }
+
+    // MiniCPM5 - XML tool calls with <function name="..."><param name="...">...</param></function>
+    {
+        auto tst = peg_tester("models/templates/openbmb-MiniCPM5-1B.jinja", detailed_debug);
+
+        tst.test("Hello, world!\nWhat's up?")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist)
+            .run();
+
+        tst.test(R"(<function name="python"><param name="code">print('Hello, World!')</param></function>)")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ python_tool })
+            .expect_tool_calls({ { "python", R"#({"code": "print('Hello, World!')"})#", {} } })
+            .run();
+
+        tst.test(R"(<function name="empty_args"></function>)")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ empty_args_tool })
+            .expect(simple_assist_msg("", "", "empty_args", "{}"))
+            .run();
+
+        tst.test(R"(<function name="python"><param name="code">print('x')</param></function>)")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .parallel_tool_calls(true)
+            .tools({ python_tool })
+            .expect_tool_calls({ { "python", R"#({"code": "print('x')"})#", {} } })
+            .run();
+
+        // CDATA lets a string value carry characters that would otherwise close the tag.
+        tst.test(R"(<function name="html"><param name="markup"><![CDATA[<a href="/x">hi</a> </param>]]></param></function>)")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ html_tool })
+            .expect_tool_calls({ { "html", R"#({"markup": "<a href=\"/x\">hi</a> </param>"})#", {} } })
+            .run();
+
+        tst.test(R"(I'm thinking</think><function name="python"><param name="code">print('hey')</param></function>)")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ python_tool })
+            .expect_reasoning("I'm thinking")
+            .expect_tool_calls({ { "python", R"#({"code": "print('hey')"})#", {} } })
+            .run();
+
+        tst.test(R"(<function name="python"><param name="code">print('x')</param></function>
+<function name="python"><param name="code">print('y')</param></function>)")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .parallel_tool_calls(true)
+            .tools({ python_tool })
+            .expect_tool_calls({
+                { "python", R"#({"code": "print('x')"})#", {} },
+                { "python", R"#({"code": "print('y')"})#", {} },
+            })
+            .run();
+
+        tst.test(" thinking</think>Hello, world!\nWhat's up?")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .messages({ message_user, message_assist_prefill_reasoning })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_REASONING)
+            .expect_reasoning("I'm thinking")
+            .expect_content("Hello, world!\nWhat's up?")
+            .run();
+    }
 }
 
 static void test_template_generation_prompt() {
@@ -5665,6 +6019,13 @@ static void test_template_generation_prompt() {
         check(tmpls, continuation_content(),   "<｜Assistant｜><think>I'm thinking</think>Hello, ");
         check(tmpls, continuation_reasoning(), "<｜Assistant｜><think>I'm");
     }
+
+    {
+        auto tmpls = read_templates("models/templates/openbmb-MiniCPM5-1B.jinja");
+        check(tmpls, basic(),                  "<|im_start|>assistant\n<think>\n");
+        check(tmpls, continuation_content(),   "<|im_start|>assistant\n<think>\nI'm thinking\n</think>\n\nHello, ");
+        check(tmpls, continuation_reasoning(), "<|im_start|>assistant\n<think>\nI'm");
+    }
 }
 
 // Test the developer role to system workaround with a simple mock template
@@ -5702,6 +6063,209 @@ static void test_developer_role_to_system_workaround() {
             throw std::runtime_error("Test failed: system message not found in output");
         }
         LOG_ERR("Test 1 passed: developer role changed to system\n");
+    }
+}
+
+// Verify reasoning-trace retention rules in the DeepSeek-V4 template:
+// all traces are retained unless drop_thinking is true AND the conversation
+// has no tool calls, in which case only the last (after-final-user) trace is
+// kept and earlier ones are dropped.
+static void test_deepseek_v4_thinking_retention() {
+    LOG_DBG("%s\n", __func__);
+
+    auto tmpls = read_templates("models/templates/deepseek-ai-DeepSeek-V4.jinja");
+
+    common_chat_msg user_q1; user_q1.role = "user"; user_q1.content = "Question 1";
+    common_chat_msg user_q2; user_q2.role = "user"; user_q2.content = "Question 2";
+    common_chat_msg asst_a1 = simple_assist_msg("Answer 1", "thinking A1");
+    common_chat_msg asst_a2 = simple_assist_msg("Answer 2", "thinking A2");
+
+    common_chat_msg tool_assist = message_with_tool_calls("special_function", "{\"arg1\": 1}");
+    common_chat_msg tool_result; tool_result.role = "tool";
+    tool_result.tool_name = "special_function"; tool_result.tool_call_id = "0"; tool_result.content = "result";
+
+    // The template uses U+FF5C as the role separator and literal think tags
+    // for the reasoning block.
+    const std::string asst_marker   = "<\xef\xbd\x9c" "Assistant" "\xef\xbd\x9c>";
+    // Built via concatenation so the thinking tokens are not interpreted by
+    // tooling processing this source file.
+    const std::string think_start   = "<" "think" ">";
+    const std::string think_end     = "</" "think" ">";
+
+    const std::string think_a1      = asst_marker + think_start + "thinking A1" + think_end;
+    const std::string think_a2      = asst_marker + think_start + "thinking A2" + think_end;
+    const std::string asst_no_think = asst_marker + think_end;
+
+    auto render = [&](const std::vector<common_chat_msg> & messages, bool drop_thinking) {
+        common_chat_templates_inputs inputs;
+        inputs.messages = messages;
+        inputs.add_generation_prompt = false;
+        inputs.chat_template_kwargs["thinking"]     = "true";
+        inputs.chat_template_kwargs["drop_thinking"] = drop_thinking ? "true" : "false";
+        return common_chat_templates_apply(tmpls.get(), inputs).prompt;
+    };
+
+    // No tools, drop_thinking=false: all reasoning is retained.
+    {
+        auto prompt = render({ user_q1, asst_a1, user_q2, asst_a2 }, /* drop_thinking = */ false);
+        assert_contains(prompt, think_a1);
+        assert_contains(prompt, think_a2);
+    }
+
+    // No tools, drop_thinking=true: only the last reasoning trace is kept,
+    // earlier ones are dropped (the assistant block emits just the end token).
+    {
+        auto prompt = render({ user_q1, asst_a1, user_q2, asst_a2 }, /* drop_thinking = */ true);
+        assert_not_contains(prompt, think_a1);
+        assert_contains(prompt, think_a2);
+        // The dropped assistant turn still opens with the marker + bare end token.
+        assert_contains(prompt, asst_no_think + "Answer 1");
+    }
+
+    // Single assistant turn, drop_thinking=true: the only trace is the last
+    // one, so it must be retained even with drop_thinking set.
+    {
+        auto prompt = render({ user_q1, asst_a1 }, /* drop_thinking = */ true);
+        assert_contains(prompt, think_a1);
+    }
+
+    // Single assistant turn, drop_thinking=false: reasoning is retained.
+    {
+        auto prompt = render({ user_q1, asst_a1 }, /* drop_thinking = */ false);
+        assert_contains(prompt, think_a1);
+    }
+
+    // With tool calls, drop_thinking=true: tool presence forces all reasoning
+    // to be retained, including the pre-tool-call trace.
+    {
+        auto prompt = render({ user_q1, asst_a1, user_q2, tool_assist, tool_result, asst_a2 },
+                             /* drop_thinking = */ true);
+        assert_contains(prompt, think_a1);
+        assert_contains(prompt, think_a2);
+    }
+
+    // With tool calls, drop_thinking=false: all reasoning retained.
+    {
+        auto prompt = render({ user_q1, asst_a1, user_q2, tool_assist, tool_result, asst_a2 },
+                             /* drop_thinking = */ false);
+        assert_contains(prompt, think_a1);
+        assert_contains(prompt, think_a2);
+    }
+}
+
+// Verify that consecutive tool results are rendered in the tool call order of the
+// preceding assistant message (matched by tool call id), as required by the reference
+// DeepSeek-V4 implementation.
+static void test_deepseek_v4_tool_result_ordering() {
+    LOG_DBG("%s\n", __func__);
+
+    auto tmpls = read_templates("models/templates/deepseek-ai-DeepSeek-V4.jinja");
+
+    common_chat_msg user_q; user_q.role = "user"; user_q.content = "Question";
+
+    common_chat_msg assist_calls;
+    assist_calls.role = "assistant";
+    assist_calls.tool_calls.push_back({ "get_time",    "{\"city\": \"Paris\"}", "call_1" });
+    assist_calls.tool_calls.push_back({ "get_weather", "{\"city\": \"Paris\"}", "call_2" });
+
+    common_chat_msg time_result; time_result.role = "tool";
+    time_result.tool_name = "get_time"; time_result.tool_call_id = "call_1"; time_result.content = "12:00";
+    common_chat_msg weather_result; weather_result.role = "tool";
+    weather_result.tool_name = "get_weather"; weather_result.tool_call_id = "call_2"; weather_result.content = "sunny";
+
+    auto render = [&](const std::vector<common_chat_msg> & messages) {
+        common_chat_templates_inputs inputs;
+        inputs.messages = messages;
+        inputs.add_generation_prompt = false;
+        return common_chat_templates_apply(tmpls.get(), inputs).prompt;
+    };
+
+    // Results sent out of order are reordered to match the tool call order.
+    {
+        auto prompt = render({ user_q, assist_calls, weather_result, time_result });
+        assert_contains(prompt, "<tool_result>12:00</tool_result>\n\n<tool_result>sunny</tool_result>");
+    }
+
+    // Results already in call order stay put.
+    {
+        auto prompt = render({ user_q, assist_calls, time_result, weather_result });
+        assert_contains(prompt, "<tool_result>12:00</tool_result>\n\n<tool_result>sunny</tool_result>");
+    }
+
+    // Without tool call ids there is nothing to match against; order is preserved.
+    {
+        auto no_id_calls = assist_calls;
+        no_id_calls.tool_calls[0].id = "";
+        no_id_calls.tool_calls[1].id = "";
+        auto no_id_weather = weather_result; no_id_weather.tool_call_id = "";
+        auto no_id_time    = time_result;    no_id_time.tool_call_id = "";
+        auto prompt = render({ user_q, no_id_calls, no_id_weather, no_id_time });
+        assert_contains(prompt, "<tool_result>sunny</tool_result>\n\n<tool_result>12:00</tool_result>");
+    }
+}
+
+static void test_reasoning_budget_tokens_per_request() {
+    LOG_DBG("%s\n", __func__);
+    // Use Qwen3 template which has <think>...</think> reasoning markers.
+    // The autoparser detects them and sets thinking_start/end_tag, which enables
+    // the reasoning-budget code path in oaicompat_chat_params_parse.
+    auto tmpls = read_templates("models/templates/Qwen-Qwen3-0.6B.jinja");
+
+    server_chat_params opt;
+    opt.tmpls            = std::move(tmpls);
+    opt.use_jinja        = true;
+    opt.enable_thinking  = true;
+    opt.reasoning_budget = -1;
+    opt.reasoning_format = COMMON_REASONING_FORMAT_NONE;
+
+    // Body with per-request reasoning_budget_tokens=0 (suppress thinking).
+    json body = {
+        {"messages", json::array({json{{"role", "user"}, {"content", "hello"}}})},
+        {"reasoning_budget_tokens", 0},
+    };
+    std::vector<raw_buffer> out_files;
+    auto llama_params = oaicompat_chat_params_parse(body, opt, out_files);
+
+    // The per-request value must win over the server default (-1).
+    if (!llama_params.contains("reasoning_budget_tokens")) {
+        throw std::runtime_error("reasoning_budget_tokens missing from llama_params (thinking_end_tag may be empty for this template)");
+    }
+    int got = llama_params["reasoning_budget_tokens"].get<int>();
+    if (got != 0) {
+        throw std::runtime_error(std::string("Expected reasoning_budget_tokens=0, got ") + std::to_string(got));
+    }
+}
+
+static void test_reasoning_budget_message_per_request() {
+    LOG_DBG("%s\n", __func__);
+    // Same code path as test_reasoning_budget_tokens_per_request: the Qwen3 template's
+    // <think>...</think> markers enable the reasoning-budget block in oaicompat_chat_params_parse.
+    auto tmpls = read_templates("models/templates/Qwen-Qwen3-0.6B.jinja");
+
+    server_chat_params opt;
+    opt.tmpls                   = std::move(tmpls);
+    opt.use_jinja               = true;
+    opt.enable_thinking         = true;
+    opt.reasoning_budget        = -1;
+    opt.reasoning_format        = COMMON_REASONING_FORMAT_NONE;
+    opt.reasoning_budget_message = "server default";
+
+    // Body with a per-request reasoning_budget_message override.
+    const std::string per_request_message = "per-request message";
+    json body = {
+        {"messages", json::array({json{{"role", "user"}, {"content", "hello"}}})},
+        {"reasoning_budget_message", per_request_message},
+    };
+    std::vector<raw_buffer> out_files;
+    auto llama_params = oaicompat_chat_params_parse(body, opt, out_files);
+
+    // The per-request value must win over the server default.
+    if (!llama_params.contains("reasoning_budget_message")) {
+        throw std::runtime_error("reasoning_budget_message missing from llama_params (thinking_end_tag may be empty for this template)");
+    }
+    std::string got = llama_params["reasoning_budget_message"].get<std::string>();
+    if (got != per_request_message) {
+        throw std::runtime_error("Expected reasoning_budget_message='" + per_request_message + "', got '" + got + "'");
     }
 }
 
@@ -5857,11 +6421,15 @@ int main(int argc, char ** argv) {
     {
         test_msg_diffs_compute();
         test_msgs_oaicompat_json_conversion();
-        test_split_by_role();
+        test_msg_token_delimiters_split();
         test_tools_oaicompat_json_conversion();
         test_convert_responses_to_chatcmpl();
         test_developer_role_to_system_workaround();
+        test_deepseek_v4_thinking_retention();
+        test_deepseek_v4_tool_result_ordering();
         test_template_generation_prompt();
+        test_reasoning_budget_tokens_per_request();
+        test_reasoning_budget_message_per_request();
         test_template_output_peg_parsers(detailed_debug);
         std::cout << "\n[chat] All tests passed!" << '\n';
     }

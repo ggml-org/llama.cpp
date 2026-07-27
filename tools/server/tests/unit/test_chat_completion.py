@@ -603,3 +603,23 @@ def test_chat_completions_token_count():
         })
         assert res.status_code == 200
         assert res.body["input_tokens"] > 5
+
+
+def test_verbose_debug():
+    global server
+    server.start()
+    for verbose in [True, False]:
+        res = server.make_request("POST", "/chat/completions", data={
+            "max_tokens": 2,
+            "messages": [
+                {"role": "system", "content": "Book"},
+                {"role": "user", "content": "What is the best book"},
+            ],
+            "verbose": verbose,
+        })
+        assert res.status_code == 200
+        if verbose:
+            assert "__verbose" in res.body
+            assert "Book" in res.body["__verbose"]["prompt"]
+        else:
+            assert "__verbose" not in res.body

@@ -16,6 +16,7 @@ import {
 	DEFAULT_MCP_CONFIG,
 	DEFAULT_CLIENT_VERSION,
 	DEFAULT_IMAGE_MIME_TYPE,
+	CORS_PROXY_HEADER_PREFIX,
 	MCP_PARTIAL_REDACT_HEADERS,
 	CORS_PROXY_ENDPOINT
 } from '$lib/constants';
@@ -131,6 +132,20 @@ export class MCPService {
 		}
 
 		return details;
+	}
+
+	private static addRequestHeaders(
+		requestHeaders: Headers,
+		headers: HeadersInit,
+		useProxy: boolean
+	) {
+		for (const [key, value] of new Headers(headers).entries()) {
+			const proxiedKey =
+				useProxy && !key.toLowerCase().startsWith(CORS_PROXY_HEADER_PREFIX)
+					? `${CORS_PROXY_HEADER_PREFIX}${key}`
+					: key;
+			requestHeaders.set(proxiedKey, value);
+		}
 	}
 
 	private static summarizeError(error: unknown): Record<string, unknown> {
@@ -271,15 +286,11 @@ export class MCPService {
 				const requestHeaders = new Headers(baseInit.headers);
 
 				if (typeof Request !== 'undefined' && input instanceof Request) {
-					for (const [key, value] of input.headers.entries()) {
-						requestHeaders.set(key, value);
-					}
+					this.addRequestHeaders(requestHeaders, input.headers, useProxy);
 				}
 
 				if (init?.headers) {
-					for (const [key, value] of new Headers(init.headers).entries()) {
-						requestHeaders.set(key, value);
-					}
+					this.addRequestHeaders(requestHeaders, init.headers, useProxy);
 				}
 
 				const request = this.createDiagnosticRequestDetails(
@@ -302,6 +313,30 @@ export class MCPService {
 						}
 					)
 				);
+
+				if (method === 'DELETE' && url.includes(CORS_PROXY_ENDPOINT)) {
+					const response = new Response(null, { status: 200, statusText: 'OK' });
+
+					logIfEnabled(
+						this.createLog(
+							MCPConnectionPhase.INITIALIZING,
+							`HTTP 200 ${method} ${url} (fake response)`,
+							MCPLogLevel.INFO,
+							{
+								response: {
+									url,
+									status: response.status,
+									statusText: response.statusText,
+									durationMs: 0,
+									isFake: true
+								}
+							}
+						)
+					);
+
+					// fake response, bypass real fetch()
+					return response;
+				}
 
 				try {
 					const response = await fetch(input, {
@@ -617,19 +652,20 @@ export class MCPService {
 		);
 
 		const runtimeErrorHandler = (error: Error) => {
-			// Ignore errors that are expected when the SDK's transport is closed,
-			// or when connecting to servers that don't support SSE (stateless-only
-			// endpoints returning 405). The SDK wraps the original AbortError in
-			// a new Error with the message "SSE stream disconnected: AbortError",
-			// and also produces "Cannot cancel a stream locked by a reader".
-			// DOMException is thrown by the browser when aborting fetch requests.
-			const msg = error.message || String(error);
+			// the SDK reports any post initialize error here, including the abort we trigger
+			// ourselves on the next health check cycle, on tab unload, or on server teardown.
+			// these are lifecycle aborts, not actionable errors, so we keep them out of the red console.
+			// the SDK wraps the original AbortError in a generic Error like
+			//   "SSE stream disconnected: AbortError: The operation was aborted."
+			// which isAbortError cannot recognize by name alone, so we also pattern match on the message
+			if (isAbortError(error)) {
+				return;
+			}
+			const msg = error?.message ?? '';
 			if (
-				error.name === 'AbortError' ||
-				error instanceof DOMException ||
-				msg.includes('SSE stream disconnected') ||
-				msg.includes('stream locked by a reader') ||
-				msg.includes('The operation was aborted')
+				/SSE stream disconnected:.*AbortError/i.test(msg) ||
+				/AbortError: .*aborted/i.test(msg) ||
+				/stream locked by a reader/i.test(msg)
 			) {
 				return;
 			}
@@ -656,8 +692,31 @@ export class MCPService {
 			this.createLog(MCPConnectionPhase.INITIALIZING, 'Sending initialize request...')
 		);
 
+		// The SDK timeout only covers the initialize request, not transport.start(),
+		// which can hang forever on an unreachable host (SSE endpoint wait, WebSocket
+		// handshake, proxied fetch). This race bounds the whole handshake and closes
+		// the transport on expiry so the underlying fetch or socket is aborted.
+		const handshakeTimeoutMs =
+			serverConfig.handshakeTimeoutMs ?? DEFAULT_MCP_CONFIG.connectionTimeoutMs;
+
 		try {
-			await client.connect(transport);
+			let handshakeTimer: ReturnType<typeof setTimeout> | undefined;
+			const handshakeDeadline = new Promise<never>((_, reject) => {
+				handshakeTimer = setTimeout(() => {
+					void transport.close().catch(() => {});
+					reject(new Error(`Connection timed out after ${Math.round(handshakeTimeoutMs / 1000)}s`));
+				}, handshakeTimeoutMs);
+			});
+
+			try {
+				await Promise.race([
+					client.connect(transport, { timeout: handshakeTimeoutMs }),
+					handshakeDeadline
+				]);
+			} finally {
+				clearTimeout(handshakeTimer);
+			}
+
 			// Transport diagnostics are only for the initial handshake, not long-lived traffic.
 			stopPhaseLogging();
 			client.onerror = runtimeErrorHandler;

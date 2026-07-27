@@ -13,6 +13,14 @@
 #include <sstream>
 #include <vector>
 #include <memory>
+#include <fstream>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 // Internal header for clip.cpp
 
@@ -34,6 +42,7 @@
 #define KEY_N_HEAD              "clip.%s.attention.head_count"
 #define KEY_N_HEAD_KV           "clip.%s.attention.head_count_kv"
 #define KEY_LAYER_NORM_EPS      "clip.%s.attention.layer_norm_epsilon"
+#define KEY_FEATURE_LAYERS      "clip.%s.feature_layer"
 
 // vision-specific
 #define KEY_VISION_PROJ_TYPE        "clip.vision.projector_type" // for models with mixed modalities
@@ -46,7 +55,6 @@
 #define KEY_PATCH_SIZE              "clip.vision.patch_size"
 #define KEY_IMAGE_MEAN              "clip.vision.image_mean"
 #define KEY_IMAGE_STD               "clip.vision.image_std"
-#define KEY_FEATURE_LAYER           "clip.vision.feature_layer"
 #define KEY_PROJ_SCALE_FACTOR       "clip.vision.projector.scale_factor"
 #define KEY_PROJ_SAMPLE_QUERY_SIDE  "clip.vision.projector.query_side"
 #define KEY_PROJ_SAMPLE_WINDOW_SIDE "clip.vision.projector.window_side"
@@ -125,6 +133,8 @@
 #define TN_MM_SOFT_EMB_N   "mm.soft_emb_norm.weight"    // gemma3
 #define TN_MM_PROJECTOR    "mm.model.fc.%s"             // idefics3, deepseekocr
 #define TN_MM_PATCH_MERGER "mm.patch_merger.%s"         // mistral small 3.1, glm4v
+#define TN_MM_MERGER_FC1   "mm.merger.fc1.%s"            // minimax-m3 patch-merge MLP
+#define TN_MM_MERGER_FC2   "mm.merger.fc2.%s"
 #define TN_TOK_IMG_BREAK   "v.token_embd.img_break"     // pixtral
 #define TN_TOK_GLM_BOI     "adapter.boi"                // glm-edge (these embeddings are not in text model)
 #define TN_TOK_GLM_EOI     "adapter.eoi"                // glm-edge (these embeddings are not in text model)
@@ -371,6 +381,7 @@ enum projector_type {
     PROJECTOR_TYPE_MINICPMV4_6,
     PROJECTOR_TYPE_GRANITE_SPEECH,
     PROJECTOR_TYPE_MIMOVL,
+    PROJECTOR_TYPE_MINIMAX_M3,
     PROJECTOR_TYPE_GRANITE4_VISION,
     PROJECTOR_TYPE_UNKNOWN,
 };
@@ -425,6 +436,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_MINICPMV4_6,       "minicpmv4_6"},
     { PROJECTOR_TYPE_GRANITE_SPEECH,    "granite_speech"},
     { PROJECTOR_TYPE_MIMOVL,            "mimovl"},
+    { PROJECTOR_TYPE_MINIMAX_M3,        "minimax_m3"},
     { PROJECTOR_TYPE_GRANITE4_VISION,   "granite4_vision"},
     { PROJECTOR_TYPE_PARAKEET,          "parakeet"},
 };
@@ -670,6 +682,22 @@ struct clip_image_f32_batch {
 //
 // common utils
 //
+
+#ifdef _WIN32
+static std::ifstream open_ifstream_binary(const std::string & fname) {
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, fname.c_str(), -1, NULL, 0);
+    if (!wlen) {
+        throw std::runtime_error("failed to convert filename to UTF-16: " + fname);
+    }
+    std::vector<wchar_t> wfname(wlen);
+    (void)MultiByteToWideChar(CP_UTF8, 0, fname.c_str(), -1, wfname.data(), wlen);
+    return std::ifstream(wfname.data(), std::ios::binary);
+}
+#else
+static std::ifstream open_ifstream_binary(const std::string & fname) {
+    return std::ifstream(fname, std::ios::binary);
+}
+#endif
 
 static std::string string_format(const char * fmt, ...) {
     va_list ap;

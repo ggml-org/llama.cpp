@@ -715,6 +715,9 @@ class GGUFWriter:
     def add_full_attention_interval(self, interval: int) -> None:
         self.add_uint32(Keys.LLM.FULL_ATTENTION_INTERVAL.format(arch=self.arch), interval)
 
+    def add_hash_layer_count(self, count: int) -> None:
+        self.add_uint32(Keys.LLM.HASH_LAYER_COUNT.format(arch=self.arch), count)
+
     def add_feed_forward_length(self, length: int | Sequence[int]) -> None:
         if isinstance(length, int):
             self.add_uint32(Keys.LLM.FEED_FORWARD_LENGTH.format(arch=self.arch), length)
@@ -789,6 +792,16 @@ class GGUFWriter:
 
     def add_indexer_top_k(self, top_k: int) -> None:
         self.add_uint32(Keys.Attention.Indexer.TOP_K.format(arch=self.arch), top_k)
+
+    def add_indexer_block_size(self, block_size: int) -> None:
+        self.add_uint32(Keys.Attention.Indexer.BLOCK_SIZE.format(arch=self.arch), block_size)
+
+    def add_indexer_local_blocks(self, local_blocks: int) -> None:
+        self.add_uint32(Keys.Attention.Indexer.LOCAL_BLOCKS.format(arch=self.arch), local_blocks)
+
+    def add_indexer_types(self, value: Sequence[bool]) -> None:
+        key = Keys.Attention.Indexer.TYPES.format(arch=self.arch)
+        self.add_array(key, value)
 
     def add_max_alibi_bias(self, bias: float) -> None:
         self.add_float32(Keys.Attention.MAX_ALIBI_BIAS.format(arch=self.arch), bias)
@@ -939,6 +952,39 @@ class GGUFWriter:
 
     def add_sliding_window(self, value: int) -> None:
         self.add_uint32(Keys.Attention.SLIDING_WINDOW.format(arch=self.arch), value)
+
+    def add_block_size(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.BLOCK_SIZE.format(arch=self.arch), value)
+
+    def add_target_layers(self, value: Sequence[int]) -> None:
+        self.add_array(Keys.LLM.TARGET_LAYERS.format(arch=self.arch), value)
+
+    def add_target_hidden_size(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.TARGET_HIDDEN_SIZE.format(arch=self.arch), value)
+
+    def add_norm_before_residual(self, value: bool) -> None:
+        self.add_bool(Keys.LLM.NORM_BEFORE_RESIDUAL.format(arch=self.arch), value)
+
+    def add_attention_output_group_count(self, count: int) -> None:
+        self.add_uint32(Keys.Attention.OUTPUT_GROUP_COUNT.format(arch=self.arch), count)
+
+    def add_attention_output_lora_rank(self, length: int) -> None:
+        self.add_uint32(Keys.Attention.OUTPUT_LORA_RANK.format(arch=self.arch), length)
+
+    def add_attention_compress_ratios(self, values: Sequence[int]) -> None:
+        self.add_array(Keys.Attention.COMPRESS_RATIOS.format(arch=self.arch), values)
+
+    def add_attention_compress_rope_freq_base(self, value: float) -> None:
+        self.add_float32(Keys.Attention.COMPRESS_ROPE_FREQ_BASE.format(arch=self.arch), value)
+
+    def add_hyper_connection_count(self, count: int) -> None:
+        self.add_uint32(Keys.HyperConnection.COUNT.format(arch=self.arch), count)
+
+    def add_hyper_connection_sinkhorn_iterations(self, count: int) -> None:
+        self.add_uint32(Keys.HyperConnection.SINKHORN_ITERATIONS.format(arch=self.arch), count)
+
+    def add_hyper_connection_epsilon(self, value: float) -> None:
+        self.add_float32(Keys.HyperConnection.EPSILON.format(arch=self.arch), value)
 
     def add_attention_scale(self, value: float) -> None:
         self.add_float32(Keys.Attention.SCALE.format(arch=self.arch), value)
@@ -1312,6 +1358,9 @@ class GGUFWriter:
 
     def add_audio_max_pos_emb(self, value: int) -> None:
         self.add_uint32(Keys.ClipAudio.MAX_POS_EMB, value)
+
+    def add_audio_feature_layers(self, layers: Sequence[int]) -> None:
+        self.add_array(Keys.ClipAudio.FEATURE_LAYERS, layers)
 
     def add_audio_projector_window_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipAudio.Projector.WINDOW_SIZE, value)

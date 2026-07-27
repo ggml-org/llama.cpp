@@ -263,6 +263,10 @@ static void llama_log_softmax(float * array, size_t size) {
 */
 
 static void llama_sampler_temp_impl(llama_token_data_array * cur_p, float temp) {
+    if (cur_p->size == 0) {
+        return;
+    }
+
     if (temp <= 0.0f) {
         // find the token with the highest logit and set the rest to -inf
         size_t max_i = 0;
@@ -2813,8 +2817,6 @@ static void llama_sampler_top_n_sigma_apply(struct llama_sampler * smpl, llama_t
             cur_p->data[i].logit = -INFINITY;
         }
     }
-
-    llama_sampler_softmax_impl(cur_p, true);
 }
 
 static struct llama_sampler * llama_sampler_top_n_sigma_clone(const struct llama_sampler * smpl) {

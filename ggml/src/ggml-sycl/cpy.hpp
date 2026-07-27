@@ -317,7 +317,7 @@ inline void cpy_blck_f32_nvfp4(const char * cxi, char * cdsti) {
 
         const uint8_t ue = ggml_fp32_to_ue4m3(amax / 6.0f);
         dsti->d[s] = ue;
-        const float d = ggml_ue4m3_to_fp32(ue);
+        const float d = ggml_sycl_ue4m3_to_fp32(ue);
 
         for (int j = 0; j < QK_NVFP4_SUB / 2; ++j) {
             const uint8_t x0 = best_index_mxfp4(xb[0 + j], d);

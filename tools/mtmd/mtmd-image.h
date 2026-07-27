@@ -11,11 +11,19 @@
 struct mtmd_image_preproc_out {
     std::vector<clip_image_f32> entries;
     // grid size is required for llava-uhd style models
+
+    clip_image_f32 overview; // overview image (downscaled image)
     int grid_x = 0;
     int grid_y = 0;
+
     void append(const clip_hparams & hparams, const clip_image_u8 & img, bool normalized = true);
     void append(const clip_hparams & hparams, const std::vector<clip_image_u8> & imgs, bool normalized = true);
     void append(const clip_hparams & hparams, clip_image_f32 & img, bool normalized = true);
+
+    void append_overview(const clip_hparams & hparams, const clip_image_u8 & img, bool normalized = true);
+    bool has_overview() const {
+        return overview.nx() > 0 || overview.ny() > 0;
+    }
 };
 
 // base class, models must inherit from this class
@@ -46,6 +54,8 @@ struct mtmd_image_preprocessor {
  * [overview] --> [slice 1] --> [slice 2]
  *           |                |
  *           +--> [slice 3] --> [slice 4]
+ *
+ * NOTE: for the ordering of overview, set "ov_img_first" on the mtmd_context
  */
 struct mtmd_image_preprocessor_llava_uhd : mtmd_image_preprocessor {
     mtmd_image_preprocessor_llava_uhd(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
@@ -67,7 +77,11 @@ struct mtmd_image_preprocessor_llava_uhd : mtmd_image_preprocessor {
     // LFM2 override this function to implement its custom slicing logic
     virtual slice_instructions get_slice_instructions(const clip_image_size & original_size);
 
-    std::vector<clip_image_u8> slice_image(const clip_image_u8 & img, const slice_instructions & inst, bool overview_first = true);
+    struct slice_output {
+        clip_image_u8 overview;
+        std::vector<clip_image_u8> slices;
+    };
+    slice_output slice_image(const clip_image_u8 & img, const slice_instructions & inst);
 
 private:
     clip_image_size get_best_resize(const clip_image_size & original_size, int scale_resolution, int patch_size, bool allow_upscale = false);
@@ -146,29 +160,29 @@ struct mtmd_image_preprocessor_internvl : mtmd_image_preprocessor_llava_uhd {
     mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
 };
 
+// DeepSeek-OCR (v1/v2) global view + optional local tile grid
 struct mtmd_image_preprocessor_deepseekocr : mtmd_image_preprocessor {
-    mtmd_image_preprocessor_deepseekocr(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
-    mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
-};
-
-// DeepSeek-OCR-2: a 1024x1024 global view, plus InternVL-style 768x768 local
-// tiles when the image is larger than a tile in either dimension.
-struct mtmd_image_preprocessor_deepseekocr2 : mtmd_image_preprocessor {
-    static constexpr int base_size = 1024; // global view
-    static constexpr int tile_size = 768;  // local tile
-    static constexpr int min_tiles = 2;
-    static constexpr int max_tiles = 6;
-
-    mtmd_image_preprocessor_deepseekocr2(const clip_ctx * ctx) : mtmd_image_preprocessor(ctx) {}
+    mtmd_image_preprocessor_deepseekocr(const clip_ctx * ctx)
+        : mtmd_image_preprocessor(ctx),
+            fuse_row(clip_get_projector_type(ctx) == PROJECTOR_TYPE_DEEPSEEKOCR),
+          base_size(hparams.image_size),
+          tile_size(hparams.preproc_tile_size),
+          min_tiles(hparams.preproc_min_tiles),
+          max_tiles(hparams.preproc_max_tiles) {}
     mtmd_image_preproc_out preprocess(const clip_image_u8 & img) override;
 
 private:
-    static std::vector<clip_image_size> get_target_ratios();
-    static clip_image_size              find_closest_aspect_ratio(
-        float                                aspect_ratio,
-        const std::vector<clip_image_size> & target_ratios,
-        int                                  width,
-        int                                  height);
+    bool fuse_row; // v1 fuses a tile-row into one image; v2 keeps tiles separate
+    int base_size; // global view
+    int tile_size; // each tile
+    int min_tiles;
+    int max_tiles;
+
+    std::vector<clip_image_size> get_target_ratios() const;
+    clip_image_size find_closest_aspect_ratio(
+            float aspect_ratio,
+            const std::vector<clip_image_size> & target_ratios,
+            int width, int height) const;
 };
 
 // custom image preprocessing for Step3VL
