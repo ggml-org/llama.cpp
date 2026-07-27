@@ -1862,12 +1862,22 @@ struct clip_model_loader {
                 return result;
             }
 
-            int idx = gguf_find_tensor(ctx_gguf.get(), name.c_str());
-            if (idx <= 0) {
+            const int64_t idx = gguf_find_tensor(ctx_gguf.get(), name.c_str());
+            if (idx < 0) {
                 throw std::runtime_error(string_format("%s: failed to find tensor %s\n", __func__, name.c_str()));
             }
-            size_t n_bytes = gguf_get_tensor_size(ctx_gguf.get(), idx);
-            size_t n_elems = n_bytes / sizeof(float);
+
+            if (const auto type = gguf_get_tensor_type(ctx_gguf.get(), idx); type != GGML_TYPE_F32) {
+                throw std::runtime_error(string_format("%s: %s must be %s, was %s\n", __func__,
+                            name.c_str(), ggml_type_name(GGML_TYPE_F32), ggml_type_name(type)));
+            }
+
+            const size_t n_bytes = gguf_get_tensor_size(ctx_gguf.get(), idx);
+            if (n_bytes == 0) {
+                throw std::runtime_error(string_format("%s: tensor %s is empty\n", __func__, name.c_str()));
+            }
+
+            const size_t n_elems = n_bytes / sizeof(float);
             result.resize(n_elems);
             fin.seekg(it->second, std::ios::beg);
             fin.read(reinterpret_cast<char*>(result.data()), n_bytes);
