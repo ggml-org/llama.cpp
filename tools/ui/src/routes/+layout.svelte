@@ -6,16 +6,12 @@
 	import { page } from '$app/state';
 	import { untrack } from 'svelte';
 	import { onMount } from 'svelte';
-	import { fade } from 'svelte/transition';
 
-	import {
-		DesktopIconStrip,
-		DialogConversationTitleUpdate,
-		SidebarNavigation
-	} from '$lib/components/app';
+	import { SidebarNavigation } from '$lib/components/app';
+	import { PwaMetaTags, PwaRefreshAlert } from '$lib/components/pwa';
+	import { pwaAssetsHead } from 'virtual:pwa-assets/head';
 
-	import { conversationsStore } from '$lib/stores/conversations.svelte';
-	import * as Sidebar from '$lib/components/ui/sidebar/index.js';
+	import { chatStore } from '$lib/stores/chat.svelte';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { isRouterMode, serverStore } from '$lib/stores/server.svelte';
 	import { config, settingsStore } from '$lib/stores/settings.svelte';
@@ -25,17 +21,18 @@
 	import { Toaster } from 'svelte-sonner';
 	import { modelsStore } from '$lib/stores/models.svelte';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
-	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
+	import { AUTHORIZATION_HEADER, BEARER_PREFIX, TOOLTIP_DELAY_DURATION } from '$lib/constants';
+	import { FAVICON_PATHS, FAVICON_SELECTORS } from '$lib/constants/pwa';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
-	import { useSettingsNavigation } from '$lib/hooks/use-settings-navigation.svelte';
+	import { usePwa } from '$lib/hooks/use-pwa.svelte';
 	import { conversations } from '$lib/stores/conversations.svelte';
 	import { isMobile } from '$lib/stores/viewport.svelte';
+	import { theme } from '$lib/stores/theme.svelte';
+	import { buildInfoStore } from '$lib/stores/build-info.svelte';
+
+	import { SETTINGS_KEYS } from '$lib/constants';
 
 	let { children } = $props();
-	let alwaysShowSidebarOnDesktop = $derived(config().alwaysShowSidebarOnDesktop);
-	let isDesktop = $derived(!isMobile.current);
-	let sidebarOpen = $state(false);
-	let mounted = $state(false);
 	let innerHeight = $state<number | undefined>();
 	let innerWidth = $state(browser ? window.innerWidth : 0);
 
@@ -46,11 +43,25 @@
 		  }
 		| undefined = $state();
 
-	let titleUpdateDialogOpen = $state(false);
-	let titleUpdateCurrentTitle = $state('');
-	let titleUpdateNewTitle = $state('');
-	let titleUpdateResolve: ((value: boolean) => void) | null = null;
-	const panelNav = useSettingsNavigation();
+	let showBuildVersion = $derived(config()[SETTINGS_KEYS.SHOW_BUILD_VERSION] as boolean);
+
+	// Keep the hook object intact: destructuring needRefreshByStorage reads the getter once and freezes it
+	const pwa = usePwa();
+	const { needRefresh, updateServiceWorker } = pwa;
+
+	function updateFavicon() {
+		const dark = theme.isSystemDark;
+
+		let icoLink = document.querySelector(FAVICON_SELECTORS.ICO_48X48) as HTMLLinkElement | null;
+		if (icoLink) {
+			icoLink.href = dark ? FAVICON_PATHS.ICO_DARK : FAVICON_PATHS.ICO_LIGHT;
+		}
+
+		let svgLink = document.querySelector(FAVICON_SELECTORS.SVG_ANY) as HTMLLinkElement | null;
+		if (svgLink) {
+			svgLink.href = dark ? FAVICON_PATHS.SVG_DARK : FAVICON_PATHS.SVG_LIGHT;
+		}
+	}
 
 	function navigateToConversation(direction: -1 | 1) {
 		const allConvs = conversations();
@@ -88,8 +99,9 @@
 	function checkApiKey() {
 		const apiKey = config().apiKey;
 
-		// No API key configured — server doesn't require auth, no need to validate.
-		// This mirrors the early return in validateApiKey() to avoid redundant /props requests.
+		// Without a stored key there is nothing to re-validate here; the keyless
+		// 401 case is handled by validateApiKey() at navigation time, and the
+		// reload below must never fire in a keyless loop.
 		if (!apiKey || apiKey.trim() === '') {
 			return;
 		}
@@ -102,7 +114,7 @@
 			) {
 				const headers: Record<string, string> = {
 					'Content-Type': 'application/json',
-					Authorization: `Bearer ${apiKey.trim()}`
+					[AUTHORIZATION_HEADER]: `${BEARER_PREFIX}${apiKey.trim()}`
 				};
 
 				fetch(`${base}/props`, { headers })
@@ -118,34 +130,24 @@
 		});
 	}
 
-	function handleTitleUpdateCancel() {
-		titleUpdateDialogOpen = false;
-
-		if (titleUpdateResolve) {
-			titleUpdateResolve(false);
-			titleUpdateResolve = null;
-		}
-	}
-
-	function handleTitleUpdateConfirm() {
-		titleUpdateDialogOpen = false;
-
-		if (titleUpdateResolve) {
-			titleUpdateResolve(true);
-			titleUpdateResolve = null;
-		}
-	}
-
 	onMount(() => {
-		mounted = true;
+		updateFavicon();
+		// snapshot of every backend running stream on first load, populates the sidebar spinners
+		// so the user sees each conv that has a live inference, even ones not opened yet
+		void chatStore.syncRemoteRunningStreams();
 	});
 
-	$effect(() => {
-		if (alwaysShowSidebarOnDesktop && isDesktop) {
-			sidebarOpen = true;
+	// refresh that snapshot when the tab returns to the foreground, a stream may have advanced
+	// or ended while it was hidden. snapshot only, no polling
+	function handleVisibilityChange() {
+		if (document.visibilityState !== 'visible') return;
+		void chatStore.syncRemoteRunningStreams();
+	}
 
-			return;
-		}
+	$effect(() => {
+		void theme.isSystemDark;
+
+		updateFavicon();
 	});
 
 	// Initialize server properties on app load (run once)
@@ -195,20 +197,40 @@
 		}
 	});
 
-	// Background MCP server health checks on app load
-	// Fetch enabled servers from settings and run health checks in background
+	// Live model status and load progress via the /models/sse feed (router mode)
+	$effect(() => {
+		if (!browser) return;
+		if (!isRouterMode()) return;
+
+		untrack(() => {
+			modelsStore.subscribeStatus();
+		});
+
+		return () => {
+			modelsStore.unsubscribeStatus();
+		};
+	});
+
+	// Background MCP server health checks on app load.
+	// Health-check every configured server with a URL - including disabled ones -
+	// so the /mcp-servers page can display health metadata for servers that are
+	// currently turned off. Disabled servers never get promoted to active
+	// connections (see runHealthCheck), so their tools/prompts/resources stay
+	// out of the chat-side stores.
+	// Only IDLE servers are checked; already-resolved (SUCCESS / ERROR) servers
+	// keep their existing state, so adding or removing a server does not flash
+	// every other card back through skeleton state.
 	$effect(() => {
 		if (!browser) return;
 
 		const mcpServers = mcpStore.getServers();
 
-		// Only run health checks if we have enabled servers with URLs
-		const enabledServers = mcpServers.filter((s) => s.enabled && s.url.trim());
+		const serversWithUrls = mcpServers.filter((s) => s.url.trim());
 
-		if (enabledServers.length > 0) {
+		if (serversWithUrls.length > 0) {
 			untrack(() => {
 				// Run health checks in background (don't await)
-				mcpStore.runHealthChecksForServers(enabledServers, false).catch((error) => {
+				mcpStore.runHealthChecksForServers(serversWithUrls, true).catch((error) => {
 					console.warn('[layout] MCP health checks failed:', error);
 				});
 			});
@@ -219,77 +241,58 @@
 	$effect(() => {
 		checkApiKey();
 	});
-
-	// Set up title update confirmation callback
-	$effect(() => {
-		conversationsStore.setTitleUpdateConfirmationCallback(
-			async (currentTitle: string, newTitle: string) => {
-				return new Promise<boolean>((resolve) => {
-					titleUpdateCurrentTitle = currentTitle;
-					titleUpdateNewTitle = newTitle;
-					titleUpdateResolve = resolve;
-					titleUpdateDialogOpen = true;
-				});
-			}
-		);
-	});
 </script>
 
 <svelte:head>
+	{#if pwaAssetsHead.themeColor}
+		<meta name="theme-color" content={pwaAssetsHead.themeColor.content} />
+	{/if}
+
 	{#if config().customCss}
 		<style use:customCss></style>
 	{/if}
+
+	{#each pwaAssetsHead.links as link (link.href)}
+		<link {...link} />
+	{/each}
+
+	<PwaMetaTags />
 </svelte:head>
 
+<svelte:window onkeydown={handleKeydown} bind:innerHeight bind:innerWidth />
+<svelte:document onvisibilitychange={handleVisibilityChange} />
+
 <Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
-	<ModeWatcher />
-	<Toaster richColors />
+	<div class="flex flex-col md:flex-row">
+		<SidebarNavigation
+			onSearchClick={() => {
+				if (isMobile.current) {
+					goto(ROUTES.SEARCH);
+				} else if (chatSidebar?.activateSearchMode) {
+					chatSidebar.activateSearchMode();
+				}
+			}}
+		/>
 
-	<DialogConversationTitleUpdate
-		bind:open={titleUpdateDialogOpen}
-		currentTitle={titleUpdateCurrentTitle}
-		newTitle={titleUpdateNewTitle}
-		onConfirm={handleTitleUpdateConfirm}
-		onCancel={handleTitleUpdateCancel}
-	/>
-
-	<Sidebar.Provider bind:open={sidebarOpen}>
-		<div class="flex h-dvh w-full">
-			<Sidebar.Root variant="floating" class="h-full"
-				><SidebarNavigation bind:this={chatSidebar} /></Sidebar.Root
-			>
-
-			{#if !(alwaysShowSidebarOnDesktop && isDesktop) && !(panelNav.isSettingsRoute && !isDesktop)}
-				{#if mounted}
-					<div in:fade={{ duration: 200 }}>
-						<Sidebar.Trigger
-							class="transition-left absolute left-0 z-[900] duration-200 ease-linear {sidebarOpen
-								? 'left-[calc(var(--sidebar-width)+0.75rem)] max-md:hidden'
-								: 'left-0!'}"
-							style="translate: 1rem 1rem;"
-						/>
-					</div>
-				{/if}
-			{/if}
-
-			{#if isDesktop && !alwaysShowSidebarOnDesktop}
-				<DesktopIconStrip
-					{sidebarOpen}
-					onSearchClick={() => {
-						if (chatSidebar?.activateSearchMode) {
-							chatSidebar.activateSearchMode();
-						}
-
-						sidebarOpen = true;
-					}}
-				/>
-			{/if}
-
-			<Sidebar.Inset class="flex flex-1 flex-col overflow-hidden"
-				>{@render children?.()}</Sidebar.Inset
-			>
+		<div class="flex-1">
+			{@render children?.()}
 		</div>
-	</Sidebar.Provider>
+	</div>
+
+	<ModeWatcher />
+
+	<Toaster richColors />
 </Tooltip.Provider>
 
-<svelte:window onkeydown={handleKeydown} bind:innerHeight bind:innerWidth />
+<!-- PWA update prompt + version -->
+<div class="fixed right-4 bottom-4 z-9999 flex flex-col items-end gap-1">
+	{#if showBuildVersion && buildInfoStore.value}
+		<span class="text-[10px] tabular-nums text-muted-foreground">{buildInfoStore.value}</span>
+	{/if}
+
+	<PwaRefreshAlert
+		needRefresh={$needRefresh || pwa.needRefreshByStorage}
+		forceReload={pwa.needRefreshByStorage}
+		{updateServiceWorker}
+	/>
+</div>

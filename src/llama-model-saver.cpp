@@ -18,6 +18,7 @@ bool llama_model_saver_supports_arch(llm_arch arch) {
         case LLM_ARCH_GEMMA3:
         case LLM_ARCH_GEMMA3N:
         case LLM_ARCH_COHERE2:
+        case LLM_ARCH_COHERE2MOE:
         case LLM_ARCH_OLMO2:
         case LLM_ARCH_BITNET:
         case LLM_ARCH_T5:
@@ -27,6 +28,7 @@ bool llama_model_saver_supports_arch(llm_arch arch) {
         case LLM_ARCH_MIMO2:
         case LLM_ARCH_STEP35:
         case LLM_ARCH_MELLUM:
+        case LLM_ARCH_LAGUNA:
             return false;
         default:
             return true;
@@ -279,6 +281,9 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT,      hparams.indexer_n_head);
     add_kv(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH,      hparams.indexer_head_size);
     add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,           hparams.indexer_top_k);
+    add_kv(LLM_KV_ATTENTION_INDEXER_BLOCK_SIZE,      hparams.indexer_block_size);
+    add_kv(LLM_KV_ATTENTION_INDEXER_LOCAL_BLOCKS,    hparams.indexer_local_blocks);
+    add_kv(LLM_KV_ATTENTION_INDEXER_TYPES,           hparams.is_indexer_full_impl, true);
     add_kv(LLM_KV_ATTENTION_RECURRENT_LAYERS,        hparams.is_recr_impl, true);
 
     const float rope_scaling_factor = hparams.rope_freq_scale_train == 1.0f ? 0.0f : 1.0f/hparams.rope_freq_scale_train;

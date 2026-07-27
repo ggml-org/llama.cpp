@@ -58,6 +58,13 @@ jobs:
           git tag ${{ steps.srctag.outputs.name }} || exit 0
           git push origin ${{ steps.srctag.outputs.name }} || exit 0
 
+  build_ui:
+    name: Build UI
+    needs: create_tag
+    uses: ./.github/workflows/ui-build.yml
+    with:
+      hf_ui_version: ${{ needs.create_tag.outputs.source_tag }}
+
   prepare_matrices:
     name: Prepare Docker matrices
     runs-on: ubuntu-24.04
@@ -79,7 +86,7 @@ jobs:
           [
             { "tag": "cpu", "dockerfile": ".devops/cpu.Dockerfile", "platforms": "linux/amd64", "full": true, "light": true, "server": true, "free_disk_space": false, "runs_on": "ubuntu-24.04" },
             { "tag": "cpu", "dockerfile": ".devops/cpu.Dockerfile", "platforms": "linux/arm64", "full": true, "light": true, "server": true, "free_disk_space": false, "runs_on": "ubuntu-24.04-arm" },
-            { "tag": "cpu", "dockerfile": ".devops/s390x.Dockerfile", "platforms": "linux/s390x", "full": true, "light": true, "server": true, "free_disk_space": false, "runs_on": "ubuntu-24.04-s390x" },
+            { "tag": "cpu", "dockerfile": ".devops/s390x.Dockerfile", "platforms": "linux/s390x", "full": true, "light": true, "server": true, "free_disk_space": false, "runs_on": "ubuntu-24.04-s390x", "prebuilt_ui": true },
             { "tag": "cuda cuda12", "dockerfile": ".devops/cuda.Dockerfile", "cuda_version": "12.8.1", "platforms": "linux/amd64", "full": true, "light": true, "server": true, "free_disk_space": true, "runs_on": "ubuntu-24.04" },
             { "tag": "cuda cuda12", "dockerfile": ".devops/cuda.Dockerfile", "cuda_version": "12.8.1", "platforms": "linux/arm64", "full": true, "light": true, "server": true, "free_disk_space": true, "runs_on": "ubuntu-24.04-arm" },
             { "tag": "cuda13", "dockerfile": ".devops/cuda.Dockerfile", "cuda_version": "13.3.0", "platforms": "linux/amd64", "full": true, "light": true, "server": true, "free_disk_space": true, "runs_on": "ubuntu-24.04" },
@@ -135,7 +142,7 @@ jobs:
 
   push_to_registry:
     name: Push Docker image to Docker Registry
-    needs: [prepare_matrices, create_tag]
+    needs: [prepare_matrices, create_tag, build_ui]
 
     runs-on: ${{ matrix.config.runs_on }}
     strategy:
@@ -149,6 +156,13 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ needs.create_tag.outputs.source_tag }}
+
+      - name: Download prebuilt UI
+        if: ${{ matrix.config.prebuilt_ui == true }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: ui-build
+          path: tools/ui/dist
 
       - name: Set up QEMU
         if: ${{ contains(matrix.config.platforms, 'linux/amd64') }}

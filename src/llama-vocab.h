@@ -64,6 +64,7 @@ enum llama_vocab_pre_type {
     LLAMA_VOCAB_PRE_TYPE_WHITESPACE        = 53,
     LLAMA_VOCAB_PRE_TYPE_GRANITE_EMB_MULTI = 54,
     LLAMA_VOCAB_PRE_TYPE_MELLUM2           = 55,
+    LLAMA_VOCAB_PRE_TYPE_LAGUNA            = 56,
 };
 
 struct LLM_KV;
@@ -74,6 +75,12 @@ struct llama_vocab {
         std::string      text;
         float            score;
         llama_token_attr attr;
+    };
+
+    struct normalizer_options {
+        bool lowercase     = true;
+        bool strip_accents = true;
+        // TODO: clean_text, handle_chinese_chars
     };
 
     llama_vocab();
@@ -141,7 +148,7 @@ struct llama_vocab {
     bool get_remove_extra_whitespaces  () const;
     bool get_escape_whitespaces        () const;
     bool get_treat_whitespace_as_suffix() const;
-    bool get_normalizer_lowercase      () const;
+    const normalizer_options & get_normalizer_opts() const;
 
     const std::vector<llama_token> & get_suppress_tokens() const;
 

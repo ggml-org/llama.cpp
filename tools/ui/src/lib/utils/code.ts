@@ -6,7 +6,9 @@ import {
 	AMPERSAND_REGEX,
 	LT_REGEX,
 	GT_REGEX,
-	FENCE_PATTERN
+	FENCE_PATTERN,
+	TRIM_LEADING_PADDING_REGEX,
+	TRIM_TRAILING_PADDING_REGEX
 } from '$lib/constants';
 
 export interface IncompleteCodeBlock {
@@ -16,31 +18,55 @@ export interface IncompleteCodeBlock {
 }
 
 /**
+ * Strips empty lines (whitespace-only) from the start and end of code.
+ *
+ * Tool call payloads frequently arrive with surrounding whitespace from LLM
+ * formatting (`"\nfunction ...\n"`). Preserving those newlines makes hljs emit
+ * a leading/trailing empty line that `<pre>` then renders as a phantom row,
+ * pushing real content away from the box edge. The trim keeps the body intact
+ * so internal blank lines are still rendered as such.
+ */
+function trimCodePadding(code: string): string {
+	return code.replace(TRIM_LEADING_PADDING_REGEX, '').replace(TRIM_TRAILING_PADDING_REGEX, '');
+}
+
+function escapeCode(code: string): string {
+	return code.replace(AMPERSAND_REGEX, '&amp;').replace(LT_REGEX, '&lt;').replace(GT_REGEX, '&gt;');
+}
+
+/**
  * Highlights code using highlight.js
  * @param code - The code to highlight
  * @param language - The programming language
+ * @param autoDetect - Fall back to `highlightAuto` when `language` is unknown.
+ *   Callers rendering a still-streaming block should pass false: auto-detection
+ *   costs ~38ms per call and re-guesses on every chunk, so the language (and
+ *   therefore the whole highlight) flickers as the block grows.
  * @returns HTML string with syntax highlighting
  */
-export function highlightCode(code: string, language: string): string {
+export function highlightCode(code: string, language: string, autoDetect = true): string {
 	if (!code) return '';
+
+	const trimmed = trimCodePadding(code);
 
 	try {
 		const lang = language.toLowerCase();
 		const isSupported = hljs.getLanguage(lang);
 
 		if (isSupported) {
-			return hljs.highlight(code, { language: lang }).value;
+			return hljs.highlight(trimmed, { language: lang }).value;
+		} else if (autoDetect) {
+			return hljs.highlightAuto(trimmed).value;
 		} else {
-			return hljs.highlightAuto(code).value;
+			return escapeCode(trimmed);
 		}
 	} catch {
 		// Fallback to escaped plain text
-		return code
-			.replace(AMPERSAND_REGEX, '&amp;')
-			.replace(LT_REGEX, '&lt;')
-			.replace(GT_REGEX, '&gt;');
+		return escapeCode(trimmed);
 	}
 }
+
+export { trimCodePadding };
 
 /**
  * Detects if markdown ends with an incomplete code block (opened but not closed).

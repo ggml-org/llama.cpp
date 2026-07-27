@@ -9,9 +9,15 @@
 #define JSON_ASSERT GGML_ASSERT
 #include <nlohmann/json.hpp>
 
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <cinttypes>
+#include <functional>
+#include <mutex>
+#include <queue>
 #include <string>
 #include <vector>
-#include <cinttypes>
 
 using json = nlohmann::ordered_json;
 
@@ -180,6 +186,10 @@ public:
 
     const mtmd::input_chunk_ptr & find_chunk(size_t idx) const;
 
+    // find next media chunk after idx
+    // returns a pair of pointer to the chunk (nullptr if not found) and its start index in tokens
+    std::pair<const mtmd::input_chunk_ptr *, size_t> find_next_media_chunk(size_t idx) const;
+
     void push_back(llama_token tok);
 
     // will create a copy of the chunk if it contains non-text data
@@ -203,6 +213,9 @@ public:
 
     bool empty() const { return tokens.empty(); }
 
+    // true if the sequence actually contains image/audio chunks.
+    bool has_media() const { return !map_idx_to_media.empty(); }
+
     void clear() {
         map_idx_to_media.clear();
         tokens.clear();
@@ -214,17 +227,11 @@ public:
 
     size_t get_common_prefix(const server_tokens & b) const;
 
+    // split the tokens into message spans, skipping over media chunks
+    common_chat_msg_spans find_message_spans(const common_chat_msg_delimiters & delims) const;
+
     // make sure all text tokens are within the vocab range
     bool validate(const struct llama_context * ctx) const;
-
-    // encode and decode the image chunk
-    int32_t process_chunk(
-                llama_context * ctx,
-                mtmd_context * mctx,
-                size_t idx,
-                llama_pos pos,
-                int32_t seq_id,
-                size_t & n_tokens_out) const;
 
     server_tokens clone() const;
 };
@@ -331,7 +338,7 @@ json format_response_rerank(
 // other utils
 //
 
-std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int idx);
+std::vector<llama_token_data> get_token_probabilities(llama_context * ctx, int idx, size_t n_top);
 
 std::string safe_json_to_str(const json & data);
 
@@ -375,3 +382,67 @@ server_tokens format_prompt_rerank(
         mtmd_context * mctx,
         const std::string & query,
         const std::string & doc);
+
+// simple implementation of a pipe
+// used for streaming data between threads
+template<typename T>
+struct server_pipe {
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::queue<T> queue;
+    std::atomic<bool> writer_closed{false};
+    std::atomic<bool> reader_closed{false};
+
+    // 0 = unbounded (default)
+    // > 0, write() drops the oldest item once the queue is full
+    size_t max_size = 0;
+
+    void close_write() {
+        writer_closed.store(true, std::memory_order_relaxed);
+        cv.notify_all();
+    }
+
+    void close_read() {
+        reader_closed.store(true, std::memory_order_relaxed);
+        cv.notify_all();
+    }
+
+    // close_on_stop = true: should_stop means the reader is gone for good, so the writer is told the pipe is broken.
+    // close_on_stop = false: should_stop is a per-read deadline and further reads still come, so the pipe stays usable.
+    bool read(T & output, const std::function<bool()> & should_stop, bool close_on_stop = true) {
+        std::unique_lock<std::mutex> lk(mutex);
+        constexpr auto poll_interval = std::chrono::milliseconds(500);
+        while (true) {
+            if (!queue.empty()) {
+                output = std::move(queue.front());
+                queue.pop();
+                return true;
+            }
+            if (writer_closed.load()) {
+                return false; // clean EOF
+            }
+            if (should_stop && should_stop()) { // a null should_stop means "never stop"
+                if (close_on_stop) {
+                    close_read(); // signal broken pipe to writer
+                }
+                return false; // cancelled / deadline reached
+            }
+            cv.wait_for(lk, poll_interval);
+        }
+    }
+
+    bool write(T && data) {
+        std::lock_guard<std::mutex> lk(mutex);
+        if (reader_closed.load()) {
+            return false; // broken pipe
+        }
+        if (max_size > 0) {
+            while (queue.size() >= max_size) {
+                queue.pop(); // drop oldest to stay bounded
+            }
+        }
+        queue.push(std::move(data));
+        cv.notify_one();
+        return true;
+    }
+};
