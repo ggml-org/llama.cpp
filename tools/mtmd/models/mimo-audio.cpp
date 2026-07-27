@@ -127,8 +127,11 @@ ggml_cgraph * clip_graph_mimo_audio::build() {
     // input_local_transformer
     // groups of `group_size` consecutive downsampled frames are processed together, attending only within their own group.
     // Implemented as a block-diagonal mask + in-group-repeating positions
-    // (rather than a real batch dim) - same technique as the encoder's masks above,
-    // and as gemma4a's / deepseekocr2's chunked attention.
+    // (rather than a real batch dim) - same technique as the encoder's masks above, and as gemma4a's / deepseekocr2's chunked attention.
+
+    // note: hand-rolled here instead of build_vit() because this is a second, independent layer stack
+    // (own layer array/count, RMSNorm instead of LN, SiLU FFN, own RoPE theta)
+
     ggml_tensor * projected;
     {
         const int group_size = hparams.audio_local_group_size;

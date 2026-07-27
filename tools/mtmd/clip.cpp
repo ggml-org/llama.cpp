@@ -1622,6 +1622,10 @@ struct clip_model_loader {
 
                         get_u32(KEY_A_LOCAL_BLOCK_COUNT, hparams.audio_local_n_layer);
                         get_u32(KEY_A_LOCAL_GROUP_SIZE, hparams.audio_local_group_size);
+                        if (hparams.audio_local_group_size <= 0) {
+                            throw std::runtime_error(string_format(
+                                "%s: mimo_audio: %s must be > 0\n", __func__, KEY_A_LOCAL_GROUP_SIZE));
+                        }
                     } break;
                 case PROJECTOR_TYPE_PADDLEOCR:
                     {
@@ -2503,6 +2507,20 @@ struct clip_model_loader {
                     model.downsample_norm_b = get_tensor(string_format(TN_A_DOWNSAMPLE_NORM, "bias"));
                     model.rvq_codebook   = get_tensor(string_format(TN_A_RVQ_CODEBOOK, "weight"), false);
                     model.mm_a_code_embd = get_tensor(string_format(TN_MM_A_CODE_EMBD, "weight"), false);
+                    if (!model.rvq_codebook || !model.mm_a_code_embd) {
+                        throw std::runtime_error(string_format("%s: mimo_audio: missing %s or %s\n", __func__,
+                            TN_A_RVQ_CODEBOOK, TN_MM_A_CODE_EMBD));
+                    }
+                    // hparams.rvq_codebook_size comes from GGUF metadata and is independent of the
+                    // tensors' actual shapes - bound it so codebook/code_embd views built from it
+                    // (mimo-audio.cpp) can never read past either tensor's allocated bins/vocab.
+                    for (int32_t bins : hparams.rvq_codebook_size) {
+                        if (bins <= 0 || bins > model.rvq_codebook->ne[1] || bins > model.mm_a_code_embd->ne[1]) {
+                            throw std::runtime_error(string_format(
+                                "%s: mimo_audio: %s entry (%d) out of range for codebook/code_embd tensors\n",
+                                __func__, KEY_A_RVQ_CODEBOOK_SIZE, bins));
+                        }
+                    }
 
                     // LLM-side connector: input_local_transformer + projection
                     model.mm_a_local_layers.resize(hparams.audio_local_n_layer);
