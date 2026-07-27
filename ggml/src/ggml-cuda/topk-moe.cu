@@ -391,6 +391,22 @@ void ggml_cuda_op_topk_moe(ggml_backend_cuda_context &     ctx,
     }
 }
 
+void ggml_cuda_topk_moe_softmax_norm(ggml_backend_cuda_context & ctx,
+                                     const float *               logits,
+                                     float *                     weights,
+                                     int32_t *                   ids,
+                                     const int                   n_rows,
+                                     const int                   n_expert,
+                                     const int                   n_expert_used,
+                                     const float                 clamp_val) {
+    topk_moe_config config;
+    config.use_sigmoid     = false;
+    config.with_norm       = true;
+    config.delayed_softmax = false;
+
+    launch_topk_moe_cuda<false>(ctx, logits, weights, ids, nullptr, n_rows, n_expert, n_expert_used, clamp_val, 1.0f, config);
+}
+
 bool ggml_cuda_should_use_topk_moe(const ggml_tensor * gating_op,
                                    const ggml_tensor * weights,
                                    const ggml_tensor * logits,

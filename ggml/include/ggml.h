@@ -574,6 +574,7 @@ extern "C" {
         GGML_OP_DSV4_HC_COMB,
         GGML_OP_DSV4_HC_PRE,
         GGML_OP_DSV4_HC_POST,
+        GGML_OP_MOE_FFN,
 
         GGML_OP_UNARY,
 
@@ -618,6 +619,13 @@ extern "C" {
         GGML_UNARY_OP_TRUNC,
 
         GGML_UNARY_OP_COUNT,
+    };
+
+    // routing function used by ggml_moe_ffn
+    enum ggml_moe_gating_op {
+        GGML_MOE_GATING_OP_SOFTMAX,
+
+        GGML_MOE_GATING_OP_COUNT,
     };
 
     enum ggml_glu_op {
@@ -1447,6 +1455,23 @@ extern "C" {
             struct ggml_tensor  * as,
             struct ggml_tensor  * b,
             struct ggml_tensor  * ids);
+
+    // fused MoE FFN: routes each token to its top n_expert_used experts and sums their outputs
+    //   out = sum_k w_k * down_exps[e_k] @ act(gate_exps[e_k] @ x, up_exps[e_k] @ x)
+    // gate_exps may be NULL, then up_exps holds the gate and up rows merged into one tensor.
+    // Only gating_op == GGML_MOE_GATING_OP_SOFTMAX, norm_w == true and act == GGML_GLU_OP_SWIGLU
+    // are implemented; the other values are reserved so the op can grow without changing shape.
+    GGML_API struct ggml_tensor * ggml_moe_ffn(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * x,
+            struct ggml_tensor  * gate_inp,
+            struct ggml_tensor  * up_exps,
+            struct ggml_tensor  * gate_exps,
+            struct ggml_tensor  * down_exps,
+            int                   n_expert_used,
+            enum ggml_moe_gating_op gating_op,
+            bool                  norm_w,
+            enum ggml_glu_op      act);
 
     // A: m columns, n rows,
     // B: p columns, n rows,

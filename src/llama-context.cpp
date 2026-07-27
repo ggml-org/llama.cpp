@@ -55,6 +55,14 @@ static const llm_fused_op_probe llm_fused_op_gdn_ch_probe = {
     /*.n_tokens_per_seq =*/ 16,
 };
 
+// n_tokens_per_seq must exceed the batch size at which the op falls back to per-expert vector
+// kernels, so that the probe exercises the fused path itself
+static const llm_fused_op_probe llm_fused_op_moe_ffn_probe = {
+    /*.op               =*/ LLM_FUSED_OP_MOE_FFN,
+    /*.name             =*/ "fused MoE FFN",
+    /*.n_tokens_per_seq =*/ 32,
+};
+
 static const llm_fused_op_probe llm_fused_op_lid_probe = {
     /*.op               =*/ LLM_FUSED_OP_LIGHTNING_INDEXER,
     /*.name             =*/ "Lightning Indexer",
@@ -257,6 +265,9 @@ llama_context::llama_context(
     cparams.fused_dsv4_hc_comb = true;
     cparams.fused_dsv4_hc_post = true;
     cparams.auto_fhc           = true;
+
+    cparams.fused_moe_ffn = true;
+    cparams.auto_fmoe     = true;
 
     // with causal attention, the batch size is limited by the context size
     cparams.n_batch = cparams.causal_attn ? std::min(cparams.n_ctx, params.n_batch) : params.n_batch;
@@ -522,6 +533,13 @@ void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint3
             // but is still wrong for cases like --no-kv-offload.
             ggml_backend_dev_t device_layer = model.dev_layer(node.il);
 
+            // the CPU backend claims support for these ops but only has reference implementations,
+            // which are slower than the unfused path it would replace
+            if (device_fused && ggml_backend_dev_type(device_fused) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+                device_mismatch = true;
+                break;
+            }
+
             if (device_fused != device_layer) {
                 LLAMA_LOG_WARN("%s: layer %d is assigned to device %s but %s "
                         "is assigned to device %s (usually due to missing support)\n",
@@ -567,6 +585,12 @@ void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint3
         resolve(llm_fused_op_dsv4_hc_comb_probe, cparams.fused_dsv4_hc_comb);
         resolve(llm_fused_op_dsv4_hc_post_probe, cparams.fused_dsv4_hc_post);
         cparams.auto_fhc = false;
+    }
+
+    if (cparams.auto_fmoe) {
+        LLAMA_LOG_INFO("%s: resolving fused MoE FFN support:\n", func);
+        resolve(llm_fused_op_moe_ffn_probe, cparams.fused_moe_ffn);
+        cparams.auto_fmoe = false;
     }
 }
 

@@ -12002,3 +12002,164 @@ void ggml_compute_forward_lightning_indexer(
         }
     }
 }
+
+// ggml_compute_forward_moe_ffn
+
+size_t ggml_compute_forward_moe_ffn_wsize(const struct ggml_tensor * dst, int n_tasks) {
+    const struct ggml_tensor * x         = dst->src[0];
+    const struct ggml_tensor * gate_inp  = dst->src[1];
+    const struct ggml_tensor * up_exps   = dst->src[2];
+    const struct ggml_tensor * down_exps = dst->src[4];
+
+    const enum ggml_type vdt_up   = ggml_get_type_traits_cpu(up_exps->type)->vec_dot_type;
+    const enum ggml_type vdt_down = ggml_get_type_traits_cpu(down_exps->type)->vec_dot_type;
+
+    const int64_t n_embd   = x->ne[0];
+    const int64_t n_ff     = dst->src[3] ? up_exps->ne[1] : up_exps->ne[1]/2;
+    const int64_t n_expert = gate_inp->ne[1];
+
+    const int32_t n_expert_used = ggml_get_op_params_i32(dst, 0);
+
+    size_t per_thread = 0;
+    per_thread += GGML_PAD(ggml_row_size(vdt_up,   n_embd), CACHE_LINE_SIZE);
+    per_thread += GGML_PAD(ggml_row_size(vdt_down, n_ff),   CACHE_LINE_SIZE);
+    per_thread += GGML_PAD(2*n_ff*sizeof(float),            CACHE_LINE_SIZE);
+    per_thread += GGML_PAD(n_expert*sizeof(float),          CACHE_LINE_SIZE);
+    per_thread += GGML_PAD(n_expert_used*(sizeof(float) + sizeof(int32_t)), CACHE_LINE_SIZE);
+
+    return n_tasks*per_thread;
+}
+
+void ggml_compute_forward_moe_ffn(const struct ggml_compute_params * params, struct ggml_tensor * dst) {
+    const ggml_tensor * x         = dst->src[0];
+    const ggml_tensor * gate_inp  = dst->src[1];
+    const ggml_tensor * up_exps   = dst->src[2];
+    const ggml_tensor * gate_exps = dst->src[3];
+    const ggml_tensor * down_exps = dst->src[4];
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int64_t n_embd   = x->ne[0];
+    const int64_t n_tokens = x->ne[1];
+    const int64_t n_expert = gate_inp->ne[1];
+    const int64_t n_ff     = gate_exps ? up_exps->ne[1] : up_exps->ne[1]/2;
+
+    const int32_t n_expert_used = ggml_get_op_params_i32(dst, 0);
+
+    GGML_ASSERT(x->type        == GGML_TYPE_F32);
+    GGML_ASSERT(gate_inp->type == GGML_TYPE_F32);
+    GGML_ASSERT(!gate_exps || up_exps->type == gate_exps->type);
+
+    // merged gate_up: gate rows are [0, n_ff), up rows are [n_ff, 2*n_ff)
+    const char * gate_rows_base = gate_exps ? (const char *) gate_exps->data : (const char *) up_exps->data;
+    const char * up_rows_base   = gate_exps ? (const char *) up_exps->data   : (const char *) up_exps->data + n_ff*up_exps->nb[1];
+    const size_t nb1_gate       = gate_exps ? gate_exps->nb[1] : up_exps->nb[1];
+    const size_t nb2_gate       = gate_exps ? gate_exps->nb[2] : up_exps->nb[2];
+
+    const ggml_type_traits_cpu * traits_up   = ggml_get_type_traits_cpu(up_exps->type);
+    const ggml_type_traits_cpu * traits_down = ggml_get_type_traits_cpu(down_exps->type);
+
+    ggml_vec_dot_t const vec_dot_up   = traits_up->vec_dot;
+    ggml_vec_dot_t const vec_dot_down = traits_down->vec_dot;
+
+    const enum ggml_type vdt_up   = traits_up->vec_dot_type;
+    const enum ggml_type vdt_down = traits_down->vec_dot_type;
+
+    ggml_from_float_t const from_float_up   = ggml_get_type_traits_cpu(vdt_up)->from_float;
+    ggml_from_float_t const from_float_down = ggml_get_type_traits_cpu(vdt_down)->from_float;
+
+    const size_t per_thread = ggml_compute_forward_moe_ffn_wsize(dst, 1);
+    GGML_ASSERT(params->wsize >= nth*per_thread);
+
+    char * wdata = (char *) params->wdata + ith*per_thread;
+
+    void  * x_q    = wdata;                 wdata += GGML_PAD(ggml_row_size(vdt_up, n_embd), CACHE_LINE_SIZE);
+    void  * act_q  = wdata;                 wdata += GGML_PAD(ggml_row_size(vdt_down, n_ff), CACHE_LINE_SIZE);
+    float * up_f   = (float *) wdata;
+    float * gate_f = up_f + n_ff;           wdata += GGML_PAD(2*n_ff*sizeof(float), CACHE_LINE_SIZE);
+    float * probs  = (float *) wdata;       wdata += GGML_PAD(n_expert*sizeof(float), CACHE_LINE_SIZE);
+
+    float   * sel_w = (float *) wdata;
+    int32_t * sel   = (int32_t *) (sel_w + n_expert_used);
+
+    for (int64_t it = ith; it < n_tokens; it += nth) {
+        const float * x_row = (const float *) ((const char *) x->data + it*x->nb[1]);
+
+        for (int64_t e = 0; e < n_expert; ++e) {
+            const float * gi_row = (const float *) ((const char *) gate_inp->data + e*gate_inp->nb[1]);
+            ggml_vec_dot_f32(n_embd, &probs[e], 0, gi_row, 0, x_row, 0, 1);
+        }
+
+        float pmax = -INFINITY;
+        for (int64_t e = 0; e < n_expert; ++e) {
+            pmax = MAX(pmax, probs[e]);
+        }
+        float psum = 0.0f;
+        for (int64_t e = 0; e < n_expert; ++e) {
+            probs[e] = expf(probs[e] - pmax);
+            psum += probs[e];
+        }
+        for (int64_t e = 0; e < n_expert; ++e) {
+            probs[e] /= psum;
+        }
+
+        float wsum = 0.0f;
+        for (int32_t j = 0; j < n_expert_used; ++j) {
+            int64_t best = 0;
+            for (int64_t e = 1; e < n_expert; ++e) {
+                if (probs[e] > probs[best]) {
+                    best = e;
+                }
+            }
+            sel[j]   = best;
+            sel_w[j] = probs[best];
+            wsum    += probs[best];
+            probs[best] = -INFINITY;
+        }
+
+        // matches the clamp in llm_graph_context::build_moe_ffn
+        wsum = MAX(wsum, 6.103515625e-5f);
+        for (int32_t j = 0; j < n_expert_used; ++j) {
+            sel_w[j] /= wsum;
+        }
+
+        const void * x_vd = x_row;
+        if (vdt_up != GGML_TYPE_F32) {
+            from_float_up(x_row, x_q, n_embd);
+            x_vd = x_q;
+        }
+
+        float * dst_col = (float *) ((char *) dst->data + it*dst->nb[1]);
+        ggml_vec_set_f32(n_embd, dst_col, 0.0f);
+
+        for (int32_t j = 0; j < n_expert_used; ++j) {
+            const int64_t e = sel[j];
+
+            const char * up_base   = up_rows_base   + e*up_exps->nb[2];
+            const char * gate_base = gate_rows_base + e*nb2_gate;
+
+            for (int64_t r = 0; r < n_ff; ++r) {
+                vec_dot_up(n_embd, &up_f[r],   0, up_base   + r*up_exps->nb[1], 0, x_vd, 0, 1);
+                vec_dot_up(n_embd, &gate_f[r], 0, gate_base + r*nb1_gate,       0, x_vd, 0, 1);
+            }
+
+            ggml_vec_silu_f32(n_ff, gate_f, gate_f);
+            ggml_vec_mul_f32(n_ff, gate_f, gate_f, up_f);
+
+            const void * act_vd = gate_f;
+            if (vdt_down != GGML_TYPE_F32) {
+                from_float_down(gate_f, act_q, n_ff);
+                act_vd = act_q;
+            }
+
+            const char * down_base = (const char *) down_exps->data + e*down_exps->nb[2];
+
+            for (int64_t r = 0; r < n_embd; ++r) {
+                float v;
+                vec_dot_down(n_ff, &v, 0, down_base + r*down_exps->nb[1], 0, act_vd, 0, 1);
+                dst_col[r] += sel_w[j]*v;
+            }
+        }
+    }
+}
