@@ -3445,6 +3445,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     };
 
     add_opt(common_arg(
+        {"--reasoning-budget-enable"},
+        {"--no-reasoning-budget-enable"},
+        "master switch for the reasoning budget mechanism (hard cutoff, soft warning, intro message, grace period, and the runtime reasoning-control endpoint); if disabled, none of the other --reasoning-budget-* settings take effect regardless of their values (default: disabled)",
+        [](common_params & params, bool value) {
+            params.sampling.reasoning_budget_enabled = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK_BUDGET_ENABLE"));
+    add_opt(common_arg(
         {"--reasoning-budget"}, "N",
         "token budget for thinking: -1 for unrestricted, 0 for immediate end, N>0 for token budget (default: -1)",
         [](common_params & params, int value) {
@@ -3454,7 +3462,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_COMPLETION, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_THINK_BUDGET"));
     add_opt(common_arg(
         {"--reasoning-budget-message"}, "MESSAGE",
-        "message injected before the end-of-thinking tag when reasoning budget is exhausted (default: none)",
+        "message forced when the reasoning budget is exhausted; should include the model's own closing tag (e.g. </think>) as it is not appended automatically, since the exact tag can differ between models/templates. If empty, falls back to forcing just the auto-detected closing tag alone so the block still always closes (default: none)",
         [](common_params & params, const std::string & value) {
             params.sampling.reasoning_budget_message = unescape(value);
         }

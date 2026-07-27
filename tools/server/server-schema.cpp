@@ -419,12 +419,16 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         }));
 
     add((new field_str("reasoning_budget_message"))
-        ->set_desc("Message to prepend to the reasoning budget end tag when forcing it")
+        ->set_desc("Message forced when the reasoning budget is exhausted. Should include the model's own closing tag (e.g. </think>) since it is not appended automatically - the exact tag can differ between models/templates. If empty, falls back to forcing just the auto-detected closing tag alone, so the reasoning block still always closes")
         ->set_handler([&](field_eval_context & ctx, const json & data) {
             GGML_ASSERT(ctx.vocab != nullptr);
-            std::string end_tag = json_value(data, "reasoning_budget_end_tag", std::string());
             std::string message = data.at("reasoning_budget_message").get<std::string>();
-            ctx.params.sampling.reasoning_budget_forced = common_tokenize(ctx.vocab, message + end_tag, false, true);
+            if (message.empty()) {
+                std::string end_tag = json_value(data, "reasoning_budget_end_tag", std::string());
+                ctx.params.sampling.reasoning_budget_forced = common_tokenize(ctx.vocab, end_tag, false, true);
+            } else {
+                ctx.params.sampling.reasoning_budget_forced = common_tokenize(ctx.vocab, message, false, true);
+            }
         }));
 
     add((new field_str("reasoning_budget_soft_message"))

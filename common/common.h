@@ -283,6 +283,7 @@ struct common_params_sampling {
 
     // reasoning budget sampler parameters
     // these are populated by the server/CLI based on chat template params
+    bool                     reasoning_budget_enabled  = false; // master switch: must be true for the budget/soft/intro/grace mechanism to run at all
     int32_t                  reasoning_budget_tokens   = -1;   // -1 = disabled, >= 0 = token budget
     std::vector<llama_token> reasoning_budget_start;           // start tag token sequence
     std::vector<llama_token> reasoning_budget_end;             // end tag token sequence
