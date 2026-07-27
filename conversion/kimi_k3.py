@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Callable, Iterable, TYPE_CHECKING
+from typing import Callable, Iterable, Iterator, TYPE_CHECKING
 
 import numpy as np
 import torch
@@ -35,8 +35,8 @@ class KimiK3Model(TextModel):
     # elementwise product norm.weight * proj.weight (see _apply_attn_res in
     # modeling_kimi_linear.py), so they are fused into a single [n_embd] vector
     # at conversion time. They arrive as separate tensors, so buffer whichever
-    # comes first.
-    _res_parts: dict[str, Tensor]
+    # comes first, tagged with which one it is.
+    _res_parts: dict[str, tuple[str, Tensor]]
 
     # HF suffix -> (gguf tensor, per-layer?)
     _RES_FUSIONS = {
@@ -67,7 +67,11 @@ class KimiK3Model(TextModel):
         # K3 ships the same TikToken vocab as K2: its pre-tokenizer hashes to
         # 81212dc7... which base.py already maps to "kimi-k2", so no new
         # pre-tokenizer registration is needed.
-        KimiLinearModel.set_vocab(self)
+        #
+        # Borrowed rather than inherited: K3 shares kimi-linear's vocab handling
+        # but none of its tensor layout. The method only touches TextModel
+        # members, so an unrelated TextModel is a valid receiver.
+        KimiLinearModel.set_vocab(self)  # ty: ignore[invalid-argument-type]
 
         # ...but K2's converter ends by forcing eos to the tokenizer's own
         # eos_id, which for K3 is 163585 = [EOS], the *document* terminator.
@@ -124,17 +128,21 @@ class KimiK3Model(TextModel):
         n_blocks = (packed_cols * 2) // 32
         byte_shape = (len(loaders), rows, n_blocks * 17)
 
-        def load() -> np.ndarray:
+        def load(fns: list[tuple[Callable[[], Tensor], Callable[[], Tensor]]]) -> np.ndarray:
             out = np.empty(byte_shape, dtype=np.uint8)
-            for eid, (packed_fn, scale_fn) in enumerate(loaders):
+            for eid, (packed_fn, scale_fn) in enumerate(fns):
                 out[eid] = repack_mxfp4_blocks(
                     LazyTorchTensor.to_eager(packed_fn()),
                     LazyTorchTensor.to_eager(scale_fn()),
                 )
             return out
 
+        # loaders goes through args rather than the closure so that `func` matches
+        # LazyBase's single-argument shape; _recurse_apply passes plain callables
+        # through untouched.
         return gguf.LazyNumpyTensor(
             meta=gguf.LazyNumpyTensor.meta_with_dtype_and_shape(np.uint8, byte_shape),
+            args=(loaders,),
             func=load,
         )
 
@@ -190,7 +198,7 @@ class KimiK3Model(TextModel):
             self._write_mxfp4_experts()
         return ()
 
-    def get_tensors(self) -> Iterable[tuple[str, Tensor]]:
+    def get_tensors(self) -> Iterator[tuple[str, Tensor]]:
         for name, data in super().get_tensors():
             if name.startswith(("vision_tower.", "mm_projector.")):
                 continue  # text only
