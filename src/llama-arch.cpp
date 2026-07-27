@@ -143,6 +143,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_KIMI_LINEAR,      "kimi-linear"      },
     { LLM_ARCH_TALKIE,           "talkie"           },
     { LLM_ARCH_MELLUM,           "mellum"           },
+    { LLM_ARCH_RUGPT3XL,         "rugpt3xl"         },
     { LLM_ARCH_UNKNOWN,          "(unknown)"        },
 };
 
@@ -263,6 +264,10 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_ATTENTION_COMPRESS_RATIOS,              "%s.attention.compress_ratios"              },
     { LLM_KV_ATTENTION_SHARED_KV_LAYERS,             "%s.attention.shared_kv_layers"             },
     { LLM_KV_ATTENTION_RECURRENT_LAYERS,             "%s.attention.recurrent_layers"             },
+    { LLM_KV_ATTENTION_SPARSE_BLOCK_SIZE,            "%s.attention.sparse_block_size"            },
+    { LLM_KV_ATTENTION_SPARSE_NUM_LOCAL_BLOCKS,      "%s.attention.sparse_num_local_blocks"      },
+    { LLM_KV_ATTENTION_SPARSE_NUM_GLOBAL_BLOCKS,     "%s.attention.sparse_num_global_blocks"     },
+    { LLM_KV_ATTENTION_SPARSE_NUM_GLOBAL_PATTERNS,   "%s.attention.sparse_num_global_patterns"   },
 
     { LLM_KV_HYPER_CONNECTION_COUNT,                 "%s.hyper_connection.count"                 },
     { LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS,   "%s.hyper_connection.sinkhorn_iterations"   },

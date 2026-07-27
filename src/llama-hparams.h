@@ -246,6 +246,12 @@ struct llama_hparams {
     float    dsv4_hc_eps               = 0.0f;
     std::array<uint32_t, LLAMA_MAX_LAYERS> dsv4_compress_ratios;
 
+    // ruGPT3XL block-sparse attention (DeepSpeed FixedSparsityConfig)
+    uint32_t sparse_block_size          = 0;
+    uint32_t sparse_num_local_blocks    = 0;
+    uint32_t sparse_num_global_blocks   = 0;
+    uint32_t sparse_num_global_patterns = 0;
+
     // qwen3vl deepstack
     // When parsed from GGUF, this implies the first N layers consume the first
     // N deepstack embeddings. Use deepstack_mapping_arr if you need a more
