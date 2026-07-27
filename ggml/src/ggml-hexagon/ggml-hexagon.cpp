@@ -71,6 +71,7 @@ static size_t opt_mbuf    = 1ul * 1024 * 1024 * 1024; // max buffer size
 static int    opt_etm     = 0;
 static int    opt_verbose = 0;
 static int    opt_profile = 0; // profiling mode (0-disabled, 1-basic, 2-pmu)
+static bool   opt_hostbuf = false;
 
 static int    opt_mm_select = 3; // 3 = HMX -> Tiled -> Flat -> CPU, 2 = Tiled -> Flat -> CPU, 1 = Flat -> CPU
 static int    opt_fa_select = 2; // 2 = HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU (unsupported)
@@ -4263,6 +4264,9 @@ static ggml_backend_buffer_type_t ggml_backend_hexagon_device_get_buffer_type(gg
 }
 
 static ggml_backend_buffer_type_t ggml_backend_hexagon_device_get_host_buffer_type(ggml_backend_dev_t dev) {
+    if (!opt_hostbuf) {
+        return NULL;
+    }
     auto sess = static_cast<ggml_hexagon_session *>(dev->context);
     return &sess->host_buffer_type;
 }
@@ -4704,6 +4708,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     const char * str_vmem     = getenv("GGML_HEXAGON_VMEM");
     const char * str_mbuf     = getenv("GGML_HEXAGON_MBUF");
     const char * str_optrace  = getenv("GGML_HEXAGON_OPTRACE");
+    const char * str_hostbuf  = getenv("GGML_HEXAGON_HOSTBUF");
 
     // Init Arch first since it affects other defaults
     if (!str_arch) {
@@ -4751,6 +4756,7 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     opt_ndev      = str_ndev     ? strtoul(str_ndev, NULL, 0)             : opt_ndev;
     opt_mbuf      = str_mbuf     ? strtoul(str_mbuf, NULL, 0) * MiB       : opt_mbuf;
     opt_vmem      = str_vmem     ? strtoul(str_vmem, NULL, 0) * MiB       : opt_vmem;
+    opt_hostbuf   = str_hostbuf  ? atoi(str_hostbuf) != 0                 : opt_hostbuf;
 
     if (opt_ndev > GGML_HEXAGON_MAX_SESSIONS) {
         opt_ndev = GGML_HEXAGON_MAX_SESSIONS;
