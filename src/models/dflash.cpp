@@ -47,7 +47,7 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
         dspark_markov_w1 = create_tensor(tn(LLM_TENSOR_DSPARK_MARKOV_W1, "weight"), { dspark_markov_rank, n_vocab }, 0);
         dspark_markov_w2 = create_tensor(tn(LLM_TENSOR_DSPARK_MARKOV_W2, "weight"), { dspark_markov_rank, n_vocab }, 0);
 
-        dspark_conf_proj   = create_tensor(tn(LLM_TENSOR_DSPARK_CONF_PROJ, "weight"), { n_embd + dspark_markov_rank, 1 }, TENSOR_NOT_REQUIRED);
+        dspark_conf_proj   = create_tensor(tn(LLM_TENSOR_DSPARK_CONF_PROJ, "weight"), { n_embd + dspark_markov_rank, 1 }, 0);
         dspark_conf_proj_b = create_tensor(tn(LLM_TENSOR_DSPARK_CONF_PROJ, "bias"),   { 1 },             TENSOR_NOT_REQUIRED);
 
         LLAMA_LOG_INFO("%s: DFlash with DSpark markov head (rank = %lld)\n", __func__, (long long) dspark_markov_rank);
@@ -128,7 +128,7 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
 
     ggml_tensor * w1 = model.dspark_markov_w1;
     ggml_tensor * w2 = model.dspark_markov_w2;
-    GGML_ASSERT(w1 && w2 && "DSpark markov weights not loaded");
+    GGML_ASSERT(w1 && w2 && model.dspark_conf_proj && "DSpark markov/confidence weights not loaded");
 
     ggml_tensor * base = res->t_logits; // [n_vocab, n_tokens]
     const int64_t n_vocab = base->ne[0];
@@ -140,9 +140,7 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
     GGML_ASSERT(block_size > 0);
 
     const int64_t n_blocks = g.ubatch.n_seqs_unq;
-    if (n_blocks == 0 || n_tok % n_blocks != 0) {
-        return;
-    }
+    GGML_ASSERT(n_blocks > 0 && n_tok % n_blocks == 0 && "DSpark markov head requires equal-size blocks");
     // runtime tokens per block in this ubatch (anchor + drafted positions), bounded by training block_size
     const int64_t block_drafts = n_tok / n_blocks;
     if (block_drafts > block_size) {
@@ -156,8 +154,8 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
     ggml_tensor * prev = ggml_view_2d(ctx0, tokens, 1, n_blocks, token_stride, 0);
     prev = ggml_cont_1d(ctx0, prev, n_blocks);
 
-    // optional confidence head: predicts per-position acceptance
-    ggml_tensor * conf_inp = model.dspark_conf_proj ? res->t_embd : nullptr; // [n_embd, n_tok]
+    // confidence head input: predicts per-position acceptance
+    ggml_tensor * conf_inp = res->t_embd; // [n_embd, n_tok]
 
     ggml_tensor * cat      = nullptr;
     ggml_tensor * cat_conf = nullptr;
@@ -174,19 +172,17 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
 
         cat = cat ? ggml_concat(ctx0, cat, col, 1) : col;
 
-        if (conf_inp) {
-            // conf(i) = sigmoid(conf_proj . [conf_inp(i); markov_w1[prev(i)]] + b)  -- [1, n_blocks]
-            ggml_tensor * conf_inp_i = ggml_view_2d(ctx0, conf_inp, conf_inp->ne[0], n_blocks,
-                                                    (size_t) block_drafts * conf_inp->nb[1], i*conf_inp->nb[1]);
-            ggml_tensor * feat = ggml_concat(ctx0, ggml_cont(ctx0, conf_inp_i), w1_prev, 0);
-            ggml_tensor * conf = ggml_mul_mat(ctx0, model.dspark_conf_proj, feat);
-            if (model.dspark_conf_proj_b) {
-                conf = ggml_add(ctx0, conf, model.dspark_conf_proj_b);
-            }
-            conf = ggml_sigmoid(ctx0, conf);
-
-            cat_conf = cat_conf ? ggml_concat(ctx0, cat_conf, conf, 1) : conf;
+        // conf(i) = sigmoid(conf_proj . [conf_inp(i); markov_w1[prev(i)]] + b)  -- [1, n_blocks]
+        ggml_tensor * conf_inp_i = ggml_view_2d(ctx0, conf_inp, conf_inp->ne[0], n_blocks,
+                                                (size_t) block_drafts * conf_inp->nb[1], i*conf_inp->nb[1]);
+        ggml_tensor * feat = ggml_concat(ctx0, ggml_cont(ctx0, conf_inp_i), w1_prev, 0);
+        ggml_tensor * conf = ggml_mul_mat(ctx0, model.dspark_conf_proj, feat);
+        if (model.dspark_conf_proj_b) {
+            conf = ggml_add(ctx0, conf, model.dspark_conf_proj_b);
         }
+        conf = ggml_sigmoid(ctx0, conf);
+
+        cat_conf = cat_conf ? ggml_concat(ctx0, cat_conf, conf, 1) : conf;
 
         if (i + 1 < block_drafts) {
             prev = ggml_argmax(ctx0, col);
@@ -198,7 +194,7 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
     out = ggml_cont(ctx0, ggml_permute(ctx0, out, 0, 2, 1, 3)); // [n_vocab, block_drafts, n_blocks]
     out = ggml_reshape_2d(ctx0, out, n_vocab, n_tok);
 
-    if (cat_conf) {
+    {
         ggml_tensor * conf = ggml_reshape_3d(ctx0, cat_conf, 1, n_blocks, block_drafts);
         conf = ggml_cont(ctx0, ggml_permute(ctx0, conf, 0, 2, 1, 3));
         conf = ggml_reshape_2d(ctx0, conf, 1, n_tok);
