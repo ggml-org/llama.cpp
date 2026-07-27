@@ -2284,7 +2284,7 @@ common_speculative_init_result::common_speculative_init_result(
     std::string model_path;
     if (has_draft) {
         model_path = params.speculative.draft.mparams.path;
-        LOG_TRC("%s: loading draft model '%s'\n", __func__, model_path.c_str());
+        LOG_INF("%s: loading draft model '%s'\n", __func__, model_path.c_str());
 
         llama_model * model_dft = llama_model_load_from_file(params.model.path.c_str(), mparams);
         if (model_dft == NULL) {
@@ -2304,7 +2304,7 @@ common_speculative_init_result::common_speculative_init_result(
     } else if (spec_mtp) {
         model_path = params.model.path;
 
-        LOG_TRC("%s: creating MTP draft context against the target model '%s'\n", __func__, model_path.c_str());
+        LOG_INF("%s: creating MTP draft context against the target model '%s'\n", __func__, model_path.c_str());
 
         llama_context * ctx_dft = llama_init_from_model(model_tgt, cparams);
         if (ctx_dft == nullptr) {

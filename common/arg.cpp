@@ -539,6 +539,13 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
         }
     };
 
+    // an explicit draft file selection (e.g. -md with -hfd) disables the sidecar resolution of the draft repo
+    if (!params.speculative.draft.mparams.hf_file.empty()) {
+        plan_spec.mtp    = {};
+        plan_spec.dflash = {};
+        plan_spec.eagle3 = {};
+    }
+
     // infer the speculative type from the sidecar shipped by the draft repo when none is requested
     if (spec_types_is_default(params)) {
         if (!plan_spec.mtp.local_path.empty()) {
@@ -586,6 +593,11 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
                 hf_cache::finalize_file(plan_spec.eagle3);
             }
         });
+    }
+
+    // a wired draft sidecar counts as an explicit draft for the main plan fallback below
+    if (spec_sidecar_found) {
+        had_spec_url = true;
     }
 
     // handle plan_spec (e.g. --spec-draft-hf)
