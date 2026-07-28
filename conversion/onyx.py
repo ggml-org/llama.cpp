@@ -18,6 +18,10 @@ class OnyxModel(TextModel):
         # All four layer norms use 1, the final norm uses 0.
         return 1.0 if name.endswith("layernorm.weight") else 0.0
 
+    def set_vocab(self):
+        super().set_vocab()
+        self.gguf_writer.add_eot_token_id(200008)
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         hparams = self.hparams
