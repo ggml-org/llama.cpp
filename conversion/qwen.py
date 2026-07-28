@@ -688,3 +688,23 @@ class DFlashModel(Qwen3Model):
         if not name.startswith("model."):
             name = "model." + name
         return super().filter_tensors((name, gen))
+
+
+@ModelBase.register("Qwen3DSparkModel")
+class DSparkModel(DFlashModel):
+    # DSpark = DFlash + a semi-autoregressive Markov head
+    model_arch = gguf.MODEL_ARCH.DFLASH
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # normalize the flat DeepSpec schema to DFlash's nested dflash_config
+        self.hparams.setdefault("dflash_config", {
+            k: self.hparams[k] for k in ("target_layer_ids", "mask_token_id") if k in self.hparams
+        })
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+        if name.endswith(("embed_tokens.weight", "lm_head.weight")):
+            return None
+        return super().filter_tensors((name, gen))
