@@ -133,6 +133,7 @@ enum ggml_sycl_backend_gpu_mode {
 enum ggml_sycl_dev2dev_memcpy_mode {
   DEV2DEV_MEMCPY_SYCL = 0,
   DEV2DEV_MEMCPY_L0 = 1,
+  DEV2DEV_MEMCPY_FORWARD = 2
 };
 
 static_assert(sizeof(sycl::half) == sizeof(ggml_fp16_t), "wrong fp16 size");
