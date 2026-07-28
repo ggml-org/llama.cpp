@@ -2,28 +2,21 @@
 
 #include "common.h"
 #include "ggml.h"
-#include "gguf.h"
 #include "llama.h"
 #include "log.h"
 #include "ngram-cache.h"
 #include "ngram-map.h"
 #include "ngram-mod.h"
 #include "sampling.h"
-#ifdef __APPLE__
-#include "ane-mtp.h"
-#endif
 
 #include "../src/llama-ext.h" // staging API: llama_set_embeddings_nextn / llama_get_embeddings_nextn_ith (used by MTP)
 
 #include <algorithm>
 #include <cassert>
-#include <cstdlib>
 #include <cstring>
-#include <fstream>
 #include <iomanip>
 #include <map>
 #include <cinttypes>
-#include <mutex>
 
 #define SPC_DBG(fmt, ...) LOG_DBG("spec %12.*s: " fmt, 12, __func__, __VA_ARGS__)
 #define SPC_TRC(fmt, ...) LOG_TRC("spec %12.*s: " fmt, 12, __func__, __VA_ARGS__)
@@ -35,33 +28,13 @@
 #define SPEC_VOCAB_MAX_SIZE_DIFFERENCE  128
 #define SPEC_VOCAB_CHECK_START_TOKEN_ID 5
 
-bool common_model_has_embedded_mtp(const std::string & path) {
-    if (path.empty()) {
-        return false;
-    }
-    struct gguf_init_params params = {
-        /*.no_alloc =*/ true,
-        /*.ctx      =*/ nullptr,
-    };
-    gguf_context * ctx = gguf_init_from_file(path.c_str(), params);
-    if (ctx == nullptr) {
-        return false;
-    }
-    const int64_t key = gguf_find_key(ctx, "mtp.component.present");
-    const bool present = key >= 0 &&
-        gguf_get_kv_type(ctx, key) == GGUF_TYPE_BOOL &&
-        gguf_get_val_bool(ctx, key);
-    gguf_free(ctx);
-    return present;
-}
-
 const std::map<std::string, common_speculative_type> common_speculative_type_from_name_map = {
     {"none",          COMMON_SPECULATIVE_TYPE_NONE},
     {"draft-simple",  COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE},
     {"draft-eagle3",  COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3},
     {"draft-mtp",     COMMON_SPECULATIVE_TYPE_DRAFT_MTP},
     {"draft-dflash",  COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH},
-    {"draft-hybrid",  COMMON_SPECULATIVE_TYPE_DRAFT_HYBRID},
+    {"draft-dspark",  COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK},
     {"ngram-simple",  COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE},
     {"ngram-map-k",   COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K},
     {"ngram-map-k4v", COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V},
@@ -416,7 +389,6 @@ struct common_speculative_impl_draft_simple : public common_speculative_impl {
     bool need_embd() const override {
         return false;
     }
-
 };
 
 
@@ -466,6 +438,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
     int32_t n_embd_dec = 0;       // draft hidden size
     int32_t n_embd_enc = 0;       // target_layer_ids_n * target_hidden_size
     int32_t n_embd_tgt = 0;       // target model hidden size
+    int32_t n_layer_tgt = 0;      // target model layer count
 
     const int32_t * target_layer_ids   = nullptr; // model_dft's extract layer indices
     uint32_t        target_layer_ids_n = 0;
@@ -507,6 +480,7 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         n_embd_tgt = llama_model_n_embd(model_tgt);
         n_embd_dec = llama_model_n_embd(model_dft);
         n_embd_enc = (int32_t) target_layer_ids_n * n_embd_tgt;
+        n_layer_tgt = llama_model_n_layer(model_tgt);
 
         const int32_t n_b = (int32_t) llama_n_batch(ctx_dft);
         batch = llama_batch_init(/*n_tokens=*/ n_b, /*embd=*/ n_embd_dec, /*n_seq_max=*/ 1);
@@ -539,9 +513,15 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
             }
         }
 
-        // turn on extraction of the target layers' input embeddings
+        // turn on extraction of the target layers' hidden states
         for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
-            llama_set_embeddings_layer_inp(ctx_tgt, (uint32_t) target_layer_ids[k], true);
+            if (target_layer_ids[k] < n_layer_tgt) {
+                llama_set_embeddings_layer_inp(ctx_tgt, (uint32_t) target_layer_ids[k], true);
+            } else if (target_layer_ids[k] == n_layer_tgt) {
+                llama_set_embeddings_nextn(ctx_tgt, true, /*masked*/ false);
+            } else {
+                GGML_ABORT("EAGLE3: target layer id %d exceeds target n_layer %d", target_layer_ids[k], n_layer_tgt);
+            }
         }
 
         // turn on extraction of the draft model's pre-norm hidden state
@@ -629,7 +609,9 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         features_buf.resize((size_t) n_tokens * n_embd_enc, 0.0f);
 
         for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
-            const float * layer = llama_get_embeddings_layer_inp(ctx_tgt, (uint32_t) target_layer_ids[k]);
+            const float * layer = target_layer_ids[k] < n_layer_tgt
+                ? llama_get_embeddings_layer_inp(ctx_tgt, (uint32_t) target_layer_ids[k])
+                : llama_get_embeddings_nextn(ctx_tgt);
             if (!layer) {
                 GGML_ABORT("EAGLE3: target layer %d input not extracted.", target_layer_ids[k]);
             }
@@ -947,21 +929,20 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
     int32_t     block_size    = 0;
     llama_token mask_token_id = 0;
 
+    // draft-dspark: the draft carries a Markov head and uses an anchor-first block layout
+    const bool is_dspark;
+
     const int32_t * target_layer_ids   = nullptr; // model_dft's extract layer indices
     uint32_t        target_layer_ids_n = 0;
 
     // scratch buffer for concatenated target features [n_tokens, n_embd_enc]
     std::vector<float> features_buf;
 
-    // Acceptance-aware calibration telemetry. This deliberately records only
-    // small host-side decisions; activation statistics remain graph-resident.
-    std::vector<std::vector<float>> last_confidence;
-    std::ofstream                   telemetry;
-    std::mutex                      telemetry_mutex;
-
-    common_speculative_impl_draft_dflash(const common_params_speculative & params, uint32_t n_seq)
-        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH, n_seq)
+    common_speculative_impl_draft_dflash(const common_params_speculative & params, uint32_t n_seq,
+            common_speculative_type type = COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH)
+        : common_speculative_impl(type, n_seq)
         , params(params.draft)
+        , is_dspark(type == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK)
     {
         auto * ctx_tgt = this->params.ctx_tgt;
         auto * ctx_dft = this->params.ctx_dft;
@@ -988,23 +969,24 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         }
         mask_token_id = llama_vocab_mask(llama_model_get_vocab(model_dft));
 
-        LOG_INF("%s: adding speculative implementation 'draft-dflash'\n", __func__);
+        LOG_INF("%s: adding speculative implementation '%s'\n", __func__, common_speculative_type_to_str(type).c_str());
         LOG_INF("%s: - n_max=%d, n_min=%d, p_min=%.2f\n", __func__, this->params.n_max, this->params.n_min, this->params.p_min);
         LOG_INF("%s: - block_size=%d, mask_token_id=%d, n_extract=%u\n", __func__, block_size, mask_token_id, target_layer_ids_n);
 
-        // DFlash input is [id_last, <mask> * (block_size-1)], so it can draft at most block_size-1 tokens per step
-        if (this->params.n_max > block_size - 1 || this->params.n_min > block_size - 1) {
-            LOG_WRN("%s: requested draft size (n_max=%d, n_min=%d) exceeds the trained DFlash block size %d -- clamping to %d\n",
-                    __func__, this->params.n_max, this->params.n_min, block_size, block_size - 1);
-            this->params.n_max = std::min(this->params.n_max, block_size - 1);
-            this->params.n_min = std::min(this->params.n_min, block_size - 1);
+        // DFlash input is [id_last, <mask> * (block_size-1)]: in-place denoising yields at most
+        // block_size-1 draft tokens, DSpark yield a full block_size draft tokens
+        const int32_t n_draft_max = is_dspark ? block_size : block_size - 1;
+        if (this->params.n_max > n_draft_max || this->params.n_min > n_draft_max) {
+            LOG_WRN("%s: requested draft size (n_max=%d, n_min=%d) exceeds the trained block size %d -- clamping to %d\n",
+                    __func__, this->params.n_max, this->params.n_min, block_size, n_draft_max);
+            this->params.n_max = std::min(this->params.n_max, n_draft_max);
+            this->params.n_min = std::min(this->params.n_min, n_draft_max);
         }
 
         batch        = llama_batch_init(llama_n_batch(ctx_dft), 0,          n_seq);
         batch_inject = llama_batch_init(llama_n_batch(ctx_dft), n_embd_dec, n_seq);
 
         smpls.resize(n_seq);
-        last_confidence.resize(n_seq);
         for (auto & s : smpls) {
             common_params_sampling sparams;
             sparams.no_perf  = false;
@@ -1020,16 +1002,6 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
         llama_set_embeddings_nextn(ctx_dft, true, /*masked*/ true);
         llama_set_causal_attn(ctx_dft, false); // DFlash needs non-causal attention
-
-        const char * telemetry_path = std::getenv("LLAMA_DFLASH_TELEMETRY");
-        if (telemetry_path != nullptr && telemetry_path[0] != '\0') {
-            telemetry.open(telemetry_path, std::ios::out | std::ios::app);
-            if (!telemetry) {
-                LOG_WRN("%s: failed to open DFlash telemetry at '%s'\n", __func__, telemetry_path);
-            } else {
-                LOG_INF("%s: writing DFlash acceptance telemetry to '%s'\n", __func__, telemetry_path);
-            }
-        }
     }
 
     ~common_speculative_impl_draft_dflash() override {
@@ -1163,8 +1135,6 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         std::vector<int32_t> n_block    (n_seq,  0);
 
         for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
-            last_confidence[seq_id].clear();
-
             auto & dp = dparams[seq_id];
             if (!dp.drafting) {
                 continue;
@@ -1174,12 +1144,9 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
             const int32_t n = (int32_t) dp.n_past;
 
-            int32_t n_draft = params.n_max;
-            if (dp.n_max > 0) {
-                n_draft = std::min(n_draft, dp.n_max);
-            }
+            const int32_t n_draft = params.n_max;
 
-            const int32_t n_block_tokens = n_draft + 1; // id_last + n_draft * <mask>
+            const int32_t n_block_tokens = n_draft + (is_dspark ? 0 : 1);
             i_block_beg[seq_id] = batch.n_tokens;
             n_block    [seq_id] = n_block_tokens;
             for (int32_t i = 0; i < n_block_tokens; ++i) {
@@ -1211,67 +1178,71 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
 
             auto & result = *dp.result;
 
-            // greedily read the predicted block at this sequence's noise positions 1..n_block_tokens-1
-            for (int32_t i = 1; i < n_block_tokens; ++i) {
-                common_sampler_sample(smpl, ctx_dft, beg + i, true);
+            if (is_dspark) {
+                // DSpark predicts the next token from position 0 and optionally truncates
+                // at the first position below the confidence threshold.
+                const float * conf = params.p_min > 0.0f ? llama_get_embeddings_nextn(ctx_dft) : nullptr;
 
-                const auto * cur_p = common_sampler_get_candidates(smpl, true);
+                for (int32_t i = 0; i < n_block_tokens; ++i) {
+                    const int32_t idx = beg + i;
 
-                for (int k = 0; k < std::min(3, (int) cur_p->size); ++k) {
-                    LOG_DBG(" - seq_id %d, draft candidate %3d, pos %3d: %6d (%8.3f) '%s'\n",
-                            seq_id, k, i - 1, cur_p->data[k].id, cur_p->data[k].p,
-                            common_token_to_piece(ctx_dft, cur_p->data[k].id).c_str());
+                    if (conf && conf[(size_t) idx * n_embd_dec] < params.p_min) {
+                        break;
+                    }
+
+                    common_sampler_sample(smpl, ctx_dft, idx, true);
+
+                    const auto * cur_p = common_sampler_get_candidates(smpl, true);
+
+                    for (int k = 0; k < std::min(3, (int) cur_p->size); ++k) {
+                        LOG_DBG(" - seq_id %d, draft candidate %3d, pos %3d: %6d (%8.3f) '%s'\n",
+                                seq_id, k, i, cur_p->data[k].id, cur_p->data[k].p,
+                                common_token_to_piece(ctx_dft, cur_p->data[k].id).c_str());
+                    }
+
+                    const llama_token id = cur_p->data[0].id;
+
+                    common_sampler_accept(smpl, id, true);
+
+                    result.push_back(id);
                 }
+            } else {
+                // greedily read the predicted block at this sequence's noise positions 1..n_block_tokens-1
+                for (int32_t i = 1; i < n_block_tokens; ++i) {
+                    common_sampler_sample(smpl, ctx_dft, beg + i, true);
 
-                const llama_token id = cur_p->data[0].id;
-                const float confidence = cur_p->data[0].p;
+                    const auto * cur_p = common_sampler_get_candidates(smpl, true);
 
-                if (confidence < params.p_min) {
-                    break;
+                    for (int k = 0; k < std::min(3, (int) cur_p->size); ++k) {
+                        LOG_DBG(" - seq_id %d, draft candidate %3d, pos %3d: %6d (%8.3f) '%s'\n",
+                                seq_id, k, i - 1, cur_p->data[k].id, cur_p->data[k].p,
+                                common_token_to_piece(ctx_dft, cur_p->data[k].id).c_str());
+                    }
+
+                    const llama_token id = cur_p->data[0].id;
+
+                    if (cur_p->data[0].p < params.p_min) {
+                        break;
+                    }
+
+                    common_sampler_accept(smpl, id, true);
+
+                    result.push_back(id);
                 }
-
-                common_sampler_accept(smpl, id, true);
-
-                result.push_back(id);
-                last_confidence[seq_id].push_back(confidence);
             }
 
             if (result.size() < (size_t) params.n_min) {
                 result.clear();
-                last_confidence[seq_id].clear();
             }
         }
     }
 
-    void accept(llama_seq_id seq_id, uint16_t n_accepted, bool is_other) override {
-        if (is_other || !telemetry || seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
-            return;
-        }
-
-        const auto & confidence = last_confidence[seq_id];
-        const size_t accepted = std::min<size_t>(n_accepted, confidence.size());
-
-        std::lock_guard<std::mutex> lock(telemetry_mutex);
-        telemetry << "{\"schema\":\"llama.dflash.acceptance.v1\",\"seq_id\":" << seq_id
-                  << ",\"drafted\":" << confidence.size()
-                  << ",\"accepted\":" << accepted
-                  << ",\"confidence\":[";
-        for (size_t i = 0; i < confidence.size(); ++i) {
-            if (i != 0) {
-                telemetry << ',';
-            }
-            telemetry << std::setprecision(8) << confidence[i];
-        }
-        telemetry << "]}\n";
-        telemetry.flush();
+    void accept(llama_seq_id /*seq_id*/, uint16_t /*n_accepted*/, bool /*is_other*/) override {
+        // noop
     }
 
     bool need_embd() const override {
         return false;
-    }
-
-    const std::vector<float> & confidence(llama_seq_id seq_id) const {
-        return last_confidence.at(seq_id);
     }
 };
 
@@ -1310,15 +1281,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
     std::vector<int>                i_last;
     std::vector<std::vector<float>> chain_h;
-
-    std::vector<std::vector<float>> last_confidence;
-    std::ofstream                   telemetry;
-    std::mutex                      telemetry_mutex;
-
-#ifdef __APPLE__
-    common_ane_mtp_program_ptr ane_mtp;
-    bool ane_kv_ready = false;
-#endif
 
     common_speculative_impl_draft_mtp(const common_params_speculative & params, uint32_t n_seq)
         : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_MTP, n_seq)
@@ -1380,14 +1342,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
         is_mem_shared = llama_get_ctx_other(ctx_dft) == ctx_tgt;
         chain_heads   = n_mtp_layers > 1 && !is_mem_shared;
 
-#ifdef __APPLE__
-        if (this->params.ane_mtp_program && is_mem_shared) {
-            ane_mtp = common_ane_mtp_program_ptr(
-                static_cast<common_ane_mtp_program *>(this->params.ane_mtp_program),
-                [](common_ane_mtp_program *) {});
-        }
-#endif
-
         if (chain_heads) {
             this->params.n_max = std::min(this->params.n_max, n_mtp_layers);
 
@@ -1405,17 +1359,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
         verify_h.assign(n_seq, {});
         verify_h_rows.assign(n_seq, 0);
-        last_confidence.assign(n_seq, {});
-
-        const char * telemetry_path = std::getenv("LLAMA_MTP_TELEMETRY");
-        if (telemetry_path != nullptr && telemetry_path[0] != '\0') {
-            telemetry.open(telemetry_path, std::ios::out | std::ios::app);
-            if (!telemetry) {
-                SPC_WRN("failed to open MTP telemetry at '%s'\n", telemetry_path);
-            } else {
-                SPC_INF("writing MTP acceptance telemetry to '%s'\n", telemetry_path);
-            }
-        }
     }
 
     ~common_speculative_impl_draft_mtp() override {
@@ -1571,188 +1514,10 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                     verify_h[seq_id].data() + (size_t) (n_rows - 1) * n_embd, row_bytes);
         }
 
-#ifdef __APPLE__
-        if (ane_mtp && is_mem_shared) {
-            const int32_t n_layer_tgt = llama_model_n_layer(llama_get_model(ctx_tgt));
-            const int32_t layer_swa = n_layer_tgt - 2;
-            const int32_t layer_base = n_layer_tgt - 1;
-            std::vector<uint32_t> counts(n_seq, 0);
-            std::vector<uint32_t> base_widths(n_seq, 0);
-            std::vector<uint32_t> swa_widths(n_seq, 0);
-            uint32_t row_stride = 0;
-            bool snapshot_ok = true;
-
-            for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
-                if (i_batch_beg[seq_id] < 0) {
-                    continue;
-                }
-                const llama_pos p0 = batch_in.pos[i_batch_beg[seq_id]];
-                const int32_t n_base = llama_kv_cache_seq_get_data(
-                    ctx_tgt, seq_id, false, layer_base, p0,
-                    nullptr, nullptr, nullptr, 0, &base_widths[seq_id]);
-                const int32_t n_swa = llama_kv_cache_seq_get_data(
-                    ctx_tgt, seq_id, true, layer_swa, p0,
-                    nullptr, nullptr, nullptr, 0, &swa_widths[seq_id]);
-                if (n_base < 0 || n_swa != n_base) {
-                    snapshot_ok = false;
-                    break;
-                }
-                counts[seq_id] = (uint32_t) n_base;
-                row_stride = std::max(row_stride, counts[seq_id]);
-            }
-
-            if (snapshot_ok && row_stride > 0) {
-                uint32_t base_width = 0;
-                uint32_t swa_width = 0;
-                for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
-                    if (counts[seq_id] == 0) {
-                        continue;
-                    }
-                    base_width = base_widths[seq_id];
-                    swa_width = swa_widths[seq_id];
-                    break;
-                }
-                std::vector<int32_t> positions((size_t) n_seq * row_stride);
-                std::vector<float> base_k((size_t) n_seq * row_stride * base_width);
-                std::vector<float> base_v(base_k.size());
-                std::vector<float> swa_k((size_t) n_seq * row_stride * swa_width);
-                std::vector<float> swa_v(swa_k.size());
-
-                for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
-                    if (counts[seq_id] == 0) {
-                        continue;
-                    }
-                    const llama_pos p0 = batch_in.pos[i_batch_beg[seq_id]];
-                    const int32_t n_base = llama_kv_cache_seq_get_data(
-                        ctx_tgt, seq_id, false, layer_base, p0,
-                        positions.data() + (size_t) seq_id * row_stride,
-                        base_k.data() + (size_t) seq_id * row_stride * base_width,
-                        base_v.data() + (size_t) seq_id * row_stride * base_width,
-                        row_stride, nullptr);
-                    std::vector<int32_t> swa_positions(row_stride);
-                    const int32_t n_swa = llama_kv_cache_seq_get_data(
-                        ctx_tgt, seq_id, true, layer_swa, p0,
-                        swa_positions.data(),
-                        swa_k.data() + (size_t) seq_id * row_stride * swa_width,
-                        swa_v.data() + (size_t) seq_id * row_stride * swa_width,
-                        row_stride, nullptr);
-                    if (n_base != (int32_t) counts[seq_id] || n_swa != n_base ||
-                            !std::equal(swa_positions.begin(), swa_positions.begin() + n_swa,
-                                positions.begin() + (size_t) seq_id * row_stride)) {
-                        snapshot_ok = false;
-                        break;
-                    }
-                }
-
-                std::vector<int32_t> reset_lanes(n_seq, 0);
-                bool needs_reset = false;
-                for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
-                    if (i_batch_beg[seq_id] >= 0 &&
-                            batch_in.pos[i_batch_beg[seq_id]] == 0) {
-                        reset_lanes[seq_id] = 1;
-                        needs_reset = true;
-                    }
-                }
-                const bool reset_ok = !needs_reset ||
-                    common_ane_mtp_program_reset(ane_mtp, n_seq, reset_lanes.data());
-                ane_kv_ready = snapshot_ok && reset_ok && common_ane_mtp_program_sync_kv(
-                    ane_mtp, n_seq, row_stride, counts.data(), positions.data(),
-                    base_k.data(), base_v.data(), base_width,
-                    swa_k.data(), swa_v.data(), swa_width);
-            } else if (!snapshot_ok) {
-                ane_kv_ready = false;
-            }
-        }
-#endif
-
         return true;
     }
-
-#ifdef __APPLE__
-    bool draft_ane(common_speculative_draft_params_vec & dparams) {
-        if (!ane_mtp || !ane_kv_ready) {
-            return false;
-        }
-
-        std::vector<bool> active(n_seq, false);
-        std::vector<int32_t> tokens(n_seq, 0);
-        std::vector<float> hidden((size_t) n_seq * n_embd, 0.0f);
-        std::vector<int32_t> predicted(n_seq);
-        std::vector<int32_t> positions(n_seq, 0);
-        std::vector<float> confidence(n_seq);
-        std::vector<float> next_hidden((size_t) n_seq * n_embd);
-        int n_active = 0;
-
-        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
-            if (!dparams[seq_id].drafting) {
-                continue;
-            }
-            active[seq_id] = true;
-            ++n_active;
-            tokens[seq_id] = dparams[seq_id].id_last;
-            positions[seq_id] = (int32_t) dparams[seq_id].n_past;
-            std::memcpy(hidden.data() + (size_t) seq_id * n_embd,
-                    pending_h[seq_id].data(), (size_t) n_embd * sizeof(float));
-        }
-
-        while (n_active > 0) {
-            if (!common_ane_mtp_program_predict(
-                    ane_mtp, tokens.data(), hidden.data(), n_seq, n_embd,
-                    positions.data(), predicted.data(), confidence.data(), next_hidden.data())) {
-                for (auto & dp : dparams) {
-                    if (dp.drafting) {
-                        dp.result->clear();
-                    }
-                }
-                ane_kv_ready = false;
-                return false;
-            }
-
-            for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
-                if (!active[seq_id]) {
-                    continue;
-                }
-                auto & result = *dparams[seq_id].result;
-                if (confidence[seq_id] < params.p_min) {
-                    active[seq_id] = false;
-                    --n_active;
-                    continue;
-                }
-                result.push_back(predicted[seq_id]);
-                last_confidence[seq_id].push_back(confidence[seq_id]);
-                if (params.n_max <= (int) result.size()) {
-                    active[seq_id] = false;
-                    --n_active;
-                    continue;
-                }
-                tokens[seq_id] = predicted[seq_id];
-                std::memcpy(hidden.data() + (size_t) seq_id * n_embd,
-                        next_hidden.data() + (size_t) seq_id * n_embd,
-                        (size_t) n_embd * sizeof(float));
-            }
-        }
-
-        for (size_t seq_id = 0; seq_id < dparams.size(); ++seq_id) {
-            auto & dp = dparams[seq_id];
-            if (dp.drafting && dp.result->size() < (size_t) params.n_min) {
-                dp.result->clear();
-                last_confidence[seq_id].clear();
-            }
-        }
-        return true;
-    }
-#endif
 
     void draft(common_speculative_draft_params_vec & dparams) override {
-        for (auto & confidence : last_confidence) {
-            confidence.clear();
-        }
-
-#ifdef __APPLE__
-        if (draft_ane(dparams)) {
-            return;
-        }
-#endif
         auto & ctx_dft = params.ctx_dft;
 
         common_batch_clear(batch);
@@ -1834,10 +1599,9 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
                 // add drafted token for each sequence
                 const llama_token id = cur_p->data[0].id;
-                const float confidence = cur_p->data[0].p;
 
                 // only collect very high-confidence draft tokens
-                if (confidence < params.p_min) {
+                if (cur_p->data[0].p < params.p_min) {
                     drafting[seq_id] = false;
                     n_drafting--;
 
@@ -1850,7 +1614,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
                 auto & result = *dp.result;
 
                 result.push_back(id);
-                last_confidence[seq_id].push_back(confidence);
 
                 if (params.n_max <= (int) result.size()) {
                     drafting[seq_id] = false;
@@ -1901,32 +1664,13 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
             if (dp.result->size() < (size_t) params.n_min) {
                 dp.result->clear();
-                last_confidence[seq_id].clear();
             }
         }
     }
 
-    void accept(llama_seq_id seq_id, uint16_t n_accepted, bool is_other) override {
+    void accept(llama_seq_id seq_id, uint16_t n_accepted, bool /*is_other*/) override {
         if (seq_id < 0 || seq_id >= (llama_seq_id) n_seq) {
             return;
-        }
-
-        if (!is_other && telemetry) {
-            const auto & confidence = last_confidence[seq_id];
-            const size_t accepted = std::min<size_t>(n_accepted, confidence.size());
-            std::lock_guard<std::mutex> lock(telemetry_mutex);
-            telemetry << "{\"schema\":\"llama.mtp.acceptance.v1\",\"seq_id\":" << seq_id
-                      << ",\"drafted\":" << confidence.size()
-                      << ",\"accepted\":" << accepted
-                      << ",\"confidence\":[";
-            for (size_t i = 0; i < confidence.size(); ++i) {
-                if (i != 0) {
-                    telemetry << ',';
-                }
-                telemetry << std::setprecision(8) << confidence[i];
-            }
-            telemetry << "]}\n";
-            telemetry.flush();
         }
 
         const int32_t n_rows = verify_h_rows[seq_id];
@@ -1945,159 +1689,6 @@ struct common_speculative_impl_draft_mtp : public common_speculative_impl {
 
     bool need_embd_nextn() const override {
         return true;
-    }
-
-    const std::vector<float> & confidence(llama_seq_id seq_id) const {
-        return last_confidence.at(seq_id);
-    }
-};
-
-struct common_speculative_impl_draft_hybrid : public common_speculative_impl {
-    std::unique_ptr<common_speculative_impl_draft_dflash> dflash;
-    std::unique_ptr<common_speculative_impl_draft_mtp>    mtp;
-
-    std::vector<uint8_t> selected;
-    float dflash_cutoff = 0.65f;
-    uint32_t hybrid_block = 1;
-#ifdef __APPLE__
-    common_ane_mtp_program_ptr ane_program;
-#endif
-
-    common_speculative_impl_draft_hybrid(const common_params_speculative & params, uint32_t n_seq)
-        : common_speculative_impl(COMMON_SPECULATIVE_TYPE_DRAFT_HYBRID, n_seq) {
-        common_params_speculative dflash_params = params;
-        common_params_speculative mtp_params = params;
-        mtp_params.draft.ctx_dft = params.draft.ctx_mtp;
-
-        dflash = std::make_unique<common_speculative_impl_draft_dflash>(dflash_params, n_seq);
-        mtp = std::make_unique<common_speculative_impl_draft_mtp>(mtp_params, n_seq);
-        hybrid_block = (uint32_t) std::max(1, dflash->params.n_max);
-        selected.assign(n_seq, 0);
-#ifdef __APPLE__
-        if (params.draft.ane_mtp_program) {
-            ane_program = common_ane_mtp_program_ptr(
-                static_cast<common_ane_mtp_program *>(params.draft.ane_mtp_program),
-                [](common_ane_mtp_program *) {});
-        }
-#endif
-
-        const char * cutoff = std::getenv("LLAMA_HYBRID_DFLASH_P_MIN");
-        if (cutoff != nullptr && cutoff[0] != '\0') {
-            dflash_cutoff = std::clamp(std::strtof(cutoff, nullptr), 0.0f, 1.0f);
-        }
-        SPC_INF("hybrid DFlash/MTP arbitration enabled, DFlash cutoff=%.3f\n", dflash_cutoff);
-    }
-
-    void begin(llama_seq_id seq_id, const llama_tokens & prompt) override {
-        dflash->begin(seq_id, prompt);
-        mtp->begin(seq_id, prompt);
-    }
-
-    bool process(const llama_batch & batch) override {
-        return dflash->process(batch) && mtp->process(batch);
-    }
-
-    void draft(common_speculative_draft_params_vec & dparams) override {
-        std::vector<llama_tokens> result_dflash(n_seq);
-        std::vector<llama_tokens> result_mtp(n_seq);
-        auto params_dflash = dparams;
-        auto params_mtp = dparams;
-
-        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
-            params_dflash[seq_id].result = &result_dflash[seq_id];
-            params_mtp[seq_id].result = &result_mtp[seq_id];
-            selected[seq_id] = 0;
-        }
-
-        dflash->draft(params_dflash);
-        mtp->draft(params_mtp);
-
-        std::vector<int32_t> ane_source(n_seq, 0);
-        std::vector<int32_t> ane_agreement(n_seq, 0);
-#ifdef __APPLE__
-        if (ane_program) {
-            const uint32_t block = hybrid_block;
-            std::vector<int32_t> d_tokens((size_t) n_seq * block, 0);
-            std::vector<float> d_confidence((size_t) n_seq * block, 0.0f);
-            std::vector<int32_t> d_counts(n_seq, 0);
-            std::vector<int32_t> m_tokens((size_t) n_seq * block, 0);
-            std::vector<float> m_confidence((size_t) n_seq * block, 0.0f);
-            std::vector<int32_t> m_counts(n_seq, 0);
-            for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
-                const auto & td = result_dflash[seq_id];
-                const auto & tm = result_mtp[seq_id];
-                const auto & cd = dflash->confidence(seq_id);
-                const auto & cm = mtp->confidence(seq_id);
-                d_counts[seq_id] = (int32_t) std::min<size_t>(td.size(), block);
-                m_counts[seq_id] = (int32_t) std::min<size_t>(tm.size(), block);
-                for (int32_t i = 0; i < d_counts[seq_id]; ++i) {
-                    d_tokens[(size_t) seq_id * block + i] = td[i];
-                    d_confidence[(size_t) seq_id * block + i] = cd[i];
-                }
-                for (int32_t i = 0; i < m_counts[seq_id]; ++i) {
-                    m_tokens[(size_t) seq_id * block + i] = tm[i];
-                    m_confidence[(size_t) seq_id * block + i] = cm[i];
-                }
-            }
-            if (!common_ane_compute_hybrid(
-                    ane_program, block,
-                    d_tokens.data(), d_confidence.data(), d_counts.data(),
-                    m_tokens.data(), m_confidence.data(), m_counts.data(),
-                    n_seq, dflash_cutoff,
-                    ane_source.data(), ane_agreement.data())) {
-                std::fill(ane_source.begin(), ane_source.end(), 0);
-            }
-        }
-#endif
-
-        for (llama_seq_id seq_id = 0; seq_id < (llama_seq_id) n_seq; ++seq_id) {
-            if (!dparams[seq_id].drafting) {
-                continue;
-            }
-
-            const auto & td = result_dflash[seq_id];
-            const auto & tm = result_mtp[seq_id];
-            const auto & cd = dflash->confidence(seq_id);
-            const auto & cm = mtp->confidence(seq_id);
-
-            size_t common = 0;
-            while (common < td.size() && common < tm.size() && td[common] == tm[common]) {
-                ++common;
-            }
-
-            bool choose_mtp = ane_source[seq_id] == 2;
-            if (ane_source[seq_id] == 0) {
-                choose_mtp = td.empty();
-                if (!tm.empty() && !td.empty() && common < td.size()) {
-                    const float pd = common < cd.size() ? cd[common] : 0.0f;
-                    const float pm = common < cm.size() ? cm[common] : 0.0f;
-                    choose_mtp = pd < dflash_cutoff && pm > pd;
-                }
-                if (!tm.empty() && common == td.size() && tm.size() > td.size()) {
-                    choose_mtp = true;
-                }
-            }
-
-            const llama_tokens & chosen = choose_mtp ? tm : td;
-            *dparams[seq_id].result = chosen;
-            selected[seq_id] = choose_mtp ? 2 : (!chosen.empty() ? 1 : 0);
-
-            SPC_DBG("hybrid seq=%d agreement=%zu dflash=%zu mtp=%zu selected=%s\n",
-                    seq_id, common, td.size(), tm.size(), choose_mtp ? "mtp" : "dflash");
-        }
-    }
-
-    void accept(llama_seq_id seq_id, uint16_t n_accepted, bool is_other) override {
-        dflash->accept(seq_id, n_accepted, is_other || selected.at(seq_id) != 1);
-        mtp->accept(seq_id, n_accepted, is_other || selected.at(seq_id) != 2);
-    }
-
-    bool need_embd() const override {
-        return dflash->need_embd() || mtp->need_embd();
-    }
-
-    bool need_embd_nextn() const override {
-        return dflash->need_embd_nextn() || mtp->need_embd_nextn();
     }
 };
 
@@ -2599,7 +2190,7 @@ std::string common_speculative_type_to_str(common_speculative_type type) {
         case COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3:  return "draft-eagle3";
         case COMMON_SPECULATIVE_TYPE_DRAFT_MTP:     return "draft-mtp";
         case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH:  return "draft-dflash";
-        case COMMON_SPECULATIVE_TYPE_DRAFT_HYBRID:  return "draft-hybrid";
+        case COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK:  return "draft-dspark";
         case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:  return "ngram-simple";
         case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K:   return "ngram-map-k";
         case COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V: return "ngram-map-k4v";
@@ -2653,7 +2244,7 @@ int32_t common_speculative_n_max(const common_params_speculative * spec) {
             case COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3:
             case COMMON_SPECULATIVE_TYPE_DRAFT_MTP:
             case COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH:
-            case COMMON_SPECULATIVE_TYPE_DRAFT_HYBRID:
+            case COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK:
                 n_max = std::max(n_max, std::max(0, spec->draft.n_max));
                 break;
             case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE:
@@ -2712,11 +2303,6 @@ struct common_speculative_init_result::impl {
     // note: the order in which model, context, etc. are declared matters because their destructors will be called bottom-to-top
     llama_model_ptr   model;
     llama_context_ptr context;
-    llama_model_ptr   model_mtp;
-    llama_context_ptr context_mtp;
-#ifdef __APPLE__
-    common_ane_mtp_program_ptr ane_mtp;
-#endif
 };
 
 common_speculative_init_result::common_speculative_init_result(
@@ -2728,20 +2314,12 @@ common_speculative_init_result::common_speculative_init_result(
     const bool spec_mtp = std::find(params.speculative.types.begin(),
                                     params.speculative.types.end(),
                                     COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end();
-    const bool spec_hybrid = std::find(params.speculative.types.begin(),
-                                       params.speculative.types.end(),
-                                       COMMON_SPECULATIVE_TYPE_DRAFT_HYBRID) != params.speculative.types.end();
-    char embedded_mtp_buf[16] = {};
-    const bool embedded_mtp = (spec_mtp || spec_hybrid) &&
-        llama_model_meta_val_str(model_tgt, "mtp.component.present",
-                                 embedded_mtp_buf, sizeof(embedded_mtp_buf)) > 0 &&
-        strcmp(embedded_mtp_buf, "true") == 0;
-    GGML_ASSERT(has_draft || spec_mtp || spec_hybrid);
+    GGML_ASSERT(has_draft || spec_mtp);
 
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
 
-    if (spec_mtp && !spec_hybrid) {
+    if (spec_mtp) {
         cparams.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
     }
 
@@ -2751,14 +2329,11 @@ common_speculative_init_result::common_speculative_init_result(
     cparams.ctx_other = ctx_tgt;
 
     std::string model_path;
-    if (has_draft || (embedded_mtp && !spec_hybrid)) {
-        model_path = embedded_mtp && !spec_hybrid ? params.model.path : params.speculative.draft.mparams.path;
-        LOG_TRC("%s: loading draft model '%s'\n", __func__, model_path.c_str());
+    if (has_draft) {
+        model_path = params.speculative.draft.mparams.path;
+        LOG_INF("%s: loading draft model '%s'\n", __func__, model_path.c_str());
 
-        if (embedded_mtp && !spec_hybrid) {
-            mparams.component_prefix = "mtp.";
-        }
-        llama_model * model_dft = llama_model_load_from_file(model_path.c_str(), mparams);
+        llama_model * model_dft = llama_model_load_from_file(params.model.path.c_str(), mparams);
         if (model_dft == NULL) {
             LOG_ERR("%s: failed to load draft model, '%s'\n", __func__, model_path.c_str());
             return;
@@ -2773,21 +2348,10 @@ common_speculative_init_result::common_speculative_init_result(
         }
 
         pimpl->context.reset(ctx_dft);
-#ifdef __APPLE__
-        if (embedded_mtp && !spec_hybrid) {
-            pimpl->ane_mtp = common_ane_mtp_program_load(
-                model_path, (uint32_t) std::max(1, params.n_parallel));
-            if (pimpl->ane_mtp) {
-                LOG_INF("%s: embedded ANE MTP program is warm and resident\n", __func__);
-            } else {
-                LOG_TRC("%s: no usable embedded ANE MTP program; retaining Metal fallback\n", __func__);
-            }
-        }
-#endif
     } else if (spec_mtp) {
         model_path = params.model.path;
 
-        LOG_TRC("%s: creating MTP draft context against the target model '%s'\n", __func__, model_path.c_str());
+        LOG_INF("%s: creating MTP draft context against the target model '%s'\n", __func__, model_path.c_str());
 
         llama_context * ctx_dft = llama_init_from_model(model_tgt, cparams);
         if (ctx_dft == nullptr) {
@@ -2796,39 +2360,6 @@ common_speculative_init_result::common_speculative_init_result(
         }
 
         pimpl->context.reset(ctx_dft);
-    }
-
-    if (spec_hybrid) {
-        if (!has_draft || !embedded_mtp) {
-            LOG_ERR("%s: draft-hybrid requires an external DFlash model and an embedded MTP component\n", __func__);
-            return;
-        }
-
-        auto mparams_mtp = common_model_params_to_llama(params);
-        auto cparams_mtp = common_context_params_to_llama(params);
-        mparams_mtp.component_prefix = "mtp.";
-        cparams_mtp.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
-        cparams_mtp.n_rs_seq = 0;
-        cparams_mtp.ctx_other = ctx_tgt;
-
-        const std::string & target_path = params.speculative.draft.target_model_path;
-        llama_model * model_mtp = llama_model_load_from_file(target_path.c_str(), mparams_mtp);
-        if (model_mtp == nullptr) {
-            LOG_ERR("%s: failed to load embedded MTP component\n", __func__);
-            return;
-        }
-        pimpl->model_mtp.reset(model_mtp);
-
-        llama_context * ctx_mtp = llama_init_from_model(model_mtp, cparams_mtp);
-        if (ctx_mtp == nullptr) {
-            LOG_ERR("%s: failed to create embedded MTP context\n", __func__);
-            return;
-        }
-        pimpl->context_mtp.reset(ctx_mtp);
-#ifdef __APPLE__
-        pimpl->ane_mtp = common_ane_mtp_program_load(
-            target_path, (uint32_t) std::max(1, params.n_parallel));
-#endif
     }
 }
 
@@ -2840,18 +2371,6 @@ llama_model * common_speculative_init_result::model() {
 
 llama_context * common_speculative_init_result::context() {
     return pimpl->context.get();
-}
-
-llama_context * common_speculative_init_result::mtp_context() {
-    return pimpl->context_mtp.get();
-}
-
-void * common_speculative_init_result::ane_mtp_program() {
-#ifdef __APPLE__
-    return pimpl->ane_mtp.get();
-#else
-    return nullptr;
-#endif
 }
 
 common_speculative_init_result_ptr common_speculative_init_from_params(common_params & params, llama_model * model_tgt, llama_context * ctx_tgt) {
@@ -2870,8 +2389,7 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         bool has_draft_eagle3 = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3)) && params.draft.ctx_dft != nullptr;
         bool has_draft_mtp    = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_MTP))    && params.draft.ctx_dft != nullptr;
         bool has_draft_dflash = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH)) && params.draft.ctx_dft != nullptr;
-        bool has_draft_hybrid = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_HYBRID)) &&
-                                params.draft.ctx_dft != nullptr && params.draft.ctx_mtp != nullptr;
+        bool has_draft_dspark = (enabled_configs & (1u << COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK)) && params.draft.ctx_dft != nullptr;
 
 
 
@@ -2915,8 +2433,8 @@ common_speculative * common_speculative_init(common_params_speculative & params,
         if (has_draft_dflash) {
             configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH, params));
         }
-        if (has_draft_hybrid) {
-            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_HYBRID, params));
+        if (has_draft_dspark) {
+            configs.push_back(common_speculative_config(COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK, params));
         }
     }
 
@@ -2942,8 +2460,9 @@ common_speculative * common_speculative_init(common_params_speculative & params,
                 impls.push_back(std::make_unique<common_speculative_impl_draft_dflash>(config.params, n_seq));
                 break;
             }
-            case COMMON_SPECULATIVE_TYPE_DRAFT_HYBRID: {
-                impls.push_back(std::make_unique<common_speculative_impl_draft_hybrid>(config.params, n_seq));
+            case COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK: {
+                impls.push_back(std::make_unique<common_speculative_impl_draft_dflash>(
+                        config.params, n_seq, COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK));
                 break;
             }
             case COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE: {
