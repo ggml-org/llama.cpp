@@ -27,6 +27,7 @@ class OnyxModel(TextModel):
         hparams = self.hparams
 
         self.gguf_writer.add_final_logit_softcapping(hparams["final_logit_softcapping"])
+        self.gguf_writer.add_logit_scale(hparams["output_multiplier"])
 
         # SWA + NoPE: [SW, SW, SW, Full], NoPE used on Full layers. References:
         # https://huggingface.co/someorgtoo-hf/onyx-hf-converted/blob/main/config.json#L19
@@ -35,9 +36,6 @@ class OnyxModel(TextModel):
         self.gguf_writer.add_sliding_window_pattern(4)
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if name.endswith("lm_head.weight"):
-            data_torch = data_torch * float(self.hparams["output_multiplier"])
-
         shift = self.norm_shift(name)
         if shift != 0.0:
             data_torch = data_torch + shift

@@ -4,6 +4,7 @@ void llama_model_onyx::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa, false);
     ml.get_key(LLM_KV_FINAL_LOGIT_SOFTCAPPING,     hparams.f_final_logit_softcapping, false);
+    ml.get_key(LLM_KV_LOGIT_SCALE,                 hparams.f_logit_scale);
 
     // SWA + NoPE: [SW, SW, SW, Full], NoPE used on Full layers.
     if (hparams.n_swa > 0) {
@@ -175,8 +176,9 @@ llama_model_onyx::graph::graph(const llama_model & model, const llm_graph_params
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    // lm_head. output_multiplier is already folded into the weight at conversion.
+    // lm_head, followed by output multiplier
     cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = ggml_scale(ctx0, cur, hparams.f_logit_scale);
 
     // Final logit tanh softcap (from gemma3.cpp).
     if (hparams.f_final_logit_softcapping) {
