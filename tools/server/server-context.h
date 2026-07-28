@@ -90,6 +90,18 @@ struct server_context {
     // returns true on success
     bool load_model(common_params & params);
 
+    // reinitialize the model's context without reloading weights
+    // returns true on success
+    bool reload_context(common_params & params);
+
+    // unload an existing mmproj and/or load a new one
+    // returns true on success
+    bool reload_mmproj(common_params & params);
+
+    // unload an existing speculative decoder and/or load a new one
+    // returns true on success
+    bool reload_speculative(common_params & params);
+
     // this function will block main thread until termination
     void start_loop();
 
