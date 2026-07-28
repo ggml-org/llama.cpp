@@ -132,21 +132,6 @@ typedef struct VkPhysicalDeviceShaderMixedFloatDotProductFeaturesVALVE {
 #define CEIL_DIV(M, N) (((M) / (N)) + (((M) % (N)) != 0))
 static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
 
-static bool ggml_vk_intel_windows_driver_equals_or_newer_than(uint32_t driver_version, uint32_t threshold_major, uint32_t threshold_minor) {
-#if defined(_WIN32)
-    // Intel Windows encodes xxx.yyyy as [31:14].[13:0].
-    const uint32_t major = driver_version >> 14;
-    const uint32_t minor = driver_version & 0x3fff;
-
-    return major > threshold_major || (major == threshold_major && minor >= threshold_minor);
-#else
-    GGML_UNUSED(driver_version);
-    GGML_UNUSED(threshold_major);
-    GGML_UNUSED(threshold_minor);
-    return true;
-#endif
-}
-
 #define VK_VENDOR_ID_AMD 0x1002
 #define VK_VENDOR_ID_APPLE 0x106b
 #define VK_VENDOR_ID_INTEL 0x8086
@@ -1874,6 +1859,7 @@ struct ggml_vk_garbage_collector {
 static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_context subctx);
 static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested = nullptr);
 static void ggml_pipeline_allocate_descriptor_sets(ggml_backend_vk_context * ctx);
+static bool ggml_vk_intel_windows_driver_equals_or_newer_than(uint32_t driver_version, uint32_t threshold_major, uint32_t threshold_minor);
 
 static bool vk_memory_logger_enabled = false;
 
@@ -18108,6 +18094,22 @@ static uint32_t ggml_vk_intel_shader_core_count(const vk::PhysicalDevice& vkdev)
         return 0;
     }
 }
+
+static bool ggml_vk_intel_windows_driver_equals_or_newer_than(uint32_t driver_version, uint32_t threshold_major, uint32_t threshold_minor) {
+#if defined(_WIN32)
+    // Intel Windows encodes xxx.yyyy as [31:14].[13:0].
+    const uint32_t major = driver_version >> 14;
+    const uint32_t minor = driver_version & 0x3fff;
+
+    return major > threshold_major || (major == threshold_major && minor >= threshold_minor);
+#else
+    GGML_UNUSED(driver_version);
+    GGML_UNUSED(threshold_major);
+    GGML_UNUSED(threshold_minor);
+    return true;
+#endif
+}
+
 
 // checks
 
