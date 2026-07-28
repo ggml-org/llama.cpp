@@ -110,6 +110,8 @@ struct clip_hparams {
     // audio
     int32_t n_mel_bins = 0; // whisper preprocessor
     int32_t proj_stack_factor = 0; // ultravox
+    int32_t subsampling_factor = 0; // parakeet
+
     int32_t audio_chunk_size           = 0;
     int32_t audio_conv_kernel_size     = 0;
     int32_t audio_max_pos_emb          = 0;
@@ -123,6 +125,10 @@ struct clip_hparams {
     int32_t audio_n_fft       = -1;
     int32_t audio_window_len  = -1;
     int32_t audio_hop_len     = -1;
+
+    // parakeet
+    std::vector<float> mel_filters;
+    std::vector<float> window;
 
     // mimo-audio-tokenizer: residual vector quantizer
     int32_t rvq_num_quantizers = 0;
@@ -245,14 +251,16 @@ struct clip_layer {
     ggml_tensor * norm_conv_b   = nullptr;
     ggml_tensor * linear_pos_w  = nullptr;
 
-    ggml_tensor * conv_norm_w   = nullptr;
-    ggml_tensor * conv_norm_b   = nullptr;
-    ggml_tensor * conv_dw_w     = nullptr;
-    ggml_tensor * conv_dw_b     = nullptr;
-    ggml_tensor * conv_pw1_w    = nullptr;
-    ggml_tensor * conv_pw1_b    = nullptr;
-    ggml_tensor * conv_pw2_w    = nullptr;
-    ggml_tensor * conv_pw2_b    = nullptr;
+    ggml_tensor * conv_norm_w    = nullptr;
+    ggml_tensor * conv_norm_b    = nullptr;
+    ggml_tensor * conv_norm_mean = nullptr;  // parakeet
+    ggml_tensor * conv_norm_var  = nullptr;  // parakeet
+    ggml_tensor * conv_dw_w      = nullptr;
+    ggml_tensor * conv_dw_b      = nullptr;
+    ggml_tensor * conv_pw1_w     = nullptr;
+    ggml_tensor * conv_pw1_b     = nullptr;
+    ggml_tensor * conv_pw2_w     = nullptr;
+    ggml_tensor * conv_pw2_b     = nullptr;
 
     // gemma4 audio conformer per-layer
     ggml_tensor * attn_pre_norm_w   = nullptr;

@@ -88,6 +88,7 @@
 #define KEY_A_ATTN_WINDOW_SIZE     "clip.audio.window_size"          // mimo-audio-tokenizer: sliding-window radius
 #define KEY_A_LOCAL_BLOCK_COUNT    "clip.audio.local_block_count"    // mimo-v2.5: input_local_transformer layer count
 #define KEY_A_LOCAL_GROUP_SIZE     "clip.audio.local_group_size"     // mimo-v2.5: input_local_transformer grouping size
+#define KEY_AUDIO_SUBSAMPLING_FACTOR "clip.audio.subsampling_factor"
 
 //
 // tensor name constants
@@ -338,6 +339,12 @@
 #define TN_YASA_STAGE_DOWN_CONV  "v.stage.%d.down.conv.%s"
 #define TN_YASA_STAGE_BLK        "v.stage.%d.blk.%d.%s.%s"
 
+// parakeet
+#define TN_MEL_FILTERS           "a.mel_filters"
+#define TN_WINDOW                "a.window"
+#define TN_CONV_NORM_MEAN        "%s.blk.%d.conv_norm_mean"
+#define TN_CONV_NORM_VAR         "%s.blk.%d.conv_norm_var"
+
 // align x to upper multiple of n
 #define CLIP_ALIGN(x, n) ((((x) + (n) - 1) / (n)) * (n))
 
@@ -392,6 +399,7 @@ enum projector_type {
     PROJECTOR_TYPE_KIMIK25,
     PROJECTOR_TYPE_NEMOTRON_V2_VL,
     PROJECTOR_TYPE_HUNYUANVL,
+    PROJECTOR_TYPE_PARAKEET,
     PROJECTOR_TYPE_EXAONE4_5,
     PROJECTOR_TYPE_MINICPMV4_6,
     PROJECTOR_TYPE_GRANITE_SPEECH,
@@ -455,6 +463,7 @@ static std::map<projector_type, std::string> PROJECTOR_TYPE_NAMES = {
     { PROJECTOR_TYPE_MINIMAX_M3,        "minimax_m3"},
     { PROJECTOR_TYPE_GRANITE4_VISION,   "granite4_vision"},
     { PROJECTOR_TYPE_MIMO_AUDIO,        "mimo_audio"},
+    { PROJECTOR_TYPE_PARAKEET,          "parakeet"},
 };
 
 static projector_type clip_projector_type_from_string(const std::string & str) {
