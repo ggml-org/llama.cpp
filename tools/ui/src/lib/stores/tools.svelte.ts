@@ -412,7 +412,8 @@ class ToolsStore {
 		tools: { name: string; description?: string }[];
 	}[] {
 		const result: ReturnType<ToolsStore['getMcpToolsFromHealthChecks']> = [];
-		for (const server of mcpStore.visibleMcpServers) {
+		for (const server of mcpStore.getServers()) {
+			if (!server.enabled) continue;
 			const health = mcpStore.getHealthCheckState(server.id);
 			if (health.status === HealthCheckStatus.SUCCESS && health.tools.length > 0) {
 				result.push({

@@ -384,7 +384,6 @@
 			{isLastAssistantMessage}
 			{message}
 			{toolMessages}
-			messageContent={message.content}
 			onConfirmDelete={handleConfirmDelete}
 			onContinue={handleContinue}
 			onCopy={handleCopy}

@@ -15,10 +15,10 @@
 // ##############################
 
 
-#include <ggml.h>
-#include <ggml-alloc.h>
-#include <ggml-backend.h>
-#include <ggml-cpp.h>
+#include "ggml.h"
+#include "ggml-alloc.h"
+#include "ggml-backend.h"
+#include "ggml-cpp.h"
 
 #include <algorithm>
 #include <atomic>
@@ -2423,11 +2423,10 @@ struct test_set_rows : public test_case {
 
     void initialize_tensors(ggml_context * ctx) override {
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (ggml_is_view_op(t->op)) {
+                continue;
+            }
             if (t->type == GGML_TYPE_I64 || t->type == GGML_TYPE_I32) {
-                if (ggml_is_view_op(t->op)) {
-                    continue;
-                }
-
                 init_set_rows_row_ids(t, ne[1]);
             } else {
                 init_tensor_uniform(t);
@@ -2450,6 +2449,9 @@ struct test_set_rows : public test_case {
                 err_estimate /= 8.0f;
             }
             err_estimate *= err_estimate;
+            if (type_src == GGML_TYPE_F16) {
+                err_estimate *= 16.0f;
+            }
             err_estimate /= 0.25f*float(ne[0] * r * ne[2]*nr23[0] * ne[3]*nr23[1]);
             return err_estimate;
         }
@@ -5553,7 +5555,7 @@ struct test_concat : public test_case {
     const std::array<int64_t, 4> ne_a;
     const int64_t ne_b_d;
     const int dim;
-    const int v; // view (1 << 0: non-cont a, 1 << 1: non-cont b)
+    const int v; // view (1 << 0: non-cont a (first 3 dim), 1 << 1: non-cont b (first 3 dim), 1 << 2: non-cont a (last 2 dim), 1 << 3: non-cont b (last 2 dim))
 
     std::string vars() override {
         return VARS_TO_STR5(type, ne_a, ne_b_d, dim, v);
@@ -5576,6 +5578,13 @@ struct test_concat : public test_case {
 
             a = ggml_view_4d(ctx, a, ne_a[0], ne_a[1], ne_a[2], ne_a[3], a->nb[1], a->nb[2], a->nb[3], 0);
             ggml_set_name(a, "view_of_a");
+        } else if (v & 4) {
+            auto ne = ne_a; ne[2] *= 2; ne[3] *= 4;
+            a = ggml_new_tensor(ctx, type, 4, ne.data());
+            ggml_set_name(a, "a");
+
+            a = ggml_view_4d(ctx, a, ne_a[0], ne_a[1], ne_a[2], ne_a[3], a->nb[1], a->nb[2], a->nb[3], 0);
+            ggml_set_name(a, "view_of_a");
         } else {
             a = ggml_new_tensor(ctx, type, 4, ne_a.data());
             ggml_set_name(a, "a");
@@ -5583,6 +5592,13 @@ struct test_concat : public test_case {
         ggml_tensor * b;
         if (v & 2) {
             auto ne = ne_b; ne[0] *= 3; ne[1] *= 2; ne[2] *= 4;
+            b = ggml_new_tensor(ctx, type, 4, ne.data());
+            ggml_set_name(b, "b");
+
+            b = ggml_view_4d(ctx, b, ne_b[0], ne_b[1], ne_b[2], ne_b[3], b->nb[1], b->nb[2], b->nb[3], 0);
+            ggml_set_name(b, "view_of_b");
+        } else if (v & 8) {
+            auto ne = ne_b; ne[2] *= 3; ne[3] *= 2;
             b = ggml_new_tensor(ctx, type, 4, ne.data());
             ggml_set_name(b, "b");
 
@@ -7928,17 +7944,19 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_I64, { 1, 8, 1, 3 }, { 1, 1 }, 2, false));
     test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_I32, { 1, 8, 1, 3 }, { 1, 1 }, 2, false));
     test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, GGML_TYPE_Q8_0, GGML_TYPE_I32, { 256, 5, 1, 3 }, { 1, 1, }, 1, false));
-    for (ggml_type type : all_types) {
-        for (int b : {1, 7}) {
-            for (bool v : {false, true}) {
-                test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, type, GGML_TYPE_I64, { 256, 5,  b, 3 }, { 1, 1, }, 1, v));
-                test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, type, GGML_TYPE_I64, { 256, 11, 1, b }, { 2, 3, }, 7, v));
+    for (ggml_type src_type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
+        for (ggml_type type : all_types) {
+            for (int b : {1, 7}) {
+                for (bool v : {false, true}) {
+                    test_cases.emplace_back(new test_set_rows(src_type, type, GGML_TYPE_I64, { 256, 5,  b, 3 }, { 1, 1, }, 1, v));
+                    test_cases.emplace_back(new test_set_rows(src_type, type, GGML_TYPE_I64, { 256, 11, 1, b }, { 2, 3, }, 7, v));
 
-                test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, type, GGML_TYPE_I64, { 3*ggml_blck_size(type), 3, b, 1 }, { 2, 3, }, 2, v));
+                    test_cases.emplace_back(new test_set_rows(src_type, type, GGML_TYPE_I64, { 3*ggml_blck_size(type), 3, b, 1 }, { 2, 3, }, 2, v));
 
-                if (ggml_blck_size(type) == 1) {
-                    test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, type, GGML_TYPE_I64, { 31, 3, b, 1 }, { 2, 3, }, 2, v));
-                    test_cases.emplace_back(new test_set_rows(GGML_TYPE_F32, type, GGML_TYPE_I64, { 33, 5, 1, b }, { 2, 3, }, 1, v));
+                    if (ggml_blck_size(type) == 1) {
+                        test_cases.emplace_back(new test_set_rows(src_type, type, GGML_TYPE_I64, { 31, 3, b, 1 }, { 2, 3, }, 2, v));
+                        test_cases.emplace_back(new test_set_rows(src_type, type, GGML_TYPE_I64, { 33, 5, 1, b }, { 2, 3, }, 1, v));
+                    }
                 }
             }
         }
@@ -8013,6 +8031,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     // im2col 2D
     test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_F32));
+    test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F32, GGML_TYPE_F16));
     test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F32));
     test_cases.emplace_back(new test_im2col(GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     for (int s0 : {1, 3}) {
@@ -9084,8 +9103,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
 
     for (ggml_type type_a : { GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, GGML_TYPE_Q8_0 }) {
-        for (int dim : { 0, 1, 2, 3, }) {
-            test_cases.emplace_back(new test_concat(type_a, {128, 12, 13, 14}, dim == 0 ? 256 : 7, dim, 0));
+        for (int v : { 0, 4, 8, 12 }) {
+            for (int dim : { 0, 1, 2, 3, }) {
+                test_cases.emplace_back(new test_concat(type_a, {128, 12, 13, 14}, dim == 0 ? 256 : 7, dim, v));
+            }
         }
     }
 

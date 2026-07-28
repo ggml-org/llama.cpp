@@ -114,6 +114,7 @@ enum GPU_FAMILY {
 
 enum ADRENO_GPU_GEN {
     ADRENO_UNKNOWN,
+    A6X,
     A7X,
     A8X,
     X1E,
@@ -122,6 +123,7 @@ enum ADRENO_GPU_GEN {
 
 enum ADRENO_CL_COMPILER_TYPE {
     E031,
+    E17,
     DX,
 };
 
@@ -243,6 +245,19 @@ static ggml_cl_version get_opencl_c_version(ggml_cl_version platform_version, cl
 }
 
 static ADRENO_GPU_GEN get_adreno_gpu_gen(const char *device_name) {
+    if (strstr(device_name, "610") || strstr(device_name, "612") ||
+        strstr(device_name, "613") || strstr(device_name, "615") ||
+        strstr(device_name, "616") || strstr(device_name, "618") ||
+        strstr(device_name, "619") || strstr(device_name, "620") ||
+        strstr(device_name, "630") || strstr(device_name, "640") ||
+        strstr(device_name, "642") || strstr(device_name, "643") ||
+        strstr(device_name, "644") || strstr(device_name, "650") ||
+        strstr(device_name, "660") || strstr(device_name, "663") ||
+        strstr(device_name, "680") || strstr(device_name, "685") ||
+        strstr(device_name, "690")) {
+        return ADRENO_GPU_GEN::A6X;
+    }
+
     if (strstr(device_name, "730") ||
         strstr(device_name, "740") ||
         strstr(device_name, "750")) {
@@ -250,7 +265,8 @@ static ADRENO_GPU_GEN get_adreno_gpu_gen(const char *device_name) {
     }
 
     if (strstr(device_name, "830") ||
-        strstr(device_name, "840")) {
+        strstr(device_name, "840") ||
+        strstr(device_name, "850")) {
         return ADRENO_GPU_GEN::A8X;
     }
 
@@ -275,6 +291,17 @@ static ggml_cl_compiler_version get_adreno_cl_compiler_version(const char *drive
     size_t compiler_patch_offset = 11;
 
     if (compiler_ver_pos == std::string::npos) {
+        compiler_ver_pos = driver_ver_str.find("E17");
+        if (compiler_ver_pos != std::string::npos) {
+            type = ADRENO_CL_COMPILER_TYPE::E17;
+            compiler_ver_len = 12;
+            compiler_major_offset = 4;
+            compiler_minor_offset = 7;
+            compiler_patch_offset = 10;
+        }
+    }
+
+    if (compiler_ver_pos == std::string::npos) {
         compiler_ver_pos = driver_ver_str.find("DX");
         if (compiler_ver_pos == std::string::npos) {
             return {};
@@ -282,6 +309,8 @@ static ggml_cl_compiler_version get_adreno_cl_compiler_version(const char *drive
         type = ADRENO_CL_COMPILER_TYPE::DX;
         compiler_ver_len = 11;
         compiler_major_offset = 3;
+        compiler_minor_offset = 6;
+        compiler_patch_offset = 9;
     }
 
     std::string compiler_ver_str = driver_ver_str.substr(compiler_ver_pos, compiler_ver_len);
@@ -532,6 +561,7 @@ struct ggml_backend_opencl_context {
     bool fp16_support;
     bool has_vector_subgroup_broadcast;
     bool has_subgroup_shuffle = false;       // cl_khr_subgroup_shuffle or cl_qcom_subgroup_shuffle
+    bool has_integer_dot      = false;       // cl_khr_integer_dot_product or cl_qcom_dot_product8
     bool has_qcom_subgroup_shuffle = false;  // specifically cl_qcom_subgroup_shuffle
     bool disable_fusion;
 
@@ -834,7 +864,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_gemv_moe_q5_1_f32_ns, kernel_gemm_moe_q5_1_f32_ns;
     cl_kernel kernel_gemv_moe_q4_k_f32_ns, kernel_gemm_moe_q4_k_f32_ns, kernel_gemm_moe_q4_k_f32_ns_bin;
     cl_kernel kernel_gemv_moe_q4_k_f32_ns_wimg = nullptr;  // weight-as-texture MoE decode GEMV (opt-in)
-    cl_kernel kernel_gemm_moe_q4_k_q8_1_dp4a;    // dp4a (int8) prefill GEMM variant
+    cl_kernel kernel_gemm_moe_q4_k_q8_1_dp4a = nullptr;    // dp4a (int8) prefill GEMM variant
     cl_kernel kernel_moe_reorder_quant_a_q8_1;   // fused reorder + q8_1 quant for the dp4a GEMM
     cl_kernel kernel_gemm_moe_q8_1_dp4a_q80 = nullptr;   // generic dp4a MoE GEMM (MOE_QT=80), opt-in
     cl_kernel kernel_moe_expand_scale_q8_0 = nullptr;    // q8_0 per-block d -> uniform scale[16]
@@ -844,12 +874,12 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_moe_expand_scale_q5_K = nullptr;    // q5_K 6-bit s[] -> uniform scale[16]/min[8]
     cl_kernel kernel_gemv_moe_q5_k_f32_ns, kernel_gemm_moe_q5_k_f32_ns;
     cl_kernel kernel_gemv_moe_q6_k_f32_ns, kernel_gemm_moe_q6_k_f32_ns;
-    cl_kernel kernel_gemm_moe_q6_k_q8_1_dp4a;    // dp4a (int8) q6_K MoE prefill GEMM
+    cl_kernel kernel_gemm_moe_q6_k_q8_1_dp4a = nullptr;    // dp4a (int8) q6_K MoE prefill GEMM
     cl_kernel kernel_gemv_moe_mxfp4_f32, kernel_gemm_moe_mxfp4_f32;
     cl_kernel kernel_gemv_moe_mxfp4_f32_ns, kernel_gemm_moe_mxfp4_f32_ns, kernel_gemm_moe_mxfp4_f32_ns_bin;
     cl_kernel kernel_gemv_moe_mxfp4_f32_ns_wimg = nullptr;      // weight-as-texture MoE decode GEMV
-    cl_kernel kernel_gemm_moe_mxfp4_q8_1_dp4a;   // dp4a (int8) mxfp4 MoE prefill GEMM
-    cl_kernel kernel_gemm_moe_q4_0_q8_1_dp4a;    // dp4a (int8) q4_0 MoE prefill GEMM
+    cl_kernel kernel_gemm_moe_mxfp4_q8_1_dp4a = nullptr;   // dp4a (int8) mxfp4 MoE prefill GEMM
+    cl_kernel kernel_gemm_moe_q4_0_q8_1_dp4a = nullptr;    // dp4a (int8) q4_0 MoE prefill GEMM
     cl_kernel kernel_moe_reorder_b;
     cl_kernel kernel_moe_histogram, kernel_moe_scan, kernel_moe_fill, kernel_moe_scatter;
     cl_kernel kernel_moe_combine_f32 = nullptr;   // fused router-weight mul + cross-expert sum
@@ -1037,10 +1067,10 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_gemv_noshuffle_q1_0_f32;
     cl_kernel kernel_gemv_noshuffle_q4_k_f32;
     cl_kernel kernel_gemm_noshuffle_q4_k_f32;
-    cl_kernel kernel_gemm_noshuffle_q4_k_q8_1_dp4a;  // dp4a (int8) dense prefill GEMM
-    cl_kernel kernel_gemm_noshuffle_q4_k_q8_1_dp4a_wimg;  // dp4a dense prefill GEMM, weights via texture (X1 opt-in)
-    cl_kernel kernel_gemm_noshuffle_q5_k_q8_1_dp4a;  // dp4a (int8) dense q5_K prefill GEMM
-    cl_kernel kernel_gemm_noshuffle_q6_k_q8_1_dp4a;  // dp4a (int8) dense q6_K prefill GEMM
+    cl_kernel kernel_gemm_noshuffle_q4_k_q8_1_dp4a = nullptr;  // dp4a (int8) dense prefill GEMM
+    cl_kernel kernel_gemm_noshuffle_q4_k_q8_1_dp4a_wimg = nullptr;  // dp4a dense prefill GEMM, weights via texture (X1 opt-in)
+    cl_kernel kernel_gemm_noshuffle_q5_k_q8_1_dp4a = nullptr;  // dp4a (int8) dense q5_K prefill GEMM
+    cl_kernel kernel_gemm_noshuffle_q6_k_q8_1_dp4a = nullptr;  // dp4a (int8) dense q6_K prefill GEMM
     cl_kernel kernel_quant_a_q8_1;                    // plain activation q8_1 pre-pass
     cl_kernel kernel_gemv_noshuffle_q6_K_f32;
     cl_kernel kernel_gemm_noshuffle_q6_K_f32;
@@ -1640,6 +1670,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
     // those compiler versions since it is anyway not used for Adreno.
     if (backend_ctx->gpu_family != ADRENO ||
         backend_ctx->adreno_cl_compiler_version.newer_than_or_same(E031, 38, 11, 0) ||
+        backend_ctx->adreno_cl_compiler_version.type == E17 ||
         backend_ctx->adreno_cl_compiler_version.type == DX) {
 #ifdef GGML_OPENCL_EMBED_KERNELS
         const std::string kernel_src {
@@ -3490,7 +3521,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
     }
 
     // gemm_noshuffle_q5_0_q8_1_dp4a (dp4a dense q5_0 prefill GEMM)
-    {
+    if (backend_ctx->has_integer_dot) {
 #ifdef GGML_OPENCL_EMBED_KERNELS
         const std::string kernel_src {
             #include "gemm_noshuffle_q5_0_q8_1_dp4a.cl.h"
@@ -3580,7 +3611,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
     }
 
     // gemm_noshuffle_iq4_nl_q8_1_dp4a (dp4a dense IQ4_NL prefill GEMM)
-    {
+    if (backend_ctx->has_integer_dot) {
 #ifdef GGML_OPENCL_EMBED_KERNELS
         const std::string kernel_src {
             #include "gemm_noshuffle_iq4_nl_q8_1_dp4a.cl.h"
@@ -3595,7 +3626,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
     }
 
     // gemm_noshuffle_q4_0_q8_1_dp4a (dp4a dense q4_0 prefill GEMM)
-    {
+    if (backend_ctx->has_integer_dot) {
 #ifdef GGML_OPENCL_EMBED_KERNELS
         const std::string kernel_src {
             #include "gemm_noshuffle_q4_0_q8_1_dp4a.cl.h"
@@ -3708,7 +3739,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
     }
 
     // gemm_noshuffle_q4_k_q8_1_dp4a (dp4a dense prefill GEMM)
-    {
+    if (backend_ctx->has_integer_dot) {
 #ifdef GGML_OPENCL_EMBED_KERNELS
         const std::string kernel_src {
             #include "gemm_noshuffle_q4_k_q8_1_dp4a.cl.h"
@@ -3730,7 +3761,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
     }
 
     // gemm_noshuffle_q8_0_q8_1_dp4a (dp4a dense q8_0 prefill GEMM)
-    {
+    if (backend_ctx->has_integer_dot) {
 #ifdef GGML_OPENCL_EMBED_KERNELS
         const std::string kernel_src {
             #include "gemm_noshuffle_q8_0_q8_1_dp4a.cl.h"
@@ -3746,7 +3777,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
     }
 
     // gemm_noshuffle_q5_k_q8_1_dp4a (dp4a dense prefill GEMM for q5_K)
-    {
+    if (backend_ctx->has_integer_dot) {
 #ifdef GGML_OPENCL_EMBED_KERNELS
         const std::string kernel_src {
             #include "gemm_noshuffle_q5_k_q8_1_dp4a.cl.h"
@@ -3761,7 +3792,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
     }
 
     // gemm_noshuffle_q6_k_q8_1_dp4a (dp4a dense prefill GEMM for q6_K ffn_down/output)
-    {
+    if (backend_ctx->has_integer_dot) {
 #ifdef GGML_OPENCL_EMBED_KERNELS
         const std::string kernel_src {
             #include "gemm_noshuffle_q6_k_q8_1_dp4a.cl.h"
@@ -4091,7 +4122,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
     }
 
     // gemm_moe_q4_k_q8_1_dp4a (dp4a prefill GEMM)
-    {
+    if (backend_ctx->has_integer_dot) {
 #ifdef GGML_OPENCL_EMBED_KERNELS
         const std::string kernel_src {
             #include "gemm_moe_q4_k_q8_1_dp4a.cl.h"
@@ -4108,7 +4139,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
     }
 
     // gemm_moe_mxfp4_q8_1_dp4a (dp4a prefill GEMM)
-    {
+    if (backend_ctx->has_integer_dot) {
 #ifdef GGML_OPENCL_EMBED_KERNELS
         const std::string kernel_src {
             #include "gemm_moe_mxfp4_q8_1_dp4a.cl.h"
@@ -4125,7 +4156,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
     }
 
     // gemm_moe_q4_0_q8_1_dp4a (dp4a prefill GEMM)
-    {
+    if (backend_ctx->has_integer_dot) {
 #ifdef GGML_OPENCL_EMBED_KERNELS
         const std::string kernel_src {
             #include "gemm_moe_q4_0_q8_1_dp4a.cl.h"
@@ -4142,7 +4173,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
     }
 
     // gemm_moe_q8_1_dp4a (generic dp4a MoE GEMM; MOE_QT=80 -> q8_0 expert variant)
-    {
+    if (backend_ctx->has_integer_dot) {
 #ifdef GGML_OPENCL_EMBED_KERNELS
         const std::string kernel_src {
             #include "gemm_moe_q8_1_dp4a.cl.h"
@@ -4256,7 +4287,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
     }
 
     // gemm_moe_q6_k_q8_1_dp4a (dp4a q6_K MoE prefill GEMM)
-    {
+    if (backend_ctx->has_integer_dot) {
 #ifdef GGML_OPENCL_EMBED_KERNELS
         const std::string kernel_src {
             #include "gemm_moe_q6_k_q8_1_dp4a.cl.h"
@@ -5602,6 +5633,8 @@ static void ggml_opencl_print_backend_info(ggml_backend_opencl_device_context * 
         backend_ctx->has_subgroup_shuffle ? "true" : "false");
     GGML_LOG_INFO("ggml_opencl: device FP16 support: %s\n",
         backend_ctx->fp16_support ? "true" : "false");
+    GGML_LOG_INFO("ggml_opencl: khr dot product support: %s\n",
+        backend_ctx->has_integer_dot ? "true" : "false");
     GGML_LOG_INFO("ggml_opencl: mem base addr align: %u\n",
         backend_ctx->alignment);
     GGML_LOG_INFO("ggml_opencl: global mem size: %zu MB\n",
@@ -5809,6 +5842,12 @@ static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev) {
     backend_ctx->has_subgroup_shuffle =
         strstr(ext_buffer, "cl_khr_subgroup_shuffle") != NULL ||
         backend_ctx->has_qcom_subgroup_shuffle;
+
+    // check for cl_khr_integer_dot_product
+    // cl_qcom_dot_product8 uses signed * unsigned
+    // while cl_khr_integer_dot_product uses signed * signed -- we stick with khr for now
+    backend_ctx->has_integer_dot =
+        strstr(ext_buffer, "cl_khr_integer_dot_product") != NULL;
 
     cl_uint base_align_in_bits;
     CL_CHECK(clGetDeviceInfo(device, CL_DEVICE_MEM_BASE_ADDR_ALIGN, sizeof(cl_uint), &base_align_in_bits, NULL));
@@ -6923,8 +6962,31 @@ inline bool use_adreno_kernels(const ggml_backend_opencl_context *backend_ctx, c
     return threashold_ok;
 }
 
+static bool adreno_e17_compiler_quirks(const ggml_backend_opencl_context *backend_ctx) {
+    if (!backend_ctx || backend_ctx->gpu_family != GPU_FAMILY::ADRENO ||
+        backend_ctx->adreno_cl_compiler_version.type != ADRENO_CL_COMPILER_TYPE::E17) {
+        return false;
+    }
+    const char * env = getenv("GGML_OPENCL_ADRENO_E17_QUIRKS");
+    return !(env && env[0] == '0');
+}
+
 inline bool use_adreno_moe_kernels(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
-    GGML_UNUSED(backend_ctx);
+    // The moe weight repack kernels *_trans4_ns alias a private ushort8 through a uchar*.
+    // Certain compilers (found with some A7x and A6x) miscompiles this, corrupting the weights.
+    // So, exclude A6x and A7x from using Adreno MoE kernels for now.
+    // The quants that have a general mul_mat_id kernel fallback to the general version; the
+    // rest fallback to CPU.
+    if (backend_ctx && (backend_ctx->adreno_gen == ADRENO_GPU_GEN::A6X ||
+                        backend_ctx->adreno_gen == ADRENO_GPU_GEN::A7X ||
+                        backend_ctx->adreno_gen == ADRENO_GPU_GEN::ADRENO_UNKNOWN)) {
+        return false;
+    }
+
+    if (adreno_e17_compiler_quirks(backend_ctx)) {
+        return false;
+    }
+
     int ne01 = tensor->ne[1];
     return (((strstr(tensor->name, "ffn") != NULL) && (strstr(tensor->name, "exps") != NULL)) || (strstr(tensor->name, "as") != NULL)) && (ne01 % 32 == 0);
 }
@@ -7257,6 +7319,10 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
         case GGML_OP_MEAN:
             return op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_FLASH_ATTN_EXT: {
+            // The E17 compilers segfault while building FA kernels, skip E17 for now
+            if (adreno_e17_compiler_quirks(backend_ctx)) {
+                return false;
+            }
             const ggml_tensor * q = op->src[0];
             const ggml_tensor * k = op->src[1];
             const ggml_tensor * v = op->src[2];
@@ -7307,6 +7373,14 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
             const bool kv_combo_ok = is_f32_f32 || is_f16_f16 || is_f32_f16 ||
                                          is_f32_q8_0 || is_f32_q4_0 || is_f32_asym;
             if (!kv_combo_ok) {
+                return false;
+            }
+
+            // Some compilers for A7x (Adreno 740, compiler E031.41) crashes when
+            // building FA kernels with mixed or quant types (f32_f16, f32_q8_0, f32_q4_0)
+            // Here we skip all A7x for these kernels to avoid crash
+            if (backend_ctx->adreno_gen == ADRENO_GPU_GEN::A7X &&
+                (is_f32_f16 || is_f32_q8_0 || is_f32_q4_0)) {
                 return false;
             }
 
@@ -10516,10 +10590,16 @@ static ggml_backend_buffer_t ggml_backend_opencl_buffer_type_alloc_buffer(ggml_b
 
     cl_int err;
     cl_mem mem = clCreateBuffer(backend_ctx->context, CL_MEM_READ_WRITE, size, NULL, &err);
+#if GGML_OPENCL_TARGET_VERSION >= 300
+    // clCreateBufferWithProperties and cl_mem_properties are OpenCL 3.0. Drivers older than
+    // that do not export the symbol, so a build targeting them fails to link. The large
+    // buffer extension is only ever enabled on drivers that are well past 3.0, so this path
+    // is dead there anyway.
     if (err != CL_SUCCESS && backend_ctx->adreno_use_large_buffer) {
         cl_mem_properties props[] = { 0x41A6 /* CL_LARGE_BUFFER_QCOM */, 1, 0 };
         mem = clCreateBufferWithProperties(backend_ctx->context, props, CL_MEM_READ_WRITE, size, NULL, &err);
     }
+#endif
 
     if (err != CL_SUCCESS) {
         GGML_LOG_INFO("%s: failed to allocate %.2f MiB\n", __func__, size / 1024.0 / 1024.0);
@@ -15819,18 +15899,14 @@ static void ggml_cl_mul_mat_q4_0_f32_adreno(ggml_backend_t backend, const ggml_t
         CL_CHECK(clReleaseMemObject(b_sub_buf));
         CL_CHECK(clReleaseMemObject(b_img));
     } else {
-        // dp4a (int8) dense prefill GEMM: quant activations to q8_1, then the int8
-        // dp4a inner-loop GEMM, in place of the transpose + f16 half-dot kernel.
-        // q4_0 = d*(q-8); mirrors the IQ4_NL/q8_0 dense dp4a paths (+ the sum term).
-        // OPT-IN / DEFAULT OFF: correct, but neutral on X2E. q4_0's dequant
-        // ((q-8)*scale) is already trivial so the f16 GEMM is weight-BW-bound and the
-        // int8 ALU win has nothing to beat -- same as q5_0 dense (unlike IQ4_NL, whose
-        // codebook dequant is expensive enough for dp4a to help). Kept for A/B; force
-        // on with GGML_OPENCL_Q4_0_DENSE_DP4A=1. Needs N>8, K%32==0, M%64==0.
+        // dp4a (int8) dense prefill GEMM, default off
         static const char * q4_0_dense_dp4a_env = getenv("GGML_OPENCL_Q4_0_DENSE_DP4A");
-        const bool q4_0_dense_dp4a_on = q4_0_dense_dp4a_env
+        bool q4_0_dense_dp4a_on = q4_0_dense_dp4a_env
             ? (atoi(q4_0_dense_dp4a_env) != 0)
             : false;
+        // dot prod has to be available
+        q4_0_dense_dp4a_on = backend_ctx->has_integer_dot && q4_0_dense_dp4a_on;
+
         if (q4_0_dense_dp4a_on && backend_ctx->kernel_gemm_noshuffle_q4_0_q8_1_dp4a
                 && N > 8 && (K % 32 == 0) && (M % 64 == 0)) {
             cl_mem a_sub = nullptr;
@@ -16253,27 +16329,16 @@ static void ggml_cl_mul_mat_q5_0_f32_adreno(ggml_backend_t backend, const ggml_t
         CL_CHECK(clReleaseMemObject(b_sub_buf));
         CL_CHECK(clReleaseMemObject(b_img));
     } else {
-        // dp4a (int8) dense q5_0 prefill GEMM. Quantizes the [N,K] activations to
-        // q8_1 and runs the int8 dot instead of the f16 half-dot. Large-batch
-        // (ne1>8) only. q5_0 weight = (x-16)*d (x = nibble | hi<<4); x packed as a
-        // 0..31 byte (dp4a), the -16 centering folded into a single min term
-        // (d*16) via the q8_1 block sum. Reads the qs/qh/d buffers byte-identically
-        // to the f16 kernel (greedy byte-identical, MUL_MAT NMSE-OK).
-        //
-        // OPT-IN / DEFAULT OFF. Unlike q8_0/q4_K dense, dp4a is not a win for q5_0 on
-        // X2E: the q5_0 model is bottlenecked elsewhere, so the dense-GEMM int8 win
-        // has nothing to surface and the q8_1 prepass slightly hurts. Kept correct +
-        // opt-in for the X1 A/B (different texture-cache dynamic) and the
-        // weight-texture variant. Env: GGML_OPENCL_Q5_DENSE_DP4A=1.
-        // Weight-as-texture variant (X1 lever): routes the dominant qs nibble plane
-        // through an image1d_buffer (qh stays a buffer). Opt-in
-        // GGML_OPENCL_Q5_DENSE_DP4A_WIMG; when set it also forces the dp4a path on.
+        // dp4a (int8) dense q5_0 prefill GEMM, default off
         static const char * q5_dense_dp4a_env = getenv("GGML_OPENCL_Q5_DENSE_DP4A");
         static const char * q5_dense_wimg_env = getenv("GGML_OPENCL_Q5_DENSE_DP4A_WIMG");
         const bool q5_dense_wimg_on = q5_dense_wimg_env && (atoi(q5_dense_wimg_env) != 0);
-        const bool q5_dense_dp4a_on = q5_dense_wimg_on
+              bool q5_dense_dp4a_on = q5_dense_wimg_on
             ? true
             : (q5_dense_dp4a_env && (atoi(q5_dense_dp4a_env) != 0));
+        // dot prod has to be available
+        q5_dense_dp4a_on = backend_ctx->has_integer_dot && q5_dense_dp4a_on;
+
         if (q5_dense_dp4a_on && backend_ctx->kernel_gemm_noshuffle_q5_0_q8_1_dp4a
                 && N > 8 && (K % 32 == 0) && (M % 64 == 0)) {
             cl_mem a_sub = nullptr;
@@ -16708,15 +16773,14 @@ static void ggml_cl_mul_mat_iq4_nl_f32_adreno(ggml_backend_t backend, const ggml
     } else {
         // dp4a (int8) dense IQ4_NL prefill GEMM. Quantizes the [N,K] activations to
         // q8_1 and runs the int8 dot instead of the f16 half-dot. Large-batch
-        // (ne1>8) only. IQ4_NL weight = kvalues[nibble]*d; the codebook value IS the
-        // int8 (no min term), so this is the q8_0 dense case plus a nibble->int8 LUT
-        // unpack. Reads the q/d buffers byte-identically to the f16 kernel. No bin
-        // kernel for IQ4_NL -> baseline is f16, default ON for X2E (like q4_K/q6_K
-        // dense dp4a). X1 stays on f16. Env: GGML_OPENCL_IQ4NL_DENSE_DP4A.
+        // (ne1>8) only
         static const char * iq4nl_dense_dp4a_env = getenv("GGML_OPENCL_IQ4NL_DENSE_DP4A");
-        const bool iq4nl_dense_dp4a_on = iq4nl_dense_dp4a_env
+        bool iq4nl_dense_dp4a_on = iq4nl_dense_dp4a_env
             ? (atoi(iq4nl_dense_dp4a_env) != 0)
             : (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E);
+        // dot prod has to be available
+        iq4nl_dense_dp4a_on = backend_ctx->has_integer_dot && iq4nl_dense_dp4a_on;
+
         if (iq4nl_dense_dp4a_on && backend_ctx->kernel_gemm_noshuffle_iq4_nl_q8_1_dp4a
                 && N > 8 && (K % 32 == 0) && (M % 64 == 0)) {
             cl_mem a_sub = nullptr;
@@ -16966,13 +17030,15 @@ static void ggml_cl_mul_mat_q8_0_f32_adreno(ggml_backend_t backend, const ggml_t
         static const char * q8_dense_wimg_env = getenv("GGML_OPENCL_Q8_DENSE_DP4A_WIMG");
         const bool q8_dense_wimg_on = q8_dense_wimg_env && (atoi(q8_dense_wimg_env) != 0);
 
-        const bool q8_bin_loaded   = (backend_ctx->kernel_gemm_noshuffle_q8_0_f32_bin != nullptr);
+        const bool q8_bin_loaded = (backend_ctx->kernel_gemm_noshuffle_q8_0_f32_bin != nullptr);
         // bin kernel takes precedence
-        const bool q8_dense_dp4a_on = q8_dense_wimg_on
+        bool q8_dense_dp4a_on = q8_dense_wimg_on
             ? true
             : q8_dense_dp4a_env
             ? (atoi(q8_dense_dp4a_env) != 0)
             : (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E && !q8_bin_loaded);
+        // dot prod has to be available
+        q8_dense_dp4a_on = backend_ctx->has_integer_dot && q8_dense_dp4a_on;
 
         if (q8_dense_dp4a_on && backend_ctx->kernel_gemm_noshuffle_q8_0_q8_1_dp4a
                 && N > 8 && (K % 32 == 0) && (M % 64 == 0)) {
@@ -17379,12 +17445,15 @@ static void ggml_cl_mul_mat_q4_k_f32_adreno(ggml_backend_t backend, const ggml_t
         static const char * q4k_dense_dp4a_env = getenv("GGML_OPENCL_Q4K_DENSE_DP4A");
         static const char * q4k_dense_wimg_env = getenv("GGML_OPENCL_Q4K_DENSE_DP4A_WIMG");
 
-        const bool          q4k_dense_wimg_on  = q4k_dense_wimg_env && (atoi(q4k_dense_wimg_env) != 0);
-        const bool          q4k_dense_dp4a_on  = q4k_dense_wimg_on
+        const bool q4k_dense_wimg_on = q4k_dense_wimg_env && (atoi(q4k_dense_wimg_env) != 0);
+              bool q4k_dense_dp4a_on = q4k_dense_wimg_on
             ? true
             : q4k_dense_dp4a_env
             ? (atoi(q4k_dense_dp4a_env) != 0)
             : (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E);
+
+        // dp4 has to be available
+        q4k_dense_dp4a_on = backend_ctx->has_integer_dot && q4k_dense_dp4a_on;
 
         // Min N for the dp4a prefill GEMM, default 9, i.e., ne1 > 8
         static const char * q4k_dp4a_minn_env = getenv("GGML_OPENCL_Q4K_DP4A_MINN");
@@ -17608,9 +17677,11 @@ static void ggml_cl_mul_mat_q6_K_f32_adreno(ggml_backend_t backend, const ggml_t
 
         // dp4a (int8) dense q6_K prefill GEMM
         static const char * q6k_dense_dp4a_env = getenv("GGML_OPENCL_Q6K_DENSE_DP4A");
-        static const bool   q6k_dense_dp4a_on  = (q6k_dense_dp4a_env != nullptr)
+                     bool   q6k_dense_dp4a_on  = (q6k_dense_dp4a_env != nullptr)
                                                    ? (atoi(q6k_dense_dp4a_env) != 0)
                                                    : (backend_ctx->adreno_gen != ADRENO_GPU_GEN::X1E);
+        // dot prod has to be available
+        q6k_dense_dp4a_on = backend_ctx->has_integer_dot && q6k_dense_dp4a_on;
 
         const bool is_output_w_dp4a = strncmp(src0->name, "output", 6) == 0 ||
                                       strncmp(src0->name, "token_embd", 10) == 0;
@@ -17901,9 +17972,11 @@ static void ggml_cl_mul_mat_q5_K_f32_adreno(ggml_backend_t backend, const ggml_t
 
         // dp4a (int8) dense q5_K prefill GEMM
         static const char * q5k_dense_dp4a_env = getenv("GGML_OPENCL_Q5K_DENSE_DP4A");
-        const bool          q5k_dense_dp4a_on  = q5k_dense_dp4a_env
+                     bool   q5k_dense_dp4a_on  = q5k_dense_dp4a_env
             ? (atoi(q5k_dense_dp4a_env) != 0)
             : (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E);
+        // dot prod has to be available
+        q5k_dense_dp4a_on = backend_ctx->has_integer_dot && q5k_dense_dp4a_on;
 
         if (q5k_dense_dp4a_on && ne1 > 8 && (ne00 % 32 == 0) && (ne01 % 64 == 0)) {
             const int Mm = ne01, Nn = ne1, Kk = ne00;
@@ -20640,6 +20713,8 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     bool use_moe_dp4a = q4_0_moe_dp4a_env
                         ? (atoi(q4_0_moe_dp4a_env) != 0)
                         : (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E);
+                    // dot prod has to be available
+                    use_moe_dp4a = backend_ctx->has_integer_dot && use_moe_dp4a;
                     // bin kernel takes precedence
                     use_moe_dp4a = use_moe_dp4a && backend_ctx->kernel_gemm_moe_q4_0_f32_ns_bin == nullptr;
 
@@ -21815,6 +21890,8 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     bool  use_moe_dp4a = (q4k_moe_dp4a_env != nullptr)
                                          ? (atoi(q4k_moe_dp4a_env) != 0)
                                          : (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E || backend_ctx->adreno_gen == ADRENO_GPU_GEN::X1E);
+                    // dot prod has to be available
+                    use_moe_dp4a = backend_ctx->has_integer_dot && use_moe_dp4a;
                     // bin kernel takes precedence
                     use_moe_dp4a = use_moe_dp4a && backend_ctx->kernel_gemm_moe_q4_k_f32_ns_bin == nullptr;
 
@@ -22316,10 +22393,12 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
 
                     // dp4a (int8) q6_K MoE prefill GEMM
                     static const char * q6k_moe_dp4a_env = getenv("GGML_OPENCL_Q6K_MOE_DP4A");
-                    static const bool   use_moe_dp4a = (q6k_moe_dp4a_env != nullptr)
+                                 bool   use_moe_dp4a = (q6k_moe_dp4a_env != nullptr)
                                                          ? (atoi(q6k_moe_dp4a_env) != 0)
                                                          : (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E
                                                             || backend_ctx->adreno_gen == ADRENO_GPU_GEN::X1E);
+                    // dot prod has to be available
+                    use_moe_dp4a = backend_ctx->has_integer_dot && use_moe_dp4a;
 
                     cl_buffer_region region;
                     region.origin = 0;
@@ -22569,6 +22648,8 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
                     bool use_moe_dp4a = mxfp4_moe_dp4a_env
                         ? (atoi(mxfp4_moe_dp4a_env) != 0)
                         : (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E);
+                    // dot prod has to be available
+                    use_moe_dp4a = backend_ctx->has_integer_dot && use_moe_dp4a;
                     // bin kernel takes precedence
                     use_moe_dp4a = use_moe_dp4a && backend_ctx->kernel_gemm_moe_mxfp4_f32_ns_bin == nullptr;
 
