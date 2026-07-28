@@ -993,7 +993,9 @@ static void llama_sampler_greedy_backend_apply(
     GGML_UNUSED(gf);
     GGML_UNUSED(smpl);
 
-    struct ggml_tensor * curl = ggml_argmax(ctx, data->logits);
+    struct ggml_tensor * logits = ggml_reshape_1d(ctx, data->logits, ggml_nelements(data->logits));
+
+    struct ggml_tensor * curl = ggml_argmax(ctx, logits);
     ggml_set_name(curl, "greedy_argmax");
 
     data->sampled = curl;
@@ -1292,7 +1294,9 @@ static void llama_sampler_top_k_backend_apply(
         struct llama_sampler_data * data) {
     auto * sctx = (llama_sampler_top_k *) smpl->ctx;
 
-    struct ggml_tensor * top_k = ggml_top_k(ctx, data->logits, sctx->k);
+    struct ggml_tensor * logits = ggml_reshape_1d(ctx, data->logits, ggml_nelements(data->logits));
+
+    struct ggml_tensor * top_k = ggml_top_k(ctx, logits, sctx->k);
     ggml_set_name(top_k, "top_k");
 
     if (data->candidates) {
@@ -1303,10 +1307,9 @@ static void llama_sampler_top_k_backend_apply(
         data->candidates = top_k;
     }
 
-    struct ggml_tensor * logits_rows = ggml_reshape_2d(ctx, data->logits, 1, data->logits->ne[0]);
-    struct ggml_tensor * top_k_rows = ggml_get_rows(ctx, logits_rows, top_k);
-    data->logits = top_k_rows;
-    ggml_set_name(top_k_rows, "top_k_rows");
+    struct ggml_tensor * logits_rows = ggml_reshape_2d(ctx, logits, 1, logits->ne[0]);
+    data->logits = ggml_get_rows(ctx, logits_rows, top_k);
+    ggml_set_name(data->logits, "top_k_rows");
 
     GGML_UNUSED(gf);
 }
@@ -1438,7 +1441,7 @@ static void llama_sampler_top_p_backend_apply(
     auto * sctx = (llama_sampler_top_p *) smpl->ctx;
 
     // flatten
-    data->logits = ggml_reshape_1d(ctx, data->logits, ggml_nelements(data->logits));
+    struct ggml_tensor * logits = ggml_reshape_1d(ctx, data->logits, ggml_nelements(data->logits));
 
     auto ggml_sort = [ctx](struct ggml_tensor * a, struct ggml_tensor * b) {
         GGML_ASSERT(ggml_nrows(a) == 1);
@@ -1448,14 +1451,14 @@ static void llama_sampler_top_p_backend_apply(
     };
 
     // Get the sorted logits in descending order.
-    struct ggml_tensor * sorted_idx = ggml_argsort(ctx, data->logits, GGML_SORT_ORDER_DESC);
+    struct ggml_tensor * sorted_idx = ggml_argsort(ctx, logits, GGML_SORT_ORDER_DESC);
     ggml_set_name(sorted_idx, "top_p_sorted_idx");
 
     // Do the sorting via reshape + get_rows
-    struct ggml_tensor * sorted_logits = ggml_sort(data->logits, sorted_idx);
+    struct ggml_tensor * sorted_logits = ggml_sort(logits, sorted_idx);
     ggml_set_name(sorted_logits, "top_p_sorted_logits");
 
-    sorted_logits = ggml_reshape_1d(ctx, sorted_logits, data->logits->ne[0]);
+    sorted_logits = ggml_reshape_1d(ctx, sorted_logits, logits->ne[0]);
     struct ggml_tensor * softmax = ggml_soft_max(ctx, sorted_logits);
     ggml_set_name(softmax, "top_p_softmax");
 
@@ -1632,10 +1635,12 @@ static void llama_sampler_min_p_backend_apply(
         struct llama_sampler_data * data) {
     auto * sctx = (llama_sampler_min_p *) smpl->ctx;
 
-    struct ggml_tensor * max_idx = ggml_argmax(ctx, data->logits);
+    struct ggml_tensor * logits = ggml_reshape_1d(ctx, data->logits, ggml_nelements(data->logits));
+
+    struct ggml_tensor * max_idx = ggml_argmax(ctx, logits);
     ggml_set_name(max_idx, "max_idx");
 
-    struct ggml_tensor * logits_rows = ggml_reshape_2d(ctx, data->logits, 1, data->logits->ne[0]);
+    struct ggml_tensor * logits_rows = ggml_reshape_2d(ctx, logits, 1, logits->ne[0]);
     ggml_set_name(logits_rows, "logits_rows");
 
     struct ggml_tensor * max_logit = ggml_get_rows(ctx, logits_rows, max_idx);
@@ -1646,7 +1651,7 @@ static void llama_sampler_min_p_backend_apply(
     ggml_set_name(threshold, "min_p_threshold");
 
     // Subtract the threshold from logits.
-    struct ggml_tensor * sub = ggml_sub(ctx, data->logits, threshold);
+    struct ggml_tensor * sub = ggml_sub(ctx, logits, threshold);
 
     // Create a mask where logits below the threshold are 0 (discard),
     // and others are 1 (keep).
@@ -1658,7 +1663,7 @@ static void llama_sampler_min_p_backend_apply(
     struct ggml_tensor * min_p_bias = ggml_log(ctx, mask);
     ggml_set_name(min_p_bias, "min_p_bias");
 
-    data->logits = ggml_add(ctx, data->logits, min_p_bias);
+    data->logits = ggml_add(ctx, logits, min_p_bias);
     ggml_set_name(data->logits, "min_p_logits");
 
     GGML_UNUSED(gf);
@@ -1835,8 +1840,10 @@ static void llama_sampler_backend_temp_sampling(
         struct llama_sampler_data * data,
         float                       temp) {
     if (temp <= 0.0f) {
+        struct ggml_tensor * logits = ggml_reshape_1d(ctx, data->logits, ggml_nelements(data->logits));
+
         // Find the most probable token index.
-        struct ggml_tensor * max_idx = ggml_argmax(ctx, data->logits);
+        struct ggml_tensor * max_idx = ggml_argmax(ctx, logits);
         ggml_set_name(max_idx, "temp_max_idx");
 
         if (data->candidates) {
@@ -1846,7 +1853,7 @@ static void llama_sampler_backend_temp_sampling(
             data->candidates = max_idx;
         }
 
-        struct ggml_tensor * logits_rows = ggml_reshape_2d(ctx, data->logits, 1, ggml_nelements(data->logits));
+        struct ggml_tensor * logits_rows = ggml_reshape_2d(ctx, logits, 1, ggml_nelements(logits));
         data->logits = ggml_get_rows(ctx, logits_rows, max_idx);
 
         return;
@@ -2025,13 +2032,15 @@ static void llama_sampler_temp_ext_backend_apply(
         return;
     }
 
+    struct ggml_tensor * logits = ggml_reshape_1d(ctx, data->logits, ggml_nelements(data->logits));
+
     // Calculate min_temp, max_temp, and max_entropy.
     const float min_temp    = std::max(0.0f, sctx->temp - sctx->delta);
     const float max_temp    = sctx->temp + sctx->delta;
-    const float max_entropy = logf(data->logits->ne[0]);
+    const float max_entropy = logf(logits->ne[0]);
 
     // Calculate the probabilities.
-    struct ggml_tensor * probs = ggml_soft_max(ctx, data->logits);
+    struct ggml_tensor * probs = ggml_soft_max(ctx, logits);
     ggml_set_name(probs, "temp_ext_softmax_probs");
 
     // Clamp probabilities to avoid log(0) which would give -inf
@@ -2069,7 +2078,7 @@ static void llama_sampler_temp_ext_backend_apply(
     ggml_set_name(dyn_temp,         "temp_ext_dyn_temp");
 
     // Scale the logits by the dynamic temperature
-    struct ggml_tensor * scaled_logits = ggml_div(ctx, data->logits, dyn_temp);
+    struct ggml_tensor * scaled_logits = ggml_div(ctx, logits, dyn_temp);
     ggml_set_name(scaled_logits, "temp_ext_scaled_logits");
 
     data->logits = scaled_logits;
