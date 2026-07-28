@@ -602,6 +602,8 @@ typedef struct {
     int32_t  IL;
     int32_t  K;
     int32_t  s0;
+    int32_t  OL;
+    int32_t  OC;
     uint64_t nb0;
     uint64_t nb1;
 } ggml_metal_kargs_conv_transpose_1d;

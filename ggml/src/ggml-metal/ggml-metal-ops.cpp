@@ -3977,6 +3977,8 @@ int ggml_metal_op_conv_transpose_1d(ggml_metal_op_t ctx, int idx) {
         /*.IL  =*/ IL,
         /*.K   =*/ K,
         /*.s0  =*/ s0,
+        /*.OL  =*/ OL,
+        /*.OC  =*/ OC,
         /*.nb0 =*/ nb0,
         /*.nb1 =*/ nb1,
     };
@@ -3989,7 +3991,9 @@ int ggml_metal_op_conv_transpose_1d(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
     ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
 
-    ggml_metal_encoder_dispatch_threadgroups(enc, OL, OC, 1, 1, 1, 1);
+    const int nth = std::min(ggml_metal_pipeline_max_theads_per_threadgroup(pipeline), 256);
+
+    ggml_metal_encoder_dispatch_threadgroups(enc, (OL + nth - 1)/nth, OC, 1, nth, 1, 1);
 
     return 1;
 }
