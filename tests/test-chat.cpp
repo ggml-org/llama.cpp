@@ -730,6 +730,71 @@ static common_chat_tool imaginary_number_tool{
     })",
 };
 
+static common_chat_tool nested_args_tool{
+    /* .name = */ "nested_args",
+    /* .description = */ "Tool with nested array arguments",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "tags": {
+                "type": "array",
+                "items": { "type": "string" }
+            },
+            "entries": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "integer" },
+                        "label": { "type": "string" }
+                    },
+                    "required": ["id", "label"]
+                }
+            }
+        },
+        "required": ["tags", "entries"]
+    })",
+};
+
+static common_chat_tool union_args_tool{
+    /* .name = */ "union_args",
+    /* .description = */ "Tool with union arguments",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "filter": {
+                "anyOf": [
+                    { "type": "array", "items": { "type": "string" } },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "field": { "type": "string" },
+                            "op": { "type": "string" }
+                        },
+                        "required": ["field", "op"]
+                    }
+                ]
+            },
+            "label": {
+                "oneOf": [
+                    { "type": "string" },
+                    { "type": "object", "properties": { "text": { "type": "string" } } }
+                ]
+            },
+            "limit": {
+                "oneOf": [
+                    { "type": "integer" },
+                    {
+                        "type": "object",
+                        "properties": { "max": { "type": "integer" } },
+                        "required": ["max"]
+                    }
+                ]
+            }
+        }
+    })",
+};
+
 static common_chat_tool nullable_string_tool{
     /* .name = */ "set_nullable_str",
     /* .description = */ "Set a nullable string value",
@@ -4840,6 +4905,370 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
 
         tst.test(" thinking\n</think>\n\nHello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
+            .messages({ message_user, message_assist_prefill_reasoning })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_REASONING)
+            .expect_reasoning("I'm thinking")
+            .expect_content("Hello, world!\nWhat's up?")
+            .run();
+    }
+
+    // MiniMax-M3 tests - namespaced XML invoke format, the parameter name is the tag
+    // Format:
+    //   ]<]minimax[>[<tool_call>
+    //   ]<]minimax[>[<invoke name="get_time">]<]minimax[>[<city>Tokyo]<]minimax[>[</city>]<]minimax[>[</invoke>
+    //   ]<]minimax[>[</tool_call>
+    // Reasoning uses <mm:think>...</mm:think>. The generation prompt is only "]~b]ai\n", so the model
+    // opens the thinking block itself; a turn without reasoning is prefixed with a bare </mm:think>.
+    {
+        auto tst = peg_tester("models/templates/MiniMax-M3.jinja", detailed_debug);
+
+        // Content only (bare </mm:think> prefix)
+        tst.test("</mm:think>Hello, world!\nWhat's up?")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist)
+            .expect_reconstruction()
+            .run();
+
+        // Thinking + content
+        tst.test("<mm:think>I'm\nthinking</mm:think>Hello, world!\nWhat's up?")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist_thoughts)
+            .expect_reconstruction()
+            .run();
+
+        // Thinking + tool call (single, string param)
+        tst.test(
+               "<mm:think>Let me check the time</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"get_time\">"
+               "]<]minimax[>[<city>Tokyo]<]minimax[>[</city>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ get_time_tool })
+            .expect(message_with_tool_calls_and_reasoning("get_time", R"({"city": "Tokyo"})", "Let me check the time"))
+            .expect_reconstruction()
+            .run();
+
+        // Tool call without reasoning, integer param
+        tst.test(
+               "</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"special_function\">"
+               "]<]minimax[>[<arg1>1]<]minimax[>[</arg1>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .expect_reconstruction()
+            .run();
+
+        // Tool call with no parameters
+        tst.test(
+               "<mm:think>Let's call a tool:</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"empty_args\">"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ empty_args_tool })
+            .expect(message_with_reasoning_and_tool_call("Let's call a tool:", "empty_args", "{}"))
+            .expect_reconstruction()
+            .run();
+
+        // Multiple parallel tool calls in one block
+        tst.test(
+               "<mm:think>Calling both</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"get_time\">"
+               "]<]minimax[>[<city>Paris]<]minimax[>[</city>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[<invoke name=\"get_weather\">"
+               "]<]minimax[>[<city>Paris]<]minimax[>[</city>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .parallel_tool_calls(true)
+            .tools({ get_time_tool, get_weather_tool })
+            .expect(message_with_reasoning_content_and_multiple_tool_calls(
+                "Calling both", "",
+                { { "get_time", R"({"city": "Paris"})" }, { "get_weather", R"({"city": "Paris"})" } }))
+            .expect_reconstruction()
+            .run();
+
+        // Content before the tool call block
+        tst.test(
+               "<mm:think>Thinking about it</mm:think>"
+               "Let me call the function."
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"special_function\">"
+               "]<]minimax[>[<arg1>1]<]minimax[>[</arg1>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect_reasoning("Thinking about it")
+            .expect_content("Let me call the function.")
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // Negative number
+        tst.test(
+               "<mm:think>Test negative</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"magic_int\">"
+               "]<]minimax[>[<ref>-14]<]minimax[>[</ref>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ magic_int_tool })
+            .expect_reasoning("Test negative")
+            .expect_tool_calls({
+                { "magic_int", R"({"ref": -14})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // Decimal number
+        tst.test(
+               "<mm:think>Test decimal</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"amount\">"
+               "]<]minimax[>[<orig>3.14]<]minimax[>[</orig>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ amount_tool })
+            .expect_reasoning("Test decimal")
+            .expect_tool_calls({
+                { "amount", R"({"orig": 3.14})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // Boolean
+        tst.test(
+               "<mm:think>Test boolean</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"toggle\">"
+               "]<]minimax[>[<enabled>true]<]minimax[>[</enabled>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ toggle_tool })
+            .expect_reasoning("Test boolean")
+            .expect_tool_calls({
+                { "toggle", R"({"enabled": true})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // Multiple params of mixed types (required int first, then optional string)
+        tst.test(
+               "<mm:think>Multi-arg call</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"magic_int\">"
+               "]<]minimax[>[<ref>42]<]minimax[>[</ref>"
+               "]<]minimax[>[<name>foo bar]<]minimax[>[</name>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ magic_int_tool })
+            .expect_reasoning("Multi-arg call")
+            .expect_tool_calls({
+                { "magic_int", R"({"ref": 42, "name": "foo bar"})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // Nested object param, expanded into one element per key
+        tst.test(
+               "<mm:think>Nested object</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"imaginary_number\">"
+               "]<]minimax[>[<number>"
+               "]<]minimax[>[<real>1.5]<]minimax[>[</real>"
+               "]<]minimax[>[<imaginary>-2.5]<]minimax[>[</imaginary>"
+               "]<]minimax[>[</number>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ imaginary_number_tool })
+            .expect_reasoning("Nested object")
+            .expect_tool_calls({
+                { "imaginary_number", R"({"number": {"real": 1.5, "imaginary": -2.5}})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // Array params, expanded into <item> elements (of scalars and of objects)
+        tst.test(
+               "<mm:think>Nested arrays</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"nested_args\">"
+               "]<]minimax[>[<tags>"
+               "]<]minimax[>[<item>alpha]<]minimax[>[</item>"
+               "]<]minimax[>[<item>beta]<]minimax[>[</item>"
+               "]<]minimax[>[</tags>"
+               "]<]minimax[>[<entries>"
+               "]<]minimax[>[<item>"
+               "]<]minimax[>[<id>1]<]minimax[>[</id>"
+               "]<]minimax[>[<label>one]<]minimax[>[</label>"
+               "]<]minimax[>[</item>"
+               "]<]minimax[>[</entries>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ nested_args_tool })
+            .expect_reasoning("Nested arrays")
+            .expect_tool_calls({
+                { "nested_args", R"({"tags": ["alpha", "beta"], "entries": [{"id": 1, "label": "one"}]})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // Union params (anyOf/oneOf), expanded as a choice of the alternatives
+        tst.test(
+               "<mm:think>Union array</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"union_args\">"
+               "]<]minimax[>[<filter>"
+               "]<]minimax[>[<item>alpha]<]minimax[>[</item>"
+               "]<]minimax[>[<item>beta]<]minimax[>[</item>"
+               "]<]minimax[>[</filter>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ union_args_tool })
+            .expect_reasoning("Union array")
+            .expect_tool_calls({
+                { "union_args", R"({"filter": ["alpha", "beta"]})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // oneOf between a scalar and an object
+        tst.test(
+               "<mm:think>Union scalar</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"union_args\">"
+               "]<]minimax[>[<limit>5]<]minimax[>[</limit>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ union_args_tool })
+            .expect_reasoning("Union scalar")
+            .expect_tool_calls({
+                { "union_args", R"({"limit": 5})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        tst.test(
+               "<mm:think>Union nested</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"union_args\">"
+               "]<]minimax[>[<limit>"
+               "]<]minimax[>[<max>10]<]minimax[>[</max>"
+               "]<]minimax[>[</limit>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ union_args_tool })
+            .expect_reasoning("Union nested")
+            .expect_tool_calls({
+                { "union_args", R"({"limit": {"max": 10}})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // A union with a string alternative is a string
+        tst.test(
+               "<mm:think>Union string</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"union_args\">"
+               "]<]minimax[>[<label>hi]<]minimax[>[</label>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ union_args_tool })
+            .expect_reasoning("Union string")
+            .expect_tool_calls({
+                { "union_args", R"({"label": "hi"})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // ... even when the value looks structured
+        tst.test(
+               "<mm:think>Union string</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"union_args\">"
+               "]<]minimax[>[<label>"
+               "]<]minimax[>[<text>hi]<]minimax[>[</text>"
+               "]<]minimax[>[</label>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ union_args_tool })
+            .expect_reasoning("Union string")
+            .expect_tool_calls({
+                { "union_args", R"({"label": "]<]minimax[>[<text>hi]<]minimax[>[</text>"})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // Edge case: empty reasoning followed by a tool call
+        tst.test(
+               "<mm:think></mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"get_time\">"
+               "]<]minimax[>[<city>XYZCITY]<]minimax[>[</city>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ get_time_tool })
+            .expect(message_with_tool_calls("get_time", R"({"city": "XYZCITY"})"))
+            .run();
+
+        // Continuation tests
+        tst.test("world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
+            .messages({ message_user, message_assist_prefill_content })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_CONTENT)
+            .expect_reasoning("I'm thinking")
+            .expect_content("Hello, world!\nWhat's up?")
+            .run();
+
+        tst.test(" thinking</mm:think>Hello, world!\nWhat's up?")
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .enable_thinking(true)
             .messages({ message_user, message_assist_prefill_reasoning })
