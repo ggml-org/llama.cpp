@@ -2363,6 +2363,19 @@ static common_chat_params common_chat_params_init_kimi_k3(const common_chat_temp
     data.thinking_start_tag = THINK_START;
     data.thinking_end_tags  = { THINK_END };
 
+    // Per-role message-start delimiters. User/assistant messages carry only the
+    // role attribute, so their full opener (through <|sep|>) is used. System and
+    // tool messages continue with more attributes (type=/tool=/index=), so those
+    // delimiters stop after the role's closing quote - verified against the K3
+    // tokenizer that the quote is always its own token and never merges with the
+    // following attribute text, keeping the token-level prefix match exact.
+    data.message_delimiters = {
+        { COMMON_CHAT_ROLE_ASSISTANT, "<|open|>message role=\"assistant\"<|sep|>" },
+        { COMMON_CHAT_ROLE_USER,      "<|open|>message role=\"user\"<|sep|>"      },
+        { COMMON_CHAT_ROLE_TOOL,      "<|open|>message role=\"tool\""             },
+        { COMMON_CHAT_ROLE_SYSTEM,    "<|open|>message role=\"system\""           },
+    };
+
     auto has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
     auto extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
     auto include_grammar   = has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
