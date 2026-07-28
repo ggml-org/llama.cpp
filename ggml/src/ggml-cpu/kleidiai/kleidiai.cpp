@@ -158,6 +158,10 @@ static void add_smcus_from_smidr(uint64_t smidr, size_t & num_private, std::map<
     const uint32_t affinity2 = (uint32_t)((smidr >> 32) & 0xFFFFFu);
     const uint32_t id = (affinity2 << 12) | affinity;
 
+    if (nsmc == 0xF) {
+        GGML_LOG_WARN("kleidiai: NSMC detected as 0xF indicating reserved value, setting min safe shared SMCU count to 1");
+    }
+
     switch (sh) {
         case 2: // private SMCU
             ++num_private;
