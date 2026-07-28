@@ -4271,29 +4271,6 @@ static ggml_backend_buffer_type_t ggml_backend_hexagon_device_get_host_buffer_ty
     return &sess->host_buffer_type;
 }
 
-static bool ggml_hexagon_supported_buffer(ggml_hexagon_session *sess, const struct ggml_tensor * t) {
-    if (t && t->buffer) {
-        if (ggml_backend_buffer_is_hexagon(t->buffer)      == false) return false; // not our buffer
-        if (ggml_backend_hexagon_buffer_get_sess(t->buffer) != sess) return false; // wrong session
-    }
-    return true;
-}
-
-static bool ggml_hexagon_supported_buffers(ggml_hexagon_session *sess, const struct ggml_tensor * t) {
-    // all srcs & dsts must be mapped to the same session
-    if (!ggml_hexagon_supported_buffer(sess, t)) {
-        return false;
-    }
-
-    for (int i = 0; i < GGML_MAX_SRC; i++) {
-        if (!ggml_hexagon_supported_buffer(sess, t->src[i])) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
 static bool ggml_hexagon_supported_cpy(const struct ggml_hexagon_session * sess, const struct ggml_tensor * op) {
     GGML_UNUSED(sess);
 
@@ -4389,10 +4366,27 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
         return false;
     }
 
-    // all srcs & dsts must be mapped to the same session
-    if (!ggml_hexagon_supported_buffers(sess, op)) {
+    // check if all sources & destination belong to the same session
+    // (similar to CUDA's device mismatch check)
+    auto check_session = [sess](const struct ggml_tensor * t) -> bool {
+        if (t && t->buffer && ggml_backend_buffer_is_hexagon(t->buffer)) {
+            if (ggml_backend_hexagon_buffer_get_sess(t->buffer) != sess) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    if (!check_session(op)) {
         ggml_hexagon_dump_op_supp(sess->name, op, false);
         return false;
+    }
+
+    for (int i = 0; i < GGML_MAX_SRC; i++) {
+        if (!check_session(op->src[i])) {
+            ggml_hexagon_dump_op_supp(sess->name, op, false);
+            return false;
+        }
     }
 
     bool supp = false;
