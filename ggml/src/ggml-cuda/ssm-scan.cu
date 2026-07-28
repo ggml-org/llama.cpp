@@ -418,6 +418,7 @@ __global__ void ssm_ssd_prepare_dt_kernel(
             cs_seq[t * n_head + h] = running + sdata[threadIdx.x];
         }
         running += sdata[BLOCK_SIZE - 1];
+        __syncthreads();
     }
 #endif
 }
