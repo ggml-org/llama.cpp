@@ -5516,10 +5516,16 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
     }
 }
 
+static bool ggml_cuda_is_gfx1151(const int device) {
+    return ggml_cuda_info().devices[device].cc == GGML_CUDA_CC_RDNA3_5 + 1;
+}
+
 static bool ggml_backend_cuda_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
     ggml_backend_cuda_device_context * dev_ctx = (ggml_backend_cuda_device_context *) dev->context;
-    const bool integrated = ggml_cuda_info().devices[dev_ctx->device].integrated;
-    return (ggml_backend_buft_is_cuda(buft) && buft->device == dev) || (integrated && ggml_backend_buft_is_cuda_host(buft));
+    const bool integrated        = ggml_cuda_info().devices[dev_ctx->device].integrated;
+    const bool direct_host_access = integrated && !ggml_cuda_is_gfx1151(dev_ctx->device);
+    return (ggml_backend_buft_is_cuda(buft) && buft->device == dev) ||
+           (direct_host_access && ggml_backend_buft_is_cuda_host(buft));
 }
 
 static int64_t get_op_batch_size(const ggml_tensor * op) {
