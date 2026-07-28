@@ -1116,7 +1116,9 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
 }
 
 static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(const struct ggml_tensor * tensor, bool assume_sync) {
-    GGML_ASSERT(ggml_backend_buffer_is_meta(tensor->buffer));
+    if (tensor->buffer == nullptr || !ggml_backend_buffer_is_meta(tensor->buffer)) {
+        return { GGML_BACKEND_SPLIT_AXIS_MIRRORED, {0}, {1}, 1 };
+    }
     ggml_backend_meta_buffer_context * buf_ctx = (ggml_backend_meta_buffer_context *) tensor->buffer->context;
     return ggml_backend_meta_get_split_state(buf_ctx->get_simple_tensor_container(tensor), tensor, assume_sync);
 }
@@ -1498,6 +1500,16 @@ static const ggml_backend_buffer_i ggml_backend_meta_buffer_iface = {
 
 bool ggml_backend_buffer_is_meta(ggml_backend_buffer_t buf) {
     return buf != nullptr && buf->iface.free_buffer == ggml_backend_meta_buffer_iface.free_buffer;
+}
+
+void ggml_backend_meta_buffer_set_usage(ggml_backend_buffer_t buffer, enum ggml_backend_buffer_usage usage) {
+    GGML_ASSERT(ggml_backend_buffer_is_meta(buffer));
+    ggml_backend_meta_buffer_context * buf_ctx = (ggml_backend_meta_buffer_context *) buffer->context;
+    for (size_t i = 0; i < buf_ctx->bufs.size(); i++) {
+        if (buf_ctx->bufs[i]) {
+            ggml_backend_buffer_set_usage(buf_ctx->bufs[i].get(), usage);
+        }
+    }
 }
 
 static ggml_backend_buffer_t ggml_backend_meta_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
