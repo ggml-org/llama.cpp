@@ -6,6 +6,7 @@
 #include "arg.h"
 #include "common.h"
 #include "hf-cache.h"
+#include "log.h"
 #include "model-resolution.h"
 #include "speculative.h"
 
@@ -19,12 +20,17 @@
 
 namespace fs = std::filesystem;
 
+// the plan case being checked, named by the failure report below
+static const char * current_case = "";
+
 // independent of NDEBUG, so the checks stay alive in Release builds
-#define REQUIRE(x) do {                                                         \
-    if (!(x)) {                                                                 \
-        fprintf(stderr, "%s:%d: REQUIRE(%s) failed\n", __FILE__, __LINE__, #x); \
-        std::abort();                                                           \
-    }                                                                           \
+#define REQUIRE(x) do {                                                        \
+    if (!(x)) {                                                                \
+        fprintf(stderr, "%s:%d: REQUIRE(%s) failed%s%s\n",                     \
+                __FILE__, __LINE__, #x,                                        \
+                *current_case ? " on case " : "", current_case);               \
+        std::abort();                                                          \
+    }                                                                          \
 } while (0)
 
 // fixtures mimicking real repo layouts
@@ -225,6 +231,7 @@ static const plan_case plan_cases[] = {
 };
 
 static void check_plan(const plan_case & c, const hf_cache::hf_files & files) {
+    current_case = c.name;
     model_resolution::opts opts;
     opts.mmproj = c.sidecars;
     opts.mtp    = c.sidecars;
@@ -256,6 +263,7 @@ static void check_plan(const plan_case & c, const hf_cache::hf_files & files) {
     if (!plan.primary.path.empty()) {
         REQUIRE(model_resolution::gguf_filename_is_model(plan.primary.path));
     }
+    current_case = "";
 }
 
 static void test_plan_resolution() {
@@ -417,6 +425,10 @@ static void set_env(const char * name, const char * value) {
 }
 
 int main(void) {
+    // the negative cases legitimately log errors on every permutation,
+    // keep the output down to the printf reports and the failure reports
+    common_log_pause(common_log_main());
+
     // the cache location is read once by hf-cache.cpp, point it at the fake
     // cache before anything else touches it
     set_env("LLAMA_CACHE", cache_dir.string().c_str());
