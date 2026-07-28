@@ -2339,6 +2339,7 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
         model.arch == LLM_ARCH_QWEN35 ||
         model.arch == LLM_ARCH_QWEN35MOE ||
         model.arch == LLM_ARCH_DEEPSEEK4 ||
+        model.arch == LLM_ARCH_NANBEIGE ||
         model.arch == LLM_ARCH_MINIMAX_M3) {
         return std::max<uint32_t>(n_tokens * 40, 32u * model.n_tensors());
     }
@@ -2473,11 +2474,12 @@ llm_graph_cb llama_context::graph_get_cb() const {
             ggml_set_name(cur, name);
         }
 
-        // norm may be automatically assigned to the backend of the previous layer, increasing data transfer between backends
+        // - norm may be automatically assigned to the backend of the previous layer, increasing data transfer between backends
+        // - force the last op of the layer on the specified backend to avoid running it on the backend of the next layer due to scheduling
         // FIXME: fix in ggml_backend_sched
         const bool full_offload = model.n_gpu_layers() > model.hparams.n_layer_all;
         if (ubatch.n_tokens < 32 || full_offload) {
-            if (il != -1 && strcmp(name, "norm") == 0) {
+            if (il != -1 && (strcmp(name, "norm") == 0 || strcmp(name, "l_last") == 0)) {
                 const auto & dev_layer = model.dev_layer(il);
                 for (const auto & backend : backends) {
                     if (ggml_backend_get_device(backend.get()) == dev_layer) {
