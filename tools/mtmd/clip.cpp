@@ -1366,6 +1366,8 @@ struct clip_model_loader {
                         GGML_ASSERT(hparams.subsampling_factor == 8 &&
                             "subsampling_factor must match the conv strides in clip_graph_parakeet::build()");
                         get_u32(KEY_A_CONV_KERNEL_SIZE,       hparams.audio_conv_kernel_size);
+                        GGML_ASSERT(hparams.audio_conv_kernel_size > 0 && hparams.audio_conv_kernel_size % 2 == 1 &&
+                            "audio_conv_kernel_size must be a positive odd integer");
                         hparams.audio_chunk_len    = 0;
                         hparams.audio_sample_rate  = 16000;
                         hparams.audio_n_fft        = 512;
@@ -2882,18 +2884,18 @@ struct clip_model_loader {
                         layer.conv_dw_w      = get_tensor(string_format(TN_CONV_DW,        prefix, il, "weight"));
                         layer.conv_dw_b      = get_tensor(string_format(TN_CONV_DW,        prefix, il, "bias"), false);
                         layer.conv_norm_w    = get_tensor(string_format(TN_CONV_NORM,      prefix, il, "weight"));
-                        layer.conv_norm_b    = get_tensor(string_format(TN_CONV_NORM,      prefix, il, "bias"), false);
-                        layer.conv_norm_mean = get_tensor(string_format(TN_CONV_NORM_MEAN, prefix, il), false);
-                        layer.conv_norm_var  = get_tensor(string_format(TN_CONV_NORM_VAR,  prefix, il), false);
+                        layer.conv_norm_b    = get_tensor(string_format(TN_CONV_NORM,      prefix, il, "bias"));
+                        layer.conv_norm_mean = get_tensor(string_format(TN_CONV_NORM_MEAN, prefix, il));
+                        layer.conv_norm_var  = get_tensor(string_format(TN_CONV_NORM_VAR,  prefix, il));
                         layer.conv_pw2_w     = get_tensor(string_format(TN_CONV_PW2,       prefix, il, "weight"));
                         layer.conv_pw2_b     = get_tensor(string_format(TN_CONV_PW2,       prefix, il, "bias"), false);
 
                         // Feed-forward networks
                         layer.ff_norm_w   = get_tensor(string_format(TN_FFN_NORM,   prefix, il, "weight"));
-                        layer.ff_norm_b   = get_tensor(string_format(TN_FFN_NORM,   prefix, il, "bias"), false);
+                        layer.ff_norm_b   = get_tensor(string_format(TN_FFN_NORM,   prefix, il, "bias"));
 
                         layer.ff_norm_1_w = get_tensor(string_format(TN_FFN_NORM_1, prefix, il, "weight"));
-                        layer.ff_norm_1_b = get_tensor(string_format(TN_FFN_NORM_1, prefix, il, "bias"), false);
+                        layer.ff_norm_1_b = get_tensor(string_format(TN_FFN_NORM_1, prefix, il, "bias"));
                         layer.ff_up_1_w   = get_tensor(string_format(TN_FFN_UP_1,   prefix, il, "weight"));
                         layer.ff_up_1_b   = get_tensor(string_format(TN_FFN_UP_1,   prefix, il, "bias"), false);
                         layer.ff_down_1_w = get_tensor(string_format(TN_FFN_DOWN_1, prefix, il, "weight"));
@@ -2901,7 +2903,7 @@ struct clip_model_loader {
 
                         // Layer norms
                         layer.norm_conv_w = get_tensor(string_format(TN_NORM_CONV, prefix, il, "weight"));
-                        layer.norm_conv_b = get_tensor(string_format(TN_NORM_CONV, prefix, il, "bias"), false);
+                        layer.norm_conv_b = get_tensor(string_format(TN_NORM_CONV, prefix, il, "bias"));
                     }
 
                     model.mm_model_mlp_1_w = get_tensor(string_format(TN_MVLM_PROJ_MLP, 0, "weight"));
