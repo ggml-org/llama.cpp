@@ -4670,10 +4670,12 @@ bool clip_image_batch_encode(clip_ctx * ctx, int n_threads, const clip_image_f32
             } break;
         case PROJECTOR_TYPE_PARAKEET:
             {
+                GGML_ASSERT(imgs.entries.size() == 1);
                 struct ggml_tensor * attn_mask = ggml_graph_get_tensor(gf, "attn_mask");
                 const int n_q = attn_mask->ne[1];
                 const int n_k = attn_mask->ne[0];
-                const int n_tokens_real = (1101 + hparams.subsampling_factor-1) / hparams.subsampling_factor;
+                const int n_frames = imgs.entries.front().nx();
+                const int n_tokens_real = (n_frames + hparams.subsampling_factor-1) / hparams.subsampling_factor;
                 const float mask_value  = -1e30f;
 
                 std::vector<float> mask_data(n_q * n_k);
