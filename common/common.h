@@ -6,6 +6,7 @@
 
 #include "ggml-opt.h"
 #include "ggml.h"
+#include "llama.h"
 
 #include <set>
 #include <sstream>
@@ -283,12 +284,12 @@ struct common_params_sampling {
 
     // reasoning budget sampler parameters
     // these are populated by the server/CLI based on chat template params
-    int32_t                  reasoning_budget_tokens   = -1;   // -1 = disabled, >= 0 = token budget
-    std::vector<llama_token> reasoning_budget_start;           // start tag token sequence
-    std::vector<llama_token> reasoning_budget_end;             // end tag token sequence
-    std::vector<llama_token> reasoning_budget_forced;          // forced sequence (message + end tag)
-    std::string              reasoning_budget_message;         // message injected before end tag when budget exhausted
-    bool                     reasoning_control = false;        // create the budget sampler on demand so reasoning can be ended at runtime
+    int32_t                   reasoning_budget_tokens   = -1;  // -1 = disabled, >= 0 = token budget
+    std::vector<llama_token>  reasoning_budget_start;          // start tag token sequence
+    std::vector<llama_tokens> reasoning_budget_end;            // end tag token sequences; the first tag is used as the forcing sequence
+    std::vector<llama_token>  reasoning_budget_forced;         // forced sequence (message + first end tag)
+    std::string               reasoning_budget_message;        // message injected before end tag when budget exhausted
+    bool                      reasoning_control = false;       // create the budget sampler on demand so reasoning can be ended at runtime
 
     bool backend_sampling = false;
 
@@ -482,6 +483,7 @@ struct common_params {
     std::vector<size_t> fit_params_target = std::vector<size_t>(llama_max_devices(), 1024 * 1024*1024);
 
     enum llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER; // how to split the model across GPUs
+    enum llama_load_mode  load_mode  = LLAMA_LOAD_MODE_MMAP; // how to load the model
 
     common_cpu_params cpuparams;
     common_cpu_params cpuparams_batch;
@@ -572,9 +574,6 @@ struct common_params {
     bool kv_unified        = false; // enable unified KV cache
 
     bool input_prefix_bos  = false; // prefix BOS to user inputs, preceding input_prefix
-    bool use_mmap          = true;  // enable mmap to use filesystem cache
-    bool use_direct_io     = false; // read from disk without buffering
-    bool use_mlock         = false; // use mlock to keep model in memory
     bool verbose_prompt    = false; // print prompt tokens before generation
     bool display_prompt    = true;  // print prompt before generation
     bool no_kv_offload     = false; // disable KV offloading
@@ -668,6 +667,10 @@ struct common_params {
 
     // enable built-in tools
     std::vector<std::string> server_tools;
+
+    // MCP server configs (Cursor-compatible JSON)
+    std::string mcp_servers_config;   // path to JSON file with MCP server definitions
+    std::string mcp_servers_json;     // inline JSON with MCP server definitions
 
     // router server configs
     std::string models_dir    = "";     // directory containing models for the router server

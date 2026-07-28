@@ -19,6 +19,8 @@
 #endif
 #define HTP_MAX_MMAPS    16
 
+#define HTP_MAX_DIRTY_RANGES 16
+
 // Memory mapping
 struct htp_mmap {
     uint64_t size;
@@ -95,7 +97,11 @@ struct htp_context {
     atomic_bool            vtcm_needs_release;
 
     uint64_t               max_vmem;
-    uint32_t               dirty_map[HTP_OP_MAX_TENSORS / 32];
+    struct htp_dirty_range {
+        uint32_t start;
+        uint32_t end;
+        uint32_t bi;
+    } dirty_ranges[HTP_MAX_DIRTY_RANGES];
 
     // Persistent DDR scratchpad for MUL_MAT_ID mappings
     void *                 ddr_spad_base;
@@ -134,5 +140,6 @@ int op_diag(struct htp_ops_context * octx);
 int op_solve_tri(struct htp_ops_context * octx);
 int op_gated_delta_net(struct htp_ops_context * octx);
 int op_pad(struct htp_ops_context * octx);
+int op_im2col(struct htp_ops_context * octx);
 
 #endif /* HTP_CTX_H */

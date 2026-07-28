@@ -116,14 +116,16 @@
 
 							{#if reasoning.thinkingEnabled}
 								<Lightbulb class="{ICON_CLASS_DEFAULT} shrink-0 text-amber-400" />
-							{:else}
+							{:else if reasoning.isOff}
 								<LightbulbOff class="{ICON_CLASS_DEFAULT} shrink-0 text-muted-foreground" />
+							{:else}
+								<Lightbulb class="{ICON_CLASS_DEFAULT} shrink-0 text-muted-foreground" />
 							{/if}
 
 							<span class="flex-1">Reasoning</span>
 
 							<span class="text-xs capitalize text-muted-foreground">
-								{reasoning.thinkingEnabled ? reasoning.currentEffort : 'off'}
+								{reasoning.currentEffort}
 							</span>
 						</Collapsible.Trigger>
 
@@ -297,7 +299,7 @@
 
 						<Collapsible.Content>
 							<div class="flex flex-col gap-0.5 pl-4">
-								{#each toolsPanel.activeGroups as group (group.label)}
+								{#each toolsPanel.activeGroups as group (group.key)}
 									{@const checked = toolsPanel.isGroupChecked(group)}
 									{@const enabledCount = toolsPanel.getEnabledToolCount(group)}
 									{@const favicon = toolsPanel.getFavicon(group)}
@@ -305,7 +307,7 @@
 									<button
 										type="button"
 										class={sheetItemRowClass}
-										onclick={() => toolsPanel.toggleGroupByLabel(group.label)}
+										onclick={() => toolsPanel.toggleGroupByKey(group.key)}
 									>
 										{#if favicon}
 											<img
@@ -328,7 +330,7 @@
 											{checked}
 											class="{ICON_CLASS_DEFAULT} shrink-0"
 											onclick={(e) => e.stopPropagation()}
-											onCheckedChange={() => toolsPanel.toggleGroupByLabel(group.label)}
+											onCheckedChange={() => toolsPanel.toggleGroupByKey(group.key)}
 										/>
 									</button>
 								{/each}
