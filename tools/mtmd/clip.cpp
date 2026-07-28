@@ -1363,6 +1363,8 @@ struct clip_model_loader {
                 case PROJECTOR_TYPE_PARAKEET:
                     {
                         get_u32(KEY_AUDIO_SUBSAMPLING_FACTOR, hparams.subsampling_factor);
+                        GGML_ASSERT(hparams.subsampling_factor == 8 &&
+                            "subsampling_factor must match the conv strides in clip_graph_parakeet::build()");
                         get_u32(KEY_A_CONV_KERNEL_SIZE,       hparams.audio_conv_kernel_size);
                         hparams.audio_chunk_len    = 0;
                         hparams.audio_sample_rate  = 16000;
