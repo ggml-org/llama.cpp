@@ -3,7 +3,6 @@
 //
 #include <arm_neon.h>
 #include <assert.h>
-#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <atomic>
@@ -20,10 +19,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
-#include <limits>
 #include <map>
 #include <iostream>
 #include <climits>
+#include <charconv>
+#include <system_error>
 #if defined(__linux__)
 #include <asm/hwcap.h>
 #include <dirent.h>
@@ -93,20 +93,23 @@ static const char* cpu_feature_to_string(cpu_feature f) {
 }
 
 #if defined(__linux__) && defined(__aarch64__)
-static bool parse_cpu_dir_name(const char * name, size_t * cpu) {
-    if (strncmp(name, "cpu", 3) != 0 || name[3] < '0' || name[3] > '9') {
+static bool parse_cpu_dir_name(const char* name, size_t* cpu) {
+    if (strncmp(name, "cpu", 3) != 0 ||
+        name[3] < '0' || name[3] > '9') {
         return false;
     }
 
-    char * end = nullptr;
-    errno = 0;
-    const unsigned long long value = strtoull(name + 3, &end, 10);
-    if (errno != 0 || *end != '\0' ||
-        value > (unsigned long long) std::numeric_limits<size_t>::max()) {
+    const char* first = name + 3;
+    const char* last = name + strlen(name);
+
+    size_t value = 0;
+    const auto [end, ec] = std::from_chars(first, last, value, 10);
+
+    if (ec != std::errc{} || end != last) {
         return false;
     }
 
-    *cpu = (size_t) value;
+    *cpu = value;
     return true;
 }
 
@@ -307,7 +310,7 @@ static void init_kleidiai_context(void) {
 
         size_t detected_smcus = 0;
 
-        ctx.features  = (runtime_feat.has_dotprod ? CPU_FEATURE_DOTPROD : CPU_FEATURE_NONE) |
+        ctx.features  = (runtime_feat.has_dotprod  ? CPU_FEATURE_DOTPROD : CPU_FEATURE_NONE) |
                         (runtime_feat.has_i8mm     ? CPU_FEATURE_I8MM    : CPU_FEATURE_NONE) |
                         (runtime_feat.sve_cnt == QK8_0 ? CPU_FEATURE_SVE : CPU_FEATURE_NONE);
 
