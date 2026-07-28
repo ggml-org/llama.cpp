@@ -1265,8 +1265,23 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
 
     this->ml = &ml; // to be used by create_tensor() and load_arch_tensors()
 
+    if (ml.use_mmap && params.load_mode == LLAMA_LOAD_MODE_AUTO) {
+        for (const auto & dev : devices) {
+            ggml_backend_dev_props props;
+            ggml_backend_dev_get_props(dev.dev, &props);
+            if (!props.caps.mmap_support) {
+                ml.use_mmap = false;
+                break;
+            }
+        }
+    }
+
+    const char * load_mode_name = params.load_mode == LLAMA_LOAD_MODE_AUTO
+        ? llama_load_mode_name(ml.use_mmap ? LLAMA_LOAD_MODE_MMAP : LLAMA_LOAD_MODE_NONE)
+        : llama_load_mode_name(params.load_mode);
+
     LLAMA_LOG_INFO("%s: loading model tensors, this can take a while... (load_mode = %s)\n",
-        __func__, llama_load_mode_name(params.load_mode));
+        __func__, load_mode_name);
 
     // build a list of buffer types for the CPU and GPU devices
     pimpl->cpu_buft_list = make_cpu_buft_list(devices, params.use_extra_bufts, params.no_host);
@@ -1527,27 +1542,6 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         for (auto * cur = ggml_get_first_tensor(ctx_ptr.get()); cur != NULL; cur = ggml_get_next_tensor(ctx_ptr.get(), cur)) {
             tensors_by_name.emplace_back(ggml_get_name(cur), cur);
         }
-    }
-
-    if (ml.use_mmap && params.load_mode == LLAMA_LOAD_MODE_AUTO) {
-        for (auto & [buft, ctx_ptr] : ml.ctx_map) {
-            if (ggml_get_first_tensor(ctx_ptr.get()) == nullptr) {
-                continue;
-            }
-            ggml_backend_dev_t dev = ggml_backend_buft_get_device(buft);
-            if (!dev) {
-                dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
-            }
-            if (dev) {
-                ggml_backend_dev_props props;
-                ggml_backend_dev_get_props(dev, &props);
-                if (!props.caps.mmap_support) {
-                    ml.use_mmap = false;
-                    break;
-                }
-            }
-        }
-        LLAMA_LOG_INFO("%s: using load mode: %s\n", __func__, ml.use_mmap ? "mmap" : "none");
     }
 
     ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
