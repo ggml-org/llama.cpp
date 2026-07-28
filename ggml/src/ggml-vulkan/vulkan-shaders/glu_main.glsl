@@ -1,9 +1,13 @@
 void main() {
-    const uint i = gl_GlobalInvocationID.z * 262144 + gl_GlobalInvocationID.y * 512 + gl_GlobalInvocationID.x;
+    uint base = gl_GlobalInvocationID.z * 262144 + gl_GlobalInvocationID.y * 512 + gl_GlobalInvocationID.x;
 
-    if (i >= p.N) {
-        return;
-    }
+    // local_size 256 * 2 iters == 512 to match wg_denoms / index stride (#26213).
+    for (uint iter = 0; iter < 2; ++iter) {
+        const uint i = base + iter * 256;
+
+        if (i >= p.N) {
+            continue;
+        }
 
     const uint i23 = fastdiv(i, p.ne2_012mp, p.ne2_012L);
     const uint i23_offset = i23 * p.ne22*p.ne21*p.ne20;
@@ -31,5 +35,6 @@ void main() {
     } else {
         // Split
         data_d[dst_idx] = D_TYPE(op(float(data_a[src_idx_a]), float(data_b[src_idx_b])));
+    }
     }
 }

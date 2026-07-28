@@ -30,7 +30,7 @@ layout (binding = 6) readonly buffer R_I {uvec2 rope_data_i[];}; // indices for 
 #endif
 
 #extension GL_EXT_control_flow_attributes : enable
-#define BLOCK_SIZE 512
+#define BLOCK_SIZE 256
 
 layout (constant_id = 1) const bool do_multiply = false;
 

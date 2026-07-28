@@ -3,7 +3,9 @@
 #include "types.glsl"
 #include "generic_unary_head.glsl"
 
-layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
+const uint num_threads = 256;
+
+layout(local_size_x = num_threads, local_size_y = 1, local_size_z = 1) in;
 
 float op_abs(float x) {
     return abs(x);
@@ -155,14 +157,20 @@ float op_trunc(float x) {
 }
 
 void main() {
-    const uint idx = get_idx();
+    uint idx = get_idx();
 
-    if (idx >= p.ne) {
-        return;
+    // num_threads * num_iter must equal 512, to match wg_denoms and get_idx (#26213).
+    const uint num_iter = 2;
+
+    [[unroll]] for (uint i = 0; i < num_iter; ++i) {
+        if (idx >= p.ne) {
+            continue;
+        }
+
+        const uint a_idx = get_aoffset() + src0_idx(idx);
+        const uint d_idx = get_doffset() + dst_idx(idx);
+
+        data_d[d_idx] = D_TYPE(OP(float(data_a[a_idx])));
+        idx += num_threads;
     }
-
-    const uint a_idx = get_aoffset() + src0_idx(idx);
-    const uint d_idx = get_doffset() + dst_idx(idx);
-
-    data_d[d_idx] = D_TYPE(OP(float(data_a[a_idx])));
 }

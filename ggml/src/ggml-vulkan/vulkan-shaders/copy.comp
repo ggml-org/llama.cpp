@@ -3,15 +3,20 @@
 #include "types.glsl"
 #include "generic_unary_head.glsl"
 
-layout(local_size_x = 512, local_size_y = 1, local_size_z = 1) in;
+const uint num_threads = 256;
+
+layout(local_size_x = num_threads, local_size_y = 1, local_size_z = 1) in;
 
 void main() {
-    const uint idx = get_idx();
+    uint idx = get_idx();
 
-    if (idx >= p.ne) {
-        return;
-    }
+    // num_threads * num_iter must equal 512, to match wg_denoms and get_idx (#26213).
+    const uint num_iter = 2;
 
+    [[unroll]] for (uint i = 0; i < num_iter; ++i) {
+        if (idx >= p.ne) {
+            continue;
+        }
 #if defined(DATA_A_BF16)
     data_d[get_doffset() + dst_idx(idx)] = D_TYPE(bf16_to_fp32(uint32_t(data_a[get_aoffset() + src0_idx(idx)])));
 #elif defined(DATA_D_BF16)
@@ -22,4 +27,6 @@ void main() {
 #else
     data_d[get_doffset() + dst_idx(idx)] = data_a[get_aoffset() + src0_idx(idx)];
 #endif
+        idx += num_threads;
+    }
 }
