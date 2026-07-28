@@ -756,6 +756,45 @@ static common_chat_tool nested_args_tool{
     })",
 };
 
+static common_chat_tool union_args_tool{
+    /* .name = */ "union_args",
+    /* .description = */ "Tool with union arguments",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "filter": {
+                "anyOf": [
+                    { "type": "array", "items": { "type": "string" } },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "field": { "type": "string" },
+                            "op": { "type": "string" }
+                        },
+                        "required": ["field", "op"]
+                    }
+                ]
+            },
+            "label": {
+                "oneOf": [
+                    { "type": "string" },
+                    { "type": "object", "properties": { "text": { "type": "string" } } }
+                ]
+            },
+            "limit": {
+                "oneOf": [
+                    { "type": "integer" },
+                    {
+                        "type": "object",
+                        "properties": { "max": { "type": "integer" } },
+                        "required": ["max"]
+                    }
+                ]
+            }
+        }
+    })",
+};
+
 static common_chat_tool nullable_string_tool{
     /* .name = */ "set_nullable_str",
     /* .description = */ "Set a nullable string value",
@@ -5104,6 +5143,84 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_reasoning("Nested arrays")
             .expect_tool_calls({
                 { "nested_args", R"({"tags": ["alpha", "beta"], "entries": [{"id": 1, "label": "one"}]})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // Union params (anyOf/oneOf), expanded as a choice of the alternatives
+        tst.test(
+               "<mm:think>Union array</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"union_args\">"
+               "]<]minimax[>[<filter>"
+               "]<]minimax[>[<item>alpha]<]minimax[>[</item>"
+               "]<]minimax[>[<item>beta]<]minimax[>[</item>"
+               "]<]minimax[>[</filter>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ union_args_tool })
+            .expect_reasoning("Union array")
+            .expect_tool_calls({
+                { "union_args", R"({"filter": ["alpha", "beta"]})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // oneOf between a scalar and an object
+        tst.test(
+               "<mm:think>Union scalar</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"union_args\">"
+               "]<]minimax[>[<limit>5]<]minimax[>[</limit>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ union_args_tool })
+            .expect_reasoning("Union scalar")
+            .expect_tool_calls({
+                { "union_args", R"({"limit": 5})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        tst.test(
+               "<mm:think>Union nested</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"union_args\">"
+               "]<]minimax[>[<limit>"
+               "]<]minimax[>[<max>10]<]minimax[>[</max>"
+               "]<]minimax[>[</limit>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ union_args_tool })
+            .expect_reasoning("Union nested")
+            .expect_tool_calls({
+                { "union_args", R"({"limit": {"max": 10}})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // A union with a string alternative is a string, even when the value looks structured
+        tst.test(
+               "<mm:think>Union string</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"union_args\">"
+               "]<]minimax[>[<label>"
+               "]<]minimax[>[<text>hi]<]minimax[>[</text>"
+               "]<]minimax[>[</label>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ union_args_tool })
+            .expect_reasoning("Union string")
+            .expect_tool_calls({
+                { "union_args", R"({"label": "]<]minimax[>[<text>hi]<]minimax[>[</text>"})", {} },
             })
             .expect_reconstruction()
             .run();

@@ -2356,6 +2356,15 @@ static common_chat_params common_chat_params_init_minimax_m3(const common_chat_t
             return generation_prompt + reasoning + p.content(p.rest()) + end;
         }
 
+        auto alternatives_of = [](const json & schema) -> std::optional<json> {
+            for (const auto * keyword : { "oneOf", "anyOf" }) {
+                if (schema.contains(keyword) && schema.at(keyword).is_array() && !schema.at(keyword).empty()) {
+                    return schema.at(keyword);
+                }
+            }
+            return std::nullopt;
+        };
+
         auto tool_choice = p.choice();
         foreach_function(inputs.tools, [&](const json & tool) {
             const auto & function = tool.at("function");
@@ -2385,8 +2394,24 @@ static common_chat_params common_chat_params_init_minimax_m3(const common_chat_t
                            const std::string & close) -> common_peg_parser {
                 auto close_tag = p.tool_arg_close(p.literal(close));
 
+                // A string accepts anything, so a union with a string alternative is a string
                 if (schema_info.resolves_to_string(schema)) {
                     return p.ac(p.tool_arg_string_value(p.until(close)) + close_tag, close);
+                }
+
+                if (auto alternatives = alternatives_of(schema)) {
+                    std::vector<common_peg_parser> choices;
+
+                    size_t index = 0;
+                    for (const auto & alternative : *alternatives) {
+                        const std::string alt_name = rule_name + "-" + std::to_string(index++);
+
+                        // There is a risk that this breaks streaming deltas, but that's a risk we
+                        // assume to provide tool arg streaming.
+                        choices.push_back(value_of(alternative, alt_name, close));
+                    }
+
+                    return p.choice(choices);
                 }
 
                 const std::string type = schema.contains("type") && schema.at("type").is_string()
@@ -2406,8 +2431,6 @@ static common_chat_params common_chat_params_init_minimax_m3(const common_chat_t
                     return p.tag(mm3::TOOL_ARG_ARRAY, p.repeat(p.space() + item, 0, -1)) + p.space() + close_tag;
                 }
 
-                // Numbers and booleans are written verbatim; what we cannot expand yet (free-form
-                // objects, oneOf/anyOf) is parsed as JSON
                 return p.tool_arg_json_value(p.schema(p.json(), rule_name + "-schema", schema, false)) + close_tag;
             };
 
