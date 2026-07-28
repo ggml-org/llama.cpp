@@ -2000,8 +2000,8 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
             svbool_t pg16_4 = svwhilelt_b16(0, 4);
             svbool_t pg16_8 = svwhilelt_b16(0, 8);
             svbool_t pg16_16 = svwhilelt_b16(0, 16);
-
-            double total_padd_time = 0;
+            svbool_t pg8_16 = svwhilelt_b8(0, 16);
+            svbool_t pg8_32 = svptrue_b8();
             
             // 1x8 tile corresponding to one q8_K row = 2 x 4 for NEON
             svfloat32_t  acc_f32_0;
@@ -2096,7 +2096,6 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                             const int8_t * q8_base_h = q8_base_l + 64;
 
                             // Load and duplicate q8 values (each register covers two interleaved columns of q6)  
-                            // For the time being do not combine these                  
                             svint8_t q8_l_0 = svreinterpret_s8_s64(svdup_n_s64(*(const int64_t *)(q8_base_l + 0 * 8)));
                             svint8_t q8_h_0 = svreinterpret_s8_s64(svdup_n_s64(*(const int64_t *)(q8_base_h + 0 * 8)));
                             svint8_t q8_l_1 = svreinterpret_s8_s64(svdup_n_s64(*(const int64_t *)(q8_base_l + 1 * 8)));
@@ -2106,8 +2105,6 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                             const int qh_off_base = ql_off_base & 255;  // wraps after 256 bytes
 
                             // Load 4 vectors at once (64 bytes each for ql_0, ql_1, qh_0, qh_1)
-                            svbool_t pg8_16 = svwhilelt_b8(0, 16);
-                            svbool_t pg8_32 = svptrue_b8();
                             const uint8_t *ptr = ql_base + ql_off_base;
                             
                             svuint8_t q6_ql_0_01 = svld1_u8(pg8_32, ptr);
@@ -2127,9 +2124,7 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                            
                             svuint8_t q6_qh_1_01 = svld1_u8(pg8_32, ptr);
                             svuint8_t q6_qh_1_23 = svld1_u8(pg8_32, ptr + 32);
-
-                            svbool_t pg16_16 = svptrue_b16();
-
+                            
                             // Adjust qh for subblocks 2 and 3 (shift right by 2)
                             if (sb > 1) {
                                 q6_qh_0_01 = svlsr_n_u8_x(pg8_32,q6_qh_0_01, 2);
@@ -2143,15 +2138,14 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                             svuint8_t q6_qs_cp_1_hh = svand_u8_x(pg8_32, q6_qh_1_01, mask_hi);
                             
                             // q6 = (low4 | high2<<4), without -32 bias (handled via bsums)
-                            svbool_t pg = svptrue_b8();
                             svint8_t q6_l0 = svreinterpret_s8_u8(
-                                svorr_u8_x(pg, svand_u8_x(pg, q6_ql_0_01, m4b), svlsl_n_u8_x(pg, svand_u8_x(pg, q6_qh_0_01, mask_lo), 4)));
+                                svorr_u8_x(pg8_32, svand_u8_x(pg8_32, q6_ql_0_01, m4b), svlsl_n_u8_x(pg8_32, svand_u8_x(pg8_32, q6_qh_0_01, mask_lo), 4)));
                             svint8_t q6_l1 = svreinterpret_s8_u8(
-                                svorr_u8_x(pg, svand_u8_x(pg, q6_ql_1_01, m4b), svlsl_n_u8_x(pg, svand_u8_x(pg, q6_qh_1_01, mask_lo), 4)));
+                                svorr_u8_x(pg8_32, svand_u8_x(pg8_32, q6_ql_1_01, m4b), svlsl_n_u8_x(pg8_32, svand_u8_x(pg8_32, q6_qh_1_01, mask_lo), 4)));
                             svint8_t q6_h0 =svreinterpret_s8_u8(
-                                svorr_u8_x(pg, svlsr_n_u8_x(pg, q6_ql_0_01, 4), q6_qs_cp_0_hh));
+                                svorr_u8_x(pg8_32, svlsr_n_u8_x(pg8_32, q6_ql_0_01, 4), q6_qs_cp_0_hh));
                             svint8_t q6_h1 =svreinterpret_s8_u8(
-                                svorr_u8_x(pg, svlsr_n_u8_x(pg, q6_ql_1_01, 4), q6_qs_cp_1_hh));
+                                svorr_u8_x(pg8_32, svlsr_n_u8_x(pg8_32, q6_ql_1_01, 4), q6_qs_cp_1_hh));
 
                             svint32_t sb_acc_l = svdup_s32(0);
                             sb_acc_l = svdot_s32(sb_acc_l, q6_l0, q8_l_0);
@@ -2174,13 +2168,13 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                             q6_qs_cp_1_hh = svand_u8_x(pg8_32, q6_qh_1_23, mask_hi);
                             
                             q6_l0 = svreinterpret_s8_u8(
-                                svorr_u8_x(pg, svand_u8_x(pg, q6_ql_0_23, m4b), svlsl_n_u8_x(pg, svand_u8_x(pg, q6_qh_0_23, mask_lo), 4)));
+                                svorr_u8_x(pg8_32, svand_u8_x(pg8_32, q6_ql_0_23, m4b), svlsl_n_u8_x(pg8_32, svand_u8_x(pg8_32, q6_qh_0_23, mask_lo), 4)));
                             q6_l1 = svreinterpret_s8_u8(
-                                svorr_u8_x(pg, svand_u8_x(pg, q6_ql_1_23, m4b), svlsl_n_u8_x(pg, svand_u8_x(pg, q6_qh_1_23, mask_lo), 4)));
+                                svorr_u8_x(pg8_32, svand_u8_x(pg8_32, q6_ql_1_23, m4b), svlsl_n_u8_x(pg8_32, svand_u8_x(pg8_32, q6_qh_1_23, mask_lo), 4)));
                             q6_h0 =svreinterpret_s8_u8(
-                                svorr_u8_x(pg, svlsr_n_u8_x(pg, q6_ql_0_23, 4), q6_qs_cp_0_hh));
+                                svorr_u8_x(pg8_32, svlsr_n_u8_x(pg8_32, q6_ql_0_23, 4), q6_qs_cp_0_hh));
                             q6_h1 =svreinterpret_s8_u8(
-                                svorr_u8_x(pg, svlsr_n_u8_x(pg, q6_ql_1_23, 4), q6_qs_cp_1_hh));
+                                svorr_u8_x(pg8_32, svlsr_n_u8_x(pg8_32, q6_ql_1_23, 4), q6_qs_cp_1_hh));
 
                             sb_acc_l = svdup_s32(0);
                             sb_acc_l = svdot_s32(sb_acc_l, q6_l0, q8_l_0);
