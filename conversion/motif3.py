@@ -38,11 +38,14 @@ class Motif3Model(TextModel):
             return super().get_vocab_base_pre(tokenizer)
         except NotImplementedError:
             pass
-        # unknown checksum: identify the pre-tokenizer by its Split regex instead
+        return self._pre_from_tokenizer_json_str(tokenizer.backend_tokenizer.to_str())
+
+    def _pre_from_tokenizer_json_str(self, tk_str: str) -> str:
+        # identify the pre-tokenizer by its Split regex (checksum-independent)
         import json as _json
         pats: list[str] = []
         try:
-            tk = _json.loads(tokenizer.backend_tokenizer.to_str())
+            tk = _json.loads(tk_str)
 
             def collect(node):
                 if not isinstance(node, dict):
@@ -76,11 +79,56 @@ class Motif3Model(TextModel):
     def set_vocab(self):
         self._set_vocab_gpt2()
 
+    def get_vocab_base(self) -> tuple[list[str], list[int], str]:
+        tokenizer_file = self.dir_model / "tokenizer.json"
+        if not tokenizer_file.is_file():
+            return super().get_vocab_base()
+
+        from tokenizers import Tokenizer  # independent of transformers
+        tok = Tokenizer.from_file(str(tokenizer_file))
+
+        vocab = tok.get_vocab(with_added_tokens=True)
+        vocab_size = self.hparams.get("vocab_size", len(vocab))
+        assert max(vocab.values()) < vocab_size
+
+        tokpre = self._pre_from_tokenizer_json_str(tok.to_str())
+
+        reverse_vocab = {id_: t for t, id_ in vocab.items()}
+        added_decoder = tok.get_added_tokens_decoder()  # {id: AddedToken}
+
+        tokens: list[str] = []
+        toktypes: list[int] = []
+        for i in range(vocab_size):
+            if i not in reverse_vocab:
+                tokens.append(f"[PAD{i}]")
+                toktypes.append(gguf.TokenType.UNUSED)
+                continue
+            token: str = reverse_vocab[i]
+            at = added_decoder.get(i)
+            if at is not None:
+                # mirror conversion/base.py: normalize non-normalized added tokens
+                if not at.normalized:
+                    previous_token = token
+                    token = tok.decode(tok.encode(token, add_special_tokens=False).ids,
+                                       skip_special_tokens=False)
+                    if previous_token != token:
+                        logger.info(f"{previous_token!r} is encoded and decoded back to {token!r} using tokenizers")
+                if at.special or self.does_token_look_special(token):
+                    toktypes.append(gguf.TokenType.CONTROL)
+                else:
+                    token = token.replace("\u2581", " ")  # pre-normalize user-defined spaces
+                    toktypes.append(gguf.TokenType.USER_DEFINED)
+            else:
+                toktypes.append(gguf.TokenType.NORMAL)
+            tokens.append(token)
+
+        return tokens, toktypes, tokpre
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
         hparams = self.hparams
 
-        # --- attention (GDLA) ---
+        # attention (GDLA)
         qk_rope = int(hparams["qk_rope_head_dim"])
         head_dim = int(hparams["head_dim"])       # qk_nope + qk_rope
         v_head_dim = int(hparams["v_head_dim"])
@@ -94,7 +142,7 @@ class Motif3Model(TextModel):
         n_noise = int(hparams["num_noise_heads"])
         self.gguf_writer.add_uint32(f"{self.gguf_writer.arch}.attention.noise_head_count", n_noise)
 
-        # --- RoPE / YaRN ---
+        # RoPE / YaRN
         rope_theta = float(hparams.get("rope_theta", 10000.0))
         self.gguf_writer.add_rope_freq_base(rope_theta)
 
@@ -110,15 +158,8 @@ class Motif3Model(TextModel):
             mscale = float(rope_scaling.get("mscale", hparams.get("mscale", 1.0)))
             self.gguf_writer.add_float32(f"{self.gguf_writer.arch}.attention.yarn_mscale", mscale)
 
-        # --- interleaved SWA ---
+        # interleaved SWA
         if hparams.get("use_sliding_window") and hparams.get("sliding_window") is not None:
-            # The modeling code passes window = sliding_window + 1 to the attention
-            # interface; transformers >= 4.56 converts that to flash-attn
-            # window_size = (window - 1, ...) ("total window incl. self"), so the
-            # model attends to positions at distance <= sliding_window. llama.cpp's
-            # STANDARD swa masks p1 - p0 >= n_swa => n_swa = sliding_window + 1.
-            # (note: transformers <= 4.55 used window_size = (window, window), which
-            # would shift HF itself by one token - a transformers quirk, not ours)
             self.gguf_writer.add_sliding_window(int(hparams["sliding_window"]) + 1)
             pattern = hparams.get("sliding_window_pattern", "interleave")
             if pattern != "interleave":
@@ -128,7 +169,7 @@ class Motif3Model(TextModel):
             if swa_rope_theta is not None:
                 self.gguf_writer.add_rope_freq_base_swa(float(swa_rope_theta))
 
-        # --- MoE ---
+        # MoE
         n_expert = int(hparams.get("num_experts", 0) or 0)
         if n_expert > 0:
             if hparams.get("score_func", "sigmoid") != "sigmoid":
@@ -147,7 +188,7 @@ class Motif3Model(TextModel):
             self.gguf_writer.add_leading_dense_block_count(int(hparams.get("n_dense_first_layers", 0)))
             self.gguf_writer.add_interleave_moe_layer_step(int(hparams.get("interleave_moe_layer_step", 1)))
 
-        # --- PolyNorm ---
+        # PolyNorm
         arch = self.gguf_writer.arch
         self.gguf_writer.add_float32(f"{arch}.polynorm.epsilon", 1e-6)
         self.gguf_writer.add_float32(f"{arch}.polynorm.output_scale", float(hparams.get("polynorm_output_scale", 1.0)))
@@ -159,7 +200,7 @@ class Motif3Model(TextModel):
             self.gguf_writer.add_float32(f"{arch}.polynorm.hidden_clamp", float(hidden_clamp))
         self.gguf_writer.add_bool(f"{arch}.polynorm.sigmoid_weight", bool(hparams.get("polynorm_sigmoid_weight", True)))
 
-        # --- mHC ---
+        # mHC
         if hparams.get("mhc_enabled"):
             self.gguf_writer.add_uint32(f"{arch}.hyper_connection.count", int(hparams.get("mhc_expansion_rate", 4)))
             self.gguf_writer.add_uint32(f"{arch}.hyper_connection.sinkhorn_iterations", int(hparams.get("mhc_sinkhorn_iters", 20)))
@@ -181,11 +222,7 @@ class Motif3Model(TextModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         T = gguf.MODEL_TENSOR
 
-        # skip the MTP (multi-token-prediction) head tensors. The released
-        # checkpoint stores them under model.mtp_layers.N.* - a prefix the HF
-        # modeling code itself never loads (it contains no MTP module), so they
-        # are not part of the inference graph. Also keep the DeepSeek-style
-        # bid >= block_count skip in case a variant stores them as extra layers.
+        # skip the MTP (multi-token-prediction) head tensors.
         if name.startswith("model.mtp_layers."):
             logger.debug(f"skipping MTP tensor {name}")
             return []
@@ -198,7 +235,7 @@ class Motif3Model(TextModel):
         def out(t: gguf.MODEL_TENSOR, tensor: Tensor, suffix: str = ".weight"):
             return [(self.format_tensor_name(t, bid, suffix=suffix), tensor)]
 
-        # --- global tensors ---
+        # global tensors
         if name == "model.embed_tokens.weight":
             return out(T.TOKEN_EMBD, data_torch)
         if name == "model.norm.weight":
@@ -215,13 +252,13 @@ class Motif3Model(TextModel):
                 "needs a new entry.")
         sub = name[len(prefix):]
 
-        # --- layer norms ---
+        # layer norms
         if sub == "input_layernorm.weight":
             return out(T.ATTN_NORM, data_torch)
         if sub == "post_attention_layernorm.weight":
             return out(T.FFN_NORM, data_torch)
 
-        # --- attention (GDLA) ---
+        # attention (GDLA)
         attn_map = {
             "self_attn.wq_a.weight":        T.ATTN_Q_A,
             "self_attn.q_norm.weight":      T.ATTN_Q_A_NORM,
@@ -236,7 +273,7 @@ class Motif3Model(TextModel):
         if sub in attn_map:
             return out(attn_map[sub], data_torch)
 
-        # --- dense MLP (PolyNorm) ---
+        # dense MLP (PolyNorm)
         dense_map = {
             "mlp.gate_proj.weight": (T.FFN_GATE, ".weight"),
             "mlp.up_proj.weight":   (T.FFN_UP,   ".weight"),
@@ -248,7 +285,7 @@ class Motif3Model(TextModel):
             t, suffix = dense_map[sub]
             return out(t, data_torch, suffix)
 
-        # --- MoE ---
+        # MoE
         if sub == "moe.router.gate.weight":
             return out(T.FFN_GATE_INP, data_torch)
         if sub == "moe.expert_bias":
@@ -277,7 +314,7 @@ class Motif3Model(TextModel):
             t, suffix = shexp_map[sub]
             return out(t, data_torch, suffix)
 
-        # --- mHC ---
+        # mHC
         for which, t_norm, t_pre, t_post, t_res, t_alpha in (
             ("mhc_attn", T.MHC_ATTN_NORM, T.MHC_ATTN_PRE, T.MHC_ATTN_POST, T.MHC_ATTN_RES, T.MHC_ATTN_ALPHA),
             ("mhc_ffn",  T.MHC_FFN_NORM,  T.MHC_FFN_PRE,  T.MHC_FFN_POST,  T.MHC_FFN_RES,  T.MHC_FFN_ALPHA),
