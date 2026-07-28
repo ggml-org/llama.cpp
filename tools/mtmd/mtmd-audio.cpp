@@ -1156,52 +1156,37 @@ bool mtmd_audio_preprocessor_parakeet::preprocess(const float * samples,
     out_full.data.resize(out_full.n_mel * out_full.n_len);
 
     const int n_threads = 4;
+    std::vector<std::thread> workers(n_threads - 1);
+    for (int iw = 0; iw < n_threads - 1; ++iw) {
+        workers[iw] = std::thread(
+            worker_thread, iw + 1,
+            window_func,
+            window_size,
+            std::cref(samples_padded),
+            samples_padded.size(),
+            frame_size,
+            frame_step,
+            n_threads,
+            params.n_fft_bins,
+            std::cref(cache),
+            std::ref(out_full)
+        );
+    }
 
-    if (n_threads == 1) {
-        worker_thread(0,
-                window_func,
-                window_size,
-                samples_padded,
-                samples_padded.size(),
-                frame_size,
-                frame_step,
-                1,
-                params.n_fft_bins,
-                cache,
-                out_full);
-    } else {
-        std::vector<std::thread> workers(n_threads - 1);
-        for (int iw = 0; iw < n_threads - 1; ++iw) {
-            workers[iw] = std::thread(
-                worker_thread, iw + 1,
-                window_func,
-                window_size,
-                std::cref(samples_padded),
-                samples_padded.size(),
-                frame_size,
-                frame_step,
-                n_threads,
-                params.n_fft_bins,
-                std::cref(cache),
-                std::ref(out_full)
-            );
-        }
+    worker_thread(0,
+            window_func,
+            window_size,
+            samples_padded,
+            samples_padded.size(),
+            frame_size,
+            frame_step,
+            n_threads,
+            params.n_fft_bins,
+            cache,
+            out_full);
 
-        worker_thread(0,
-                window_func,
-                window_size,
-                samples_padded,
-                samples_padded.size(),
-                frame_size,
-                frame_step,
-                n_threads,
-                params.n_fft_bins,
-                cache,
-                out_full);
-
-        for (int iw = 0; iw < n_threads - 1; ++iw) {
-            workers[iw].join();
-        }
+    for (int iw = 0; iw < n_threads - 1; ++iw) {
+        workers[iw].join();
     }
 
     // Per-feature normalization (only on valid frames)
