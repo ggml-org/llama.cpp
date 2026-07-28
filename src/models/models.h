@@ -533,6 +533,7 @@ struct llama_model_qwen3 : public llama_model_base {
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
+    template <bool iswa>
     struct graph : public llm_graph_context {
         graph(const llama_model & model, const llm_graph_params & params);
     };
