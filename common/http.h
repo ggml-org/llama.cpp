@@ -2,6 +2,8 @@
 
 #include <cpp-httplib/httplib.h>
 
+#include <memory>
+
 #ifdef _WIN32
 #include <winsock2.h>
 #include <windows.h>
@@ -97,7 +99,25 @@ static common_http_url common_http_parse_url(const std::string & url) {
     return parts;
 }
 
-static std::pair<httplib::Client, common_http_url> common_http_client(const std::string & url) {
+class common_http_client {
+    httplib::Client cli;
+public:
+    common_http_client(const std::string & url) : cli(url) {}
+    //set_follow_location // TODO
+    //set_basic_auth // TODO
+    httplib::Result Get(); // TODO
+    // TODO
+};
+
+using common_http_client_ptr = std::unique_ptr<common_http_client>;
+
+// re-assign this to mock a different HTTP client for testing purposes (ONLY for testing)
+inline std::function<common_http_client_ptr(const std::string &)>
+    common_http_client_factory = [](const std::string & url) -> common_http_client_ptr {
+        return std::make_unique<common_http_client>(url);
+    };
+
+static std::pair<common_http_client_ptr, common_http_url> common_http_client_init(const std::string & url) {
     common_http_url parts = common_http_parse_url(url);
 
     if (parts.host.empty()) {
@@ -115,13 +135,11 @@ static std::pair<httplib::Client, common_http_url> common_http_client(const std:
     }
 #endif
 
-    httplib::Client cli(parts.scheme + "://" + common_http_format_host(parts.host) + ":" + std::to_string(parts.port));
+    auto cli = common_http_client_factory(parts.scheme + "://" + common_http_format_host(parts.host) + ":" + std::to_string(parts.port));
 
     if (!parts.user.empty()) {
-        cli.set_basic_auth(parts.user, parts.password);
+        cli->set_basic_auth(parts.user, parts.password);
     }
-
-    cli.set_follow_location(true);
 
     return { std::move(cli), std::move(parts) };
 }
