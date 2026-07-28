@@ -1755,6 +1755,8 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
         const float f_keep_cur = float(lcp_cur) / it->prompt.tokens.size();
         const float sim_cur    = float(lcp_cur) / tokens_new.size();
 
+        SRV_TRC("   - prompt with length %7zu, lcp = %7d, f_keep = %.3f, sim = %.3f\n", it->prompt.tokens.size(), lcp_cur, f_keep_cur, sim_cur);
+
         // don't trash large prompts
         if (f_keep_cur < 0.25f) {
             continue;
