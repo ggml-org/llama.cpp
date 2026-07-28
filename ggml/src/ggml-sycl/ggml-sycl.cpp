@@ -4455,18 +4455,20 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
     use_mul_mat_q = use_mul_mat_q && (src1->ne[1] <= MMQ_MAX_BATCH_SIZE);
 #endif // SYCL_USE_XMX
 
-    // when reorder is enabled, both ESIMD, MMVQ and DMMV kernels may be used
-    // for best performance use ESIMD when supported, followed by MMVQ, and finally DMMV
+    // When reorder is enabled, both ESIMD, MMVQ and DMMV kernels may be used. For
+    // best performance use ESIMD when supported, followed by MMVQ, and finally DMMV.
+    // But the reordered ESIMD path cannot be used without reordered MMVQ. A later
+    // multi-token call (ne[1] in 2..8) will take the MMVQ path and it would read the
+    // reordered bytes as if they were still the unreordered layout.
 
-    if (!g_ggml_sycl_prioritize_dmmv && should_reorder_tensor(ctx, dst)) {
+    if (!g_ggml_sycl_prioritize_dmmv && ((should_reorder_tensor(ctx, dst) &&
+                                          ggml_sycl_supports_reorder_mmvq(src0->type)))) {
         bool use = g_ggml_sycl_enable_esimd && ggml_sycl_supports_reorder_esimd(src0->type);
-        if (ggml_sycl_supports_reorder_mmvq(src0->type)) {
-            // Arc770 get benefit with Q4_0 by skipping MMVQ path
-            if (!(ggml_sycl_info().devices[ctx.device].hw_info.arch ==
-                        gpu_arch::intel_gpu_acm_g10 &&
-                    src0->type == GGML_TYPE_Q4_0)) {
-                use = use || !use_mul_mat_vec_q;
-            }
+        // Arc770 get benefit with Q4_0 by skipping MMVQ path
+        if (!(ggml_sycl_info().devices[ctx.device].hw_info.arch ==
+                    gpu_arch::intel_gpu_acm_g10 &&
+                src0->type == GGML_TYPE_Q4_0)) {
+            use = use || !use_mul_mat_vec_q;
         }
         use_dequantize_mul_mat_vec = use_dequantize_mul_mat_vec && use;
     }
