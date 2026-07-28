@@ -1,8 +1,9 @@
 {#- Iteration on laguna_glm_thinking_v8/chat_template.jinja -#}
 {#- No formatting instructions -#}
 {{- "〈|EOS|〉" -}}
-{%- set enable_thinking = enable_thinking | default(false) -%}
+{%- set enable_thinking = enable_thinking | default(true) -%}
 {%- set add_generation_prompt = add_generation_prompt | default(false) -%}
+{%- set preserve_thinking = preserve_thinking | default(false) -%}
 
 {#- ───── header (system message) ───── -#}
 {#- A caller-supplied system message with empty content opts out of the default below, producing no <system> block — used to train without a system message. -#}
@@ -51,7 +52,7 @@
         {%- set reasoning_content = message.reasoning_content -%}
       {%- endif -%}
       {#- Display reasoning content for all messages if enable_thinking -#}
-      {%- if enable_thinking -%}
+      {%- if enable_thinking or preserve_thinking -%}
         {{- '<think>' + reasoning_content + '</think>' -}}
       {%- else -%}
         {{- '</think>' -}}
