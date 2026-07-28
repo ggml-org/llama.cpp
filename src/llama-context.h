@@ -378,6 +378,13 @@ private:
     // env: LLAMA_GRAPH_REUSE_DISABLE
     bool graph_reuse_disable = false;
 
+    // true if any graph input lives in a device-owned host buffer (ROCm_Host,
+    // CUDA_Host, Vulkan_Host, ...). such inputs are written by set_inputs with a
+    // plain CPU memcpy that is not ordered against an in-flight compute, so they
+    // require an explicit synchronization before they can be overwritten.
+    // recomputed whenever the graph is rebuilt.
+    bool gf_host_inputs = false;
+
     // perf
     mutable int64_t t_start_us  = 0;
     mutable int64_t t_load_us   = 0;
