@@ -5762,7 +5762,7 @@ kernel void kernel_upscale_bicubic_f32(
     const float w_y2 = bicubic_weight1(1.0f - fd1);
     const float w_y3 = bicubic_weight2(2.0f - fd1);
 
-    const device const char * src_slice = src0 + i03 * args.nb03 + i02 * args.nb02;
+    const device char * src_slice = src0 + i03 * args.nb03 + i02 * args.nb02;
 
     device float * dst_ptr = (device float *)(dst + i3 * args.nb3 + i2 * args.nb2 + i1 * args.nb1);
 
@@ -6171,6 +6171,68 @@ kernel void kernel_argsort_merge_f32_i32(
 
 template [[host_name("kernel_argsort_merge_f32_i32_asc")]]  kernel argsort_merge_t kernel_argsort_merge_f32_i32<GGML_SORT_ORDER_ASC>;
 template [[host_name("kernel_argsort_merge_f32_i32_desc")]] kernel argsort_merge_t kernel_argsort_merge_f32_i32<GGML_SORT_ORDER_DESC>;
+
+template<int N>
+kernel void kernel_fwht_f32(
+        constant ggml_metal_kargs_fwht & args,
+        device const float * src,
+        device float * dst,
+        uint3  tgpig[[threadgroup_position_in_grid]],
+        ushort sgitg[[simdgroup_index_in_threadgroup]],
+        ushort tiisg[[thread_index_in_simdgroup]],
+        ushort3  ntg[[threads_per_threadgroup]]) {
+
+    constexpr int NW = N_SIMDWIDTH;
+    constexpr int NE = N / NW;
+
+    const float scale = 1.0f / sqrt((float) N);
+
+    const int sg_per_tg = ntg.x / NW;
+    const int64_t r = tgpig.x * sg_per_tg + sgitg;
+    if (r >= args.nrows) {
+        return;
+    }
+
+    src += r * N;
+    dst += r * N;
+
+    const int lane = tiisg;
+
+    float reg[NE];
+    for (int i = 0; i < NE; i++) {
+        reg[i] = src[i*NW + lane]*scale;
+    }
+    for (int i = 1; i < NW; i *= 2) {
+        for (int j = 0; j < NE; j++) {
+            const float val = reg[j];
+            const float val2 = simd_shuffle_xor(val, i);
+            reg[j] = (lane & i) == 0 ? val2 + val : val2 - val;
+        }
+    }
+
+    for (int i = NW; i < N; i *= 2) {
+        const int step = i / NW;
+        for (int j = 0; j < NE; j += (2 * step)) {
+            for (int k = 0; k < step; k++) {
+                const float x = reg[j + k ];
+                const float y = reg[j + k + step];
+                reg[j + k]        = x + y;
+                reg[j + k + step] = x - y;
+            }
+        }
+    }
+
+    for (int i = 0; i < NE; i++) {
+        dst[i*NW + lane] = reg[i];
+    }
+}
+
+typedef decltype(kernel_fwht_f32<64>) kernel_fwht_t;
+
+template [[host_name("kernel_fwht_f32_64")]]  kernel kernel_fwht_t kernel_fwht_f32<64>;
+template [[host_name("kernel_fwht_f32_128")]] kernel kernel_fwht_t kernel_fwht_f32<128>;
+template [[host_name("kernel_fwht_f32_256")]] kernel kernel_fwht_t kernel_fwht_f32<256>;
+template [[host_name("kernel_fwht_f32_512")]] kernel kernel_fwht_t kernel_fwht_f32<512>;
 
 constant bool FC_flash_attn_ext_pad_has_mask [[function_constant(FC_FLASH_ATTN_EXT_PAD + 0)]];
 
