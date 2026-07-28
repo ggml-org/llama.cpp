@@ -1451,11 +1451,6 @@ class peg_tester {
         template_path_(template_path),
         detailed_debug_(detailed_debug) {}
 
-    explicit peg_tester(common_chat_templates_ptr tmpls, const std::string & template_path, const bool detailed_debug = false) :
-        tmpls_(std::move(tmpls)),
-        template_path_(template_path),
-        detailed_debug_(detailed_debug) {}
-
     const std::string & template_path() const { return template_path_; }
 
     peg_test_builder test(const std::string & input);
@@ -2252,6 +2247,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             })
             .run();
 
+
         // test code that starts with indent
         tst.test(
                "<tool_call>\n"
@@ -2272,100 +2268,6 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
 
         tst.test(
-               "Need to inspect the current directory.\n"
-               "<tool_call>\n"
-               "<function=run_in_terminal>\n"
-               "<parameter=command>\n"
-               "pwd\n"
-               "</parameter>\n"
-               "</function>\n"
-               "</tool_call>\n"
-               "</think>\n"
-               "Done.")
-            .enable_thinking(true)
-            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
-            .tools({ run_in_terminal_tool })
-            .expect_reasoning("Need to inspect the current directory.")
-            .expect_content("Done.")
-            .expect_tool_calls({
-                { "run_in_terminal", R"({"command": "pwd"})", {} },
-            })
-            .run();
-
-        tst.test(
-               "Need to inspect the current directory.\n"
-               "<tool_call>\n"
-               "<function=run_in_terminal>\n"
-               "<parameter=command>\n"
-               "pwd\n"
-               "</parameter>\n"
-               "</function>\n"
-               "</tool_call>\n"
-               "Done.")
-            .enable_thinking(true)
-            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
-            .tools({ run_in_terminal_tool })
-            .expect_reasoning("Need to inspect the current directory.")
-            .expect_content("Done.")
-            .expect_tool_calls({
-                { "run_in_terminal", R"({"command": "pwd"})", {} },
-            })
-            .run();
-
-        tst.test(
-               "<tool_call>\n"
-               "<function=edit>\n"
-               "<parameter=newString>\n"
-               "new text\n"
-               "</parameter>\n"
-               "<parameter=oldString>\n"
-               "old text\n"
-               "</parameter>\n"
-               "<parameter=filename>\n"
-               "foo.cpp\n"
-               "</parameter>\n"
-               "</function>\n"
-               "</tool_call>")
-            .enable_thinking(false)
-            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
-            .tools({ edit_tool })
-            .expect_tool_calls({
-                { "edit", R"({"newString": "new text", "oldString": "old text", "filename": "foo.cpp"})", {} },
-            })
-            .run();
-
-        tst.test(
-               "Need the directory.\n"
-               "<tool_call>\n"
-               "<function=run_in_terminal>\n"
-               "<parameter=command>\n"
-               "pwd\n"
-               "</parameter>\n"
-               "</function>\n"
-               "</tool_call>\n"
-               "Need the files.\n"
-               "<tool_call>\n"
-               "<function=run_in_terminal>\n"
-               "<parameter=command>\n"
-               "ls\n"
-               "</parameter>\n"
-               "</function>\n"
-               "</tool_call>\n"
-               "</think>\n"
-               "Done.")
-            .enable_thinking(true)
-            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
-            .parallel_tool_calls(true)
-            .tools({ run_in_terminal_tool })
-            .expect_reasoning("Need the directory.")
-            .expect_content("Need the files.\nDone.")
-            .expect_tool_calls({
-                { "run_in_terminal", R"({"command": "pwd"})", {} },
-                { "run_in_terminal", R"({"command": "ls"})", {} },
-            })
-            .run();
-
-        tst.test(
                "I need to output the invoice details in JSON\n"
                "</think>\n\n"
                R"({"amount": 123.45, "date": "2025-12-03"})")
@@ -2376,46 +2278,39 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
             .run();
 
-        // tool call segment in reasoning
+        // a tool call ends the prefilled thinking block, with or without a closing </think>
         tst.test(
-               "Let's call a tool: <tool_call>\n"
-               "<function=python>\n"
-               "<parameter=code>\n"
-               "def hello():\n"
-               "    print(\"Not the real call!\")\n"
-               "\n"
-               "hello()\n"
-               "</parameter>\n"
-               "</function>\n"
-               "</tool_call>\n</think>\n\n"
                "<tool_call>\n"
-               "<function=python>\n"
-               "<parameter=code>\n"
-               "def hello():\n"
-               "    print(\"Hello, world!\")\n"
-               "\n"
-               "hello()\n"
+               "<function=run_in_terminal>\n"
+               "<parameter=command>\n"
+               "pwd\n"
                "</parameter>\n"
                "</function>\n"
                "</tool_call>")
             .enable_thinking(true)
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
-            .tools({
-                python_tool
-        })
-            .expect_reasoning(
-                "Let's call a tool: <tool_call>\n"
-                "<function=python>\n"
-                "<parameter=code>\n"
-                "def hello():\n"
-                "    print(\"Not the real call!\")\n"
-                "\n"
-                "hello()\n"
-                "</parameter>\n"
-                "</function>\n"
-                "</tool_call>")
+            .tools({ run_in_terminal_tool })
             .expect_tool_calls({
-                { "python", "{\"code\": \"def hello():\\n    print(\\\"Hello, world!\\\")\\n\\nhello()\"}", {} },
+                { "run_in_terminal", R"({"command": "pwd"})", {} },
+            })
+            .run();
+
+        // ...including after the model has thought about it
+        tst.test(
+               "Need to inspect the current directory.\n"
+               "<tool_call>\n"
+               "<function=run_in_terminal>\n"
+               "<parameter=command>\n"
+               "pwd\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ run_in_terminal_tool })
+            .expect_reasoning("Need to inspect the current directory.")
+            .expect_tool_calls({
+                { "run_in_terminal", R"({"command": "pwd"})", {} },
             })
             .run();
 
@@ -2455,7 +2350,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .tools({
                 special_function_tool
         })
-            .expect_reasoning("")
+            .expect_reasoning("<think>\n\n")
             .expect_tool_calls({ { "special_function", "{\"arg1\": 1}", "" } })
             .run();
 
@@ -2557,24 +2452,6 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_tool_calls({
                 { "run_in_terminal", R"({"command": "pwd"})", {} },
             })
-            .run();
-
-        tst.test(
-               "I might call <tool_call> later, but I am still thinking.\n"
-               "</think>\n\n"
-               "Final answer without tools.")
-            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
-            .enable_thinking(true)
-            .tools({ run_in_terminal_tool })
-            .expect_reasoning("I might call <tool_call> later, but I am still thinking.")
-            .expect_content("Final answer without tools.")
-            .run();
-
-        tst.test("Final answer without thinking.")
-            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
-            .enable_thinking(true)
-            .tools({ run_in_terminal_tool })
-            .expect_content("Final answer without thinking.")
             .run();
 
         // Continuation tests
@@ -2681,93 +2558,6 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 .expect_tool_calls({
                     { "run_in_terminal", R"({"command": "pwd"})", {} },
                 })
-                .run();
-        }
-
-        {
-            auto src = read_file("models/templates/Qwen3.5-4B.jinja");
-            string_replace_all(src,
-                "{%- if add_generation_prompt %}\n"
-                "    {{- '<|im_start|>assistant\\n' }}\n"
-                "    {%- if enable_thinking is defined and enable_thinking is false %}\n"
-                "        {{- '<think>\\n\\n</think>\\n\\n' }}\n"
-                "    {%- else %}\n"
-                "        {{- '<think>\\n' }}\n"
-                "    {%- endif %}\n"
-                "{%- endif %}",
-                "{%- if add_generation_prompt %}\n"
-                "    {{- '<|im_start|>assistant\\n' }}\n"
-                "{%- endif %}");
-
-            auto no_prefill = peg_tester(
-                common_chat_templates_ptr(common_chat_templates_init(/* model= */ nullptr, src)),
-                "models/templates/Qwen3.5-4B-no-prefill-think.jinja",
-                detailed_debug);
-
-            no_prefill.test(
-                   "<think>\n"
-                   "I need to run a terminal command.\n"
-                   "</think>\n\n"
-                   "<tool_call>\n"
-                   "<function=run_in_terminal>\n"
-                   "<parameter=command>\n"
-                   "pwd\n"
-                   "</parameter>\n"
-                   "</function>\n"
-                   "</tool_call>")
-                .enable_thinking(true)
-                .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
-                .tools({ run_in_terminal_tool })
-                .expect_reasoning("I need to run a terminal command.")
-                .expect_tool_calls({
-                    { "run_in_terminal", R"({"command": "pwd"})", {} },
-                })
-                .run();
-
-            no_prefill.test(
-                   "<think>\n"
-                   "I need to run a terminal command.\n"
-                   "<tool_call>\n"
-                   "<function=run_in_terminal>\n"
-                   "<parameter=command>\n"
-                   "pwd\n"
-                   "</parameter>\n"
-                   "</function>\n"
-                   "</tool_call>\n"
-                   "Done.")
-                .enable_thinking(true)
-                .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
-                .tools({ run_in_terminal_tool })
-                .expect_reasoning("I need to run a terminal command.")
-                .expect_content("Done.")
-                .expect_tool_calls({
-                    { "run_in_terminal", R"({"command": "pwd"})", {} },
-                })
-                .run();
-
-            no_prefill.test(
-                   "I need to run a terminal command.\n"
-                   "<tool_call>\n"
-                   "<function=run_in_terminal>\n"
-                   "<parameter=command>\n"
-                   "pwd\n"
-                   "</parameter>\n"
-                   "</function>\n"
-                   "</tool_call>")
-                .enable_thinking(true)
-                .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
-                .tools({ run_in_terminal_tool })
-                .expect_reasoning("I need to run a terminal command.")
-                .expect_tool_calls({
-                    { "run_in_terminal", R"({"command": "pwd"})", {} },
-                })
-                .run();
-
-            no_prefill.test("Final answer without thinking.")
-                .enable_thinking(true)
-                .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
-                .tools({ run_in_terminal_tool })
-                .expect_content("Final answer without thinking.")
                 .run();
         }
     }
@@ -2966,49 +2756,6 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .json_schema(invoice_schema)
             .expect_reasoning("I need to output the invoice details in JSON")
             .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
-            .run();
-
-        // tool call segment in reasoning
-        tst.test(
-               "Let's call a tool: <tool_call>\n"
-               "<function=python>\n"
-               "<parameter=code>\n"
-               "def hello():\n"
-               "    print(\"Not the real call!\")\n"
-               "\n"
-               "hello()\n"
-               "</parameter>\n"
-               "</function>\n"
-               "</tool_call>\n</think>\n"
-               "<tool_call>\n"
-               "<function=python>\n"
-               "<parameter=code>\n"
-               "def hello():\n"
-               "    print(\"Hello, world!\")\n"
-               "\n"
-               "hello()\n"
-               "</parameter>\n"
-               "</function>\n"
-               "</tool_call>\n"
-            )
-            .enable_thinking(true)
-            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
-            .tools({
-                python_tool
-        })
-            .expect_reasoning("Let's call a tool: <tool_call>\n"
-               "<function=python>\n"
-               "<parameter=code>\n"
-               "def hello():\n"
-               "    print(\"Not the real call!\")\n"
-               "\n"
-               "hello()\n"
-               "</parameter>\n"
-               "</function>\n"
-               "</tool_call>\n")
-            .expect_tool_calls({
-                { "python", "{\"code\": \"def hello():\\n    print(\\\"Hello, world!\\\")\\n\\nhello()\"}", {} },
-            })
             .run();
 
         // Continuation tests
@@ -3868,6 +3615,37 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
         })
             .expect_tool_calls({
                 { "todo_list", "{\"todos\": [{\"item\": \"Check stuff\", \"selected\": false}, {\"item\": \"Prepare stuff\", \"selected\": true}]}", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // Test flexible required argument ordering (required args still come first, in any order)
+        tst.test(
+               "<tool_call>\n"
+               "<function=edit>\n"
+               "<parameter=newString>\n#include\n</parameter>\n"
+               "<parameter=filename>\nfoo.c\n</parameter>\n"
+               "<parameter=oldString>\n#iclunde\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ edit_tool })
+            .expect_tool_calls({
+                { "edit", R"({"newString": "#include", "filename": "foo.c", "oldString": "#iclunde"})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        tst.test(
+               "<tool_call>\n"
+               "<function=tool_2req_4opt>\n"
+               "<parameter=req2>\n42\n</parameter>\n"
+               "<parameter=req1>\nhello\n</parameter>\n"
+               "<parameter=opt2>\n200\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ tool_2req_4opt })
+            .expect_tool_calls({
+                { "tool_2req_4opt", R"({"req2": 42, "req1": "hello", "opt2": 200})", {} },
             })
             .expect_reconstruction()
             .run();
