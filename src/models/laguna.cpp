@@ -58,6 +58,7 @@ void llama_model_laguna::load_arch_hparams(llama_model_loader & ml) {
 
     switch (hparams.n_layer()) {
         case 40: type = LLM_TYPE_30B_A3B;   break;  // Laguna-XS.2
+        case 48: type = LLM_TYPE_118B_A8B;  break;  // Laguna-S.2
         case 70: type = LLM_TYPE_230B_A10B; break;  // Laguna-M.1
         default: type = LLM_TYPE_UNKNOWN;
     }
