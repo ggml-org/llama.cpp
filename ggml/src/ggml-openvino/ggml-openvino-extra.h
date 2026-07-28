@@ -67,9 +67,25 @@ struct ggml_openvino_device_config {
     std::unordered_map<std::string, std::string> environment_variables;
     cl_command_queue cl_queue = nullptr;
 
+    // Phase split: prefill and decode may compile/run on different OpenVINO devices.
+    bool phase_split = false;
+    std::string prefill_device;
+    std::string decode_device;
+
     void init();
     ~ggml_openvino_device_config();
 };
+
+bool ggml_openvino_device_is_gpu(const std::string & device);
+
+bool ggml_openvino_phase_split_enabled();
+
+const std::string & ggml_openvino_get_prefill_device();
+
+const std::string & ggml_openvino_get_decode_device();
+
+// CPU on one phase and GPU on the other: KV in USM host memory (UMA, no copy at phase switch).
+bool ggml_openvino_phase_split_shared_kv();
 
 // Get the global device config singleton
 ggml_openvino_device_config & ggml_openvino_get_device_config();

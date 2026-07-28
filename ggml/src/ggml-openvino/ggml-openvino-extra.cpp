@@ -31,6 +31,9 @@ void ggml_openvino_device_config::init() {
         // String values (use ggml_openvino_getenv_str)
         "GGML_OPENVINO_DEVICE",
         "GGML_OPENVINO_CACHE_DIR",
+        "GGML_OPENVINO_PREFILL_DEVICE",
+        "GGML_OPENVINO_DECODE_DEVICE",
+        "GGML_OPENVINO_PHASE_SPLIT",
         // Integer values (use ggml_openvino_getenv_int)
         "GGML_OPENVINO_PREFILL_CHUNK_SIZE",
         // Boolean toggles (treated as int flags via ggml_openvino_getenv_int)
@@ -54,12 +57,42 @@ void ggml_openvino_device_config::init() {
         }
     }
 
-    device_name = ggml_openvino_getenv_str("GGML_OPENVINO_DEVICE", "CPU");
     auto available_devices = ov_singleton_core().get_available_devices();
-    if (std::find(available_devices.begin(), available_devices.end(), device_name) == available_devices.end()) {
-        GGML_LOG_WARN("GGML OpenVINO Backend: device %s is not available, fallback to CPU\n", device_name.c_str());
-        device_name = "CPU";
+
+    auto resolve_device = [&](const char * env_var, const std::string & fallback) -> std::string {
+        const char * requested = ggml_openvino_getenv_str(env_var, nullptr);
+        std::string dev = requested ? requested : fallback;
+        if (std::find(available_devices.begin(), available_devices.end(), dev) == available_devices.end()) {
+            GGML_LOG_WARN("GGML OpenVINO Backend: device %s (%s) is not available, fallback to CPU\n", dev.c_str(),
+                          env_var);
+            dev = "CPU";
+        }
+        return dev;
+    };
+
+    device_name = resolve_device("GGML_OPENVINO_DEVICE", "CPU");
+    prefill_device = resolve_device("GGML_OPENVINO_PREFILL_DEVICE", device_name);
+    decode_device  = resolve_device("GGML_OPENVINO_DECODE_DEVICE", device_name);
+
+    const bool phase_split_env = ggml_openvino_getenv_int("GGML_OPENVINO_PHASE_SPLIT") != 0;
+    phase_split = phase_split_env || prefill_device != decode_device;
+
+    if (phase_split) {
+        // Host-visible weights/KV when CPU participates in prefill (see buffer_init_tensor).
+        if (!ggml_openvino_device_is_gpu(prefill_device)) {
+            device_name = prefill_device;
+        } else if (!ggml_openvino_device_is_gpu(decode_device)) {
+            device_name = decode_device;
+        }
+        if (ggml_openvino_phase_split_shared_kv()) {
+            GGML_LOG_INFO("OpenVINO phase split: prefill=%s decode=%s (KV USM host / UMA)\n", prefill_device.c_str(),
+                          decode_device.c_str());
+        } else {
+            GGML_LOG_INFO("OpenVINO phase split: prefill=%s decode=%s (buffer device=%s)\n", prefill_device.c_str(),
+                          decode_device.c_str(), device_name.c_str());
+        }
     }
+
     is_npu = (device_name == "NPU");
 
     const char * cache_dir = ggml_openvino_getenv_str("GGML_OPENVINO_CACHE_DIR");
@@ -85,7 +118,10 @@ void ggml_openvino_device_config::init() {
     }
 
     // Initialize remote context with queue sharing for GPU
-    if (device_name == "GPU") {
+    const bool needs_gpu_remote = ggml_openvino_device_is_gpu(device_name) ||
+                                  (phase_split && (ggml_openvino_device_is_gpu(prefill_device) ||
+                                                   ggml_openvino_device_is_gpu(decode_device)));
+    if (needs_gpu_remote) {
         // Create OpenCL context and queue
         cl_int err;
         cl_platform_id platform;
@@ -149,6 +185,32 @@ void ggml_openvino_init_device_config() {
 // Get the device name
 const std::string & ggml_openvino_get_device_name() {
     return ggml_openvino_get_device_config().device_name;
+}
+
+bool ggml_openvino_device_is_gpu(const std::string & device) {
+    return device == "GPU" || (device.rfind("GPU.", 0) == 0);
+}
+
+bool ggml_openvino_phase_split_enabled() {
+    return ggml_openvino_get_device_config().phase_split;
+}
+
+const std::string & ggml_openvino_get_prefill_device() {
+    return ggml_openvino_get_device_config().prefill_device;
+}
+
+const std::string & ggml_openvino_get_decode_device() {
+    return ggml_openvino_get_device_config().decode_device;
+}
+
+bool ggml_openvino_phase_split_shared_kv() {
+    const auto & cfg = ggml_openvino_get_device_config();
+    if (!cfg.phase_split) {
+        return false;
+    }
+    const bool pp_gpu = ggml_openvino_device_is_gpu(cfg.prefill_device);
+    const bool tg_gpu = ggml_openvino_device_is_gpu(cfg.decode_device);
+    return pp_gpu != tg_gpu;
 }
 
 // Get the value of a GGML_OPENVINO_* env var as a string. Returns
@@ -418,11 +480,12 @@ ggml_openvino_tensor_extra * ggml_openvino_create_tensor_extra(const ggml_tensor
     }
 
     const auto & device_name = ggml_openvino_get_device_name();
+    (void) device_name;
     auto remote_context = ggml_openvino_get_remote_context();
 
     std::shared_ptr<ov::Tensor> ov_tensor;
     if (is_remote) {
-        GGML_ASSERT(device_name == "GPU");
+        GGML_ASSERT(remote_context.has_value());
         auto gpu_context = remote_context->as<ov::intel_gpu::ocl::ClContext>();
         auto usm_tensor = gpu_context.create_tensor(element_type, shape, tensor->data);
         ov_tensor = std::make_shared<ov::intel_gpu::ocl::USMTensor>(std::move(usm_tensor));
