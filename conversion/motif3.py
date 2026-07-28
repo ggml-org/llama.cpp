@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Iterable
 
 from .base import ModelBase, TextModel, gguf, logger
@@ -22,14 +23,43 @@ class Motif3Model(TextModel):
         self._mhc_alpha: dict[str, dict[str, Tensor]] = {}
 
     def get_vocab_base_pre(self, tokenizer) -> str:
-        try:
-            return super().get_vocab_base_pre(tokenizer)
-        except NotImplementedError:
-            logger.warning(
-                "unrecognized pre-tokenizer (hash not in convert_hf_to_gguf_update.py); "
-                "falling back to 'gpt-2'. Tokenization of unusual strings may differ slightly - "
-                "consider registering the proper pre-tokenizer for production use.")
-            return "gpt-2"
+        """Return the llama.cpp pre-tokenizer used by the shipped Motif-3 tokenizer.
+        
+        """
+        backend = getattr(tokenizer, "backend_tokenizer", None)
+        if backend is None:
+            # Compatibility with older transformers releases.
+            backend = getattr(tokenizer, "_tokenizer", None)
+        if backend is None:
+            raise TypeError(
+                "Motif-3 conversion requires a fast tokenizer exposing "
+                "backend_tokenizer")
+
+        tokenizer_cfg = json.loads(backend.to_str())
+        model_cfg = tokenizer_cfg.get("model") or {}
+        pre_cfg = tokenizer_cfg.get("pre_tokenizer") or {}
+        decoder_cfg = tokenizer_cfg.get("decoder") or {}
+
+        is_gpt2_bytelevel = (
+            tokenizer_cfg.get("normalizer") is None
+            and model_cfg.get("type") == "BPE"
+            and not bool(model_cfg.get("byte_fallback", False))
+            and pre_cfg.get("type") == "ByteLevel"
+            and not bool(pre_cfg.get("add_prefix_space", False))
+            and bool(pre_cfg.get("use_regex", True))
+            and decoder_cfg.get("type") == "ByteLevel"
+        )
+
+        if not is_gpt2_bytelevel:
+            raise NotImplementedError(
+                "Motif-3 tokenizer no longer matches llama.cpp's 'gpt-2' "
+                "ByteLevel pre-tokenizer; add an explicit tokenizer.ggml.pre "
+                "implementation instead of silently aliasing it. "
+                f"normalizer={tokenizer_cfg.get('normalizer')!r}, "
+                f"pre_tokenizer={pre_cfg!r}, decoder={decoder_cfg!r}, "
+                f"model.type={model_cfg.get('type')!r}")
+
+        return "gpt-2"
 
     def set_vocab(self):
         self._set_vocab_gpt2()
