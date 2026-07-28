@@ -105,6 +105,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
             || arch == LLM_ARCH_DEEPSEEK32
             || arch == LLM_ARCH_GLM_DSA
             || arch == LLM_ARCH_KIMI_LINEAR
+            || arch == LLM_ARCH_KIMI_K3
             || arch == LLM_ARCH_MISTRAL4) {
         n_embd = 128;
         n_head = 1;
@@ -145,7 +146,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
     ms.add_kv(LLM_KV_FULL_ATTENTION_INTERVAL, uint32_t(2));
 
     if (arch == LLM_ARCH_PLAMO2 || arch == LLM_ARCH_JAMBA || arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE ||
-            arch == LLM_ARCH_GRANITE_HYBRID || arch == LLM_ARCH_LFM2 || arch == LLM_ARCH_LFM2MOE || arch == LLM_ARCH_KIMI_LINEAR) {
+            arch == LLM_ARCH_GRANITE_HYBRID || arch == LLM_ARCH_LFM2 || arch == LLM_ARCH_LFM2MOE || arch == LLM_ARCH_KIMI_LINEAR || arch == LLM_ARCH_KIMI_K3) {
         GGML_ASSERT(n_layer >= 2);
         std::vector<uint32_t> n_head_per_layer;
         n_head_per_layer.reserve(n_layer);
@@ -164,6 +165,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
             || arch == LLM_ARCH_DEEPSEEK32
             || arch == LLM_ARCH_GLM_DSA
             || arch == LLM_ARCH_KIMI_LINEAR
+            || arch == LLM_ARCH_KIMI_K3
             || arch == LLM_ARCH_MISTRAL4) {
         ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH,       uint32_t(576));
         ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH,     uint32_t(512));
@@ -370,6 +372,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_PADDLEOCR:
         case LLM_ARCH_MIMO2:
         case LLM_ARCH_KIMI_LINEAR:
+        case LLM_ARCH_KIMI_K3:
         case LLM_ARCH_STEP35:
         case LLM_ARCH_MISTRAL4:
         case LLM_ARCH_MELLUM:
@@ -436,7 +439,7 @@ static bool arch_supported(const llm_arch arch) {
 
     // FIXME: these hit scheduler/view-backed-output issues with WebGPU on CI.
 #ifdef GGML_USE_WEBGPU
-    if (arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_GLM_DSA) {
+    if (arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_KIMI_K3) {
         return false;
     }
 #endif // GGML_USE_WEBGPU
