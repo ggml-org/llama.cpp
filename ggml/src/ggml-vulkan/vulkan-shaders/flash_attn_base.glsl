@@ -133,7 +133,7 @@ uint fa_quant_r_mmq(uint ty) {
 
 bool fa_type_needs_shmem(uint ty) {
     switch (ty) {
-        case FA_TYPE_IQ4_NL: return true;
+        case GGML_TYPE_IQ4_NL: return true;
         default:             return false;
     }
 }
