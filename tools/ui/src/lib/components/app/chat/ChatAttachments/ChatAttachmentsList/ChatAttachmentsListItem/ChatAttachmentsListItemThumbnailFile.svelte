@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { X, Music, Video } from '@lucide/svelte';
 	import {
 		formatFileSize,
@@ -109,9 +110,9 @@
 		class="flex h-8 w-8 items-center justify-center rounded bg-primary/10 text-xs font-medium text-primary"
 	>
 		{#if isAudio}
-			<Music class="h-4 w-4 text-white/70" />
+			<Music class="{ICON_CLASS_DEFAULT} text-white/70" />
 		{:else if isVideo}
-			<Video class="h-4 w-4 text-white/70" />
+			<Video class="{ICON_CLASS_DEFAULT} text-white/70" />
 		{:else}
 			{fileTypeLabel}
 		{/if}

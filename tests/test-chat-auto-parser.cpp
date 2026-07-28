@@ -57,6 +57,15 @@ static void test_seed_oss_tool_with_reasoning(testing & t);
 static void test_nemotron_analysis(testing & t);
 static void test_nemotron_reasoning_detection(testing & t);
 static void test_nemotron_tool_format(testing & t);
+static void test_laguna_analysis(testing & t);
+static void test_laguna_reasoning_detection(testing & t);
+static void test_laguna_tool_format(testing & t);
+static void test_laguna_s_analysis(testing & t);
+static void test_laguna_s_reasoning_detection(testing & t);
+static void test_laguna_s_tool_format(testing & t);
+static void test_laguna_xs2_analysis(testing & t);
+static void test_laguna_xs2_reasoning_detection(testing & t);
+static void test_laguna_xs2_tool_format(testing & t);
 
 // CohereForAI template analysis tests
 static void test_cohere_reasoning_detection(testing & t);
@@ -101,6 +110,9 @@ int main(int argc, char * argv[]) {
     t.test("seed_oss_diffs", test_seed_oss_tool_analysis);
     t.test("cohere", test_cohere_analysis);
     t.test("nemotron", test_nemotron_analysis);
+    t.test("laguna", test_laguna_analysis);
+    t.test("laguna-s", test_laguna_s_analysis);
+    t.test("laguna-xs2", test_laguna_xs2_analysis);
     t.test("smollm3", test_smollm3_analysis);
     t.test("standard_json_tools", test_standard_json_tools_formats);
     t.test("normalize_quotes_to_json", test_normalize_quotes_to_json);
@@ -1376,6 +1388,94 @@ static void test_nemotron_tool_format(testing & t) {
 
     // Verify tool support
     t.assert_true("should support tools", analysis.jinja_caps.supports_tools);
+}
+
+// ============================================================================
+// Laguna Template Analysis Tests
+// ============================================================================
+static common_chat_template load_laguna_template(testing & t) {
+    return load_template(t, "models/templates/poolside-Laguna-XS-2.1.jinja");
+}
+
+static void test_laguna_reasoning_detection(testing & t) {
+    common_chat_template tmpl = load_laguna_template(t);
+    struct autoparser analysis;
+    analysis.analyze_template(tmpl);
+    // Laguna's template renders reasoning delimiters with formatting whitespace
+    // ("<think>\n") that the model does not emit; the Laguna patch trims them.
+    t.assert_equal("reasoning_start should be '<think>'", "<think>", analysis.reasoning.start);
+    t.assert_equal("reasoning_end should be '</think>'", "</think>", analysis.reasoning.end);
+    t.assert_equal("reasoning should be TAG_BASED", reasoning_mode::TAG_BASED, analysis.reasoning.mode);
+}
+
+static void test_laguna_tool_format(testing & t) {
+    common_chat_template tmpl = load_laguna_template(t);
+    struct autoparser analysis;
+    analysis.analyze_template(tmpl);
+    t.assert_equal("arg_value_suffix should be '</arg_value>'", "</arg_value>", analysis.tools.arguments.value_suffix);
+}
+
+static void test_laguna_stop_string(testing & t) {
+    // The </assistant> turn terminator can be emitted as ordinary text tokens
+    // (not the single eot token), so it must also be a literal stop string.
+    common_chat_template tmpl = load_laguna_template(t);
+    struct autoparser analysis;
+    analysis.analyze_template(tmpl);
+    bool has_stop = false;
+    for (const auto & stop : analysis.additional_stops) {
+        if (stop == "</assistant>") { has_stop = true; break; }
+    }
+    t.assert_true("Laguna additional_stops contains </assistant>", has_stop);
+}
+
+static void test_laguna_analysis(testing & t) {
+    t.test("Laguna reasoning detection", test_laguna_reasoning_detection);
+    t.test("Laguna tool format", test_laguna_tool_format);
+    t.test("Laguna stop string", test_laguna_stop_string);
+}
+
+static common_chat_template load_laguna_s_template(testing & t) {
+    return load_template(t, "models/templates/poolside-Laguna-S-2.1.jinja");
+}
+static void test_laguna_s_reasoning_detection(testing & t) {
+    common_chat_template tmpl = load_laguna_s_template(t);
+    struct autoparser analysis;
+    analysis.analyze_template(tmpl);
+    t.assert_equal("Laguna-S(v8) reasoning_start should be '<think>'", "<think>", analysis.reasoning.start);
+    t.assert_equal("Laguna-S(v8) reasoning_end should be '</think>'", "</think>", analysis.reasoning.end);
+    t.assert_equal("Laguna-S(v8) reasoning should be TAG_BASED", reasoning_mode::TAG_BASED, analysis.reasoning.mode);
+}
+static void test_laguna_s_tool_format(testing & t) {
+    common_chat_template tmpl = load_laguna_s_template(t);
+    struct autoparser analysis;
+    analysis.analyze_template(tmpl);
+    t.assert_equal("Laguna-S(v8) arg_value_suffix should be '</arg_value>'", "</arg_value>", analysis.tools.arguments.value_suffix);
+}
+static void test_laguna_s_analysis(testing & t) {
+    t.test("Laguna-S(v8) reasoning detection", test_laguna_s_reasoning_detection);
+    t.test("Laguna-S(v8) tool format", test_laguna_s_tool_format);
+}
+
+static common_chat_template load_laguna_xs2_template(testing & t) {
+    return load_template(t, "models/templates/poolside-Laguna-XS.2.jinja");
+}
+static void test_laguna_xs2_reasoning_detection(testing & t) {
+    common_chat_template tmpl = load_laguna_xs2_template(t);
+    struct autoparser analysis;
+    analysis.analyze_template(tmpl);
+    t.assert_equal("Laguna-XS.2(v5) reasoning_start should be '<think>'", "<think>", analysis.reasoning.start);
+    t.assert_equal("Laguna-XS.2(v5) reasoning_end should be '</think>'", "</think>", analysis.reasoning.end);
+    t.assert_equal("Laguna-XS.2(v5) reasoning should be TAG_BASED", reasoning_mode::TAG_BASED, analysis.reasoning.mode);
+}
+static void test_laguna_xs2_tool_format(testing & t) {
+    common_chat_template tmpl = load_laguna_xs2_template(t);
+    struct autoparser analysis;
+    analysis.analyze_template(tmpl);
+    t.assert_equal("Laguna-XS.2(v5) arg_value_suffix should be '</arg_value>'", "</arg_value>", analysis.tools.arguments.value_suffix);
+}
+static void test_laguna_xs2_analysis(testing & t) {
+    t.test("Laguna-XS.2(v5) reasoning detection", test_laguna_xs2_reasoning_detection);
+    t.test("Laguna-XS.2(v5) tool format", test_laguna_xs2_tool_format);
 }
 
 static common_chat_template load_cohere_template(testing & t) {

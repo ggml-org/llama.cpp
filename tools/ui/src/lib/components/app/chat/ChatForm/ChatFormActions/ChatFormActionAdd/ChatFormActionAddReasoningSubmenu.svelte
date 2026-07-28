@@ -1,21 +1,22 @@
 <script lang="ts">
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { Lightbulb, LightbulbOff, Check, Info } from '@lucide/svelte';
 	import * as DropdownMenu from '$lib/components/ui/dropdown-menu';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { useReasoningMenu } from '$lib/hooks/use-reasoning-menu.svelte';
 
-	let subOpen = $state(false);
-
 	const reasoning = useReasoningMenu();
 </script>
 
 {#if reasoning.modelSupportsThinking}
-	<DropdownMenu.Sub bind:open={subOpen}>
+	<DropdownMenu.Sub>
 		<DropdownMenu.SubTrigger class="flex cursor-pointer items-center gap-2">
 			{#if reasoning.thinkingEnabled}
-				<Lightbulb class="h-4 w-4 shrink-0 text-amber-400" />
+				<Lightbulb class="{ICON_CLASS_DEFAULT} shrink-0 text-amber-400" />
+			{:else if reasoning.isOff}
+				<LightbulbOff class="{ICON_CLASS_DEFAULT} shrink-0 text-muted-foreground" />
 			{:else}
-				<LightbulbOff class="h-4 w-4 shrink-0 text-muted-foreground" />
+				<Lightbulb class="{ICON_CLASS_DEFAULT} shrink-0 text-muted-foreground" />
 			{/if}
 
 			<span
@@ -26,7 +27,7 @@
 				Reasoning
 
 				<span class="capitalize text-muted-foreground">
-					{reasoning.thinkingEnabled ? reasoning.currentEffort : 'off'}
+					{reasoning.currentEffort}
 				</span>
 			</span>
 		</DropdownMenu.SubTrigger>
@@ -36,19 +37,18 @@
 		>
 			{#each reasoning.levels as level (level.value)}
 				{@const tokenLabel = reasoning.tokenLabel(level)}
-				<button
-					type="button"
-					class="flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1.75 text-left text-sm transition-colors hover:bg-accent"
-					class:bg-accent={reasoning.isSelected(level)}
-					onclick={() => {
-						reasoning.select(level);
-						subOpen = false;
-					}}
+				<DropdownMenu.Item
+					class="flex w-full cursor-pointer items-center gap-3 rounded-md px-2 py-1.75 text-left text-sm transition-colors hover:bg-accent {reasoning.isSelected(
+						level
+					)
+						? 'bg-accent'
+						: ''}"
+					onclick={() => reasoning.select(level)}
 				>
 					{#if reasoning.isSelected(level)}
-						<Check class="h-4 w-4 shrink-0 text-foreground" />
+						<Check class="{ICON_CLASS_DEFAULT} shrink-0 text-foreground" />
 					{:else}
-						<div class="h-4 w-4 shrink-0"></div>
+						<div class="{ICON_CLASS_DEFAULT} shrink-0"></div>
 					{/if}
 
 					<span class="flex-1">{level.label}</span>
@@ -69,7 +69,7 @@
 							</Tooltip.Content>
 						</Tooltip.Root>
 					{/if}
-				</button>
+				</DropdownMenu.Item>
 			{/each}
 		</DropdownMenu.SubContent>
 	</DropdownMenu.Sub>
