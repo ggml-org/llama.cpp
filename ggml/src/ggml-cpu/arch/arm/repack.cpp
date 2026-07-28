@@ -14,7 +14,6 @@
 #include <cassert>
 #include <cstdlib> // for qsort
 #include <cstdio>  // for GGML_ASSERT
-#include <iostream>
 
 #define GGML_CPU_CLANG_WORKAROUND
 #include "../../repack.h"
@@ -4950,7 +4949,7 @@ void ggml_gemm_q6_K_8x8_q8_K(int                        n,
             }
 
             for (int b = 0; b < nb; b++) {
-                int32x4_t acc[8];  // rows 01 stored inc [0][1][2][3], rows 23 stored in [4][5][6][7]
+                int32x4_t acc[8];  // rows 01 stored in [0][1][2][3], rows 23 stored in [4][5][6][7]
                 for (int i = 0; i < 8; i++) {
                     acc[i] = vdupq_n_s32(0);
                 }
