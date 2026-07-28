@@ -1768,8 +1768,6 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                             svint32_t scale_vec_l, scale_vec_h;
                             
                             // Combined for cp0 and cp1
-                            // const int scale_idx_l = half * 8 + sb;
-                            // const int scale_idx_h = half * 8 + sb + 4;
                             if(half == 0){
                                 if(sb == 0){
                                     //half * 8 + sb-> 0
@@ -1906,8 +1904,6 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                             sum_h_1 = pairwise_add_4xi32_sve1(sb_acc_h);
 
                             // Combined for cp2 and cp3
-                            // const int scale_idx_l = half * 8 + sb;
-                            // const int scale_idx_h = half * 8 + sb + 4;
                             if(half == 0){
                                 if(sb == 0){
                                     //half * 8 + sb-> 0
@@ -2091,7 +2087,6 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                         // Since q6_K scales are per 16 elements
                         // num sbs -> 256 elements / (16 elements/scale * 2 elements/byte * 2 halves)
                         for (int sb = 0; sb < QK_K / 64; sb++) {
-                            // auto tbegin_cp = std::chrono::high_resolution_clock::now();
                             const int8_t * q8_base_l = q8_ptr[b].qs + half * 128 + sb * 16;
                             const int8_t * q8_base_h = q8_base_l + 64;
 
@@ -2156,12 +2151,8 @@ void ggml_gemv_q6_K_8x8_q8_K(int                        n,
                             sb_acc_h = svdot_s32(sb_acc_h, q6_h1, q8_h_1);
 
                             // Pairwise add to get per-column sums: [col0, col1]
-                            // auto tbegin_padd = std::chrono::high_resolution_clock::now();
                             svint32_t sum_l_01 = pairwise_add_8xi32_sve1(sb_acc_l);
                             svint32_t sum_h_01 = pairwise_add_8xi32_sve1(sb_acc_h);
-                            // auto tend_padd = std::chrono::high_resolution_clock::now();
-                            // double sec_padd = std::chrono::duration<double>(tbegin_padd - tend_padd).count();
-                            // total_padd_time+=sec_padd*10e9;
 
                             // Extract high 2 bits for upper nibble reconstruction - 23
                             q6_qs_cp_0_hh = svand_u8_x(pg8_32, q6_qh_0_23, mask_hi);
