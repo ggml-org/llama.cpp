@@ -192,6 +192,19 @@ Example Video:
 
 - See #19164
 
+### Suffix Decoding (`ngram-suffix`)
+
+This model-free implementation builds an online, path-compressed suffix tree over the prompt and all previously generated tokens. Unlike the fixed-size n-gram lookups above, it matches the **longest** suffix of the current context that has occurred before and drafts the most frequent continuation that followed it, scored by token frequency. The number of drafted tokens scales with the length of the matched context (`--spec-ngram-suffix-max-factor`), so more reliable (longer) matches speculate deeper.
+
+It is especially effective when the output repeats structured content already in the context (code editing, agentic tool loops, reasoning models that restate their thinking, summarization).
+
+**Sample usage:**
+```
+llama-server [...] --spec-type ngram-suffix --spec-ngram-suffix-n-max 24 --spec-ngram-suffix-max-factor 1.0 --spec-ngram-suffix-min-prob 0.1
+```
+
+ref: Suffix Decoding, arXiv:2411.04975
+
 ### Differences between ngram-simple, ngram-map and ngram-mod
 
 - ngram-simple looks for a previous matching n-gram and inserts the following m-gram.
@@ -205,7 +218,7 @@ If a draft model is combined with a draftless decoding the draftless decoding ha
 ### General Speculative Parameters
 
 ```
---spec-type [none|draft-simple|draft-eagle3|draft-dflash|draft-dspark|draft-mtp|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]
+--spec-type [none|draft-simple|draft-eagle3|draft-dflash|draft-dspark|draft-mtp|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod|ngram-suffix]
                                         comma-separated list of types of speculative decoding to use
                                         (default: none)
                                         (env: LLAMA_ARG_SPEC_TYPE)
