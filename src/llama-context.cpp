@@ -3538,8 +3538,8 @@ llama_context * llama_init_from_model(
         }
     }
 
-    if (model->arch == LLM_ARCH_DEEPSEEK4 && params.type_k != params.type_v) {
-        LLAMA_LOG_ERROR("%s: DeepSeek V4 does not support different K (%s) and V (%s) cache types\n", __func__, ggml_type_name(params.type_k), ggml_type_name(params.type_v));
+    if ((model->hparams.is_mla() || model->arch == LLM_ARCH_DEEPSEEK4) && params.type_k != params.type_v) {
+        LLAMA_LOG_ERROR("%s: model does not support different K (%s) and V (%s) cache types\n", __func__, ggml_type_name(params.type_k), ggml_type_name(params.type_v));
         return nullptr;
     }
 
