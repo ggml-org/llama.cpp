@@ -589,7 +589,7 @@ struct server_tool_exec_shell_command : server_tool {
     static constexpr const char *shell_symbol_blacklist = "%<>$&!";
     // Safe because they can not begin command string (unless whitelisted): "*"
     // Separate (potential) command segments:
-    static constexpr const char *shell_cmd_delims = "|;";
+    static constexpr const char *shell_cmd_delims = "|;\n";
     // Isolate executables (from arguments/segments):
     static constexpr const char *shell_delims     = "|;" " \t\n";
 #else
@@ -597,7 +597,7 @@ struct server_tool_exec_shell_command : server_tool {
     static constexpr const char *shell_symbol_blacklist = "`<>$()&";
     // Safe because they can not begin command string (unless whitelisted): "*!"
     // Separate (potential) command segments:
-    static constexpr const char *shell_cmd_delims = "|;";
+    static constexpr const char *shell_cmd_delims = "|;\n";
     // Isolate executables (from arguments/segments):
     static constexpr const char *shell_delims     = "|;" " \t\n";
 #endif
