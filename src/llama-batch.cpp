@@ -298,7 +298,9 @@ bool llama_batch_allocr::init(
                 bool ok = true;
 
                 if (seq_pos_min(s) != p0 + 1) {
-                    ok = false;
+                    LLAMA_LOG_WARN(
+                            "%s: warning: sequence %d positions are not consecutive: X = %d, Y = %d\n",
+                            __func__, s, p0, seq_pos_min(s));
                 }
 
                 if (!ok) {
