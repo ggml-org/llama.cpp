@@ -932,6 +932,7 @@ static ggml_kleidiai_kernels gemm_gemv_kernels_q8[] = {
             /* .get_lhs_offset_ex     = */ &kernel_offs_fn2<kai_get_lhs_packed_offset_matmul_clamp_f32_qai8dxp1vlx4_qsi8cxp4vlx4_1vlx4vl_sme_mopa>,
             /* .get_rhs_packed_offset_ex = */ &kernel_offs_fn2<kai_get_rhs_packed_offset_matmul_clamp_f32_qai8dxp1vlx4_qsi8cxp4vlx4_1vlx4vl_sme_mopa>,
             /* .run_kernel_ex         = */ &kernel_run_float_fn10<kai_run_matmul_clamp_f32_qai8dxp1vlx4_qsi8cxp4vlx4_1vlx4vl_sme_mopa>,
+            /* .run_kernel_lut_ex     = */ nullptr,
         },
         /* .gemm_lhs_info = */ {
             /* .get_offset            = */ kai_get_lhs_offset_lhs_quant_pack_qai8dxp_f32,
@@ -952,6 +953,7 @@ static ggml_kleidiai_kernels gemm_gemv_kernels_q8[] = {
             /* .get_lhs_offset_ex     = */ &kernel_offs_fn2<kai_get_lhs_packed_offset_matmul_clamp_f32_qai8dxp1x4_qsi8cxp4vlx4_1x4vl_sme_dot>,
             /* .get_rhs_packed_offset_ex = */ &kernel_offs_fn2<kai_get_rhs_packed_offset_matmul_clamp_f32_qai8dxp1x4_qsi8cxp4vlx4_1x4vl_sme_dot>,
             /* .run_kernel_ex         = */ &kernel_run_float_fn10<kai_run_matmul_clamp_f32_qai8dxp1x4_qsi8cxp4vlx4_1x4vl_sme_dot>,
+            /* .run_kernel_lut_ex     = */ nullptr,
         },
         /* .gemv_lhs_info = */ {
             /* .get_offset            = */ kai_get_lhs_offset_lhs_quant_pack_qai8dxp_f32,
@@ -965,6 +967,7 @@ static ggml_kleidiai_kernels gemm_gemv_kernels_q8[] = {
             /* .packed_size_ex        = */ &rhs_ps_fn5<kai_get_rhs_packed_size_rhs_pack_nxk_qsi8cxp_qsi8cx_neon>,
             /* .packed_stride_ex      = */ &rhs_stride_fn4<kai_get_rhs_packed_stride_rhs_pack_nxk_qsi8cxp_qsi8cx_neon>,
             /* .pack_func_ex          = */ &rhs_pack_scale_fn12<kai_run_rhs_pack_nxk_qsi8cxp_qsi8cx_neon>,
+            /* .pack_func_lut_ex      = */ nullptr,
         },
         /* .required_cpu       = */ CPU_FEATURE_SME,
         /* .lhs_type           = */ GGML_TYPE_F32,
@@ -1101,6 +1104,7 @@ static ggml_kleidiai_kernels ggml_kleidiai_kernels_f32[] = {
             /* .get_lhs_offset_ex     = */ &kernel_offs_fn2<kai_get_lhs_packed_offset_matmul_clamp_f32_f32p2vlx1_f32p2vlx1biasf32_sme2_mopa>,
             /* .get_rhs_packed_offset_ex = */ &kernel_offs_fn2<kai_get_rhs_packed_offset_matmul_clamp_f32_f32p2vlx1_f32p2vlx1biasf32_sme2_mopa>,
             /* .run_kernel_ex         = */ &kernel_run_fn10<kai_run_matmul_clamp_f32_f32p2vlx1_f32p2vlx1biasf32_sme2_mopa>,
+            /* .run_kernel_lut_ex     = */ nullptr,
         },
         /* .gemm_lhs_info = */ {
             /* .get_offset            = */ kai_get_lhs_offset_lhs_pack_f32p2vlx1_f32_sme,
@@ -1121,6 +1125,7 @@ static ggml_kleidiai_kernels ggml_kleidiai_kernels_f32[] = {
             /* .get_lhs_offset_ex     = */ nullptr,
             /* .get_rhs_packed_offset_ex = */ nullptr,
             /* .run_kernel_ex         = */ nullptr,
+            /* .run_kernel_lut_ex     = */ nullptr,
         },
         /* .gemv_lhs_info = */ {
             /* .get_offset            = */ kai_get_lhs_offset_lhs_pack_f32p2vlx1_f32_sme,
@@ -1134,6 +1139,7 @@ static ggml_kleidiai_kernels ggml_kleidiai_kernels_f32[] = {
             /* .packed_size_ex        = */ &rhs_ps_fn2<kai_get_rhs_packed_size_rhs_pack_nxk_f32p2vlx1biasf32_f32_f32_sme>,
             /* .packed_stride_ex      = */ &rhs_stride_fn1<kai_get_rhs_packed_stride_rhs_pack_nxk_f32p2vlx1biasf32_f32_f32_sme>,
             /* .pack_func_ex          = */ &rhs_pack_fn13<kai_run_rhs_pack_nxk_f32p2vlx1biasf32_f32_f32_sme>,
+            /* .pack_func_lut_ex      = */ nullptr,
         },
         /* .required_cpu       = */ CPU_FEATURE_SME2,
         /* .lhs_type           = */ GGML_TYPE_F32,
@@ -1154,6 +1160,7 @@ static ggml_kleidiai_kernels ggml_kleidiai_kernels_f32[] = {
             /* .get_lhs_offset_ex     = */ &kernel_offs_fn2<kai_get_lhs_packed_offset_matmul_clamp_f32_f32p2vlx1_f32p2vlx1b_2vlx2vl_sme_mopa>,
             /* .get_rhs_packed_offset_ex = */ &kernel_offs_fn2<kai_get_rhs_packed_offset_matmul_clamp_f32_f32p2vlx1_f32p2vlx1b_2vlx2vl_sme_mopa>,
             /* .run_kernel_ex         = */ &kernel_run_fn10<kai_run_matmul_clamp_f32_f32p2vlx1_f32p2vlx1b_2vlx2vl_sme_mopa>,
+            /* .run_kernel_lut_ex     = */ nullptr,
         },
         /* .gemm_lhs_info = */ {
             /* .get_offset            = */ kai_get_lhs_offset_lhs_pack_f32p2vlx1_f32_sme,
@@ -1174,6 +1181,7 @@ static ggml_kleidiai_kernels ggml_kleidiai_kernels_f32[] = {
             /* .get_lhs_offset_ex     = */ nullptr,
             /* .get_rhs_packed_offset_ex = */ nullptr,
             /* .run_kernel_ex         = */ nullptr,
+            /* .run_kernel_lut_ex     = */ nullptr,
         },
         /* .gemv_lhs_info = */ {
             /* .get_offset            = */ kai_get_lhs_offset_lhs_pack_f32p2vlx1_f32_sme,
@@ -1187,6 +1195,7 @@ static ggml_kleidiai_kernels ggml_kleidiai_kernels_f32[] = {
             /* .packed_size_ex        = */ &rhs_ps_fn2<kai_get_rhs_packed_size_rhs_pack_nxk_f32p2vlx1biasf32_f32_f32_sme>,
             /* .packed_stride_ex      = */ &rhs_stride_fn1<kai_get_rhs_packed_stride_rhs_pack_nxk_f32p2vlx1biasf32_f32_f32_sme>,
             /* .pack_func_ex          = */ &rhs_pack_fn13<kai_run_rhs_pack_nxk_f32p2vlx1biasf32_f32_f32_sme>,
+            /* .pack_func_lut_ex      = */ nullptr,
         },
         /* .required_cpu       = */ CPU_FEATURE_SME,
         /* .lhs_type           = */ GGML_TYPE_F32,
