@@ -345,3 +345,31 @@ kernel void kernel_count_equal(
 typedef decltype(kernel_count_equal<int32_t>) kernel_count_equal_t;
 
 template [[host_name("kernel_count_equal_i32")]] kernel kernel_count_equal_t kernel_count_equal<int32_t>;
+
+template <typename T>
+kernel void kernel_snake(
+        constant ggml_metal_kargs_snake & args,
+        device const T     * x,
+        device const float * a,
+        device const float * inv_b,
+        device       T     * dst,
+        uint         tgpig [[threadgroup_position_in_grid]],
+        uint         tpitg [[thread_position_in_threadgroup]],
+        uint         ntg   [[threads_per_threadgroup]]) {
+
+    const int idx = tgpig * ntg + tpitg;
+    if (idx >= args.T * args.C) {
+        return;
+    }
+
+    const int   c  = idx / args.T;  // x is [T, C], a / inv_b collapse to [1, C]
+    const float xi = float(x[idx]);
+    const float si = sin(a[c] * xi);
+    dst[idx] = T(xi + si * si * inv_b[c]);
+}
+
+template [[host_name("kernel_snake_f32")]]  kernel void kernel_snake<float>(constant ggml_metal_kargs_snake &, device const float *, device const float *, device const float *, device float *, uint, uint, uint);
+template [[host_name("kernel_snake_f16")]]  kernel void kernel_snake<half>(constant ggml_metal_kargs_snake &, device const half *, device const float *, device const float *, device half *, uint, uint, uint);
+#if defined(GGML_METAL_HAS_BF16)
+template [[host_name("kernel_snake_bf16")]] kernel void kernel_snake<bfloat>(constant ggml_metal_kargs_snake &, device const bfloat *, device const float *, device const float *, device bfloat *, uint, uint, uint);
+#endif
