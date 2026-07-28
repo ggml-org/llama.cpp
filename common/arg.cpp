@@ -4178,6 +4178,41 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
+    add_opt(common_arg(
+        {"--spec-ngram-suffix-max-depth"}, "N",
+        string_format("suffix-tree depth = max context-match length for ngram-suffix speculative decoding (default: %d)", params.speculative.ngram_suffix.max_depth),
+        [](common_params & params, int value) {
+            if (value < 1) {
+                throw std::invalid_argument("ngram-suffix max depth must be at least 1");
+            }
+            params.speculative.ngram_suffix.max_depth = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--spec-ngram-suffix-n-max"}, "N",
+        string_format("maximum number of draft tokens for ngram-suffix speculative decoding (default: %d)", params.speculative.ngram_suffix.n_max),
+        [](common_params & params, int value) {
+            if (value < 1) {
+                throw std::invalid_argument("ngram-suffix n-max must be at least 1");
+            }
+            params.speculative.ngram_suffix.n_max = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--spec-ngram-suffix-max-factor"}, "F",
+        string_format("draft up to match_len * F tokens for ngram-suffix speculative decoding (default: %.1f)", params.speculative.ngram_suffix.max_factor),
+        [](common_params & params, const std::string & value) {
+            params.speculative.ngram_suffix.max_factor = std::stof(value);
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--spec-ngram-suffix-min-prob"}, "F",
+        string_format("stop drafting below this frequency probability for ngram-suffix speculative decoding (default: %.2f)", params.speculative.ngram_suffix.min_prob),
+        [](common_params & params, const std::string & value) {
+            params.speculative.ngram_suffix.min_prob = std::stof(value);
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
     //
     // removed params
     //
