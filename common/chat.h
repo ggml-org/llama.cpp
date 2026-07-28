@@ -233,6 +233,7 @@ enum common_chat_format {
     COMMON_CHAT_FORMAT_PEG_SIMPLE,
     COMMON_CHAT_FORMAT_PEG_NATIVE,
     COMMON_CHAT_FORMAT_PEG_GEMMA4,
+    COMMON_CHAT_FORMAT_PEG_MINIMAX_M3,
 
     COMMON_CHAT_FORMAT_COUNT,  // Not a format, just the # formats
 };
