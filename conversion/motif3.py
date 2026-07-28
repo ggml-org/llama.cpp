@@ -163,6 +163,9 @@ class Motif3Model(TextModel):
         T = gguf.MODEL_TENSOR
 
         # skip the MTP (multi-token-prediction) head layer(s)
+        if name.startswith("model.mtp_layers."):
+            logger.debug(f"skipping MTP tensor {name}")
+            return []
         if bid is not None and bid >= self.block_count:
             logger.debug(f"skipping MTP tensor {name}")
             return []
