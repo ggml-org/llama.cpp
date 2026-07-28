@@ -21,45 +21,57 @@ class Motif3Model(TextModel):
         super().__init__(*args, **kwargs)
         # collect alpha_{pre,post,res} scalars into a single [3] tensor per mHC block
         self._mhc_alpha: dict[str, dict[str, Tensor]] = {}
-
-    def get_vocab_base_pre(self, tokenizer) -> str:
-        """Return the llama.cpp pre-tokenizer used by the shipped Motif-3 tokenizer.
         
-        """
-        backend = getattr(tokenizer, "backend_tokenizer", None)
-        if backend is None:
-            # Compatibility with older transformers releases.
-            backend = getattr(tokenizer, "_tokenizer", None)
-        if backend is None:
-            raise TypeError(
-                "Motif-3 conversion requires a fast tokenizer exposing "
-                "backend_tokenizer")
+    _O200K_SPLIT_REGEX = (
+        r"[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*"
+        r"[\p{Ll}\p{Lm}\p{Lo}\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?|"
+        r"[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+"
+        r"[\p{Ll}\p{Lm}\p{Lo}\p{M}]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?|"
+        r"\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n/]*|\s*[\r\n]+|\s+(?!\S)|\s+"
+    )
 
-        tokenizer_cfg = json.loads(backend.to_str())
-        model_cfg = tokenizer_cfg.get("model") or {}
-        pre_cfg = tokenizer_cfg.get("pre_tokenizer") or {}
-        decoder_cfg = tokenizer_cfg.get("decoder") or {}
 
-        is_gpt2_bytelevel = (
-            tokenizer_cfg.get("normalizer") is None
-            and model_cfg.get("type") == "BPE"
-            and not bool(model_cfg.get("byte_fallback", False))
-            and pre_cfg.get("type") == "ByteLevel"
-            and not bool(pre_cfg.get("add_prefix_space", False))
-            and bool(pre_cfg.get("use_regex", True))
-            and decoder_cfg.get("type") == "ByteLevel"
-        )
+     def get_vocab_base_pre(self, tokenizer) -> str:
+         try:
+             return super().get_vocab_base_pre(tokenizer)
+         except NotImplementedError:
+            pass
+        # unknown checksum: identify the pre-tokenizer by its Split regex instead
+        import json as _json
+        pats: list[str] = []
+        try:
+            tk = _json.loads(tokenizer.backend_tokenizer.to_str())
 
-        if not is_gpt2_bytelevel:
-            raise NotImplementedError(
-                "Motif-3 tokenizer no longer matches llama.cpp's 'gpt-2' "
-                "ByteLevel pre-tokenizer; add an explicit tokenizer.ggml.pre "
-                "implementation instead of silently aliasing it. "
-                f"normalizer={tokenizer_cfg.get('normalizer')!r}, "
-                f"pre_tokenizer={pre_cfg!r}, decoder={decoder_cfg!r}, "
-                f"model.type={model_cfg.get('type')!r}")
+            def collect(node):
+                if not isinstance(node, dict):
+                    return
+                if node.get("type") == "Split":
+                    pat = node.get("pattern") or {}
+                    if "Regex" in pat:
+                        pats.append(pat["Regex"])
+                for sub in node.get("pretokenizers") or []:
+                    collect(sub)
 
+            collect(tk.get("pre_tokenizer") or {})
+        except Exception as e:
+            logger.warning(f"could not inspect the pre_tokenizer structure: {e}")
+        if any(p == self._O200K_SPLIT_REGEX for p in pats):
+            logger.info(
+                "pre-tokenizer: unknown checksum, but the Split regex is the o200k/GPT-4o "
+                "pattern -> using 'gpt-4o' (natively supported by llama.cpp)")
+            return "gpt-4o"
+        if pats:
+            logger.warning("unrecognized pre-tokenizer. Found Split regex(es):")
+            for p in pats:
+                logger.warning(f"  {p!r}")
+             logger.warning(
+                "falling back to 'gpt-2' - tokenization of some strings WILL differ from HF. "
+                "Report the regex above so a proper pre type can be registered.")
+        else:
+            logger.warning("unrecognized pre-tokenizer (no Split regex found); falling back to 'gpt-2'.")
         return "gpt-2"
+
+
 
     def set_vocab(self):
         self._set_vocab_gpt2()
