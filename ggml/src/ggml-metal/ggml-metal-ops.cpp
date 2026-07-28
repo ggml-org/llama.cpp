@@ -2013,6 +2013,7 @@ int ggml_metal_op_fwht(ggml_metal_op_t ctx, int idx) {
     int sg_per_tg = 2;
     sg_per_tg = std::min(sg_per_tg, th_max/simd_size);
     sg_per_tg = std::max(sg_per_tg, 1);
+
     const int64_t n_tg = (nrows + sg_per_tg - 1) / sg_per_tg;
     ggml_metal_encoder_dispatch_threadgroups(enc, n_tg, 1, 1, 32*sg_per_tg, 1, 1);
 
@@ -2093,8 +2094,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
             ggml_is_contiguous(op->src[1]) &&
             ggml_is_contiguous(op) &&
             ggml_are_same_shape(op->src[1], op) &&
-            ggml_metal_fwht_supported_size(op->src[1]->ne[0])
-        ) {
+            ggml_metal_fwht_supported_size(op->src[1]->ne[0])) {
             return ggml_metal_op_fwht(ctx, idx);
         }
     }
