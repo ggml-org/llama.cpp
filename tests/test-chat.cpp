@@ -5205,7 +5205,25 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_reconstruction()
             .run();
 
-        // A union with a string alternative is a string, even when the value looks structured
+        // A union with a string alternative is a string
+        tst.test(
+               "<mm:think>Union string</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"union_args\">"
+               "]<]minimax[>[<label>hi]<]minimax[>[</label>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ union_args_tool })
+            .expect_reasoning("Union string")
+            .expect_tool_calls({
+                { "union_args", R"({"label": "hi"})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // ... even when the value looks structured
         tst.test(
                "<mm:think>Union string</mm:think>"
                "]<]minimax[>[<tool_call>\n"
