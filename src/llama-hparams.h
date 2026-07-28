@@ -240,6 +240,18 @@ struct llama_hparams {
     // DeepSeek-V4
     uint32_t dsv4_o_group_count        = 0;
     uint32_t dsv4_o_lora_rank          = 0;
+    // Motif-3
+    uint32_t motif_n_noise_heads    = 0;
+    float    motif_mscale           = 1.0f;
+    float    motif_poly_eps         = 1e-6f;
+    float    motif_poly_out_scale   = 1.0f;
+    float    motif_poly_bias_clamp  = 0.0f;
+    float    motif_poly_hidden_clamp = 0.0f;
+    bool     motif_poly_sigmoid_w   = true;
+    uint32_t motif_mhc_mult         = 0;
+    uint32_t motif_mhc_iters        = 20;
+    float    motif_mhc_post_coeff   = 1.0f;
+
     uint32_t dsv4_hc_mult              = 0;
     uint32_t dsv4_hc_sinkhorn_iters    = 0;
     uint32_t dsv4_hash_layer_count     = 0;

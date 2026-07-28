@@ -555,6 +555,7 @@ class MODEL_ARCH(IntEnum):
     TALKIE           = auto()
     MELLUM           = auto()
     NANBEIGE         = auto()
+    MOTIF3           = auto()
 
 
 class VISION_PROJECTOR_TYPE(IntEnum):
@@ -722,6 +723,20 @@ class MODEL_TENSOR(IntEnum):
     HC_FFN_FN            = auto()
     HC_FFN_BASE          = auto()
     HC_FFN_SCALE         = auto()
+    ATTN_LAMBDA          = auto()  # motif3 differential-attention lambda proj
+    FFN_POLY             = auto()  # motif3 PolyNorm coefficients (dense mlp)
+    FFN_POLY_EXPS        = auto()  # motif3 per-expert PolyNorm coefficients
+    FFN_POLY_SHEXP       = auto()  # motif3 shared-expert PolyNorm coefficients
+    MHC_ATTN_NORM        = auto()  # motif3 mHC rms-norm (attn sublayer)
+    MHC_ATTN_PRE         = auto()
+    MHC_ATTN_POST        = auto()
+    MHC_ATTN_RES         = auto()
+    MHC_ATTN_ALPHA       = auto()
+    MHC_FFN_NORM         = auto()
+    MHC_FFN_PRE          = auto()
+    MHC_FFN_POST         = auto()
+    MHC_FFN_RES          = auto()
+    MHC_FFN_ALPHA        = auto()
     ATTN_COMPRESSOR_WKV  = auto()
     ATTN_COMPRESSOR_WGATE = auto()
     ATTN_COMPRESSOR_APE  = auto()
@@ -1163,6 +1178,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.TALKIE:           "talkie",
     MODEL_ARCH.MELLUM:           "mellum",
     MODEL_ARCH.NANBEIGE:         "nanbeige",
+    MODEL_ARCH.MOTIF3:           "motif3",
 }
 
 VISION_PROJECTOR_TYPE_NAMES: dict[VISION_PROJECTOR_TYPE, str] = {
@@ -1328,6 +1344,20 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.HC_FFN_FN:                 "blk.{bid}.hc_ffn_fn",
     MODEL_TENSOR.HC_FFN_BASE:               "blk.{bid}.hc_ffn_base",
     MODEL_TENSOR.HC_FFN_SCALE:              "blk.{bid}.hc_ffn_scale",
+    MODEL_TENSOR.ATTN_LAMBDA:               "blk.{bid}.attn_lambda",
+    MODEL_TENSOR.FFN_POLY:                  "blk.{bid}.ffn_poly",
+    MODEL_TENSOR.FFN_POLY_EXPS:             "blk.{bid}.ffn_poly_exps",
+    MODEL_TENSOR.FFN_POLY_SHEXP:            "blk.{bid}.ffn_poly_shexp",
+    MODEL_TENSOR.MHC_ATTN_NORM:             "blk.{bid}.mhc_attn_norm",
+    MODEL_TENSOR.MHC_ATTN_PRE:              "blk.{bid}.mhc_attn_pre",
+    MODEL_TENSOR.MHC_ATTN_POST:             "blk.{bid}.mhc_attn_post",
+    MODEL_TENSOR.MHC_ATTN_RES:              "blk.{bid}.mhc_attn_res",
+    MODEL_TENSOR.MHC_ATTN_ALPHA:            "blk.{bid}.mhc_attn_alpha",
+    MODEL_TENSOR.MHC_FFN_NORM:              "blk.{bid}.mhc_ffn_norm",
+    MODEL_TENSOR.MHC_FFN_PRE:               "blk.{bid}.mhc_ffn_pre",
+    MODEL_TENSOR.MHC_FFN_POST:              "blk.{bid}.mhc_ffn_post",
+    MODEL_TENSOR.MHC_FFN_RES:               "blk.{bid}.mhc_ffn_res",
+    MODEL_TENSOR.MHC_FFN_ALPHA:             "blk.{bid}.mhc_ffn_alpha",
     MODEL_TENSOR.ATTN_COMPRESSOR_WKV:       "blk.{bid}.attn_compressor_kv",
     MODEL_TENSOR.ATTN_COMPRESSOR_WGATE:     "blk.{bid}.attn_compressor_gate",
     MODEL_TENSOR.ATTN_COMPRESSOR_APE:       "blk.{bid}.attn_compressor_ape",
@@ -3169,6 +3199,46 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_GATE_SHEXP,
         MODEL_TENSOR.FFN_DOWN_SHEXP,
         MODEL_TENSOR.FFN_UP_SHEXP,
+    ],
+    MODEL_ARCH.MOTIF3: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_Q_A,
+        MODEL_TENSOR.ATTN_Q_A_NORM,
+        MODEL_TENSOR.ATTN_Q_B,
+        MODEL_TENSOR.ATTN_GATE,
+        MODEL_TENSOR.ATTN_KV_A_MQA,
+        MODEL_TENSOR.ATTN_KV_A_NORM,
+        MODEL_TENSOR.ATTN_KV_B,
+        MODEL_TENSOR.ATTN_LAMBDA,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.FFN_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_POLY,
+        MODEL_TENSOR.FFN_GATE_INP,
+        MODEL_TENSOR.FFN_EXP_PROBS_B,
+        MODEL_TENSOR.FFN_GATE_EXP,
+        MODEL_TENSOR.FFN_UP_EXP,
+        MODEL_TENSOR.FFN_DOWN_EXP,
+        MODEL_TENSOR.FFN_POLY_EXPS,
+        MODEL_TENSOR.FFN_GATE_SHEXP,
+        MODEL_TENSOR.FFN_UP_SHEXP,
+        MODEL_TENSOR.FFN_DOWN_SHEXP,
+        MODEL_TENSOR.FFN_POLY_SHEXP,
+        MODEL_TENSOR.MHC_ATTN_NORM,
+        MODEL_TENSOR.MHC_ATTN_PRE,
+        MODEL_TENSOR.MHC_ATTN_POST,
+        MODEL_TENSOR.MHC_ATTN_RES,
+        MODEL_TENSOR.MHC_ATTN_ALPHA,
+        MODEL_TENSOR.MHC_FFN_NORM,
+        MODEL_TENSOR.MHC_FFN_PRE,
+        MODEL_TENSOR.MHC_FFN_POST,
+        MODEL_TENSOR.MHC_FFN_RES,
+        MODEL_TENSOR.MHC_FFN_ALPHA,
     ],
     MODEL_ARCH.DEEPSEEK2: [
         MODEL_TENSOR.TOKEN_EMBD,
