@@ -1295,7 +1295,6 @@ static void llama_sampler_top_k_backend_apply(
     if (data->candidates) {
         struct ggml_tensor * candidates_rows = ggml_reshape_2d(ctx, data->candidates, 1, data->candidates->ne[0]);
         data->candidates = ggml_get_rows(ctx, candidates_rows, top_k);
-        data->candidates = ggml_reshape_1d(ctx, data->candidates, sctx->k);
         ggml_set_name(data->candidates, "top_k_candidates");
     } else {
         data->candidates = top_k;
@@ -1303,7 +1302,7 @@ static void llama_sampler_top_k_backend_apply(
 
     struct ggml_tensor * logits_rows = ggml_reshape_2d(ctx, data->logits, 1, data->logits->ne[0]);
     struct ggml_tensor * top_k_rows = ggml_get_rows(ctx, logits_rows, top_k);
-    data->logits = ggml_reshape_1d(ctx, top_k_rows, sctx->k);
+    data->logits = top_k_rows;
     ggml_set_name(top_k_rows, "top_k_rows");
 
     GGML_UNUSED(gf);
@@ -1435,11 +1434,14 @@ static void llama_sampler_top_p_backend_apply(
         struct llama_sampler_data * data) {
     auto * sctx = (llama_sampler_top_p *) smpl->ctx;
 
+    // flatten
+    data->logits = ggml_reshape_1d(ctx, data->logits, ggml_nelements(data->logits));
+
     auto ggml_sort = [ctx](struct ggml_tensor * a, struct ggml_tensor * b) {
         GGML_ASSERT(ggml_nrows(a) == 1);
         struct ggml_tensor * a_reshaped = ggml_reshape_2d(ctx, a, 1, a->ne[0]);
         struct ggml_tensor * a_sorted   = ggml_get_rows(ctx, a_reshaped, b);
-        return ggml_reshape_1d(ctx, a_sorted, a->ne[0]);
+        return a_sorted;
     };
 
     // Get the sorted logits in descending order.
@@ -1450,6 +1452,7 @@ static void llama_sampler_top_p_backend_apply(
     struct ggml_tensor * sorted_logits = ggml_sort(data->logits, sorted_idx);
     ggml_set_name(sorted_logits, "top_p_sorted_logits");
 
+    sorted_logits = ggml_reshape_1d(ctx, sorted_logits, data->logits->ne[0]);
     struct ggml_tensor * softmax = ggml_soft_max(ctx, sorted_logits);
     ggml_set_name(softmax, "top_p_softmax");
 
@@ -1834,13 +1837,13 @@ static void llama_sampler_backend_temp_sampling(
         ggml_set_name(max_idx, "temp_max_idx");
 
         if (data->candidates) {
-            struct ggml_tensor * candidates_rows = ggml_reshape_2d(ctx, data->candidates, 1, data->candidates->ne[0]);
+            struct ggml_tensor * candidates_rows = ggml_reshape_2d(ctx, data->candidates, 1, ggml_nelements(data->candidates));
             data->candidates = ggml_get_rows(ctx, candidates_rows, max_idx);
         } else {
             data->candidates = max_idx;
         }
 
-        struct ggml_tensor * logits_rows = ggml_reshape_2d(ctx, data->logits, 1, data->logits->ne[0]);
+        struct ggml_tensor * logits_rows = ggml_reshape_2d(ctx, data->logits, 1, ggml_nelements(data->logits));
         data->logits = ggml_get_rows(ctx, logits_rows, max_idx);
 
         return;

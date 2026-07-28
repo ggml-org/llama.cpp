@@ -1230,7 +1230,7 @@ void llm_graph_result::set_inputs(const llama_ubatch * ubatch) {
 void llm_graph_result::set_outputs(const llm_graph_params & params) {
     auto set_output = [](ggml_tensor * t) {
         ggml_set_output(t);
-        GGML_ASSERT(t->view_src == nullptr && "views cannot be outputs");
+        GGML_ASSERT((t->view_src == nullptr || t->view_src->flags & GGML_TENSOR_FLAG_OUTPUT) && "src tensor of an output view is not an output");
     };
 
     if (t_logits != nullptr) {
@@ -3442,7 +3442,9 @@ void llm_graph_context::build_sampling() const {
     // add a dummy row of logits
     // this trick makes the graph static, regardless of which samplers are activated
     // this is important in order to minimize graph reallocations
+    // note: mark this tensor as output since there could be output views of its data
     ggml_tensor * logits_t = ggml_pad(ctx0, res->t_logits, 0, 1, 0, 0);
+    ggml_set_output(logits_t);
 
     for (const auto & [seq_id, sampler] : samplers) {
         const auto it = seq_to_logit_row.find(seq_id);
