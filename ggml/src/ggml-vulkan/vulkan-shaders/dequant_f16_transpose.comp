@@ -1,0 +1,28 @@
+#version 450
+
+#include "dequant_head.glsl"
+
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout (binding = 0) readonly buffer A {f16vec4 data_a[];};
+layout (binding = 1) writeonly buffer D {f16vec4 data_b[];};
+
+// read [HS, NH, KV, NS], write [HS, KV, NH, NS]; moves 8 HS-contiguous elements, so HS % 8 == 0
+void main() {
+    const uint i = gl_GlobalInvocationID.x;
+    const uint e0 = i * 8;
+    if (e0 >= p.nel) {
+        return;
+    }
+
+    const uint HS = p.M, NH = p.K, KVn = p.stride_a;
+    const uint dst = (e0 % HS)
+                   + ((e0 / (HS * NH)) % KVn) * HS
+                   + ((e0 / HS) % NH) * (HS * KVn)
+                   + (e0 / (HS * NH * KVn)) * (HS * KVn * NH);
+
+    data_b[dst / 4    ] = data_a[e0 / 4    ];
+    data_b[dst / 4 + 1] = data_a[e0 / 4 + 1];
+}
