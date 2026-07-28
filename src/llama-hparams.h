@@ -198,6 +198,11 @@ struct llama_hparams {
     // output embedding dimension (0 = use n_embd)
     uint32_t n_embd_out_impl = 0;
 
+    // output/logits vocab size, for models whose embedding table covers more ids
+    // than the output head can produce, e.g. extra ids reserved for multimodal
+    // input-only tokens (0 = use vocab.n_tokens(), see llama_model::n_vocab_out())
+    uint32_t n_vocab_out_impl = 0;
+
     // llama4 smallthinker
     uint32_t n_moe_layer_step        = 0;
     uint32_t n_no_rope_layer_step    = 4;
