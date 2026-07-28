@@ -1226,12 +1226,18 @@ static common_chat_params common_chat_params_init_qwen3_coder(const common_chat_
                 tool_choice |= p.rule("tool-" + name, func);
             });
 
-            auto min_calls  = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0;
-            auto max_calls  = inputs.parallel_tool_calls ? -1 : 1;
-            auto tool_call  = p.rule("tool-call", "<tool_call>\n" + tool_choice + "</tool_call>" + p.space());
-            auto tool_calls = p.trigger_rule("tool-call-root", p.repeat(tool_call, min_calls, max_calls));
+            auto min_calls = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED ? 1 : 0;
 
-            return generation_prompt + (reasoning << p.content(p.until("<tool_call>")) << tool_calls);
+            // Qwen3-Coder models may occasionally omit the <tool_call> token.
+            auto tool_call_body  = tool_choice + "</tool_call>" + p.space();
+            auto tool_call_first = p.rule("tool-call-first", p.optional(p.literal("<tool_call>\n")) + tool_call_body);
+            auto tool_call       = p.rule("tool-call", "<tool_call>\n" + tool_call_body);
+
+            auto calls      = inputs.parallel_tool_calls ? tool_call_first + p.zero_or_more(tool_call) : tool_call_first;
+            auto tool_calls = p.trigger_rule("tool-call-root", p.repeat(calls, min_calls, 1));
+
+            return generation_prompt +
+                   (reasoning << p.content(p.until_one_of({ "<tool_call>", "<function=" })) << tool_calls);
         }
 
         // Content only parser
@@ -1258,7 +1264,8 @@ static common_chat_params common_chat_params_init_qwen3_coder(const common_chat_
 
         if (data.grammar_lazy) {
             data.grammar_triggers = {
-                { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<tool_call>" }
+                { COMMON_GRAMMAR_TRIGGER_TYPE_WORD,    "<tool_call>" },
+                { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, "<function=" },
             };
         }
     }
