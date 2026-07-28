@@ -3,6 +3,25 @@
 // patched to serve synthetic listings, so the tested code is not modified and
 // no network access is needed
 
+// this TU compiles a private namespaced copy of the sources, so many of their
+// static functions and the statics of transitively included headers are
+// legitimately unused here
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic ignored "-Wunused-function"
+#pragma GCC diagnostic ignored "-Wunused-variable"
+#pragma GCC diagnostic ignored "-Wunused-const-variable"
+#endif
+
+// arg.cpp includes windows headers on _WIN32, pre-include them here so they
+// stay outside the namespace below
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <shellapi.h>
+#endif
+
 // pre-included so their include guards keep these global inside the namespace,
 // arg.h and preset.h are NOT pre-included: the sources pull them inside the
 // namespace below, so their declarations and definitions live together
@@ -91,8 +110,18 @@ namespace hf_cache {
     }
 } // namespace hf_cache
 
-// re-declare with its default argument, lost in the rename of the declaration
-int common_download_file_single(const std::string & url, const std::string & path, const common_download_opts & opts, bool is_hf = true);
+// previous declarations for the renamed copies of the download.h functions,
+// written with their original names so the macros above keep them in sync,
+// with the default argument of the download one restored
+std::pair<long, std::vector<char>> common_remote_get_content(const std::string & url, const common_remote_params & params);
+std::pair<std::string, std::string> common_download_split_repo_tag(const std::string & hf_repo_with_tag);
+void common_download_run_tasks(const std::vector<common_download_task> & tasks);
+std::vector<std::string> common_download_get_all_parts(const std::string & url);
+std::vector<common_cached_model_info> common_list_cached_models();
+int common_download_file_single(const std::string & url, const std::string & path, const common_download_opts & opts = {}, bool skip_etag = false);
+std::string common_docker_resolve_model(const std::string & docker);
+bool common_download_remove(const std::string & hf_repo_with_tag);
+common_download_hf_plan common_download_get_hf_plan(const common_params_model & model, const common_download_opts & opts);
 
 // unqualified hf_cache:: lookups inside the sources now bind to the fakes above
 #include "download.cpp"
