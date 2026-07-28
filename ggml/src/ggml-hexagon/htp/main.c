@@ -228,7 +228,7 @@ AEEResult htp_iface_munmap(remote_handle64 handle, uint32 fd) {
 
 static void vtcm_acquire(struct htp_context * ctx) {
     if (!ctx->vtcm_valid) {
-        int err = HAP_compute_res_acquire_cached(ctx->vtcm_rctx, 1000000u);
+        int err = HAP_compute_res_acquire_cached(ctx->vtcm_rctx, 10000000u);
         if (err != 0) {
             FARF(ERROR, "ggml-hex: failed to acquire VTCM: 0x%08x", (unsigned)err);
             abort();
