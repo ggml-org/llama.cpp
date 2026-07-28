@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING, Iterable
 
 from .base import ModelBase, TextModel, gguf, logger
@@ -11,7 +10,8 @@ if TYPE_CHECKING:
 
 @ModelBase.register("MotifForCausalLM")
 class Motif3Model(TextModel):
-    """Motif-3 GDLA attention + grouped-PolyNorm MoE + mHC.
+    """Motif-3 (Motif Technologies): GDLA attention + grouped-PolyNorm MoE + mHC.
+
     ref: https://huggingface.co/Motif-Technologies/Motif-3-Beta
     """
 
@@ -21,7 +21,10 @@ class Motif3Model(TextModel):
         super().__init__(*args, **kwargs)
         # collect alpha_{pre,post,res} scalars into a single [3] tensor per mHC block
         self._mhc_alpha: dict[str, dict[str, Tensor]] = {}
-        
+
+    # the o200k_base / GPT-4o split pattern, as it appears (JSON-decoded) in
+    # tokenizer.json. llama.cpp implements exactly this under the "gpt-4o" pre
+    # type (src/llama-vocab.cpp, LLAMA_VOCAB_PRE_TYPE_GPT4O).
     _O200K_SPLIT_REGEX = (
         r"[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*"
         r"[\p{Ll}\p{Lm}\p{Lo}\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?|"
@@ -30,11 +33,10 @@ class Motif3Model(TextModel):
         r"\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n/]*|\s*[\r\n]+|\s+(?!\S)|\s+"
     )
 
-
-     def get_vocab_base_pre(self, tokenizer) -> str:
-         try:
-             return super().get_vocab_base_pre(tokenizer)
-         except NotImplementedError:
+    def get_vocab_base_pre(self, tokenizer) -> str:
+        try:
+            return super().get_vocab_base_pre(tokenizer)
+        except NotImplementedError:
             pass
         # unknown checksum: identify the pre-tokenizer by its Split regex instead
         import json as _json
@@ -64,14 +66,12 @@ class Motif3Model(TextModel):
             logger.warning("unrecognized pre-tokenizer. Found Split regex(es):")
             for p in pats:
                 logger.warning(f"  {p!r}")
-             logger.warning(
+            logger.warning(
                 "falling back to 'gpt-2' - tokenization of some strings WILL differ from HF. "
                 "Report the regex above so a proper pre type can be registered.")
         else:
             logger.warning("unrecognized pre-tokenizer (no Split regex found); falling back to 'gpt-2'.")
         return "gpt-2"
-
-
 
     def set_vocab(self):
         self._set_vocab_gpt2()
@@ -80,7 +80,7 @@ class Motif3Model(TextModel):
         super().set_gguf_parameters()
         hparams = self.hparams
 
-        # GDL Attention
+        # --- attention (GDLA) ---
         qk_rope = int(hparams["qk_rope_head_dim"])
         head_dim = int(hparams["head_dim"])       # qk_nope + qk_rope
         v_head_dim = int(hparams["v_head_dim"])
@@ -94,7 +94,7 @@ class Motif3Model(TextModel):
         n_noise = int(hparams["num_noise_heads"])
         self.gguf_writer.add_uint32(f"{self.gguf_writer.arch}.attention.noise_head_count", n_noise)
 
-        # RoPE / YaRN
+        # --- RoPE / YaRN ---
         rope_theta = float(hparams.get("rope_theta", 10000.0))
         self.gguf_writer.add_rope_freq_base(rope_theta)
 
@@ -110,8 +110,15 @@ class Motif3Model(TextModel):
             mscale = float(rope_scaling.get("mscale", hparams.get("mscale", 1.0)))
             self.gguf_writer.add_float32(f"{self.gguf_writer.arch}.attention.yarn_mscale", mscale)
 
-        # interleaved SWA
+        # --- interleaved SWA ---
         if hparams.get("use_sliding_window") and hparams.get("sliding_window") is not None:
+            # The modeling code passes window = sliding_window + 1 to the attention
+            # interface; transformers >= 4.56 converts that to flash-attn
+            # window_size = (window - 1, ...) ("total window incl. self"), so the
+            # model attends to positions at distance <= sliding_window. llama.cpp's
+            # STANDARD swa masks p1 - p0 >= n_swa => n_swa = sliding_window + 1.
+            # (note: transformers <= 4.55 used window_size = (window, window), which
+            # would shift HF itself by one token - a transformers quirk, not ours)
             self.gguf_writer.add_sliding_window(int(hparams["sliding_window"]) + 1)
             pattern = hparams.get("sliding_window_pattern", "interleave")
             if pattern != "interleave":
@@ -121,7 +128,7 @@ class Motif3Model(TextModel):
             if swa_rope_theta is not None:
                 self.gguf_writer.add_rope_freq_base_swa(float(swa_rope_theta))
 
-        # MoE
+        # --- MoE ---
         n_expert = int(hparams.get("num_experts", 0) or 0)
         if n_expert > 0:
             if hparams.get("score_func", "sigmoid") != "sigmoid":
@@ -140,7 +147,7 @@ class Motif3Model(TextModel):
             self.gguf_writer.add_leading_dense_block_count(int(hparams.get("n_dense_first_layers", 0)))
             self.gguf_writer.add_interleave_moe_layer_step(int(hparams.get("interleave_moe_layer_step", 1)))
 
-        # PolyNorm
+        # --- PolyNorm ---
         arch = self.gguf_writer.arch
         self.gguf_writer.add_float32(f"{arch}.polynorm.epsilon", 1e-6)
         self.gguf_writer.add_float32(f"{arch}.polynorm.output_scale", float(hparams.get("polynorm_output_scale", 1.0)))
@@ -152,7 +159,7 @@ class Motif3Model(TextModel):
             self.gguf_writer.add_float32(f"{arch}.polynorm.hidden_clamp", float(hidden_clamp))
         self.gguf_writer.add_bool(f"{arch}.polynorm.sigmoid_weight", bool(hparams.get("polynorm_sigmoid_weight", True)))
 
-        # mHC
+        # --- mHC ---
         if hparams.get("mhc_enabled"):
             self.gguf_writer.add_uint32(f"{arch}.hyper_connection.count", int(hparams.get("mhc_expansion_rate", 4)))
             self.gguf_writer.add_uint32(f"{arch}.hyper_connection.sinkhorn_iterations", int(hparams.get("mhc_sinkhorn_iters", 20)))
@@ -174,7 +181,11 @@ class Motif3Model(TextModel):
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         T = gguf.MODEL_TENSOR
 
-        # skip the MTP (multi-token-prediction) head layer(s)
+        # skip the MTP (multi-token-prediction) head tensors. The released
+        # checkpoint stores them under model.mtp_layers.N.* - a prefix the HF
+        # modeling code itself never loads (it contains no MTP module), so they
+        # are not part of the inference graph. Also keep the DeepSeek-style
+        # bid >= block_count skip in case a variant stores them as extra layers.
         if name.startswith("model.mtp_layers."):
             logger.debug(f"skipping MTP tensor {name}")
             return []
@@ -187,7 +198,7 @@ class Motif3Model(TextModel):
         def out(t: gguf.MODEL_TENSOR, tensor: Tensor, suffix: str = ".weight"):
             return [(self.format_tensor_name(t, bid, suffix=suffix), tensor)]
 
-        # global tensors
+        # --- global tensors ---
         if name == "model.embed_tokens.weight":
             return out(T.TOKEN_EMBD, data_torch)
         if name == "model.norm.weight":
@@ -195,19 +206,22 @@ class Motif3Model(TextModel):
         if name == "lm_head.weight":
             return out(T.OUTPUT, data_torch)
 
-        assert bid is not None, f"unexpected non-layer tensor: {name}"
-
         prefix = f"model.layers.{bid}."
-        assert name.startswith(prefix), f"unexpected tensor: {name}"
+        if bid is None or not name.startswith(prefix):
+            raise ValueError(
+                f"unexpected tensor: {name!r} - not a recognized global tensor and not "
+                f"under {prefix!r}. If this is an auxiliary head (e.g. another MTP "
+                "naming variant), add a skip for its prefix; otherwise the tensor map "
+                "needs a new entry.")
         sub = name[len(prefix):]
 
-        # layer norms
+        # --- layer norms ---
         if sub == "input_layernorm.weight":
             return out(T.ATTN_NORM, data_torch)
         if sub == "post_attention_layernorm.weight":
             return out(T.FFN_NORM, data_torch)
 
-        # GDL attention
+        # --- attention (GDLA) ---
         attn_map = {
             "self_attn.wq_a.weight":        T.ATTN_Q_A,
             "self_attn.q_norm.weight":      T.ATTN_Q_A_NORM,
@@ -222,7 +236,7 @@ class Motif3Model(TextModel):
         if sub in attn_map:
             return out(attn_map[sub], data_torch)
 
-        # dense MLP (PolyNorm)
+        # --- dense MLP (PolyNorm) ---
         dense_map = {
             "mlp.gate_proj.weight": (T.FFN_GATE, ".weight"),
             "mlp.up_proj.weight":   (T.FFN_UP,   ".weight"),
@@ -234,7 +248,7 @@ class Motif3Model(TextModel):
             t, suffix = dense_map[sub]
             return out(t, data_torch, suffix)
 
-        # MoE
+        # --- MoE ---
         if sub == "moe.router.gate.weight":
             return out(T.FFN_GATE_INP, data_torch)
         if sub == "moe.expert_bias":
@@ -263,7 +277,7 @@ class Motif3Model(TextModel):
             t, suffix = shexp_map[sub]
             return out(t, data_torch, suffix)
 
-        # mHC
+        # --- mHC ---
         for which, t_norm, t_pre, t_post, t_res, t_alpha in (
             ("mhc_attn", T.MHC_ATTN_NORM, T.MHC_ATTN_PRE, T.MHC_ATTN_POST, T.MHC_ATTN_RES, T.MHC_ATTN_ALPHA),
             ("mhc_ffn",  T.MHC_FFN_NORM,  T.MHC_FFN_PRE,  T.MHC_FFN_POST,  T.MHC_FFN_RES,  T.MHC_FFN_ALPHA),
