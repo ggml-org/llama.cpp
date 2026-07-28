@@ -4351,6 +4351,7 @@ kernel void kernel_mul_mv_t_t(
 typedef decltype(kernel_mul_mv_t_t<half, half>) mul_mv_t_t;
 
 template [[host_name("kernel_mul_mv_f32_f32")]]   kernel mul_mv_t_t kernel_mul_mv_t_t<float, float>;
+template [[host_name("kernel_mul_mv_f32_f16")]]   kernel mul_mv_t_t kernel_mul_mv_t_t<float, half>;
 template [[host_name("kernel_mul_mv_f16_f32")]]   kernel mul_mv_t_t kernel_mul_mv_t_t<half,  float>;
 template [[host_name("kernel_mul_mv_f16_f16")]]   kernel mul_mv_t_t kernel_mul_mv_t_t<half,  half>;
 #if defined(GGML_METAL_HAS_BF16)
@@ -4475,6 +4476,7 @@ kernel void kernel_mul_mv_t_t_4(
 typedef decltype(kernel_mul_mv_t_t_4<half, half4, half, half4>) mul_mv_t_t_4;
 
 template [[host_name("kernel_mul_mv_f32_f32_4")]]   kernel mul_mv_t_t_4 kernel_mul_mv_t_t_4<float, float4, float, float4>;
+template [[host_name("kernel_mul_mv_f32_f16_4")]]   kernel mul_mv_t_t_4 kernel_mul_mv_t_t_4<float, float4, half,  half4>;
 template [[host_name("kernel_mul_mv_f16_f32_4")]]   kernel mul_mv_t_t_4 kernel_mul_mv_t_t_4<half,  half4,  float, float4>;
 template [[host_name("kernel_mul_mv_f16_f16_4")]]   kernel mul_mv_t_t_4 kernel_mul_mv_t_t_4<half,  half4,  half,  half4>;
 #if defined(GGML_METAL_HAS_BF16)
@@ -4540,6 +4542,7 @@ kernel void kernel_mul_mv_t_t_short(
 typedef decltype(kernel_mul_mv_t_t_short<half, half>) mul_mv_t_t_short_t;
 
 template [[host_name("kernel_mul_mv_f32_f32_short")]]  kernel mul_mv_t_t_short_t kernel_mul_mv_t_t_short<float, float>;
+template [[host_name("kernel_mul_mv_f32_f16_short")]]  kernel mul_mv_t_t_short_t kernel_mul_mv_t_t_short<float, half>;
 template [[host_name("kernel_mul_mv_f16_f32_short")]]  kernel mul_mv_t_t_short_t kernel_mul_mv_t_t_short<half,  float>;
 template [[host_name("kernel_mul_mv_f16_f16_short")]]  kernel mul_mv_t_t_short_t kernel_mul_mv_t_t_short<half,  half>;
 #if defined(GGML_METAL_HAS_BF16)
