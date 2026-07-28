@@ -92,8 +92,17 @@ function deriveSingleTurnSections(
 
 	// 3. Persisted tool calls (from message.toolCalls field)
 	const toolCalls = parseToolCalls(message.toolCalls);
+
+	// Index tool messages by toolCallId for O(1) lookup instead of O(n) find()
+	const toolMsgById = new Map<string, DatabaseMessage>();
+	for (const tm of toolMessages) {
+		if (tm.toolCallId && !toolMsgById.has(tm.toolCallId)) {
+			toolMsgById.set(tm.toolCallId, tm);
+		}
+	}
+
 	for (const tc of toolCalls) {
-		const resultMsg = toolMessages.find((m) => m.toolCallId === tc.id);
+		const resultMsg = tc.id ? toolMsgById.get(tc.id) : undefined;
 		// Only show as pending/loading if we're actively streaming; otherwise it's just a tool call without result
 		const type = resultMsg
 			? AgenticSectionType.TOOL_CALL
@@ -112,9 +121,10 @@ function deriveSingleTurnSections(
 	}
 
 	// 4. Streaming tool calls (not yet persisted - currently being received)
+	const persistedIds = new Set(toolCalls.map((t) => t.id).filter(Boolean));
 	for (const tc of streamingToolCalls) {
 		// Skip if already in persisted tool calls
-		if (tc.id && toolCalls.find((t) => t.id === tc.id)) continue;
+		if (tc.id && persistedIds.has(tc.id)) continue;
 		sections.push({
 			type: AgenticSectionType.TOOL_CALL_STREAMING,
 			content: '',
@@ -281,15 +291,31 @@ export function splitSearchSummaryList(
 	return { lines };
 }
 
+/** Bounded cache for parseToolResultWithImages results. */
+const TOOL_RESULT_LINES_CACHE_MAX_SIZE = 32;
+const toolResultLinesCache = new Map<string, ToolResultLine[]>();
+
 /**
  * Parse tool result text into lines, matching image attachments by name.
+ * Memoized: called per render during streaming on unchanged tool result
+ * strings with unchanged extras.
  */
 export function parseToolResultWithImages(
 	toolResult: string,
 	extras?: DatabaseMessageExtra[]
 ): ToolResultLine[] {
+	// Cache key includes image attachment names so we recompute when
+	// attachments change, even if the count stays the same.
+	const imageNames = (extras ?? [])
+		.filter((e): e is DatabaseMessageExtraImageFile => e.type === AttachmentType.IMAGE)
+		.map((e) => e.name)
+		.join(NEWLINE);
+	const cacheKey = `${imageNames}:${toolResult}`;
+	const cached = toolResultLinesCache.get(cacheKey);
+	if (cached !== undefined) return cached;
+
 	const lines = toolResult.split(NEWLINE);
-	return lines.map((line) => {
+	const result = lines.map((line) => {
 		const match = line.match(ATTACHMENT_SAVED_REGEX);
 		if (!match || !extras) return { text: line };
 
@@ -301,7 +327,18 @@ export function parseToolResultWithImages(
 
 		return { text: line, image };
 	});
+
+	if (toolResultLinesCache.size >= TOOL_RESULT_LINES_CACHE_MAX_SIZE) {
+		toolResultLinesCache.delete(toolResultLinesCache.keys().next().value!);
+	}
+	toolResultLinesCache.set(cacheKey, result);
+
+	return result;
 }
+
+/** Bounded cache for classifyToolResult results. */
+const CLASSIFY_CACHE_MAX_SIZE = 32;
+const classifyCache = new Map<string, ToolResultKind>();
 
 /**
  * Pick a renderer tier for a tool's result content.
@@ -312,25 +349,39 @@ export function parseToolResultWithImages(
  *              through MarkdownContent for proper formatting.
  *   text     - everything else, rendered as plain text lines (with image
  *              attachment resolution as a side effect).
+ * Memoized: called per render during streaming on unchanged content.
  */
 export function classifyToolResult(content: string | undefined): ToolResultKind {
 	if (!content) return ToolResultKind.TEXT;
+
+	const cached = classifyCache.get(content);
+	if (cached !== undefined) return cached;
+
 	const trimmed = content.trim();
 	if (!trimmed) return ToolResultKind.TEXT;
+
+	let result: ToolResultKind = ToolResultKind.TEXT;
 
 	// Strongest signal: JSON object/array round-trips through JSON.parse.
 	if (TOOL_RESULT_JSON_OPEN_REGEX.test(trimmed)) {
 		try {
 			JSON.parse(trimmed);
-			return ToolResultKind.JSON;
+			result = ToolResultKind.JSON;
 		} catch (error) {
 			console.error('[agentic] tool result looked like JSON but failed to parse:', error);
 		}
 	}
 
-	if (looksLikeMarkdown(trimmed)) return ToolResultKind.MARKDOWN;
+	if (result === ToolResultKind.TEXT && looksLikeMarkdown(trimmed)) {
+		result = ToolResultKind.MARKDOWN;
+	}
 
-	return ToolResultKind.TEXT;
+	if (classifyCache.size >= CLASSIFY_CACHE_MAX_SIZE) {
+		classifyCache.delete(classifyCache.keys().next().value!);
+	}
+	classifyCache.set(content, result);
+
+	return result;
 }
 
 /**
@@ -370,19 +421,35 @@ function looksLikeMarkdown(content: string): boolean {
 	return false;
 }
 
+/** Bounded cache for parsed tool-call JSON blobs. */
+const TOOL_CALLS_CACHE_MAX_SIZE = 64;
+const toolCallsParseCache = new Map<string, ApiChatCompletionToolCall[]>();
+
 /**
  * Safely parse the toolCalls JSON string from a DatabaseMessage.
+ * Memoized: the same JSON string is re-parsed on every render during
+ * streaming, which is wasted CPU since tool calls don't change mid-stream.
  */
 function parseToolCalls(toolCallsJson?: string): ApiChatCompletionToolCall[] {
 	if (!toolCallsJson) return [];
 
+	const cached = toolCallsParseCache.get(toolCallsJson);
+	if (cached) return cached;
+
+	let result: ApiChatCompletionToolCall[];
 	try {
 		const parsed = JSON.parse(toolCallsJson);
-
-		return Array.isArray(parsed) ? parsed : [];
+		result = Array.isArray(parsed) ? parsed : [];
 	} catch {
-		return [];
+		result = [];
 	}
+
+	if (toolCallsParseCache.size >= TOOL_CALLS_CACHE_MAX_SIZE) {
+		toolCallsParseCache.delete(toolCallsParseCache.keys().next().value!);
+	}
+	toolCallsParseCache.set(toolCallsJson, result);
+
+	return result;
 }
 
 /**

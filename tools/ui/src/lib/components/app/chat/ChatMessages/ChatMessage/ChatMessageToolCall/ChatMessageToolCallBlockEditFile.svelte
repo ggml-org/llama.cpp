@@ -15,7 +15,6 @@
 	let { section, open, isStreaming, onToggle }: Props = $props();
 
 	const editFileMeta = $derived(parseEditFileMeta(section));
-
 	const editDiffs = $derived(
 		(editFileMeta?.edits ?? []).map((edit) => computeLineDiff(edit.oldText, edit.newText))
 	);
