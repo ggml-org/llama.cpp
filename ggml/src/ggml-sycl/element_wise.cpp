@@ -318,25 +318,25 @@ static void unary_op_generic_kernel(
         const T * x,
         T * dst,
         const int k,
-        const int64_t ne0, const int64_t ne1, const int64_t ne2, const int64_t ne3,
+        const sycl::uint3 ne0_fd, const sycl::uint3 ne1_fd, const sycl::uint3 ne2_fd,
         const size_t nb0,  const size_t nb1,  const size_t nb2,  const size_t nb3,
         const size_t nbd0, const size_t nbd1, const size_t nbd2, const size_t nbd3,
         const sycl::nd_item<1> & item_ct1,
         F func) {
 
-    (void) ne3;
-    // 32-bit index math: k is int, so every logical index fits u32. 64-bit
-    // integer div/mod is emulated on Xe and dominates this kernel otherwise;
-    // byte offsets are widened back to size_t only for the final address math.
-    const uint32_t une0 = (uint32_t) ne0;
-    const uint32_t une1 = (uint32_t) ne1;
-    const uint32_t une2 = (uint32_t) ne2;
+    // 32-bit index math: k is int, so every logical index fits u32. 64-bit integer div/mod is
+    // emulated on Xe and dominates this kernel otherwise, and even the 32-bit divide is worth
+    // avoiding -- the divisors are launch-invariant, so the magic numbers are precomputed
+    // host-side and each division becomes a multiply-high plus a shift.
+    // Byte offsets are widened back to size_t only for the final address math.
     SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
-        uint32_t t = (uint32_t) i;
-        const uint32_t i0 = t % une0; t /= une0;
-        const uint32_t i1 = t % une1; t /= une1;
-        const uint32_t i2 = t % une2; t /= une2;
-        const uint32_t i3 = t;
+        sycl::uint2 dm = fast_div_modulo((uint32_t) i, ne0_fd);
+        const uint32_t i0 = dm.y();
+        dm = fast_div_modulo(dm.x(), ne1_fd);
+        const uint32_t i1 = dm.y();
+        dm = fast_div_modulo(dm.x(), ne2_fd);
+        const uint32_t i2 = dm.y();
+        const uint32_t i3 = dm.x();
 
         const char * src_base = (const char *) x;
         char       * dst_base = (char *) dst;
@@ -421,46 +421,51 @@ static void clamp(const T * x, T * dst, const float min, const float max, const 
 }
 
 template<typename T>
-static void gated_op_fused_geglu(const T * x, const T * g, T * dst, const uint64_t k, const uint64_t n, const uint64_t o0, const uint64_t o1, const sycl::nd_item<1> &item_ct1) {
+static void gated_op_fused_geglu(const T * x, const T * g, T * dst, const uint64_t k, const sycl::uint3 n_fd, const uint64_t o0, const uint64_t o1, const sycl::nd_item<1> &item_ct1) {
     SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
-        const int64_t j0 = (i / n) * o0 + (i % n);
-        const int64_t j1 = o0 == o1 ? j0 : (i / n) * o1 + (i % n);
+        const sycl::uint2 rc = fast_div_modulo((uint32_t) i, n_fd);
+        const int64_t j0 = rc.x() * o0 + rc.y();
+        const int64_t j1 = o0 == o1 ? j0 : rc.x() * o1 + rc.y();
         dst[i] = op_gelu(x[j0]) * g[j1];
     }
 }
 
 template<typename T>
-static void gated_op_fused_reglu(const T * x, const T * g, T * dst, const uint64_t k, const uint64_t n, const uint64_t o0, const uint64_t o1, const sycl::nd_item<1> &item_ct1) {
+static void gated_op_fused_reglu(const T * x, const T * g, T * dst, const uint64_t k, const sycl::uint3 n_fd, const uint64_t o0, const uint64_t o1, const sycl::nd_item<1> &item_ct1) {
     SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
-        const int64_t j0 = (i / n) * o0 + (i % n);
-        const int64_t j1 = o0 == o1 ? j0 : (i / n) * o1 + (i % n);
+        const sycl::uint2 rc = fast_div_modulo((uint32_t) i, n_fd);
+        const int64_t j0 = rc.x() * o0 + rc.y();
+        const int64_t j1 = o0 == o1 ? j0 : rc.x() * o1 + rc.y();
         dst[i] = op_relu(x[j0]) * g[j1];
     }
 }
 
 template<typename T>
-static void gated_op_fused_swiglu(const T * x, const T * g, T * dst, const uint64_t k, const uint64_t n, const uint64_t o0, const uint64_t o1, const sycl::nd_item<1> &item_ct1) {
+static void gated_op_fused_swiglu(const T * x, const T * g, T * dst, const uint64_t k, const sycl::uint3 n_fd, const uint64_t o0, const uint64_t o1, const sycl::nd_item<1> &item_ct1) {
     SYCL_GLOBAL_ID_LOOP(k, item_ct1)  {
-        const int64_t j0 = (i / n) * o0 + (i % n);
-        const int64_t j1 = o0 == o1 ? j0 : (i / n) * o1 + (i % n);
+        const sycl::uint2 rc = fast_div_modulo((uint32_t) i, n_fd);
+        const int64_t j0 = rc.x() * o0 + rc.y();
+        const int64_t j1 = o0 == o1 ? j0 : rc.x() * o1 + rc.y();
         dst[i] = op_silu(x[j0]) * g[j1];
     }
 }
 
 template<typename T>
-static void gated_op_fused_geglu_erf(const T * x, const T * g, T * dst, const uint64_t k, const uint64_t n, const uint64_t o0, const uint64_t o1, const sycl::nd_item<1> &item_ct1) {
+static void gated_op_fused_geglu_erf(const T * x, const T * g, T * dst, const uint64_t k, const sycl::uint3 n_fd, const uint64_t o0, const uint64_t o1, const sycl::nd_item<1> &item_ct1) {
     SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
-        const int64_t j0 = (i / n) * o0 + (i % n);
-        const int64_t j1 = o0 == o1 ? j0 : (i / n) * o1 + (i % n);
+        const sycl::uint2 rc = fast_div_modulo((uint32_t) i, n_fd);
+        const int64_t j0 = rc.x() * o0 + rc.y();
+        const int64_t j1 = o0 == o1 ? j0 : rc.x() * o1 + rc.y();
         dst[i] = op_gelu_erf(x[j0]) * g[j1];
     }
 }
 
 template<typename T>
-static void gated_op_fused_geglu_quick(const T * x, const T * g, T * dst, const uint64_t k, const uint64_t n, const uint64_t o0, const uint64_t o1, const sycl::nd_item<1> &item_ct1) {
+static void gated_op_fused_geglu_quick(const T * x, const T * g, T * dst, const uint64_t k, const sycl::uint3 n_fd, const uint64_t o0, const uint64_t o1, const sycl::nd_item<1> &item_ct1) {
     SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
-        const int64_t j0 = (i / n) * o0 + (i % n);
-        const int64_t j1 = o0 == o1 ? j0 : (i / n) * o1 + (i % n);
+        const sycl::uint2 rc = fast_div_modulo((uint32_t) i, n_fd);
+        const int64_t j0 = rc.x() * o0 + rc.y();
+        const int64_t j1 = o0 == o1 ? j0 : rc.x() * o1 + rc.y();
         dst[i] = op_gelu_quick(x[j0]) * g[j1];
     }
 }
@@ -543,6 +548,10 @@ static inline void dispatch_ggml_sycl_op_fused_glu(ggml_backend_sycl_context & c
     GGML_ASSERT(dst->ne[0] == nc);
     GGML_ASSERT(ggml_is_contiguous_1(dst->src[0]));
     GGML_ASSERT(ggml_is_contiguous(dst));
+    // The fused GLU kernels index with 32-bit fastdiv, which is exact only for indices below
+    // 2^31. A dst that large is ~8 GB at f32, and the grid sizing already narrows to 32 bits,
+    // so assert the bound rather than carry a second code path for it.
+    GGML_ASSERT(ggml_nelements(dst) < ((int64_t) 1 << 31));
     const int32_t swapped = ((const int32_t *) dst->op_params)[1];
     void * src0_d = src0->data;
     void * src1_d = src1 ? src1->data : src0->data;
@@ -611,7 +620,6 @@ static inline void ggml_sycl_op_unary(
     const int64_t ne0  = dst->ne[0];
     const int64_t ne1  = dst->ne[1];
     const int64_t ne2  = dst->ne[2];
-    const int64_t ne3  = dst->ne[3];
 
     const size_t  nb0  = src0->nb[0];
     const size_t  nb1  = src0->nb[1];
@@ -640,13 +648,18 @@ static inline void ggml_sycl_op_unary(
                         unary_op_flat_kernel(src, dst_ptr, k_elements, item_ct1, func);
                     });
             } else {
+                // Launch-invariant divisors: compute the magic numbers once on the host so the
+                // kernel never issues an integer divide. Only the strided path needs them.
+                const sycl::uint3 ne0_fd = init_fastdiv_values((uint32_t) ne0);
+                const sycl::uint3 ne1_fd = init_fastdiv_values((uint32_t) ne1);
+                const sycl::uint3 ne2_fd = init_fastdiv_values((uint32_t) ne2);
                 stream->parallel_for(
                     sycl::nd_range<1>(sycl::range<1>(num_blocks) * sycl::range<1>(256),
                                       sycl::range<1>(256)),
                     [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
                         unary_op_generic_kernel(
                             src, dst_ptr, k_elements,
-                            ne0, ne1, ne2, ne3,
+                            ne0_fd, ne1_fd, ne2_fd,
                             nb0, nb1, nb2, nb3,
                             nbd0, nbd1, nbd2, nbd3,
                             item_ct1,
@@ -957,10 +970,11 @@ static inline void ggml_sycl_op_geglu(ggml_backend_sycl_context & ctx, ggml_tens
     ggml_sycl_detail::dispatch_ggml_sycl_op_fused_glu(ctx, dst,
         [](const auto* x_ptr, const auto* g_ptr, auto* dst_ptr, uint64_t k, uint64_t n, uint64_t o0, uint64_t o1, queue_ptr main_stream) {
             const uint32_t num_blocks = ceil_div(k, SYCL_GELU_BLOCK_SIZE);
+            const sycl::uint3 n_fd = init_fastdiv_values((uint32_t) n);
             main_stream->parallel_for(
                     sycl::nd_range<1>((num_blocks * sycl::range<1>(SYCL_GELU_BLOCK_SIZE)),
                     sycl::range<1>(SYCL_GELU_BLOCK_SIZE)), [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                gated_op_fused_geglu(x_ptr, g_ptr, dst_ptr, k, n, o0, o1, item_ct1);
+                gated_op_fused_geglu(x_ptr, g_ptr, dst_ptr, k, n_fd, o0, o1, item_ct1);
             });
         });
 }
@@ -969,10 +983,11 @@ static inline void ggml_sycl_op_reglu(ggml_backend_sycl_context & ctx, ggml_tens
     ggml_sycl_detail::dispatch_ggml_sycl_op_fused_glu(ctx, dst,
         [](const auto* x_ptr, const auto* g_ptr, auto* dst_ptr, uint64_t k, uint64_t n, uint64_t o0, uint64_t o1, queue_ptr main_stream) {
             const uint32_t num_blocks = ceil_div((uint32_t)k, SYCL_RELU_BLOCK_SIZE); // Using RELU block size for reglu
+            const sycl::uint3 n_fd = init_fastdiv_values((uint32_t) n);
             main_stream->parallel_for(
                     sycl::nd_range<1>((num_blocks * sycl::range<1>(SYCL_RELU_BLOCK_SIZE)),
                     sycl::range<1>(SYCL_RELU_BLOCK_SIZE)), [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                gated_op_fused_reglu(x_ptr, g_ptr, dst_ptr, k, n, o0, o1, item_ct1);
+                gated_op_fused_reglu(x_ptr, g_ptr, dst_ptr, k, n_fd, o0, o1, item_ct1);
             });
         });
 }
@@ -981,10 +996,11 @@ static inline void ggml_sycl_op_swiglu(ggml_backend_sycl_context & ctx, ggml_ten
     ggml_sycl_detail::dispatch_ggml_sycl_op_fused_glu(ctx, dst,
         [](const auto* x_ptr, const auto* g_ptr, auto* dst_ptr, uint64_t k, uint64_t n, uint64_t o0, uint64_t o1, queue_ptr main_stream) {
             const uint32_t num_blocks = ceil_div((uint32_t)k, SYCL_SILU_BLOCK_SIZE); // Using SILU block size for swiglu
+            const sycl::uint3 n_fd = init_fastdiv_values((uint32_t) n);
             main_stream->parallel_for(
                     sycl::nd_range<1>((num_blocks * sycl::range<1>(SYCL_SILU_BLOCK_SIZE)),
                     sycl::range<1>(SYCL_SILU_BLOCK_SIZE)), [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                gated_op_fused_swiglu(x_ptr, g_ptr, dst_ptr, k, n, o0, o1, item_ct1);
+                gated_op_fused_swiglu(x_ptr, g_ptr, dst_ptr, k, n_fd, o0, o1, item_ct1);
             });
         });
 }
@@ -1084,10 +1100,11 @@ static inline void ggml_sycl_op_geglu_erf(ggml_backend_sycl_context & ctx, ggml_
     ggml_sycl_detail::dispatch_ggml_sycl_op_fused_glu(ctx, dst,
         [](const auto* x_ptr, const auto* g_ptr, auto* dst_ptr, uint64_t k, uint64_t n, uint64_t o0, uint64_t o1, queue_ptr main_stream) {
             const uint32_t num_blocks = ceil_div(k, SYCL_GELU_BLOCK_SIZE);
+            const sycl::uint3 n_fd = init_fastdiv_values((uint32_t) n);
             main_stream->parallel_for(
                     sycl::nd_range<1>((num_blocks * sycl::range<1>(SYCL_GELU_BLOCK_SIZE)),
                     sycl::range<1>(SYCL_GELU_BLOCK_SIZE)), [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                gated_op_fused_geglu_erf(x_ptr, g_ptr, dst_ptr, k, n, o0, o1, item_ct1);
+                gated_op_fused_geglu_erf(x_ptr, g_ptr, dst_ptr, k, n_fd, o0, o1, item_ct1);
             });
         });
 }
@@ -1096,10 +1113,11 @@ static inline void ggml_sycl_op_geglu_quick(ggml_backend_sycl_context & ctx, ggm
     ggml_sycl_detail::dispatch_ggml_sycl_op_fused_glu(ctx, dst,
         [](const auto* x_ptr, const auto* g_ptr, auto* dst_ptr, uint64_t k, uint64_t n, uint64_t o0, uint64_t o1, queue_ptr main_stream) {
             const uint32_t num_blocks = ceil_div(k, SYCL_GELU_BLOCK_SIZE);
+            const sycl::uint3 n_fd = init_fastdiv_values((uint32_t) n);
             main_stream->parallel_for(
                     sycl::nd_range<1>((num_blocks * sycl::range<1>(SYCL_GELU_BLOCK_SIZE)),
                     sycl::range<1>(SYCL_GELU_BLOCK_SIZE)), [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                gated_op_fused_geglu_quick(x_ptr, g_ptr, dst_ptr, k, n, o0, o1, item_ct1);
+                gated_op_fused_geglu_quick(x_ptr, g_ptr, dst_ptr, k, n_fd, o0, o1, item_ct1);
             });
         });
 }
