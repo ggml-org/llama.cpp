@@ -279,6 +279,13 @@ struct ggml_hexagon_opqueue;
 struct htp_opnode;
 struct ggml_hexagon_shared_buffer;
 
+struct ggml_hexagon_session;
+
+struct ggml_hexagon_event {
+    ggml_hexagon_session * sess = nullptr;
+    uint64_t               seq  = 0;
+};
+
 struct ggml_hexagon_session {
     std::string      name;
     remote_handle64  handle;
@@ -311,6 +318,7 @@ struct ggml_hexagon_session {
         std::vector<htp_opnode> htp_nodes;
     } cached_graph;
     std::unordered_map<int, std::unique_ptr<ggml_hexagon_shared_buffer>> buffers;
+    std::vector<ggml_hexagon_event> dependencies;
 
     ggml_hexagon_session(int dev_id, ggml_backend_dev_t dev) noexcept(false);
     ~ggml_hexagon_session() noexcept(true);
@@ -326,6 +334,9 @@ struct ggml_hexagon_session {
 
     void flush_pending(bool all = false);
     void flush_batch();
+
+    uint64_t record_event();
+    void wait_event(uint64_t seq);
 };
 
 // ** backend buffers
@@ -467,8 +478,8 @@ static enum ggml_status ggml_backend_hexagon_buffer_init_tensor(ggml_backend_buf
     auto sbuf = static_cast<ggml_hexagon_shared_buffer *>(buffer->context);
     auto sess = sbuf->sess;
 
-    HEX_VERBOSE("ggml-hex: %s init-tensor %s : base %p data %p nbytes %zu usage %d\n", sess->c_name(),
-                tensor->name, (void *) sbuf->base(), tensor->data, ggml_nbytes(tensor), (int) buffer->usage);
+    HEX_VERBOSE("ggml-hex: %s init-tensor %s : base %p data %p nbytes %zu\n", sess->c_name(),
+                tensor->name, (void *) sbuf->base(), tensor->data, ggml_nbytes(tensor));
 
     if (tensor->view_src != NULL && tensor->view_offs == 0) {
         return GGML_STATUS_SUCCESS; // nothing to do for the view
@@ -993,7 +1004,7 @@ static void ggml_backend_hexagon_buffer_set_tensor(ggml_backend_buffer_t buffer,
     auto sbuf = (ggml_hexagon_shared_buffer *) buffer->context;
     auto sess = sbuf->sess;
 
-    HEX_VERBOSE("ggml-hex: %s set-tensor %s : data %p offset %zu size %zu\n", sess->c_name(), tensor->name, data, offset, size);
+    HEX_VERBOSE("ggml-hex: %s set-tensor %s : data %p offset %zu size %zu usage %d\n", sess->c_name(), tensor->name, data, offset, size, (int) buffer->usage);
 
     if (!ggml_hexagon_is_repack_tensor(tensor)) {
         memcpy((char *) tensor->data + offset, data, size);
@@ -1040,7 +1051,7 @@ static void ggml_backend_hexagon_buffer_get_tensor(ggml_backend_buffer_t buffer,
     auto sbuf = (ggml_hexagon_shared_buffer *) buffer->context;
     auto sess = sbuf->sess;
 
-    HEX_VERBOSE("ggml-hex: %s get-tensor %s : data %p offset %zu size %zu\n", sess->c_name(), tensor->name, data, offset, size);
+    HEX_VERBOSE("ggml-hex: %s get-tensor %s : data %p offset %zu size %zu usage %d\n", sess->c_name(), tensor->name, data, offset, size, (int) buffer->usage);
 
     if (!ggml_hexagon_is_repack_tensor(tensor)) {
         memcpy(data, (const char *) tensor->data + offset, size);
@@ -1095,6 +1106,127 @@ static bool ggml_backend_hexagon_buffer_cpy_tensor(ggml_backend_buffer_t      bu
     GGML_UNUSED(dst);
 }
 
+static void ggml_backend_hexagon_buffer_set_tensor_2d(ggml_backend_buffer_t buffer,
+                                                      ggml_tensor *         tensor,
+                                                      const void *          data,
+                                                      size_t                offset,
+                                                      size_t                size,
+                                                      size_t                n_copies,
+                                                      size_t                stride_tensor,
+                                                      size_t                stride_data) {
+    auto sbuf = (ggml_hexagon_shared_buffer *) buffer->context;
+    auto sess = sbuf->sess;
+
+    HEX_VERBOSE("ggml-hex: %s set-tensor-2d %s : data %p offset %zu size %zu n_copies %zu stride_tensor %zu stride_data %zu usage %d\n",
+                sess->c_name(), tensor->name, data, offset, size, n_copies, stride_tensor, stride_data, (int) buffer->usage);
+
+    if (!ggml_hexagon_is_repack_tensor(tensor)) {
+        for (size_t i = 0; i < n_copies; i++) {
+            memcpy((char *) tensor->data + offset + i * stride_tensor,
+                   (const char *) data + i * stride_data,
+                   size);
+        }
+        return;
+    }
+
+    size_t temp_size = n_copies * stride_tensor;
+    std::vector<uint8_t> temp_buf(temp_size);
+    for (size_t i = 0; i < n_copies; i++) {
+        memcpy(temp_buf.data() + i * stride_tensor,
+               (const char *) data + i * stride_data,
+               size);
+    }
+
+    size_t slice_size = tensor->ne[1] * ggml_row_size(tensor->type, tensor->ne[0]);
+    GGML_ASSERT(offset % slice_size == 0 && "offset must be aligned to slice boundary");
+    GGML_ASSERT(offset + temp_size <= ggml_nbytes(tensor));
+
+    switch (tensor->type) {
+        case GGML_TYPE_Q4_0:
+            repack_q4_0_tiled(tensor, temp_buf.data(), offset, temp_size);
+            break;
+
+        case GGML_TYPE_Q4_1:
+            repack_q4_1_tiled(tensor, temp_buf.data(), offset, temp_size);
+            break;
+
+        case GGML_TYPE_Q8_0:
+            repack_q8_0_tiled(tensor, temp_buf.data(), offset, temp_size);
+            break;
+
+        case GGML_TYPE_IQ4_NL:
+            repack_q4_0_tiled(tensor, temp_buf.data(), offset, temp_size);
+            break;
+
+        case GGML_TYPE_MXFP4:
+            repack_mxfp4_tiled(tensor, temp_buf.data(), offset, temp_size);
+            break;
+
+        default:
+            memcpy((char *) tensor->data + offset, temp_buf.data(), temp_size);
+            break;
+    }
+}
+
+static void ggml_backend_hexagon_buffer_get_tensor_2d(ggml_backend_buffer_t buffer,
+                                                      const ggml_tensor *   tensor,
+                                                      void *                data,
+                                                      size_t                offset,
+                                                      size_t                size,
+                                                      size_t                n_copies,
+                                                      size_t                stride_tensor,
+                                                      size_t                stride_data) {
+    auto sbuf = (ggml_hexagon_shared_buffer *) buffer->context;
+    auto sess = sbuf->sess;
+
+    HEX_VERBOSE("ggml-hex: %s get-tensor-2d %s : data %p offset %zu size %zu n_copies %zu stride_tensor %zu stride_data %zu usage %d\n",
+                sess->c_name(), tensor->name, data, offset, size, n_copies, stride_tensor, stride_data, (int) buffer->usage);
+
+    if (!ggml_hexagon_is_repack_tensor(tensor)) {
+        for (size_t i = 0; i < n_copies; i++) {
+            memcpy((char *) data + i * stride_data,
+                   (const char *) tensor->data + offset + i * stride_tensor,
+                   size);
+        }
+        return;
+    }
+
+    size_t temp_size = n_copies * stride_tensor;
+    std::vector<uint8_t> temp_buf(temp_size);
+
+    switch (tensor->type) {
+        case GGML_TYPE_Q4_0:
+            repack_tiled_q4_0(temp_buf.data(), tensor, temp_size);
+            break;
+
+        case GGML_TYPE_Q4_1:
+            repack_tiled_q4_1(temp_buf.data(), tensor, temp_size);
+            break;
+
+        case GGML_TYPE_Q8_0:
+            repack_tiled_q8_0(temp_buf.data(), tensor, temp_size);
+            break;
+
+        case GGML_TYPE_IQ4_NL:
+            repack_tiled_q4_0(temp_buf.data(), tensor, temp_size);
+            break;
+
+        case GGML_TYPE_MXFP4:
+            repack_tiled_mxfp4(temp_buf.data(), tensor, temp_size);
+            break;
+
+        default:
+            memcpy(temp_buf.data(), (const char *) tensor->data + offset, temp_size);
+            break;
+    }
+
+    for (size_t i = 0; i < n_copies; i++) {
+        memcpy((char *) data + i * stride_data,
+               temp_buf.data() + i * stride_tensor,
+               size);
+    }
+}
+
 static void ggml_backend_hexagon_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
     auto sbuf = (ggml_hexagon_shared_buffer *) buffer->context;
     auto sess = sbuf->sess;
@@ -1109,8 +1241,8 @@ static ggml_backend_buffer_i ggml_backend_hexagon_buffer_interface = {
     /* .memset_tensor   = */ NULL,
     /* .set_tensor      = */ ggml_backend_hexagon_buffer_set_tensor,
     /* .get_tensor      = */ ggml_backend_hexagon_buffer_get_tensor,
-    /* .set_tensor_2d   = */ NULL,
-    /* .get_tensor_2d   = */ NULL,
+    /* .set_tensor_2d   = */ ggml_backend_hexagon_buffer_set_tensor_2d,
+    /* .get_tensor_2d   = */ ggml_backend_hexagon_buffer_get_tensor_2d,
     /* .cpy_tensor      = */ ggml_backend_hexagon_buffer_cpy_tensor,
     /* .clear           = */ ggml_backend_hexagon_buffer_clear,
     /* .reset           = */ NULL,
@@ -1510,8 +1642,6 @@ struct ggml_hexagon_opqueue {
     std::vector<opvec>          op_cache;       // per batch op cache
     std::vector<uint64_t>       start_usec;     // per batch start time
 
-    void wait(uint64_t seq);
-
     ggml_hexagon_opqueue(ggml_hexagon_session *sess, size_t batch_size, size_t depth) {
         size_t n_bufs    = HTP_OP_MAX_BUFS;
         size_t n_ops     = batch_size;
@@ -1717,6 +1847,11 @@ void ggml_hexagon_session::flush_pending(bool all) {
 void ggml_hexagon_session::flush_batch() {
     if (op_batch->empty()) { return; }
 
+    for (const auto & dep : dependencies) {
+        dep.sess->wait_event(dep.seq);
+    }
+    dependencies.clear();
+
     op_batch->finalize_ranges();
 
     htp_opbatch_req req {};
@@ -1766,16 +1901,20 @@ void ggml_hexagon_session::flush(bool all) {
     flush_pending(all);
 }
 
-void ggml_hexagon_opqueue::wait(uint64_t seq) {
+void ggml_hexagon_session::wait_event(uint64_t seq) {
     HEX_VERBOSE("ggml-hex: %s opqueue-wait start: seq %llu, current rsp-seq %llu, pending %d\n",
-                shm_buf->sess->name.c_str(), (unsigned long long)seq, (unsigned long long)rsp_seq, (int)shm_buf->sess->op_pending);
-    while (this->rsp_seq < seq && shm_buf->sess->op_pending > 0) {
-        shm_buf->sess->flush_pending(false);
+                this->name.c_str(), (unsigned long long)seq, (unsigned long long)op_queue->rsp_seq, (int)this->op_pending);
+    while (op_queue->rsp_seq < seq && this->op_pending > 0) {
+        this->flush_pending(false);
     }
     HEX_VERBOSE("ggml-hex: %s opqueue-wait end: seq %llu, current rsp-seq %llu, pending %d\n",
-                shm_buf->sess->name.c_str(), (unsigned long long)seq, (unsigned long long)rsp_seq, (int)shm_buf->sess->op_pending);
+                this->name.c_str(), (unsigned long long)seq, (unsigned long long)op_queue->rsp_seq, (int)this->op_pending);
 }
 
+uint64_t ggml_hexagon_session::record_event() {
+    flush_batch();
+    return op_queue->req_seq;
+}
 
 static size_t ggml_hexagon_measure_max_vmem(ggml_hexagon_session *sess) {
     // Allocate a bunch pinned buffers till failure.
@@ -4125,21 +4264,22 @@ static bool ggml_backend_hexagon_cpy_tensor_async(ggml_backend_t backend_src, gg
             }
             sess_dst->buffers[sbuf_src->fd()] = std::move(clone);
         }
-    }
 
-    HEX_VERBOSE("ggml-hex: %s cpy-tensor-async %s -> %s size %zu\n", sess_dst->name.c_str(), src->name, dst->name, ggml_nbytes(src));
+        uint64_t seq = sess_src->record_event();
+        HEX_VERBOSE("ggml-hex: %s cpy-tensor-async %s -> %s size %zu : dep %s:%llu\n",
+                    sess_dst->name.c_str(), src->name, dst->name, ggml_nbytes(src),
+                    sess_src->c_name(), (unsigned long long)seq);
+        sess_dst->dependencies.push_back({ sess_src, seq });
+    } else {
+        HEX_VERBOSE("ggml-hex: %s cpy-tensor-async %s -> %s size %zu\n", sess_dst->name.c_str(), src->name, dst->name, ggml_nbytes(src));
+    }
     sess_dst->enqueue_cpy(src, dst);
 
     return true;
 }
 
-struct ggml_backend_hexagon_event {
-    ggml_hexagon_session * sess = nullptr;
-    uint64_t               seq  = 0;
-};
-
 static ggml_backend_event_t ggml_backend_hexagon_device_event_new(ggml_backend_dev_t dev) {
-    ggml_backend_hexagon_event * hex_event = new ggml_backend_hexagon_event();
+    ggml_hexagon_event * hex_event = new ggml_hexagon_event();
     HEX_VERBOSE("ggml-hex: %s event-new : event %p\n", ggml_backend_dev_name(dev), (void *)hex_event);
 
     return new ggml_backend_event {
@@ -4155,7 +4295,7 @@ static void ggml_backend_hexagon_device_event_free(ggml_backend_dev_t dev, ggml_
         return;
     }
 
-    ggml_backend_hexagon_event * hex_event = (ggml_backend_hexagon_event *)event->context;
+    ggml_hexagon_event * hex_event = (ggml_hexagon_event *)event->context;
     HEX_VERBOSE("ggml-hex: %s event-free : event %p\n", ggml_backend_dev_name(dev), (void *)hex_event);
     delete hex_event;
     delete event;
@@ -4164,22 +4304,20 @@ static void ggml_backend_hexagon_device_event_free(ggml_backend_dev_t dev, ggml_
 static void ggml_backend_hexagon_device_event_synchronize(ggml_backend_dev_t dev, ggml_backend_event_t event) {
     GGML_UNUSED(dev);
 
-    ggml_backend_hexagon_event * hex_event = (ggml_backend_hexagon_event *)event->context;
+    ggml_hexagon_event * hex_event = (ggml_hexagon_event *)event->context;
     HEX_VERBOSE("ggml-hex: %s event-synchronize : event %p seq %llu\n",
                 ggml_backend_dev_name(dev), (void *)hex_event, (unsigned long long)hex_event->seq);
     if (hex_event->sess != nullptr) {
-        hex_event->sess->op_queue->wait(hex_event->seq);
+        hex_event->sess->wait_event(hex_event->seq);
     }
 }
 
 static void ggml_backend_hexagon_event_record(ggml_backend_t backend, ggml_backend_event_t event) {
     auto sess = static_cast<ggml_hexagon_session *>(backend->context);
-    ggml_backend_hexagon_event * hex_event = (ggml_backend_hexagon_event *)event->context;
-
-    sess->flush_batch();
+    ggml_hexagon_event * hex_event = (ggml_hexagon_event *)event->context;
 
     hex_event->sess = sess;
-    hex_event->seq  = sess->op_queue->req_seq;
+    hex_event->seq  = sess->record_event();
     HEX_VERBOSE("ggml-hex: %s event-record : event %p seq %llu\n",
                 sess->c_name(), (void *)hex_event, (unsigned long long)hex_event->seq);
 }
@@ -4187,27 +4325,56 @@ static void ggml_backend_hexagon_event_record(ggml_backend_t backend, ggml_backe
 static void ggml_backend_hexagon_event_wait(ggml_backend_t backend, ggml_backend_event_t event) {
     GGML_UNUSED(backend);
 
-    ggml_backend_hexagon_event * hex_event = (ggml_backend_hexagon_event *)event->context;
+    ggml_hexagon_event * hex_event = (ggml_hexagon_event *)event->context;
     if (hex_event->sess != nullptr) {
         HEX_VERBOSE("ggml-hex: %s event-wait : event %p seq %llu\n",
                     hex_event->sess->c_name(), (void *)hex_event, (unsigned long long)hex_event->seq);
-        hex_event->sess->op_queue->wait(hex_event->seq);
+        hex_event->sess->wait_event(hex_event->seq);
     }
 }
 
 static void ggml_backend_hexagon_set_tensor_async(ggml_backend_t backend, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     auto sess = static_cast<ggml_hexagon_session *>(backend->context);
-    HEX_VERBOSE("ggml-hex: %s set-tensor-async %s : data %p offset %zu size %zu\n",
-                sess->c_name(), tensor->name, data, offset, size);
+    HEX_VERBOSE("ggml-hex: %s set-tensor-async %s : data %p offset %zu size %zu usage %d\n",
+                sess->c_name(), tensor->name, data, offset, size, tensor->buffer ? (int) tensor->buffer->usage : -1);
     ggml_backend_tensor_set(tensor, data, offset, size);
 }
 
 static void ggml_backend_hexagon_get_tensor_async(ggml_backend_t backend, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
     auto sess = static_cast<ggml_hexagon_session *>(backend->context);
-    HEX_VERBOSE("ggml-hex: %s get-tensor-async %s : data %p offset %zu size %zu\n",
-                sess->c_name(), tensor->name, data, offset, size);
+    HEX_VERBOSE("ggml-hex: %s get-tensor-async %s : data %p offset %zu size %zu usage %d\n",
+                sess->c_name(), tensor->name, data, offset, size, tensor->buffer ? (int) tensor->buffer->usage : -1);
     sess->flush(true);
     ggml_backend_tensor_get(tensor, data, offset, size);
+}
+
+static void ggml_backend_hexagon_set_tensor_2d_async(ggml_backend_t backend,
+                                                     struct ggml_tensor * tensor,
+                                                     const void * data,
+                                                     size_t offset,
+                                                     size_t size,
+                                                     size_t n_copies,
+                                                     size_t stride_tensor,
+                                                     size_t stride_data) {
+    auto sess = static_cast<ggml_hexagon_session *>(backend->context);
+    HEX_VERBOSE("ggml-hex: %s set-tensor-2d-async %s : data %p offset %zu size %zu n_copies %zu stride_tensor %zu stride_data %zu usage %d\n",
+                sess->c_name(), tensor->name, data, offset, size, n_copies, stride_tensor, stride_data, tensor->buffer ? (int) tensor->buffer->usage : -1);
+    ggml_backend_tensor_set_2d(tensor, data, offset, size, n_copies, stride_tensor, stride_data);
+}
+
+static void ggml_backend_hexagon_get_tensor_2d_async(ggml_backend_t backend,
+                                                     const struct ggml_tensor * tensor,
+                                                     void * data,
+                                                     size_t offset,
+                                                     size_t size,
+                                                     size_t n_copies,
+                                                     size_t stride_tensor,
+                                                     size_t stride_data) {
+    auto sess = static_cast<ggml_hexagon_session *>(backend->context);
+    HEX_VERBOSE("ggml-hex: %s get-tensor-2d-async %s : data %p offset %zu size %zu n_copies %zu stride_tensor %zu stride_data %zu usage %d\n",
+                sess->c_name(), tensor->name, data, offset, size, n_copies, stride_tensor, stride_data, tensor->buffer ? (int) tensor->buffer->usage : -1);
+    sess->flush(true);
+    ggml_backend_tensor_get_2d(tensor, data, offset, size, n_copies, stride_tensor, stride_data);
 }
 
 static struct ggml_backend_i hexagon_backend_i = {
@@ -4215,8 +4382,8 @@ static struct ggml_backend_i hexagon_backend_i = {
     /* .free                    = */ ggml_backend_hexagon_free,
     /* .set_tensor_async        = */ ggml_backend_hexagon_set_tensor_async,
     /* .get_tensor_async        = */ ggml_backend_hexagon_get_tensor_async,
-    /* .set_tensor_2d_async     = */ NULL,
-    /* .get_tensor_2d_async     = */ NULL,
+    /* .set_tensor_2d_async     = */ ggml_backend_hexagon_set_tensor_2d_async,
+    /* .get_tensor_2d_async     = */ ggml_backend_hexagon_get_tensor_2d_async,
     /* .cpy_tensor_async        = */ ggml_backend_hexagon_cpy_tensor_async,
     /* .synchronize             = */ ggml_backend_hexagon_synchronize,
     /* .graph_plan_create       = */ NULL,
