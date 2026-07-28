@@ -730,6 +730,32 @@ static common_chat_tool imaginary_number_tool{
     })",
 };
 
+static common_chat_tool nested_args_tool{
+    /* .name = */ "nested_args",
+    /* .description = */ "Tool with nested array arguments",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "tags": {
+                "type": "array",
+                "items": { "type": "string" }
+            },
+            "entries": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "integer" },
+                        "label": { "type": "string" }
+                    },
+                    "required": ["id", "label"]
+                }
+            }
+        },
+        "required": ["tags", "entries"]
+    })",
+};
+
 static common_chat_tool nullable_string_tool{
     /* .name = */ "set_nullable_str",
     /* .description = */ "Set a nullable string value",
@@ -5030,6 +5056,54 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_reasoning("Multi-arg call")
             .expect_tool_calls({
                 { "magic_int", R"({"ref": 42, "name": "foo bar"})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // Nested object param, expanded into one element per key
+        tst.test(
+               "<mm:think>Nested object</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"imaginary_number\">"
+               "]<]minimax[>[<number>"
+               "]<]minimax[>[<real>1.5]<]minimax[>[</real>"
+               "]<]minimax[>[<imaginary>-2.5]<]minimax[>[</imaginary>"
+               "]<]minimax[>[</number>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ imaginary_number_tool })
+            .expect_reasoning("Nested object")
+            .expect_tool_calls({
+                { "imaginary_number", R"({"number": {"real": 1.5, "imaginary": -2.5}})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // Array params, expanded into <item> elements (of scalars and of objects)
+        tst.test(
+               "<mm:think>Nested arrays</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"nested_args\">"
+               "]<]minimax[>[<tags>"
+               "]<]minimax[>[<item>alpha]<]minimax[>[</item>"
+               "]<]minimax[>[<item>beta]<]minimax[>[</item>"
+               "]<]minimax[>[</tags>"
+               "]<]minimax[>[<entries>"
+               "]<]minimax[>[<item>"
+               "]<]minimax[>[<id>1]<]minimax[>[</id>"
+               "]<]minimax[>[<label>one]<]minimax[>[</label>"
+               "]<]minimax[>[</item>"
+               "]<]minimax[>[</entries>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ nested_args_tool })
+            .expect_reasoning("Nested arrays")
+            .expect_tool_calls({
+                { "nested_args", R"({"tags": ["alpha", "beta"], "entries": [{"id": 1, "label": "one"}]})", {} },
             })
             .expect_reconstruction()
             .run();

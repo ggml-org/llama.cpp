@@ -816,6 +816,8 @@ const char * common_chat_format_name(common_chat_format format) {
             return "peg-native";
         case COMMON_CHAT_FORMAT_PEG_GEMMA4:
             return "peg-gemma4";
+        case COMMON_CHAT_FORMAT_PEG_MINIMAX_M3:
+            return "peg-minimax-m3";
         default:
             throw std::runtime_error("Unknown chat format");
     }
@@ -2276,7 +2278,7 @@ static common_chat_params common_chat_params_init_minimax_m3(const common_chat_t
 
     data.prompt             = common_chat_template_direct_apply_impl(tmpl, inputs);
     data.generation_prompt  = common_chat_template_generation_prompt_impl(tmpl, inputs);
-    data.format             = COMMON_CHAT_FORMAT_PEG_NATIVE;
+    data.format             = COMMON_CHAT_FORMAT_PEG_MINIMAX_M3;
     data.supports_thinking  = true;
     data.thinking_start_tag = "<mm:think>";
     data.thinking_end_tags  = {"</mm:think>"};
@@ -2313,6 +2315,8 @@ static common_chat_params common_chat_params_init_minimax_m3(const common_chat_t
 
     const std::string GEN_PROMPT = data.generation_prompt;
 
+    using mm3 = common_chat_peg_minimax_m3_mapper;
+
     if (inputs.has_continuation()) {
         const auto & msg = inputs.continue_msg;
 
@@ -2325,15 +2329,19 @@ static common_chat_params common_chat_params_init_minimax_m3(const common_chat_t
     }
 
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
-        auto generation_prompt = p.literal(GEN_PROMPT);
+        auto generation_prompt = p.prefix(GEN_PROMPT, THINK_START);
         auto end = p.end();
 
         auto reasoning = p.eps();
-        // M3 can emit a bare </mm:think> (no opener) after tool results; keep the opener optional.
-        if (extract_reasoning && inputs.enable_thinking) {
-            reasoning = p.optional(p.optional(p.literal(THINK_START)) + p.reasoning(p.until(THINK_END)) + THINK_END);
-        } else if (extract_reasoning) {
-            reasoning = p.optional(p.optional(p.literal(THINK_START)) + p.until(THINK_END) + p.literal(THINK_END));
+        if (extract_reasoning) {
+            auto block = inputs.enable_thinking
+                             ? p.literal(THINK_START) + p.space() +
+                                   p.ac(p.reasoning(p.until(THINK_END)) + p.literal(THINK_END), THINK_END)
+                             : p.literal(THINK_START) + p.ac(p.until(THINK_END) + p.literal(THINK_END), THINK_END);
+
+            // A turn without reasoning is prefixed with a bare </mm:think>, written either by the
+            // generation prompt (thinking_mode = "disabled") or by the model itself.
+            reasoning = p.optional(p.choice({ block, p.literal(THINK_END) }));
         }
 
         if (has_response_format) {
@@ -2353,62 +2361,98 @@ static common_chat_params common_chat_params_init_minimax_m3(const common_chat_t
             const auto & function = tool.at("function");
             std::string  name     = function.at("name");
             auto         params   = function.contains("parameters") ? function.at("parameters") : json::object();
-            const auto & props    = params.contains("properties") ? params.at("properties") : json::object();
-
-            std::set<std::string> required;
-            if (params.contains("required")) {
-                params.at("required").get_to(required);
-            }
 
             auto schema_info = common_schema_info();
             schema_info.resolve_refs(params);
 
-            std::vector<common_peg_parser> required_parsers;
-            std::vector<common_peg_parser> optional_parsers;
-            for (const auto & [param_name, param_schema] : props.items()) {
-                bool is_required = required.find(param_name) != required.end();
-                bool is_string   = schema_info.resolves_to_string(param_schema);
+            // The template expands argument values recursively in XML (see the to_xml() macro)
+            std::function<common_peg_parser(const json &, const std::string &, const std::string &)> value_of;
+            std::function<common_peg_parser(const json &, const std::string &)>                      members_of;
 
-                const std::string p_close = NS + "</" + param_name + ">";
+            auto element_of = [&](const std::string & tag, const json & schema, const std::string & rule_name) {
+                const std::string close = NS + "</" + tag + ">";
+                return p.rule(rule_name,
+                    p.tool_arg(
+                        p.tool_arg_open(
+                            p.literal(NS + "<") +
+                            p.tool_arg_name(p.literal(tag)) +
+                            p.literal(">")) +
+                        value_of(schema, rule_name, close)));
+            };
 
-                auto arg = p.tool_arg(
-                    p.tool_arg_open(
-                        p.literal(NS + "<") +
-                        p.tool_arg_name(p.literal(param_name)) +
-                        p.literal(">")) +
-                    (is_string
-                         ? p.ac(p.tool_arg_string_value(p.until(p_close)) +
-                                p.tool_arg_close(p.literal(p_close)), p_close)
-                         : p.tool_arg_json_value(p.schema(p.json(),
-                                                          "tool-" + name + "-arg-" + param_name + "-schema",
-                                                          param_schema, false)) +
-                           p.tool_arg_close(p.literal(p_close))));
+            value_of = [&](const json & schema,
+                           const std::string & rule_name,
+                           const std::string & close) -> common_peg_parser {
+                auto close_tag = p.tool_arg_close(p.literal(close));
 
-                auto named_arg = p.rule("tool-" + name + "-arg-" + param_name, arg);
-                if (is_required) {
-                    required_parsers.push_back(named_arg);
-                } else {
-                    optional_parsers.push_back(named_arg);
+                if (schema_info.resolves_to_string(schema)) {
+                    return p.ac(p.tool_arg_string_value(p.until(close)) + close_tag, close);
                 }
-            }
 
-            common_peg_parser args_seq = p.eps();
-            for (size_t i = 0; i < required_parsers.size(); i++) {
-                if (i > 0) {
-                    args_seq = args_seq + p.space();
+                const std::string type = schema.contains("type") && schema.at("type").is_string()
+                                             ? schema.at("type").get<std::string>()
+                                             : "";
+
+                if (type == "object" && schema.contains("properties")) {
+                    return p.tag(mm3::TOOL_ARG_OBJECT, members_of(schema, rule_name)) + p.space() + close_tag;
                 }
-                args_seq = args_seq + required_parsers[i];
-            }
 
-            if (!optional_parsers.empty()) {
-                common_peg_parser any_opt = p.choice();
-                for (const auto & opt : optional_parsers) {
-                    any_opt |= opt;
+                if (type == "array" && schema.contains("items")) {
+                    const std::string item_close = NS + "</item>";
+                    auto item = p.rule(rule_name + "-item",
+                        p.tag(mm3::TOOL_ARG_ITEM,
+                              p.literal(NS + "<item>") +
+                                  value_of(schema.at("items"), rule_name + "-item", item_close)));
+                    return p.tag(mm3::TOOL_ARG_ARRAY, p.repeat(p.space() + item, 0, -1)) + p.space() + close_tag;
                 }
-                args_seq = args_seq + p.repeat(p.space() + any_opt, 0, -1);
-            }
 
-            common_peg_parser invoke_body = args_seq;
+                // Numbers and booleans are written verbatim; what we cannot expand yet (free-form
+                // objects, oneOf/anyOf) is parsed as JSON
+                return p.tool_arg_json_value(p.schema(p.json(), rule_name + "-schema", schema, false)) + close_tag;
+            };
+
+            // Required properties in schema order, then any number of optional ones in any order.
+            members_of = [&](const json & schema, const std::string & rule_prefix) -> common_peg_parser {
+                const auto & props = schema.at("properties");
+
+                std::set<std::string> required;
+                if (schema.contains("required")) {
+                    schema.at("required").get_to(required);
+                }
+
+                std::vector<common_peg_parser> required_elements;
+                std::vector<common_peg_parser> optional_elements;
+                for (const auto & [key, key_schema] : props.items()) {
+                    auto element = element_of(key, key_schema, rule_prefix + "-" + key);
+                    if (required.find(key) != required.end()) {
+                        required_elements.push_back(element);
+                    } else {
+                        optional_elements.push_back(element);
+                    }
+                }
+
+                common_peg_parser members = p.eps();
+                for (size_t i = 0; i < required_elements.size(); i++) {
+                    if (i > 0) {
+                        members = members + p.space();
+                    }
+                    members = members + required_elements[i];
+                }
+
+                if (!optional_elements.empty()) {
+                    common_peg_parser any_optional = p.choice();
+                    for (const auto & element : optional_elements) {
+                        any_optional |= element;
+                    }
+                    members = members + p.repeat(p.space() + any_optional, 0, -1);
+                }
+
+                return members;
+            };
+
+            common_peg_parser invoke_body =
+                params.contains("properties") ? members_of(params, "tool-" + name + "-arg") : p.eps();
+
             auto func_parser = p.tool(
                 p.tool_open(p.literal(NS + "<invoke name=\"") +
                             p.tool_name(p.literal(name)) + p.literal("\">")) +
@@ -3200,6 +3244,8 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
             std::unique_ptr<common_chat_peg_mapper> mapper;
             if (params.format == COMMON_CHAT_FORMAT_PEG_GEMMA4) {
                 mapper = std::make_unique<common_chat_peg_gemma4_mapper>(msg);
+            } else if (params.format == COMMON_CHAT_FORMAT_PEG_MINIMAX_M3) {
+                mapper = std::make_unique<common_chat_peg_minimax_m3_mapper>(msg);
             } else {
                 mapper = std::make_unique<common_chat_peg_mapper>(msg);
             }
@@ -3222,6 +3268,8 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
     std::unique_ptr<common_chat_peg_mapper> mapper;
     if (params.format == COMMON_CHAT_FORMAT_PEG_GEMMA4) {
         mapper = std::make_unique<common_chat_peg_gemma4_mapper>(msg);
+    } else if (params.format == COMMON_CHAT_FORMAT_PEG_MINIMAX_M3) {
+        mapper = std::make_unique<common_chat_peg_minimax_m3_mapper>(msg);
     } else {
         mapper = std::make_unique<common_chat_peg_mapper>(msg);
     }
