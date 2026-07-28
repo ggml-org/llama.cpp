@@ -622,6 +622,22 @@ build\ReleaseOV\bin\llama-cli.exe -m "C:\models\Llama-3.2-1B-Instruct-Q4_K_M.ggu
 > [!NOTE]
 > On systems with multiple GPUs, use `GPU.0` or `GPU.1` to explicitly target specific GPU. See [OpenVINO GPU Device](https://docs.openvino.ai/2026/openvino-workflow/running-inference/inference-devices-and-modes/gpu-device.html) for more details.
 
+**Phase split (CPU + iGPU on UMA):** on integrated GPU systems, prefill on CPU and decode on `GPU.0` can outperform a single device. KV cache is allocated in USM host memory when one phase uses CPU and the other uses GPU, so the cache is not copied at phase boundaries. Example:
+
+```bash
+export GGML_OPENVINO_CACHE_DIR=/tmp/ov_cache
+export GGML_OPENVINO_PHASE_SPLIT=1
+export GGML_OPENVINO_PREFILL_DEVICE=CPU
+export GGML_OPENVINO_DECODE_DEVICE=GPU.0
+export GGML_OPENVINO_STATEFUL_EXECUTION=1
+
+./build/bin/llama-bench -m model.gguf -pg 512,128
+# llama-cli: use --single-turn (-st) with -p when not in interactive chat
+./build/bin/llama-cli -m model.gguf -p "Hello" -n 32 -st --simple-io
+```
+
+Integration test (requires `LLAMACPP_TEST_MODELFILE`): `tests/test-openvino-phase-split.sh`.
+
 ### 5. Docker Build
 
 You can build and run llama.cpp with OpenVINO backend using Docker.
@@ -709,6 +725,9 @@ Boolean flags follow a uniform convention: set to a **positive integer** (e.g. `
 | Variable                          | Type      | Default    | Description                                                                                                 |
 |-----------------------------------|-----------|------------|-------------------------------------------------------------------------------------------------------------|
 | `GGML_OPENVINO_DEVICE`            | String    | `CPU`      | Specify the target device (CPU, GPU, NPU). On systems with multiple GPUs, use `GPU.0` or `GPU.1` to explicitly target specific GPU. See [OpenVINO GPU Device](https://docs.openvino.ai/2026/openvino-workflow/running-inference/inference-devices-and-modes/gpu-device.html). When set to **NPU**, static compilation mode is enabled for optimal performance. |
+| `GGML_OPENVINO_PHASE_SPLIT`       | Boolean   | `0`        | Enable separate OpenVINO devices for prefill (multi-token) and decode (single-token) steps. Also enabled automatically when prefill and decode device variables differ. |
+| `GGML_OPENVINO_PREFILL_DEVICE`    | String    | `GGML_OPENVINO_DEVICE` | OpenVINO device for prefill when phase split is active (for example `CPU`). |
+| `GGML_OPENVINO_DECODE_DEVICE`     | String    | `GGML_OPENVINO_DEVICE` | OpenVINO device for decode when phase split is active (for example `GPU.0`). |
 | `GGML_OPENVINO_CACHE_DIR`         | String    | `not set`  | Directory for OpenVINO model caching (recommended: `/tmp/ov_cache`). Enables model caching when set. **Not supported on NPU devices.** |
 | `GGML_OPENVINO_PREFILL_CHUNK_SIZE`| Integer   | `256`      | Token chunk size for **NPU** prefill (NPU-only; ignored on CPU/GPU). Must be a positive integer; otherwise the default is used. |
 | `GGML_OPENVINO_STATEFUL_EXECUTION`| Boolean   | `0`        | Enable stateful KV cache for better performance. Recommended on CPU, GPU.                                   |

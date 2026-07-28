@@ -144,6 +144,15 @@ if (NOT WIN32)
     )
 endif()
 
+if (GGML_OPENVINO AND NOT WIN32)
+    llama_test_cmd(
+        ${CMAKE_CURRENT_SOURCE_DIR}/test-openvino-phase-split.sh
+        NAME test-openvino-phase-split
+        LABEL openvino
+        WORKING_DIRECTORY ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}
+    )
+endif()
+
 if (LLAMA_LLGUIDANCE)
     llama_build_and_test(test-grammar-llguidance.cpp ARGS ${PROJECT_SOURCE_DIR}/models/ggml-vocab-llama-bpe.gguf)
 endif ()
