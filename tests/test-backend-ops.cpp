@@ -4924,7 +4924,7 @@ struct test_mul_mat_hadamard : public test_mul_mat {
     }
 };
 
-static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats) {
+static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats, float amax = 1.0f) {
     std::random_device rd;
     std::default_random_engine rng(rd());
     for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
@@ -4939,6 +4939,10 @@ static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats) {
                 std::shuffle(data.begin(), data.end(), rng);
                 ggml_backend_tensor_set(t, data.data(), r * t->nb[1], t->ne[0] * sizeof(int32_t));
             }
+        } else if (amax != 1.0f && t->type == GGML_TYPE_F32) {
+            // src1 (activations) only — the weights stay in their normal
+            // range so this isolates activation magnitude.
+            init_tensor_uniform(t, -amax, amax);
         } else {
             init_tensor_uniform(t);
         }
@@ -4955,9 +4959,16 @@ struct test_mul_mat_id : public test_case {
     const int64_t m;
     const int64_t n;
     const int64_t k;
+    // Magnitude of the src1 activations. Default 1.0f reproduces the
+    // historical uniform [-1, 1] init. Larger values exercise backends
+    // that narrow the activations to a lower-range type internally:
+    // Metal's mul_mm_id feeds simdgroup_half8x8, and f16 saturates at
+    // 65504, so real models whose activations exceed that produce inf
+    // and then NaN on that path while the mul_mv_id path is correct.
+    const float amax;
 
     std::string vars() override {
-        return VARS_TO_STR8(type_a, type_b, n_mats, n_used, b, m, n, k);
+        return VARS_TO_STR9(type_a, type_b, n_mats, n_used, b, m, n, k, amax);
     }
 
     double max_nmse_err() override {
@@ -4979,9 +4990,10 @@ struct test_mul_mat_id : public test_case {
 
     test_mul_mat_id(ggml_type type_a = GGML_TYPE_F32, ggml_type type_b = GGML_TYPE_F32,
             int n_mats = 8, int n_used = 2, bool b = false,
-            int64_t m = 32, int64_t n = 32, int64_t k = 32)
+            int64_t m = 32, int64_t n = 32, int64_t k = 32,
+            float amax = 1.0f)
         : type_a(type_a), type_b(type_b), n_mats(n_mats), n_used(n_used), b(b),
-            m(m), n(n), k(k) {
+            m(m), n(n), k(k), amax(amax) {
             GGML_ASSERT(n_used <= n_mats);
         }
 
@@ -5007,7 +5019,7 @@ struct test_mul_mat_id : public test_case {
     }
 
     void initialize_tensors(ggml_context * ctx) override {
-        init_mul_mat_id_tensors(ctx, n_mats);
+        init_mul_mat_id_tensors(ctx, n_mats, amax);
     }
 };
 
@@ -9890,6 +9902,22 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (ggml_type type_a : {GGML_TYPE_IQ2_XXS, GGML_TYPE_IQ2_XS, GGML_TYPE_IQ2_S, GGML_TYPE_IQ3_XXS,
                              GGML_TYPE_IQ3_S, GGML_TYPE_IQ1_S, GGML_TYPE_IQ1_M, GGML_TYPE_IQ4_XS}) {
         test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 4, 4, false, 16, 10, 256));
+    }
+
+    // Activations outside f16 range. Backends that narrow src1 to a
+    // half-precision type for a matrix-multiply path (Metal's
+    // mul_mm_id feeds simdgroup_half8x8) saturate at 65504 and produce
+    // inf, then NaN — while the vector path on the same backend, and
+    // every CPU path, are correct. Real models hit this: Mistral
+    // Small 4 (arch mistral4, 128 experts / 4 active) has a layer whose
+    // ffn activations reach ~1e5, so on Metal every prefill of >= 32
+    // tokens returns an all-NaN vocabulary, and fewer than 32 tokens is
+    // correct (ne21_mm_id_min switches mul_mv_id -> mul_mm_id at 32).
+    // n = 32 and 64 sit above that switch; n = 16 below it is the
+    // control that must stay green.
+    for (int n : {16, 32, 64}) {
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_K, GGML_TYPE_F32, 128, 4, false, 4096, n, 2048, 1e5f));
+        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q8_0, GGML_TYPE_F32, 8,   2, false, 512,  n, 256,  1e5f));
     }
 
     for (ggml_type type_a : base_types) {
