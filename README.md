@@ -1,4 +1,13 @@
-# llama.cpp
+# llamar.cpp (Llama Recurrent)
+
+> [!IMPORTANT]
+> **llamar.cpp** is a fork of `llama.cpp` implementing **KV-Decoupled Recurrent Transformer Layers** with **Euler Step Scaling** for stable inference-time recurrence.
+> 
+> * **Theory & Architecture:** Conceived by a human developer.
+> * **Implementation & Coding:** Written by Google Gemini 3.5 Flash (medium) AI assistant.
+> * **Purpose:** Research implementation of recurrence within causal and parallel transformer blocks to scale reasoning capabilities of smaller models at inference time.
+
+---
 
 ![llama](https://raw.githubusercontent.com/ggml-org/llama.brand/refs/heads/master/cover/llama-cpp/cover-llama-cpp-dark.svg)
 
