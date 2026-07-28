@@ -3437,7 +3437,6 @@ void llm_graph_context::build_sampling() const {
     // add a dummy row of logits
     // this trick makes the graph static, regardless of which samplers are activated
     // this is important in order to minimize graph reallocations
-    // note: mark this tensor as output since there could be output views of its data
     ggml_tensor * logits_t = ggml_pad(ctx0, res->t_logits, 0, 1, 0, 0);
 
     for (const auto & [seq_id, sampler] : samplers) {

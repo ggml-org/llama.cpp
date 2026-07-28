@@ -1458,7 +1458,7 @@ static void llama_sampler_top_p_backend_apply(
     struct ggml_tensor * sorted_logits = ggml_sort(logits, sorted_idx);
     ggml_set_name(sorted_logits, "top_p_sorted_logits");
 
-    sorted_logits = ggml_reshape_1d(ctx, sorted_logits, logits->ne[0]);
+    sorted_logits = ggml_reshape_1d(ctx, sorted_logits, ggml_nelements(sorted_logits));
     struct ggml_tensor * softmax = ggml_soft_max(ctx, sorted_logits);
     ggml_set_name(softmax, "top_p_softmax");
 
