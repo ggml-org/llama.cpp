@@ -96,6 +96,39 @@ void dequantize_q1_0_t4(device const block_q1_0 * xb, short il, thread type4 & r
 }
 
 template <typename type4x4>
+void dequantize_q2_0(device const block_q2_0 * xb, short il, thread type4x4 & reg) {
+    device const uint8_t * qs = xb->qs;
+    const float d = xb->d;
+
+    const int byte_offset = il * 4;  // il*16 elements = il*4 bytes (4 elements per byte)
+    float4x4 reg_f;
+
+    for (int i = 0; i < 4; i++) {
+        const uint8_t b = qs[byte_offset + i];
+        reg_f[i][0] = ((float)((b >> 0) & 3) - 1.0f) * d;
+        reg_f[i][1] = ((float)((b >> 2) & 3) - 1.0f) * d;
+        reg_f[i][2] = ((float)((b >> 4) & 3) - 1.0f) * d;
+        reg_f[i][3] = ((float)((b >> 6) & 3) - 1.0f) * d;
+    }
+
+    reg = (type4x4) reg_f;
+}
+
+template <typename type4>
+void dequantize_q2_0_t4(device const block_q2_0 * xb, short il, thread type4 & reg) {
+    const float d = xb->d;
+    const uint8_t b = xb->qs[il];
+
+    float4 reg_f;
+    reg_f[0] = ((float)((b >> 0) & 3) - 1.0f) * d;
+    reg_f[1] = ((float)((b >> 2) & 3) - 1.0f) * d;
+    reg_f[2] = ((float)((b >> 4) & 3) - 1.0f) * d;
+    reg_f[3] = ((float)((b >> 6) & 3) - 1.0f) * d;
+
+    reg = (type4) reg_f;
+}
+
+template <typename type4x4>
 void dequantize_q4_0(device const block_q4_0 * xb, short il, thread type4x4 & reg) {
     device const uint16_t * qs = ((device const uint16_t *)xb + 1);
     const float d1 = il ? (xb->d / 16.h) : xb->d;
