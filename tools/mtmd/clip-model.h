@@ -262,8 +262,6 @@ struct clip_layer {
     ggml_tensor * conv_pw2_w     = nullptr;
     ggml_tensor * conv_pw2_b     = nullptr;
 
-    struct ggml_tensor * attn_pos_w;
-
     // gemma4 audio conformer per-layer
     ggml_tensor * attn_pre_norm_w   = nullptr;
     ggml_tensor * attn_k_rel_w      = nullptr;
@@ -604,9 +602,6 @@ struct clip_model {
     ggml_tensor * neck_3_b;
     ggml_tensor * net_2;
     ggml_tensor * net_3;
-
-    // Parakeet
-    ggml_tensor * mm_norm_w   = nullptr;
 
     int32_t n_sam_layers = 12; // used by deepseek-ocr sam encoder
 
