@@ -199,6 +199,7 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
         conf = ggml_cont(ctx0, ggml_permute(ctx0, conf, 0, 2, 1, 3));
         conf = ggml_reshape_2d(ctx0, conf, 1, n_tok);
 
+        // note: broadcast the [1, n_tok] confidences to n_embd-wide rows
         conf = ggml_repeat(ctx0, conf, res->t_embd);
         res->t_h_nextn = conf;
         ggml_build_forward_expand(g.gf, conf);
