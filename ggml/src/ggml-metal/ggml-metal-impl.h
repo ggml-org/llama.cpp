@@ -509,6 +509,14 @@ typedef struct {
 
 typedef struct {
     int32_t  ne00;
+    int32_t  ne01;
+    int32_t  ne02;
+    uint64_t nb01;
+    uint64_t nb02;
+} ggml_metal_kargs_mul_mm_id_amax;
+
+typedef struct {
+    int32_t  ne00;
     int32_t  ne02;
     uint64_t nb01;
     uint64_t nb02;
