@@ -1228,50 +1228,45 @@ void llm_graph_result::set_inputs(const llama_ubatch * ubatch) {
 }
 
 void llm_graph_result::set_outputs(const llm_graph_params & params) {
-    auto set_output = [](ggml_tensor * t) {
-        ggml_set_output(t);
-        GGML_ASSERT((t->view_src == nullptr || t->view_src->flags & GGML_TENSOR_FLAG_OUTPUT) && "src tensor of an output view is not an output");
-    };
-
     if (t_logits != nullptr) {
-        set_output(t_logits);
+        ggml_set_output(t_logits);
     }
     if (t_embd != nullptr) {
-        set_output(t_embd);
+        ggml_set_output(t_embd);
     }
     if (t_embd_pooled != nullptr) {
-        set_output(t_embd_pooled);
+        ggml_set_output(t_embd_pooled);
     }
     if (t_h_nextn != nullptr) {
-        set_output(t_h_nextn);
+        ggml_set_output(t_h_nextn);
     }
     {
         const auto & embeddings_layer_inp = params.cparams.embeddings_layer_inp;
         for (size_t il = 0; il < embeddings_layer_inp.size(); ++il) {
             if (embeddings_layer_inp[il]) {
                 GGML_ASSERT(t_layer_inp[il] != nullptr && "layer input tensor is null");
-                set_output(t_layer_inp[il]);
+                ggml_set_output(t_layer_inp[il]);
             }
         }
     }
     for (auto & [seq_id, t] : t_sampled) {
         if (t != nullptr) {
-            set_output(t);
+            ggml_set_output(t);
         }
     }
     for (auto & [seq_id, t] : t_sampled_probs) {
         if (t != nullptr) {
-            set_output(t);
+            ggml_set_output(t);
         }
     }
     for (auto & [seq_id, t] : t_sampled_logits) {
         if (t != nullptr) {
-            set_output(t);
+            ggml_set_output(t);
         }
     }
     for (auto & [seq_id, t] : t_candidates) {
         if (t != nullptr) {
-            set_output(t);
+            ggml_set_output(t);
         }
     }
 }
@@ -3444,7 +3439,6 @@ void llm_graph_context::build_sampling() const {
     // this is important in order to minimize graph reallocations
     // note: mark this tensor as output since there could be output views of its data
     ggml_tensor * logits_t = ggml_pad(ctx0, res->t_logits, 0, 1, 0, 0);
-    ggml_set_output(logits_t);
 
     for (const auto & [seq_id, sampler] : samplers) {
         const auto it = seq_to_logit_row.find(seq_id);
