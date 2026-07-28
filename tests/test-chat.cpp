@@ -3422,6 +3422,19 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             })
             .run();
 
+        // The model sometimes drops the <seed:tool_call> wrapper while still emitting a
+        // well-formed <function=...></function> block (build_tool_parser_tag_json must
+        // tolerate this the same way build_tool_parser_tag_tagged does for Qwen3-Coder).
+        tst.test(
+               "<function=special_function>\n"
+               "<parameter=arg1>1</parameter>\n"
+               "</function>\n")
+            .tools({ special_function_tool })
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", {} },
+            })
+            .run();
+
         tst.test(
                "<seed:tool_call>\n"
                "<function=todo_list>\n"
@@ -3717,6 +3730,84 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .tools({ enum_no_type_tool })
             .expect_tool_calls({
                 { "set_unit", R"({"unit": "celsius"})", {} },
+            })
+            .run();
+
+        // The model sometimes drops the outer <tool_call> wrapper (per_call_start/
+        // per_call_end) while still emitting a well-formed <function=...></function>
+        // block. Since Qwen3-Coder's format.section_start is empty (per_call_start is
+        // itself the wrapper here, not a separate outer section), this must still parse
+        // as a proper tool call rather than falling through to plain content.
+        tst.test(
+               "<function=special_function>\n"
+               "<parameter=arg1>\n"
+               "1\n"
+               "</parameter>\n"
+               "</function>\n")
+            .tools({ special_function_tool })
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", {} },
+            })
+            .run();
+
+        // Same as above, but with the leading chatter a model commonly emits before
+        // deciding to call a tool ("I'll help you ...").
+        tst.test(
+               "I'll help with that.\n\n"
+               "<function=special_function>\n"
+               "<parameter=arg1>\n"
+               "1\n"
+               "</parameter>\n"
+               "</function>\n")
+            .tools({ special_function_tool })
+            .expect_content("I'll help with that.\n\n")
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", {} },
+            })
+            .run();
+
+        // Asymmetric case: the opening <tool_call> wrapper is dropped but a trailing
+        // </tool_call> is still emitted. Both sides of the wrapper are independently
+        // optional, so this must parse too.
+        tst.test(
+               "<function=special_function>\n"
+               "<parameter=arg1>\n"
+               "1\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .tools({ special_function_tool })
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", {} },
+            })
+            .run();
+
+        // Parallel calls where only the first wrapper is dropped and the second is
+        // well-formed - the optional wrapper must be evaluated independently per call,
+        // not just once for the whole sequence.
+        tst.test(
+               "<function=special_function>\n"
+               "<parameter=arg1>\n"
+               "1\n"
+               "</parameter>\n"
+               "</function>\n"
+               "<tool_call>\n"
+               "<function=special_function_with_opt>\n"
+               "<parameter=arg1>\n"
+               "1\n"
+               "</parameter>\n"
+               "<parameter=arg2>\n"
+               "2\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .parallel_tool_calls(true)
+            .tools({
+                special_function_tool, special_function_tool_with_optional_param
+        })
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", {} },
+                { "special_function_with_opt", R"({"arg1": 1, "arg2": 2})", {} },
             })
             .run();
 

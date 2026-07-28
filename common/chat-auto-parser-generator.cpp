@@ -105,6 +105,20 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
             data.grammar_triggers = {
                 { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, trigger_marker }
             };
+            // A dropped wrapper can still leave a well-formed call starting at per_call_start
+            // or function.name_prefix (see build_tool_parser_tag_tagged). Trigger on both too,
+            // when distinct, so sampling still gets grammar-constrained in that case.
+            if (!autoparser.tools.format.per_call_start.empty() &&
+                autoparser.tools.format.per_call_start != trigger_marker) {
+                data.grammar_triggers.push_back(
+                    { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, autoparser.tools.format.per_call_start });
+            }
+            if (!autoparser.tools.function.name_prefix.empty() &&
+                autoparser.tools.function.name_prefix != trigger_marker &&
+                autoparser.tools.function.name_prefix != autoparser.tools.format.per_call_start) {
+                data.grammar_triggers.push_back(
+                    { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, autoparser.tools.function.name_prefix });
+            }
             if (autoparser.tools.format.openai_wrapper_trigger) {
                 // model emits the OpenAI function wrapper, trigger on it
                 data.grammar_triggers.push_back({ COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "{\"type\": \"function\"," });
@@ -345,7 +359,13 @@ common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context
     common_peg_parser tool_calls = p.eps();
 
     if (!format.per_call_start.empty()) {
-        auto wrapped_call = format.per_call_start + tool_choice + format.per_call_end;
+        // See the equivalent handling in build_tool_parser_tag_tagged below for the full
+        // reasoning: both the per-call marker and the outer section wrapper (further down)
+        // can be dropped by the model independently, so make each optional rather than
+        // mandatory - the function tag itself (inside tool_choice) stays mandatory.
+        auto call_open    = p.optional(p.literal(format.per_call_start));
+        auto call_close   = format.per_call_end.empty() ? p.eps() : p.optional(p.literal(format.per_call_end));
+        auto wrapped_call = call_open + tool_choice + call_close;
         if (inputs.parallel_tool_calls) {
             tool_calls = p.trigger_rule("tool-call", wrapped_call + p.zero_or_more(p.space() + wrapped_call));
         } else {
@@ -353,8 +373,8 @@ common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context
         }
         if (!format.section_start.empty()) {
             tool_calls = p.trigger_rule("tool-calls",
-                                        p.literal(format.section_start) + p.space() + tool_calls + p.space() +
-                                            (format.section_end.empty() ? p.end() : p.literal(format.section_end)));
+                                        p.optional(p.literal(format.section_start)) + p.space() + tool_calls + p.space() +
+                                            (format.section_end.empty() ? p.end() : p.optional(p.literal(format.section_end))));
         }
     } else {
         std::string separator = ", ";  // Default
@@ -370,8 +390,18 @@ common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context
         tool_calls = p.optional(tool_calls);
     }
 
-    std::string trigger_marker       = !format.section_start.empty() ? format.section_start : format.per_call_start;
-    auto        content_before_tools = trigger_marker.empty() ? p.eps() : p.until(trigger_marker);
+    // See the equivalent content_before_tools handling in build_tool_parser_tag_tagged below:
+    // only widen the scan past section_start when section_start itself is empty.
+    std::vector<std::string> content_stop_markers;
+    if (!format.section_start.empty()) {
+        content_stop_markers.push_back(format.section_start);
+    } else if (!format.per_call_start.empty()) {
+        content_stop_markers.push_back(format.per_call_start);
+        if (!function.name_prefix.empty() && function.name_prefix != format.per_call_start) {
+            content_stop_markers.push_back(function.name_prefix);
+        }
+    }
+    auto content_before_tools = content_stop_markers.empty() ? p.eps() : p.until_one_of(content_stop_markers);
     return ctx.reasoning_parser + p.optional(p.content(content_before_tools)) + tool_calls + p.end();
 }
 
@@ -473,16 +503,23 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
     common_peg_parser tool_calls = p.eps();
 
     if (!format.per_call_start.empty()) {
-        auto wrapped_call = format.per_call_start + p.space() + tool_choice + p.space() + format.per_call_end;
+        // Models occasionally skip the per-call wrapper and jump straight to the function tag
+        // (a separate literal, function.name_prefix). Make per_call_start/per_call_end
+        // independently optional; the function tag itself (inside tool_choice) stays mandatory.
+        auto call_open     = p.optional(p.literal(format.per_call_start) + p.space());
+        auto call_close    = format.per_call_end.empty() ? p.eps() : p.optional(p.literal(format.per_call_end));
+        auto wrapped_call  = call_open + tool_choice + p.space() + call_close;
         if (inputs.parallel_tool_calls) {
             tool_calls = p.trigger_rule("tool-call", wrapped_call + p.zero_or_more(p.space() + wrapped_call) + p.space());
         } else {
             tool_calls = p.trigger_rule("tool-call", wrapped_call + p.space());
         }
         if (!format.section_start.empty()) {
+            // Same reasoning as per_call_start/per_call_end above, one level up: the outer
+            // section wrapper can be dropped too, independently of the per-call one.
             tool_calls = p.trigger_rule("tool-calls",
-                                        p.literal(format.section_start) + p.space() + tool_calls + p.space() +
-                                            (format.section_end.empty() ? p.end() : p.literal(format.section_end) + p.space()));
+                                        p.optional(p.literal(format.section_start) + p.space()) + tool_calls + p.space() +
+                                            (format.section_end.empty() ? p.end() : p.optional(p.literal(format.section_end)) + p.space()));
         }
     } else {
         std::string separator = ", ";  // Default
@@ -501,8 +538,20 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
         tool_calls = p.optional(tool_calls);
     }
 
-    std::string trigger_marker       = !format.section_start.empty() ? format.section_start : format.per_call_start;
-    auto        content_before_tools = trigger_marker.empty() ? p.eps() : p.until(trigger_marker);
+    // Stop the content-before-tools scan at the marker that actually begins a tool call. Only
+    // widen past section_start when it's empty (per_call_start IS the wrapper there, see
+    // above) - otherwise a chatty model quoting per_call_start/function.name_prefix-shaped
+    // text before the real section_start would truncate legitimate content early.
+    std::vector<std::string> content_stop_markers;
+    if (!format.section_start.empty()) {
+        content_stop_markers.push_back(format.section_start);
+    } else if (!format.per_call_start.empty()) {
+        content_stop_markers.push_back(format.per_call_start);
+        if (!function.name_prefix.empty() && function.name_prefix != format.per_call_start) {
+            content_stop_markers.push_back(function.name_prefix);
+        }
+    }
+    auto content_before_tools = content_stop_markers.empty() ? p.eps() : p.until_one_of(content_stop_markers);
     return ctx.reasoning_parser + p.optional(p.content(content_before_tools)) + tool_calls + p.end();
 }
 
