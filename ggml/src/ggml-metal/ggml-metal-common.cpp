@@ -310,11 +310,17 @@ static std::vector<int> ggml_metal_graph_optimize_reorder(const std::vector<node
 
         const auto & node0 = nodes[i0];
 
+        // a cpy that scatters gated_delta_net state snapshots into the cache must stay right after
+        // its gdn node, otherwise the gdn+copy fusion cannot apply. do not pull other nodes in front of it.
+        const bool pinned = node0.op() == GGML_OP_CPY &&
+                            node0.node->src[0] && node0.node->src[0]->view_src &&
+                            node0.node->src[0]->view_src->op == GGML_OP_GATED_DELTA_NET;
+
         // the node is not concurrent with the existing concurrent set, so we have to "put a barrier" (i.e reset mrs0)
         // but before we do that, look forward for some other nodes that can be added to the concurrent set mrs0
         //
         // note: we can always add empty nodes to the concurrent set as they don't read nor write anything
-        if (!node0.is_empty() && !h_check(mrs0, node0)) {
+        if (!pinned && !node0.is_empty() && !h_check(mrs0, node0)) {
             // this will hold the set of memory ranges from the nodes that haven't been processed yet
             // if a node is not concurrent with this set, we cannot reorder it
             ggml_mem_ranges_reset(mrs1);
