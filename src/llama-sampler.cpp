@@ -1158,7 +1158,10 @@ static void llama_sampler_dist_backend_apply(
     ggml_set_name (sctx->inp_uniform, "uniform");
     ggml_set_input(sctx->inp_uniform);
 
-    struct ggml_tensor * probs = ggml_soft_max(ctx, data->logits);
+    // flatten
+    struct ggml_tensor * logits = ggml_reshape_1d(ctx, data->logits, ggml_nelements(data->logits));
+
+    struct ggml_tensor * probs = ggml_soft_max(ctx, logits);
     ggml_set_name(probs, "dist_probs");
 
     struct ggml_tensor * cumsum = ggml_cumsum(ctx, probs);
