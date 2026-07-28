@@ -70,6 +70,10 @@ inline void cpy_blck_f32_q1_0(const char * cxi, char * cdsti) {
     }
 }
 
+inline int round_nearest_int(float x) {
+    return (int)(x >= 0.0f ? x + 0.5f : x - 0.5f);
+}
+
 inline void cpy_blck_f32_q2_0(const char * cxi, char * cdsti) {
     const float * xi   = (const float *) cxi;
     block_q2_0 *  dsti = (block_q2_0 *) cdsti;
@@ -90,7 +94,7 @@ inline void cpy_blck_f32_q2_0(const char * cxi, char * cdsti) {
     }
 
     for (int j = 0; j < QK2_0; ++j) {
-        int q = (int) sycl::round((float) (xi[j] * id)) + 1;
+        int q = round_nearest_int(xi[j] * id) + 1;
         q = dpct::max(0, dpct::min(3, q));
 
         const int byte_index = j / 4;
