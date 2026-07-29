@@ -6,7 +6,6 @@
 #include "arg.h"
 #include "common.h"
 #include "download.h"
-#include "hf-cache.h"
 #include "http.h"
 #include "log.h"
 
@@ -20,11 +19,6 @@
 #include <thread>
 #include <string>
 #include <vector>
-
-// http.h defines file-static helpers that this TU does not call
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic ignored "-Wunused-function"
-#endif
 
 // the case and reordering being checked, printed with every failure
 static std::string g_context;
@@ -48,15 +42,14 @@ static std::string g_context;
 } while (0)
 
 //
-// synthetic repos served by the stubbed HTTP client, keyed by repo id
+// synthetic repos keyed by repo id, served over the loopback by a real
+// httplib server, so the tested code runs its own client and transport
 //
 
 static std::map<std::string, std::vector<std::string>> g_repos;
 
 static const char * COMMIT = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-// synthetic repos served over the loopback by a real httplib server, so
-// the tested code runs its own client and transport end to end
 static httplib::Server g_server;
 
 static void serve_repos() {
@@ -317,8 +310,8 @@ static void test_plan_resolution() {
 }
 
 //
-// end-to-end assembly: real CLI parsing, real handler init resolving through
-// the stubbed HTTP client, downloads skipped by flipping offline before apply
+// end-to-end assembly: real CLI parsing, real handler init resolving over the
+// loopback, downloads skipped by flipping offline before apply
 //
 
 static void assemble(std::vector<std::string> argv, common_params & params) {
@@ -433,8 +426,8 @@ int main(void) {
     // keep the output down to the reports
     common_log_pause(common_log_main());
 
-    // isolate the cache and serve every HTTP request from the stub,
-    // the cache location is read once so it is set before anything else
+    // isolate the cache, its location is read once so it is set
+    // before anything else
     std::filesystem::remove_all(cache_dir);
     common_set_env("LLAMA_CACHE", cache_dir.string());
 
