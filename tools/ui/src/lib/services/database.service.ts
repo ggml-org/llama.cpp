@@ -51,13 +51,20 @@ async function encryptConversationSecrets<T extends Partial<DatabaseConversation
 }
 
 async function decryptConversationSecrets(
-	conversation: DatabaseConversation
+	conversation: DatabaseConversation,
+	key?: CryptoKey
 ): Promise<DatabaseConversation> {
-	if (!EncryptionService.isUnlocked() || !EncryptionService.isEncryptedValue(conversation.name)) {
+	if (
+		(!key && !EncryptionService.isUnlocked()) ||
+		!EncryptionService.isEncryptedValue(conversation.name)
+	) {
 		return conversation;
 	}
 	try {
-		return { ...conversation, name: await EncryptionService.decryptString(conversation.name) };
+		return {
+			...conversation,
+			name: await EncryptionService.decryptString(conversation.name, key)
+		};
 	} catch {
 		return conversation;
 	}
@@ -91,8 +98,11 @@ async function encryptMessageSecrets<T extends Partial<DatabaseMessage>>(record:
 	return changed ? result : record;
 }
 
-async function decryptMessageSecrets(message: DatabaseMessage): Promise<DatabaseMessage> {
-	if (!EncryptionService.isUnlocked()) return message;
+async function decryptMessageSecrets(
+	message: DatabaseMessage,
+	key?: CryptoKey
+): Promise<DatabaseMessage> {
+	if (!key && !EncryptionService.isUnlocked()) return message;
 
 	let changed = false;
 	const result = { ...message };
@@ -100,7 +110,10 @@ async function decryptMessageSecrets(message: DatabaseMessage): Promise<Database
 		const value = result[field];
 		if (EncryptionService.isEncryptedValue(value)) {
 			try {
-				(result as Record<string, unknown>)[field] = await EncryptionService.decryptString(value);
+				(result as Record<string, unknown>)[field] = await EncryptionService.decryptString(
+					value,
+					key
+				);
 				changed = true;
 			} catch {
 				// literal text starting with the prefix, or corrupt data: keep as stored
@@ -112,7 +125,8 @@ async function decryptMessageSecrets(message: DatabaseMessage): Promise<Database
 	if (result.extra?.length === 1 && firstExtra?.type === AttachmentType.ENCRYPTED) {
 		try {
 			result.extra = await EncryptionService.decryptJson<DatabaseMessageExtra[]>(
-				firstExtra.payload
+				firstExtra.payload,
+				key
 			);
 			changed = true;
 		} catch {
@@ -509,7 +523,7 @@ export class DatabaseService {
 			.orderBy('lastModified')
 			.reverse()
 			.toArray();
-		return await Promise.all(conversations.map(decryptConversationSecrets));
+		return await Promise.all(conversations.map((conv) => decryptConversationSecrets(conv)));
 	}
 
 	/**
@@ -534,7 +548,7 @@ export class DatabaseService {
 			.where('convId')
 			.equals(convId)
 			.sortBy('timestamp');
-		return await Promise.all(messages.map(decryptMessageSecrets));
+		return await Promise.all(messages.map((message) => decryptMessageSecrets(message)));
 	}
 
 	/**
@@ -561,7 +575,7 @@ export class DatabaseService {
 				.where('convId')
 				.anyOf(cleanIds)
 				.toArray()
-				.then((messages) => Promise.all(messages.map(decryptMessageSecrets)))
+				.then((messages) => Promise.all(messages.map((message) => decryptMessageSecrets(message))))
 		]);
 
 		const messagesByConv = new Map<string, DatabaseMessage[]>();
@@ -735,6 +749,32 @@ export class DatabaseService {
 				conv: await encryptConversationSecrets(conv),
 				messages: await Promise.all(messages.map((msg) => encryptMessageSecrets(msg)))
 			}))
+		);
+	}
+
+	/**
+	 * Decrypts an encrypted import with an unwrapped export key (see
+	 * EncryptionService.unwrapDekWithPassphrase) and strips the per-session
+	 * encryption marker. Records already plaintext pass through.
+	 *
+	 * @param data - Parsed import sessions, possibly encrypted
+	 * @param key - The unwrapped export key; defaults to the session key
+	 * @returns Plaintext sessions ready for {@link importConversations}
+	 */
+	static async decryptImportedData(
+		data: ExportedConversation[],
+		key?: CryptoKey
+	): Promise<ExportedConversation[]> {
+		return await Promise.all(
+			data.map(async ({ conv, messages }) => {
+				const { encryption: _encryption, ...rest } = conv as DatabaseConversation & {
+					encryption?: EncryptionMeta;
+				};
+				return {
+					conv: await decryptConversationSecrets(rest, key),
+					messages: await Promise.all(messages.map((msg) => decryptMessageSecrets(msg, key)))
+				};
+			})
 		);
 	}
 
