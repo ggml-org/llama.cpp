@@ -23,6 +23,10 @@ std::string common_speculative_type_to_str(enum common_speculative_type type);
 // return the max number of draft tokens based on the speculative parameters
 int32_t common_speculative_n_max(const common_params_speculative * spec);
 
+// Inspect a GGUF without loading its tensors and report whether it contains
+// a namespaced MTP component.
+bool common_model_has_embedded_mtp(const std::string & path);
+
 common_params common_base_params_to_speculative(const common_params & params);
 
 common_speculative * common_speculative_init(common_params_speculative & params, uint32_t n_seq);
@@ -89,6 +93,8 @@ struct common_speculative_init_result {
 
     llama_model   * model();
     llama_context * context();
+    llama_context * mtp_context();
+    void          * ane_mtp_program();
 
 private:
     struct impl;

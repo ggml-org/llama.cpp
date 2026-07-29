@@ -173,6 +173,7 @@ enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3,  // Eagle3 speculative decoding
     COMMON_SPECULATIVE_TYPE_DRAFT_MTP,     // Multi-token prediction
     COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH,  // DFlash speculative decoding
+    COMMON_SPECULATIVE_TYPE_DRAFT_HYBRID,  // DFlash and MTP arbitration
     COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,  // simple self-speculative decoding based on n-grams
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,   // self-speculative decoding with n-gram keys only
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, // self-speculative decoding with n-gram keys and 4 m-gram values
@@ -334,9 +335,12 @@ struct common_params_speculative_draft {
     bool backend_sampling = true; // offload draft sampling to the backend (default: on)
 
     common_params_model mparams;
+    std::string target_model_path; // target GGUF used to load an embedded MTP component
 
     llama_context * ctx_tgt = nullptr;
     llama_context * ctx_dft = nullptr;
+    llama_context * ctx_mtp = nullptr; // optional second context for DFlash + embedded MTP
+    void * ane_mtp_program = nullptr; // non-owning; retained by common_speculative_init_result
 
     int32_t n_gpu_layers = -1; // number of layers to store in VRAM for the draft model (-1 - use default)
 
@@ -388,7 +392,10 @@ struct common_params_speculative {
 
     uint32_t need_n_rs_seq() const {
         bool needs_rs_seq = std::any_of(types.begin(), types.end(), [&](auto t) {
-            return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP || t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 || t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH;
+            return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP ||
+                   t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 ||
+                   t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH ||
+                   t == COMMON_SPECULATIVE_TYPE_DRAFT_HYBRID;
         });
 
         return needs_rs_seq ? draft.n_max : 0u;
@@ -455,6 +462,8 @@ struct common_params {
     int32_t n_ubatch              =   512; // physical batch size for prompt processing (must be >=32 to use BLAS)
     int32_t n_keep                =     0; // number of tokens to keep from initial prompt
     int32_t n_chunks              =    -1; // max number of chunks to process (-1 = unlimited)
+    int32_t n_spec_steps          =    64; // [imatrix] number of spec-decoding steps to roll forward when --model-draft is set (0 = until context limit)
+    std::string telemetry_out;             // [imatrix] path to write per-step accept/reject JSONL when --model-draft is set
     int32_t n_parallel            =     1; // number of parallel sequences to decode
     int32_t n_sequences           =     1; // number of sequences to decode
     int32_t n_outputs_max         =     0; // max outputs in a batch (0 = n_batch)
@@ -490,6 +499,7 @@ struct common_params {
 
     ggml_backend_sched_eval_callback cb_eval = nullptr;
     void * cb_eval_user_data                 = nullptr;
+    bool imatrix_observers                   = false;
 
     ggml_numa_strategy numa = GGML_NUMA_STRATEGY_DISABLED;
 
@@ -705,6 +715,11 @@ struct common_params {
     int32_t n_out_freq  = 10; // output the imatrix every n_out_freq iterations
     int32_t n_save_freq =  0; // save the imatrix every n_save_freq iterations
     int32_t i_chunk     =  0; // start processing from this chunk
+    int32_t imatrix_convergence_min_chunks = 0; // minimum chunks before adaptive stopping (0 = disabled)
+    int32_t imatrix_convergence_interval   = 16; // chunks between convergence checks
+    int32_t imatrix_convergence_patience   = 3; // consecutive stable checks required
+    float   imatrix_convergence_tolerance  = 0.01f; // RMS log-moment change considered stable
+    float   imatrix_min_expert_coverage    = 0.25f; // minimum routed-expert sample ratio before freezing
     int8_t  imat_dat    =  0; // whether the legacy imatrix.dat format should be output (gguf <= 0 < dat)
 
     bool process_output  = false; // collect data for the output tensor

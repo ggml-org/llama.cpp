@@ -370,6 +370,10 @@ common_models_handler common_models_handler_init(const common_params & params, l
                                            params.speculative.types.end(),
                                            COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH) != params.speculative.types.end();
 
+    const bool spec_type_draft_hybrid = std::find(params.speculative.types.begin(),
+                                           params.speculative.types.end(),
+                                           COMMON_SPECULATIVE_TYPE_DRAFT_HYBRID) != params.speculative.types.end();
+
     const bool spec_type_draft_eagle3 = std::find(params.speculative.types.begin(),
                                            params.speculative.types.end(),
                                            COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3) != params.speculative.types.end();
@@ -385,9 +389,9 @@ common_models_handler common_models_handler_init(const common_params & params, l
 
     opts.bearer_token    = params.hf_token;
     opts.offline         = params.offline;
-    opts.download_mtp    = spec_type_draft_mtp;
+    opts.download_mtp    = spec_type_draft_mtp || spec_type_draft_hybrid;
     opts.download_eagle3 = spec_type_draft_eagle3;
-    opts.download_dflash = spec_type_draft_dflash;
+    opts.download_dflash = spec_type_draft_dflash || spec_type_draft_hybrid;
     opts.download_mmproj = use_mmproj && !params.no_mmproj
                         && params.mmproj.path.empty() && params.mmproj.url.empty();
 
@@ -1625,6 +1629,30 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.n_chunks = value;
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX, LLAMA_EXAMPLE_PERPLEXITY, LLAMA_EXAMPLE_RETRIEVAL}));
+    add_opt(common_arg(
+        {"--spec-steps"}, "N",
+        string_format(
+            "[imatrix] number of spec-decoding steps to roll forward when --model-draft is set "
+            "(default: %d, 0 = until context limit). Captures verifier activations during real "
+            "speculative-decoding forward passes instead of plain text forward passes.",
+            params.n_spec_steps),
+        [](common_params & params, int value) {
+            params.n_spec_steps = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    add_opt(common_arg(
+        {"--telemetry-out"}, "PATH",
+        string_format(
+            "[imatrix] path to write per-step accept/reject JSONL when "
+            "--model-draft is set (default: %s). Schema: "
+            "llama.dflash.acceptance.v1 with seq_id, drafted, accepted, "
+            "confidence[]. One record per spec step. Use for drafter "
+            "fine-tuning (rejection sampling).",
+            params.telemetry_out.c_str()),
+        [](common_params & params, const std::string & value) {
+            params.telemetry_out = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
     add_opt(common_arg({ "-fa", "--flash-attn" }, "[on|off|auto]",
                        string_format("set Flash Attention use ('on', 'off', or 'auto', default: '%s')",
                                      llama_flash_attn_type_name(params.flash_attn_type)),
@@ -3022,6 +3050,58 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
     add_opt(common_arg(
+        {"--convergence-min-chunks"}, "N",
+        "minimum calibration chunks before adaptive observer convergence stopping (0 = disabled)",
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("convergence minimum chunks must be non-negative");
+            }
+            params.imatrix_convergence_min_chunks = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    add_opt(common_arg(
+        {"--convergence-interval"}, "N",
+        "chunks between adaptive observer convergence checks",
+        [](common_params & params, int value) {
+            if (value <= 0) {
+                throw std::invalid_argument("convergence interval must be positive");
+            }
+            params.imatrix_convergence_interval = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    add_opt(common_arg(
+        {"--convergence-patience"}, "N",
+        "consecutive stable observer windows required before stopping",
+        [](common_params & params, int value) {
+            if (value <= 0) {
+                throw std::invalid_argument("convergence patience must be positive");
+            }
+            params.imatrix_convergence_patience = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    add_opt(common_arg(
+        {"--convergence-tolerance"}, "F",
+        "RMS change in normalized log-moment signatures considered stable",
+        [](common_params & params, const std::string & value_text) {
+            const float value = std::stof(value_text);
+            if (!(value > 0.0f)) {
+                throw std::invalid_argument("convergence tolerance must be positive");
+            }
+            params.imatrix_convergence_tolerance = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    add_opt(common_arg(
+        {"--min-expert-coverage"}, "F",
+        "minimum least/most-routed expert sample ratio before an MoE observer may freeze (0..1)",
+        [](common_params & params, const std::string & value_text) {
+            const float value = std::stof(value_text);
+            if (!(value >= 0.0f && value <= 1.0f)) {
+                throw std::invalid_argument("minimum expert coverage must be in [0, 1]");
+            }
+            params.imatrix_min_expert_coverage = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    add_opt(common_arg(
         {"--process-output"},
         string_format("collect data for the output tensor (default: %s)", params.process_output ? "true" : "false"),
         [](common_params & params) {
@@ -4000,7 +4080,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.speculative.draft.mparams.path = value;
             params.speculative.draft.mparams.hf_file = value; // will be used if --spec-draft-hf is set
         }
-    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_MODEL"));
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_IMATRIX}).set_env("LLAMA_ARG_SPEC_DRAFT_MODEL"));
     add_opt(common_arg(
         {"--spec-type"}, common_speculative_all_types_str(),
         string_format("comma-separated list of types of speculative decoding to use (default: %s)\n",

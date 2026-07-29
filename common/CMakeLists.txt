@@ -118,6 +118,12 @@ add_library(${TARGET}
     jinja/caps.h
     )
 
+if (APPLE)
+    target_sources(${TARGET} PRIVATE ane-mtp.mm ane-mtp.h)
+    set_source_files_properties(ane-mtp.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    target_link_libraries(${TARGET} PRIVATE "-framework CoreML" "-framework Foundation" "-framework IOSurface")
+endif()
+
 set_target_properties(${TARGET} PROPERTIES
     VERSION ${LLAMA_INSTALL_VERSION}
     SOVERSION 0
