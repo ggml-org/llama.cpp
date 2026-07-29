@@ -10,6 +10,7 @@ import {
 	Sliders,
 	PencilRuler,
 	Database,
+	ShieldCheck,
 	Monitor as MonitorIcon,
 	Sun,
 	Moon
@@ -36,6 +37,7 @@ export const SETTINGS_SECTION_TITLES = {
 	AGENTIC: 'Agentic',
 	TOOLS: 'Tools',
 	IMPORT_EXPORT: 'Import/Export',
+	SECURITY: 'Security',
 	DEVELOPER: 'Developer'
 } as const;
 
@@ -45,6 +47,11 @@ const STANDALONE_SECTIONS: { title: SettingsSectionTitle; slug: string; icon: Co
 		title: SETTINGS_SECTION_TITLES.IMPORT_EXPORT,
 		slug: SETTINGS_SECTION_SLUGS.IMPORT_EXPORT,
 		icon: Database
+	},
+	{
+		title: SETTINGS_SECTION_TITLES.SECURITY,
+		slug: SETTINGS_SECTION_SLUGS.SECURITY,
+		icon: ShieldCheck
 	}
 ];
 
