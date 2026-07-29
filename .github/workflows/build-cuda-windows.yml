@@ -90,7 +90,7 @@ jobs:
         include:
           # sync with release.yml
           - name: "radeon"
-            gpu_targets: "gfx1150;gfx1151;gfx1200;gfx1201;gfx1100;gfx1101;gfx1102;gfx1030;gfx1031;gfx1032"
+            gpu_targets: "gfx1150;gfx1151;gfx1152;gfx1200;gfx1201;gfx1100;gfx1101;gfx1102;gfx1030;gfx1031;gfx1032"
 
     steps:
       - name: Clone
