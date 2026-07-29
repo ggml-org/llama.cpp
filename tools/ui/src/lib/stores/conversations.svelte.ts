@@ -111,6 +111,9 @@ class ConversationsStore {
 		| ((messageId: string, updates: Partial<DatabaseMessage>) => void)
 		| null = null;
 
+	/** In-flight init run; shared by concurrent callers, reset on failure to allow retry */
+	private initPromise: Promise<void> | null = null;
+
 	/**
 	 *
 	 *
@@ -121,19 +124,25 @@ class ConversationsStore {
 
 	/**
 	 * Initialize the store by loading conversations from database.
-	 * Must be called once after app startup.
+	 * Safe to call multiple times: concurrent callers share a single run,
+	 * and a failed run can be retried by calling again.
 	 */
-	async init(): Promise<void> {
-		if (!browser) return;
-		if (this.isInitialized) return;
+	init(): Promise<void> {
+		if (!browser) return Promise.resolve();
+		if (this.initPromise) return this.initPromise;
 
-		try {
-			await MigrationService.runAllMigrations();
-			await this.loadConversations();
-			this.isInitialized = true;
-		} catch (error) {
-			console.error('Failed to initialize conversations:', error);
-		}
+		this.initPromise = (async () => {
+			try {
+				await MigrationService.runAllMigrations();
+				await this.loadConversations();
+				this.isInitialized = true;
+			} catch (error) {
+				console.error('Failed to initialize conversations:', error);
+				this.initPromise = null;
+			}
+		})();
+
+		return this.initPromise;
 	}
 
 	/**
