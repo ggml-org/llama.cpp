@@ -24,12 +24,16 @@
 	let showDisableDialog = $state(false);
 	let disabling = $state(false);
 
+	const MIN_PASSPHRASE_LENGTH = 8;
+
 	const canEnable = $derived(
-		newPassphrase.length > 0 && newPassphrase === newPassphraseConfirm && !enabling
+		newPassphrase.length >= MIN_PASSPHRASE_LENGTH &&
+			newPassphrase === newPassphraseConfirm &&
+			!enabling
 	);
 	const canChange = $derived(
 		currentPassphrase.length > 0 &&
-			nextPassphrase.length > 0 &&
+			nextPassphrase.length >= MIN_PASSPHRASE_LENGTH &&
 			nextPassphrase === nextPassphraseConfirm &&
 			!changing
 	);
@@ -129,7 +133,9 @@
 					aria-label="Confirm passphrase"
 				/>
 
-				{#if newPassphraseConfirm.length > 0 && newPassphrase !== newPassphraseConfirm}
+				{#if newPassphrase.length > 0 && newPassphrase.length < MIN_PASSPHRASE_LENGTH}
+					<p class="text-sm text-destructive">Use at least {MIN_PASSPHRASE_LENGTH} characters.</p>
+				{:else if newPassphraseConfirm.length > 0 && newPassphrase !== newPassphraseConfirm}
 					<p class="text-sm text-destructive">Passphrases do not match.</p>
 				{/if}
 
@@ -198,7 +204,9 @@
 					aria-label="Confirm new passphrase"
 				/>
 
-				{#if nextPassphraseConfirm.length > 0 && nextPassphrase !== nextPassphraseConfirm}
+				{#if nextPassphrase.length > 0 && nextPassphrase.length < MIN_PASSPHRASE_LENGTH}
+					<p class="text-sm text-destructive">Use at least {MIN_PASSPHRASE_LENGTH} characters.</p>
+				{:else if nextPassphraseConfirm.length > 0 && nextPassphrase !== nextPassphraseConfirm}
 					<p class="text-sm text-destructive">Passphrases do not match.</p>
 				{/if}
 
