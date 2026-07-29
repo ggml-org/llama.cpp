@@ -367,10 +367,7 @@ class ConversationsStore {
 	async deleteAll(): Promise<void> {
 		try {
 			const allConversations = await DatabaseService.getAllConversations();
-
-			for (const conv of allConversations) {
-				await DatabaseService.deleteConversation(conv.id);
-			}
+			await DatabaseService.bulkDeleteConversations(allConversations.map((c) => c.id));
 
 			this.clearActiveConversation();
 			this.conversations = [];
@@ -421,7 +418,9 @@ class ConversationsStore {
 			}
 
 			toast.success(
-				convIds.length === 1 ? 'Conversation deleted' : `${convIds.length} conversations deleted`
+				idsToRemove.size === 1
+					? 'Conversation deleted'
+					: `${idsToRemove.size} conversations deleted`
 			);
 		} catch (error) {
 			console.error('Failed to bulk delete conversations:', error);
