@@ -277,31 +277,8 @@ int get_mmvq_mmid_max_batch(ggml_type type, int cc) {
     return MMVQ_MAX_BATCH_SIZE;
 }
 
-int64_t ggml_cuda_mmvq_max_batch() {
-    static const int64_t max_batch = []{
-        const char * val = getenv("GGML_CUDA_MMVQ_MAX");
-        if (!val || !*val) {
-            return (int64_t) MMVQ_MAX_BATCH_SIZE;
-        }
-        // only [1, MMVQ_MAX_BATCH_SIZE] is valid (mul_mat_vec_q asserts ncols_dst <= it)
-        char * end = nullptr;
-        const long parsed = strtol(val, &end, 10);
-        if (*end != '\0' || parsed < 1 || parsed > MMVQ_MAX_BATCH_SIZE) {
-            GGML_LOG_WARN("%s: ignoring invalid GGML_CUDA_MMVQ_MAX=\"%s\" (expected 1..%d), using %d\n",
-                          __func__, val, MMVQ_MAX_BATCH_SIZE, MMVQ_MAX_BATCH_SIZE);
-            return (int64_t) MMVQ_MAX_BATCH_SIZE;
-        }
-        return (int64_t) parsed;
-    }();
-    return max_batch;
-}
-
 bool ggml_cuda_should_use_mmvq(enum ggml_type type, int cc, int64_t ne11) {
     if (!ggml_is_quantized(type)) {
-        return false;
-    }
-    // batches above the crossover use MMQ instead of the vector kernel
-    if (ne11 > ggml_cuda_mmvq_max_batch()) {
         return false;
     }
     // k-quants cost more to decode and mvq redoes that per column, so MMQ wins sooner.
@@ -315,6 +292,19 @@ bool ggml_cuda_should_use_mmvq(enum ggml_type type, int cc, int64_t ne11) {
                 return ne11 <= 5;
             case GGML_TYPE_Q6_K:
                 return ne11 <= 7;
+            default:
+                return ne11 <= MMVQ_MAX_BATCH_SIZE;
+        }
+    }
+    if (GGML_CUDA_CC_IS_NVIDIA(cc) && cc == GGML_CUDA_CC_DGX_SPARK) {
+        switch (type) {
+            case GGML_TYPE_Q2_K:
+                return ne11 <= 3;
+            case GGML_TYPE_Q3_K:
+            case GGML_TYPE_Q4_K:
+                return ne11 <= 5;
+            case GGML_TYPE_Q5_K:
+                return ne11 <= 6;
             default:
                 return ne11 <= MMVQ_MAX_BATCH_SIZE;
         }

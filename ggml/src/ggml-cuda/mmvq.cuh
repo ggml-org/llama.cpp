@@ -4,9 +4,6 @@
 
 bool ggml_cuda_should_use_mmvq(enum ggml_type type, int cc, int64_t ne11);
 
-// MMVQ->MMQ batch crossover, overridable via GGML_CUDA_MMVQ_MAX (default MMVQ_MAX_BATCH_SIZE)
-int64_t ggml_cuda_mmvq_max_batch();
-
 // Returns the maximum batch size for which MMVQ should be used for MUL_MAT_ID,
 // based on the quantization type and GPU architecture (compute capability).
 int get_mmvq_mmid_max_batch(ggml_type type, int cc);
