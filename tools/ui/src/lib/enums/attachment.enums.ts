@@ -9,7 +9,13 @@ export enum AttachmentType {
 	MCP_RESOURCE = 'MCP_RESOURCE',
 	PDF = 'PDF',
 	TEXT = 'TEXT',
-	LEGACY_CONTEXT = 'context' // Legacy attachment type for backward compatibility
+	LEGACY_CONTEXT = 'context', // Legacy attachment type for backward compatibility
+	/**
+	 * Marker for an encryption-at-rest payload: the whole extras array is
+	 * JSON-encrypted into a single entry with this type. Only ever present in
+	 * storage; the database layer always decrypts it before exposing records.
+	 */
+	ENCRYPTED = 'encrypted'
 }
 
 /**
