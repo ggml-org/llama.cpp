@@ -2400,9 +2400,13 @@ ggml_cgraph * llama_context::graph_reserve(
     // initialize scheduler with the specified graph
     if (split_only) {
         if (sizes) {
-            ggml_backend_sched_reserve_size(sched.get(), gf, sizes);
-        } else {
-            ggml_backend_sched_split_graph(sched.get(), gf);
+            if (!ggml_backend_sched_reserve_size(sched.get(), gf, sizes)) {
+                LLAMA_LOG_ERROR("%s: failed to reserve compute buffer sizes\n", __func__);
+                return nullptr;
+            }
+        } else if (!ggml_backend_sched_split_graph(sched.get(), gf)) {
+            LLAMA_LOG_ERROR("%s: failed to split graph\n", __func__);
+            return nullptr;
         }
     } else if (!ggml_backend_sched_reserve(sched.get(), gf)) {
         GGML_ASSERT(!sizes);
