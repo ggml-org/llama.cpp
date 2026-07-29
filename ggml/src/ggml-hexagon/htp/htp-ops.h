@@ -117,8 +117,8 @@ enum htp_op_code {
 #define HTP_MMAP_MAX_VMEM  (2147483648u)
 
 enum htp_tensor_flags {
-    HTP_TENSOR_COMPUTE = (1U << 0), // Tensor buffer temporal compute data (not weights)
-    HTP_TENSOR_DIRTY   = (1U << 1)  // Tensor buffer is dirty and needs to be flushed
+    HTP_TENSOR_WEIGHT  = (1U << 0), // Tensor buffer model weight data (not compute)
+    HTP_TENSOR_REPACK  = (1U << 1)  // Tensor is in repacked tiled format
 };
 
 // Tensor descriptor
