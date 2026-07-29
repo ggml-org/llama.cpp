@@ -10,6 +10,7 @@
 	import { createMessageCountMap } from '$lib/utils';
 	import { settingsStore } from '$lib/stores/settings.svelte';
 	import { encryptionStore } from '$lib/stores/encryption.svelte';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { DatabaseService } from '$lib/services/database.service';
 	import { EncryptionService } from '$lib/services/encryption.service';
 	import { Checkbox } from '$lib/components/ui/checkbox';
@@ -102,6 +103,7 @@
 					}
 
 					settingsStore.importSettings(data);
+					await mcpStore.migrateInlineHeadersToSecrets();
 
 					showSettingsImportSummary = true;
 					showSettingsExportSummary = false;
