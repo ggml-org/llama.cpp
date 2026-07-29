@@ -20,6 +20,13 @@ const ENCRYPTED_VALUE_PREFIX = 'enc1:';
 const KDF_ITERATIONS = 600_000;
 const AES_GCM_IV_BYTES = 12;
 const PBKDF2_SALT_BYTES = 16;
+// 32-byte DEK + 16-byte GCM auth tag
+const WRAPPED_DEK_BYTES = 48;
+// Accepted iteration band for persisted/imported metadata; guards against
+// crafted imports freezing the tab on huge counts or weakening brute-force
+// resistance with tiny ones
+const KDF_MIN_ITERATIONS = 100_000;
+const KDF_MAX_ITERATIONS = 10_000_000;
 
 function bytesToBase64(bytes: Uint8Array): string {
 	const CHUNK = 0x8000;
@@ -37,6 +44,13 @@ function base64ToBytes(base64: string): Uint8Array {
 		bytes[i] = binary.charCodeAt(i);
 	}
 	return bytes;
+}
+
+// Decoded byte length of a strict base64 string, or null when malformed
+function base64ByteLength(value: string): number | null {
+	if (value.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(value)) return null;
+	const padding = value.endsWith('==') ? 2 : value.endsWith('=') ? 1 : 0;
+	return (value.length / 4) * 3 - padding;
 }
 
 function deriveKek(passphrase: string, salt: Uint8Array, iterations: number): Promise<CryptoKey> {
@@ -153,6 +167,31 @@ export class EncryptionService {
 	}
 
 	/**
+	 * Validates encryption metadata before it feeds key derivation. Metadata
+	 * from an import file is attacker-controlled and PBKDF2 runs before any
+	 * passphrase check, so bound the KDF cost and field sizes first.
+	 */
+	static isValidMeta(meta: unknown): meta is EncryptionMeta {
+		if (typeof meta !== 'object' || meta === null) return false;
+		const m = meta as Partial<EncryptionMeta>;
+		return (
+			m.version === ENCRYPTION_FORMAT_VERSION &&
+			m.kdf === 'PBKDF2' &&
+			m.kdfHash === 'SHA-256' &&
+			typeof m.kdfIterations === 'number' &&
+			Number.isInteger(m.kdfIterations) &&
+			m.kdfIterations >= KDF_MIN_ITERATIONS &&
+			m.kdfIterations <= KDF_MAX_ITERATIONS &&
+			typeof m.salt === 'string' &&
+			base64ByteLength(m.salt) === PBKDF2_SALT_BYTES &&
+			typeof m.wrapIv === 'string' &&
+			base64ByteLength(m.wrapIv) === AES_GCM_IV_BYTES &&
+			typeof m.wrappedDek === 'string' &&
+			base64ByteLength(m.wrappedDek) === WRAPPED_DEK_BYTES
+		);
+	}
+
+	/**
 	 * Unwraps the DEK of an arbitrary encryption meta (e.g. attached to an
 	 * encrypted export from another machine) with the given passphrase.
 	 *
@@ -162,7 +201,7 @@ export class EncryptionService {
 		meta: EncryptionMeta,
 		passphrase: string
 	): Promise<CryptoKey | null> {
-		if (!passphrase) return null;
+		if (!passphrase || !this.isValidMeta(meta)) return null;
 
 		const kek = await deriveKek(passphrase, base64ToBytes(meta.salt), meta.kdfIterations);
 		try {
@@ -310,8 +349,8 @@ export class EncryptionService {
 		try {
 			const raw = localStorage.getItem(ENCRYPTION_META_LOCALSTORAGE_KEY);
 			if (!raw) return null;
-			const meta = JSON.parse(raw) as EncryptionMeta;
-			return meta.version === ENCRYPTION_FORMAT_VERSION ? meta : null;
+			const meta: unknown = JSON.parse(raw);
+			return this.isValidMeta(meta) ? meta : null;
 		} catch {
 			return null;
 		}
