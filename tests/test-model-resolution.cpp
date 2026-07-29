@@ -50,10 +50,10 @@ static std::map<std::string, std::vector<std::string>> g_repos;
 
 static const char * COMMIT = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-static httplib::Server g_server;
-
-static void serve_repos() {
-    g_server.Get(R"(/api/models/(.+)/refs)", [](const httplib::Request & req, httplib::Response & res) {
+// the server lives in main, so its destructor runs before the static teardown
+// tears down the winsock state httplib brings in
+static void serve_repos(httplib::Server & server) {
+    server.Get(R"(/api/models/(.+)/refs)", [](const httplib::Request & req, httplib::Response & res) {
         if (g_repos.count(req.matches[1])) {
             res.set_content(nlohmann::json{{"branches", {{{"name", "main"}, {"targetCommit", COMMIT}}}}}.dump(),
                             "application/json");
@@ -61,7 +61,7 @@ static void serve_repos() {
             res.status = 404;
         }
     });
-    g_server.Get(R"(/api/models/(.+)/tree/.+)", [](const httplib::Request & req, httplib::Response & res) {
+    server.Get(R"(/api/models/(.+)/tree/.+)", [](const httplib::Request & req, httplib::Response & res) {
         if (!g_repos.count(req.matches[1])) {
             res.status = 404;
             return;
@@ -422,14 +422,19 @@ static void test_task_assembly() {
 }
 
 int main(void) {
+    // unbuffered, so a crash cannot swallow the reports already printed
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    setvbuf(stderr, nullptr, _IONBF, 0);
+
     // the negative cases legitimately log errors on every reordering,
     // keep the output down to the reports
     common_log_pause(common_log_main());
 
     // the loopback endpoint also keeps the client init from rejecting
     // https on the builds without TLS support
-    serve_repos();
-    int port = g_server.bind_to_any_port("127.0.0.1");
+    httplib::Server server;
+    serve_repos(server);
+    int port = server.bind_to_any_port("127.0.0.1");
 
     // isolate the cache, its location is read once so it is set
     // before anything else
@@ -438,14 +443,14 @@ int main(void) {
     std::filesystem::remove_all(cache_dir);
     common_set_env("LLAMA_CACHE", cache_dir.string());
 
-    std::thread server_thread([] { g_server.listen_after_bind(); });
-    g_server.wait_until_ready();
+    std::thread server_thread([&server] { server.listen_after_bind(); });
+    server.wait_until_ready();
     common_set_env("MODEL_ENDPOINT", "http://127.0.0.1:" + std::to_string(port) + "/");
 
     test_plan_resolution();
     test_task_assembly();
 
-    g_server.stop();
+    server.stop();
     server_thread.join();
 
     std::filesystem::remove_all(cache_dir);
