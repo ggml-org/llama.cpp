@@ -349,6 +349,19 @@ If a draft model is combined with a draftless decoding the draftless decoding ha
                                         minimum hits for ngram-map-k4v speculative decoding (default: 1)
 ```
 
+### Suffix Decoding Parameters
+
+```
+--spec-ngram-suffix-max-depth           N
+                                        suffix-tree depth = max context-match length for ngram-suffix speculative decoding (default: 24)
+--spec-ngram-suffix-n-max               N
+                                        maximum number of draft tokens for ngram-suffix speculative decoding (default: 24)
+--spec-ngram-suffix-max-factor          F
+                                        draft up to match_len * F tokens for ngram-suffix speculative decoding (default: 1.0)
+--spec-ngram-suffix-min-prob            F
+                                        stop drafting below this frequency probability for ngram-suffix speculative decoding (default: 0.10)
+```
+
 ### `--spec-type TYPE`
 
 Specifies a comma-separated list of speculative decoding types to use.
@@ -366,6 +379,7 @@ Specifies a comma-separated list of speculative decoding types to use.
 | `ngram-map-k` | Use n-gram pattern matching with n-gram-keys |
 | `ngram-map-k4v` | Use n-gram pattern matching with n-gram-keys and up to four m-gram values (experimental) |
 | `ngram-mod` | Use basic ngram hasher for speculative decoding with shared pool |
+| `ngram-suffix` | Use an online suffix tree, drafting the most frequent continuation of the longest matching context (suffix decoding) |
 
 **Example:** Server-instance used to refactor source code.
 ```bash
