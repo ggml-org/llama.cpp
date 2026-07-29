@@ -146,9 +146,27 @@ export class EncryptionService {
 		const meta = this.readMeta();
 		if (!meta || !passphrase) return false;
 
+		const key = await this.unwrapDekWithPassphrase(meta, passphrase);
+		if (!key) return false;
+		this.dek = key;
+		return true;
+	}
+
+	/**
+	 * Unwraps the DEK of an arbitrary encryption meta (e.g. attached to an
+	 * encrypted export from another machine) with the given passphrase.
+	 *
+	 * @returns The unwrapped key, or null when the passphrase did not match
+	 */
+	static async unwrapDekWithPassphrase(
+		meta: EncryptionMeta,
+		passphrase: string
+	): Promise<CryptoKey | null> {
+		if (!passphrase) return null;
+
 		const kek = await deriveKek(passphrase, base64ToBytes(meta.salt), meta.kdfIterations);
 		try {
-			this.dek = await globalThis.crypto.subtle.unwrapKey(
+			return await globalThis.crypto.subtle.unwrapKey(
 				'raw',
 				base64ToBytes(meta.wrappedDek) as BufferSource,
 				kek,
@@ -157,10 +175,9 @@ export class EncryptionService {
 				false,
 				['encrypt', 'decrypt']
 			);
-			return true;
 		} catch {
 			// AES-GCM auth tag mismatch: wrong passphrase
-			return false;
+			return null;
 		}
 	}
 
@@ -259,10 +276,12 @@ export class EncryptionService {
 	/**
 	 * Decrypts a value produced by {@link encryptString}.
 	 *
-	 * @throws Error if the session is locked or the value is not encrypted
+	 * @param key - Optional explicit key (defaults to the session key)
+	 * @throws Error if no key is available or the value is not encrypted
 	 */
-	static async decryptString(payload: string): Promise<string> {
-		if (!this.dek) throw new Error('Encryption is locked');
+	static async decryptString(payload: string, key?: CryptoKey): Promise<string> {
+		const dek = key ?? this.dek;
+		if (!dek) throw new Error('Encryption is locked');
 		if (!this.isEncryptedValue(payload)) throw new Error('Value is not encrypted');
 
 		const body = payload.slice(ENCRYPTED_VALUE_PREFIX.length);
@@ -271,7 +290,7 @@ export class EncryptionService {
 		const ciphertext = base64ToBytes(body.slice(separator + 1));
 		const plaintext = await globalThis.crypto.subtle.decrypt(
 			{ name: 'AES-GCM', iv: iv as BufferSource },
-			this.dek,
+			dek,
 			ciphertext as BufferSource
 		);
 		return new TextDecoder().decode(plaintext);
@@ -283,8 +302,8 @@ export class EncryptionService {
 	}
 
 	/** Decrypts a value produced by {@link encryptJson} and parses the JSON */
-	static async decryptJson<T>(payload: string): Promise<T> {
-		return JSON.parse(await this.decryptString(payload)) as T;
+	static async decryptJson<T>(payload: string, key?: CryptoKey): Promise<T> {
+		return JSON.parse(await this.decryptString(payload, key)) as T;
 	}
 
 	private static readMeta(): EncryptionMeta | null {

@@ -1,5 +1,7 @@
 <script lang="ts">
-	import { Download, Upload, Trash2 } from '@lucide/svelte';
+	import { Download, Upload, Trash2, Lock } from '@lucide/svelte';
+	import * as AlertDialog from '$lib/components/ui/alert-dialog';
+	import { Input } from '$lib/components/ui/input';
 	import {
 		DialogConversationSelection,
 		DialogConfirmation,
@@ -11,6 +13,7 @@
 	import { DatabaseService } from '$lib/services/database.service';
 	import { EncryptionService } from '$lib/services/encryption.service';
 	import { Checkbox } from '$lib/components/ui/checkbox';
+	import { Button } from '$lib/components/ui/button';
 	import { conversationsStore, conversations } from '$lib/stores/conversations.svelte';
 	import { toast } from 'svelte-sonner';
 	import { fade } from 'svelte/transition';
@@ -26,6 +29,11 @@
 	let showExportDialog = $state(false);
 	let showImportDialog = $state(false);
 	let encryptExport = $state(false);
+
+	let pendingEncryptedImport = $state<ExportedConversation[] | null>(null);
+	let importPassphrase = $state('');
+	let importPassphraseFailed = $state(false);
+	let decryptingImport = $state(false);
 	let availableConversations = $state<DatabaseConversation[]>([]);
 	let messageCountMap = $state<Map<string, number>>(new Map());
 	let fullImportData = $state<Array<{ conv: DatabaseConversation; messages: DatabaseMessage[] }>>(
@@ -186,10 +194,26 @@
 						throw new Error('No conversations found in file');
 					}
 
-					fullImportData = importedData;
-					availableConversations = importedData.map((item) => item.conv);
-					messageCountMap = createMessageCountMap(importedData);
-					showImportDialog = true;
+					const encryptionMeta = importedData
+						.map(
+							(item) =>
+								(item.conv as DatabaseConversation & { encryption?: EncryptionMeta }).encryption
+						)
+						.find((meta) => meta);
+
+					if (encryptionMeta) {
+						const localMeta = EncryptionService.getPersistedMeta();
+						if (localMeta && JSON.stringify(localMeta) === JSON.stringify(encryptionMeta)) {
+							// Exported by this same setup: decrypts with the session key
+							proceedToImportSelection(await DatabaseService.decryptImportedData(importedData));
+						} else {
+							importPassphrase = '';
+							importPassphraseFailed = false;
+							pendingEncryptedImport = importedData;
+						}
+					} else {
+						proceedToImportSelection(importedData);
+					}
 				} catch (err: unknown) {
 					const message = err instanceof Error ? err.message : 'Unknown error';
 
@@ -202,6 +226,41 @@
 		} catch (err) {
 			console.error('Import failed:', err);
 			alert('Failed to import conversations');
+		}
+	}
+
+	function proceedToImportSelection(importedData: ExportedConversation[]) {
+		fullImportData = importedData;
+		availableConversations = importedData.map((item) => item.conv);
+		messageCountMap = createMessageCountMap(importedData);
+		showImportDialog = true;
+	}
+
+	async function handleImportPassphraseSubmit() {
+		if (!pendingEncryptedImport || !importPassphrase || decryptingImport) return;
+
+		decryptingImport = true;
+		try {
+			const meta = (
+				pendingEncryptedImport[0].conv as DatabaseConversation & { encryption?: EncryptionMeta }
+			).encryption;
+			const key = meta
+				? await EncryptionService.unwrapDekWithPassphrase(meta, importPassphrase)
+				: null;
+
+			if (!key) {
+				importPassphraseFailed = true;
+				return;
+			}
+
+			const decrypted = await DatabaseService.decryptImportedData(pendingEncryptedImport, key);
+			pendingEncryptedImport = null;
+			proceedToImportSelection(decrypted);
+		} catch (err) {
+			console.error('Failed to decrypt import:', err);
+			importPassphraseFailed = true;
+		} finally {
+			decryptingImport = false;
 		}
 	}
 
@@ -347,6 +406,66 @@
 	onCancel={() => (showImportDialog = false)}
 	onConfirm={handleImportConfirm}
 />
+
+<AlertDialog.Root open={pendingEncryptedImport !== null}>
+	<AlertDialog.Content
+		onEscapeKeydown={(e) => e.preventDefault()}
+		onInteractOutside={(e) => e.preventDefault()}
+	>
+		<AlertDialog.Header>
+			<AlertDialog.Title class="flex items-center gap-2">
+				<Lock class="h-5 w-5" />
+				Encrypted import
+			</AlertDialog.Title>
+
+			<AlertDialog.Description>
+				This export is encrypted. Enter the passphrase that was used to protect it.
+			</AlertDialog.Description>
+		</AlertDialog.Header>
+
+		<form
+			onsubmit={(e) => {
+				e.preventDefault();
+				handleImportPassphraseSubmit();
+			}}
+			class="space-y-2 pt-2 pb-4"
+		>
+			<Input
+				type="password"
+				bind:value={importPassphrase}
+				placeholder="Passphrase"
+				autocomplete="off"
+				aria-label="Export passphrase"
+				aria-invalid={importPassphraseFailed}
+			/>
+
+			{#if importPassphraseFailed}
+				<p class="text-sm text-destructive">Wrong passphrase. Please try again.</p>
+			{/if}
+		</form>
+
+		<AlertDialog.Footer>
+			<Button
+				variant="outline"
+				type="button"
+				onclick={() => {
+					pendingEncryptedImport = null;
+					importPassphrase = '';
+				}}
+			>
+				Cancel
+			</Button>
+
+			<Button
+				type="button"
+				disabled={!importPassphrase || decryptingImport}
+				onclick={handleImportPassphraseSubmit}
+			>
+				{decryptingImport ? 'Decrypting...' : 'Decrypt'}
+			</Button>
+		</AlertDialog.Footer>
+	</AlertDialog.Content>
+</AlertDialog.Root>
 
 <DialogConfirmation
 	bind:open={showDeleteDialog}
