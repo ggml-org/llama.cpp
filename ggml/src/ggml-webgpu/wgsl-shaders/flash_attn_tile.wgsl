@@ -333,7 +333,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
         }
 
         workgroupBarrier();
-        
+
         // The tile path stages K/V in shared memory so each tile can be reused across
         // Q_TILE query rows. It therefore does not use the direct path.
 #ifndef V_DIRECT
