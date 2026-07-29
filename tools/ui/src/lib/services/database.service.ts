@@ -720,6 +720,25 @@ export class DatabaseService {
 	}
 
 	/**
+	 * Encrypts already-fetched conversations for an encrypted export. Values
+	 * already carrying the encrypted prefix pass through untouched.
+	 *
+	 * @param data - Plaintext exported conversations
+	 * @returns Copies with all secret fields encrypted
+	 */
+	static async encryptForExport(data: ExportedConversation[]): Promise<ExportedConversation[]> {
+		if (!EncryptionService.isUnlocked()) {
+			throw new Error('Encryption is locked');
+		}
+		return await Promise.all(
+			data.map(async ({ conv, messages }) => ({
+				conv: await encryptConversationSecrets(conv),
+				messages: await Promise.all(messages.map((msg) => encryptMessageSecrets(msg)))
+			}))
+		);
+	}
+
+	/**
 	 * Decrypts every stored conversation and message back to plaintext.
 	 * Records already plaintext are left untouched, so the pass is idempotent
 	 * and can simply be re-run after an interruption. Requires the unlocked
