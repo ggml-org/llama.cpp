@@ -45,7 +45,12 @@
 
 		<AlertDialog.Footer>
 			<AlertDialog.Cancel onclick={onCancel}>Cancel</AlertDialog.Cancel>
-			<AlertDialog.Action onclick={() => onConfirm(unencrypted)}>Export</AlertDialog.Action>
+			<AlertDialog.Action
+				class={unencrypted ? 'bg-destructive text-white hover:bg-destructive/80' : ''}
+				onclick={() => onConfirm(unencrypted)}
+			>
+				Export
+			</AlertDialog.Action>
 		</AlertDialog.Footer>
 	</AlertDialog.Content>
 </AlertDialog.Root>
