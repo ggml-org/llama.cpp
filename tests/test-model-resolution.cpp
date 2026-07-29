@@ -8,6 +8,7 @@
 #include "download.h"
 #include "hf-cache.h"
 #include "http.h"
+#include "log.h"
 
 #include <nlohmann/json.hpp>
 
@@ -98,9 +99,14 @@ static common_params_model model_ref(const std::string & hf_repo, const std::str
     return m;
 }
 
-static bool path_ends_with(const std::string & s, const std::string & filename) {
-    const std::string suffix = "/" + filename;
-    return s.size() >= suffix.size() && s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
+// the model cache is isolated under a temporary directory, and the local
+// path the handler wires for a file is snapshots/<commit>/<path> inside it
+static const std::filesystem::path cache_dir =
+    std::filesystem::temp_directory_path() / "test-model-resolution-cache";
+
+static std::string cached(std::string repo_id, const std::string & path) {
+    string_replace_all(repo_id, "/", "--");
+    return (cache_dir / ("models--" + repo_id) / "snapshots" / COMMIT / path).string();
 }
 
 //
@@ -300,11 +306,9 @@ static void test_plan_resolution() {
 
     for (const auto & c : plan_cases) {
         printf("  %s\n", c.name);
-        // invariant: the resolution is insensitive to the listing order,
-        // the cases resolving nothing are checked once to keep the logs short
-        const bool empty_result = c.primary[0] == 0 && c.mtp[0] == 0 && c.dflash[0] == 0 && c.eagle3[0] == 0;
+        // invariant: the resolution is insensitive to the listing order
         for (size_t rot = 0; rot < c.files.size(); ++rot) {
-            if ((c.order_dependent || empty_result) && rot > 0) {
+            if (c.order_dependent && rot > 0) {
                 continue;
             }
             g_context = std::string(c.name) + ", reordering " + std::to_string(rot);
@@ -330,7 +334,7 @@ static void assemble(std::vector<std::string> argv, common_params & params) {
     g_context.clear();
     for (auto & a : argv) {
         g_context += g_context.empty() ? a : " " + a;
-        cargv.push_back(const_cast<char *>(a.c_str()));
+        cargv.push_back(a.data());
     }
     bool ok = common_params_parse((int) cargv.size(), cargv.data(), params, LLAMA_EXAMPLE_SERVER);
     REQUIRE(ok);
@@ -357,8 +361,8 @@ static void test_task_assembly() {
         // plain -hf wires the model and its mmproj, nothing speculative
         common_params params;
         assemble({"server", "-hf", "test/main:Q8_0"}, params);
-        REQUIRE(path_ends_with(params.model.path,  "model-Q8_0.gguf"));
-        REQUIRE(path_ends_with(params.mmproj.path, "mmproj-model-Q8_0.gguf"));
+        REQUIRE_EQ(params.model.path,  cached("test/main", "model-Q8_0.gguf"));
+        REQUIRE_EQ(params.mmproj.path, cached("test/main", "mmproj-model-Q8_0.gguf"));
         REQUIRE(params.speculative.draft.mparams.path.empty());
     }
     {
@@ -377,54 +381,54 @@ static void test_task_assembly() {
         // -hf with a spec type wires the sidecar of the main repo as fallback draft
         common_params params;
         assemble({"server", "-hf", "test/main:Q8_0", "--spec-type", "draft-mtp"}, params);
-        REQUIRE(path_ends_with(params.speculative.draft.mparams.path, "mtp-model-Q8_0.gguf"));
+        REQUIRE_EQ(params.speculative.draft.mparams.path, cached("test/main", "mtp-model-Q8_0.gguf"));
     }
     {
         // -hfd with a spec type wires the draft repo sidecar at its tag,
         // not its full model, and suppresses the main repo fallback
         common_params params;
         assemble({"server", "-hf", "test/hole:Q8_0", "-hfd", "test/hole:Q4_0", "--spec-type", "draft-mtp"}, params);
-        REQUIRE(path_ends_with(params.speculative.draft.mparams.path, "mtp-model-Q4_0.gguf"));
+        REQUIRE_EQ(params.speculative.draft.mparams.path, cached("test/hole", "mtp-model-Q4_0.gguf"));
     }
     {
         // an explicit -md file wins over the sidecar resolution
         common_params params;
         assemble({"server", "-hf", "test/main:Q8_0", "-hfd", "test/main", "-md", "mtp-model-BF16.gguf", "--spec-type", "draft-mtp"}, params);
-        REQUIRE(path_ends_with(params.speculative.draft.mparams.path, "mtp-model-BF16.gguf"));
+        REQUIRE_EQ(params.speculative.draft.mparams.path, cached("test/main", "mtp-model-BF16.gguf"));
     }
     {
         // -hfd without a spec type auto-selects the type, mtp first when all ship
         common_params params;
         assemble({"server", "-hf", "test/main:Q8_0", "-hfd", "test/trio:Q8_0"}, params);
         REQUIRE(params.speculative.types == std::vector<enum common_speculative_type>{COMMON_SPECULATIVE_TYPE_DRAFT_MTP});
-        REQUIRE(path_ends_with(params.speculative.draft.mparams.path, "mtp-model-Q8_0.gguf"));
+        REQUIRE_EQ(params.speculative.draft.mparams.path, cached("test/trio", "mtp-model-Q8_0.gguf"));
     }
     {
         // auto-selection with only a dflash sidecar
         common_params params;
         assemble({"server", "-hf", "test/main:Q8_0", "-hfd", "test/dflash:Q8_0"}, params);
         REQUIRE(params.speculative.types == std::vector<enum common_speculative_type>{COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH});
-        REQUIRE(path_ends_with(params.speculative.draft.mparams.path, "dflash-model-Q8_0.gguf"));
+        REQUIRE_EQ(params.speculative.draft.mparams.path, cached("test/dflash", "dflash-model-Q8_0.gguf"));
     }
     {
         // auto-selection with only an eagle3 sidecar
         common_params params;
         assemble({"server", "-hf", "test/main:Q8_0", "-hfd", "test/eagle3:Q8_0"}, params);
         REQUIRE(params.speculative.types == std::vector<enum common_speculative_type>{COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3});
-        REQUIRE(path_ends_with(params.speculative.draft.mparams.path, "eagle3-model-Q8_0.gguf"));
+        REQUIRE_EQ(params.speculative.draft.mparams.path, cached("test/eagle3", "eagle3-model-Q8_0.gguf"));
     }
     {
         // -hfd on a repo without sidecars keeps resolving a full model as draft
         common_params params;
         assemble({"server", "-hf", "test/main:Q8_0", "-hfd", "test/small"}, params);
         REQUIRE(params.speculative.types == std::vector<enum common_speculative_type>{COMMON_SPECULATIVE_TYPE_NONE});
-        REQUIRE(path_ends_with(params.speculative.draft.mparams.path, "draft-model-Q4_K_M.gguf"));
+        REQUIRE_EQ(params.speculative.draft.mparams.path, cached("test/small", "draft-model-Q4_K_M.gguf"));
     }
     {
         // a preset repo wires the preset and clears the model for router mode
         common_params params;
         assemble({"server", "-hf", "test/preset"}, params);
-        REQUIRE(path_ends_with(params.models_preset, "preset.ini"));
+        REQUIRE_EQ(params.models_preset, cached("test/preset", "preset.ini"));
         REQUIRE(params.model.path.empty());
         REQUIRE(params.model.hf_repo.empty());
     }
@@ -432,11 +436,27 @@ static void test_task_assembly() {
     g_repos.clear();
 }
 
+static void set_env(const char * name, const char * value) {
+#if defined(_WIN32)
+    _putenv_s(name, value);
+#else
+    setenv(name, value, 1);
+#endif
+}
+
 int main(void) {
-    // isolate the cache and serve every HTTP request from the stub
-    std::string cache = (std::filesystem::temp_directory_path() / "test-model-resolution-cache").string();
-    std::filesystem::remove_all(cache);
-    setenv("LLAMA_CACHE", cache.c_str(), 1);
+    // the negative cases legitimately log errors on every reordering,
+    // keep the output down to the reports
+    common_log_pause(common_log_main());
+
+    // isolate the cache and serve every HTTP request from the stub,
+    // the cache location is read once so it is set before anything else
+    std::filesystem::remove_all(cache_dir);
+    set_env("LLAMA_CACHE", cache_dir.string().c_str());
+
+    // an http endpoint keeps the client init from rejecting https on the
+    // builds without TLS support, the stub serves it either way
+    set_env("MODEL_ENDPOINT", "http://models.test/");
 
     common_http_client_factory = [](const std::string & url) -> common_http_client_ptr {
         return std::make_unique<http_client_stub>(url);
@@ -444,6 +464,8 @@ int main(void) {
 
     test_plan_resolution();
     test_task_assembly();
+
+    std::filesystem::remove_all(cache_dir);
     printf("test-model-resolution: all tests OK\n");
     return 0;
 }
