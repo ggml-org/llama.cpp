@@ -415,7 +415,7 @@ static std::pair<long, std::vector<char>> gguf_http_get(
         const httplib::Headers & headers = {},
         int timeout_sec = 60) {
     try {
-        auto [cli, parts] = common_http_client(url);
+        auto [cli, parts] = common_http_client_init(url);
 
         if (timeout_sec > 0) {
             cli->set_read_timeout(timeout_sec, 0);

@@ -297,7 +297,7 @@ static int common_download_file_single_online(const std::string & url,
         return 304; // 304 Not Modified - fake cached response
     }
 
-    auto [cli, parts] = common_http_client(url);
+    auto [cli, parts] = common_http_client_init(url);
 
     httplib::Headers headers;
     for (const auto & h : opts.headers) {
@@ -404,7 +404,7 @@ static int common_download_file_single_online(const std::string & url,
                 __func__, common_http_show_masked_url(parts).c_str(),
                 path_temporary.c_str(), etag.c_str());
 
-        if (common_pull_file(*cli, parts.path, path_temporary, supports_ranges, p, opts.callback)) {
+        if (common_pull_file(cli->raw(), parts.path, path_temporary, supports_ranges, p, opts.callback)) {
             if (std::rename(path_temporary.c_str(), path.c_str()) != 0) {
                 LOG_ERR("%s: unable to rename file: %s to %s\n", __func__, path_temporary.c_str(), path.c_str());
                 break;
@@ -436,7 +436,7 @@ static int common_download_file_single_online(const std::string & url,
 
 std::pair<long, std::vector<char>> common_remote_get_content(const std::string          & url,
                                                              const common_remote_params & params) {
-    auto [cli, parts] = common_http_client(url);
+    auto [cli, parts] = common_http_client_init(url);
 
     httplib::Headers headers;
     for (const auto & h : params.headers) {

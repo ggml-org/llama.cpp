@@ -197,7 +197,7 @@ static void safe_write_file(const fs::path & path, const std::string & data) {
 
 static nl::json api_get(const std::string & url,
                         const std::string & token) {
-    auto [cli, parts] = common_http_client(url);
+    auto [cli, parts] = common_http_client_init(url);
 
     httplib::Headers headers = {
         {"User-Agent", "llama-cpp/" + std::string(llama_build_info())},

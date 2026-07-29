@@ -64,7 +64,7 @@ struct cli_server {
             return false;
         }
         while (!should_stop()) {
-            auto [cli, parts] = common_http_client(address());
+            auto [cli, parts] = common_http_client_init(address());
             cli->set_connection_timeout(1, 0);
             auto res = cli->Get("/health");
             if (res) {

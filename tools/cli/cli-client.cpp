@@ -26,7 +26,7 @@ static std::string join_path(const common_http_url & parts, const std::string & 
 }
 
 std::string cli_client::get(const std::string & path) {
-    auto [cli, parts] = common_http_client(server_base);
+    auto [cli, parts] = common_http_client_init(server_base);
     cli->set_read_timeout(CLI_HTTP_READ_TIMEOUT_SEC, 0);
     auto path_with_model = path + (model.empty() ? "" : ("?model=" + model));
     auto res = cli->Get(join_path(parts, path_with_model));
@@ -40,7 +40,7 @@ std::string cli_client::get(const std::string & path) {
 }
 
 std::string cli_client::post(const std::string & path, const std::string & body) {
-    auto [cli, parts] = common_http_client(server_base);
+    auto [cli, parts] = common_http_client_init(server_base);
     cli->set_read_timeout(CLI_HTTP_READ_TIMEOUT_SEC, 0);
     auto res = cli->Post(join_path(parts, path), body, "application/json");
     if (!res) {
@@ -56,7 +56,7 @@ std::string cli_client::post_sse(const std::string & path,
                                   const std::string & body,
                                   const std::function<bool()> & should_stop,
                                   const std::function<void(const std::string &)> & on_data) {
-    auto [cli, parts] = common_http_client(server_base);
+    auto [cli, parts] = common_http_client_init(server_base);
     cli->set_read_timeout(CLI_HTTP_READ_TIMEOUT_SEC, 0);
 
     std::string pending;  // buffer for incomplete SSE lines
@@ -110,7 +110,7 @@ std::string cli_client::post_sse(const std::string & path,
 bool cli_client::wait_health(const std::function<bool()> & is_aborted) {
     int connect_attempts = 0;
     while (!is_aborted()) {
-        auto [cli, parts] = common_http_client(server_base);
+        auto [cli, parts] = common_http_client_init(server_base);
         cli->set_connection_timeout(1, 0);
         auto res = cli->Get(join_path(parts, "/health"));
         if (res) {
