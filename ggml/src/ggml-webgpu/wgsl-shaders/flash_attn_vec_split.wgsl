@@ -545,7 +545,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
             let d = f32(f16_from_u16(load_v_u16_at(block_byte_base)));
             d_shmem[j / 32] = d;
         }
-#endif // V_Q8_0 || V_Q4_0
+#endif
 #else
       // load v tile into shared memory
       load_v_tile_block(local_id.x, kv_count, kv_tile, v_head_offset);
@@ -605,7 +605,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
 #else
                       let v_idx = v_head_offset + v_row * params.stride_v1 + vec_col * 4u;
                       let v4 = vec4<f32>(V[v_idx >> 2u]);
-#endif // V_Q8_0 || V_Q4_0
+#endif
 #else
                       let v_idx = kv_idx * HEAD_DIM_V + vec_col * 4u;
                       let v4 = vec4<f32>(
@@ -613,7 +613,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                           kv_shmem[v_idx + 1u],
                           kv_shmem[v_idx + 2u],
                           kv_shmem[v_idx + 3u]);
-#endif // V_DIRECT
+#endif // defined(V_DIRECT)
                       lo += p * v4;
                   }
 

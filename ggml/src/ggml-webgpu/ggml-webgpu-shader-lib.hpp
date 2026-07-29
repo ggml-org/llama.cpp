@@ -2808,7 +2808,7 @@ class ggml_webgpu_shader_lib {
         key.common                              = ggml_webgpu_flash_attn_make_common_pipeline_key(
             context, decisions.use_sg_matrix ? context.sg_mat_k : 1u, kv_overlap);
         key.common.k_direct &= decisions.use_sg_matrix && key.common.k_type == GGML_TYPE_F16;
-        key.common.v_direct &= decisions.use_sg_matrix && key.common.k_type == GGML_TYPE_F16;
+        key.common.v_direct &= decisions.use_sg_matrix && key.common.v_type == GGML_TYPE_F16;
         key.use_sg_matrix = decisions.use_sg_matrix;
 
         const uint32_t max_kv_tile = ggml_webgpu_flash_attn_max_kv_tile(
