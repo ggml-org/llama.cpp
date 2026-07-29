@@ -7,6 +7,10 @@
 	} from '$lib/components/app';
 	import { createMessageCountMap } from '$lib/utils';
 	import { settingsStore } from '$lib/stores/settings.svelte';
+	import { encryptionStore } from '$lib/stores/encryption.svelte';
+	import { DatabaseService } from '$lib/services/database.service';
+	import { EncryptionService } from '$lib/services/encryption.service';
+	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { conversationsStore, conversations } from '$lib/stores/conversations.svelte';
 	import { toast } from 'svelte-sonner';
 	import { fade } from 'svelte/transition';
@@ -21,6 +25,7 @@
 
 	let showExportDialog = $state(false);
 	let showImportDialog = $state(false);
+	let encryptExport = $state(false);
 	let availableConversations = $state<DatabaseConversation[]>([]);
 	let messageCountMap = $state<Map<string, number>>(new Map());
 	let fullImportData = $state<Array<{ conv: DatabaseConversation; messages: DatabaseMessage[] }>>(
@@ -132,17 +137,23 @@
 
 	async function handleExportConfirm(selectedConversations: DatabaseConversation[]) {
 		try {
-			const allData: ExportedConversation[] = await Promise.all(
+			let allData: ExportedConversation[] = await Promise.all(
 				selectedConversations.map(async (conv) => {
 					const messages = await conversationsStore.getConversationMessages(conv.id);
 					return { conv: $state.snapshot(conv), messages: $state.snapshot(messages) };
 				})
 			);
 
+			let encryptionMeta: EncryptionMeta | undefined;
+			if (encryptExport && encryptionStore.isUnlocked) {
+				allData = await DatabaseService.encryptForExport(allData);
+				encryptionMeta = EncryptionService.getPersistedMeta() ?? undefined;
+			}
+
 			if (allData.length === 1) {
-				conversationsStore.downloadConversationFile(allData[0]);
+				conversationsStore.downloadConversationFile(allData[0], undefined, { encryptionMeta });
 			} else {
-				conversationsStore.downloadConversationsArchive(allData);
+				conversationsStore.downloadConversationsArchive(allData, { encryptionMeta });
 			}
 
 			exportedConversations = selectedConversations;
@@ -262,6 +273,13 @@
 			onclick={handleExportClick}
 			summary={{ show: showExportSummary, verb: 'Exported', items: exportedConversations }}
 		/>
+
+		{#if encryptionStore.isUnlocked}
+			<label class="flex items-center gap-2 text-sm text-muted-foreground">
+				<Checkbox bind:checked={encryptExport} />
+				Encrypt the export (requires your passphrase to import)
+			</label>
+		{/if}
 
 		<SettingsChatImportExportSection
 			title="Import"

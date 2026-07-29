@@ -228,6 +228,11 @@ export class EncryptionService {
 		return true;
 	}
 
+	/** The persisted wrapped DEK + KDF parameters, or null when not set up */
+	static getPersistedMeta(): EncryptionMeta | null {
+		return this.readMeta();
+	}
+
 	/** Reports whether a value carries the encrypted-value prefix */
 	static isEncryptedValue(value: unknown): value is string {
 		return typeof value === 'string' && value.startsWith(ENCRYPTED_VALUE_PREFIX);

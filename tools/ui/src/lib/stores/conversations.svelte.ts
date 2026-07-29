@@ -22,6 +22,7 @@ import { goto } from '$app/navigation';
 import { browser } from '$app/environment';
 import { toast } from 'svelte-sonner';
 import { DatabaseService } from '$lib/services/database.service';
+import { EncryptionService } from '$lib/services/encryption.service';
 import { MigrationService } from '$lib/services/migration.service';
 import { config } from '$lib/stores/settings.svelte';
 import { encryptionStore } from '$lib/stores/encryption.svelte';
@@ -485,7 +486,10 @@ class ConversationsStore {
 	 * browser download (one JSONL file per conversation).
 	 * @param convIds - Conversation IDs to export
 	 */
-	async bulkExportConversations(convIds: string[]): Promise<void> {
+	async bulkExportConversations(
+		convIds: string[],
+		options?: { encrypted?: boolean }
+	): Promise<void> {
 		if (convIds.length === 0) return;
 
 		try {
@@ -497,13 +501,19 @@ class ConversationsStore {
 				overridden.conv = { ...this.activeConversation! };
 			}
 
-			const exported = [...fetched.values()];
+			let exported = [...fetched.values()];
 			if (exported.length === 0) {
 				toast.error('No conversations to export');
 				return;
 			}
 
-			this.downloadConversationsArchive(exported);
+			let encryptionMeta: EncryptionMeta | undefined;
+			if (options?.encrypted) {
+				exported = await DatabaseService.encryptForExport(exported);
+				encryptionMeta = EncryptionService.getPersistedMeta() ?? undefined;
+			}
+
+			this.downloadConversationsArchive(exported, { encryptionMeta });
 
 			toast.success(
 				exported.length === 1
@@ -993,12 +1003,16 @@ class ConversationsStore {
 	 * @param data - The exported conversation payload
 	 * @returns The JSONL string (one record per line)
 	 */
-	serializeSessionToJsonl(data: ExportedConversation): string {
+	serializeSessionToJsonl(
+		data: ExportedConversation,
+		options?: { encryptionMeta?: EncryptionMeta }
+	): string {
 		const { conv, messages } = data;
 
 		const sessionLine = JSON.stringify({
 			type: SessionRecordType.SESSION,
 			harness: SESSION_HARNESS,
+			...(options?.encryptionMeta ? { encryption: options.encryptionMeta } : {}),
 			...conv
 		});
 		const messageLines = messages.map((message: DatabaseMessage) => {
@@ -1118,7 +1132,11 @@ class ConversationsStore {
 	 * @param data - The exported conversation payload (a single conversation with its messages)
 	 * @param filename - Filename; if omitted, a deterministic name is generated
 	 */
-	downloadConversationFile(data: ExportedConversation, filename?: string): void {
+	downloadConversationFile(
+		data: ExportedConversation,
+		filename?: string,
+		options?: { encryptionMeta?: EncryptionMeta }
+	): void {
 		const { conv: conversation, messages: msgs } = data;
 
 		if (!conversation) {
@@ -1128,7 +1146,7 @@ class ConversationsStore {
 
 		const downloadFilename = filename ?? this.generateConversationFilename(conversation, msgs);
 
-		const jsonl = this.serializeSessionToJsonl(data);
+		const jsonl = this.serializeSessionToJsonl(data, options);
 		const blob = new Blob([jsonl], { type: MimeTypeText.JSONL });
 		this.triggerDownload(blob, downloadFilename);
 	}
@@ -1138,7 +1156,10 @@ class ConversationsStore {
 	 * `.jsonl` file per conversation.
 	 * @param data - The conversations to export
 	 */
-	downloadConversationsArchive(data: ExportedConversation[]): void {
+	downloadConversationsArchive(
+		data: ExportedConversation[],
+		options?: { encryptionMeta?: EncryptionMeta }
+	): void {
 		if (data.length === 0) {
 			console.error('Invalid data: no conversations to export');
 			return;
@@ -1161,7 +1182,7 @@ class ConversationsStore {
 			}
 			usedNames.add(entryName);
 
-			files[entryName] = strToU8(this.serializeSessionToJsonl(session));
+			files[entryName] = strToU8(this.serializeSessionToJsonl(session, options));
 		}
 
 		const archiveName = `${new Date().toISOString().split(ISO_DATE_TIME_SEPARATOR)[0]}_conversations${FileExtensionText.ZIP}`;
