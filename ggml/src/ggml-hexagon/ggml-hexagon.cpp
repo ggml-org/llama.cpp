@@ -63,6 +63,27 @@ using intvec  = std::vector<int>;
 using uintvec = std::vector<unsigned int>;
 using u32vec  = std::vector<uint32_t>;
 
+#define GGML_HEXAGON_MAX_SESSIONS 16
+
+struct ggml_hexagon_device_config {
+    int physical_idx = 0;
+    int virtual_idx = 0;
+    std::string name;
+};
+
+static ggml_hexagon_device_config opt_device_configs[GGML_HEXAGON_MAX_SESSIONS];
+
+static int get_domain_id(int physical_idx) {
+    return CDSP_DOMAIN_ID + physical_idx;
+}
+
+static std::string get_domain_name(int physical_idx) {
+    if (physical_idx == 0) {
+        return CDSP_DOMAIN_NAME;
+    }
+    return std::string("cdsp") + std::to_string(physical_idx);
+}
+
 static int    opt_arch    = 0; // autodetect
 static size_t opt_ndev    = 1;
 static size_t opt_nhvx    = 0; // use all
@@ -1687,7 +1708,7 @@ struct ggml_hexagon_opqueue {
         for (unsigned int i = 0; i < depth; i++) { done.push(i); }
 
         if (opt_verbose) {
-            GGML_LOG_INFO("ggml-hex: %s allocated op-queue : batch-size %zu depth %zu shm-size %zu shm-block-size %zu\n",
+            GGML_LOG_INFO("ggml-hex: %s allocated opqueue : batch-size %zu depth %zu shm-size %zu shm-block-size %zu\n",
                     sess->c_name(), batch_size, depth, shm_buf->size(), shm_blk_size);
         }
     }
@@ -1746,7 +1767,7 @@ struct ggml_hexagon_opqueue {
         memcpy(t_ptr, (void *) op_batch->h_tens.data(), t_size);
         memcpy(o_ptr, (void *) op_batch->h_ops.data(),  o_size);
 
-        HEX_VERBOSE("ggml-hex: %s op-queue push batch #%u : n-bufs %u n-tensors %u n-ops %u vmem %zu : b-size %zu t-size %zu o-size %zu m-size %zu\n",
+        HEX_VERBOSE("ggml-hex: %s opqueue-push batch #%u : n-bufs %u n-tensors %u n-ops %u vmem %zu : b-size %zu t-size %zu o-size %zu m-size %zu\n",
                 shm_buf->sess->c_name(), req.id, req.n_bufs, req.n_tensors, req.n_ops, op_batch->b_vmem,
                 b_size, t_size, o_size, (size_t) dbuf.size);
 
@@ -1789,7 +1810,7 @@ struct ggml_hexagon_opqueue {
         const size_t m_size = b_size + t_size + o_size + p_size + tr_size;
         GGML_ASSERT(m_size <= shm_blk_size);
 
-        HEX_VERBOSE("ggml-hex: %s op-queue pop batch #%u : n-bufs %u n-tensors %u n-ops %u : m-size %zu b-size %zu t-size %zu o-size %zu\n",
+        HEX_VERBOSE("ggml-hex: %s opqueue-pop batch #%u : n-bufs %u n-tensors %u n-ops %u : m-size %zu b-size %zu t-size %zu o-size %zu\n",
                 shm_buf->sess->c_name(), rsp.id, rsp.n_bufs, rsp.n_tensors, rsp.n_ops,
                 (size_t) dbuf.size, b_size, t_size, o_size);
 
@@ -1971,31 +1992,38 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
     this->valid_queue   = false;
     this->valid_iface   = false;
 
-    this->domain_id  = 3;  // Default for CDSP, updated after the session is created
-    this->session_id = 0;  // Default for CDSP, updated after the session is created
-    this->dev_id         = dev_id;
-    this->name           = std::string("HTP") + std::to_string(dev_id);
-    this->op_pending     = 0;
+    const auto & config = opt_device_configs[dev_id];
+
+    int phys_idx = config.physical_idx;
+    int virt_idx = config.virtual_idx;
+
+    this->domain_id  = get_domain_id(phys_idx);
+    this->session_id = 0;
+    this->dev_id     = dev_id;
+    this->name       = config.name;
+    this->op_pending = 0;
 
     GGML_LOG_DEBUG("ggml-hex: %s allocating new session\n", this->name.c_str());
 
     domain * my_domain = htpdrv_get_domain(this->domain_id);
     if (my_domain == NULL) {
-        GGML_LOG_ERROR("ggml-hex: unable to get domain struct for CDSP\n");
+        GGML_LOG_ERROR("ggml-hex: unable to get domain struct for CDSP (domain_id %d)\n", this->domain_id);
         throw std::runtime_error("ggml-hex: failed to get CDSP domain (see log for details)");
     }
 
-    // Create new session
-    if (dev_id != 0) {
+    std::string dom_name = get_domain_name(phys_idx);
+
+    // Create new session if virtual_idx > 0
+    if (virt_idx > 0) {
         struct remote_rpc_reserve_new_session n;
-        n.domain_name_len  = strlen(CDSP_DOMAIN_NAME);
-        n.domain_name      = const_cast<char *>(CDSP_DOMAIN_NAME);
+        n.domain_name_len  = dom_name.size();
+        n.domain_name      = const_cast<char *>(dom_name.c_str());
         n.session_name     = const_cast<char *>(this->name.c_str());
         n.session_name_len = this->name.size();
 
         int err = remote_session_control(FASTRPC_RESERVE_NEW_SESSION, (void *) &n, sizeof(n));
         if (err != AEE_SUCCESS) {
-            GGML_LOG_ERROR("ggml-hex: failed to reserve new session %d : error 0x%x\n", dev_id, err);
+            GGML_LOG_ERROR("ggml-hex: failed to reserve new session %d (physical %d, virtual %d) : error 0x%x\n", dev_id, phys_idx, virt_idx, err);
             throw std::runtime_error("ggml-hex: remote_session_control(new-sess) failed (see log for details)");
         }
 
@@ -2014,8 +2042,8 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
 
         struct remote_rpc_get_uri u = {};
         u.session_id      = this->session_id;
-        u.domain_name     = const_cast<char *>(CDSP_DOMAIN_NAME);
-        u.domain_name_len = strlen(CDSP_DOMAIN_NAME);
+        u.domain_name     = const_cast<char *>(dom_name.c_str());
+        u.domain_name_len = dom_name.size();
         u.module_uri      = const_cast<char *>(htp_uri);
         u.module_uri_len  = strlen(htp_uri);
         u.uri             = session_uri;
@@ -2028,7 +2056,7 @@ void ggml_hexagon_session::allocate(int dev_id) noexcept(false) {
 
             snprintf(session_uri, htp_URI_domain_len, "%s%s", htp_uri, my_domain->uri);
 
-            GGML_LOG_WARN("ggml-hex: failed to get URI for session %d : error 0x%x. Falling back to single session URI: %s\n", dev_id, err, session_uri);
+            GGML_LOG_WARN("ggml-hex: failed to get URI for session %d (physical %d, virtual %d) : error 0x%x. Falling back to single session URI: %s\n", dev_id, phys_idx, virt_idx, err, session_uri);
         }
     }
 
@@ -4802,8 +4830,6 @@ static const struct ggml_backend_device_i ggml_backend_hexagon_device_i = {
 
 //** backend registry
 
-#define GGML_HEXAGON_MAX_SESSIONS 16
-
 struct ggml_hexagon_registry {
     ggml_hexagon_registry(ggml_backend_reg_t reg);
     ~ggml_hexagon_registry();
@@ -4962,13 +4988,84 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
     opt_nhmx      = str_nhmx     ? atoi(str_nhmx)                         : (str_use_hmx ? atoi(str_use_hmx) : opt_nhmx);
     opt_mm_select = str_mm_select ? atoi(str_mm_select)                   : opt_mm_select;
     opt_fa_select = str_fa_select ? atoi(str_fa_select)                   : opt_fa_select;
-    opt_ndev      = str_ndev     ? strtoul(str_ndev, NULL, 0)             : opt_ndev;
     opt_mbuf      = str_mbuf     ? strtoul(str_mbuf, NULL, 0) * MiB       : opt_mbuf;
     opt_vmem      = str_vmem     ? strtoul(str_vmem, NULL, 0) * MiB       : opt_vmem;
     opt_hostbuf   = str_hostbuf  ? atoi(str_hostbuf) != 0                 : opt_hostbuf;
 
-    if (opt_ndev > GGML_HEXAGON_MAX_SESSIONS) {
-        opt_ndev = GGML_HEXAGON_MAX_SESSIONS;
+    // Parse device configuration
+    const char * str_devices  = getenv("GGML_HEXAGON_DEVICES");
+    if (str_devices && str_devices[0] != '\0') {
+        bool is_single_number = true;
+        for (int i = 0; str_devices[i] != '\0'; i++) {
+            if (!isdigit((unsigned char)str_devices[i])) {
+                is_single_number = false;
+                break;
+            }
+        }
+        if (is_single_number) {
+            int n = atoi(str_devices);
+            if (n < 1) n = 1;
+            if (n > GGML_HEXAGON_MAX_SESSIONS) n = GGML_HEXAGON_MAX_SESSIONS;
+            opt_ndev = n;
+            for (size_t i = 0; i < opt_ndev; i++) {
+                opt_device_configs[i].physical_idx = (int)i;
+                opt_device_configs[i].virtual_idx  = 0;
+                opt_device_configs[i].name         = "HTP" + std::to_string(i) + ":0";
+            }
+        } else {
+            std::string s_devices(str_devices);
+            std::stringstream ss(s_devices);
+            std::string item;
+            opt_ndev = 0;
+            while (std::getline(ss, item, ',')) {
+                size_t start = item.find_first_not_of(" \t\r\n");
+                size_t end = item.find_last_not_of(" \t\r\n");
+                if (start == std::string::npos) {
+                    continue;
+                }
+                item = item.substr(start, end - start + 1);
+
+                if (item.rfind("HTP", 0) == 0) {
+                    std::string rest = item.substr(3);
+                    size_t colon_pos = rest.find(':');
+                    int phys = 0;
+                    int virt = 0;
+                    try {
+                        if (colon_pos == std::string::npos) {
+                            phys = std::stoi(rest);
+                            virt = 0;
+                        } else {
+                            phys = std::stoi(rest.substr(0, colon_pos));
+                            virt = std::stoi(rest.substr(colon_pos + 1));
+                        }
+                    } catch (...) {
+                        GGML_LOG_WARN("ggml-hex: failed to parse device index in '%s'\n", item.c_str());
+                        continue;
+                    }
+
+                    if (opt_ndev < GGML_HEXAGON_MAX_SESSIONS) {
+                        opt_device_configs[opt_ndev].physical_idx = phys;
+                        opt_device_configs[opt_ndev].virtual_idx  = virt;
+                        opt_device_configs[opt_ndev].name         = "HTP" + std::to_string(phys) + ":" + std::to_string(virt);
+                        opt_ndev++;
+                    } else {
+                        GGML_LOG_WARN("ggml-hex: max sessions limit reached (%d), ignoring device %s\n", GGML_HEXAGON_MAX_SESSIONS, item.c_str());
+                    }
+                } else {
+                    GGML_LOG_WARN("ggml-hex: invalid device name format '%s', must start with HTP\n", item.c_str());
+                }
+            }
+        }
+    } else {
+        int n = str_ndev ? atoi(str_ndev) : 1;
+        if (n < 1) n = 1;
+        if (n > GGML_HEXAGON_MAX_SESSIONS) n = GGML_HEXAGON_MAX_SESSIONS;
+        opt_ndev = n;
+        for (size_t i = 0; i < opt_ndev; i++) {
+            opt_device_configs[i].physical_idx = 0;
+            opt_device_configs[i].virtual_idx  = (int)i;
+            opt_device_configs[i].name         = "HTP0:" + std::to_string(i);
+        }
     }
 
 #if defined(__ANDROID__)
