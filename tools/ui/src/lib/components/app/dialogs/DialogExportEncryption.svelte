@@ -49,7 +49,7 @@
 				class={unencrypted ? 'bg-destructive text-white hover:bg-destructive/80' : ''}
 				onclick={() => onConfirm(unencrypted)}
 			>
-				Export
+				{unencrypted ? 'Export unencrypted' : 'Export'}
 			</AlertDialog.Action>
 		</AlertDialog.Footer>
 	</AlertDialog.Content>
