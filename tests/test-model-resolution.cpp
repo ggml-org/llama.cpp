@@ -1,7 +1,7 @@
 // tests the HF model resolution and the model handler assembly end-to-end on
-// synthetic repo listings: the common_http_client factory is re-assigned to a
-// stub serving hardcoded HF API responses, so the real hf_cache, resolution
-// and CLI parsing run against them without network access
+// synthetic repo listings: a local httplib server bound to the loopback
+// serves hardcoded HF API responses, so the real client, hf_cache, resolution
+// and CLI parsing run against them without external network access
 
 #include "arg.h"
 #include "common.h"
@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <map>
+#include <thread>
 #include <string>
 #include <vector>
 
@@ -54,43 +55,34 @@ static std::map<std::string, std::vector<std::string>> g_repos;
 
 static const char * COMMIT = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-struct http_client_stub : common_http_client {
-    http_client_stub(const std::string & url) : common_http_client(url) {}
+// synthetic repos served over the loopback by a real httplib server, so
+// the tested code runs its own client and transport end to end
+static httplib::Server g_server;
 
-    httplib::Result respond(const std::string & path) {
-        auto res = std::make_unique<httplib::Response>();
-        res->status = 404;
-
-        auto pos = path.find("/api/models/");
-        if (pos != std::string::npos) {
-            auto rest = path.substr(pos + 12);
-            auto refs = rest.find("/refs");
-            auto tree = rest.find("/tree/");
-            if (refs != std::string::npos && g_repos.count(rest.substr(0, refs))) {
-                res->status = 200;
-                res->body = nlohmann::json{{"branches", {{{"name", "main"}, {"targetCommit", COMMIT}}}}}.dump();
-            } else if (tree != std::string::npos && g_repos.count(rest.substr(0, tree))) {
-                auto files = nlohmann::json::array();
-                size_t i = 0;
-                for (const auto & p : g_repos[rest.substr(0, tree)]) {
-                    char oid[41];
-                    snprintf(oid, sizeof(oid), "%040lx", (unsigned long) ++i);
-                    files.push_back({{"type", "file"}, {"path", p}, {"size", 1}, {"oid", oid}});
-                }
-                res->status = 200;
-                res->body = files.dump();
-            }
+static void serve_repos() {
+    g_server.Get(R"(/api/models/(.+)/refs)", [](const httplib::Request & req, httplib::Response & res) {
+        if (g_repos.count(req.matches[1])) {
+            res.set_content(nlohmann::json{{"branches", {{{"name", "main"}, {"targetCommit", COMMIT}}}}}.dump(),
+                            "application/json");
+        } else {
+            res.status = 404;
         }
-        return httplib::Result{std::move(res), httplib::Error::Success};
-    }
-
-    httplib::Result Head(const std::string & path) override { return respond(path); }
-    httplib::Result Get (const std::string & path) override { return respond(path); }
-    httplib::Result Get (const std::string & path, const httplib::Headers &) override { return respond(path); }
-    httplib::Result Get (const std::string & path, const httplib::Headers &, httplib::ContentReceiver, httplib::DownloadProgress) override { return respond(path); }
-    httplib::Result Post(const std::string & path, const std::string &, const std::string &) override { return respond(path); }
-    httplib::Result Post(const std::string & path, const httplib::Headers &, const std::string &, const std::string &, httplib::ContentReceiver) override { return respond(path); }
-};
+    });
+    g_server.Get(R"(/api/models/(.+)/tree/.+)", [](const httplib::Request & req, httplib::Response & res) {
+        if (!g_repos.count(req.matches[1])) {
+            res.status = 404;
+            return;
+        }
+        auto files = nlohmann::json::array();
+        size_t i = 0;
+        for (const auto & p : g_repos[req.matches[1]]) {
+            char oid[41];
+            snprintf(oid, sizeof(oid), "%040lx", (unsigned long) ++i);
+            files.push_back({{"type", "file"}, {"path", p}, {"size", 1}, {"oid", oid}});
+        }
+        res.set_content(files.dump(), "application/json");
+    });
+}
 
 static common_params_model model_ref(const std::string & hf_repo, const std::string & hf_file = "") {
     common_params_model m;
@@ -454,16 +446,19 @@ int main(void) {
     std::filesystem::remove_all(cache_dir);
     set_env("LLAMA_CACHE", cache_dir.string().c_str());
 
-    // an http endpoint keeps the client init from rejecting https on the
-    // builds without TLS support, the stub serves it either way
-    set_env("MODEL_ENDPOINT", "http://models.test/");
-
-    common_http_client_set_factory([](const std::string & url) -> common_http_client_ptr {
-        return std::make_unique<http_client_stub>(url);
-    });
+    // the loopback endpoint also keeps the client init from rejecting
+    // https on the builds without TLS support
+    serve_repos();
+    int port = g_server.bind_to_any_port("127.0.0.1");
+    std::thread server_thread([] { g_server.listen_after_bind(); });
+    g_server.wait_until_ready();
+    set_env("MODEL_ENDPOINT", ("http://127.0.0.1:" + std::to_string(port) + "/").c_str());
 
     test_plan_resolution();
     test_task_assembly();
+
+    g_server.stop();
+    server_thread.join();
 
     std::filesystem::remove_all(cache_dir);
     printf("test-model-resolution: all tests OK\n");
