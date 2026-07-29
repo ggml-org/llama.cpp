@@ -12,6 +12,7 @@
 		onSelect: (id: string) => void;
 		onEdit: (id: string) => void;
 		onDelete: (id: string) => void;
+		onExport: (id: string) => void;
 		onStop: (id: string) => void;
 		onToggleSelect?: (id: string) => void;
 		onEnterSelectionMode?: (id: string) => void;
@@ -29,6 +30,7 @@
 		onSelect,
 		onEdit,
 		onDelete,
+		onExport,
 		onStop,
 		onToggleSelect,
 		onEnterSelectionMode,
@@ -73,6 +75,7 @@
 						{onSelect}
 						{onEdit}
 						{onDelete}
+						{onExport}
 						{onStop}
 						{onToggleSelect}
 						{onEnterSelectionMode}

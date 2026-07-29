@@ -28,7 +28,7 @@
 
 	let showExportDialog = $state(false);
 	let showImportDialog = $state(false);
-	let encryptExport = $state(false);
+	let exportUnencrypted = $state(false);
 
 	let pendingEncryptedImport = $state<ExportedConversation[] | null>(null);
 	let importPassphrase = $state('');
@@ -153,7 +153,7 @@
 			);
 
 			let encryptionMeta: EncryptionMeta | undefined;
-			if (encryptExport && encryptionStore.isUnlocked) {
+			if (!exportUnencrypted && encryptionStore.isUnlocked) {
 				allData = await DatabaseService.encryptForExport(allData);
 				encryptionMeta = EncryptionService.getPersistedMeta() ?? undefined;
 			}
@@ -335,8 +335,8 @@
 
 		{#if encryptionStore.isUnlocked}
 			<label class="flex items-center gap-2 text-sm text-muted-foreground">
-				<Checkbox bind:checked={encryptExport} />
-				Encrypt the export (requires your passphrase to import)
+				<Checkbox bind:checked={exportUnencrypted} />
+				Export unencrypted conversations
 			</label>
 		{/if}
 

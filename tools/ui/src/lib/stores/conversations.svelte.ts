@@ -1210,7 +1210,7 @@ class ConversationsStore {
 	 * Downloads a single conversation as a JSONL file, serializing the full message tree.
 	 * @param convId - The conversation ID to download
 	 */
-	async downloadConversation(convId: string): Promise<void> {
+	async downloadConversation(convId: string, options?: { encrypted?: boolean }): Promise<void> {
 		const conversation =
 			this.activeConversation?.id === convId
 				? this.activeConversation
@@ -1220,7 +1220,14 @@ class ConversationsStore {
 
 		const messages = await DatabaseService.getConversationMessages(convId);
 
-		this.downloadConversationFile({ conv: conversation, messages });
+		let data: ExportedConversation = { conv: conversation, messages };
+		let encryptionMeta: EncryptionMeta | undefined;
+		if (options?.encrypted) {
+			[data] = await DatabaseService.encryptForExport([data]);
+			encryptionMeta = EncryptionService.getPersistedMeta() ?? undefined;
+		}
+
+		this.downloadConversationFile(data, undefined, { encryptionMeta });
 	}
 
 	/**

@@ -30,6 +30,7 @@
 		isSelected?: boolean;
 		onDelete?: (id: string) => void;
 		onEdit?: (id: string) => void;
+		onExport?: (id: string) => void;
 		onSelect?: (id: string) => void;
 		onStop?: (id: string) => void;
 		onToggleSelect?: (id: string) => void;
@@ -42,6 +43,7 @@
 		conversation,
 		onDelete,
 		onEdit,
+		onExport,
 		onSelect,
 		onStop,
 		onToggleSelect,
@@ -265,7 +267,7 @@
 						label: 'Export',
 						onclick: (e: Event) => {
 							e.stopPropagation();
-							conversationsStore.downloadConversation(conversation.id);
+							onExport?.(conversation.id);
 						},
 						shortcut: ['shift', 'cmd', 's']
 					},
