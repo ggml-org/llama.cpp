@@ -1309,6 +1309,8 @@ static void llama_sampler_top_k_backend_apply(
 
     struct ggml_tensor * logits_rows = ggml_reshape_2d(ctx, logits, 1, logits->ne[0]);
     data->logits = ggml_get_rows(ctx, logits_rows, top_k);
+    data->logits = ggml_reshape_1d(ctx, data->logits, sctx->k);
+    GGML_ASSERT(ggml_n_dims(data->logits) == 1 && "top_k must leave logits as 1D tensor");
     ggml_set_name(data->logits, "top_k_rows");
 
     GGML_UNUSED(gf);
