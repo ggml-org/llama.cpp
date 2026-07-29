@@ -100,11 +100,11 @@ llama-server -m Qwen3-4B.gguf -md Qwen3-4B-DSpark.gguf \
 
 `--spec-draft-n-max` is clamped to the draft model's trained block size.
 
-`--spec-draft-conf-min P` truncates each drafted block at the first position whose predicted
-acceptance (from the draft's confidence head, if present) falls below `P` (default 0 = disabled).
+`--spec-draft-p-min P` also gates the DSpark confidence head: each drafted block is truncated at
+the first position whose predicted acceptance falls below `P` (default 0 = disabled).
 
-Currently only drafts with a Qwen3 backbone are supported; support for other backbones
-(e.g. Gemma4) is planned.
+DSpark drafts come with either a Qwen3-style or a Gemma4-style backbone; the backbone is detected
+from the checkpoint, and both convert and run the same way.
 
 See:
 
