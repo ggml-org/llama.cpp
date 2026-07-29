@@ -2643,6 +2643,19 @@ struct llama_sampler_penalties : public llama_sampler_backend {
     std::vector<int32_t> host_token_ids;
     std::vector<int32_t> host_counts;
 
+    static bool is_disabled(
+            int32_t penalty_last_n,
+            float   penalty_repeat,
+            float   penalty_freq,
+            float   penalty_present) {
+        return penalty_last_n == 0 ||
+            (penalty_repeat == 1.0f && penalty_freq == 0.0f && penalty_present == 0.0f);
+    }
+
+    bool is_disabled() const {
+        return is_disabled(penalty_last_n, penalty_repeat, penalty_freq, penalty_present);
+    }
+
     llama_sampler_penalties(
             int32_t penalty_last_n,
             float   penalty_repeat,
@@ -2696,8 +2709,7 @@ static void llama_sampler_penalties_accept(struct llama_sampler * smpl, llama_to
 static void llama_sampler_penalties_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
     auto * ctx = (llama_sampler_penalties *) smpl->ctx;
 
-    if ((ctx->penalty_last_n == 0) ||
-        (ctx->penalty_repeat == 1.0f && ctx->penalty_freq == 0.0f && ctx->penalty_present == 0.0f)) {
+    if (ctx->is_disabled()) {
         return;
     }
 
@@ -2776,8 +2788,7 @@ static void llama_sampler_penalties_backend_apply(
 
     auto * sctx = (llama_sampler_penalties *) smpl->ctx;
 
-    if ((sctx->penalty_last_n == 0) ||
-        (sctx->penalty_repeat == 1.0f && sctx->penalty_freq == 0.0f && sctx->penalty_present == 0.0f)) {
+    if (sctx->is_disabled()) {
         return;
     }
 
@@ -2800,20 +2811,25 @@ static void llama_sampler_penalties_backend_apply(
         sctx->host_counts.assign(sctx->n_max, 0);
     }
 
-    ggml_tensor * gathered = data->logits;
+    // flatten
+    ggml_tensor * logits = ggml_reshape_1d(ctx, data->logits, ggml_nelements(data->logits));
+    ggml_tensor * gathered = logits;
     ggml_tensor * counts_f32 = ggml_cast(ctx, sctx->inp_counts, GGML_TYPE_F32);
 
     if (sctx->has_candidates) {
-        const int32_t n_candidates = (int32_t) data->logits->ne[0];
+        ggml_tensor * candidates = ggml_reshape_1d(
+                ctx, data->candidates, ggml_nelements(data->candidates));
+        const int64_t n_candidates = candidates->ne[0];
+        GGML_ASSERT(n_candidates == ggml_nelements(logits));
 
         ggml_tensor * counts_rows = ggml_fill(
                 ctx, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, sctx->n_vocab), 0.0f);
         ggml_tensor * scatter_rows = ggml_reshape_2d(ctx, counts_f32, 1, sctx->n_max);
         counts_rows = ggml_set_rows(ctx, counts_rows, scatter_rows, sctx->inp_token_ids);
-        counts_f32 = ggml_get_rows(ctx, counts_rows, data->candidates);
+        counts_f32 = ggml_get_rows(ctx, counts_rows, candidates);
         counts_f32 = ggml_reshape_1d(ctx, counts_f32, n_candidates);
     } else {
-        ggml_tensor * logits_rows = ggml_reshape_2d(ctx, data->logits, 1, ggml_nelements(data->logits));
+        ggml_tensor * logits_rows = ggml_reshape_2d(ctx, logits, 1, ggml_nelements(logits));
         gathered = ggml_get_rows(ctx, logits_rows, sctx->inp_token_ids);
         gathered = ggml_reshape_1d(ctx, gathered, sctx->n_max);
     }
@@ -2831,9 +2847,10 @@ static void llama_sampler_penalties_backend_apply(
         ggml_tensor * neg_scale = ggml_scale(ctx, neg_mask, sctx->penalty_repeat);
         ggml_tensor * repeat_scale = ggml_add(ctx, pos_scale, neg_scale);
 
+        // scale inactive entries with 1 to avoid -INF * 0 = NaN for values masked by top-p
         repeat_scale = ggml_mul(ctx, repeat_scale, active_mask);
         repeat_scale = ggml_add(ctx, repeat_scale, inactive_mask);
-        penalized = ggml_mul(ctx, penalized, repeat_scale);
+        penalized = ggml_mul(ctx, gathered, repeat_scale);
     }
 
     if (sctx->penalty_freq != 0.0f) {
@@ -2849,10 +2866,10 @@ static void llama_sampler_penalties_backend_apply(
     if (sctx->has_candidates) {
         data->logits = penalized;
     } else {
-        ggml_tensor * logits_rows = ggml_reshape_2d(ctx, data->logits, 1, ggml_nelements(data->logits));
+        ggml_tensor * logits_rows = ggml_reshape_2d(ctx, logits, 1, ggml_nelements(logits));
         ggml_tensor * scatter_rows = ggml_reshape_2d(ctx, penalized, 1, sctx->n_max);
         logits_rows = ggml_set_rows(ctx, logits_rows, scatter_rows, sctx->inp_token_ids);
-        data->logits = ggml_reshape_1d(ctx, logits_rows, ggml_nelements(data->logits));
+        data->logits = ggml_reshape_1d(ctx, logits_rows, ggml_nelements(logits));
     }
 }
 
@@ -2863,11 +2880,11 @@ static void llama_sampler_penalties_backend_set_input(struct llama_sampler * smp
         return;
     }
 
-    if ((sctx->penalty_last_n == 0) ||
-        (sctx->penalty_repeat == 1.0f && sctx->penalty_freq == 0.0f && sctx->penalty_present == 0.0f)) {
+    if (sctx->is_disabled()) {
         return;
     }
-    //fill active entries from the map
+
+    // fill active entries from the map
     int32_t n_active = 0;
 
     for (const auto & it : sctx->token_count) {
@@ -2876,8 +2893,8 @@ static void llama_sampler_penalties_backend_set_input(struct llama_sampler * smp
         sctx->host_counts   [n_active] = it.second;
         ++n_active;
     }
-    
-    // This is required because backend_apply uses ggml_set_rows (a scatter-back operation) 
+
+    // This is required because backend_apply uses ggml_set_rows (a scatter-back operation)
     std::vector<std::pair<int32_t, int32_t>> entries;
     entries.reserve(n_active);
     for (int32_t i = 0; i < n_active; ++i) {
@@ -2890,7 +2907,7 @@ static void llama_sampler_penalties_backend_set_input(struct llama_sampler * smp
         sctx->host_token_ids[i] = entries[i].first;
         sctx->host_counts   [i] = entries[i].second;
     }
-    
+
     // Padding: Finds a filler token id that is not present in token_count.
     // Use it to do padding for the arrays, it avoids resizing every time.
     // The arrays must always have exactly n_max entries (the GPU tensor is a fixed size).
@@ -2901,10 +2918,10 @@ static void llama_sampler_penalties_backend_set_input(struct llama_sampler * smp
         }
         GGML_ASSERT(filler < sctx->n_vocab);
     }
-    
+
     // Fill the rest of the arrays with the filler token id and count 0.
     // Inactive slots are padded with a unique dummy token ID (count = 0).
-    // The uniqueness matters because ggml_set_rows with duplicate indices can produce non-deterministic or incorrect results. 
+    // The uniqueness matters because ggml_set_rows with duplicate indices can produce non-deterministic or incorrect results.
     // Using a filler token with count 0 that isn't in the active set is safe, because the active_mask step in backend_apply filters them out via ggml_step(counts_f32)
     for (int32_t i = n_active; i < sctx->n_max; ++i) {
         sctx->host_token_ids[i] = filler;
@@ -2933,17 +2950,10 @@ struct llama_sampler * llama_sampler_init_penalties(
         float penalty_repeat,
         float penalty_freq,
         float penalty_present) {
-    GGML_ASSERT(std::isfinite(penalty_repeat));
-    GGML_ASSERT(penalty_repeat > 0.0f);
-    GGML_ASSERT(std::isfinite(1.0f/penalty_repeat));
-    GGML_ASSERT(std::isfinite(penalty_freq));
-    GGML_ASSERT(std::isfinite(penalty_present));
-
     penalty_last_n = std::max(penalty_last_n, 0);
 
-    const bool is_empty = (penalty_last_n == 0 || (penalty_repeat == 1.0f && penalty_freq == 0.0f && penalty_present == 0.0f));
-
-    if (is_empty) {
+    if (llama_sampler_penalties::is_disabled(
+                penalty_last_n, penalty_repeat, penalty_freq, penalty_present)) {
         return llama_sampler_init_empty("?penalties");
     }
 
