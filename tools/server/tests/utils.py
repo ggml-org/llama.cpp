@@ -115,6 +115,8 @@ class ServerProcess:
     backend_sampling: bool = False
     gcp_compat: bool = False
     server_tools: str | None = None
+    mcp_servers_config: str | None = None
+    mcp_servers_json: str | None = None
     cors_origins: str | None = None
 
     # session variables
@@ -265,6 +267,10 @@ class ServerProcess:
             server_args.append("--ui-mcp-proxy")
         if self.server_tools:
             server_args.extend(["--tools", self.server_tools])
+        if self.mcp_servers_config:
+            server_args.extend(["--mcp-servers-config", self.mcp_servers_config])
+        if self.mcp_servers_json:
+            server_args.extend(["--mcp-servers-json", self.mcp_servers_json])
         if self.backend_sampling:
             server_args.append("--backend_sampling")
         if self.gcp_compat:

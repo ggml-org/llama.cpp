@@ -233,6 +233,7 @@ enum common_chat_format {
     COMMON_CHAT_FORMAT_PEG_SIMPLE,
     COMMON_CHAT_FORMAT_PEG_NATIVE,
     COMMON_CHAT_FORMAT_PEG_GEMMA4,
+    COMMON_CHAT_FORMAT_PEG_MINIMAX_M3,
 
     COMMON_CHAT_FORMAT_COUNT,  // Not a format, just the # formats
 };
@@ -274,7 +275,7 @@ struct common_chat_params {
     std::string                         generation_prompt;
     bool                                supports_thinking    = false;
     std::string                         thinking_start_tag;  // e.g., "<think>"
-    std::string                         thinking_end_tag;    // e.g., "</think>"
+    std::vector<std::string>            thinking_end_tags;   // e.g., "</think>"
     std::vector<common_grammar_trigger> grammar_triggers;
     std::vector<std::string>            preserved_tokens;
     std::vector<std::string>            additional_stops;
