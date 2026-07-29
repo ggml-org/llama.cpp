@@ -95,4 +95,44 @@ describe('EncryptionService', () => {
 		expect(EncryptionService.isUnlocked()).toBe(false);
 		expect(await EncryptionService.unlockWithPassphrase('pw')).toBe(false);
 	});
+
+	describe('meta validation', () => {
+		it('accepts the metadata it persists', async () => {
+			await EncryptionService.setupWithPassphrase('pw');
+
+			const meta = EncryptionService.getPersistedMeta();
+			expect(meta).not.toBeNull();
+			expect(EncryptionService.isValidMeta(meta)).toBe(true);
+		});
+
+		it.each([
+			['too few iterations', { kdfIterations: 1_000 }],
+			['too many iterations', { kdfIterations: 2 ** 31 - 1 }],
+			['non-integer iterations', { kdfIterations: 600_000.5 }],
+			['string iterations', { kdfIterations: '600000' }],
+			['wrong salt length', { salt: btoa('short') }],
+			['malformed base64 iv', { wrapIv: '!!!not-base64!!!' }],
+			['wrong wrapped dek length', { wrappedDek: btoa('too-short-for-a-wrapped-key') }],
+			['wrong version', { version: 2 }]
+		])('rejects %s', async (_label, override) => {
+			await EncryptionService.setupWithPassphrase('pw');
+			const meta = { ...EncryptionService.getPersistedMeta(), ...override } as EncryptionMeta;
+
+			expect(EncryptionService.isValidMeta(meta)).toBe(false);
+			// and the guard holds before any key derivation happens
+			expect(await EncryptionService.unwrapDekWithPassphrase(meta, 'pw')).toBeNull();
+		});
+
+		it('treats tampered persisted metadata as not configured', async () => {
+			await EncryptionService.setupWithPassphrase('pw');
+			const meta = EncryptionService.getPersistedMeta()!;
+			localStorage.setItem(
+				ENCRYPTION_META_LOCALSTORAGE_KEY,
+				JSON.stringify({ ...meta, kdfIterations: 2 ** 31 - 1 })
+			);
+
+			expect(EncryptionService.isEnabled()).toBe(false);
+			expect(EncryptionService.getPersistedMeta()).toBeNull();
+		});
+	});
 });
