@@ -84,10 +84,10 @@ static common_params_model model_ref(const std::string & hf_repo, const std::str
     return m;
 }
 
-// the model cache is isolated under a temporary directory, and the local
-// path the handler wires for a file is snapshots/<commit>/<path> inside it
-static const std::filesystem::path cache_dir =
-    std::filesystem::temp_directory_path() / "test-model-resolution-cache";
+// the model cache is isolated under a temporary directory named after the
+// loopback port, so concurrent runs on a shared machine keep their own, and
+// the local path the handler wires for a file is snapshots/<commit>/<path>
+static std::filesystem::path cache_dir;
 
 static std::string cached(std::string repo_id, const std::string & path) {
     string_replace_all(repo_id, "/", "--");
@@ -426,15 +426,18 @@ int main(void) {
     // keep the output down to the reports
     common_log_pause(common_log_main());
 
-    // isolate the cache, its location is read once so it is set
-    // before anything else
-    std::filesystem::remove_all(cache_dir);
-    common_set_env("LLAMA_CACHE", cache_dir.string());
-
     // the loopback endpoint also keeps the client init from rejecting
     // https on the builds without TLS support
     serve_repos();
     int port = g_server.bind_to_any_port("127.0.0.1");
+
+    // isolate the cache, its location is read once so it is set
+    // before anything else
+    cache_dir = std::filesystem::temp_directory_path() /
+                ("test-model-resolution-cache-" + std::to_string(port));
+    std::filesystem::remove_all(cache_dir);
+    common_set_env("LLAMA_CACHE", cache_dir.string());
+
     std::thread server_thread([] { g_server.listen_after_bind(); });
     g_server.wait_until_ready();
     common_set_env("MODEL_ENDPOINT", "http://127.0.0.1:" + std::to_string(port) + "/");

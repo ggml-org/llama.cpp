@@ -126,7 +126,6 @@ public:
 
 using common_http_client_ptr = std::unique_ptr<common_http_client>;
 
-
 static std::pair<common_http_client_ptr, common_http_url> common_http_client_init(const std::string & url) {
     common_http_url parts = common_http_parse_url(url);
 
