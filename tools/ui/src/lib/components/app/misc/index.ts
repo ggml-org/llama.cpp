@@ -53,6 +53,14 @@ export { default as KeyboardShortcutInfo } from './KeyboardShortcutInfo.svelte';
 export { default as CodeBlockActions } from './CodeBlockActions.svelte';
 
 /**
+ * **EncryptionIdleCountdown** - Auto-lock warning indicator
+ *
+ * Floating countdown shown in the top-right corner during the last minute
+ * before the encryption session auto-locks due to inactivity.
+ */
+export { default as EncryptionIdleCountdown } from './EncryptionIdleCountdown.svelte';
+
+/**
  * **Logo** - Application brand mark
  *
  * Inline SVG of the application logo. Accepts styling via the standard

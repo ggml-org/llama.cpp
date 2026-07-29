@@ -1,15 +1,25 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { Eye, Lock, LockOpen, ShieldCheck, ShieldOff, TriangleAlert } from '@lucide/svelte';
+	import {
+		Eye,
+		Lock,
+		LockOpen,
+		ShieldCheck,
+		ShieldOff,
+		Timer,
+		TriangleAlert
+	} from '@lucide/svelte';
 	import { toast } from 'svelte-sonner';
 
 	import * as Alert from '$lib/components/ui/alert';
+	import * as Select from '$lib/components/ui/select';
 	import { DialogConfirmation, DialogEncryptionEnable } from '$lib/components/app';
 	import SettingsGroup from '$lib/components/app/settings/SettingsGroup.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { DatabaseService } from '$lib/services/database.service';
-	import { encryptionStore } from '$lib/stores/encryption.svelte';
+	import { encryptionStore, IDLE_TIMEOUT_OPTIONS } from '$lib/stores/encryption.svelte';
+	import type { IdleTimeoutMinutes } from '$lib/stores/encryption.svelte';
 
 	let newPassphrase = $state('');
 	let newPassphraseConfirm = $state('');
@@ -92,6 +102,11 @@
 			disabling = false;
 		}
 	}
+
+	function handleIdleTimeoutChange(value: string): void {
+		const minutes = Number(value) as IdleTimeoutMinutes;
+		encryptionStore.setIdleTimeout(minutes);
+	}
 </script>
 
 {#if !encryptionStore.isSupported}
@@ -137,7 +152,8 @@
 				<Alert.Title>No recovery if you forget the passphrase</Alert.Title>
 				<Alert.Description class="text-amber-700/90 dark:text-amber-400/90">
 					It is never stored and cannot be reset. Without it, your conversations cannot be decrypted
-					- by you or by anyone else. You will need it on every visit.
+					- by you or by anyone else. You will need it again after inactivity (5 minutes by default,
+					configurable below).
 				</Alert.Description>
 			</Alert.Root>
 
@@ -207,6 +223,38 @@
 						Unlock with your passphrase to continue.
 					</p>
 				{/if}
+			</div>
+		</SettingsGroup>
+
+		<SettingsGroup title="Auto-lock">
+			<div class="grid gap-1">
+				<p class="mb-4 max-w-xl text-sm text-muted-foreground">
+					Skip the passphrase prompt while you stay within this window, even across page refreshes.
+					The key is kept in this browser's storage during the window and removed when it expires -
+					until then, anyone using this browser can read your conversations without the passphrase.
+					Never keeps you unlocked until you lock manually.
+				</p>
+
+				<div class="flex items-center gap-3 max-w-xs">
+					<Timer class="h-4 w-4 text-muted-foreground shrink-0" />
+					<Select.Root
+						type="single"
+						value={String(encryptionStore.idleTimeoutMinutes)}
+						onValueChange={handleIdleTimeoutChange}
+					>
+						<Select.Trigger class="w-[180px]">
+							{IDLE_TIMEOUT_OPTIONS.find((o) => o.value === encryptionStore.idleTimeoutMinutes)
+								?.label ?? '5 minutes'}
+						</Select.Trigger>
+						<Select.Content>
+							{#each IDLE_TIMEOUT_OPTIONS as option (option.value)}
+								<Select.Item value={String(option.value)}>
+									{option.label}
+								</Select.Item>
+							{/each}
+						</Select.Content>
+					</Select.Root>
+				</div>
 			</div>
 		</SettingsGroup>
 

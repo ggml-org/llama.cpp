@@ -91,6 +91,23 @@ export class EncryptionService {
 		this.dek = null;
 	}
 
+	/** Exports the session DEK as base64 for bounded session resume; null when locked */
+	static async exportRawDek(): Promise<string | null> {
+		if (!this.dek) return null;
+		return bytesToBase64(new Uint8Array(await globalThis.crypto.subtle.exportKey('raw', this.dek)));
+	}
+
+	/** Imports a previously exported session DEK, unlocking the session */
+	static async importRawDek(rawDek: string): Promise<void> {
+		this.dek = await globalThis.crypto.subtle.importKey(
+			'raw',
+			base64ToBytes(rawDek) as BufferSource,
+			{ name: 'AES-GCM', length: 256 },
+			true,
+			['encrypt', 'decrypt']
+		);
+	}
+
 	/**
 	 * Disables encryption entirely: removes the wrapped DEK and locks the
 	 * session. Callers must decrypt all data beforehand; anything left
@@ -119,7 +136,7 @@ export class EncryptionService {
 		const salt = globalThis.crypto.getRandomValues(new Uint8Array(PBKDF2_SALT_BYTES));
 		const kek = await deriveKek(passphrase, salt, KDF_ITERATIONS);
 
-		// extractable so it can be wrapped; the session copy below is not
+		// extractable so it can be wrapped and exported for session resume
 		const dek = await globalThis.crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, [
 			'encrypt',
 			'decrypt'
@@ -145,7 +162,7 @@ export class EncryptionService {
 			'raw',
 			rawDek,
 			{ name: 'AES-GCM', length: 256 },
-			false,
+			true,
 			['encrypt', 'decrypt']
 		);
 	}
@@ -160,7 +177,8 @@ export class EncryptionService {
 		const meta = this.readMeta();
 		if (!meta || !passphrase) return false;
 
-		const key = await this.unwrapDekWithPassphrase(meta, passphrase);
+		// extractable so the session can be persisted for bounded resume
+		const key = await this.unwrapDekWithPassphrase(meta, passphrase, true);
 		if (!key) return false;
 		this.dek = key;
 		return true;
@@ -199,7 +217,8 @@ export class EncryptionService {
 	 */
 	static async unwrapDekWithPassphrase(
 		meta: EncryptionMeta,
-		passphrase: string
+		passphrase: string,
+		extractable = false
 	): Promise<CryptoKey | null> {
 		if (!passphrase || !this.isValidMeta(meta)) return null;
 
@@ -211,7 +230,7 @@ export class EncryptionService {
 				kek,
 				{ name: 'AES-GCM', iv: base64ToBytes(meta.wrapIv) as BufferSource },
 				{ name: 'AES-GCM', length: 256 },
-				false,
+				extractable,
 				['encrypt', 'decrypt']
 			);
 		} catch {

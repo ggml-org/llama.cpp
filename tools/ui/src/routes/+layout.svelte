@@ -7,7 +7,7 @@
 	import { untrack } from 'svelte';
 	import { onMount } from 'svelte';
 
-	import { SidebarNavigation } from '$lib/components/app';
+	import { EncryptionIdleCountdown, SidebarNavigation } from '$lib/components/app';
 	import { DialogEncryptionUnlock } from '$lib/components/app/dialogs';
 	import { PwaMetaTags, PwaRefreshAlert } from '$lib/components/pwa';
 	import { pwaAssetsHead } from 'virtual:pwa-assets/head';
@@ -26,7 +26,8 @@
 	import { FAVICON_PATHS, FAVICON_SELECTORS } from '$lib/constants/pwa';
 	import { useKeyboardShortcuts } from '$lib/hooks/use-keyboard-shortcuts.svelte';
 	import { usePwa } from '$lib/hooks/use-pwa.svelte';
-	import { conversations } from '$lib/stores/conversations.svelte';
+	import { conversations, conversationsStore } from '$lib/stores/conversations.svelte';
+	import { encryptionStore } from '$lib/stores/encryption.svelte';
 	import { isMobile } from '$lib/stores/viewport.svelte';
 	import { theme } from '$lib/stores/theme.svelte';
 	import { buildInfoStore } from '$lib/stores/build-info.svelte';
@@ -136,6 +137,35 @@
 		// snapshot of every backend running stream on first load, populates the sidebar spinners
 		// so the user sees each conv that has a live inference, even ones not opened yet
 		void chatStore.syncRemoteRunningStreams();
+
+		// Wipe decrypted in-memory data on lock; persisted data in IndexedDB is
+		// already encrypted at rest. After unlock, reload it.
+		encryptionStore.onLock(() => {
+			conversationsStore.purgeDecryptedData();
+			chatStore.purgeDecryptedData();
+		});
+		encryptionStore.onUnlock(() => {
+			if (!conversationsStore.isInitialized) void conversationsStore.init();
+		});
+
+		// Wire up global user-activity listeners for the encryption idle timer
+		const activityHandler = () => encryptionStore.onUserActivity();
+		window.addEventListener('mousemove', activityHandler, { passive: true });
+		window.addEventListener('keydown', activityHandler, { passive: true });
+		window.addEventListener('click', activityHandler, { passive: true });
+		window.addEventListener('scroll', activityHandler, { passive: true });
+		window.addEventListener('touchstart', activityHandler, { passive: true });
+
+		// Teardown on layout destroy
+		$effect(() => {
+			return () => {
+				window.removeEventListener('mousemove', activityHandler);
+				window.removeEventListener('keydown', activityHandler);
+				window.removeEventListener('click', activityHandler);
+				window.removeEventListener('scroll', activityHandler);
+				window.removeEventListener('touchstart', activityHandler);
+			};
+		});
 	});
 
 	// refresh that snapshot when the tab returns to the foreground, a stream may have advanced
@@ -285,6 +315,8 @@
 	<Toaster richColors />
 
 	<DialogEncryptionUnlock />
+
+	<EncryptionIdleCountdown />
 </Tooltip.Provider>
 
 <!-- PWA update prompt + version -->

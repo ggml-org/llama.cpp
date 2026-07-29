@@ -5,6 +5,7 @@
 	import { DialogModelNotAvailable } from '$lib/components/app';
 	import { APP_NAME, ROUTES } from '$lib/constants';
 	import { chatStore } from '$lib/stores/chat.svelte';
+	import { encryptionStore } from '$lib/stores/encryption.svelte';
 	import { conversationsStore, activeConversation } from '$lib/stores/conversations.svelte';
 	import { modelsStore, modelOptions } from '$lib/stores/models.svelte';
 
@@ -77,6 +78,12 @@
 	});
 
 	$effect(() => {
+		// decrypted data is purged on lock; wait for unlock, then reload
+		if (encryptionStore.needsUnlock) {
+			currentChatId = undefined;
+			return;
+		}
+
 		if (chatId && chatId !== currentChatId) {
 			currentChatId = chatId;
 			urlParamsProcessed = false; // Reset for new chat

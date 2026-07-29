@@ -166,6 +166,18 @@ class ConversationsStore {
 	}
 
 	/**
+	 * Drops decrypted in-memory data on lock; persisted data stays encrypted
+	 * in IndexedDB and is reloaded via init() after unlock.
+	 */
+	purgeDecryptedData(): void {
+		this.conversations = [];
+		this.activeConversation = null;
+		this.activeMessages = [];
+		this.isInitialized = false;
+		this.initPromise = null;
+	}
+
+	/**
 	 * Register a callback for message updates from other stores.
 	 * Called by chatStore during initialization.
 	 */

@@ -550,6 +550,18 @@ class ChatStore {
 		this.isStreamingActive = false;
 	}
 
+	/**
+	 * Drops decrypted in-memory data on lock; persisted data stays encrypted
+	 * in IndexedDB and running streams re-attach after unlock.
+	 */
+	purgeDecryptedData(): void {
+		this.currentResponse = '';
+		this.chatStreamingStates.clear();
+		this.errorDialogState = null;
+		this._pendingDraftMessage = '';
+		this._pendingDraftFiles = [];
+	}
+
 	setActiveProcessingConversation(conversationId: string | null): void {
 		this.activeConversationId = conversationId;
 		this.activeProcessingState = conversationId

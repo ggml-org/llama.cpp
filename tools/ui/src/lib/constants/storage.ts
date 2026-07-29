@@ -28,6 +28,12 @@ export const DISMISSED_RECOMMENDED_MCP_SERVERS_LOCALSTORAGE_KEY = `${STORAGE_APP
 /** Wrapped data encryption key and KDF parameters (see EncryptionService) */
 export const ENCRYPTION_META_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.encryptionMeta`;
 
+/** Auto-lock idle timeout in minutes (see EncryptionStore) */
+export const ENCRYPTION_IDLE_TIMEOUT_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.encryptionIdleTimeout`;
+
+/** Resumable encryption session: raw DEK + last activity timestamp (see EncryptionStore) */
+export const ENCRYPTION_SESSION_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.encryptionSession`;
+
 /** Key prefix for per-conversation resumable stream state, conversationId is appended */
 export const STREAM_RESUME_LOCALSTORAGE_KEY_PREFIX = `${STORAGE_APP_NAME}.streamResume.`;
 

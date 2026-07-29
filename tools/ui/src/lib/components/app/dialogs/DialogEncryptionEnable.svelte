@@ -55,7 +55,10 @@
 			</li>
 			<li class="flex items-start gap-2">
 				<RefreshCw class="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-				<span>You will be asked for it on every visit. It is held in memory only.</span>
+				<span>
+					You will be asked for it again after 5 minutes of inactivity (configurable in Security
+					settings once enabled).
+				</span>
 			</li>
 			<li class="flex items-start gap-2">
 				<Eye class="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
