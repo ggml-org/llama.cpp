@@ -1131,6 +1131,7 @@ static common_chat_params common_chat_params_init_qwen3_coder(const common_chat_
     if (supports_reasoning) {
         data.thinking_start_tag = "<think>";
         // Support both </think> and <tool_call> as reasoning end sequences.
+        // <function= is omitted, as it is a workaround for Qwen3-Coder which is not a thinking model
         data.thinking_end_tags = { "</think>", "<tool_call>" };
         data.preserved_tokens.insert(data.preserved_tokens.end(), { "<think>", "</think>" });
     }
