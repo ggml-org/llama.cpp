@@ -61,6 +61,13 @@ void llama_model_motif3::load_arch_hparams(llama_model_loader & ml) {
         (hparams.n_head() - hparams.motif_n_noise_heads) % hparams.motif_n_noise_heads != 0) {
         throw std::runtime_error("Motif-3: head_count must be divisible into noise groups");
     }
+    if (hparams.n_rot() == 0 || hparams.n_rot() % 2 != 0 || hparams.n_rot() >= hparams.n_embd_head_k()) {
+        throw std::runtime_error("Motif-3: rope dims must be even and smaller than the K head size");
+    }
+    if (hparams.n_head_kv() == 0 || hparams.n_head() % hparams.n_head_kv() != 0) {
+        throw std::runtime_error("Motif-3: head_count must be a multiple of head_count_kv");
+    }
+
 
     switch (hparams.n_layer()) {
         case 53: type = LLM_TYPE_314B_A13B; break;
@@ -91,10 +98,7 @@ void llama_model_motif3::load_arch_tensors(llama_model_loader &) {
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
-    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
-    if (!output) {
-        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
-    }
+    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, 0);
 
     for (int i = 0; i < n_layer; ++i) {
         auto & layer = layers[i];
@@ -430,7 +434,7 @@ ggml_tensor * llama_model_motif3::graph::build_moe_polynorm(const llama_model & 
     if (hparams.expert_weights_norm) {
         weights = ggml_reshape_2d(ctx0, weights, n_expert_used, nt);
         ggml_tensor * weights_sum = ggml_sum_rows(ctx0, weights); // [1, nt]
-        weights_sum = ggml_clamp(ctx0, weights_sum, 6.103515625e-5f, INFINITY);
+        weights_sum = ggml_clamp(ctx0, weights_sum, 1e-20f, INFINITY);
         weights = ggml_div(ctx0, weights, weights_sum);
         weights = ggml_reshape_3d(ctx0, weights, 1, n_expert_used, nt);
         cb(weights, "ffn_moe_weights_norm", il);
