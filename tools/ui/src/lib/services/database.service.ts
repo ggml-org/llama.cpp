@@ -479,7 +479,7 @@ export class DatabaseService {
 	 * @returns The new pinned status
 	 */
 	static async toggleConversationPin(id: string): Promise<boolean> {
-		const conversation = await db.conversations.get(id);
+		const conversation = await db[IDXDB_TABLES.conversations].get(id);
 		if (!conversation) {
 			throw new Error(`Conversation ${id} not found`);
 		}
