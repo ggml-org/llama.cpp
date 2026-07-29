@@ -34,6 +34,8 @@ void ggml_openvino_device_config::init() {
         "GGML_OPENVINO_PREFILL_DEVICE",
         "GGML_OPENVINO_DECODE_DEVICE",
         "GGML_OPENVINO_PHASE_SPLIT",
+        "GGML_OPENVINO_RACE_CPU_DEVICE",
+        "GGML_OPENVINO_RACE_GPU_DEVICE",
         // Integer values (use ggml_openvino_getenv_int)
         "GGML_OPENVINO_PREFILL_CHUNK_SIZE",
         // Boolean toggles (treated as int flags via ggml_openvino_getenv_int)
@@ -48,6 +50,9 @@ void ggml_openvino_device_config::init() {
         "GGML_OPENVINO_DISABLE_CACHE",
         "GGML_OPENVINO_DISABLE_KV_SLICE",
         "GGML_OPENVINO_MANUAL_GQA_ATTN",
+        "GGML_OPENVINO_DECODE_RACE",
+        "GGML_OPENVINO_RACE_LOSER_SLEEP_TOKENS",
+        "GGML_OPENVINO_DECODE_RACE_DIAG",
     };
 
     for (const char * const & env_var : env_var_names) {
@@ -74,10 +79,32 @@ void ggml_openvino_device_config::init() {
     prefill_device = resolve_device("GGML_OPENVINO_PREFILL_DEVICE", device_name);
     decode_device  = resolve_device("GGML_OPENVINO_DECODE_DEVICE", device_name);
 
-    const bool phase_split_env = ggml_openvino_getenv_int("GGML_OPENVINO_PHASE_SPLIT") != 0;
-    phase_split = phase_split_env || prefill_device != decode_device;
+    decode_race = ggml_openvino_getenv_int("GGML_OPENVINO_DECODE_RACE") != 0;
+    race_cpu_device = resolve_device("GGML_OPENVINO_RACE_CPU_DEVICE", "CPU");
+    race_gpu_device = resolve_device("GGML_OPENVINO_RACE_GPU_DEVICE",
+                                     ggml_openvino_device_is_gpu(decode_device) ? decode_device : "GPU.0");
+    if (decode_race && !ggml_openvino_device_is_gpu(race_gpu_device)) {
+        GGML_LOG_WARN("OpenVINO decode race: GPU device %s invalid for race, using GPU.0\n", race_gpu_device.c_str());
+        race_gpu_device = resolve_device("GGML_OPENVINO_RACE_GPU_DEVICE", "GPU.0");
+    }
 
-    if (phase_split) {
+    const bool phase_split_env = ggml_openvino_getenv_int("GGML_OPENVINO_PHASE_SPLIT") != 0;
+    phase_split = phase_split_env || prefill_device != decode_device || decode_race;
+
+    if (decode_race) {
+        if (!ggml_openvino_getenv_str("GGML_OPENVINO_PREFILL_DEVICE", nullptr)) {
+            prefill_device = race_cpu_device;
+        }
+        decode_device = race_gpu_device;
+        race_loser_sleep_tokens = ggml_openvino_getenv_int("GGML_OPENVINO_RACE_LOSER_SLEEP_TOKENS", 32);
+        if (race_loser_sleep_tokens <= 0) {
+            race_loser_sleep_tokens = 32;
+        }
+        race_diag = ggml_openvino_getenv_int("GGML_OPENVINO_DECODE_RACE_DIAG", 1);
+        GGML_LOG_INFO("OpenVINO decode race: prefill=%s race CPU=%s GPU=%s loser_sleep=%d (KV USM host)\n",
+                      prefill_device.c_str(), race_cpu_device.c_str(), race_gpu_device.c_str(),
+                      race_loser_sleep_tokens);
+    } else if (phase_split) {
         // Host-visible weights/KV when CPU participates in prefill (see buffer_init_tensor).
         if (!ggml_openvino_device_is_gpu(prefill_device)) {
             device_name = prefill_device;
@@ -120,7 +147,8 @@ void ggml_openvino_device_config::init() {
     // Initialize remote context with queue sharing for GPU
     const bool needs_gpu_remote = ggml_openvino_device_is_gpu(device_name) ||
                                   (phase_split && (ggml_openvino_device_is_gpu(prefill_device) ||
-                                                   ggml_openvino_device_is_gpu(decode_device)));
+                                                   ggml_openvino_device_is_gpu(decode_device))) ||
+                                  (decode_race && ggml_openvino_device_is_gpu(race_gpu_device));
     if (needs_gpu_remote) {
         // Create OpenCL context and queue
         cl_int err;
@@ -205,12 +233,35 @@ const std::string & ggml_openvino_get_decode_device() {
 
 bool ggml_openvino_phase_split_shared_kv() {
     const auto & cfg = ggml_openvino_get_device_config();
+    if (cfg.decode_race) {
+        return true;
+    }
     if (!cfg.phase_split) {
         return false;
     }
     const bool pp_gpu = ggml_openvino_device_is_gpu(cfg.prefill_device);
     const bool tg_gpu = ggml_openvino_device_is_gpu(cfg.decode_device);
     return pp_gpu != tg_gpu;
+}
+
+bool ggml_openvino_decode_race_enabled() {
+    return ggml_openvino_get_device_config().decode_race;
+}
+
+const std::string & ggml_openvino_get_race_cpu_device() {
+    return ggml_openvino_get_device_config().race_cpu_device;
+}
+
+const std::string & ggml_openvino_get_race_gpu_device() {
+    return ggml_openvino_get_device_config().race_gpu_device;
+}
+
+int ggml_openvino_race_loser_sleep_tokens() {
+    return ggml_openvino_get_device_config().race_loser_sleep_tokens;
+}
+
+bool ggml_openvino_decode_race_diag_enabled() {
+    return ggml_openvino_get_device_config().race_diag != 0;
 }
 
 // Get the value of a GGML_OPENVINO_* env var as a string. Returns

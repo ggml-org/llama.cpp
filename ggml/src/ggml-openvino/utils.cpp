@@ -1,5 +1,6 @@
 #include "utils.h"
 
+#include "ggml-openvino-decode-race.h"
 #include "ggml-impl.h"
 #include "ggml-openvino-extra.h"
 #include "ggml-openvino/ggml-decoder.h"
@@ -175,6 +176,9 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
     if (phase_split) {
         const auto * inp_pos = get_inp_pos_tensor(cgraph);
         is_prefill = get_is_prefill(inp_pos);
+        if (!is_prefill && ggml_openvino_decode_race_enabled()) {
+            return ov_graph_compute_decode_race(cgraph, r_ctx);
+        }
         active_device = is_prefill ? ggml_openvino_get_prefill_device() : ggml_openvino_get_decode_device();
     }
 

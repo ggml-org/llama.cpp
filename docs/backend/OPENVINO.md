@@ -638,6 +638,25 @@ export GGML_OPENVINO_STATEFUL_EXECUTION=1
 
 Integration test (requires `LLAMACPP_TEST_MODELFILE`): `tests/test-openvino-phase-split.sh`.
 
+**Decode race (experimental):** on each decode step, run stateless inference on CPU and GPU in parallel; the first finished result updates KV (USM host). Prefill uses `GGML_OPENVINO_PREFILL_DEVICE` (default CPU). Requires `GGML_OPENVINO_STATEFUL_EXECUTION=0`. Use `llama-bench --no-warmup` for benchmarks.
+
+After a device loses a dual race, it skips dual races for `GGML_OPENVINO_RACE_LOSER_SLEEP_TOKENS` decode steps (single-device infer only), then re-enters the race. Default sleep is **32** tokens. Set `GGML_OPENVINO_DECODE_RACE_DIAG=1` (default) to print a short summary on process exit (dual vs single-step counts, winner flips, latency gaps).
+
+For profiling, a **degenerate** case (one dual race per run, then only the winner device): set `GGML_OPENVINO_RACE_LOSER_SLEEP_TOKENS` to a very large value (e.g. `1000000`). GPU-only decode steps use primary KV directly; shadow copies run in bulk only before a dual race (so the GPU side does not clobber KV if CPU wins).
+
+```bash
+export GGML_OPENVINO_DECODE_RACE=1
+export GGML_OPENVINO_RACE_CPU_DEVICE=CPU
+export GGML_OPENVINO_RACE_GPU_DEVICE=GPU.0
+export GGML_OPENVINO_RACE_LOSER_SLEEP_TOKENS=32
+export GGML_OPENVINO_DECODE_RACE_DIAG=1
+export GGML_OPENVINO_PREFILL_DEVICE=CPU
+export GGML_OPENVINO_STATEFUL_EXECUTION=0
+
+./build/bin/llama-bench -m model.gguf -r 3 --no-warmup -pg 512,128
+# helper: scripts/bench-openvino-decode-race.sh model.gguf
+```
+
 ### 5. Docker Build
 
 You can build and run llama.cpp with OpenVINO backend using Docker.
@@ -728,6 +747,11 @@ Boolean flags follow a uniform convention: set to a **positive integer** (e.g. `
 | `GGML_OPENVINO_PHASE_SPLIT`       | Boolean   | `0`        | Enable separate OpenVINO devices for prefill (multi-token) and decode (single-token) steps. Also enabled automatically when prefill and decode device variables differ. |
 | `GGML_OPENVINO_PREFILL_DEVICE`    | String    | `GGML_OPENVINO_DEVICE` | OpenVINO device for prefill when phase split is active (for example `CPU`). |
 | `GGML_OPENVINO_DECODE_DEVICE`     | String    | `GGML_OPENVINO_DEVICE` | OpenVINO device for decode when phase split is active (for example `GPU.0`). |
+| `GGML_OPENVINO_DECODE_RACE`       | Boolean   | `0`        | Experimental: parallel CPU+GPU decode race each token (stateless, dual KV shadow on GPU). |
+| `GGML_OPENVINO_RACE_CPU_DEVICE`   | String    | `CPU`      | CPU device for decode race. |
+| `GGML_OPENVINO_RACE_GPU_DEVICE`   | String    | `GPU.0`    | GPU device for decode race. |
+| `GGML_OPENVINO_RACE_LOSER_SLEEP_TOKENS` | Integer | `32`   | After losing a dual race, skip dual races on that device for this many decode steps (single-device infer), then race again. |
+| `GGML_OPENVINO_DECODE_RACE_DIAG`  | Boolean   | `1`        | On process exit, print decode-race summary (dual/cpu-only/gpu-only counts, winner flips, latency stats). |
 | `GGML_OPENVINO_CACHE_DIR`         | String    | `not set`  | Directory for OpenVINO model caching (recommended: `/tmp/ov_cache`). Enables model caching when set. **Not supported on NPU devices.** |
 | `GGML_OPENVINO_PREFILL_CHUNK_SIZE`| Integer   | `256`      | Token chunk size for **NPU** prefill (NPU-only; ignored on CPU/GPU). Must be a positive integer; otherwise the default is used. |
 | `GGML_OPENVINO_STATEFUL_EXECUTION`| Boolean   | `0`        | Enable stateful KV cache for better performance. Recommended on CPU, GPU.                                   |
