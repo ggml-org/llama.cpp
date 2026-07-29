@@ -46,7 +46,14 @@
 		assistantMessages: number;
 		messageTypes: string[];
 	} | null>(null);
-	let editedContent = $derived(message.content);
+	// The system message placeholder must never surface as editable content; keeping
+	// it in the derived (not just in handleEdit) guards against prop invalidation
+	// reverting the override while editing
+	let editedContent = $derived(
+		message.role === MessageRole.SYSTEM && message.content === SYSTEM_MESSAGE_PLACEHOLDER
+			? ''
+			: message.content
+	);
 
 	let rawEditContent = $derived.by(() => {
 		if (message.role !== MessageRole.ASSISTANT) return undefined;
