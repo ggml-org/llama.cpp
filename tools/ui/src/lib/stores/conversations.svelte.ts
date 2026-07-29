@@ -246,15 +246,11 @@ class ConversationsStore {
 	 */
 	async createConversation(name?: string): Promise<string> {
 		const conversationName = name || `Chat ${new Date().toLocaleString()}`;
-		const conversation = await DatabaseService.createConversation(conversationName);
 
 		// No MCP override list is seeded: getAllMcpServerOverrides resolves
 		// servers without a per-conversation override to `mcpServers[i].enabled`,
 		// and only explicit toggles are stored on the conversation.
-
-		// Inherit the global reasoning default into the new conversation
-		conversation.reasoningEffort = this.pendingReasoningEffort;
-		await DatabaseService.updateConversation(conversation.id, {
+		const conversation = await DatabaseService.createConversation(conversationName, {
 			reasoningEffort: this.pendingReasoningEffort
 		});
 

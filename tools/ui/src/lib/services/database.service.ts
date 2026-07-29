@@ -31,14 +31,19 @@ export class DatabaseService {
 	 * Creates a new conversation.
 	 *
 	 * @param name - Name of the conversation
+	 * @param fields - Optional extra fields (e.g. reasoningEffort)
 	 * @returns The created conversation
 	 */
-	static async createConversation(name: string): Promise<DatabaseConversation> {
+	static async createConversation(
+		name: string,
+		fields?: Partial<Omit<DatabaseConversation, 'id' | 'name' | 'lastModified'>>
+	): Promise<DatabaseConversation> {
 		const conversation: DatabaseConversation = {
 			id: uuid(),
 			name,
 			lastModified: Date.now(),
-			currNode: ''
+			currNode: '',
+			...fields
 		};
 
 		await db[IDXDB_TABLES.conversations].add(conversation);
