@@ -864,6 +864,14 @@ std::string string_from(const struct llama_context * ctx, const struct llama_bat
 bool glob_match(const std::string & pattern, const std::string & str);
 
 //
+// Environment utils
+//
+
+// portable environment access, an unset variable reads as an empty string
+std::string common_get_env(const std::string & name);
+void        common_set_env(const std::string & name, const std::string & value);
+
+//
 // Filesystem utils
 //
 

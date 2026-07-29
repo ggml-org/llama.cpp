@@ -998,6 +998,19 @@ bool fs_is_directory(const std::string & path) {
     return std::filesystem::exists(dir) && std::filesystem::is_directory(dir);
 }
 
+std::string common_get_env(const std::string & name) {
+    const char * value = std::getenv(name.c_str());
+    return value == nullptr ? "" : value;
+}
+
+void common_set_env(const std::string & name, const std::string & value) {
+#if defined(_WIN32)
+    _putenv_s(name.c_str(), value.c_str());
+#else
+    setenv(name.c_str(), value.c_str(), 1);
+#endif
+}
+
 std::string fs_get_cache_directory() {
     std::string cache_directory = "";
     auto ensure_trailing_slash = [](std::string p) {

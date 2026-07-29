@@ -428,14 +428,6 @@ static void test_task_assembly() {
     g_repos.clear();
 }
 
-static void set_env(const char * name, const char * value) {
-#if defined(_WIN32)
-    _putenv_s(name, value);
-#else
-    setenv(name, value, 1);
-#endif
-}
-
 int main(void) {
     // the negative cases legitimately log errors on every reordering,
     // keep the output down to the reports
@@ -444,7 +436,7 @@ int main(void) {
     // isolate the cache and serve every HTTP request from the stub,
     // the cache location is read once so it is set before anything else
     std::filesystem::remove_all(cache_dir);
-    set_env("LLAMA_CACHE", cache_dir.string().c_str());
+    common_set_env("LLAMA_CACHE", cache_dir.string());
 
     // the loopback endpoint also keeps the client init from rejecting
     // https on the builds without TLS support
@@ -452,7 +444,7 @@ int main(void) {
     int port = g_server.bind_to_any_port("127.0.0.1");
     std::thread server_thread([] { g_server.listen_after_bind(); });
     g_server.wait_until_ready();
-    set_env("MODEL_ENDPOINT", ("http://127.0.0.1:" + std::to_string(port) + "/").c_str());
+    common_set_env("MODEL_ENDPOINT", "http://127.0.0.1:" + std::to_string(port) + "/");
 
     test_plan_resolution();
     test_task_assembly();
