@@ -3,12 +3,17 @@
 	import { page } from '$app/state';
 	import { browser } from '$app/environment';
 
-	import { SearchInput, SidebarNavigationSearchResults } from '$lib/components/app';
+	import {
+		SearchInput,
+		SidebarNavigationSearchResults,
+		DialogExportEncryption
+	} from '$lib/components/app';
 	import { ROUTES } from '$lib/constants/routes';
 	import { RouterService } from '$lib/services/router.service';
 	import { conversationsStore, conversations } from '$lib/stores/conversations.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
 	import { isMobile } from '$lib/stores/viewport.svelte';
+	import { encryptionStore } from '$lib/stores/encryption.svelte';
 
 	let searchQuery = $state('');
 	let searchInputRef = $state<HTMLInputElement | null>(null);
@@ -59,6 +64,18 @@
 		chatStore.stopGenerationForChat(id);
 	}
 
+	let showExportEncryptionDialog = $state(false);
+	let pendingExportId: string | null = null;
+
+	function handleExportConversation(id: string) {
+		if (encryptionStore.isUnlocked) {
+			pendingExportId = id;
+			showExportEncryptionDialog = true;
+		} else {
+			conversationsStore.downloadConversation(id);
+		}
+	}
+
 	function handleBack() {
 		if (history.length > 1) {
 			history.back();
@@ -88,8 +105,20 @@
 		{filteredConversations}
 		{currentChatId}
 		onSelect={selectConversation}
+		onExport={handleExportConversation}
 		onEdit={handleEditConversation}
 		onDelete={handleDeleteConversation}
 		onStop={handleStopGeneration}
 	/>
 </div>
+
+<DialogExportEncryption
+	bind:open={showExportEncryptionDialog}
+	onConfirm={(unencrypted) => {
+		if (pendingExportId) {
+			conversationsStore.downloadConversation(pendingExportId, { encrypted: !unencrypted });
+		}
+		pendingExportId = null;
+	}}
+	onCancel={() => (pendingExportId = null)}
+/>

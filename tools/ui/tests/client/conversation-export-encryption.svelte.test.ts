@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { strFromU8, unzipSync } from 'fflate';
 import { DatabaseService } from '$lib/services/database.service';
 import { EncryptionService } from '$lib/services/encryption.service';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
@@ -6,6 +7,7 @@ import { ENCRYPTION_META_LOCALSTORAGE_KEY } from '$lib/constants';
 import { MessageRole, MessageType } from '$lib/enums';
 
 afterEach(async () => {
+	vi.restoreAllMocks();
 	EncryptionService.disable();
 	localStorage.removeItem(ENCRYPTION_META_LOCALSTORAGE_KEY);
 	const conversations = await DatabaseService.getAllConversations();
@@ -101,5 +103,54 @@ describe('encrypted conversation export', () => {
 		expect(decrypted.conv.name).toBe('secret chat');
 		expect((decrypted.conv as { encryption?: unknown }).encryption).toBeUndefined();
 		expect(decrypted.messages.map((m) => m.content)).toContain('secret body');
+	});
+
+	it('encrypts store exports only when requested', async () => {
+		await EncryptionService.setupWithPassphrase('pw');
+
+		const conv = await DatabaseService.createConversation('secret chat');
+		const rootId = await DatabaseService.createRootMessage(conv.id);
+		await DatabaseService.createMessageBranch(
+			{
+				convId: conv.id,
+				type: MessageType.TEXT,
+				timestamp: Date.now(),
+				role: MessageRole.USER,
+				content: 'secret body',
+				parent: null,
+				children: []
+			} as Omit<DatabaseMessage, 'id'>,
+			rootId
+		);
+
+		const blobs: Blob[] = [];
+		vi.spyOn(URL, 'createObjectURL').mockImplementation((blob) => {
+			blobs.push(blob as Blob);
+			return 'blob:mock';
+		});
+		vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+		vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+
+		await conversationsStore.bulkExportConversations([conv.id], { encrypted: true });
+		expect(blobs).toHaveLength(1);
+		let entries = unzipSync(new Uint8Array(await blobs[0].arrayBuffer()));
+		let header = JSON.parse(strFromU8(Object.values(entries)[0]).split('\n')[0]);
+		expect(header.encryption).toBeDefined();
+		expect(EncryptionService.isEncryptedValue(header.name)).toBe(true);
+
+		blobs.length = 0;
+		await conversationsStore.bulkExportConversations([conv.id]);
+		expect(blobs).toHaveLength(1);
+		entries = unzipSync(new Uint8Array(await blobs[0].arrayBuffer()));
+		header = JSON.parse(strFromU8(Object.values(entries)[0]).split('\n')[0]);
+		expect(header.encryption).toBeUndefined();
+		expect(header.name).toBe('secret chat');
+
+		blobs.length = 0;
+		await conversationsStore.downloadConversation(conv.id, { encrypted: true });
+		expect(blobs).toHaveLength(1);
+		header = JSON.parse((await blobs[0].text()).split('\n')[0]);
+		expect(header.encryption).toBeDefined();
+		expect(EncryptionService.isEncryptedValue(header.name)).toBe(true);
 	});
 });

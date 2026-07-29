@@ -124,6 +124,7 @@ export { default as DialogConfirmation } from './DialogConfirmation.svelte';
 export { default as DialogConversationRename } from './DialogConversationRename.svelte';
 
 export { default as DialogEncryptionUnlock } from './DialogEncryptionUnlock.svelte';
+export { default as DialogExportEncryption } from './DialogExportEncryption.svelte';
 
 /**
  *

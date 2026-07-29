@@ -5,6 +5,7 @@
 	import {
 		ActionIcon,
 		DialogConversationRename,
+		DialogExportEncryption,
 		Logo,
 		SidebarNavigationConversationList,
 		SidebarNavigationActions
@@ -24,6 +25,7 @@
 	import { config } from '$lib/stores/settings.svelte';
 	import { RouterService } from '$lib/services/router.service';
 	import { isMobile } from '$lib/stores/viewport.svelte';
+	import { encryptionStore } from '$lib/stores/encryption.svelte';
 	import { TooltipSide } from '$lib/enums';
 	import { device } from '$lib/stores/device.svelte';
 	import { circIn } from 'svelte/easing';
@@ -189,7 +191,28 @@
 	async function handleBulkExport() {
 		const ids = Array.from(selectedIds);
 		if (ids.length === 0) return;
-		await conversationsStore.bulkExportConversations(ids);
+		requestExport((unencrypted) =>
+			conversationsStore.bulkExportConversations(ids, { encrypted: !unencrypted })
+		);
+	}
+
+	function handleExportConversation(id: string) {
+		requestExport((unencrypted) =>
+			conversationsStore.downloadConversation(id, { encrypted: !unencrypted })
+		);
+	}
+
+	// With encryption enabled, exporting asks whether to keep the data encrypted
+	let showExportEncryptionDialog = $state(false);
+	let pendingExport: ((unencrypted: boolean) => void) | null = null;
+
+	function requestExport(action: (unencrypted: boolean) => void) {
+		if (encryptionStore.isUnlocked) {
+			pendingExport = action;
+			showExportEncryptionDialog = true;
+		} else {
+			action(true);
+		}
 	}
 
 	const marquee = useMarqueeSelection({
@@ -389,6 +412,7 @@
 						onSelect={selectConversation}
 						onEdit={handleEditConversation}
 						onDelete={handleDeleteConversation}
+						onExport={handleExportConversation}
 						onStop={handleStopGeneration}
 						onToggleSelect={toggleSelected}
 						onEnterSelectionMode={enterSelectionMode}
@@ -412,6 +436,15 @@
 		</div>
 	</aside>
 {/if}
+
+<DialogExportEncryption
+	bind:open={showExportEncryptionDialog}
+	onConfirm={(unencrypted) => {
+		pendingExport?.(unencrypted);
+		pendingExport = null;
+	}}
+	onCancel={() => (pendingExport = null)}
+/>
 
 <DialogConversationRename
 	bind:open={renameDialogOpen}
