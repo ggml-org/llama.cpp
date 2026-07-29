@@ -16,6 +16,7 @@ class EncryptionStore {
 
 	needsUnlock = $derived(this.isEnabled && !this.isUnlocked);
 
+	private unlockPromise: Promise<void> | null = null;
 	private unlockResolver: (() => void) | null = null;
 
 	refresh(): void {
@@ -32,9 +33,14 @@ class EncryptionStore {
 		this.refresh();
 		if (!this.isEnabled || this.isUnlocked) return Promise.resolve();
 
-		return new Promise((resolve) => {
-			this.unlockResolver = resolve;
-		});
+		// Concurrent callers share a single gate
+		if (!this.unlockPromise) {
+			this.unlockPromise = new Promise((resolve) => {
+				this.unlockResolver = resolve;
+			});
+		}
+
+		return this.unlockPromise;
 	}
 
 	async unlockWithPassphrase(passphrase: string): Promise<boolean> {
@@ -43,6 +49,7 @@ class EncryptionStore {
 			this.refresh();
 			this.unlockResolver?.();
 			this.unlockResolver = null;
+			this.unlockPromise = null;
 		}
 		return unlocked;
 	}
@@ -64,6 +71,9 @@ class EncryptionStore {
 	disable(): void {
 		EncryptionService.disable();
 		this.refresh();
+		this.unlockResolver?.();
+		this.unlockResolver = null;
+		this.unlockPromise = null;
 	}
 }
 
