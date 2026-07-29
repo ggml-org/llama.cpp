@@ -192,8 +192,8 @@ static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
         try {                                                       \
             err_ = (err);                                           \
         } catch (vk::DeviceLostError &) {                           \
-            ggml_vk_print_device_fault_info(dev);                   \
-            fprintf(stderr, "ggml_vulkan: %s error VK_ERROR_DEVICE_LOST at %s:%d\n", \
+            ggml_vk_print_device_lost_info(dev);                    \
+            fprintf(stderr, "ggml_vulkan: %s at %s:%d\n",           \
                 #err, __FILE__, __LINE__);                          \
             exit(1);                                                \
         }                                                           \
@@ -311,6 +311,7 @@ struct vk_command_pool {
 };
 
 static void ggml_vk_print_device_fault_info(const vk_device& device);
+static void ggml_vk_print_device_lost_info(const vk_device& device);
 
 // Prevent simultaneous submissions to the same queue.
 struct vk_queue_handle {
@@ -329,7 +330,7 @@ struct vk_queue_handle_synchronized : vk_queue_handle {
         try {
             queue.submit(submits, fence);
         } catch (vk::DeviceLostError &) {
-            ggml_vk_print_device_fault_info(device);
+            ggml_vk_print_device_lost_info(device);
             throw;
         }
     }
@@ -343,7 +344,7 @@ struct vk_queue_handle_unsynchronized : vk_queue_handle {
         try {
             queue.submit(submits, fence);
         } catch (vk::DeviceLostError &) {
-            ggml_vk_print_device_fault_info(device);
+            ggml_vk_print_device_lost_info(device);
             throw;
         }
     }
@@ -836,6 +837,10 @@ struct vk_device_struct {
     PFN_vkGetDeviceFaultInfoEXT pfn_vkGetDeviceFaultInfoEXT {};
 
     bool serialize_submissions {};
+
+    const ggml_cgraph * diag_cgraph {};
+    int diag_prev_start = -1;
+    int diag_prev_end = -1;
 
     size_t idx;
 
@@ -2110,6 +2115,17 @@ static void ggml_vk_print_node_list(const ggml_cgraph * cgraph, int start, int e
     fprintf(stderr, "  total: %d ops, %.2f GFLOP\n", n_ops, total_flops / 1e9);
 }
 
+static void ggml_vk_print_device_lost_info(const vk_device& device) {
+    ggml_vk_print_device_fault_info(device);
+    if (device->serialize_submissions && device->diag_cgraph != nullptr && device->diag_prev_start >= 0) {
+        fprintf(stderr, "ggml_vulkan: device lost on %s, likely caused by previous submission (nodes %d to %d):\n",
+                device->name.c_str(), device->diag_prev_start, device->diag_prev_end);
+        ggml_vk_print_node_list(device->diag_cgraph, device->diag_prev_start, device->diag_prev_end);
+    } else {
+        fprintf(stderr, "ggml_vulkan: device lost on %s\n", device->name.c_str());
+    }
+}
+
 class vk_perf_logger {
   public:
     void print_timings(bool force = false) {
@@ -2533,8 +2549,8 @@ static void ggml_vk_wait_for_fence(ggml_backend_vk_context * ctx) {
         try {
             result = ctx->device->device.getFenceStatus(ctx->fence);
         } catch (vk::DeviceLostError &) {
-            ggml_vk_print_device_fault_info(ctx->device);
-            fprintf(stderr, "ggml_vulkan: getFenceStatus VK_ERROR_DEVICE_LOST at %s:%d\n", __FILE__, __LINE__);
+            ggml_vk_print_device_lost_info(ctx->device);
+            fprintf(stderr, "ggml_vulkan: getFenceStatus at %s:%d\n", __FILE__, __LINE__);
             exit(1);
         }
         if (result == vk::Result::eSuccess) {
@@ -16147,18 +16163,8 @@ static void ggml_vk_synchronize(ggml_backend_vk_context * ctx) {
         }
 
         if (ctx->device->serialize_submissions) {
-            try {
-                ggml_vk_submit(compute_ctx, ctx->fence);
-                auto res = ctx->device->device.waitForFences({ ctx->fence }, true, UINT64_MAX);
-                if (res != vk::Result::eSuccess) {
-                    fprintf(stderr, "ggml_vulkan: waitForFences error in synchronize\n");
-                    exit(1);
-                }
-            } catch (vk::DeviceLostError &) {
-                ggml_vk_print_device_fault_info(ctx->device);
-                fprintf(stderr, "ggml_vulkan: device lost during synchronize submission\n");
-                throw;
-            }
+            ggml_vk_submit(compute_ctx, ctx->fence);
+            VK_CHECK(ctx->device->device.waitForFences({ ctx->fence }, true, UINT64_MAX), "synchronize waitForFences", ctx->device);
             ctx->device->device.resetFences({ ctx->fence });
         } else {
             ggml_vk_submit(compute_ctx, {});
@@ -16744,6 +16750,10 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
     VK_LOG_DEBUG("ggml_backend_vk_graph_compute(" << cgraph->n_nodes << " nodes)");
     ggml_backend_vk_context * ctx = (ggml_backend_vk_context *)backend->context;
 
+    ctx->device->diag_cgraph = nullptr;
+    ctx->device->diag_prev_start = -1;
+    ctx->device->diag_prev_end = -1;
+
     if (vk_instance.debug_utils_support) {
         vk::DebugUtilsLabelEXT dul = {};
         dul.pLabelName = "ggml_backend_vk_graph_compute";
@@ -16769,8 +16779,6 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
 
     bool first_node_in_batch = true; // true if next node will be first node in a batch
     int submit_node_idx = 0; // index to first node in a batch
-    int prev_submit_start = -1;
-    int prev_submit_end = -1;
 
     ggml_vk_submit_transfer_ctx(ctx);
 
@@ -16837,6 +16845,36 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
     }
     uint64_t flops_per_submit = std::min(flops_cap, ctx->last_total_flops / 40u);
 
+    auto const submit_after = [&](int start, int end) {
+        if (ctx->device->serialize_submissions) {
+            try {
+                auto res = ctx->device->device.waitForFences({ ctx->fence }, true, UINT64_MAX);
+                if (res != vk::Result::eSuccess) {
+                    fprintf(stderr, "ggml_vulkan: waitForFences error during serialized submission\n");
+                    exit(1);
+                }
+            } catch (vk::DeviceLostError &) {
+                ggml_vk_print_device_fault_info(ctx->device);
+                fprintf(stderr, "ggml_vulkan: device lost on %s waiting for submission (nodes %d to %d):\n",
+                        ctx->device->name.c_str(), start, end);
+                ggml_vk_print_node_list(cgraph, start, end);
+                throw;
+            }
+            ctx->device->device.resetFences({ ctx->fence });
+            ctx->submit_pending = false;
+            ctx->device->diag_cgraph = cgraph;
+            ctx->device->diag_prev_start = start;
+            ctx->device->diag_prev_end = end;
+        }
+        first_node_in_batch = true;
+        submitted_nodes = 0;
+        batch_flops = 0;
+        if (submit_count < 3) {
+            flops_per_submit *= 2;
+        }
+        submit_count++;
+    };
+
     for (int i = 0; i < cgraph->n_nodes; i++) {
         if (first_node_in_batch) {
             submit_node_idx = i;
@@ -16844,8 +16882,20 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
 
         {
             auto node_flops = ggml_vk_get_node_flops(cgraph->nodes[i]);
-            batch_flops += node_flops;
             total_flops += node_flops;
+
+            // Flush the current batch before recording a node that would push it over the flop threshold
+            if (flops_per_submit != 0 && submitted_nodes > 0 && batch_flops + node_flops >= flops_per_submit) {
+                vk_context flush_ctx = ggml_vk_get_compute_ctx(ctx);
+                ggml_vk_ctx_end(flush_ctx);
+                flush_ctx->exit_tensor_idx = -1;
+                ctx->compute_ctx.reset();
+                ggml_vk_compute_forward(ctx, cgraph, cgraph->nodes[submit_node_idx], submit_node_idx, false);
+                submit_after(submit_node_idx, i - 1);
+                submit_node_idx = i;
+            }
+
+            batch_flops += node_flops;
         }
 
         // op_srcs_fused_elementwise indicates whether an op's srcs all contribute to
@@ -17062,18 +17112,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
                       (i + ctx->num_additional_fused_ops >= last_node) ||
                       (almost_ready && !ctx->almost_ready_fence_pending);
 
-        bool enqueued;
-        try {
-            enqueued = ggml_vk_build_graph(ctx, cgraph, i, cgraph->nodes[submit_node_idx], submit_node_idx, i + ctx->num_additional_fused_ops >= last_node, almost_ready, submit);
-        } catch (vk::DeviceLostError &) {
-            ggml_vk_print_device_fault_info(ctx->device);
-            if (ctx->device->serialize_submissions && prev_submit_start >= 0) {
-                fprintf(stderr, "ggml_vulkan: device lost, likely caused by previous submission (nodes %d to %d):\n",
-                        prev_submit_start, prev_submit_end);
-                ggml_vk_print_node_list(cgraph, prev_submit_start, prev_submit_end);
-            }
-            throw;
-        }
+        bool enqueued = ggml_vk_build_graph(ctx, cgraph, i, cgraph->nodes[submit_node_idx], submit_node_idx, i + ctx->num_additional_fused_ops >= last_node, almost_ready, submit);
 
         if (vk_perf_logger_enabled && enqueued) {
             compute_ctx = ggml_vk_get_compute_ctx(ctx);
@@ -17101,34 +17140,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         }
 
         if (submit && enqueued) {
-            if (ctx->device->serialize_submissions) {
-                int end_node = i + (int)ctx->num_additional_fused_ops;
-                try {
-                    auto res = ctx->device->device.waitForFences({ ctx->fence }, true, UINT64_MAX);
-                    if (res != vk::Result::eSuccess) {
-                        fprintf(stderr, "ggml_vulkan: waitForFences error during serialized submission\n");
-                        exit(1);
-                    }
-                } catch (vk::DeviceLostError &) {
-                    ggml_vk_print_device_fault_info(ctx->device);
-                    fprintf(stderr, "ggml_vulkan: device lost waiting for submission (nodes %d to %d):\n",
-                            submit_node_idx, end_node);
-                    ggml_vk_print_node_list(cgraph, submit_node_idx, end_node);
-                    throw;
-                }
-                ctx->device->device.resetFences({ ctx->fence });
-                ctx->submit_pending = false;
-                prev_submit_start = submit_node_idx;
-                prev_submit_end = end_node;
-            }
-
-            first_node_in_batch = true;
-            submitted_nodes = 0;
-            batch_flops = 0;
-            if (submit_count < 3) {
-                flops_per_submit *= 2;
-            }
-            submit_count++;
+            submit_after(submit_node_idx, i + (int)ctx->num_additional_fused_ops);
         }
         i += ctx->num_additional_fused_ops;
         ctx->num_additional_fused_ops = 0;
