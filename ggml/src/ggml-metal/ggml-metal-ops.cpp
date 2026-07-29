@@ -2437,17 +2437,6 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
             ggml_metal_encoder_dispatch_threadgroups(enc, N_MM_NPART_AMAX, 1, 1, 256, 1, 1);
         }
 
-        ggml_metal_op_concurrency_reset(ctx);
-
-        {
-            auto pipeline = ggml_metal_library_get_pipeline_mul_mm_id_amax(lib);
-
-            ggml_metal_encoder_set_pipeline(enc, pipeline);
-            ggml_metal_encoder_set_buffer  (enc, bid_amax, 0);
-
-            ggml_metal_encoder_dispatch_threadgroups(enc, 1, 1, 1, 32, 1, 1);
-        }
-
         {
             ggml_metal_kargs_mul_mm_id_map0 args = {
                 ne02,
@@ -2479,7 +2468,18 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
             ggml_metal_encoder_dispatch_threadgroups(enc, 1, 1, 1, ne02, 1, 1);
         }
 
-        // this barrier is always needed because the next kernel has to wait for the id maps to be computed
+        ggml_metal_op_concurrency_reset(ctx);
+
+        {
+            auto pipeline = ggml_metal_library_get_pipeline_mul_mm_id_amax(lib);
+
+            ggml_metal_encoder_set_pipeline(enc, pipeline);
+            ggml_metal_encoder_set_buffer  (enc, bid_amax, 0);
+
+            ggml_metal_encoder_dispatch_threadgroups(enc, 1, 1, 1, 32, 1, 1);
+        }
+
+        // the next kernel has to wait for the amax data
         ggml_metal_op_concurrency_reset(ctx);
 
         {
