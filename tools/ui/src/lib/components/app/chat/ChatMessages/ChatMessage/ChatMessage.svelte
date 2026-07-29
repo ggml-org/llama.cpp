@@ -2,6 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { getChatActionsContext, setMessageEditContext } from '$lib/contexts';
 	import { chatStore, pendingEditMessageId } from '$lib/stores/chat.svelte';
+	import { isMobile } from '$lib/stores/viewport.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { DatabaseService } from '$lib/services/database.service';
 	import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants';
@@ -272,6 +273,12 @@
 		chatActions.navigateToSibling(siblingId);
 	}
 
+	// After the system message flow ends, hand focus to the main chat form
+	function focusMainChatForm() {
+		if (isMobile.current) return;
+		document.querySelector<HTMLTextAreaElement>('.chat-screen-form-wrapper textarea')?.focus();
+	}
+
 	async function handleSaveEdit() {
 		if (message.role === MessageRole.SYSTEM) {
 			// System messages: update in place without branching
@@ -283,6 +290,8 @@
 				isEditing = false;
 				if (conversationDeleted) {
 					goto(ROUTES.START);
+				} else {
+					focusMainChatForm();
 				}
 				return;
 			}
@@ -292,6 +301,7 @@
 			if (index !== -1) {
 				conversationsStore.updateMessageAtIndex(index, { content: newContent });
 			}
+			focusMainChatForm();
 		} else if (message.role === MessageRole.USER) {
 			const finalExtras = await getMergedExtras();
 			chatActions.editWithBranching(message, editedContent.trim(), finalExtras);
