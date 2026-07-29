@@ -484,28 +484,64 @@ static void ggml_backend_rpc_buffer_memset_tensor(
 }
 
 static void ggml_backend_rpc_buffer_set_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
+    // Parallel model-loading workers can call set_tensor concurrently.
+    // Serialize complete set-tensor request/response transactions because
+    // RPC devices for the same endpoint may share one socket.
+    static std::mutex set_tensor_mutex;
+
     ggml_backend_rpc_buffer_context * ctx = (ggml_backend_rpc_buffer_context *)buffer->context;
     rpc_tensor rpc_tensor = serialize_tensor(tensor);
     if (size > HASH_THRESHOLD) {
+        // Keep the expensive byte-at-a-time FNV pass outside the socket lock.
+        const uint64_t hash = fnv_hash((const uint8_t *) data, size);
         rpc_msg_set_tensor_hash_req request;
         request.tensor = rpc_tensor;
         request.offset = offset;
-        request.hash = fnv_hash((const uint8_t*)data, size);
+        request.hash = hash;
         rpc_msg_set_tensor_hash_rsp response;
+        // Keep the hash query and any cold-cache fallback upload together as
+        // one transaction on the shared socket.
+        std::lock_guard<std::mutex> lock(set_tensor_mutex);
         bool status = send_rpc_cmd(ctx->sock, RPC_CMD_SET_TENSOR_HASH, &request, sizeof(request), &response, sizeof(response));
         RPC_STATUS_ASSERT(status);
         if (response.result) {
-            // the server has the same data, no need to send it
+            // The server already has identical cached tensor data, no need to send it
             return;
         }
+
+        // Input format:
+        // | rpc_tensor | offset (8 bytes) | data (size bytes) |
+        const size_t input_size =
+            sizeof(rpc_tensor) + sizeof(uint64_t) + size;
+
+        std::vector<uint8_t> input(input_size, 0);
+        memcpy(input.data(), &rpc_tensor, sizeof(rpc_tensor));
+        memcpy(input.data() + sizeof(rpc_tensor), &offset, sizeof(offset));
+        memcpy(
+            input.data() + sizeof(rpc_tensor) + sizeof(offset),
+            data,
+            size);
+
+        status = send_rpc_cmd(
+            ctx->sock,
+            RPC_CMD_SET_TENSOR,
+            input.data(),
+            input.size());
+
+        RPC_STATUS_ASSERT(status);
+        return;
     }
     // input serialization format: | rpc_tensor | offset (8 bytes) | data (size bytes)
-    size_t input_size = sizeof(rpc_tensor) + sizeof(uint64_t) + size;
+    // Small tensors skip the cache hash lookup but still share the socket.
+    const size_t input_size = sizeof(rpc_tensor) + sizeof(uint64_t) + size;
+
     std::vector<uint8_t> input(input_size, 0);
     memcpy(input.data(), &rpc_tensor, sizeof(rpc_tensor));
     memcpy(input.data() + sizeof(rpc_tensor), &offset, sizeof(offset));
     memcpy(input.data() + sizeof(rpc_tensor) + sizeof(offset), data, size);
-    bool status = send_rpc_cmd(ctx->sock, RPC_CMD_SET_TENSOR, input.data(), input.size());
+    std::lock_guard<std::mutex> lock(set_tensor_mutex);
+    const bool status = send_rpc_cmd(ctx->sock, RPC_CMD_SET_TENSOR, input.data(), input.size());
+
     RPC_STATUS_ASSERT(status);
 }
 
