@@ -317,10 +317,7 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
         int32_t n_suppress = 0;
         const llama_token * suppress = llama_vocab_get_suppress_tokens(vocab, &n_suppress);
         for (int32_t i = 0; i < n_suppress; ++i) {
-            const llama_token id = suppress[i];
-            if (0 <= id && id < llama_vocab_n_tokens(vocab)) {
-                merged.push_back({ id, -INFINITY });
-            }
+            merged.push_back({ suppress[i], -INFINITY });
         }
 
         if (!merged.empty()) {

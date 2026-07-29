@@ -2578,7 +2578,14 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             if (suppress_idx != -1) {
                 const int n = gguf_get_arr_n(ctx, suppress_idx);
                 const int32_t * data = (const int32_t *) gguf_get_arr_data(ctx, suppress_idx);
-                suppress_tokens.assign(data, data + n);
+                // drop out-of-range ids
+                suppress_tokens.reserve(n);
+                for (int i = 0; i < n; ++i) {
+                    const int32_t id = data[i];
+                    if (id >= 0 && id < (int) id_to_token.size()) {
+                        suppress_tokens.push_back(id);
+                    }
+                }
             }
         }
 
