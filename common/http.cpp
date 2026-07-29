@@ -5,9 +5,9 @@
 // variable would exist once per module and a substitution made by the
 // executable would be invisible to the DLL
 
-static common_http_client_ptr (*g_http_client_factory)(const std::string & url) = nullptr;
+static common_http_client_factory_fn g_http_client_factory = nullptr;
 
-void common_http_client_set_factory(common_http_client_ptr (*factory)(const std::string & url)) {
+void common_http_client_set_factory(common_http_client_factory_fn factory) {
     g_http_client_factory = factory;
 }
 
