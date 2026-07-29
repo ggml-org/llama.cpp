@@ -217,6 +217,18 @@ class Qwen3Model(Qwen2Model):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
+
+        # Emit sliding-window attention config when present in the HF config.
+        # Guarded so this is a no-op for standard Qwen3 models that do not set
+        # use_sliding_window (i.e. all first-party Alibaba Qwen3 dense models).
+        use_sliding_window = self.hparams.get("use_sliding_window", False)
+        sliding_window = self.hparams.get("sliding_window")
+        layer_types = self.hparams.get("layer_types")
+        if use_sliding_window and sliding_window and layer_types:
+            is_swa = [lt == "sliding_attention" for lt in layer_types]
+            self.gguf_writer.add_sliding_window(sliding_window)
+            self.gguf_writer.add_sliding_window_pattern(is_swa)
+
         if self.is_rerank:
             self.gguf_writer.add_pooling_type(gguf.PoolingType.RANK)
             self.gguf_writer.add_classifier_output_labels(["yes", "no"])
