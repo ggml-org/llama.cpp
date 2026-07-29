@@ -138,6 +138,7 @@ class ConversationsStore {
 				await MigrationService.runAllMigrations();
 				// Hard gate: never load (or fall back to writing) data while locked
 				await encryptionStore.ensureUnlocked();
+				await mcpStore.loadSecrets();
 				await this.loadConversations();
 				this.isInitialized = true;
 			} catch (error) {

@@ -8,6 +8,7 @@
  */
 
 import { EncryptionService } from '$lib/services/encryption.service';
+import { mcpStore } from '$lib/stores/mcp.svelte';
 
 class EncryptionStore {
 	isSupported = $state(false);
@@ -47,6 +48,7 @@ class EncryptionStore {
 		const unlocked = await EncryptionService.unlockWithPassphrase(passphrase);
 		if (unlocked) {
 			this.refresh();
+			await mcpStore.loadSecrets();
 			this.unlockResolver?.();
 			this.unlockResolver = null;
 			this.unlockPromise = null;

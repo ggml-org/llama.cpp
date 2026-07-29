@@ -8,7 +8,9 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { DatabaseService } from '$lib/services/database.service';
+	import { McpSecretsService } from '$lib/services/mcp-secrets.service';
 	import { encryptionStore } from '$lib/stores/encryption.svelte';
+	import { mcpStore } from '$lib/stores/mcp.svelte';
 
 	let newPassphrase = $state('');
 	let newPassphraseConfirm = $state('');
@@ -41,6 +43,8 @@
 		try {
 			await encryptionStore.setupWithPassphrase(newPassphrase);
 			await DatabaseService.encryptAllStoredData();
+			await mcpStore.loadSecrets();
+			await McpSecretsService.persist();
 			newPassphrase = '';
 			newPassphraseConfirm = '';
 			toast.success('Encryption enabled');
@@ -77,6 +81,7 @@
 		disabling = true;
 		try {
 			await DatabaseService.decryptAllStoredData();
+			await McpSecretsService.persist({ plaintext: true });
 			encryptionStore.disable();
 			toast.success('Encryption disabled');
 		} catch (error) {

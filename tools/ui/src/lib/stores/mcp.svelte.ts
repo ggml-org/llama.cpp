@@ -25,16 +25,13 @@
 import { browser } from '$app/environment';
 import { SETTINGS_KEYS } from '$lib/constants';
 import { MCPService } from '$lib/services/mcp.service';
+import { McpSecretsService } from '$lib/services/mcp-secrets.service';
+import { EncryptionService } from '$lib/services/encryption.service';
 import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { mcpResourceStore } from '$lib/stores/mcp-resources.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
 import { mode } from 'mode-watcher';
-import {
-	parseMcpServerSettings,
-	detectMcpTransportFromUrl,
-	uuid,
-	extractRootDomain
-} from '$lib/utils';
+import { detectMcpTransportFromUrl, uuid, extractRootDomain } from '$lib/utils';
 import {
 	MCPConnectionPhase,
 	MCPLogLevel,
@@ -141,15 +138,17 @@ class MCPStore {
 
 		return parsed.map((entry, index) => {
 			const url = typeof entry?.url === 'string' ? entry.url.trim() : '';
-			const headers = typeof entry?.headers === 'string' ? entry.headers.trim() : undefined;
+			const id = this.#generateServerId((entry as { id?: unknown })?.id, index);
+			const inlineHeaders = typeof entry?.headers === 'string' ? entry.headers.trim() : undefined;
 
 			return {
-				id: this.#generateServerId((entry as { id?: unknown })?.id, index),
+				id,
 				enabled: Boolean((entry as { enabled?: unknown })?.enabled),
 				url,
 				name: (entry as { name?: string })?.name,
 				displayName: (entry as { displayName?: string })?.displayName,
-				headers: headers || undefined,
+				// headers live in the secrets store; inline values are a legacy fallback
+				headers: McpSecretsService.getHeaders(id) ?? inlineHeaders ?? undefined,
 				useProxy: Boolean((entry as { useProxy?: unknown })?.useProxy)
 			} satisfies MCPServerSettingsEntry;
 		});
@@ -365,7 +364,7 @@ class MCPStore {
 	}
 
 	getServers(): MCPServerSettingsEntry[] {
-		return parseMcpServerSettings(config().mcpServers);
+		return this.#parseServerSettings(config().mcpServers);
 	}
 
 	/**
@@ -537,40 +536,82 @@ class MCPStore {
 		serverData: Omit<MCPServerSettingsEntry, 'id'> & { id?: string }
 	): MCPServerSettingsEntry {
 		const servers = this.getServers();
+		const headers = serverData.headers?.trim() || undefined;
 		const newServer: MCPServerSettingsEntry = {
 			id: serverData.id || (uuid() ?? `server-${Date.now()}`),
 			enabled: serverData.enabled,
 			url: serverData.url.trim(),
 			name: serverData.name,
 			displayName: serverData.displayName,
-			headers: serverData.headers?.trim() || undefined,
+			headers,
 			useProxy: serverData.useProxy
 		};
-		settingsStore.updateConfig(SETTINGS_KEYS.MCP_SERVERS, JSON.stringify([...servers, newServer]));
+		this.#persistServers([...servers, newServer]);
+		if (headers) this.#storeHeaders(newServer.id, headers);
 		return newServer;
 	}
 
 	updateServer(id: string, updates: Partial<MCPServerSettingsEntry>): void {
 		const servers = this.getServers();
-		settingsStore.updateConfig(
-			SETTINGS_KEYS.MCP_SERVERS,
-			JSON.stringify(
-				servers.map((server) => (server.id === id ? { ...server, ...updates } : server))
-			)
+		this.#persistServers(
+			servers.map((server) => (server.id === id ? { ...server, ...updates } : server))
 		);
+		if (updates.headers !== undefined) {
+			this.#storeHeaders(id, updates.headers?.trim() || undefined);
+		}
 	}
 
 	removeServer(id: string): void {
 		const servers = this.getServers();
-		settingsStore.updateConfig(
-			SETTINGS_KEYS.MCP_SERVERS,
-			JSON.stringify(servers.filter((s) => s.id !== id))
-		);
+		this.#persistServers(servers.filter((s) => s.id !== id));
+		this.#storeHeaders(id, undefined);
 		this.clearHealthCheck(id);
 	}
 
+	// Headers are kept out of the plaintext config blob; they persist in the
+	// (possibly encrypted) secrets store instead. Entries still carrying
+	// inline headers are copied over first so no secret is dropped.
+	#persistServers(servers: MCPServerSettingsEntry[]): void {
+		for (const server of servers) {
+			if (server.headers && McpSecretsService.getHeaders(server.id) === undefined) {
+				this.#storeHeaders(server.id, server.headers);
+			}
+		}
+
+		settingsStore.updateConfig(
+			SETTINGS_KEYS.MCP_SERVERS,
+			JSON.stringify(servers.map(({ headers: _headers, ...rest }) => rest))
+		);
+	}
+
+	#storeHeaders(serverId: string, headers: string | undefined): void {
+		McpSecretsService.setHeaders(serverId, headers).catch((error) =>
+			console.warn('[MCP] Failed to persist server headers:', error)
+		);
+	}
+
+	/**
+	 * Moves headers still inline in the config blob into the secrets store,
+	 * persisting resolved ids so secrets stay attached to their server.
+	 * No-op while encryption is locked.
+	 */
+	async migrateInlineHeadersToSecrets(): Promise<void> {
+		if (EncryptionService.isEnabled() && !EncryptionService.isUnlocked()) return;
+
+		const servers = this.getServers();
+		if (!servers.some((server) => server.headers)) return;
+
+		this.#persistServers(servers);
+	}
+
+	/** Loads the secrets cache and migrates any inline headers. */
+	async loadSecrets(): Promise<void> {
+		await McpSecretsService.load();
+		await this.migrateInlineHeadersToSecrets();
+	}
+
 	hasAvailableServers(): boolean {
-		return parseMcpServerSettings(config().mcpServers).some((s) => s.enabled && s.url.trim());
+		return this.getServers().some((s) => s.enabled && s.url.trim());
 	}
 	hasEnabledServers(perChatOverrides?: McpServerOverride[]): boolean {
 		return Boolean(this.#buildMcpClientConfig(config(), perChatOverrides));

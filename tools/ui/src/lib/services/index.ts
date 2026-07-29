@@ -120,6 +120,7 @@ export { DatabaseService } from './database.service';
  * @see encryption.service.ts - full implementation
  */
 export { EncryptionService } from './encryption.service';
+export { McpSecretsService } from './mcp-secrets.service';
 
 /**
  * **ModelsService** - Model management API communication

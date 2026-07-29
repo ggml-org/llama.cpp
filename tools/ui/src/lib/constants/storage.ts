@@ -27,6 +27,7 @@ export const DISMISSED_RECOMMENDED_MCP_SERVERS_LOCALSTORAGE_KEY = `${STORAGE_APP
 
 /** Wrapped data encryption key and KDF parameters (see EncryptionService) */
 export const ENCRYPTION_META_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.encryptionMeta`;
+export const MCP_SECRETS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.mcpSecrets`;
 
 /** Key prefix for per-conversation resumable stream state, conversationId is appended */
 export const STREAM_RESUME_LOCALSTORAGE_KEY_PREFIX = `${STORAGE_APP_NAME}.streamResume.`;
