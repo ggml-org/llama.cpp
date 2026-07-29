@@ -74,6 +74,9 @@ export type {
 	ExportedConversations
 } from './database';
 
+// Encryption types
+export type { EncryptionMeta } from './encryption';
+
 // Model types
 export type {
 	ModelModalities,
