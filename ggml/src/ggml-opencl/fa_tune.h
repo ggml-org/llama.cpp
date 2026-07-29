@@ -3,8 +3,8 @@
 // Flash-attention per-(dk,dv) tile tuning for the Adreno OpenCL backend.
 // Isolated from ggml-opencl.cpp so the tuning numbers are easy to find and
 // edit; the FA dispatch and kernel-compile logic stay in the main file.
-// This header is a file section — it is #included exactly once, at the point
-// in ggml-opencl.cpp where the ggml logging macros are already in scope.
+// This header is a file section — it is #included exactly once by
+// ops/flash_attn.cpp, where the ggml logging macros are already in scope.
 
 // Per-(dk, dv) FA config; shared by dispatch and supports_op.
 struct ggml_opencl_fa_dim {
@@ -82,7 +82,7 @@ static void ggml_opencl_fa_apply_env_overrides() {
 // Copy the default table into the mutable runtime buffer and apply any
 // GGML_OPENCL_FA_TUNE overrides. A per-generation table can be added here
 // once it has been tuned on hardware.
-static void ggml_cl_init_fa_dims_table() {
+void ggml_cl_init_fa_dims_table() {
     const size_t count = sizeof(g_fa_dims_adreno_default) / sizeof(g_fa_dims_adreno_default[0]);
     for (size_t i = 0; i < count; ++i) {
         g_fa_dims_runtime[i] = g_fa_dims_adreno_default[i];

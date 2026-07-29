@@ -5,6 +5,75 @@ set(TARGET_NAME ggml-opencl)
 
 ggml_add_backend_library(${TARGET_NAME}
                          ggml-opencl.cpp
+                         cl-common.h
+                         cl-common.cpp
+                         repack.cpp
+                         unpack.cpp
+                         ops/nop.cpp
+                         ops/unary-ext.cpp
+                         ops/get_rows.cpp
+                         ops/set_rows.cpp
+                         ops/add.cpp
+                         ops/add_id.cpp
+                         ops/mul.cpp
+                         ops/div.cpp
+                         ops/sub.cpp
+                         ops/sqr.cpp
+                         ops/sqrt.cpp
+                         ops/mean.cpp
+                         ops/ssm_conv.cpp
+                         ops/ssm_scan.cpp
+                         ops/gelu.cpp
+                         ops/silu.cpp
+                         ops/relu.cpp
+                         ops/sigmoid.cpp
+                         ops/tri.cpp
+                         ops/fill.cpp
+                         ops/clamp.cpp
+                         ops/norm.cpp
+                         ops/rms_norm.cpp
+                         ops/group_norm.cpp
+                         ops/l2_norm.cpp
+                         ops/tanh.cpp
+                         ops/neg.cpp
+                         ops/exp.cpp
+                         ops/expm1.cpp
+                         ops/abs.cpp
+                         ops/softplus.cpp
+                         ops/repeat.cpp
+                         ops/pad.cpp
+                         ops/upscale.cpp
+                         ops/concat.cpp
+                         ops/timestep_embedding.cpp
+                         ops/flash_attn.cpp
+                         ops/mul_mat.cpp
+                         ops/conv_2d.cpp
+                         ops/conv_2d_dw.cpp
+                         ops/mul_mat_id.cpp
+                         ops/scale.cpp
+                         ops/cpy.cpp
+                         ops/dup.cpp
+                         ops/cont.cpp
+                         ops/reshape.cpp
+                         ops/view.cpp
+                         ops/permute.cpp
+                         ops/transpose.cpp
+                         ops/set.cpp
+                         ops/diag_mask_inf.cpp
+                         ops/diag.cpp
+                         ops/soft_max.cpp
+                         ops/rope.cpp
+                         ops/solve_tri.cpp
+                         ops/im2col.cpp
+                         ops/im2col_3d.cpp
+                         ops/argmax.cpp
+                         ops/lightning_indexer.cpp
+                         ops/top_k.cpp
+                         ops/argsort.cpp
+                         ops/sum_rows.cpp
+                         ops/cumsum.cpp
+                         ops/glu.cpp
+                         ops/gated_delta_net.cpp
                          cl-program-cache.cpp
                          cl-program-cache.h
                          ../../include/ggml-opencl.h)
