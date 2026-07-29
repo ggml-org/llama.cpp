@@ -445,7 +445,8 @@ export class DatabaseService {
 	}
 
 	/**
-	 * Updates a conversation.
+	 * Updates a conversation. `lastModified` is never stamped implicitly;
+	 * pass it in `updates` to bump the conversation in recency ordering.
 	 *
 	 * @param id - Conversation ID
 	 * @param updates - Partial updates to apply
@@ -455,10 +456,7 @@ export class DatabaseService {
 		id: string,
 		updates: Partial<Omit<DatabaseConversation, 'id'>>
 	): Promise<void> {
-		await db[IDXDB_TABLES.conversations].update(id, {
-			...updates,
-			lastModified: Date.now()
-		});
+		await db[IDXDB_TABLES.conversations].update(id, updates);
 	}
 
 	/**
@@ -500,7 +498,6 @@ export class DatabaseService {
 		const result = new Map<string, boolean>();
 		if (cleanIds.length === 0) return result;
 
-		const now = Date.now();
 		await db.transaction('rw', db[IDXDB_TABLES.conversations], async () => {
 			const convs = await db[IDXDB_TABLES.conversations].bulkGet(cleanIds);
 			const updates: DatabaseConversation[] = [];
@@ -508,7 +505,7 @@ export class DatabaseService {
 				const conv = convs[i];
 				if (!conv) continue;
 				const newPinned = !conv.pinned;
-				updates.push({ ...conv, pinned: newPinned, lastModified: now });
+				updates.push({ ...conv, pinned: newPinned });
 				result.set(cleanIds[i], newPinned);
 			}
 			if (updates.length === 0) return;

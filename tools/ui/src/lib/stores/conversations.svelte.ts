@@ -600,18 +600,28 @@ class ConversationsStore {
 	}
 
 	/**
-	 * Updates conversation lastModified timestamp and moves it to top of list
+	 * Marks the active conversation as recently active: stamps lastModified
+	 * (persisted) and moves it to the top of the list. Only message-activity
+	 * flows call this; metadata updates (rename, pin, settings) do not.
 	 */
 	updateConversationTimestamp(): void {
 		if (!this.activeConversation) return;
 
-		const chatIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
+		const convId = this.activeConversation.id;
+		const now = Date.now();
+
+		const chatIndex = this.conversations.findIndex((c) => c.id === convId);
 
 		if (chatIndex !== -1) {
-			this.conversations[chatIndex].lastModified = Date.now();
+			this.conversations[chatIndex].lastModified = now;
 			const updatedConv = this.conversations.splice(chatIndex, 1)[0];
 			this.conversations = [updatedConv, ...this.conversations];
 		}
+
+		this.activeConversation = { ...this.activeConversation, lastModified: now };
+		DatabaseService.updateConversation(convId, { lastModified: now }).catch((error) =>
+			console.error('Failed to update conversation timestamp:', error)
+		);
 	}
 
 	/**
