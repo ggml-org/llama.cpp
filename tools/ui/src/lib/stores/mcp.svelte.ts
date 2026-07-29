@@ -31,7 +31,12 @@ import { config, settingsStore } from '$lib/stores/settings.svelte';
 import { mcpResourceStore } from '$lib/stores/mcp-resources.svelte';
 import { serverStore } from '$lib/stores/server.svelte';
 import { mode } from 'mode-watcher';
-import { detectMcpTransportFromUrl, uuid, extractRootDomain } from '$lib/utils';
+import {
+	detectMcpTransportFromUrl,
+	parseMcpServerSettings,
+	uuid,
+	extractRootDomain
+} from '$lib/utils';
 import {
 	MCPConnectionPhase,
 	MCPLogLevel,
@@ -111,47 +116,11 @@ class MCPStore {
 	 * Parses raw server settings from config into MCPServerSettingsEntry array.
 	 */
 	#parseServerSettings(rawServers: unknown): MCPServerSettingsEntry[] {
-		if (!rawServers) {
-			return [];
-		}
-
-		let parsed: unknown;
-		if (typeof rawServers === 'string') {
-			const trimmed = rawServers.trim();
-			if (!trimmed) {
-				return [];
-			}
-
-			try {
-				parsed = JSON.parse(trimmed);
-			} catch (error) {
-				console.warn('[MCP] Failed to parse mcpServers JSON:', error);
-
-				return [];
-			}
-		} else {
-			parsed = rawServers;
-		}
-		if (!Array.isArray(parsed)) {
-			return [];
-		}
-
-		return parsed.map((entry, index) => {
-			const url = typeof entry?.url === 'string' ? entry.url.trim() : '';
-			const id = this.#generateServerId((entry as { id?: unknown })?.id, index);
-			const inlineHeaders = typeof entry?.headers === 'string' ? entry.headers.trim() : undefined;
-
-			return {
-				id,
-				enabled: Boolean((entry as { enabled?: unknown })?.enabled),
-				url,
-				name: (entry as { name?: string })?.name,
-				displayName: (entry as { displayName?: string })?.displayName,
-				// headers live in the secrets store; inline values are a legacy fallback
-				headers: McpSecretsService.getHeaders(id) ?? inlineHeaders ?? undefined,
-				useProxy: Boolean((entry as { useProxy?: unknown })?.useProxy)
-			} satisfies MCPServerSettingsEntry;
-		});
+		return parseMcpServerSettings(rawServers).map((entry) => ({
+			...entry,
+			// headers live in the secrets store; inline values are a legacy fallback
+			headers: McpSecretsService.getHeaders(entry.id) ?? entry.headers
+		}));
 	}
 
 	/**
