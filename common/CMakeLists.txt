@@ -77,7 +77,6 @@ add_library(${TARGET}
     fit.h
     hf-cache.cpp
     hf-cache.h
-    http.cpp
     http.h
     imatrix-loader.cpp
     imatrix-loader.h

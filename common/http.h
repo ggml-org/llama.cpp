@@ -126,13 +126,6 @@ public:
 
 using common_http_client_ptr = std::unique_ptr<common_http_client>;
 
-using common_http_client_factory_fn = common_http_client_ptr (*)(const std::string & url);
-
-// create an HTTP client through the substitutable factory below
-common_http_client_ptr common_http_client_create(const std::string & url);
-
-// substitute the client creation, e.g. with a stub (ONLY for testing)
-void common_http_client_set_factory(common_http_client_factory_fn factory);
 
 static std::pair<common_http_client_ptr, common_http_url> common_http_client_init(const std::string & url) {
     common_http_url parts = common_http_parse_url(url);
@@ -152,7 +145,7 @@ static std::pair<common_http_client_ptr, common_http_url> common_http_client_ini
     }
 #endif
 
-    auto cli = common_http_client_create(parts.scheme + "://" + common_http_format_host(parts.host) + ":" + std::to_string(parts.port));
+    auto cli = std::make_unique<common_http_client>(parts.scheme + "://" + common_http_format_host(parts.host) + ":" + std::to_string(parts.port));
 
     if (!parts.user.empty()) {
         cli->set_basic_auth(parts.user, parts.password);
