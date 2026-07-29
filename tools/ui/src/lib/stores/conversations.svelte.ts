@@ -24,6 +24,7 @@ import { toast } from 'svelte-sonner';
 import { DatabaseService } from '$lib/services/database.service';
 import { MigrationService } from '$lib/services/migration.service';
 import { config } from '$lib/stores/settings.svelte';
+import { encryptionStore } from '$lib/stores/encryption.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
 import { filterByLeafNodeId, findLeafNode, generateConversationTitle } from '$lib/utils';
 import type { McpServerOverride } from '$lib/types/database';
@@ -143,6 +144,8 @@ class ConversationsStore {
 		this.initPromise = (async () => {
 			try {
 				await MigrationService.runAllMigrations();
+				// Hard gate: never load (or fall back to writing) data while locked
+				await encryptionStore.ensureUnlocked();
 				await this.loadConversations();
 				this.isInitialized = true;
 			} catch (error) {

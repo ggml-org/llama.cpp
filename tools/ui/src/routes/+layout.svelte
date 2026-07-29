@@ -8,6 +8,7 @@
 	import { onMount } from 'svelte';
 
 	import { SidebarNavigation } from '$lib/components/app';
+	import { DialogEncryptionUnlock } from '$lib/components/app/dialogs';
 	import { PwaMetaTags, PwaRefreshAlert } from '$lib/components/pwa';
 	import { pwaAssetsHead } from 'virtual:pwa-assets/head';
 
@@ -282,6 +283,8 @@
 	<ModeWatcher />
 
 	<Toaster richColors />
+
+	<DialogEncryptionUnlock />
 </Tooltip.Provider>
 
 <!-- PWA update prompt + version -->
