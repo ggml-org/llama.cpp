@@ -1,7 +1,8 @@
 import Dexie, { type EntityTable } from 'dexie';
 import { findDescendantMessages, uuid, filterByLeafNodeId } from '$lib/utils';
 import { IDXDB_TABLES, IDXDB_STORES, STORAGE_APP_NAME } from '$lib/constants';
-import { MessageRole } from '$lib/enums';
+import { AttachmentType, MessageRole } from '$lib/enums';
+import { EncryptionService } from './encryption.service';
 import type { McpServerOverride } from '$lib/types/database';
 import type { ExportedConversation } from '$lib/types/database';
 
@@ -17,6 +18,103 @@ class LlamaUiDatabase extends Dexie {
 }
 
 const db = new LlamaUiDatabase();
+
+// Encryption seam: the fields below are encrypted at rest when encryption is
+// enabled and unlocked. Values already carrying the encrypted prefix are
+// never re-encrypted, and non-prefixed values pass through on read, so
+// records written before encryption was enabled keep working.
+//
+// Transforms must run OUTSIDE Dexie transactions: awaiting WebCrypto inside a
+// transaction would commit it prematurely.
+
+const MESSAGE_SECRET_FIELDS = ['content', 'reasoningContent', 'toolCalls'] as const;
+
+function assertEncryptionWritable(): void {
+	if (EncryptionService.isEnabled() && !EncryptionService.isUnlocked()) {
+		throw new Error('Encryption is locked');
+	}
+}
+
+async function encryptName(name: string): Promise<string> {
+	if (!EncryptionService.isUnlocked() || name === '' || EncryptionService.isEncryptedValue(name)) {
+		return name;
+	}
+	return await EncryptionService.encryptString(name);
+}
+
+async function encryptConversationSecrets<T extends Partial<DatabaseConversation>>(
+	record: T
+): Promise<T> {
+	if (typeof record.name !== 'string') return record;
+	const name = await encryptName(record.name);
+	return name === record.name ? record : { ...record, name };
+}
+
+async function decryptConversationSecrets(
+	conversation: DatabaseConversation
+): Promise<DatabaseConversation> {
+	if (!EncryptionService.isUnlocked() || !EncryptionService.isEncryptedValue(conversation.name)) {
+		return conversation;
+	}
+	try {
+		return { ...conversation, name: await EncryptionService.decryptString(conversation.name) };
+	} catch {
+		return conversation;
+	}
+}
+
+async function encryptMessageSecrets<T extends Partial<DatabaseMessage>>(record: T): Promise<T> {
+	if (!EncryptionService.isUnlocked()) return record;
+
+	const result = { ...record };
+	for (const field of MESSAGE_SECRET_FIELDS) {
+		const value = result[field];
+		if (typeof value === 'string' && value !== '' && !EncryptionService.isEncryptedValue(value)) {
+			(result as Record<string, unknown>)[field] = await EncryptionService.encryptString(value);
+		}
+	}
+
+	if (Array.isArray(result.extra) && result.extra.length > 0) {
+		const marker = result.extra[0] as unknown as DatabaseMessageExtraEncrypted;
+		const alreadyEncrypted = result.extra.length === 1 && marker.type === AttachmentType.ENCRYPTED;
+		if (!alreadyEncrypted) {
+			const marker: DatabaseMessageExtraEncrypted = {
+				type: AttachmentType.ENCRYPTED,
+				payload: await EncryptionService.encryptJson(result.extra)
+			};
+			result.extra = [marker as unknown as DatabaseMessageExtra];
+		}
+	}
+	return result;
+}
+
+async function decryptMessageSecrets(message: DatabaseMessage): Promise<DatabaseMessage> {
+	if (!EncryptionService.isUnlocked()) return message;
+
+	const result = { ...message };
+	for (const field of MESSAGE_SECRET_FIELDS) {
+		const value = result[field];
+		if (EncryptionService.isEncryptedValue(value)) {
+			try {
+				(result as Record<string, unknown>)[field] = await EncryptionService.decryptString(value);
+			} catch {
+				// literal text starting with the prefix, or corrupt data: keep as stored
+			}
+		}
+	}
+
+	const firstExtra = result.extra?.[0] as unknown as DatabaseMessageExtraEncrypted | undefined;
+	if (result.extra?.length === 1 && firstExtra?.type === AttachmentType.ENCRYPTED) {
+		try {
+			result.extra = await EncryptionService.decryptJson<DatabaseMessageExtra[]>(
+				firstExtra.payload
+			);
+		} catch {
+			// keep as stored
+		}
+	}
+	return result;
+}
 
 export class DatabaseService {
 	/**
@@ -38,6 +136,8 @@ export class DatabaseService {
 		name: string,
 		fields?: Partial<Omit<DatabaseConversation, 'id' | 'name' | 'lastModified'>>
 	): Promise<DatabaseConversation> {
+		assertEncryptionWritable();
+
 		const conversation: DatabaseConversation = {
 			id: uuid(),
 			name,
@@ -46,7 +146,7 @@ export class DatabaseService {
 			...fields
 		};
 
-		await db[IDXDB_TABLES.conversations].add(conversation);
+		await db[IDXDB_TABLES.conversations].add(await encryptConversationSecrets(conversation));
 		return conversation;
 	}
 
@@ -70,6 +170,19 @@ export class DatabaseService {
 		message: Omit<DatabaseMessage, 'id'>,
 		parentId: string | null
 	): Promise<DatabaseMessage> {
+		assertEncryptionWritable();
+
+		const newMessage: DatabaseMessage = {
+			...message,
+			id: uuid(),
+			parent: parentId,
+			toolCalls: message.toolCalls ?? '',
+			children: []
+		};
+		// Encrypt before entering the transaction: awaiting WebCrypto inside a
+		// Dexie transaction would commit it prematurely.
+		const stored = await encryptMessageSecrets(newMessage);
+
 		return await db.transaction(
 			'rw',
 			[db[IDXDB_TABLES.conversations], db[IDXDB_TABLES.messages]],
@@ -82,15 +195,7 @@ export class DatabaseService {
 					}
 				}
 
-				const newMessage: DatabaseMessage = {
-					...message,
-					id: uuid(),
-					parent: parentId,
-					toolCalls: message.toolCalls ?? '',
-					children: []
-				};
-
-				await db[IDXDB_TABLES.messages].add(newMessage);
+				await db[IDXDB_TABLES.messages].add(stored);
 
 				// Update parent's children array if parent exists
 				if (parentId !== null) {
@@ -102,7 +207,7 @@ export class DatabaseService {
 					}
 				}
 
-				await this.updateConversation(message.convId, {
+				await db[IDXDB_TABLES.conversations].update(message.convId, {
 					currNode: newMessage.id
 				});
 
@@ -119,6 +224,8 @@ export class DatabaseService {
 	 * @returns The created root message
 	 */
 	static async createRootMessage(convId: string): Promise<string> {
+		assertEncryptionWritable();
+
 		const rootMessage: DatabaseMessage = {
 			id: uuid(),
 			convId,
@@ -131,7 +238,7 @@ export class DatabaseService {
 			children: []
 		};
 
-		await db[IDXDB_TABLES.messages].add(rootMessage);
+		await db[IDXDB_TABLES.messages].add(await encryptMessageSecrets(rootMessage));
 		return rootMessage.id;
 	}
 
@@ -154,24 +261,27 @@ export class DatabaseService {
 			throw new Error('Cannot create system message with empty content');
 		}
 
+		assertEncryptionWritable();
+
+		const systemMessage: DatabaseMessage = {
+			id: uuid(),
+			convId,
+			type: MessageRole.SYSTEM,
+			timestamp: Date.now(),
+			role: MessageRole.SYSTEM,
+			content: trimmedPrompt,
+			parent: parentId,
+			children: []
+		};
+		const stored = await encryptMessageSecrets(systemMessage);
+
 		return await db.transaction('rw', db[IDXDB_TABLES.messages], async () => {
 			const parentMessage = await db[IDXDB_TABLES.messages].get(parentId);
 			if (!parentMessage) {
 				throw new Error(`Parent message ${parentId} not found`);
 			}
 
-			const systemMessage: DatabaseMessage = {
-				id: uuid(),
-				convId,
-				type: MessageRole.SYSTEM,
-				timestamp: Date.now(),
-				role: MessageRole.SYSTEM,
-				content: trimmedPrompt,
-				parent: parentId,
-				children: []
-			};
-
-			await db[IDXDB_TABLES.messages].add(systemMessage);
+			await db[IDXDB_TABLES.messages].add(stored);
 			await db[IDXDB_TABLES.messages].update(parentId, {
 				children: [...parentMessage.children, systemMessage.id]
 			});
@@ -389,7 +499,11 @@ export class DatabaseService {
 	 * @returns Array of conversations
 	 */
 	static async getAllConversations(): Promise<DatabaseConversation[]> {
-		return await db[IDXDB_TABLES.conversations].orderBy('lastModified').reverse().toArray();
+		const conversations = await db[IDXDB_TABLES.conversations]
+			.orderBy('lastModified')
+			.reverse()
+			.toArray();
+		return await Promise.all(conversations.map(decryptConversationSecrets));
 	}
 
 	/**
@@ -399,7 +513,8 @@ export class DatabaseService {
 	 * @returns The conversation if found, otherwise undefined
 	 */
 	static async getConversation(id: string): Promise<DatabaseConversation | undefined> {
-		return await db[IDXDB_TABLES.conversations].get(id);
+		const conversation = await db[IDXDB_TABLES.conversations].get(id);
+		return conversation ? await decryptConversationSecrets(conversation) : undefined;
 	}
 
 	/**
@@ -409,7 +524,11 @@ export class DatabaseService {
 	 * @returns Array of messages in the conversation
 	 */
 	static async getConversationMessages(convId: string): Promise<DatabaseMessage[]> {
-		return await db[IDXDB_TABLES.messages].where('convId').equals(convId).sortBy('timestamp');
+		const messages = await db[IDXDB_TABLES.messages]
+			.where('convId')
+			.equals(convId)
+			.sortBy('timestamp');
+		return await Promise.all(messages.map(decryptMessageSecrets));
 	}
 
 	/**
@@ -427,8 +546,16 @@ export class DatabaseService {
 		if (cleanIds.length === 0) return result;
 
 		const [convs, allMessages] = await Promise.all([
-			db[IDXDB_TABLES.conversations].bulkGet(cleanIds),
-			db[IDXDB_TABLES.messages].where('convId').anyOf(cleanIds).toArray()
+			db[IDXDB_TABLES.conversations]
+				.bulkGet(cleanIds)
+				.then((items) =>
+					Promise.all(items.map((conv) => (conv ? decryptConversationSecrets(conv) : conv)))
+				),
+			db[IDXDB_TABLES.messages]
+				.where('convId')
+				.anyOf(cleanIds)
+				.toArray()
+				.then((messages) => Promise.all(messages.map(decryptMessageSecrets)))
 		]);
 
 		const messagesByConv = new Map<string, DatabaseMessage[]>();
@@ -461,7 +588,8 @@ export class DatabaseService {
 		id: string,
 		updates: Partial<Omit<DatabaseConversation, 'id'>>
 	): Promise<void> {
-		await db[IDXDB_TABLES.conversations].update(id, updates);
+		assertEncryptionWritable();
+		await db[IDXDB_TABLES.conversations].update(id, await encryptConversationSecrets(updates));
 	}
 
 	/**
@@ -543,7 +671,8 @@ export class DatabaseService {
 		id: string,
 		updates: Partial<Omit<DatabaseMessage, 'id'>>
 	): Promise<void> {
-		await db[IDXDB_TABLES.messages].update(id, updates);
+		assertEncryptionWritable();
+		await db[IDXDB_TABLES.messages].update(id, await encryptMessageSecrets(updates));
 	}
 
 	/**
@@ -564,19 +693,30 @@ export class DatabaseService {
 	static async importConversations(
 		data: { conv: DatabaseConversation; messages: DatabaseMessage[] }[]
 	): Promise<{ imported: DatabaseConversation[]; skipped: DatabaseConversation[] }> {
+		assertEncryptionWritable();
 		const imported: DatabaseConversation[] = [];
 		const skipped: DatabaseConversation[] = [];
+
+		// Encrypt before entering the transaction: awaiting WebCrypto inside a
+		// Dexie transaction would commit it prematurely.
+		const prepared = await Promise.all(
+			data.map(async (item) => ({
+				original: item.conv,
+				conv: await encryptConversationSecrets(item.conv),
+				messages: await Promise.all(item.messages.map((msg) => encryptMessageSecrets(msg)))
+			}))
+		);
 
 		return await db.transaction(
 			'rw',
 			[db[IDXDB_TABLES.conversations], db[IDXDB_TABLES.messages]],
 			async () => {
-				for (const item of data) {
-					const { conv, messages } = item;
+				for (const item of prepared) {
+					const { conv, messages, original } = item;
 
 					const existing = await db[IDXDB_TABLES.conversations].get(conv.id);
 					if (existing) {
-						skipped.push(conv);
+						skipped.push(original);
 						continue;
 					}
 
@@ -585,7 +725,7 @@ export class DatabaseService {
 						await db[IDXDB_TABLES.messages].put(msg);
 					}
 
-					imported.push(conv);
+					imported.push(original);
 				}
 
 				return { imported, skipped };
@@ -615,6 +755,9 @@ export class DatabaseService {
 		atMessageId: string,
 		options: { name: string; includeAttachments: boolean }
 	): Promise<DatabaseConversation> {
+		assertEncryptionWritable();
+		const storedName = await encryptName(options.name);
+
 		return await db.transaction(
 			'rw',
 			[db[IDXDB_TABLES.conversations], db[IDXDB_TABLES.messages]],
@@ -665,7 +808,7 @@ export class DatabaseService {
 				const lastClonedMessage = clonedMessages[clonedMessages.length - 1];
 				const newConv: DatabaseConversation = {
 					id: newConvId,
-					name: options.name,
+					name: storedName,
 					lastModified: Date.now(),
 					currNode: lastClonedMessage.id,
 					forkedFromConversationId: sourceConvId,
@@ -684,7 +827,8 @@ export class DatabaseService {
 					await db[IDXDB_TABLES.messages].add(msg);
 				}
 
-				return newConv;
+				// Return the plaintext record; only the stored copy is encrypted
+				return { ...newConv, name: options.name };
 			}
 		);
 	}

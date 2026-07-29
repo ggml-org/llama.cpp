@@ -90,6 +90,18 @@ export interface DatabaseMessageExtraMcpResource {
 	mimeType?: string;
 }
 
+/**
+ * Storage-only marker holding the JSON-encrypted extras array of a message
+ * (see AttachmentType.ENCRYPTED). Never exposed past the database layer, so
+ * deliberately NOT part of the DatabaseMessageExtra union; the database
+ * service casts to/from it at the encryption seam.
+ */
+export interface DatabaseMessageExtraEncrypted {
+	type: AttachmentType.ENCRYPTED;
+	/** `enc1:` payload of the JSON-serialized original extras array */
+	payload: string;
+}
+
 export type DatabaseMessageExtra =
 	| DatabaseMessageExtraImageFile
 	| DatabaseMessageExtraTextFile
