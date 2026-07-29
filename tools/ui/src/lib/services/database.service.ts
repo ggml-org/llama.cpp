@@ -137,7 +137,7 @@ export class DatabaseService {
 	 * @param systemPrompt - The system prompt content (must be non-empty)
 	 * @param parentId - Parent message ID (typically the root message)
 	 * @returns The created system message
-	 * @throws Error if systemPrompt is empty
+	 * @throws Error if systemPrompt is empty or the parent message does not exist
 	 */
 	static async createSystemMessage(
 		convId: string,
@@ -149,27 +149,30 @@ export class DatabaseService {
 			throw new Error('Cannot create system message with empty content');
 		}
 
-		const systemMessage: DatabaseMessage = {
-			id: uuid(),
-			convId,
-			type: MessageRole.SYSTEM,
-			timestamp: Date.now(),
-			role: MessageRole.SYSTEM,
-			content: trimmedPrompt,
-			parent: parentId,
-			children: []
-		};
+		return await db.transaction('rw', db[IDXDB_TABLES.messages], async () => {
+			const parentMessage = await db[IDXDB_TABLES.messages].get(parentId);
+			if (!parentMessage) {
+				throw new Error(`Parent message ${parentId} not found`);
+			}
 
-		await db[IDXDB_TABLES.messages].add(systemMessage);
+			const systemMessage: DatabaseMessage = {
+				id: uuid(),
+				convId,
+				type: MessageRole.SYSTEM,
+				timestamp: Date.now(),
+				role: MessageRole.SYSTEM,
+				content: trimmedPrompt,
+				parent: parentId,
+				children: []
+			};
 
-		const parentMessage = await db[IDXDB_TABLES.messages].get(parentId);
-		if (parentMessage) {
+			await db[IDXDB_TABLES.messages].add(systemMessage);
 			await db[IDXDB_TABLES.messages].update(parentId, {
 				children: [...parentMessage.children, systemMessage.id]
 			});
-		}
 
-		return systemMessage;
+			return systemMessage;
+		});
 	}
 
 	/**
