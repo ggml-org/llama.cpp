@@ -104,6 +104,24 @@ export { ChatService } from './chat.service';
 export { DatabaseService } from './database.service';
 
 /**
+ * **EncryptionService** - At-rest encryption for IndexedDB data
+ *
+ * Envelope encryption with WebCrypto: a random AES-GCM data encryption key
+ * (DEK) encrypts record fields; the DEK is wrapped by a passphrase-derived
+ * key encryption key (PBKDF2) and only the wrapped blob plus KDF parameters
+ * are persisted. The session DEK lives in memory only, as a non-extractable
+ * CryptoKey.
+ *
+ * **Key Responsibilities:**
+ * - Passphrase setup, unlock, lock and change (re-wrap only, no data rewrite)
+ * - Per-value AES-GCM encrypt/decrypt with random IVs (`enc1:` prefix)
+ * - Capability/session state queries (supported, enabled, unlocked)
+ *
+ * @see encryption.service.ts - full implementation
+ */
+export { EncryptionService } from './encryption.service';
+
+/**
  * **ModelsService** - Model management API communication
  *
  * Handles communication with model-related endpoints for both MODEL (single model)
