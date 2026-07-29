@@ -179,11 +179,11 @@ class Qwen25OmniModel(Qwen2VLVisionModel, Qwen25AudioModel):
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name, gen = item
 
-        if not name.startswith("visual.") and not name.startswith("audio_tower."):
-            return None
-
         if name.startswith("thinker."):
             name = name.replace("thinker.", "")
+
+        if not name.startswith("visual.") and not name.startswith("audio_tower."):
+            return None
 
         if "audio_bos_eos_token" in name:
             # this tensor is left unused in transformers code
