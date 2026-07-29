@@ -40,4 +40,38 @@ describe('encryptionStore', () => {
 		expect(released).toBe(true);
 		expect(encryptionStore.needsUnlock).toBe(false);
 	});
+
+	it('releases every concurrent ensureUnlocked caller on unlock', async () => {
+		await encryptionStore.setupWithPassphrase('pw');
+		encryptionStore.lock();
+
+		let first = false;
+		let second = false;
+		const gates = Promise.all([
+			encryptionStore.ensureUnlocked().then(() => {
+				first = true;
+			}),
+			encryptionStore.ensureUnlocked().then(() => {
+				second = true;
+			})
+		]);
+
+		expect(await encryptionStore.unlockWithPassphrase('pw')).toBe(true);
+		await gates;
+		expect(first).toBe(true);
+		expect(second).toBe(true);
+
+		// a subsequent lock starts a fresh gate
+		encryptionStore.lock();
+		expect(encryptionStore.needsUnlock).toBe(true);
+		let third = false;
+		const gate = encryptionStore.ensureUnlocked().then(() => {
+			third = true;
+		});
+		await Promise.resolve();
+		expect(third).toBe(false);
+		expect(await encryptionStore.unlockWithPassphrase('pw')).toBe(true);
+		await gate;
+		expect(third).toBe(true);
+	});
 });

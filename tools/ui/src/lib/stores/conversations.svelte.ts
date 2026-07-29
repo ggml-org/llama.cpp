@@ -273,6 +273,10 @@ class ConversationsStore {
 	 * @returns True if conversation was loaded successfully
 	 */
 	async loadConversation(convId: string): Promise<boolean> {
+		// Reads must not race the unlock gate: while locked the seam would
+		// pass ciphertext through and nothing would re-fetch after unlock
+		await encryptionStore.ensureUnlocked();
+
 		try {
 			const conversation = await DatabaseService.getConversation(convId);
 
