@@ -152,6 +152,51 @@ describe('DatabaseService encryption seam', () => {
 		);
 	});
 
+	it('encryptAllStoredData encrypts pre-existing plaintext records, idempotently', async () => {
+		const { conv, message } = await seedConversation('legacy chat', 'legacy body');
+
+		await EncryptionService.setupWithPassphrase('pw');
+		await DatabaseService.encryptAllStoredData();
+
+		expect(EncryptionService.isEncryptedValue((await rawConversation(conv.id)).name)).toBe(true);
+		expect(EncryptionService.isEncryptedValue((await rawMessage(message.id)).content)).toBe(true);
+
+		expect((await DatabaseService.getConversation(conv.id))?.name).toBe('legacy chat');
+		const messages = await DatabaseService.getConversationMessages(conv.id);
+		expect(messages.find((m) => m.id === message.id)?.content).toBe('legacy body');
+
+		// re-running is a no-op and keeps data readable
+		await DatabaseService.encryptAllStoredData();
+		expect((await DatabaseService.getConversation(conv.id))?.name).toBe('legacy chat');
+	});
+
+	it('decryptAllStoredData restores plaintext records, including extras', async () => {
+		await EncryptionService.setupWithPassphrase('pw');
+
+		const extra = [
+			{ type: AttachmentType.TEXT, name: 'notes.txt', content: 'file body' }
+		] as DatabaseMessageExtra[];
+		const conv = await DatabaseService.createConversation('secret chat');
+		const rootId = await DatabaseService.createRootMessage(conv.id);
+		const message = await DatabaseService.createMessageBranch(
+			{ ...makeMessage(conv.id, 'secret body'), extra },
+			rootId
+		);
+
+		await DatabaseService.decryptAllStoredData();
+
+		const storedConv = await rawConversation(conv.id);
+		const storedMessage = await rawMessage(message.id);
+		expect(storedConv.name).toBe('secret chat');
+		expect(storedMessage.content).toBe('secret body');
+		expect(storedMessage.extra).toEqual(extra);
+
+		// reads keep working with encryption still enabled
+		expect((await DatabaseService.getConversation(conv.id))?.name).toBe('secret chat');
+		const messages = await DatabaseService.getConversationMessages(conv.id);
+		expect(messages.find((m) => m.id === message.id)?.extra).toEqual(extra);
+	});
+
 	it('keeps ciphertext at rest when forking an encrypted conversation', async () => {
 		await EncryptionService.setupWithPassphrase('pw');
 		const { conv, message } = await seedConversation('source chat', 'source body');

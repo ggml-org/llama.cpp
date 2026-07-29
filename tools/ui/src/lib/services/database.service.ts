@@ -66,11 +66,13 @@ async function decryptConversationSecrets(
 async function encryptMessageSecrets<T extends Partial<DatabaseMessage>>(record: T): Promise<T> {
 	if (!EncryptionService.isUnlocked()) return record;
 
+	let changed = false;
 	const result = { ...record };
 	for (const field of MESSAGE_SECRET_FIELDS) {
 		const value = result[field];
 		if (typeof value === 'string' && value !== '' && !EncryptionService.isEncryptedValue(value)) {
 			(result as Record<string, unknown>)[field] = await EncryptionService.encryptString(value);
+			changed = true;
 		}
 	}
 
@@ -78,25 +80,28 @@ async function encryptMessageSecrets<T extends Partial<DatabaseMessage>>(record:
 		const marker = result.extra[0] as unknown as DatabaseMessageExtraEncrypted;
 		const alreadyEncrypted = result.extra.length === 1 && marker.type === AttachmentType.ENCRYPTED;
 		if (!alreadyEncrypted) {
-			const marker: DatabaseMessageExtraEncrypted = {
+			const next: DatabaseMessageExtraEncrypted = {
 				type: AttachmentType.ENCRYPTED,
 				payload: await EncryptionService.encryptJson(result.extra)
 			};
-			result.extra = [marker as unknown as DatabaseMessageExtra];
+			result.extra = [next as unknown as DatabaseMessageExtra];
+			changed = true;
 		}
 	}
-	return result;
+	return changed ? result : record;
 }
 
 async function decryptMessageSecrets(message: DatabaseMessage): Promise<DatabaseMessage> {
 	if (!EncryptionService.isUnlocked()) return message;
 
+	let changed = false;
 	const result = { ...message };
 	for (const field of MESSAGE_SECRET_FIELDS) {
 		const value = result[field];
 		if (EncryptionService.isEncryptedValue(value)) {
 			try {
 				(result as Record<string, unknown>)[field] = await EncryptionService.decryptString(value);
+				changed = true;
 			} catch {
 				// literal text starting with the prefix, or corrupt data: keep as stored
 			}
@@ -109,11 +114,12 @@ async function decryptMessageSecrets(message: DatabaseMessage): Promise<Database
 			result.extra = await EncryptionService.decryptJson<DatabaseMessageExtra[]>(
 				firstExtra.payload
 			);
+			changed = true;
 		} catch {
 			// keep as stored
 		}
 	}
-	return result;
+	return changed ? result : message;
 }
 
 export class DatabaseService {
@@ -673,6 +679,82 @@ export class DatabaseService {
 	): Promise<void> {
 		assertEncryptionWritable();
 		await db[IDXDB_TABLES.messages].update(id, await encryptMessageSecrets(updates));
+	}
+
+	/**
+	 * Re-encrypts every stored conversation and message with the session key.
+	 * Records already encrypted are left untouched, so the pass is idempotent
+	 * and can simply be re-run after an interruption. Requires the unlocked
+	 * session key; run when encryption is enabled.
+	 */
+	static async encryptAllStoredData(): Promise<void> {
+		if (!EncryptionService.isUnlocked()) {
+			throw new Error('Encryption is locked');
+		}
+
+		const conversations = await db[IDXDB_TABLES.conversations].toArray();
+		const reEncryptedConversations = await Promise.all(
+			conversations.map(async (conv) => {
+				const next = await encryptConversationSecrets(conv);
+				return next === conv ? null : next;
+			})
+		);
+		await db[IDXDB_TABLES.conversations].bulkPut(
+			reEncryptedConversations.filter(
+				(conv: DatabaseConversation | null): conv is DatabaseConversation => conv !== null
+			)
+		);
+
+		const messages = await db[IDXDB_TABLES.messages].toArray();
+		const reEncryptedMessages = await Promise.all(
+			messages.map(async (message) => {
+				const next = await encryptMessageSecrets(message);
+				return next === message ? null : next;
+			})
+		);
+		await db[IDXDB_TABLES.messages].bulkPut(
+			reEncryptedMessages.filter(
+				(message: DatabaseMessage | null): message is DatabaseMessage => message !== null
+			)
+		);
+	}
+
+	/**
+	 * Decrypts every stored conversation and message back to plaintext.
+	 * Records already plaintext are left untouched, so the pass is idempotent
+	 * and can simply be re-run after an interruption. Requires the unlocked
+	 * session key; run before encryption is disabled.
+	 */
+	static async decryptAllStoredData(): Promise<void> {
+		if (!EncryptionService.isUnlocked()) {
+			throw new Error('Encryption is locked');
+		}
+
+		const conversations = await db[IDXDB_TABLES.conversations].toArray();
+		const decryptedConversations = await Promise.all(
+			conversations.map(async (conv) => {
+				const next = await decryptConversationSecrets(conv);
+				return next === conv ? null : next;
+			})
+		);
+		await db[IDXDB_TABLES.conversations].bulkPut(
+			decryptedConversations.filter(
+				(conv: DatabaseConversation | null): conv is DatabaseConversation => conv !== null
+			)
+		);
+
+		const messages = await db[IDXDB_TABLES.messages].toArray();
+		const decryptedMessages = await Promise.all(
+			messages.map(async (message) => {
+				const next = await decryptMessageSecrets(message);
+				return next === message ? null : next;
+			})
+		);
+		await db[IDXDB_TABLES.messages].bulkPut(
+			decryptedMessages.filter(
+				(message: DatabaseMessage | null): message is DatabaseMessage => message !== null
+			)
+		);
 	}
 
 	/**
