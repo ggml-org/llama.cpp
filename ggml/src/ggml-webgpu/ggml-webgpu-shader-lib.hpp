@@ -712,7 +712,7 @@ inline ggml_webgpu_flash_attn_common_pipeline_key ggml_webgpu_flash_attn_make_co
     key.head_dim_v                                 = (uint32_t) context.src2->ne[0];
     key.k_direct           = ggml_webgpu_flash_attn_k_direct(context.src0, context.src1, kv_direct_align);
     key.v_direct           = ggml_webgpu_flash_attn_v_direct(context.src0, context.src2, kv_direct_align);
-    key.kv_overlap         = ggml_webgpu_tensor_overlap(context.src1, context.src2);
+    key.kv_overlap         = kv_overlap;
     key.has_mask           = context.src3 != nullptr;
     key.has_sinks          = context.src4 != nullptr;
     key.uses_logit_softcap = ggml_get_op_params_f32(context.dst, 2) != 0.0f;
