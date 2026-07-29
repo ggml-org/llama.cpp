@@ -294,10 +294,6 @@ struct common_params_sampling {
 
     bool backend_sampling = false;
 
-    bool has_logit_bias() const {
-        return !logit_bias.empty();
-    }
-
     // print the parameters into a string
     std::string print() const;
 };

@@ -2578,7 +2578,14 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             if (suppress_idx != -1) {
                 const int n = gguf_get_arr_n(ctx, suppress_idx);
                 const int32_t * data = (const int32_t *) gguf_get_arr_data(ctx, suppress_idx);
-                suppress_tokens.assign(data, data + n);
+                // drop out-of-range ids
+                suppress_tokens.reserve(n);
+                for (int i = 0; i < n; ++i) {
+                    const int32_t id = data[i];
+                    if (id >= 0 && id < (int) id_to_token.size()) {
+                        suppress_tokens.push_back(id);
+                    }
+                }
             }
         }
 
@@ -4203,6 +4210,14 @@ bool llama_vocab_get_add_eos(const struct llama_vocab * vocab) {
 
 bool llama_vocab_get_add_sep(const struct llama_vocab * vocab) {
     return vocab->get_add_sep();
+}
+
+const llama_token * llama_vocab_get_suppress_tokens(const struct llama_vocab * vocab, int32_t * n_suppress_tokens) {
+    const std::vector<llama_token> & tokens = vocab->get_suppress_tokens();
+    if (n_suppress_tokens) {
+        *n_suppress_tokens = (int32_t) tokens.size();
+    }
+    return tokens.data();
 }
 
 llama_token llama_vocab_fim_pre(const struct llama_vocab * vocab) {
