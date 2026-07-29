@@ -31,6 +31,7 @@ static std::string g_context;
 // independent of NDEBUG, so the checks stay alive in Release builds
 #define REQUIRE(x) do {                                                         \
     if (!(x)) {                                                                 \
+        common_log_resume(common_log_main());                                   \
         fprintf(stderr, "%s:%d: [%s] REQUIRE(%s) failed\n",                     \
                 __FILE__, __LINE__, g_context.c_str(), #x);                     \
         std::abort();                                                           \
@@ -39,6 +40,7 @@ static std::string g_context;
 
 #define REQUIRE_EQ(actual, expected) do {                                       \
     if (!((actual) == (expected))) {                                            \
+        common_log_resume(common_log_main());                                   \
         fprintf(stderr, "%s:%d: [%s] REQUIRE_EQ(%s, %s) failed\n  actual:   '%s'\n  expected: '%s'\n", \
                 __FILE__, __LINE__, g_context.c_str(), #actual, #expected,      \
                 std::string(actual).c_str(), std::string(expected).c_str());    \
@@ -74,7 +76,7 @@ struct http_client_stub : common_http_client {
                 size_t i = 0;
                 for (const auto & p : g_repos[rest.substr(0, tree)]) {
                     char oid[41];
-                    snprintf(oid, sizeof(oid), "%040zx", ++i);
+                    snprintf(oid, sizeof(oid), "%040lx", (unsigned long) ++i);
                     files.push_back({{"type", "file"}, {"path", p}, {"size", 1}, {"oid", oid}});
                 }
                 res->status = 200;
