@@ -451,7 +451,6 @@ class ConversationsStore {
 				const newPinned = updates.get(this.conversations[i].id);
 				if (newPinned !== undefined) this.conversations[i].pinned = newPinned;
 			}
-			this.conversations = [...this.conversations];
 
 			toast.success(
 				convIds.length === 1
@@ -560,7 +559,6 @@ class ConversationsStore {
 
 			if (convIndex !== -1) {
 				this.conversations[convIndex].name = name;
-				this.conversations = [...this.conversations];
 			}
 
 			if (this.activeConversation?.id === convId) {
@@ -584,7 +582,6 @@ class ConversationsStore {
 
 			if (convIndex !== -1) {
 				this.conversations[convIndex].pinned = newPinnedState;
-				this.conversations = [...this.conversations];
 			}
 
 			if (this.activeConversation?.id === convId) {
@@ -791,7 +788,6 @@ class ConversationsStore {
 		if (convIndex !== -1) {
 			this.conversations[convIndex].mcpServerOverrides =
 				newOverrides.length > 0 ? newOverrides : undefined;
-			this.conversations = [...this.conversations];
 		}
 	}
 
@@ -855,7 +851,6 @@ class ConversationsStore {
 		const convIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
 		if (convIndex !== -1) {
 			this.conversations[convIndex].reasoningEffort = effort;
-			this.conversations = [...this.conversations];
 		}
 	}
 
