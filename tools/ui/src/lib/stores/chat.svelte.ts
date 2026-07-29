@@ -2038,7 +2038,7 @@ class ChatStore {
 							timings
 						});
 
-						conversationsStore.updateConversationTimestamp();
+						conversationsStore.updateConversationTimestamp(msg.convId);
 
 						this.setChatLoading(msg.convId, false);
 						this.clearChatStreaming(msg.convId);

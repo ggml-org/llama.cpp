@@ -592,17 +592,19 @@ class ConversationsStore {
 	}
 
 	/**
-	 * Marks the active conversation as recently active: stamps lastModified
-	 * (persisted) and moves it to the top of the list. Only message-activity
-	 * flows call this; metadata updates (rename, pin, settings) do not.
+	 * Marks a conversation as recently active: stamps lastModified (persisted)
+	 * and moves it to the top of the list. Only message-activity flows call
+	 * this; metadata updates (rename, pin, settings) do not.
+	 *
+	 * @param convId - Conversation that produced the activity, defaults to the active one
 	 */
-	updateConversationTimestamp(): void {
-		if (!this.activeConversation) return;
+	updateConversationTimestamp(convId?: string): void {
+		const targetId = convId ?? this.activeConversation?.id;
+		if (!targetId) return;
 
-		const convId = this.activeConversation.id;
 		const now = Date.now();
 
-		const chatIndex = this.conversations.findIndex((c) => c.id === convId);
+		const chatIndex = this.conversations.findIndex((c) => c.id === targetId);
 
 		if (chatIndex !== -1) {
 			this.conversations[chatIndex].lastModified = now;
@@ -610,8 +612,11 @@ class ConversationsStore {
 			this.conversations = [updatedConv, ...this.conversations];
 		}
 
-		this.activeConversation = { ...this.activeConversation, lastModified: now };
-		DatabaseService.updateConversation(convId, { lastModified: now }).catch((error) =>
+		if (this.activeConversation?.id === targetId) {
+			this.activeConversation = { ...this.activeConversation, lastModified: now };
+		}
+
+		DatabaseService.updateConversation(targetId, { lastModified: now }).catch((error) =>
 			console.error('Failed to update conversation timestamp:', error)
 		);
 	}
