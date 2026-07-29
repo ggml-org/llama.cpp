@@ -540,6 +540,8 @@ class MCPStore {
 	// Headers are kept out of the plaintext config blob; they persist in the
 	// (possibly encrypted) secrets store instead. Entries still carrying
 	// inline headers are copied over first so no secret is dropped.
+	// The mcp-headers-to-secrets-v1 migration does the same move for entries
+	// that predate this store (see migration.service.ts).
 	#persistServers(servers: MCPServerSettingsEntry[]): void {
 		for (const server of servers) {
 			if (server.headers && McpSecretsService.getHeaders(server.id) === undefined) {
