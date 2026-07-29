@@ -10160,8 +10160,8 @@ static bool run_fa_vec_drift_guard(ggml_backend_t backend_metal, ggml_backend_t 
 // offsets / parallel-reduce stride (ne11 -> nsg 1/2/4).
 static bool run_fa_vec_tune_check(ggml_backend_t backend_metal, ggml_backend_t backend_cpu) {
     auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend_metal));
-    auto set_ov   = (set_fa_vec_override_t)   ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_set_fa_vec_override");
-    auto clear_ov = (clear_fa_vec_override_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_clear_fa_vec_override");
+    auto set_ov   = (set_fa_vec_override_t)   ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_tuning_set_fa_vec_override");
+    auto clear_ov = (clear_fa_vec_override_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_tuning_clear_fa_vec_override");
     if (!set_ov || !clear_ov) { printf("metal fa_vec override proc unavailable\n"); return false; }
 
     struct shape_t { int dk, dv; };
@@ -10344,13 +10344,13 @@ static double time_fa_cell_median(ggml_backend_t backend, const fa_perf_cell & c
 // nsg/nwg are left to the ops.cpp adaptive heuristic (not part of the table).
 static bool run_fa_vec_tune_perf(ggml_backend_t backend_metal) {
     auto * reg    = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend_metal));
-    auto   set_ov      = (set_fa_vec_override_t)   ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_set_fa_vec_override");
-    auto   clr_ov      = (clear_fa_vec_override_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_clear_fa_vec_override");
+    auto   set_ov      = (set_fa_vec_override_t)   ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_tuning_set_fa_vec_override");
+    auto   clr_ov      = (clear_fa_vec_override_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_tuning_clear_fa_vec_override");
     // Share the runtime's bucketers + baseline NE via read-only proc bridges, so the emitted
     // (ne11_b, ne01_b) keys match fa_vec_pick and can't silently desync from FA_VEC_*_BUCKETS.
-    auto   ne11_bucket = (fa_vec_bucket_t)      ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_fa_vec_ne11_bucket");
-    auto   ne01_bucket = (fa_vec_bucket_t)      ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_fa_vec_ne01_bucket");
-    auto   baseline_ne = (fa_vec_baseline_ne_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_fa_vec_baseline_ne");
+    auto   ne11_bucket = (fa_vec_bucket_t)      ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_tuning_fa_vec_ne11_bucket");
+    auto   ne01_bucket = (fa_vec_bucket_t)      ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_tuning_fa_vec_ne01_bucket");
+    auto   baseline_ne = (fa_vec_baseline_ne_t) ggml_backend_reg_get_proc_address(reg, "ggml_backend_metal_tuning_fa_vec_baseline_ne");
     if (!set_ov || !clr_ov || !ne11_bucket || !ne01_bucket || !baseline_ne) {
         printf("metal fa_vec tuning procs unavailable\n");
         return false;

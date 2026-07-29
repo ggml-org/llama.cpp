@@ -54,7 +54,6 @@ struct fa_vec_entry_t {
 // test/tune-only override; when set, fa_vec_pick returns it directly.
 void         fa_vec_set_override(fa_vec_cfg_t cfg);
 void         fa_vec_clear_override();
-bool         fa_vec_override_active();
 fa_vec_cfg_t fa_vec_baseline_cfg(int dk, int dv);
 
 // device_id selects a per-SKU row; on a miss, gpu_family (0 if unknown) maps to a representative

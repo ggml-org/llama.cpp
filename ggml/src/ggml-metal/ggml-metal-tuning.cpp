@@ -287,10 +287,6 @@ void fa_vec_clear_override() {
     g_override_set = false;
 }
 
-bool fa_vec_override_active() {
-    return g_override_set;
-}
-
 static const fa_vec_cfg_t * find_cfg(const fa_vec_entry_t * tbl, size_t n, const fa_vec_key_t & k) {
     for (size_t i = 0; i < n; ++i) {
         if (memcmp(&tbl[i].key, &k, sizeof(k)) == 0) {
