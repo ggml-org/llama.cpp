@@ -896,8 +896,7 @@ static int ggml_backend_sched_backend_id_from_cur(ggml_backend_sched_t sched, st
     if (tensor->buffer || (tensor->view_src && tensor->view_src->buffer)) {
         // since the tensor is pre-allocated, it cannot be moved to another backend
         ggml_backend_buffer_t buffer = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
-        GGML_LOG_ERROR("%s: pre-allocated tensor (%s) in a buffer (%s) cannot run the operation (%s)
-", __func__, tensor->name, ggml_backend_buffer_name(buffer), ggml_op_name(tensor->op));
+        GGML_LOG_ERROR("%s: pre-allocated tensor (%s) in a buffer (%s) cannot run the operation (%s)\n", __func__, tensor->name, ggml_backend_buffer_name(buffer), ggml_op_name(tensor->op));
         sched->has_error = true;
         return -1;
     }
@@ -1260,8 +1259,7 @@ bool ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
             ggml_backend_sched_set_if_supported(sched, node, b, cur_backend_id);
         }
         if (*cur_backend_id == -1) {
-            GGML_LOG_ERROR("%s: unable to assign a backend for tensor (%s), operation (%s)
-", __func__, node->name, ggml_op_name(node->op));
+            GGML_LOG_ERROR("%s: unable to assign a backend for tensor (%s), operation (%s)\n", __func__, node->name, ggml_op_name(node->op));
             sched->has_error = true;
             return false;
         }
