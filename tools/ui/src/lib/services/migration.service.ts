@@ -10,11 +10,17 @@
  * - `runAllMigrations()` should be called once at app startup
  * - All migrations are NON-DESTRUCTIVE - legacy data is preserved for downgrade compatibility
  *
+ * **Phases:**
+ * - boot (default): runs before the encryption unlock gate; must not read
+ *   encrypted fields (they would see ciphertext passthrough)
+ * - post-unlock: runs after the gate; may assume an unlocked session
+ *
  * **Current Migrations:**
  * 1. localStorage prefix: Copy LlamaCppWebui.* → LlamaUi.* (both preserved)
  * 2. IndexedDB database: Copy LlamacppWebui → LlamaUi (both preserved)
- * 3. Legacy message format: Transform in-place (preserves structure, migrates markers)
+ * 3. Legacy message format: Transform in-place (post-unlock; migrates markers)
  * 4. Theme key: Copy standalone `theme` → config object (both preserved)
+ * 5. MCP headers: Move inline MCP server headers into the secrets store (post-unlock)
  */
 
 import Dexie from 'dexie';
@@ -25,19 +31,31 @@ import {
 	CONFIG_LOCALSTORAGE_KEY,
 	IDXDB_TABLES,
 	IDXDB_STORES,
+	MCP_SERVER_ID_PREFIX,
 	NEW_TO_DEPRECATED_MAP
 } from '$lib/constants';
+import { McpSecretsService } from '$lib/services/mcp-secrets.service';
 import { LEGACY_AGENTIC_REGEX, LEGACY_REASONING_TAGS } from '$lib/constants/agentic';
 import { SETTINGS_KEYS } from '$lib/constants/settings-keys';
 import { MessageRole } from '$lib/enums';
 
 // Types
 
+/**
+ * boot migrations run before the encryption unlock gate and must not read
+ * encrypted fields (they would see ciphertext passthrough); post-unlock
+ * migrations run after the gate and may assume the session is unlocked (or
+ * encryption is disabled).
+ */
+type MigrationPhase = 'boot' | 'post-unlock';
+
 interface Migration {
 	/** Unique identifier for this migration */
 	id: string;
 	/** Human-readable description */
 	description: string;
+	/** When the migration runs; defaults to 'boot' */
+	phase?: MigrationPhase;
 	/** Run the migration forward (non-destructive - copies, doesn't delete) */
 	run(): Promise<void>;
 }
@@ -283,6 +301,8 @@ async function getDatabaseService() {
 const legacyMessageMigration: Migration = {
 	id: LEGACY_MESSAGE_MIGRATION_ID,
 	description: 'Migrate legacy marker-based messages to structured format',
+	// reads and rewrites message content, so it must see plaintext
+	phase: 'post-unlock',
 
 	async run(): Promise<void> {
 		const db = await getDatabaseService();
@@ -663,6 +683,69 @@ const mcpDefaultOverridesMergeMigration: Migration = {
 	}
 };
 
+const MCP_HEADERS_TO_SECRETS_MIGRATION_ID = 'mcp-headers-to-secrets-v1';
+
+/**
+ * Moves MCP server auth headers still inline in the config blob into the
+ * secrets store (see McpSecretsService), freezing each server's resolved id
+ * so the secret stays attached. Runs post-unlock because persisting secrets
+ * requires an unlocked session when encryption is enabled.
+ */
+const mcpHeadersToSecretsMigration: Migration = {
+	id: MCP_HEADERS_TO_SECRETS_MIGRATION_ID,
+	description: 'Move inline MCP server headers from config into the secrets store',
+	phase: 'post-unlock',
+
+	async run(): Promise<void> {
+		const configRaw = localStorage.getItem(CONFIG_LOCALSTORAGE_KEY);
+		if (configRaw === null) return;
+
+		const config = JSON.parse(configRaw);
+		const rawServers = config[SETTINGS_KEYS.MCP_SERVERS];
+
+		let servers: unknown;
+		if (typeof rawServers === 'string') {
+			if (!rawServers.trim()) return;
+			try {
+				servers = JSON.parse(rawServers);
+			} catch {
+				return;
+			}
+		} else {
+			servers = rawServers;
+		}
+		if (!Array.isArray(servers)) return;
+
+		await McpSecretsService.load();
+
+		let changed = false;
+		for (const [index, entry] of servers.entries()) {
+			const headers = typeof entry?.headers === 'string' ? entry.headers.trim() : '';
+			if (!headers) continue;
+
+			const id =
+				typeof (entry as { id?: unknown })?.id === 'string' && (entry as { id: string }).id.trim()
+					? (entry as { id: string }).id.trim()
+					: `${MCP_SERVER_ID_PREFIX}-${index + 1}`;
+
+			if (McpSecretsService.getHeaders(id) === undefined) {
+				await McpSecretsService.setHeaders(id, headers);
+			}
+
+			servers[index] = { ...(entry as Record<string, unknown>), id, headers: undefined };
+			changed = true;
+		}
+
+		if (!changed) return;
+
+		config[SETTINGS_KEYS.MCP_SERVERS] = JSON.stringify(servers);
+		localStorage.setItem(CONFIG_LOCALSTORAGE_KEY, JSON.stringify(config));
+
+		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
+			console.log('[Migration] MCP headers to secrets: moved inline headers into secrets store');
+	}
+};
+
 const migrations: Migration[] = [
 	localStorageMigration,
 	idxdbMigration,
@@ -671,7 +754,8 @@ const migrations: Migration[] = [
 	customJsonKeyMigration,
 	mcpDefaultEnabledMigration,
 	mcpDefaultOverridesMergeMigration,
-	configTypesMigration
+	configTypesMigration,
+	mcpHeadersToSecretsMigration
 ];
 
 export const MigrationService = {
@@ -709,12 +793,14 @@ export const MigrationService = {
 	 * Run all pending migrations (non-destructive - preserves legacy data)
 	 * Should be called once at app initialization
 	 */
-	async runAllMigrations(): Promise<void> {
+	async runAllMigrations(phase: MigrationPhase = 'boot'): Promise<void> {
 		const state = getMigrationState();
 		if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
-			console.log('[Migration] Starting migration run, state:', state);
+			console.log(`[Migration] Starting ${phase} migration run, state:`, state);
 
 		for (const migration of migrations) {
+			if ((migration.phase ?? 'boot') !== phase) continue;
+
 			if (isMigrationCompleted(migration.id)) {
 				if (import.meta.env.DEV && import.meta.env.VITE_DEBUG)
 					console.log(`[Migration] ${migration.id}: already completed, skipping`);
