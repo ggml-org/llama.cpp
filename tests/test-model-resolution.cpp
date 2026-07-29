@@ -31,7 +31,6 @@ static std::string g_context;
 // independent of NDEBUG, so the checks stay alive in Release builds
 #define REQUIRE(x) do {                                                         \
     if (!(x)) {                                                                 \
-        common_log_resume(common_log_main());                                   \
         fprintf(stderr, "%s:%d: [%s] REQUIRE(%s) failed\n",                     \
                 __FILE__, __LINE__, g_context.c_str(), #x);                     \
         std::abort();                                                           \
@@ -40,7 +39,6 @@ static std::string g_context;
 
 #define REQUIRE_EQ(actual, expected) do {                                       \
     if (!((actual) == (expected))) {                                            \
-        common_log_resume(common_log_main());                                   \
         fprintf(stderr, "%s:%d: [%s] REQUIRE_EQ(%s, %s) failed\n  actual:   '%s'\n  expected: '%s'\n", \
                 __FILE__, __LINE__, g_context.c_str(), #actual, #expected,      \
                 std::string(actual).c_str(), std::string(expected).c_str());    \
@@ -460,9 +458,9 @@ int main(void) {
     // builds without TLS support, the stub serves it either way
     set_env("MODEL_ENDPOINT", "http://models.test/");
 
-    common_http_client_factory = [](const std::string & url) -> common_http_client_ptr {
+    common_http_client_set_factory([](const std::string & url) -> common_http_client_ptr {
         return std::make_unique<http_client_stub>(url);
-    };
+    });
 
     test_plan_resolution();
     test_task_assembly();
