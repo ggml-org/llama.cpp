@@ -1,0 +1,113 @@
+---
+description: Remote Intel lab host m48 (SSH) - OpenVINO llama.cpp build and benchmarks
+alwaysApply: false
+---
+
+# Remote host `m48` (gklab-dse-mom-48)
+
+Twin workflow to the local lucasso box: same `~/scripts/setvars-llama.sh` helpers and `~/src/llama` tree, **different iGPU** (pick via `ll_openvino_igpu_device`, not dGPU / Arc).
+
+## SSH and shell
+
+```bash
+ssh m48
+source ~/.bash_intel
+ls_setup_env_llama_oneapi
+cd ~/src/llama   # or: cdl
+```
+
+- User on m48: `lslusarczyk` (not `lucasso`).
+- `~/.bash_intel` loads `~/scripts/setvars-llama.sh` via `setvars-setup.sh`.
+- Do **not** commit or paste secrets from `~/.bash_intel` (tokens, etc.).
+
+## OpenVINO runtime
+
+Expected layout (same as local guide):
+
+- `OPENVINO_ROOT=~/intel/openvino` with `setupvars.sh`
+- If missing: install under `~/intel/openvino_2026.2.1` and `ln -sfn` to `~/intel/openvino`
+
+Configure/build:
+
+```bash
+export LL_BACKEND=openvino
+ll_configure_openvino
+ll_build_openvino --target llama-bench llama-simple llama-cli
+```
+
+Build dir: `build_oneapi_<branch>_openvino_RelWithDebInfo` under `LLREPO` (default `~/src/llama`).
+
+Runtime:
+
+```bash
+ll_source_openvino
+ll_openvino_gpu_devices
+IGPU=$(ll_openvino_igpu_device)   # override: LL_OPENVINO_IGPU_DEVICE=GPU.0
+```
+
+Use **`GPU.1` / iGPU only** on m48 for hybrid routing benchmarks.
+
+On **gklab-dse-mom-48**, OpenVINO **`GPU.0` is Arc B580 (dGPU)**; integrated graphics is **`GPU.1`**. Default `ll_openvino_igpu_device` may return `GPU.0` if Python/numpy is missing for device probing — set explicitly:
+
+```bash
+export LL_OPENVINO_IGPU_DEVICE=GPU.1
+# bench scripts: GGML_OPENVINO_DECODE_DEVICE=GPU.1, all-iGPU ditto
+```
+
+Do **not** use GPU.0 for CPU+iGPU phase-split studies on m48.
+
+## OpenVINO runtime on m48
+
+If `~/intel/openvino` is missing, install runtime under `~/intel/openvino_2026.2.1` and symlink `~/intel/openvino` (see local `docs/backend/OPENVINO.md` tarball URL).
+
+Build gotchas on this host:
+
+- `sudo apt install ocl-icd-opencl-dev opencl-headers opencl-clhpp-headers`
+- Link OpenVINO with system **`g++`** (not only `g++-11`): `export LL_OPENVINO_C_COMPILER=gcc LL_OPENVINO_CXX_COMPILER=g++` before `ll_configure_openvino`
+
+Build dir example: `build_oneapi_openvino/phase-split-usm-kv_openvino_RelWithDebInfo/bin/`
+
+## Git on m48
+
+- Working copy: `~/src/llama`
+- `origin` may point at `ggml-org/llama.cpp`; feature branches are pushed to **`ls`** from the local machine (`git push ls HEAD:<branch>`).
+- On m48: `git fetch origin` / checkout branch; **code is not auto-synced** - pull or fetch after push from local.
+
+Local remote for the same fork:
+
+```bash
+git remote add ls git@github.com:lslusarczyk/llama.cpp.git   # if missing
+git push -u ls HEAD:<branch>
+```
+
+## Benchmarks (phase split, e2e)
+
+After `ll_source_openvino` and **`export LL_OPENVINO_IGPU_DEVICE=GPU.1`**:
+
+```bash
+ssh m48 bash -s <<'REMOTE'
+source ~/.bash_intel
+ls_setup_env_llama_oneapi >/dev/null 2>&1
+source ~/intel/openvino/setupvars.sh
+export BENCH=$HOME/src/llama/build_oneapi_openvino/phase-split-usm-kv_openvino_RelWithDebInfo/bin/llama-bench
+sed 's/GPU\.0/GPU.1/g' ~/src/llama/scripts/bench-openvino-phase-split.sh | bash -s -- ~/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf
+REMOTE
+```
+
+Use a **heredoc** so paths and `$HOME` expand on m48, not on the local machine.
+
+Set `LLAMACPP_TEST_MODELFILE` for `tests/test-openvino-phase-split.sh`.
+
+Integration test:
+
+```bash
+LLAMA_BIN_DIR=<build>/bin LLAMACPP_TEST_MODELFILE=<model.gguf> \
+  bash tests/test-openvino-phase-split.sh
+```
+
+## Agent workflow
+
+1. `ssh m48 'source ~/.bash_intel; ...'` for probes and long builds (OpenVINO download, `ll_build_openvino`).
+2. Confirm OpenVINO + iGPU device list before benchmarking.
+3. Append results to Confluence [Dynamic Backend Selection Evaluation](https://wiki.ith.intel.com/spaces/PERFORMANCE/pages/4865201015/Dynamic+Backend+Selection+Evaluation) under a **host-specific** subsection (e.g. m48).
+4. Do not `git push` / open PRs to `ggml-org` without explicit user approval (`AGENTS.md`).
