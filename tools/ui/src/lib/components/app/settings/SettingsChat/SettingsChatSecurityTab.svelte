@@ -1,9 +1,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { Lock, LockOpen, ShieldCheck, ShieldOff } from '@lucide/svelte';
+	import { Eye, Lock, LockOpen, ShieldCheck, ShieldOff, TriangleAlert } from '@lucide/svelte';
 	import { toast } from 'svelte-sonner';
 
-	import { DialogConfirmation } from '$lib/components/app';
+	import * as Alert from '$lib/components/ui/alert';
+	import { DialogConfirmation, DialogEncryptionEnable } from '$lib/components/app';
 	import SettingsGroup from '$lib/components/app/settings/SettingsGroup.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -19,6 +20,7 @@
 	let nextPassphraseConfirm = $state('');
 	let changing = $state(false);
 
+	let showEnableDialog = $state(false);
 	let showDisableDialog = $state(false);
 	let disabling = $state(false);
 
@@ -98,18 +100,51 @@
 	</p>
 {:else if !encryptionStore.isEnabled}
 	<SettingsGroup title="Encrypt conversations">
-		<div class="grid gap-1">
-			<p class="mb-4 text-sm text-muted-foreground">
-				Encrypt your conversations at rest in this browser with a passphrase. Conversation names,
-				message content and attachments are encrypted; timestamps and the conversation structure
-				stay readable. The passphrase is held in memory only and is required on every visit - if you
-				forget it, your conversations cannot be recovered.
+		<div class="grid gap-4">
+			<p class="text-sm text-muted-foreground">
+				Encrypt your conversations at rest in this browser with a passphrase.
 			</p>
+
+			<div class="grid gap-4 text-sm sm:grid-cols-2">
+				<div>
+					<p class="mb-1 flex items-center gap-1.5 font-medium">
+						<Lock class="h-4 w-4" />
+						Encrypted
+					</p>
+					<ul class="list-disc pl-5 text-muted-foreground">
+						<li>Conversation titles</li>
+						<li>Message content</li>
+						<li>Attachments</li>
+					</ul>
+				</div>
+
+				<div>
+					<p class="mb-1 flex items-center gap-1.5 font-medium">
+						<Eye class="h-4 w-4" />
+						Stays visible
+					</p>
+					<ul class="list-disc pl-5 text-muted-foreground">
+						<li>Timestamps</li>
+						<li>Message counts and structure</li>
+					</ul>
+				</div>
+			</div>
+
+			<Alert.Root
+				class="max-w-xl border-amber-500/50 bg-amber-500/10 text-amber-700 dark:text-amber-400"
+			>
+				<TriangleAlert />
+				<Alert.Title>No recovery if you forget the passphrase</Alert.Title>
+				<Alert.Description class="text-amber-700/90 dark:text-amber-400/90">
+					It is never stored and cannot be reset. Without it, your conversations cannot be decrypted
+					- by you or by anyone else. You will need it on every visit.
+				</Alert.Description>
+			</Alert.Root>
 
 			<form
 				onsubmit={(e) => {
 					e.preventDefault();
-					handleEnable();
+					if (canEnable) showEnableDialog = true;
 				}}
 				class="grid max-w-sm gap-2"
 			>
@@ -141,6 +176,12 @@
 			</form>
 		</div>
 	</SettingsGroup>
+
+	<DialogEncryptionEnable
+		bind:open={showEnableDialog}
+		onConfirm={handleEnable}
+		onCancel={() => (showEnableDialog = false)}
+	/>
 {:else}
 	<div class="space-y-10">
 		<SettingsGroup title="Session">
@@ -170,6 +211,11 @@
 		</SettingsGroup>
 
 		<SettingsGroup title="Change passphrase">
+			<p class="mb-4 max-w-xl text-sm text-muted-foreground">
+				Conversations stay encrypted - only the passphrase changes. If you forget the new
+				passphrase, they cannot be recovered.
+			</p>
+
 			<form
 				onsubmit={(e) => {
 					e.preventDefault();
@@ -234,7 +280,7 @@
 <DialogConfirmation
 	bind:open={showDisableDialog}
 	title="Disable encryption"
-	description="All conversations will be decrypted and stored as plaintext. Continue?"
+	description="All conversations will be decrypted and stored as plaintext in this browser. Anyone using this browser will be able to read them. Continue?"
 	confirmText="Disable"
 	variant="destructive"
 	icon={ShieldOff}
