@@ -349,6 +349,9 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
 
     const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 
+    // the Gemma4 backbone (marked by its sandwich norms) uses GELU instead of SiLU
+    const llm_ffn_op_type ffn_act = model.layers[0].ffn_post_norm ? LLM_FFN_GELU : LLM_FFN_SILU;
+
     // KV cache injection
     if (ubatch.embd) {
         auto inp = std::make_unique<llm_graph_input_embd>(n_embd);
@@ -495,13 +498,12 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
         cur = build_norm(ffn_inp, layer.ffn_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "ffn_norm", il);
 
-        // sandwich norms mark a Gemma4 backbone, which uses GELU instead of SiLU
         cur = build_ffn(cur,
                 layer.ffn_up,   NULL, NULL,
                 layer.ffn_gate, NULL, NULL,
                 layer.ffn_down, NULL, NULL,
                 NULL,
-                layer.ffn_post_norm ? LLM_FFN_GELU : LLM_FFN_SILU, LLM_FFN_PAR, il);
+                ffn_act, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);
 
         if (layer.ffn_post_norm) {
