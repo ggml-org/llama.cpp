@@ -690,6 +690,8 @@ const MCP_HEADERS_TO_SECRETS_MIGRATION_ID = 'mcp-headers-to-secrets-v1';
  * secrets store (see McpSecretsService), freezing each server's resolved id
  * so the secret stays attached. Runs post-unlock because persisting secrets
  * requires an unlocked session when encryption is enabled.
+ * Mirrors the copy-and-strip that mcpStore#persistServers applies on every
+ * settings write; duplicated here to keep MigrationService store-free.
  */
 const mcpHeadersToSecretsMigration: Migration = {
 	id: MCP_HEADERS_TO_SECRETS_MIGRATION_ID,
