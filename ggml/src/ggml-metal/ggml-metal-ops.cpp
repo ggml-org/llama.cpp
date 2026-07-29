@@ -2346,10 +2346,8 @@ size_t ggml_metal_op_mul_mat_id_extra_amax(const ggml_tensor * op) {
 
     GGML_UNUSED(op);
 
-    // 16 bytes for the factor pair (inverse scale applied to src1 on
-    // load, scale applied to the f32 accumulator on store), then one
-    // float per stage-1 partial.
-    return 16 + 256*sizeof(float);
+    // 2 scaling factors (8 bytes) + N_MM_NPART_AMAX per-threadgroup scales for stage-1
+    return 8 + N_MM_NPART_AMAX*sizeof(float);
 }
 
 int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
@@ -2412,9 +2410,8 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
         ggml_metal_buffer_id bid_amax = bid_ids;
         bid_amax.offs += ggml_metal_op_mul_mat_id_extra_ids(op);
 
-        // src1 rescale factors, computed before the matmul so the
-        // narrowing to the half MMA operands cannot overflow. See
-        // kernel_mul_mm_id_amax_f32.
+        // src1 rescale factors, computed before the matmul
+        // ref: https://github.com/ggml-org/llama.cpp/pull/26223
         {
             ggml_metal_kargs_mul_mm_id_amax args = {
                 /*.ne00 =*/ ne10,
@@ -2437,7 +2434,7 @@ int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
 
             ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
 
-            ggml_metal_encoder_dispatch_threadgroups(enc, 256, 1, 1, 256, 1, 1);
+            ggml_metal_encoder_dispatch_threadgroups(enc, N_MM_NPART_AMAX, 1, 1, 256, 1, 1);
         }
 
         ggml_metal_op_concurrency_reset(ctx);

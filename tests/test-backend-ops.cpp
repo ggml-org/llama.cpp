@@ -4420,8 +4420,6 @@ static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats, float amax =
                 ggml_backend_tensor_set(t, data.data(), r * t->nb[1], t->ne[0] * sizeof(int32_t));
             }
         } else if (amax != 1.0f && t->type == GGML_TYPE_F32) {
-            // src1 (activations) only — the weights stay in their normal
-            // range so this isolates activation magnitude.
             init_tensor_uniform(t, -amax, amax);
         } else {
             init_tensor_uniform(t);
@@ -4439,13 +4437,7 @@ struct test_mul_mat_id : public test_case {
     const int64_t m;
     const int64_t n;
     const int64_t k;
-    // Magnitude of the src1 activations. Default 1.0f reproduces the
-    // historical uniform [-1, 1] init. Larger values exercise backends
-    // that narrow the activations to a lower-range type internally:
-    // Metal's mul_mm_id feeds simdgroup_half8x8, and f16 saturates at
-    // 65504, so real models whose activations exceed that produce inf
-    // and then NaN on that path while the mul_mv_id path is correct.
-    const float amax;
+    const float amax; // magnitude of src1
 
     std::string vars() override {
         return VARS_TO_STR9(type_a, type_b, n_mats, n_used, b, m, n, k, amax);
@@ -9042,17 +9034,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_mul_mat_id(type_a, GGML_TYPE_F32, 4, 2, false, 64, 16, 3*ggml_blck_size(type_a)));
     }
 
-    // Activations outside f16 range. Backends that narrow src1 to a
-    // half-precision type for a matrix-multiply path (Metal's
-    // mul_mm_id feeds simdgroup_half8x8) saturate at 65504 and produce
-    // inf, then NaN — while the vector path on the same backend, and
-    // every CPU path, are correct. Real models hit this: Mistral
-    // Small 4 (arch mistral4, 128 experts / 4 active) has a layer whose
-    // ffn activations reach ~1e5, so on Metal every prefill of >= 32
-    // tokens returns an all-NaN vocabulary, and fewer than 32 tokens is
-    // correct (ne21_mm_id_min switches mul_mv_id -> mul_mm_id at 32).
-    // n = 32 and 64 sit above that switch; n = 16 below it is the
-    // control that must stay green.
+    // test src1 f16 overflow
     for (int n : {16, 32, 64}) {
         test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q4_K, GGML_TYPE_F32, 128, 4, false, 4096, n, 2048, 1e5f));
         test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q8_0, GGML_TYPE_F32, 8,   2, false, 512,  n, 256,  1e5f));

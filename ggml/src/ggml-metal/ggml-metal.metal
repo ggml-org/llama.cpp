@@ -10420,27 +10420,6 @@ kernel void kernel_mul_mm_id_map0(
     tpe_u32[ide] = n_all;
 }
 
-// Compute max(|x|) over src1 and derive a power-of-two scale that
-// brings the activations inside f16 range.
-//
-// kernel_mul_mm_id narrows src1 to `half` for the simdgroup MMA
-// operands. f16 saturates at 65504, so a model whose activations exceed
-// that yields inf, and simdgroup_multiply_accumulate then poisons the
-// whole accumulator tile with NaN. Scaling src1 down by a power of two
-// on load and scaling the f32 accumulator back up on store is exact —
-// powers of two are exact in binary floating point and the dot product
-// is linear, so a single tensor-wide factor introduces no error at all.
-//
-// When amax fits already (the overwhelmingly common case) the factor is
-// 1.0 and the result is bit-identical to not doing this.
-//
-// Two stages so the pass stays bandwidth-bound rather than serialized
-// on one threadgroup: stage 1 reduces rows across GGML_METAL_AMAX_NPART
-// threadgroups into partials, stage 2 folds the partials and writes the
-// factor pair.
-
-#define GGML_METAL_AMAX_NPART 256
-
 kernel void kernel_mul_mm_id_amax_part_f32(
         constant ggml_metal_kargs_mul_mm_id_amax & args,
         device   const char * src1,
@@ -10455,7 +10434,7 @@ kernel void kernel_mul_mm_id_amax_part_f32(
 
     float lmax = 0.0f;
 
-    for (int ir = tgpig; ir < nrow; ir += GGML_METAL_AMAX_NPART) {
+    for (int ir = tgpig; ir < nrow; ir += N_MM_NPART_AMAX) {
         const int i01 = ir % args.ne01;
         const int i02 = ir / args.ne01;
 
@@ -10486,30 +10465,29 @@ kernel void kernel_mul_mm_id_amax_part_f32(
     }
 
     if (tiitg == 0) {
-        // partials live after the two-float factor pair
-        ((device float *) (dst + 16))[tgpig] = amax;
+        ((device float *) (dst + 8))[tgpig] = amax;
     }
 }
 
 kernel void kernel_mul_mm_id_amax_f32(
         device char * dst,
         ushort tiitg[[thread_index_in_threadgroup]]) {
-    device const float * part = (device const float *) (dst + 16);
+    device const float * part = (device const float *) (dst + 8);
 
     float amax = 0.0f;
 
-    for (int i = tiitg; i < GGML_METAL_AMAX_NPART; i += N_SIMDWIDTH) {
+    for (int i = tiitg; i < N_MM_NPART_AMAX; i += N_SIMDWIDTH) {
         amax = max(amax, part[i]);
     }
 
     amax = simd_max(amax);
 
     if (tiitg == 0) {
-        // Leave a comfortable margin below the f16 max of 65504: the
-        // products feeding the accumulator stay in f32, so only the
-        // operand itself has to fit.
+        // leave a comfortable margin below the f16 max of 65504
         float scale = 1.0f;
 
+        // isfinite: src1 already inf/nan is not ours to fix - keep the
+        // scale at 1.0 instead of turning it into a different failure
         if (isfinite(amax) && amax > 32768.0f) {
             scale = exp2(ceil(log2(amax)) - 15.0f);
         }
@@ -10609,9 +10587,7 @@ kernel void kernel_mul_mm_id(
     S0_8x8 ma[4];
     S1_8x8 mb[2];
 
-    // Power-of-two rescale so activations outside f16 range survive the
-    // narrowing to the `half` MMA operands. Both factors are exactly 1.0
-    // unless src1 needed it, in which case they are exact powers of two.
+    // power-of-two rescaling
     const float s1_inv   = ((device const float *) amax)[0];
     const float s1_scale = ((device const float *) amax)[1];
 
