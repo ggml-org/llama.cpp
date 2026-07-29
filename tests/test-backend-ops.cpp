@@ -9057,6 +9057,16 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     // top-k row must not silently drop a slot in the compacted src1/dst mapping.
     test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_Q8_0, GGML_TYPE_F32, 144, 6, true, 2048, 9, 4096, /*force_duplicate_id=*/true));
 
+    // Regression test for the CUDA mul_mat_id CPU-fallback path: a token's
+    // top-k row can name the same expert at more than one slot (duplicate/
+    // degenerate routing table). The fallback's ids_to_sorted_host builder used
+    // to break out of the per-token expert scan after the first match, silently
+    // dropping later slots and undercounting ids_to_sorted_host below
+    // ne_get_rows, which tripped a GGML_ASSERT. This shape (F16/F32,
+    // n_mats=n_used=16, m=50, n_tokens=200, k=64) is chosen to actually route
+    // through the CPU fallback rather than the CUDA MMQ/MMF paths.
+    test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F16, GGML_TYPE_F32, 16, 16, false, 50, 200, 64, /*force_duplicate_id=*/true));
+
     for (int bs : {1, 4, 512}) {
         for (ggml_type type_a : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_Q4_0, GGML_TYPE_Q4_K}) {
             for (ggml_type type_b : {GGML_TYPE_F32}) {

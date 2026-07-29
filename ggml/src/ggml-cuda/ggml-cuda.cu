@@ -1932,7 +1932,9 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
                     ids_from_sorted_host[i12*n_expert_used + iex] = ids_to_sorted_host.size();
                     ids_to_sorted_host.push_back(i12*ne11 + iex % ne11);
                     tokens_per_expert[i02]++;
-                    break;
+                    // note: no break here -- a token's routing table can assign the
+                    // same expert to more than one slot (duplicate/degenerate ids),
+                    // and each such slot needs its own compacted row.
                 }
             }
         }
