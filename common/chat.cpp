@@ -1137,8 +1137,8 @@ static common_chat_params common_chat_params_init_qwen3_coder(const common_chat_
 
     data.message_delimiters = {
         { COMMON_CHAT_ROLE_ASSISTANT, "<|im_start|>assistant"             },
-        { COMMON_CHAT_ROLE_TOOL,      "<|im_start|>user\n<tool_response>" },
-        { COMMON_CHAT_ROLE_TOOL,      "<|im_start|>tool"                  },
+        { COMMON_CHAT_ROLE_TOOL,      "<|im_start|>user\n<tool_response>" }, // Qwen3-Coder, Qwen3.5, Nemotron Nano 3
+        { COMMON_CHAT_ROLE_TOOL,      "<|im_start|>tool_response"         }, // StepFun-3.5-Flash
         { COMMON_CHAT_ROLE_USER,      "<|im_start|>user"                  },
         { COMMON_CHAT_ROLE_SYSTEM,    "<|im_start|>system"                },
     };
