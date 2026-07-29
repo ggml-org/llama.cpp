@@ -15,6 +15,7 @@ import {
 	ENCRYPTION_IDLE_TIMEOUT_LOCALSTORAGE_KEY,
 	ENCRYPTION_SESSION_LOCALSTORAGE_KEY
 } from '$lib/constants';
+import { mcpStore } from '$lib/stores/mcp.svelte';
 
 /** Default idle timeout in minutes */
 const DEFAULT_IDLE_TIMEOUT_MINUTES = 5;
@@ -150,6 +151,7 @@ class EncryptionStore {
 		const unlocked = await EncryptionService.unlockWithPassphrase(passphrase);
 		if (unlocked) {
 			this.refresh();
+			await mcpStore.loadSecrets();
 			this.unlockResolver?.();
 			this.unlockResolver = null;
 			this.unlockPromise = null;

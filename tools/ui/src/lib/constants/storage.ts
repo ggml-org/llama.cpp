@@ -27,6 +27,7 @@ export const DISMISSED_RECOMMENDED_MCP_SERVERS_LOCALSTORAGE_KEY = `${STORAGE_APP
 
 /** Wrapped data encryption key and KDF parameters (see EncryptionService) */
 export const ENCRYPTION_META_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.encryptionMeta`;
+export const MCP_SECRETS_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.mcpSecrets`;
 
 /** Auto-lock idle timeout in minutes (see EncryptionStore) */
 export const ENCRYPTION_IDLE_TIMEOUT_LOCALSTORAGE_KEY = `${STORAGE_APP_NAME}.encryptionIdleTimeout`;
