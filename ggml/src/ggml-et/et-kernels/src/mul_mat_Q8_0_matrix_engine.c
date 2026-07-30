@@ -393,11 +393,27 @@ int entry_point(struct ggml_et_mm_q8_params *params, void *env) {
             for (int64_t kw = 0; kw < n_windows; ++kw) {
                 const int buf = wid & 1;
                 wid++;
-                scp_wait(ready_ctr, wid);
 
+                // Pure index arithmetic hoisted above scp_wait (no dependency on
+                // the producer's readiness signal). Also hoist r=0's C-seed when
+                // kw>0 (validated on mul_mat_f16_f32_matrix_engine.c, +10-12% on
+                // windowed shapes): it only needs cscratch data Hart 0 itself
+                // wrote in the previous window, not anything from the producer.
+                // The kw==0 bias-preload path is intentionally left untouched --
+                // test-backend-ops cannot exercise the fused MM+ADD path, so
+                // this is not a safe place for exploratory refactoring.
                 const int64_t kb0 = k_start_block + kw * KWIN;
                 const int64_t kbn = (kb0 + KWIN <= k_end_block) ? KWIN : (k_end_block - kb0);
                 const int is_last = (kw == n_windows - 1);
+
+                int seeded0 = 0;
+                if (kw > 0 && r_count > 0) {
+                    c_seed(cscratch);
+                    seeded0 = 1;
+                }
+
+                scp_wait(ready_ctr, wid);
+
                 float *cf = (float *) cache_buf[buf];
 
                 for (int64_t r = 0; r < r_count; ++r) {
@@ -446,6 +462,8 @@ int entry_point(struct ggml_et_mm_q8_params *params, void *env) {
                         } else {
                             first = 1;   // zero-init (unfused, or non-zero k_split)
                         }
+                    } else if (r == 0 && seeded0) {
+                        first = 0;       // pre-seeded above, before scp_wait
                     } else {
                         c_seed(cs);      // carry partial from prior windows
                         first = 0;
