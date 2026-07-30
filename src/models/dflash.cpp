@@ -37,24 +37,14 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
 
     const int64_t n_embd_inp = hparams.n_embd_inp_enc();
 
-    // DSpark = DFlash + a semi-autoregressive Markov head and Confidence head
-    //
-    // TODO: only Qwen3-style backbones are supported for now; other backbones (e.g. Gemma4)
-    //       need their own conversion path and graph tweaks
-    // NOTE: accept the original dspark converter's "markov.w1.weight" naming in addition
-    //       to the canonical "markov_w1.weight" so older gguf files still load.
+    // DSpark = DFlash + a semi-autoregressive Markov head and Confidence head.
+    // The DSpark extension is folded into the upstream DFlash loader; only the
+    // canonical "markov_w1.weight" naming is accepted here.  Other backbones
+    // (e.g. Gemma4) have their own conversion path and graph tweaks; see
+    // llama_model_dflash_gemma4 in src/models/dflash-gemma4.{h,cpp}.
     const struct ggml_tensor * markov_meta = ml->get_tensor_meta("markov_w1.weight");
-    if (!markov_meta) {
-        markov_meta = ml->get_tensor_meta("markov.w1.weight");
-    }
     if (markov_meta) {
         const int64_t dspark_markov_rank = markov_meta->ne[0];
-        // Use the meta from whichever name was present so create_tensor reads the right blob
-        if (markov_meta->name[0] == 'm' && markov_meta->name[7] == '.') {
-            // legacy "markov.w1.weight" form: hijack the create_tensor path by pre-registering
-            // the legacy name as the canonical one
-            LLAMA_LOG_WARN("%s: dspark model uses legacy 'markov.w1.weight' naming; aliasing to 'markov_w1.weight'\n", __func__);
-        }
         dspark_markov_w1 = create_tensor(tn(LLM_TENSOR_DSPARK_MARKOV_W1, "weight"), { dspark_markov_rank, n_vocab }, 0);
         dspark_markov_w2 = create_tensor(tn(LLM_TENSOR_DSPARK_MARKOV_W2, "weight"), { dspark_markov_rank, n_vocab }, 0);
 
@@ -98,13 +88,6 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
         layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), { n_embd, n_ff }, 0);
         layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), { n_ff, n_embd }, 0);
         layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), { n_embd, n_ff }, 0);
-
-        // Gemma4-style extras
-        layer.attn_post_norm  = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM,  "weight", i), { n_embd }, TENSOR_NOT_REQUIRED);
-        layer.ffn_post_norm   = create_tensor(tn(LLM_TENSOR_FFN_POST_NORM,   "weight", i), { n_embd }, TENSOR_NOT_REQUIRED);
-        layer.rope_freqs      = create_tensor(tn(LLM_TENSOR_ROPE_FREQS,      "weight", i), { n_embd_head_k/2 }, TENSOR_NOT_REQUIRED | (i != 0 ? TENSOR_DUPLICATED : 0));
-        // dflash-specific 1-element per-layer scale (gemma4 drafter artifact)
-        create_tensor(tn(LLM_TENSOR_LAYER_OUT_SCALE, "weight", i), { 1 }, TENSOR_NOT_REQUIRED);
     }
 }
 
@@ -153,7 +136,7 @@ llama_model_dflash::graph<true>::graph(const llama_model & model, const llm_grap
 }
 
 // DSpark (DFlash + Markov & Confidence head): Markov bias on the draft logits, chained per block position
-static void build_dspark_markov_head(llm_graph_context & g, const llama_model & model, ggml_tensor * tokens) {
+void llama_model_dflash::build_dspark_markov_head(llm_graph_context & g, const llama_model & model, ggml_tensor * tokens) {
     ggml_context * ctx0 = g.ctx0;
     auto         & res  = g.res;
 
@@ -430,6 +413,6 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
 
     // DSpark: bias the draft logits with the Markov head
     if (model.dspark_markov_w1) {
-        build_dspark_markov_head(*this, model, inp_tokens);
+        llama_model_dflash::build_dspark_markov_head(*this, model, inp_tokens);
     }
 }

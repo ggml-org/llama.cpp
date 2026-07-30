@@ -37,6 +37,25 @@
 #include <string>
 #include <vector>
 
+// DFlash subclass dispatch: the arch stays LLM_ARCH_DFLASH, but a Gemma4
+// drafter carries Gemma4-specific tensors (attn_post_norm, ffn_post_norm,
+// rope_freqs, out_scale).  When those are present in the GGUF, we route
+// to llama_model_dflash_gemma4 which loads and applies them; otherwise
+// the arch-agnostic base class is used.
+//
+// The detection is done at construction time so the rest of the loader
+// sees a finalized class.  The legacy arch-only factory falls back to the
+// base class because it has no GGUF to inspect.
+static llama_model * llama_model_create_dflash(llama_model_loader & ml, const llama_model_params & params) {
+    // The LLM_TENSOR_ATTN_POST_NORM tensor name (see llama-arch.cpp) is
+    // "blk.%d.post_attention_norm"; the canonical GGUF entry has the
+    // ".weight" suffix from `create_tensor(..., "weight", i)`.
+    if (ml.get_tensor_meta("blk.0.post_attention_norm.weight") != nullptr) {
+        return new llama_model_dflash_gemma4(params);
+    }
+    return new llama_model_dflash(params);
+}
+
 static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params & params) {
     switch (arch) {
         case LLM_ARCH_LLAMA:
@@ -330,6 +349,19 @@ llama_model * llama_model_create(llama_model_loader & ml, const llama_model_para
     llm_arch arch = ml.get_arch();
     if (arch == LLM_ARCH_UNKNOWN) {
         throw std::runtime_error("unknown model architecture: '" + ml.get_arch_name() + "'");
+    }
+
+    // DFlash subclass dispatch needs the loader to inspect the GGUF for the
+    // Gemma4 marker; the arch-only factory cannot do this.
+    if (arch == LLM_ARCH_DFLASH) {
+        llama_model * model = llama_model_create_dflash(ml, params);
+        if (model != nullptr) {
+            model->arch = arch;
+            if (params.split_mode == LLAMA_SPLIT_MODE_TENSOR && !llm_arch_supports_sm_tensor(arch)) {
+                throw std::runtime_error(std::string("LLAMA_SPLIT_MODE_TENSOR not implemented for architecture '") + llm_arch_name(arch) + "'");
+            }
+        }
+        return model;
     }
 
     return llama_model_create(arch, params);
