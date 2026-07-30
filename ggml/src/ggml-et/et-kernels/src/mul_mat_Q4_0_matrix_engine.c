@@ -557,11 +557,25 @@ int entry_point(struct ggml_et_binary_params *params, void *env) {
             for (int64_t kw = 0; kw < n_windows; ++kw) {
                 const int buf = wid & 1;
                 wid++;
-                scp_wait(ready_ctr, wid);
 
+                // Pure index arithmetic hoisted above scp_wait (no dependency on
+                // the producer's readiness signal). Also hoist r=0's C-seed when
+                // kw>0 (same optimization as mul_mat_Q8_0_matrix_engine.c,
+                // ~+10-12% on windowed shapes there): it only needs cscratch data
+                // Hart 0 itself wrote in the previous window, not anything from
+                // the producer.
                 const int64_t kb0 = k_start_block + kw * KWIN;
                 const int64_t kbn = (kb0 + KWIN <= k_end_block) ? KWIN : (k_end_block - kb0);
                 const int is_last = (kw == n_windows - 1);
+
+                int seeded0 = 0;
+                if (kw > 0 && r_count > 0) {
+                    c_seed(cscratch);
+                    seeded0 = 1;
+                }
+
+                scp_wait(ready_ctr, wid);
+
                 float *cf = (float *) cache_buf[buf];
 
                 for (int64_t r = 0; r < r_count; ++r) {
@@ -571,8 +585,15 @@ int entry_point(struct ggml_et_binary_params *params, void *env) {
 
                     char *cs = cscratch + r * (16 * 64);
 
-                    if (kw > 0) c_seed(cs);
-                    int first = (kw == 0) ? 1 : 0;
+                    int first;
+                    if (kw == 0) {
+                        first = 1;
+                    } else if (r == 0 && seeded0) {
+                        first = 0;       // pre-seeded above, before scp_wait
+                    } else {
+                        c_seed(cs);
+                        first = 0;
+                    }
 
                     if (n_cur == 4) {
                         // Errata-D: present AROWS=4 by zero-padding row 4 in BOTH
