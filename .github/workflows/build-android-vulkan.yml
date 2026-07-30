@@ -125,48 +125,74 @@ jobs:
 
       # The Android NDK toolchain hard-codes
       #   CMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY
-      # which restricts find_package() to paths inside the NDK sysroot.
-      # The LunarG Vulkan SDK ships SPIRV-Headers on the host, but those
-      # CMake config files (SPIRV-HeadersConfig.cmake) are NOT inside the
-      # sysroot, so `find_package(SPIRV-Headers CONFIG REQUIRED)` fails
-      # with the error:
-      #   Could not find a package configuration file provided by
-      #   "SPIRV-Headers" with any of the following names:
-      #     SPIRV-HeadersConfig.cmake
-      #     spirv-headers-config.cmake
+      #   CMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY
+      # which restricts both find_package() AND #include <...> searches
+      # to paths inside the NDK sysroot.
       #
-      # Workaround: clone SPIRV-Headers from Khronos and install both
-      # the headers and the CMake config into the NDK sysroot, where
-      # the Android toolchain's find_package will pick them up.
+      # The LunarG Vulkan SDK ships two header libraries on the *host*:
+      #   1. SPIRV-Headers  — needed by find_package(SPIRV-Headers CONFIG)
+      #   2. Vulkan-Headers — needed by #include <vulkan/vulkan.hpp>
+      #                       (the C++ Vulkan wrapper used by ggml-vulkan.cpp)
       #
-      # We pin to the tag matching the bundled Vulkan SDK SPIRV-Headers
-      # release to keep glslc (which compiles the .comp shaders) and the
-      # SPIRV-Headers used by ggml-vulkan in sync.
-      # Tag format on KhronosGroup/SPIRV-Headers is `vulkan-sdk-<version>`,
+      # The Android NDK sysroot ships `vulkan/vulkan.h` and
+      # `vulkan/vulkan_core.h` (because Vulkan is part of Android's
+      # stable API since API 24), but it does NOT ship the C++ wrapper
+      # `vulkan/vulkan.hpp`. Without it, the build fails with:
+      #
+      #   ggml-vulkan.cpp:22:10: fatal error: 'vulkan/vulkan.hpp' file not found
+      #     22 | #include <vulkan/vulkan.hpp>
+      #
+      # Workaround: clone BOTH KhronosGroup/SPIRV-Headers and
+      # KhronosGroup/Vulkan-Headers and install them into the NDK
+      # sysroot, where the Android toolchain will pick them up.
+      #
+      # Installing Vulkan-Headers overwrites the NDK's older
+      # vulkan_core.h with a newer one (e.g. 1.4.357.0 vs 1.3.275).
+      # This is safe because:
+      #   - The newer vulkan_core.h is a strict superset of the old one
+      #     (only adds new extension declarations; old APIs unchanged).
+      #   - ggml-vulkan resolves ALL device extensions at runtime via
+      #     vkGetInstanceProcAddr / vkGetDeviceProcAddr, so newer
+      #     declarations don't cause runtime failures on older drivers.
+      #
+      # Both repos use the `vulkan-sdk-<version>` tag format on GitHub,
       # e.g. `vulkan-sdk-1.4.357.0` for Vulkan SDK 1.4.357.0.
-      - name: Install SPIRV-Headers into NDK sysroot
+      - name: Install SPIRV-Headers + Vulkan-Headers into NDK sysroot
         run: |
           source ./vulkan_sdk/setup-env.sh
           SYSROOT=${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/sysroot
-          # LunarG tags SPIRV-Headers as `vulkan-sdk-<vulkan-sdk-version>`
-          # on GitHub, e.g. `vulkan-sdk-1.4.357.0`.
-          SPIRV_HEADERS_TAG="vulkan-sdk-${VULKAN_SDK_VERSION}"
-          echo "Installing SPIRV-Headers tag ${SPIRV_HEADERS_TAG} into ${SYSROOT}/usr"
-          # Try the tag first; if LunarG hasn't pushed the matching tag yet,
-          # fall back to main (SPIRV-Headers is header-only with a stable API).
-          if ! git clone --depth 1 --branch "${SPIRV_HEADERS_TAG}" \
+          KHRONOS_TAG="vulkan-sdk-${VULKAN_SDK_VERSION}"
+          echo "Installing Khronos headers tag ${KHRONOS_TAG} into ${SYSROOT}/usr"
+
+          # ---- SPIRV-Headers ----
+          if ! git clone --depth 1 --branch "${KHRONOS_TAG}" \
                 https://github.com/KhronosGroup/SPIRV-Headers.git /tmp/spirv-headers; then
-            echo "Tag ${SPIRV_HEADERS_TAG} not found, falling back to main branch"
+            echo "Tag ${KHRONOS_TAG} not found on SPIRV-Headers, falling back to main"
             git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Headers.git /tmp/spirv-headers
           fi
-          cmake -S /tmp/spirv-headers -B /tmp/spirv-headers/build \
-            -DCMAKE_BUILD_TYPE=Release
+          cmake -S /tmp/spirv-headers -B /tmp/spirv-headers/build -DCMAKE_BUILD_TYPE=Release
           cmake --install /tmp/spirv-headers/build --prefix "${SYSROOT}/usr"
-          # Sanity check — SPIRV-Headers installs its CMake config to
-          # share/cmake/SPIRV-Headers/ (not lib/cmake/...).
           test -f "${SYSROOT}/usr/share/cmake/SPIRV-Headers/SPIRV-HeadersConfig.cmake" \
             && echo "OK: SPIRV-HeadersConfig.cmake installed" \
             || { echo "FAIL: SPIRV-HeadersConfig.cmake not found"; exit 1; }
+
+          # ---- Vulkan-Headers (provides vulkan/vulkan.hpp C++ wrapper) ----
+          if ! git clone --depth 1 --branch "${KHRONOS_TAG}" \
+                https://github.com/KhronosGroup/Vulkan-Headers.git /tmp/vulkan-headers; then
+            echo "Tag ${KHRONOS_TAG} not found on Vulkan-Headers, falling back to main"
+            git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Headers.git /tmp/vulkan-headers
+          fi
+          cmake -S /tmp/vulkan-headers -B /tmp/vulkan-headers/build -DCMAKE_BUILD_TYPE=Release
+          cmake --install /tmp/vulkan-headers/build --prefix "${SYSROOT}/usr"
+          test -f "${SYSROOT}/usr/include/vulkan/vulkan.hpp" \
+            && echo "OK: vulkan/vulkan.hpp installed" \
+            || { echo "FAIL: vulkan/vulkan.hpp not found"; exit 1; }
+          test -f "${SYSROOT}/usr/include/vulkan/vulkan_core.h" \
+            && echo "OK: vulkan/vulkan_core.h installed" \
+            || { echo "FAIL: vulkan/vulkan_core.h not found"; exit 1; }
+          test -f "${SYSROOT}/usr/share/cmake/VulkanHeaders/VulkanHeadersConfig.cmake" \
+            && echo "OK: VulkanHeadersConfig.cmake installed" \
+            || { echo "FAIL: VulkanHeadersConfig.cmake not found"; exit 1; }
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
