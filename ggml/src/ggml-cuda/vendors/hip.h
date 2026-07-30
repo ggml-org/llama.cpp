@@ -6,10 +6,6 @@
 #include <hip/hip_fp16.h>
 #include <hip/hip_bf16.h>
 
-#if defined(GGML_HIP_ROCWMMA_FATTN)
-#include <rocwmma/rocwmma-version.hpp>
-#endif // defined(GGML_HIP_ROCWMMA_FATTN)
-
 #ifdef GGML_USE_NCCL
 #include <rccl/rccl.h>
 #endif // GGML_USE_NCCL

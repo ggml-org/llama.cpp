@@ -156,6 +156,24 @@ typedef struct VkPhysicalDeviceShaderFloat8FeaturesEXT {
 } VkPhysicalDeviceShaderFloat8FeaturesEXT;
 #endif
 
+#ifndef VK_KHR_INTERNALLY_SYNCHRONIZED_QUEUES_EXTENSION_NAME
+#define VK_KHR_INTERNALLY_SYNCHRONIZED_QUEUES_EXTENSION_NAME "VK_KHR_internally_synchronized_queues"
+#define VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INTERNALLY_SYNCHRONIZED_QUEUES_FEATURES_KHR ((VkStructureType)1000504000)
+#define VK_DEVICE_QUEUE_CREATE_INTERNALLY_SYNCHRONIZED_BIT_KHR ((VkDeviceQueueCreateFlagBits)0x00000004)
+
+// Compile-time constant guaranteed; no runtime initialization overhead
+static constexpr vk::DeviceQueueCreateFlagBits eInternallySynchronizedKHR =
+    static_cast<vk::DeviceQueueCreateFlagBits>(0x00000004);
+
+typedef struct VkPhysicalDeviceInternallySynchronizedQueuesFeaturesKHR {
+    VkStructureType    sType;
+    void* pNext;
+    VkBool32           internallySynchronizedQueues;
+} VkPhysicalDeviceInternallySynchronizedQueuesFeaturesKHR;
+#else
+static constexpr vk::DeviceQueueCreateFlagBits eInternallySynchronizedKHR = vk::DeviceQueueCreateFlagBits::eInternallySynchronizedKHR;
+#endif
+
 #define ROUNDUP_POW2(M, N) (((M) + (N) - 1) & ~((N) - 1))
 #define CEIL_DIV(M, N) (((M) / (N)) + (((M) % (N)) != 0))
 static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
@@ -285,27 +303,41 @@ struct vk_command_pool {
 };
 
 // Prevent simultaneous submissions to the same queue.
-// This could be per vk_queue if we stopped having two vk_queue structures
-// sharing the same vk::Queue.
-static std::mutex queue_mutex;
+struct vk_queue_handle {
+    vk::Queue queue;
+    virtual void submit(vk::ArrayProxy<const vk::SubmitInfo> submits, vk::Fence fence) = 0;
+    virtual void lock()   {}   // no-op by default (internally synchronized case)
+    virtual void unlock() {}
+    virtual ~vk_queue_handle() = default;
+};
+
+struct vk_queue_handle_synchronized : vk_queue_handle {
+    std::mutex mutex;
+    void submit(vk::ArrayProxy<const vk::SubmitInfo> submits, vk::Fence fence) override {
+        std::lock_guard<std::mutex> guard(mutex);
+        queue.submit(submits, fence);
+    }
+    void lock()   override { mutex.lock(); }
+    void unlock() override { mutex.unlock(); }
+};
+
+struct vk_queue_handle_unsynchronized : vk_queue_handle {
+    void submit(vk::ArrayProxy<const vk::SubmitInfo> submits, vk::Fence fence) override {
+        // Driver guarantees internal synchronization via VK_KHR_internally_synchronized_queues
+        queue.submit(submits, fence);
+    }
+    // lock()/unlock() inherited no-ops
+};
 
 struct vk_queue {
     uint32_t queue_family_index;
-    vk::Queue queue;
+    std::shared_ptr<vk_queue_handle> handle;
 
     vk_command_pool cmd_pool;
 
     vk::PipelineStageFlags stage_flags;
 
     bool transfer_only;
-
-    // copy everything except the cmd_pool
-    void copyFrom(vk_queue &other) {
-        queue_family_index = other.queue_family_index;
-        queue = other.queue;
-        stage_flags = other.stage_flags;
-        transfer_only = other.transfer_only;
-    }
 };
 
 static const char * ggml_backend_vk_buffer_type_name(ggml_backend_buffer_type_t buft);
@@ -712,11 +744,12 @@ struct vk_device_struct {
     uint32_t vendor_id;
     vk::DriverId driver_id;
     vk_device_architecture architecture;
-    vk_queue compute_queue;
-    vk_queue transfer_queue;
+    std::unique_ptr<vk_queue> compute_queue;
+    std::unique_ptr<vk_queue> transfer_queue;
     bool single_queue;
     bool support_async;
     bool async_use_transfer_queue;
+    bool has_internally_synchronized_queues = false;
     uint32_t subgroup_size;
     uint32_t subgroup_size_log2;
     uint32_t shader_core_count;
@@ -1019,8 +1052,13 @@ struct vk_device_struct {
 
         ggml_vk_destroy_buffer(sync_staging);
 
-        compute_queue.cmd_pool.destroy(device);
-        transfer_queue.cmd_pool.destroy(device);
+        if (compute_queue) compute_queue->cmd_pool.destroy(device);
+        if (transfer_queue) transfer_queue->cmd_pool.destroy(device);
+
+        // Explicitly clear to ensure queues drop their shared_ptrs to handles
+        // before the Vulkan logical device instance is destroyed
+        compute_queue.reset();
+        transfer_queue.reset();
 
         for (auto& pipeline : all_pipelines) {
             if (pipeline.expired()) {
@@ -2909,8 +2947,7 @@ static vk_command_buffer* ggml_vk_create_cmd_buffer(vk_device& device, vk_comman
 static void ggml_vk_submit(vk_context& ctx, vk::Fence fence) {
     if (ctx->seqs.empty()) {
         if (fence) {
-            std::lock_guard<std::mutex> guard(queue_mutex);
-            ctx->p->q->queue.submit({}, fence);
+            ctx->p->q->handle->submit({}, fence);
         }
         return;
     }
@@ -2979,8 +3016,7 @@ static void ggml_vk_submit(vk_context& ctx, vk::Fence fence) {
         }
     }
 
-    std::lock_guard<std::mutex> guard(queue_mutex);
-    ctx->p->q->queue.submit(submit_infos, fence);
+    ctx->p->q->handle->submit(submit_infos, fence);
 
     ctx->seqs.clear();
 }
@@ -3031,18 +3067,44 @@ static uint32_t ggml_vk_find_queue_family_index(std::vector<vk::QueueFamilyPrope
     abort();
 }
 
-static void ggml_vk_create_queue(vk_device& device, vk_queue& q, uint32_t queue_family_index, uint32_t queue_index, vk::PipelineStageFlags&& stage_flags, bool transfer_only) {
+static std::unique_ptr<vk_queue> ggml_vk_create_queue(vk_device& device, uint32_t queue_family_index, uint32_t queue_index, vk::PipelineStageFlags&& stage_flags, bool transfer_only) {
     VK_LOG_DEBUG("ggml_vk_create_queue()");
     std::lock_guard<std::recursive_mutex> guard(device->mutex);
 
-    q.queue_family_index = queue_family_index;
-    q.transfer_only = transfer_only;
+    auto q = std::make_unique<vk_queue>();
+    q->queue_family_index = queue_family_index;
+    q->transfer_only = transfer_only;
 
-    q.cmd_pool.init(device, &q);
+    std::shared_ptr<vk_queue_handle> h;
+    vk::DeviceQueueInfo2 queue_info2{};
+    queue_info2.queueFamilyIndex = queue_family_index;
+    queue_info2.queueIndex = queue_index;
 
-    q.queue = device->device.getQueue(queue_family_index, queue_index);
+    if (device->has_internally_synchronized_queues) {
+        h = std::make_shared<vk_queue_handle_unsynchronized>();
+        queue_info2.flags = eInternallySynchronizedKHR;
+    } else {
+        h = std::make_shared<vk_queue_handle_synchronized>();
+    }
 
-    q.stage_flags = stage_flags;
+    h->queue = device->device.getQueue2(queue_info2);
+    q->handle = h;
+
+    q->cmd_pool.init(device, q.get());
+
+    q->stage_flags = stage_flags;
+    return q;
+}
+
+static std::unique_ptr<vk_queue> ggml_vk_create_aliased_queue(vk_device& device, const std::unique_ptr<vk_queue>& source) {
+    std::lock_guard<std::recursive_mutex> guard(device->mutex);
+    auto q = std::make_unique<vk_queue>();
+    q->handle = source->handle;
+    q->queue_family_index = source->queue_family_index;
+    q->stage_flags = source->stage_flags;
+    q->transfer_only = source->transfer_only;
+    q->cmd_pool.init(device, q.get());
+    return q;
 }
 
 static vk_context ggml_vk_create_context(ggml_backend_vk_context * ctx, vk_command_pool& p) {
@@ -3107,11 +3169,11 @@ static void ggml_vk_queue_command_pools_cleanup(vk_device& device) {
     // Arbitrary frequency to cleanup/reuse command buffers
     static constexpr uint32_t cleanup_frequency = 10;
 
-    if (device->compute_queue.cmd_pool.buffers_in_use() >= cleanup_frequency) {
-        ggml_vk_command_pool_cleanup(device, device->compute_queue.cmd_pool);
+    if (device->compute_queue->cmd_pool.buffers_in_use() >= cleanup_frequency) {
+        ggml_vk_command_pool_cleanup(device, device->compute_queue->cmd_pool);
     }
-    if (device->transfer_queue.cmd_pool.buffers_in_use() >= cleanup_frequency) {
-        ggml_vk_command_pool_cleanup(device, device->transfer_queue.cmd_pool);
+    if (device->transfer_queue->cmd_pool.buffers_in_use() >= cleanup_frequency) {
+        ggml_vk_command_pool_cleanup(device, device->transfer_queue->cmd_pool);
     }
 }
 
@@ -3428,7 +3490,7 @@ struct vk_fa_tuning_params {
 };
 
 static bool ggml_vk_flash_attn_scalar_shmem_support(const vk_device& device, const vk_fa_tuning_params& params, uint32_t hsk, uint32_t hsv, bool f32acc, ggml_type k_type, ggml_type v_type);
-static bool ggml_vk_flash_attn_coopmat_shmem_support(const vk_device& device, const vk_fa_tuning_params& params, uint32_t hsk, uint32_t hsv, bool f32acc, ggml_type k_type = GGML_TYPE_F16);
+static bool ggml_vk_flash_attn_coopmat_shmem_support(const vk_device& device, const vk_fa_tuning_params& params, uint32_t hsk, uint32_t hsv, bool f32acc, ggml_type k_type = GGML_TYPE_F16, ggml_type v_type = GGML_TYPE_F16);
 
 static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, uint32_t hsk, uint32_t hsv, uint32_t n_rows, uint32_t n_kv, ggml_type k_type, ggml_type v_type, bool f32acc) {
 
@@ -3584,7 +3646,7 @@ static vk_fa_tuning_params get_fa_tuning_params(const vk_device& device, uint32_
         bool shape_ok = (f32acc && device->coopmat_support_16x16x16_f32acc) ||
                         (!f32acc && device->coopmat_support_16x16x16_f16acc);
         const vk_fa_tuning_params params = get_fa_tuning_params_coopmat1(device, hsk, hsv, n_rows, n_kv, k_type, v_type, f32acc);
-        bool shmem_ok = ggml_vk_flash_attn_coopmat_shmem_support(device, params, hsk, hsv, f32acc, k_type);
+        bool shmem_ok = ggml_vk_flash_attn_coopmat_shmem_support(device, params, hsk, hsv, f32acc, k_type, v_type);
 
         if (!shape_ok || !shmem_ok) {
             path = FA_SCALAR;
@@ -3594,11 +3656,6 @@ static vk_fa_tuning_params get_fa_tuning_params(const vk_device& device, uint32_
     // scalar is faster than coopmat when N==1
     if (n_rows == 1 && (path == FA_COOPMAT1 || path == FA_COOPMAT2)) {
         path = FA_SCALAR;
-    }
-
-    // Q1_0 K/V is only implemented on coopmat2 (flash_attn_cm2); there is no scalar FA shader for it.
-    if ((k_type == GGML_TYPE_Q1_0 || v_type == GGML_TYPE_Q1_0) && device->coopmat2) {
-        path = FA_COOPMAT2;
     }
 
     switch (path) {
@@ -3842,16 +3899,27 @@ static uint32_t get_subgroup_size(const std::string &pipeline_name, const vk_dev
     return 0; // If no matching configuration is found
 }
 
-// Whether scalar flash attention will use the MMQ path for the given k_type.
-static bool ggml_vk_fa_scalar_uses_mmq(const vk_device& device, ggml_type k_type) {
+// Whether scalar flash attention will use the MMQ path for the given K/V types.
+static bool ggml_vk_fa_type_needs_shmem(ggml_type type) {
+    switch (type) {
+    case GGML_TYPE_IQ4_NL:
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool ggml_vk_fa_scalar_uses_mmq(const vk_device& device, ggml_type k_type, ggml_type v_type) {
 #if defined(GGML_VULKAN_INTEGER_DOT_GLSLC_SUPPORT)
     return device->integer_dot_product && device->subgroup_clustered &&
+           !ggml_vk_fa_type_needs_shmem(v_type) &&
            (k_type == GGML_TYPE_Q4_0 || k_type == GGML_TYPE_Q4_1 ||
             k_type == GGML_TYPE_Q5_0 || k_type == GGML_TYPE_Q5_1 ||
             k_type == GGML_TYPE_Q8_0);
 #else
     GGML_UNUSED(device);
     GGML_UNUSED(k_type);
+    GGML_UNUSED(v_type);
     return false;
 #endif
 }
@@ -4184,7 +4252,7 @@ static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
         const bool fa_ds = fa.first.subgroup_size == 0;
 
         const bool bf16_kv = fa.first.k_type == GGML_TYPE_BF16;
-        const bool use_mmq = ggml_vk_fa_scalar_uses_mmq(device, fa.first.k_type);
+        const bool use_mmq = ggml_vk_fa_scalar_uses_mmq(device, fa.first.k_type, fa.first.v_type);
         const void * spv_data = nullptr;
         size_t spv_size = 0;
         const char *name = nullptr;
@@ -5886,6 +5954,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
         bool coopmat2_support = false;
         bool coopmat2_decode_vector_support = false;
         bool pipeline_executable_properties_support = false;
+        bool internally_sync_support = false;
         device->coopmat_support = false;
         device->integer_dot_product = false;
         device->shader_64b_indexing = false;
@@ -5957,6 +6026,8 @@ static vk_device ggml_vk_get_device(size_t idx) {
             } else if (strcmp("VK_EXT_shader_64bit_indexing", properties.extensionName) == 0) {
                 device->shader_64b_indexing = true;
 #endif
+            } else if (strcmp(VK_KHR_INTERNALLY_SYNCHRONIZED_QUEUES_EXTENSION_NAME, properties.extensionName) == 0) {
+                internally_sync_support = true;
             }
         }
 
@@ -6143,14 +6214,6 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device->single_queue = compute_queue_family_index == transfer_queue_family_index && queue_family_props[compute_queue_family_index].queueCount == 1;
 
         std::vector<vk::DeviceQueueCreateInfo> device_queue_create_infos;
-        if (compute_queue_family_index != transfer_queue_family_index) {
-            device_queue_create_infos.push_back({vk::DeviceQueueCreateFlags(), compute_queue_family_index, 1, priorities});
-            device_queue_create_infos.push_back({vk::DeviceQueueCreateFlags(), transfer_queue_family_index, 1, priorities + 1});
-        } else if(!device->single_queue) {
-            device_queue_create_infos.push_back({vk::DeviceQueueCreateFlags(), compute_queue_family_index, 2, priorities});
-        } else {
-            device_queue_create_infos.push_back({vk::DeviceQueueCreateFlags(), compute_queue_family_index, 1, priorities});
-        }
         vk::DeviceCreateInfo device_create_info{};
         std::vector<const char *> device_extensions;
         vk::PhysicalDeviceFeatures device_features = device->physical_device.getFeatures();
@@ -6171,6 +6234,17 @@ static vk_device ggml_vk_get_device(size_t idx) {
         vk11_features.pNext = &vk12_features;
 
         last_struct = (VkBaseOutStructure *)&vk12_features;
+
+        VkPhysicalDeviceInternallySynchronizedQueuesFeaturesKHR internally_synchronized_queues_features{};
+        internally_synchronized_queues_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_INTERNALLY_SYNCHRONIZED_QUEUES_FEATURES_KHR;
+        internally_synchronized_queues_features.pNext = nullptr;
+        internally_synchronized_queues_features.internallySynchronizedQueues = VK_FALSE;
+
+        if (internally_sync_support) {
+            last_struct->pNext = (VkBaseOutStructure *)&internally_synchronized_queues_features;
+            last_struct = (VkBaseOutStructure *)&internally_synchronized_queues_features;
+            device_extensions.push_back(VK_KHR_INTERNALLY_SYNCHRONIZED_QUEUES_EXTENSION_NAME);
+        }
 
         VkPhysicalDevicePipelineRobustnessFeaturesEXT pl_robustness_features;
         pl_robustness_features.pNext = nullptr;
@@ -6309,6 +6383,23 @@ static vk_device ggml_vk_get_device(size_t idx) {
 #endif
 
         vkGetPhysicalDeviceFeatures2(device->physical_device, &device_features2);
+
+        device->has_internally_synchronized_queues = internally_synchronized_queues_features.internallySynchronizedQueues;
+
+        // Build queue create infos only after querying whether internally synchronized queues are enabled.
+        // getQueue2() later uses the same flag, so creation/retrieval must stay consistent.
+        vk::DeviceQueueCreateFlags queue_flags = device->has_internally_synchronized_queues ?
+                                                eInternallySynchronizedKHR :
+                                                vk::DeviceQueueCreateFlags();
+
+        if (compute_queue_family_index != transfer_queue_family_index) {
+            device_queue_create_infos.push_back({queue_flags, compute_queue_family_index, 1, priorities});
+            device_queue_create_infos.push_back({queue_flags, transfer_queue_family_index, 1, priorities + 1});
+        } else if(!device->single_queue) {
+            device_queue_create_infos.push_back({queue_flags, compute_queue_family_index, 2, priorities});
+        } else {
+            device_queue_create_infos.push_back({queue_flags, compute_queue_family_index, 1, priorities});
+        }
 
         device->pipeline_executable_properties_support = pipeline_executable_properties_support;
 
@@ -6592,7 +6683,7 @@ static vk_device ggml_vk_get_device(size_t idx) {
         device->device = device->physical_device.createDevice(device_create_info);
 
         // Queues
-        ggml_vk_create_queue(device, device->compute_queue, compute_queue_family_index, 0, { vk::PipelineStageFlagBits::eComputeShader | vk::PipelineStageFlagBits::eTransfer }, false);
+        device->compute_queue = ggml_vk_create_queue(device, compute_queue_family_index, 0, { vk::PipelineStageFlagBits::eComputeShader | vk::PipelineStageFlagBits::eTransfer }, false);
 
         // Shaders
         // Disable matmul tile sizes early if performance low or not supported
@@ -6694,13 +6785,11 @@ static vk_device ggml_vk_get_device(size_t idx) {
 
         if (!device->single_queue) {
             const uint32_t transfer_queue_index = compute_queue_family_index == transfer_queue_family_index ? 1 : 0;
-            ggml_vk_create_queue(device, device->transfer_queue, transfer_queue_family_index, transfer_queue_index, { vk::PipelineStageFlagBits::eTransfer }, true);
+            device->transfer_queue = ggml_vk_create_queue(device, transfer_queue_family_index, transfer_queue_index, { vk::PipelineStageFlagBits::eTransfer }, true);
 
             device->async_use_transfer_queue = prefers_transfer_queue || (getenv("GGML_VK_ASYNC_USE_TRANSFER_QUEUE") != nullptr);
         } else {
-            // TODO: Use pointer or reference to avoid copy
-            device->transfer_queue.copyFrom(device->compute_queue);
-            device->transfer_queue.cmd_pool.init(device, &device->transfer_queue);
+            device->transfer_queue = ggml_vk_create_aliased_queue(device, device->compute_queue);
 
             device->async_use_transfer_queue = false;
         }
@@ -7263,7 +7352,7 @@ static void ggml_vk_init(ggml_backend_vk_context * ctx, size_t idx) {
     ctx->fence = ctx->device->device.createFence({});
     ctx->almost_ready_fence = ctx->device->device.createFence({});
 
-    ctx->compute_cmd_pool.init(ctx->device, &ctx->device->compute_queue);
+    ctx->compute_cmd_pool.init(ctx->device, ctx->device->compute_queue.get());
     if (ctx->device->async_use_transfer_queue) {
         vk::SemaphoreTypeCreateInfo tci{ vk::SemaphoreType::eTimeline, 0 };
         vk::SemaphoreCreateInfo ci{};
@@ -7271,7 +7360,7 @@ static void ggml_vk_init(ggml_backend_vk_context * ctx, size_t idx) {
         ctx->transfer_semaphore.s = ctx->device->device.createSemaphore(ci);
         ctx->transfer_semaphore.value = 0;
 
-        ctx->transfer_cmd_pool.init(ctx->device, &ctx->device->transfer_queue);
+        ctx->transfer_cmd_pool.init(ctx->device, ctx->device->transfer_queue.get());
     }
 
     if (vk_perf_logger_enabled) {
@@ -8126,7 +8215,7 @@ static void ggml_vk_buffer_write_2d(vk_buffer& dst, size_t offset, const void * 
     } else {
         std::lock_guard<std::recursive_mutex> guard(dst->device->mutex);
 
-        vk_context subctx = ggml_vk_create_temporary_context(dst->device->transfer_queue.cmd_pool);
+        vk_context subctx = ggml_vk_create_temporary_context(dst->device->transfer_queue->cmd_pool);
         ggml_vk_ctx_begin(dst->device, subctx);
         bool ret = ggml_vk_buffer_write_2d_async(subctx, dst, offset, src, spitch, dpitch, width, height, true);
         GGML_ASSERT(ret);
@@ -8241,7 +8330,7 @@ static void ggml_vk_buffer_read_2d(vk_buffer& src, size_t offset, void * dst, si
         GGML_ASSERT(src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
 
         std::lock_guard<std::recursive_mutex> guard(src->device->mutex);
-        vk_context subctx = ggml_vk_create_temporary_context(src->device->compute_queue.cmd_pool);
+        vk_context subctx = ggml_vk_create_temporary_context(src->device->compute_queue->cmd_pool);
         ggml_vk_ctx_begin(src->device, subctx);
         subctx->s->buffer->buf.pipelineBarrier(
             vk::PipelineStageFlagBits::eComputeShader | vk::PipelineStageFlagBits::eTransfer,
@@ -8267,7 +8356,7 @@ static void ggml_vk_buffer_read_2d(vk_buffer& src, size_t offset, void * dst, si
     } else {
         std::lock_guard<std::recursive_mutex> guard(src->device->mutex);
 
-        vk_context subctx = ggml_vk_create_temporary_context(src->device->transfer_queue.cmd_pool);
+        vk_context subctx = ggml_vk_create_temporary_context(src->device->transfer_queue->cmd_pool);
         ggml_vk_ctx_begin(src->device, subctx);
         bool ret = ggml_vk_buffer_read_2d_async(subctx, src, offset, dst, spitch, dpitch, width, height, true);
         GGML_ASSERT(ret);
@@ -8304,7 +8393,7 @@ static void ggml_vk_buffer_copy(vk_buffer& dst, size_t dst_offset, vk_buffer& sr
         std::lock_guard<std::recursive_mutex> guard(src->device->mutex);
         VK_LOG_DEBUG("ggml_vk_buffer_copy(SINGLE_DEVICE, " << size << ")");
         // Copy within the device
-        vk_context subctx = ggml_vk_create_temporary_context(src->device->transfer_queue.cmd_pool);
+        vk_context subctx = ggml_vk_create_temporary_context(src->device->transfer_queue->cmd_pool);
         ggml_vk_ctx_begin(src->device, subctx);
         ggml_vk_buffer_copy_async(subctx, dst, dst_offset, src, src_offset, size);
         ggml_vk_ctx_end(subctx);
@@ -8347,7 +8436,7 @@ static void ggml_vk_buffer_memset(vk_buffer& dst, size_t offset, uint32_t c, siz
     }
 
     std::lock_guard<std::recursive_mutex> guard(dst->device->mutex);
-    vk_context subctx = ggml_vk_create_temporary_context(dst->device->transfer_queue.cmd_pool);
+    vk_context subctx = ggml_vk_create_temporary_context(dst->device->transfer_queue->cmd_pool);
     ggml_vk_ctx_begin(dst->device, subctx);
     subctx->s->buffer->buf.fillBuffer(dst->buffer, offset, size, c);
     ggml_vk_ctx_end(subctx);
@@ -10297,7 +10386,6 @@ static void ggml_vk_mul_mat_id(ggml_backend_vk_context * ctx, vk_context& subctx
 
 static bool ggml_vk_flash_attn_scalar_shmem_support(const vk_device& device, const vk_fa_tuning_params& params, uint32_t hsk, uint32_t hsv, bool f32acc, ggml_type k_type, ggml_type v_type) {
     GGML_UNUSED(f32acc);
-    GGML_UNUSED(v_type);
     // Needs to be kept up to date on shader changes
     const uint32_t wg_size = params.workgroup_size;
     const uint32_t Br = params.block_rows;
@@ -10306,13 +10394,15 @@ static bool ggml_vk_flash_attn_scalar_shmem_support(const vk_device& device, con
     // BF16 uses the fp32 shader (FLOAT_TYPE=float)
     const uint32_t float_type_size = (device->fp16 && k_type != GGML_TYPE_BF16) ? sizeof(ggml_fp16_t) : sizeof(float);
 
-    const bool mmq = ggml_vk_fa_scalar_uses_mmq(device, k_type);
+    const bool mmq = ggml_vk_fa_scalar_uses_mmq(device, k_type, v_type);
 
     // tmpsh is overestimated slightly
     const uint32_t tmpsh = wg_size * sizeof(float);
     const uint32_t tmpshv4 = wg_size * 4 * float_type_size;
 
     const uint32_t masksh = Bc * (Br + 1) * float_type_size;
+    // DATA_A_IQ4_NL is compiled into the FA shaders unconditionally, so its shared table is always allocated.
+    const uint32_t iq_shmem = 16 * float_type_size;
 
     uint32_t Qf, kvsh, kblocksh_size;
     if (mmq) {
@@ -10337,7 +10427,7 @@ static bool ggml_vk_flash_attn_scalar_shmem_support(const vk_device& device, con
         kblocksh_size = 0;
     }
 
-    const uint32_t total_size = tmpsh + tmpshv4 + masksh + Qf + kvsh + kblocksh_size;
+    const uint32_t total_size = tmpsh + tmpshv4 + masksh + iq_shmem + Qf + kvsh + kblocksh_size;
     const bool supported = total_size <= device->properties.limits.maxComputeSharedMemorySize;
 
     VK_LOG_DEBUG("ggml_vk_flash_attn_scalar_shmem_support(HSK=" << hsk << ", HSV=" << hsv << ", mmq=" << mmq << ", total_size=" << total_size << ", supported=" << supported);
@@ -10345,7 +10435,8 @@ static bool ggml_vk_flash_attn_scalar_shmem_support(const vk_device& device, con
     return supported;
 }
 
-static bool ggml_vk_flash_attn_coopmat_shmem_support(const vk_device& device, const vk_fa_tuning_params& params, uint32_t hsk, uint32_t hsv, bool f32acc, ggml_type k_type) {
+static bool ggml_vk_flash_attn_coopmat_shmem_support(const vk_device& device, const vk_fa_tuning_params& params, uint32_t hsk, uint32_t hsv, bool f32acc, ggml_type k_type, ggml_type v_type) {
+    GGML_UNUSED(v_type);
     // Needs to be kept up to date on shader changes
     const uint32_t Br = params.block_rows;
     const uint32_t Bc = params.block_cols;
@@ -10361,6 +10452,8 @@ static bool ggml_vk_flash_attn_coopmat_shmem_support(const vk_device& device, co
     const uint32_t f16vec4 = 8;
 
     const uint32_t tmpsh = (Bc / MatBc) * sizeof(float);
+    // DATA_A_IQ4_NL is compiled into the FA shaders unconditionally, so its shared table is always allocated.
+    const uint32_t iq_shmem = 16 * sizeof(ggml_fp16_t);
 
     const uint32_t qstride = hsk_pad / 4 + 2;
     const uint32_t Qf = Br * qstride * f16vec4;
@@ -10382,7 +10475,7 @@ static bool ggml_vk_flash_attn_coopmat_shmem_support(const vk_device& device, co
 
     const uint32_t slope = Br * acctype;
 
-    const uint32_t total_size = tmpsh + Qf + Psh + sfsh + ksh + pvsh + slope;
+    const uint32_t total_size = tmpsh + iq_shmem + Qf + Psh + sfsh + ksh + pvsh + slope;
     const bool supported = total_size <= device->properties.limits.maxComputeSharedMemorySize;
 
     VK_LOG_DEBUG("ggml_vk_flash_attn_coopmat_shmem_support(HSK=" << hsk << ", HSV=" << hsv << ", f32acc=" << f32acc << ", total_size=" << total_size << ", supported=" << supported);
@@ -15875,19 +15968,17 @@ static void ggml_vk_synchronize(ggml_backend_vk_context * ctx) {
                 1, &ctx->transfer_semaphore.value,
                 0, nullptr,
             };
-            vk::PipelineStageFlags stage = ctx->device->transfer_queue.stage_flags;
+            vk::PipelineStageFlags stage = ctx->device->transfer_queue->stage_flags;
             vk::SubmitInfo si{
                 1, &ctx->transfer_semaphore.s, &stage,
                 0, nullptr,
                 0, nullptr,
             };
             si.setPNext(&tl_info);
-            std::lock_guard<std::mutex> guard(queue_mutex);
-            ctx->device->compute_queue.queue.submit({ si }, ctx->fence);
+            ctx->device->compute_queue->handle->submit({ si }, ctx->fence);
             ctx->transfer_semaphore_last_submitted = ctx->transfer_semaphore.value;
         } else {
-            std::lock_guard<std::mutex> guard(queue_mutex);
-            ctx->device->compute_queue.queue.submit({}, ctx->fence);
+            ctx->device->compute_queue->handle->submit({}, ctx->fence);
         }
         ggml_vk_wait_for_fence(ctx);
         ctx->submit_pending = false;
@@ -16449,7 +16540,9 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
         vk::DebugUtilsLabelEXT dul = {};
         dul.pLabelName = "ggml_backend_vk_graph_compute";
         dul.color = std::array<float,4>{1.0f, 1.0f, 1.0f, 1.0f};
-        vk_instance.pfn_vkQueueBeginDebugUtilsLabelEXT(ctx->device->compute_queue.queue, reinterpret_cast<VkDebugUtilsLabelEXT*>(&dul));
+
+        std::lock_guard<vk_queue_handle> guard(*ctx->device->compute_queue->handle);
+        vk_instance.pfn_vkQueueBeginDebugUtilsLabelEXT(ctx->device->compute_queue->handle->queue, reinterpret_cast<VkDebugUtilsLabelEXT*>(&dul));
     }
 
     ctx->prealloc_size_add_rms_partials_offset = 0;
@@ -17534,7 +17627,7 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 if (op->src[3] && op->src[3]->type != GGML_TYPE_F16) {
                     return false;
                 }
-                auto fa_kv_ok = [coopmat2](ggml_type t) {
+                auto fa_kv_ok = [](ggml_type t) {
                     switch (t) {
                     case GGML_TYPE_F32:
                     case GGML_TYPE_F16:
@@ -17544,9 +17637,8 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                     case GGML_TYPE_Q5_0:
                     case GGML_TYPE_Q4_1:
                     case GGML_TYPE_Q4_0:
+                    case GGML_TYPE_IQ4_NL:
                         return true;
-                    case GGML_TYPE_Q1_0:
-                        return coopmat2;
                     default:
                         return false;
                     }

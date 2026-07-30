@@ -13,6 +13,14 @@
 
 struct build_vit_opts {
     ggml_tensor * attn_mask = nullptr;
+    // TODO @ngxson : merge attn_mask and attn_mask_layers into one call
+    std::vector<ggml_tensor *> attn_mask_layers; // one per layer
+
+    // hook at layer output embeddings
+    std::function<void(ggml_tensor * cur, int il)> callback_layer_out = nullptr;
+
+    // whether to skip the automatic post-layernorm (model.post_ln_w) applied at the end
+    bool skip_post_ln = false;
 };
 
 struct clip_graph {
