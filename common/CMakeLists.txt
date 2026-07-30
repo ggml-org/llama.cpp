@@ -82,8 +82,6 @@ add_library(${TARGET}
     imatrix-loader.h
     json-schema-to-grammar.cpp
     llguidance.cpp
-    log.cpp
-    log.h
     ngram-cache.cpp
     ngram-cache.h
     ngram-map.cpp
@@ -141,6 +139,7 @@ if (BUILD_SHARED_LIBS)
 endif()
 
 target_link_libraries(${TARGET} PUBLIC  llama-common-base)
+target_link_libraries(${TARGET} PUBLIC  llama-log)
 target_link_libraries(${TARGET} PRIVATE cpp-httplib)
 
 if (LLAMA_LLGUIDANCE)
@@ -176,6 +175,14 @@ if (LLAMA_LLGUIDANCE)
 endif()
 
 target_link_libraries(${TARGET} PUBLIC llama Threads::Threads)
+
+# Low-level logging primitives. Built as its own static target so the
+# backends (ggml-cpu, ggml-cuda, ggml-metal) and the tessera-debug
+# sidecar writer can use the LOG_* macros without dragging in the
+# whole common/ library. Guarded so the first caller wins.
+if (NOT TARGET llama-log)
+    add_subdirectory(${CMAKE_SOURCE_DIR}/common/log ${CMAKE_BINARY_DIR}/_deps/llama-log)
+endif()
 
 # Tessera Layer 1 sidecar writer. Built as its own static target so
 # the backends (ggml-cpu, ggml-cuda, ggml-metal) can link against it

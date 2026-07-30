@@ -26,3 +26,12 @@ target_include_directories(${TARGET} PUBLIC
 )
 
 target_compile_features(${TARGET} PUBLIC cxx_std_17)
+
+# LOG_WRN/LOG_ERR in tessera-debug.cpp need the low-level log macros
+# from llama-log. Guarded so the first caller wins; either common/
+# (which already links llama-log) or the backends may bring it in
+# first.
+if (NOT TARGET llama-log)
+    add_subdirectory(${CMAKE_SOURCE_DIR}/common/log ${CMAKE_BINARY_DIR}/_deps/llama-log)
+endif()
+target_link_libraries(${TARGET} PUBLIC llama-log)

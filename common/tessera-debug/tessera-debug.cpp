@@ -1,12 +1,6 @@
 #include "tessera-debug.h"
 
-// Intentionally NOT including common/log.h: this translation unit is
-// compiled into the llama-tessera-debug static library, which sits
-// below common/ in the layering hierarchy. Pulling in log.h would
-// drag common/log.cpp (and the rest of llama-common) into the link
-// for every backend. The sidecar writer is a low-level stream sink;
-// its diagnostic messages go straight to stderr instead of through
-// the common log infrastructure.
+#include "log.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -36,7 +30,7 @@ void set_dequant_dir(const std::string & path) {
     // If a file is open under the old dir, close it; the new dir means
     // any subsequent open_dequant_writer is a fresh start.
     if (g_ofs.is_open()) {
-        fprintf(stderr, "tessera_debug: closing sidecar for '%s' before reconfiguring dir\n",
+        LOG_WRN("tessera_debug: closing sidecar for '%s' before reconfiguring dir\n",
                 g_open_tensor_name.c_str());
         g_ofs.close();
         g_open_tensor_name.clear();
@@ -65,7 +59,7 @@ void open_dequant_writer(const char * tensor_name, int64_t rows, int64_t cols) {
     if (g_ofs.is_open()) {
         if (g_open_tensor_name == tensor_name &&
             (g_open_rows != rows || g_open_cols != cols)) {
-            fprintf(stderr, "tessera_debug: shape mismatch for '%s' (%lldx%lld -> %lldx%lld); "
+            LOG_WRN("tessera_debug: shape mismatch for '%s' (%lldx%lld -> %lldx%lld); "
                     "closing and reopening\n",
                     tensor_name,
                     (long long) g_open_rows, (long long) g_open_cols,
@@ -84,14 +78,14 @@ void open_dequant_writer(const char * tensor_name, int64_t rows, int64_t cols) {
     std::error_code ec;
     std::filesystem::create_directories(g_dequant_dir, ec);
     if (ec) {
-        fprintf(stderr, "tessera_debug: failed to create dir '%s': %s\n",
+        LOG_ERR("tessera_debug: failed to create dir '%s': %s\n",
                 g_dequant_dir.c_str(), ec.message().c_str());
         return;
     }
 
     g_ofs.open(out_path, std::ios::binary | std::ios::out | std::ios::trunc);
     if (!g_ofs.is_open()) {
-        fprintf(stderr, "tessera_debug: failed to open '%s' for writing\n",
+        LOG_ERR("tessera_debug: failed to open '%s' for writing\n",
                 out_path.string().c_str());
         return;
     }
@@ -116,7 +110,7 @@ void write_dequant_row(int64_t row_idx, const float * data, int64_t n) {
         return;
     }
     if (n != g_open_cols) {
-        fprintf(stderr, "tessera_debug: row width mismatch for '%s' (cols=%lld, got=%lld); "
+        LOG_WRN("tessera_debug: row width mismatch for '%s' (cols=%lld, got=%lld); "
                 "writing %lld values\n",
                 g_open_tensor_name.c_str(),
                 (long long) g_open_cols, (long long) n, (long long) n);
