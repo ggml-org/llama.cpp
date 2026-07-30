@@ -1654,6 +1654,18 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
     add_opt(common_arg(
+        {"--telemetry-topk"}, "N",
+        string_format(
+            "[imatrix] when > 0 with --telemetry-out, emit llama.spec_calib.v2 "
+            "schema with full top-N distributions of verifier and drafter at each "
+            "draft position (default: %d, 0 = v1 only). Used for drafter "
+            "fine-tuning via distillation/rejection sampling. Suggested: 64.",
+            params.n_telemetry_topk),
+        [](common_params & params, int value) {
+            params.n_telemetry_topk = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    add_opt(common_arg(
         {"--spec-steps"}, "N",
         string_format(
             "[imatrix] number of spec-decoding steps to roll forward when --model-draft is set "
@@ -1675,6 +1687,18 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.telemetry_out.c_str()),
         [](common_params & params, const std::string & value) {
             params.telemetry_out = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    add_opt(common_arg(
+        {"--telemetry-topk"}, "N",
+        string_format(
+            "[imatrix] when > 0 with --telemetry-out, emit llama.spec_calib.v2 "
+            "schema with full top-N distributions of verifier and drafter at each "
+            "draft position (default: %d, 0 = v1 only). Used for drafter "
+            "fine-tuning via distillation/rejection sampling. Suggested: 64.",
+            params.n_telemetry_topk),
+        [](common_params & params, int value) {
+            params.n_telemetry_topk = value;
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
     add_opt(common_arg({ "-fa", "--flash-attn" }, "[on|off|auto]",

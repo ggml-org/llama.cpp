@@ -1911,6 +1911,16 @@ static bool compute_imatrix_spec(
 
     while (n_steps <= 0 || step < n_steps) {
         // 1. Drafter forward: at position n_past, sample one token.
+        //    Save the drafter's logits after each forward so the v2
+        //    telemetry has the full per-position distribution (the
+        //    drafter's graph exposes logits only at position 0 of the
+        //    last batch, so we need to save it before the next forward
+        //    overwrites it).
+        std::vector<const float *> dft_logits_ptrs;
+        std::vector<std::vector<float>> dft_logits_storage;
+        dft_logits_ptrs.reserve(n_draft_max + 1);
+        dft_logits_storage.reserve(n_draft_max + 1);
+
         common_batch_clear(batch);
         common_batch_add(batch, id_last, n_past, {0}, true);
         if (llama_decode(ctx_dft, batch) != 0) {
@@ -1921,10 +1931,20 @@ static bool compute_imatrix_spec(
         // The drafter's logits are now at i_batch=0; sample top-1.
         llama_token dft_id = common_sampler_sample(dft_smpl.get(), ctx_dft, 0);
         common_sampler_accept(dft_smpl.get(), dft_id, true);
+        if (telemetry_fp != nullptr) {
+            const float * row = llama_get_logits_ith(ctx_dft, 0);
+            if (row != nullptr) {
+                const int n_vocab = llama_vocab_n_tokens(vocab);
+                dft_logits_storage.emplace_back(row, row + n_vocab);
+                dft_logits_ptrs.push_back(dft_logits_storage.back().data());
+            } else {
+                dft_logits_ptrs.push_back(nullptr);
+            }
+        }
 
         // Build the draft sequence by stepping the drafter forward
         // n_draft_max times. Each step: add the previous sample at the
-        // next position, decode, sample.
+        // next position, decode, sample. Save logits at each step.
         std::vector<llama_token> draft;
         draft.reserve(n_draft_max);
         for (int k = 0; k < n_draft_max; k++) {
@@ -1940,6 +1960,16 @@ static bool compute_imatrix_spec(
             const llama_token next_id = common_sampler_sample(dft_smpl.get(), ctx_dft, 0);
             common_sampler_accept(dft_smpl.get(), next_id, true);
             dft_id = next_id;
+            if (telemetry_fp != nullptr) {
+                const float * row = llama_get_logits_ith(ctx_dft, 0);
+                if (row != nullptr) {
+                    const int n_vocab = llama_vocab_n_tokens(vocab);
+                    dft_logits_storage.emplace_back(row, row + n_vocab);
+                    dft_logits_ptrs.push_back(dft_logits_storage.back().data());
+                } else {
+                    dft_logits_ptrs.push_back(nullptr);
+                }
+            }
         }
         n_drafted += (int) draft.size();
         if (draft.empty()) {
@@ -1948,50 +1978,218 @@ static bool compute_imatrix_spec(
             break;
         }
 
-        // 2. Build verifier batch: [id_last, draft_0, draft_1, ..., draft_K-1]
         const int n_dft = (int) draft.size();
-        common_batch_clear(batch);
-        common_batch_add(batch, id_last, n_past, {0}, true);
-        for (int i = 0; i < n_dft; ++i) {
-            common_batch_add(batch, draft[i], n_past + 1 + (llama_pos) i, {0}, true);
+
+        // 2. Verifier: do n_dft+1 per-prefix forwards. Each forward
+        //    adds ONE new token (the latest in the prefix) — earlier
+        //    tokens are already in the KV from the previous forward.
+        //    After the priming, the KV has id_last at n_past. After
+        //    forward i, the KV has id_last at n_past and draft[0..i-1]
+        //    at n_past+1..n_past+i. The i-th forward's logits at
+        //    position 0 are the verifier's prediction for the next
+        //    token (i.e., for draft[i] or for the bonus if i==n_dft).
+        //
+        //    Note: the verifier's causal-attention graph only computes
+        //    logits at the last position of a batched forward, so the
+        //    old "single batched 4-token forward" path returned 0.0f
+        //    confidence for every non-last position. Doing 1-token
+        //    per-prefix forwards is the only way to get per-position
+        //    verifier distributions without disabling causal attention.
+        std::vector<const float *> v_logits_ptrs;
+        std::vector<std::vector<float>> v_logits_storage;
+        std::vector<int32_t> v_argmax(n_dft + 1, 0);
+        if (telemetry_fp != nullptr) {
+            v_logits_ptrs.reserve(n_dft + 1);
+            v_logits_storage.reserve(n_dft + 1);
+        }
+        {
+            llama_batch ver_batch = llama_batch_init(llama_n_batch(ctx_tgt), 0, 1);
+            for (int i = 0; i <= n_dft; ++i) {
+                common_batch_clear(ver_batch);
+                // The first forward (i==0) primes id_last; subsequent
+                // forwards add the next draft token at n_past+i.
+                if (i == 0) {
+                    common_batch_add(ver_batch, id_last,
+                                      n_past, {0}, true);
+                } else {
+                    common_batch_add(ver_batch, draft[i - 1],
+                                      n_past + (llama_pos) i, {0}, true);
+                }
+                if (i == n_dft) {
+                    // The "main" forward (last) runs the graph
+                    // observers; earlier per-prefix forwards are
+                    // observer-silent to keep imatrix attribution
+                    // clean (each chunk = one spec step).
+                    g_collector.begin_graph_observers();
+                }
+                if (llama_decode(ctx_tgt, ver_batch) != 0) {
+                    LOG_ERR("%s: verifier per-prefix forward %d failed at step %d\n",
+                            __func__, i, step);
+                    llama_batch_free(ver_batch);
+                    llama_batch_free(batch);
+                    return false;
+                }
+                if (i == n_dft) {
+                    g_collector.flush_graph_observers();
+                }
+                if (telemetry_fp != nullptr) {
+                    const float * row = llama_get_logits_ith(ctx_tgt, 0);
+                    if (row != nullptr) {
+                        const int n_vocab = llama_vocab_n_tokens(vocab);
+                        int32_t am = 0;
+                        float am_val = row[0];
+                        for (int v = 1; v < n_vocab; ++v) {
+                            if (row[v] > am_val) { am_val = row[v]; am = v; }
+                        }
+                        v_argmax[i] = am;
+                        v_logits_storage.emplace_back(row, row + n_vocab);
+                        v_logits_ptrs.push_back(v_logits_storage.back().data());
+                    } else {
+                        v_logits_ptrs.push_back(nullptr);
+                    }
+                }
+            }
+            llama_batch_free(ver_batch);
         }
 
-        // 3. Verifier forward with graph observers active.
-        g_collector.begin_graph_observers();
-        if (llama_decode(ctx_tgt, batch) != 0) {
-            LOG_ERR("%s: failed to eval at step %d\n", __func__, step);
-            llama_batch_free(batch);
-            return false;
+        // 3. The "main" verifier forward (already done as the i==n_dft
+        //    per-prefix forward) sampled the bonus.  Compute the
+        //    accepted count from the per-position argmaxes (this is
+        //    the same logic as the verifier's normal accept check).
+        //
+        //    The first draft is accepted iff v_argmax[1] == draft[0],
+        //    the second iff v_argmax[2] == draft[1] AND draft[0] was
+        //    accepted, etc. So the longest prefix match is the number
+        //    of accepted drafts.
+        int n_acc = 0;
+        for (int i = 1; i <= n_dft; ++i) {
+            if (v_argmax[i] == draft[i - 1]) {
+                n_acc = i;
+            } else {
+                break;
+            }
         }
+        const llama_token bonus = v_argmax[n_dft];
+        std::vector<llama_token> ids;
+        ids.reserve(n_acc + 1);
+        for (int k = 0; k < n_acc; ++k) {
+            ids.push_back(draft[k]);
+        }
+        ids.push_back(bonus);
+        n_accepted += (int) (ids.size() - 1);
 
-        // 4. Sample and accept. `ids` is the accepted sequence: the first
-        //    ids.size()-1 entries are the accepted drafts, and the last
-        //    entry is the bonus token the verifier sampled.
-        auto ids = common_sampler_sample_and_accept_n(smpl.get(), ctx_tgt, draft);
-        const size_t n_acc = ids.size() - 1;  // 0..n_dft
-        n_accepted += (int) n_acc;
+        // 4. Roll back the verifier's KV for the rejected tokens. The
+        //    verifier's KV now has positions n_past..n_past+n_dft
+        //    (n_dft+1 tokens).  The kept tail is n_acc drafts
+        //    (positions n_past+1..n_past+n_acc) plus the bonus token
+        //    (position n_past+n_acc+1, which is v_argmax[n_acc] -- we
+        //    overwrite the verifier's pre-existing bonus prediction
+        //    with the just-sampled bonus, which is v_argmax[n_dft]).
+        //
+        //    Easier formulation: the next id_last is bonus, and the
+        //    next n_past is n_past + n_acc + 1.  So we want the
+        //    verifier's KV to end at position n_past + n_acc (inclusive
+        //    of id_last at n_past).  Trim positions n_past+n_acc+1
+        //    through n_past+n_dft (which is n_past+n_dft+1 - 1).
+        if (n_acc < n_dft) {
+            llama_memory_seq_rm(llama_get_memory(ctx_tgt), 0,
+                                n_past + n_acc + 1,
+                                n_past + n_dft + 1);
+        }
 
         // 4b. If telemetry is enabled, compute the verifier's softmax
-        //     probability of each draft token and emit a JSONL record
-        //     matching the `llama.dflash.acceptance.v1` schema. The
-        //     verifier's forward filled logits for every position in the
-        //     batch (we set logits=true on all common_batch_add calls),
-        //     so we read each draft position's logits via
-        //     llama_get_logits_ith(ctx, i+1) (the i-th draft is the
-        //     (i+1)-th entry in the batch, after id_last at position 0).
+        //     probability of each draft token and emit a JSONL record.
+        //     Two schemas:
+        //     - llama.dflash.acceptance.v1 (default): confidence[] is the
+        //       verifier's softmax probability of the drafter's pick.
+        //     - llama.spec_calib.v2 (--telemetry-topk > 0): adds
+        //       verifier_topk_*, drafter_topk_*, accepted_tokens, etc.
+        //       for distillation/rejection-sampling training.
+        //
+        //     The verifier's per-position logits are in v_logits_ptrs
+        //     (n_dft+1 entries, one per prefix [id_last] up through
+        //     [id_last, draft[0], ..., draft[n_dft-1]]). The i-th
+        //     argmax at v_logits_ptrs[i] is the verifier's prediction
+        //     for the (i+1)-th "next token" position.
+        //
+        //     The drafter's per-position logits are in dft_logits_ptrs
+        //     (n_dft+1 entries: priming + n_dft draft forwards). The
+        //     i-th dft_logits_ptrs[i] is the drafter's view of the
+        //     token at position n_past+i+1.
         if (telemetry_fp != nullptr) {
-            std::vector<float> confidence;
-            confidence.reserve(n_dft);
             const int n_vocab = llama_vocab_n_tokens(vocab);
-            for (int i = 0; i < n_dft; ++i) {
-                const float * row = llama_get_logits_ith(ctx_tgt, i + 1);
+            const int topk    = std::min(
+                (int) params.n_telemetry_topk > 0 ? params.n_telemetry_topk : 0,
+                n_vocab);
+
+            // Per-row top-k helper. Builds two parallel vectors
+            // (tokens, logit-values) sorted high-to-low.
+            auto topk_row = [&](const float * row,
+                                int32_t & argmax_out) {
+                std::vector<int32_t> tok;
+                std::vector<float>   val;
                 if (row == nullptr) {
-                    // logits[i+1] not available (shouldn't happen since
-                    // we set logits=true on every batch entry, but be
-                    // defensive).
-                    confidence.push_back(0.0f);
-                    continue;
+                    argmax_out = 0;
+                    return std::pair{std::move(tok), std::move(val)};
                 }
+                int32_t am = 0;
+                float   am_val = row[0];
+                for (int v = 1; v < n_vocab; ++v) {
+                    if (row[v] > am_val) { am_val = row[v]; am = v; }
+                }
+                argmax_out = am;
+                if (topk == 0) {
+                    return std::pair{std::move(tok), std::move(val)};
+                }
+                std::vector<std::pair<float, int32_t>> heap;
+                heap.reserve(topk);
+                for (int v = 0; v < n_vocab; ++v) {
+                    if ((int) heap.size() < topk) {
+                        heap.emplace_back(row[v], v);
+                        std::push_heap(heap.begin(), heap.end(),
+                            std::greater<std::pair<float, int32_t>>());
+                    } else if (row[v] > heap.front().first) {
+                        std::pop_heap(heap.begin(), heap.end(),
+                            std::greater<std::pair<float, int32_t>>());
+                        heap.back() = {row[v], v};
+                        std::push_heap(heap.begin(), heap.end(),
+                            std::greater<std::pair<float, int32_t>>());
+                    }
+                }
+                tok.reserve(topk);
+                val.reserve(topk);
+                while (!heap.empty()) {
+                    std::pop_heap(heap.begin(), heap.end(),
+                        std::greater<std::pair<float, int32_t>>());
+                    tok.push_back(heap.back().second);
+                    val.push_back(heap.back().first);
+                    heap.pop_back();
+                }
+                return std::pair{std::move(tok), std::move(val)};
+            };
+
+            // Verifier: n_dft+1 per-position distributions from
+            // v_logits_ptrs (captured during per-prefix forwards).
+            std::vector<std::vector<int32_t>> v_topk_tokens(n_dft + 1);
+            std::vector<std::vector<float>>   v_topk_probs(n_dft + 1);
+            std::vector<int32_t>              v_argmax_explicit(n_dft + 1, 0);
+            std::vector<float>                confidence(n_dft, 0.0f);
+            for (int i = 0; i <= n_dft; ++i) {
+                int32_t am = 0;
+                auto tk = topk_row(
+                    i < (int) v_logits_ptrs.size() ? v_logits_ptrs[i] : nullptr,
+                    am);
+                v_topk_tokens[i] = std::move(tk.first);
+                v_topk_probs[i]  = std::move(tk.second);
+                v_argmax_explicit[i] = am;
+            }
+            // confidence[] for v1: softmax prob of draft[i-1] under
+            // verifier at the i-th per-position forward. Use the
+            // precomputed row (avoids re-scanning the vocab).
+            for (int i = 1; i <= n_dft; ++i) {
+                const float * row = (i < (int) v_logits_ptrs.size())
+                                    ? v_logits_ptrs[i] : nullptr;
+                if (row == nullptr) continue;
                 float max_logit = row[0];
                 for (int v = 1; v < n_vocab; ++v) {
                     if (row[v] > max_logit) max_logit = row[v];
@@ -2001,24 +2199,166 @@ static bool compute_imatrix_spec(
                     sum_exp += std::exp((double) row[v] - (double) max_logit);
                 }
                 const double prob = sum_exp > 0.0
-                    ? std::exp((double) row[draft[i]] - (double) max_logit) / sum_exp
+                    ? std::exp((double) row[draft[i - 1]] - (double) max_logit) / sum_exp
                     : 0.0;
-                confidence.push_back((float) prob);
+                confidence[i - 1] = (float) prob;
             }
-            // Emit the JSONL record. We hand-build a minimal JSON
-            // object to avoid pulling in a JSON dependency.
-            std::string line = "{\"schema\":\"llama.dflash.acceptance.v1\"";
-            line += ",\"seq_id\":0";
-            line += ",\"drafted\":" + std::to_string(n_dft);
-            line += ",\"accepted\":" + std::to_string(n_acc);
-            line += ",\"confidence\":[";
-            for (size_t i = 0; i < confidence.size(); ++i) {
-                if (i > 0) line += ",";
-                char buf[64];
-                std::snprintf(buf, sizeof(buf), "%.8g", confidence[i]);
-                line += buf;
+
+            // Drafter: n_dft+1 per-position distributions from
+            // dft_logits_ptrs (one per drafter forward, priming + drafts).
+            std::vector<std::vector<int32_t>> d_topk_tokens(n_dft + 1);
+            std::vector<std::vector<float>>   d_topk_probs(n_dft + 1);
+            std::vector<int32_t>              d_argmax_explicit(n_dft + 1, 0);
+            for (int i = 0; i <= n_dft; ++i) {
+                int32_t am = 0;
+                auto tk = topk_row(
+                    i < (int) dft_logits_ptrs.size() ? dft_logits_ptrs[i] : nullptr,
+                    am);
+                d_topk_tokens[i] = std::move(tk.first);
+                d_topk_probs[i]  = std::move(tk.second);
+                d_argmax_explicit[i] = am;
             }
-            line += "]}\n";
+
+            // accepted_tokens: drafts[0..n_acc-1] + bonus
+            // Bonus = verifier argmax at position n_acc (which equals
+            // v_argmax_explicit[n_dft] in our per-prefix scheme; the
+            // verifier "extends past the last accepted draft" with the
+            // same prediction regardless of how many drafts were
+            // accepted).
+            const llama_token bonus = v_argmax_explicit[n_dft];
+            std::vector<int32_t> accepted_tokens;
+            accepted_tokens.reserve(n_acc + 1);
+            for (size_t k = 0; k < n_acc; ++k) {
+                accepted_tokens.push_back(draft[k]);
+            }
+            if (n_acc <= (size_t) n_dft) {
+                accepted_tokens.push_back(bonus);
+            }
+
+            // Hand-build the JSONL record. We keep arrays parallel
+            // (tokens[] and probs[]) to keep the encoding compact; the
+            // training pipeline re-zips them per position.
+            std::string line;
+            if (topk > 0) {
+                line  = "{\"schema\":\"llama.spec_calib.v2\"";
+                line += ",\"seq_id\":0";
+                line += ",\"step_idx\":" + std::to_string(step);
+                line += ",\"prime_token\":" + std::to_string(id_last);
+                line += ",\"drafted\":" + std::to_string(n_dft);
+                line += ",\"accepted\":" + std::to_string(n_acc);
+                line += ",\"topk\":" + std::to_string(topk);
+
+                line += ",\"drafted_tokens\":[";
+                for (int i = 0; i < n_dft; ++i) {
+                    if (i > 0) line += ",";
+                    line += std::to_string(draft[i]);
+                }
+                line += "]";
+
+                line += ",\"accepted_tokens\":[";
+                for (size_t i = 0; i < accepted_tokens.size(); ++i) {
+                    if (i > 0) line += ",";
+                    line += std::to_string(accepted_tokens[i]);
+                }
+                line += "]";
+
+                line += ",\"verifier_argmax\":[";
+                for (int i = 0; i <= n_dft; ++i) {
+                    if (i > 0) line += ",";
+                    line += std::to_string(v_argmax_explicit[i]);
+                }
+                line += "]";
+
+                line += ",\"drafter_argmax\":[";
+                for (int i = 0; i <= n_dft; ++i) {
+                    if (i > 0) line += ",";
+                    line += std::to_string(d_argmax_explicit[i]);
+                }
+                line += "]";
+
+                // Verifier top-k: parallel arrays.
+                line += ",\"verifier_topk_tokens\":[";
+                for (int i = 0; i <= n_dft; ++i) {
+                    if (i > 0) line += ",";
+                    line += "[";
+                    for (size_t k = 0; k < v_topk_tokens[i].size(); ++k) {
+                        if (k > 0) line += ",";
+                        line += std::to_string(v_topk_tokens[i][k]);
+                    }
+                    line += "]";
+                }
+                line += "]";
+                line += ",\"verifier_topk_probs\":[";
+                for (int i = 0; i <= n_dft; ++i) {
+                    if (i > 0) line += ",";
+                    line += "[";
+                    for (size_t k = 0; k < v_topk_probs[i].size(); ++k) {
+                        if (k > 0) line += ",";
+                        char buf[64];
+                        std::snprintf(buf, sizeof(buf), "%.6g",
+                                      (double) v_topk_probs[i][k]);
+                        line += buf;
+                    }
+                    line += "]";
+                }
+                line += "]";
+
+                // Drafter top-k: parallel arrays.
+                line += ",\"drafter_topk_tokens\":[";
+                for (int i = 0; i <= n_dft; ++i) {
+                    if (i > 0) line += ",";
+                    line += "[";
+                    for (size_t k = 0; k < d_topk_tokens[i].size(); ++k) {
+                        if (k > 0) line += ",";
+                        line += std::to_string(d_topk_tokens[i][k]);
+                    }
+                    line += "]";
+                }
+                line += "]";
+                line += ",\"drafter_topk_probs\":[";
+                for (int i = 0; i <= n_dft; ++i) {
+                    if (i > 0) line += ",";
+                    line += "[";
+                    for (size_t k = 0; k < d_topk_probs[i].size(); ++k) {
+                        if (k > 0) line += ",";
+                        char buf[64];
+                        std::snprintf(buf, sizeof(buf), "%.6g",
+                                      (double) d_topk_probs[i][k]);
+                        line += buf;
+                    }
+                    line += "]";
+                }
+                line += "]";
+
+                // v1 back-compat: confidence = verifier softmax prob of
+                // each draft token (so existing rejection-sampling tools
+                // can consume v2 records too).
+                line += ",\"confidence\":[";
+                for (size_t i = 0; i < confidence.size(); ++i) {
+                    if (i > 0) line += ",";
+                    char buf[64];
+                    std::snprintf(buf, sizeof(buf), "%.8g",
+                                  (double) confidence[i]);
+                    line += buf;
+                }
+                line += "]";
+                line += "}\n";
+            } else {
+                // v1 schema (existing path, unchanged).
+                line  = "{\"schema\":\"llama.dflash.acceptance.v1\"";
+                line += ",\"seq_id\":0";
+                line += ",\"drafted\":" + std::to_string(n_dft);
+                line += ",\"accepted\":" + std::to_string(n_acc);
+                line += ",\"confidence\":[";
+                for (size_t i = 0; i < confidence.size(); ++i) {
+                    if (i > 0) line += ",";
+                    char buf[64];
+                    std::snprintf(buf, sizeof(buf), "%.8g",
+                                  (double) confidence[i]);
+                    line += buf;
+                }
+                line += "]}\n";
+            }
             if (std::fwrite(line.data(), 1, line.size(), telemetry_fp) != line.size()) {
                 LOG_WRN("%s: failed to write telemetry record at step %d\n",
                         __func__, step);
