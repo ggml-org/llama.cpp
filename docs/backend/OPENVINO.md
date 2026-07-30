@@ -638,7 +638,7 @@ export GGML_OPENVINO_STATEFUL_EXECUTION=1
 
 Integration test (requires `LLAMACPP_TEST_MODELFILE`): `tests/test-openvino-phase-split.sh`.
 
-**Phase tune (crossover profiling):** with `GGML_OPENVINO_PHASE_TUNE=1`, each prefill/decode step runs timing on both devices, then the normal phase-split path updates KV. Default **two-pass** mode (`GGML_OPENVINO_PHASE_TUNE_TWO_PASS=1`, default): run `llama-bench` twice with `GGML_OPENVINO_PHASE_TUNE_PASS=0` then `1` so each step does one timed probe on one device plus production infer (no per-step KV backup). Legacy dual-probe per step: set `GGML_OPENVINO_PHASE_TUNE_TWO_PASS=0`. At process exit, average ms per token index is written under `GGML_OPENVINO_PHASE_TUNE_OUTPUT_DIR` (four CSVs: `pp_<dev>.csv`, `tg_<dev>.csv`). Plot: `scripts/plot-openvino-phase-tune.py`. Example: `scripts/run-openvino-phase-tune-tata.sh`.
+**Phase tune (crossover profiling):** with `GGML_OPENVINO_PHASE_TUNE=1`, each prefill/decode step runs stateless timing on both devices (KV snapshot restored between probes), then the normal phase-split path updates KV. At process exit, average ms per token index is written under `GGML_OPENVINO_PHASE_TUNE_OUTPUT_DIR` (four CSVs: `pp_<dev>.csv`, `tg_<dev>.csv`). Plot: `scripts/plot-openvino-phase-tune.py`. Example: `scripts/run-openvino-phase-tune-tata.sh`.
 
 ```bash
 export GGML_OPENVINO_PHASE_TUNE=1

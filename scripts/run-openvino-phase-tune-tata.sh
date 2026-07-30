@@ -30,32 +30,16 @@ export GGML_OPENVINO_CACHE_DIR="${GGML_OPENVINO_CACHE_DIR:-/tmp/ov_phase_tune_ca
 export GGML_OPENVINO_PHASE_TUNE=1
 export GGML_OPENVINO_PHASE_TUNE_DEVICES="${GGML_OPENVINO_PHASE_TUNE_DEVICES:-CPU,GPU.0}"
 export GGML_OPENVINO_PHASE_TUNE_OUTPUT_DIR="$OUT"
-export GGML_OPENVINO_PHASE_TUNE_TWO_PASS="${GGML_OPENVINO_PHASE_TUNE_TWO_PASS:-1}"
 export GGML_OPENVINO_PHASE_SPLIT=1
 export GGML_OPENVINO_PREFILL_DEVICE=CPU
 export GGML_OPENVINO_DECODE_DEVICE=GPU.0
-export GGML_OPENVINO_STATEFUL_EXECUTION="${GGML_OPENVINO_STATEFUL_EXECUTION:-0}"
+export GGML_OPENVINO_STATEFUL_EXECUTION=0
 
 echo "Running phase tune -pg ${PP},${TG} (reps=$REPS) -> $OUT"
-if [[ "$GGML_OPENVINO_PHASE_TUNE_TWO_PASS" == "1" ]]; then
-  echo "Two-pass mode: full bench pass 0 (device0) then pass 1 (device1); ~2x infer per step."
-else
-  echo "Legacy tune: 3x infer + KV restore per step; tg=${TG} can take very long (use --progress)."
-fi
+echo "Note: tune mode runs 3x infer per step; tg=${TG} can take a long time (use --progress)."
 
-BENCH_ARGS=(-m "$MODEL" -r "$REPS" --no-warmup --progress -p 0 -n 0 -pg "${PP},${TG}")
-
-if [[ "$GGML_OPENVINO_PHASE_TUNE_TWO_PASS" == "1" ]]; then
-  export GGML_OPENVINO_PHASE_TUNE_PASS=0
-  echo "=== phase tune pass 0 (${GGML_OPENVINO_PHASE_TUNE_DEVICES%%,*}) ==="
-  "$BENCH" "${BENCH_ARGS[@]}"
-  export GGML_OPENVINO_PHASE_TUNE_PASS=1
-  echo "=== phase tune pass 1 (${GGML_OPENVINO_PHASE_TUNE_DEVICES##*,}) ==="
-  "$BENCH" "${BENCH_ARGS[@]}"
-  unset GGML_OPENVINO_PHASE_TUNE_PASS
-else
-  "$BENCH" "${BENCH_ARGS[@]}"
-fi
+# -p 0 -n 0: skip default pp512/tg128 tests (otherwise llama-bench runs those too).
+"$BENCH" -m "$MODEL" -r "$REPS" --no-warmup --progress -p 0 -n 0 -pg "${PP},${TG}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 python3 "$SCRIPT_DIR/plot-openvino-phase-tune.py" "$OUT" --device0 CPU --device1 GPU.0 --out "$OUT"

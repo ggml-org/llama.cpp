@@ -76,7 +76,6 @@ struct ggml_openvino_device_config {
     std::string phase_tune_device0;
     std::string phase_tune_device1;
     std::string phase_tune_output_dir;
-    bool phase_tune_two_pass = true;
 
     void init();
     ~ggml_openvino_device_config();
@@ -98,11 +97,6 @@ bool ggml_openvino_phase_tune_enabled();
 const std::string & ggml_openvino_get_phase_tune_device(int index);
 
 const std::string & ggml_openvino_get_phase_tune_output_dir();
-
-// Two-pass tune: 0 = measure device0 only this process, 1 = device1 only, -1 = both each step (legacy).
-int ggml_openvino_phase_tune_pass();
-
-bool ggml_openvino_phase_tune_two_pass_enabled();
 
 // Get the global device config singleton
 ggml_openvino_device_config & ggml_openvino_get_device_config();
