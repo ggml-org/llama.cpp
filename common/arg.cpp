@@ -7,6 +7,7 @@
 #include "json-schema-to-grammar.h"
 #include "llama.h"
 #include "log.h"
+#include "tessera-debug.h"
 #include "sampling.h"
 #include "speculative.h"
 #include "preset.h"
@@ -3830,6 +3831,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
+        {"--tessera-dequant-dir"}, "PATH",
+        "Tessera: dump per-tensor dequantized weights to PATH as .dequant.f32 sidecar files "
+        "(only used for calibration, default: disabled)",
+        [](common_params &, const std::string & value) {
+            tessera_debug::set_dequant_dir(value);
+        }
+    ).set_env("LLAMA_TILE640_DEBUG_DEQUANT_DIR"));
     add_opt(common_arg(
         {"--log-colors"}, "[on|off|auto]",
         "Set colored logging ('on', 'off', or 'auto', default: 'auto')\n"

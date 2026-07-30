@@ -100,6 +100,8 @@ add_library(${TARGET}
     sampling.h
     speculative.cpp
     speculative.h
+    tessera-debug.cpp
+    tessera-debug.h
     trie.cpp
     trie.h
     unicode.cpp
