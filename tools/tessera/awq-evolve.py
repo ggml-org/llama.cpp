@@ -56,6 +56,13 @@ class Candidate:
     outlier_fraction: float
     moment_mix: float
     tail_guard: float
+    # Multiplier on the per-row mean(|W|) used as the {-1, 0, +1} ternarization
+    # threshold. Default 1.0 = current tessera behaviour. Searched per-tensor
+    # by tools/tessera/per_tensor_calibrate.py to fix the mis-calibrated bulk
+    # of the requantization (Q/K/V/FFN gate/up/down at layers 4-32 where the
+    # global mean(|W|) threshold is too aggressive and 70-150% layer-output
+    # error accumulates through the network).
+    ternary_threshold: float = 1.0
 
     def clipped(self) -> "Candidate":
         return Candidate(
@@ -64,6 +71,7 @@ class Candidate:
             outlier_fraction=float(np.clip(self.outlier_fraction, 0.0001, 0.05)),
             moment_mix=float(np.clip(self.moment_mix, 0.0, 1.0)),
             tail_guard=float(np.clip(self.tail_guard, 0.0, 2.0)),
+            ternary_threshold=float(np.clip(self.ternary_threshold, 0.30, 3.0)),
         )
 
     def as_array(self) -> np.ndarray:
@@ -223,7 +231,11 @@ def _ternary_reconstruct(weight: np.ndarray, candidate: Candidate, importance: n
     transformed = weight * scale.reshape(1, -1)
     row_limit = np.max(np.abs(transformed), axis=1, keepdims=True) * candidate.clip
     transformed = np.clip(transformed, -row_limit, row_limit)
-    threshold = np.mean(np.abs(transformed), axis=1, keepdims=True)
+    # Per-row ternarization threshold: per-row mean(|W|) × ternary_threshold
+    # multiplier. The legacy tessera path used a hardcoded 1.0 (mean(|W|));
+    # the multiplier is the missing calibration knob. Higher = sparser
+    # (more zeros, fewer {-1, +1}); lower = denser (more non-zeros).
+    threshold = np.mean(np.abs(transformed), axis=1, keepdims=True) * candidate.ternary_threshold
     ternary = np.where(transformed >= threshold, 1.0, np.where(transformed <= -threshold, -1.0, 0.0))
     denominator = np.sum(np.abs(ternary), axis=1, keepdims=True)
     row_scale = np.divide(
@@ -675,18 +687,30 @@ def random_candidate(rng: random.Random, base_fraction: float) -> Candidate:
         math.exp(rng.uniform(math.log(max(0.0001, base_fraction / 4)), math.log(min(0.05, base_fraction * 4)))),
         rng.random(),
         rng.uniform(0.0, 1.0),
+        # ternary_threshold: 0.3 (very dense) to 3.0 (very sparse). Bias the
+        # initial population around 1.0 (legacy behaviour) by sampling in
+        # [0.7, 1.6] most of the time, with 25% chance of an out-of-band
+        # exploration in [0.4, 2.5].
+        math.exp(rng.uniform(math.log(0.5), math.log(2.0))) if rng.random() < 0.75 else rng.uniform(0.4, 2.5),
     ).clipped()
 
 
 def mutate(candidate: Candidate, rng: random.Random, sigma: float) -> Candidate:
     values = candidate.as_array()
-    scales = np.asarray([0.20, 0.08, max(candidate.outlier_fraction, 0.001), 0.20, 0.25])
+    scales = np.asarray([
+        0.20,                                # alpha
+        0.08,                                # clip
+        max(candidate.outlier_fraction, 0.001),  # outlier_fraction
+        0.20,                                # moment_mix
+        0.25,                                # tail_guard
+        0.18,                                # ternary_threshold (multiplicative)
+    ])
     noise = np.asarray([rng.gauss(0.0, sigma) for _ in values])
     return Candidate.from_array(values + noise * scales)
 
 
 def crossover(left: Candidate, right: Candidate, rng: random.Random) -> Candidate:
-    mask = np.asarray([rng.random() < 0.5 for _ in range(5)])
+    mask = np.asarray([rng.random() < 0.5 for _ in range(6)])
     blend = rng.random()
     values = np.where(mask, left.as_array(), right.as_array())
     values = blend * values + (1.0 - blend) * ((left.as_array() + right.as_array()) / 2.0)

@@ -1067,7 +1067,7 @@ private:
         const bool has_embedded_mtp = common_model_has_embedded_mtp(params_base.model.path);
         if (params_base.speculative.types ==
                 std::vector<common_speculative_type>{COMMON_SPECULATIVE_TYPE_NONE} &&
-            has_embedded_mtp) {
+            has_embedded_mtp && !params_base.no_embedded_mtp) {
             params_base.speculative.types = {COMMON_SPECULATIVE_TYPE_DRAFT_MTP};
             SRV_INF("automatically enabling embedded MTP component from model GGUF: %s\n",
                     params_base.model.path.c_str());

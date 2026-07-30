@@ -2534,6 +2534,18 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_MTMD, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_DOWNLOAD}).set_env("LLAMA_ARG_MMPROJ_AUTO"));
     add_opt(common_arg(
+        {"--no-embedded-mtp"},
+        string_format(
+            "do not auto-enable the embedded MTP draft even if the GGUF carries one "
+            "(default: %s). The auto-MTP path requires a working ctx_other and is "
+            "currently unstable for standalone model load; use this flag when you "
+            "want plain inference or a custom drafter wired in separately.",
+            params.no_embedded_mtp ? "disabled" : "enabled"),
+        [](common_params & params) {
+            params.no_embedded_mtp = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_IMATRIX}).set_env("LLAMA_ARG_NO_EMBEDDED_MTP"));
+    add_opt(common_arg(
         {"--mmproj-offload"},
         {"--no-mmproj-offload"},
         string_format("whether to enable GPU offloading for multimodal projector (default: %s)", params.mmproj_use_gpu ? "enabled" : "disabled"),

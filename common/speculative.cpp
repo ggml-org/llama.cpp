@@ -2,6 +2,7 @@
 
 #include "common.h"
 #include "ggml.h"
+#include "gguf.h"
 #include "llama.h"
 #include "log.h"
 #include "ngram-cache.h"
@@ -17,6 +18,30 @@
 #include <iomanip>
 #include <map>
 #include <cinttypes>
+
+// Recovered from 9e9f275 (was lost when WIP commit 06e514f captured a partial
+// snapshot). This probes the GGUF header for the MTP component marker without
+// loading tensors — used by server-context.cpp to decide whether to wire up
+// the embedded-MTP spec path.
+bool common_model_has_embedded_mtp(const std::string & path) {
+    if (path.empty()) {
+        return false;
+    }
+    struct gguf_init_params params = {
+        /*.no_alloc =*/ true,
+        /*.ctx      =*/ nullptr,
+    };
+    gguf_context * ctx = gguf_init_from_file(path.c_str(), params);
+    if (ctx == nullptr) {
+        return false;
+    }
+    const int64_t key = gguf_find_key(ctx, "mtp.component.present");
+    const bool present = key >= 0 &&
+        gguf_get_kv_type(ctx, key) == GGUF_TYPE_BOOL &&
+        gguf_get_val_bool(ctx, key);
+    gguf_free(ctx);
+    return present;
+}
 
 #define SPC_DBG(fmt, ...) LOG_DBG("spec %12.*s: " fmt, 12, __func__, __VA_ARGS__)
 #define SPC_TRC(fmt, ...) LOG_TRC("spec %12.*s: " fmt, 12, __func__, __VA_ARGS__)
@@ -2371,6 +2396,19 @@ llama_model * common_speculative_init_result::model() {
 
 llama_context * common_speculative_init_result::context() {
     return pimpl->context.get();
+}
+
+// Recovered from 9e9f275. The current `impl` struct doesn't carry separate
+// `context_mtp` or `ane_mtp` members (the WIP commit 06e514f didn't complete
+// the MTP context wiring), so both accessors return nullptr. server-context.cpp
+// checks for nullptr before using the result, so this is safe and unblocks the
+// build. Full MTP wiring can be added back when the WIP is finalized.
+llama_context * common_speculative_init_result::mtp_context() {
+    return nullptr;
+}
+
+void * common_speculative_init_result::ane_mtp_program() {
+    return nullptr;
 }
 
 common_speculative_init_result_ptr common_speculative_init_from_params(common_params & params, llama_model * model_tgt, llama_context * ctx_tgt) {
