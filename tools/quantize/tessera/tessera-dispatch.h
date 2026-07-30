@@ -1,0 +1,67 @@
+#pragma once
+
+//
+// tessera-dispatch.h
+//
+// Top-level Tessera pipeline orchestrator. Called from quantize.cpp as
+// llama_model_quantize_tessera(). Decides which steps to run based on
+// flag presence, runs calibration / GA / per-tensor quantize, and
+// returns results ready for the GGUF writer.
+//
+
+#include <string>
+#include <vector>
+#include <cstdint>
+
+struct ts_dispatch_params {
+    std::string input_path;
+    std::string output_path;
+    std::string imatrix_path;     // empty = run calibration
+    std::string policy_path;      // empty = run GA
+    std::string policy_out_path;
+    std::string calib_corpus;     // empty = use built-in mini-corpus
+    uint64_t    evolve_seed;
+    int         evolve_iters;
+    int         evolve_islands;
+    int         evolve_population;
+    bool        evolve_only;
+    bool        calibrate_only;
+    float       outlier_frac;
+    std::string awq_alpha;        // "auto" or a float string
+    float       awq_clip;
+    int         nthreads;
+    bool        verbose;
+};
+
+// Result of the Tessera pipeline for one tensor.
+struct ts_dispatch_tensor_result {
+    std::string name;
+    std::string family;
+    int64_t     out_dim;
+    int64_t     in_dim;
+    // quantized data (the 6 components) - opaque blob for the writer
+    std::vector<uint8_t> packed;
+    std::vector<uint8_t> page_scales;
+    std::vector<uint8_t> lane_scales;
+    std::vector<uint8_t> outlier_row_offsets;
+    std::vector<uint8_t> outlier_cols;
+    std::vector<uint8_t> outlier_vals;
+    std::vector<uint8_t> act_scale;   // empty if alpha == 0
+    float       mse;
+    float       alpha_used;
+};
+
+struct ts_dispatch_result {
+    std::vector<ts_dispatch_tensor_result> tensors;
+    std::string policy_json;      // serialized policy for writing
+    std::string policy_sha256;
+    int64_t     n_tensors_quantized;
+    int64_t     n_tensors_skipped;
+    float       total_mse;
+};
+
+// Run the full Tessera quantization pipeline.
+// Returns 0 on success, non-zero on error.
+int ts_dispatch_run(const ts_dispatch_params * params,
+                    ts_dispatch_result * result,
+                    std::string * err_msg);
