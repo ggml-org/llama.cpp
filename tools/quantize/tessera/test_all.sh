@@ -62,7 +62,13 @@ compile_and_run peqat       $T/test_peqat.cpp       $T/tessera-peqat.cpp
 # --- Needs vec (Accelerate) ---
 compile_and_run vec         $T/test_vec.cpp         $T/tessera-vec.cpp -framework Accelerate
 compile_and_run quant       $T/test_quant.cpp       $T/tessera-quant.cpp $T/tessera-vec.cpp -framework Accelerate
-compile_and_run dispatch    $T/test_dispatch.cpp    $T/tessera-dispatch.cpp $T/tessera-quant.cpp $T/tessera-vec.cpp $T/tessera-awq.cpp -framework Accelerate
+# dispatch requires libgguf/libggml (full CMake build); skip in standalone mode
+printf "  %-30s" "dispatch"
+if [ -f build/ggml/src/libgguf.a ] || [ -f build/ggml/src/libgguf.dylib ]; then
+    compile_and_run dispatch $T/test_dispatch.cpp $T/tessera-dispatch.cpp $T/tessera-quant.cpp $T/tessera-vec.cpp $T/tessera-awq.cpp -I ggml/include -I ggml/src -L build/ggml/src -lgguf -lggml -framework Accelerate
+else
+    echo "SKIP (needs CMake build for libgguf)"
+fi
 
 # --- Needs linalg + lbfgs ---
 compile_and_run search      $T/test_search.cpp      $T/tessera-search.cpp $T/tessera-linalg.cpp $T/tessera-lbfgs.cpp
