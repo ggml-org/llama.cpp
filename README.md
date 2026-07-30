@@ -37,8 +37,14 @@ llama serve -hf ggml-org/Qwen3.5-0.8B-GGUF
 
 <table align="center">
     <tr>
-        <td><img width="1310" height="888" alt="image" src="https://github.com/user-attachments/assets/b3efaa27-1ab8-4da1-93ec-5018e429733c" /></td>
-        <td><img width="1392" height="958" alt="image" src="https://github.com/user-attachments/assets/b402f972-2e32-4def-8771-8d849f08cf2e" /></td>
+        <td align="center" width=50%>
+            <img width="1310" height="888" alt="VLM session with `llama cli`" src="https://github.com/user-attachments/assets/b3efaa27-1ab8-4da1-93ec-5018e429733c" />
+            <i>VLM session with <b>llama cli</b></i>
+        </td>
+        <td align="center">
+            <img width="1392" height="958" alt="Build-in web UI against `llama serve` running Qwen 3.6" src="https://github.com/user-attachments/assets/b402f972-2e32-4def-8771-8d849f08cf2e" />
+            <i>Build-in web UI against <b>llama serve</b> running Qwen 3.6</i>
+        </td>
     </tr>
 <table>
 
