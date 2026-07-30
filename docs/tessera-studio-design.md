@@ -11,6 +11,18 @@ The 32 architect decisions are locked by the prior conversation and
 the three prior scoping docs. This doc references them and does not
 re-litigate them.
 
+**Architect directives applied in this revision (2026-07-30):**
+web search is in scope (Tavily-backed, see section 5.6);
+.mlmodelc distribution is via App Store IAP with Apple-hosted
+background assets for large files (see section 5.10.4 and 5.10.5);
+Gemma 4 12B unified is a reasoning model and the engine + UI must
+support chain-of-thought from day 1 (see section 5.7);
+rich renderers (markdown, code highlighting, Mermaid, HTML preview)
+are in scope (see section 5.8); the chat history drawer pattern is
+in scope and replaces the iOS tab bar (see section 5.9); a full
+Settings surface is in scope for App Store publishability
+(see section 5.10).
+
 - CoreML design: `docs/tessera-coreml-conversion-design.md`
   (decisions C1-C10)
 - Multi-modal calibration: `docs/multimodal-calibration-design.md`
@@ -51,11 +63,14 @@ beat.
 | Minute | Beat | What the user sees |
 | --- | --- | --- |
 | 0:00-0:30 | Cold open | The "What is Tessera?" splash. One sentence, one diagram, the 9-component cluster next to a 7-component stock K-quant. The A/B is already implied. |
-| 0:30-1:00 | Model picker | Three models are pre-bundled. Stock Q4_0 Gemma 3 4B. Tessera-quantized Gemma 3 4B (4-bit effective, T640). Tessera-quantized Gemma 4 12B Unified (text + image + audio, 3.5-bit effective, T640). Badges: ANE badge on the Tessera rows, GPU badge on the stock row. |
+| 0:30-1:00 | Model picker | Three models are pre-bundled. Stock Q4_0 Gemma 3 4B. Tessera-quantized Gemma 3 4B (4-bit effective, T640). Tessera-quantized Gemma 4 12B Unified (text + image + audio, 3.5-bit effective, T640, **reasoning**). Badges: ANE badge on the Tessera rows, GPU badge on the stock row, REASONING badge on the 12B. |
 | 1:00-1:30 | First inference | User picks the Tessera 12B, types "In one sentence, what is the capital of France?" The iPhone warms. First token in 240ms. ANE power bar starts moving. |
-| 1:30-2:30 | Telemetry transparency | User opens the collapsible telemetry drawer. Five live readouts: ANE power (mW), GPU power (mW), DRAM power (mW), battery current (mA), thermal state. The "why CoreML" answer is right there: ANE is doing the work, GPU is idle. |
-| 2:30-3:30 | Modality switch | User pastes a photo from the camera roll, asks "What is in this image?" The .mlmodelc is the same one (C8). The act_scale switches to `IMAGE` at the engine call. The first image token lands in 340ms; the per-token stream follows. |
-| 3:30-4:30 | Audio mode | User records a 4-second voice memo, asks for a transcript. The same .mlmodelc. act_scale switches to `AUDIO`. The transcript streams; latency is up (audio tokenisation is heavier) but ANE power is steady. |
+| 1:30-2:00 | Telemetry transparency | User taps the title. A sub-row appears: `tok/s = 24.1`, `ANE mW = 1.2k`, `battery Δ = 12 mAh`. The five IOReport gauges are available via a `...` menu. The "why CoreML" answer is on the screen. |
+| 2:00-2:45 | Reasoning reveal | User asks "Why is the sky blue? Show your reasoning." The 12B emits a `Thinking for 4.2s` block (collapsible, monospaced, sparkle icon). When complete, the user expands it to see the chain-of-thought. The reasoning is preserved in the L1 sidecar (per-token) and the v3 export. |
+| 2:45-3:15 | Web search | User asks "What is the capital of France today?" (Tavily-backed web search enabled). A `web_search` chip appears above the answer; the model streams its synthesis, citation links visible inline. |
+| 3:15-3:45 | Modality switch | User pastes a photo from the camera roll, asks "What is in this image?" The .mlmodelc is the same one (C8). The act_scale switches to `IMAGE` at the engine call. The first image token lands in 340ms; the per-token stream follows. |
+| 3:45-4:15 | Audio mode | User records a 4-second voice memo, asks for a transcript. The same .mlmodelc. act_scale switches to `AUDIO`. The transcript streams; latency is up (audio tokenisation is heavier) but ANE power is steady. |
+| 4:15-4:30 | Drawer reveal | User swipes from the left edge. The chat history drawer opens: Today / Yesterday / 2 days ago / ... / This month bucketing, breathing-dot on the active conversation, the new conversation button. |
 | 4:30-5:00 | The A/B moment | User taps "Compare" on the chat header. Side-by-side: Tessera 4-bit 12B vs stock Q4_0 12B. Same prompt, same image. Per-token latency table. The 12B Tessera row is faster (4 effective bits < Q4_0's 4.5) and uses less ANE power per token. PPL proxy on a 50-token held-out set is reported (e.g. Tessera 5.42, stock 5.39). The "PPL cost of going 4-bit" is on the screen. |
 
 The script works because the iPhone app boots into the chat surface
@@ -63,7 +78,10 @@ with the Tessera 12B already loaded; the user never waits on
 downloads, never configures a quantizer, never sees a CLI. The
 conversion (C2) and the calibration (multi-modal-calibration-design
 section 4) already happened on the Mac companion and the result is
-in the `.app` bundle.
+in the `.app` bundle. The pre-bundled .mlmodelcs are listed in
+section 5.10.4 (the In-App Purchase / Apple-hosted background asset
+distribution); the user can buy additional .mlmodelcs from the App
+Store without leaving the app.
 
 ### 1.2 The 30-minute flight test
 
@@ -90,22 +108,32 @@ a JSON file (the v3 sidecar extension, see
 `docs/tessera-coreml-conversion-design.md` section 6.5) for later
 analysis on the Mac.
 
-### 1.3 The 3 primary screens
+### 1.3 The 3 primary screens + chat history drawer
 
-The app has three top-level destinations, surfaced as a tab bar on
-iOS and a window menu on Mac:
+The app has three top-level destinations, surfaced as a chat
+history drawer + content area on iOS (NavigationSplitView, section
+5.9) and a window menu on Mac:
 
-1. **Chat** (iOS-only, primary). The LlamaState-style chat surface
-   (`examples/llama.swiftui/llama.swiftui/Models/LlamaState.swift`
-   is the pattern we port). Modality picker, engine selector,
-   live IOReport, the 30-minute flight test.
-2. **A/B Compare** (iOS-only). Side-by-side: Tessera-quantized vs
+1. **Chat** (iOS primary, Mac also). The LlamaState-style chat
+   surface (`examples/llama.swiftui/llama.swiftui/Models/LlamaState
+   .swift` is the pattern we port). Modality picker, engine
+   selector, live IOReport, the 30-minute flight test, the
+   reasoning toggle, the web search button, the rich markdown
+   renderers. The Mac Studio's `Run` tab is the same surface
+   scaled up.
+2. **A/B Compare** (iOS, Mac). Side-by-side: Tessera-quantized vs
    stock Q4_0. Same model, same prompt, different engines. The
    comparison table.
-3. **Studio** (Mac-only, primary). The calibration + evolution
-   surface. Pick a model, pick a calibration corpus, run
-   AWQ-evolve, quantize, convert to `.mlmodelc`, ship to iPhone
-   via iCloud Drive.
+3. **Studio** (Mac only). The calibration + evolution surface.
+   Pick a model, pick a calibration corpus, run AWQ-evolve,
+   quantize, convert to `.mlmodelc`, ship to iPhone via iCloud
+   Drive.
+
+The **chat history drawer** is on the left side of the iOS app
+(NavigationSplitView, sections 5.9 and 5.10). It is always
+visible on iPad (sidebar) and is a swipe-to-reveal drawer on
+iPhone. The Mac app uses a similar drawer pattern via
+NavigationSplitView.
 
 ### 1.4 The secondary screens
 
@@ -113,12 +141,15 @@ Each primary screen has a detail / drawer that exposes a secondary
 view. None of these are top-level destinations; they are reached
 via push / sheet from the primary.
 
-- **ModelStore** (drawer, both). Lists bundled models + any
-  user-imported GGUFs / .mlmodelcs in the Documents directory.
-  Badges: ANE (Tessera + CoreML), GPU (stock + Metal), CPU (rare,
-  for debugging).
+- **ModelStore** (drawer / sheet, both). Lists bundled models +
+  any user-imported GGUFs / .mlmodelcs in the Documents directory
+  + the App Store IAP catalog (section 5.10.4). Badges: ANE
+  (Tessera + CoreML), GPU (stock + Metal), CPU (rare, for
+  debugging), REASONING (Gemma 4 12B Unified).
 - **Telemetry** (drawer, iOS). The live IOReport + the 30-minute
-  flight test results. Always-on when the chat surface is active.
+  flight test results. The summary card is the conclusion of
+  the flight test (mWh/token headline, thermal events, per-modality
+  breakdown).
 - **QuantizationPlan** (sheet, iOS; full view, Mac). The
   "calibrate -> evolve -> quantize -> convert -> run" pipeline
   visualised as five steps. iOS shows the plan the user shipped
@@ -127,6 +158,10 @@ via push / sheet from the primary.
   imatrix + policy + provenance for a single calibration pass.
   Mac shows the runner with weight visualisation; iOS shows the
   read-only viewer.
+- **Settings** (push from drawer / menu, both). The full
+  settings surface (section 5.10). Privacy, telemetry, IAP
+  catalog, model management, background behaviour, theme,
+  about. Required for App Store publishability (section 13).
 
 ### 1.5 The "wow" moments
 
@@ -157,31 +192,46 @@ TesseraStudio/
   Package.swift
   Sources/
     TesseraCore/           (shared library, both platforms)
-      LibTessera.swift         ~400 LoC
-      InferenceAdapter.swift   ~200 LoC
-      ModelStore.swift         ~200 LoC
-      ConversationStore.swift  ~200 LoC
-      CalibrationSession.swift ~200 LoC
-      QuantizationPlan.swift   ~150 LoC
-      TelemetryObserver.swift  ~200 LoC
-      (total ~1,550 LoC)
+      LibTessera.swift          ~400 LoC
+      InferenceAdapter.swift    ~200 LoC
+      ModelStore.swift          ~200 LoC
+      ConversationStore.swift   ~200 LoC
+      TesseraChatHistory.swift  ~200 LoC (new in 2026-07-30 rev)
+      CalibrationSession.swift  ~200 LoC
+      QuantizationPlan.swift    ~150 LoC
+      TelemetryObserver.swift   ~200 LoC
+      TesseraWebSearch.swift    ~200 LoC (new in 2026-07-30 rev)
+      TesseraRichRenderer.swift ~300 LoC (new in 2026-07-30 rev)
+      TesseraSettings.swift     ~150 LoC (new in 2026-07-30 rev)
+      TesseraStoreKit.swift     ~250 LoC (new in 2026-07-30 rev)
+      TesseraIOReporter.swift   ~120 LoC
+      (total ~2,570 LoC)
     TesseraStudioiOS/      (iOS app)
       TesseraStudioiOSApp.swift    ~50 LoC
-      ContentView.swift            ~120 LoC
-      ChatView.swift               ~480 LoC
+      ContentView.swift            ~150 LoC (NavigationSplitView root)
+      ChatView.swift               ~520 LoC (Chat + reasoning + web search chips)
       ABCompareView.swift          ~280 LoC
+      ChatHistoryDrawer.swift      ~180 LoC (new in 2026-07-30 rev)
       ModelStoreDrawer.swift       ~150 LoC
       TelemetryDrawer.swift        ~120 LoC
-      (total ~1,200 LoC)
+      SettingsView.swift           ~200 LoC (new in 2026-07-30 rev)
+      OnboardingView.swift         ~120 LoC (new in 2026-07-30 rev)
+      ThinkingBlock.swift          ~80 LoC  (new in 2026-07-30 rev)
+      MarkdownView.swift           ~250 LoC (new in 2026-07-30 rev)
+      MermaidView.swift            ~250 LoC (new in 2026-07-30 rev)
+      (total ~2,350 LoC)
     TesseraStudioMac/      (Mac app)
       TesseraStudioMacApp.swift    ~50 LoC
-      ContentView.swift            ~150 LoC
+      ContentView.swift            ~180 LoC (NavigationSplitView root)
       StudioView.swift             ~400 LoC
       QuantizationPlanEditor.swift ~280 LoC
       CalibrationSessionView.swift ~320 LoC
       SidecarViewer.swift          ~250 LoC
       ABReplayView.swift           ~250 LoC
-      (total ~1,800 LoC)
+      ChatHistoryDrawer.swift      ~180 LoC
+      SettingsView.swift           ~200 LoC
+      RunTabView.swift             ~480 LoC (the Mac chat surface)
+      (total ~2,590 LoC)
   Frameworks/
     tessera.xcframework    (the C FFI, ~3,500 LoC of C/C++)
   Resources/
@@ -192,9 +242,12 @@ TesseraStudio/
     TesseraStudioMacTests/
 ```
 
-Total: ~4,800 LoC of Swift across the three targets, plus the
+Total: ~7,500 LoC of Swift across the three targets, plus the
 ~3,500 LoC C/C++ engine that we do not write here (it is the
-output of the G0-G7 workstreams in the C++ port design).
+output of the G0-G7 workstreams in the C++ port design). The
++2,700 LoC delta from the previous revision is web search,
+reasoning, rich renderers, chat history drawer, settings,
+IAP / StoreKit, onboarding, and AI disclosure.
 
 ### 2.2 Package.swift
 
@@ -403,6 +456,8 @@ public struct TesseraToken: Sendable {
     public let batteryCurrentMA: Double
     public let thermalState: Int32
     public let l1SidecarDelta: URL?  // written by C side per token
+    public let isReasoningToken: Bool  // section 5.5: true for CoT
+    public let reasoningDurationSeconds: Double?  // set on EOG
 }
 ```
 
@@ -493,6 +548,49 @@ int tessera_poll_io_report(
 int tessera_poll_battery(
     int32_t * out_current_ma,
     int32_t * out_thermal_state
+);
+
+// Reasoning model support (section 5.5).
+typedef enum {
+    TESSERA_REASONING_DISABLED = 0,
+    TESSERA_REASONING_ENABLED  = 1,
+    TESSERA_REASONING_AUTO      = 2,  // model decides
+} tessera_reasoning_mode_t;
+
+int tessera_set_reasoning_mode(
+    tessera_context_t * tctx,
+    tessera_reasoning_mode_t mode
+);
+
+// Read the latest reasoning token (CoT stream). Returns 0 on
+// success, -1 on EOG. The reasoning token is written to
+// out_buf (caller-allocated, >= 256 bytes recommended).
+int tessera_read_reasoning_token(
+    tessera_context_t * tctx,
+    char * out_buf,
+    int * out_len
+);
+
+// Returns the duration (in seconds) of the most recent
+// reasoning pass. Set on EOG of the reasoning channel.
+// Returns -1.0 if no reasoning pass has completed.
+double tessera_last_reasoning_duration(
+    tessera_context_t * tctx
+);
+
+// Web search context (section 5.6). The web search context
+// is allocated by tessera_web_search_init and freed by
+// tessera_web_search_free. The search is performed by the
+// Swift side; the C side exposes only the search-context
+// lifecycle + the prompt-folding logic.
+typedef struct tessera_web_search tessera_web_search_t;
+
+tessera_web_search_t * tessera_web_search_init(
+    const char * tavily_api_key
+);
+
+void tessera_web_search_free(
+    tessera_web_search_t * ws
 );
 ```
 
@@ -721,6 +819,23 @@ port:
 - Keeps the journal + ring buffer + prefetch pattern. The
   `workingWindowSize = 200` and `prefetchChunkSize = 100`
   constants (line 22-23) stay.
+
+### 4.4a ConversationList - KEEP, ADAPT for Tessera drawer
+
+File: `PrismAgent/PrismAgentiOS/PrismAgentiOS/ConversationList.swift:1-56`
+(missed in the previous revision; this is the iOS-side
+conversation list view that pairs with `ConversationStore`).
+The pattern is `List` of `NavigationLink`s into `ChatView`,
+with `swipeActions` for delete. The Tessera port lifts this
+to the iOS chat history drawer (section 5.7) and adds the
+`BreathingDot` for active inference, the recency bucketing
+(Today / Yesterday / 2d ago / ...), the pin action, and
+the rename action. The Mac side uses the same
+`ConversationList` adapted to a `NavigationSplitView` sidebar.
+The recency-bucketing utility is `TesseraChatHistory.swift`
+in TesseraCore (~200 LoC), ported from the AWS sample's
+`react-native/src/history/HistoryGroupUtil.ts:21-68` pattern
+(but in Swift, not TypeScript).
 
 ### 4.5 Plan / QuantizationPlan - KEEP, RENAME
 
@@ -961,16 +1076,452 @@ The Studio is a workbench. The user runs the plan, watches
 the L1 / L1.5 sidecars fill in, sees the L5 recommendations
 emerge, ships the .mlmodelc to the iPhone via iCloud Drive.
 
+### 5.4 Web search (Tavily-backed)
+
+The chat surface has a web search button next to the modality
+picker. Tapping it enables web search for the next message;
+the button is toggled off by default (privacy by default).
+When enabled, the engine routes the user's prompt through a
+two-step pipeline: (1) the prompt is sent to Tavily
+(`https://api.tavily.com/search`) with `search_depth: "basic"`
+and `max_results: 5`; (2) the top-5 results are folded into
+the prompt as a context block, the engine streams the synthesis,
+the citation links are rendered inline.
+
+The web search behaviour is documented at
+`https://docs.tavily.com/documentation/best-practices/best-
+practices-search`. The query is constrained to <= 400 chars
+(`Keep queries concise`), and the `time_range` is set to
+`month` for freshness. The `session_id` is a per-conversation
+UUID (Tavily's recommendation for multi-turn agents).
+
+The Swift surface is `TesseraWebSearch.swift` (~200 LoC,
+TesseraCore):
+
+```swift
+public actor TesseraWebSearch {
+    public init(apiKey: String, baseURL: URL = .tavily)
+
+    public struct Result: Codable, Sendable {
+        public let title: String
+        public let url: URL
+        public let content: String
+        public let score: Double
+    }
+
+    public func search(
+        query: String,
+        sessionId: UUID,
+        maxResults: Int = 5
+    ) async throws -> [Result]
+}
+```
+
+The chat surface injects a `web_search` chip above the message
+when the user enables it: `Web search: 5 sources, top hit
+"..."`. The chip is the same shape as the file attachment
+chips. The user can tap the chip to expand the source list.
+
+Tavily is the primary provider (best-practices document cited
+above; designed for AI agents; `tavily-best-practices` skill
+exists at `github.com/tavily-ai/skills`). A `Google CSE`
+fallback is in the design as a future option if Tavily's
+pricing changes; not implemented in v1.
+
+The privacy implication: the user's prompt and the session ID
+are sent to a third-party API. The Settings surface has a
+toggle for "Send prompts to web search provider" (default ON,
+warns the user). The privacy policy is in the App Store
+metadata (section 13.3) and the in-app About screen.
+
+The web search is on the chat surface, not on the A/B Compare
+or the Mac Studio. A/B is offline-by-construction; the Mac
+Studio runs the calibration corpus from disk.
+
+### 5.5 Reasoning model support (Gemma 4 12B Unified)
+
+Gemma 4 12B Unified is a reasoning model: before emitting the
+final answer, the model emits a chain-of-thought (CoT)
+reasoning trace. The engine surfaces both: the CoT in a
+`Thinking for Ns` block (collapsed by default, expandable),
+the final answer in the normal message body. The pattern is
+the Locara + Anthropic + DeepSeek convention (see the research
+notes in the section 4 / 5.x reference); default collapsed
+because most users don't look at CoT (Claude Code's stated
+rationale).
+
+The C FFI adds the reasoning channel:
+
+```c
+typedef enum {
+    TESSERA_REASONING_DISABLED = 0,
+    TESSERA_REASONING_ENABLED  = 1,
+    TESSERA_REASONING_AUTO      = 2,  // model decides
+} tessera_reasoning_mode_t;
+
+int tessera_set_reasoning_mode(
+    tessera_context_t * tctx,
+    tessera_reasoning_mode_t mode
+);
+
+// Read the latest reasoning token (CoT stream). Returns 0 on
+// success, -1 on EOG.
+int tessera_read_reasoning_token(
+    tessera_context_t * tctx,
+    char * out_buf,
+    int * out_len
+);
+```
+
+The Swift `TesseraToken` gains a `reasoningToken: String?`
+field. The chat surface renders the CoT in a separate
+`ThinkingBlock` SwiftUI view:
+
+```swift
+struct ThinkingBlock: View {
+    let isStreaming: Bool
+    let durationSeconds: Double
+    let wordCount: Int?
+    let body: String  // full reasoning text (rendered in monospaced font)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Image(systemName: "sparkles")
+                    .symbolEffect(.pulse, isActive: isStreaming)
+                Text(isStreaming
+                     ? "Thinking..."
+                     : "Thought for \(String(format: "%.1f", durationSeconds))s")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                if let n = wordCount {
+                    Text("\(n) words")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            if expanded {
+                Text(body)
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+        }
+    }
+}
+```
+
+The reasoning toggle in the engine selector menu has three
+states: `Auto` (model decides, default), `On` (force CoT
+on), `Off` (suppress CoT). The choice persists per-model
+in `UserDefaults`. The reasoning tokens are written to the
+L1 sidecar (`reasoning_content` field per row) and to the
+v3 sidecar export (section 6.5 of the CoreML design).
+
+The latency budget: reasoning models emit CoT before the
+final answer, so first-token latency is 2-10x higher than
+non-reasoning models. The IOReport reflects the delay:
+`battery_delta_mWh` for a reasoning run is higher than for
+a non-reasoning run on the same prompt. The chat surface
+surfaces `time_to_first_reasoning_token` and
+`time_to_first_answer_token` as two separate metrics in the
+title sub-row.
+
+The Mac Studio's CalibrationSessionView surfaces the per-tensor
+reasoning cost: which tensors contribute to the CoT vs the
+final answer (from the L1 sidecar `tensor_kind` field, a
+new addition in v3). This is for debugging, not for v1 UX.
+
+### 5.6 Rich renderers (markdown, code, Mermaid, HTML)
+
+The chat surface renders the model's output as rich content,
+not plain text. The Swift surface is
+`TesseraRichRenderer.swift` (~300 LoC, TesseraCore), with
+SwiftUI views per element type. The renderer is
+streaming-aware: it parses incrementally as tokens arrive
+(debounce 64 chars or 200ms, whichever is first) and
+re-parses the full visible chunk on each update.
+
+The supported elements:
+
+- **Markdown** (headings, paragraphs, lists, links, bold,
+  italic, code spans, blockquotes, tables). Uses
+  Apple's `Markdown` framework (`#available(iOS 17, *)`)
+  with manual `PresentationIntentAttribute` walking for
+  header levels (per the SO answer cited in the research;
+  SwiftUI's `AttributedString(markdown:)` doesn't render
+  headers natively). For iOS 16 fallback, fall back to
+  `AttributedString(markdown:)` and lose header styling.
+- **Code blocks** with language detection. Highlights via
+  Splash (Swift-only, no JS) or a custom rule-based
+  highlighter; ~100 LoC. Languages: Python, TypeScript,
+  Swift, Rust, C, C++, Go, JSON, YAML, Bash. Falls back to
+  monospaced plain text for unknown languages.
+- **Mermaid diagrams** rendered to SVG via a Swift-native
+  renderer (~600 LoC, based on the Mermaid grammar). For
+  v1 we support `flowchart`, `sequenceDiagram`,
+  `classDiagram`, `stateDiagram-v2`. The SVG is rendered
+  via `WKWebView` (a local HTML host with the SVG inline,
+  no network). A "Copy SVG" and "Open in fullscreen" button
+  appears on hover.
+- **HTML preview** for `<html>` code blocks. The HTML is
+  rendered in a `WKWebView` sandbox (no JS, no network).
+  The user can copy the HTML or open in fullscreen.
+- **Tables** rendered as `Table` (SwiftUI, iOS 16+). The
+  table is selectable, copyable, and adapts to dynamic
+  type.
+- **Math** (LaTeX-style) is deferred to v2. KaTeX is a
+  JavaScript library; the v2 path is a native Swift
+  renderer or a `WKWebView` with KaTeX bundled.
+
+The streaming caveat: as the model emits tokens, the
+markdown is incomplete (an unclosed code block, an
+unclosed table). The renderer holds the last block as a
+"pending" state (lighter colour, no syntax highlighting
+yet) and promotes it to "complete" when the closing
+delimiter arrives. The `Markdown` framework's incremental
+parse is the foundation; the pending-state UI is in
+`TesseraRichRenderer.swift`.
+
+The Mac Studio's CalibrationSessionView also uses the
+markdown renderer for the policy JSON, the imatrix
+preview, and the L1 / L1.5 sidecar summaries.
+
+### 5.7 Chat history drawer (NavigationSplitView)
+
+The iOS app uses SwiftUI's `NavigationSplitView` for the
+chat history pattern (the SwiftUI native replacement for
+the React Navigation drawer in the AWS sample). On iPad
+the sidebar is always visible (two-column layout); on
+iPhone the sidebar is hidden until the user swipes from
+the left edge or taps the menu button in the top-left.
+
+The Mac app uses the same `NavigationSplitView` for the
+chat history drawer in the Studio's `Run` tab. The
+sidebar shows the conversation list, the detail shows
+the active conversation.
+
+The drawer contents:
+
+- **"New Chat"** button at the top.
+- **Pinned conversations** (3-5 max, user-pinnable, with
+  a pin icon).
+- **Conversation list** grouped by recency (the
+  `HistoryGroupUtil.ts` pattern from the AWS sample,
+  ported to Swift):
+  - Today
+  - Yesterday
+  - 2 days ago
+  - ... up to 6 days ago
+  - Last week
+  - ... up to 4 weeks ago
+  - Then by month (e.g. `2026.07`)
+- Each row shows: title (first user message, truncated
+  to 32 chars), last-update time, a breathing-dot if
+  the conversation is currently streaming inference
+  (the `BreathingDot` from the AWS sample's
+  `CustomDrawerContent.tsx:45-68`).
+- Swipe actions: rename, pin, share, delete.
+- Long-press: context menu with the same options.
+- Search field at the top (deferred to v2; v1 is a
+  scrollable list).
+
+The Swift type is `TesseraChatHistoryStore`
+(TesseraCore, ~200 LoC). It uses the same tiered
+storage as `ConversationStore`: a journal on disk
+(JSON-Lines, one row per event), an in-memory
+ring buffer for the last 200 messages of the
+active conversation, a lazy reverse prefetch for
+older messages.
+
+The `BreathingDot` is a SwiftUI
+`@State private var opacity: Double` with
+`withAnimation(.easeInOut.repeatForever)`,
+identical pattern to the AWS sample.
+
+### 5.8 Settings (iOS, Mac) - the full settings surface
+
+The Settings surface is required for App Store
+publishability (section 13). It is a single
+`NavigationStack` with the following sections. Each
+section is a `Form` with the corresponding toggles; the
+underlying state is `TesseraSettings` in TesseraCore
+(~150 LoC), a `@Observable` class backed by
+`@AppStorage` for the simple toggles and a JSON file in
+the Documents directory for the structured data (the
+IAP catalog, the model aliases).
+
+- **Privacy** (App Store requires clear disclosure of
+  data use, see section 13.3):
+  - `Send prompts to web search provider` (default ON,
+    warns the user; toggles `TesseraWebSearch.isEnabled`)
+  - `Send prompts to telemetry collector` (default OFF;
+    the testflight build has the collector on by
+    default)
+  - `Share analytics with Tessera project` (default OFF;
+    the analytics are crash reports + the v3 sidecar
+    export, opt-in only)
+  - `Show AI-generated content labels` (default ON, per
+    EU AI Act Article 50 + Apple's iOS 26 AI
+    disclosure; this is the "AI-generated" badge on
+    every assistant message)
+- **Model**:
+  - The App Store IAP catalog (section 5.10.4): the list
+    of purchasable .mlmodelcs, the user's purchased
+    items, the "Restore Purchases" button.
+  - `Default engine`: Tessera + CoreML / Tessera +
+    Metal / Stock + Metal (per-model override).
+  - `Default modality`: text / image / audio.
+  - `Reasoning mode`: Auto / On / Off (per-model
+    override, default Auto for reasoning-capable
+    models).
+  - `iCloud Drive sync`: ON / OFF. When ON, the .mlmodelc
+    is imported from iCloud Drive; when OFF, the user
+    downloads from the App Store IAP only.
+  - `Delete all model files`: confirmation required.
+- **Inference**:
+  - `Background keep-alive for flight test` (default
+    ON, explains the pink-noise audio session, required
+    for the 30-minute flight test to run with the
+    iPhone locked; C3).
+  - `Live Activity for flight test` (default ON,
+    required for the iOS 16.2+ Live Activity to
+    surface the flight test progress on the Lock
+    Screen).
+  - `Telemetry in title` (default ON, taps the title
+    to show tok/s + ANE mW + battery delta).
+  - `Persist IOReport samples` (default OFF; when ON,
+    the 1 Hz samples are written to a JSON file in
+    Documents, used by the ABReplayView on Mac).
+- **Display**:
+  - `Theme`: System / Light / Dark.
+  - `Font size`: respects Dynamic Type.
+  - `Language`: English v1; the strings are externalised.
+  - `Show reasoning by default` (default OFF; when
+    ON, the `ThinkingBlock` is expanded on first
+    arrival).
+- **About**:
+  - App version + build number.
+  - The privacy policy link.
+  - The terms of service link.
+  - `Contact support` (mailto:).
+  - `Open source licenses` (the third-party licence
+    list; required for the App Store).
+
+The Settings view is reachable from the chat history
+drawer (iOS) and the app menu (Mac). The privacy
+section is at the top; this matches Apple's
+"Privacy & Security" convention in iOS Settings.
+
+### 5.9 IAP / Apple-hosted background asset distribution
+
+The .mlmodelc distribution is via the App Store. The
+three pre-bundled models (Tessera 4-bit Gemma 3 4B,
+Tessera 3.5-bit Gemma 4 12B Unified, Stock Q4_0
+Gemma 3 4B) ship in the `.app`; additional .mlmodelcs
+are purchasable via In-App Purchase. The IAP
+catalog:
+
+| Tier | Product | Price (US) | Apple cut (30%) | Net to us |
+| --- | --- | --- | --- | --- |
+| Small | `tessera.gemma3.4b.q4.tessera.v1` | $4.99 | $1.50 | $3.49 |
+| Medium | `tessera.gemma4.12b.unified.q35.tessera.v1` | $9.99 | $3.00 | $6.99 |
+| Large | `tessera.gemma4.27b.unified.q3.tessera.v1` (v2) | $19.99 | $6.00 | $13.99 |
+
+The pricing is the App Store's tier 4 / tier 6 / tier
+9; the net is documented for the user in the
+Settings > About screen. The 30% cut is the standard
+commission; the Small Business Program (15%) is
+available at < $1M annual revenue (we are not there
+yet).
+
+The .mlmodelc is delivered as an **Apple-hosted
+background asset** (`BackgroundAssets.framework`,
+iOS 26+). The flow is:
+
+1. The user buys the IAP via StoreKit 2.
+2. The .mlmodelc is bundled as an Apple-hosted
+   background asset pack (up to 200 GB per app,
+   included in the Developer Program membership;
+   `WWDC26/378` for the documentation).
+3. The OS automatically downloads the asset pack when
+   the IAP is purchased; the user sees a
+   "Downloading..." progress in the App Store.
+4. The app reads the asset pack from the local
+   Background Assets cache; the engine loads the
+   .mlmodelc from the cached path.
+
+The rationale: Apple discontinued Apple-hosted
+non-consumable IAP content in April 2022 (the
+`SKDownload` API is deprecated). The two remaining
+options are On-Demand Resources (limited to the app
+bundle, requires resubmission for every update) and
+Background Assets (Apple-hosted, automatic download,
+iOS 26+). Background Assets is the right answer for
+v1; v2 may also ship a self-hosted option for users
+who have already paid for the .mlmodelc on a different
+device.
+
+The "Restore Purchases" button is in the Settings >
+Model section; the `Transaction.currentEntitlements`
+API (StoreKit 2) is the source of truth. The receipt
+validation is on-device (no server; StoreKit 2
+returns a JWS that the app verifies locally).
+
+The IAP catalog is also browsable from the ModelStore
+drawer: the "Store" tab shows the available
+.mlmodelcs with a "Buy" button next to each. The buy
+button triggers the StoreKit 2 `product.purchase()`
+flow with a sheet for the App Store sign-in.
+
+The Mac companion distribution stays as iCloud Drive
+handoff (per the original design). The user can
+either (a) build a .mlmodelc on the Mac, drop it in
+iCloud Drive, import on iOS, or (b) buy a .mlmodelc
+on the iOS App Store and have it Apple-hosted
+delivered to the iPhone. Both paths are documented
+in the Settings > Model section.
+
+### 5.10 Onboarding + first-run
+
+First-run is the user's first 30 seconds. The flow:
+
+1. **Splash** (0-3s). The "What is Tessera?" splash.
+2. **AI disclosure** (3-5s). The EU AI Act Article 50
+   + iOS 26 AI disclosure screen: "Tessera Studio
+   uses on-device AI to generate responses. All
+   inference is local; no data leaves your device
+   unless you enable web search." Required for App
+   Store review (section 13.3).
+3. **Welcome** (5-15s). The 9-component cluster
+   diagram, the "from corpus to device" narrative,
+   the "Buy or import a model" button.
+4. **First model** (15-30s). The ModelStore drawer
+   with the three pre-bundled models; the user
+   picks one and the engine loads it.
+
+The "AI disclosure" step is required by the iOS 26
+App Review Guidelines (Guideline 2.1, AI
+disclosure-forward enforcement). The disclosure must
+be visible in the UI, not buried in the privacy
+policy. The "Show AI-generated content labels"
+toggle in Settings (section 5.8) controls whether
+the "AI-generated" badge appears on every assistant
+message; the default is ON.
+
+The first-run also requests the iOS permissions the
+app will use later: speech recognition (for audio
+input), microphone (for audio input), photo library
+(for image input), camera (for image input). Each
+permission is requested in the context where it is
+used (e.g. microphone when the user first taps the
+audio modality), not all at once. This is the
+"permission priming" pattern recommended in the App
+Store Review Guidelines.
+
 ---
 
 ## 6. The CoreML backend integration
-
-The CoreML backend is the C side (`ggml-coreml`, G7 of the C++
-port, `docs/tessera-coreml-conversion-design.md` section 5).
-This section documents the Swift surface that wraps the C
-backend and how it integrates with the `TesseraEngine`.
-
-### 6.1 The ggml-coreml backend is a Swift wrapper around CoreML
 
 The C backend (`ggml-coreml`) loads the `.mlmodelc`, manages
 the MLState, and routes the matmul calls to the ANE. The
@@ -1278,6 +1829,19 @@ story.
   headline, ~30-40% gap Tessera 4-bit vs stock Q4_0).
 - **Telemetry transparency** (IOReport visible to the
   user, not hidden).
+- **Reasoning transparency** (the `Thinking for Ns`
+  block, collapsed by default, expandable to see the
+  chain-of-thought; the user can audit the model's
+  reasoning before trusting the answer).
+- **Rich content** (markdown + code highlighting +
+  Mermaid diagrams + HTML preview; the chat surface is
+  not a plain-text terminal).
+- **Web search grounded answers** (Tavily-backed
+  citations inline, no hallucination on "what is
+  current?").
+- **One-tap model store** (App Store IAP for the
+  .mlmodelc, no manual download, no iCloud Drive
+  dance).
 
 ---
 
@@ -1387,6 +1951,60 @@ App Store submission.
 - The Mac Studio replay is automated; the
   `ABReplayView` reads the JSON and re-renders the
   surfaces.
+
+### 9.6 New-feature tests (added 2026-07-30)
+
+- **Web search test**: `TesseraWebSearchTests.testSearch`,
+  using a real Tavily API key (or a fixture response).
+  Asserts the search returns <= 5 results, each with a
+  `title` + `url` + `content` + `score` field. The
+  `TesseraChatWebSearchTests.testFoldPrompt` asserts
+  that the prompt-folding produces a context block
+  with the right format.
+- **Reasoning test**: `TesseraEngineTests.testReasoning`,
+  using a small reasoning-capable model (a 1B
+  distilled). Asserts that the `reasoningToken` field
+  is populated, that the CoT arrives before the
+  answer, and that the duration is recorded.
+  `TesseraChatReasoningTests.testThinkingBlockRenders`
+  asserts that the `ThinkingBlock` view collapses by
+  default and expands on tap.
+- **Rich renderer test**: `TesseraRichRendererTests
+  .testMarkdownStreaming`, asserting the parser
+  re-parses on each token, that the pending block is
+  visible, and that the complete block is promoted on
+  closing delimiter. `testCodeHighlighting` asserts
+  Python syntax highlighting. `testMermaid` asserts
+  a `flowchart TD; A-->B; B-->C;` block renders to an
+  SVG.
+- **Chat history drawer test**:
+  `TesseraChatHistoryTests.testRecencyBucketing`,
+  asserting that messages from "today" go in the
+  Today bucket, messages from "2 days ago" go in the
+  2-days-ago bucket, etc.
+- **IAP / StoreKit test**: `TesseraStoreKitTests
+  .testIAPCatalog` uses a `.storekit` configuration
+  file with the 3 products, asserts the catalog loads,
+  the purchase flow runs, the receipt is validated,
+  and the "Restore Purchases" button restores the
+  entitlements. The `.storekit` file is checked into
+  the repo at `Tests/Fixtures/Products.storekit`.
+- **Settings test**: `TesseraSettingsTests.testDefaults`,
+  asserting the default values for every toggle
+  match the section 5.8 spec. `testPrivacyManifest`
+  asserts the `PrivacyInfo.xcprivacy` file is in
+  every binary target.
+- **AI disclosure test**:
+  `TesseraStudioiOSTests.testAIDisclosure`, asserting
+  the `OnboardingView` shows the EU AI Act Article
+  50 disclosure before the first inference. The
+  App Store review test: the disclosure must be
+  visible without scrolling.
+- **Privacy manifest test**: a CI script runs `xcrun
+  privacy-manifest-tool validate` on every
+  `PrivacyInfo.xcprivacy` in the repo. The script
+  fails the build if any required reason is
+  missing.
 
 ---
 
@@ -1513,31 +2131,106 @@ polish, the export, the Mac ABReplayView.
 Gate: A/B compare works on iOS, flight test exports
 to JSON, Mac replay works.
 
-### Phase 6 (~2 weeks): Polish, App Store compliance, beta
+### Phase 6 (~2 weeks): Reasoning, web search, rich renderers
 
-- 6.1: App Store compliance: the IOReport subscriber
+The new architect-directed features.
+
+- 6.1: `Sources/TesseraCore/TesseraWebSearch.swift`
+  (~200 LoC). The Tavily client + the prompt-folding
+  + the `TesseraChatWebSearchChip` SwiftUI view.
+- 6.2: The reasoning C FFI additions
+  (`tessera_set_reasoning_mode`,
+  `tessera_read_reasoning_token`,
+  `tessera_last_reasoning_duration`).
+- 6.3: `Sources/TesseraCore/TesseraChatHistory.swift`
+  (~200 LoC). The recency-bucketing utility.
+- 6.4: `Sources/TesseraStudioiOS/ChatHistoryDrawer
+  .swift` (~180 LoC). The `NavigationSplitView`
+  sidebar.
+- 6.5: `Sources/TesseraStudioiOS/ThinkingBlock
+  .swift` (~80 LoC). The collapsible CoT block.
+- 6.6: `Sources/TesseraCore/TesseraRichRenderer
+  .swift` (~300 LoC). The markdown parser +
+  code highlighter + Mermaid renderer + HTML
+  preview host.
+- 6.7: `Sources/TesseraStudioiOS/MarkdownView
+  .swift` (~250 LoC) + `MermaidView.swift` (~250
+  LoC). The SwiftUI views.
+- 6.8: `TesseraWebSearchTests`, `TesseraChatReasoning
+  Tests`, `TesseraRichRendererTests`,
+  `TesseraChatHistoryTests` (section 9.6).
+
+Gate: web search works, reasoning block collapses
+by default, chat history drawer opens with the
+recency bucketing, rich renderers display markdown
++ code + Mermaid.
+
+### Phase 7 (~2 weeks): Settings, IAP, App Store metadata
+
+The publishability surface.
+
+- 7.1: `Sources/TesseraCore/TesseraSettings.swift`
+  (~150 LoC). The `@Observable` settings model.
+- 7.2: `Sources/TesseraStudioiOS/SettingsView.swift`
+  (~200 LoC) and `Sources/TesseraStudioMac/
+  SettingsView.swift` (~200 LoC). The settings
+  surface.
+- 7.3: `Sources/TesseraStudioiOS/OnboardingView
+  .swift` (~120 LoC). The first-run flow with the
+  AI disclosure.
+- 7.4: `Sources/TesseraCore/TesseraStoreKit.swift`
+  (~250 LoC). The StoreKit 2 wrapper + the IAP
+  catalog.
+- 7.5: The `.storekit` configuration file (the
+  TestFlight product catalog).
+- 7.6: The Apple-hosted background asset pack (the
+  large .mlmodelc bundled in the Background Assets
+  framework).
+- 7.7: The `PrivacyInfo.xcprivacy` files for the
+  app + every xcframework.
+- 7.8: The App Store Connect metadata: the privacy
+  label, the App Privacy questionnaire, the AI
+  disclosure, the privacy policy link, the support
+  URL, the IAP catalog.
+
+Gate: settings surface is reachable from both
+platforms, IAP catalog loads, AI disclosure is
+visible in the first-run, privacy manifest is
+validated, App Store Connect metadata is ready for
+submission.
+
+### Phase 8 (~2 weeks): Polish, App Store compliance, beta
+
+- 8.1: App Store compliance: the IOReport subscriber
   uses private APIs; the v1 ships via TestFlight only.
   The v2 (with public-API fallback) is documented.
-- 6.2: Accessibility (VoiceOver labels, Dynamic Type).
-- 6.3: Localisation (English v1; the strings are
-  externalised).
-- 6.4: Beta testing (TestFlight, 50 users).
-- 6.5: App Store submission (v1, TestFlight track).
+- 8.2: Accessibility (VoiceOver labels, Dynamic Type,
+  Reduced Motion).
+- 8.3: Localisation (English v1; the strings are
+  externalised in `Localizable.strings`).
+- 8.4: Beta testing (TestFlight, 50 users).
+- 8.5: App Store submission (v1, TestFlight track).
 
 Gate: TestFlight build is approved, 50 beta users
 have run the 30-minute flight test, the hero metric
-is on the marketing page.
+is on the marketing page, the App Store review
+passes.
 
 ### Total
 
-~16 weeks wall clock with 1 dev. ~6 weeks with 4
-parallel agents after Phase 1.
+~22 weeks wall clock with 1 dev. ~10 weeks with 4
+parallel agents after Phase 1. The 6-week delta
+from the previous revision is Phase 6 (reasoning +
+web search + rich renderers) and Phase 7 (settings
++ IAP + App Store metadata).
 
 Phase 1 is the critical path; Phases 2-3 can run as
 2-3 parallel agents (chat, CoreML backend, IOReport
 are independent). Phase 4 is Mac-only and can run
 in parallel with Phase 5's iOS work. Phase 6 is
-sequential.
+iOS-heavy (the chat + the chat history drawer) and
+can run in parallel with the iOS-side Phase 7 work.
+Phase 8 is sequential.
 
 ---
 
@@ -1695,6 +2388,93 @@ already `swift-tools-version: 6.2`; the Tessera
 Studio inherits that. The `actor TesseraContext`
 pattern in `LibLlama.swift:24` translates cleanly to
 strict concurrency.
+
+### 11.13 Web search provider
+
+Question: Tavily only, or Tavily + Google CSE fallback,
+or Brave Search, or self-hosted (SearXNG)?
+
+Lean: Tavily only for v1. The `tavily-best-practices`
+skill exists (`github.com/tavily-ai/skills`); the API
+is designed for AI agents; the citation format is
+clean; the latency is predictable. Google CSE and
+Brave are added as a v2 fallback if Tavily's pricing
+or availability changes. Self-hosted SearXNG is not
+in scope (operational overhead, no SLA).
+
+### 11.14 Reasoning model UI defaults
+
+Question: Show the `ThinkingBlock` collapsed by
+default, or expanded, or both (collapsed on first
+arrival, auto-expand on user tap, stay expanded
+until the user collapses it)?
+
+Lean: Collapsed by default, with a `Show reasoning
+by default` toggle in Settings (default OFF). The
+Claude Code pattern is "most people don't look at
+it"; the Locara pattern is "default collapsed -
+opening is the user's deliberate choice." The
+Tessera port follows Locara.
+
+### 11.15 IAP pricing tier
+
+Question: $4.99 / $9.99 / $19.99, or $2.99 / $7.99 /
+$14.99, or other?
+
+Lean: $4.99 / $9.99 / $19.99 (App Store tier 4 / tier
+6 / tier 9). The 30% Apple cut is acceptable for v1
+(we are not in the Small Business Program yet);
+the $9.99 medium tier covers the Gemma 4 12B
+Tessera 3.5-bit .mlmodelc which is the "show your
+work" model. The pricing is a product decision; the
+architect may push back.
+
+### 11.16 IAP delivery mechanism
+
+Question: Apple-hosted non-consumable IAP (deprecated
+in April 2022), On-Demand Resources (limited to the
+app bundle), Background Assets (Apple-hosted, iOS
+26+), or self-hosted CDN with receipt validation?
+
+Lean: Background Assets (`BackgroundAssets.framework`,
+iOS 26+). Apple-hosted, up to 200 GB per app,
+included in the Developer Program membership, no
+`SKDownload` deprecation risk. The 12B .mlmodelc is
+~3.5 GB; the 27B v2 is ~10 GB; both fit. The
+fallback for iOS 18-25 users is On-Demand Resources
+in the same build (or a "minimum iOS 26" cutoff, the
+lean).
+
+### 11.17 Settings: pre-bundled vs IAP-only
+
+Question: Pre-bundle 3 .mlmodelcs in the `.app` (free,
+in the App Store binary) AND offer IAP for additional
+.mlmodelcs, or IAP-only (the user buys all .mlmodelcs
+including the 3 pre-bundled)?
+
+Lean: Pre-bundle 3 + IAP for additional. The 3
+pre-bundled models are the "show your work" set
+(stock Q4_0 4B, Tessera 4-bit 4B, Tessera 3.5-bit
+12B reasoning). The IAP catalog offers larger and
+niche models (Gemma 4 27B v2, Llama 4 Scout v2,
+multimodal specialists). The 30% Apple cut on the
+IAP is the revenue model; the 3 pre-bundled models
+are the on-ramp.
+
+### 11.18 Chat history sync across devices
+
+Question: Sync the chat history across the user's
+iPhone + iPad + Mac via iCloud, or per-device only?
+
+Lean: Per-device only. The chat history is in the
+app's Documents directory; the .mlmodelc + the
+plan are in iCloud Drive. The chat history is
+local-only; the user can export a single
+conversation as a markdown file from the
+`...` menu if they want to share it. Sync
+introduces conflict-resolution complexity
+(two devices editing the same conversation
+mid-stream) for negligible benefit.
 
 ---
 
@@ -1892,6 +2672,298 @@ do not need a separate entry:
 - R21: the app name "Tessera Studio" vs "Tessera Chat"
   is a product decision; the design doc is agnostic.
 
+### R22 - Apple's 30% IAP cut is significant
+
+The .mlmodelc IAP prices have a 30% Apple cut. A
+$9.99 medium model yields $6.99 net. The $19.99
+large model yields $13.99 net. The 30% is the
+standard commission; the Small Business Program
+(15%) is available at < $1M annual revenue (not
+applicable at launch). Mitigations: (a) keep the
+Tessera quantize-side costs in the 2-person-team
+range, (b) treat the IAP as a margin contributor
+not a profit centre, (c) re-evaluate the
+Small Business Program at the $1M threshold.
+
+### R23 - Background Assets requires iOS 26+
+
+`BackgroundAssets.framework` is iOS 26+. The current
+plan targets iOS 18. Mitigations: (a) raise the
+minimum to iOS 26 (cuts the addressable market by
+~30%, the lean), (b) On-Demand Resources for
+iOS 18-25 and Background Assets for iOS 26+
+(the user is on a 2-track install, more complex),
+(c) self-host the .mlmodelc on a CDN with receipt
+validation (operational overhead).
+
+### R24 - Reasoning model latency is 2-10x slower
+
+The Gemma 4 12B Unified reasoning model emits CoT
+before the answer. First-token latency for a
+reasoning run is 2-10x slower than a non-reasoning
+run. The chat surface surfaces the delay
+(`time_to_first_reasoning_token` and
+`time_to_first_answer_token` in the title sub-row);
+the user is warned. The A/B Compare view shows the
+delta. The flight test records both metrics. The
+Settings "Reasoning mode = Auto" default is the
+right answer for most users; the user can flip to
+"Off" for non-reasoning runs.
+
+### R25 - AI disclosure is required, the wording matters
+
+iOS 26 App Review Guidelines require an in-app
+disclosure at the point of display for AI-generated
+content. The EU AI Act Article 50 (effective 2
+August 2026) requires machine-readable marks and
+explicit disclosure. The wording in the
+`OnboardingView` and on every assistant message
+("AI-generated response") must be approved by
+counsel. The conservative interpretation is
+"disclose in both the App Store description and a
+visible in-app location" (per the
+`appsops.store/news/week-in-app-store-ops-july-12-
+2026` summary).
+
+### R26 - Privacy manifest required, every binary
+
+Apple's `PrivacyInfo.xcprivacy` is required for
+every binary in the `.app` (the main app, every
+xcframework, every extension). The required-reason
+APIs that Tessera Studio uses:
+
+- `NSPrivacyAccessedAPICategoryUserDefaults`
+  (`CA92.1` for the app's own defaults; the
+  Settings + the IAP catalog both use `UserDefaults`).
+- `NSPrivacyAccessedAPICategorySystemBootTime`
+  (`35F9.1` for the flight test duration
+  measurement; the IOReport subscriber uses
+  `ProcessInfo.processInfo.systemUptime`).
+- `NSPrivacyAccessedAPICategoryDiskSpace` (`85F4.1`
+  for the .mlmodelc download size check).
+- `NSPrivacyAccessedAPICategoryFileTimestamp`
+  (`C617.1` for the conversation journal).
+
+A CI script runs `xcrun privacy-manifest-tool
+validate` on every `PrivacyInfo.xcprivacy` in the
+repo. The build fails if any required reason is
+missing. The first-submission rejection rate for
+apps missing the privacy manifest is non-trivial
+(per `mobile.wednesday.is` 28% for AI apps); this
+is a hard gate.
+
+### R27 - The Mermaid + HTML renderer uses WKWebView
+
+The Mermaid diagram and the HTML preview host their
+content in a `WKWebView`. The webview is sandboxed
+(no network, no JS for the HTML preview; JS for the
+Mermaid renderer). The user can paste arbitrary
+HTML; the webview is a sandboxed renderer, not a
+general-purpose browser. Mitigations: (a) the
+webview is `WKWebView` not `SFSafariViewController`,
+(b) the HTML preview sets
+`WKWebpagePreferences.allowsContentJavaScript =
+false`, (c) the Mermaid renderer bundles KaTeX
+(when v2) or a Swift-native renderer (v1).
+
+---
+
+## 13. App Store publishability (added 2026-07-30)
+
+This section consolidates the App Store-specific
+deliverables: the privacy manifest, the App Store
+Connect metadata, the IAP / Apple-hosted background
+asset configuration, the AI disclosure, the EU AI
+Act compliance, the App Privacy questionnaire.
+
+### 13.1 Privacy manifest (`PrivacyInfo.xcprivacy`)
+
+Every binary in the `.app` ships a
+`PrivacyInfo.xcprivacy` file (per Apple's
+`developer.apple.com/documentation/bundleresources
+/describing-use-of-required-reason-api`). The
+required-reason APIs Tessera Studio uses, with the
+approved reason codes:
+
+- **`NSPrivacyAccessedAPICategoryUserDefaults`**
+  (`CA92.1`): the app's own defaults. The Settings
+  surface uses `@AppStorage` for the simple toggles.
+- **`NSPrivacyAccessedAPICategorySystemBootTime`**
+  (`35F9.1`): elapsed-time measurement. The flight
+  test uses `ProcessInfo.processInfo.systemUptime`
+  for the 30-minute timer; the IOReport subscriber
+  uses it for the telemetry window.
+- **`NSPrivacyAccessedAPICategoryDiskSpace`**
+  (`85F4.1`): storage check before the .mlmodelc
+  download (the user needs >= 5 GB free for the 12B
+  .mlmodelc).
+- **`NSPrivacyAccessedAPICategoryFileTimestamp`**
+  (`C617.1`): the conversation journal uses file
+  creation + modification dates for the recency
+  bucketing.
+
+The manifest lives in every binary target
+(`Sources/TesseraStudioiOS/PrivacyInfo.xcprivacy`
++ the iOS app + the iOS extension + every
+xcframework's privacy manifest). A CI script runs
+`xcrun privacy-manifest-tool validate` on every
+manifest in the repo; the build fails if any
+required reason is missing.
+
+### 13.2 App Privacy questionnaire
+
+The App Store Connect App Privacy questionnaire
+must match the `PrivacyInfo.xcprivacy` exactly.
+The questionnaire is filled out per the
+`appsops.store/news/week-in-app-store-ops-july-12-
+2026` guidance:
+
+- **Data collection**: the app does not collect
+  data from the user unless they opt in. The
+  default for "Share analytics" is OFF. The
+  default for "Send prompts to web search
+  provider" is ON, with a clear in-app disclosure
+  at first-run.
+- **Data linked to user**: the conversation
+  journal is local to the device; not synced, not
+  shared, not collected. The flight test JSON
+  export is local. The .mlmodelc is local.
+- **Tracking**: the app does not track. The
+  `NSPrivacyTracking` is `false`. The
+  `NSPrivacyTrackingDomains` is empty.
+- **Data types collected**: `Identifiers` (the
+  per-conversation UUID, the per-session UUID, not
+  linked to user identity) and `Usage Data` (the
+  flight test JSON, the v3 sidecar, opt-in) and
+  `Diagnostics` (crash reports, opt-in).
+
+### 13.3 AI disclosure (iOS 26 + EU AI Act Article 50)
+
+The iOS 26 App Review Guidelines (Guideline 2.1,
+AI disclosure-forward enforcement) require an
+in-app disclosure at the point of display for
+AI-generated content. The EU AI Act Article 50
+(effective 2 August 2026) requires machine-readable
+marks and explicit disclosure for AI systems that
+interact with individuals.
+
+The Tessera Studio compliance:
+
+- **First-run disclosure** (`OnboardingView`): the
+  "AI disclosure" step in section 5.10 shows the
+  EU AI Act + iOS 26 disclosure before the first
+  inference. The wording: "Tessera Studio uses
+  on-device AI to generate responses. All
+  inference is local; no data leaves your device
+  unless you enable web search."
+- **Per-message disclosure** (Settings toggle,
+  default ON): every assistant message has an
+  "AI-generated response" badge in the footer.
+- **Settings disclosure** (About section): the
+  "About" screen in Settings has a "Tessera uses
+  on-device AI" link to the disclosure text.
+- **App Store description**: the description has
+  the same disclosure in the first paragraph.
+- **Reviewer notes**: the App Store Connect review
+  notes include the disclosure text + the
+  in-app locations + the per-message badge
+  location + the test account credentials.
+
+The conservative interpretation is
+"disclose in both the App Store description and a
+visible in-app location" (per the
+`appsops.store/news` summary). The 28% first-
+submission rejection rate for AI apps without
+disclosure is the risk; the disclosure is the
+fix.
+
+### 13.4 IAP configuration (App Store Connect)
+
+The IAP catalog is configured in App Store
+Connect > Monetization > In-App Purchases:
+
+- `tessera.gemma3.4b.q4.tessera.v1` (Small, $4.99,
+  non-consumable).
+- `tessera.gemma4.12b.unified.q35.tessera.v1`
+  (Medium, $9.99, non-consumable).
+- `tessera.gemma4.27b.unified.q3.tessera.v1`
+  (Large, $19.99, non-consumable, v2).
+
+Each product is non-consumable (the user buys
+once, keeps forever, restores on new device).
+The Apple-hosted background asset pack is
+attached to each product via the App Store
+Connect > In-App Purchases > Hosting section
+(deprecated path) or the Xcode 27+
+`ba-package` command for Background Assets
+(iOS 26+, the lean path).
+
+The `Restore Purchases` button in Settings uses
+`Transaction.currentEntitlements` (StoreKit 2) to
+restore. The receipt validation is on-device (no
+server).
+
+The `.storekit` configuration file is at
+`Tests/Fixtures/Products.storekit`; the iOS
+scheme uses it for the sandbox test. The
+synced `.storekit` file (linked to App Store
+Connect) is at
+`Tests/Fixtures/SyncedProducts.storekit`.
+
+### 13.5 Privacy policy + terms of service
+
+The privacy policy is hosted at
+`https://tessera.studio/privacy` (placeholder, the
+real URL is set before App Store submission). The
+policy covers:
+
+- What data the app collects (none by default;
+  opt-in for analytics + web search).
+- How the data is processed (on-device; no cloud
+  upload unless the user enables web search).
+- The web search provider (Tavily), with the
+  privacy policy link.
+- The Apple-hosted background asset distribution
+  (Apple's privacy policy applies).
+- The EU AI Act Article 50 disclosure.
+- The data retention (the conversation journal is
+  local; the user can delete it from the Settings
+  > Model > "Delete all model files" + "Delete all
+  conversations").
+- The data deletion request process
+  (mailto: privacy@tessera.studio).
+
+The terms of service is at
+`https://tessera.studio/terms` (placeholder). The
+App Store Connect metadata includes both URLs in
+the App Privacy section.
+
+### 13.6 TestFlight distribution
+
+The TestFlight build is the v1 distribution
+channel. The flow:
+
+1. The TestFlight build is uploaded via
+   `xcodebuild -exportArchive` + the App Store
+   Connect API.
+2. The internal TestFlight group (50 users) is
+   invited via email.
+3. The 50 users run the 30-minute flight test on
+   a M-series iPhone.
+4. The 50 users fill out a 5-question survey
+   (latency perception, battery perception,
+   reasoning quality, web search quality, "would
+   you pay for the Medium model").
+5. The survey results are aggregated; the v1
+   App Store submission is gated on >= 4.0/5.0
+   average + >= 80% "would pay".
+
+The TestFlight build includes the IOReport
+subscriber (private API). The App Store build
+uses the public-API fallback (section 1.1 of the
+CoreML design). The two are separate targets with
+separate build settings.
+
 ---
 
 ## Appendix A: File index
@@ -1934,6 +3006,10 @@ and their roles.
   - the tool dispatcher, SKIP.
 - `PrismAgent/PrismAgent/P2PRouter.swift:1-72` - the P2P
   bridge, SKIP.
+- `PrismAgent/PrismAgentiOS/PrismAgentiOS/ConversationList
+  .swift:1-56` - the iOS conversation list view
+  (KEEP + ADAPT for the chat history drawer, see
+  section 4.4a).
 
 ### llama.cpp references
 
