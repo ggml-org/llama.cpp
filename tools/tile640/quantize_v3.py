@@ -39,6 +39,32 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+# CHAMP-Q channel permutation. Imported lazily in main() so the helper
+# module path can be customised via TESSERA_TOOLS / sys.path; the
+# functions themselves have no side effects on import.
+try:
+    from tools.tessera.champq_permute import (  # type: ignore
+        CHAMPQPolicy,
+        apply_champq_permutation,
+        compute_champq_permutation,
+        decode_q_to_weight,
+        invert_champq_permutation,
+    )
+    _CHAMPQ_AVAILABLE = True
+except ImportError:
+    try:
+        # tools/ is on sys.path when quantize_v3 is run as a script.
+        from tessera.champq_permute import (  # type: ignore
+            CHAMPQPolicy,
+            apply_champq_permutation,
+            compute_champq_permutation,
+            decode_q_to_weight,
+            invert_champq_permutation,
+        )
+        _CHAMPQ_AVAILABLE = True
+    except ImportError:
+        _CHAMPQ_AVAILABLE = False
+
 ACCELERATE_BACKEND = None
 ANE_BACKEND = None
 if sys.platform == "darwin" and os.environ.get("TESSERA_ACCELERATE", "1") != "0":
@@ -2341,6 +2367,32 @@ def main():
         action="store_true",
         help="Validate metadata and tensor mapping without reading or quantizing weights",
     )
+    ap.add_argument(
+        "--permute-channels",
+        "--champq",
+        action="store_true",
+        dest="permute_channels",
+        help=(
+            "Enable CHAMP-Q: permute the input channels of every Tile640 "
+            "weight by L2 activation magnitude (or per-row weight L2 if no "
+            "imatrix is loaded) before quantizing, then fold the inverse "
+            "permutation into the output. The output GGUF is in original "
+            "channel order and is bit-compatible with the non-CHAMP-Q path. "
+            "Calibration-time only; no runtime cost. See "
+            "tools/tessera/champq_permute.py for the algorithm."
+        ),
+    )
+    ap.add_argument(
+        "--champq-policy-out",
+        default=None,
+        help=(
+            "Path to write the per-tensor CHAMP-Q permutation policy JSON. "
+            "Default: derived from --output (champq-policy.json next to the "
+            "GGUF). Set to an empty string to disable the policy file. The "
+            "policy is for debugging / A-B comparison; the GGUF itself does "
+            "not need it because the output is already in original order."
+        ),
+    )
     args = ap.parse_args()
     calibration_policy = load_calibration_policy(args.calibration_policy)
     epoch_receipt = (
@@ -2708,6 +2760,40 @@ def main():
     imatrix_hits = imatrix_misses = 0
     alpha_counts: Dict[float, int] = {}
 
+    # CHAMP-Q policy recording. Populated only when --permute-channels is
+    # set and the helper module is importable. The default output path
+    # sits next to the GGUF; an empty --champq-policy-out disables the
+    # file. The policy is for debugging / A-B comparison; the GGUF does
+    # not need it because the output is already in original channel
+    # order.
+    champq_policy: Optional["CHAMPQPolicy"] = None
+    if args.permute_channels:
+        if not _CHAMPQ_AVAILABLE:
+            raise RuntimeError(
+                "--permute-channels requires tools.tessera.champq_permute; "
+                "the module failed to import on this checkout"
+            )
+        if args.champq_policy_out is None:
+            output_dir = Path(args.output).expanduser().resolve().parent
+            champq_policy_path = output_dir / "champq-policy.json"
+        elif args.champq_policy_out == "":
+            champq_policy_path = None
+        else:
+            champq_policy_path = Path(args.champq_policy_out).expanduser()
+        if champq_policy_path is not None:
+            champq_policy = CHAMPQPolicy()
+            print(
+                f"  CHAMP-Q: permutation policy will be written to "
+                f"{champq_policy_path}",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "  CHAMP-Q: enabled, permutation policy file disabled via "
+                "--champq-policy-out ''",
+                file=sys.stderr,
+            )
+
     for done, (wname, shape, dtype, out_name, layer_idx, short) in enumerate(inventory):
         # Find which shard holds this tensor
         for shard in shard_files:
@@ -2766,6 +2852,26 @@ def main():
                 and not direct_exact
                 and act_scales is not None
             )
+            # CHAMP-Q permute setup. Hoisted before the if/elif so the same
+            # permuted (arr, act_scales) feed all paths. LRQ is authoritative
+            # and skips the permute; the policy already encodes the rank-r
+            # scaling for this tensor. direct_exact tensors (all-zero ternary)
+            # also skip: channel ordering is irrelevant for them.
+            champq_perm: Optional[np.ndarray] = None
+            if (
+                not use_lrq
+                and args.permute_channels
+                and not direct_exact
+                and _CHAMPQ_AVAILABLE
+                and in_dim > 1
+            ):
+                champq_perm = compute_champq_permutation(arr, act_scales)
+                champq_inverse = invert_champq_permutation(champq_perm)
+                arr = apply_champq_permutation(arr, champq_perm)
+                act_scales = (
+                    act_scales[champq_perm] if act_scales is not None else None
+                )
+
             if use_lrq:
                 # LRQ-mode: the policy carries a rank-r S = U @ V scale. The
                 # AWQ and imatrix_mse paths are bypassed because the policy
@@ -2813,6 +2919,42 @@ def main():
                     tensor_name=out_name,
                     ternary_threshold=(1.0 if direct_exact else policy_threshold),
                 )
+            if champq_perm is not None:
+                # CHAMP-Q Option A: decode the permuted quantization to F32,
+                # undo the input-dim permutation, and re-quantize in the
+                # original order. The output Tile640 components are then in
+                # the same channel order as the source weight, so the GGUF
+                # is interchangeable with the non-CHAMP-Q output.
+                w_unpermuted = decode_q_to_weight(q, out_dim, in_dim)
+                w_unpermuted = apply_champq_permutation(
+                    w_unpermuted, champq_inverse
+                )
+                if use_imatrix_mse:
+                    q = quantize_2d_imatrix_mse(
+                        w_unpermuted,
+                        out_dim,
+                        in_dim,
+                        policy_frac,
+                        lookup_acts(wname, imatrix, gguf_n) if imatrix else None,
+                        mse_norm=args.imatrix_mse_norm,
+                        mse_grid=args.imatrix_mse_grid,
+                        mse_maxshrink=args.imatrix_mse_maxshrink,
+                        awq_clip=policy_clip,
+                    )
+                else:
+                    q = quantize_2d(
+                        w_unpermuted,
+                        out_dim,
+                        in_dim,
+                        policy_frac,
+                        lookup_acts(wname, imatrix, gguf_n) if imatrix else None,
+                        policy_alpha,
+                        policy_clip,
+                        tensor_name=out_name,
+                        ternary_threshold=policy_threshold,
+                    )
+                if champq_policy is not None:
+                    champq_policy.add(out_name, champq_perm)
             alpha = float(q["awq_alpha"])
             alpha_counts[alpha] = alpha_counts.get(alpha, 0) + 1
             writer.add_tensor(component_name(out_name, "weight_packed"),       q["packed"])
@@ -2848,6 +2990,31 @@ def main():
                 policy_alpha,
                 policy_clip,
             )
+            # CHAMP-Q for 3D: permute the input channel axis of the expert
+            # bank before quantizing, then fold the inverse permutation
+            # into the output. The permutation is shared across all
+            # experts (the in_dim axis is the same for every expert). See
+            # the 2D path above for the rationale. policy_exact forces
+            # every expert to exact encoding, where the input-channel
+            # ordering is irrelevant, so CHAMP-Q is skipped.
+            champq_perm_3d: Optional[np.ndarray] = None
+            if (
+                args.permute_channels
+                and not policy_exact
+                and _CHAMPQ_AVAILABLE
+                and in_dim > 1
+            ):
+                pooled_act: Optional[np.ndarray] = None
+                if act_scales is not None:
+                    if act_scales.ndim == 2:
+                        pooled_act = np.mean(
+                            act_scales, axis=0, dtype=np.float32
+                        )
+                    elif act_scales.shape == (in_dim,):
+                        pooled_act = act_scales
+                champq_perm_3d = compute_champq_permutation(arr, pooled_act)
+                champq_inverse_3d = invert_champq_permutation(champq_perm_3d)
+                arr = apply_champq_permutation(arr, champq_perm_3d)
             # Note: 3D path currently does not route through
             # quantize_2d_imatrix_mse because the expert loop is structured
             # differently (per-expert 2D quantize under quantize_3d). The
@@ -2860,6 +3027,28 @@ def main():
                 0.0 if policy_exact else expert_alphas,
                 1.0 if policy_exact else expert_clips,
             )
+            if champq_perm_3d is not None:
+                # CHAMP-Q Option A: decode each expert's permuted
+                # quantization, undo the input-dim permutation, and
+                # re-quantize the un-permuted expert bank with the
+                # original imatrix. The result is a Tile640 expert bank
+                # in the original channel order, interchangeable with
+                # the non-CHAMP-Q output.
+                w_orig_3d = np.empty_like(arr)
+                for ex in range(n_experts):
+                    w_perm = decode_q_to_weight(qs[ex], out_dim, in_dim)
+                    w_orig_3d[ex] = apply_champq_permutation(
+                        w_perm, champq_inverse_3d
+                    )
+                qs = quantize_3d(
+                    w_orig_3d, n_experts, out_dim, in_dim,
+                    expert_fractions,
+                    imatrix, wname, gguf_n,
+                    expert_alphas,
+                    expert_clips,
+                )
+                if champq_policy is not None:
+                    champq_policy.add(out_name, champq_perm_3d)
             if qs:
                 alpha = float(qs[0]["awq_alpha"])
                 alpha_counts[alpha] = alpha_counts.get(alpha, 0) + 1
@@ -3067,6 +3256,19 @@ def main():
         coverage = 100.0 * imatrix_hits / total_lookups if total_lookups else 0.0
         print(f"AWQ imatrix coverage: {imatrix_hits}/{total_lookups} tensors ({coverage:.1f}%)", file=sys.stderr)
         print(f"AWQ selected alphas: {dict(sorted(alpha_counts.items()))}", file=sys.stderr)
+    if champq_policy is not None and champq_policy.tensors:
+        champq_policy.save(str(champq_policy_path))
+        print(
+            f"  CHAMP-Q: wrote {len(champq_policy.tensors)} permutations "
+            f"to {champq_policy_path}",
+            file=sys.stderr,
+        )
+    elif champq_policy is not None:
+        print(
+            "  CHAMP-Q: enabled but no tensors received a permutation "
+            "(everything was direct_exact); policy file not written",
+            file=sys.stderr,
+        )
     print(f"\nWrote {args.output}", file=sys.stderr)
     print(f"OK: {args.output}", file=sys.stderr)
 
