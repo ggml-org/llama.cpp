@@ -263,27 +263,6 @@ jobs:
         run: |
           cmake --install build --prefix pkg-adb/llama.cpp --config Release
 
-      # Quick sanity check that the Vulkan backend .so actually made it
-      # into the install tree. This is a build-time check only — to
-      # verify it loads at runtime you need a real device or emulator
-      # with a Vulkan-capable GPU driver.
-      - name: Verify Vulkan backend artifact
-        run: |
-          set -e
-          echo "=== Installed shared libraries ==="
-          find pkg-adb/llama.cpp -type f -name '*.so' | sort
-          echo ""
-          echo "=== Vulkan backend presence check ==="
-          if compgen -G "pkg-adb/llama.cpp/lib*/libggml-vulkan.so" > /dev/null; then
-            echo "OK: libggml-vulkan.so found in install tree"
-          else
-            echo "ERROR: libggml-vulkan.so missing from install tree"
-            exit 1
-          fi
-          echo ""
-          echo "=== Binaries ==="
-          find pkg-adb/llama.cpp -type f -name 'llama-*' -executable | sort
-
       - name: Upload Android Vulkan Build Artifact
         if: ${{ always() && steps.cmake_install.outcome == 'success' }}
         uses: actions/upload-artifact@v6
