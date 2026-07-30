@@ -219,8 +219,6 @@ struct ggml_cuda_mmq_config {
 
 #include "mmq-config-cdna.cuh"
 #include "mmq-config-rdna2.cuh"
-#include "mmq-config-rdna3.cuh"
-#include "mmq-config-rdna3-5.cuh"
 #include "mmq-config-rdna4.cuh"
 
 #undef CASE
@@ -230,14 +228,8 @@ static __host__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config(const ggml_type ty
         if (GGML_CUDA_CC_IS_CDNA(cc)) {
             return ggml_cuda_mmq_get_config_cdna(type, J, fallback);
         }
-        if (GGML_CUDA_CC_IS_RDNA4(cc)) {
+        if (amd_wmma_available(cc)) {
             return ggml_cuda_mmq_get_config_rdna4(type, J, fallback);
-        }
-        if (GGML_CUDA_CC_IS_RDNA3_5(cc)) {
-            return ggml_cuda_mmq_get_config_rdna3_5(type, J, fallback);
-        }
-        if (GGML_CUDA_CC_IS_RDNA3(cc)) {  // covers RDNA 3.0
-            return ggml_cuda_mmq_get_config_rdna3(type, J, fallback);
         }
         return ggml_cuda_mmq_get_config_rdna2(type, J, fallback);
     }
@@ -254,12 +246,8 @@ static constexpr __device__ ggml_cuda_mmq_config ggml_cuda_mmq_get_config(ggml_t
 #ifdef GGML_USE_HIP
 #ifdef CDNA
     return ggml_cuda_mmq_get_config_cdna(type, J, fallback);
-#elif defined(RDNA4)
+#elif defined(AMD_WMMA_AVAILABLE)
     return ggml_cuda_mmq_get_config_rdna4(type, J, fallback);
-#elif defined(RDNA3_5)
-    return ggml_cuda_mmq_get_config_rdna3_5(type, J, fallback);
-#elif defined(RDNA3)
-    return ggml_cuda_mmq_get_config_rdna3(type, J, fallback);
 #else
     return ggml_cuda_mmq_get_config_rdna2(type, J, fallback);
 #endif // CDNA
@@ -1241,7 +1229,7 @@ static __global__ void mul_mat_q(
 template <ggml_type type, int J, bool fallback>
 __launch_bounds__(ggml_cuda_mmq_get_nthreads(type, J, fallback)/2, 1)
 static __global__ void mul_mat_q_stream_k_fixup(
-        const int32_t * __restrict__ ids_dst, const int32_t * __restrict__ expert_bounds, float * __restrict__ dst,
+    const int32_t * __restrict__ ids_dst, const int32_t * __restrict__ expert_bounds, float * __restrict__ dst,
         float * __restrict__ tmp_last_tile, const uint3 blocks_per_ne00, const int nrows_x, const int ncols_dst,
         const int stride_col_dst, const uint3 nchannels_y, const int stride_channel_dst, const uint3 nsamples_y,
         const int stride_sample_dst, const uint3 ntx, const float * __restrict__ x_scale) {
