@@ -554,12 +554,13 @@ export class DatabaseService {
 	 * Skips conversations that already exist.
 	 *
 	 * @param data - Array of { conv, messages } objects
+	 * @returns The conversations written to the database and the ones skipped
 	 */
 	static async importConversations(
 		data: { conv: DatabaseConversation; messages: DatabaseMessage[] }[]
-	): Promise<{ imported: number; skipped: number }> {
-		let importedCount = 0;
-		let skippedCount = 0;
+	): Promise<{ imported: DatabaseConversation[]; skipped: DatabaseConversation[] }> {
+		const imported: DatabaseConversation[] = [];
+		const skipped: DatabaseConversation[] = [];
 
 		return await db.transaction(
 			'rw',
@@ -570,8 +571,7 @@ export class DatabaseService {
 
 					const existing = await db[IDXDB_TABLES.conversations].get(conv.id);
 					if (existing) {
-						console.warn(`Conversation "${conv.name}" already exists, skipping...`);
-						skippedCount++;
+						skipped.push(conv);
 						continue;
 					}
 
@@ -580,10 +580,10 @@ export class DatabaseService {
 						await db[IDXDB_TABLES.messages].put(msg);
 					}
 
-					importedCount++;
+					imported.push(conv);
 				}
 
-				return { imported: importedCount, skipped: skippedCount };
+				return { imported, skipped };
 			}
 		);
 	}

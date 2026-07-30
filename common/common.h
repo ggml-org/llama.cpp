@@ -174,6 +174,7 @@ enum common_speculative_type {
     COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3,  // Eagle3 speculative decoding
     COMMON_SPECULATIVE_TYPE_DRAFT_MTP,     // Multi-token prediction
     COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH,  // DFlash speculative decoding
+    COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK,  // DSpark speculative decoding (DFlash + Markov head)
     COMMON_SPECULATIVE_TYPE_NGRAM_SIMPLE,  // simple self-speculative decoding based on n-grams
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K,   // self-speculative decoding with n-gram keys only
     COMMON_SPECULATIVE_TYPE_NGRAM_MAP_K4V, // self-speculative decoding with n-gram keys and 4 m-gram values
@@ -285,18 +286,14 @@ struct common_params_sampling {
 
     // reasoning budget sampler parameters
     // these are populated by the server/CLI based on chat template params
-    int32_t                  reasoning_budget_tokens   = -1;   // -1 = disabled, >= 0 = token budget
-    std::vector<llama_token> reasoning_budget_start;           // start tag token sequence
-    std::vector<llama_token> reasoning_budget_end;             // end tag token sequence
-    std::vector<llama_token> reasoning_budget_forced;          // forced sequence (message + end tag)
-    std::string              reasoning_budget_message;         // message injected before end tag when budget exhausted
-    bool                     reasoning_control = false;        // create the budget sampler on demand so reasoning can be ended at runtime
+    int32_t                   reasoning_budget_tokens   = -1;  // -1 = disabled, >= 0 = token budget
+    std::vector<llama_token>  reasoning_budget_start;          // start tag token sequence
+    std::vector<llama_tokens> reasoning_budget_end;            // end tag token sequences; the first tag is used as the forcing sequence
+    std::vector<llama_token>  reasoning_budget_forced;         // forced sequence (message + first end tag)
+    std::string               reasoning_budget_message;        // message injected before end tag when budget exhausted
+    bool                      reasoning_control = false;       // create the budget sampler on demand so reasoning can be ended at runtime
 
     bool backend_sampling = false;
-
-    bool has_logit_bias() const {
-        return !logit_bias.empty();
-    }
 
     // print the parameters into a string
     std::string print() const;
@@ -389,7 +386,7 @@ struct common_params_speculative {
 
     uint32_t need_n_rs_seq() const {
         bool needs_rs_seq = std::any_of(types.begin(), types.end(), [&](auto t) {
-            return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP || t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 || t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH;
+            return t == COMMON_SPECULATIVE_TYPE_DRAFT_MTP || t == COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3 || t == COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH || t == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK;
         });
 
         return needs_rs_seq ? draft.n_max : 0u;
@@ -692,6 +689,10 @@ struct common_params {
     // enable built-in tools
     std::vector<std::string> server_tools;
 
+    // MCP server configs (Cursor-compatible JSON)
+    std::string mcp_servers_config;   // path to JSON file with MCP server definitions
+    std::string mcp_servers_json;     // inline JSON with MCP server definitions
+
     // router server configs
     std::string models_dir    = "";     // directory containing models for the router server
     std::string models_preset = "";     // directory containing model presets for the router server
@@ -968,10 +969,17 @@ enum common_context_seq_rm_type {
 // note: clears the memory of the context
 common_context_seq_rm_type common_context_can_seq_rm(llama_context * ctx);
 
-// aborts execution on failure
-void common_context_seq_rm (llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1);
-void common_context_seq_add(llama_context * ctx, llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos delta);
-void common_context_seq_cp (llama_context * ctx, llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1);
+struct common_memory {
+    llama_context * ctx_tgt = nullptr;
+    llama_context * ctx_dft = nullptr;
+
+    void init(llama_context * ctx_tgt, llama_context * ctx_dft = nullptr);
+
+    // aborts execution on failure
+    void seq_rm (llama_seq_id seq_id, llama_pos p0, llama_pos p1) const;
+    void seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos delta) const;
+    void seq_cp (llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) const;
+};
 
 //
 // Batch utils

@@ -12772,7 +12772,7 @@ static void ggml_opencl_op_rms_norm_fused(ggml_backend_t backend, ggml_tensor * 
     ggml_tensor_extra_cl * extrad = (ggml_tensor_extra_cl *)dst->extra;
 
     cl_ulong offset0 = extra0->offset + src0->view_offs;
-    cl_ulong offset1 = extra1->offset + src0->view_offs;
+    cl_ulong offset1 = extra1->offset + src1->view_offs;
     cl_ulong offsetd = extrad->offset + dst->view_offs;
 
     ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
@@ -15675,7 +15675,7 @@ static void ggml_cl_mul_mat_kq_kqv_adreno(ggml_backend_t backend, const ggml_ten
     // <--------------------------------------------> //
     extra0 = src0->view_src ? (ggml_tensor_extra_cl *)src0->view_src->extra : (ggml_tensor_extra_cl *)src0->extra;
 
-    region.origin = (extra0->offset);
+    region.origin = (extra0->offset + src0->view_offs);
     if (nb01 > nb02) {
         // KQ
         region.size = nb01 * ne01;
@@ -15691,7 +15691,7 @@ static void ggml_cl_mul_mat_kq_kqv_adreno(ggml_backend_t backend, const ggml_ten
 
     // create sub-buffer for B
     // <--------------------------------------------> //
-    region.origin = (extra1->offset);
+    region.origin = (extra1->offset + src1->view_offs);
     region.size = nb10 * ne10 * ne11 * ne12;
     B_sub_buffer = clCreateSubBuffer((extra1->data_device), 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &status);
     CL_CHECK(status);
@@ -15712,7 +15712,7 @@ static void ggml_cl_mul_mat_kq_kqv_adreno(ggml_backend_t backend, const ggml_ten
 
     // create sub-buffer for output C
     // <--------------------------------------------> //
-    region.origin = (extrad->offset);
+    region.origin = (extrad->offset + dst->view_offs);
     region.size = ne0 * ne1 * dst->ne[2] * dst->nb[0]; // size of C in bytes
     D_sub_buffer = clCreateSubBuffer((extrad->data_device), 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &status);
     CL_CHECK(status);
@@ -18591,6 +18591,8 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     if(src0t == GGML_TYPE_F16 && src1t == GGML_TYPE_F32){
         if (ne01 >= 64 && ne1 >= 32 && ne00 >= 16 && (ne12 % ne02) == 0  &&
+            // the KQ/KQV image kernels do not handle dim 3 (multi-stream batches)
+            ne03 == 1 && ne13 == 1 &&
             // dst is wrapped with image1d_buffer, the size limit applies, also src0
             (ne0 * ne1 * dst->ne[2] * dst->nb[0] / 4 <= backend_ctx->image_max_buffer_size)) {
             // For KQ

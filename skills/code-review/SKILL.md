@@ -110,6 +110,15 @@ Public API changes carry a higher bar than internal ones (`CONTRIBUTING.md`). Re
 - Security: don't trust client-supplied headers (e.g. `X-Forwarded-For`) or add footguns; things like IP allowlisting belong at a reverse proxy unless there's a trusted-proxy design.
 - Wire new behavior into the existing request/response and checkpoint paths correctly; watch for resource leaks across requests.
 
+## Multimodal (`tools/mtmd/`)
+
+- Tensor names must be prefixed by `v.`, `a.`, `mm.` or `a.mm.` (legacy naming doesn't follow this convention - this is expected, but new code should follow it).
+- Do not use explicit sin/cos for RoPE; use `ggml_rope_ext` instead, see `HOWTO-add-model.md`. If it can't express the needed behavior, that's a design discussion, not a PR.
+- New GGML ops must not be introduced in the same PR, you must push it as a separate PR.
+- In most cases, `build_vit` should be enough to build the transformer graph for vision models. Do not add a loop to build the transformer graph manually, unless you have a very good reason to do so. If you do, please explain why in the PR description.
+- If you need a dedicated preprocessor, there is a high chance that it can be a derived class from one of the existing preprocessors. Check carefully before adding a new preprocessor class.
+- If the model need a new public API in `mtmd.h`, open a discussion first.
+
 ## General (always)
 
 Enforce the `AGENTS.md` / `CONTRIBUTING.md` coding and naming guidelines on every changed line - this is a distinct pass from checking that the code works, and matters just as much for review speed:
