@@ -163,9 +163,6 @@ class Keys:
         NORM_BEFORE_RESIDUAL              = "{arch}.norm_before_residual"
         NORM_BEFORE_FC                    = "{arch}.norm_before_fc"
 
-        # Zaya-specific
-        ZAYA_HIGH_PREC                    = "zaya.high_prec"
-
     class Attention:
         HEAD_COUNT                   = "{arch}.attention.head_count"
         HEAD_COUNT_KV                = "{arch}.attention.head_count_kv"

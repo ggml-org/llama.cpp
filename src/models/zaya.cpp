@@ -514,11 +514,9 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
     cur = ggml_mul_mat(ctx0, model.output, cur);
     cb(cur, "result_output", -1);
 
-    // FP32 logits for numerical stability (zaya_high_prec)
-    if (hparams.zaya_high_prec) {
-        cur = ggml_cont(ctx0, ggml_cast(ctx0, cur, GGML_TYPE_F32));
-        cb(cur, "result_output_fp32", -1);
-    }
+    // FP32 logits for numerical stability
+    cur = ggml_cont(ctx0, ggml_cast(ctx0, cur, GGML_TYPE_F32));
+    cb(cur, "result_output_fp32", -1);
 
     res->t_logits = cur;
 
