@@ -506,11 +506,12 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
     // when ask is true, the scheduler wants to know if we are interested in data from this tensor
     // if we return true, a follow-up call will be made with ask=false in which we can do the actual collection
     if (ask) {
-        if (t->op == GGML_OP_MUL_MAT_ID) return true; // collect all indirect matrix multiplications
-        if (t->op != GGML_OP_MUL_MAT) return false;
+        if (t->op == GGML_OP_MUL_MAT_ID) { return true; } // collect all indirect matrix multiplications
+        if (t->op != GGML_OP_MUL_MAT) { return false; }
         // why are small batches ignored (<16 tokens)?
-        if (src1->ne[1] < 16 || src1->type != GGML_TYPE_F32) return false;
-        if (!(wname.substr(0, 4) == "blk." || (m_params.process_output && wname == "output.weight"))) return false;
+        if (src1->ne[1] < 16 || src1->type != GGML_TYPE_F32) { return false; }
+        // collect output.weight and token_embd.weight when a tied model uses it as the output matmul
+        if (!(wname.substr(0, 4) == "blk." || (m_params.process_output && (wname == "output.weight" || wname == "token_embd.weight")))) { return false; }
         return true;
     }
 
