@@ -414,3 +414,45 @@ python tools/tessera/kv_prefix_identifier.py \
   --model-family gemma4 \
   --threshold 64
 ```
+
+## Per-tile Hessian trace (L3 sensitivity, E5)
+
+`l3_hessian_trace.py` is the L3 E5 unlock. It computes the empirical
+Hessian trace ``tr(X^T X / N)`` per tensor and buckets it by 640-wide
+input-channel tiles (the T640 page size), then writes a
+`llama.tessera.hessian-trace-policy.v1` document. HAWQ-V2 (NeurIPS 2020)
+shows the average Hessian trace is the right layer-wise sensitivity
+metric; the IterQuant L5 orchestrator on `tessera/track-iterquant-prod`
+consumes this as a third signal alongside the LLM.int8 outlier count
+and the IterQuant token-level sensitivity.
+
+Two estimators are supported: `hutchinson` (default, 50 Rademacher
+probes; matches HAWQ-V2) and `exact-diagonal` (uses the imatrix's
+per-channel `in_sum2` and is the right choice when only the
+calibration observer is available). Both produce per-tensor
+`hessian_trace` / `hessian_trace_avg` and a per-tile
+`hessian_trace_per_tile` array.
+
+The consumer is `tile640_quantize_v3.py --hessian-trace-policy`, which
+loads the pre-computed policy and merges the per-tensor trace values
+into the in-memory calibration policy. Downstream code (the L5
+orchestrator, the quantizer's sensitivity scorer) reads the merged
+fields as first-class entries on each tensor family.
+
+```sh
+# Producer
+python tools/tessera/l3_hessian_trace.py \
+  --layers /Volumes/Julian\ T7/calibration/gemma4-layers \
+  --output /Volumes/Julian\ T7/calibration/gemma4-hessian-trace.json \
+  --method hutchinson --n-hutchinson-vectors 50
+
+# Demo + validation harness
+python tools/tessera/l3_hessian_trace_demo.py --determinism-check
+
+# Consumer
+python tools/tile640/quantize_v3.py \
+  --model-dir /path/to/model --output out.gguf \
+  --imatrix gemma4.imatrix.npz \
+  --calibration-policy gemma4-evolved-policy.json \
+  --hessian-trace-policy gemma4-hessian-trace.json
+```
