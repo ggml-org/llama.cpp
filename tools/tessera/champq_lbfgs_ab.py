@@ -451,8 +451,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--lbfgs-subsample",
         type=int,
-        default=256,
-        help="Run LBFGS on a sub-matrix of this many channels (default: 256). "
+        default=1024,
+        help="Run LBFGS on a sub-matrix of this many channels (default: 1024). "
         "Use --lbfgs-subsample 0 to disable subsampling and run on the full in_dim.",
     )
     parser.add_argument(
