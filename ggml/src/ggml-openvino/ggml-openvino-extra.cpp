@@ -51,6 +51,7 @@ void ggml_openvino_device_config::init() {
         "GGML_OPENVINO_PHASE_TUNE",
         "GGML_OPENVINO_PHASE_TUNE_DEVICES",
         "GGML_OPENVINO_PHASE_TUNE_OUTPUT_DIR",
+        "GGML_OPENVINO_PHASE_TUNE_PROGRESS",
     };
 
     for (const char * const & env_var : env_var_names) {

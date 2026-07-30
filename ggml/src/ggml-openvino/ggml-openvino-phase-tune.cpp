@@ -37,8 +37,16 @@ static tune_cache g_tune_cache;
 static bool       g_tune_production = false;
 static bool       g_atexit_registered = false;
 
-static int g_pp_token_cursor = 0;
-static int g_tg_token_cursor = 0;
+static int                  g_pp_token_cursor = 0;
+static int                  g_tg_token_cursor = 0;
+
+static int tune_progress_interval() {
+    static const int n = []() {
+        const int v = ggml_openvino_getenv_int("GGML_OPENVINO_PHASE_TUNE_PROGRESS", 50);
+        return v > 0 ? v : 0;
+    }();
+    return n;
+}
 
 enum class tune_phase : uint8_t { prefill = 0, decode = 1 };
 
@@ -373,6 +381,10 @@ enum ggml_status ov_graph_compute_phase_tune(ggml_cgraph * cgraph, std::shared_p
         if (is_prefill) {
             g_pp_token_cursor += n_tokens_in_graph;
         } else {
+            const int iv = tune_progress_interval();
+            if (iv > 0 && (g_tg_token_cursor % iv) == 0) {
+                fprintf(stderr, "OpenVINO phase tune: decode token %d\n", g_tg_token_cursor);
+            }
             g_tg_token_cursor += n_tokens_in_graph;
         }
     }
