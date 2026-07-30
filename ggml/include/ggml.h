@@ -430,7 +430,9 @@ extern "C" {
         GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)
         GGML_TYPE_Q1_0    = 41,
         GGML_TYPE_Q2_0    = 42,
-        GGML_TYPE_COUNT   = 43,
+        GGML_TYPE_TESSERA_T640    = 43, // 2D Tile640 ternary; 6 component tensors
+        GGML_TYPE_TESSERA_T640_3D = 44, // 3D expert bank marker; same physical encoding as T640
+        GGML_TYPE_COUNT   = 45,
     };
 
     // precision

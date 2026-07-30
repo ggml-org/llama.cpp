@@ -177,6 +177,15 @@ typedef sycl::half2 ggml_half2;
 #define GGML_EXTENSION __extension__
 #endif // _MSC_VER
 
+//
+// Tessera Tile640 (TESSERA_T640 / TESSERA_T640_3D)
+//
+
+#define TILE640_PAGE_SIZE      640
+#define TILE640_LANE_SIZE      20
+#define TILE640_LANES_PER_PAGE 32
+#define TILE640_WORDS_PER_PAGE 32
+
 #define QK1_0 128
 typedef struct {
     ggml_half d;           // delta

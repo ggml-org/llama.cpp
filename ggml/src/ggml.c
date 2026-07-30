@@ -942,6 +942,22 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .type_size                = 0,
         .is_quantized             = false,
     },
+    [GGML_TYPE_TESSERA_T640] = {
+        .type_name                = "tessera_t640",
+        .blck_size                = TILE640_PAGE_SIZE,
+        .type_size                = sizeof(int32_t), // logical; the pack is a 6-tensor cluster
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_tessera_t640,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_tessera_t640_ref,
+    },
+    [GGML_TYPE_TESSERA_T640_3D] = {
+        .type_name                = "tessera_t640_3d",
+        .blck_size                = TILE640_PAGE_SIZE,
+        .type_size                = sizeof(int32_t),
+        .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_tessera_t640,
+        .from_float_ref           = (ggml_from_float_t) quantize_row_tessera_t640_ref,
+    },
 };
 
 const struct ggml_type_traits * ggml_get_type_traits(enum ggml_type type) {
