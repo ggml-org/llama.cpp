@@ -143,10 +143,8 @@ declare global {
 		idxThemeStyle?: number;
 		idxCodeBlock?: number;
 
-		// File System Access API - missing from older DOM lib versions.
-		// Used by ChatFormWorkingDirectory's native folder picker. Feature availability
-		// is gated at runtime via `typeof window.showDirectoryPicker === 'function'`.
-		showDirectoryPicker: (options?: {
+		// File System Access API - not in the DOM lib and unavailable in some browsers
+		showDirectoryPicker?: (options?: {
 			id?: string;
 			mode?: 'read' | 'readwrite';
 			startIn?: FileSystemHandle | string;

@@ -135,6 +135,19 @@ class SettingsStore {
 				...savedVal
 			};
 
+			// Migrate legacy `renderUserContentAsMarkdown` (true = render as
+			// markdown) into `renderUserContentAsRawText` (true = render as
+			// plain text) - inverted semantics.
+			const LEGACY_USER_CONTENT_KEY = 'renderUserContentAsMarkdown';
+			if (LEGACY_USER_CONTENT_KEY in savedVal) {
+				if (!(SETTINGS_KEYS.RENDER_USER_CONTENT_AS_RAW_TEXT in savedVal)) {
+					this.config[SETTINGS_KEYS.RENDER_USER_CONTENT_AS_RAW_TEXT] =
+						!savedVal[LEGACY_USER_CONTENT_KEY];
+				}
+				delete (savedVal as Record<string, unknown>)[LEGACY_USER_CONTENT_KEY];
+				this.saveConfig();
+			}
+
 			// Default sendOnEnter to false on mobile when the user has no saved preference
 			if (!(SETTINGS_KEYS.SEND_ON_ENTER in savedVal)) {
 				if (isMobile.current) {

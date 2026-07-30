@@ -166,3 +166,14 @@ export interface FileProcessingResult {
 	extras: DatabaseMessageExtra[];
 	emptyFiles: string[];
 }
+
+/**
+ * A file or folder picked in the @-mention picker. `path` is the
+ * absolute server-side path; `name` is the basename, denormalized so
+ * the recents store can render entries without re-deriving it.
+ */
+export interface FileMentionEntry {
+	path: string;
+	name: string;
+	type: 'file' | 'directory';
+}

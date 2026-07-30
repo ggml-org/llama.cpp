@@ -23,7 +23,7 @@ import type {
 	SettingsSectionEntry,
 	SettingsSection
 } from '$lib/types';
-import { CLI_FLAGS, DEFAULT_MCP_CONFIG } from '$lib/constants';
+import { CLI_FLAGS, DEFAULT_MCP_CONFIG, FILE_GLOB_SEARCH_PICKERS_DEFAULT_SEARCH_DEPTH } from '$lib/constants';
 import { SETTINGS_KEYS } from './settings-keys';
 import { ROUTES, SETTINGS_SECTION_SLUGS } from './routes';
 import { TITLE_GENERATION } from './title-generation';
@@ -228,18 +228,10 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				section: SETTINGS_SECTION_SLUGS.DISPLAY
 			},
 			{
-				key: SETTINGS_KEYS.RENDER_USER_CONTENT_AS_MARKDOWN,
-				label: 'Render user content as Markdown',
-				help: 'Render user messages using markdown formatting in the chat.',
+				key: SETTINGS_KEYS.RENDER_USER_CONTENT_AS_RAW_TEXT,
+				label: 'Render user content as raw text',
+				help: 'Display user messages as plain text instead of formatted Markdown.',
 				defaultValue: false,
-				type: SettingsFieldType.CHECKBOX,
-				section: SETTINGS_SECTION_SLUGS.DISPLAY
-			},
-			{
-				key: SETTINGS_KEYS.RENDER_THINKING_AS_MARKDOWN,
-				label: 'Render thinking as Markdown',
-				help: 'Render the reasoning/thinking block content as formatted Markdown instead of plain text.',
-				defaultValue: true,
 				type: SettingsFieldType.CHECKBOX,
 				section: SETTINGS_SECTION_SLUGS.DISPLAY
 			},
@@ -555,6 +547,18 @@ const SETTINGS_REGISTRY: Record<string, SettingsSectionEntry> = {
 				type: SettingsFieldType.INPUT,
 				section: SETTINGS_SECTION_SLUGS.AGENTIC,
 				isPositiveInteger: true
+			},
+			{
+				key: SETTINGS_KEYS.MENTION_SEARCH_MAX_DEPTH,
+				label: 'Mention search depth',
+				help: 'How many directory levels below the working directory the @-mention file search descends. Larger values surface deeply nested files but take longer on large trees. Server cap is 32.',
+				defaultValue: FILE_GLOB_SEARCH_PICKERS_DEFAULT_SEARCH_DEPTH,
+				placeholder: `${FILE_GLOB_SEARCH_PICKERS_DEFAULT_SEARCH_DEPTH}`,
+				min: 1,
+				max: 32,
+				type: SettingsFieldType.INPUT,
+				section: SETTINGS_SECTION_SLUGS.AGENTIC,
+				isPositiveInteger: true
 			}
 		]
 	},
@@ -699,6 +703,9 @@ export const SETTINGS_CHAT_SECTIONS: SettingsSection[] = [
 			type: s.type,
 			isExperimental: s.isExperimental,
 			isPositiveInteger: s.isPositiveInteger,
+			placeholder: s.placeholder,
+			min: s.min,
+			max: s.max,
 			dependsOn: s.dependsOn,
 			help: s.help,
 			options: s.options,

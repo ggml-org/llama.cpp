@@ -397,6 +397,22 @@ div.markdown-user-content :global(.table-wrapper) {
 	background: inherit;
 }
 
+/* Mention-badge chips (`file://` links rendered via MentionBadge
+ * Svelte component / contenteditable tokenizer / rehype plugin).
+ * The badge owns its visual styling via the shared Tailwind
+ * class string in `$lib/utils/mention-badge`; this block only
+ * enforces the cursor + reset quirks specific to the markdown
+ * rendering context (link color, underline, selection). */
+.markdown-content :global(.mention-badge-link) {
+	text-decoration: none;
+	color: inherit;
+	cursor: pointer;
+}
+
+.markdown-user-content :global(.mention-badge-link) {
+	color: inherit;
+}
+
 /* Enhanced blockquotes */
 .markdown-content :global(blockquote) {
 	transition: all 0.2s ease;

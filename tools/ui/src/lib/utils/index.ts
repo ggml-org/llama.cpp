@@ -181,6 +181,39 @@ export {
 	type PathQuery
 } from './working-directory';
 
+// Mention-token detection (for the `@`-triggered file/folder mention picker)
+export {
+	findMentionToken,
+	takeMentionDismissSnapshot,
+	type MentionDismissSnapshot
+} from './mention-token';
+
+// Tokenization for the chat-form contenteditable (renders `@`-picked
+// `[name](file://...)` links as inline badges inside the input while
+// keeping the markdown source unchanged).
+export {
+	tokenizeContent,
+	serializeContent,
+	buildFragment,
+	rangeToTextOffset,
+	textOffsetToRange,
+	badgeAwareWordJump,
+	leadingBadgeEdgeOffset,
+	type ContentToken
+} from './contenteditable-tokenizer';
+
+// Mention-badge visual contract (used by MentionBadge.svelte and the
+// contenteditable / rehype DOM paths that build the same chip without
+// a Svelte mount)
+export {
+	containsFileMentionLink,
+	MENTION_BADGE_CLASSNAME,
+	MENTION_BADGE_ICON_CLASSNAME,
+	MENTION_BADGE_FILE_ICON_PATHS,
+	MENTION_BADGE_FOLDER_ICON_PATHS,
+	getMentionBadgeIconPaths
+} from './mention-badge';
+
 // Agentic content utilities (structured section derivation)
 export {
 	deriveAgenticSections,

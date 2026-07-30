@@ -2,6 +2,7 @@
 	import {
 		ChatAttachmentsList,
 		ChatFormActions,
+		ChatFormContenteditable,
 		ChatFormFileInputInvisible,
 		ChatFormMcpResourcesList,
 		ChatFormPickers,
@@ -15,8 +16,7 @@
 		SETTING_CONFIG_DEFAULT,
 		INITIAL_FILE_SIZE,
 		PROMPT_CONTENT_SEPARATOR,
-		PROMPT_TRIGGER_PREFIX,
-		RESOURCE_TRIGGER_PREFIX
+		PROMPT_TRIGGER_PREFIX
 	} from '$lib/constants';
 	import {
 		ContentPartType,
@@ -39,8 +39,24 @@
 		activeConversation,
 		pendingCwd
 	} from '$lib/stores/conversations.svelte';
-	import type { GetPromptResult, MCPPromptInfo, MCPResourceInfo, PromptMessage } from '$lib/types';
-	import { isIMEComposing, parseClipboardContent, uuid } from '$lib/utils';
+	import { recentMentionsStore } from '$lib/stores/recent-mentions.svelte';
+	import type {
+		FileMentionEntry,
+		GetPromptResult,
+		MCPPromptInfo,
+		MCPResourceInfo,
+		PromptMessage
+	} from '$lib/types';
+	import {
+		containsFileMentionLink,
+		findMentionToken,
+		isIMEComposing,
+		lastPathSegment,
+		parseClipboardContent,
+		takeMentionDismissSnapshot,
+		uuid,
+		type MentionDismissSnapshot
+	} from '$lib/utils';
 	import {
 		AudioRecorder,
 		convertToWav,
@@ -97,12 +113,31 @@
 	}: Props = $props();
 
 	// Component References
+	// Component handle shared by both the simple textarea and the
+	// contenteditable variant - both expose the same surface (focus,
+	// resetHeight, getElement, getCaretOffset, setCaretOffset).
+	type ChatInputHandle = {
+		focus(): void;
+		resetHeight(): void;
+		getElement(): HTMLElement | undefined;
+		getCaretOffset(): number;
+		setCaretOffset(offset: number): void;
+	};
+
 	let audioRecorder: AudioRecorder | undefined;
 	let chatFormActionsRef: ChatFormActions | undefined = $state(undefined);
 	let fileInputRef: ChatFormFileInputInvisible | undefined = $state(undefined);
 	let pickersRef: { handleKeydown: (event: KeyboardEvent) => boolean } | undefined =
 		$state(undefined);
-	let textareaRef: ChatFormTextarea | undefined = $state(undefined);
+	let inputRef: ChatInputHandle | undefined = $state(undefined);
+
+	// One-way promotion gate: render the simple textarea by default,
+	// swap in the contenteditable once a `file://` markdown link lands
+	// in the buffer. The promotion is sticky for the lifetime of the
+	// composition - backspacing every file link out does NOT demote,
+	// preventing the swap-thrash that comes from a textarea tearing
+	// down and remounting mid-edit.
+	let useContenteditable = $state(false);
 
 	// Audio Recording State
 	let isRecording = $state(false);
@@ -111,10 +146,32 @@
 	// Picker State
 	let isPromptPickerOpen = $state(false);
 	let promptSearchQuery = $state('');
-	let isInlineResourcePickerOpen = $state(false);
-	let resourceSearchQuery = $state('');
+	let isMentionPickerOpen = $state(false);
+	let mentionQuery = $state('');
+
+	/**
+	 * Snapshot of the most recent `@`-mention token the user dismissed
+	 * (via Escape, outside-click, or simply by deleting it). When the
+	 * picker is closed AND the same token is still intact in the buffer,
+	 * we do NOT auto-reopen - the user has explicitly told us this
+	 * `@<query>` should be treated as literal text. The snapshot
+	 * becomes stale the moment any character inside the token changes,
+	 * at which point the picker is allowed to reopen on the next input.
+	 */
+	let mentionDismissedSnapshot: MentionDismissSnapshot | null = null;
+
+	// Invisible anchor for the mention picker: sits at the top edge of the
+	// chat form so the popover floats above the box (matches the working-
+	// directory picker's `customAnchor` pattern). One anchor per popover we
+	// want to anchor above the form.
+	let mentionAnchor: HTMLDivElement | null = $state(null);
 
 	let cwd = $derived(activeConversation()?.cwd ?? pendingCwd());
+
+	// Scopes the @-mention search to the cwd the user picked (when set),
+	// falling back to the server home so the picker still finds matches
+	// before the user has chosen a directory.
+	let mentionScopePath = $derived(cwd ?? toolsStore.serverHome ?? null);
 
 	async function handleWorkingDirectoryChange(value: string | null) {
 		await conversationsStore.setCwd(value);
@@ -166,23 +223,51 @@
 	);
 	let canSubmit = $derived(value.trim().length > 0 || hasAttachments);
 
+	// Caret offset restored after a renderer swap. Callers that mutate `value`
+	// themselves (e.g. the mention picker splicing in `[name](file://path)`)
+	// pin the target offset BEFORE the value assignment; otherwise the swap
+	// effect snapshots the current caret.
+	let pendingCaretOffset = 0;
+	let caretOffsetPinned = false;
+
+	// Runs after the renderer swap settles so the caret lands in the
+	// newly-mounted input.
+	function queueCaretRestore() {
+		queueMicrotask(() => {
+			inputRef?.focus();
+			inputRef?.setCaretOffset(pendingCaretOffset);
+			caretOffsetPinned = false;
+		});
+	}
+
+	// Render-mode selector: promote to the contenteditable when the
+	// value carries a `file://`-mention link, demote to the plain
+	// textarea when it doesn't any longer.
+	$effect(() => {
+		const wantContenteditable = containsFileMentionLink(value ?? '');
+		if (useContenteditable === wantContenteditable) return;
+
+		// Pin (set by the mention picker) wins; otherwise snapshot the
+		// current caret from whatever renderer is mounted.
+		if (!caretOffsetPinned) {
+			pendingCaretOffset = inputRef?.getCaretOffset() ?? (value ?? '').length;
+		}
+
+		useContenteditable = wantContenteditable;
+		queueCaretRestore();
+	});
+
 	onMount(() => {
 		recordingSupported = isAudioRecordingSupported();
 		audioRecorder = new AudioRecorder();
 	});
 
-	// Defer so the closing popover's focus scope tears down first - bits-ui
-	// yanks a synchronous focus() back into the still-mounted popover.
-	function refocusInput() {
-		queueMicrotask(() => textareaRef?.focus());
-	}
-
 	export function focus() {
-		textareaRef?.focus();
+		inputRef?.focus();
 	}
 
 	export function resetTextareaHeight() {
-		textareaRef?.resetHeight();
+		inputRef?.resetHeight();
 	}
 
 	export function openModelSelector() {
@@ -219,26 +304,58 @@
 	function handleInput() {
 		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
 		const hasServers = mcpStore.hasEnabledServers(perChatOverrides);
+		const cursor = inputRef?.getCaretOffset() ?? value.length;
 
 		if (value.startsWith(PROMPT_TRIGGER_PREFIX) && hasServers) {
 			isPromptPickerOpen = true;
 			promptSearchQuery = value.slice(1);
-			isInlineResourcePickerOpen = false;
-			resourceSearchQuery = '';
-		} else if (
-			value.startsWith(RESOURCE_TRIGGER_PREFIX) &&
-			hasServers &&
-			mcpStore.hasResourcesCapability(perChatOverrides)
-		) {
-			isInlineResourcePickerOpen = true;
-			resourceSearchQuery = value.slice(1);
-			isPromptPickerOpen = false;
-			promptSearchQuery = '';
+			isMentionPickerOpen = false;
+			mentionQuery = '';
 		} else {
+			const token = findMentionToken(value, cursor);
+
+			if (token) {
+				// Picker's been dismissed for THIS exact token - honor the
+				// "literal until delete + retype" rule: don't reopen until the
+				// token changes (typed-then-Esc'd a slot, then kept typing
+				// inside the same `@<q>`).
+				const isDismissedSticky =
+					mentionDismissedSnapshot !== null &&
+					mentionDismissedSnapshot.start === token.start &&
+					mentionDismissedSnapshot.query === token.query;
+
+				if (!isDismissedSticky) {
+					// Show the picker only if it can actually render something
+					// useful: either the user has typed at least one
+					// character after `@` (live search), or we've previously
+					// picked at least one file/folder (recents surface). A
+					// bare `@` with no recents is a no-op - re-typing into
+					// the token would otherwise flash an empty "start
+					// typing..." hint before the user types anything.
+					const haveRecents = recentMentionsStore.value.length > 0;
+					const haveQuery = token.query.length > 0;
+
+					if (haveRecents || haveQuery) {
+						mentionDismissedSnapshot = null;
+						isMentionPickerOpen = true;
+						mentionQuery = token.query;
+						isPromptPickerOpen = false;
+						promptSearchQuery = '';
+						return;
+					}
+				}
+			}
+
 			isPromptPickerOpen = false;
 			promptSearchQuery = '';
-			isInlineResourcePickerOpen = false;
-			resourceSearchQuery = '';
+			isMentionPickerOpen = false;
+			mentionQuery = '';
+
+			// Token gone or no longer intact - the snapshot is stale. Reset so
+			// the next fresh `@` opens immediately even at the same offset.
+			if (mentionDismissedSnapshot !== null && !token) {
+				mentionDismissedSnapshot = null;
+			}
 		}
 	}
 
@@ -250,12 +367,6 @@
 		if (event.key === KeyboardKey.ESCAPE && isPromptPickerOpen) {
 			isPromptPickerOpen = false;
 			promptSearchQuery = '';
-			return;
-		}
-
-		if (event.key === KeyboardKey.ESCAPE && isInlineResourcePickerOpen) {
-			isInlineResourcePickerOpen = false;
-			resourceSearchQuery = '';
 			return;
 		}
 
@@ -332,7 +443,7 @@
 				}
 
 				setTimeout(() => {
-					textareaRef?.focus();
+					inputRef?.focus();
 				}, 10);
 
 				return;
@@ -384,7 +495,7 @@
 
 		uploadedFiles = [...uploadedFiles, placeholder];
 		onUploadedFilesChange?.(uploadedFiles);
-		textareaRef?.focus();
+		inputRef?.focus();
 	}
 
 	function handlePromptLoadComplete(placeholderId: string, result: GetPromptResult) {
@@ -426,39 +537,81 @@
 		onUploadedFilesChange?.(uploadedFiles);
 	}
 
+	// Refocus the chat input after a picker closes. Deferred so the
+	// closing popover's focus scope tears down first - bits-ui yanks a
+	// synchronous focus() back into the still-mounted popover.
+	function refocusInput() {
+		queueMicrotask(() => inputRef?.focus());
+	}
+
 	function handlePromptPickerClose() {
 		isPromptPickerOpen = false;
 		promptSearchQuery = '';
-		textareaRef?.focus();
+		refocusInput();
 	}
 
-	function handleInlineResourcePickerClose() {
-		isInlineResourcePickerOpen = false;
-		resourceSearchQuery = '';
-		textareaRef?.focus();
-	}
-
-	function handleInlineResourceSelect() {
-		if (value.startsWith(RESOURCE_TRIGGER_PREFIX)) {
-			value = '';
-			onValueChange?.('');
+	/**
+	 * Mention picker dismissed (Esc, outside-click, or selection-complete).
+	 * Capture a `(start, query)` snapshot of the live token so subsequent
+	 * input events that produce the SAME token won't reopen the picker -
+	 * the user has explicitly told us that `@<query>` should be literal
+	 * until they delete or retype a fresh `@`.
+	 */
+	function handleMentionPickerClose() {
+		if (isMentionPickerOpen) {
+			const cursor = inputRef?.getCaretOffset() ?? value.length;
+			mentionDismissedSnapshot = takeMentionDismissSnapshot(value, cursor);
 		}
-
-		isInlineResourcePickerOpen = false;
-		resourceSearchQuery = '';
-		textareaRef?.focus();
+		isMentionPickerOpen = false;
+		mentionQuery = '';
+		refocusInput();
 	}
 
-	function handleBrowseResources() {
-		isInlineResourcePickerOpen = false;
-		resourceSearchQuery = '';
+	/**
+	 * Selection from the mention picker: splice `[name](file://<abs>)`
+	 * + trailing space in place of the `@<query>` token. Cursor lands
+	 * right after the trailing space so the user can keep typing
+	 * naturally. Uses the live cursor position (not the stale snapshot)
+	 * because the token might have been edited since we last saw it.
+	 *
+	 * URI shape follows RFC 8089: `file:` + `//` + absolute path. The
+	 * search entry's `path` is already rooted (begins with `/`), so the
+	 * prefix is `file://` not `file:///` - that yields the canonical
+	 * three-slash form `file:///Users/foo/bar` without an extra `/`.
+	 *
+	 * Directories get a trailing `/` so the link resolves to a folder
+	 * rather than being interpreted as a file with no extension.
+	 */
+	function handleMentionSelect(entry: FileMentionEntry) {
+		const cursor = inputRef?.getCaretOffset() ?? value.length;
+		const token = findMentionToken(value, cursor);
+		if (!token) return;
 
-		if (value.startsWith(RESOURCE_TRIGGER_PREFIX)) {
-			value = '';
-			onValueChange?.('');
+		// Strip trailing `/` so that entry.path (which already ends
+		// in `/` for directories per the filesystem service) does
+		// not get a second `/` appended below. The directory marker
+		// is then re-added deterministically.
+		const cleanedPath = entry.path.replace(/\/+$/, '');
+		const pathWithSeparator = entry.type === 'directory' ? `${cleanedPath}/` : cleanedPath;
+		const basename = lastPathSegment(cleanedPath) || entry.name;
+		const insertion = `[${basename}](file://${pathWithSeparator}) `;
+		const newValue = value.slice(0, token.start) + insertion + value.slice(token.end);
+
+		// Pin the post-insertion caret offset BEFORE the swap effect
+		// runs; otherwise the effect would clobber it with whatever
+		// the textarea's selection was at promotion time (browser-
+		// dependent: usually reset to 0).
+		pendingCaretOffset = token.start + insertion.length;
+		caretOffsetPinned = true;
+
+		value = newValue;
+		onValueChange?.(newValue);
+
+		// Already in contenteditable mode: this insert does not flip the
+		// renderer, so the swap effect's caret restore never runs.
+		if (useContenteditable) {
+			queueCaretRestore();
 		}
-
-		isResourceDialogOpen = true;
 	}
 
 	async function handleMicClick() {
@@ -505,16 +658,24 @@
 		bind:this={pickersRef}
 		{isPromptPickerOpen}
 		{promptSearchQuery}
-		{isInlineResourcePickerOpen}
-		{resourceSearchQuery}
+		{isMentionPickerOpen}
+		{mentionQuery}
+		{mentionAnchor}
+		scopePath={mentionScopePath}
 		onPromptPickerClose={handlePromptPickerClose}
-		onInlineResourcePickerClose={handleInlineResourcePickerClose}
-		onInlineResourceSelect={handleInlineResourceSelect}
+		onMentionPickerClose={handleMentionPickerClose}
+		onMentionOpened={() => inputRef?.focus()}
+		onMentionSelect={handleMentionSelect}
 		onPromptLoadStart={handlePromptLoadStart}
 		onPromptLoadComplete={handlePromptLoadComplete}
 		onPromptLoadError={handlePromptLoadError}
-		onInlineResourceBrowse={handleBrowseResources}
 	/>
+
+	<div
+		bind:this={mentionAnchor}
+		class="pointer-events-none absolute top-0 right-0 left-0 h-px"
+		aria-hidden="true"
+	></div>
 
 	<div
 		class="{INPUT_CLASSES} overflow-hidden rounded-4xl md:rounded-3xl backdrop-blur-md {disabled
@@ -536,18 +697,35 @@
 			class="flex-column relative min-h-12 items-center rounded-4xl md:rounded-3xl py-2 pb-2.25 shadow-sm transition-all focus-within:shadow-md md:py-3!"
 			onpaste={handlePaste}
 		>
-			<ChatFormTextarea
-				class="px-5 py-1.5 md:pt-0"
-				bind:this={textareaRef}
-				bind:value
-				onKeydown={handleKeydown}
-				onInput={() => {
-					handleInput();
-					onValueChange?.(value);
-				}}
-				{disabled}
-				{placeholder}
-			/>
+			{#if useContenteditable}
+				<ChatFormContenteditable
+					class="px-5 py-1.5 md:pt-0 mb-0.5"
+					bind:this={inputRef}
+					bind:value
+					onKeydown={handleKeydown}
+					onInput={() => {
+						handleInput();
+						onValueChange?.(value);
+					}}
+					onPaste={handlePaste}
+					{disabled}
+					{placeholder}
+				/>
+			{:else}
+				<ChatFormTextarea
+					class="px-5 py-1.5 md:pt-0"
+					bind:this={inputRef}
+					bind:value
+					onKeydown={handleKeydown}
+					onInput={() => {
+						handleInput();
+						onValueChange?.(value);
+					}}
+					onPaste={handlePaste}
+					{disabled}
+					{placeholder}
+				/>
+			{/if}
 
 			{#if mcpHasResourceAttachments()}
 				<ChatFormMcpResourcesList

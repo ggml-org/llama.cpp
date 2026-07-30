@@ -73,3 +73,5 @@ export const LEGACY_AGENTIC_REGEX = {
 	AGENTIC_TOOL_CALL_OPEN: /\n*<<<AGENTIC_TOOL_CALL_START>>>[\s\S]*$/,
 	HAS_LEGACY_MARKERS: /<<<(?:AGENTIC_TOOL_CALL_START|reasoning_content_start)>>>/
 } as const;
+
+export const FILE_GLOB_SEARCH_PICKERS_DEFAULT_SEARCH_DEPTH = 10;

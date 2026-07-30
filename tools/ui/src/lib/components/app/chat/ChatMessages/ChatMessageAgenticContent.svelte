@@ -41,7 +41,7 @@
 
 	let expandedStates: Record<number, boolean> = $state({});
 
-	const renderThinkingAsMarkdown = $derived(config().renderThinkingAsMarkdown as boolean);
+	const renderThinkingAsMarkdown = true;
 	const showThoughtInProgress = $derived(Boolean(config().showThoughtInProgress));
 	const alwaysShowToolCallContent = $derived(Boolean(config().alwaysShowToolCallContent));
 	const showMessageStats = $derived(Boolean(config().showMessageStats));
