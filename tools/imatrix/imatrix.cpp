@@ -7,6 +7,7 @@
 #include "nlohmann/json.hpp"
 #include "sampling.h"
 #include "speculative.h"
+#include "telemetry-record.h"
 
 #include <algorithm>
 #include <array>
@@ -2099,12 +2100,14 @@ static bool compute_imatrix_spec(
 
         // 4b. If telemetry is enabled, compute the verifier's softmax
         //     probability of each draft token and emit a JSONL record.
-        //     Two schemas:
-        //     - llama.dflash.acceptance.v1 (default): confidence[] is the
-        //       verifier's softmax probability of the drafter's pick.
-        //     - llama.spec_calib.v2 (--telemetry-topk > 0): adds
-        //       verifier_topk_*, drafter_topk_*, accepted_tokens, etc.
-        //       for distillation/rejection-sampling training.
+        //     Schemas:
+        //     - llama.spec_calib.v3 (default, unified): strict superset of
+        //       v1 + v2. Always includes confidence[] and the cheap v2
+        //       token arrays. Includes verifier_topk_*, drafter_topk_* when
+        //       --telemetry-topk > 0. v3 is the canonical schema.
+        //     - llama.dflash.acceptance.v1 (--telemetry-v1-compat adapter):
+        //       legacy 4-field minimal schema for existing consumers.
+        //       Adapter for one major version, then remove.
         //
         //     The verifier's per-position logits are in v_logits_ptrs
         //     (n_dft+1 entries, one per prefix [id_last] up through
@@ -2235,130 +2238,39 @@ static bool compute_imatrix_spec(
                 accepted_tokens.push_back(bonus);
             }
 
-            // Hand-build the JSONL record. We keep arrays parallel
-            // (tokens[] and probs[]) to keep the encoding compact; the
-            // training pipeline re-zips them per position.
-            std::string line;
-            if (topk > 0) {
-                line  = "{\"schema\":\"llama.spec_calib.v2\"";
-                line += ",\"seq_id\":0";
-                line += ",\"step_idx\":" + std::to_string(step);
-                line += ",\"prime_token\":" + std::to_string(id_last);
-                line += ",\"drafted\":" + std::to_string(n_dft);
-                line += ",\"accepted\":" + std::to_string(n_acc);
-                line += ",\"topk\":" + std::to_string(topk);
-
-                line += ",\"drafted_tokens\":[";
-                for (int i = 0; i < n_dft; ++i) {
-                    if (i > 0) line += ",";
-                    line += std::to_string(draft[i]);
-                }
-                line += "]";
-
-                line += ",\"accepted_tokens\":[";
-                for (size_t i = 0; i < accepted_tokens.size(); ++i) {
-                    if (i > 0) line += ",";
-                    line += std::to_string(accepted_tokens[i]);
-                }
-                line += "]";
-
-                line += ",\"verifier_argmax\":[";
-                for (int i = 0; i <= n_dft; ++i) {
-                    if (i > 0) line += ",";
-                    line += std::to_string(v_argmax_explicit[i]);
-                }
-                line += "]";
-
-                line += ",\"drafter_argmax\":[";
-                for (int i = 0; i <= n_dft; ++i) {
-                    if (i > 0) line += ",";
-                    line += std::to_string(d_argmax_explicit[i]);
-                }
-                line += "]";
-
-                // Verifier top-k: parallel arrays.
-                line += ",\"verifier_topk_tokens\":[";
-                for (int i = 0; i <= n_dft; ++i) {
-                    if (i > 0) line += ",";
-                    line += "[";
-                    for (size_t k = 0; k < v_topk_tokens[i].size(); ++k) {
-                        if (k > 0) line += ",";
-                        line += std::to_string(v_topk_tokens[i][k]);
-                    }
-                    line += "]";
-                }
-                line += "]";
-                line += ",\"verifier_topk_probs\":[";
-                for (int i = 0; i <= n_dft; ++i) {
-                    if (i > 0) line += ",";
-                    line += "[";
-                    for (size_t k = 0; k < v_topk_probs[i].size(); ++k) {
-                        if (k > 0) line += ",";
-                        char buf[64];
-                        std::snprintf(buf, sizeof(buf), "%.6g",
-                                      (double) v_topk_probs[i][k]);
-                        line += buf;
-                    }
-                    line += "]";
-                }
-                line += "]";
-
-                // Drafter top-k: parallel arrays.
-                line += ",\"drafter_topk_tokens\":[";
-                for (int i = 0; i <= n_dft; ++i) {
-                    if (i > 0) line += ",";
-                    line += "[";
-                    for (size_t k = 0; k < d_topk_tokens[i].size(); ++k) {
-                        if (k > 0) line += ",";
-                        line += std::to_string(d_topk_tokens[i][k]);
-                    }
-                    line += "]";
-                }
-                line += "]";
-                line += ",\"drafter_topk_probs\":[";
-                for (int i = 0; i <= n_dft; ++i) {
-                    if (i > 0) line += ",";
-                    line += "[";
-                    for (size_t k = 0; k < d_topk_probs[i].size(); ++k) {
-                        if (k > 0) line += ",";
-                        char buf[64];
-                        std::snprintf(buf, sizeof(buf), "%.6g",
-                                      (double) d_topk_probs[i][k]);
-                        line += buf;
-                    }
-                    line += "]";
-                }
-                line += "]";
-
-                // v1 back-compat: confidence = verifier softmax prob of
-                // each draft token (so existing rejection-sampling tools
-                // can consume v2 records too).
-                line += ",\"confidence\":[";
-                for (size_t i = 0; i < confidence.size(); ++i) {
-                    if (i > 0) line += ",";
-                    char buf[64];
-                    std::snprintf(buf, sizeof(buf), "%.8g",
-                                  (double) confidence[i]);
-                    line += buf;
-                }
-                line += "]";
-                line += "}\n";
-            } else {
-                // v1 schema (existing path, unchanged).
-                line  = "{\"schema\":\"llama.dflash.acceptance.v1\"";
-                line += ",\"seq_id\":0";
-                line += ",\"drafted\":" + std::to_string(n_dft);
-                line += ",\"accepted\":" + std::to_string(n_acc);
-                line += ",\"confidence\":[";
-                for (size_t i = 0; i < confidence.size(); ++i) {
-                    if (i > 0) line += ",";
-                    char buf[64];
-                    std::snprintf(buf, sizeof(buf), "%.8g",
-                                  (double) confidence[i]);
-                    line += buf;
-                }
-                line += "]}\n";
+            // Hand-build the JSONL record via the spec_calib helper. The
+            // shape is selected by `params.telemetry_v1_compat` (legacy
+            // adapter) and `topk` (whether to include top-k fields). The
+            // helper is the single source of truth for the schema name
+            // and the field set; see tools/imatrix/telemetry-record.h.
+            spec_calib::telemetry_record rec;
+            rec.seq_id      = 0;
+            rec.step_idx    = step;
+            rec.prime_token = id_last;
+            rec.drafted     = n_dft;
+            rec.accepted    = (int32_t) n_acc;
+            rec.confidence  = std::move(confidence);
+            rec.drafted_tokens.reserve(n_dft);
+            for (int i = 0; i < n_dft; ++i) {
+                rec.drafted_tokens.push_back(draft[i]);
             }
+            rec.accepted_tokens = std::move(accepted_tokens);
+            if (topk > 0) {
+                rec.verifier_argmax = std::move(v_argmax_explicit);
+                rec.drafter_argmax  = std::move(d_argmax_explicit);
+                rec.verifier_topk.resize(v_topk_tokens.size());
+                for (size_t i = 0; i < v_topk_tokens.size(); ++i) {
+                    rec.verifier_topk[i].tokens = std::move(v_topk_tokens[i]);
+                    rec.verifier_topk[i].probs  = std::move(v_topk_probs[i]);
+                }
+                rec.drafter_topk.resize(d_topk_tokens.size());
+                for (size_t i = 0; i < d_topk_tokens.size(); ++i) {
+                    rec.drafter_topk[i].tokens = std::move(d_topk_tokens[i]);
+                    rec.drafter_topk[i].probs  = std::move(d_topk_probs[i]);
+                }
+            }
+            const std::string line = spec_calib::build_telemetry_jsonl(
+                rec, topk, params.telemetry_v1_compat);
             if (std::fwrite(line.data(), 1, line.size(), telemetry_fp) != line.size()) {
                 LOG_WRN("%s: failed to write telemetry record at step %d\n",
                         __func__, step);

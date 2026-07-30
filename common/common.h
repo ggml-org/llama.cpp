@@ -466,7 +466,8 @@ struct common_params {
     int32_t n_chunks              =    -1; // max number of chunks to process (-1 = unlimited)
     int32_t n_spec_steps          =    64; // [imatrix] number of spec-decoding steps to roll forward when --model-draft is set (0 = until context limit)
     std::string telemetry_out;             // [imatrix] path to write per-step accept/reject JSONL when --model-draft is set
-    int32_t n_telemetry_topk   = 0;        // [imatrix] when > 0 with telemetry_out, emit v2 schema with verifier+drafter top-k distributions per draft position (0 = v1 only)
+    int32_t n_telemetry_topk   = 0;        // [imatrix] when > 0 with telemetry_out, emit spec_calib.v3 schema with verifier+drafter top-k distributions per draft position (0 = minimal record)
+    bool    telemetry_v1_compat = false;   // [imatrix] when true with telemetry_out, emit the legacy llama.dflash.acceptance.v1 schema instead of the unified v3 schema. Adapter for one major version, then remove.
     int32_t n_parallel            =     1; // number of parallel sequences to decode
     int32_t n_sequences           =     1; // number of sequences to decode
     int32_t n_outputs_max         =     0; // max outputs in a batch (0 = n_batch)

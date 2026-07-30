@@ -1666,6 +1666,19 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
     add_opt(common_arg(
+        {"--telemetry-v1-compat"},
+        string_format(
+            "[imatrix] when set with --telemetry-out, emit the legacy "
+            "llama.dflash.acceptance.v1 schema (seq_id, drafted, accepted, "
+            "confidence[]) instead of the unified llama.spec_calib.v3. "
+            "Adapter for one major version to give existing consumers time "
+            "to migrate. Default: %s.",
+            params.telemetry_v1_compat ? "true" : "false"),
+        [](common_params & params) {
+            params.telemetry_v1_compat = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    add_opt(common_arg(
         {"--spec-steps"}, "N",
         string_format(
             "[imatrix] number of spec-decoding steps to roll forward when --model-draft is set "
@@ -1699,6 +1712,19 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.n_telemetry_topk),
         [](common_params & params, int value) {
             params.n_telemetry_topk = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    add_opt(common_arg(
+        {"--telemetry-v1-compat"},
+        string_format(
+            "[imatrix] when set with --telemetry-out, emit the legacy "
+            "llama.dflash.acceptance.v1 schema (seq_id, drafted, accepted, "
+            "confidence[]) instead of the unified llama.spec_calib.v3. "
+            "Adapter for one major version to give existing consumers time "
+            "to migrate. Default: %s.",
+            params.telemetry_v1_compat ? "true" : "false"),
+        [](common_params & params) {
+            params.telemetry_v1_compat = true;
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
     add_opt(common_arg({ "-fa", "--flash-attn" }, "[on|off|auto]",

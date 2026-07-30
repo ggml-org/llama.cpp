@@ -79,8 +79,13 @@ setting `LLAMA_DFLASH_TELEMETRY` to an output path before starting llama.cpp.
 Each record contains the proposed block length, accepted prefix length, and
 per-position draft confidence. The stream is append-only and flushed after
 every verification, so it is suitable for long-running representative prompt
-sets and survives an interrupted run. Convert it into an AWQ and evolved
-Tile640 policy with:
+sets and survives an interrupted run. The default schema is
+`llama.spec_calib.v3` (a strict superset of the legacy v1 + v2 schemas; it
+always carries `confidence[]` and the cheap v2 token arrays, and includes
+the verifier/drafter top-k distributions when `--telemetry-topk` is set).
+The legacy `llama.dflash.acceptance.v1` schema is still available as a
+documented adapter for one major version via `--telemetry-v1-compat`.
+Convert the stream into an AWQ and evolved Tile640 policy with:
 
 ```bash
 python tools/ane-mtp/dflash-calibration-policy.py \

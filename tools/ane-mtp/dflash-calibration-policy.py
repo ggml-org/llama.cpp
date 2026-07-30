@@ -7,9 +7,13 @@ from pathlib import Path
 
 
 SCHEMA = "llama.speculative.calibration-policy.v1"
+# Accept both the legacy v1 schema and the unified v3 schema. v3 is a strict
+# superset of v1 + v2 and always carries `confidence[]`, so consumers that
+# only look at drafted/accepted/confidence work on both without change.
 EVENT_SCHEMAS = {
     "llama.dflash.acceptance.v1": "dflash",
-    "llama.mtp.acceptance.v1": "mtp",
+    "llama.spec_calib.v3":        "dflash",
+    "llama.mtp.acceptance.v1":    "mtp",
 }
 
 

@@ -16,9 +16,12 @@ that adds:
   `(ternary_threshold, outlier_fraction, awq_alpha, awq_clip)`, fitness is
   the round-trip relative Frobenius between the BF16 source and the
   dequantized reconstruction.
-- **Spec-decoding telemetry** — `llama.spec_calib.v2` JSONL with per-step
+- **Spec-decoding telemetry** — `llama.spec_calib.v3` JSONL with per-step
   verifier and drafter top-k distributions, used for drafter fine-tuning
-  via distillation / rejection sampling.
+  via distillation / rejection sampling. v3 is a strict superset of v1
+  (`llama.dflash.acceptance.v1`) and the legacy v2 schema; the legacy
+  v1 schema is still emitted as a documented adapter via
+  `--telemetry-v1-compat`.
 
 Tessera is a fork of llama.cpp, not a wrapper. The C++ changes live in the
 same files as llama.cpp. The Python quantizer lives in `tools/tessera/`,
@@ -34,7 +37,7 @@ same files as llama.cpp. The Python quantizer lives in `tools/tessera/`,
 | DFlash drafter (`models/dflash.cpp`) | **Production** | DSpark folded into DFlash per upstream PR #25173. |
 | DSpark markov head | **Production** | Loaded from `markov_w1`/`markov_w2`/`conf_proj` tensors. |
 | Spec hook in `llama-imatrix` | **Production** | `--model-draft`, `--telemetry-out`, `--telemetry-topk`, `--spec-steps`. |
-| V2 telemetry schema (`llama.spec_calib.v2`) | **Production** | Per-position verifier + drafter top-k. |
+| V3 telemetry schema (`llama.spec_calib.v3`) | **Production** | Per-position verifier + drafter top-k. Strict superset of v1 + v2. v1 available as documented adapter via `--telemetry-v1-compat`. |
 | ANE prefill (`common/ane-mtp.mm`) | **WIP** | Implementation present, full integration with the verifier's MTP context is not yet wired. `--no-embedded-mtp` flag bypasses the auto-trigger. |
 | dft. observer protocol (`llama-graph.cpp`) | **WIP** | String-prefix hack. See `docs/audit-2026-07-29.md`. To be replaced with proper per-context observer state. |
 | `dspark-gguf-patch/` | **Legacy** | Preprocessor for pre-PR-#25173 dspark drafters. Will be removed once the legacy converter is no longer in production. |
