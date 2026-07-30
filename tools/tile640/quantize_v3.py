@@ -2077,6 +2077,8 @@ def quantize_2d_septq(weights: np.ndarray, out_dim: int, in_dim: int,
                       calibration_activations: Optional[np.ndarray] = None,
                       septq_hessian_mode: str = "banded",
                       septq_hessian_bandwidth: int = 32,
+                      septq_importance_weight: str = "quant_error_h",
+                      septq_importance_lambda: float = 0.0,
                       ) -> Dict[str, np.ndarray]:
     """2D weight quantization using the SEPTQ recipe (KDD 2025).
 
@@ -2156,6 +2158,14 @@ def quantize_2d_septq(weights: np.ndarray, out_dim: int, in_dim: int,
             default of 32 is a conservative trade-off: small enough to be
             cheap (O(n * b^2) factorization) and large enough to capture
             most of the cross-column benefit on typical layer activations.
+        septq_importance_weight: importance score mode. ``"quant_error_h"``
+            (default) is the original ``(W - Q(W))^2 * h_diag``. The
+            other modes are designed for heavy-tailed weights where the
+            original score lets outliers dominate the mask and forces
+            them into {-1, 0, +1}, which destroys their full-precision
+            values. See the per-mode descriptions in the source.
+        septq_importance_lambda: weight on the ``1/(|W| + eps)`` term
+            in the ``hybrid`` importance mode. Ignored for other modes.
     """
     if not 0.0 < septq_ratio <= 1.0:
         raise ValueError(f"septq_ratio must be in (0, 1], got {septq_ratio}")
@@ -2172,6 +2182,18 @@ def quantize_2d_septq(weights: np.ndarray, out_dim: int, in_dim: int,
     if septq_hessian_bandwidth < 0:
         raise ValueError(
             f"septq_hessian_bandwidth must be >= 0, got {septq_hessian_bandwidth}"
+        )
+    if septq_importance_weight not in (
+        "quant_error_h", "inv_abs_w", "inv_cdf", "hybrid",
+    ):
+        raise ValueError(
+            f"septq_importance_weight must be one of "
+            f"'quant_error_h', 'inv_abs_w', 'inv_cdf', 'hybrid'; "
+            f"got {septq_importance_weight!r}"
+        )
+    if septq_importance_lambda < 0:
+        raise ValueError(
+            f"septq_importance_lambda must be >= 0, got {septq_importance_lambda}"
         )
     # Bandwidth > in_dim - 1 is the same as full Cholesky. Clamp here so
     # the inner helpers can assume 0 <= bandwidth < in_dim.
@@ -2212,9 +2234,63 @@ def quantize_2d_septq(weights: np.ndarray, out_dim: int, in_dim: int,
     ternary_init = np.where(keep_2d, sign_W, np.int8(0))
     quant_error_init = (W - ternary_init.astype(np.float32)) ** 2
 
-    # Step 2: per-element importance. Column-weighted squared quantization
-    # error. Elements with large error in important columns are prioritised.
-    importance_2d = quant_error_init * h_diag.reshape(1, in_dim)
+    # Step 2: per-element importance. The original score is
+    # ``(W - Q(W))^2 * h_diag`` which puts the largest values on the
+    # heavy-tail elements (large |W| -> large ternarization error
+    # because Q(W) is sign(W) for |W| > row_mean). On heavy-tailed
+    # weights this lets outliers dominate the mask and forces them
+    # into {-1, 0, +1}, which destroys their full-precision values.
+    # The weighted modes downweight outliers so the mask focuses on
+    # the bulk where ternarization actually helps the MSE.
+    base_importance_2d = quant_error_init * h_diag.reshape(1, in_dim)
+    if septq_importance_weight == "quant_error_h":
+        importance_2d = base_importance_2d
+    elif septq_importance_weight == "inv_abs_w":
+        # Divide by |W| (with a small eps for stability) to downweight
+        # large-|W| elements. The mask then focuses on the bulk where
+        # ternarization is most useful.
+        weight_2d = np.float32(1.0) / (abs_W + np.float32(1e-8))
+        importance_2d = base_importance_2d * weight_2d
+    elif septq_importance_weight == "inv_cdf":
+        # Use the empirical 1 - CDF(|W|) as the weight. The CDF is
+        # computed per row (matching the per-row ternarization rule).
+        # This is the most aggressive downweighting: elements in the
+        # top of the row's magnitude distribution get weight ~0, so
+        # the mask never picks them.
+        abs_W_2d = abs_W
+        # Per-row ranks via argsort; convert to a [0, 1] CDF value.
+        row_ranks = np.empty_like(abs_W_2d, dtype=np.float32)
+        for r in range(out_dim):
+            order = np.argsort(abs_W_2d[r], kind="stable")
+            row_ranks[r, order] = np.arange(in_dim, dtype=np.float32) / max(in_dim - 1, 1)
+        cdf_weight_2d = np.float32(1.0) - row_ranks
+        importance_2d = base_importance_2d * cdf_weight_2d
+    elif septq_importance_weight == "hybrid":
+        # Additive hybrid: original score plus a lambda-weighted
+        # 1/(|W| + eps) term. With lambda = 0 this is the original;
+        # larger lambda progressively downweights outliers. The
+        # 1/(|W| + eps) term is scaled by h_diag so both terms share
+        # the same activation weighting and the units are comparable.
+        inv_abs_2d = np.float32(1.0) / (abs_W + np.float32(1e-8))
+        # Scale lambda to the bulk of the base importance so the
+        # lambda = 1 setting produces a comparable contribution from
+        # both terms. The base importance at a typical element is
+        # roughly E[(W - Q(W))^2] * E[H[j,j]]; we approximate the
+        # scale with the median of the base importance, which is
+        # robust to outliers.
+        base_scale = float(np.median(base_importance_2d))
+        inv_scale = float(np.median(inv_abs_2d * h_diag.reshape(1, in_dim)))
+        if inv_scale > 0 and base_scale > 0:
+            normalized_lambda = (
+                np.float32(septq_importance_lambda) *
+                np.float32(base_scale / inv_scale)
+            )
+        else:
+            normalized_lambda = np.float32(0.0)
+        importance_2d = base_importance_2d + normalized_lambda * inv_abs_2d * h_diag.reshape(1, in_dim)
+    else:
+        # Unreachable; the constructor validates the choice.
+        raise AssertionError(f"unreachable importance mode {septq_importance_weight!r}")
     importance_flat = importance_2d.reshape(-1)
 
     # Step 3: static global mask. We only need the top-k elements by
@@ -2972,6 +3048,29 @@ def main():
             "--septq-hessian-mode banded."
         ),
     )
+    ap.add_argument(
+        "--septq-importance-weight",
+        choices=("quant_error_h", "inv_abs_w", "inv_cdf", "hybrid"),
+        default="quant_error_h",
+        help=(
+            "SEPTQ importance score. 'quant_error_h' (default, v1 behaviour) "
+            "uses (W - Q(W))^2 * h_diag. 'inv_abs_w' divides by (|W| + eps) "
+            "to downweight heavy-tail outliers so the mask focuses on the "
+            "bulk. 'inv_cdf' uses 1 - CDF_per_row(|W|) as the weight "
+            "(most aggressive). 'hybrid' adds lambda * h_diag / (|W| + eps) "
+            "to the original score; --septq-importance-lambda sets lambda. "
+            "Only used when --septq is set."
+        ),
+    )
+    ap.add_argument(
+        "--septq-importance-lambda",
+        type=float,
+        default=0.0,
+        help=(
+            "Lambda for the 'hybrid' importance mode (default 0 = original). "
+            "Only used when --septq and --septq-importance-weight hybrid."
+        ),
+    )
     args = ap.parse_args()
     calibration_policy = load_calibration_policy(args.calibration_policy)
     if args.hessian_trace_policy:
@@ -3320,6 +3419,8 @@ def main():
         writer.add_uint32("tessera.septq.iterations", int(args.septq_iterations))
         writer.add_string("tessera.septq.hessian_mode", str(args.septq_hessian_mode))
         writer.add_uint32("tessera.septq.hessian_bandwidth", int(args.septq_hessian_bandwidth))
+        writer.add_string("tessera.septq.importance_weight", str(args.septq_importance_weight))
+        writer.add_float32("tessera.septq.importance_lambda", float(args.septq_importance_lambda))
     writer.add_string("tessera.awq_search_target", args.awq_search_target)
     if args.calibration_activations:
         writer.add_string(
@@ -3516,6 +3617,8 @@ def main():
                     tensor_name=out_name,
                     septq_hessian_mode=args.septq_hessian_mode,
                     septq_hessian_bandwidth=args.septq_hessian_bandwidth,
+                    septq_importance_weight=args.septq_importance_weight,
+                    septq_importance_lambda=args.septq_importance_lambda,
                 )
             elif use_imatrix_mse:
                 # imatrix_mse range selection: per-row MSE grid search

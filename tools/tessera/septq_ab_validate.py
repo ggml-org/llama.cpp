@@ -376,6 +376,8 @@ class TensorResult:
     baseline_kwargs: Dict[str, Any] = field(default_factory=dict)
     septq_hessian_mode: str = "banded"
     septq_hessian_bandwidth: int = 32
+    septq_importance_weight: str = "quant_error_h"
+    septq_importance_lambda: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -390,6 +392,8 @@ class TensorResult:
             "baseline_kwargs": self.baseline_kwargs,
             "septq_hessian_mode": self.septq_hessian_mode,
             "septq_hessian_bandwidth": self.septq_hessian_bandwidth,
+            "septq_importance_weight": self.septq_importance_weight,
+            "septq_importance_lambda": self.septq_importance_lambda,
         }
 
 
@@ -403,6 +407,8 @@ def compare_tensor(
     septq_calibration_activations: Optional[np.ndarray] = None,
     septq_hessian_mode: str = "banded",
     septq_hessian_bandwidth: int = 32,
+    septq_importance_weight: str = "quant_error_h",
+    septq_importance_lambda: float = 0.0,
 ) -> TensorResult:
     """Run baseline and SEPTQ on one tensor and return the comparison.
 
@@ -455,6 +461,8 @@ def compare_tensor(
         septq_kwargs["calibration_activations"] = septq_calibration_activations
     septq_kwargs["septq_hessian_mode"] = septq_hessian_mode
     septq_kwargs["septq_hessian_bandwidth"] = septq_hessian_bandwidth
+    septq_kwargs["septq_importance_weight"] = septq_importance_weight
+    septq_kwargs["septq_importance_lambda"] = septq_importance_lambda
     _, septq_metrics, _ = quantize_with_metrics(
         septq_fn,
         weight,
@@ -489,6 +497,8 @@ def compare_tensor(
         baseline_kwargs={k: v for k, v in (baseline_kwargs or {}).items() if k != "__mode__"},
         septq_hessian_mode=septq_hessian_mode,
         septq_hessian_bandwidth=septq_hessian_bandwidth,
+        septq_importance_weight=septq_importance_weight,
+        septq_importance_lambda=septq_importance_lambda,
     )
 
 
@@ -699,6 +709,28 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         ),
     )
     ap.add_argument(
+        "--septq-importance-weight",
+        choices=("quant_error_h", "inv_abs_w", "inv_cdf", "hybrid"),
+        default="quant_error_h",
+        help=(
+            "SEPTQ importance score mode. 'quant_error_h' (default) is the "
+            "original (W - Q(W))^2 * h_diag. 'inv_abs_w' divides by (|W| + "
+            "eps) to downweight heavy-tail outliers. 'inv_cdf' uses "
+            "1 - per-row-CDF(|W|). 'hybrid' adds a lambda-weighted "
+            "h_diag/(|W| + eps) term; see --septq-importance-lambda."
+        ),
+    )
+    ap.add_argument(
+        "--septq-importance-lambda",
+        type=float,
+        default=0.0,
+        help=(
+            "Lambda for the 'hybrid' importance mode. Default 0.0 (== "
+            "'quant_error_h'). Only used when "
+            "--septq-importance-weight hybrid."
+        ),
+    )
+    ap.add_argument(
         "--output",
         type=Path,
         default=Path("/tmp/septq_ab_report.json"),
@@ -770,6 +802,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         "septq_iterations": args.septq_iterations,
         "septq_hessian_mode": args.septq_hessian_mode,
         "septq_hessian_bandwidth": args.septq_hessian_bandwidth,
+        "septq_importance_weight": args.septq_importance_weight,
+        "septq_importance_lambda": args.septq_importance_lambda,
         "baseline_mode": args.baseline,
         "baseline_policy": str(args.policy) if args.policy else None,
         "tessera_quantize_v3": str(TILE640_DIR / "quantize_v3.py"),
@@ -809,6 +843,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             septq_calibration_activations=calib,
             septq_hessian_mode=args.septq_hessian_mode,
             septq_hessian_bandwidth=args.septq_hessian_bandwidth,
+            septq_importance_weight=args.septq_importance_weight,
+            septq_importance_lambda=args.septq_importance_lambda,
         )
         results.append(result)
 
