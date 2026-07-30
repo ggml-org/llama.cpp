@@ -617,6 +617,7 @@ struct common_params {
     std::string lora_qat             = "none"; // none, q3_k, q4_k, q4_0, mxfp4, q6_k, q8_0
     std::string lr_scheduler         = "constant"; // constant, cosine
     int32_t warmup_steps             = 0;   // linear learning-rate warmup in logical training steps
+    float   warmup_init_ratio        = 0.1f; // initial warmup learning rate as a fraction of peak learning rate
     bool    train_on_prompt        = false; // include prompt tokens in training loss (default: response tokens only)
     bool    shuffle_dataset        = false; // shuffle dataset windows at the start of each epoch
 

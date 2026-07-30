@@ -67,7 +67,7 @@ Trains LoRA adapters on a quantized GGUF model.
   --train-file data/train.jsonl \
   --lora-rank 16 --lora-alpha 16 \
   -c 4096 -b 4096 -ub 512 \
-  --lr-scheduler cosine --warmup-steps 10 -lr-min 1e-6 \
+  --lr-scheduler cosine --warmup-steps 10 --warmup-init-ratio 0.1 -lr-min 1e-6 \
   --save-every 10 \
   --lora-out ~/adapter.gguf \
   --epochs 3 --seed 42
@@ -81,7 +81,7 @@ Trains LoRA adapters on a quantized GGUF model.
   --train-file data/train.jsonl \
   --lora-rank 16 --lora-alpha 16 \
   -ngl 13 -c 14336 -b 14336 -ub 1024 \
-  --lr-scheduler cosine --warmup-steps 10 -lr-min 1e-6 \
+  --lr-scheduler cosine --warmup-steps 10 --warmup-init-ratio 0.1 -lr-min 1e-6 \
   --save-every 8 \
   --lora-out ~/nemotron-lora.gguf \
   --epochs 3 --seed 42
@@ -113,6 +113,7 @@ Trains LoRA adapters on a quantized GGUF model.
 | `-lr` / `--learning-rate` | `1e-4` | AdamW learning rate |
 | `--lr-scheduler` | `constant` | Learning-rate schedule: `constant` or `cosine` |
 | `--warmup-steps` | `0` | Linear warmup over N logical training steps |
+| `--warmup-init-ratio` | `0.1` | Initial warmup LR as a fraction of peak LR; must be in `(0, 1]` |
 | `-lr-min` / `--learning-rate-min` | `-1` | Cosine floor; values below 0 use 0 |
 | `--seed` | `42` | Random seed for LoRA init |
 
@@ -121,8 +122,12 @@ one completed GRPO iteration. The recommended `-b == -c` configuration performs
 one optimizer update per SFT scheduler step. Micro-batches used for gradient
 accumulation do not advance the schedule. Checkpoints store the completed
 scheduler step, so warmup and cosine decay continue from the same position after
-resume. Use the same scheduler, warmup, base learning rate, and minimum
-learning rate flags when resuming.
+resume. Use the same scheduler, warmup steps, warmup init ratio, base learning
+rate, and minimum learning rate flags when resuming.
+
+During warmup, step 0 starts at `peak_lr * warmup_init_ratio`. Each subsequent
+logical step linearly interpolates toward peak LR using
+`progress = step / warmup_steps`. The ratio is ignored when warmup is disabled.
 
 ### Resume from a checkpoint
 

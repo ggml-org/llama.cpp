@@ -11,7 +11,7 @@
          --model model-q4_k_m.gguf \
          --train-file train.jsonl \
          --lora-rank 16 --lora-alpha 16 \
-         --lr-scheduler cosine --warmup-steps 10 \
+         --lr-scheduler cosine --warmup-steps 10 --warmup-init-ratio 0.1 \
          --lora-out adapter.gguf \
          --epochs 3 -c 4096 -b 4096 -ub 512
 */
@@ -137,6 +137,7 @@ struct qlora_lr_schedule {
     const lr_opt * lr;
     std::string    type;
     int64_t        warmup_steps;
+    float          warmup_init_ratio;
     int64_t        total_steps;
     int64_t        step;
     float          current_lr = 0.0f;
@@ -144,7 +145,9 @@ struct qlora_lr_schedule {
     float get_lr() const {
         const float lr_base = lr->lr0;
         if (step < warmup_steps) {
-            return lr_base * (float) (step + 1) / (float) warmup_steps;
+            const float lr_start = lr_base * warmup_init_ratio;
+            const float progress = (float) step / (float) warmup_steps;
+            return lr_start + (lr_base - lr_start) * progress;
         }
         if (type != "cosine" || total_steps <= warmup_steps) {
             return lr->get_lr();
@@ -1262,7 +1265,7 @@ static int run_grpo_mode(
         return 1;
     }
     qlora_lr_schedule schedule {
-        &params.lr, params.lr_scheduler, params.warmup_steps, n_steps, schedule_step
+        &params.lr, params.lr_scheduler, params.warmup_steps, params.warmup_init_ratio, n_steps, schedule_step
     };
 
     std::mt19937 rng(params.sampling.seed != LLAMA_DEFAULT_SEED
@@ -1294,8 +1297,8 @@ static int run_grpo_mode(
         LOG_INF("%s: resuming GRPO after step %d/%d; optimizer state starts fresh\n",
                 __func__, step, n_steps);
     }
-    LOG_INF("%s: lr scheduler=%s warmup_steps=%d total_steps=%d start_step=%ld lr=%.3g lr_min=%.3g\n",
-            __func__, params.lr_scheduler.c_str(), params.warmup_steps, n_steps,
+    LOG_INF("%s: lr scheduler=%s warmup_steps=%d warmup_init_ratio=%.3g total_steps=%d start_step=%ld lr=%.3g lr_min=%.3g\n",
+            __func__, params.lr_scheduler.c_str(), params.warmup_steps, (double) params.warmup_init_ratio, n_steps,
             (long) schedule.step, (double) params.lr.lr0, (double) std::max(0.0f, params.lr.lr_min));
 
     while (step < n_steps && !g_grpo_stop) {
@@ -1641,7 +1644,7 @@ int main(int argc, char ** argv) {
     if (!dataset) return 1;
 
     qlora_lr_schedule schedule {
-        &params.lr, params.lr_scheduler, params.warmup_steps, 0, 0
+        &params.lr, params.lr_scheduler, params.warmup_steps, params.warmup_init_ratio, 0, 0
     };
 
     // Initialize optimizer - our custom param filter restricts training to lora_a/b.
@@ -1793,8 +1796,9 @@ int main(int argc, char ** argv) {
     LOG_INF("%s: dataset: %ld windows × %d ubatches = %ld steps per epoch  (n_ctx=%d n_ubatch=%d stride=%d)\n",
             __func__, (long)total_windows, ubatch_per_ctx, (long)(idata_split * ubatch_per_ctx),
             n_ctx, n_ubatch, n_ctx / 2);
-    LOG_INF("%s: lr scheduler=%s warmup_steps=%d total_steps=%ld start_step=%ld lr=%.3g lr_min=%.3g\n",
-            __func__, params.lr_scheduler.c_str(), params.warmup_steps, (long) schedule.total_steps,
+    LOG_INF("%s: lr scheduler=%s warmup_steps=%d warmup_init_ratio=%.3g total_steps=%ld start_step=%ld lr=%.3g lr_min=%.3g\n",
+            __func__, params.lr_scheduler.c_str(), params.warmup_steps, (double) params.warmup_init_ratio,
+            (long) schedule.total_steps,
             (long) schedule.step, (double) params.lr.lr0, (double) std::max(0.0f, params.lr.lr_min));
     if (params.save_every > 0) {
         LOG_INF("%s: will save checkpoint every %d windows → %s.ckptN.gguf\n",

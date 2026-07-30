@@ -4408,6 +4408,17 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
     add_opt(common_arg(
+        {"--warmup-init-ratio"}, "RATIO",
+        "QLoRA initial warmup learning rate as a fraction of peak LR (default: 0.1)",
+        [](common_params & params, const std::string & value) {
+            const float ratio = std::stof(value);
+            if (!(ratio > 0.0f && ratio <= 1.0f)) {
+                throw std::invalid_argument("--warmup-init-ratio must be greater than 0 and at most 1");
+            }
+            params.warmup_init_ratio = ratio;
+        }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
         {"--train-on-prompt"},
         "compute loss on prompt tokens too, not just the response (default: response-only loss)",
         [](common_params & params) { params.train_on_prompt = true; }
