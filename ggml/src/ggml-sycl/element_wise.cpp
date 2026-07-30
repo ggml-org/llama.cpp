@@ -420,53 +420,24 @@ static void clamp(const T * x, T * dst, const float min, const float max, const 
     }
 }
 
-template<typename T>
-static void gated_op_fused_geglu(const T * x, const T * g, T * dst, const uint64_t k, const sycl::uint3 n_fd, const uint64_t o0, const uint64_t o1, const sycl::nd_item<1> &item_ct1) {
+template<typename T, typename F>
+static void unary_gated_op_kernel(
+        const T * x,
+        const T * g,
+        T * dst,
+        const uint64_t k,
+        const sycl::uint3 n_fd,
+        const uint64_t o0,
+        const uint64_t o1,
+        const sycl::nd_item<1> & item_ct1,
+        F func) {
+
+    // rows of n columns at strides o0 and o1: two halves of one fused tensor, or two tensors
     SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
         const sycl::uint2 rc = fast_div_modulo((uint32_t) i, n_fd);
         const int64_t j0 = rc.x() * o0 + rc.y();
         const int64_t j1 = o0 == o1 ? j0 : rc.x() * o1 + rc.y();
-        dst[i] = op_gelu(x[j0]) * g[j1];
-    }
-}
-
-template<typename T>
-static void gated_op_fused_reglu(const T * x, const T * g, T * dst, const uint64_t k, const sycl::uint3 n_fd, const uint64_t o0, const uint64_t o1, const sycl::nd_item<1> &item_ct1) {
-    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
-        const sycl::uint2 rc = fast_div_modulo((uint32_t) i, n_fd);
-        const int64_t j0 = rc.x() * o0 + rc.y();
-        const int64_t j1 = o0 == o1 ? j0 : rc.x() * o1 + rc.y();
-        dst[i] = op_relu(x[j0]) * g[j1];
-    }
-}
-
-template<typename T>
-static void gated_op_fused_swiglu(const T * x, const T * g, T * dst, const uint64_t k, const sycl::uint3 n_fd, const uint64_t o0, const uint64_t o1, const sycl::nd_item<1> &item_ct1) {
-    SYCL_GLOBAL_ID_LOOP(k, item_ct1)  {
-        const sycl::uint2 rc = fast_div_modulo((uint32_t) i, n_fd);
-        const int64_t j0 = rc.x() * o0 + rc.y();
-        const int64_t j1 = o0 == o1 ? j0 : rc.x() * o1 + rc.y();
-        dst[i] = op_silu(x[j0]) * g[j1];
-    }
-}
-
-template<typename T>
-static void gated_op_fused_geglu_erf(const T * x, const T * g, T * dst, const uint64_t k, const sycl::uint3 n_fd, const uint64_t o0, const uint64_t o1, const sycl::nd_item<1> &item_ct1) {
-    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
-        const sycl::uint2 rc = fast_div_modulo((uint32_t) i, n_fd);
-        const int64_t j0 = rc.x() * o0 + rc.y();
-        const int64_t j1 = o0 == o1 ? j0 : rc.x() * o1 + rc.y();
-        dst[i] = op_gelu_erf(x[j0]) * g[j1];
-    }
-}
-
-template<typename T>
-static void gated_op_fused_geglu_quick(const T * x, const T * g, T * dst, const uint64_t k, const sycl::uint3 n_fd, const uint64_t o0, const uint64_t o1, const sycl::nd_item<1> &item_ct1) {
-    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
-        const sycl::uint2 rc = fast_div_modulo((uint32_t) i, n_fd);
-        const int64_t j0 = rc.x() * o0 + rc.y();
-        const int64_t j1 = o0 == o1 ? j0 : rc.x() * o1 + rc.y();
-        dst[i] = op_gelu_quick(x[j0]) * g[j1];
+        dst[i] = func(x[j0]) * g[j1];
     }
 }
 
@@ -667,6 +638,26 @@ static inline void ggml_sycl_op_unary(
                         );
                     });
             }
+        });
+}
+
+template<typename F>
+static inline void ggml_sycl_op_unary_gated(
+        ggml_backend_sycl_context & ctx, ggml_tensor * dst, F func) {
+
+    dispatch_ggml_sycl_op_fused_glu(ctx, dst,
+        [func](const auto * x_ptr, const auto * g_ptr, auto * dst_ptr, uint64_t k, uint64_t n, uint64_t o0, uint64_t o1, queue_ptr main_stream) {
+
+            const uint32_t num_blocks = (uint32_t) ceil_div(k, SYCL_GLU_BLOCK_SIZE);
+            const sycl::nd_range<1> launch_range(num_blocks * sycl::range<1>(SYCL_GLU_BLOCK_SIZE),
+                                                 sycl::range<1>(SYCL_GLU_BLOCK_SIZE));
+
+            // launch-invariant divisor, computed once on the host
+            const sycl::uint3 n_fd = init_fastdiv_values((uint32_t) n);
+            main_stream->parallel_for(launch_range,
+                [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                    unary_gated_op_kernel(x_ptr, g_ptr, dst_ptr, k, n_fd, o0, o1, item_ct1, func);
+                });
         });
 }
 
@@ -967,42 +958,21 @@ static inline void ggml_sycl_op_acc(ggml_backend_sycl_context & ctx, ggml_tensor
 }
 
 static inline void ggml_sycl_op_geglu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    ggml_sycl_detail::dispatch_ggml_sycl_op_fused_glu(ctx, dst,
-        [](const auto* x_ptr, const auto* g_ptr, auto* dst_ptr, uint64_t k, uint64_t n, uint64_t o0, uint64_t o1, queue_ptr main_stream) {
-            const uint32_t num_blocks = ceil_div(k, SYCL_GELU_BLOCK_SIZE);
-            const sycl::uint3 n_fd = init_fastdiv_values((uint32_t) n);
-            main_stream->parallel_for(
-                    sycl::nd_range<1>((num_blocks * sycl::range<1>(SYCL_GELU_BLOCK_SIZE)),
-                    sycl::range<1>(SYCL_GELU_BLOCK_SIZE)), [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                gated_op_fused_geglu(x_ptr, g_ptr, dst_ptr, k, n_fd, o0, o1, item_ct1);
-            });
-        });
+    ggml_sycl_detail::ggml_sycl_op_unary_gated(ctx, dst, [](auto x) {
+        return op_gelu(x);
+    });
 }
 
 static inline void ggml_sycl_op_reglu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    ggml_sycl_detail::dispatch_ggml_sycl_op_fused_glu(ctx, dst,
-        [](const auto* x_ptr, const auto* g_ptr, auto* dst_ptr, uint64_t k, uint64_t n, uint64_t o0, uint64_t o1, queue_ptr main_stream) {
-            const uint32_t num_blocks = ceil_div((uint32_t)k, SYCL_RELU_BLOCK_SIZE); // Using RELU block size for reglu
-            const sycl::uint3 n_fd = init_fastdiv_values((uint32_t) n);
-            main_stream->parallel_for(
-                    sycl::nd_range<1>((num_blocks * sycl::range<1>(SYCL_RELU_BLOCK_SIZE)),
-                    sycl::range<1>(SYCL_RELU_BLOCK_SIZE)), [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                gated_op_fused_reglu(x_ptr, g_ptr, dst_ptr, k, n_fd, o0, o1, item_ct1);
-            });
-        });
+    ggml_sycl_detail::ggml_sycl_op_unary_gated(ctx, dst, [](auto x) {
+        return op_relu(x);
+    });
 }
 
 static inline void ggml_sycl_op_swiglu(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    ggml_sycl_detail::dispatch_ggml_sycl_op_fused_glu(ctx, dst,
-        [](const auto* x_ptr, const auto* g_ptr, auto* dst_ptr, uint64_t k, uint64_t n, uint64_t o0, uint64_t o1, queue_ptr main_stream) {
-            const uint32_t num_blocks = ceil_div((uint32_t)k, SYCL_SILU_BLOCK_SIZE); // Using SILU block size for swiglu
-            const sycl::uint3 n_fd = init_fastdiv_values((uint32_t) n);
-            main_stream->parallel_for(
-                    sycl::nd_range<1>((num_blocks * sycl::range<1>(SYCL_SILU_BLOCK_SIZE)),
-                    sycl::range<1>(SYCL_SILU_BLOCK_SIZE)), [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                gated_op_fused_swiglu(x_ptr, g_ptr, dst_ptr, k, n_fd, o0, o1, item_ct1);
-            });
-        });
+    ggml_sycl_detail::ggml_sycl_op_unary_gated(ctx, dst, [](auto x) {
+        return op_silu(x);
+    });
 }
 
 __dpct_inline__ float ggml_sycl_op_swiglu_oai_single(float x, float g, float alpha = 1.702f, float limit = 7.0f) {
@@ -1097,29 +1067,15 @@ void ggml_sycl_op_swiglu_oai(ggml_backend_sycl_context & ctx, ggml_tensor * dst)
 }
 
 static inline void ggml_sycl_op_geglu_erf(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    ggml_sycl_detail::dispatch_ggml_sycl_op_fused_glu(ctx, dst,
-        [](const auto* x_ptr, const auto* g_ptr, auto* dst_ptr, uint64_t k, uint64_t n, uint64_t o0, uint64_t o1, queue_ptr main_stream) {
-            const uint32_t num_blocks = ceil_div(k, SYCL_GELU_BLOCK_SIZE);
-            const sycl::uint3 n_fd = init_fastdiv_values((uint32_t) n);
-            main_stream->parallel_for(
-                    sycl::nd_range<1>((num_blocks * sycl::range<1>(SYCL_GELU_BLOCK_SIZE)),
-                    sycl::range<1>(SYCL_GELU_BLOCK_SIZE)), [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                gated_op_fused_geglu_erf(x_ptr, g_ptr, dst_ptr, k, n_fd, o0, o1, item_ct1);
-            });
-        });
+    ggml_sycl_detail::ggml_sycl_op_unary_gated(ctx, dst, [](auto x) {
+        return op_gelu_erf(x);
+    });
 }
 
 static inline void ggml_sycl_op_geglu_quick(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
-    ggml_sycl_detail::dispatch_ggml_sycl_op_fused_glu(ctx, dst,
-        [](const auto* x_ptr, const auto* g_ptr, auto* dst_ptr, uint64_t k, uint64_t n, uint64_t o0, uint64_t o1, queue_ptr main_stream) {
-            const uint32_t num_blocks = ceil_div(k, SYCL_GELU_BLOCK_SIZE);
-            const sycl::uint3 n_fd = init_fastdiv_values((uint32_t) n);
-            main_stream->parallel_for(
-                    sycl::nd_range<1>((num_blocks * sycl::range<1>(SYCL_GELU_BLOCK_SIZE)),
-                    sycl::range<1>(SYCL_GELU_BLOCK_SIZE)), [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                gated_op_fused_geglu_quick(x_ptr, g_ptr, dst_ptr, k, n_fd, o0, o1, item_ct1);
-            });
-        });
+    ggml_sycl_detail::ggml_sycl_op_unary_gated(ctx, dst, [](auto x) {
+        return op_gelu_quick(x);
+    });
 }
 
 
