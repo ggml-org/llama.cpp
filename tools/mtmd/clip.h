@@ -99,6 +99,13 @@ struct clip_encode_params {
     int32_t top_k = 50;
     float   top_p = 1.0f;
     std::vector<float> * out_audio = nullptr;
+    // past codes feeding the code2wav left-context window: flattened
+    // frames * 16, frame major, oldest first. May hold fewer frames than
+    // the window (the front is padded with code 0); only the newest
+    // frames are used. out_codes receives this frame's 16 codes so the
+    // caller can extend its history after each call.
+    const std::vector<int32_t> * ctx_codes = nullptr;
+    std::vector<int32_t> * out_codes = nullptr;
 };
 bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params);
 

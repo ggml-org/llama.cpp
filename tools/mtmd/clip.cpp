@@ -4734,6 +4734,29 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
                     std::vector<float> r = { dist(rng) };
                     set_input_f32(("inp_rand_" + std::to_string(g)).c_str(), r);
                 }
+
+                // code2wav left-context window: repack the caller's frame
+                // major history (oldest first) into the group major layout
+                // of inp_ctx_codes, front-padded with code 0
+                {
+                    ggml_tensor * t = get_inp_tensor("inp_ctx_codes");
+                    const int64_t T_ctx   = t->ne[0];
+                    const int64_t n_codes = t->ne[1];
+                    std::vector<int32_t> buf((size_t) (T_ctx * n_codes), 0);
+                    if (params->ctx_codes) {
+                        const auto &  hist     = *params->ctx_codes;
+                        const int64_t n_frames = (int64_t) hist.size() / n_codes;
+                        const int64_t n_use    = std::min(n_frames, T_ctx);
+                        const int64_t dst0     = T_ctx - n_use;   // front padding
+                        const int64_t src0     = n_frames - n_use; // newest frames
+                        for (int64_t f = 0; f < n_use; f++) {
+                            for (int64_t g = 0; g < n_codes; g++) {
+                                buf[(size_t) (g * T_ctx + dst0 + f)] = hist[(size_t) ((src0 + f) * n_codes + g)];
+                            }
+                        }
+                    }
+                    set_input_i32("inp_ctx_codes", buf);
+                }
             } break;
         case PROJECTOR_TYPE_HUNYUANVL:
             {
@@ -5179,6 +5202,16 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
 
     // for audio gen: also copy out the decoded PCM samples
     // auto-sized to whatever the graph produced (fixed per model, but not known up-front)
+    if (params->out_codes != nullptr) {
+        ggml_tensor * codes = ggml_graph_get_tensor(gf, "out_codes");
+        if (codes == nullptr) {
+            GGML_ABORT("out_codes requested but graph has no \"out_codes\" tensor");
+        }
+        auto & out_codes = *params->out_codes;
+        out_codes.resize(ggml_nelements(codes));
+        ggml_backend_tensor_get(codes, out_codes.data(), 0, ggml_nbytes(codes));
+    }
+
     if (params->out_audio != nullptr) {
         ggml_tensor * audio = ggml_graph_get_tensor(gf, "out_audio");
         if (audio == nullptr) {
