@@ -2,6 +2,7 @@
 
 #include "ggml-impl.h"
 #include "ggml-openvino-extra.h"
+#include "ggml-openvino-phase-tune.h"
 #include "ggml-openvino/ggml-decoder.h"
 #include "ggml.h"
 #include "openvino/frontend.h"
@@ -175,6 +176,9 @@ enum ggml_status ov_graph_compute_dynamic(ggml_cgraph * cgraph, std::shared_ptr<
     if (phase_split) {
         const auto * inp_pos = get_inp_pos_tensor(cgraph);
         is_prefill = get_is_prefill(inp_pos);
+        if (ggml_openvino_phase_tune_enabled() && !ggml_openvino_phase_tune_in_production()) {
+            return ov_graph_compute_phase_tune(cgraph, r_ctx);
+        }
         active_device = is_prefill ? ggml_openvino_get_prefill_device() : ggml_openvino_get_decode_device();
     }
 

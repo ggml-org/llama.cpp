@@ -48,6 +48,9 @@ void ggml_openvino_device_config::init() {
         "GGML_OPENVINO_DISABLE_CACHE",
         "GGML_OPENVINO_DISABLE_KV_SLICE",
         "GGML_OPENVINO_MANUAL_GQA_ATTN",
+        "GGML_OPENVINO_PHASE_TUNE",
+        "GGML_OPENVINO_PHASE_TUNE_DEVICES",
+        "GGML_OPENVINO_PHASE_TUNE_OUTPUT_DIR",
     };
 
     for (const char * const & env_var : env_var_names) {
@@ -75,7 +78,44 @@ void ggml_openvino_device_config::init() {
     decode_device  = resolve_device("GGML_OPENVINO_DECODE_DEVICE", device_name);
 
     const bool phase_split_env = ggml_openvino_getenv_int("GGML_OPENVINO_PHASE_SPLIT") != 0;
-    phase_split = phase_split_env || prefill_device != decode_device;
+    phase_tune                 = ggml_openvino_getenv_int("GGML_OPENVINO_PHASE_TUNE") != 0;
+
+    auto resolve_parsed_device = [&](std::string dev) -> std::string {
+        while (!dev.empty() && (dev.front() == ' ' || dev.front() == '\t')) {
+            dev.erase(dev.begin());
+        }
+        while (!dev.empty() && (dev.back() == ' ' || dev.back() == '\t')) {
+            dev.pop_back();
+        }
+        if (dev.empty()) {
+            return "CPU";
+        }
+        if (std::find(available_devices.begin(), available_devices.end(), dev) == available_devices.end()) {
+            GGML_LOG_WARN("OpenVINO phase tune: device %s not available, fallback CPU\n", dev.c_str());
+            return "CPU";
+        }
+        return dev;
+    };
+
+    if (phase_tune) {
+        const char * devs = ggml_openvino_getenv_str("GGML_OPENVINO_PHASE_TUNE_DEVICES", "CPU,GPU.0");
+        std::string s(devs);
+        const auto comma = s.find(',');
+        if (comma == std::string::npos) {
+            GGML_LOG_WARN("OpenVINO phase tune: GGML_OPENVINO_PHASE_TUNE_DEVICES must be dev0,dev1; using CPU,GPU.0\n");
+            phase_tune_device0 = resolve_parsed_device("CPU");
+            phase_tune_device1 = resolve_parsed_device("GPU.0");
+        } else {
+            phase_tune_device0 = resolve_parsed_device(s.substr(0, comma));
+            phase_tune_device1 = resolve_parsed_device(s.substr(comma + 1));
+        }
+        const char * out = ggml_openvino_getenv_str("GGML_OPENVINO_PHASE_TUNE_OUTPUT_DIR", "/tmp/ov_phase_tune");
+        phase_tune_output_dir = out;
+        GGML_LOG_INFO("OpenVINO phase tune: devices %s vs %s, output %s (stateless timing; use STATEFUL=0)\n",
+                      phase_tune_device0.c_str(), phase_tune_device1.c_str(), phase_tune_output_dir.c_str());
+    }
+
+    phase_split = phase_split_env || prefill_device != decode_device || phase_tune;
 
     if (phase_split) {
         // Host-visible weights/KV when CPU participates in prefill (see buffer_init_tensor).
@@ -120,7 +160,9 @@ void ggml_openvino_device_config::init() {
     // Initialize remote context with queue sharing for GPU
     const bool needs_gpu_remote = ggml_openvino_device_is_gpu(device_name) ||
                                   (phase_split && (ggml_openvino_device_is_gpu(prefill_device) ||
-                                                   ggml_openvino_device_is_gpu(decode_device)));
+                                                   ggml_openvino_device_is_gpu(decode_device))) ||
+                                  (phase_tune && (ggml_openvino_device_is_gpu(phase_tune_device0) ||
+                                                  ggml_openvino_device_is_gpu(phase_tune_device1)));
     if (needs_gpu_remote) {
         // Create OpenCL context and queue
         cl_int err;
@@ -211,6 +253,19 @@ bool ggml_openvino_phase_split_shared_kv() {
     const bool pp_gpu = ggml_openvino_device_is_gpu(cfg.prefill_device);
     const bool tg_gpu = ggml_openvino_device_is_gpu(cfg.decode_device);
     return pp_gpu != tg_gpu;
+}
+
+bool ggml_openvino_phase_tune_enabled() {
+    return ggml_openvino_get_device_config().phase_tune;
+}
+
+const std::string & ggml_openvino_get_phase_tune_device(int index) {
+    const auto & cfg = ggml_openvino_get_device_config();
+    return index == 0 ? cfg.phase_tune_device0 : cfg.phase_tune_device1;
+}
+
+const std::string & ggml_openvino_get_phase_tune_output_dir() {
+    return ggml_openvino_get_device_config().phase_tune_output_dir;
 }
 
 // Get the value of a GGML_OPENVINO_* env var as a string. Returns

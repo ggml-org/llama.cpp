@@ -72,6 +72,11 @@ struct ggml_openvino_device_config {
     std::string prefill_device;
     std::string decode_device;
 
+    bool phase_tune = false;
+    std::string phase_tune_device0;
+    std::string phase_tune_device1;
+    std::string phase_tune_output_dir;
+
     void init();
     ~ggml_openvino_device_config();
 };
@@ -86,6 +91,12 @@ const std::string & ggml_openvino_get_decode_device();
 
 // CPU on one phase and GPU on the other: KV in USM host memory (UMA, no copy at phase switch).
 bool ggml_openvino_phase_split_shared_kv();
+
+bool ggml_openvino_phase_tune_enabled();
+
+const std::string & ggml_openvino_get_phase_tune_device(int index);
+
+const std::string & ggml_openvino_get_phase_tune_output_dir();
 
 // Get the global device config singleton
 ggml_openvino_device_config & ggml_openvino_get_device_config();
