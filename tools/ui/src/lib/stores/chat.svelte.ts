@@ -1658,7 +1658,8 @@ class ChatStore {
 					generateConversationTitle(newContent, Boolean(config().titleGenerationUseFirstLine))
 				);
 			const messagesToRemove = conversationsStore.activeMessages.slice(messageIndex + 1);
-			for (const message of messagesToRemove) await DatabaseService.deleteMessage(message.id);
+			if (messagesToRemove.length > 0)
+				await DatabaseService.deleteMessageCascading(activeConv.id, messagesToRemove[0].id);
 			conversationsStore.sliceActiveMessages(messageIndex + 1);
 			conversationsStore.updateConversationTimestamp();
 			this.setChatLoading(activeConv.id, true);
@@ -1690,7 +1691,7 @@ class ChatStore {
 		const { index: messageIndex } = result;
 		try {
 			const messagesToRemove = conversationsStore.activeMessages.slice(messageIndex);
-			for (const message of messagesToRemove) await DatabaseService.deleteMessage(message.id);
+			await DatabaseService.deleteMessageCascading(activeConv.id, messagesToRemove[0].id);
 			conversationsStore.sliceActiveMessages(messageIndex);
 			conversationsStore.updateConversationTimestamp();
 			this.setChatLoading(activeConv.id, true);
@@ -2037,7 +2038,7 @@ class ChatStore {
 							timings
 						});
 
-						conversationsStore.updateConversationTimestamp();
+						conversationsStore.updateConversationTimestamp(msg.convId);
 
 						this.setChatLoading(msg.convId, false);
 						this.clearChatStreaming(msg.convId);
