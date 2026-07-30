@@ -95,6 +95,9 @@ void cpu_dump_dequant(
         tessera_debug::write_dequant_row(r, scratch + r * cols, cols);
     }
     tessera_debug::close_dequant_writer();
+    // Per-row outlier counts (|x| > threshold) are now sealed in the
+    // sidecar file's per-row strip. The L3 metric and the L5 IterQuant
+    // orchestrator consume this strip via tools/tessera/l3_outlier_report.py.
 
     std::free(scratch);
 }

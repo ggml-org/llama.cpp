@@ -138,6 +138,9 @@ void ggml_cuda_dump_dequant(ggml_backend_cuda_context & ctx, const ggml_tensor *
     // Sidecar write: header + one row per ne0 index, each row is ne1 floats
     // wide. Matches the convention in docs/runtime-aware-pipeline.md 1.2:
     // `open(name, ne0, ne1); for r in 0..ne0 write(r, scratch + r*ne1, ne1)`.
+    // Per-row outlier counts (|x| > threshold) are computed inside the
+    // writer against the F32 host buffer; the convention here is
+    // preserved: ne0 == rows, ne1 == cols, row r at offset r*ne1.
     tessera_debug::open_dequant_writer(src0->name, ne0, ne1);
     for (int64_t r = 0; r < ne0; r++) {
         tessera_debug::write_dequant_row(r, dst_h.data() + r * ne1, ne1);

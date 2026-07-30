@@ -96,4 +96,9 @@ void metal_dump_dequant(
         tessera_debug::write_dequant_row(r, host_buf.data() + r * cols, cols);
     }
     tessera_debug::close_dequant_writer();
+    // Per-row outlier counts (|x| > threshold) are sealed in the sidecar
+    // file's per-row strip. The CPU-side host_buf ref-dequant matches
+    // the Metal kernel's per-element dequant under the ULP tolerance,
+    // so counting on the host gives the L3 metric the same signal it
+    // would get from a GPU-side count.
 }
