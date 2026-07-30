@@ -21,6 +21,74 @@ the ANE via CoreML on iPhone.
    how the runtime will load the `.mlmodelc` and instrument it with
    IOReport.
 
+### Architect decisions on the 10 open questions (2026-07-30)
+
+The scoping agent surfaced 10 questions in section 9. The architect
+(2026-07-30) locked the following answers; the agent's leans in
+section 9 are superseded by the items below.
+
+**C1. Tessera dequant: CoreML custom op vs stock ops.** Locked:
+stock ops for v1, custom op as v2 gated on >5% dequant time.
+Custom op is private API (App Store risk). The 5% threshold is
+measured; if the regression is real, we revisit. The 2% tightening
+I floated in my prediction is NOT applied — the architect stays
+at 5%.
+
+**C2. `.mlmodelc` generation timing.** Locked: at quantize time
+(Mac), bundle the `.mlmodelc` in the `.app`. The 30-120s
+conversion is offline and reproducible; the iPhone user opens
+the app and the model is already there.
+
+**C3. IOReport channel stability across iOS versions.** Locked:
+research, surface findings, document fallback. ANE power in
+"Energy Model" is stable across iOS 15+; ANE activity in DVFS
+is more variable. Use power when activity is unavailable.
+
+**C4. Battery attribution granularity.** Locked: per-session for
+v1, per-token as v2. The hero metric is mWh/token over a 30-minute
+flight test; per-session is the demo number, per-token is
+research-grade (per-token rows land in the sidecar regardless;
+per-session aggregation is a query over the sidecar).
+
+**C5. `ggml-coreml` memory layout.** Locked: MMAP for the weight
+blobs, RAM for the activations. Standard Apple ML stack pattern.
+
+**C6. KV cache: full CoreML state API vs custom.** Locked: full
+state API (`MLState`). Public API as designed; custom is more
+code for no benefit. The Prism `coreml_state.rs` proves it works.
+
+**C7. Backend fallback (CoreML fail -> Metal).** Locked: yes,
+log the fallback. `--device metal` skips the attempt. The
+fallback is silent in production; the test harness enables verbose
+logging.
+
+**C8. Multimodal `.mlmodelc` shape: 3 per modality vs 1 with
+runtime act_scale.** Locked: **1 `.mlmodelc` with runtime act_scale
+for v1, 3 as a v2 packaging optimization if profiling shows the
+input switch is hot.** This is a PUSHBACK from the agent's lean
+(3 for v1, 1 for v2). Rationale:
+- 3 separate `.mlmodelc` for gemma 4 12b at 3-4 GB effective bits
+  is 9-12 GB bundled in the `.app` (most of an iPhone).
+- 3 cold-start loads when the user switches modalities mid-chat.
+- The architect's earlier "BOTH modality ID + per-modality
+  components" decision already makes the act_scale a runtime
+  choice; baking it in at convert time reverses that.
+- The Prism pattern is "one canonical reality." One `.mlmodelc`
+  is the honest expression.
+- The 3-package v2 is gated on profiling: if the runtime input
+  switch is hot, we generate 3 separate `.mlmodelc` files (one
+  per modality) and the iPhone app picks based on the user's
+  task. This is a packaging optimization, not a v1 requirement.
+
+**C9. Conversion tool: `coremlcompiler` CLI vs public
+`+compileModelAtURL:` API.** Locked: public API. App Store safe;
+testable; what Apple recommends for app-side compilation.
+
+**C10. Tessera config source: GGUF metadata vs sidecar JSON.**
+Locked: GGUF metadata is the primary source; sidecar JSON is
+an override for non-Tessera-aware tools. The conversion tool
+warns if they disagree.
+
 The conversion tool lives in `tools/quantize/tessera-to-coreml/` (new
 binary, alongside `llama-quantize`). The runtime lives in
 `ggml/src/ggml-coreml/` (new directory, alongside `ggml-cpu`,
@@ -1265,6 +1333,13 @@ reads from a public API the runtime exposes (the
 sample ring buffer), and Phase 4 depends on both.
 
 ## 9. Open design questions (with lean recommendations)
+
+The architect locked the answers to all 10 questions on 2026-07-30
+(see items C1-C10 in "Architect decisions on the 10 open questions"
+above). The agent's leans below are historical analysis; the
+architect's decisions supersede them. Note that the architect
+pushed back on C8 (3 `.mlmodelc` per modality became 1 with runtime
+act_scale for v1).
 
 | Q#  | Question                                                              | Lean                                              | Notes                                                                                                                  |
 |----:|-----------------------------------------------------------------------|---------------------------------------------------|------------------------------------------------------------------------------------------------------------------------|

@@ -12,6 +12,57 @@ Architect decisions (already locked, not revisited here):
 - 5k multi-modal calibration set must be license-clean (research AND
   commercial). Curated combination (no single set is sufficient).
 
+### Architect decisions on the 8 open questions (2026-07-30)
+
+The scoping agent surfaced 8 questions in section 10. The architect
+(2026-07-30) locked the following answers; the agent's leans in
+section 10 are superseded by the items below.
+
+**M1. Modality weights default (text / image / audio).** Locked:
+`0.5 / 0.3 / 0.2`. Text is primary; image and audio are weighted by
+their share of the curated 5k set (1.5k text / 2k image / 1.5k audio).
+The GA can evolve away from this seed; the seed sets the v1 bias.
+
+**M2. Missing `modality_scales` for one modality.** Locked: ERROR by
+default, with a `--tessera-missing-modality={error,fallback-text}`
+flag. Default is `error`; the runtime emits a clear remediation
+message ("this model was calibrated for text only; image/audio
+inference is not calibrated. Pass
+`--tessera-missing-modality=fallback-text` to use the text scale
+as a fallback, or re-calibrate the model with the multi-modal
+imatrix"). Silent fallback masks calibration bugs; the explicit
+failure path matches the libopenblas hard-fail precedent (see
+`c++-port-design.md` decision 5).
+
+**M3. Per-modality imatrix storage.** Locked: one file with
+`modality_breakdown`. Single SHA, single receipt. Separate files
+is a v2+ concern for parallel calibration runs.
+
+**M4. GA fitness modes.** Locked: support both. Default is
+all-modalities weighted; `--modality-filter {text,image,audio}`
+restricts to a single modality. The filter is an output-targeting
+flag, not a mode flag (consistent with the one-tool-one-mode
+pattern in `c++-port-design.md` decision 4).
+
+**M5. 5k set composition.** Locked: weighted 1.5k / 2k / 1.5k
+(text / image / audio). The image-heavy 2k is justified by
+PixelProse's CC BY 4.0 license uniformity; the audio 1.5k is
+LibriSpeech's natural subsample.
+
+**M6. Image preprocessing.** Locked: aspect-ratio preserving, both
+H and W divisible by 48, default 280-soft-token budget (~645k
+pixels). Larger budgets (560, 1120) are v2 ablation.
+
+**M7. Audio preprocessing.** Locked: 16 kHz, 640-sample frames
+(40 ms). Matches gemma 4 12b unified's audio path exactly;
+LibriSpeech is native 16 kHz, no resample.
+
+**M8. Per-modality AWQ alpha.** Locked: per-modality. Joint alpha
+is the text alpha (backward compat); per-modality alphas are in
+`modality_awq`. If `modality_awq` is missing for a modality, the
+runtime uses the joint alpha (the text alpha) for that modality
+(same fallback rule as M2's flag-controlled fallback).
+
 Target preprocessing for gemma 4 12b unified (Gemma 4 12B dev guide,
 HF Gemma4Unified docs):
 
@@ -875,6 +926,11 @@ unchanged.
   on text, so the bar is the same).
 
 ## 10. Open design questions (with lean recommendations)
+
+The architect locked the answers to all 8 questions on 2026-07-30
+(see items M1-M8 in "Architect decisions on the 8 open questions"
+above). The agent's leans below are historical analysis; the
+architect's decisions supersede them.
 
 1. **Modality weights default** (text / image / audio). Lean:
    `0.5 / 0.3 / 0.2`. Justification in Section 4.2.
