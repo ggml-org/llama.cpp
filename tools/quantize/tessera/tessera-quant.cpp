@@ -169,11 +169,12 @@ float ts_ternarize_with_acts(const float * weights, const float * act_scales,
         }
     }
 
-    double abs_sum = 0.0;
+    // float32 accumulation to match Python's np.float32.sum() bit-exactly
+    float abs_sum = 0.0f;
     for (int64_t i = 0; i < n; i++) {
-        abs_sum += (double)std::fabs(ws[i]);
+        abs_sum += std::fabs(ws[i]);
     }
-    float threshold = (n > 0) ? (float)(abs_sum / (double)n) : 0.0f;
+    float threshold = (n > 0) ? (abs_sum / (float)n) : 0.0f;
 
     for (int64_t i = 0; i < n; i++) {
         int8_t t = 0;

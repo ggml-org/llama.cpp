@@ -83,11 +83,12 @@ static void ts_peqat_ternarize(const float * W_s, float * W_q,
         const float * row = W_s + o * in_dim;
         float * out = W_q + o * in_dim;
 
-        double abs_sum = 0.0;
+        // float32 accumulation to match Python reference bit-exactly
+        float abs_sum = 0.0f;
         for (int64_t j = 0; j < in_dim; j++) {
-            abs_sum += (double)std::fabs(row[j]);
+            abs_sum += std::fabs(row[j]);
         }
-        float threshold = (in_dim > 0) ? (float)(abs_sum / (double)in_dim) : 0.0f;
+        float threshold = (in_dim > 0) ? (abs_sum / (float)in_dim) : 0.0f;
 
         double mag_sum = 0.0;
         int64_t nz = 0;

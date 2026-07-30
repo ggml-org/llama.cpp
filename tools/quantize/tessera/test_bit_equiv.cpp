@@ -16,44 +16,19 @@
 //       -o /tmp/test_bit_equiv && /tmp/test_bit_equiv
 //
 // ---------------------------------------------------------------------------
-// FINDINGS (observed, this worktree)
+// FINDINGS (updated after fixes)
 // ---------------------------------------------------------------------------
 //   packed       : PASS - 512 bytes (128 u32 words) byte-identical.
-//   page_scales  : FAIL - 8/8 bytes differ, first mismatch @ byte 0.
-//   lane_scales  : FAIL - 122/128 bytes differ, first mismatch @ byte 0.
+//   page_scales  : tested via ts_compute_scales (not ts_pack_tile640 placeholders).
+//   lane_scales  : tested via ts_compute_scales (not ts_pack_tile640 placeholders).
 //
-// Root cause is architectural, not an endianness or packing-order bug:
-//
-//   1. Packing (PASS). Both sides use the same wire format: base-3, 20 trits
-//      per u32 word, LSB-first, trit encoding {+1->1, -1->2, 0->0}, word
-//      index ((o*pages + p)*32 + l). Given an identical ternary input the
-//      packed words match exactly. (The ternary itself also matched here;
-//      see note 3.)
-//
-//   2. Scales (FAIL). ts_pack_tile640 does NOT fit scales. It emits
-//      placeholders: page_scales = f16(1.0) (0x3c00) for every page and
-//      lane_scales = 127 for any lane with a nonzero trit else 1 (see
-//      tessera-quant.cpp:245-275). The Python reference instead calls
-//      compute_scales, which fits the least-squares per-lane scale and an
-//      FP16 per-page scale. On this input Python produces page_scales
-//      {0x3f6d,0x3f28,0x3e58,0x3e96} (~1.86/1.79/1.59/1.65) and lane_scales
-//      in [70,127], so the two disagree by design. The apples-to-apples C++
-//      counterpart of compute_scales is ts_compute_scales
-//      (tessera-quant.cpp:196); this test deliberately compares against
-//      ts_pack_tile640 as specified, which is why scales diverge.
-//
-//   3. Ternary threshold precision (latent, did not flip any trit here).
-//      The Python threshold accumulates abs_sum in float32 (np.float32
-//      .sum()); the C++ threshold accumulates in double then casts
-//      (tessera-quant.cpp:172-176). The two thresholds can differ by ~1 ULP,
-//      which would flip any weight sitting exactly on the boundary. With 2560
-//      Gaussian samples no element landed in that band, so the ternary - and
-//      hence packed - matched. This is a determinism hazard for real models,
-//      not a cause of the scale FAIL above.
-//
-// Conclusion: the C++ packing is bit-exact; the C++ scale output from
-// ts_pack_tile640 is a placeholder and is not comparable to compute_scales.
-// Per-lane/page scale equivalence must be tested against ts_compute_scales.
+// History:
+//   - Original test compared ts_pack_tile640 placeholder scales against
+//     Python compute_scales -> FAIL by design. Fixed: now compares
+//     ts_compute_scales output (the real fitted scales).
+//   - Ternary threshold used double accumulation in C++ vs float32 in
+//     Python. Fixed: C++ now uses float32 accumulation to match Python
+//     bit-exactly (tessera-quant.cpp ts_ternarize_with_acts).
 // ---------------------------------------------------------------------------
 
 #include "tessera-quant.h"
@@ -129,7 +104,7 @@ int main(void) {
     std::vector<float> weights((size_t)n);
     std::memcpy(weights.data(), wbuf.data(), wbuf.size());
 
-    // 2. C++ ternarize (no AWQ, no clip) + pack
+    // 2. C++ ternarize (no AWQ, no clip) + pack + fit scales
     std::vector<int8_t> ternary((size_t)n, 0);
     ts_ternarize_with_acts(weights.data(), nullptr, 0.0f, 0.0f,
                            ternary.data(), out_dim, in_dim);
@@ -140,6 +115,13 @@ int main(void) {
     ts_pack_tile640(ternary.data(), packed.data(), pscale.data(), lscale.data(),
                     out_dim, in_dim);
 
+    // ts_pack_tile640 emits placeholder scales; the real scales come from
+    // ts_compute_scales (same as Python's compute_scales). Compare those.
+    std::vector<uint16_t> fitted_ps((size_t)(out_dim * pages), 0);
+    std::vector<int8_t>   fitted_ls((size_t)(out_dim * pages * 32), 0);
+    ts_compute_scales(weights.data(), ternary.data(),
+                      fitted_ps.data(), fitted_ls.data(), out_dim, in_dim);
+
     // 3. read the Python reference buffers
     std::vector<uint8_t> py_packed = read_file("/tmp/bit_equiv_py_packed.bin", packed_bytes);
     std::vector<uint8_t> py_page   = read_file("/tmp/bit_equiv_py_page_scales.bin", page_bytes);
@@ -149,16 +131,16 @@ int main(void) {
     }
 
     // 4. byte-by-byte compare
-    std::printf("bit-equivalence: C++ ts_pack_tile640 vs Python quantize_v3 (%lldx%lld)\n",
+    std::printf("bit-equivalence: C++ vs Python quantize_v3 (%lldx%lld)\n",
                 (long long)out_dim, (long long)in_dim);
     bool packed_ok = compare_bytes("packed",
                                    (const uint8_t *)packed.data(), py_packed.data(),
                                    packed_bytes, 10);
-    bool page_ok   = compare_bytes("page_scales",
-                                   (const uint8_t *)pscale.data(), py_page.data(),
+    bool page_ok   = compare_bytes("page_scales (ts_compute_scales)",
+                                   (const uint8_t *)fitted_ps.data(), py_page.data(),
                                    page_bytes, 10);
-    bool lane_ok   = compare_bytes("lane_scales",
-                                   (const uint8_t *)lscale.data(), py_lane.data(),
+    bool lane_ok   = compare_bytes("lane_scales (ts_compute_scales)",
+                                   (const uint8_t *)fitted_ls.data(), py_lane.data(),
                                    lane_bytes, 10);
 
     if (packed_ok && page_ok && lane_ok) {
