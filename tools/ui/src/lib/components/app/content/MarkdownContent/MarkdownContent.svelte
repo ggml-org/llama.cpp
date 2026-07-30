@@ -78,7 +78,6 @@
 	import { createAutoScrollController } from '$lib/hooks/use-auto-scroll.svelte';
 	import type { DatabaseMessageExtra } from '$lib/types/database';
 	import { config } from '$lib/stores/settings.svelte';
-	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
 
 	interface Props {
 		attachments?: DatabaseMessageExtra[];
@@ -108,6 +107,15 @@
 		return null;
 	});
 	const liveSvgHtml = $derived(streamingSvgCode !== null ? sanitizeSvg(streamingSvgCode) : '');
+
+	// Derived rather than called inline in the template so it only recomputes when
+	// the block actually changes. Auto-detection is disabled while streaming: it
+	// costs ~38ms a call and re-guesses the language on every chunk.
+	const streamingCodeHtml = $derived(
+		incompleteCodeBlock
+			? highlightCode(incompleteCodeBlock.code, incompleteCodeBlock.language || 'text', false)
+			: ''
+	);
 	let previewDialogOpen = $state(false);
 	let previewCode = $state('');
 	let previewLanguage = $state('text');
@@ -828,7 +836,7 @@
 		: ''}"
 >
 	{#each renderedBlocks as block (block.id)}
-		<div class="markdown-block" data-block-id={block.id} use:fadeInView={{ skipIfVisible: true }}>
+		<div class="markdown-block" data-block-id={block.id}>
 			{@html block.html}
 		</div>
 	{/each}
@@ -904,10 +912,7 @@
 				>
 					<pre class="streaming-code-pre"><code
 							class="hljs language-{incompleteCodeBlock.language || 'text'}"
-							>{@html highlightCode(
-								incompleteCodeBlock.code,
-								incompleteCodeBlock.language || 'text'
-							)}</code
+							>{@html streamingCodeHtml}</code
 						></pre>
 				</div>
 			</div>

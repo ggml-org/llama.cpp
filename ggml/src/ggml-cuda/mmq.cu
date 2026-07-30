@@ -296,6 +296,15 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
         return false;
     }
 
+    // MMQ tiles require at least 48 KiB per-block shared memory; fall back to BLAS otherwise.
+    {
+        const int    id    = ggml_cuda_get_device();
+        const size_t smpbo = ggml_cuda_info().devices[id].smpbo;
+        if (smpbo < 48 * 1024) {
+            return false;
+        }
+    }
+
     if (turing_mma_available(cc)) {
         return true;
     }

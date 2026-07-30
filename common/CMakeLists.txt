@@ -100,6 +100,10 @@ add_library(${TARGET}
     sampling.h
     speculative.cpp
     speculative.h
+    subproc.cpp
+    subproc.h
+    trie.cpp
+    trie.h
     unicode.cpp
     unicode.h
     jinja/lexer.cpp
@@ -124,6 +128,10 @@ set_target_properties(${TARGET} PROPERTIES
 
 target_include_directories(${TARGET} PUBLIC . ../vendor)
 target_compile_features   (${TARGET} PUBLIC cxx_std_17)
+
+if (LLAMA_SUBPROCESS)
+    target_compile_definitions(${TARGET} PUBLIC LLAMA_SUBPROCESS)
+endif()
 
 if (BUILD_SHARED_LIBS)
     set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
