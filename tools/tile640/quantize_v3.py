@@ -2919,8 +2919,11 @@ def main():
             "standard tessera flow. SEPTQ computes a static global importance "
             "mask from a Hessian-based criterion, then quantizes only the "
             "top-k percent elements; the rest are kept at full precision. "
-            "The diagonal-only approximation of the Hessian inverse is used. "
-            "Requires --imatrix. See --septq-ratio."
+            "See --septq-hessian-mode for the diagonal / banded choice and "
+            "--septq-ratio for the quantize fraction. Requires --imatrix for "
+            "the Hessian-diagonal importance score; --septq-hessian-mode "
+            "banded additionally requires full calibration activations "
+            "(currently only the synthetic / A/B harness path supplies them)."
         ),
     )
     ap.add_argument(
@@ -2942,6 +2945,31 @@ def main():
             "at the first iteration (static global mask per the paper); "
             "subsequent passes re-ternarize with the same mask. Default 1. "
             "Only used when --septq is set."
+        ),
+    )
+    ap.add_argument(
+        "--septq-hessian-mode",
+        choices=("diagonal", "banded"),
+        default="banded",
+        help=(
+            "SEPTQ Hessian inverse mode. 'diagonal' (original behaviour) uses "
+            "act_scales[j]^2 as the diagonal of H and skips the cross-column "
+            "update. 'banded' (default) uses the full H = X^T X / n from the "
+            "calibration activations and applies a banded GPTQ-style update "
+            "with bandwidth --septq-hessian-bandwidth. The main quantize "
+            "script does not have the raw calibration activations and "
+            "silently falls back to 'diagonal'; the A/B harness can use the "
+            "banded mode when synthetic activations are available."
+        ),
+    )
+    ap.add_argument(
+        "--septq-hessian-bandwidth",
+        type=int,
+        default=32,
+        help=(
+            "Bandwidth of the banded Cholesky used by the SEPTQ cross-column "
+            "update. Default 32. Only used when --septq and "
+            "--septq-hessian-mode banded."
         ),
     )
     args = ap.parse_args()
@@ -3290,6 +3318,8 @@ def main():
         writer.add_string("tessera.range_selection", "septq")
         writer.add_float32("tessera.septq.ratio", float(args.septq_ratio))
         writer.add_uint32("tessera.septq.iterations", int(args.septq_iterations))
+        writer.add_string("tessera.septq.hessian_mode", str(args.septq_hessian_mode))
+        writer.add_uint32("tessera.septq.hessian_bandwidth", int(args.septq_hessian_bandwidth))
     writer.add_string("tessera.awq_search_target", args.awq_search_target)
     if args.calibration_activations:
         writer.add_string(
@@ -3484,6 +3514,8 @@ def main():
                     septq_iterations=args.septq_iterations,
                     ternary_threshold=policy_threshold,
                     tensor_name=out_name,
+                    septq_hessian_mode=args.septq_hessian_mode,
+                    septq_hessian_bandwidth=args.septq_hessian_bandwidth,
                 )
             elif use_imatrix_mse:
                 # imatrix_mse range selection: per-row MSE grid search

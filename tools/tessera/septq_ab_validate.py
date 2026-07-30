@@ -303,6 +303,63 @@ def quantize_with_metrics(
     return q, metrics, wall_time_ms
 
 
+def load_calibration_policy_for_harness(path: Path) -> dict:
+    """Load a calibration policy JSON for the A/B harness.
+
+    Accepts the ``llama.speculative.calibration-policy.v1`` schema produced
+    by awq-evolve. The policy is a plain dict; the harness passes it to
+    ``quantize_v3.tensor_policy`` to resolve per-tensor parameters.
+    """
+    with open(path, "r", encoding="utf-8") as f:
+        policy = json.load(f)
+    schema = policy.get("schema", "")
+    if schema and schema not in {
+        "llama.speculative.calibration-policy.v1",
+        # Older names kept for backward compat with bundles produced before
+        # the policy schema was finalised.
+        "llama.tessera.calibration-policy.v1",
+    }:
+        raise ValueError(
+            f"{path}: unsupported policy schema {schema!r}"
+        )
+    return policy
+
+
+def resolve_baseline_kwargs(
+    policy: Optional[dict],
+    tensor_name: str,
+    default_fraction: float = 0.005,
+    default_alpha: Optional[float] = 0.0,
+) -> Dict[str, Any]:
+    """Resolve per-tensor baseline kwargs from a calibration policy.
+
+    For the ``evolved`` baseline the policy's outlier_fraction / awq_alpha /
+    awq_clip / ternary_threshold override the RTN defaults. For the ``rtn``
+    baseline (policy is None) the defaults are returned unchanged.
+    """
+    if policy is None:
+        return {
+            "outlier_frac": default_fraction,
+            "awq_alpha": default_alpha,
+            "awq_clip": 1.0,
+            "ternary_threshold": 1.0,
+        }
+    # Lazy import: quantize_v3 has heavy import side effects (gguf, mlx, etc.)
+    # and is normally loaded in main(). We import it here to keep the helper
+    # self-contained for unit testing.
+    import importlib
+    qv3 = importlib.import_module("quantize_v3")
+    fraction, alpha, clip, _exact, threshold = qv3.tensor_policy(
+        policy, tensor_name, default_fraction, default_alpha
+    )
+    return {
+        "outlier_frac": float(fraction),
+        "awq_alpha": alpha,
+        "awq_clip": float(clip),
+        "ternary_threshold": float(threshold),
+    }
+
+
 # ---------------------------------------------------------------------------
 # A/B comparison
 # ---------------------------------------------------------------------------
@@ -315,6 +372,10 @@ class TensorResult:
     septq: TensorMetrics
     winner: str  # "septq", "baseline", or "tie"
     mse_improvement_pct: float  # positive = SEPTQ better
+    baseline_mode: str = "rtn"  # "rtn" or "evolved"
+    baseline_kwargs: Dict[str, Any] = field(default_factory=dict)
+    septq_hessian_mode: str = "banded"
+    septq_hessian_bandwidth: int = 32
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -325,6 +386,10 @@ class TensorResult:
             "septq": self.septq.to_dict(),
             "winner": self.winner,
             "mse_improvement_pct": self.mse_improvement_pct,
+            "baseline_mode": self.baseline_mode,
+            "baseline_kwargs": self.baseline_kwargs,
+            "septq_hessian_mode": self.septq_hessian_mode,
+            "septq_hessian_bandwidth": self.septq_hessian_bandwidth,
         }
 
 
@@ -334,39 +399,69 @@ def compare_tensor(
     septq_fn,
     septq_ratio: float,
     septq_iterations: int,
+    baseline_kwargs: Optional[Dict[str, Any]] = None,
+    septq_calibration_activations: Optional[np.ndarray] = None,
+    septq_hessian_mode: str = "banded",
+    septq_hessian_bandwidth: int = 32,
 ) -> TensorResult:
-    """Run baseline and SEPTQ on one tensor and return the comparison."""
+    """Run baseline and SEPTQ on one tensor and return the comparison.
+
+    ``baseline_kwargs`` is a dict of kwargs passed to the baseline quantize
+    function (outlier_frac, awq_alpha, awq_clip, ternary_threshold). When
+    None, RTN defaults are used (outlier_frac=0.005, no AWQ, ternary
+    threshold 1.0). When supplied, the values come from the calibration
+    policy (evolved baseline).
+
+    ``septq_calibration_activations`` is optional (n_samples, in_dim)
+    calibration activations. When present and ``septq_hessian_mode`` is
+    ``"banded"``, SEPTQ uses the full H = X^T X / n for the cross-column
+    update. When absent the diagonal H proxy is used.
+    """
     weight = sample.weight
     out_dim, in_dim = weight.shape
     act_scales = sample.act_scales
 
-    # Baseline: standard tessera 2D path with no AWQ. outlier_frac=0.005 is
-    # the production default and is a fair RTN-style baseline. No
-    # imatrix-mse and no SEPTQ, so this is the "vanilla" tessera flow.
+    if baseline_kwargs is None:
+        baseline_kwargs = {
+            "outlier_frac": 0.005,
+            "awq_alpha": 0.0,
+            "awq_clip": 1.0,
+            "ternary_threshold": 1.0,
+        }
+    # The harness tags the dict with a __mode__ key for reporting; the
+    # actual quantize function does not accept it.
+    quantize_kwargs = {k: v for k, v in baseline_kwargs.items() if not k.startswith("__")}
+
+    # Baseline: standard tessera 2D path. Default kwargs are RTN (no AWQ,
+    # no imatrix-mse); evolved baseline overrides via the policy.
     _, baseline_metrics, _ = quantize_with_metrics(
         baseline_fn,
         weight,
         out_dim,
         in_dim,
         act_scales,
-        outlier_frac=0.005,
-        awq_alpha=0.0,
-        awq_clip=1.0,
         tensor_name=sample.name,
-        ternary_threshold=1.0,
+        **quantize_kwargs,
     )
 
-    # SEPTQ: the new --septq mode.
+    # SEPTQ: the new --septq mode. Pass the calibration activations (if
+    # available) and the hessian mode so the banded mode can be used.
+    septq_kwargs: Dict[str, Any] = {
+        "septq_ratio": septq_ratio,
+        "septq_iterations": septq_iterations,
+        "tensor_name": sample.name,
+    }
+    if septq_calibration_activations is not None:
+        septq_kwargs["calibration_activations"] = septq_calibration_activations
+    septq_kwargs["septq_hessian_mode"] = septq_hessian_mode
+    septq_kwargs["septq_hessian_bandwidth"] = septq_hessian_bandwidth
     _, septq_metrics, _ = quantize_with_metrics(
         septq_fn,
         weight,
         out_dim,
         in_dim,
         act_scales,
-        septq_ratio=septq_ratio,
-        septq_iterations=septq_iterations,
-        ternary_threshold=1.0,
-        tensor_name=sample.name,
+        **septq_kwargs,
     )
 
     # Winner: lower MSE wins. Tie if equal within 1e-9.
@@ -390,6 +485,10 @@ def compare_tensor(
         septq=septq_metrics,
         winner=winner,
         mse_improvement_pct=float(improvement),
+        baseline_mode=baseline_kwargs.get("__mode__", "rtn") if isinstance(baseline_kwargs, dict) else "rtn",
+        baseline_kwargs={k: v for k, v in (baseline_kwargs or {}).items() if k != "__mode__"},
+        septq_hessian_mode=septq_hessian_mode,
+        septq_hessian_bandwidth=septq_hessian_bandwidth,
     )
 
 
@@ -555,6 +654,51 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="Number of column-by-column passes for SEPTQ (default 1).",
     )
     ap.add_argument(
+        "--septq-hessian-mode",
+        choices=("diagonal", "banded"),
+        default="banded",
+        help=(
+            "SEPTQ Hessian mode. 'banded' (default) uses the full H = X^T X / n "
+            "from calibration activations and applies the banded Cholesky "
+            "cross-column update. 'diagonal' uses H[j,j] = act_scales[j]^2 as "
+            "the Hessian diagonal proxy and skips the cross-column update."
+        ),
+    )
+    ap.add_argument(
+        "--septq-hessian-bandwidth",
+        type=int,
+        default=32,
+        help=(
+            "Bandwidth of the banded Cholesky used by the SEPTQ cross-column "
+            "update (default 32). Larger values capture more off-diagonal "
+            "structure at higher Cholesky cost. Only used when "
+            "--septq-hessian-mode banded and calibration activations are "
+            "available."
+        ),
+    )
+    ap.add_argument(
+        "--baseline",
+        choices=("rtn", "evolved"),
+        default="rtn",
+        help=(
+            "Baseline quantize path. 'rtn' (default) uses the standard tessera "
+            "RTN with no AWQ and no imatrix-mse. 'evolved' uses a calibration "
+            "policy produced by awq-evolve.py to set per-tensor outlier_fraction, "
+            "awq_alpha, awq_clip, and ternary_threshold. Requires --policy."
+        ),
+    )
+    ap.add_argument(
+        "--policy",
+        type=Path,
+        default=None,
+        help=(
+            "Path to a calibration policy JSON (schema "
+            "llama.speculative.calibration-policy.v1). Used as the baseline "
+            "when --baseline evolved is selected. The policy is also used to "
+            "look up per-tensor ternary_threshold for SEPTQ."
+        ),
+    )
+    ap.add_argument(
         "--output",
         type=Path,
         default=Path("/tmp/septq_ab_report.json"),
@@ -577,6 +721,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.bundle and args.synthetic:
         print("error: --bundle and --synthetic are mutually exclusive", file=sys.stderr)
         return 2
+    if args.baseline == "evolved" and args.policy is None:
+        print("error: --baseline evolved requires --policy", file=sys.stderr)
+        return 2
 
     # Import the quantize functions lazily so the harness can show --help
     # without gguf being installed.
@@ -589,13 +736,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         "quantize_v3", str(TILE640_DIR / "quantize_v3.py")
     )
     qmod = importlib.util.module_from_spec(spec)
+    sys.modules["quantize_v3"] = qmod
     spec.loader.exec_module(qmod)
     baseline_fn = qmod.quantize_2d
     septq_fn = qmod.quantize_2d_septq
 
+    # Load the calibration policy if --baseline evolved.
+    policy: Optional[dict] = None
+    if args.policy is not None:
+        policy = load_calibration_policy_for_harness(args.policy)
+
     # Load data.
     if args.synthetic:
-        sample, _calib = synthetic_sample()
+        sample, calib = synthetic_sample()
         samples = [sample]
         data_source = "synthetic-4096x4096"
     else:
@@ -606,11 +759,19 @@ def main(argv: Optional[List[str]] = None) -> int:
         else:
             samples = [load_bundle(bundle_path)]
             data_source = f"bundle:{bundle_path}"
+        # Bundles (.npz) do not carry the raw calibration activations; only
+        # the diagonal imatrix (in_sum2) is stored. The banded SEPTQ mode
+        # is therefore unavailable and the harness falls back to diagonal.
+        calib = None
 
     config = {
         "data_source": data_source,
         "septq_ratio": args.septq_ratio,
         "septq_iterations": args.septq_iterations,
+        "septq_hessian_mode": args.septq_hessian_mode,
+        "septq_hessian_bandwidth": args.septq_hessian_bandwidth,
+        "baseline_mode": args.baseline,
+        "baseline_policy": str(args.policy) if args.policy else None,
         "tessera_quantize_v3": str(TILE640_DIR / "quantize_v3.py"),
     }
 
@@ -621,12 +782,33 @@ def main(argv: Optional[List[str]] = None) -> int:
             f"  evaluating {sample.name} ({out_dim}x{in_dim})...",
             file=sys.stderr,
         )
+        # Resolve the per-tensor baseline kwargs from the policy (or RTN
+        # defaults). The policy is a single source of truth for both the
+        # baseline AWQ knobs and the SEPTQ ternary_threshold.
+        if policy is not None:
+            baseline_kwargs = resolve_baseline_kwargs(
+                policy, sample.name,
+                default_fraction=0.005, default_alpha=0.0,
+            )
+            baseline_kwargs["__mode__"] = "evolved"
+        else:
+            baseline_kwargs = {
+                "__mode__": "rtn",
+                "outlier_frac": 0.005,
+                "awq_alpha": 0.0,
+                "awq_clip": 1.0,
+                "ternary_threshold": 1.0,
+            }
         result = compare_tensor(
             sample,
             baseline_fn,
             septq_fn,
             args.septq_ratio,
             args.septq_iterations,
+            baseline_kwargs=baseline_kwargs,
+            septq_calibration_activations=calib,
+            septq_hessian_mode=args.septq_hessian_mode,
+            septq_hessian_bandwidth=args.septq_hessian_bandwidth,
         )
         results.append(result)
 
