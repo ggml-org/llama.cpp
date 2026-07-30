@@ -2225,6 +2225,118 @@ def load_calibration_policy(path: Optional[str]) -> Optional[dict]:
     return policy
 
 
+HESSIAN_TRACE_SCHEMA = "llama.tessera.hessian-trace-policy.v1"
+
+
+def load_hessian_trace_policy(path: Optional[str]) -> Optional[dict]:
+    """Load an L3 E5 hessian-trace policy produced by l3_hessian_trace.py.
+
+    The policy inherits the speculative calibration-policy parent schema
+    so the same root-schema check as ``load_calibration_policy`` applies.
+    Returns None when ``path`` is empty.
+    """
+    if not path:
+        return None
+    with open(path, "r", encoding="utf-8") as source:
+        policy = json.load(source)
+    if policy.get("schema") not in {
+        "llama.dflash.calibration-policy.v1",
+        "llama.speculative.calibration-policy.v1",
+    }:
+        raise ValueError(f"{path}: unsupported calibration policy schema")
+    hessian = policy.get("hessian_trace")
+    if not isinstance(hessian, dict):
+        raise ValueError(
+            f"{path}: missing hessian_trace sub-policy (expected schema {HESSIAN_TRACE_SCHEMA!r})"
+        )
+    if hessian.get("schema") != HESSIAN_TRACE_SCHEMA:
+        raise ValueError(
+            f"{path}: hessian_trace.schema must be {HESSIAN_TRACE_SCHEMA!r}, "
+            f"got {hessian.get('schema')!r}"
+        )
+    return policy
+
+
+def merge_hessian_trace_into_policy(
+    calibration_policy: Optional[dict], trace_policy: Optional[dict]
+) -> Optional[dict]:
+    """Merge the per-tensor trace values into the in-memory calibration policy.
+
+    The merge is additive: each tensor entry under
+    ``trace_policy['hessian_trace']['tensors']`` adds a
+    ``hessian_trace`` / ``hessian_trace_avg`` /
+    ``hessian_trace_per_tile`` triplet to the corresponding tensor_family
+    in the calibration policy. New tensor families are created when no
+    existing entry matches the tensor name (substring match by default,
+    exact match when ``exact`` is set). The merge keeps the parent
+    speculative-calibration schema intact; downstream consumers
+    (the L5 orchestrator, the quantizer's sensitivity scorer) can then
+    read the trace values as a first-class field on each tensor.
+
+    Returns the calibration policy (mutated in place) or None when no
+    calibration policy is supplied. The trace-only path (no calibration
+    policy) writes the trace policy back as-is so the standalone tool
+    can drive the consumer side too.
+    """
+    if trace_policy is None:
+        return calibration_policy
+    hessian = trace_policy.get("hessian_trace", {})
+    records = hessian.get("tensors", [])
+    if calibration_policy is None:
+        # No parent calibration policy: emit the trace policy verbatim
+        # so the caller still gets a consumable document.
+        return trace_policy
+    families = calibration_policy.get("tensor_families", {})
+    # Pre-compute the matching tensor name once per family for speed.
+    matched_keys: set[str] = set()
+    for record in records:
+        name = record.get("name")
+        if not name:
+            continue
+        per_tile = record.get("hessian_trace_per_tile", [])
+        for key, entry in families.items():
+            matches = entry.get("match", [])
+            if not matches:
+                continue
+            exact = bool(entry.get("exact", False))
+            ok = (
+                name in matches
+                if exact
+                else any(fragment in name for fragment in matches)
+            )
+            if not ok:
+                continue
+            entry["hessian_trace"] = record.get("hessian_trace")
+            entry["hessian_trace_avg"] = record.get("hessian_trace_avg")
+            entry["hessian_trace_per_tile"] = list(per_tile)
+            entry["hessian_trace_n_tiles"] = record.get("n_tiles")
+            entry["hessian_trace_method"] = record.get("method", hessian.get("method"))
+            matched_keys.add(key)
+    # Tensors that did not match an existing family get their own entry
+    # so the L5 orchestrator can rank them even when no AWQ / LRQ prior
+    # exists for the same name.
+    for record in records:
+        name = record.get("name")
+        if not name:
+            continue
+        entry_key = f"hessian:{name}"
+        if entry_key in families:
+            continue
+        families[entry_key] = {
+            "match": [name],
+            "exact": True,
+            "hessian_trace": record.get("hessian_trace"),
+            "hessian_trace_avg": record.get("hessian_trace_avg"),
+            "hessian_trace_per_tile": list(record.get("hessian_trace_per_tile", [])),
+            "hessian_trace_n_tiles": record.get("n_tiles"),
+            "hessian_trace_method": record.get("method", hessian.get("method")),
+        }
+        matched_keys.add(entry_key)
+    calibration_policy["tensor_families"] = families
+    calibration_policy["hessian_trace"] = hessian
+    return calibration_policy
+
+
 def lrq_policy_for(
     policy: Optional[dict], tensor_name: str
 ) -> Optional[Tuple[int, np.ndarray, np.ndarray, str]]:
@@ -2423,6 +2535,20 @@ def main():
     ap.add_argument("--calibration-policy", default=None,
                     help="Acceptance-aware DFlash calibration policy JSON")
     ap.add_argument(
+        "--hessian-trace-policy",
+        default=None,
+        help=(
+            "Hessian-trace calibration policy (llama.tessera.hessian-trace-policy.v1) "
+            "produced by tools/tessera/l3_hessian_trace.py. The per-tensor "
+            "trace and per-tile trace values are merged into the in-memory "
+            "calibration_policy so downstream consumers (the L5 orchestrator, "
+            "the quantizer's sensitivity scorer) can read them. The parent "
+            "schema is llama.speculative.calibration-policy.v1 so this flag is "
+            "a no-op consumer-side schema-wise; it is the L3 E5 unlock for "
+            "first-class Hessian-trace sensitivity."
+        ),
+    )
+    ap.add_argument(
         "--tessera-epoch-receipt",
         default=None,
         help="Epoch JSON frozen before calibration and embedded in the output GGUF",
@@ -2615,6 +2741,19 @@ def main():
     )
     args = ap.parse_args()
     calibration_policy = load_calibration_policy(args.calibration_policy)
+    if args.hessian_trace_policy:
+        trace_policy = load_hessian_trace_policy(args.hessian_trace_policy)
+        if trace_policy is not None:
+            n_tensors = len(trace_policy.get("hessian_trace", {}).get("tensors", []))
+            method = trace_policy.get("hessian_trace", {}).get("method", "unknown")
+            print(
+                f"  hessian-trace: merging {n_tensors} tensor records "
+                f"(method={method}) from {args.hessian_trace_policy}",
+                file=sys.stderr,
+            )
+            calibration_policy = merge_hessian_trace_into_policy(
+                calibration_policy, trace_policy
+            )
     epoch_receipt = (
         json.loads(Path(args.tessera_epoch_receipt).read_text(encoding="utf-8"))
         if args.tessera_epoch_receipt
