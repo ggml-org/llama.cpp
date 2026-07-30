@@ -421,7 +421,14 @@ static void clamp(const T * x, T * dst, const float min, const float max, const 
 }
 
 template<typename T, typename F>
-static void unary_gated_op_kernel(
+static void unary_gated_op_flat_kernel(const T * x, const T * g, T * dst, const uint64_t k, const sycl::nd_item<1> & item_ct1, F func) {
+    SYCL_GLOBAL_ID_LOOP(k, item_ct1) {
+        dst[i] = func(x[i]) * g[i];
+    }
+}
+
+template<typename T, typename F>
+static void unary_gated_op_generic_kernel(
         const T * x,
         const T * g,
         T * dst,
@@ -652,12 +659,21 @@ static inline void ggml_sycl_op_unary_gated(
             const sycl::nd_range<1> launch_range(num_blocks * sycl::range<1>(SYCL_GLU_BLOCK_SIZE),
                                                  sycl::range<1>(SYCL_GLU_BLOCK_SIZE));
 
-            // launch-invariant divisor, computed once on the host
-            const sycl::uint3 n_fd = init_fastdiv_values((uint32_t) n);
-            main_stream->parallel_for(launch_range,
-                [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
-                    unary_gated_op_kernel(x_ptr, g_ptr, dst_ptr, k, n_fd, o0, o1, item_ct1, func);
-                });
+            // o0 == n and o1 == n make the index math the identity, so index flat
+            // note: not ggml_is_contiguous - a fused [gate|up] src0 is contiguous with o0 == 2n
+            if (o0 == n && o1 == n) {
+                main_stream->parallel_for(launch_range,
+                    [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                        unary_gated_op_flat_kernel(x_ptr, g_ptr, dst_ptr, k, item_ct1, func);
+                    });
+            } else {
+                // launch-invariant divisor, and only this path needs it
+                const sycl::uint3 n_fd = init_fastdiv_values((uint32_t) n);
+                main_stream->parallel_for(launch_range,
+                    [=](sycl::nd_item<1> item_ct1) [[sycl::reqd_sub_group_size(WARP_SIZE)]] {
+                        unary_gated_op_generic_kernel(x_ptr, g_ptr, dst_ptr, k, n_fd, o0, o1, item_ct1, func);
+                    });
+            }
         });
 }
 
