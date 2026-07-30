@@ -142,27 +142,39 @@ jobs:
       #   ggml-vulkan.cpp:22:10: fatal error: 'vulkan/vulkan.hpp' file not found
       #     22 | #include <vulkan/vulkan.hpp>
       #
-      # Workaround: clone BOTH KhronosGroup/SPIRV-Headers and
-      # KhronosGroup/Vulkan-Headers and install them into the NDK
-      # sysroot, where the Android toolchain will pick them up.
+      # The original approach was to install both Khronos header sets
+      # directly into the NDK sysroot. That fails because the sysroot
+      # already contains root-owned `vulkan/` and `vk_video/` directories
+      # shipped by the NDK, and `cmake --install` (running as the
+      # `runner` user without sudo) cannot chmod them:
       #
-      # Installing Vulkan-Headers overwrites the NDK's older
-      # vulkan_core.h with a newer one (e.g. 1.4.357.0 vs 1.3.275).
-      # This is safe because:
-      #   - The newer vulkan_core.h is a strict superset of the old one
-      #     (only adds new extension declarations; old APIs unchanged).
-      #   - ggml-vulkan resolves ALL device extensions at runtime via
-      #     vkGetInstanceProcAddr / vkGetDeviceProcAddr, so newer
-      #     declarations don't cause runtime failures on older drivers.
+      #   CMake Error at cmake_install.cmake:51 (file):
+      #     file INSTALL cannot set permissions on
+      #     ".../sysroot/usr/include/vk_video": Operation not permitted.
+      #
+      # Fix: install both Khronos header sets to a SEPARATE prefix
+      # `$RUNNER_TEMP/khronos-headers` (guaranteed writable by the
+      # `runner` user — no permission conflicts), then tell the Android
+      # toolchain to ALSO search that prefix by extending
+      # `CMAKE_FIND_ROOT_PATH`. Setting `CMAKE_PREFIX_PATH` alone is not
+      # enough — the NDK toolchain's `CMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY`
+      # would still re-root the search to the sysroot only.
+      #
+      # The NDK toolchain itself doesn't explicitly set CMAKE_FIND_ROOT_PATH;
+      # it only sets CMAKE_SYSROOT, and CMake auto-derives
+      # CMAKE_FIND_ROOT_PATH=<sysroot> from it. Passing
+      # `-DCMAKE_FIND_ROOT_PATH=<khronos-prefix>;<toolchain-root>` on the
+      # cmake command line overrides that auto-derivation, so both paths
+      # get searched.
       #
       # Both repos use the `vulkan-sdk-<version>` tag format on GitHub,
       # e.g. `vulkan-sdk-1.4.357.0` for Vulkan SDK 1.4.357.0.
-      - name: Install SPIRV-Headers + Vulkan-Headers into NDK sysroot
+      - name: Install SPIRV-Headers + Vulkan-Headers to $RUNNER_TEMP
         run: |
           source ./vulkan_sdk/setup-env.sh
-          SYSROOT=${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/sysroot
+          KHRONOS_PREFIX="${RUNNER_TEMP}/khronos-headers"
           KHRONOS_TAG="vulkan-sdk-${VULKAN_SDK_VERSION}"
-          echo "Installing Khronos headers tag ${KHRONOS_TAG} into ${SYSROOT}/usr"
+          echo "Installing Khronos headers tag ${KHRONOS_TAG} into ${KHRONOS_PREFIX}"
 
           # ---- SPIRV-Headers ----
           if ! git clone --depth 1 --branch "${KHRONOS_TAG}" \
@@ -171,8 +183,8 @@ jobs:
             git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Headers.git /tmp/spirv-headers
           fi
           cmake -S /tmp/spirv-headers -B /tmp/spirv-headers/build -DCMAKE_BUILD_TYPE=Release
-          cmake --install /tmp/spirv-headers/build --prefix "${SYSROOT}/usr"
-          test -f "${SYSROOT}/usr/share/cmake/SPIRV-Headers/SPIRV-HeadersConfig.cmake" \
+          cmake --install /tmp/spirv-headers/build --prefix "${KHRONOS_PREFIX}"
+          test -f "${KHRONOS_PREFIX}/share/cmake/SPIRV-Headers/SPIRV-HeadersConfig.cmake" \
             && echo "OK: SPIRV-HeadersConfig.cmake installed" \
             || { echo "FAIL: SPIRV-HeadersConfig.cmake not found"; exit 1; }
 
@@ -183,16 +195,19 @@ jobs:
             git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Headers.git /tmp/vulkan-headers
           fi
           cmake -S /tmp/vulkan-headers -B /tmp/vulkan-headers/build -DCMAKE_BUILD_TYPE=Release
-          cmake --install /tmp/vulkan-headers/build --prefix "${SYSROOT}/usr"
-          test -f "${SYSROOT}/usr/include/vulkan/vulkan.hpp" \
+          cmake --install /tmp/vulkan-headers/build --prefix "${KHRONOS_PREFIX}"
+          test -f "${KHRONOS_PREFIX}/include/vulkan/vulkan.hpp" \
             && echo "OK: vulkan/vulkan.hpp installed" \
             || { echo "FAIL: vulkan/vulkan.hpp not found"; exit 1; }
-          test -f "${SYSROOT}/usr/include/vulkan/vulkan_core.h" \
+          test -f "${KHRONOS_PREFIX}/include/vulkan/vulkan_core.h" \
             && echo "OK: vulkan/vulkan_core.h installed" \
             || { echo "FAIL: vulkan/vulkan_core.h not found"; exit 1; }
-          test -f "${SYSROOT}/usr/share/cmake/VulkanHeaders/VulkanHeadersConfig.cmake" \
+          test -f "${KHRONOS_PREFIX}/share/cmake/VulkanHeaders/VulkanHeadersConfig.cmake" \
             && echo "OK: VulkanHeadersConfig.cmake installed" \
             || { echo "FAIL: VulkanHeadersConfig.cmake not found"; exit 1; }
+
+          # Surface the prefix path to subsequent steps via $GITHUB_ENV.
+          echo "KHRONOS_PREFIX=${KHRONOS_PREFIX}" >> $GITHUB_ENV
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
@@ -206,12 +221,25 @@ jobs:
         id: cmake_configure
         run: |
           source ./vulkan_sdk/setup-env.sh
+          # Extend CMAKE_FIND_ROOT_PATH with our Khronos prefix so the
+          # Android toolchain's find_package() and #include searches
+          # also look there. Without this, CMAKE_FIND_ROOT_PATH_MODE_*=ONLY
+          # would re-root the search to the NDK sysroot only and ignore
+          # both CMAKE_PREFIX_PATH and -I flags pointing outside the sysroot.
+          #
+          # Note: the NDK toolchain sets CMAKE_SYSROOT (which auto-derives
+          # CMAKE_FIND_ROOT_PATH to <sysroot>), so we must include the
+          # toolchain root explicitly in our override to keep the NDK
+          # headers + libs discoverable.
+          ANDROID_TOOLCHAIN_ROOT="${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64"
           cmake -B build \
             -G "Ninja" \
             -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK}/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=${{ matrix.android_abi }} \
             -DANDROID_PLATFORM=android-${{ matrix.android_platform }} \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_FIND_ROOT_PATH="${KHRONOS_PREFIX};${ANDROID_TOOLCHAIN_ROOT}" \
+            -DCMAKE_PREFIX_PATH="${KHRONOS_PREFIX}" \
             \
             -DGGML_VULKAN=ON \
             -DGGML_BACKEND_DL=ON \
