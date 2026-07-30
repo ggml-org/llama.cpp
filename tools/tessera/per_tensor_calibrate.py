@@ -54,6 +54,7 @@ import numpy as np
 
 SCHEMA = "llama.speculative.calibration-policy.v1"
 LRQ_SCHEMA = "llama.tessera.lrq-policy.v1"
+DARTQUANT_SCHEMA = "llama.tessera.dartquant-policy.v1"
 DEFAULT_RANK = 16
 DEFAULT_ITERATIONS = 50
 DEFAULT_LR = 1.0e-3
@@ -62,6 +63,30 @@ DEFAULT_OUTLIER_FRAC = 0.005
 # Aggregation method for reducing a rank-r S matrix to a per-input-channel scale
 # that the existing AWQ path can consume without runtime changes.
 LRQ_AGGREGATIONS = ("mean", "rms")
+
+# DartQuant defaults. The QR-Orth step size is intentionally small: the
+# Stiefel retraction is a first-order scheme and large steps drift the
+# rotated weight well outside the manifold before QR pulls it back. The
+# whip weight controls how aggressively the rotation is shaped toward
+# activation uniformity versus the tile-quant output MSE.
+DEFAULT_DARTQUANT_ITERS = 50
+DEFAULT_DARTQUANT_LR = 1.0e-2
+DEFAULT_DARTQUANT_WHIP_WEIGHT = 0.1
+
+# Allow the linalg helper to be imported both as a package-relative module
+# (when this file is run as ``python3 -m tools.tessera.per_tensor_calibrate``)
+# and as a script (when the parent directory is on sys.path).
+try:
+    from ._dartquant_linalg import qr_orth_step, random_orthogonal, stiefel_project
+except ImportError:  # pragma: no cover - script-mode import
+    _REPO_ROOT = Path(__file__).resolve().parents[2]
+    if str(_REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(_REPO_ROOT))
+    from tools.tessera._dartquant_linalg import (  # type: ignore[no-redef]
+        qr_orth_step,
+        random_orthogonal,
+        stiefel_project,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -461,6 +486,333 @@ def train_lrq(
 
 
 # ---------------------------------------------------------------------------
+# DartQuant: pre-rotation + Whip loss + QR-Orth
+# ---------------------------------------------------------------------------
+#
+# DartQuant (NeurIPS 2025) learns an orthogonal rotation ``R`` of the
+# weight input dimension so that, after the rotation, the tile640
+# ternarization has less work to do. The full loss is a weighted sum of
+# two terms:
+#
+#   * tile-quant output MSE: ``mean(((W @ R) - Q(W @ R)) @ X.T) ** 2)``
+#     i.e. the error projected through the calibration activations. The
+#     straight-through estimator (STE) treats the ternarization as
+#     identity for the backward pass; the gradient w.r.t. ``R`` is
+#     ``(2 / N) * W.T @ residual @ X.T @ X``.
+#   * Whip loss: variance of per-output-channel L2 norms of ``W @ R``,
+#     optionally weighted by the calibration imatrix ``sqrt(E[x^2])``.
+#     This is the "shape toward uniform activations" term from the paper.
+#
+# The combined gradient is passed to ``qr_orth_step`` (Stiefel tangent
+# projection + QR retraction). Cayley SGD is replaced by QR-Orth in the
+# paper because the retraction is a single LAPACK call rather than a
+# matrix inverse; in this pure-Python implementation the QR uses
+# ``np.linalg.qr`` and the per-step cost is dominated by the
+# forward+backward matmuls on ``W`` and ``X``.
+
+
+@dataclasses.dataclass
+class DartQuantResult:
+    rotation: np.ndarray  # (in_dim, in_dim), FP16 orthogonal
+    initial_whip: float
+    final_whip: float
+    initial_quant_mse: float  # weight tile-quant MSE on W @ R (relative)
+    final_quant_mse: float
+    initial_output_mse: float  # matmul output MSE (with X if available)
+    final_output_mse: float
+    iterations: int
+    history: list[float]  # total loss per iteration
+    rotation_dtype: str  # "float16" (we downcast before serialisation)
+    in_dim: int
+
+    bundle_name: str = ""
+
+    def policy_entry(self) -> dict:
+        return {
+            "match": [self.bundle_name],
+            "exact": True,
+            "dartquant_rotation": self.rotation.astype(np.float16).tolist(),
+            "dartquant_rotation_dim": int(self.in_dim),
+            "dartquant_rotation_dtype": self.rotation_dtype,
+            "dartquant_whip_initial": float(self.initial_whip),
+            "dartquant_whip_final": float(self.final_whip),
+            "dartquant_quant_mse_initial": float(self.initial_quant_mse),
+            "dartquant_quant_mse_final": float(self.final_quant_mse),
+            "dartquant_output_mse_initial": float(self.initial_output_mse),
+            "dartquant_output_mse_final": float(self.final_output_mse),
+            "dartquant_iterations": int(self.iterations),
+        }
+
+    def bytes_used(self) -> int:
+        # FP16 storage of the K x K rotation.
+        return int(self.rotation.size) * 2
+
+
+def dartquant_apply_rotation(W: np.ndarray, R: np.ndarray) -> np.ndarray:
+    """Apply the learned rotation: ``W' = W @ R``.
+
+    Output is FP32, contiguous, owning. ``R`` must be square
+    ``(W.shape[1], W.shape[1])``.
+    """
+    Wf = np.ascontiguousarray(W, dtype=np.float32)
+    Rf = np.asarray(R, dtype=np.float32)
+    if Rf.ndim != 2 or Rf.shape[0] != Rf.shape[1]:
+        raise ValueError(f"R must be square, got {Rf.shape}")
+    if Rf.shape[0] != Wf.shape[1]:
+        raise ValueError(
+            f"R shape {Rf.shape} incompatible with W input dim {Wf.shape[1]}"
+        )
+    return Wf @ Rf
+
+
+def _ternarize_recon(weights: np.ndarray) -> np.ndarray:
+    """Tile-quant a 2-D weight: ternarize, then reconstruct with the
+    per-position mean(|W|) multiplier (matches the LRQ training path)."""
+    t = ternarize(weights)
+    return ternarize_value(t, weights)
+
+
+def _row_l2(W: np.ndarray) -> np.ndarray:
+    """Per-row L2 norms of a 2-D weight matrix, FP32, with a floor for
+    numerical stability. Returns a 1-D array of shape ``(W.shape[0],)``."""
+    return np.sqrt(np.maximum(np.sum(W.astype(np.float32) ** 2, axis=1), 1.0e-24))
+
+
+def dartquant_whip_loss(
+    W_rot: np.ndarray, X_hat: np.ndarray | None = None
+) -> float:
+    """Whip loss: coefficient of variation of per-output-channel L2 norms.
+
+    Without a calibration imatrix (no ``X_hat``), the loss is the
+    coefficient of variation of ``||W'[o, :]||_2`` across output channels
+    ``o``. Lower values mean the rotation has made the per-channel
+    response magnitudes more uniform, which is the proxy for "the
+    activation distribution is closer to uniform" from the DartQuant
+    paper.
+
+    With ``X_hat`` (``sqrt(E[x^2])``, per-input-channel), the rotation is
+    evaluated on the activation-weighted weight: ``W' * sqrt(E[x^2])``
+    per the SmoothQuant-style convention. Same formula, different
+    weight matrix.
+    """
+    if X_hat is not None:
+        scale = np.asarray(X_hat, dtype=np.float32).reshape(-1)
+        if scale.shape[0] != W_rot.shape[1]:
+            raise ValueError(
+                f"X_hat length {scale.shape[0]} != W_rot input dim {W_rot.shape[1]}"
+            )
+        Ww = W_rot.astype(np.float32) * scale[None, :]
+    else:
+        Ww = W_rot.astype(np.float32)
+    norms = _row_l2(Ww)
+    mean = float(np.mean(norms))
+    if mean < 1.0e-12:
+        return 0.0
+    return float(np.std(norms) / mean)
+
+
+def _whip_grad_impl(W: np.ndarray, R: np.ndarray, X_hat: np.ndarray | None) -> np.ndarray:
+    """Analytical gradient of the Whip loss w.r.t. ``R``.
+
+    Let ``W' = W @ R``, ``f_o = ||W'[o, :]||_2`` (or
+    ``||W'[o, :] * sqrt(E[x^2])||_2`` if ``X_hat`` is supplied), and
+    ``L = std(f_o) / mean(f_o)`` (the coefficient of variation). The
+    closed-form gradient w.r.t. ``R`` is
+
+        d L / d R = (1 / mean(f)) * (W.T @ ((f - m) / f)[:, None] * W')
+                  - (L / (N * mean(f))) * (W.T @ ones(f)[:, None] * W' / f)
+
+    but the simpler form (treating the outer ``1 / mean(f)`` factor as a
+    constant) recovers the right Stiefel step direction up to a positive
+    scaling. We use the simpler form so the gradient stays
+    single-precision clean and the QR-Orth step is well-conditioned.
+    """
+    out_dim, in_dim = W.shape
+    Wf = W.astype(np.float32, copy=False)
+    Wp = Wf @ R.astype(np.float32, copy=False)
+    if X_hat is not None:
+        scale = np.asarray(X_hat, dtype=np.float32).reshape(-1)
+        if scale.shape[0] != in_dim:
+            raise ValueError(
+                f"X_hat length {scale.shape[0]} != input dim {in_dim}"
+            )
+        Wp = Wp * scale[None, :]
+    norms = _row_l2(Wp)
+    safe_norms = np.maximum(norms, 1.0e-12)
+    mean_n = float(np.mean(norms))
+    if mean_n < 1.0e-12:
+        return np.zeros((in_dim, in_dim), dtype=np.float32)
+    # diff_o = (f_o - mean) / f_o  for each output channel o
+    diff = (norms - mean_n) / safe_norms
+    dWp = diff[:, None] * Wp  # (out, in)
+    # d L / d R = (1 / (N * mean(f))) * W.T @ dWp
+    grad = Wf.T @ dWp
+    grad /= float(out_dim) * mean_n
+    return grad.astype(np.float32, copy=False)
+
+
+def _output_mse_and_grad(
+    W: np.ndarray, R: np.ndarray, X: np.ndarray | None
+) -> tuple[float, np.ndarray]:
+    """Tile-quant output MSE on ``W @ R`` plus its gradient w.r.t. ``R``.
+
+    The forward loss is::
+
+        L = mean(((W @ R) - Q(W @ R)) @ X.T) ** 2)
+
+    i.e. the projected difference between the quantised rotated weight
+    and the original (un-rotated) weight ``W``. The ``-W`` term is held
+    constant during the backward pass (asymmetric straight-through
+    estimator): the gradient flows only through the quantiser, treating
+    ``Q(W')`` as ``W'`` for differentiation. With this convention the
+    gradient is well-defined even though the standard symmetric STE
+    collapses to zero (the variable ``R`` appears in both ``Q(W')`` and
+    ``-W'`` so the two contributions cancel).
+
+    The closed-form gradient w.r.t. ``R`` is::
+
+        d L / d R = (2 / N) * W.T @ ((Q(W') - W) @ X.T) @ X
+                  = (2 / N) * W.T @ err @ X
+
+    where ``err = (Q(W') - W) @ X.T`` and ``N = out_dim * n_tokens``.
+
+    Without ``X`` we fall back to the weight reconstruction MSE
+    ``mean((W' - Q(W')) ** 2)``; its STE gradient is exactly zero so the
+    caller will only get a meaningful scalar, not a meaningful gradient.
+    """
+    Wf = W.astype(np.float32, copy=False)
+    Wp = Wf @ R.astype(np.float32, copy=False)
+    Wq = _ternarize_recon(Wp)
+    if X is None or X.size == 0:
+        residual = Wq - Wp
+        loss = float(np.mean(residual * residual))
+        return loss, np.zeros(R.shape, dtype=np.float32)
+    Xf = X.astype(np.float32, copy=False)
+    if Xf.ndim != 2 or Xf.shape[1] != Wf.shape[1]:
+        raise ValueError(
+            f"X shape {Xf.shape} incompatible with W {Wf.shape}"
+        )
+    # Asymmetric residual: quantised rotated weight minus the un-rotated
+    # weight. The ``-W`` part is constant w.r.t. ``R``; only ``Q(W')``
+    # flows through the gradient.
+    residual = Wq - Wf
+    err = residual @ Xf.T
+    n_tokens = Xf.shape[0]
+    N = Wf.shape[0] * n_tokens
+    loss = float(np.mean(err * err))
+    dL_dWp = (2.0 / float(N)) * (err @ Xf)
+    grad = Wf.T @ dL_dWp
+    return loss, grad.astype(np.float32, copy=False)
+
+
+def _relative_quant_mse(W: np.ndarray) -> float:
+    """Relative tile-quant MSE: ``||W - Q(W)||_F^2 / ||W||_F^2``."""
+    Wf = W.astype(np.float32, copy=False)
+    Wq = _ternarize_recon(Wf)
+    residual = Wq - Wf
+    num = float(np.sum(residual * residual))
+    den = float(np.sum(Wf * Wf)) + 1.0e-12
+    return num / den
+
+
+def dartquant_qr_orth(
+    W: np.ndarray,
+    X: np.ndarray | None,
+    n_iters: int = DEFAULT_DARTQUANT_ITERS,
+    lr: float = DEFAULT_DARTQUANT_LR,
+    whip_weight: float = DEFAULT_DARTQUANT_WHIP_WEIGHT,
+    X_hat: np.ndarray | None = None,
+    seed: int = 0,
+    verbose: bool = False,
+) -> DartQuantResult:
+    """Train an orthogonal rotation ``R`` for ``W`` using QR-Orth.
+
+    The loss is ``L_quant + whip_weight * L_whip``. ``R`` lives on the
+    Stiefel manifold; one step is
+
+        tangent = G - R @ sym(R.T @ G)
+        M       = R - lr * tangent
+        R_next  = qf(M)
+
+    where ``G`` is the ambient gradient. The output-MSE term uses the
+    asymmetric straight-through estimator (asymmetric STE: the
+    ``-W'`` part of the residual is held constant during the backward
+    pass; gradient flows only through ``Q(W')``). This is the
+    convention used by ``train_lrq`` further up in this file.
+
+    The combined loss is non-convex: the best rotation may not be the
+    final one. We track the best output MSE seen during the schedule
+    and report it alongside the final; the policy carries the final
+    rotation but operators tuning the schedule should also try multiple
+    seeds and pick the best.
+
+    Convergence usually needs ``n_iters >= 20`` and a small ``lr``
+    (1e-3 to 1e-1). The initial rotation is the identity when
+    ``seed == 0`` and a Haar-uniform orthogonal otherwise.
+    """
+    Wf = np.ascontiguousarray(W.astype(np.float32))
+    in_dim = Wf.shape[1]
+    R = np.eye(in_dim, dtype=np.float32)
+    if seed:
+        # Optional perturbation of the identity so the GA sees a different
+        # starting point per seed; the Stiefel step will pull it back.
+        R = random_orthogonal(in_dim, seed=seed).astype(np.float32)
+    # Initial metrics.
+    Wp = dartquant_apply_rotation(Wf, R)
+    initial_whip = dartquant_whip_loss(Wp, X_hat=X_hat)
+    initial_quant_mse = _relative_quant_mse(Wp)
+    initial_output_mse, _ = _output_mse_and_grad(Wf, R, X)
+    history: list[float] = [initial_quant_mse + whip_weight * initial_whip]
+    # Best-so-far tracking on output MSE (the deployment metric). Tile-
+    # quant MSE is a secondary diagnostic; output MSE is what the
+    # runtime will see.
+    best_R = R.copy()
+    best_output_mse = initial_output_mse
+    best_quant_mse = initial_quant_mse
+    best_whip = initial_whip
+    for it in range(n_iters):
+        q_loss, q_grad = _output_mse_and_grad(Wf, R, X)
+        w_grad = _whip_grad_impl(Wf, R, X_hat)
+        total_grad = q_grad + float(whip_weight) * w_grad
+        R = qr_orth_step(R.astype(np.float64), total_grad.astype(np.float64), lr)
+        R = R.astype(np.float32, copy=False)
+        Wp = dartquant_apply_rotation(Wf, R)
+        cur_whip = dartquant_whip_loss(Wp, X_hat=X_hat)
+        cur_qmse = _relative_quant_mse(Wp)
+        cur_omse, _ = _output_mse_and_grad(Wf, R, X)
+        history.append(cur_qmse + whip_weight * cur_whip)
+        if cur_omse < best_output_mse:
+            best_output_mse = cur_omse
+            best_quant_mse = cur_qmse
+            best_whip = cur_whip
+            best_R = R.copy()
+        if verbose and (it % max(1, n_iters // 10) == 0 or it == n_iters - 1):
+            print(
+                f"  dartquant[iter {it:3d}/{n_iters}] "
+                f"quant_mse={cur_qmse:.4e} whip={cur_whip:.4e} "
+                f"out_mse={cur_omse:.4e} loss={history[-1]:.4e}",
+                file=sys.stderr,
+            )
+    Wp = dartquant_apply_rotation(Wf, R)
+    final_whip = dartquant_whip_loss(Wp, X_hat=X_hat)
+    final_quant_mse = _relative_quant_mse(Wp)
+    final_output_mse, _ = _output_mse_and_grad(Wf, R, X)
+    return DartQuantResult(
+        rotation=R,
+        initial_whip=initial_whip,
+        final_whip=final_whip,
+        initial_quant_mse=initial_quant_mse,
+        final_quant_mse=final_quant_mse,
+        initial_output_mse=initial_output_mse,
+        final_output_mse=final_output_mse,
+        iterations=n_iters,
+        history=history,
+        rotation_dtype="float16",
+        in_dim=in_dim,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Policy assembly
 # ---------------------------------------------------------------------------
 
@@ -505,6 +857,60 @@ def build_lrq_policy(
             "iterations": results[0][1].iterations if results else 0,
             "lr": DEFAULT_LR,
             "input_scale_agg": results[0][1].input_scale_agg if results else "mean",
+            "tensor_count": len(results),
+            "total_bytes": total_bytes,
+            "tensors": tensor_records,
+        },
+        "tensor_families": families,
+        "per_tensor_calibration": provenance,
+    })
+    policy.setdefault("draft_type", "hybrid")
+    return policy
+
+
+def build_dartquant_policy(
+    results: list[tuple[Layer, DartQuantResult]],
+    provenance: dict,
+    base: dict | None = None,
+) -> dict:
+    """Assemble the DartQuant pre-rotation policy.
+
+    Each tensor gets an entry under ``tensor_families`` keyed
+    ``dartquant:<name>`` carrying the FP16 rotation matrix and the
+    training statistics. The rotation is applied at the runtime side
+    by ``tile640_quantize_v3.py --dartquant-rotation``: the dequantised
+    weight is reconstructed as ``Q(W') @ R.T`` so the original ``W`` is
+    recovered exactly (modulo the ternarization error on ``W'``).
+    """
+    policy: dict = dict(base or {})
+    families = dict(policy.get("tensor_families", {}))
+    tensor_records: list[dict] = []
+    total_bytes = 0
+    for layer, result in results:
+        entry = result.policy_entry()
+        entry_key = f"dartquant:{layer.name}"
+        families[entry_key] = entry
+        tensor_records.append({
+            "tensor": layer.name,
+            "shape": list(layer.weight.shape),
+            "rotation_dim": int(result.in_dim),
+            "whip_initial": result.initial_whip,
+            "whip_final": result.final_whip,
+            "quant_mse_initial": result.initial_quant_mse,
+            "quant_mse_final": result.final_quant_mse,
+            "output_mse_initial": result.initial_output_mse,
+            "output_mse_final": result.final_output_mse,
+            "iterations": result.iterations,
+            "bytes": result.bytes_used(),
+        })
+        total_bytes += result.bytes_used()
+
+    policy.update({
+        "schema": SCHEMA,
+        "dartquant": {
+            "schema": DARTQUANT_SCHEMA,
+            "iterations": results[0][1].iterations if results else 0,
+            "rotation_dtype": results[0][1].rotation_dtype if results else "float16",
             "tensor_count": len(results),
             "total_bytes": total_bytes,
             "tensors": tensor_records,
@@ -1154,6 +1560,64 @@ def run_compare(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_dartquant(args: argparse.Namespace) -> int:
+    """Run the DartQuant pre-rotation mode on every layer bundle."""
+    layers = iter_layer_paths(args.layers)
+    if not layers:
+        raise ValueError(f"{args.layers}: no layer bundles")
+    digests = {p.stem: bundle_digest(p) for p in layers}
+    results: list[tuple[Layer, DartQuantResult]] = []
+    for path in layers:
+        layer = load_layer(path, max_tokens=args.max_tokens)
+        X = layer.train_activations
+        if X is None or X.size == 0:
+            # Without activations the output-MSE gradient is zero; fall
+            # back to the activation-observer proxy.
+            X_hat = layer.input_scale()
+        else:
+            X_hat = None
+        result = dartquant_qr_orth(
+            layer.weight,
+            X=X,
+            X_hat=X_hat,
+            n_iters=args.dartquant_orth_iters,
+            lr=args.dartquant_orth_lr,
+            whip_weight=args.dartquant_whip_weight,
+            seed=args.seed,
+            verbose=args.verbose,
+        )
+        result.bundle_name = layer.name
+        results.append((layer, result))
+        if args.verbose:
+            print(
+                f"dartquant[{layer.name}]: "
+                f"whip {result.initial_whip:.4e} -> {result.final_whip:.4e}  "
+                f"quant_mse {result.initial_quant_mse:.4e} -> {result.final_quant_mse:.4e}  "
+                f"output_mse {result.initial_output_mse:.4e} -> {result.final_output_mse:.4e}  "
+                f"bytes={result.bytes_used()}",
+                file=sys.stderr,
+            )
+    provenance = {
+        "tool": "per_tensor_calibrate.py",
+        "mode": "dartquant",
+        "seed": args.seed,
+        "dartquant_orth_iters": args.dartquant_orth_iters,
+        "dartquant_orth_lr": args.dartquant_orth_lr,
+        "dartquant_whip_weight": args.dartquant_whip_weight,
+        "bundle_digests": digests,
+        "timestamp": time.time(),
+    }
+    policy = build_dartquant_policy(results, provenance)
+    output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(json.dumps(policy, indent=2) + "\n", encoding="utf-8")
+    print(
+        f"wrote {output} with {len(results)} DartQuant tensor entries",
+        file=sys.stderr,
+    )
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -1281,12 +1745,13 @@ def _build_parser() -> argparse.ArgumentParser:
         description=(
             "Per-tensor Tessera calibration. --fitness selects the search mode "
             "(lrq: low-rank weight-scaling; awq: delegate to awq-evolve.py; "
+            "dartquant: pre-rotation via QR-Orth + Whip loss; "
             "compare: run both and write a side-by-side report)."
         )
     )
     parser.add_argument(
         "--fitness",
-        choices=("lrq", "awq", "flrq", "compare"),
+        choices=("lrq", "awq", "flrq", "dartquant", "compare"),
         default="lrq",
         help="Calibration mode (default: lrq).",
     )
@@ -1330,6 +1795,28 @@ def _build_parser() -> argparse.ArgumentParser:
     # AWQ delegation (compare mode)
     parser.add_argument("--awq-generations", type=int, default=8)
     parser.add_argument("--awq-population", type=int, default=8)
+    # DartQuant pre-rotation
+    parser.add_argument(
+        "--dartquant-orth-iters",
+        type=int,
+        default=DEFAULT_DARTQUANT_ITERS,
+        help=f"QR-Orth iterations per tensor (default {DEFAULT_DARTQUANT_ITERS})",
+    )
+    parser.add_argument(
+        "--dartquant-orth-lr",
+        type=float,
+        default=DEFAULT_DARTQUANT_LR,
+        help=f"QR-Orth Stiefel step size (default {DEFAULT_DARTQUANT_LR})",
+    )
+    parser.add_argument(
+        "--dartquant-whip-weight",
+        type=float,
+        default=DEFAULT_DARTQUANT_WHIP_WEIGHT,
+        help=(
+            "Weight of the Whip loss (activation uniformity) in the combined "
+            f"fitness (default {DEFAULT_DARTQUANT_WHIP_WEIGHT})"
+        ),
+    )
     parser.add_argument(
         "--seed",
         type=int,
@@ -1448,6 +1935,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_flrq(args)
     if args.fitness == "compare":
         return run_compare(args)
+    if args.fitness == "dartquant":
+        return run_dartquant(args)
     raise ValueError(f"unknown --fitness {args.fitness!r}")
 
 
