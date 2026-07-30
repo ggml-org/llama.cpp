@@ -2966,6 +2966,502 @@ separate build settings.
 
 ---
 
+## 14. Agent loop + tool calling (v1, not v2)
+
+The architect's 2026-07-30 reversal on the agent's
+"SKIP for v1, EVALUATE for v2" lean: the agent loop
+is part of the v1 spec. Tessera Studio is a full
+agent app for macOS and iOS, on par with the most
+mature references (Agent!, Foundation Lab, PrismAgent,
+open-agent-sdk-swift).
+
+Rationale: the calibration pipeline is linear, but
+the agent loop adds value beyond automation. The user
+sees a chat surface that can invoke Tessera tools
+(calibrate, quantize, evaluate, export), inspect
+tool call receipts, and undo destructive operations.
+The 5-tool MVP becomes an 8-tool v1; the rest of the
+agent loop is the standard typed-protocol + approval
+engine + tool message UI pattern, all of which are
+well-trodden in the references.
+
+This section extends the v1 spec; the prior sections
+that described the agent loop as v2 are superseded.
+
+### 14.1 The tool protocol (TesseraTool)
+
+A typed protocol with Codable + JSON Schema. The
+PrismAgent `ToolTypes.swift` and `open-agent-sdk-swift`
+architecture doc are the two references; Tessera
+inherits PrismAgent's shape and adds the `@Generable`
+pattern from Foundation Lab for the calibration config
+inputs.
+
+```swift
+public protocol TesseraTool: Identifiable, Codable,
+    Sendable {
+    associatedtype Input: Codable & Sendable
+    associatedtype Output: Codable & Sendable
+
+    var id: String { get }
+    var name: String { get }
+    var description: String { get }
+    var iconName: String { get }  // banner icon
+    var inputSchema: JSONSchema { get }
+    var outputSchema: JSONSchema { get }
+    var approvalLevel: ApprovalLevel { get }
+
+    func run(_ input: Input) async throws -> Output
+}
+
+public enum ApprovalLevel: String, Codable, Sendable {
+    case auto    // safe, no confirmation
+    case notify  // run + log, no prompt
+    case prompt  // require user confirmation
+    case denied  // not exposed in v1
+}
+```
+
+LoC: ~150 Swift.
+
+### 14.2 The tool registry (TesseraToolRegistry)
+
+The catalog of available tools, indexed by id. The
+registry is `@MainActor` and observable so the chat
+can re-render the available tool list. The catalog
+ships with the 8 v1 tools (see 14.4); new tools
+register at app launch.
+
+```swift
+@MainActor
+@Observable
+public final class TesseraToolRegistry {
+    public private(set) var tools: [String: any TesseraTool] = [:]
+
+    public func register<T: TesseraTool>(_ tool: T) { ... }
+    public func tool(id: String) -> (any TesseraTool)? { ... }
+    public func toolsForApprovalLevel(_ level: ApprovalLevel)
+        -> [any TesseraTool] { ... }
+}
+```
+
+LoC: ~80 Swift.
+
+### 14.3 The agent loop (TesseraAgentLoop)
+
+The core streaming loop: receive user message, decide
+which tools to call, stream tool invocations and
+results, render tool messages in the chat, repeat
+until the model stops. The agent's lean is the
+AsyncStream actor pattern from Foundation Lab, which
+combines cleanly with the existing `TesseraEngine`
+streaming.
+
+```swift
+@MainActor
+@Observable
+public final class TesseraAgentLoop {
+    public enum State: Equatable {
+        case idle
+        case planning
+        case awaitingApproval(toolId: String, input: Data)
+        case executing(toolId: String)
+        case streaming
+        case error(String)
+    }
+
+    public private(set) var state: State = .idle
+    public private(set) var pendingToolCalls: [ToolCall] = []
+    public private(set) var conversationLog: [ConversationTurn] = []
+
+    public func send(_ userMessage: String) async { ... }
+    public func approvePendingToolCall() async { ... }
+    public func denyPendingToolCall(reason: String) async { ... }
+    public func cancel() async { ... }
+}
+```
+
+The loop is cancellation-aware (every `await` checks
+`Task.isCancelled`). The state is observable; the
+chat re-renders on every state change. The conversation
+log is persisted via SwiftData (pattern from Agent!).
+
+LoC: ~280 Swift.
+
+### 14.4 The 8 v1 tools
+
+| # | Name | Description | Approval | LoC |
+|---|---|---|---|---|
+| 1 | `list_models` | List the available Tessera-quantized + stock models in the ModelStore | `auto` | 30 |
+| 2 | `load_model` | Load a specific model into the TesseraEngine | `auto` | 40 |
+| 3 | `inspect_sidecar` | Read the v3 sidecar (L1 + L1.5 + per-row meta) for a model, return a JSON report | `auto` | 60 |
+| 4 | `calibrate` | Run the 5k multi-modal calibration corpus, produce a modality-tagged imatrix v2 | `prompt` (destructive: 5-30 min on the GPU) | 180 |
+| 5 | `evolve` | Run AWQ-evolve on the imatrix, produce a TesseraPolicy (modality_scales + AWQ alpha) | `prompt` (destructive: 5-30 min on the GPU) | 160 |
+| 6 | `quantize` | Quantize the source model with the TesseraPolicy, write the TESSERA_* GGUF | `prompt` (writes to disk) | 120 |
+| 7 | `convert` | Run `tessera-to-coreml` on the GGUF, write the `.mlmodelc` | `prompt` (writes 3-4 GB) | 100 |
+| 8 | `evaluate` | Run the A/B Compare harness on a held-out eval set, return the per-tensor PPL + the per-token latency | `auto` | 140 |
+
+Total tool LoC: ~830 Swift + 6 shared types.
+
+The 8 tools compose the full Tessera pipeline. The
+chat can run them in any order; the typical sequence
+is `calibrate` -> `evolve` -> `quantize` -> `convert`
+-> `evaluate`. The agent loop is responsible for
+ordering; the user is responsible for approvals.
+
+### 14.5 The approval engine (TesseraApprovalEngine)
+
+User-facing approval for destructive tool calls.
+When the agent loop hits a `prompt`-level tool, it
+pauses, posts a `TesseraApprovalRequest` to the
+approval engine, and waits. The user sees a modal
+sheet in the chat surface with:
+- The tool name + icon
+- The input (rendered as a structured form, not raw JSON)
+- The estimated duration + cost (e.g., "20 min, will write 4 GB to disk")
+- Approve / Deny / Deny + don't ask again
+
+The "don't ask again" is per-tool, per-session (not
+persisted; the destructive behavior is always
+re-prompted across sessions for safety).
+
+LoC: ~120 Swift + 60 SwiftUI for the modal sheet.
+
+### 14.6 The 3-destination shell
+
+The app shell: 3 destinations in a `NavigationSplitView`,
+following the Foundation Lab pattern. Each destination
+is a top-level section in the sidebar.
+
+| Destination | Purpose | Tessera target |
+|---|---|---|
+| **Library** | Browse + download + manage models and `.mlmodelc` files | `LibraryDestination.swift` (~250 LoC) |
+| **Playground** | The chat + A/B Compare + on-device telemetry | `PlaygroundDestination.swift` (~150 LoC) |
+| **Runs** | The agent loop history + tool call receipts + audit log | `RunsDestination.swift` (~200 LoC) |
+
+Total destination LoC: ~600 Swift + ~80 SwiftUI for
+the shell chrome.
+
+### 14.7 The 3-destination -> 4-screen map
+
+The chat is the primary screen in Playground. The
+A/B Compare is a separate screen (a sheet over the
+chat). The Settings surface is a separate screen
+(an inspector panel in the chat sidebar, not a
+top-level destination — per the iOS 26 pattern).
+The Studio on Mac has 4 destinations, not 3: the
+calibration pipeline editor is a Mac-only top-level
+section.
+
+### 14.8 The tool message UI (RichMessageView)
+
+The chat surface renders tool calls as rich messages,
+not raw text. Per the PrismAgent `ToolMessageView`
+pattern + the Foundation Lab `@Generable` rendering:
+
+- File content: monospace, syntax-highlighted
+- Directory: tree view
+- Search results: list with snippets
+- Web results: card with title + URL + snippet
+- Sidecar JSON: collapsible, syntax-highlighted
+- Receipt: structured form with the audit log
+- Error: red border, the stack trace, the recovery hint
+
+The tool call banner is at the top of the message
+(`TesseraToolBanner.swift`, ~36 LoC): icon-by-prefix
+from PrismAgent (the tool's `iconName` + a chevron +
+the tool's name + a duration + a status dot).
+
+LoC: ~400 Swift + ~80 SwiftUI.
+
+### 14.9 The sub-agent dispatch (QuantizationWorkerPool)
+
+When the agent invokes `calibrate` or `evolve`, the
+work is parallelizable across tensors. The
+`QuantizationWorkerPool` (the rename of PrismAgent's
+`SubAgentOrchestrator`) spawns N workers (N = the
+number of GPU cores or the number of ANE engines,
+whichever is larger) and dispatches per-tensor work.
+
+For the calibration: 1 worker per layer, 1 work item
+per tensor.
+For the evolve: 1 worker per island, 1 work item per
+generation.
+
+The pool is observable; the agent can see the
+progress (`worker X is processing tensor Y, 30% done`).
+The chat renders a progress bar in the tool message
+UI when the tool is long-running.
+
+LoC: ~150 Swift (rename + thread pool + progress
+emission).
+
+### 14.10 The audit receipts (CalibrationReceipt)
+
+Every destructive tool call produces a `CalibrationReceipt`
+written to the conversation journal. The receipt is
+JSON, schema-versioned (`llama.tessera.calibration-receipt.v1`),
+and contains:
+- The tool id + name + description
+- The input (canonical JSON)
+- The output (canonical JSON)
+- The wall-clock duration
+- The IOReport snapshot at tool completion
+- A SHA-256 of the receipt itself (for cross-reference)
+
+The receipt is the source of truth for the audit log
+in the Runs destination. The user can export the
+receipt chain as a single JSONL for offline analysis.
+
+LoC: ~18 Swift (the receipt struct) + ~40 Swift
+for the Runs destination rendering.
+
+### 14.11 The AION mediator (Apple Intelligence)
+
+The AION pattern from `Agent!` README.md:24-30:
+Apple AI observes the conversation and injects
+`[AI]`-prefixed annotations on-device, free, no API
+cost. For Tessera Studio:
+
+- When the user asks "what models are available?",
+  AION injects a `modelCard` annotation
+- When the user asks "is this quantized?", AION
+  injects a `quantizationReport` annotation
+- When the user asks "how long did the calibration
+  take?", AION injects a `calibrationTiming`
+  annotation
+
+The AION mediator is a small Swift service
+(~100 LoC) that listens to the conversation log
+and posts annotations to the chat.
+
+LoC: ~100 Swift. v1 ships with the AION mediator
+on Mac (Apple Intelligence is macOS 26+); iOS
+v1 ships without AION (Apple Intelligence is
+limited on iOS).
+
+### 14.12 The token budget visualization (StudioUsageView)
+
+A small popover in the chat title bar that shows the
+current session's token usage, the prompt token
+count, the completion token count, the cached tokens
+(if any), the per-tool-call token delta, and the
+estimated cost (when the TesseraRuntime is `privateCloud`).
+
+LoC: ~80 Swift.
+
+### 14.13 The TesseraRuntime enum
+
+A 3-value runtime selector, mirroring the
+`FoundationModelRuntime` pattern from Foundation Lab:
+
+```swift
+public enum TesseraRuntime: String, Codable, CaseIterable,
+    Sendable {
+    case onDevice   // CoreML on the local ANE
+    case mlx        // MLX (v2, for models that don't
+                   //   fit the Tessera pipeline yet)
+    case privateCloud  // v2, a remote Tessera endpoint
+}
+```
+
+The default for v1 is `onDevice`. The selector lives
+in the Settings surface; the chat reads it via
+`@AppStorage`.
+
+LoC: ~3 Swift (just the enum).
+
+### 14.14 The SwiftData chat journal
+
+The conversation log is persisted via SwiftData
+(pattern from Agent! `AgentViewModel.swift:39-40`).
+The schema is:
+- `Conversation`: id, title, createdAt, updatedAt
+- `ConversationTurn`: id, role (user/assistant/tool), content, toolCallId?, createdAt
+- `ToolCall`: id, toolName, input, output?, status, startedAt, completedAt?
+
+The SwiftData model is auto-migrated; the conversation
+journal is a single SQLite file in the app's
+`Application Support/Studio/` directory.
+
+LoC: ~120 Swift for the SwiftData models + ~60 for
+the migration.
+
+### 14.15 The C FFI additions for the agent loop
+
+The C FFI from section 3 needs three new functions
+for the agent loop:
+
+```c
+// Stream the model's response; the agent loop calls
+// this and consumes the AsyncStream of tokens.
+int32_t tessera_stream_response(
+    TesseraContextHandle ctx,
+    const char * system_prompt,
+    const char * user_message,
+    TesseraModality modality,
+    TesseraTokenCallback callback,
+    void * user_data
+);
+
+// Pause + resume a streaming response (for tool
+// approval pauses).
+int32_t tessera_pause_stream(TesseraContextHandle ctx);
+int32_t tessera_resume_stream(TesseraContextHandle ctx);
+```
+
+LoC: ~200 C.
+
+### 14.16 The 20 patterns the agent recommended to skip
+
+For reference, the patterns the agent flagged to
+NOT adopt (per `docs/agent-patterns-research.md`):
+
+- 15-button toolbar (Agent!) — visual noise
+- XPC user agent + privileged daemon (Agent!) —
+  Studio is foreground single-user
+- MCP server config UI (Agent!) — not in v1
+- Computer use (PrismAgent) — out of scope
+- AppleScript bridge (PrismAgent) — not needed
+- Accessibility scan (PrismAgent) — not needed
+- Action overlay (PrismAgent) — foreground app
+- iMessage remote (Agent!) — not Tessera use case
+- Voice hotword (Agent!) — not hands-busy
+- Plan mode (PrismAgent, Agent!) — calibration is
+  linear
+- TUI mode (seldon) — GUI users first
+- Global hotkey (Motive) — windowed app
+- LoRA adapter training (junco) — calibration, not
+  fine-tuning
+- Server mode (Foundation Lab) — macOS/iOS only for
+  v1
+- JSONL repo-map (Agent!) — we don't edit code
+- `fmas` Python tooling (Foundation Lab) — Swift-native
+- Sub-agent dispatcher for chat tool calls
+  (PrismAgent) — sub-agent pool yes; chat dispatcher no
+- Tessera-core LoRA (junco) — out of scope
+- iOS BackgroundKeepAlive / Live Activity
+  (sample-mobile-ai-assistant) — macOS only
+- Chat history drawer (already adopted) (AWS sample) —
+  already in design doc 5.6
+
+### 14.17 Total agent loop LoC impact
+
+| Component | LoC |
+|---|---:|
+| TesseraTool protocol (14.1) | ~150 |
+| TesseraToolRegistry (14.2) | ~80 |
+| TesseraAgentLoop (14.3) | ~280 |
+| 8 v1 tools (14.4) | ~830 |
+| TesseraApprovalEngine (14.5) | ~180 |
+| 3-destination shell (14.6) | ~680 |
+| Tool message UI (14.8) | ~480 |
+| QuantizationWorkerPool (14.9) | ~150 |
+| CalibrationReceipt (14.10) | ~58 |
+| AION mediator (14.11) | ~100 |
+| Token budget viz (14.12) | ~80 |
+| TesseraRuntime enum (14.13) | ~3 |
+| SwiftData journal (14.14) | ~180 |
+| C FFI additions (14.15) | ~200 |
+| **Total** | **~3,651** |
+
+The v1 Studio is now ~4,800 + ~3,651 = **~8,451 LoC
+Swift** + **~3,700 LoC C/C++** = **~12,151 LoC total**.
+
+### 14.18 The new open questions for the agent loop
+
+The agent's "Should Tessera Studio get an agent loop?"
+question is now answered (YES for v1). The follow-up
+questions are:
+
+- **Q13. Tool count**: 8 tools is the v1 floor. Should
+  the v1 ship more (e.g., `inspect_receipt`,
+  `diff_policies`, `export_receipts`, `import_receipts`,
+  `fork_session`)? Lean: 8 for v1, +4 for v2.
+- **Q14. Approval granularity**: per-tool, per-session,
+  or both? Lean: per-tool + per-session override; the
+  default is per-tool with the destructive-tools list
+  prompting.
+- **Q15. Sub-agent visibility**: should the user see
+  the sub-agent worker pool (the parallel calibration
+  workers) in the tool message UI? Lean: yes, a
+  collapsible "Workers" section in the tool message
+  that shows per-worker progress.
+- **Q16. AION on iOS**: Apple Intelligence is
+  limited on iOS; the AION mediator is Mac-only for
+  v1. Lean: Mac-only v1, iOS v2.
+- **Q17. Multi-modal tool inputs**: the `calibrate` and
+  `evolve` tools accept multi-modal inputs (the 5k
+  corpus). The tool input schema needs to encode the
+  modality. Lean: the tool input is a
+  `CalibrationConfig` struct with a `modality` enum
+  and a `corpus` reference.
+
+### 14.19 Risk additions for the agent loop
+
+The agent loop adds 4 new risks to section 12:
+
+- **R27. Agent loop runaway**: a poorly-prompted agent
+  could invoke tools in a tight loop, generating cost
+  or filling disk. Mitigated by the per-tool cost
+  ceiling, the per-session token budget, and the
+  cancellation surface (`TesseraAgentLoop.cancel()`).
+- **R28. Tool approval bypass**: a user could
+  pre-approve a destructive tool via the "don't ask
+  again" affordance, then forget. Mitigated by
+  per-session-only approval persistence (the "don't
+  ask again" expires at app restart).
+- **R29. Sub-agent pool size**: a chat with N tools
+  spawning M sub-agents per tool could exhaust the
+  iOS memory budget. Mitigated by a hard cap on the
+  pool size (8 workers on iOS, 32 on Mac) and a
+  queue-based dispatch.
+- **R30. AION hallucination**: Apple's Apple
+  Intelligence can annotate incorrectly. Mitigated
+  by the `modelCard` annotation being a hint, not a
+  fact; the user can dismiss the annotation.
+
+### 14.20 Updated phasing
+
+The v1 phasing from section 10 is updated to include
+the agent loop in Phase 2 and Phase 3 (parallel with
+the existing work):
+
+- **Phase 1 (~3 weeks)**: The engine integration
+  (LibTessera.swift + the C FFI + the xcframework
+  build). Same as before.
+- **Phase 2 (~4 weeks)**: The Swift Package skeleton
+  (TesseraCore shared + the 2 targets + the chat
+  surface on iOS) + **the agent loop core (TesseraTool
+  protocol, TesseraToolRegistry, TesseraAgentLoop,
+  TesseraApprovalEngine, the 8 v1 tools)**. Phase 2
+  grows from 3 to 4 weeks to accommodate the agent
+  loop.
+- **Phase 3 (~3 weeks)**: The CoreML backend + the
+  IOReport telemetry + **the tool message UI
+  (RichMessageView, TesseraToolBanner, the sub-agent
+  dispatch)**. Phase 3 grows from 3 to 4 weeks.
+- **Phase 4 (~4 weeks)**: The Studio surface on Mac
+  (calibration, evolution, telemetry review) + **the
+  3-destination shell + the audit receipts + the
+  SwiftData journal**. Phase 4 grows from 3 to 4
+  weeks.
+- **Phase 5 (~2 weeks)**: The A/B compare view + the
+  30-min flight test + **the AION mediator (Mac) +
+  the token budget viz**. Phase 5 grows from 2 to
+  3 weeks.
+- **Phase 6 (~2 weeks)**: Polish, App Store
+  compliance (privacy manifest, AI disclosure), beta
+  testing. Same as before.
+
+**Total: 18 weeks wall-clock with 1 dev, ~7 weeks
+with 4 parallel agents after Phase 1.**
+
+The agent loop adds 2 weeks to the 1-dev timeline
+and 1 week to the 4-parallel-agent timeline. The
+Studio v1 is now ~12,151 LoC across 3 targets +
+the xcframework.
+
 ## Appendix A: File index
 
 This section lists the files referenced in the design
