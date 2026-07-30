@@ -1653,6 +1653,30 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.telemetry_out = value;
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    add_opt(common_arg(
+        {"--spec-steps"}, "N",
+        string_format(
+            "[imatrix] number of spec-decoding steps to roll forward when --model-draft is set "
+            "(default: %d, 0 = until context limit). Captures verifier activations during real "
+            "speculative-decoding forward passes instead of plain text forward passes.",
+            params.n_spec_steps),
+        [](common_params & params, int value) {
+            params.n_spec_steps = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    add_opt(common_arg(
+        {"--telemetry-out"}, "PATH",
+        string_format(
+            "[imatrix] path to write per-step accept/reject JSONL when "
+            "--model-draft is set (default: %s). Schema: "
+            "llama.dflash.acceptance.v1 with seq_id, drafted, accepted, "
+            "confidence[]. One record per spec step. Use for drafter "
+            "fine-tuning (rejection sampling).",
+            params.telemetry_out.c_str()),
+        [](common_params & params, const std::string & value) {
+            params.telemetry_out = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
     add_opt(common_arg({ "-fa", "--flash-attn" }, "[on|off|auto]",
                        string_format("set Flash Attention use ('on', 'off', or 'auto', default: '%s')",
                                      llama_flash_attn_type_name(params.flash_attn_type)),
@@ -3844,7 +3868,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) {
             params.speculative.draft.mparams.hf_repo = value;
         }
-    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}).set_env("LLAMA_ARG_SPEC_DRAFT_HF_REPO"));
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_IMATRIX}).set_env("LLAMA_ARG_SPEC_DRAFT_HF_REPO"));
     add_opt(common_arg(
         {"--spec-draft-threads", "-td", "--threads-draft"}, "N",
         "number of threads to use during generation (default: same as --threads)",

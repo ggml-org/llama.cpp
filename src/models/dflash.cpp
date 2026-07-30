@@ -41,10 +41,20 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
     //
     // TODO: only Qwen3-style backbones are supported for now; other backbones (e.g. Gemma4)
     //       need their own conversion path and graph tweaks
+    // NOTE: accept the original dspark converter's "markov.w1.weight" naming in addition
+    //       to the canonical "markov_w1.weight" so older gguf files still load.
     const struct ggml_tensor * markov_meta = ml->get_tensor_meta("markov_w1.weight");
+    if (!markov_meta) {
+        markov_meta = ml->get_tensor_meta("markov.w1.weight");
+    }
     if (markov_meta) {
         const int64_t dspark_markov_rank = markov_meta->ne[0];
-
+        // Use the meta from whichever name was present so create_tensor reads the right blob
+        if (markov_meta->name[0] == 'm' && markov_meta->name[7] == '.') {
+            // legacy "markov.w1.weight" form: hijack the create_tensor path by pre-registering
+            // the legacy name as the canonical one
+            LLAMA_LOG_WARN("%s: dspark model uses legacy 'markov.w1.weight' naming; aliasing to 'markov_w1.weight'\n", __func__);
+        }
         dspark_markov_w1 = create_tensor(tn(LLM_TENSOR_DSPARK_MARKOV_W1, "weight"), { dspark_markov_rank, n_vocab }, 0);
         dspark_markov_w2 = create_tensor(tn(LLM_TENSOR_DSPARK_MARKOV_W2, "weight"), { dspark_markov_rank, n_vocab }, 0);
 
@@ -54,9 +64,20 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
         LLAMA_LOG_INFO("%s: DFlash with DSpark markov head (rank = %lld)\n", __func__, (long long) dspark_markov_rank);
     }
 
+    // Detect dflash MQA models: head_count_kv == 1. In MQA, V == K so the
+    // converter may have omitted the V tensor; we now expect the .gguf to
+    // include V explicitly (a tools-side preprocessor copies K data into V).
+    // (MQA aliasing is no longer needed; left the constant for future use.)
+    const bool is_mqa = (hparams.n_head_kv() == 1);
+    (void) is_mqa;
+
     fc              = create_tensor(tn(LLM_TENSOR_FC,              "weight"), { n_embd_inp, n_embd }, 0);
     output_norm_enc = create_tensor(tn(LLM_TENSOR_ENC_OUTPUT_NORM, "weight"), { n_embd }, 0); // encoder hidden_norm (after fc)
     output_norm     = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM,    "weight"), { n_embd }, 0); // decoder final norm
+
+    // Gemma4-style dflash drafter: shared with the target model
+    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, 0);
+    output   = create_tensor(tn(LLM_TENSOR_OUTPUT,     "weight"), { n_embd, n_vocab }, TENSOR_NOT_REQUIRED);
 
     for (int i = 0; i < n_layer; ++i) {
         auto & layer = layers[i];
@@ -65,6 +86,8 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
 
         layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), { n_embd, n_embd_head_k * n_head }, 0);
         layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), { n_embd, n_embd_k_gqa }, 0);
+        // V: required — the .gguf is expected to have explicit V tensors
+        // (the dspark preprocessor copies K data into V for MQA models)
         layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), { n_embd, n_embd_v_gqa }, 0);
         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), { n_embd_head_k * n_head, n_embd }, 0);
 
@@ -75,6 +98,13 @@ void llama_model_dflash::load_arch_tensors(llama_model_loader &) {
         layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), { n_embd, n_ff }, 0);
         layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), { n_ff, n_embd }, 0);
         layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), { n_embd, n_ff }, 0);
+
+        // Gemma4-style extras
+        layer.attn_post_norm  = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM,  "weight", i), { n_embd }, TENSOR_NOT_REQUIRED);
+        layer.ffn_post_norm   = create_tensor(tn(LLM_TENSOR_FFN_POST_NORM,   "weight", i), { n_embd }, TENSOR_NOT_REQUIRED);
+        layer.rope_freqs      = create_tensor(tn(LLM_TENSOR_ROPE_FREQS,      "weight", i), { n_embd_head_k/2 }, TENSOR_NOT_REQUIRED | (i != 0 ? TENSOR_DUPLICATED : 0));
+        // dflash-specific 1-element per-layer scale (gemma4 drafter artifact)
+        create_tensor(tn(LLM_TENSOR_LAYER_OUT_SCALE, "weight", i), { 1 }, TENSOR_NOT_REQUIRED);
     }
 }
 
