@@ -72,15 +72,107 @@ void quantize_row_q1_0_ref(const float * GGML_RESTRICT x, block_q1_0 * GGML_REST
 }
 
 //
-// Tessera Tile640 (G0 registration stubs; real quantize/dequant wired in G1)
+// Tessera Tile640
+//
+// Per-row layout in y:
+//   [pages * TILE640_WORDS_PER_PAGE]  uint32_t  packed radix-243 words
+//   [pages]                           uint16_t  page_scales (f16)
+//   [pages * TILE640_LANES_PER_PAGE]  int8_t    lane_scales
 //
 
 void quantize_row_tessera_t640_ref(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
-    GGML_UNUSED(x); GGML_UNUSED(y); GGML_UNUSED(k);
+    const int pages = (int)((k + TILE640_PAGE_SIZE - 1) / TILE640_PAGE_SIZE);
+
+    uint32_t * packed      = (uint32_t *) y;
+    uint16_t * page_scales = (uint16_t *) (packed + pages * TILE640_WORDS_PER_PAGE);
+    int8_t   * lane_scales = (int8_t *)   (page_scales + pages);
+
+    for (int p = 0; p < pages; p++) {
+        const int base     = p * TILE640_PAGE_SIZE;
+        const int page_len = (base + TILE640_PAGE_SIZE <= k) ? TILE640_PAGE_SIZE : (int)(k - base);
+
+        float sum_abs  = 0.0f;
+        float page_max = 0.0f;
+        for (int j = 0; j < page_len; j++) {
+            const float a = fabsf(x[base + j]);
+            sum_abs += a;
+            if (a > page_max) page_max = a;
+        }
+        const float threshold = sum_abs / page_len;
+
+        page_scales[p] = GGML_FP32_TO_FP16(page_max);
+
+        for (int l = 0; l < TILE640_LANES_PER_PAGE; l++) {
+            const int col0 = base + l * TILE640_LANE_SIZE;
+
+            float lane_max = 0.0f;
+            for (int j = 0; j < TILE640_LANE_SIZE; j++) {
+                const int col = col0 + j;
+                if (col < k) {
+                    const float a = fabsf(x[col]);
+                    if (a > lane_max) lane_max = a;
+                }
+            }
+
+            int8_t ls = 0;
+            if (page_max > 0.0f) {
+                ls = (int8_t) roundf(127.0f * lane_max / page_max);
+                if (ls > 127) ls = 127;
+            }
+            lane_scales[p * TILE640_LANES_PER_PAGE + l] = ls;
+
+            uint32_t word   = 0;
+            uint32_t pow243 = 1;
+            for (int g = 0; g < 4; g++) {
+                uint32_t group_val = 0;
+                uint32_t pow3      = 1;
+                for (int d = 0; d < 5; d++) {
+                    const int col = col0 + g * 5 + d;
+                    uint32_t trit = 0;
+                    if (col < k) {
+                        const float v = x[col];
+                        if (v >  threshold) trit = 1;
+                        if (v < -threshold) trit = 2;
+                    }
+                    group_val += trit * pow3;
+                    pow3 *= 3;
+                }
+                word += group_val * pow243;
+                pow243 *= 243;
+            }
+            packed[p * TILE640_WORDS_PER_PAGE + l] = word;
+        }
+    }
 }
 
 void dequantize_row_tessera_t640(const void * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
-    GGML_UNUSED(x); GGML_UNUSED(y); GGML_UNUSED(k);
+    const int pages = (int)((k + TILE640_PAGE_SIZE - 1) / TILE640_PAGE_SIZE);
+
+    const uint32_t * packed      = (const uint32_t *) x;
+    const uint16_t * page_scales = (const uint16_t *) (packed + pages * TILE640_WORDS_PER_PAGE);
+    const int8_t   * lane_scales = (const int8_t *)   (page_scales + pages);
+
+    for (int p = 0; p < pages; p++) {
+        const float page_max = GGML_FP16_TO_FP32(page_scales[p]);
+
+        for (int l = 0; l < TILE640_LANES_PER_PAGE; l++) {
+            const float scale = page_max * (lane_scales[p * TILE640_LANES_PER_PAGE + l] * (1.0f / 127.0f));
+            const int   col0  = p * TILE640_PAGE_SIZE + l * TILE640_LANE_SIZE;
+
+            uint32_t rem = packed[p * TILE640_WORDS_PER_PAGE + l];
+            for (int g = 0; g < 4; g++) {
+                uint32_t idx = rem % 243;
+                rem /= 243;
+                for (int d = 0; d < 5; d++) {
+                    const int col = col0 + g * 5 + d;
+                    if (col >= k) break;
+                    const uint32_t trit = idx % 3;
+                    idx /= 3;
+                    y[col] = trit == 1 ? scale : trit == 2 ? -scale : 0.0f;
+                }
+            }
+        }
+    }
 }
 
 void quantize_row_q2_0_ref(const float * GGML_RESTRICT x, block_q2_0 * GGML_RESTRICT y, int64_t k) {
