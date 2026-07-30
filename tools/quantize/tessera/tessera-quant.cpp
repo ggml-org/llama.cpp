@@ -169,7 +169,8 @@ float ts_ternarize_with_acts(const float * weights, const float * act_scales,
         }
     }
 
-    // float32 accumulation to match Python's np.float32.sum() bit-exactly
+    // sequential float32 accumulation; numpy .sum() is pairwise so the sum may
+    // differ in the last bit (ternary still matches, see test_bit_equiv.cpp)
     float abs_sum = 0.0f;
     for (int64_t i = 0; i < n; i++) {
         abs_sum += std::fabs(ws[i]);

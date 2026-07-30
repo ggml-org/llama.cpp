@@ -16,19 +16,30 @@
 //       -o /tmp/test_bit_equiv && /tmp/test_bit_equiv
 //
 // ---------------------------------------------------------------------------
-// FINDINGS (updated after fixes)
+// FINDINGS (verified end-to-end: python ref gen + C++ test, seed=42 4x640)
 // ---------------------------------------------------------------------------
 //   packed       : PASS - 512 bytes (128 u32 words) byte-identical.
-//   page_scales  : tested via ts_compute_scales (not ts_pack_tile640 placeholders).
-//   lane_scales  : tested via ts_compute_scales (not ts_pack_tile640 placeholders).
+//   page_scales  : PASS - 8 bytes (4 fp16) byte-identical via ts_compute_scales.
+//   lane_scales  : PASS - 128 bytes (4x32 int8) byte-identical via ts_compute_scales.
+//   RESULT: PASS (all buffers byte-identical), deterministic across reruns.
+//
+// Robustness (diagnosed, not just observed):
+//   - Ternary threshold: C++ accumulates |w| sequentially in float32; numpy
+//     .sum() is pairwise, so the sums differ in the last bit (seq 2011.5541 vs
+//     np 2011.5532). No trit flips because no |w| is within ~3.7e-5 of the
+//     threshold for this seed. The match is margin-based, not an exact sum match.
+//   - Lane scales: C++ uses std::lround (half away from zero) vs numpy np.round
+//     (half to even). No raw value is within ~4.6e-3 of a .5 boundary here, so
+//     the two roundings agree. A value exactly at .5 would diverge.
+//   - Page scales: ts_f32_to_f16 matches numpy astype(float16) on these values.
 //
 // History:
 //   - Original test compared ts_pack_tile640 placeholder scales against
 //     Python compute_scales -> FAIL by design. Fixed: now compares
 //     ts_compute_scales output (the real fitted scales).
 //   - Ternary threshold used double accumulation in C++ vs float32 in
-//     Python. Fixed: C++ now uses float32 accumulation to match Python
-//     bit-exactly (tessera-quant.cpp ts_ternarize_with_acts).
+//     Python. Fixed: C++ now uses float32 accumulation (tessera-quant.cpp
+//     ts_ternarize_with_acts); see the summation-order note above.
 // ---------------------------------------------------------------------------
 
 #include "tessera-quant.h"
