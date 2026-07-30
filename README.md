@@ -80,14 +80,16 @@ The `llama.cpp` project is the main playground for developing new features for t
 | [Hexagon [In Progress]](docs/backend/snapdragon/README.md) | Snapdragon |
 | [VirtGPU](docs/backend/VirtGPU.md) | VirtGPU APIR |
 
-## Other documentation
+## Documentation
+
+#### Tools
 
 - [cli](tools/cli/README.md)
 - [completion](tools/completion/README.md)
 - [server](tools/server/README.md)
 - [GBNF grammars](grammars/README.md)
 
-#### Development documentation
+#### Development
 
 - [How to build](docs/build.md)
 - [Running on Docker](docs/docker.md)
@@ -98,18 +100,6 @@ The `llama.cpp` project is the main playground for developing new features for t
 - [XCFramework](docs/xcframework.md)
 - [Completions](docs/completions.md)
 - [Models](docs/models.md)
-
-#### Seminal papers and background on the models
-
-If your issue is with model generation quality, then please at least scan the following links and papers to understand the limitations of LLaMA models. This is especially important when choosing an appropriate model size and appreciating both the significant and subtle differences between LLaMA models and ChatGPT:
-- LLaMA:
-    - [Introducing LLaMA: A foundational, 65-billion-parameter large language model](https://ai.facebook.com/blog/large-language-model-llama-meta-ai/)
-    - [LLaMA: Open and Efficient Foundation Language Models](https://arxiv.org/abs/2302.13971)
-- GPT-3
-    - [Language Models are Few-Shot Learners](https://arxiv.org/abs/2005.14165)
-- GPT-3.5 / InstructGPT / ChatGPT:
-    - [Aligning language models to follow instructions](https://openai.com/research/instruction-following)
-    - [Training language models to follow instructions with human feedback](https://arxiv.org/abs/2203.02155)
 
 ## Dependencies
 
