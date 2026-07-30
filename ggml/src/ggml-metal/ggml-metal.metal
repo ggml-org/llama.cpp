@@ -11366,7 +11366,9 @@ kernel void kernel_TILE640_MATMUL(
     device const uint*    outlier_cols,
     device const half*    outlier_vals,
     device const uchar*   input,
+    device const half*    act_scale,   // [in_dim] per-channel AWQ scale, or nullptr
     device       float*   output,
+    constant uint &       modality_id, // 0=text, 1=image, 2=audio (v2 selects among bound arrays)
     uint3 tgp [[threadgroup_position_in_grid]],
     ushort3 tp [[thread_position_in_threadgroup]],
     uint  sl  [[thread_index_in_simdgroup]],
@@ -11397,6 +11399,8 @@ kernel void kernel_TILE640_MATMUL(
     // while amortizing the base-3 decode across the tile.
     threadgroup float decoded_page[T640_PAGE];
     float acc = 0.0f;
+    // Precision invariant: dequant values are fp32 from scale*trit through
+    // the FMA accumulation. act_scale is applied in fp32 after f16->f32 load.
     for (int32_t p = 0; p < nt; ++p) {
         if (si == 0) {
             const float page_max = float(row_ps[p]);
@@ -11452,9 +11456,11 @@ kernel void kernel_TILE640_MATMUL(
             const int64_t input_base =
                 ((int64_t)b * n_tokens + j0 + si) * in_dim + page_col0;
             for (int32_t k = sl; k < page_cols; k += 32) {
-                acc = fma(
-                    tile640_load_activation(input, input_base + k),
-                    decoded_page[k], acc);
+                float a = tile640_load_activation(input, input_base + k);
+                if (act_scale != nullptr) {
+                    a *= float(act_scale[page_col0 + k]);
+                }
+                acc = fma(a, decoded_page[k], acc);
             }
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -11472,10 +11478,12 @@ kernel void kernel_TILE640_MATMUL(
             const int32_t gk  = row_off_lo + k;
             const int32_t col = (int32_t) outlier_cols[gk];
             if (col < in_dim) {
-                acc = fma(
-                    tile640_load_activation(input, input_base + col),
-                    float(outlier_vals[gk]),
-                    acc);
+                if (act_scale != nullptr) {
+                    float ov = float(outlier_vals[gk]) * float(act_scale[col]);
+                    acc = fma(tile640_load_activation(input, input_base + col), ov, acc);
+                } else {
+                    acc = fma(tile640_load_activation(input, input_base + col), float(outlier_vals[gk]), acc);
+                }
             }
         }
     }
