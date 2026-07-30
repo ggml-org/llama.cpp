@@ -21,6 +21,7 @@
 #include "ggml-cuda/count-equal.cuh"
 #include "ggml-cuda/cpy.cuh"
 #include "ggml-cuda/cross-entropy-loss.cuh"
+#include "ggml-cuda/cuda-dump-dequant.cuh"
 #include "ggml-cuda/cumsum.cuh"
 #include "ggml-cuda/diagmask.cuh"
 #include "ggml-cuda/diag.cuh"
@@ -1810,6 +1811,12 @@ static bool ggml_cuda_should_fuse_mul_mat_vec_q(const ggml_tensor * tensor) {
 }
 
 static void ggml_cuda_mul_mat(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    // Tessera Layer 1: dump the dequantized weight to sidecar before the
+    // matmul. No-op when the env var / flag is not set, so the matmul
+    // output is byte-identical to a stock build. Per-process dedup keeps
+    // the sidecar write to one per tensor. See cuda-dump-dequant.cu.
+    ggml_cuda_dump_dequant(ctx, src0);
+
     GGML_TENSOR_BINARY_OP_LOCALS
 
     const int32_t hint = ggml_get_op_params_i32(dst, 1);
@@ -1855,6 +1862,11 @@ static void ggml_cuda_mul_mat_id(ggml_backend_cuda_context & ctx, ggml_tensor * 
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
     const ggml_tensor * ids  = dst->src[2];
+
+    // Tessera Layer 1: dump the dequantized weight for the full tensor
+    // (deduped per-process; the per-expert slices inside the loop below
+    // will hit the dedup cache and skip). See cuda-dump-dequant.cu.
+    ggml_cuda_dump_dequant(ctx, src0);
 
     GGML_ASSERT(src1->type == GGML_TYPE_F32);
     GGML_ASSERT(dst->type  == GGML_TYPE_F32);
