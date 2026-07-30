@@ -2,11 +2,33 @@
 
 set(TARGET llama-quantize-impl)
 
-add_library(${TARGET} quantize.cpp)
+add_library(${TARGET}
+    quantize.cpp
+    tessera/tessera-vec.cpp
+    tessera/tessera-linalg.cpp
+    tessera/tessera-lbfgs.cpp
+    tessera/tessera-quant.cpp
+    tessera/tessera-search.cpp
+    tessera/tessera-awq.cpp
+    tessera/tessera-l5.cpp
+)
 set_target_properties(${TARGET} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
-target_include_directories(${TARGET} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(${TARGET} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/tessera)
 target_link_libraries(${TARGET} PUBLIC llama-common llama ${CMAKE_THREAD_LIBS_INIT})
+
+if(APPLE)
+    target_link_libraries(${TARGET} PUBLIC "-framework Accelerate")
+endif()
+
+if(UNIX AND NOT APPLE)
+    find_package(BLAS)
+    if(BLAS_FOUND)
+        target_link_libraries(${TARGET} PUBLIC ${BLAS_LIBRARIES})
+    else()
+        message(STATUS "BLAS not found - tessera will use scalar fallback")
+    endif()
+endif()
 
 if(LLAMA_TOOLS_INSTALL)
     install(TARGETS ${TARGET} LIBRARY)
