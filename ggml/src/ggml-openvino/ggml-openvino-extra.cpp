@@ -52,6 +52,8 @@ void ggml_openvino_device_config::init() {
         "GGML_OPENVINO_PHASE_TUNE_DEVICES",
         "GGML_OPENVINO_PHASE_TUNE_OUTPUT_DIR",
         "GGML_OPENVINO_PHASE_TUNE_PROGRESS",
+        "GGML_OPENVINO_PHASE_TUNE_TWO_PASS",
+        "GGML_OPENVINO_PHASE_TUNE_PASS",
     };
 
     for (const char * const & env_var : env_var_names) {
@@ -112,8 +114,12 @@ void ggml_openvino_device_config::init() {
         }
         const char * out = ggml_openvino_getenv_str("GGML_OPENVINO_PHASE_TUNE_OUTPUT_DIR", "/tmp/ov_phase_tune");
         phase_tune_output_dir = out;
-        GGML_LOG_INFO("OpenVINO phase tune: devices %s vs %s, output %s (stateless timing; use STATEFUL=0)\n",
-                      phase_tune_device0.c_str(), phase_tune_device1.c_str(), phase_tune_output_dir.c_str());
+        phase_tune_two_pass   = ggml_openvino_getenv_int("GGML_OPENVINO_PHASE_TUNE_TWO_PASS", 1) != 0;
+        const int pass_env    = ggml_openvino_getenv_int("GGML_OPENVINO_PHASE_TUNE_PASS", -1);
+        GGML_LOG_INFO("OpenVINO phase tune: devices %s vs %s, output %s two_pass=%d pass=%d STATEFUL=%d\n",
+                      phase_tune_device0.c_str(), phase_tune_device1.c_str(), phase_tune_output_dir.c_str(),
+                      phase_tune_two_pass ? 1 : 0, pass_env,
+                      ggml_openvino_getenv_int("GGML_OPENVINO_STATEFUL_EXECUTION"));
     }
 
     phase_split = phase_split_env || prefill_device != decode_device || phase_tune;
@@ -267,6 +273,17 @@ const std::string & ggml_openvino_get_phase_tune_device(int index) {
 
 const std::string & ggml_openvino_get_phase_tune_output_dir() {
     return ggml_openvino_get_device_config().phase_tune_output_dir;
+}
+
+bool ggml_openvino_phase_tune_two_pass_enabled() {
+    return ggml_openvino_get_device_config().phase_tune_two_pass;
+}
+
+int ggml_openvino_phase_tune_pass() {
+    if (!ggml_openvino_phase_tune_two_pass_enabled()) {
+        return -1;
+    }
+    return ggml_openvino_getenv_int("GGML_OPENVINO_PHASE_TUNE_PASS", -1);
 }
 
 // Get the value of a GGML_OPENVINO_* env var as a string. Returns

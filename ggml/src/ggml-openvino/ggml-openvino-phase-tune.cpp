@@ -7,8 +7,6 @@
 #include "openvino/frontend.h"
 #include "openvino/input_model.h"
 #include "openvino/translate_session.h"
-#include "openvino/input_model.h"
-#include "openvino/translate_session.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -285,6 +283,19 @@ static void write_phase_csv(const char *               phase_name,
     fprintf(stderr, "OpenVINO phase tune: wrote %s\n", path.c_str());
 }
 
+static void write_all_tune_csv(const std::string &                        out_dir,
+                               const std::string &                        d0,
+                               const std::string &                        d1,
+                               const std::unordered_map<int, tune_sample> & pp0,
+                               const std::unordered_map<int, tune_sample> & pp1,
+                               const std::unordered_map<int, tune_sample> & tg0,
+                               const std::unordered_map<int, tune_sample> & tg1) {
+    write_phase_csv("pp", d0, pp0, out_dir);
+    write_phase_csv("pp", d1, pp1, out_dir);
+    write_phase_csv("tg", d0, tg0, out_dir);
+    write_phase_csv("tg", d1, tg1, out_dir);
+}
+
 static void dump_tune_csv_files() {
     if (!ggml_openvino_phase_tune_enabled()) {
         return;
@@ -292,6 +303,7 @@ static void dump_tune_csv_files() {
     const std::string out_dir = ggml_openvino_get_phase_tune_output_dir();
     const std::string d0      = ggml_openvino_get_phase_tune_device(0);
     const std::string d1      = ggml_openvino_get_phase_tune_device(1);
+    const int         pass    = ggml_openvino_phase_tune_pass();
 
     std::unordered_map<int, tune_sample> pp0, pp1, tg0, tg1;
     {
@@ -302,9 +314,16 @@ static void dump_tune_csv_files() {
         tg1 = g_tg_dev1;
     }
 
-    write_phase_csv("pp", d0, pp0, out_dir);
+    if (pass < 0) {
+        write_all_tune_csv(out_dir, d0, d1, pp0, pp1, tg0, tg1);
+        return;
+    }
+    if (pass == 0) {
+        write_phase_csv("pp", d0, pp0, out_dir);
+        write_phase_csv("tg", d0, tg0, out_dir);
+        return;
+    }
     write_phase_csv("pp", d1, pp1, out_dir);
-    write_phase_csv("tg", d0, tg0, out_dir);
     write_phase_csv("tg", d1, tg1, out_dir);
 }
 
@@ -347,31 +366,36 @@ enum ggml_status ov_graph_compute_phase_tune(ggml_cgraph * cgraph, std::shared_p
     graph_key base_key(cgraph);
     base_key.last_node_name += is_prefill ? ":ov_pp" : ":ov_tg";
 
-    const auto cache_tensors = collect_cache_tensors(cgraph);
-    std::vector<kv_backup_entry> kv_saved;
-    backup_kv(cache_tensors, kv_saved);
-
-    int base_token = 0;
-    if (is_prefill) {
-        base_token = g_pp_token_cursor;
-    } else {
-        base_token = g_tg_token_cursor;
-    }
-
     const std::string dev0 = ggml_openvino_get_phase_tune_device(0);
     const std::string dev1 = ggml_openvino_get_phase_tune_device(1);
+    const int         pass = ggml_openvino_phase_tune_pass();
+    const int         base_token = is_prefill ? g_pp_token_cursor : g_tg_token_cursor;
 
-    for (int di = 0; di < 2; ++di) {
-        restore_kv(cache_tensors, kv_saved);
-        const std::string & device = (di == 0) ? dev0 : dev1;
+    if (pass >= 0) {
+        const std::string & device = (pass == 0) ? dev0 : dev1;
         float               ms     = 0.f;
         if (timed_infer_on_device(cgraph, base_key, is_prefill, device, &ms) != GGML_STATUS_SUCCESS) {
             return GGML_STATUS_FAILED;
         }
-        record_samples(is_prefill ? tune_phase::prefill : tune_phase::decode, base_token, n_tokens_in_graph, di, ms);
-    }
+        record_samples(is_prefill ? tune_phase::prefill : tune_phase::decode, base_token, n_tokens_in_graph, pass, ms);
+    } else {
+        const auto cache_tensors = collect_cache_tensors(cgraph);
+        std::vector<kv_backup_entry> kv_saved;
+        backup_kv(cache_tensors, kv_saved);
 
-    restore_kv(cache_tensors, kv_saved);
+        for (int di = 0; di < 2; ++di) {
+            restore_kv(cache_tensors, kv_saved);
+            const std::string & device = (di == 0) ? dev0 : dev1;
+            float               ms     = 0.f;
+            if (timed_infer_on_device(cgraph, base_key, is_prefill, device, &ms) != GGML_STATUS_SUCCESS) {
+                return GGML_STATUS_FAILED;
+            }
+            record_samples(is_prefill ? tune_phase::prefill : tune_phase::decode, base_token, n_tokens_in_graph, di,
+                           ms);
+        }
+
+        restore_kv(cache_tensors, kv_saved);
+    }
 
     g_tune_production = true;
     const enum ggml_status st = ov_graph_compute_dynamic(cgraph, r_ctx);

@@ -695,8 +695,7 @@ static std::shared_ptr<ov_runtime_context> get_ov_runtime_context_ptr() {
         const bool decode_on_gpu = ggml_openvino_device_is_gpu(ggml_openvino_get_decode_device());
         const bool same_phase_device = !ggml_openvino_phase_split_enabled() ||
                                        (ggml_openvino_get_prefill_device() == ggml_openvino_get_decode_device());
-        ctx->stateful = is_stateful_enabled() && !ggml_openvino_is_npu() && decode_on_gpu && same_phase_device &&
-                          !ggml_openvino_phase_tune_enabled();
+        ctx->stateful = is_stateful_enabled() && !ggml_openvino_is_npu() && decode_on_gpu && same_phase_device;
         return ctx;
     }();
     return r_ctx;
