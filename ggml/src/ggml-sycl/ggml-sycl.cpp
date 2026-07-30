@@ -2667,7 +2667,6 @@ inline void ggml_sycl_op_mul_mat_sycl(
         {
             const float alpha = 1.0f;
             const float beta  = 0.0f;
-            // use native fp16 to fp32 promotion GEMM
             SYCL_CHECK(CHECK_TRY_ERROR(dpct::gemm(
                 *stream, oneapi::mkl::transpose::trans,
                 oneapi::mkl::transpose::nontrans, row_diff, src1_ncols, ne10,
