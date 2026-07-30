@@ -74,12 +74,39 @@ struct ggml_tallocr ggml_tallocr_new(ggml_backend_buffer_t buffer) {
 
 enum ggml_status ggml_tallocr_alloc(struct ggml_tallocr * talloc, struct ggml_tensor * tensor) {
     size_t size = ggml_backend_buffer_get_alloc_size(talloc->buffer, tensor);
+
+    // Defensive: GGML_PAD below relies on alignment being a non-zero power of two.
+    // The constructor already asserts this, but assertions may be disabled in
+    // release builds and callers should not be able to crash the allocator.
+    if (talloc->alignment == 0 || (talloc->alignment & (talloc->alignment - 1)) != 0) {
+        GGML_LOG_ERROR("%s: invalid alignment %zu for tensor %s (must be non-zero power of two)\n",
+                __func__, talloc->alignment, tensor->name);
+        return GGML_STATUS_FAILED;
+    }
+
+    // Prevent integer overflow in GGML_PAD: size + alignment - 1 must not wrap.
+    // With alignment > 0 validated above, SIZE_MAX - alignment + 1 cannot underflow.
+    if (size > SIZE_MAX - talloc->alignment + 1) {
+        GGML_LOG_ERROR("%s: allocation size overflow for tensor %s (size %zu, alignment %zu)\n",
+                __func__, tensor->name, size, talloc->alignment);
+        return GGML_STATUS_FAILED;
+    }
+
     size = GGML_PAD(size, talloc->alignment);
 
-    if (talloc->offset + size > ggml_backend_buffer_get_size(talloc->buffer)) {
+    // Reject zero-byte allocations: they would return a valid pointer to a buffer
+    // that is too small for the tensor's declared dimensions.
+    if (size == 0) {
+        GGML_LOG_ERROR("%s: zero-size allocation requested for tensor %s\n",
+                __func__, tensor->name);
+        return GGML_STATUS_FAILED;
+    }
+
+    const size_t buf_size = ggml_backend_buffer_get_size(talloc->buffer);
+    if (talloc->offset > buf_size || size > buf_size - talloc->offset) {
         GGML_LOG_ERROR("%s: not enough space in the buffer to allocate %s (needed %zu, available %zu)\n",
-                __func__, tensor->name, size, ggml_backend_buffer_get_size(talloc->buffer) - talloc->offset);
-        GGML_ABORT("not enough space in the buffer");
+                __func__, tensor->name, size, buf_size - talloc->offset);
+        return GGML_STATUS_FAILED;
     }
 
     void * addr = (char *)ggml_backend_buffer_get_base(talloc->buffer) + talloc->offset;

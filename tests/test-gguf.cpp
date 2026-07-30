@@ -31,6 +31,7 @@ enum handcrafted_file_type {
     // HANDCRAFTED_KV_BAD_VALUE_SIZE          =  30 + offset_has_kv, // removed because it can result in allocations > 1 TB (default sanitizer limit)
     HANDCRAFTED_KV_DUPLICATE_KEY           =  40 + offset_has_kv,
     HANDCRAFTED_KV_BAD_ALIGN               =  50 + offset_has_kv,
+    HANDCRAFTED_KV_ALIGNMENT_WRONG_TYPE    =  60 + offset_has_kv,
     HANDCRAFTED_KV_SUCCESS                 = 800 + offset_has_kv,
 
     HANDCRAFTED_TENSORS_BAD_NAME_SIZE      =  10 + offset_has_tensors,
@@ -69,6 +70,7 @@ static std::string handcrafted_file_type_name(const enum handcrafted_file_type h
         case HANDCRAFTED_KV_BAD_TYPE:                return "KV_BAD_TYPE";
         case HANDCRAFTED_KV_DUPLICATE_KEY:           return "KV_DUPLICATE_KEY";
         case HANDCRAFTED_KV_BAD_ALIGN:               return "KV_BAD_ALIGN";
+        case HANDCRAFTED_KV_ALIGNMENT_WRONG_TYPE:    return "KV_ALIGNMENT_WRONG_TYPE";
         case HANDCRAFTED_KV_SUCCESS:                 return "KV_RANDOM_KV";
 
         case HANDCRAFTED_TENSORS_BAD_NAME_SIZE:      return "TENSORS_BAD_NAME_SIZE";
@@ -99,7 +101,9 @@ static bool expect_context_not_null(const enum handcrafted_file_type hft) {
         return hft >= HANDCRAFTED_HEADER_EMPTY;
     }
     if (hft < offset_has_tensors) {
-        return hft >= HANDCRAFTED_KV_SUCCESS;
+        // KV_ALIGNMENT_WRONG_TYPE is a malformed-but-recoverable file: the parser
+        // should fall back to the default alignment instead of aborting.
+        return hft >= HANDCRAFTED_KV_SUCCESS || hft == HANDCRAFTED_KV_ALIGNMENT_WRONG_TYPE;
     }
     if (hft < offset_has_data) {
         return hft >= HANDCRAFTED_TENSORS_SUCCESS;
@@ -357,6 +361,20 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
 
         alignment = expect_context_not_null(hft) ? 1 : 13;
         helper_write(file, alignment);
+    }
+
+    if (hft == HANDCRAFTED_KV_ALIGNMENT_WRONG_TYPE) {
+        const uint64_t n = strlen(GGUF_KEY_GENERAL_ALIGNMENT);
+        helper_write(file, n);
+        helper_write(file, GGUF_KEY_GENERAL_ALIGNMENT, n);
+
+        // Write general.alignment with a non-UINT32 type (e.g., INT32).
+        // A robust parser should fall back to GGUF_DEFAULT_ALIGNMENT instead of aborting.
+        const int32_t type = gguf_type(GGUF_TYPE_INT32);
+        helper_write(file, type);
+
+        const int32_t value = 64;
+        helper_write(file, value);
     }
 
     if (hft < offset_has_tensors) {
@@ -747,6 +765,7 @@ static std::pair<int, int> test_handcrafted_file(const unsigned int seed) {
         HANDCRAFTED_KV_BAD_TYPE,
         HANDCRAFTED_KV_DUPLICATE_KEY,
         HANDCRAFTED_KV_BAD_ALIGN,
+        HANDCRAFTED_KV_ALIGNMENT_WRONG_TYPE,
         HANDCRAFTED_KV_SUCCESS,
 
         HANDCRAFTED_TENSORS_BAD_NAME_SIZE,
