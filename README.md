@@ -269,6 +269,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 - [llmaz](https://github.com/InftyAI/llmaz) - ☸️ Easy, advanced inference platform for large language models on Kubernetes.
 - [LLMKube](https://github.com/defilantech/llmkube) - Kubernetes operator for llama.cpp with multi-GPU and Apple Silicon Metal
   support"
+- [Nika](https://github.com/supernovae-st/nika) - workflow engine for AI that drives `llama-server` as a local provider: `.nika.yaml` DAGs statically checked before execution (schema, permits, cost), tamper-evident traces after (AGPL)
 </details>
 
 <details>
