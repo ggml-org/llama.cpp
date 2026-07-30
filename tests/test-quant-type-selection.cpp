@@ -216,18 +216,18 @@ static std::string snapshot_file_from_name(const std::string & name) {
 }
 
 static const remote_model_spec model_specs[] = {
-    { "ggml-org/Qwen3-0.6B-GGUF",                   "Q8_0"   },
-    { "ggml-org/GLM-4.6V-GGUF",                     "Q8_0"   },
-    { "ggml-org/Step-3.5-Flash-GGUF",               "Q4_K"   },
-    { "ggml-org/Qwen3-Coder-Next-GGUF",             "Q8_0"   },
-    { "ggml-org/Qwen3-14B-GGUF",                    "Q8_0"   },
-    { "ggml-org/Nemotron-Nano-3-30B-A3B-GGUF",      "Q8_0"   },
-    { "ggml-org/gpt-oss-120b-GGUF",                 "mxfp4"  },
-    { "ggml-org/gemma-3-4b-it-GGUF",                "Q8_0"   },
-    { "bartowski/Meta-Llama-3.1-70B-Instruct-GGUF", "Q4_K_M" },
-    { "bartowski/deepseek-ai_DeepSeek-V3.1-GGUF",   "IQ1_M"  },
-    { "bartowski/Qwen_Qwen3.5-397B-A17B-GGUF",      "IQ1_S"  }, // TODO: swap with ggml-org if/when it's released
-    { "bartowski/Qwen_Qwen3.5-27B-GGUF",            "Q8_0"   }, // TODO: swap with ggml-org if/when it's released
+    { "ggml-org/Qwen3-0.6B-GGUF",                     "Q8_0"   },
+    { "ggml-org/GLM-4.6V-GGUF",                       "Q8_0"   },
+    { "ggml-org/Step-3.5-Flash-GGUF",                 "Q4_K"   },
+    { "ggml-org/Qwen3-Coder-Next-GGUF",               "Q8_0"   },
+    { "ggml-org/Qwen3-14B-GGUF",                      "Q8_0"   },
+    { "ggml-org/NVIDIA-Nemotron-Nano-3-30B-A3B-GGUF", "Q8_0"   },
+    { "ggml-org/gpt-oss-120b-GGUF",                   "mxfp4"  },
+    { "ggml-org/gemma-3-4b-it-GGUF",                  "Q8_0"   },
+    { "bartowski/Meta-Llama-3.1-70B-Instruct-GGUF",   "Q4_K_M" },
+    { "bartowski/deepseek-ai_DeepSeek-V3.1-GGUF",     "IQ1_M"  },
+  //{ "bartowski/Qwen_Qwen3.5-397B-A17B-GGUF",        "IQ1_S"  }, // TODO: swap with ggml-org if/when it's released
+    { "ggml-org/Qwen3.6-27B-GGUF",                    "Q8_0"   },
 };
 
 static const int n_model_specs = (int) (sizeof(model_specs) / sizeof(model_specs[0]));
