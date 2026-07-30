@@ -1,7 +1,7 @@
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch
 torchvision
-git+https://github.com/Zyphra/transformers.git@zaya1
+transformers
 huggingface-hub
 accelerate
 sentence-transformers
