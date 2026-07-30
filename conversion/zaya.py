@@ -32,6 +32,8 @@ class ZayaModel(TextModel):
         n_ff = self.hparams.get("ffn_hidden_size", 4096) // 2
         self.gguf_writer.add_feed_forward_length(n_ff)
 
+        self.gguf_writer.add_layer_norm_rms_eps(self.hparams.get("norm_epsilon", 1e-05))
+
         cca_time0 = self.hparams.get("cca_time0", 2)
         self.gguf_writer.add_ssm_conv_kernel(cca_time0)
 
@@ -39,8 +41,6 @@ class ZayaModel(TextModel):
         partial_rotary = self.hparams.get("partial_rotary_factor", 0.5)
         self.gguf_writer.add_rope_dimension_count(int(partial_rotary * head_dim))
 
-        n_expert = self.find_hparam(["num_experts"])
-        self.gguf_writer.add_expert_count(n_expert)
         n_expert_used = self.find_hparam(["moe_router_topk", "num_experts_per_tok"], optional=True) or 1
         self.gguf_writer.add_expert_used_count(n_expert_used)
 

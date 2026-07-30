@@ -1875,7 +1875,6 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             {
                 probs = logits; // already-normalized expert probabilities
             } break;
-            } break;
         default:
             GGML_ABORT("fatal error");
     }
