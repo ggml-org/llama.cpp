@@ -14,9 +14,19 @@ import argparse
 import ast
 import json
 import math
+import sys
 from pathlib import Path
 
-import polars as pl
+import numpy as np
+
+# Polars is only required by the bridge / observer-evidence path.  Lazy-import
+# so the PE-QAT sub-mode stays usable on systems where polars is not pinned
+# (e.g. inside the calibration harness container that ships without it).
+try:
+    import polars  # noqa: F401
+    _HAS_POLARS = True
+except ImportError:  # pragma: no cover - exercised on polars-free systems
+    _HAS_POLARS = False
 
 
 POLICY_SCHEMA = "llama.speculative.calibration-policy.v1"
@@ -88,6 +98,11 @@ def unique_fragments(module: str) -> list[str]:
 
 
 def observer_candidates(store: Path, run_id: str | None, fraction: float) -> list[dict]:
+    if not _HAS_POLARS:
+        raise RuntimeError(
+            "polars is required for --evidence-store; install it via the tessera requirements"
+        )
+    import polars as pl
     files = list((store / "observer").glob("*.parquet"))
     if not files or fraction <= 0:
         return []
@@ -132,6 +147,61 @@ def load_base_policy(path: Path | None) -> dict:
     return policy
 
 
+def command_pe_qat(args: argparse.Namespace) -> None:
+    """PE-QAT sub-mode.  Trains a LoRA + SmoothQuant policy on a layer bundle."""
+    # Importing here keeps the existing bridge path dependency-free of
+    # ``tools.tessera.pe_qat`` (which is only relevant to the DSpark LoRA
+    # finetuning lane).  We try the package-relative import first (so the
+    # tool behaves identically whether invoked as a module or as a script)
+    # and fall back to a sys.path-anchored import for the script path.
+    try:
+        from .pe_qat import apply_pe_qat, pe_qat_train, save_pe_qat_policy
+        from .pe_qat_demo import _per_position_mse  # type: ignore[attr-defined]
+    except ImportError:
+        repo_root = Path(__file__).resolve().parents[2]
+        if str(repo_root) not in sys.path:
+            sys.path.insert(0, str(repo_root))
+        from tools.tessera.pe_qat import apply_pe_qat, pe_qat_train, save_pe_qat_policy
+        from tools.tessera.pe_qat_demo import _per_position_mse  # type: ignore[attr-defined]
+
+    data = np.load(Path(args.pe_qat_bundle), allow_pickle=False)
+    if "weight" not in data or "train_activations" not in data:
+        raise ValueError(
+            f"{args.pe_qat_bundle}: expected `weight` and `train_activations` arrays"
+        )
+    W = np.asarray(data["weight"], dtype=np.float32)
+    x = np.asarray(data["train_activations"], dtype=np.float32)
+    if W.ndim != 2:
+        raise ValueError(f"{args.pe_qat_bundle}: weight must be 2-D, got {W.shape}")
+    if x.ndim != 2 or x.shape[1] != W.shape[1]:
+        raise ValueError(
+            f"{args.pe_qat_bundle}: train_activations must be (batch, in={W.shape[1]}), got {x.shape}"
+        )
+    print(f"loaded {args.pe_qat_bundle}: W={W.shape}, x={x.shape}")
+    result = pe_qat_train(
+        W,
+        x,
+        rank=args.pe_qat_rank,
+        alpha=args.pe_qat_alpha,
+        iters=args.pe_qat_iters,
+        lr=args.pe_qat_lr,
+        smooth_prior_weight=args.pe_qat_smooth_prior_weight,
+        log_every=args.pe_qat_log_every,
+        seed=args.pe_qat_seed,
+    )
+    output = Path(args.output)
+    save_pe_qat_policy(output, result, family=args.pe_qat_family)
+    print(f"wrote {output}")
+
+    y_ref, y_q = apply_pe_qat(W, x, result)
+    per_pos = _per_position_mse(y_ref, y_q)
+    print(
+        f"output MSE: quant-vs-ref={float(np.mean(per_pos)):.4e}  "
+        f"per-position min={per_pos.min():.4e} max={per_pos.max():.4e} "
+        f"median={np.median(per_pos):.4e}"
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build a Tessera policy from Unsloth and observer evidence")
     parser.add_argument("--output", required=True)
@@ -148,7 +218,32 @@ def main() -> None:
         default="protected",
         help="Encode Unsloth skips with a larger residual budget or exact Tessera residuals",
     )
+    # PE-QAT mode flags.  All optional; when --pe-qat-bundle is omitted the
+    # script behaves exactly as it did before this mode was added.  The
+    # ``--pe-qat-*`` namespace keeps the existing flat CLI intact so the
+    # calibrate_quantize.py and test-tessera-unsloth-policy.py consumers
+    # don't need to be updated.
+    parser.add_argument(
+        "--pe-qat-bundle",
+        default=None,
+        help="Layer bundle .npz to run PE-QAT on; switches the script into PE-QAT mode",
+    )
+    parser.add_argument("--pe-qat-rank", type=int, default=16, help="LoRA rank for PE-QAT")
+    parser.add_argument("--pe-qat-alpha", type=float, default=32.0, help="LoRA alpha for PE-QAT")
+    parser.add_argument("--pe-qat-iters", type=int, default=100, help="PE-QAT training iterations")
+    parser.add_argument("--pe-qat-lr", type=float, default=1e-3, help="AdamW learning rate")
+    parser.add_argument(
+        "--pe-qat-smooth-prior-weight", type=float, default=1e-3, help="SmoothQuant log-space prior weight"
+    )
+    parser.add_argument("--pe-qat-seed", type=int, default=0, help="RNG seed")
+    parser.add_argument("--pe-qat-family", default="attention", help="Family tag stored in the policy JSON")
+    parser.add_argument("--pe-qat-log-every", type=int, default=10, help="Loss-log interval")
     args = parser.parse_args()
+
+    if args.pe_qat_bundle:
+        command_pe_qat(args)
+        return
+
     if not 0 <= args.evidence_top_fraction <= 1:
         raise ValueError("--evidence-top-fraction must be in [0, 1]")
     if not 0 < args.protected_outlier_frac <= 1:
