@@ -30,6 +30,19 @@ The parameters in square brackets are optional and have the following meaning:
 * `--no-ppl` disables the calculation of perplexity for the processed chunks. Useful if you want to speed up the processing and do not care about perplexity.
 * `--show-statistics` displays imatrix file's statistics.
 
+## Speculative-decoding calibration
+
+When `--model-draft FNAME` is set, `llama-imatrix` rolls the target model
+forward under real speculative-decoding forward passes instead of plain
+text forward passes. This captures verifier activations that match the
+distribution the drafter will see at inference time, and is the basis
+for the drafter fine-tuning (rejection sampling / distillation) flow.
+
+* `--model-draft PATH` (also `-md` / `--spec-draft-model`) drafter model used to drive spec-decoding forward passes. When set, the imatrix is collected on the verifier activations produced while the drafter is run side-by-side; when unset, plain autoregressive forward passes are used.
+* `--spec-steps N` number of spec-decoding steps to roll forward (default: 0, i.e. until the context limit is reached). Each step is one draft-token proposal plus the verifier check; set this to bound the calibration run when you do not need to consume the full context.
+* `--telemetry-out PATH` path to write a per-step accept/reject JSONL stream when `--model-draft` is set (default: disabled, no output). The v1 schema is `llama.dflash.acceptance.v1` with one record per spec step carrying `seq_id`, `drafted`, `accepted`, and a per-position `confidence[]` array. The stream is append-only and flushed after each step, so it survives an interrupted run.
+* `--telemetry-topk N` when `> 0` together with `--telemetry-out`, additionally emit the `llama.spec_calib.v2` schema with the full top-N verifier and drafter distributions at every draft position (default: 0, v1 only). Suggested value: 64. The v2 stream is what the drafter fine-tuning / distillation tooling consumes; without it, only the accept/reject signal is available.
+
 For faster computation, make sure to use GPU offloading via the `-ngl | --n-gpu-layers` argument.
 
 Recent versions of `llama-imatrix` store data in GGUF format by default. For the legacy format, use an extension other than `.gguf` when saving the output file. More information is available in <https://github.com/ggml-org/llama.cpp/pull/9400>.
@@ -72,6 +85,18 @@ Recent versions of `llama-imatrix` store data in GGUF format by default. For the
 ```bash
 # analyse imatrix file and display summary statistics instead of running inference
 ./llama-imatrix --in-file imatrix.gguf --show-statistics
+```
+
+```bash
+# spec-decoding calibration: collect verifier imatrix under real draft-and-verify
+# forward passes, write the v2 top-64 telemetry stream for drafter fine-tuning
+./llama-imatrix \
+    -m ggml-model-f16.gguf -f calibration-data.txt \
+    -md ggml-drafter.gguf \
+    --spec-steps 256 \
+    --telemetry-out spec-acceptance.jsonl \
+    --telemetry-topk 64 \
+    -ngl 99 -o imatrix.gguf
 ```
 
 `--show-statistics` will display the following statistics:

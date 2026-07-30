@@ -607,7 +607,7 @@ struct common_params {
     struct common_params_model mmproj;
     bool mmproj_use_gpu = true;     // use GPU for multimodal model
     bool no_mmproj = false;         // explicitly disable multimodal model
-    bool no_embedded_mtp = false;   // do not auto-enable the embedded MTP draft even if the GGUF has one
+    bool no_embedded_mtp = false;   // disable auto-enable of the MTP draft embedded in the model GGUF
     std::vector<std::string> image; // path to image file(s) ; TODO: change the name to "media"
     int image_min_tokens = -1;
     int image_max_tokens = -1;
