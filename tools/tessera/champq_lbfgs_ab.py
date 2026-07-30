@@ -372,33 +372,38 @@ def run_ab(
 def print_table(report: Dict[str, object]) -> None:
     """Print a one-row-per-mode table to stdout."""
     modes = report["modes"]
-    name_w = 8
-    mse_w = 12
-    smooth_w = 12
-    elapsed_w = 9
-    per_row_w = 14
-    header = (
-        f"{'mode':<{name_w}}"
-        f"{'mse_per_row':<{mse_w}}"
-        f"{'mse_per_lane':<{mse_w}}"
-        f"{'smoothness':<{smooth_w}}"
-        f"{'per_row_mean':<{per_row_w}}"
-        f"{'elapsed_s':<{elapsed_w}}"
-    )
+    # Column widths chosen so the table fits in a normal terminal.
+    cols = [
+        ("mode", 8, "<", "s"),
+        ("mse_per_row", 12, ">", "e"),
+        ("mse_per_lane", 12, ">", "e"),
+        ("smoothness", 13, ">", "e"),
+        ("per_row_mean", 14, ">", "e"),
+        ("elapsed_s", 9, ">", "f"),
+    ]
+    # Two-space gap between columns.
+    gap = "  "
+    header = gap.join(f"{name:>{w}}" for name, w, _, _ in cols)
     print(header)
     print("-" * len(header))
     for mode in ("none", "random", "ga", "lbfgs"):
         if mode not in modes:
             continue
         m = modes[mode]
-        print(
-            f"{mode:<{name_w}}"
-            f"{m['mse_per_row']:<{mse_w}.4e}"
-            f"{m['mse_per_lane']:<{mse_w}.4e}"
-            f"{m['smoothness']:<{smooth_w}.4e}"
-            f"{m['per_row_mse_mean_per_lane']:<{per_row_w}.4e}"
-            f"{m['elapsed_s']:<{elapsed_w}.2f}"
-        )
+        cells = [mode]
+        cells.append(f"{m['mse_per_row']:.3e}")
+        cells.append(f"{m['mse_per_lane']:.3e}")
+        cells.append(f"{m['smoothness']:.3e}")
+        cells.append(f"{m['per_row_mse_mean_per_lane']:.3e}")
+        cells.append(f"{m['elapsed_s']:.2f}")
+        # Apply alignment per column.
+        out = []
+        for (name, w, align, _fmt), val in zip(cols, cells):
+            if align == "<":
+                out.append(f"{val:<{w}}")
+            else:
+                out.append(f"{val:>{w}}")
+        print(gap.join(out))
     # Verdict: did LBFGS beat the others?
     if all(k in modes for k in ("none", "random", "ga", "lbfgs")):
         for metric, label in (("mse_per_row", "per-row MSE"), ("mse_per_lane", "per-lane MSE")):
@@ -407,7 +412,7 @@ def print_table(report: Dict[str, object]) -> None:
                 key=lambda kv: kv[1],
             )
             print()
-            print(f"lowest {label}: {best[0]} ({best[1]:.4e})")
+            print(f"lowest {label}: {best[0]} ({best[1]:.3e})")
             mse_l = modes["lbfgs"][metric]
             for other in ("none", "random", "ga"):
                 mse_o = modes[other][metric]
