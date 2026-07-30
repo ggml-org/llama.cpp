@@ -15,6 +15,10 @@ llama_add_compile_flags()
 # branch + commit and main tip used to build the dump tool, without an
 # out-of-band config. When git is not present at configure time (e.g.,
 # release tarballs) the fallback values ("unknown" for both) are used.
+#
+# Reconfigure on HEAD change: the .git/HEAD file and the ref it
+# points at both feed CMake's configure-depends mechanism so a
+# commit on this branch triggers a re-run of configure_file.
 set(TESSERA_KERNEL_VERSION "unknown")
 set(TESSERA_MAIN_TIP        "unknown")
 
@@ -53,6 +57,20 @@ if(Git_FOUND)
     endif()
     if(TESSERA_MAIN_RC EQUAL 0)
         set(TESSERA_MAIN_TIP "${TESSERA_MAIN_SHA}")
+    endif()
+
+    # Make CMake re-run configure_file when the branch tip changes.
+    # Both HEAD (the symbolic ref) and the ref it points at are
+    # dependencies; either one changing triggers a re-configure.
+    set(GIT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../.git")
+    if(IS_DIRECTORY "${GIT_DIR}")
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+            "${GIT_DIR}/HEAD")
+        # The ref file lives at .git/refs/heads/<branch>; we add the
+        # current branch's ref so a commit on this branch re-runs
+        # the configure step.
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+            "${GIT_DIR}/refs/heads/${TESSERA_BRANCH}")
     endif()
 endif()
 
