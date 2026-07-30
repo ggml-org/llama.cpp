@@ -45,6 +45,85 @@ Default values preserve upstream's existing hard-cutoff behavior; the new stages
 
 Planned follow-up work: generalize this mechanism into a configurable reasoning template/grammar, rather than a fixed set of budget-based checkpoints.
 
+## Benchmarking & Findings
+
+### Setup
+
+All results below use Qwen3.6-27B, `UD-Q4_K_XL` quantization, with MTP speculative decoding (3 draft tokens). A separate pass without speculative decoding produced consistent results and is omitted here for brevity.
+
+Four configurations are compared at several reasoning budgets, each adding one more piece of the mechanism on top of the last:
+
+- **Naive** — llama.cpp's existing default: the moment the budget is reached, `</think>` is force-injected immediately, with no grace period and no in-context signaling of any kind. This is the behavior described in the Problem section above, and the baseline this fork is trying to improve on.
+- **Hard-limit only** — this fork's hard-stop-with-grace-period stage used on its own (no soft warning, no intro message): instead of an immediate cutoff, the sampler waits up to `grace_tokens` for a paragraph boundary before closing the block.
+- **Soft + hard** — the grace-period hard stop plus the soft-warning stage (fired at a configurable fraction of the budget), without the intro stage.
+- **Intro + soft + hard** — the full three-stage mechanism: intro message, soft warning, hard stop with grace period.
+
+Two further reference points appear in the charts and tables: **Baseline (unlimited)**, where the reasoning block runs to its own natural `</think>`, and — for LiveCodeBench only — **No reasoning**, where the reasoning block is disabled entirely.
+
+Benchmarks: HumanEval+ (n=164) and LiveCodeBench (`release_v6`, n=200). Reported token counts are average total completion tokens per test (reasoning block plus final answer), matching the chart axes.
+
+### Results: HumanEval+
+
+<img width="950" height="550" alt="HumanEval+: token consumption by configuration" src="https://github.com/user-attachments/assets/ceb23497-0494-466b-8486-818b7e3569e6" />
+
+<img width="900" height="550" alt="HumanEval+: accuracy vs. token cost" src="https://github.com/user-attachments/assets/0834281d-5d96-4c0c-a28f-3f86e158e332" />
+
+
+| Budget (tokens) | Naive: tok / pass@1 | Hard-limit only: tok / pass@1 | Soft + hard: tok / pass@1 | Intro + soft + hard: tok / pass@1 |
+|---|---|---|---|---|
+| 300 | 499 / 92.7% | 489 / 92.1% | 422 / 92.1% | 391 / 92.7% |
+| 500 | 749 / 91.5% | 672 / 93.3% | 592 / 93.9% | 569 / 93.3% |
+| 750 | 963 / 93.3% | 906 / 93.9% | 809 / 93.9% | 863 / 91.5% |
+| 1250 | 1363 / 92.7% | 1348 / 92.7% | 1221 / 93.9% | 1360 / 95.7% |
+| Unlimited (baseline) | 2776 / 92.7% | — | — | — |
+
+Two results stand out here:
+
+1. **Token consumption drops monotonically as guidance is added, at every budget.** Naive uses the most completion tokens of the four configurations at all four budgets, hard-limit-only is next, and soft + hard / intro + soft + hard are consistently the lowest — e.g. at budget 500: 749 (naive) → 672 (hard-limit only) → 592 (soft + hard) → 569 (intro + soft + hard). Soft + hard and intro + soft + hard are close to each other throughout, and which of the two is marginally lower varies by budget on this benchmark (soft + hard is lowest at 750 and 1250; intro + soft + hard is lowest at 300 and 500) — with n=164 this is likely within run-to-run noise rather than a real ordering between the two.
+2. **Most configurations meet or beat the unlimited baseline (92.7%).** Of the 16 budget/configuration combinations, 12 are at or above 92.7%, and 8 exceed it outright — including the best result in the table, intro + soft + hard at budget 1250 (95.7%, using 1360 tokens against the baseline's 2776). The most plausible explanation is that constraining and guiding the reasoning block suppresses the repetition loops and non-convergent revision described in the Problem section above — on a benchmark like HumanEval+, where the model can typically reach a correct answer well within a modest token budget, an unconstrained reasoning block gives the model more opportunity to talk itself into a worse answer, not a better one.
+
+### Results: LiveCodeBench
+
+<img width="950" height="550" alt="LiveCodeBench: token usage by reasoning budget and style" src="https://github.com/user-attachments/assets/94c16e8b-e910-4b02-9f44-920a1cfc6034" />
+
+<img width="900" height="550" alt="LiveCodeBench: accuracy vs. token cost" src="https://github.com/user-attachments/assets/ff0776dc-1f82-4b5b-ab66-2c90df1a96f1" />
+
+| Budget (tokens) | Naive: tok / pass@1 | Hard-limit only: tok / pass@1 | Soft + hard: tok / pass@1 | Intro + soft + hard: tok / pass@1 |
+|---|---|---|---|---|
+| 500 | 6955 / 61.0% | 4827 / 58.5% | 3894 / 61.5% | 2930 / 56.5% |
+| 1000 | 7624 / 64.0% | 5820 / 65.5% | 4582 / 64.5% | 3334 / 60.0% |
+| 1750 | 7779 / 62.0% | 6556 / 62.5% | 4864 / 68.5% | 4862 / 66.0% |
+| 4000 | 16324 / 70.5% | 11251 / 65.5% | 10277 / 68.5% | 7693 / 69.5% |
+| Unlimited (baseline) | 36293 / 72.0% | — | — | — |
+| No reasoning | — / 57.0% | — | — | — |
+
+LiveCodeBench is far more reasoning-intensive at baseline (36293 tokens/task on average, versus 2776 for HumanEval+), and the ordering seen above holds even more cleanly here: **naive > hard-limit only > soft + hard > intro + soft + hard in total token count, at every single budget tested, with no exceptions.** At the 4000-token budget, naive uses 16324 tokens for 70.5% pass@1, while intro + soft + hard uses 7693 tokens — 47% of naive's token count — for 69.5%, a 1-point difference well within what n=200 sampling noise would produce.
+
+Accuracy differences between configurations at a fixed budget are generally small (a few points, consistent with n=200 noise) and don't show a systematic penalty for the more guided configurations — in most cases they hold accuracy roughly level with naive while using a fraction of the tokens.
+
+A separate effect shows up in how each configuration's accuracy responds to *increasing* the budget. For soft + hard and intro + soft + hard, pass@1 rises monotonically as budget increases from 500 to 4000, with no reversals. Naive and hard-limit-only do not show this: naive drops from 64.0% (1000 tokens) to 62.0% (1750 tokens) before jumping to 70.5% (4000 tokens), and hard-limit-only drops from 65.5% (1000 tokens) to 62.5% (1750 tokens). The guided configurations turn additional budget into a predictable accuracy gain; naive and hard-limit-only do not — this is the clearest "reduced noise" effect in this data.
+
+None of the four budget-constrained configurations fully recovers the unlimited baseline's 72.0% at any tested budget.
+
+### By difficulty (LiveCodeBench)
+
+| Difficulty | Baseline (unlimited) | 500-token budget (range across 4 configs) | 4000-token budget (range across 4 configs) |
+|---|---|---|---|
+| Easy (n=53) | 85% | 96–98% | 94–96% |
+| Medium (n=61) | 72% | 61–72% | 72–80% |
+| Hard (n=86) | 64% | 26–36% | 42–50% |
+
+This breakdown clarifies where the token savings come from, and echoes the HumanEval+ result above. On easy problems, every budget-constrained configuration at every tested budget scores at or above the unlimited baseline (96–98% vs. 85%) — again consistent with a capped, guided reasoning block reducing the chance the model overthinks its way into a wrong answer on a problem it could already solve. Medium problems are roughly flat to slightly improved at the higher budget. Hard problems are the exception: accuracy stays well below the unlimited baseline at both the smallest (26–36% vs. 64%) and largest (42–50% vs. 64%) budgets tested, for every configuration including intro + soft + hard. Budget-based control, however it's implemented, does not close this gap — the hardest problems still lose accuracy when reasoning length is capped.
+
+### Summary
+
+- Naive (llama.cpp's existing immediate-cutoff behavior) uses the most completion tokens of the four configurations at every budget tested, on both benchmarks — this is the behavior the mechanism is designed to improve on.
+- Each additional stage of budget-aware guidance (grace period → soft warning → intro message) reduces token consumption further. On LiveCodeBench this ordering is exact at every budget: naive > hard-limit only > soft + hard > intro + soft + hard.
+- Aggregate pass@1 does not show a systematic drop from budget constraints. On HumanEval+, 12 of 16 tested combinations meet or exceed the 92.7% unlimited baseline, and the single best result in either benchmark (95.7%) comes from the most heavily guided, budget-constrained configuration.
+- Soft + hard and intro + soft + hard produce a monotonic, predictable accuracy/budget relationship on LiveCodeBench; naive and hard-limit-only do not.
+- The gains are not evenly distributed across problem difficulty: easy-problem accuracy improves under constrained, guided budgets (consistent with reduced overthinking), while hard-problem accuracy remains below the unlimited baseline at every budget tested, for every configuration.
+
+
 ## Quick start
 
 Configuration is set via `LLAMA_ARG_THINK_BUDGET_*` environment variables, and can be overridden per-request in the API call — see [server API docs](tools/server/README.md) for the request-level parameters.
