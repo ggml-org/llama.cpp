@@ -86,18 +86,6 @@ void llama_model_zaya::load_arch_hparams(llama_model_loader & ml) {
     hparams.ssm_d_state = 1;
     hparams.ssm_n_group = 0;
 
-    /*
-     * zaya.py ref: L575-602 (layer alternation)
-     *
-     * for layer_n in range(config.num_hidden_layers):
-     *     if layer_n % 2 == 1:
-     *         self.layers.append(ZayaDecoderMLPLayer(...))   # MoE layer
-     *     else:
-     *         self.layers.append(ZayaDecoderATTLayer(...))   # Attention layer
-     */
-    for (uint32_t i = 0; i < hparams.n_layer(); ++i) {
-    }
-
     switch (hparams.n_layer()) {
         case 80: type = LLM_TYPE_8B; break;
         default: type = LLM_TYPE_UNKNOWN;
