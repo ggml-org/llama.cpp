@@ -50,17 +50,29 @@ Window C - Outlier addback divergence:
 
 Primary target: Window A. Secondary: Window C.
 
-## 3. Three-Tier Priority Schedule
+## 3. Three-Tier Temporal Priority Schedule
 
 P0: Tile640 dequant + matmul (the actual inference, never preempted)
-P1: Speculative drafter small GEMM (compute-bound, fills decode idle)
-P2: KV cache ops (fills remaining idle after drafter caps)
+P1: Speculative drafter small GEMM (compute-bound, fills memory-load stalls)
+P2: KV cache ops (fills remaining stalls after drafter, from threadgroup)
 
-Drafter duty cycle cap: 30-40% of Window A cycles. Rationale: acceptance
-rate drops past 2-3 draft tokens; additional drafts waste ALU time on
-rejected tokens. Cap is configurable via function constant.
+Scheduling is TEMPORAL, not spatial. All SIMD groups cooperatively decode
+the page (matching the base kernel's occupancy optimization). During the
+dot-product loop, each thread issues its activation memory load (~200-400
+cycle latency) and then executes one P1 or P2 instruction while waiting.
+The GPU's out-of-order execution engine overlaps the independent compute
+with the memory latency, so P1/P2 work is effectively free.
 
-KV ops get the remaining 60-70% of Window A.
+P1 takes priority over P2. When drafter_enabled is set, every dot-product
+loop iteration includes one drafter FMA step. When the drafter is done (or
+disabled), P2 KV quantization takes over.
+
+KV lines are prefetched into threadgroup memory during the decode phase
+(device memory -> threadgroup), then consumed from threadgroup during the
+dot product. This avoids competing for HBM bandwidth with activation loads.
+
+Drafter weights are read from device memory but the working set is small
+(~1-5 MB for a 1-2 layer draft model) and fits in L2 cache.
 
 ## 4. Drafter Integration (P1)
 
