@@ -42,6 +42,34 @@
 #endif
 
 // utils
+static void set_env(const char * name, const std::string & value) {
+#ifdef _WIN32
+    _putenv_s(name, value.c_str());
+#else
+    setenv(name, value.c_str(), 1);
+#endif
+}
+
+static void configure_vulkan_from_args(int argc, char ** argv) {
+    for (int i = 1; i < argc; i++) {
+        const std::string arg = argv[i];
+        if (arg != "-coopmat" && arg != "--coopmat") {
+            continue;
+        }
+        if (++i >= argc) {
+            fprintf(stderr, "error: missing value for argument: %s\n", arg.c_str());
+            exit(1);
+        }
+
+        const std::string value = argv[i];
+        if (value != "0" && value != "1" && value != "2" && value != "3") {
+            fprintf(stderr, "error: invalid cooperative matrix mode: %s\n", value.c_str());
+            exit(1);
+        }
+        set_env("GGML_VK_COOPMAT", value);
+    }
+}
+
 static uint64_t get_time_ns() {
     using clock = std::chrono::high_resolution_clock;
     return std::chrono::nanoseconds(clock::now().time_since_epoch()).count();
@@ -447,6 +475,8 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -v, --verbose                               verbose output\n");
     printf("  --progress                                  print test progress indicators\n");
     printf("  --no-warmup                                 skip warmup runs before benchmarking\n");
+    printf("  -coopmat, --coopmat <0|1|2|3>               Vulkan cooperative matrix mode\n");
+    printf("                                              0=disable, 1=KHR, 2=NV coopmat2, 3=NV coopmat2 decode vector\n");
     printf("  --capture-prefill                           capture the complete prompt prefill with RenderDoc\n");
     printf("  --capture-prefill-batch <n>                 capture the 1-based logical prompt batch n with RenderDoc\n");
     printf("                                              (requires Vulkan)\n");
@@ -549,6 +579,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     params.progress             = cmd_params_defaults.progress;
     params.no_warmup            = cmd_params_defaults.no_warmup;
     params.offline              = cmd_params_defaults.offline;
+    params.renderdoc_prefill_batch = cmd_params_defaults.renderdoc_prefill_batch;
 
     if (const char * env = getenv("HF_TOKEN")) {
         params.hf_token = env;
@@ -1066,6 +1097,16 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 params.progress = true;
             } else if (arg == "--no-warmup") {
                 params.no_warmup = true;
+            } else if (arg == "-coopmat" || arg == "--coopmat") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                const std::string value = argv[i];
+                if (value != "0" && value != "1" && value != "2" && value != "3") {
+                    invalid_param = true;
+                    break;
+                }
             } else if (arg == "--capture-prefill") {
                 params.renderdoc_prefill_batch = -1;
             } else if (arg == "--capture-prefill-batch") {
@@ -2346,6 +2387,9 @@ int llama_bench(int argc, char ** argv) {
 #if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
     fprintf(stderr, "warning: sanitizer enabled, performance may be affected\n");
 #endif
+
+    // Vulkan reads GGML_VK_COOPMAT while the backend is loaded, before the full argument parser runs.
+    configure_vulkan_from_args(argc, argv);
 
     // initialize backends
     ggml_backend_load_all();
