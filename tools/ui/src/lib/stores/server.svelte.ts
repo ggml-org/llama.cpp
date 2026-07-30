@@ -67,6 +67,10 @@ class ServerStore {
 		return this.role === ServerRole.MODEL;
 	}
 
+	get isAgentMode(): boolean {
+		return this.props?.agent_mode === true;
+	}
+
 	/**
 	 *
 	 *
@@ -173,3 +177,4 @@ export const defaultParams = () => serverStore.defaultParams;
 export const contextSize = () => serverStore.contextSize;
 export const isRouterMode = () => serverStore.isRouterMode;
 export const isModelMode = () => serverStore.isModelMode;
+export const isAgentMode = () => serverStore.isAgentMode;

@@ -336,6 +336,8 @@ The server includes a set of built-in tools that enable the LLM to access the lo
 
 To use this feature, start the server with `--tools all`. You can also enable only specific tools by passing a comma-separated list: `--tools name1,name2,...`. Run `--help` for the full list of available tool names.
 
+When tools are enabled, the server also exposes filesystem browsing endpoints used by the Web UI (working directory picker, file mentions): `POST /filesystem/search`, `GET /filesystem/roots` and `POST /filesystem/git` (see API Endpoints below). Browsing is restricted to a set of browse roots, configured with `--browse-root PATH` (repeatable); when omitted, it defaults to the user's home directory. Paths outside the browse roots are rejected.
+
 ## Build
 
 `llama-server` is built alongside everything else from the root of the project
@@ -1169,6 +1171,84 @@ To know the `id` of the adapter, use GET `/lora-adapters`
   {"id": 1, "scale": 0.8}
 ]
 ```
+
+### GET `/filesystem/roots`: List the configured browse roots
+
+Requires `--tools` (or `--agent`); otherwise returns HTTP 501. `/v1/filesystem/roots` also works.
+
+**Response format**
+
+```json
+{
+    "roots": [
+        {"path": "/home/user", "default": true}
+    ]
+}
+```
+
+### POST `/filesystem/search`: Search for files and folders under a browse root
+
+Requires `--tools` (or `--agent`); otherwise returns HTTP 501. `/v1/filesystem/search` also works.
+
+Walks the resolved root directory and returns ranked matches. Entries under directories named `.git`, `node_modules`, `build`, etc. are skipped.
+
+*Options:*
+
+`query`: (Required) Search text. A query containing `/` (e.g. `"src/main"`) matches its segments against successive path segments; otherwise it matches entry names. A leading `~` expands to the user's home directory (e.g. `"~/src/main"`); an absolute query outside `path` re-roots the search to the browse root containing it.
+
+`path`: Optional context directory. When set, only entries inside it are returned. Must resolve inside a browse root, otherwise HTTP 400.
+
+`type`: One of `any` (default), `file`, `directory`.
+
+`match`: One of `substring` (default), `prefix`.
+
+`limit`: Maximum number of results, 0-200. Default: 50.
+
+`max_depth`: Maximum directory depth below the root, 0-32. Default: 8.
+
+`show_hidden`: Include entries under `.`-prefixed directories. Default: false.
+
+**Response format**
+
+```json
+{
+    "results": [
+        {
+            "name": "main.cpp",
+            "path": "/home/user/project/src/main.cpp",
+            "parent": "/home/user/project/src",
+            "type": "file",
+            "size": 1234,
+            "modified": 1735000000
+        }
+    ]
+}
+```
+
+`size` is only present for files. Results are ranked by match quality (exact, then prefix, then substring), then by recency.
+
+### POST `/filesystem/git`: Probe a path for git repository metadata
+
+Requires `--tools` (or `--agent`); otherwise returns HTTP 501. `/v1/filesystem/git` also works.
+
+Walks up from the given path looking for a `.git` directory (or gitfile), staying inside the browse roots.
+
+*Options:*
+
+`path`: Directory to probe. Relative paths resolve against the first browse root; when omitted, the first browse root is used. Must resolve inside a browse root, otherwise HTTP 400.
+
+**Response format**
+
+```json
+{
+    "path": "/home/user/project/src",
+    "is_repo": true,
+    "root": "/home/user/project",
+    "branch": "main"
+}
+```
+
+`branch` is `"detached"` when HEAD is not a branch ref, `"submodule"` for the gitfile layout, and empty when `is_repo` is false. The not-a-repo case is a normal 200 response, not an error.
 
 ## OpenAI-compatible API Endpoints
 

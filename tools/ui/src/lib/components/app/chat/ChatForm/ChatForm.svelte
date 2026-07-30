@@ -6,6 +6,7 @@
 		ChatFormMcpResourcesList,
 		ChatFormPickers,
 		ChatFormTextarea,
+		ChatFormWorkingDirectory,
 		DialogMcpResourcesBrowser
 	} from '$lib/components/app';
 	import {
@@ -27,11 +28,17 @@
 	import { config } from '$lib/stores/settings.svelte';
 	import ContextGaugePopup from './ChatFormContextGauge/ContextGaugePopup.svelte';
 	import { modelOptions, selectedModelId } from '$lib/stores/models.svelte';
-	import { isRouterMode } from '$lib/stores/server.svelte';
+	import { isAgentMode, isRouterMode } from '$lib/stores/server.svelte';
 	import { chatStore } from '$lib/stores/chat.svelte';
+	import { BuiltInTool } from '$lib/enums';
 	import { mcpStore } from '$lib/stores/mcp.svelte';
 	import { mcpHasResourceAttachments } from '$lib/stores/mcp-resources.svelte';
-	import { conversationsStore, activeMessages } from '$lib/stores/conversations.svelte';
+	import {
+		conversationsStore,
+		activeMessages,
+		activeConversation,
+		pendingWorkingDirectory
+	} from '$lib/stores/conversations.svelte';
 	import type { GetPromptResult, MCPPromptInfo, MCPResourceInfo, PromptMessage } from '$lib/types';
 	import { isIMEComposing, parseClipboardContent, uuid } from '$lib/utils';
 	import {
@@ -107,6 +114,34 @@
 	let isInlineResourcePickerOpen = $state(false);
 	let resourceSearchQuery = $state('');
 
+	// Working Directory State
+	// Sourced from the active conversation so the picked cwd is restored when
+	// the user reopens the same chat. On the empty new-chat screen there's no
+	// active conversation yet; falls back to the pending cwd that the user just
+	// picked (and which createConversation() will persist on first message).
+	let workingDirectory = $derived(
+		activeConversation()?.workingDirectory ?? pendingWorkingDirectory() ?? null
+	);
+
+	async function handleWorkingDirectoryChange(value: string | null) {
+		await conversationsStore.setWorkingDirectory(value);
+		// If the conversation has already started, drop a synthetic
+		// `set_working_directory` tool call into chat history so the model
+		// sees the change on its next turn. Pending mode (no active conv
+		// yet) is handled in `chatStore.sendMessage` at first-send time.
+		if (conversationsStore.activeConversation) {
+			const trimmed = value?.trim();
+			await chatStore.recordUserToolCall(
+				BuiltInTool.SET_WORKING_DIRECTORY,
+				{ path: trimmed ?? '' },
+				{
+					content: trimmed ? `Working directory set to: ${trimmed}` : 'Working directory cleared',
+					isError: false
+				}
+			);
+		}
+	}
+
 	// Resource Dialog State
 	let isResourceDialogOpen = $state(false);
 	let preSelectedResourceUri = $state<string | undefined>(undefined);
@@ -154,6 +189,12 @@
 		recordingSupported = isAudioRecordingSupported();
 		audioRecorder = new AudioRecorder();
 	});
+
+	// Defer so the closing popover's focus scope tears down first - bits-ui
+	// yanks a synchronous focus() back into the still-mounted popover.
+	function refocusInput() {
+		queueMicrotask(() => textareaRef?.focus());
+	}
 
 	export function focus() {
 		textareaRef?.focus();
@@ -470,7 +511,7 @@
 <ChatFormFileInputInvisible bind:this={fileInputRef} onFileSelect={handleFileSelect} />
 
 <form
-	class="relative {className}"
+	class="relative grid {className}"
 	onsubmit={(event) => {
 		event.preventDefault();
 
@@ -559,6 +600,15 @@
 	</div>
 
 	<ContextGaugePopup />
+
+	{#if isAgentMode()}
+		<ChatFormWorkingDirectory
+			directory={workingDirectory}
+			onChange={handleWorkingDirectoryChange}
+			onClose={refocusInput}
+			{disabled}
+		/>
+	{/if}
 </form>
 
 <DialogMcpResourcesBrowser

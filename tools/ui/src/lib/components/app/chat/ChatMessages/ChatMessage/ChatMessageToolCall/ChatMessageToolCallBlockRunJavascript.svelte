@@ -48,6 +48,7 @@
 			/>
 			<div class="mb-2 mt-3 flex items-center gap-2 text-xs text-muted-foreground/70">
 				<Terminal class="h-3 w-3" />
+
 				<span>Console</span>
 				{#if meta.timeoutMs != null}
 					<span class="font-mono">&middot;&nbsp;timeout&nbsp;{meta.timeoutMs}&nbsp;ms</span>

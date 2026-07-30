@@ -252,6 +252,7 @@ export interface ApiLlamaCppServerProps {
 	webui_settings?: Record<string, string | number | boolean>;
 	ui_settings?: Record<string, string | number | boolean>;
 	cors_proxy_enabled?: boolean;
+	agent_mode?: boolean;
 }
 
 export interface ApiChatCompletionRequest {
@@ -527,4 +528,87 @@ export interface ApiStreamSession {
 	total_bytes: number;
 	started_at: number;
 	completed_at: number;
+}
+
+/**
+ * One entry in the response of `POST /v1/filesystem/search`.
+ * `path` and `parent` are canonical absolute paths on the server's filesystem;
+ * `name` is the basename of the entry.
+ * `size` is only populated for files; both kinds expose `modified` in unix
+ * seconds since epoch.
+ */
+export interface ApiFilesystemSearchEntry {
+	name: string;
+	path: string;
+	parent: string;
+	type: 'file' | 'directory';
+	size?: number;
+	modified: number;
+}
+
+/**
+ * Request body for `POST /v1/filesystem/search`. All fields except `query` are
+ * optional. `path` defaults to the server process's current working directory
+ * on the server side, so an empty value searches from there.
+ */
+export interface ApiFilesystemSearchRequest {
+	query: string;
+	path?: string;
+	type?: 'any' | 'file' | 'directory';
+	match?: 'substring' | 'prefix';
+	limit?: number;
+	max_depth?: number;
+	/** When false (default) drops entries under dot-prefixed directories. */
+	show_hidden?: boolean;
+}
+
+export interface ApiFilesystemSearchResponse {
+	results: ApiFilesystemSearchEntry[];
+}
+
+/**
+ * One browse root returned by `GET /v1/filesystem/roots`. Each root is a
+ * canonical absolute directory the user is allowed to search from. Servers
+ * fall back to `$HOME` when no `--browse-root` is configured.
+ */
+export interface ApiFilesystemRoot {
+	/** Canonical absolute path - safe to send back as `path` in search calls. */
+	path: string;
+	/** True for the root the server uses as the implicit default for empty `path`. */
+	default: boolean;
+}
+
+export interface ApiFilesystemRootsResponse {
+	roots: ApiFilesystemRoot[];
+}
+
+/**
+ * Request body for `POST /v1/filesystem/git`. The server resolves `path`
+ * against the configured browse roots (mirroring `/filesystem/search`)
+ * and walks upward looking for `.git/`. Pass an empty `path` to probe the
+ * default browse root.
+ */
+export interface ApiFilesystemGitRequest {
+	path?: string;
+}
+
+/**
+ * Response from `POST /v1/filesystem/git`. `is_repo=false` is a valid
+ * outcome (the path simply isn't inside a git repository) and is not
+ * surfaced as an HTTP error - the UI just hides the branch badge.
+ *
+ * `branch` is populated for the common `ref: refs/heads/<name>` case,
+ * the literal string `"detached"` when `.git/HEAD` contains a bare SHA,
+ * and `"submodule"` when `.git` is a gitfile (we don't chase the linked
+ * gitdir, so we can't resolve a branch in that layout).
+ */
+export interface ApiFilesystemGitResponse {
+	/** Canonical absolute path the server actually probed. */
+	path: string;
+	/** True when `.git` was found somewhere on the way up. */
+	is_repo: boolean;
+	/** Repo root - the directory that holds `.git/`. Empty when not a repo. */
+	root: string;
+	/** Branch name, "detached", "submodule", or empty when not a repo. */
+	branch: string;
 }

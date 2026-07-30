@@ -120,6 +120,10 @@ export interface AgenticFlowCallbacks {
 		content: string,
 		extras?: DatabaseMessageExtra[]
 	) => Promise<void>;
+	/** Persist the effective (working-directory-injected) arguments of the
+	 *  current turn's tool calls onto its assistant message, so history and
+	 *  rendering reflect what actually executed. */
+	updateToolCallArguments?: (toolCalls: AgenticToolCallList) => Promise<void>;
 	/** Create a new assistant message for the next agentic turn */
 	createAssistantMessage?: () => Promise<DatabaseMessage>;
 	/** Entire agentic flow is complete */

@@ -9,7 +9,7 @@
 
 // API utilities
 export { getAuthHeaders, getJsonHeaders, sanitizeHeaders } from './api-headers';
-export { apiFetch, apiFetchWithParams, apiPost, type ApiFetchOptions } from './api-fetch';
+export { apiFetch, apiFetchWithParams, apiPost, ApiError, type ApiFetchOptions } from './api-fetch';
 export { validateApiKey } from './api-key-validation';
 
 // Attachment utilities
@@ -157,6 +157,9 @@ export { createBase64DataUrl } from './data-url';
 
 // Header utilities
 export { parseHeadersToArray, serializeHeaders } from './headers';
+
+// Working-directory display helpers (HOME-style tilde abbreviation)
+export { abbreviateWorkingDir, lastPathSegment, resolveDefaultBrowseRoot } from './path-display';
 
 // Agentic content utilities (structured section derivation)
 export {

@@ -118,6 +118,8 @@ class ServerProcess:
     mcp_servers_config: str | None = None
     mcp_servers_json: str | None = None
     cors_origins: str | None = None
+    browse_root: str | None = None
+    env_extra: dict | None = None
 
     # session variables
     process: subprocess.Popen | None = None
@@ -135,6 +137,8 @@ class ServerProcess:
         env = {**os.environ}
         if "LLAMA_CACHE" not in os.environ:
             env["LLAMA_CACHE"] = "tmp"
+        if self.env_extra:
+            env.update(self.env_extra)
         if self.external_server:
             print(f"[external_server]: Assuming external server running on {self.server_host}:{self.server_port}")
             return
@@ -267,6 +271,8 @@ class ServerProcess:
             server_args.append("--ui-mcp-proxy")
         if self.server_tools:
             server_args.extend(["--tools", self.server_tools])
+        if self.browse_root:
+            server_args.extend(["--browse-root", self.browse_root])
         if self.mcp_servers_config:
             server_args.extend(["--mcp-servers-config", self.mcp_servers_config])
         if self.mcp_servers_json:

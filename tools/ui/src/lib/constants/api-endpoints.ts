@@ -33,3 +33,10 @@ export const API_STREAM = {
 
 /** CORS proxy endpoint path */
 export const CORS_PROXY_ENDPOINT = '/cors-proxy';
+
+// filesystem browse endpoint, requires `--tools` / `--agent` on the server
+export const API_FILESYSTEM = {
+	SEARCH: '/v1/filesystem/search',
+	ROOTS: '/v1/filesystem/roots',
+	GIT: '/v1/filesystem/git'
+};

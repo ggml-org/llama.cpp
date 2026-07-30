@@ -11,6 +11,7 @@ import { parseToolArgs } from './_shared';
 
 export type ExecShellCommandMeta = {
 	command: string;
+	workingDirectory?: string;
 };
 
 export function parseExecShellCommandMeta(section: AgenticSection): ExecShellCommandMeta | null {
@@ -19,5 +20,7 @@ export function parseExecShellCommandMeta(section: AgenticSection): ExecShellCom
 
 	const commandRaw = args.command ?? args.cmd ?? args.shell_command;
 	if (typeof commandRaw !== 'string' || !commandRaw) return null;
-	return { command: commandRaw };
+	const wdRaw = args.working_directory;
+	const workingDirectory = typeof wdRaw === 'string' && wdRaw ? wdRaw : undefined;
+	return { command: commandRaw, workingDirectory };
 }

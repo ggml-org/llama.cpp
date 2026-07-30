@@ -1,5 +1,6 @@
 #include "server-tools.h"
 
+#include "server-fs.h"
 #include "subproc.h"
 
 #include <filesystem>
@@ -10,6 +11,8 @@
 #include <ctime>
 #include <atomic>
 #include <cstring>
+#include <climits>
+#include <cstdlib>
 #include <algorithm>
 #include <unordered_set>
 #include <functional>
@@ -53,6 +56,8 @@ public:
     virtual bool write_file(const std::string & path, const std::string & content) const = 0;
     // paths relative to `base`, '/'-separated; sets `err` if `base` isn't a directory
     virtual std::vector<std::string> list_files(const std::string & base, std::string & err) const = 0;
+    // resolve `path` against the IO's base directory; absolute paths and non-existent paths are returned unchanged
+    virtual std::string resolve_path(const std::string & path) const = 0;
     // on_chunk, if set, is called with each chunk of output as it is read (before truncation cuts in);
     // returning false terminates the process early (e.g. the client disconnected)
     virtual exec_result run(
@@ -64,24 +69,35 @@ public:
 
 class tools_io_basic : public tools_io {
 public:
+    explicit tools_io_basic(const std::string & base = "") : base_dir(absolute_of(base)) {}
+
+    std::string resolve_path(const std::string & path) const override {
+        fs::path p(server_fs::expand_home(path));
+        std::error_code ec;
+        if (p.is_absolute() || base_dir.empty()) {
+            return fs::absolute(p, ec).string();
+        }
+        return fs::absolute(fs::path(base_dir) / p, ec).string();
+    }
+
     bool is_directory(const std::string & path) const override {
         std::error_code ec;
-        return fs::is_directory(path, ec) && !ec;
+        return fs::is_directory(resolve_path(path), ec) && !ec;
     }
 
     bool is_regular_file(const std::string & path) const override {
         std::error_code ec;
-        return fs::is_regular_file(path, ec) && !ec;
+        return fs::is_regular_file(resolve_path(path), ec) && !ec;
     }
 
     bool file_size(const std::string & path, uintmax_t & out_size) const override {
         std::error_code ec;
-        out_size = fs::file_size(path, ec);
+        out_size = fs::file_size(resolve_path(path), ec);
         return !ec;
     }
 
     bool read_file(const std::string & path, std::string & out) const override {
-        std::ifstream f(path, std::ios::binary);
+        std::ifstream f(resolve_path(path), std::ios::binary);
         if (!f) return false;
         std::ostringstream ss;
         ss << f.rdbuf();
@@ -91,12 +107,12 @@ public:
 
     bool write_file(const std::string & path, const std::string & content) const override {
         std::error_code ec;
-        fs::path fpath(path);
+        fs::path fpath(resolve_path(path));
         if (fpath.has_parent_path()) {
             fs::create_directories(fpath.parent_path(), ec);
             if (ec) return false;
         }
-        std::ofstream f(path, std::ios::binary);
+        std::ofstream f(fpath, std::ios::binary);
         if (!f) return false;
         f << content;
         return (bool) f;
@@ -104,13 +120,14 @@ public:
 
     std::vector<std::string> list_files(const std::string & base, std::string & err) const override {
         err.clear();
+        fs::path resolved_base(resolve_path(base));
         if (!is_directory(base)) {
-            err = "path does not exist or is not a directory: " + base;
+            err = "path does not exist or is not a directory: " + resolved_base.string();
             return {};
         }
 
         auto res = run(
-            {"git", "-C", base, "ls-files", "--cached", "--others", "--exclude-standard"},
+            {"git", "-C", resolved_base.string(), "ls-files", "--cached", "--others", "--exclude-standard"},
             SERVER_TOOL_GIT_LS_FILES_MAX_OUTPUT, SERVER_TOOL_GIT_LS_FILES_TIMEOUT);
 
         if (res.exit_code == 0 && !res.timed_out) {
@@ -121,14 +138,14 @@ public:
                 if (!line.empty() && line.back() == '\r') line.pop_back();
                 if (line.empty()) continue;
                 std::replace(line.begin(), line.end(), '\\', '/');
-                if (is_regular_file((fs::path(base) / line).string())) {
+                if (is_regular_file((resolved_base / line).string())) {
                     result.push_back(line);
                 }
             }
             return result;
         }
 
-        return list_files_fallback(base);
+        return list_files_fallback(resolved_base.string());
     }
 
     exec_result run(
@@ -204,14 +221,15 @@ public:
         return res;
     }
 
-private:
-    static const std::unordered_set<std::string> & junk_dir_names() {
-        static const std::unordered_set<std::string> names = {
-            ".git", ".svn", ".hg", "node_modules", "__pycache__",
-            ".venv", "venv", "dist", "build", "target", ".cache", ".idea", ".vscode",
-        };
-        return names;
+    static std::string absolute_of(const std::string & path) {
+        if (path.empty()) return "";
+        std::error_code ec;
+        std::string abs = fs::absolute(server_fs::expand_home(path), ec).string();
+        return ec ? path : abs;
     }
+
+private:
+    std::string base_dir;
 
     std::vector<std::string> list_files_fallback(const std::string & base) const {
         std::vector<std::string> result;
@@ -229,7 +247,7 @@ private:
                 std::string fname = entry.path().filename().string();
                 std::error_code tec;
                 if (entry.is_directory(tec)) {
-                    if (junk_dir_names().count(fname) > 0) continue;
+                    if (server_fs::junk_dir_names().count(fname) > 0) continue;
                     stack.emplace_back(entry.path(), rel_dir / fname);
                 } else if (entry.is_regular_file(tec)) {
                     std::string rel = (rel_dir / fname).string();
@@ -243,9 +261,8 @@ private:
     }
 };
 
-static std::unique_ptr<tools_io> make_tools_io(const json & params) {
-    GGML_UNUSED(params); // TODO in follow-up PR
-    return std::make_unique<tools_io_basic>();
+static std::unique_ptr<tools_io> make_tools_io(const std::string & working_directory) {
+    return std::make_unique<tools_io_basic>(working_directory);
 }
 
 // no '/' in pattern -> match basename at any depth; else match full relative path
@@ -286,6 +303,7 @@ struct server_tool_read_file : server_tool {
                         {"start_line", {{"type", "integer"}, {"description", "First line to read, 1-based (default: 1)"}}},
                         {"end_line",   {{"type", "integer"}, {"description", "Last line to read, 1-based inclusive (default: end of file)"}}},
                         {"append_loc", {{"type", "boolean"}, {"description", "Prefix each line with its line number"}}},
+                        {"working_directory", {{"type", "string"}, {"description", "If set, resolve relative paths against this directory; absolute paths are unchanged"}}},
                     }},
                     {"required", json::array({"path"})},
                 }},
@@ -299,11 +317,12 @@ struct server_tool_read_file : server_tool {
         int  end_line     = json_value(params, "end_line",  -1); // -1 = no limit
         bool append_loc   = json_value(params, "append_loc", false);
 
-        auto io = make_tools_io(params);
+        auto io = make_tools_io(json_value(params, "working_directory", std::string()));
+        const std::string resolved_path = io->resolve_path(path);
 
         uintmax_t file_size = 0;
         if (!io->file_size(path, file_size)) {
-            return {{"error", "cannot stat file: " + path}};
+            return {{"error", "cannot stat file: " + resolved_path}};
         }
         if (file_size > SERVER_TOOL_READ_FILE_MAX_SIZE && end_line == -1) {
             return {{"error", string_format(
@@ -313,7 +332,7 @@ struct server_tool_read_file : server_tool {
 
         std::string content;
         if (!io->read_file(path, content)) {
-            return {{"error", "failed to open file: " + path}};
+            return {{"error", "failed to open file: " + resolved_path}};
         }
 
         std::istringstream f(content);
@@ -375,6 +394,7 @@ struct server_tool_file_glob_search : server_tool {
                         {"path",    {{"type", "string"}, {"description", "Base directory to search in"}}},
                         {"include", {{"type", "string"}, {"description", "Glob pattern for files to include (e.g. \"*.cpp\" or \"src/**/*.cpp\"). Default: **"}}},
                         {"exclude", {{"type", "string"}, {"description", "Glob pattern for files to exclude"}}},
+                        {"working_directory", {{"type", "string"}, {"description", "If set, resolve the search path against this directory; absolute paths are unchanged"}}},
                     }},
                     {"required", json::array({"path"})},
                 }},
@@ -387,7 +407,7 @@ struct server_tool_file_glob_search : server_tool {
         std::string include = json_value(params, "include", std::string("**"));
         std::string exclude = json_value(params, "exclude", std::string(""));
 
-        auto io = make_tools_io(params);
+        auto io = make_tools_io(json_value(params, "working_directory", std::string()));
         std::string err;
         auto files = io->list_files(base, err);
         if (!err.empty()) {
@@ -456,6 +476,7 @@ struct server_tool_grep_search : server_tool {
                         {"literal",             {{"type", "boolean"}, {"description", "Treat pattern as a literal string instead of a regular expression (default: false)"}}},
                         {"ignore_case",         {{"type", "boolean"}, {"description", "Case-insensitive search (default: false)"}}},
                         {"context_lines",       {{"type", "integer"}, {"description", "Number of lines of context to show before and after each match (default: 0)"}}},
+                        {"working_directory",   {{"type", "string"},  {"description", "If set, resolve the search path against this directory; absolute paths are unchanged"}}},
                     }},
                     {"required", json::array({"path", "pattern"})},
                 }},
@@ -494,13 +515,14 @@ struct server_tool_grep_search : server_tool {
             return {{"error", std::string("invalid regex: ") + e.what()}};
         }
 
-        auto io = make_tools_io(params);
+        auto io = make_tools_io(json_value(params, "working_directory", std::string()));
+        const std::string resolved_path = io->resolve_path(path);
 
         // collect (absolute_path, display_path) pairs to search
         std::vector<std::pair<std::string, std::string>> files;
 
         if (io->is_regular_file(path)) {
-            files.emplace_back(path, path);
+            files.emplace_back(resolved_path, resolved_path);
         } else if (io->is_directory(path)) {
             std::string err;
             auto candidates = io->list_files(path, err);
@@ -510,10 +532,10 @@ struct server_tool_grep_search : server_tool {
             for (const auto & rel : candidates) {
                 if (!path_glob_match(include, rel)) continue;
                 if (!exclude.empty() && path_glob_match(exclude, rel)) continue;
-                files.emplace_back((fs::path(path) / rel).string(), rel);
+                files.emplace_back((fs::path(resolved_path) / rel).string(), rel);
             }
         } else {
-            return {{"error", "path does not exist: " + path}};
+            return {{"error", "path does not exist: " + resolved_path}};
         }
 
         std::ostringstream output_text;
@@ -598,6 +620,7 @@ struct server_tool_exec_shell_command : server_tool {
                         {"command",         {{"type", "string"},  {"description", "Shell command to execute"}}},
                         {"timeout",         {{"type", "integer"}, {"description", string_format("Timeout in seconds (default 10, max %d)", SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_TIMEOUT)}}},
                         {"max_output_size", {{"type", "integer"}, {"description", string_format("Maximum output size in bytes (default %zu)", SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE)}}},
+                        {"working_directory", {{"type", "string"}, {"description", "If set, the command runs with this directory as the working directory"}}},
                     }},
                     {"required", json::array({"command"})},
                 }},
@@ -609,9 +632,33 @@ struct server_tool_exec_shell_command : server_tool {
         std::string command   = params.at("command").get<std::string>();
         int    timeout        = json_value(params, "timeout",         10);
         size_t max_output     = (size_t) json_value(params, "max_output_size", (int) SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE);
+        std::string working_directory = json_value(params, "working_directory", std::string());
 
         timeout    = std::min(timeout,    SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_TIMEOUT);
         max_output = std::min(max_output, SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE);
+
+        // expand leading "~" before quoting; otherwise `cd '~/x'` fails.
+        if (!working_directory.empty() && working_directory[0] == '~') {
+            working_directory = server_fs::expand_home(working_directory);
+        }
+
+        if (!working_directory.empty()) {
+            std::string quoted;
+            quoted.reserve(working_directory.size() + 4);
+#ifdef _WIN32
+            for (char c : working_directory) {
+                if (c == '"') quoted += "\"\"";
+                else quoted += c;
+            }
+            command = "cd /D \"" + quoted + "\" && " + command;
+#else
+            for (char c : working_directory) {
+                if (c == '\'') quoted += "'\\''";
+                else quoted += c;
+            }
+            command = "cd '" + quoted + "' && " + command;
+#endif
+        }
 
 #ifdef _WIN32
         std::vector<std::string> args = {"cmd", "/c", command};
@@ -619,7 +666,7 @@ struct server_tool_exec_shell_command : server_tool {
         std::vector<std::string> args = {"sh", "-c", command};
 #endif
 
-        auto io = make_tools_io(params);
+        auto io = make_tools_io(working_directory);
 
         if (st) {
             auto res = io->run(args, max_output, timeout, [st](const std::string & chunk) {
@@ -671,6 +718,7 @@ struct server_tool_write_file : server_tool {
                     {"properties", {
                         {"path",    {{"type", "string"}, {"description", "Path of the file to write"}}},
                         {"content", {{"type", "string"}, {"description", "Content to write"}}},
+                        {"working_directory", {{"type", "string"}, {"description", "If set, resolve relative paths against this directory; absolute paths are unchanged"}}},
                     }},
                     {"required", json::array({"path", "content"})},
                 }},
@@ -682,12 +730,13 @@ struct server_tool_write_file : server_tool {
         std::string path    = params.at("path").get<std::string>();
         std::string content = params.at("content").get<std::string>();
 
-        auto io = make_tools_io(params);
+        auto io = make_tools_io(json_value(params, "working_directory", std::string()));
+        const std::string resolved_path = io->resolve_path(path);
         if (!io->write_file(path, content)) {
-            return {{"error", "failed to write file: " + path}};
+            return {{"error", "failed to write file: " + resolved_path}};
         }
 
-        return {{"result", "file written successfully"}, {"path", path}, {"bytes", content.size()}};
+        return {{"result", "file written successfully"}, {"path", resolved_path}, {"bytes", content.size()}};
     }
 };
 
@@ -727,6 +776,7 @@ struct server_tool_edit_file : server_tool {
                                 {"required", json::array({"old_text", "new_text"})},
                             }},
                         }},
+                        {"working_directory", {{"type", "string"}, {"description", "If set, resolve relative paths against this directory; absolute paths are unchanged"}}},
                     }},
                     {"required", json::array({"path", "edits"})},
                 }},
@@ -758,10 +808,11 @@ struct server_tool_edit_file : server_tool {
             edits.push_back(std::move(er));
         }
 
-        auto io = make_tools_io(params);
+        auto io = make_tools_io(json_value(params, "working_directory", std::string()));
+        const std::string resolved_path = io->resolve_path(path);
         std::string original_content;
         if (!io->read_file(path, original_content)) {
-            return {{"error", "failed to open file: " + path}};
+            return {{"error", "failed to open file: " + resolved_path}};
         }
 
         // does any old_text need fuzzy matching (no exact match found)?
@@ -773,7 +824,7 @@ struct server_tool_edit_file : server_tool {
             if (fuzzy_content.find(fuzzy_old) == std::string::npos) {
                 return {{"error", string_format(
                     "could not find edits[%zu].old_text in %s, it must match the file's current content exactly",
-                    i, path.c_str())}};
+                    i, resolved_path.c_str())}};
             }
             any_fuzzy = true;
         }
@@ -791,7 +842,7 @@ struct server_tool_edit_file : server_tool {
             if (occurrences > 1) {
                 return {{"error", string_format(
                     "found %zu occurrences of edits[%zu].old_text in %s, it must be unique",
-                    occurrences, i, path.c_str())}};
+                    occurrences, i, resolved_path.c_str())}};
             }
             size_t idx = base_content.find(needle);
             matched.push_back({i, idx, needle.size(), edits[i].new_text});
@@ -804,7 +855,7 @@ struct server_tool_edit_file : server_tool {
             if (matched[i - 1].match_index + matched[i - 1].match_length > matched[i].match_index) {
                 return {{"error", string_format(
                     "edits[%zu] and edits[%zu] overlap in %s; merge them into one edit or target disjoint regions",
-                    matched[i - 1].edit_index, matched[i].edit_index, path.c_str())}};
+                    matched[i - 1].edit_index, matched[i].edit_index, resolved_path.c_str())}};
             }
         }
 
@@ -817,10 +868,10 @@ struct server_tool_edit_file : server_tool {
         }
 
         if (!io->write_file(path, new_content)) {
-            return {{"error", "failed to write file: " + path}};
+            return {{"error", "failed to write file: " + resolved_path}};
         }
 
-        return {{"result", "file edited successfully"}, {"path", path}, {"edits_applied", (int) matched.size()}};
+        return {{"result", "file edited successfully"}, {"path", resolved_path}, {"edits_applied", (int) matched.size()}};
     }
 
 private:

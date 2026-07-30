@@ -36,7 +36,8 @@ import {
 	findLeafNode,
 	findMessageById,
 	isAbortError,
-	generateConversationTitle
+	generateConversationTitle,
+	uuid
 } from '$lib/utils';
 import { classifyContinueIntent } from '$lib/utils/agentic';
 import {
@@ -59,12 +60,14 @@ import type {
 	DatabaseMessageExtra
 } from '$lib/types';
 import {
+	BuiltInTool,
 	ContinueIntentKind,
 	ErrorDialogType,
 	MessageRole,
 	MessageType,
 	ReasoningEffort,
-	StreamConnectionState
+	StreamConnectionState,
+	ToolCallType
 } from '$lib/enums';
 
 interface ConversationStateEntry {
@@ -903,6 +906,84 @@ class ChatStore {
 		return message;
 	}
 
+	/**
+	 * Persist a user-initiated tool call into the chat history as if the
+	 * model had emitted it: an assistant message carrying the tool call,
+	 * followed by a tool message carrying the result. Both messages end
+	 * up in DB and the conversation history, so the next model turn sees
+	 * them in its context. Branches off the active conversation's current
+	 * leaf (or `parentIdOverride` when supplied, e.g. when injecting a
+	 * setup call after the system message on the first send).
+	 */
+	async recordUserToolCall(
+		toolName: string,
+		args: Record<string, unknown>,
+		result: { content: string; isError: boolean },
+		parentIdOverride?: string
+	): Promise<{ assistantId: string; toolMessageId: string } | null> {
+		const activeConv = conversationsStore.activeConversation;
+		if (!activeConv) return null;
+
+		let parentId: string;
+		if (parentIdOverride) {
+			parentId = parentIdOverride;
+		} else {
+			const last = conversationsStore.activeMessages[conversationsStore.activeMessages.length - 1];
+			if (last) {
+				parentId = last.id;
+			} else {
+				const all = await DatabaseService.getConversationMessages(activeConv.id);
+				const r = all.find((m) => m.parent === null && m.type === 'root');
+				parentId = r ? r.id : await DatabaseService.createRootMessage(activeConv.id);
+			}
+		}
+
+		const toolCallId = uuid();
+		const toolCallsJson = JSON.stringify([
+			{
+				id: toolCallId,
+				type: ToolCallType.FUNCTION,
+				function: { name: toolName, arguments: JSON.stringify(args) }
+			}
+		]);
+
+		const assistantMsg = await DatabaseService.createMessageBranch(
+			{
+				convId: activeConv.id,
+				type: MessageType.TEXT,
+				role: MessageRole.ASSISTANT,
+				content: '',
+				timestamp: Date.now(),
+				toolCalls: toolCallsJson,
+				children: [],
+				extra: undefined
+			},
+			parentId
+		);
+		conversationsStore.addMessageToActive(assistantMsg);
+		await conversationsStore.updateCurrentNode(assistantMsg.id);
+
+		const toolMsg = await DatabaseService.createMessageBranch(
+			{
+				convId: activeConv.id,
+				type: MessageType.TEXT,
+				role: MessageRole.TOOL,
+				content: result.content,
+				toolCallId,
+				timestamp: Date.now(),
+				toolCalls: '',
+				children: [],
+				extra: undefined
+			},
+			assistantMsg.id
+		);
+		conversationsStore.addMessageToActive(toolMsg);
+		await conversationsStore.updateCurrentNode(toolMsg.id);
+		conversationsStore.updateConversationTimestamp();
+
+		return { assistantId: assistantMsg.id, toolMessageId: toolMsg.id };
+	}
+
 	async addSystemPrompt(): Promise<void> {
 		let activeConv = conversationsStore.activeConversation;
 		if (!activeConv) {
@@ -1055,6 +1136,7 @@ class ChatStore {
 				const rootId = await DatabaseService.createRootMessage(currentConv.id);
 				const currentConfig = config();
 				const systemPrompt = currentConfig.systemMessage?.toString().trim();
+				let sysOrRootId = rootId;
 				if (systemPrompt) {
 					const systemMessage = await DatabaseService.createSystemMessage(
 						currentConv.id,
@@ -1062,8 +1144,26 @@ class ChatStore {
 						rootId
 					);
 					conversationsStore.addMessageToActive(systemMessage);
-					parentIdForUserMessage = systemMessage.id;
-				} else parentIdForUserMessage = rootId;
+					sysOrRootId = systemMessage.id;
+				}
+				// If the new conversation inherited a working directory from the
+				// pending cwd on the new-chat picker, reflect it explicitly into
+				// chat history before the user's first message, so the model
+				// sees it on its first turn instead of having to remember.
+				if (currentConv.workingDirectory) {
+					const injected = await this.recordUserToolCall(
+						BuiltInTool.SET_WORKING_DIRECTORY,
+						{ path: currentConv.workingDirectory },
+						{
+							content: `Working directory set to: ${currentConv.workingDirectory}`,
+							isError: false
+						},
+						sysOrRootId
+					);
+					parentIdForUserMessage = injected?.toolMessageId ?? sysOrRootId;
+				} else {
+					parentIdForUserMessage = sysOrRootId;
+				}
 			}
 			const userMessage = await this.addMessage(
 				MessageRole.USER,
@@ -1331,6 +1431,15 @@ class ChatStore {
 					if (idx >= 0) conversationsStore.updateMessageAtIndex(idx, updates);
 				}
 				await DatabaseService.updateMessage(messageId, updates);
+			},
+			updateToolCallArguments: async (toolCalls) => {
+				// currentMessageId is the current turn's assistant message here
+				const json = JSON.stringify(toolCalls);
+				await DatabaseService.updateMessage(currentMessageId, { toolCalls: json });
+				if (conversationsStore.activeConversation?.id === convId) {
+					const idx = conversationsStore.findMessageIndex(currentMessageId);
+					if (idx >= 0) conversationsStore.updateMessageAtIndex(idx, { toolCalls: json });
+				}
 			},
 			createAssistantMessage: async () => {
 				// Reset streaming state for new message

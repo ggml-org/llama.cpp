@@ -7,6 +7,8 @@ set(TARGET server-context)
 add_library(${TARGET} STATIC
     server-chat.cpp
     server-chat.h
+    server-fs.cpp
+    server-fs.h
     server-task.cpp
     server-task.h
     server-queue.cpp

@@ -8,7 +8,7 @@
 	import { Switch } from '$lib/components/ui/switch';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { TOOLTIP_DELAY_DURATION } from '$lib/constants';
-	import { ATTACHMENT_FILE_ITEMS } from '$lib/constants/attachment-menu';
+	import { ATTACHMENT_FILE_ITEMS, ATTACHMENT_TOOLTIP_TEXT } from '$lib/constants/attachment-menu';
 	import { useAttachmentMenu } from '$lib/hooks/use-attachment-menu.svelte';
 	import { useToolsPanel } from '$lib/hooks/use-tools-panel.svelte';
 	import { useReasoningMenu } from '$lib/hooks/use-reasoning-menu.svelte';
@@ -35,9 +35,9 @@
 		hasMcpPromptsSupport?: boolean;
 		hasMcpResourcesSupport?: boolean;
 		onFileUpload?: () => void;
-		onSystemPromptClick?: () => void;
 		onMcpPromptClick?: () => void;
 		onMcpResourcesClick?: () => void;
+		onSystemPromptClick?: () => void;
 		trigger: Snippet<[{ disabled: boolean; onclick?: () => void }]>;
 	}
 
@@ -50,9 +50,9 @@
 		hasMcpPromptsSupport = false,
 		hasMcpResourcesSupport = false,
 		onFileUpload,
-		onSystemPromptClick,
 		onMcpPromptClick,
 		onMcpResourcesClick,
+		onSystemPromptClick,
 		trigger
 	}: Props = $props();
 
@@ -97,7 +97,7 @@
 				<Sheet.Title>Add to chat</Sheet.Title>
 
 				<Sheet.Description class="sr-only">
-					Add files, system prompt or configure MCP servers
+					{ATTACHMENT_TOOLTIP_TEXT}
 				</Sheet.Description>
 			</Sheet.Header>
 

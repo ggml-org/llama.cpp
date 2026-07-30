@@ -331,3 +331,17 @@ export { RouterService } from './router.service';
  * @see migration.service.ts — full implementation (non-destructive)
  */
 export { MigrationService } from './migration.service';
+
+/**
+ * **FilesystemService** - Server filesystem search API communication
+ *
+ * Stateless wrapper around `POST /v1/filesystem/search`. Used by chat-form
+ * pickers to provide directory/file autocomplete suggestions backed by the
+ * server's filesystem walk (skips junk dirs like `.git`, `node_modules`).
+ * The endpoint requires `--tools` / `--agent` on the server; if those are
+ * absent the request fails with a 501 `not_supported_error` and callers
+ * should surface a friendly "enable agent mode" hint.
+ *
+ * @see ChatFormWorkingDirectory.svelte — primary consumer for the working directory picker
+ */
+export { FilesystemService } from './filesystem.service';

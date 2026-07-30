@@ -655,6 +655,7 @@ struct common_params {
     // UI configs
     bool ui = true;
     bool ui_mcp_proxy = false;
+    bool agent = false; // --agent was passed (enables all tools + CORS proxy)
     std::string ui_config_json;
 
     // "advanced" endpoints are disabled by default for better security
@@ -668,6 +669,10 @@ struct common_params {
     // MCP server configs (Cursor-compatible JSON)
     std::string mcp_servers_config;   // path to JSON file with MCP server definitions
     std::string mcp_servers_json;     // inline JSON with MCP server definitions
+
+    // filesystem browse roots for the /filesystem/search endpoint
+    // (repeatable via --browse-root). when empty, the server defaults to $HOME.
+    std::vector<std::string> filesystem_browse_roots;
 
     // router server configs
     std::string models_dir    = "";     // directory containing models for the router server

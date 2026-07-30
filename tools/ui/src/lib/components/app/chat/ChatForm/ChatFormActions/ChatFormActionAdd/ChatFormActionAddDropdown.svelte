@@ -26,10 +26,10 @@
 		hasMcpPromptsSupport?: boolean;
 		hasMcpResourcesSupport?: boolean;
 		onFileUpload?: () => void;
-		onSystemPromptClick?: () => void;
 		onMcpPromptClick?: () => void;
-		onMcpSettingsClick?: () => void;
 		onMcpResourcesClick?: () => void;
+		onMcpSettingsClick?: () => void;
+		onSystemPromptClick?: () => void;
 	}
 
 	let {
@@ -41,10 +41,10 @@
 		hasMcpPromptsSupport = false,
 		hasMcpResourcesSupport = false,
 		onFileUpload,
-		onSystemPromptClick,
 		onMcpPromptClick,
+		onMcpResourcesClick,
 		onMcpSettingsClick,
-		onMcpResourcesClick
+		onSystemPromptClick
 	}: Props = $props();
 
 	let dropdownOpen = $state(false);
@@ -117,7 +117,7 @@
 				<DropdownMenu.SubTrigger class="flex cursor-pointer items-center gap-2">
 					<File class={ICON_CLASS_DEFAULT} />
 
-					<span>Add files</span>
+					<span>Attach files</span>
 				</DropdownMenu.SubTrigger>
 
 				<DropdownMenu.SubContent class="w-48">

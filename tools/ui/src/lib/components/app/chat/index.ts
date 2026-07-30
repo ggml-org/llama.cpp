@@ -273,6 +273,23 @@ export { default as ChatFormMcpResourcesList } from './ChatForm/ChatFormMcpResou
 export { default as ChatFormTextarea } from './ChatForm/ChatFormTextarea.svelte';
 
 /**
+ * Working directory selector for tool calls. Hidden by default; revealed below
+ * the chat form box when the user picks the "Working Directory" item in the
+ * Add dropdown. The chip shows "Select working directory" as a placeholder
+ * until a path is picked, then renders the picked path. The X on the chip
+ * is a two-step dismiss: first click clears an existing directory while
+ * keeping the chip visible, second click fires `onDismiss` so the parent
+ * can hide it entirely. Clicking the trigger itself opens a popover with
+ * the picker UI (text search against `/v1/filesystem/search`, browse via
+ * File System Access API, show-hidden toggle, browse-root scope hint); the
+ * picked directory is exposed via `bind:directory` so it can be forwarded
+ * to the server with outgoing requests. When the cwd sits inside a git
+ * repo, the trigger shows an inline branch badge - probed via
+ * `/v1/filesystem/git`.
+ */
+export { default as ChatFormWorkingDirectory } from './ChatForm/ChatFormWorkingDirectory.svelte';
+
+/**
  * **ChatFormPickerMcpPrompts** - MCP prompt selection interface
  *
  * Floating picker for browsing and selecting MCP Server Prompts.

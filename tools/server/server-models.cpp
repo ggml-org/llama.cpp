@@ -1553,6 +1553,7 @@ void server_models_routes::init_routes() {
                 {"ui_settings",          ui_settings},
                 {"build_info",           std::string(llama_build_info())},
                 {"cors_proxy_enabled",   params.ui_mcp_proxy},
+                {"agent_mode",           params.agent},
             });
             return res;
         }

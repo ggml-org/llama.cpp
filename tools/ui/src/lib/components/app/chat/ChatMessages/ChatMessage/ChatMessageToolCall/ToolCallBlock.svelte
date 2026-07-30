@@ -59,6 +59,7 @@
 		wrapper?: typeof CollapsibleContentBlock;
 		title?: string;
 		titleSnippet?: Snippet;
+		prefixSnippet?: Snippet;
 		onToggle?: () => void;
 		children: Snippet<[TMeta | null | undefined, ToolCallCtx]>;
 	}
@@ -73,6 +74,7 @@
 		wrapper: Wrapper = CollapsibleContentBlock,
 		title,
 		titleSnippet,
+		prefixSnippet,
 		onToggle,
 		children
 	}: Props = $props();
@@ -83,9 +85,15 @@
 	const isCodeStreaming = $derived(isStreaming && (isPending || isStreamingCall));
 
 	const toolUi: BuiltinToolUiEntry | null = $derived(getBuiltinToolUi(section.toolName));
-	const toolIcon: Component = $derived(
-		spinIconWhenActive && showSpinner ? Loader2 : (toolUi?.icon ?? Wrench)
-	);
+	const toolIcon: Component | null = $derived.by(() => {
+		if (spinIconWhenActive && showSpinner) return Loader2;
+		if (!toolUi) return Wrench;
+		// The registry treats explicit `null` as "no icon" (the slot
+		// collapses) and a missing/undefined field as "fall back to
+		// the default". Only collapse when the value really is null.
+		if (toolUi.icon === null) return null;
+		return toolUi.icon ?? Wrench;
+	});
 	const toolIconClass = $derived(
 		spinIconWhenActive && showSpinner ? ICON_CLASS_SPIN : ICON_CLASS_DEFAULT
 	);
@@ -94,13 +102,19 @@
 	const mcpServerFavicon = $derived(
 		showSpinner ? null : mcpStore.getServerFaviconForTool(section.toolName)
 	);
-	const iconUrl = $derived(
-		showSpinner || (toolUi?.icon ?? null) || !mcpServerFavicon ? null : mcpServerFavicon
-	);
+	const iconUrl = $derived.by(() => {
+		if (showSpinner || !mcpServerFavicon) return null;
+		// Suppress the favicon whenever the built-in icon slot will
+		// render something - i.e. when icon is a Component, or when
+		// it's omitted (Wrench fallback). Allow the favicon only when
+		// the registry explicitly opted the tool out of any icon
+		// (`icon === null`).
+		return toolUi?.icon === null ? mcpServerFavicon : null;
+	});
 
 	function subtitleFor(errorMessage?: string): string | undefined {
-		if (extraLiveStreaming) return 'streaming...';
-		if (showSpinner) return 'executing...';
+		if (extraLiveStreaming) return '';
+		if (showSpinner) return '';
 		if (errorMessage) return 'failed';
 		if (isStreamingCall && !isStreaming) return 'incomplete';
 		return undefined;
@@ -117,6 +131,7 @@
 	{iconUrl}
 	{title}
 	{titleSnippet}
+	{prefixSnippet}
 	{subtitle}
 	{onToggle}
 >

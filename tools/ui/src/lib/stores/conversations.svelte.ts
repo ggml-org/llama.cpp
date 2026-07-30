@@ -86,7 +86,16 @@ class ConversationsStore {
 	/** Global (non-conversation-specific) reasoning effort default */
 	pendingReasoningEffort = $state<ReasoningEffort>(ConversationsStore.loadReasoningEffortDefault());
 
-	/** Load reasoning effort default from localStorage, DEFAULT defers to the server */
+	/**
+	 * Working directory picked on the empty new-chat screen, before any
+	 * conversation exists. `createConversation()` copies it into the new
+	 * chat's IDB row, then clears it. Cleared also by `loadConversation`
+	 * and `clearActiveConversation` so a stale pick can't bleed onto an
+	 * unrelated chat the user navigates to.
+	 */
+	pendingWorkingDirectory = $state<string | null>(null);
+
+	/** Load reasoning effort default from localStorage */
 	private static loadReasoningEffortDefault(): ReasoningEffort {
 		if (typeof globalThis.localStorage === 'undefined') return ReasoningEffort.DEFAULT;
 		try {
@@ -250,9 +259,13 @@ class ConversationsStore {
 		// No MCP override list is seeded: getAllMcpServerOverrides resolves
 		// servers without a per-conversation override to `mcpServers[i].enabled`,
 		// and only explicit toggles are stored on the conversation.
+		// Working directory picked on the new-chat screen gets threaded in
+		// here too, then cleared so it doesn't bleed onto subsequent new chats.
 		const conversation = await DatabaseService.createConversation(conversationName, {
-			reasoningEffort: this.pendingReasoningEffort
+			reasoningEffort: this.pendingReasoningEffort,
+			workingDirectory: this.pendingWorkingDirectory ?? undefined
 		});
+		this.pendingWorkingDirectory = null;
 
 		this.conversations = [conversation, ...this.conversations];
 		this.activeConversation = conversation;
@@ -275,6 +288,10 @@ class ConversationsStore {
 			if (!conversation) {
 				return false;
 			}
+
+			// Drop any cwd the user drafted on the empty new-chat screen -
+			// it doesn't belong to this conversation.
+			this.pendingWorkingDirectory = null;
 
 			this.activeConversation = conversation;
 
@@ -306,6 +323,8 @@ class ConversationsStore {
 		this.activeMessages = [];
 		// reload defaults so new chats inherit persisted state
 		this.pendingReasoningEffort = ConversationsStore.loadReasoningEffortDefault();
+		// Start each fresh new-chat screen with no cwd drafted from a prior session.
+		this.pendingWorkingDirectory = null;
 	}
 
 	/**
@@ -856,6 +875,42 @@ class ConversationsStore {
 	}
 
 	/**
+	 * Sets the working directory for the active conversation. Pass `null` or
+	 * an empty string to clear it, which restores the picker's empty state.
+	 *
+	 * On the empty new-chat screen (no active conversation yet), the value
+	 * is buffered into `pendingWorkingDirectory` so the user can pick before
+	 * sending the first message; `createConversation()` consumes it.
+	 *
+	 * @param value - Absolute server-side path to the working directory, or null to clear
+	 */
+	async setWorkingDirectory(value: string | null): Promise<void> {
+		const trimmed = value?.trim() || undefined;
+
+		// No chat yet — buffer for the first chat the user creates.
+		if (!this.activeConversation) {
+			this.pendingWorkingDirectory = trimmed ?? null;
+			return;
+		}
+
+		this.activeConversation = {
+			...this.activeConversation,
+			workingDirectory: trimmed
+		};
+
+		await DatabaseService.updateConversation(this.activeConversation.id, {
+			workingDirectory: trimmed
+		});
+
+		const convIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
+		if (convIndex !== -1) {
+			this.conversations[convIndex].workingDirectory = trimmed;
+			this.conversations = [...this.conversations];
+		}
+		this.pendingWorkingDirectory = null;
+	}
+
+	/**
 	 * Forks a conversation at a specific message, creating a new conversation
 	 * containing messages from root up to the target message, then navigates to it.
 	 *
@@ -1169,6 +1224,7 @@ if (browser) {
 export const conversations = () => conversationsStore.conversations;
 export const activeConversation = () => conversationsStore.activeConversation;
 export const activeMessages = () => conversationsStore.activeMessages;
+export const pendingWorkingDirectory = () => conversationsStore.pendingWorkingDirectory;
 export const isConversationsInitialized = () => conversationsStore.isInitialized;
 
 /**

@@ -5,11 +5,13 @@ import {
 	SANDBOX_TIMEOUT_MS_DEFAULT,
 	SANDBOX_TIMEOUT_MS_MAX,
 	SANDBOX_TOOL_NAME,
-	SANDBOX_TRUNCATION_NOTICE
+	SANDBOX_TRUNCATION_NOTICE,
+	WORKING_DIRECTORY_TOOL_NAME
 } from '$lib/constants';
 import { buildSandboxHarness } from './sandbox-harness';
 import { config } from '$lib/stores/settings.svelte';
 import type { ToolExecutionResult } from '$lib/types';
+import { conversationsStore } from '$lib/stores/conversations.svelte';
 
 /** Cached harnesses keyed by whether nerdamer is included. */
 const harnessCache: Record<string, string> = {};
@@ -73,6 +75,29 @@ export class SandboxService {
 		params: Record<string, unknown>,
 		signal?: AbortSignal
 	): Promise<ToolExecutionResult> {
+		if (toolName === WORKING_DIRECTORY_TOOL_NAME) {
+			const path = typeof params.path === 'string' ? params.path.trim() : '';
+			try {
+				await conversationsStore.setWorkingDirectory(path || null);
+				const active = conversationsStore.activeConversation;
+				const display = active?.workingDirectory;
+				if (display) {
+					return {
+						content: `Working directory set to: ${display}`,
+						isError: false
+					};
+				} else {
+					return {
+						content: 'Working directory cleared',
+						isError: false
+					};
+				}
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				return { content: `Failed to set working directory: ${msg}`, isError: true };
+			}
+		}
+
 		if (toolName !== SANDBOX_TOOL_NAME) {
 			return { content: `Unknown frontend tool: ${toolName}`, isError: true };
 		}

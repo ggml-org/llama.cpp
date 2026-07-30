@@ -12,6 +12,8 @@
 	import { config } from '$lib/stores/settings.svelte';
 	import { TOOL_RUNTIME_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '$lib/constants/auto-scroll';
 	import {
+		ApiError,
+		abbreviateWorkingDir,
 		highlightCode,
 		isExitCodeSummaryLine,
 		parseExecShellCommandError,
@@ -21,8 +23,9 @@
 		type ExecShellExitStatus,
 		type ToolResultLine
 	} from '$lib/utils';
+	import { FilesystemService } from '$lib/services';
 	import { parseExecShellCommandMeta } from './parsers/exec-shell-command';
-	import type { DatabaseMessageExtra } from '$lib/types';
+	import type { ApiFilesystemRoot, DatabaseMessageExtra } from '$lib/types';
 	import ToolCallBlock from './ToolCallBlock.svelte';
 
 	interface Props {
@@ -73,6 +76,45 @@
 	// output blob uses bare monospace to skip hljs per-line highlighting.
 	const highlightedCommandHtml = $derived(
 		execShellMeta ? highlightCode(execShellMeta.command, 'bash') : ''
+	);
+
+	// Fetch browse roots so we can abbreviate the working directory to
+	// `~`/`~/...` via the shared utility. Settles to `[]` on failure -
+	// chrome 501 / network errors - so `abbreviateWorkingDir` cleanly
+	// falls back to the basename.
+	let browseRoots = $state<ApiFilesystemRoot[] | null>(null);
+
+	async function loadBrowseRoots() {
+		if (browseRoots !== null) return;
+		try {
+			const res = await FilesystemService.getRoots();
+			browseRoots = res.roots;
+		} catch (err) {
+			if (!(err instanceof ApiError && err.status === 501)) {
+				console.error('[ExecShell] getRoots failed:', err);
+			}
+			browseRoots = [];
+		}
+	}
+
+	$effect(() => {
+		if (execShellMeta?.workingDirectory) void loadBrowseRoots();
+	});
+
+	// Default browse root mirrors the picker logic: prefer the entry
+	// flagged `default`, otherwise the first. `null` while loading.
+	const execShellDefaultRoot = $derived.by(() => {
+		if (!browseRoots || browseRoots.length === 0) return null;
+		const def = browseRoots.find((r) => r.default);
+		return def?.path ?? browseRoots[0].path;
+	});
+
+	// Display string for the prefix chip. Delegates to the shared
+	// utility so the picker chip and this title prefix render HOME
+	// identically (matches `~/...` against the default browse root,
+	// falls back to the basename otherwise).
+	const execShellWdDisplay = $derived(
+		abbreviateWorkingDir(execShellMeta?.workingDirectory, browseRoots)
 	);
 
 	const exitBadgeClass = $derived(
@@ -159,10 +201,27 @@
 </script>
 
 {#snippet execShellTitle()}
+	{#if execShellDefaultRoot && execShellMeta?.workingDirectory === execShellDefaultRoot}
+		<span class="font-mono text-[12px] mr-1">~</span>
+	{/if}
+
+	<span class="font-mono text-[12px] mr-1">$</span>
+
 	{#if highlightedCommandHtml}
-		<span class="font-mono">{@html highlightedCommandHtml}</span>
-	{:else}
-		<span class="font-mono">{execShellMeta?.command}</span>
+		<span class="font-mono text-[12px]">{@html highlightedCommandHtml}</span>
+	{:else if execShellMeta?.command}
+		<span class="font-mono text-[12px]">{execShellMeta.command}</span>
+	{/if}
+{/snippet}
+
+{#snippet execShellPrefix()}
+	{#if execShellMeta?.workingDirectory}
+		<span
+			class="text-[12px]! tracking-6! min-h-0! h-5.5! p-0! wd-prefix font-mono items-center flex"
+			data-testid="exec-shell-working-directory"
+		>
+			{execShellWdDisplay}
+		</span>
 	{/if}
 {/snippet}
 
@@ -174,6 +233,7 @@
 	wrapper={CollapsibleTerminalBlock}
 	extraLiveStreaming={isLive}
 	spinIconWhenActive={true}
+	prefixSnippet={execShellPrefix}
 	{onToggle}
 >
 	{#snippet titleSnippet()}
@@ -199,7 +259,8 @@
 				onscroll={handleScrollEvent}
 			>
 				{#each outputLines as line, i (i)}
-					<div class="font-mono text-[11px] leading-relaxed whitespace-pre-wrap">{line.text}</div>
+					<div class="font-mono text-[12px] leading-relaxed whitespace-pre-wrap">{line.text}</div>
+
 					{#if line.image}
 						<img
 							src={line.image.base64Url}
@@ -214,6 +275,7 @@
 					<div class={exitBadgeClass}>
 						{#if execShellExitStatus.timedOut}
 							<AlertTriangle class="h-3 w-3" />
+
 							<span>timed out</span>
 							<span class="exit-sep">&middot;</span>
 							<span>exit {execShellExitStatus.code}</span>
@@ -243,6 +305,16 @@
 		padding-right: 0.25rem;
 	}
 
+	.wd-prefix {
+		font-size: 12px;
+		line-height: 1rem;
+		color: color-mix(in oklch, var(--muted-foreground) 70%, transparent);
+		max-width: 14rem;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		padding-top: 0.125rem;
+	}
+
 	.exit-badge {
 		display: inline-flex;
 		align-items: center;
@@ -251,7 +323,7 @@
 		padding: 0.2rem 0.55rem;
 		border-radius: 0.375rem;
 		font-family: var(--font-mono);
-		font-size: 11px;
+		font-size: 12px;
 		font-weight: 500;
 		letter-spacing: 0.01em;
 		line-height: 1;

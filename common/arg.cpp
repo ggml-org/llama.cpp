@@ -3283,6 +3283,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)\n"
         "specify \"all\" to enable all tools\n"
         "available tools: read_file, file_glob_search, grep_search, exec_shell_command, write_file, edit_file, get_datetime\n"
+        "this also enables the /filesystem/search endpoint used by the chat UI's file/folder autocomplete.\n"
         "note: for security reasons, this will limit --cors-origins to localhost by default",
         [](common_params & params, const std::string & value) {
             params.server_tools = parse_csv_row(value);
@@ -3305,11 +3306,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_MCP_SERVERS_JSON"));
     add_opt(common_arg(
+        {"--browse-root"}, "PATH",
+        "add a directory the /filesystem/search endpoint is allowed to read from. paths returned by queries are confined to the union of all configured roots.\n"
+        "may be repeated. if no roots are configured, the search defaults to $HOME.",
+        [](common_params & params, const std::string & value) {
+            params.filesystem_browse_roots.push_back(value);
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_BROWSE_ROOT"));
+    add_opt(common_arg(
         {"-ag", "--agent"},
         {"-no-ag", "--no-agent"},
         "whether to enable CORS proxy and all built-in tools - do not enable in untrusted environments (default: disabled)\n"
         "note: for security reasons, this will limit --cors-origins to localhost by default",
         [](common_params & params, bool value) {
+            params.agent = value;
             if (value) {
                 params.server_tools = {"all"};
                 params.ui_mcp_proxy = true;

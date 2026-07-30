@@ -14,6 +14,7 @@ export interface DatabaseConversation {
 	mcpServerOverrides?: McpServerOverride[];
 	thinkingEnabled?: boolean;
 	reasoningEffort?: ReasoningEffort;
+	workingDirectory?: string;
 	forkedFromConversationId?: string;
 	pinned?: boolean;
 }

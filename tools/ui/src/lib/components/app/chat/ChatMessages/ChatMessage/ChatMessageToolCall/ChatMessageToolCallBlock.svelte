@@ -16,6 +16,7 @@
 	import ChatMessageToolCallBlockReadFile from './ChatMessageToolCallBlockReadFile.svelte';
 	import ChatMessageToolCallBlockRunJavascript from './ChatMessageToolCallBlockRunJavascript.svelte';
 	import ChatMessageToolCallBlockSearchResults from './ChatMessageToolCallBlockSearchResults.svelte';
+	import ChatMessageToolCallBlockSetWorkingDirectory from './ChatMessageToolCallBlockSetWorkingDirectory.svelte';
 	import ChatMessageToolCallBlockWriteFile from './ChatMessageToolCallBlockWriteFile.svelte';
 
 	interface Props {
@@ -61,6 +62,8 @@
 	<ChatMessageToolCallBlockGrepSearch {section} {open} {isStreaming} {onToggle} />
 {:else if section.toolName === BuiltInTool.RUN_JAVASCRIPT}
 	<ChatMessageToolCallBlockRunJavascript {section} {open} {isStreaming} {onToggle} />
+{:else if section.toolName === BuiltInTool.SET_WORKING_DIRECTORY}
+	<ChatMessageToolCallBlockSetWorkingDirectory {section} {isStreaming} />
 {:else}
 	<ChatMessageToolCallBlockDefault {section} {open} {isStreaming} {attachments} {onToggle} />
 {/if}

@@ -3,6 +3,9 @@ import type { OpenAIToolDefinition } from '$lib/types';
 
 export const SANDBOX_TOOL_NAME = BuiltInTool.RUN_JAVASCRIPT;
 
+/** Name of the browser-only set_working_directory frontend tool. */
+export const WORKING_DIRECTORY_TOOL_NAME = BuiltInTool.SET_WORKING_DIRECTORY;
+
 export const SANDBOX_TIMEOUT_MS_DEFAULT = 10000;
 
 export const SANDBOX_TIMEOUT_MS_MAX = 30000;
@@ -57,3 +60,31 @@ export function buildSandboxToolDefinition(includeSymbolicMath: boolean): OpenAI
 
 /** @deprecated Use {@link buildSandboxToolDefinition} instead. Kept for backward compatibility. */
 export const SANDBOX_TOOL_DEFINITION = buildSandboxToolDefinition(true);
+
+/**
+ * Build the OpenAI-compatible tool definition for the browser-only
+ * `set_working_directory` frontend tool. This tool writes the supplied
+ * path into the active conversation's IndexedDB row (via
+ * `conversationsStore.setWorkingDirectory`) so that subsequent server-side
+ * file operations use it as their base directory.
+ */
+export function buildSetWorkingDirectoryToolDefinition(): OpenAIToolDefinition {
+	return {
+		type: ToolCallType.FUNCTION,
+		function: {
+			name: WORKING_DIRECTORY_TOOL_NAME,
+			description:
+				'Set the working directory for the current conversation. The directory is persisted in the conversation state (IndexedDB) and used as the base path for subsequent file system tool calls. Pass an empty string to clear the working directory.',
+			parameters: {
+				type: JsonSchemaType.OBJECT,
+				properties: {
+					path: {
+						type: JsonSchemaType.STRING,
+						description: 'Absolute path to set as the working directory. Pass an empty string to clear it.'
+					}
+				},
+				required: ['path']
+			}
+		}
+	};
+}

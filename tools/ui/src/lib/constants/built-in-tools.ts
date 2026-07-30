@@ -15,13 +15,18 @@ import {
 	FilePlus,
 	FileSearch,
 	FileText,
-	SearchCode,
-	Terminal
+	Folder,
+	SearchCode
 } from '@lucide/svelte';
 import { BuiltInTool, ToolSource } from '$lib/enums';
 
 export interface BuiltinToolUiEntry {
-	icon: Component;
+	// `undefined` (i.e. omitting the field on a registry entry) means
+	// "use the default fallback icon". An explicit `null` opts a tool
+	// out of the icon slot entirely - used by `exec_shell_command`,
+	// whose title snippet carries a `$` glyph inline instead. The
+	// renderer in `ToolCallBlock` keeps these two cases distinct.
+	icon?: Component | null;
 	label: string;
 	source: ToolSource.BUILTIN | ToolSource.FRONTEND;
 }
@@ -42,13 +47,18 @@ export const BUILTIN_TOOL_UI: Readonly<Record<BuiltInTool, BuiltinToolUiEntry>> 
 	},
 	[BuiltInTool.GET_DATETIME]: { icon: Clock, label: 'Current time', source: ToolSource.BUILTIN },
 	[BuiltInTool.EXEC_SHELL_COMMAND]: {
-		icon: Terminal,
+		icon: null,
 		label: 'Run command',
 		source: ToolSource.BUILTIN
 	},
 	[BuiltInTool.RUN_JAVASCRIPT]: {
 		icon: Braces,
 		label: 'Run JavaScript',
+		source: ToolSource.FRONTEND
+	},
+	[BuiltInTool.SET_WORKING_DIRECTORY]: {
+		icon: Folder,
+		label: 'Set working directory',
 		source: ToolSource.FRONTEND
 	}
 } as const;
