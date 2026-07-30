@@ -1518,6 +1518,9 @@ def quantize_2d(weights: np.ndarray, out_dim: int, in_dim: int,
                 awq_clip: float = 1.0,
                 tensor_name: str = "",
                 ternary_threshold: float = 1.0,
+                lrq_u: Optional[np.ndarray] = None,
+                lrq_v: Optional[np.ndarray] = None,
+                lrq_agg: str = "mean",
                 ) -> Dict[str, np.ndarray]:
     """Full 2D weight quantization: ternary + pack + scales + outliers.
 
@@ -1526,26 +1529,63 @@ def quantize_2d(weights: np.ndarray, out_dim: int, in_dim: int,
         ternarize and scale W'
         stored_input_scale[c] = 1.0 / s[c]^awq_alpha   (applied to input at runtime)
 
+    LRQ step (when lrq_u and lrq_v are provided):
+        Reconstruct S = U @ V (shape (out_dim, in_dim)). Aggregate across
+        the output dimension to a per-input-channel scale
+        ``s_agg[c] = mean_r(S[r, c])`` (or RMS for ``lrq_agg="rms"``).
+        Apply the per-input-channel scale to the weight, ternarize, and
+        store ``1.0 / s_agg`` as the input scale. The full U and V are not
+        applied at runtime (we do not touch the runtime); they are kept in
+        the policy as audit metadata so a future runtime extension can
+        apply the low-rank correction additively.
+
     `ternary_threshold` is a multiplier on the per-row mean(|W|) used as the
     {-1, 0, +1} cutoff. Default 1.0 = legacy tessera behaviour. A value >1
     produces a sparser quantization (more zeros), <1 denser. Per-tensor
     calibrated via tools/tessera/per_tensor_calibrate.py.
     """
-    if act_scales is not None and awq_alpha is None:
+    if lrq_u is not None and lrq_v is not None:
+        # Reconstruct the rank-r scale and aggregate it to per-input-channel.
+        # The aggregation preserves energy ("rms") or the linear mean
+        # ("mean"); both reduce to the AWQ convention at rank 1.
+        s = np.asarray(lrq_u, dtype=np.float32) @ np.asarray(lrq_v, dtype=np.float32)
+        if lrq_agg == "rms":
+            s_agg = np.sqrt(np.mean(s * s, axis=0) + 1e-12).astype(np.float32)
+        else:
+            s_agg = np.mean(s, axis=0).astype(np.float32)
+        # Clamp before inversion so the F16 reciprocal is always finite.
+        s_agg = np.maximum(s_agg, np.float32(1e-6))
+        w_scale = s_agg.reshape(1, in_dim)
+        weights_scaled = (weights.astype(np.float32) * w_scale)
+        input_scale = (1.0 / s_agg).astype(np.float32)
+        resolved_alpha = 0.0  # AWQ path is bypassed when LRQ is active
+    elif act_scales is not None and awq_alpha is None:
         awq_alpha, _ = awq_scale_search(
             weights, act_scales, outlier_frac, tensor_name=tensor_name
         )
-    resolved_alpha = 0.0 if awq_alpha is None else awq_alpha
-    input_scale = np.ones(in_dim, dtype=np.float32)
-    if act_scales is not None and resolved_alpha > 0.0:
-        # Per-channel scale on weights. Normalize and bound the telemetry
-        # before inversion so the serialized F16 reciprocal is always finite.
-        w_scale = normalized_awq_scale(act_scales, resolved_alpha)
-        weights_scaled = (weights.astype(np.float32) * w_scale.reshape(1, in_dim))
-        # inverse goes to the input
-        input_scale = 1.0 / w_scale
+        resolved_alpha = 0.0 if awq_alpha is None else awq_alpha
+        input_scale = np.ones(in_dim, dtype=np.float32)
+        if act_scales is not None and resolved_alpha > 0.0:
+            # Per-channel scale on weights. Normalize and bound the telemetry
+            # before inversion so the serialized F16 reciprocal is always finite.
+            w_scale = normalized_awq_scale(act_scales, resolved_alpha)
+            weights_scaled = (weights.astype(np.float32) * w_scale.reshape(1, in_dim))
+            # inverse goes to the input
+            input_scale = 1.0 / w_scale
+        else:
+            weights_scaled = weights.astype(np.float32)
     else:
-        weights_scaled = weights.astype(np.float32)
+        resolved_alpha = 0.0 if awq_alpha is None else awq_alpha
+        input_scale = np.ones(in_dim, dtype=np.float32)
+        if act_scales is not None and resolved_alpha > 0.0:
+            # Per-channel scale on weights. Normalize and bound the telemetry
+            # before inversion so the serialized F16 reciprocal is always finite.
+            w_scale = normalized_awq_scale(act_scales, resolved_alpha)
+            weights_scaled = (weights.astype(np.float32) * w_scale.reshape(1, in_dim))
+            # inverse goes to the input
+            input_scale = 1.0 / w_scale
+        else:
+            weights_scaled = weights.astype(np.float32)
 
     if not 0.7 <= awq_clip <= 1.0:
         raise ValueError(f"AWQ clip must be in [0.7, 1.0], got {awq_clip}")
@@ -1970,6 +2010,52 @@ def load_calibration_policy(path: Optional[str]) -> Optional[dict]:
     }:
         raise ValueError(f"{path}: unsupported calibration policy schema")
     return policy
+
+
+def lrq_policy_for(
+    policy: Optional[dict], tensor_name: str
+) -> Optional[Tuple[int, np.ndarray, np.ndarray, str]]:
+    """Return (rank, U, V, aggregation) for `tensor_name` if the policy has
+    an LRQ entry that matches it, or None when no LRQ data applies.
+
+    The matching rule mirrors ``tensor_policy``: the entry's ``match`` list
+    is checked as a substring unless ``exact`` is set. The caller should
+    prefer this over AWQ when it returns non-None.
+    """
+    if policy is None:
+        return None
+    for family in policy.get("tensor_families", {}).values():
+        if "lrq_u" not in family or "lrq_v" not in family:
+            continue
+        matches = family.get("match", [])
+        if not matches:
+            continue
+        exact = bool(family.get("exact", False))
+        matched = (
+            tensor_name in matches
+            if exact
+            else any(fragment in tensor_name for fragment in matches)
+        )
+        if not matched:
+            continue
+        rank = int(family.get("lrq_rank", 0))
+        try:
+            u = np.asarray(family["lrq_u"], dtype=np.float32)
+            v = np.asarray(family["lrq_v"], dtype=np.float32)
+        except (TypeError, ValueError):
+            continue
+        if u.ndim != 2 or v.ndim != 2:
+            continue
+        if rank <= 0:
+            rank = min(u.shape[0], v.shape[1])
+        if u.shape[1] != rank or v.shape[0] != rank:
+            # Malformed entry; skip rather than fail the whole quantize call.
+            continue
+        agg = str(family.get("lrq_input_scale_agg", "mean"))
+        if agg not in ("mean", "rms"):
+            agg = "mean"
+        return rank, u, v, agg
+    return None
 
 
 def tensor_policy(policy: Optional[dict], tensor_name: str,
@@ -2672,12 +2758,34 @@ def main():
                 calibration_policy, out_name, args.outlier_frac, args.awq_alpha
             )
             direct_exact = direct_exact or policy_exact
+            lrq = lrq_policy_for(calibration_policy, out_name) if not direct_exact else None
+            use_lrq = lrq is not None
             use_imatrix_mse = (
-                args.range_selection == "imatrix-mse"
+                not use_lrq
+                and args.range_selection == "imatrix-mse"
                 and not direct_exact
                 and act_scales is not None
             )
-            if use_imatrix_mse:
+            if use_lrq:
+                # LRQ-mode: the policy carries a rank-r S = U @ V scale. The
+                # AWQ and imatrix_mse paths are bypassed because the policy
+                # is the authoritative source for this tensor.
+                _lrq_rank, _lrq_u, _lrq_v, _lrq_agg = lrq
+                q = quantize_2d(
+                    arr,
+                    out_dim,
+                    in_dim,
+                    1.0 if direct_exact else policy_frac,
+                    None if direct_exact else act_scales,
+                    0.0 if direct_exact else policy_alpha,
+                    1.0 if direct_exact else policy_clip,
+                    tensor_name=out_name,
+                    ternary_threshold=(1.0 if direct_exact else policy_threshold),
+                    lrq_u=_lrq_u,
+                    lrq_v=_lrq_v,
+                    lrq_agg=_lrq_agg,
+                )
+            elif use_imatrix_mse:
                 # imatrix_mse range selection: per-row MSE grid search
                 # weighted by per-channel importance. AWQ per-channel scaling
                 # is bypassed because importance is already consumed by the
