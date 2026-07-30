@@ -255,7 +255,7 @@ Instructions for adding support for new models: [HOWTO-add-model.md](docs/develo
 - [gpustack/gguf-parser](https://github.com/gpustack/gguf-parser-go/tree/main/cmd/gguf-parser) - review/check the GGUF file and estimate the memory usage
 - [Styled Lines](https://marketplace.unity.com/packages/tools/generative-ai/styled-lines-llama-cpp-model-292902) (proprietary licensed, async wrapper of inference part for game development in Unity3d with pre-built Mobile and Web platform wrappers and a model example)
 - [unslothai/unsloth](https://github.com/unslothai/unsloth) – 🦥 exports/saves fine-tuned and trained models to GGUF (Apache-2.0)
-
+- [LlamaNet](https://github.com/machaao/llama-net) - 🦙 LlamaNet is an open-source llama.cpp powered distributed inference network that provides an OpenAI-compatible API for serving and routing powered inference across connected nodes. 
 </details>
 
 <details>
