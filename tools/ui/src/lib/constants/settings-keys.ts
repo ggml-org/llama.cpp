@@ -67,6 +67,7 @@ export const SETTINGS_KEYS = {
 	EXCLUDE_REASONING_FROM_CONTEXT: 'excludeReasoningFromContext',
 	SHOW_RAW_OUTPUT_SWITCH: 'showRawOutputSwitch',
 	JS_SANDBOX_ENABLED: 'jsSandboxEnabled',
+	SYMBOLIC_MATH_ENABLED: 'symbolicMathEnabled',
 	// PY_INTERPRETER_ENABLED: 'pyInterpreterEnabled',
 	CUSTOM_JSON: 'customJson',
 	CUSTOM_CSS: 'customCss'

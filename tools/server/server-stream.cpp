@@ -453,7 +453,7 @@ static server_http_res_ptr make_error_response(int status, const std::string & m
 
 server_http_context::handler_t server_stream_make_get_handler() {
     return [](const server_http_req & req) -> server_http_res_ptr {
-        // GET /v1/stream/<conv_id>?from=N replays buffered SSE bytes then blocks for live
+        // GET /v1/stream?conv_id=<id>&from=N replays buffered SSE bytes then blocks for live
         // bytes until the session finalizes, streamed as text/event-stream for EventSource
         std::string conv_id = req.get_param("conv_id");
         if (conv_id.empty()) {
@@ -560,13 +560,13 @@ server_http_context::handler_t server_stream_make_lookup_handler() {
 
 server_http_context::handler_t server_stream_make_delete_handler() {
     return [](const server_http_req & req) -> server_http_res_ptr {
-        // DELETE /v1/stream/<conv_id> is the explicit user Stop, cancels the producer and evicts
+        // DELETE /v1/stream?conv_id=<id> is the explicit user Stop, cancels the producer and evicts
         // the buffer. idempotent, returns 204 even if the session was already gone
         std::string conv_id = req.get_param("conv_id");
         if (conv_id.empty()) {
             return make_error_response(400, "Missing conversation id in path", ERROR_TYPE_INVALID_REQUEST);
         }
-        SRV_TRC("DELETE /v1/stream/%s -> evict_and_cancel\n", conv_id.c_str());
+        SRV_TRC("DELETE /v1/stream conv_id=%s -> evict_and_cancel\n", conv_id.c_str());
         g_stream_sessions.evict_and_cancel(conv_id);
         auto res = std::make_unique<server_http_res>();
         res->status = 204;
@@ -621,7 +621,7 @@ bool server_res_spipe::conn_alive() {
 
 bool server_res_spipe::should_stop() {
     if (spipe) {
-        // note: if DELETE /v1/stream/<conv_id> is called, is_cancelled() will be true
+        // note: if DELETE /v1/stream is called for this conv, is_cancelled() will be true
         return spipe->is_cancelled();
     } else {
         return !conn_alive();

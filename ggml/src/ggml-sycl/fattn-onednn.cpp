@@ -38,6 +38,12 @@ bool ggml_sycl_flash_attn_ext_onednn_supported(const ggml_tensor * dst) {
     if (K->type != GGML_TYPE_F16 || V->type != GGML_TYPE_F16) {
         return false;
     }
+    // Optional KV-length ceiling (GGML_SYCL_FA_ONEDNN_MAX_KV, 0 = unlimited). Escape hatch:
+    // very long sequences make the fused SDPA slow enough to risk the xe driver watchdog on
+    // some stacks; past the cap we fall back to the native FA kernel instead.
+    if (g_ggml_sycl_fa_onednn_max_kv > 0 && K->ne[1] > g_ggml_sycl_fa_onednn_max_kv) {
+        return false;
+    }
     // gate for the following cases
     // 1. if the oneDNN graph Add node has no input --> skip
     // 2. types other than f16 need different logical_tensor declaration
@@ -208,9 +214,17 @@ void ggml_sycl_flash_attn_ext_onednn(ggml_backend_sycl_context & ctx, ggml_tenso
     cont_to_f16_sycl<sycl::half>((const char *) V->data, Vf.get(), d, seq, Hkv, mb, V->nb[1], V->nb[2], V->nb[3], stream);
 
     // divide-by-(1/scale) reproduces ggml's score *= kq_scale on the proven probe graph.
+    //
+    // The scale must not be uploaded with an async memcpy from a stack local: on the in-order
+    // queue that copy waits behind the K/V staging kernels, and once those take long enough
+    // (n_kv >= ~26k on B70) the host frame is recycled before the copy runs, feeding the SDPA a
+    // garbage scale (output collapses to a repeated token). Write the scalar from a kernel
+    // instead -- the value is captured into the command, so no host memory has to outlive the
+    // call, and the enqueue stays async.
     const sycl::half scale_h = (sycl::half) (1.0f / kq_scale);
     ggml_sycl_pool_alloc<sycl::half> scbuf(ctx.pool(), 1);
-    stream->memcpy(scbuf.get(), &scale_h, sizeof(sycl::half));
+    sycl::half * const scale_dev = scbuf.get();
+    stream->single_task([=]() { *scale_dev = scale_h; });
 
     ggml_sycl_pool_alloc<sycl::half> outf(ctx.pool(), (size_t) H * q * d);   // f16 contiguous SDPA out [mb,H,q,d]
 
@@ -232,7 +246,7 @@ void ggml_sycl_flash_attn_ext_onednn(ggml_backend_sycl_context & ctx, ggml_tenso
         if (r == E.id_q)     return Qf.get();
         if (r == E.id_k)     return Kf.get();
         if (r == E.id_v)     return Vf.get();
-        if (r == E.id_scale) return scbuf.get();
+        if (r == E.id_scale) return scale_dev;
         if (r == E.id_mask)  return (void *) mask->data;
         return nullptr;
     };
@@ -245,14 +259,12 @@ void ggml_sycl_flash_attn_ext_onednn(ggml_backend_sycl_context & ctx, ggml_tenso
     E.cp.execute(strm, ti, {to});
 
     permute_sdpa_out_sycl(outf.get(), (float *) dst->data, mb, H, q, d, stream);
-    // Single device: no sync is required, and actually PP perf is ~6% > wait_and_throw() (tested on llama-3.1-8b & qwen3.6-27b, both Q8_0, with Arc B70).
-    // Any future multi-GPU refactor MUST re-measure this single-device path and keep the best
-    // single-device PP speed. Otherwise (multiple devices/streams can race the reuse):
+    // Single device needs no sync: the dnnl stream wraps this same in-order queue, so the SDPA
+    // serializes with the staging kernels before it and the permute/pool reuse after it. The
+    // garbage output formerly blamed on the missing sync here was the scale use-after-return
+    // fixed above. Keep the conservative wait for multi-GPU, where other devices' streams can
+    // race the pool:
     if (ggml_sycl_info().device_count > 1) {
-        // cont_to_f16 -> oneDNN execute -> permute is async on this stream, but the
-        // pool_alloc*s above free their device buffers at host return. Without this wait the next
-        // scheduler op re-acquires those bytes while the GPU is still computing the SDPA, turning
-        // it into garbage and collapsing multi-turn output to a single repeated token ("GGGGG...").
         stream->wait_and_throw();
     }
 }

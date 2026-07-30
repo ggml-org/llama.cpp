@@ -21,7 +21,37 @@ cmake --build build -j$(nproc)
 cmake --build build --target llama-finetune-qlora -j$(nproc)
 # If llama-adapter.cpp or llama-context.cpp changed, rebuild all:
 cmake --build build -j$(nproc)
+
+# ROCm build:
+./ROCm-build.sh
+
+# Optional: compile for a specific AMD GPU architecture:
+GPU_TARGETS=gfx1100 ./ROCm-build.sh
+
+# Radeon 680M (gfx1035, unsupported test configuration):
+# ROCm's packaged rocBLAS kernels target gfx1030, so use a separate build.
+BUILD_DIR=build-rocm-gfx1030 GPU_TARGETS=gfx1030 ./ROCm-build.sh
+
+# Incremental ROCm rebuild:
+cmake --build build-rocm --target llama-finetune-qlora -j$(nproc)
 ```
+
+Run the Radeon 680M compatibility build with:
+
+```bash
+HSA_OVERRIDE_GFX_VERSION=10.3.0 \
+GGML_CUDA_DISABLE_GRAPHS=1 \
+./build-rocm-gfx1030/bin/llama-finetune-qlora ...
+```
+
+The Radeon 680M is not in AMD's supported ROCm GPU matrix. This compatibility
+mode is intended for local testing and uses the packaged gfx1030 rocBLAS
+kernels. Do not combine gfx1030 and gfx1035 objects in one build directory.
+
+The ROCm build supports the same SFT, reward-weighted SFT, GRPO, resume,
+checkpointing, LoRA QAT, partial offload, and optimizer modes as the CUDA build.
+HIP compiles the shared `ggml-cuda` training kernels, including quantized
+`OUT_PROD`, `OUT_PROD_ID`, and device-resident Q8 AdamW state.
 
 ---
 
@@ -37,6 +67,7 @@ Trains LoRA adapters on a quantized GGUF model.
   --train-file data/train.jsonl \
   --lora-rank 16 --lora-alpha 16 \
   -c 4096 -b 4096 -ub 512 \
+  --lr-scheduler cosine --warmup-steps 10 --warmup-init-ratio 0.1 -lr-min 1e-6 \
   --save-every 10 \
   --lora-out ~/adapter.gguf \
   --epochs 3 --seed 42
@@ -50,6 +81,7 @@ Trains LoRA adapters on a quantized GGUF model.
   --train-file data/train.jsonl \
   --lora-rank 16 --lora-alpha 16 \
   -ngl 13 -c 14336 -b 14336 -ub 1024 \
+  --lr-scheduler cosine --warmup-steps 10 --warmup-init-ratio 0.1 -lr-min 1e-6 \
   --save-every 8 \
   --lora-out ~/nemotron-lora.gguf \
   --epochs 3 --seed 42
@@ -79,7 +111,35 @@ Trains LoRA adapters on a quantized GGUF model.
 | `-ub` / `--ubatch-size` | `512` | GPU micro-batch tokens; controls VRAM vs. step time |
 | `-ngl` | `999` | GPU layers to offload |
 | `-lr` / `--learning-rate` | `1e-4` | AdamW learning rate |
+| `--lr-scheduler` | `constant` | Learning-rate schedule: `constant` or `cosine` |
+| `--warmup-steps` | `0` | Linear warmup over N logical training steps |
+| `--warmup-init-ratio` | `0.1` | Initial warmup LR as a fraction of peak LR; must be in `(0, 1]` |
+| `--verbose-loss` | off | Print one structured loss line per SFT dataset window |
+| `-lr-min` / `--learning-rate-min` | `-1` | Cosine floor; values below 0 use 0 |
 | `--seed` | `42` | Random seed for LoRA init |
+
+For SFT, one scheduler step is one completed dataset window. For GRPO, it is
+one completed GRPO iteration. The recommended `-b == -c` configuration performs
+one optimizer update per SFT scheduler step. Micro-batches used for gradient
+accumulation do not advance the schedule. Checkpoints store the completed
+scheduler step, so warmup and cosine decay continue from the same position after
+resume. Use the same scheduler, warmup steps, warmup init ratio, base learning
+rate, and minimum learning rate flags when resuming.
+
+During warmup, step 0 starts at `peak_lr * warmup_init_ratio`. Each subsequent
+logical step linearly interpolates toward peak LR using
+`progress = step / warmup_steps`. The ratio is ignored when warmup is disabled.
+
+With `--verbose-loss`, each completed SFT window prints one line:
+
+```text
+epoch=1 window=42 window_loss=1.234567 ema16=1.345678 ema64=1.456789 epoch_mean=1.567890 lr=1e-05
+```
+
+`window_loss` is the mean of the ubatch losses in that window. EMA16 uses
+`0.8825 * ema16 + 0.1175 * window_loss`; EMA64 uses
+`0.9692 * ema64 + 0.0308 * window_loss`. The EMAs continue across epochs,
+while `epoch_mean` resets at each epoch.
 
 ### Resume from a checkpoint
 
@@ -306,7 +366,7 @@ Gradients propagate through all layers that have LoRA adapters. Use `--freeze-la
 | ✅ Done | **BOS separators** — insert BOS between concatenated samples | Correct cross-sample boundaries | Implemented |
 | ✅ Done | **Per-epoch loss summary** — log train/val loss after each epoch | Observability | Implemented |
 | ✅ Done | **`MUL_MAT_ID` backward** — LoRA on MoE dense FFN layers; `OUT_PROD_ID` for scattered outer product | Unlocks Mixtral/Nemotron-MoE | Implemented |
-| ✅ Done | **Quantized `OUT_PROD`** — dequantize on GPU + cuBLAS for backward matmul | Full GPU training (no CPU fallback) | Implemented |
+| Done | **Quantized `OUT_PROD`** - dequantize on GPU + cuBLAS/hipBLAS for backward matmul | Full GPU training (no CPU fallback) | Implemented |
 | ✅ Done | **Reuse `ctx_compute_opt`** — allocate tensor metadata context once, `ggml_reset()` across ubatches | Eliminate ~0.5 s/step overhead | Implemented |
 | ❌ Skip | **Static training graphs** — KV mask shape changes per ubatch (`n_kv` grows); graph topology not static | Would need KV cache redesign | Not feasible |
 | Low | **`SSM_SCAN/CONV` backward** — enable LoRA on Mamba SSM layers | Unlocks NemotronH SSM layers | Planned |
@@ -326,7 +386,7 @@ Gradients propagate through all layers that have LoRA adapters. Use `--freeze-la
 | `common/common.h` | Added `save_every`, `lora_resume`, `lora_freeze_layers`, `grad_checkpoint_interval`, `train_on_prompt`, `shuffle_dataset` fields |
 | `common/arg.cpp` | Added `--save-every`, `--resume`, `--freeze-layers`, `--grad-checkpoint`, `--train-on-prompt`, `--shuffle-dataset` arguments |
 | `include/llama.h` | Added `llama_opt_set_reward_weights()` and `llama_opt_epoch_range()`; `grad_checkpoint_interval` in `llama_opt_params`; `shuffle` param in `llama_opt_epoch` |
-| `ggml/src/ggml-cuda/out-prod.cu` | `OUT_PROD` with quantized src0 (dequantize on GPU + cuBLAS); `OUT_PROD_ID` for MoE backward |
+| `ggml/src/ggml-cuda/out-prod.cu` | Shared CUDA/HIP `OUT_PROD` with quantized src0 (dequantize on GPU + cuBLAS/hipBLAS); `OUT_PROD_ID` for MoE backward |
 | `ggml/src/ggml-cuda/ggml-cuda.cu` | `supports_op` for quantized `OUT_PROD` and `OUT_PROD_ID`; CPU-resident ids fix in `mul_mat_id` |
 | `ggml/include/ggml-opt.h` | Added `grad_checkpoint_interval` to `ggml_opt_params` |
 | `ggml/src/ggml-opt.cpp` | Gradient checkpointing: marks every Nth forward node `GGML_TENSOR_FLAG_OUTPUT` before backward build |

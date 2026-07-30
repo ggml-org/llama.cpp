@@ -103,14 +103,19 @@ static enum ggml_type ggml_opt_optimizer_state_type(enum ggml_opt_optimizer_type
     }
 }
 
-static bool ggml_opt_is_cuda_buffer_type(ggml_backend_buffer_type_t buft) {
+static bool ggml_opt_has_device_q8_adamw(ggml_backend_buffer_type_t buft) {
     ggml_backend_dev_t dev = ggml_backend_buft_get_device(buft);
     if (!dev) {
         return false;
     }
 
     ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
-    return reg && strcmp(ggml_backend_reg_name(reg), "CUDA") == 0;
+    if (!reg) {
+        return false;
+    }
+
+    const char * name = ggml_backend_reg_name(reg);
+    return strcmp(name, "CUDA") == 0 || strcmp(name, "ROCm") == 0;
 }
 
 static void ggml_opt_step_adamw_quantized(ggml_opt_context_t opt_ctx, const ggml_opt_optimizer_params & opt_pars) {
@@ -426,7 +431,7 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
 
     const bool need_momenta = opt_ctx->build_type_alloc == GGML_OPT_BUILD_TYPE_OPT &&
         opt_ctx->optimizer == GGML_OPT_OPTIMIZER_TYPE_ADAMW;
-    const bool need_q8_cuda_momenta = opt_ctx->build_type_alloc == GGML_OPT_BUILD_TYPE_OPT &&
+    const bool need_q8_device_momenta = opt_ctx->build_type_alloc == GGML_OPT_BUILD_TYPE_OPT &&
         opt_ctx->optimizer == GGML_OPT_OPTIMIZER_TYPE_ADAMW_Q8_0;
     const bool need_quantized_momenta = opt_ctx->build_type_alloc == GGML_OPT_BUILD_TYPE_OPT &&
         ggml_opt_optimizer_state_type(opt_ctx->optimizer) != GGML_TYPE_COUNT;
@@ -452,7 +457,7 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
         //   - pred (if using static graphs)
         //   - ncorrect (if using static graphs, 2 tensors).
         constexpr size_t n_loss = 1;
-        const size_t tensors_per_param = (accumulate ? 1 : 0) + ((need_momenta || need_q8_cuda_momenta) ? 2 : 0);
+        const size_t tensors_per_param = (accumulate ? 1 : 0) + ((need_momenta || need_q8_device_momenta) ? 2 : 0);
         const size_t tensors_const = opt_ctx->static_graphs ? 9 : 0;
         const size_t size_meta = (n_loss + tensors_per_param*n_param + tensors_const) * ggml_tensor_overhead();
         struct ggml_init_params params = {
@@ -569,7 +574,7 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
             }
         }
 
-        if ((need_momenta || need_q8_cuda_momenta) && opt_ctx->build_type_alloc >= GGML_OPT_BUILD_TYPE_OPT) {
+        if ((need_momenta || need_q8_device_momenta) && opt_ctx->build_type_alloc >= GGML_OPT_BUILD_TYPE_OPT) {
             opt_ctx->grad_m.resize(n_nodes);
             opt_ctx->grad_v.resize(n_nodes);
             for (int i = 0; i < n_nodes; ++i) {
@@ -582,7 +587,7 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
                         ? ggml_backend_buffer_get_type(node->buffer)
                         : ggml_backend_cpu_buffer_type();
 
-                    if (need_q8_cuda_momenta && !ggml_opt_is_cuda_buffer_type(param_buft)) {
+                    if (need_q8_device_momenta && !ggml_opt_has_device_q8_adamw(param_buft)) {
                         opt_ctx->grad_m[i] = nullptr;
                         opt_ctx->grad_v[i] = nullptr;
                         continue;
@@ -592,7 +597,7 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
                     const size_t sz = 2 * ggml_tensor_overhead();
                     struct ggml_init_params mip = { sz, nullptr, true };
                     struct ggml_context * mctx = ggml_init(mip);
-                    if (need_q8_cuda_momenta) {
+                    if (need_q8_device_momenta) {
                         const int64_t ne = ggml_nelements(node);
                         const int64_t block_size = ggml_blck_size(GGML_TYPE_Q8_0);
                         const int64_t ne_padded = (ne + block_size - 1)/block_size*block_size;
@@ -659,7 +664,7 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
                 continue;
             }
             GGML_ASSERT(node->type == GGML_TYPE_F32 && grad->type == GGML_TYPE_F32);
-            if (need_q8_cuda_momenta && opt_ctx->grad_m[i]) {
+            if (need_q8_device_momenta && opt_ctx->grad_m[i]) {
                 continue;
             }
             const int64_t ne = ggml_nelements(node);
@@ -719,7 +724,7 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
                 v = opt_ctx->grad_v[i];
                 ggml_format_name(m, "AdamW m for %s", node->name);
                 ggml_format_name(v, "AdamW v for %s", node->name);
-            } else if (need_q8_cuda_momenta && opt_ctx->grad_m[i]) {
+            } else if (need_q8_device_momenta && opt_ctx->grad_m[i]) {
                 m = opt_ctx->grad_m[i];
                 v = opt_ctx->grad_v[i];
                 ggml_format_name(m, "AdamW Q8_0 m for %s", node->name);
@@ -982,7 +987,12 @@ void ggml_opt_alloc(ggml_opt_context_t opt_ctx, bool backward) {
             graph = opt_ctx->gb_grad;
         } break;
         case GGML_OPT_BUILD_TYPE_OPT: {
-            graph = ggml_opt_optimizer_state_type(opt_ctx->optimizer) == GGML_TYPE_COUNT ? opt_ctx->gb_opt : opt_ctx->gb_grad;
+            const bool has_device_q8_step =
+                opt_ctx->optimizer == GGML_OPT_OPTIMIZER_TYPE_ADAMW_Q8_0 &&
+                !opt_ctx->bufs_momenta.empty();
+            graph = ggml_opt_optimizer_state_type(opt_ctx->optimizer) == GGML_TYPE_COUNT || has_device_q8_step
+                ? opt_ctx->gb_opt
+                : opt_ctx->gb_grad;
         } break;
     }
     GGML_ASSERT(graph);
@@ -1068,7 +1078,7 @@ void ggml_opt_eval(ggml_opt_context_t opt_ctx, ggml_opt_result_t result) {
         const ggml_opt_optimizer_params & opt_pars = opt_ctx->get_opt_pars(opt_ctx->get_opt_pars_ud);
         ggml_opt_step_adamw_quantized(opt_ctx, opt_pars);
     }
-    opt_ctx->iter += opt_ctx->allocated_graph == opt_ctx->gb_opt;
+    opt_ctx->iter += do_optimizer_step;
     opt_ctx->opt_i = (opt_ctx->opt_i + 1) % opt_ctx->opt_period;
 
     if (!opt_ctx->static_graphs) {

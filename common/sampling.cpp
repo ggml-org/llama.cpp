@@ -299,7 +299,7 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
     if (!params.reasoning_budget_start.empty() && !params.reasoning_budget_end.empty() && (params.grammar_lazy || params.reasoning_budget_tokens >= 0 || params.reasoning_control)) {
         rbudget = common_reasoning_budget_init(
             vocab,
-            params.reasoning_budget_start,
+            {params.reasoning_budget_start},
             params.reasoning_budget_end,
             params.reasoning_budget_forced,
             params.reasoning_budget_tokens < 0 ? INT_MAX : params.reasoning_budget_tokens);
@@ -310,8 +310,19 @@ struct common_sampler * common_sampler_init(const struct llama_model * model, st
         }
     }
 
-    if (params.has_logit_bias()) {
-        samplers.push_back(llama_sampler_init_logit_bias(llama_vocab_n_tokens(vocab), params.logit_bias.size(), params.logit_bias.data()));
+    // logit bias: user biases + model suppress tokens (-INFINITY)
+    {
+        std::vector<llama_logit_bias> merged = params.logit_bias;
+
+        int32_t n_suppress = 0;
+        const llama_token * suppress = llama_vocab_get_suppress_tokens(vocab, &n_suppress);
+        for (int32_t i = 0; i < n_suppress; ++i) {
+            merged.push_back({ suppress[i], -INFINITY });
+        }
+
+        if (!merged.empty()) {
+            samplers.push_back(llama_sampler_init_logit_bias(llama_vocab_n_tokens(vocab), merged.size(), merged.data()));
+        }
     }
 
     if (params.mirostat == 0) {
@@ -453,6 +464,17 @@ void common_sampler_accept(struct common_sampler * gsmpl, llama_token token, boo
 
     if (gsmpl->rbudget && is_generated) {
         llama_sampler_accept(gsmpl->rbudget, token);
+
+        // if done, replay end sequence which may contain a grammar trigger
+        const bool is_done = common_reasoning_budget_get_state(gsmpl->rbudget) == REASONING_BUDGET_DONE;
+        if (gsmpl->grmr && !accept_grammar && is_done) {
+            const llama_tokens * end_seq = common_reasoning_budget_get_end_match(gsmpl->rbudget);
+            if (end_seq) {
+                for (const llama_token end_token : *end_seq) {
+                    llama_sampler_accept(gsmpl->grmr, end_token);
+                }
+            }
+        }
     }
 
     if (gsmpl->grmr && accept_grammar) {
