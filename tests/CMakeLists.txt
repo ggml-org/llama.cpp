@@ -276,6 +276,18 @@ llama_build(test-imatrix-observer-classification.cpp)
 llama_test(test-imatrix-observer-classification)
 llama_build(test-imatrix-observer-epoch.cpp)
 llama_test(test-imatrix-observer-epoch)
+llama_build(test-server-mtp-trigger.cpp)
+llama_test(test-server-mtp-trigger)
+target_include_directories(test-server-mtp-trigger PRIVATE ${PROJECT_SOURCE_DIR}/common)
+target_link_libraries(test-server-mtp-trigger PRIVATE llama-common)
+llama_build(test-telemetry-jsonl.cpp)
+llama_test(test-telemetry-jsonl)
+llama_build(test-dflash-loader.cpp)
+llama_test(test-dflash-loader)
+target_include_directories(test-dflash-loader PRIVATE ${PROJECT_SOURCE_DIR}/src)
+llama_build(test-dspark-markov-head.cpp)
+llama_test(test-dspark-markov-head)
+target_include_directories(test-dspark-markov-head PRIVATE ${PROJECT_SOURCE_DIR}/src)
 add_executable(test-tessera-engram test-tessera-engram.cpp)
 target_include_directories(test-tessera-engram PRIVATE ${PROJECT_SOURCE_DIR}/tools/tessera)
 add_test(NAME test-tessera-engram COMMAND test-tessera-engram)
@@ -298,6 +310,14 @@ add_test(
 add_test(
     NAME test-tessera-policy-prior
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test-tessera-policy-prior.py
+)
+add_test(
+    NAME test-per-tensor-policy
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test-per-tensor-policy.py
+)
+add_test(
+    NAME test-dspark-gguf-patch
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test-dspark-gguf-patch.py
 )
 llama_build(${PROJECT_SOURCE_DIR}/tools/tessera/kv-compress-reference.cpp)
 add_executable(test-tessera-kv-compaction test-tessera-kv-compaction.cpp)
