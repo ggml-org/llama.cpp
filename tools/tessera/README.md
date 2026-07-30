@@ -507,3 +507,40 @@ python tools/tessera/latency_lut.py \
   --sidecar-dir /path/to/v3/sidecars \
   --out lut.json --include-l15
 ```
+
+## Linear fidelity predictor (Phase E)
+
+`fidelity_predictor.py` is a linear (not neural network) regression that
+maps the L5 6-signal score to the per-tensor quant error. The model is
+intentionally simple for inspectability: `intercept` (scalar), `alpha`
+(6-vector), `beta` ((n_layers, n_layers) symmetric, sparse band,
+zero by default). Training is closed-form `np.linalg.lstsq` on the
+augmented `[1, s_0..s_5]` design matrix, seeded via
+`np.random.default_rng(seed)`. Two `train()` calls with the same seed
+produce bit-identical coefficients.
+
+Inputs: the same 6 signals the L5 orchestrator consumes (imatrix,
+gradient, layer, kurtosis, hessian_trace, outlier). Targets: per-tensor
+error from Phase B's table (or a synthetic ground truth when B isn't
+available). The output schema is
+`llama.tessera.fidelity-predictor.v1`.
+
+`beta` is retained in the `Predictor` struct for the per-pair
+adjacent-layer interaction term but defaults to zero; the 10-row
+synthetic bundle is too small to fit per-pair interactions robustly
+without overfitting. The model is ready to re-enable beta once a
+richer Phase-B cohort is wired in.
+
+```sh
+# Train + emit a predictor JSON from the synthetic 10-tensor bundle
+python tools/tessera/fidelity_predictor.py --train-demo --out pred.json
+
+# Programmatic use
+python -c "
+from tools.tessera.fidelity_predictor import train, predict_error
+import numpy as np
+scores = np.array([0.5, 0.3, 0.2, 0.1, 0.4, 0.2])  # 6 signals
+pred = train(scores_arr=..., errors_arr=..., layer_indices=...)
+err  = predict_error(scores, neighbors=[], predictor=pred)
+"
+```
