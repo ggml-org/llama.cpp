@@ -3,6 +3,9 @@
 #include "build-info.h"
 #include "common.h"
 #include "imatrix-loader.h"
+#include "tessera-args.h"
+
+#include "tessera/tessera-dispatch.h"
 
 #include "gguf.h"
 
@@ -403,6 +406,7 @@ int llama_quantize(int argc, char ** argv) {
     std::vector<llama_model_kv_override> kv_overrides;
     std::vector<tensor_type_option> tensor_type_opts;
     std::vector<int> prune_layers;
+    bool use_tessera = false;
 
     for (; arg_idx < argc && strncmp(argv[arg_idx], "--", 2) == 0; arg_idx++) {
         if (strcmp(argv[arg_idx], "--leave-output-tensor") == 0) {
@@ -552,7 +556,15 @@ int llama_quantize(int argc, char ** argv) {
 
     std::string ftype_str;
     std::string suffix = ".gguf";
-    if (try_parse_ftype(argv[arg_idx], params.ftype, ftype_str)) {
+    if (try_parse_ftype(argv[arg_idx], params.ftype, ftype_str) ||
+            striequals(argv[arg_idx], "TESSERA_T640") || striequals(argv[arg_idx], "TESSERA_T640_3D")) {
+        if (striequals(argv[arg_idx], "TESSERA_T640") || striequals(argv[arg_idx], "TESSERA_T640_3D")) {
+            use_tessera = true;
+            ftype_str = argv[arg_idx];
+            for (auto & ch : ftype_str) {
+                ch = std::toupper(ch);
+            }
+        }
         // argv[arg_idx] is the ftype directly: <input> <ftype>
         if (!params.dry_run) {
             std::string fpath;
@@ -583,9 +595,17 @@ int llama_quantize(int argc, char ** argv) {
             fprintf(stderr, "%s: missing ftype\n", __func__);
             return 1;
         }
-        if (!try_parse_ftype(argv[arg_idx], params.ftype, ftype_str)) {
+        if (!try_parse_ftype(argv[arg_idx], params.ftype, ftype_str) &&
+                !striequals(argv[arg_idx], "TESSERA_T640") && !striequals(argv[arg_idx], "TESSERA_T640_3D")) {
             fprintf(stderr, "%s: invalid ftype '%s'\n", __func__, argv[arg_idx]);
             return 1;
+        }
+        if (striequals(argv[arg_idx], "TESSERA_T640") || striequals(argv[arg_idx], "TESSERA_T640_3D")) {
+            use_tessera = true;
+            ftype_str = argv[arg_idx];
+            for (auto & ch : ftype_str) {
+                ch = std::toupper(ch);
+            }
         }
         if (ftype_str == "COPY") {
            params.only_copy = true;
@@ -627,6 +647,22 @@ int llama_quantize(int argc, char ** argv) {
     const int64_t t_main_start_us = llama_time_us();
 
     int64_t t_quantize_us = 0;
+
+    if (use_tessera) {
+        ts_dispatch_params tparams = {};
+        tparams.input_path = fname_inp;
+        tparams.output_path = fname_out;
+        // Fill from common_get_tessera_params() if available
+        ts_dispatch_result tresult;
+        std::string terr;
+        if (ts_dispatch_run(&tparams, &tresult, &terr) != 0) {
+            fprintf(stderr, "error: tessera pipeline failed: %s\n", terr.c_str());
+            return 1;
+        }
+        printf("tessera: quantized %lld tensors, total mse = %.6f\n",
+               (long long)tresult.n_tensors_quantized, tresult.total_mse);
+        return 0;
+    }
 
     // load the model
     {
