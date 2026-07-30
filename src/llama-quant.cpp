@@ -307,6 +307,12 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     // NOTE: can't use LLM_TN here because the layer number is not known
     quantize &= name.find("ffn_gate_inp.weight") == std::string::npos;
 
+    // do not quantize Motif-3 PolyNorm activation coefficients and
+    // hyper-connection gate tensors
+    quantize &= name.find("ffn_poly")           == std::string::npos;
+    quantize &= name.find("mhc_")               == std::string::npos;
+    quantize &= name.find("attn_lambda.weight") == std::string::npos;
+
     // do not quantize the i32 token-id -> expert-id routing table (DeepSeek-V4)
     quantize &= name.find("ffn_gate_tid2eid.weight") == std::string::npos;
 
