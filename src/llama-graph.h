@@ -966,6 +966,16 @@ struct llm_graph_context {
              const char   * weight_name) const;
     bool imatrix_observer_enabled(const char * weight_name) const;
 
+    // Drafter graphs (DFlash/DSpark) share tensor names with the verifier
+    // (e.g. both have blk.3.attn_output.weight) but the activations are
+    // different shapes because the architectures differ.  When both
+    // contexts run inside the same imatrix session, the second write
+    // trips a shape-mismatch error.  We disambiguate by prefixing every
+    // observer name on a drafter arch with "dft." so verifier and drafter
+    // land in separate m_stats buckets.
+    bool is_drafter_arch() const { return arch == LLM_ARCH_DFLASH; }
+    std::string imatrix_observer_name(const char * weight_name) const;
+
     ggml_tensor * build_imatrix_observer_cast_dense(
               ggml_tensor * cur,
               ggml_tensor * weight_anchor,

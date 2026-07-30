@@ -1409,6 +1409,13 @@ bool llm_graph_context::imatrix_observer_enabled(
                 weight_name, cparams.imatrix_observer_filter_data));
 }
 
+std::string llm_graph_context::imatrix_observer_name(const char * weight_name) const {
+    if (is_drafter_arch()) {
+        return std::string("dft.") + weight_name;
+    }
+    return std::string(weight_name);
+}
+
 void llm_graph_context::build_imatrix_observer_dense(
         ggml_tensor * cur,
         ggml_tensor * weight_anchor,
@@ -1428,7 +1435,7 @@ void llm_graph_context::build_imatrix_observer_dense(
 
     ggml_tensor * observer =
         ggml_imatrix_observer(ctx0, cur, nullptr, weight_anchor, 1);
-    ggml_set_name(observer, weight_name);
+    ggml_set_name(observer, imatrix_observer_name(weight_name).c_str());
     ggml_set_output(observer);
     if (weight_anchor->buffer &&
         ggml_backend_buffer_is_host(weight_anchor->buffer)) {
@@ -1461,7 +1468,7 @@ ggml_tensor * llm_graph_context::build_imatrix_observer_cast_dense(
     GGML_ASSERT(activation_view->view_src);
     GGML_ASSERT(stats_view->view_src == activation_view->view_src);
     ggml_tensor * storage = activation_view->view_src;
-    ggml_set_name(stats_view, weight_name);
+    ggml_set_name(stats_view, imatrix_observer_name(weight_name).c_str());
     ggml_set_output(stats_view);
     if (weight_anchor->buffer &&
         ggml_backend_buffer_is_host(weight_anchor->buffer)) {
@@ -1615,7 +1622,7 @@ ggml_tensor * llm_graph_context::build_tile640_lora_mm_id(
         if (imatrix_observer_enabled(observer_name)) {
             ggml_tensor * observer =
                 ggml_imatrix_observer(ctx0, cur, ids, w_packed, experts);
-            ggml_set_name(observer, observer_name);
+            ggml_set_name(observer, imatrix_observer_name(observer_name).c_str());
             ggml_set_output(observer);
             if (w_packed->buffer && ggml_backend_buffer_is_host(w_packed->buffer)) {
                 ggml_backend_sched_set_tensor_backend(sched, observer, backend_cpu);
@@ -1645,7 +1652,7 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
         strncmp(w->name, "blk.", 4) == 0) {
         ggml_tensor * observer =
             ggml_imatrix_observer(ctx0, cur, ids, w, (int32_t) w->ne[2]);
-        ggml_set_name(observer, w->name);
+        ggml_set_name(observer, imatrix_observer_name(w->name).c_str());
         ggml_set_output(observer);
         if (w->buffer && ggml_backend_buffer_is_host(w->buffer)) {
             ggml_backend_sched_set_tensor_backend(sched, observer, backend_cpu);
@@ -2137,7 +2144,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         if (imatrix_observer_enabled(observer_name)) {
             ggml_tensor * router_observer =
                 ggml_imatrix_observer(ctx0, probs, nullptr, gate_inp, 1);
-            ggml_set_name(router_observer, observer_name);
+            ggml_set_name(router_observer, imatrix_observer_name(observer_name).c_str());
             ggml_set_output(router_observer);
             if (gate_inp->buffer && ggml_backend_buffer_is_host(gate_inp->buffer)) {
                 ggml_backend_sched_set_tensor_backend(
