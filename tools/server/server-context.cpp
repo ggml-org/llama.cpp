@@ -1065,12 +1065,18 @@ private:
         params_base.n_outputs_max = server_n_outputs_max(params_base);
 
         const bool has_embedded_mtp = common_model_has_embedded_mtp(params_base.model.path);
-        if (params_base.speculative.types ==
-                std::vector<common_speculative_type>{COMMON_SPECULATIVE_TYPE_NONE} &&
-            has_embedded_mtp && !params_base.no_embedded_mtp) {
-            params_base.speculative.types = {COMMON_SPECULATIVE_TYPE_DRAFT_MTP};
-            SRV_INF("automatically enabling embedded MTP component from model GGUF: %s\n",
-                    params_base.model.path.c_str());
+        if (has_embedded_mtp &&
+            params_base.speculative.types ==
+                std::vector<common_speculative_type>{COMMON_SPECULATIVE_TYPE_NONE}) {
+            // Embedded-MTP path is intentionally NOT auto-enabled: the MTP context wiring
+            // (common_speculative_init_result::mtp_context / ane_mtp_program) currently
+            // returns nullptr, so silently flipping spec.types to DRAFT_MTP would route
+            // the server onto a broken no-op path. MTP must be opted into explicitly via
+            // --spec-draft-type mtp until the full ANE prefill integration lands.
+            SRV_WRN("%s\n",
+                    "model has mtp.component.present but the MTP path is not yet integrated; "
+                    "use --spec-draft-type mtp to enable it manually, or --no-embedded-mtp "
+                    "to suppress this warning");
         }
 
         if (params_base.mmproj.path.empty() && !params_base.no_mmproj) {
