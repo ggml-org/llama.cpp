@@ -123,6 +123,51 @@ jobs:
           path: ./vulkan_sdk
           version: ${{ env.VULKAN_SDK_VERSION }}
 
+      # The Android NDK toolchain hard-codes
+      #   CMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY
+      # which restricts find_package() to paths inside the NDK sysroot.
+      # The LunarG Vulkan SDK ships SPIRV-Headers on the host, but those
+      # CMake config files (SPIRV-HeadersConfig.cmake) are NOT inside the
+      # sysroot, so `find_package(SPIRV-Headers CONFIG REQUIRED)` fails
+      # with the error:
+      #   Could not find a package configuration file provided by
+      #   "SPIRV-Headers" with any of the following names:
+      #     SPIRV-HeadersConfig.cmake
+      #     spirv-headers-config.cmake
+      #
+      # Workaround: clone SPIRV-Headers from Khronos and install both
+      # the headers and the CMake config into the NDK sysroot, where
+      # the Android toolchain's find_package will pick them up.
+      #
+      # We pin to the tag matching the bundled Vulkan SDK SPIRV-Headers
+      # release to keep glslc (which compiles the .comp shaders) and the
+      # SPIRV-Headers used by ggml-vulkan in sync.
+      # Tag format on KhronosGroup/SPIRV-Headers is `vulkan-sdk-<version>`,
+      # e.g. `vulkan-sdk-1.4.357.0` for Vulkan SDK 1.4.357.0.
+      - name: Install SPIRV-Headers into NDK sysroot
+        run: |
+          source ./vulkan_sdk/setup-env.sh
+          SYSROOT=${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/sysroot
+          # LunarG tags SPIRV-Headers as `vulkan-sdk-<vulkan-sdk-version>`
+          # on GitHub, e.g. `vulkan-sdk-1.4.357.0`.
+          SPIRV_HEADERS_TAG="vulkan-sdk-${VULKAN_SDK_VERSION}"
+          echo "Installing SPIRV-Headers tag ${SPIRV_HEADERS_TAG} into ${SYSROOT}/usr"
+          # Try the tag first; if LunarG hasn't pushed the matching tag yet,
+          # fall back to main (SPIRV-Headers is header-only with a stable API).
+          if ! git clone --depth 1 --branch "${SPIRV_HEADERS_TAG}" \
+                https://github.com/KhronosGroup/SPIRV-Headers.git /tmp/spirv-headers; then
+            echo "Tag ${SPIRV_HEADERS_TAG} not found, falling back to main branch"
+            git clone --depth 1 https://github.com/KhronosGroup/SPIRV-Headers.git /tmp/spirv-headers
+          fi
+          cmake -S /tmp/spirv-headers -B /tmp/spirv-headers/build \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --install /tmp/spirv-headers/build --prefix "${SYSROOT}/usr"
+          # Sanity check — SPIRV-Headers installs its CMake config to
+          # share/cmake/SPIRV-Headers/ (not lib/cmake/...).
+          test -f "${SYSROOT}/usr/share/cmake/SPIRV-Headers/SPIRV-HeadersConfig.cmake" \
+            && echo "OK: SPIRV-HeadersConfig.cmake installed" \
+            || { echo "FAIL: SPIRV-HeadersConfig.cmake not found"; exit 1; }
+
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.21
         with:
