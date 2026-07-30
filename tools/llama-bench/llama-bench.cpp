@@ -26,6 +26,7 @@
 #include "fit.h"
 #include "ggml.h"
 #include "llama.h"
+#include "llama-tweak.h"
 #include "log.h"
 
 #ifdef _WIN32
@@ -361,6 +362,7 @@ struct cmd_params {
     bool                             no_warmup;
     output_formats                   output_format;
     output_formats                   output_format_stderr;
+    bool                             llama_tweak = false;
 };
 
 static const cmd_params cmd_params_defaults = {
@@ -658,6 +660,11 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto combos = string_split<std::string>(argv[i], split_delim);
                 for (const auto & combo : combos) {
+                    if (combo == "tweak") {
+                        params.llama_tweak = true;
+                        params.devices.push_back({});
+                        continue;
+                    }
                     try {
                         params.devices.push_back(parse_devices_arg(combo));
                     } catch (const std::exception & e) {
@@ -1227,6 +1234,7 @@ struct cmd_params_instance {
     bool               no_host;
     size_t             fit_target;
     uint32_t           fit_min_ctx;
+    bool               llama_tweak_device = false;
 
     llama_model_params to_llama_mparams() const {
         llama_model_params mparams = llama_model_default_params();
@@ -1445,6 +1453,12 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
         }
     }
     // clang-format on
+
+    if (params.llama_tweak) {
+        for (auto & inst : instances) {
+            inst.llama_tweak_device = true;
+        }
+    }
 
     return instances;
 }
@@ -2260,8 +2274,9 @@ int llama_bench(int argc, char ** argv) {
 
     std::vector<cmd_params_instance> params_instances = get_cmd_params_instances(params);
 
-    llama_model *               lmodel    = nullptr;
-    const cmd_params_instance * prev_inst = nullptr;
+    llama_model *       lmodel        = nullptr;
+    cmd_params_instance prev_run;
+    bool                have_prev_run = false;
 
     // store the llama_context state at the previous depth that we performed a test
     // ref: https://github.com/ggml-org/llama.cpp/pull/16944#issuecomment-3478151721
@@ -2274,11 +2289,39 @@ int llama_bench(int argc, char ** argv) {
         if (params.progress) {
             fprintf(stderr, "llama-bench: benchmark %d/%zu: starting\n", params_idx, params_count);
         }
-        auto mparams = inst.to_llama_mparams();
-        auto cparams = inst.to_llama_cparams();
 
-        bool do_fit = inst.fit_target != cmd_params_defaults.fit_params_target[0] ||
-                      inst.fit_min_ctx != cmd_params_defaults.fit_params_min_ctx[0];
+        cmd_params_instance run_inst = inst;
+        if (run_inst.llama_tweak_device) {
+            const int pp = run_inst.n_prompt;
+            const int tg = run_inst.n_gen;
+            llama_tweak_plan plan;
+            if (!llama_tweak_resolve(run_inst.model, pp, tg, plan)) {
+                fprintf(stderr,
+                        "llama-tweak: no cache for '%s' (pp=%d tg=%d). Run: llama-tweak record -m ...\n",
+                        run_inst.model.c_str(), pp, tg);
+                return 1;
+            }
+            llama_tweak_apply_env(plan);
+            auto * dev = ggml_backend_dev_by_name(plan.ggml_device.c_str());
+            if (!dev || ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+                fprintf(stderr, "llama-tweak: device '%s' not available\n", plan.ggml_device.c_str());
+                return 1;
+            }
+            run_inst.devices.clear();
+            run_inst.devices.push_back(dev);
+            run_inst.devices.push_back(nullptr);
+            run_inst.llama_tweak_device = false;
+            fprintf(stderr,
+                    "llama-tweak: pp=%d tg=%d -> cache pp=%d tg=%d %s (%s, %.1f tok/s expected)\n", pp, tg,
+                    plan.resolved_pp, plan.resolved_tg, plan.selected_tag.c_str(), plan.ggml_device.c_str(),
+                    plan.expected_tps);
+        }
+
+        auto mparams = run_inst.to_llama_mparams();
+        auto cparams = run_inst.to_llama_cparams();
+
+        bool do_fit = run_inst.fit_target != cmd_params_defaults.fit_params_target[0] ||
+                      run_inst.fit_min_ctx != cmd_params_defaults.fit_params_min_ctx[0];
 
         std::vector<float> fit_tensor_split(llama_max_devices(), 0.0f);
         std::vector<llama_model_tensor_buft_override> fit_overrides(llama_max_tensor_buft_overrides(), {nullptr, nullptr});
@@ -2287,8 +2330,8 @@ int llama_bench(int argc, char ** argv) {
             // free the previous model so fit sees full free VRAM
             if (lmodel) {
                 llama_model_free(lmodel);
-                lmodel    = nullptr;
-                prev_inst = nullptr;
+                lmodel        = nullptr;
+                have_prev_run = false;
             }
 
             // use default n_gpu_layers and n_ctx so common_fit_params can adjust them
@@ -2297,41 +2340,42 @@ int llama_bench(int argc, char ** argv) {
             mparams.tensor_buft_overrides = fit_overrides.data();
             cparams.n_ctx                 = 0;
 
-            std::vector<size_t> margins(llama_max_devices(), inst.fit_target * 1024 * 1024);
+            std::vector<size_t> margins(llama_max_devices(), run_inst.fit_target * 1024 * 1024);
 
-            uint32_t n_ctx_needed = inst.n_prompt + inst.n_gen + inst.n_depth;
+            uint32_t n_ctx_needed = run_inst.n_prompt + run_inst.n_gen + run_inst.n_depth;
             cparams.n_ctx = std::max(cparams.n_ctx, n_ctx_needed);
 
-            common_fit_params(inst.model.c_str(), &mparams, &cparams,
+            common_fit_params(run_inst.model.c_str(), &mparams, &cparams,
                 fit_tensor_split.data(),
                 fit_overrides.data(),
                 margins.data(),
-                inst.fit_min_ctx,
+                run_inst.fit_min_ctx,
                 params.verbose ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
        }
 
         // keep the same model between tests when possible
-        if (!lmodel || !prev_inst || !inst.equal_mparams(*prev_inst)) {
+        if (!lmodel || !have_prev_run || !run_inst.equal_mparams(prev_run)) {
             if (lmodel) {
                 llama_model_free(lmodel);
             }
 
-            lmodel = llama_model_load_from_file(inst.model.c_str(), mparams);
+            lmodel = llama_model_load_from_file(run_inst.model.c_str(), mparams);
             if (lmodel == NULL) {
-                fprintf(stderr, "%s: error: failed to load model '%s'\n", __func__, inst.model.c_str());
+                fprintf(stderr, "%s: error: failed to load model '%s'\n", __func__, run_inst.model.c_str());
                 return 1;
             }
-            prev_inst = &inst;
+            prev_run      = run_inst;
+            have_prev_run = true;
         }
 
         llama_context * ctx = llama_init_from_model(lmodel, cparams);
         if (ctx == NULL) {
-            fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, inst.model.c_str());
+            fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, run_inst.model.c_str());
             llama_model_free(lmodel);
             return 1;
         }
 
-        test t(inst, lmodel, ctx);
+        test t(run_inst, lmodel, ctx);
 
         llama_memory_clear(llama_get_memory(ctx), false);
 

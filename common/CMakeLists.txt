@@ -82,6 +82,8 @@ add_library(${TARGET}
     imatrix-loader.h
     json-schema-to-grammar.cpp
     llguidance.cpp
+    llama-tweak.cpp
+    llama-tweak.h
     log.cpp
     log.h
     ngram-cache.cpp

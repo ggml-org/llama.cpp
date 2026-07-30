@@ -2581,9 +2581,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "comma-separated list of devices to use for offloading (none = don't offload)\n"
         "use --list-devices to see a list of available devices",
         [](common_params & params, const std::string & value) {
+            auto dev_names = string_split<std::string>(value, ',');
+            if (dev_names.size() == 1 && dev_names[0] == "tweak") {
+                params.llama_tweak_routing = true;
+                return;
+            }
             params.devices = parse_device_list(value);
         }
     ).set_env("LLAMA_ARG_DEVICE"));
+    add_opt(common_arg(
+        {"--tweak-cache"}, "<PATH>",
+        "path to llama-tweak JSON cache (default: ./llama-tweak-<model-stem>.json in cwd)",
+        [](common_params & params, const std::string & value) {
+            params.llama_tweak_cache = value;
+        }
+    ).set_env("LLAMA_TWEAK_CACHE"));
     add_opt(common_arg(
         {"--list-devices"},
         "print list of available devices and exit",

@@ -471,6 +471,8 @@ struct common_params {
 
     // offload params
     std::vector<ggml_backend_dev_t> devices; // devices to use for offloading
+    bool llama_tweak_routing = false;        // --device tweak: pick backend from llama-tweak.json
+    std::string llama_tweak_cache;           // override cache path (env: LLAMA_TWEAK_CACHE)
 
     int32_t n_gpu_layers       = -1;    // number of layers to store in VRAM, -1 is auto, <= -2 is all
     int32_t main_gpu           = 0;     // the GPU that is used for scratch and small tensors

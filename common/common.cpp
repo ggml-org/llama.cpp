@@ -3,6 +3,7 @@
 
 #include "build-info.h"
 #include "common.h"
+#include "llama-tweak.h"
 #include "fit.h"
 #include "log.h"
 #include "llama.h"
@@ -1216,6 +1217,10 @@ struct common_init_result::impl {
 
 common_init_result::common_init_result(common_params & params, bool model_only) :
     pimpl(new impl{}) {
+    if (!common_llama_tweak_prepare(params)) {
+        return;
+    }
+
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
 
