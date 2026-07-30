@@ -4,8 +4,3 @@ install(TARGETS ${TARGET} RUNTIME)
 target_link_libraries(${TARGET} PRIVATE llama-common llama ${CMAKE_THREAD_LIBS_INIT})
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
 
-set(TARGET_SAVE llama-save-layers)
-add_executable(${TARGET_SAVE} save-layers.cpp)
-install(TARGETS ${TARGET_SAVE} RUNTIME)
-target_link_libraries(${TARGET_SAVE} PRIVATE llama-common llama ${CMAKE_THREAD_LIBS_INIT})
-target_compile_features(${TARGET_SAVE} PRIVATE cxx_std_17)
