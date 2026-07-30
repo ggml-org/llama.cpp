@@ -456,3 +456,54 @@ python tools/tile640/quantize_v3.py \
   --calibration-policy gemma4-evolved-policy.json \
   --hessian-trace-policy gemma4-hessian-trace.json
 ```
+
+## Per-layer error table (L1 vs L1.5)
+
+`per_layer_error_table.py` consumes the L1 + L1.5 v3 sidecars and produces a
+per-layer error report. Per-tensor epsilon(l, b) is the relative
+Frobenius error between the L1.5 FP16 reference and the L1 dequantized
+output, normalized by the reference norm. Per-layer totals are the sum of
+per-tensor errors within the layer. Output is a schema-versioned JSON
+document (`llama.tessera.per-layer-error-table.v1`) or a greppable
+`--format table` rendering.
+
+Layer name derivation strips `.weight`/`.bias` and the per-expert index,
+then keeps the `blk.<N>` prefix; tensors outside that pattern (token
+embedding, output, norms) fall back to the full name. Missing L1 or L1.5
+files are skipped with a warning, not a hard error. Reuses
+`l3_sidecar_v3_reader.py` for v1/v2/v3 dispatch.
+
+The wave-4 gotcha applies: in current production runs the L1.5 file
+contains the same F32 as the L1 file, so epsilon is zero until the FP16
+reference path lands in the C++ dequant hook. The smoke test asserts this
+contract.
+
+```sh
+python tools/tessera/per_layer_error_table.py \
+  --sidecar-dir /path/to/v3/sidecars \
+  --out error-table.json --format json
+```
+
+## Latency LUT (per-shape, per-kernel)
+
+`latency_lut.py` reads the per-row `timing_ns` and `kernel_id` from the
+v3 sidecar strip and aggregates to a per-(shape, kernel_id) lookup table.
+Default grouping is `shape-kernel`; `--group-by {shape,kernel,shape-kernel}`
+overrides. Per-row mean and per-row population std are reported alongside
+the count and mean total. v1/v2 sidecars (no v3 strip) are skipped with a
+stderr warning rather than polluting the LUT with zero-timed records.
+
+L1.5 sidecars are matched via the `.act.dequant.f32` suffix rather than a
+glob, so an L1 glob does not substring-match L1.5 files. Output is a
+schema-versioned JSON document (`llama.tessera.latency-lut.v1`).
+
+```sh
+python tools/tessera/latency_lut.py \
+  --sidecar-dir /path/to/v3/sidecars \
+  --out lut.json --format json
+
+# include L1.5 timings too
+python tools/tessera/latency_lut.py \
+  --sidecar-dir /path/to/v3/sidecars \
+  --out lut.json --include-l15
+```
