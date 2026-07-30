@@ -11357,6 +11357,16 @@ static inline float tile640_load_activation(
     return float(((device const half *) input)[index]);
 }
 
+static inline float4 tile640_load_activation4(
+        device const uchar * input,
+        int64_t index) {
+    if (FC_tile640_input_f32) {
+        return *((device const float4 *) ((device const float *) input + index));
+    }
+    return float4(*((device const half4 *) ((device const half *) input + index)));
+}
+
+[[max_total_threads_per_threadgroup(128)]]
 kernel void kernel_TILE640_MATMUL(
     constant ggml_metal_kargs_tile640_matmul & args,
     device const uint*    packed,
@@ -11370,7 +11380,7 @@ kernel void kernel_TILE640_MATMUL(
     device       float*   output,
     constant uint &       modality_id, // 0=text, 1=image, 2=audio (v2 selects among bound arrays)
     uint3 tgp [[threadgroup_position_in_grid]],
-    ushort3 tp [[thread_position_in_threadgroup]],
+    ushort3 tpt [[threads_per_threadgroup]],
     uint  sl  [[thread_index_in_simdgroup]],
     uint  si  [[simdgroup_index_in_threadgroup]])
 {
@@ -11393,60 +11403,37 @@ kernel void kernel_TILE640_MATMUL(
     device const uchar*  row_ls      = lane_scales  +
         (int64_t)i * pages_per_row * T640_LANES_PER_PAGE;
 
-    // One SIMD group owns one token. SIMD group zero cooperatively decodes a
-    // 640-weight page once into threadgroup memory; all four token groups then
-    // consume that page in parallel. This retains token-level GPU parallelism
-    // while amortizing the base-3 decode across the tile.
-    threadgroup float decoded_page[T640_PAGE];
+    // Register budget: ~40 VGPRs per thread (acc + scale + loop vars + vector
+    // temps). The host dispatches 1-4 SIMD groups (32-128 threads) per
+    // threadgroup; one SIMD group owns one token, and the decode below spreads
+    // each 640-weight page across every group so the base-3 reconstruction
+    // latency falls with the SIMD-group count instead of idling all but zero.
+    threadgroup float decoded_page[T640_PAGE] __attribute__((aligned(16)));
+
+    const int32_t tid      = (int32_t) (si * 32u + sl);
+    const int32_t nthreads = (int32_t) (tpt.x * tpt.y * tpt.z);
+
     float acc = 0.0f;
     // Precision invariant: dequant values are fp32 from scale*trit through
     // the FMA accumulation. act_scale is applied in fp32 after f16->f32 load.
     for (int32_t p = 0; p < nt; ++p) {
-        if (si == 0) {
-            const float page_max = float(row_ps[p]);
+        // Cooperative decode: all SIMD groups reconstruct a contiguous stride
+        // of the page (640 / nthreads columns each). page_max is hoisted once
+        // per page; the per-lane scale stays out of the dot-product loop.
+        const float page_max = float(row_ps[p]);
+        for (int32_t col = tid; col < T640_PAGE; col += nthreads) {
+            const int32_t qlane = col / T640_LANE;
+            const float scale = page_max *
+                float(row_ls[p * T640_LANES_PER_PAGE + qlane]) *
+                (1.0f / 127.0f);
+            uint d;
             if (FC_tile640_packing != 0) {
-                // Preserve Tile640's original 32-lane ownership. Every SIMD
-                // lane reconstructs exactly one 20-trit quantization lane,
-                // loads its scale once, and performs the same amount of work.
-                // The 2-bit words cross lane boundaries, so cache the current
-                // word locally and reload only at those boundaries.
-                const int32_t lane = sl;
-                const int32_t col0 = lane * T640_LANE;
-                const float scale = page_max *
-                    float(row_ls[p * T640_LANES_PER_PAGE + lane]) *
-                    (1.0f / 127.0f);
-                int32_t cached_wi = -1;
-                uint bits = 0;
-                for (int32_t vi = 0; vi < T640_LANE; ++vi) {
-                    const int32_t page_col = col0 + vi;
-                    const int32_t wi = page_col / 16;
-                    if (wi != cached_wi) {
-                        bits = row_pack[p * 40 + wi];
-                        cached_wi = wi;
-                    }
-                    const uint d = (bits >> (2 * (page_col & 15))) & 3u;
-                    decoded_page[page_col] =
-                        d == 1u ? scale : d == 2u ? -scale : 0.0f;
-                }
+                d = (row_pack[p * 40 + col / 16] >> (2 * (col & 15))) & 3u;
             } else {
-                const int32_t wi = p * T640_WORDS_PER_PAGE + sl;
-                const int32_t col0 = sl * T640_LANE;
-                const float scale = page_max *
-                    float(row_ls[wi]) * (1.0f / 127.0f);
-                uint rem = row_pack[wi];
-                // Decode four radix-243 groups rather than dividing once
-                // per trit. T640_TRIT5_LUT expands each group into five
-                // two-bit trits with exactly the legacy base-3 values.
-                for (int32_t group = 0; group < 4; ++group) {
-                    const uint packed5 = T640_TRIT5_LUT[rem % 243u];
-                    rem /= 243u;
-                    for (int32_t digit = 0; digit < 5; ++digit) {
-                        const uint d = (packed5 >> (2 * digit)) & 3u;
-                        decoded_page[col0 + group * 5 + digit] =
-                            d == 1u ? scale : d == 2u ? -scale : 0.0f;
-                    }
-                }
+                d = tile640_trit(row_pack[p * T640_WORDS_PER_PAGE + qlane],
+                                 col % T640_LANE);
             }
+            decoded_page[col] = d == 1u ? scale : d == 2u ? -scale : 0.0f;
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
 
@@ -11455,7 +11442,22 @@ kernel void kernel_TILE640_MATMUL(
             const int32_t page_cols = min(T640_PAGE, in_dim - page_col0);
             const int64_t input_base =
                 ((int64_t)b * n_tokens + j0 + si) * in_dim + page_col0;
-            for (int32_t k = sl; k < page_cols; k += 32) {
+int32_t k = sl * 4;
+            for (; k + 3 < page_cols; k += 128) {
+                float4 a4 = tile640_load_activation4(input, input_base + k);
+                if (act_scale != nullptr) {
+                    a4.x *= float(act_scale[page_col0 + k]);
+                    a4.y *= float(act_scale[page_col0 + k + 1]);
+                    a4.z *= float(act_scale[page_col0 + k + 2]);
+                    a4.w *= float(act_scale[page_col0 + k + 3]);
+                }
+                const float4 d4 = *((threadgroup const float4 *) (decoded_page + k));
+                acc = fma(a4.x, d4.x, acc);
+                acc = fma(a4.y, d4.y, acc);
+                acc = fma(a4.z, d4.z, acc);
+                acc = fma(a4.w, d4.w, acc);
+            }
+            for (; k < page_cols; ++k) {
                 float a = tile640_load_activation(input, input_base + k);
                 if (act_scale != nullptr) {
                     a *= float(act_scale[page_col0 + k]);
