@@ -72,13 +72,6 @@ struct ggml_openvino_device_config {
     std::string prefill_device;
     std::string decode_device;
 
-    // Decode race: parallel CPU + GPU decode; first finished step wins (stateless dual KV).
-    bool decode_race = false;
-    std::string race_cpu_device;
-    std::string race_gpu_device;
-    int race_loser_sleep_tokens = 32;
-    int race_diag = 1;
-
     void init();
     ~ggml_openvino_device_config();
 };
@@ -93,16 +86,6 @@ const std::string & ggml_openvino_get_decode_device();
 
 // CPU on one phase and GPU on the other: KV in USM host memory (UMA, no copy at phase switch).
 bool ggml_openvino_phase_split_shared_kv();
-
-bool ggml_openvino_decode_race_enabled();
-
-const std::string & ggml_openvino_get_race_cpu_device();
-
-const std::string & ggml_openvino_get_race_gpu_device();
-
-int ggml_openvino_race_loser_sleep_tokens();
-
-bool ggml_openvino_decode_race_diag_enabled();
 
 // Get the global device config singleton
 ggml_openvino_device_config & ggml_openvino_get_device_config();
