@@ -1948,12 +1948,135 @@ def quantize_2d_imatrix_mse(
     }
 
 
+def _septq_banded_cholesky(H: np.ndarray, bandwidth: int) -> np.ndarray:
+    """Compute a lower-triangular Cholesky factor L with H = L @ L.T.
+
+    Two strategies are used depending on banded-Cholesky feasibility:
+
+    1. **Banded Cholesky** (cost O(n * bandwidth^2)): the standard
+       outer-product Cholesky restricted to the band. Works when the
+       off-band energy of H is small relative to the diagonal (i.e., H is
+       "approximately" banded with the requested bandwidth).
+
+    2. **Full Cholesky + banded read-out** (fallback, cost O(n^3) via
+       BLAS): when the banded Cholesky fails because the off-band energy
+       of H is non-negligible (the common case for a rank-deficient H
+       from a small calibration set), compute the full Cholesky factor
+       and return it. The GPTQ-M helper does a banded forward-substitution
+       on the returned L which gives the exact banded portion of L^{-1}
+       regardless of whether L is full or banded.
+
+    The fallback fires only when the banded Cholesky would produce a
+    non-positive-definite s = H[j,j] - sum_{k=k_min}^{j-1} L[j,k]^2.
+    """
+    if H.ndim != 2 or H.shape[0] != H.shape[1]:
+        raise ValueError(f"H must be square, got {H.shape}")
+    n = H.shape[0]
+    if bandwidth < 0:
+        raise ValueError(f"bandwidth must be >= 0, got {bandwidth}")
+    L = np.zeros((n, n), dtype=H.dtype)
+    fallback = False
+    for j in range(n):
+        k_min = max(0, j - bandwidth)
+        if k_min < j:
+            s = H[j, j] - L[j, k_min:j] @ L[j, k_min:j]
+        else:
+            s = H[j, j]
+        if s <= 0.0:
+            fallback = True
+            break
+        L[j, j] = np.sqrt(s)
+        i_max = min(n, j + bandwidth + 1)
+        if i_max > j + 1 and k_min < j:
+            L[j + 1:i_max, j] = (
+                H[j + 1:i_max, j] - L[j + 1:i_max, k_min:j] @ L[j, k_min:j]
+            ) / L[j, j]
+        elif i_max > j + 1:
+            L[j + 1:i_max, j] = H[j + 1:i_max, j] / L[j, j]
+    if not fallback:
+        return L
+    # Fallback: full Cholesky via BLAS. The banded forward-sub in
+    # _septq_gptq_M produces the banded portion of L^{-1} regardless
+    # of whether L is full or banded, so the rest of the GPTQ-M path
+    # is unchanged.
+    L_full = np.linalg.cholesky(H)
+    return L_full
+
+
+def _septq_gptq_M(L: np.ndarray, bandwidth: int) -> np.ndarray:
+    """Build the strictly upper-triangular GPTQ update matrix from L = chol(H).
+
+    With L lower triangular, (L^{-1})_{jj} = 1 / L[j, j], so the closed-form
+    per-column update is ``M[j, k] = (L^{-1})_{k, j} * L[j, j]`` for k > j.
+    M is upper triangular with bandwidth ``bandwidth`` (M[j, k] = 0 for
+    k - j > bandwidth). The banded portion of L^{-1} comes from a banded
+    forward-substitution: for each j, solve L x = e_j keeping only x[k] for
+    k in (j, j + bandwidth + 1). Cost is O(n * bandwidth^2).
+    """
+    n = L.shape[0]
+    if bandwidth < 0:
+        raise ValueError(f"bandwidth must be >= 0, got {bandwidth}")
+    M = np.zeros((n, n), dtype=L.dtype)
+    for j in range(n):
+        x = np.zeros(n, dtype=L.dtype)
+        x[j] = 1.0 / L[j, j]
+        k_max = min(n, j + bandwidth + 1)
+        for k in range(j + 1, k_max):
+            row_min = max(0, k - bandwidth)
+            s = -np.dot(L[k, row_min:k], x[row_min:k])
+            x[k] = s / L[k, k]
+        if k_max > j + 1:
+            M[j, j + 1:k_max] = x[j + 1:k_max] * L[j, j]
+    return M
+
+
+def _septq_build_hessian(
+    in_dim: int,
+    act_scales: Optional[np.ndarray],
+    calibration_activations: Optional[np.ndarray],
+    ridge_fraction: float = 1e-4,
+) -> np.ndarray:
+    """Build the symmetric positive-definite Hessian H for the SEPTQ update.
+
+    With calibration activations X of shape (n_samples, in_dim), H is the
+    standard second-moment matrix H = X^T X / n_samples, optionally ridged
+    for numerical stability. Without activations we fall back to a diagonal
+    Hessian with H[j, j] = act_scales[j]^2 (the imatrix RMS proxy).
+    """
+    if calibration_activations is not None:
+        X = np.asarray(calibration_activations, dtype=np.float32)
+        if X.ndim != 2 or X.shape[1] != in_dim:
+            raise ValueError(
+                f"calibration_activations must be (n_samples, {in_dim}); got {X.shape}"
+            )
+        n = X.shape[0]
+        H = (X.T @ X) / np.float32(max(n, 1))
+        diag_mean = float(np.mean(np.diag(H)))
+        ridge = max(np.float32(ridge_fraction) * np.float32(diag_mean),
+                    np.float32(1e-2) * np.float32(diag_mean))
+        if ridge > 0:
+            H = H + np.eye(in_dim, dtype=np.float32) * ridge
+    elif act_scales is not None:
+        if act_scales.shape != (in_dim,):
+            raise ValueError(
+                f"act_scales shape mismatch: {act_scales.shape} vs {(in_dim,)}"
+            )
+        diag = np.maximum(act_scales.astype(np.float32), 1e-8) ** 2
+        H = np.diag(diag).astype(np.float32)
+    else:
+        H = np.eye(in_dim, dtype=np.float32)
+    return H
+
+
 def quantize_2d_septq(weights: np.ndarray, out_dim: int, in_dim: int,
                       septq_ratio: float,
                       act_scales: Optional[np.ndarray] = None,
                       septq_iterations: int = 1,
                       ternary_threshold: float = 1.0,
                       tensor_name: str = "",
+                      calibration_activations: Optional[np.ndarray] = None,
+                      septq_hessian_mode: str = "banded",
+                      septq_hessian_bandwidth: int = 32,
                       ) -> Dict[str, np.ndarray]:
     """2D weight quantization using the SEPTQ recipe (KDD 2025).
 
@@ -1963,8 +2086,12 @@ def quantize_2d_septq(weights: np.ndarray, out_dim: int, in_dim: int,
        ``s[i,j] = (W[i,j] - Q(W[i,j]))^2 * H[j,j]`` where H is the Hessian of
        the calibration activations and Q is a baseline quantizer. The top-k%
        elements by importance form a static global mask M.
-    2. **Vectorized column-wise quantization with error compensation.**
-       Quantize the masked elements in one vectorized pass to
+    2. **Column-wise quantization with error compensation.** Build the
+       strictly upper-triangular GPTQ update matrix M = (H^{-1} / diag(H))
+       restricted to a band of width ``septq_hessian_bandwidth``. Quantize
+       the masked elements in one vectorized pass to {-1, 0, +1}, then
+       apply the cross-column update ``W[:, k] -= sum_j e_j * M[j, k]`` as a
+       single (out_dim, in_dim) @ (in_dim, in_dim) matmul.
        {-1, 0, +1} and apply the cross-column update. The diagonal-H
        approximation (this commit) makes the cross-column update a
        no-op; the banded GPTQ-M path is added in a follow-up commit.
@@ -1981,6 +2108,23 @@ def quantize_2d_septq(weights: np.ndarray, out_dim: int, in_dim: int,
     a tractable simplification of the full SEPTQ algorithm. The mask
     selection uses argpartition (O(n)) instead of a full sort (O(n log n))
     to make the importance ranking cheaper.
+
+    Two Hessian modes are supported:
+
+    * ``"banded"`` (default when ``calibration_activations`` is provided):
+      compute H = X^T X / n from the calibration activations, take the
+      banded Cholesky factor with bandwidth ``septq_hessian_bandwidth``,
+      and use the GPTQ update. This is the full SEPTQ algorithm modulo
+      the band truncation.
+    * ``"diagonal"``: H is a diagonal matrix with H[j, j] = act_scales[j]^2
+      (the imatrix RMS proxy). M is identically zero, so the cross-column
+      update is a no-op; only the static mask is active. This is the
+      v1 SEPTQ behaviour and is kept as a fast ablation baseline.
+
+    When ``calibration_activations`` is None and ``septq_hessian_mode`` is
+    ``"banded"``, the function silently falls back to the diagonal proxy.
+    The main script has no activations, so the banded mode is currently
+    only exercised by the A/B harness.
 
     The output dict has the same shape as ``quantize_2d``. The
     ``outlier_*`` entries store the UNIMPORTANT elements (full precision);
@@ -2004,6 +2148,14 @@ def quantize_2d_septq(weights: np.ndarray, out_dim: int, in_dim: int,
         ternary_threshold: multiplier on per-row mean(|W|) for the {-1, 0,
             +1} cutoff. Default 1.0 = legacy tessera behaviour.
         tensor_name: for diagnostics only.
+        calibration_activations: optional (n_samples, in_dim) calibration
+            activations used to build the full Hessian in banded mode.
+        septq_hessian_mode: ``"banded"`` (default) or ``"diagonal"``.
+        septq_hessian_bandwidth: band radius for banded Cholesky; only
+            entries with |i - j| <= bandwidth participate in H^{-1}. The
+            default of 32 is a conservative trade-off: small enough to be
+            cheap (O(n * b^2) factorization) and large enough to capture
+            most of the cross-column benefit on typical layer activations.
     """
     if not 0.0 < septq_ratio <= 1.0:
         raise ValueError(f"septq_ratio must be in (0, 1], got {septq_ratio}")
@@ -2013,10 +2165,27 @@ def quantize_2d_septq(weights: np.ndarray, out_dim: int, in_dim: int,
         raise ValueError(
             f"ternary_threshold must be in [0.3, 3.0], got {ternary_threshold}"
         )
+    if septq_hessian_mode not in ("diagonal", "banded"):
+        raise ValueError(
+            f"septq_hessian_mode must be 'diagonal' or 'banded', got {septq_hessian_mode}"
+        )
+    if septq_hessian_bandwidth < 0:
+        raise ValueError(
+            f"septq_hessian_bandwidth must be >= 0, got {septq_hessian_bandwidth}"
+        )
+    # Bandwidth > in_dim - 1 is the same as full Cholesky. Clamp here so
+    # the inner helpers can assume 0 <= bandwidth < in_dim.
+    effective_bandwidth = min(septq_hessian_bandwidth, in_dim - 1)
 
     W = weights.astype(np.float32, copy=False)
     n = out_dim * in_dim
     abs_W = np.abs(W)
+
+    # Resolve Hessian mode: banded requires activations; fall back to diagonal
+    # when activations are not available so the main-script path is unchanged.
+    effective_mode = septq_hessian_mode
+    if effective_mode == "banded" and calibration_activations is None:
+        effective_mode = "diagonal"
 
     # Hessian diagonal proxy. The imatrix's RMS per channel is a cheap
     # surrogate for H[j,j] = E[x_j^2] over the calibration distribution.
@@ -2079,25 +2248,50 @@ def quantize_2d_septq(weights: np.ndarray, out_dim: int, in_dim: int,
 
     # Step 4: vectorized column-wise quantization with error compensation.
     # The v1 per-column Python loop was the dominant cost. It is replaced
-    # by a few vectorized ops that build the quantized mask, the ternary,
-    # and the per-position error matrix in a single pass each. The
-    # diagonal-H approximation is preserved (no cross-column update) and
-    # the banded GPTQ-M path is added in a follow-up commit. `error_2d`
-    # is computed but unused here; it is the per-position error matrix
-    # the banded path consumes, and keeping it in the diagonal branch
-    # makes the two paths share the same ternary construction.
+    # by a few vectorized ops: build the quantized mask, the ternary, and
+    # the per-position error matrix in a single pass each. The diagonal-H
+    # approximation is preserved as the "diagonal" mode (no cross-column
+    # update). The "banded" mode applies the GPTQ-M update via
+    # W_compensated = W - error_2d @ M with M derived from the banded
+    # Cholesky of H = X^T X / n.
     quantized_mask_2d = mask_2d & keep_2d
     ternary_2d = np.where(quantized_mask_2d, sign_W, np.int8(0))
+    # E is the per-position error at quantized positions, 0 elsewhere.
+    # Casting ternary_2d to float32 once and broadcasting is faster than
+    # the per-column `astype` of the original loop.
     error_2d = (ternary_2d.astype(np.float32) - W) * quantized_mask_2d.astype(np.float32)
-    # Diagonal-only: the GPTQ update matrix M is identically zero, so
-    # the cross-column error compensation is a no-op. W_compensated = W.
-    W_compensated = W
+
+    if effective_mode == "banded":
+        H = _septq_build_hessian(
+            in_dim, act_scales, calibration_activations
+        )
+        L = _septq_banded_cholesky(H, effective_bandwidth)
+        M = _septq_gptq_M(L, effective_bandwidth)
+        # W_compensated = W - E @ M. With banded M (b << in_dim) this is
+        # a dense matmul that BLAS handles in well under a second on
+        # 4096^2 inputs. E @ M is O(out_dim * in_dim^2) for the dense
+        # matmul even when M is banded (BLAS doesn't know about the zeros
+        # outside the band); a custom banded matmul would be O(out_dim *
+        # in_dim * bandwidth) but would require a separate code path.
+        W_compensated = W - error_2d @ M
+    else:
+        # Diagonal-only approximation: H_inv is diagonal, so M is
+        # identically zero. W_compensated is just W (the per-column
+        # local absorption in the v1 loop was a no-op because error_2d
+        # is zero at non-quantized positions; it is dropped here for
+        # clarity). Avoid the matmul entirely; BLAS would still take
+        # ~100ms even on a zero matrix.
+        W_compensated = W
+
     ternary_final = ternary_2d.reshape(-1)
 
     # Step 5: pack into the Tessera format. The "outliers" are the
-    # UNIMPORTANT elements (stored as full precision). The ternary stores
-    # the IMPORTANT elements. The page/lane scales are computed against
-    # the original weights at the ternary positions only.
+    # UNIMPORTANT elements (stored as full precision after the
+    # cross-column update has been applied). The ternary stores the
+    # IMPORTANT elements. The page/lane scales are computed against the
+    # original weights at the ternary positions only (the pack reflects
+    # the quantization; the outlier storage reflects the compensated
+    # W so that reconstruction at inference matches the optimized W).
     unimportant_2d = np.where(~mask_2d, W_compensated, np.float32(0.0))
     outlier_idx = np.where((~mask_2d).reshape(-1))[0].astype(np.int64)
     outlier_vals = unimportant_2d.reshape(-1)[outlier_idx].astype(np.float32)
