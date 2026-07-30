@@ -1028,7 +1028,15 @@ struct save_ctx {
     int64_t              dataset_windows;
     int64_t              context_length;
     bool                 shuffle;
+    bool                 verbose_loss;
     qlora_lr_schedule * schedule;
+    bool                 loss_ema_initialized = false;
+    double               loss_ema16 = 0.0;
+    double               loss_ema64 = 0.0;
+    double               loss_cumulative_sum = 0.0;
+    int64_t              loss_cumulative_count = 0;
+    double               loss_epoch_sum = 0.0;
+    int64_t              loss_epoch_count = 0;
 };
 
 // TLS pointer set before each epoch so the static callback can access it.
@@ -1049,13 +1057,37 @@ static void save_every_callback(
         const int64_t window = g_save_ctx->window_offset + ibatch / g_save_ctx->ubatch_per_ctx;
         const int64_t ubatch_in_window = ibatch % g_save_ctx->ubatch_per_ctx;
         if (ibatch > 0 && ubatch_in_window == 0) {
-            ++g_save_ctx->schedule->step;
-            double loss = 0.0, loss_unc = 0.0;
-            if (g_save_ctx->save_every > 0) {
-                ggml_opt_result_loss(result, &loss, &loss_unc);
-                fprintf(stderr, "\n[window %4ld] loss=%.4f +/- %.4f lr=%.6g\n",
-                        (long) window, loss, loss_unc, (double) g_save_ctx->schedule->current_lr);
+            if (g_save_ctx->verbose_loss) {
+                double cumulative_loss_mean = 0.0;
+                ggml_opt_result_loss(result, &cumulative_loss_mean, nullptr);
+
+                const int64_t cumulative_loss_count = ibatch;
+                const double cumulative_loss_sum = cumulative_loss_mean * cumulative_loss_count;
+                const double window_loss_sum = cumulative_loss_sum - g_save_ctx->loss_cumulative_sum;
+                const int64_t window_loss_count = cumulative_loss_count - g_save_ctx->loss_cumulative_count;
+                const double window_loss = window_loss_sum / std::max<int64_t>(1, window_loss_count);
+
+                g_save_ctx->loss_ema16 = g_save_ctx->loss_ema_initialized
+                    ? 0.8825 * g_save_ctx->loss_ema16 + 0.1175 * window_loss
+                    : window_loss;
+                g_save_ctx->loss_ema64 = g_save_ctx->loss_ema_initialized
+                    ? 0.9692 * g_save_ctx->loss_ema64 + 0.0308 * window_loss
+                    : window_loss;
+                g_save_ctx->loss_ema_initialized = true;
+                g_save_ctx->loss_cumulative_sum = cumulative_loss_sum;
+                g_save_ctx->loss_cumulative_count = cumulative_loss_count;
+                g_save_ctx->loss_epoch_sum += window_loss_sum;
+                g_save_ctx->loss_epoch_count += window_loss_count;
+
+                const double epoch_mean = g_save_ctx->loss_epoch_sum /
+                    std::max<int64_t>(1, g_save_ctx->loss_epoch_count);
+                fprintf(stderr,
+                        "\nepoch=%ld window=%ld window_loss=%.6f ema16=%.6f ema64=%.6f epoch_mean=%.6f lr=%.6g\n",
+                        (long) g_save_ctx->epoch, (long) window, window_loss,
+                        g_save_ctx->loss_ema16, g_save_ctx->loss_ema64, epoch_mean,
+                        (double) g_save_ctx->schedule->current_lr);
             }
+            ++g_save_ctx->schedule->step;
         }
     }
 
@@ -1768,7 +1800,8 @@ int main(int argc, char ** argv) {
 
     save_ctx sctx {
         &lt, &params.lora_out, &arch, &params.model.path, lora_alpha,
-        params.save_every, ubatch_per_ctx, 0, 0, 0, idata_split, n_ctx, params.shuffle_dataset, &schedule
+        params.save_every, ubatch_per_ctx, 0, 0, 0, idata_split, n_ctx,
+        params.shuffle_dataset, params.verbose_loss, &schedule
     };
     g_save_ctx = &sctx;
 
@@ -1812,6 +1845,10 @@ int main(int argc, char ** argv) {
         sctx.window_offset = idata_start;
         sctx.last_saved = idata_start;
         sctx.epoch = params.lr.epoch + 1;
+        sctx.loss_cumulative_sum = 0.0;
+        sctx.loss_cumulative_count = 0;
+        sctx.loss_epoch_sum = 0.0;
+        sctx.loss_epoch_count = 0;
         llama_opt_epoch_range(ctx, dataset, result_train, result_eval, idata_start, idata_split,
                               cb_train,
                               ggml_opt_epoch_callback_progress_bar,

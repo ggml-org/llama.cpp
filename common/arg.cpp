@@ -4419,6 +4419,11 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
     add_opt(common_arg(
+        {"--verbose-loss"},
+        "print one structured SFT loss line per dataset window",
+        [](common_params & params) { params.verbose_loss = true; }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
         {"--train-on-prompt"},
         "compute loss on prompt tokens too, not just the response (default: response-only loss)",
         [](common_params & params) { params.train_on_prompt = true; }

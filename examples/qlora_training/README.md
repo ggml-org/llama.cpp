@@ -114,6 +114,7 @@ Trains LoRA adapters on a quantized GGUF model.
 | `--lr-scheduler` | `constant` | Learning-rate schedule: `constant` or `cosine` |
 | `--warmup-steps` | `0` | Linear warmup over N logical training steps |
 | `--warmup-init-ratio` | `0.1` | Initial warmup LR as a fraction of peak LR; must be in `(0, 1]` |
+| `--verbose-loss` | off | Print one structured loss line per SFT dataset window |
 | `-lr-min` / `--learning-rate-min` | `-1` | Cosine floor; values below 0 use 0 |
 | `--seed` | `42` | Random seed for LoRA init |
 
@@ -128,6 +129,17 @@ rate, and minimum learning rate flags when resuming.
 During warmup, step 0 starts at `peak_lr * warmup_init_ratio`. Each subsequent
 logical step linearly interpolates toward peak LR using
 `progress = step / warmup_steps`. The ratio is ignored when warmup is disabled.
+
+With `--verbose-loss`, each completed SFT window prints one line:
+
+```text
+epoch=1 window=42 window_loss=1.234567 ema16=1.345678 ema64=1.456789 epoch_mean=1.567890 lr=1e-05
+```
+
+`window_loss` is the mean of the ubatch losses in that window. EMA16 uses
+`0.8825 * ema16 + 0.1175 * window_loss`; EMA64 uses
+`0.9692 * ema64 + 0.0308 * window_loss`. The EMAs continue across epochs,
+while `epoch_mean` resets at each epoch.
 
 ### Resume from a checkpoint
 
