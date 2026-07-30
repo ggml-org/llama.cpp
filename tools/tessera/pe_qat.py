@@ -39,7 +39,7 @@ import json
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Optional
 
 import numpy as np
 
@@ -600,3 +600,113 @@ def apply_pe_qat(
     x_q = fake_quantize_per_tensor(x_s, a_scale)
     y_q = W_q @ x_q
     return y_ref, y_q
+
+
+# ---------------------------------------------------------------------------
+# Policy consumption (the integration surface)
+# ---------------------------------------------------------------------------
+
+
+def _pe_qat_policy_for(
+    pe_qat_policy: Optional[dict],
+    tensor_name: str,
+) -> Optional[dict]:
+    """Return the PE-QAT policy entry for `tensor_name`, or None.
+
+    Two layouts are accepted:
+
+    - Multi-tensor: ``{"tensors": {name: entry, ...}}`` -- exact match first,
+      then substring match in either direction.  This is the layout a
+      production orchestrator would write after training every dense layer.
+    - Single-tensor flat: top-level ``lora_A`` / ``per_channel_smooth_s`` --
+      implicit match (the policy itself is the entry).  This is the format
+      ``save_pe_qat_policy`` produces for a single trained layer, so the
+      existing demo output works without any wrapper.
+    """
+    if not pe_qat_policy:
+        return None
+    tensors = pe_qat_policy.get("tensors")
+    if isinstance(tensors, dict):
+        if tensor_name in tensors:
+            entry = tensors[tensor_name]
+            return entry if isinstance(entry, dict) else None
+        for name, entry in tensors.items():
+            if not isinstance(name, str) or not isinstance(entry, dict):
+                continue
+            if name and (name in tensor_name or tensor_name in name):
+                return entry
+        return None
+    if "lora_A" in pe_qat_policy or "per_channel_smooth_s" in pe_qat_policy:
+        return pe_qat_policy
+    return None
+
+
+def apply_pe_qat_to_weight(
+    weight: np.ndarray,
+    pe_qat_policy: dict,
+    tensor_name: str,
+) -> np.ndarray:
+    """Apply a PE-QAT policy to a weight.
+
+    The function is pure (no I/O, no mutation of the input) and runs in
+    NumPy only.  The caller (e.g. ``quantize_v3.py``) is responsible for
+    handing the returned adjusted weight to its quantizer.
+
+    Steps:
+
+    1. Look up the policy entry for ``tensor_name``.  Returns the original
+       weight unchanged if no entry matches.
+    2. If the entry carries LoRA factors, merge the low-rank delta into
+       the weight: ``W' = W + (alpha / rank) * (B @ A)``.
+    3. If the entry carries ``per_channel_smooth_s``, apply the
+       SmoothQuant-style per-input-channel scaling: ``W'' = W' * s``.
+       The clip threshold ``c`` is intentionally NOT applied here --
+       it belongs at quantization time, where the per-output-channel
+       maximum of ``W''`` is the natural reference scale.
+    4. Return the adjusted weight as float32.
+
+    Shape / dtype mismatches between the entry and ``weight`` cause the
+    corresponding step to be skipped (with the weight passed through
+    unchanged) rather than raising; the caller can decide whether the
+    silent skip is acceptable.  The point is to make the integration
+    fail-soft: a stale or partial policy never blocks quantization.
+    """
+    entry = _pe_qat_policy_for(pe_qat_policy, tensor_name)
+    if entry is None:
+        return weight.astype(np.float32, copy=False)
+
+    if weight.ndim != 2:
+        return weight.astype(np.float32, copy=False)
+    out_features, in_features = weight.shape
+    W = weight.astype(np.float32, copy=True)
+
+    # 1. LoRA merge: W' = W + (alpha / rank) * (B @ A).
+    lora_A = entry.get("lora_A")
+    lora_B = entry.get("lora_B")
+    if lora_A is not None and lora_B is not None:
+        A = np.asarray(lora_A, dtype=np.float32)
+        B = np.asarray(lora_B, dtype=np.float32)
+        rank = int(entry.get("rank", A.shape[0] if A.ndim == 2 else 0))
+        alpha = float(entry.get("alpha", float(rank)))
+        if (
+            A.ndim == 2
+            and B.ndim == 2
+            and rank > 0
+            and A.shape == (rank, in_features)
+            and B.shape == (out_features, rank)
+            and alpha == alpha  # not NaN
+        ):
+            scaling = alpha / float(rank)
+            W = W + scaling * (B @ A)
+        # else: shape mismatch; skip LoRA merge (W' = W).
+
+    # 2. Per-channel SmoothQuant-style scaling: W'' = W' * s.
+    s = entry.get("per_channel_smooth_s")
+    if s is not None:
+        s_arr = np.asarray(s, dtype=np.float32)
+        if s_arr.ndim == 1 and s_arr.shape[0] == in_features:
+            W = W * s_arr[None, :]
+        # else: shape mismatch; skip smooth scaling (W'' = W').
+        # c (clip) is consumed at quantization time, not here.
+
+    return W

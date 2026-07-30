@@ -65,6 +65,29 @@ except ImportError:
     except ImportError:
         _CHAMPQ_AVAILABLE = False
 
+# PE-QAT: parameter-efficient quantization-aware training policy. The
+# trainer lives in tools.tessera.pe_qat and is imported as a normal
+# module import (it has no platform-specific deps). The policy is
+# consumed in the main quantize loop via apply_pe_qat_to_weight().
+try:
+    from tools.tessera.pe_qat import (  # type: ignore
+        PE_QAT_POLICY_SCHEMA,
+        _pe_qat_policy_for,
+        apply_pe_qat_to_weight,
+    )
+    _PE_QAT_AVAILABLE = True
+except ImportError:
+    try:
+        # tools/ is on sys.path when quantize_v3 is run as a script.
+        from tessera.pe_qat import (  # type: ignore
+            PE_QAT_POLICY_SCHEMA,
+            _pe_qat_policy_for,
+            apply_pe_qat_to_weight,
+        )
+        _PE_QAT_AVAILABLE = True
+    except ImportError:
+        _PE_QAT_AVAILABLE = False
+
 ACCELERATE_BACKEND = None
 ANE_BACKEND = None
 if sys.platform == "darwin" and os.environ.get("TESSERA_ACCELERATE", "1") != "0":
@@ -2664,6 +2687,48 @@ def lrq_policy_for(
     return None
 
 
+def load_pe_qat_policy(path: Optional[str]) -> Optional[dict]:
+    """Load a ``llama.tessera.pe-qat-policy.v1`` JSON from disk.
+
+    Returns None if `path` is None/empty.  Raises if the path is set but
+    the file is unreadable, the JSON is malformed, or the schema is not
+    the PE-QAT schema.  Unlike the calibration policy (which has a
+    family/instance split), the PE-QAT policy is consumed wholesale by
+    ``pe_qat_policy_for`` per tensor.
+    """
+    if not path:
+        return None
+    if not _PE_QAT_AVAILABLE:
+        raise RuntimeError(
+            "--pe-qat-policy requires tools.tessera.pe_qat; the module "
+            "failed to import on this checkout"
+        )
+    with open(path, "r", encoding="utf-8") as source:
+        policy = json.load(source)
+    if policy.get("schema") != PE_QAT_POLICY_SCHEMA:
+        raise ValueError(
+            f"{path}: expected schema {PE_QAT_POLICY_SCHEMA!r}, "
+            f"got {policy.get('schema')!r}"
+        )
+    return policy
+
+
+def pe_qat_policy_for(
+    policy: Optional[dict], tensor_name: str
+) -> Optional[dict]:
+    """Return the PE-QAT entry for `tensor_name`, or None.
+
+    Delegates to ``tools.tessera.pe_qat._pe_qat_policy_for`` so the
+    multi-tensor / single-tensor layout is consistent between the
+    trainer, the demo, and the quantizer.  Kept as a thin wrapper so
+    the rest of quantize_v3.py does not need to know about the
+    internal helper.
+    """
+    if policy is None:
+        return None
+    return _pe_qat_policy_for(policy, tensor_name)
+
+
 def tensor_policy(policy: Optional[dict], tensor_name: str,
                   default_fraction: float, default_alpha: Optional[float]) -> Tuple[float, Optional[float], float, bool, float]:
     """Return (outlier_fraction, awq_alpha, awq_clip, exact, ternary_threshold)
@@ -3071,6 +3136,23 @@ def main():
             "Only used when --septq and --septq-importance-weight hybrid."
         ),
     )
+    ap.add_argument(
+        "--pe-qat-policy",
+        default=None,
+        help=(
+            "Path to a llama.tessera.pe-qat-policy.v1 JSON produced by "
+            "tools/tessera/pe_qat_demo.py (or a production orchestrator). "
+            "When set, the trained LoRA delta is merged into each dense "
+            "weight and the per-input-channel SmoothQuant factors are "
+            "applied before quantization. PE-QAT is checked first in the "
+            "policy precedence order (before LRQ / SEPTQ / imatrix-mse) "
+            "because it carries the trained LoRA. CHAMP-Q permutation is "
+            "skipped on PE-QAT-adjusted weights -- the per-channel s was "
+            "trained against the original channel order. Only the 2D "
+            "weight path is currently wired; the 3D expert path falls "
+            "through to the default quantizer."
+        ),
+    )
     args = ap.parse_args()
     calibration_policy = load_calibration_policy(args.calibration_policy)
     if args.hessian_trace_policy:
@@ -3086,6 +3168,7 @@ def main():
             calibration_policy = merge_hessian_trace_into_policy(
                 calibration_policy, trace_policy
             )
+    pe_qat_policy = load_pe_qat_policy(args.pe_qat_policy)
     epoch_receipt = (
         json.loads(Path(args.tessera_epoch_receipt).read_text(encoding="utf-8"))
         if args.tessera_epoch_receipt
@@ -3497,6 +3580,23 @@ def main():
                 file=sys.stderr,
             )
 
+    # PE-QAT policy summary. Loaded eagerly above; per-tensor lookups happen
+    # inside the main loop where each tensor name is known. The schema and
+    # the number of entries (multi-tensor: dict size; single-tensor: 1) are
+    # printed here so a misconfigured policy is visible before any
+    # quantization work.
+    if pe_qat_policy is not None:
+        n_entries = 1
+        if isinstance(pe_qat_policy.get("tensors"), dict):
+            n_entries = len(pe_qat_policy["tensors"])
+        rank = pe_qat_policy.get("rank", "?")
+        alpha = pe_qat_policy.get("alpha", "?")
+        print(
+            f"  PE-QAT: policy loaded, rank={rank} alpha={alpha} "
+            f"entries={n_entries}; will merge LoRA + smooth before quantize",
+            file=sys.stderr,
+        )
+
     for done, (wname, shape, dtype, out_name, layer_idx, short) in enumerate(inventory):
         # Find which shard holds this tensor
         for shard in shard_files:
@@ -3549,20 +3649,32 @@ def main():
             direct_exact = direct_exact or policy_exact
             lrq = lrq_policy_for(calibration_policy, out_name) if not direct_exact else None
             use_lrq = lrq is not None
+            # PE-QAT is checked before LRQ: a trained LoRA is the most
+            # authoritative source for this tensor. direct_exact tensors
+            # (e.g. MoE gates) skip PE-QAT -- the weight is already kept
+            # at full precision downstream so a merge would be wasted work.
+            pe_qat_entry = (
+                pe_qat_policy_for(pe_qat_policy, out_name) if not direct_exact else None
+            )
+            use_pe_qat = pe_qat_entry is not None
             use_imatrix_mse = (
                 not use_lrq
+                and not use_pe_qat
                 and args.range_selection == "imatrix-mse"
                 and not direct_exact
                 and act_scales is not None
             )
             # CHAMP-Q permute setup. Hoisted before the if/elif so the same
-            # permuted (arr, act_scales) feed all paths. LRQ is authoritative
-            # and skips the permute; the policy already encodes the rank-r
-            # scaling for this tensor. direct_exact tensors (all-zero ternary)
-            # also skip: channel ordering is irrelevant for them.
+            # permuted (arr, act_scales) feed all paths. LRQ and PE-QAT are
+            # both authoritative and skip the permute: their policies already
+            # encode the scaling for this tensor, and PE-QAT's per-channel s
+            # was trained against the original channel order. direct_exact
+            # tensors (all-zero ternary) also skip: channel ordering is
+            # irrelevant for them.
             champq_perm: Optional[np.ndarray] = None
             if (
                 not use_lrq
+                and not use_pe_qat
                 and args.permute_channels
                 and not direct_exact
                 and _CHAMPQ_AVAILABLE
@@ -3586,7 +3698,41 @@ def main():
                 and not use_imatrix_mse
             )
 
-            if use_lrq:
+            if use_pe_qat:
+                # PE-QAT-mode: the policy carries a trained LoRA + per-channel
+                # SmoothQuant factors.  Both are merged into the weight before
+                # quantization.  PE-QAT is checked first because the LoRA is
+                # the most authoritative per-tensor adjustment available; LRQ
+                # is a coarser rank-r scale, AWQ is a heuristic, and SEPTQ
+                # / imatrix_mse only refine the range selection.  The clip
+                # threshold c is not applied here -- it is consumed at
+                # quantization time by the per-output-channel quantizer.
+                arr = apply_pe_qat_to_weight(arr, pe_qat_policy, out_name)
+                q = quantize_2d(
+                    arr,
+                    out_dim,
+                    in_dim,
+                    1.0 if direct_exact else policy_frac,
+                    None if direct_exact else act_scales,
+                    0.0 if direct_exact else policy_alpha,
+                    1.0 if direct_exact else policy_clip,
+                    tensor_name=out_name,
+                    ternary_threshold=(1.0 if direct_exact else policy_threshold),
+                )
+                # SmoothQuant split: apply_pe_qat_to_weight multiplied the
+                # weight by s, so the runtime must apply 1/s to the input
+                # to preserve the matmul equivalence (W*s) @ (x/s) = W @ x.
+                # Override the input_scale that quantize_2d set to ones.
+                # direct_exact tensors carry no policy entry (and so no s),
+                # so this is a no-op for them.
+                pe_qat_s = pe_qat_entry.get("per_channel_smooth_s")
+                if pe_qat_s is not None and not direct_exact:
+                    s_arr = np.asarray(pe_qat_s, dtype=np.float32)
+                    if s_arr.ndim == 1 and s_arr.shape[0] == in_dim:
+                        q["input_scale"] = (
+                            1.0 / np.maximum(s_arr, np.float32(1e-6))
+                        ).astype(np.float32)
+            elif use_lrq:
                 # LRQ-mode: the policy carries a rank-r S = U @ V scale. The
                 # AWQ and imatrix_mse paths are bypassed because the policy
                 # is the authoritative source for this tensor.
@@ -3725,11 +3871,24 @@ def main():
             # experts (the in_dim axis is the same for every expert). See
             # the 2D path above for the rationale. policy_exact forces
             # every expert to exact encoding, where the input-channel
-            # ordering is irrelevant, so CHAMP-Q is skipped.
+            # ordering is irrelevant, so CHAMP-Q is skipped. PE-QAT, if
+            # present for this tensor, also skips CHAMP-Q for the same
+            # reason as the 2D path -- the per-channel s was trained
+            # against the original channel order. The 3D path itself does
+            # not currently apply the PE-QAT merge (the demo only trains
+            # 2D layers); the gate is here for symmetry / future 3D
+            # support.
+            pe_qat_entry_3d = (
+                pe_qat_policy_for(pe_qat_policy, out_name)
+                if not policy_exact
+                else None
+            )
+            use_pe_qat_3d = pe_qat_entry_3d is not None
             champq_perm_3d: Optional[np.ndarray] = None
             if (
                 args.permute_channels
                 and not policy_exact
+                and not use_pe_qat_3d
                 and _CHAMPQ_AVAILABLE
                 and in_dim > 1
             ):
