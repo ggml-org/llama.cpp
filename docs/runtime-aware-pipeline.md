@@ -4,6 +4,14 @@ _Companion to [`pipeline-design.md`](pipeline-design.md). Where the design
 doc describes what each layer is supposed to do, this document describes
 what needs to change to build them._
 
+> Roadmap alignment: the runtime-aware proxy-objective research
+> (2026-07-30) validates this pipeline as the differentiating capability
+> and promotes L1 to the critical path for the C++ port's GA
+> (`c++-port-design.md` G4-done and G6 both depend on L1). It also
+> sharpens the L6 fitness form and adds a QEP off-switch. See
+> [`research-alignment-2026-07-30.md`](research-alignment-2026-07-30.md);
+> inline notes below mark the touched sections.
+
 ## Overview
 
 The pipeline has six layers. Each one closes a different gap between the
@@ -435,6 +443,24 @@ Add `fitness = "kernel-direct"` to `per_tensor_calibrate.py`. The mode:
 The existing modes (`direct`, `importance`, `combined`) remain for
 sanity-check comparisons; `kernel-direct` is the production default once
 L1 lands.
+
+> Alignment (2026-07-30): `kernel-direct` is the ground-truth
+> instantiation of the Linearity-Theorem term. Per tensor,
+> `t_l^2 = ||dequant_kernel(W_l) - W_l||_F^2 / ||W_l||_F^2`, where
+> `dequant_kernel(W_l)` is the L1 sidecar (what the kernel actually
+> dequantizes), not the offline `_ternary_reconstruct`. The GA objective
+> that aggregates these is `Sum_l alpha_l * t_l^2`, with `alpha_l` the
+> method-independent layer coefficients estimated once per model (HIGGS
+> calibration: perturb each layer, measure PPL response) and cached in
+> the sidecar / policy. If `alpha_l` estimation proves noisy, fall back
+> to uniform weights; the form still holds structurally.
+>
+> QEP off-switch: do NOT add cross-layer error propagation to this
+> fitness for TESSERA_T640 v1. The Linearity Theorem holds in this
+> regime; QEP (arXiv:2504.09629) shows the cross-layer correction only
+> pays off sub-3-bit. Revisit only for a T640_3D sub-3-bit extension or
+> the W4A4 activation boundary. See
+> research-alignment-2026-07-30.md Sections 4.1 and 7.
 
 #### 6.2 GA plumbing
 

@@ -7,6 +7,13 @@ replaces: stock K-quants remain reachable through `--tessera-mode=off`,
 and every flag below is added to the existing CLI rather than
 introducing a new tool or subcommand.
 
+> Roadmap alignment: the runtime-aware proxy-objective research
+> (2026-07-30) reframes parts of G2, G4, and G6 and reorders the port
+> around the kernel-fidelity loop. See
+> [`research-alignment-2026-07-30.md`](research-alignment-2026-07-30.md).
+> Where that doc and this one disagree, that doc wins until this one is
+> updated. The inline notes below mark the touched sections.
+
 ## Architectural decisions (locked)
 
 These are settled by the prior conversation and not revisited below:
@@ -735,6 +742,18 @@ Python quantizer on the smoke-test set.
 
 Goal: the other quantize modes are ported.
 
+> Alignment (2026-07-30): these six are regime experts, not competing
+> modes. Add a regime router (~150-250 LoC) that picks the expert per
+> tensor from the regime descriptors already in the imatrix v2 and
+> `tensor_families`: high kurtosis / massive outliers (esp. `down_proj`)
+> -> rotation (DartQuant) + permutation; high spectral compactness ->
+> low-rank (FLRQ / LRQ), gated by a cheap effective-rank descriptor;
+> attention Q/K -> Hessian-mask expert (SEPTQ); MoE expert FFNs ->
+> lighter expert; default -> AWQ diagonal scaling. This is the operative
+> use of `tensor_families`. CHAMP-Q permutation stays closed-form in v1;
+> relax it (Gumbel-Sinkhorn / differentiable sorting) only if it enters
+> the GA search space. See research-alignment-2026-07-30.md Section 4.2.
+
 LoC: ~4500 (tessera-linalg.h/.cpp for FLRQ + DartQuant + Stiefel +
 SVD, tessera-lbfgs.h/.cpp for CHAMP-Q + L-BFGS, additional
 quantize_2d branches in tessera-quant.cpp, pe_qat LoRA merge).
@@ -763,6 +782,20 @@ Goal: `awq-evolve.py` is ported to `tessera-awq.cpp` with the
 island GA, MAP-Elites archive, progressive evaluation, and the
 checkpoint JSON. Determinism is bit-for-bit across runs at the
 same seed.
+
+> Alignment (2026-07-30): two refinements. (1) The MAP-Elites archive
+> cell (`ts_awq_archive_cell`, currently a generic 3-axis bin index)
+> uses the regime descriptors as its axes: (kurtosis bucket,
+> effective-rank bucket, tensor-family / modality bucket). The archive
+> then stores the best reconstruction-knob config per regime cell.
+> (2) The stated GA objective is `Sum_l alpha_l * t_l^2` (Linearity
+> Theorem), where `t_l^2` is the relative per-tensor reconstruction
+> error. Production `t_l^2` is evaluated against the L1 kernel-dequant
+> output (== runtime-aware-pipeline L6); the offline ternary MSE is the
+> stand-in proxy used until L1 lands. `alpha_l` are estimated once per
+> model and cached. This makes L1 (runtime-aware-pipeline.md) a
+> prerequisite for G4-done. See research-alignment-2026-07-30.md
+> Sections 4.2 and 6.
 
 LoC: ~1600 (tessera-awq.h/.cpp; the AWQ-evolve lib is the bulk).
 Dependency: G1 (the AWQ ternary reconstruct uses `ts_compute_scales`
@@ -799,6 +832,18 @@ Acceptance: `llama-quantize --tessera-mode=default in.gguf
 --calib-corpus corpus/ --tessera-evolve-iters 4` produces a GGUF
 that loads in `llama-cli` and produces plausible output on the
 smoke-test prompts.
+
+> Alignment (2026-07-30): the acceptance is sharpened into the
+> novelty-boundary gate, and G6 now also depends on runtime-aware-pipeline
+> L1 + L6. On held-out tensors, the regime-routed kernel-fidelity
+> composite (`Sum_l alpha_l * t_l^2` against L1 kernel output) must beat
+> the best single proxy (AWQ-only, rotation-only, low-rank-only,
+> Hessian-mask-only) at the same bit budget, on both kernel-fidelity
+> `t_l^2` and end-to-end PPL (the L4 probe). Separately, measure the
+> ranking disagreement between the offline ternary-MSE proxy and the
+> kernel-direct fitness and report it; if it is near zero, the
+> kernel-fidelity contribution is null and the novelty reduces to
+> routing. See research-alignment-2026-07-30.md Section 5.
 
 ### Total
 

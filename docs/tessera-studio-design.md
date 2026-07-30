@@ -7,6 +7,17 @@ the Tessera project: per-tensor policy, schema-versioned evidence,
 runtime agreement, full CoreML inference on iPhone, multi-modal
 calibration.
 
+> Roadmap alignment: the runtime-aware proxy-objective research
+> (2026-07-30) validates the `evaluate` tool, the fitness-over-generations
+> chart, and the A/B compare view as the user-facing surface for the
+> kernel-fidelity loop (runtime-aware-pipeline L4/L6). Two refinements:
+> the fitness chart should plot the alpha-weighted composite and the
+> regime-indexed archive occupancy (not a single fitness line), and the
+> A/B compare view is the natural place to surface the G6
+> composite-beats-single-proxy result as a receipt. See
+> [`research-alignment-2026-07-30.md`](research-alignment-2026-07-30.md)
+> Section 4.6.
+
 The 32 architect decisions are locked by the prior conversation and
 the three prior scoping docs. This doc references them and does not
 re-litigate them.

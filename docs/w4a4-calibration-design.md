@@ -7,6 +7,16 @@ strategy, and open questions. It targets an implementation agent who is
 already familiar with the Tessera L1-L6 runtime-aware calibration pipeline
 described in `docs/pipeline-design.md` and `docs/runtime-aware-pipeline.md`.
 
+> Roadmap alignment: the runtime-aware proxy-objective research
+> (2026-07-30) validates this design as-is. The W4A16/W4A4 weighted
+> fitness (0.5/0.5) and the per-semantic-family breakdown already
+> instantiate the alpha-weighted composite objective and regime routing.
+> One flag: W4A4 is the lower-bit regime where the QEP off-switch is most
+> likely to need revisiting if fitness plateaus or diverges from
+> end-to-end PPL. See
+> [`research-alignment-2026-07-30.md`](research-alignment-2026-07-30.md)
+> Section 4.4.
+
 ## 1. Goals and non-goals
 
 ### What W4A4 means for Tessera

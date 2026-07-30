@@ -4,6 +4,16 @@ Design only. No implementation code. Targets gemma 4 12b unified (text +
 vision + audio), Tessera-quantized, running both prefill AND decode on
 the ANE via CoreML on iPhone.
 
+> Roadmap alignment: the runtime-aware proxy-objective research
+> (2026-07-30) validates the IOReport runtime-telemetry + receipts thesis
+> and the Metal auto-fallback (C7): a practitioner report of ~23% INT8
+> accuracy variance across five Snapdragon chipsets is direct external
+> evidence that fidelity lives at the runtime boundary and varies per
+> hardware. The `modality_scales` translation (Section 2.5) carries the
+> regime axis into the CoreML artifact. No structural change. See
+> [`research-alignment-2026-07-30.md`](research-alignment-2026-07-30.md)
+> Section 4.5.
+
 ## Architectural decisions (locked by the prior conversation, not revisited here)
 
 1. Full CoreML inference as a first-class backend, peer to ggml-metal.

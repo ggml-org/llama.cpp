@@ -3,6 +3,14 @@
 Design only. No implementation code. Targets gemma 4 12b unified
 (encoder-free, text + vision + audio, single decoder-only transformer).
 
+> Roadmap alignment: the runtime-aware proxy-objective research
+> (2026-07-30) validates modality as a first-class regime axis. The
+> modality-weighted fitness (0.5/0.3/0.2) is the alpha-weighted composite
+> objective extended across modality, and modality enters the MAP-Elites
+> descriptor space. Locked decisions M1-M8 hold. See
+> [`research-alignment-2026-07-30.md`](research-alignment-2026-07-30.md)
+> Section 4.3.
+
 Architect decisions (already locked, not revisited here):
 
 - Extend calibration for multimodal: multi-modal corpus + modality-tagged
