@@ -312,7 +312,9 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     quantize &= name.find("ffn_poly")           == std::string::npos;
     quantize &= name.find("mhc_")               == std::string::npos;
     quantize &= name.find("attn_lambda.weight") == std::string::npos;
-
+    if (arch == LLM_ARCH_MOTIF3) {
+        quantize &= name.find("attn_gate.weight")   == std::string::npos;
+    }
     // do not quantize the i32 token-id -> expert-id routing table (DeepSeek-V4)
     quantize &= name.find("ffn_gate_tid2eid.weight") == std::string::npos;
 
