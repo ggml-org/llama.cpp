@@ -2894,7 +2894,7 @@ static void llama_sampler_penalties_backend_set_input(struct llama_sampler * smp
         ++n_active;
     }
 
-    // This is required because backend_apply uses ggml_set_rows (a scatter-back operation)
+    // Sorting is required because backend_apply uses ggml_set_rows (a scatter-back operation)
     std::vector<std::pair<int32_t, int32_t>> entries;
     entries.reserve(n_active);
     for (int32_t i = 0; i < n_active; ++i) {
