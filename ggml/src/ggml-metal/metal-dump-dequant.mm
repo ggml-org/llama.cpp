@@ -12,6 +12,23 @@
 // any per-element difference between the reference and the fused
 // matmul's dequant is below the spec's ULP tolerance.
 //
+// In v3 the hook also captures per-row wall-clock timing (around the
+// dequant call) and writes it to the v3 per-row meta strip. The
+// timing is captured once around the full dequant (one call covers
+// all rows) and distributed equally to each row in the sidecar; the
+// L6 kernel-direct fitness reads the strip and treats the per-row
+// timing as a proxy for the row-wise dequant cost. The L1 spec
+// describes the timing as "dequant + matmul"; the matmul portion is
+// not measured at this hook (it fires before the matmul). The L6
+// orchestrator combines the L1 dequant timing with the matmul cost
+// from its own instrumentation.
+//
+// In W4A4 mode (LLAMA_TILE640_DEBUG_DEQUANT_MODE=w4a4) the L1.5
+// FP16-reference sidecar (.act.dequant.f32) is also written. The data
+// is the same F32 values; a future refactor will pass the original
+// FP16 weight to the hook so the L1.5 reference captures the actual
+// ground-truth.
+//
 // No-op when the dequant debug hook is not enabled or src0 is not
 // quantized. The hook is off by default; activate via
 // `--tessera-dequant-dir PATH` or `LLAMA_TILE640_DEBUG_DEQUANT_DIR`.
@@ -39,6 +56,7 @@
 
 #include "tessera-debug.h"
 
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <vector>
@@ -85,7 +103,23 @@ void metal_dump_dequant(
     }
 
     std::vector<float> host_buf((size_t) expected_els);
+
+    // Wall-clock around the single host dequant call. We don't have a
+    // command-buffer fence here (this is host-side work, not a GPU
+    // dispatch), so std::chrono::steady_clock is the right tool. The
+    // total time is distributed equally to each row in the per-row
+    // meta strip; the L6 fitness treats this as the per-row dequant
+    // cost (a per-row GPU dequant kernel is the future work).
+    const auto t0 = std::chrono::steady_clock::now();
     traits->to_float(src0->data, host_buf.data(), expected_els);
+    const auto t1 = std::chrono::steady_clock::now();
+    const uint64_t total_ns =
+        (uint64_t) std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count();
+    const uint64_t per_row_ns = rows > 0 ? (total_ns / (uint64_t) rows) : 0;
+
+    // kernel_id for the v3 per-row meta: a stable per-quantization-type
+    // identifier. dispatch_count is 1 for the single host dequant call.
+    const uint32_t kernel_id = (uint32_t) src0->type;
 
     // The dump is laid out as `rows` rows of `cols` F32 values. The
     // reference dequant is row-major, so row r starts at host_buf +
@@ -94,6 +128,8 @@ void metal_dump_dequant(
     tessera_debug::open_dequant_writer(name, rows, cols);
     for (int64_t r = 0; r < rows; r++) {
         tessera_debug::write_dequant_row(r, host_buf.data() + r * cols, cols);
+        tessera_debug::set_dequant_row_meta(r, per_row_ns, kernel_id,
+                                            /*dispatch_count=*/1);
     }
     tessera_debug::close_dequant_writer();
     // Per-row outlier counts (|x| > threshold) are sealed in the sidecar
@@ -101,4 +137,8 @@ void metal_dump_dequant(
     // the Metal kernel's per-element dequant under the ULP tolerance,
     // so counting on the host gives the L3 metric the same signal it
     // would get from a GPU-side count.
+    //
+    // In W4A4 mode the L1.5 FP16-reference sidecar
+    // (.act.dequant.f32) is also written; see header for the data
+    // semantics.
 }

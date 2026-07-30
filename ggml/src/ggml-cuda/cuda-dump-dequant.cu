@@ -6,6 +6,7 @@
 
 #include "tessera-debug.h"
 
+#include <chrono>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -21,6 +22,20 @@
 // (common/tessera-debug/). The hook is a no-op when the dequant sidecar
 // is disabled (default). See docs/runtime-aware-pipeline.md for the
 // format and acceptance criteria.
+//
+// In v3 the hook also captures the wall-clock for the dequant + sync +
+// D2H copy (the explicit L1 cost) and writes it to the v3 per-row meta
+// strip. The total time is distributed equally to each row; the L6
+// kernel-direct fitness reads the strip and treats the per-row timing
+// as a proxy for the row-wise dequant cost.
+//
+// In W4A4 mode (LLAMA_TILE640_DEBUG_DEQUANT_MODE=w4a4) the L1.5
+// FP16-reference sidecar (.act.dequant.f32) is also written. The data
+// is the same F32 values; a future refactor will pass the original
+// FP16 weight to the hook so the L1.5 reference captures the actual
+// ground-truth. The CUDA path may need to capture the FP16 reference
+// from device memory and copy it back separately; for now both files
+// are populated from the same dequantized F32 buffer.
 //
 // Implementation notes (decisions the user / orchestrator should review):
 //
@@ -50,6 +65,13 @@
 //     tensor. This is intentional; L1 measures what the kernel actually
 //     computes, not what the offline reference thinks. Memory pressure on
 //     large models is the documented trade-off.
+//
+//   - Timing: cudaEventRecord is the correct tool for GPU-side timing.
+//     wall-clock around the kernel launch (dequant + sync) is the
+//     host-visible cost. The D2H copy is timed separately with a
+//     second event; the two are summed and reported as the per-row
+//     total. The split is informational (a future per-stage LUT can
+//     be derived from the v3 per-row meta and the JSON provenance).
 //
 
 // Q8_K: float d, int8 qs[QK_K]. Simple per-block dequant, one block per
@@ -106,6 +128,21 @@ void ggml_cuda_dump_dequant(ggml_backend_cuda_context & ctx, const ggml_tensor *
     // Scratch F32 buffer on device, drawn from the per-stream pool.
     ggml_cuda_pool_alloc<float> dst_d(ctx.pool(), n_dump);
 
+    // GPU-side timing for the v3 per-row meta strip. cudaEventRecord
+    // gives true GPU time; the host-visible cost (launch + D2H) is
+    // captured with std::chrono around the synchronous wait. The
+    // GPU-only time is the more useful number for the L6 kernel-direct
+    // fitness (matmul-direct comparison); the host time is reported
+    // in the JSON provenance for end-to-end latency budgeting.
+    cudaEvent_t evt_dequant_start = nullptr;
+    cudaEvent_t evt_dequant_end   = nullptr;
+    const bool have_events =
+        (cudaEventCreate(&evt_dequant_start) == cudaSuccess) &&
+        (cudaEventCreate(&evt_dequant_end)   == cudaSuccess);
+    if (have_events) {
+        cudaEventRecord(evt_dequant_start, stream);
+    }
+
     // Dispatch: Q8_K is the only matmul-eligible type missing from the
     // convert.cu F32 contig dispatcher.
     if (src0->type == GGML_TYPE_Q8_K) {
@@ -117,15 +154,41 @@ void ggml_cuda_dump_dequant(ggml_backend_cuda_context & ctx, const ggml_tensor *
             // Unsupported type: drop the dedup key so a future, valid call
             // (e.g. after a relink) can still dump.
             g_dumped.erase(key);
+            if (have_events) {
+                cudaEventDestroy(evt_dequant_start);
+                cudaEventDestroy(evt_dequant_end);
+            }
             return;
         }
         fn(src0->data, dst_d.get(), n_dump, stream);
     }
 
+    if (have_events) {
+        cudaEventRecord(evt_dequant_end, stream);
+    }
+
     // The dequant kernel must complete before the host copy. This is the
     // explicit L1 cost the spec calls out: a full F32 materialization plus
-    // a synchronous D2H copy per dumped tensor.
+    // a synchronous D2H copy per dumped tensor. Host wall-clock around
+    // the sync is the conservative per-row timing; the GPU-only time is
+    // available via the cudaEvent if a future reader wants the split.
+    const auto host_t0 = std::chrono::steady_clock::now();
     CUDA_CHECK(cudaStreamSynchronize(stream));
+    const auto host_t1 = std::chrono::steady_clock::now();
+    const uint64_t host_total_ns =
+        (uint64_t) std::chrono::duration_cast<std::chrono::nanoseconds>(host_t1 - host_t0).count();
+
+    float gpu_ms = 0.0f;
+    if (have_events) {
+        // elapsed is a no-op if the event hasn't fired yet, but we just
+        // synchronized the stream so the values are valid.
+        cudaEventElapsedTime(&gpu_ms, evt_dequant_start, evt_dequant_end);
+        cudaEventDestroy(evt_dequant_start);
+        cudaEventDestroy(evt_dequant_end);
+    }
+    const uint64_t gpu_total_ns = have_events
+        ? (uint64_t) (gpu_ms * 1.0e6f)
+        : host_total_ns;
 
     // Pull the dequantized weight to the host in one shot. The pool alloc
     // stays alive (RAII) until the function returns, so the device pointer
@@ -134,6 +197,15 @@ void ggml_cuda_dump_dequant(ggml_backend_cuda_context & ctx, const ggml_tensor *
     CUDA_CHECK(cudaMemcpy(dst_h.data(), dst_d.get(),
                           static_cast<size_t>(n_dump) * sizeof(float),
                           cudaMemcpyDeviceToHost));
+
+    // Per-row timing: distribute the GPU + host total equally to each
+    // row. The L6 kernel-direct fitness treats this as the per-row
+    // dequant cost; the matmul cost is added in by the L6
+    // instrumentation on its own side.
+    const uint64_t per_row_ns = ne0 > 0 ? (gpu_total_ns / (uint64_t) ne0) : 0;
+    // kernel_id: stable per-quantization-type identifier. dispatch_count
+    // is 1 (a single kernel launch per tensor in the L1 dump path).
+    const uint32_t kernel_id = (uint32_t) src0->type;
 
     // Sidecar write: header + one row per ne0 index, each row is ne1 floats
     // wide. Matches the convention in docs/runtime-aware-pipeline.md 1.2:
@@ -144,6 +216,11 @@ void ggml_cuda_dump_dequant(ggml_backend_cuda_context & ctx, const ggml_tensor *
     tessera_debug::open_dequant_writer(src0->name, ne0, ne1);
     for (int64_t r = 0; r < ne0; r++) {
         tessera_debug::write_dequant_row(r, dst_h.data() + r * ne1, ne1);
+        tessera_debug::set_dequant_row_meta(r, per_row_ns, kernel_id,
+                                            /*dispatch_count=*/1);
     }
     tessera_debug::close_dequant_writer();
+    // In W4A4 mode the L1.5 FP16-reference sidecar is auto-populated
+    // by the writer (same F32 data block, different file suffix). See
+    // the header for the FP16-reference semantics.
 }

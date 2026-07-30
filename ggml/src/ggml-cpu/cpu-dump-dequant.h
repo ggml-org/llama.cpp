@@ -12,6 +12,18 @@
 // dequantized F32 weight to disk. The hook is a no-op when the sidecar
 // is disabled or the source tensor is not quantized.
 //
+// In v3 (this commit) the hook also captures per-row wall-clock timing
+// around the dequant call and writes it to the v3 per-row meta strip
+// (timing_ns, kernel_id, dispatch_count). This is consumed by the L6
+// kernel-direct fitness and the GA orchestrator.
+//
+// In W4A4 mode (LLAMA_TILE640_DEBUG_DEQUANT_MODE=w4a4) the L1.5
+// FP16-reference sidecar (.act.dequant.f32) is written alongside the
+// L1 dequant sidecar (.dequant.f32). The two are written from the
+// same F32 data block; a future refactor will pass the original FP16
+// weight to the hook so the L1.5 reference captures the actual
+// ground-truth instead of the dequantized quantized weight.
+//
 // Each tensor is dumped at most once per process; the helper maintains
 // a small dedup set keyed on the tensor name.
 //
