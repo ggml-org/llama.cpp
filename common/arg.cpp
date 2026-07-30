@@ -7,6 +7,7 @@
 #include "json-schema-to-grammar.h"
 #include "llama.h"
 #include "log.h"
+#include "tessera-args.h"
 #include "tessera-debug.h"
 #include "sampling.h"
 #include "speculative.h"
@@ -62,6 +63,12 @@ static std::initializer_list<enum llama_example> mmproj_examples = {
     LLAMA_EXAMPLE_SERVER,
     LLAMA_EXAMPLE_CLI,
 };
+
+static common_tessera_params tessera_params;
+
+const common_tessera_params & common_get_tessera_params() {
+    return tessera_params;
+}
 
 static std::string read_file(const std::string & fname) {
     std::ifstream file(fname);
@@ -3839,6 +3846,154 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             tessera_debug::set_dequant_dir(value);
         }
     ).set_env("LLAMA_TILE640_DEBUG_DEQUANT_DIR"));
+    add_opt(common_arg(
+        {"--tessera-mode"}, "MODE",
+        "Tessera mode: off, default, calibrate-only, evolve-only (default: default)",
+        [](common_params &, const std::string & value) {
+            if (value != "off" && value != "default" && value != "calibrate-only" && value != "evolve-only") {
+                throw std::invalid_argument(
+                    string_format("error: unknown value for --tessera-mode: '%s'\n", value.c_str()));
+            }
+            tessera_params.mode = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-imatrix"}, "PATH",
+        "Tessera: imatrix path (.npz/.gguf); skips calibration when provided",
+        [](common_params &, const std::string & value) {
+            tessera_params.imatrix = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-policy"}, "PATH",
+        "Tessera: calibration policy JSON path",
+        [](common_params &, const std::string & value) {
+            tessera_params.policy = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-policy-out"}, "PATH",
+        "Tessera: output path for the generated policy JSON",
+        [](common_params &, const std::string & value) {
+            tessera_params.policy_out = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-ga-checkpoint"}, "PATH",
+        "Tessera: GA checkpoint path for resume",
+        [](common_params &, const std::string & value) {
+            tessera_params.ga_checkpoint = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--calib-corpus"}, "PATH",
+        "Tessera: directory of calibration activations (.npy/.npz)",
+        [](common_params &, const std::string & value) {
+            tessera_params.calib_corpus = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--calib-corpus-out"}, "PATH",
+        "Tessera: write resolved mini-corpus to this path",
+        [](common_params &, const std::string & value) {
+            tessera_params.calib_corpus_out = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-evolve-seed"}, "N",
+        "Tessera: GA random seed for bit-identical policies (default: 0)",
+        [](common_params &, const std::string & value) {
+            tessera_params.evolve_seed = std::stoull(value);
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-evolve-iters"}, "N",
+        "Tessera: GA generations (default: 8)",
+        [](common_params &, int value) {
+            tessera_params.evolve_iters = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-evolve-islands"}, "N",
+        "Tessera: GA islands (default: 4)",
+        [](common_params &, int value) {
+            tessera_params.evolve_islands = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-evolve-population"}, "N",
+        "Tessera: GA population per island (default: 16)",
+        [](common_params &, int value) {
+            tessera_params.evolve_population = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-evolve-only"},
+        "Tessera: only run the GA; do not quantize",
+        [](common_params &) {
+            tessera_params.evolve_only = true;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-calibrate-only"},
+        "Tessera: only run calibration; do not run GA or quantize",
+        [](common_params &) {
+            tessera_params.calibrate_only = true;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-outlier-frac"}, "F",
+        "Tessera: outlier fraction (default: 0.005)",
+        [](common_params &, const std::string & value) {
+            tessera_params.outlier_frac = std::stof(value);
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-awq-alpha"}, "F|auto",
+        "Tessera: per-tensor AWQ alpha; 'auto' = per-tensor search (default: auto)",
+        [](common_params &, const std::string & value) {
+            tessera_params.awq_alpha = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-awq-clip"}, "F",
+        "Tessera: per-row AWQ clip (default: 1.0)",
+        [](common_params &, const std::string & value) {
+            tessera_params.awq_clip = std::stof(value);
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-ternary-threshold"}, "F|auto",
+        "Tessera: per-row mean(|W|) multiplier; 'auto' = automatic (default: auto)",
+        [](common_params &, const std::string & value) {
+            tessera_params.ternary_threshold = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-range-selection"}, "MODE",
+        "Tessera: range selection: legacy, imatrix-mse, septq (default: legacy)",
+        [](common_params &, const std::string & value) {
+            if (value != "legacy" && value != "imatrix-mse" && value != "septq") {
+                throw std::invalid_argument(
+                    string_format("error: unknown value for --tessera-range-selection: '%s'\n", value.c_str()));
+            }
+            tessera_params.range_selection = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-champq"},
+        "Tessera: enable CHAMP-Q permutation",
+        [](common_params &) {
+            tessera_params.champq = true;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-nthreads"}, "N",
+        "Tessera: threads for calibration/GA/quantize (default: 0 = use positional nthreads)",
+        [](common_params &, int value) {
+            tessera_params.nthreads = value;
+        }
+    ));
     add_opt(common_arg(
         {"--log-colors"}, "[on|off|auto]",
         "Set colored logging ('on', 'off', or 'auto', default: 'auto')\n"
