@@ -317,6 +317,10 @@ struct llama_layer {
     // ff MoE latent proj
     struct ggml_tensor * ffn_latent_down = nullptr;
     struct ggml_tensor * ffn_latent_up   = nullptr;
+    struct ggml_tensor * attn_res_norm   = nullptr;
+    struct ggml_tensor * attn_res_proj   = nullptr;
+    struct ggml_tensor * ffn_res_norm    = nullptr;
+    struct ggml_tensor * ffn_res_proj    = nullptr;
 
     // ff shared expert (shexp)
     struct ggml_tensor * ffn_gate_inp_shexp = nullptr;
@@ -525,6 +529,118 @@ struct llama_layer {
     struct llama_layer_shortconv shortconv;
 
     struct llama_layer_nextn nextn;
+
+    // Tile640 ternary quantization metadata. For each of these weights,
+    // a 6-tuple of tensors is stored when the model is Tile640-quantized:
+    //   {*}_packed, {*}_page_scales, {*}_lane_scales,
+    //   {*}_outlier_row_offsets, {*}_outlier_cols, {*}_outlier_vals.
+    // A weight is Tile640-quantized iff {name}_packed != nullptr. The
+    // original FP16 weight tensor is left null in that case (the loader
+    // would not have created it).
+
+    // 2D Tile640 weights (heavy projections)
+    struct ggml_tensor * wq_packed              = nullptr;
+    struct ggml_tensor * wq_page_scales         = nullptr;
+    struct ggml_tensor * wq_lane_scales         = nullptr;
+    struct ggml_tensor * wq_outlier_row_offsets        = nullptr;
+    struct ggml_tensor * wq_outlier_cols        = nullptr;
+    struct ggml_tensor * wq_outlier_vals        = nullptr;
+
+    struct ggml_tensor * wk_packed              = nullptr;
+    struct ggml_tensor * wk_page_scales         = nullptr;
+    struct ggml_tensor * wk_lane_scales         = nullptr;
+    struct ggml_tensor * wk_outlier_row_offsets        = nullptr;
+    struct ggml_tensor * wk_outlier_cols        = nullptr;
+    struct ggml_tensor * wk_outlier_vals        = nullptr;
+
+    struct ggml_tensor * wv_packed              = nullptr;
+    struct ggml_tensor * wv_page_scales         = nullptr;
+    struct ggml_tensor * wv_lane_scales         = nullptr;
+    struct ggml_tensor * wv_outlier_row_offsets        = nullptr;
+    struct ggml_tensor * wv_outlier_cols        = nullptr;
+    struct ggml_tensor * wv_outlier_vals        = nullptr;
+
+    struct ggml_tensor * wo_packed              = nullptr;
+    struct ggml_tensor * wo_page_scales         = nullptr;
+    struct ggml_tensor * wo_lane_scales         = nullptr;
+    struct ggml_tensor * wo_outlier_row_offsets        = nullptr;
+    struct ggml_tensor * wo_outlier_cols        = nullptr;
+    struct ggml_tensor * wo_outlier_vals        = nullptr;
+
+    struct ggml_tensor * wqkv_packed            = nullptr;
+    struct ggml_tensor * wqkv_page_scales       = nullptr;
+    struct ggml_tensor * wqkv_lane_scales       = nullptr;
+    struct ggml_tensor * wqkv_outlier_row_offsets      = nullptr;
+    struct ggml_tensor * wqkv_outlier_cols      = nullptr;
+    struct ggml_tensor * wqkv_outlier_vals      = nullptr;
+
+    struct ggml_tensor * wqkv_gate_packed       = nullptr;
+    struct ggml_tensor * wqkv_gate_page_scales  = nullptr;
+    struct ggml_tensor * wqkv_gate_lane_scales  = nullptr;
+    struct ggml_tensor * wqkv_gate_outlier_row_offsets = nullptr;
+    struct ggml_tensor * wqkv_gate_outlier_cols = nullptr;
+    struct ggml_tensor * wqkv_gate_outlier_vals = nullptr;
+
+    struct ggml_tensor * ssm_out_packed         = nullptr;
+    struct ggml_tensor * ssm_out_page_scales    = nullptr;
+    struct ggml_tensor * ssm_out_lane_scales    = nullptr;
+    struct ggml_tensor * ssm_out_outlier_row_offsets   = nullptr;
+    struct ggml_tensor * ssm_out_outlier_cols   = nullptr;
+    struct ggml_tensor * ssm_out_outlier_vals   = nullptr;
+
+    struct ggml_tensor * ffn_gate_shexp_packed     = nullptr;
+    struct ggml_tensor * ffn_gate_shexp_page_scales= nullptr;
+    struct ggml_tensor * ffn_gate_shexp_lane_scales= nullptr;
+    struct ggml_tensor * ffn_gate_shexp_outlier_row_offsets = nullptr;
+    struct ggml_tensor * ffn_gate_shexp_outlier_cols = nullptr;
+    struct ggml_tensor * ffn_gate_shexp_outlier_vals = nullptr;
+
+    struct ggml_tensor * ffn_up_shexp_packed       = nullptr;
+    struct ggml_tensor * ffn_up_shexp_page_scales  = nullptr;
+    struct ggml_tensor * ffn_up_shexp_lane_scales  = nullptr;
+    struct ggml_tensor * ffn_up_shexp_outlier_row_offsets = nullptr;
+    struct ggml_tensor * ffn_up_shexp_outlier_cols = nullptr;
+    struct ggml_tensor * ffn_up_shexp_outlier_vals = nullptr;
+
+    struct ggml_tensor * ffn_down_shexp_packed     = nullptr;
+    struct ggml_tensor * ffn_down_shexp_page_scales= nullptr;
+    struct ggml_tensor * ffn_down_shexp_lane_scales= nullptr;
+    struct ggml_tensor * ffn_down_shexp_outlier_row_offsets = nullptr;
+    struct ggml_tensor * ffn_down_shexp_outlier_cols = nullptr;
+    struct ggml_tensor * ffn_down_shexp_outlier_vals = nullptr;
+
+    // 3D Tile640 weights (MoE experts)
+    struct ggml_tensor * ffn_gate_up_exps_packed     = nullptr;
+    struct ggml_tensor * ffn_gate_up_exps_page_scales= nullptr;
+    struct ggml_tensor * ffn_gate_up_exps_lane_scales= nullptr;
+    struct ggml_tensor * ffn_gate_up_exps_outlier_row_offsets = nullptr;
+    struct ggml_tensor * ffn_gate_up_exps_outlier_cols = nullptr;
+    struct ggml_tensor * ffn_gate_up_exps_outlier_vals = nullptr;
+
+    struct ggml_tensor * ffn_down_exps_packed     = nullptr;
+    struct ggml_tensor * ffn_down_exps_page_scales= nullptr;
+    struct ggml_tensor * ffn_down_exps_lane_scales= nullptr;
+    struct ggml_tensor * ffn_down_exps_outlier_row_offsets = nullptr;
+    struct ggml_tensor * ffn_down_exps_outlier_cols = nullptr;
+    struct ggml_tensor * ffn_down_exps_outlier_vals = nullptr;
+
+    // AWQ per-channel input multipliers (F16, [in_dim]). Optional when no AWQ.
+    // The quantizer stores the inverse weight transform directly, so runtime
+    // applies `input = input * act_scale` before the Tile640 matmul.
+    struct ggml_tensor * wo_act_scale            = nullptr;
+    struct ggml_tensor * wq_act_scale            = nullptr;
+    struct ggml_tensor * wk_act_scale            = nullptr;
+    struct ggml_tensor * wv_act_scale            = nullptr;
+    struct ggml_tensor * wqkv_act_scale          = nullptr;
+    struct ggml_tensor * wqkv_gate_act_scale     = nullptr;
+    struct ggml_tensor * ssm_out_act_scale       = nullptr;
+    struct ggml_tensor * ffn_gate_shexp_act_scale= nullptr;
+    struct ggml_tensor * ffn_up_shexp_act_scale  = nullptr;
+    struct ggml_tensor * ffn_down_shexp_act_scale= nullptr;
+    struct ggml_tensor * ffn_gate_exps_act_scale = nullptr;
+    struct ggml_tensor * ffn_up_exps_act_scale   = nullptr;
+    struct ggml_tensor * ffn_gate_up_exps_act_scale = nullptr;
+    struct ggml_tensor * ffn_down_exps_act_scale = nullptr;
 };
 
 struct llama_device {
@@ -539,6 +655,20 @@ struct llama_meta_device_get_split_state_userdata {
 };
 
 struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const struct ggml_tensor * tensor, void * userdata);
+
+struct llama_tile640_tensor {
+    ggml_tensor * packed              = nullptr;
+    ggml_tensor * page_scales         = nullptr;
+    ggml_tensor * lane_scales         = nullptr;
+    ggml_tensor * outlier_row_offsets = nullptr;
+    ggml_tensor * outlier_cols        = nullptr;
+    ggml_tensor * outlier_vals        = nullptr;
+    std::array<int64_t, 4> ne         = { 1, 1, 1, 1 };
+    ggml_tensor * act_scale           = nullptr;
+    ggml_tensor * packed_base3        = nullptr;
+
+    bool valid() const { return packed != nullptr; }
+};
 
 struct llama_model {
     llm_type type = LLM_TYPE_UNKNOWN;
@@ -562,6 +692,8 @@ struct llama_model {
     struct ggml_tensor * output_norm_b   = nullptr;
     struct ggml_tensor * output          = nullptr;
     struct ggml_tensor * output_b        = nullptr;
+    struct ggml_tensor * output_attn_res_norm = nullptr;
+    struct ggml_tensor * output_attn_res_proj = nullptr;
     struct ggml_tensor * output_norm_enc = nullptr;
 
 
@@ -609,6 +741,10 @@ struct llama_model {
     std::vector<int32_t> target_layer_ids;
 
     std::vector<llama_layer> layers;
+
+    // Evolved Tile640 tensors without architecture-specific component fields.
+    // Keys are canonical GGUF tensor names such as token_embd.weight.
+    std::unordered_map<std::string, llama_tile640_tensor> tile640_tensors;
 
     //Dense linear projections for SentenceTransformers models like embeddinggemma
     // For Sentence Transformers models structure see
@@ -668,6 +804,7 @@ struct llama_model {
     bool has_tensor_overrides() const;
 
     const struct ggml_tensor * get_tensor(const char * name) const;
+    const llama_tile640_tensor * get_tile640_tensor(const std::string & name) const;
 
     float get_rope_freq_base (const llama_cparams & cparams, int il) const;
     float get_rope_freq_scale(const llama_cparams & cparams, int il) const;
@@ -719,6 +856,10 @@ struct llama_model_base : public llama_model {
 
     // convenience overload of create_tensor that doesn't require llama_model_loader
     ggml_tensor * create_tensor(const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags);
+    ggml_tensor * create_tensor_or_tile640(
+            const LLM_TN_IMPL & tn,
+            const std::initializer_list<int64_t> & ne,
+            int flags);
 
     // helper: try merged gate_up_exps first, fall back to separate gate and up
     void create_tensor_gate_up_exps(llama_layer & layer, int bid, int64_t n_embd_,

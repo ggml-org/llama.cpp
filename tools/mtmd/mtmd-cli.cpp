@@ -40,8 +40,8 @@ static volatile bool g_is_interrupted = false;
 static void show_additional_info(int /*argc*/, char ** argv) {
     LOG(
         "Experimental CLI for multimodal\n\n"
-        "Usage: %s [options] -m <model> --mmproj <mmproj> --image <image> --audio <audio> -p <prompt>\n\n"
-        "  -m and --mmproj are required\n"
+        "Usage: %s [options] -m <model> [--mmproj <mmproj>] --image <image> --audio <audio> -p <prompt>\n\n"
+        "  -m is required; --mmproj may be omitted when the model GGUF embeds the projector\n"
         "  -hf user/repo can replace both -m and --mmproj in most cases\n"
         "  --image, --audio and -p are optional, if NOT provided, the CLI will run in chat mode\n"
         "  to disable using GPU for mmproj model, add --no-mmproj-offload\n",
@@ -382,9 +382,18 @@ int main(int argc, char ** argv) {
 
     mtmd_helper_log_set(common_log_default_callback, nullptr);
 
+    if (params.mmproj.path.empty() && !params.no_mmproj) {
+        const mtmd_caps caps = mtmd_get_cap_from_file(params.model.path.c_str());
+        if (caps.inp_vision || caps.inp_audio) {
+            params.mmproj.path = params.model.path;
+            LOG_INF("%s: using multimodal tensors embedded in model GGUF: %s\n",
+                    __func__, params.model.path.c_str());
+        }
+    }
+
     if (params.mmproj.path.empty()) {
         show_additional_info(argc, argv);
-        LOG_ERR("ERR: Missing --mmproj argument\n");
+        LOG_ERR("ERR: Missing --mmproj argument and model GGUF has no embedded multimodal projector\n");
         return 1;
     }
 

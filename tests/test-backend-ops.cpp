@@ -6914,6 +6914,62 @@ struct test_flash_attn_ext : public test_case {
     }
 };
 
+// GGML_OP_TESSERA_PAGED_ATTN
+// Exercises a deliberately non-contiguous logical KV sequence.  The map is
+// part of the operation rather than a pre-gather step, so a backend only
+// passes this test if it consumes the physical cache rows directly.
+struct test_tessera_paged_attn : public test_case {
+    const ggml_type kv_type;
+    const bool v_trans;
+
+    explicit test_tessera_paged_attn(ggml_type kv_type = GGML_TYPE_F32, bool v_trans = false) : kv_type(kv_type), v_trans(v_trans) {}
+
+    std::string vars() override {
+        return std::string("kv_type=") + ggml_type_name(kv_type) + ",v_trans=" + (v_trans ? "true" : "false") + ",d=32,dv=24,nq=5,hq=4,hkv=2,n_logical=19,n_physical=37";
+    }
+
+    double max_nmse_err() override {
+        return kv_type == GGML_TYPE_F16 ? 2e-5 : 1e-6;
+    }
+
+    uint64_t op_flops(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return 2*32*5*4*19 + 2*24*5*4*19;
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 32, 5, 4, 1);
+        ggml_tensor * k = ggml_new_tensor_4d(ctx, kv_type, 32, 2, 37, 1);
+        ggml_tensor * v = v_trans
+            ? ggml_new_tensor_4d(ctx, kv_type, 37, 2, 24, 1)
+            : ggml_new_tensor_4d(ctx, kv_type, 24, 2, 37, 1);
+        ggml_tensor * map = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 19);
+        ggml_set_name(q, "tessera_paged_q");
+        ggml_set_name(k, "tessera_paged_k");
+        ggml_set_name(v, "tessera_paged_v");
+        ggml_set_name(map, "tessera_paged_map");
+
+        ggml_tensor * out = ggml_tessera_paged_attn(ctx, q, k, v, map, 1.0f/sqrtf(32.0f));
+        ggml_set_name(out, "out");
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "tessera_paged_map") == 0) {
+                // Includes both forward and backward jumps through the arena.
+                const std::array<int32_t, 19> map = {
+                    31, 4, 28, 1, 35, 9, 22, 6, 34, 12,
+                    0, 26, 17, 36, 3, 20, 8, 30, 14,
+                };
+                ggml_backend_tensor_set(t, map.data(), 0, map.size()*sizeof(map[0]));
+            } else if (strcmp(t->name, "out") != 0) {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
 // GGML_OP_CROSS_ENTROPY_LOSS
 struct test_cross_entropy_loss : public test_case {
     const ggml_type type;
@@ -7336,6 +7392,421 @@ struct test_lightning_indexer : public test_case {
                 init_tensor_kq_mask(t);
             } else {
                 init_tensor_uniform(t);
+            }
+        }
+    }
+};
+
+// GGML_OP_IMATRIX_OBSERVER
+struct test_imatrix_observer : public test_case {
+    const int64_t channels;
+    const int64_t tokens;
+    const int64_t experts;
+    const int64_t experts_used;
+    const bool f16;
+    const bool fused_cast;
+    const bool return_stats;
+
+    test_imatrix_observer(
+            int64_t channels = 64,
+            int64_t tokens = 32,
+            int64_t experts = 1,
+            int64_t experts_used = 0,
+            bool f16 = false,
+            bool fused_cast = false,
+            bool return_stats = false)
+        : channels(channels), tokens(tokens), experts(experts),
+          experts_used(experts_used), f16(f16),
+          fused_cast(fused_cast), return_stats(return_stats) {
+        GGML_ASSERT(experts > 0);
+        GGML_ASSERT(
+            (experts == 1 && experts_used == 0) ||
+            (experts > 1 && experts_used > 0 && experts_used <= experts));
+    }
+
+    std::string vars() override {
+        return VARS_TO_STR7(
+            channels, tokens, experts, experts_used,
+            f16, fused_cast, return_stats);
+    }
+
+    std::string op_desc(ggml_tensor * tensor) override {
+        if (tensor->op == GGML_OP_IMATRIX_OBSERVER) {
+            int32_t mode = 0;
+            memcpy(
+                &mode,
+                tensor->op_params + sizeof(int32_t),
+                sizeof(mode));
+            if (mode != 0) {
+                return "IMATRIX_STORAGE_INTERNAL";
+            }
+        }
+        return "IMATRIX_OBSERVER";
+    }
+
+    double max_nmse_err() override {
+        return 1e-6;
+    }
+
+    bool run_whole_graph() override {
+        return fused_cast;
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * activations = experts == 1
+            ? ggml_new_tensor_2d(ctx, f16 ? GGML_TYPE_F16 : GGML_TYPE_F32, channels, tokens)
+            : ggml_new_tensor_3d(ctx, f16 ? GGML_TYPE_F16 : GGML_TYPE_F32, channels, 1, tokens);
+        ggml_set_name(activations, "activations");
+        ggml_set_param(activations);
+        ggml_tensor * anchor = experts == 1
+            ? ggml_new_tensor_2d(ctx, GGML_TYPE_F32, channels, channels)
+            : ggml_new_tensor_3d(
+                ctx, GGML_TYPE_F32, channels, channels, experts);
+        ggml_set_name(anchor, "weight_anchor");
+        ggml_set_param(anchor);
+        ggml_tensor * ids = nullptr;
+        if (experts > 1) {
+            ids = ggml_new_tensor_2d(
+                ctx, GGML_TYPE_I32, experts_used, tokens);
+            ggml_set_name(ids, "expert_ids");
+        }
+        ggml_tensor * observer = nullptr;
+        if (fused_cast) {
+            ggml_tensor * stats = nullptr;
+            observer = ggml_imatrix_observer_cast(
+                ctx, activations, anchor, &stats);
+            if (return_stats) {
+                observer = stats;
+            }
+            observer = ggml_cont(ctx, observer);
+        } else {
+            observer = ggml_imatrix_observer(
+                ctx, activations, ids, anchor, experts);
+        }
+        ggml_set_name(observer, "observer");
+        return observer;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * tensor = ggml_get_first_tensor(ctx);
+             tensor != nullptr;
+             tensor = ggml_get_next_tensor(ctx, tensor)) {
+            if (tensor->type != GGML_TYPE_I32) {
+                init_tensor_uniform(tensor);
+                continue;
+            }
+            for (int64_t token = 0; token < tokens; ++token) {
+                std::vector<int32_t> ids(experts_used);
+                for (int64_t rank = 0; rank < experts_used; ++rank) {
+                    ids[rank] = (int32_t) ((token + rank) % experts);
+                }
+                ggml_backend_tensor_set(
+                    tensor,
+                    ids.data(),
+                    token * tensor->nb[1],
+                    ids.size() * sizeof(int32_t));
+            }
+        }
+    }
+};
+
+// GGML_OP_TILE640_MATMUL
+struct test_tile640_matmul : public test_case {
+    const int64_t in_dim;
+    const int64_t out_dim;
+    const int64_t tokens;
+    const int64_t batches;
+    const int64_t seqs;
+    const bool packed2;
+    const bool input_f32;
+
+    test_tile640_matmul(
+            int64_t in_dim = 641,
+            int64_t out_dim = 13,
+            int64_t tokens = 9,
+            int64_t batches = 1,
+            int64_t seqs = 1,
+            bool packed2 = false,
+            bool input_f32 = false)
+        : in_dim(in_dim), out_dim(out_dim), tokens(tokens),
+          batches(batches), seqs(seqs), packed2(packed2),
+          input_f32(input_f32) {}
+
+    std::string vars() override {
+        return VARS_TO_STR7(
+            in_dim, out_dim, tokens, batches, seqs, packed2, input_f32);
+    }
+
+    double max_nmse_err() override {
+        return 1e-6;
+    }
+
+    uint64_t op_flops(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return 2ULL * in_dim * out_dim * tokens * batches * seqs;
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        const int64_t pages = (in_dim + 639) / 640;
+        const int64_t words = out_dim * pages * (packed2 ? 40 : 32);
+        const int64_t outliers = out_dim * 2;
+
+        ggml_tensor * packed = ggml_new_tensor_1d(
+            ctx, GGML_TYPE_I32, words);
+        ggml_tensor * page_scales = ggml_new_tensor_1d(
+            ctx, GGML_TYPE_F16, out_dim * pages);
+        ggml_tensor * lane_scales = ggml_new_tensor_1d(
+            ctx, GGML_TYPE_I8, out_dim * pages * 32);
+        ggml_tensor * offsets = ggml_new_tensor_1d(
+            ctx, GGML_TYPE_I32, out_dim + 1);
+        ggml_tensor * cols = ggml_new_tensor_1d(
+            ctx, GGML_TYPE_I32, outliers);
+        ggml_tensor * vals = ggml_new_tensor_1d(
+            ctx, GGML_TYPE_F16, outliers);
+        ggml_tensor * activations = ggml_new_tensor_4d(
+            ctx, input_f32 ? GGML_TYPE_F32 : GGML_TYPE_F16,
+            in_dim, tokens, batches, seqs);
+
+        ggml_set_name(packed, "tile640_packed");
+        ggml_set_name(page_scales, "tile640_page_scales");
+        ggml_set_name(lane_scales, "tile640_lane_scales");
+        ggml_set_name(offsets, "tile640_offsets");
+        ggml_set_name(cols, "tile640_cols");
+        ggml_set_name(vals, "tile640_vals");
+        ggml_set_name(activations, "tile640_activations");
+
+        ggml_tensor * out = ggml_tile640_matmul(
+            ctx, packed, page_scales, lane_scales, offsets, cols, vals,
+            activations);
+        ggml_set_name(out, "out");
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * tensor = ggml_get_first_tensor(ctx);
+             tensor != nullptr;
+             tensor = ggml_get_next_tensor(ctx, tensor)) {
+            const int64_t count = ggml_nelements(tensor);
+            if (strcmp(tensor->name, "tile640_packed") == 0) {
+                std::vector<uint32_t> values(count);
+                if (packed2) {
+                    for (int64_t i = 0; i < count; ++i) {
+                        uint32_t word = 0;
+                        for (int digit = 0; digit < 16; ++digit) {
+                            word |= (uint32_t) ((i + digit) % 3)
+                                << (2 * digit);
+                        }
+                        values[i] = word;
+                    }
+                } else {
+                    for (int64_t i = 0; i < count; ++i) {
+                        values[i] = 3486784400u / (uint32_t) (1 + i % 7);
+                    }
+                }
+                ggml_backend_tensor_set(
+                    tensor, values.data(), 0, values.size() * sizeof(values[0]));
+            } else if (strcmp(tensor->name, "tile640_page_scales") == 0) {
+                std::vector<ggml_fp16_t> values(count);
+                for (int64_t i = 0; i < count; ++i) {
+                    values[i] = ggml_fp32_to_fp16(0.05f + 0.01f * (i % 11));
+                }
+                ggml_backend_tensor_set(
+                    tensor, values.data(), 0, values.size() * sizeof(values[0]));
+            } else if (strcmp(tensor->name, "tile640_lane_scales") == 0) {
+                std::vector<int8_t> values(count);
+                for (int64_t i = 0; i < count; ++i) {
+                    values[i] = (int8_t) (1 + i % 127);
+                }
+                ggml_backend_tensor_set(
+                    tensor, values.data(), 0, values.size() * sizeof(values[0]));
+            } else if (strcmp(tensor->name, "tile640_offsets") == 0) {
+                std::vector<int32_t> values(count);
+                for (int64_t i = 0; i < count; ++i) {
+                    values[i] = (int32_t) (2 * i);
+                }
+                ggml_backend_tensor_set(
+                    tensor, values.data(), 0, values.size() * sizeof(values[0]));
+            } else if (strcmp(tensor->name, "tile640_cols") == 0) {
+                std::vector<int32_t> values(count);
+                for (int64_t i = 0; i < count; ++i) {
+                    values[i] = (int32_t) ((i * 97 + 3) % in_dim);
+                }
+                ggml_backend_tensor_set(
+                    tensor, values.data(), 0, values.size() * sizeof(values[0]));
+            } else if (strcmp(tensor->name, "tile640_vals") == 0) {
+                std::vector<ggml_fp16_t> values(count);
+                for (int64_t i = 0; i < count; ++i) {
+                    values[i] = ggml_fp32_to_fp16(
+                        (i & 1 ? -1.0f : 1.0f) * (0.01f + 0.001f * (i % 13)));
+                }
+                ggml_backend_tensor_set(
+                    tensor, values.data(), 0, values.size() * sizeof(values[0]));
+            } else if (strcmp(tensor->name, "tile640_activations") == 0) {
+                if (input_f32) {
+                    std::vector<float> values(count);
+                    for (int64_t i = 0; i < count; ++i) {
+                        values[i] =
+                            ((int32_t) (i % 29) - 14) * (1.0f / 16.0f);
+                    }
+                    ggml_backend_tensor_set(
+                        tensor, values.data(), 0,
+                        values.size() * sizeof(values[0]));
+                } else {
+                    std::vector<ggml_fp16_t> values(count);
+                    for (int64_t i = 0; i < count; ++i) {
+                        values[i] = ggml_fp32_to_fp16(
+                            ((int32_t) (i % 29) - 14) * (1.0f / 16.0f));
+                    }
+                    ggml_backend_tensor_set(
+                        tensor, values.data(), 0,
+                        values.size() * sizeof(values[0]));
+                }
+            }
+        }
+    }
+};
+
+// GGML_OP_TILE640_MATMUL_ID.  This is deliberately separate from the dense
+// case: the expert weights and CSR offsets are laid out per expert and the
+// input's second dimension is the broadcast dimension used by routed FFNs.
+// Keep decode and prompt-sized routed batches in the backend suite so a
+// Tile640 phase specialization cannot silently regress MoE correctness.
+struct test_tile640_matmul_id : public test_case {
+    const int64_t in_dim;
+    const int64_t out_dim;
+    const int64_t experts;
+    const int64_t experts_used;
+    const int64_t tokens;
+    const int64_t broadcast;
+    const bool per_expert_act_scale;
+
+    test_tile640_matmul_id(
+            int64_t in_dim = 641,
+            int64_t out_dim = 13,
+            int64_t experts = 4,
+            int64_t experts_used = 2,
+            int64_t tokens = 9,
+            int64_t broadcast = 2,
+            bool per_expert_act_scale = false)
+        : in_dim(in_dim), out_dim(out_dim), experts(experts),
+          experts_used(experts_used), tokens(tokens), broadcast(broadcast),
+          per_expert_act_scale(per_expert_act_scale) {}
+
+    std::string vars() override {
+        return VARS_TO_STR7(
+            in_dim, out_dim, experts, experts_used, tokens, broadcast,
+            per_expert_act_scale);
+    }
+
+    double max_nmse_err() override {
+        return 1e-6;
+    }
+
+    uint64_t op_flops(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return 2ULL * in_dim * out_dim * experts_used * tokens;
+    }
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        const int64_t pages = (in_dim + 639) / 640;
+        const int64_t rows = experts * out_dim;
+        const int64_t outliers = rows * 2;
+        ggml_tensor * packed = ggml_new_tensor_1d(ctx, GGML_TYPE_I32,
+            rows * pages * 32);
+        ggml_tensor * page_scales = ggml_new_tensor_1d(ctx, GGML_TYPE_F16,
+            rows * pages);
+        ggml_tensor * lane_scales = ggml_new_tensor_1d(ctx, GGML_TYPE_I8,
+            rows * pages * 32);
+        ggml_tensor * offsets = ggml_new_tensor_1d(ctx, GGML_TYPE_I32,
+            experts * (out_dim + 1));
+        ggml_tensor * cols = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, outliers);
+        ggml_tensor * vals = ggml_new_tensor_1d(ctx, GGML_TYPE_F16, outliers);
+        ggml_tensor * activations = ggml_new_tensor_3d(ctx, GGML_TYPE_F16,
+            in_dim, broadcast, tokens);
+        ggml_tensor * ids = ggml_new_tensor_2d(ctx, GGML_TYPE_I32,
+            experts_used, tokens);
+        ggml_tensor * act_scale = ggml_new_tensor_1d(ctx, GGML_TYPE_F16,
+            per_expert_act_scale ? in_dim * experts : in_dim);
+
+        ggml_set_name(packed, "tile640_id_packed");
+        ggml_set_name(page_scales, "tile640_id_page_scales");
+        ggml_set_name(lane_scales, "tile640_id_lane_scales");
+        ggml_set_name(offsets, "tile640_id_offsets");
+        ggml_set_name(cols, "tile640_id_cols");
+        ggml_set_name(vals, "tile640_id_vals");
+        ggml_set_name(activations, "tile640_id_activations");
+        ggml_set_name(ids, "tile640_id_ids");
+        ggml_set_name(act_scale, "tile640_id_act_scale");
+
+        ggml_tensor * out = ggml_tile640_matmul_id(
+            ctx, packed, page_scales, lane_scales, offsets, cols, vals,
+            activations, ids, act_scale, out_dim);
+        ggml_set_name(out, "out");
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * tensor = ggml_get_first_tensor(ctx);
+             tensor != nullptr;
+             tensor = ggml_get_next_tensor(ctx, tensor)) {
+            const int64_t count = ggml_nelements(tensor);
+            if (strcmp(tensor->name, "tile640_id_packed") == 0) {
+                std::vector<uint32_t> values(count);
+                for (int64_t i = 0; i < count; ++i) {
+                    values[i] = 3486784400u / (uint32_t) (1 + i % 7);
+                }
+                ggml_backend_tensor_set(tensor, values.data(), 0,
+                    values.size() * sizeof(values[0]));
+            } else if (strcmp(tensor->name, "tile640_id_page_scales") == 0 ||
+                       strcmp(tensor->name, "tile640_id_act_scale") == 0) {
+                std::vector<ggml_fp16_t> values(count);
+                for (int64_t i = 0; i < count; ++i) {
+                    values[i] = ggml_fp32_to_fp16(0.05f + 0.01f * (i % 11));
+                }
+                ggml_backend_tensor_set(tensor, values.data(), 0,
+                    values.size() * sizeof(values[0]));
+            } else if (strcmp(tensor->name, "tile640_id_lane_scales") == 0) {
+                std::vector<int8_t> values(count);
+                for (int64_t i = 0; i < count; ++i) values[i] = (int8_t) (1 + i % 127);
+                ggml_backend_tensor_set(tensor, values.data(), 0,
+                    values.size() * sizeof(values[0]));
+            } else if (strcmp(tensor->name, "tile640_id_offsets") == 0) {
+                std::vector<int32_t> values(count);
+                for (int64_t expert = 0; expert < experts; ++expert) {
+                    for (int64_t row = 0; row <= out_dim; ++row) {
+                        values[expert * (out_dim + 1) + row] =
+                            (int32_t) (expert * out_dim * 2 + row * 2);
+                    }
+                }
+                ggml_backend_tensor_set(tensor, values.data(), 0,
+                    values.size() * sizeof(values[0]));
+            } else if (strcmp(tensor->name, "tile640_id_cols") == 0) {
+                std::vector<int32_t> values(count);
+                for (int64_t i = 0; i < count; ++i) values[i] = (int32_t) ((i * 97 + 3) % in_dim);
+                ggml_backend_tensor_set(tensor, values.data(), 0,
+                    values.size() * sizeof(values[0]));
+            } else if (strcmp(tensor->name, "tile640_id_vals") == 0) {
+                std::vector<ggml_fp16_t> values(count);
+                for (int64_t i = 0; i < count; ++i) values[i] = ggml_fp32_to_fp16(
+                    (i & 1 ? -1.0f : 1.0f) * (0.01f + 0.001f * (i % 13)));
+                ggml_backend_tensor_set(tensor, values.data(), 0,
+                    values.size() * sizeof(values[0]));
+            } else if (strcmp(tensor->name, "tile640_id_activations") == 0) {
+                std::vector<ggml_fp16_t> values(count);
+                for (int64_t i = 0; i < count; ++i) values[i] = ggml_fp32_to_fp16(
+                    ((int32_t) (i % 29) - 14) * (1.0f / 16.0f));
+                ggml_backend_tensor_set(tensor, values.data(), 0,
+                    values.size() * sizeof(values[0]));
+            } else if (strcmp(tensor->name, "tile640_id_ids") == 0) {
+                std::vector<int32_t> values(count);
+                for (int64_t token = 0; token < tokens; ++token) {
+                    for (int64_t rank = 0; rank < experts_used; ++rank) {
+                        values[token * experts_used + rank] =
+                            (int32_t) ((token + rank) % experts);
+                    }
+                }
+                ggml_backend_tensor_set(tensor, values.data(), 0,
+                    values.size() * sizeof(values[0]));
             }
         }
     }
@@ -9543,6 +10014,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_flash_attn_ext(128, 64, 4, {1, 1}, 128, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q1_0, GGML_TYPE_Q4_0));
     test_cases.emplace_back(new test_flash_attn_ext(64, 128, 4, {1, 1}, 128, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q1_0));
     test_cases.emplace_back(new test_flash_attn_ext(128, 64, 4, {1, 1}, 64, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q1_0, GGML_TYPE_F16));
+    // Dense Gemma-style host-backed prefill attention for the Accelerate backend.
+    test_cases.emplace_back(new test_flash_attn_ext(256, 256, 8, {2, 1}, 128, 64, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F32, GGML_TYPE_F32));
+    test_cases.emplace_back(new test_tessera_paged_attn(GGML_TYPE_F32));
+    test_cases.emplace_back(new test_tessera_paged_attn(GGML_TYPE_F16));
+    test_cases.emplace_back(new test_tessera_paged_attn(GGML_TYPE_F32, true));
+    test_cases.emplace_back(new test_tessera_paged_attn(GGML_TYPE_F16, true));
 
     test_cases.emplace_back(new test_cross_entropy_loss     (GGML_TYPE_F32, {   10, 5, 4, 3}));
     test_cases.emplace_back(new test_cross_entropy_loss     (GGML_TYPE_F32, {30000, 1, 1, 1}));
@@ -9670,6 +10147,37 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             }
         }
     }
+
+    test_cases.emplace_back(new test_imatrix_observer(64, 32));
+    test_cases.emplace_back(new test_imatrix_observer(384, 128));
+    test_cases.emplace_back(new test_imatrix_observer(64, 32, 8, 2));
+    test_cases.emplace_back(new test_imatrix_observer(384, 128, 64, 8));
+    test_cases.emplace_back(new test_imatrix_observer(384, 128, 1, 0, true));
+    test_cases.emplace_back(new test_imatrix_observer(384, 128, 64, 8, true));
+    test_cases.emplace_back(new test_imatrix_observer(384, 512));
+    test_cases.emplace_back(new test_imatrix_observer(384, 512, 1, 0, true));
+    test_cases.emplace_back(new test_imatrix_observer(
+        384, 128, 1, 0, false, true, false));
+    test_cases.emplace_back(new test_imatrix_observer(
+        384, 128, 1, 0, false, true, true));
+    // Exercises the SIMD-group fused cast/observer epilogue selected for
+    // long prompt chunks.
+    test_cases.emplace_back(new test_imatrix_observer(
+        384, 512, 1, 0, false, true, true));
+    test_cases.emplace_back(new test_tile640_matmul(640, 13, 1));
+    test_cases.emplace_back(new test_tile640_matmul(641, 13, 7));
+    test_cases.emplace_back(new test_tile640_matmul(641, 13, 8));
+    test_cases.emplace_back(new test_tile640_matmul(641, 13, 9));
+    test_cases.emplace_back(new test_tile640_matmul(641, 13, 17, 2, 2));
+    test_cases.emplace_back(new test_tile640_matmul(640, 13, 8, 1, 1, true));
+    test_cases.emplace_back(new test_tile640_matmul(641, 13, 17, 2, 2, true));
+    test_cases.emplace_back(new test_tile640_matmul(640, 13, 8, 1, 1, false, true));
+    test_cases.emplace_back(new test_tile640_matmul(641, 13, 17, 2, 2, true, true));
+    // Routed Tile640 FFN: one-token decode, multi-token prefill, and the
+    // per-expert activation-scale layout used by refined MoE quantization.
+    test_cases.emplace_back(new test_tile640_matmul_id(640, 13, 4, 2, 1, 2));
+    test_cases.emplace_back(new test_tile640_matmul_id(641, 13, 4, 2, 9, 2));
+    test_cases.emplace_back(new test_tile640_matmul_id(641, 13, 4, 3, 17, 3, true));
 
     return test_cases;
 }
@@ -9872,6 +10380,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     // Qwen3-VL-8B https://github.com/ggml-org/llama.cpp/issues/17012
     test_cases.emplace_back(new test_flash_attn_ext(72, 72, 16, {1, 1}, 5776, 5776, false, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
 
+    // Gemma 4 sliding-window prefill shape with host-backed F32 K/V.
+    test_cases.emplace_back(new test_flash_attn_ext(256, 256, 8, {2, 1}, 1024, 128, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F32, GGML_TYPE_F32));
+
     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 8, {8, 1}, 7680, 1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 8, {8, 1}, 7680, 4, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 8, {8, 1}, 7680,   1, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q4_0));
@@ -9999,6 +10510,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 128, 512, 1));  // 4h PP-512
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 4, 128, 1024, 1)); // 4h PP-1024
     test_cases.emplace_back(new test_gated_delta_net(GGML_TYPE_F32, 32, 128, 64, 1, 1, false, true)); // KDA PP-64
+
+    // Tessera Tile640 phase probes.  Keep decode and prefill separate: the
+    // dense path uses a smaller threadgroup for a single-token decode, while
+    // routed MoE keeps one row/expert workgroup and scales in the grid.
+    test_cases.emplace_back(new test_tile640_matmul(2048, 2048, 1));
+    test_cases.emplace_back(new test_tile640_matmul(2048, 2048, 128));
+    test_cases.emplace_back(new test_tile640_matmul_id(2048, 2048, 8, 2, 1, 2));
+    test_cases.emplace_back(new test_tile640_matmul_id(2048, 2048, 8, 2, 128, 2));
 
     // lightning_indexer
     for (int kv : { 256, 4096, 65536 }) {

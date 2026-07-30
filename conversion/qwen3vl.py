@@ -21,6 +21,12 @@ class Qwen3VLVisionModel(MmprojModel):
             logger.info("No vision config found, skipping vision tensor processing")
             return
 
+        # Some Qwen3.5/3.6 community checkpoints ship the vision configuration
+        # and weights but omit preprocessor_config.json. Qwen's vision tower
+        # uses the standard OpenAI CLIP normalization constants.
+        self.preprocessor_config.setdefault("image_mean", [0.48145466, 0.4578275, 0.40821073])
+        self.preprocessor_config.setdefault("image_std",  [0.26862954, 0.26130258, 0.27577711])
+
         # Compute image_size if not present
         if "image_size" not in self.hparams_vision:
             # For Qwen3VL/Qwen3VLMoe, compute from num_position_embeddings

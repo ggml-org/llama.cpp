@@ -5,6 +5,7 @@
 
 #include <future>
 #include <vector>
+#include <cmath>
 #include <cstring>
 
 #if defined(GGML_BLAS_USE_ACCELERATE)
@@ -209,6 +210,116 @@ static void ggml_backend_blas_out_prod(ggml_backend_blas_context * ctx, struct g
     GGML_UNUSED(ctx);
 }
 
+#if defined(GGML_BLAS_USE_ACCELERATE)
+// Coarse host-backed attention path for large prefill batches. Keeping QK,
+// masked softmax, and AV inside one backend operation avoids bouncing the
+// score matrix across the Metal/CPU boundary.
+static void ggml_backend_blas_flash_attn_ext(
+        ggml_backend_blas_context * ctx,
+        struct ggml_tensor * dst) {
+    const ggml_tensor * q = dst->src[0];
+    const ggml_tensor * k = dst->src[1];
+    const ggml_tensor * v = dst->src[2];
+    const ggml_tensor * mask = dst->src[3];
+
+    const int64_t dk = q->ne[0];
+    const int64_t nq = q->ne[1];
+    const int64_t nhq = q->ne[2];
+    const int64_t nbatch = q->ne[3];
+    const int64_t nkv = k->ne[1];
+    const int64_t nhk = k->ne[2];
+    const int64_t dv = v->ne[0];
+    const int64_t nhv = v->ne[2];
+
+    float scale;
+    float max_bias;
+    float logit_softcap;
+    std::memcpy(&scale, dst->op_params + 0 * sizeof(float), sizeof(float));
+    std::memcpy(&max_bias, dst->op_params + 1 * sizeof(float), sizeof(float));
+    std::memcpy(&logit_softcap, dst->op_params + 2 * sizeof(float), sizeof(float));
+
+    const size_t scores_count = (size_t) nq * nkv;
+    const size_t output_count = (size_t) nq * dv;
+    const size_t required = (scores_count + output_count) * sizeof(float);
+    if (ctx->work_size < required) {
+        ctx->work_data.reset(new char[required]);
+        ctx->work_size = required;
+    }
+    float * scores = (float *) ctx->work_data.get();
+    float * output = scores + scores_count;
+
+    const uint32_t n_head_log2 =
+        1u << (uint32_t) std::floor(std::log2((double) nhq));
+    const float m0 = std::pow(2.0f, -max_bias / n_head_log2);
+    const float m1 = std::pow(2.0f, -(max_bias / 2.0f) / n_head_log2);
+
+    for (int64_t ib = 0; ib < nbatch; ++ib) {
+        for (int64_t ih = 0; ih < nhq; ++ih) {
+            const int64_t ikh = ih / (nhq / nhk);
+            const int64_t ivh = ih / (nhq / nhv);
+            const float * q_data = (const float *)
+                ((const char *) q->data + ih*q->nb[2] + ib*q->nb[3]);
+            const float * k_data = (const float *)
+                ((const char *) k->data + ikh*k->nb[2] +
+                 (ib % k->ne[3])*k->nb[3]);
+            const float * v_data = (const float *)
+                ((const char *) v->data + ivh*v->nb[2] +
+                 (ib % v->ne[3])*v->nb[3]);
+
+            cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                    (int) nq, (int) nkv, (int) dk,
+                    scale, q_data, (int) dk, k_data, (int) dk,
+                    0.0f, scores, (int) nkv);
+
+            const float slope = max_bias > 0.0f
+                ? (ih < n_head_log2
+                    ? std::pow(m0, (float) ih + 1.0f)
+                    : std::pow(m1, (float) (2*(ih - n_head_log2) + 1)))
+                : 1.0f;
+            for (int64_t iq = 0; iq < nq; ++iq) {
+                float * row = scores + iq*nkv;
+                const ggml_fp16_t * mask_row = mask
+                    ? (const ggml_fp16_t *) ((const char *) mask->data +
+                        iq*mask->nb[1] + (ih % mask->ne[2])*mask->nb[2] +
+                        (ib % mask->ne[3])*mask->nb[3])
+                    : nullptr;
+                for (int64_t ik = 0; ik < nkv; ++ik) {
+                    if (logit_softcap != 0.0f) {
+                        row[ik] = logit_softcap *
+                            std::tanh(row[ik] / logit_softcap);
+                    }
+                    if (mask_row) {
+                        row[ik] += slope * ggml_fp16_to_fp32(mask_row[ik]);
+                    }
+                }
+                float maximum;
+                vDSP_maxv(row, 1, &maximum, (vDSP_Length) nkv);
+                const float negative_maximum = -maximum;
+                vDSP_vsadd(row, 1, &negative_maximum, row, 1,
+                        (vDSP_Length) nkv);
+                int length = (int) nkv;
+                vvexpf(row, row, &length);
+                float sum;
+                vDSP_sve(row, 1, &sum, (vDSP_Length) nkv);
+                const float inverse_sum = sum > 0.0f ? 1.0f/sum : 0.0f;
+                vDSP_vsmul(row, 1, &inverse_sum, row, 1,
+                        (vDSP_Length) nkv);
+            }
+
+            cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+                    (int) nq, (int) dv, (int) nkv,
+                    1.0f, scores, (int) nkv, v_data, (int) dv,
+                    0.0f, output, (int) dv);
+            for (int64_t iq = 0; iq < nq; ++iq) {
+                std::memcpy((char *) dst->data +
+                            ih*dst->nb[1] + iq*dst->nb[2] + ib*dst->nb[3],
+                        output + iq*dv, dv*sizeof(float));
+            }
+        }
+    }
+}
+#endif
+
 // backend interface
 
 static const char * ggml_backend_blas_get_name(ggml_backend_t backend) {
@@ -241,6 +352,12 @@ static enum ggml_status ggml_backend_blas_graph_compute(ggml_backend_t backend, 
             case GGML_OP_OUT_PROD:
                 ggml_backend_blas_out_prod(ctx, node);
                 break;
+
+#if defined(GGML_BLAS_USE_ACCELERATE)
+            case GGML_OP_FLASH_ATTN_EXT:
+                ggml_backend_blas_flash_attn_ext(ctx, node);
+                break;
+#endif
 
             case GGML_OP_NONE:
             case GGML_OP_RESHAPE:
@@ -437,6 +554,40 @@ static bool ggml_backend_blas_device_supports_op(ggml_backend_dev_t dev, const s
                    ggml_is_contiguous(src0) &&
                    (ggml_is_contiguous(src1) || ggml_is_transposed(src1)) &&
                    (src0->type == GGML_TYPE_F32 || ggml_get_type_traits(src0->type)->to_float != NULL);
+
+#if defined(GGML_BLAS_USE_ACCELERATE)
+        case GGML_OP_FLASH_ATTN_EXT:
+        {
+            const ggml_tensor * q = op->src[0];
+            const ggml_tensor * k = op->src[1];
+            const ggml_tensor * v = op->src[2];
+            const ggml_tensor * mask = op->src[3];
+            float max_bias;
+            std::memcpy(&max_bias,
+                    op->op_params + sizeof(float), sizeof(float));
+            // Start conservatively: dense F32 prefill, ordinary F16 masks,
+            // no attention sinks, and matrices large enough to amortize the
+            // single backend boundary.
+            return q && k && v &&
+                   q->type == GGML_TYPE_F32 &&
+                   k->type == GGML_TYPE_F32 &&
+                   v->type == GGML_TYPE_F32 &&
+                   max_bias == 0.0f &&
+                   (!mask || (mask->type == GGML_TYPE_F16 &&
+                              ggml_is_contiguous(mask))) &&
+                   op->src[4] == nullptr &&
+                   q->nb[0] == sizeof(float) &&
+                   q->nb[1] == (size_t) q->ne[0]*sizeof(float) &&
+                   k->nb[0] == sizeof(float) &&
+                   k->nb[1] == (size_t) k->ne[0]*sizeof(float) &&
+                   v->nb[0] == sizeof(float) &&
+                   v->nb[1] == (size_t) v->ne[0]*sizeof(float) &&
+                   q->ne[1] >= 32 &&
+                   k->ne[1] >= 32 &&
+                   q->ne[2] % k->ne[2] == 0 &&
+                   q->ne[2] % v->ne[2] == 0;
+        }
+#endif
 
         default:
             return false;

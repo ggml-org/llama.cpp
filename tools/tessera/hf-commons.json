@@ -1,0 +1,8 @@
+{
+  "schema": "llama.tessera.hf-evidence-config.v1",
+  "repo_id": "juliantorr/tessera-calibration-commons",
+  "repo_type": "dataset",
+  "revision": "main",
+  "privacy": "aggregate-only",
+  "bootstrap": "before-calibration"
+}

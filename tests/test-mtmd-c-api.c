@@ -27,6 +27,34 @@ int main(void) {
     printf("Number of chunks: %zu\n", n_chunks);
     assert(n_chunks > 0);
 
+    mtmd_prompt_plan * plan = mtmd_prompt_plan_init(chunks);
+    if (plan == NULL ||
+            !mtmd_prompt_plan_validate(plan) ||
+            mtmd_prompt_plan_get_n_spans(plan) != n_chunks ||
+            mtmd_prompt_plan_get_n_tokens(plan) != n_tokens_total ||
+            mtmd_prompt_plan_get_n_positions(plan) == 0 ||
+            mtmd_prompt_plan_get_modality_mask(plan) != 1 ||
+            mtmd_prompt_plan_get_attention_layout(plan) != MTMD_ATTENTION_LAYOUT_MULTIMODAL_PREFILL) {
+        fprintf(stderr, "Invalid multimodal prompt plan\n");
+        mtmd_prompt_plan_free(plan);
+        mtmd_input_chunks_free(chunks);
+        return 2;
+    }
+    for (size_t i = 0; i < n_chunks; ++i) {
+        struct mtmd_prompt_span span;
+        if (!mtmd_prompt_plan_get_span(plan, i, &span) ||
+                span.token_length == 0 ||
+                span.decoder_position_length == 0) {
+            fprintf(stderr, "Invalid multimodal prompt span %zu\n", i);
+            mtmd_prompt_plan_free(plan);
+            mtmd_input_chunks_free(chunks);
+            return 3;
+        }
+        printf("Plan span %zu: tokens=%u positions=%u\n",
+               i, span.token_length, span.decoder_position_length);
+    }
+    mtmd_prompt_plan_free(plan);
+
     for (size_t i = 0; i < n_chunks; i++) {
         const mtmd_input_chunk * chunk = mtmd_input_chunks_get(chunks, i);
         assert(chunk != NULL);

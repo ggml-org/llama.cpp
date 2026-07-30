@@ -414,6 +414,10 @@ class TensorNameMap:
             "layers.{bid}.mlp_norm"                                          # modern-bert
         ),
 
+        MODEL_TENSOR.FFN_NORM_EXP: (
+            "model.layers.{bid}.block_sparse_moe.routed_expert_norm",        # kimi k3
+        ),
+
         # Pre feed-forward norm
         MODEL_TENSOR.FFN_PRE_NORM: (
             "model.layers.{bid}.pre_feedforward_layernorm", # gemma2
@@ -611,10 +615,31 @@ class TensorNameMap:
 
         MODEL_TENSOR.MOE_LATENT_DOWN: (
             "backbone.layers.{bid}.mixer.fc1_latent_proj",                 # nemotron 3 super
+            "model.layers.{bid}.block_sparse_moe.routed_expert_down_proj", # kimi k3
         ),
 
         MODEL_TENSOR.MOE_LATENT_UP: (
             "backbone.layers.{bid}.mixer.fc2_latent_proj",                 # nemotron 3 super
+            "model.layers.{bid}.block_sparse_moe.routed_expert_up_proj",   # kimi k3
+        ),
+
+        MODEL_TENSOR.ATTN_RES_NORM: (
+            "model.layers.{bid}.self_attention_res_norm",
+        ),
+        MODEL_TENSOR.ATTN_RES_PROJ: (
+            "model.layers.{bid}.self_attention_res_proj",
+        ),
+        MODEL_TENSOR.FFN_RES_NORM: (
+            "model.layers.{bid}.mlp_res_norm",
+        ),
+        MODEL_TENSOR.FFN_RES_PROJ: (
+            "model.layers.{bid}.mlp_res_proj",
+        ),
+        MODEL_TENSOR.OUTPUT_ATTN_RES_NORM: (
+            "model.output_attn_res_norm",
+        ),
+        MODEL_TENSOR.OUTPUT_ATTN_RES_PROJ: (
+            "model.output_attn_res_proj",
         ),
 
         # Feed-forward down

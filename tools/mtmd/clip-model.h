@@ -8,6 +8,8 @@
 #include <array>
 #include <vector>
 #include <unordered_set>
+#include <unordered_map>
+#include <string>
 #include <cstdint>
 #include <cmath>
 
@@ -347,10 +349,23 @@ struct qf_block {
     std::vector<clip_layer> qf_proj_layers;
 };
 
+struct clip_tile640_tensor {
+    ggml_tensor * descriptor          = nullptr;
+    ggml_tensor * packed              = nullptr;
+    ggml_tensor * page_scales         = nullptr;
+    ggml_tensor * lane_scales         = nullptr;
+    ggml_tensor * outlier_row_offsets = nullptr;
+    ggml_tensor * outlier_cols        = nullptr;
+    ggml_tensor * outlier_vals        = nullptr;
+    std::array<int64_t, 4> ne         = { 1, 1, 1, 1 };
+    std::array<int64_t, 4> matrix_ne  = { 1, 1, 1, 1 };
+};
+
 struct clip_model {
     clip_modality modality = CLIP_MODALITY_VISION;
     projector_type proj_type = PROJECTOR_TYPE_MLP;
     clip_hparams hparams;
+    std::unordered_map<const ggml_tensor *, clip_tile640_tensor> tile640_tensors;
 
     // embeddings
     ggml_tensor * class_embedding = nullptr;

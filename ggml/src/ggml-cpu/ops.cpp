@@ -8,6 +8,8 @@
 #include "unary-ops.h"
 #include "vec.h"
 
+#include <vector>
+
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
@@ -9216,6 +9218,94 @@ void ggml_compute_forward_flash_attn_ext(
     }
 }
 
+void ggml_compute_forward_tessera_paged_attn(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const ggml_tensor * q        = dst->src[0];
+    const ggml_tensor * k        = dst->src[1];
+    const ggml_tensor * v        = dst->src[2];
+    const ggml_tensor * page_map = dst->src[3];
+
+    GGML_ASSERT(q->type == GGML_TYPE_F32);
+    GGML_ASSERT(k->type == GGML_TYPE_F32 || k->type == GGML_TYPE_F16);
+    GGML_ASSERT(v->type == GGML_TYPE_F32 || v->type == GGML_TYPE_F16);
+    GGML_ASSERT(page_map->type == GGML_TYPE_I32);
+    GGML_ASSERT(q->ne[0] == k->ne[0]);
+    const bool v_trans = ggml_get_op_params_i32(dst, 1) != 0;
+    GGML_ASSERT(v->ne[1] == k->ne[1] && v->ne[3] == k->ne[3]);
+    GGML_ASSERT(v_trans ? v->ne[0] == k->ne[2] : v->ne[2] == k->ne[2]);
+    GGML_ASSERT(q->ne[2] % k->ne[1] == 0 && page_map->ne[1] == q->ne[3]);
+    GGML_ASSERT(dst->ne[0] == (v_trans ? v->ne[2] : v->ne[0]) && dst->ne[1] == q->ne[2] &&
+                dst->ne[2] == q->ne[1] && dst->ne[3] == q->ne[3]);
+    GGML_ASSERT(ggml_is_contiguous(q) && ggml_is_contiguous(k) &&
+                ggml_is_contiguous(v) && ggml_is_contiguous(page_map) &&
+                ggml_is_contiguous(dst));
+
+    const int64_t d     = q->ne[0];
+    const int64_t dv    = v_trans ? v->ne[2] : v->ne[0];
+    const int64_t nq    = q->ne[1];
+    const int64_t n_kv  = page_map->ne[0];
+    const int64_t n_phy = k->ne[2];
+    const int64_t hq    = q->ne[2];
+    const int64_t hkv   = k->ne[1];
+    const int64_t ns    = q->ne[3];
+    const float scale   = ggml_get_op_params_f32(dst, 0);
+
+    const float * q_data = (const float *) q->data;
+    const int32_t * map  = (const int32_t *) page_map->data;
+    float * out          = (float *) dst->data;
+
+    const auto load_k = [k](int64_t i) {
+        return k->type == GGML_TYPE_F32
+            ? ((const float *) k->data)[i]
+            : ggml_fp16_to_fp32(((const ggml_fp16_t *) k->data)[i]);
+    };
+    const auto load_v = [v](int64_t i) {
+        return v->type == GGML_TYPE_F32
+            ? ((const float *) v->data)[i]
+            : ggml_fp16_to_fp32(((const ggml_fp16_t *) v->data)[i]);
+    };
+
+    const int64_t n_rows = nq*hq*ns;
+    const int64_t dr = (n_rows + params->nth - 1) / params->nth;
+    const int64_t q0 = dr * params->ith;
+    const int64_t q1 = MIN(q0 + dr, n_rows);
+
+    for (int64_t row = q0; row < q1; ++row) {
+        const int64_t iq = row % nq;
+        const int64_t ihq = (row / nq) % hq;
+        const int64_t is = row / (nq*hq);
+        const int64_t ihkv = ihq/(hq/hkv);
+        const float * q_row = q_data + ((is*hq + ihq)*nq + iq)*d;
+        float max_score = -INFINITY;
+        for (int64_t il = 0; il < n_kv; ++il) {
+            const int32_t ip = map[is*n_kv + il];
+            GGML_ASSERT(ip >= 0 && ip < n_phy);
+            float score = 0.0f;
+            for (int64_t id = 0; id < d; ++id) score += q_row[id]*load_k((((is*n_phy + ip)*hkv + ihkv)*d) + id);
+            max_score = MAX(max_score, score*scale);
+        }
+
+        float denom = 0.0f;
+        float * out_row = out + ((is*nq + iq)*hq + ihq)*dv;
+        for (int64_t idv = 0; idv < dv; ++idv) out_row[idv] = 0.0f;
+        for (int64_t il = 0; il < n_kv; ++il) {
+            const int32_t ip = map[is*n_kv + il];
+            float score = 0.0f;
+            for (int64_t id = 0; id < d; ++id) score += q_row[id]*load_k((((is*n_phy + ip)*hkv + ihkv)*d) + id);
+            const float weight = expf(score*scale - max_score);
+            denom += weight;
+            for (int64_t idv = 0; idv < dv; ++idv) {
+                const int64_t v_index = v_trans
+                    ? (((is*dv + idv)*hkv + ihkv)*n_phy + ip)
+                    : (((is*n_phy + ip)*hkv + ihkv)*dv + idv);
+                out_row[idv] += weight*load_v(v_index);
+            }
+        }
+        for (int64_t idv = 0; idv < dv; ++idv) out_row[idv] /= denom;
+    }
+}
+
 // ggml_compute_forward_flash_attn_back
 
 static void ggml_compute_forward_flash_attn_back_f32(
@@ -10941,6 +11031,580 @@ void ggml_compute_forward_gated_delta_net(
             {
                 GGML_ABORT("fatal error");
             }
+    }
+}
+
+
+// ====================== Tile640 ternary matmul ==========================
+//
+// Ternary matmul with per-page BF16 scales, per-lane INT8 scales, and
+// sparse BF16 outlier correction. Reconstruction:
+//
+//   dequant(A[i,k]) = trit_in_word(packed[i, p, l], v) * page_scale[p] * (lane_scale[l] / 127.0)
+//                      for page p, lane l, trit v in lane, with col p*640 + l*20 + v == k
+//   dequant(A[i,k]) += outlier_val for any outlier (i, k)
+//
+// out[i,j] = sum_k dequant(A[i,k]) * B[k,j]
+//
+// Per-row K layout (v2 format):
+//   A_outlier_row_offsets:  I32 [out_dim + 1]  (CSR; K_i = offsets[i+1] - offsets[i])
+//   A_outlier_cols:         I32 [total_outliers]
+//   A_outlier_vals:         F16 [total_outliers]  (residual: original - 0 = original at that pos)
+//
+// Page size = 640, lane size = 20. 32 lanes per page. Each u32 holds 20 trits
+// (base-3, LSB-first).
+//
+// Single-threaded CPU implementation; intentionally simple. The Metal
+// kernel is the load-bearing path; this is the correctness reference.
+
+static void ggml_compute_forward_tile640_matmul_f32(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const ggml_tensor * A_packed              = dst->src[0];
+    const ggml_tensor * A_page_scales         = dst->src[1];
+    const ggml_tensor * A_lane_scales         = dst->src[2];
+    const ggml_tensor * A_outlier_row_offsets = dst->src[3];
+    const ggml_tensor * A_outlier_cols        = dst->src[4];
+    const ggml_tensor * A_outlier_vals        = dst->src[5];
+    const ggml_tensor * B                     = dst->src[6];
+
+    GGML_ASSERT(ggml_is_contiguous(A_packed));
+    GGML_ASSERT(ggml_is_contiguous(A_page_scales));
+    GGML_ASSERT(ggml_is_contiguous(A_lane_scales));
+    GGML_ASSERT(ggml_is_contiguous(A_outlier_row_offsets));
+    GGML_ASSERT(ggml_is_contiguous(A_outlier_cols));
+    GGML_ASSERT(ggml_is_contiguous(A_outlier_vals));
+    GGML_ASSERT(ggml_is_contiguous(B));
+
+    const int32_t out_dim = ggml_get_op_params_i32(dst, 0);
+    const bool packed2 = ggml_get_op_params_i32(dst, 1) != 0;
+    const int64_t in_dim  = B->ne[0];
+
+    constexpr int64_t PAGE_SIZE = 640;
+    constexpr int64_t LANE_SIZE = 20;
+    constexpr int64_t LANES_PER_PAGE = 32;  // 640 / 20
+    constexpr int64_t WORDS_PER_PAGE = 32;  // 640 / 20
+    const int64_t pages_per_row = (in_dim + PAGE_SIZE - 1) / PAGE_SIZE;
+
+    const int64_t n_tokens = B->ne[1];
+    const int64_t n_batch  = B->ne[2];
+    const int64_t n_seqs   = B->ne[3];
+
+    const uint32_t *    packed       = (const uint32_t *)    A_packed->data;
+    const ggml_fp16_t * page_scales  = (const ggml_fp16_t *) A_page_scales->data;
+    const int8_t *      lane_scales  = (const int8_t *)      A_lane_scales->data;
+    const int32_t *     outlier_row_offsets = (const int32_t *) A_outlier_row_offsets->data;
+    const int32_t *     outlier_cols = (const int32_t *)     A_outlier_cols->data;
+    const ggml_fp16_t * outlier_vals = (const ggml_fp16_t *) A_outlier_vals->data;
+    const char * B_data = (const char *) B->data;
+    const size_t B_element_size = ggml_element_size(B);
+    const auto load_activation = [B](const char * value) {
+        return B->type == GGML_TYPE_F32
+            ? *(const float *) value
+            : ggml_fp16_to_fp32(*(const ggml_fp16_t *) value);
+    };
+
+    const int64_t words_per_row    = pages_per_row *
+        (packed2 ? 40 : WORDS_PER_PAGE);
+    const int64_t n_lanes_per_row  = pages_per_row * LANES_PER_PAGE;
+
+    GGML_ASSERT((int64_t) A_outlier_row_offsets->ne[0] == (int64_t)(out_dim + 1));
+    GGML_ASSERT((int64_t) A_packed->ne[0]              == (int64_t) out_dim * words_per_row);
+    GGML_ASSERT((int64_t) A_page_scales->ne[0]         == (int64_t) out_dim * pages_per_row);
+    GGML_ASSERT((int64_t) A_lane_scales->ne[0]         == (int64_t) out_dim * n_lanes_per_row);
+    GGML_ASSERT((int64_t) A_outlier_cols->ne[0]        == (int64_t) outlier_row_offsets[out_dim]);
+    GGML_ASSERT((int64_t) A_outlier_vals->ne[0]        == (int64_t) outlier_row_offsets[out_dim]);
+
+    // Output layout: [out_dim, n_tokens, n_batch, n_seqs] — stride
+    //   out[i, j, b, s] = dst_data[((s * n_batch + b) * n_tokens + j) * out_dim + i]
+    const int64_t dst_row_stride = out_dim;             // within a (b,s) slab
+    const int64_t dst_batch_stride = (int64_t) n_tokens * out_dim;
+    const int64_t dst_seq_stride  = (int64_t) n_batch  * n_tokens * out_dim;
+
+    const int64_t n_rows_total = (int64_t) out_dim * n_batch * n_seqs;
+    const int64_t n_per_thread = (n_rows_total + params->nth - 1) / params->nth;
+    const int64_t ith = params->ith;
+    const int64_t row_start = ith * n_per_thread;
+    const int64_t row_end   = MIN(row_start + n_per_thread, n_rows_total);
+
+    float * dst_data = (float *) dst->data;
+
+    for (int64_t idx = row_start; idx < row_end; ++idx) {
+        const int64_t i   = idx % out_dim;
+        const int64_t b   = (idx / out_dim) % n_batch;
+        const int64_t s   = idx / (out_dim * n_batch);
+
+        const uint32_t *    A_row  = packed + (int64_t) i * words_per_row;
+        const ggml_fp16_t * ps_row = page_scales + (int64_t) i * pages_per_row;
+        const int8_t *      ls_row = lane_scales + (int64_t) i * n_lanes_per_row;
+        // Per-row K_i from the CSR offsets.
+        const int64_t row_off_lo = outlier_row_offsets[i];
+        const int64_t row_off_hi = outlier_row_offsets[i + 1];
+        const int64_t K_i = row_off_hi - row_off_lo;
+
+        // B is laid out as [in_dim, n_tokens, n_batch, n_seqs] contiguous:
+        //   B[k, j, b, s] = B_data[((s * n_batch + b) * n_tokens + j) * in_dim + k]
+        const char * B_slab = B_data +
+            (int64_t) (s * n_batch + b) * n_tokens * in_dim *
+            B_element_size;
+
+        for (int64_t j = 0; j < n_tokens; ++j) {
+            const char * B_col = B_slab +
+                (int64_t) j * in_dim * B_element_size;
+
+            float acc = 0.0f;
+
+            for (int64_t p = 0; p < pages_per_row; ++p) {
+                const float page_max = ggml_fp16_to_fp32(ps_row[p]);
+                for (int64_t l = 0; l < LANES_PER_PAGE; ++l) {
+                    const float lane_s_f = (float) ls_row[p * LANES_PER_PAGE + l] * (1.0f / 127.0f);
+                    const float scale = page_max * lane_s_f;
+
+                    uint32_t word = packed2 ? 0 : A_row[p * WORDS_PER_PAGE + l];
+                    const int64_t col0 = p * PAGE_SIZE + l * LANE_SIZE;
+                    const int64_t col_end = (col0 + LANE_SIZE < in_dim) ? (col0 + LANE_SIZE) : in_dim;
+
+                    for (int64_t v = 0; v < LANE_SIZE; ++v) {
+                        const int64_t col = col0 + v;
+                        if (col >= col_end) break;
+                        int32_t trit;
+                        if (packed2) {
+                            const int64_t page_col = l * LANE_SIZE + v;
+                            const uint32_t bits = A_row[p * 40 + page_col / 16];
+                            trit = (int32_t) ((bits >> (2 * (page_col % 16))) & 3u);
+                        } else {
+                            trit = (int32_t) (word % 3u);
+                            word /= 3u;
+                        }
+                        if (trit == 1) {
+                            acc += scale * load_activation(
+                                B_col + col * B_element_size);
+                        } else if (trit == 2) {
+                            acc -= scale * load_activation(
+                                B_col + col * B_element_size);
+                        }
+                    }
+                }
+            }
+
+            // Per-row outlier addback (variable K). The residual stored at
+            // each (row, col) position is the original weight value (ternary
+            // at that position is 0 by construction, so residual = original).
+            for (int64_t kk = 0; kk < K_i; ++kk) {
+                const int64_t gk = row_off_lo + kk;
+                const int64_t col = (int64_t) outlier_cols[gk];
+                acc += ggml_fp16_to_fp32(outlier_vals[gk]) *
+                    load_activation(B_col + col * B_element_size);
+            }
+
+            const int64_t dst_idx = s * dst_seq_stride + b * dst_batch_stride + j * dst_row_stride + i;
+            dst_data[dst_idx] = acc;
+        }
+    }
+}
+
+void ggml_compute_forward_tile640_matmul(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const ggml_tensor * B = dst->src[6];
+    GGML_ASSERT(B->type == GGML_TYPE_F16 || B->type == GGML_TYPE_F32);
+    ggml_compute_forward_tile640_matmul_f32(params, dst);
+}
+
+
+// ggml_compute_forward_tile640_matmul_id
+//
+// Per-expert variant of Tile640 matmul. For each (e, j) in ids × tokens:
+//   out[:, e, j] = dequant(A[ids[e,j], :, :]) @ B[:, j]
+//
+// Each expert has the same 2D Tile640 structure as a single weight.
+
+static void ggml_compute_forward_tile640_matmul_id_f32(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const ggml_tensor * A_packed              = dst->src[0];
+    const ggml_tensor * A_page_scales         = dst->src[1];
+    const ggml_tensor * A_lane_scales         = dst->src[2];
+    const ggml_tensor * A_outlier_row_offsets = dst->src[3];
+    const ggml_tensor * A_outlier_cols        = dst->src[4];
+    const ggml_tensor * A_outlier_vals        = dst->src[5];
+    const ggml_tensor * B                     = dst->src[6];
+    const ggml_tensor * ids                   = dst->src[7];
+    const ggml_tensor * act_scale             = dst->src[8];
+
+    GGML_ASSERT(ggml_is_contiguous(A_packed));
+    GGML_ASSERT(ggml_is_contiguous(A_page_scales));
+    GGML_ASSERT(ggml_is_contiguous(A_lane_scales));
+    GGML_ASSERT(ggml_is_contiguous(A_outlier_row_offsets));
+    GGML_ASSERT(ggml_is_contiguous(A_outlier_cols));
+    GGML_ASSERT(ggml_is_contiguous(A_outlier_vals));
+    GGML_ASSERT(ggml_is_contiguous(B));
+    GGML_ASSERT(ggml_is_contiguous(ids));
+    GGML_ASSERT(act_scale == nullptr || ggml_is_contiguous(act_scale));
+
+    const int32_t n_experts = ggml_get_op_params_i32(dst, 0);
+    const int32_t out_dim   = ggml_get_op_params_i32(dst, 1);
+    const int64_t in_dim    = B->ne[0];
+
+    constexpr int64_t PAGE_SIZE       = 640;
+    constexpr int64_t LANE_SIZE       = 20;
+    constexpr int64_t LANES_PER_PAGE  = 32;
+    constexpr int64_t WORDS_PER_PAGE  = 32;
+    const int64_t pages_per_row = (in_dim + PAGE_SIZE - 1) / PAGE_SIZE;
+    const int64_t words_per_row = pages_per_row * WORDS_PER_PAGE;
+    const int64_t lanes_per_row = pages_per_row * LANES_PER_PAGE;
+
+    const int64_t n_tokens      = B->ne[2];
+    const int64_t n_broadcast   = B->ne[1];
+    const int64_t n_expert_used = ids->ne[0];
+
+    const uint32_t *    packed       = (const uint32_t *)    A_packed->data;
+    const ggml_fp16_t * page_scales  = (const ggml_fp16_t *) A_page_scales->data;
+    const int8_t *      lane_scales  = (const int8_t *)      A_lane_scales->data;
+    const int32_t *     outlier_row_offsets = (const int32_t *) A_outlier_row_offsets->data;
+    const int32_t *     outlier_cols = (const int32_t *)     A_outlier_cols->data;
+    const ggml_fp16_t * outlier_vals = (const ggml_fp16_t *) A_outlier_vals->data;
+    const ggml_fp16_t * B_data       = (const ggml_fp16_t *) B->data;
+    const int32_t *     ids_data     = (const int32_t *)     ids->data;
+    const ggml_fp16_t * act_scale_data =
+        act_scale ? (const ggml_fp16_t *) act_scale->data : nullptr;
+    const bool act_scale_per_expert =
+        act_scale && ggml_nelements(act_scale) == in_dim * n_experts;
+    GGML_ASSERT(act_scale == nullptr || act_scale->type == GGML_TYPE_F16);
+    GGML_ASSERT(act_scale == nullptr ||
+                ggml_nelements(act_scale) == in_dim ||
+                act_scale_per_expert);
+
+    // Per-expert per-row K layout: each expert has an [out_dim + 1] CSR offset.
+    const int64_t offsets_per_expert = out_dim + 1;
+    const int64_t total_offsets = n_experts * offsets_per_expert;
+    GGML_ASSERT((int64_t) A_outlier_row_offsets->ne[0] == total_offsets);
+    const int64_t total_outliers = (int64_t) A_outlier_cols->ne[0];
+    GGML_ASSERT((int64_t) A_outlier_vals->ne[0]        == total_outliers);
+
+    const int64_t words_per_expert  = (int64_t) out_dim * words_per_row;
+    const int64_t pages_per_expert  = (int64_t) out_dim * pages_per_row;
+    const int64_t lanes_per_expert  = (int64_t) out_dim * lanes_per_row;
+
+    GGML_ASSERT((int64_t) A_packed->ne[0]       == (int64_t) n_experts * words_per_expert);
+    GGML_ASSERT((int64_t) A_page_scales->ne[0] == (int64_t) n_experts * pages_per_expert);
+    GGML_ASSERT((int64_t) A_lane_scales->ne[0] == (int64_t) n_experts * lanes_per_expert);
+    GGML_ASSERT(out_dim > 0 && n_experts > 0);
+    GGML_ASSERT(n_expert_used > 0 && n_tokens > 0);
+
+    float * dst_data = (float *) dst->data;
+
+    // Each output row corresponds to one (e, j) pair:
+    //   dst[i, e, j, 0] = sum_k dequant(A[ids[e,j], i, k], ...) * B[k, j, 0, 0] + outliers
+    // Output is contiguous: out_dim * n_expert_used * n_tokens floats
+    const int64_t n_rows_total = (int64_t) out_dim * n_expert_used * n_tokens;
+    const int64_t n_per_thread = (n_rows_total + params->nth - 1) / params->nth;
+    const int64_t ith          = params->ith;
+    const int64_t row_start    = ith * n_per_thread;
+    const int64_t row_end      = MIN(row_start + n_per_thread, n_rows_total);
+
+    for (int64_t idx = row_start; idx < row_end; ++idx) {
+        // Linear order: (i, e, j) with i major, then e, then j
+        const int64_t i = idx % out_dim;
+        const int64_t e = (idx / out_dim) % n_expert_used;
+        const int64_t j = idx / (out_dim * n_expert_used);
+
+        const int32_t expert_id = ids_data[(int64_t) j * n_expert_used + e];
+        GGML_ASSERT(expert_id >= 0 && expert_id < n_experts);
+
+        const uint32_t *    A_row  = packed       + (int64_t) expert_id * words_per_expert  + (int64_t) i * words_per_row;
+        const ggml_fp16_t * ps_row = page_scales  + (int64_t) expert_id * pages_per_expert  + (int64_t) i * pages_per_row;
+        const int8_t *      ls_row = lane_scales  + (int64_t) expert_id * lanes_per_expert  + (int64_t) i * lanes_per_row;
+        // Per-expert per-row K_i from the CSR offsets for this expert.
+        const int32_t * offs_e = outlier_row_offsets + (int64_t) expert_id * offsets_per_expert;
+        const int64_t row_off_lo = offs_e[i];
+        const int64_t row_off_hi = offs_e[i + 1];
+        const int64_t K_i = row_off_hi - row_off_lo;
+
+        const ggml_fp16_t * B_col = (const ggml_fp16_t *)
+            ((const char *) B_data + (int64_t) j * B->nb[2] + (e % n_broadcast) * B->nb[1]);
+        const ggml_fp16_t * scale_row = act_scale_data
+            ? act_scale_data + (act_scale_per_expert ? (int64_t) expert_id * in_dim : 0)
+            : nullptr;
+
+        float acc = 0.0f;
+        for (int64_t p = 0; p < pages_per_row; ++p) {
+            const float page_max = ggml_fp16_to_fp32(ps_row[p]);
+            for (int64_t l = 0; l < LANES_PER_PAGE; ++l) {
+                const float lane_s = (float) ls_row[p * LANES_PER_PAGE + l] * (1.0f / 127.0f);
+                const float scale  = page_max * lane_s;
+                uint32_t word = A_row[p * WORDS_PER_PAGE + l];
+                const int64_t col0 = p * PAGE_SIZE + l * LANE_SIZE;
+                const int64_t col_end = (col0 + LANE_SIZE < in_dim) ? (col0 + LANE_SIZE) : in_dim;
+                for (int64_t v = 0; v < LANE_SIZE; ++v) {
+                    const int64_t col = col0 + v;
+                    if (col >= col_end) break;
+                    const int32_t trit = (int32_t) (word % 3u);
+                    word /= 3u;
+                    if (trit == 1) {
+                        const float input = ggml_fp16_to_fp32(B_col[col]) *
+                            (scale_row ? ggml_fp16_to_fp32(scale_row[col]) : 1.0f);
+                        acc += scale * input;
+                    } else if (trit == 2) {
+                        const float input = ggml_fp16_to_fp32(B_col[col]) *
+                            (scale_row ? ggml_fp16_to_fp32(scale_row[col]) : 1.0f);
+                        acc -= scale * input;
+                    }
+                }
+            }
+        }
+        for (int64_t k = 0; k < K_i; ++k) {
+            const int64_t gk = row_off_lo + k;
+            const int64_t col = (int64_t) outlier_cols[gk];
+            const float input = ggml_fp16_to_fp32(B_col[col]) *
+                (scale_row ? ggml_fp16_to_fp32(scale_row[col]) : 1.0f);
+            acc += ggml_fp16_to_fp32(outlier_vals[gk]) * input;
+        }
+
+        dst_data[idx] = acc;
+    }
+}
+
+void ggml_compute_forward_tile640_matmul_id(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const ggml_tensor * B = dst->src[6];
+    GGML_ASSERT(B->type == GGML_TYPE_F16);
+    ggml_compute_forward_tile640_matmul_id_f32(params, dst);
+}
+
+static void ggml_tile640_decode_row(
+        float * dst,
+        int64_t row,
+        int64_t row_width,
+        const uint32_t * packed,
+        const ggml_fp16_t * page_scales,
+        const int8_t * lane_scales,
+        const int32_t * outlier_row_offsets,
+        const int32_t * outlier_cols,
+        const ggml_fp16_t * outlier_vals) {
+    constexpr int64_t page_size = 640;
+    constexpr int64_t lane_size = 20;
+    constexpr int64_t lanes_per_page = 32;
+    const int64_t pages_per_row = (row_width + page_size - 1) / page_size;
+    const int64_t words_per_row = pages_per_row * lanes_per_page;
+
+    for (int64_t p = 0; p < pages_per_row; ++p) {
+        const float page_scale = ggml_fp16_to_fp32(page_scales[row * pages_per_row + p]);
+        for (int64_t lane = 0; lane < lanes_per_page; ++lane) {
+            const int64_t col0 = p * page_size + lane * lane_size;
+            if (col0 >= row_width) {
+                break;
+            }
+            uint32_t word = packed[row * words_per_row + p * lanes_per_page + lane];
+            const float scale = page_scale *
+                ((float) lane_scales[row * words_per_row + p * lanes_per_page + lane] / 127.0f);
+            for (int64_t v = 0; v < lane_size && col0 + v < row_width; ++v) {
+                const uint32_t trit = word % 3u;
+                word /= 3u;
+                dst[col0 + v] = trit == 1u ? scale : trit == 2u ? -scale : 0.0f;
+            }
+        }
+    }
+
+    for (int32_t k = outlier_row_offsets[row]; k < outlier_row_offsets[row + 1]; ++k) {
+        const int32_t col = outlier_cols[k];
+        GGML_ASSERT(col >= 0 && col < row_width);
+        dst[col] = ggml_fp16_to_fp32(outlier_vals[k]);
+    }
+}
+
+void ggml_compute_forward_tile640_get_rows(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const ggml_tensor * packed = dst->src[0];
+    const ggml_tensor * page_scales = dst->src[1];
+    const ggml_tensor * lane_scales = dst->src[2];
+    const ggml_tensor * outlier_row_offsets = dst->src[3];
+    const ggml_tensor * outlier_cols = dst->src[4];
+    const ggml_tensor * outlier_vals = dst->src[5];
+    const ggml_tensor * ids = dst->src[6];
+    const int64_t row_width = ggml_get_op_params_i32(dst, 0);
+    const int64_t n_ids = ggml_nelements(ids);
+    const int64_t n_rows = outlier_row_offsets->ne[0] - 1;
+
+    const int64_t dr = (n_ids + params->nth - 1) / params->nth;
+    const int64_t begin = dr * params->ith;
+    const int64_t end = std::min(begin + dr, n_ids);
+    const int32_t * ids_data = (const int32_t *) ids->data;
+    float * dst_data = (float *) dst->data;
+
+    for (int64_t i = begin; i < end; ++i) {
+        const int64_t row = ids_data[i];
+        GGML_ASSERT(row >= 0 && row < n_rows);
+        ggml_tile640_decode_row(
+            dst_data + i * row_width, row, row_width,
+            (const uint32_t *) packed->data,
+            (const ggml_fp16_t *) page_scales->data,
+            (const int8_t *) lane_scales->data,
+            (const int32_t *) outlier_row_offsets->data,
+            (const int32_t *) outlier_cols->data,
+            (const ggml_fp16_t *) outlier_vals->data);
+    }
+}
+
+void ggml_compute_forward_tile640_dequant(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const int64_t row_width = dst->ne[0];
+    const int64_t n_rows = ggml_nelements(dst) / row_width;
+    GGML_ASSERT(dst->src[3]->ne[0] == n_rows + 1);
+    const int64_t dr = (n_rows + params->nth - 1) / params->nth;
+    const int64_t begin = dr * params->ith;
+    const int64_t end = std::min(begin + dr, n_rows);
+    for (int64_t row = begin; row < end; ++row) {
+        ggml_tile640_decode_row(
+            (float *) dst->data + row * row_width, row, row_width,
+            (const uint32_t *) dst->src[0]->data,
+            (const ggml_fp16_t *) dst->src[1]->data,
+            (const int8_t *) dst->src[2]->data,
+            (const int32_t *) dst->src[3]->data,
+            (const int32_t *) dst->src[4]->data,
+            (const ggml_fp16_t *) dst->src[5]->data);
+    }
+}
+
+void ggml_compute_forward_imatrix_observer(
+        const ggml_compute_params * params,
+        ggml_tensor * dst) {
+    const ggml_tensor * src = dst->src[0];
+    const ggml_tensor * ids = dst->src[1];
+    const bool fused_cast = ggml_get_op_params_i32(dst, 1) != 0;
+    if (fused_cast) {
+        GGML_ASSERT(src && src->type == GGML_TYPE_F32);
+        GGML_ASSERT(dst->type == GGML_TYPE_F16);
+        const int64_t channels = ggml_get_op_params_i32(dst, 2);
+        const size_t stats_offset =
+            (size_t) ggml_get_op_params_i32(dst, 3);
+        const int64_t count = ggml_nrows(src);
+        float * stats = (float *) ((char *) dst->data + stats_offset);
+        for (int64_t channel = params->ith;
+             channel < channels;
+             channel += params->nth) {
+            double sum2 = 0.0;
+            double sumabs = 0.0;
+            double sum4 = 0.0;
+            float maxabs = 0.0f;
+            for (int64_t row = 0; row < count; ++row) {
+                const int64_t index = row * channels + channel;
+                const float value = ((const float *) src->data)[index];
+                ((ggml_fp16_t *) dst->data)[index] =
+                    GGML_FP32_TO_FP16(value);
+                const float magnitude = std::abs(value);
+                const double square = (double) value * value;
+                sum2 += square;
+                sumabs += magnitude;
+                sum4 += square * square;
+                maxabs = std::max(maxabs, magnitude);
+            }
+            stats[channel] = (float) sum2;
+            stats[channels + channel] = (float) sumabs;
+            stats[2 * channels + channel] = (float) sum4;
+            stats[3 * channels + channel] = maxabs;
+        }
+        if (params->ith == 0) {
+            stats[4 * channels] = (float) count;
+        }
+        return;
+    }
+    GGML_ASSERT(src && (src->type == GGML_TYPE_F32 ||
+                        src->type == GGML_TYPE_F16));
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_is_contiguous(dst));
+
+    const int64_t channels = src->ne[0];
+    const int64_t experts  = dst->ne[1];
+    float * out = (float *) dst->data;
+    const auto load_value = [src](const char * ptr) {
+        return src->type == GGML_TYPE_F16
+            ? GGML_FP16_TO_FP32(*(const ggml_fp16_t *) ptr)
+            : *(const float *) ptr;
+    };
+
+    if (ids) {
+        GGML_ASSERT(ids->type == GGML_TYPE_I32);
+        const int64_t n_ids = ids->ne[0];
+        const int64_t n_tokens = ids->ne[1];
+        std::vector<std::pair<int64_t, int64_t>> selected;
+        selected.reserve((n_ids * n_tokens + experts - 1) / experts);
+
+        for (int64_t expert = params->ith; expert < experts; expert += params->nth) {
+            selected.clear();
+            for (int64_t token = 0; token < n_tokens; ++token) {
+                for (int64_t slot = 0; slot < n_ids; ++slot) {
+                    const int32_t routed = *(const int32_t *)
+                        ((const char *) ids->data + slot * ids->nb[0] + token * ids->nb[1]);
+                    if (routed == expert) {
+                        selected.emplace_back(slot, token);
+                    }
+                }
+            }
+
+            float * row = out + expert * (4 * channels + 1);
+            for (int64_t channel = 0; channel < channels; ++channel) {
+                double sum2 = 0.0;
+                double sumabs = 0.0;
+                double sum4 = 0.0;
+                float maxabs = 0.0f;
+                for (const auto & [slot, token] : selected) {
+                    const float value = load_value(
+                        (const char *) src->data +
+                        channel * src->nb[0] +
+                        (slot % src->ne[1]) * src->nb[1] +
+                        token * src->nb[2]);
+                    const float magnitude = std::abs(value);
+                    const double square = (double) value * value;
+                    sum2 += square;
+                    sumabs += magnitude;
+                    sum4 += square * square;
+                    maxabs = std::max(maxabs, magnitude);
+                }
+                row[channel] = (float) sum2;
+                row[channels + channel] = (float) sumabs;
+                row[2 * channels + channel] = (float) sum4;
+                row[3 * channels + channel] = maxabs;
+            }
+            row[4 * channels] = (float) selected.size();
+        }
+        return;
+    }
+
+    const int64_t count = ggml_nrows(src);
+    for (int64_t channel = params->ith; channel < channels; channel += params->nth) {
+        double sum2 = 0.0;
+        double sumabs = 0.0;
+        double sum4 = 0.0;
+        float maxabs = 0.0f;
+        for (int64_t i3 = 0; i3 < src->ne[3]; ++i3) {
+            for (int64_t i2 = 0; i2 < src->ne[2]; ++i2) {
+                for (int64_t i1 = 0; i1 < src->ne[1]; ++i1) {
+                    const float value = load_value(
+                        (const char *) src->data +
+                        channel * src->nb[0] +
+                        i1 * src->nb[1] +
+                        i2 * src->nb[2] +
+                        i3 * src->nb[3]);
+                    const float magnitude = std::abs(value);
+                    const double square = (double) value * value;
+                    sum2 += square;
+                    sumabs += magnitude;
+                    sum4 += square * square;
+                    maxabs = std::max(maxabs, magnitude);
+                }
+            }
+        }
+        out[channel] = (float) sum2;
+        out[channels + channel] = (float) sumabs;
+        out[2 * channels + channel] = (float) sum4;
+        out[3 * channels + channel] = maxabs;
+    }
+    if (params->ith == 0) {
+        out[4 * channels] = (float) count;
     }
 }
 

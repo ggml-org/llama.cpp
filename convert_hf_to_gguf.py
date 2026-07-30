@@ -4,11 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import logging
 import os
 import sys
 from pathlib import Path
 
+import numpy as np
 import torch
 
 if 'NO_LOCAL_GGUF' not in os.environ:
@@ -16,6 +19,7 @@ if 'NO_LOCAL_GGUF' not in os.environ:
 import gguf
 
 from conversion import (
+    MmprojModel,
     ModelBase,
     ModelType,
     get_model_architecture,
@@ -116,6 +120,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--mmproj", action="store_true",
         help="Export multimodal projector (mmproj) for vision models. This will only work on some vision models. An 'mmproj-' prefix will be added to the output file name.",
+    )
+    parser.add_argument(
+        "--embed-mmproj", action="store_true",
+        help="Embed multimodal projector tensors and metadata in the text-model GGUF. "
+             "This preserves the normal model output name and is only supported for models with an mmproj converter.",
+    )
+    parser.add_argument(
+        "--embed-mtp", type=Path, metavar="DIR",
+        help="Embed a standalone MTP/draft checkpoint as a namespaced component in the model GGUF. "
+             "The component tensors and metadata are stored under the 'mtp.' prefix.",
+    )
+    parser.add_argument(
+        "--embed-mtp-ane", type=Path, metavar="MLMODELC",
+        help="Embed a compiled multifunction ANE compute image containing MTP and optional prefill/DFlash functions, "
+             "or a directory containing batch-{1,2,4,8}.mlmodelc variants. Files are materialized into a "
+             "content-addressed cache at runtime.",
     )
     parser.add_argument(
         "--mtp", action="store_true",
@@ -233,6 +253,25 @@ def main() -> None:
 
     with torch.inference_mode():
         output_type = ftype_map[args.outtype]
+        if args.mmproj and args.embed_mmproj:
+            logger.error("--mmproj and --embed-mmproj are mutually exclusive")
+            sys.exit(1)
+        if args.vocab_only and (args.embed_mmproj or args.embed_mtp):
+            logger.error("--embed-mmproj / --embed-mtp cannot be used with --vocab-only")
+            sys.exit(1)
+        if args.mtp and args.embed_mtp:
+            logger.error("--mtp and --embed-mtp are mutually exclusive")
+            sys.exit(1)
+        if args.embed_mtp_ane and not args.embed_mtp:
+            logger.error("--embed-mtp-ane requires --embed-mtp")
+            sys.exit(1)
+        if args.embed_mtp_ane and not args.embed_mtp_ane.is_dir():
+            logger.error("--embed-mtp-ane must point to a compiled .mlmodelc directory or batch-bundle directory")
+            sys.exit(1)
+        if args.embed_mtp_ane and (args.split_max_tensors > 0 or args.split_max_size != "0"):
+            logger.error("--embed-mtp-ane currently requires a single, unsplit GGUF")
+            sys.exit(1)
+
         model_type = ModelType.MMPROJ if args.mmproj else ModelType.TEXT
         hparams = ModelBase.load_hparams(dir_model, is_mistral_format)
         if not is_mistral_format:
@@ -285,6 +324,137 @@ def main() -> None:
             logger.info("Exporting model vocab...")
             model_instance.write_vocab()
             logger.info(f"Model vocab successfully exported to {model_instance.fname_out}")
+        elif args.embed_mmproj or args.embed_mtp:
+            component_instances: list[tuple[str, ModelBase]] = []
+            if args.embed_mmproj:
+                try:
+                    mmproj_class = get_model_class(model_architecture, mmproj=True)
+                except NotImplementedError:
+                    logger.error("--embed-mmproj is not supported for %s", model_architecture)
+                    sys.exit(1)
+
+                component_instances.append(("", mmproj_class(
+                    dir_model, output_type, fname_out,
+                    is_big_endian=args.bigendian, use_temp_file=args.use_temp_file,
+                    eager=args.no_lazy,
+                    metadata_override=args.metadata, model_name=args.model_name,
+                    split_max_tensors=0, split_max_size=0, dry_run=args.dry_run,
+                    small_first_shard=False,
+                    remote_hf_model_id=hf_repo_id,
+                    disable_mistral_community_chat_template=disable_mistral_community_chat_template,
+                    sentence_transformers_dense_modules=args.sentence_transformers_dense_modules,
+                    target_model_dir=Path(args.target_model_dir) if args.target_model_dir else None,
+                    fuse_gate_up_exps=args.fuse_gate_up_exps,
+                    fp8_as_q8=args.fp8_as_q8,
+                )))
+
+            if args.embed_mtp:
+                mtp_hparams = ModelBase.load_hparams(args.embed_mtp, is_mistral_format=False)
+                mtp_architecture = get_model_architecture(mtp_hparams, ModelType.TEXT)
+                mtp_class = get_model_class(mtp_architecture, mmproj=False)
+                component_instances.append(("mtp.", mtp_class(
+                    args.embed_mtp, output_type, fname_out,
+                    is_big_endian=args.bigendian, use_temp_file=False,
+                    eager=args.no_lazy,
+                    metadata_override=None, model_name=f"{args.embed_mtp.name} MTP",
+                    split_max_tensors=0, split_max_size=0, dry_run=args.dry_run,
+                    small_first_shard=False,
+                    remote_hf_model_id=None,
+                    disable_mistral_community_chat_template=disable_mistral_community_chat_template,
+                    sentence_transformers_dense_modules=False,
+                    target_model_dir=dir_model,
+                    fuse_gate_up_exps=args.fuse_gate_up_exps,
+                    fp8_as_q8=args.fp8_as_q8,
+                )))
+
+            logger.info("Exporting model with %d embedded component(s)...", len(component_instances))
+            model_instance.prepare_tensors()
+            model_instance.prepare_metadata(vocab_only=False)
+            ane_mmaps: list[np.memmap] = []
+
+            for prefix, component in component_instances:
+                if not prefix:
+                    component.gguf_writer = model_instance.gguf_writer
+                    component.prepare_tensors()
+                    if isinstance(component, MmprojModel):
+                        component.embedded_in_model = True
+                    component.set_gguf_parameters()
+                    continue
+
+                component.prepare_tensors()
+                component.prepare_metadata(vocab_only=False)
+                for shard in component.gguf_writer.tensors:
+                    for name, tensor_info in shard.items():
+                        model_instance.gguf_writer.add_tensor_info(
+                            prefix + name,
+                            tensor_info.shape,
+                            tensor_info.tensor.dtype,
+                            tensor_info.nbytes,
+                            raw_dtype=tensor_info.dtype,
+                        )
+                        model_instance.gguf_writer.tensors[-1][prefix + name].tensor = tensor_info.tensor
+                for key, value in component.gguf_writer.kv_data[0].items():
+                    model_instance.gguf_writer.add_key_value(
+                        prefix + key,
+                        value.value,
+                        value.type,
+                        value.sub_type,
+                    )
+                model_instance.gguf_writer.add_bool(prefix + "component.present", True)
+
+            if args.embed_mtp_ane:
+                bucket_dirs = [
+                    (batch, args.embed_mtp_ane / f"batch-{batch}.mlmodelc")
+                    for batch in (1, 2, 4, 8)
+                    if (args.embed_mtp_ane / f"batch-{batch}.mlmodelc").is_dir()
+                ]
+                if not bucket_dirs:
+                    bucket_dirs = [(1, args.embed_mtp_ane)]
+
+                embedded_buckets: list[int] = []
+                for batch, bundle_dir in bucket_dirs:
+                    ane_files = sorted(path for path in bundle_dir.rglob("*") if path.is_file())
+                    if not ane_files:
+                        logger.error("ANE MTP bundle for batch %d contains no files: %s", batch, bundle_dir)
+                        sys.exit(1)
+                    digest = hashlib.sha256()
+                    key_prefix = f"mtp.ane.bucket.{batch}"
+                    for index, path in enumerate(ane_files):
+                        relative = path.relative_to(bundle_dir).as_posix()
+                        data = np.memmap(path, mode="r", dtype=np.uint8)
+                        ane_mmaps.append(data)
+                        digest.update(relative.encode("utf-8"))
+                        digest.update(b"\0")
+                        digest.update(memoryview(data))
+                        tensor_name = f"{key_prefix}.file.{index:04d}"
+                        model_instance.gguf_writer.add_tensor(tensor_name, data.view(np.int8))
+                        model_instance.gguf_writer.add_string(f"{tensor_name}.path", relative)
+                    model_instance.gguf_writer.add_uint32(f"{key_prefix}.file_count", len(ane_files))
+                    model_instance.gguf_writer.add_string(f"{key_prefix}.bundle_sha256", digest.hexdigest())
+                    manifest_path = args.embed_mtp_ane / f"batch-{batch}.json"
+                    if manifest_path.is_file():
+                        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                        functions = manifest.get("functions", [])
+                        if functions:
+                            model_instance.gguf_writer.add_array(f"{key_prefix}.functions", functions)
+                        if "context" in manifest:
+                            model_instance.gguf_writer.add_uint32(
+                                f"{key_prefix}.context_length", int(manifest["context"]))
+                        if "sync_chunk" in manifest:
+                            model_instance.gguf_writer.add_uint32(
+                                f"{key_prefix}.sync_chunk", int(manifest["sync_chunk"]))
+                    embedded_buckets.append(batch)
+
+                model_instance.gguf_writer.add_string("mtp.ane.format", "mlmodelc-buckets-v2")
+                model_instance.gguf_writer.add_array("mtp.ane.batch_buckets", embedded_buckets)
+                model_instance.gguf_writer.add_bool("mtp.ane.keep_warm", True)
+
+            model_instance.gguf_writer.write_header_to_file(path=model_instance.fname_out)
+            model_instance.gguf_writer.write_kv_data_to_file()
+            model_instance.gguf_writer.write_tensors_to_file(progress=True)
+            model_instance.gguf_writer.close()
+            out_path = f"{model_instance.fname_out.parent}{os.sep}" if is_split else model_instance.fname_out
+            logger.info(f"Model with embedded components successfully exported to {out_path}")
         else:
             logger.info("Exporting model...")
             model_instance.write()

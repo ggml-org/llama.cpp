@@ -18,6 +18,33 @@ GGML_QUANT_VERSION     = 2  # GGML_QNT_VERSION from ggml.h
 
 
 class Keys:
+    class Tessera:
+        NAME                       = "tessera.name"
+        VERSION                    = "tessera.version"
+        PROFILE                    = "tessera.profile"
+        FEATURES                   = "tessera.features"
+        CORE_TYPE                  = "tessera.core.type"
+        CORE_LEVELS                = "tessera.core.levels"
+        LAYOUT                     = "tessera.layout"
+        LAYOUT_VERSION             = "tessera.layout.version"
+        PAGE_SIZE                  = "tessera.layout.page_size"
+        LANE_SIZE                  = "tessera.layout.lane_size"
+        LANES_PER_PAGE             = "tessera.layout.lanes_per_page"
+        WORDS_PER_PAGE             = "tessera.layout.words_per_page"
+        PAGE_SCALE_TYPE            = "tessera.scale.page_type"
+        LANE_SCALE_TYPE            = "tessera.scale.lane_type"
+        RESIDUAL_TYPE              = "tessera.residual.type"
+        RESIDUAL_VALUE_TYPE        = "tessera.residual.value_type"
+        EXACT_SENSITIVE            = "tessera.sensitive.exact"
+        CALIBRATION_IMATRIX        = "tessera.calibration.imatrix"
+        CALIBRATION_AWQ            = "tessera.calibration.awq"
+        CALIBRATION_UNSLOTH_PRIOR   = "tessera.calibration.unsloth_prior"
+        COVERAGE                   = "tessera.coverage"
+        PASSTHROUGH                = "tessera.passthrough"
+        UNIFIED                    = "tessera.unified"
+        SHAPE                      = "tessera.shape.{name}"
+        MATRIX_SHAPE               = "tessera.matrix_shape.{name}"
+
     class General:
         TYPE                       = "general.type"
         ARCHITECTURE               = "general.architecture"
@@ -126,6 +153,7 @@ class Keys:
         EXPERTS_PER_GROUP                 = "{arch}.experts_per_group"
         MOE_EVERY_N_LAYERS                = "{arch}.moe_every_n_layers"
         MOE_LATENT_SIZE                   = "{arch}.moe_latent_size"
+        ATTN_RES_BLOCK_SIZE               = "{arch}.attention_residual_block_size"
         NEXTN_PREDICT_LAYERS              = "{arch}.nextn_predict_layers"
         NUM_DEEPSTACK_LAYERS              = "{arch}.n_deepstack_layers"
         DEEPSTACK_MAPPING                 = "{arch}.deepstack_mapping"
@@ -614,6 +642,12 @@ class MODEL_TENSOR(IntEnum):
     FFN_GATE_TID2EID     = auto()
     MOE_LATENT_DOWN      = auto() # nemotron 3 super
     MOE_LATENT_UP        = auto() # nemotron 3 super
+    ATTN_RES_NORM        = auto()
+    ATTN_RES_PROJ        = auto()
+    FFN_RES_NORM         = auto()
+    FFN_RES_PROJ         = auto()
+    OUTPUT_ATTN_RES_NORM = auto()
+    OUTPUT_ATTN_RES_PROJ = auto()
     ATTN_Q_NORM          = auto()
     ATTN_K_NORM          = auto()
     LAYER_OUT_NORM       = auto()
@@ -1201,6 +1235,12 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.FFN_GATE_TID2EID:          "blk.{bid}.ffn_gate_tid2eid",
     MODEL_TENSOR.MOE_LATENT_DOWN:           "blk.{bid}.ffn_latent_down",      # nemotron 3 super
     MODEL_TENSOR.MOE_LATENT_UP:             "blk.{bid}.ffn_latent_up",        # nemotron 3 super
+    MODEL_TENSOR.ATTN_RES_NORM:             "blk.{bid}.attn_res_norm",
+    MODEL_TENSOR.ATTN_RES_PROJ:             "blk.{bid}.attn_res_proj",
+    MODEL_TENSOR.FFN_RES_NORM:              "blk.{bid}.ffn_res_norm",
+    MODEL_TENSOR.FFN_RES_PROJ:              "blk.{bid}.ffn_res_proj",
+    MODEL_TENSOR.OUTPUT_ATTN_RES_NORM:       "output_attn_res_norm",
+    MODEL_TENSOR.OUTPUT_ATTN_RES_PROJ:       "output_attn_res_proj",
     MODEL_TENSOR.LAYER_OUT_NORM:            "blk.{bid}.layer_output_norm",
     MODEL_TENSOR.LAYER_OUT_SCALE:           "blk.{bid}.layer_output_scale",
     MODEL_TENSOR.PER_LAYER_TOKEN_EMBD:      "per_layer_token_embd",           # gemma3n
@@ -3542,6 +3582,12 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         # expert latent
         MODEL_TENSOR.MOE_LATENT_DOWN,
         MODEL_TENSOR.MOE_LATENT_UP,
+        MODEL_TENSOR.ATTN_RES_NORM,
+        MODEL_TENSOR.ATTN_RES_PROJ,
+        MODEL_TENSOR.FFN_RES_NORM,
+        MODEL_TENSOR.FFN_RES_PROJ,
+        MODEL_TENSOR.OUTPUT_ATTN_RES_NORM,
+        MODEL_TENSOR.OUTPUT_ATTN_RES_PROJ,
         # shared expert
         MODEL_TENSOR.FFN_DOWN_SHEXP,
         MODEL_TENSOR.FFN_UP_SHEXP,
@@ -4410,6 +4456,7 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.ATTN_K,
         MODEL_TENSOR.ATTN_V,
         MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.ATTN_GATE,
         MODEL_TENSOR.ATTN_Q_A,
         MODEL_TENSOR.ATTN_Q_B,
         MODEL_TENSOR.ATTN_KV_A_MQA,
@@ -4438,6 +4485,15 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.SSM_DT,
         MODEL_TENSOR.SSM_NORM,
         MODEL_TENSOR.FFN_EXP_PROBS_B,
+        MODEL_TENSOR.FFN_NORM_EXP,
+        MODEL_TENSOR.MOE_LATENT_DOWN,
+        MODEL_TENSOR.MOE_LATENT_UP,
+        MODEL_TENSOR.ATTN_RES_NORM,
+        MODEL_TENSOR.ATTN_RES_PROJ,
+        MODEL_TENSOR.FFN_RES_NORM,
+        MODEL_TENSOR.FFN_RES_PROJ,
+        MODEL_TENSOR.OUTPUT_ATTN_RES_NORM,
+        MODEL_TENSOR.OUTPUT_ATTN_RES_PROJ,
         MODEL_TENSOR.FFN_GATE_SHEXP,
         MODEL_TENSOR.FFN_DOWN_SHEXP,
         MODEL_TENSOR.FFN_UP_SHEXP,

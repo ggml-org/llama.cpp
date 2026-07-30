@@ -1224,6 +1224,70 @@ ggml_tensor * llama_kv_cache::get_k_storage(int32_t il) const {
     return layers[ikv].k;
 }
 
+int32_t llama_kv_cache::seq_get_data(
+        llama_seq_id seq_id,
+        int32_t il,
+        llama_pos p0,
+        llama_pos * positions,
+        float * keys,
+        float * values,
+        uint32_t capacity,
+        uint32_t * width) const {
+    if (seq_id < 0 || (size_t) seq_id >= seq_to_stream.size() || v_trans) {
+        return -1;
+    }
+    const auto found = map_layer_ids.find(il);
+    if (found == map_layer_ids.end()) {
+        return -1;
+    }
+
+    const auto & layer = layers[found->second];
+    const uint32_t stream = seq_to_stream[seq_id];
+    const auto & cells = v_cells[stream];
+    const uint32_t row_width = (uint32_t) layer.k_stream[stream]->ne[0];
+    if (!layer.v_stream[stream] || layer.v_stream[stream]->ne[0] != row_width) {
+        return -1;
+    }
+    if (width) {
+        *width = row_width;
+    }
+
+    std::vector<std::pair<llama_pos, uint32_t>> selected;
+    selected.reserve(cells.get_used());
+    const llama_pos pos_max = cells.seq_pos_max(seq_id);
+    for (uint32_t cell = 0; cell < cells.size(); ++cell) {
+        if (!cells.seq_has(cell, seq_id)) {
+            continue;
+        }
+        const llama_pos pos = cells.pos_get(cell);
+        if (pos < p0 || llama_hparams::is_masked_swa(n_swa, swa_type, pos, pos_max)) {
+            continue;
+        }
+        selected.emplace_back(pos, cell);
+    }
+    std::sort(selected.begin(), selected.end());
+    if (capacity == 0) {
+        return (int32_t) selected.size();
+    }
+    if (!positions || !keys || !values || selected.size() > capacity) {
+        return -1;
+    }
+
+    const auto copy_row = [&](ggml_tensor * tensor, uint32_t cell, float * dst) {
+        const size_t row_size = ggml_row_size(tensor->type, row_width);
+        std::vector<uint8_t> encoded(row_size);
+        ggml_backend_tensor_get(tensor, encoded.data(), (size_t) cell * row_size, row_size);
+        ggml_get_type_traits(tensor->type)->to_float(encoded.data(), dst, row_width);
+    };
+
+    for (size_t row = 0; row < selected.size(); ++row) {
+        positions[row] = selected[row].first;
+        copy_row(layer.k_stream[stream], selected[row].second, keys + row * row_width);
+        copy_row(layer.v_stream[stream], selected[row].second, values + row * row_width);
+    }
+    return (int32_t) selected.size();
+}
+
 uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo) const {
     uint32_t result = 0;
 
@@ -1235,6 +1299,66 @@ uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo) const {
         const auto & cells = v_cells[sinfo.strm[s]];
 
         result = std::max(std::min(cells.size(), std::max(n_pad_cur, GGML_PAD(cells.used_max_p1(), n_pad_cur))), result);
+    }
+
+    return result;
+}
+
+std::vector<uint32_t> llama_kv_cache::tessera_kv_block_table::make_page_map(size_t stream) const {
+    if (stream >= streams.size()) {
+        throw std::out_of_range("Tessera KV page-map stream index");
+    }
+
+    std::vector<uint32_t> result(n_tokens, std::numeric_limits<uint32_t>::max());
+    for (const auto & span : streams[stream]) {
+        if (span.logical_p0 + span.n_cells > result.size()) {
+            throw std::invalid_argument("Tessera KV span exceeds logical table");
+        }
+        for (uint32_t i = 0; i < span.n_cells; ++i) {
+            result[span.logical_p0 + i] = span.cell_p0 + i;
+        }
+    }
+    return result;
+}
+
+llama_kv_cache::tessera_kv_block_table llama_kv_cache::build_tessera_block_table(
+        const slot_info & sinfo,
+        uint32_t n_tokens,
+        uint32_t block_size) {
+    if (block_size == 0) {
+        throw std::invalid_argument("Tessera KV block size must be positive");
+    }
+
+    tessera_kv_block_table result = {
+        block_size,
+        n_tokens,
+        {},
+    };
+    result.streams.resize(sinfo.idxs.size());
+
+    for (size_t stream = 0; stream < sinfo.idxs.size(); ++stream) {
+        const auto & idxs = sinfo.idxs[stream];
+        const uint32_t count = std::min<uint32_t>(n_tokens, idxs.size());
+        auto & spans = result.streams[stream];
+
+        uint32_t logical = 0;
+        while (logical < count) {
+            const uint32_t cell0 = idxs[logical];
+            uint32_t length = 1;
+
+            // A span never crosses the logical block boundary. This keeps
+            // per-block quantization metadata and future Metal page tables
+            // stable even when the backing cells are otherwise contiguous.
+            while (logical + length < count &&
+                   length < block_size &&
+                   ((logical + length) / block_size) == (logical / block_size) &&
+                   idxs[logical + length] == cell0 + length) {
+                ++length;
+            }
+
+            spans.push_back({ logical, cell0, length });
+            logical += length;
+        }
     }
 
     return result;
@@ -1290,6 +1414,14 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
             ggml_row_size(v->type, kv_size),                        // v->nb[2]
             ggml_row_size(v->type, kv_size*n_embd_v_gqa),           // v->nb[3]
             ggml_row_size(v->type, kv_size*n_embd_v_gqa)*sinfo.s0);
+}
+
+ggml_tensor * llama_kv_cache::get_k_paged(ggml_context * ctx, int32_t il, const slot_info & sinfo) const {
+    return get_k(ctx, il, get_size(), sinfo);
+}
+
+ggml_tensor * llama_kv_cache::get_v_paged(ggml_context * ctx, int32_t il, const slot_info & sinfo) const {
+    return get_v(ctx, il, get_size(), sinfo);
 }
 
 ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il, const slot_info & sinfo) const {
@@ -2588,6 +2720,18 @@ ggml_tensor * llama_kv_cache_context::get_v(ggml_context * ctx, int32_t il) cons
     return kv->get_v(ctx, il, n_kv, sinfos[i_cur]);
 }
 
+ggml_tensor * llama_kv_cache_context::get_k_paged(ggml_context * ctx, int32_t il) const {
+    return kv->get_k_paged(ctx, il, sinfos[i_cur]);
+}
+
+ggml_tensor * llama_kv_cache_context::get_v_paged(ggml_context * ctx, int32_t il) const {
+    return kv->get_v_paged(ctx, il, sinfos[i_cur]);
+}
+
+bool llama_kv_cache_context::is_v_trans() const {
+    return kv->is_v_trans();
+}
+
 ggml_tensor * llama_kv_cache_context::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const {
     return kv->cpy_k(ctx, k_cur, k_idxs, il, sinfos[i_cur]);
 }
@@ -2626,6 +2770,13 @@ void llama_kv_cache_context::set_input_v_idxs(ggml_tensor * dst, const llama_uba
 
 void llama_kv_cache_context::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const {
     kv->set_input_kq_mask(dst, ubatch, causal_attn);
+}
+
+void llama_kv_cache_context::set_input_tessera_page_map(ggml_tensor * dst) const {
+    const auto table = kv->build_tessera_block_table(sinfos[i_cur], n_kv);
+    const auto map = table.make_page_map(/* stream = */ 0);
+    GGML_ASSERT(dst->type == GGML_TYPE_I32 && dst->ne[0] == (int64_t) map.size());
+    ggml_backend_tensor_set(dst, map.data(), 0, map.size()*sizeof(map[0]));
 }
 
 void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const {

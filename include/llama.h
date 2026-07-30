@@ -330,6 +330,11 @@ extern "C" {
         // override key-value pairs of the model meta data
         const struct llama_model_kv_override * kv_overrides;
 
+        // Optional namespaced component view inside a unified GGUF (for example "mtp.").
+        // Metadata is resolved from this prefix first and tensors are exposed with the
+        // prefix stripped. NULL selects the primary model view.
+        const char * component_prefix;
+
         // Keep the booleans together to avoid misalignment during copy-by-value.
         bool vocab_only;      // only load the vocabulary, no weights
         bool check_tensors;   // validate model tensor data
@@ -373,6 +378,7 @@ extern "C" {
 
         ggml_backend_sched_eval_callback cb_eval;
         void * cb_eval_user_data;
+        bool imatrix_observers; // graph-resident compact activation observers [EXPERIMENTAL]
 
         enum ggml_type type_k; // data type for K cache [EXPERIMENTAL]
         enum ggml_type type_v; // data type for V cache [EXPERIMENTAL]
@@ -566,6 +572,18 @@ extern "C" {
     LLAMA_API const struct llama_model * llama_get_model   (const struct llama_context * ctx);
     LLAMA_API           llama_memory_t   llama_get_memory  (const struct llama_context * ctx);
     LLAMA_API  enum llama_pooling_type   llama_pooling_type(const struct llama_context * ctx); // TODO: rename to llama_get_pooling_type
+
+    LLAMA_API int32_t llama_kv_cache_seq_get_data(
+            const struct llama_context * ctx,
+            llama_seq_id seq_id,
+            bool swa,
+            int32_t layer,
+            llama_pos p0,
+            llama_pos * positions,
+            float * keys,
+            float * values,
+            uint32_t capacity,
+            uint32_t * width);
 
     LLAMA_API const struct llama_vocab * llama_model_get_vocab(const struct llama_model * model);
     LLAMA_API enum llama_rope_type       llama_model_rope_type(const struct llama_model * model);
@@ -975,6 +993,20 @@ extern "C" {
             struct llama_context * ctx,
               struct llama_batch   batch);
 
+    // Arm the immediately following embedding-backed decode call to resume
+    // after a qualified external prefill slab. K/V are F32 token-major rows
+    // [n_tokens, kv_heads, head_dim] and are imported through llama.cpp's
+    // normal memory context. Returns false without changing context state
+    // when the sealed ANE continuation contract is not supported.
+    LLAMA_API bool llama_set_ane_prefill_result(
+            struct llama_context * ctx,
+            uint32_t layer_count,
+            uint32_t n_tokens,
+            uint32_t kv_heads,
+            uint32_t head_dim,
+            const float * keys,
+            const float * values);
+
     // Set the number of threads used for decoding
     // n_threads is the number of threads used for generation (single token)
     // n_threads_batch is the number of threads used for prompt and batch processing (multiple tokens)
@@ -1004,6 +1036,18 @@ extern "C" {
 
     // Set abort callback
     LLAMA_API void llama_set_abort_callback(struct llama_context * ctx, ggml_abort_callback abort_callback, void * abort_callback_data);
+
+    // Select graph-resident importance observers dynamically. Returning false
+    // omits the named observer from subsequently built decode graphs.
+    typedef bool (*llama_imatrix_observer_filter)(const char * tensor_name, void * user_data);
+    LLAMA_API void llama_set_imatrix_observer_filter(
+            struct llama_context             * ctx,
+            llama_imatrix_observer_filter      filter,
+            void                            * user_data);
+
+    // Advance the graph-topology epoch after an observer filter changes its
+    // active tensor set. This preserves graph reuse between transitions.
+    LLAMA_API void llama_bump_imatrix_observer_epoch(struct llama_context * ctx);
 
     // Wait until all computations are finished
     // This is automatically done when using one of the functions below to obtain the computation results

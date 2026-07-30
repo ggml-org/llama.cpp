@@ -2001,6 +2001,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 ggml_compute_forward_flash_attn_ext(params, tensor);
             } break;
+        case GGML_OP_TESSERA_PAGED_ATTN:
+            {
+                ggml_compute_forward_tessera_paged_attn(params, tensor);
+            } break;
         case GGML_OP_FLASH_ATTN_BACK:
             {
                 int32_t t = ggml_get_op_params_i32(tensor, 0);
@@ -2059,6 +2063,26 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
         case GGML_OP_GATED_DELTA_NET:
             {
                 ggml_compute_forward_gated_delta_net(params, tensor);
+            } break;
+        case GGML_OP_TILE640_MATMUL:
+            {
+                ggml_compute_forward_tile640_matmul(params, tensor);
+            } break;
+        case GGML_OP_TILE640_MATMUL_ID:
+            {
+                ggml_compute_forward_tile640_matmul_id(params, tensor);
+            } break;
+        case GGML_OP_TILE640_GET_ROWS:
+            {
+                ggml_compute_forward_tile640_get_rows(params, tensor);
+            } break;
+        case GGML_OP_TILE640_DEQUANT:
+            {
+                ggml_compute_forward_tile640_dequant(params, tensor);
+            } break;
+        case GGML_OP_IMATRIX_OBSERVER:
+            {
+                ggml_compute_forward_imatrix_observer(params, tensor);
             } break;
         case GGML_OP_LIGHTNING_INDEXER:
             {
@@ -2256,6 +2280,11 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_COUNT_EQUAL:
         case GGML_OP_SOLVE_TRI:
         case GGML_OP_GATED_DELTA_NET:
+        case GGML_OP_TILE640_MATMUL:
+        case GGML_OP_TILE640_MATMUL_ID:
+        case GGML_OP_TILE640_GET_ROWS:
+        case GGML_OP_TILE640_DEQUANT:
+        case GGML_OP_IMATRIX_OBSERVER:
         case GGML_OP_DSV4_HC_COMB:
         case GGML_OP_DSV4_HC_PRE:
         case GGML_OP_DSV4_HC_POST:
@@ -2396,6 +2425,7 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_ARGSORT:
         case GGML_OP_TOP_K:
         case GGML_OP_FLASH_ATTN_EXT:
+        case GGML_OP_TESSERA_PAGED_ATTN:
         case GGML_OP_FLASH_ATTN_BACK:
         case GGML_OP_SSM_CONV:
         case GGML_OP_SSM_SCAN:

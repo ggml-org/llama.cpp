@@ -1,0 +1,13 @@
+{
+  "schema": "llama.tessera.training-corpus.v1",
+  "epoch": 0,
+  "sha256": "replace-with-corpus-sha256",
+  "license": "CC-BY-NC-SA-4.0",
+  "license_uri": "https://creativecommons.org/licenses/by-nc-sa/4.0/",
+  "attribution": "Julian Alejandro Torres Nieto, Tribunus.dev",
+  "distribution_cleared": true,
+  "contains_user_inference": false,
+  "commercial_use": false,
+  "share_alike": true,
+  "sources": []
+}

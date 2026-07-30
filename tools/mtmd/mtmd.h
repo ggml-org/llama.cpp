@@ -64,6 +64,8 @@ struct mtmd_image_tokens;
 struct mtmd_input_chunk;
 struct mtmd_input_chunks;
 struct mtmd_batch;
+struct mtmd_prompt_plan;
+struct mtmd_projection_telemetry;
 
 struct mtmd_input_text {
     const char * text;
@@ -83,8 +85,12 @@ typedef struct mtmd_input_chunk  mtmd_input_chunk;
 typedef struct mtmd_input_chunks mtmd_input_chunks;
 typedef struct mtmd_input_text   mtmd_input_text;
 typedef struct mtmd_batch        mtmd_batch;
+typedef struct mtmd_prompt_plan  mtmd_prompt_plan;
 
 typedef bool (*mtmd_progress_callback)(float progress, void * user_data);
+typedef void (*mtmd_projection_telemetry_callback)(
+    const struct mtmd_projection_telemetry * telemetry,
+    void * user_data);
 
 struct mtmd_context_params {
     bool use_gpu;
@@ -113,6 +119,12 @@ struct mtmd_context_params {
     // If it returns false, model loading is immediately aborted.
     mtmd_progress_callback progress_callback;
     void * progress_callback_user_data;
+
+    // Aggregate-only telemetry callback. No callback occurs before the
+    // minimum population is reached; the in-memory window is reset afterward.
+    uint64_t telemetry_min_observations;
+    mtmd_projection_telemetry_callback telemetry_callback;
+    void * telemetry_callback_user_data;
 };
 
 MTMD_API const char * mtmd_default_marker(void);
@@ -212,6 +224,35 @@ MTMD_API mtmd_input_chunks *      mtmd_input_chunks_init(void);
 MTMD_API size_t                   mtmd_input_chunks_size(const mtmd_input_chunks * chunks);
 MTMD_API const mtmd_input_chunk * mtmd_input_chunks_get (const mtmd_input_chunks * chunks, size_t idx);
 MTMD_API void                     mtmd_input_chunks_free(mtmd_input_chunks * chunks);
+
+// Validated mixed-embedding plan derived from tokenized chunks. This mirrors
+// the execution contract used by Prism's multimodal prompt planner while
+// retaining mtmd's model-independent chunk representation.
+enum mtmd_attention_layout {
+    MTMD_ATTENTION_LAYOUT_TEXT_ONLY,
+    MTMD_ATTENTION_LAYOUT_MULTIMODAL_PREFILL,
+};
+
+struct mtmd_prompt_span {
+    enum mtmd_input_chunk_type type;
+    uint32_t token_start;
+    uint32_t token_length;
+    uint32_t decoder_position_start;
+    uint32_t decoder_position_length;
+};
+
+MTMD_API mtmd_prompt_plan * mtmd_prompt_plan_init(const mtmd_input_chunks * chunks);
+MTMD_API void               mtmd_prompt_plan_free(mtmd_prompt_plan * plan);
+MTMD_API bool               mtmd_prompt_plan_validate(const mtmd_prompt_plan * plan);
+MTMD_API size_t             mtmd_prompt_plan_get_n_spans(const mtmd_prompt_plan * plan);
+MTMD_API bool               mtmd_prompt_plan_get_span(
+                                   const mtmd_prompt_plan * plan,
+                                   size_t index,
+                                   struct mtmd_prompt_span * output);
+MTMD_API uint32_t           mtmd_prompt_plan_get_n_tokens(const mtmd_prompt_plan * plan);
+MTMD_API uint32_t           mtmd_prompt_plan_get_n_positions(const mtmd_prompt_plan * plan);
+MTMD_API uint32_t           mtmd_prompt_plan_get_modality_mask(const mtmd_prompt_plan * plan);
+MTMD_API enum mtmd_attention_layout mtmd_prompt_plan_get_attention_layout(const mtmd_prompt_plan * plan);
 
 // mtmd_input_chunk
 //
@@ -313,6 +354,30 @@ MTMD_API int32_t mtmd_batch_add_chunk(mtmd_batch * batch, const mtmd_input_chunk
 // returns 1 on generic error
 MTMD_API int32_t mtmd_batch_encode(mtmd_batch * batch);
 MTMD_API float * mtmd_batch_get_output_embd(mtmd_batch * batch, const mtmd_input_chunk * chunk);
+
+// Thresholded, aggregate-only projection telemetry. mtmd never retains
+// request IDs, timestamps, prompt/media hashes, tokens, embeddings, or
+// individual request records. A snapshot is unavailable until at least
+// min_observations projections have accumulated.
+#define MTMD_TELEMETRY_N_BUCKETS 8
+struct mtmd_projection_telemetry {
+    uint64_t observations;
+    uint64_t successful;
+    uint64_t image_observations;
+    uint64_t audio_observations;
+    uint64_t media_total;
+    uint64_t output_tokens_total;
+    uint64_t elapsed_us_total;
+    uint64_t token_buckets[MTMD_TELEMETRY_N_BUCKETS];
+    uint64_t latency_buckets[MTMD_TELEMETRY_N_BUCKETS];
+};
+
+MTMD_API void mtmd_projection_telemetry_set_min_observations(
+                  mtmd_context * ctx, uint64_t min_observations);
+MTMD_API bool mtmd_projection_telemetry_snapshot(
+                  const mtmd_context * ctx, struct mtmd_projection_telemetry * output);
+MTMD_API bool mtmd_projection_telemetry_take(
+                  mtmd_context * ctx, struct mtmd_projection_telemetry * output);
 
 
 // Set callback for all future logging events.

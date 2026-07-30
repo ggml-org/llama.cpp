@@ -32,7 +32,7 @@ ggml_cgraph * clip_graph_qwen3vl::build() {
 
     // add patch bias
     if (model.patch_bias != nullptr) {
-        inp = ggml_add(ctx0, inp, model.patch_bias);
+        inp = ggml_add(ctx0, inp, resolve_weight(model.patch_bias));
         cb(inp, "patch_bias", -1);
     }
 
@@ -79,7 +79,7 @@ ggml_cgraph * clip_graph_qwen3vl::build() {
         // self-attention
         {
             cur = build_mm(layer.qkv_w, cur);
-            cur = ggml_add(ctx0, cur, layer.qkv_b);
+            cur = ggml_add(ctx0, cur, resolve_weight(layer.qkv_b));
 
             ggml_tensor * Qcur = ggml_view_3d(ctx0, cur, d_head, n_head, n_pos,
                     /* nb1    */ ggml_row_size(cur->type, d_head),

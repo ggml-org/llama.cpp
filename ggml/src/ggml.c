@@ -1067,6 +1067,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "FILL",
 
     "FLASH_ATTN_EXT",
+    "TESSERA_PAGED_ATTN",
     "FLASH_ATTN_BACK",
     "SSM_CONV",
     "SSM_SCAN",
@@ -1083,6 +1084,11 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "DSV4_HC_COMB",
     "DSV4_HC_PRE",
     "DSV4_HC_POST",
+    "TILE640_MATMUL",
+    "TILE640_MATMUL_ID",
+    "TILE640_GET_ROWS",
+    "TILE640_DEQUANT",
+    "IMATRIX_OBSERVER",
 
     "UNARY",
 
@@ -1100,7 +1106,7 @@ static const char * GGML_OP_NAME[GGML_OP_COUNT] = {
     "GLU",
 };
 
-static_assert(GGML_OP_COUNT == 101, "GGML_OP_COUNT != 101");
+static_assert(GGML_OP_COUNT == 107, "GGML_OP_COUNT != 107");
 
 static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "none",
@@ -1198,6 +1204,10 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "dsv4_hc_comb(mixes, scale, base)",
     "dsv4_hc_pre(x, weights)",
     "dsv4_hc_post(x, residual, post, comb)",
+    "tile640_matmul(A, scales, outliers, B)",
+    "tile640_matmul_id(A, scales, outliers, B, ids)",
+    "tile640_get_rows(A, scales, outliers, ids)",
+    "tile640_dequant(A, scales, outliers)",
 
     "unary(x)",
 
@@ -1215,7 +1225,7 @@ static const char * GGML_OP_SYMBOL[GGML_OP_COUNT] = {
     "glu(x)",
 };
 
-static_assert(GGML_OP_COUNT == 101, "GGML_OP_COUNT != 101");
+static_assert(GGML_OP_COUNT == 107, "GGML_OP_COUNT != 107");
 
 static_assert(GGML_OP_POOL_COUNT == 2, "GGML_OP_POOL_COUNT != 2");
 
@@ -5443,6 +5453,41 @@ struct ggml_tensor * ggml_flash_attn_ext(
     return result;
 }
 
+struct ggml_tensor * ggml_tessera_paged_attn(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * q,
+        struct ggml_tensor  * k,
+        struct ggml_tensor  * v,
+        struct ggml_tensor  * page_map,
+        float                 scale) {
+    GGML_ASSERT(q->type == GGML_TYPE_F32);
+    GGML_ASSERT((k->type == GGML_TYPE_F16 || k->type == GGML_TYPE_F32) &&
+                (v->type == GGML_TYPE_F16 || v->type == GGML_TYPE_F32));
+    GGML_ASSERT(page_map->type == GGML_TYPE_I32);
+    GGML_ASSERT(q->ne[0] == k->ne[0]);
+    const bool v_trans = v->ne[0] == k->ne[2];
+    GGML_ASSERT(k->ne[1] == v->ne[1]);
+    GGML_ASSERT(k->ne[3] == v->ne[3]);
+    GGML_ASSERT(v_trans || k->ne[2] == v->ne[2]);
+    GGML_ASSERT(q->ne[2] % k->ne[1] == 0);
+    GGML_ASSERT(page_map->ne[1] == q->ne[3]);
+    // page_map is the logical sequence.  K/V may have more rows because they
+    // are the physical paged-cache arena rather than a gathered contiguous
+    // view.  Each map value is validated by the backend at execution time.
+    GGML_ASSERT(page_map->ne[0] > 0 && page_map->ne[0] <= k->ne[2]);
+
+    int64_t ne[4] = { v_trans ? v->ne[2] : v->ne[0], q->ne[2], q->ne[1], q->ne[3] };
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+    ggml_set_op_params(result, &scale, sizeof(scale));
+    ggml_set_op_params_i32(result, 1, v_trans ? 1 : 0);
+    result->op     = GGML_OP_TESSERA_PAGED_ATTN;
+    result->src[0] = q;
+    result->src[1] = k;
+    result->src[2] = v;
+    result->src[3] = page_map;
+    return result;
+}
+
 
 void ggml_flash_attn_ext_set_prec(
         struct ggml_tensor * a,
@@ -6306,6 +6351,365 @@ struct ggml_tensor * ggml_gated_delta_net(
     result->src[5] = state;
 
     return result;
+}
+
+// ggml_tile640_matmul
+//
+// Tile640 ternary matmul with per-page BF16 scales, per-lane INT8 scales,
+// and sparse BF16 outlier correction. v2 format: per-row K via CSR offsets.
+//
+// Inputs:
+//   src0 = A_packed:              I32,  size = out_dim * pages_per_row * 32
+//   src1 = A_page_scales:         F16,  size = out_dim * pages_per_row
+//   src2 = A_lane_scales:         I8,   size = out_dim * pages_per_row * 32
+//   src3 = A_outlier_row_offsets: I32,  size = out_dim + 1 (CSR; K_i = offsets[i+1] - offsets[i])
+//   src4 = A_outlier_cols:        I32,  size = offsets[out_dim]  (concatenated row-major)
+//   src5 = A_outlier_vals:        F16,  size = offsets[out_dim]  (residual = original at that pos)
+//   src6 = B:                     F16/F32, shape [in_dim, n_tokens, ...] (activations)
+//
+// Output: F32, shape [out_dim, n_tokens, ...]
+//   out[i,j] = sum_k dequant(A[i,k], page_scales, lane_scales) * B[k,j]
+//            + sum_{k in [offsets[i], offsets[i+1])} outlier_vals[k] * B[outlier_cols[k],j]
+//
+// op_params[0] = out_dim (rows of A)
+
+struct ggml_tensor * ggml_tile640_matmul(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * A_packed,
+        struct ggml_tensor  * A_page_scales,
+        struct ggml_tensor  * A_lane_scales,
+        struct ggml_tensor  * A_outlier_row_offsets,
+        struct ggml_tensor  * A_outlier_cols,
+        struct ggml_tensor  * A_outlier_vals,
+        struct ggml_tensor  * B) {
+    GGML_ASSERT(A_packed->type     == GGML_TYPE_I32);
+    GGML_ASSERT(A_page_scales->type == GGML_TYPE_F16);
+    GGML_ASSERT(A_lane_scales->type == GGML_TYPE_I8);
+    GGML_ASSERT(A_outlier_row_offsets->type == GGML_TYPE_I32);
+    GGML_ASSERT(A_outlier_cols->type == GGML_TYPE_I32);
+    GGML_ASSERT(A_outlier_vals->type == GGML_TYPE_F16);
+    GGML_ASSERT(B->type == GGML_TYPE_F16 || B->type == GGML_TYPE_F32);
+
+    GGML_ASSERT(ggml_is_contiguous(A_packed));
+    GGML_ASSERT(ggml_is_contiguous(A_page_scales));
+    GGML_ASSERT(ggml_is_contiguous(A_lane_scales));
+    GGML_ASSERT(ggml_is_contiguous(A_outlier_row_offsets));
+    GGML_ASSERT(ggml_is_contiguous(A_outlier_cols));
+    GGML_ASSERT(ggml_is_contiguous(A_outlier_vals));
+    GGML_ASSERT(ggml_is_contiguous(B));
+
+    const int64_t in_dim  = B->ne[0];
+    // A_packed is 1D; the forward kernel uses op_params[0] for out_dim. Recover
+    // it here from A_page_scales' size: pages_per_row = (in_dim + 639) / 640,
+    // out_dim = A_page_scales->ne[0] / pages_per_row.
+    const int64_t pages_per_row = (in_dim + 639) / 640;
+    GGML_ASSERT(A_page_scales->ne[0] % pages_per_row == 0);
+    const int64_t out_dim = A_page_scales->ne[0] / pages_per_row;
+    const int64_t compact_words = out_dim * pages_per_row * 32;
+    const int64_t trit2_words   = out_dim * pages_per_row * 40;
+    GGML_ASSERT(A_packed->ne[0] == compact_words ||
+                A_packed->ne[0] == trit2_words);
+
+    const int64_t n_tokens  = B->ne[1];
+    const int64_t n_batch   = B->ne[2];
+    const int64_t n_seqs    = B->ne[3];
+
+    const int64_t ne[4] = { out_dim, n_tokens, n_batch, n_seqs };
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+
+    result->op     = GGML_OP_TILE640_MATMUL;
+    result->src[0] = A_packed;
+    result->src[1] = A_page_scales;
+    result->src[2] = A_lane_scales;
+    result->src[3] = A_outlier_row_offsets;
+    result->src[4] = A_outlier_cols;
+    result->src[5] = A_outlier_vals;
+    result->src[6] = B;
+
+    // op_params: out_dim (i32) — consumed by the forward kernel
+    ggml_set_op_params_i32(result, 0, (int32_t) out_dim);
+    ggml_set_op_params_i32(
+        result, 1, A_packed->ne[0] == trit2_words ? 1 : 0);
+
+    return result;
+}
+
+// ggml_tile640_matmul_id — per-expert variant for MoE FFN.
+//
+// Inputs (v2 per-row K format):
+//   src0 = A_packed:              I32,  shape [n_experts, out_dim, pages_per_row, 32]
+//   src1 = A_page_scales:         F16,  shape [n_experts, out_dim, pages_per_row]
+//   src2 = A_lane_scales:         I8,   shape [n_experts, out_dim, pages_per_row, 32]
+//   src3 = A_outlier_row_offsets: I32,  shape [n_experts, out_dim + 1] (per-expert CSR)
+//   src4 = A_outlier_cols:        I32,  shape [total_outliers]  (concatenated row-major)
+//   src5 = A_outlier_vals:        F16,  shape [total_outliers]  (residual = original at that pos)
+//   src6 = B:                     F16,  shape [in_dim, n_tokens, n_batch, n_seqs]
+//   src7 = ids:                   I32,  shape [n_expert_used, n_tokens, n_batch, n_seqs]
+//   src8 = act_scale:             F16,  shape [in_dim] or [in_dim, n_experts] (optional)
+//
+// Output: F32, shape [out_dim, n_expert_used, n_tokens, n_batch, n_seqs]
+//   out[i, e, j, b, s] = sum_k dequant(A[ids[e,j,b,s], i, k], ...) * B[k, j, b, s]
+//                         + sum_{k in [offs_e[i], offs_e[i+1])} outlier_vals[k] * B[cols[k], j, b, s]
+//
+// op_params[0] = n_experts, op_params[1] = out_dim
+
+struct ggml_tensor * ggml_tile640_matmul_id(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * A_packed,
+        struct ggml_tensor  * A_page_scales,
+        struct ggml_tensor  * A_lane_scales,
+        struct ggml_tensor  * A_outlier_row_offsets,
+        struct ggml_tensor  * A_outlier_cols,
+        struct ggml_tensor  * A_outlier_vals,
+        struct ggml_tensor  * B,
+        struct ggml_tensor  * ids,
+        struct ggml_tensor  * act_scale,
+        int32_t             out_dim) {
+    GGML_ASSERT(A_packed->type     == GGML_TYPE_I32);
+    GGML_ASSERT(A_page_scales->type == GGML_TYPE_F16);
+    GGML_ASSERT(A_lane_scales->type == GGML_TYPE_I8);
+    GGML_ASSERT(A_outlier_row_offsets->type == GGML_TYPE_I32);
+    GGML_ASSERT(A_outlier_cols->type == GGML_TYPE_I32);
+    GGML_ASSERT(A_outlier_vals->type == GGML_TYPE_F16);
+    GGML_ASSERT(B->type             == GGML_TYPE_F16);
+    GGML_ASSERT(ids->type           == GGML_TYPE_I32);
+    GGML_ASSERT(act_scale == NULL || act_scale->type == GGML_TYPE_F16);
+
+    GGML_ASSERT(ggml_is_contiguous(A_packed));
+    GGML_ASSERT(ggml_is_contiguous(A_page_scales));
+    GGML_ASSERT(ggml_is_contiguous(A_lane_scales));
+    GGML_ASSERT(ggml_is_contiguous(A_outlier_row_offsets));
+    GGML_ASSERT(ggml_is_contiguous(A_outlier_cols));
+    GGML_ASSERT(ggml_is_contiguous(A_outlier_vals));
+    GGML_ASSERT(ggml_is_contiguous(B));
+    GGML_ASSERT(ggml_is_contiguous(ids));
+    GGML_ASSERT(act_scale == NULL || ggml_is_contiguous(act_scale));
+
+    const int64_t in_dim  = B->ne[0];
+    GGML_ASSERT(B->ne[3] == 1);
+    GGML_ASSERT(ids->ne[2] == 1 && ids->ne[3] == 1);
+    GGML_ASSERT(ids->ne[1] == B->ne[2]);
+    GGML_ASSERT(ids->ne[0] % B->ne[1] == 0);
+    const int64_t n_tokens = B->ne[2];
+
+    // Recover n_experts and out_dim from A_page_scales' shape
+    //   pages_per_row = (in_dim + 639) / 640
+    //   n_experts * out_dim * pages_per_row == A_page_scales->ne[0]
+    const int64_t pages_per_row = (in_dim + 639) / 640;
+    const int64_t words_per_page = 32;  // 640 / 20 = 32 lanes per page
+    GGML_ASSERT(A_page_scales->ne[0] % pages_per_row == 0);
+    const int64_t experts_times_out = A_page_scales->ne[0] / pages_per_row;
+    GGML_ASSERT(experts_times_out % out_dim == 0);
+    const int64_t n_experts = experts_times_out / out_dim;
+    GGML_ASSERT(A_packed->ne[0] == n_experts * out_dim * pages_per_row * words_per_page);
+    GGML_ASSERT(act_scale == NULL ||
+                ggml_nelements(act_scale) == in_dim ||
+                ggml_nelements(act_scale) == in_dim * n_experts);
+
+    const int64_t n_expert_used = ids->ne[0];
+
+    // Output shape mirrors ggml_mul_mat_id: [out_dim, n_expert_used, n_tokens, 1]
+    // (ggml uses 4D tensors; n_batch/n_seqs are 1 for matmul_id)
+    const int64_t ne[4] = { out_dim, n_expert_used, n_tokens, 1 };
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+
+    result->op     = GGML_OP_TILE640_MATMUL_ID;
+    result->src[0] = A_packed;
+    result->src[1] = A_page_scales;
+    result->src[2] = A_lane_scales;
+    result->src[3] = A_outlier_row_offsets;
+    result->src[4] = A_outlier_cols;
+    result->src[5] = A_outlier_vals;
+    result->src[6] = B;
+    result->src[7] = ids;
+    result->src[8] = act_scale;
+
+    ggml_set_op_params_i32(result, 0, (int32_t) n_experts);
+    ggml_set_op_params_i32(result, 1, (int32_t) out_dim);
+
+    return result;
+}
+
+struct ggml_tensor * ggml_tile640_get_rows(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * A_packed,
+        struct ggml_tensor  * A_page_scales,
+        struct ggml_tensor  * A_lane_scales,
+        struct ggml_tensor  * A_outlier_row_offsets,
+        struct ggml_tensor  * A_outlier_cols,
+        struct ggml_tensor  * A_outlier_vals,
+        struct ggml_tensor  * ids,
+        int32_t               row_width) {
+    GGML_ASSERT(A_packed->type == GGML_TYPE_I32);
+    GGML_ASSERT(A_page_scales->type == GGML_TYPE_F16);
+    GGML_ASSERT(A_lane_scales->type == GGML_TYPE_I8);
+    GGML_ASSERT(A_outlier_row_offsets->type == GGML_TYPE_I32);
+    GGML_ASSERT(A_outlier_cols->type == GGML_TYPE_I32);
+    GGML_ASSERT(A_outlier_vals->type == GGML_TYPE_F16);
+    GGML_ASSERT(ids->type == GGML_TYPE_I32);
+    GGML_ASSERT(row_width > 0);
+
+    const int64_t ne[4] = { row_width, ids->ne[0], ids->ne[1], ids->ne[2] * ids->ne[3] };
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+    result->op = GGML_OP_TILE640_GET_ROWS;
+    result->src[0] = A_packed;
+    result->src[1] = A_page_scales;
+    result->src[2] = A_lane_scales;
+    result->src[3] = A_outlier_row_offsets;
+    result->src[4] = A_outlier_cols;
+    result->src[5] = A_outlier_vals;
+    result->src[6] = ids;
+    ggml_set_op_params_i32(result, 0, row_width);
+    return result;
+}
+
+struct ggml_tensor * ggml_tile640_dequant(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * A_packed,
+        struct ggml_tensor  * A_page_scales,
+        struct ggml_tensor  * A_lane_scales,
+        struct ggml_tensor  * A_outlier_row_offsets,
+        struct ggml_tensor  * A_outlier_cols,
+        struct ggml_tensor  * A_outlier_vals,
+        int64_t               ne0,
+        int64_t               ne1,
+        int64_t               ne2,
+        int64_t               ne3) {
+    GGML_ASSERT(A_packed->type == GGML_TYPE_I32);
+    GGML_ASSERT(A_page_scales->type == GGML_TYPE_F16);
+    GGML_ASSERT(A_lane_scales->type == GGML_TYPE_I8);
+    GGML_ASSERT(A_outlier_row_offsets->type == GGML_TYPE_I32);
+    GGML_ASSERT(A_outlier_cols->type == GGML_TYPE_I32);
+    GGML_ASSERT(A_outlier_vals->type == GGML_TYPE_F16);
+    GGML_ASSERT(ne0 > 0 && ne1 > 0 && ne2 > 0 && ne3 > 0);
+
+    const int64_t ne[4] = { ne0, ne1, ne2, ne3 };
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+    result->op = GGML_OP_TILE640_DEQUANT;
+    result->src[0] = A_packed;
+    result->src[1] = A_page_scales;
+    result->src[2] = A_lane_scales;
+    result->src[3] = A_outlier_row_offsets;
+    result->src[4] = A_outlier_cols;
+    result->src[5] = A_outlier_vals;
+    ggml_set_op_params_i32(result, 0, (int32_t) ggml_nelements(result));
+    return result;
+}
+
+struct ggml_tensor * ggml_imatrix_observer(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * activations,
+        struct ggml_tensor  * ids,
+        struct ggml_tensor  * weight_anchor,
+        int32_t               experts) {
+    GGML_ASSERT(activations->type == GGML_TYPE_F32 ||
+                activations->type == GGML_TYPE_F16);
+    GGML_ASSERT(experts > 0);
+    if (ids) {
+        GGML_ASSERT(ids->type == GGML_TYPE_I32);
+        GGML_ASSERT(experts > 1);
+        GGML_ASSERT(ids->ne[1] == activations->ne[2]);
+    } else {
+        GGML_ASSERT(experts == 1);
+    }
+
+    // Four compact per-channel statistics followed by a sample count:
+    // sum(x^2), sum(abs(x)), sum(x^4), max(abs(x)), count.
+    const int64_t ne[2] = { 4 * activations->ne[0] + 1, experts };
+    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 2, ne);
+    result->op     = GGML_OP_IMATRIX_OBSERVER;
+    result->src[0] = activations;
+    result->src[1] = ids;
+    // This source is deliberately not read by the observer kernels. Marking
+    // the observed matrix as a weight source anchors backend scheduling to
+    // the same CPU/Metal backend as the matmul and avoids full-activation
+    // transfers solely for calibration.
+    result->src[2] = weight_anchor;
+    ggml_set_op_params_i32(result, 0, experts);
+    ggml_set_op_params_i32(result, 1, 0);
+    return result;
+}
+
+struct ggml_tensor * ggml_imatrix_observer_cast(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * activations,
+        struct ggml_tensor  * weight_anchor,
+        struct ggml_tensor ** stats_out) {
+    GGML_ASSERT(activations->type == GGML_TYPE_F32);
+    GGML_ASSERT(stats_out);
+
+    const int64_t channels = activations->ne[0];
+    const int64_t activation_elements = ggml_nelements(activations);
+    const size_t activation_bytes =
+        (size_t) activation_elements * ggml_type_size(GGML_TYPE_F16);
+    const size_t stats_offset = GGML_PAD(activation_bytes, sizeof(float));
+    const int64_t stats_elements = 4 * channels + 1;
+    const size_t total_bytes = stats_offset +
+        (size_t) stats_elements * sizeof(float);
+    GGML_ASSERT(total_bytes % ggml_type_size(GGML_TYPE_F16) == 0);
+
+    struct ggml_tensor * storage = ggml_new_tensor_1d(
+        ctx, GGML_TYPE_F16,
+        total_bytes / ggml_type_size(GGML_TYPE_F16));
+    storage->op = GGML_OP_IMATRIX_OBSERVER;
+    storage->src[0] = activations;
+    storage->src[1] = NULL;
+    storage->src[2] = weight_anchor;
+    ggml_set_op_params_i32(storage, 0, 1);
+    ggml_set_op_params_i32(storage, 1, 1);
+    ggml_set_op_params_i32(storage, 2, (int32_t) channels);
+    ggml_set_op_params_i32(storage, 3, (int32_t) stats_offset);
+
+    const size_t nb1 = (size_t) activations->ne[0] *
+        ggml_type_size(GGML_TYPE_F16);
+    const size_t nb2 = nb1 * (size_t) activations->ne[1];
+    const size_t nb3 = nb2 * (size_t) activations->ne[2];
+    struct ggml_tensor * activation_view = ggml_view_4d(
+        ctx, storage,
+        activations->ne[0], activations->ne[1],
+        activations->ne[2], activations->ne[3],
+        nb1, nb2, nb3, 0);
+
+    struct ggml_tensor * stats_view = ggml_view_1d(
+        ctx, storage, stats_elements, stats_offset);
+    stats_view->type = GGML_TYPE_F32;
+    stats_view->nb[0] = sizeof(float);
+    stats_view->nb[1] = stats_elements * sizeof(float);
+    stats_view->nb[2] = stats_view->nb[1];
+    stats_view->nb[3] = stats_view->nb[2];
+    *stats_out = stats_view;
+    return activation_view;
+}
+
+bool ggml_imatrix_observer_is_stats(const struct ggml_tensor * tensor) {
+    if (tensor == NULL ||
+        tensor->op != GGML_OP_VIEW ||
+        tensor->type != GGML_TYPE_F32 ||
+        tensor->view_src == NULL) {
+        return false;
+    }
+
+    const struct ggml_tensor * storage = tensor->view_src;
+    if (storage->op != GGML_OP_IMATRIX_OBSERVER ||
+        storage->type != GGML_TYPE_F16 ||
+        ggml_get_op_params_i32(storage, 1) == 0) {
+        return false;
+    }
+
+    const int64_t channels = ggml_get_op_params_i32(storage, 2);
+    const int32_t stats_offset_i32 = ggml_get_op_params_i32(storage, 3);
+    if (channels <= 0 || stats_offset_i32 < 0) {
+        return false;
+    }
+
+    const size_t stats_offset = (size_t) stats_offset_i32;
+    const int64_t stats_elements = 4 * channels + 1;
+    const size_t stats_bytes = (size_t) stats_elements * sizeof(float);
+    return tensor->view_offs == stats_offset &&
+           ggml_nelements(tensor) == stats_elements &&
+           ggml_nbytes(tensor) == stats_bytes &&
+           stats_offset <= ggml_nbytes(storage) &&
+           stats_bytes <= ggml_nbytes(storage) - stats_offset;
 }
 
 // ggml_lightning_indexer

@@ -17,6 +17,7 @@
 #endif
 
 #include <algorithm>
+#include <chrono>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -198,6 +199,14 @@ struct mtmd_input_chunks {
     std::vector<mtmd_input_chunk> entries;
 };
 
+struct mtmd_prompt_plan {
+    std::vector<mtmd_prompt_span> spans;
+    uint32_t n_tokens = 0;
+    uint32_t n_positions = 0;
+    uint32_t modality_mask = 0;
+    mtmd_attention_layout attention_layout = MTMD_ATTENTION_LAYOUT_TEXT_ONLY;
+};
+
 struct mtmd_batch {
     mtmd_context * ctx;
     std::vector<const mtmd_input_chunk *> entries;
@@ -253,6 +262,9 @@ mtmd_context_params mtmd_context_params_default() {
         /* batch_max_tokens  */ 1024,
         /* progress_callback */ nullptr,
         /* progress_callback_user_data */ nullptr,
+        /* telemetry_min_observations */ 128,
+        /* telemetry_callback */ nullptr,
+        /* telemetry_callback_user_data */ nullptr,
     };
     return params;
 }
@@ -261,6 +273,10 @@ struct mtmd_context {
     struct clip_ctx * ctx_v; // vision
     struct clip_ctx * ctx_a; // audio
     std::vector<float> out_embd; // image embedding vector
+    mtmd_projection_telemetry projection_telemetry = {};
+    uint64_t projection_telemetry_min_observations = 128;
+    mtmd_projection_telemetry_callback projection_telemetry_callback = nullptr;
+    void * projection_telemetry_callback_user_data = nullptr;
 
     bool print_timings;
     int n_threads;
@@ -304,6 +320,10 @@ struct mtmd_context {
                    const llama_model * text_model,
                    const mtmd_context_params & ctx_params,
                    bool no_alloc = false) :
+        projection_telemetry_min_observations(
+            std::max<uint64_t>(ctx_params.telemetry_min_observations, 2)),
+        projection_telemetry_callback(ctx_params.telemetry_callback),
+        projection_telemetry_callback_user_data(ctx_params.telemetry_callback_user_data),
         print_timings   (ctx_params.print_timings),
         n_threads       (ctx_params.n_threads),
         media_marker    (ctx_params.media_marker),
@@ -790,6 +810,41 @@ private:
         return piece;
     }
 };
+
+static size_t mtmd_telemetry_bucket(uint64_t value, const uint64_t (&bounds)[7]) {
+    size_t bucket = 0;
+    while (bucket < 7 && value > bounds[bucket]) {
+        ++bucket;
+    }
+    return bucket;
+}
+
+static void mtmd_record_projection_telemetry(
+        mtmd_context * ctx,
+        uint32_t modality_mask,
+        uint32_t media_count,
+        uint32_t output_tokens,
+        uint64_t elapsed_us,
+        bool success) {
+    static constexpr uint64_t token_bounds[7] = { 32, 64, 128, 256, 512, 1024, 2048 };
+    static constexpr uint64_t latency_bounds[7] = { 1000, 5000, 10000, 25000, 50000, 100000, 500000 };
+    auto & telemetry = ctx->projection_telemetry;
+    ++telemetry.observations;
+    telemetry.successful += success ? 1 : 0;
+    telemetry.image_observations += (modality_mask & 1u) != 0 ? 1 : 0;
+    telemetry.audio_observations += (modality_mask & 2u) != 0 ? 1 : 0;
+    telemetry.media_total += media_count;
+    telemetry.output_tokens_total += output_tokens;
+    telemetry.elapsed_us_total += elapsed_us;
+    ++telemetry.token_buckets[mtmd_telemetry_bucket(output_tokens, token_bounds)];
+    ++telemetry.latency_buckets[mtmd_telemetry_bucket(elapsed_us, latency_bounds)];
+    if (ctx->projection_telemetry_callback != nullptr &&
+            telemetry.observations >= ctx->projection_telemetry_min_observations) {
+        ctx->projection_telemetry_callback(
+            &telemetry, ctx->projection_telemetry_callback_user_data);
+        telemetry = {};
+    }
+}
 
 mtmd_context * mtmd_init_from_file(const char * mmproj_fname,
         const struct llama_model * text_model,
@@ -1507,12 +1562,24 @@ static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk
 
 int32_t mtmd_encode_chunk(mtmd_context * ctx, const mtmd_input_chunk * chunk) {
     // this is the non-batching version
+    const auto started = std::chrono::steady_clock::now();
+    int32_t result = 1;
     try {
-        return mtmd_encode_chunk_impl(ctx, chunk, ctx->out_embd);
+        result = mtmd_encode_chunk_impl(ctx, chunk, ctx->out_embd);
     } catch (const std::exception & e) {
         LOG_ERR("%s: error: %s\n", __func__, e.what());
-        return 1;
     }
+    const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - started);
+    mtmd_record_projection_telemetry(
+        ctx,
+        chunk->type == MTMD_INPUT_CHUNK_TYPE_IMAGE ? 1u :
+            chunk->type == MTMD_INPUT_CHUNK_TYPE_AUDIO ? 2u : 0u,
+        chunk->type == MTMD_INPUT_CHUNK_TYPE_TEXT ? 0u : 1u,
+        static_cast<uint32_t>(mtmd_input_chunk_get_n_tokens(chunk)),
+        static_cast<uint64_t>(elapsed.count()),
+        result == 0);
+    return result;
 }
 
 int32_t mtmd_encode(mtmd_context * ctx, const mtmd_image_tokens * image_tokens) {
@@ -1628,12 +1695,28 @@ static int32_t mtmd_batch_encode_impl(mtmd_batch * batch) {
 }
 
 int32_t mtmd_batch_encode(mtmd_batch * batch) {
+    const auto started = std::chrono::steady_clock::now();
+    int32_t result = 1;
     try {
-        return mtmd_batch_encode_impl(batch);
+        result = mtmd_batch_encode_impl(batch);
     } catch (const std::exception & e) {
         LOG_ERR("%s: error: %s\n", __func__, e.what());
-        return 1;
     }
+    uint32_t modality_mask = 0;
+    for (const auto * chunk : batch->entries) {
+        modality_mask |= chunk->type == MTMD_INPUT_CHUNK_TYPE_IMAGE ? 1u :
+                         chunk->type == MTMD_INPUT_CHUNK_TYPE_AUDIO ? 2u : 0u;
+    }
+    const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - started);
+    mtmd_record_projection_telemetry(
+        batch->ctx,
+        modality_mask,
+        static_cast<uint32_t>(batch->entries.size()),
+        static_cast<uint32_t>(batch->n_tokens()),
+        static_cast<uint64_t>(elapsed.count()),
+        result == 0);
+    return result;
 }
 
 float * mtmd_batch_get_output_embd(mtmd_batch * batch, const mtmd_input_chunk * chunk) {
@@ -1654,6 +1737,32 @@ float * mtmd_batch_get_output_embd(mtmd_batch * batch, const mtmd_input_chunk * 
         }
     }
     return nullptr; // not found
+}
+
+void mtmd_projection_telemetry_set_min_observations(
+        mtmd_context * ctx, uint64_t min_observations) {
+    if (ctx != nullptr) {
+        ctx->projection_telemetry_min_observations = std::max<uint64_t>(min_observations, 2);
+    }
+}
+
+bool mtmd_projection_telemetry_snapshot(
+        const mtmd_context * ctx, mtmd_projection_telemetry * output) {
+    if (ctx == nullptr || output == nullptr ||
+            ctx->projection_telemetry.observations < ctx->projection_telemetry_min_observations) {
+        return false;
+    }
+    *output = ctx->projection_telemetry;
+    return true;
+}
+
+bool mtmd_projection_telemetry_take(
+        mtmd_context * ctx, mtmd_projection_telemetry * output) {
+    if (!mtmd_projection_telemetry_snapshot(ctx, output)) {
+        return false;
+    }
+    ctx->projection_telemetry = {};
+    return true;
 }
 
 bool mtmd_decode_use_non_causal(const mtmd_context * ctx, const mtmd_input_chunk * chunk) {
@@ -1794,6 +1903,100 @@ void mtmd_input_chunks_free(mtmd_input_chunks * chunks) {
     if (chunks) {
         delete chunks;
     }
+}
+
+mtmd_prompt_plan * mtmd_prompt_plan_init(const mtmd_input_chunks * chunks) {
+    if (chunks == nullptr || chunks->entries.empty()) {
+        return nullptr;
+    }
+    auto * plan = new mtmd_prompt_plan;
+    for (const auto & chunk : chunks->entries) {
+        const size_t n_tokens = mtmd_input_chunk_get_n_tokens(&chunk);
+        const llama_pos n_positions = mtmd_input_chunk_get_n_pos(&chunk);
+        if (n_tokens == 0 || n_tokens > UINT32_MAX || n_positions <= 0 ||
+                static_cast<uint64_t>(n_positions) > UINT32_MAX ||
+                static_cast<uint64_t>(plan->n_tokens) + n_tokens > UINT32_MAX ||
+                static_cast<uint64_t>(plan->n_positions) + static_cast<uint64_t>(n_positions) > UINT32_MAX) {
+            delete plan;
+            return nullptr;
+        }
+        plan->spans.push_back({
+            chunk.type,
+            plan->n_tokens,
+            static_cast<uint32_t>(n_tokens),
+            plan->n_positions,
+            static_cast<uint32_t>(n_positions),
+        });
+        plan->n_tokens += static_cast<uint32_t>(n_tokens);
+        plan->n_positions += static_cast<uint32_t>(n_positions);
+        if (chunk.type == MTMD_INPUT_CHUNK_TYPE_IMAGE) {
+            plan->modality_mask |= 1u;
+        } else if (chunk.type == MTMD_INPUT_CHUNK_TYPE_AUDIO) {
+            plan->modality_mask |= 2u;
+        }
+    }
+    plan->attention_layout = plan->modality_mask == 0
+        ? MTMD_ATTENTION_LAYOUT_TEXT_ONLY
+        : MTMD_ATTENTION_LAYOUT_MULTIMODAL_PREFILL;
+    return plan;
+}
+
+void mtmd_prompt_plan_free(mtmd_prompt_plan * plan) {
+    delete plan;
+}
+
+bool mtmd_prompt_plan_validate(const mtmd_prompt_plan * plan) {
+    if (plan == nullptr || plan->spans.empty()) {
+        return false;
+    }
+    uint32_t next_token = 0;
+    uint32_t next_position = 0;
+    uint32_t modality_mask = 0;
+    for (const auto & span : plan->spans) {
+        if (span.token_length == 0 || span.decoder_position_length == 0 ||
+                span.token_start != next_token ||
+                span.decoder_position_start != next_position) {
+            return false;
+        }
+        next_token += span.token_length;
+        next_position += span.decoder_position_length;
+        modality_mask |= span.type == MTMD_INPUT_CHUNK_TYPE_IMAGE ? 1u :
+                         span.type == MTMD_INPUT_CHUNK_TYPE_AUDIO ? 2u : 0u;
+    }
+    return next_token == plan->n_tokens &&
+           next_position == plan->n_positions &&
+           modality_mask == plan->modality_mask;
+}
+
+size_t mtmd_prompt_plan_get_n_spans(const mtmd_prompt_plan * plan) {
+    return plan ? plan->spans.size() : 0;
+}
+
+bool mtmd_prompt_plan_get_span(
+        const mtmd_prompt_plan * plan,
+        size_t index,
+        mtmd_prompt_span * output) {
+    if (plan == nullptr || output == nullptr || index >= plan->spans.size()) {
+        return false;
+    }
+    *output = plan->spans[index];
+    return true;
+}
+
+uint32_t mtmd_prompt_plan_get_n_tokens(const mtmd_prompt_plan * plan) {
+    return plan ? plan->n_tokens : 0;
+}
+
+uint32_t mtmd_prompt_plan_get_n_positions(const mtmd_prompt_plan * plan) {
+    return plan ? plan->n_positions : 0;
+}
+
+uint32_t mtmd_prompt_plan_get_modality_mask(const mtmd_prompt_plan * plan) {
+    return plan ? plan->modality_mask : 0;
+}
+
+mtmd_attention_layout mtmd_prompt_plan_get_attention_layout(const mtmd_prompt_plan * plan) {
+    return plan ? plan->attention_layout : MTMD_ATTENTION_LAYOUT_TEXT_ONLY;
 }
 
 // mtmd_input_chunk

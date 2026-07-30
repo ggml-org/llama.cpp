@@ -758,7 +758,9 @@ static bool ggml_backend_metal_device_offload_op(ggml_backend_dev_t dev, const g
     ggml_metal_device_t ctx_dev = (ggml_metal_device_t)dev->context;
 
     return (op->op == GGML_OP_MUL_MAT ||
-            op->op == GGML_OP_MUL_MAT_ID) &&
+            op->op == GGML_OP_MUL_MAT_ID ||
+            op->op == GGML_OP_TILE640_MATMUL ||
+            op->op == GGML_OP_TILE640_MATMUL_ID) &&
             get_op_batch_size(op) >= ggml_metal_device_get_props(ctx_dev)->op_offload_min_batch_size;
 }
 

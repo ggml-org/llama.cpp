@@ -136,9 +136,10 @@ void llama_model_deepseek4::load_arch_tensors(llama_model_loader &) {
         }
         layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
 
-        layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {n_embd,   n_ff_exp, n_expert}, 0);
-        layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp, n_embd,   n_expert}, 0);
-        layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {n_embd,   n_ff_exp, n_expert}, 0);
+        create_tensor_gate_up_exps(layer, i, n_embd, n_ff_exp, n_expert, 0);
+        layer.ffn_down_exps = create_tensor_or_tile640(
+                tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i),
+                {n_ff_exp, n_embd, n_expert}, 0);
 
         layer.ffn_gate_shexp = create_tensor(tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", i), {n_embd,                     n_ff_exp * n_expert_shared}, 0);
         layer.ffn_down_shexp = create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", i), {n_ff_exp * n_expert_shared, n_embd                    }, 0);
@@ -1144,6 +1145,31 @@ llama_model_deepseek4::graph::graph(const llama_model & model, const llm_graph_p
             exp_probs_b = nullptr;
         }
 
+        llama_tile640_tensor gate_up_tile;
+        const llama_tile640_tensor * gate_up_tile_ptr = nullptr;
+        if (layer.ffn_gate_up_exps_packed) {
+            gate_up_tile = {
+                layer.ffn_gate_up_exps_packed,
+                layer.ffn_gate_up_exps_page_scales,
+                layer.ffn_gate_up_exps_lane_scales,
+                layer.ffn_gate_up_exps_outlier_row_offsets,
+                layer.ffn_gate_up_exps_outlier_cols,
+                layer.ffn_gate_up_exps_outlier_vals,
+                { n_embd, 2 * hparams.n_ff_exp, n_expert, 1 },
+                layer.ffn_gate_up_exps_act_scale,
+            };
+            gate_up_tile_ptr = &gate_up_tile;
+        }
+        const auto * down_tile_ptr =
+                model.get_tile640_tensor(LLM_TN(model.arch)(
+                    LLM_TENSOR_FFN_DOWN_EXPS, "weight", il).str());
+        const auto * gate_tile_ptr =
+                model.get_tile640_tensor(LLM_TN(model.arch)(
+                    LLM_TENSOR_FFN_GATE_EXPS, "weight", il).str());
+        const auto * up_tile_ptr =
+                model.get_tile640_tensor(LLM_TN(model.arch)(
+                    LLM_TENSOR_FFN_UP_EXPS, "weight", il).str());
+
         ggml_tensor * moe_out = build_moe_ffn(cur,
                 layer.ffn_gate_inp,
                 layer.ffn_up_exps,
@@ -1156,11 +1182,15 @@ llama_model_deepseek4::graph::graph(const llama_model & model, const llm_graph_p
                 (llama_expert_gating_func_type) hparams.expert_gating_func,
                 il,
                 nullptr,
+                layer.ffn_gate_up_exps,
                 nullptr,
                 nullptr,
                 nullptr,
-                nullptr,
-                selected_experts);
+                selected_experts,
+                gate_up_tile_ptr,
+                down_tile_ptr,
+                gate_tile_ptr,
+                up_tile_ptr);
         cb(moe_out, "ffn_moe_out", il);
 
         ggml_tensor * ffn_shexp = build_ffn(cur,

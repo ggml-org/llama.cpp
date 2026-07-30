@@ -1,0 +1,48 @@
+{
+  "schema": "llama.tessera.source-manifest.v1",
+  "epoch": 0,
+  "lineage": {
+    "parent_source_digest": null,
+    "training_corpus_epoch": null,
+    "training_corpus_digest": null,
+    "telemetry_epoch": null
+  },
+  "components": [
+    {
+      "name": "Gemma 4 12B Unified",
+      "namespace": "gemma",
+      "path": "/Volumes/Julian T7/models/gemma-4-12B-it-qat-q4_0-unquantized",
+      "upstream_repo": "google/gemma-4-12B-it-qat-q4_0-unquantized",
+      "upstream_revision": "b6ed86275a6a5735884e208bfed95b445a684ca2",
+      "license": "Apache-2.0",
+      "redistribution": true
+    },
+    {
+      "name": "Gemma 4 12B MTP Assistant",
+      "namespace": "draft.mtp",
+      "path": "/Volumes/Julian T7/models/gemma-4-12B-it-qat-q4_0-unquantized-assistant",
+      "upstream_repo": "google/gemma-4-12B-it-qat-q4_0-unquantized-assistant",
+      "upstream_revision": "18934064dd4c5c6cc3621f6381e7d377fc8cb7bd",
+      "license": "Apache-2.0",
+      "redistribution": true
+    },
+    {
+      "name": "Gemma 4 12B DFlash",
+      "namespace": "draft.dflash",
+      "path": "/Users/user/Downloads",
+      "upstream_repo": "z-lab/gemma4-12B-it-DFlash",
+      "upstream_revision": "541d351de6dc9cd698fc348612bd5cdf03c636d0",
+      "license": "UNRESOLVED",
+      "redistribution": false
+    },
+    {
+      "name": "Qwen3 TTS 1.7B Base",
+      "namespace": "speech.qwen3_tts",
+      "path": "/Volumes/Julian T7/models/qwen3-tts-model",
+      "upstream_repo": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+      "upstream_revision": "fd4b254389122332181a7c3db7f27e918eec64e3",
+      "license": "Apache-2.0",
+      "redistribution": true
+    }
+  ]
+}

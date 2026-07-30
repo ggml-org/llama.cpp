@@ -7,6 +7,7 @@
 #include "llama-batch.h"
 #include "llama-io.h"
 #include "llama-memory.h"
+#include "llama-kv-cache-iswa.h"
 #include "llama-mmap.h"
 #include "llama-model.h"
 #include "llama-ext.h"
@@ -136,6 +137,7 @@ llama_context::llama_context(
 
     cparams.cb_eval           = params.cb_eval;
     cparams.cb_eval_user_data = params.cb_eval_user_data;
+    cparams.imatrix_observers = params.imatrix_observers;
 
     cparams.ctx_other = nullptr;
 
@@ -1142,6 +1144,18 @@ void llama_context::set_abort_callback(bool (*abort_callback)(void * data), void
     }
 }
 
+void llama_context::set_imatrix_observer_filter(
+        llama_imatrix_observer_filter filter,
+        void * user_data) {
+    cparams.imatrix_observer_filter = filter;
+    cparams.imatrix_observer_filter_data = user_data;
+    ++cparams.imatrix_observer_epoch;
+}
+
+void llama_context::bump_imatrix_observer_epoch() {
+    ++cparams.imatrix_observer_epoch;
+}
+
 void llama_context::set_embeddings(bool value) {
     LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
 
@@ -1196,6 +1210,29 @@ void llama_context::set_warmup(bool value) {
 
     // warmups are usually with small batches, so no need to reserve
     //sched_need_reserve = true;
+}
+
+bool llama_context::set_ane_prefill_pending(
+        uint32_t layer_count,
+        uint32_t n_tokens,
+        uint32_t kv_heads,
+        uint32_t head_dim,
+        const float * keys,
+        const float * values) {
+    const size_t kv_count = (size_t) n_tokens * kv_heads * head_dim;
+    if (model.arch != LLM_ARCH_GEMMA4 || layer_count != 1 || n_tokens == 0 ||
+            kv_heads != model.hparams.n_head_kv(0) ||
+            head_dim != model.hparams.n_embd_head_k(0) || !keys || !values ||
+            ane_prefill_pending.active()) {
+        return false;
+    }
+    ane_prefill_pending.layer_count = layer_count;
+    ane_prefill_pending.n_tokens = n_tokens;
+    ane_prefill_pending.kv_heads = kv_heads;
+    ane_prefill_pending.head_dim = head_dim;
+    ane_prefill_pending.keys.assign(keys, keys + kv_count);
+    ane_prefill_pending.values.assign(values, values + kv_count);
+    return true;
 }
 
 bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
@@ -1319,6 +1356,18 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
         ret = GGML_STATUS_FAILED;
         return nullptr;
+    }
+
+    if (ane_prefill_pending.active()) {
+        cparams.ane_prefill_layer_count = ane_prefill_pending.layer_count;
+        if (!import_ane_prefill_kv(ubatch, mctx)) {
+            LLAMA_LOG_ERROR("%s: failed to import ANE prefill K/V rows\n", __func__);
+            cparams.ane_prefill_layer_count = 0;
+            ane_prefill_pending.clear();
+            ret = GGML_STATUS_FAILED;
+            return nullptr;
+        }
+        ane_prefill_pending.clear();
     }
 
     auto * res = gf_res_prev.get();
@@ -1705,6 +1754,11 @@ int llama_context::decode(const llama_batch & batch_inp) {
         return -1;
     }
 
+    // A continuation boundary is never sticky.  The only code that enables
+    // it is process_ubatch after it has successfully imported the matching
+    // external K/V rows for this decode.
+    cparams.ane_prefill_layer_count = 0;
+
     const auto & vocab   = model.vocab;
     const auto & hparams = model.hparams;
 
@@ -1748,6 +1802,14 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
     const uint32_t n_tokens_all  = balloc->get_n_tokens();
     const uint32_t n_outputs_all = balloc->get_n_outputs();
+
+    if (ane_prefill_pending.active() &&
+            (!batch_inp.embd || n_tokens_all != ane_prefill_pending.n_tokens ||
+             cparams.n_ubatch < n_tokens_all || batch_inp.n_tokens != (int32_t) n_tokens_all)) {
+        LLAMA_LOG_ERROR("%s: ANE prefill requires one embedding-backed contiguous ubatch\n", __func__);
+        ane_prefill_pending.clear();
+        return -1;
+    }
 
     if (output_all) {
         // require that all tokens are output
@@ -2064,6 +2126,8 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
     // wait for the computation to finish (automatically done when obtaining the model output)
     //synchronize();
+
+    cparams.ane_prefill_layer_count = 0;
 
     return 0;
 }
@@ -2433,6 +2497,69 @@ llm_graph_params llama_context::graph_params(
         /*.cb          =*/ graph_get_cb(),
         /*.res         =*/ res,
     };
+}
+
+bool llama_context::import_ane_prefill_kv(
+        const llama_ubatch & ubatch,
+        const llama_memory_context_i * mctx) {
+    if (!ane_prefill_pending.active() || ane_prefill_pending.layer_count != 1 ||
+            !mctx || ubatch.n_tokens != ane_prefill_pending.n_tokens) {
+        return false;
+    }
+
+    // Gemma 4 layer zero is a sliding-attention layer, so iSWA owns the
+    // authoritative destination rows.  Retain a plain-KV branch for dense
+    // contexts because the import operation itself is generic and the ABI
+    // deliberately describes row layout rather than a cache implementation.
+    const llama_kv_cache_context * kvctx = nullptr;
+    if (const auto * iswa = dynamic_cast<const llama_kv_cache_iswa_context *>(mctx)) {
+        kvctx = model.hparams.is_swa(0) ? iswa->get_swa() : iswa->get_base();
+    } else {
+        kvctx = dynamic_cast<const llama_kv_cache_context *>(mctx);
+    }
+    if (!kvctx) {
+        return false;
+    }
+
+    const size_t meta_size = 16*ggml_tensor_overhead() + ggml_graph_overhead_custom(8, false);
+    std::vector<uint8_t> meta(meta_size);
+    ggml_init_params params = {
+        /*.mem_size   =*/ meta.size(),
+        /*.mem_buffer =*/ meta.data(),
+        /*.no_alloc   =*/ true,
+    };
+    ggml_context_ptr ctx(ggml_init(params));
+    if (!ctx) {
+        return false;
+    }
+    ggml_cgraph * gf = ggml_new_graph_custom(ctx.get(), 8, false);
+    const int64_t hd = ane_prefill_pending.head_dim;
+    const int64_t nh = ane_prefill_pending.kv_heads;
+    const int64_t nt = ane_prefill_pending.n_tokens;
+    ggml_tensor * keys = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, hd, nh, nt);
+    ggml_tensor * values = ggml_new_tensor_3d(ctx.get(), GGML_TYPE_F32, hd, nh, nt);
+    ggml_tensor * k_idxs = kvctx->build_input_k_idxs(ctx.get(), ubatch);
+    ggml_tensor * v_idxs = kvctx->build_input_v_idxs(ctx.get(), ubatch);
+    ggml_set_input(keys);
+    ggml_set_input(values);
+    ggml_set_input(k_idxs);
+    ggml_set_input(v_idxs);
+    ggml_build_forward_expand(gf, kvctx->cpy_k(ctx.get(), keys, k_idxs, 0));
+    ggml_build_forward_expand(gf, kvctx->cpy_v(ctx.get(), values, v_idxs, 0));
+
+    ggml_backend_sched_reset(sched.get());
+    if (!ggml_backend_sched_alloc_graph(sched.get(), gf)) {
+        return false;
+    }
+    ggml_backend_tensor_set(keys, ane_prefill_pending.keys.data(), 0, ggml_nbytes(keys));
+    ggml_backend_tensor_set(values, ane_prefill_pending.values.data(), 0, ggml_nbytes(values));
+    kvctx->set_input_k_idxs(k_idxs, &ubatch);
+    kvctx->set_input_v_idxs(v_idxs, &ubatch);
+    if (graph_compute(gf, true) != GGML_STATUS_SUCCESS) {
+        return false;
+    }
+    ggml_backend_sched_synchronize(sched.get());
+    return true;
 }
 
 ggml_status llama_context::graph_compute(
@@ -3486,6 +3613,7 @@ llama_context_params llama_context_default_params() {
         /*.defrag_thold                =*/ -1.0f,
         /*.cb_eval                     =*/ nullptr,
         /*.cb_eval_user_data           =*/ nullptr,
+        /*.imatrix_observers           =*/ false,
         /*.type_k                      =*/ GGML_TYPE_F16,
         /*.type_v                      =*/ GGML_TYPE_F16,
         /*.abort_callback              =*/ nullptr,
@@ -3658,6 +3786,17 @@ void llama_set_abort_callback(llama_context * ctx, bool (*abort_callback)(void *
     ctx->set_abort_callback(abort_callback, abort_callback_data);
 }
 
+void llama_set_imatrix_observer_filter(
+        llama_context * ctx,
+        llama_imatrix_observer_filter filter,
+        void * user_data) {
+    ctx->set_imatrix_observer_filter(filter, user_data);
+}
+
+void llama_bump_imatrix_observer_epoch(llama_context * ctx) {
+    ctx->bump_imatrix_observer_epoch();
+}
+
 void llama_set_embeddings(llama_context * ctx, bool embeddings) {
     ctx->set_embeddings(embeddings);
 }
@@ -3668,6 +3807,18 @@ void llama_set_causal_attn(llama_context * ctx, bool causal_attn) {
 
 void llama_set_warmup(llama_context * ctx, bool warmup) {
     ctx->set_warmup(warmup);
+}
+
+bool llama_set_ane_prefill_result(
+        llama_context * ctx,
+        uint32_t layer_count,
+        uint32_t n_tokens,
+        uint32_t kv_heads,
+        uint32_t head_dim,
+        const float * keys,
+        const float * values) {
+    return ctx && ctx->set_ane_prefill_pending(
+        layer_count, n_tokens, kv_heads, head_dim, keys, values);
 }
 
 void llama_synchronize(llama_context * ctx) {
@@ -3730,6 +3881,28 @@ llama_memory_t llama_get_memory(const struct llama_context * ctx) {
     }
 
     return ctx->get_memory();
+}
+
+int32_t llama_kv_cache_seq_get_data(
+        const llama_context * ctx,
+        llama_seq_id seq_id,
+        bool swa,
+        int32_t layer,
+        llama_pos p0,
+        llama_pos * positions,
+        float * keys,
+        float * values,
+        uint32_t capacity,
+        uint32_t * width) {
+    if (!ctx) {
+        return -1;
+    }
+    auto * iswa = dynamic_cast<llama_kv_cache_iswa *>(ctx->get_memory());
+    if (!iswa) {
+        return -1;
+    }
+    llama_kv_cache * cache = swa ? iswa->get_swa() : iswa->get_base();
+    return cache->seq_get_data(seq_id, layer, p0, positions, keys, values, capacity, width);
 }
 
 float * llama_get_embeddings_nextn(llama_context * ctx) {

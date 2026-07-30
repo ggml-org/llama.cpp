@@ -226,10 +226,12 @@ void server_model_meta::update_caps() {
         params.offline = true;
         common_models_handler handler = common_models_handler_init(params, LLAMA_EXAMPLE_SERVER);
         common_models_handler_apply(handler, params); // note: this won't download the model because offline=true
-        if (params.no_mmproj || params.mmproj.path.empty()) {
+        if (params.no_mmproj) {
             multimodal = { false, false };
-        } else {
+        } else if (!params.mmproj.path.empty()) {
             multimodal = mtmd_get_cap_from_file(params.mmproj.path.c_str());
+        } else {
+            multimodal = mtmd_get_cap_from_file(params.model.path.c_str());
         }
     } catch (const std::exception & e) {
         LOG_WRN("failed to initialize common_params for multimodal capability detection: %s\n", e.what());

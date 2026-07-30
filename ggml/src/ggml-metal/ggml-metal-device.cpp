@@ -668,6 +668,130 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_solve_tri(ggml_m
     return res;
 }
 
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_tile640_matmul(ggml_metal_library_t lib, const ggml_tensor * op) {
+    char base[256];
+    char name[256];
+
+    // src[0] is the input B (matrix), ne[0] = in_dim (K), ne[1] = n_tokens
+    // src[1] is the weight page_scales; ne[0] = out_dim * pages_per_row → out_dim = ne01 / pages_per_row
+    // We get out_dim directly from ggml_get_op_params_i32(dst, 0).
+    const int in_dim  = (int) op->src[6]->ne[0];
+    const int out_dim = ggml_get_op_params_i32(op, 0);
+    const int pages_per_row = (in_dim + 639) / 640;
+    const int words_per_page =
+        (int) (op->src[0]->ne[0] / (out_dim * pages_per_row));
+    GGML_ASSERT(words_per_page == 32 || words_per_page == 40);
+    const int packing = words_per_page == 40 ? 1 : 0;
+    const int input_f32 = op->src[6]->type == GGML_TYPE_F32 ? 1 : 0;
+
+    snprintf(base, 256, "kernel_TILE640_MATMUL");
+    snprintf(name, 256, "%s_in=%d_out=%d_pack=%d_f32=%d",
+             base, in_dim, out_dim, packing, input_f32);
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res.pipeline) {
+        ggml_metal_cv_t cv = ggml_metal_cv_init();
+        ggml_metal_cv_set_int32(cv, in_dim,  FC_TILE640 + 0);
+        ggml_metal_cv_set_int32(cv, out_dim, FC_TILE640 + 1);
+        ggml_metal_cv_set_int32(cv, packing, FC_TILE640 + 2);
+        ggml_metal_cv_set_bool (cv, input_f32, FC_TILE640 + 3);
+        res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
+        ggml_metal_cv_free(cv);
+    }
+
+    res.nsg = 1;
+    return res;
+}
+
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_tile640_matmul_id(ggml_metal_library_t lib, const ggml_tensor * op) {
+    char base[256];
+    char name[256];
+
+    const int in_dim  = (int) op->src[6]->ne[0];
+    const int out_dim = ggml_get_op_params_i32(op, 1);
+    const int n_experts = ggml_get_op_params_i32(op, 0);
+
+    snprintf(base, 256, "kernel_TILE640_MATMUL_ID");
+    snprintf(name, 256, "%s_in=%d_out=%d_e=%d", base, in_dim, out_dim, n_experts);
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res.pipeline) {
+        ggml_metal_cv_t cv = ggml_metal_cv_init();
+        ggml_metal_cv_set_int32(cv, in_dim,    FC_TILE640 + 0);
+        ggml_metal_cv_set_int32(cv, out_dim,   FC_TILE640 + 1);
+        res = ggml_metal_library_compile_pipeline(lib, base, name, cv);
+        ggml_metal_cv_free(cv);
+    }
+
+    res.nsg = 1;
+    return res;
+}
+
+static ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_tile640_decode(
+        ggml_metal_library_t lib, const char * kernel) {
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, kernel);
+    if (!res.pipeline) {
+        res = ggml_metal_library_compile_pipeline(lib, kernel, kernel, nullptr);
+    }
+    return res;
+}
+
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_tile640_get_rows(ggml_metal_library_t lib) {
+    return ggml_metal_library_get_pipeline_tile640_decode(lib, "kernel_TILE640_GET_ROWS");
+}
+
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_tile640_dequant(ggml_metal_library_t lib) {
+    return ggml_metal_library_get_pipeline_tile640_decode(lib, "kernel_TILE640_DEQUANT");
+}
+
+static ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_imatrix_observer_typed(
+        ggml_metal_library_t lib, const char * kernel, bool f16) {
+    char name[256];
+    snprintf(name, sizeof(name), "%s_f16=%d", kernel, f16 ? 1 : 0);
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res.pipeline) {
+        ggml_metal_cv_t cv = ggml_metal_cv_init();
+        ggml_metal_cv_set_bool(cv, f16, FC_IMATRIX_OBSERVER + 0);
+        res = ggml_metal_library_compile_pipeline(lib, kernel, name, cv);
+        ggml_metal_cv_free(cv);
+    }
+    return res;
+}
+
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_imatrix_observer(
+        ggml_metal_library_t lib, bool f16) {
+    return ggml_metal_library_get_pipeline_imatrix_observer_typed(
+        lib, "kernel_IMATRIX_OBSERVER", f16);
+}
+
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_imatrix_observer_cast(
+        ggml_metal_library_t lib) {
+    return ggml_metal_library_get_pipeline_tile640_decode(
+        lib, "kernel_IMATRIX_OBSERVER_CAST");
+}
+
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_imatrix_observer_cast_tiled(
+        ggml_metal_library_t lib) {
+    return ggml_metal_library_get_pipeline_tile640_decode(
+        lib, "kernel_IMATRIX_OBSERVER_CAST_TILED");
+}
+
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_imatrix_observer_tiled(
+        ggml_metal_library_t lib, bool f16) {
+    return ggml_metal_library_get_pipeline_imatrix_observer_typed(
+        lib, "kernel_IMATRIX_OBSERVER_TILED", f16);
+}
+
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_imatrix_observer_clear(ggml_metal_library_t lib) {
+    return ggml_metal_library_get_pipeline_tile640_decode(lib, "kernel_IMATRIX_OBSERVER_CLEAR");
+}
+
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_imatrix_observer_routed(
+        ggml_metal_library_t lib, bool f16) {
+    return ggml_metal_library_get_pipeline_imatrix_observer_typed(
+        lib, "kernel_IMATRIX_OBSERVER_ROUTED", f16);
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv_ext(ggml_metal_library_t lib, const ggml_tensor * op, int nsg, int nxpsg, int r1ptg) {
     char base[256];
     char name[256];

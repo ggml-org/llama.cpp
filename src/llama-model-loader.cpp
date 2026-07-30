@@ -271,14 +271,25 @@ namespace GGUFMeta {
     };
 }
 
+std::string llama_model_loader::scoped_key(const std::string & key) const {
+    if (!component_prefix.empty()) {
+        const std::string candidate = component_prefix + key;
+        if (gguf_find_key(metadata, candidate.c_str()) >= 0) {
+            return candidate;
+        }
+    }
+    return key;
+}
+
     template<typename T>
     typename std::enable_if<std::is_integral<T>::value, bool>::type
     llama_model_loader::get_arr_n(const std::string & key, T & result, bool required) {
-        const int kid = gguf_find_key(metadata, key.c_str());
+        const std::string resolved_key = scoped_key(key);
+        const int kid = gguf_find_key(metadata, resolved_key.c_str());
 
         if (kid < 0) {
             if (required) {
-                throw std::runtime_error(format("key not found in model: %s", key.c_str()));
+                throw std::runtime_error(format("key not found in model: %s", resolved_key.c_str()));
             }
             return false;
         }
@@ -304,11 +315,12 @@ namespace GGUFMeta {
     template<typename T>
     bool llama_model_loader::get_arr(const std::string & key, std::vector<T> & result, bool required) {
         const gguf_context * ctx = metadata;
-        const int kid = gguf_find_key(ctx, key.c_str());
+        const std::string resolved_key = scoped_key(key);
+        const int kid = gguf_find_key(ctx, resolved_key.c_str());
 
         if (kid < 0 || gguf_get_kv_type(ctx, kid) != GGUF_TYPE_ARRAY) {
             if (required) {
-                throw std::runtime_error(format("array key not found in model: %s", key.c_str()));
+                throw std::runtime_error(format("array key not found in model: %s", resolved_key.c_str()));
             }
             return false;
         }
@@ -345,11 +357,12 @@ namespace GGUFMeta {
     template<typename T, size_t N_MAX>
     bool llama_model_loader::get_arr(const std::string & key, std::array<T, N_MAX> & result, bool required) {
         const gguf_context * ctx = metadata;
-        const int kid = gguf_find_key(ctx, key.c_str());
+        const std::string resolved_key = scoped_key(key);
+        const int kid = gguf_find_key(ctx, resolved_key.c_str());
 
         if (kid < 0 || gguf_get_kv_type(ctx, kid) != GGUF_TYPE_ARRAY) {
             if (required) {
-                throw std::runtime_error(format("array key not found in model: %s", key.c_str()));
+                throw std::runtime_error(format("array key not found in model: %s", resolved_key.c_str()));
             }
             return false;
         }
@@ -405,15 +418,16 @@ namespace GGUFMeta {
 
     template<typename T>
     bool llama_model_loader::get_key(const std::string & key, T & result, bool required) {
-        auto it = kv_overrides.find(key);
+        const std::string resolved_key = scoped_key(key);
+        auto it = kv_overrides.find(resolved_key);
 
         const struct llama_model_kv_override * override =
             it != kv_overrides.end() ? &it->second : nullptr;
 
-        const bool found = GGUFMeta::GKV<T>::set(metadata, key, result, override);
+        const bool found = GGUFMeta::GKV<T>::set(metadata, resolved_key, result, override);
 
         if (required && !found) {
-            throw std::runtime_error(format("key not found in model: %s", key.c_str()));
+            throw std::runtime_error(format("key not found in model: %s", resolved_key.c_str()));
         }
 
         return found;
@@ -444,11 +458,12 @@ namespace GGUFMeta {
     // get array of n <= N_MAX elements, or a single element repeated n times
     template<typename T, size_t N_MAX>
     bool llama_model_loader::get_key_or_arr(const std::string & key, std::array<T, N_MAX> & result, uint32_t n, bool required) {
-        const int kid = gguf_find_key(metadata, key.c_str());
+        const std::string resolved_key = scoped_key(key);
+        const int kid = gguf_find_key(metadata, resolved_key.c_str());
 
         if (kid < 0) {
             if (required) {
-                throw std::runtime_error(format("key not found in model: %s", key.c_str()));
+                throw std::runtime_error(format("key not found in model: %s", resolved_key.c_str()));
             }
             return false;
         }
@@ -465,12 +480,12 @@ namespace GGUFMeta {
                 throw std::runtime_error(format("key %s has wrong array length; expected %u, got %u", key.c_str(), n, (uint32_t) arr_info.length));
             }
 
-            return get_arr(key, result, required);
+            return get_arr(resolved_key, result, required);
         }
 
         T value;
 
-        bool ok = get_key(key, value, required);
+        bool ok = get_key(resolved_key, value, required);
         if (!ok) {
             return false;
         }
@@ -489,12 +504,12 @@ namespace GGUFMeta {
 
     bool llama_model_loader::get_key_or_arr(enum llm_kv kid, uint32_t & result, bool required) {
         const std::string key = llm_kv(kid);
-
-        const int id = gguf_find_key(metadata, key.c_str());
+        const std::string resolved_key = scoped_key(key);
+        const int id = gguf_find_key(metadata, resolved_key.c_str());
 
         if (id < 0) {
             if (required) {
-                throw std::runtime_error(format("key not found in model: %s", key.c_str()));
+                throw std::runtime_error(format("key not found in model: %s", resolved_key.c_str()));
             }
             return false;
         }
@@ -527,8 +542,30 @@ llama_model_loader::llama_model_loader(
         bool check_tensors,
         bool no_alloc,
         const llama_model_kv_override * param_overrides_p,
-        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p)
+        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p,
+        const char * component_prefix_p)
         : metadata(meta), set_tensor_data(set_tensor_data), set_tensor_data_ud(set_tensor_data_ud) {
+    component_prefix = component_prefix_p ? component_prefix_p : "";
+
+    const auto expose_tensor_name = [this](const char * raw_name, std::string & exposed_name) {
+        const std::string name(raw_name);
+        if (component_prefix.empty()) {
+            if (name.rfind("mtp.", 0) == 0) {
+                return false;
+            }
+            exposed_name = name;
+            return true;
+        }
+        if (name.rfind(component_prefix, 0) != 0) {
+            return false;
+        }
+        exposed_name = name.substr(component_prefix.size());
+        if (exposed_name.rfind("ane.", 0) == 0) {
+            return false;
+        }
+        return true;
+    };
+
     int trace = 0;
     if (getenv("LLAMA_TRACE")) {
         trace = atoi(getenv("LLAMA_TRACE"));
@@ -569,7 +606,10 @@ llama_model_loader::llama_model_loader(
         // For subsidiary files, `meta` tensor data offset must not be used,
         // so we build a unified tensors index for weights.
         for (ggml_tensor * cur = ggml_get_first_tensor(ctx); cur; cur = ggml_get_next_tensor(ctx, cur)) {
-            std::string tensor_name = std::string(cur->name);
+            std::string tensor_name;
+            if (!expose_tensor_name(cur->name, tensor_name)) {
+                continue;
+            }
             // make sure there is no duplicated tensor names
             if (weights_map.find(tensor_name) != weights_map.end()) {
                 throw std::runtime_error(format("invalid model: tensor '%s' is duplicated", ggml_get_name(cur)));
@@ -635,7 +675,10 @@ llama_model_loader::llama_model_loader(
 
                 // Save tensors data offset info of the shard.
                 for (ggml_tensor * cur = ggml_get_first_tensor(ctx); cur; cur = ggml_get_next_tensor(ctx, cur)) {
-                    std::string tensor_name = std::string(cur->name);
+                    std::string tensor_name;
+                    if (!expose_tensor_name(cur->name, tensor_name)) {
+                        continue;
+                    }
                     // make sure there is no duplicated tensor names
                     if (weights_map.find(tensor_name) != weights_map.end()) {
                         throw std::runtime_error(format("invalid model: tensor '%s' is duplicated", ggml_get_name(cur)));
@@ -651,7 +694,7 @@ llama_model_loader::llama_model_loader(
             // sanity check
             {
                 const int n_tensors_loaded = (int) weights_map.size();
-                if (n_tensors != n_tensors_loaded) {
+                if (component_prefix.empty() && n_tensors < n_tensors_loaded) {
                     throw std::runtime_error(format("corrupted model: %d tensors expected but %d found", n_tensors, n_tensors_loaded));
                 }
             }
@@ -679,7 +722,10 @@ llama_model_loader::llama_model_loader(
 
         // Save tensors data offset info of the main file.
         for (ggml_tensor * cur = ggml_get_first_tensor(ctx); cur; cur = ggml_get_next_tensor(ctx, cur)) {
-            std::string tensor_name = std::string(cur->name);
+            std::string tensor_name;
+            if (!expose_tensor_name(cur->name, tensor_name)) {
+                continue;
+            }
             // make sure there is no duplicated tensor names
             if (weights_map.find(tensor_name) != weights_map.end()) {
                 throw std::runtime_error(format("invalid model: tensor '%s' is duplicated", ggml_get_name(cur)));
@@ -1048,6 +1094,11 @@ struct ggml_tensor * llama_model_loader::create_tensor(
             int max_n_tensors = n_tensors;
             max_n_tensors += 1;                   // duplicated output tensor
             max_n_tensors += hparams.n_layer()*2; // duplicated rope freq tensors
+            // Evolved Tile640 represents one logical weight with several GGUF
+            // component tensors. A duplicated logical tensor (most notably a
+            // tied token embedding / output head) duplicates every component,
+            // so the historical +1 allowance is insufficient.
+            max_n_tensors += n_tensors;
             if (files.empty()) {
                 max_n_tensors += hparams.n_layer()*256; // this should be well above what any model actually uses
             }
@@ -1101,6 +1152,7 @@ struct ggml_tensor * llama_model_loader::create_tensor(
 
             size_data -= nbytes;
             n_created++;
+            LLAMA_LOG_INFO("DEBUG: skip unused %s (n_created=%d)\n", tn.str().c_str(), n_created);
 
             return nullptr;
         }

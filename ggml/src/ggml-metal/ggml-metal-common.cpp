@@ -260,6 +260,11 @@ static std::vector<int> ggml_metal_graph_optimize_reorder(const std::vector<node
         switch (op) {
             case GGML_OP_MUL_MAT:
             case GGML_OP_MUL_MAT_ID:
+            case GGML_OP_TILE640_MATMUL:
+            case GGML_OP_TILE640_MATMUL_ID:
+            case GGML_OP_TILE640_GET_ROWS:
+            case GGML_OP_TILE640_DEQUANT:
+            case GGML_OP_IMATRIX_OBSERVER:
             case GGML_OP_ROPE:
             case GGML_OP_NORM:
             case GGML_OP_RMS_NORM:

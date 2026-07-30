@@ -114,6 +114,20 @@ LLAMA_API void llama_set_embeddings_layer_inp(struct llama_context * ctx, uint32
 // LLAMA_API float * llama_get_embeddings(struct llama_context * ctx);
 LLAMA_API float * llama_get_embeddings_layer_inp(struct llama_context * ctx, uint32_t lid);
 
+// Arm one Gemma ANE prefill continuation. `keys` and `values` are F32
+// token-major rows [n_tokens, kv_heads, head_dim]; the caller supplies the
+// matching post-slab hidden states as llama_batch.embd to the immediately
+// following decode call. Returns false when the current context cannot honor
+// the sealed one-layer, one-ubatch contract.
+LLAMA_API bool llama_set_ane_prefill_result(
+        struct llama_context * ctx,
+        uint32_t layer_count,
+        uint32_t n_tokens,
+        uint32_t kv_heads,
+        uint32_t head_dim,
+        const float * keys,
+        const float * values);
+
 LLAMA_API llama_context * llama_get_ctx_other(struct llama_context * ctx);
 
 //

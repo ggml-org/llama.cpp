@@ -433,6 +433,16 @@ int32_t mtmd_helper_eval_chunks(mtmd_context * ctx,
         return 0;
     }
 
+    mtmd_prompt_plan * plan = mtmd_prompt_plan_init(chunks);
+    if (plan == nullptr || !mtmd_prompt_plan_validate(plan)) {
+        mtmd_prompt_plan_free(plan);
+        LOG_ERR("invalid multimodal prompt plan\n");
+        return 1;
+    }
+    const llama_pos expected_n_past =
+        n_past + static_cast<llama_pos>(mtmd_prompt_plan_get_n_positions(plan));
+    mtmd_prompt_plan_free(plan);
+
     for (size_t i = 0; i < n_chunks; i++) {
         bool chunk_logits_last = (i == n_chunks - 1) && logits_last;
         auto chunk = mtmd_input_chunks_get(chunks, i);
@@ -443,6 +453,12 @@ int32_t mtmd_helper_eval_chunks(mtmd_context * ctx,
             return res;
         }
         *new_n_past = n_past;
+    }
+
+    if (n_past != expected_n_past) {
+        LOG_ERR("multimodal prompt plan position mismatch: expected %" PRId64 ", got %" PRId64 "\n",
+                static_cast<int64_t>(expected_n_past), static_cast<int64_t>(n_past));
+        return 1;
     }
 
     return 0;

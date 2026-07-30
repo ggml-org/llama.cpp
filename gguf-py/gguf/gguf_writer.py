@@ -875,6 +875,9 @@ class GGUFWriter:
     def add_moe_latent_size(self, value: int) -> None:
         self.add_uint32(Keys.LLM.MOE_LATENT_SIZE.format(arch=self.arch), value)
 
+    def add_attention_residual_block_size(self, value: int) -> None:
+        self.add_uint32(Keys.LLM.ATTN_RES_BLOCK_SIZE.format(arch=self.arch), value)
+
     def add_nextn_predict_layers(self, count: int) -> None:
         self.add_uint32(Keys.LLM.NEXTN_PREDICT_LAYERS.format(arch=self.arch), count)
 

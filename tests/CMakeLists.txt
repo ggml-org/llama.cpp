@@ -161,6 +161,9 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     llama_build_and_test(test-chat.cpp WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
     target_include_directories(test-chat PRIVATE ${PROJECT_SOURCE_DIR}/tools/server)
     target_link_libraries(test-chat PRIVATE server-context)
+    llama_build_and_test(test-server-prompt-cache.cpp)
+    target_include_directories(test-server-prompt-cache PRIVATE ${PROJECT_SOURCE_DIR}/tools/server)
+    target_link_libraries(test-server-prompt-cache PRIVATE server-context)
     # TODO: disabled on loongarch64 because the ggml-ci node lacks Python 3.8
     if (NOT ${CMAKE_SYSTEM_PROCESSOR} MATCHES "loongarch64")
         llama_build_and_test(test-json-schema-to-grammar.cpp   WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
@@ -266,6 +269,47 @@ endif()
 llama_build_and_test(test-backend-ops.cpp)
 
 llama_build_and_test(test-model-load-cancel.cpp LABEL "model")
+llama_build_and_test(test-tessera-kv-block-table.cpp)
+target_include_directories(test-tessera-kv-block-table PRIVATE ${PROJECT_SOURCE_DIR}/src)
+llama_build(test-component-load.cpp)
+llama_build(test-imatrix-observer-classification.cpp)
+llama_test(test-imatrix-observer-classification)
+llama_build(test-imatrix-observer-epoch.cpp)
+llama_test(test-imatrix-observer-epoch)
+add_executable(test-tessera-engram test-tessera-engram.cpp)
+target_include_directories(test-tessera-engram PRIVATE ${PROJECT_SOURCE_DIR}/tools/tessera)
+add_test(NAME test-tessera-engram COMMAND test-tessera-engram)
+add_test(
+    NAME test-tessera-semantic-repair-transfer
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test-tessera-semantic-repair-transfer.py
+)
+add_test(
+    NAME test-tessera-awq-evolve
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test-tessera-awq-evolve.py
+)
+add_test(
+    NAME test-tessera-shadow-calibration
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test-tessera-shadow-calibration.py
+)
+add_test(
+    NAME test-tessera-challenge-corpus
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test-tessera-challenge-corpus.py
+)
+add_test(
+    NAME test-tessera-policy-prior
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test-tessera-policy-prior.py
+)
+llama_build(${PROJECT_SOURCE_DIR}/tools/tessera/kv-compress-reference.cpp)
+add_executable(test-tessera-kv-compaction test-tessera-kv-compaction.cpp)
+target_include_directories(test-tessera-kv-compaction PRIVATE ${PROJECT_SOURCE_DIR}/tools/tessera)
+add_test(NAME test-tessera-kv-compaction COMMAND test-tessera-kv-compaction)
+if (APPLE)
+    llama_build(test-ane-mtp.cpp)
+    llama_build(test-ane-prefill-manifest.cpp)
+    llama_build(test-ane-prefill-slab.cpp)
+    llama_build(test-ane-prefill-buckets.cpp)
+    llama_build(test-ane-prefill-chunked.cpp)
+endif()
 llama_build_and_test(test-autorelease.cpp       LABEL "model")
 llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
 

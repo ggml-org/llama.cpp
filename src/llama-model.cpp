@@ -873,6 +873,7 @@ static const std::map<std::string, llm_ffn_op_type> LLM_FFN_OP_TYPES_FROM_STRING
     { "swiglu", LLM_FFN_SWIGLU },
     { "relu",   LLM_FFN_RELU   },
     { "reglu",  LLM_FFN_REGLU  },
+    { "situ",   LLM_FFN_SITU   },
 };
 
 llm_ffn_op_type llm_ffn_op_type_from_string(const std::string & name, llm_ffn_op_type fallback) {
@@ -1505,7 +1506,13 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
             }
         }
     }
-    ml.done_getting_tensors();
+    // A unified multimodal GGUF contains a language model and a sibling
+    // projector/vision model. The language loader validates every tensor it
+    // requests, while mtmd consumes the clip tensors from the same file later.
+    // Do not require the language model alone to claim the sibling tensors.
+    bool has_embedded_vision = false;
+    ml.get_key("clip.has_vision_encoder", has_embedded_vision, false);
+    ml.done_getting_tensors(has_embedded_vision);
 
     // Tied NVFP4 output is valid when no separate LM-head scale tensors are present.
     // If sidecar scales exist, the output weight must be an actual output tensor.
@@ -1647,6 +1654,132 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
         if (!ml.load_all_data(ctx, buf_map, use_mlock ? &pimpl->mlock_mmaps : NULL, params.progress_callback, params.progress_callback_user_data)) {
             return false;
         }
+    }
+
+    // Tessera keeps its compact base-3 representation in the GGUF. Metal
+    // benefits from a page-aligned execution view containing sixteen 2-bit
+    // trits per word, so expand each Metal-resident tensor once after loading.
+    // The compact tensor remains owned by the model for provenance and CPU
+    // compatibility; graph construction uses value.packed, which is replaced
+    // by the execution view only on Metal.
+    std::map<ggml_backend_buffer_type_t,
+             std::vector<std::pair<std::string, llama_tile640_tensor *>>>
+        tile640_expand_groups;
+    for (auto & [name, value] : tile640_tensors) {
+        if (!value.packed || !value.packed->buffer) {
+            continue;
+        }
+        ggml_backend_buffer_type_t buft =
+            ggml_backend_buffer_get_type(value.packed->buffer);
+        ggml_backend_dev_t dev = ggml_backend_buft_get_device(buft);
+        ggml_backend_reg_t reg = dev ? ggml_backend_dev_backend_reg(dev) : nullptr;
+        const char * reg_name = reg ? ggml_backend_reg_name(reg) : nullptr;
+        if (!reg_name || std::string(reg_name) != "MTL") {
+            continue;
+        }
+        tile640_expand_groups[buft].emplace_back(name, &value);
+    }
+
+    for (auto & [buft, entries] : tile640_expand_groups) {
+        ggml_init_params expanded_params = {
+            /*.mem_size   =*/ ggml_tensor_overhead() * (entries.size() + 1),
+            /*.mem_buffer =*/ nullptr,
+            /*.no_alloc   =*/ true,
+        };
+        ggml_context_ptr expanded_ctx(ggml_init(expanded_params));
+        if (!expanded_ctx) {
+            throw std::runtime_error("unable to create Tessera two-bit context");
+        }
+
+        struct expanded_entry {
+            std::string name;
+            llama_tile640_tensor * value;
+            ggml_tensor * compact;
+            ggml_tensor * expanded;
+            int64_t n_rows;
+            int64_t pages_per_row;
+        };
+        std::vector<expanded_entry> expanded_entries;
+        expanded_entries.reserve(entries.size());
+
+        for (auto & [name, value] : entries) {
+            const int64_t n_rows =
+                value->ne[1] * value->ne[2] * value->ne[3];
+            const int64_t pages_per_row = (value->ne[0] + 639) / 640;
+            ggml_tensor * expanded = ggml_new_tensor_1d(
+                expanded_ctx.get(),
+                GGML_TYPE_I32,
+                n_rows * pages_per_row * 40);
+            ggml_format_name(
+                expanded, "%s_packed2", name.c_str());
+            expanded_entries.push_back({
+                name, value, value->packed, expanded, n_rows, pages_per_row,
+            });
+        }
+
+        ggml_backend_buffer_ptr expanded_buf(
+            ggml_backend_alloc_ctx_tensors_from_buft(expanded_ctx.get(), buft));
+        if (!expanded_buf) {
+            throw std::runtime_error(
+                "unable to allocate Tessera two-bit Metal execution buffer");
+        }
+        ggml_backend_buffer_set_usage(
+            expanded_buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+        size_t expanded_bytes = 0;
+        for (auto & entry : expanded_entries) {
+            const size_t compact_words = ggml_nelements(entry.compact);
+            const size_t expected_compact_words =
+                entry.n_rows * entry.pages_per_row * 32;
+            if (compact_words != expected_compact_words) {
+                throw std::runtime_error(format(
+                    "%s: invalid Tessera compact word count %zu, expected %zu",
+                    entry.name.c_str(), compact_words, expected_compact_words));
+            }
+
+            std::vector<uint32_t> compact(compact_words);
+            std::vector<uint32_t> expanded(
+                entry.n_rows * entry.pages_per_row * 40, 0);
+            ggml_backend_tensor_get(
+                entry.compact, compact.data(), 0,
+                compact.size() * sizeof(compact[0]));
+
+            for (int64_t row = 0; row < entry.n_rows; ++row) {
+                for (int64_t page = 0; page < entry.pages_per_row; ++page) {
+                    const int64_t compact_page =
+                        (row * entry.pages_per_row + page) * 32;
+                    const int64_t expanded_page =
+                        (row * entry.pages_per_row + page) * 40;
+                    for (int64_t lane = 0; lane < 32; ++lane) {
+                        uint32_t word = compact[compact_page + lane];
+                        for (int64_t trit = 0; trit < 20; ++trit) {
+                            const uint32_t digit = word % 3u;
+                            word /= 3u;
+                            const int64_t page_col = lane * 20 + trit;
+                            expanded[expanded_page + page_col / 16] |=
+                                digit << (2 * (page_col % 16));
+                        }
+                    }
+                }
+            }
+
+            ggml_backend_tensor_set(
+                entry.expanded, expanded.data(), 0,
+                expanded.size() * sizeof(expanded[0]));
+            entry.value->packed_base3 = entry.compact;
+            entry.value->packed = entry.expanded;
+            tensors_by_name.emplace_back(
+                ggml_get_name(entry.expanded), entry.expanded);
+            expanded_bytes += expanded.size() * sizeof(expanded[0]);
+        }
+
+        LLAMA_LOG_INFO(
+            "%s: Tessera two-bit Metal execution buffer size = %.2f MiB\n",
+            __func__, expanded_bytes / 1024.0 / 1024.0);
+        std::vector<ggml_backend_buffer_ptr> bufs;
+        bufs.emplace_back(std::move(expanded_buf));
+        pimpl->ctxs_bufs.emplace_back(
+            std::move(expanded_ctx), std::move(bufs));
     }
 
     if (use_mmap_buffer) {
@@ -2019,6 +2152,11 @@ const ggml_tensor * llama_model::get_tensor(const char * name) const {
     return it->second;
 }
 
+const llama_tile640_tensor * llama_model::get_tile640_tensor(const std::string & name) const {
+    const auto it = tile640_tensors.find(name);
+    return it == tile640_tensors.end() ? nullptr : &it->second;
+}
+
 float llama_model::get_rope_freq_base (const llama_cparams & cparams, int il) const {
     return hparams.is_swa(il) ? hparams.rope_freq_base_train_swa : cparams.rope_freq_base;
 }
@@ -2328,6 +2466,7 @@ llama_model_params llama_model_default_params() {
         /*.progress_callback           =*/ nullptr,
         /*.progress_callback_user_data =*/ nullptr,
         /*.kv_overrides                =*/ nullptr,
+        /*.component_prefix            =*/ nullptr,
         /*.vocab_only                  =*/ false,
         /*.check_tensors               =*/ false,
         /*.use_extra_bufts             =*/ true,
@@ -2750,11 +2889,87 @@ ggml_tensor * llama_model_base::create_tensor(const LLM_TN_IMPL & tn, const std:
     return create_tensor(*ml, tn, ne, flags);
 }
 
+ggml_tensor * llama_model_base::create_tensor_or_tile640(
+        const LLM_TN_IMPL & tn,
+        const std::initializer_list<int64_t> & ne,
+        int flags) {
+    GGML_ASSERT(ml != nullptr);
+
+    const std::string logical_name = tn.str();
+    const std::string stem = tn.suffix ? tn.suffix : "weight";
+    const std::string packed_suffix = stem + "_packed";
+    const LLM_TN_IMPL packed_tn(tn.arch, tn.tensor, packed_suffix.c_str(), tn.bid, tn.xid);
+    if (ml->get_tensor_meta(packed_tn.str().c_str()) == nullptr) {
+        return create_tensor(tn, ne, flags);
+    }
+
+    std::array<int64_t, 4> shape = { 1, 1, 1, 1 };
+    size_t rank = 0;
+    for (const int64_t dim : ne) {
+        GGML_ASSERT(rank < shape.size() && dim > 0);
+        shape[rank++] = dim;
+    }
+    const int64_t row_width = shape[0];
+    const int64_t n_rows = shape[1] * shape[2] * shape[3];
+    const int64_t pages_per_row = (row_width + 639) / 640;
+
+    auto component = [&](const char * tail, std::initializer_list<int64_t> dims) {
+        const std::string suffix = stem + tail;
+        return create_tensor(
+            LLM_TN_IMPL(tn.arch, tn.tensor, suffix.c_str(), tn.bid, tn.xid),
+            dims, flags & (TENSOR_NOT_REQUIRED | TENSOR_DUPLICATED));
+    };
+
+    llama_tile640_tensor value;
+    value.ne = shape;
+    value.packed       = component("_packed",      { n_rows * pages_per_row * 32 });
+    value.page_scales  = component("_page_scales", { n_rows * pages_per_row });
+    value.lane_scales  = component("_lane_scales", { n_rows * pages_per_row * 32 });
+    value.outlier_row_offsets = component("_outlier_row_offsets", { n_rows + 1 });
+
+    const std::string cols_suffix = stem + "_outlier_cols";
+    const LLM_TN_IMPL cols_tn(tn.arch, tn.tensor, cols_suffix.c_str(), tn.bid, tn.xid);
+    const auto * outlier_meta = ml->require_tensor_meta(cols_tn.str());
+    value.outlier_cols = create_tensor(
+        cols_tn,
+        { outlier_meta->ne[0] },
+        flags & (TENSOR_NOT_REQUIRED | TENSOR_DUPLICATED));
+    value.outlier_vals = component("_outlier_vals", { outlier_meta->ne[0] });
+    const std::string act_suffix = stem + "_act_scale";
+    const LLM_TN_IMPL act_tn(tn.arch, tn.tensor, act_suffix.c_str(), tn.bid, tn.xid);
+    if (ml->get_tensor_meta(act_tn.str().c_str()) != nullptr) {
+        value.act_scale = create_tensor(
+            act_tn,
+            { row_width },
+            TENSOR_NOT_REQUIRED | (flags & TENSOR_DUPLICATED));
+    }
+    tile640_tensors.emplace(logical_name, value);
+    return nullptr;
+}
+
 void llama_model_base::create_tensor_gate_up_exps(llama_layer & layer, int bid, int64_t n_embd_, int64_t n_ff_, int64_t n_expert_, int flags) {
     layer.ffn_gate_up_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_UP_EXPS, "weight", bid), {n_embd_, n_ff_ * 2, n_expert_}, TENSOR_NOT_REQUIRED);
     if (layer.ffn_gate_up_exps == nullptr) {
-        layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", bid), {n_embd_, n_ff_, n_expert_}, flags);
-        layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", bid), {n_embd_, n_ff_, n_expert_}, flags);
+        // Tile640 detection for fused gate+up experts (3D)
+        const std::string gu_packed_name = tn(LLM_TENSOR_FFN_GATE_UP_EXPS, "weight_packed", bid).str();
+        if (ml->get_tensor_meta(gu_packed_name.c_str()) != nullptr) {
+            constexpr int64_t PAGE_SIZE = 640, LANES_PER_PAGE = 32, WORDS_PER_PAGE = 32;
+            const int64_t pages_per_row = (n_embd_ + PAGE_SIZE - 1) / PAGE_SIZE;
+            layer.ffn_gate_up_exps_packed       = create_tensor(tn(LLM_TENSOR_FFN_GATE_UP_EXPS, "weight_packed",       bid), {n_expert_ * (n_ff_ * 2) * pages_per_row * WORDS_PER_PAGE}, TENSOR_NOT_REQUIRED);
+            layer.ffn_gate_up_exps_page_scales  = create_tensor(tn(LLM_TENSOR_FFN_GATE_UP_EXPS, "weight_page_scales",  bid), {n_expert_ * (n_ff_ * 2) * pages_per_row}, TENSOR_NOT_REQUIRED);
+            layer.ffn_gate_up_exps_lane_scales  = create_tensor(tn(LLM_TENSOR_FFN_GATE_UP_EXPS, "weight_lane_scales",  bid), {n_expert_ * (n_ff_ * 2) * pages_per_row * LANES_PER_PAGE}, TENSOR_NOT_REQUIRED);
+            layer.ffn_gate_up_exps_outlier_row_offsets = create_tensor(tn(LLM_TENSOR_FFN_GATE_UP_EXPS, "weight_outlier_row_offsets", bid), {n_expert_ * (n_ff_ * 2 + 1)}, TENSOR_NOT_REQUIRED);
+            const auto * outlier_meta = ml->require_tensor_meta(tn(LLM_TENSOR_FFN_GATE_UP_EXPS, "weight_outlier_cols", bid).str());
+            layer.ffn_gate_up_exps_outlier_cols = create_tensor(tn(LLM_TENSOR_FFN_GATE_UP_EXPS, "weight_outlier_cols", bid), {outlier_meta->ne[0]}, TENSOR_NOT_REQUIRED);
+            layer.ffn_gate_up_exps_outlier_vals = create_tensor(tn(LLM_TENSOR_FFN_GATE_UP_EXPS, "weight_outlier_vals", bid), {outlier_meta->ne[0]}, TENSOR_NOT_REQUIRED);
+        } else {
+            layer.ffn_gate_exps = create_tensor_or_tile640(
+                    tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", bid),
+                    {n_embd_, n_ff_, n_expert_}, flags);
+            layer.ffn_up_exps = create_tensor_or_tile640(
+                    tn(LLM_TENSOR_FFN_UP_EXPS, "weight", bid),
+                    {n_embd_, n_ff_, n_expert_}, flags);
+        }
     }
 }
 
@@ -2766,9 +2981,57 @@ void llama_model_base::create_tensor_qkv(llama_layer & layer, int bid,
     if (layer.wqkv) {
         layer.wqkv_b = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "bias", bid), {n_embd_qkv}, TENSOR_NOT_REQUIRED | TENSOR_SKIP_IF_VIRTUAL);
     } else {
-        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q, "weight", bid), {n_embd_, n_embd_q_}, flags);
-        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K, "weight", bid), {n_embd_, n_embd_k_}, flags);
-        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V, "weight", bid), {n_embd_, n_embd_v_}, flags);
+        // Tile640 detection: if the q/k/v weight is Tile640-quantized, load the
+        // 6-tuple of metadata tensors instead of the FP16 weight. Each weight is
+        // quantized independently.
+        const std::string q_packed_name = tn(LLM_TENSOR_ATTN_Q, "weight_packed", bid).str();
+        const std::string k_packed_name = tn(LLM_TENSOR_ATTN_K, "weight_packed", bid).str();
+        const std::string v_packed_name = tn(LLM_TENSOR_ATTN_V, "weight_packed", bid).str();
+        const bool q_tile640 = ml->get_tensor_meta(q_packed_name.c_str()) != nullptr;
+        const bool k_tile640 = ml->get_tensor_meta(k_packed_name.c_str()) != nullptr;
+        const bool v_tile640 = ml->get_tensor_meta(v_packed_name.c_str()) != nullptr;
+        if (!q_tile640) {
+            layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q, "weight", bid), {n_embd_, n_embd_q_}, flags);
+        } else {
+            constexpr int64_t PAGE_SIZE = 640, LANES_PER_PAGE = 32, WORDS_PER_PAGE = 32;
+            const int64_t pages_per_row = (n_embd_ + PAGE_SIZE - 1) / PAGE_SIZE;
+            layer.wq_packed       = create_tensor(tn(LLM_TENSOR_ATTN_Q, "weight_packed",       bid), {n_embd_q_ * pages_per_row * WORDS_PER_PAGE}, TENSOR_NOT_REQUIRED);
+            layer.wq_page_scales  = create_tensor(tn(LLM_TENSOR_ATTN_Q, "weight_page_scales",  bid), {n_embd_q_ * pages_per_row}, TENSOR_NOT_REQUIRED);
+            layer.wq_lane_scales  = create_tensor(tn(LLM_TENSOR_ATTN_Q, "weight_lane_scales",  bid), {n_embd_q_ * pages_per_row * LANES_PER_PAGE}, TENSOR_NOT_REQUIRED);
+            layer.wq_outlier_row_offsets = create_tensor(tn(LLM_TENSOR_ATTN_Q, "weight_outlier_row_offsets", bid), {n_embd_q_ + 1}, TENSOR_NOT_REQUIRED);
+            const auto * outlier_meta = ml->require_tensor_meta(tn(LLM_TENSOR_ATTN_Q, "weight_outlier_cols", bid).str());
+            layer.wq_outlier_cols = create_tensor(tn(LLM_TENSOR_ATTN_Q, "weight_outlier_cols", bid), {outlier_meta->ne[0]}, TENSOR_NOT_REQUIRED);
+            layer.wq_outlier_vals = create_tensor(tn(LLM_TENSOR_ATTN_Q, "weight_outlier_vals", bid), {outlier_meta->ne[0]}, TENSOR_NOT_REQUIRED);
+            layer.wq_act_scale = create_tensor(tn(LLM_TENSOR_ATTN_Q, "weight_act_scale", bid), {n_embd_}, TENSOR_NOT_REQUIRED);
+        }
+        if (!k_tile640) {
+            layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K, "weight", bid), {n_embd_, n_embd_k_}, flags);
+        } else {
+            constexpr int64_t PAGE_SIZE = 640, LANES_PER_PAGE = 32, WORDS_PER_PAGE = 32;
+            const int64_t pages_per_row = (n_embd_ + PAGE_SIZE - 1) / PAGE_SIZE;
+            layer.wk_packed       = create_tensor(tn(LLM_TENSOR_ATTN_K, "weight_packed",       bid), {n_embd_k_ * pages_per_row * WORDS_PER_PAGE}, TENSOR_NOT_REQUIRED);
+            layer.wk_page_scales  = create_tensor(tn(LLM_TENSOR_ATTN_K, "weight_page_scales",  bid), {n_embd_k_ * pages_per_row}, TENSOR_NOT_REQUIRED);
+            layer.wk_lane_scales  = create_tensor(tn(LLM_TENSOR_ATTN_K, "weight_lane_scales",  bid), {n_embd_k_ * pages_per_row * LANES_PER_PAGE}, TENSOR_NOT_REQUIRED);
+            layer.wk_outlier_row_offsets = create_tensor(tn(LLM_TENSOR_ATTN_K, "weight_outlier_row_offsets", bid), {n_embd_k_ + 1}, TENSOR_NOT_REQUIRED);
+            const auto * outlier_meta = ml->require_tensor_meta(tn(LLM_TENSOR_ATTN_K, "weight_outlier_cols", bid).str());
+            layer.wk_outlier_cols = create_tensor(tn(LLM_TENSOR_ATTN_K, "weight_outlier_cols", bid), {outlier_meta->ne[0]}, TENSOR_NOT_REQUIRED);
+            layer.wk_outlier_vals = create_tensor(tn(LLM_TENSOR_ATTN_K, "weight_outlier_vals", bid), {outlier_meta->ne[0]}, TENSOR_NOT_REQUIRED);
+            layer.wk_act_scale = create_tensor(tn(LLM_TENSOR_ATTN_K, "weight_act_scale", bid), {n_embd_}, TENSOR_NOT_REQUIRED);
+        }
+        if (!v_tile640) {
+            layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V, "weight", bid), {n_embd_, n_embd_v_}, flags);
+        } else {
+            constexpr int64_t PAGE_SIZE = 640, LANES_PER_PAGE = 32, WORDS_PER_PAGE = 32;
+            const int64_t pages_per_row = (n_embd_ + PAGE_SIZE - 1) / PAGE_SIZE;
+            layer.wv_packed       = create_tensor(tn(LLM_TENSOR_ATTN_V, "weight_packed",       bid), {n_embd_v_ * pages_per_row * WORDS_PER_PAGE}, TENSOR_NOT_REQUIRED);
+            layer.wv_page_scales  = create_tensor(tn(LLM_TENSOR_ATTN_V, "weight_page_scales",  bid), {n_embd_v_ * pages_per_row}, TENSOR_NOT_REQUIRED);
+            layer.wv_lane_scales  = create_tensor(tn(LLM_TENSOR_ATTN_V, "weight_lane_scales",  bid), {n_embd_v_ * pages_per_row * LANES_PER_PAGE}, TENSOR_NOT_REQUIRED);
+            layer.wv_outlier_row_offsets = create_tensor(tn(LLM_TENSOR_ATTN_V, "weight_outlier_row_offsets", bid), {n_embd_v_ + 1}, TENSOR_NOT_REQUIRED);
+            const auto * outlier_meta = ml->require_tensor_meta(tn(LLM_TENSOR_ATTN_V, "weight_outlier_cols", bid).str());
+            layer.wv_outlier_cols = create_tensor(tn(LLM_TENSOR_ATTN_V, "weight_outlier_cols", bid), {outlier_meta->ne[0]}, TENSOR_NOT_REQUIRED);
+            layer.wv_outlier_vals = create_tensor(tn(LLM_TENSOR_ATTN_V, "weight_outlier_vals", bid), {outlier_meta->ne[0]}, TENSOR_NOT_REQUIRED);
+            layer.wv_act_scale = create_tensor(tn(LLM_TENSOR_ATTN_V, "weight_act_scale", bid), {n_embd_}, TENSOR_NOT_REQUIRED);
+        }
         layer.wq_b = create_tensor(tn(LLM_TENSOR_ATTN_Q, "bias", bid), {n_embd_q_}, TENSOR_NOT_REQUIRED);
         layer.wk_b = create_tensor(tn(LLM_TENSOR_ATTN_K, "bias", bid), {n_embd_k_}, TENSOR_NOT_REQUIRED);
         layer.wv_b = create_tensor(tn(LLM_TENSOR_ATTN_V, "bias", bid), {n_embd_v_}, TENSOR_NOT_REQUIRED);

@@ -52,6 +52,7 @@ struct clip_graph {
     // wrapper around ggml_mul_mat, allow hooking (e.g. LoRA, clamping) depending on the model
     // tensor w should be the weight matrix, and tensor x should be the input
     virtual ggml_tensor * build_mm(ggml_tensor * w, ggml_tensor * x) const;
+    ggml_tensor * resolve_weight(ggml_tensor * tensor) const;
     // TODO: build_mm(w, b, x) to support bias
 
     virtual bool support_batch() const {

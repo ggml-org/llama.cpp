@@ -15,11 +15,27 @@
 
 #include <cassert>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <numeric>
 #include <sstream>
 #include <string>
 #include <unordered_set>
+
+static bool tessera_fused_cast_observer_enabled() {
+    const char * value = std::getenv("TESSERA_FUSED_CAST_OBSERVER");
+    return value && strcmp(value, "1") == 0;
+}
+
+static bool tessera_tile640_f32_input_enabled() {
+    const char * value = std::getenv("TESSERA_TILE640_F32_INPUT");
+    return value && strcmp(value, "1") == 0;
+}
+
+static bool tessera_paged_attn_enabled() {
+    const char * value = std::getenv("TESSERA_PAGED_ATTN");
+    return value && strcmp(value, "1") == 0;
+}
 
 // dedup helpers
 
@@ -64,13 +80,13 @@ static bool can_reuse_kq_mask(
 // impl
 
 void llm_graph_input_embd::set_input(const llama_ubatch * ubatch) {
-    if (ubatch->token) {
+    if (ubatch->token && tokens) {
         const int64_t n_tokens = ubatch->n_tokens;
 
         ggml_backend_tensor_set(tokens, ubatch->token, 0, n_tokens*ggml_element_size(tokens));
     }
 
-    if (ubatch->embd) {
+    if (ubatch->embd && embd) {
         GGML_ASSERT(n_embd == embd->ne[0]);
 
         const int64_t n_tokens = ubatch->n_tokens;
@@ -82,7 +98,7 @@ void llm_graph_input_embd::set_input(const llama_ubatch * ubatch) {
 bool llm_graph_input_embd::can_reuse(const llm_graph_params & params) {
     bool res = true;
 
-    res &= (!params.ubatch.token) || (tokens && tokens->ne[0] == params.ubatch.n_tokens);
+    res &= (!params.ubatch.token) || !tokens || tokens->ne[0] == params.ubatch.n_tokens;
     res &= (!params.ubatch.embd)  || (embd   &&   embd->ne[1] == params.ubatch.n_tokens);
 
     return res;
@@ -474,6 +490,10 @@ void llm_graph_input_attn_kv::set_input(const llama_ubatch * ubatch) {
         mctx->set_input_kq_mask(self_kq_mask, ubatch, cparams.causal_attn);
     }
 
+    if (self_tessera_page_map && self_tessera_page_map->buffer) {
+        mctx->set_input_tessera_page_map(self_tessera_page_map);
+    }
+
     if (self_k_rot && self_k_rot->buffer) {
         mctx->set_input_k_rot(self_k_rot);
     }
@@ -494,6 +514,9 @@ bool llm_graph_input_attn_kv::can_reuse(const llm_graph_params & params) {
   //res &= self_v_idxs->ne[0] == params.ubatch.n_tokens; // TODO: need to move this to the unified cache and check there
 
     res &= can_reuse_kq_mask(self_kq_mask, mctx, params.ubatch, params.cparams);
+    if (self_tessera_page_map) {
+        res &= self_tessera_page_map->ne[0] == mctx->get_n_kv();
+    }
 
     return res;
 }
@@ -570,6 +593,13 @@ void llm_graph_input_attn_kv_iswa::set_input(const llama_ubatch * ubatch) {
 
     if (self_kq_mask_swa && self_kq_mask_swa->buffer) {
         mctx->get_swa()->set_input_kq_mask(self_kq_mask_swa, ubatch, cparams.causal_attn);
+    }
+
+    if (self_tessera_page_map && self_tessera_page_map->buffer) {
+        mctx->get_base()->set_input_tessera_page_map(self_tessera_page_map);
+    }
+    if (self_tessera_page_map_swa && self_tessera_page_map_swa->buffer) {
+        mctx->get_swa()->set_input_tessera_page_map(self_tessera_page_map_swa);
     }
 
     if (self_k_rot && self_k_rot->buffer) {
@@ -1371,6 +1401,79 @@ void llm_graph_context::cb(ggml_tensor * cur, const char * name, int il) const {
     }
 }
 
+bool llm_graph_context::imatrix_observer_enabled(
+        const char * weight_name) const {
+    return cparams.imatrix_observers &&
+           (!cparams.imatrix_observer_filter ||
+            cparams.imatrix_observer_filter(
+                weight_name, cparams.imatrix_observer_filter_data));
+}
+
+void llm_graph_context::build_imatrix_observer_dense(
+        ggml_tensor * cur,
+        ggml_tensor * weight_anchor,
+        const char  * weight_name) const {
+    auto found = imatrix_dense_observers.find(cur);
+    if (found != imatrix_dense_observers.end()) {
+        ggml_tensor * observer = found->second;
+        const std::string aliases =
+            std::string(ggml_get_name(observer)) + "|" + weight_name;
+        if (aliases.size() < GGML_MAX_NAME) {
+            ggml_set_name(observer, aliases.c_str());
+            return;
+        }
+        // Preserve correctness when an architecture has more aliases than
+        // fit in a GGML tensor name. The uncommon overflow gets its own scan.
+    }
+
+    ggml_tensor * observer =
+        ggml_imatrix_observer(ctx0, cur, nullptr, weight_anchor, 1);
+    ggml_set_name(observer, weight_name);
+    ggml_set_output(observer);
+    if (weight_anchor->buffer &&
+        ggml_backend_buffer_is_host(weight_anchor->buffer)) {
+        ggml_backend_sched_set_tensor_backend(sched, observer, backend_cpu);
+    }
+    ggml_build_forward_expand(gf, observer);
+    imatrix_dense_observers.emplace(cur, observer);
+}
+
+ggml_tensor * llm_graph_context::build_imatrix_observer_cast_dense(
+        ggml_tensor * cur,
+        ggml_tensor * weight_anchor,
+        const char  * weight_name) const {
+    auto found = imatrix_dense_observers.find(cur);
+    auto view_found = imatrix_cast_views.find(cur);
+    if (found != imatrix_dense_observers.end() &&
+        view_found != imatrix_cast_views.end()) {
+        ggml_tensor * stats_view = found->second;
+        const std::string aliases =
+            std::string(ggml_get_name(stats_view)) + "|" + weight_name;
+        if (aliases.size() < GGML_MAX_NAME) {
+            ggml_set_name(stats_view, aliases.c_str());
+            return view_found->second;
+        }
+    }
+
+    ggml_tensor * stats_view = nullptr;
+    ggml_tensor * activation_view = ggml_imatrix_observer_cast(
+        ctx0, cur, weight_anchor, &stats_view);
+    GGML_ASSERT(activation_view->view_src);
+    GGML_ASSERT(stats_view->view_src == activation_view->view_src);
+    ggml_tensor * storage = activation_view->view_src;
+    ggml_set_name(stats_view, weight_name);
+    ggml_set_output(stats_view);
+    if (weight_anchor->buffer &&
+        ggml_backend_buffer_is_host(weight_anchor->buffer)) {
+        ggml_backend_sched_set_tensor_backend(sched, storage, backend_cpu);
+    }
+    ggml_build_forward_expand(gf, activation_view);
+    ggml_build_forward_expand(gf, stats_view);
+    imatrix_dense_observers.emplace(cur, stats_view);
+    imatrix_cast_views.emplace(cur, activation_view);
+    return activation_view;
+}
+
 
 
 ggml_tensor * llm_graph_context::build_cvec(
@@ -1383,6 +1486,12 @@ ggml_tensor * llm_graph_context::build_lora_mm(
           ggml_tensor * w,
           ggml_tensor * cur,
           ggml_tensor * w_s) const {
+    if (imatrix_observer_enabled(w->name) &&
+        cur->type == GGML_TYPE_F32 &&
+        cur->ne[1] >= 16 &&
+        strncmp(w->name, "blk.", 4) == 0) {
+        build_imatrix_observer_dense(cur, w, w->name);
+    }
     ggml_tensor * res = ggml_mul_mat(ctx0, w, cur);
 
     if (w_s) {
@@ -1410,11 +1519,139 @@ ggml_tensor * llm_graph_context::build_lora_mm(
     return res;
 }
 
+ggml_tensor * llm_graph_context::build_tile640_lora_mm(
+          ggml_tensor * w_packed,
+          ggml_tensor * w_page_scales,
+          ggml_tensor * w_lane_scales,
+          ggml_tensor * w_outlier_row_offsets,
+          ggml_tensor * w_outlier_cols,
+          ggml_tensor * w_outlier_vals,
+          ggml_tensor * w_act_scale,
+          ggml_tensor * cur) const {
+    // Tile640 ternary matmul. Layout (v2 per-row K format):
+    //   w_packed:              I32   [out_dim * pages_per_row * 32]
+    //   w_page_scales:         F16   [out_dim * pages_per_row]
+    //   w_lane_scales:         I8    [out_dim * pages_per_row * 32]
+    //   w_outlier_row_offsets: I32   [out_dim + 1]   (CSR; K_i = offsets[i+1] - offsets[i])
+    //   w_outlier_cols:        I32   [offsets[out_dim]]
+    //   w_outlier_vals:        F16   [offsets[out_dim]]  (residual = original)
+    //   cur:                   F16   [in_dim, n_tokens, n_batch, n_seqs]
+    //   w_act_scale:           F16   [in_dim] or nullptr (AWQ)
+    //   result:                F32   [out_dim, n_tokens, n_batch, n_seqs]
+    if (cparams.imatrix_observers &&
+        strncmp(w_packed->name, "blk.", 4) == 0) {
+        char observer_name[GGML_MAX_NAME];
+        const size_t name_len = strlen(w_packed->name);
+        const size_t suffix_len = strlen("_packed");
+        snprintf(
+            observer_name,
+            sizeof(observer_name),
+            "%.*s",
+            (int) (name_len >= suffix_len ? name_len - suffix_len : name_len),
+            w_packed->name);
+        if (imatrix_observer_enabled(observer_name)) {
+            if (tessera_fused_cast_observer_enabled() &&
+                !w_act_scale && cur->type == GGML_TYPE_F32) {
+                cur = build_imatrix_observer_cast_dense(
+                    cur, w_packed, observer_name);
+            } else {
+                build_imatrix_observer_dense(cur, w_packed, observer_name);
+            }
+        }
+    }
+    if (w_act_scale) {
+        // cur is [in_dim, n_tokens, n_batch, n_seqs]; broadcast scale across cols
+        // SCALE_OP: cur = cur * w_act_scale  (broadcast over the 3 leading axes)
+        cur = ggml_mul(ctx0, cur, w_act_scale);
+    }
+    if (!tessera_tile640_f32_input_enabled() &&
+        cur->type != GGML_TYPE_F16) {
+        cur = ggml_cast(ctx0, cur, GGML_TYPE_F16);
+    }
+    GGML_ASSERT(cur->type == GGML_TYPE_F16 || cur->type == GGML_TYPE_F32);
+    return ggml_tile640_matmul(ctx0,
+            w_packed, w_page_scales, w_lane_scales,
+            w_outlier_row_offsets, w_outlier_cols, w_outlier_vals,
+            cur);
+}
+
+ggml_tensor * llm_graph_context::build_tile640_lora_mm_id(
+          ggml_tensor * w_packed,
+          ggml_tensor * w_page_scales,
+          ggml_tensor * w_lane_scales,
+          ggml_tensor * w_outlier_row_offsets,
+          ggml_tensor * w_outlier_cols,
+          ggml_tensor * w_outlier_vals,
+          ggml_tensor * w_act_scale,
+          ggml_tensor * cur,
+          ggml_tensor * ids,
+          int32_t       out_dim) const {
+    // Per-expert Tile640 matmul for MoE FFN (v2 per-row K format).
+    //   w_packed:              I32   [n_experts, out_dim, pages_per_row, 32]
+    //   w_page_scales:         F16   [n_experts, out_dim, pages_per_row]
+    //   w_lane_scales:         I8    [n_experts, out_dim, pages_per_row, 32]
+    //   w_outlier_row_offsets: I32   [n_experts, out_dim + 1]   (per-expert CSR)
+    //   w_outlier_cols:        I32   [total_outliers]
+    //   w_outlier_vals:        F16   [total_outliers]  (residual = original)
+    //   cur:                   F16   [in_dim, n_tokens]
+    //   ids:                   I32   [n_expert_used, n_tokens]
+    //   w_act_scale:           F16   [in_dim] or [in_dim, n_experts], or nullptr
+    //   result:                F32   [out_dim, n_expert_used, n_tokens]
+    if (cparams.imatrix_observers &&
+        strncmp(w_packed->name, "blk.", 4) == 0) {
+        const int64_t offsets_per_expert = (int64_t) out_dim + 1;
+        GGML_ASSERT(ggml_nelements(w_outlier_row_offsets) % offsets_per_expert == 0);
+        const int32_t experts =
+            (int32_t) (ggml_nelements(w_outlier_row_offsets) / offsets_per_expert);
+        char observer_name[GGML_MAX_NAME];
+        const size_t name_len = strlen(w_packed->name);
+        const size_t suffix_len = strlen("_packed");
+        snprintf(
+            observer_name,
+            sizeof(observer_name),
+            "%.*s",
+            (int) (name_len >= suffix_len ? name_len - suffix_len : name_len),
+            w_packed->name);
+        if (imatrix_observer_enabled(observer_name)) {
+            ggml_tensor * observer =
+                ggml_imatrix_observer(ctx0, cur, ids, w_packed, experts);
+            ggml_set_name(observer, observer_name);
+            ggml_set_output(observer);
+            if (w_packed->buffer && ggml_backend_buffer_is_host(w_packed->buffer)) {
+                ggml_backend_sched_set_tensor_backend(sched, observer, backend_cpu);
+            }
+            ggml_build_forward_expand(gf, observer);
+        }
+    }
+    if (cur->type != GGML_TYPE_F16) {
+        cur = ggml_cast(ctx0, cur, GGML_TYPE_F16);
+    }
+    if (!ggml_is_contiguous(ids)) {
+        ids = ggml_cont(ctx0, ids);
+    }
+    return ggml_tile640_matmul_id(ctx0,
+            w_packed, w_page_scales, w_lane_scales,
+            w_outlier_row_offsets, w_outlier_cols, w_outlier_vals,
+            cur, ids, w_act_scale, out_dim);
+}
+
 ggml_tensor * llm_graph_context::build_lora_mm_id(
           ggml_tensor * w,   // ggml_tensor * as
           ggml_tensor * cur, // ggml_tensor * b
           ggml_tensor * ids,
           ggml_tensor * w_s) const {
+    if (imatrix_observer_enabled(w->name) &&
+        cur->type == GGML_TYPE_F32 &&
+        strncmp(w->name, "blk.", 4) == 0) {
+        ggml_tensor * observer =
+            ggml_imatrix_observer(ctx0, cur, ids, w, (int32_t) w->ne[2]);
+        ggml_set_name(observer, w->name);
+        ggml_set_output(observer);
+        if (w->buffer && ggml_backend_buffer_is_host(w->buffer)) {
+            ggml_backend_sched_set_tensor_backend(sched, observer, backend_cpu);
+        }
+        ggml_build_forward_expand(gf, observer);
+    }
     ggml_tensor * res = ggml_mul_mat_id(ctx0, w, cur, ids);
 
     if (w_s) {
@@ -1719,6 +1956,23 @@ ggml_tensor * llm_graph_context::build_ffn(
                 cur = ggml_reglu(ctx0, cur);
                 cb(cur, "ffn_reglu", il);
             } break;
+        case LLM_FFN_SITU:
+            {
+                GGML_ASSERT(gate && type_gate == LLM_FFN_PAR);
+                ggml_tensor * gate_tanh = ggml_tanh(
+                        ctx0, ggml_scale(ctx0, cur, 1.0f / hparams.situ_beta));
+                gate_tanh = ggml_scale(ctx0, gate_tanh, hparams.situ_beta);
+                ggml_tensor * gate_sigmoid = ggml_sigmoid(ctx0, cur);
+                ggml_tensor * gate_act = ggml_mul(ctx0, gate_tanh, gate_sigmoid);
+                tmp = ggml_scale(
+                        ctx0,
+                        ggml_tanh(ctx0, ggml_scale(
+                            ctx0, tmp, 1.0f / hparams.situ_linear_beta)),
+                        hparams.situ_linear_beta);
+                cur = ggml_mul(ctx0, gate_act, tmp);
+                cb(cur, "ffn_situ", il);
+                type_gate = LLM_FFN_SEQ;
+            } break;
         default:
             GGML_ABORT("fatal error");
     }
@@ -1730,14 +1984,11 @@ ggml_tensor * llm_graph_context::build_ffn(
 
     if (down) {
         cur = build_lora_mm(down, cur);
+        cb(cur, "ffn_down", il);
         if (arch == LLM_ARCH_GLM4 || arch == LLM_ARCH_GLM4_MOE || arch == LLM_ARCH_JAIS2) {
             // GLM4, GLM4_MOE, and JAIS2 seem to have numerical issues with half-precision accumulators
             ggml_mul_mat_set_prec(cur, GGML_PREC_F32);
         }
-    }
-
-    if (down_b) {
-        cb(cur, "ffn_down", il);
     }
 
     if (down_b) {
@@ -1771,7 +2022,11 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
          ggml_tensor * up_exps_s,
          ggml_tensor * gate_exps_s,
          ggml_tensor * down_exps_s,
-         ggml_tensor * selected_experts_in) const {
+         ggml_tensor * selected_experts_in,
+         const llama_tile640_tensor * gate_up_tile640,
+         const llama_tile640_tensor * down_tile640,
+         const llama_tile640_tensor * gate_tile640,
+         const llama_tile640_tensor * up_tile640) const {
     return build_moe_ffn(
         cur,
         gate_inp,  /* gate_inp_b  */ nullptr,
@@ -1792,7 +2047,11 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         up_exps_s,
         gate_exps_s,
         down_exps_s,
-        selected_experts_in
+        selected_experts_in,
+        gate_up_tile640,
+        down_tile640,
+        gate_tile640,
+        up_tile640
     );
 }
 
@@ -1820,7 +2079,11 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
          ggml_tensor * up_exps_s,
          ggml_tensor * gate_exps_s,
          ggml_tensor * down_exps_s,
-         ggml_tensor * selected_experts_in) const {
+         ggml_tensor * selected_experts_in,
+         const llama_tile640_tensor * gate_up_tile640,
+         const llama_tile640_tensor * down_tile640,
+         const llama_tile640_tensor * gate_tile640,
+         const llama_tile640_tensor * up_tile640) const {
     const int64_t n_embd   = cur->ne[0];
     const int64_t n_tokens = cur->ne[1];
     const bool weight_before_ffn = arch == LLM_ARCH_LLAMA4; // for llama4, we apply the sigmoid-ed weights before the FFN
@@ -1864,6 +2127,25 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             GGML_ABORT("fatal error");
     }
     cb(probs, "ffn_moe_probs", il);
+    if (cparams.imatrix_observers && probs->type == GGML_TYPE_F32) {
+        char observer_name[GGML_MAX_NAME];
+        snprintf(
+            observer_name,
+            sizeof(observer_name),
+            "blk.%d.ffn_moe_router",
+            il);
+        if (imatrix_observer_enabled(observer_name)) {
+            ggml_tensor * router_observer =
+                ggml_imatrix_observer(ctx0, probs, nullptr, gate_inp, 1);
+            ggml_set_name(router_observer, observer_name);
+            ggml_set_output(router_observer);
+            if (gate_inp->buffer && ggml_backend_buffer_is_host(gate_inp->buffer)) {
+                ggml_backend_sched_set_tensor_backend(
+                    sched, router_observer, backend_cpu);
+            }
+            ggml_build_forward_expand(gf, router_observer);
+        }
+    }
 
     // add experts selection bias - introduced in DeepSeek V3
     // leave probs unbiased as it's later used to get expert weights
@@ -1972,9 +2254,21 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     ggml_tensor * up = nullptr;
     ggml_tensor * experts = nullptr;
 
-    if (gate_up_exps) {
+    if (gate_up_exps || gate_up_tile640) {
         // merged gate_up path: one mul_mat_id, then split into gate and up views
-        ggml_tensor * gate_up = build_lora_mm_id(gate_up_exps, cur, selected_experts, up_exps_s); // [n_ff*2, n_expert_used, n_tokens]
+        ggml_tensor * gate_up = gate_up_tile640
+            ? build_tile640_lora_mm_id(
+                gate_up_tile640->packed,
+                gate_up_tile640->page_scales,
+                gate_up_tile640->lane_scales,
+                gate_up_tile640->outlier_row_offsets,
+                gate_up_tile640->outlier_cols,
+                gate_up_tile640->outlier_vals,
+                gate_up_tile640->act_scale,
+                cur,
+                selected_experts,
+                (int32_t) gate_up_tile640->ne[1])
+            : build_lora_mm_id(gate_up_exps, cur, selected_experts, up_exps_s); // [n_ff*2, n_expert_used, n_tokens]
         cb(gate_up, "ffn_moe_gate_up", il);
 
         if (up_exps_s) {
@@ -1991,6 +2285,33 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         cb(cur, "ffn_moe_gate", il);
         up  = ggml_view_3d(ctx0, gate_up, n_ff, gate_up->ne[1], gate_up->ne[2], gate_up->nb[1], gate_up->nb[2], n_ff * gate_up->nb[0]);
         cb(up, "ffn_moe_up", il);
+    } else if (gate_tile640 || up_tile640) {
+        GGML_ASSERT(gate_tile640 != nullptr && up_tile640 != nullptr);
+        up = build_tile640_lora_mm_id(
+                up_tile640->packed,
+                up_tile640->page_scales,
+                up_tile640->lane_scales,
+                up_tile640->outlier_row_offsets,
+                up_tile640->outlier_cols,
+                up_tile640->outlier_vals,
+                up_tile640->act_scale,
+                cur,
+                selected_experts,
+                (int32_t) up_tile640->ne[1]);
+        cb(up, "ffn_moe_up", il);
+
+        cur = build_tile640_lora_mm_id(
+                gate_tile640->packed,
+                gate_tile640->page_scales,
+                gate_tile640->lane_scales,
+                gate_tile640->outlier_row_offsets,
+                gate_tile640->outlier_cols,
+                gate_tile640->outlier_vals,
+                gate_tile640->act_scale,
+                cur,
+                selected_experts,
+                (int32_t) gate_tile640->ne[1]);
+        cb(cur, "ffn_moe_gate", il);
     } else {
         // separate gate and up path
         up = build_lora_mm_id(up_exps, cur, selected_experts, up_exps_s); // [n_ff, n_expert_used, n_tokens]
@@ -2022,11 +2343,11 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
         }
     }
 
-    const bool has_gate = gate_exps || gate_up_exps;
+    const bool has_gate = gate_exps || gate_up_exps || gate_up_tile640 || gate_tile640;
 
     switch (type_op) {
         case LLM_FFN_SILU:
-            if (gate_exps) {
+            if (has_gate) {
                 if (il >= 0) {
                     const float limit = hparams.swiglu_clamp_exp[il];
                     constexpr float eps = 1e-6f;
@@ -2074,6 +2395,22 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                 cur = ggml_swiglu_oai(ctx0, cur, up, alpha, limit);
                 cb(cur, "ffn_moe_swiglu_oai", il);
             } break;
+        case LLM_FFN_SITU:
+            {
+                GGML_ASSERT(has_gate);
+                ggml_tensor * gate_tanh = ggml_tanh(
+                        ctx0, ggml_scale(ctx0, cur, 1.0f / hparams.situ_beta));
+                gate_tanh = ggml_scale(ctx0, gate_tanh, hparams.situ_beta);
+                ggml_tensor * gate_act =
+                        ggml_mul(ctx0, gate_tanh, ggml_sigmoid(ctx0, cur));
+                up = ggml_scale(
+                        ctx0,
+                        ggml_tanh(ctx0, ggml_scale(
+                            ctx0, up, 1.0f / hparams.situ_linear_beta)),
+                        hparams.situ_linear_beta);
+                cur = ggml_mul(ctx0, gate_act, up);
+                cb(cur, "ffn_moe_situ", il);
+            } break;
         case LLM_FFN_RELU:
             if (has_gate) {
                 cur = ggml_reglu_split(ctx0, cur, up);
@@ -2095,7 +2432,19 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
             GGML_ABORT("fatal error");
     }
 
-    experts = build_lora_mm_id(down_exps, cur, selected_experts, down_exps_s); // [n_embd, n_expert_used, n_tokens]
+    experts = down_tile640
+        ? build_tile640_lora_mm_id(
+            down_tile640->packed,
+            down_tile640->page_scales,
+            down_tile640->lane_scales,
+            down_tile640->outlier_row_offsets,
+            down_tile640->outlier_cols,
+            down_tile640->outlier_vals,
+            down_tile640->act_scale,
+            cur,
+            selected_experts,
+            (int32_t) down_tile640->ne[1])
+        : build_lora_mm_id(down_exps, cur, selected_experts, down_exps_s); // [n_embd, n_expert_used, n_tokens]
     cb(experts, "ffn_moe_down", il);
 
     if (down_exps_s) {
@@ -2610,6 +2959,12 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
 
         inp->self_kq_mask = build_attn_inp_kq_mask(ctx0, mctx_cur, ubatch, cparams);
         inp->self_kq_mask_cnv = inp->self_kq_mask;
+
+        if (tessera_paged_attn_enabled() && cparams.kv_unified && ubatch.n_tokens == 1) {
+            inp->self_tessera_page_map = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, mctx_cur->get_n_kv());
+            ggml_set_input(inp->self_tessera_page_map);
+            ggml_set_name(inp->self_tessera_page_map, "attn_inp_tessera_page_map");
+        }
     }
 
     inp->self_k_rot = mctx_cur->build_input_k_rot(ctx0);
@@ -2673,8 +3028,37 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * q = q_cur;
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
+    ggml_tensor * cur = nullptr;
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
+    // Decode has exactly one query token, so the current unified-KV page map
+    // is already its causal visibility set.  Keep prefill and nonstandard
+    // attention features on the established flash path until they have their
+    // own masked paged kernels.
+    const bool use_tessera_paged =
+        tessera_paged_attn_enabled() &&
+        cparams.kv_unified && cparams.causal_attn && ubatch.n_tokens == 1 &&
+        inp->get_tessera_page_map() &&
+        !kq_b && !sinks && !v_mla &&
+        q_cur->type == GGML_TYPE_F32 &&
+        (mctx_cur->type_k() == GGML_TYPE_F16 || mctx_cur->type_k() == GGML_TYPE_F32) &&
+        mctx_cur->type_k() == mctx_cur->type_v();
+
+    if (use_tessera_paged) {
+        if (const char * debug = std::getenv("TESSERA_PAGED_ATTN_DEBUG"); debug && strcmp(debug, "1") == 0) {
+            LLAMA_LOG_WARN("TESSERA_PAGED_ATTN_SELECTED: layer=%d n_kv=%u q_heads=%lld kv_heads=%lld\n",
+                    il, mctx_cur->get_n_kv(), (long long) q_cur->ne[1], (long long) hparams.n_head_kv(il));
+        }
+        const int64_t n_head = q_cur->ne[1];
+        q = ggml_reshape_4d(ctx0, q_cur, q_cur->ne[0], n_head, 1, 1);
+        q = ggml_permute(ctx0, q, 0, 2, 1, 3); // [d, token, q_head, stream]
+        k = mctx_cur->get_k_paged(ctx0, il);
+        v = mctx_cur->get_v_paged(ctx0, il);
+        cur = ggml_tessera_paged_attn(ctx0, q, k, v, inp->get_tessera_page_map(), kq_scale);
+        cur = ggml_reshape_2d(ctx0, cur, cur->ne[0]*cur->ne[1], cur->ne[2]*cur->ne[3]);
+        cb(cur, "tessera_paged_kqv_out", il);
+    } else {
+        cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
+    }
     cb(cur, "kqv_out", il);
 
     if (inp->self_v_rot) {
@@ -2928,8 +3312,27 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * q = q_cur;
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
-
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
+    const bool use_tessera_paged = tessera_paged_attn_enabled() && cparams.kv_unified &&
+        cparams.causal_attn && ubatch.n_tokens == 1 && inp->get_tessera_page_map(is_swa) &&
+        !kq_b && !sinks && !v_mla && q_cur->type == GGML_TYPE_F32 &&
+        (mctx_cur->type_k() == GGML_TYPE_F16 || mctx_cur->type_k() == GGML_TYPE_F32) &&
+        mctx_cur->type_k() == mctx_cur->type_v();
+    ggml_tensor * cur = nullptr;
+    if (use_tessera_paged) {
+        if (const char * debug = std::getenv("TESSERA_PAGED_ATTN_DEBUG"); debug && strcmp(debug, "1") == 0) {
+            LLAMA_LOG_WARN("TESSERA_PAGED_ATTN_SELECTED: layer=%d n_kv=%u q_heads=%lld kv_heads=%lld\n",
+                    il, mctx_cur->get_n_kv(), (long long) q_cur->ne[1], (long long) hparams.n_head_kv(il));
+        }
+        q = ggml_reshape_4d(ctx0, q_cur, q_cur->ne[0], q_cur->ne[1], 1, 1);
+        q = ggml_permute(ctx0, q, 0, 2, 1, 3);
+        k = mctx_cur->get_k_paged(ctx0, il);
+        v = mctx_cur->get_v_paged(ctx0, il);
+        cur = ggml_tessera_paged_attn(ctx0, q, k, v, inp->get_tessera_page_map(is_swa), kq_scale);
+        cur = ggml_reshape_2d(ctx0, cur, cur->ne[0]*cur->ne[1], cur->ne[2]*cur->ne[3]);
+        cb(cur, "tessera_paged_kqv_out", il);
+    } else {
+        cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
+    }
     cb(cur, "kqv_out", il);
 
     if (v_rot) {
@@ -3052,6 +3455,12 @@ llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa() const
 
         inp->self_kq_mask = build_attn_inp_kq_mask(ctx0, mctx_cur->get_base(), ubatch, cparams);
         inp->self_kq_mask_cnv = inp->self_kq_mask;
+
+        if (tessera_paged_attn_enabled() && cparams.kv_unified && ubatch.n_tokens == 1) {
+            inp->self_tessera_page_map = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, mctx_cur->get_base()->get_n_kv());
+            ggml_set_input(inp->self_tessera_page_map);
+            ggml_set_name(inp->self_tessera_page_map, "attn_inp_tessera_page_map");
+        }
     }
 
     {
@@ -3062,6 +3471,12 @@ llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa() const
 
         inp->self_kq_mask_swa = build_attn_inp_kq_mask(ctx0, mctx_cur->get_swa(), ubatch, cparams);
         inp->self_kq_mask_swa_cnv = inp->self_kq_mask_swa;
+
+        if (tessera_paged_attn_enabled() && cparams.kv_unified && ubatch.n_tokens == 1) {
+            inp->self_tessera_page_map_swa = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, mctx_cur->get_swa()->get_n_kv());
+            ggml_set_input(inp->self_tessera_page_map_swa);
+            ggml_set_name(inp->self_tessera_page_map_swa, "attn_inp_tessera_page_map_swa");
+        }
     }
 
     inp->self_k_rot = mctx_cur->get_base()->build_input_k_rot(ctx0);
@@ -3258,6 +3673,10 @@ llm_graph_input_mem_hybrid_iswa * llm_graph_context::build_inp_mem_hybrid_iswa()
 
         inp_attn->self_kq_mask = build_attn_inp_kq_mask(ctx0, attn_ctx->get_base(), ubatch, cparams);
         inp_attn->self_kq_mask_cnv = inp_attn->self_kq_mask;
+        if (tessera_paged_attn_enabled() && cparams.kv_unified && ubatch.n_tokens == 1) {
+            inp_attn->self_tessera_page_map = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, attn_ctx->get_base()->get_n_kv());
+            ggml_set_input(inp_attn->self_tessera_page_map);
+        }
     }
 
     {
@@ -3266,6 +3685,10 @@ llm_graph_input_mem_hybrid_iswa * llm_graph_context::build_inp_mem_hybrid_iswa()
 
         inp_attn->self_kq_mask_swa = build_attn_inp_kq_mask(ctx0, attn_ctx->get_swa(), ubatch, cparams);
         inp_attn->self_kq_mask_swa_cnv = inp_attn->self_kq_mask_swa;
+        if (tessera_paged_attn_enabled() && cparams.kv_unified && ubatch.n_tokens == 1) {
+            inp_attn->self_tessera_page_map_swa = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, attn_ctx->get_swa()->get_n_kv());
+            ggml_set_input(inp_attn->self_tessera_page_map_swa);
+        }
     }
 
     auto inp = std::make_unique<llm_graph_input_mem_hybrid_iswa>(cparams, std::move(inp_attn), std::move(inp_rs), mctx_cur);

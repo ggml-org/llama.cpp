@@ -37,6 +37,29 @@ struct llama_memory_buffer {
     std::vector<ggml_tensor *> cpy;
 };
 
+// One qualified external prefill slab awaiting the next decode call.  The
+// hidden state is supplied through llama_batch.embd so normal batch ownership
+// remains unchanged; this structure carries only the authoritative cache rows
+// that must be written through llama_memory_context_i before layer continuation.
+struct llama_ane_prefill_pending {
+    uint32_t layer_count = 0;
+    uint32_t n_tokens = 0;
+    uint32_t kv_heads = 0;
+    uint32_t head_dim = 0;
+    std::vector<float> keys;
+    std::vector<float> values;
+
+    bool active() const {
+        return layer_count > 0 && n_tokens > 0 && !keys.empty() && !values.empty();
+    }
+
+    void clear() {
+        layer_count = n_tokens = kv_heads = head_dim = 0;
+        keys.clear();
+        values.clear();
+    }
+};
+
 using llama_memory_buffers = std::map<ggml_backend_buffer_type_t, llama_memory_buffer>;
 
 struct llama_context {
@@ -111,6 +134,10 @@ struct llama_context {
     void set_n_threads(int32_t n_threads, int32_t n_threads_batch);
 
     void set_abort_callback(bool (*abort_callback)(void * data), void * abort_callback_data);
+    void set_imatrix_observer_filter(
+            llama_imatrix_observer_filter filter,
+            void * user_data);
+    void bump_imatrix_observer_epoch();
 
     void set_embeddings (bool value);
     void set_embeddings_nextn(bool value, bool masked);
@@ -118,6 +145,18 @@ struct llama_context {
     void set_nextn_layer_offset(int32_t offset);
     void set_causal_attn(bool value);
     void set_warmup(bool value);
+
+    // Arms exactly one eligible decode call for an externally executed
+    // prefill slab. The caller supplies matching post-slab hidden states via
+    // llama_batch.embd; layer-0 K/V rows are retained here until the current
+    // memory context has allocated their canonical cache cells.
+    bool set_ane_prefill_pending(
+            uint32_t layer_count,
+            uint32_t n_tokens,
+            uint32_t kv_heads,
+            uint32_t head_dim,
+            const float * keys,
+            const float * values);
 
     void set_adapters_lora(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);
 
@@ -262,6 +301,10 @@ private:
 
     llm_graph_cb graph_get_cb() const;
 
+    bool import_ane_prefill_kv(
+            const llama_ubatch & ubatch,
+            const llama_memory_context_i * mctx);
+
     // disable auto fused ops (Flash Attention, Gated Delta Net) whose op lands on a device
     // that differs from the layer it belongs to (usually due to missing backend support)
     void resolve_fused_ops(const llama_memory_context_i * mctx, uint32_t n_seqs);
@@ -287,6 +330,8 @@ private:
     llama_cross cross; // TODO: tmp for handling cross-attention - need something better probably
 
     llama_memory_ptr memory;
+
+    llama_ane_prefill_pending ane_prefill_pending;
 
     // decode output (2-dimensional array: [n_outputs][n_vocab])
     buffer_view<float> logits = {nullptr, 0};

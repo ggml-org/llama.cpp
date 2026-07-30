@@ -104,6 +104,8 @@
 #define FC_SUM_ROWS                    1400
 #define FC_UPSCALE                     1500
 #define FC_GATED_DELTA_NET             1600
+#define FC_TILE640                     1700
+#define FC_IMATRIX_OBSERVER            1800
 
 // op-specific constants
 #define OP_FLASH_ATTN_EXT_NQPSG 8
@@ -332,6 +334,19 @@ typedef struct {
     int32_t  sect_3;
     bool     src2;
 } ggml_metal_kargs_rope;
+
+typedef struct {
+    int32_t d;
+    int32_t dv;
+    int32_t nq;
+    int32_t hq;
+    int32_t hkv;
+    int32_t n_kv;
+    int32_t n_phy;
+    int32_t n_stream;
+    int32_t v_trans;
+    float scale;
+} ggml_metal_kargs_tessera_paged_attn;
 
 typedef struct {
     int32_t  ne11;
@@ -1217,5 +1232,54 @@ typedef struct {
 typedef struct {
     int64_t  np;
 } ggml_metal_kargs_opt_step_sgd;
+
+// Tile640 ternary matmul (2D). ne12 = n_tokens, ne13 = n_outliers (passes dims at runtime).
+typedef struct {
+    int32_t  ne12;     // n_tokens (per slab)
+    int32_t  ne13;     // n_outliers (per row)
+    int32_t  ne14;     // packing: 0 = base-3, 1 = two-bit execution view
+} ggml_metal_kargs_tile640_matmul;
+
+// Tile640 ternary matmul (3D, per-expert). ne12 = n_expert_used, ne13 = n_tokens,
+// ne20 = outliers_per_expert.
+typedef struct {
+    int32_t  ne11;     // input expert/broadcast dimension
+    int32_t  ne12;     // n_expert_used
+    int32_t  ne13;     // n_tokens (per slab)
+    int32_t  ne20;     // outliers_per_expert
+    int32_t  ne21;     // act-scale rows: 0 absent, 1 shared, n_experts per-expert
+    int32_t  ne22;     // threads per routed-expert workgroup
+} ggml_metal_kargs_tile640_matmul_id;
+
+typedef struct {
+    int32_t row_width;
+    int32_t n_rows;
+    int32_t n_ids;
+} ggml_metal_kargs_tile640_get_rows;
+
+typedef struct {
+    int32_t row_width;
+    int32_t n_rows;
+    int32_t n_elements;
+} ggml_metal_kargs_tile640_dequant;
+
+typedef struct {
+    int32_t  ne0;
+    int32_t  ne1;
+    int32_t  ne2;
+    int32_t  ne3;
+    uint64_t nb0;
+    uint64_t nb1;
+    uint64_t nb2;
+    uint64_t nb3;
+    int32_t  ids_ne0;
+    int32_t  ids_ne1;
+    uint64_t ids_nb0;
+    uint64_t ids_nb1;
+    int32_t  experts;
+    int32_t  has_ids;
+    int32_t  src_is_f16;
+    uint64_t stats_offset;
+} ggml_metal_kargs_imatrix_observer;
 
 #endif // GGML_METAL_IMPL

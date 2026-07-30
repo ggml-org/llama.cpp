@@ -824,7 +824,10 @@ class ModelBase:
                 quant_algo = "NVFP4"
 
         self._is_nvfp4 = quant_algo == "NVFP4"
-        self._is_mxfp4 = quant_method == "mxfp4"
+        self._is_mxfp4 = quant_method == "mxfp4" or (
+            quant_method == "compressed-tensors"
+            and quant_format == "mxfp4-pack-quantized"
+        )
 
         # NVFP4 weights are repacked and written directly to gguf_writer.
         # This must run before dequant_model so NVFP4 tensors are removed
@@ -1655,6 +1658,9 @@ class TextModel(ModelBase):
         if chkhsh == "d30d75d9059f1aa2c19359de71047b3ae408c70875e8a3ccf8c5fba56c9d8af4":
             # ref: https://huggingface.co/Qwen/Qwen3.5-9B-Instruct
             res = "qwen35"
+        if chkhsh == "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945":
+            # ref: https://huggingface.co/prism-ml/Qwen3.6-35B-A3B
+            res = "qwen35"
         if chkhsh == "b4b8ca1f9769494fbd956ebc4c249de6131fb277a4a3345a7a92c7dd7a55808d":
             # ref: https://huggingface.co/jdopensource/JoyAI-LLM-Flash
             res = "joyai-llm"
@@ -2320,6 +2326,7 @@ class MmprojModel(ModelBase):
 
     has_vision_encoder: bool = True # by default
     has_audio_encoder: bool = False
+    embedded_in_model: bool = False
 
     # for models having multiple encoders, we need to separate their hparams
     hparams_vision: dict[str, Any] | None = None
@@ -2429,7 +2436,8 @@ class MmprojModel(ModelBase):
             self.fname_out = self.fname_out.parent / gguf.fill_templated_filename(self.fname_out.name, output_type)
 
     def set_gguf_parameters(self):
-        self.gguf_writer.add_file_type(self.ftype)
+        if not self.embedded_in_model:
+            self.gguf_writer.add_file_type(self.ftype)
 
         if self.has_vision_encoder:
             self.gguf_writer.add_clip_has_vision_encoder(True)

@@ -18,6 +18,7 @@ struct ggml_tensor;
 
 struct llama_cparams;
 struct llama_layer;
+struct llama_tile640_tensor;
 
 struct llama_memory_context_i;
 
@@ -58,6 +59,7 @@ enum llm_ffn_op_type : int {
     LLM_FFN_GEGLU,
     LLM_FFN_REGLU,
     LLM_FFN_SWIGLU_OAI_MOE,
+    LLM_FFN_SITU,
 };
 
 enum llm_ffn_gate_type {
@@ -334,12 +336,14 @@ public:
     ggml_tensor * get_v_idxs() const { return self_v_idxs; }
 
     ggml_tensor * get_kq_mask() const { return self_kq_mask_cnv; }
+    ggml_tensor * get_tessera_page_map() const { return self_tessera_page_map; }
 
     ggml_tensor * self_k_idxs = nullptr; // I64 [n_batch]
     ggml_tensor * self_v_idxs = nullptr; // I64 [n_batch] or [n_batch*n_embd_v_gqa]
 
     ggml_tensor * self_kq_mask     = nullptr; // F32/F16 [n_kv, n_batch/n_stream, 1, n_stream]
     ggml_tensor * self_kq_mask_cnv = nullptr; //         [n_kv, n_batch/n_stream, 1, n_stream]
+    ggml_tensor * self_tessera_page_map = nullptr; // I32 [n_kv], physical unified-KV cell per logical position
 
     // note: assumes v_rot^2 == I
     ggml_tensor * self_k_rot = nullptr;
@@ -448,6 +452,7 @@ public:
 
     ggml_tensor * get_kq_mask()     const { return self_kq_mask_cnv; }
     ggml_tensor * get_kq_mask_swa() const { return self_kq_mask_swa_cnv; }
+    ggml_tensor * get_tessera_page_map(bool is_swa) const { return is_swa ? self_tessera_page_map_swa : self_tessera_page_map; }
 
     ggml_tensor * self_k_idxs     = nullptr; // I64 [n_batch]
     ggml_tensor * self_v_idxs     = nullptr; // I64 [n_batch] or [n_batch*n_embd_v_gqa]
@@ -458,6 +463,8 @@ public:
     ggml_tensor * self_kq_mask_cnv     = nullptr; //         [n_kv, n_batch/n_stream, 1, n_stream]
     ggml_tensor * self_kq_mask_swa     = nullptr; // F32/F16 [n_kv, n_batch/n_stream, 1, n_stream]
     ggml_tensor * self_kq_mask_swa_cnv = nullptr; //         [n_kv, n_batch/n_stream, 1, n_stream]
+    ggml_tensor * self_tessera_page_map     = nullptr; // I32 [n_kv]
+    ggml_tensor * self_tessera_page_map_swa = nullptr; // I32 [n_kv]
 
     ggml_tensor * self_k_rot = nullptr;
     ggml_tensor * self_v_rot = nullptr;
@@ -772,11 +779,16 @@ struct llm_graph_params {
             return false;
         }
 
+        if (cparams.ane_prefill_layer_count != other.cparams.ane_prefill_layer_count) {
+            return false;
+        }
+
         return
             cparams.embeddings              == other.cparams.embeddings              &&
             cparams.embeddings_nextn        == other.cparams.embeddings_nextn        &&
             cparams.embeddings_nextn_masked == other.cparams.embeddings_nextn_masked &&
             cparams.causal_attn             == other.cparams.causal_attn             &&
+            cparams.imatrix_observer_epoch  == other.cparams.imatrix_observer_epoch  &&
             arch  == other.arch  &&
             gtype == other.gtype &&
             cvec  == other.cvec  &&
@@ -937,10 +949,27 @@ struct llm_graph_context {
     ggml_context * ctx0 = nullptr;
     ggml_cgraph  * gf   = nullptr;
 
+    // Dense importance statistics depend only on the activation tensor, not
+    // on which matrix consumes it. Q/K/V and gate/up projections therefore
+    // share one observer and fan its result out to multiple weight names.
+    mutable std::map<ggml_tensor *, ggml_tensor *> imatrix_dense_observers;
+    mutable std::map<ggml_tensor *, ggml_tensor *> imatrix_cast_views;
+
     llm_graph_context(const llm_graph_params & params);
     virtual ~llm_graph_context() = default;
 
     void cb(ggml_tensor * cur, const char * name, int il) const;
+
+    void build_imatrix_observer_dense(
+              ggml_tensor * cur,
+              ggml_tensor * weight_anchor,
+             const char   * weight_name) const;
+    bool imatrix_observer_enabled(const char * weight_name) const;
+
+    ggml_tensor * build_imatrix_observer_cast_dense(
+              ggml_tensor * cur,
+              ggml_tensor * weight_anchor,
+             const char   * weight_name) const;
 
     //
     // common
@@ -955,6 +984,38 @@ struct llm_graph_context {
               ggml_tensor * w,
               ggml_tensor * cur,
               ggml_tensor * w_s = nullptr) const;
+
+    // do matmul with a Tile640 ternary-quantized weight: 6 tensors
+    // (packed, page_scales, lane_scales, outlier_row_offsets, outlier_cols,
+    //  outlier_vals). v2 per-row K format — outlier_row_offsets is a CSR-style
+    // I32[out_dim+1] giving the column range for each output row.
+    // LoRA adapters are not supported for Tile640 weights.
+    // If w_act_scale is non-null it is a F16[in_dim] per-input-channel scale
+    // (the *inverse* of the AWQ scale, so the runtime op is a plain SCALE).
+    ggml_tensor * build_tile640_lora_mm(
+              ggml_tensor * w_packed,
+              ggml_tensor * w_page_scales,
+              ggml_tensor * w_lane_scales,
+              ggml_tensor * w_outlier_row_offsets,
+              ggml_tensor * w_outlier_cols,
+              ggml_tensor * w_outlier_vals,
+              ggml_tensor * w_act_scale,  // optional F16[in_dim], or nullptr
+              ggml_tensor * cur) const;
+
+    // Per-expert variant of build_tile640_lora_mm for MoE FFN.
+    // out_dim is the per-expert output dim (rows of each expert matrix).
+    // w_act_scale is shared across experts (all experts see the same input).
+    ggml_tensor * build_tile640_lora_mm_id(
+              ggml_tensor * w_packed,
+              ggml_tensor * w_page_scales,
+              ggml_tensor * w_lane_scales,
+              ggml_tensor * w_outlier_row_offsets,
+              ggml_tensor * w_outlier_cols,
+              ggml_tensor * w_outlier_vals,
+              ggml_tensor * w_act_scale,  // optional F16[in_dim], or nullptr
+              ggml_tensor * cur,
+              ggml_tensor * ids,
+              int32_t       out_dim) const;
 
     // do mat_mul_id, while optionally apply lora and per-expert scale
     ggml_tensor * build_lora_mm_id(
@@ -1017,7 +1078,11 @@ struct llm_graph_context {
              ggml_tensor * up_exps_s = nullptr,
              ggml_tensor * gate_exps_s = nullptr,
              ggml_tensor * down_exps_s = nullptr,
-             ggml_tensor * selected_experts_in = nullptr) const;
+             ggml_tensor * selected_experts_in = nullptr,
+             const llama_tile640_tensor * gate_up_tile640 = nullptr,
+             const llama_tile640_tensor * down_tile640 = nullptr,
+             const llama_tile640_tensor * gate_tile640 = nullptr,
+             const llama_tile640_tensor * up_tile640 = nullptr) const;
 
     ggml_tensor * build_moe_ffn(
              ggml_tensor * cur,
@@ -1043,7 +1108,11 @@ struct llm_graph_context {
              ggml_tensor * up_exps_s = nullptr,
              ggml_tensor * gate_exps_s = nullptr,
              ggml_tensor * down_exps_s = nullptr,
-             ggml_tensor * selected_experts_in = nullptr) const;
+             ggml_tensor * selected_experts_in = nullptr,
+             const llama_tile640_tensor * gate_up_tile640 = nullptr,
+             const llama_tile640_tensor * down_tile640 = nullptr,
+             const llama_tile640_tensor * gate_tile640 = nullptr,
+             const llama_tile640_tensor * up_tile640 = nullptr) const;
 
     //
     // inputs

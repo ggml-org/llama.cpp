@@ -1226,7 +1226,32 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_ARANGE:
         case GGML_OP_ROLL:
             return true;
+        case GGML_OP_TESSERA_PAGED_ATTN:
+            return op->type == GGML_TYPE_F32 &&
+                   op->src[0] && op->src[1] && op->src[2] && op->src[3] &&
+                   op->src[0]->type == GGML_TYPE_F32 &&
+                   (op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F16) &&
+                   op->src[2]->type == op->src[1]->type &&
+                   op->src[3]->type == GGML_TYPE_I32 &&
+                   op->src[0]->ne[2] % op->src[1]->ne[1] == 0 &&
+                   op->src[3]->ne[0] <= op->src[1]->ne[2] &&
+                   op->src[3]->ne[1] == op->src[0]->ne[3];
         case GGML_OP_FLASH_ATTN_EXT:
+            // Experimental heterogeneous scheduling: let the Accelerate BLAS
+            // backend claim large host-backed F32 prefill attention as one
+            // coarse operation. This is opt-in because standalone Metal
+            // attention remains faster on current Apple GPUs.
+            if (getenv("GGML_METAL_ATTENTION_ACCELERATE") &&
+                    strcmp(getenv("GGML_METAL_ATTENTION_ACCELERATE"), "0") != 0 &&
+                    op->src[0]->type == GGML_TYPE_F32 &&
+                    op->src[1]->type == GGML_TYPE_F32 &&
+                    op->src[2]->type == GGML_TYPE_F32 &&
+                    op->src[0]->ne[1] >= 32 &&
+                    op->src[1]->ne[1] >= 32 &&
+                    op->src[4] == NULL &&
+                    ggml_get_op_params_f32(op, 1) == 0.0f) {
+                return false;
+            }
             // for new head sizes, add checks here
             if (op->src[0]->ne[0] != 32 &&
                 op->src[0]->ne[0] != 40 &&
@@ -1276,7 +1301,12 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_SOLVE_TRI:
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
-            return has_simdgroup_reduction && op->src[0]->type != GGML_TYPE_NVFP4;
+        case GGML_OP_TILE640_MATMUL:
+        case GGML_OP_TILE640_MATMUL_ID:
+        case GGML_OP_TILE640_GET_ROWS:
+        case GGML_OP_TILE640_DEQUANT:
+        case GGML_OP_IMATRIX_OBSERVER:
+            return has_simdgroup_reduction;
         case GGML_OP_SET:
         case GGML_OP_CPY:
         case GGML_OP_DUP:

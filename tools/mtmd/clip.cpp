@@ -270,7 +270,51 @@ clip_graph::clip_graph(clip_ctx * ctx, const clip_image_f32 & img) :
 }
 
 ggml_tensor * clip_graph::build_mm(ggml_tensor * w, ggml_tensor * x) const {
+    const auto it = model.tile640_tensors.find(w);
+    if (it != model.tile640_tensors.end()) {
+        const auto & q = it->second;
+        if (x->type != GGML_TYPE_F16) {
+            x = ggml_cast(ctx0, x, GGML_TYPE_F16);
+        }
+        return ggml_tile640_matmul(
+            ctx0, q.packed, q.page_scales, q.lane_scales,
+            q.outlier_row_offsets, q.outlier_cols, q.outlier_vals, x);
+    }
     return ggml_mul_mat(ctx0, w, x);
+}
+
+ggml_tensor * clip_graph::resolve_weight(ggml_tensor * tensor) const {
+    if (!tensor) {
+        return nullptr;
+    }
+    const auto it = model.tile640_tensors.find(tensor);
+    if (it == model.tile640_tensors.end()) {
+        return tensor;
+    }
+    const auto & q = it->second;
+    ggml_tensor * decoded = ggml_tile640_dequant(
+        ctx0, q.packed, q.page_scales, q.lane_scales,
+        q.outlier_row_offsets, q.outlier_cols, q.outlier_vals,
+        q.matrix_ne[0], q.matrix_ne[1], q.matrix_ne[2], q.matrix_ne[3]);
+    if (q.matrix_ne != q.ne) {
+        switch (ggml_n_dims(tensor)) {
+            case 1:
+                decoded = ggml_reshape_1d(ctx0, decoded, q.ne[0]);
+                break;
+            case 2:
+                decoded = ggml_reshape_2d(ctx0, decoded, q.ne[0], q.ne[1]);
+                break;
+            case 3:
+                decoded = ggml_reshape_3d(ctx0, decoded, q.ne[0], q.ne[1], q.ne[2]);
+                break;
+            case 4:
+                decoded = ggml_reshape_4d(ctx0, decoded, q.ne[0], q.ne[1], q.ne[2], q.ne[3]);
+                break;
+            default:
+                GGML_ABORT("unsupported Tile640 logical rank");
+        }
+    }
+    return decoded;
 }
 
 void clip_graph::cb(ggml_tensor * cur, const char * name, int il) const {
@@ -283,7 +327,7 @@ void clip_graph::cb(ggml_tensor * cur, const char * name, int il) const {
 
 // siglip2 naflex
 ggml_tensor * clip_graph::resize_position_embeddings(uint32_t interpolation_mode) {
-    ggml_tensor * pos_embd = model.position_embeddings;
+    ggml_tensor * pos_embd = resolve_weight(model.position_embeddings);
     const int height       = img.ny() / patch_size;
     const int width        = img.nx() / patch_size;
     const uint32_t mode    = interpolation_mode;
@@ -533,11 +577,11 @@ ggml_tensor * clip_graph::build_vit(
 // returns tensor with shape [n_embd, n_patches]
 ggml_tensor * clip_graph::build_inp() {
     ggml_tensor * inp_raw = build_inp_raw();
-    ggml_tensor * inp = ggml_conv_2d(ctx0, model.patch_embeddings_0, inp_raw, patch_size, patch_size, 0, 0, 1, 1);
+    ggml_tensor * inp = ggml_conv_2d(ctx0, resolve_weight(model.patch_embeddings_0), inp_raw, patch_size, patch_size, 0, 0, 1, 1);
     inp = ggml_reshape_3d(ctx0, inp, n_patches, n_embd, n_batch);
     inp = ggml_cont(ctx0, ggml_transpose(ctx0, inp));
     if (model.patch_bias) {
-        inp = ggml_add(ctx0, inp, model.patch_bias);
+        inp = ggml_add(ctx0, inp, resolve_weight(model.patch_bias));
         cb(inp, "patch_bias", -1);
     }
     return inp;
@@ -563,12 +607,12 @@ ggml_tensor * clip_graph::build_norm(
         : ggml_norm(ctx0, cur, norm_eps);
 
     if (mw) {
-        cur = ggml_mul(ctx0, cur, mw);
+        cur = ggml_mul(ctx0, cur, resolve_weight(mw));
         cb(cur, "norm_w", il);
     }
 
     if (mb) {
-        cur = ggml_add(ctx0, cur, mb);
+        cur = ggml_add(ctx0, cur, resolve_weight(mb));
         cb(cur, "norm_b", il);
     }
 
@@ -590,7 +634,7 @@ ggml_tensor * clip_graph::build_ffn(
     cb(tmp, "ffn_up", il);
 
     if (up_b) {
-        tmp = ggml_add(ctx0, tmp, up_b);
+        tmp = ggml_add(ctx0, tmp, resolve_weight(up_b));
         cb(tmp, "ffn_up_b", il);
     }
 
@@ -599,7 +643,7 @@ ggml_tensor * clip_graph::build_ffn(
         cb(cur, "ffn_gate", il);
 
         if (gate_b) {
-            cur = ggml_add(ctx0, cur, gate_b);
+            cur = ggml_add(ctx0, cur, resolve_weight(gate_b));
             cb(cur, "ffn_gate_b", il);
         }
     } else {
@@ -657,7 +701,7 @@ ggml_tensor * clip_graph::build_ffn(
     }
 
     if (down_b) {
-        cur = ggml_add(ctx0, cur, down_b);
+        cur = ggml_add(ctx0, cur, resolve_weight(down_b));
     }
 
     return cur;
@@ -729,7 +773,7 @@ ggml_tensor * clip_graph::build_attn(
     }
 
     if (wo_b) {
-        cur = ggml_add(ctx0, cur, wo_b);
+        cur = ggml_add(ctx0, cur, resolve_weight(wo_b));
     }
 
     return cur;
@@ -1794,7 +1838,7 @@ struct clip_model_loader {
 
         // create data context
         struct ggml_init_params params = {
-            /*.mem_size =*/ static_cast<size_t>(gguf_get_n_tensors(ctx_gguf.get()) + 1) * ggml_tensor_overhead(),
+            /*.mem_size =*/ static_cast<size_t>(gguf_get_n_tensors(ctx_gguf.get()) * 2 + 1) * ggml_tensor_overhead(),
             /*.mem_buffer =*/ NULL,
             /*.no_alloc =*/ true,
         };
@@ -1805,23 +1849,85 @@ struct clip_model_loader {
 
         // helper function
         std::unordered_set<std::string> loaded_tensor_names;
-        auto get_tensor = [&](const std::string & name, bool required = true) {
-            // Each tensor should only be loaded once; duplicates indicate a bug
+        auto load_raw_tensor = [&](const std::string & name) -> ggml_tensor * {
             if (loaded_tensor_names.count(name)) {
                 throw std::runtime_error(string_format("%s: tensor already loaded: %s\n", __func__, name.c_str()));
             }
-            ggml_tensor * cur = ggml_get_tensor(ctx_meta.get(), name.c_str());
+            ggml_tensor * meta_tensor = ggml_get_tensor(ctx_meta.get(), name.c_str());
+            if (!meta_tensor) {
+                return nullptr;
+            }
+            tensors_to_load.push_back(meta_tensor);
+            ggml_tensor * data_tensor = ggml_dup_tensor(ctx_clip.ctx_data.get(), meta_tensor);
+            ggml_set_name(data_tensor, meta_tensor->name);
+            loaded_tensor_names.insert(name);
+            ctx_clip.mem_usage[ggml_backend_get_device(ctx_clip.backend)] += ggml_nbytes(data_tensor);
+            return data_tensor;
+        };
+        auto get_tensor = [&](const std::string & name, bool required = true) {
+            ggml_tensor * cur = load_raw_tensor(name);
+            if (!cur) {
+                // Several legacy mtmd name builders leave an embedded trailing
+                // NUL in std::string storage. It is harmless for c_str()-based
+                // lookup, but suffix concatenation would put `_packed` after
+                // that NUL and make the evolved component invisible.
+                const std::string logical_name(name.c_str());
+                // Canonical weight/bias names use `<name>_packed`. A handful
+                // of projector tensors have converter-generated suffixes
+                // (for example `v.patch_embd.weight.1`); the evolved format
+                // gives those a `.weight_*` component namespace.
+                std::string component_prefix = logical_name;
+                std::string packed_name = component_prefix + "_packed";
+                if (!ggml_get_tensor(ctx_meta.get(), packed_name.c_str())) {
+                    component_prefix = logical_name + ".weight";
+                    packed_name = component_prefix + "_packed";
+                }
+                if (ggml_get_tensor(ctx_meta.get(), packed_name.c_str())) {
+                    std::vector<int> shape;
+                    get_arr_int("tessera.shape." + logical_name, shape, false);
+                    if (shape.empty()) {
+                        get_arr_int("tile640.shape." + logical_name, shape);
+                    }
+                    if (shape.empty() || shape.size() > 4) {
+                        throw std::runtime_error(string_format("%s: invalid Tile640 shape for %s\n", __func__, logical_name.c_str()));
+                    }
+                    int64_t ne[4] = { 1, 1, 1, 1 };
+                    for (size_t i = 0; i < shape.size(); ++i) {
+                        ne[i] = shape[i];
+                    }
+                    ggml_tensor * descriptor = ggml_new_tensor(
+                        ctx_clip.ctx_data.get(), GGML_TYPE_F32, (int) shape.size(), ne);
+                    ggml_set_name(descriptor, name.c_str());
+                    clip_tile640_tensor tile;
+                    tile.descriptor = descriptor;
+                    tile.packed = load_raw_tensor(packed_name);
+                    tile.page_scales = load_raw_tensor(component_prefix + "_page_scales");
+                    tile.lane_scales = load_raw_tensor(component_prefix + "_lane_scales");
+                    tile.outlier_row_offsets = load_raw_tensor(component_prefix + "_outlier_row_offsets");
+                    tile.outlier_cols = load_raw_tensor(component_prefix + "_outlier_cols");
+                    tile.outlier_vals = load_raw_tensor(component_prefix + "_outlier_vals");
+                    std::copy(std::begin(ne), std::end(ne), tile.ne.begin());
+                    std::vector<int> matrix_shape;
+                    get_arr_int("tessera.matrix_shape." + logical_name, matrix_shape, false);
+                    if (matrix_shape.empty()) {
+                        get_arr_int("tile640.matrix_shape." + logical_name, matrix_shape, false);
+                    }
+                    if (matrix_shape.empty()) {
+                        std::copy(std::begin(ne), std::end(ne), tile.matrix_ne.begin());
+                    } else {
+                        if (matrix_shape.size() != 2) {
+                            throw std::runtime_error(string_format(
+                                "%s: invalid Tile640 matrix shape for %s\n", __func__, logical_name.c_str()));
+                        }
+                        tile.matrix_ne = { matrix_shape[0], matrix_shape[1], 1, 1 };
+                    }
+                    model.tile640_tensors.emplace(descriptor, tile);
+                    loaded_tensor_names.insert(name);
+                    cur = descriptor;
+                }
+            }
             if (!cur && required) {
                 throw std::runtime_error(string_format("%s: unable to find tensor %s\n", __func__, name.c_str()));
-            }
-            if (cur) {
-                tensors_to_load.push_back(cur);
-                ggml_tensor * data_tensor = ggml_dup_tensor(ctx_clip.ctx_data.get(), cur);
-                ggml_set_name(data_tensor, cur->name);
-                loaded_tensor_names.insert(name);
-                cur = data_tensor;
-                // add to weight memory counter
-                ctx_clip.mem_usage[ggml_backend_get_device(ctx_clip.backend)] += ggml_nbytes(cur);
             }
             return cur;
         };

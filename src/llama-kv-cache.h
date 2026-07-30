@@ -91,7 +91,51 @@ public:
         }
     };
 
+    // Backend-neutral description of how a logical attention sequence maps
+    // to physical KV cells.  The vanilla cache can be contiguous, shifted,
+    // or share cells across sequences; attention therefore cannot assume a
+    // simple base pointer.  Tessera uses this table as the common boundary for
+    // direct quantized/paged attention. A span is bounded by block_size so a
+    // backend can substitute a compressed block reader without materializing
+    // a contiguous K/V staging tensor.
+    struct tessera_kv_block_span {
+        uint32_t logical_p0;
+        uint32_t cell_p0;
+        uint32_t n_cells;
+    };
+
+    struct tessera_kv_block_table {
+        uint32_t block_size;
+        uint32_t n_tokens;
+        std::vector<std::vector<tessera_kv_block_span>> streams;
+
+        bool is_direct() const {
+            if (streams.empty()) {
+                return false;
+            }
+            for (const auto & stream : streams) {
+                for (const auto & span : stream) {
+                    if (span.n_cells == 0 || span.n_cells > block_size) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+
+        // Flat logical-token -> physical-cell map for backends that cannot
+        // consume run spans directly. This is an index buffer, not a K/V
+        // staging allocation; Metal can dereference the original compressed
+        // cache tensor through it.
+        std::vector<uint32_t> make_page_map(size_t stream = 0) const;
+    };
+
     using slot_info_vec_t = std::vector<slot_info>;
+
+    static tessera_kv_block_table build_tessera_block_table(
+            const slot_info & sinfo,
+            uint32_t n_tokens,
+            uint32_t block_size = 32);
 
     // TODO: refactor the memory instances to not depend on `llama_model`
     //       instead pass all necessary info (e.g. hparams, dev layers, arch, etc.) directly
@@ -164,6 +208,16 @@ public:
     std::vector<uint32_t> get_layer_ids() const;
     ggml_tensor * get_k_storage(int32_t il) const;
 
+    int32_t seq_get_data(
+            llama_seq_id seq_id,
+            int32_t il,
+            llama_pos p0,
+            llama_pos * positions,
+            float * keys,
+            float * values,
+            uint32_t capacity,
+            uint32_t * width) const;
+
     //
     // graph_build API
     //
@@ -173,6 +227,11 @@ public:
     // get views of the current state of the cache
     ggml_tensor * get_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
     ggml_tensor * get_v(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
+    // Physical-cache views used by Tessera paged attention. Unlike get_k/v,
+    // these retain the complete cell arena and are addressed by a page map.
+    ggml_tensor * get_k_paged(ggml_context * ctx, int32_t il, const slot_info & sinfo) const;
+    ggml_tensor * get_v_paged(ggml_context * ctx, int32_t il, const slot_info & sinfo) const;
+    bool is_v_trans() const { return v_trans; }
 
     // store k_cur and v_cur in the cache based on the provided head location
     ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il, const slot_info & sinfo) const;
@@ -370,6 +429,9 @@ public:
     // get views of the current state of the cache
     ggml_tensor * get_k(ggml_context * ctx, int32_t il) const;
     ggml_tensor * get_v(ggml_context * ctx, int32_t il) const;
+    ggml_tensor * get_k_paged(ggml_context * ctx, int32_t il) const;
+    ggml_tensor * get_v_paged(ggml_context * ctx, int32_t il) const;
+    bool is_v_trans() const;
 
     // store k_cur and v_cur in the cache based on the provided head location
     // note: the heads in k_cur and v_cur should be laid out contiguously in memory
@@ -394,6 +456,7 @@ public:
 
     void set_input_k_shift   (ggml_tensor * dst) const;
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
+    void set_input_tessera_page_map(ggml_tensor * dst) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
     void set_input_k_rot(ggml_tensor * dst) const;

@@ -558,6 +558,7 @@ extern "C" {
         GGML_OP_FILL,
 
         GGML_OP_FLASH_ATTN_EXT,
+        GGML_OP_TESSERA_PAGED_ATTN,
         GGML_OP_FLASH_ATTN_BACK,
         GGML_OP_SSM_CONV,
         GGML_OP_SSM_SCAN,
@@ -574,6 +575,11 @@ extern "C" {
         GGML_OP_DSV4_HC_COMB,
         GGML_OP_DSV4_HC_PRE,
         GGML_OP_DSV4_HC_POST,
+        GGML_OP_TILE640_MATMUL,
+        GGML_OP_TILE640_MATMUL_ID,
+        GGML_OP_TILE640_GET_ROWS,
+        GGML_OP_TILE640_DEQUANT,
+        GGML_OP_IMATRIX_OBSERVER,
 
         GGML_OP_UNARY,
 
@@ -2426,6 +2432,17 @@ extern "C" {
             float                 max_bias,
             float                 logit_softcap);
 
+    // Page-map attention. page_map is I32 [n_kv] and maps each logical KV
+    // position to its physical cache cell; K/V remain in their original
+    // storage and are never gathered into a contiguous staging tensor.
+    GGML_API struct ggml_tensor * ggml_tessera_paged_attn(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * v,
+            struct ggml_tensor  * page_map,
+            float                 scale);
+
     GGML_API void ggml_flash_attn_ext_set_prec(
             struct ggml_tensor * a,
             enum ggml_prec       prec);
@@ -2582,6 +2599,117 @@ extern "C" {
             struct ggml_tensor  * beta,
             struct ggml_tensor  * state,
             int64_t               K);
+
+    // Tile640 ternary matmul with per-page BF16 scales, per-lane INT8 scales,
+    // and sparse BF16 outlier correction.
+    //
+    // A is stored as 6 separate tensors (rather than a single block-quantized
+    // format) so the matmul kernel can dequantize in-register and the
+    // outliers can be added as a sparse correction without an extra pass.
+    //
+    // Inputs:
+    //   A_packed       : I32  size = out_dim * pages_per_row * 32  (20 trits per u32, base-3, LSB-first)
+    //   A_page_scales  : F16  size = out_dim * pages_per_row        (BF16 bits, 1 per 640-weight page)
+    //   A_lane_scales  : I8   size = out_dim * pages_per_row * 32  (1 per 20-weight lane, [1, 127])
+    //   A_outlier_rows : I32  size = n_outliers                     (sparse row indices)
+    //   A_outlier_cols : I32  size = n_outliers
+    //   A_outlier_vals : F16  size = n_outliers                     (BF16 bits)
+    //   B              : F16  shape [in_dim, n_tokens, ...]        (activations)
+    //
+    // Output: F32, shape [out_dim, n_tokens, ...]
+    //
+    // Caller passes out_dim in op_params via a sentinel tensor, or the
+    // caller uses this op's wrapper which sets it. See llama-graph.cpp.
+    GGML_API struct ggml_tensor * ggml_tile640_matmul(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * A_packed,
+            struct ggml_tensor  * A_page_scales,
+            struct ggml_tensor  * A_lane_scales,
+            struct ggml_tensor  * A_outlier_rows,
+            struct ggml_tensor  * A_outlier_cols,
+            struct ggml_tensor  * A_outlier_vals,
+            struct ggml_tensor  * B);
+
+    // Per-expert variant of Tile640 matmul for MoE FFN.
+    //   A_packed       : I32  shape [n_experts, out_dim, pages_per_row, 32]
+    //   A_page_scales  : F16  shape [n_experts, out_dim, pages_per_row]
+    //   A_lane_scales  : I8   shape [n_experts, out_dim, pages_per_row, 32]
+    //   A_outlier_rows : I32  shape [n_experts, n_outliers_per_expert]
+    //   A_outlier_cols : I32  shape [n_experts, n_outliers_per_expert]
+    //   A_outlier_vals : F16  shape [n_experts, n_outliers_per_expert]
+    //   B              : F16  shape [in_dim, n_tokens]
+    //   ids            : I32  shape [n_expert_used, n_tokens]
+    //   out            : F32  shape [out_dim, n_expert_used, n_tokens]
+    //
+    // out_dim must be passed as an explicit argument (not recoverable from
+    // the input tensor shapes).
+    GGML_API struct ggml_tensor * ggml_tile640_matmul_id(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * A_packed,
+            struct ggml_tensor  * A_page_scales,
+            struct ggml_tensor  * A_lane_scales,
+            struct ggml_tensor  * A_outlier_rows,
+            struct ggml_tensor  * A_outlier_cols,
+            struct ggml_tensor  * A_outlier_vals,
+            struct ggml_tensor  * B,
+            struct ggml_tensor  * ids,
+            struct ggml_tensor  * act_scale,
+            int32_t             out_dim);
+
+    // Direct row lookup for Tile640-encoded embedding tables.
+    GGML_API struct ggml_tensor * ggml_tile640_get_rows(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * A_packed,
+            struct ggml_tensor  * A_page_scales,
+            struct ggml_tensor  * A_lane_scales,
+            struct ggml_tensor  * A_outlier_row_offsets,
+            struct ggml_tensor  * A_outlier_cols,
+            struct ggml_tensor  * A_outlier_vals,
+            struct ggml_tensor  * ids,
+            int32_t               row_width);
+
+    // Decode a Tile640 vector payload to F32 for elementwise, normalization,
+    // convolution, and recurrent-state consumers.
+    GGML_API struct ggml_tensor * ggml_tile640_dequant(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * A_packed,
+            struct ggml_tensor  * A_page_scales,
+            struct ggml_tensor  * A_lane_scales,
+            struct ggml_tensor  * A_outlier_row_offsets,
+            struct ggml_tensor  * A_outlier_cols,
+            struct ggml_tensor  * A_outlier_vals,
+            int64_t               ne0,
+            int64_t               ne1,
+            int64_t               ne2,
+            int64_t               ne3);
+
+    // Graph-resident importance-matrix observer. The output is F32
+    // [4*channels + 1, experts], where each expert row contains per-channel
+    // sum(x^2), sum(abs(x)), sum(x^4), max(abs(x)), followed by the routed
+    // sample count. When ids is NULL the observer is dense and experts must
+    // be 1.
+    GGML_API struct ggml_tensor * ggml_imatrix_observer(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * activations,
+            struct ggml_tensor  * ids,
+            struct ggml_tensor  * weight_anchor,
+            int32_t               experts);
+
+    // Fused dense observation and F32-to-F16 cast. One scheduler-owned
+    // allocation contains an F16 activation prefix and an aligned F32
+    // statistics tail. The returned tensor is the activation view; stats_out
+    // receives the F32 tail view.
+    GGML_API struct ggml_tensor * ggml_imatrix_observer_cast(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * activations,
+            struct ggml_tensor  * weight_anchor,
+            struct ggml_tensor ** stats_out);
+
+    // Returns true only for the compact F32 statistics tail created by
+    // ggml_imatrix_observer_cast(). The shared F16 storage tensor and its
+    // activation view deliberately return false.
+    GGML_API bool ggml_imatrix_observer_is_stats(
+            const struct ggml_tensor * tensor);
 
     // DSA lightning indexer
     //

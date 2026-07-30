@@ -4,8 +4,12 @@
 #include "log.h"
 #include "llama.h"
 #include "gguf.h"
+#include "nlohmann/json.hpp"
+#include "sampling.h"
+#include "speculative.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <clocale>
 #include <cmath>
@@ -16,10 +20,12 @@
 #include <mutex>
 #include <vector>
 #include <fstream>
+#include <future>
 #include <unordered_map>
 #include <map>
 #include <regex>
 #include <numeric>
+#include <set>
 
 #if defined(_MSC_VER)
 #pragma warning(disable: 4244 4267) // possible loss of data
@@ -31,12 +37,17 @@ static void print_usage(int, char ** argv) {
             "       -m model.gguf -f some-text.txt [-o imatrix.gguf] [--output-format {gguf,dat}] [--no-ppl] \\\n"
             "       [--process-output] [--chunk 123] [--save-frequency 0] [--output-frequency 10] \\\n"
             "       [--in-file imatrix-prev-0.gguf --in-file imatrix-prev-1.gguf ...] [--parse-special] \\\n"
-            "       [--show-statistics] [...]\n" , argv[0]);
+            "       [--show-statistics] \\\n"
+            "       [--model-draft drafter.gguf --spec-steps 64]   # spec-decoding calibration\n"
+            "       [...]\n" , argv[0]);
     LOG("\n");
 }
 
 struct Stats {
     std::vector<float>   values;
+    std::vector<float>   abs_values;
+    std::vector<float>   fourth_values;
+    std::vector<float>   max_values;
     std::vector<int64_t> counts;
 };
 
@@ -55,16 +66,58 @@ struct tensor_statistics {
     float cossim       = 0.0f;
 };
 
+struct observer_transfer_state {
+    std::vector<double> previous_moments;
+    std::vector<int64_t> previous_counts;
+    std::vector<float> signature;
+    int32_t stable_windows = 0;
+    int32_t frozen_at = 0;
+    int32_t next_probe = 0;
+    bool frozen = false;
+    bool probe_active = false;
+};
+
 class IMatrixCollector {
 public:
     IMatrixCollector() = default;
     void set_params(common_params params) { m_params = std::move(params); }
     bool collect_imatrix(struct ggml_tensor * t, bool ask, void * user_data);
+    void begin_graph_observers();
+    bool collect_graph_observers();
+    bool flush_graph_observers();
+    void log_observer_performance();
+    bool update_progressive_transfer(
+            int32_t chunks_processed,
+            bool allow_freeze,
+            float * delta_out);
+    void set_observer_chunk(int32_t chunk);
+    bool take_observer_topology_changed();
+    bool observer_enabled(const char * tensor_name);
+    static bool observer_filter(const char * tensor_name, void * user_data);
     void save_imatrix_legacy(int32_t ncall = -1) const;
     void save_imatrix(int32_t n_chunk = -1) const;
     bool load_imatrix(const char * file_name);
     const std::unordered_map<std::string, Stats> & get_mstats() const { return m_stats; }
 private:
+    static constexpr size_t k_observer_slots = 2;
+    struct graph_observer_snapshot {
+        std::string names;
+        std::string backend_name;
+        int64_t channels;
+        int64_t experts;
+        size_t offset;
+    };
+
+    bool reduce_graph_observers(
+            std::vector<graph_observer_snapshot> snapshots,
+            const std::vector<float> & staging);
+    bool flush_graph_observer_slot(size_t slot);
+    void save_transfer_ledger(
+            const std::string & imatrix_path,
+            int32_t checkpoint_chunk) const;
+    bool load_transfer_ledger(
+            const std::string & imatrix_path,
+            int32_t checkpoint_chunk);
     std::unordered_map<std::string, Stats> m_stats;
     common_params                          m_params;
     std::mutex                             m_mutex;
@@ -72,6 +125,22 @@ private:
     int32_t                                m_last_chunk = 0;
     std::vector<char>                      m_src1_data;
     std::vector<char>                      m_ids; // the expert ids from ggml_mul_mat_id
+    std::vector<ggml_tensor *>             m_graph_observers;
+    std::set<std::string>                  m_observer_backends;
+    // Two slots let CPU reduction overlap the following Metal graph while
+    // keeping staging and completion ownership one-to-one.
+    std::array<std::vector<float>, k_observer_slots> m_observer_staging;
+    std::vector<size_t>                    m_observer_offsets;
+    std::array<std::future<bool>, k_observer_slots> m_observer_reduction;
+    size_t                                  m_observer_staging_slot = 0;
+    double                                  m_observer_copy_seconds = 0.0;
+    double                                  m_observer_reduce_seconds = 0.0;
+    double                                  m_observer_slot_wait_seconds = 0.0;
+    uint64_t                                m_observer_copy_bytes = 0;
+    uint64_t                                m_observer_batches = 0;
+    std::unordered_map<std::string, observer_transfer_state> m_transfer;
+    int32_t                                m_observer_chunk = 0;
+    bool                                   m_observer_topology_changed = false;
 };
 
 // remove any prefix and suffixes from the name
@@ -91,6 +160,13 @@ static std::string filter_tensor_name(const char * name) {
         wname = name;
     }
     return wname;
+}
+
+static int32_t imatrix_op_param_i32(
+        const ggml_tensor * tensor, size_t index) {
+    int32_t value;
+    memcpy(&value, tensor->op_params + index * sizeof(value), sizeof(value));
+    return value;
 }
 
 static void process_tensor_name(const std::string & input, std::string & layer, std::string & tensor) {
@@ -223,6 +299,28 @@ static void compute_cossim(std::vector<tensor_statistics> & tstats) {
 }
 
 bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * user_data) {
+    if (m_params.imatrix_observers) {
+        const bool fused_stats_view =
+            ggml_imatrix_observer_is_stats(t);
+        const bool regular_observer =
+            t->op == GGML_OP_IMATRIX_OBSERVER &&
+            t->type == GGML_TYPE_F32 &&
+            imatrix_op_param_i32(t, 1) == 0;
+        if (ask && (regular_observer ||
+                    fused_stats_view)) {
+            m_graph_observers.push_back(t);
+            return false;
+        }
+        if (ask) {
+            // Synchronize once at the ordinary graph output, after all compact
+            // observer nodes for this internal ubatch have executed.
+            return (t->flags & GGML_TENSOR_FLAG_OUTPUT) &&
+                   !m_graph_observers.empty();
+        }
+        const bool ok = collect_graph_observers();
+        m_graph_observers.clear();
+        return ok;
+    }
     GGML_UNUSED(user_data);
 
     const struct ggml_tensor * src0 = t->src[0];
@@ -404,6 +502,520 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
     return true;
 }
 
+void IMatrixCollector::begin_graph_observers() {
+    m_graph_observers.clear();
+}
+
+bool IMatrixCollector::collect_graph_observers() {
+    // Reuse one of two persistent arenas. The other arena may still be
+    // reducing the preceding graph while Metal executes this graph.
+    // Keep producer and completion ownership in the same bounded ring.  This
+    // must be derived from the completion array: a stale binary once had
+    // three staging vectors and two futures, which allowed slot 2 to escape
+    // the reduction ring after two graphs.
+    static_assert(k_observer_slots == std::tuple_size_v<decltype(m_observer_reduction)>);
+    const size_t slot = m_observer_staging_slot++ % m_observer_reduction.size();
+    if (!flush_graph_observer_slot(slot)) {
+        return false;
+    }
+    // Pack all compact observer outputs into one reusable host arena. Metal
+    // uses shared buffers on Apple silicon, so the tensor gets are ordinary
+    // bounded copies after the graph-level synchronization rather than
+    // individual GPU readback transactions.
+    const auto copy_start = std::chrono::steady_clock::now();
+    m_observer_offsets.resize(m_graph_observers.size() + 1);
+    m_observer_offsets[0] = 0;
+    for (size_t i = 0; i < m_graph_observers.size(); ++i) {
+        ggml_tensor * observer = m_graph_observers[i];
+        const bool fused_cast =
+            ggml_imatrix_observer_is_stats(observer);
+        GGML_UNUSED(fused_cast);
+        const size_t compact_elements = ggml_nelements(observer);
+        m_observer_offsets[i + 1] =
+            m_observer_offsets[i] + compact_elements;
+    }
+    std::vector<float> & staging = m_observer_staging[slot];
+    staging.resize(m_observer_offsets.back());
+    for (size_t i = 0; i < m_graph_observers.size(); ++i) {
+        ggml_tensor * observer = m_graph_observers[i];
+        const bool fused_cast =
+            ggml_imatrix_observer_is_stats(observer);
+        GGML_UNUSED(fused_cast);
+        const size_t read_bytes =
+            (m_observer_offsets[i + 1] - m_observer_offsets[i]) *
+            sizeof(float);
+        if (read_bytes > ggml_nbytes(observer)) {
+            LOG_ERR(
+                "%s: compact observer read exceeds logical tensor '%s': "
+                "requested=%zu, available=%zu, op=%s, type=%s, view=%d\n",
+                __func__, observer->name, read_bytes,
+                ggml_nbytes(observer), ggml_op_name(observer->op),
+                ggml_type_name(observer->type),
+                observer->view_src != nullptr);
+            return false;
+        }
+        // On Apple silicon a shared Metal observer buffer is directly mapped
+        // into this process.  Bypass the backend virtual dispatch in that
+        // common case; non-host backends retain the portable tensor-get path.
+        ggml_backend_buffer_t observer_buffer = observer->buffer;
+        if (!observer_buffer && observer->view_src) {
+            observer_buffer = observer->view_src->buffer;
+        }
+        if (observer_buffer && ggml_backend_buffer_is_host(observer_buffer)) {
+            memcpy(
+                staging.data() + m_observer_offsets[i],
+                observer->data,
+                read_bytes);
+        } else {
+            ggml_backend_tensor_get(
+                observer,
+                staging.data() + m_observer_offsets[i],
+                0,
+                read_bytes);
+        }
+    }
+    const auto copy_end = std::chrono::steady_clock::now();
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_observer_copy_seconds +=
+            std::chrono::duration<double>(copy_end - copy_start).count();
+        m_observer_copy_bytes += m_observer_offsets.back() * sizeof(float);
+        ++m_observer_batches;
+    }
+
+    std::vector<graph_observer_snapshot> snapshots;
+    snapshots.reserve(m_graph_observers.size());
+    size_t observer_index = 0;
+    for (ggml_tensor * observer : m_graph_observers) {
+        const bool fused_cast =
+            ggml_imatrix_observer_is_stats(observer);
+        GGML_ASSERT(observer->op == GGML_OP_IMATRIX_OBSERVER ||
+                    fused_cast);
+        ggml_backend_buffer_t observer_buffer = observer->buffer;
+        if (!observer_buffer && observer->view_src) {
+            observer_buffer = observer->view_src->buffer;
+        }
+        const int64_t channels = fused_cast
+            ? imatrix_op_param_i32(observer->view_src, 2)
+            : (observer->ne[0] - 1) / 4;
+        const int64_t experts = fused_cast ? 1 : observer->ne[1];
+        GGML_ASSERT(fused_cast || (observer->ne[0] - 1) % 4 == 0);
+        snapshots.push_back({
+            filter_tensor_name(observer->name),
+            ggml_backend_buffer_name(observer_buffer),
+            channels,
+            experts,
+            m_observer_offsets[observer_index++],
+        });
+    }
+
+    // The alternate arena remains available to the next callback. CPU
+    // accumulation therefore overlaps the following Metal decode without
+    // per-ubatch allocation churn.
+    m_observer_reduction[slot] = std::async(
+        std::launch::async,
+        [this, slot, snapshots = std::move(snapshots)]() mutable {
+            return reduce_graph_observers(
+                std::move(snapshots), m_observer_staging[slot]);
+        });
+    return true;
+}
+
+bool IMatrixCollector::flush_graph_observer_slot(size_t slot) {
+    GGML_ASSERT(slot < m_observer_reduction.size());
+    if (!m_observer_reduction[slot].valid()) {
+        return true;
+    }
+    const auto wait_start = std::chrono::steady_clock::now();
+    const bool result = m_observer_reduction[slot].get();
+    const double wait_seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - wait_start).count();
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_observer_slot_wait_seconds += wait_seconds;
+    }
+    return result;
+}
+
+bool IMatrixCollector::flush_graph_observers() {
+    for (size_t slot = 0; slot < m_observer_reduction.size(); ++slot) {
+        if (!flush_graph_observer_slot(slot)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool IMatrixCollector::reduce_graph_observers(
+        std::vector<graph_observer_snapshot> snapshots,
+        const std::vector<float> & staging) {
+    const auto reduce_start = std::chrono::steady_clock::now();
+    const int32_t chunk_size = m_params.n_ctx / m_params.n_parallel;
+    // Build a private delta while Metal starts the following graph.  Holding
+    // m_mutex across every channel used to make the decode thread contend
+    // with both async reduction slots merely to check an observer filter.
+    // A short, deterministic merge below preserves the on-disk imatrix
+    // contract while keeping that critical section proportional to the
+    // compact statistics, not their parsing and allocation cost.
+    std::unordered_map<std::string, Stats> delta;
+    std::set<std::string> backends;
+    for (const graph_observer_snapshot & snapshot : snapshots) {
+        backends.insert(snapshot.backend_name);
+        const int64_t channels = snapshot.channels;
+        const int64_t experts = snapshot.experts;
+        const float * compact = staging.data() + snapshot.offset;
+        const std::string & observer_names = snapshot.names;
+        size_t name_begin = 0;
+        while (name_begin <= observer_names.size()) {
+            const size_t name_end = observer_names.find('|', name_begin);
+            const std::string wname = observer_names.substr(
+                name_begin,
+                name_end == std::string::npos
+                    ? std::string::npos
+                    : name_end - name_begin);
+            auto & entry = delta[wname];
+            if (entry.values.empty()) {
+                entry.values.resize(channels * experts, 0.0f);
+            }
+            if (entry.abs_values.empty()) {
+                entry.abs_values.resize(channels * experts, 0.0f);
+            }
+            if (entry.fourth_values.empty()) {
+                entry.fourth_values.resize(channels * experts, 0.0f);
+            }
+            if (entry.max_values.empty()) {
+                entry.max_values.resize(channels * experts, 0.0f);
+            }
+            if (entry.counts.empty()) {
+                entry.counts.resize(experts, 0);
+            }
+            if (entry.values.size() != (size_t) (channels * experts) ||
+                entry.abs_values.size() != (size_t) (channels * experts) ||
+                entry.fourth_values.size() != (size_t) (channels * experts) ||
+                entry.max_values.size() != (size_t) (channels * experts) ||
+                entry.counts.size() != (size_t) experts) {
+                LOG_ERR(
+                    "%s: observer shape changed within graph for %s: "
+                    "existing=[%zu,%zu] incoming=[%lld,%lld]\n",
+                    __func__, wname.c_str(),
+                    entry.values.size(), entry.counts.size(),
+                    (long long) (channels * experts),
+                    (long long) experts);
+                return false;
+            }
+
+            for (int64_t expert = 0; expert < experts; ++expert) {
+                const float * row =
+                    compact + expert * (4 * channels + 1);
+                for (int64_t channel = 0; channel < channels; ++channel) {
+                    const int64_t index = expert * channels + channel;
+                    entry.values[index] += row[channel];
+                    entry.abs_values[index] += row[channels + channel];
+                    entry.fourth_values[index] +=
+                        row[2 * channels + channel];
+                    entry.max_values[index] = std::max(
+                        entry.max_values[index],
+                        row[3 * channels + channel]);
+                }
+                entry.counts[expert] +=
+                    (int64_t) llroundf(row[4 * channels]);
+            }
+            if (name_end == std::string::npos) {
+                break;
+            }
+            name_begin = name_end + 1;
+        }
+    }
+
+    const double reduce_seconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - reduce_start).count();
+    std::lock_guard<std::mutex> lock(m_mutex);
+    for (const std::string & backend : backends) {
+        if (m_observer_backends.insert(backend).second) {
+            LOG_INF("%s: graph observers active on backend buffer '%s'\n",
+                    __func__, backend.c_str());
+        }
+    }
+    for (auto & [name, source] : delta) {
+        auto & destination = m_stats[name];
+        if (destination.values.empty()) {
+            destination = Stats{
+                std::vector<float>(source.values.size(), 0.0f),
+                std::vector<float>(source.abs_values.size(), 0.0f),
+                std::vector<float>(source.fourth_values.size(), 0.0f),
+                std::vector<float>(source.max_values.size(), 0.0f),
+                std::vector<int64_t>(source.counts.size(), 0),
+            };
+        }
+        // Older checkpoints predate the rich observer moments.  Their
+        // squared-activation sums and counts remain valid; introduce zeroed
+        // accumulators for the newly observed moments so resume can continue
+        // rather than misclassifying an absent optional field as a tensor
+        // shape transition.
+        if (destination.abs_values.empty() &&
+            destination.fourth_values.empty() &&
+            destination.max_values.empty() &&
+            destination.values.size() == source.values.size()) {
+            destination.abs_values.resize(source.abs_values.size(), 0.0f);
+            destination.fourth_values.resize(source.fourth_values.size(), 0.0f);
+            destination.max_values.resize(source.max_values.size(), 0.0f);
+        }
+        if (destination.values.size() != source.values.size() ||
+            destination.abs_values.size() != source.abs_values.size() ||
+            destination.fourth_values.size() != source.fourth_values.size() ||
+            destination.max_values.size() != source.max_values.size() ||
+            destination.counts.size() != source.counts.size()) {
+            LOG_ERR(
+                "%s: observer shape changed against accumulated state for %s: "
+                "stored=[%zu,%zu] incoming=[%zu,%zu]\n",
+                __func__, name.c_str(),
+                destination.values.size(), destination.counts.size(),
+                source.values.size(), source.counts.size());
+            return false;
+        }
+        for (size_t i = 0; i < source.values.size(); ++i) {
+            destination.values[i] += source.values[i];
+            destination.abs_values[i] += source.abs_values[i];
+            destination.fourth_values[i] += source.fourth_values[i];
+            destination.max_values[i] = std::max(
+                destination.max_values[i], source.max_values[i]);
+        }
+        for (size_t i = 0; i < source.counts.size(); ++i) {
+            destination.counts[i] += source.counts[i];
+            m_last_chunk = std::max(
+                m_last_chunk,
+                (int32_t) (destination.counts[i] / chunk_size));
+        }
+    }
+    m_observer_reduce_seconds += reduce_seconds;
+    return true;
+}
+
+void IMatrixCollector::log_observer_performance() {
+    if (!flush_graph_observers()) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_observer_batches == 0) {
+        return;
+    }
+    LOG_INF(
+        "%s: observer batches=%llu payload=%.2f MiB copy=%.3fs reduce=%.3fs "
+        "slot_wait=%.3fs\n",
+        __func__, (unsigned long long) m_observer_batches,
+        (double) m_observer_copy_bytes / (1024.0 * 1024.0),
+        m_observer_copy_seconds, m_observer_reduce_seconds,
+        m_observer_slot_wait_seconds);
+}
+
+bool IMatrixCollector::update_progressive_transfer(
+        int32_t chunks_processed,
+        bool allow_freeze,
+        float * delta_out) {
+    if (!flush_graph_observers()) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::vector<std::string> names;
+    names.reserve(m_stats.size());
+    for (const auto & item : m_stats) {
+        names.push_back(item.first);
+    }
+    std::sort(names.begin(), names.end());
+
+    float worst_delta = 0.0f;
+    size_t active = 0;
+    for (const std::string & name : names) {
+        const Stats & stats = m_stats.at(name);
+        if (stats.values.empty() || stats.counts.empty() ||
+            stats.abs_values.size() != stats.values.size() ||
+            stats.fourth_values.size() != stats.values.size()) {
+            continue;
+        }
+        const size_t channels = stats.values.size() / stats.counts.size();
+        if (channels == 0) {
+            continue;
+        }
+        std::vector<double> moments;
+        std::vector<float> signature;
+        moments.reserve(stats.counts.size() * 96);
+        signature.reserve(stats.counts.size() * 96);
+        const size_t stride = std::max<size_t>(1, channels / 32);
+        for (size_t expert = 0; expert < stats.counts.size(); ++expert) {
+            const size_t begin = expert * channels;
+            for (size_t channel = 0; channel < channels; channel += stride) {
+                const size_t index = begin + channel;
+                moments.push_back(stats.values[index]);
+                if (index < stats.abs_values.size()) {
+                    moments.push_back(stats.abs_values[index]);
+                }
+                if (index < stats.fourth_values.size()) {
+                    moments.push_back(stats.fourth_values[index]);
+                }
+            }
+        }
+
+        auto & state = m_transfer[name];
+        if (moments.empty() ||
+            moments.size() != state.previous_moments.size() ||
+            stats.counts.size() != state.previous_counts.size()) {
+            state.previous_moments = std::move(moments);
+            state.previous_counts = stats.counts;
+            state.signature.clear();
+            state.stable_windows = 0;
+            ++active;
+            continue;
+        }
+
+        bool complete_window = true;
+        size_t moment = 0;
+        for (size_t expert = 0; expert < stats.counts.size(); ++expert) {
+            const int64_t window_count =
+                stats.counts[expert] - state.previous_counts[expert];
+            if (window_count <= 0) {
+                complete_window = false;
+            }
+            for (size_t channel = 0; channel < channels; channel += stride) {
+                GGML_UNUSED(channel);
+                for (int statistic = 0; statistic < 3; ++statistic) {
+                    const double window_sum =
+                        moments[moment] - state.previous_moments[moment];
+                    signature.push_back(log1pf(fabsf((float) (
+                        window_sum / std::max<int64_t>(1, window_count)))));
+                    ++moment;
+                }
+            }
+        }
+        state.previous_moments = std::move(moments);
+        state.previous_counts = stats.counts;
+        if (!complete_window) {
+            ++active;
+            continue;
+        }
+        const auto [min_count_it, max_count_it] = std::minmax_element(
+            stats.counts.begin(), stats.counts.end());
+        const float expert_coverage = stats.counts.size() <= 1
+            ? 1.0f
+            : (float) *min_count_it / std::max<int64_t>(1, *max_count_it);
+        const bool coverage_ready = expert_coverage >=
+            m_params.imatrix_min_expert_coverage;
+        if (signature.size() != state.signature.size()) {
+            state.signature = std::move(signature);
+            state.stable_windows = 0;
+            ++active;
+            continue;
+        }
+
+        double squared_delta = 0.0;
+        for (size_t i = 0; i < signature.size(); ++i) {
+            const double delta =
+                (double) signature[i] - state.signature[i];
+            squared_delta += delta * delta;
+        }
+        const float rms_delta = (float) sqrt(
+            squared_delta / std::max<size_t>(1, signature.size()));
+        worst_delta = std::max(worst_delta, rms_delta);
+        state.signature = std::move(signature);
+
+        if (state.frozen) {
+            if (chunks_processed >= state.next_probe) {
+                if (rms_delta >
+                    m_params.imatrix_convergence_tolerance * 2.0f) {
+                    state.frozen = false;
+                    state.probe_active = false;
+                    state.stable_windows = 0;
+                    LOG_INF(
+                        "%s: reopened observer %s at chunk %d "
+                        "(probe rms_delta=%.7g)\n",
+                        __func__, name.c_str(), chunks_processed, rms_delta);
+                } else {
+                    state.next_probe = chunks_processed +
+                        4 * m_params.imatrix_convergence_interval;
+                    state.probe_active = false;
+                    m_observer_topology_changed = true;
+                }
+            }
+        } else if (rms_delta <= m_params.imatrix_convergence_tolerance) {
+            ++state.stable_windows;
+            if (allow_freeze &&
+                coverage_ready &&
+                state.stable_windows >=
+                    m_params.imatrix_convergence_patience) {
+                state.frozen = true;
+                state.frozen_at = chunks_processed;
+                state.next_probe = chunks_processed +
+                    4 * m_params.imatrix_convergence_interval;
+                state.probe_active = false;
+                m_observer_topology_changed = true;
+                LOG_INF(
+                    "%s: froze transferable observer %s at chunk %d "
+                    "(rms_delta=%.7g, expert_coverage=%.3f)\n",
+                    __func__, name.c_str(), chunks_processed, rms_delta,
+                    expert_coverage);
+            }
+        } else {
+            state.stable_windows = 0;
+        }
+        if (allow_freeze && !coverage_ready && stats.counts.size() > 1) {
+            LOG_DBGV(2,
+                "%s: retaining routed observer %s at chunk %d "
+                "(expert_coverage=%.3f < %.3f)\n",
+                __func__, name.c_str(), chunks_processed, expert_coverage,
+                m_params.imatrix_min_expert_coverage);
+        }
+        if (!state.frozen) {
+            ++active;
+        }
+    }
+
+    if (delta_out) {
+        *delta_out = names.empty() ? INFINITY : worst_delta;
+    }
+    const size_t frozen = m_transfer.size() - active;
+    LOG_INF(
+        "%s: progressive observer transfer at chunk %d: "
+        "frozen=%zu active=%zu\n",
+        __func__, chunks_processed, frozen, active);
+    return allow_freeze && !m_transfer.empty() && active == 0;
+}
+
+void IMatrixCollector::set_observer_chunk(int32_t chunk) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_observer_chunk = chunk;
+    for (auto & [name, state] : m_transfer) {
+        GGML_UNUSED(name);
+        if (state.frozen && !state.probe_active &&
+            chunk >= state.next_probe) {
+            state.probe_active = true;
+            m_observer_topology_changed = true;
+        }
+    }
+}
+
+bool IMatrixCollector::take_observer_topology_changed() {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    const bool changed = m_observer_topology_changed;
+    m_observer_topology_changed = false;
+    return changed;
+}
+
+bool IMatrixCollector::observer_enabled(const char * tensor_name) {
+    std::lock_guard<std::mutex> lock(m_mutex);
+    const std::string name = filter_tensor_name(tensor_name);
+    auto found = m_transfer.find(name);
+    if (found == m_transfer.end() || !found->second.frozen) {
+        return true;
+    }
+    return m_observer_chunk >= found->second.next_probe;
+}
+
+bool IMatrixCollector::observer_filter(
+        const char * tensor_name,
+        void * user_data) {
+    return static_cast<IMatrixCollector *>(user_data)->
+        observer_enabled(tensor_name);
+}
+
 void IMatrixCollector::save_imatrix_legacy(int32_t ncall) const {
     auto fname = m_params.out_file;
 
@@ -557,6 +1169,11 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
 
         to_store.push_back(kv.first);
         data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * kv.second.values.size(), GGML_MEM_ALIGN);
+        if (!kv.second.abs_values.empty()) {
+            data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * kv.second.abs_values.size(), GGML_MEM_ALIGN);
+            data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * kv.second.fourth_values.size(), GGML_MEM_ALIGN);
+            data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * kv.second.max_values.size(), GGML_MEM_ALIGN);
+        }
         data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * kv.second.counts.size(), GGML_MEM_ALIGN);
     }
 
@@ -608,6 +1225,25 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
 
             gguf_add_tensor(ctx_gguf, in_sum2);
             gguf_add_tensor(ctx_gguf, counts);
+
+            if (stat.abs_values.size() == stat.values.size() &&
+                stat.fourth_values.size() == stat.values.size() &&
+                stat.max_values.size() == stat.values.size()) {
+                struct ggml_tensor * in_sumabs = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, nval / nmat, nmat);
+                struct ggml_tensor * in_sum4   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, nval / nmat, nmat);
+                struct ggml_tensor * in_maxabs = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, nval / nmat, nmat);
+                ggml_format_name(in_sumabs, "%s.in_sumabs", name.c_str());
+                ggml_format_name(in_sum4,   "%s.in_sum4",   name.c_str());
+                ggml_format_name(in_maxabs, "%s.in_maxabs", name.c_str());
+                for (int32_t j = 0; j < nval; ++j) {
+                    ((float *) in_sumabs->data)[j] = stat.abs_values[j];
+                    ((float *) in_sum4->data)[j]   = stat.fourth_values[j];
+                    ((float *) in_maxabs->data)[j] = stat.max_values[j];
+                }
+                gguf_add_tensor(ctx_gguf, in_sumabs);
+                gguf_add_tensor(ctx_gguf, in_sum4);
+                gguf_add_tensor(ctx_gguf, in_maxabs);
+            }
         }
     }
 
@@ -618,6 +1254,115 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
 
     gguf_free(ctx_gguf);
     ggml_free(ctx);
+
+    save_transfer_ledger(
+        fname,
+        n_chunk > 0 ? n_chunk : m_last_chunk);
+}
+
+void IMatrixCollector::save_transfer_ledger(
+        const std::string & imatrix_path,
+        int32_t checkpoint_chunk) const {
+    nlohmann::ordered_json root = {
+        { "schema", "llama.tessera.progressive-observer-ledger.v1" },
+        { "checkpoint_chunk", checkpoint_chunk },
+        { "convergence_interval", m_params.imatrix_convergence_interval },
+        { "convergence_patience", m_params.imatrix_convergence_patience },
+        { "convergence_tolerance", m_params.imatrix_convergence_tolerance },
+        { "tensors", nlohmann::ordered_json::object() },
+    };
+    size_t frozen = 0;
+    for (const auto & [name, state] : m_transfer) {
+        root["tensors"][name] = {
+            { "previous_moments", state.previous_moments },
+            { "previous_counts", state.previous_counts },
+            { "signature", state.signature },
+            { "stable_windows", state.stable_windows },
+            { "frozen_at", state.frozen_at },
+            { "next_probe", state.next_probe },
+            { "frozen", state.frozen },
+            { "probe_active", state.probe_active },
+        };
+        frozen += state.frozen ? 1 : 0;
+    }
+    root["frozen_tensors"] = frozen;
+    root["total_tensors"] = m_transfer.size();
+    root["frozen_fraction"] = m_transfer.empty()
+        ? 0.0
+        : (double) frozen / m_transfer.size();
+
+    const std::string path = imatrix_path + ".transfer.json";
+    const std::string temporary = path + ".tmp";
+    {
+        std::ofstream output(temporary, std::ios::trunc);
+        if (!output) {
+            LOG_ERR("%s: failed to create %s\n", __func__, temporary.c_str());
+            return;
+        }
+        output << root.dump(2) << '\n';
+        if (!output) {
+            LOG_ERR("%s: failed to write %s\n", __func__, temporary.c_str());
+            return;
+        }
+    }
+    if (std::rename(temporary.c_str(), path.c_str()) != 0) {
+        LOG_ERR("%s: failed to publish %s\n", __func__, path.c_str());
+        return;
+    }
+    LOG_INF(
+        "%s: saved progressive ledger %s (frozen=%zu/%zu)\n",
+        __func__, path.c_str(), frozen, m_transfer.size());
+}
+
+bool IMatrixCollector::load_transfer_ledger(
+        const std::string & imatrix_path,
+        int32_t checkpoint_chunk) {
+    const std::string path = imatrix_path + ".transfer.json";
+    std::ifstream input(path);
+    if (!input) {
+        LOG_INF(
+            "%s: no progressive ledger beside %s; seeding fresh windows\n",
+            __func__, imatrix_path.c_str());
+        return true;
+    }
+    try {
+        const nlohmann::ordered_json root =
+            nlohmann::ordered_json::parse(input);
+        if (root.value("schema", std::string()) !=
+                "llama.tessera.progressive-observer-ledger.v1" ||
+            root.value("checkpoint_chunk", -1) != checkpoint_chunk) {
+            LOG_ERR("%s: incompatible progressive ledger %s\n",
+                    __func__, path.c_str());
+            return false;
+        }
+        std::unordered_map<std::string, observer_transfer_state> loaded;
+        for (auto item : root.at("tensors").items()) {
+            const auto & value = item.value();
+            observer_transfer_state state;
+            state.previous_moments =
+                value.at("previous_moments").get<std::vector<double>>();
+            state.previous_counts =
+                value.at("previous_counts").get<std::vector<int64_t>>();
+            state.signature =
+                value.at("signature").get<std::vector<float>>();
+            state.stable_windows = value.value("stable_windows", 0);
+            state.frozen_at = value.value("frozen_at", 0);
+            state.next_probe = value.value("next_probe", 0);
+            state.frozen = value.value("frozen", false);
+            state.probe_active = value.value("probe_active", false);
+            loaded.emplace(item.key(), std::move(state));
+        }
+        m_transfer = std::move(loaded);
+        m_observer_topology_changed = !m_transfer.empty();
+        LOG_INF(
+            "%s: restored progressive ledger %s (%zu tensors)\n",
+            __func__, path.c_str(), m_transfer.size());
+        return true;
+    } catch (const std::exception & error) {
+        LOG_ERR("%s: failed to parse %s: %s\n",
+                __func__, path.c_str(), error.what());
+        return false;
+    }
 }
 
 bool IMatrixCollector::load_imatrix(const char * file_name) {
@@ -669,6 +1414,27 @@ bool IMatrixCollector::load_imatrix(const char * file_name) {
             for (int64_t j = 0; j < nval; ++j) {
                 e.values[j] += entry.sums[j];
             }
+            if (!entry.abs_sums.empty()) {
+                if (e.abs_values.empty()) {
+                    e.abs_values.resize(nval, 0.0f);
+                    e.fourth_values.resize(nval, 0.0f);
+                    e.max_values.resize(nval, 0.0f);
+                }
+                if (entry.abs_sums.size() != (size_t) nval ||
+                    entry.fourth_sums.size() != (size_t) nval ||
+                    entry.max_abs.size() != (size_t) nval) {
+                    LOG_ERR(
+                        "%s: mismatched rich moment size for %s\n",
+                        __func__, name.c_str());
+                    return false;
+                }
+                for (int64_t j = 0; j < nval; ++j) {
+                    e.abs_values[j] += entry.abs_sums[j];
+                    e.fourth_values[j] += entry.fourth_sums[j];
+                    e.max_values[j] = std::max(
+                        e.max_values[j], entry.max_abs[j]);
+                }
+            }
             for (int64_t j = 0; j < ncounts; ++j) {
                 e.counts[j] += entry.counts[j];
             }
@@ -688,7 +1454,7 @@ bool IMatrixCollector::load_imatrix(const char * file_name) {
     }
     m_last_chunk = max_count / chunk_size;
 
-    return true;
+    return load_transfer_ledger(file_name, loaded.chunk_count);
 }
 
 static IMatrixCollector g_collector;
@@ -842,6 +1608,15 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params, c
         const int end   = start + n_ctx;
 
         const int n_seq_batch = std::min(n_seq, n_chunk - i);
+        const int32_t chunks_processed =
+            params.i_chunk + i + n_seq_batch;
+        g_collector.set_observer_chunk(chunks_processed);
+        if (g_collector.take_observer_topology_changed()) {
+            llama_bump_imatrix_observer_epoch(ctx);
+            LOG_INF("%s: observer topology transition at chunk %d; "
+                    "rebuilding once for the new mask\n",
+                    __func__, chunks_processed);
+        }
 
         const auto t_start = std::chrono::high_resolution_clock::now();
 
@@ -877,6 +1652,7 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params, c
                 tokens[seq_start] = token_org;
             }
 
+            g_collector.begin_graph_observers();
             if (llama_decode(ctx, batch)) {
                 LOG_ERR("%s : failed to eval\n", __func__);
                 llama_batch_free(batch);
@@ -924,6 +1700,49 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params, c
 
             logits.clear();
         }
+
+        if (params.imatrix_observers &&
+            params.imatrix_convergence_min_chunks > 0 &&
+            chunks_processed % params.imatrix_convergence_interval == 0) {
+            float convergence_delta = INFINITY;
+            const bool allow_freeze =
+                chunks_processed >=
+                params.imatrix_convergence_min_chunks;
+            const bool converged =
+                g_collector.update_progressive_transfer(
+                    chunks_processed, allow_freeze, &convergence_delta);
+            if (g_collector.take_observer_topology_changed()) {
+                llama_bump_imatrix_observer_epoch(ctx);
+                LOG_INF("%s: observer topology transition after chunk %d; "
+                        "rebuilding once for the new mask\n",
+                        __func__, chunks_processed);
+            }
+            g_collector.log_observer_performance();
+            LOG_INF(
+                "%s: observer convergence at chunk %d: rms_delta=%.7g, "
+                "tolerance=%.7g%s\n",
+                __func__, chunks_processed, convergence_delta,
+                params.imatrix_convergence_tolerance,
+                converged ? " (stable; stopping)" : "");
+            if (converged) {
+                g_collector.save_imatrix(chunks_processed);
+                break;
+            }
+        }
+        if (params.n_out_freq > 0 &&
+            chunks_processed % params.n_out_freq == 0) {
+            if (!g_collector.flush_graph_observers()) {
+                return false;
+            }
+            g_collector.save_imatrix();
+        }
+        if (params.n_save_freq > 0 &&
+            chunks_processed % params.n_save_freq == 0) {
+            if (!g_collector.flush_graph_observers()) {
+                return false;
+            }
+            g_collector.save_imatrix(chunks_processed);
+        }
     }
 
     LOG("\n");
@@ -943,7 +1762,311 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params, c
 
     llama_batch_free(batch);
 
+    if (!g_collector.flush_graph_observers()) {
+        return false;
+    }
+
     return true;
+}
+
+// Spec-decoding variant of compute_imatrix. Runs real speculative-decoding
+// forward passes on the calibration text instead of plain text forward
+// passes, so the captured imatrix reflects the drafter-co-decoded input
+// distribution (i.e. what the verifier actually sees during spec decoding
+// at inference time, not the bare text distribution).
+//
+// Inputs:
+//   ctx_tgt:  verifier context (already loaded, has graph observers attached)
+//   model_tgt: verifier model (needed for vocab and sampler)
+//   spec:     common_speculative handle (drafter model is already loaded
+//             inside the spec struct; both ctx_tgt and ctx_dft have been
+//             set on params.speculative.draft by the caller)
+//   params:   common_params; we use params.prompt (text) and params.n_spec_steps
+//   n_ctx:    context size used to prime the prompt
+//
+// Key design points:
+//   - common_speculative_begin / _draft / _accept are used so the spec
+//     semantics match llama-server's DRAFT_SIMPLE path exactly.
+//   - Graph observers are active ONLY during the verifier's decode (the
+//     drafter's forward is observer-free — we only care about the verifier's
+//     activations, since that's what tessera will quantize).
+//   - The verifier's KV cache is rolled forward with the spec-decoded
+//     sequence; the calibration therefore covers a contiguous forward
+//     trajectory, not chunked restarts.
+static bool compute_imatrix_spec(
+    llama_context * ctx_tgt,
+    llama_model * model_tgt,
+    common_speculative * spec,
+    common_params & params,
+    const int32_t n_ctx
+) {
+    const llama_vocab * vocab = llama_model_get_vocab(model_tgt);
+    const int n_draft_max = common_speculative_n_max(&params.speculative);
+    const int n_steps = params.n_spec_steps;  // 0 means "until context limit"
+
+    LOG_INF("%s: tokenizing the input ..\n", __func__);
+    std::vector<llama_token> tokens = common_tokenize(
+        ctx_tgt, params.prompt, true, params.parse_special);
+    LOG_INF("%s: tokenized %zu tokens\n", __func__, tokens.size());
+
+    if (int(tokens.size()) < n_ctx + 4) {
+        LOG_ERR("%s: need at least %d tokens for spec calibration (have %zu)\n",
+                __func__, n_ctx + 4, tokens.size());
+        return false;
+    }
+
+    // Prime the verifier with most of the context window, leaving a tail
+    // for the spec loop to use (1 verifier-token + n_draft_max draft-tokens
+    // per step). Without this headroom the slot allocator refuses the
+    // first spec batch with "failed to find a memory slot for batch of
+    // size 4".
+    //
+    // We also prime the drafter with the same prompt: DRAFT_SIMPLE's
+    // `begin()` is a no-op, so the drafter's KV cache is empty after
+    // common_speculative_begin; the drafter needs to see the prompt
+    // tokens before it can draft at position n_past.
+    //
+    // If `params.telemetry_out` is set, we open a JSONL file and write
+    // one record per spec step with the drafter's per-position confidence
+    // (the verifier's softmax probability of the drafter's pick). This
+    // matches the schema used by llama-server for `dflash-acceptance.jsonl`
+    // and is the input for downstream drafter fine-tuning (e.g. rejection
+    // sampling on dspark to bring it back into alignment with the QAT
+    // target — see the dspark-realign pipeline).
+    FILE * telemetry_fp = nullptr;
+    if (!params.telemetry_out.empty()) {
+        telemetry_fp = std::fopen(params.telemetry_out.c_str(), "w");
+        if (telemetry_fp == nullptr) {
+            LOG_ERR("%s: failed to open telemetry output '%s'\n",
+                    __func__, params.telemetry_out.c_str());
+            return false;
+        }
+        LOG_INF("%s: writing per-step accept/reject telemetry to '%s'\n",
+                __func__, params.telemetry_out.c_str());
+    }
+
+    const int prime_size = std::max(8, n_ctx - n_draft_max - 4);
+    std::vector<llama_token> prompt_tokens(
+        tokens.begin(), tokens.begin() + prime_size);
+    if (llama_decode(ctx_tgt, llama_batch_get_one(
+            prompt_tokens.data(), prompt_tokens.size() - 1)) != 0) {
+        LOG_ERR("%s: failed to prime verifier\n", __func__);
+        if (telemetry_fp) std::fclose(telemetry_fp);
+        return false;
+    }
+    if (params.speculative.draft.ctx_dft != nullptr) {
+        // Prime the drafter with the same (N-1)-length prefix. After this,
+        // the drafter's KV has positions 0..prime_size-2 filled and
+        // n_past_dft == prime_size - 1.
+        if (llama_decode(params.speculative.draft.ctx_dft,
+                llama_batch_get_one(prompt_tokens.data(), prompt_tokens.size() - 1)) != 0) {
+            LOG_ERR("%s: failed to prime drafter\n", __func__);
+            if (telemetry_fp) std::fclose(telemetry_fp);
+            return false;
+        }
+    }
+    {
+        auto * mem_tgt = llama_get_memory(ctx_tgt);
+        auto * mem_dft = params.speculative.draft.ctx_dft != nullptr
+                              ? llama_get_memory(params.speculative.draft.ctx_dft)
+                              : nullptr;
+        const llama_pos pos_tgt = llama_memory_seq_pos_max(mem_tgt, 0);
+        const llama_pos pos_dft = mem_dft ? llama_memory_seq_pos_max(mem_dft, 0) : -1;
+        LOG_INF("%s: post-prime KV: tgt n_past=%lld, dft n_past=%lld, prime_size=%d\n",
+                __func__, (long long) pos_tgt + 1, (long long) pos_dft + 1, prime_size);
+    }
+
+    // Begin the spec context with the prompt. The spec implementation
+    // primes the drafter's KV cache with the same prompt here.
+    common_speculative_begin(spec, 0, prompt_tokens);
+
+    // Sampler for the verifier (greedy by default for determinism).
+    common_sampler_ptr smpl(common_sampler_init(model_tgt, params.sampling));
+
+    llama_batch batch = llama_batch_init(llama_n_batch(ctx_tgt), 0, 1);
+
+    llama_token id_last = prompt_tokens.back();
+    int n_past = (int) prompt_tokens.size() - 1;
+    int n_drafted = 0;
+    int n_accepted = 0;
+
+    LOG_INF("%s: starting spec loop: n_ctx=%d, n_draft_max=%d, n_steps=%s\n",
+            __func__, n_ctx, n_draft_max,
+            n_steps > 0 ? std::to_string(n_steps).c_str() : "until-limit");
+
+    int step = 0;
+    // Get the drafter context once. We bypass common_speculative_draft()
+    // and run the drafter forward manually; the spec API's bookkeeping
+    // (pos = n_past + i + 1) collides with our verifier's pos tracking in
+    // ways that produce off-by-one KV errors.
+    llama_context * ctx_dft = params.speculative.draft.ctx_dft;
+    if (ctx_dft == nullptr) {
+        LOG_ERR("%s: drafter context is null\n", __func__);
+        return false;
+    }
+    // Separate sampler for the drafter (greedy). We don't accept its
+    // samples; we just need its top-1 token at each step.
+    common_sampler_ptr dft_smpl(
+        common_sampler_init(model_tgt, params.sampling));
+
+    while (n_steps <= 0 || step < n_steps) {
+        // 1. Drafter forward: at position n_past, sample one token.
+        common_batch_clear(batch);
+        common_batch_add(batch, id_last, n_past, {0}, true);
+        if (llama_decode(ctx_dft, batch) != 0) {
+            LOG_ERR("%s: drafter forward failed at step %d\n", __func__, step);
+            llama_batch_free(batch);
+            return false;
+        }
+        // The drafter's logits are now at i_batch=0; sample top-1.
+        llama_token dft_id = common_sampler_sample(dft_smpl.get(), ctx_dft, 0);
+        common_sampler_accept(dft_smpl.get(), dft_id, true);
+
+        // Build the draft sequence by stepping the drafter forward
+        // n_draft_max times. Each step: add the previous sample at the
+        // next position, decode, sample.
+        std::vector<llama_token> draft;
+        draft.reserve(n_draft_max);
+        for (int k = 0; k < n_draft_max; k++) {
+            draft.push_back(dft_id);
+            common_batch_clear(batch);
+            common_batch_add(batch, dft_id, n_past + 1 + (llama_pos) k, {0}, true);
+            if (llama_decode(ctx_dft, batch) != 0) {
+                LOG_WRN("%s: drafter draft-step %d failed; using %d drafts\n",
+                        __func__, k, (int) draft.size() - 1);
+                draft.pop_back();
+                break;
+            }
+            const llama_token next_id = common_sampler_sample(dft_smpl.get(), ctx_dft, 0);
+            common_sampler_accept(dft_smpl.get(), next_id, true);
+            dft_id = next_id;
+        }
+        n_drafted += (int) draft.size();
+        if (draft.empty()) {
+            LOG_INF("%s: drafter produced empty draft at step %d, stopping\n",
+                    __func__, step);
+            break;
+        }
+
+        // 2. Build verifier batch: [id_last, draft_0, draft_1, ..., draft_K-1]
+        const int n_dft = (int) draft.size();
+        common_batch_clear(batch);
+        common_batch_add(batch, id_last, n_past, {0}, true);
+        for (int i = 0; i < n_dft; ++i) {
+            common_batch_add(batch, draft[i], n_past + 1 + (llama_pos) i, {0}, true);
+        }
+
+        // 3. Verifier forward with graph observers active.
+        g_collector.begin_graph_observers();
+        if (llama_decode(ctx_tgt, batch) != 0) {
+            LOG_ERR("%s: failed to eval at step %d\n", __func__, step);
+            llama_batch_free(batch);
+            return false;
+        }
+
+        // 4. Sample and accept. `ids` is the accepted sequence: the first
+        //    ids.size()-1 entries are the accepted drafts, and the last
+        //    entry is the bonus token the verifier sampled.
+        auto ids = common_sampler_sample_and_accept_n(smpl.get(), ctx_tgt, draft);
+        const size_t n_acc = ids.size() - 1;  // 0..n_dft
+        n_accepted += (int) n_acc;
+
+        // 4b. If telemetry is enabled, compute the verifier's softmax
+        //     probability of each draft token and emit a JSONL record
+        //     matching the `llama.dflash.acceptance.v1` schema. The
+        //     verifier's forward filled logits for every position in the
+        //     batch (we set logits=true on all common_batch_add calls),
+        //     so we read each draft position's logits via
+        //     llama_get_logits_ith(ctx, i+1) (the i-th draft is the
+        //     (i+1)-th entry in the batch, after id_last at position 0).
+        if (telemetry_fp != nullptr) {
+            std::vector<float> confidence;
+            confidence.reserve(n_dft);
+            const int n_vocab = llama_vocab_n_tokens(vocab);
+            for (int i = 0; i < n_dft; ++i) {
+                const float * row = llama_get_logits_ith(ctx_tgt, i + 1);
+                if (row == nullptr) {
+                    // logits[i+1] not available (shouldn't happen since
+                    // we set logits=true on every batch entry, but be
+                    // defensive).
+                    confidence.push_back(0.0f);
+                    continue;
+                }
+                float max_logit = row[0];
+                for (int v = 1; v < n_vocab; ++v) {
+                    if (row[v] > max_logit) max_logit = row[v];
+                }
+                double sum_exp = 0.0;
+                for (int v = 0; v < n_vocab; ++v) {
+                    sum_exp += std::exp((double) row[v] - (double) max_logit);
+                }
+                const double prob = sum_exp > 0.0
+                    ? std::exp((double) row[draft[i]] - (double) max_logit) / sum_exp
+                    : 0.0;
+                confidence.push_back((float) prob);
+            }
+            // Emit the JSONL record. We hand-build a minimal JSON
+            // object to avoid pulling in a JSON dependency.
+            std::string line = "{\"schema\":\"llama.dflash.acceptance.v1\"";
+            line += ",\"seq_id\":0";
+            line += ",\"drafted\":" + std::to_string(n_dft);
+            line += ",\"accepted\":" + std::to_string(n_acc);
+            line += ",\"confidence\":[";
+            for (size_t i = 0; i < confidence.size(); ++i) {
+                if (i > 0) line += ",";
+                char buf[64];
+                std::snprintf(buf, sizeof(buf), "%.8g", confidence[i]);
+                line += buf;
+            }
+            line += "]}\n";
+            if (std::fwrite(line.data(), 1, line.size(), telemetry_fp) != line.size()) {
+                LOG_WRN("%s: failed to write telemetry record at step %d\n",
+                        __func__, step);
+            }
+        }
+
+        // 5. Roll back the verifier's KV for the rejected tokens. The
+        //    verifier saw n_dft+1 tokens (id_last at n_past + drafts at
+        //    n_past+1..n_past+n_dft). The kept tail is n_acc drafts
+        //    (positions n_past+1..n_past+n_acc) plus the bonus token
+        //    (position n_past+n_acc+1). Rejected tokens are at
+        //    positions n_past+n_acc+1..n_past+n_dft (the bonus + the
+        //    remaining rejected drafts).
+        if ((int) n_acc < n_dft) {
+            llama_memory_seq_rm(llama_get_memory(ctx_tgt), 0,
+                                n_past + (int) n_acc + 1,
+                                n_past + n_dft + 1);
+        }
+        // Same roll-back on the drafter.
+        if ((int) n_acc < n_dft) {
+            llama_memory_seq_rm(llama_get_memory(ctx_dft), 0,
+                                n_past + (int) n_acc + 1,
+                                n_past + n_dft + 1);
+        }
+
+        // 6. Advance past the kept (accepted + bonus) tokens.
+        n_past += (int) n_acc + 1;
+        id_last = ids.back();
+        step++;
+
+        if ((size_t) n_past + n_draft_max + 1 >= (size_t) llama_n_ctx(ctx_tgt)) {
+            LOG_INF("%s: approaching context limit at step %d (n_past=%d), stopping\n",
+                    __func__, step, n_past);
+            break;
+        }
+    }
+
+    LOG_INF("%s: spec loop done: n_steps=%d, n_drafted=%d, n_accepted=%d, accept_rate=%.3f\n",
+            __func__, step, n_drafted, n_accepted,
+            n_drafted > 0 ? double(n_accepted) / double(n_drafted) : 0.0);
+    common_speculative_print_stats(spec);
+
+    llama_batch_free(batch);
+    if (telemetry_fp) {
+        std::fclose(telemetry_fp);
+        LOG_INF("%s: closed telemetry output\n", __func__);
+    }
+    return g_collector.flush_graph_observers();
 }
 
 static bool show_statistics(const common_params & params) {
@@ -1098,7 +2221,21 @@ int main(int argc, char ** argv) {
         params.n_batch = std::min(params.n_batch, n_kv);
     }
 
+    // Keep the collector and graph builder on the same graph-resident
+    // observer path. Setting this only after set_params() leaves the
+    // collector in the legacy callback mode and silently emits an empty
+    // imatrix for Tile640 graphs.
+    params.imatrix_observers = true;
+    params.warmup = false;
     g_collector.set_params(params);
+
+    // If the spec-decoding path will be used (--model-draft set), enable
+    // ctx_shift on the verifier so the priming decode can be followed by
+    // the spec loop without the KV cache running out of slots. This must
+    // be set before common_init_from_params below.
+    if (!params.speculative.draft.mparams.path.empty()) {
+        params.ctx_shift = true;
+    }
 
     for (const auto & in_file : params.in_files) {
         LOG_INF("%s : loading imatrix from '%s'\n", __func__, in_file.c_str());
@@ -1134,8 +2271,6 @@ int main(int argc, char ** argv) {
     // it will be executed for each node during the graph computation
     params.cb_eval = ik_collect_imatrix;
     params.cb_eval_user_data = NULL;
-    params.warmup = false;
-
     // init
     auto llama_init = common_init_from_params(params);
 
@@ -1146,6 +2281,8 @@ int main(int argc, char ** argv) {
         LOG_ERR("%s : failed to init\n", __func__);
         return 1;
     }
+    llama_set_imatrix_observer_filter(
+        ctx, IMatrixCollector::observer_filter, &g_collector);
 
     const int n_ctx_train = llama_model_n_ctx_train(model);
     if (params.n_ctx > n_ctx_train) {
@@ -1153,14 +2290,61 @@ int main(int argc, char ** argv) {
                 __func__, n_ctx_train, params.n_ctx);
     }
 
+    // ─── Spec-decoding calibration path ─────────────────────────────────────
+    // If --model-draft is set, load the drafter and run a real spec-decoding
+    // loop instead of the plain text loop. The verifier (this ctx) keeps its
+    // graph observers; the drafter is observer-free.
+    common_speculative_init_result_ptr spec_init;
+    common_speculative_ptr spec;
+    const bool use_spec = !params.speculative.draft.mparams.path.empty();
+    if (use_spec) {
+        LOG_INF("%s: spec-decoding calibration requested; loading drafter '%s'\n",
+                __func__, params.speculative.draft.mparams.path.c_str());
+
+        common_params params_dft = common_base_params_to_speculative(params);
+        params_dft.speculative.draft.target_model_path = params.model.path;
+        // Make sure the drafter picks the right speculative type. We default
+        // to DRAFT_SIMPLE; the user can override via --spec-type. We have
+        // to set BOTH params_dft.speculative.types (used by
+        // common_speculative_init_from_params) AND params.speculative.types
+        // (used by common_speculative_init below).
+        if (params.speculative.types.empty() ||
+            params.speculative.types[0] == COMMON_SPECULATIVE_TYPE_NONE) {
+            params.speculative.types = { COMMON_SPECULATIVE_TYPE_DRAFT_SIMPLE };
+        }
+        params_dft.speculative.types = params.speculative.types;
+
+        spec_init = common_speculative_init_from_params(params_dft, model, ctx);
+        if (!spec_init || spec_init->model() == nullptr || spec_init->context() == nullptr) {
+            LOG_ERR("%s : failed to load drafter model '%s'\n",
+                    __func__, params_dft.model.path.c_str());
+            return 1;
+        }
+        params.speculative.draft.ctx_tgt = ctx;
+        params.speculative.draft.ctx_dft = spec_init->context();
+
+        spec.reset(common_speculative_init(params.speculative, /*n_seq=*/1));
+        if (!spec) {
+            LOG_ERR("%s : failed to create spec context\n", __func__);
+            return 1;
+        }
+    }
+    // ────────────────────────────────────────────────────────────────────────
+
     // print system information
     {
         LOG_INF("\n");
         LOG_INF("%s\n", common_params_get_system_info(params).c_str());
     }
 
-    if (!compute_imatrix(ctx, params, n_ctx)) {
-        return 1;
+    if (use_spec) {
+        if (!compute_imatrix_spec(ctx, model, spec.get(), params, n_ctx)) {
+            return 1;
+        }
+    } else {
+        if (!compute_imatrix(ctx, params, n_ctx)) {
+            return 1;
+        }
     }
 
     g_collector.save_imatrix();

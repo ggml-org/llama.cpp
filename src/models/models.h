@@ -813,6 +813,10 @@ struct llama_model_gemma4 : public llama_model_base {
 
         graph(const llama_model & model, const llm_graph_params & params);
 
+        ggml_tensor * tile640_mul_mat(
+            const llama_tile640_tensor * tensor,
+            ggml_tensor * input) const;
+
         // TODO: refactor in common "per-layer" functionality [TAG_PER_LAYER]
         ggml_tensor * build_inp_per_layer();
         ggml_tensor * project_per_layer_inputs(ggml_tensor * inp_batch, ggml_tensor * inp_per_layer);

@@ -14,6 +14,7 @@
 #include "log.h"
 #include "sampling.h"
 #include "speculative.h"
+#include "ane-mtp.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
 
@@ -22,6 +23,7 @@
 #include <cinttypes>
 #include <exception>
 #include <memory>
+#include <map>
 #include <filesystem>
 #include <utility>
 #include <fstream>
@@ -802,6 +804,18 @@ struct server_metrics {
 
     uint64_t n_decode_total     = 0;
     uint64_t n_busy_slots_total = 0;
+    uint64_t n_prefill_quantum_yields_total = 0;
+    uint64_t n_prefill_adaptive_chunks_total = 0;
+    uint64_t n_prefill_adaptive_tokens_deferred_total = 0;
+    uint64_t n_kv_radix_hits_total = 0;
+    uint64_t n_kv_radix_hit_positions_total = 0;
+    uint64_t n_kv_prefix_shares_total = 0;
+    uint64_t n_kv_prefix_shared_positions_total = 0;
+    uint64_t n_scheduler_prefill_selections_total = 0;
+    uint64_t scheduler_prefix_positions_total = 0;
+    uint64_t scheduler_estimated_cost_tokens_total = 0;
+    uint64_t scheduler_acceptance_milli_total = 0;
+    int64_t  scheduler_score_milli_last = 0;
 
     void init() {
         t_start = ggml_time_us();
@@ -831,6 +845,39 @@ struct server_metrics {
             }
             n_tokens_max = std::max(n_tokens_max, (uint64_t) slot.prompt.n_tokens());
         }
+    }
+
+    void on_prefill_quantum_yield() {
+        ++n_prefill_quantum_yields_total;
+    }
+
+    void on_prefill_adaptive_quantum(int32_t selected, int32_t maximum) {
+        if (selected < maximum) {
+            ++n_prefill_adaptive_chunks_total;
+            n_prefill_adaptive_tokens_deferred_total += maximum - selected;
+        }
+    }
+
+    void on_kv_radix_hit(llama_pos positions) {
+        ++n_kv_radix_hits_total;
+        n_kv_radix_hit_positions_total += std::max<llama_pos>(0, positions);
+    }
+
+    void on_kv_prefix_share(llama_pos positions) {
+        ++n_kv_prefix_shares_total;
+        n_kv_prefix_shared_positions_total += std::max<llama_pos>(0, positions);
+    }
+
+    void on_scheduler_prefill_selection(
+            llama_pos prefix_positions,
+            uint32_t estimated_cost_tokens,
+            uint32_t acceptance_milli,
+            int64_t score_milli) {
+        ++n_scheduler_prefill_selections_total;
+        scheduler_prefix_positions_total += std::max<llama_pos>(0, prefix_positions);
+        scheduler_estimated_cost_tokens_total += estimated_cost_tokens;
+        scheduler_acceptance_milli_total += acceptance_milli;
+        scheduler_score_milli_last = score_milli;
     }
 
     void reset_bucket() {
@@ -901,6 +948,12 @@ private:
 
     common_speculative_ptr spec;
 
+    // One stateless compiled program per sequence bucket.  A model may keep
+    // all functions in one multifunction asset or embed per-bucket assets;
+    // the scheduler sees the same bucket map either way.
+    std::map<uint32_t, common_ane_prefill_program_ptr> ane_prefill;
+    common_ane_prefill_manifest ane_prefill_manifest;
+
     bool add_bos_token = true;
 
     int32_t n_ctx; // total context for all clients / slots
@@ -917,6 +970,7 @@ private:
     int n_empty_consecutive = 0;
 
     std::unique_ptr<server_prompt_cache> prompt_cache;
+    server_kv_block_radix kv_block_radix;
 
     server_metrics metrics;
 
@@ -941,6 +995,9 @@ private:
         model_dft = nullptr;
 
         llama_init.reset();
+
+        ane_prefill.clear();
+        ane_prefill_manifest = {};
 
         ctx_tgt = nullptr;
         model_tgt = nullptr;
@@ -1007,8 +1064,26 @@ private:
         params_base = params;
         params_base.n_outputs_max = server_n_outputs_max(params_base);
 
-        const bool has_mmproj = !params.mmproj.path.empty();
-        const bool has_draft = params.speculative.has_dft();
+        const bool has_embedded_mtp = common_model_has_embedded_mtp(params_base.model.path);
+        if (params_base.speculative.types ==
+                std::vector<common_speculative_type>{COMMON_SPECULATIVE_TYPE_NONE} &&
+            has_embedded_mtp) {
+            params_base.speculative.types = {COMMON_SPECULATIVE_TYPE_DRAFT_MTP};
+            SRV_INF("automatically enabling embedded MTP component from model GGUF: %s\n",
+                    params_base.model.path.c_str());
+        }
+
+        if (params_base.mmproj.path.empty() && !params_base.no_mmproj) {
+            const mtmd_caps caps = mtmd_get_cap_from_file(params_base.model.path.c_str());
+            if (caps.inp_vision || caps.inp_audio) {
+                params_base.mmproj.path = params_base.model.path;
+                SRV_INF("using multimodal tensors embedded in model GGUF: %s\n",
+                        params_base.model.path.c_str());
+            }
+        }
+
+        const bool has_mmproj = !params_base.mmproj.path.empty();
+        const bool has_draft = params_base.speculative.has_dft();
         const bool spec_mtp = std::find(params_base.speculative.types.begin(),
                                         params_base.speculative.types.end(),
                                         COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params_base.speculative.types.end();
@@ -1083,12 +1158,16 @@ private:
         if (params_base.fit_params) {
             if (has_spec) {
                 // MTP draft context lives on the target model, only context+compute are new
-                bool measure_model_bytes = has_draft;
+                bool measure_model_bytes = has_draft || has_embedded_mtp;
 
                 common_params params_dft = common_base_params_to_speculative(params_base);
+                params_dft.speculative.draft.target_model_path = params_base.model.path;
 
                 auto mparams_dft = common_model_params_to_llama(params_dft);
                 auto cparams_dft = common_context_params_to_llama(params_dft);
+                if (has_embedded_mtp) {
+                    mparams_dft.component_prefix = "mtp.";
+                }
                 if (spec_mtp) {
                     cparams_dft.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
                 }
@@ -1161,6 +1240,31 @@ private:
 
         n_ctx = llama_n_ctx(ctx_tgt);
 
+#if defined(__APPLE__)
+        // Loading is opportunistic.  A missing, malformed, or unsupported
+        // artifact leaves the server on its existing Metal-only execution
+        // path; no request-level behavior changes until the narrow scheduler
+        // predicate below accepts a sealed prompt bucket.
+        if (common_ane_prefill_manifest_load(params_base.model.path, &ane_prefill_manifest)) {
+            for (const uint32_t bucket : ane_prefill_manifest.sequence_buckets) {
+                auto program = common_ane_prefill_program_load(params_base.model.path, bucket);
+                if (!program) {
+                    ane_prefill.clear();
+                    break;
+                }
+                ane_prefill.emplace(bucket, std::move(program));
+            }
+            if (!ane_prefill.empty()) {
+                SRV_INF("loaded %zu qualified ANE prefill bucket%s for %s\n",
+                        ane_prefill.size(), ane_prefill.size() == 1 ? "" : "s",
+                        params_base.model.path.c_str());
+            } else {
+                SRV_WRN("%s", "ANE prefill artifact was present but no bucket could be warmed; using Metal fallback\n");
+                ane_prefill_manifest = {};
+            }
+        }
+#endif
+
         add_bos_token = llama_vocab_get_add_bos(vocab);
 
         if (has_spec) {
@@ -1170,6 +1274,7 @@ private:
 
             {
                 common_params params_dft = common_base_params_to_speculative(params_base);
+                params_dft.speculative.draft.target_model_path = params_base.model.path;
 
                 // progress callback
                 params_dft.load_progress_callback           = load_progress_callback;
@@ -1179,7 +1284,7 @@ private:
                 model_dft = spec_init->model();
                 ctx_dft   = spec_init->context();
 
-                if (has_draft && model_dft == nullptr) {
+                if ((has_draft || has_embedded_mtp) && model_dft == nullptr) {
                     SRV_ERR("failed to load draft model, '%s'\n", params_dft.model.path.c_str());
                     return false;
                 }
@@ -1191,6 +1296,8 @@ private:
 
                 params_base.speculative.draft.ctx_tgt = ctx_tgt;
                 params_base.speculative.draft.ctx_dft = ctx_dft;
+                params_base.speculative.draft.ctx_mtp = spec_init->mtp_context();
+                params_base.speculative.draft.ane_mtp_program = spec_init->ane_mtp_program();
             }
 
             load_progress_callback(1.0f, &load_progress_spec);
@@ -1311,6 +1418,14 @@ private:
             SLT_TRC(slot, "new slot, n_ctx = %d\n", slot.n_ctx);
 
             slot.callback_on_release = [this](int id_slot) {
+                // A slot may have inherited another sequence's blocks before
+                // it evaluates its suffix. Replace that transient ownership
+                // set with the completed prompt's sealed blocks atomically at
+                // the server level; otherwise stale routes can point at a
+                // slot after it has been reassigned.
+                kv_block_radix.release(id_slot);
+                publish_slot_kv_blocks(slots[id_slot]);
+                kv_block_radix.evict(std::max<size_t>(1, n_ctx / 32));
                 queue_tasks.pop_deferred_task(id_slot);
             };
 
@@ -1527,10 +1642,120 @@ private:
         return nullptr;
     }
 
+    int32_t prefill_quantum_for(
+            const server_slot & slot,
+            int32_t n_batch,
+            int32_t n_ubatch,
+            bool has_interactive_work) const {
+        if (!has_interactive_work) {
+            return n_batch;
+        }
+
+        const int32_t maximum = std::max<int32_t>(1, std::min(n_batch, n_ubatch));
+        const llama_pos n_pos = slot.prompt.tokens.pos_next();
+
+        // Attention cost grows with the existing sequence, so smaller prompt
+        // chunks at long context reduce decode tail latency.  Quantize to 32
+        // tokens where possible: it preserves useful Metal workgroup/page
+        // shapes and makes a future block-KV cache use the same boundary.
+        int32_t divisor = 1;
+        if (n_pos >= 65536) {
+            divisor = 8;
+        } else if (n_pos >= 16384) {
+            divisor = 4;
+        } else if (n_pos >= 4096) {
+            divisor = 2;
+        }
+
+        int32_t quantum = std::max<int32_t>(1, maximum / divisor);
+        if (maximum >= 32) {
+            quantum = std::max<int32_t>(32, (quantum / 32) * 32);
+        }
+        return std::min(quantum, maximum);
+    }
+
+    struct prefill_schedule_score {
+        llama_pos prefix_positions = 0;
+        uint32_t estimated_cost_tokens = 0;
+        uint32_t acceptance_milli = 500;
+        int64_t score_milli = std::numeric_limits<int64_t>::min();
+    };
+
+    // The scheduler is intentionally a local policy: it does not reorder the
+    // task queue, but it does choose which already-admitted prompt receives a
+    // shared batch first. Prefix reuse buys GPU work back, age prevents LPM
+    // starvation, the attention-weighted suffix estimates cost, and rolling
+    // acceptance favors requests likely to make useful speculative progress.
+    prefill_schedule_score score_prefill_slot(const server_slot & slot, int64_t now_us) const {
+        prefill_schedule_score result;
+        if (!slot.task) {
+            return result;
+        }
+
+        const auto & requested = slot.task->tokens;
+        llama_pos prefix = slot.prompt.tokens.pos_next(
+                slot.prompt.tokens.get_common_prefix(requested));
+        if (prompt_cache && slot.task->params.cache_prompt) {
+            if (auto * cached = prompt_cache->find_longest_prefix(requested)) {
+                prefix = std::max(prefix, cached->prompt.tokens.pos_next());
+            }
+        }
+
+        const uint32_t remaining = static_cast<uint32_t>(std::max<int>(
+                0, requested.size() - slot.prompt.n_tokens()));
+        const uint32_t attention_weight = 1u + static_cast<uint32_t>(
+                std::max<llama_pos>(0, slot.prompt.tokens.pos_next()) / 4096);
+        result.prefix_positions = prefix;
+        result.estimated_cost_tokens = remaining * attention_weight;
+        if (slot.n_draft_total > 0) {
+            result.acceptance_milli = static_cast<uint32_t>(
+                    1000ull * slot.n_draft_accepted / slot.n_draft_total);
+        }
+
+        const int64_t age_ms = slot.t_start_process_prompt > 0
+            ? std::max<int64_t>(0, (now_us - slot.t_start_process_prompt) / 1000)
+            : 0;
+        result.score_milli =
+              1000ll * result.prefix_positions
+            +    8ll * std::min<int64_t>(age_ms, 60000)
+            +   16ll * result.acceptance_milli
+            -    4ll * result.estimated_cost_tokens;
+        return result;
+    }
+
+    void publish_slot_kv_blocks(const server_slot & slot) {
+        if (!params_base.kv_unified || slot.prompt.tokens.empty()) {
+            return;
+        }
+        std::vector<std::string> keys;
+        if (!slot.prompt.tokens.get_stable_cache_keys(keys)) {
+            return;
+        }
+        std::vector<llama_pos> positions;
+        constexpr size_t block_tokens = 32;
+        for (size_t end = block_tokens; end < keys.size(); end += block_tokens) {
+            positions.push_back(slot.prompt.tokens.pos_next(end));
+        }
+        positions.push_back(slot.prompt.tokens.pos_next());
+        kv_block_radix.publish(keys, positions, slot.id, ggml_time_us());
+    }
+
     server_slot * get_available_slot(const server_task & task) {
         server_slot * ret = nullptr;
 
         bool update_cache = false;
+        server_prompt_cache_state * radix_state = nullptr;
+
+        // A radix hit means prefill cost is dominated by the suffix. Preserve
+        // large resident idle contexts by preferring an empty or short slot
+        // for restoration. This is cache-aware local admission without
+        // reordering the task queue or starving a long-running request.
+        if (task.type == SERVER_TASK_TYPE_COMPLETION && task.params.cache_prompt && prompt_cache) {
+            radix_state = prompt_cache->find_longest_prefix(task.tokens);
+            if (radix_state) {
+                metrics.on_kv_radix_hit(radix_state->prompt.tokens.pos_next());
+            }
+        }
 
         // if a specific slot is requested, use it (still goes through cache update logic below)
         if (task.id_slot != -1) {
@@ -1587,9 +1812,11 @@ private:
             }
         }
 
-        // find the slot that has been least recently used
+        // Find the least costly slot to replace. A radix hit prefers the
+        // shortest resident context; otherwise preserve conventional LRU.
         if (ret == nullptr) {
             int64_t t_last = -1;
+            llama_pos n_positions_best = std::numeric_limits<llama_pos>::max();
 
             for (server_slot & slot : slots) {
                 // skip the slot if it is not available
@@ -1597,21 +1824,106 @@ private:
                     continue;
                 }
 
-                // select the current slot if the criteria match
-                if (!ret || slot.t_last_used <= t_last) {
+                const llama_pos n_positions = slot.prompt.tokens.pos_next();
+                const bool better_for_radix = radix_state &&
+                    (!ret || n_positions < n_positions_best ||
+                     (n_positions == n_positions_best && slot.t_last_used <= t_last));
+                const bool better_for_lru = !radix_state &&
+                    (!ret || slot.t_last_used <= t_last);
+                if (better_for_radix || better_for_lru) {
                     t_last = slot.t_last_used;
+                    n_positions_best = n_positions;
                     ret = &slot;
                 }
             }
 
             if (ret != nullptr) {
-                SLT_INF(*ret, "selected slot by LRU, t_last = %" PRId64 "\n", t_last);
+                if (radix_state) {
+                    SLT_INF(*ret, "selected slot for radix hit, replacement positions = %d\n",
+                            n_positions_best);
+                } else {
+                    SLT_INF(*ret, "selected slot by LRU, t_last = %" PRId64 "\n", t_last);
+                }
 
                 update_cache = true;
             }
         }
 
         if (ret) {
+            // This slot is about to be reassigned. Its previous prompt may
+            // still be resident in the unified cache, but it cannot remain a
+            // radix owner once prompt_clear or snapshot restoration changes
+            // the sequence.
+            if (params_base.kv_unified) {
+                kv_block_radix.release(ret->id);
+            }
+            // Before falling back to a serialized prompt snapshot, reuse an
+            // idle sequence directly. llama_memory_seq_cp shares KV cells
+            // within a unified stream, so this is a real block-reference
+            // handoff rather than a prompt re-evaluation or KV copy.
+            if (task.type == SERVER_TASK_TYPE_COMPLETION &&
+                task.params.cache_prompt) {
+                server_slot * source = nullptr;
+                size_t best_prefix = 0;
+                server_kv_block_radix::attachment block_attachment;
+                std::vector<std::string> cache_keys;
+                if (params_base.kv_unified && task.tokens.get_stable_cache_keys(cache_keys)) {
+                    // The block radix only returns a source that owns every
+                    // sealed prefix block, so one seq_cp attaches the exact
+                    // native cell range without serializing or copying K/V.
+                    block_attachment = kv_block_radix.attach(cache_keys, ret->id, ggml_time_us());
+                    if (block_attachment.source >= 0 && block_attachment.positions > 0) {
+                        source = get_slot_by_id(block_attachment.source);
+                        best_prefix = task.tokens.size_up_to_pos(block_attachment.positions);
+                        if (source == ret || source == nullptr || source->is_processing() ||
+                            source->prompt.tokens.empty()) {
+                            // attach() is intentionally optimistic so it can
+                            // update the block LRU.  Undo it if the selected
+                            // source ceased to be an idle native-KV owner.
+                            kv_block_radix.release(ret->id);
+                            source = nullptr;
+                            best_prefix = 0;
+                            block_attachment = { };
+                        }
+                    }
+                }
+                for (server_slot & candidate : slots) {
+                    if (source) {
+                        break;
+                    }
+                    if (&candidate == ret || candidate.is_processing() ||
+                        candidate.prompt.tokens.empty()) {
+                        continue;
+                    }
+                    const size_t prefix = candidate.prompt.tokens
+                        .get_common_prefix(task.tokens);
+                    if (prefix > best_prefix) {
+                        best_prefix = prefix;
+                        source = &candidate;
+                    }
+                }
+
+                if (source && best_prefix > 0) {
+                    SRV_TRC(" - sharing %zu prompt tokens from idle slot %d to slot %d\n",
+                            best_prefix, source->id, ret->id);
+                    ret->prompt_clear();
+                    const llama_pos p1 = block_attachment.positions > 0
+                        ? block_attachment.positions
+                        : source->prompt.tokens.pos_next(best_prefix);
+                    common_context_seq_cp(ctx_tgt, source->id, ret->id, 0, p1);
+                    if (ctx_dft) {
+                        common_context_seq_cp(ctx_dft, source->id, ret->id, 0, p1);
+                    }
+                    ret->prompt = source->prompt.clone();
+                    ret->prompt.tokens.keep_first(best_prefix);
+                    // Checkpoints capture per-sequence speculative state;
+                    // only the shared KV prefix is valid for this new slot.
+                    ret->prompt.checkpoints.clear();
+                    update_cache = false;
+                    metrics.on_kv_prefix_share(p1);
+                }
+            }
+
             update_cache = update_cache && prompt_cache;
 
             // cache prompts only for completion tasks
@@ -2407,6 +2719,7 @@ private:
 
                                 if (params_base.kv_unified) {
                                     // [TAG_IDLE_SLOT_CLEAR]
+                                    kv_block_radix.release(slot.id);
                                     slot.prompt_clear();
                                 }
                             }
@@ -2502,6 +2815,18 @@ private:
 
                     res->n_decode_total          = metrics.n_decode_total;
                     res->n_busy_slots_total      = metrics.n_busy_slots_total;
+                    res->n_prefill_quantum_yields_total = metrics.n_prefill_quantum_yields_total;
+                    res->n_prefill_adaptive_chunks_total = metrics.n_prefill_adaptive_chunks_total;
+                    res->n_prefill_adaptive_tokens_deferred_total = metrics.n_prefill_adaptive_tokens_deferred_total;
+                    res->n_kv_radix_hits_total = metrics.n_kv_radix_hits_total;
+                    res->n_kv_radix_hit_positions_total = metrics.n_kv_radix_hit_positions_total;
+                    res->n_kv_prefix_shares_total = metrics.n_kv_prefix_shares_total;
+                    res->n_kv_prefix_shared_positions_total = metrics.n_kv_prefix_shared_positions_total;
+                    res->n_scheduler_prefill_selections_total = metrics.n_scheduler_prefill_selections_total;
+                    res->scheduler_prefix_positions_total = metrics.scheduler_prefix_positions_total;
+                    res->scheduler_estimated_cost_tokens_total = metrics.scheduler_estimated_cost_tokens_total;
+                    res->scheduler_acceptance_milli_total = metrics.scheduler_acceptance_milli_total;
+                    res->scheduler_score_milli_last = metrics.scheduler_score_milli_last;
 
                     if (task.metrics_reset_bucket) {
                         metrics.reset_bucket();
@@ -3044,8 +3369,30 @@ private:
         // next, batch any pending prompts without exceeding n_batch
         if (params_base.cont_batching || batch.size() == 0) {
             bool add_ok = true; // false means the batch is full, skip remaining slots
+            // Decode and speculative verification are latency-sensitive. When
+            // either is present, prefill advances in physical-ubatch quanta
+            // so one large request cannot monopolize the next graph. With no
+            // interactive work, retain the full-batch prefill throughput path.
+            const int32_t prefill_quantum_max = generating.empty()
+                ? n_batch
+                : std::max<int32_t>(1, std::min(n_batch, n_ubatch));
 
-            iterate(slots, [&](server_slot & slot) {
+            std::vector<server_slot *> prefill_slots;
+            prefill_slots.reserve(slots.size());
+            for (server_slot & slot : slots) {
+                if (slot.state == SLOT_STATE_PROCESSING_PROMPT || slot.state == SLOT_STATE_STARTED) {
+                    prefill_slots.push_back(&slot);
+                }
+            }
+
+            const int64_t schedule_now_us = ggml_time_us();
+            std::stable_sort(prefill_slots.begin(), prefill_slots.end(),
+                    [&](const server_slot * lhs, const server_slot * rhs) {
+                        return score_prefill_slot(*lhs, schedule_now_us).score_milli >
+                               score_prefill_slot(*rhs, schedule_now_us).score_milli;
+                    });
+
+            iterate(prefill_slots, [&](server_slot & slot) {
                 if (!add_ok || batch.size() >= n_batch) {
                     return; // batch is full, skip remaining slots
                 }
@@ -3067,10 +3414,20 @@ private:
 
                 // this slot still has a prompt to be processed
                 if (slot.state == SLOT_STATE_PROCESSING_PROMPT || slot.state == SLOT_STATE_STARTED) {
+                    const auto schedule_score = score_prefill_slot(slot, schedule_now_us);
+                    metrics.on_scheduler_prefill_selection(
+                            schedule_score.prefix_positions,
+                            schedule_score.estimated_cost_tokens,
+                            schedule_score.acceptance_milli,
+                            schedule_score.score_milli);
                     const auto & input_tokens = slot.task->tokens;
 
                     // used to determine the number of tokens added to the batch for the current slot
                     const auto n_tokens_prev = batch.size();
+                    const int32_t prefill_quantum = prefill_quantum_for(
+                        slot, n_batch, n_ubatch, !generating.empty());
+                    metrics.on_prefill_adaptive_quantum(
+                        prefill_quantum, prefill_quantum_max);
 
                     // TODO: maybe move branch to outside of this loop in the future
                     if (slot.state == SLOT_STATE_STARTED) {
@@ -3403,6 +3760,30 @@ private:
                     // make checkpoints only for completion tasks
                     do_checkpoint = do_checkpoint && slot.task->type == SERVER_TASK_TYPE_COMPLETION;
 
+#if defined(__APPLE__)
+                    // A sealed ANE slab owns the complete layer-0 KV prefix.
+                    // The ordinary checkpoint policy deliberately splits the
+                    // final four prompt tokens into a second decode batch,
+                    // which would make an exact fixed-bucket program
+                    // unreachable.  Suppress that split only for a fresh,
+                    // text-only request whose whole prompt exactly matches a
+                    // loaded ANE bucket.  All other requests retain the
+                    // normal checkpoint and Metal-fallback behavior.
+                    const uint32_t ane_bucket = !ane_prefill.empty()
+                        ? common_ane_prefill_select_bucket(
+                            ane_prefill_manifest, (uint32_t) slot.task->n_tokens())
+                        : 0;
+                    const bool ane_sealed_prompt = ane_bucket != 0 &&
+                        ane_prefill.find(ane_bucket) != ane_prefill.end() && !mctx &&
+                        batch.size() == 0 &&
+                        slot.prompt.n_tokens() == 0 &&
+                        slot.n_prompt_tokens_cache == 0 &&
+                        slot.task->n_tokens() <= (int32_t) ane_bucket &&
+                        slot.task->n_tokens() <= n_ubatch &&
+                        slot.alora_invocation_start < 0;
+                    do_checkpoint = do_checkpoint && !ane_sealed_prompt;
+#endif
+
                     // make a checkpoint of the parts of the memory that cannot be rolled back.
                     // checkpoints are created only if:
                     // - the model does not support partial sequence removal
@@ -3450,7 +3831,9 @@ private:
                     const auto last_user_pos = spans.last_user_message_pos();
 
                     // add prompt tokens for processing in the current batch
-                    while (slot.prompt.n_tokens() < slot.task->n_tokens() && batch.size() < n_batch) {
+                    while (slot.prompt.n_tokens() < slot.task->n_tokens() &&
+                           batch.size() < n_batch &&
+                           batch.size() - n_tokens_prev < prefill_quantum) {
                         // get next token to process
                         llama_token cur_tok = input_tokens[slot.prompt.n_tokens()];
                         if (cur_tok == LLAMA_TOKEN_NULL) {
@@ -3512,6 +3895,12 @@ private:
                     const auto n_tokens_cur = batch.size() - n_tokens_prev;
 
                     const auto n_tokens_start = slot.prompt.n_tokens() - n_tokens_cur;
+
+                    if (!generating.empty() &&
+                        n_tokens_cur >= prefill_quantum &&
+                        slot.prompt.n_tokens() < slot.task->n_tokens()) {
+                        metrics.on_prefill_quantum_yield();
+                    }
 
                     const bool near_prompt_end = slot.task->n_tokens() < slot.prompt.n_tokens() + n_ubatch;
 
@@ -3589,7 +3978,53 @@ private:
             n_empty_consecutive = 0;
         }
 
-        const int ret = llama_decode(ctx_tgt, batch_view);
+        int ret = 0;
+        bool ane_executed = false;
+#if defined(__APPLE__)
+        // The current artifact is an empty-cache Gemma layer-0 slab.  Admit
+        // only a single fresh server sequence whose complete 128-token
+        // prefix is present in this decode view.  Any deviation, including
+        // batching unrelated clients, cache reuse, multimodal embeddings,
+        // adapters, or a different prompt quantum, remains on Metal.
+        const uint32_t ane_bucket = !ane_prefill.empty() && batch_view.n_tokens > 0
+            ? common_ane_prefill_select_bucket(ane_prefill_manifest, (uint32_t) batch_view.n_tokens)
+            : 0;
+        const auto ane_program = ane_prefill.find(ane_bucket);
+        if (ane_program != ane_prefill.end() && batch.slot_batched) {
+            SRV_DBG("ANE prefill admission: slot=%d tokens=%d cache=%d processed=%d alora=%g mm=%d draft=%d\n",
+                    batch.slot_batched->id,
+                    batch_view.n_tokens,
+                    batch.slot_batched->n_prompt_tokens_cache,
+                    batch.slot_batched->n_prompt_tokens_processed,
+                    batch.alora_scale,
+                    mctx != nullptr,
+                    ctx_dft != nullptr);
+        }
+        const bool ane_candidate = ane_program != ane_prefill.end() &&
+            batch.slot_batched &&
+            batch.slot_batched->n_prompt_tokens_cache == 0 &&
+            batch.slot_batched->n_prompt_tokens_processed == batch_view.n_tokens &&
+            batch.alora_scale < 0.0f &&
+            // The target-side slab is independent of the optional draft
+            // context.  Embedded MTP otherwise makes every unified Gemma
+            // artifact ineligible before a request reaches the ANE path.
+            // Multimodal prompts remain excluded because this v1 ABI only
+            // accepts token IDs and uses the text embedding table itself.
+            !mctx &&
+            ane_prefill_manifest.architecture == "gemma4" &&
+            ane_prefill_manifest.layer_first == 0 && ane_prefill_manifest.layer_last == 0;
+        if (ane_candidate) {
+            ane_executed = common_ane_prefill_decode(
+                ane_program->second, ane_prefill_manifest, ctx_tgt, batch_view, &ret);
+            if (ane_executed) {
+                SRV_INF("executed ANE prefill slab s%u for server slot %d\n",
+                        ane_bucket, batch.slot_batched->id);
+            }
+        }
+#endif
+        if (!ane_executed) {
+            ret = llama_decode(ctx_tgt, batch_view);
+        }
 
         metrics.on_decoded(slots);
 
@@ -4391,6 +4826,50 @@ void server_routes::init_routes() {
                     {"help",  "Total number of llama_decode() calls"},
                     {"value",  res_task->n_decode_total}
             }, {
+                    {"name",  "prefill_quantum_yields_total"},
+                    {"help",  "Prompt chunks intentionally yielded to active decode or speculative work."},
+                    {"value",  res_task->n_prefill_quantum_yields_total}
+            }, {
+                    {"name",  "prefill_adaptive_chunks_total"},
+                    {"help",  "Long-context prompt chunks reduced below the interactive maximum."},
+                    {"value",  res_task->n_prefill_adaptive_chunks_total}
+            }, {
+                    {"name",  "prefill_adaptive_tokens_deferred_total"},
+                    {"help",  "Interactive prefill tokens deferred by long-context adaptive chunking."},
+                    {"value",  res_task->n_prefill_adaptive_tokens_deferred_total}
+            }, {
+                    {"name",  "kv_radix_hits_total"},
+                    {"help",  "Text prompt-cache hits resolved through the radix prefix index."},
+                    {"value",  res_task->n_kv_radix_hits_total}
+            }, {
+                    {"name",  "kv_radix_hit_positions_total"},
+                    {"help",  "KV positions represented by radix-cache hits."},
+                    {"value",  res_task->n_kv_radix_hit_positions_total}
+            }, {
+                    {"name",  "kv_prefix_shares_total"},
+                    {"help",  "Idle-slot KV prefix handoffs using sequence-cell sharing."},
+                    {"value",  res_task->n_kv_prefix_shares_total}
+            }, {
+                    {"name",  "kv_prefix_shared_positions_total"},
+                    {"help",  "KV positions reused by idle-slot prefix handoffs."},
+                    {"value",  res_task->n_kv_prefix_shared_positions_total}
+            }, {
+                    {"name",  "scheduler_prefill_selections_total"},
+                    {"help",  "Prompt selections ranked by the Tessera cache-aware scheduler."},
+                    {"value",  res_task->n_scheduler_prefill_selections_total}
+            }, {
+                    {"name",  "scheduler_prefix_positions_total"},
+                    {"help",  "Reusable KV positions considered by selected prompt work."},
+                    {"value",  res_task->scheduler_prefix_positions_total}
+            }, {
+                    {"name",  "scheduler_estimated_cost_tokens_total"},
+                    {"help",  "Estimated attention-weighted prompt tokens selected by the scheduler."},
+                    {"value",  res_task->scheduler_estimated_cost_tokens_total}
+            }, {
+                    {"name",  "scheduler_acceptance_milli_total"},
+                    {"help",  "Rolling speculative acceptance contribution, scaled by 1000."},
+                    {"value",  res_task->scheduler_acceptance_milli_total}
+            }, {
                     {"name",  "n_tokens_max"},
                     {"help",  "Largest observed n_tokens."},
                     {"value",  res_task->n_tokens_max}
@@ -4399,6 +4878,10 @@ void server_routes::init_routes() {
                     {"name",  "prompt_tokens_seconds"},
                     {"help",  "Average prompt throughput in tokens/s."},
                     {"value",  res_task->n_prompt_tokens_processed ? 1.e3 / res_task->t_prompt_processing * res_task->n_prompt_tokens_processed : 0.}
+            },{
+                    {"name",  "scheduler_score_milli_last"},
+                    {"help",  "Score of the most recently selected prompt, scaled by 1000."},
+                    {"value",  res_task->scheduler_score_milli_last}
             },{
                     {"name",  "predicted_tokens_seconds"},
                     {"help",  "Average generation throughput in tokens/s."},

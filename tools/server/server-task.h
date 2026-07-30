@@ -5,6 +5,7 @@
 
 #include <string>
 #include <unordered_set>
+#include <unordered_map>
 #include <list>
 #include <map>
 
@@ -531,6 +532,18 @@ struct server_task_result_metrics : server_task_result {
 
     uint64_t n_decode_total     = 0;
     uint64_t n_busy_slots_total = 0;
+    uint64_t n_prefill_quantum_yields_total = 0;
+    uint64_t n_prefill_adaptive_chunks_total = 0;
+    uint64_t n_prefill_adaptive_tokens_deferred_total = 0;
+    uint64_t n_kv_radix_hits_total = 0;
+    uint64_t n_kv_radix_hit_positions_total = 0;
+    uint64_t n_kv_prefix_shares_total = 0;
+    uint64_t n_kv_prefix_shared_positions_total = 0;
+    uint64_t n_scheduler_prefill_selections_total = 0;
+    uint64_t scheduler_prefix_positions_total = 0;
+    uint64_t scheduler_estimated_cost_tokens_total = 0;
+    uint64_t scheduler_acceptance_milli_total = 0;
+    int64_t  scheduler_score_milli_last = 0;
 
     // while we can also use std::vector<server_slot> this requires copying the slot object which can be quite messy
     // therefore, we use json to temporarily store the slot.to_json() result
@@ -630,6 +643,16 @@ struct server_prompt_cache_state {
     }
 };
 
+// Prompts form a radix index over immutable prompt-state snapshots. The index
+// is token-keyed for text and stable-component-keyed for media; anonymous
+// media never enters it. It is intentionally separate from the serialized
+// payload so the same ownership path can move to native KV blocks.
+struct server_prompt_cache_radix_node {
+    std::unordered_map<std::string, size_t> children;
+    server_prompt_cache_state * state = nullptr;
+    llama_pos positions = 0;
+};
+
 struct server_prompt_cache {
     server_prompt_cache(int32_t limit_size_mib, size_t limit_tokens) {
         this->limit_size   = 1024ull*1024ull*(limit_size_mib < 0 ? 0 : limit_size_mib);
@@ -644,15 +667,73 @@ struct server_prompt_cache {
     // in tokens, 0 = no limit
     size_t limit_tokens = 0;
 
+    // node zero is the root. Nodes own only index metadata; state buffers
+    // remain owned by states and list addresses stay stable across LRU splices.
+    std::vector<server_prompt_cache_radix_node> radix = { { } };
+
     size_t size() const;
 
     size_t n_tokens() const;
+
+    // Returns the deepest cached token/media-keyed prefix in O(prompt length).
+    // Anonymous media returns nullptr rather than creating a cache identity.
+    server_prompt_cache_state * find_longest_prefix(const server_tokens & tokens) const;
 
     server_prompt_cache_state * alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_drft);
 
     bool load(server_prompt & prompt, const server_tokens & tokens_new, llama_context * ctx_main, llama_context * ctx_drft, int32_t id_slot);
 
     void update();
+
+private:
+    void radix_rebuild();
+};
+
+// Native unified-KV ownership index.  The actual K/V tensors and their cell
+// sequence sets stay in llama_kv_cache; this server-side radix tracks which
+// sequence can be used as a zero-copy source for each sealed prompt block.
+// A block is evictable only after every attached sequence releases it.
+struct server_kv_block_radix {
+    struct block {
+        uint64_t id = 0;
+        llama_pos p0 = 0;
+        llama_pos p1 = 0;
+        uint64_t last_used = 0;
+        std::unordered_set<llama_seq_id> owners;
+    };
+
+    struct attachment {
+        llama_seq_id source = -1;
+        llama_pos positions = 0;
+        std::vector<uint64_t> block_ids;
+    };
+
+    explicit server_kv_block_radix(uint32_t block_tokens = 32) : block_tokens(block_tokens) {}
+
+    // Publish completed prompt blocks owned by seq. Keys must be stable token
+    // or media-component keys; empty keys mean the request is not cacheable.
+    void publish(const std::vector<std::string> & keys,
+                 const std::vector<llama_pos> & block_positions,
+                 llama_seq_id seq,
+                 uint64_t now);
+    attachment attach(const std::vector<std::string> & keys, llama_seq_id seq, uint64_t now);
+    void release(llama_seq_id seq);
+    size_t evict(size_t max_blocks);
+
+    size_t n_blocks() const { return blocks.size(); }
+    size_t n_owners(uint64_t id) const;
+    bool contains(uint64_t id) const { return blocks.find(id) != blocks.end(); }
+
+private:
+    struct node {
+        std::unordered_map<std::string, size_t> children;
+        uint64_t block_id = 0;
+    };
+
+    uint32_t block_tokens;
+    uint64_t next_block_id = 1;
+    std::vector<node> nodes = { { } };
+    std::unordered_map<uint64_t, block> blocks;
 };
 
 // used exclusively by router mode

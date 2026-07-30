@@ -1555,6 +1555,11 @@ json server_task_result_metrics::to_json() {
 
         { "n_decode_total",                  n_decode_total },
         { "n_busy_slots_total",              n_busy_slots_total },
+        { "scheduler_prefill_selections_total", n_scheduler_prefill_selections_total },
+        { "scheduler_prefix_positions_total", scheduler_prefix_positions_total },
+        { "scheduler_estimated_cost_tokens_total", scheduler_estimated_cost_tokens_total },
+        { "scheduler_acceptance_milli_total", scheduler_acceptance_milli_total },
+        { "scheduler_score_milli_last", scheduler_score_milli_last },
 
         { "slots",                           slots_data },
     };
@@ -1646,10 +1651,64 @@ size_t server_prompt_cache::n_tokens() const {
     size_t res = 0;
 
     for (const auto & state : states) {
-        res += state.prompt.n_tokens();
+        // The cache limit is a KV-memory budget.  A multimodal chunk can
+        // occupy many attention positions while appearing as a compact token
+        // span, so account in positions rather than placeholder tokens.
+        res += state.prompt.tokens.pos_next();
     }
 
     return res;
+}
+
+void server_prompt_cache::radix_rebuild() {
+    radix.clear();
+    radix.emplace_back();
+
+    for (auto & state : states) {
+        std::vector<std::string> keys;
+        if (!state.prompt.tokens.get_stable_cache_keys(keys)) {
+            continue;
+        }
+
+        size_t node = 0;
+        for (const auto & key : keys) {
+            const auto it = radix[node].children.find(key);
+            if (it != radix[node].children.end()) {
+                node = it->second;
+                continue;
+            }
+
+            const size_t child = radix.size();
+            radix.emplace_back();
+            radix[node].children.emplace(key, child);
+            node = child;
+        }
+
+        radix[node].state = &state;
+        radix[node].positions = state.prompt.tokens.pos_next();
+    }
+}
+
+server_prompt_cache_state * server_prompt_cache::find_longest_prefix(const server_tokens & tokens) const {
+    std::vector<std::string> keys;
+    if (radix.empty() || !tokens.get_stable_cache_keys(keys)) {
+        return nullptr;
+    }
+
+    size_t node = 0;
+    server_prompt_cache_state * best = radix[node].state;
+    for (const auto & key : keys) {
+        const auto it = radix[node].children.find(key);
+        if (it == radix[node].children.end()) {
+            break;
+        }
+        node = it->second;
+        if (radix[node].state) {
+            best = radix[node].state;
+        }
+    }
+
+    return best;
 }
 
 server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & prompt, size_t state_size_tgt, size_t state_size_dft) {
@@ -1678,18 +1737,10 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
         return nullptr;
     }
 
-    // remove any cached prompts that are fully contained in the current prompt
-    for (auto it = states.begin(); it != states.end();) {
-        const int len = it->prompt.tokens.get_common_prefix(prompt.tokens);
-
-        if (len == (int) it->prompt.tokens.size()) {
-            SRV_TRC(" - removing obsolete cached prompt with length %d\n", len);
-
-            it = states.erase(it);
-        } else {
-            ++it;
-        }
-    }
+    // Keep shorter prefixes even when a longer prompt arrives. They are not
+    // obsolete: a radix-style cache needs the shared system/tool prefix to
+    // serve future sibling prompts without restoring a much larger state.
+    // The existing byte/token limits and LRU order decide eviction.
 
     if (limit_size > 0) {
         // make room before allocating the new vectors to avoid breaching the limit
@@ -1731,6 +1782,8 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
         },
     });
 
+    radix_rebuild();
+
     return &states.back();
 }
 
@@ -1744,8 +1797,29 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
 
     auto it_best = states.end();
 
+    // Text prompts use the radix index for the common case. It finds the
+    // longest materialized prefix without scanning every snapshot. Retain the
+    // existing scan for multimodal identity-aware comparison and as a fallback
+    // while an older cache has not yet been indexed.
+    if (auto * radix_best = find_longest_prefix(tokens_new)) {
+        const int lcp_cur = radix_best->prompt.tokens.get_common_prefix(tokens_new);
+        const float f_keep_cur = float(lcp_cur) / radix_best->prompt.tokens.size();
+        const float sim_cur = float(lcp_cur) / tokens_new.size();
+        if (f_keep_cur >= 0.25f && f_keep_best < f_keep_cur && sim_best < sim_cur) {
+            f_keep_best = f_keep_cur;
+            sim_best = sim_cur;
+            it_best = std::find_if(states.begin(), states.end(),
+                [radix_best](const server_prompt_cache_state & state) {
+                    return &state == radix_best;
+                });
+        }
+    }
+
     // find the most similar cached prompt, that would also preserve the most context
     for (auto it = states.begin(); it != states.end(); ++it) {
+        if (it_best != states.end() && &*it == &*it_best) {
+            continue;
+        }
         const int lcp_cur = it->prompt.tokens.get_common_prefix(tokens_new);
 
         const float f_keep_cur = float(lcp_cur) / it->prompt.tokens.size();
@@ -1768,7 +1842,7 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
         SRV_TRC(" - found better prompt with f_keep = %.3f, sim = %.3f\n", f_keep_best, sim_best);
 
         {
-            auto & data = it_best->data.main;
+            const auto & data = it_best->data.main;
 
             const size_t size = data.size();
             const size_t n = llama_state_seq_set_data_ext(ctx_tgt, data.data(), size, id_slot, 0);
@@ -1777,13 +1851,10 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
 
                 return false;
             }
-
-            data.clear();
-            data.shrink_to_fit();
         }
 
         {
-            auto & data = it_best->data.drft;
+            const auto & data = it_best->data.drft;
 
             if (!data.empty()) {
                 GGML_ASSERT(ctx_dft);
@@ -1795,15 +1866,15 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
 
                     return false;
                 }
-
-                data.clear();
-                data.shrink_to_fit();
             }
         }
 
-        prompt = std::move(it_best->prompt);
-
-        states.erase(it_best);
+        // State restoration is read-only.  Retain the immutable snapshot so
+        // future requests sharing this prefix do not pay another prefill.
+        // Moving the hit to the back implements LRU without duplicating its
+        // potentially large target and draft state buffers.
+        prompt = it_best->prompt.clone();
+        states.splice(states.end(), states, it_best);
     }
 
     return true;
@@ -1826,18 +1897,138 @@ void server_prompt_cache::update() {
 
     if (limit_tokens > 0) {
         while (!states.empty() && n_tokens() > limit_tokens_cur) {
-            SRV_WRN(" - cache token limit (%zu, est: %zu) reached, removing oldest entry (size = %.3f MiB)\n",
+            SRV_WRN(" - cache position limit (%zu, est: %zu) reached, removing oldest entry (size = %.3f MiB)\n",
                     limit_tokens, limit_tokens_cur, states.front().size() / (1024.0 * 1024.0));
 
             states.pop_front();
         }
     }
 
-    SRV_TRC(" - cache state: %zu prompts, %.3f MiB (limits: %.3f MiB, %zu tokens, %zu est)\n",
+    // Erasure changes list membership but not the remaining state addresses.
+    // Rebuild only after eviction, never on a cache hit/LRU splice.
+    radix_rebuild();
+
+    SRV_TRC(" - cache state: %zu prompts, %.3f MiB (limits: %.3f MiB, %zu positions, %zu est)\n",
             states.size(), size() / (1024.0 * 1024.0), limit_size / (1024.0 * 1024.0), limit_tokens, limit_tokens_cur);
 
     for (const auto & state : states) {
         SRV_TRC("   - prompt %p: %7d tokens, checkpoints: %2zu, %9.3f MiB\n",
                 (const void *)&state, state.prompt.n_tokens(), state.prompt.checkpoints.size(), state.size() / (1024.0 * 1024.0));
     }
+}
+
+void server_kv_block_radix::publish(
+        const std::vector<std::string> & keys,
+        const std::vector<llama_pos> & block_positions,
+        llama_seq_id seq,
+        uint64_t now) {
+    if (keys.empty() || block_positions.empty()) {
+        return;
+    }
+
+    size_t node = 0;
+    size_t block_index = 0;
+    llama_pos p0 = 0;
+    for (size_t i = 0; i < keys.size(); ++i) {
+        const auto it = nodes[node].children.find(keys[i]);
+        if (it != nodes[node].children.end()) {
+            node = it->second;
+        } else {
+            const size_t child = nodes.size();
+            nodes.emplace_back();
+            nodes[node].children.emplace(keys[i], child);
+            node = child;
+        }
+
+        const bool sealed = (i + 1) % block_tokens == 0 || i + 1 == keys.size();
+        if (!sealed) {
+            continue;
+        }
+        const llama_pos p1 = block_positions[std::min(block_index, block_positions.size() - 1)];
+        uint64_t id = nodes[node].block_id;
+        if (id == 0) {
+            id = next_block_id++;
+            nodes[node].block_id = id;
+            blocks.emplace(id, block { id, p0, p1, now, { } });
+        }
+        auto & entry = blocks.at(id);
+        entry.owners.insert(seq);
+        entry.last_used = now;
+        p0 = p1;
+        ++block_index;
+    }
+}
+
+server_kv_block_radix::attachment server_kv_block_radix::attach(
+        const std::vector<std::string> & keys, llama_seq_id seq, uint64_t now) {
+    attachment result;
+    size_t node = 0;
+    for (size_t i = 0; i < keys.size(); ++i) {
+        const auto it = nodes[node].children.find(keys[i]);
+        if (it == nodes[node].children.end()) {
+            break;
+        }
+        node = it->second;
+        const uint64_t id = nodes[node].block_id;
+        if (id == 0) {
+            continue;
+        }
+        auto block_it = blocks.find(id);
+        if (block_it == blocks.end() || block_it->second.owners.empty()) {
+            break;
+        }
+        auto & entry = block_it->second;
+        if (result.source < 0) {
+            result.source = *entry.owners.begin();
+        }
+        // A single source must own every copied physical block. This avoids
+        // stitching incompatible sequence prefixes at the server boundary.
+        if (!entry.owners.count(result.source)) {
+            break;
+        }
+        entry.owners.insert(seq);
+        entry.last_used = now;
+        result.positions = entry.p1;
+        result.block_ids.push_back(id);
+    }
+    return result;
+}
+
+void server_kv_block_radix::release(llama_seq_id seq) {
+    for (auto & [id, entry] : blocks) {
+        GGML_UNUSED(id);
+        entry.owners.erase(seq);
+    }
+}
+
+size_t server_kv_block_radix::evict(size_t max_blocks) {
+    size_t evicted = 0;
+    while (blocks.size() > max_blocks) {
+        auto victim = blocks.end();
+        for (auto it = blocks.begin(); it != blocks.end(); ++it) {
+            if (!it->second.owners.empty()) {
+                continue;
+            }
+            if (victim == blocks.end() || it->second.last_used < victim->second.last_used) {
+                victim = it;
+            }
+        }
+        if (victim == blocks.end()) {
+            break;
+        }
+        const uint64_t id = victim->first;
+        for (auto & node : nodes) {
+            if (node.block_id == id) {
+                node.block_id = 0;
+            }
+        }
+        blocks.erase(victim);
+        ++evicted;
+    }
+    return evicted;
+}
+
+size_t server_kv_block_radix::n_owners(uint64_t id) const {
+    const auto it = blocks.find(id);
+    return it == blocks.end() ? 0 : it->second.owners.size();
 }

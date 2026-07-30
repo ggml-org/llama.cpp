@@ -7,7 +7,7 @@
 
 // bump if necessary
 #define LLAMA_MAX_LAYERS  512
-#define LLAMA_MAX_EXPERTS 512 // Qwen3 Next
+#define LLAMA_MAX_EXPERTS 1024 // Kimi K3 has 896 routed experts
 
 enum llama_expert_gating_func_type {
     LLAMA_EXPERT_GATING_FUNC_TYPE_NONE           = 0,
@@ -101,6 +101,9 @@ struct llama_hparams {
     uint32_t expert_gating_func   = LLAMA_EXPERT_GATING_FUNC_TYPE_NONE;
     uint32_t moe_every_n_layers   = 0;
     uint32_t moe_latent_size      = 0;
+    uint32_t attn_res_block_size  = 0;
+    float    situ_beta            = 4.0f;
+    float    situ_linear_beta     = 25.0f;
 
     float f_norm_eps;
     float f_norm_rms_eps;

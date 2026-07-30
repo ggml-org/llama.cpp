@@ -221,6 +221,12 @@ public:
 
     size_t get_common_prefix(const server_tokens & b) const;
 
+    // Stable, in-process radix keys. Text tokens retain their exact ID. A
+    // media span is keyed by its caller-provided stable component ID plus its
+    // token/position geometry; anonymous media deliberately produces no key
+    // so it cannot enter a reusable cross-request KV path.
+    bool get_stable_cache_keys(std::vector<std::string> & keys) const;
+
     // split the tokens into message spans, skipping over media chunks
     common_chat_msg_spans find_message_spans(const common_chat_msg_delimiters & delims) const;
 

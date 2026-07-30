@@ -499,7 +499,14 @@ size_t server_tokens::get_common_prefix(const server_tokens & b) const {
             const size_t n_tok_a = mtmd_input_chunk_get_n_tokens(a_chunk.get());
             const size_t n_tok_b = mtmd_input_chunk_get_n_tokens(b_chunk.get());
 
-            if (id_ai == id_bi && n_tok_a == n_tok_b) {
+            // An empty component ID is deliberately not an identity.  Media
+            // clients that do not provide an ID must never inherit a KV
+            // prefix from another image/audio request merely because both
+            // placeholders happen to be LLAMA_TOKEN_NULL.  This keeps the
+            // cache local and safe while still allowing callers that provide
+            // a stable component ID to reuse the corresponding projection
+            // and decoder prefix.
+            if (!id_ai.empty() && id_ai == id_bi && n_tok_a == n_tok_b) {
                 GGML_ASSERT(n_tok_a > 0 && "Invalid media chunk"); // should never happen
                 i += n_tok_a - 1; // will be +1 by the for loop
                 continue;
@@ -516,6 +523,37 @@ size_t server_tokens::get_common_prefix(const server_tokens & b) const {
     }
 
     return max_idx; // all tokens are equal
+}
+
+bool server_tokens::get_stable_cache_keys(std::vector<std::string> & keys) const {
+    keys.clear();
+    keys.reserve(tokens.size());
+
+    for (size_t i = 0; i < tokens.size(); ++i) {
+        const llama_token token = tokens[i];
+        if (token != LLAMA_TOKEN_NULL) {
+            keys.emplace_back("t:" + std::to_string(token));
+            continue;
+        }
+
+        const auto & chunk = find_chunk(i);
+        const char * id = mtmd_input_chunk_get_id(chunk.get());
+        if (id == nullptr || id[0] == '\0') {
+            keys.clear();
+            return false;
+        }
+
+        const size_t n_tokens = mtmd_input_chunk_get_n_tokens(chunk.get());
+        const llama_pos n_pos = mtmd_input_chunk_get_n_pos(chunk.get());
+        for (size_t j = 0; j < n_tokens; ++j) {
+            keys.emplace_back("m:" + std::string(id) + ":" +
+                    std::to_string(n_tokens) + ":" + std::to_string(n_pos) + ":" +
+                    std::to_string(j));
+        }
+        i += n_tokens - 1;
+    }
+
+    return true;
 }
 
 common_chat_msg_spans server_tokens::find_message_spans(const common_chat_msg_delimiters & delims) const {

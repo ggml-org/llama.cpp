@@ -629,8 +629,64 @@ class Qwen3_5TextModel(_Qwen35MtpMixin, _Qwen35MRopeMixin, _LinearAttentionVReor
 class Qwen3_5MoeTextModel(_Qwen35MtpMixin, _Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35MOE
 
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        """
+        Override to handle the Qwen3.5/3.6 MoE merged-expert format.
 
-@ModelBase.register("DFlashDraftModel")
+        In the HF safetensors for Qwen3.5/3.6, the 3D MoE expert weights are
+        stored as single merged tensors (one per layer, not per-expert):
+          - `mlp.experts.gate_up_proj`: [n_experts, 2*n_ff, n_embd]
+          - `mlp.experts.down_proj`:    [n_experts, n_embd, n_ff]
+
+        The C++ loader (qwen35moe.cpp) expects on-disk ne from check_tensor_dims:
+          - `ffn_gate_up_exps.weight`:  ne = [n_embd, 2*n_ff, n_experts]
+          - `ffn_gate_exps.weight`:     ne = [n_embd, n_ff, n_experts]
+          - `ffn_up_exps.weight`:       ne = [n_embd, n_ff, n_experts]
+          - `ffn_down_exps.weight`:     ne = [n_ff, n_embd, n_experts]
+
+        The GGUF writer reverses ti.shape when writing, so:
+          - gate_up:  HF [n_experts, 2*n_ff, n_embd]  ->  no permute  ->  file ne = [n_embd, 2*n_ff, n_experts]
+          - gate/up:  HF [n_experts, n_ff, n_embd]    ->  no permute  ->  file ne = [n_embd, n_ff, n_experts]
+          - down:     HF [n_experts, n_embd, n_ff]    ->  no permute  ->  file ne = [n_ff, n_embd, n_experts]
+
+        This matches the Qwen2Moe conversion convention.
+        """
+        # Detect merged gate_up_proj (with or without .weight suffix)
+        is_gate_up = (
+            name.endswith("mlp.experts.gate_up_proj")
+            or name.endswith("mlp.experts.gate_up_proj.weight")
+        )
+        is_down = (
+            name.endswith("mlp.experts.down_proj")
+            or name.endswith("mlp.experts.down_proj.weight")
+        )
+
+        if is_gate_up:
+            # HF: [n_experts, 2*n_ff, n_embd]  ->  file ne = [n_embd, 2*n_ff, n_experts] after writer reversal.
+            # No permute needed: HF dim order is already the reverse of the desired on-disk order.
+            permuted = data_torch.contiguous()
+            mapped = name
+            if not mapped.endswith(".weight"):
+                mapped = f"{mapped}.weight"
+            logger.info(f"gate_up_proj: {tuple(data_torch.shape)} -> on-disk ne {tuple(permuted.shape[::-1])} after writer reversal")
+            yield from super().modify_tensors(permuted, mapped, bid)
+            return
+
+        if is_down:
+            # HF: [n_experts, n_embd, n_ff]  ->  file ne = [n_ff, n_embd, n_experts] after writer reversal.
+            # No permute needed: HF dim order is already the reverse of the desired on-disk order.
+            permuted = data_torch.contiguous()
+            mapped = name
+            if not mapped.endswith(".weight"):
+                mapped = f"{mapped}.weight"
+            logger.info(f"down_proj: {tuple(data_torch.shape)} -> on-disk ne {tuple(permuted.shape[::-1])} after writer reversal")
+            yield from super().modify_tensors(permuted, mapped, bid)
+            return
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("DFlashDraftModel", "GemmaScaledDraftModel")
 class DFlashModel(Qwen3Model):
     model_arch = gguf.MODEL_ARCH.DFLASH
 

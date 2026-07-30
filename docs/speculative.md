@@ -74,6 +74,60 @@ llama-server -m Qwen3-4B.gguf -md Qwen3-4B-DFlash.gguf \
 
 `--spec-draft-n-max` is clamped to the draft model's trained block size.
 
+Acceptance-aware calibration can persist one JSON object per verified draft by
+setting `LLAMA_DFLASH_TELEMETRY` to an output path before starting llama.cpp.
+Each record contains the proposed block length, accepted prefix length, and
+per-position draft confidence. The stream is append-only and flushed after
+every verification, so it is suitable for long-running representative prompt
+sets and survives an interrupted run. Convert it into an AWQ and evolved
+Tile640 policy with:
+
+```bash
+python tools/ane-mtp/dflash-calibration-policy.py \
+    --telemetry dflash-acceptance.jsonl \
+    --output dflash-policy.json
+```
+
+The policy uses reach probability and conditional acceptance to give early,
+high-impact draft positions more influence. It keeps norms exact and assigns
+separate outlier budgets to the DFlash fusion, output and embedding, attention,
+and feed-forward tensor families. Activation importance is still collected by
+the graph-resident imatrix observer; the acceptance stream augments that data
+instead of replacing it.
+
+The standard autoregressive MTP drafter supports the same calibration flow
+through `LLAMA_MTP_TELEMETRY`. Its records use the MTP acceptance schema and
+are emitted by both the llama.cpp and warm ANE execution paths. The policy
+generator accepts either DFlash or MTP telemetry and rejects mixed streams,
+since their draft-position semantics differ.
+
+When the target GGUF contains an embedded MTP component and an external
+DFlash model is supplied, `draft-hybrid` runs both drafters from the same
+verified target boundary. The scheduler measures token agreement and selects
+the complete MTP candidate when DFlash becomes uncertain and MTP is more
+confident; otherwise it retains the parallel DFlash candidate. It never
+splices a candidate after a divergent token because MTP does not have a
+verified target hidden state at that boundary. The target model remains the
+only verifier.
+
+```bash
+llama-server -m gemma4-unified-mtp.gguf \
+    -md gemma4-dflash.gguf \
+    --spec-type draft-hybrid --spec-draft-n-max 8
+```
+
+`LLAMA_HYBRID_DFLASH_P_MIN` controls the DFlash confidence cutoff and defaults
+to `0.65`.
+
+ANE compute images can include a fixed-width `hybrid_bN` multifunction entry
+alongside `dflash_bN` and the stateful MTP functions. It receives both
+candidate blocks, both confidence blocks, their valid lengths, and the cutoff,
+then returns the selected source and agreement depth. Generate the standalone
+function package with `tools/ane-mtp/make-hybrid-function.py` and merge it with
+`tools/ane-mtp/export-gemma4-mtp.py --compute-function
+hybrid_bN=PATH`. Older compute images remain compatible and use the same
+arbitration on the host.
+
 See:
 
 - #22105

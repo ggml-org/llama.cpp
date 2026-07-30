@@ -97,6 +97,7 @@ struct llama_model_loader {
     std::vector<ggml_context_ptr> contexts;
 
     std::string arch_name;
+    std::string component_prefix;
     LLM_KV      llm_kv    = LLM_KV(LLM_ARCH_UNKNOWN);
 
     size_t size_done = 0;
@@ -130,7 +131,10 @@ struct llama_model_loader {
         bool check_tensors,
         bool no_alloc,
         const llama_model_kv_override * param_overrides_p,
-        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p);
+        const llama_model_tensor_buft_override * param_tensor_buft_overrides_p,
+        const char * component_prefix_p = nullptr);
+
+    std::string scoped_key(const std::string & key) const;
 
     template<typename T>
     typename std::enable_if<std::is_integral<T>::value, bool>::type

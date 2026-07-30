@@ -19,8 +19,8 @@ ggml_cgraph * clip_graph_gemma4uv::build() {
         inp = build_norm(inp, model.patch_norm_1_w, model.patch_norm_1_b, NORM_TYPE_NORMAL, eps, -1);
         // inp shape: [patch_size * patch_size * c, n_patches]
 
-        inp = ggml_mul_mat(ctx0, model.patch_embeddings_0, inp);
-        inp = ggml_add(ctx0, inp, model.patch_bias);
+        inp = build_mm(model.patch_embeddings_0, inp);
+        inp = ggml_add(ctx0, inp, resolve_weight(model.patch_bias));
         // inp shape: [n_embd, n_patches]
 
         inp = build_norm(inp, model.patch_norm_2_w, model.patch_norm_2_b, NORM_TYPE_NORMAL, eps, -1);
@@ -35,13 +35,14 @@ ggml_cgraph * clip_graph_gemma4uv::build() {
     ggml_set_input(pos_y);
 
     {
-        const int64_t pos_size = model.position_embeddings->ne[1];
-        const size_t  nb1      = ggml_row_size(model.position_embeddings->type, n_embd);
+        ggml_tensor * position_embeddings = resolve_weight(model.position_embeddings);
+        const int64_t pos_size = position_embeddings->ne[1];
+        const size_t  nb1      = ggml_row_size(position_embeddings->type, n_embd);
 
         // positional embeddings are stored as lookup tables (one for x, one for y)
-        ggml_tensor * tbl_x = ggml_view_2d(ctx0, model.position_embeddings,
+        ggml_tensor * tbl_x = ggml_view_2d(ctx0, position_embeddings,
                                              n_embd, pos_size, nb1, 0);
-        ggml_tensor * tbl_y = ggml_view_2d(ctx0, model.position_embeddings,
+        ggml_tensor * tbl_y = ggml_view_2d(ctx0, position_embeddings,
                                              n_embd, pos_size, nb1, pos_size * nb1);
 
         // ggml_get_rows: [n_embd, n_patches]

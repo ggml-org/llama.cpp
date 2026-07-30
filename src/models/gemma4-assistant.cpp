@@ -1,5 +1,43 @@
 #include "models.h"
 
+static ggml_tensor * gemma4_assistant_tile640_dequant(
+        ggml_context * ctx,
+        const llama_tile640_tensor * tensor) {
+    GGML_ASSERT(tensor && tensor->valid());
+    return ggml_tile640_dequant(
+        ctx, tensor->packed, tensor->page_scales, tensor->lane_scales,
+        tensor->outlier_row_offsets, tensor->outlier_cols, tensor->outlier_vals,
+        tensor->ne[0], tensor->ne[1], tensor->ne[2], tensor->ne[3]);
+}
+
+static ggml_tensor * gemma4_assistant_tile640_mul_mat(
+        ggml_context * ctx,
+        const llama_tile640_tensor * tensor,
+        ggml_tensor * input) {
+    GGML_ASSERT(tensor && tensor->valid());
+    if (tensor->act_scale) {
+        input = ggml_mul(ctx, input, tensor->act_scale);
+    }
+    if (input->type != GGML_TYPE_F16) {
+        input = ggml_cast(ctx, input, GGML_TYPE_F16);
+    }
+    return ggml_tile640_matmul(
+        ctx, tensor->packed, tensor->page_scales, tensor->lane_scales,
+        tensor->outlier_row_offsets, tensor->outlier_cols, tensor->outlier_vals,
+        input);
+}
+
+static ggml_tensor * gemma4_assistant_tile640_get_rows(
+        ggml_context * ctx,
+        const llama_tile640_tensor * tensor,
+        ggml_tensor * ids) {
+    GGML_ASSERT(tensor && tensor->valid());
+    return ggml_tile640_get_rows(
+        ctx, tensor->packed, tensor->page_scales, tensor->lane_scales,
+        tensor->outlier_row_offsets, tensor->outlier_cols, tensor->outlier_vals,
+        ids, (int32_t) tensor->ne[0]);
+}
+
 void llama_model_gemma4_assistant::load_arch_hparams(llama_model_loader & ml) {
     hparams.n_embd_inp_impl = hparams.n_embd_out();
 
@@ -34,16 +72,16 @@ void llama_model_gemma4_assistant::load_arch_tensors(llama_model_loader &) {
         throw std::runtime_error("Gemma 4 assistant requires embedding_length_out to carry the target hidden size");
     }
 
-    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, 0);
-    output   = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, TENSOR_DUPLICATED);
+    tok_embd = create_tensor_or_tile640(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, 0);
+    output   = create_tensor_or_tile640(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, TENSOR_DUPLICATED);
 
-    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), { n_embd }, 0);
+    output_norm = create_tensor_or_tile640(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), { n_embd }, 0);
 
     create_tensor(tn(LLM_TENSOR_MASKED_EMBD_CENTROIDS, "weight"), {}, TENSOR_NOT_REQUIRED);
     create_tensor(tn(LLM_TENSOR_MASKED_EMBD_ORDERING),  {}, TENSOR_NOT_REQUIRED);
 
     const int64_t n_embd_backbone = hparams.n_embd_inp();
-    nextn_proj_post = create_tensor(tn(LLM_TENSOR_NEXTN_PROJ_POST, "weight"), { n_embd, n_embd_backbone }, 0);
+    nextn_proj_post = create_tensor_or_tile640(tn(LLM_TENSOR_NEXTN_PROJ_POST, "weight"), { n_embd, n_embd_backbone }, 0);
 
     int rope_freqs_flag = 0;
 
@@ -55,28 +93,28 @@ void llama_model_gemma4_assistant::load_arch_tensors(llama_model_loader &) {
         const int64_t n_ff        = hparams.n_ff(i);
 
         if (i == 0) {
-            nextn_proj_pre = create_tensor(tn(LLM_TENSOR_NEXTN_PROJ_PRE, "weight", i), { 2*n_embd_backbone, n_embd }, 0);
+            nextn_proj_pre = create_tensor_or_tile640(tn(LLM_TENSOR_NEXTN_PROJ_PRE, "weight", i), { 2*n_embd_backbone, n_embd }, 0);
         }
 
-        layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), { n_embd }, 0);
-        layer.wq        = create_tensor(tn(LLM_TENSOR_ATTN_Q,    "weight", i), { n_embd, n_embd_head*n_head }, 0);
-        layer.wo        = create_tensor(tn(LLM_TENSOR_ATTN_OUT,  "weight", i), { n_embd_head*n_head, n_embd }, 0);
+        layer.attn_norm = create_tensor_or_tile640(tn(LLM_TENSOR_ATTN_NORM, "weight", i), { n_embd }, 0);
+        layer.wq        = create_tensor_or_tile640(tn(LLM_TENSOR_ATTN_Q,    "weight", i), { n_embd, n_embd_head*n_head }, 0);
+        layer.wo        = create_tensor_or_tile640(tn(LLM_TENSOR_ATTN_OUT,  "weight", i), { n_embd_head*n_head, n_embd }, 0);
 
-        layer.attn_q_norm    = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM,    "weight", i), { n_embd_head }, 0);
-        layer.attn_post_norm = create_tensor(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), { n_embd }, 0);
+        layer.attn_q_norm    = create_tensor_or_tile640(tn(LLM_TENSOR_ATTN_Q_NORM,    "weight", i), { n_embd_head }, 0);
+        layer.attn_post_norm = create_tensor_or_tile640(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", i), { n_embd }, 0);
 
-        layer.out_scale = create_tensor(tn(LLM_TENSOR_LAYER_OUT_SCALE, "weight", i), { 1u }, 0);
+        layer.out_scale = create_tensor_or_tile640(tn(LLM_TENSOR_LAYER_OUT_SCALE, "weight", i), { 1u }, 0);
 
         if (!hparams.is_swa(i)) {
             layer.rope_freqs = create_tensor(tn(LLM_TENSOR_ROPE_FREQS, "weight", i), { n_embd_head/2 }, rope_freqs_flag);
             rope_freqs_flag = TENSOR_DUPLICATED;
         }
 
-        layer.ffn_norm      = create_tensor(tn(LLM_TENSOR_FFN_NORM,      "weight", i), { n_embd }, 0);
-        layer.ffn_gate      = create_tensor(tn(LLM_TENSOR_FFN_GATE,      "weight", i), { n_embd, n_ff }, 0);
-        layer.ffn_up        = create_tensor(tn(LLM_TENSOR_FFN_UP,        "weight", i), { n_embd, n_ff }, 0);
-        layer.ffn_down      = create_tensor(tn(LLM_TENSOR_FFN_DOWN,      "weight", i), { n_ff, n_embd }, 0);
-        layer.ffn_post_norm = create_tensor(tn(LLM_TENSOR_FFN_POST_NORM, "weight", i), { n_embd }, 0);
+        layer.ffn_norm      = create_tensor_or_tile640(tn(LLM_TENSOR_FFN_NORM,      "weight", i), { n_embd }, 0);
+        layer.ffn_gate      = create_tensor_or_tile640(tn(LLM_TENSOR_FFN_GATE,      "weight", i), { n_embd, n_ff }, 0);
+        layer.ffn_up        = create_tensor_or_tile640(tn(LLM_TENSOR_FFN_UP,        "weight", i), { n_embd, n_ff }, 0);
+        layer.ffn_down      = create_tensor_or_tile640(tn(LLM_TENSOR_FFN_DOWN,      "weight", i), { n_ff, n_embd }, 0);
+        layer.ffn_post_norm = create_tensor_or_tile640(tn(LLM_TENSOR_FFN_POST_NORM, "weight", i), { n_embd }, 0);
     }
 }
 
@@ -86,6 +124,7 @@ std::unique_ptr<llm_graph_context> llama_model_gemma4_assistant::build_arch_grap
 
 llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_graph_params & params) :
         llm_graph_context(params) {
+    const LLM_TN qtn(model.arch);
     const int64_t n_embd_backbone = hparams.n_embd_inp();
 
     ggml_tensor * inp_tokens;
@@ -111,14 +150,25 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
     GGML_ASSERT(cparams.ctx_other != nullptr);
     const auto * model_other = llama_get_model(cparams.ctx_other);
 
-    ggml_tensor * x = ggml_get_rows(ctx0, model_other->tok_embd, inp_tokens);
+    ggml_tensor * x;
+    const LLM_TN target_tn(model_other->arch);
+    if (const auto * q = model_other->get_tile640_tensor(target_tn(LLM_TENSOR_TOKEN_EMBD, "weight").str())) {
+        x = gemma4_assistant_tile640_get_rows(ctx0, q, inp_tokens);
+    } else {
+        x = ggml_get_rows(ctx0, model_other->tok_embd, inp_tokens);
+    }
     x = ggml_scale(ctx0, x, sqrtf((float) n_embd_backbone));
     cb(x, "inp_embd_target", -1);
 
     ggml_tensor * xh = ggml_concat(ctx0, x, inp_h, 0);
     cb(xh, "inp_xh", -1);
 
-    ggml_tensor * cur = ggml_mul_mat(ctx0, model.nextn_proj_pre, xh);
+    ggml_tensor * cur;
+    if (const auto * q = model.get_tile640_tensor(qtn(LLM_TENSOR_NEXTN_PROJ_PRE, "weight", 0).str())) {
+        cur = gemma4_assistant_tile640_mul_mat(ctx0, q, xh);
+    } else {
+        cur = ggml_mul_mat(ctx0, model.nextn_proj_pre, xh);
+    }
     cb(cur, "pre_proj", -1);
 
     auto *        inp_attn    = build_attn_inp_kv_iswa();
@@ -137,12 +187,25 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
         const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
         const int   n_rot_l      = hparams.n_rot(il);
 
-        ggml_tensor * cur_norm = build_norm(inpL, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);
+        ggml_tensor * attn_norm = model.layers[il].attn_norm;
+        if (const auto * q = model.get_tile640_tensor(qtn(LLM_TENSOR_ATTN_NORM, "weight", il).str())) {
+            attn_norm = gemma4_assistant_tile640_dequant(ctx0, q);
+        }
+        ggml_tensor * cur_norm = build_norm(inpL, attn_norm, nullptr, LLM_NORM_RMS, il);
         cb(cur_norm, "attn_norm", il);
 
-        ggml_tensor * Qcur = build_lora_mm(model.layers[il].wq, cur_norm);
+        ggml_tensor * Qcur;
+        if (const auto * q = model.get_tile640_tensor(qtn(LLM_TENSOR_ATTN_Q, "weight", il).str())) {
+            Qcur = gemma4_assistant_tile640_mul_mat(ctx0, q, cur_norm);
+        } else {
+            Qcur = build_lora_mm(model.layers[il].wq, cur_norm);
+        }
         Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens);
-        Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, il);
+        ggml_tensor * q_norm = model.layers[il].attn_q_norm;
+        if (const auto * q = model.get_tile640_tensor(qtn(LLM_TENSOR_ATTN_Q_NORM, "weight", il).str())) {
+            q_norm = gemma4_assistant_tile640_dequant(ctx0, q);
+        }
+        Qcur = build_norm(Qcur, q_norm, nullptr, LLM_NORM_RMS, il);
         cb(Qcur, "Qcur_normed", il);
 
         ggml_tensor * freq_factors = is_swa ? nullptr : model.layers[il].rope_freqs;
@@ -150,51 +213,94 @@ llama_model_gemma4_assistant::graph::graph(const llama_model & model, const llm_
                              freq_base_l, freq_scale_l, ext_factor, attn_factor, beta_fast, beta_slow);
         cb(Qcur, "Qcur_pos", il);
 
-        cur = build_attn(inp_attn, model.layers[il].wo, nullptr, nullptr,
+        const auto * wo_q = model.get_tile640_tensor(qtn(LLM_TENSOR_ATTN_OUT, "weight", il).str());
+        cur = build_attn(inp_attn, wo_q ? nullptr : model.layers[il].wo, nullptr, nullptr,
                 Qcur, nullptr, nullptr, nullptr, nullptr, nullptr, hparams.f_attention_scale, il);
+        if (wo_q) {
+            cur = gemma4_assistant_tile640_mul_mat(ctx0, wo_q, cur);
+        }
 
         if (il == n_layer_nextn - 1 && inp_out_ids) {
             cur  = ggml_get_rows(ctx0, cur,  inp_out_ids);
             inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
         }
 
-        cur = build_norm(cur, model.layers[il].attn_post_norm, nullptr, LLM_NORM_RMS, il);
+        ggml_tensor * attn_post_norm = model.layers[il].attn_post_norm;
+        if (const auto * q = model.get_tile640_tensor(qtn(LLM_TENSOR_ATTN_POST_NORM, "weight", il).str())) {
+            attn_post_norm = gemma4_assistant_tile640_dequant(ctx0, q);
+        }
+        cur = build_norm(cur, attn_post_norm, nullptr, LLM_NORM_RMS, il);
         cb(cur, "attn_post_norm", il);
 
         ggml_tensor * attn_out = ggml_add(ctx0, cur, inpL);
         cb(attn_out, "attn_out", il);
 
-        cur = build_norm(attn_out, model.layers[il].ffn_norm, nullptr, LLM_NORM_RMS, il);
+        ggml_tensor * ffn_norm = model.layers[il].ffn_norm;
+        if (const auto * q = model.get_tile640_tensor(qtn(LLM_TENSOR_FFN_NORM, "weight", il).str())) {
+            ffn_norm = gemma4_assistant_tile640_dequant(ctx0, q);
+        }
+        cur = build_norm(attn_out, ffn_norm, nullptr, LLM_NORM_RMS, il);
         cb(cur, "ffn_norm", il);
 
-        cur = build_ffn(cur,
-                model.layers[il].ffn_up,   nullptr, nullptr,
-                model.layers[il].ffn_gate, nullptr, nullptr,
-                model.layers[il].ffn_down, nullptr, nullptr,
-                nullptr,
-                LLM_FFN_GELU, LLM_FFN_PAR, il);
+        const auto * up_q = model.get_tile640_tensor(qtn(LLM_TENSOR_FFN_UP, "weight", il).str());
+        const auto * gate_q = model.get_tile640_tensor(qtn(LLM_TENSOR_FFN_GATE, "weight", il).str());
+        const auto * down_q = model.get_tile640_tensor(qtn(LLM_TENSOR_FFN_DOWN, "weight", il).str());
+        if (up_q && gate_q && down_q) {
+            ggml_tensor * up = gemma4_assistant_tile640_mul_mat(ctx0, up_q, cur);
+            ggml_tensor * gate = ggml_gelu(ctx0, gemma4_assistant_tile640_mul_mat(ctx0, gate_q, cur));
+            cur = gemma4_assistant_tile640_mul_mat(ctx0, down_q, ggml_mul(ctx0, gate, up));
+        } else {
+            cur = build_ffn(cur,
+                    model.layers[il].ffn_up,   nullptr, nullptr,
+                    model.layers[il].ffn_gate, nullptr, nullptr,
+                    model.layers[il].ffn_down, nullptr, nullptr,
+                    nullptr,
+                    LLM_FFN_GELU, LLM_FFN_PAR, il);
+        }
         cb(cur, "ffn_out", il);
 
-        cur = build_norm(cur, model.layers[il].ffn_post_norm, nullptr, LLM_NORM_RMS, -1);
+        ggml_tensor * ffn_post_norm = model.layers[il].ffn_post_norm;
+        if (const auto * q = model.get_tile640_tensor(qtn(LLM_TENSOR_FFN_POST_NORM, "weight", il).str())) {
+            ffn_post_norm = gemma4_assistant_tile640_dequant(ctx0, q);
+        }
+        cur = build_norm(cur, ffn_post_norm, nullptr, LLM_NORM_RMS, -1);
         cb(cur, "ffn_post_norm", il);
 
         cur = ggml_add(ctx0, cur, attn_out);
 
-        cur = ggml_mul(ctx0, cur, model.layers[il].out_scale);
+        ggml_tensor * out_scale = model.layers[il].out_scale;
+        if (const auto * q = model.get_tile640_tensor(qtn(LLM_TENSOR_LAYER_OUT_SCALE, "weight", il).str())) {
+            out_scale = gemma4_assistant_tile640_dequant(ctx0, q);
+        }
+        cur = ggml_mul(ctx0, cur, out_scale);
         cb(cur, "out_scaled", il);
 
         inpL = cur;
     }
     cur = inpL;
 
-    cur = build_norm(cur, model.output_norm, nullptr, LLM_NORM_RMS, -1);
+    ggml_tensor * output_norm = model.output_norm;
+    if (const auto * q = model.get_tile640_tensor(qtn(LLM_TENSOR_OUTPUT_NORM, "weight").str())) {
+        output_norm = gemma4_assistant_tile640_dequant(ctx0, q);
+    }
+    cur = build_norm(cur, output_norm, nullptr, LLM_NORM_RMS, -1);
     cb(cur, "result_norm", -1);
 
-    ggml_tensor * logits = build_lora_mm(model.output, cur);
+    ggml_tensor * logits;
+    if (const auto * q = model.get_tile640_tensor(qtn(LLM_TENSOR_TOKEN_EMBD, "weight").str())) {
+        logits = gemma4_assistant_tile640_mul_mat(ctx0, q, cur);
+    } else {
+        logits = build_lora_mm(model.output, cur);
+    }
     cb(logits, "result_output", -1);
     res->t_logits = logits;
 
-    ggml_tensor * h_next = ggml_mul_mat(ctx0, model.nextn_proj_post, cur);
+    ggml_tensor * h_next;
+    if (const auto * q = model.get_tile640_tensor(qtn(LLM_TENSOR_NEXTN_PROJ_POST, "weight").str())) {
+        h_next = gemma4_assistant_tile640_mul_mat(ctx0, q, cur);
+    } else {
+        h_next = ggml_mul_mat(ctx0, model.nextn_proj_post, cur);
+    }
     cb(h_next, "h_nextn", -1);
     res->t_h_nextn = h_next;
 

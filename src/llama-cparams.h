@@ -53,6 +53,13 @@ struct llama_cparams {
     bool kv_unified;
     bool pipeline_parallel;
 
+    // Number of initial decoder layers supplied by a qualified external
+    // prefill slab.  The remaining graph consumes ubatch.embd as the
+    // post-slab hidden state and starts at this layer boundary.  This is
+    // intentionally internal context state: only the ANE prefill handoff
+    // establishes it after validating the artifact and cache contract.
+    uint32_t ane_prefill_layer_count = 0;
+
     std::vector<bool> embeddings_layer_inp; // [n_layer()] extract input embeddings for layer
 
     enum llama_context_type ctx_type;
@@ -60,6 +67,10 @@ struct llama_cparams {
 
     ggml_backend_sched_eval_callback cb_eval;
     void * cb_eval_user_data;
+    bool imatrix_observers;
+    llama_imatrix_observer_filter imatrix_observer_filter = nullptr;
+    void * imatrix_observer_filter_data = nullptr;
+    uint64_t imatrix_observer_epoch = 0;
 
     llama_context * ctx_other;
 };
