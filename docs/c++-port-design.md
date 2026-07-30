@@ -16,15 +16,46 @@ These are settled by the prior conversation and not revisited below:
    gets new entries.
 3. AWQ-evolve GA is part of `llama-quantize` (flag-driven).
 4. Backward-compat ON: stock K-quants still work via
-   `--tessera-mode=off`.
-5. System libopenblas preferred on Linux (`find_package(OpenBLAS)`,
-   fall back to a naive shim when absent). Accelerate on macOS.
+   `--tessera-mode=off` (the only mode flag).
+5. System libopenblas is REQUIRED on Linux (`find_package(OpenBLAS)`).
+   If not found, `llama-quantize` prints an install prompt for the
+   user's distro (apt / yum / dnf / pacman) and exits. No naive shim
+   fallback. macOS uses Accelerate (no extra install).
 6. GA is deterministic via `--tessera-evolve-seed`; bit-identical
    policy across runs.
 7. Flag-driven default flow: presence/absence of `--tessera-imatrix`,
    `--tessera-policy`, `--calib-corpus` controls which steps run. No
    imatrix + no policy + no corpus = run calibration on the built-in
    mini-corpus + run GA + quantize.
+
+### Architect decisions on the 7 open questions (2026-07-30)
+
+The scoping agent surfaced 7 questions in section 7. The architect
+(2026-07-30) locked the following answers; the agent's leans in
+section 7 are superseded:
+
+8. **TESSERA_T640_3D**: separate `GGML_TYPE_TESSERA_T640_3D` enum
+   entry. Mirrors `GGML_TYPE_MXFP4_MOE`.
+9. **LAPACK install**: hard requirement. Missing libopenblas is a
+   user-actionable install error, not a runtime fallback.
+10. **L5 orchestrator**: one tool, one mode. No `--tessera-mode=...`
+    family. The pipeline always runs end-to-end; intermediate outputs
+    are opt-in via output-targeting flags
+    (`--tessera-evolve-only` writes policy JSON only;
+    `--tessera-calibrate-only` writes imatrix only). The
+    `--tessera-mode=off` flag is the only mode flag and exists solely
+    to opt back into stock K-quants.
+11. **Calibration policy location**: both. Small
+    `tessera.calibration.policy` string in GGUF metadata
+    (`tensor_families` block only, no U/V factor payloads). Full
+    U/V payloads and GA archive in sidecar JSON. SHA-256 in both.
+12. **Built-in mini-corpus**: ship baked-in (~1MB synthetic,
+    compiled into the binary). No download step.
+13. **CHAMP-Q**: port with G2. The Python and C++ paths must produce
+    bit-equivalent artifacts; deferring breaks artifact compatibility.
+14. **PE-QAT**: full trainer in scope. LoRA merge + SmoothQuant `s`
+    pre-scale + AdamW + LoRA forward/backward + training loop all in
+    C++. Trainer parity with `tools/tessera/pe_qat.py`.
 
 ## 1. Operation inventory
 
@@ -778,6 +809,11 @@ is validated by bit-equivalence on the smoke-test set at every
 phase boundary.
 
 ## 7. Open design questions
+
+The architect locked the answers to all 7 questions on 2026-07-30
+(see items 8-14 in "Architectural decisions (locked)" above).
+The agent's leans below are historical analysis; the architect's
+decisions supersede them.
 
 ### 7.1 TESSERA_T640_3D as a separate enum entry or a tensor-name marker?
 
