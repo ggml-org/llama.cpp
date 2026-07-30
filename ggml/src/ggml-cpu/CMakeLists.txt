@@ -59,13 +59,13 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
     target_compile_features(${GGML_CPU_NAME} PRIVATE c_std_11 cxx_std_17)
     target_include_directories(${GGML_CPU_NAME} PRIVATE . ggml-cpu ${CMAKE_SOURCE_DIR}/common)
 
-    # tessera_debug symbols are provided by the llama-common static library
-    # in the final binary; for the ggml-cpu shared library we defer the
-    # resolution to link time. Mac's ld fails on undefined symbols by
-    # default; pass -undefined dynamic_lookup for shared builds on Apple.
-    if (BUILD_SHARED_LIBS AND APPLE)
-        target_link_options(${GGML_CPU_NAME} PRIVATE -Wl,-undefined,dynamic_lookup)
+    # Bring the tessera-debug static target into scope before linking
+    # against it. Guarded so the first caller (any of the backends or
+    # common/) wins; the rest are no-ops.
+    if (NOT TARGET llama-tessera-debug)
+        add_subdirectory(${CMAKE_SOURCE_DIR}/common/tessera-debug ${CMAKE_BINARY_DIR}/_deps/llama-tessera-debug)
     endif()
+    target_link_libraries(${GGML_CPU_NAME} PUBLIC llama-tessera-debug)
 
     if (APPLE AND GGML_ACCELERATE)
         find_library(ACCELERATE_FRAMEWORK Accelerate)

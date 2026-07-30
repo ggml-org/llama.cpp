@@ -17,9 +17,10 @@
 //
 // Materializes the full dequantized F32 weight of a quantized `src0` to a
 // device scratch buffer, copies it to the host, and writes the rows to a
-// `.dequant.f32` sidecar via common/tessera-debug.h. The hook is a no-op
-// when the dequant sidecar is disabled (default). See
-// docs/runtime-aware-pipeline.md for the format and acceptance criteria.
+// `.dequant.f32` sidecar via the `llama-tessera-debug` static target
+// (common/tessera-debug/). The hook is a no-op when the dequant sidecar
+// is disabled (default). See docs/runtime-aware-pipeline.md for the
+// format and acceptance criteria.
 //
 // Implementation notes (decisions the user / orchestrator should review):
 //
@@ -87,8 +88,12 @@ void ggml_cuda_dump_dequant(ggml_backend_cuda_context & ctx, const ggml_tensor *
     }
     g_dumped.insert(key);
 
-    const int64_t ne0 = src0->ne[0];
-    const int64_t ne1 = src0->ne[1];
+    // The dequantized F32 weight has the natural storage layout of
+    // M (=ne[1]) rows of K (=ne[0]) F32 values. Match the cpu/metal
+    // sidecar convention so the round-trip validator does not see a
+    // transposed view.
+    const int64_t ne0 = src0->ne[1];
+    const int64_t ne1 = src0->ne[0];
     // Dump the first slice along ne2/ne3. For batched matmul this is the
     // first expert; for the common 2-D weight case it is the whole tensor.
     const int64_t n_dump = ne0 * ne1;

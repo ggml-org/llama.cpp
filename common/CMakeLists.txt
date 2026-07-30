@@ -100,8 +100,6 @@ add_library(${TARGET}
     sampling.h
     speculative.cpp
     speculative.h
-    tessera-debug.cpp
-    tessera-debug.h
     trie.cpp
     trie.h
     unicode.cpp
@@ -132,7 +130,7 @@ set_target_properties(${TARGET} PROPERTIES
     MACHO_CURRENT_VERSION 0 # keep macOS linker from seeing oversized version number
 )
 
-target_include_directories(${TARGET} PUBLIC . ../vendor)
+target_include_directories(${TARGET} PUBLIC . ./tessera-debug ../vendor)
 target_compile_features   (${TARGET} PUBLIC cxx_std_17)
 
 if (BUILD_SHARED_LIBS)
@@ -178,3 +176,14 @@ if (LLAMA_LLGUIDANCE)
 endif()
 
 target_link_libraries(${TARGET} PUBLIC llama Threads::Threads)
+
+# Tessera Layer 1 sidecar writer. Built as its own static target so
+# the backends (ggml-cpu, ggml-cuda, ggml-metal) can link against it
+# directly without dragging in the whole common/ library. The first
+# caller (whichever backend configures first) wins; subsequent calls
+# from the other backends are no-ops.
+if (NOT TARGET llama-tessera-debug)
+    add_subdirectory(${CMAKE_SOURCE_DIR}/common/tessera-debug ${CMAKE_BINARY_DIR}/_deps/llama-tessera-debug)
+endif()
+
+target_link_libraries(${TARGET} PUBLIC llama-tessera-debug)

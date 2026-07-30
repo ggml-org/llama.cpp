@@ -26,16 +26,10 @@
 // produces a correct, dense F32 dump that satisfies the acceptance
 // criteria in docs/runtime-aware-pipeline.md.
 //
-// Linking note: `tessera_debug::*` lives in `common/` (foundation
-// territory, owned by the orchestrator), which is a *higher-level*
-// library than ggml-metal. Linking against it directly would create
-// a cycle (ggml-metal -> llama-common -> llama -> ggml -> ggml-metal).
-// Instead, the C++ namespace functions are referenced as weak symbols
-// here and the dylib is built with `-undefined dynamic_lookup` on
-// macOS. The dynamic linker resolves the symbols at runtime from
-// whatever loaded `llama-common` happens to be in the process. When
-// the foundation is not loaded (e.g. unit tests, custom embeds) the
-// weak pointers are null and this helper is a no-op.
+// Linking note: `tessera_debug::*` lives in the `llama-tessera-debug`
+// static target (common/tessera-debug/). The link dependency is
+// declared in ggml/src/ggml-metal/CMakeLists.txt; symbols resolve at
+// link time. No weak redeclarations, no `-undefined dynamic_lookup`.
 //
 
 #import "metal-dump-dequant.h"
@@ -49,18 +43,6 @@
 #include <cstdio>
 #include <vector>
 
-namespace tessera_debug {
-    // Weak redeclarations. The strong definitions live in `common/`
-    // (compiled into `libllama-common.dylib`); on macOS the dynamic
-    // linker resolves the weak references at load time. If the strong
-    // definitions are not loaded, the function pointers are null and
-    // `metal_dump_dequant` early-returns.
-    __attribute__((weak)) bool dequant_debug_enabled();
-    __attribute__((weak)) void open_dequant_writer(const char * tensor_name, int64_t rows, int64_t cols);
-    __attribute__((weak)) void write_dequant_row(int64_t row_idx, const float * data, int64_t n);
-    __attribute__((weak)) void close_dequant_writer();
-}
-
 void metal_dump_dequant(
         ggml_metal_device_t dev,
         const struct ggml_tensor * src0,
@@ -69,9 +51,6 @@ void metal_dump_dequant(
         const char * name) {
     (void) dev;
     if (src0 == nullptr || name == nullptr) {
-        return;
-    }
-    if (tessera_debug::dequant_debug_enabled == nullptr) {
         return;
     }
     if (!tessera_debug::dequant_debug_enabled()) {
@@ -107,12 +86,6 @@ void metal_dump_dequant(
 
     std::vector<float> host_buf((size_t) expected_els);
     traits->to_float(src0->data, host_buf.data(), expected_els);
-
-    if (tessera_debug::open_dequant_writer == nullptr ||
-        tessera_debug::write_dequant_row   == nullptr ||
-        tessera_debug::close_dequant_writer == nullptr) {
-        return;
-    }
 
     // The dump is laid out as `rows` rows of `cols` F32 values. The
     // reference dequant is row-major, so row r starts at host_buf +
