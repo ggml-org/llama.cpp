@@ -22,7 +22,15 @@ Two workloads can fill this idle time:
 
 ## 2. Idle Window Map
 
-Window A - Page decode (PRIMARY):
+Note: the occupancy-optimized kernel_TILE640_MATMUL uses cooperative decode
+(all SIMD groups reconstruct the page in parallel), which eliminates Window A.
+The interleaved variant deliberately reverts to si==0-only decode to recreate
+Window A as usable idle time for drafter/KV work. This is a throughput trade:
+~3-4x longer decode phase, but the idle SIMD groups produce drafter tokens
+and KV quantization for free. The runtime selects the kernel variant based
+on whether speculative decoding or KV management is active.
+
+Window A - Page decode (PRIMARY, interleaved variant only):
   Location: lines 11404-11450, si==0 decodes, si!=0 idle
   Duration: ~40-60 cycles per page, nt pages per row
   Available: SIMD groups 1..min(3, token_count-1)
