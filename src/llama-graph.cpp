@@ -1403,16 +1403,25 @@ void llm_graph_context::cb(ggml_tensor * cur, const char * name, int il) const {
 
 bool llm_graph_context::imatrix_observer_enabled(
         const char * weight_name) const {
-    return cparams.imatrix_observers &&
-           (!cparams.imatrix_observer_filter ||
-            cparams.imatrix_observer_filter(
-                weight_name, cparams.imatrix_observer_filter_data));
+    if (!cparams.imatrix_observers) {
+        return false;
+    }
+    const int scope = imatrix_observer_scope();
+    GGML_ASSERT(scope >= LLAMA_OBSERVER_SCOPE_VERIFIER &&
+                scope <= LLAMA_OBSERVER_SCOPE_DRAFTER);
+    const auto filter = cparams.imatrix_observer_filter[scope];
+    if (filter == nullptr) {
+        return true;
+    }
+    return filter(weight_name, cparams.imatrix_observer_filter_data[scope]);
 }
 
 std::string llm_graph_context::imatrix_observer_name(const char * weight_name) const {
-    if (is_drafter_arch()) {
-        return std::string("dft.") + weight_name;
-    }
+    // The verifier/drafter split is owned by the per-scope IMatrixCollector
+    // bound to this context, not by a name prefix. The graph build must
+    // hand the bare weight name to ggml so that downstream tooling can
+    // identify the observer by its tensor name only.
+    (void) this; // scope is resolved at filter time, not here
     return std::string(weight_name);
 }
 

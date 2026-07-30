@@ -1147,13 +1147,31 @@ void llama_context::set_abort_callback(bool (*abort_callback)(void * data), void
 void llama_context::set_imatrix_observer_filter(
         llama_imatrix_observer_filter filter,
         void * user_data) {
-    cparams.imatrix_observer_filter = filter;
-    cparams.imatrix_observer_filter_data = user_data;
-    ++cparams.imatrix_observer_epoch;
+    if (this == nullptr) {
+        return;
+    }
+    const int scope = cparams.imatrix_observer_scope;
+    GGML_ASSERT(scope >= LLAMA_OBSERVER_SCOPE_VERIFIER &&
+                scope <= LLAMA_OBSERVER_SCOPE_DRAFTER);
+    cparams.imatrix_observer_filter[scope] = filter;
+    cparams.imatrix_observer_filter_data[scope] = user_data;
+    ++cparams.imatrix_observer_epoch[scope];
+}
+
+void llama_context::set_imatrix_observer_scope(enum llama_observer_scope scope) {
+    GGML_ASSERT(scope >= LLAMA_OBSERVER_SCOPE_VERIFIER &&
+                scope <= LLAMA_OBSERVER_SCOPE_DRAFTER);
+    cparams.imatrix_observer_scope = scope;
 }
 
 void llama_context::bump_imatrix_observer_epoch() {
-    ++cparams.imatrix_observer_epoch;
+    if (this == nullptr) {
+        return;
+    }
+    const int scope = cparams.imatrix_observer_scope;
+    GGML_ASSERT(scope >= LLAMA_OBSERVER_SCOPE_VERIFIER &&
+                scope <= LLAMA_OBSERVER_SCOPE_DRAFTER);
+    ++cparams.imatrix_observer_epoch[scope];
 }
 
 void llama_context::set_embeddings(bool value) {
@@ -3790,10 +3808,25 @@ void llama_set_imatrix_observer_filter(
         llama_context * ctx,
         llama_imatrix_observer_filter filter,
         void * user_data) {
+    if (ctx == nullptr) {
+        return;
+    }
     ctx->set_imatrix_observer_filter(filter, user_data);
 }
 
+void llama_set_imatrix_observer_scope(
+        llama_context * ctx,
+        enum llama_observer_scope scope) {
+    if (ctx == nullptr) {
+        return;
+    }
+    ctx->set_imatrix_observer_scope(scope);
+}
+
 void llama_bump_imatrix_observer_epoch(llama_context * ctx) {
+    if (ctx == nullptr) {
+        return;
+    }
     ctx->bump_imatrix_observer_epoch();
 }
 

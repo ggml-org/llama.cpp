@@ -2621,6 +2621,10 @@ int main(int argc, char ** argv) {
         LOG_ERR("%s : failed to init\n", __func__);
         return 1;
     }
+    // Bind the verifier collector to the verifier scope. The drafter
+    // (if any) is wired up below in the spec hook and binds to the
+    // DRAFTER scope on its own context.
+    llama_set_imatrix_observer_scope(ctx, LLAMA_OBSERVER_SCOPE_VERIFIER);
     llama_set_imatrix_observer_filter(
         ctx, IMatrixCollector::observer_filter, &g_collector);
 
