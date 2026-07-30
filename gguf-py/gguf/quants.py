@@ -1329,7 +1329,7 @@ class IQ1_M(__Quant, qtype=GGMLQuantizationType.IQ1_M):
 
 
 class IQ2_NL(__Quant, qtype=GGMLQuantizationType.IQ2_NL):
-    kvalues = (-127, -38, 38, 127)
+    kvalues = (-127, -49, 9, 88)
 
     @classmethod
     def dequantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:
@@ -1349,7 +1349,7 @@ class IQ2_NL(__Quant, qtype=GGMLQuantizationType.IQ2_NL):
 
 
 class IQ3_NL(__Quant, qtype=GGMLQuantizationType.IQ3_NL):
-    kvalues = (-127, -79, -45, -14, 14, 45, 79, 127)
+    kvalues = (-127, -78, -45, -18, 3, 30, 62, 107)
 
     @classmethod
     def dequantize_blocks(cls, blocks: np.ndarray) -> np.ndarray:

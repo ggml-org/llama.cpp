@@ -24,6 +24,9 @@
 #define N_R0_Q1_0 8
 #define N_SG_Q1_0 2
 
+#define N_R0_Q2_0 8
+#define N_SG_Q2_0 2
+
 #define N_R0_Q4_0 4
 #define N_SG_Q4_0 2
 
@@ -618,6 +621,11 @@ typedef struct {
     int32_t  s0;
     int32_t  p0;
 } ggml_metal_kargs_col2im_1d;
+
+typedef struct {
+    int32_t T;
+    int32_t C;
+} ggml_metal_kargs_snake;
 
 typedef struct {
     int32_t  IC;

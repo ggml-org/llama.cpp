@@ -1137,17 +1137,17 @@ GGML_TABLE_BEGIN(uint32_t, iq3s_grid, 512)
     0x0f090307, 0x0f090501, 0x0f090b01, 0x0f0b0505, 0x0f0b0905, 0x0f0d0105, 0x0f0d0703, 0x0f0f0101,
 GGML_TABLE_END()
 
-// TODO: fix name to kvalues_iq4_nl
-GGML_TABLE_BEGIN(int8_t, kvalues_iq4nl, 16)
-    -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113,
-GGML_TABLE_END()
-
 GGML_TABLE_BEGIN(int8_t, kvalues_iq2nl, 4)
-    -127, -38, 38, 127,
+    -127, -49, 9, 88,
 GGML_TABLE_END()
 
 GGML_TABLE_BEGIN(int8_t, kvalues_iq3nl, 8)
-    -127, -79, -45, -14, 14, 45, 79, 127,
+    -127, -78, -45, -18, 3, 30, 62, 107,
+GGML_TABLE_END()
+
+// TODO: fix name to kvalues_iq4_nl
+GGML_TABLE_BEGIN(int8_t, kvalues_iq4nl, 16)
+    -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113,
 GGML_TABLE_END()
 
 // e2m1 values (doubled), shared by MXFP4 and NVFP4

@@ -7,6 +7,11 @@
 #extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
 #extension GL_EXT_shader_16bit_storage : require
 
+#ifdef USE_OCP_FP4
+#extension GL_EXT_float_e2m1 : require
+#extension GL_EXT_float_e4m3 : require
+#endif
+
 #if defined(DATA_A_F32)
 #define QUANT_K 1
 #define QUANT_R 1
@@ -204,6 +209,30 @@ struct block_q1_0
 #define QUANT_R QUANT_R_Q1_0
 #define QUANT_AUXF 1
 #define A_TYPE block_q1_0
+#endif
+
+#define QUANT_K_Q2_0 64
+#define QUANT_R_Q2_0 1
+
+struct block_q2_0
+{
+    float16_t d;
+    uint8_t qs[QUANT_K_Q2_0 / 4];
+};
+
+struct block_q2_0_packed16
+{
+    float16_t d;
+    uint16_t qs[QUANT_K_Q2_0 / 8];
+};
+
+#if defined(DATA_A_Q2_0)
+#define QUANT_K QUANT_K_Q2_0
+#define QUANT_R QUANT_R_Q2_0
+#define QUANT_AUXF 1
+#define A_TYPE block_q2_0
+#define A_TYPE_PACKED16 block_q2_0_packed16
+#define DATA_A_QUANT_LEGACY
 #endif
 
 #define QUANT_K_Q8_1 32
@@ -1730,6 +1759,12 @@ struct block_nvfp4
     uint8_t qs[QUANT_K_NVFP4 / 2];
 };
 
+struct block_nvfp4_packed16
+{
+    uint16_t d[QUANT_K_NVFP4 / 16 / 2];
+    uint16_t qs[QUANT_K_NVFP4 / 2 / 2];
+};
+
 struct block_nvfp4_packed32
 {
     uint32_t d[QUANT_K_NVFP4 / 16 / 4];
@@ -1741,6 +1776,7 @@ struct block_nvfp4_packed32
 #define QUANT_R QUANT_R_NVFP4
 #define QUANT_AUXF 1
 #define A_TYPE block_nvfp4
+#define A_TYPE_PACKED16 block_nvfp4_packed16
 #define A_TYPE_PACKED32 block_nvfp4_packed32
 #endif
 
@@ -1764,14 +1800,16 @@ void init_iq_shmem(uvec3 wgsize)
 #endif
 
 #if defined(DATA_A_MXFP4) || defined(DATA_A_NVFP4)
+#if !defined(USE_OCP_FP4)
 const int8_t kvalues_mxfp4_const[16] = {
     int8_t(0), int8_t(1), int8_t(2), int8_t(3), int8_t(4), int8_t(6), int8_t(8), int8_t(12),
     int8_t(0), int8_t(-1), int8_t(-2), int8_t(-3), int8_t(-4), int8_t(-6), int8_t(-8), int8_t(-12),
 };
 
 shared int8_t kvalues_mxfp4[16];
+#endif
 
-#if defined(DATA_A_NVFP4)
+#if defined(DATA_A_NVFP4) && !defined(USE_OCP_FP4)
 // UE4M3 scale in NVFP4 blocks use only 7 bits; sign (bit 7) is always zero.
 shared float ue4m3_fp32_lut[128];
 
@@ -1789,6 +1827,7 @@ float ue4m3_to_fp32_build(uint u) {
 }
 #endif
 
+#if !defined(USE_OCP_FP4)
 #define NEEDS_INIT_IQ_SHMEM
 void init_iq_shmem(uvec3 wgsize)
 {
@@ -1803,6 +1842,7 @@ void init_iq_shmem(uvec3 wgsize)
 #endif
     barrier();
 }
+#endif
 #endif
 
 // returns the bfloat value in the low 16b.
@@ -1838,8 +1878,21 @@ float e8m0_to_fp32(uint8_t x) {
 }
 
 #if defined(DATA_A_NVFP4)
+#if defined(USE_OCP_FP4)
+floate4m3_t ue4m3_from_bits(uint8_t x) {
+    if (x == uint8_t(0x7F)) {
+        return floate4m3_t(0.0);
+    }
+    return uintBitsToFloate4m3EXT(x);
+}
+#endif
+
 float ue4m3_to_fp32(uint8_t x) {
+#if defined(USE_OCP_FP4)
+    return float(ue4m3_from_bits(x));
+#else
     return ue4m3_fp32_lut[uint(x)];
+#endif
 }
 #endif
 

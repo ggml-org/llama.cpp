@@ -345,7 +345,7 @@ static void htp_argsort_f32_##ne00##_##order_name(unsigned int n, unsigned int i
     int32_t * indices_buf = (int32_t *) (spad + values_size);                                                  \
     uint32_t nb01 = src0->nb[1];                                                                               \
     uint32_t nb1 = dst->nb[1];                                                                                 \
-    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[i] : NULL;                                    \
+    struct htp_thread_trace * tr = &octx->ctx->trace[i];                                                       \
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, start_row);                                              \
     for (uint32_t r = start_row; r < end_row; r++) {                                                           \
         uint32_t src_offset = r * nb01;                                                                        \
@@ -411,7 +411,7 @@ static void htp_argsort_f32_fallback(unsigned int n, unsigned int i, void * data
     const HVX_Vector ind_init_vec = *(HVX_Vector *)argosrt_ramp_lut;
     const HVX_Vector ind_diff_vec = Q6_V_vsplat_R(32);
 
-    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[i] : NULL;
+    struct htp_thread_trace * tr = &octx->ctx->trace[i];
     htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, start_row);
 
     for (uint32_t r = start_row; r < end_row; r++) {

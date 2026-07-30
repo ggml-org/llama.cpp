@@ -620,6 +620,16 @@ static hf_cache::hf_file find_best_mtp(const hf_cache::hf_files & files,
     return find_best_sibling(files, model, "mtp-");
 }
 
+static hf_cache::hf_file find_best_eagle3(const hf_cache::hf_files & files,
+                                          const std::string        & model) {
+    return find_best_sibling(files, model, "eagle3-");
+}
+
+static hf_cache::hf_file find_best_dflash(const hf_cache::hf_files & files,
+                                          const std::string        & model) {
+    return find_best_sibling(files, model, "dflash-");
+}
+
 static bool gguf_filename_is_model(const std::string & filepath) {
     if (!string_ends_with(filepath, ".gguf")) {
         return false;
@@ -632,7 +642,9 @@ static bool gguf_filename_is_model(const std::string & filepath) {
 
     return filename.find("mmproj")  == std::string::npos &&
            filename.find("imatrix") == std::string::npos &&
-           filename.find("mtp-")    == std::string::npos;
+           filename.find("mtp-")    == std::string::npos &&
+           filename.find("eagle3-") == std::string::npos &&
+           filename.find("dflash-") == std::string::npos;
 }
 
 static hf_cache::hf_file find_best_model(const hf_cache::hf_files & files,
@@ -739,6 +751,12 @@ common_download_hf_plan common_download_get_hf_plan(const common_params_model & 
     }
     if (opts.download_mtp) {
         plan.mtp = find_best_mtp(all, primary.path);
+    }
+    if (opts.download_dflash) {
+        plan.dflash = find_best_dflash(all, primary.path);
+    }
+    if (opts.download_eagle3) {
+        plan.eagle3 = find_best_eagle3(all, primary.path);
     }
 
     return plan;
@@ -911,8 +929,10 @@ std::vector<common_cached_model_info> common_list_cached_models() {
     for (const auto & f : files) {
         auto split = get_gguf_split_info(f.path);
         if (split.index != 1 || split.tag.empty() ||
-            split.prefix.find("mmproj") != std::string::npos ||
-            split.prefix.find("mtp-")   != std::string::npos) {
+            split.prefix.find("mmproj")  != std::string::npos ||
+            split.prefix.find("mtp-")    != std::string::npos ||
+            split.prefix.find("eagle3-") != std::string::npos ||
+            split.prefix.find("dflash-") != std::string::npos) {
             continue;
         }
         if (seen.insert(f.repo_id + ":" + split.tag).second) {

@@ -19,6 +19,7 @@
 #include "ggml-common.h"
 #include "htp-ctx.h"
 #include "htp-ops.h"
+#include "htp-tensor.h"
 #include "htp-vtcm.h"
 #include "hex-profile.h"
 
@@ -397,7 +398,7 @@ static void unary_task_f32_##NAME(unsigned int nth, unsigned int ith, void * dat
     struct htp_ops_context * octx = uctx->octx;                                                                     \
     const struct htp_tensor * src = octx->src[0];                                                                   \
     const struct htp_tensor * dst = octx->dst;                                                                      \
-    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;                                       \
+    struct htp_thread_trace * tr = &octx->ctx->trace[ith];                                                          \
                                                                                                                     \
     htp_unary_preamble;                                                                                             \
                                                                                                                     \
@@ -558,7 +559,7 @@ static void unary_task_f32_tiled_##NAME(unsigned int nth, unsigned int ith, void
     struct htp_ops_context * octx = uctx->octx;                                                                     \
     const struct htp_tensor * src = octx->src[0];                                                                   \
     const struct htp_tensor * dst = octx->dst;                                                                      \
-    struct htp_thread_trace * tr = octx->ctx ? &octx->ctx->trace[ith] : NULL;                                       \
+    struct htp_thread_trace * tr = &octx->ctx->trace[ith];                                                          \
                                                                                                                     \
     htp_unary_preamble;                                                                                             \
                                                                                                                     \
@@ -922,17 +923,11 @@ static int execute_op_unary_f32(struct htp_ops_context * octx) {
 }
 
 int op_unary(struct htp_ops_context * octx) {
-    int err = HTP_STATUS_OK;
-
     switch (octx->src[0]->type) {
         case HTP_TYPE_F32:
-            err = execute_op_unary_f32(octx);
-            break;
+            return execute_op_unary_f32(octx);
 
         default:
-            err = HTP_STATUS_NO_SUPPORT;
-            break;
+            return HTP_STATUS_NO_SUPPORT;
     }
-
-    return err;
 }
