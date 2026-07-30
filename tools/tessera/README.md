@@ -392,3 +392,25 @@ both its logical-source and assembled-artifact digests.
   --store /Volumes/Julian\ T7/calibration/evidence \
   --run-id gemma4-pilot
 ```
+
+## PrefixQuant outlier identification
+
+`kv_prefix_identifier.py` is the offline first step of the PrefixQuant
+(arXiv:2410.05265) integration. It reads a `llama-imatrix` GGUF, computes
+the per-position max activation magnitude for each tensor, and flags
+positions whose max exceeds `eta` times the per-tensor median
+(`eta=64` per paper). The number of prefix candidates is
+`ceil(max(per-tensor outlier count))`, taken from the embedding tensor
+when present, otherwise from the widest tensor in the imatrix. The output
+uses `llama.tessera.kv-prefix-tokens.v1` and records the per-tensor
+outlier counts and the source imatrix path so the choice of
+`outlier_count` is auditable. The actual KV-prefix loader is a future
+runtime layer; this tool only identifies the tokens.
+
+```sh
+python tools/tessera/kv_prefix_identifier.py \
+  --imatrix /Volumes/Julian\ T7/calibration/gemma4-rich.imatrix.gguf \
+  --output /Volumes/Julian\ T7/calibration/gemma4-kv-prefix-tokens.json \
+  --model-family gemma4 \
+  --threshold 64
+```
