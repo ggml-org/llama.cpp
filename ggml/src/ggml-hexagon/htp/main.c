@@ -18,6 +18,7 @@
 #include <qurt_memory.h>
 #include <remote.h>
 #include <string.h>
+#include <stdatomic.h>
 
 #include "hex-utils.h"
 #include "hex-dma.h"
@@ -692,8 +693,36 @@ static inline void profile_stop(uint32_t mode, struct profile_data * d) {
     }
 }
 
+static int op_sync(struct htp_ops_context * octx) {
+    struct htp_context *ctx = octx->ctx;
+
+    const struct htp_tensor * sync = octx->src[0];
+    atomic_uint* sync_token = (atomic_uint *)sync->data;
+
+    uint32_t seq   = sync_token[1];
+    uint32_t spins = 0;
+    while (1) {
+        Q6_dccleaninva_A((void *)sync_token);
+        asm volatile ("syncht" : : : "memory");
+        if (atomic_load(sync_token) == 0) {
+            break;
+        }
+        spins++;
+        if (spins % (10*1024*1024) == 0) {
+            FARF(ALWAYS, "ggml-hex: sync-wait : token %p spins %u seq %u\n", sync_token, spins, seq);
+        }
+        hex_pause();
+    }
+
+    FARF(HIGH, "ggml-hex: sync-done : token %p spins %u seq %u\n", sync_token, spins, seq);
+    return HTP_STATUS_OK;
+}
+
 static int execute_op(struct htp_ops_context * octx) {
     switch (octx->op) {
+        case HTP_OP_SYNC:
+            return op_sync(octx);
+
         case HTP_OP_MUL_MAT:
         case HTP_OP_MUL_MAT_ADD:
             return op_matmul(octx);
@@ -818,7 +847,7 @@ static inline bool reuse_buf(struct htp_context *ctx, uint32_t *m_reuse, struct 
 
 static inline void drop_mmap(struct htp_context *ctx, struct htp_mmap *m) {
     if (m->size) {
-        FARF(HIGH, "unmap : fd %u base %p size %u", m->fd, (void*) m->base, (uint32_t) m->size);
+        FARF(ALWAYS, "unmap : fd %u base %p size %u", m->fd, (void*) m->base, (uint32_t) m->size);
 #if __HVX_ARCH__ > 73
         HAP_munmap2((void *) m->base, m->size);
 #else
@@ -856,7 +885,7 @@ static inline void mmap_buf(struct htp_context *ctx, struct htp_buf_desc *b) {
             m->fd     = b->fd;
             m->size   = b->size;
 
-            FARF(HIGH, "mmap : fd %u base %p size %u", m->fd, (void*) m->base, (uint32_t) m->size);
+            FARF(ALWAYS, "mmap : fd %u base %p size %u", m->fd, (void*) m->base, (uint32_t) m->size);
             return;
         }
     }
