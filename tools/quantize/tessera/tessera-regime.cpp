@@ -1,0 +1,263 @@
+#include "tessera-regime.h"
+
+#include <cmath>
+#include <cstring>
+#include <algorithm>
+
+// --- family inference ---
+
+struct ts_family_pattern {
+    const char * fragment;
+    const char * family;
+};
+
+// ordered by specificity: longer fragments first to avoid prefix collisions
+static const ts_family_pattern ts_family_patterns[] = {
+    { "attn_output", "attn_out"  },
+    { "attn_out",    "attn_out"  },
+    { "attn_q",      "attn_q"    },
+    { "attn_k",      "attn_k"    },
+    { "attn_v",      "attn_v"    },
+    { "ffn_gate",    "ffn_gate"  },
+    { "ffn_up",      "ffn_up"    },
+    { "ffn_down",    "ffn_down"  },
+};
+
+std::string ts_regime_infer_family(const char * tensor_name) {
+    if (!tensor_name) {
+        return "unknown";
+    }
+    for (const auto & p : ts_family_patterns) {
+        if (strstr(tensor_name, p.fragment)) {
+            return p.family;
+        }
+    }
+    return "unknown";
+}
+
+// --- regime classification ---
+
+static bool ts_family_contains(const std::string & family, const char * sub) {
+    return family.find(sub) != std::string::npos;
+}
+
+ts_regime_routing ts_regime_classify(const ts_regime_descriptor * desc) {
+    ts_regime_routing r;
+    r.tensor_name = desc->tensor_name;
+
+    const float kurt = desc->kurtosis;
+    const float er   = desc->eff_rank;
+    const std::string & fam = desc->family;
+
+    // massive outliers in down_proj (DuQuant observation)
+    if (kurt > 10.0f && ts_family_contains(fam, "down")) {
+        r.expert     = TS_EXPERT_DARTQUANT;
+        r.reason     = "kurtosis > 10 in down_proj: rotation handles massive outliers";
+        r.confidence = 0.95f;
+        return r;
+    }
+
+    // heavy tails: rotation or permutation
+    if (kurt > 10.0f) {
+        r.expert     = TS_EXPERT_DARTQUANT;
+        r.reason     = "kurtosis > 10: distribution-aware rotation";
+        r.confidence = 0.85f;
+        return r;
+    }
+    if (kurt > 5.0f) {
+        r.expert     = TS_EXPERT_CHAMPQ;
+        r.reason     = "kurtosis > 5: channel permutation smooths heavy tails";
+        r.confidence = 0.75f;
+        return r;
+    }
+
+    // spectrally compact: low-rank residual helps
+    if (er < 0.15f) {
+        r.expert     = TS_EXPERT_FLRQ;
+        r.reason     = "eff_rank < 0.15: highly compact spectrum, factored low-rank";
+        r.confidence = 0.85f;
+        return r;
+    }
+    if (er < 0.3f) {
+        r.expert     = TS_EXPERT_LRQ;
+        r.reason     = "eff_rank < 0.3: low-rank residual captures structure";
+        r.confidence = 0.80f;
+        return r;
+    }
+
+    // attention K/V projections are typically well-behaved
+    if (fam == "attn_k" || fam == "attn_v") {
+        r.expert     = TS_EXPERT_AWQ;
+        r.reason     = "attention K/V: well-behaved, diagonal scaling sufficient";
+        r.confidence = 0.85f;
+        return r;
+    }
+
+    // well-conditioned, light tails
+    if (er > 0.7f && kurt < 3.0f) {
+        r.expert     = TS_EXPERT_AWQ;
+        r.reason     = "well-conditioned (eff_rank > 0.7, kurtosis < 3): plain AWQ";
+        r.confidence = 0.90f;
+        return r;
+    }
+
+    r.expert     = TS_EXPERT_AWQ;
+    r.reason     = "default regime: AWQ diagonal scaling";
+    r.confidence = 0.50f;
+    return r;
+}
+
+std::vector<ts_regime_routing> ts_regime_route_all(
+    const ts_regime_descriptor * descs, int64_t n_tensors) {
+    std::vector<ts_regime_routing> routings;
+    routings.reserve(n_tensors);
+    for (int64_t i = 0; i < n_tensors; i++) {
+        routings.push_back(ts_regime_classify(&descs[i]));
+    }
+    return routings;
+}
+
+// --- descriptor computation ---
+
+static float ts_regime_kurtosis(const float * x, int64_t n) {
+    if (n < 4) {
+        return 3.0f;
+    }
+    float mean = 0.0f;
+    for (int64_t i = 0; i < n; i++) {
+        mean += x[i];
+    }
+    mean /= (float)n;
+
+    float m2 = 0.0f, m4 = 0.0f;
+    for (int64_t i = 0; i < n; i++) {
+        float d = x[i] - mean;
+        float d2 = d * d;
+        m2 += d2;
+        m4 += d2 * d2;
+    }
+    m2 /= (float)n;
+    m4 /= (float)n;
+
+    if (m2 < 1e-24f) {
+        return 3.0f;
+    }
+    // excess kurtosis
+    return m4 / (m2 * m2) - 3.0f;
+}
+
+static float ts_regime_eff_rank(const float * x, int64_t n) {
+    if (n < 1) {
+        return 0.0f;
+    }
+    float sum = 0.0f;
+    for (int64_t i = 0; i < n; i++) {
+        sum += fabsf(x[i]);
+    }
+    if (sum < 1e-24f) {
+        return 0.0f;
+    }
+    // spectral entropy: H = -sum(p * log(p)), eff_rank = exp(H) / n
+    float H = 0.0f;
+    for (int64_t i = 0; i < n; i++) {
+        float p = fabsf(x[i]) / sum;
+        if (p > 1e-12f) {
+            H -= p * logf(p);
+        }
+    }
+    return expf(H) / (float)n;
+}
+
+static float ts_regime_percentile(const float * x, int64_t n, float pct) {
+    if (n < 1) {
+        return 0.0f;
+    }
+    std::vector<float> sorted(x, x + n);
+    std::sort(sorted.begin(), sorted.end());
+    float idx = pct * (float)(n - 1);
+    int64_t lo = (int64_t)idx;
+    int64_t hi = std::min(lo + 1, n - 1);
+    float frac = idx - (float)lo;
+    return sorted[lo] * (1.0f - frac) + sorted[hi] * frac;
+}
+
+ts_regime_descriptor ts_regime_compute_descriptor(
+    const char * tensor_name,
+    const float * weights, int64_t out_dim, int64_t in_dim,
+    const float * imatrix_data, int64_t imatrix_dim) {
+
+    ts_regime_descriptor desc;
+    desc.tensor_name    = tensor_name ? tensor_name : "";
+    desc.family         = ts_regime_infer_family(tensor_name);
+    desc.out_dim        = out_dim;
+    desc.in_dim         = in_dim;
+    desc.modality       = 0;
+    desc.kurtosis       = 3.0f;
+    desc.eff_rank       = 0.5f;
+    desc.mean_magnitude = 0.0f;
+    desc.p99            = 0.0f;
+
+    if (imatrix_data && imatrix_dim > 0) {
+        desc.kurtosis       = ts_regime_kurtosis(imatrix_data, imatrix_dim);
+        desc.eff_rank       = ts_regime_eff_rank(imatrix_data, imatrix_dim);
+        desc.p99            = ts_regime_percentile(imatrix_data, imatrix_dim, 0.99f);
+
+        float sum = 0.0f;
+        for (int64_t i = 0; i < imatrix_dim; i++) {
+            sum += fabsf(imatrix_data[i]);
+        }
+        desc.mean_magnitude = sum / (float)imatrix_dim;
+    } else if (weights && out_dim > 0 && in_dim > 0) {
+        // fallback: derive stats from weight magnitudes per input channel
+        int64_t n = in_dim;
+        std::vector<float> col_mag(n, 0.0f);
+        for (int64_t j = 0; j < in_dim; j++) {
+            float s = 0.0f;
+            for (int64_t i = 0; i < out_dim; i++) {
+                s += fabsf(weights[i * in_dim + j]);
+            }
+            col_mag[j] = s / (float)out_dim;
+        }
+        desc.kurtosis       = ts_regime_kurtosis(col_mag.data(), n);
+        desc.eff_rank       = ts_regime_eff_rank(col_mag.data(), n);
+        desc.p99            = ts_regime_percentile(col_mag.data(), n, 0.99f);
+
+        float sum = 0.0f;
+        for (int64_t j = 0; j < n; j++) {
+            sum += col_mag[j];
+        }
+        desc.mean_magnitude = sum / (float)n;
+    }
+
+    return desc;
+}
+
+// --- summary ---
+
+ts_regime_summary ts_regime_summarize(const std::vector<ts_regime_routing> * routings,
+                                      const ts_regime_descriptor * descs,
+                                      int64_t n_tensors) {
+    ts_regime_summary s;
+    memset(s.count_per_expert, 0, sizeof(s.count_per_expert));
+    s.mean_kurtosis = 0.0f;
+    s.mean_eff_rank = 0.0f;
+
+    if (routings) {
+        for (const auto & r : *routings) {
+            if (r.expert >= 0 && r.expert < TS_EXPERT_COUNT) {
+                s.count_per_expert[r.expert]++;
+            }
+        }
+    }
+
+    if (descs && n_tensors > 0) {
+        for (int64_t i = 0; i < n_tensors; i++) {
+            s.mean_kurtosis += descs[i].kurtosis;
+            s.mean_eff_rank += descs[i].eff_rank;
+        }
+        s.mean_kurtosis /= (float)n_tensors;
+        s.mean_eff_rank /= (float)n_tensors;
+    }
+
+    return s;
+}
