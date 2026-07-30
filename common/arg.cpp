@@ -4388,6 +4388,26 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, int value) { params.optimizer_restart_every = value; }
     ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
     add_opt(common_arg(
+        {"--lr-scheduler"}, "TYPE",
+        "QLoRA learning-rate scheduler: constant or cosine (default: constant)",
+        [](common_params & params, const std::string & value) {
+            if (value != "constant" && value != "cosine") {
+                throw std::invalid_argument("--lr-scheduler must be constant or cosine");
+            }
+            params.lr_scheduler = value;
+        }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
+        {"--warmup-steps"}, "N",
+        "QLoRA linear learning-rate warmup steps (default: 0)",
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("--warmup-steps must be non-negative");
+            }
+            params.warmup_steps = value;
+        }
+    ).set_examples({ LLAMA_EXAMPLE_FINETUNE_QLORA }));
+    add_opt(common_arg(
         {"--train-on-prompt"},
         "compute loss on prompt tokens too, not just the response (default: response-only loss)",
         [](common_params & params) { params.train_on_prompt = true; }

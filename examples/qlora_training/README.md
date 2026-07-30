@@ -67,6 +67,7 @@ Trains LoRA adapters on a quantized GGUF model.
   --train-file data/train.jsonl \
   --lora-rank 16 --lora-alpha 16 \
   -c 4096 -b 4096 -ub 512 \
+  --lr-scheduler cosine --warmup-steps 10 -lr-min 1e-6 \
   --save-every 10 \
   --lora-out ~/adapter.gguf \
   --epochs 3 --seed 42
@@ -80,6 +81,7 @@ Trains LoRA adapters on a quantized GGUF model.
   --train-file data/train.jsonl \
   --lora-rank 16 --lora-alpha 16 \
   -ngl 13 -c 14336 -b 14336 -ub 1024 \
+  --lr-scheduler cosine --warmup-steps 10 -lr-min 1e-6 \
   --save-every 8 \
   --lora-out ~/nemotron-lora.gguf \
   --epochs 3 --seed 42
@@ -109,7 +111,18 @@ Trains LoRA adapters on a quantized GGUF model.
 | `-ub` / `--ubatch-size` | `512` | GPU micro-batch tokens; controls VRAM vs. step time |
 | `-ngl` | `999` | GPU layers to offload |
 | `-lr` / `--learning-rate` | `1e-4` | AdamW learning rate |
+| `--lr-scheduler` | `constant` | Learning-rate schedule: `constant` or `cosine` |
+| `--warmup-steps` | `0` | Linear warmup over N logical training steps |
+| `-lr-min` / `--learning-rate-min` | `-1` | Cosine floor; values below 0 use 0 |
 | `--seed` | `42` | Random seed for LoRA init |
+
+For SFT, one scheduler step is one completed dataset window. For GRPO, it is
+one completed GRPO iteration. The recommended `-b == -c` configuration performs
+one optimizer update per SFT scheduler step. Micro-batches used for gradient
+accumulation do not advance the schedule. Checkpoints store the completed
+scheduler step, so warmup and cosine decay continue from the same position after
+resume. Use the same scheduler, warmup, base learning rate, and minimum
+learning rate flags when resuming.
 
 ### Resume from a checkpoint
 
