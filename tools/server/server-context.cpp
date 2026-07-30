@@ -97,6 +97,7 @@ struct server_batch {
 
     ~server_batch() {
         if (batch.pos != nullptr) {
+            clear();
             llama_batch_free(batch);
         }
     }
