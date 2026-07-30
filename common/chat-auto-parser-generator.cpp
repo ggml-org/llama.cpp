@@ -13,6 +13,12 @@
 
 using json = nlohmann::ordered_json;
 
+// Tool-call markers arrive with whatever whitespace the template renders after them
+// ("<tool_call>\n"), but models vary it ("<tool_call> \n"). Markers are used as grammar
+// triggers, parser literals and until() needles, so demanding the exact bytes silently
+// turns a tool call into plain content. Trimming is safe: every marker is followed by
+// p.space(), which takes any whitespace run (build_parser() trims reasoning markers too).
+
 // Helper to iterate over tools/functions
 static void foreach_function(const json & tools, const std::function<void(const json &)> & fn) {
     for (const auto & tool : tools) {
@@ -77,8 +83,11 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
     // Build grammar if tools are present
     bool has_tools =
         autoparser.tools.format.mode != tool_format::NONE && inputs.tools.is_array() && !inputs.tools.empty();
-    std::string trigger_marker = !autoparser.tools.format.section_start.empty() ? autoparser.tools.format.section_start :
-                                                                                  autoparser.tools.format.per_call_start;
+    // A lazy grammar only engages once its trigger is complete, so it can never
+    // constrain whitespace that is part of the trigger.
+    std::string trigger_marker = trim_trailing_whitespace(
+        !autoparser.tools.format.section_start.empty() ? autoparser.tools.format.section_start :
+                                                        autoparser.tools.format.per_call_start);
 
     bool has_response_format = !inputs.json_schema.empty() && inputs.json_schema.is_object();
     bool include_grammar = has_response_format || (has_tools &&
@@ -370,7 +379,9 @@ common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context
         tool_calls = p.optional(tool_calls);
     }
 
-    std::string trigger_marker       = !format.section_start.empty() ? format.section_start : format.per_call_start;
+    // A needle that misses swallows the whole tool call as content.
+    std::string trigger_marker       = trim_trailing_whitespace(
+        !format.section_start.empty() ? format.section_start : format.per_call_start);
     auto        content_before_tools = trigger_marker.empty() ? p.eps() : p.until(trigger_marker);
     return ctx.reasoning_parser + p.optional(p.content(content_before_tools)) + tool_calls + p.end();
 }
@@ -473,7 +484,9 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
     common_peg_parser tool_calls = p.eps();
 
     if (!format.per_call_start.empty()) {
-        auto wrapped_call = format.per_call_start + p.space() + tool_choice + p.space() + format.per_call_end;
+        // p.space() below already absorbs the marker's trailing whitespace.
+        auto wrapped_call = trim_trailing_whitespace(format.per_call_start) + p.space() + tool_choice +
+                            p.space() + format.per_call_end;
         if (inputs.parallel_tool_calls) {
             tool_calls = p.trigger_rule("tool-call", wrapped_call + p.zero_or_more(p.space() + wrapped_call) + p.space());
         } else {
@@ -501,7 +514,9 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
         tool_calls = p.optional(tool_calls);
     }
 
-    std::string trigger_marker       = !format.section_start.empty() ? format.section_start : format.per_call_start;
+    // A needle that misses swallows the whole tool call as content.
+    std::string trigger_marker       = trim_trailing_whitespace(
+        !format.section_start.empty() ? format.section_start : format.per_call_start);
     auto        content_before_tools = trigger_marker.empty() ? p.eps() : p.until(trigger_marker);
     return ctx.reasoning_parser + p.optional(p.content(content_before_tools)) + tool_calls + p.end();
 }

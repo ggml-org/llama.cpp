@@ -3554,6 +3554,82 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
     }
 
     {
+        // Nanbeige4.2 -- ChatML, XML-style tool calls, <think> pre-opened by the
+        // generation prompt. It emits "<tool_call> " rather than "<tool_call>\n" for
+        // ~25% of calls; the grammar permits that (space ::= " ") so the parser must too.
+        auto tst = peg_tester("models/templates/Nanbeige4.2-3B.jinja", detailed_debug);
+
+        tst.test("I'm\nthinking\n</think>\n\nHello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
+            .expect(message_assist_thoughts)
+            .run();
+
+        // canonical marker
+        tst.test(
+               "<tool_call>\n"
+               "<function=special_function>\n"
+               "<parameter=arg1>\n1\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .expect_reconstruction()
+            .run();
+
+        // marker followed by a single space instead of a newline
+        tst.test(
+               "<tool_call> "
+               "<function=special_function>\n"
+               "<parameter=arg1>\n1\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+
+        // same, after a reasoning block
+        tst.test(
+               "I'm\nthinking\n</think>\n\n"
+               "<tool_call> "
+               "<function=special_function>\n"
+               "<parameter=arg1>\n1\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(message_assist_call_thoughts)
+            .run();
+
+        // parallel calls, both markers followed by a space
+        tst.test(
+               "<tool_call> "
+               "<function=special_function>\n"
+               "<parameter=arg1>\n1\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>\n"
+               "<tool_call> "
+               "<function=special_function_with_opt>\n"
+               "<parameter=arg1>\n1\n</parameter>\n"
+               "<parameter=arg2>\n2\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .parallel_tool_calls(true)
+            .tools({ special_function_tool, special_function_tool_with_optional_param })
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", {} },
+                { "special_function_with_opt", R"({"arg1": 1, "arg2": 2})", {} },
+            })
+            .run();
+    }
+
+    {
         // Qwen3-Coder (tool calling with XML-style format)
         auto tst = peg_tester("models/templates/Qwen3-Coder.jinja", detailed_debug);
 
