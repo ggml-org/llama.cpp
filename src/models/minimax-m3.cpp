@@ -2,7 +2,6 @@
 #include "llama-kv-cache.h"
 #include <cmath>
 #include <vector>
-#include <algorithm>
 #include <cstdint>
 
 // MiniMax-M3: MiniMax-M2 style GQA (per-head QK-norm, partial rotary) with
@@ -125,68 +124,6 @@ public:
     int     local;
     int64_t nblk;
 };
-
-// pooled score of a block with no visible token: -inf from the mask, or -FLT_MAX from the
-// max-pool identity when every element of the block is -inf
-static inline bool msa_score_masked(float x) { return x <= -1e30f; }
-
-// MSA block selection (batch regime)
-// CPU custom op, the token-level expansion and the combination with the causal mask happen on the GPU.
-static void msa_block_mask_op(struct ggml_tensor * dst, int ith, int nth, void * userdata) {
-    const struct ggml_tensor * bs   = dst->src[0];
-    const struct ggml_tensor * bias = dst->src[1];
-    const msa_params * p = (const msa_params *) userdata;
-
-    const int nblk = (int) bs->ne[0];
-    const int Hd   = (int) bs->ne[1];
-    const int S    = (int) bs->ne[2];
-
-    GGML_ASSERT(bs->type   == GGML_TYPE_F32 && ggml_is_contiguous(bs));
-    GGML_ASSERT(bias->type == GGML_TYPE_F32 && ggml_is_contiguous(bias));
-    GGML_ASSERT(dst->type  == GGML_TYPE_F16 && ggml_is_contiguous(dst));
-    GGML_ASSERT(dst->ne[0] == nblk && dst->ne[1] == S && dst->ne[2] == Hd);
-    GGML_ASSERT(bias->ne[0] == nblk && bias->ne[1] == S);
-
-    const int topk = p->topk_blocks < nblk ? p->topk_blocks : nblk;
-
-    const ggml_fp16_t f16_zero = ggml_fp32_to_fp16(0.0f);
-    const ggml_fp16_t f16_ninf = ggml_fp32_to_fp16(-INFINITY);
-
-    std::vector<float> rank(nblk);
-    std::vector<char>  valid(nblk);
-    std::vector<int>   ord(nblk);
-
-    ggml_fp16_t * out = (ggml_fp16_t *) dst->data;
-
-    for (int i = ith; i < S; i += nth) {
-        const float * bias_col = (const float *) bias->data + (size_t) i * nblk;
-        for (int h = 0; h < Hd; ++h) {
-            const float * bs_col = (const float *) bs->data + ((size_t) i * Hd + h) * nblk;
-
-            for (int bk = 0; bk < nblk; ++bk) {
-                // a block is selectable if it has a visible token or is locally forced
-                valid[bk] = !msa_score_masked(bs_col[bk]) || bias_col[bk] > 0.0f;
-                rank [bk] = bias_col[bk] > 0.0f ? bias_col[bk] : bs_col[bk];
-                ord  [bk] = bk;
-            }
-
-            std::partial_sort(ord.begin(), ord.begin() + topk, ord.end(),
-                              [&](int a, int b) { return rank[a] > rank[b]; });
-
-            ggml_fp16_t * dst_col = out + ((size_t) h * S + i) * nblk;
-            for (int bk = 0; bk < nblk; ++bk) {
-                dst_col[bk] = f16_ninf;
-            }
-            for (int t = 0; t < topk; ++t) {
-                const int bk = ord[t];
-                if (!valid[bk]) {
-                    break;   // sorted desc: first invalid -> fewer than topk selectable blocks
-                }
-                dst_col[bk] = f16_zero;
-            }
-        }
-    }
-}
 
 // One FA call for all GQA groups (and at multi-stream decode, all streams) by mapping them onto the FA sequence dim (ne[3])
 ggml_tensor * llama_model_minimax_m3::graph::build_attn_msa_fa(
@@ -433,8 +370,8 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                                 msa_mf->nb[1], msa_mf->nb[1], st*msa_mf->nb[3]);
                         ggml_tensor * km_s = ggml_view_3d(ctx0, msa_kqm, n_kv, n_tps, 1,
                                 msa_kqm->nb[1], msa_kqm->nb[3], st*msa_kqm->nb[3]);
-                        ggml_tensor * bias_s = ggml_view_2d(ctx0, msa_loc->bias, nblk, n_tps,
-                                msa_loc->bias->nb[1], st*n_tps*msa_loc->bias->nb[1]);
+                        ggml_tensor * bias_s = ggml_view_3d(ctx0, msa_loc->bias, nblk, 1, n_tps,
+                                msa_loc->bias->nb[1], msa_loc->bias->nb[1], st*n_tps*msa_loc->bias->nb[1]);
                         ggml_tensor * q_s = ggml_view_3d(ctx0, Qcur, D, n_head, n_tps,
                                 Qcur->nb[1], Qcur->nb[2], st*n_tps*Qcur->nb[2]);
                         ggml_tensor * k_s = ggml_view_4d(ctx0, k, D, HKV, n_kv, 1,
@@ -453,15 +390,27 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                         ggml_tensor * bs = ggml_pool_2d(ctx0, sc, GGML_OP_POOL_MAX, blk, 1, blk, 1, 0, 0);
                         cb(bs, "msa_bs", il);
 
-                        // block-level 0/-inf keep mask on the CPU, tiny transfer
-                        ggml_tensor * srcs[2] = { bs, bias_s };
-                        ggml_tensor * bm = ggml_custom_4d(ctx0, GGML_TYPE_F16,
-                                nblk, n_tps, Hd, 1,
-                                srcs, 2, msa_block_mask_op, GGML_N_TASKS_MAX,
-                                const_cast<msa_params *>(&mm.msa_p));
+                        // bias the scores so locally-forced blocks always rank first
+                        ggml_tensor * bsf = ggml_add(ctx0, bs, bias_s);   // [nblk, Hd, n_tps]
+                        cb(bsf, "msa_bsf", il);
+
+                        ggml_tensor * idx = ggml_top_k(ctx0, bsf, K);   // [K, Hd, n_tps] i32
+
+                        ggml_tensor * ninf = ggml_cast(ctx0,
+                                ggml_scale_bias(ctx0, bias_s, 0.0f, -1e30f),
+                                GGML_TYPE_F16);                              // [nblk, 1, n_tps]
+                        ninf = ggml_repeat_4d(ctx0, ninf, nblk, Hd, n_tps, 1);
+                        ggml_tensor * zero = ggml_scale(ctx0,
+                                ggml_cast(ctx0, idx, GGML_TYPE_F32), 0.0f);
+                        ggml_tensor * bm = ggml_set_rows(ctx0,
+                                ggml_reshape_3d(ctx0, ninf, 1, nblk, Hd*n_tps),
+                                ggml_reshape_3d(ctx0, zero, 1, K,    Hd*n_tps),
+                                ggml_reshape_2d(ctx0, idx,     K,    Hd*n_tps));
+                        bm = ggml_reshape_3d(ctx0, bm, nblk, Hd, n_tps);
+                        bm = ggml_cont(ctx0, ggml_permute(ctx0, bm, 0, 2, 1, 3)); // [nblk, n_tps, Hd]
                         cb(bm, "msa_block_mask", il);
 
-                        // expand block -> token granularity on the GPU (j = bk*blk + t),
+                        // expand block -> token granularity (j = bk*blk + t),
                         // then combine with the causal mask in place
                         ggml_tensor * bmx = ggml_repeat_4d(ctx0,
                                 ggml_reshape_3d(ctx0, bm, 1, nblk, n_tps*Hd),
