@@ -106,15 +106,23 @@
 		onFileRemove?.(fileId);
 	}
 
+	// Auto-focus must not steal focus already claimed elsewhere (e.g. the system
+	// message editor opened just before a navigation)
+	function focusFormUnlessCaptured() {
+		const active = document.activeElement;
+		if (active instanceof HTMLTextAreaElement || active instanceof HTMLInputElement) return;
+		chatFormRef?.focus();
+	}
+
 	onMount(() => {
 		if (!isMobile.current) {
-			setTimeout(() => chatFormRef?.focus(), 100);
+			setTimeout(focusFormUnlessCaptured, 100);
 		}
 	});
 
 	afterNavigate((navigation) => {
 		if (navigation?.from != null && !isMobile.current) {
-			setTimeout(() => chatFormRef?.focus(), 100);
+			setTimeout(focusFormUnlessCaptured, 100);
 		}
 	});
 
@@ -127,7 +135,7 @@
 
 	$effect(() => {
 		if (previousIsLoading && !isLoading) {
-			setTimeout(() => chatFormRef?.focus(), 10);
+			setTimeout(focusFormUnlessCaptured, 10);
 		}
 
 		previousIsLoading = isLoading;
