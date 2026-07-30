@@ -193,6 +193,10 @@ class ZayaModel(TextModel):
 
         assert len(tokens) == vocab.vocab_size
 
+        for i, text in enumerate(tokens):
+            if text in ('</s>', '<eos>'):
+                toktypes[i] = gguf.TokenType.CONTROL
+
         self.gguf_writer.add_tokenizer_model("gemma4")
         self.gguf_writer.add_token_list(tokens)
         self.gguf_writer.add_token_scores(scores)

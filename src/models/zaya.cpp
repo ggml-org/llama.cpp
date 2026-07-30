@@ -651,8 +651,17 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
              * zaya.py ref: CCA.py - grouped conv
              *
              * QK = conv_1d_grouped(QK, conv_grp, n_groups) + conv_grp_b
+             *
+             * cca_conv_grp is stored as BF16 regardless of quantization. At inference,
+             * convert to F16 for quantized models (performance) or to BF16 for F32
+             * models (matching Python reference precision).
              */
             ggml_tensor * conv_grp = layer.cca_conv_grp;
+            if (ggml_is_quantized(layer.wq->type)) {
+                conv_grp = ggml_cont(ctx0, ggml_cast(ctx0, conv_grp, GGML_TYPE_F16));
+            } else if (conv_grp->type == GGML_TYPE_F32) {
+                conv_grp = ggml_cont(ctx0, ggml_cast(ctx0, conv_grp, GGML_TYPE_BF16));
+            }
             QK = ggml_conv_1d_grouped(ctx0, conv_grp, QK, 1, 0, 1, n_groups);
             QK = ggml_add(ctx0, QK, ggml_reshape_3d(ctx0, layer.cca_conv_grp_b, 1, n_qk, 1));
             cb(QK, "QK_grp", il);
