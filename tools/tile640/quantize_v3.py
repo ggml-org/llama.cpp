@@ -1645,9 +1645,18 @@ def quantize_2d(weights: np.ndarray, out_dim: int, in_dim: int,
         flat = core_weights.flatten()
         flat_ternary = np.zeros(flat.size, dtype=np.int8)
         # The legacy path kept positions where |w| >= mean(|W|); scale that
-        # by the calibrated multiplier.
+        # by the calibrated multiplier. Broadcast (out_dim,) over the
+        # flattened (out_dim * in_dim,) weight via row-major repeat:
+        # `per_row_threshold` is per-row, so the same value applies to
+        # every element of that row in the row-major flat layout. The v1
+        # comparison used `per_row_threshold.reshape(-1)` (shape out_dim)
+        # against an (out_dim * in_dim,) array, which broadcasts the
+        # threshold vector against the flat array as if it were a
+        # column-major layout — silently shifting the threshold for
+        # every row past row 0 and corrupting the ternarized output.
+        threshold_flat = np.repeat(per_row_threshold.reshape(-1), in_dim)
         abs_flat = np.abs(flat)
-        keep = abs_flat >= per_row_threshold.reshape(-1)
+        keep = abs_flat >= threshold_flat
         # We also need to know sign for the kept positions.
         flat_ternary[keep & (flat > 0)] = 1
         flat_ternary[keep & (flat < 0)] = -1
@@ -1954,11 +1963,11 @@ def quantize_2d_septq(weights: np.ndarray, out_dim: int, in_dim: int,
        ``s[i,j] = (W[i,j] - Q(W[i,j]))^2 * H[j,j]`` where H is the Hessian of
        the calibration activations and Q is a baseline quantizer. The top-k%
        elements by importance form a static global mask M.
-    2. **Column-by-column quantization with error compensation.** Iterate
-       over columns. For each column j, quantize the elements where M=1
-       (the "important" weights) and update the elements in the same row
-       and to the right of column j using a closed-form rule derived from
-       the inverse Hessian.
+    2. **Vectorized column-wise quantization with error compensation.**
+       Quantize the masked elements in one vectorized pass to
+       {-1, 0, +1} and apply the cross-column update. The diagonal-H
+       approximation (this commit) makes the cross-column update a
+       no-op; the banded GPTQ-M path is added in a follow-up commit.
 
     The end result is a mixed-precision representation: the "important"
     elements are quantized to ternary {-1, 0, +1} and the "unimportant"
@@ -1969,8 +1978,9 @@ def quantize_2d_septq(weights: np.ndarray, out_dim: int, in_dim: int,
     H[j,j] (the column-wise importance from the imatrix) for the importance
     scoring, and skip the cross-column error compensation. With a strictly
     diagonal H_inv the cross-column update is identically zero, so this is
-    a tractable simplification of the full SEPTQ algorithm. The column
-    ordering is preserved for determinism with the full algorithm.
+    a tractable simplification of the full SEPTQ algorithm. The mask
+    selection uses argpartition (O(n)) instead of a full sort (O(n log n))
+    to make the importance ranking cheaper.
 
     The output dict has the same shape as ``quantize_2d``. The
     ``outlier_*`` entries store the UNIMPORTANT elements (full precision);
@@ -1987,9 +1997,10 @@ def quantize_2d_septq(weights: np.ndarray, out_dim: int, in_dim: int,
         act_scales: per-input-channel activation magnitude (RMS), used as
             a proxy for the Hessian diagonal H[j,j]. If None, uniform
             column importance is assumed.
-        septq_iterations: number of column-by-column passes. The mask is
-            fixed at the first iteration (static global mask per the
-            paper); subsequent passes re-ternarize with the same mask.
+        septq_iterations: number of column-wise passes. The mask is fixed
+            at the first iteration (static global mask per the paper);
+            subsequent passes re-ternarize with the same mask. The default
+            of 1 is the canonical SEPTQ setting.
         ternary_threshold: multiplier on per-row mean(|W|) for the {-1, 0,
             +1} cutoff. Default 1.0 = legacy tessera behaviour.
         tensor_name: for diagnostics only.
@@ -2037,51 +2048,51 @@ def quantize_2d_septq(weights: np.ndarray, out_dim: int, in_dim: int,
     importance_2d = quant_error_init * h_diag.reshape(1, in_dim)
     importance_flat = importance_2d.reshape(-1)
 
-    # Step 3: static global mask. Stable descending sort, then take the
-    # top-k. Stable sort gives deterministic tie-breaking by flat index.
+    # Step 3: static global mask. We only need the top-k elements by
+    # importance, so we find the k-th largest value with argpartition
+    # (O(n)) and use it as a threshold. Cost is O(n) instead of O(n log n)
+    # for a full sort. With float32 importance values exact ties at the
+    # threshold are vanishingly rare, so the mask has exactly k True
+    # entries in practice. If there are ties the mask may have a few
+    # more than k entries; that is fine for SEPTQ which only uses the
+    # ratio approximately. Determinism is preserved: argpartition is
+    # quickselect and the threshold comparison is exact.
     k = max(1, min(n, int(np.ceil(n * septq_ratio))))
     if k >= n:
         mask_2d = np.ones((out_dim, in_dim), dtype=bool)
     else:
-        sorted_idx = np.argsort(-importance_flat, kind="stable")
-        mask_flat = np.zeros(n, dtype=bool)
-        mask_flat[sorted_idx[:k]] = True
+        kth_idx = np.argpartition(-importance_flat, k - 1)[k - 1]
+        threshold = importance_flat[kth_idx]
+        mask_flat = importance_flat >= threshold
+        # If the threshold selection overshot (rare, only when there are
+        # exact float32 ties at the boundary), cap to exactly k True
+        # entries by clearing the lowest-importance over-shoots. Cost is
+        # O(n) once more; in practice this branch almost never fires
+        # for float32 importance values.
+        excess = int(mask_flat.sum()) - k
+        if excess > 0:
+            true_idx = np.flatnonzero(mask_flat)
+            true_importance = importance_flat[true_idx]
+            tail = np.argpartition(true_importance, excess)[:excess]
+            mask_flat[true_idx[tail]] = False
         mask_2d = mask_flat.reshape(out_dim, in_dim)
 
-    # Step 4: column-by-column quantization with error compensation.
-    # Diagonal-only approximation: no cross-column update is applied
-    # (H_inv[j, k] = 0 for k > j with a strictly diagonal H). The
-    # "column-by-column" processing is preserved for determinism and to
-    # match the full algorithm's interface. The final ternary is built
-    # in a single vectorised pass; the loop is over columns only to make
-    # the algorithm's structure explicit.
-    W_compensated = W.copy()
-    ternary_final = np.zeros(n, dtype=np.int8)
-    # threshold_1d is per-row (out_dim values), not per-column. The
-    # column loop uses the same per-row threshold for all columns.
-    for j in range(in_dim):
-        col_mask = mask_2d[:, j]
-        if not col_mask.any():
-            continue
-        col_keep = abs_W[:, j] >= threshold_1d
-        col_quantized = col_mask & col_keep
-        if not col_quantized.any():
-            continue
-        # Quantize the important elements in this column.
-        ternary_col = np.where(col_quantized, sign_W[:, j], np.int8(0))
-        # Error for the quantized elements.
-        e = (ternary_col.astype(np.float32) - W[:, j]) * col_quantized.astype(np.float32)
-        # Diagonal-only compensation: the error is absorbed into the same
-        # column's residual (unimportant) elements. This is a local
-        # compensation that doesn't require the full H_inv. It preserves
-        # the column-output MSE when the column is processed in isolation
-        # but does not propagate to future columns (which is what the
-        # full GPTQ-style update would do).
-        col_unimportant = ~col_mask
-        if col_unimportant.any():
-            W_compensated[col_unimportant, j] -= e[col_unimportant]
-        # Store the ternary for this column.
-        ternary_final[j * out_dim:(j + 1) * out_dim] = ternary_col
+    # Step 4: vectorized column-wise quantization with error compensation.
+    # The v1 per-column Python loop was the dominant cost. It is replaced
+    # by a few vectorized ops that build the quantized mask, the ternary,
+    # and the per-position error matrix in a single pass each. The
+    # diagonal-H approximation is preserved (no cross-column update) and
+    # the banded GPTQ-M path is added in a follow-up commit. `error_2d`
+    # is computed but unused here; it is the per-position error matrix
+    # the banded path consumes, and keeping it in the diagonal branch
+    # makes the two paths share the same ternary construction.
+    quantized_mask_2d = mask_2d & keep_2d
+    ternary_2d = np.where(quantized_mask_2d, sign_W, np.int8(0))
+    error_2d = (ternary_2d.astype(np.float32) - W) * quantized_mask_2d.astype(np.float32)
+    # Diagonal-only: the GPTQ update matrix M is identically zero, so
+    # the cross-column error compensation is a no-op. W_compensated = W.
+    W_compensated = W
+    ternary_final = ternary_2d.reshape(-1)
 
     # Step 5: pack into the Tessera format. The "outliers" are the
     # UNIMPORTANT elements (stored as full precision). The ternary stores
