@@ -29,10 +29,10 @@ Once installed:
 
 ```sh
 # Download and run a model directly from Hugging Face
-llama cli -hf ggml-org/gemma-3-1b-it-GGUF
+llama cli -hf ggml-org/Qwen3.5-0.8B-GGUF
 
 # Launch OpenAI-compatible API server
-llama serve -hf ggml-org/gemma-3-1b-it-GGUF
+llama serve -hf ggml-org/Qwen3.5-0.8B-GGUF
 ```
 
 <table align="center">
