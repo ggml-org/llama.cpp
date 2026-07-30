@@ -19,6 +19,14 @@ Fitness modes (selected via ``--fitness``):
   per tensor (a few KB at rank 16) and the rank. ``tile640_quantize_v3.py``
   recognises the LRQ fields and reconstructs ``S`` to derive the AWQ-style
   per-input-channel aggregate.
+* ``flrq``    FLRQ (Jan 2026): R1-Sketch with Gaussian projection to identify
+  outlier-aware low-rank components, then Best Low-Rank Approximation under
+  Clipping (BLC) to minimise the residual quantisation error. The policy
+  stores FP16 ``U`` (K x r) and ``V`` (r x N) plus a tile640-style
+  quantised residual. Calibration-free: only the weight matrix ``W`` is
+  read; the rank is selected by sweeping ``[4, 8, 16, 32, 64]`` and
+  keeping the smallest r whose relative reconstruction MSE is below
+  ``--flrq-mse-threshold`` (default 1e-3).
 * ``compare`` run ``awq`` and ``lrq`` on the same bundle and write a
   side-by-side report covering per-tensor MSE, policy size, and the relative
   reduction the LRQ-mode achieves versus the GA baseline.
@@ -509,8 +517,481 @@ def build_lrq_policy(
 
 
 # ---------------------------------------------------------------------------
-# AWQ delegation
+# FLRQ (Jan 2026) -- R1-Sketch + Best Low-rank Approximation under Clipping
 # ---------------------------------------------------------------------------
+#
+# FLRQ decomposes a 2-D weight W as W = U @ V + tile640_quant(R), where
+# U (K x r) and V (r x N) are FP16 low-rank factors and R = W - U@V is
+# the residual.  The low-rank factors capture outlier-aware structure
+# identified by the R1-Sketch (a few Gaussian random projections of W,
+# no calibration data needed).  The residual is quantised under a
+# per-tensor symmetric uniform scheme that BLC iteratively fits.
+#
+# The decomposition is calibration-free: the sketch operates on W alone,
+# which is the key advantage for the data-sparse Apple-Silicon path.
+# The policy blob matches the existing
+# ``llama.speculative.calibration-policy.v1`` wrapper, with a sub-schema
+# ``llama.tessera.flrq-policy.v1`` under ``policy["flrq"]``.  GGUF
+# sidecar serialisation is intentionally a follow-up; the JSON form here
+# is what the orchestrator consumes.
+
+FLRQ_SCHEMA = "llama.tessera.flrq-policy.v1"
+FLRQ_DEFAULT_PROJECTIONS = 32
+FLRQ_DEFAULT_RANK_CANDIDATES = (4, 8, 16, 32, 64)
+FLRQ_DEFAULT_MSE_THRESHOLD = 1.0e-3
+FLRQ_DEFAULT_BLC_ITERS = 4
+FLRQ_DEFAULT_QBITS = 4
+
+
+@dataclasses.dataclass
+class FLRQResult:
+    rank: int
+    u: np.ndarray            # (out_dim, rank), FP32 in the result; the policy serialises as FP16-shaped
+    v: np.ndarray            # (rank, in_dim)
+    residual: np.ndarray     # (out_dim, in_dim) -- the original W minus U @ V
+    residual_q: np.ndarray   # (out_dim, in_dim) -- tile640-style quantised residual
+    residual_scale: float    # per-tensor scale used for the residual quantiser
+    residual_clip: float     # per-tensor clip used for the residual quantiser
+    residual_qbits: int      # bits of the residual quantiser (e.g. 4)
+    reconstruction_mse: float
+    reconstruction_rel_mse: float
+    baseline_mse: float
+    n_projections: int
+    sketch_seed: int
+    blc_iters: int
+    bundle_name: str = ""
+
+    def bytes_used(self) -> int:
+        # FP16 for U and V (2 bytes/element) + int8 for the residual
+        # quantised payload (1 byte/element) + small scalar overhead.
+        return int(self.u.size) * 2 + int(self.v.size) * 2 + int(self.residual_q.size)
+
+    def policy_entry(self) -> dict:
+        return {
+            "match": [self.bundle_name],
+            "exact": True,
+            "flrq_rank": int(self.rank),
+            "flrq_u": self.u.astype(np.float32).tolist(),
+            "flrq_v": self.v.astype(np.float32).tolist(),
+            "flrq_residual_scale": float(self.residual_scale),
+            "flrq_residual_clip": float(self.residual_clip),
+            "flrq_residual_qbits": int(self.residual_qbits),
+            "flrq_reconstruction_mse": float(self.reconstruction_mse),
+            "flrq_reconstruction_rel_mse": float(self.reconstruction_rel_mse),
+            "flrq_baseline_mse": float(self.baseline_mse),
+            "flrq_n_projections": int(self.n_projections),
+            "flrq_sketch_seed": int(self.sketch_seed),
+            "flrq_blc_iters": int(self.blc_iters),
+        }
+
+
+def flrq_sketch(
+    weight: np.ndarray,
+    n_projections: int,
+    seed: int,
+    target_rank: int | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """R1-Sketch with Gaussian projection (calibration-free).
+
+    The sketch ``Y = W @ Omega`` captures the dominant row-space of
+    ``W`` using only a handful of Gaussian projections of ``W``.  The
+    top-r LEFT singular vectors of ``Y`` form the outlier-aware basis
+    we use to build the low-rank factors U and V: by the standard
+    randomised-SVD argument, the row space of ``Y = W @ Omega``
+    contains (and approximates) the row space of ``W``, so the top
+    left singular vectors of ``Y`` are a good basis in which to
+    represent the low-rank component of ``W``.  V is then the
+    orthogonal projection of ``W`` onto that basis, so the initial
+    rank-r reconstruction is the best rank-r approximation of ``W``
+    in the sketch basis.
+
+    Parameters
+    ----------
+    weight : (K, N) FP32 ndarray
+        The 2-D weight matrix to sketch.
+    n_projections : int
+        Number of Gaussian projection vectors to draw.  16-64 is the
+        FLRQ operating range; the sketch is approximate, so the answer
+        is robust to the exact count as long as ``n_projections`` is at
+        least a few multiples of the target rank.
+    seed : int
+        RNG seed; deterministic in the same way as ``np.random.default_rng``.
+    target_rank : int, optional
+        The number of sketch basis vectors to return.  Defaults to
+        ``min(K, N, 16)``.  Callers usually want to pass an explicit
+        value so the rank sweep can drive the sketch width.
+
+    Returns
+    -------
+    Y : (K, n_projections * target_rank) FP32 ndarray
+        The R1-Sketch of W.
+    U_basis : (K, target_rank) FP32 ndarray
+        The top ``target_rank`` left singular vectors of ``Y`` (the
+        row-space basis the BLC step projects onto).
+    sigma : (target_rank,) FP32 ndarray
+        The corresponding singular values, descending.
+    """
+    if weight.ndim != 2:
+        raise ValueError(f"flrq_sketch: weight must be 2-D, got {weight.ndim}-D")
+    K, N = weight.shape
+    if n_projections < 1:
+        raise ValueError(f"flrq_sketch: n_projections must be >= 1, got {n_projections}")
+    if target_rank is None:
+        target_rank = max(1, min(K, N, 16))
+    r = max(1, min(int(target_rank), K, N))
+    total_width = min(N, n_projections * r)
+
+    rng = np.random.default_rng(seed)
+    omega = rng.standard_normal((N, total_width), dtype=np.float32)
+    Y = weight.astype(np.float32) @ omega  # (K, total_width)
+    # Truncated SVD: we only need the top-r left singular vectors of Y.
+    # numpy returns (U, s, Vh) with shapes (M, K_min), (K_min,), (K_min, N)
+    # where K_min = min(M, N).  We take the first r columns of U.
+    _, sigma, _ = np.linalg.svd(Y, full_matrices=False)
+    # The full U has shape (K, total_width) when K < N, else (K, K_min)
+    # where K_min = min(K, total_width) = total_width when total_width <= K.
+    # We compute U explicitly so the (K, r) extraction is always correct.
+    U_full, sigma, _ = np.linalg.svd(Y, full_matrices=False)
+    U_basis = U_full[:, :r].astype(np.float32)  # (K, r)
+    sigma = sigma[:r].astype(np.float32)
+    return Y, U_basis, sigma
+
+
+def flrq_bcl(
+    weight: np.ndarray,
+    U_basis: np.ndarray,
+    n_iters: int = FLRQ_DEFAULT_BLC_ITERS,
+    qbits: int = FLRQ_DEFAULT_QBITS,
+) -> tuple[np.ndarray, np.ndarray, float, float, np.ndarray, np.ndarray]:
+    """Best Low-Rank Approximation under Clipping (BLC).
+
+    Given the FLRQ sketch basis ``U_basis`` (K, r) and the target
+    weight ``W`` (K, N), find the best (V, scale, clip) such that
+    ``W ~= U_basis @ V + Q(R; scale, clip)`` where ``R = W - U_basis @ V``
+    and ``Q`` is a per-tensor symmetric uniform quantiser with
+    ``qbits`` bits.  The basis ``U_basis`` is held fixed (it is the
+    output of the R1-Sketch); BLC iterates:
+
+    1. Initialise ``V = U_basis.T @ W`` (orthogonal projection of
+       ``W`` onto the sketch basis).
+    2. For ``n_iters`` iterations:
+       a. Compute the residual ``R = W - U_basis @ V``.
+       b. Update ``(scale, clip)`` for the residual quantiser: a
+          closed-form rule (``scale = (2^q-1) / max|R|``, ``clip = 1``)
+          gives the symmetric uniform quantiser with the lowest MSE
+          when the residual distribution is symmetric and roughly
+          uniform inside its support.  We keep ``clip = 1`` for
+          ``qbits >= 3`` (which is the FLRQ operating range) and
+          allow a small slack for ``qbits < 3`` so the quantiser does
+          not waste levels on a tiny fraction of large outliers.
+       c. Update ``V`` to absorb the residual quantisation error:
+          ``V = U_basis.T @ (W - R_q)`` is the orthogonal projection
+          of the new target onto the sketch basis.  This is the
+          closed-form solution to
+          ``min_V || (W - R_q) - U_basis @ V ||_F``.
+
+    Parameters
+    ----------
+    weight : (K, N) FP32 ndarray
+    U_basis : (K, r) FP32 ndarray
+    n_iters : int
+    qbits : int
+
+    Returns
+    -------
+    U : (K, r) FP32 (== U_basis)
+    V : (r, N) FP32
+    scale : float
+    clip : float
+    residual : (K, N) FP32
+    residual_q : (K, N) FP32 (the dequantised residual)
+    """
+    if weight.ndim != 2:
+        raise ValueError(f"flrq_bcl: weight must be 2-D, got {weight.ndim}-D")
+    if U_basis.ndim != 2:
+        raise ValueError(f"flrq_bcl: U_basis must be 2-D, got {U_basis.ndim}-D")
+    if U_basis.shape[0] != weight.shape[0]:
+        raise ValueError(
+            f"flrq_bcl: U_basis rows {U_basis.shape[0]} must match weight rows {weight.shape[0]}"
+        )
+    if qbits < 1 or qbits > 12:
+        raise ValueError(f"flrq_bcl: qbits must be in [1, 12], got {qbits}")
+
+    W32 = weight.astype(np.float32)
+    U = U_basis.astype(np.float32)
+    r = U.shape[1]
+    qmax = float((1 << (qbits - 1)) - 1)  # e.g. 7 for qbits=4
+    # 1. Initial V = U^T W (orthogonal projection of W onto U's column space).
+    V = U.T @ W32  # (r, N)
+    low_rank = U @ V
+    residual = W32 - low_rank
+    scale = 1.0
+    clip = 1.0
+    residual_q = residual.copy()
+
+    for _ in range(max(1, n_iters)):
+        # 2a. Update scale/clip for the residual quantiser.  ``clip``
+        # stays at 1.0 for qbits >= 3; below that we leave a 0.95 slack
+        # so the quantiser does not waste most of its range on the
+        # tail.  This matches the standard "best clipping" rule of
+        # thumb for INT2 / INT3 uniform quantisation.
+        max_abs = float(np.max(np.abs(residual)))
+        if max_abs <= 0.0:
+            scale = 1.0
+            clip = 1.0
+        else:
+            clip = 1.0 if qbits >= 3 else 0.95
+            scale = (qmax * clip) / max_abs
+        # 2b. Quantise the residual under (scale, clip) and dequantise.
+        residual_scaled = np.clip(residual * scale, -qmax, qmax)
+        residual_q_int = np.round(residual_scaled).astype(np.int8)
+        residual_q = residual_q_int.astype(np.float32) / max(scale, 1e-12)
+        # 2c. Update V to absorb the residual quantisation error.
+        target = W32 - residual_q
+        V = U.T @ target  # (r, N) -- orthogonal projection onto U's column space
+        low_rank = U @ V
+        residual = W32 - low_rank
+
+    return U, V, scale, clip, residual, residual_q
+
+
+def flrq_select_rank(
+    weight: np.ndarray,
+    rank_candidates: Iterable[int] = FLRQ_DEFAULT_RANK_CANDIDATES,
+    n_projections: int = FLRQ_DEFAULT_PROJECTIONS,
+    seed: int = 0,
+    blc_iters: int = FLRQ_DEFAULT_BLC_ITERS,
+    qbits: int = FLRQ_DEFAULT_QBITS,
+    mse_threshold: float = FLRQ_DEFAULT_MSE_THRESHOLD,
+) -> tuple[int, dict[int, dict]]:
+    """Pick the smallest rank whose total reconstruction MSE is below the threshold.
+
+    The threshold is interpreted relative to ``||W||_F^2``: a value of
+    ``1e-3`` means the FLRQ decomposition must recover at least
+    99.9 % of the squared Frobenius norm of W.  The smallest rank
+    that clears the bar wins.  If no candidate clears the bar, the
+    largest rank is returned along with a note that the threshold was
+    not met; the orchestrator can decide whether to widen the rank
+    sweep or fall back to the AWQ mode.
+
+    Parameters
+    ----------
+    weight : (K, N) FP32 ndarray
+    rank_candidates : iterable of int
+    n_projections : int
+    seed : int
+    blc_iters : int
+    qbits : int
+    mse_threshold : float
+        Threshold on ``||W - (U@V + residual_q)||_F^2 / ||W||_F^2``.
+
+    Returns
+    -------
+    chosen_rank : int
+    per_rank : dict[int, dict]
+        Maps each rank in ``rank_candidates`` to a record with
+        ``mse`` (relative), ``bytes``, and ``clears_threshold`` (bool).
+    """
+    if weight.ndim != 2:
+        raise ValueError(f"flrq_select_rank: weight must be 2-D, got {weight.ndim}-D")
+    W32 = weight.astype(np.float32)
+    w_fro2 = float(np.sum(W32 * W32)) + 1e-12
+    candidates = sorted({int(r) for r in rank_candidates if r >= 1})
+    if not candidates:
+        raise ValueError("flrq_select_rank: rank_candidates must contain at least one value >= 1")
+
+    per_rank: dict[int, dict] = {}
+    chosen_rank = candidates[-1]
+    for r in candidates:
+        # The sketch basis is shared across BLC iterations for a given r.
+        # We deliberately use a different seed per rank so the sketches
+        # are independent; the FLRQ paper observes that a fresh Gaussian
+        # sketch per rank is more accurate than re-using one.
+        _, U_basis, _ = flrq_sketch(
+            W32,
+            n_projections=n_projections,
+            seed=seed + r,
+            target_rank=r,
+        )
+        U, V, scale, clip, residual, residual_q = flrq_bcl(
+            W32,
+            U_basis,
+            n_iters=blc_iters,
+            qbits=qbits,
+        )
+        recon = U @ V + residual_q
+        diff = W32 - recon
+        mse = float(np.sum(diff * diff)) / w_fro2
+        bytes_used = int(U.size) * 2 + int(V.size) * 2 + int(residual_q.size)
+        clears = mse <= mse_threshold
+        per_rank[r] = {
+            "mse": mse,
+            "bytes": bytes_used,
+            "scale": scale,
+            "clip": clip,
+            "residual_max_abs": float(np.max(np.abs(residual))),
+            "clears_threshold": clears,
+        }
+        if clears and r < chosen_rank:
+            chosen_rank = r
+    return chosen_rank, per_rank
+
+
+def train_flrq(
+    layer: Layer,
+    rank_candidates: Iterable[int] = FLRQ_DEFAULT_RANK_CANDIDATES,
+    n_projections: int = FLRQ_DEFAULT_PROJECTIONS,
+    seed: int = 0,
+    blc_iters: int = FLRQ_DEFAULT_BLC_ITERS,
+    qbits: int = FLRQ_DEFAULT_QBITS,
+    mse_threshold: float = FLRQ_DEFAULT_MSE_THRESHOLD,
+    verbose: bool = False,
+) -> FLRQResult:
+    """High-level FLRQ driver for one tensor bundle.
+
+    Composes ``flrq_sketch`` and ``flrq_select_rank`` (which itself
+    calls ``flrq_bcl`` per rank) to produce a single
+    ``FLRQResult`` ready to be serialised into the policy.  The
+    baseline MSE is the MSE of a per-tensor symmetric quantiser at
+    ``qbits`` bits with no low-rank correction; the reconstruction
+    MSE is after the BLC step.
+    """
+    W = layer.weight.astype(np.float32)
+    K, N = W.shape
+    baseline_max = float(np.max(np.abs(W)))
+    if baseline_max <= 0.0:
+        raise ValueError(f"flrq: weight {layer.name} is all-zero")
+    qmax = float((1 << (qbits - 1)) - 1)
+    baseline_scale = qmax / baseline_max
+    baseline_q = np.round(np.clip(W * baseline_scale, -qmax, qmax)).astype(np.int8)
+    baseline_dq = baseline_q.astype(np.float32) / max(baseline_scale, 1e-12)
+    baseline_mse = float(np.mean((W - baseline_dq) ** 2))
+
+    chosen_rank, per_rank = flrq_select_rank(
+        W,
+        rank_candidates=rank_candidates,
+        n_projections=n_projections,
+        seed=seed,
+        blc_iters=blc_iters,
+        qbits=qbits,
+        mse_threshold=mse_threshold,
+    )
+
+    # Recompute the chosen-rank decomposition with the final sketch
+    # seed so the policy entry carries the exact U, V that produced
+    # the recorded MSE.  ``flrq_select_rank`` already ran BLC for that
+    # rank; we re-run it here so the caller has access to the full
+    # U, V, residual, residual_q tensors (per_rank only keeps scalars).
+    _, U_basis, _ = flrq_sketch(
+        W,
+        n_projections=n_projections,
+        seed=seed + chosen_rank,
+        target_rank=chosen_rank,
+    )
+    U, V, scale, clip, residual, residual_q = flrq_bcl(
+        W,
+        U_basis,
+        n_iters=blc_iters,
+        qbits=qbits,
+    )
+    recon = U @ V + residual_q
+    diff = W - recon
+    reconstruction_mse = float(np.mean(diff * diff))
+    w_fro2_local = float(np.sum(W * W)) + 1e-12
+    reconstruction_rel_mse = float(np.sum(diff * diff)) / w_fro2_local
+
+    if verbose:
+        for r in sorted(per_rank):
+            record = per_rank[r]
+            marker = "*" if r == chosen_rank else " "
+            print(
+                f"  flrq[{layer.name}] rank={r:3d}{marker}  "
+                f"mse={record['mse']:.4e}  bytes={record['bytes']}  "
+                f"clears={record['clears_threshold']}",
+                file=sys.stderr,
+            )
+
+    return FLRQResult(
+        rank=chosen_rank,
+        u=U.astype(np.float32),
+        v=V.astype(np.float32),
+        residual=residual.astype(np.float32),
+        residual_q=residual_q.astype(np.float32),
+        residual_scale=float(scale),
+        residual_clip=float(clip),
+        residual_qbits=int(qbits),
+        reconstruction_mse=reconstruction_mse,
+        reconstruction_rel_mse=reconstruction_rel_mse,
+        baseline_mse=baseline_mse,
+        n_projections=int(n_projections),
+        sketch_seed=int(seed),
+        blc_iters=int(blc_iters),
+        bundle_name=layer.name,
+    )
+
+
+def build_flrq_policy(
+    results: list[tuple[Layer, FLRQResult]],
+    provenance: dict,
+    per_rank: dict[str, dict[int, dict]] | None = None,
+    base: dict | None = None,
+) -> dict:
+    """Assemble FLRQ results into a calibration-policy document.
+
+    Same wrapper schema as the LRQ path (``llama.speculative.calibration-policy.v1``)
+    so downstream consumers do not need a schema change.  The FLRQ
+    payload lives under ``policy["flrq"]`` with its own sub-schema
+    (``llama.tessera.flrq-policy.v1``).
+    """
+    policy: dict = dict(base or {})
+    families = dict(policy.get("tensor_families", {}))
+    tensor_records: list[dict] = []
+    total_bytes = 0
+    per_rank_out: dict[str, dict[str, dict]] = {}
+    for layer, result in results:
+        entry = result.policy_entry()
+        entry_key = f"flrq:{layer.name}"
+        families[entry_key] = entry
+        tensor_records.append({
+            "tensor": layer.name,
+            "rank": result.rank,
+            "reconstruction_mse": result.reconstruction_mse,
+            "baseline_mse": result.baseline_mse,
+            "residual_qbits": result.residual_qbits,
+            "bytes": result.bytes_used(),
+        })
+        total_bytes += result.bytes_used()
+        if per_rank is not None and layer.name in per_rank:
+            per_rank_out[layer.name] = {
+                str(r): {
+                    "mse": float(record["mse"]),
+                    "bytes": int(record["bytes"]),
+                    "clears_threshold": bool(record["clears_threshold"]),
+                }
+                for r, record in sorted(per_rank[layer.name].items())
+            }
+
+    policy.update({
+        "schema": SCHEMA,
+        "flrq": {
+            "schema": FLRQ_SCHEMA,
+            "rank": results[0][1].rank if results else 0,
+            "n_projections": results[0][1].n_projections if results else FLRQ_DEFAULT_PROJECTIONS,
+            "blc_iters": results[0][1].blc_iters if results else FLRQ_DEFAULT_BLC_ITERS,
+            "qbits": results[0][1].residual_qbits if results else FLRQ_DEFAULT_QBITS,
+            "tensor_count": len(results),
+            "total_bytes": total_bytes,
+            "tensors": tensor_records,
+            "per_rank": per_rank_out,
+        },
+        "tensor_families": families,
+        "per_tensor_calibration": provenance,
+    })
+    policy.setdefault("draft_type", "hybrid")
+    return policy
+
+
+
 
 
 def run_awq_subprocess(
@@ -678,6 +1159,123 @@ def run_compare(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
+def run_flrq(args: argparse.Namespace) -> int:
+    """Driver for the ``--fitness flrq`` mode.
+
+    Iterates the layer bundles, runs ``train_flrq`` on each, and writes
+    the assembled policy JSON.  The output schema is
+    ``llama.speculative.calibration-policy.v1`` with a
+    ``llama.tessera.flrq-policy.v1`` sub-payload under ``policy["flrq"]``.
+    The per-rank sweep is recorded in the policy so the orchestrator
+    can inspect the MSE curve without re-running the calibration.
+    """
+    layers = iter_layer_paths(args.layers)
+    if not layers:
+        raise ValueError(f"{args.layers}: no layer bundles")
+
+    output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    digests = {p.stem: bundle_digest(p) for p in layers}
+
+    flrq_results: list[tuple[Layer, FLRQResult]] = []
+    per_rank: dict[str, dict[int, dict]] = {}
+    for path in layers:
+        layer = load_layer(path, max_tokens=args.max_tokens)
+        # We need the per-rank sweep data for the policy, so call
+        # ``flrq_select_rank`` directly and build the result from it.
+        W = layer.weight.astype(np.float32)
+        chosen_rank, sweep = flrq_select_rank(
+            W,
+            rank_candidates=args.flrq_rank_candidates,
+            n_projections=args.flrq_n_projections,
+            seed=args.seed,
+            blc_iters=args.flrq_blc_iters,
+            qbits=args.flrq_qbits,
+            mse_threshold=args.flrq_mse_threshold,
+        )
+        per_rank[layer.name] = sweep
+        _, U_basis, _ = flrq_sketch(
+            W,
+            n_projections=args.flrq_n_projections,
+            seed=args.seed + chosen_rank,
+            target_rank=chosen_rank,
+        )
+        U, V, scale, clip, residual, residual_q = flrq_bcl(
+            W,
+            U_basis,
+            n_iters=args.flrq_blc_iters,
+            qbits=args.flrq_qbits,
+        )
+        recon = U @ V + residual_q
+        diff = W - recon
+        reconstruction_mse = float(np.mean(diff * diff))
+        w_fro2_local = float(np.sum(W * W)) + 1e-12
+        reconstruction_rel_mse = float(np.sum(diff * diff)) / w_fro2_local
+        qmax = float((1 << (args.flrq_qbits - 1)) - 1)
+        baseline_max = float(np.max(np.abs(W)))
+        baseline_scale = qmax / max(baseline_max, 1e-12)
+        baseline_q = np.round(np.clip(W * baseline_scale, -qmax, qmax)).astype(np.int8)
+        baseline_dq = baseline_q.astype(np.float32) / max(baseline_scale, 1e-12)
+        baseline_mse = float(np.mean((W - baseline_dq) ** 2))
+        result = FLRQResult(
+            rank=chosen_rank,
+            u=U.astype(np.float32),
+            v=V.astype(np.float32),
+            residual=residual.astype(np.float32),
+            residual_q=residual_q.astype(np.float32),
+            residual_scale=float(scale),
+            residual_clip=float(clip),
+            residual_qbits=int(args.flrq_qbits),
+            reconstruction_mse=reconstruction_mse,
+            reconstruction_rel_mse=reconstruction_rel_mse,
+            baseline_mse=baseline_mse,
+            n_projections=int(args.flrq_n_projections),
+            sketch_seed=int(args.seed),
+            blc_iters=int(args.flrq_blc_iters),
+            bundle_name=layer.name,
+        )
+        flrq_results.append((layer, result))
+        if args.verbose:
+            for r in sorted(sweep):
+                record = sweep[r]
+                marker = "*" if r == chosen_rank else " "
+                print(
+                    f"  flrq[{layer.name}] rank={r:3d}{marker}  "
+                    f"mse={record['mse']:.4e}  bytes={record['bytes']}  "
+                    f"clears={record['clears_threshold']}",
+                    file=sys.stderr,
+                )
+            print(
+                f"flrq[{layer.name}]: rank={chosen_rank} "
+                f"recon_mse={result.reconstruction_mse:.4e} "
+                f"recon_rel_mse={result.reconstruction_rel_mse:.4e} "
+                f"baseline_mse={result.baseline_mse:.4e} "
+                f"bytes={result.bytes_used()}",
+                file=sys.stderr,
+            )
+
+    provenance = {
+        "tool": "per_tensor_calibrate.py",
+        "mode": "flrq",
+        "seed": args.seed,
+        "flrq_rank_candidates": list(args.flrq_rank_candidates),
+        "flrq_mse_threshold": float(args.flrq_mse_threshold),
+        "flrq_n_projections": int(args.flrq_n_projections),
+        "flrq_blc_iters": int(args.flrq_blc_iters),
+        "flrq_qbits": int(args.flrq_qbits),
+        "bundle_digests": digests,
+        "timestamp": time.time(),
+    }
+    policy = build_flrq_policy(flrq_results, provenance, per_rank=per_rank)
+    output.write_text(json.dumps(policy, indent=2) + "\n", encoding="utf-8")
+    print(
+        f"wrote {output} with {len(flrq_results)} FLRQ tensor entries "
+        f"(total bytes: {sum(r.bytes_used() for _, r in flrq_results)})",
+        file=sys.stderr,
+    )
+    return 0
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -688,7 +1286,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--fitness",
-        choices=("lrq", "awq", "compare"),
+        choices=("lrq", "awq", "flrq", "compare"),
         default="lrq",
         help="Calibration mode (default: lrq).",
     )
@@ -739,6 +1337,55 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Seed for both LRQ and AWQ legs",
     )
     parser.add_argument("--verbose", action="store_true")
+    # FLRQ (Jan 2026): R1-Sketch + BLC.  Calibration-free: only W is read.
+    parser.add_argument(
+        "--flrq-rank-candidates",
+        type=int,
+        nargs="+",
+        default=list(FLRQ_DEFAULT_RANK_CANDIDATES),
+        help=(
+            "FLRQ rank sweep; the smallest rank whose relative "
+            "reconstruction MSE clears --flrq-mse-threshold wins "
+            f"(default: {' '.join(str(r) for r in FLRQ_DEFAULT_RANK_CANDIDATES)})"
+        ),
+    )
+    parser.add_argument(
+        "--flrq-mse-threshold",
+        type=float,
+        default=FLRQ_DEFAULT_MSE_THRESHOLD,
+        help=(
+            "FLRQ relative-MSE threshold for rank selection, expressed as "
+            "||W - (UV + R_q)||_F^2 / ||W||_F^2 "
+            f"(default {FLRQ_DEFAULT_MSE_THRESHOLD:g})"
+        ),
+    )
+    parser.add_argument(
+        "--flrq-n-projections",
+        type=int,
+        default=FLRQ_DEFAULT_PROJECTIONS,
+        help=(
+            "FLRQ R1-Sketch Gaussian projection count; 16-64 is the "
+            f"recommended operating range (default {FLRQ_DEFAULT_PROJECTIONS})"
+        ),
+    )
+    parser.add_argument(
+        "--flrq-blc-iters",
+        type=int,
+        default=FLRQ_DEFAULT_BLC_ITERS,
+        help=(
+            "FLRQ BLC iterations: number of (re-quantise, re-project) "
+            f"passes per rank (default {FLRQ_DEFAULT_BLC_ITERS})"
+        ),
+    )
+    parser.add_argument(
+        "--flrq-qbits",
+        type=int,
+        default=FLRQ_DEFAULT_QBITS,
+        help=(
+            "FLRQ residual quantiser bit-width (uniform symmetric). "
+            f"INT3-INT4 is the recommended operating range (default {FLRQ_DEFAULT_QBITS})"
+        ),
+    )
     return parser
 
 
@@ -797,6 +1444,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(f"wrote {output} via awq-evolve.py", file=sys.stderr)
         return 0
+    if args.fitness == "flrq":
+        return run_flrq(args)
     if args.fitness == "compare":
         return run_compare(args)
     raise ValueError(f"unknown --fitness {args.fitness!r}")
