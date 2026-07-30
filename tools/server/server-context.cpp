@@ -289,6 +289,7 @@ struct server_slot {
     int32_t n_draft_accepted = 0;   // Draft tokens actually accepted
     int32_t n_draft_verif_steps = 0; // Total draft token verification steps by the target model
     std::vector<int32_t> n_accepted_per_pos; // Accepted tokens per draft position
+    bool is_draft_replay = false;
 
     void reset() {
         SLT_DBG(*this, "%s", "\n");
@@ -317,6 +318,7 @@ struct server_slot {
         n_draft_accepted = 0;
         n_draft_verif_steps = 0;
         n_accepted_per_pos.clear();
+        is_draft_replay = false;
 
         task_prev = std::move(task);
         task.reset();
@@ -3815,6 +3817,7 @@ private:
                         }
 
                         // partial acceptance is not supported by the context -> truncate the draft and restore the state
+                        slot.is_draft_replay = true;
                         slot.spec_draft = std::move(accepted);
 
                         const auto & ckpt = slot.spec_ckpt;
@@ -3848,17 +3851,22 @@ private:
             const int64_t t_now = ggml_time_us();
 
             const auto ids = std::move(slot.spec_draft);
+            size_t n_accepted_stats = ids.size() - 1;
+            if (slot.is_draft_replay && n_accepted_stats > 0) {
+                n_accepted_stats--;
+            }
+            slot.is_draft_replay = false;
 
             slot.t_token_generation = std::max<int64_t>(1, t_now - slot.t_start_generation) / 1e3;
 
             // update how many tokens out of those tested were accepted
-            slot.n_draft_accepted += ids.size() - 1;
+            slot.n_draft_accepted += n_accepted_stats;
             slot.n_draft_verif_steps += 1;
 
             if (slot.n_accepted_per_pos.empty()) {
                 slot.n_accepted_per_pos.resize(common_speculative_n_max(&params_base.speculative), 0);
             }
-            for (size_t i = 0; i < ids.size() - 1 && i < slot.n_accepted_per_pos.size(); ++i) {
+            for (size_t i = 0; i < n_accepted_stats && i < slot.n_accepted_per_pos.size(); ++i) {
                 slot.n_accepted_per_pos[i]++;
             }
 
