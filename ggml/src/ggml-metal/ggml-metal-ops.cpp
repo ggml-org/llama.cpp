@@ -7,6 +7,7 @@
 #include "ggml-metal-impl.h"
 #include "ggml-metal-common.h"
 #include "ggml-metal-device.h"
+#include "metal-dump-dequant.h"
 
 #include <cassert>
 #include <algorithm>
@@ -2291,6 +2292,14 @@ int ggml_metal_op_pool_2d(ggml_metal_op_t ctx, int idx) {
 int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
     ggml_tensor * op = ctx->node(idx);
 
+    // Tessera Layer 1: dump the dequantized weight to the sidecar before
+    // the matmul kernel runs. No-op when the dequant debug hook is not
+    // enabled (see metal-dump-dequant.h).
+    metal_dump_dequant(ctx->dev, op->src[0],
+                       (int64_t) op->src[0]->ne[1] * op->src[0]->ne[2] * op->src[0]->ne[3],
+                       (int64_t) op->src[0]->ne[0],
+                       op->src[0]->name);
+
     ggml_metal_library_t lib = ctx->lib;
     ggml_metal_encoder_t enc = ctx->enc;
 
@@ -2539,6 +2548,14 @@ size_t ggml_metal_op_mul_mat_id_extra_ids(const ggml_tensor * op) {
 
 int ggml_metal_op_mul_mat_id(ggml_metal_op_t ctx, int idx) {
     ggml_tensor * op = ctx->node(idx);
+
+    // Tessera Layer 1: dump the dequantized weight to the sidecar before
+    // the matmul kernel runs. No-op when the dequant debug hook is not
+    // enabled.
+    metal_dump_dequant(ctx->dev, op->src[0],
+                       (int64_t) op->src[0]->ne[1] * op->src[0]->ne[2] * op->src[0]->ne[3],
+                       (int64_t) op->src[0]->ne[0],
+                       op->src[0]->name);
 
     ggml_metal_library_t lib = ctx->lib;
     ggml_metal_encoder_t enc = ctx->enc;

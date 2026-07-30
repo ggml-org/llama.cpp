@@ -11,7 +11,21 @@ ggml_add_backend_library(ggml-metal
                          ggml-metal-common.cpp
                          ggml-metal-context.m
                          ggml-metal-ops.cpp
+                         metal-dump-dequant.mm
                         )
+
+target_include_directories(ggml-metal PRIVATE ../../../common)
+
+# Allow undefined symbols in the dylib so that `tessera_debug::*` (which
+# lives in `common/` and is therefore a higher-level library than this
+# backend) can be resolved at runtime by the dynamic linker. The C++
+# functions are declared with `__attribute__((weak))` in
+# metal-dump-dequant.mm and called through null-checked pointers, so
+# loading a process that doesn't include the foundation (e.g. unit
+# tests) is safe.
+if (APPLE)
+    target_link_options(ggml-metal PRIVATE "LINKER:-undefined,dynamic_lookup")
+endif()
 
 target_link_libraries(ggml-metal PRIVATE
                       ${FOUNDATION_LIBRARY}
