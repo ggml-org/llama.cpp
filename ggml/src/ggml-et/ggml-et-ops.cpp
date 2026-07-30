@@ -755,7 +755,7 @@ bool ggml_et_op_mul_mat(ggml_backend_et_device_context * dev_ctx,
         src0_type_name = "F32";
     } else if (node->type == GGML_TYPE_F32 && node->src[0]->type == GGML_TYPE_F32 &&
                (node->src[1]->type == GGML_TYPE_F16 || node->src[1]->type == GGML_TYPE_F32)) {
-        kernel_name    = "mul_mat_f32";  // N <= 2, or shape doesn't fit the matrix-engine tiling
+        kernel_name    = "mul_mat_f32";  // N < 7, or shape doesn't fit the matrix-engine tiling
         src0_type_name = "F32";
     } else {
         GGML_LOG_ERROR("ET: MUL_MAT operation with unsupported types: dst=%s src0=%s src1=%s\n",
