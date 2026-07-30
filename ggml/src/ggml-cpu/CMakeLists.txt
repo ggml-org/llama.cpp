@@ -52,10 +52,20 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         ggml-cpu/vec.cpp
         ggml-cpu/ops.h
         ggml-cpu/ops.cpp
+        ggml-cpu/cpu-dump-dequant.h
+        ggml-cpu/cpu-dump-dequant.cpp
         )
 
     target_compile_features(${GGML_CPU_NAME} PRIVATE c_std_11 cxx_std_17)
-    target_include_directories(${GGML_CPU_NAME} PRIVATE . ggml-cpu)
+    target_include_directories(${GGML_CPU_NAME} PRIVATE . ggml-cpu ${CMAKE_SOURCE_DIR}/common)
+
+    # tessera_debug symbols are provided by the llama-common static library
+    # in the final binary; for the ggml-cpu shared library we defer the
+    # resolution to link time. Mac's ld fails on undefined symbols by
+    # default; pass -undefined dynamic_lookup for shared builds on Apple.
+    if (BUILD_SHARED_LIBS AND APPLE)
+        target_link_options(${GGML_CPU_NAME} PRIVATE -Wl,-undefined,dynamic_lookup)
+    endif()
 
     if (APPLE AND GGML_ACCELERATE)
         find_library(ACCELERATE_FRAMEWORK Accelerate)
