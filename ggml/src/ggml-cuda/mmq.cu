@@ -5,22 +5,16 @@
 
 #include <cstdint>
 
-// Set x_scale and related fields in mmq_args based on the provided ids tensor and fusion arguments.
-static void mmq_args_set_x_scale(
-        mmq_args & args, const ggml_tensor * ids, const ggml_cuda_mm_fusion_args_host * fusion) {
+static void mmq_args_set_x_scale(mmq_args & args, const ggml_cuda_mm_fusion_args_host * fusion) {
     if (!fusion || !fusion->x_scale) {
         return;
     }
 
+    GGML_ASSERT(args.type_x == GGML_TYPE_NVFP4);
     GGML_ASSERT(fusion->x_scale->type == GGML_TYPE_F32);
+    GGML_ASSERT(ggml_is_contiguous(fusion->x_scale));
+    GGML_ASSERT(ggml_nelements(fusion->x_scale) == (args.ids_dst ? args.nchannels_y : 1));
     args.x_scale = (const float *) fusion->x_scale->data;
-
-    if (ids && ggml_nelements(fusion->x_scale) > 1) {
-        args.x_scale_per_expert = true;
-        args.ids_x_scale = (const int32_t *) ids->data;
-        args.n_expert_used_xs = (int) ids->ne[0];
-        args.ids_x_scale_stride = (int) (ids->nb[1] / ggml_element_size(ids));
-    }
 }
 
 static void ggml_cuda_mul_mat_q_switch_type(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) {
@@ -188,7 +182,7 @@ void ggml_cuda_mul_mat_q(
             ne02, ne12, s02, s12, s2,
             ne03, ne13, s03, s13, s3,
             ne1};
-        mmq_args_set_x_scale(args, nullptr, fusion);
+        mmq_args_set_x_scale(args, fusion);
         ggml_cuda_mul_mat_q_switch_type(ctx, args, stream);
         return;
     }
@@ -270,7 +264,7 @@ void ggml_cuda_mul_mat_q(
         ne03, ne13, s03, s13, s3,
         ne12};
 
-    mmq_args_set_x_scale(args, ids, fusion);
+    mmq_args_set_x_scale(args, fusion);
     ggml_cuda_mul_mat_q_switch_type(ctx, args, stream);
 }
 
@@ -315,6 +309,15 @@ bool ggml_cuda_should_use_mmq(enum ggml_type type, int cc, int64_t ne11, int64_t
 
     if (!mmq_supported) {
         return false;
+    }
+
+    // MMQ tiles require at least 48 KiB per-block shared memory; fall back to BLAS otherwise.
+    {
+        const int    id    = ggml_cuda_get_device();
+        const size_t smpbo = ggml_cuda_info().devices[id].smpbo;
+        if (smpbo < 48 * 1024) {
+            return false;
+        }
     }
 
     if (turing_mma_available(cc)) {
