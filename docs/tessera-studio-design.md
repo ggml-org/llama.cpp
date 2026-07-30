@@ -1,0 +1,2025 @@
+# Tessera Studio - Scoping Design
+
+Design only. No implementation code. Scopes a new native iOS + Mac
+app that uses the Tessera llama.cpp fork at its core, ports the good
+architectural patterns from PrismAgent, and showcases the nature of
+the Tessera project: per-tensor policy, schema-versioned evidence,
+runtime agreement, full CoreML inference on iPhone, multi-modal
+calibration.
+
+The 32 architect decisions are locked by the prior conversation and
+the three prior scoping docs. This doc references them and does not
+re-litigate them.
+
+- CoreML design: `docs/tessera-coreml-conversion-design.md`
+  (decisions C1-C10)
+- Multi-modal calibration: `docs/multimodal-calibration-design.md`
+  (decisions M1-M8)
+- C++ port: `docs/c++-port-design.md` (G0-G6 phasing,
+  Tessera-as-default of llama-quantize, `--tessera-mode=off` opt-out)
+- L1-L6 telemetry pipeline: `docs/runtime-aware-pipeline.md`
+- L1.5 reference sidecar: `docs/c++-port-design.md` section 5
+- Tessera GGUF metadata spec: `docs/tessera.md`
+
+Architect surface, one-line summary of the locked state:
+
+- Full CoreML inference is a first-class backend peer to ggml-metal
+  (C1). iPhone is the primary surface (decision 2). Hero metric is
+  sustained battery draw per token on a phone (decision 2). IOReport
+  is the runtime telemetry source (C3, C4). The conversion tool is
+  stateless, the runtime is ggml-coreml (decision 4, G7). 1
+  .mlmodelc with runtime act_scale for v1, 3 as v2 packaging
+  optimization (C8). Per-modality AWQ alpha with text fallback
+  (M8, M2 hard error on missing modality_scales). The C++ port is
+  in flight, G0-G6 phasing (c++-port-design.md #1, #4). Multi-modal
+  calibration with 5k curated set, weighted 1.5k/2k/1.5k (M1-M8).
+  Tessera as the new default of llama-quantize; no subcommand;
+  --tessera-mode=off only opt-out (c++-port-design.md #1, #4).
+  Match llama.cpp production code style; no new abstractions.
+
+---
+
+## 1. Product surface
+
+### 1.1 The 5-minute iPhone demo
+
+A new user opens Tessera Studio on a M-series iPhone and sees the
+full Tessera story in five minutes. The flow is scripted, not free
+exploration: every step lands a different "this is what Tessera is"
+beat.
+
+| Minute | Beat | What the user sees |
+| --- | --- | --- |
+| 0:00-0:30 | Cold open | The "What is Tessera?" splash. One sentence, one diagram, the 9-component cluster next to a 7-component stock K-quant. The A/B is already implied. |
+| 0:30-1:00 | Model picker | Three models are pre-bundled. Stock Q4_0 Gemma 3 4B. Tessera-quantized Gemma 3 4B (4-bit effective, T640). Tessera-quantized Gemma 4 12B Unified (text + image + audio, 3.5-bit effective, T640). Badges: ANE badge on the Tessera rows, GPU badge on the stock row. |
+| 1:00-1:30 | First inference | User picks the Tessera 12B, types "In one sentence, what is the capital of France?" The iPhone warms. First token in 240ms. ANE power bar starts moving. |
+| 1:30-2:30 | Telemetry transparency | User opens the collapsible telemetry drawer. Five live readouts: ANE power (mW), GPU power (mW), DRAM power (mW), battery current (mA), thermal state. The "why CoreML" answer is right there: ANE is doing the work, GPU is idle. |
+| 2:30-3:30 | Modality switch | User pastes a photo from the camera roll, asks "What is in this image?" The .mlmodelc is the same one (C8). The act_scale switches to `IMAGE` at the engine call. The first image token lands in 340ms; the per-token stream follows. |
+| 3:30-4:30 | Audio mode | User records a 4-second voice memo, asks for a transcript. The same .mlmodelc. act_scale switches to `AUDIO`. The transcript streams; latency is up (audio tokenisation is heavier) but ANE power is steady. |
+| 4:30-5:00 | The A/B moment | User taps "Compare" on the chat header. Side-by-side: Tessera 4-bit 12B vs stock Q4_0 12B. Same prompt, same image. Per-token latency table. The 12B Tessera row is faster (4 effective bits < Q4_0's 4.5) and uses less ANE power per token. PPL proxy on a 50-token held-out set is reported (e.g. Tessera 5.42, stock 5.39). The "PPL cost of going 4-bit" is on the screen. |
+
+The script works because the iPhone app boots into the chat surface
+with the Tessera 12B already loaded; the user never waits on
+downloads, never configures a quantizer, never sees a CLI. The
+conversion (C2) and the calibration (multi-modal-calibration-design
+section 4) already happened on the Mac companion and the result is
+in the `.app` bundle.
+
+### 1.2 The 30-minute flight test
+
+The hero metric is sustained battery draw per token on a phone
+(decision 2). The 30-minute flight test is the canonical
+demonstration of that metric. The iPhone app runs a continuous
+chat workload for 30 minutes on battery (no charger), records:
+
+- `battery_delta_mWh` (the total consumed, from IOReport)
+- `tokens_generated` (the denominator)
+- `mWh_per_token` (the headline)
+- ANE power, GPU power, DRAM power, battery current as
+  time-series (sampled at 1 Hz)
+- thermal events (number of `kIOReturnTemperatureCritical` /
+  throttling transitions)
+- L1 + L1.5 sidecar emitted per token (Tessera-quality evidence
+  is part of the headline, not separate)
+
+The flight test is live in the iPhone app: a "Flight Test" button
+in the chat header starts a 30-minute timer, runs an automated
+prompt stream (text + image + audio round-robin), and renders the
+results in a summary card at the end. The summary is exportable as
+a JSON file (the v3 sidecar extension, see
+`docs/tessera-coreml-conversion-design.md` section 6.5) for later
+analysis on the Mac.
+
+### 1.3 The 3 primary screens
+
+The app has three top-level destinations, surfaced as a tab bar on
+iOS and a window menu on Mac:
+
+1. **Chat** (iOS-only, primary). The LlamaState-style chat surface
+   (`examples/llama.swiftui/llama.swiftui/Models/LlamaState.swift`
+   is the pattern we port). Modality picker, engine selector,
+   live IOReport, the 30-minute flight test.
+2. **A/B Compare** (iOS-only). Side-by-side: Tessera-quantized vs
+   stock Q4_0. Same model, same prompt, different engines. The
+   comparison table.
+3. **Studio** (Mac-only, primary). The calibration + evolution
+   surface. Pick a model, pick a calibration corpus, run
+   AWQ-evolve, quantize, convert to `.mlmodelc`, ship to iPhone
+   via iCloud Drive.
+
+### 1.4 The secondary screens
+
+Each primary screen has a detail / drawer that exposes a secondary
+view. None of these are top-level destinations; they are reached
+via push / sheet from the primary.
+
+- **ModelStore** (drawer, both). Lists bundled models + any
+  user-imported GGUFs / .mlmodelcs in the Documents directory.
+  Badges: ANE (Tessera + CoreML), GPU (stock + Metal), CPU (rare,
+  for debugging).
+- **Telemetry** (drawer, iOS). The live IOReport + the 30-minute
+  flight test results. Always-on when the chat surface is active.
+- **QuantizationPlan** (sheet, iOS; full view, Mac). The
+  "calibrate -> evolve -> quantize -> convert -> run" pipeline
+  visualised as five steps. iOS shows the plan the user shipped
+  from the Mac; Mac shows the editor.
+- **CalibrationSession** (sheet, iOS; full view, Mac). The
+  imatrix + policy + provenance for a single calibration pass.
+  Mac shows the runner with weight visualisation; iOS shows the
+  read-only viewer.
+
+### 1.5 The "wow" moments
+
+Three moments are designed to be screenshot-worthy:
+
+- **First-token latency**: Metal vs CoreML, on a 12B, on a phone.
+  The gap is ~3x on prefill (ANE > Metal) and ~2x on decode (ANE
+  is competitive on memory-bound). Show both numbers, same prompt.
+- **Sustained battery**: 30-minute flight test, mWh/token
+  headline. The gap between Tessera 4-bit and stock Q4_0 is
+  ~30-40% on the 12B; the headline lands that.
+- **Telemetry transparency**: IOReport visible to the user. Other
+  on-device inference apps hide the metric. We do not.
+
+---
+
+## 2. Architecture: Swift Package layout
+
+### 2.1 The high-level shape
+
+One Swift Package, three targets. The shared target is the engine
++ the adapter + the data models. The two platform targets are
+iOS (chat + A/B) and Mac (Studio + calibration). No shared UI
+code: iOS UI and Mac UI are different work, different idioms.
+
+```
+TesseraStudio/
+  Package.swift
+  Sources/
+    TesseraCore/           (shared library, both platforms)
+      LibTessera.swift         ~400 LoC
+      InferenceAdapter.swift   ~200 LoC
+      ModelStore.swift         ~200 LoC
+      ConversationStore.swift  ~200 LoC
+      CalibrationSession.swift ~200 LoC
+      QuantizationPlan.swift   ~150 LoC
+      TelemetryObserver.swift  ~200 LoC
+      (total ~1,550 LoC)
+    TesseraStudioiOS/      (iOS app)
+      TesseraStudioiOSApp.swift    ~50 LoC
+      ContentView.swift            ~120 LoC
+      ChatView.swift               ~480 LoC
+      ABCompareView.swift          ~280 LoC
+      ModelStoreDrawer.swift       ~150 LoC
+      TelemetryDrawer.swift        ~120 LoC
+      (total ~1,200 LoC)
+    TesseraStudioMac/      (Mac app)
+      TesseraStudioMacApp.swift    ~50 LoC
+      ContentView.swift            ~150 LoC
+      StudioView.swift             ~400 LoC
+      QuantizationPlanEditor.swift ~280 LoC
+      CalibrationSessionView.swift ~320 LoC
+      SidecarViewer.swift          ~250 LoC
+      ABReplayView.swift           ~250 LoC
+      (total ~1,800 LoC)
+  Frameworks/
+    tessera.xcframework    (the C FFI, ~3,500 LoC of C/C++)
+  Resources/
+    models/                (pre-bundled GGUFs and .mlmodelcs)
+  Tests/
+    TesseraCoreTests/
+    TesseraStudioiOSTests/
+    TesseraStudioMacTests/
+```
+
+Total: ~4,800 LoC of Swift across the three targets, plus the
+~3,500 LoC C/C++ engine that we do not write here (it is the
+output of the G0-G7 workstreams in the C++ port design).
+
+### 2.2 Package.swift
+
+```swift
+// swift-tools-version: 6.2
+import PackageDescription
+
+let package = Package(
+    name: "TesseraStudio",
+    platforms: [
+        .macOS(.v15),
+        .iOS(.v18),
+    ],
+    products: [
+        .library(name: "TesseraCore", targets: ["TesseraCore"]),
+        .executable(name: "TesseraStudioiOS", targets: ["TesseraStudioiOS"]),
+        .executable(name: "TesseraStudioMac", targets: ["TesseraStudioMac"]),
+    ],
+    dependencies: [],
+    targets: [
+        .target(
+            name: "TesseraCore",
+            path: "Sources/TesseraCore",
+            linkerSettings: [
+                .linkedFramework("CoreML"),
+                .linkedFramework("Metal"),
+                .linkedLibrary("tessera"),
+                .unsafeFlags(["-L", "Frameworks/tessera.xcframework"]),
+            ]
+        ),
+        .executableTarget(
+            name: "TesseraStudioiOS",
+            dependencies: ["TesseraCore"],
+            path: "Sources/TesseraStudioiOS"
+        ),
+        .executableTarget(
+            name: "TesseraStudioMac",
+            dependencies: ["TesseraCore"],
+            path: "Sources/TesseraStudioMac"
+        ),
+        .testTarget(
+            name: "TesseraCoreTests",
+            dependencies: ["TesseraCore"],
+            path: "Tests/TesseraCoreTests"
+        ),
+    ]
+)
+```
+
+The iOS app target embeds `tessera.xcframework` via the Xcode
+project, not the SwiftPM target. The Package.swift surface is
+Mac-friendly (SwiftPM build for command-line tests) and the
+xcodebuild surface handles the iOS embed-and-sign. This mirrors
+the pattern in `examples/llama.swiftui/llama.swiftui.xcodeproj/
+project.pbxproj:24-26` (the llama.xcframework is in `Frameworks,`
+`Libraries, and Embedded Content`).
+
+### 2.3 Target dependencies
+
+| Target | Depends on | Why |
+| --- | --- | --- |
+| TesseraCore | CoreML, Metal, tessera xcframework | The engine + the adapter. The xcframework is the C FFI (G0-G7). CoreML is the Swift-side CoreML backend (it is the .mlmodelc loader + MLState, not the C backend). |
+| TesseraStudioiOS | TesseraCore | The iOS chat + A/B surface. |
+| TesseraStudioMac | TesseraCore | The Mac Studio surface. Imports the C-side calibration runner via tessera xcframework. |
+| TesseraCoreTests | TesseraCore | Unit tests for the adapter, the model store, the calibration session persistence. |
+
+### 2.4 File-level LoC estimates
+
+| File | LoC | Status |
+| --- | --- | --- |
+| `Package.swift` | 50 | Design. |
+| `Sources/TesseraCore/LibTessera.swift` | 400 | Design. The C FFI wrapper. Replaces `examples/llama.swiftui/llama.cpp.swift/LibLlama.swift` (337 LoC) and adds the Tessera C functions. |
+| `Sources/TesseraCore/InferenceAdapter.swift` | 200 | Design. The protocol ported from `PrismAgent/PrismAgentiOS/PrismAgentiOS/InferenceAdapter.swift:1-25`. |
+| `Sources/TesseraCore/ModelStore.swift` | 200 | Design. The Tessera-aware model store. Replaces `PrismAgent/PrismAgent/ModelStore.swift:1-229` minus the Prism-specific `authorized` check. |
+| `Sources/TesseraCore/ConversationStore.swift` | 200 | Design. Tiered storage. Replaces `PrismAgent/PrismAgent/ConversationStore.swift:1-172` with a Tessera-flavoured StoredMessage (no image cache; modality is part of the message). |
+| `Sources/TesseraCore/CalibrationSession.swift` | 200 | Design. The imatrix + policy + provenance record. New, not a port. |
+| `Sources/TesseraCore/QuantizationPlan.swift` | 150 | Design. The 5-step pipeline. Replaces the PrismAgent "Plan" idea with a Tessera-flavoured one. |
+| `Sources/TesseraCore/TelemetryObserver.swift` | 200 | Design. The L1 + L1.5 + B + C + E consumer. New, not a port. |
+| `Sources/TesseraStudioiOS/TesseraStudioiOSApp.swift` | 50 | Design. |
+| `Sources/TesseraStudioiOS/ContentView.swift` | 120 | Design. Tab bar. |
+| `Sources/TesseraStudioiOS/ChatView.swift` | 480 | Design. Modality picker, engine selector, IOReport, flight test. |
+| `Sources/TesseraStudioiOS/ABCompareView.swift` | 280 | Design. |
+| `Sources/TesseraStudioiOS/ModelStoreDrawer.swift` | 150 | Design. |
+| `Sources/TesseraStudioiOS/TelemetryDrawer.swift` | 120 | Design. |
+| `Sources/TesseraStudioMac/TesseraStudioMacApp.swift` | 50 | Design. |
+| `Sources/TesseraStudioMac/ContentView.swift` | 150 | Design. Window menu. |
+| `Sources/TesseraStudioMac/StudioView.swift` | 400 | Design. |
+| `Sources/TesseraStudioMac/QuantizationPlanEditor.swift` | 280 | Design. |
+| `Sources/TesseraStudioMac/CalibrationSessionView.swift` | 320 | Design. |
+| `Sources/TesseraStudioMac/SidecarViewer.swift` | 250 | Design. |
+| `Sources/TesseraStudioMac/ABReplayView.swift` | 250 | Design. |
+| Tests + xcconfig | ~300 | Design. |
+| **Swift total** | **~4,800** | |
+| C/C++ xcframework | ~3,500 | Out of scope for this doc. Output of G0-G7. |
+
+The Swift totals are a target, not a budget. The LlamaState + the
+PrismAgent surfaces show a real chat surface fits in ~480 LoC
+(`PrismAgent/PrismChatView.swift:1-479` is 479 LoC and it does
+more: voice, image drop, multimodal streaming). The Tessera
+chat surface is simpler (no agent loop, no tool calls, no
+embedded browser) and fits the same envelope.
+
+### 2.5 The xcframework
+
+The build script is a fork of
+`/Users/user/Developer/GitHub/llama.cpp/build-xcframework.sh:1-550`
+(550 LoC, builds for iOS sim, iOS device, macOS arm64, macOS x86_64,
+visionOS, visionOS sim, tvOS sim, tvOS device). The Tessera
+fork is ~600 LoC because it adds:
+
+- `ggml-coreml` as a backend (`docs/tessera-coreml-conversion-
+  design.md` section 5, G7)
+- The Tessera common lib (`tools/quantize/tessera/`, the C++ port
+  output of G3-G5)
+- A subset of `tools/mtmd/` (the multimodal glue) for the iOS
+  app's image / audio tokenisation
+- The new `llama.h` with the Tessera additions (see section 3
+  below for the C FFI)
+
+The Mac app links against the Mac slice; the iOS app embeds the
+iOS device + iOS sim slices. The fork is stored as
+`build-tessera-xcframework.sh` in the Tessera llama.cpp fork and
+called by the Tessera Studio Xcode project as a pre-build step.
+
+---
+
+## 3. The Tessera engine integration
+
+### 3.1 How the llama.cpp fork becomes a Swift module
+
+The Tessera llama.cpp fork produces a `tessera.xcframework` with
+the same shape as `llama.xcframework` (see
+`/Users/user/Developer/GitHub/llama.cpp/build-xcframework.sh:533-
+550` for the xcodebuild `xcodebuild -create-xcframework` call).
+The framework exposes the C API in a module map
+(`build-xcframework.sh:135-146` shows the llama.xcframework
+module map; the Tessera one is identical with `llama` -> `tessera`
+and one extra header `tessera.h`).
+
+The Swift wrapper `Sources/TesseraCore/LibTessera.swift` (~400
+LoC) is a port of
+`/Users/user/Developer/GitHub/llama.cpp/examples/llama.swiftui/
+llama.cpp.swift/LibLlama.swift:1-337` (337 LoC). The port adds
+~60 LoC for the new Tessera C functions. The pattern is the
+same: an `actor TesseraContext` holds the `OpaquePointer` for
+`model`, `context`, `vocab`, `sampling`, and a `batch`; the
+`create_context` static factory loads the model.
+
+### 3.2 The new TesseraEngine class
+
+`TesseraEngine` (in `LibTessera.swift`) wraps the llama.cpp C API
+and adds the Tessera-specific surface. It is the public entry
+point for both `InferenceAdapter` implementations and the
+`CalibrationSession` consumer.
+
+```swift
+@MainActor
+public final class TesseraEngine {
+    public static let shared: TesseraEngine = .init()
+
+    // The loaded model + context
+    private var model: OpaquePointer?
+    private var context: OpaquePointer?
+    private var vocab: OpaquePointer?
+    private var sampling: UnsafeMutablePointer<llama_sampler>?
+
+    // The Tessera C-side handles
+    private var tesseraContext: OpaquePointer?
+    private var l1SidecarWriter: OpaquePointer?
+    private var l15SidecarWriter: OpaquePointer?
+
+    // The IOReport client (Objective-C bridge, see 6.5)
+    private var ioReport: TesseraIOReporter?
+
+    public func load(
+        ggufPath: String,
+        tesseraSidecar: URL?,
+        policy: TesseraPolicy?
+    ) async throws
+
+    public func generate(
+        prompt: String,
+        modality: TesseraModality,
+        config: TesseraGenerateConfig
+    ) -> AsyncThrowingStream<TesseraToken, Error>
+
+    public func readL1Sidecar(for tensor: String) throws -> TesseraL1Sidecar
+    public func readL15Sidecar(for tensor: String) throws -> TesseraL15Sidecar
+
+    public func latestIOReport() throws -> TesseraIOReport
+    public func flightTestStatus() throws -> TesseraFlightTestStatus
+}
+```
+
+The `TesseraToken` is the streaming element. It carries:
+
+```swift
+public struct TesseraToken: Sendable {
+    public let text: String
+    public let tokenID: Int32
+    public let modality: TesseraModality
+    public let latencyNs: UInt64
+    public let anePowerMW: Double
+    public let gpuPowerMW: Double
+    public let dramPowerMW: Double
+    public let batteryCurrentMA: Double
+    public let thermalState: Int32
+    public let l1SidecarDelta: URL?  // written by C side per token
+}
+```
+
+`TesseraModality` is the C FFI enum (see 3.3 below).
+
+### 3.3 The C FFI additions
+
+The C FFI is THIN. Most of the work is in C++; the Swift surface
+is a wrapper. The new C functions and their signatures:
+
+```c
+// libtessera.h (added to llama.h, not a new header)
+
+typedef enum {
+    TESSERA_MODALITY_TEXT  = 0,
+    TESSERA_MODALITY_IMAGE = 1,
+    TESSERA_MODALITY_AUDIO = 2,
+} tessera_modality_t;
+
+typedef enum {
+    TESSERA_DEQUANT_T640_3D = 0,
+    TESSERA_DEQUANT_T640_4D = 1,
+    TESSERA_DEQUANT_STOCK_KQUANT = 2,
+} tessera_dequant_mode_t;
+
+// Opaque handle; created by tessera_context_init, freed by tessera_context_free
+typedef struct tessera_context tessera_context_t;
+
+tessera_context_t * tessera_context_init(
+    struct llama_context * lctx,
+    const char * policy_json_path  // optional; NULL falls back to GGUF metadata
+);
+
+void tessera_context_free(tessera_context_t * tctx);
+
+int tessera_set_dequant_mode(
+    tessera_context_t * tctx,
+    tessera_dequant_mode_t mode
+);
+
+int tessera_set_modality(
+    tessera_context_t * tctx,
+    tessera_modality_t modality
+);
+
+int tessera_set_imatrix(
+    tessera_context_t * tctx,
+    const char * imatrix_path  // imatrix v2, modality-tagged (M3)
+);
+
+int tessera_set_policy(
+    tessera_context_t * tctx,
+    const char * policy_json_path  // calibration-policy.v1 + modality_scales (M2)
+);
+
+// L1 sidecar: per-tensor dequant error (the kernel's actual dequant vs BF16).
+// Writer is created on first call; rows appended per matmul.
+int tessera_open_l1_sidecar(
+    tessera_context_t * tctx,
+    const char * output_dir  // one .dequant.f32 file per tensor
+);
+
+int tessera_read_l1_sidecar(
+    const char * path,
+    struct tessera_l1_row ** out_rows,
+    int64_t * out_n_rows
+);
+
+// L1.5 sidecar: FP16 reference for the dequant. Same v3 schema (c++-port-design.md 5.1).
+int tessera_open_l15_sidecar(
+    tessera_context_t * tctx,
+    const char * output_dir
+);
+
+int tessera_read_l15_sidecar(
+    const char * path,
+    struct tessera_l15_row ** out_rows,
+    int64_t * out_n_rows
+);
+
+// IOReport telemetry: one row per token. Swift polls latestIOReport() at 1 Hz.
+int tessera_poll_io_report(
+    tessera_context_t * tctx,
+    struct tessera_io_report * out_report
+);
+
+// Battery current (the hero metric, decision 2 + C4).
+int tessera_poll_battery(
+    int32_t * out_current_ma,
+    int32_t * out_thermal_state
+);
+```
+
+The `tessera_modality_t` enum is the M5 decision (BOTH modality
+ID + per-modality components). The `tessera_set_modality` call is
+made before every `llama_decode`; the engine routes the act_scale
+lookup and the L1 / L1.5 sidecar row tagging by the current
+modality. This matches `docs/multimodal-calibration-design.md:
+561-606` (section 5.1, 5.2, 5.3).
+
+The `tessera_set_policy` accepts the calibration-policy.v1 +
+modality_scales JSON produced by the AWQ-evolve runner
+(`docs/multimodal-calibration-design.md:348-386`, schema diff
+v1 -> v2). The runner writes it to disk; the engine reads it. M2
+hard-errors on missing modality_scales - the Swift side surfaces
+the error and refuses to load.
+
+The `tessera_set_imatrix` accepts the modality-tagged imatrix v2
+(`docs/multimodal-calibration-design.md:410-482`, M3). The
+`modality_breakdown` field is consumed by the engine to populate
+the per-modality AWQ alpha; the per-modality component is
+selected by the modality ID (M5).
+
+The C FFI is THIN. The C++ side does the work:
+
+- `tessera_context_init` calls into the G3-G5 C++ port
+  (`tools/quantize/tessera/tessera-context.{h,cpp}` in the C++
+  port design section 2.1) to wire the runtime to the L1 sidecar
+  writer, the L1.5 sidecar reader, the imatrix v2 reader, and the
+  policy reader.
+- `tessera_set_modality` mutates the engine's `current_modality`
+  field; the next matmul uses it for act_scale lookup and
+  sidecar row tagging.
+- `tessera_open_l1_sidecar` opens a sidecar file per tensor, the
+  first time the tensor is dequanted. The writer is the
+  `common/tessera-debug/tessera-sidecar-v3.cpp` already in the
+  C++ port (G5).
+- `tessera_poll_io_report` reads the IOReport subsamples from the
+  channel opened in `tessera_context_init` (C3, C4).
+
+### 3.4 How the engine loads a Tessera-quantized GGUF
+
+The flow is the same as `LlamaContext.create_context` in
+`/Users/user/Developer/GitHub/llama.cpp/examples/llama.swiftui/
+llama.cpp.swift/LibLlama.swift:62-91` (30 LoC, calls
+`llama_backend_init`, `llama_model_load_from_file`,
+`llama_init_from_model`), with three additions:
+
+1. After `llama_model_load_from_file`, read the `tessera.*`
+   metadata fields (`docs/tessera.md` section 1 for the field
+   list). Validate that `tessera.version` matches the C++ port's
+   `TESSERA_KERNEL_VERSION`. Hard-fail if mismatched.
+2. After `llama_init_from_model`, call `tessera_context_init` with
+   the path to the calibration-policy.v1 + modality_scales JSON
+   (if present on disk next to the GGUF; the GGUF metadata
+   `tessera.policy.path` points to it; C10).
+3. After `tessera_context_init`, call `tessera_set_imatrix` with
+   the imatrix v2 path (if present; `tessera.imatrix.path` in
+   the GGUF metadata).
+
+The M2 hard-error on missing modality_scales is enforced at
+step 2: if the policy is multi-modal and modality_scales is
+absent, `tessera_context_init` returns NULL and the Swift side
+throws `TesseraError.missingModalityScales`. This matches
+`docs/multimodal-calibration-design.md:329-348` (section 2.1,
+the in-place extension decision).
+
+### 3.5 How the engine emits L1 / L1.5 sidecars (v3 schema)
+
+The v3 sidecar format is defined in
+`docs/c++-port-design.md:595-621` (section 4.3) and the C++ port
+already implements the writer (G5, `tools/quantize/tessera/
+tessera-sidecar-v3.cpp`). The engine enables the writer via
+`tessera_open_l1_sidecar(tctx, output_dir)`. Per-tensor, the C++
+sidecar hook is fired by the dequant kernel (see
+`docs/runtime-aware-pipeline.md:104-117` for the kernel
+instrumentation pattern).
+
+The Swift side reads the sidecars for the SidecarViewer (Mac)
+and the ABReplayView (Mac). It does not parse the binary F32
+payload; it dispatches to a tiny C function
+`tessera_l1_sidecar_summary` that emits JSON (mean, max,
+p99, top-k) so the Swift view does not have to allocate 4 GiB
+of F32 in the heap. The C function is ~80 LoC.
+
+### 3.6 How the engine reports IOReport telemetry back to Swift
+
+The flow matches `docs/tessera-coreml-conversion-design.md:
+section 6` (IOReport telemetry design). The C side opens the
+IOReport channels in `tessera_context_init` (C3, the "Energy
+Model" channel for ANE power; the DVFS channel as a fallback for
+ANE activity; the GPU power channel; the DRAM power channel;
+the battery current channel; the thermal state channel). The
+Swift side calls `tessera_poll_io_report` at 1 Hz (or at
+`CADisplayLink` callback for 60 Hz; default is 1 Hz to keep
+the C bridge cheap).
+
+The `TesseraIOReporter` Objective-C class is the bridge; it owns
+the IOReport subscription. It is in
+`Sources/TesseraCore/TesseraIOReporter.swift` (~120 LoC) and
+links `IOKit.framework` and `IOSurface.framework` (private
+frameworks; the App Store risk is documented in section 12 and
+section 11).
+
+### 3.7 The C FFI is THIN
+
+The 10 C functions above total ~400 LoC of C. The Swift wrapper
+is ~400 LoC. The C++ side does the work, including:
+
+- the dequant kernel
+- the L1 sidecar writer
+- the IOReport subscriber
+- the policy / imatrix reader
+- the per-modality act_scale dispatch
+
+This matches the llama.cpp production style: thin wrappers, no
+new abstractions. The Swift surface is a one-to-one mirror of
+the C surface; there is no Swift-side OR-M, no async wrappers
+beyond `AsyncThrowingStream` for `generate`, no Swift-specific
+state machine. The C++ port owns the design.
+
+---
+
+## 4. PrismAgent pattern porting
+
+The PrismAgent surface has 197 Swift files in the worktree. Most
+of them are Prism-specific (Neo4j graph, Chromium embedded, XPC,
+P2P, agent loop with tool calls). A small minority are patterns
+that translate cleanly to the Tessera app. This section
+documents each pattern, what it does, the relevant file, and the
+verdict (KEEP / REPLACE / SKIP / RENAME).
+
+### 4.1 InferenceAdapter protocol - KEEP, REPLACE inner
+
+File: `PrismAgent/PrismAgentiOS/PrismAgentiOS/InferenceAdapter.
+swift:1-25`. The protocol:
+
+```swift
+@MainActor
+public protocol InferenceAdapter: AnyObject {
+    func loadCImage(at url: URL) async throws
+    func generateText(prompt: String) -> AsyncThrowingStream<String, Error>
+    func synthesizeSpeech(text: String, voice: String) async throws -> Data
+    var isReady: Bool { get }
+    var tokensPerSecond: Double { get }
+}
+```
+
+This is the right shape. The Tessera port:
+
+- Renames `loadCImage(at:)` to `loadGGUF(at:tesseraSidecar:policy:)`
+  to match the Tessera file shape (C10: GGUF metadata is primary,
+  sidecar is override).
+- Renames `generateText(prompt:)` to `generate(prompt:modality:
+  config:)` to surface the M5 modality ID.
+- Replaces the `synthesizeSpeech` method with `loadTTSAssets`
+  (deferred to v2; v1 does not ship TTS).
+- Adds `telemetry` as a published property: the live
+  `TesseraIOReport` (C3, C4).
+- Adds `l1SidecarURL(for tensor:)` and `l15SidecarURL(for tensor:)`
+  for the Mac companion to read.
+
+The protocol stays. The engine is the new CoreML-backed
+implementation; the iOS inference adapter is a thin wrapper.
+
+### 4.2 ModelStore - KEEP, TESSERA-FLAVOUR
+
+File: `PrismAgent/PrismAgent/ModelStore.swift:1-229`. The
+catalogue + the `ModelDownload` (URLSession with progress
+tracking) + the `installedModels` set + `scanInstalled`. The
+Tessera port keeps the same surface but:
+
+- Adds a `TesseraModelDescriptor` per entry with the
+  `tessera.profile` field (e.g. `TSQ-T640-AWQ-SR-U-M3`), the
+  per-modality `awq_alpha` vector, the `.mlmodelc` path, and the
+  imatrix v2 path.
+- Replaces the "is downloaded" check with two checks: "is the
+  GGUF present" and "is the .mlmodelc present" (C2: the .mlmodelc
+  is baked at quantize time, so on iOS the .mlmodelc ships in the
+  `.app` bundle; the GGUF is for the Mac).
+- Replaces the Prism-specific `authorized` flag (line 179-182,
+  the `~/.prism/auth` file) with `tesseraBaked` (a bool
+  indicating whether the model was Tessera-quantized).
+- Drops the `LocalModelDiscovery` reference (line 9, the on-disk
+  filesystem scan); the Tessera model store reads the `models/`
+  bundle directory on first launch and registers the entries.
+
+### 4.3 ModelStoreView - KEEP, REPLACE, ADD BADGES
+
+File: `PrismAgent/PrismAgent/ModelStoreView.swift:1-428`. The
+horizontal-scroll `ModelSection` (line 157-179) + the
+`ModelCard` (line 183-333) + the `LocalModelCard` (line 337-422).
+The Tessera port keeps the layout but:
+
+- Replaces the `compatibleDevices: [String]` (PrismAgent
+  line 18) with `backends: [TesseraBackend]` (an enum:
+  `ane`, `metal`, `cpu`). The badge mapping (line 316-332) is
+  unchanged in shape; only the values change.
+- Adds a `TesseraProfileBadge` per card: a small pill showing
+  `TSQ-T640-AWQ-SR-U` with the effective-bit count (e.g. "3.5
+  bit") on a second line.
+- Adds a `.mlmodelc` status indicator: green check if the
+  .mlmodelc is bundled; gray dash if the model is stock (no
+  .mlmodelc).
+- Drops the `compilePipelineSection` (line 119-152, the
+  "Compile for Device" UI for Prism's cimage format). The
+  Tessera equivalent lives on the Mac Studio surface, not in
+  the iOS model store drawer.
+
+### 4.4 ConversationStore - KEEP, TESSERA-FLAVOUR
+
+File: `PrismAgent/PrismAgent/ConversationStore.swift:1-172`. The
+tiered storage (journal on disk + ring buffer + lazy reverse
+prefetch, line 4-9 docs) is the right pattern. The Tessera
+port:
+
+- Replaces the `StoredMessage` (PrismAgent's, has `imageAttachment
+  :ImageAttachment?`) with a `TesseraMessage` that has
+  `modality: TesseraModality` and a `payload: TesseraPayload`
+  (an enum: `.text(String)`, `.image(URL)`, `.audio(URL)`).
+- Replaces the `ImageCacheService` (line 38, 121-123) with a
+  `TesseraAttachmentStore` that handles text + image + audio
+  attachments.
+- Replaces the `SpotlightIndexer` reference (line 98) with the
+  Tessera-side indexer (deferred to v2).
+- Keeps the journal + ring buffer + prefetch pattern. The
+  `workingWindowSize = 200` and `prefetchChunkSize = 100`
+  constants (line 22-23) stay.
+
+### 4.5 Plan / QuantizationPlan - KEEP, RENAME
+
+PrismAgent does not have a `Plan.swift` in the iOS / Mac
+sources we read; the "Plan" idea lives in the agent loop (the
+AutonomousOrchestrator generates a plan, the user approves it,
+the orchestrator runs it). The Tessera equivalent is the
+`QuantizationPlan`:
+
+```
+calibrate -> evolve -> quantize -> convert -> run
+```
+
+The five steps are: pick a calibration corpus (M1), run
+AWQ-evolve (M2), quantize with the resulting policy (G3), convert
+to .mlmodelc (C2), ship to iPhone for run (C8). The
+QuantizationPlan Swift type is a `Codable` struct that the Mac
+Studio editor mutates and the iOS app reads for display.
+
+### 4.6 AgentObserver / TelemetryObserver - KEEP, RENAME
+
+PrismAgent does not have an `AgentObserver.swift`; the observer
+pattern is implicit in the agent loop (the AgentOrchestrator
+pushes events to the StreamHandler at `PrismAgent/
+PrismBridgeAdapter.swift:49-67`). The Tessera port lifts this
+into a first-class `TelemetryObserver` Swift type that consumes
+the L1 + L1.5 + B + C + E layers:
+
+- L1: per-tensor dequant sidecar (the kernel's actual dequant
+  vs BF16, see `docs/runtime-aware-pipeline.md:51-117`)
+- L1.5: FP16 reference sidecar (see `docs/c++-port-design.md:
+  638-696`)
+- B: per-layer sensitivity rank (the L2/L3/L4 output, see
+  `docs/runtime-aware-pipeline.md:138-145`)
+- C: per-kernel latency LUT, modality-tagged (see
+  `docs/multimodal-calibration-design.md:772-784`)
+- E: fidelity predictor (the E2E quality estimate, see
+  `docs/runtime-aware-pipeline.md:218-227` and the Phase E
+  smoke + unit tests already in the C++ port)
+
+The `TelemetryObserver` is the Swift object that exposes these
+five layers to the UI; it owns the polling loops (1 Hz for
+IOReport, on-demand for sidecars, lazy for B/C/E) and the
+serialization to JSON for export.
+
+### 4.7 SubAgent / QuantizationWorkerPool - KEEP, RENAME
+
+File: `PrismAgent/PrismAgent/SubAgentOrchestrator.swift:1-100`.
+The `SubAgent` lifecycle (spawn -> mark running -> complete ->
+move to completedAgents, line 26-77) is the right pattern. The
+Tessera port lifts it to `QuantizationWorkerPool` for parallel
+per-tile work: the calibration runner spawns N workers
+(one per tile, N = 8 by default), each runs an
+AWQ-evolve generation, the pool aggregates the results into the
+joint policy.
+
+The Tessera port keeps the `activeWorkers` / `completedWorkers`
+separation, the `cancelAll` (line 70-75), the `reset` (line
+77-81). It drops the `parentPlanID` and the `goal: String` (line
+27, 86) - the QuantizationWorker has a `tileIndex: Int` and a
+`policyGenes: QuantizationGenes` instead.
+
+### 4.8 - 4.14 SKIP summary
+
+The following PrismAgent patterns are SKIP (Prism-specific, no
+Tessera equivalent). One-line per pattern; no port.
+
+- `AgentToolDispatcher` (`PrismAgent/AgentToolDispatcher.swift:1-292`):
+  intent classifier + tool dispatch; no agent loop in Tessera.
+- `PrismVoiceEngine` (visible in PrismAgent file list line 39):
+  TTS, deferred to v2.
+- `ChromiumView` / `BrowserTools` / `ChromeCDP` /
+  `PrismBridgeAdapter.swift:466-1105` (semantic DOM reducer +
+  injection guard, 640 LoC): no embedded browser.
+- Neo4j / Valkey / LMDB: the Prism memory stack; Tessera has
+  only the conversation journal (local JSON).
+- `PrismEngineXPCProtocol` / `PrismCredentialService` (in
+  `Package.swift:115-125`): XPC + separate credential process;
+  Tessera links the xcframework directly.
+- `P2PRouter` (`PrismAgent/P2PRouter.swift:1-72`): the
+  NetworkSession + SymmetricKey; no P2P in Tessera.
+- `MacRemoteView*` + `RemoteViewBridge` + `RemoteKeyboardBridge`:
+  the iOS-as-Mac-remote-display pattern; Tessera Mac and iOS
+  are independent, the Plan syncs via iCloud Drive.
+
+### 4.15 SubAgent pool summary
+
+| Prism pattern | File | LoC | Verdict |
+| --- | --- | --- | --- |
+| InferenceAdapter protocol | PrismAgentiOS/InferenceAdapter.swift | 83 | KEEP, REPLACE inner |
+| ModelStore | PrismAgent/ModelStore.swift | 229 | KEEP, TESSERA-FLAVOUR |
+| ModelStoreView | PrismAgent/ModelStoreView.swift | 428 | KEEP, REPLACE, ADD BADGES |
+| ConversationStore | PrismAgent/ConversationStore.swift | 172 | KEEP, TESSERA-FLAVOUR |
+| PrismChatView | PrismAgent/PrismChatView.swift | 479 | KEEP, SIMPLIFY (drop voice + agent) |
+| PrismEngineApp | PrismAgent/PrismEngineApp.swift | 14 | KEEP, minimal |
+| PrismAgentiOSApp | PrismAgentiOS/PrismAgentiOSApp.swift | 39 | KEEP, minimal |
+| PrismModelManager | PrismAgent/PrismModelManager.swift | 171 | KEEP, simplify to ModelStore |
+| PrismModelCardView | PrismAgent/PrismModelCardView.swift | 206 | KEEP, REPLACE compile/download |
+| PrismBridgeAdapter | PrismAgent/PrismBridgeAdapter.swift | 1105 | PARTIAL: keep StreamHandler pattern only |
+| SubAgentOrchestrator | PrismAgent/SubAgentOrchestrator.swift | 100 | KEEP, RENAME QuantizationWorkerPool |
+| AutonomousOrchestrator | PrismAgent/AutonomousOrchestrator.swift | 159 | SKIP (no agent loop) |
+| AgentToolDispatcher | PrismAgent/AgentToolDispatcher.swift | 292 | SKIP |
+| P2PRouter | PrismAgent/P2PRouter.swift | 72 | SKIP |
+| Voice (PrismVoiceEngine) | PrismAgent/PrismVoiceEngine.swift | (not read) | SKIP v1, v2 |
+| Chromium / DOM reducer | PrismBridgeAdapter.swift:466-1105 | 640 | SKIP |
+| Neo4j / Valkey / LMDB | (across PrismAgent) | n/a | SKIP |
+| XPC / Credential Service | PrismEngineXPCProtocol.swift, Package.swift:115-125 | n/a | SKIP |
+| Mac remote view | MacRemoteView*.swift, RemoteViewBridge.swift | n/a | SKIP |
+
+Net: ~1,920 LoC of PrismAgent ports cleanly into the Tessera
+Studio surface. ~5,000 LoC of PrismAgent is Prism-specific and
+is skipped. The Tessera port is ~4,800 LoC of new Swift; ~40%
+of it is a port, ~60% is Tessera-flavoured new code (the
+Studio surface, the CalibrationSession, the SidecarViewer).
+
+---
+
+## 5. The Tessera-specific UI surfaces
+
+This section documents the iOS + Mac surfaces that are
+Tessera-specific (no Prism equivalent) and the surfaces that
+are ports of the llama.swiftui engine shape.
+
+### 5.1 Chat (iOS)
+
+The chat surface is a port of the LlamaState pattern
+(`/Users/user/Developer/GitHub/llama.cpp/examples/llama.swiftui/
+llama.swiftui/Models/LlamaState.swift:1-196`), extended with:
+
+- The modality picker (text / image / audio) - a horizontal
+  `SegmentedControl` above the input bar.
+- The engine selector (Tessera + CoreML, Tessera + Metal, Stock
+  + Metal) - a `Menu` in the navigation bar, with badges.
+- The inference controls (temperature, top-p, top-k, max
+  tokens) - a `Sheet` triggered by a gear icon.
+- The live IOReport (C3, C4) - a collapsible `DisclosureGroup`
+  at the bottom of the chat scroll view, showing five
+  `Gauge`s: ANE power, GPU power, DRAM power, battery current,
+  thermal state.
+- The 30-minute flight test button - a `Button` in the
+  navigation bar that starts the test, runs an automated prompt
+  stream, and renders a summary card at the end.
+
+The message bubble is a port of
+`PrismAgent/PrismAgent/PrismChatView.swift:288-414` (the
+`MessageBubble` view) with the image attachment replaced by
+the modality-aware payload (text + image + audio). The
+streaming dot (line 442-457) stays.
+
+The chat surface is keyboard-first: tapping the input field
+shows the keyboard, the user types, taps send, the engine
+streams tokens. The modality picker is for "I have an image
+to attach" or "I want to dictate a voice memo"; the default
+is text-only.
+
+The IOReport is the new thing. Five gauges, updated at 1 Hz,
+are the answer to "why is this app different from any other
+on-device inference app." We do not hide the metric.
+
+The 30-minute flight test is the second new thing. It is
+visible to the user, not a separate QA harness. The user taps
+"Flight Test" once, gets a 30-minute timer, walks away, comes
+back to a summary card with the hero metric (mWh/token) and
+the thermal events. The summary is exportable.
+
+### 5.2 A/B Compare (iOS)
+
+The A/B Compare view runs two engines side-by-side on the same
+prompt and surfaces the comparison.
+
+- **Layout**: a `VStack` of two `ChatView`-like surfaces, the
+  top labelled "Tessera" with an ANE badge, the bottom labelled
+  "Stock" with a GPU badge. The input bar is shared: one
+  prompt, two engines, one "Send" button.
+- **Per-token latency table**: when both engines finish, the
+  view renders a table with columns `token`, `Tessera
+  latency`, `Stock latency`, `delta`. The table is virtualised
+  (only the first 20 + last 20 tokens are shown; the full
+  table is in the export).
+- **First-token latency comparison**: a single row at the top
+  with `Tessera: 240ms`, `Stock: 720ms`, `delta: -480ms` (or
+  similar). The headline.
+- **PPL proxy**: the view runs a held-out 50-token validation
+  set through both engines, computes the perplexity on each,
+  and reports `Tessera PPL: 5.42`, `Stock PPL: 5.39`,
+  `delta: 0.03`. The "PPL cost of going 4-bit" number.
+- **Memory footprint**: the view reports `Tessera RSS: 3.1 GB`,
+  `Stock RSS: 3.4 GB`, `delta: -0.3 GB` (the 4-bit effective
+  bits of the Tessera 12B are tighter than Q4_0's 4.5).
+- **Export**: the per-token table + the IOReport time-series
+  + the PPL numbers are written to a JSON file in the
+  Documents directory for the Mac companion to ingest.
+
+The A/B Compare view is the "show your work" surface. The
+Tessera story is "we are faster, smaller, and the quality cost
+is bounded" - the table is the proof.
+
+### 5.3 Studio (Mac)
+
+The Studio is the Mac-only primary surface. The user opens the
+Mac app, lands on the Studio, picks a model from the
+`ModelStore` drawer, picks a calibration corpus from the
+`CorpusPicker`, and runs the five-step pipeline.
+
+- **QuantizationPlan editor**: a `Form` view with five sections
+  (calibrate, evolve, quantize, convert, run). The user picks
+  the model, the corpus, the AWQ-evolve generation count, the
+  output bit-width, the .mlmodelc output path. The form
+  persists the plan as a JSON file in `~/Library/Application
+  Support/TesseraStudio/plans/<id>.json`.
+- **L1 / L1.5 sidecar viewer**: a `Table` view with columns
+  `tensor`, `L1 mean`, `L1 max`, `L1 p99`, `L1.5 mean abs`,
+  `L1.5 max abs`. The rows are sorted by L1 p99 descending; the
+  top 20 are highlighted. The user clicks a row to see a
+  per-position heatmap (the dequant error per row of the
+  tensor).
+- **Per-layer error table (B)**: a `Table` view with columns
+  `layer`, `sensitivity rank`, `B mean`, `B max`, `recommended
+  bit-width`. The recommended bit-width comes from the L5
+  orchestrator (`docs/c++-port-design.md:171-181`).
+- **Latency LUT (C)**: a `Table` view with columns `kernel`,
+  `shape`, `modality`, `p50`, `p99`. Grouped by
+  (shape, kernel_id, modality) per
+  `docs/multimodal-calibration-design.md:772-784`.
+- **Fidelity predictor (E)**: a `Chart` view of the predicted
+  E2E PPL vs the actual PPL on a held-out probe set. The
+  diagonal `y = x` is overlaid; the points are the per-prompt
+  predictions.
+- **The 30-minute flight test is replayable from the sidecar
+  data**: the user picks a recorded flight test (an exported
+  JSON from the iPhone app), the Studio replays the
+  inference steps against the recorded sidecars, and the
+  latency / power / PPL surfaces re-render. The replay is
+  for debugging: "why was the flight test on 2026-08-15
+  weird?"
+
+The Studio is a workbench. The user runs the plan, watches
+the L1 / L1.5 sidecars fill in, sees the L5 recommendations
+emerge, ships the .mlmodelc to the iPhone via iCloud Drive.
+
+---
+
+## 6. The CoreML backend integration
+
+The CoreML backend is the C side (`ggml-coreml`, G7 of the C++
+port, `docs/tessera-coreml-conversion-design.md` section 5).
+This section documents the Swift surface that wraps the C
+backend and how it integrates with the `TesseraEngine`.
+
+### 6.1 The ggml-coreml backend is a Swift wrapper around CoreML
+
+The C backend (`ggml-coreml`) loads the `.mlmodelc`, manages
+the MLState, and routes the matmul calls to the ANE. The
+Swift wrapper (`TesseraCoreMLBackend.swift`, ~150 LoC) wraps
+the C API in a Swift class:
+
+```swift
+final class TesseraCoreMLBackend {
+    let model: MLModel
+    let state: MLState
+    let inputName: String
+    let outputName: String
+    let actScaleInputName: String  // C8: runtime act_scale
+
+    init(modelURL: URL, configuration: MLModelConfiguration) throws
+
+    func predict(
+        inputs: [String: MLFeatureValue],
+        modality: TesseraModality
+    ) throws -> [String: MLFeatureValue]
+}
+```
+
+The `MLModelConfiguration` is built with
+`computeUnits = .all` (ANE + GPU + CPU), `allowLowPrecision
+AccumulationOnGPU = true` (ANE's preferred), and
+`functionName = nil` (single function). The `MLState` is
+loaded with `state = try MLState(mlModel:)` (C6: full state
+API).
+
+### 6.2 Memory layout (C5)
+
+Locked: MMAP for the weight blobs, RAM for the activations.
+Standard Apple ML stack pattern. The Swift wrapper enforces
+this by not allocating a CPU-side `MLMultiArray` for the
+weights; it lets the CoreML framework MMAP the `.mlmodelc`
+weight blobs and only allocates the activation buffers
+(`MLMultiArray`s) on demand.
+
+### 6.3 The backend uses MLState for the KV cache (C6)
+
+Locked: full state API (`MLState`). Public API as designed;
+custom is more code for no benefit. The Swift wrapper owns
+the `MLState` and exposes `stateValue(for:)` /
+`setStateValue(_:for:)` to the C side via the C FFI
+(`tessera_coreml_state_get` / `tessera_coreml_state_set`, ~50
+LoC of C).
+
+### 6.4 The backend routes prefill AND decode to ANE (decision 1)
+
+Locked: both prefill AND decode run on the ANE via CoreML.
+The Swift wrapper sets `computeUnits = .all` and the C
+backend is the routing layer: it prefers ANE for matmul
+(MMEPilogue / MIL `matmul`), falls back to GPU for ops
+the ANE cannot do (e.g. some reduction patterns), falls
+back to CPU last. The C backend logs the fallback (C7)
+and the Swift side surfaces the fallback in the
+`TesseraIOReport` (a `fallbackCount: Int` field).
+
+### 6.5 The backend takes a modality ID per call (M5)
+
+The M5 decision is "BOTH modality ID + per-modality
+components." The backend takes the modality ID on every
+`predict` call and uses it to:
+
+- Select the act_scale input to the .mlmodelc (C8: runtime
+  act_scale, one .mlmodelc with the act_scale as a runtime
+  input).
+- Tag the L1 / L1.5 sidecar row with the modality ID
+  (`docs/multimodal-calibration-design.md:561-606`, section
+  5.1, 5.2, 5.3).
+- Apply the per-modality AWQ alpha from the policy
+  (`docs/multimodal-calibration-design.md:495-557`,
+  section 4).
+
+The Swift wrapper passes the modality ID through
+unmodified; the C backend uses it.
+
+### 6.6 The backend emits IOReport telemetry per token (C3, C4)
+
+Locked: IOReport is the runtime telemetry source. The
+backend records ANE power, GPU power, DRAM power, battery
+current, thermal state at the end of every `predict` call
+(via the IOReport subsamples, see
+`docs/tessera-coreml-conversion-design.md` section 6.1).
+The Swift side polls at 1 Hz; the per-token rows are
+written to the v3 sidecar (`docs/tessera-coreml-conversion-
+design.md` section 6.5, the v3 sidecar extension).
+
+The IOReport subscriber is in
+`Sources/TesseraCore/TesseraIOReporter.swift` (~120 LoC) and
+links `IOKit.framework` and `IOSurface.framework`. The
+App Store risk is documented in section 11 and section 12.
+
+### 6.7 The CoreML backend is one of two backends
+
+The TesseraEngine supports two backends:
+
+- `TesseraCoreMLBackend` (default on M-series iPhone and
+  Mac, the primary path)
+- `TesseraMetalBackend` (fallback for non-M-series or for
+  users who opt out via `--device metal`, C7)
+
+The user picks the backend in the engine selector
+(section 5.1). The Tessera quantize time decision (C2)
+means the .mlmodelc is bundled; the Metal fallback
+re-quantizes on the fly from the GGUF (the stock K-quant
+path).
+
+---
+
+## 7. Multi-modal calibration UI
+
+The Mac Studio surface runs the multi-modal calibration
+pipeline
+(`docs/multimodal-calibration-design.md` sections 1-4).
+This section documents the Swift surfaces that wrap the
+C++ runner.
+
+### 7.1 The corpus picker
+
+The corpus picker is a `List` view with three sections:
+Text (CC0 procedural generator, M1), Image (PixelProse,
+M1), Audio (LibriSpeech, M1). Each section shows the
+entry count, the SHA-256, the license, the per-modality
+weight. The user adjusts the weights via a `Slider` per
+section (the lean recommendation in
+`docs/multimodal-calibration-design.md:107-145` is 1.5k /
+2k / 1.5k; the user can change the per-section count, the
+weights update automatically to keep the total at 5k).
+
+The corpus picker writes a `corpus.json` file that the
+C++ imatrix runner reads. The C++ runner is invoked via
+the Tessera C FFI:
+
+```c
+int tessera_calibrate_corpus(
+    const char * gguf_path,
+    const char * corpus_json_path,
+    const char * output_imatrix_path,
+    const char * output_policy_path
+);
+```
+
+### 7.2 The calibration runner
+
+The calibration runner is a `View` that wraps the C++
+call. The user clicks "Run Calibration," the view shows
+a progress bar, a log, and a "current modality" label
+(text / image / audio round-robin). When the runner
+finishes, the view shows the per-modality imatrix v2
+breakdown and the modality_scales (M2, M3).
+
+The view writes the imatrix v2 and the policy JSON to
+the plan directory
+(`~/Library/Application Support/TesseraStudio/plans/
+<id>/`). The AWQ-evolve runner picks them up next.
+
+### 7.3 The GA runner
+
+The GA runner is a `View` that runs AWQ-evolve for N
+generations (default 50, configurable). The view shows:
+
+- The current generation number.
+- A fitness-over-generations `Chart` (the weighted
+  per-modality fitness, see
+  `docs/multimodal-calibration-design.md:505-557`,
+  section 4.2-4.4).
+- A weight visualisation (the AWQ alpha per tensor, a
+  heatmap with rows = layers, columns = modality).
+- The top 5 candidates of the current generation
+  (fitness, alpha vector, per-modality policy).
+
+The GA runner is the slowest step in the pipeline
+(5-30 minutes for a 12B on a M-series Mac). The user
+can pause / resume; the runner checkpoints the
+population + the random state per
+`docs/tessera.md` ("uses deterministic island populations
+and a MAP-Elites archive").
+
+### 7.4 The policy editor
+
+The policy editor is a `Form` view that shows the
+modality_scales (M2) and lets the user override the
+per-modality alpha. The form has three sliders (text /
+image / audio) and a "preview" button. The preview
+renders the per-tensor act_scale for the current
+modality as a heatmap; the user clicks through the
+modalities to see how the act_scale changes.
+
+The policy editor writes the final policy to
+`plan/policy.json`. The quantize step picks it up.
+
+### 7.5 The dequant preview
+
+The dequant preview is a `View` that shows the L1 +
+L1.5 sidecar deltas for the current policy. The user
+clicks "Preview Dequant," the view runs the dequant
+kernel on a small slice of the model (one tensor, 10%
+of the rows), and renders:
+
+- The L1 dequant error histogram (BF16 vs Tessera
+  dequant).
+- The L1.5 reference comparison (the FP16 source vs
+  the Tessera dequant).
+- The act_scale heatmap (per-row scaling, normalised
+  to [0, 1]).
+
+The preview is for sanity-checking the policy before
+shipping the quantize + convert step.
+
+---
+
+## 8. The demo narrative
+
+This section scripts the three demo flows: the 5-minute
+iPhone demo, the 30-minute flight test, the Mac Studio
+demo. Each flow is timestamped and lists the UI surfaces
+involved.
+
+### 8.1 The 5-minute iPhone demo (minute-by-minute)
+
+| Min | Beat | UI surface | What happens |
+| --- | --- | --- | --- |
+| 0:00-0:15 | Splash | `TesseraStudioiOSApp.swift` | "What is Tessera?" splash. One sentence + the 9-component cluster diagram. |
+| 0:15-0:30 | Model picker | `ModelStoreDrawer` | Three models are pre-bundled: Stock Q4_0 Gemma 3 4B, Tessera 4-bit Gemma 3 4B, Tessera 3.5-bit Gemma 4 12B Unified. |
+| 0:30-0:45 | Engine selector | `ChatView` nav bar | Tessera + CoreML (default, ANE badge). The user can switch to Stock + Metal for the A/B later. |
+| 0:45-1:15 | First inference | `ChatView` | User types "In one sentence, what is the capital of France?" First token in 240ms. |
+| 1:15-1:45 | IOReport reveal | `TelemetryDrawer` | User expands the IOReport. Five gauges start moving. ANE power ~1.2W, GPU power ~0.1W, DRAM power ~0.4W. The "why CoreML" answer is on the screen. |
+| 1:45-2:15 | Modality switch | `ChatView` | User pastes a photo. Modality picker switches to IMAGE. First image token in 340ms; per-token stream follows. |
+| 2:15-2:45 | Audio mode | `ChatView` | User records a 4-second voice memo. Modality picker switches to AUDIO. Transcript streams. |
+| 2:45-3:15 | Engine switch | `ChatView` | User switches to Stock + Metal. Same text prompt. First token in 720ms. The first-token latency delta is shown. |
+| 3:15-4:00 | A/B moment | `ABCompareView` | User opens A/B Compare. Side-by-side. Per-token latency table. Tessera row is faster; PPL proxy shows the quality cost. |
+| 4:00-4:30 | Flight test intro | `ChatView` | User taps "Flight Test." 30-minute timer starts. Automated prompt stream begins. |
+| 4:30-5:00 | Wrap | `ChatView` | User stops the flight test after 60 seconds. Summary card: `mWh/token = 0.42`, `ANE power avg = 1.1W`, `thermal events = 0`. The hero metric is on the screen. |
+
+### 8.2 The 30-minute flight test (the hero metric)
+
+The flight test is the sustained-battery-draw measurement
+(decision 2). The user runs the iPhone on battery, taps
+"Flight Test," and the app runs an automated prompt stream
+for 30 minutes:
+
+- 10 prompts of text-only ("Summarise the second
+  paragraph of Moby Dick in two sentences," etc.)
+- 5 prompts with an attached image (round-robin from a
+  bundled image set).
+- 5 prompts with an attached voice memo (round-robin
+  from a bundled audio set).
+- Each prompt is generated to 100 tokens (configurable).
+
+The app records:
+
+- `battery_delta_mWh` (IOReport battery current integrated
+  over the 30 minutes).
+- `tokens_generated` (the denominator).
+- `mWh_per_token` (the headline).
+- `ane_power_avg_mW`, `gpu_power_avg_mW`, `dram_power_avg_mW`
+  (the 1 Hz time-series mean).
+- `thermal_events` (count of throttling transitions).
+- `l1_sidecar_path`, `l15_sidecar_path` (the v3 sidecar
+  paths for the export).
+- `flight_test_id` (a UUID for the JSON export filename).
+
+The summary card is rendered at the end. The export is a
+JSON file in `Documents/flight-tests/<id>.json` for the
+Mac companion to ingest.
+
+### 8.3 The Mac Studio demo
+
+The user opens the Mac app, lands on the Studio. The
+demo flow is:
+
+- **0:00-0:30**: Land on Studio. The plan library is
+  empty; the user clicks "New Plan."
+- **0:30-1:30**: The QuantizationPlan editor. User picks
+  the model (Tessera 3.5-bit Gemma 4 12B Unified), the
+  corpus (5k curated set, 1.5k text / 2k image / 1.5k
+  audio), the AWQ-evolve generation count (50), the
+  output bit-width (3.5), the .mlmodelc output path.
+- **1:30-3:00**: Calibrate. The C++ imatrix runner runs.
+  The view shows the per-modality imatrix v2 breakdown
+  + the modality_scales.
+- **3:00-5:00**: Evolve. The GA runner runs. The user
+  watches the fitness chart climb; the top 5 candidates
+  are visible.
+- **5:00-5:30**: Quantize. The C++ quantize step runs
+  (Tessera-as-default, no subcommand, per
+  `docs/c++-port-design.md:417-493`).
+- **5:30-6:00**: Convert. The C++ `tessera-to-coreml` step
+  runs (per `docs/tessera-coreml-conversion-design.md`
+  section 4). The .mlmodelc is written.
+- **6:00-6:30**: Ship. The .mlmodelc is dropped in the
+  iCloud Drive `TesseraStudio` directory. The user opens
+  the iPhone, the .mlmodelc is in the ModelStore.
+
+The 6.5-minute Mac demo is the "from corpus to device"
+story.
+
+### 8.4 The "wow" moments (recap)
+
+- **First-token latency** (Metal vs CoreML, on a 12B on
+  a phone, ~3x gap on prefill, ~2x on decode).
+- **Sustained battery** (30-min flight test, mWh/token
+  headline, ~30-40% gap Tessera 4-bit vs stock Q4_0).
+- **Telemetry transparency** (IOReport visible to the
+  user, not hidden).
+
+---
+
+## 9. Test path
+
+This section documents the verification path, mirroring
+the test path sections of the C++ port design
+(`docs/c++-port-design.md:980-1057` risk register +
+`docs/tessera-coreml-conversion-design.md:1280-1371`
+section 7).
+
+### 9.1 Mac test: engine on stock Q4_0 GGUFs
+
+First verification: the engine works on stock Q4_0 GGUFs
+before we ship any Tessera-specific code. The Mac app
+loads a stock Q4_0 Gemma 3 4B from the bundled
+`models/` directory, runs a 50-token generation, asserts:
+
+- The text output is non-empty.
+- The first-token latency is < 500ms.
+- The IOReport subscriber fires (ANE power, GPU power
+  both > 0).
+- The L1 sidecar file is created in the sidecar
+  directory.
+
+This is the "did the xcframework build and link" test. It
+runs in `TesseraCoreTests/testStockQ4_0Engine` and is the
+gate for Phase 1 of the implementation plan.
+
+### 9.2 Mac test: calibrate, evolve, quantize, convert
+
+The second verification: the C++ pipeline produces a
+working .mlmodelc. The Mac app runs the five-step
+pipeline on TinyLlama 1.1B (a small model that fits
+in the test fixture budget):
+
+- Calibrate on a 1k subset of the corpus (text-only for
+  TinyLlama).
+- Evolve for 10 generations (small budget).
+- Quantize with the resulting policy.
+- Convert to .mlmodelc.
+
+The test asserts:
+
+- The .mlmodelc is a valid CoreML model (it loads in
+  `MLModel(contentsOf:)`).
+- The .mlmodelc produces non-empty output on a
+  held-out 10-token generation.
+- The L1 / L1.5 sidecar files are created.
+- The IOReport shows ANE power > 0 during the
+  inference.
+
+This is the "did the C++ pipeline + the Swift wrapper
+integrate" test. It runs in
+`TesseraCoreTests/testFullPipelineTinyLlama` and is the
+gate for Phase 4.
+
+### 9.3 iPhone test: install the .app on a real device
+
+The third verification: the iPhone app loads the
+.mlmodelc and produces output. The user runs the
+`build-tessera-xcframework.sh` on the Mac, opens the
+iOS app in Xcode, builds, deploys to a real M-series
+iPhone (iPhone 15 Pro or later), and runs a 50-token
+generation.
+
+The test asserts:
+
+- The .mlmodelc is in the `.app` bundle
+  (`Frameworks/tessera_ane.mlmodelc`).
+- The first-token latency is < 300ms on a 12B.
+- The IOReport shows ANE power > 0, GPU power < 0.2W.
+- The L1 sidecar file is created in the app's
+  Documents directory.
+
+This is the "did the iOS embed + the on-device runtime
+work" test. It is manual, not automated (Xcode +
+device + real measurement).
+
+### 9.4 The 30-minute flight test
+
+The fourth verification: the hero metric is real. The
+user runs the 30-minute flight test on a M-series
+iPhone on battery, captures the JSON export, and runs
+the Mac ABReplayView against the JSON. The replay
+asserts:
+
+- `battery_delta_mWh > 0`.
+- `mWh_per_token` is in the expected range
+  (TBD; will be measured on the first 3-5 flight tests).
+- The thermal events count is < 5.
+- The L1 sidecar files are present and have
+  per-modality rows.
+
+This is the "is the hero metric real" test. It is
+manual, runs on a real device, and is the gate for the
+App Store submission.
+
+### 9.5 Test infrastructure
+
+- The Mac tests run via `swift test` (SwiftPM). The
+  `Package.swift` declares a `TesseraCoreTests` target.
+- The iOS tests run via Xcode's XCTest. The iOS app
+  target has a `TesseraStudioiOSTests` target.
+- The on-device flight test is manual; the JSON export
+  is the artifact.
+- The Mac Studio replay is automated; the
+  `ABReplayView` reads the JSON and re-renders the
+  surfaces.
+
+---
+
+## 10. Phased implementation plan
+
+This section documents the implementation phasing. The
+phases match the dependency graph: Phase 1 is the
+critical path (engine + xcframework + C FFI), Phases 2-3
+are parallel (Swift Package skeleton + CoreML backend
++ IOReport), Phases 4-5 are sequential (Studio surface
++ A/B compare), Phase 6 is polish.
+
+### Phase 1 (~3 weeks): The engine integration
+
+The critical path. The Mac and iOS apps both depend on
+this.
+
+- 1.1: `build-tessera-xcframework.sh` (~600 LoC, fork
+  of `/Users/user/Developer/GitHub/llama.cpp/build-
+  xcframework.sh:1-550`).
+- 1.2: The C FFI additions
+  (`tessera_modality_t`, `tessera_set_dequant_mode`,
+  `tessera_read_l1_sidecar`, `tessera_read_l15_sidecar`,
+  `tessera_set_imatrix`, `tessera_set_policy`) - ~400
+  LoC of C.
+- 1.3: `Sources/TesseraCore/LibTessera.swift` (~400
+  LoC, port of the llama.swiftui LibLlama.swift pattern).
+- 1.4: The TesseraEngine class (~150 LoC inside
+  LibTessera.swift).
+- 1.5: The TesseraIOReporter Objective-C bridge
+  (~120 LoC).
+- 1.6: `Package.swift` (~50 LoC).
+- 1.7: The stock Q4_0 engine test
+  (`TesseraCoreTests/testStockQ4_0Engine`).
+
+Gate: stock Q4_0 inference works on Mac + iOS.
+
+### Phase 2 (~3 weeks): The Swift Package skeleton
+
+The chat surface on iOS, the package layout, the
+adapter protocol.
+
+- 2.1: `Sources/TesseraCore/InferenceAdapter.swift`
+  (~200 LoC).
+- 2.2: `Sources/TesseraCore/ModelStore.swift` (~200
+  LoC, port + Tessera flavour).
+- 2.3: `Sources/TesseraCore/ConversationStore.swift`
+  (~200 LoC).
+- 2.4: `Sources/TesseraStudioiOS/TesseraStudioiOSApp
+  .swift` (~50 LoC).
+- 2.5: `Sources/TesseraStudioiOS/ContentView.swift`
+  (~120 LoC, tab bar).
+- 2.6: `Sources/TesseraStudioiOS/ChatView.swift` (~480
+  LoC, port of PrismChatView + LlamaState).
+- 2.7: `Sources/TesseraStudioiOS/ModelStoreDrawer
+  .swift` (~150 LoC).
+- 2.8: `Sources/TesseraStudioMac/TesseraStudioMacApp
+  .swift` (~50 LoC, minimal: empty Studio placeholder).
+- 2.9: `Sources/TesseraStudioMac/ContentView.swift`
+  (~150 LoC, window menu).
+
+Gate: chat works on iOS, Mac app launches.
+
+### Phase 3 (~3 weeks): The CoreML backend + IOReport
+
+The CoreML backend, the IOReport telemetry, the L1 /
+L1.5 sidecar writer.
+
+- 3.1: `Sources/TesseraCore/TesseraCoreMLBackend.swift`
+  (~150 LoC).
+- 3.2: The C-side `ggml-coreml` integration (G7 of
+  the C++ port, out of scope for this doc).
+- 3.3: `Sources/TesseraStudioiOS/TelemetryDrawer
+  .swift` (~120 LoC, the five gauges).
+- 3.4: The IOReport v3 sidecar extension (C-side,
+  out of scope for this doc; Swift side reads).
+- 3.5: The flight test runner (~80 LoC in
+  ChatView.swift, the 30-minute timer + the
+  automated prompt stream).
+
+Gate: IOReport visible in chat, flight test runs end
+to end on iOS.
+
+### Phase 4 (~3 weeks): The Studio surface on Mac
+
+The Mac Studio, the calibration runner, the GA runner,
+the policy editor, the sidecar viewer.
+
+- 4.1: `Sources/TesseraCore/CalibrationSession.swift`
+  (~200 LoC).
+- 4.2: `Sources/TesseraCore/QuantizationPlan.swift`
+  (~150 LoC).
+- 4.3: `Sources/TesseraCore/TelemetryObserver.swift`
+  (~200 LoC, the L1 + L1.5 + B + C + E consumer).
+- 4.4: `Sources/TesseraStudioMac/StudioView.swift`
+  (~400 LoC).
+- 4.5: `Sources/TesseraStudioMac/QuantizationPlanEditor
+  .swift` (~280 LoC).
+- 4.6: `Sources/TesseraStudioMac/CalibrationSessionView
+  .swift` (~320 LoC).
+- 4.7: `Sources/TesseraStudioMac/SidecarViewer.swift`
+  (~250 LoC).
+- 4.8: The Mac pipeline test
+  (`TesseraCoreTests/testFullPipelineTinyLlama`).
+
+Gate: full pipeline runs on Mac, .mlmodelc ships to
+iOS.
+
+### Phase 5 (~2 weeks): The A/B compare view + flight test polish
+
+The A/B compare view, the 30-minute flight test
+polish, the export, the Mac ABReplayView.
+
+- 5.1: `Sources/TesseraStudioiOS/ABCompareView.swift`
+  (~280 LoC).
+- 5.2: `Sources/TesseraStudioMac/ABReplayView.swift`
+  (~250 LoC).
+- 5.3: The flight test summary card (~50 LoC in
+  ChatView.swift).
+- 5.4: The flight test JSON export (~50 LoC).
+- 5.5: The iCloud Drive sync (~50 LoC of
+  file-presentation code).
+
+Gate: A/B compare works on iOS, flight test exports
+to JSON, Mac replay works.
+
+### Phase 6 (~2 weeks): Polish, App Store compliance, beta
+
+- 6.1: App Store compliance: the IOReport subscriber
+  uses private APIs; the v1 ships via TestFlight only.
+  The v2 (with public-API fallback) is documented.
+- 6.2: Accessibility (VoiceOver labels, Dynamic Type).
+- 6.3: Localisation (English v1; the strings are
+  externalised).
+- 6.4: Beta testing (TestFlight, 50 users).
+- 6.5: App Store submission (v1, TestFlight track).
+
+Gate: TestFlight build is approved, 50 beta users
+have run the 30-minute flight test, the hero metric
+is on the marketing page.
+
+### Total
+
+~16 weeks wall clock with 1 dev. ~6 weeks with 4
+parallel agents after Phase 1.
+
+Phase 1 is the critical path; Phases 2-3 can run as
+2-3 parallel agents (chat, CoreML backend, IOReport
+are independent). Phase 4 is Mac-only and can run
+in parallel with Phase 5's iOS work. Phase 6 is
+sequential.
+
+---
+
+## 11. Open design questions (with lean recommendations)
+
+The following are open at scoping time. Each is
+documented with a lean recommendation; the architect
+is expected to lock or push back.
+
+### 11.1 The app's bundle identifier
+
+Question: `com.butterbase.tessera-studio`? `com.tessera-
+project.studio`? `ai.tessera.studio`?
+
+Lean: `com.butterbase.tessera-studio`. Matches the
+PrismAgent namespace (`com.butterbase.*` is what
+PrismAgent uses for its `PrismEngineController` and
+the Butterbase SDK). Avoids claiming a namespace
+the project does not own.
+
+### 11.2 Mac Catalyst vs Mac-native for the Mac target
+
+Question: Mac Catalyst (one codebase, both iPad and
+Mac) or Mac-native (two codebases, idiomatic UI on
+each)?
+
+Lean: Mac-native. The Mac Studio surface (the
+calibration runner, the GA visualisation, the policy
+editor) is fundamentally different from the iOS chat
+surface. Catalyst is a compromise that costs more in
+the long run; native SwiftUI is the right answer. The
+shared `TesseraCore` library makes the duplication of
+the app entry + the tab bar / window menu trivial.
+
+### 11.3 iOS app on iPad: universal or iPhone-only?
+
+Question: Universal (iPhone + iPad) or iPhone-only
+(Mac Catalyst for iPad)?
+
+Lean: Universal. The chat surface scales well (the
+`MessageBubble` and the input bar adapt to the iPad
+keyboard with a few `horizontalSizeClass` checks). The
+A/B compare view benefits from the larger screen. The
+iPad does not need a separate target.
+
+### 11.4 On-device model download
+
+Question: App Store CDN (Apple hosts the .mlmodelc) or
+Mac companion (user transfers via Finder / iCloud)?
+
+Lean: Mac companion exports the .mlmodelc, user
+transfers via iCloud Drive. Reasons:
+
+- The .mlmodelc is 3-4 GB for a 12B; the App Store CDN
+  has a 4 GB limit per download, and Apple does not
+  support resumable downloads for assets that large.
+- The .mlmodelc is generated per-model per-policy; the
+  CDN model assumes a stable set of models. The Mac
+  companion can generate a new .mlmodelc every time
+  the user changes the policy.
+- The user is already on the Mac for calibration; the
+  iCloud handoff is a one-tap operation.
+
+### 11.5 The 30-minute flight test: live in-app or QA harness
+
+Question: Live in the iPhone app (visible to the user)
+or a separate QA harness (Xcode UI test)?
+
+Lean: Live in the iPhone app. The 30-minute flight test
+is the hero metric; the user needs to see it. A QA
+harness hides the metric.
+
+### 11.6 The Plan's persistence
+
+Question: JSON file in iCloud Drive (sync across
+devices) or JSON file in the app's Documents directory
+(per-device, no sync)?
+
+Lean: JSON file in the app's Documents directory; the
+.mlmodelc and the flight test JSON are in iCloud Drive.
+The Plan is a working document on the Mac; the iOS app
+reads a copy of the Plan from iCloud Drive for display
+only. The iOS app does not edit Plans.
+
+### 11.7 The IOReport telemetry display
+
+Question: Always visible (persistent in the chat
+surface) or on-demand (collapsed drawer, expanded on
+tap)?
+
+Lean: Collapsed by default, expandable on tap. The
+chat surface is the primary surface; the IOReport is
+the secondary surface. A persistent display would
+clutter the chat. A collapsed drawer keeps the chat
+clean and surfaces the metric on demand.
+
+### 11.8 App Store compliance
+
+Question: IOReport is a private API. The v1 ships via
+TestFlight; the v2 uses public APIs only (or a
+different telemetry source).
+
+Lean: TestFlight v1, App Store v2 with public API
+fallback. The public API fallback is
+`ProcessInfo.thermalState` (thermal) +
+`ProcessInfo.processInfo.systemUptime` (uptime) +
+`os_signpost` (in-process power, public on iOS 13+)
++ a battery-drain heuristic (start battery level,
+end battery level, elapsed time, tokens generated).
+The App Store v2 has worse fidelity than the
+TestFlight v1, but it is the right answer for the
+store.
+
+### 11.9 Pre-bundled models
+
+Question: Which models ship in the `.app` bundle for
+v1?
+
+Lean: Two: (a) Tessera 4-bit Gemma 3 4B (text-only,
+~2 GB), (b) Tessera 3.5-bit Gemma 4 12B Unified
+(text + image + audio, ~3.5 GB). The user can add
+more via the Mac companion. The stock Q4_0 model
+(for A/B) is downloaded on first use, not bundled.
+
+### 11.10 The iCloud Drive handoff format
+
+Question: Is the .mlmodelc a single file in iCloud
+Drive, or a directory (with the sidecars)?
+
+Lean: Directory. The .mlmodelc is a directory in
+CoreML; the sidecars (L1, L1.5, policy, imatrix) sit
+next to it in the same directory. The iPhone app
+imports the whole directory; the Mac app writes the
+whole directory. The directory name is the model ID.
+
+### 11.11 The Mac Studio's text-only mode
+
+Question: Can the Mac Studio run inference (not just
+calibration)?
+
+Lean: Yes. The Mac Studio has a "Run" tab (the same
+chat surface as iOS, scaled up) for testing the
+model locally before shipping to the iPhone. The
+Studio's primary surface is calibration; the "Run"
+tab is secondary.
+
+### 11.12 The Swift 6.2 strict concurrency posture
+
+Question: The existing llama.swiftui uses non-strict
+concurrency; should the Tessera Studio use strict
+(Swift 6.2 default) or non-strict?
+
+Lean: Strict. The PrismAgent `Package.swift:1` is
+already `swift-tools-version: 6.2`; the Tessera
+Studio inherits that. The `actor TesseraContext`
+pattern in `LibLlama.swift:24` translates cleanly to
+strict concurrency.
+
+---
+
+## 12. Risk register
+
+This section lists the risks, mirroring the C++ port
+design's risk register
+(`docs/c++-port-design.md:964-1113`).
+
+### R1 - The CoreML backend depends on G7
+
+The CoreML backend (`ggml-coreml`, G7 of the C++ port)
+is the largest unknown. If G7 is delayed, the iOS app
+cannot ship. Mitigations: the iOS app can ship with
+the Metal backend (Tessera-quantized + Metal) in
+parallel; the CoreML backend is a v1.1 upgrade. The
+Metal backend is the fallback (C7) and is tested
+independently.
+
+### R2 - Multi-modal calibration depends on G0-MM-G4-MM
+
+The Mac Studio surface depends on the multi-modal
+calibration work (M1-M8, G0-MM through G4-MM in
+`docs/multimodal-calibration-design.md:828-925`).
+If the multi-modal work is delayed, the Mac Studio
+ships with text-only calibration and a "multi-modal
+coming soon" badge.
+
+### R3 - IOReport is a private API on iOS
+
+The App Store will reject a v1 that uses private
+APIs. Mitigations: TestFlight v1 (no rejection
+risk), App Store v2 with public API fallback
+(section 11.8). The C-side IOReport subscriber is
+isolated to `TesseraIOReporter.swift`; the fallback
+is a drop-in replacement.
+
+### R4 - The .mlmodelc conversion takes 30-120s for a 12B
+
+The 30-120s conversion is a UX problem on the Mac:
+the user clicks "Convert" and waits. Mitigations: the
+conversion is offline (the user is on the Mac, can
+do other things); the conversion runs in a background
+task; the progress bar shows the per-layer progress.
+The C2 decision (convert at quantize time) means the
+iPhone user never waits.
+
+### R5 - 12B on iPhone: ANE memory constraints
+
+The gemma 4 12b at 3.5-bit effective is ~5.5 GB; the
+ANE on a M-series iPhone has 6-8 GB of unified memory.
+A 12B at 3-bit effective is ~4.7 GB; fits. A 12B at
+4-bit effective is ~6 GB; tight. Mitigations: the
+Tessera quantizer supports 3-bit and 3.5-bit
+configurations; the iPhone app warns the user if
+the chosen model is too large.
+
+### R6 - PrismAgent has 197 Swift files; selective port
+
+The PrismAgent port is selective (~1,920 LoC of the
+~3,692 LoC we read ports cleanly, ~5,000 LoC is
+skipped). Some patterns may not translate cleanly
+(e.g. the multi-tier journal may be overkill for a
+Tessera app that is not an agent). Mitigations: the
+design above is opinionated about what to port and
+what to skip; the open questions in section 11
+flag the borderline cases.
+
+### R7 - Swift 6.2 strict concurrency
+
+The existing llama.swiftui uses non-strict
+concurrency. The Tessera Studio is strict (the
+`actor TesseraContext` pattern translates cleanly;
+the LlamaState is `@MainActor` already at
+`/Users/user/Developer/GitHub/llama.cpp/examples/
+llama.swiftui/llama.swiftui/Models/LlamaState.swift:
+11`). Mitigations: the Tessera Studio starts strict
+from day 1; the C FFI is wrapped in a single
+`@unchecked Sendable` actor if necessary.
+
+### R8 - TestFlight / App Store review timeline
+
+The TestFlight v1 review is 1-2 days; the App Store
+v2 review is 1-7 days. The 16-week implementation
+plan does not include review time. Mitigations: the
+plan is 16 weeks of dev; the review is in addition.
+The 50-user beta (Phase 6.4) is the buffer for
+review delays.
+
+### R9 - IOReport sampling rate vs Swift UI thread
+
+The IOReport subscriber fires at 1 Hz; the Swift
+side reads at 1 Hz. If the Swift UI is busy (a
+streaming chat surface), the read can be delayed.
+Mitigations: the IOReport subscriber is on a
+background queue; the Swift side reads from a
+lock-free ring buffer. The 1 Hz rate is the
+floor; the 60 Hz (CADisplayLink) is the ceiling
+for the visible gauges.
+
+### R10 - The 9-component cluster vs CoreML's input switch
+
+The C8 decision is 1 .mlmodelc with runtime
+act_scale. The act_scale is a runtime input; the
+CoreML framework routes the act_scale through the
+graph. If the act_scale input is on the hot path,
+the runtime input switch is a cost. Mitigations:
+the 3-package v2 (C8 fallback) is gated on
+profiling; if the act_scale input is hot, the
+Mac Studio re-generates 3 .mlmodelc files and the
+iPhone app picks based on modality. This is a
+packaging optimization, not a v1 requirement.
+
+### R11 - The PrismAgent PrismEngineC is not reused
+
+The PrismAgent `PrismEngineC` and `PrismBridgeFFI`
+targets (`Package.swift:89-108`) are Prism-specific
+(the FFI is to a Rust core, not C). The Tessera
+Studio does not reuse them; the FFI is to the
+tessera xcframework (C). This is a known divergence;
+the Tessera xcframework is a fork of the llama.cpp
+xcframework, not a port of the PrismEngineC.
+
+### R12 - The C++ port phasing (G0-G6) is on the critical path
+
+The Tessera Studio depends on the C++ port
+(`docs/c++-port-design.md:699-810`). G3 (TESSERA_*
+writer) is the gate for the Mac quantize step; G5
+(L1.5 + sidecar v3 producer) is the gate for the
+Mac sidecar viewer. If G3 or G5 is delayed, the Mac
+Studio ships with a "Tessera quantize coming soon"
+badge and uses the Python `tools/tessera/`
+quantize for v1.
+
+### R13 - iCloud Drive directory import on iOS
+
+The iPhone app imports a directory from iCloud Drive
+(`.mlmodelc` + sidecars). iOS does not have a
+"directory import" API the way the Mac does. The
+iOS app reads the directory via
+`FileManager.startDownloadingUbiquitousItem` for
+each file in the directory. Mitigations: the
+.mlmodelc + sidecars are listed in a JSON manifest
+in the directory; the iOS app reads the manifest
+first, then downloads each file. The progress is
+shown in the ModelStore drawer.
+
+### R14 - The iPhone "first inference" 240ms target
+
+The 240ms first-token latency on a 12B on a phone
+is an estimate, not a measurement. The actual
+latency depends on the ANE warm-up, the prefill
+length, the model's prefill shape, and the
+Tessera kernel's efficiency. Mitigations: the
+Mac ABReplayView is the offline simulator; the
+iPhone measurement is the ground truth. The
+5-minute demo script is updated once the first
+flight tests land.
+
+### R15 - The "30-minute flight test" is 30 minutes
+
+The 30-minute flight test is long. The user has
+to leave the app running for 30 minutes. The app
+must handle background / lock / thermal
+throttling during the 30 minutes. Mitigations:
+the flight test is foreground-only (the iPhone
+user keeps the app open); the IOReport
+subscriber is foreground-only (C3); the
+summary card is rendered at the end even if
+the app was backgrounded (the v3 sidecar is
+written continuously).
+
+### R16 - Substantive risks remaining
+
+R11 (PrismAgent PrismEngineC not reused), R13 (iCloud
+directory import), R14 (240ms first-token target is
+an estimate), R15 (30-minute flight test is long) are
+documented in detail above. Lower-impact risks that
+do not need a separate entry:
+
+- R17: corpus licensing (CC0 + MIT + CC-BY-4.0,
+  documented in `docs/multimodal-calibration-design.md:
+  81-145`).
+- R18: Mac Studio "Run" tab duplicates the iOS chat
+  surface; the shared `TesseraCore` makes this a thin
+  wrapper.
+- R19: the Plan is a Swift-side convenience; the
+  artifacts the C++ side reads are independent (the
+  `policy.json` and `imatrix.v2.bin` from the C++ port
+  design).
+- R20: the flight test JSON is `version: 1`; future
+  versions extend the v3 sidecar per
+  `docs/tessera-coreml-conversion-design.md` section
+  6.5.
+- R21: the app name "Tessera Studio" vs "Tessera Chat"
+  is a product decision; the design doc is agnostic.
+
+---
+
+## Appendix A: File index
+
+This section lists the files referenced in the design
+and their roles.
+
+### PrismAgent references
+
+- `PrismAgent/Package.swift:1-143` - the project layout
+  (PrismAgent SDK + iOS + Mac + Keyboard + Watch +
+  EngineC + BridgeFFI + CredentialService).
+- `PrismAgent/PrismAgentiOS/PrismAgentiOS/InferenceAdapter
+  .swift:1-83` - the adapter protocol, KEEP + REPLACE
+  inner.
+- `PrismAgent/PrismAgent/ModelStore.swift:1-229` - the
+  model store, KEEP + TESSERA-FLAVOUR.
+- `PrismAgent/PrismAgent/ModelStoreView.swift:1-428`  - 
+  the model store view, KEEP + REPLACE + ADD BADGES.
+- `PrismAgent/PrismAgent/ConversationStore.swift:1-172`  - 
+  the conversation store, KEEP + TESSERA-FLAVOUR.
+- `PrismAgent/PrismAgent/PrismChatView.swift:1-479`  - 
+  the chat view, KEEP + SIMPLIFY.
+- `PrismAgent/PrismAgent/PrismEngineApp.swift:1-14`  - 
+  the Mac app entry, KEEP minimal.
+- `PrismAgent/PrismAgentiOS/PrismAgentiOS/PrismAgentiOSApp
+  .swift:1-39` - the iOS app entry, KEEP minimal.
+- `PrismAgent/PrismAgent/PrismModelManager.swift:1-171`  - 
+  the model manager, KEEP + simplify.
+- `PrismAgent/PrismAgent/PrismModelCardView.swift:1-206`
+  - the model card view, KEEP + REPLACE.
+- `PrismAgent/PrismAgent/PrismBridgeAdapter.swift:1-1105`
+  - the engine bridge, PARTIAL (StreamHandler pattern
+  only).
+- `PrismAgent/PrismAgent/SubAgentOrchestrator.swift:1-100`
+  - the sub-agent pool, KEEP + RENAME.
+- `PrismAgent/PrismAgent/AutonomousOrchestrator.swift:
+  1-159` - the agent loop, SKIP.
+- `PrismAgent/PrismAgent/AgentToolDispatcher.swift:1-292`
+  - the tool dispatcher, SKIP.
+- `PrismAgent/PrismAgent/P2PRouter.swift:1-72` - the P2P
+  bridge, SKIP.
+
+### llama.cpp references
+
+- `/Users/user/Developer/GitHub/llama.cpp/examples/
+  llama.swiftui/llama.cpp.swift/LibLlama.swift:1-337`  - 
+  the C FFI wrapper pattern (port to LibTessera.swift).
+- `/Users/user/Developer/GitHub/llama.cpp/examples/
+  llama.swiftui/llama.swiftui/Models/LlamaState.swift:
+  1-196` - the model state pattern (port to ChatView).
+- `/Users/user/Developer/GitHub/llama.cpp/examples/
+  llama.swiftui/llama.swiftui/UI/ContentView.swift:1-156`
+  - the chat UI (reference for the iOS ContentView).
+- `/Users/user/Developer/GitHub/llama.cpp/build-
+  xcframework.sh:1-550` - the xcframework build script
+  (fork to build-tessera-xcframework.sh).
+- `/Users/user/Developer/GitHub/llama.cpp/examples/
+  llama.swiftui/README.md:1-27` - the build instructions
+  (model for the Tessera Studio README).
+- `/Users/user/Developer/GitHub/llama.cpp/examples/
+  llama.swiftui/llama.swiftui.xcodeproj/project.pbxproj:
+  1-449` - the project file (target structure).
+
+### Tessera references
+
+- `docs/tessera.md` - the Tessera quantization spec
+  (GGUF metadata fields, AWQ-evolve, calibration).
+- `docs/c++-port-design.md` - the C++ port design
+  (G0-G6, CLI surface, sidecar JSON shape).
+- `docs/multimodal-calibration-design.md` - the
+  multi-modal calibration design (M1-M8, schema
+  diff, per-modality AWQ, L5 scorer).
+- `docs/tessera-coreml-conversion-design.md` - the
+  CoreML conversion + runtime design (C1-C10,
+  ggml-coreml, IOReport, test path, risk register).
+- `docs/runtime-aware-pipeline.md` - the L1-L6
+  telemetry pipeline.
+- `docs/per-tensor-calibration.md` - the per-tensor
+  GA calibration (the `ternary_threshold` knob).
+
+## Appendix B: Glossary
+
+- **A/B Compare**: the iOS surface that runs two
+  engines side-by-side on the same prompt.
+- **ANE**: Apple Neural Engine.
+- **Calibration**: the process of computing the
+  imatrix v2 (importance scores) from a calibration
+  corpus.
+- **CalibrationSession**: the Swift object that
+  represents a single calibration pass.
+- **Conversion**: the process of writing a
+  `.mlmodelc` from a Tessera-quantized GGUF.
+- **CoreML**: Apple's machine learning framework.
+- **.mlmodelc**: the compiled CoreML model bundle.
+- **Evolved policy**: the output of AWQ-evolve, the
+  per-tensor AWQ alpha + the per-modality scales.
+- **Flight test**: the 30-minute sustained-battery
+  measurement.
+- **G0-G6**: the C++ port phasing (see
+  `docs/c++-port-design.md:699-810`).
+- **G7**: the ggml-coreml runtime workstream.
+- **GA**: genetic algorithm, used in AWQ-evolve.
+- **GGUF**: the GGML Universal Format, the Tessera
+  container.
+- **Imatrix**: importance matrix, the per-tensor
+  activation statistics.
+- **IOReport**: Apple's private API for hardware
+  telemetry.
+- **L1 / L1.5 / L2 / L3 / L4 / L5 / L6**: the
+  runtime-aware pipeline layers (see
+  `docs/runtime-aware-pipeline.md:24-30`).
+- **M1-M8**: the multi-modal calibration decisions
+  (see `docs/multimodal-calibration-design.md`).
+- **Plan**: the QuantizationPlan, the five-step
+  pipeline.
+- **QuantizationPlan**: the Swift object that
+  represents the user's pipeline configuration.
+- **Sidecar**: the v3 schema evidence file written
+  next to the GGUF.
+- **Studio**: the Mac-only primary surface.
+- **TelemetryObserver**: the Swift object that
+  consumes the L1 + L1.5 + B + C + E layers.
+- **Tessera**: the quantization architecture, the
+  9-component cluster, the project name.
+- **TesseraEngine**: the public entry point for the
+  engine.
+- **TesseraModality**: text / image / audio, the M5
+  decision.
+- **TesseraPolicy**: the JSON policy (modality_scales
+  + AWQ alpha + calibration metadata).
