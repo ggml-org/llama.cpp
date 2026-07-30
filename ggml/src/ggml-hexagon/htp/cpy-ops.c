@@ -291,5 +291,16 @@ int op_cpy(struct htp_ops_context * octx) {
 
     worker_pool_run_func(octx->ctx->worker_pool, copy_fun, &ct, n_threads);
 
+    const struct htp_tensor *sync = octx->src[1];
+    if (sync) {
+        atomic_uint* sync_token = (atomic_uint *)sync->data;
+        uint32_t seq = ((uint32_t *)sync_token)[1];
+        uint32_t val = atomic_fetch_sub(sync_token, 1);
+        asm volatile ("syncht" : : : "memory");
+        Q6_dccleaninva_A((void *)sync_token);
+
+        FARF(HIGH, "ggml-hex: sync-release : token %p seq %u (%u)\n", sync_token, seq, val);
+    }
+
     return HTP_STATUS_OK;
 }

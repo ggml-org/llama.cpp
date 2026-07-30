@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <string>
 #include <vector>
+#include <memory>
 #include <stdio.h>
 #include "htp-ops.h"
 #include "htp/matmul-ops.h"
@@ -15,25 +16,26 @@
 #include "htp/unary-ops.h"
 
 struct htp_opnode {
-    ggml_tensor * node = nullptr;
+    ggml_tensor * node   = nullptr;
+    htp_op_code   opcode = HTP_OP_INVALID;
 
-    std::vector<ggml_tensor *> fused;
-
-    htp_op_code opcode = HTP_OP_INVALID;
-
-    std::vector<ggml_tensor *> extra_dsts;
+    std::vector<ggml_tensor *>                fused;
+    std::vector<ggml_tensor *>                extra_dsts;
+    std::vector<std::shared_ptr<ggml_tensor>> dummy_tensors;
 
     int32_t kernel_params[HTP_OP_MAX_KERN_PARAMS] = {0};
 
     htp_opnode(ggml_tensor * node = nullptr, std::vector<ggml_tensor *> fused = {}, htp_op_code opcode = HTP_OP_INVALID, std::vector<ggml_tensor *> extra_dsts = {})
-        : node(node), fused(std::move(fused)), opcode(opcode), extra_dsts(std::move(extra_dsts)) {}
+        : node(node), opcode(opcode), fused(std::move(fused)), extra_dsts(std::move(extra_dsts)) {}
 
-    ggml_op op() const {
-        return node->op;
-    }
+    ggml_op op() const { return node->op; }
+    const ggml_tensor * src0() const { return node->src[0]; }
+    const ggml_tensor * src1() const { return node->src[1]; }
+    const ggml_tensor * dst()  const { return fused.empty() ? node : fused.back(); }
 
-    const ggml_tensor * dst() const {
-        return fused.empty() ? node : fused.back();
+    ggml_tensor * add_dummy(const ggml_tensor & t) {
+        dummy_tensors.push_back(std::make_shared<ggml_tensor>(t));
+        return dummy_tensors.back().get();
     }
 
     void add_fused(ggml_tensor * t, bool extra_dst = false) {
@@ -54,14 +56,6 @@ struct htp_opnode {
             }
         }
         return res;
-    }
-
-    const ggml_tensor * src0() const {
-        return node->src[0];
-    }
-
-    const ggml_tensor * src1() const {
-        return node->src[1];
     }
 
     bool is_empty() const {
