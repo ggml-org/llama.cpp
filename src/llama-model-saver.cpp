@@ -384,7 +384,6 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_DENSE_2_FEAT_OUT,                  hparams.dense_2_feat_out);
     add_kv(LLM_KV_DENSE_3_FEAT_IN,                   hparams.dense_3_feat_in);
     add_kv(LLM_KV_DENSE_3_FEAT_OUT,                  hparams.dense_3_feat_out);
-
 }
 
 void llama_model_saver::add_tensors_from_model() {
