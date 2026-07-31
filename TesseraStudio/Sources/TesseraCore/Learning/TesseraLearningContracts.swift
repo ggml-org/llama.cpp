@@ -591,6 +591,7 @@ public final class TesseraLearningCenter: @unchecked Sendable {
     private var _scheduler: any TesseraAdaptationScheduling = TesseraNoopAdaptationScheduler()
     private var _assessor: any TesseraTeacherAssessing = TesseraNoopTeacherAssessor()
     private var _foraging: any TesseraForagingStoring = TesseraNoopForagingStore()
+    private var _headRouting: any TesseraHeadRouting = TesseraNoopHeadRouting()
 
     private init() {}
 
@@ -619,6 +620,9 @@ public final class TesseraLearningCenter: @unchecked Sendable {
     }
     public var foraging: any TesseraForagingStoring {
         lock.lock(); defer { lock.unlock() }; return _foraging
+    }
+    public var headRouting: any TesseraHeadRouting {
+        lock.lock(); defer { lock.unlock() }; return _headRouting
     }
 
     /// True once a real escalation service with at least one teacher is
@@ -652,6 +656,9 @@ public final class TesseraLearningCenter: @unchecked Sendable {
     }
     public func install(foraging: any TesseraForagingStoring) {
         lock.lock(); defer { lock.unlock() }; _foraging = foraging
+    }
+    public func install(headRouting: any TesseraHeadRouting) {
+        lock.lock(); defer { lock.unlock() }; _headRouting = headRouting
     }
 
     /// Purge stored training data across every purgeable store. Returns a

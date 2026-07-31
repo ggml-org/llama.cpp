@@ -5,6 +5,10 @@ import Foundation
 /// no-op defaults. Wired at app launch by the orchestrator; nothing in this
 /// module calls installDefaults itself.
 public enum TesseraLearningServices {
+    /// Held for the process lifetime so the recurring assessment loop is not
+    /// deallocated; installDefaults owns the only reference.
+    private static var assessmentScheduler: TesseraAssessmentScheduler?
+
     public static func installDefaults(into center: TesseraLearningCenter = .shared) {
         center.install(escalation: TesseraEscalationService())
         center.install(curation: TesseraCurationService())
@@ -14,5 +18,10 @@ public enum TesseraLearningServices {
         center.install(scheduler: TesseraAdaptationScheduler())
         center.install(assessor: TesseraTeacherAssessor())
         center.install(foraging: TesseraForagingStore())
+        center.install(headRouting: TesseraTrackRScaffold())
+
+        let scheduler = TesseraAssessmentScheduler(assessor: center.assessor)
+        scheduler.start()
+        assessmentScheduler = scheduler
     }
 }
