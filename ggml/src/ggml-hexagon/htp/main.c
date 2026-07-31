@@ -706,6 +706,8 @@ static inline void profile_stop(uint32_t mode, struct profile_data * d) {
     }
 }
 
+#define HTP_SYNC_TIMEOUT (1000000000ULL)
+
 static int op_sync(struct htp_ops_context * octx) {
     struct htp_context *ctx = octx->ctx;
 
@@ -713,21 +715,21 @@ static int op_sync(struct htp_ops_context * octx) {
     atomic_uint* sync_token = (atomic_uint *)sync->data;
 
     uint32_t seq   = sync_token[1];
-    uint32_t spins = 0;
+    uint64_t spins = 0;
     while (1) {
         Q6_dccleaninva_A((void *)sync_token);
         asm volatile ("syncht" : : : "memory");
         if (atomic_load(sync_token) == 0) {
             break;
         }
-        spins++;
-        if (spins % (10*1024*1024) == 0) {
-            FARF(ALWAYS, "ggml-hex: sync-wait : token %p spins %u seq %u\n", sync_token, spins, seq);
+        if (++spins > HTP_SYNC_TIMEOUT) {
+            FARF(ERROR, "ggml-hex: sync-wait TIMEOUT : token %p spins %llu seq %u\n", sync_token, spins, seq);
+            break;
         }
         hex_pause();
     }
 
-    FARF(HIGH, "ggml-hex: sync-done : token %p spins %u seq %u\n", sync_token, spins, seq);
+    FARF(HIGH, "ggml-hex: sync-done : token %p spins %llu seq %u\n", sync_token, spins, seq);
     return HTP_STATUS_OK;
 }
 
