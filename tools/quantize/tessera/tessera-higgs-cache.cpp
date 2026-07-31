@@ -167,9 +167,9 @@ ts_higgs_cache_key ts_higgs_cache_compute_key(const float ** weights,
     sha256_init(&ctx);
 
     for (int64_t l = 0; l < n_layers; l++) {
-        int64_t n_elem = out_dims[l] * in_dims[l];
+        size_t n_elem = (size_t)out_dims[l] * (size_t)in_dims[l];
         sha256_update(&ctx, (const uint8_t *)weights[l],
-                      (size_t)n_elem * sizeof(float));
+                      n_elem * sizeof(float));
     }
 
     ts_higgs_cache_key key;

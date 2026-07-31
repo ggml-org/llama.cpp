@@ -402,7 +402,7 @@ float ts_awq_scale_search(const float * weights, const float * act_scales,
 
     std::vector<int64_t> rows = ts_row_ids(out_dim, 1024);
     int64_t R = (int64_t)rows.size();
-    std::vector<float> W((size_t)(R * in_dim));
+    std::vector<float> W((size_t)R * (size_t)in_dim);
     for (int64_t r = 0; r < R; r++) {
         std::memcpy(W.data() + r * in_dim, weights + rows[(size_t)r] * in_dim,
                     (size_t)in_dim * sizeof(float));
@@ -415,13 +415,13 @@ float ts_awq_scale_search(const float * weights, const float * act_scales,
     }
 
     const int64_t pages = ts_pages_per_row(in_dim);
-    std::vector<int8_t>  ternary((size_t)(R * in_dim));
-    std::vector<uint16_t> pscale((size_t)(R * pages));
-    std::vector<int8_t>  lscale((size_t)(R * pages * TS_LANES_PER_PAGE));
-    std::vector<float>   deq((size_t)(R * in_dim));
+    std::vector<int8_t>  ternary((size_t)R * (size_t)in_dim);
+    std::vector<uint16_t> pscale((size_t)R * (size_t)pages);
+    std::vector<int8_t>  lscale((size_t)R * (size_t)pages * TS_LANES_PER_PAGE);
+    std::vector<float>   deq((size_t)R * (size_t)in_dim);
     std::vector<float>   scale((size_t)in_dim);
-    std::vector<float>   Ws((size_t)(R * in_dim));
-    std::vector<float>   diff((size_t)(R * in_dim));
+    std::vector<float>   Ws((size_t)R * (size_t)in_dim);
+    std::vector<float>   diff((size_t)R * (size_t)in_dim);
 
     float best_alpha = 0.0f;
     float best_err   = std::numeric_limits<float>::infinity();
@@ -489,8 +489,8 @@ float ts_awq_scale_search_layer_output(
     int64_t R = (int64_t)rows.size();
 
     // W: (R x in_dim), ref_T: (R x n_tokens) = transpose of ref_output[rows]
-    std::vector<float> W((size_t)(R * in_dim));
-    std::vector<float> ref_T((size_t)(R * n_tokens));
+    std::vector<float> W((size_t)R * (size_t)in_dim);
+    std::vector<float> ref_T((size_t)R * (size_t)n_tokens);
     for (int64_t r = 0; r < R; r++) {
         int64_t src = rows[(size_t)r];
         std::memcpy(W.data() + r * in_dim, weights + src * in_dim,
@@ -501,7 +501,7 @@ float ts_awq_scale_search_layer_output(
     }
 
     // X_T: (in_dim x n_tokens)
-    std::vector<float> X_T((size_t)(in_dim * n_tokens));
+    std::vector<float> X_T((size_t)in_dim * (size_t)n_tokens);
     for (int64_t t = 0; t < n_tokens; t++) {
         for (int64_t c = 0; c < in_dim; c++) {
             X_T[(size_t)(c * n_tokens + t)] = calib_X[t * in_dim + c];
@@ -509,9 +509,9 @@ float ts_awq_scale_search_layer_output(
     }
 
     std::vector<float> scale((size_t)in_dim);
-    std::vector<float> Ws((size_t)(R * in_dim));
-    std::vector<float> Weff((size_t)(R * in_dim));
-    std::vector<float> WXq((size_t)(R * n_tokens));
+    std::vector<float> Ws((size_t)R * (size_t)in_dim);
+    std::vector<float> Weff((size_t)R * (size_t)in_dim);
+    std::vector<float> WXq((size_t)R * (size_t)n_tokens);
 
     float best_alpha = 0.0f;
     float best_err   = std::numeric_limits<float>::infinity();
@@ -643,12 +643,12 @@ int ts_quantize_2d(const float * weights,
     }
 
     // --- pack + fit scales ---
-    result->packed.assign((size_t)(out_dim * pages * TS_WORDS_PER_PAGE), 0);
-    result->page_scales.assign((size_t)(out_dim * pages), 0);
-    result->lane_scales.assign((size_t)(out_dim * pages * TS_LANES_PER_PAGE), 0);
+    result->packed.assign((size_t)out_dim * (size_t)pages * TS_WORDS_PER_PAGE, 0);
+    result->page_scales.assign((size_t)out_dim * (size_t)pages, 0);
+    result->lane_scales.assign((size_t)out_dim * (size_t)pages * TS_LANES_PER_PAGE, 0);
 
-    std::vector<uint16_t> pack_ps((size_t)(out_dim * pages));
-    std::vector<int8_t>   pack_ls((size_t)(out_dim * pages * TS_LANES_PER_PAGE));
+    std::vector<uint16_t> pack_ps((size_t)out_dim * (size_t)pages);
+    std::vector<int8_t>   pack_ls((size_t)out_dim * (size_t)pages * TS_LANES_PER_PAGE);
     ts_pack_tile640(ternary.data(), result->packed.data(),
                     pack_ps.data(), pack_ls.data(), out_dim, in_dim);
 

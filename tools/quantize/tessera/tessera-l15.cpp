@@ -110,8 +110,8 @@ float ts_l15_layer_output_mse(const float * w_hat,
     }
 
     // Y_hat = W_hat @ X,  Y_ref = W_ref @ X   (out_dim x n_tokens)
-    std::vector<float> y_hat(out_dim * n_tokens);
-    std::vector<float> y_ref(out_dim * n_tokens);
+    std::vector<float> y_hat((size_t)out_dim * (size_t)n_tokens);
+    std::vector<float> y_ref((size_t)out_dim * (size_t)n_tokens);
 
     ts_mat_mul(w_hat,          calib_X, y_hat.data(), out_dim, in_dim, n_tokens);
     ts_mat_mul(ref->data.data(), calib_X, y_ref.data(), out_dim, in_dim, n_tokens);

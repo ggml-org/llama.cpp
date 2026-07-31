@@ -328,7 +328,10 @@ int ts_awq_evolve_all(const ts_awq_layer * layers, int64_t n_layers,
         for (int64_t si = 0; si < screen_count; si++) {
             int64_t li = si * (n_layers - 1) / std::max((int64_t)1, screen_count - 1);
             screen_params.seed = params->seed + (uint32_t)li;
-            ts_awq_evolve(&layers[li], eval, eval_ctx, &screen_params, &screen_results[si]);
+            int rc = ts_awq_evolve(&layers[li], eval, eval_ctx, &screen_params, &screen_results[si]);
+            if (rc != 0) {
+                return rc;
+            }
         }
     }
 

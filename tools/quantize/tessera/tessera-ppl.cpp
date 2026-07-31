@@ -121,7 +121,7 @@ int ts_ppl_probe(ts_ppl_forward_fn forward_ref, void * ref_ctx,
         tokens[i] = (int32_t)(ts_ppl_xorshift32(&rng) % (uint32_t)vocab_size);
     }
 
-    int64_t buf_size = n_tokens * vocab_size;
+    size_t buf_size = (size_t)n_tokens * (size_t)vocab_size;
     std::vector<float> logits_ref(buf_size);
     std::vector<float> logits_quant(buf_size);
 

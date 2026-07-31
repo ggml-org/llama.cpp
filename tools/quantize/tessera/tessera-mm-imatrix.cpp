@@ -59,7 +59,7 @@ static std::vector<zip_entry> zip_parse(const uint8_t * buf, size_t len) {
             zip_entry e;
             e.name.assign((const char *)buf + name_off, name_len);
             e.data = buf + data_off;
-            e.size = uncomp_sz;
+            e.size = std::min(uncomp_sz, comp_sz); // bound to the validated extent
             entries.push_back(std::move(e));
         }
 
@@ -134,13 +134,13 @@ static bool npy_to_floats(const uint8_t * buf, uint32_t len, std::vector<float> 
 
     if (major == 1) {
         hdr_len = read_u16le(buf + 8);
-        data_off = 10 + hdr_len;
+        data_off = (size_t)10 + hdr_len;
     } else {
         if (len < 12) {
             return false;
         }
         hdr_len = read_u32le(buf + 8);
-        data_off = 12 + hdr_len;
+        data_off = (size_t)12 + hdr_len;
     }
 
     if (data_off > len) {
@@ -158,10 +158,10 @@ static bool npy_to_floats(const uint8_t * buf, uint32_t len, std::vector<float> 
         return false;
     }
 
-    size_t data_bytes = (size_t)n_elem * 4;
-    if (data_off + data_bytes > len) {
+    if ((size_t)n_elem > (len - data_off) / 4) {
         return false;
     }
+    size_t data_bytes = (size_t)n_elem * 4;
 
     out.resize(n_elem);
     std::memcpy(out.data(), buf + data_off, data_bytes);
