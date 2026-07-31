@@ -116,6 +116,7 @@ static __global__ void soft_max_f32(
         vals[col] = val;
     }
 
+    // sync is needed as we reuse buf_iw across block_reduce invocations, see #26385
     __syncthreads();
     // find the sum of exps in the block
     tmp = block_reduce<block_reduce_method::SUM, block_size_template>(tmp, buf_iw);
