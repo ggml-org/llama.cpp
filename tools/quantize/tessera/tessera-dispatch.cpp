@@ -419,11 +419,18 @@ int ts_dispatch_run(const ts_dispatch_params * params,
     // ts_quantize_2d; the HIGGS alpha_l weights (search_cfg) score the
     // cross-layer composite via ts_search_fitness when the layer counts match.
     std::unordered_map<std::string, float> ga_alpha;
+
+    // MAP-Elites archive: best policy per regime cell, populated from the GA
+    // results below and persisted to a sidecar JSON alongside the policy.
+    ts_map_elites_archive archive;
+    bool have_archive = false;
+
     if (need_ga) {
-        std::vector<std::string>        ga_names;
-        std::vector<std::vector<float>> ga_wbufs;     // weight storage (owns data)
-        std::vector<std::vector<float>> ga_actbufs;   // corpus-derived act_scales storage
-        std::vector<ts_awq_layer>       ga_layers;
+        std::vector<std::string>           ga_names;
+        std::vector<std::vector<float>>    ga_wbufs;     // weight storage (owns data)
+        std::vector<std::vector<float>>    ga_actbufs;   // corpus-derived act_scales storage
+        std::vector<ts_awq_layer>          ga_layers;
+        std::vector<ts_regime_descriptor>  ga_descs;     // regime descriptor per layer (archive axes)
 
         for (int64_t i = 0; i < n_tensors; i++) {
             const char * name = gguf_get_tensor_name(in_ctx, i);
@@ -484,6 +491,7 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             layer.kurtosis    = desc.kurtosis;
             layer.eff_rank    = desc.eff_rank;
             ga_layers.push_back(layer);
+            ga_descs.push_back(desc);
         }
 
         if (!ga_layers.empty()) {
@@ -521,6 +529,27 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             if (verbose) {
                 printf("tessera-dispatch: GA done (%lld layers, composite=%.6f, higgs_weighted=%d)\n",
                        (long long)ga_layers.size(), composite, fit_cfg.layer_alpha != nullptr);
+            }
+
+            // feed the GA outcomes into the MAP-Elites archive: one elite per
+            // regime cell, keyed by each layer's descriptor. Fitness is the
+            // HIGGS-weighted per-layer t_l^2 (lower is better).
+            ts_archive_init(&archive, 5, 5, 8, 3);
+            for (size_t l = 0; l < ga_results.size(); l++) {
+                const float w_l     = fit_cfg.layer_alpha ? fit_cfg.layer_alpha[l] : 1.0f;
+                const float fitness = w_l * t2[l];
+                ts_archive_insert(&archive, &ga_descs[l], fitness,
+                                  ga_results[l].best.alpha, ga_results[l].best.clip,
+                                  ga_names[l].c_str());
+            }
+            have_archive = true;
+
+            ts_archive_summary as = ts_archive_summarize(&archive);
+            result->archive_json = ts_archive_to_json(&archive);
+            if (verbose) {
+                printf("tessera-dispatch: MAP-Elites archive (%d/%d cells occupied, "
+                       "mean_fitness=%.6f best=%.6f)\n",
+                       as.occupied_cells, as.total_cells, as.mean_fitness, as.best_fitness);
             }
         }
     }
@@ -807,6 +836,21 @@ int ts_dispatch_run(const ts_dispatch_params * params,
         } else {
             fprintf(stderr, "tessera-dispatch: warning: could not write policy to '%s'\n",
                     params->policy_out_path.c_str());
+        }
+
+        // write the MAP-Elites archive sidecar alongside the policy
+        if (have_archive) {
+            const std::string archive_path = params->policy_out_path + ".archive.json";
+            std::ofstream af(archive_path);
+            if (af.is_open()) {
+                af << result->archive_json << "\n";
+                if (verbose) {
+                    printf("tessera-dispatch: wrote archive '%s'\n", archive_path.c_str());
+                }
+            } else {
+                fprintf(stderr, "tessera-dispatch: warning: could not write archive to '%s'\n",
+                        archive_path.c_str());
+            }
         }
     }
 

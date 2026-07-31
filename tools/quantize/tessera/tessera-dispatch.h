@@ -65,6 +65,7 @@ struct ts_dispatch_tensor_result {
 struct ts_dispatch_result {
     std::vector<ts_dispatch_tensor_result> tensors;
     std::string policy_json;      // serialized policy for writing
+    std::string archive_json;     // serialized MAP-Elites archive (empty if no GA)
     std::string policy_sha256;
     int64_t     n_tensors_quantized;
     int64_t     n_tensors_skipped;
