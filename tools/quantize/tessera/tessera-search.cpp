@@ -864,6 +864,20 @@ void ts_champq_invert(const int32_t * perm, int32_t * inv, int64_t n) {
     }
 }
 
+// --- GA search fitness ---
+
+float ts_search_fitness(const float * t2, const ts_search_config * cfg) {
+    if (!t2 || !cfg || cfg->n_layers <= 0) {
+        return 0.0f;
+    }
+    float sum = 0.0f;
+    for (int64_t l = 0; l < cfg->n_layers; l++) {
+        float alpha = cfg->layer_alpha ? cfg->layer_alpha[l] : 1.0f;
+        sum += alpha * t2[l];
+    }
+    return sum;
+}
+
 // --- Regime router ---
 
 ts_expert_id ts_route_expert(float kurtosis, float eff_rank,

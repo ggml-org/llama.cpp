@@ -74,6 +74,9 @@ fi
 # --- Needs linalg + lbfgs ---
 compile_and_run search      $T/test_search.cpp      $T/tessera-search.cpp $T/tessera-linalg.cpp $T/tessera-lbfgs.cpp
 
+# --- HIGGS integration (higgs + cache + search + quant + vec) ---
+compile_and_run higgs_integration $T/test_higgs_integration.cpp $T/tessera-higgs.cpp $T/tessera-higgs-cache.cpp $T/tessera-search.cpp $T/tessera-linalg.cpp $T/tessera-lbfgs.cpp $T/tessera-quant.cpp $T/tessera-vec.cpp -framework Accelerate
+
 # --- Needs sidecar + vec ---
 compile_and_run l15         $T/test_l15.cpp         $T/tessera-l15.cpp $C/tessera-sidecar-v3.cpp $T/tessera-vec.cpp -I $C -framework Accelerate
 

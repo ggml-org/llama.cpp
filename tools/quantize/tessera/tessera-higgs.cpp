@@ -219,3 +219,17 @@ int ts_higgs_from_json(const char * json_str, float * alphas_out, int64_t max_la
 
     return (count > 0) ? (int)count : -1;
 }
+
+// ---------------------------------------------------------------------------
+// Alpha extraction
+// ---------------------------------------------------------------------------
+
+std::vector<float> ts_higgs_extract_alphas(const ts_higgs_result * result) {
+    std::vector<float> alphas;
+    if (!result) return alphas;
+    alphas.reserve(result->layers.size());
+    for (const auto & lr : result->layers) {
+        alphas.push_back(lr.alpha_l);
+    }
+    return alphas;
+}

@@ -20,6 +20,8 @@ struct ts_dispatch_params {
     std::string policy_path;      // empty = run GA
     std::string policy_out_path;
     std::string calib_corpus;     // empty = use built-in mini-corpus
+    std::string higgs_alpha_mode; // "auto", "uniform", "cache-only" (default: "uniform")
+    std::string higgs_cache_dir;  // empty = default (~/.cache/tessera/higgs_alpha/)
     uint64_t    evolve_seed;
     int         evolve_iters;
     int         evolve_islands;

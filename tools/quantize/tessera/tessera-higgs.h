@@ -59,3 +59,6 @@ std::string ts_higgs_to_json(const ts_higgs_result * result);
 
 // Load cached alpha_l from JSON. Returns n_layers loaded, or -1.
 int ts_higgs_from_json(const char * json_str, float * alphas_out, int64_t max_layers);
+
+// Extract alpha_l values from a result into a flat vector.
+std::vector<float> ts_higgs_extract_alphas(const ts_higgs_result * result);

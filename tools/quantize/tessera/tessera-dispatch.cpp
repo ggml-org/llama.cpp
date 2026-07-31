@@ -12,6 +12,9 @@
 #include "tessera-awq.h"
 #include "tessera-regime.h"
 #include "tessera-gguf-writer.h"
+#include "tessera-higgs.h"
+#include "tessera-higgs-cache.h"
+#include "tessera-search.h"
 
 #include "gguf.h"
 #include "ggml.h"
@@ -167,6 +170,81 @@ int ts_dispatch_run(const ts_dispatch_params * params,
         printf("tessera-dispatch: loaded '%s' (%lld tensors)\n",
                params->input_path.c_str(), (long long)n_tensors);
     }
+
+    // --- step 5b: HIGGS alpha_l estimation / cache lookup ---
+    std::string higgs_mode = params->higgs_alpha_mode.empty() ? "uniform" : params->higgs_alpha_mode;
+    std::vector<float> higgs_alphas;   // empty = uniform
+    bool higgs_active = false;
+
+    if (higgs_mode != "uniform") {
+        // collect quantizable tensor weights for cache key
+        std::vector<const float *> higgs_wptrs;
+        std::vector<int64_t> higgs_outs, higgs_ins;
+        std::vector<std::vector<float>> higgs_wbufs;
+
+        for (int64_t i = 0; i < n_tensors; i++) {
+            const char * name = gguf_get_tensor_name(in_ctx, i);
+            const enum ggml_type type = gguf_get_tensor_type(in_ctx, i);
+            const int64_t * ne = gguf_get_tensor_ne(in_ctx, i);
+            int nd = GGML_MAX_DIMS;
+            while (nd > 1 && ne[nd - 1] == 1) nd--;
+
+            if (!ts_is_quantizable(name, type, nd)) continue;
+
+            struct ggml_tensor * t = ggml_get_tensor(ggml_ctx, name);
+            if (!t) continue;
+
+            higgs_wbufs.push_back(ts_tensor_to_f32(t));
+            if (higgs_wbufs.back().empty()) {
+                higgs_wbufs.pop_back();
+                continue;
+            }
+            higgs_wptrs.push_back(higgs_wbufs.back().data());
+            higgs_outs.push_back(ne[1]);
+            higgs_ins.push_back(ne[0]);
+        }
+
+        if (!higgs_wptrs.empty()) {
+            ts_higgs_cache_key ckey = ts_higgs_cache_compute_key(
+                higgs_wptrs.data(), higgs_outs.data(), higgs_ins.data(),
+                (int64_t)higgs_wptrs.size());
+
+            const std::string * cdir = params->higgs_cache_dir.empty()
+                ? nullptr : &params->higgs_cache_dir;
+
+            auto cached = ts_higgs_cache_load(&ckey, cdir);
+            if (cached.has_value()) {
+                higgs_alphas = std::move(cached.value());
+                higgs_active = true;
+                if (verbose) {
+                    printf("tessera-dispatch: HIGGS cache hit (%lld layers, hash=%s...)\n",
+                           (long long)higgs_alphas.size(), ckey.hex.substr(0, 12).c_str());
+                }
+            } else if (higgs_mode == "cache-only") {
+                if (err_msg) {
+                    *err_msg = "HIGGS cache miss and mode is cache-only (hash=" + ckey.hex + ")";
+                }
+                gguf_free(in_ctx);
+                ggml_free(ggml_ctx);
+                return 4;
+            } else {
+                // mode == "auto": estimation requires a model forward-pass
+                // callback (metric_fn) not available in the standalone
+                // dispatch. The offline harness (alpha_calibrate.py) produces
+                // the cache artifact; log and fall back to uniform.
+                if (verbose) {
+                    printf("tessera-dispatch: HIGGS cache miss, falling back to uniform "
+                           "(run alpha_calibrate.py to populate cache, hash=%s...)\n",
+                           ckey.hex.substr(0, 12).c_str());
+                }
+            }
+        }
+    }
+
+    // build search config for the GA
+    ts_search_config search_cfg;
+    search_cfg.layer_alpha = higgs_active ? higgs_alphas.data() : nullptr;
+    search_cfg.n_layers    = higgs_active ? (int64_t)higgs_alphas.size() : 0;
 
     // --- step 6: prepare output GGUF ---
     struct gguf_context * out_ctx = gguf_init_empty();

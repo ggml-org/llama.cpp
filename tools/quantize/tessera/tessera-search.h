@@ -113,6 +113,18 @@ void ts_champq_invert(const int32_t * perm, int32_t * inv, int64_t n);
 // Sinkhorn projection: project (n x n) matrix onto doubly-stochastic.
 void ts_champq_sinkhorn(float * M, int64_t n, int64_t n_iters, float eps);
 
+// --- GA search config and fitness ---
+
+struct ts_search_config {
+    const float * layer_alpha;  // per-layer HIGGS weights (n_layers,), nullptr = uniform
+    int64_t       n_layers;
+};
+
+// Composite fitness: Sum_l alpha_l * t_l^2.
+// t2: per-layer relative Frobenius errors (n_layers,).
+// cfg: search config with optional layer_alpha (nullptr = all alpha_l = 1).
+float ts_search_fitness(const float * t2, const ts_search_config * cfg);
+
 // --- Regime router ---
 
 enum ts_expert_id {
