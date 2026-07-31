@@ -32,6 +32,7 @@ extern "C" {
         GGML_OPT_LOSS_TYPE_SUM,
         GGML_OPT_LOSS_TYPE_CROSS_ENTROPY,
         GGML_OPT_LOSS_TYPE_MEAN_SQUARED_ERROR,
+        GGML_OPT_LOSS_TYPE_LK, // LK acceptance-rate loss for speculative-decoding drafter training
     };
 
     // ====== Dataset ======

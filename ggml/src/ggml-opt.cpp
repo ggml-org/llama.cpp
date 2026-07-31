@@ -428,12 +428,40 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
             opt_ctx->loss_per_datapoint = true;
             break;
         }
+        case GGML_OPT_LOSS_TYPE_LK: {
+            // LK loss: directly maximize the speculative-decoding acceptance rate
+            //   alpha = sum_x min(p(x), q(x))
+            // with p = verifier distribution (labels, already normalized) and
+            // q = drafter distribution (softmax of the output logits). For normalized
+            // distributions the identity alpha = 1 - (1/2)*sum_x |p(x) - q(x)| holds,
+            // so minimizing the total variation distance is exactly equivalent to
+            // maximizing alpha. Expressed with existing differentiable ops only.
+            opt_ctx->labels = ggml_dup_tensor(ctx_results, opt_ctx->outputs);
+            ggml_set_input(opt_ctx->labels);
+            ggml_set_name(opt_ctx->labels, "labels");
+
+            struct ggml_tensor * q = ggml_soft_max(ctx_results, opt_ctx->outputs);
+            ggml_set_name(q, "lk_q");
+            opt_ctx->loss = ggml_sub(ctx_results, opt_ctx->labels, q);
+            ggml_set_name(opt_ctx->loss, "lk_diff");
+            opt_ctx->loss = ggml_abs(ctx_results, opt_ctx->loss);
+            ggml_set_name(opt_ctx->loss, "lk_abs_diff");
+            opt_ctx->loss = ggml_sum(ctx_results, opt_ctx->loss);
+            ggml_set_name(opt_ctx->loss, "lk_tv_sum");
+            // per-datapoint mean acceptance deficit in [0, 1]; ne[1] is the number of datapoints
+            const float scale = 0.5f / (opt_ctx->opt_period * opt_ctx->outputs->ne[1]);
+            opt_ctx->loss = ggml_scale(ctx_results, opt_ctx->loss, scale);
+            ggml_set_name(opt_ctx->loss, "loss_lk");
+            opt_ctx->loss_per_datapoint = true;
+            break;
+        }
     }
     ggml_set_output(opt_ctx->loss);
     ggml_set_loss(opt_ctx->loss);
     ggml_build_forward_expand(opt_ctx->gf, opt_ctx->loss);
 
-    if (opt_ctx->loss_type == GGML_OPT_LOSS_TYPE_CROSS_ENTROPY) {
+    if (opt_ctx->loss_type == GGML_OPT_LOSS_TYPE_CROSS_ENTROPY ||
+        opt_ctx->loss_type == GGML_OPT_LOSS_TYPE_LK) {
         opt_ctx->pred = ggml_argmax(ctx_results, opt_ctx->outputs);
         ggml_set_name(opt_ctx->pred, "pred");
         ggml_set_output(opt_ctx->pred);
