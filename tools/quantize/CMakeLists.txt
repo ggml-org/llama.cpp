@@ -81,7 +81,7 @@ endif()
 set(TARGET tessera-ffi)
 
 add_library(${TARGET} STATIC
-    ${CMAKE_SOURCE_DIR}/TesseraStudio/Sources/CTesseraFFI/tessera_ffi.cpp
+    ${CMAKE_SOURCE_DIR}/TesseraStudio/ffi/tessera_ffi.cpp
 )
 
 target_include_directories(${TARGET} PRIVATE
