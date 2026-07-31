@@ -1628,6 +1628,10 @@ extern "C" {
         void * get_opt_pars_ud;                     // userdata for calculating optimizer parameters
 
         enum ggml_opt_optimizer_type optimizer_type;
+
+        enum ggml_opt_loss_type loss_type; // loss to minimize. GGML_OPT_LOSS_TYPE_LK requires the labels to be
+                                           // dense probability distributions (see tools/quantize/tessera/tessera-lk-loss.h),
+                                           // not the token-id labels used for cross-entropy.
     };
 
     LLAMA_API void llama_opt_init(struct llama_context * lctx, struct llama_model * model, struct llama_opt_params lopt_params);
