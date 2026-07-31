@@ -21,6 +21,11 @@ struct ts_gguf_writer_params {
     std::string policy_sha256;    // hex
     std::string build_info;
     std::string main_tip;
+    // S9 W4A4 activation quantization metadata (written when w4a4_enabled)
+    bool        w4a4_enabled = false;
+    int         w4a4_activation_bits = 4;
+    std::string w4a4_scale_mode;  // "per_token" / "per_tensor"
+    float       w4a4_outlier_thresh = 6.0f;
 };
 
 // Write tessera.* metadata KV pairs to an open gguf_context.

@@ -22,6 +22,7 @@
 #include "tessera-mm-imatrix.h"
 #include "tessera-mm-fitness.h"
 #include "tessera-mm-awq.h"
+#include "tessera-w4a4.h"
 
 #include "gguf.h"
 #include "ggml.h"
@@ -813,6 +814,20 @@ int ts_dispatch_run(const ts_dispatch_params * params,
     qparams.awq_grid       = 20;
     qparams.seed           = (uint32_t)params->evolve_seed;
 
+    // S9 W4A4 activation quantization config. The weight-only contract is
+    // unchanged when w4a4 is false; when true the per-tensor activation scales
+    // and LLM.int8 outlier decomposition are computed from the calibration
+    // activations and recorded as sidecar metadata.
+    ts_w4a4_config wcfg = ts_w4a4_default_config();
+    wcfg.enable         = params->w4a4;
+    wcfg.outlier_thresh = params->w4a4_outlier_thresh > 0.0f
+                              ? params->w4a4_outlier_thresh : wcfg.outlier_thresh;
+    if (params->w4a4 && verbose) {
+        printf("tessera-dispatch: W4A4 enabled (bits=%d scale_mode=%s outlier_thresh=%.2f)\n",
+               wcfg.activation_bits, ts_w4a4_scale_mode_str(wcfg.scale_mode).c_str(),
+               wcfg.outlier_thresh);
+    }
+
     float total_mse = 0.0f;
     int64_t n_quantized = 0;
     int64_t n_skipped   = 0;
@@ -966,6 +981,12 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             }
         };
 
+        // S9 W4A4 sidecar for this tensor (populated in the 2D branch when
+        // params->w4a4 is set; MoE 3D W4A4 is deferred). w4a4_policy_json is
+        // appended to the per-tensor policy / receipt entry below.
+        ts_w4a4_sidecar w4a4_sc = {};
+        std::string     w4a4_policy_json;
+
         if (n_dims == 3) {
             // MoE expert tensor: (n_experts x out_dim x in_dim)
             const int64_t n_experts = ne[2];
@@ -1020,14 +1041,37 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             }
         } else {
             // standard 2D weight
-            ts_quant_result_2d qr;
-            int rc = ts_quantize_2d(weights.data(),
+            ts_quant_result_2d    qr;
+            ts_w4a4_weight_result wres;
+            wres.base = &qr;
+
+            // W4A4 routes through the activation-aware wrapper when the
+            // calibration width matches this tensor; otherwise the existing
+            // weight-only path runs and (when w4a4 is on) the activation
+            // metadata is still recorded from any width-matching calibration.
+            const bool calib_match = params->w4a4 && !calib_X.empty() &&
+                                     calib_in_dim == in_dim && calib_n_tokens > 0;
+            int rc;
+            if (calib_match) {
+                rc = ts_w4a4_quantize_weights(weights.data(), calib_X.data(),
+                                              out_dim, in_dim, calib_n_tokens,
+                                              &tqp, &wcfg, &qr, &wres);
+            } else {
+                rc = ts_quantize_2d(weights.data(),
                                     act_scales,   // act_scales
                                     nullptr,      // calib_X
                                     nullptr,      // ref_output
                                     act_scales,   // imatrix
                                     out_dim, in_dim, 0,
                                     &tqp, &qr);
+                if (rc == 0 && params->w4a4) {
+                    const float * cx = (!calib_X.empty() && calib_in_dim == in_dim)
+                                           ? calib_X.data() : nullptr;
+                    const int64_t ct = (cx != nullptr) ? calib_n_tokens : 0;
+                    ts_w4a4_detect_outliers(cx, ct, in_dim, &wcfg, &wres.outliers);
+                    ts_w4a4_compute_act_scales(cx, ct, in_dim, &wcfg, &wres.scales);
+                }
+            }
             if (rc != 0) {
                 if (err_msg) {
                     *err_msg = "ts_quantize_2d failed for " + std::string(name);
@@ -1055,6 +1099,30 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             tr.act_scale           = ts_to_bytes_u16(qr.act_scale);
             tr.mse                 = qr.mse;
             tr.alpha_used          = qr.best_alpha;
+
+            // S9 W4A4 sidecar metadata + per-tensor receipt entry
+            if (params->w4a4) {
+                tr.w4a4_enabled          = true;
+                tr.w4a4_activation_bits  = wcfg.activation_bits;
+                tr.w4a4_scale_mode       = ts_w4a4_scale_mode_str(wcfg.scale_mode);
+                tr.w4a4_outlier_frac     = wres.outliers.frac;
+                tr.w4a4_act_scale_static = wres.scales.per_tensor;
+                tr.w4a4_outlier_channels = wres.outliers.channels;
+
+                w4a4_sc.enabled          = true;
+                w4a4_sc.activation_bits  = wcfg.activation_bits;
+                w4a4_sc.scale_mode       = wcfg.scale_mode;
+                w4a4_sc.outlier_frac     = wres.outliers.frac;
+                w4a4_sc.act_scale_static = wres.scales.per_tensor;
+                w4a4_sc.outlier_channels = wres.outliers.channels;
+                w4a4_policy_json         = ", " + ts_w4a4_sidecar_json(&w4a4_sc);
+
+                if (verbose) {
+                    printf("tessera-dispatch: %s w4a4 outliers=%zu frac=%.5f eff_bits=%.3f\n",
+                           name, wres.outliers.channels.size(), wres.outliers.frac,
+                           wres.effective_bits);
+                }
+            }
 
             total_mse += qr.mse;
             result->tensors.push_back(std::move(tr));
@@ -1087,7 +1155,7 @@ int ts_dispatch_run(const ts_dispatch_params * params,
                      + "\"max_outliers\": " + std::to_string(tqp.max_outliers) + ", "
                      + "\"outlier_thresh\": " + std::to_string(tqp.outlier_thresh) + ", "
                      + "\"use_septq\": " + (tqp.use_septq ? "true" : "false")
-                     + "}}";
+                     + "}" + w4a4_policy_json + "}";
     }
 
     policy_json += "\n  ]\n}";
@@ -1102,6 +1170,10 @@ int ts_dispatch_run(const ts_dispatch_params * params,
     wparams.policy_sha256  = "";
     wparams.build_info     = "";
     wparams.main_tip       = "";
+    wparams.w4a4_enabled         = params->w4a4;
+    wparams.w4a4_activation_bits = wcfg.activation_bits;
+    wparams.w4a4_scale_mode      = ts_w4a4_scale_mode_str(wcfg.scale_mode);
+    wparams.w4a4_outlier_thresh  = wcfg.outlier_thresh;
     ts_gguf_write_metadata(out_ctx, &wparams);
 
     // --- step 9: write output GGUF ---

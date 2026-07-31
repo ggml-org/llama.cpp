@@ -39,6 +39,12 @@ struct ts_dispatch_params {
     bool        kernel_fitness;
     std::string kernel_fitness_dir;     // empty = $LLAMA_TILE640_DEBUG_DEQUANT_DIR
     float       kernel_fitness_blend;   // 0.0 = offline, 1.0 = kernel-direct
+    // S9 W4A4 activation quantization. When w4a4 is set the pipeline computes
+    // per-token activation scales and the LLM.int8 outlier decomposition from
+    // the calibration activations and records them as sidecar metadata; the
+    // weight-only contract is unchanged when w4a4 is false.
+    bool        w4a4;
+    float       w4a4_outlier_thresh;    // LLM.int8 |X| threshold (default 6.0)
 };
 
 // Result of the Tessera pipeline for one tensor.
@@ -70,6 +76,13 @@ struct ts_dispatch_tensor_result {
     // per-modality AWQ alpha from the multimodal imatrix (0 when absent)
     int         modality_id;
     float       modality_alpha[3];
+    // S9 W4A4 sidecar metadata (populated when params.w4a4 is set)
+    bool        w4a4_enabled = false;
+    int         w4a4_activation_bits = 0;
+    std::string w4a4_scale_mode;        // "per_token" / "per_tensor"
+    float       w4a4_outlier_frac = 0.0f;
+    float       w4a4_act_scale_static = 0.0f;
+    std::vector<uint32_t> w4a4_outlier_channels;
 };
 
 struct ts_dispatch_result {

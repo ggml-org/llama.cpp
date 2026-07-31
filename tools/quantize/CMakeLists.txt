@@ -9,6 +9,7 @@ add_library(${TARGET}
     tessera/tessera-linalg.cpp
     tessera/tessera-lbfgs.cpp
     tessera/tessera-quant.cpp
+    tessera/tessera-w4a4.cpp
     # calibration + imatrix + corpus
     tessera/tessera-imatrix.cpp
     tessera/tessera-corpus.cpp

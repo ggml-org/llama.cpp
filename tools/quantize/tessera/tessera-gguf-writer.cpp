@@ -35,6 +35,15 @@ void ts_gguf_write_metadata(struct gguf_context * ctx, const ts_gguf_writer_para
     if (!params->main_tip.empty()) {
         gguf_set_val_str(ctx, "tessera.provenance.main_tip", params->main_tip.c_str());
     }
+
+    // S9 W4A4 activation quantization metadata (additive; absent when disabled)
+    if (params->w4a4_enabled) {
+        gguf_set_val_bool(ctx, "tessera.w4a4.enabled", true);
+        gguf_set_val_u32(ctx, "tessera.w4a4.activation_bits", (uint32_t)params->w4a4_activation_bits);
+        gguf_set_val_str(ctx, "tessera.w4a4.scale_mode",
+                         params->w4a4_scale_mode.empty() ? "per_token" : params->w4a4_scale_mode.c_str());
+        gguf_set_val_f32(ctx, "tessera.w4a4.outlier_thresh", params->w4a4_outlier_thresh);
+    }
 }
 
 void ts_gguf_write_tensor_cluster(struct gguf_context * ctx,

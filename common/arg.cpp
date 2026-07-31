@@ -94,6 +94,7 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
     if (arg == "--tessera-calibrate-only") { tessera_params.calibrate_only = true; return 1; }
     if (arg == "--tessera-champq")         { tessera_params.champq         = true; return 1; }
     if (arg == "--tessera-kernel-fitness") { tessera_params.kernel_fitness = true; return 1; }
+    if (arg == "--tessera-w4a4")           { tessera_params.w4a4           = true; return 1; }
 
     // enum-valued
     if (arg == "--tessera-mode") {
@@ -179,6 +180,15 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
         catch (...) { err = string_format("error: invalid value for --tessera-kernel-fitness-blend: '%s'\n", val.c_str()); return -1; }
         if (f < 0.0f || f > 1.0f) { err = string_format("error: --tessera-kernel-fitness-blend must be in [0, 1], got %f\n", f); return -1; }
         tessera_params.kernel_fitness_blend = f;
+        return 2;
+    }
+    if (arg == "--tessera-w4a4-outlier-thresh") {
+        if (!require_val("--tessera-w4a4-outlier-thresh")) return -1;
+        float f;
+        try { f = std::stof(val); }
+        catch (...) { err = string_format("error: invalid value for --tessera-w4a4-outlier-thresh: '%s'\n", val.c_str()); return -1; }
+        if (f <= 0.0f) { err = string_format("error: --tessera-w4a4-outlier-thresh must be > 0, got %f\n", f); return -1; }
+        tessera_params.w4a4_outlier_thresh = f;
         return 2;
     }
 
@@ -4159,6 +4169,27 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                     string_format("error: --tessera-kernel-fitness-blend must be in [0, 1], got %f\n", f));
             }
             tessera_params.kernel_fitness_blend = f;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-w4a4"},
+        "Tessera: enable W4A4 activation quantization (4-bit weights + 4-bit "
+        "activations) with LLM.int8-style outlier handling (default: off)",
+        [](common_params &) {
+            tessera_params.w4a4 = true;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-w4a4-outlier-thresh"}, "F",
+        "Tessera: W4A4 LLM.int8 outlier threshold; activation channels with "
+        "|X| above this stay FP16 (default: 6.0)",
+        [](common_params &, const std::string & value) {
+            const float f = std::stof(value);
+            if (f <= 0.0f) {
+                throw std::invalid_argument(
+                    string_format("error: --tessera-w4a4-outlier-thresh must be > 0, got %f\n", f));
+            }
+            tessera_params.w4a4_outlier_thresh = f;
         }
     ));
     add_opt(common_arg(

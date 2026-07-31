@@ -680,6 +680,8 @@ int llama_quantize(int argc, char ** argv) {
         tparams.kernel_fitness       = tp.kernel_fitness;
         tparams.kernel_fitness_dir   = tp.kernel_fitness_dir;
         tparams.kernel_fitness_blend = tp.kernel_fitness_blend;
+        tparams.w4a4                 = tp.w4a4;
+        tparams.w4a4_outlier_thresh  = tp.w4a4_outlier_thresh;
         ts_dispatch_result tresult;
         std::string terr;
         if (ts_dispatch_run(&tparams, &tresult, &terr) != 0) {
