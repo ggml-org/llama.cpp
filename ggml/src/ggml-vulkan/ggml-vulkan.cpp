@@ -193,14 +193,15 @@ static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
             err_ = (err);                                           \
         } catch (vk::DeviceLostError &) {                           \
             ggml_vk_print_device_lost_info(dev);                    \
-            fprintf(stderr, "ggml_vulkan: %s at %s:%d\n",           \
+            GGML_LOG_ERROR("ggml_vulkan: %s at %s:%d\n",            \
                 #err, __FILE__, __LINE__);                          \
-            exit(1);                                                \
+            throw;                                                  \
         }                                                           \
         if (err_ != vk::Result::eSuccess) {                         \
-            fprintf(stderr, "ggml_vulkan: %s error %s at %s:%d\n",  \
+            GGML_LOG_ERROR("ggml_vulkan: %s error %s at %s:%d\n",   \
                 #err, to_string(err_).c_str(), __FILE__, __LINE__); \
-            exit(1);                                                \
+            throw vk::SystemError(vk::make_error_code(err_),        \
+                "ggml_vulkan: " msg);                               \
         }                                                           \
     } while (0)
 
@@ -1132,7 +1133,7 @@ static void ggml_vk_print_device_fault_info(const vk_device& device) {
     fault_counts.sType = VK_STRUCTURE_TYPE_DEVICE_FAULT_COUNTS_EXT;
     VkResult res = device->pfn_vkGetDeviceFaultInfoEXT(device->device, &fault_counts, nullptr);
     if (res != VK_SUCCESS) {
-        fprintf(stderr, "ggml_vulkan: vkGetDeviceFaultInfoEXT (counts) failed: %d\n", res);
+        GGML_LOG_ERROR("ggml_vulkan: vkGetDeviceFaultInfoEXT (counts) failed: %d\n", res);
         return;
     }
 
@@ -1146,7 +1147,7 @@ static void ggml_vk_print_device_fault_info(const vk_device& device) {
 
     res = device->pfn_vkGetDeviceFaultInfoEXT(device->device, &fault_counts, &fault_info);
     if (res != VK_SUCCESS) {
-        fprintf(stderr, "ggml_vulkan: vkGetDeviceFaultInfoEXT (info) failed: %d\n", res);
+        GGML_LOG_ERROR("ggml_vulkan: vkGetDeviceFaultInfoEXT (info) failed: %d\n", res);
         return;
     }
 
@@ -1155,19 +1156,19 @@ static void ggml_vk_print_device_fault_info(const vk_device& device) {
     }
 
     if (fault_info.description[0] != '\0') {
-        fprintf(stderr, "ggml_vulkan: device fault on %s: %s\n", device->name.c_str(), fault_info.description);
+        GGML_LOG_ERROR("ggml_vulkan: device fault on %s: %s\n", device->name.c_str(), fault_info.description);
     }
 
     for (uint32_t i = 0; i < fault_counts.addressInfoCount; i++) {
         const auto& info = address_infos[i];
-        fprintf(stderr, "  address fault %u: type=%d address=0x%llx precision=0x%llx\n",
+        GGML_LOG_CONT("  address fault %u: type=%d address=0x%llx precision=0x%llx\n",
                 i, (int)info.addressType,
                 (unsigned long long)info.reportedAddress,
                 (unsigned long long)info.addressPrecision);
     }
     for (uint32_t i = 0; i < fault_counts.vendorInfoCount; i++) {
         const auto& info = vendor_infos[i];
-        fprintf(stderr, "  vendor fault %u: %s (code=0x%llx data=0x%llx)\n",
+        GGML_LOG_CONT("  vendor fault %u: %s (code=0x%llx data=0x%llx)\n",
                 i, info.description,
                 (unsigned long long)info.vendorFaultCode,
                 (unsigned long long)info.vendorFaultData);
@@ -2104,25 +2105,25 @@ static void ggml_vk_print_node_list(const ggml_cgraph * cgraph, int start, int e
         total_flops += flops;
         n_ops++;
         if (flops > 0) {
-            fprintf(stderr, "  node %d: %s (%s) [%.2f GFLOP]\n",
+            GGML_LOG_CONT("  node %d: %s (%s) [%.2f GFLOP]\n",
                     j, cgraph->nodes[j]->name, ggml_op_name(cgraph->nodes[j]->op),
                     flops / 1e9);
         } else {
-            fprintf(stderr, "  node %d: %s (%s)\n",
+            GGML_LOG_CONT("  node %d: %s (%s)\n",
                     j, cgraph->nodes[j]->name, ggml_op_name(cgraph->nodes[j]->op));
         }
     }
-    fprintf(stderr, "  total: %d ops, %.2f GFLOP\n", n_ops, total_flops / 1e9);
+    GGML_LOG_CONT("  total: %d ops, %.2f GFLOP\n", n_ops, total_flops / 1e9);
 }
 
 static void ggml_vk_print_device_lost_info(const vk_device& device) {
     ggml_vk_print_device_fault_info(device);
     if (device->serialize_submissions && device->diag_cgraph != nullptr && device->diag_prev_start >= 0) {
-        fprintf(stderr, "ggml_vulkan: device lost on %s, likely caused by previous submission (nodes %d to %d):\n",
+        GGML_LOG_ERROR("ggml_vulkan: device lost on %s, likely caused by previous submission (nodes %d to %d):\n",
                 device->name.c_str(), device->diag_prev_start, device->diag_prev_end);
         ggml_vk_print_node_list(device->diag_cgraph, device->diag_prev_start, device->diag_prev_end);
     } else {
-        fprintf(stderr, "ggml_vulkan: device lost on %s\n", device->name.c_str());
+        GGML_LOG_ERROR("ggml_vulkan: device lost on %s\n", device->name.c_str());
     }
 }
 
@@ -2550,15 +2551,15 @@ static void ggml_vk_wait_for_fence(ggml_backend_vk_context * ctx) {
             result = ctx->device->device.getFenceStatus(ctx->fence);
         } catch (vk::DeviceLostError &) {
             ggml_vk_print_device_lost_info(ctx->device);
-            fprintf(stderr, "ggml_vulkan: getFenceStatus at %s:%d\n", __FILE__, __LINE__);
-            exit(1);
+            GGML_LOG_ERROR("ggml_vulkan: getFenceStatus at %s:%d\n", __FILE__, __LINE__);
+            throw;
         }
         if (result == vk::Result::eSuccess) {
             break;
         }
         if (result != vk::Result::eNotReady) {
-            fprintf(stderr, "ggml_vulkan: error %s at %s:%d\n", to_string(result).c_str(), __FILE__, __LINE__);
-            exit(1);
+            GGML_LOG_ERROR("ggml_vulkan: error %s at %s:%d\n", to_string(result).c_str(), __FILE__, __LINE__);
+            throw vk::SystemError(vk::make_error_code(result), "ggml_vulkan: getFenceStatus");
         }
         for (uint32_t i = 0; i < 100; ++i) {
             YIELD();
@@ -16850,12 +16851,12 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
             try {
                 auto res = ctx->device->device.waitForFences({ ctx->fence }, true, UINT64_MAX);
                 if (res != vk::Result::eSuccess) {
-                    fprintf(stderr, "ggml_vulkan: waitForFences error during serialized submission\n");
-                    exit(1);
+                    GGML_LOG_ERROR("ggml_vulkan: waitForFences error during serialized submission\n");
+                    throw vk::SystemError(vk::make_error_code(res), "ggml_vulkan: waitForFences during serialized submission");
                 }
             } catch (vk::DeviceLostError &) {
                 ggml_vk_print_device_fault_info(ctx->device);
-                fprintf(stderr, "ggml_vulkan: device lost on %s waiting for submission (nodes %d to %d):\n",
+                GGML_LOG_ERROR("ggml_vulkan: device lost on %s waiting for submission (nodes %d to %d):\n",
                         ctx->device->name.c_str(), start, end);
                 ggml_vk_print_node_list(cgraph, start, end);
                 throw;
