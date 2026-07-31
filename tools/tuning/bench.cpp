@@ -1,8 +1,11 @@
 #include "bench.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <thread>
+#include <utility>
 
 perf_cell build_perf_cell(ggml_backend_t backend, const build_graph_fn & build,
                           const init_tensors_fn & init, const op_flops_fn & flops) {
@@ -72,6 +75,54 @@ double time_cell_median(ggml_backend_t backend, const perf_cell & cell, int reps
     return samples[samples.size()/2] / cell.n_runs;
 }
 
+// times one candidate and returns its time; -1 on failure
+static double measure_one(ggml_backend_t backend, const perf_cell & cell, int reps,
+                          const set_candidate_fn & set_cand, const clear_candidate_fn & clear_cand,
+                          int cand) {
+    set_cand(cand);
+    const double t = time_cell_median(backend, cell, reps);
+    clear_cand();
+
+    return t;
+}
+
+// waits for the anchor to come back within eps of anchor_ref, with exponential backoff.
+// returns the converged anchor, or -1 if it never converged within max_wait.
+static double cool_until_steady(ggml_backend_t backend, const perf_cell & cell, int reps,
+                                const set_candidate_fn & set_cand, const clear_candidate_fn & clear_cand,
+                                int baseline_cand, double & anchor_ref, const cooldown_opts & cool,
+                                const char * cell_label) {
+    int total_wait = 0;
+
+    for (int sleep_s = 2; total_wait < cool.max_wait; sleep_s = std::min(sleep_s*2, 32)) {
+        const int this_wait = std::min(sleep_s, cool.max_wait - total_wait);
+
+        fprintf(stderr, "# COOL sleeping %ds (%ds/%ds) %s\n",
+                this_wait, total_wait + this_wait, cool.max_wait, cell_label);
+        std::this_thread::sleep_for(std::chrono::seconds(this_wait));
+        total_wait += this_wait;
+
+        const double a = measure_one(backend, cell, reps, set_cand, clear_cand, baseline_cand);
+        if (a <= 0.0) {
+            continue;
+        }
+
+        // a faster anchor means the machine got cooler than anything seen so far: adopt it
+        if (a < anchor_ref) {
+            anchor_ref = a;
+        }
+
+        if (a <= anchor_ref*(1.0 + cool.eps)) {
+            fprintf(stderr, "# COOL steady after %ds %s\n", total_wait, cell_label);
+            return a;
+        }
+    }
+
+    fprintf(stderr, "# COOL gave up after %ds %s\n", total_wait, cell_label);
+
+    return -1.0;
+}
+
 cell_result measure_cell(ggml_backend_t backend, const perf_cell & cell, int reps,
                          int n_cands, const std::vector<int> & order,
                          const set_candidate_fn & set_cand,
@@ -83,21 +134,30 @@ cell_result measure_cell(ggml_backend_t backend, const perf_cell & cell, int rep
 
     double anchor_ref = 0.0;
 
+    // anchors accepted as clean, as (value, position in order[]). the dirty window starts
+    // at the position of the last anchor still within eps of anchor_ref, so a downward
+    // drift (anchor_ref dropping) naturally widens the window to the whole cell.
+    std::vector<std::pair<double, size_t>> anchors;
+
+    auto window_start = [&]() -> size_t {
+        for (size_t i = anchors.size(); i-- > 0; ) {
+            if (anchors[i].first <= anchor_ref*(1.0 + cool.eps)) {
+                return anchors[i].second;
+            }
+        }
+        return 0;  // no clean anchor left -> the whole cell is suspect
+    };
+
+    int retries_left = cool.max_retry;
+
     for (size_t i = 0; i < order.size(); ++i) {
-        set_cand(order[i]);
-        res.t[order[i]] = time_cell_median(backend, cell, reps);
-        clear_cand();
+        res.t[order[i]] = measure_one(backend, cell, reps, set_cand, clear_cand, order[i]);
 
         if (i % 4 != 0) {
             continue;
         }
 
-        // re-measure the baseline config as an anchor: same config every time, so any
-        // change is the machine, not the kernel
-        set_cand(baseline_cand);
-        const double a = time_cell_median(backend, cell, reps);
-        clear_cand();
-
+        const double a = measure_one(backend, cell, reps, set_cand, clear_cand, baseline_cand);
         if (a <= 0.0) {
             continue;
         }
@@ -105,14 +165,60 @@ cell_result measure_cell(ggml_backend_t backend, const perf_cell & cell, int rep
         res.anchor_min = res.anchor_min > 0.0 ? std::min(res.anchor_min, a) : a;
         res.anchor_max = std::max(res.anchor_max, a);
 
-        if (anchor_ref > 0.0) {
-            const double drift = std::fabs(a - anchor_ref) / anchor_ref;
-            if (drift > cool.drift) {
-                fprintf(stderr, "# WARN throttling? anchor drift %.1f%% %s\n", 100.0*drift, cell_label);
-            }
+        if (anchor_ref == 0.0) {
+            anchor_ref = a;
+            anchors.push_back({ a, i });
+            continue;
         }
 
-        anchor_ref = anchor_ref > 0.0 ? std::min(anchor_ref, a) : a;
+        const double drift = std::fabs(a - anchor_ref)/anchor_ref;
+
+        // a cooler anchor than any so far becomes the reference: whatever was measured
+        // before it was measured on a hotter machine
+        if (a < anchor_ref) {
+            anchor_ref = a;
+        }
+
+        if (drift <= cool.drift) {
+            anchors.push_back({ a, i });
+            continue;
+        }
+
+        fprintf(stderr, "# WARN throttling? anchor drift %.1f%% %s\n", 100.0*drift, cell_label);
+
+        if (!cool.enabled) {
+            anchors.push_back({ a, i });
+            continue;
+        }
+
+        if (retries_left <= 0) {
+            fprintf(stderr, "# DIRTY retries exhausted %s\n", cell_label);
+            res.trusted = false;
+            return res;
+        }
+
+        const size_t dirty_from = window_start();
+
+        res.n_cooldowns++;
+
+        const double a_cool = cool_until_steady(backend, cell, reps, set_cand, clear_cand,
+                                                baseline_cand, anchor_ref, cool, cell_label);
+        if (a_cool <= 0.0) {
+            res.trusted = false;
+            return res;
+        }
+
+        // the converged anchor is the only clean one now; re-measure the dirty window from it
+        anchors.clear();
+        anchors.push_back({ a_cool, dirty_from });
+
+        retries_left--;
+
+        fprintf(stderr, "# REDO candidates %zu..%zu %s\n", dirty_from, i, cell_label);
+        for (size_t j = dirty_from; j <= i; ++j) {
+            res.t[order[j]] = measure_one(backend, cell, reps, set_cand, clear_cand, order[j]);
+            res.n_remeasures++;
+        }
     }
 
     return res;
