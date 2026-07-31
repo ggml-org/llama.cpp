@@ -2658,9 +2658,8 @@ static int ggml_cuda_try_gdn_cache_fusion(
         return 0;
     }
 
-    // The GDN chunked prefill  writes its recurrent state to the gdn output and does not
-    // support scattering directly into the snapshot cache. Skip fusion for chunked GDN ops 
-    // is faster with output to snapshot copy. Decode and fallback recurrent (T < 128) do fuse.
+    // Chunked prefill writes state to dst; it cannot scatter into the snapshot cache, so skip fusion.
+    // Decode and fallback recurrent (T < 128) do fuse.
     if (ggml_cuda_gdn_op_is_chunked(gdn)) {
         return 0;
     }

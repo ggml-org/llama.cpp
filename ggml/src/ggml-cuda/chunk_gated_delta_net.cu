@@ -2,14 +2,13 @@
 // SPDX-License-Identifier: MIT
 //
 // Chunked Gated Delta Net prefill: fwdsub intra -> Q@K^T precompute -> WMMA state+output.
-// H-state GEMMs use bf16; k^T v and qk*v_new use fp16; accum/gating/state stay fp32.
+// All WMMA GEMMs use fp16 operands with fp32 accumulation; gating/state/accum stay fp32.
 //
 #include "chunk_gated_delta_net.cuh"
 
 #include <cmath>
 
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
-#include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <mma.h>
@@ -23,7 +22,7 @@
 // Also emits g_cum. Grid (B*H, num_chunks); 128 threads. V may use a fused-QKV token stride.
 template <int CS, int BK>
 __launch_bounds__(128, 4) __global__ void cgdr_fwdsub_intra_kernel(
-    const float * __restrict__ K,     // (B, T, H, K)
+    const float * __restrict__ K,     // (B, T, num_k_heads, K)
     const float * __restrict__ V,     // (B, T, H, V), token stride = v_tok_stride (may be fused QKV)
     const float * __restrict__ Beta,  // (B, T, H)
     const float * __restrict__ G,     // (B, T, H)
@@ -171,7 +170,7 @@ __launch_bounds__(128, 4) __global__ void cgdr_fwdsub_intra_kernel(
     }
 }
 
-// Masked Q@K^T on tensor cores (bf16 WMMA, one warp per block):
+// Masked Q@K^T on tensor cores (fp16 WMMA, one warp per block):
 //   qk_buf[i,j] = (Q_ch . K_ch[j]) * exp(g_cum[i] - g_cum[j])   for j <= i, else 0.
 // Grid (B*H, num_chunks); 32 threads. Requires CS==16, BK%16==0.
 template <int CS, int BK>
@@ -190,11 +189,11 @@ __launch_bounds__(32, 8) __global__ void cgdr_precompute_qk_wmma_kernel(const fl
     static_assert(BK % 16 == 0, "BK must be a multiple of 16");
     constexpr int KT = BK / 16;
 
-    // SMEM layout (no padding needed: bf16 tiles at BK=128 have no bank conflicts)
+    // SMEM layout (no padding needed: fp16 tiles at BK=128 have no bank conflicts)
     extern __shared__ char _smem[];
-    auto *                 s_Q    = reinterpret_cast<__nv_bfloat16 *>(_smem);
-    auto *                 s_K    = reinterpret_cast<__nv_bfloat16 *>(_smem + CS * BK * sizeof(__nv_bfloat16));
-    auto *                 s_gcum = reinterpret_cast<float *>(_smem + 2 * CS * BK * sizeof(__nv_bfloat16));
+    auto *                 s_Q    = reinterpret_cast<__half *>(_smem);
+    auto *                 s_K    = reinterpret_cast<__half *>(_smem + CS * BK * sizeof(__half));
+    auto *                 s_gcum = reinterpret_cast<float *>(_smem + 2 * CS * BK * sizeof(__half));
     auto *                 s_acc  = s_gcum + CS;  // fp32 [CSxCS] accumulator store
 
     const int bh  = blockIdx.x;
@@ -214,15 +213,16 @@ __launch_bounds__(32, 8) __global__ void cgdr_precompute_qk_wmma_kernel(const fl
         s_gcum[tid] = g_cum[(bh * num_chunks + c) * CS + tid];
     }
 
-    // Load Q and K (float->bf16); each token row has stride HK. The last chunk may be partial when
+    // Load Q and K (float->fp16); each token row has stride HK. The last chunk may be partial when
     // seq_len is not a multiple of CS -- zero-fill rows past valid_cs to avoid out-of-bounds reads.
+    // Q*scale and K are small (unit-length vectors), so fp16 is safe.
     const int valid_cs = min(CS, seq_len - t_off);
     for (int i = tid; i < CS * BK; i += 32) {
         const int   row = i / BK, col = i % BK;
         const float qv = (row < valid_cs) ? Q_chunk[(long long) row * HK + col] : 0.f;
         const float kv = (row < valid_cs) ? K_chunk[(long long) row * HK + col] : 0.f;
-        s_Q[i]         = __float2bfloat16(qv * scale);
-        s_K[i]         = __float2bfloat16(kv);
+        s_Q[i]         = __float2half(qv * scale);
+        s_K[i]         = __float2half(kv);
     }
     __syncthreads();
 
@@ -231,8 +231,8 @@ __launch_bounds__(32, 8) __global__ void cgdr_precompute_qk_wmma_kernel(const fl
     wmma::fill_fragment(acc, 0.f);
     #pragma unroll
     for (int kt = 0; kt < KT; kt++) {
-        wmma::fragment<wmma::matrix_a, 16, 16, 16, __nv_bfloat16, wmma::row_major> fA;
-        wmma::fragment<wmma::matrix_b, 16, 16, 16, __nv_bfloat16, wmma::col_major> fB;
+        wmma::fragment<wmma::matrix_a, 16, 16, 16, __half, wmma::row_major> fA;
+        wmma::fragment<wmma::matrix_b, 16, 16, 16, __half, wmma::col_major> fB;
         wmma::load_matrix_sync(fA, s_Q + kt * 16, BK);
         wmma::load_matrix_sync(fB, s_K + kt * 16, BK);
         wmma::mma_sync(acc, fA, fB, acc);
@@ -251,7 +251,7 @@ __launch_bounds__(32, 8) __global__ void cgdr_precompute_qk_wmma_kernel(const fl
         O_base[flat]   = (col <= row) ? s_acc[flat] * __expf(s_gcum[row] - s_gcum[col]) : 0.f;
     }
 #else
-    // bf16 WMMA requires SM80+ (Ampere); never launched on older GPUs (dispatch guards cc>=Ampere).
+    // WMMA path is only dispatched on Ampere+ (dispatch guards cc>=Ampere); compiled out below.
     (void) Q_raw;
     (void) K_raw;
     (void) g_cum;
@@ -266,10 +266,11 @@ __launch_bounds__(32, 8) __global__ void cgdr_precompute_qk_wmma_kernel(const fl
 }
 
 // Recurrent state update + fused output. Grid tiles V by BV; H stays in fp32 h_regs across chunks
-// with a per-chunk bf16 copy (s_hbf16) for the WMMA B-operand. Matmuls are m16n16k16 WMMA (fp32
+// with a per-chunk fp16 copy (s_hfp16) for the WMMA B-operand. Matmuls are m16n16k16 WMMA (fp32
 // accum). H SMEM is V-major [BV][BK], matching GGML [bh][v][k]. Grid (B*H, V_dim/BV); NT threads.
 
-// fp32 -> fp16, clamped to finite fp16 range.
+// Convert fp32 to fp16 for WMMA operands. Inputs stay small (unit-length q/k, beta in [0,1],
+// decay <= 1), so fp16 is safe measured on wikitext-2, the clamp is defensive and does not fire
 __device__ __forceinline__ __half cgdr_to_fp16(float v) {
     v = fminf(fmaxf(v, -65504.0f), 65504.0f);
     return __float2half(v);
@@ -279,8 +280,8 @@ template <int CS, int BK, int BV, int NT, int OCC>
 __launch_bounds__(NT, OCC) __global__ void cgdr_state_wmma_kernel(
     const float * __restrict__ V_corr,
     const float * __restrict__ K_cumdecay,
-    const float * __restrict__ K_raw,   // raw K input [B,T,H,K]
-    const float * __restrict__ Q_raw,   // raw Q input [B,T,H,K]
+    const float * __restrict__ K_raw,   // raw K input [B,T,num_k_heads,K]
+    const float * __restrict__ Q_raw,   // raw Q input [B,T,num_k_heads,K]
     const float * __restrict__ G_cum_in,
     const float * __restrict__ QK_buf,  // [B*H, num_chunks, CS, CS] -- fused output input
     float * __restrict__ Output,        // [B, T, H, V_dim] GGML layout -- direct output write
@@ -294,8 +295,8 @@ __launch_bounds__(NT, OCC) __global__ void cgdr_state_wmma_kernel(
     int   seq_len) {
 #if !defined(__CUDA_ARCH__) || (__CUDA_ARCH__ >= 800)
     using namespace nvcuda;
-    static_assert(BK == 128, "bf16 state kernel requires BK=128");
-    static_assert(CS == 16, "bf16 state kernel requires CS=16");
+    static_assert(BK == 128, "fp16 state kernel requires BK=128");
+    static_assert(CS == 16, "fp16 state kernel requires CS=16");
     static_assert(BV % 16 == 0, "BV must be a multiple of 16");
     static_assert(NT % 32 == 0, "NT must be a multiple of warp size");
     static_assert((CS * BV) % NT == 0, "CS*BV must be divisible by NT");
@@ -303,25 +304,26 @@ __launch_bounds__(NT, OCC) __global__ void cgdr_state_wmma_kernel(
     static_assert(NT / 32 >= BV / 16, "need at least BV/16 warps for WMMA n-tiles");
 
     // SMEM layout:
-    //   s_hbf16[BKxBV]  bf16  -- H staging for steps 2b/2.5 WMMA B-operand
-    //   s_kbuf_bf16[CSxBK] bf16 -- K_cumdecay/Q (steps 2a/2.5); same buffer reused as fp16 s_kch/qkb
+    //   s_hfp16[BKxBV]  fp16  -- H staging for steps 2b/2.5 WMMA B-operand
+    //   s_kbuf[CSxBK]   fp16  -- K_cumdecay/Q (steps 2a/2.5); same buffer reused as s_kch/s_qkb
     //   s_result[CSxBV]  fp32  -- WMMA accumulator; reused as s_vnew fp16 (step 4)
     //   s_gcum[CS]       fp32
     //   s_hdelta[BKxBV]  fp32  -- step-5 delta / output WMMA scratch (V-major)
-    constexpr int H_BYTES    = BK * BV * (int) sizeof(__nv_bfloat16);
-    constexpr int KBUF_BYTES = CS * BK * (int) sizeof(__nv_bfloat16);
+    // H and K_cumdecay/Q stay small (measured on wikitext-2), so fp16 is safe.
+    constexpr int H_BYTES    = BK * BV * (int) sizeof(__half);
+    constexpr int KBUF_BYTES = CS * BK * (int) sizeof(__half);
     constexpr int RES_BYTES  = CS * BV * (int) sizeof(float);
     constexpr int GCUM_BYTES = CS * (int) sizeof(float);
 
-    extern __shared__ char _smem_bf16[];
-    __nv_bfloat16 *        s_hbf16     = reinterpret_cast<__nv_bfloat16 *>(_smem_bf16);
-    __nv_bfloat16 *        s_kbuf_bf16 = reinterpret_cast<__nv_bfloat16 *>(_smem_bf16 + H_BYTES);
-    float *                s_result    = reinterpret_cast<float *>(_smem_bf16 + H_BYTES + KBUF_BYTES);
-    float *                s_gcum      = reinterpret_cast<float *>(_smem_bf16 + H_BYTES + KBUF_BYTES + RES_BYTES);
-    float *  s_hdelta = reinterpret_cast<float *>(_smem_bf16 + H_BYTES + KBUF_BYTES + RES_BYTES + GCUM_BYTES);
-    // fp16 operands for the step-5 (k^T v) and output WMMAs, aliasing the bf16/fp32 SMEM above:
-    __half * s_kch    = reinterpret_cast<__half *>(s_kbuf_bf16);  // step 3 stages K_raw (reuses the 2a/2.5 buffer)
-    __half * s_vnew   = reinterpret_cast<__half *>(s_result);     // step 4 stages v_new (overlays fp32 WMMA result)
+    extern __shared__ char _smem_st[];
+    __half * s_hfp16  = reinterpret_cast<__half *>(_smem_st);
+    __half * s_kbuf   = reinterpret_cast<__half *>(_smem_st + H_BYTES);
+    float *  s_result = reinterpret_cast<float *>(_smem_st + H_BYTES + KBUF_BYTES);
+    float *  s_gcum   = reinterpret_cast<float *>(_smem_st + H_BYTES + KBUF_BYTES + RES_BYTES);
+    float *  s_hdelta = reinterpret_cast<float *>(_smem_st + H_BYTES + KBUF_BYTES + RES_BYTES + GCUM_BYTES);
+    // fp16 operands for the step-5 (k^T v) and output WMMAs, aliasing the fp16/fp32 SMEM above:
+    __half * s_kch    = s_kbuf;                                // step 3 stages K_raw (reuses the 2a/2.5 buffer)
+    __half * s_vnew   = reinterpret_cast<__half *>(s_result);  // step 4 stages v_new (overlays fp32 WMMA result)
 
     const int     pid_bh  = blockIdx.x;
     const int     tile_v  = blockIdx.y;
@@ -349,17 +351,17 @@ __launch_bounds__(NT, OCC) __global__ void cgdr_state_wmma_kernel(
     const float * Kraw_bh = K_raw + (long long) b_idx * seq_len * HK + h_k * BK;
     const float * Qraw_bh = Q_raw + (long long) b_idx * seq_len * HK + h_k * BK;
 
-    // FP32 H state in thread registers -- persistent across all chunks (no per-chunk bf16 rounding).
+    // FP32 H state in thread registers -- persistent across all chunks (no per-chunk fp16 rounding).
     float h_regs[EPT_H];
 
     // Initialize h_regs from InitState (GDN always has an input recurrent state s0), then prime
-    // s_hbf16 for the first chunk's WMMA.
+    // s_hfp16 for the first chunk's WMMA.
     {
         const long long src_base = bh_off * (long long) V_dim * BK;
         for (int j = 0; j < EPT_H; j++) {
             const int idx = tid + j * NT;
             h_regs[j]     = InitState[src_base + (idx / BK + v_off) * BK + (idx % BK)];
-            s_hbf16[idx]  = __float2bfloat16(h_regs[j]);
+            s_hfp16[idx]  = cgdr_to_fp16(h_regs[j]);
         }
     }
     __syncthreads();
@@ -379,24 +381,24 @@ __launch_bounds__(NT, OCC) __global__ void cgdr_state_wmma_kernel(
             s_gcum[i] = gcum_ptr[i];
         }
 
-        // Step 2a: K_cumdecay -> s_kbuf_bf16 (fp32 -> bf16, no clamp -- bf16 has fp32 range)
+        // Step 2a: load K_cumdecay into s_kbuf as fp16 (values are small, so fp16 is safe)
         for (int i = tid; i < CS * BK; i += NT) {
-            s_kbuf_bf16[i] = __float2bfloat16(kcd_ptr[i]);
+            s_kbuf[i] = cgdr_to_fp16(kcd_ptr[i]);
         }
 
         __syncthreads();
 
-        // Step 2b: s_result[CSxBV] = WMMA(s_kbuf_bf16 @ s_hbf16)   (v_new = u - w*h)
+        // Step 2b: s_result[CSxBV] = WMMA(s_kbuf @ s_hfp16)   (v_new = u - w*h)
         if (warp_id < N_TILES) {
             const int                                            n_off = warp_id * 16;
             wmma::fragment<wmma::accumulator, 16, 16, 16, float> acc;
             wmma::fill_fragment(acc, 0.f);
-            wmma::fragment<wmma::matrix_a, 16, 16, 16, __nv_bfloat16, wmma::row_major> a_frag;
-            wmma::fragment<wmma::matrix_b, 16, 16, 16, __nv_bfloat16, wmma::col_major> b_frag;
+            wmma::fragment<wmma::matrix_a, 16, 16, 16, __half, wmma::row_major> a_frag;
+            wmma::fragment<wmma::matrix_b, 16, 16, 16, __half, wmma::col_major> b_frag;
             #pragma unroll
             for (int k = 0; k < BK; k += 16) {
-                wmma::load_matrix_sync(a_frag, s_kbuf_bf16 + k, BK);
-                wmma::load_matrix_sync(b_frag, s_hbf16 + n_off * BK + k, BK);
+                wmma::load_matrix_sync(a_frag, s_kbuf + k, BK);
+                wmma::load_matrix_sync(b_frag, s_hfp16 + n_off * BK + k, BK);
                 wmma::mma_sync(acc, a_frag, b_frag, acc);
             }
             wmma::store_matrix_sync(s_result + n_off, acc, BV, wmma::mem_row_major);
@@ -410,20 +412,16 @@ __launch_bounds__(NT, OCC) __global__ void cgdr_state_wmma_kernel(
             const int t_idx = idx / BV;
             const int v_loc = idx % BV;
             const int g_idx = t_idx * V_dim + v_off + v_loc;
-            float     vn    = vcorr_ptr[g_idx] - s_result[t_idx * BV + v_loc];
-            if (!isfinite(vn)) {
-                vn = 0.f;
-            }
-            vnew_regs[j] = vn;
+            vnew_regs[j]    = vcorr_ptr[g_idx] - s_result[t_idx * BV + v_loc];
         }
 
-        // Step 2.5: Q_raw -> s_kbuf_bf16, then WMMA for O_inter (o_inter = (q*scale) @ h)
+        // Step 2.5: Q_raw -> s_kbuf, then WMMA for O_inter (o_inter = (q*scale) @ h)
         __syncthreads();
 
         for (int i = tid; i < CS * BK; i += NT) {
             const int   t = i / BK, k = i % BK;
             const float qv = (t < valid_cs) ? qraw_chunk[(long long) t * HK + k] : 0.f;
-            s_kbuf_bf16[i] = __float2bfloat16(qv * scale);
+            s_kbuf[i] = cgdr_to_fp16(qv * scale);
         }
 
         __syncthreads();
@@ -432,12 +430,12 @@ __launch_bounds__(NT, OCC) __global__ void cgdr_state_wmma_kernel(
             const int                                            n_off = warp_id * 16;
             wmma::fragment<wmma::accumulator, 16, 16, 16, float> acc;
             wmma::fill_fragment(acc, 0.f);
-            wmma::fragment<wmma::matrix_a, 16, 16, 16, __nv_bfloat16, wmma::row_major> a_frag;
-            wmma::fragment<wmma::matrix_b, 16, 16, 16, __nv_bfloat16, wmma::col_major> b_frag;
+            wmma::fragment<wmma::matrix_a, 16, 16, 16, __half, wmma::row_major> a_frag;
+            wmma::fragment<wmma::matrix_b, 16, 16, 16, __half, wmma::col_major> b_frag;
             #pragma unroll
             for (int k = 0; k < BK; k += 16) {
-                wmma::load_matrix_sync(a_frag, s_kbuf_bf16 + k, BK);
-                wmma::load_matrix_sync(b_frag, s_hbf16 + n_off * BK + k, BK);
+                wmma::load_matrix_sync(a_frag, s_kbuf + k, BK);
+                wmma::load_matrix_sync(b_frag, s_hfp16 + n_off * BK + k, BK);
                 wmma::mma_sync(acc, a_frag, b_frag, acc);
             }
             wmma::store_matrix_sync(s_result + n_off, acc, BV, wmma::mem_row_major);
@@ -450,11 +448,7 @@ __launch_bounds__(NT, OCC) __global__ void cgdr_state_wmma_kernel(
             const int idx   = tid + j * NT;
             const int t_idx = idx / BV;
             const int v_loc = idx % BV;
-            float     oi    = s_result[t_idx * BV + v_loc] * __expf(fminf(s_gcum[t_idx], 88.72f));
-            if (!isfinite(oi)) {
-                oi = 0.f;
-            }
-            oi_regs[j] = oi;
+            oi_regs[j] = s_result[t_idx * BV + v_loc] * __expf(fminf(s_gcum[t_idx], 88.72f));
         }
 
         // Step 3: K_raw -> s_kch fp16 (row-major [CS][BK], decay-scaled by exp(g_last-g_cum[t]))
@@ -498,21 +492,18 @@ __launch_bounds__(NT, OCC) __global__ void cgdr_state_wmma_kernel(
         const float exp_g = __expf(g_last);
         for (int j = 0; j < EPT_H; j++) {
             h_regs[j] = exp_g * h_regs[j] + s_hdelta[tid + j * NT];
-            if (!isfinite(h_regs[j])) {
-                h_regs[j] = 0.f;
-            }
         }
         __syncthreads();  // all reads of s_hdelta done before output WMMA overwrites it
 
-        // Refresh s_hbf16 from fp32 h_regs for the next chunk's B-matrix (no clamp -- bf16 fp32-range).
+        // Refresh s_hfp16 from fp32 h_regs for the next chunk's B-matrix (fp16, operands in range).
         for (int j = 0; j < EPT_H; j++) {
-            s_hbf16[tid + j * NT] = __float2bfloat16(h_regs[j]);
+            s_hfp16[tid + j * NT] = cgdr_to_fp16(h_regs[j]);
         }
 
         // Output (fp16 WMMA): O[t][v] = O_inter + sum_t' qk[t][t'] * Vnew[t'][v]
         //   qk loaded fp32 from global, downcast to fp16.
         {
-            __half *      s_qkb   = reinterpret_cast<__half *>(s_kbuf_bf16);  // reuse kbuf: [CS][CS] fp16
+            __half *      s_qkb   = reinterpret_cast<__half *>(s_kbuf);  // reuse kbuf: [CS][CS] fp16
             const float * qk_base = QK_buf + (bh_off * (long long) num_chunks + ci) * CS * CS;
             for (int i = tid; i < CS * CS; i += NT) {
                 s_qkb[i] = cgdr_to_fp16(qk_base[i]);
@@ -547,7 +538,7 @@ __launch_bounds__(NT, OCC) __global__ void cgdr_state_wmma_kernel(
             }
         }
 
-        __syncthreads();  // ensure s_hbf16 refresh + output done before next chunk
+        __syncthreads();  // ensure s_hfp16 refresh + output done before next chunk
 
     }  // end chunk loop
 
@@ -560,7 +551,7 @@ __launch_bounds__(NT, OCC) __global__ void cgdr_state_wmma_kernel(
         }
     }
 #else
-    // bf16 WMMA needs SM80+; the dispatch predicate keeps this off pre-Ampere GPUs. Compiling the
+    // WMMA path is dispatched on Ampere+; the dispatch predicate keeps this off pre-Ampere GPUs. Compiling the
     // body out lets sm_75 etc. build, and __trap() catches any launch that slips through.
     (void) V_corr;
     (void) K_cumdecay;
@@ -587,13 +578,13 @@ static inline size_t cgdr_smem_fwdsub_intra(int CS, int BK) {
 }
 
 static inline size_t cgdr_smem_preqk_wmma(int CS, int BK) {
-    // s_Q[CSxBK] bf16 + s_K[CSxBK] bf16 + s_gcum[CS] fp32 + s_acc[CSxCS] fp32
-    return (size_t) 2 * CS * BK * sizeof(__nv_bfloat16) + (size_t) (CS + CS * CS) * sizeof(float);
+    // s_Q[CSxBK] fp16 + s_K[CSxBK] fp16 + s_gcum[CS] fp32 + s_acc[CSxCS] fp32
+    return (size_t) 2 * CS * BK * sizeof(__half) + (size_t) (CS + CS * CS) * sizeof(float);
 }
 
 static inline size_t cgdr_smem_state_wmma(int CS, int BK, int BV) {
-    size_t s_h      = (size_t) BK * BV * sizeof(__nv_bfloat16);  // bf16 H state (B-matrix)
-    size_t s_kbuf   = (size_t) CS * BK * sizeof(__nv_bfloat16);  // bf16 kbuf
+    size_t s_h      = (size_t) BK * BV * sizeof(__half);  // fp16 H state (B-matrix)
+    size_t s_kbuf   = (size_t) CS * BK * sizeof(__half);  // fp16 kbuf
     size_t s_res    = (size_t) CS * BV * sizeof(float);          // fp32 WMMA result (2b/2.5); s_vnew overlay
     size_t s_gcum   = (size_t) CS * sizeof(float);               // fp32 gcum
     size_t s_hdelta = (size_t) BK * BV * sizeof(float);          // fp32 WMMA scratch (step 5 delta / output)
@@ -622,20 +613,18 @@ static void ggml_cuda_op_gated_delta_net_chunked_impl(ggml_backend_cuda_context 
                                                       cudaStream_t                stream) {
     ggml_cuda_pool & pool = ctx.pool();
 
-    constexpr int            CS               = 16;
-    // Pad each scratch buffer by a small tail. WMMA store_matrix_sync writes a full 16-wide tile; on
-    // the last chunk/tile a store can touch a few elements past the logical size, so over-allocate to
-    // keep those writes inside the pool block (128 B is comfortably more than one tile's overrun).
-    static constexpr int64_t POOL_GUARD_ELEMS = 32;
-    const int64_t            cs_v             = (int64_t) B * H * num_chunks * CS * V_dim;
-    const int64_t            cs_k             = (int64_t) B * H * num_chunks * CS * K_dim;
-    const int64_t            cs_g             = (int64_t) B * H * num_chunks * CS;
-    const int64_t            cs_qk            = (int64_t) B * H * num_chunks * CS * CS;
+    constexpr int CS    = 16;
+    // Scratch buffers are written only by scalar, exactly-bounded stores in the fwdsub/preqk kernels
+    // (the WMMA store_matrix_sync writes target shared memory, not these), so size them exactly.
+    const int64_t cs_v  = (int64_t) B * H * num_chunks * CS * V_dim;
+    const int64_t cs_k  = (int64_t) B * H * num_chunks * CS * K_dim;
+    const int64_t cs_g  = (int64_t) B * H * num_chunks * CS;
+    const int64_t cs_qk = (int64_t) B * H * num_chunks * CS * CS;
 
-    ggml_cuda_pool_alloc<float> v_corr_buf(pool, cs_v + POOL_GUARD_ELEMS);
-    ggml_cuda_pool_alloc<float> k_cumdecay_buf(pool, cs_k + POOL_GUARD_ELEMS);
-    ggml_cuda_pool_alloc<float> g_cum_buf(pool, cs_g + POOL_GUARD_ELEMS);
-    ggml_cuda_pool_alloc<float> qk_buf(pool, cs_qk + POOL_GUARD_ELEMS);
+    ggml_cuda_pool_alloc<float> v_corr_buf(pool, cs_v);
+    ggml_cuda_pool_alloc<float> k_cumdecay_buf(pool, cs_k);
+    ggml_cuda_pool_alloc<float> g_cum_buf(pool, cs_g);
+    ggml_cuda_pool_alloc<float> qk_buf(pool, cs_qk);
 
     // Stage 1 -- intra pass: exact FP32 forward substitution -> V_corr, K_cumdecay, G_cum.
     {
@@ -647,7 +636,7 @@ static void ggml_cuda_op_gated_delta_net_chunked_impl(ggml_backend_cuda_context 
     }
     CUDA_CHECK(cudaGetLastError());
 
-    // Stage 2 -- preqk pass: masked Q@K^T with BF16 WMMA (32 threads/block, tensor cores).
+    // Stage 2 -- preqk pass: masked Q@K^T with fp16 WMMA (32 threads/block, tensor cores).
     {
         const size_t qk_smem = cgdr_smem_preqk_wmma(CS, K_dim);  // 9.1 KB < 48 KB -> no opt-in needed
         const dim3   qk_grid(B * H, num_chunks, 1);
@@ -697,11 +686,14 @@ void ggml_cuda_op_gated_delta_net_chunked(ggml_backend_cuda_context & ctx, ggml_
     GGML_ASSERT(ggml_is_contiguous(src_beta));
     GGML_ASSERT(ggml_is_contiguous(src_state));
     // V may be a strided view of the fused QKV buffer (no cont in the model graph). The intra kernel
-    // handles an arbitrary token stride, but still needs V contiguous within a token: elements packed
-    // (nb0 == elt) and v-heads packed (nb1 == V_dim*elt). Only the token stride (nb2) may differ.
+    // handles an arbitrary token stride (nb2), but the rest of the V layout must be packed, because
+    // the kernels derive the per-sequence stride as seq_len * token_stride: elements packed
+    // (nb0 == elt), v-heads packed (nb1 == V_dim*elt), and sequences packed with no padding
+    // (nb3 == T*nb2). Q/K/G/beta/state get all of this from the ggml_is_contiguous asserts above.
     const size_t vsz = ggml_type_size(src_v->type);
     GGML_ASSERT(src_v->nb[0] == vsz && src_v->nb[1] == (size_t) V_dim * vsz &&
-                "chunked GDN requires V contiguous within a token");
+                src_v->nb[3] == (size_t) T * src_v->nb[2] &&
+                "chunked GDN requires V packed within a token and across sequences (nb3 == T*nb2)");
     const long long v_tok_stride = (long long) (src_v->nb[2] / vsz);
     // The state kernel uses BK=128 as the state's key-row stride, but GGML stores the state square
     // ([S_v, S_v] per head), so the layouts only line up at K_dim == V_dim == 128. The eligibility

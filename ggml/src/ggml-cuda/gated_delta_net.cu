@@ -250,12 +250,12 @@ bool ggml_cuda_gdn_op_is_chunked(const ggml_tensor * dst) {
     const int  cc_dev    = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
     const bool is_nvidia = GGML_CUDA_CC_IS_NVIDIA(cc_dev);
 
-    // - NVIDIA Ampere+ (bf16 WMMA); not KDA; K == 1 (final state only)
+    // - NVIDIA Ampere+ (fp16 WMMA); not KDA; K == 1 (final state only)
     // - Q/K/G/beta/state must be contiguous; V must be contiguous within each token
     //   (nb[0]/nb[1] packed) with arbitrary token stride (fused QKV view)
     // - 128-wide heads, GQA-aligned head counts, n_tokens >= 128
     return is_nvidia
-        && cc_dev >= GGML_CUDA_CC_AMPERE   // bf16 tensor cores (WMMA); Turing/Volta lack them
+        && cc_dev >= GGML_CUDA_CC_AMPERE
         && !chunk_disabled
         && !kda && K == 1
         && neq0 == 128 && S_v == 128 && nev1 % neq1 == 0
