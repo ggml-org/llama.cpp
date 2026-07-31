@@ -259,6 +259,8 @@ enum ggml_metal_device_id {
     GGML_METAL_DEVICE_M5_ULTRA,
 };
 
+const char * ggml_metal_device_id_token(enum ggml_metal_device_id id);
+
 struct ggml_metal_device_props {
     int device;
     int device_phys;
