@@ -326,7 +326,7 @@ struct ggml_hexagon_session {
     ggml_hexagon_opbatch* op_batch;
     ggml_hexagon_opqueue* op_queue;
 
-    std::unordered_map<int, std::unique_ptr<ggml_hexagon_shared_buffer>> buffers;
+    std::unordered_map<int, std::unique_ptr<ggml_hexagon_shared_buffer>> cloned_buffers;
 
     ggml_backend_buffer_type buffer_type        = {};
     ggml_backend_buffer_type host_buffer_type   = {};
@@ -363,7 +363,7 @@ struct ggml_hexagon_session {
     uint64_t record_event();
     void     wait_event(uint64_t seq);
 
-    bool clone_buffer(ggml_hexagon_shared_buffer*);
+    bool clone_buffer(const ggml_hexagon_shared_buffer*);
 };
 
 // ** backend buffers
@@ -414,9 +414,10 @@ struct ggml_hexagon_shared_buffer {
     bool                   pinned;
     std::vector<uint16_t>  free_tokens;
 
-    uint8_t * base() const { return mem ? mem->base : nullptr; }
-    size_t    size() const { return mem ? mem->size : 0; }
-    int       fd()   const { return mem ? mem->fd : -1; }
+    const char * c_name() const { return sess->c_name(); }
+    uint8_t *    base()   const { return mem ? mem->base : nullptr; }
+    size_t       size()   const { return mem ? mem->size : 0;  }
+    int          fd()     const { return mem ? mem->fd   : -1; }
 
     uint8_t * alloc_token() {
         if (free_tokens.empty()) { return nullptr; }
@@ -1956,6 +1957,21 @@ void ggml_hexagon_session::flush_batch() {
 }
 
 void ggml_hexagon_session::enqueue_op(const htp_opnode & node) {
+    for (auto t : node.get_inputs()) {
+        if (t && t->buffer && ggml_backend_buffer_is_hexagon(t->buffer)) {
+            if (ggml_backend_hexagon_buffer_get_sess(t->buffer) != this) {
+                this->clone_buffer(static_cast<const ggml_hexagon_shared_buffer *>(t->buffer->context));
+            }
+        }
+    }
+    for (auto t : node.get_outputs()) {
+        if (t && t->buffer && ggml_backend_buffer_is_hexagon(t->buffer)) {
+            if (ggml_backend_hexagon_buffer_get_sess(t->buffer) != this) {
+                this->clone_buffer(static_cast<const ggml_hexagon_shared_buffer *>(t->buffer->context));
+            }
+        }
+    }
+
     if (!op_batch->fit_op(node)) {
         flush_batch();
     }
@@ -2006,9 +2022,12 @@ uint64_t ggml_hexagon_session::record_event() {
     return op_queue->req_seq;
 }
 
-bool ggml_hexagon_session::clone_buffer(ggml_hexagon_shared_buffer *sbuf)
+bool ggml_hexagon_session::clone_buffer(const ggml_hexagon_shared_buffer *sbuf)
 {
-    if (this->buffers.find(sbuf->fd()) != this->buffers.end()) return true;
+    if (this->cloned_buffers.find(sbuf->fd()) != this->cloned_buffers.end()) return true;
+
+    HEX_VERBOSE("ggml-hex: %s clone-buffer: %s base %p size %zu fd %d\n", this->name.c_str(),
+                sbuf->c_name(), sbuf->base(), sbuf->size(), sbuf->fd());
 
     auto clone = std::make_unique<ggml_hexagon_shared_buffer>(this, *sbuf);
     try {
@@ -2018,7 +2037,7 @@ bool ggml_hexagon_session::clone_buffer(ggml_hexagon_shared_buffer *sbuf)
         return false;
     }
 
-    this->buffers[sbuf->fd()] = std::move(clone);
+    this->cloned_buffers[sbuf->fd()] = std::move(clone);
     return true;
 }
 
@@ -2290,7 +2309,8 @@ void ggml_hexagon_session::release() noexcept(true) {
     if (this->valid_handle) {
         htp_iface_close(this->handle);
     }
-    this->buffers.clear();
+
+    this->cloned_buffers.clear();
 }
 
 ggml_hexagon_session::ggml_hexagon_session(int dev_id, ggml_backend_dev_t dev) noexcept(false) {
@@ -4362,8 +4382,6 @@ static bool ggml_hexagon_cpy_tensor_async_phys(ggml_backend_t backend_src, ggml_
     auto sess_dst = static_cast<ggml_hexagon_session *>(backend_dst->context);
     auto sbuf_dst = (ggml_hexagon_shared_buffer *) dst->buffer->context;
 
-    if (!sess_src->clone_buffer(sbuf_dst)) { return false; }
-
     uint32_t sync_seq = sess_dst->sync_seq++;
     auto sync_token = (volatile uint32_t*)sbuf_dst->alloc_token();
     if (!sync_token) {
@@ -4727,29 +4745,6 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
         return false;
     }
 
-    // check if all sources & destination belong to the same session
-    // (similar to CUDA's device mismatch check)
-    auto check_session = [sess](const struct ggml_tensor * t) -> bool {
-        if (t && t->buffer && ggml_backend_buffer_is_hexagon(t->buffer)) {
-            if (ggml_backend_hexagon_buffer_get_sess(t->buffer) != sess) {
-                return false;
-            }
-        }
-        return true;
-    };
-
-    if (!check_session(op)) {
-        ggml_hexagon_dump_op_supp(sess->name, op, false);
-        return false;
-    }
-
-    for (int i = 0; i < GGML_MAX_SRC; i++) {
-        if (!check_session(op->src[i])) {
-            ggml_hexagon_dump_op_supp(sess->name, op, false);
-            return false;
-        }
-    }
-
     bool supp = false;
     switch (op->op) {
         case GGML_OP_NONE:
@@ -4910,19 +4905,17 @@ static bool ggml_backend_hexagon_device_supports_op(ggml_backend_dev_t dev, cons
 }
 
 static bool ggml_backend_hexagon_device_supports_buft(ggml_backend_dev_t dev, ggml_backend_buffer_type_t buft) {
-    auto s0 = static_cast<ggml_hexagon_session *>(dev->context);
+    auto sess = static_cast<ggml_hexagon_session *>(dev->context);
 
-    bool supp = false;
-    if (buft == &s0->host_buffer_type) { supp = true; }
-    if (buft == &s0->buffer_type)      { supp = true; }
+    // Technically we can clone hexagon buffers from any session but for some reason the output is garbled with layer-split,
+    // tensor-split works correctly, so it needs mode debugging and investigation. For now accept only our own buffers.
+#if 0
+    bool supp = (buft->iface.get_alignment == ggml_backend_hexagon_buffer_type_get_alignment);
+#else
+    bool supp = (buft == &sess->host_buffer_type) || (buft == &sess->buffer_type);
+#endif
 
-    const char * buft_name = "unknown";
-    if (supp) {
-        buft_name = static_cast<ggml_backend_hexagon_buffer_type_context *>(buft->context)->name.c_str();
-    }
-
-    HEX_VERBOSE("ggml-hex: %s device-supports-buft %s (%d)\n", s0->name.c_str(), buft_name, (int) supp);
-
+    HEX_VERBOSE("ggml-hex: %s device-supports-buft %s %s\n", sess->name.c_str(), ggml_backend_buft_name(buft), supp ? "yes" : "no");
     return supp;
 }
 
