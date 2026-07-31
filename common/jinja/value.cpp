@@ -444,7 +444,13 @@ const func_builtins & global_builtins() {
         }},
         {"test_is_divisibleby", [](const func_args & args) -> value {
             args.ensure_vals<value_int, value_int>();
-            bool res = args.get_pos(0)->val_int % args.get_pos(1)->val_int == 0;
+            const int64_t num = args.get_pos(0)->val_int;
+            const int64_t den = args.get_pos(1)->val_int;
+            // guard both x86 idiv traps: divisor 0 and INT64_MIN / -1 overflow
+            if (den == 0 || (den == -1 && num == INT64_MIN)) {
+                return mk_val<value_bool>(false);
+            }
+            bool res = num % den == 0;
             return mk_val<value_bool>(res);
         }},
         {"test_is_string", test_type_fn<value_string>},
