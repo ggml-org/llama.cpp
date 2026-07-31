@@ -295,11 +295,11 @@ int op_cpy(struct htp_ops_context * octx) {
     if (sync) {
         atomic_uint* sync_token = (atomic_uint *)sync->data;
         uint32_t seq = ((uint32_t *)sync_token)[1];
-        uint32_t val = atomic_fetch_sub(sync_token, 1);
+        atomic_store(sync_token, seq);
         asm volatile ("syncht" : : : "memory");
         Q6_dccleaninva_A((void *)sync_token);
 
-        FARF(HIGH, "ggml-hex: sync-release : token %p seq %u (%u)\n", sync_token, seq, val);
+        FARF(HIGH, "ggml-hex: sync-release : token %p seq %u\n", sync_token, seq);
     }
 
     return HTP_STATUS_OK;

@@ -337,6 +337,7 @@ struct ggml_hexagon_session {
     uint64_t vtcm_size   = 0;
     size_t   max_vmem    = 0;
     size_t   max_bufsize = 0;
+    uint32_t sync_seq;
 
     uint64_t                cached_uid = 0;
     std::vector<htp_opnode> cached_nodes;
@@ -412,7 +413,6 @@ struct ggml_hexagon_shared_buffer {
     bool                   mapped;
     bool                   pinned;
     std::vector<int>       free_slots;
-    uint32_t               token_seq;
 
     uint8_t * base() const { return mem ? mem->base : nullptr; }
     size_t    size() const { return mem ? mem->size : 0; }
@@ -425,9 +425,6 @@ struct ggml_hexagon_shared_buffer {
 
         size_t guard_offset = size() - GGML_HEXAGON_TOKEN_BUFFER_SIZE;
         uint8_t * token_ptr = base() + guard_offset + slot * GGML_HEXAGON_TOKEN_SLOT_SIZE;
-
-        uint32_t seq = this->token_seq++;
-        ((uint32_t *)token_ptr)[1] = seq;
 
         return token_ptr;
     }
@@ -498,7 +495,6 @@ struct ggml_hexagon_shared_buffer {
         this->sess   = sess;
         this->mapped = false;
         this->pinned = pinned;
-        this->token_seq = ((uintptr_t)this) & 0xFFFF;
 
         // Size adjustment inside the buffer class
         size_t guard_offset = (size + 4095) & ~4095;
@@ -517,7 +513,6 @@ struct ggml_hexagon_shared_buffer {
         this->mem    = other.mem;
         this->mapped = false;
         this->pinned = other.pinned;
-        this->token_seq = other.token_seq;
     }
 
     ~ggml_hexagon_shared_buffer() {
@@ -2304,6 +2299,7 @@ ggml_hexagon_session::ggml_hexagon_session(int dev_id, ggml_backend_dev_t dev) n
 
     op_batch = nullptr;
     op_queue = nullptr;
+    sync_seq = ((uintptr_t)this) & 0xFFFF;
 
     try {
         allocate(dev_id);
@@ -4368,14 +4364,15 @@ static bool ggml_hexagon_cpy_tensor_async_phys(ggml_backend_t backend_src, ggml_
 
     if (!sess_src->clone_buffer(sbuf_dst)) { return false; }
 
+    uint32_t sync_seq = sess_dst->sync_seq++;
     auto sync_token = (volatile uint32_t*)sbuf_dst->alloc_token();
     if (!sync_token) {
         GGML_LOG_ERROR("ggml-hex: failed to allocate sync token slot\n");
         return false;
     }
-    sync_token[0] = 1;
+    sync_token[0] = 0;
+    sync_token[1] = sync_seq;
 
-    uint32_t sync_seq = sync_token[1];
     HEX_VERBOSE("ggml-hex: %s cpy-tensor-async %s -> %s size %zu : sync token %p seq %u\n",
                 sess_dst->name.c_str(), src->name, dst->name, ggml_nbytes(src), (void*) sync_token, sync_seq);
 
