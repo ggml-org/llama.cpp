@@ -96,6 +96,7 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
     if (arg == "--tessera-kernel-fitness") { tessera_params.kernel_fitness = true; return 1; }
     if (arg == "--tessera-w4a4")           { tessera_params.w4a4           = true; return 1; }
     if (arg == "--tessera-acceptance")     { tessera_params.acceptance     = true; return 1; }
+    if (arg == "--tessera-adapt-dry-run")  { tessera_params.adapt_dry_run  = true; return 1; }
 
     // enum-valued
     if (arg == "--tessera-mode") {
@@ -126,6 +127,10 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
     if (arg == "--tessera-ternary-threshold") { if (!require_val("--tessera-ternary-threshold")) return -1; tessera_params.ternary_threshold = val; return 2; }
     if (arg == "--tessera-kernel-fitness-dir") { if (!require_val("--tessera-kernel-fitness-dir")) return -1; tessera_params.kernel_fitness_dir = val; return 2; }
     if (arg == "--tessera-acceptance-out") { if (!require_val("--tessera-acceptance-out")) return -1; tessera_params.acceptance_out = val; return 2; }
+    if (arg == "--tessera-capability-eval") { if (!require_val("--tessera-capability-eval")) return -1; tessera_params.capability_eval = val; return 2; }
+    if (arg == "--tessera-capability-out")  { if (!require_val("--tessera-capability-out")) return -1;  tessera_params.capability_out  = val; return 2; }
+    if (arg == "--tessera-adapt")           { if (!require_val("--tessera-adapt")) return -1;           tessera_params.adapt_eval      = val; return 2; }
+    if (arg == "--tessera-adapt-out")       { if (!require_val("--tessera-adapt-out")) return -1;       tessera_params.adapt_out       = val; return 2; }
     if (arg == "--tessera-dequant-dir") {
         if (!require_val("--tessera-dequant-dir")) return -1;
         tessera_debug::set_dequant_dir(val); return 2;
@@ -191,6 +196,15 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
         catch (...) { err = string_format("error: invalid value for --tessera-w4a4-outlier-thresh: '%s'\n", val.c_str()); return -1; }
         if (f <= 0.0f) { err = string_format("error: --tessera-w4a4-outlier-thresh must be > 0, got %f\n", f); return -1; }
         tessera_params.w4a4_outlier_thresh = f;
+        return 2;
+    }
+    if (arg == "--tessera-adapt-epsilon") {
+        if (!require_val("--tessera-adapt-epsilon")) return -1;
+        double d;
+        try { d = std::stod(val); }
+        catch (...) { err = string_format("error: invalid value for --tessera-adapt-epsilon: '%s'\n", val.c_str()); return -1; }
+        if (d < 0.0) { err = string_format("error: --tessera-adapt-epsilon must be >= 0, got %f\n", d); return -1; }
+        tessera_params.adapt_epsilon = d;
         return 2;
     }
 
@@ -4218,6 +4232,55 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                     string_format("error: --tessera-nthreads must be >= 0, got %d\n", value));
             }
             tessera_params.nthreads = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-capability-eval"}, "PATH",
+        "Tessera: reduce per-axis capability instances JSON to a score, print it "
+        "as JSON, and exit without quantizing",
+        [](common_params &, const std::string & value) {
+            tessera_params.capability_eval = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-capability-out"}, "PATH",
+        "Tessera: also write the capability-eval score JSON to PATH",
+        [](common_params &, const std::string & value) {
+            tessera_params.capability_out = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-adapt"}, "PATH",
+        "Tessera: run one guarded adaptation step over a capability-eval JSON, "
+        "write a receipt, and exit without quantizing",
+        [](common_params &, const std::string & value) {
+            tessera_params.adapt_eval = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-adapt-out"}, "PATH",
+        "Tessera: adaptation receipt output path (default: tessera-adapt-receipt.json)",
+        [](common_params &, const std::string & value) {
+            tessera_params.adapt_out = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-adapt-dry-run"},
+        "Tessera: record adaptation intent only (receipt still written)",
+        [](common_params &) {
+            tessera_params.adapt_dry_run = true;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-adapt-epsilon"}, "F",
+        "Tessera: general-competence regression tolerance for the adapt guard (default: 0.02)",
+        [](common_params &, const std::string & value) {
+            const double d = std::stod(value);
+            if (d < 0.0) {
+                throw std::invalid_argument(
+                    string_format("error: --tessera-adapt-epsilon must be >= 0, got %f\n", d));
+            }
+            tessera_params.adapt_epsilon = d;
         }
     ));
     add_opt(common_arg(

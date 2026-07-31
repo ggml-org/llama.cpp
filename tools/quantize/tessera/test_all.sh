@@ -99,6 +99,9 @@ compile_and_run l2l5        $T/test_l2l5.cpp        $T/tessera-l2-diff.cpp $T/te
 # --- Needs vendor (nlohmann/json) ---
 compile_and_run policy      $T/test_policy.cpp      $T/tessera-policy.cpp -I vendor
 
+# --- Self-improving capability loop (capability-eval + adapt; needs vendor) ---
+compile_and_run capability_loop $T/test_capability_loop.cpp $T/tessera-capability-eval.cpp $T/tessera-adapt.cpp -I vendor
+
 # --- common/tessera-debug ---
 compile_and_run sidecar_v3  $C/test_sidecar_v3.cpp  $C/tessera-sidecar-v3.cpp -I $C
 

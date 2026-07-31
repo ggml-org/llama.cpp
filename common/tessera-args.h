@@ -31,6 +31,14 @@ struct common_tessera_params {
     float       w4a4_outlier_thresh = 6.0f;
     bool        acceptance = false;
     std::string acceptance_out;
+    // self-improving capability loop: output-targeting ops that run then exit
+    // without quantizing (precedent: --tessera-evolve-only / --tessera-calibrate-only)
+    std::string capability_eval;
+    std::string capability_out;
+    std::string adapt_eval;
+    std::string adapt_out;
+    bool        adapt_dry_run = false;
+    double      adapt_epsilon = 0.02;
 };
 
 const common_tessera_params & common_get_tessera_params();

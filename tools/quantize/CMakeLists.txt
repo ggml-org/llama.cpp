@@ -33,6 +33,9 @@ add_library(${TARGET}
     tessera/tessera-ab-harness.cpp
     tessera/tessera-acceptance.cpp
     tessera/tessera-peqat.cpp
+    # self-improving capability loop (section 4.7 multi-axis eval + adaptation engine)
+    tessera/tessera-capability-eval.cpp
+    tessera/tessera-adapt.cpp
     # multimodal
     tessera/tessera-mm-imatrix.cpp
     tessera/tessera-mm-awq.cpp

@@ -6,8 +6,12 @@
 #include "tessera-args.h"
 
 #include "tessera/tessera-dispatch.h"
+#include "tessera/tessera-capability-eval.h"
+#include "tessera/tessera-adapt.h"
 
 #include "gguf.h"
+
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -392,6 +396,79 @@ static bool parse_layer_prune(const char * data, std::vector<int> & prune_layers
 // satisfies -Wmissing-declarations
 int llama_quantize(int argc, char ** argv);
 
+// Serialize a capability score vector. Field order matches the adapt
+// receipt's "score" object (tessera-adapt.cpp) so the two stay in sync.
+static nlohmann::json ts_cli_capability_score_json(const ts_capability_score * s) {
+    nlohmann::json j;
+    j["mechanical"]         = s->mechanical;
+    j["api_currency"]       = s->api_currency;
+    j["hard_tail"]          = s->hard_tail;
+    j["personal_style"]     = s->personal_style;
+    j["general_competence"] = s->general_competence;
+    return j;
+}
+
+// --tessera-capability-eval: reduce per-axis instances to a score, print it
+// as JSON (five axes + uniform-weight sum), optionally write it, then exit.
+// No quantization runs. Returns a process exit code.
+static int ts_cli_capability_eval(const common_tessera_params & tp) {
+    ts_capability_score score;
+    ts_capability_score baseline;
+    bool has_baseline = false;
+    std::string err;
+    if (ts_capability_score_load(tp.capability_eval.c_str(), &score, &baseline, &has_baseline, &err) != 0) {
+        fprintf(stderr, "error: capability-eval: %s\n", err.c_str());
+        return 1;
+    }
+
+    // uniform weights over the four optimization axes; weights[4] is the
+    // guard axis and is deliberately not summed (ts_capability_score_weighted_sum).
+    const double weights[5] = { 0.25, 0.25, 0.25, 0.25, 0.0 };
+
+    nlohmann::json j;
+    j["schema"]       = "llama.tessera.capability.v1";
+    j["score"]        = ts_cli_capability_score_json(&score);
+    j["weights"]      = { weights[0], weights[1], weights[2], weights[3], weights[4] };
+    j["weighted_sum"] = ts_capability_score_weighted_sum(&score, weights);
+    j["has_baseline"] = has_baseline;
+    j["baseline"]     = has_baseline ? ts_cli_capability_score_json(&baseline) : nlohmann::json(nullptr);
+
+    const std::string out = j.dump(2);
+    printf("%s\n", out.c_str());
+
+    if (!tp.capability_out.empty()) {
+        std::ofstream f(tp.capability_out, std::ios::binary);
+        if (!f) {
+            fprintf(stderr, "error: capability-eval: cannot write: %s\n", tp.capability_out.c_str());
+            return 1;
+        }
+        f << out << "\n";
+        if (!f.good()) {
+            fprintf(stderr, "error: capability-eval: write failed: %s\n", tp.capability_out.c_str());
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// --tessera-adapt: run one guarded adaptation step and exit with the adapter's
+// return code mapped to a process exit code: 0 -> 0 (guard passed),
+// 1 -> 1 (guard failed / blocked), -1 -> 2 (error).
+static int ts_cli_adapt(const common_tessera_params & tp) {
+    ts_adapt_params params;
+    ts_adapt_default_params(&params);
+    snprintf(params.input_eval_path, sizeof(params.input_eval_path), "%s", tp.adapt_eval.c_str());
+    const std::string out_path = tp.adapt_out.empty() ? std::string("tessera-adapt-receipt.json") : tp.adapt_out;
+    snprintf(params.output_receipt_path, sizeof(params.output_receipt_path), "%s", out_path.c_str());
+    params.dry_run       = tp.adapt_dry_run;
+    params.guard_epsilon = tp.adapt_epsilon;
+
+    const int rc = ts_adapt_run(&params);
+    if (rc == 0) return 0;
+    if (rc == 1) return 1;
+    return 2;
+}
+
 int llama_quantize(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
     if (argc < 3) {
@@ -482,6 +559,19 @@ int llama_quantize(int argc, char ** argv) {
             } else {
                 arg_idx += n - 1;  // the for-loop performs the final ++
             }
+        }
+    }
+
+    // Self-improving loop harnesses: output-targeting ops that run and exit
+    // without the normal model+output positional args, following the
+    // --tessera-evolve-only / --tessera-calibrate-only precedent.
+    {
+        const common_tessera_params & tp = common_get_tessera_params();
+        if (!tp.capability_eval.empty()) {
+            return ts_cli_capability_eval(tp);
+        }
+        if (!tp.adapt_eval.empty()) {
+            return ts_cli_adapt(tp);
         }
     }
 
