@@ -1987,6 +1987,9 @@ void ggml_hexagon_session::enqueue_cpy(const ggml_tensor * src, ggml_tensor * ds
     node->src[1] = sync_tensor ? cpy_node.add_dummy(*sync_tensor) : nullptr;
 
     cpy_node.init(node);
+    if (sync_tensor) {
+        cpy_node.name = "CPY+SYNC";
+    }
     this->enqueue_op(cpy_node);
 }
 
@@ -1998,6 +2001,7 @@ void ggml_hexagon_session::enqueue_sync(const ggml_tensor * sync_tensor) {
     node->src[0] = node;
 
     sync_node.init(node);
+    sync_node.name = "SYNC";
     this->enqueue_op(sync_node);
 }
 
