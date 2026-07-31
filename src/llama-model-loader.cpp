@@ -1326,11 +1326,21 @@ void llama_model_loader::done_getting_tensors(bool partial) const {
     }
 }
 
-void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps) {
+// routed MoE expert weight tensors (large, sparsely activated). Deliberately excludes shared
+// experts (ffn_*_shexp, active every token) and the small ffn_norm_exps norm.
+static bool is_lazy_expert_weight(const std::string & name) {
+    return name.find(".ffn_gate_exps.")    != std::string::npos ||
+           name.find(".ffn_up_exps.")      != std::string::npos ||
+           name.find(".ffn_down_exps.")    != std::string::npos ||
+           name.find(".ffn_gate_up_exps.") != std::string::npos;
+}
+
+void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps, bool lazy_experts) {
     if (use_mmap) {
         mappings.reserve(files.size());
         mmaps_used.reserve(files.size());
-        for (const auto & file : files) {
+        for (uint16_t idx = 0; idx < files.size(); ++idx) {
+            const auto & file = files[idx];
             bool is_numa = false;
 
             auto * dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
@@ -1342,7 +1352,40 @@ void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps
                 }
             }
 
-            std::unique_ptr<llama_mmap> mapping = std::make_unique<llama_mmap>(file.get(), prefetch ? -1 : 0, is_numa);
+            // With lazy experts we do NOT MAP_POPULATE the whole file: expert regions must stay
+            // unloaded until routed to. Non-expert regions are prefetched explicitly below instead.
+            const bool   lazy_this    = lazy_experts && prefetch && !is_numa;
+            const size_t map_prefetch = (prefetch && !lazy_this) ? (size_t) -1 : 0;
+            std::unique_ptr<llama_mmap> mapping = std::make_unique<llama_mmap>(file.get(), map_prefetch, is_numa);
+
+            if (lazy_this) {
+                size_t expert_bytes   = 0;
+                size_t prefetch_bytes = 0;
+                for (const auto & [name, w] : weights_map) {
+                    if (w.idx != idx) {
+                        continue;
+                    }
+                    const size_t nbytes = ggml_nbytes(w.tensor);
+                    if (is_lazy_expert_weight(name)) {
+                        // Faulted in per expert, on demand. Readahead is deliberately left ON: each
+                        // fault then pulls a larger contiguous chunk of the expert row in one go,
+                        // which is much faster when the model is bigger than RAM and disk-bound.
+                        // LLAMA_LAZY_EXPERT_RANDOM forces MADV_RANDOM (no readahead) instead, which
+                        // avoids dragging neighbours in and can be preferable when the model fits.
+                        static const bool force_random = getenv("LLAMA_LAZY_EXPERT_RANDOM") != nullptr;
+                        if (force_random) {
+                            mapping->advise_range(w.offs, nbytes, llama_mmap::ADVICE_RANDOM);
+                        }
+                        expert_bytes += nbytes;
+                    } else {
+                        mapping->advise_range(w.offs, nbytes, llama_mmap::ADVICE_WILLNEED);
+                        prefetch_bytes += nbytes;
+                    }
+                }
+                LLAMA_LOG_INFO("%s: lazy experts (file %u): %.1f MiB on-demand, %.1f MiB prefetched\n",
+                        __func__, idx, expert_bytes / (1024.0 * 1024.0), prefetch_bytes / (1024.0 * 1024.0));
+            }
+
             mmaps_used.emplace_back(mapping->size(), 0);
             if (mlock_mmaps) {
                 std::unique_ptr<llama_mlock> mlock_mmap(new llama_mlock());
@@ -1556,6 +1599,13 @@ bool llama_model_loader::load_all_data(
                 mmap_used.second = std::max(mmap_used.second, weight->offs + n_size);
             } else {
                 ggml_backend_tensor_set(cur, data, 0, n_size);
+
+                // This tensor now lives in its device (or other non-mmap) buffer, so the bytes we
+                // just read through the mmap are dead weight. On a model larger than RAM, leaving
+                // them in the page cache evicts pages that are still needed and thrashes the load.
+                // Drop them now -- advisory and page-aligned inward, so a clean re-access simply
+                // re-faults from the file and a neighbour's pages are never touched.
+                mapping->advise_range(weight->offs, n_size, llama_mmap::ADVICE_DONTNEED);
             }
         } else {
             const auto & file = files.at(weight->idx);

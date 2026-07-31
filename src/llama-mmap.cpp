@@ -523,6 +523,56 @@ struct llama_mmap::impl {
         mapped_fragments = std::move(new_mapped_fragments);
     }
 
+    void advise_range(size_t offset, size_t len, advice a) {
+        if (len == 0 || offset >= size) {
+            return;
+        }
+        len = std::min(len, size - offset);
+
+        // (posix_)madvise requires a page-aligned start address, and tensor offsets are not aligned,
+        // so snap the range to page boundaries. Advisory hints (WILLNEED/RANDOM) round OUTWARD so the
+        // whole requested range is still covered; the destructive DONTNEED rounds INWARD so it never
+        // drops a neighbouring tensor's pages. addr itself is page-aligned (mmap guarantees it).
+        const uintptr_t page = (uintptr_t) sysconf(_SC_PAGESIZE);
+        const uintptr_t lo   = (uintptr_t) addr + offset;
+        const uintptr_t hi   = lo + len;
+        uintptr_t astart, aend;
+        if (a == ADVICE_DONTNEED) {
+            astart = (lo + (page - 1)) & ~(page - 1);   // round up
+            aend   =  hi               & ~(page - 1);   // round down
+        } else {
+            astart =  lo               & ~(page - 1);   // round down
+            aend   = (hi + (page - 1)) & ~(page - 1);   // round up
+            const uintptr_t map_end = (uintptr_t) addr + size;
+            if (aend > map_end) {
+                aend = map_end;
+            }
+        }
+        if (aend <= astart) {
+            return;   // nothing page-aligned to advise
+        }
+        void * const p    = (void *) astart;
+        const size_t alen = (size_t) (aend - astart);
+
+        // NB: posix_madvise() RETURNS the error number and does NOT set errno; madvise() (the Linux
+        // DONTNEED path) returns -1 and sets errno. Normalise to a single code for the message.
+        int err = 0;
+        switch (a) {
+            case ADVICE_WILLNEED: err = posix_madvise(p, alen, POSIX_MADV_WILLNEED); break;
+            case ADVICE_RANDOM:   err = posix_madvise(p, alen, POSIX_MADV_RANDOM);   break;
+            case ADVICE_DONTNEED:
+#ifdef __linux__
+                err = madvise(p, alen, MADV_DONTNEED) ? errno : 0;   // on Linux this drops the clean file-backed pages
+#else
+                err = posix_madvise(p, alen, POSIX_MADV_DONTNEED);
+#endif
+                break;
+        }
+        if (err) {
+            LLAMA_LOG_WARN("warning: madvise(range, %d) failed: %s\n", (int) a, strerror(err));
+        }
+    }
+
     ~impl() {
         for (const auto & frag : mapped_fragments) {
             if (munmap((char *) addr + frag.first, frag.second - frag.first)) {
@@ -582,6 +632,27 @@ struct llama_mmap::impl {
         GGML_UNUSED(last);
     }
 
+    void advise_range(size_t offset, size_t len, advice a) {
+        if (len == 0 || offset >= size || a != ADVICE_WILLNEED) {
+            return; // only WILLNEED (prefetch) is actionable here; RANDOM/DONTNEED are hints we skip
+        }
+        len = std::min(len, size - offset);
+#if _WIN32_WINNT >= 0x602
+        BOOL (WINAPI *pPrefetchVirtualMemory) (HANDLE, ULONG_PTR, PWIN32_MEMORY_RANGE_ENTRY, ULONG);
+        HMODULE hKernel32 = GetModuleHandleW(L"kernel32.dll");
+        pPrefetchVirtualMemory = (decltype(pPrefetchVirtualMemory))(void *) GetProcAddress(hKernel32, "PrefetchVirtualMemory");
+        if (pPrefetchVirtualMemory) {
+            WIN32_MEMORY_RANGE_ENTRY range;
+            range.VirtualAddress = (uint8_t *) addr + offset;
+            range.NumberOfBytes  = (SIZE_T) len;
+            if (!pPrefetchVirtualMemory(GetCurrentProcess(), 1, &range, 0)) {
+                LLAMA_LOG_WARN("warning: PrefetchVirtualMemory(range) failed: %s\n",
+                        llama_format_win_err(GetLastError()).c_str());
+            }
+        }
+#endif
+    }
+
     ~impl() {
         if (hMapping) {
             if (addr) {
@@ -611,6 +682,12 @@ struct llama_mmap::impl {
 
         throw std::runtime_error("mmap not supported");
     }
+
+    void advise_range(size_t offset, size_t len, advice a) {
+        GGML_UNUSED(offset);
+        GGML_UNUSED(len);
+        GGML_UNUSED(a);
+    }
 #endif
 
     void * addr;
@@ -624,6 +701,8 @@ size_t llama_mmap::size() const { return pimpl->size; }
 void * llama_mmap::addr() const { return pimpl->addr; }
 
 void llama_mmap::unmap_fragment(size_t first, size_t last) { pimpl->unmap_fragment(first, last); }
+
+void llama_mmap::advise_range(size_t offset, size_t len, advice a) const { pimpl->advise_range(offset, len, a); }
 
 #if defined(_POSIX_MEMLOCK_RANGE) || defined(_WIN32)
 const bool llama_mmap::SUPPORTED  = true;

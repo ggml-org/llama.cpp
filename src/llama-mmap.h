@@ -41,6 +41,13 @@ private:
 };
 
 struct llama_mmap {
+    // access hint for advise_range(); maps to posix_madvise() / PrefetchVirtualMemory() where available
+    enum advice {
+        ADVICE_WILLNEED, // prefetch this range into RAM (readahead)
+        ADVICE_RANDOM,   // random access: disable readahead so neighbours are not pulled in
+        ADVICE_DONTNEED, // hint that this range is no longer needed (allow eviction)
+    };
+
     llama_mmap(const llama_mmap &) = delete;
     llama_mmap(struct llama_file * file, size_t prefetch = (size_t) -1, bool numa = false);
     ~llama_mmap();
@@ -49,6 +56,9 @@ struct llama_mmap {
     void * addr() const;
 
     void unmap_fragment(size_t first, size_t last);
+
+    // apply an access hint to a sub-range of the mapping ([offset, offset+len) clamped to the mapping)
+    void advise_range(size_t offset, size_t len, advice a) const;
 
     static const bool SUPPORTED;
 
