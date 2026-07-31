@@ -917,6 +917,9 @@ class GGUFWriter:
     def add_layer_norm_rms_eps(self, value: float) -> None:
         self.add_float32(Keys.Attention.LAYERNORM_RMS_EPS.format(arch=self.arch), value)
 
+    def add_post_norm_rms_eps(self, value: float) -> None:
+        self.add_float32(Keys.Attention.POST_NORM_RMS_EPS.format(arch=self.arch), value)
+
     def add_group_norm_eps(self, value: float) -> None:
         self.add_float32(Keys.Attention.GROUPNORM_EPS.format(arch=self.arch), value)
 

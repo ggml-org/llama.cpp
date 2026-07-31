@@ -28,6 +28,7 @@ class OnyxModel(TextModel):
 
         self.gguf_writer.add_final_logit_softcapping(hparams["final_logit_softcapping"])
         self.gguf_writer.add_logit_scale(hparams["output_multiplier"])
+        self.gguf_writer.add_post_norm_rms_eps(hparams["post_norm_eps"])
 
         # SWA + NoPE: [SW, SW, SW, Full], NoPE used on Full layers. References:
         # https://huggingface.co/someorgtoo-hf/onyx-hf-converted/blob/main/config.json#L19
