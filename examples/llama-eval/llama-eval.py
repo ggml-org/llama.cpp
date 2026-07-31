@@ -28,6 +28,18 @@ class ServerConfig:
     url: str
     threads: int
     name: str = ""
+    api_key: Optional[str] = None
+
+    def headers(self) -> Dict[str, str]:
+        return auth_headers(self.api_key)
+
+
+def auth_headers(api_key: Optional[str]) -> Dict[str, str]:
+    """Standard request headers, carrying a bearer token when one is configured."""
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    return headers
 
 def wilson_interval(correct: int, total: int, z: float = 1.96) -> Tuple[float, float]:
     """Wilson score confidence interval for a proportion."""
@@ -1712,6 +1724,7 @@ class Grader:
         grader_script: Optional[str] = None,
         grader_model_name: Optional[str] = None,
         grader_server_url: str = "",
+        grader_api_key: Optional[str] = None,
         dataset_type: str = "aime",
         sandbox: Optional[Sandbox] = None,
         exec_timeout: float = 15.0,
@@ -1722,6 +1735,7 @@ class Grader:
         self.grader_script = grader_script
         self.grader_model_name = grader_model_name
         self.grader_server_url = grader_server_url
+        self.grader_api_key = grader_api_key
         self.dataset_type = dataset_type
         self.sandbox = sandbox
         self.exec_timeout = exec_timeout
@@ -1822,7 +1836,7 @@ When extracting the answer, provide only the extracted answer itself, nothing el
 Please provide only the extracted answer, nothing else. If there is no clear answer that can be extracted from the response, reply with 'no answer'."""
 
         url = f"{self.grader_server_url}/v1/chat/completions"
-        headers = {"Content-Type": "application/json"}
+        headers = auth_headers(self.grader_api_key)
         data = {
             "model": self.grader_model_name,
             "messages": [
@@ -1899,7 +1913,7 @@ class Processor:
     def _check_server(server_config: ServerConfig) -> List[str]:
         url = f"{server_config.url}/v1/models"
         try:
-            response = requests.get(url)
+            response = requests.get(url, headers=server_config.headers())
             response.raise_for_status()
             models = [m["id"] for m in response.json().get("data", [])]
             return models
@@ -1911,7 +1925,7 @@ class Processor:
         self, server_config: ServerConfig, eval_state: EvalState, prompt: str
     ) -> Tuple[Dict[str, Any], int, Optional[float], Optional[float], str]:
         url = f"{server_config.url}/v1/chat/completions"
-        headers = {"Content-Type": "application/json"}
+        headers = server_config.headers()
         data = {
             "model": self.model_name if self.model_name else "llama",
             "messages": [{"role": "user", "content": prompt}],
@@ -2041,7 +2055,7 @@ class Processor:
                 value = eval_state.sampling_config.get(key)
                 if value is not None:
                     data[key] = value
-            response = requests.post(url, headers={"Content-Type": "application/json"},
+            response = requests.post(url, headers=server_config.headers(),
                                      json=data, timeout=1800)
             response.raise_for_status()
             return response.json()
@@ -2296,6 +2310,13 @@ def main():
         help="Comma-separated display names for servers (default: use URLs)"
     )
     parser.add_argument(
+        "--api-key",
+        type=str,
+        default=None,
+        help="Bearer token for the eval servers: one key for all of them, or a "
+             "comma-separated key per --server (default: $LLAMA_API_KEY, else none)"
+    )
+    parser.add_argument(
         "--dataset",
         type=str,
         default="aime",
@@ -2429,6 +2450,13 @@ def main():
         help="Model name for LLM grader (default: same as main model)"
     )
     parser.add_argument(
+        "--grader-api-key",
+        type=str,
+        default=None,
+        help="Bearer token for the LLM grader server (default: the first "
+             "--api-key when the grader runs on the main server, else none)"
+    )
+    parser.add_argument(
         "--agentic-lang",
         type=str,
         default=None,
@@ -2499,10 +2527,33 @@ def main():
     else:
         server_names = server_urls  # fallback to URLs
 
+    # One key shared by every server is the common case; a comma-separated list
+    # covers a mixed run where each endpoint has its own credentials.
+    api_key_arg = args.api_key if args.api_key is not None else os.environ.get("LLAMA_API_KEY")
+    if api_key_arg:
+        api_keys = [k.strip() for k in api_key_arg.split(",")]
+        if len(api_keys) == 1:
+            api_keys = api_keys * len(server_urls)
+        elif len(api_keys) != len(server_urls):
+            print(f"Error: --api-key ({len(api_keys)} keys) must be a single key or "
+                  f"match --server ({len(server_urls)} URLs)")
+            sys.exit(1)
+    else:
+        api_keys = [None] * len(server_urls)
+
     server_configs = [
-        ServerConfig(url=url, threads=threads, name=name)
-        for url, threads, name in zip(server_urls, thread_counts, server_names)
+        ServerConfig(url=url, threads=threads, name=name, api_key=key)
+        for url, threads, name, key in zip(server_urls, thread_counts, server_names, api_keys)
     ]
+
+    # The grader usually runs on one of the eval servers, so it inherits that
+    # server's key unless it was given one of its own.
+    if args.grader_api_key is not None:
+        grader_api_key = args.grader_api_key
+    else:
+        grader_url = args.grader_server or server_configs[0].url
+        grader_api_key = next(
+            (s.api_key for s in server_configs if s.url == grader_url), None)
 
     if args.dataset == "gpqa" and args.grader_type != "llm":
         print("Error: GPQA dataset requires --grader-type llm")
@@ -2548,6 +2599,7 @@ def main():
             grader_script=args.grader_script,
             grader_model_name=grader_model_name,
             grader_server_url=grader_server_url,
+            grader_api_key=grader_api_key,
             dataset_type=eval_state.dataset_type
         )
         resume = True
@@ -2567,6 +2619,7 @@ def main():
             grader_script=args.grader_script,
             grader_model_name=grader_model_name,
             grader_server_url=grader_server_url,
+            grader_api_key=grader_api_key,
             dataset_type=args.dataset
         )
 

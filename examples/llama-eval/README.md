@@ -25,6 +25,31 @@ python3 llama-eval.py \
   --grader-type regex
 ```
 
+### Authentication
+
+A server started with `--api-key` (or any OpenAI-compatible endpoint behind a
+token) needs one here too. `--api-key` is sent as `Authorization: Bearer` on
+every eval request; it falls back to `$LLAMA_API_KEY`, which keeps the secret
+out of your shell history and off the process list.
+
+```bash
+# One key for every server
+python3 llama-eval.py --server http://localhost:8033 --api-key sk-... ...
+
+# From the environment
+export LLAMA_API_KEY=sk-...
+python3 llama-eval.py --server http://localhost:8033 ...
+
+# One key per server, in --server order
+python3 llama-eval.py \
+  --server http://server1:8033,http://server2:8033 \
+  --api-key sk-one,sk-two --threads 16,16 ...
+```
+
+The LLM grader authenticates too. It reuses the key of the server it runs on,
+so `--grader-type llm` without `--grader-server` needs nothing extra; a grader
+on a separate endpoint takes `--grader-api-key`.
+
 ## Agentic suite
 
 `--dataset agentic` is a different shape from the other code suites. It runs
