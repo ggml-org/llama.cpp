@@ -146,7 +146,7 @@ static void ggml_hexagon_dump_op_exec(const std::string &sess_name, const htp_op
 static void ggml_hexagon_dump_op_supp(const std::string &sess_name, const struct ggml_tensor * op, bool supp) {
     if (!opt_verbose) return;
 
-    htp_opformat fmt(htp_opformat(htp_opnode{const_cast<ggml_tensor*>(op), {}, HTP_OP_INVALID}));
+    htp_opformat fmt(htp_opformat(htp_opnode(HTP_OP_INVALID, const_cast<ggml_tensor*>(op))));
     GGML_LOG_DEBUG("ggml-hex: %s supports-op %s|%s|%s|%s|%s|%s|%s\n", sess_name.c_str(),
                 ggml_op_desc(op), fmt.names, fmt.dims, fmt.types, fmt.strides, fmt.buffs, supp ? "yes" : "no");
 }
@@ -1979,25 +1979,25 @@ void ggml_hexagon_session::enqueue_op(const htp_opnode & node) {
 }
 
 void ggml_hexagon_session::enqueue_cpy(const ggml_tensor * src, ggml_tensor * dst, const ggml_tensor * sync_tensor) {
-    htp_opnode cpy_node({}, {}, HTP_OP_CPY);
+    htp_opnode cpy_node(HTP_OP_CPY);
 
     ggml_tensor* node = cpy_node.add_dummy(*dst);
     node->op     = GGML_OP_CPY;
     node->src[0] = const_cast<ggml_tensor *>(src);
     node->src[1] = sync_tensor ? cpy_node.add_dummy(*sync_tensor) : nullptr;
 
-    cpy_node.node = node;
+    cpy_node.init(node);
     this->enqueue_op(cpy_node);
 }
 
 void ggml_hexagon_session::enqueue_sync(const ggml_tensor * sync_tensor) {
-    htp_opnode sync_node({}, {}, HTP_OP_SYNC);
+    htp_opnode sync_node(HTP_OP_SYNC);
 
     ggml_tensor* node = sync_node.add_dummy(*sync_tensor);
     node->op     = GGML_OP_NONE;
     node->src[0] = node;
 
-    sync_node.node = node;
+    sync_node.init(node);
     this->enqueue_op(sync_node);
 }
 
@@ -4083,7 +4083,7 @@ static bool try_fuse_node(const ggml_hexagon_session * sess, const ggml_cgraph *
 
     if (n->op == GGML_OP_RMS_NORM && next_node) {
         if (next_node->op == GGML_OP_MUL && op_is_compute(next_node) && ggml_can_fuse(graph, i, { GGML_OP_RMS_NORM, GGML_OP_MUL })) {
-            htp_opnode node(n, {}, HTP_OP_RMS_NORM_MUL);
+            htp_opnode node(HTP_OP_RMS_NORM_MUL, n);
             node.add_fused(next_node);
 
             auto inputs = node.get_inputs();
@@ -4108,7 +4108,7 @@ static bool try_fuse_node(const ggml_hexagon_session * sess, const ggml_cgraph *
             ggml_hexagon_precompute_fused_qkv_params(sess, n1->src[0], n1->src[1], &kparams);
             if ((size_t)kparams.vtcm_size <= sess->vtcm_size) {
                 // Reorder to KVQ: K (n1), V (n2), Q (n)
-                htp_opnode node(n1, {}, HTP_OP_MUL_MAT_QKV);
+                htp_opnode node(HTP_OP_MUL_MAT_QKV, n1);
                 node.add_fused(n2, true);
                 node.add_fused(n, true);
                 memcpy(node.kernel_params, &kparams, sizeof(kparams));
@@ -4124,7 +4124,7 @@ static bool try_fuse_node(const ggml_hexagon_session * sess, const ggml_cgraph *
             struct htp_mm_kernel_params kparams;
             ggml_hexagon_precompute_fused_ffn_params(sess, n->src[0], n->src[1], &kparams);
             if ((size_t)kparams.vtcm_size <= sess->vtcm_size) {
-                htp_opnode node(n, {}, HTP_OP_MUL_MAT_FFN);
+                htp_opnode node(HTP_OP_MUL_MAT_FFN, n);
                 node.add_fused(n1, true);
                 memcpy(node.kernel_params, &kparams, sizeof(kparams));
                 nodes.push_back(std::move(node));
@@ -4146,7 +4146,7 @@ static bool try_fuse_node(const ggml_hexagon_session * sess, const ggml_cgraph *
                 const int src1_nrows = n->src[1]->ne[1] * n->src[1]->ne[2] * n->src[1]->ne[3];
                 const bool can_fuse = (kparams.n_hmx > 0) || (src1_nrows == 1);
                 if (can_fuse && (size_t)kparams.vtcm_size <= sess->vtcm_size) {
-                    htp_opnode node(n, {}, HTP_OP_MUL_MAT_ADD);
+                    htp_opnode node(HTP_OP_MUL_MAT_ADD, n);
                     node.add_fused(next_node);
                     memcpy(node.kernel_params, &kparams, sizeof(kparams));
                     nodes.push_back(std::move(node));
@@ -4189,7 +4189,7 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
                 continue;
             }
 
-            htp_opnode node(n, {}, HTP_OP_INVALID);
+            htp_opnode node(HTP_OP_INVALID, n);
             node.opcode = op_remap_to_htp(n);
             if (node.opcode == HTP_OP_MUL_MAT || node.opcode == HTP_OP_MUL_MAT_ID) {
                 ggml_hexagon_precompute_matmul_params(sess,
@@ -4313,10 +4313,7 @@ static void ggml_backend_hexagon_graph_optimize(ggml_backend_t backend, ggml_cgr
     // we don't want to make reorders that break fusing, so we first pack all fusable tensors
     //   and perform the reorder over the fused nodes. after the reorder is done, we unfuse
     for (int i = 0; i < n; i++) {
-        htp_opnode node = {
-            /*.node =*/gf->nodes[i],
-            /*.fused =*/{},
-        };
+        htp_opnode node(HTP_OP_INVALID, gf->nodes[i]);
 
         // fuse only ops that start with these operations
         // can be expanded when needed
