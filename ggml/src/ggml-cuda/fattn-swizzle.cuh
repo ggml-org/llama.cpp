@@ -38,10 +38,11 @@ static __host__ int ggml_cuda_fattn_swz_tile_stride(const int nbatch_2, const in
 }
 
 // Swizzled byte offset for tile element (row, col_h2); same map used for writes and reads.
-template<int stride_h2>
+template<int stride_h2, bool swz>
 static __device__ __forceinline__ int ggml_cuda_fattn_swz_bytes_rc(const int row, const int col_h2) {
+    static_assert(!swz || ggml_cuda_fattn_swz_pow2_stride(stride_h2), "swizzled tile needs a pow2 stride");
     int off_bytes = (row * stride_h2 + col_h2) * (int) sizeof(half2);
-    if constexpr (ggml_cuda_fattn_swz_enabled(stride_h2)) {
+    if constexpr (swz) {
         off_bytes ^= (row & 7) << 4;
     }
     return off_bytes;
@@ -62,27 +63,28 @@ static __device__ __forceinline__ void ggml_cuda_fattn_ldmatrix_x4_trans(int * x
 }
 
 // Per-lane swizzled generic pointer for tile<16,8> ldmatrix.
-template<int stride_h2>
+template<int stride_h2, bool swz>
 static __device__ __forceinline__ const half2 * ggml_cuda_fattn_swz_saddr(
         const half2 * tile_base, const int base_row, const int base_col_h2, const int I, const int J) {
+    static_assert(!swz || ggml_cuda_fattn_swz_pow2_stride(stride_h2), "swizzled tile needs a pow2 stride");
     const int lane_row = threadIdx.x % I;
     const int lane_col = (threadIdx.x / I) * (J / 2);
     uint32_t byte_off = (uint32_t)((base_row + lane_row) * stride_h2 + base_col_h2 + lane_col) * (uint32_t)sizeof(half2);
-    if constexpr (ggml_cuda_fattn_swz_enabled(stride_h2)) {
+    if constexpr (swz) {
         byte_off ^= (uint32_t)(((base_row + lane_row) & 7) << 4);
     }
     return (const half2 *) ((const char *) tile_base + byte_off);
 }
 
-template<typename TileT, int stride_h2>
+template<typename TileT, int stride_h2, bool swz>
 static __device__ __forceinline__ void load_ldmatrix(
         TileT & t, half2 * tile_base, const int base_row, const int base_col_h2) {
     using Tile = typename std::remove_reference<TileT>::type;
     constexpr int I = Tile::I;
     constexpr int J = Tile::J;
 #if defined(TURING_MMA_AVAILABLE)
-    if constexpr (I == 16 && J == 8 && ggml_cuda_fattn_swz_enabled(stride_h2)) {
-        const half2 * addr = ggml_cuda_fattn_swz_saddr<stride_h2>(tile_base, base_row, base_col_h2, I, J);
+    if constexpr (I == 16 && J == 8 && swz) {
+        const half2 * addr = ggml_cuda_fattn_swz_saddr<stride_h2, swz>(tile_base, base_row, base_col_h2, I, J);
         ggml_cuda_fattn_ldmatrix_x4((int *) t.x, addr);
         return;
     }
@@ -90,15 +92,15 @@ static __device__ __forceinline__ void load_ldmatrix(
     ggml_cuda_mma::load_ldmatrix(t, tile_base + base_row * stride_h2 + base_col_h2, stride_h2);
 }
 
-template<typename TileT, int stride_h2>
+template<typename TileT, int stride_h2, bool swz>
 static __device__ __forceinline__ void load_ldmatrix_trans(
         TileT & t, half2 * tile_base, const int base_row, const int base_col_h2) {
     using Tile = typename std::remove_reference<TileT>::type;
     constexpr int I = Tile::I;
     constexpr int J = Tile::J;
 #if defined(TURING_MMA_AVAILABLE)
-    if constexpr (I == 16 && J == 8 && ggml_cuda_fattn_swz_enabled(stride_h2)) {
-        const half2 * addr = ggml_cuda_fattn_swz_saddr<stride_h2>(tile_base, base_row, base_col_h2, I, J);
+    if constexpr (I == 16 && J == 8 && swz) {
+        const half2 * addr = ggml_cuda_fattn_swz_saddr<stride_h2, swz>(tile_base, base_row, base_col_h2, I, J);
         ggml_cuda_fattn_ldmatrix_x4_trans((int *) t.x, addr);
         return;
     }
