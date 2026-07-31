@@ -52,6 +52,24 @@ ts_regime_descriptor ts_regime_compute_descriptor(
     const float * weights, int64_t out_dim, int64_t in_dim,
     const float * imatrix_data, int64_t imatrix_dim);
 
+// Per-expert quantization parameter profile. Maps a routed expert to the
+// concrete adjustments applied to ts_quant_params_2d before quantizing, so
+// the routing decision actually changes the quantization code path.
+struct ts_expert_profile {
+    float alpha_scale;       // multiplier on AWQ alpha (1.0 = no change)
+    float clip_scale;        // multiplier on AWQ clip
+    bool  use_septq;         // enable SEPTQ Hessian compensation
+    int   awq_grid;          // AWQ grid search resolution
+    int   max_outliers;      // outlier budget (per row)
+    float outlier_thresh;    // outlier threshold multiplier
+};
+
+// Return the default parameter profile for a routed expert.
+ts_expert_profile ts_expert_default_profile(ts_expert_id expert);
+
+// Human-readable expert name ("AWQ", "LRQ", "DartQuant", ...).
+const char * ts_expert_name(ts_expert_id expert);
+
 // Summary statistics for a routing plan.
 struct ts_regime_summary {
     int64_t count_per_expert[TS_EXPERT_COUNT];

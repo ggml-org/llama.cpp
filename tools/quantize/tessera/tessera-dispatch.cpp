@@ -143,14 +143,24 @@ static ts_awq_score ts_dispatch_awq_eval(const ts_awq_candidate * cand,
     score.heldout_mse   = std::numeric_limits<float>::infinity();
     score.composite     = -std::numeric_limits<float>::infinity();
 
+    // route the layer to its expert and apply that expert's profile so the
+    // GA scores candidates under the same knobs the final quantize uses
+    ts_regime_descriptor rd = {};
+    rd.tensor_name = layer->name;
+    rd.family      = layer->family;
+    rd.kurtosis    = layer->kurtosis;
+    rd.eff_rank    = layer->eff_rank;
+    ts_regime_routing  rr   = ts_regime_classify(&rd);
+    ts_expert_profile  prof = ts_expert_default_profile(rr.expert);
+
     ts_quant_params_2d qp;
-    qp.alpha          = cand->alpha;
-    qp.clip           = cand->clip;
-    qp.max_outliers   = 0;
-    qp.outlier_thresh = ec->outlier_thresh;
+    qp.alpha          = cand->alpha * prof.alpha_scale;
+    qp.clip           = cand->clip * prof.clip_scale;
+    qp.max_outliers   = prof.max_outliers;
+    qp.outlier_thresh = ec->outlier_thresh * prof.outlier_thresh;
     qp.use_imatrix    = layer->imatrix != nullptr;
-    qp.use_septq      = false;
-    qp.awq_grid       = 20;
+    qp.use_septq      = prof.use_septq;
+    qp.awq_grid       = prof.awq_grid;
     qp.seed           = ec->seed;
 
     ts_quant_result_2d qr;
@@ -604,12 +614,37 @@ int ts_dispatch_run(const ts_dispatch_params * params,
         // per-tensor alpha: GA result when available, else the default
         const float tensor_alpha = (need_ga && ga_alpha.count(name))
                                        ? ga_alpha[name] : default_alpha;
-        qparams.alpha = tensor_alpha;
+
+        // apply the routed expert's profile to a per-tensor copy of the base
+        // params (qparams is shared across the loop, so never mutate it here)
+        ts_expert_profile  profile = ts_expert_default_profile(routing.expert);
+        ts_quant_params_2d tqp     = qparams;
+        tqp.alpha           = tensor_alpha * profile.alpha_scale;
+        tqp.clip           *= profile.clip_scale;
+        tqp.use_septq       = profile.use_septq;
+        tqp.awq_grid        = profile.awq_grid;
+        tqp.max_outliers    = profile.max_outliers;
+        tqp.outlier_thresh *= profile.outlier_thresh;
 
         if (verbose) {
-            printf("tessera-dispatch: %s family=%s expert=%d reason='%s'\n",
-                   name, family.c_str(), (int)routing.expert, routing.reason.c_str());
+            printf("tessera-dispatch: %s family=%s expert=%s reason='%s' "
+                   "alpha=%.3f clip=%.3f grid=%d outliers=%d septq=%d\n",
+                   name, family.c_str(), ts_expert_name(routing.expert),
+                   routing.reason.c_str(), tqp.alpha, tqp.clip,
+                   (int)tqp.awq_grid, (int)tqp.max_outliers, (int)tqp.use_septq);
         }
+
+        // stamp the routed expert + applied profile onto the per-tensor result
+        auto fill_expert_meta = [&](ts_dispatch_tensor_result & out) {
+            out.expert_id              = (int)routing.expert;
+            out.expert_name            = ts_expert_name(routing.expert);
+            out.profile_alpha          = tqp.alpha;
+            out.profile_clip           = tqp.clip;
+            out.profile_awq_grid       = (int)tqp.awq_grid;
+            out.profile_max_outliers   = (int)tqp.max_outliers;
+            out.profile_outlier_thresh = tqp.outlier_thresh;
+            out.profile_use_septq      = tqp.use_septq;
+        };
 
         if (n_dims == 3) {
             // MoE expert tensor: (n_experts x out_dim x in_dim)
@@ -619,7 +654,7 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             int rc = ts_quantize_3d(weights.data(),
                                     act_scales, nullptr, nullptr, act_scales,
                                     n_experts, out_dim, in_dim, 0,
-                                    &qparams, &qresults);
+                                    &tqp, &qresults);
             if (rc != 0) {
                 if (err_msg) {
                     *err_msg = "ts_quantize_3d failed for " + std::string(name);
@@ -643,6 +678,7 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             tr.family  = family;
             tr.out_dim = out_dim;
             tr.in_dim  = in_dim;
+            fill_expert_meta(tr);
             // aggregate first expert's blobs for the result struct
             if (!qresults.empty()) {
                 tr.packed              = ts_to_bytes_u32(qresults[0].packed);
@@ -671,7 +707,7 @@ int ts_dispatch_run(const ts_dispatch_params * params,
                                     nullptr,      // ref_output
                                     act_scales,   // imatrix
                                     out_dim, in_dim, 0,
-                                    &qparams, &qr);
+                                    &tqp, &qr);
             if (rc != 0) {
                 if (err_msg) {
                     *err_msg = "ts_quantize_2d failed for " + std::string(name);
@@ -689,6 +725,7 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             tr.family              = family;
             tr.out_dim             = out_dim;
             tr.in_dim              = in_dim;
+            fill_expert_meta(tr);
             tr.packed              = ts_to_bytes_u32(qr.packed);
             tr.page_scales         = ts_to_bytes_u16(qr.page_scales);
             tr.lane_scales         = ts_to_bytes_i8(qr.lane_scales);
@@ -717,7 +754,16 @@ int ts_dispatch_run(const ts_dispatch_params * params,
         policy_json += "    {\"name\": \"" + std::string(name) + "\", "
                      + "\"family\": \"" + family + "\", "
                      + "\"expert\": " + std::to_string((int)routing.expert) + ", "
-                     + "\"alpha\": " + std::to_string(tensor_alpha) + "}";
+                     + "\"expert_name\": \"" + ts_expert_name(routing.expert) + "\", "
+                     + "\"alpha\": " + std::to_string(tensor_alpha) + ", "
+                     + "\"profile\": {"
+                     + "\"alpha\": " + std::to_string(tqp.alpha) + ", "
+                     + "\"clip\": " + std::to_string(tqp.clip) + ", "
+                     + "\"awq_grid\": " + std::to_string(tqp.awq_grid) + ", "
+                     + "\"max_outliers\": " + std::to_string(tqp.max_outliers) + ", "
+                     + "\"outlier_thresh\": " + std::to_string(tqp.outlier_thresh) + ", "
+                     + "\"use_septq\": " + (tqp.use_septq ? "true" : "false")
+                     + "}}";
     }
 
     policy_json += "\n  ]\n}";

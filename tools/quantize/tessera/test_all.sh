@@ -63,6 +63,7 @@ compile_and_run peqat       $T/test_peqat.cpp       $T/tessera-peqat.cpp
 compile_and_run vec         $T/test_vec.cpp         $T/tessera-vec.cpp -framework Accelerate
 compile_and_run quant       $T/test_quant.cpp       $T/tessera-quant.cpp $T/tessera-vec.cpp -framework Accelerate
 compile_and_run moe_shapes  $T/test_moe_shapes.cpp  $T/tessera-quant.cpp $T/tessera-vec.cpp -framework Accelerate
+compile_and_run operative_routing $T/test_operative_routing.cpp $T/tessera-regime.cpp $T/tessera-quant.cpp $T/tessera-vec.cpp -framework Accelerate
 # dispatch requires libgguf/libggml (full CMake build); skip in standalone mode
 printf "  %-30s" "dispatch"
 if [ -f build/ggml/src/libgguf.a ] || [ -f build/ggml/src/libgguf.dylib ]; then

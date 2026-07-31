@@ -51,6 +51,15 @@ struct ts_dispatch_tensor_result {
     std::vector<uint8_t> act_scale;   // empty if alpha == 0
     float       mse;
     float       alpha_used;
+    // routed expert + the profile actually applied to this tensor
+    int         expert_id;
+    std::string expert_name;
+    float       profile_alpha;
+    float       profile_clip;
+    int         profile_awq_grid;
+    int         profile_max_outliers;
+    float       profile_outlier_thresh;
+    bool        profile_use_septq;
 };
 
 struct ts_dispatch_result {

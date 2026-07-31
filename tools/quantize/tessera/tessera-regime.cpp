@@ -117,6 +117,67 @@ std::vector<ts_regime_routing> ts_regime_route_all(
     return routings;
 }
 
+// --- expert profiles ---
+
+const char * ts_expert_name(ts_expert_id expert) {
+    switch (expert) {
+        case TS_EXPERT_AWQ:       return "AWQ";
+        case TS_EXPERT_LRQ:       return "LRQ";
+        case TS_EXPERT_DARTQUANT: return "DartQuant";
+        case TS_EXPERT_FLRQ:      return "FLRQ";
+        case TS_EXPERT_CHAMPQ:    return "CHAMP-Q";
+        case TS_EXPERT_SEPTQ:     return "SEPTQ";
+        default:                  return "unknown";
+    }
+}
+
+ts_expert_profile ts_expert_default_profile(ts_expert_id expert) {
+    // baseline: identity multipliers, no SEPTQ, default grid, no forced outliers
+    ts_expert_profile p;
+    p.alpha_scale    = 1.0f;
+    p.clip_scale     = 1.0f;
+    p.use_septq      = false;
+    p.awq_grid       = 20;
+    p.max_outliers   = 0;
+    p.outlier_thresh = 1.0f;
+
+    switch (expert) {
+        case TS_EXPERT_AWQ:
+            // baseline diagonal scaling, no adjustment
+            break;
+        case TS_EXPERT_DARTQUANT:
+            // rotation expert for massive outliers: tighter selection threshold
+            // and a larger repair budget (+50% over the nominal base budget of 8)
+            p.outlier_thresh = 0.8f;
+            p.max_outliers   = 12;
+            break;
+        case TS_EXPERT_CHAMPQ:
+            // permutation expert: finer alpha search, slightly stronger scaling
+            p.awq_grid    = 40;
+            p.alpha_scale = 1.1f;
+            break;
+        case TS_EXPERT_FLRQ:
+            // factored low-rank: Hessian-compensation proxy, gentler clip
+            p.use_septq  = true;
+            p.clip_scale = 0.9f;
+            break;
+        case TS_EXPERT_LRQ:
+            // aggressive low-rank: Hessian proxy, reduced alpha and clip
+            p.use_septq   = true;
+            p.alpha_scale = 0.9f;
+            p.clip_scale  = 0.85f;
+            break;
+        case TS_EXPERT_SEPTQ:
+            // Hessian compensation expert: SEPTQ on, finer grid
+            p.use_septq = true;
+            p.awq_grid  = 30;
+            break;
+        default:
+            break;
+    }
+    return p;
+}
+
 // --- descriptor computation ---
 
 static float ts_regime_kurtosis(const float * x, int64_t n) {
