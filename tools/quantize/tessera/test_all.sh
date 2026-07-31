@@ -108,6 +108,9 @@ compile_and_run anonymizer    $T/test_anonymizer.cpp  $T/tessera-anonymizer.cpp 
 # --- Text secret redactor (standalone; no vendor needed) ---
 compile_and_run scrub         $T/test_scrub.cpp       $T/tessera-scrub.cpp
 
+# --- North-star throughput harness (needs vendor/nlohmann for workload+receipt JSON) ---
+compile_and_run throughput    $T/test_throughput.cpp  $T/tessera-throughput.cpp -I vendor
+
 # --- common/tessera-debug ---
 compile_and_run sidecar_v3  $C/test_sidecar_v3.cpp  $C/tessera-sidecar-v3.cpp -I $C
 

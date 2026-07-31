@@ -40,6 +40,8 @@ add_library(${TARGET}
     tessera/tessera-anonymizer.cpp
     # text secret redactor (tier-2 egress privacy, R4)
     tessera/tessera-scrub.cpp
+    # north-star batched-throughput workload harness
+    tessera/tessera-throughput.cpp
     # multimodal
     tessera/tessera-mm-imatrix.cpp
     tessera/tessera-mm-awq.cpp

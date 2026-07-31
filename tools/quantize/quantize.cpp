@@ -9,6 +9,7 @@
 #include "tessera/tessera-capability-eval.h"
 #include "tessera/tessera-adapt.h"
 #include "tessera/tessera-anonymizer.h"
+#include "tessera/tessera-throughput.h"
 
 #include "gguf.h"
 
@@ -532,6 +533,46 @@ static int ts_cli_anonymize(const common_tessera_params & tp) {
     return rc;
 }
 
+// --tessera-throughput: run the north-star batched-throughput workload harness
+// and exit. No model is loaded in v1; the stub timing path exercises the full
+// measurement and receipt pipeline. Returns a process exit code.
+static int ts_cli_throughput(const common_tessera_params & tp) {
+    ts_throughput_workload workloads[TS_THROUGHPUT_MAX_WORKLOADS];
+    int n_workloads = 0;
+    std::string err;
+
+    if (ts_throughput_workload_load(tp.throughput_workload.c_str(), workloads,
+                                    TS_THROUGHPUT_MAX_WORKLOADS, &n_workloads, &err) != 0) {
+        fprintf(stderr, "error: throughput: %s\n", err.c_str());
+        return 1;
+    }
+
+    std::vector<ts_throughput_result> results(n_workloads);
+    // v1: no inference backend wired -> stub timing (stub=true in receipt)
+    if (ts_throughput_run(workloads, n_workloads, nullptr, nullptr, results.data(), &err) != 0) {
+        fprintf(stderr, "error: throughput: %s\n", err.c_str());
+        return 1;
+    }
+
+    const std::string out_path = tp.throughput_out.empty()
+        ? std::string("tessera-throughput-receipt.json")
+        : tp.throughput_out;
+    if (ts_throughput_receipt_write(out_path.c_str(), results.data(), n_workloads, &err) != 0) {
+        fprintf(stderr, "error: throughput: %s\n", err.c_str());
+        return 1;
+    }
+
+    // also print to stdout for immediate inspection
+    for (const auto & r : results) {
+        printf("%-24s regime=%-8s batch=%d seq=%d  %.1f tok/s  mean=%.2fms  p95=%.2fms%s\n",
+               r.name, r.regime, r.batch_size, r.seq_len,
+               r.tokens_per_sec, r.mean_latency_ms, r.p95_latency_ms,
+               r.stub ? "  [stub]" : "");
+    }
+    printf("receipt: %s\n", out_path.c_str());
+    return 0;
+}
+
 int llama_quantize(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
     if (argc < 3) {
@@ -638,6 +679,9 @@ int llama_quantize(int argc, char ** argv) {
         }
         if (!tp.anonymize_in.empty()) {
             return ts_cli_anonymize(tp);
+        }
+        if (!tp.throughput_workload.empty()) {
+            return ts_cli_throughput(tp);
         }
     }
 

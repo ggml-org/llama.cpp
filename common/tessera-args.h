@@ -44,6 +44,9 @@ struct common_tessera_params {
     std::string anonymize_out;
     std::string anonymize_level = "balanced";
     std::string anonymize_map;
+    // north-star throughput harness: run workloads then exit without quantizing
+    std::string throughput_workload;
+    std::string throughput_out;
 };
 
 const common_tessera_params & common_get_tessera_params();

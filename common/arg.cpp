@@ -142,6 +142,8 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
     if (arg == "--tessera-anonymize")       { if (!require_val("--tessera-anonymize")) return -1;       tessera_params.anonymize_in    = val; return 2; }
     if (arg == "--tessera-anonymize-out")   { if (!require_val("--tessera-anonymize-out")) return -1;   tessera_params.anonymize_out   = val; return 2; }
     if (arg == "--tessera-anonymize-map")   { if (!require_val("--tessera-anonymize-map")) return -1;   tessera_params.anonymize_map   = val; return 2; }
+    if (arg == "--tessera-throughput")      { if (!require_val("--tessera-throughput")) return -1;      tessera_params.throughput_workload = val; return 2; }
+    if (arg == "--tessera-throughput-out")  { if (!require_val("--tessera-throughput-out")) return -1;  tessera_params.throughput_out  = val; return 2; }
     if (arg == "--tessera-dequant-dir") {
         if (!require_val("--tessera-dequant-dir")) return -1;
         tessera_debug::set_dequant_dir(val); return 2;
@@ -4325,6 +4327,21 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "Tessera: write the local de-anonymization map (pseudonym -> original) as JSON to PATH",
         [](common_params &, const std::string & value) {
             tessera_params.anonymize_map = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-throughput"}, "PATH",
+        "Tessera: run the north-star batched-throughput workload harness over the\n"
+        "workload JSON at PATH, print the receipt, then exit without quantizing",
+        [](common_params &, const std::string & value) {
+            tessera_params.throughput_workload = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-throughput-out"}, "PATH",
+        "Tessera: also write the throughput receipt JSON to PATH",
+        [](common_params &, const std::string & value) {
+            tessera_params.throughput_out = value;
         }
     ));
     add_opt(common_arg(
