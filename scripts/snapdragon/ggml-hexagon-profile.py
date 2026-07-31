@@ -34,6 +34,26 @@ trace_pattern = re.compile(
     r"trace-evt\s+(?P<event>[A-Z_0-9\-]+):\s+thread\s+(?P<thread>\d+)\s+info\s+(?P<info>\d+)\s+(?P<state>start|stop)\s+(?P<cycles>\d+)"
 )
 
+device_pattern = re.compile(r"\b(HTP\d+(?::\d+)?)\s+(?:profile-op|trace-evt)\b")
+
+
+def extract_device(line):
+    m = device_pattern.search(line)
+    if m:
+        return m.group(1)
+    return "HTP0"
+
+
+def device_matches(record_device, target_device):
+    targets = [t.strip() for t in target_device.split(',')]
+    for target in targets:
+        if record_device == target:
+            return True
+        if record_device.startswith(target + ":"):
+            return True
+    return False
+
+
 logger = logging.getLogger("ggml-hexagon-profile")
 
 
@@ -72,7 +92,7 @@ class CycleUnwrapper:
         return raw + self.high_part
 
 
-def parse_log(file_path, pmu_index=None):
+def parse_log(file_path, pmu_index=None, limit=None, device_filter=None, op_filter_re=None):
     try:
         if file_path != "-":
             f = open(file_path, 'r', encoding='utf-8', errors='ignore')
@@ -85,12 +105,20 @@ def parse_log(file_path, pmu_index=None):
     all_ops: List[Dict[str, Any]] = []
     all_traces: List[Dict[str, Any]] = []
     current_op: Optional[Dict[str, Any]] = None
+    ops_count_per_device = {}
+    if device_filter is not None:
+        for target in device_filter.split(','):
+            ops_count_per_device[target.strip()] = 0
+    limit_reached = False
 
     timestamp_pattern = re.compile(r"^(?P<min>\d+)\.(?P<sec>\d+)\.(?P<ms>\d+)\.(?P<us>\d+)\s+[A-Z]\s+")
-    unwrapper = None
-    trace_unwrapper = None
+    unwrappers = {}
+    trace_unwrappers = {}
 
     for line in f:
+        if "profile-op" not in line and "trace-evt" not in line:
+            continue
+
         ts_match = timestamp_pattern.match(line)
         abs_usec = 0
         if ts_match:
@@ -99,6 +127,8 @@ def parse_log(file_path, pmu_index=None):
                 + int(ts_match.group('ms')) * 1000
                 + int(ts_match.group('us'))
             )
+
+        device = extract_device(line)
 
         if "|" in line and "profile-op" in line:
             parts = [p.strip() for p in line.split("|")]
@@ -146,7 +176,6 @@ def parse_log(file_path, pmu_index=None):
                     pmu_val = None
 
             evt_val = None
-            evt_val = None
             if types.startswith("evt-cnt "):
                 try:
                     evt_val = [int(x.strip()) for x in types[8:].split(',')]
@@ -158,11 +187,13 @@ def parse_log(file_path, pmu_index=None):
             if op_name == "OPBATCH":
                 if cycles_start_raw:
                     unwrapped_cycles_start = int(cycles_start_raw)
-                    unwrapper = CycleUnwrapper(unwrapped_cycles_start)
-                    trace_unwrapper = CycleUnwrapper(unwrapped_cycles_start)
+                    unwrappers[device] = CycleUnwrapper(unwrapped_cycles_start)
+                    trace_unwrappers[device] = CycleUnwrapper(unwrapped_cycles_start)
             else:
-                if cycles_start_raw and unwrapper is not None:
-                    unwrapped_cycles_start = unwrapper.unwrap(int(cycles_start_raw))
+                if cycles_start_raw:
+                    device_unwrapper = unwrappers.get(device)
+                    if device_unwrapper is not None:
+                        unwrapped_cycles_start = device_unwrapper.unwrap(int(cycles_start_raw))
 
             idx = line.find("profile-op ")
             op_text = line[idx + 11:].strip() if idx != -1 else line.strip()
@@ -180,24 +211,55 @@ def parse_log(file_path, pmu_index=None):
                 'pmu_val':      pmu_val,
                 'evt_val':      evt_val,
                 'abs_usec':     abs_usec,
-                'trace_events': []
+                'trace_events': [],
+                'device':       device
             }
             all_ops.append(current_op)
+
+            # Check if matching early exit criteria
+            matched = False
+            matched_target = None
+            if device_filter is not None:
+                targets = [t.strip() for t in device_filter.split(',')]
+                for target in targets:
+                    if device == target or device.startswith(target + ":"):
+                        matched = True
+                        matched_target = target
+                        break
+            else:
+                matched = True
+                matched_target = device
+
+            if op_filter_re is not None and not op_filter_re.search(op_text):
+                matched = False
+
+            if matched:
+                if matched_target not in ops_count_per_device:
+                    ops_count_per_device[matched_target] = 0
+                ops_count_per_device[matched_target] += 1
+
+            if limit is not None and len(ops_count_per_device) > 0 and all(count >= limit for count in ops_count_per_device.values()):
+                limit_reached = True
+
+            if limit_reached and op_name == "OPBATCH":
+                break
             continue
 
         trace_match = trace_pattern.search(line)
         if trace_match:
             raw_cyc = int(trace_match.group('cycles'))
             unwrapped_cyc = None
-            if trace_unwrapper is not None:
-                unwrapped_cyc = trace_unwrapper.unwrap(raw_cyc)
+            device_trace_unwrapper = trace_unwrappers.get(device)
+            if device_trace_unwrapper is not None:
+                unwrapped_cyc = device_trace_unwrapper.unwrap(raw_cyc)
             all_traces.append({
                 'thread': int(trace_match.group('thread')),
                 'event':  trace_match.group('event'),
                 'info':   int(trace_match.group('info')),
                 'cycles': raw_cyc,
                 'unwrapped_cycles': unwrapped_cyc,
-                'state':  trace_match.group('state')
+                'state':  trace_match.group('state'),
+                'device': device
             })
 
     f.close()
@@ -207,39 +269,45 @@ def parse_log(file_path, pmu_index=None):
         op['start_cycles'] = op['unwrapped_cycles_start']
         op['end_cycles'] = op['start_cycles'] + op['cycles'] if op['start_cycles'] is not None else None
 
-    # Filter ops with valid start_cycles
-    valid_ops = [op for op in all_ops if op['start_cycles'] is not None and op['end_cycles'] is not None]
+    # Group ops by device
+    valid_ops_by_dev = defaultdict(list)
+    for op in all_ops:
+        if op['start_cycles'] is not None and op['end_cycles'] is not None:
+            valid_ops_by_dev[op['device']].append(op)
 
-    # Separate OPBATCH ops from other ops
-    opbatch_ops = [op for op in valid_ops if op['name'] == "OPBATCH"]
-    other_ops = [op for op in valid_ops if op['name'] != "OPBATCH"]
-
-    # Sort them by start_cycles to enable binary search
-    opbatch_ops.sort(key=lambda op: op['start_cycles'])
-    other_ops.sort(key=lambda op: op['start_cycles'])
-
-    opbatch_starts = [op['start_cycles'] for op in opbatch_ops]
-    other_starts = [op['start_cycles'] for op in other_ops]
-
-    # Map trace events to any operator whose cycles contain them
+    # Group trace events by device
+    traces_by_dev = defaultdict(list)
     for e in all_traces:
-        cyc = e['unwrapped_cycles']
-        if cyc is None:
-            continue
+        if e['unwrapped_cycles'] is not None:
+            traces_by_dev[e['device']].append(e)
 
-        # Map to OPBATCH
-        idx = bisect.bisect_right(opbatch_starts, cyc) - 1
-        if idx >= 0:
-            op = opbatch_ops[idx]
-            if op['start_cycles'] <= cyc <= op['end_cycles']:
-                op['trace_events'].append(e)
+    for device, dev_ops in valid_ops_by_dev.items():
+        opbatch_ops = [op for op in dev_ops if op['name'] == "OPBATCH"]
+        other_ops = [op for op in dev_ops if op['name'] != "OPBATCH"]
 
-        # Map to other ops
-        idx = bisect.bisect_right(other_starts, cyc) - 1
-        if idx >= 0:
-            op = other_ops[idx]
-            if op['start_cycles'] <= cyc <= op['end_cycles']:
-                op['trace_events'].append(e)
+        opbatch_ops.sort(key=lambda op: op['start_cycles'])
+        other_ops.sort(key=lambda op: op['start_cycles'])
+
+        opbatch_starts = [op['start_cycles'] for op in opbatch_ops]
+        other_starts = [op['start_cycles'] for op in other_ops]
+
+        dev_traces = traces_by_dev.get(device, [])
+        for e in dev_traces:
+            cyc = e['unwrapped_cycles']
+
+            # Map to OPBATCH
+            idx = bisect.bisect_right(opbatch_starts, cyc) - 1
+            if idx >= 0:
+                op = opbatch_ops[idx]
+                if op['start_cycles'] <= cyc <= op['end_cycles']:
+                    op['trace_events'].append(e)
+
+            # Map to other ops
+            idx = bisect.bisect_right(other_starts, cyc) - 1
+            if idx >= 0:
+                op = other_ops[idx]
+                if op['start_cycles'] <= cyc <= op['end_cycles']:
+                    op['trace_events'].append(e)
 
     return all_ops
 
@@ -563,6 +631,7 @@ def main():
     parser.add_argument("--timeline", type=str, nargs='?', const='summary', choices=["summary", "bubbles"],
                         help="Output ASCII art event summary or thread idle bubble analysis (default: summary)")
     parser.add_argument("--filter", type=str, help="Regex filter matching against the original profile-op line")
+    parser.add_argument("--device", type=str, help="Device to filter by (e.g. HTP0, HTP0:0) or 'split' to generate separate reports per device")
 
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--head", type=int, help="Limit to first N ops")
@@ -586,29 +655,74 @@ def main():
                 logger.warning(f"Invalid width format '{w}'")
 
     final_pmu_name = (args.pmu_name or f"#{args.pmu_index}") if args.pmu_index is not None else None
-    ops = parse_log(args.logfile, pmu_index=args.pmu_index)
 
+    op_filter_re = None
     if args.filter:
         try:
-            filter_re = re.compile(args.filter)
+            op_filter_re = re.compile(args.filter)
         except re.error as e:
             logger.error(f"Invalid regex filter: {e}")
             sys.exit(1)
-        ops = [op for op in ops if filter_re.search(op['op_text'])]
 
-    if args.head is not None:
-        ops = ops[:args.head]
-    elif args.tail is not None:
-        ops = ops[-args.tail:]
+    limit = args.head if args.head is not None else None
+    device_filter = args.device if (args.device and args.device != "split") else None
+    ops = parse_log(args.logfile, pmu_index=args.pmu_index, limit=limit, device_filter=device_filter, op_filter_re=op_filter_re)
 
-    if args.timeline:
-        for op in ops:
-            if args.timeline == "summary":
-                print_ascii_summary(op['name'], op['dims'], op['types'], op['usec'], op['cycles'], op['trace_events'])
-            elif args.timeline == "bubbles":
-                print_bubbles_timeline(op)
+    if args.device and args.device != "split":
+        ops = [op for op in ops if device_matches(op['device'], args.device)]
+
+    if args.device == "split":
+        unique_devices = sorted(list(set(op['device'] for op in ops)))
+        for dev in unique_devices:
+            dev_ops = [op for op in ops if device_matches(op['device'], dev)]
+
+            if args.filter:
+                try:
+                    filter_re = re.compile(args.filter)
+                except re.error as e:
+                    logger.error(f"Invalid regex filter: {e}")
+                    sys.exit(1)
+                dev_ops = [op for op in dev_ops if filter_re.search(op['op_text'])]
+
+            if args.head is not None:
+                dev_ops = dev_ops[:args.head]
+            elif args.tail is not None:
+                dev_ops = dev_ops[-args.tail:]
+
+            logger.info(f"\n=========================================")
+            logger.info(f" Device: {dev}")
+            logger.info(f"=========================================")
+
+            if args.timeline:
+                for op in dev_ops:
+                    if args.timeline == "summary":
+                        print_ascii_summary(op['name'], op['dims'], op['types'], op['usec'], op['cycles'], op['trace_events'])
+                    elif args.timeline == "bubbles":
+                        print_bubbles_timeline(op)
+            else:
+                generate_report(dev_ops, args.top, overrides, args.sort, pmu_name=final_pmu_name)
     else:
-        generate_report(ops, args.top, overrides, args.sort, pmu_name=final_pmu_name)
+        if args.filter:
+            try:
+                filter_re = re.compile(args.filter)
+            except re.error as e:
+                logger.error(f"Invalid regex filter: {e}")
+                sys.exit(1)
+            ops = [op for op in ops if filter_re.search(op['op_text'])]
+
+        if args.head is not None:
+            ops = ops[:args.head]
+        elif args.tail is not None:
+            ops = ops[-args.tail:]
+
+        if args.timeline:
+            for op in ops:
+                if args.timeline == "summary":
+                    print_ascii_summary(op['name'], op['dims'], op['types'], op['usec'], op['cycles'], op['trace_events'])
+                elif args.timeline == "bubbles":
+                    print_bubbles_timeline(op)
+        else:
+            generate_report(ops, args.top, overrides, args.sort, pmu_name=final_pmu_name)
 
 
 if __name__ == "__main__":
