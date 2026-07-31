@@ -11,8 +11,7 @@
 		classifyToolResult,
 		formatJsonPretty,
 		parseToolResultWithImages,
-		type AgenticSection,
-		type ToolResultLine
+		type AgenticSection
 	} from '$lib/utils';
 	import { getBuiltinToolUi } from '$lib/constants/built-in-tools';
 	import type { DatabaseMessageExtra } from '$lib/types';
@@ -29,11 +28,10 @@
 	let { section, open, isStreaming, attachments, onToggle }: Props = $props();
 
 	const title = $derived(getBuiltinToolUi(section.toolName)?.label ?? section.toolName ?? '');
-
-	const parsedLines: ToolResultLine[] = $derived(
+	const outputKind = $derived(classifyToolResult(section.toolResult));
+	const parsedLines = $derived(
 		section.toolResult ? parseToolResultWithImages(section.toolResult, attachments) : []
 	);
-	const outputKind = $derived(classifyToolResult(section.toolResult));
 </script>
 
 <ToolCallBlock {section} {open} {isStreaming} meta={null} {title} {onToggle}>

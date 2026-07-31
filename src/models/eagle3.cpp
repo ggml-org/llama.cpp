@@ -28,6 +28,10 @@ void llama_model_eagle3::load_arch_hparams(llama_model_loader & ml) {
         LLAMA_LOG_INFO("%s: EAGLE3gnorm_before_residual = true\n", __func__);
     }
 
+    // eagle3 norm_before_fc (optional, default false)
+    // compatible with eagle3.1 (e.g. nvidia/gpt-oss-120b-Eagle3-v3)
+    ml.get_key(LLM_KV_NORM_BEFORE_FC, hparams.norm_before_fc, false);
+
     type = LLM_TYPE_UNKNOWN;
 }
 
@@ -52,6 +56,11 @@ void llama_model_eagle3::load_arch_tensors(llama_model_loader &) {
 
     // Feature fusion layer: projects 3 target layers to draft hidden size
     fc = create_tensor(tn(LLM_TENSOR_FC, "weight"), {n_embd_inp, n_embd}, 0);
+
+    // RMSNorm on the fused target features (input to fc), only when norm_before_fc is set.
+    if (hparams.norm_before_fc) {
+        output_norm_enc = create_tensor(tn(LLM_TENSOR_ENC_OUTPUT_NORM, "weight"), {n_embd_inp}, 0);
+    }
 
     // Output layer (uses draft vocab size)
     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
@@ -129,6 +138,12 @@ llama_model_eagle3::graph<true>::graph(const llama_model & model, const llm_grap
     ggml_tensor * cur = nullptr;
 
     cur = build_inp_embd_enc();
+
+    // RMSNorm on the fused target features before fc
+    if (hparams.norm_before_fc) {
+        cur = build_norm(cur, model.output_norm_enc, NULL, LLM_NORM_RMS, -1);
+        cb(cur, "enc_input_norm", -1);
+    }
 
     // Feature fusion layer
     cur = build_lora_mm(model.fc, cur);

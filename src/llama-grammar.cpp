@@ -1139,6 +1139,18 @@ struct llama_grammar * llama_grammar_init_impl(
         vec_rules[i].push_back({LLAMA_GRETYPE_END, 0});
     }
 
+    // Validate that all rule references point to valid rules
+    for (size_t i = 0; i < n_rules; i++) {
+        for (const auto & elem : vec_rules[i]) {
+            if (elem.type == LLAMA_GRETYPE_RULE_REF) {
+                if (elem.value >= n_rules || vec_rules[elem.value].empty()) {
+                    LLAMA_LOG_ERROR("invalid grammar: rule %zu references undefined rule %u\n", i, elem.value);
+                    return nullptr;
+                }
+            }
+        }
+    }
+
     // Check for left recursion
     std::vector<bool> rules_visited(n_rules);
     std::vector<bool> rules_in_progress(n_rules);

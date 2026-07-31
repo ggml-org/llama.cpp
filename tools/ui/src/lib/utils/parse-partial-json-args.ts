@@ -14,70 +14,94 @@ const JSON_ARRAY_CLOSE = ']';
 // comma when the model cut off mid-key.
 const TRAILING_JSON_PUNCTUATION_REGEX = /,?\s*$/;
 
+/** Bounded cache for parsePartialJsonArgs results. */
+const PARTIAL_JSON_CACHE_MAX_SIZE = 32;
+const partialJsonCache = new Map<string, Record<string, unknown> | null>();
+
+function cacheResult(input: string, result: Record<string, unknown> | null): void {
+	if (partialJsonCache.size >= PARTIAL_JSON_CACHE_MAX_SIZE) {
+		partialJsonCache.delete(partialJsonCache.keys().next().value!);
+	}
+	partialJsonCache.set(input, result);
+}
+
 // Parse partial tool-arg JSON streamed token-by-token. Closes any
 // unterminated string and dangling open containers (in reverse order),
 // so parsers can still surface keys already received while the call
-// is still in flight.
+// is still in flight. Memoized: the char-by-char scanner runs on every
+// render during streaming even when toolArgs hasn't changed.
 export function parsePartialJsonArgs(toolArgsString: string): Record<string, unknown> | null {
+	const cached = partialJsonCache.get(toolArgsString);
+	if (cached !== undefined) return cached;
+
+	let result: Record<string, unknown> | null;
+
 	try {
 		const parsed: unknown = JSON.parse(toolArgsString);
-		if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-			return parsed as Record<string, unknown>;
-		}
-		return null;
+		result =
+			parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+				? (parsed as Record<string, unknown>)
+				: null;
 	} catch {
-		let inString = false;
-		let escape = false;
-		const stack: ('{' | '[')[] = [];
+		result = scanPartialJson(toolArgsString);
+	}
 
-		for (let i = 0; i < toolArgsString.length; i++) {
-			const ch = toolArgsString[i];
-			if (escape) {
-				escape = false;
-				continue;
-			}
-			if (ch === JSON_BACKSLASH && inString) {
-				escape = true;
-				continue;
-			}
-			if (ch === JSON_QUOTE) {
-				inString = !inString;
-				continue;
-			}
-			if (inString) continue;
-			if (ch === JSON_OBJECT_OPEN) stack.push(JSON_OBJECT_OPEN);
-			else if (ch === JSON_OBJECT_CLOSE) {
-				if (stack.length === 0 || stack[stack.length - 1] !== JSON_OBJECT_OPEN) return null;
-				stack.pop();
-			} else if (ch === JSON_ARRAY_OPEN) stack.push(JSON_ARRAY_OPEN);
-			else if (ch === JSON_ARRAY_CLOSE) {
-				if (stack.length === 0 || stack[stack.length - 1] !== JSON_ARRAY_OPEN) return null;
-				stack.pop();
-			}
-		}
+	cacheResult(toolArgsString, result);
+	return result;
+}
 
-		let completed = toolArgsString;
+/** Char-by-char scanner for unterminated partial JSON. */
+function scanPartialJson(toolArgsString: string): Record<string, unknown> | null {
+	let inString = false;
+	let escape = false;
+	const stack: ('{' | '[')[] = [];
+
+	for (let i = 0; i < toolArgsString.length; i++) {
+		const ch = toolArgsString[i];
 		if (escape) {
-			// Dangling escape at end of partial JSON: escape the trailing
-			// backslash as a literal so we can close the string cleanly.
-			completed += JSON_BACKSLASH;
+			escape = false;
+			continue;
 		}
-		if (inString) completed += JSON_QUOTE;
-		if (!inString) completed = completed.replace(TRAILING_JSON_PUNCTUATION_REGEX, '');
+		if (ch === JSON_BACKSLASH && inString) {
+			escape = true;
+			continue;
+		}
+		if (ch === JSON_QUOTE) {
+			inString = !inString;
+			continue;
+		}
+		if (inString) continue;
+		if (ch === JSON_OBJECT_OPEN) stack.push(JSON_OBJECT_OPEN);
+		else if (ch === JSON_OBJECT_CLOSE) {
+			if (stack.length === 0 || stack[stack.length - 1] !== JSON_OBJECT_OPEN) return null;
+			stack.pop();
+		} else if (ch === JSON_ARRAY_OPEN) stack.push(JSON_ARRAY_OPEN);
+		else if (ch === JSON_ARRAY_CLOSE) {
+			if (stack.length === 0 || stack[stack.length - 1] !== JSON_ARRAY_OPEN) return null;
+			stack.pop();
+		}
+	}
 
-		// Close in reverse nesting order: innermost container first.
-		for (let i = stack.length - 1; i >= 0; i--) {
-			completed += stack[i] === JSON_OBJECT_OPEN ? JSON_OBJECT_CLOSE : JSON_ARRAY_CLOSE;
-		}
+	let completed = toolArgsString;
+	if (escape) {
+		// Dangling escape at end of partial JSON: escape the trailing
+		// backslash as a literal so we can close the string cleanly.
+		completed += JSON_BACKSLASH;
+	}
+	if (inString) completed += JSON_QUOTE;
+	if (!inString) completed = completed.replace(TRAILING_JSON_PUNCTUATION_REGEX, '');
 
-		try {
-			const parsed: unknown = JSON.parse(completed);
-			if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-				return parsed as Record<string, unknown>;
-			}
-			return null;
-		} catch {
-			return null;
-		}
+	// Close in reverse nesting order: innermost container first.
+	for (let i = stack.length - 1; i >= 0; i--) {
+		completed += stack[i] === JSON_OBJECT_OPEN ? JSON_OBJECT_CLOSE : JSON_ARRAY_CLOSE;
+	}
+
+	try {
+		const parsed: unknown = JSON.parse(completed);
+		return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+			? (parsed as Record<string, unknown>)
+			: null;
+	} catch {
+		return null;
 	}
 }
