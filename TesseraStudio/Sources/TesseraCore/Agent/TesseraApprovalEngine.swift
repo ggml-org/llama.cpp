@@ -88,6 +88,36 @@ public final class TesseraApprovalEngine {
         continuation = nil
     }
 
+    // MARK: - Safety spine
+
+    /// Denial circuit-breaker shared across the loop (S3).
+    public let circuitBreaker = TesseraDenialCircuitBreaker()
+
+    /// Layered safety gate (S2/S3/S4). Verifies the action, computes the
+    /// layered-permission check, and folds in the circuit-breaker: a tripped
+    /// breaker rejects outright. Each rejection is recorded so repeated
+    /// denials can interrupt the loop. Additive to `requestApproval`; it does
+    /// not alter the existing approval flow.
+    public func safetyCheck(
+        for action: PendingAction,
+        permissionProfile: TesseraPermissionProfile = .standard,
+        sandboxEnforceable: Bool,
+        verifier: any ActionVerifying = TesseraActionVerifier()
+    ) -> TesseraSafetyCheck {
+        if circuitBreaker.isTripped {
+            return .reject
+        }
+        let decision = verifier.verify(action)
+        let check = TesseraSafetyDecision(
+            approvalPolicy: level(for: action.toolName, default: .prompt),
+            permissionProfile: permissionProfile,
+            sandboxEnforceable: sandboxEnforceable,
+            actionRisk: decision.riskLevel
+        ).check
+        circuitBreaker.record(denied: check == .reject)
+        return check
+    }
+
     // MARK: - Persistence
 
     private static let storageKey = "tessera.approval.overrides"
