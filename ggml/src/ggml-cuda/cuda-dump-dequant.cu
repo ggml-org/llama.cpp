@@ -213,10 +213,14 @@ void ggml_cuda_dump_dequant(ggml_backend_cuda_context & ctx, const ggml_tensor *
     // Per-row outlier counts (|x| > threshold) are computed inside the
     // writer against the F32 host buffer; the convention here is
     // preserved: ne0 == rows, ne1 == cols, row r at offset r*ne1.
-    tessera_debug::open_dequant_writer(src0->name, ne0, ne1);
-    for (int64_t r = 0; r < ne0; r++) {
-        tessera_debug::write_dequant_row(r, dst_h.data() + r * ne1, ne1);
-        tessera_debug::set_dequant_row_meta(r, per_row_ns, kernel_id,
+    const int64_t stride = tessera_debug::dequant_stride();
+    const int64_t captured_rows = (ne0 + stride - 1) / stride;
+
+    tessera_debug::open_dequant_writer(src0->name, captured_rows, ne1);
+    int64_t out_r = 0;
+    for (int64_t r = 0; r < ne0; r += stride, out_r++) {
+        tessera_debug::write_dequant_row(out_r, dst_h.data() + r * ne1, ne1);
+        tessera_debug::set_dequant_row_meta(out_r, per_row_ns, kernel_id,
                                             /*dispatch_count=*/1);
     }
     tessera_debug::close_dequant_writer();

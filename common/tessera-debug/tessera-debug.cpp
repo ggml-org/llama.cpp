@@ -38,6 +38,7 @@ struct EnvState {
     std::string model;
     std::string calibration_corpus;
     std::string calibration_corpus_hash;
+    int64_t     stride = 1;
     bool        initialized = false;
 };
 
@@ -66,6 +67,10 @@ void ensure_env_loaded() {
     }
     if (const char * v = std::getenv("TESSERA_TELEMETRY_CALIBRATION_CORPUS_HASH"); v != nullptr) {
         s.calibration_corpus_hash = v;
+    }
+    if (const char * v = std::getenv("LLAMA_TILE640_DEBUG_DEQUANT_STRIDE"); v != nullptr) {
+        int64_t st = (int64_t) atoll(v);
+        s.stride = (st < 1) ? 1 : st;
     }
 }
 
@@ -453,6 +458,16 @@ void set_outlier_threshold(float threshold) {
 
 float outlier_threshold() {
     return g_outlier_threshold;
+}
+
+void set_dequant_stride(int64_t stride) {
+    ensure_env_loaded();
+    env_state().stride = (stride < 1) ? 1 : stride;
+}
+
+int64_t dequant_stride() {
+    ensure_env_loaded();
+    return env_state().stride;
 }
 
 void open_dequant_writer(const char * tensor_name, int64_t rows, int64_t cols) {

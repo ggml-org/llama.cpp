@@ -125,10 +125,14 @@ void metal_dump_dequant(
     // reference dequant is row-major, so row r starts at host_buf +
     // r*cols. (The caller chooses the row/col split; for a 2D weight
     // [K, N] that means rows=N, cols=K.)
-    tessera_debug::open_dequant_writer(name, rows, cols);
-    for (int64_t r = 0; r < rows; r++) {
-        tessera_debug::write_dequant_row(r, host_buf.data() + r * cols, cols);
-        tessera_debug::set_dequant_row_meta(r, per_row_ns, kernel_id,
+    const int64_t stride = tessera_debug::dequant_stride();
+    const int64_t captured_rows = (rows + stride - 1) / stride;
+
+    tessera_debug::open_dequant_writer(name, captured_rows, cols);
+    int64_t out_r = 0;
+    for (int64_t r = 0; r < rows; r += stride, out_r++) {
+        tessera_debug::write_dequant_row(out_r, host_buf.data() + r * cols, cols);
+        tessera_debug::set_dequant_row_meta(out_r, per_row_ns, kernel_id,
                                             /*dispatch_count=*/1);
     }
     tessera_debug::close_dequant_writer();

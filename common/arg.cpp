@@ -125,6 +125,10 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
         if (!require_val("--tessera-dequant-dir")) return -1;
         tessera_debug::set_dequant_dir(val); return 2;
     }
+    if (arg == "--tessera-dequant-stride") {
+        if (!require_val("--tessera-dequant-stride")) return -1;
+        tessera_debug::set_dequant_stride((int64_t) atoll(val.c_str())); return 2;
+    }
 
     // integer-valued
     if (arg == "--tessera-evolve-seed") {
@@ -3946,6 +3950,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             tessera_debug::set_dequant_dir(value);
         }
     ).set_env("LLAMA_TILE640_DEBUG_DEQUANT_DIR"));
+    add_opt(common_arg(
+        {"--tessera-dequant-stride"}, "N",
+        "Tessera: capture only every Nth row in dequant sidecar output "
+        "(default: 1, capture all rows)",
+        [](common_params &, const std::string & value) {
+            tessera_debug::set_dequant_stride((int64_t) std::stoll(value));
+        }
+    ).set_env("LLAMA_TILE640_DEBUG_DEQUANT_STRIDE"));
     add_opt(common_arg(
         {"--tessera-mode"}, "MODE",
         "Tessera mode: off, default, calibrate-only, evolve-only (default: default)",

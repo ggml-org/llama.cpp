@@ -86,6 +86,10 @@ compile_and_run policy      $T/test_policy.cpp      $T/tessera-policy.cpp -I ven
 # --- common/tessera-debug ---
 compile_and_run sidecar_v3  $C/test_sidecar_v3.cpp  $C/tessera-sidecar-v3.cpp -I $C
 
+# L1 sidecar writer end-to-end (needs a stub tessera-build-info.h)
+printf '#pragma once\n#define TESSERA_KERNEL_VERSION "test"\n#define TESSERA_MAIN_TIP "test"\n' > "$BIN/tessera-build-info.h"
+compile_and_run l1_sidecar  $T/test_l1_sidecar.cpp  $C/tessera-debug.cpp $C/tessera-sidecar-v3.cpp -I $C -I "$BIN"
+
 # --- CoreML bridge ---
 compile_and_run coreml_bridge $T/test_coreml_bridge.cpp $T/tessera-coreml.cpp $T/tessera-coreml-builder.cpp $T/tessera-coreml-metadata.cpp -I ggml/include
 

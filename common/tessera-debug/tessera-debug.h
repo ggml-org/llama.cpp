@@ -163,6 +163,16 @@ namespace tessera_debug {
     // set_outlier_threshold call, or the default if none).
     float outlier_threshold();
 
+    // Configure the row capture stride. When stride > 1, only every
+    // Nth row is written to the sidecar (rows 0, N, 2N, ...). Default
+    // is 1 (capture all rows). Can also be set via the env var
+    // `LLAMA_TILE640_DEBUG_DEQUANT_STRIDE` at process start. Values
+    // < 1 are clamped to 1.
+    void set_dequant_stride(int64_t stride);
+
+    // Returns the currently-configured row capture stride (default 1).
+    int64_t dequant_stride();
+
     // Open (or reuse) the L1 dequant sidecar file for `tensor_name` and
     // write its v3 header. The first call opens the file at
     // `<dequant_dir>/<tensor_name>.dequant.f32` in truncating write mode;

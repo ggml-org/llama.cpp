@@ -112,10 +112,14 @@ void cpu_dump_dequant(
     // (one call per row).
     const uint32_t kernel_id = (uint32_t) src0->type;
 
-    tessera_debug::open_dequant_writer(tensor_name, rows, cols);
-    for (int64_t r = 0; r < rows; r++) {
-        tessera_debug::write_dequant_row(r, scratch + r * cols, cols);
-        tessera_debug::set_dequant_row_meta(r, row_timing_ns[(size_t) r],
+    const int64_t stride = tessera_debug::dequant_stride();
+    const int64_t captured_rows = (rows + stride - 1) / stride;
+
+    tessera_debug::open_dequant_writer(tensor_name, captured_rows, cols);
+    int64_t out_r = 0;
+    for (int64_t r = 0; r < rows; r += stride, out_r++) {
+        tessera_debug::write_dequant_row(out_r, scratch + r * cols, cols);
+        tessera_debug::set_dequant_row_meta(out_r, row_timing_ns[(size_t) r],
                                             kernel_id, /*dispatch_count=*/1);
     }
     tessera_debug::close_dequant_writer();
