@@ -8,6 +8,7 @@
 #include "tessera/tessera-dispatch.h"
 #include "tessera/tessera-capability-eval.h"
 #include "tessera/tessera-adapt.h"
+#include "tessera/tessera-anonymizer.h"
 
 #include "gguf.h"
 
@@ -469,6 +470,68 @@ static int ts_cli_adapt(const common_tessera_params & tp) {
     return 2;
 }
 
+// --tessera-anonymize: scrub a text payload (tier-2 escalation) and exit.
+// Prints the anonymized text to stdout, optionally writes it to
+// --tessera-anonymize-out and the local de-anonymization map to
+// --tessera-anonymize-map. No quantization runs. Returns a process exit code.
+static int ts_cli_anonymize(const common_tessera_params & tp) {
+    std::ifstream f(tp.anonymize_in, std::ios::binary);
+    if (!f) {
+        fprintf(stderr, "error: anonymize: cannot read: %s\n", tp.anonymize_in.c_str());
+        return 1;
+    }
+    const std::string input((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+
+    ts_anon_params params;
+    ts_anon_default_params(&params);
+    if (ts_anon_level_from_string(tp.anonymize_level.c_str(), &params.level) != 0) {
+        fprintf(stderr, "error: anonymize: unknown level: %s\n", tp.anonymize_level.c_str());
+        return 1;
+    }
+    params.emit_map = !tp.anonymize_map.empty();
+
+    char * output_text = NULL;
+    char * map_json    = NULL;
+    if (ts_anonymize_run(&params, input.c_str(), &output_text, &map_json) != 0) {
+        fprintf(stderr, "error: anonymize: anonymize run failed\n");
+        return 1;
+    }
+
+    printf("%s", output_text);
+
+    int rc = 0;
+    if (!tp.anonymize_out.empty()) {
+        std::ofstream of(tp.anonymize_out, std::ios::binary);
+        if (!of) {
+            fprintf(stderr, "error: anonymize: cannot write: %s\n", tp.anonymize_out.c_str());
+            rc = 1;
+        } else {
+            of << output_text;
+            if (!of.good()) {
+                fprintf(stderr, "error: anonymize: write failed: %s\n", tp.anonymize_out.c_str());
+                rc = 1;
+            }
+        }
+    }
+    if (rc == 0 && map_json != NULL) {
+        std::ofstream mf(tp.anonymize_map, std::ios::binary);
+        if (!mf) {
+            fprintf(stderr, "error: anonymize: cannot write map: %s\n", tp.anonymize_map.c_str());
+            rc = 1;
+        } else {
+            mf << map_json << "\n";
+            if (!mf.good()) {
+                fprintf(stderr, "error: anonymize: map write failed: %s\n", tp.anonymize_map.c_str());
+                rc = 1;
+            }
+        }
+    }
+
+    free(output_text);
+    free(map_json);
+    return rc;
+}
+
 int llama_quantize(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
     if (argc < 3) {
@@ -572,6 +635,9 @@ int llama_quantize(int argc, char ** argv) {
         }
         if (!tp.adapt_eval.empty()) {
             return ts_cli_adapt(tp);
+        }
+        if (!tp.anonymize_in.empty()) {
+            return ts_cli_anonymize(tp);
         }
     }
 

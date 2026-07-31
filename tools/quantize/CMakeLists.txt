@@ -36,6 +36,8 @@ add_library(${TARGET}
     # self-improving capability loop (section 4.7 multi-axis eval + adaptation engine)
     tessera/tessera-capability-eval.cpp
     tessera/tessera-adapt.cpp
+    # tier-2 escalation anonymizer (Phase 5)
+    tessera/tessera-anonymizer.cpp
     # multimodal
     tessera/tessera-mm-imatrix.cpp
     tessera/tessera-mm-awq.cpp

@@ -102,6 +102,9 @@ compile_and_run policy      $T/test_policy.cpp      $T/tessera-policy.cpp -I ven
 # --- Self-improving capability loop (capability-eval + adapt; needs vendor) ---
 compile_and_run capability_loop $T/test_capability_loop.cpp $T/tessera-capability-eval.cpp $T/tessera-adapt.cpp -I vendor
 
+# --- Tier-2 anonymizer (needs vendor/nlohmann for the de-anonymization map) ---
+compile_and_run anonymizer    $T/test_anonymizer.cpp  $T/tessera-anonymizer.cpp -I vendor
+
 # --- common/tessera-debug ---
 compile_and_run sidecar_v3  $C/test_sidecar_v3.cpp  $C/tessera-sidecar-v3.cpp -I $C
 

@@ -115,6 +115,14 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
         }
         tessera_params.range_selection = val; return 2;
     }
+    if (arg == "--tessera-anonymize-level") {
+        if (!require_val("--tessera-anonymize-level")) return -1;
+        if (val != "light" && val != "balanced" && val != "aggressive") {
+            err = string_format("error: unknown value for --tessera-anonymize-level: '%s'\n", val.c_str());
+            return -1;
+        }
+        tessera_params.anonymize_level = val; return 2;
+    }
 
     // string-valued
     if (arg == "--tessera-imatrix")           { if (!require_val("--tessera-imatrix")) return -1;           tessera_params.imatrix          = val; return 2; }
@@ -131,6 +139,9 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
     if (arg == "--tessera-capability-out")  { if (!require_val("--tessera-capability-out")) return -1;  tessera_params.capability_out  = val; return 2; }
     if (arg == "--tessera-adapt")           { if (!require_val("--tessera-adapt")) return -1;           tessera_params.adapt_eval      = val; return 2; }
     if (arg == "--tessera-adapt-out")       { if (!require_val("--tessera-adapt-out")) return -1;       tessera_params.adapt_out       = val; return 2; }
+    if (arg == "--tessera-anonymize")       { if (!require_val("--tessera-anonymize")) return -1;       tessera_params.anonymize_in    = val; return 2; }
+    if (arg == "--tessera-anonymize-out")   { if (!require_val("--tessera-anonymize-out")) return -1;   tessera_params.anonymize_out   = val; return 2; }
+    if (arg == "--tessera-anonymize-map")   { if (!require_val("--tessera-anonymize-map")) return -1;   tessera_params.anonymize_map   = val; return 2; }
     if (arg == "--tessera-dequant-dir") {
         if (!require_val("--tessera-dequant-dir")) return -1;
         tessera_debug::set_dequant_dir(val); return 2;
@@ -4281,6 +4292,39 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
                     string_format("error: --tessera-adapt-epsilon must be >= 0, got %f\n", d));
             }
             tessera_params.adapt_epsilon = d;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-anonymize"}, "PATH",
+        "Tessera: anonymize the text payload at PATH (tier-2 escalation scrub), "
+        "print it to stdout, and exit without quantizing",
+        [](common_params &, const std::string & value) {
+            tessera_params.anonymize_in = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-anonymize-out"}, "PATH",
+        "Tessera: also write the anonymized text to PATH",
+        [](common_params &, const std::string & value) {
+            tessera_params.anonymize_out = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-anonymize-level"}, "light|balanced|aggressive",
+        "Tessera: anonymizer aggressiveness dial (default: balanced)",
+        [](common_params &, const std::string & value) {
+            if (value != "light" && value != "balanced" && value != "aggressive") {
+                throw std::invalid_argument(
+                    string_format("error: unknown value for --tessera-anonymize-level: '%s'\n", value.c_str()));
+            }
+            tessera_params.anonymize_level = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-anonymize-map"}, "PATH",
+        "Tessera: write the local de-anonymization map (pseudonym -> original) as JSON to PATH",
+        [](common_params &, const std::string & value) {
+            tessera_params.anonymize_map = value;
         }
     ));
     add_opt(common_arg(

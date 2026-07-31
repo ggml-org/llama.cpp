@@ -39,6 +39,11 @@ struct common_tessera_params {
     std::string adapt_out;
     bool        adapt_dry_run = false;
     double      adapt_epsilon = 0.02;
+    // tier-2 anonymizer: scrub a text payload then exit without quantizing
+    std::string anonymize_in;
+    std::string anonymize_out;
+    std::string anonymize_level = "balanced";
+    std::string anonymize_map;
 };
 
 const common_tessera_params & common_get_tessera_params();
