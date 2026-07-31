@@ -72,3 +72,21 @@ target_compile_features(${TARGET} PRIVATE cxx_std_17)
 if(LLAMA_TOOLS_INSTALL)
     install(TARGETS ${TARGET} RUNTIME)
 endif()
+
+# tessera-ffi: static library for the Tessera Studio xcframework.
+# Contains the real FFI entry points; links the full engine via
+# llama-quantize-impl. Built with BUILD_SHARED_LIBS=OFF by the
+# TesseraStudio/scripts/build-xcframework.sh script.
+
+set(TARGET tessera-ffi)
+
+add_library(${TARGET} STATIC
+    ${CMAKE_SOURCE_DIR}/TesseraStudio/Sources/CTesseraFFI/tessera_ffi.cpp
+)
+
+target_include_directories(${TARGET} PRIVATE
+    ${CMAKE_SOURCE_DIR}/TesseraStudio/Sources/CTesseraFFI
+)
+
+target_link_libraries(${TARGET} PUBLIC llama-quantize-impl)
+target_compile_features(${TARGET} PRIVATE cxx_std_17)
