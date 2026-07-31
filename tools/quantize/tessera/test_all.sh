@@ -105,6 +105,9 @@ compile_and_run capability_loop $T/test_capability_loop.cpp $T/tessera-capabilit
 # --- Tier-2 anonymizer (needs vendor/nlohmann for the de-anonymization map) ---
 compile_and_run anonymizer    $T/test_anonymizer.cpp  $T/tessera-anonymizer.cpp -I vendor
 
+# --- Text secret redactor (standalone; no vendor needed) ---
+compile_and_run scrub         $T/test_scrub.cpp       $T/tessera-scrub.cpp
+
 # --- common/tessera-debug ---
 compile_and_run sidecar_v3  $C/test_sidecar_v3.cpp  $C/tessera-sidecar-v3.cpp -I $C
 

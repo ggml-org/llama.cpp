@@ -38,6 +38,8 @@ add_library(${TARGET}
     tessera/tessera-adapt.cpp
     # tier-2 escalation anonymizer (Phase 5)
     tessera/tessera-anonymizer.cpp
+    # text secret redactor (tier-2 egress privacy, R4)
+    tessera/tessera-scrub.cpp
     # multimodal
     tessera/tessera-mm-imatrix.cpp
     tessera/tessera-mm-awq.cpp
