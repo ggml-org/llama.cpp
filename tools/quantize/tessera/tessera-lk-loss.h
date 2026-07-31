@@ -61,3 +61,33 @@ double ts_lk_loss(const float * p, const float * q, int n_vocab);
 // Per-token contribution to alpha: min(p[x], q[x]).
 // Useful for diagnostics: which tokens drive acceptance vs rejection.
 double ts_lk_token_contribution(float p_x, float q_x);
+
+//
+// Dense reconstruction from top-k telemetry.
+//
+// The llama.spec_calib.v2 traces store only the top-k entries of each
+// distribution, but GGML_OPT_LOSS_TYPE_LK consumes a dense verifier
+// distribution as its label tensor. These functions densify a top-k record:
+// the top-k probabilities are placed at their token slots and the residual
+// mass (1 - sum(probs)) is spread uniformly over the remaining vocabulary.
+// The high-probability support is preserved exactly; only the long tail is
+// approximated, which is where negligible acceptance mass lives for k >= 8.
+//
+
+// Reconstruct a single dense distribution from its top-k entries.
+// out_dense must hold n_vocab floats. The result is non-negative and sums to
+// 1. Returns 0 on success, -1 on invalid input (bad k, out-of-range or
+// negative token id, negative probability).
+int ts_lk_dense_from_topk(const int32_t * tokens, const float * probs, int k,
+                          int n_vocab, float * out_dense);
+
+// Build a dense label matrix of shape [n_vocab, n_positions] laid out as
+// out_dense[pos*n_vocab + tok] - the layout of the GGML_OPT_LOSS_TYPE_LK
+// labels tensor (ne[0] = n_vocab contiguous, ne[1] = n_positions). Each
+// position's top-k verifier record is densified independently. Returns 0 on
+// success, -1 on the first position that fails to densify.
+int ts_lk_dense_labels_batch(const int32_t * const * tokens,
+                             const float * const * probs,
+                             const int * k,
+                             int n_positions, int n_vocab,
+                             float * out_dense);

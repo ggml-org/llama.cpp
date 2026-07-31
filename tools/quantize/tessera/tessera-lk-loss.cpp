@@ -82,3 +82,53 @@ double ts_lk_acceptance_rate_batch(const int32_t * const * p_tokens,
     }
     return sum / n_positions;
 }
+
+int ts_lk_dense_from_topk(const int32_t * tokens, const float * probs, int k,
+                          int n_vocab, float * out_dense) {
+    if (n_vocab <= 0 || out_dense == nullptr) return -1;
+    if (k < 0 || k > n_vocab) return -1;
+    if (k > 0 && (tokens == nullptr || probs == nullptr)) return -1;
+
+    for (int i = 0; i < n_vocab; ++i) out_dense[i] = 0.0f;
+
+    // Place the top-k probabilities, tracking the covered mass and the number
+    // of distinct token slots filled (a token may repeat in the top-k list).
+    std::vector<char> filled(n_vocab, 0);
+    double mass = 0.0;
+    int n_distinct = 0;
+    for (int i = 0; i < k; ++i) {
+        const int32_t tok = tokens[i];
+        if (tok < 0 || tok >= n_vocab) return -1;
+        const float p = probs[i];
+        if (p < 0.0f) return -1;
+        if (!filled[tok]) { filled[tok] = 1; n_distinct++; }
+        out_dense[tok] += p;
+        mass += (double)p;
+    }
+
+    // Spread the residual mass uniformly over the unfilled slots.
+    const double residual = std::max(0.0, 1.0 - mass);
+    const int n_rest = n_vocab - n_distinct;
+    if (n_rest > 0 && residual > 0.0) {
+        const float per = (float)(residual / n_rest);
+        for (int i = 0; i < n_vocab; ++i) {
+            if (!filled[i]) out_dense[i] = per;
+        }
+    }
+    return 0;
+}
+
+int ts_lk_dense_labels_batch(const int32_t * const * tokens,
+                             const float * const * probs,
+                             const int * k,
+                             int n_positions, int n_vocab,
+                             float * out_dense) {
+    if (n_positions < 0) return -1;
+    for (int pos = 0; pos < n_positions; ++pos) {
+        const int rc = ts_lk_dense_from_topk(
+            tokens[pos], probs[pos], k[pos], n_vocab,
+            out_dense + (size_t)pos * n_vocab);
+        if (rc != 0) return rc;
+    }
+    return 0;
+}
