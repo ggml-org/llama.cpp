@@ -111,6 +111,7 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "HunYuanVLForConditionalGeneration": "hunyuan",
     "HYV3ForCausalLM": "hunyuan",
     "IQuestCoderForCausalLM": "llama",
+    "InstellaMoEForCausalLM": "deepseek",
     "InternLM2ForCausalLM": "internlm",
     "InternLM3ForCausalLM": "internlm",
     "JAISLMHeadModel": "jais",

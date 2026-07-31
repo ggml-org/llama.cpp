@@ -443,6 +443,31 @@ class DeepseekV2Model(TextModel):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
+@ModelBase.register("InstellaMoEForCausalLM")
+class InstellaMoEModel(DeepseekV2Model):
+    model_arch = gguf.MODEL_ARCH.INSTELLA_MOE
+
+    def set_gguf_parameters(self):
+        hparams = self.hparams
+
+        # the graph implements the FarSkip-Collective dataflow unconditionally, so reject
+        # any checkpoint that only enables it on a subset of the layers
+        if not hparams.get("farskip", False):
+            raise NotImplementedError("Instella-MoE without FarSkip is not supported")
+        if hparams.get("farskip_start_idx", 0) != 0 or hparams.get("farskip_end_idx", 1e4) < hparams["num_hidden_layers"] - 1:
+            raise NotImplementedError("Instella-MoE with a partial FarSkip layer range is not supported")
+        if hparams.get("attn_only_farskip", False) or hparams.get("mlp_only_farskip", False):
+            raise NotImplementedError("Instella-MoE with attn_only_farskip/mlp_only_farskip is not supported")
+        if not hparams.get("gated_attention", False):
+            raise NotImplementedError("Instella-MoE without gated attention is not supported")
+        if hparams.get("q_lora_rank") is not None:
+            raise NotImplementedError("Instella-MoE with a low-rank query projection is not supported")
+        if not hparams.get("rope_interleave", True):
+            raise NotImplementedError("Instella-MoE with non-interleaved RoPE is not supported")
+
+        super().set_gguf_parameters()
+
+
 @ModelBase.register("DeepseekV32ForCausalLM")
 class DeepseekV32Model(DeepseekV2Model):
     model_arch = gguf.MODEL_ARCH.DEEPSEEK32

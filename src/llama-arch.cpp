@@ -144,6 +144,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_TALKIE,           "talkie"           },
     { LLM_ARCH_MELLUM,           "mellum"           },
     { LLM_ARCH_NANBEIGE,         "nanbeige"         },
+    { LLM_ARCH_INSTELLA_MOE,     "instella-moe"     },
     { LLM_ARCH_UNKNOWN,          "(unknown)"        },
 };
 
