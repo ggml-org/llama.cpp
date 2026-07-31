@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: MIT
 //
 #include <arm_neon.h>
-#include <assert.h>
-#include <stdio.h>
-#include <stdlib.h>
+#include <cassert>
+#include <cstdio>
+#include <cstdlib>
 #include <atomic>
 #include <cfloat>
 #include <cctype>
@@ -41,7 +41,7 @@
 #include "ggml-cpu.h"
 #include "ggml-cpu-impl.h"
 #include "ggml-impl.h"
-#include "ggml-aarch64.h"
+#include "ggml-feats.h"
 #include "ggml-backend-impl.h"
 #include "ggml-threading.h"
 #include "traits.h"
