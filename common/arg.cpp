@@ -144,6 +144,9 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
     if (arg == "--tessera-anonymize-map")   { if (!require_val("--tessera-anonymize-map")) return -1;   tessera_params.anonymize_map   = val; return 2; }
     if (arg == "--tessera-throughput")      { if (!require_val("--tessera-throughput")) return -1;      tessera_params.throughput_workload = val; return 2; }
     if (arg == "--tessera-throughput-out")  { if (!require_val("--tessera-throughput-out")) return -1;  tessera_params.throughput_out  = val; return 2; }
+    if (arg == "--tessera-dataset")         { if (!require_val("--tessera-dataset")) return -1;         tessera_params.dataset_in      = val; return 2; }
+    if (arg == "--tessera-dataset-out")     { if (!require_val("--tessera-dataset-out")) return -1;     tessera_params.dataset_out     = val; return 2; }
+    if (arg == "--tessera-dataset-mode")    { if (!require_val("--tessera-dataset-mode")) return -1;    tessera_params.dataset_mode    = val; return 2; }
     if (arg == "--tessera-dequant-dir") {
         if (!require_val("--tessera-dequant-dir")) return -1;
         tessera_debug::set_dequant_dir(val); return 2;
@@ -4342,6 +4345,31 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "Tessera: also write the throughput receipt JSON to PATH",
         [](common_params &, const std::string & value) {
             tessera_params.throughput_out = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-dataset"}, "PATH",
+        "Tessera: prepare drafter training data from llama.spec_calib.v2 JSONL\n"
+        "at PATH, write the result, then exit without quantizing",
+        [](common_params &, const std::string & value) {
+            tessera_params.dataset_in = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-dataset-out"}, "PATH",
+        "Tessera: dataset output path (default: tessera-dataset-out.txt)",
+        [](common_params &, const std::string & value) {
+            tessera_params.dataset_out = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-dataset-mode"}, "text|pairs|lk",
+        "Tessera: dataset output mode (default: text)\n"
+        "text: accepted token IDs, one sequence per line\n"
+        "pairs: rejection-sampling JSONL {context,drafted,accepted}\n"
+        "lk: LK loss JSONL {position,p_tokens,p_probs,q_tokens,q_probs,accepted}",
+        [](common_params &, const std::string & value) {
+            tessera_params.dataset_mode = value;
         }
     ));
     add_opt(common_arg(

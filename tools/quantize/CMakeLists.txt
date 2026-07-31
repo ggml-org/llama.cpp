@@ -42,6 +42,9 @@ add_library(${TARGET}
     tessera/tessera-scrub.cpp
     # north-star batched-throughput workload harness
     tessera/tessera-throughput.cpp
+    # drafter training pipeline: LK loss + dataset preparation
+    tessera/tessera-lk-loss.cpp
+    tessera/tessera-dataset.cpp
     # multimodal
     tessera/tessera-mm-imatrix.cpp
     tessera/tessera-mm-awq.cpp

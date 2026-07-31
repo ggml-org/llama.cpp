@@ -10,6 +10,7 @@
 #include "tessera/tessera-adapt.h"
 #include "tessera/tessera-anonymizer.h"
 #include "tessera/tessera-throughput.h"
+#include "tessera/tessera-dataset.h"
 
 #include "gguf.h"
 
@@ -573,6 +574,31 @@ static int ts_cli_throughput(const common_tessera_params & tp) {
     return 0;
 }
 
+// --tessera-dataset: prepare drafter training data from spec_calib.v2 JSONL
+// and exit. No model needed. Returns a process exit code.
+static int ts_cli_dataset(const common_tessera_params & tp) {
+    ts_dataset_params dp;
+    ts_dataset_default_params(&dp);
+    snprintf(dp.input_path,  sizeof(dp.input_path),  "%s", tp.dataset_in.c_str());
+    const std::string out = tp.dataset_out.empty()
+        ? std::string("tessera-dataset-out.txt")
+        : tp.dataset_out;
+    snprintf(dp.output_path, sizeof(dp.output_path), "%s", out.c_str());
+    if (ts_dataset_mode_from_string(tp.dataset_mode.c_str(), &dp.mode) != 0) {
+        fprintf(stderr, "error: dataset: unknown mode '%s' (use text|pairs|lk)\n",
+                tp.dataset_mode.c_str());
+        return 1;
+    }
+    int n_records = 0;
+    std::string err;
+    if (ts_dataset_run(&dp, &n_records, &err) != 0) {
+        fprintf(stderr, "error: dataset: %s\n", err.c_str());
+        return 1;
+    }
+    printf("dataset: %d records -> %s (mode=%s)\n", n_records, out.c_str(), tp.dataset_mode.c_str());
+    return 0;
+}
+
 int llama_quantize(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
     if (argc < 3) {
@@ -682,6 +708,9 @@ int llama_quantize(int argc, char ** argv) {
         }
         if (!tp.throughput_workload.empty()) {
             return ts_cli_throughput(tp);
+        }
+        if (!tp.dataset_in.empty()) {
+            return ts_cli_dataset(tp);
         }
     }
 

@@ -111,6 +111,12 @@ compile_and_run scrub         $T/test_scrub.cpp       $T/tessera-scrub.cpp
 # --- North-star throughput harness (needs vendor/nlohmann for workload+receipt JSON) ---
 compile_and_run throughput    $T/test_throughput.cpp  $T/tessera-throughput.cpp -I vendor
 
+# --- Drafter training pipeline: LK loss (pure math, no vendor) ---
+compile_and_run lk_loss       $T/test_lk_loss.cpp     $T/tessera-lk-loss.cpp
+
+# --- Drafter training pipeline: dataset prep (needs vendor/nlohmann) ---
+compile_and_run dataset       $T/test_dataset.cpp     $T/tessera-dataset.cpp -I vendor
+
 # --- common/tessera-debug ---
 compile_and_run sidecar_v3  $C/test_sidecar_v3.cpp  $C/tessera-sidecar-v3.cpp -I $C
 
