@@ -463,6 +463,13 @@ struct mtmd_context {
                     img_end = "<|vision_end|>";
                     image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
                 } break;
+            case PROJECTOR_TYPE_MINIMAX_M3:
+                {
+                    // ]<]start of image[>[ ... (image embeddings) ... ]<]end of image[>[
+                    img_beg = "]<]start of image[>[";
+                    img_end = "]<]end of image[>[";
+                    image_preproc = std::make_unique<mtmd_image_preprocessor_dyn_size>(ctx_v);
+                } break;
             case PROJECTOR_TYPE_YOUTUVL:
                 {
                     // <|vision_start|> ... (image embeddings) ... <|vision_end|>
@@ -717,11 +724,21 @@ struct mtmd_context {
                     aud_end = "<audio|>";
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_gemma4a>(ctx_a);
                 } break;
+            case PROJECTOR_TYPE_PARAKEET:
+                {
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_parakeet>(ctx_a);
+                } break;
             case PROJECTOR_TYPE_GEMMA4UA:
                 {
                     aud_beg = "<|audio>";
                     aud_end = "<audio|>";
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_gemma4ua>(ctx_a);
+                } break;
+            case PROJECTOR_TYPE_MIMO_AUDIO:
+                {
+                    aud_beg = "<|mimo_audio_start|>";
+                    aud_end = "<|mimo_audio_end|>";
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_mimo_audio>(ctx_a);
                 } break;
             default:
                 throw std::runtime_error(string_format("%s: unexpected audio projector type %d\n", __func__, proj));

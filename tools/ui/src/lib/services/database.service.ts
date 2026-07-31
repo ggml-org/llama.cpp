@@ -31,14 +31,19 @@ export class DatabaseService {
 	 * Creates a new conversation.
 	 *
 	 * @param name - Name of the conversation
+	 * @param fields - Optional extra fields (e.g. reasoningEffort)
 	 * @returns The created conversation
 	 */
-	static async createConversation(name: string): Promise<DatabaseConversation> {
+	static async createConversation(
+		name: string,
+		fields?: Partial<Omit<DatabaseConversation, 'id' | 'name' | 'lastModified'>>
+	): Promise<DatabaseConversation> {
 		const conversation: DatabaseConversation = {
 			id: uuid(),
 			name,
 			lastModified: Date.now(),
-			currNode: ''
+			currNode: '',
+			...fields
 		};
 
 		await db[IDXDB_TABLES.conversations].add(conversation);
@@ -137,7 +142,7 @@ export class DatabaseService {
 	 * @param systemPrompt - The system prompt content (must be non-empty)
 	 * @param parentId - Parent message ID (typically the root message)
 	 * @returns The created system message
-	 * @throws Error if systemPrompt is empty
+	 * @throws Error if systemPrompt is empty or the parent message does not exist
 	 */
 	static async createSystemMessage(
 		convId: string,
@@ -149,27 +154,30 @@ export class DatabaseService {
 			throw new Error('Cannot create system message with empty content');
 		}
 
-		const systemMessage: DatabaseMessage = {
-			id: uuid(),
-			convId,
-			type: MessageRole.SYSTEM,
-			timestamp: Date.now(),
-			role: MessageRole.SYSTEM,
-			content: trimmedPrompt,
-			parent: parentId,
-			children: []
-		};
+		return await db.transaction('rw', db[IDXDB_TABLES.messages], async () => {
+			const parentMessage = await db[IDXDB_TABLES.messages].get(parentId);
+			if (!parentMessage) {
+				throw new Error(`Parent message ${parentId} not found`);
+			}
 
-		await db[IDXDB_TABLES.messages].add(systemMessage);
+			const systemMessage: DatabaseMessage = {
+				id: uuid(),
+				convId,
+				type: MessageRole.SYSTEM,
+				timestamp: Date.now(),
+				role: MessageRole.SYSTEM,
+				content: trimmedPrompt,
+				parent: parentId,
+				children: []
+			};
 
-		const parentMessage = await db[IDXDB_TABLES.messages].get(parentId);
-		if (parentMessage) {
+			await db[IDXDB_TABLES.messages].add(systemMessage);
 			await db[IDXDB_TABLES.messages].update(parentId, {
 				children: [...parentMessage.children, systemMessage.id]
 			});
-		}
 
-		return systemMessage;
+			return systemMessage;
+		});
 	}
 
 	/**
@@ -442,7 +450,8 @@ export class DatabaseService {
 	}
 
 	/**
-	 * Updates a conversation.
+	 * Updates a conversation. `lastModified` is never stamped implicitly;
+	 * pass it in `updates` to bump the conversation in recency ordering.
 	 *
 	 * @param id - Conversation ID
 	 * @param updates - Partial updates to apply
@@ -452,10 +461,7 @@ export class DatabaseService {
 		id: string,
 		updates: Partial<Omit<DatabaseConversation, 'id'>>
 	): Promise<void> {
-		await db[IDXDB_TABLES.conversations].update(id, {
-			...updates,
-			lastModified: Date.now()
-		});
+		await db[IDXDB_TABLES.conversations].update(id, updates);
 	}
 
 	/**
@@ -473,7 +479,7 @@ export class DatabaseService {
 	 * @returns The new pinned status
 	 */
 	static async toggleConversationPin(id: string): Promise<boolean> {
-		const conversation = await db.conversations.get(id);
+		const conversation = await db[IDXDB_TABLES.conversations].get(id);
 		if (!conversation) {
 			throw new Error(`Conversation ${id} not found`);
 		}
@@ -497,7 +503,6 @@ export class DatabaseService {
 		const result = new Map<string, boolean>();
 		if (cleanIds.length === 0) return result;
 
-		const now = Date.now();
 		await db.transaction('rw', db[IDXDB_TABLES.conversations], async () => {
 			const convs = await db[IDXDB_TABLES.conversations].bulkGet(cleanIds);
 			const updates: DatabaseConversation[] = [];
@@ -505,7 +510,7 @@ export class DatabaseService {
 				const conv = convs[i];
 				if (!conv) continue;
 				const newPinned = !conv.pinned;
-				updates.push({ ...conv, pinned: newPinned, lastModified: now });
+				updates.push({ ...conv, pinned: newPinned });
 				result.set(cleanIds[i], newPinned);
 			}
 			if (updates.length === 0) return;
@@ -554,12 +559,13 @@ export class DatabaseService {
 	 * Skips conversations that already exist.
 	 *
 	 * @param data - Array of { conv, messages } objects
+	 * @returns The conversations written to the database and the ones skipped
 	 */
 	static async importConversations(
 		data: { conv: DatabaseConversation; messages: DatabaseMessage[] }[]
-	): Promise<{ imported: number; skipped: number }> {
-		let importedCount = 0;
-		let skippedCount = 0;
+	): Promise<{ imported: DatabaseConversation[]; skipped: DatabaseConversation[] }> {
+		const imported: DatabaseConversation[] = [];
+		const skipped: DatabaseConversation[] = [];
 
 		return await db.transaction(
 			'rw',
@@ -570,8 +576,7 @@ export class DatabaseService {
 
 					const existing = await db[IDXDB_TABLES.conversations].get(conv.id);
 					if (existing) {
-						console.warn(`Conversation "${conv.name}" already exists, skipping...`);
-						skippedCount++;
+						skipped.push(conv);
 						continue;
 					}
 
@@ -580,10 +585,10 @@ export class DatabaseService {
 						await db[IDXDB_TABLES.messages].put(msg);
 					}
 
-					importedCount++;
+					imported.push(conv);
 				}
 
-				return { imported: importedCount, skipped: skippedCount };
+				return { imported, skipped };
 			}
 		);
 	}

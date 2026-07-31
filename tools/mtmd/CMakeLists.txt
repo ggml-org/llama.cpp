@@ -47,9 +47,11 @@ add_library(mtmd
             models/paddleocr.cpp
             models/pixtral.cpp
             models/qwen2vl.cpp
+            models/minimax-m3.cpp
             models/qwen3vl.cpp
             models/mimovl.cpp
             models/qwen3a.cpp
+            models/mimo-audio.cpp
             models/step3vl.cpp
             models/siglip.cpp
             models/whisper-enc.cpp
@@ -58,6 +60,7 @@ add_library(mtmd
             models/mobilenetv5.cpp
             models/youtuvl.cpp
             models/yasa2.cpp
+            models/parakeet.cpp
             )
 
 set_target_properties(mtmd PROPERTIES
