@@ -2,6 +2,7 @@
 	import { goto } from '$app/navigation';
 	import { getChatActionsContext, setMessageEditContext } from '$lib/contexts';
 	import { chatStore, pendingEditMessageId } from '$lib/stores/chat.svelte';
+	import { isMobile } from '$lib/stores/viewport.svelte';
 	import { conversationsStore } from '$lib/stores/conversations.svelte';
 	import { DatabaseService } from '$lib/services/database.service';
 	import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants';
@@ -46,7 +47,14 @@
 		assistantMessages: number;
 		messageTypes: string[];
 	} | null>(null);
-	let editedContent = $derived(message.content);
+	// The system message placeholder must never surface as editable content; keeping
+	// it in the derived (not just in handleEdit) guards against prop invalidation
+	// reverting the override while editing
+	let editedContent = $derived(
+		message.role === MessageRole.SYSTEM && message.content === SYSTEM_MESSAGE_PLACEHOLDER
+			? ''
+			: message.content
+	);
 
 	let rawEditContent = $derived.by(() => {
 		if (message.role !== MessageRole.ASSISTANT) return undefined;
@@ -265,6 +273,12 @@
 		chatActions.navigateToSibling(siblingId);
 	}
 
+	// After the system message flow ends, hand focus to the main chat form
+	function focusMainChatForm() {
+		if (isMobile.current) return;
+		document.querySelector<HTMLTextAreaElement>('.chat-screen-form-wrapper textarea')?.focus();
+	}
+
 	async function handleSaveEdit() {
 		if (message.role === MessageRole.SYSTEM) {
 			// System messages: update in place without branching
@@ -276,6 +290,8 @@
 				isEditing = false;
 				if (conversationDeleted) {
 					goto(ROUTES.START);
+				} else {
+					focusMainChatForm();
 				}
 				return;
 			}
@@ -285,6 +301,7 @@
 			if (index !== -1) {
 				conversationsStore.updateMessageAtIndex(index, { content: newContent });
 			}
+			focusMainChatForm();
 		} else if (message.role === MessageRole.USER) {
 			const finalExtras = await getMergedExtras();
 			chatActions.editWithBranching(message, editedContent.trim(), finalExtras);
