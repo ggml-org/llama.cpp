@@ -30,11 +30,11 @@ import type { McpServerOverride } from '$lib/types/database';
 import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate';
 import {
 	MessageRole,
-	HtmlInputType,
 	FileExtensionText,
 	MimeTypeText,
 	MimeTypeApplication,
-	ReasoningEffort
+	ReasoningEffort,
+	SessionRecordType
 } from '$lib/enums';
 import {
 	ISO_DATE_TIME_SEPARATOR,
@@ -47,7 +47,10 @@ import {
 	ISO_TIME_SEPARATOR_REPLACEMENT,
 	NON_ALPHANUMERIC_REGEX,
 	MULTIPLE_UNDERSCORE_REGEX,
-	REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY
+	REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY,
+	NEWLINE,
+	SESSION_HARNESS,
+	ZIP_MAGIC
 } from '$lib/constants';
 
 import { ROUTES } from '$lib/constants/routes';
@@ -80,25 +83,17 @@ class ConversationsStore {
 	/** Whether the store has been initialized */
 	isInitialized = $state(false);
 
-	/** Global (non-conversation-specific) thinking toggle default, derived from reasoning effort */
-	pendingThinkingEnabled = $state(false);
-
 	/** Global (non-conversation-specific) reasoning effort default */
-	pendingReasoningEffort = $state<ReasoningEffort | ReasoningEffort.OFF>(
-		ConversationsStore.loadReasoningEffortDefault()
-	);
+	pendingReasoningEffort = $state<ReasoningEffort>(ConversationsStore.loadReasoningEffortDefault());
 
-	/** Last non-off reasoning effort, restored when re-enabling thinking globally */
-	private lastNonOffEffort: ReasoningEffort | null = null;
-
-	/** Load reasoning effort default from localStorage */
-	private static loadReasoningEffortDefault(): ReasoningEffort | ReasoningEffort.OFF {
-		if (typeof globalThis.localStorage === 'undefined') return ReasoningEffort.OFF;
+	/** Load reasoning effort default from localStorage, DEFAULT defers to the server */
+	private static loadReasoningEffortDefault(): ReasoningEffort {
+		if (typeof globalThis.localStorage === 'undefined') return ReasoningEffort.DEFAULT;
 		try {
 			const raw = localStorage.getItem(REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY);
-			return (raw as ReasoningEffort | ReasoningEffort.OFF) || ReasoningEffort.OFF;
+			return (raw as ReasoningEffort) || ReasoningEffort.DEFAULT;
 		} catch {
-			return ReasoningEffort.OFF;
+			return ReasoningEffort.DEFAULT;
 		}
 	}
 
@@ -116,6 +111,9 @@ class ConversationsStore {
 		| ((messageId: string, updates: Partial<DatabaseMessage>) => void)
 		| null = null;
 
+	/** In-flight init run; shared by concurrent callers, reset on failure to allow retry */
+	private initPromise: Promise<void> | null = null;
+
 	/**
 	 *
 	 *
@@ -126,19 +124,25 @@ class ConversationsStore {
 
 	/**
 	 * Initialize the store by loading conversations from database.
-	 * Must be called once after app startup.
+	 * Safe to call multiple times: concurrent callers share a single run,
+	 * and a failed run can be retried by calling again.
 	 */
-	async init(): Promise<void> {
-		if (!browser) return;
-		if (this.isInitialized) return;
+	init(): Promise<void> {
+		if (!browser) return Promise.resolve();
+		if (this.initPromise) return this.initPromise;
 
-		try {
-			await MigrationService.runAllMigrations();
-			await this.loadConversations();
-			this.isInitialized = true;
-		} catch (error) {
-			console.error('Failed to initialize conversations:', error);
-		}
+		this.initPromise = (async () => {
+			try {
+				await MigrationService.runAllMigrations();
+				await this.loadConversations();
+				this.isInitialized = true;
+			} catch (error) {
+				console.error('Failed to initialize conversations:', error);
+				this.initPromise = null;
+			}
+		})();
+
+		return this.initPromise;
 	}
 
 	/**
@@ -177,8 +181,21 @@ class ConversationsStore {
 	 * Updates a message at a specific index in active messages
 	 */
 	updateMessageAtIndex(index: number, updates: Partial<DatabaseMessage>): void {
-		if (index !== -1 && this.activeMessages[index]) {
-			this.activeMessages[index] = { ...this.activeMessages[index], ...updates };
+		const message = index === -1 ? undefined : this.activeMessages[index];
+
+		if (!message) return;
+
+		// Assign field by field rather than replacing the object. Replacing it
+		// changes the array slot, which invalidates every consumer that merely
+		// walks the list - notably ChatMessages.displayMessages, which rebuilds
+		// entries for every message in the conversation. Deep $state proxies make
+		// per-field writes fine-grained, so only readers of the changed field wake.
+		const target = message as unknown as Record<string, unknown>;
+
+		for (const [key, value] of Object.entries(updates)) {
+			if (target[key] !== value) {
+				target[key] = value;
+			}
 		}
 	}
 
@@ -229,23 +246,12 @@ class ConversationsStore {
 	 */
 	async createConversation(name?: string): Promise<string> {
 		const conversationName = name || `Chat ${new Date().toLocaleString()}`;
-		const conversation = await DatabaseService.createConversation(conversationName);
 
 		// No MCP override list is seeded: getAllMcpServerOverrides resolves
 		// servers without a per-conversation override to `mcpServers[i].enabled`,
 		// and only explicit toggles are stored on the conversation.
-
-		// Inherit global thinking/reasoning defaults into the new conversation
-		const thinkingEnabled = this.getThinkingEnabled();
-		conversation.thinkingEnabled = thinkingEnabled;
-		conversation.reasoningEffort =
-			this.pendingReasoningEffort === ReasoningEffort.OFF ? undefined : this.pendingReasoningEffort;
-		await DatabaseService.updateConversation(conversation.id, {
-			thinkingEnabled,
-			reasoningEffort:
-				this.pendingReasoningEffort === ReasoningEffort.OFF
-					? undefined
-					: this.pendingReasoningEffort
+		const conversation = await DatabaseService.createConversation(conversationName, {
+			reasoningEffort: this.pendingReasoningEffort
 		});
 
 		this.conversations = [conversation, ...this.conversations];
@@ -357,10 +363,7 @@ class ConversationsStore {
 	async deleteAll(): Promise<void> {
 		try {
 			const allConversations = await DatabaseService.getAllConversations();
-
-			for (const conv of allConversations) {
-				await DatabaseService.deleteConversation(conv.id);
-			}
+			await DatabaseService.bulkDeleteConversations(allConversations.map((c) => c.id));
 
 			this.clearActiveConversation();
 			this.conversations = [];
@@ -411,7 +414,9 @@ class ConversationsStore {
 			}
 
 			toast.success(
-				convIds.length === 1 ? 'Conversation deleted' : `${convIds.length} conversations deleted`
+				idsToRemove.size === 1
+					? 'Conversation deleted'
+					: `${idsToRemove.size} conversations deleted`
 			);
 		} catch (error) {
 			console.error('Failed to bulk delete conversations:', error);
@@ -442,7 +447,6 @@ class ConversationsStore {
 				const newPinned = updates.get(this.conversations[i].id);
 				if (newPinned !== undefined) this.conversations[i].pinned = newPinned;
 			}
-			this.conversations = [...this.conversations];
 
 			toast.success(
 				convIds.length === 1
@@ -551,7 +555,6 @@ class ConversationsStore {
 
 			if (convIndex !== -1) {
 				this.conversations[convIndex].name = name;
-				this.conversations = [...this.conversations];
 			}
 
 			if (this.activeConversation?.id === convId) {
@@ -575,7 +578,6 @@ class ConversationsStore {
 
 			if (convIndex !== -1) {
 				this.conversations[convIndex].pinned = newPinnedState;
-				this.conversations = [...this.conversations];
 			}
 
 			if (this.activeConversation?.id === convId) {
@@ -590,18 +592,33 @@ class ConversationsStore {
 	}
 
 	/**
-	 * Updates conversation lastModified timestamp and moves it to top of list
+	 * Marks a conversation as recently active: stamps lastModified (persisted)
+	 * and moves it to the top of the list. Only message-activity flows call
+	 * this; metadata updates (rename, pin, settings) do not.
+	 *
+	 * @param convId - Conversation that produced the activity, defaults to the active one
 	 */
-	updateConversationTimestamp(): void {
-		if (!this.activeConversation) return;
+	updateConversationTimestamp(convId?: string): void {
+		const targetId = convId ?? this.activeConversation?.id;
+		if (!targetId) return;
 
-		const chatIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
+		const now = Date.now();
+
+		const chatIndex = this.conversations.findIndex((c) => c.id === targetId);
 
 		if (chatIndex !== -1) {
-			this.conversations[chatIndex].lastModified = Date.now();
+			this.conversations[chatIndex].lastModified = now;
 			const updatedConv = this.conversations.splice(chatIndex, 1)[0];
 			this.conversations = [updatedConv, ...this.conversations];
 		}
+
+		if (this.activeConversation?.id === targetId) {
+			this.activeConversation = { ...this.activeConversation, lastModified: now };
+		}
+
+		DatabaseService.updateConversation(targetId, { lastModified: now }).catch((error) =>
+			console.error('Failed to update conversation timestamp:', error)
+		);
 	}
 
 	/**
@@ -772,7 +789,6 @@ class ConversationsStore {
 		if (convIndex !== -1) {
 			this.conversations[convIndex].mcpServerOverrides =
 				newOverrides.length > 0 ? newOverrides : undefined;
-			this.conversations = [...this.conversations];
 		}
 	}
 
@@ -794,62 +810,20 @@ class ConversationsStore {
 	}
 
 	/**
-	 * Gets the effective thinking-enabled state for the active conversation.
-	 * Returns the conversation override if set, otherwise the global default.
-	 */
-	getThinkingEnabled(): boolean {
-		if (this.activeConversation) {
-			if (this.activeConversation.thinkingEnabled !== undefined) {
-				return this.activeConversation.thinkingEnabled;
-			}
-		}
-		return this.getReasoningEffort() !== ReasoningEffort.OFF;
-	}
-
-	/**
-	 * Sets the thinking-enabled state for the active conversation.
-	 * If no conversation exists, stores the global default.
-	 * @param enabled - The enabled state
-	 */
-	async setThinkingEnabled(enabled: boolean): Promise<void> {
-		if (!this.activeConversation) {
-			if (enabled) {
-				const effort = this.lastNonOffEffort ?? ReasoningEffort.LOW;
-				this.pendingReasoningEffort = effort;
-				this.saveReasoningEffortDefaults();
-			} else {
-				if (this.pendingReasoningEffort !== ReasoningEffort.OFF) {
-					this.lastNonOffEffort = this.pendingReasoningEffort;
-				}
-				this.pendingReasoningEffort = ReasoningEffort.OFF;
-				this.saveReasoningEffortDefaults();
-			}
-			return;
-		}
-
-		this.activeConversation = {
-			...this.activeConversation,
-			thinkingEnabled: enabled
-		};
-
-		await DatabaseService.updateConversation(this.activeConversation.id, {
-			thinkingEnabled: enabled
-		});
-
-		const convIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
-		if (convIndex !== -1) {
-			this.conversations[convIndex].thinkingEnabled = enabled;
-			this.conversations = [...this.conversations];
-		}
-	}
-
-	/**
 	 * Gets the effective reasoning effort for the active conversation.
 	 * Returns the conversation override if set, otherwise the global default.
+	 * DEFAULT means no override is sent and the server decides.
 	 */
-	getReasoningEffort(): ReasoningEffort | ReasoningEffort.OFF {
+	getReasoningEffort(): ReasoningEffort {
 		if (this.activeConversation) {
-			return this.activeConversation.reasoningEffort ?? this.pendingReasoningEffort;
+			if (this.activeConversation.reasoningEffort !== undefined) {
+				return this.activeConversation.reasoningEffort;
+			}
+			// conversations created before the tri-state store an explicit
+			// opt-out only as thinkingEnabled = false
+			if (this.activeConversation.thinkingEnabled === false) {
+				return ReasoningEffort.OFF;
+			}
 		}
 		return this.pendingReasoningEffort;
 	}
@@ -857,7 +831,7 @@ class ConversationsStore {
 	/**
 	 * Sets the reasoning effort for the active conversation.
 	 * If no conversation exists, stores the global default.
-	 * @param effort - The effort level ('low' | 'medium' | 'high' | 'max')
+	 * @param effort - The effort level ('default' | 'off' | 'low' | 'medium' | 'high' | 'max')
 	 */
 	async setReasoningEffort(effort: ReasoningEffort): Promise<void> {
 		if (!this.activeConversation) {
@@ -878,7 +852,6 @@ class ConversationsStore {
 		const convIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
 		if (convIndex !== -1) {
 			this.conversations[convIndex].reasoningEffort = effort;
-			this.conversations = [...this.conversations];
 		}
 	}
 
@@ -958,30 +931,35 @@ class ConversationsStore {
 
 	/**
 	 * Serializes a session (a conversation with its messages) as JSONL.
-	 * The first line is the session header (a `type: 'session'` record carrying the
-	 * conversation properties); each subsequent line is a single message.
+	 * The first line is the session header (a `SessionRecordType.SESSION` record
+	 * carrying the conversation properties); each subsequent line is a single message.
 	 * @param data - The exported conversation payload
 	 * @returns The JSONL string (one record per line)
 	 */
 	serializeSessionToJsonl(data: ExportedConversation): string {
 		const { conv, messages } = data;
 
-		const sessionLine = JSON.stringify({ type: 'session', harness: 'llama.app', ...conv });
+		const sessionLine = JSON.stringify({
+			type: SessionRecordType.SESSION,
+			harness: SESSION_HARNESS,
+			...conv
+		});
 		const messageLines = messages.map((message: DatabaseMessage) => {
 			// `toolCalls` is stored as a JSON string; drop it when empty, otherwise parse it.
 			const { toolCalls, ...rest } = message;
 			const normalized = toolCalls ? { ...rest, toolCalls: JSON.parse(toolCalls) } : rest;
 
-			return JSON.stringify({ type: 'message', message: normalized });
+			return JSON.stringify({ type: SessionRecordType.MESSAGE, message: normalized });
 		});
 
-		return [sessionLine, ...messageLines].join('\n');
+		return [sessionLine, ...messageLines].join(NEWLINE);
 	}
 
 	/**
 	 * Parses the JSONL session format produced by {@link serializeSessionToJsonl}.
-	 * A `type: 'session'` line starts a new session; following `type: 'message'`
-	 * lines are appended to it. Supports multiple sessions in a single file.
+	 * A `SessionRecordType.SESSION` line starts a new session; following
+	 * `SessionRecordType.MESSAGE` lines are appended to it. Supports multiple
+	 * sessions in a single file.
 	 * @param text - The JSONL file contents
 	 * @returns The parsed conversations with their messages
 	 */
@@ -989,20 +967,20 @@ class ConversationsStore {
 		const sessions: ExportedConversation[] = [];
 		let current: ExportedConversation | null = null;
 
-		for (const line of text.split('\n')) {
+		for (const line of text.split(NEWLINE)) {
 			const trimmed = line.trim();
 			if (!trimmed) continue;
 
 			const record = JSON.parse(trimmed);
 
-			if (record.type === 'session') {
+			if (record.type === SessionRecordType.SESSION) {
 				// Drop the discriminator and harness marker; the rest is the conversation.
 				const conv = { ...record };
 				delete conv.type;
 				delete conv.harness;
 				current = { conv: conv as DatabaseConversation, messages: [] };
 				sessions.push(current);
-			} else if (record.type === 'message') {
+			} else if (record.type === SessionRecordType.MESSAGE) {
 				if (!current) {
 					throw new Error('Invalid JSONL: message record before any session record');
 				}
@@ -1021,27 +999,47 @@ class ConversationsStore {
 	}
 
 	/**
-	 * Parses an import file into conversations, accepting the current `.jsonl` and
-	 * `.zip` formats as well as the legacy `.json` format.
+	 * Reports whether the text is the JSONL session format, whose first non-empty
+	 * line is a `SessionRecordType.SESSION` record. A legacy JSON export starts
+	 * with an array or an object that has no such discriminator.
+	 * @param text - The file contents
+	 */
+	private isSessionsJsonl(text: string): boolean {
+		const trimmed = text.trimStart();
+		const lineEnd = trimmed.indexOf(NEWLINE);
+		const firstLine = lineEnd === -1 ? trimmed : trimmed.slice(0, lineEnd);
+
+		try {
+			return JSON.parse(firstLine).type === SessionRecordType.SESSION;
+		} catch {
+			// Not a standalone JSON record, so not the JSONL format.
+			return false;
+		}
+	}
+
+	/**
+	 * Parses an import file into conversations, accepting the current JSONL and
+	 * ZIP formats as well as the legacy JSON format. The format comes from the
+	 * contents, so an import works whatever the file is named.
 	 * @param file - The user-selected file
 	 * @returns The parsed conversations with their messages
 	 */
 	async parseImportFile(file: File): Promise<ExportedConversation[]> {
-		const name = file.name.toLowerCase();
+		const bytes = new Uint8Array(await file.arrayBuffer());
 
-		if (name.endsWith(FileExtensionText.ZIP)) {
-			const entries = unzipSync(new Uint8Array(await file.arrayBuffer()));
+		if (ZIP_MAGIC.every((byte, index) => bytes[index] === byte)) {
+			const entries = unzipSync(bytes);
 			const sessions: ExportedConversation[] = [];
-			for (const [entryName, bytes] of Object.entries(entries)) {
+			for (const [entryName, entryBytes] of Object.entries(entries)) {
 				if (!entryName.toLowerCase().endsWith(FileExtensionText.JSONL)) continue;
-				sessions.push(...this.parseSessionsJsonl(strFromU8(bytes)));
+				sessions.push(...this.parseSessionsJsonl(strFromU8(entryBytes)));
 			}
 			return sessions;
 		}
 
-		const text = await file.text();
+		const text = strFromU8(bytes);
 
-		if (name.endsWith(FileExtensionText.JSONL)) {
+		if (this.isSessionsJsonl(text)) {
 			return this.parseSessionsJsonl(text);
 		}
 
@@ -1148,72 +1146,13 @@ class ConversationsStore {
 	}
 
 	/**
-	 * Imports conversations from a JSON file
-	 * Opens file picker and processes the selected file
-	 * @returns The list of imported conversations
-	 */
-	async importConversations(): Promise<DatabaseConversation[]> {
-		return new Promise((resolve, reject) => {
-			const input = document.createElement('input');
-			input.type = HtmlInputType.FILE;
-			input.accept = FileExtensionText.JSON;
-
-			input.onchange = async (e) => {
-				const file = (e.target as HTMLInputElement)?.files?.[0];
-
-				if (!file) {
-					reject(new Error('No file selected'));
-					return;
-				}
-
-				try {
-					const text = await file.text();
-					const parsedData = JSON.parse(text);
-					let importedData: ExportedConversations;
-
-					if (Array.isArray(parsedData)) {
-						importedData = parsedData;
-					} else if (
-						parsedData &&
-						typeof parsedData === 'object' &&
-						'conv' in parsedData &&
-						'messages' in parsedData
-					) {
-						importedData = [parsedData];
-					} else {
-						throw new Error('Invalid file format');
-					}
-
-					const result = await DatabaseService.importConversations(importedData);
-					toast.success(`Imported ${result.imported} conversation(s), skipped ${result.skipped}`);
-
-					await this.loadConversations();
-
-					const importedConversations = (
-						Array.isArray(importedData) ? importedData : [importedData]
-					).map((item) => item.conv);
-
-					resolve(importedConversations);
-				} catch (err: unknown) {
-					const message = err instanceof Error ? err.message : 'Unknown error';
-					console.error('Failed to import conversations:', err);
-					toast.error('Import failed', { description: message });
-					reject(new Error(`Import failed: ${message}`));
-				}
-			};
-
-			input.click();
-		});
-	}
-
-	/**
 	 * Imports conversations from provided data (without file picker)
 	 * @param data - Array of conversation data with messages
-	 * @returns Import result with counts
+	 * @returns The conversations written to the database and the ones skipped
 	 */
 	async importConversationsData(
 		data: ExportedConversations
-	): Promise<{ imported: number; skipped: number }> {
+	): Promise<{ imported: DatabaseConversation[]; skipped: DatabaseConversation[] }> {
 		const result = await DatabaseService.importConversations(data);
 		await this.loadConversations();
 		return result;

@@ -2,6 +2,8 @@
 
 #include "llama.h"
 
+#include "common.h"
+
 #include <cstdint>
 #include <vector>
 
@@ -21,9 +23,9 @@ enum common_reasoning_budget_state {
 // reasoning block (e.g. between <think> and </think>).
 //
 // State machine: IDLE -> INTRO_FORCING -> COUNTING -> SOFT_PENDING -> SOFT_FORCING -> COUNTING -> HARD_PENDING -> WAITING_UTF8 -> FORCING -> DONE
-//   IDLE:          passthrough, watching for start_tokens sequence
+//   IDLE:          passthrough, watching for a start sequence
 //   INTRO_FORCING: forces intro_forced_tokens token-by-token right as the block starts, then proceeds to COUNTING (or straight to FORCING if budget <= 0)
-//   COUNTING:      counting down remaining tokens, watching for natural end_tokens
+//   COUNTING:      counting down remaining tokens, watching for a natural end sequence
 //   SOFT_PENDING:  soft threshold crossed, waiting for a newline token before warning
 //   SOFT_FORCING:  forces soft_forced_tokens token-by-token, then returns to COUNTING
 //   HARD_PENDING:  budget exhausted, waiting (up to grace_tokens) for a paragraph boundary before forcing
@@ -46,30 +48,34 @@ enum common_reasoning_budget_state {
 // hard guarantee on total length is bounded by budget + grace_tokens, never open-ended.
 //
 // Parameters:
-//   vocab              - vocabulary (used for UTF-8/paragraph boundary detection; can be nullptr)
-//   start_tokens       - token sequence that activates counting
-//   end_tokens         - token sequence for natural deactivation
-//   forced_tokens      - token sequence forced when budget expires
-//   soft_forced_tokens - token sequence forced once at the soft threshold (empty = disabled)
+//   vocab               - vocabulary (used for UTF-8/paragraph boundary detection; can be nullptr)
+//   start_seqs          - token sequences, any of which activates counting
+//   end_seqs            - token sequences, any of which naturally deactivates
+//   forced_tokens       - token sequence forced when budget expires
+//   soft_forced_tokens  - token sequence forced once at the soft threshold (empty = disabled)
 //   intro_forced_tokens - token sequence forced once right as the block starts (empty = disabled)
-//   budget             - max tokens allowed in the reasoning block
-//   soft_ratio         - fraction of budget consumed at which to trigger the soft warning (<= 0 disables it)
-//   grace_tokens       - max tokens to wait for a paragraph boundary after the budget expires (<= 0 = force immediately, no wait)
-//   initial_state      - initial state
+//   budget              - max tokens allowed in the reasoning block
+//   soft_ratio          - fraction of budget consumed at which to trigger the soft warning (<= 0 disables it)
+//   grace_tokens        - max tokens to wait for a paragraph boundary after the budget expires (<= 0 = force immediately, no wait)
+//   initial_state       - initial state
 //
 struct llama_sampler * common_reasoning_budget_init(
-        const struct llama_vocab       * vocab,
-        const std::vector<llama_token> & start_tokens,
-        const std::vector<llama_token> & end_tokens,
-        const std::vector<llama_token> & forced_tokens,
-        const std::vector<llama_token> & soft_forced_tokens,
-        const std::vector<llama_token> & intro_forced_tokens,
-        int32_t                          budget,
-        float                             soft_ratio = -1.0f,
-        int32_t                           grace_tokens = 0,
-        common_reasoning_budget_state    initial_state = REASONING_BUDGET_IDLE);
+        const struct llama_vocab        * vocab,
+        const std::vector<llama_tokens> & start_seqs,
+        const std::vector<llama_tokens> & end_seqs,
+        const llama_tokens              & forced_tokens,
+        const llama_tokens              & soft_forced_tokens,
+        const llama_tokens              & intro_forced_tokens,
+        int32_t                           budget,
+        float                              soft_ratio = -1.0f,
+        int32_t                            grace_tokens = 0,
+        common_reasoning_budget_state     initial_state = REASONING_BUDGET_IDLE);
 
 common_reasoning_budget_state common_reasoning_budget_get_state(const struct llama_sampler * smpl);
+
+// The end sequence that transitioned the sampler to DONE, or nullptr if none
+// was recorded. Cleared when a new start sequence re-arms the sampler.
+const llama_tokens * common_reasoning_budget_get_end_match(const struct llama_sampler * smpl);
 
 // Manually transition the reasoning budget sampler into the FORCING state.
 // Returns true if the transition occurred.

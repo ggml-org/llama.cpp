@@ -40,6 +40,18 @@ class common_chat_peg_gemma4_mapper : public common_chat_peg_mapper {
     void visit(const common_peg_ast_arena & arena, common_peg_ast_id id);
 };
 
+class common_chat_peg_minimax_m3_mapper : public common_chat_peg_mapper {
+  public:
+    static constexpr const char * TOOL_ARG_OBJECT = "tool-arg-object";
+    static constexpr const char * TOOL_ARG_ARRAY  = "tool-arg-array";
+    static constexpr const char * TOOL_ARG_ITEM   = "tool-arg-item";
+
+    common_chat_peg_minimax_m3_mapper(common_chat_msg & msg) : common_chat_peg_mapper(msg) {}
+    virtual void from_ast(const common_peg_ast_arena & arena, const common_peg_parse_result & result);
+  private:
+    void visit(const common_peg_ast_arena & arena, common_peg_ast_id id);
+};
+
 struct content_structure;
 struct tool_call_structure;
 

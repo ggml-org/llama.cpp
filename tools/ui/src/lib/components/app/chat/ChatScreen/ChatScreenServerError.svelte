@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { AlertTriangle, Loader2, RefreshCw } from '@lucide/svelte';
-	import { fadeInView } from '$lib/actions/fade-in-view.svelte';
 	import * as Alert from '$lib/components/ui/alert';
 	import { serverError, serverLoading, serverStatus, serverStore } from '$lib/stores/server.svelte';
 
@@ -10,10 +9,7 @@
 </script>
 
 {#if hasError}
-	<div
-		class="pointer-events-auto mx-auto mb-4 max-w-[48rem] px-1"
-		use:fadeInView={{ y: 10, duration: 250 }}
-	>
+	<div class="pointer-events-auto mx-auto mb-4 max-w-[48rem] px-1">
 		<Alert.Root variant={isLoadingModel ? 'default' : 'destructive'}>
 			{#if isLoadingModel}
 				<Loader2 class="{ICON_CLASS_DEFAULT} animate-spin" />
