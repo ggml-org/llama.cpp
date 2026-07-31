@@ -8,6 +8,7 @@ struct TesseraStudioMacApp: App {
 
     init() {
         TesseraSettings.registerDefaults()
+        TesseraLearningServices.installDefaults()
         do {
             let schema = Schema([ChatMessage.self, RunRecord.self, Conversation.self])
             let config = ModelConfiguration("TesseraStudio", schema: schema)

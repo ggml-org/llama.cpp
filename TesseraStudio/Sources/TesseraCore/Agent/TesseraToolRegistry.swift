@@ -33,7 +33,7 @@ public final class TesseraToolRegistry: Sendable {
         return lines.joined(separator: "\n")
     }
 
-    /// The default registry with all 8 v1 tools.
+    /// The default registry: the 8 v1 tools plus the 9 learning tools.
     public static let `default` = TesseraToolRegistry(tools: [
         ListModelsTool(),
         LoadModelTool(),
@@ -43,5 +43,15 @@ public final class TesseraToolRegistry: Sendable {
         QuantizeTool(),
         ConvertTool(),
         EvaluateTool(),
+        // Self-improving learning loop (docs/self-improving-loop-design.md)
+        LookupDocsTool(),
+        QueryPlaybookTool(),
+        RecordOutcomeTool(),
+        EscalateReasoningTool(),
+        AnonymizeWorktreeTool(),
+        EscalateWithCodeTool(),
+        RunAdaptationTool(),
+        InspectLearningTool(),
+        PurgeTrainingDataTool(),
     ])
 }
