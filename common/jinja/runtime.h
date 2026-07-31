@@ -74,6 +74,7 @@ struct context {
     }
     ~context() = default;
 
+    int call_depth = 0; // macro/caller recursion guard (propagated through scope copies)
     context(const context & parent) : context() {
         // inherit variables (for example, when entering a new scope)
         auto & pvar = parent.env->as_ordered_object();
@@ -83,6 +84,7 @@ struct context {
         current_time = parent.current_time;
         is_get_stats = parent.is_get_stats;
         src = parent.src;
+        call_depth = parent.call_depth;
     }
 
     value get_val(const std::string & name) {

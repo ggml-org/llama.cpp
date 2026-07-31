@@ -18,11 +18,29 @@ static bool is_type(const statement_ptr & ptr) {
     return dynamic_cast<const T*>(ptr.get()) != nullptr;
 }
 
+namespace {
+// RAII counter for recursion-depth guards: increments on entry, decrements on
+// ANY exit path (parse_any has many early returns); throws past the cap.
+struct depth_guard {
+    int & depth;
+    depth_guard(int & d, int max, const char * msg, const std::string & src, size_t pos) : depth(d) {
+        if (++depth > max) {
+            throw parser_exception(msg, src, pos);
+        }
+    }
+    ~depth_guard() { --depth; }
+};
+} // namespace
+
 class parser {
     const std::vector<token> & tokens;
     size_t current = 0;
 
     std::string source; // for error reporting
+
+    static constexpr int MAX_PARSE_DEPTH = 256; // guard vs stack exhaustion on adversarial nesting
+    int expr_depth = 0;
+    int stmt_depth = 0;
 
 public:
     parser(const std::vector<token> & t, const std::string & src) : tokens(t), source(src) {}
@@ -94,6 +112,7 @@ private:
     }
 
     statement_ptr parse_any() {
+        depth_guard guard(stmt_depth, MAX_PARSE_DEPTH, "block nesting too deep", source, current);
         size_t start_pos = current;
         switch (peek().t) {
             case token::comment:
@@ -326,6 +345,7 @@ private:
 
     statement_ptr parse_expression() {
         // Choose parse function with lowest precedence
+        depth_guard guard(expr_depth, MAX_PARSE_DEPTH, "expression nesting too deep", source, current);
         return parse_if_expression();
     }
 

@@ -738,8 +738,12 @@ value macro_statement::execute_impl(context & ctx) {
     }
     std::string name = cast_stmt<identifier>(this->name)->val;
 
+    static constexpr int MAX_CALL_DEPTH = 256; // guard vs stack exhaustion from recursive macros
     const func_handler func = [this, name](const func_args & args) -> value {
         context macro_ctx(args.ctx); // new scope for macro execution
+        if (++macro_ctx.call_depth > MAX_CALL_DEPTH) {
+            throw std::runtime_error("macro call depth limit exceeded (recursive macro?)");
+        }
 
         bind_parameters(name, this->args, args, macro_ctx);
 
