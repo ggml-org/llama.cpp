@@ -297,6 +297,61 @@ public struct TesseraLearningReceipt: Codable, Sendable, Identifiable, Equatable
     }
 }
 
+// MARK: - Foraging signals
+
+/// Where an escalation frame or lookup was resolved. The whole point of
+/// retrieve-before-escalate (design Phase 2) is to shift the corpus from
+/// `remote` toward the local sources, so the source is recorded per event.
+public enum TesseraForagingSource: String, Codable, Sendable, CaseIterable {
+    case localPlaybook = "local-playbook"
+    case localReference = "local-reference"
+    case remote = "remote"
+}
+
+/// One retrieval/lookup event: what class of problem, where it was resolved,
+/// and which teachers (real or synthetic local ids) contributed. This is the
+/// telemetry that purifies the escalation corpus toward genuinely
+/// reasoning-bound problems.
+public struct TesseraForagingRecord: Codable, Sendable, Identifiable, Equatable {
+    public let id: String
+    public let problemClass: String
+    public let source: TesseraForagingSource
+    public let teacherIds: [String]
+    public let timestamp: Date
+
+    public init(
+        id: String = UUID().uuidString,
+        problemClass: String,
+        source: TesseraForagingSource,
+        teacherIds: [String] = [],
+        timestamp: Date = Date()
+    ) {
+        self.id = id
+        self.problemClass = problemClass
+        self.source = source
+        self.teacherIds = teacherIds
+        self.timestamp = timestamp
+    }
+}
+
+/// Aggregate counts by resolution source. `resolvedLocally` vs `remote` is
+/// the headline: a climbing local fraction means retrieval is doing its job.
+public struct TesseraForagingSummary: Codable, Sendable, Equatable {
+    public var total: Int
+    public var localPlaybook: Int
+    public var localReference: Int
+    public var remote: Int
+
+    public var resolvedLocally: Int { localPlaybook + localReference }
+
+    public init(total: Int = 0, localPlaybook: Int = 0, localReference: Int = 0, remote: Int = 0) {
+        self.total = total
+        self.localPlaybook = localPlaybook
+        self.localReference = localReference
+        self.remote = remote
+    }
+}
+
 // MARK: - Service protocols
 
 /// Anything that stores learned/training data and can purge it on demand.
@@ -351,6 +406,14 @@ public protocol TesseraAdaptationScheduling: Sendable {
 public protocol TesseraTeacherAssessing: TesseraPurgeable {
     func assessments() -> [TesseraTeacherAssessment]
     func recordTrial(proposal: TesseraTeacherProposal, passedWorldGate: Bool) throws
+}
+
+/// Foraging store: records retrieval/lookup events so the corpus
+/// distinguishes "resolved locally" from "escalated" (design Phase 2).
+public protocol TesseraForagingStoring: TesseraPurgeable {
+    func record(problemClass: String, source: TesseraForagingSource, teacherIds: [String]) throws
+    func recent(limit: Int) -> [TesseraForagingRecord]
+    func summary() -> TesseraForagingSummary
 }
 
 // MARK: - No-op defaults
@@ -415,6 +478,14 @@ public struct TesseraNoopTeacherAssessor: TesseraTeacherAssessing {
     public func purgeTrainingData() throws -> Int { 0 }
 }
 
+public struct TesseraNoopForagingStore: TesseraForagingStoring {
+    public init() {}
+    public func record(problemClass: String, source: TesseraForagingSource, teacherIds: [String]) throws {}
+    public func recent(limit: Int) -> [TesseraForagingRecord] { [] }
+    public func summary() -> TesseraForagingSummary { TesseraForagingSummary() }
+    public func purgeTrainingData() throws -> Int { 0 }
+}
+
 // MARK: - Composition root
 
 /// Service locator for the learning subsystem. Tools resolve their
@@ -432,6 +503,7 @@ public final class TesseraLearningCenter: @unchecked Sendable {
     private var _worldSignals: any TesseraWorldSignalObserving = TesseraNoopWorldSignalObserver()
     private var _scheduler: any TesseraAdaptationScheduling = TesseraNoopAdaptationScheduler()
     private var _assessor: any TesseraTeacherAssessing = TesseraNoopTeacherAssessor()
+    private var _foraging: any TesseraForagingStoring = TesseraNoopForagingStore()
 
     private init() {}
 
@@ -457,6 +529,9 @@ public final class TesseraLearningCenter: @unchecked Sendable {
     }
     public var assessor: any TesseraTeacherAssessing {
         lock.lock(); defer { lock.unlock() }; return _assessor
+    }
+    public var foraging: any TesseraForagingStoring {
+        lock.lock(); defer { lock.unlock() }; return _foraging
     }
 
     /// True once a real escalation service with at least one teacher is
@@ -488,6 +563,9 @@ public final class TesseraLearningCenter: @unchecked Sendable {
     public func install(assessor: any TesseraTeacherAssessing) {
         lock.lock(); defer { lock.unlock() }; _assessor = assessor
     }
+    public func install(foraging: any TesseraForagingStoring) {
+        lock.lock(); defer { lock.unlock() }; _foraging = foraging
+    }
 
     /// Purge stored training data across every purgeable store. Returns a
     /// receipt summarizing what was removed.
@@ -498,6 +576,7 @@ public final class TesseraLearningCenter: @unchecked Sendable {
         removed += (try? reference.purgeTrainingData()) ?? 0
         removed += (try? worldSignals.purgeTrainingData()) ?? 0
         removed += (try? assessor.purgeTrainingData()) ?? 0
+        removed += (try? foraging.purgeTrainingData()) ?? 0
         return TesseraLearningReceipt(
             kind: "purge",
             summary: "Purged \(removed) learning record(s).",

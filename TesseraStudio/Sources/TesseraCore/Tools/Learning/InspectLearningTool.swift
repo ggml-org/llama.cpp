@@ -19,6 +19,7 @@ public struct InspectLearningTool: TesseraTool {
         let recentCount = center.worldSignals.recent(limit: 10).count
         let playbook = center.playbook.all()
         let playbookEntries = playbook.values.reduce(0) { $0 + $1.count }
+        let foraging = center.foraging.summary()
 
         var lines: [String] = [
             "Learning subsystem",
@@ -31,6 +32,7 @@ public struct InspectLearningTool: TesseraTool {
         }
         lines.append("- recent outcomes (last 10): \(recentCount)")
         lines.append("- playbook: \(playbook.count) class(es), \(playbookEntries) strategy(ies)")
+        lines.append("- foraging: \(foraging.total) event(s) - local-playbook: \(foraging.localPlaybook), local-reference: \(foraging.localReference), remote: \(foraging.remote) (resolved locally: \(foraging.resolvedLocally))")
 
         return .ok(lines.joined(separator: "\n"), data: [
             "configured": .bool(configured),
@@ -38,6 +40,9 @@ public struct InspectLearningTool: TesseraTool {
             "assessments": .number(Double(assessments.count)),
             "recent_outcomes": .number(Double(recentCount)),
             "playbook_classes": .number(Double(playbook.count)),
+            "foraging_total": .number(Double(foraging.total)),
+            "foraging_resolved_locally": .number(Double(foraging.resolvedLocally)),
+            "foraging_remote": .number(Double(foraging.remote)),
         ])
     }
 }

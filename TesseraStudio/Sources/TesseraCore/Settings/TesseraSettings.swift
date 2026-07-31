@@ -32,6 +32,7 @@ public enum TesseraSettingsKey {
     public static let learningEscalationEnabled = "tessera.settings.learningEscalationEnabled"
     public static let learningTeachers = "tessera.settings.learningTeachers"
     public static let learningAnonymizerAggressiveness = "tessera.settings.learningAnonymizerAggressiveness"
+    public static let learningAnonymizerBinary = "tessera.settings.learningAnonymizerBinary"
     public static let learningCaptureScopes = "tessera.settings.learningCaptureScopes"
     public static let learningIdleAdaptation = "tessera.settings.learningIdleAdaptation"
     public static let learningOnPowerOnly = "tessera.settings.learningOnPowerOnly"
@@ -67,6 +68,7 @@ public enum TesseraSettingsDefault {
     public static let learningEscalationEnabled = false
     public static let learningTeachers = ""            // JSON array of TesseraTeacherConfig
     public static let learningAnonymizerAggressiveness = "balanced"  // light | balanced | aggressive
+    public static let learningAnonymizerBinary = ""          // empty -> /usr/local/bin/llama-quantize
     public static let learningCaptureScopes = "build,test,git"       // editor,screen off by default
     public static let learningIdleAdaptation = false
     public static let learningOnPowerOnly = true
@@ -110,6 +112,7 @@ public enum TesseraSettings {
             TesseraSettingsKey.learningEscalationEnabled: TesseraSettingsDefault.learningEscalationEnabled,
             TesseraSettingsKey.learningTeachers: TesseraSettingsDefault.learningTeachers,
             TesseraSettingsKey.learningAnonymizerAggressiveness: TesseraSettingsDefault.learningAnonymizerAggressiveness,
+            TesseraSettingsKey.learningAnonymizerBinary: TesseraSettingsDefault.learningAnonymizerBinary,
             TesseraSettingsKey.learningCaptureScopes: TesseraSettingsDefault.learningCaptureScopes,
             TesseraSettingsKey.learningIdleAdaptation: TesseraSettingsDefault.learningIdleAdaptation,
             TesseraSettingsKey.learningOnPowerOnly: TesseraSettingsDefault.learningOnPowerOnly,
@@ -232,6 +235,12 @@ public enum TesseraSettings {
 
     public static var learningAnonymizerAggressiveness: String {
         UserDefaults.standard.string(forKey: TesseraSettingsKey.learningAnonymizerAggressiveness) ?? TesseraSettingsDefault.learningAnonymizerAggressiveness
+    }
+
+    /// Path to the llama-quantize binary that carries the C++ symbol-level
+    /// anonymizer. Empty falls back to the installed default location.
+    public static var learningAnonymizerBinary: String {
+        UserDefaults.standard.string(forKey: TesseraSettingsKey.learningAnonymizerBinary) ?? TesseraSettingsDefault.learningAnonymizerBinary
     }
 
     /// Enabled capture scopes (build/test/git on by default; editor/screen off).

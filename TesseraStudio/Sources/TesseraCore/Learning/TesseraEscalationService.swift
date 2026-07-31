@@ -152,6 +152,12 @@ public struct TesseraEscalationService: TesseraEscalating {
         let sources = proposals.map(\.teacherId).reduce(into: [String]()) { acc, id in
             if !acc.contains(id) { acc.append(id) }
         }
+        // Foraging capture: a locally-resolved frame is one less escalation.
+        // Telemetry only - a store failure must not break the resolution.
+        for id in sources {
+            let source: TesseraForagingSource = (id == "local-reference") ? .localReference : .localPlaybook
+            try? center.foraging.record(problemClass: frame.problemClass, source: source, teacherIds: [id])
+        }
         return TesseraEscalationResult(frame: frame, proposals: proposals, fannedOutTo: sources)
     }
 
@@ -193,6 +199,11 @@ public struct TesseraEscalationService: TesseraEscalating {
         for proposal in proposals {
             TesseraProposalRegistry.shared.register(proposal)
         }
+
+        // Foraging capture: this frame could not be resolved locally and fanned
+        // out to remote teachers. Telemetry only - never sinks the fan-out.
+        try? TesseraLearningCenter.shared.foraging.record(
+            problemClass: frame.problemClass, source: .remote, teacherIds: selectedIds)
 
         // fannedOutTo carries the selected teachers in weight order (highest
         // first); routeTeachers exposes the full weight + rationale per teacher.

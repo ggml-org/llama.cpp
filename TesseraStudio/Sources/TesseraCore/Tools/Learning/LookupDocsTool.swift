@@ -25,10 +25,32 @@ public struct LookupDocsTool: TesseraTool {
             return .fail("query is required")
         }
 
-        let hits = TesseraLearningCenter.shared.reference.lookup(query: query)
-        if hits.isEmpty {
+        let center = TesseraLearningCenter.shared
+        let hits = center.reference.lookup(query: query)
+
+        // WEB PLUG-IN POINT (design Phase 2): there is no web-search/Tavily
+        // surface in this codebase yet, so this tool reads the LOCAL reference
+        // store only - it does not fabricate a web client. A future web step
+        // would run right here when the local store misses, then cache its hits
+        // into the reference store so the next lookup resolves locally:
+        //
+        //   if hits.isEmpty {
+        //       for result in try await webSearch(query) {
+        //           try center.reference.cache(query: query, content: result,
+        //                                      ttlDays: TesseraSettings.learningReferenceTTLDays)
+        //       }
+        //       hits = center.reference.lookup(query: query)  // now local
+        //   }
+        //
+        // No web egress happens on this path today.
+
+        guard !hits.isEmpty else {
             return .ok("No cached reference docs for \"\(query)\".", data: ["hits": .number(0)])
         }
+
+        // Foraging capture: a lookup hit resolved locally from the reference
+        // store. Telemetry only - a store failure must not break the lookup.
+        try? center.foraging.record(problemClass: query, source: .localReference, teacherIds: [])
 
         let body = hits.enumerated()
             .map { "[\($0.offset + 1)] \($0.element)" }

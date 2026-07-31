@@ -1,10 +1,12 @@
 import Foundation
 
-/// Tier-2 code escalation: scrub a code payload and fan it out to the
+/// Tier-2 code escalation: anonymize a code payload and fan it out to the
 /// assessment-weighted teacher ensemble. Highest sensitivity. The payload is
-/// scrubbed with curation.scrub (the best anonymization available now); the
-/// full symbol-level anonymizer (the C++ tessera-anonymizer, design Phase 5)
-/// upgrades payload quality in a later wave.
+/// run through the symbol-level C++ anonymizer (TesseraAnonymizerService,
+/// design Phase 5) and the local de-anonymization map is persisted under an
+/// escalation id so a teacher's answer can be de-anonymized later. When the
+/// anonymizer binary is unavailable the service degrades honestly to
+/// curation.scrub and reports the fallback.
 public struct EscalateWithCodeTool: TesseraTool {
     public let name = "escalate_with_code"
     public let description = "Tier 2: scrub a code payload and send it to the teacher ensemble. Highest sensitivity; the payload is secret-scrubbed before egress."
@@ -57,26 +59,45 @@ public struct EscalateWithCodeTool: TesseraTool {
 
         let frame = TesseraEscalationFrame(problemClass: problemClass, summary: summary)
 
-        // Scrub the payload with the best anonymization available right now.
-        // NOTE: curation.scrub is a secret-scrubber, not the full symbol-level
-        // anonymizer. The type-preserving symbol anonymizer (a later wave / the
-        // C++ tessera-anonymizer, design Phase 5) upgrades payload quality;
-        // until then curation.scrub is the scrubber.
-        let anonymizedPayload = center.curation.scrub(code)
+        // Symbol-level anonymization (design Phase 5). The service degrades to
+        // curation.scrub and flags it when the binary is missing or fails - it
+        // never reports a symbol-level pass it did not actually run.
+        let anonymizer = TesseraAnonymizerService()
+        let anonymized = await anonymizer.anonymize(code)
+
+        // Persist the de-anonymization map under an escalation id so a teacher's
+        // answer can be reversed locally later. The map is the local-only key;
+        // it is empty (and skipped) on a scrub fallback.
+        let escalationId = UUID().uuidString
+        if !anonymized.map.isEmpty {
+            try? anonymizer.persistMap(anonymized.map, forEscalation: escalationId)
+        }
 
         do {
-            let result = try await service.escalateWithCode(frame: frame, anonymizedPayload: anonymizedPayload)
+            let result = try await service.escalateWithCode(frame: frame, anonymizedPayload: anonymized.text)
             var responded: [String] = []
             for proposal in result.proposals where !responded.contains(proposal.teacherId) {
                 responded.append(proposal.teacherId)
             }
             let teachers = responded.joined(separator: ", ")
-            let output = "Tier-2 escalation to \(result.fannedOutTo.count) teacher(s); received \(result.proposals.count) proposal(s) from: \(teachers.isEmpty ? "none" : teachers). Payload scrubbed with curation.scrub (\(code.count) -> \(anonymizedPayload.count) chars)."
+
+            let method: String
+            if anonymized.usedFallback {
+                method = "curation-scrub fallback (\(anonymized.note)); no de-anonymization map"
+            } else {
+                method = "symbol-level anonymizer (level: \(anonymized.level)); \(anonymized.map.count) symbol(s) mapped, escalation id \(escalationId)"
+            }
+            let output = "Tier-2 escalation to \(result.fannedOutTo.count) teacher(s); received \(result.proposals.count) proposal(s) from: \(teachers.isEmpty ? "none" : teachers). Payload prepared with \(method). (\(code.count) -> \(anonymized.text.count) chars)."
             return .ok(output, data: [
                 "proposals": .number(Double(result.proposals.count)),
                 "teachers": .string(teachers),
+                "anonymizer": .string(anonymized.anonymizer),
+                "level": .string(anonymized.level),
+                "used_fallback": .bool(anonymized.usedFallback),
+                "escalation_id": .string(escalationId),
+                "mapped_symbols": .number(Double(anonymized.map.count)),
                 "original_chars": .number(Double(code.count)),
-                "scrubbed_chars": .number(Double(anonymizedPayload.count)),
+                "anonymized_chars": .number(Double(anonymized.text.count)),
             ])
         } catch {
             return .fail(error.localizedDescription)

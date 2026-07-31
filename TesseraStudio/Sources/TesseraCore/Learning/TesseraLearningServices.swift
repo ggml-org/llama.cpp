@@ -13,5 +13,6 @@ public enum TesseraLearningServices {
         center.install(worldSignals: TesseraWorldSignalObserver())
         center.install(scheduler: TesseraAdaptationScheduler())
         center.install(assessor: TesseraTeacherAssessor())
+        center.install(foraging: TesseraForagingStore())
     }
 }
