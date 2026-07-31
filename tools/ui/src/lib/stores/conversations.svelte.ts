@@ -111,6 +111,9 @@ class ConversationsStore {
 		| ((messageId: string, updates: Partial<DatabaseMessage>) => void)
 		| null = null;
 
+	/** In-flight init run; shared by concurrent callers, reset on failure to allow retry */
+	private initPromise: Promise<void> | null = null;
+
 	/**
 	 *
 	 *
@@ -121,19 +124,25 @@ class ConversationsStore {
 
 	/**
 	 * Initialize the store by loading conversations from database.
-	 * Must be called once after app startup.
+	 * Safe to call multiple times: concurrent callers share a single run,
+	 * and a failed run can be retried by calling again.
 	 */
-	async init(): Promise<void> {
-		if (!browser) return;
-		if (this.isInitialized) return;
+	init(): Promise<void> {
+		if (!browser) return Promise.resolve();
+		if (this.initPromise) return this.initPromise;
 
-		try {
-			await MigrationService.runAllMigrations();
-			await this.loadConversations();
-			this.isInitialized = true;
-		} catch (error) {
-			console.error('Failed to initialize conversations:', error);
-		}
+		this.initPromise = (async () => {
+			try {
+				await MigrationService.runAllMigrations();
+				await this.loadConversations();
+				this.isInitialized = true;
+			} catch (error) {
+				console.error('Failed to initialize conversations:', error);
+				this.initPromise = null;
+			}
+		})();
+
+		return this.initPromise;
 	}
 
 	/**
@@ -237,15 +246,11 @@ class ConversationsStore {
 	 */
 	async createConversation(name?: string): Promise<string> {
 		const conversationName = name || `Chat ${new Date().toLocaleString()}`;
-		const conversation = await DatabaseService.createConversation(conversationName);
 
 		// No MCP override list is seeded: getAllMcpServerOverrides resolves
 		// servers without a per-conversation override to `mcpServers[i].enabled`,
 		// and only explicit toggles are stored on the conversation.
-
-		// Inherit the global reasoning default into the new conversation
-		conversation.reasoningEffort = this.pendingReasoningEffort;
-		await DatabaseService.updateConversation(conversation.id, {
+		const conversation = await DatabaseService.createConversation(conversationName, {
 			reasoningEffort: this.pendingReasoningEffort
 		});
 
@@ -358,10 +363,7 @@ class ConversationsStore {
 	async deleteAll(): Promise<void> {
 		try {
 			const allConversations = await DatabaseService.getAllConversations();
-
-			for (const conv of allConversations) {
-				await DatabaseService.deleteConversation(conv.id);
-			}
+			await DatabaseService.bulkDeleteConversations(allConversations.map((c) => c.id));
 
 			this.clearActiveConversation();
 			this.conversations = [];
@@ -412,7 +414,9 @@ class ConversationsStore {
 			}
 
 			toast.success(
-				convIds.length === 1 ? 'Conversation deleted' : `${convIds.length} conversations deleted`
+				idsToRemove.size === 1
+					? 'Conversation deleted'
+					: `${idsToRemove.size} conversations deleted`
 			);
 		} catch (error) {
 			console.error('Failed to bulk delete conversations:', error);
@@ -443,7 +447,6 @@ class ConversationsStore {
 				const newPinned = updates.get(this.conversations[i].id);
 				if (newPinned !== undefined) this.conversations[i].pinned = newPinned;
 			}
-			this.conversations = [...this.conversations];
 
 			toast.success(
 				convIds.length === 1
@@ -552,7 +555,6 @@ class ConversationsStore {
 
 			if (convIndex !== -1) {
 				this.conversations[convIndex].name = name;
-				this.conversations = [...this.conversations];
 			}
 
 			if (this.activeConversation?.id === convId) {
@@ -576,7 +578,6 @@ class ConversationsStore {
 
 			if (convIndex !== -1) {
 				this.conversations[convIndex].pinned = newPinnedState;
-				this.conversations = [...this.conversations];
 			}
 
 			if (this.activeConversation?.id === convId) {
@@ -591,18 +592,33 @@ class ConversationsStore {
 	}
 
 	/**
-	 * Updates conversation lastModified timestamp and moves it to top of list
+	 * Marks a conversation as recently active: stamps lastModified (persisted)
+	 * and moves it to the top of the list. Only message-activity flows call
+	 * this; metadata updates (rename, pin, settings) do not.
+	 *
+	 * @param convId - Conversation that produced the activity, defaults to the active one
 	 */
-	updateConversationTimestamp(): void {
-		if (!this.activeConversation) return;
+	updateConversationTimestamp(convId?: string): void {
+		const targetId = convId ?? this.activeConversation?.id;
+		if (!targetId) return;
 
-		const chatIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
+		const now = Date.now();
+
+		const chatIndex = this.conversations.findIndex((c) => c.id === targetId);
 
 		if (chatIndex !== -1) {
-			this.conversations[chatIndex].lastModified = Date.now();
+			this.conversations[chatIndex].lastModified = now;
 			const updatedConv = this.conversations.splice(chatIndex, 1)[0];
 			this.conversations = [updatedConv, ...this.conversations];
 		}
+
+		if (this.activeConversation?.id === targetId) {
+			this.activeConversation = { ...this.activeConversation, lastModified: now };
+		}
+
+		DatabaseService.updateConversation(targetId, { lastModified: now }).catch((error) =>
+			console.error('Failed to update conversation timestamp:', error)
+		);
 	}
 
 	/**
@@ -773,7 +789,6 @@ class ConversationsStore {
 		if (convIndex !== -1) {
 			this.conversations[convIndex].mcpServerOverrides =
 				newOverrides.length > 0 ? newOverrides : undefined;
-			this.conversations = [...this.conversations];
 		}
 	}
 
@@ -837,7 +852,6 @@ class ConversationsStore {
 		const convIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
 		if (convIndex !== -1) {
 			this.conversations[convIndex].reasoningEffort = effort;
-			this.conversations = [...this.conversations];
 		}
 	}
 
