@@ -412,19 +412,19 @@ struct ggml_hexagon_shared_buffer {
     std::shared_ptr<ggml_hexagon_rpcmem_block> mem;
     bool                   mapped;
     bool                   pinned;
-    std::vector<int>       free_slots;
+    std::vector<uint16_t>  free_tokens;
 
     uint8_t * base() const { return mem ? mem->base : nullptr; }
     size_t    size() const { return mem ? mem->size : 0; }
     int       fd()   const { return mem ? mem->fd : -1; }
 
     uint8_t * alloc_token() {
-        if (free_slots.empty()) { return nullptr; }
-        int slot = free_slots.back();
-        free_slots.pop_back();
+        if (free_tokens.empty()) { return nullptr; }
+        uint16_t slot = free_tokens.front();
+        free_tokens.erase(free_tokens.begin());
 
         size_t guard_offset = size() - GGML_HEXAGON_TOKEN_BUFFER_SIZE;
-        uint8_t * token_ptr = base() + guard_offset + slot * GGML_HEXAGON_TOKEN_SLOT_SIZE;
+        uint8_t * token_ptr = base() + guard_offset + (size_t)slot * GGML_HEXAGON_TOKEN_SLOT_SIZE;
 
         return token_ptr;
     }
@@ -432,9 +432,9 @@ struct ggml_hexagon_shared_buffer {
     void release_token(void * ptr) {
         size_t guard_offset = size() - GGML_HEXAGON_TOKEN_BUFFER_SIZE;
         uintptr_t offset = (uintptr_t)ptr - (uintptr_t)(base() + guard_offset);
-        int slot = offset / GGML_HEXAGON_TOKEN_SLOT_SIZE;
+        uint16_t slot = offset / GGML_HEXAGON_TOKEN_SLOT_SIZE;
         if (slot >= 0 && slot < GGML_HEXAGON_TOKEN_MAX_SLOTS) {
-            free_slots.push_back(slot);
+            free_tokens.push_back(slot);
         }
     }
 
@@ -487,7 +487,7 @@ struct ggml_hexagon_shared_buffer {
         unmap();
         // The memory is freed when the shared_ptr refcount drops to 0.
         HEX_VERBOSE("ggml-hex: %s release ref on buffer: base %p size %zu fd %d\n", sess->c_name(),
-                (void *) base(), size(), fd());
+                    (void *) base(), size(), fd());
         this->mem  = nullptr;
     }
 
@@ -503,7 +503,7 @@ struct ggml_hexagon_shared_buffer {
         alloc(total_size);
 
         for (int i = 0; i < GGML_HEXAGON_TOKEN_MAX_SLOTS; i++) {
-            free_slots.push_back(i);
+            free_tokens.push_back(i);
         }
     }
 
