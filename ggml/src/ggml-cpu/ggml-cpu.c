@@ -1660,7 +1660,7 @@ static void ggml_compute_forward_mul_mat_id(
 
         int chunk_size = 16;
         if (nr0 == 1 || nr1 == 1) {
-            chunk_size = 64;
+            chunk_size = 256;
         }
 
         // disable for NUMA
@@ -1669,7 +1669,7 @@ static void ggml_compute_forward_mul_mat_id(
         int64_t nchunk0 = (nr0 + chunk_size - 1) / chunk_size;
         int64_t nchunk1 = (nr1 + chunk_size - 1) / chunk_size;
 
-        if (nchunk0 * nchunk1 < nth * 4 || disable_chunking) {
+        if (true || nchunk0 * nchunk1 < nth * 4 || disable_chunking) {
             nchunk0 = nr0 > nr1 ? nth : 1;
             nchunk1 = nr0 > nr1 ? 1 : nth;
         }
