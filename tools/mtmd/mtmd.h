@@ -358,6 +358,9 @@ MTMD_API int32_t mtmd_gen_audio(mtmd_context * ctx,
                                 const struct mtmd_gen_inp * inp,
                                 struct mtmd_gen_out * out);
 
+// clear the code2wav left-context ring, call before starting a new utterance
+MTMD_API void mtmd_gen_audio_reset(mtmd_context * ctx);
+
 /////////////////////////////////////////
 
 // test function, to be used in test-mtmd-c-api.c

@@ -264,7 +264,12 @@ struct mtmd_context {
 
     // generation context
     struct clip_ctx * ctx_gen_a; // audio
-    std::vector<float> gen_out_audio; // decoded PCM samples for the current frame
+    std::vector<float> gen_out_audio;
+    // code2wav left-context ring: past frames' codes, frame major,
+    // oldest first, fed to the decode window and extended after every
+    // generated frame
+    std::vector<int32_t> gen_ctx_codes;
+    std::vector<int32_t> gen_out_codes; // decoded PCM samples for the current frame
 
     bool print_timings;
     int n_threads;
@@ -1610,6 +1615,8 @@ static int32_t mtmd_gen_audio_impl(mtmd_context * ctx, const mtmd_gen_inp * inp,
     params.code0     = inp->code0;
     params.top_k     = inp->top_k;
     params.top_p     = inp->top_p;
+    params.ctx_codes = &ctx->gen_ctx_codes;
+    params.out_codes = &ctx->gen_out_codes;
 
     if (!clip_encode(ctx_clip, &params)) {
         LOG_ERR("%s: clip_encode failed\n", __func__);
@@ -1622,10 +1629,23 @@ static int32_t mtmd_gen_audio_impl(mtmd_context * ctx, const mtmd_gen_inp * inp,
     }
     std::copy(out_embd.begin(), out_embd.end(), out->embd);
 
+    // extend the context ring with this frame's codes, capped to more
+    // history than the decode window ever reads
+    ctx->gen_ctx_codes.insert(ctx->gen_ctx_codes.end(), ctx->gen_out_codes.begin(), ctx->gen_out_codes.end());
+    const size_t max_hist = 64 * ctx->gen_out_codes.size();
+    if (max_hist > 0 && ctx->gen_ctx_codes.size() > max_hist) {
+        ctx->gen_ctx_codes.erase(ctx->gen_ctx_codes.begin(),
+                                 ctx->gen_ctx_codes.end() - (ptrdiff_t) max_hist);
+    }
+
     out->audio     = ctx->gen_out_audio.data();
     out->n_samples = ctx->gen_out_audio.size();
 
     return 0;
+}
+
+void mtmd_gen_audio_reset(mtmd_context * ctx) {
+    ctx->gen_ctx_codes.clear();
 }
 
 int32_t mtmd_gen_audio(mtmd_context * ctx, const struct mtmd_gen_inp * inp, struct mtmd_gen_out * out) {
