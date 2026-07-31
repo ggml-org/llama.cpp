@@ -116,6 +116,7 @@ static __global__ void soft_max_f32(
         vals[col] = val;
     }
 
+    __syncthreads();
     // find the sum of exps in the block
     tmp = block_reduce<block_reduce_method::SUM, block_size_template>(tmp, buf_iw);
 
@@ -208,6 +209,7 @@ static __device__ void soft_max_f32_parallelize_cols_single_row(const float * __
         col += step_size * n_elem_per_thread;
     }
 
+    __syncthreads();
     // Reduce divisor within CTA
     tmp_expf = block_reduce<block_reduce_method::SUM>(tmp_expf, shared_vals);
 
@@ -313,6 +315,7 @@ __launch_bounds__(8*WARP_SIZE, 1) static __global__ void soft_max_f32_paralleliz
     for (int rowx = 0; rowx < p.ne01 * p.ne02 * p.ne03; rowx++) {
         soft_max_f32_parallelize_cols_single_row(x + int64_t(rowx) * p.ncols, dst + int64_t(rowx) * p.ncols, tmp_maxs,
                                                  tmp_sums, p);
+        __syncthreads();
     }
 }
 

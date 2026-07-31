@@ -64,6 +64,7 @@ static __global__ void group_norm_f32(const float * x, float * dst, const int gr
         tmp += xi * xi;
     }
 
+    __syncthreads();
     tmp = block_reduce<block_reduce_method::SUM, block_size>(tmp, s_sum);
 
     const float variance = tmp / group_size;
