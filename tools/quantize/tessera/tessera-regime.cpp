@@ -35,6 +35,33 @@ std::string ts_regime_infer_family(const char * tensor_name) {
     return "unknown";
 }
 
+// --- modality inference ---
+
+int ts_regime_infer_modality(const char * tensor_name) {
+    if (!tensor_name) {
+        return 0;
+    }
+    // image / vision embedder tensors
+    static const char * image_fragments[] = {
+        "vision", "image", "vit", "patch", "pixel", "img",
+    };
+    for (const char * f : image_fragments) {
+        if (strstr(tensor_name, f)) {
+            return 1;
+        }
+    }
+    // audio / acoustic embedder tensors
+    static const char * audio_fragments[] = {
+        "audio", "acoustic", "speech", "wav",
+    };
+    for (const char * f : audio_fragments) {
+        if (strstr(tensor_name, f)) {
+            return 2;
+        }
+    }
+    return 0;
+}
+
 // --- regime classification ---
 
 static bool ts_family_contains(const std::string & family, const char * sub) {
@@ -48,6 +75,26 @@ ts_regime_routing ts_regime_classify(const ts_regime_descriptor * desc) {
     const float kurt = desc->kurtosis;
     const float er   = desc->eff_rank;
     const std::string & fam = desc->family;
+    const int modality = desc->modality;
+
+    // modality-specific regimes. Text (modality 0) falls through to the
+    // generic cascade below unchanged.
+    if (modality == 2 && kurt > 5.0f) {
+        // audio activations are heavy-tailed; a factored low-rank residual
+        // handles the long tails better than rotation/permutation experts
+        r.expert     = TS_EXPERT_FLRQ;
+        r.reason     = "audio + kurtosis > 5: heavy-tailed acoustic activations, factored low-rank";
+        r.confidence = 0.85f;
+        return r;
+    }
+    if (modality == 1 && er < 0.3f) {
+        // vision activations are spatially low-rank; an explicit low-rank
+        // residual captures the structure
+        r.expert     = TS_EXPERT_LRQ;
+        r.reason     = "image + eff_rank < 0.3: spatially low-rank vision activations";
+        r.confidence = 0.82f;
+        return r;
+    }
 
     // massive outliers in down_proj (DuQuant observation)
     if (kurt > 10.0f && ts_family_contains(fam, "down")) {
@@ -131,7 +178,7 @@ const char * ts_expert_name(ts_expert_id expert) {
     }
 }
 
-ts_expert_profile ts_expert_default_profile(ts_expert_id expert) {
+ts_expert_profile ts_expert_default_profile(ts_expert_id expert, int modality_id) {
     // baseline: identity multipliers, no SEPTQ, default grid, no forced outliers
     ts_expert_profile p;
     p.alpha_scale    = 1.0f;
@@ -175,6 +222,16 @@ ts_expert_profile ts_expert_default_profile(ts_expert_id expert) {
         default:
             break;
     }
+
+    // per-modality adjustments on top of the expert baseline
+    if (modality_id == 2) {
+        // audio: more sensitive to clipping -> tighter clip
+        p.clip_scale *= 0.8f;
+    } else if (modality_id == 1) {
+        // image: more spatial outliers -> wider outlier budget
+        p.max_outliers += 4;
+    }
+
     return p;
 }
 
@@ -252,7 +309,7 @@ ts_regime_descriptor ts_regime_compute_descriptor(
     desc.family         = ts_regime_infer_family(tensor_name);
     desc.out_dim        = out_dim;
     desc.in_dim         = in_dim;
-    desc.modality       = 0;
+    desc.modality       = ts_regime_infer_modality(tensor_name);
     desc.kurtosis       = 3.0f;
     desc.eff_rank       = 0.5f;
     desc.mean_magnitude = 0.0f;

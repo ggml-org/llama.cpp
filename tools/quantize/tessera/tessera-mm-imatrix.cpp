@@ -308,6 +308,9 @@ int ts_mm_imatrix_load(const char * path, ts_mm_imatrix * out, std::string * err
 
         mm_regime(vals.data(), (int64_t)vals.size(), en.stats[mod]);
 
+        // retain the raw per-channel array for use as AWQ act_scales
+        en.act[mod] = std::move(vals);
+
         found_modality = true;
     }
 
@@ -323,14 +326,9 @@ int ts_mm_imatrix_load(const char * path, ts_mm_imatrix * out, std::string * err
     return 0;
 }
 
-const ts_imatrix_regime_stats * ts_mm_imatrix_modality_stats(
-    const ts_mm_imatrix * mm, const char * tensor_name, ts_modality mod) {
+const ts_mm_imatrix_entry * ts_mm_imatrix_entry_get(
+    const ts_mm_imatrix * mm, const char * tensor_name) {
     if (!mm || !tensor_name) {
-        return nullptr;
-    }
-
-    int m = (int)mod;
-    if (m < 0 || m >= TS_MODALITY_COUNT) {
         return nullptr;
     }
 
@@ -344,11 +342,40 @@ const ts_imatrix_regime_stats * ts_mm_imatrix_modality_stats(
         return nullptr;
     }
 
-    if (!it->second.has_modality[m]) {
+    return &it->second;
+}
+
+const ts_imatrix_regime_stats * ts_mm_imatrix_modality_stats(
+    const ts_mm_imatrix * mm, const char * tensor_name, ts_modality mod) {
+    int m = (int)mod;
+    if (m < 0 || m >= TS_MODALITY_COUNT) {
         return nullptr;
     }
 
-    return &it->second.stats[m];
+    const ts_mm_imatrix_entry * en = ts_mm_imatrix_entry_get(mm, tensor_name);
+    if (!en || !en->has_modality[m]) {
+        return nullptr;
+    }
+
+    return &en->stats[m];
+}
+
+const float * ts_mm_imatrix_act_scales(
+    const ts_mm_imatrix * mm, const char * tensor_name, ts_modality mod, int64_t * dim) {
+    int m = (int)mod;
+    if (m < 0 || m >= TS_MODALITY_COUNT) {
+        return nullptr;
+    }
+
+    const ts_mm_imatrix_entry * en = ts_mm_imatrix_entry_get(mm, tensor_name);
+    if (!en || !en->has_modality[m] || en->act[m].empty()) {
+        return nullptr;
+    }
+
+    if (dim) {
+        *dim = (int64_t)en->act[m].size();
+    }
+    return en->act[m].data();
 }
 
 float ts_mm_imatrix_joint_kurtosis(const ts_mm_imatrix_entry * entry) {

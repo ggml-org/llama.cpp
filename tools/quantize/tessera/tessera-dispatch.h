@@ -66,6 +66,10 @@ struct ts_dispatch_tensor_result {
     int         profile_max_outliers;
     float       profile_outlier_thresh;
     bool        profile_use_septq;
+    // modality axis: operative modality (0=text, 1=image, 2=audio) and the
+    // per-modality AWQ alpha from the multimodal imatrix (0 when absent)
+    int         modality_id;
+    float       modality_alpha[3];
 };
 
 struct ts_dispatch_result {

@@ -19,6 +19,9 @@
 #include "tessera-corpus.h"
 #include "tessera-l1-fitness.h"
 #include "tessera-ab-harness.h"
+#include "tessera-mm-imatrix.h"
+#include "tessera-mm-fitness.h"
+#include "tessera-mm-awq.h"
 
 #include "gguf.h"
 #include "ggml.h"
@@ -127,6 +130,52 @@ static const float * ts_dispatch_act_scales(
     return nullptr;
 }
 
+// Resolve a tensor's operative modality against the multimodal imatrix.
+// Prefers the name-inferred modality when the imatrix has data for it, else
+// the first present modality, else text. Returns the MM entry (nullptr when
+// the tensor is absent from the imatrix) and writes the chosen modality.
+static const ts_mm_imatrix_entry * ts_dispatch_mm_resolve(
+        const ts_mm_imatrix * mm, const char * name, int inferred, int * modality) {
+    const ts_mm_imatrix_entry * en = ts_mm_imatrix_entry_get(mm, name);
+    if (en == nullptr) {
+        *modality = inferred;
+        return nullptr;
+    }
+    if (inferred >= 0 && inferred < TS_MODALITY_COUNT && en->has_modality[inferred]) {
+        *modality = inferred;
+        return en;
+    }
+    for (int m = 0; m < TS_MODALITY_COUNT; m++) {
+        if (en->has_modality[m]) {
+            *modality = m;
+            return en;
+        }
+    }
+    *modality = 0;
+    return en;
+}
+
+// Run the per-modality AWQ alpha search for one tensor against the multimodal
+// imatrix. Only modalities whose per-channel array length matches in_dim are
+// usable as AWQ scales. Returns 0 on success and fills *result.
+static int ts_dispatch_mm_awq(const ts_mm_imatrix * mm, const char * name,
+                              const float * weights, int64_t out_dim, int64_t in_dim,
+                              ts_mm_awq_result * result) {
+    const float * act_mm[3] = { nullptr, nullptr, nullptr };
+    for (int m = 0; m < TS_MODALITY_COUNT; m++) {
+        int64_t d = 0;
+        const float * a = ts_mm_imatrix_act_scales(mm, name, (ts_modality)m, &d);
+        if (a != nullptr && d == in_dim) {
+            act_mm[m] = a;
+        }
+    }
+    ts_mm_awq_params mp = ts_mm_awq_default_params();
+    mp.error_on_missing = false;   // partial modalities -> text fallback (M8)
+    std::string merr;
+    return ts_mm_awq_compute(weights, act_mm, nullptr, nullptr, nullptr,
+                             out_dim, in_dim, &mp, result, &merr);
+}
+
 // Fixed quantization knobs shared across all GA candidate evaluations, plus
 // the S5 kernel-direct fitness state. sidecar_cache holds the kernel dequant
 // per tensor (loaded once; an empty vector means no sidecar is present) so the
@@ -142,6 +191,7 @@ struct ts_dispatch_eval_ctx {
     std::unordered_map<std::string, std::vector<float>>      sidecar_cache;
     std::unordered_map<std::string, float>                   best_t2;
     std::unordered_map<std::string, std::pair<float, float>> best_pair;
+    std::unordered_map<std::string, int>                     modality;  // per-tensor operative modality
 };
 
 // GA evaluator: quantize the layer with a candidate (alpha, clip) and score
@@ -163,13 +213,20 @@ static ts_awq_score ts_dispatch_awq_eval(const ts_awq_candidate * cand,
 
     // route the layer to its expert and apply that expert's profile so the
     // GA scores candidates under the same knobs the final quantize uses
+    int mod = 0;
+    auto mit = ec->modality.find(layer->name);
+    if (mit != ec->modality.end()) {
+        mod = mit->second;
+    }
+
     ts_regime_descriptor rd = {};
     rd.tensor_name = layer->name;
     rd.family      = layer->family;
     rd.kurtosis    = layer->kurtosis;
     rd.eff_rank    = layer->eff_rank;
+    rd.modality    = mod;
     ts_regime_routing  rr   = ts_regime_classify(&rd);
-    ts_expert_profile  prof = ts_expert_default_profile(rr.expert);
+    ts_expert_profile  prof = ts_expert_default_profile(rr.expert, mod);
 
     ts_quant_params_2d qp;
     qp.alpha          = cand->alpha * prof.alpha_scale;
@@ -275,7 +332,20 @@ int ts_dispatch_run(const ts_dispatch_params * params,
     // artifact) when an imatrix is provided.
     ts_imatrix imatrix;
     bool have_imatrix = false;
+    ts_mm_imatrix mm_imatrix;
+    bool have_mm_imatrix = false;
     if (!params->imatrix_path.empty()) {
+        // multimodal imatrix (v3, modality_breakdown). Optional: a text-only
+        // v2 file simply fails this load and falls through to the text path.
+        std::string mmsg;
+        if (ts_mm_imatrix_load(params->imatrix_path.c_str(), &mm_imatrix, &mmsg) == 0) {
+            have_mm_imatrix = true;
+            if (verbose) {
+                printf("tessera-dispatch: calibration: loaded multimodal imatrix '%s' (%zu tensors)\n",
+                       params->imatrix_path.c_str(), mm_imatrix.data.size());
+            }
+        }
+
         std::string imsg;
         if (ts_imatrix_load_npz(params->imatrix_path.c_str(), &imatrix, &imsg) == 0) {
             have_imatrix = true;
@@ -283,11 +353,14 @@ int ts_dispatch_run(const ts_dispatch_params * params,
                 printf("tessera-dispatch: calibration: loaded imatrix '%s' (%zu tensors)\n",
                        params->imatrix_path.c_str(), imatrix.data.size());
             }
-        } else {
+        } else if (!have_mm_imatrix) {
             if (err_msg) {
                 *err_msg = "failed to load imatrix '" + params->imatrix_path + "': " + imsg;
             }
             return 1;
+        } else if (verbose) {
+            printf("tessera-dispatch: calibration: no text rollup in '%s' (multimodal only)\n",
+                   params->imatrix_path.c_str());
         }
     }
 
@@ -480,6 +553,12 @@ int ts_dispatch_run(const ts_dispatch_params * params,
     // cross-layer composite via ts_search_fitness when the layer counts match.
     std::unordered_map<std::string, float> ga_alpha;
 
+    // per-tensor multimodal state (populated when an MM imatrix is present):
+    // the per-modality AWQ result (alpha + mse) and the operative modality.
+    // mm_awq is shared with the quantize loop so the alpha search runs once.
+    std::unordered_map<std::string, ts_mm_awq_result> mm_awq;
+    std::unordered_map<std::string, int>              mm_modality;
+
     // MAP-Elites archive: best policy per regime cell, populated from the GA
     // results below and persisted to a sidecar JSON alongside the policy.
     ts_map_elites_archive archive;
@@ -534,6 +613,23 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             ts_regime_descriptor desc = ts_regime_compute_descriptor(
                 name, w.data(), out_dim, in_dim, imdata, imdata ? imdim : 0);
 
+            // multimodal: resolve the operative modality (drives routing + the
+            // archive axis) and run the per-modality AWQ alpha search (drives
+            // the modality-weighted fitness below).
+            if (have_mm_imatrix) {
+                int mod = desc.modality;
+                const ts_mm_imatrix_entry * en =
+                    ts_dispatch_mm_resolve(&mm_imatrix, name, desc.modality, &mod);
+                desc.modality = mod;
+                if (en != nullptr) {
+                    mm_modality[name] = mod;
+                    ts_mm_awq_result mres;
+                    if (ts_dispatch_mm_awq(&mm_imatrix, name, w.data(), out_dim, in_dim, &mres) == 0) {
+                        mm_awq[name] = std::move(mres);
+                    }
+                }
+            }
+
             ga_names.push_back(name);
             ga_wbufs.push_back(std::move(w));
 
@@ -560,6 +656,7 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             eval_ctx.seed           = (uint32_t)params->evolve_seed;
             eval_ctx.verbose        = verbose;
             eval_ctx.mode_prints    = 0;
+            eval_ctx.modality       = mm_modality;
 
             // S5 kernel-direct fitness config. The sidecar directory defaults
             // to the runtime hook's dump dir ($LLAMA_TILE640_DEBUG_DEQUANT_DIR).
@@ -607,11 +704,44 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             fit_cfg.layer_alpha = (search_cfg.n_layers == (int64_t)t2.size())
                                       ? search_cfg.layer_alpha : nullptr;
             fit_cfg.n_layers    = (int64_t)t2.size();
-            float composite = ts_search_fitness(t2.data(), &fit_cfg);
+
+            // modality-weighted composite (M1) when multimodal data exists:
+            // per-modality per-layer t_l^2 from the per-modality AWQ reconstruction
+            // error, combined with the 0.5/0.3/0.2 weights via ts_mm_fitness_compute.
+            // Missing modalities carry the text fallback (M8), so all three slots
+            // are populated for every layer that has an MM AWQ result.
+            float composite;
+            const bool mm_composite = have_mm_imatrix && !mm_awq.empty();
+            if (mm_composite) {
+                const int64_t n_layers = (int64_t)t2.size();
+                std::vector<float> t2_text(n_layers, 0.0f);
+                std::vector<float> t2_image(n_layers, 0.0f);
+                std::vector<float> t2_audio(n_layers, 0.0f);
+                for (size_t l = 0; l < ga_results.size(); l++) {
+                    auto it = mm_awq.find(ga_names[l]);
+                    if (it != mm_awq.end()) {
+                        t2_text[l]  = it->second.mse_per_modality[0];
+                        t2_image[l] = it->second.mse_per_modality[1];
+                        t2_audio[l] = it->second.mse_per_modality[2];
+                    } else {
+                        t2_text[l]  = t2[l];
+                        t2_image[l] = t2[l];
+                        t2_audio[l] = t2[l];
+                    }
+                }
+                const float * t2_mm[3] = { t2_text.data(), t2_image.data(), t2_audio.data() };
+                const bool present[3]  = { true, true, true };
+                ts_mm_fitness_params fp = ts_mm_fitness_default_params();
+                ts_mm_fitness_score fs = ts_mm_fitness_compute(
+                    t2_mm, fit_cfg.layer_alpha, present, n_layers, &fp);
+                composite = fit_cfg.layer_alpha ? fs.alpha_weighted : fs.composite;
+            } else {
+                composite = ts_search_fitness(t2.data(), &fit_cfg);
+            }
 
             if (verbose) {
-                printf("tessera-dispatch: GA done (%lld layers, composite=%.6f, higgs_weighted=%d)\n",
-                       (long long)ga_layers.size(), composite, fit_cfg.layer_alpha != nullptr);
+                printf("tessera-dispatch: GA done (%lld layers, composite=%.6f, higgs_weighted=%d, mm_weighted=%d)\n",
+                       (long long)ga_layers.size(), composite, fit_cfg.layer_alpha != nullptr, (int)mm_composite);
             }
 
             // feed the GA outcomes into the MAP-Elites archive: one elite per
@@ -752,15 +882,58 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             name, weights.data(), out_dim, in_dim,
             imdata, imdata ? imdim : 0);
 
+        // multimodal: resolve the operative modality, the per-modality AWQ
+        // alpha, and the per-modality activation scales for this tensor.
+        int   mm_mod        = desc.modality;
+        float mm_alpha[3]   = { 0.0f, 0.0f, 0.0f };
+        bool  have_mm       = false;
+        bool  have_mm_alpha = false;
+        if (have_mm_imatrix) {
+            const ts_mm_imatrix_entry * en =
+                ts_dispatch_mm_resolve(&mm_imatrix, name, desc.modality, &mm_mod);
+            desc.modality = mm_mod;
+            if (en != nullptr) {
+                have_mm = true;
+                auto it = mm_awq.find(name);
+                if (it == mm_awq.end()) {
+                    ts_mm_awq_result mres;
+                    if (ts_dispatch_mm_awq(&mm_imatrix, name, weights.data(),
+                                           out_dim, in_dim, &mres) == 0) {
+                        it = mm_awq.emplace(name, std::move(mres)).first;
+                    }
+                }
+                if (it != mm_awq.end()) {
+                    for (int m = 0; m < 3; m++) {
+                        mm_alpha[m] = it->second.best_alpha[m];
+                    }
+                    have_mm_alpha = true;
+                }
+                // per-modality act_scales for the operative modality override the
+                // text rollup so the quantizer's act_scale field is modality-specific
+                int64_t ad = 0;
+                const float * ma = ts_mm_imatrix_act_scales(
+                    &mm_imatrix, name, (ts_modality)mm_mod, &ad);
+                if (ma != nullptr && ad == in_dim) {
+                    act_scales = ma;
+                }
+            }
+        }
+
         ts_regime_routing routing = ts_regime_classify(&desc);
 
-        // per-tensor alpha: GA result when available, else the default
-        const float tensor_alpha = (need_ga && ga_alpha.count(name))
-                                       ? ga_alpha[name] : default_alpha;
+        // per-tensor alpha: per-modality MM alpha > GA result > default
+        float tensor_alpha;
+        if (have_mm && have_mm_alpha) {
+            tensor_alpha = mm_alpha[mm_mod];
+        } else if (need_ga && ga_alpha.count(name)) {
+            tensor_alpha = ga_alpha[name];
+        } else {
+            tensor_alpha = default_alpha;
+        }
 
         // apply the routed expert's profile to a per-tensor copy of the base
         // params (qparams is shared across the loop, so never mutate it here)
-        ts_expert_profile  profile = ts_expert_default_profile(routing.expert);
+        ts_expert_profile  profile = ts_expert_default_profile(routing.expert, desc.modality);
         ts_quant_params_2d tqp     = qparams;
         tqp.alpha           = tensor_alpha * profile.alpha_scale;
         tqp.clip           *= profile.clip_scale;
@@ -770,9 +943,9 @@ int ts_dispatch_run(const ts_dispatch_params * params,
         tqp.outlier_thresh *= profile.outlier_thresh;
 
         if (verbose) {
-            printf("tessera-dispatch: %s family=%s expert=%s reason='%s' "
+            printf("tessera-dispatch: %s family=%s modality=%d expert=%s reason='%s' "
                    "alpha=%.3f clip=%.3f grid=%d outliers=%d septq=%d\n",
-                   name, family.c_str(), ts_expert_name(routing.expert),
+                   name, family.c_str(), (int)desc.modality, ts_expert_name(routing.expert),
                    routing.reason.c_str(), tqp.alpha, tqp.clip,
                    (int)tqp.awq_grid, (int)tqp.max_outliers, (int)tqp.use_septq);
         }
@@ -787,6 +960,10 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             out.profile_max_outliers   = (int)tqp.max_outliers;
             out.profile_outlier_thresh = tqp.outlier_thresh;
             out.profile_use_septq      = tqp.use_septq;
+            out.modality_id            = (int)desc.modality;
+            for (int m = 0; m < 3; m++) {
+                out.modality_alpha[m] = mm_alpha[m];
+            }
         };
 
         if (n_dims == 3) {
@@ -896,6 +1073,10 @@ int ts_dispatch_run(const ts_dispatch_params * params,
         first_policy_entry = false;
         policy_json += "    {\"name\": \"" + std::string(name) + "\", "
                      + "\"family\": \"" + family + "\", "
+                     + "\"modality\": " + std::to_string((int)desc.modality) + ", "
+                     + "\"modality_alpha\": [" + std::to_string(mm_alpha[0]) + ", "
+                     + std::to_string(mm_alpha[1]) + ", "
+                     + std::to_string(mm_alpha[2]) + "], "
                      + "\"expert\": " + std::to_string((int)routing.expert) + ", "
                      + "\"expert_name\": \"" + ts_expert_name(routing.expert) + "\", "
                      + "\"alpha\": " + std::to_string(tensor_alpha) + ", "

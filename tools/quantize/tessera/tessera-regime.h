@@ -37,6 +37,11 @@ struct ts_regime_routing {
 // Infer tensor family from name (e.g. "blk.0.attn_q.weight" -> "attn_q").
 std::string ts_regime_infer_family(const char * tensor_name);
 
+// Infer modality from tensor name patterns (0=text, 1=image, 2=audio).
+// Vision/audio embedder tensors map to their modality; everything else
+// (the shared LM blocks) defaults to text.
+int ts_regime_infer_modality(const char * tensor_name);
+
 // Classify a tensor's regime from its descriptors.
 // Returns the routing decision with reason.
 ts_regime_routing ts_regime_classify(const ts_regime_descriptor * desc);
@@ -64,8 +69,11 @@ struct ts_expert_profile {
     float outlier_thresh;    // outlier threshold multiplier
 };
 
-// Return the default parameter profile for a routed expert.
-ts_expert_profile ts_expert_default_profile(ts_expert_id expert);
+// Return the default parameter profile for a routed expert. The optional
+// modality_id (0=text, 1=image, 2=audio) layers per-modality adjustments on
+// top of the expert baseline: audio tightens the clip, image widens the
+// outlier budget, text is unchanged.
+ts_expert_profile ts_expert_default_profile(ts_expert_id expert, int modality_id = 0);
 
 // Human-readable expert name ("AWQ", "LRQ", "DartQuant", ...).
 const char * ts_expert_name(ts_expert_id expert);

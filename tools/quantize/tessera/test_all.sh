@@ -78,6 +78,9 @@ compile_and_run search      $T/test_search.cpp      $T/tessera-search.cpp $T/tes
 # --- MAP-Elites archive (search + linalg + lbfgs + vendor/nlohmann) ---
 compile_and_run map_elites  $T/test_map_elites.cpp  $T/tessera-search.cpp $T/tessera-linalg.cpp $T/tessera-lbfgs.cpp -I vendor
 
+# --- Modality as operative regime axis (regime + search + linalg + lbfgs + vendor) ---
+compile_and_run modality_routing $T/test_modality_routing.cpp $T/tessera-regime.cpp $T/tessera-search.cpp $T/tessera-linalg.cpp $T/tessera-lbfgs.cpp -I vendor
+
 # --- HIGGS integration (higgs + cache + search + quant + vec) ---
 compile_and_run higgs_integration $T/test_higgs_integration.cpp $T/tessera-higgs.cpp $T/tessera-higgs-cache.cpp $T/tessera-search.cpp $T/tessera-linalg.cpp $T/tessera-lbfgs.cpp $T/tessera-quant.cpp $T/tessera-vec.cpp -I vendor -framework Accelerate
 
