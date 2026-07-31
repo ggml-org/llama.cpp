@@ -253,7 +253,7 @@ clip_graph::clip_graph(clip_ctx * ctx, const clip_image_f32 & img) :
         n_embd(hparams.n_embd),
         n_head(hparams.n_head),
         n_head_kv(hparams.n_head_kv),
-        d_head(n_head > 0 ? n_embd / n_head : 0),
+        d_head(hparams.n_embd_head > 0 ? hparams.n_embd_head : (n_head > 0 ? n_embd / n_head : 0)),
         n_layer(hparams.n_layer),
         n_mmproj_embd(clip_n_mmproj_embd(ctx)),
         eps(hparams.eps),
@@ -372,13 +372,13 @@ ggml_tensor * clip_graph::build_vit(
                 /* nb1    */ ggml_row_size(cur->type, d_head),
                 /* nb2    */ cur->nb[1],
                 /* nb3    */ cur->nb[1] * n_pos,
-                /* offset */ ggml_row_size(cur->type, n_embd));
+                /* offset */ ggml_row_size(cur->type, n_head * d_head));
 
                 Vcur = ggml_view_4d(ctx0, cur, d_head, n_head, n_pos, B,
                 /* nb1    */ ggml_row_size(cur->type, d_head),
                 /* nb2    */ cur->nb[1],
                 /* nb3    */ cur->nb[1] * n_pos,
-                /* offset */ ggml_row_size(cur->type, 2 * n_embd));
+                /* offset */ ggml_row_size(cur->type, 2 * n_head * d_head));
 
                 if (layer.q_norm) {
                     GGML_ASSERT(layer.q_norm->ne[0] == Qcur->ne[0]);
@@ -1190,6 +1190,7 @@ struct clip_model_loader {
             const char * prefix = is_vision ? "vision" : "audio";
             get_u32(string_format(KEY_N_EMBD,         prefix), hparams.n_embd);
             get_u32(string_format(KEY_N_HEAD,         prefix), hparams.n_head);
+            get_u32(string_format(KEY_N_EMBD_HEAD,    prefix), hparams.n_embd_head, false);
             get_u32(string_format(KEY_N_FF,           prefix), hparams.n_ff);
             get_u32(string_format(KEY_N_BLOCK,        prefix), hparams.n_layer);
             get_u32(string_format(KEY_PROJ_DIM,       prefix), hparams.projection_dim);

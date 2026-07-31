@@ -54,6 +54,8 @@ struct clip_hparams {
     int32_t projection_dim = 0;
     int32_t n_head = 0;
     int32_t n_head_kv = 0;
+    // 0 = derive from n_embd; set when qkv width != n_embd
+    int32_t n_embd_head = 0;
     int32_t n_layer = 0;
     int32_t n_merge = 1; // number of patch merges **per-side**
 

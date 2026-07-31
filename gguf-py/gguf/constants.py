@@ -353,6 +353,7 @@ class Keys:
         class Attention:
             HEAD_COUNT      = "clip.vision.attention.head_count"
             HEAD_COUNT_KV   = "clip.vision.attention.head_count_kv" # used by mimovl (GQA)
+            HEAD_DIM        = "clip.vision.attention.head_dim" # set when qkv width != n_embd
             LAYERNORM_EPS   = "clip.vision.attention.layer_norm_epsilon"
 
         class Projector:
