@@ -54,18 +54,24 @@ public struct RecordOutcomeTool: TesseraTool {
             // fail the outcome record.
             _ = try? await center.curation.ingest(outcome: outcome)
 
-            // If this outcome verifies a teacher proposal, record the trial.
-            // v1 lacks the full proposal -> teacher mapping, so the trial is
-            // attributed to an "unknown" bucket (Phase 2 wires real attribution).
+            // If this outcome verifies a teacher proposal, resolve the teacher
+            // that produced it via the proposal registry and record the trial
+            // against the world gate. Proposals the registry does not know
+            // (e.g. recorded before the registry existed) fall back to the
+            // "unknown" bucket.
+            var attributedTeacher = ""
             if let proposalId, !proposalId.isEmpty {
-                let placeholder = TesseraTeacherProposal(id: proposalId, teacherId: "unknown", reasoning: "")
-                try? center.assessor.recordTrial(proposal: placeholder, passedWorldGate: success)
+                let teacherId = TesseraProposalRegistry.shared.teacherId(forProposalId: proposalId) ?? "unknown"
+                attributedTeacher = teacherId
+                let attributed = TesseraTeacherProposal(id: proposalId, teacherId: teacherId, reasoning: "")
+                try? center.assessor.recordTrial(proposal: attributed, passedWorldGate: success)
             }
 
             return .ok(receipt.summary, data: [
                 "outcome_id": .string(outcome.id),
                 "kind": .string(kind.rawValue),
                 "success": .bool(success),
+                "attributed_teacher": .string(attributedTeacher),
             ])
         } catch {
             return .fail(error.localizedDescription)
