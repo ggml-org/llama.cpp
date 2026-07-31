@@ -45,12 +45,15 @@ using set_candidate_fn = std::function<void(int)>;
 // undoes the last set_candidate
 using clear_candidate_fn = std::function<void()>;
 
+// giving up on a cell returns early with trusted == false, so a trusted cell is one every
+// candidate of was measured; callers may still see a non-positive t[] from a failed measure.
 struct cell_result {
     std::vector<double> t;               // time (us) per candidate index, <= 0 if not measured
     bool                trusted = true;  // false -> caller must drop this cell
     double              anchor_min = 0.0;
     double              anchor_max = 0.0;
     int                 n_cooldowns = 0;
+    int                 n_remeasures = 0;
 };
 
 // times every candidate over the prebuilt cell, re-measuring a periodic baseline anchor
