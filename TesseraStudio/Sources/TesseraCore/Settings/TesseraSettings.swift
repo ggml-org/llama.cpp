@@ -41,6 +41,9 @@ public enum TesseraSettingsKey {
     public static let learningMaxConcurrentAgents = "tessera.settings.learningMaxConcurrentAgents"
     public static let learningGuardEpsilon = "tessera.settings.learningGuardEpsilon"
     public static let learningAssessmentIntervalHours = "tessera.settings.learningAssessmentIntervalHours"
+    public static let learningBaseModelPath = "tessera.settings.learningBaseModelPath"
+    public static let learningMinTracesForTraining = "tessera.settings.learningMinTracesForTraining"
+    public static let learningTrainingDryRun = "tessera.settings.learningTrainingDryRun"
 }
 
 /// Factory defaults, registered at app launch.
@@ -77,6 +80,9 @@ public enum TesseraSettingsDefault {
     public static let learningMaxConcurrentAgents = 4
     public static let learningGuardEpsilon = 0.02      // collapse-guard regression tolerance
     public static let learningAssessmentIntervalHours = 24
+    public static let learningBaseModelPath = ""           // empty -> training disabled
+    public static let learningMinTracesForTraining = 1000
+    public static let learningTrainingDryRun = true
 }
 
 /// Log levels offered in Advanced settings.
@@ -121,6 +127,9 @@ public enum TesseraSettings {
             TesseraSettingsKey.learningMaxConcurrentAgents: TesseraSettingsDefault.learningMaxConcurrentAgents,
             TesseraSettingsKey.learningGuardEpsilon: TesseraSettingsDefault.learningGuardEpsilon,
             TesseraSettingsKey.learningAssessmentIntervalHours: TesseraSettingsDefault.learningAssessmentIntervalHours,
+            TesseraSettingsKey.learningBaseModelPath: TesseraSettingsDefault.learningBaseModelPath,
+            TesseraSettingsKey.learningMinTracesForTraining: TesseraSettingsDefault.learningMinTracesForTraining,
+            TesseraSettingsKey.learningTrainingDryRun: TesseraSettingsDefault.learningTrainingDryRun,
         ])
     }
 
@@ -283,5 +292,21 @@ public enum TesseraSettings {
     public static var learningAssessmentIntervalHours: Int {
         let v = UserDefaults.standard.integer(forKey: TesseraSettingsKey.learningAssessmentIntervalHours)
         return v > 0 ? v : TesseraSettingsDefault.learningAssessmentIntervalHours
+    }
+
+    /// Base model the drafter trainer fine-tunes. Empty means training is
+    /// disabled; the orchestrator reports skippedNoModel rather than guessing.
+    public static var learningBaseModelPath: String {
+        UserDefaults.standard.string(forKey: TesseraSettingsKey.learningBaseModelPath) ?? TesseraSettingsDefault.learningBaseModelPath
+    }
+
+    public static var learningMinTracesForTraining: Int {
+        let v = UserDefaults.standard.integer(forKey: TesseraSettingsKey.learningMinTracesForTraining)
+        return v > 0 ? v : TesseraSettingsDefault.learningMinTracesForTraining
+    }
+
+    public static var learningTrainingDryRun: Bool {
+        // register(defaults:) seeds this, so the bool read is meaningful.
+        UserDefaults.standard.bool(forKey: TesseraSettingsKey.learningTrainingDryRun)
     }
 }

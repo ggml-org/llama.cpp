@@ -592,6 +592,8 @@ public final class TesseraLearningCenter: @unchecked Sendable {
     private var _assessor: any TesseraTeacherAssessing = TesseraNoopTeacherAssessor()
     private var _foraging: any TesseraForagingStoring = TesseraNoopForagingStore()
     private var _headRouting: any TesseraHeadRouting = TesseraNoopHeadRouting()
+    // Optional: nil until installDefaults wires the drafter trainer.
+    private var _training: TesseraTrainingOrchestrator?
 
     private init() {}
 
@@ -623,6 +625,9 @@ public final class TesseraLearningCenter: @unchecked Sendable {
     }
     public var headRouting: any TesseraHeadRouting {
         lock.lock(); defer { lock.unlock() }; return _headRouting
+    }
+    public var training: TesseraTrainingOrchestrator? {
+        lock.lock(); defer { lock.unlock() }; return _training
     }
 
     /// True once a real escalation service with at least one teacher is
@@ -660,6 +665,9 @@ public final class TesseraLearningCenter: @unchecked Sendable {
     public func install(headRouting: any TesseraHeadRouting) {
         lock.lock(); defer { lock.unlock() }; _headRouting = headRouting
     }
+    public func install(training: TesseraTrainingOrchestrator) {
+        lock.lock(); defer { lock.unlock() }; _training = training
+    }
 
     /// Purge stored training data across every purgeable store. Returns a
     /// receipt summarizing what was removed.
@@ -671,6 +679,7 @@ public final class TesseraLearningCenter: @unchecked Sendable {
         removed += (try? worldSignals.purgeTrainingData()) ?? 0
         removed += (try? assessor.purgeTrainingData()) ?? 0
         removed += (try? foraging.purgeTrainingData()) ?? 0
+        removed += (try? training?.traceStore.purgeTrainingData()) ?? 0
         return TesseraLearningReceipt(
             kind: "purge",
             summary: "Purged \(removed) learning record(s).",

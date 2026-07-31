@@ -3136,6 +3136,10 @@ The "don't ask again" is per-tool, per-session (not
 persisted; the destructive behavior is always
 re-prompted across sessions for safety).
 
+(This per-session-only posture is superseded for the outward agent by
+the learned-trust model in section 15.5, which persists approval
+history under a one-way ratchet.)
+
 LoC: ~120 Swift + 60 SwiftUI for the modal sheet.
 
 ### 14.6 The 3-destination shell
@@ -3328,6 +3332,10 @@ LoC: ~200 C.
 For reference, the patterns the agent flagged to
 NOT adopt (per `docs/agent-patterns-research.md`):
 
+(Several of these were v1 skips and are promoted to later-wave scope in
+section 15.4: computer use, Accessibility scan, AppleScript bridge,
+global hotkey, and LoRA adapter training.)
+
 - 15-button toolbar (Agent!) — visual noise
 - XPC user agent + privileged daemon (Agent!) —
   Studio is foreground single-user
@@ -3472,6 +3480,165 @@ The agent loop adds 2 weeks to the 1-dev timeline
 and 1 week to the 4-parallel-agent timeline. The
 Studio v1 is now ~12,151 LoC across 3 targets +
 the xcframework.
+
+---
+
+## 15. Agent harness direction: the outward agent (added 2026-07-31)
+
+Section 14 specified the INWARD agent: the loop that drives the Tessera
+calibration pipeline (calibrate -> evolve -> quantize -> convert ->
+evaluate). This section adds the OUTWARD agent: a general Mac agent that
+acts on the user's behalf across the machine - computer use, browser,
+research - the same loop pointed at the world instead of at the
+quantizer. One machine, two payloads (`self-improving-loop-design.md`
+section 1): the agent used by day is the harness that harvests the
+training signal that improves the model by night. The outward
+capabilities are scoped in `PROJECT-STATUS.md` Priority 9 and absorbed
+selectively from seven scouted open-source agents
+(`docs/tessera-harness-absorption-2026-07-31.md`).
+
+This section extends the v1 spec; where it conflicts with section 14's
+v1 skips and v1 approval posture, this section governs the later waves.
+
+### 15.1 Positioning: agent manager, not an editor
+
+Studio orchestrates, verifies, and records agents; editors and browsers
+are things it DRIVES and DIFFS against, not things it IS. No text editor,
+LSP, debugger, or extension ecosystem. The editor is a commodity
+(Google's Antigravity just forked VS Code) and a tar pit for a small
+team; the seat Tessera takes is the layer ABOVE the editor - the thing
+that manages agents, holds the evidence, enforces approval, and drives
+the Mac. Diff-review + "open in editor" replaces building an editor.
+(This refines section 14.16's "we don't edit code" skip: the agent
+reviews and proposes diffs and opens the user's editor; it does not
+become the editor.)
+
+### 15.2 Distribution: Developer ID for the Mac app
+
+The Mac app ships via Developer ID + notarization, NOT the Mac App Store
+(confirmed by the architect). Deep macOS integration - the Accessibility
+API, Full Disk Access, screen recording - is impossible under Mac App
+Store sandboxing, and those are the differentiator, so the Mac app takes
+the Developer ID path that every serious computer-use product uses. This
+is scoped to the Mac: the iOS app keeps the App Store path in section 13
+(IAP model distribution, privacy manifest, AI disclosure all unchanged).
+The two distribution channels are independent; nothing in section 13 is
+superseded.
+
+### 15.3 The macOS integration ladder
+
+The local product can go places a cloud product cannot, in rough order
+of permission burden:
+
+- Global hotkey + menu bar - summon an agent from anywhere. (Promotes
+  section 14.16's "global hotkey" skip.)
+- Services / Quick Actions - right-click any text or file -> "ask
+  Tessera."
+- ScreenCaptureKit - see any screen or window; the perception half of
+  computer use.
+- Accessibility API - read and drive ANY app's UI, not just the browser;
+  the action half of computer use. (Promotes section 14.16's
+  "Accessibility scan" + "computer use" skips.)
+- AppleScript / Apple Events - script Finder, Mail, Calendar, Notes,
+  Reminders. (Promotes section 14.16's "AppleScript bridge" skip.)
+- Vision OCR + Speech transcription - free, on-device perception.
+- Apple Foundation Models - the zero-cost local drafter tier and default
+  teacher (`self-improving-loop-design.md` 4.1); the seed is the AION
+  mediator in 14.11, promoted from annotation hint to first-class
+  runtime + teacher.
+
+### 15.4 The outward capabilities (Priority 9, three waves)
+
+- **Wave 1 - safety spine + cheap wins (P0).** Approval-engine hardening
+  (layered permission: policy x profile x sandbox-enforceability,
+  fail-safe to AskUser); a fail-closed action verifier ("verify a real
+  state change, not a self-reported success"); a denial circuit-breaker
+  (the collapse guard, made concrete); per-claim citation + a
+  never-fabricate contract; a skills directory + `SKILL.md` loader; a
+  research tool over `TesseraWebSearch`.
+- **Wave 2 - native capabilities (P0/P1, macOS-first).** A computer-use
+  tool (ScreenCaptureKit -> Accessibility -> CGEvent, model-native
+  coordinate grounding, skill-capture receipts, capture-time PII scrub)
+  and a browser tool (WKWebView + an indexed-DOM serializer + a
+  page-change re-ground guard).
+- **Wave 3 - identity + polish (P1/P2).** `SOUL.md` persona, per-model
+  harness profiles + context-budget rules, a local-first config posture
+  + `doctor` migrations, scoped gating, source curation.
+
+Deliberately NOT absorbed: anyone else's agent loop, cloud/vendor/server
+infra, heavy Python/CUDA/CV stacks, unsigned-binary supply chains, and
+self-judging evaluation. (This revisits section 14.16: computer use,
+Accessibility, AppleScript, and the global hotkey were v1 skips and are
+now Wave-2/Wave-3 scope; LoRA training was a v1 skip and is now the
+whole inward flywheel of `self-improving-loop-design.md`.)
+
+### 15.5 Autonomy calibration: needy -> learned trust -> scoped YOLO
+
+Studio starts NEEDY: it asks for approval often. Every approval and
+denial is a receipt (14.10), and the approval policy is a LEARNED
+PROJECTION over that history: action-classes the user consistently
+allows auto-continue; novel and edge cases keep prompting. This
+SUPERSEDES the v1 approval posture in 14.5 and risk R28, which held
+approval to per-session-only and never persisted, on the theory that
+persisted approval is dangerous. The learned-trust model is safe
+precisely because of the invariant below; the per-session-only rule was
+a blunt instrument for a danger the ratchet defuses.
+
+- **One-way ratchet (load-bearing).** Learning only ever moves toward
+  MORE autonomy on OBSERVED-SAFE patterns. A NEW consequential or
+  irreversible action-class ALWAYS prompts, regardless of history. "You
+  have approved 200 file edits" must never translate into "auto-approve
+  this `rm -rf`." Trust is per-action-class, and irreversible classes
+  are permanently un-trainable.
+- **Scoped YOLO mode.** A time-boxed AND goal/session-boxed override
+  that auto-approves within scope. It is always logged, always expires,
+  and still records receipts at full fidelity - a YOLO session is the
+  richest training data the harness gets (many actions, fast) and feeds
+  the loop rather than escaping it.
+
+### 15.6 One receipt stream, two learners
+
+The receipts defined in 14.10 are the shared substrate for both
+payloads. The SAME accept/reject + outcome stream trains the model (idle
+LoRA, `self-improving-loop-design.md` 4.4-4.5) and trains the approval
+policy (15.5). Capture is on by default and local; learning and egress
+are opt-in (`self-improving-loop-design.md` section 6). No cloud product
+can replicate this, because none has the user's local longitudinal
+approval history; that history is the moat, and it is built one receipt
+at a time.
+
+### 15.7 The one honest tension
+
+Teacher distillation sends the user's struggling prompts to a teacher -
+the single real egress in an otherwise-local system. It is therefore
+opt-in, approval-governed, and scrubbed before it leaves; Apple
+Foundation Models / Private Cloud Compute is the default teacher
+precisely because it barely egresses at all
+(`self-improving-loop-design.md` 4.1). Computer use is the other face of
+the same tension: an agent that can click anything can click the wrong
+thing, and a screen recorder captures passwords and PHI by construction.
+The mitigation is the approval engine + the no-egress boundary +
+capture-time scrub + the receipts, treated as gates, not afterthoughts.
+This is what makes an autonomous Mac agent trustworthy rather than
+terrifying, and it is the constitutional/receipt architecture Tessera
+already owns.
+
+### 15.8 New open questions for the outward agent
+
+- **Q18. How much autonomy before requiring approval?** The ratchet
+  (15.5) needs a threshold: how many consistent approvals on an
+  action-class before it auto-continues, and what confidence. Lean:
+  start conservative (high count, high confidence) and let the user
+  tune.
+- **Q19. AFM teacher quality on the hard tail.** Is Apple Foundation
+  Models good enough as the default teacher for the genuinely-hard
+  escalations, or does the hard tail always need a third-party teacher?
+  The recurring per-teacher assessment (`self-improving-loop-design.md`
+  4.1) measures this; lean: AFM default, third-party on demand.
+- **Q20. Computer-use permission onboarding.** Accessibility + Full Disk
+  Access + screen recording each need a separate macOS grant. Lean: a
+  guided first-run flow that requests each only when the capability that
+  needs it is first used, not all up front.
 
 ## Appendix A: File index
 

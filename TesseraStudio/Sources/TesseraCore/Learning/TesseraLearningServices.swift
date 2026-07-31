@@ -20,6 +20,14 @@ public enum TesseraLearningServices {
         center.install(foraging: TesseraForagingStore())
         center.install(headRouting: TesseraTrackRScaffold())
 
+        let baseModel = TesseraSettings.learningBaseModelPath
+        let trainingConfig = TesseraTrainingOrchestrator.Config(
+            minTracesForTraining: TesseraSettings.learningMinTracesForTraining,
+            baseModelPath: baseModel.isEmpty ? nil : baseModel,
+            dryRun: TesseraSettings.learningTrainingDryRun
+        )
+        center.install(training: TesseraTrainingOrchestrator(config: trainingConfig))
+
         let scheduler = TesseraAssessmentScheduler(assessor: center.assessor)
         scheduler.start()
         assessmentScheduler = scheduler

@@ -51,6 +51,7 @@ public final class TesseraToolRegistry: Sendable {
         AnonymizeWorktreeTool(),
         EscalateWithCodeTool(),
         RunAdaptationTool(),
+        RunTrainingTool(),
         InspectLearningTool(),
         PurgeTrainingDataTool(),
     ])

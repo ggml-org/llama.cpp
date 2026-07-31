@@ -253,6 +253,24 @@ become gospel, and the verbosity / reasoning-externalization criterion
 of R6 is MEASURED per teacher on a recurring basis instead of chosen
 once at config time.
 
+Apple Foundation Models is the default teacher (resolved 2026-07-31).
+The ensemble above is "whatever providers the user has keys for," which
+leaves a cold-start gap: a fresh install with no API keys has no teacher
+at all. Apple Foundation Models (AFM) closes it. AFM is available on
+macOS 26+ with NO API key and no account, runs on-device or on Apple's
+Private Cloud Compute (PCC) under Apple's attestation guarantees, and is
+therefore the always-available FLOOR of the teacher pool: the default
+drafter tier and the default escalation teacher when the user has
+configured nothing else. Third-party cloud teachers (Claude/GPT) remain
+the higher-capability, higher-egress tier the user opts into by adding
+keys. The ordering is deliberate: AFM is the low-egress default precisely
+because teacher distillation is the one real egress in an otherwise-local
+system (privacy boundary, above), and PCC barely egresses at all. AFM
+enters `learning.teachers` as a synthetic, keyless entry the service
+always treats as available; it is the seed of the AION mediator already
+specified in `tessera-studio-design.md` 14.11, promoted from annotation
+hint to first-class teacher.
+
 ### 4.2 Curation pipeline (NEW)
 
 Purpose: turn raw harvested traces into usable, safe training signal.
@@ -473,9 +491,26 @@ Extend `TesseraSettingsKey` / `TesseraSettingsDefault`
 | `learning.guardEpsilon` | 0.02 | Collapse-guard regression tolerance (general-competence axis) |
 | `learning.assessmentIntervalHours` | 24 | Recurring per-teacher assessment cadence |
 
-`telemetryEnabled` stays false and continues to govern any external
+`telemetryEnabled` stays false and continues to govern any EXTERNAL
 telemetry; the learning egress is separate and governed by
 `learning.escalationEnabled`.
+
+Capture vs egress vs learning (resolved 2026-07-31). "Always-on
+telemetry" and "privacy-first" are not in tension once three layers are
+separated. (1) CAPTURE - the receipt stream - is ON by default and local:
+every agent action already produces a schema-versioned receipt
+(`tessera-studio-design.md` 14.10), and the accept/reject + world-signal
+capture (4.4) extends it. This is the fuel; it never leaves the device.
+(2) LEARNING - turning receipts into LoRA training - is opt-in via
+`learning.enabled`, idle + on-power gated (4.5). (3) EGRESS - sending
+anything to a teacher - is opt-in via `learning.escalationEnabled` and
+approval-gated (4.1). Capture, learning, and egress are three separate
+gates. The receipts are simultaneously the LoRA dataset (the
+accept/reject signal IS the label) and the autonomy-calibration data the
+approval engine learns trust from (`tessera-studio-design.md` 15): one
+receipt stream, two learners. So the flywheel runs on data the app
+already records for audit; nothing new is captured, and the only new
+question is whether the user opts in to letting it train.
 
 ---
 
@@ -737,10 +772,34 @@ The architect ratified the full scope and settled the open questions:
    out to all available teachers, every proposal is trialed against the
    world gate and learned from, and a recurring per-teacher assessment
    keeps a live quality estimate that gates future use (section 4.1).
+10. **Apple Foundation Models is the default teacher** (resolves the
+    cold-start gap in decision 9): AFM (macOS 26+, no API key, on-device
+    or Private Cloud Compute) is the always-available floor of the teacher
+    pool and the default drafter tier; third-party cloud teachers are the
+    higher-capability, higher-egress opt-in tier. See section 4.1.
+11. **Telemetry capture is on by default and local; learning and egress
+    are opt-in** (the "always-on telemetry" decision): the receipt stream
+    is the LoRA fuel and is always recorded locally, but turning it into
+    training is gated by `learning.enabled` and teacher egress by
+    `learning.escalationEnabled`. Capture, learning, and egress are three
+    separate gates. See section 6.
+12. **Autonomy is calibrated, not fixed** (joint with
+    `tessera-studio-design.md` 15): the approval policy is a learned
+    projection over the receipt history - needy at first, auto-continuing
+    on consistently-allowed action-classes, prompting on novel/edge
+    cases - under a one-way ratchet (learning only ever grants MORE
+    autonomy on OBSERVED-SAFE patterns; a new consequential/irreversible
+    action-class always prompts) plus a scoped, time-boxed, logged YOLO
+    override. The receipts that train the model also train the approval
+    policy: one stream, two learners.
 
 Remaining open items:
 
 - **Held-out set sizes per axis** - needs a first calibration pass.
+- **AFM teacher quality on the hard tail** - is Apple Foundation Models
+  good enough as the default teacher for the genuinely-hard escalations,
+  or does the hard tail always need a third-party teacher? The recurring
+  per-teacher assessment (section 4.1) measures this.
 
 ---
 

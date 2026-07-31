@@ -70,7 +70,10 @@ let package = Package(
         .target(
             name: "TesseraCore",
             dependencies: ["CTesseraFFI", "CLlama"],
-            path: "Sources/TesseraCore"
+            path: "Sources/TesseraCore",
+            // Ships the Skills format doc so the target has a resource bundle
+            // (Bundle.module); the skill loader looks here for bundled skills.
+            resources: [.copy("Skills/README.md")]
         ),
         .executableTarget(
             name: "TesseraStudioMac",
@@ -85,7 +88,10 @@ let package = Package(
         .testTarget(
             name: "TesseraCoreTests",
             dependencies: ["TesseraCore"],
-            path: "Tests/TesseraCoreTests"
+            path: "Tests/TesseraCoreTests",
+            // Copied verbatim so the loader's `<name>/SKILL.md` nesting is
+            // preserved when the fixtures are read back via Bundle.module.
+            resources: [.copy("Fixtures")]
         ),
     ]
 )
