@@ -719,7 +719,7 @@ static int op_sync(struct htp_ops_context * octx) {
     while (1) {
         Q6_dccleaninva_A((void *)sync_token);
         asm volatile ("syncht" : : : "memory");
-        if (atomic_load(sync_token) == 0) {
+        if (atomic_load(sync_token) == seq) {
             break;
         }
         if (++spins > HTP_SYNC_TIMEOUT) {
