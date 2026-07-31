@@ -9565,6 +9565,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // Speculative-verify shapes: GQA + multi-token queries (neq1 in 2..8).
+    // Vulkan GQA packing must not treat these as single-token decode.
+    for (int nb : { 2, 4, 5, 7, 8 }) {
+        test_cases.emplace_back(new test_flash_attn_ext(128, 128, 8, {4, 1}, 512, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+        test_cases.emplace_back(new test_flash_attn_ext(64, 64, 8, {4, 1}, 512, nb, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+    }
+
     // mixed quant and Q1_0 test cases
     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 4, {1, 1}, 128, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q4_0));
     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 4, {1, 1}, 128, 2, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q4_0, GGML_TYPE_F16));

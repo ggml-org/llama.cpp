@@ -10586,7 +10586,8 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     vk_fa_tuning_params tuning_params = get_fa_tuning_params(ctx->device, HSK, HSV, 512, KV, k->type, v->type, f32acc);
     const uint32_t max_gqa = std::min(tuning_params.block_rows, 32u);
 
-    if (N <= 8 && qk_ratio > 1 && qk_ratio <= max_gqa &&
+    // GQA packing (N := gqa_ratio) is only valid for single-token decode
+    if (neq1 == 1 && N <= 8 && qk_ratio > 1 && qk_ratio <= max_gqa &&
         qk_ratio * nek2 == neq2 && nek2 == nev2 && nem2 <= 1) {
         // grouped query attention - make the N dimension equal to gqa_ratio, reduce
         // workgroups proportionally in y dimension. The shader will detect gqa_ratio > 1
