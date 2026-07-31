@@ -541,6 +541,7 @@ llama_model_loader::llama_model_loader(
         llama_load_mode load_mode,
         bool check_tensors,
         bool no_alloc,
+        bool load_mtp,
         const llama_model_kv_override * param_overrides_p,
         const llama_model_tensor_buft_override * param_tensor_buft_overrides_p,
         const char * component_prefix_p)
@@ -858,6 +859,7 @@ llama_model_loader::llama_model_loader(
 
     this->check_tensors = check_tensors;
     this->no_alloc = no_alloc;
+    this->load_mtp = load_mtp;
 }
 
 std::string llama_model_loader::get_arch_name() const {

@@ -156,6 +156,7 @@ void llama_model_qwen35moe::load_arch_tensors(llama_model_loader & ml) {
 
     const bool mtp_only = (hparams.n_layer_nextn > 0) && (ml.get_weight("blk.0.attn_norm.weight") == nullptr);
     const int trunk_flags = mtp_only ? TENSOR_NOT_REQUIRED : 0;
+    int mtp_flags = !ml.load_mtp ? TENSOR_SKIP : 0;
 
     tok_embd = create_tensor_or_tile640(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, 0);
 
@@ -262,59 +263,59 @@ void llama_model_qwen35moe::load_arch_tensors(llama_model_loader & ml) {
         const int64_t n_ff_shexp = hparams.n_ff_shexp ? hparams.n_ff_shexp : n_ff;
 
         // MTP block looks like a full-attention Qwen3.5 decoder block with MoE FFN.
-        layer.attn_norm      = create_tensor_or_tile640(tn(LLM_TENSOR_ATTN_NORM, "weight", il), { n_embd }, 0);
-        layer.attn_post_norm = create_tensor_or_tile640(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", il), { n_embd }, 0);
+        layer.attn_norm      = create_tensor_or_tile640(tn(LLM_TENSOR_ATTN_NORM, "weight", il), { n_embd }, mtp_flags);
+        layer.attn_post_norm = create_tensor_or_tile640(tn(LLM_TENSOR_ATTN_POST_NORM, "weight", il), { n_embd }, mtp_flags);
 
-        create_tensor_qkv(layer, il, n_embd, n_embd_head_k * n_head * 2, n_embd_k_gqa, n_embd_v_gqa, 0);
+        create_tensor_qkv(layer, il, n_embd, n_embd_head_k * n_head * 2, n_embd_k_gqa, n_embd_v_gqa, mtp_flags);
         // Tile640 detection for self-attention output (MTP block)
-        layer.wo = create_tensor_or_tile640(tn(LLM_TENSOR_ATTN_OUT, "weight", il), { n_embd_head_k * n_head, n_embd }, 0);
-        layer.attn_q_norm = create_tensor_or_tile640(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", il), { n_embd_head_k }, 0);
-        layer.attn_k_norm = create_tensor_or_tile640(tn(LLM_TENSOR_ATTN_K_NORM, "weight", il), { n_embd_head_k }, 0);
+        layer.wo = create_tensor_or_tile640(tn(LLM_TENSOR_ATTN_OUT, "weight", il), { n_embd_head_k * n_head, n_embd }, mtp_flags);
+        layer.attn_q_norm = create_tensor_or_tile640(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", il), { n_embd_head_k }, mtp_flags);
+        layer.attn_k_norm = create_tensor_or_tile640(tn(LLM_TENSOR_ATTN_K_NORM, "weight", il), { n_embd_head_k }, mtp_flags);
 
         // Routed experts
-        layer.ffn_gate_inp  = create_tensor_or_tile640(tn(LLM_TENSOR_FFN_GATE_INP, "weight", il), { n_embd, n_expert }, 0);
+        layer.ffn_gate_inp  = create_tensor_or_tile640(tn(LLM_TENSOR_FFN_GATE_INP, "weight", il), { n_embd, n_expert }, mtp_flags);
         // See note in load_block_trunk: down_exps is (n_ff, n_embd, n_expert) for mul_mat_id.
         {
             const std::string _packed_name = tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight_packed", il).str();
             if (ml.get_tensor_meta(_packed_name.c_str()) != nullptr) {
                 constexpr int64_t _PAGE_SIZE = 640, _LP = 32, _WP = 32;
                 const int64_t _ppr = (n_ff_exp + _PAGE_SIZE - 1) / _PAGE_SIZE;
-                layer.ffn_down_exps_packed       = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight_packed",       il), {(int64_t)(n_expert) * (n_embd) * _ppr * _WP}, 0);
-                layer.ffn_down_exps_page_scales  = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight_page_scales",  il), {(int64_t)(n_expert) * (n_embd) * _ppr}, 0);
-                layer.ffn_down_exps_lane_scales  = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight_lane_scales",  il), {(int64_t)(n_expert) * (n_embd) * _ppr * _LP}, 0);
-                layer.ffn_down_exps_outlier_row_offsets = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight_outlier_row_offsets", il), {(int64_t)(n_expert) * (n_embd + 1)}, 0);
+                layer.ffn_down_exps_packed       = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight_packed",       il), {(int64_t)(n_expert) * (n_embd) * _ppr * _WP}, mtp_flags);
+                layer.ffn_down_exps_page_scales  = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight_page_scales",  il), {(int64_t)(n_expert) * (n_embd) * _ppr}, mtp_flags);
+                layer.ffn_down_exps_lane_scales  = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight_lane_scales",  il), {(int64_t)(n_expert) * (n_embd) * _ppr * _LP}, mtp_flags);
+                layer.ffn_down_exps_outlier_row_offsets = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight_outlier_row_offsets", il), {(int64_t)(n_expert) * (n_embd + 1)}, mtp_flags);
                 const auto * _outlier_meta = ml.require_tensor_meta(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight_outlier_cols", il).str());
-                layer.ffn_down_exps_outlier_cols = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight_outlier_cols", il), {_outlier_meta->ne[0]}, 0);
-                layer.ffn_down_exps_outlier_vals = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight_outlier_vals", il), {_outlier_meta->ne[0]}, 0);
+                layer.ffn_down_exps_outlier_cols = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight_outlier_cols", il), {_outlier_meta->ne[0]}, mtp_flags);
+                layer.ffn_down_exps_outlier_vals = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight_outlier_vals", il), {_outlier_meta->ne[0]}, mtp_flags);
             } else {
-                layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", il), {(int64_t)(n_ff_exp), (int64_t)(n_embd), (int64_t)(n_expert)}, 0);
+                layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", il), {(int64_t)(n_ff_exp), (int64_t)(n_embd), (int64_t)(n_expert)}, mtp_flags);
             }
         }
-        create_tensor_gate_up_exps(layer, il, n_embd, n_ff_exp, n_expert, 0);
-        layer.ffn_gate_up_exps_act_scale = create_tensor(tn(LLM_TENSOR_FFN_GATE_UP_EXPS, "weight_act_scale", il), { n_embd, n_expert }, TENSOR_NOT_REQUIRED);
-        layer.ffn_down_exps_act_scale = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight_act_scale", il), { n_ff_exp, n_expert }, TENSOR_NOT_REQUIRED);
+        create_tensor_gate_up_exps(layer, il, n_embd, n_ff_exp, n_expert, mtp_flags);
+        layer.ffn_gate_up_exps_act_scale = create_tensor(tn(LLM_TENSOR_FFN_GATE_UP_EXPS, "weight_act_scale", il), { n_embd, n_expert }, mtp_flags | TENSOR_NOT_REQUIRED);
+        layer.ffn_down_exps_act_scale = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight_act_scale", il), { n_ff_exp, n_expert }, mtp_flags | TENSOR_NOT_REQUIRED);
 
         // Shared experts
-        layer.ffn_gate_inp_shexp = create_tensor_or_tile640(tn(LLM_TENSOR_FFN_GATE_INP_SHEXP, "weight", il), { n_embd }, 0);
-        layer.ffn_gate_shexp = create_tensor_or_tile640(tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", il), { n_embd, n_ff_shexp }, 0);
-        layer.ffn_up_shexp = create_tensor_or_tile640(tn(LLM_TENSOR_FFN_UP_SHEXP, "weight", il), { n_embd, n_ff_shexp }, 0);
-        layer.ffn_down_shexp = create_tensor_or_tile640(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", il), { n_ff_shexp, n_embd }, 0);
+        layer.ffn_gate_inp_shexp = create_tensor_or_tile640(tn(LLM_TENSOR_FFN_GATE_INP_SHEXP, "weight", il), { n_embd }, mtp_flags);
+        layer.ffn_gate_shexp = create_tensor_or_tile640(tn(LLM_TENSOR_FFN_GATE_SHEXP, "weight", il), { n_embd, n_ff_shexp }, mtp_flags);
+        layer.ffn_up_shexp = create_tensor_or_tile640(tn(LLM_TENSOR_FFN_UP_SHEXP, "weight", il), { n_embd, n_ff_shexp }, mtp_flags);
+        layer.ffn_down_shexp = create_tensor_or_tile640(tn(LLM_TENSOR_FFN_DOWN_SHEXP, "weight", il), { n_ff_shexp, n_embd }, mtp_flags);
 
         // Optional AWQ input scales (MTP block).
-        layer.wo_act_scale            = create_tensor(tn(LLM_TENSOR_ATTN_OUT,         "weight_act_scale", il), { n_embd_head_k * n_head }, TENSOR_NOT_REQUIRED);
-        layer.wqkv_act_scale          = create_tensor(tn(LLM_TENSOR_ATTN_QKV,         "weight_act_scale", il), { n_embd },       TENSOR_NOT_REQUIRED);
-        layer.wqkv_gate_act_scale     = create_tensor(tn(LLM_TENSOR_ATTN_GATE,        "weight_act_scale", il), { n_embd },       TENSOR_NOT_REQUIRED);
-        layer.ffn_gate_shexp_act_scale= create_tensor(tn(LLM_TENSOR_FFN_GATE_SHEXP,   "weight_act_scale", il), { n_embd },       TENSOR_NOT_REQUIRED);
-        layer.ffn_up_shexp_act_scale  = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,     "weight_act_scale", il), { n_embd },       TENSOR_NOT_REQUIRED);
-        layer.ffn_down_shexp_act_scale= create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP,   "weight_act_scale", il), { n_ff_shexp },   TENSOR_NOT_REQUIRED);
+        layer.wo_act_scale            = create_tensor(tn(LLM_TENSOR_ATTN_OUT,         "weight_act_scale", il), { n_embd_head_k * n_head }, mtp_flags | TENSOR_NOT_REQUIRED);
+        layer.wqkv_act_scale          = create_tensor(tn(LLM_TENSOR_ATTN_QKV,         "weight_act_scale", il), { n_embd },       mtp_flags | TENSOR_NOT_REQUIRED);
+        layer.wqkv_gate_act_scale     = create_tensor(tn(LLM_TENSOR_ATTN_GATE,        "weight_act_scale", il), { n_embd },       mtp_flags | TENSOR_NOT_REQUIRED);
+        layer.ffn_gate_shexp_act_scale= create_tensor(tn(LLM_TENSOR_FFN_GATE_SHEXP,   "weight_act_scale", il), { n_embd },       mtp_flags | TENSOR_NOT_REQUIRED);
+        layer.ffn_up_shexp_act_scale  = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,     "weight_act_scale", il), { n_embd },       mtp_flags | TENSOR_NOT_REQUIRED);
+        layer.ffn_down_shexp_act_scale= create_tensor(tn(LLM_TENSOR_FFN_DOWN_SHEXP,   "weight_act_scale", il), { n_ff_shexp },   mtp_flags | TENSOR_NOT_REQUIRED);
 
         // NextN-specific tensors that define the MTP block.
-        layer.nextn.eh_proj          = create_tensor_or_tile640(tn(LLM_TENSOR_NEXTN_EH_PROJ, "weight", il), { 2 * n_embd, n_embd }, 0);
-        layer.nextn.enorm            = create_tensor_or_tile640(tn(LLM_TENSOR_NEXTN_ENORM, "weight", il), { n_embd }, 0);
-        layer.nextn.hnorm            = create_tensor_or_tile640(tn(LLM_TENSOR_NEXTN_HNORM, "weight", il), { n_embd }, 0);
-        layer.nextn.embed_tokens     = create_tensor_or_tile640(tn(LLM_TENSOR_NEXTN_EMBED_TOKENS, "weight", il), { n_embd, n_vocab }, TENSOR_NOT_REQUIRED);
-        layer.nextn.shared_head_head = create_tensor_or_tile640(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "weight", il), { n_embd, n_vocab }, TENSOR_NOT_REQUIRED);
-        layer.nextn.shared_head_norm = create_tensor_or_tile640(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "weight", il), { n_embd }, TENSOR_NOT_REQUIRED);
+        layer.nextn.eh_proj          = create_tensor_or_tile640(tn(LLM_TENSOR_NEXTN_EH_PROJ, "weight", il), { 2 * n_embd, n_embd }, mtp_flags);
+        layer.nextn.enorm            = create_tensor_or_tile640(tn(LLM_TENSOR_NEXTN_ENORM, "weight", il), { n_embd }, mtp_flags);
+        layer.nextn.hnorm            = create_tensor_or_tile640(tn(LLM_TENSOR_NEXTN_HNORM, "weight", il), { n_embd }, mtp_flags);
+        layer.nextn.embed_tokens     = create_tensor_or_tile640(tn(LLM_TENSOR_NEXTN_EMBED_TOKENS, "weight", il), { n_embd, n_vocab }, mtp_flags | TENSOR_NOT_REQUIRED);
+        layer.nextn.shared_head_head = create_tensor_or_tile640(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_HEAD, "weight", il), { n_embd, n_vocab }, mtp_flags | TENSOR_NOT_REQUIRED);
+        layer.nextn.shared_head_norm = create_tensor_or_tile640(tn(LLM_TENSOR_NEXTN_SHARED_HEAD_NORM, "weight", il), { n_embd }, mtp_flags | TENSOR_NOT_REQUIRED);
     };
 
     for (int i = 0; i < n_layer; ++i) {

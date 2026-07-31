@@ -81,6 +81,9 @@ void llama_model_glm_dsa::load_arch_tensors(llama_model_loader &) {
     LLAMA_LOAD_LOCALS;
     const int64_t n_expert_shared = hparams.n_expert_shared;
 
+    // NextN/MTP tensors are always skipped per-layer below (TENSOR_SKIP for
+    // i >= n_layer); load_mtp is a no-op here, so the mtp_flags scaffolding
+    // used by other MTP archs is not introduced.
     const bool is_mla = hparams.is_mla();
     if (!is_mla) {
         throw std::runtime_error("GLM_DSA architecture requires MLA");
