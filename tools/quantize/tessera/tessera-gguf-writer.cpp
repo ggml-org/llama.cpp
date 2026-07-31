@@ -47,6 +47,7 @@ void ts_gguf_write_metadata(struct gguf_context * ctx, const ts_gguf_writer_para
 }
 
 void ts_gguf_write_tensor_cluster(struct gguf_context * ctx,
+                                  struct ggml_context * gctx,
                                   const char * base_name,
                                   const void * result,
                                   int64_t out_dim, int64_t in_dim) {
@@ -56,17 +57,6 @@ void ts_gguf_write_tensor_cluster(struct gguf_context * ctx,
     const int64_t packed_cols   = pages_per_row * TS_WORDS_PER_PAGE;
     const int64_t lane_cols     = pages_per_row * 32;
     const int64_t n_outliers    = (int64_t)res->outlier_cols.size();
-
-    struct ggml_init_params gparams = {
-        /*mem_size   =*/ 16 * 1024,
-        /*mem_buffer =*/ nullptr,
-        /*no_alloc   =*/ true,
-    };
-    struct ggml_context * gctx = ggml_init(gparams);
-    if (!gctx) {
-        std::fprintf(stderr, "%s: ggml_init failed\n", __func__);
-        return;
-    }
 
     struct ggml_tensor * t;
 
@@ -113,6 +103,4 @@ void ts_gguf_write_tensor_cluster(struct gguf_context * ctx,
         t->data = (void *)res->act_scale.data();
         gguf_add_tensor(ctx, t);
     }
-
-    ggml_free(gctx);
 }

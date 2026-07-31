@@ -97,3 +97,15 @@ target_include_directories(${TARGET} PRIVATE
 
 target_link_libraries(${TARGET} PUBLIC llama-quantize-impl)
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
+
+# Regression test: GGUF writer data-lifetime (see tessera-gguf-writer.h).
+# The cluster descriptors reference the quant-result buffers by data pointer,
+# so those buffers must outlive gguf_write_to_file. This writes a real GGUF,
+# tears down the write side, reads it back, and byte-compares the payload.
+if(LLAMA_BUILD_TESTS)
+    set(TARGET test-tessera-gguf-write)
+    add_executable(${TARGET} tessera/test_gguf_write_lifetime.cpp)
+    target_link_libraries(${TARGET} PRIVATE llama-quantize-impl)
+    target_compile_features(${TARGET} PRIVATE cxx_std_17)
+    add_test(NAME ${TARGET} COMMAND ${TARGET})
+endif()

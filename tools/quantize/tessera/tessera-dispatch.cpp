@@ -32,6 +32,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <limits>
 #include <string>
 #include <utility>
@@ -838,6 +839,44 @@ int ts_dispatch_run(const ts_dispatch_params * params,
     struct gguf_context * out_ctx = gguf_init_empty();
     gguf_set_kv(out_ctx, in_ctx);
 
+    // The cluster descriptors are allocated from a caller-owned context so the
+    // writer stays allocation-free. Size it from the input metadata: each
+    // quantizable tensor emits one cluster (ne[2] clusters for a 3D MoE
+    // weight), up to 7 descriptors each. Over-counting only wastes a little
+    // RAM; under-counting aborts ggml_init's fixed pool, so budget generously.
+    int64_t n_cluster_tensors = 0;
+    for (int64_t i = 0; i < n_tensors; i++) {
+        const enum ggml_type type_i = gguf_get_tensor_type(in_ctx, i);
+        const int64_t * ne_i = gguf_get_tensor_ne(in_ctx, i);
+        int nd_i = GGML_MAX_DIMS;
+        while (nd_i > 1 && ne_i[nd_i - 1] == 1) nd_i--;
+        if (!ts_is_quantizable(gguf_get_tensor_name(in_ctx, i), type_i, nd_i)) continue;
+        n_cluster_tensors += ((nd_i == 3) ? ne_i[2] : 1) * 7;
+    }
+    struct ggml_init_params out_init = {
+        /*mem_size   =*/ (size_t)n_cluster_tensors * 512 + 64 * 1024,
+        /*mem_buffer =*/ nullptr,
+        /*no_alloc   =*/ true,
+    };
+    struct ggml_context * out_ggml_ctx = ggml_init(out_init);
+    if (!out_ggml_ctx) {
+        if (err_msg) {
+            *err_msg = "ggml_init failed for output tensor context";
+        }
+        gguf_free(out_ctx);
+        gguf_free(in_ctx);
+        ggml_free(ggml_ctx);
+        return 1;
+    }
+
+    // Quant-result buffers are referenced by the GGUF tensor descriptors by
+    // data pointer, and gguf_write_to_file reads through those pointers after
+    // the walk below completes. The results must therefore outlive the write,
+    // so they are kept in function-scope deques (stable element addresses)
+    // rather than as per-iteration locals.
+    std::deque<ts_quant_result_2d>              cluster_results; // 2D weights
+    std::deque<std::vector<ts_quant_result_2d>> moe_results;     // 3D MoE weights
+
     // --- step 7: walk tensors, quantize or copy through ---
     ts_quant_params_2d qparams;
     qparams.alpha          = default_alpha;
@@ -1035,18 +1074,23 @@ int ts_dispatch_run(const ts_dispatch_params * params,
                 if (err_msg) {
                     *err_msg = "ts_quantize_3d failed for " + std::string(name);
                 }
+                ggml_free(out_ggml_ctx);
                 gguf_free(out_ctx);
                 gguf_free(in_ctx);
                 ggml_free(ggml_ctx);
                 return 2;
             }
 
+            // keep the expert results alive until after gguf_write_to_file
+            moe_results.push_back(std::move(qresults));
+            const std::vector<ts_quant_result_2d> & qr_keep = moe_results.back();
+
             // write per-expert clusters
             for (int64_t e = 0; e < n_experts; e++) {
                 char exp_name[GGML_MAX_NAME];
                 snprintf(exp_name, sizeof(exp_name), "%s.%lld", name, (long long)e);
-                ts_gguf_write_tensor_cluster(out_ctx, exp_name, &qresults[(size_t)e], out_dim, in_dim);
-                total_mse += qresults[(size_t)e].mse;
+                ts_gguf_write_tensor_cluster(out_ctx, out_ggml_ctx, exp_name, &qr_keep[(size_t)e], out_dim, in_dim);
+                total_mse += qr_keep[(size_t)e].mse;
             }
 
             ts_dispatch_tensor_result tr;
@@ -1056,16 +1100,16 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             tr.in_dim  = in_dim;
             fill_expert_meta(tr);
             // aggregate first expert's blobs for the result struct
-            if (!qresults.empty()) {
-                tr.packed              = ts_to_bytes_u32(qresults[0].packed);
-                tr.page_scales         = ts_to_bytes_u16(qresults[0].page_scales);
-                tr.lane_scales         = ts_to_bytes_i8(qresults[0].lane_scales);
-                tr.outlier_row_offsets = ts_to_bytes_i32(qresults[0].outlier_row_offsets);
-                tr.outlier_cols        = ts_to_bytes_i32(qresults[0].outlier_cols);
-                tr.outlier_vals        = ts_to_bytes_u16(qresults[0].outlier_vals);
-                tr.act_scale           = ts_to_bytes_u16(qresults[0].act_scale);
-                tr.mse                 = qresults[0].mse;
-                tr.alpha_used          = qresults[0].best_alpha;
+            if (!qr_keep.empty()) {
+                tr.packed              = ts_to_bytes_u32(qr_keep[0].packed);
+                tr.page_scales         = ts_to_bytes_u16(qr_keep[0].page_scales);
+                tr.lane_scales         = ts_to_bytes_i8(qr_keep[0].lane_scales);
+                tr.outlier_row_offsets = ts_to_bytes_i32(qr_keep[0].outlier_row_offsets);
+                tr.outlier_cols        = ts_to_bytes_i32(qr_keep[0].outlier_cols);
+                tr.outlier_vals        = ts_to_bytes_u16(qr_keep[0].outlier_vals);
+                tr.act_scale           = ts_to_bytes_u16(qr_keep[0].act_scale);
+                tr.mse                 = qr_keep[0].mse;
+                tr.alpha_used          = qr_keep[0].best_alpha;
             }
             result->tensors.push_back(std::move(tr));
             n_quantized++;
@@ -1075,8 +1119,10 @@ int ts_dispatch_run(const ts_dispatch_params * params,
                        name, (long long)n_experts);
             }
         } else {
-            // standard 2D weight
-            ts_quant_result_2d    qr;
+            // standard 2D weight. The result lives in cluster_results (function
+            // scope) so the buffers referenced by the GGUF descriptors stay
+            // valid until gguf_write_to_file runs after the walk completes.
+            ts_quant_result_2d &  qr = cluster_results.emplace_back();
             ts_w4a4_weight_result wres;
             wres.base = &qr;
 
@@ -1111,13 +1157,14 @@ int ts_dispatch_run(const ts_dispatch_params * params,
                 if (err_msg) {
                     *err_msg = "ts_quantize_2d failed for " + std::string(name);
                 }
+                ggml_free(out_ggml_ctx);
                 gguf_free(out_ctx);
                 gguf_free(in_ctx);
                 ggml_free(ggml_ctx);
                 return 2;
             }
 
-            ts_gguf_write_tensor_cluster(out_ctx, name, &qr, out_dim, in_dim);
+            ts_gguf_write_tensor_cluster(out_ctx, out_ggml_ctx, name, &qr, out_dim, in_dim);
 
             ts_dispatch_tensor_result tr;
             tr.name                = name;
@@ -1284,6 +1331,7 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             if (err_msg) {
                 *err_msg = "failed to write output GGUF: " + params->output_path;
             }
+            ggml_free(out_ggml_ctx);
             gguf_free(out_ctx);
             gguf_free(in_ctx);
             ggml_free(ggml_ctx);
@@ -1331,6 +1379,7 @@ int ts_dispatch_run(const ts_dispatch_params * params,
     result->policy_sha256       = "";
 
     // --- cleanup ---
+    ggml_free(out_ggml_ctx);
     gguf_free(out_ctx);
     gguf_free(in_ctx);
     ggml_free(ggml_ctx);

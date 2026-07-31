@@ -11,6 +11,7 @@
 #include <cstdint>
 
 struct gguf_context;
+struct ggml_context;
 
 struct ts_gguf_writer_params {
     uint32_t    seed;
@@ -33,10 +34,18 @@ void ts_gguf_write_metadata(struct gguf_context * ctx, const ts_gguf_writer_para
 
 // Write the 6-component tensor cluster for one quantized weight.
 // ctx: open gguf_context for writing.
+// gctx: caller-owned ggml_context used to allocate the transient tensor
+//       descriptors. gguf_add_tensor copies each descriptor by value, so the
+//       descriptors themselves do not outlive this call; gctx is caller-owned
+//       only to keep this function allocation-free.
 // base_name: e.g. "blk.0.attn_q" (components get suffixed).
-// result: the ts_quant_result_2d from tessera-quant.h.
+// result: the ts_quant_result_2d from tessera-quant.h. Its backing buffers
+//       (packed / page_scales / lane_scales / outliers / act_scale) are stored
+//       by data pointer, so they MUST remain valid until after the eventual
+//       gguf_write_to_file call, which writes the payload from those pointers.
 // out_dim, in_dim: tensor dimensions.
 void ts_gguf_write_tensor_cluster(struct gguf_context * ctx,
+                                  struct ggml_context * gctx,
                                   const char * base_name,
                                   const void * result,
                                   int64_t out_dim, int64_t in_dim);
