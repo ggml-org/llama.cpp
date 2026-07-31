@@ -11,6 +11,7 @@
 #include "tessera/tessera-anonymizer.h"
 #include "tessera/tessera-throughput.h"
 #include "tessera/tessera-dataset.h"
+#include "tessera/tessera-dpace.h"
 
 #include "gguf.h"
 
@@ -599,6 +600,135 @@ static int ts_cli_dataset(const common_tessera_params & tp) {
     return 0;
 }
 
+// --tessera-dpace: compute D-PACE adaptive position weights from DFlash
+// acceptance telemetry and exit. No model needed. Returns a process exit code.
+static int ts_cli_dpace(const common_tessera_params & tp) {
+    std::ifstream f(tp.dpace_in);
+    if (!f) {
+        fprintf(stderr, "error: dpace: cannot read: %s\n", tp.dpace_in.c_str());
+        return 1;
+    }
+
+    const float alpha = tp.dpace_alpha;
+    const float gamma = tp.dpace_gamma;
+
+    // Accumulate per-position weight statistics across all telemetry events
+    int n_events = 0;
+    int max_block = 0;
+    std::vector<double> dpace_sum;   // sum of D-PACE weights per position
+    std::vector<double> decay_sum;   // sum of decay weights per position
+    std::vector<int>    pos_count;   // number of events reaching each position
+    double surrogate_sum = 0.0;
+
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.empty()) {
+            continue;
+        }
+        // Parse llama.dflash.acceptance.v1 JSONL
+        // Expected: {"schema":"llama.dflash.acceptance.v1","drafted":N,"accepted":M,"confidence":[...]}
+        auto j = nlohmann::json::parse(line, nullptr, false);
+        if (j.is_discarded()) {
+            continue;
+        }
+        if (j.value("schema", "") != "llama.dflash.acceptance.v1") {
+            continue;
+        }
+        if (!j.contains("confidence") || !j["confidence"].is_array()) {
+            continue;
+        }
+
+        const auto & conf = j["confidence"];
+        const int block_size = (int)conf.size();
+        if (block_size <= 0) {
+            continue;
+        }
+
+        // Grow accumulators if needed
+        if (block_size > max_block) {
+            dpace_sum.resize(block_size, 0.0);
+            decay_sum.resize(block_size, 0.0);
+            pos_count.resize(block_size, 0);
+            max_block = block_size;
+        }
+
+        // Extract per-position acceptance probabilities
+        std::vector<float> acc(block_size);
+        for (int i = 0; i < block_size; ++i) {
+            acc[i] = (float)conf[i].get<double>();
+        }
+
+        // Compute D-PACE weights (smoothed, normalized)
+        std::vector<double> dw(block_size);
+        ts_dpace_weights_smoothed(acc.data(), block_size, alpha, dw.data());
+        ts_dpace_normalize_weights(dw.data(), block_size);
+
+        // Compute DFlash decay weights (normalized)
+        std::vector<double> fw(block_size);
+        ts_dflash_decay_weights(block_size, gamma, fw.data());
+        ts_dpace_normalize_weights(fw.data(), block_size);
+
+        for (int i = 0; i < block_size; ++i) {
+            dpace_sum[i] += dw[i];
+            decay_sum[i] += fw[i];
+            pos_count[i]++;
+        }
+        surrogate_sum += ts_dpace_accepted_length_surrogate(acc.data(), block_size);
+        n_events++;
+    }
+
+    if (n_events == 0) {
+        fprintf(stderr, "error: dpace: no valid llama.dflash.acceptance.v1 events in %s\n",
+                tp.dpace_in.c_str());
+        return 1;
+    }
+
+    // Build output JSON
+    nlohmann::json out;
+    out["schema"] = "llama.tessera.dpace.v1";
+    out["n_events"] = n_events;
+    out["max_block_size"] = max_block;
+    out["alpha"] = alpha;
+    out["gamma"] = gamma;
+    out["mean_surrogate"] = surrogate_sum / n_events;
+
+    nlohmann::json positions = nlohmann::json::array();
+    for (int i = 0; i < max_block; ++i) {
+        nlohmann::json p;
+        p["position"] = i;
+        p["count"] = pos_count[i];
+        p["dpace_weight"] = pos_count[i] > 0 ? dpace_sum[i] / pos_count[i] : 0.0;
+        p["decay_weight"] = pos_count[i] > 0 ? decay_sum[i] / pos_count[i] : 0.0;
+        positions.push_back(p);
+    }
+    out["positions"] = positions;
+
+    // Print summary
+    printf("dpace: %d events, max_block=%d, alpha=%.3f, gamma=%.3f\n",
+           n_events, max_block, alpha, gamma);
+    printf("dpace: mean accepted-length surrogate = %.4f\n", surrogate_sum / n_events);
+    printf("dpace: per-position weights (dpace vs decay):\n");
+    for (int i = 0; i < max_block && i < 16; ++i) {
+        double dw = pos_count[i] > 0 ? dpace_sum[i] / pos_count[i] : 0.0;
+        double fw = pos_count[i] > 0 ? decay_sum[i] / pos_count[i] : 0.0;
+        printf("  pos %2d: dpace=%.4f  decay=%.4f  ratio=%.3f\n", i, dw, fw,
+               fw > 0.0 ? dw / fw : 0.0);
+    }
+
+    // Write output file if requested
+    if (!tp.dpace_out.empty()) {
+        std::ofstream of(tp.dpace_out);
+        if (!of) {
+            fprintf(stderr, "error: dpace: cannot write: %s\n", tp.dpace_out.c_str());
+            return 1;
+        }
+        of << out.dump(2) << "\n";
+        printf("dpace: receipt -> %s\n", tp.dpace_out.c_str());
+    }
+
+    return 0;
+}
+
 int llama_quantize(int argc, char ** argv) {
     std::setlocale(LC_NUMERIC, "C");
     if (argc < 3) {
@@ -711,6 +841,9 @@ int llama_quantize(int argc, char ** argv) {
         }
         if (!tp.dataset_in.empty()) {
             return ts_cli_dataset(tp);
+        }
+        if (!tp.dpace_in.empty()) {
+            return ts_cli_dpace(tp);
         }
     }
 

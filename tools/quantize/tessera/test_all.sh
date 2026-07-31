@@ -117,6 +117,9 @@ compile_and_run lk_loss       $T/test_lk_loss.cpp     $T/tessera-lk-loss.cpp
 # --- Drafter training pipeline: dataset prep (needs vendor/nlohmann) ---
 compile_and_run dataset       $T/test_dataset.cpp     $T/tessera-dataset.cpp -I vendor
 
+# --- Drafter training pipeline: D-PACE loss (pure math, no vendor) ---
+compile_and_run dpace         $T/test_dpace.cpp       $T/tessera-dpace.cpp
+
 # --- common/tessera-debug ---
 compile_and_run sidecar_v3  $C/test_sidecar_v3.cpp  $C/tessera-sidecar-v3.cpp -I $C
 

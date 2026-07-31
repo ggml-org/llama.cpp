@@ -51,6 +51,11 @@ struct common_tessera_params {
     std::string dataset_in;
     std::string dataset_out;
     std::string dataset_mode = "text";
+    // D-PACE: compute adaptive position weights from DFlash telemetry then exit
+    std::string dpace_in;
+    std::string dpace_out;
+    float       dpace_alpha = 0.1f;
+    float       dpace_gamma = 3.0f;
 };
 
 const common_tessera_params & common_get_tessera_params();

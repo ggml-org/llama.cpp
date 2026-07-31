@@ -147,6 +147,10 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
     if (arg == "--tessera-dataset")         { if (!require_val("--tessera-dataset")) return -1;         tessera_params.dataset_in      = val; return 2; }
     if (arg == "--tessera-dataset-out")     { if (!require_val("--tessera-dataset-out")) return -1;     tessera_params.dataset_out     = val; return 2; }
     if (arg == "--tessera-dataset-mode")    { if (!require_val("--tessera-dataset-mode")) return -1;    tessera_params.dataset_mode    = val; return 2; }
+    if (arg == "--tessera-dpace")           { if (!require_val("--tessera-dpace")) return -1;           tessera_params.dpace_in        = val; return 2; }
+    if (arg == "--tessera-dpace-out")       { if (!require_val("--tessera-dpace-out")) return -1;       tessera_params.dpace_out       = val; return 2; }
+    if (arg == "--tessera-dpace-alpha")     { if (!require_val("--tessera-dpace-alpha")) return -1;     tessera_params.dpace_alpha     = std::stof(val); return 2; }
+    if (arg == "--tessera-dpace-gamma")     { if (!require_val("--tessera-dpace-gamma")) return -1;     tessera_params.dpace_gamma     = std::stof(val); return 2; }
     if (arg == "--tessera-dequant-dir") {
         if (!require_val("--tessera-dequant-dir")) return -1;
         tessera_debug::set_dequant_dir(val); return 2;
@@ -4370,6 +4374,35 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "lk: LK loss JSONL {position,p_tokens,p_probs,q_tokens,q_probs,accepted}",
         [](common_params &, const std::string & value) {
             tessera_params.dataset_mode = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-dpace"}, "PATH",
+        "Tessera: compute D-PACE adaptive position weights from DFlash\n"
+        "acceptance telemetry JSONL at PATH, then exit without quantizing",
+        [](common_params &, const std::string & value) {
+            tessera_params.dpace_in = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-dpace-out"}, "PATH",
+        "Tessera: write D-PACE weight summary JSON to PATH",
+        [](common_params &, const std::string & value) {
+            tessera_params.dpace_out = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-dpace-alpha"}, "FLOAT",
+        "Tessera: D-PACE asymmetric smoothing alpha (default: 0.1)",
+        [](common_params &, const std::string & value) {
+            tessera_params.dpace_alpha = std::stof(value);
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-dpace-gamma"}, "FLOAT",
+        "Tessera: DFlash exponential decay gamma for A/B comparison (default: 3.0)",
+        [](common_params &, const std::string & value) {
+            tessera_params.dpace_gamma = std::stof(value);
         }
     ));
     add_opt(common_arg(
