@@ -143,6 +143,7 @@ enum llm_type {
     LLM_TYPE_397B_A17B, // Qwen3.5
     LLM_TYPE_685B_A37B, // DeepSeek V3.2
     LLM_TYPE_744B_A40B, // GLM-5
+    LLM_TYPE_2_8T_A50B, // Kimi-K3
     LLM_TYPE_E2B,
     LLM_TYPE_E4B,
 };

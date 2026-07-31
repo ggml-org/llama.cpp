@@ -85,14 +85,6 @@ class KimiK3Model(TextModel):
     #
     # compressed-tensors MXFP4 -> ggml MXFP4
     #
-    # The real checkpoint stores only the routed experts quantized (everything
-    # else is excluded by quantization_config["ignore"]), as a
-    # weight_packed/weight_scale pair per expert. Both sides are 4-bit E2M1 with
-    # a per-32 E8M0 scale, so this is a pure repack - see repack_mxfp4_blocks.
-    #
-    # Dequantizing instead would be catastrophic here: the routed experts are
-    # ~1.38 TB at 4 bits, so a bf16 round-trip would need ~5.5 TB of output.
-    #
 
     def _is_mxfp4_packed(self) -> bool:
         quant_config = self.hparams.get("quantization_config") or {}

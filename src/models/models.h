@@ -2292,12 +2292,10 @@ struct llama_model_kimi_k3 : public llama_model_base {
         // needs no transpose of the (large) stack.
         // Each checkpoint is kept as its own [n_embd, 1, n_token] tensor and the
         // [n_embd, n_ckpt, n_token] stack is materialised with ggml_concat only when
-        // the set changes (8 times per forward pass for the real model). A single
-        // preallocated buffer would be cheaper, but a bare ggml_new_tensor leaf has
-        // no backing buffer - ggml-alloc only allocates tensors that are op outputs.
-        std::vector<ggml_tensor *> ckpts;
-        ggml_tensor * stack_cache   = nullptr;
-        int           stack_cache_n = -1;
+        // the set changes (8 times per forward pass for the real model).
+        std::vector<ggml_tensor *> resi;
+        ggml_tensor *              resi_stack   = nullptr;
+        int                        resi_stack_n = -1;
 
         void          res_push(ggml_tensor * cur, int64_t n_embd, int64_t n_tokens);
         ggml_tensor * res_stack(int64_t n_embd, int64_t n_tokens);

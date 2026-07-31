@@ -35,14 +35,14 @@ void llama_model_kimi_k3::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,       hparams.expert_weights_scale, false);
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,        hparams.expert_weights_norm, false);
     ml.get_key(LLM_KV_EXPERT_GATING_FUNC,         hparams.expert_gating_func);
-    ml.get_key(LLM_KV_EXPERT_LATENT_LENGTH,       hparams.n_expert_latent, false);
+    ml.get_key(LLM_KV_EXPERT_LATENT_LENGTH,       hparams.n_expert_latent);
 
-    ml.get_key(LLM_KV_ATTN_RES_BLOCK_SIZE,          hparams.attn_res_block_size, false);
-    ml.get_key(LLM_KV_ACTIVATION_SITU_BETA,         hparams.situ_beta, false);
-    ml.get_key(LLM_KV_ACTIVATION_SITU_LINEAR_BETA,  hparams.situ_linear_beta, false);
+    ml.get_key(LLM_KV_ATTN_RES_BLOCK_SIZE,          hparams.attn_res_block_size);
+    ml.get_key(LLM_KV_ACTIVATION_SITU_BETA,         hparams.situ_beta);
+    ml.get_key(LLM_KV_ACTIVATION_SITU_LINEAR_BETA,  hparams.situ_linear_beta);
 
     switch (hparams.n_layer()) {
-        case 93: type = LLM_TYPE_UNKNOWN; break; // Kimi-K3
+        case 93: type = LLM_TYPE_2_8T_A50B; break; // Kimi-K3
         default: type = LLM_TYPE_UNKNOWN;
     }
 }
@@ -93,16 +93,7 @@ void llama_model_kimi_k3::load_arch_tensors(llama_model_loader &) {
             layer.ssm_beta = create_tensor(tn(LLM_TENSOR_SSM_BETA, "weight", i), {n_embd, n_head}, 0);
 
             // K3's A_log is a plain 1-D [n_head] parameter (kimi-linear's is padded);
-            // accept the padded forms too so both layouts load. -exp() is folded at
-            // conversion time. Only the element count matters - the graph reshapes it.
             layer.ssm_a = create_tensor(tn(LLM_TENSOR_SSM_A, i), {n_head}, TENSOR_NOT_REQUIRED);
-            if (!layer.ssm_a) {
-                layer.ssm_a = create_tensor(tn(LLM_TENSOR_SSM_A, i), {1, n_head, 1, 1}, TENSOR_NOT_REQUIRED);
-            }
-            if (!layer.ssm_a) {
-                layer.ssm_a = create_tensor(tn(LLM_TENSOR_SSM_A, i), {1, n_head}, 0);
-            }
-
             layer.ssm_dt_b = create_tensor(tn(LLM_TENSOR_SSM_DT, "bias", i), {d_inner}, 0);
 
             // K3 uses a single full-rank gate instead of kimi-linear's g_a/g_b pair
@@ -197,27 +188,27 @@ static ggml_tensor * kimi_k3_situ(ggml_context * ctx0, ggml_tensor * gate, ggml_
 //
 
 void llama_model_kimi_k3::graph::res_push(ggml_tensor * cur, int64_t n_embd, int64_t n_tokens) {
-    ckpts.push_back(ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens));
+    resi.push_back(ggml_reshape_3d(ctx0, cur, n_embd, 1, n_tokens));
 }
 
 ggml_tensor * llama_model_kimi_k3::graph::res_stack(int64_t n_embd, int64_t n_tokens) {
     GGML_UNUSED(n_embd);
     GGML_UNUSED(n_tokens);
-    if (stack_cache_n == (int) ckpts.size()) {
-        return stack_cache;   // set unchanged since the last mix
+    if (resi_stack_n == (int) resi.size()) {
+        return resi_stack;   // set unchanged since the last mix
     }
-    ggml_tensor * acc = ckpts[0];
-    for (size_t i = 1; i < ckpts.size(); ++i) {
-        acc = ggml_concat(ctx0, acc, ckpts[i], 1);
+    ggml_tensor * acc = resi[0];
+    for (size_t i = 1; i < resi.size(); ++i) {
+        acc = ggml_concat(ctx0, acc, resi[i], 1);
     }
-    stack_cache   = acc;
-    stack_cache_n = (int) ckpts.size();
+    resi_stack   = acc;
+    resi_stack_n = (int) resi.size();
     return acc;
 }
 
 ggml_tensor * llama_model_kimi_k3::graph::res_mix(ggml_tensor * cur, ggml_tensor * score_w,
                                                   int64_t n_embd, int64_t n_tokens, int il) {
-    const int n_ckpt = (int) ckpts.size();
+    const int n_ckpt = (int) resi.size();
     if (n_ckpt == 0) {
         return cur; // layer 0: nothing banked yet
     }
