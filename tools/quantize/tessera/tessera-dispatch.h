@@ -13,6 +13,8 @@
 #include <vector>
 #include <cstdint>
 
+#include "tessera-acceptance.h"
+
 struct ts_dispatch_params {
     std::string input_path;
     std::string output_path;
@@ -45,6 +47,11 @@ struct ts_dispatch_params {
     // weight-only contract is unchanged when w4a4 is false.
     bool        w4a4;
     float       w4a4_outlier_thresh;    // LLM.int8 |X| threshold (default 6.0)
+    // S7 G6 acceptance gate. When set, re-quantizes each tensor under every
+    // single-proxy expert and runs the composite-beats-single + ranking
+    // disagreement test after quantization.
+    bool        run_acceptance;
+    ts_acceptance_config acceptance_config;
 };
 
 // Result of the Tessera pipeline for one tensor.
@@ -93,6 +100,9 @@ struct ts_dispatch_result {
     int64_t     n_tensors_quantized;
     int64_t     n_tensors_skipped;
     float       total_mse;
+    // S7 G6 acceptance gate result (populated when run_acceptance is set)
+    bool                  acceptance_ran;
+    ts_acceptance_result  acceptance;
 };
 
 // Run the full Tessera quantization pipeline.

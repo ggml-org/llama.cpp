@@ -23,6 +23,7 @@
 #include "tessera-mm-fitness.h"
 #include "tessera-mm-awq.h"
 #include "tessera-w4a4.h"
+#include "tessera-acceptance.h"
 
 #include "gguf.h"
 #include "ggml.h"
@@ -304,6 +305,40 @@ static ts_awq_score ts_dispatch_awq_eval(const ts_awq_candidate * cand,
     score.heldout_mse   = qr.mse;   // no held-out split in standalone dispatch
     score.composite     = -t2;
     return score;
+}
+
+// Quantize a tensor with a forced expert profile and return relative
+// Frobenius t_l^2 = ||W_hat - W||_F^2 / ||W||_F^2.
+static float ts_dispatch_forced_t2(const float * weights, const float * act_scales,
+                                   int64_t out_dim, int64_t in_dim,
+                                   ts_expert_id expert, float base_alpha,
+                                   float base_clip, float outlier_thresh,
+                                   uint32_t seed) {
+    ts_expert_profile prof = ts_expert_default_profile(expert);
+
+    ts_quant_params_2d qp;
+    qp.alpha          = base_alpha * prof.alpha_scale;
+    qp.clip           = base_clip * prof.clip_scale;
+    qp.max_outliers   = prof.max_outliers;
+    qp.outlier_thresh = outlier_thresh * prof.outlier_thresh;
+    qp.use_imatrix    = act_scales != nullptr;
+    qp.use_septq      = prof.use_septq;
+    qp.awq_grid       = prof.awq_grid;
+    qp.seed           = seed;
+
+    ts_quant_result_2d qr;
+    int rc = ts_quantize_2d(weights, act_scales, nullptr, nullptr, act_scales,
+                            out_dim, in_dim, 0, &qp, &qr);
+    if (rc != 0) {
+        return 1.0f;  // worst case
+    }
+
+    const int64_t n = out_dim * in_dim;
+    double frob2 = 0.0;
+    for (int64_t i = 0; i < n; i++) {
+        frob2 += (double)weights[i] * (double)weights[i];
+    }
+    return (frob2 > 0.0) ? (float)((double)qr.mse * (double)n / frob2) : qr.mse;
 }
 
 // ---------------------------------------------------------------------------
@@ -1159,6 +1194,73 @@ int ts_dispatch_run(const ts_dispatch_params * params,
     }
 
     policy_json += "\n  ]\n}";
+
+    // --- step 7b: G6 acceptance gate ---
+    result->acceptance_ran = false;
+    if (params->run_acceptance) {
+        std::vector<ts_acceptance_tensor> acc_tensors;
+
+        for (int64_t i = 0; i < n_tensors; i++) {
+            const char * name = gguf_get_tensor_name(in_ctx, i);
+            const enum ggml_type type = gguf_get_tensor_type(in_ctx, i);
+            const int64_t * ne = gguf_get_tensor_ne(in_ctx, i);
+            int nd = GGML_MAX_DIMS;
+            while (nd > 1 && ne[nd - 1] == 1) nd--;
+
+            if (nd != 2 || !ts_is_quantizable(name, type, nd)) continue;
+
+            struct ggml_tensor * t = ggml_get_tensor(ggml_ctx, name);
+            if (!t) continue;
+
+            std::vector<float> w = ts_tensor_to_f32(t);
+            if (w.empty()) continue;
+
+            const int64_t in_dim  = ne[0];
+            const int64_t out_dim = ne[1];
+
+            std::vector<float> act_scratch;
+            const float * act = ts_dispatch_act_scales(
+                have_imatrix ? &imatrix : nullptr, name, in_dim,
+                calib_X.empty() ? nullptr : calib_X.data(), calib_in_dim, calib_n_tokens,
+                &act_scratch);
+
+            const float alpha = default_alpha;
+            const float clip  = params->awq_clip;
+            const float othresh = params->outlier_frac;
+            const uint32_t seed = (uint32_t)params->evolve_seed;
+
+            // composite: regime-routed
+            ts_regime_descriptor desc = ts_regime_compute_descriptor(
+                name, w.data(), out_dim, in_dim, nullptr, 0);
+            ts_regime_routing routing = ts_regime_classify(&desc);
+            float comp_t2 = ts_dispatch_forced_t2(
+                w.data(), act, out_dim, in_dim, routing.expert,
+                alpha, clip, othresh, seed);
+
+            ts_acceptance_tensor at;
+            memset(&at, 0, sizeof(at));
+            snprintf(at.name, sizeof(at.name), "%s", name);
+            at.composite_t2      = comp_t2;
+            at.awq_t2            = ts_dispatch_forced_t2(w.data(), act, out_dim, in_dim, TS_EXPERT_AWQ,       alpha, clip, othresh, seed);
+            at.rotation_t2       = ts_dispatch_forced_t2(w.data(), act, out_dim, in_dim, TS_EXPERT_DARTQUANT, alpha, clip, othresh, seed);
+            at.lowrank_t2        = ts_dispatch_forced_t2(w.data(), act, out_dim, in_dim, TS_EXPERT_FLRQ,      alpha, clip, othresh, seed);
+            at.hessian_t2        = ts_dispatch_forced_t2(w.data(), act, out_dim, in_dim, TS_EXPERT_SEPTQ,     alpha, clip, othresh, seed);
+            at.offline_proxy_mse = comp_t2;
+            at.kernel_direct_t2  = comp_t2;  // no sidecar in standalone dispatch
+            at.held_out          = false;    // fraction-based fallback in ts_acceptance_run
+            acc_tensors.push_back(at);
+        }
+
+        if (!acc_tensors.empty()) {
+            ts_acceptance_run(&params->acceptance_config,
+                              acc_tensors.data(), (int64_t)acc_tensors.size(),
+                              &result->acceptance);
+            result->acceptance_ran = true;
+            if (verbose) {
+                printf("tessera-dispatch: acceptance: %s\n", result->acceptance.verdict);
+            }
+        }
+    }
 
     // --- step 8: write tessera metadata ---
     ts_gguf_writer_params wparams;

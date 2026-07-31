@@ -31,6 +31,7 @@ add_library(${TARGET}
     tessera/tessera-l2-diff.cpp
     tessera/tessera-l3-coherence.cpp
     tessera/tessera-ab-harness.cpp
+    tessera/tessera-acceptance.cpp
     tessera/tessera-peqat.cpp
     # multimodal
     tessera/tessera-mm-imatrix.cpp

@@ -55,6 +55,7 @@ compile_and_run imatrix     $T/test_imatrix.cpp     $T/tessera-imatrix.cpp
 compile_and_run corpus      $T/test_corpus.cpp      $T/tessera-corpus.cpp
 compile_and_run ppl         $T/test_ppl.cpp         $T/tessera-ppl.cpp
 compile_and_run ab_harness  $T/test_ab_harness.cpp  $T/tessera-ab-harness.cpp
+compile_and_run acceptance  $T/test_acceptance.cpp  $T/tessera-acceptance.cpp $T/tessera-ab-harness.cpp
 compile_and_run higgs       $T/test_higgs.cpp       $T/tessera-higgs.cpp
 compile_and_run regime      $T/test_regime.cpp      $T/tessera-regime.cpp
 compile_and_run peqat       $T/test_peqat.cpp       $T/tessera-peqat.cpp

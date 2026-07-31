@@ -29,6 +29,8 @@ struct common_tessera_params {
     float       kernel_fitness_blend = 1.0f;
     bool        w4a4 = false;
     float       w4a4_outlier_thresh = 6.0f;
+    bool        acceptance = false;
+    std::string acceptance_out;
 };
 
 const common_tessera_params & common_get_tessera_params();

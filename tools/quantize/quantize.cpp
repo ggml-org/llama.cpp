@@ -682,6 +682,16 @@ int llama_quantize(int argc, char ** argv) {
         tparams.kernel_fitness_blend = tp.kernel_fitness_blend;
         tparams.w4a4                 = tp.w4a4;
         tparams.w4a4_outlier_thresh  = tp.w4a4_outlier_thresh;
+        tparams.run_acceptance       = tp.acceptance;
+        if (tp.acceptance) {
+            ts_acceptance_default_config(&tparams.acceptance_config);
+            tparams.acceptance_config.verbose = true;
+            if (!tp.acceptance_out.empty()) {
+                snprintf(tparams.acceptance_config.output_path,
+                         sizeof(tparams.acceptance_config.output_path),
+                         "%s", tp.acceptance_out.c_str());
+            }
+        }
         ts_dispatch_result tresult;
         std::string terr;
         if (ts_dispatch_run(&tparams, &tresult, &terr) != 0) {
@@ -690,6 +700,10 @@ int llama_quantize(int argc, char ** argv) {
         }
         printf("tessera: quantized %lld tensors, total mse = %.6f\n",
                (long long)tresult.n_tensors_quantized, tresult.total_mse);
+        if (tresult.acceptance_ran) {
+            printf("tessera: acceptance: %s\n", tresult.acceptance.verdict);
+            return tresult.acceptance.acceptance_passed ? 0 : 1;
+        }
         return 0;
     }
 
