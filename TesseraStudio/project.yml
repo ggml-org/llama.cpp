@@ -1,0 +1,74 @@
+name: TesseraStudio
+
+options:
+  bundleIdPrefix: com.tessera.studio
+  deploymentTarget:
+    macOS: "14.0"
+    iOS: "17.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    ENABLE_HARDENED_RUNTIME: "YES"
+
+# The SwiftUI sources do `import TesseraCore` (and TesseraCore does
+# `import CTesseraFFI`), so those modules must stay separate compilation
+# units. We reuse the existing SPM package unchanged: each app target
+# links the `TesseraCore` product and compiles only its own app surface.
+packages:
+  TesseraStudio:
+    path: .
+
+targets:
+  TesseraStudioMac:
+    type: application
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: Sources/TesseraStudioMac
+    resources:
+      - path: Shared/Assets.xcassets
+    dependencies:
+      - package: TesseraStudio
+        product: TesseraCore
+    settings:
+      base:
+        PRODUCT_NAME: TesseraStudioMac
+        PRODUCT_BUNDLE_IDENTIFIER: com.tessera.studio.mac
+        INFOPLIST_FILE: Support/Mac/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Support/Mac/TesseraStudioMac.entitlements
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGNING_REQUIRED: "NO"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+    scheme:
+      testTargets: []
+
+  TesseraStudioiOS:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: Sources/TesseraStudioiOS
+    resources:
+      - path: Shared/Assets.xcassets
+    dependencies:
+      - package: TesseraStudio
+        product: TesseraCore
+    settings:
+      base:
+        PRODUCT_NAME: TesseraStudioiOS
+        PRODUCT_BUNDLE_IDENTIFIER: com.tessera.studio.ios
+        INFOPLIST_FILE: Support/iOS/Info.plist
+        TARGETED_DEVICE_FAMILY: "1,2"
+        CODE_SIGNING_ALLOWED: "NO"
+        CODE_SIGNING_REQUIRED: "NO"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+    scheme:
+      testTargets: []

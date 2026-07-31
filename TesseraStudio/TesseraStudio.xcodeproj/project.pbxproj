@@ -1,0 +1,503 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		14E5A74A80E7C2805E812FA3 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 543C41C3EF0C82A41F740F1E /* ContentView.swift */; };
+		44820084A42BFF61FD9198E8 /* TesseraCore in Frameworks */ = {isa = PBXBuildFile; productRef = 3EE7F1E4BFBB3E93B73ACCC3 /* TesseraCore */; };
+		47AD6881245204EF1A0C514C /* TesseraStudioMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFD216E1B50E0E33E37DDB5C /* TesseraStudioMacApp.swift */; };
+		504CC16738EF99406D6B8529 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C144C7F04921903632D744E /* ContentView.swift */; };
+		94155ADF33A1FA2244B0096B /* TesseraCore in Frameworks */ = {isa = PBXBuildFile; productRef = 558253DF4AD709A6F954A1B9 /* TesseraCore */; };
+		ACA69BEBB04769F1DD146753 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 515D71CE71265C64C3BC538B /* SettingsView.swift */; };
+		D3B43A51CB7885704B6C80CE /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9839F117CD5A6CC1C9C5F7DE /* SettingsView.swift */; };
+		D4B9C1644A7E90A4302166CF /* TesseraStudioiOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 437779B0DF7334909ED10304 /* TesseraStudioiOSApp.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		2C144C7F04921903632D744E /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		437779B0DF7334909ED10304 /* TesseraStudioiOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TesseraStudioiOSApp.swift; sourceTree = "<group>"; };
+		515D71CE71265C64C3BC538B /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		543C41C3EF0C82A41F740F1E /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		55B00FB4A80A894E7D327A58 /* TesseraStudioiOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = TesseraStudioiOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		9075FB059F1B04D32002C2F2 /* TesseraStudioMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TesseraStudioMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		92B9CE3C72E91BD745B3A6BF /* TesseraStudio */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TesseraStudio; path = .; sourceTree = SOURCE_ROOT; };
+		9839F117CD5A6CC1C9C5F7DE /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		DFD216E1B50E0E33E37DDB5C /* TesseraStudioMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TesseraStudioMacApp.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		9EE5FEF540331CE14B3DF1DA /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				44820084A42BFF61FD9198E8 /* TesseraCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F2936DE8F64A5825A8188229 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				94155ADF33A1FA2244B0096B /* TesseraCore in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		1CB356EEFE5F04B3E736C1B5 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				9839F117CD5A6CC1C9C5F7DE /* SettingsView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		3C6123140A713C13FF958CE6 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				2C144C7F04921903632D744E /* ContentView.swift */,
+				DFD216E1B50E0E33E37DDB5C /* TesseraStudioMacApp.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		4B0BFA4088E866070226D74B /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				92B9CE3C72E91BD745B3A6BF /* TesseraStudio */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		4E15D410EFCB6A43B652A6DA /* TesseraStudioiOS */ = {
+			isa = PBXGroup;
+			children = (
+				C027C100D0A3D2A9E4685C9A /* App */,
+				1CB356EEFE5F04B3E736C1B5 /* Views */,
+			);
+			path = TesseraStudioiOS;
+			sourceTree = "<group>";
+		};
+		ADF4D9448C4AB7B955BF1EC0 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				55B00FB4A80A894E7D327A58 /* TesseraStudioiOS.app */,
+				9075FB059F1B04D32002C2F2 /* TesseraStudioMac.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		BDB3D247610FB8EE2D45003A /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				4E15D410EFCB6A43B652A6DA /* TesseraStudioiOS */,
+				FE4F864427047DB409BEA3FC /* TesseraStudioMac */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		C027C100D0A3D2A9E4685C9A /* App */ = {
+			isa = PBXGroup;
+			children = (
+				543C41C3EF0C82A41F740F1E /* ContentView.swift */,
+				437779B0DF7334909ED10304 /* TesseraStudioiOSApp.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		E444049A8E6351CE88F16EC3 = {
+			isa = PBXGroup;
+			children = (
+				4B0BFA4088E866070226D74B /* Packages */,
+				BDB3D247610FB8EE2D45003A /* Sources */,
+				ADF4D9448C4AB7B955BF1EC0 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		F5AF8869B5464F3C31082196 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				515D71CE71265C64C3BC538B /* SettingsView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		FE4F864427047DB409BEA3FC /* TesseraStudioMac */ = {
+			isa = PBXGroup;
+			children = (
+				3C6123140A713C13FF958CE6 /* App */,
+				F5AF8869B5464F3C31082196 /* Views */,
+			);
+			path = TesseraStudioMac;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		69B8A4CF45C9BDF967B903D6 /* TesseraStudioiOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4D4432793AE3CF2D4B78400D /* Build configuration list for PBXNativeTarget "TesseraStudioiOS" */;
+			buildPhases = (
+				5B65E49E08C43B3AE9743D40 /* Sources */,
+				9EE5FEF540331CE14B3DF1DA /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = TesseraStudioiOS;
+			packageProductDependencies = (
+				3EE7F1E4BFBB3E93B73ACCC3 /* TesseraCore */,
+			);
+			productName = TesseraStudioiOS;
+			productReference = 55B00FB4A80A894E7D327A58 /* TesseraStudioiOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+		A4383DB23095790C1B7A06E6 /* TesseraStudioMac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1BA3A17FA0B3CA6F9F416A0A /* Build configuration list for PBXNativeTarget "TesseraStudioMac" */;
+			buildPhases = (
+				D522CCF6F89116F5D1065F1E /* Sources */,
+				F2936DE8F64A5825A8188229 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = TesseraStudioMac;
+			packageProductDependencies = (
+				558253DF4AD709A6F954A1B9 /* TesseraCore */,
+			);
+			productName = TesseraStudioMac;
+			productReference = 9075FB059F1B04D32002C2F2 /* TesseraStudioMac.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A0F95CDDD801526A4D635543 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					A4383DB23095790C1B7A06E6 = {
+						ProvisioningStyle = Manual;
+					};
+				};
+			};
+			buildConfigurationList = 0F5B7BABB3D775D0EEF7D4ED /* Build configuration list for PBXProject "TesseraStudio" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = E444049A8E6351CE88F16EC3;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				B8F6101CBB78B794C01EFF67 /* XCLocalSwiftPackageReference "." */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = ADF4D9448C4AB7B955BF1EC0 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A4383DB23095790C1B7A06E6 /* TesseraStudioMac */,
+				69B8A4CF45C9BDF967B903D6 /* TesseraStudioiOS */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		5B65E49E08C43B3AE9743D40 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				14E5A74A80E7C2805E812FA3 /* ContentView.swift in Sources */,
+				D3B43A51CB7885704B6C80CE /* SettingsView.swift in Sources */,
+				D4B9C1644A7E90A4302166CF /* TesseraStudioiOSApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D522CCF6F89116F5D1065F1E /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				504CC16738EF99406D6B8529 /* ContentView.swift in Sources */,
+				ACA69BEBB04769F1DD146753 /* SettingsView.swift in Sources */,
+				47AD6881245204EF1A0C514C /* TesseraStudioMacApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		17A74129DBB0D945D2A62E7C /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_ENTITLEMENTS = Support/Mac/TesseraStudioMac.entitlements;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = Support/Mac/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tessera.studio.mac;
+				PRODUCT_NAME = TesseraStudioMac;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		839E85A8E75074525FA38B6F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = Support/iOS/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.tessera.studio.ios;
+				PRODUCT_NAME = TesseraStudioiOS;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		BD9CA5653897EB92BEC50C7C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.9;
+			};
+			name = Release;
+		};
+		C7F6C23EAEF3E3CE24F5E1D5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				INFOPLIST_FILE = Support/iOS/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.tessera.studio.ios;
+				PRODUCT_NAME = TesseraStudioiOS;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		EE23CB8C2FE92F1505720E59 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGNING_REQUIRED = NO;
+				CODE_SIGN_ENTITLEMENTS = Support/Mac/TesseraStudioMac.entitlements;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				COMBINE_HIDPI_IMAGES = YES;
+				INFOPLIST_FILE = Support/Mac/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.tessera.studio.mac;
+				PRODUCT_NAME = TesseraStudioMac;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		F672645DD88ECA4B07864BB6 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.9;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		0F5B7BABB3D775D0EEF7D4ED /* Build configuration list for PBXProject "TesseraStudio" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F672645DD88ECA4B07864BB6 /* Debug */,
+				BD9CA5653897EB92BEC50C7C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		1BA3A17FA0B3CA6F9F416A0A /* Build configuration list for PBXNativeTarget "TesseraStudioMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				17A74129DBB0D945D2A62E7C /* Debug */,
+				EE23CB8C2FE92F1505720E59 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		4D4432793AE3CF2D4B78400D /* Build configuration list for PBXNativeTarget "TesseraStudioiOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				839E85A8E75074525FA38B6F /* Debug */,
+				C7F6C23EAEF3E3CE24F5E1D5 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		B8F6101CBB78B794C01EFF67 /* XCLocalSwiftPackageReference "." */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = .;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		3EE7F1E4BFBB3E93B73ACCC3 /* TesseraCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TesseraCore;
+		};
+		558253DF4AD709A6F954A1B9 /* TesseraCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TesseraCore;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = A0F95CDDD801526A4D635543 /* Project object */;
+}
