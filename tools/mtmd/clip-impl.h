@@ -41,6 +41,7 @@
 #define KEY_PROJ_DIM            "clip.%s.projection_dim"
 #define KEY_N_HEAD              "clip.%s.attention.head_count"
 #define KEY_N_HEAD_KV           "clip.%s.attention.head_count_kv"
+#define KEY_N_EMBD_HEAD         "clip.%s.attention.head_dim"
 #define KEY_LAYER_NORM_EPS      "clip.%s.attention.layer_norm_epsilon"
 #define KEY_FEATURE_LAYERS      "clip.%s.feature_layer"
 
