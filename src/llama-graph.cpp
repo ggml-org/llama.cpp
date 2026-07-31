@@ -1983,9 +1983,14 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
     ggml_tensor * up = nullptr;
     ggml_tensor * experts = nullptr;
 
-    if (gate_up_exps) {
+    struct ggml_tensor * gate_up_exps_eff = gate_up_exps;
+    if (!gate_up_exps_eff && gate_exps && up_exps && cparams.fused_gate_up) {
+        gate_up_exps_eff = ggml_concat(ctx0, gate_exps, up_exps, 0);
+    }
+
+    if (gate_up_exps_eff) {
         // merged gate_up path: one mul_mat_id, then split into gate and up views
-        ggml_tensor * gate_up = build_lora_mm_id(gate_up_exps, cur, selected_experts, up_exps_s); // [n_ff*2, n_expert_used, n_tokens]
+        ggml_tensor * gate_up = build_lora_mm_id(gate_up_exps_eff, cur, selected_experts, up_exps_s); // [n_ff*2, n_expert_used, n_tokens]
         cb(gate_up, "ffn_moe_gate_up", il);
 
         if (up_exps_s) {

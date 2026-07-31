@@ -360,6 +360,7 @@ extern "C" {
         enum llama_pooling_type      pooling_type;      // whether to pool (sum) embedding results by sequence id
         enum llama_attention_type    attention_type;    // attention type to use for embeddings
         enum llama_flash_attn_type   flash_attn_type;   // when to enable Flash Attention
+        bool                         fuse_gate_up;      // whether to fuse MoE gate and up projections
 
         // ref: https://github.com/ggml-org/llama.cpp/pull/2054
         float    rope_freq_base;   // RoPE base frequency, 0 = from model
