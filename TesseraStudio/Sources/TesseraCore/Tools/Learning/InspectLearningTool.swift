@@ -20,6 +20,8 @@ public struct InspectLearningTool: TesseraTool {
         let playbook = center.playbook.all()
         let playbookEntries = playbook.values.reduce(0) { $0 + $1.count }
         let foraging = center.foraging.summary()
+        let curation = center.curation.summary()
+        let adaptation = center.scheduler.lastAdaptation()
 
         var lines: [String] = [
             "Learning subsystem",
@@ -33,8 +35,14 @@ public struct InspectLearningTool: TesseraTool {
         lines.append("- recent outcomes (last 10): \(recentCount)")
         lines.append("- playbook: \(playbook.count) class(es), \(playbookEntries) strategy(ies)")
         lines.append("- foraging: \(foraging.total) event(s) - local-playbook: \(foraging.localPlaybook), local-reference: \(foraging.localReference), remote: \(foraging.remote) (resolved locally: \(foraging.resolvedLocally))")
+        lines.append("- curation: \(curation.stored) outcome(s), \(curation.preferencePairs) preference pair(s), dedup-skipped \(curation.dedupSkipped), mean quality \(String(format: "%.2f", curation.meanQuality))")
+        if let adaptation {
+            lines.append("- last adaptation: guard=\(adaptation.guardPassed ? "pass" : "fail") adapted=\(adaptation.adapted) dryRun=\(adaptation.dryRun) backend=\(adaptation.backend)")
+        } else {
+            lines.append("- last adaptation: none")
+        }
 
-        return .ok(lines.joined(separator: "\n"), data: [
+        var data: [String: JSONValue] = [
             "configured": .bool(configured),
             "teachers": .number(Double(teacherCount)),
             "assessments": .number(Double(assessments.count)),
@@ -43,6 +51,17 @@ public struct InspectLearningTool: TesseraTool {
             "foraging_total": .number(Double(foraging.total)),
             "foraging_resolved_locally": .number(Double(foraging.resolvedLocally)),
             "foraging_remote": .number(Double(foraging.remote)),
-        ])
+            "curation_stored": .number(Double(curation.stored)),
+            "curation_preference_pairs": .number(Double(curation.preferencePairs)),
+            "curation_dedup_skipped": .number(Double(curation.dedupSkipped)),
+            "curation_mean_quality": .number(curation.meanQuality),
+        ]
+        if let adaptation {
+            data["last_adaptation_guard_passed"] = .bool(adaptation.guardPassed)
+            data["last_adaptation_adapted"] = .bool(adaptation.adapted)
+            data["last_adaptation_backend"] = .string(adaptation.backend)
+        }
+
+        return .ok(lines.joined(separator: "\n"), data: data)
     }
 }

@@ -82,37 +82,209 @@ public struct TesseraLensComparison: Codable, Sendable, Equatable {
     }
 }
 
+// MARK: - Harness exchange types
+
+/// Per-axis pass/fail tally. The C++ harness (ts_capability_score_load)
+/// reduces {"pass":N,"fail":M} to a pass fraction; this is the unit both the
+/// capability-eval and adapt inputs are serialized in.
+public struct TesseraAxisTally: Codable, Sendable, Equatable {
+    public var pass: Int
+    public var fail: Int
+
+    public init(pass: Int = 0, fail: Int = 0) {
+        self.pass = pass
+        self.fail = fail
+    }
+
+    public var total: Int { pass + fail }
+    public var fraction: Double { total > 0 ? Double(pass) / Double(total) : 0 }
+}
+
+/// The result of scoring a set of instance results, tagged with which backend
+/// produced it. The C++ harness is the source of truth when its binary is
+/// present; the in-process Swift reduction is the honest fallback (same
+/// pass-fraction math, just computed locally).
+public struct TesseraCapabilityEvalOutcome: Sendable, Equatable {
+    public let score: TesseraCapabilityScore
+    public let tallies: [String: TesseraAxisTally]   // keyed by Swift axis name
+    public let weightedSum: Double
+    public let backend: String                        // "harness" | "swift"
+    public let note: String
+
+    public init(
+        score: TesseraCapabilityScore,
+        tallies: [String: TesseraAxisTally],
+        weightedSum: Double,
+        backend: String,
+        note: String
+    ) {
+        self.score = score
+        self.tallies = tallies
+        self.weightedSum = weightedSum
+        self.backend = backend
+        self.note = note
+    }
+}
+
 // MARK: - Service
 
 /// Turns per-axis instance results into a TesseraCapabilityScore and reads
 /// the same vector through two lenses (weighted-sum scalar, Pareto
-/// non-domination). Stateless; the score VECTOR is the substrate, the lenses
-/// are just projections (design 4.7).
+/// non-domination). The score VECTOR is the substrate, the lenses are just
+/// projections (design 4.7).
+///
+/// Scoring has two backends: the C++ harness (--tessera-capability-eval) is
+/// the source of truth when its binary is installed; the Swift reduction is
+/// the fallback when it is not. Both reduce per-axis pass/fail to the same
+/// fractions, so the fallback is a degradation of location, not of method.
 public struct TesseraCapabilityEvalService {
+    /// Swift axis name -> C++ harness JSON key. The harness uses snake_case
+    /// (ts_capability_score field names); the Swift score uses camelCase.
+    public static let axisToHarnessKey: [String: String] = [
+        "mechanical": "mechanical",
+        "apiCurrency": "api_currency",
+        "hardTail": "hard_tail",
+        "personalStyle": "personal_style",
+        "generalCompetence": "general_competence",
+    ]
+
+    /// Uniform weights over the four optimization axes, matching the harness
+    /// (quantize.cpp). The guard axis is excluded by weightedSum, never here.
+    public static let uniformWeights: [String: Double] = [
+        "mechanical": 0.25, "apiCurrency": 0.25, "hardTail": 0.25, "personalStyle": 0.25,
+    ]
+
+    private static let capabilityOutSchema = "llama.tessera.capability.v1"
+
     public init() {}
 
     /// Each axis = pass fraction over that axis's instances. Axes with zero
     /// instances score 0. Results naming an unknown axis are ignored.
     public func score(from results: [TesseraEvalInstanceResult]) -> TesseraCapabilityScore {
-        var passed: [String: Int] = [:]
-        var total: [String: Int] = [:]
+        let tallies = tally(from: results)
+        return TesseraCapabilityScore(
+            mechanical: tallies["mechanical"]?.fraction ?? 0,
+            apiCurrency: tallies["apiCurrency"]?.fraction ?? 0,
+            hardTail: tallies["hardTail"]?.fraction ?? 0,
+            personalStyle: tallies["personalStyle"]?.fraction ?? 0,
+            generalCompetence: tallies["generalCompetence"]?.fraction ?? 0
+        )
+    }
+
+    /// Reduce per-instance results to per-axis pass/fail tallies. Every axis
+    /// is present (zeroed) so the harness - which requires all five - always
+    /// gets a complete vector. Results naming an unknown axis are ignored.
+    public func tally(from results: [TesseraEvalInstanceResult]) -> [String: TesseraAxisTally] {
+        var tallies: [String: TesseraAxisTally] = [:]
+        for axis in TesseraCapabilityScore.axisNames { tallies[axis] = TesseraAxisTally() }
         for result in results {
             guard TesseraCapabilityScore.axisNames.contains(result.axis) else { continue }
-            total[result.axis, default: 0] += 1
-            if result.passed { passed[result.axis, default: 0] += 1 }
+            var t = tallies[result.axis] ?? TesseraAxisTally()
+            if result.passed { t.pass += 1 } else { t.fail += 1 }
+            tallies[result.axis] = t
+        }
+        return tallies
+    }
+
+    /// Serialize per-axis tallies to the harness instances JSON: schema_version
+    /// 1, all five axes as {"pass","fail"}, and optional baseline fractions.
+    /// This is the shared input shape for BOTH --tessera-capability-eval and
+    /// --tessera-adapt (ts_capability_score_load consumes both). All five axes
+    /// are always emitted; a missing axis would make the harness fail loudly.
+    public func serializeInstancesJSON(
+        tallies: [String: TesseraAxisTally],
+        baseline: TesseraCapabilityScore? = nil
+    ) throws -> Data {
+        var axes: [String: HarnessAxisCounts] = [:]
+        for axis in TesseraCapabilityScore.axisNames {
+            let key = Self.axisToHarnessKey[axis] ?? axis
+            let t = tallies[axis] ?? TesseraAxisTally()
+            axes[key] = HarnessAxisCounts(pass: t.pass, fail: t.fail)
         }
 
-        func fraction(_ axis: String) -> Double {
-            guard let denominator = total[axis], denominator > 0 else { return 0 }
-            return Double(passed[axis] ?? 0) / Double(denominator)
+        var baselineObject: [String: Double]?
+        if let baseline {
+            var b: [String: Double] = [:]
+            for axis in TesseraCapabilityScore.axisNames {
+                b[Self.axisToHarnessKey[axis] ?? axis] = baseline[axis]
+            }
+            baselineObject = b
         }
 
-        return TesseraCapabilityScore(
-            mechanical: fraction("mechanical"),
-            apiCurrency: fraction("apiCurrency"),
-            hardTail: fraction("hardTail"),
-            personalStyle: fraction("personalStyle"),
-            generalCompetence: fraction("generalCompetence")
+        return try JSONEncoder().encode(
+            HarnessInstancesFile(schema_version: 1, axes: axes, baseline: baselineObject)
+        )
+    }
+
+    /// Score instance results via the C++ harness when its binary is present
+    /// (source of truth), falling back to the in-process Swift reduction
+    /// otherwise. Never fabricates: with no results, every axis is 0 because
+    /// zero instances were scored, and the note says which backend ran.
+    public func scoreResults(
+        _ results: [TesseraEvalInstanceResult],
+        baseline: TesseraCapabilityScore? = nil
+    ) async -> TesseraCapabilityEvalOutcome {
+        let tallies = tally(from: results)
+        let swiftScore = score(from: results)
+        let swiftSum = swiftScore.weightedSum(weights: Self.uniformWeights)
+
+        func fallback(_ note: String) -> TesseraCapabilityEvalOutcome {
+            TesseraCapabilityEvalOutcome(
+                score: swiftScore, tallies: tallies, weightedSum: swiftSum,
+                backend: "swift", note: note
+            )
+        }
+
+        let binary = TesseraHarnessBinary.path
+        guard FileManager.default.isExecutableFile(atPath: binary) else {
+            return fallback("harness binary not found at \(binary); scored in Swift")
+        }
+
+        // The binary reads the instances from a file and writes the score to a
+        // file; both are ephemeral and removed before returning.
+        let dir = NSTemporaryDirectory()
+        let inPath = (dir as NSString).appendingPathComponent("tessera-cap-\(UUID().uuidString).in.json")
+        let outPath = (dir as NSString).appendingPathComponent("tessera-cap-\(UUID().uuidString).out.json")
+        defer {
+            try? FileManager.default.removeItem(atPath: inPath)
+            try? FileManager.default.removeItem(atPath: outPath)
+        }
+
+        do {
+            let data = try serializeInstancesJSON(tallies: tallies, baseline: baseline)
+            try data.write(to: URL(fileURLWithPath: inPath), options: .atomic)
+        } catch {
+            return fallback("could not stage instances for the harness; scored in Swift")
+        }
+
+        let result: ProcessResult
+        do {
+            result = try await ProcessRunner().run(
+                executable: binary,
+                arguments: [
+                    "--tessera-capability-eval", inPath,
+                    "--tessera-capability-out", outPath,
+                ]
+            )
+        } catch {
+            return fallback("harness process unavailable (\(error.localizedDescription)); scored in Swift")
+        }
+
+        guard result.exitCode == 0 else {
+            let detail = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            return fallback("harness exited \(result.exitCode)\(detail.isEmpty ? "" : ": " + detail); scored in Swift")
+        }
+
+        guard let out = Self.parseCapabilityOut(at: outPath), let harnessScore = out.score else {
+            return fallback("harness ran but its score output was unreadable; scored in Swift")
+        }
+
+        return TesseraCapabilityEvalOutcome(
+            score: Self.scoreFromHarness(harnessScore),
+            tallies: tallies,
+            weightedSum: out.weighted_sum ?? swiftSum,
+            backend: "harness",
+            note: "scored by \(binary)"
         )
     }
 
@@ -175,5 +347,56 @@ public struct TesseraCapabilityEvalService {
         let verdict = comparison.disagree ? "DISAGREE" : "agree"
         return "weighted-sum says \(label(comparison.scalarWinner)) (\(sumA) vs \(sumB)), "
             + "Pareto says \(label(comparison.paretoWinner)) -> lenses \(verdict)"
+    }
+
+    // MARK: Harness JSON shapes
+
+    private struct HarnessAxisCounts: Codable {
+        let pass: Int
+        let fail: Int
+    }
+
+    private struct HarnessInstancesFile: Codable {
+        let schema_version: Int
+        let axes: [String: HarnessAxisCounts]   // keyed by harness (snake_case) key
+        let baseline: [String: Double]?         // keyed by harness key; optional
+    }
+
+    private struct HarnessScoreObject: Codable {
+        let mechanical: Double?
+        let api_currency: Double?
+        let hard_tail: Double?
+        let personal_style: Double?
+        let general_competence: Double?
+    }
+
+    private struct HarnessCapabilityOut: Codable {
+        let schema: String?
+        let score: HarnessScoreObject?
+        let weighted_sum: Double?
+        let has_baseline: Bool?
+        let baseline: HarnessScoreObject?
+    }
+
+    private static func scoreFromHarness(_ s: HarnessScoreObject) -> TesseraCapabilityScore {
+        TesseraCapabilityScore(
+            mechanical: s.mechanical ?? 0,
+            apiCurrency: s.api_currency ?? 0,
+            hardTail: s.hard_tail ?? 0,
+            personalStyle: s.personal_style ?? 0,
+            generalCompetence: s.general_competence ?? 0
+        )
+    }
+
+    /// Parse the harness score output. Returns nil when the file is missing,
+    /// malformed, carries an unexpected schema, or has no score - a harness
+    /// pass without a readable score is treated as a failure (caller falls
+    /// back to Swift).
+    private static func parseCapabilityOut(at path: String) -> HarnessCapabilityOut? {
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return nil }
+        guard let decoded = try? JSONDecoder().decode(HarnessCapabilityOut.self, from: data) else { return nil }
+        if let schema = decoded.schema, schema != capabilityOutSchema { return nil }
+        guard decoded.score != nil else { return nil }
+        return decoded
     }
 }

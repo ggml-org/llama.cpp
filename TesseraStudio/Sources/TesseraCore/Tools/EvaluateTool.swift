@@ -53,7 +53,7 @@ public struct EvaluateTool: TesseraTool {
         // perplexity/latency/power behavior below is unchanged.
         let capabilityEval = arguments["capability_eval"].map { $0 == .bool(true) || $0 == .string("true") } ?? false
         if capabilityEval {
-            return runCapabilityEval(arguments: arguments)
+            return await runCapabilityEval(arguments: arguments)
         }
 
         guard let modelPath = arguments["model_path"]?.stringValue, !modelPath.isEmpty else {
@@ -112,13 +112,18 @@ public struct EvaluateTool: TesseraTool {
 
     /// Multi-axis capability eval (design 4.7 / 8). Scores caller-supplied
     /// instance results into a TesseraCapabilityScore and returns the five
-    /// axis scores plus the guard value. HONESTY: running instances against a
-    /// live model requires a model + compute we do not have here; results are
-    /// supplied by the caller via `eval_instances` (a future runner executes
-    /// the instances and records pass/fail). Without results, every axis
-    /// scores 0 because zero instances were scored - NOT because the model
-    /// failed - and the output says so plainly. No scores are fabricated.
-    private func runCapabilityEval(arguments: [String: JSONValue]) -> ToolResult {
+    /// axis scores plus the guard value. Scoring goes through the C++ harness
+    /// (--tessera-capability-eval) when its binary is installed - the source
+    /// of truth - and falls back to the in-process Swift reduction when it is
+    /// not; both reduce per-axis pass/fail to the same fractions.
+    ///
+    /// HONESTY: running instances against a live model requires a model +
+    /// compute we do not have here; results are supplied by the caller via
+    /// `eval_instances` (a future runner executes the instances and records
+    /// pass/fail). Without results, every axis scores 0 because zero instances
+    /// were scored - NOT because the model failed - and the output says so
+    /// plainly. No scores are fabricated.
+    private func runCapabilityEval(arguments: [String: JSONValue]) async -> ToolResult {
         let service = TesseraCapabilityEvalService()
         let store = TesseraEvalInstanceStore()
         store.seedDefaultsIfNeeded()
@@ -141,12 +146,26 @@ public struct EvaluateTool: TesseraTool {
             results = []
         }
 
-        let score = service.score(from: results)
+        let outcome = await service.scoreResults(results)
+        let score = outcome.score
         let hasResults = !results.isEmpty
+
+        // Persist the latest scored eval so the adaptation scheduler has a
+        // real, honest input (and a baseline for its guard). Only when results
+        // were actually supplied - a zero-result eval carries no signal.
+        if hasResults {
+            let record = TesseraCapabilityEvalRecord(
+                tallies: outcome.tallies,
+                score: score,
+                weightedSum: outcome.weightedSum,
+                backend: outcome.backend
+            )
+            try? TesseraCapabilityEvalStore().recordLatest(record)
+        }
 
         let message: String
         if hasResults {
-            message = "Capability eval complete: scored \(results.count) result(s) across \(TesseraCapabilityScore.axisNames.count) axes."
+            message = "Capability eval complete (\(outcome.backend)): scored \(results.count) result(s) across \(TesseraCapabilityScore.axisNames.count) axes."
         } else {
             message = "Capability eval: no results supplied. A live model run is required to execute the "
                 + "\(instances.count) held-out instance(s); pass them via eval_instances. Scores are 0 because "
@@ -155,6 +174,9 @@ public struct EvaluateTool: TesseraTool {
 
         var data: [String: JSONValue] = [
             "backend": .string("capability_eval"),
+            "scoring_backend": .string(outcome.backend),
+            "scoring_note": .string(outcome.note),
+            "weighted_sum": .number(outcome.weightedSum),
             "mechanical": .number(score.mechanical),
             "apiCurrency": .number(score.apiCurrency),
             "hardTail": .number(score.hardTail),
