@@ -45,3 +45,28 @@ int ts_ppl_probe(ts_ppl_forward_fn forward_ref, void * ref_ctx,
                  ts_ppl_forward_fn forward_quant, void * quant_ctx,
                  const ts_ppl_params * params,
                  ts_ppl_result * result);
+
+// --- L4 end-to-end comparison (runtime-aware pipeline Layer 4) ---
+
+struct ts_ppl_compare_result {
+    float   ppl_ref;        // PPL of the reference (BF16) model
+    float   ppl_quant;      // PPL of the quantized model
+    float   delta_ppl;      // ppl_quant - ppl_ref
+    float   ppl_ratio;      // ppl_quant / ppl_ref
+    float   kl_divergence;  // KL(ref || quant), nats
+    float   threshold;      // pass threshold applied
+    bool    pass;           // delta_ppl < threshold
+    int64_t n_tokens_used;
+};
+
+// L4 smoke test: run PPL on both models over the same random tokens and
+// report the whole-model delta plus a pass verdict. Acceptance for T640
+// on standard benchmarks: delta_ppl < 0.5. pass_threshold <= 0 falls back
+// to 0.5. Per-layer contribution needs model-graph access unavailable in
+// the quantize tool, so this reports the whole-model delta only.
+// Returns 0 on success, -1 on invalid params.
+int ts_ppl_compare(ts_ppl_forward_fn forward_ref, void * ref_ctx,
+                   ts_ppl_forward_fn forward_quant, void * quant_ctx,
+                   const ts_ppl_params * params,
+                   float pass_threshold,
+                   ts_ppl_compare_result * result);

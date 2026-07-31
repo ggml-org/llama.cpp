@@ -335,3 +335,74 @@ int ts_l5_orchestrate_step(const ts_score_map * sensitivity,
 
     return (int)plan->actions.size();
 }
+
+// --- Adaptive requantization ---
+
+void ts_l5_adaptive_default_params(ts_l5_adaptive_params * p) {
+    if (p == nullptr) {
+        return;
+    }
+    p->alpha_scale = 0.5f;
+    p->clip_scale  = 0.5f;
+    p->min_alpha   = 0.1f;
+    p->min_clip    = 0.1f;
+}
+
+int ts_l5_adaptive_requant(const ts_l2_report * report,
+                           const ts_l5_adaptive_params * params,
+                           int64_t generation,
+                           ts_l5_adaptive_plan * plan) {
+    if (plan == nullptr) {
+        return -1;
+    }
+    plan->specs.clear();
+    plan->n_requant  = 0;
+    plan->generation = generation;
+    if (report == nullptr) {
+        return 0;
+    }
+
+    ts_l5_adaptive_params p;
+    if (params != nullptr) {
+        p = *params;
+    } else {
+        ts_l5_adaptive_default_params(&p);
+    }
+
+    for (const auto & t : report->tensors) {
+        if (!t.flagged) {
+            continue;
+        }
+
+        // how far the observed divergence overshoots the type baseline
+        float overshoot = (t.expected_frob > 0.0f)
+                              ? t.divergence.relative_frobenius / t.expected_frob
+                              : 1.0f;
+        if (overshoot < 1.0f) {
+            overshoot = 1.0f;
+        }
+
+        // tighten proportionally: worse tensors get smaller alpha/clip
+        float new_alpha = p.alpha_scale / overshoot;
+        float new_clip  = p.clip_scale  / overshoot;
+        if (new_alpha < p.min_alpha) {
+            new_alpha = p.min_alpha;
+        }
+        if (new_clip < p.min_clip) {
+            new_clip = p.min_clip;
+        }
+
+        ts_l5_requant_spec s;
+        s.tensor_name = t.tensor_name;
+        s.qtype       = t.qtype;
+        s.divergence  = t.divergence.relative_frobenius;
+        s.expected    = t.expected_frob;
+        s.overshoot   = overshoot;
+        s.new_alpha   = new_alpha;
+        s.new_clip    = new_clip;
+        plan->specs.push_back(s);
+        plan->n_requant++;
+    }
+
+    return (int)plan->n_requant;
+}

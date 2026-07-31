@@ -23,6 +23,16 @@ static uint32_t ts_ppl_xorshift32(uint32_t * state) {
     return x;
 }
 
+// Deterministic random token IDs in [0, vocab_size), shared by the probe
+// and the L4 compare so both models see identical input.
+static void ts_ppl_gen_tokens(int32_t * tokens, int64_t n_tokens,
+                              int64_t vocab_size, uint32_t seed) {
+    uint32_t rng = seed;
+    for (int64_t i = 0; i < n_tokens; i++) {
+        tokens[i] = (int32_t)(ts_ppl_xorshift32(&rng) % (uint32_t)vocab_size);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Softmax helpers (in-place, numerically stable)
 // ---------------------------------------------------------------------------
@@ -116,10 +126,7 @@ int ts_ppl_probe(ts_ppl_forward_fn forward_ref, void * ref_ctx,
 
     // generate random token IDs
     std::vector<int32_t> tokens(n_tokens);
-    uint32_t rng = seed;
-    for (int64_t i = 0; i < n_tokens; i++) {
-        tokens[i] = (int32_t)(ts_ppl_xorshift32(&rng) % (uint32_t)vocab_size);
-    }
+    ts_ppl_gen_tokens(tokens.data(), n_tokens, vocab_size, seed);
 
     size_t buf_size = (size_t)n_tokens * (size_t)vocab_size;
     std::vector<float> logits_ref(buf_size);
@@ -136,6 +143,48 @@ int ts_ppl_probe(ts_ppl_forward_fn forward_ref, void * ref_ctx,
 
     result->ppl_ratio     = ppl_quant / ppl_ref;
     result->delta_ppl     = ppl_quant - ppl_ref;
+    result->n_tokens_used = n_tokens;
+
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// L4 end-to-end comparison
+// ---------------------------------------------------------------------------
+
+int ts_ppl_compare(ts_ppl_forward_fn forward_ref, void * ref_ctx,
+                   ts_ppl_forward_fn forward_quant, void * quant_ctx,
+                   const ts_ppl_params * params,
+                   float pass_threshold,
+                   ts_ppl_compare_result * result) {
+    if (!forward_ref || !forward_quant || !params || !result) {
+        return -1;
+    }
+
+    int64_t n_tokens   = params->n_tokens   > 0 ? params->n_tokens   : 256;
+    int64_t vocab_size = params->vocab_size > 0 ? params->vocab_size : 32000;
+    uint32_t seed      = params->seed ? params->seed : 42;
+    float threshold    = pass_threshold > 0.0f ? pass_threshold : 0.5f;
+
+    std::vector<int32_t> tokens(n_tokens);
+    ts_ppl_gen_tokens(tokens.data(), n_tokens, vocab_size, seed);
+
+    size_t buf_size = (size_t)n_tokens * (size_t)vocab_size;
+    std::vector<float> logits_ref(buf_size);
+    std::vector<float> logits_quant(buf_size);
+
+    forward_ref(tokens.data(), logits_ref.data(), n_tokens, vocab_size, ref_ctx);
+    forward_quant(tokens.data(), logits_quant.data(), n_tokens, vocab_size, quant_ctx);
+
+    result->ppl_ref   = ts_ppl_perplexity(logits_ref.data(),   tokens.data(), n_tokens, vocab_size);
+    result->ppl_quant = ts_ppl_perplexity(logits_quant.data(), tokens.data(), n_tokens, vocab_size);
+    result->kl_divergence = ts_ppl_kl_divergence(
+        logits_ref.data(), logits_quant.data(), n_tokens, vocab_size);
+
+    result->delta_ppl     = result->ppl_quant - result->ppl_ref;
+    result->ppl_ratio     = result->ppl_ref > 0.0f ? result->ppl_quant / result->ppl_ref : 0.0f;
+    result->threshold     = threshold;
+    result->pass          = result->delta_ppl < threshold;
     result->n_tokens_used = n_tokens;
 
     return 0;

@@ -87,6 +87,10 @@ compile_and_run l15         $T/test_l15.cpp         $T/tessera-l15.cpp $C/tesser
 # --- Needs sidecar (L1 kernel-direct fitness) ---
 compile_and_run l1_fitness  $T/test_l1_fitness.cpp  $T/tessera-l1-fitness.cpp $C/tessera-sidecar-v3.cpp -I $C
 
+# --- L2-L5 runtime-aware pipeline (L2 diff + L3 coherence + L5 adaptive) ---
+# L2 needs vendor/nlohmann (JSON report); L3 needs the sidecar reader.
+compile_and_run l2l5        $T/test_l2l5.cpp        $T/tessera-l2-diff.cpp $T/tessera-l3-coherence.cpp $T/tessera-l5.cpp $T/tessera-ppl.cpp $C/tessera-sidecar-v3.cpp -I vendor -I $C
+
 # --- Needs vendor (nlohmann/json) ---
 compile_and_run policy      $T/test_policy.cpp      $T/tessera-policy.cpp -I vendor
 

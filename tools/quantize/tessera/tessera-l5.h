@@ -13,6 +13,8 @@
 #include <vector>
 #include <map>
 
+#include "tessera-l2-diff.h"    // ts_l2_report (adaptive requant input)
+
 // --- Sensitivity metrics (l5_metrics.py) ---
 
 // Per-component score map: tensor_name -> score.
@@ -101,3 +103,46 @@ int ts_l5_orchestrate_step(const ts_score_map * sensitivity,
                            int64_t generation,
                            const ts_orchestrator_params * params,
                            ts_requant_plan * plan);
+
+// --- Adaptive requantization (L5 closes the L2 loop) ---
+//
+// L2 flags tensors whose divergence overshoots their type baseline; this
+// turns those flags into tightened requantization params. The worse the
+// overshoot, the more alpha/clip are reduced. Applying the plan
+// (re-quantize + GGUF rewrite) goes through the existing quantize /
+// GGUF-writer path, matching ts_l5_orchestrate_step which also emits a
+// plan for downstream application.
+
+struct ts_l5_adaptive_params {
+    float alpha_scale;    // base alpha multiplier (< 1 tightens), default 0.5
+    float clip_scale;     // base clip multiplier (< 1 tightens), default 0.5
+    float min_alpha;      // alpha floor, default 0.1
+    float min_clip;       // clip floor, default 0.1
+};
+
+// Tightened requantization spec for one flagged tensor.
+struct ts_l5_requant_spec {
+    std::string tensor_name;
+    std::string qtype;
+    float divergence;    // observed relative_frobenius (from L2)
+    float expected;      // type baseline
+    float overshoot;     // divergence / expected (>= 1)
+    float new_alpha;
+    float new_clip;
+};
+
+struct ts_l5_adaptive_plan {
+    std::vector<ts_l5_requant_spec> specs;
+    int64_t n_requant;
+    int64_t generation;
+};
+
+void ts_l5_adaptive_default_params(ts_l5_adaptive_params * p);
+
+// Identify flagged tensors in an L2 report and compute tightened
+// requantization params for each. params == nullptr uses defaults.
+// Returns the number of specs (>= 0), or -1 on invalid plan.
+int ts_l5_adaptive_requant(const ts_l2_report * report,
+                           const ts_l5_adaptive_params * params,
+                           int64_t generation,
+                           ts_l5_adaptive_plan * plan);

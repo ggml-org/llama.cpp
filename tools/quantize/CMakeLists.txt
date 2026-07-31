@@ -27,6 +27,8 @@ add_library(${TARGET}
     tessera/tessera-l15.cpp
     tessera/tessera-l1-fitness.cpp
     tessera/tessera-ppl.cpp
+    tessera/tessera-l2-diff.cpp
+    tessera/tessera-l3-coherence.cpp
     tessera/tessera-ab-harness.cpp
     tessera/tessera-peqat.cpp
     # multimodal
