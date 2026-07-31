@@ -5166,16 +5166,22 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
                 }
             }
         }
-    } else {
-        int n = str_ndev ? atoi(str_ndev) : 1;
+    } else if (str_ndev && str_ndev[0] != '\0') {
+        GGML_LOG_WARN("DEPRECATED: GGML_HEXAGON_NDEV is deprecated. use GGML_HEXAGON_DEVICES instead\n");
+        int n = atoi(str_ndev);
         if (n < 1) n = 1;
         if (n > GGML_HEXAGON_MAX_SESSIONS) n = GGML_HEXAGON_MAX_SESSIONS;
         opt_ndev = n;
         for (size_t i = 0; i < opt_ndev; i++) {
             opt_device_configs[i].physical_idx = 0;
             opt_device_configs[i].virtual_idx  = (int)i;
-            opt_device_configs[i].name         = "HTP0:" + std::to_string(i);
+            opt_device_configs[i].name         = "HTP" + std::to_string(i);
         }
+    } else {
+        opt_ndev = 1;
+        opt_device_configs[0].physical_idx = 0;
+        opt_device_configs[0].virtual_idx  = 0;
+        opt_device_configs[0].name         = "HTP0";
     }
 
 #if defined(__ANDROID__)
