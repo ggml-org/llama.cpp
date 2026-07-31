@@ -15,12 +15,16 @@
 #include "tessera-higgs.h"
 #include "tessera-higgs-cache.h"
 #include "tessera-search.h"
+#include "tessera-imatrix.h"
+#include "tessera-corpus.h"
 
 #include "gguf.h"
 #include "ggml.h"
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -86,6 +90,94 @@ static std::vector<float> ts_tensor_to_f32(const struct ggml_tensor * t) {
     return out;
 }
 
+// Resolve per-channel AWQ activation scales for one tensor.
+// Priority: (1) imatrix lookup, (2) mean |activation| derived from the
+// calibration corpus when its width matches the tensor in_dim. Returns
+// nullptr when neither source is available (AWQ scaling disabled). When the
+// corpus path is used the result points into *scratch, which the caller must
+// keep alive for as long as the returned pointer is needed.
+static const float * ts_dispatch_act_scales(
+        const ts_imatrix * imatrix, const char * name, int64_t in_dim,
+        const float * calib_X, int64_t calib_in_dim, int64_t calib_n_tokens,
+        std::vector<float> * scratch) {
+    if (imatrix != nullptr) {
+        int64_t dim = 0;
+        const float * a = ts_imatrix_lookup(imatrix, name, &dim);
+        if (a != nullptr && dim == in_dim) {
+            return a;
+        }
+    }
+    if (calib_X != nullptr && calib_in_dim == in_dim && calib_n_tokens > 0) {
+        scratch->assign((size_t)in_dim, 0.0f);
+        for (int64_t t = 0; t < calib_n_tokens; t++) {
+            const float * row = calib_X + (size_t)t * in_dim;
+            for (int64_t c = 0; c < in_dim; c++) {
+                (*scratch)[(size_t)c] += std::fabs(row[c]);
+            }
+        }
+        for (int64_t c = 0; c < in_dim; c++) {
+            (*scratch)[(size_t)c] /= (float)calib_n_tokens;
+        }
+        return scratch->data();
+    }
+    return nullptr;
+}
+
+// Fixed quantization knobs shared across all GA candidate evaluations.
+struct ts_dispatch_eval_ctx {
+    float    outlier_thresh;
+    uint32_t seed;
+};
+
+// GA evaluator: quantize the layer with a candidate (alpha, clip) and score
+// it. The GA maximizes `composite`, so report the negative relative Frobenius
+// error t_l^2 = ||W_hat - W||_F^2 / ||W||_F^2 (lower error -> higher fitness).
+static ts_awq_score ts_dispatch_awq_eval(const ts_awq_candidate * cand,
+                                         const ts_awq_layer * layer,
+                                         void * ctx) {
+    ts_dispatch_eval_ctx * ec = (ts_dispatch_eval_ctx *)ctx;
+
+    ts_awq_score score;
+    score.mse           = std::numeric_limits<float>::infinity();
+    score.relative_frob = std::numeric_limits<float>::infinity();
+    score.heldout_mse   = std::numeric_limits<float>::infinity();
+    score.composite     = -std::numeric_limits<float>::infinity();
+
+    ts_quant_params_2d qp;
+    qp.alpha          = cand->alpha;
+    qp.clip           = cand->clip;
+    qp.max_outliers   = 0;
+    qp.outlier_thresh = ec->outlier_thresh;
+    qp.use_imatrix    = layer->imatrix != nullptr;
+    qp.use_septq      = false;
+    qp.awq_grid       = 20;
+    qp.seed           = ec->seed;
+
+    ts_quant_result_2d qr;
+    int rc = ts_quantize_2d(layer->weights, layer->act_scales,
+                            layer->calib_X, layer->ref_output, layer->imatrix,
+                            layer->out_dim, layer->in_dim, layer->n_tokens,
+                            &qp, &qr);
+    if (rc != 0) {
+        return score;   // worst possible fitness
+    }
+
+    // qr.mse is the mean squared reconstruction error, so
+    // ||W_hat - W||_F^2 = mse * n.
+    const int64_t n = layer->out_dim * layer->in_dim;
+    double frob2 = 0.0;
+    for (int64_t i = 0; i < n; i++) {
+        frob2 += (double)layer->weights[i] * (double)layer->weights[i];
+    }
+    float rel_frob = (frob2 > 0.0) ? (float)((double)qr.mse * (double)n / frob2) : qr.mse;
+
+    score.mse           = qr.mse;
+    score.relative_frob = rel_frob;
+    score.heldout_mse   = qr.mse;   // no held-out split in standalone dispatch
+    score.composite     = -rel_frob;
+    return score;
+}
+
 // ---------------------------------------------------------------------------
 // dispatch
 // ---------------------------------------------------------------------------
@@ -108,12 +200,64 @@ int ts_dispatch_run(const ts_dispatch_params * params,
     const bool need_calibration = params->imatrix_path.empty() && params->policy_path.empty();
     const bool need_ga          = params->policy_path.empty();
 
-    // --- step 2: calibration (placeholder) ---
-    if (need_calibration) {
-        if (verbose) {
-            printf("tessera-dispatch: would run calibration (%s)\n",
-                   params->calib_corpus.empty() ? "built-in mini-corpus" : params->calib_corpus.c_str());
+    // --- step 2: calibration ---
+    // Load precomputed per-channel activation statistics (the AWQ calibration
+    // artifact) when an imatrix is provided.
+    ts_imatrix imatrix;
+    bool have_imatrix = false;
+    if (!params->imatrix_path.empty()) {
+        std::string imsg;
+        if (ts_imatrix_load_npz(params->imatrix_path.c_str(), &imatrix, &imsg) == 0) {
+            have_imatrix = true;
+            if (verbose) {
+                printf("tessera-dispatch: calibration: loaded imatrix '%s' (%zu tensors)\n",
+                       params->imatrix_path.c_str(), imatrix.data.size());
+            }
+        } else {
+            if (err_msg) {
+                *err_msg = "failed to load imatrix '" + params->imatrix_path + "': " + imsg;
+            }
+            return 1;
         }
+    }
+
+    // Calibration activations. With no imatrix and no policy we use the
+    // built-in mini-corpus (deterministic synthetic activations) or a
+    // caller-supplied corpus directory; these feed the AWQ scale fit for any
+    // tensor whose in_dim matches the corpus width.
+    std::vector<float> calib_X;
+    int64_t calib_n_tokens = 0;
+    int64_t calib_in_dim   = 0;
+    if (need_calibration) {
+        if (params->calib_corpus.empty()) {
+            ts_corpus_params cparams = ts_corpus_default_params();
+            calib_X        = ts_corpus_generate(&cparams);
+            calib_n_tokens = cparams.n_tokens;
+            calib_in_dim   = cparams.in_dim;
+            if (verbose) {
+                printf("tessera-dispatch: calibration: built-in mini-corpus (%lld x %lld)\n",
+                       (long long)calib_n_tokens, (long long)calib_in_dim);
+            }
+        } else {
+            std::string cmsg;
+            calib_X = ts_corpus_load_directory(params->calib_corpus.c_str(),
+                                               &calib_n_tokens, &calib_in_dim, &cmsg);
+            if (calib_X.empty()) {
+                if (err_msg) {
+                    *err_msg = "failed to load calib corpus '" + params->calib_corpus + "': " + cmsg;
+                }
+                return 1;
+            }
+            if (verbose) {
+                printf("tessera-dispatch: calibration: loaded corpus '%s' (%lld x %lld)\n",
+                       params->calib_corpus.c_str(), (long long)calib_n_tokens, (long long)calib_in_dim);
+            }
+        }
+        // TODO(hardening): real per-layer calibration activations require a
+        // model forward pass over the corpus (per-layer calib_X / ref_output).
+        // ts_dispatch_params carries no tokenizer or forward callback, so the
+        // corpus above is a data-free proxy; per-channel act_scales come from
+        // the imatrix when one is provided.
     }
 
     if (params->calibrate_only) {
@@ -124,12 +268,25 @@ int ts_dispatch_run(const ts_dispatch_params * params,
         return 0;
     }
 
-    // --- step 3: GA (placeholder) ---
+    // --- step 3: GA configuration ---
+    // The evolutionary search runs per-tensor once the weights are loaded
+    // (step 5c); here the dispatch knobs are translated into GA params.
     float default_alpha = 0.5f;
+
+    ts_awq_evolve_params evolve_params;
+    evolve_params.population         = params->evolve_population > 0 ? params->evolve_population : 32;
+    evolve_params.generations        = params->evolve_iters > 0 ? params->evolve_iters : 100;
+    evolve_params.islands            = params->evolve_islands > 0 ? params->evolve_islands : 4;
+    evolve_params.migration_interval = 10;
+    evolve_params.mutation_sigma     = 0.1f;
+    evolve_params.crossover_rate     = 0.7f;
+    evolve_params.heldout_weight     = 2.0f;
+    evolve_params.seed               = (uint32_t)params->evolve_seed;
+    evolve_params.verbose            = verbose;
 
     if (need_ga) {
         if (verbose) {
-            printf("tessera-dispatch: would run GA (seed=%llu iters=%d islands=%d pop=%d)\n",
+            printf("tessera-dispatch: GA configured (seed=%llu iters=%d islands=%d pop=%d)\n",
                    (unsigned long long)params->evolve_seed,
                    params->evolve_iters,
                    params->evolve_islands,
@@ -246,6 +403,118 @@ int ts_dispatch_run(const ts_dispatch_params * params,
     search_cfg.layer_alpha = higgs_active ? higgs_alphas.data() : nullptr;
     search_cfg.n_layers    = higgs_active ? (int64_t)higgs_alphas.size() : 0;
 
+    // --- step 5c: evolutionary per-tensor alpha search (GA) ---
+    // Runs the real AWQ/GA search over the 2D quantizable tensors to produce a
+    // per-tensor alpha. The evaluator quantizes each candidate via
+    // ts_quantize_2d; the HIGGS alpha_l weights (search_cfg) score the
+    // cross-layer composite via ts_search_fitness when the layer counts match.
+    std::unordered_map<std::string, float> ga_alpha;
+    if (need_ga) {
+        std::vector<std::string>        ga_names;
+        std::vector<std::vector<float>> ga_wbufs;     // weight storage (owns data)
+        std::vector<std::vector<float>> ga_actbufs;   // corpus-derived act_scales storage
+        std::vector<ts_awq_layer>       ga_layers;
+
+        for (int64_t i = 0; i < n_tensors; i++) {
+            const char * name = gguf_get_tensor_name(in_ctx, i);
+            const enum ggml_type type = gguf_get_tensor_type(in_ctx, i);
+            const int64_t * ne = gguf_get_tensor_ne(in_ctx, i);
+            int nd = GGML_MAX_DIMS;
+            while (nd > 1 && ne[nd - 1] == 1) nd--;
+
+            // the GA evolves 2D weight matrices; 3D MoE tensors fall back to
+            // default_alpha in the quantize loop below.
+            if (nd != 2 || !ts_is_quantizable(name, type, nd)) continue;
+
+            struct ggml_tensor * t = ggml_get_tensor(ggml_ctx, name);
+            if (!t) continue;
+
+            std::vector<float> w = ts_tensor_to_f32(t);
+            if (w.empty()) continue;
+
+            const int64_t in_dim  = ne[0];
+            const int64_t out_dim = ne[1];
+
+            // resolve per-channel activation scales (imatrix, else corpus);
+            // a corpus-derived buffer is moved into ga_actbufs to keep the
+            // pointer valid for the whole evolution.
+            std::vector<float> act_scratch;
+            const float * act = ts_dispatch_act_scales(
+                have_imatrix ? &imatrix : nullptr, name, in_dim,
+                calib_X.empty() ? nullptr : calib_X.data(), calib_in_dim, calib_n_tokens,
+                &act_scratch);
+            if (act != nullptr && act == act_scratch.data()) {
+                ga_actbufs.push_back(std::move(act_scratch));
+                act = ga_actbufs.back().data();
+            }
+
+            // regime descriptors (kurtosis / eff_rank) feed the GA archive cell
+            const float * imdata = nullptr;
+            int64_t       imdim  = 0;
+            if (have_imatrix) {
+                imdata = ts_imatrix_lookup(&imatrix, name, &imdim);
+            }
+            ts_regime_descriptor desc = ts_regime_compute_descriptor(
+                name, w.data(), out_dim, in_dim, imdata, imdata ? imdim : 0);
+
+            ga_names.push_back(name);
+            ga_wbufs.push_back(std::move(w));
+
+            ts_awq_layer layer;
+            layer.name        = ga_names.back();
+            layer.family      = desc.family;
+            layer.weights     = ga_wbufs.back().data();
+            layer.act_scales  = act;
+            layer.calib_X     = nullptr;
+            layer.ref_output  = nullptr;
+            layer.imatrix     = act;
+            layer.out_dim     = out_dim;
+            layer.in_dim      = in_dim;
+            layer.n_tokens    = 0;
+            layer.kurtosis    = desc.kurtosis;
+            layer.eff_rank    = desc.eff_rank;
+            ga_layers.push_back(layer);
+        }
+
+        if (!ga_layers.empty()) {
+            ts_dispatch_eval_ctx eval_ctx;
+            eval_ctx.outlier_thresh = params->outlier_frac;
+            eval_ctx.seed           = (uint32_t)params->evolve_seed;
+
+            std::vector<ts_awq_evolve_result> ga_results;
+            int rc = ts_awq_evolve_all(ga_layers.data(), (int64_t)ga_layers.size(),
+                                       ts_dispatch_awq_eval, &eval_ctx,
+                                       &evolve_params, &ga_results);
+            if (rc != 0) {
+                if (err_msg) {
+                    *err_msg = "ts_awq_evolve_all failed";
+                }
+                gguf_free(in_ctx);
+                ggml_free(ggml_ctx);
+                return 5;
+            }
+
+            // per-tensor alpha + per-layer relative Frobenius error
+            std::vector<float> t2(ga_results.size());
+            for (size_t l = 0; l < ga_results.size(); l++) {
+                ga_alpha[ga_names[l]] = ga_results[l].best.alpha;
+                t2[l]                 = ga_results[l].best_score.relative_frob;
+            }
+
+            // HIGGS-weighted pipeline composite (uniform when layer counts differ)
+            ts_search_config fit_cfg;
+            fit_cfg.layer_alpha = (search_cfg.n_layers == (int64_t)t2.size())
+                                      ? search_cfg.layer_alpha : nullptr;
+            fit_cfg.n_layers    = (int64_t)t2.size();
+            float composite = ts_search_fitness(t2.data(), &fit_cfg);
+
+            if (verbose) {
+                printf("tessera-dispatch: GA done (%lld layers, composite=%.6f, higgs_weighted=%d)\n",
+                       (long long)ga_layers.size(), composite, fit_cfg.layer_alpha != nullptr);
+            }
+        }
+    }
+
     // --- step 6: prepare output GGUF ---
     struct gguf_context * out_ctx = gguf_init_empty();
     gguf_set_kv(out_ctx, in_ctx);
@@ -311,12 +580,31 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             continue;
         }
 
+        // resolve per-channel AWQ activation scales (imatrix, else corpus)
+        std::vector<float> act_scratch;
+        const float * act_scales = ts_dispatch_act_scales(
+            have_imatrix ? &imatrix : nullptr, name, in_dim,
+            calib_X.empty() ? nullptr : calib_X.data(), calib_in_dim, calib_n_tokens,
+            &act_scratch);
+
+        // imatrix regime stats for the descriptor (nullptr when unavailable)
+        const float * imdata = nullptr;
+        int64_t       imdim  = 0;
+        if (have_imatrix) {
+            imdata = ts_imatrix_lookup(&imatrix, name, &imdim);
+        }
+
         // compute regime descriptor and route
         ts_regime_descriptor desc = ts_regime_compute_descriptor(
             name, weights.data(), out_dim, in_dim,
-            nullptr, 0);  // imatrix lookup deferred
+            imdata, imdata ? imdim : 0);
 
         ts_regime_routing routing = ts_regime_classify(&desc);
+
+        // per-tensor alpha: GA result when available, else the default
+        const float tensor_alpha = (need_ga && ga_alpha.count(name))
+                                       ? ga_alpha[name] : default_alpha;
+        qparams.alpha = tensor_alpha;
 
         if (verbose) {
             printf("tessera-dispatch: %s family=%s expert=%d reason='%s'\n",
@@ -329,7 +617,7 @@ int ts_dispatch_run(const ts_dispatch_params * params,
 
             std::vector<ts_quant_result_2d> qresults;
             int rc = ts_quantize_3d(weights.data(),
-                                    nullptr, nullptr, nullptr, nullptr,
+                                    act_scales, nullptr, nullptr, act_scales,
                                     n_experts, out_dim, in_dim, 0,
                                     &qparams, &qresults);
             if (rc != 0) {
@@ -378,10 +666,10 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             // standard 2D weight
             ts_quant_result_2d qr;
             int rc = ts_quantize_2d(weights.data(),
-                                    nullptr,   // act_scales
-                                    nullptr,   // calib_X
-                                    nullptr,   // ref_output
-                                    nullptr,   // imatrix
+                                    act_scales,   // act_scales
+                                    nullptr,      // calib_X
+                                    nullptr,      // ref_output
+                                    act_scales,   // imatrix
                                     out_dim, in_dim, 0,
                                     &qparams, &qr);
             if (rc != 0) {
@@ -429,7 +717,7 @@ int ts_dispatch_run(const ts_dispatch_params * params,
         policy_json += "    {\"name\": \"" + std::string(name) + "\", "
                      + "\"family\": \"" + family + "\", "
                      + "\"expert\": " + std::to_string((int)routing.expert) + ", "
-                     + "\"alpha\": " + std::to_string(default_alpha) + "}";
+                     + "\"alpha\": " + std::to_string(tensor_alpha) + "}";
     }
 
     policy_json += "\n  ]\n}";
