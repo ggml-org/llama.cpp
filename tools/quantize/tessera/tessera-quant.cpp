@@ -699,6 +699,16 @@ int ts_quantize_2d(const float * weights,
     ts_vec_vsub(ws.data(), deq.data(), diff.data(), n);
     result->mse = ts_vec_dotpr(diff.data(), diff.data(), n) / (float)n;
 
+    // W_hat in the original weight space: remove the per-channel AWQ scaling
+    // (deq lives in the scaled space, ws = W * wscale) so the reconstruction
+    // is comparable to the source weights and the kernel-direct L1 sidecar.
+    for (int64_t r = 0; r < out_dim; r++) {
+        for (int64_t c = 0; c < in_dim; c++) {
+            deq[(size_t)(r * in_dim + c)] *= input_scale[(size_t)c];
+        }
+    }
+    result->recon = std::move(deq);
+
     return 0;
 }
 

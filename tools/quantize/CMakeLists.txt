@@ -25,6 +25,7 @@ add_library(${TARGET}
     # probes + harnesses
     tessera/tessera-l5.cpp
     tessera/tessera-l15.cpp
+    tessera/tessera-l1-fitness.cpp
     tessera/tessera-ppl.cpp
     tessera/tessera-ab-harness.cpp
     tessera/tessera-peqat.cpp

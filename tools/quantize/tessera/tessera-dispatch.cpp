@@ -17,15 +17,19 @@
 #include "tessera-search.h"
 #include "tessera-imatrix.h"
 #include "tessera-corpus.h"
+#include "tessera-l1-fitness.h"
+#include "tessera-ab-harness.h"
 
 #include "gguf.h"
 #include "ggml.h"
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 #include <unordered_map>
 #include <fstream>
@@ -123,15 +127,29 @@ static const float * ts_dispatch_act_scales(
     return nullptr;
 }
 
-// Fixed quantization knobs shared across all GA candidate evaluations.
+// Fixed quantization knobs shared across all GA candidate evaluations, plus
+// the S5 kernel-direct fitness state. sidecar_cache holds the kernel dequant
+// per tensor (loaded once; an empty vector means no sidecar is present) so the
+// evaluator does not re-read disk per candidate. best_t2 / best_pair track,
+// per tensor, the best-scoring candidate's blended t_l^2 and its
+// (offline, kernel-direct) components, to feed the A/B harness after evolution.
 struct ts_dispatch_eval_ctx {
     float    outlier_thresh;
     uint32_t seed;
+    ts_l1_fitness_config l1;
+    bool     verbose;
+    int      mode_prints;   // tensors whose fitness mode has been logged
+    std::unordered_map<std::string, std::vector<float>>      sidecar_cache;
+    std::unordered_map<std::string, float>                   best_t2;
+    std::unordered_map<std::string, std::pair<float, float>> best_pair;
 };
 
 // GA evaluator: quantize the layer with a candidate (alpha, clip) and score
-// it. The GA maximizes `composite`, so report the negative relative Frobenius
-// error t_l^2 = ||W_hat - W||_F^2 / ||W||_F^2 (lower error -> higher fitness).
+// it. The GA maximizes `composite`, so report the negative t_l^2 (lower error
+// -> higher fitness). By default t_l^2 is the offline relative Frobenius proxy
+// ||W_hat - W||_F^2 / ||W||_F^2; with S5 kernel-direct fitness enabled it is
+// blended with ||W_hat - dequant_kernel||_F^2 / ||W||_F^2, where
+// dequant_kernel is the tensor's L1 sidecar (the kernel's real output).
 static ts_awq_score ts_dispatch_awq_eval(const ts_awq_candidate * cand,
                                          const ts_awq_layer * layer,
                                          void * ctx) {
@@ -181,10 +199,52 @@ static ts_awq_score ts_dispatch_awq_eval(const ts_awq_candidate * cand,
     }
     float rel_frob = (frob2 > 0.0) ? (float)((double)qr.mse * (double)n / frob2) : qr.mse;
 
+    // S5: kernel-direct t_l^2 from the L1 sidecar, blended with the proxy.
+    float t2    = rel_frob;
+    float kd_t2 = rel_frob;   // falls back to the proxy when no sidecar exists
+    if (ec->l1.use_kernel_direct) {
+        auto it = ec->sidecar_cache.find(layer->name);
+        if (it == ec->sidecar_cache.end()) {
+            std::vector<float> kdeq;
+            int64_t sr = 0;
+            int64_t sc = 0;
+            if (ec->l1.sidecar_dir[0] != '\0' &&
+                ts_l1_load_sidecar(ec->l1.sidecar_dir, layer->name.c_str(),
+                                   &kdeq, &sr, &sc) == 0 && sr * sc == n) {
+                ec->sidecar_cache[layer->name] = std::move(kdeq);
+            } else {
+                ec->sidecar_cache[layer->name] = std::vector<float>();
+            }
+            it = ec->sidecar_cache.find(layer->name);
+            if (ec->verbose && ec->mode_prints < 3) {
+                printf("tessera-dispatch: kernel-fitness: %s -> %s\n",
+                       layer->name.c_str(),
+                       it->second.empty() ? "offline proxy (no sidecar)"
+                                          : "kernel-direct (L1 sidecar)");
+                ec->mode_prints++;
+            }
+        }
+        if (!it->second.empty() && (int64_t)it->second.size() == n &&
+            (int64_t)qr.recon.size() == n) {
+            kd_t2 = ts_l1_kernel_direct_t2(qr.recon.data(), layer->weights,
+                                           it->second.data(), n);
+            t2    = ts_l1_blended_t2(rel_frob, kd_t2, ec->l1.blend_factor);
+        }
+    }
+
+    // record the best candidate's (offline, kernel) pair for the A/B harness
+    if (ec->l1.use_kernel_direct) {
+        auto bit = ec->best_t2.find(layer->name);
+        if (bit == ec->best_t2.end() || t2 < bit->second) {
+            ec->best_t2[layer->name]   = t2;
+            ec->best_pair[layer->name] = std::make_pair(rel_frob, kd_t2);
+        }
+    }
+
     score.mse           = qr.mse;
-    score.relative_frob = rel_frob;
+    score.relative_frob = t2;       // t_l^2 used for fitness (blended when kernel-direct)
     score.heldout_mse   = qr.mse;   // no held-out split in standalone dispatch
-    score.composite     = -rel_frob;
+    score.composite     = -t2;
     return score;
 }
 
@@ -498,6 +558,29 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             ts_dispatch_eval_ctx eval_ctx;
             eval_ctx.outlier_thresh = params->outlier_frac;
             eval_ctx.seed           = (uint32_t)params->evolve_seed;
+            eval_ctx.verbose        = verbose;
+            eval_ctx.mode_prints    = 0;
+
+            // S5 kernel-direct fitness config. The sidecar directory defaults
+            // to the runtime hook's dump dir ($LLAMA_TILE640_DEBUG_DEQUANT_DIR).
+            ts_l1_fitness_default_config(&eval_ctx.l1);
+            eval_ctx.l1.use_kernel_direct = params->kernel_fitness;
+            eval_ctx.l1.blend_factor      = params->kernel_fitness_blend;
+            std::string kf_dir = params->kernel_fitness_dir;
+            if (kf_dir.empty()) {
+                const char * env = std::getenv("LLAMA_TILE640_DEBUG_DEQUANT_DIR");
+                if (env != nullptr) {
+                    kf_dir = env;
+                }
+            }
+            if (!kf_dir.empty()) {
+                snprintf(eval_ctx.l1.sidecar_dir, sizeof(eval_ctx.l1.sidecar_dir),
+                         "%s", kf_dir.c_str());
+            }
+            if (params->kernel_fitness && verbose) {
+                printf("tessera-dispatch: kernel-fitness: enabled (blend=%.2f dir='%s')\n",
+                       (double)eval_ctx.l1.blend_factor, eval_ctx.l1.sidecar_dir);
+            }
 
             std::vector<ts_awq_evolve_result> ga_results;
             int rc = ts_awq_evolve_all(ga_layers.data(), (int64_t)ga_layers.size(),
@@ -550,6 +633,37 @@ int ts_dispatch_run(const ts_dispatch_params * params,
                 printf("tessera-dispatch: MAP-Elites archive (%d/%d cells occupied, "
                        "mean_fitness=%.6f best=%.6f)\n",
                        as.occupied_cells, as.total_cells, as.mean_fitness, as.best_fitness);
+            }
+
+            // S5: A/B comparison of the offline proxy vs kernel-direct t_l^2,
+            // reported side by side (per-tensor scores + alpha-weighted
+            // composites + ranking agreement).
+            if (params->kernel_fitness) {
+                std::vector<ts_ab_tensor_scores> ab_scores;
+                ab_scores.reserve(ga_names.size());
+                for (size_t l = 0; l < ga_names.size(); l++) {
+                    auto pit = eval_ctx.best_pair.find(ga_names[l]);
+                    if (pit == eval_ctx.best_pair.end()) {
+                        continue;
+                    }
+                    ts_ab_tensor_scores s;
+                    s.name              = ga_names[l];
+                    s.offline_proxy_mse = pit->second.first;
+                    s.kernel_direct_t2  = pit->second.second;
+                    s.alpha_l           = (fit_cfg.layer_alpha != nullptr)
+                                              ? fit_cfg.layer_alpha[l] : 1.0f;
+                    ab_scores.push_back(std::move(s));
+                }
+                if (!ab_scores.empty()) {
+                    ts_ab_harness_params ab_params;
+                    ab_params.n_heldout       = 0;   // score all tensors
+                    ab_params.measure_ranking = true;
+                    ab_params.verbose         = false;
+                    ts_ab_harness_result ab_result;
+                    if (ts_ab_run(&ab_scores, &ab_params, &ab_result) == 0 && verbose) {
+                        printf("tessera-dispatch: A/B harness: %s\n", ab_result.report.c_str());
+                    }
+                }
             }
         }
     }

@@ -33,6 +33,12 @@ struct ts_dispatch_params {
     float       awq_clip;
     int         nthreads;
     bool        verbose;
+    // S5 kernel-direct fitness (L1 sidecar). When kernel_fitness is set the
+    // GA evaluator scores candidates against the kernel's real dequant output
+    // (from kernel_fitness_dir) blended with the offline proxy.
+    bool        kernel_fitness;
+    std::string kernel_fitness_dir;     // empty = $LLAMA_TILE640_DEBUG_DEQUANT_DIR
+    float       kernel_fitness_blend;   // 0.0 = offline, 1.0 = kernel-direct
 };
 
 // Result of the Tessera pipeline for one tensor.

@@ -93,6 +93,7 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
     if (arg == "--tessera-evolve-only")    { tessera_params.evolve_only    = true; return 1; }
     if (arg == "--tessera-calibrate-only") { tessera_params.calibrate_only = true; return 1; }
     if (arg == "--tessera-champq")         { tessera_params.champq         = true; return 1; }
+    if (arg == "--tessera-kernel-fitness") { tessera_params.kernel_fitness = true; return 1; }
 
     // enum-valued
     if (arg == "--tessera-mode") {
@@ -121,6 +122,7 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
     if (arg == "--calib-corpus-out")          { if (!require_val("--calib-corpus-out")) return -1;          tessera_params.calib_corpus_out = val; return 2; }
     if (arg == "--tessera-awq-alpha")         { if (!require_val("--tessera-awq-alpha")) return -1;         tessera_params.awq_alpha        = val; return 2; }
     if (arg == "--tessera-ternary-threshold") { if (!require_val("--tessera-ternary-threshold")) return -1; tessera_params.ternary_threshold = val; return 2; }
+    if (arg == "--tessera-kernel-fitness-dir") { if (!require_val("--tessera-kernel-fitness-dir")) return -1; tessera_params.kernel_fitness_dir = val; return 2; }
     if (arg == "--tessera-dequant-dir") {
         if (!require_val("--tessera-dequant-dir")) return -1;
         tessera_debug::set_dequant_dir(val); return 2;
@@ -168,6 +170,15 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
             if (f <= 0.0f) { err = string_format("error: --tessera-awq-clip must be > 0, got %f\n", f); return -1; }
             tessera_params.awq_clip = f;
         }
+        return 2;
+    }
+    if (arg == "--tessera-kernel-fitness-blend") {
+        if (!require_val("--tessera-kernel-fitness-blend")) return -1;
+        float f;
+        try { f = std::stof(val); }
+        catch (...) { err = string_format("error: invalid value for --tessera-kernel-fitness-blend: '%s'\n", val.c_str()); return -1; }
+        if (f < 0.0f || f > 1.0f) { err = string_format("error: --tessera-kernel-fitness-blend must be in [0, 1], got %f\n", f); return -1; }
+        tessera_params.kernel_fitness_blend = f;
         return 2;
     }
 
@@ -4119,6 +4130,35 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "Tessera: enable CHAMP-Q permutation",
         [](common_params &) {
             tessera_params.champq = true;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-kernel-fitness"},
+        "Tessera: score GA candidates against the kernel's real dequant output "
+        "(L1 sidecar files) instead of the offline Frobenius proxy",
+        [](common_params &) {
+            tessera_params.kernel_fitness = true;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-kernel-fitness-dir"}, "PATH",
+        "Tessera: directory of L1 dequant sidecar files for kernel-direct fitness "
+        "(default: $LLAMA_TILE640_DEBUG_DEQUANT_DIR)",
+        [](common_params &, const std::string & value) {
+            tessera_params.kernel_fitness_dir = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-kernel-fitness-blend"}, "F",
+        "Tessera: kernel-direct fitness blend in [0, 1]; 0 = offline proxy, "
+        "1 = pure kernel-direct (default: 1)",
+        [](common_params &, const std::string & value) {
+            float f = std::stof(value);
+            if (f < 0.0f || f > 1.0f) {
+                throw std::invalid_argument(
+                    string_format("error: --tessera-kernel-fitness-blend must be in [0, 1], got %f\n", f));
+            }
+            tessera_params.kernel_fitness_blend = f;
         }
     ));
     add_opt(common_arg(

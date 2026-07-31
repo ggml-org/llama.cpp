@@ -85,6 +85,9 @@ struct ts_quant_result_2d {
     std::vector<uint16_t> act_scale;            // f16, empty if alpha == 0
     float                 best_alpha;
     float                 mse;
+    std::vector<float>    recon;                // W_hat (out_dim x in_dim) in the
+                                                // original weight space (AWQ scale
+                                                // removed); kernel-direct fitness
 };
 
 struct ts_quant_params_2d {

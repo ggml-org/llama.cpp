@@ -84,6 +84,9 @@ compile_and_run higgs_integration $T/test_higgs_integration.cpp $T/tessera-higgs
 # --- Needs sidecar + vec ---
 compile_and_run l15         $T/test_l15.cpp         $T/tessera-l15.cpp $C/tessera-sidecar-v3.cpp $T/tessera-vec.cpp -I $C -framework Accelerate
 
+# --- Needs sidecar (L1 kernel-direct fitness) ---
+compile_and_run l1_fitness  $T/test_l1_fitness.cpp  $T/tessera-l1-fitness.cpp $C/tessera-sidecar-v3.cpp -I $C
+
 # --- Needs vendor (nlohmann/json) ---
 compile_and_run policy      $T/test_policy.cpp      $T/tessera-policy.cpp -I vendor
 

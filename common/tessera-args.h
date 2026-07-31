@@ -24,6 +24,9 @@ struct common_tessera_params {
     std::string range_selection = "legacy";
     bool        champq = false;
     int         nthreads = 0;
+    bool        kernel_fitness = false;
+    std::string kernel_fitness_dir;
+    float       kernel_fitness_blend = 1.0f;
 };
 
 const common_tessera_params & common_get_tessera_params();
