@@ -19,8 +19,13 @@ class OnyxModel(TextModel):
         return 1.0 if name.endswith("layernorm.weight") else 0.0
 
     def set_vocab(self):
-        super().set_vocab()
-        self.gguf_writer.add_eot_token_id(200008)
+        self._set_vocab_gpt2()
+
+        from transformers import AutoTokenizer
+        tok = AutoTokenizer.from_pretrained(self.dir_model)
+        eot_id = tok.convert_tokens_to_ids("<|eot|>")
+        if isinstance(eot_id, int) and eot_id >= 0:
+            self.gguf_writer.add_eot_token_id(eot_id)
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
