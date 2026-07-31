@@ -511,8 +511,6 @@ struct llama_layer {
     struct ggml_tensor * ssm_o_norm = nullptr;
 
     // ZAYA CCA (Compressed Convolutional Attention)
-    struct ggml_tensor * cca_conv_dw    = nullptr;  // depthwise conv (conv_qk.0)
-    struct ggml_tensor * cca_conv_dw_b  = nullptr;  // depthwise conv bias
     struct ggml_tensor * cca_conv_grp   = nullptr;  // grouped conv   (conv_qk.1)
     struct ggml_tensor * cca_conv_grp_b = nullptr;  // grouped conv bias
     struct ggml_tensor * cca_k_scale    = nullptr;  // learned K temperature
@@ -526,11 +524,6 @@ struct llama_layer {
     struct ggml_tensor * res_scale_res_b = nullptr; // residual_bias
 
     // ZAYA Router (MoE gating)
-    struct ggml_tensor * zaya_router_down     = nullptr;  // router down_proj
-    struct ggml_tensor * zaya_router_down_b   = nullptr;  // router down_proj bias
-    struct ggml_tensor * zaya_router_norm     = nullptr;  // router rmsnorm_eda
-    struct ggml_tensor * zaya_router_mlp0     = nullptr;  // router MLP 0
-    struct ggml_tensor * zaya_router_mlp0_b   = nullptr;  // router MLP 0 bias
     struct ggml_tensor * zaya_router_mlp2     = nullptr;  // router MLP 2
     struct ggml_tensor * zaya_router_mlp2_b   = nullptr;  // router MLP 2 bias
     struct ggml_tensor * zaya_router_mlp4     = nullptr;  // router MLP 4

@@ -133,8 +133,8 @@ void llama_model_zaya::load_arch_tensors(llama_model_loader &) {
             layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_q, n_embd}, 0);
 
             // depthwise conv on [Q, K]
-            layer.cca_conv_dw   = create_tensor(tn(LLM_TENSOR_SSM_CONV1D, "weight", i), {d_conv, n_qk}, 0);
-            layer.cca_conv_dw_b = create_tensor(tn(LLM_TENSOR_SSM_CONV1D, "bias", i), {n_qk}, TENSOR_NOT_REQUIRED);
+            layer.ssm_conv1d   = create_tensor(tn(LLM_TENSOR_SSM_CONV1D, "weight", i), {d_conv, n_qk}, 0);
+            layer.ssm_conv1d_b = create_tensor(tn(LLM_TENSOR_SSM_CONV1D, "bias", i), {n_qk}, TENSOR_NOT_REQUIRED);
 
             // grouped conv on [Q, K]
             layer.cca_conv_grp   = create_tensor(tn(LLM_TENSOR_CCA_CONV_GRP, "weight", i),
@@ -154,19 +154,19 @@ void llama_model_zaya::load_arch_tensors(llama_model_loader &) {
         // MoE layers (odd indices)
         if (i % 2 == 1) {
             // Router: down projection
-            layer.zaya_router_down   = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "weight", i),
+            layer.ffn_gate_inp   = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "weight", i),
                 {n_embd, n_ff_exp}, 0);
-            layer.zaya_router_down_b = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "bias", i),
+            layer.ffn_gate_inp_b = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "bias", i),
                 {n_ff_exp}, TENSOR_NOT_REQUIRED);
 
             // Router: RMSNorm
-            layer.zaya_router_norm   = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i),
+            layer.ffn_norm   = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i),
                 {n_ff_exp}, 0);
 
             // Router MLP: Linear -> GELU -> Linear -> GELU -> Linear
-            layer.zaya_router_mlp0   = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i),
+            layer.ffn_gate   = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i),
                 {n_ff_exp, n_ff_exp}, 0);
-            layer.zaya_router_mlp0_b = create_tensor(tn(LLM_TENSOR_FFN_GATE, "bias", i),
+            layer.ffn_gate_b = create_tensor(tn(LLM_TENSOR_FFN_GATE, "bias", i),
                 {n_ff_exp}, TENSOR_NOT_REQUIRED);
             layer.zaya_router_mlp2   = create_tensor(tn(LLM_TENSOR_ZAYA_ROUTER_MLP2, "weight", i),
                 {n_ff_exp, n_ff_exp}, 0);
@@ -362,14 +362,14 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
             ggml_build_forward_expand(gf, ggml_cpy(ctx0, last_hs, prev_hs_update_target));
 
             // depthwise conv
-            ggml_tensor * conv_dw = layer.cca_conv_dw;
+            ggml_tensor * conv_dw = layer.ssm_conv1d;
             if (conv_dw->type != GGML_TYPE_F32) {
                 conv_dw = ggml_cont(ctx0, ggml_cast(ctx0, conv_dw, GGML_TYPE_F32));
             }
             ggml_tensor * QK = ggml_ssm_conv(ctx0, conv_input, conv_dw);
             QK = ggml_cont(ctx0, ggml_permute(ctx0, QK, 1, 0, 2, 3));
-            if (layer.cca_conv_dw_b) {
-                QK = ggml_add(ctx0, QK, ggml_reshape_3d(ctx0, layer.cca_conv_dw_b, 1, n_qk, 1));
+            if (layer.ssm_conv1d_b) {
+                QK = ggml_add(ctx0, QK, ggml_reshape_3d(ctx0, layer.ssm_conv1d_b, 1, n_qk, 1));
             }
             cb(QK, "QK_dw", il);
 
@@ -429,8 +429,8 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
 
             // Router: down_proj -> EDA -> RMSNorm -> MLP (GELU) -> softmax -> topk
 
-            ggml_tensor * router_h = ggml_mul_mat(ctx0, layer.zaya_router_down, cur);
-            router_h = ggml_add(ctx0, router_h, layer.zaya_router_down_b);
+            ggml_tensor * router_h = ggml_mul_mat(ctx0, layer.ffn_gate_inp, cur);
+            router_h = ggml_add(ctx0, router_h, layer.ffn_gate_inp_b);
             cb(router_h, "router_down", il);
 
             // EDA: depth-wise averaging with previous router states (disabled for layer 1)
@@ -441,12 +441,12 @@ llama_model_zaya::graph::graph(const llama_model & model, const llm_graph_params
 
             prev_router = router_h;
 
-            router_h = build_norm(router_h, layer.zaya_router_norm, nullptr, LLM_NORM_RMS, il);
+            router_h = build_norm(router_h, layer.ffn_norm, nullptr, LLM_NORM_RMS, il);
             cb(router_h, "router_norm", il);
 
             // Router MLP: Linear -> GELU -> Linear -> GELU -> Linear
-            router_h = ggml_mul_mat(ctx0, layer.zaya_router_mlp0, router_h);
-            router_h = ggml_add(ctx0, router_h, layer.zaya_router_mlp0_b);
+            router_h = ggml_mul_mat(ctx0, layer.ffn_gate, router_h);
+            router_h = ggml_add(ctx0, router_h, layer.ffn_gate_b);
             router_h = ggml_gelu(ctx0, router_h);
             cb(router_h, "router_mlp0", il);
 
