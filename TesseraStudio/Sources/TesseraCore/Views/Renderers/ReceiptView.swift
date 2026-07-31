@@ -5,9 +5,11 @@ import SwiftUI
 /// and the GA archive summary. See design doc 14.10.
 public struct ReceiptView: View {
     public let receipt: QuantizationReceipt
+    public let archive: ArchiveReport?
 
-    public init(receipt: QuantizationReceipt) {
+    public init(receipt: QuantizationReceipt, archive: ArchiveReport? = nil) {
         self.receipt = receipt
+        self.archive = archive
     }
 
     public var body: some View {
@@ -20,6 +22,9 @@ public struct ReceiptView: View {
             calibrationCard
             if let ga = receipt.gaArchive {
                 gaCard(ga)
+            }
+            if let archive {
+                archiveCard(archive)
             }
             MetricsChartView(receipt: receipt)
         }
@@ -90,6 +95,16 @@ public struct ReceiptView: View {
             ReceiptRow(label: "Population", value: "\(ga.population)")
             ReceiptRow(label: "Best fitness", value: String(format: "%.4g", ga.bestFitness))
             ReceiptRow(label: "Archive size", value: "\(ga.archiveSize)")
+        }
+    }
+
+    private func archiveCard(_ archive: ArchiveReport) -> some View {
+        let summary = archive.summary
+        return ReceiptCard(title: "MAP-Elites archive", icon: "square.grid.3x3") {
+            ReceiptRow(label: "Occupied cells", value: "\(summary.occupiedCells)/\(summary.totalCells)")
+            ReceiptRow(label: "Mean fitness", value: String(format: "%.4g", summary.meanFitness))
+            ReceiptRow(label: "Best fitness", value: String(format: "%.4g", summary.bestFitness))
+            ReceiptRow(label: "Worst fitness", value: String(format: "%.4g", summary.worstFitness))
         }
     }
 }

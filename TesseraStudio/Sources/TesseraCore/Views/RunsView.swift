@@ -8,6 +8,7 @@ public struct RunsView: View {
 
     @State private var selectedRun: RunRecord?
     @State private var statusFilter: RunStatus?
+    @State private var showAnalytics = false
 
     public init() {}
 
@@ -39,6 +40,13 @@ public struct RunsView: View {
                     TableColumn("Status") { run in
                         StatusBadge(status: run.status)
                     }
+                    TableColumn("Verdict") { run in
+                        if let verdict = run.acceptanceVerdict {
+                            AcceptanceBadge(passed: verdict.acceptancePassed)
+                        } else {
+                            Text("-").foregroundStyle(.tertiary)
+                        }
+                    }
                     TableColumn("Duration") { run in
                         Text(formatDuration(run.durationSeconds))
                     }
@@ -53,6 +61,9 @@ public struct RunsView: View {
                             Text(run.modelName)
                                 .font(.headline)
                             Spacer()
+                            if let verdict = run.acceptanceVerdict {
+                                AcceptanceBadge(passed: verdict.acceptancePassed)
+                            }
                             StatusBadge(status: run.status)
                         }
                         HStack {
@@ -80,9 +91,19 @@ public struct RunsView: View {
                     }
                 }
             }
+            ToolbarItem(placement: .primaryAction) {
+                Button("Analytics", systemImage: "chart.xyaxis.line") {
+                    showAnalytics = true
+                }
+            }
         }
         .sheet(item: $selectedRun) { run in
             RunDetailSheet(run: run)
+        }
+        .sheet(isPresented: $showAnalytics) {
+            NavigationStack {
+                AnalyticsDashboardView()
+            }
         }
     }
 
@@ -116,15 +137,46 @@ struct StatusBadge: View {
     }
 }
 
+/// Pass/fail chip for a run's G6 acceptance gate verdict.
+struct AcceptanceBadge: View {
+    let passed: Bool
+
+    var body: some View {
+        Text(passed ? "PASS" : "FAIL")
+            .font(.caption2.bold())
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(color.opacity(0.15), in: Capsule())
+            .foregroundStyle(color)
+    }
+
+    private var color: Color {
+        passed ? .green : .red
+    }
+}
+
 struct RunDetailSheet: View {
     let run: RunRecord
     @Environment(\.dismiss) private var dismiss
     @State private var exportItem: ExportItem?
+    @State private var showRunAnalytics = false
 
     /// Best-effort decode of a quantization receipt from the run's metrics.
     private var receipt: QuantizationReceipt? {
         guard let data = run.metricsJSON.data(using: .utf8) else { return nil }
         return try? JSONDecoder().decode(QuantizationReceipt.self, from: data)
+    }
+
+    /// Route the run's single analytics report to the matching dashboard tab.
+    @ViewBuilder
+    private func runAnalyticsDashboard() -> some View {
+        switch run.analyticsReport {
+        case .archive(let report): AnalyticsDashboardView(archive: report)
+        case .acceptance(let report): AnalyticsDashboardView(acceptance: report)
+        case .ab(let report): AnalyticsDashboardView(ab: report)
+        case .l2(let report): AnalyticsDashboardView(l2: report)
+        case nil: AnalyticsDashboardView()
+        }
     }
 
     var body: some View {
@@ -149,10 +201,17 @@ struct RunDetailSheet: View {
                 }
                 if let receipt {
                     Section("Receipt") {
-                        ReceiptView(receipt: receipt)
+                        ReceiptView(receipt: receipt, archive: run.archiveReport)
                             .listRowInsets(EdgeInsets())
                         Button("Export Receipt as PDF") { exportReceiptPDF(receipt) }
                         Button("Export Charts as PNG") { exportChartsPNG(receipt) }
+                    }
+                }
+                if run.hasAnalytics {
+                    Section("Analytics") {
+                        Button("Open Analytics Dashboard", systemImage: "chart.xyaxis.line") {
+                            showRunAnalytics = true
+                        }
                     }
                 }
             }
@@ -164,6 +223,11 @@ struct RunDetailSheet: View {
             }
             .sheet(item: $exportItem) { item in
                 ExportView(item: item)
+            }
+            .sheet(isPresented: $showRunAnalytics) {
+                NavigationStack {
+                    runAnalyticsDashboard()
+                }
             }
         }
         #if os(macOS)
