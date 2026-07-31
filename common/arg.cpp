@@ -3910,6 +3910,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--tessera-evolve-iters"}, "N",
         "Tessera: GA generations (default: 8)",
         [](common_params &, int value) {
+            if (value < 1) {
+                throw std::invalid_argument(
+                    string_format("error: --tessera-evolve-iters must be >= 1, got %d\n", value));
+            }
             tessera_params.evolve_iters = value;
         }
     ));
@@ -3917,6 +3921,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--tessera-evolve-islands"}, "N",
         "Tessera: GA islands (default: 4)",
         [](common_params &, int value) {
+            if (value < 1) {
+                throw std::invalid_argument(
+                    string_format("error: --tessera-evolve-islands must be >= 1, got %d\n", value));
+            }
             tessera_params.evolve_islands = value;
         }
     ));
@@ -3924,6 +3932,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--tessera-evolve-population"}, "N",
         "Tessera: GA population per island (default: 16)",
         [](common_params &, int value) {
+            if (value < 1) {
+                throw std::invalid_argument(
+                    string_format("error: --tessera-evolve-population must be >= 1, got %d\n", value));
+            }
             tessera_params.evolve_population = value;
         }
     ));
@@ -3945,7 +3957,12 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--tessera-outlier-frac"}, "F",
         "Tessera: outlier fraction (default: 0.005)",
         [](common_params &, const std::string & value) {
-            tessera_params.outlier_frac = std::stof(value);
+            const float f = std::stof(value);
+            if (f < 0.0f || f > 1.0f) {
+                throw std::invalid_argument(
+                    string_format("error: --tessera-outlier-frac must be in [0, 1], got %f\n", f));
+            }
+            tessera_params.outlier_frac = f;
         }
     ));
     add_opt(common_arg(
@@ -3959,7 +3976,12 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--tessera-awq-clip"}, "F",
         "Tessera: per-row AWQ clip (default: 1.0)",
         [](common_params &, const std::string & value) {
-            tessera_params.awq_clip = std::stof(value);
+            const float f = std::stof(value);
+            if (f <= 0.0f) {
+                throw std::invalid_argument(
+                    string_format("error: --tessera-awq-clip must be > 0, got %f\n", f));
+            }
+            tessera_params.awq_clip = f;
         }
     ));
     add_opt(common_arg(
@@ -3991,6 +4013,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--tessera-nthreads"}, "N",
         "Tessera: threads for calibration/GA/quantize (default: 0 = use positional nthreads)",
         [](common_params &, int value) {
+            if (value < 0) {
+                throw std::invalid_argument(
+                    string_format("error: --tessera-nthreads must be >= 0, got %d\n", value));
+            }
             tessera_params.nthreads = value;
         }
     ));

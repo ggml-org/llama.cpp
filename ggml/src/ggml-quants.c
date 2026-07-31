@@ -81,6 +81,7 @@ void quantize_row_q1_0_ref(const float * GGML_RESTRICT x, block_q1_0 * GGML_REST
 //
 
 void quantize_row_tessera_t640_ref(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    assert(k >= 0);
     const int pages = (int)((k + TILE640_PAGE_SIZE - 1) / TILE640_PAGE_SIZE);
 
     uint32_t * packed      = (uint32_t *) y;
@@ -146,6 +147,7 @@ void quantize_row_tessera_t640_ref(const float * GGML_RESTRICT x, void * GGML_RE
 }
 
 void dequantize_row_tessera_t640(const void * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k) {
+    assert(k >= 0);
     const int pages = (int)((k + TILE640_PAGE_SIZE - 1) / TILE640_PAGE_SIZE);
 
     const uint32_t * packed      = (const uint32_t *) x;
