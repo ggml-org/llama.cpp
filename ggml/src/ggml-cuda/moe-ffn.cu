@@ -93,6 +93,7 @@ static void moe_ffn_small_batch(
         const ggml_tensor * down_exps, int32_t * ids_data, const float * weights,
         int64_t n_embd, int64_t n_ff, int64_t n_expert, int n_expert_used, int64_t n_tokens, bool merged) {
     cudaStream_t stream = ctx.stream();
+    const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
 
     const int64_t ne_sorted = n_tokens*n_expert_used;
 
@@ -100,34 +101,44 @@ static void moe_ffn_small_batch(
                                     n_expert*sizeof(int32_t));
     ggml_tensor x_t   = moe_ffn_view(GGML_TYPE_F32, x->data, n_embd, 1, n_tokens);
 
-    ggml_cuda_pool_alloc<float> upgate(ctx.pool(), 2*n_ff*ne_sorted);
     ggml_cuda_pool_alloc<float> act(ctx.pool(), n_ff*ne_sorted);
     ggml_cuda_pool_alloc<float> experts(ctx.pool(), n_embd*ne_sorted);
 
     // gate first, then up, matching the merged tensor layout
+    ggml_tensor gate_half = *up_exps;
+    ggml_tensor up_half   = *up_exps;
     if (merged) {
-        ggml_tensor o = moe_ffn_view(GGML_TYPE_F32, upgate.get(), 2*n_ff, n_expert_used, n_tokens);
-        ggml_cuda_mul_mat_vec_q(ctx, up_exps, &x_t, &ids_t, &o);
-    } else {
-        ggml_tensor og = moe_ffn_view(GGML_TYPE_F32, upgate.get(),                n_ff, n_expert_used, n_tokens);
-        ggml_tensor ou = moe_ffn_view(GGML_TYPE_F32, upgate.get() + n_ff*ne_sorted, n_ff, n_expert_used, n_tokens);
-        ggml_cuda_mul_mat_vec_q(ctx, gate_exps, &x_t, &ids_t, &og);
-        ggml_cuda_mul_mat_vec_q(ctx, up_exps,   &x_t, &ids_t, &ou);
+        gate_half.ne[1] = n_ff;
+        up_half.ne[1]   = n_ff;
+        up_half.data    = (char *) up_exps->data + n_ff*up_exps->nb[1];
     }
+    const ggml_tensor * gate_w = merged ? &gate_half : gate_exps;
+    const ggml_tensor * up_w   = merged ? &up_half   : up_exps;
 
-    {
-        const int64_t n      = n_ff*ne_sorted;
-        const int64_t stride = merged ? 2*n_ff : n_ff;
-        const float * g      = upgate.get();
-        const float * u      = merged ? upgate.get() + n_ff : upgate.get() + n_ff*ne_sorted;
+    ggml_tensor a = moe_ffn_view(GGML_TYPE_F32, act.get(), n_ff, n_expert_used, n_tokens);
 
+    // mmvq folds the gate GEMV and the swiglu into the up GEMV, but only for one destination
+    // column, i.e. a single token; the same restriction gates the unfused graph path
+    if (n_tokens == 1 && cc > GGML_CUDA_CC_PASCAL) {
+        ggml_cuda_mm_fusion_args_host fusion = {};
+        fusion.gate   = gate_w;
+        fusion.glu_op = GGML_GLU_OP_SWIGLU;
+        ggml_cuda_mul_mat_vec_q(ctx, up_w, &x_t, &ids_t, &a, &fusion);
+    } else {
+        ggml_cuda_pool_alloc<float> upgate(ctx.pool(), 2*n_ff*ne_sorted);
+        ggml_tensor og = moe_ffn_view(GGML_TYPE_F32, upgate.get(),                 n_ff, n_expert_used, n_tokens);
+        ggml_tensor ou = moe_ffn_view(GGML_TYPE_F32, upgate.get() + n_ff*ne_sorted, n_ff, n_expert_used, n_tokens);
+        ggml_cuda_mul_mat_vec_q(ctx, gate_w, &x_t, &ids_t, &og);
+        ggml_cuda_mul_mat_vec_q(ctx, up_w,   &x_t, &ids_t, &ou);
+
+        const int64_t n = n_ff*ne_sorted;
         const int block = 256;
-        moe_ffn_swiglu<<<(n + block - 1)/block, block, 0, stream>>>(g, u, act.get(), n_ff, stride, n);
+        moe_ffn_swiglu<<<(n + block - 1)/block, block, 0, stream>>>(
+            (const float *) og.data, (const float *) ou.data, act.get(), n_ff, n_ff, n);
         CUDA_CHECK(cudaGetLastError());
     }
 
     {
-        ggml_tensor a = moe_ffn_view(GGML_TYPE_F32, act.get(),     n_ff,   n_expert_used, n_tokens);
         ggml_tensor o = moe_ffn_view(GGML_TYPE_F32, experts.get(), n_embd, n_expert_used, n_tokens);
         ggml_cuda_mul_mat_vec_q(ctx, down_exps, &a, &ids_t, &o);
     }
