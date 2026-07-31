@@ -56,5 +56,17 @@ int ts_coreml_generate_spec(const ts_coreml_tensor_desc * tensors,
 // Check if CoreML is available on this system (macOS only).
 bool ts_coreml_available();
 
+// Check whether the Xcode command-line tools (xcrun) are on PATH. Required for
+// ts_coreml_compile. Always false off Apple.
+bool ts_coreml_xcrun_available();
+
+// Compile a .mlpackage into a .mlmodelc via `xcrun coremlcompiler compile`
+// (design 1.6 / 4.5 step 8). Validates the compiled model has the expected
+// structure. Returns 0 on success, -1 on error (err_msg set: missing tools,
+// compilation failure, or malformed output).
+int ts_coreml_compile(const char * mlpackage_path,
+                      const char * output_dir,
+                      std::string * err_msg);
+
 // Default params.
 ts_coreml_params ts_coreml_default_params();

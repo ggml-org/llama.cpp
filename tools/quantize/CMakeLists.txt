@@ -39,6 +39,8 @@ add_library(${TARGET}
     tessera/tessera-coreml.cpp
     tessera/tessera-coreml-builder.cpp
     tessera/tessera-coreml-metadata.cpp
+    tessera/tessera-coreml-mil.cpp
+    tessera/tessera-coreml-telemetry.cpp
     # shared sidecar v3 (lives in common/, needed by tessera-l15)
     ../../common/tessera-debug/tessera-sidecar-v3.cpp
 )

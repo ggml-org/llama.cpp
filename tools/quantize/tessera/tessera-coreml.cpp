@@ -2,8 +2,16 @@
 
 #include "ggml.h"
 
+#include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <string>
+
+#ifndef _WIN32
+#include <dirent.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#endif
 
 //
 // helpers
@@ -50,6 +58,133 @@ bool ts_coreml_available() {
     return true;
 #else
     return false;
+#endif
+}
+
+//
+// compilation (C9 via the coremlcompiler CLI; design 1.6 / 4.5 step 8)
+//
+
+#ifndef _WIN32
+static std::string ts_coreml_shell_quote(const std::string & s) {
+    std::string out = "'";
+    for (char c : s) {
+        if (c == '\'') {
+            out += "'\\''";
+        } else {
+            out += c;
+        }
+    }
+    out += "'";
+    return out;
+}
+
+// Run a command, capture combined stdout+stderr, return the exit code (-1 if it
+// could not be launched).
+static int ts_coreml_run_capture(const std::string & cmd, std::string * out) {
+    std::string buf;
+    FILE * p = popen(cmd.c_str(), "r");
+    if (p == nullptr) {
+        return -1;
+    }
+    char chunk[512];
+    size_t n;
+    while ((n = fread(chunk, 1, sizeof(chunk), p)) > 0) {
+        buf.append(chunk, n);
+    }
+    int status = pclose(p);
+    if (out) {
+        *out = buf;
+    }
+    if (status == -1) {
+        return -1;
+    }
+    if (WIFEXITED(status)) {
+        return WEXITSTATUS(status);
+    }
+    return -1;
+}
+
+static bool ts_coreml_is_dir(const std::string & path) {
+    struct stat st;
+    return stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+static bool ts_coreml_dir_has_file(const std::string & dir) {
+    DIR * d = opendir(dir.c_str());
+    if (d == nullptr) {
+        return false;
+    }
+    bool any = false;
+    struct dirent * e;
+    while ((e = readdir(d)) != nullptr) {
+        if (std::string(e->d_name) != "." && std::string(e->d_name) != "..") {
+            any = true;
+            break;
+        }
+    }
+    closedir(d);
+    return any;
+}
+#endif // _WIN32
+
+bool ts_coreml_xcrun_available() {
+#ifndef _WIN32
+    return std::system("xcrun --version > /dev/null 2>&1") == 0;
+#else
+    return false;
+#endif
+}
+
+int ts_coreml_compile(const char * mlpackage_path,
+                      const char * output_dir,
+                      std::string * err_msg) {
+#ifdef _WIN32
+    (void) mlpackage_path; (void) output_dir;
+    ts_coreml_set_err(err_msg, "coremlcompiler is not available on Windows");
+    return -1;
+#else
+    if (mlpackage_path == nullptr || output_dir == nullptr) {
+        ts_coreml_set_err(err_msg, "null argument");
+        return -1;
+    }
+    if (!ts_coreml_xcrun_available()) {
+        ts_coreml_set_err(err_msg,
+            "Xcode command-line tools not found (xcrun); cannot compile .mlpackage");
+        return -1;
+    }
+
+    const std::string cmd = "xcrun coremlcompiler compile " +
+        ts_coreml_shell_quote(mlpackage_path) + " " +
+        ts_coreml_shell_quote(output_dir) + " 2>&1";
+
+    std::string log;
+    const int rc = ts_coreml_run_capture(cmd, &log);
+    if (rc != 0) {
+        ts_coreml_set_err(err_msg, "coremlcompiler failed (exit " + std::to_string(rc) +
+            "): " + log);
+        return -1;
+    }
+
+    // coremlcompiler writes <output_dir>/<base>.mlmodelc; derive the base name
+    // from the package path (strip a trailing ".mlpackage" and any directory).
+    std::string pkg(mlpackage_path);
+    while (!pkg.empty() && pkg.back() == '/') {
+        pkg.pop_back();
+    }
+    std::string base = pkg.substr(pkg.find_last_of('/') + 1);
+    const size_t ext = base.rfind(".mlpackage");
+    if (ext != std::string::npos) {
+        base = base.substr(0, ext);
+    }
+    const std::string mlmodelc = std::string(output_dir) + "/" + base + ".mlmodelc";
+
+    if (!ts_coreml_is_dir(mlmodelc) || !ts_coreml_dir_has_file(mlmodelc)) {
+        ts_coreml_set_err(err_msg, "compilation produced no valid model at " + mlmodelc);
+        return -1;
+    }
+
+    return 0;
 #endif
 }
 

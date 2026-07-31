@@ -101,8 +101,11 @@ compile_and_run sidecar_v3  $C/test_sidecar_v3.cpp  $C/tessera-sidecar-v3.cpp -I
 printf '#pragma once\n#define TESSERA_KERNEL_VERSION "test"\n#define TESSERA_MAIN_TIP "test"\n' > "$BIN/tessera-build-info.h"
 compile_and_run l1_sidecar  $T/test_l1_sidecar.cpp  $C/tessera-debug.cpp $C/tessera-sidecar-v3.cpp -I $C -I "$BIN"
 
-# --- CoreML bridge ---
-compile_and_run coreml_bridge $T/test_coreml_bridge.cpp $T/tessera-coreml.cpp $T/tessera-coreml-builder.cpp $T/tessera-coreml-metadata.cpp -I ggml/include
+# --- CoreML bridge (builder pulls in the MIL + telemetry modules) ---
+compile_and_run coreml_bridge $T/test_coreml_bridge.cpp $T/tessera-coreml.cpp $T/tessera-coreml-builder.cpp $T/tessera-coreml-metadata.cpp $T/tessera-coreml-mil.cpp $T/tessera-coreml-telemetry.cpp -I ggml/include
+
+# --- CoreML MIL builder + weight serialization + IOReport telemetry scaffold ---
+compile_and_run coreml_mil $T/test_coreml_mil.cpp $T/tessera-coreml-mil.cpp $T/tessera-coreml-telemetry.cpp $T/tessera-coreml-builder.cpp $T/tessera-coreml.cpp -I ggml/include
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
