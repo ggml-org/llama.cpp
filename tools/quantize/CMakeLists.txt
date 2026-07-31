@@ -4,13 +4,40 @@ set(TARGET llama-quantize-impl)
 
 add_library(${TARGET}
     quantize.cpp
+    # core numeric
     tessera/tessera-vec.cpp
     tessera/tessera-linalg.cpp
     tessera/tessera-lbfgs.cpp
     tessera/tessera-quant.cpp
-    tessera/tessera-search.cpp
+    # calibration + imatrix + corpus
+    tessera/tessera-imatrix.cpp
+    tessera/tessera-corpus.cpp
     tessera/tessera-awq.cpp
+    # search / GA / regime / HIGGS
+    tessera/tessera-search.cpp
+    tessera/tessera-regime.cpp
+    tessera/tessera-higgs.cpp
+    tessera/tessera-higgs-cache.cpp
+    # policy I/O + dispatch + GGUF writer
+    tessera/tessera-policy.cpp
+    tessera/tessera-dispatch.cpp
+    tessera/tessera-gguf-writer.cpp
+    # probes + harnesses
     tessera/tessera-l5.cpp
+    tessera/tessera-l15.cpp
+    tessera/tessera-ppl.cpp
+    tessera/tessera-ab-harness.cpp
+    tessera/tessera-peqat.cpp
+    # multimodal
+    tessera/tessera-mm-imatrix.cpp
+    tessera/tessera-mm-awq.cpp
+    tessera/tessera-mm-fitness.cpp
+    # CoreML conversion bridge
+    tessera/tessera-coreml.cpp
+    tessera/tessera-coreml-builder.cpp
+    tessera/tessera-coreml-metadata.cpp
+    # shared sidecar v3 (lives in common/, needed by tessera-l15)
+    ../../common/tessera-debug/tessera-sidecar-v3.cpp
 )
 set_target_properties(${TARGET} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
