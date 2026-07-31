@@ -1,9 +1,6 @@
 #include "cpy.hpp"
 
 #include <float.h>
-#include <atomic>
-#include <cstdio>
-#include <cstdlib>
 #include <vector>
 
 #include "dequantize.hpp"
