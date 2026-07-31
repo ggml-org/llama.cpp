@@ -12,6 +12,7 @@ struct ContentView: View {
     @State private var agentLoop = TesseraAgentLoop(
         registry: TesseraToolRegistry.default,
         approvalEngine: TesseraApprovalEngine(),
+        llmProvider: TesseraLLMProviderFactory.makeFromSettings(),
         maxIterations: TesseraSettings.maxIterations,
         tokenLimit: TesseraSettings.tokenBudget
     )
