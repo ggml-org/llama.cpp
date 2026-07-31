@@ -265,6 +265,12 @@ if (NOT LLAMA_SANITIZE_ADDRESS AND NOT GGML_SCHED_NO_REALLOC)
 endif()
 llama_build_and_test(test-backend-ops.cpp)
 
+# Vulkan FA GQA packing gate (header-only predicate; no GPU required)
+if (GGML_VULKAN)
+    llama_build_and_test(test-vk-fa-gqa-pack.cpp LABEL "Vulkan")
+    target_include_directories(test-vk-fa-gqa-pack PRIVATE ${CMAKE_SOURCE_DIR}/ggml/src/ggml-vulkan)
+endif()
+
 llama_build_and_test(test-model-load-cancel.cpp LABEL "model")
 llama_build_and_test(test-autorelease.cpp       LABEL "model")
 llama_build_and_test(test-backend-sampler.cpp   LABEL "model")
