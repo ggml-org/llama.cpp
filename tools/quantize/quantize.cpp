@@ -472,7 +472,16 @@ int llama_quantize(int argc, char ** argv) {
         } else if (strcmp(argv[arg_idx], "--keep-split") == 0) {
             params.keep_split = true;
         } else {
-            usage(argv[0]);
+            std::string terr;
+            const int n = common_tessera_parse_one(argc, argv, arg_idx, terr);
+            if (n < 0) {
+                fprintf(stderr, "%s", terr.c_str());
+                usage(argv[0]);
+            } else if (n == 0) {
+                usage(argv[0]);
+            } else {
+                arg_idx += n - 1;  // the for-loop performs the final ++
+            }
         }
     }
 
@@ -649,10 +658,25 @@ int llama_quantize(int argc, char ** argv) {
     int64_t t_quantize_us = 0;
 
     if (use_tessera) {
+        const common_tessera_params & tp = common_get_tessera_params();
         ts_dispatch_params tparams = {};
-        tparams.input_path = fname_inp;
-        tparams.output_path = fname_out;
-        // Fill from common_get_tessera_params() if available
+        tparams.input_path        = fname_inp;
+        tparams.output_path       = fname_out;
+        tparams.imatrix_path      = tp.imatrix;
+        tparams.policy_path       = tp.policy;
+        tparams.policy_out_path   = tp.policy_out;
+        tparams.calib_corpus      = tp.calib_corpus;
+        tparams.higgs_alpha_mode  = "uniform";
+        tparams.evolve_seed       = tp.evolve_seed;
+        tparams.evolve_iters      = tp.evolve_iters;
+        tparams.evolve_islands    = tp.evolve_islands;
+        tparams.evolve_population = tp.evolve_population;
+        tparams.evolve_only       = tp.evolve_only;
+        tparams.calibrate_only    = tp.calibrate_only;
+        tparams.outlier_frac      = tp.outlier_frac;
+        tparams.awq_alpha         = tp.awq_alpha;
+        tparams.awq_clip          = tp.awq_clip;
+        tparams.nthreads          = tp.nthreads;
         ts_dispatch_result tresult;
         std::string terr;
         if (ts_dispatch_run(&tparams, &tresult, &terr) != 0) {

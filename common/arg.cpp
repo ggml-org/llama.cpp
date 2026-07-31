@@ -70,6 +70,106 @@ const common_tessera_params & common_get_tessera_params() {
     return tessera_params;
 }
 
+// Parse one --tessera-* / --calib-* flag at argv[i] into tessera_params, for
+// tools (llama-quantize) that hand-roll their arg loop instead of calling
+// common_params_parse. Mirrors the --tessera-* add_opt validators below; both
+// paths write the same tessera_params and must stay in sync.
+// Returns argv slots consumed (1 = switch, 2 = valued), 0 if argv[i] is not a
+// Tessera flag, or -1 on a validation error (message written to err).
+int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
+    const std::string arg = argv[i];
+    const bool        has_val = (i + 1 < argc);
+    const std::string val = has_val ? argv[i + 1] : "";
+
+    auto require_val = [&](const char * name) -> bool {
+        if (!has_val) {
+            err = string_format("error: %s requires a value\n", name);
+            return false;
+        }
+        return true;
+    };
+
+    // switches
+    if (arg == "--tessera-evolve-only")    { tessera_params.evolve_only    = true; return 1; }
+    if (arg == "--tessera-calibrate-only") { tessera_params.calibrate_only = true; return 1; }
+    if (arg == "--tessera-champq")         { tessera_params.champq         = true; return 1; }
+
+    // enum-valued
+    if (arg == "--tessera-mode") {
+        if (!require_val("--tessera-mode")) return -1;
+        if (val != "off" && val != "default" && val != "calibrate-only" && val != "evolve-only") {
+            err = string_format("error: unknown value for --tessera-mode: '%s'\n", val.c_str());
+            return -1;
+        }
+        tessera_params.mode = val; return 2;
+    }
+    if (arg == "--tessera-range-selection") {
+        if (!require_val("--tessera-range-selection")) return -1;
+        if (val != "legacy" && val != "imatrix-mse" && val != "septq") {
+            err = string_format("error: unknown value for --tessera-range-selection: '%s'\n", val.c_str());
+            return -1;
+        }
+        tessera_params.range_selection = val; return 2;
+    }
+
+    // string-valued
+    if (arg == "--tessera-imatrix")           { if (!require_val("--tessera-imatrix")) return -1;           tessera_params.imatrix          = val; return 2; }
+    if (arg == "--tessera-policy")            { if (!require_val("--tessera-policy")) return -1;            tessera_params.policy           = val; return 2; }
+    if (arg == "--tessera-policy-out")        { if (!require_val("--tessera-policy-out")) return -1;        tessera_params.policy_out       = val; return 2; }
+    if (arg == "--tessera-ga-checkpoint")     { if (!require_val("--tessera-ga-checkpoint")) return -1;     tessera_params.ga_checkpoint    = val; return 2; }
+    if (arg == "--calib-corpus")              { if (!require_val("--calib-corpus")) return -1;              tessera_params.calib_corpus     = val; return 2; }
+    if (arg == "--calib-corpus-out")          { if (!require_val("--calib-corpus-out")) return -1;          tessera_params.calib_corpus_out = val; return 2; }
+    if (arg == "--tessera-awq-alpha")         { if (!require_val("--tessera-awq-alpha")) return -1;         tessera_params.awq_alpha        = val; return 2; }
+    if (arg == "--tessera-ternary-threshold") { if (!require_val("--tessera-ternary-threshold")) return -1; tessera_params.ternary_threshold = val; return 2; }
+    if (arg == "--tessera-dequant-dir") {
+        if (!require_val("--tessera-dequant-dir")) return -1;
+        tessera_debug::set_dequant_dir(val); return 2;
+    }
+
+    // integer-valued
+    if (arg == "--tessera-evolve-seed") {
+        if (!require_val("--tessera-evolve-seed")) return -1;
+        try { tessera_params.evolve_seed = std::stoull(val); }
+        catch (...) { err = string_format("error: invalid value for --tessera-evolve-seed: '%s'\n", val.c_str()); return -1; }
+        return 2;
+    }
+    if (arg == "--tessera-evolve-iters" || arg == "--tessera-evolve-islands" ||
+        arg == "--tessera-evolve-population" || arg == "--tessera-nthreads") {
+        if (!require_val(arg.c_str())) return -1;
+        int v;
+        try { v = std::stoi(val); }
+        catch (...) { err = string_format("error: invalid value for %s: '%s'\n", arg.c_str(), val.c_str()); return -1; }
+        const int lo = (arg == "--tessera-nthreads") ? 0 : 1;
+        if (v < lo) {
+            err = string_format("error: %s must be >= %d, got %d\n", arg.c_str(), lo, v);
+            return -1;
+        }
+        if      (arg == "--tessera-evolve-iters")      { tessera_params.evolve_iters      = v; }
+        else if (arg == "--tessera-evolve-islands")    { tessera_params.evolve_islands    = v; }
+        else if (arg == "--tessera-evolve-population") { tessera_params.evolve_population = v; }
+        else                                           { tessera_params.nthreads          = v; }
+        return 2;
+    }
+
+    // float-valued
+    if (arg == "--tessera-outlier-frac" || arg == "--tessera-awq-clip") {
+        if (!require_val(arg.c_str())) return -1;
+        float f;
+        try { f = std::stof(val); }
+        catch (...) { err = string_format("error: invalid value for %s: '%s'\n", arg.c_str(), val.c_str()); return -1; }
+        if (arg == "--tessera-outlier-frac") {
+            if (f < 0.0f || f > 1.0f) { err = string_format("error: --tessera-outlier-frac must be in [0, 1], got %f\n", f); return -1; }
+            tessera_params.outlier_frac = f;
+        } else {
+            if (f <= 0.0f) { err = string_format("error: --tessera-awq-clip must be > 0, got %f\n", f); return -1; }
+            tessera_params.awq_clip = f;
+        }
+        return 2;
+    }
+
+    return 0;  // not a Tessera flag
+}
+
 static std::string read_file(const std::string & fname) {
     std::ifstream file(fname);
     if (!file) {
