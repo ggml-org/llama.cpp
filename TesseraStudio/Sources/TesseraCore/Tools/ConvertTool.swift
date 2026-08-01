@@ -46,24 +46,6 @@ public struct ConvertTool: TesseraTool {
         let computeUnits = arguments["compute_units"]?.stringValue ?? "cpuAndNeuralEngine"
         let precision = arguments["precision"]?.stringValue ?? "float16"
 
-        if TesseraFFIBridge.isAvailable {
-            do {
-                _ = try TesseraFFIBridge.convert(
-                    modelPath: NSString(string: modelPath).expandingTildeInPath,
-                    outputPath: NSString(string: outputPath).expandingTildeInPath,
-                    format: "coreml"
-                )
-                return .ok("Conversion complete (FFI).", data: [
-                    "output_path": .string(outputPath),
-                    "compute_units": .string(computeUnits),
-                    "precision": .string(precision),
-                    "backend": .string("ffi"),
-                ])
-            } catch {
-                // fall through to CLI
-            }
-        }
-
         let runner = ProcessRunner()
         let result = try await runner.run(
             executable: "tessera-convert",

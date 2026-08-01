@@ -57,23 +57,6 @@ public struct EvolveTool: TesseraTool {
         let generations = arguments["generations"]?.numberValue.map { Int($0) } ?? 50
         let population = arguments["population"]?.numberValue.map { Int($0) } ?? 32
 
-        if TesseraFFIBridge.isAvailable {
-            do {
-                _ = try TesseraFFIBridge.evolve(
-                    modelPath: NSString(string: modelPath).expandingTildeInPath,
-                    config: arguments
-                )
-                return .ok("Evolution complete (FFI).", data: [
-                    "output_path": .string(outputPath),
-                    "target_bits": .number(targetBits),
-                    "generations": .number(Double(generations)),
-                    "backend": .string("ffi"),
-                ])
-            } catch {
-                // fall through to CLI
-            }
-        }
-
         let runner = ProcessRunner()
         let result = try await runner.run(
             executable: "tessera-evolve",

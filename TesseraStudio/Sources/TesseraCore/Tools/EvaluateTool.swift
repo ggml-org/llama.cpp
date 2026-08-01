@@ -65,21 +65,6 @@ public struct EvaluateTool: TesseraTool {
         let runtime = arguments["runtime"]?.stringValue ?? TesseraRuntime.onDevice.rawValue
         let measurePower = arguments["measure_power"].map { $0 != .bool(false) && $0 != .string("false") } ?? true
 
-        if TesseraFFIBridge.isAvailable {
-            do {
-                let metrics = try TesseraFFIBridge.evaluate(
-                    modelPath: NSString(string: modelPath).expandingTildeInPath,
-                    config: arguments
-                )
-                return .ok("Evaluation complete (FFI).", data: metrics.merging([
-                    "model_path": .string(modelPath),
-                    "backend": .string("ffi"),
-                ]) { _, new in new })
-            } catch {
-                // fall through to CLI
-            }
-        }
-
         var args = [
             "--model", NSString(string: modelPath).expandingTildeInPath,
             "--n-tokens", String(nTokens),

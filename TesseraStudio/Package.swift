@@ -2,16 +2,15 @@
 import PackageDescription
 import Foundation
 
-// Tessera Studio v2 - three-target split.
+// Tessera Studio v2 - target layout.
 //
-//   CTesseraFFI       C target: the thin FFI header (+ link-time stub).
 //   CLlama            C target: runtime-loaded (dlopen) bridge to libllama
 //                     for on-device inference. Compiles against the repo's
 //                     llama.h when present; otherwise builds a stub that
 //                     reports unavailable (see CLLAMA_NO_HEADERS below).
 //   TesseraCore       Platform-independent models, tool protocol, engine
-//                     bridge protocol + FFI/CLI bridges, and the shared
-//                     SwiftUI views (guarded with #if os() where needed).
+//                     bridge protocol + CLI bridge, and the shared SwiftUI
+//                     views (guarded with #if os() where needed).
 //   TesseraStudioMac  macOS app: AppKit integrations, Settings scene,
 //                     NSSavePanel export. Depends on TesseraCore.
 //   TesseraStudioiOS  iOS app surface. Depends on TesseraCore.
@@ -22,6 +21,9 @@ import Foundation
 // compiles to an empty module; the real iOS .app is produced by the
 // Xcode project, which embeds tessera.xcframework. This mirrors the
 // pattern in docs/tessera-studio-design.md section 2.2.
+//
+// The planned native FFI surface (tessera.xcframework) is documented,
+// not built: see Sources/TesseraCore/tessera_ffi_reference.h.
 
 // CLlama compiles against the llama.cpp public headers, which live in the
 // enclosing repo (this package is nested inside the fork). Resolve them
@@ -62,11 +64,6 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "CTesseraFFI",
-            path: "Sources/CTesseraFFI",
-            publicHeadersPath: "include"
-        ),
-        .target(
             name: "CLlama",
             path: "Sources/CLlama",
             publicHeadersPath: "include",
@@ -75,7 +72,6 @@ let package = Package(
         .target(
             name: "TesseraCore",
             dependencies: [
-                "CTesseraFFI",
                 "CLlama",
                 .product(name: "SwiftSoup", package: "SwiftSoup"),
             ],

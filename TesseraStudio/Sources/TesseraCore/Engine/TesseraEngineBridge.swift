@@ -1,8 +1,8 @@
 import Foundation
 
-/// Protocol for the Tessera engine backend. The production
-/// implementation uses the C FFI (tessera.xcframework); the
-/// placeholder shells out to CLI tools via ProcessRunner.
+/// Protocol for the Tessera engine backend. The placeholder implementation
+/// shells out to CLI tools via ProcessRunner; the on-device path goes
+/// through CLlama (see LlamaLLMProvider).
 public protocol TesseraEngineBridge: Sendable {
     /// Load a model into the engine.
     func loadModel(
@@ -50,8 +50,8 @@ public struct GeneratedToken: Sendable {
     }
 }
 
-/// Placeholder engine bridge that shells out to the tessera CLI.
-/// Replace with the real C FFI bridge when tessera.xcframework is available.
+/// Engine bridge that shells out to the tessera CLI. Backs the standalone
+/// telemetry view; the on-device inference path uses CLlama directly.
 public final class CLIEngineBridge: TesseraEngineBridge, @unchecked Sendable {
     private let runner: ProcessRunner
     private let lock = NSLock()
@@ -81,8 +81,7 @@ public final class CLIEngineBridge: TesseraEngineBridge, @unchecked Sendable {
             throw EngineBridgeError.modelNotFound(expanded)
         }
 
-        // In production: call tessera_context_init via C FFI.
-        // Placeholder: just record the path.
+        // Record the path; generate() shells out to tessera-cli per call.
         lock.withLock { _loadedModel = expanded }
     }
 
@@ -149,13 +148,11 @@ public final class CLIEngineBridge: TesseraEngineBridge, @unchecked Sendable {
 public enum EngineBridgeError: Error, LocalizedError {
     case modelNotFound(String)
     case noModelLoaded
-    case ffiUnavailable
 
     public var errorDescription: String? {
         switch self {
         case .modelNotFound(let path): "Model not found: \(path)"
         case .noModelLoaded: "No model is loaded. Call loadModel first."
-        case .ffiUnavailable: "The C FFI bridge is not available. Use CLI mode."
         }
     }
 }
