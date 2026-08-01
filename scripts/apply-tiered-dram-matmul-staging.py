@@ -144,7 +144,7 @@ replacement = r'''static ggml_status tiered_backend_graph_compute(ggml_backend_t
 
 static void tiered_backend_event_record'''
 
-new_text, count = pattern.subn(replacement, text, count=1)
+new_text, count = pattern.subn(lambda _match: replacement, text, count=1)
 if count != 1:
     raise SystemExit("tiered backend graph-compute function did not match expected source")
 
