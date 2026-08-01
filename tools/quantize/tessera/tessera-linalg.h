@@ -47,3 +47,12 @@ void ts_linalg_sketch(const float * A, float * sketch,
 
 // Gram-Schmidt orthonormalization in-place. V is (k x n) row vectors.
 void ts_linalg_gram_schmidt(float * V, int64_t k, int64_t n);
+
+// --- tessera-flrq helper (B3 FLRQ port) ---
+// Symmetric eigendecomposition via cyclic Jacobi rotations. A is a symmetric
+// (n x n) row-major matrix (only the upper triangle is read). On output
+// `eigvals` holds the eigenvalues sorted DESCENDING and `eigvecs` is (n x n)
+// with column j the eigenvector for eigvals[j]. Matches LAPACK dsyev to
+// float precision (signs aside), which is what the FLRQ sketch-basis parity
+// test requires. Used only on the small K x K sketch gram matrix.
+void ts_linalg_sym_eig(const float * A, float * eigvals, float * eigvecs, int64_t n);
