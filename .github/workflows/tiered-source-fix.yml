@@ -1,0 +1,102 @@
+name: tiered-source-fix
+
+on:
+  push:
+    branches:
+      - feature/llamay-tiered-memory-planner
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/llamay-tiered-memory-planner
+      - name: Patch CUDA source
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('ggml/src/ggml-cuda/tiered.cu')
+          text = path.read_text()
+
+          replacements = {
+              'static ggml_backend_dev_type tiered_device_type(ggml_backend_dev_t dev) {':
+                  'static enum ggml_backend_dev_type tiered_device_type(ggml_backend_dev_t dev) {',
+              '            auto * dev = new ggml_backend_device {':
+                  '            ggml_backend_dev_t dev = new ggml_backend_device {',
+              '    std::unordered_map<const ggml_tensor *, std::unique_ptr<tensor_state>> tensors;\n    std::vector<host_registration> registrations;':
+                  '    std::unordered_map<const ggml_tensor *, std::unique_ptr<tensor_state>> tensors;\n    std::vector<ggml_tensor *> all_tensors;\n    std::vector<host_registration> registrations;',
+              '    const std::string name = tensor->name;\n    return name.find("_exps") != std::string::npos ||\n           name.find(".experts.") != std::string::npos;':
+                  '    const std::string name = tensor->name;\n    const bool expert = name.find("_exps.weight") != std::string::npos ||\n                        name.find(".experts.") != std::string::npos;\n    const bool weight = name.size() >= 7 &&\n                        name.compare(name.size() - 7, 7, ".weight") == 0;\n    return expert && weight;',
+              '    if (ctx->tensors.find(tensor) == ctx->tensors.end()) {\n        ctx->tensors.emplace(tensor, std::make_unique<tensor_state>());\n    }\n    return GGML_STATUS_SUCCESS;':
+                  '    if (ctx->tensors.find(tensor) == ctx->tensors.end()) {\n        ctx->tensors.emplace(tensor, std::make_unique<tensor_state>());\n        ctx->all_tensors.push_back(tensor);\n    }\n    return GGML_STATUS_SUCCESS;',
+              '    props->device_id = ctx->device_id.c_str();\n}':
+                  '    props->device_id = ctx->device_id.c_str();\n    props->caps.buffer_from_host_ptr = false;\n}',
+          }
+
+          for old, new in replacements.items():
+              if old not in text:
+                  raise SystemExit(f'missing expected source fragment: {old[:100]!r}')
+              text = text.replace(old, new, 1)
+
+          marker = '''static void tiered_buffer_set_tensor(
+          ggml_backend_buffer_t buffer,
+          ggml_tensor * tensor,
+          const void * data,
+          size_t offset,
+          size_t size) {'''
+          helper = '''static void tiered_refresh_views(tiered_buffer_context * ctx) {
+    for (size_t pass = 0; pass < ctx->all_tensors.size(); ++pass) {
+        bool changed = false;
+        for (ggml_tensor * tensor : ctx->all_tensors) {
+            if (!tensor->view_src || !tensor->view_src->data) {
+                continue;
+            }
+            void * expected = static_cast<char *>(tensor->view_src->data) + tensor->view_offs;
+            if (tensor->data != expected) {
+                tensor->data = expected;
+                changed = true;
+            }
+        }
+        if (!changed) {
+            break;
+        }
+    }
+}
+
+''' + marker
+          if marker not in text:
+              raise SystemExit('missing tiered_buffer_set_tensor marker')
+          text = text.replace(marker, helper, 1)
+
+          call_marker = '''        case GGML_CUDA_TIERED_MEMORY_SSD:
+            init_sparse_tensor(ctx, tensor, state);
+            break;
+    }
+
+    GGML_LOG_INFO('''
+          call_replacement = '''        case GGML_CUDA_TIERED_MEMORY_SSD:
+            init_sparse_tensor(ctx, tensor, state);
+            break;
+    }
+
+    tiered_refresh_views(ctx);
+
+    GGML_LOG_INFO('''
+          if call_marker not in text:
+              raise SystemExit('missing view refresh insertion point')
+          text = text.replace(call_marker, call_replacement, 1)
+
+          path.write_text(text)
+          PY
+          rm .github/workflows/tiered-source-fix.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add ggml/src/ggml-cuda/tiered.cu .github/workflows/tiered-source-fix.yml
+          git commit -m "cuda: fix tiered backend types and views"
+          git push origin HEAD:feature/llamay-tiered-memory-planner
