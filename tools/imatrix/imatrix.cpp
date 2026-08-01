@@ -46,7 +46,7 @@ static void print_usage(int, char ** argv) {
             "       [--in-file imatrix-prev-0.gguf --in-file imatrix-prev-1.gguf ...] [--parse-special] \\\n"
             "       [--show-statistics] \\\n"
             "       [--model-draft drafter.gguf --spec-steps 64]   # spec-decoding calibration\n"
-            "       [--features-out feats --feature-layers 0,15,31]   # offline DFlash feature capture\n"
+            "       [--features-out feats --feature-layers 0,15,31 --features-warmup 256]   # offline DFlash feature capture\n"
             "       [...]\n" , argv[0]);
     LOG("\n");
 }
@@ -1792,11 +1792,15 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params, c
 // of one row per token, layers concatenated in --feature-layers order.
 //
 // Note on context: like compute_imatrix, the KV cache is cleared per chunk, so
-// each chunk's first tokens are processed without left context. Features are
-// therefore context-windowed, which matches how the drafter conditions at
-// train time. Requesting logits for every token keeps output_reorder on the
-// exact proven path compute_imatrix uses, so the layer buffers come back in
-// batch order.
+// each chunk's first tokens are processed without a full left window. We run
+// those "warmup" tokens to build context but do NOT emit their features
+// (--features-warmup, default 256); only the well-contextualized tail of each
+// chunk is written. The warmup and chunk size are recorded in the header so
+// the training driver can map feature rows back to corpus tokens. This matches
+// the steady-state inference regime (the trunk also conditions on a ~n_ctx
+// window) and how EAGLE-style feature capture is done. Requesting logits for
+// every token keeps output_reorder on the exact proven path compute_imatrix
+// uses, so the layer buffers come back in batch order.
 static bool compute_features(llama_context * ctx, const common_params & params, const int32_t n_ctx) {
     const llama_model * model = llama_get_model(ctx);
 
@@ -1814,6 +1818,17 @@ static bool compute_features(llama_context * ctx, const common_params & params, 
             LOG_ERR("%s: feature layer %d out of range [0, %d)\n", __func__, lid, n_layer);
             return false;
         }
+    }
+
+    // clamp the per-chunk warmup so at least one token per chunk is emitted.
+    int32_t warmup = params.features_warmup;
+    if (warmup < 0) {
+        warmup = 0;
+    }
+    if (warmup > n_ctx - 1) {
+        LOG_WRN("%s: --features-warmup %d >= n_ctx %d; clamping to %d\n",
+                __func__, warmup, n_ctx, n_ctx - 1);
+        warmup = n_ctx - 1;
     }
 
     LOG_INF("%s: tokenizing the input ..\n", __func__);
@@ -1837,6 +1852,9 @@ static bool compute_features(llama_context * ctx, const common_params & params, 
         LOG_ERR("%s: failed to open feature output '%s'\n", __func__, params.features_out.c_str());
         return false;
     }
+    // record the chunk layout so the training driver can map rows -> tokens.
+    writer.header.chunk_tokens = n_ctx;
+    writer.header.warmup       = warmup;
 
     const int n_chunk_max = (int) tokens.size() / n_ctx;
     const int n_chunk = params.n_chunks < 0 ? n_chunk_max : std::min(params.n_chunks, n_chunk_max);
@@ -1848,6 +1866,8 @@ static bool compute_features(llama_context * ctx, const common_params & params, 
     LOG_INF("%s: capturing %d chunks, n_ctx=%d, batch=%d, layers=%zu, n_embd=%d (%.1f KB/token f32)\n",
             __func__, n_chunk, n_ctx, n_batch, layers.size(), n_embd,
             row_floats * sizeof(float) / 1024.0);
+    LOG_INF("%s: warmup=%d -> emitting %d of %d tokens per chunk\n",
+            __func__, warmup, n_ctx - warmup, n_ctx);
 
     std::vector<const float *> layer_rows(layers.size());
 
@@ -1890,6 +1910,12 @@ static bool compute_features(llama_context * ctx, const common_params & params, 
             }
 
             for (int t = 0; t < batch_size; ++t) {
+                // chunk-local position; the warmup prefix is decoded for
+                // context but its features are not emitted.
+                const int32_t chunk_pos = j*n_batch + t;
+                if (chunk_pos < warmup) {
+                    continue;
+                }
                 for (size_t li = 0; li < layers.size(); ++li) {
                     layer_rows[li] = layer_bases[li] + (size_t) t * n_embd;
                 }

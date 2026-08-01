@@ -161,11 +161,77 @@ static void test_corrupt_header() {
     CHECK(!ts_features_read_header(pfx, h), "layer-count mismatch rejected");
 }
 
+static void test_chunk_layout_roundtrip() {
+    // warmup + chunk_tokens survive the header round-trip so the training
+    // driver can reconstruct row -> corpus-token alignment.
+    const std::string pfx = std::string(PREFIX) + "_chunky";
+    ts_features_writer w;
+    CHECK(w.open(pfx, 2, {4, 9}), "open chunky");
+    w.header.chunk_tokens = 128;
+    w.header.warmup       = 8;
+    float row[2] = {1, 2};
+    CHECK(w.append_token(row), "append chunky");
+    CHECK(w.close(), "close chunky");
+
+    ts_features_header h;
+    CHECK(ts_features_read_header(pfx, h), "read chunky header");
+    CHECK(h.chunk_tokens == 128, "chunk_tokens round-trip");
+    CHECK(h.warmup == 8, "warmup round-trip");
+    CHECK(h.rows_per_chunk() == 120, "rows_per_chunk = 128 - 8");
+}
+
+static void test_row_to_token() {
+    // chunked layout: chunk_tokens=128, warmup=8 -> 120 emitted rows/chunk.
+    ts_features_header h;
+    h.n_tokens     = 240;   // 2 chunks
+    h.n_embd       = 2;
+    h.n_layers     = 1;
+    h.target_layers = {0};
+    h.chunk_tokens = 128;
+    h.warmup       = 8;
+
+    CHECK(ts_features_row_to_token(h, 0)   == 8,   "row0 -> token 8 (first after warmup)");
+    CHECK(ts_features_row_to_token(h, 119) == 127, "row119 -> token 127 (chunk0 end)");
+    CHECK(ts_features_row_to_token(h, 120) == 136, "row120 -> token 136 (chunk1 start: 128+8)");
+    CHECK(ts_features_row_to_token(h, 239) == 255, "row239 -> token 255 (chunk1 end)");
+    CHECK(ts_features_row_to_token(h, 240) == -1,  "row240 out of range");
+    CHECK(ts_features_row_to_token(h, -1)  == -1,  "negative row rejected");
+
+    // no chunk layout + no warmup -> identity.
+    ts_features_header flat;
+    flat.n_tokens = 10;
+    flat.n_embd   = 2;
+    flat.n_layers = 1;
+    flat.target_layers = {0};
+    CHECK(ts_features_row_to_token(flat, 5) == 5, "flat identity mapping");
+
+    // warmup without chunk layout is inconsistent.
+    ts_features_header bad;
+    bad.n_tokens = 10;
+    bad.n_embd   = 2;
+    bad.n_layers = 1;
+    bad.target_layers = {0};
+    bad.warmup   = 8;   // chunk_tokens stays 0
+    CHECK(ts_features_row_to_token(bad, 0) == -1, "warmup-without-chunk rejected");
+
+    // zero emitted rows per chunk is rejected.
+    ts_features_header zero;
+    zero.n_tokens = 5;
+    zero.n_embd   = 2;
+    zero.n_layers = 1;
+    zero.target_layers = {0};
+    zero.chunk_tokens = 8;
+    zero.warmup       = 8;
+    CHECK(ts_features_row_to_token(zero, 0) == -1, "zero rows-per-chunk rejected");
+}
+
 int main() {
     test_roundtrip_layers();
     test_fused_matches_layered();
     test_error_paths();
     test_corrupt_header();
+    test_chunk_layout_roundtrip();
+    test_row_to_token();
 
     printf("features: %d passed, %d failed\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;

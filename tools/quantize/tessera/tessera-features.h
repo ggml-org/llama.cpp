@@ -45,8 +45,18 @@ struct ts_features_header {
     std::vector<int32_t> target_layers;      // concatenation order
     ts_features_dtype dtype = TS_FEATURES_F32;
 
+    // Chunk layout the capture was produced with. The trunk forward clears its
+    // KV per chunk, so the first `warmup` tokens of each chunk are processed
+    // for context but NOT emitted (their hidden states lack a full left
+    // window). Each chunk therefore contributes (chunk_tokens - warmup)
+    // contiguous rows. chunk_tokens == 0 means "no chunk layout recorded"
+    // (treat the blob as one contiguous sequence).
+    int32_t chunk_tokens = 0;   // full chunk size (stride), warmup included
+    int32_t warmup       = 0;   // skipped prefix tokens per chunk
+
     int32_t row_floats() const { return n_layers * n_embd; }
     int32_t bytes_per_float() const { return dtype == TS_FEATURES_F16 ? 2 : 4; }
+    int32_t rows_per_chunk() const { return chunk_tokens - warmup; }
 };
 
 // Streaming writer. Feed one token at a time; the blob is written
@@ -87,3 +97,10 @@ struct ts_features_writer {
 // missing, unparseable, or fails schema/shape validation. On success the blob
 // filename is derivable as <prefix>.bin (also recorded in the header JSON).
 bool ts_features_read_header(const std::string & prefix, ts_features_header & out);
+
+// Map an emitted feature row index to its corpus token index, accounting for
+// the per-chunk warmup skip. With no chunk layout recorded (chunk_tokens == 0)
+// the mapping is the identity when warmup == 0. Returns -1 if the layout is
+// inconsistent (warmup set without chunk_tokens), the row is out of range
+// ([0, n_tokens)), or a chunk has no emitted rows.
+int64_t ts_features_row_to_token(const ts_features_header & h, int64_t row);

@@ -1863,6 +1863,19 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
     add_opt(common_arg(
+        {"--features-warmup"}, "N",
+        string_format(
+            "[imatrix] with --features-out, the number of prefix tokens per chunk "
+            "to run for context but NOT emit, since a fresh-KV chunk leaves them "
+            "without a full left window (default: %d, 0 = emit every token). "
+            "Clamped to n_ctx-1. Recorded in the header so the training driver can "
+            "map feature rows back to corpus tokens.",
+            params.features_warmup),
+        [](common_params & params, int value) {
+            params.features_warmup = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    add_opt(common_arg(
         {"--spec-steps"}, "N",
         string_format(
             "[imatrix] number of spec-decoding steps to roll forward when --model-draft is set "

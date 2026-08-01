@@ -469,6 +469,7 @@ struct common_params {
     int32_t n_telemetry_topk   = 0;        // [imatrix] when > 0 with telemetry_out, emit v2 schema with verifier+drafter top-k distributions per draft position (0 = v1 only)
     std::string features_out;              // [imatrix] prefix for offline trunk target-layer feature capture (<prefix>.bin + <prefix>.json); enables the dedicated capture pass
     std::vector<int32_t> feature_layers;   // [imatrix] trunk layer ids to capture, in the encoder concatenation order (the drafter's target_layer_ids)
+    int32_t features_warmup    = 256;      // [imatrix] per-chunk prefix tokens to process for context but not emit (their hidden states lack a full left window); 0 = emit all
     int32_t n_parallel            =     1; // number of parallel sequences to decode
     int32_t n_sequences           =     1; // number of sequences to decode
     int32_t n_outputs_max         =     0; // max outputs in a batch (0 = n_batch)

@@ -153,10 +153,12 @@ dedicated trunk-only pass in `llama-imatrix`, NOT interleaved into the fragile
 speculative telemetry loop (per the constraint above):
 
 - CLI: `llama-imatrix -m trunk.gguf -f calib.txt --features-out <prefix>
-  --feature-layers <csv>`. `--feature-layers` is the drafter's
-  `target_layer_ids` in concatenation order (e.g. `0,15,31`); the pass needs
-  only the trunk + calibration text, no drafter load. Mutually exclusive with
-  `--model-draft`.
+  --feature-layers <csv> [--features-warmup N]`. `--feature-layers` is the
+  drafter's `target_layer_ids` in concatenation order (e.g. `0,15,31`); the
+  pass needs only the trunk + calibration text, no drafter load. Mutually
+  exclusive with `--model-draft`. `--features-warmup` (default 256, clamped to
+  n_ctx-1) skips the under-contextualized prefix of each chunk - see the
+  context note below.
 - Mechanism: enables the existing runtime tap
   `llama_set_embeddings_layer_inp(lid, true)` per target layer, runs the plain
   chunked forward (same structure as `compute_imatrix`, KV cleared per chunk),
@@ -168,18 +170,32 @@ speculative telemetry loop (per the constraint above):
   `[n_tokens, n_layers*n_embd]`, layers concatenated in `--feature-layers`
   order; `<prefix>.json` = header. Schema `llama.tessera.features.v1`. The
   encoder's FC input is a flat read of `row_floats = n_layers*n_embd` floats
-  per token. F16/Q8_0 are reserved in the header `dtype` field but not yet
-  implemented (f32 is exact and removes conversion risk from the critical path).
+  per token. The header also records `chunk_tokens` and `warmup` (the chunk
+  layout the blob was produced with), and the module exposes
+  `ts_features_row_to_token(header, row)` so the training driver can map an
+  emitted feature row back to its corpus token without re-deriving the layout.
+  F16/Q8_0 are reserved in the header `dtype` field but not yet implemented
+  (f32 is exact and removes conversion risk from the critical path).
 - Verified live (stories260K tiny llama, n_embd=64): 23,552 tokens x 192
   floats captured; header/blob size exact; values finite and per-token
-  distinct. Gold-standard cross-check: a separate single-layer-1 capture
-  matches the layer-1 block of the 3-layer blob BIT-EXACTLY (max diff 0.0 over
-  1,507,328 floats), proving layer order + token alignment + deterministic
-  batch-order readback. Unit tests: `test_features.cpp` (35 assertions).
+  distinct. Gold-standard cross-checks, all BIT-EXACT (max diff 0.0):
+  (a) a separate single-layer-1 capture matches the layer-1 block of the
+  3-layer blob over 1,507,328 floats -> layer order + token alignment +
+  deterministic batch-order readback; (b) a warmup=8 capture's row r equals the
+  warmup=0 row at `row_to_token(r)` over 4,239,360 floats -> the warmup skip
+  emits exactly the right tokens, in order, with the decode (hence context)
+  unaffected by the skip. Unit tests: `test_features.cpp` (51 assertions,
+  incl. the row->token mapping math).
 
-Context note: like `compute_imatrix`, KV is cleared per chunk, so each chunk's
-first tokens are processed without left context - features are
-context-windowed, matching how the drafter conditions at train time.
+Context note: like `compute_imatrix`, KV is cleared per chunk, so a chunk's
+first tokens lack a full left window. We DECODE those warmup tokens (they build
+context for the rest of the chunk) but do NOT emit their features; only the
+well-contextualized tail is written. This is mild and expected: the bulk of
+each chunk sees a full ~n_ctx window - the same regime the trunk runs in at
+inference (finite KV cache) and the regime EAGLE-style feature capture trains
+in. `compute_imatrix` applies the same idea for perplexity (`first = n_ctx/2`,
+imatrix.cpp:1683); we use a smaller fixed warmup to avoid discarding half the
+corpus.
 
 ## 5. Staged plan
 

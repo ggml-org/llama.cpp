@@ -115,6 +115,8 @@ bool ts_features_writer::close() {
     j["blob"]            = blob_rel;
     j["bytes_per_float"] = header.bytes_per_float();
     j["row_floats"]      = header.row_floats();
+    j["chunk_tokens"]    = header.chunk_tokens;
+    j["warmup"]          = header.warmup;
 
     const std::string json_path = prefix + ".json";
     std::FILE * fp = std::fopen(json_path.c_str(), "w");
@@ -197,6 +199,33 @@ bool ts_features_read_header(const std::string & prefix, ts_features_header & ou
         return false;
     }
 
+    // chunk layout is optional (absent in older files -> contiguous blob).
+    h.chunk_tokens = j.value("chunk_tokens", 0);
+    h.warmup       = j.value("warmup", 0);
+    if (h.chunk_tokens < 0 || h.warmup < 0) {
+        return false;
+    }
+    if (h.chunk_tokens > 0 && h.warmup >= h.chunk_tokens) {
+        return false; // would leave no emitted rows per chunk
+    }
+
     out = h;
     return true;
+}
+
+int64_t ts_features_row_to_token(const ts_features_header & h, int64_t row) {
+    if (row < 0 || row >= h.n_tokens) {
+        return -1;
+    }
+    if (h.chunk_tokens == 0) {
+        // no chunk layout: identity only when nothing was skipped.
+        return h.warmup == 0 ? row : -1;
+    }
+    const int64_t per = h.rows_per_chunk();
+    if (per <= 0) {
+        return -1;
+    }
+    const int64_t chunk  = row / per;
+    const int64_t offset = row % per;
+    return chunk * h.chunk_tokens + h.warmup + offset;
 }
