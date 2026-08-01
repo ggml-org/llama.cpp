@@ -1,7 +1,6 @@
 #include "ggml.h"
 #include "llama.h"
 #include "llama-cpp.h"
-#include "get-model.h"
 #include "common.h"
 
 #ifdef NDEBUG
@@ -1136,7 +1135,7 @@ int main(int argc, char ** argv) {
     test_args args = parse_cli(argc, argv);
 
     if (args.model.empty()) {
-        args.model = get_model_or_exit(1, argv);
+        args.model = common_get_model_or_exit(1, argv);
     }
 
     {

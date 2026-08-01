@@ -1,4 +1,8 @@
-import { TWO_PART_PUBLIC_SUFFIXES, WILDCARD_PUBLIC_SUFFIXES } from '$lib/constants';
+import {
+	TRAILING_SLASHES_REGEX,
+	TWO_PART_PUBLIC_SUFFIXES,
+	WILDCARD_PUBLIC_SUFFIXES
+} from '$lib/constants';
 import { UrlProtocol } from '$lib/enums';
 
 /**
@@ -68,5 +72,41 @@ export function sanitizeExternalUrl(raw: string): string | null {
 		return url.href;
 	} catch {
 		return null;
+	}
+}
+
+/**
+ * Canonicalize a server URL for "is this the same server?" checks across
+ * the user's settings and the recommended-server list. Lowercases scheme
+ * and host, drops the port entirely, and strips any trailing slashes off
+ * the path so a stored `https://api.example.com:8443/mcp/` matches the
+ * recommended `https://api.example.com/mcp`. Falls back to a cheap
+ * trim+lowercase+strip pass when the input isn't a parseable URL.
+ *
+ * Query strings are preserved deliberately - if the user entered one,
+ * it's part of their endpoint. The port is always stripped because the
+ * underlying `URL` parser is asymmetric (it auto-drops HTTPS default
+ * :443 but keeps HTTP default :80), so a half-hearted "drop default
+ * ports" policy never matches consistently across schemes.
+ */
+export function canonicalizeServerUrl(raw: string): string {
+	const trimmed = raw.trim();
+
+	try {
+		const parsed = new URL(trimmed);
+		const pathname = parsed.pathname.replace(TRAILING_SLASHES_REGEX, '');
+
+		// Aggressive: drop the port unconditionally. We only use this for
+		// equality checks between user-typed URLs and a hard-coded list of
+		// recommendations, where the port can never carry distinguishing
+		// information we care about (a different port = a different server,
+		// but two URLs that differ only in `:80` vs no-port are clearly the
+		// same intent). Lowercasing the hostname matches HTTP/HTTPS
+		// case-insensitivity - the URL parser does NOT lowercase it.
+		const host = parsed.hostname.toLowerCase();
+
+		return `${parsed.protocol}//${host}${pathname}${parsed.search}`;
+	} catch {
+		return trimmed.toLowerCase().replace(TRAILING_SLASHES_REGEX, '');
 	}
 }

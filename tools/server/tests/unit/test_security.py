@@ -1,6 +1,8 @@
 import pytest
 from openai import OpenAI
 from utils import *
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 server = ServerPreset.tinyllama2()
 
@@ -89,7 +91,7 @@ def test_openai_library_correct_api_key():
     ("localhost", "Access-Control-Allow-Origin", "localhost"),
     ("web.mydomain.fr", "Access-Control-Allow-Origin", "web.mydomain.fr"),
     ("origin", "Access-Control-Allow-Credentials", "true"),
-    ("web.mydomain.fr", "Access-Control-Allow-Methods", "GET, POST"),
+    ("web.mydomain.fr", "Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS"),
     ("web.mydomain.fr", "Access-Control-Allow-Headers", "*"),
 ])
 def test_cors_options(origin: str, cors_header: str, cors_header_value: str):
@@ -103,6 +105,113 @@ def test_cors_options(origin: str, cors_header: str, cors_header_value: str):
     assert res.status_code == 200
     assert cors_header in res.headers
     assert res.headers[cors_header] == cors_header_value
+
+
+@pytest.mark.parametrize("origin", [
+    "http://localhost",
+    "http://localhost:8080",
+    "http://127.0.0.1",
+    "http://127.0.0.1:3000",
+    "http://[::1]",
+    "http://[::1]:3000",
+])
+def test_cors_origins_localhost_reflects(origin: str):
+    global server
+    server = ServerPreset.router()
+    server.cors_origins = "localhost"
+    server.start()
+    res = server.make_request("OPTIONS", "/completions", headers={
+        "Origin": origin,
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "Authorization",
+    })
+    assert res.status_code == 200
+    assert res.headers["Access-Control-Allow-Origin"] == origin
+
+
+@pytest.mark.parametrize("origin", [
+    "http://web.mydomain.fr",
+    "http://evil.com",
+    "http://notlocalhost",
+    "http://localhost.evil.com",
+])
+def test_cors_origins_localhost_rejects(origin: str):
+    global server
+    server = ServerPreset.router()
+    server.cors_origins = "localhost"
+    server.start()
+    res = server.make_request("OPTIONS", "/completions", headers={
+        "Origin": origin,
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "Authorization",
+    })
+    assert res.status_code == 200
+    assert "Access-Control-Allow-Origin" not in res.headers
+
+
+def test_cors_origins_defaults_to_localhost_with_tools_enabled():
+    global server
+    server = ServerPreset.router()
+    server.server_tools = "all"
+    server.start()
+    res = server.make_request("OPTIONS", "/completions", headers={
+        "Origin": "http://localhost:8080",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "Authorization",
+    })
+    assert res.status_code == 200
+    assert res.headers["Access-Control-Allow-Origin"] == "http://localhost:8080"
+
+    res = server.make_request("OPTIONS", "/completions", headers={
+        "Origin": "http://evil.com",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "Authorization",
+    })
+    assert res.status_code == 200
+    assert "Access-Control-Allow-Origin" not in res.headers
+
+
+def test_cors_proxy_only_forwards_explicit_proxy_headers():
+    class CaptureHeadersHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.server.captured_headers = dict(self.headers)
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        def log_message(self, format, *args):
+            pass
+
+    target = ThreadingHTTPServer(("127.0.0.1", 0), CaptureHeadersHandler)
+    target.captured_headers = {}
+    target_thread = threading.Thread(target=target.serve_forever, daemon=True)
+    target_thread.start()
+
+    try:
+        server = ServerPreset.tinyllama2()
+        server.api_key = TEST_API_KEY
+        server.ui_mcp_proxy = True
+        server.start()
+
+        res = server.make_request("GET", f"/cors-proxy?url=http://127.0.0.1:{target.server_port}/capture", headers={
+            "Authorization": f"Bearer {TEST_API_KEY}",
+            "Proxy-Authorization": "Basic secret",
+            "X-Api-Key": TEST_API_KEY,
+            "Cookie": "session=secret",
+            "x-llama-server-proxy-header-accept": "application/json",
+            "x-llama-server-proxy-header-authorization": "Bearer explicit",
+        })
+
+        assert res.status_code == 200
+        captured = {key.lower(): value for key, value in target.captured_headers.items()}
+        assert captured["accept"] == "application/json"
+        assert captured["authorization"] == "Bearer explicit"
+        assert "proxy-authorization" not in captured
+        assert "x-api-key" not in captured
+        assert "cookie" not in captured
+    finally:
+        target.shutdown()
+        target.server_close()
 
 
 @pytest.mark.parametrize(

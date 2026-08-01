@@ -22,6 +22,8 @@
 struct htp_argsort_context {
     struct htp_ops_context * octx;
     uint32_t                 nrows_per_thread;
+    uint8_t *                vtcm_base;
+    size_t                   vtcm_per_thread;
 };
 
 static inline bool all_greater_f32(HVX_Vector x, HVX_Vector y)
@@ -170,7 +172,208 @@ int32_t argosrt_ramp_lut[32] __attribute__((aligned(VLEN))) = {
     16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31
 };
 
-static void htp_argsort_f32(unsigned int n, unsigned int i, void * data) {
+__attribute__((always_inline))
+static inline void vec_cas(HVX_Vector * X_val, HVX_Vector * X_idx, HVX_Vector * Y_val, HVX_Vector * Y_idx, bool asc) {
+    HVX_VectorPred pred = asc ? Q6_Q_vcmp_gt_VsfVsf(*X_val, *Y_val)
+                              : Q6_Q_vcmp_gt_VsfVsf(*Y_val, *X_val);
+    HVX_Vector next_X_val = Q6_V_vmux_QVV(pred, *Y_val, *X_val);
+    HVX_Vector next_Y_val = Q6_V_vmux_QVV(pred, *X_val, *Y_val);
+    HVX_Vector next_X_idx = Q6_V_vmux_QVV(pred, *Y_idx, *X_idx);
+    HVX_Vector Y_tmp_idx  = Q6_V_vmux_QVV(pred, *X_idx, *Y_idx);
+    *X_val = next_X_val;
+    *Y_val = next_Y_val;
+    *X_idx = next_X_idx;
+    *Y_idx = Y_tmp_idx;
+}
+
+__attribute__((always_inline))
+static inline void bitonic_cas_32(HVX_Vector * V, HVX_Vector * I, int d, HVX_VectorPred dir_mask, HVX_Vector idx_vec, HVX_Vector zero_vec) {
+    HVX_VectorPred mask_left;
+    HVX_Vector V_rot_left, V_rot_right;
+    HVX_Vector I_rot_left, I_rot_right;
+
+    if (d == 1) {
+        mask_left = Q6_Q_vcmp_eq_VwVw(Q6_V_vand_VV(idx_vec, Q6_V_vsplat_R(1)), zero_vec);
+        V_rot_left = Q6_V_vror_VR(*V, 4);
+        V_rot_right = Q6_V_vror_VR(*V, 124);
+        I_rot_left = Q6_V_vror_VR(*I, 4);
+        I_rot_right = Q6_V_vror_VR(*I, 124);
+    } else if (d == 2) {
+        mask_left = Q6_Q_vcmp_eq_VwVw(Q6_V_vand_VV(idx_vec, Q6_V_vsplat_R(2)), zero_vec);
+        V_rot_left = Q6_V_vror_VR(*V, 8);
+        V_rot_right = Q6_V_vror_VR(*V, 120);
+        I_rot_left = Q6_V_vror_VR(*I, 8);
+        I_rot_right = Q6_V_vror_VR(*I, 120);
+    } else if (d == 4) {
+        mask_left = Q6_Q_vcmp_eq_VwVw(Q6_V_vand_VV(idx_vec, Q6_V_vsplat_R(4)), zero_vec);
+        V_rot_left = Q6_V_vror_VR(*V, 16);
+        V_rot_right = Q6_V_vror_VR(*V, 112);
+        I_rot_left = Q6_V_vror_VR(*I, 16);
+        I_rot_right = Q6_V_vror_VR(*I, 112);
+    } else if (d == 8) {
+        mask_left = Q6_Q_vcmp_eq_VwVw(Q6_V_vand_VV(idx_vec, Q6_V_vsplat_R(8)), zero_vec);
+        V_rot_left = Q6_V_vror_VR(*V, 32);
+        V_rot_right = Q6_V_vror_VR(*V, 96);
+        I_rot_left = Q6_V_vror_VR(*I, 32);
+        I_rot_right = Q6_V_vror_VR(*I, 96);
+    } else { // d == 16
+        mask_left = Q6_Q_vcmp_eq_VwVw(Q6_V_vand_VV(idx_vec, Q6_V_vsplat_R(16)), zero_vec);
+        V_rot_left = Q6_V_vror_VR(*V, 64);
+        V_rot_right = Q6_V_vror_VR(*V, 64);
+        I_rot_left = Q6_V_vror_VR(*I, 64);
+        I_rot_right = Q6_V_vror_VR(*I, 64);
+    }
+
+    HVX_Vector V_paired = Q6_V_vmux_QVV(mask_left, V_rot_left, V_rot_right);
+    HVX_Vector I_paired = Q6_V_vmux_QVV(mask_left, I_rot_left, I_rot_right);
+
+    HVX_VectorPred V_gt_Vpaired = Q6_Q_vcmp_gt_VsfVsf(*V, V_paired);
+    HVX_VectorPred Vpaired_gt_V = Q6_Q_vcmp_gt_VsfVsf(V_paired, *V);
+    HVX_VectorPred mask_right = Q6_Q_not_Q(mask_left);
+    HVX_VectorPred Q_asc = Q6_Q_or_QQ(
+        Q6_Q_and_QQ(mask_left, V_gt_Vpaired),
+        Q6_Q_and_QQ(Vpaired_gt_V, mask_right)
+    );
+    HVX_VectorPred Q_swap = Q6_Q_or_QQ(
+        Q6_Q_and_QQ(dir_mask, Q_asc),
+        Q6_Q_and_QQ(Q6_Q_not_Q(dir_mask), Q6_Q_not_Q(Q_asc))
+    );
+
+    *V = Q6_V_vmux_QVV(Q_swap, V_paired, *V);
+    *I = Q6_V_vmux_QVV(Q_swap, I_paired, *I);
+}
+
+__attribute__((always_inline))
+static inline void bitonic_sort_generic_hvx(uint8_t * values, uint8_t * indices, int K, bool asc_order) {
+    HVX_Vector V[32];
+    HVX_Vector I[32];
+
+    HVX_Vector zero_vec = Q6_V_vzero();
+    HVX_Vector idx_vec = *(HVX_Vector *)argosrt_ramp_lut;
+
+    // Load values and initialize indices
+    for (int v = 0; v < K; v++) {
+        V[v] = *(HVX_Vector *)(values + v * 128);
+        I[v] = Q6_Vw_vadd_VwVw(idx_vec, Q6_V_vsplat_R(v * 32));
+    }
+
+    HVX_VectorPred pred_all_1s = Q6_Q_vcmp_eq_VwVw(zero_vec, zero_vec);
+    HVX_VectorPred pred_all_0s = Q6_Q_not_Q(pred_all_1s);
+
+    int M = 5;
+    while ((1 << (M - 5)) < K) M++;
+
+    for (int s = 1; s <= M; s++) {
+        for (int stage_d = s - 1; stage_d >= 0; stage_d--) {
+            int d = 1 << stage_d;
+            if (d >= 32) {
+                int v_dist = d / 32;
+                for (int v1 = 0; v1 < K; v1++) {
+                    if ((v1 & v_dist) == 0) {
+                        int v2 = v1 + v_dist;
+                        bool asc = (s < M) ? ((((v1 * 32) >> s) % 2) == 0) : asc_order;
+                        vec_cas(&V[v1], &I[v1], &V[v2], &I[v2], asc);
+                    }
+                }
+            } else {
+                if (s < 5) {
+                    HVX_VectorPred dir_mask = Q6_Q_vcmp_eq_VwVw(Q6_V_vand_VV(idx_vec, Q6_V_vsplat_R(1 << s)), zero_vec);
+                    for (int v = 0; v < K; v++) {
+                        bitonic_cas_32(&V[v], &I[v], d, dir_mask, idx_vec, zero_vec);
+                    }
+                } else {
+                    for (int v = 0; v < K; v++) {
+                        bool asc = (s < M) ? ((((v * 32) >> s) % 2) == 0) : asc_order;
+                        HVX_VectorPred dir_mask = asc ? pred_all_1s : pred_all_0s;
+                        bitonic_cas_32(&V[v], &I[v], d, dir_mask, idx_vec, zero_vec);
+                    }
+                }
+            }
+        }
+    }
+
+    // Write back sorted values and indices
+    for (int v = 0; v < K; v++) {
+        *(HVX_Vector *)(values + v * 128)  = V[v];
+        *(HVX_Vector *)(indices + v * 128) = I[v];
+    }
+}
+
+__attribute__((always_inline))
+static inline void sort32_f32_hvx(uint8_t * values, uint8_t * indices, enum ggml_sort_order order) {
+    bitonic_sort_generic_hvx(values, indices, 1, order == GGML_SORT_ORDER_ASC);
+}
+
+__attribute__((always_inline))
+static inline void sort64_f32_hvx(uint8_t * values, uint8_t * indices, enum ggml_sort_order order) {
+    bitonic_sort_generic_hvx(values, indices, 2, order == GGML_SORT_ORDER_ASC);
+}
+
+__attribute__((always_inline))
+static inline void sort128_f32_hvx(uint8_t * values, uint8_t * indices, enum ggml_sort_order order) {
+    bitonic_sort_generic_hvx(values, indices, 4, order == GGML_SORT_ORDER_ASC);
+}
+
+__attribute__((always_inline))
+static inline void sort256_f32_hvx(uint8_t * values, uint8_t * indices, enum ggml_sort_order order) {
+    bitonic_sort_generic_hvx(values, indices, 8, order == GGML_SORT_ORDER_ASC);
+}
+
+__attribute__((always_inline))
+static inline void sort512_f32_hvx(uint8_t * values, uint8_t * indices, enum ggml_sort_order order) {
+    bitonic_sort_generic_hvx(values, indices, 16, order == GGML_SORT_ORDER_ASC);
+}
+
+__attribute__((always_inline))
+static inline void sort1024_f32_hvx(uint8_t * values, uint8_t * indices, enum ggml_sort_order order) {
+    bitonic_sort_generic_hvx(values, indices, 32, order == GGML_SORT_ORDER_ASC);
+}
+
+#define HTP_ARGSORT_FN(ne00, order_name, order_enum, sort_fn)                                                  \
+static void htp_argsort_f32_##ne00##_##order_name(unsigned int n, unsigned int i, void * data) {               \
+    struct htp_argsort_context * actx = (struct htp_argsort_context *)data;                                    \
+    struct htp_ops_context * octx = actx->octx;                                                                \
+    const struct htp_tensor * src0 = octx->src[0];                                                             \
+    const struct htp_tensor * dst = octx->dst;                                                                 \
+    uint8_t * spad = actx->vtcm_base + actx->vtcm_per_thread * i;                                              \
+    uint32_t total_rows = src0->ne[1] * src0->ne[2] * src0->ne[3];                                             \
+    uint32_t rows_per_thread = actx->nrows_per_thread;                                                         \
+    uint32_t start_row = rows_per_thread * i;                                                                  \
+    uint32_t end_row = MIN(start_row + rows_per_thread, total_rows);                                           \
+    size_t values_size = hex_round_up(ne00 * sizeof(float), 128);                                              \
+    float * values_buf = (float *) spad;                                                                       \
+    int32_t * indices_buf = (int32_t *) (spad + values_size);                                                  \
+    uint32_t nb01 = src0->nb[1];                                                                               \
+    uint32_t nb1 = dst->nb[1];                                                                                 \
+    struct htp_thread_trace * tr = &octx->ctx->trace[i];                                                       \
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, start_row);                                              \
+    for (uint32_t r = start_row; r < end_row; r++) {                                                           \
+        uint32_t src_offset = r * nb01;                                                                        \
+        uint32_t dst_offset = r * nb1;                                                                         \
+        uint8_t * src_ptr = (uint8_t *) src0->data + src_offset;                                               \
+        uint8_t * dst_ptr = (uint8_t *) dst->data  + dst_offset;                                               \
+        hex_l2fetch(src_ptr, ne00 * sizeof(float), ne00 * sizeof(float), 1);                                   \
+        hvx_copy_f32_au((uint8_t*)values_buf, src_ptr, ne00);                                                  \
+        sort_fn((uint8_t*)values_buf, (uint8_t*)indices_buf, order_enum);                                      \
+        hvx_copy_f32_ua(dst_ptr, (const uint8_t *) indices_buf, ne00);                                         \
+    }                                                                                                          \
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, start_row);                                               \
+}
+
+HTP_ARGSORT_FN(32,   asc, GGML_SORT_ORDER_ASC,  sort32_f32_hvx)
+HTP_ARGSORT_FN(32,   dsc, GGML_SORT_ORDER_DESC, sort32_f32_hvx)
+HTP_ARGSORT_FN(64,   asc, GGML_SORT_ORDER_ASC,  sort64_f32_hvx)
+HTP_ARGSORT_FN(64,   dsc, GGML_SORT_ORDER_DESC, sort64_f32_hvx)
+HTP_ARGSORT_FN(128,  asc, GGML_SORT_ORDER_ASC,  sort128_f32_hvx)
+HTP_ARGSORT_FN(128,  dsc, GGML_SORT_ORDER_DESC, sort128_f32_hvx)
+HTP_ARGSORT_FN(256,  asc, GGML_SORT_ORDER_ASC,  sort256_f32_hvx)
+HTP_ARGSORT_FN(256,  dsc, GGML_SORT_ORDER_DESC, sort256_f32_hvx)
+HTP_ARGSORT_FN(512,  asc, GGML_SORT_ORDER_ASC,  sort512_f32_hvx)
+HTP_ARGSORT_FN(512,  dsc, GGML_SORT_ORDER_DESC, sort512_f32_hvx)
+HTP_ARGSORT_FN(1024, asc, GGML_SORT_ORDER_ASC,  sort1024_f32_hvx)
+HTP_ARGSORT_FN(1024, dsc, GGML_SORT_ORDER_DESC, sort1024_f32_hvx)
+
+static void htp_argsort_f32_fallback(unsigned int n, unsigned int i, void * data) {
     struct htp_argsort_context * actx = (struct htp_argsort_context *)data;
     struct htp_ops_context * octx = actx->octx;
 
@@ -179,7 +382,7 @@ static void htp_argsort_f32(unsigned int n, unsigned int i, void * data) {
     const struct htp_tensor * dst = octx->dst;
 
     // Scratchpad memory
-    uint8_t * spad = octx->src0_spad.data + octx->src0_spad.size_per_thread * i;
+    uint8_t * spad = actx->vtcm_base + actx->vtcm_per_thread * i;
 
     // Dimensions
     uint32_t ne00 = src0->ne[0];
@@ -188,12 +391,8 @@ static void htp_argsort_f32(unsigned int n, unsigned int i, void * data) {
     uint32_t ne03 = src0->ne[3];
 
     uint32_t nb01 = src0->nb[1];
-    //uint32_t nb02 = src0->nb[2];
-    //uint32_t nb03 = src0->nb[3];
 
     uint32_t nb1 = dst->nb[1];
-    //uint32_t nb2 = dst->nb[2];
-    //uint32_t nb3 = dst->nb[3];
 
     // Sort order
     enum ggml_sort_order order = (enum ggml_sort_order) octx->op_params[0];
@@ -204,19 +403,16 @@ static void htp_argsort_f32(unsigned int n, unsigned int i, void * data) {
     uint32_t start_row = rows_per_thread * i;
     uint32_t end_row = MIN(start_row + rows_per_thread, total_rows);
 
-    // Scratchpad layout:
-    // We need space for one row of float data (values) and one row of int32 indices.
-    // values: ne00 * sizeof(float)
-    // indices: ne00 * sizeof(int32_t)
-    // Padded to 128 bytes.
-
     size_t values_size = hex_round_up(ne00 * sizeof(float), 128);
-    size_t num_vec_ind_values = hmx_ceil_div(ne00, VLEN/(sizeof(int32_t)));
+    uint32_t num_vec_ind_values = hmx_ceil_div(ne00, VLEN/(sizeof(int32_t)));
     float * values_buf = (float *) spad;
     int32_t * indices_buf = (int32_t *) (spad + values_size);
     HVX_Vector * indices_buf_vec = (HVX_Vector *) (spad + values_size);
     const HVX_Vector ind_init_vec = *(HVX_Vector *)argosrt_ramp_lut;
     const HVX_Vector ind_diff_vec = Q6_V_vsplat_R(32);
+
+    struct htp_thread_trace * tr = &octx->ctx->trace[i];
+    htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, start_row);
 
     for (uint32_t r = start_row; r < end_row; r++) {
         uint32_t src_offset = r * nb01;
@@ -245,6 +441,8 @@ static void htp_argsort_f32(unsigned int n, unsigned int i, void * data) {
         // Copy indices back to DDR
         hvx_copy_f32_ua(dst_ptr, (const uint8_t *) indices_buf, ne00);
     }
+
+    htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, start_row);
 }
 
 int op_argsort(struct htp_ops_context * octx) {
@@ -273,11 +471,6 @@ int op_argsort(struct htp_ops_context * octx) {
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
 
-    octx->src0_spad.data = octx->ctx->vtcm_base;
-    octx->src0_spad.size = total_spad_size;
-    octx->src0_spad.size_per_thread = spad_per_thread;
-    octx->src0_spad.src  = NULL;
-
     FARF(HIGH, "argsort: %ux%ux%ux%u -> %ux%ux%ux%u (0x%x, 0x%x)",
          octx->src[0]->ne[0], octx->src[0]->ne[1], octx->src[0]->ne[2], octx->src[0]->ne[3],
          octx->dst->ne[0], octx->dst->ne[1], octx->dst->ne[2], octx->dst->ne[3],
@@ -286,9 +479,36 @@ int op_argsort(struct htp_ops_context * octx) {
     struct htp_argsort_context actx;
     actx.octx = octx;
     actx.nrows_per_thread = (total_rows + n_threads - 1) / n_threads;
+    actx.vtcm_base = (uint8_t *) octx->ctx->vtcm_base;
+    actx.vtcm_per_thread = spad_per_thread;
+
+    enum ggml_sort_order order = (enum ggml_sort_order) octx->op_params[0];
+    worker_callback_t job_func = htp_argsort_f32_fallback;
+
+    if (order == GGML_SORT_ORDER_ASC) {
+        switch (ne00) {
+            case 1024: job_func = htp_argsort_f32_1024_asc; break;
+            case 512:  job_func = htp_argsort_f32_512_asc;  break;
+            case 256:  job_func = htp_argsort_f32_256_asc;  break;
+            case 128:  job_func = htp_argsort_f32_128_asc;  break;
+            case 64:   job_func = htp_argsort_f32_64_asc;   break;
+            case 32:   job_func = htp_argsort_f32_32_asc;   break;
+            default:   job_func = htp_argsort_f32_fallback; break;
+        }
+    } else {
+        switch (ne00) {
+            case 1024: job_func = htp_argsort_f32_1024_dsc; break;
+            case 512:  job_func = htp_argsort_f32_512_dsc;  break;
+            case 256:  job_func = htp_argsort_f32_256_dsc;  break;
+            case 128:  job_func = htp_argsort_f32_128_dsc;  break;
+            case 64:   job_func = htp_argsort_f32_64_dsc;   break;
+            case 32:   job_func = htp_argsort_f32_32_dsc;   break;
+            default:   job_func = htp_argsort_f32_fallback; break;
+        }
+    }
 
     // Run jobs
-    worker_pool_run_func(octx->ctx->worker_pool, htp_argsort_f32, &actx, n_threads);
+    worker_pool_run_func(octx->ctx->worker_pool, job_func, &actx, n_threads);
 
     return HTP_STATUS_OK;
 }

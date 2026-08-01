@@ -238,6 +238,29 @@ struct decode_embd_batch {
     }
 };
 
+// Helper class to set non-causal attention via RAII
+class scope_non_causal {
+public:
+    scope_non_causal(llama_context * context, bool enabled) : context_(context), enabled_(enabled) {
+        if (enabled_) {
+            // TODO @ngxson : need to make sure only one image is processed at a time, and n_ubatch must be enough to hold the image
+            llama_set_causal_attn(context_, false);
+        }
+    }
+    ~scope_non_causal() {
+        if (enabled_) {
+            llama_set_causal_attn(context_, true);
+        }
+    }
+
+    scope_non_causal(const scope_non_causal &) = delete;
+    scope_non_causal & operator=(const scope_non_causal &) = delete;
+
+private:
+    llama_context * context_;
+    bool enabled_;
+};
+
 // Helper function for decoding an image whose embeddings have already been calculated
 int32_t mtmd_helper_decode_image_chunk(
         mtmd_context * ctx,
@@ -247,7 +270,9 @@ int32_t mtmd_helper_decode_image_chunk(
         llama_pos n_past,
         llama_seq_id seq_id,
         int32_t n_batch,
-        llama_pos * new_n_past) {
+        llama_pos * new_n_past,
+        mtmd_helper_post_decode_callback callback,
+        void * user_data) {
     GGML_ASSERT(n_batch > 0);
     auto chunk_type = mtmd_input_chunk_get_type(chunk);
     const char * name = chunk_type == MTMD_INPUT_CHUNK_TYPE_IMAGE ? "image" : "audio";
@@ -286,10 +311,7 @@ int32_t mtmd_helper_decode_image_chunk(
     }
 
     const bool use_non_causal = mtmd_decode_use_non_causal(ctx, chunk);
-    if (use_non_causal) {
-        llama_set_causal_attn(lctx, false);
-        // TODO @ngxson : need to make sure only one image is processed at a time, and n_ubatch must be enough to hold the image
-    }
+    const scope_non_causal non_causal(lctx, use_non_causal);
 
     while (i_batch < n_img_batches) { // split into batches
         int pos_offset = i_batch*n_batch;
@@ -302,8 +324,15 @@ int32_t mtmd_helper_decode_image_chunk(
         int32_t ret = llama_decode(lctx, batch_embd_view);
         if (ret != 0) {
             LOG_ERR("failed to decode %s\n", name);
-            llama_set_causal_attn(lctx, true); // restore causal attn
             return ret;
+        }
+
+        if (callback != nullptr) {
+            ret = callback(batch_embd_view, user_data);
+            if (ret != 0) {
+                LOG_ERR("post-decode callback failed\n");
+                return ret;
+            }
         }
 
         LOG_INF("%s decoded (batch %d/%d) in %" PRId64 " ms\n", name, i_batch+1, n_img_batches, ggml_time_ms() - t1);
@@ -314,9 +343,6 @@ int32_t mtmd_helper_decode_image_chunk(
     n_past += mtmd_input_chunk_get_n_pos(chunk);
     *new_n_past = n_past;
 
-    if (use_non_causal) {
-        llama_set_causal_attn(lctx, true);
-    }
     return 0;
 }
 
@@ -379,7 +405,7 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
         LOG_INF("%s slice encoded in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
 
         float * embd = mtmd_get_output_embd(ctx);
-        ret = mtmd_helper_decode_image_chunk(ctx, lctx, chunk, embd, n_past, seq_id, n_batch, new_n_past);
+        ret = mtmd_helper_decode_image_chunk(ctx, lctx, chunk, embd, n_past, seq_id, n_batch, new_n_past, nullptr, nullptr);
         if (ret != 0) {
             LOG_ERR("failed to decode %s\n", name);
             llama_batch_free(text_batch);
@@ -567,12 +593,28 @@ mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_buf(mtmd_context * ctx, 
 }
 
 mtmd_helper_bitmap_wrapper mtmd_helper_bitmap_init_from_file(mtmd_context * ctx, const char * fname, bool placeholder) {
-    std::vector<unsigned char> buf;
+#ifdef _WIN32
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, fname, -1, NULL, 0);
+    if (!wlen) {
+        LOG_ERR("Unable to convert filename to UTF-16: %s\n", fname);
+        return {nullptr, nullptr};
+    }
+    std::vector<wchar_t> wfname(wlen);
+    wlen = MultiByteToWideChar(CP_UTF8, 0, fname, -1, wfname.data(), wlen);
+    if (!wlen) {
+        LOG_ERR("Unable to convert filename to UTF-16: %s\n", fname);
+        return {nullptr, nullptr};
+    }
+    FILE * f = _wfopen(wfname.data(), L"rb");
+#else
     FILE * f = fopen(fname, "rb");
+#endif
     if (!f) {
         LOG_ERR("Unable to open file %s: %s\n", fname, strerror(errno));
         return {nullptr, nullptr};
     }
+
+    std::vector<unsigned char> buf;
 
     fseek(f, 0, SEEK_END);
     long file_size = ftell(f);
@@ -598,6 +640,7 @@ bool mtmd_helper_support_video(mtmd_context * ctx) {
 #ifdef MTMD_VIDEO
     return mtmd_support_vision(ctx);
 #else
+    GGML_UNUSED(ctx);
     return false;
 #endif
 }
@@ -965,6 +1008,9 @@ mtmd_helper_video * mtmd_helper_video_init(
 
     return ctx;
 #else
+    GGML_UNUSED(mctx);
+    GGML_UNUSED(path);
+    GGML_UNUSED(params);
     LOG_ERR("%s: video is not supported in this build (MTMD_VIDEO is set to OFF)\n", __func__);
     return nullptr;
 #endif
@@ -997,6 +1043,10 @@ mtmd_helper_video * mtmd_helper_video_init_from_buf(
 
     return ctx;
 #else
+    GGML_UNUSED(mctx);
+    GGML_UNUSED(buf);
+    GGML_UNUSED(len);
+    GGML_UNUSED(params);
     LOG_ERR("%s: video is not supported in this build (MTMD_VIDEO is set to OFF)\n", __func__);
     return nullptr;
 #endif
@@ -1008,6 +1058,7 @@ void mtmd_helper_video_free(mtmd_helper_video * ctx) {
     ctx->stop_ffmpeg();
     delete ctx;
 #else
+    GGML_UNUSED(ctx);
     LOG_ERR("%s: video is not supported in this build (MTMD_VIDEO is set to OFF)\n", __func__);
 #endif
 }
@@ -1016,6 +1067,7 @@ mtmd_helper_video_info mtmd_helper_video_get_info(const mtmd_helper_video * ctx)
 #ifdef MTMD_VIDEO
     return ctx->info;
 #else
+    GGML_UNUSED(ctx);
     GGML_ASSERT(false && "video is not supported in this build (MTMD_VIDEO is set to OFF)");
 #endif
 }
@@ -1026,6 +1078,9 @@ int32_t mtmd_helper_video_read_next(mtmd_helper_video * ctx,
     if (!ctx) return -2;
     return ctx->read_next(out_bitmap, out_text);
 #else
+    GGML_UNUSED(ctx);
+    GGML_UNUSED(out_bitmap);
+    GGML_UNUSED(out_text);
     GGML_ASSERT(false && "video is not supported in this build (MTMD_VIDEO is set to OFF)");
 #endif
 }

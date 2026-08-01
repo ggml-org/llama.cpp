@@ -33,7 +33,7 @@ enum resize_algo {
     RESIZE_ALGO_BILINEAR, // stretch to target resolution
     RESIZE_ALGO_BICUBIC, // center-crop when aspect ratio doesn't match
     RESIZE_ALGO_BICUBIC_PILLOW,
-    // RESIZE_ALGO_LANCZOS, // TODO
+    RESIZE_ALGO_LANCZOS,
 };
 
 // Padding style for img_tool::resize
@@ -54,9 +54,10 @@ struct clip_hparams {
     int32_t projection_dim = 0;
     int32_t n_head = 0;
     int32_t n_head_kv = 0;
+    // 0 = derive from n_embd; set when qkv width != n_embd
+    int32_t n_embd_head = 0;
     int32_t n_layer = 0;
-    // idefics3
-    int32_t n_merge = 0; // number of patch merges **per-side**
+    int32_t n_merge = 1; // number of patch merges **per-side**
 
     // for preprocessor
     int32_t image_longest_edge = 0;
@@ -70,6 +71,7 @@ struct clip_hparams {
     std::vector<clip_image_size> image_res_candidates;
     int32_t preproc_min_tiles = 0;
     int32_t preproc_max_tiles = 0;
+    int32_t preproc_tile_size = 0; // local tile size (deepseek-ocr)
     resize_algo image_resize_algo_rf = RESIZE_ALGO_BICUBIC;
     resize_algo image_resize_algo_ov = RESIZE_ALGO_BILINEAR;
     pad_style image_pad_rf = PAD_CEIL;  // padding style for the refined image (e.g. llava-1.6)
@@ -91,7 +93,7 @@ struct clip_hparams {
 
     float eps = 1e-6;
     float rope_theta = 0.0;
-    std::vector<int32_t> vision_feature_layer;
+    std::vector<int32_t> feature_layers;
     int32_t attn_window_size = 0;
     int32_t n_wa_pattern = 0;
     std::unordered_set<int32_t> wa_layer_indexes; // explicit layer indexes that use full attention (for irregular patterns like YoutuVL)
@@ -110,6 +112,8 @@ struct clip_hparams {
     // audio
     int32_t n_mel_bins = 0; // whisper preprocessor
     int32_t proj_stack_factor = 0; // ultravox
+    int32_t subsampling_factor = 0; // parakeet
+
     int32_t audio_chunk_size           = 0;
     int32_t audio_conv_kernel_size     = 0;
     int32_t audio_max_pos_emb          = 0;
@@ -124,6 +128,18 @@ struct clip_hparams {
     int32_t audio_window_len  = -1;
     int32_t audio_hop_len     = -1;
 
+    // parakeet
+    std::vector<float> mel_filters;
+    std::vector<float> window;
+
+    // mimo-audio-tokenizer: residual vector quantizer
+    int32_t rvq_num_quantizers = 0;
+    std::vector<int32_t> rvq_codebook_size; // per-quantizer bin count (ragged, e.g. 1024/1024/256/128x17)
+
+    // mimo-v2.5: LLM-side connector (input_local_transformer)
+    int32_t audio_local_n_layer = 0;
+    int32_t audio_local_group_size = 0;
+
     // legacy
     bool has_llava_projector = false;
     int minicpmv_version = 0;
@@ -135,8 +151,7 @@ struct clip_hparams {
     int32_t custom_image_max_tokens = -1;
 
     void set_limit_image_tokens(int n_tokens_min, int n_tokens_max) {
-        const int cur_merge = n_merge == 0 ? 1 : n_merge;
-        const int patch_area = patch_size * patch_size * cur_merge * cur_merge;
+        const int patch_area = patch_size * patch_size * n_merge * n_merge;
         image_min_pixels = (custom_image_min_tokens > 0 ? custom_image_min_tokens : n_tokens_min) * patch_area;
         image_max_pixels = (custom_image_max_tokens > 0 ? custom_image_max_tokens : n_tokens_max) * patch_area;
         warmup_image_size = static_cast<int>(std::sqrt(image_max_pixels));
@@ -145,8 +160,7 @@ struct clip_hparams {
     void set_warmup_n_tokens(int n_tokens) {
         int n_tok_per_side = static_cast<int>(std::sqrt(n_tokens));
         GGML_ASSERT(n_tok_per_side * n_tok_per_side == n_tokens && "n_tokens must be n*n");
-        const int cur_merge = n_merge == 0 ? 1 : n_merge;
-        warmup_image_size = n_tok_per_side * patch_size * cur_merge;
+        warmup_image_size = n_tok_per_side * patch_size * n_merge;
         // TODO: support warmup size for custom token numbers
     }
     // sam vit deepseek-ocr
@@ -165,8 +179,8 @@ struct clip_hparams {
         return false;
     }
 
-    bool is_vision_feature_layer(int32_t layer) const {
-        return std::find(vision_feature_layer.begin(), vision_feature_layer.end(), layer) != vision_feature_layer.end();
+    bool is_feature_layer(int32_t layer) const {
+        return std::find(feature_layers.begin(), feature_layers.end(), layer) != feature_layers.end();
     }
 };
 
@@ -239,14 +253,16 @@ struct clip_layer {
     ggml_tensor * norm_conv_b   = nullptr;
     ggml_tensor * linear_pos_w  = nullptr;
 
-    ggml_tensor * conv_norm_w   = nullptr;
-    ggml_tensor * conv_norm_b   = nullptr;
-    ggml_tensor * conv_dw_w     = nullptr;
-    ggml_tensor * conv_dw_b     = nullptr;
-    ggml_tensor * conv_pw1_w    = nullptr;
-    ggml_tensor * conv_pw1_b    = nullptr;
-    ggml_tensor * conv_pw2_w    = nullptr;
-    ggml_tensor * conv_pw2_b    = nullptr;
+    ggml_tensor * conv_norm_w    = nullptr;
+    ggml_tensor * conv_norm_b    = nullptr;
+    ggml_tensor * conv_norm_mean = nullptr;  // parakeet
+    ggml_tensor * conv_norm_var  = nullptr;  // parakeet
+    ggml_tensor * conv_dw_w      = nullptr;
+    ggml_tensor * conv_dw_b      = nullptr;
+    ggml_tensor * conv_pw1_w     = nullptr;
+    ggml_tensor * conv_pw1_b     = nullptr;
+    ggml_tensor * conv_pw2_w     = nullptr;
+    ggml_tensor * conv_pw2_b     = nullptr;
 
     // gemma4 audio conformer per-layer
     ggml_tensor * attn_pre_norm_w   = nullptr;
@@ -399,6 +415,10 @@ struct clip_model {
     ggml_tensor * mm_0_b = nullptr;
     ggml_tensor * mm_2_w = nullptr;
     ggml_tensor * mm_2_b = nullptr;
+    ggml_tensor * mm_merger_fc1_w = nullptr;   // minimax-m3
+    ggml_tensor * mm_merger_fc1_b = nullptr;
+    ggml_tensor * mm_merger_fc2_w = nullptr;
+    ggml_tensor * mm_merger_fc2_b = nullptr;
 
     ggml_tensor * image_newline = nullptr;
     ggml_tensor * view_seperator = nullptr;
@@ -534,6 +554,20 @@ struct clip_model {
     ggml_tensor * mm_norm_pre_w = nullptr;
     ggml_tensor * mm_norm_pre_b = nullptr;
     ggml_tensor * mm_norm_mid_w = nullptr;
+
+    // mimo-audio-tokenizer: post-transformer downsample + RVQ codebook
+    ggml_tensor * downsample_conv_w = nullptr; // no bias
+    ggml_tensor * downsample_norm_w = nullptr;
+    ggml_tensor * downsample_norm_b = nullptr;
+    ggml_tensor * rvq_codebook = nullptr; // merged 3D [n_q, max_bins, dim]
+
+    // mimo-v2.5: text-side RVQ code embedding ("text codebook")
+    ggml_tensor * mm_a_code_embd = nullptr; // merged 3D [n_channels, vocab, dim]
+
+    // mimo-v2.5: LLM-side connector (input_local_transformer, separate from the
+    // audio_tokenizer's own encoder `layers`)
+    std::vector<clip_layer> mm_a_local_layers;
+    ggml_tensor * mm_a_local_norm_w = nullptr;
 
     // qwen3a
     ggml_tensor * conv2d_1_w = nullptr;
