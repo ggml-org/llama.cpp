@@ -1747,10 +1747,14 @@ static void ggml_backend_meta_buffer_get_tensor(ggml_backend_buffer_t buffer, co
     const size_t n_bufs = ggml_backend_meta_buffer_n_bufs(buffer);
     ggml_backend_meta_scratch_shards scratch(n_bufs);
     const ggml_backend_meta_split_state split_state = ggml_backend_meta_get_split_state(tensor, /*assume_sync =*/ false);
+    // A permutation that leaves the split on axis 2 or 3 still keeps each
+    // device shard physically row-contiguous.  Axis-3 readback can therefore
+    // use the same row-wise transfer as the contiguous case.
     GGML_ASSERT(ggml_is_contiguous(tensor) ||
             split_state.axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED ||
             (ggml_is_permuted(tensor) &&
-             split_state.axis == GGML_BACKEND_SPLIT_AXIS_2));
+             (split_state.axis == GGML_BACKEND_SPLIT_AXIS_2 ||
+              split_state.axis == GGML_BACKEND_SPLIT_AXIS_3)));
 
     if (split_state.n_segments != 1 || split_state.nr[0] != 1) {
         GGML_ASSERT(split_state.axis >= 0 && split_state.axis < GGML_MAX_DIMS);

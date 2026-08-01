@@ -83,8 +83,13 @@ int main() {
     ggml_set_name(root, "root");
     ggml_tensor * mirror = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F32, 4, 4, 8, 1);
     ggml_set_name(mirror, "mirror");
-    ggml_tensor * axis3 = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F32, 4, 4, 4, 8);
+    ggml_tensor * axis3 = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F32, 3, 4, 4, 8);
     ggml_set_name(axis3, "axis3");
+    // Keep the split on axis 3 while permuting dimensions inside each
+    // physical row.  This is non-contiguous metadata but each shard remains
+    // safe for the axis-3 row-wise transfer path.
+    ggml_tensor * axis3_permuted = ggml_permute(ctx.get(), axis3, 1, 0, 2, 3);
+    ggml_set_name(axis3_permuted, "axis3-permuted");
     ggml_tensor * partial = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F32, 4, 4, 4, 1);
     ggml_set_name(partial, "partial");
     ggml_tensor * segments = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F32, 8, 4, 1, 1);
@@ -152,6 +157,13 @@ int main() {
             std::fprintf(stderr, "axis-3 readback mismatch at %zu: %.9g != %.9g\n", i, axis3_expected[i], axis3_actual[i]);
             return 1;
         }
+    }
+
+    std::fill(axis3_actual.begin(), axis3_actual.end(), 0.0f);
+    ggml_backend_tensor_get(axis3_permuted, axis3_actual.data(), 0, axis3_nbytes);
+    if (axis3_actual != axis3_expected) {
+        std::fprintf(stderr, "permuted axis-3 readback mismatch\n");
+        return 1;
     }
 
     const size_t axis3_row_bytes = axis3->nb[3];
