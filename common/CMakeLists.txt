@@ -102,8 +102,6 @@ add_library(${TARGET}
     speculative.h
     subproc.cpp
     subproc.h
-    tiered-memory.cpp
-    tiered-memory.h
     trie.cpp
     trie.h
     unicode.cpp
