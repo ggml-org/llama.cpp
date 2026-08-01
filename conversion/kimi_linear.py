@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Iterable, TYPE_CHECKING
 
 import torch
@@ -18,6 +19,8 @@ class KimiLinearModel(TextModel):
     model_arch = gguf.MODEL_ARCH.KIMI_LINEAR
 
     _experts: list[dict[str, Tensor]] | None = None
+    _routed_down: dict[int, Tensor] = {}
+    _routed_up: dict[int, Tensor] = {}
 
     def set_vocab(self):
         try:
@@ -45,7 +48,12 @@ class KimiLinearModel(TextModel):
             # Build token list
             vocab_size = self.hparams["vocab_size"]
             special_tokens = tokenizer.special_tokens  # ty: ignore[unresolved-attribute]
-            reverse_vocab = {id_ : encoded_tok for encoded_tok, id_ in {**vocab, **special_tokens}.items()}
+            added_tokens: dict[str, int] = {}
+            added_tokens_file = self.dir_model / 'added_tokens.json'
+            if added_tokens_file.is_file():
+                with open(added_tokens_file, encoding="utf-8") as f:
+                    added_tokens = json.load(f)
+            reverse_vocab = {id_ : encoded_tok for encoded_tok, id_ in {**vocab, **special_tokens, **added_tokens}.items()}
             tokens: list[str] = []
             toktypes: list[int] = []
 
@@ -56,7 +64,7 @@ class KimiLinearModel(TextModel):
                 else:
                     token = reverse_vocab[i]
                     tokens.append(token)
-                    if i in special_tokens.values():
+                    if i in special_tokens.values() or i in added_tokens.values():
                         toktypes.append(gguf.TokenType.CONTROL)
                     else:
                         toktypes.append(gguf.TokenType.NORMAL)
@@ -69,8 +77,11 @@ class KimiLinearModel(TextModel):
 
             special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=False)
             special_vocab.add_to_gguf(self.gguf_writer)
-            # override eos id in config.json with tiktoken eos id
+            # override special token ids with the tiktoken ids
+            self.gguf_writer.add_bos_token_id(tokenizer.bos_id)  # ty: ignore[unresolved-attribute]
             self.gguf_writer.add_eos_token_id(tokenizer.eos_id)  # ty: ignore[unresolved-attribute]
+            self.gguf_writer.add_unk_token_id(tokenizer.unk_id)  # ty: ignore[unresolved-attribute]
+            self.gguf_writer.add_pad_token_id(tokenizer.pad_id)  # ty: ignore[unresolved-attribute]
         else:
             raise NotImplementedError(f"Deepseek pre-tokenizer {tokpre!r} is not supported yet!")
 
@@ -147,7 +158,68 @@ class KimiLinearModel(TextModel):
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
 
+    def _maybe_merge_experts(self, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if bid is None or self._experts is None or bid >= len(self._experts):
+            return
+        n_experts = self.find_hparam(["num_local_experts", "num_experts"])
+        if len(self._experts[bid]) < n_experts * 3:
+            return
+        # Defer the merge until the latent-MoE projections are buffered (they arrive
+        # after the expert tensors alphabetically); without them we cannot fold.
+        if bid not in self._routed_down or bid not in self._routed_up:
+            return
+        routed_down = self._routed_down.pop(bid, None)  # (moe_hidden, hidden)
+        routed_up = self._routed_up.pop(bid, None)      # (hidden, moe_hidden)
+        if routed_down is not None:
+            logger.info(f"Folding latent-MoE projections into experts for layer {bid}")
+        # merge the experts into a single 3d tensor
+        # w1: gate, w2: down, w3: up
+        for wid, tname in [("w1", gguf.MODEL_TENSOR.FFN_GATE_EXP),
+                           ("w2", gguf.MODEL_TENSOR.FFN_DOWN_EXP),
+                           ("w3", gguf.MODEL_TENSOR.FFN_UP_EXP)]:
+            datas: list[Tensor] = []
+            for xid in range(n_experts):
+                ename = f"model.layers.{bid}.block_sparse_moe.experts.{xid}.{wid}.weight"
+                w = self._experts[bid][ename]
+                if routed_down is not None:
+                    if wid == "w2":
+                        w = routed_up @ w          # (hidden, moe_hidden) @ (moe_hidden, n_ff)
+                    else:
+                        w = w @ routed_down        # (n_ff, moe_hidden) @ (moe_hidden, hidden)
+                datas.append(w)
+                del self._experts[bid][ename]
+            data_torch = torch.stack(datas, dim=0)
+            new_name = self.format_tensor_name(tname, bid)
+            yield from super().modify_tensors(data_torch, new_name, bid)
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # Kimi-K3 uses a full-rank KDA output gate: g = g_proj(x) (hidden -> head_dim*n_head).
+        # llama.cpp kimi-linear expects K2's low-rank g_b(g_a(x)): g_a (hidden -> head_dim), g_b (head_dim -> head_dim*n_head).
+        # Factorize W (head_dim*n_head, hidden) via truncated SVD to rank=head_dim, then sigmoid(RMSNorm(o) * g) matches K3 exactly.
+        if name.endswith(".self_attn.g_proj.weight"):
+            lcfg = self.hparams["linear_attn_config"]
+            if bid is not None and bid + 1 in lcfg["full_attn_layers"]:
+                # MLA layer: llama.cpp kimi-linear has no MLA output gate -> skip
+                logger.info(f"SKIP MLA output gate g_proj layer {bid}")
+                return
+            W = data_torch.float()
+            head_dim = lcfg["head_dim"]
+            n_head = lcfg["num_heads"]
+            U, S, Vt = torch.linalg.svd(W, full_matrices=False)   # U (P,P), S (P), Vt (P,H)
+            g_b = U[:, :head_dim].contiguous()                     # (P, head_dim)
+            g_a = (torch.diag(S[:head_dim]) @ Vt[:head_dim, :]).contiguous()  # (head_dim, H)
+            logger.info(f"SVD factorized g_proj {tuple(W.shape)} -> g_a {tuple(g_a.shape)}, g_b {tuple(g_b.shape)}")
+            yield from super().modify_tensors(g_a.to(data_torch.dtype), name.replace("g_proj", "g_a_proj"), bid)
+            yield from super().modify_tensors(g_b.to(data_torch.dtype), name.replace("g_proj", "g_b_proj"), bid)
+            return
+
+        # Drop Kimi-K3-only tensors not supported by llama.cpp's kimi-linear runtime:
+        # cross-layer block-residual gates.
+        if any(k in name for k in ("self_attention_res_norm", "self_attention_res_proj",
+                                   "mlp_res_norm", "mlp_res_proj",
+                                   "output_attn_res_norm", "output_attn_res_proj")):
+            logger.info(f"SKIP K3-only tensor: {name}")
+            return
         logger.info(f"Processing {name}: shape before = {tuple(data_torch.shape)}")
 
         # Handle KDA conv1d weights
@@ -174,6 +246,9 @@ class KimiLinearModel(TextModel):
         # GGUF reverses numpy shape: numpy (1, 1, num_heads, 1) -> ggml ne = [1, num_heads, 1, 1]
         if name.endswith(".A_log"):
             data_torch = -torch.exp(data_torch)
+            if data_torch.ndim == 1:
+                data_torch = data_torch.reshape(1, 1, -1, 1)
+                logger.info(f"Reshaped A_log: flat [{data_torch.shape[-2]}] -> numpy {tuple(data_torch.shape)} -> ggml ne=[1, {data_torch.shape[-2]}, 1, 1]")
         if name.endswith(".dt_bias"):
             name = name.rpartition(".dt_bias")[0] + ".dt_proj.bias"
             logger.info("Changed dt_bias to dt_proj.bias")
@@ -188,20 +263,24 @@ class KimiLinearModel(TextModel):
 
             self._experts[bid][name] = data_torch
 
-            if len(self._experts[bid]) >= n_experts * 3:
-                # merge the experts into a single 3d tensor
-                # w1: gate, w2: down, w3: up
-                for wid, tname in [("w1", gguf.MODEL_TENSOR.FFN_GATE_EXP),
-                                   ("w2", gguf.MODEL_TENSOR.FFN_DOWN_EXP),
-                                   ("w3", gguf.MODEL_TENSOR.FFN_UP_EXP)]:
-                    datas: list[Tensor] = []
-                    for xid in range(n_experts):
-                        ename = f"model.layers.{bid}.block_sparse_moe.experts.{xid}.{wid}.weight"
-                        datas.append(self._experts[bid][ename])
-                        del self._experts[bid][ename]
-                    data_torch = torch.stack(datas, dim=0)
-                    new_name = self.format_tensor_name(tname, bid)
-                    yield from super().modify_tensors(data_torch, new_name, bid)
+            yield from self._maybe_merge_experts(bid)
+            return
+
+        # Kimi-K3 latent-MoE projections: consumed by expert folding above
+        if name.endswith("routed_expert_down_proj.weight"):
+            assert bid is not None
+            self._routed_down[bid] = data_torch
+            logger.info(f"Buffered routed_expert_down_proj for layer {bid}: {tuple(data_torch.shape)}")
+            yield from self._maybe_merge_experts(bid)
+            return
+        if name.endswith("routed_expert_up_proj.weight"):
+            assert bid is not None
+            self._routed_up[bid] = data_torch
+            logger.info(f"Buffered routed_expert_up_proj for layer {bid}: {tuple(data_torch.shape)}")
+            yield from self._maybe_merge_experts(bid)
+            return
+        if name.endswith("routed_expert_norm.weight"):
+            logger.info(f"SKIP K3-only tensor (latent MoE norm): {name}")
             return
 
         # note: MLA with the absorption optimization, needs these two split and k_b_proj transposed

@@ -18,7 +18,10 @@ class QwenModel(TextModel):
 
     @staticmethod
     def token_bytes_to_string(b):
-        from transformers.models.gpt2.tokenization_gpt2 import bytes_to_unicode  # ty: ignore[unresolved-import]
+        try:
+            from transformers.models.gpt2.tokenization_gpt2 import bytes_to_unicode  # type: ignore[import-not-found]  # noqa: E501
+        except ImportError:
+            from transformers.convert_slow_tokenizer import bytes_to_unicode
         byte_encoder = bytes_to_unicode()
         return ''.join([byte_encoder[ord(char)] for char in b.decode('latin-1')])
 

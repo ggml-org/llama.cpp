@@ -6,6 +6,7 @@ void llama_model_kimi_linear::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH_MLA,    hparams.n_embd_head_k_mla_impl);
     ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH_MLA,  hparams.n_embd_head_v_mla_impl);
     ml.get_key(LLM_KV_ATTENTION_KV_LORA_RANK,      hparams.n_lora_kv);
+    ml.get_key(LLM_KV_ATTENTION_Q_LORA_RANK,       hparams.n_lora_q, false);
     ml.get_key(LLM_KV_SSM_CONV_KERNEL,             hparams.ssm_d_conv);
     ml.get_key(LLM_KV_KDA_HEAD_DIM,                hparams.n_embd_head_kda);
 
@@ -377,7 +378,15 @@ llama_model_kimi_linear::graph::graph(const llama_model & model, const llm_graph
             // Step 1: Q projection and reshape
             // vLLM Kimi: q = q_proj(hidden_states), then view as [n_tokens, n_head, qk_head_dim]
             // Note: Kimi MLA does NOT use RoPE (rotary_emb=None in vLLM)
-            ggml_tensor * Qcur = ggml_mul_mat(ctx0, layer.wq, cur);
+            ggml_tensor * Qcur;
+            if (layer.wq) {
+                Qcur = ggml_mul_mat(ctx0, layer.wq, cur);
+            } else {
+                // q_lora_rank > 0: q = wq_b(q_a_norm(wq_a(x)))
+                Qcur = ggml_mul_mat(ctx0, layer.wq_a, cur);
+                Qcur = build_norm(Qcur, layer.attn_q_a_norm, nullptr, LLM_NORM_RMS, il);
+                Qcur = ggml_mul_mat(ctx0, layer.wq_b, Qcur);
+            }
 
             // Step 2: KV compression
             // kv_cmpr_pe = kv_a_proj_with_mqa(hidden_states) -> [kv_lora_rank + qk_rope_head_dim, n_tokens]
