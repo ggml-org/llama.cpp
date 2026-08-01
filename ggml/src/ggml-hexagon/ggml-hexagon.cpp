@@ -64,7 +64,7 @@ using uintvec = std::vector<unsigned int>;
 using u32vec  = std::vector<uint32_t>;
 
 #define GGML_HEXAGON_MAX_SESSIONS          16
-#define GGML_HEXAGON_GRAPH_FLUSH_THRESHOLD 4
+#define GGML_HEXAGON_GRAPH_FLUSH_THRESHOLD 16
 
 #define GGML_HEXAGON_TOKEN_BUFFER_SIZE     8192
 #define GGML_HEXAGON_TOKEN_SLOT_SIZE       128
@@ -331,6 +331,7 @@ struct ggml_hexagon_session {
     ggml_hexagon_opqueue* op_queue;
 
     std::unordered_map<int, std::unique_ptr<ggml_hexagon_shared_buffer>> cloned_buffers;
+    std::unordered_set<ggml_hexagon_session *>                           sync_peers;
 
     ggml_backend_buffer_type buffer_type        = {};
     ggml_backend_buffer_type host_buffer_type   = {};
@@ -368,6 +369,19 @@ struct ggml_hexagon_session {
     void     wait_event(uint64_t seq);
 
     bool clone_buffer(const ggml_hexagon_shared_buffer*);
+
+    void add_sync_peer(ggml_hexagon_session * peer) {
+        sync_peers.insert(peer);
+    }
+
+    void flush_sync_peers() {
+        if (sync_peers.empty()) return;
+
+        for (auto * peer : sync_peers) {
+            peer->flush_batch();
+        }
+        sync_peers.clear();
+    }
 };
 
 // ** backend buffers
@@ -1963,6 +1977,7 @@ void ggml_hexagon_session::flush_batch(size_t min_ops) {
 }
 
 void ggml_hexagon_session::flush(bool all) {
+    flush_sync_peers();
     flush_batch();
     flush_pending(all);
 }
@@ -2017,6 +2032,7 @@ void ggml_hexagon_session::enqueue_sync(const ggml_tensor * sync_tensor) {
 }
 
 void ggml_hexagon_session::wait_event(uint64_t seq) {
+    flush_sync_peers();
     HEX_VERBOSE("ggml-hex: %s opqueue-wait start: seq %llu, current rsp-seq %llu, pending %d\n",
                 this->name.c_str(), (unsigned long long)seq, (unsigned long long)op_queue->rsp_seq, (int)this->op_pending);
     while (op_queue->rsp_seq < seq && this->op_pending > 0) {
@@ -4423,6 +4439,8 @@ static bool ggml_hexagon_cpy_tensor_async_phys(ggml_backend_t backend_src, ggml_
 
     sess_src->enqueue_cpy(src, dst, &sync_tensor);
     sess_dst->enqueue_sync(&sync_tensor);
+
+    sess_dst->add_sync_peer(sess_src);
 
     return true;
 }
