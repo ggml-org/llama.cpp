@@ -512,7 +512,8 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         gqa_ratio_eff *= 2;
     }
 
-    if (top_k && Q->ne[0] == 512 && gqa_ratio % 16 == 0 && (amd_wmma_available(cc) || amd_mfma_available(cc))) {
+    const bool use_top_k = top_k && ((Q->ne[1] == 1 && K->ne[1] >= 4096) || K->ne[1] >= 8192);
+    if (use_top_k && Q->ne[0] == 512 && gqa_ratio % 16 == 0 && (amd_wmma_available(cc) || amd_mfma_available(cc))) {
         return BEST_FATTN_KERNEL_MMA_F16;
     }
 

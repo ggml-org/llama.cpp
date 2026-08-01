@@ -9968,12 +9968,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         test_cases.emplace_back(new test_flash_attn_ext(576, 512, 1, {128, 1}, kv, 1,    0, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     }
 
-    for (int kv : { 4096, 8192, 16384, 32768, 65536, 131072 }) {
+    for (int kv : { 1024, 1536, 2048, 3072, 4096, 8192, 16384, 32768, 65536, 131072 }) {
         test_cases.emplace_back(new test_flash_attn_ext(512, 512, 1, {128, 1}, kv, 1, 768, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
         test_cases.emplace_back(new test_flash_attn_ext(512, 512, 1, {128, 1}, kv, 1,   0, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     }
 
-    for (int kv : { 8192, 16384, 32768 }) {
+    for (int kv : { 2048, 3072, 4096, 8192, 16384, 32768 }) {
         test_cases.emplace_back(new test_flash_attn_ext(512, 512, 1, {128, 1}, kv, 512, 768, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
         test_cases.emplace_back(new test_flash_attn_ext(512, 512, 1, {128, 1}, kv, 512,   0, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     }
@@ -10049,6 +10049,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
                 test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {cols, nrows, 1, 1}, k));
             }
         }
+    }
+    for (auto cols : {2048, 8192, 32768, 131072}) {
+        test_cases.emplace_back(new test_top_k(GGML_TYPE_F32, {cols, 1, 1, 1}, 512));
     }
 
     for (auto nrows : {1, 4, 8, 16}) {
