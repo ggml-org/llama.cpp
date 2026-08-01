@@ -12,7 +12,11 @@
 // `set_dequant_dir()` (typically from the `--tessera-dequant-dir` CLI flag
 // or the `LLAMA_TILE640_DEBUG_DEQUANT_DIR` environment variable).
 //
-// Concurrency: not thread-safe. One matmul kernel at a time per process.
+// Concurrency: thread-safe. A recursive mutex serializes the per-tensor
+// open/write_rows/close sequence, so concurrent backend callbacks (e.g.
+// Metal addCompletedHandler blocks firing in parallel across multiple
+// Tile640 matmuls) cannot interleave their writes on the file-static
+// SidecarStream state. Each public entry point acquires the lock.
 //
 // The on-disk format is described in `DEQUANT_FILE_LAYOUT_V3` below.
 //
