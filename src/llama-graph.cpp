@@ -1208,7 +1208,12 @@ void llm_graph_result::reset() {
     inputs.clear();
     fused_nodes.clear();
 
-    buf_compute_meta.resize(ggml_tensor_overhead()*max_nodes + ggml_graph_overhead_custom(max_nodes, false));
+    // Keep a small metadata margin for large/reused DeepSeek graphs. The
+    // graph node estimate is intentionally conservative, but view/reshape
+    // construction can still require a handful of extra tensor objects.
+    constexpr int64_t meta_margin_objects = 64;
+    buf_compute_meta.resize(ggml_tensor_overhead()*(max_nodes + meta_margin_objects) +
+            ggml_graph_overhead_custom(max_nodes, false));
 
     ggml_init_params params = {
         /*.mem_size   =*/ buf_compute_meta.size(),
