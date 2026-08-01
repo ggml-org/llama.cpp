@@ -202,6 +202,17 @@ extern "C" {
         LLAMA_SPLIT_MODE_TENSOR = 3,
     };
 
+    enum llama_load_mode {
+        LLAMA_LOAD_MODE_NONE       = 0, // no special loading mode
+        LLAMA_LOAD_MODE_MMAP       = 1, // memory map the model
+        LLAMA_LOAD_MODE_MLOCK      = 2, // force system to keep model in RAM rather than swapping or compressing
+        LLAMA_LOAD_MODE_MMAP_MLOCK = 3, // mmap + force system to keep model in RAM rather than swapping or compressing
+        LLAMA_LOAD_MODE_DIRECT_IO  = 4, // use direct I/O if available
+    };
+
+    LLAMA_API const char * llama_load_mode_name(enum llama_load_mode load_mode);
+    LLAMA_API enum llama_load_mode llama_load_mode_from_str(const char * str);
+
     enum llama_context_type {
         LLAMA_CONTEXT_TYPE_DEFAULT = 0,
         LLAMA_CONTEXT_TYPE_MTP     = 1,
@@ -301,6 +312,7 @@ extern "C" {
 
         int32_t n_gpu_layers; // number of layers to store in VRAM, a negative value means all layers
         enum llama_split_mode split_mode; // how to split the model across multiple GPUs
+        enum llama_load_mode  load_mode;  // how to load the model
 
         // the GPU that is used for the entire model when split_mode is LLAMA_SPLIT_MODE_NONE
         int32_t main_gpu;
@@ -321,13 +333,11 @@ extern "C" {
 
         // Keep the booleans together to avoid misalignment during copy-by-value.
         bool vocab_only;      // only load the vocabulary, no weights
-        bool use_mmap;        // use mmap if possible
-        bool use_direct_io;   // use direct io, takes precedence over use_mmap when supported
-        bool use_mlock;       // force system to keep model in RAM
         bool check_tensors;   // validate model tensor data
         bool use_extra_bufts; // use extra buffer types (used for weight repacking)
         bool no_host;         // bypass host buffer allowing extra buffers to be used
         bool no_alloc;        // only load metadata and simulate memory allocations
+        bool load_mtp;        // whether to load MTP layers
     };
 
     struct llama_sampler_seq_config {
@@ -1092,6 +1102,9 @@ extern "C" {
     LLAMA_API bool llama_vocab_get_add_bos(const struct llama_vocab * vocab);
     LLAMA_API bool llama_vocab_get_add_eos(const struct llama_vocab * vocab);
     LLAMA_API bool llama_vocab_get_add_sep(const struct llama_vocab * vocab);
+
+    // model-specific suppress tokens (gguf key: tokenizer.ggml.suppress_tokens)
+    LLAMA_API const llama_token * llama_vocab_get_suppress_tokens(const struct llama_vocab * vocab, int32_t * n_suppress_tokens);
 
     LLAMA_API llama_token llama_vocab_fim_pre(const struct llama_vocab * vocab);
     LLAMA_API llama_token llama_vocab_fim_suf(const struct llama_vocab * vocab);

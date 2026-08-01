@@ -24,6 +24,9 @@
 #define N_R0_Q1_0 8
 #define N_SG_Q1_0 2
 
+#define N_R0_Q2_0 8
+#define N_SG_Q2_0 2
+
 #define N_R0_Q4_0 4
 #define N_SG_Q4_0 2
 
@@ -614,6 +617,11 @@ typedef struct {
 } ggml_metal_kargs_col2im_1d;
 
 typedef struct {
+    int32_t T;
+    int32_t C;
+} ggml_metal_kargs_snake;
+
+typedef struct {
     int32_t  IC;
     int32_t  IH;
     int32_t  IW;
@@ -1148,6 +1156,10 @@ typedef struct {
     int32_t  top_k;
     int32_t  len;
 } ggml_metal_kargs_argsort_merge;
+
+typedef struct {
+    int32_t nrows;
+} ggml_metal_kargs_fwht;
 
 typedef struct {
     int64_t  ne0;

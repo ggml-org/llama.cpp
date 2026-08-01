@@ -109,6 +109,15 @@ static void assert_contains(const std::string & haystack, const std::string & ne
     }
 }
 
+static void assert_not_contains(const std::string & haystack, const std::string & needle) {
+    if (haystack.find(needle) != std::string::npos) {
+        LOG_ERR("Expected NOT to contain: %s\n", needle.c_str());
+        LOG_ERR("Actual: %s\n", haystack.c_str());
+        common_log_flush(common_log_main());
+        throw std::runtime_error("Test failed");
+    }
+}
+
 static void assert_ends_with(const std::string & str, const std::string & suffix) {
     if (str.size() < suffix.size() ||
         str.compare(str.size() - suffix.size(), suffix.size(), suffix) != 0) {
@@ -721,6 +730,71 @@ static common_chat_tool imaginary_number_tool{
     })",
 };
 
+static common_chat_tool nested_args_tool{
+    /* .name = */ "nested_args",
+    /* .description = */ "Tool with nested array arguments",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "tags": {
+                "type": "array",
+                "items": { "type": "string" }
+            },
+            "entries": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": { "type": "integer" },
+                        "label": { "type": "string" }
+                    },
+                    "required": ["id", "label"]
+                }
+            }
+        },
+        "required": ["tags", "entries"]
+    })",
+};
+
+static common_chat_tool union_args_tool{
+    /* .name = */ "union_args",
+    /* .description = */ "Tool with union arguments",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "filter": {
+                "anyOf": [
+                    { "type": "array", "items": { "type": "string" } },
+                    {
+                        "type": "object",
+                        "properties": {
+                            "field": { "type": "string" },
+                            "op": { "type": "string" }
+                        },
+                        "required": ["field", "op"]
+                    }
+                ]
+            },
+            "label": {
+                "oneOf": [
+                    { "type": "string" },
+                    { "type": "object", "properties": { "text": { "type": "string" } } }
+                ]
+            },
+            "limit": {
+                "oneOf": [
+                    { "type": "integer" },
+                    {
+                        "type": "object",
+                        "properties": { "max": { "type": "integer" } },
+                        "required": ["max"]
+                    }
+                ]
+            }
+        }
+    })",
+};
+
 static common_chat_tool nullable_string_tool{
     /* .name = */ "set_nullable_str",
     /* .description = */ "Set a nullable string value",
@@ -1135,7 +1209,7 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
         // budget sampler inhibits grammar application while inside thinking blocks —
         // triggers inside <think>...</think> are suppressed.
         bool use_reasoning_budget_path = false;
-        if (parser.params_.grammar_lazy && !parser.params_.thinking_end_tag.empty()) {
+        if (parser.params_.grammar_lazy && !parser.params_.thinking_end_tags.empty()) {
             use_reasoning_budget_path = true;
             for (const auto & trigger : parser.params_.grammar_triggers) {
                 if (trigger.type != COMMON_GRAMMAR_TRIGGER_TYPE_WORD) {
@@ -1153,7 +1227,7 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
             // Walk through full_input tracking thinking state; only match triggers
             // when outside thinking blocks.
             const auto & think_start = parser.params_.thinking_start_tag;
-            const auto & think_end   = parser.params_.thinking_end_tag;
+            const auto & think_ends  = parser.params_.thinking_end_tags;
 
             bool in_thinking = false;
             for (size_t i = 0; i < full_input.size(); ++i) {
@@ -1163,12 +1237,14 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
                     i += think_start.size() - 1;
                     continue;
                 }
-                if (in_thinking && full_input.compare(i, think_end.size(), think_end) == 0) {
-                    in_thinking = false;
-                    i += think_end.size() - 1;
-                    continue;
-                }
                 if (in_thinking) {
+                    for (const auto & think_end : think_ends) {
+                        if (full_input.compare(i, think_end.size(), think_end) == 0) {
+                            in_thinking = false;
+                            i += think_end.size() - 1;
+                            break;
+                        }
+                    }
                     continue;
                 }
                 // Outside thinking — check if any trigger word starts here
@@ -2840,6 +2916,17 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect(message_assist)
             .run();
 
+        // JSON output schema
+        tst.test(
+                "I need to output the invoice details in JSON<|END_THINKING|>"
+                "<|START_TEXT|>{\"amount\": 123.45, \"date\": \"2025-12-03\"}<|END_TEXT|>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .json_schema(invoice_schema)
+            .tools({ special_function_tool })
+            .expect_reasoning("I need to output the invoice details in JSON")
+            .expect_content(R"({"amount": 123.45, "date": "2025-12-03"})")
+                .run();
+
         // Single tool call with reasoning.
         tst.test(
                "I'm\nthinking<|END_THINKING|>"
@@ -4016,6 +4103,146 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
     }
 
+    // DeepSeek V4 tests - same DSML markup as V3.2, but the tool call block is named
+    // "tool_calls" and the non-thinking generation prompt ends in a bare </think>
+    // instead of an empty <think></think> pair.
+    {
+        auto tst = peg_tester("models/templates/deepseek-ai-DeepSeek-V4.jinja", detailed_debug);
+
+        // Pure content (non-thinking mode; generation prompt ends with </think>)
+        tst.test("Hello, world!\nWhat's up?")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist)
+            .run();
+
+        // Thinking + content
+        tst.test("I'm\nthinking</think>Hello, world!\nWhat's up?")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist_thoughts)
+            .run();
+
+        // Thinking + tool call (single, string param)
+        tst.test(
+               "Let me check the time</think>\n\n"
+               "<｜DSML｜tool_calls>\n"
+               "<｜DSML｜invoke name=\"get_time\">\n"
+               "<｜DSML｜parameter name=\"city\" string=\"true\">Tokyo</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜tool_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .expect(message_with_tool_calls_and_reasoning("get_time", R"({"city": "Tokyo"})", "Let me check the time"))
+            .run();
+
+        // Tool call without reasoning (non-thinking mode), integer param (string="false")
+        tst.test(
+               "<｜DSML｜tool_calls>\n"
+               "<｜DSML｜invoke name=\"special_function\">\n"
+               "<｜DSML｜parameter name=\"arg1\" string=\"false\">1</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜tool_calls>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+
+        // Multiple parallel tool calls with reasoning
+        tst.test(
+               "Calling both</think>\n\n"
+               "<｜DSML｜tool_calls>\n"
+               "<｜DSML｜invoke name=\"get_time\">\n"
+               "<｜DSML｜parameter name=\"city\" string=\"true\">Paris</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "<｜DSML｜invoke name=\"get_weather\">\n"
+               "<｜DSML｜parameter name=\"city\" string=\"true\">Paris</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜tool_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .parallel_tool_calls(true)
+            .tools({ get_time_tool, get_weather_tool })
+            .expect(message_with_reasoning_content_and_multiple_tool_calls(
+                "Calling both", "",
+                { { "get_time", R"({"city": "Paris"})" }, { "get_weather", R"({"city": "Paris"})" } }))
+            .run();
+
+        // Tool call with content before tool calls
+        tst.test(
+               "Thinking about it</think>"
+               "Let me call the function.\n\n"
+               "<｜DSML｜tool_calls>\n"
+               "<｜DSML｜invoke name=\"special_function\">\n"
+               "<｜DSML｜parameter name=\"arg1\" string=\"false\">1</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜tool_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect_reasoning("Thinking about it")
+            .expect_content("Let me call the function.")
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", {} },
+            })
+            .run();
+
+        // Tool call with multiple params (mixed types)
+        tst.test(
+               "Multi-arg call</think>\n\n"
+               "<｜DSML｜tool_calls>\n"
+               "<｜DSML｜invoke name=\"magic_int\">\n"
+               "<｜DSML｜parameter name=\"ref\" string=\"false\">42</｜DSML｜parameter>\n"
+               "<｜DSML｜parameter name=\"name\" string=\"true\">foo bar</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜tool_calls>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ magic_int_tool })
+            .expect_reasoning("Multi-arg call")
+            .expect_tool_calls({
+                { "magic_int", R"({"ref": 42, "name": "foo bar"})", {} },
+            })
+            .run();
+
+        // Continuation tests
+        tst.test("world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .enable_thinking(true)
+            .messages({ message_user, message_assist_prefill_content })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_CONTENT)
+            .expect_reasoning("I'm thinking")
+            .expect_content("Hello, world!\nWhat's up?")
+            .run();
+
+        tst.test(" thinking</think>Hello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .enable_thinking(true)
+            .messages({ message_user, message_assist_prefill_reasoning })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_REASONING)
+            .expect_reasoning("I'm thinking")
+            .expect_content("Hello, world!\nWhat's up?")
+            .run();
+
+        tst.test(
+            "Let me check the time\n\n"
+            "<｜DSML｜tool_calls>\n"
+            "<｜DSML｜invoke name=\"get_time\">\n"
+            "<｜DSML｜parameter name=\"city\" string=\"true\">Tokyo</｜DSML｜parameter>\n"
+            "</｜DSML｜invoke>\n"
+            "</｜DSML｜tool_calls>") // no </think> after the TC close because the grammar will immediately constrain it to end
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .expect_reasoning("Let me check the time")
+            .expect_tool_calls({ { "get_time", R"({"city": "Tokyo"})", {} } })
+            .run();
+    }
+
     // GLM-4.6 tests - format: <tool_call>function_name\n<arg_key>...</arg_key>\n<arg_value>...</arg_value>\n</tool_call>
     {
         auto tst = peg_tester("models/templates/GLM-4.6.jinja", detailed_debug);
@@ -4702,13 +4929,384 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
     }
 
+    // MiniMax-M3 tests - namespaced XML invoke format, the parameter name is the tag
+    // Format:
+    //   ]<]minimax[>[<tool_call>
+    //   ]<]minimax[>[<invoke name="get_time">]<]minimax[>[<city>Tokyo]<]minimax[>[</city>]<]minimax[>[</invoke>
+    //   ]<]minimax[>[</tool_call>
+    // Reasoning uses <mm:think>...</mm:think>. The generation prompt is only "]~b]ai\n", so the model
+    // opens the thinking block itself; a turn without reasoning is prefixed with a bare </mm:think>.
+    {
+        auto tst = peg_tester("models/templates/MiniMax-M3.jinja", detailed_debug);
+
+        // Content only (bare </mm:think> prefix)
+        tst.test("</mm:think>Hello, world!\nWhat's up?")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist)
+            .expect_reconstruction()
+            .run();
+
+        // Thinking + content
+        tst.test("<mm:think>I'm\nthinking</mm:think>Hello, world!\nWhat's up?")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect(message_assist_thoughts)
+            .expect_reconstruction()
+            .run();
+
+        // Thinking + tool call (single, string param)
+        tst.test(
+               "<mm:think>Let me check the time</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"get_time\">"
+               "]<]minimax[>[<city>Tokyo]<]minimax[>[</city>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ get_time_tool })
+            .expect(message_with_tool_calls_and_reasoning("get_time", R"({"city": "Tokyo"})", "Let me check the time"))
+            .expect_reconstruction()
+            .run();
+
+        // Tool call without reasoning, integer param
+        tst.test(
+               "</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"special_function\">"
+               "]<]minimax[>[<arg1>1]<]minimax[>[</arg1>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .expect_reconstruction()
+            .run();
+
+        // Tool call with no parameters
+        tst.test(
+               "<mm:think>Let's call a tool:</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"empty_args\">"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ empty_args_tool })
+            .expect(message_with_reasoning_and_tool_call("Let's call a tool:", "empty_args", "{}"))
+            .expect_reconstruction()
+            .run();
+
+        // Multiple parallel tool calls in one block
+        tst.test(
+               "<mm:think>Calling both</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"get_time\">"
+               "]<]minimax[>[<city>Paris]<]minimax[>[</city>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[<invoke name=\"get_weather\">"
+               "]<]minimax[>[<city>Paris]<]minimax[>[</city>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .parallel_tool_calls(true)
+            .tools({ get_time_tool, get_weather_tool })
+            .expect(message_with_reasoning_content_and_multiple_tool_calls(
+                "Calling both", "",
+                { { "get_time", R"({"city": "Paris"})" }, { "get_weather", R"({"city": "Paris"})" } }))
+            .expect_reconstruction()
+            .run();
+
+        // Content before the tool call block
+        tst.test(
+               "<mm:think>Thinking about it</mm:think>"
+               "Let me call the function."
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"special_function\">"
+               "]<]minimax[>[<arg1>1]<]minimax[>[</arg1>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect_reasoning("Thinking about it")
+            .expect_content("Let me call the function.")
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // Negative number
+        tst.test(
+               "<mm:think>Test negative</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"magic_int\">"
+               "]<]minimax[>[<ref>-14]<]minimax[>[</ref>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ magic_int_tool })
+            .expect_reasoning("Test negative")
+            .expect_tool_calls({
+                { "magic_int", R"({"ref": -14})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // Decimal number
+        tst.test(
+               "<mm:think>Test decimal</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"amount\">"
+               "]<]minimax[>[<orig>3.14]<]minimax[>[</orig>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ amount_tool })
+            .expect_reasoning("Test decimal")
+            .expect_tool_calls({
+                { "amount", R"({"orig": 3.14})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // Boolean
+        tst.test(
+               "<mm:think>Test boolean</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"toggle\">"
+               "]<]minimax[>[<enabled>true]<]minimax[>[</enabled>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ toggle_tool })
+            .expect_reasoning("Test boolean")
+            .expect_tool_calls({
+                { "toggle", R"({"enabled": true})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // Multiple params of mixed types (required int first, then optional string)
+        tst.test(
+               "<mm:think>Multi-arg call</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"magic_int\">"
+               "]<]minimax[>[<ref>42]<]minimax[>[</ref>"
+               "]<]minimax[>[<name>foo bar]<]minimax[>[</name>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ magic_int_tool })
+            .expect_reasoning("Multi-arg call")
+            .expect_tool_calls({
+                { "magic_int", R"({"ref": 42, "name": "foo bar"})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // Nested object param, expanded into one element per key
+        tst.test(
+               "<mm:think>Nested object</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"imaginary_number\">"
+               "]<]minimax[>[<number>"
+               "]<]minimax[>[<real>1.5]<]minimax[>[</real>"
+               "]<]minimax[>[<imaginary>-2.5]<]minimax[>[</imaginary>"
+               "]<]minimax[>[</number>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ imaginary_number_tool })
+            .expect_reasoning("Nested object")
+            .expect_tool_calls({
+                { "imaginary_number", R"({"number": {"real": 1.5, "imaginary": -2.5}})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // Array params, expanded into <item> elements (of scalars and of objects)
+        tst.test(
+               "<mm:think>Nested arrays</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"nested_args\">"
+               "]<]minimax[>[<tags>"
+               "]<]minimax[>[<item>alpha]<]minimax[>[</item>"
+               "]<]minimax[>[<item>beta]<]minimax[>[</item>"
+               "]<]minimax[>[</tags>"
+               "]<]minimax[>[<entries>"
+               "]<]minimax[>[<item>"
+               "]<]minimax[>[<id>1]<]minimax[>[</id>"
+               "]<]minimax[>[<label>one]<]minimax[>[</label>"
+               "]<]minimax[>[</item>"
+               "]<]minimax[>[</entries>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ nested_args_tool })
+            .expect_reasoning("Nested arrays")
+            .expect_tool_calls({
+                { "nested_args", R"({"tags": ["alpha", "beta"], "entries": [{"id": 1, "label": "one"}]})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // Union params (anyOf/oneOf), expanded as a choice of the alternatives
+        tst.test(
+               "<mm:think>Union array</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"union_args\">"
+               "]<]minimax[>[<filter>"
+               "]<]minimax[>[<item>alpha]<]minimax[>[</item>"
+               "]<]minimax[>[<item>beta]<]minimax[>[</item>"
+               "]<]minimax[>[</filter>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ union_args_tool })
+            .expect_reasoning("Union array")
+            .expect_tool_calls({
+                { "union_args", R"({"filter": ["alpha", "beta"]})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // oneOf between a scalar and an object
+        tst.test(
+               "<mm:think>Union scalar</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"union_args\">"
+               "]<]minimax[>[<limit>5]<]minimax[>[</limit>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ union_args_tool })
+            .expect_reasoning("Union scalar")
+            .expect_tool_calls({
+                { "union_args", R"({"limit": 5})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        tst.test(
+               "<mm:think>Union nested</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"union_args\">"
+               "]<]minimax[>[<limit>"
+               "]<]minimax[>[<max>10]<]minimax[>[</max>"
+               "]<]minimax[>[</limit>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ union_args_tool })
+            .expect_reasoning("Union nested")
+            .expect_tool_calls({
+                { "union_args", R"({"limit": {"max": 10}})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // A union with a string alternative is a string
+        tst.test(
+               "<mm:think>Union string</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"union_args\">"
+               "]<]minimax[>[<label>hi]<]minimax[>[</label>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ union_args_tool })
+            .expect_reasoning("Union string")
+            .expect_tool_calls({
+                { "union_args", R"({"label": "hi"})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // ... even when the value looks structured
+        tst.test(
+               "<mm:think>Union string</mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"union_args\">"
+               "]<]minimax[>[<label>"
+               "]<]minimax[>[<text>hi]<]minimax[>[</text>"
+               "]<]minimax[>[</label>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ union_args_tool })
+            .expect_reasoning("Union string")
+            .expect_tool_calls({
+                { "union_args", R"({"label": "]<]minimax[>[<text>hi]<]minimax[>[</text>"})", {} },
+            })
+            .expect_reconstruction()
+            .run();
+
+        // Edge case: empty reasoning followed by a tool call
+        tst.test(
+               "<mm:think></mm:think>"
+               "]<]minimax[>[<tool_call>\n"
+               "]<]minimax[>[<invoke name=\"get_time\">"
+               "]<]minimax[>[<city>XYZCITY]<]minimax[>[</city>"
+               "]<]minimax[>[</invoke>\n"
+               "]<]minimax[>[</tool_call>")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ get_time_tool })
+            .expect(message_with_tool_calls("get_time", R"({"city": "XYZCITY"})"))
+            .run();
+
+        // Continuation tests
+        tst.test("world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
+            .messages({ message_user, message_assist_prefill_content })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_CONTENT)
+            .expect_reasoning("I'm thinking")
+            .expect_content("Hello, world!\nWhat's up?")
+            .run();
+
+        tst.test(" thinking</mm:think>Hello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
+            .messages({ message_user, message_assist_prefill_reasoning })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_REASONING)
+            .expect_reasoning("I'm thinking")
+            .expect_content("Hello, world!\nWhat's up?")
+            .run();
+    }
+
     // NVIDIA-Nemotron-Nano-v2 tests - <TOOLCALL>...</TOOLCALL> format
     // Format: <TOOLCALL>[{"name": "func", "arguments": {...}}]</TOOLCALL>
     {
         auto tst = peg_tester("models/templates/NVIDIA-Nemotron-Nano-v2.jinja", detailed_debug);
-        tst.test("<TOOLCALL>[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]</TOOLCALL>")
+        tst.test("I'm\nthinking\n</think>\n<TOOLCALL>[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]</TOOLCALL>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .tools({ special_function_tool })
-            .expect(message_assist_call)
+            .expect(message_assist_call_thoughts)
+            .run();
+
+        tst.test("I'm\nthinking\n</think>\n\n<TOOLCALL>[{\"name\": \"special_function\", \"arguments\": {\"arg1\": 1}}]</TOOLCALL>\n")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ special_function_tool })
+            .expect(message_assist_call_thoughts)
             .run();
 
         // Continuation tests
@@ -5911,6 +6509,209 @@ static void test_developer_role_to_system_workaround() {
     }
 }
 
+// Verify reasoning-trace retention rules in the DeepSeek-V4 template:
+// all traces are retained unless drop_thinking is true AND the conversation
+// has no tool calls, in which case only the last (after-final-user) trace is
+// kept and earlier ones are dropped.
+static void test_deepseek_v4_thinking_retention() {
+    LOG_DBG("%s\n", __func__);
+
+    auto tmpls = read_templates("models/templates/deepseek-ai-DeepSeek-V4.jinja");
+
+    common_chat_msg user_q1; user_q1.role = "user"; user_q1.content = "Question 1";
+    common_chat_msg user_q2; user_q2.role = "user"; user_q2.content = "Question 2";
+    common_chat_msg asst_a1 = simple_assist_msg("Answer 1", "thinking A1");
+    common_chat_msg asst_a2 = simple_assist_msg("Answer 2", "thinking A2");
+
+    common_chat_msg tool_assist = message_with_tool_calls("special_function", "{\"arg1\": 1}");
+    common_chat_msg tool_result; tool_result.role = "tool";
+    tool_result.tool_name = "special_function"; tool_result.tool_call_id = "0"; tool_result.content = "result";
+
+    // The template uses U+FF5C as the role separator and literal think tags
+    // for the reasoning block.
+    const std::string asst_marker   = "<\xef\xbd\x9c" "Assistant" "\xef\xbd\x9c>";
+    // Built via concatenation so the thinking tokens are not interpreted by
+    // tooling processing this source file.
+    const std::string think_start   = "<" "think" ">";
+    const std::string think_end     = "</" "think" ">";
+
+    const std::string think_a1      = asst_marker + think_start + "thinking A1" + think_end;
+    const std::string think_a2      = asst_marker + think_start + "thinking A2" + think_end;
+    const std::string asst_no_think = asst_marker + think_end;
+
+    auto render = [&](const std::vector<common_chat_msg> & messages, bool drop_thinking) {
+        common_chat_templates_inputs inputs;
+        inputs.messages = messages;
+        inputs.add_generation_prompt = false;
+        inputs.chat_template_kwargs["thinking"]     = "true";
+        inputs.chat_template_kwargs["drop_thinking"] = drop_thinking ? "true" : "false";
+        return common_chat_templates_apply(tmpls.get(), inputs).prompt;
+    };
+
+    // No tools, drop_thinking=false: all reasoning is retained.
+    {
+        auto prompt = render({ user_q1, asst_a1, user_q2, asst_a2 }, /* drop_thinking = */ false);
+        assert_contains(prompt, think_a1);
+        assert_contains(prompt, think_a2);
+    }
+
+    // No tools, drop_thinking=true: only the last reasoning trace is kept,
+    // earlier ones are dropped (the assistant block emits just the end token).
+    {
+        auto prompt = render({ user_q1, asst_a1, user_q2, asst_a2 }, /* drop_thinking = */ true);
+        assert_not_contains(prompt, think_a1);
+        assert_contains(prompt, think_a2);
+        // The dropped assistant turn still opens with the marker + bare end token.
+        assert_contains(prompt, asst_no_think + "Answer 1");
+    }
+
+    // Single assistant turn, drop_thinking=true: the only trace is the last
+    // one, so it must be retained even with drop_thinking set.
+    {
+        auto prompt = render({ user_q1, asst_a1 }, /* drop_thinking = */ true);
+        assert_contains(prompt, think_a1);
+    }
+
+    // Single assistant turn, drop_thinking=false: reasoning is retained.
+    {
+        auto prompt = render({ user_q1, asst_a1 }, /* drop_thinking = */ false);
+        assert_contains(prompt, think_a1);
+    }
+
+    // With tool calls, drop_thinking=true: tool presence forces all reasoning
+    // to be retained, including the pre-tool-call trace.
+    {
+        auto prompt = render({ user_q1, asst_a1, user_q2, tool_assist, tool_result, asst_a2 },
+                             /* drop_thinking = */ true);
+        assert_contains(prompt, think_a1);
+        assert_contains(prompt, think_a2);
+    }
+
+    // With tool calls, drop_thinking=false: all reasoning retained.
+    {
+        auto prompt = render({ user_q1, asst_a1, user_q2, tool_assist, tool_result, asst_a2 },
+                             /* drop_thinking = */ false);
+        assert_contains(prompt, think_a1);
+        assert_contains(prompt, think_a2);
+    }
+}
+
+// Verify that consecutive tool results are rendered in the tool call order of the
+// preceding assistant message (matched by tool call id), as required by the reference
+// DeepSeek-V4 implementation.
+static void test_deepseek_v4_tool_result_ordering() {
+    LOG_DBG("%s\n", __func__);
+
+    auto tmpls = read_templates("models/templates/deepseek-ai-DeepSeek-V4.jinja");
+
+    common_chat_msg user_q; user_q.role = "user"; user_q.content = "Question";
+
+    common_chat_msg assist_calls;
+    assist_calls.role = "assistant";
+    assist_calls.tool_calls.push_back({ "get_time",    "{\"city\": \"Paris\"}", "call_1" });
+    assist_calls.tool_calls.push_back({ "get_weather", "{\"city\": \"Paris\"}", "call_2" });
+
+    common_chat_msg time_result; time_result.role = "tool";
+    time_result.tool_name = "get_time"; time_result.tool_call_id = "call_1"; time_result.content = "12:00";
+    common_chat_msg weather_result; weather_result.role = "tool";
+    weather_result.tool_name = "get_weather"; weather_result.tool_call_id = "call_2"; weather_result.content = "sunny";
+
+    auto render = [&](const std::vector<common_chat_msg> & messages) {
+        common_chat_templates_inputs inputs;
+        inputs.messages = messages;
+        inputs.add_generation_prompt = false;
+        return common_chat_templates_apply(tmpls.get(), inputs).prompt;
+    };
+
+    // Results sent out of order are reordered to match the tool call order.
+    {
+        auto prompt = render({ user_q, assist_calls, weather_result, time_result });
+        assert_contains(prompt, "<tool_result>12:00</tool_result>\n\n<tool_result>sunny</tool_result>");
+    }
+
+    // Results already in call order stay put.
+    {
+        auto prompt = render({ user_q, assist_calls, time_result, weather_result });
+        assert_contains(prompt, "<tool_result>12:00</tool_result>\n\n<tool_result>sunny</tool_result>");
+    }
+
+    // Without tool call ids there is nothing to match against; order is preserved.
+    {
+        auto no_id_calls = assist_calls;
+        no_id_calls.tool_calls[0].id = "";
+        no_id_calls.tool_calls[1].id = "";
+        auto no_id_weather = weather_result; no_id_weather.tool_call_id = "";
+        auto no_id_time    = time_result;    no_id_time.tool_call_id = "";
+        auto prompt = render({ user_q, no_id_calls, no_id_weather, no_id_time });
+        assert_contains(prompt, "<tool_result>sunny</tool_result>\n\n<tool_result>12:00</tool_result>");
+    }
+}
+
+static void test_reasoning_budget_tokens_per_request() {
+    LOG_DBG("%s\n", __func__);
+    // Use Qwen3 template which has <think>...</think> reasoning markers.
+    // The autoparser detects them and sets thinking_start/end_tag, which enables
+    // the reasoning-budget code path in oaicompat_chat_params_parse.
+    auto tmpls = read_templates("models/templates/Qwen-Qwen3-0.6B.jinja");
+
+    server_chat_params opt;
+    opt.tmpls            = std::move(tmpls);
+    opt.use_jinja        = true;
+    opt.enable_thinking  = true;
+    opt.reasoning_budget = -1;
+    opt.reasoning_format = COMMON_REASONING_FORMAT_NONE;
+
+    // Body with per-request reasoning_budget_tokens=0 (suppress thinking).
+    json body = {
+        {"messages", json::array({json{{"role", "user"}, {"content", "hello"}}})},
+        {"reasoning_budget_tokens", 0},
+    };
+    std::vector<raw_buffer> out_files;
+    auto llama_params = oaicompat_chat_params_parse(body, opt, out_files);
+
+    // The per-request value must win over the server default (-1).
+    if (!llama_params.contains("reasoning_budget_tokens")) {
+        throw std::runtime_error("reasoning_budget_tokens missing from llama_params (thinking_end_tag may be empty for this template)");
+    }
+    int got = llama_params["reasoning_budget_tokens"].get<int>();
+    if (got != 0) {
+        throw std::runtime_error(std::string("Expected reasoning_budget_tokens=0, got ") + std::to_string(got));
+    }
+}
+
+static void test_reasoning_budget_message_per_request() {
+    LOG_DBG("%s\n", __func__);
+    // Same code path as test_reasoning_budget_tokens_per_request: the Qwen3 template's
+    // <think>...</think> markers enable the reasoning-budget block in oaicompat_chat_params_parse.
+    auto tmpls = read_templates("models/templates/Qwen-Qwen3-0.6B.jinja");
+
+    server_chat_params opt;
+    opt.tmpls                   = std::move(tmpls);
+    opt.use_jinja               = true;
+    opt.enable_thinking         = true;
+    opt.reasoning_budget        = -1;
+    opt.reasoning_format        = COMMON_REASONING_FORMAT_NONE;
+    opt.reasoning_budget_message = "server default";
+
+    // Body with a per-request reasoning_budget_message override.
+    const std::string per_request_message = "per-request message";
+    json body = {
+        {"messages", json::array({json{{"role", "user"}, {"content", "hello"}}})},
+        {"reasoning_budget_message", per_request_message},
+    };
+    std::vector<raw_buffer> out_files;
+    auto llama_params = oaicompat_chat_params_parse(body, opt, out_files);
+
+    // The per-request value must win over the server default.
+    if (!llama_params.contains("reasoning_budget_message")) {
+        throw std::runtime_error("reasoning_budget_message missing from llama_params (thinking_end_tag may be empty for this template)");
+    }
+    std::string got = llama_params["reasoning_budget_message"].get<std::string>();
+    if (got != per_request_message) {
+        throw std::runtime_error("Expected reasoning_budget_message='" + per_request_message + "', got '" + got + "'");
+    }
+}
+
 static void test_msg_diffs_compute() {
     LOG_DBG("%s\n", __func__);
     {
@@ -6067,7 +6868,11 @@ int main(int argc, char ** argv) {
         test_tools_oaicompat_json_conversion();
         test_convert_responses_to_chatcmpl();
         test_developer_role_to_system_workaround();
+        test_deepseek_v4_thinking_retention();
+        test_deepseek_v4_tool_result_ordering();
         test_template_generation_prompt();
+        test_reasoning_budget_tokens_per_request();
+        test_reasoning_budget_message_per_request();
         test_template_output_peg_parsers(detailed_debug);
         std::cout << "\n[chat] All tests passed!" << '\n';
     }

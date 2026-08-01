@@ -1979,6 +1979,46 @@ int ggml_metal_op_pool_1d(ggml_metal_op_t ctx, int idx) {
     return 1;
 }
 
+// supported FWHT sizes, must stay in sync with the
+// kernel_fwht_f32_<N> templates in ggml-metal.metal
+static bool ggml_metal_fwht_supported_size(int64_t n) {
+    return n == 64 || n == 128 || n == 256 || n == 512;
+}
+
+int ggml_metal_op_fwht(ggml_metal_op_t ctx, int idx) {
+    ggml_tensor * op = ctx->node(idx);
+
+    ggml_metal_library_t lib = ctx->lib;
+    ggml_metal_encoder_t enc = ctx->enc;
+
+    ggml_tensor * src1 = op->src[1];
+
+    const int64_t n = src1->ne[0];
+    const int64_t nrows = ggml_nrows(src1);
+
+    ggml_metal_kargs_fwht args = {
+        /*.nrows = */ (int32_t) nrows,
+    };
+
+    auto pipeline = ggml_metal_library_get_pipeline_fwht(lib, n);
+
+    ggml_metal_encoder_set_pipeline(enc, pipeline);
+    ggml_metal_encoder_set_bytes(enc, &args, sizeof(args), 0);
+    ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(src1), 1);
+    ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op), 2);
+
+    const int th_max = ggml_metal_pipeline_max_theads_per_threadgroup(pipeline);
+    const int simd_size = 32;
+
+    int sg_per_tg = 2;
+    sg_per_tg = std::min(sg_per_tg, th_max/simd_size);
+    sg_per_tg = std::max(sg_per_tg, 1);
+
+    const int64_t n_tg = (nrows + sg_per_tg - 1) / sg_per_tg;
+    ggml_metal_encoder_dispatch_threadgroups(enc, n_tg, 1, 1, 32*sg_per_tg, 1, 1);
+
+    return 1;
+}
 
 int ggml_metal_op_pool_2d(ggml_metal_op_t ctx, int idx) {
     ggml_tensor * op = ctx->node(idx);
@@ -2046,6 +2086,18 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
     ggml_metal_library_t lib = ctx->lib;
     ggml_metal_encoder_t enc = ctx->enc;
 
+    const int32_t hint = ggml_get_op_params_i32(op, 1);
+
+    if (hint == GGML_HINT_SRC0_IS_HADAMARD) {
+        if (op->src[1]->type == GGML_TYPE_F32 &&
+            op->type == GGML_TYPE_F32 &&
+            ggml_is_contiguous(op->src[1]) &&
+            ggml_is_contiguous(op) &&
+            ggml_are_same_shape(op->src[1], op) &&
+            ggml_metal_fwht_supported_size(op->src[1]->ne[0])) {
+            return ggml_metal_op_fwht(ctx, idx);
+        }
+    }
     const ggml_metal_device_props * props_dev = ggml_metal_device_get_props(ctx->dev);
 
     GGML_TENSOR_LOCALS( int32_t, ne0, op->src[0], ne);
@@ -2077,6 +2129,7 @@ int ggml_metal_op_mul_mat(ggml_metal_op_t ctx, int idx) {
            op->src[0]->type == GGML_TYPE_F16  ||
            op->src[0]->type == GGML_TYPE_BF16 ||
            op->src[0]->type == GGML_TYPE_Q1_0 ||
+           op->src[0]->type == GGML_TYPE_Q2_0 ||
            op->src[0]->type == GGML_TYPE_Q4_0 ||
            op->src[0]->type == GGML_TYPE_Q4_1 ||
            op->src[0]->type == GGML_TYPE_Q5_0 ||
@@ -3076,7 +3129,58 @@ int ggml_metal_op_flash_attn_ext(ggml_metal_op_t ctx, int idx) {
     return 1;
 }
 
+// Snake activation autofuse: mul -> sin -> sqr -> mul -> add
+static bool ggml_metal_op_can_fuse_snake(ggml_metal_op_t ctx, int idx) {
+    static constexpr ggml_op snake_ops[5] = { GGML_OP_MUL, GGML_OP_SIN, GGML_OP_SQR, GGML_OP_MUL, GGML_OP_ADD };
+
+    if (ctx->node(idx)->op != GGML_OP_MUL || !ctx->can_fuse(idx, snake_ops, 5)) {
+        return false;
+    }
+
+    const ggml_tensor * mul0     = ctx->node(idx + 0);
+    const ggml_tensor * sin_node = ctx->node(idx + 1);
+    const ggml_tensor * sqr      = ctx->node(idx + 2);
+    const ggml_tensor * mul1     = ctx->node(idx + 3);
+    const ggml_tensor * add      = ctx->node(idx + 4);
+
+    // x carries the full activation shape, a is the broadcast operand
+    const ggml_tensor * x = ggml_are_same_shape(mul0, mul0->src[0]) ? mul0->src[0] : mul0->src[1];
+    const ggml_tensor * a = (x == mul0->src[0]) ? mul0->src[1] : mul0->src[0];
+
+    // mul1 reads sqr and inv_b in either operand order
+    const ggml_tensor * inv_b    = (mul1->src[0] == sqr) ? mul1->src[1] : mul1->src[0];
+
+    // closure check: the trailing add reads the same x as the leading mul
+    const ggml_tensor * x_in_add = (add->src[0] == mul1) ? add->src[1] : add->src[0];
+
+    // x is in the supported whitelist and every chain intermediate shares x's type.
+    // a and inv_b bind as device const float * in the kernel, so they stay F32.
+    const bool types_ok =
+        (x->type == GGML_TYPE_F32 || x->type == GGML_TYPE_F16 || x->type == GGML_TYPE_BF16) &&
+        (a->type    == GGML_TYPE_F32) && (inv_b->type    == GGML_TYPE_F32) &&
+        (mul0->type == x->type)       && (sin_node->type == x->type) &&
+        (sqr->type  == x->type)       && (mul1->type     == x->type) &&
+        (add->type  == x->type);
+    // a / inv_b collapse to [1, C, 1, 1], x and add stay 2D
+    const bool shape_ok = ggml_are_same_shape(a, inv_b) && a->ne[0] == 1 && a->ne[1] == x->ne[1];
+    const bool dim_ok =
+        (x->ne[2]     == 1) && (x->ne[3]     == 1) &&
+        (add->ne[2]   == 1) && (add->ne[3]   == 1) &&
+        (a->ne[2]     == 1) && (a->ne[3]     == 1) &&
+        (inv_b->ne[2] == 1) && (inv_b->ne[3] == 1);
+    // kernel reads x[idx] and a[c] / inv_b[c] linearly, so every operand is contiguous
+    const bool contig_ok =
+        ggml_is_contiguous(x) && ggml_is_contiguous(add) &&
+        ggml_is_contiguous(a) && ggml_is_contiguous(inv_b);
+
+    return types_ok && shape_ok && dim_ok && contig_ok && x_in_add == x;
+}
+
 int ggml_metal_op_bin(ggml_metal_op_t ctx, int idx) {
+    if (ctx->use_fusion && ggml_metal_op_can_fuse_snake(ctx, idx)) {
+        return ggml_metal_op_snake_fused(ctx, idx);
+    }
+
     ggml_tensor * op = ctx->node(idx);
 
     ggml_metal_library_t lib = ctx->lib;
@@ -3981,6 +4085,55 @@ int ggml_metal_op_col2im_1d(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_dispatch_threadgroups(enc, ntg, 1, 1, nth, 1, 1);
 
     return 1;
+}
+
+// Dispatch the fused snake kernel from the matched mul -> sin -> sqr -> mul -> add chain.
+// idx points at the leading mul. The caller has validated the chain.
+int ggml_metal_op_snake_fused(ggml_metal_op_t ctx, int idx) {
+    ggml_metal_library_t lib = ctx->lib;
+    ggml_metal_encoder_t enc = ctx->enc;
+
+    const ggml_tensor * mul0 = ctx->node(idx + 0);
+    const ggml_tensor * sqr  = ctx->node(idx + 2);
+    const ggml_tensor * mul1 = ctx->node(idx + 3);
+    ggml_tensor *       add  = ctx->node(idx + 4);
+
+    const ggml_tensor * x = ggml_are_same_shape(mul0, mul0->src[0]) ? mul0->src[0] : mul0->src[1];
+    const ggml_tensor * a = (x == mul0->src[0]) ? mul0->src[1] : mul0->src[0];
+    const ggml_tensor * inv_b = (mul1->src[0] == sqr) ? mul1->src[1] : mul1->src[0];
+
+    const int T     = (int) x->ne[0];
+    const int C     = (int) x->ne[1];
+    const int total = T * C;
+
+    // the encode loop pre-checked the leading mul only, check the rest of the chain
+    for (int i = 1; i < 5; ++i) {
+        if (!ggml_metal_op_concurrency_check(ctx, ctx->node(idx + i))) {
+            ggml_metal_op_concurrency_reset(ctx);
+
+            break;
+        }
+    }
+
+    auto pipeline = ggml_metal_library_get_pipeline_snake(lib, x->type);
+
+    ggml_metal_kargs_snake args = {
+        /*.T =*/ T,
+        /*.C =*/ C,
+    };
+
+    ggml_metal_encoder_set_pipeline(enc, pipeline);
+    ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(x),     1);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(a),     2);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(inv_b), 3);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(add),   4);
+
+    const int nth = 256;
+    const int ntg = (total + nth - 1) / nth;
+    ggml_metal_encoder_dispatch_threadgroups(enc, ntg, 1, 1, nth, 1, 1);
+
+    return 5;
 }
 
 int ggml_metal_op_conv_transpose_2d(ggml_metal_op_t ctx, int idx) {

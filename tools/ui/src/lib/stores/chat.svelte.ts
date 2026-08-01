@@ -14,8 +14,11 @@
 import { SvelteMap, SvelteSet } from 'svelte/reactivity';
 import { DatabaseService } from '$lib/services/database.service';
 import { ChatService } from '$lib/services/chat.service';
+import { STREAM_RESUME_RETRY_MS } from '$lib/constants/api-endpoints';
 import { streamIdentity } from '$lib/utils/stream-identity';
 import { getAuthHeaders } from '$lib/utils/api-headers';
+import { CONTENT_TYPE_HEADER } from '$lib/constants';
+import { MimeTypeApplication } from '$lib/enums';
 import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { config } from '$lib/stores/settings.svelte';
 import { agenticStore } from '$lib/stores/agentic.svelte';
@@ -76,7 +79,7 @@ class ChatStore {
 	// true while the active conversation streams reasoning content but no visible content yet
 	isReasoning = $state(false);
 	// resumable stream connection state for the active conversation
-	// streaming -> bytes flowing normally, resuming -> waiting on /v1/stream/:id reconnect, lost -> unrecoverable
+	// streaming -> bytes flowing normally, resuming -> waiting on /v1/stream reconnect, lost -> unrecoverable
 	streamConnectionState = $state<StreamConnectionState>(StreamConnectionState.STREAMING);
 	chatLoadingStates = new SvelteMap<string, boolean>();
 	chatReasoningStates = new SvelteMap<string, boolean>();
@@ -92,6 +95,11 @@ class ChatStore {
 	// off when one conv finishes while another is still streaming. mirrors chatLoadingStates
 	// in scope but tracks the attach + tee replay path specifically
 	private attachingConvs = new SvelteSet<string>();
+	// pending resume retry timers while an owning model loads, one per conv
+	private resumeRetryTimers = new SvelteMap<string, ReturnType<typeof setTimeout>>();
+	// convs whose resume waits on a model load: their loading state belongs to the retry loop,
+	// so discoverActiveStream must not treat it as a live send and bail
+	private resumePendingConvs = new SvelteSet<string>();
 	// in-flight discoverActiveStream guard, keyed by conv id
 	private discoveringConvs = new SvelteSet<string>();
 	private abortControllers = new SvelteMap<string, AbortController>();
@@ -208,7 +216,7 @@ class ChatStore {
 			// POST the one conv id we are probing
 			listResp = await fetch(`./v1/streams/lookup`, {
 				method: 'POST',
-				headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+				headers: { ...getAuthHeaders(), [CONTENT_TYPE_HEADER]: MimeTypeApplication.JSON },
 				body: JSON.stringify({ conversation_ids: [convId] })
 			});
 		} catch (e) {
@@ -261,7 +269,7 @@ class ChatStore {
 		const id = streamId || streamIdentity(convId, selectedModelName());
 		let response: Response;
 		try {
-			response = await fetch(`./v1/stream/${encodeURIComponent(id)}?from=0`, {
+			response = await fetch(`./v1/stream?conv_id=${encodeURIComponent(id)}&from=0`, {
 				headers: getAuthHeaders()
 			});
 		} catch (e) {
@@ -436,13 +444,22 @@ class ChatStore {
 		}
 	}
 
+	/**
+	 * Model frozen at send time for a stream awaiting resume, from the persisted stream state.
+	 * The load progress indicator targets it after a reload, when the message row has no model
+	 * yet and the dropdown selection may not be restored.
+	 */
+	getResumeModel(convId: string): string | null {
+		return ChatService.getStreamState(convId)?.model ?? null;
+	}
+
 	async discoverActiveStream(convId: string): Promise<void> {
 		if (!convId) return;
 		if (this.chatStreamingStates.has(convId)) return;
-		if (this.chatLoadingStates.get(convId)) return;
+		if (this.chatLoadingStates.get(convId) && !this.resumePendingConvs.has(convId)) return;
 		// concurrency guard: another discover may already be running for this conv (typical race
 		// between mount and visibilitychange on tab switch). a second concurrent fetch on the same
-		// /v1/stream/<id> would duplicate every byte into the DB message, this guard bounces it
+		// /v1/stream would duplicate every byte into the DB message, this guard bounces it
 		if (this.discoveringConvs.has(convId)) return;
 		this.discoveringConvs.add(convId);
 
@@ -466,6 +483,38 @@ class ChatStore {
 			// still have a live session matching that identity (we just lost the bytes mid stream). retry
 			// with the frozen identity, the server probe inside attachServerStream tells us if it exists
 			if (!localState) {
+				return;
+			}
+			// quiet status probe first: a full attach flips the loading UI on every try, probing
+			// keeps the retry loop invisible while the owning model is still loading (503)
+			const status = await ChatService.probeResumeStatus(streamId);
+			if (status === 503) {
+				// make the wait visible: the empty assistant row persisted at send time renders
+				// the processing info, whose model load percentage flows from the models feed
+				this.resumePendingConvs.add(convId);
+				this.setChatLoading(convId, true);
+				if (!this.resumeRetryTimers.has(convId)) {
+					this.resumeRetryTimers.set(
+						convId,
+						setTimeout(() => {
+							this.resumeRetryTimers.delete(convId);
+							void this.discoverActiveStream(convId);
+						}, STREAM_RESUME_RETRY_MS)
+					);
+				}
+				return;
+			}
+			if (this.resumePendingConvs.delete(convId) && status !== 200) {
+				// the wait is over without a session to attach, drop the visible loading state
+				this.setChatLoading(convId, false);
+			}
+			if (status === 0) {
+				// transient network failure, the next mount or visibility change retries
+				return;
+			}
+			if (status !== 200) {
+				// the session is gone (stopped, TTL expired), nothing to resume anymore
+				ChatService.clearStreamState(convId);
 				return;
 			}
 			await this.attachServerStream(convId, streamId);
@@ -562,8 +611,14 @@ class ChatStore {
 	 * Abort the current agentic flow signal without clearing loading state.
 	 * Used by "Send immediately" to force the agentic loop to exit so that
 	 * the pending steering message can be re-sent.
+	 *
+	 * Any tool calls captured mid-stream are dropped before the abort so the
+	 * pending message (or a manual follow-up) does not re-send a half-received
+	 * tool call with invalid JSON arguments to the server. Mirrors what the
+	 * Stop button already does through stopGenerationForChat.
 	 */
-	abortCurrentFlow(convId: string): void {
+	async abortCurrentFlow(convId: string): Promise<void> {
+		await this.savePartialResponseIfNeeded(convId);
 		const c = this.abortControllers.get(convId);
 		if (c) {
 			c.abort();
@@ -666,7 +721,7 @@ class ChatStore {
 		try {
 			const resp = await fetch('./v1/streams/lookup', {
 				method: 'POST',
-				headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+				headers: { ...getAuthHeaders(), [CONTENT_TYPE_HEADER]: MimeTypeApplication.JSON },
 				body: JSON.stringify({ conversation_ids: lookupIds })
 			});
 			if (!resp.ok) return;
@@ -1255,6 +1310,28 @@ class ChatStore {
 				lastCreatedInFlow = msg.id;
 				return msg;
 			},
+			updateToolResultMessage: async (
+				messageId: string,
+				content: string,
+				extras?: DatabaseMessageExtra[]
+			) => {
+				// Persist latest content + merged extras; mirror into the active
+				// store so the chat view sees live updates for streaming tools
+				// (e.g. exec_shell_command). The existing tool message node
+				// pointer stays put - the renderer is already scoped to it.
+				const updates: Partial<DatabaseMessage> = { content };
+				if (extras) {
+					const idx = conversationsStore.findMessageIndex(messageId);
+					const existing = idx >= 0 ? (conversationsStore.activeMessages[idx]?.extra ?? []) : [];
+					const merged = [...existing, ...extras];
+					updates.extra = merged;
+				}
+				if (conversationsStore.activeConversation?.id === convId) {
+					const idx = conversationsStore.findMessageIndex(messageId);
+					if (idx >= 0) conversationsStore.updateMessageAtIndex(idx, updates);
+				}
+				await DatabaseService.updateMessage(messageId, updates);
+			},
 			createAssistantMessage: async () => {
 				// Reset streaming state for new message
 				streamedContent = '';
@@ -1334,7 +1411,7 @@ class ChatStore {
 			}
 		};
 
-		const perChatOverrides = conversationsStore.activeConversation?.mcpServerOverrides;
+		const perChatOverrides = conversationsStore.getAllMcpServerOverrides();
 
 		{
 			const agenticResult = await agenticStore.runAgenticFlow({
@@ -1439,8 +1516,16 @@ class ChatStore {
 		// detached drain keeps producing tokens until eos or max_tokens. use the frozen identity
 		// captured when the session started, not the live dropdown
 		const streamStateForStop = this.chatStreamingStates.get(convId);
-		const modelForStop = streamStateForStop?.model;
+		const modelForStop = streamStateForStop?.model ?? ChatService.getStreamState(convId)?.model;
 		void ChatService.cancelServerStream(convId, modelForStop);
+		// an explicit stop leaves nothing to resume and kills a pending resume retry
+		ChatService.clearStreamState(convId);
+		const retryTimer = this.resumeRetryTimers.get(convId);
+		if (retryTimer !== undefined) {
+			clearTimeout(retryTimer);
+			this.resumeRetryTimers.delete(convId);
+		}
+		this.resumePendingConvs.delete(convId);
 		this.abortRequest(convId);
 		this.setChatLoading(convId, false);
 		this.clearChatStreaming(convId);
@@ -1505,21 +1590,27 @@ class ChatStore {
 
 		const partialContent = streamingState.response;
 		const partialReasoning = lastMessage.reasoningContent || '';
+		// snapshot the streamed tool calls before clearing so we still know whether
+		// anything was captured when deciding to skip the DB write below
+		const hadPartialToolCalls = !!lastMessage.toolCalls?.trim();
 
-		// nothing to persist when both content and reasoning are empty (e.g. stop before any token)
-		if (!partialContent.trim() && !partialReasoning.trim()) return;
+		// nothing to persist when content, reasoning, and streamed tool calls are all empty
+		// (e.g. stop before any token). otherwise drop the partial tool call and write whatever
+		// was streamed: incomplete arguments (truncated JSON, missing closing quote) would
+		// otherwise be re-sent to the server on the next turn and rejected.
+		if (!partialContent.trim() && !partialReasoning.trim() && !hadPartialToolCalls) return;
 
 		try {
 			const updateData: {
-				content: string;
+				content?: string;
 				reasoningContent?: string;
+				toolCalls?: string;
 				timings?: ChatMessageTimings;
 			} = {
-				content: partialContent
+				toolCalls: ''
 			};
-			if (partialReasoning) {
-				updateData.reasoningContent = partialReasoning;
-			}
+			if (partialContent.trim()) updateData.content = partialContent;
+			if (partialReasoning.trim()) updateData.reasoningContent = partialReasoning;
 			const lastKnownState = this.getProcessingState(conversationId);
 			if (lastKnownState) {
 				updateData.timings = {
@@ -1535,9 +1626,14 @@ class ChatStore {
 			}
 			await DatabaseService.updateMessage(lastMessage.id, updateData);
 			lastMessage.content = partialContent;
+			// mirror the drop into the in-memory message so the next request sent via
+			// sendMessage (queued pending, Send immediately, or manual follow-up) reads
+			// the cleared value, not whatever the streaming widget had been showing
+			lastMessage.toolCalls = '';
 			if (updateData.timings) lastMessage.timings = updateData.timings;
 		} catch (error) {
 			lastMessage.content = partialContent;
+			lastMessage.toolCalls = '';
 			console.error('Failed to save partial response:', error);
 		}
 	}
@@ -1557,12 +1653,13 @@ class ChatStore {
 			conversationsStore.updateMessageAtIndex(messageIndex, { content: newContent });
 			await DatabaseService.updateMessage(messageId, { content: newContent });
 			if (isFirstUserMessage && newContent.trim())
-				await conversationsStore.updateConversationTitleWithConfirmation(
+				await conversationsStore.updateConversationName(
 					activeConv.id,
 					generateConversationTitle(newContent, Boolean(config().titleGenerationUseFirstLine))
 				);
 			const messagesToRemove = conversationsStore.activeMessages.slice(messageIndex + 1);
-			for (const message of messagesToRemove) await DatabaseService.deleteMessage(message.id);
+			if (messagesToRemove.length > 0)
+				await DatabaseService.deleteMessageCascading(activeConv.id, messagesToRemove[0].id);
 			conversationsStore.sliceActiveMessages(messageIndex + 1);
 			conversationsStore.updateConversationTimestamp();
 			this.setChatLoading(activeConv.id, true);
@@ -1594,7 +1691,7 @@ class ChatStore {
 		const { index: messageIndex } = result;
 		try {
 			const messagesToRemove = conversationsStore.activeMessages.slice(messageIndex);
-			for (const message of messagesToRemove) await DatabaseService.deleteMessage(message.id);
+			await DatabaseService.deleteMessageCascading(activeConv.id, messagesToRemove[0].id);
 			conversationsStore.sliceActiveMessages(messageIndex);
 			conversationsStore.updateConversationTimestamp();
 			this.setChatLoading(activeConv.id, true);
@@ -1941,7 +2038,7 @@ class ChatStore {
 							timings
 						});
 
-						conversationsStore.updateConversationTimestamp();
+						conversationsStore.updateConversationTimestamp(msg.convId);
 
 						this.setChatLoading(msg.convId, false);
 						this.clearChatStreaming(msg.convId);
@@ -2074,7 +2171,7 @@ class ChatStore {
 			const rootMessage = allMessages.find((m) => m.type === 'root' && m.parent === null);
 
 			if (rootMessage && msg.parent === rootMessage.id && newContent.trim()) {
-				await conversationsStore.updateConversationTitleWithConfirmation(
+				await conversationsStore.updateConversationName(
 					activeConv.id,
 					generateConversationTitle(newContent, Boolean(config().titleGenerationUseFirstLine))
 				);
@@ -2148,7 +2245,7 @@ class ChatStore {
 
 			conversationsStore.updateConversationTimestamp();
 			if (isFirstUserMessage && newContent.trim())
-				await conversationsStore.updateConversationTitleWithConfirmation(
+				await conversationsStore.updateConversationName(
 					activeConv.id,
 					generateConversationTitle(newContent, Boolean(config().titleGenerationUseFirstLine))
 				);
@@ -2334,9 +2431,12 @@ class ChatStore {
 
 		if (currentConfig.excludeReasoningFromContext) apiOptions.excludeReasoningFromContext = true;
 
-		apiOptions.enableThinking = conversationsStore.getThinkingEnabled();
+		// an explicit reasoning choice overrides the server default, DEFAULT sends nothing
 		const effort = conversationsStore.getReasoningEffort();
-		if (effort !== ReasoningEffort.OFF) apiOptions.reasoningEffort = effort;
+		if (effort !== ReasoningEffort.DEFAULT) {
+			apiOptions.enableThinking = effort !== ReasoningEffort.OFF;
+			if (effort !== ReasoningEffort.OFF) apiOptions.reasoningEffort = effort;
+		}
 
 		if (hasValue(currentConfig.temperature))
 			apiOptions.temperature = Number(currentConfig.temperature);
@@ -2389,7 +2489,8 @@ class ChatStore {
 
 		if (currentConfig.samplers) apiOptions.samplers = currentConfig.samplers;
 
-		apiOptions.backend_sampling = currentConfig.backend_sampling;
+		if (hasValue(currentConfig.backend_sampling))
+			apiOptions.backend_sampling = currentConfig.backend_sampling;
 
 		if (currentConfig.customJson) apiOptions.custom = currentConfig.customJson;
 

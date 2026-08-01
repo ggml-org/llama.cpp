@@ -184,3 +184,6 @@ function buildSuffixSet(suffixes: Record<string, readonly string[]>): Set<string
 
 export const TWO_PART_PUBLIC_SUFFIXES = buildSuffixSet(ccTLD_PREFIXES);
 export const WILDCARD_PUBLIC_SUFFIXES = buildSuffixSet(WILDCARD_BASES);
+
+// Matches one or more trailing "/" characters at the end of a URL/path.
+export const TRAILING_SLASHES_REGEX = /\/+$/;

@@ -1186,6 +1186,11 @@ const char * gguf_get_tensor_name(const struct gguf_context * ctx, int64_t tenso
     return ctx->info[tensor_id].t.name;
 }
 
+const int64_t * gguf_get_tensor_ne(const struct gguf_context * ctx, int64_t tensor_id) {
+    GGML_ASSERT(tensor_id >= 0 && tensor_id < gguf_get_n_tensors(ctx));
+    return ctx->info[tensor_id].t.ne;
+}
+
 enum ggml_type gguf_get_tensor_type(const struct gguf_context * ctx, int64_t tensor_id) {
     GGML_ASSERT(tensor_id >= 0 && tensor_id < gguf_get_n_tensors(ctx));
     return ctx->info[tensor_id].t.type;
@@ -1419,7 +1424,7 @@ void gguf_set_tensor_data(struct gguf_context * ctx, const char * name, const vo
 struct gguf_writer_base {
     size_t written_bytes {0u};
 
-    ~gguf_writer_base(void) = default;
+    virtual ~gguf_writer_base(void) = default;
 
     // we bet on devirtualization
     virtual void write(int8_t val) = 0;

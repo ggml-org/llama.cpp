@@ -496,6 +496,12 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                     "[!\"#$%&'()*+,\\-./:;<=>?@\\[\\\\\\]^_`{|}~][A-Za-z]+|[^\\r\\n\\p{L}\\p{P}\\p{S}]?[\\p{L}\\p{M}]+| ?[\\p{P}\\p{S}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
                 };
                 break;
+            case LLAMA_VOCAB_PRE_TYPE_LAGUNA:
+                regex_exprs = {
+                    "[^\\n]+|[\\n]+",
+                    "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
+                };
+                break;
             case LLAMA_VOCAB_PRE_TYPE_EXAONE_MOE:
                 regex_exprs = {
                     // original regex from tokenizer.json
@@ -1324,6 +1330,9 @@ struct llm_tokenizer_rwkv_session {
                 if (node->has_value) {
                     token_id = node->value;
                     token_length = position + 1;
+                }
+                if (position + 1 >= text.size()) {
+                    break;
                 }
                 node = node->traverse(text[++position]);
             }
@@ -2343,6 +2352,10 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_AFMOE;
                 clean_spaces = false;
             } else if (
+                tokenizer_pre == "laguna") {
+                pre_type = LLAMA_VOCAB_PRE_TYPE_LAGUNA;
+                clean_spaces = false;
+            } else if (
                 tokenizer_pre == "minimax-m2") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_MINIMAX_M2;
                 clean_spaces = false;
@@ -2565,7 +2578,14 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             if (suppress_idx != -1) {
                 const int n = gguf_get_arr_n(ctx, suppress_idx);
                 const int32_t * data = (const int32_t *) gguf_get_arr_data(ctx, suppress_idx);
-                suppress_tokens.assign(data, data + n);
+                // drop out-of-range ids
+                suppress_tokens.reserve(n);
+                for (int i = 0; i < n; ++i) {
+                    const int32_t id = data[i];
+                    if (id >= 0 && id < (int) id_to_token.size()) {
+                        suppress_tokens.push_back(id);
+                    }
+                }
             }
         }
 
@@ -2796,6 +2816,7 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                     || t.first == "<turn|>"          // gemma4
                     || t.first == "<|tool_response>" // gemma4
                     || t.first == "<｜end▁of▁sentence｜>" // deepseek-ocr
+                    || t.first == "[e~[" // minimax-m2/m3
                ) {
                 special_eog_ids.insert(t.second);
                 if ((attr & LLAMA_TOKEN_ATTR_CONTROL) == 0) {
@@ -2855,6 +2876,11 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
 
             LLAMA_LOG_INFO("%s: printing all EOG tokens:\n", __func__);
             for (auto tid : special_eog_ids) {
+                if (tid < 0 || tid >= (llama_token) id_to_token.size()) {
+                    LLAMA_LOG_WARN("%s: EOG token id %d is out of range (vocab size %zu), skipping\n",
+                            __func__, tid, id_to_token.size());
+                    continue;
+                }
                 auto & text = id_to_token[tid].text;
 
                 LLAMA_LOG_INFO("%s:   - %d ('%s')\n", __func__, tid, text.c_str());
@@ -2889,6 +2915,9 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             llama_token s_id = LLAMA_TOKEN_NULL;
 
             for (auto tid : special_eog_ids) {
+                if (tid < 0 || tid >= (llama_token) id_to_token.size()) {
+                    continue;
+                }
                 const auto & text = id_to_token[tid].text;
                 if (text == "<|tool_response>") {
                     has_tool_response = true;
@@ -4018,7 +4047,11 @@ int llama_vocab::find_bpe_rank(const std::string & token_left, const std::string
 }
 
 std::vector<std::string> llama_vocab::get_bpe_merges() const {
-    std::vector<std::string> result(pimpl->bpe_ranks.size());
+    int max_rank = -1;
+    for (const auto & pair : pimpl->bpe_ranks) {
+        max_rank = std::max(max_rank, pair.second);
+    }
+    std::vector<std::string> result(max_rank + 1);
 
     for (const auto & pair : pimpl->bpe_ranks) {
         result[pair.second] = pair.first.first + " " + pair.first.second;
@@ -4177,6 +4210,14 @@ bool llama_vocab_get_add_eos(const struct llama_vocab * vocab) {
 
 bool llama_vocab_get_add_sep(const struct llama_vocab * vocab) {
     return vocab->get_add_sep();
+}
+
+const llama_token * llama_vocab_get_suppress_tokens(const struct llama_vocab * vocab, int32_t * n_suppress_tokens) {
+    const std::vector<llama_token> & tokens = vocab->get_suppress_tokens();
+    if (n_suppress_tokens) {
+        *n_suppress_tokens = (int32_t) tokens.size();
+    }
+    return tokens.data();
 }
 
 llama_token llama_vocab_fim_pre(const struct llama_vocab * vocab) {
