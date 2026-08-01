@@ -130,6 +130,9 @@ compile_and_run features      $T/test_features.cpp    $T/tessera-features.cpp -I
 # --- Drafter training pipeline: LK training-data builder (needs vendor + lk-loss densify) ---
 compile_and_run lk_train_data $T/test_lk_train_data.cpp $T/tessera-lk-train-data.cpp $T/tessera-lk-loss.cpp -I vendor
 
+# --- DartQuant QR-Orth + Whip loss port (parity vs Python dartquant_qr_orth; needs vendor/nlohmann for fixture) ---
+compile_and_run dartquant $T/test_dartquant.cpp $T/tessera-dartquant.cpp $T/tessera-linalg.cpp -I vendor
+
 # --- common/tessera-debug ---
 compile_and_run sidecar_v3  $C/test_sidecar_v3.cpp  $C/tessera-sidecar-v3.cpp -I $C
 

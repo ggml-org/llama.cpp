@@ -1,225 +1,429 @@
+//
+// tessera-dartquant.cpp
+//
+// DartQuant (distribution-aware rotation) regime expert.
+// Port of tools/tessera/per_tensor_calibrate.py::dartquant_qr_orth.
+//
+// Optimizes an orthogonal rotation R on the Stiefel manifold that minimizes
+//   L = L_quant + whip_weight * L_whip
+// using QR-Orth retraction. L_quant is the asymmetric-STE output MSE
+// (active when calibration activations X are supplied); L_whip is the
+// coefficient of variation of per-row L2 norms (optionally activation-
+// weighted by X_hat). QR / Stiefel primitives are reused from
+// tessera-linalg.cpp; this file holds the DartQuant-specific loss,
+// gradient, and iteration driver.
+//
+// Convention (matches Python): W_rot = W @ R, R is (in_dim x in_dim).
+// Row-major float32 throughout. The optimization runs on the first
+// K-wide column block of W (K = block_size, defaults to in_dim) and the
+// returned R is applied block-diagonally by ts_dartquant_apply.
+//
+
 #include "tessera-dartquant.h"
 #include "tessera-linalg.h"
 
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+#include <vector>
 
-// --- helpers ---
+// ---------------------------------------------------------------------------
+// Shared reconstruction primitive: ternarize to {-1,0,+1} then rescale by
+// the global mean(|W|). Mirrors Python's ternarize + ternary_recon in
+// per_tensor_calibrate.py. Also reused by tessera-lrq.cpp.
+// ---------------------------------------------------------------------------
 
 static float ts_mean_abs(const float * x, int64_t n) {
-    float s = 0.0f;
+    double s = 0.0;  // accumulate in double for parity with numpy
     for (int64_t i = 0; i < n; i++) {
-        s += fabsf(x[i]);
+        s += std::fabs((double)x[i]);
     }
-    return s / (float)n;
+    return (float)(s / (double)n);
 }
 
-// ternarize_recon: sign(x) * (|x| >= threshold) * mean(|x|)
-// (shared reconstruction primitive; also used by tessera-lrq)
+// ternarize_recon: sign(x) * (|x| >= mean(|x|)) * mean(|x|)
 static void ts_ternarize_recon(const float * x, float * out, int64_t n) {
-    float thresh = ts_mean_abs(x, n);
-    float scale = thresh;
-    if (thresh <= 0.0f) {
+    float scale = ts_mean_abs(x, n);
+    if (scale <= 0.0f) {
         memset(out, 0, n * sizeof(float));
         return;
     }
     for (int64_t i = 0; i < n; i++) {
         float v = x[i];
-        if (fabsf(v) >= thresh) {
-            out[i] = (v > 0.0f ? 1.0f : -1.0f) * scale;
-        } else {
-            out[i] = 0.0f;
+        out[i] = (std::fabs(v) >= scale)
+                 ? ((v > 0.0f ? 1.0f : -1.0f) * scale)
+                 : 0.0f;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Matmul helpers (row-major). Kept local so this file is self-contained;
+// tessera-linalg has its own static copies which are file-local.
+// ---------------------------------------------------------------------------
+
+// C(m x n) = A(m x k) @ B(k x n)
+static void ts_dq_matmul(const float * A, const float * B, float * C,
+                         int64_t m, int64_t k, int64_t n) {
+    for (int64_t i = 0; i < m; i++) {
+        for (int64_t j = 0; j < n; j++) {
+            double s = 0.0;
+            for (int64_t p = 0; p < k; p++) {
+                s += (double)A[i*k + p] * (double)B[p*n + j];
+            }
+            C[i*n + j] = (float)s;
         }
     }
 }
 
-// --- DartQuant ---
-
-static float ts_whip_loss(const float * W_rot, int64_t out_dim, int64_t in_dim) {
-    // coefficient of variation of per-row L2 norms
-    std::vector<float> norms(out_dim);
-    for (int64_t i = 0; i < out_dim; i++) {
-        float s = 0.0f;
-        for (int64_t j = 0; j < in_dim; j++) {
-            float v = W_rot[i * in_dim + j];
-            s += v * v;
+// C(n x k) = A(m x n)^T @ B(m x k)
+static void ts_dq_matmul_atb(const float * A, const float * B, float * C,
+                             int64_t m, int64_t n, int64_t k) {
+    for (int64_t i = 0; i < n; i++) {
+        for (int64_t j = 0; j < k; j++) {
+            double s = 0.0;
+            for (int64_t r = 0; r < m; r++) {
+                s += (double)A[r*n + i] * (double)B[r*k + j];
+            }
+            C[i*k + j] = (float)s;
         }
-        norms[i] = sqrtf(std::max(s, 1e-24f));
     }
-    float mean = 0.0f;
+}
+
+// C(m x n) = A(m x k) @ B(n x k)^T, i.e. C[i,j] = sum_p A[i,p] * B[j,p].
+// Used for residual(out,K) @ X(n_tokens,K)^T -> err(out,n_tokens).
+static void ts_dq_matmul_abt(const float * A, const float * B, float * C,
+                             int64_t m, int64_t k, int64_t n) {
+    for (int64_t i = 0; i < m; i++) {
+        for (int64_t j = 0; j < n; j++) {
+            double s = 0.0;
+            for (int64_t p = 0; p < k; p++) {
+                s += (double)A[i*k + p] * (double)B[j*k + p];
+            }
+            C[i*n + j] = (float)s;
+        }
+    }
+}
+
+// Per-row L2 norms with a 1e-24 floor (matches Python _row_l2).
+static void ts_row_l2(const float * W, float * norms, int64_t out_dim, int64_t in_dim) {
     for (int64_t i = 0; i < out_dim; i++) {
-        mean += norms[i];
+        double s = 0.0;
+        const float * row = W + i*in_dim;
+        for (int64_t j = 0; j < in_dim; j++) {
+            s += (double)row[j] * (double)row[j];
+        }
+        norms[i] = sqrtf(std::max((float)s, 1e-24f));
     }
-    mean /= (float)out_dim;
-    if (mean < 1e-12f) {
+}
+
+// ---------------------------------------------------------------------------
+// Whip loss: std(||W[o,:]||_2) / mean(||W[o,:]||_2). Optionally weight the
+// rows by per-input-channel sqrt(E[x^2]) == X_hat (SmoothQuant convention).
+// Matches Python dartquant_whip_loss.
+// ---------------------------------------------------------------------------
+
+static float ts_whip_loss(const float * W_rot, int64_t out_dim, int64_t in_dim,
+                          const float * X_hat) {
+    std::vector<float> Ww;
+    const float * W = W_rot;
+    if (X_hat) {
+        Ww.resize(out_dim * in_dim);
+        for (int64_t i = 0; i < out_dim; i++) {
+            for (int64_t j = 0; j < in_dim; j++) {
+                Ww[i*in_dim + j] = W_rot[i*in_dim + j] * X_hat[j];
+            }
+        }
+        W = Ww.data();
+    }
+    std::vector<float> norms(out_dim);
+    ts_row_l2(W, norms.data(), out_dim, in_dim);
+    double mean = 0.0;
+    for (int64_t i = 0; i < out_dim; i++) mean += norms[i];
+    mean /= (double)out_dim;
+    if (mean < 1e-12) {
         return 0.0f;
     }
-    float var = 0.0f;
+    double var = 0.0;
     for (int64_t i = 0; i < out_dim; i++) {
-        float d = norms[i] - mean;
-        var += d * d;
+        double d = (double)norms[i] - mean;
+        var += d*d;
     }
-    var /= (float)out_dim;
-    return sqrtf(var) / mean;
+    var /= (double)out_dim;
+    return (float)(std::sqrt(var) / mean);
 }
 
-// gradient of whip loss w.r.t. R (K x K)
-static void ts_whip_grad(const float * W, const float * R, float * grad,
-                         int64_t out_dim, int64_t K) {
-    // W_rot = W @ R^T (out_dim x K)
-    std::vector<float> W_rot(out_dim * K);
-    for (int64_t i = 0; i < out_dim; i++) {
-        for (int64_t j = 0; j < K; j++) {
-            float s = 0.0f;
-            for (int64_t k = 0; k < K; k++) {
-                s += W[i * K + k] * R[j * K + k];
-            }
-            W_rot[i * K + j] = s;
-        }
+// Relative tile-quant MSE: ||W - Q(W)||_F^2 / (||W||_F^2 + 1e-12).
+// Matches Python _relative_quant_mse.
+static float ts_relative_quant_mse(const float * W, int64_t out_dim, int64_t in_dim) {
+    std::vector<float> Wq(out_dim * in_dim);
+    ts_ternarize_recon(W, Wq.data(), out_dim * in_dim);
+    double num = 0.0, den = 0.0;
+    int64_t n = out_dim * in_dim;
+    for (int64_t i = 0; i < n; i++) {
+        double d = (double)Wq[i] - (double)W[i];
+        num += d*d;
+        den += (double)W[i] * (double)W[i];
     }
+    den += 1e-12;
+    return (float)(num / den);
+}
 
-    std::vector<float> norms(out_dim);
-    for (int64_t i = 0; i < out_dim; i++) {
-        float s = 0.0f;
-        for (int64_t j = 0; j < K; j++) {
-            float v = W_rot[i * K + j];
-            s += v * v;
+// ---------------------------------------------------------------------------
+// Whip-loss gradient w.r.t. R. Matches Python _whip_grad_impl:
+//   Wp      = W @ R                         (out x in)
+//   Wp     *= X_hat[None,:]  if X_hat       (activation-weighted)
+//   f_o     = ||Wp[o,:]||_2
+//   diff_o  = (f_o - mean(f)) / max(f_o, 1e-12)
+//   dWp     = diff_o[:,None] * Wp           (out x in)
+//   grad    = (1/(out*mean(f))) * W^T @ dWp (in x in)
+// ---------------------------------------------------------------------------
+
+static void ts_whip_grad(const float * W, const float * R, float * grad,
+                         int64_t out_dim, int64_t K,
+                         const float * X_hat) {
+    std::vector<float> Wp(out_dim * K);
+    ts_dq_matmul(W, R, Wp.data(), out_dim, K, K);
+    if (X_hat) {
+        for (int64_t i = 0; i < out_dim; i++) {
+            for (int64_t j = 0; j < K; j++) {
+                Wp[i*K + j] *= X_hat[j];
+            }
         }
-        norms[i] = sqrtf(std::max(s, 1e-24f));
     }
-    float mean_n = 0.0f;
-    for (int64_t i = 0; i < out_dim; i++) {
-        mean_n += norms[i];
-    }
-    mean_n /= (float)out_dim;
-    if (mean_n < 1e-12f) {
-        memset(grad, 0, K * K * sizeof(float));
+    std::vector<float> norms(out_dim);
+    ts_row_l2(Wp.data(), norms.data(), out_dim, K);
+    double mean_n = 0.0;
+    for (int64_t i = 0; i < out_dim; i++) mean_n += norms[i];
+    mean_n /= (double)out_dim;
+    if (mean_n < 1e-12) {
+        memset(grad, 0, K*K * sizeof(float));
         return;
     }
-
-    // diff_o = (norm_o - mean) / norm_o
-    // dWp[o, j] = diff_o * W_rot[o, j]
-    // grad = W^T @ dWp / (out_dim * mean_n)
     std::vector<float> dWp(out_dim * K);
     for (int64_t o = 0; o < out_dim; o++) {
-        float diff = (norms[o] - mean_n) / std::max(norms[o], 1e-12f);
+        float diff = (float)(((double)norms[o] - mean_n) /
+                             std::max((double)norms[o], 1e-12));
         for (int64_t j = 0; j < K; j++) {
-            dWp[o * K + j] = diff * W_rot[o * K + j];
+            dWp[o*K + j] = diff * Wp[o*K + j];
         }
     }
-
-    // grad[i, j] = sum_o W[o, i] * dWp[o, j] / (out_dim * mean_n)
-    float inv = 1.0f / ((float)out_dim * mean_n);
-    for (int64_t i = 0; i < K; i++) {
-        for (int64_t j = 0; j < K; j++) {
-            float s = 0.0f;
-            for (int64_t o = 0; o < out_dim; o++) {
-                s += W[o * K + i] * dWp[o * K + j];
-            }
-            grad[i * K + j] = s * inv;
-        }
+    // grad = W^T @ dWp / (out * mean)
+    ts_dq_matmul_atb(W, dWp.data(), grad, out_dim, K, K);
+    float inv = (float)(1.0 / ((double)out_dim * mean_n));
+    for (int64_t i = 0; i < K*K; i++) {
+        grad[i] *= inv;
     }
 }
 
-int ts_dartquant_qr_orth(const float * weights, int64_t out_dim, int64_t in_dim,
-                         const ts_dartquant_params * params,
-                         ts_dartquant_result * result) {
-    int64_t K = params->block_size > 0 ? params->block_size : 64;
-    int64_t max_iters = params->max_iters > 0 ? params->max_iters : 50;
-    float lr = params->lr > 0.0f ? params->lr : 0.1f;
+// ---------------------------------------------------------------------------
+// Output-MSE loss + gradient. Matches Python _output_mse_and_grad.
+//
+// Forward (with X):
+//   Wp = W @ R ; Wq = Q(Wp)
+//   residual = Wq - W                          (asymmetric STE; -W constant)
+//   err      = residual @ X^T                  (out x n_tokens)
+//   L        = mean(err * err)
+//
+// Backward (asymmetric STE; gradient flows only through Q -> Wp):
+//   dL/dWp = (2/N) * err @ X                   (out x in)
+//   dL/dR  = W^T @ dL/dWp                      (in x in)
+//
+// Without X: L = mean((Wp - Wq)^2), gradient is exactly zero (STE collapses).
+// ---------------------------------------------------------------------------
 
-    if (K > in_dim) {
-        K = in_dim;
+static float ts_output_mse_and_grad(const float * W, const float * R,
+                                    const float * X, int64_t X_count,
+                                    int64_t out_dim, int64_t K,
+                                    float * grad_out) {
+    std::vector<float> Wp(out_dim * K);
+    ts_dq_matmul(W, R, Wp.data(), out_dim, K, K);
+    std::vector<float> Wq(out_dim * K);
+    ts_ternarize_recon(Wp.data(), Wq.data(), out_dim * K);
+
+    if (X == nullptr || X_count == 0) {
+        double loss = 0.0;
+        int64_t n = out_dim * K;
+        for (int64_t i = 0; i < n; i++) {
+            double d = (double)Wq[i] - (double)Wp[i];
+            loss += d*d;
+        }
+        loss /= (double)n;
+        if (grad_out) {
+            memset(grad_out, 0, K*K * sizeof(float));
+        }
+        return (float)loss;
     }
 
-    int64_t n_blocks = in_dim / K;
-    if (n_blocks < 1) {
+    // residual = Wq - W (out x K); err = residual @ X^T (out x n_tokens)
+    std::vector<float> residual(out_dim * K);
+    for (int64_t i = 0; i < out_dim * K; i++) {
+        residual[i] = Wq[i] - W[i];
+    }
+    std::vector<float> err(out_dim * X_count);
+    // err[o, t] = sum_j residual[o, j] * X[t, j]  ->  err = residual @ X^T
+    ts_dq_matmul_abt(residual.data(), X, err.data(), out_dim, K, X_count);
+
+    double loss = 0.0;
+    int64_t n_err = out_dim * X_count;
+    for (int64_t i = 0; i < n_err; i++) {
+        loss += (double)err[i] * (double)err[i];
+    }
+    loss /= (double)n_err;
+
+    if (grad_out) {
+        // dL/dWp = (2/N) * err @ X  (out x K)
+        std::vector<float> dL_dWp(out_dim * K);
+        double inv = 2.0 / (double)n_err;
+        for (int64_t o = 0; o < out_dim; o++) {
+            for (int64_t j = 0; j < K; j++) {
+                double s = 0.0;
+                for (int64_t t = 0; t < X_count; t++) {
+                    s += (double)err[o*X_count + t] * (double)X[t*K + j];
+                }
+                dL_dWp[o*K + j] = (float)(inv * s);
+            }
+        }
+        // grad = W^T @ dL/dWp (in x in)
+        ts_dq_matmul_atb(W, dL_dWp.data(), grad_out, out_dim, K, K);
+    }
+    return (float)loss;
+}
+
+// ---------------------------------------------------------------------------
+// Full driver. Matches Python dartquant_qr_orth (one column-block of width K).
+// ---------------------------------------------------------------------------
+
+int ts_dartquant_qr_orth(const float * weights, int64_t out_dim, int64_t in_dim,
+                         const float * X, int64_t X_count,
+                         const float * X_hat,
+                         const ts_dartquant_params * params,
+                         ts_dartquant_result * result) {
+    if (!weights || !params || !result || out_dim <= 0 || in_dim <= 0) {
         return -1;
     }
 
-    // optimize one block rotation (all blocks share the same R for simplicity)
-    std::vector<float> R(K * K);
-    if (params->seed) {
-        ts_linalg_random_orthogonal(R.data(), K, params->seed);
-    } else {
-        // identity
-        memset(R.data(), 0, K * K * sizeof(float));
-        for (int64_t i = 0; i < K; i++) {
-            R[i * K + i] = 1.0f;
-        }
-    }
+    int64_t K = params->block_size > 0 ? params->block_size : in_dim;
+    if (K > in_dim) K = in_dim;
+    if (K <= 0) return -1;
 
-    // use first block of weights for optimization
+    int64_t max_iters    = params->max_iters > 0 ? params->max_iters : 50;
+    float    lr          = params->lr > 0.0f ? params->lr : 1.0e-2f;
+    float    whip_weight = params->whip_weight;
+    uint32_t seed        = params->seed;
+
+    // Work on the first K-wide column block of W (same simplification as
+    // the Python demo: a single shared R for every column block).
     std::vector<float> W_block(out_dim * K);
     for (int64_t i = 0; i < out_dim; i++) {
-        memcpy(&W_block[i * K], &weights[i * in_dim], K * sizeof(float));
+        memcpy(&W_block[i*K], &weights[i*in_dim], K * sizeof(float));
     }
 
-    std::vector<float> W_rot(out_dim * K);
-    std::vector<float> grad(K * K);
+    // Initial rotation: identity (seed==0) or Haar-uniform orthogonal.
+    std::vector<float> R(K * K);
+    if (seed) {
+        ts_linalg_random_orthogonal(R.data(), K, seed);
+    } else {
+        memset(R.data(), 0, K*K * sizeof(float));
+        for (int64_t i = 0; i < K; i++) {
+            R[i*K + i] = 1.0f;
+        }
+    }
 
-    float best_whip = 1e30f;
-    std::vector<float> best_R(R);
+    // Initial metrics (mirror Python: Wp = W @ R, whip, qmse, omse).
+    std::vector<float> Wp(out_dim * K);
+    ts_dq_matmul(W_block.data(), R.data(), Wp.data(), out_dim, K, K);
+    float initial_whip     = ts_whip_loss(Wp.data(), out_dim, K, X_hat);
+    float initial_qmse     = ts_relative_quant_mse(Wp.data(), out_dim, K);
+    float initial_omse     = ts_output_mse_and_grad(W_block.data(), R.data(),
+                                                    X, X_count, out_dim, K, nullptr);
+
+    result->history.clear();
+    result->history.reserve((size_t)max_iters + 1);
+    result->history.push_back(initial_qmse + whip_weight * initial_whip);
+
+    // Best-so-far tracking on output MSE (the deployment metric). When X is
+    // absent, output MSE == tile-quant-style reconstruction MSE and we still
+    // track it; otherwise we track the X-projected error as Python does.
+    std::vector<float> best_R = R;
+    float best_omse  = initial_omse;
+    float best_qmse  = initial_qmse;
+    float best_whip  = initial_whip;
+
+    std::vector<float> q_grad(K * K), w_grad(K * K), total_grad(K * K);
 
     for (int64_t it = 0; it < max_iters; it++) {
-        // W_rot = W_block @ R^T
-        for (int64_t i = 0; i < out_dim; i++) {
-            for (int64_t j = 0; j < K; j++) {
-                float s = 0.0f;
-                for (int64_t k = 0; k < K; k++) {
-                    s += W_block[i * K + k] * R[j * K + k];
-                }
-                W_rot[i * K + j] = s;
-            }
+        ts_output_mse_and_grad(W_block.data(), R.data(), X, X_count,
+                               out_dim, K, q_grad.data());
+        ts_whip_grad(W_block.data(), R.data(), w_grad.data(), out_dim, K, X_hat);
+        for (int64_t i = 0; i < K*K; i++) {
+            total_grad[i] = q_grad[i] + whip_weight * w_grad[i];
+            total_grad[i] = -total_grad[i];  // descent: qr_orth_step adds lr*G
         }
+        ts_linalg_qr_orth_step(R.data(), total_grad.data(), lr, K, K);
 
-        float whip = ts_whip_loss(W_rot.data(), out_dim, K);
-        if (whip < best_whip) {
-            best_whip = whip;
-            best_R = R;
-        }
-
-        ts_whip_grad(W_block.data(), R.data(), grad.data(), out_dim, K);
-
-        // negate gradient for descent (qr_orth_step adds lr * G)
-        for (int64_t i = 0; i < K * K; i++) {
-            grad[i] = -grad[i];
-        }
-
-        ts_linalg_qr_orth_step(R.data(), grad.data(), lr, K, K);
-    }
-
-    R = best_R;
-
-    // compute final metrics
-    for (int64_t i = 0; i < out_dim; i++) {
-        for (int64_t j = 0; j < K; j++) {
-            float s = 0.0f;
-            for (int64_t k = 0; k < K; k++) {
-                s += W_block[i * K + k] * R[j * K + k];
-            }
-            W_rot[i * K + j] = s;
+        ts_dq_matmul(W_block.data(), R.data(), Wp.data(), out_dim, K, K);
+        float cur_whip = ts_whip_loss(Wp.data(), out_dim, K, X_hat);
+        float cur_qmse = ts_relative_quant_mse(Wp.data(), out_dim, K);
+        float cur_omse = ts_output_mse_and_grad(W_block.data(), R.data(),
+                                                X, X_count, out_dim, K, nullptr);
+        result->history.push_back(cur_qmse + whip_weight * cur_whip);
+        if (cur_omse < best_omse) {
+            best_omse = cur_omse;
+            best_qmse = cur_qmse;
+            best_whip = cur_whip;
+            best_R    = R;
         }
     }
-    float final_whip = ts_whip_loss(W_rot.data(), out_dim, K);
 
-    // MSE: ||W_rot - ternarize_recon(W_rot)||^2
-    std::vector<float> w_q(out_dim * K);
-    ts_ternarize_recon(W_rot.data(), w_q.data(), out_dim * K);
-    float mse = 0.0f;
-    for (int64_t i = 0; i < out_dim * K; i++) {
-        float d = W_rot[i] - w_q[i];
-        mse += d * d;
+    // Python returns the FINAL rotation (not best). We match that: the
+    // reported final_* metrics are on the final R; best_* metrics are not
+    // surfaced (kept internally for parity audit only).
+    ts_dq_matmul(W_block.data(), R.data(), Wp.data(), out_dim, K, K);
+    float final_whip = ts_whip_loss(Wp.data(), out_dim, K, X_hat);
+    float final_qmse = ts_relative_quant_mse(Wp.data(), out_dim, K);
+    float final_omse = ts_output_mse_and_grad(W_block.data(), R.data(),
+                                              X, X_count, out_dim, K, nullptr);
+    (void)best_R; (void)best_omse; (void)best_qmse; (void)best_whip;
+
+    result->R                  = std::move(R);
+    result->initial_whip       = initial_whip;
+    result->final_whip         = final_whip;
+    result->initial_quant_mse  = initial_qmse;
+    result->final_quant_mse    = final_qmse;
+    result->initial_output_mse = initial_omse;
+    result->final_output_mse   = final_omse;
+    result->n_iters            = max_iters;
+    result->whip_loss          = final_whip;
+    // Legacy mse field: reconstruction MSE (not relative) on W @ R, kept so
+    // test_search.cpp's "mse should drop" assertion still has a value to read.
+    {
+        std::vector<float> Wq(out_dim * K);
+        ts_ternarize_recon(Wp.data(), Wq.data(), out_dim * K);
+        double mse = 0.0;
+        int64_t n = out_dim * K;
+        for (int64_t i = 0; i < n; i++) {
+            double d = (double)Wp[i] - (double)Wq[i];
+            mse += d*d;
+        }
+        result->mse = (float)(mse / (double)n);
     }
-    mse /= (float)(out_dim * K);
-
-    result->R = std::move(R);
-    result->whip_loss = final_whip;
-    result->mse = mse;
-    result->n_iters = max_iters;
     return 0;
 }
+
+// Back-compat shim: drop X / X_hat and call the full driver.
+int ts_dartquant_qr_orth(const float * weights, int64_t out_dim, int64_t in_dim,
+                         const ts_dartquant_params * params,
+                         ts_dartquant_result * result) {
+    return ts_dartquant_qr_orth(weights, out_dim, in_dim,
+                                nullptr, 0, nullptr, params, result);
+}
+
+// ---------------------------------------------------------------------------
+// Apply rotation block-diagonally along in_dim. R is (block_size x block_size),
+// applied as W_rot[:, b*K:(b+1)*K] = W[:, b*K:(b+1)*K] @ R for each block b.
+// Convention W_rot = W @ R matches Python dartquant_apply_rotation when
+// block_size == in_dim (single block).
+// ---------------------------------------------------------------------------
 
 void ts_dartquant_apply(const float * W, const float * R,
                         float * W_rot, int64_t out_dim, int64_t in_dim,
@@ -228,24 +432,26 @@ void ts_dartquant_apply(const float * W, const float * R,
     for (int64_t b = 0; b < n_blocks; b++) {
         int64_t col_off = b * block_size;
         for (int64_t i = 0; i < out_dim; i++) {
+            const float * w_row = W + i*in_dim + col_off;
+            float * out_row = W_rot + i*in_dim + col_off;
             for (int64_t j = 0; j < block_size; j++) {
-                float s = 0.0f;
+                double s = 0.0;
                 for (int64_t k = 0; k < block_size; k++) {
-                    // W_rot = W @ R^T
-                    s += W[i * in_dim + col_off + k] * R[j * block_size + k];
+                    s += (double)w_row[k] * (double)R[k*block_size + j];
                 }
-                W_rot[i * in_dim + col_off + j] = s;
+                out_row[j] = (float)s;
             }
         }
     }
-    // handle remainder
+    // Remainder columns (in_dim not a multiple of block_size) are copied
+    // verbatim, matching the no-op behaviour of an identity tail block.
     int64_t rem = in_dim - n_blocks * block_size;
     if (rem > 0) {
         int64_t col_off = n_blocks * block_size;
         for (int64_t i = 0; i < out_dim; i++) {
-            for (int64_t j = 0; j < rem; j++) {
-                W_rot[i * in_dim + col_off + j] = W[i * in_dim + col_off + j];
-            }
+            memcpy(&W_rot[i*in_dim + col_off],
+                   &W[i*in_dim + col_off],
+                   rem * sizeof(float));
         }
     }
 }
