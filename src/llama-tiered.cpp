@@ -421,6 +421,7 @@ extern "C" llama_tiered_model * llama_tiered_model_load_from_file(
         model_params.n_gpu_layers = -2;
         model_params.split_mode = LLAMA_SPLIT_MODE_NONE;
         model_params.load_mode = LLAMA_LOAD_MODE_MMAP;
+        model_params.mmap_prefetch = false;
         model_params.main_gpu = 0;
         model_params.tensor_split = nullptr;
         model_params.use_extra_bufts = false;

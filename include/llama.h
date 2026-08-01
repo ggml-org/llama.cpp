@@ -332,6 +332,7 @@ extern "C" {
         const struct llama_model_kv_override * kv_overrides;
 
         // Keep the booleans together to avoid misalignment during copy-by-value.
+        bool mmap_prefetch;  // prefetch mmap pages while loading the model
         bool vocab_only;      // only load the vocabulary, no weights
         bool check_tensors;   // validate model tensor data
         bool use_extra_bufts; // use extra buffer types (used for weight repacking)
