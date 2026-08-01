@@ -1948,6 +1948,11 @@ static common_chat_params common_chat_params_init_deepseek_v3_2(const common_cha
     auto extract_reasoning   = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
     auto include_grammar     = has_response_format || (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE);
 
+    std::optional<json> additional_context;
+    if (is_v4 && has_response_format) {
+        additional_context = json{ { "response_format", inputs.json_schema } };
+    }
+
     const std::string DSML         = "｜DSML｜";
     const std::string THINK_START  = "<think>";
     const std::string THINK_END    = "</think>";
@@ -1960,8 +1965,10 @@ static common_chat_params common_chat_params_init_deepseek_v3_2(const common_cha
     const std::string PARAM_END    = "</" + DSML + "parameter>";
     const std::string GEN_PROMPT   = "<｜Assistant｜>";
 
-    data.prompt             = common_chat_template_direct_apply_impl(tmpl, inputs, adjusted_messages);
-    data.generation_prompt  = common_chat_template_generation_prompt_impl(tmpl, inputs, adjusted_messages);
+    data.prompt = common_chat_template_direct_apply_impl(
+        tmpl, inputs, adjusted_messages, std::nullopt, additional_context);
+    data.generation_prompt = common_chat_template_generation_prompt_impl(
+        tmpl, inputs, adjusted_messages, std::nullopt, additional_context);
     data.format             = COMMON_CHAT_FORMAT_PEG_NATIVE;
     data.supports_thinking  = true;
     data.thinking_start_tag = THINK_START;
@@ -1975,9 +1982,16 @@ static common_chat_params common_chat_params_init_deepseek_v3_2(const common_cha
     if (inputs.has_continuation()) {
         const auto & msg = inputs.continue_msg;
 
-        data.generation_prompt = GEN_PROMPT + THINK_START + msg.reasoning_content;
-        if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_CONTENT) {
-            data.generation_prompt += THINK_END + msg.render_content();
+        if (is_v4 && !inputs.enable_thinking) {
+            data.generation_prompt = GEN_PROMPT + THINK_END;
+            if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_CONTENT) {
+                data.generation_prompt += msg.render_content();
+            }
+        } else {
+            data.generation_prompt = GEN_PROMPT + THINK_START + msg.reasoning_content;
+            if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_CONTENT) {
+                data.generation_prompt += THINK_END + msg.render_content();
+            }
         }
 
         data.prompt += data.generation_prompt;
