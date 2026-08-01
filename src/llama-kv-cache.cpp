@@ -1301,8 +1301,8 @@ uint32_t llama_kv_cache::get_n_stream() const {
     return n_stream;
 }
 
-bool llama_kv_cache::get_is_mla() const {
-    return is_mla;
+bool llama_kv_cache::has_v() const {
+    return !is_mla;
 }
 
 bool llama_kv_cache::get_has_shift() const {
@@ -2834,8 +2834,8 @@ uint32_t llama_kv_cache_context::get_n_kv() const {
     return n_kv;
 }
 
-bool llama_kv_cache_context::get_is_mla() const {
-    return kv->get_is_mla();
+bool llama_kv_cache_context::has_v() const {
+    return kv->has_v();
 }
 
 ggml_type llama_kv_cache_context::type_k() const {

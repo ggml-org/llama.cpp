@@ -3074,14 +3074,14 @@ llm_graph_input_attn_k_dsa * llm_graph_context::build_attn_inp_k_dsa() const {
 llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa() const {
     const auto * mctx_cur = static_cast<const llama_kv_cache_iswa_context *>(mctx);
 
-    const bool is_mla = mctx_cur->get_swa()->get_is_mla();
-    GGML_ASSERT(mctx_cur->get_base()->get_is_mla() == is_mla);
+    const bool has_v = mctx_cur->get_swa()->has_v();
+    GGML_ASSERT(mctx_cur->get_base()->has_v() == has_v);
 
     auto inp = std::make_unique<llm_graph_input_attn_kv_iswa>(hparams, cparams, mctx_cur);
 
     {
         inp->self_k_idxs = mctx_cur->get_base()->build_input_k_idxs(ctx0, ubatch);
-        if (!is_mla) {
+        if (has_v) {
             inp->self_v_idxs = mctx_cur->get_base()->build_input_v_idxs(ctx0, ubatch);
         }
 
@@ -3093,7 +3093,7 @@ llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa() const
         GGML_ASSERT(hparams.swa_type != LLAMA_SWA_TYPE_NONE && "Use llama_kv_cache for non-SWA");
 
         inp->self_k_idxs_swa = mctx_cur->get_swa()->build_input_k_idxs(ctx0, ubatch);
-        if (!is_mla) {
+        if (has_v) {
             inp->self_v_idxs_swa = mctx_cur->get_swa()->build_input_v_idxs(ctx0, ubatch);
         }
 
@@ -3102,12 +3102,12 @@ llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa() const
     }
 
     inp->self_k_rot = mctx_cur->get_base()->build_input_k_rot(ctx0);
-    if (!is_mla) {
+    if (has_v) {
         inp->self_v_rot = mctx_cur->get_base()->build_input_v_rot(ctx0);
     }
 
     inp->self_k_rot_swa = mctx_cur->get_swa()->build_input_k_rot(ctx0);
-    if (!is_mla) {
+    if (has_v) {
         inp->self_v_rot_swa = mctx_cur->get_swa()->build_input_v_rot(ctx0);
     }
 
