@@ -1265,8 +1265,10 @@ static common_chat_params common_chat_params_init_qwen3_coder(const common_chat_
 
         if (data.grammar_lazy) {
             data.grammar_triggers = {
-                { COMMON_GRAMMAR_TRIGGER_TYPE_WORD,    "<tool_call>" },
-                { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, "<function=" },
+                { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<tool_call>" },
+                // Trigger on "<function" and not "<function=" because the trailing "=" is part of
+                // the token with the function name e.g. "=read"
+                { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<function"   },
             };
         }
     }
