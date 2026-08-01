@@ -1,0 +1,57 @@
+name: tiered-memory
+
+on:
+  pull_request:
+    paths:
+      - "include/llama-tiered.h"
+      - "src/llama-tiered.cpp"
+      - "ggml/include/ggml-cuda.h"
+      - "ggml/src/ggml-cuda/**"
+      - "examples/tiered-memory/**"
+      - "src/CMakeLists.txt"
+      - ".github/workflows/tiered-memory.yml"
+  push:
+    branches:
+      - feature/llamay-tiered-memory-planner
+
+jobs:
+  cpu-build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >-
+          cmake -S . -B build
+          -DGGML_CUDA=OFF
+          -DLLAMA_BUILD_EXAMPLES=ON
+          -DLLAMA_BUILD_TESTS=OFF
+          -DLLAMA_BUILD_TOOLS=OFF
+          -DLLAMA_BUILD_SERVER=OFF
+          -DLLAMA_BUILD_APP=OFF
+      - name: Build public API and example
+        run: cmake --build build --target llama llama-tiered -j2
+
+  cuda-build:
+    runs-on: ubuntu-24.04
+    container:
+      image: nvidia/cuda:12.8.1-devel-ubuntu24.04
+    steps:
+      - name: Install build tools
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates cmake git g++ make pkg-config
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >-
+          cmake -S . -B build
+          -DGGML_CUDA=ON
+          -DGGML_BACKEND_DL=OFF
+          -DBUILD_SHARED_LIBS=OFF
+          -DLLAMA_BUILD_EXAMPLES=ON
+          -DLLAMA_BUILD_TESTS=OFF
+          -DLLAMA_BUILD_TOOLS=OFF
+          -DLLAMA_BUILD_SERVER=OFF
+          -DLLAMA_BUILD_APP=OFF
+      - name: Build CUDA backend and example
+        run: cmake --build build --target llama-tiered -j2
