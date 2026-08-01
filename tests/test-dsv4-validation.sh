@@ -12,9 +12,13 @@ reuse.  The server binary defaults to build/bin/llama-server.
 
 Environment overrides:
   DSV4_SERVER             llama-server path
-  DSV4_TENSOR_SPLIT       tensor proportions (default: 1,1)
+  DSV4_TENSOR_SPLIT       tensor proportions (default: 1,1,1,1)
   DSV4_REFERENCE_SPLIT    reference split mode (default: layer)
   DSV4_FLASH_ATTN         on, off, or auto (default: auto)
+  DSV4_PARALLEL            server parallel slots (default: 1)
+  DSV4_DRAFT_MODEL         optional speculative draft GGUF
+  DSV4_SPEC_TYPE           speculative type (default: draft-mtp with draft model)
+  DSV4_DRAFT_N_MAX          optional speculative draft token count
   DSV4_PORT               first localhost port (default: 18080)
   DSV4_CTX_SIZE           context size (default: 4096)
   DSV4_N_PREDICT          generated tokens per request (default: 8)
@@ -30,23 +34,34 @@ fi
 : "${DSV4_MODEL:?DSV4_MODEL must point to a real DSv4 GGUF}"
 [[ -f "$DSV4_MODEL" ]] || { echo "error: DSV4_MODEL is not a file: $DSV4_MODEL" >&2; exit 2; }
 
+TENSOR_SPLIT=${DSV4_TENSOR_SPLIT:-1,1,1,1}
+REFERENCE_SPLIT=${DSV4_REFERENCE_SPLIT:-layer}
+FLASH_ATTN=${DSV4_FLASH_ATTN:-auto}
+PARALLEL=${DSV4_PARALLEL:-1}
+BASE_PORT=${DSV4_PORT:-18080}
+CTX_SIZE=${DSV4_CTX_SIZE:-4096}
+N_PREDICT=${DSV4_N_PREDICT:-8}
+CACHE_REUSE=${DSV4_CACHE_REUSE:-16}
+DRAFT_MODEL=${DSV4_DRAFT_MODEL:-}
+SPEC_TYPE=${DSV4_SPEC_TYPE:-}
+DRAFT_N_MAX=${DSV4_DRAFT_N_MAX:-}
+case "$FLASH_ATTN" in
+    on|off|auto) ;;
+    *) echo "error: DSV4_FLASH_ATTN must be on, off, or auto (got '$FLASH_ATTN')" >&2; exit 2 ;;
+esac
+if [[ -n "$DRAFT_MODEL" ]]; then
+    [[ -f "$DRAFT_MODEL" ]] || { echo "error: DSV4 draft model is not a file: $DRAFT_MODEL" >&2; exit 2; }
+    SPEC_TYPE=${SPEC_TYPE:-draft-mtp}
+elif [[ -n "$SPEC_TYPE" || -n "$DRAFT_N_MAX" ]]; then
+    echo "error: DSV4_DRAFT_MODEL is required when DSV4_SPEC_TYPE or DSV4_DRAFT_N_MAX is set" >&2
+    exit 2
+fi
+
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 SERVER=${DSV4_SERVER:-$ROOT_DIR/build/bin/llama-server}
 [[ -x "$SERVER" ]] || { echo "error: llama-server is not executable: $SERVER" >&2; exit 2; }
 command -v curl >/dev/null || { echo "error: curl is required" >&2; exit 2; }
 command -v python3 >/dev/null || { echo "error: python3 is required" >&2; exit 2; }
-
-TENSOR_SPLIT=${DSV4_TENSOR_SPLIT:-1,1}
-REFERENCE_SPLIT=${DSV4_REFERENCE_SPLIT:-layer}
-FLASH_ATTN=${DSV4_FLASH_ATTN:-auto}
-BASE_PORT=${DSV4_PORT:-18080}
-CTX_SIZE=${DSV4_CTX_SIZE:-4096}
-N_PREDICT=${DSV4_N_PREDICT:-8}
-CACHE_REUSE=${DSV4_CACHE_REUSE:-16}
-case "$FLASH_ATTN" in
-    on|off|auto) ;;
-    *) echo "error: DSV4_FLASH_ATTN must be on, off, or auto (got '$FLASH_ATTN')" >&2; exit 2 ;;
-esac
 
 TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/dsv4-validation.XXXXXX")
 SERVER_PID=""
@@ -81,14 +96,22 @@ request() {
 run_mode() {
     local mode=$1 label=$2 port=$3 out_dir="$TMP_ROOT/$2"
     mkdir -p "$out_dir"
-    echo "[$label] split-mode=$mode tensor-split=$TENSOR_SPLIT flash-attn=$FLASH_ATTN"
+    echo "[$label] split-mode=$mode tensor-split=$TENSOR_SPLIT flash-attn=$FLASH_ATTN parallel=$PARALLEL"
+
+    local -a draft_args=()
+    if [[ -n "$DRAFT_MODEL" ]]; then
+        draft_args+=(--spec-draft-model "$DRAFT_MODEL" --spec-type "$SPEC_TYPE")
+        if [[ -n "$DRAFT_N_MAX" ]]; then
+            draft_args+=(--spec-draft-n-max "$DRAFT_N_MAX")
+        fi
+    fi
 
     "$SERVER" \
         --model "$DSV4_MODEL" \
         --host 127.0.0.1 \
         --port "$port" \
         --ctx-size "$CTX_SIZE" \
-        --parallel 1 \
+        --parallel "$PARALLEL" \
         --seed 123 \
         --temp 0 \
         --flash-attn "$FLASH_ATTN" \
@@ -96,6 +119,7 @@ run_mode() {
         --tensor-split "$TENSOR_SPLIT" \
         --cache-prompt \
         --cache-reuse "$CACHE_REUSE" \
+        "${draft_args[@]}" \
         >"$TMP_ROOT/server.log" 2>&1 &
     SERVER_PID=$!
 
@@ -178,16 +202,20 @@ PY
 run_mode "$REFERENCE_SPLIT" reference "$BASE_PORT"
 run_mode tensor tensor "$((BASE_PORT + 1))"
 
-python3 - "$TMP_ROOT/reference/continuation.json" "$TMP_ROOT/tensor/continuation.json" <<'PY'
+python3 - "$TMP_ROOT/reference" "$TMP_ROOT/tensor" <<'PY'
 import json
+import pathlib
 import sys
-with open(sys.argv[1]) as f:
-    reference = json.load(f)
-with open(sys.argv[2]) as f:
-    tensor = json.load(f)
-if reference.get("content") != tensor.get("content"):
-    raise SystemExit("reference and tensor-split continuation outputs differ")
-print("[compare] reference and tensor-split continuation outputs match")
+
+reference_root, tensor_root = map(pathlib.Path, sys.argv[1:])
+for name in ("first.json", "continuation.json", "replay.json"):
+    with (reference_root / name).open() as f:
+        reference = json.load(f)
+    with (tensor_root / name).open() as f:
+        tensor = json.load(f)
+    if reference.get("content") != tensor.get("content"):
+        raise SystemExit(f"reference and tensor-split {name} outputs differ")
+print("[compare] reference and tensor-split deterministic outputs match")
 PY
 
 echo "DSv4 validation passed (model: $DSV4_MODEL)"
