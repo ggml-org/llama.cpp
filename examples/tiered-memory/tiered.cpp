@@ -2,7 +2,9 @@
 
 #include <clocale>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <string>
 #include <vector>
 
@@ -152,7 +154,7 @@ int main(int argc, char ** argv) {
         }
         position += batch.n_tokens;
 
-        const llama_token token = llama_sampler_sample(sampler, context, -1);
+        llama_token token = llama_sampler_sample(sampler, context, -1);
         if (llama_vocab_is_eog(vocab, token)) {
             break;
         }
