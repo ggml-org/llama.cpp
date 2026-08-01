@@ -653,8 +653,8 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
                     for (int64_t j = 0; j < src1->ne[0]; ++j) {
                         e.activations[mat_start + j] += x[j];
                         e.values[mat_start + j] += x[j] * x[j];
-                        if (!std::isfinite((float)e.values[j])) {
-                            LOG_ERR("%f detected in %s\n", (float)e.values[j], wname.c_str());
+                        if (!std::isfinite((float)e.values[mat_start + j])) {
+                            LOG_ERR("%f detected in %s\n", (float)e.values[mat_start + j], wname.c_str());
                             exit(1);
                         }
                     }
