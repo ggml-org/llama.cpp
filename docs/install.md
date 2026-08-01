@@ -1,5 +1,11 @@
 # Install pre-built version of llama.cpp
 
+> **Note:** Tessera is a fork of llama.cpp and is **not** published to the
+> third-party package managers below (conda-forge, Winget, Homebrew,
+> MacPorts, Nix). Those channels ship upstream llama.cpp. To install
+> Tessera, [build it from source](./build.md). The list below is kept for
+> reference to upstream packaging.
+
 | Install via | Windows | Mac  | Linux |
 |-------------|---------|------|-------|
 | conda-forge | ✅      | ✅   | ✅   |
