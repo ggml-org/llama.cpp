@@ -1,17 +1,14 @@
 #!/usr/bin/env python3
-"""Add a mapped pinned-memory fallback for DRAM-tier GGUF tensors.
-
-The fallback is required on systems where cudaHostRegisterMapped rejects the
-read-only GGUF mmap (observed on a GTX 1660 SUPER / Turing). The script is
-idempotent and exits successfully when the patch is already present.
-"""
-
 from pathlib import Path
 
 path = Path("ggml/src/ggml-cuda/tiered.cu")
 text = path.read_text(encoding="utf-8")
 
-if "bool host_ptr_owned = false;" in text and "using a mapped pinned copy" in text:
+if (
+    "bool host_ptr_owned = false;" in text
+    and "using a mapped pinned copy" in text
+    and "cudaFreeHost(state->host_ptr)" in text
+):
     print(f"already patched {path}")
     raise SystemExit(0)
 
@@ -27,10 +24,7 @@ new = """    void * host_ptr = nullptr;
     size_t alloc_size = 0;
 """
 if old not in text:
-    raise SystemExit(
-        "tensor_state layout did not match expected source; restore tiered.cu "
-        "from git and rerun this script"
-    )
+    raise SystemExit("tensor_state layout did not match expected source")
 text = text.replace(old, new, 1)
 
 old = """        if (state->tier == GGML_CUDA_TIERED_MEMORY_VRAM && state->device_ptr) {
