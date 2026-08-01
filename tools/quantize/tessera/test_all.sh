@@ -63,6 +63,9 @@ compile_and_run acceptance  $T/test_acceptance.cpp  $T/tessera-acceptance.cpp $T
 compile_and_run higgs       $T/test_higgs.cpp       $T/tessera-higgs.cpp
 compile_and_run regime      $T/test_regime.cpp      $T/tessera-regime.cpp
 compile_and_run peqat       $T/test_peqat.cpp       $T/tessera-peqat.cpp
+# SEPTQ banded-Cholesky quantizer parity (B3): standalone, links the septq
+# port + nlohmann/json for the fixture loader.
+compile_and_run septq       $T/test_septq.cpp       $T/tessera-septq.cpp -I vendor
 
 # --- Needs vec (Accelerate) ---
 compile_and_run vec         $T/test_vec.cpp         $T/tessera-vec.cpp -framework Accelerate
