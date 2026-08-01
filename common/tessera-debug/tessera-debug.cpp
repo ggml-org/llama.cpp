@@ -17,14 +17,23 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <string>
 #include <system_error>
 #include <vector>
 
 namespace tessera_debug {
 
-// File-static state. Not thread-safe; one matmul at a time per process.
+// File-static state. Guarded by g_writer_mutex; a per-tensor
+// open/write_rows/close sequence is atomic across concurrent backend
+// callbacks (e.g. Metal addCompletedHandler blocks firing in parallel).
 static float g_outlier_threshold = DEQUANT_DEFAULT_OUTLIER_THRESHOLD;
+
+// Recursive so the public open/write/close entry points can each acquire
+// the lock without deadlocking when one sequence nests another (it does
+// not today, but the open_dequant_writer + open_fp16_reference_writer
+// pattern means two opens can be in flight from one caller).
+static std::recursive_mutex g_writer_mutex;
 
 namespace {
 
@@ -471,6 +480,7 @@ int64_t dequant_stride() {
 }
 
 void open_dequant_writer(const char * tensor_name, int64_t rows, int64_t cols) {
+    std::lock_guard<std::recursive_mutex> lk(g_writer_mutex);
     ensure_env_loaded();
     if (!sidecar_open_impl(g_l1, env_state().dequant_dir, tensor_name, rows, cols,
                             DEQUANT_FILE_SUFFIX_L1)) {
@@ -488,6 +498,7 @@ void open_dequant_writer(const char * tensor_name, int64_t rows, int64_t cols) {
 }
 
 void write_dequant_row(int64_t row_idx, const float * data, int64_t n) {
+    std::lock_guard<std::recursive_mutex> lk(g_writer_mutex);
     sidecar_write_row_impl(g_l1, row_idx, data, n);
     if (dequant_w4a4_enabled() && g_l15.open && data != nullptr && n > 0) {
         sidecar_write_row_impl(g_l15, row_idx, data, n);
@@ -498,6 +509,7 @@ void set_dequant_row_meta(int64_t row_idx,
                           uint64_t timing_ns,
                           uint32_t kernel_id,
                           uint32_t dispatch_count) {
+    std::lock_guard<std::recursive_mutex> lk(g_writer_mutex);
     sidecar_set_row_meta_impl(g_l1, row_idx, timing_ns, kernel_id, dispatch_count);
     if (dequant_w4a4_enabled() && g_l15.open) {
         sidecar_set_row_meta_impl(g_l15, row_idx, timing_ns, kernel_id, dispatch_count);
@@ -505,6 +517,7 @@ void set_dequant_row_meta(int64_t row_idx,
 }
 
 void close_dequant_writer() {
+    std::lock_guard<std::recursive_mutex> lk(g_writer_mutex);
     if (dequant_w4a4_enabled() && g_l15.open) {
         sidecar_close_impl(g_l15);
     }
@@ -514,6 +527,7 @@ void close_dequant_writer() {
 }
 
 void open_fp16_reference_writer(const char * tensor_name, int64_t rows, int64_t cols) {
+    std::lock_guard<std::recursive_mutex> lk(g_writer_mutex);
     ensure_env_loaded();
     if (!dequant_w4a4_enabled()) {
         // Back-compat: in non-w4a4 mode the L1.5 sidecar is not
@@ -527,6 +541,7 @@ void open_fp16_reference_writer(const char * tensor_name, int64_t rows, int64_t 
 }
 
 void write_fp16_reference_row(int64_t row_idx, const float * data, int64_t n) {
+    std::lock_guard<std::recursive_mutex> lk(g_writer_mutex);
     sidecar_write_row_impl(g_l15, row_idx, data, n);
 }
 
@@ -534,10 +549,12 @@ void set_fp16_reference_row_meta(int64_t row_idx,
                                  uint64_t timing_ns,
                                  uint32_t kernel_id,
                                  uint32_t dispatch_count) {
+    std::lock_guard<std::recursive_mutex> lk(g_writer_mutex);
     sidecar_set_row_meta_impl(g_l15, row_idx, timing_ns, kernel_id, dispatch_count);
 }
 
 void close_fp16_reference_writer() {
+    std::lock_guard<std::recursive_mutex> lk(g_writer_mutex);
     sidecar_close_impl(g_l15);
 }
 
