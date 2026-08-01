@@ -82,6 +82,7 @@ struct tiered_buffer_context {
     size_t address_space_size = 0;
     std::shared_ptr<tiered_plan> plan;
     std::unordered_map<const ggml_tensor *, std::unique_ptr<tensor_state>> tensors;
+    std::vector<ggml_tensor *> all_tensors;
     std::vector<host_registration> registrations;
 };
 
@@ -252,8 +253,11 @@ static bool is_ssd_eligible(const ggml_tensor * tensor) {
         return false;
     }
     const std::string name = tensor->name;
-    return name.find("_exps") != std::string::npos ||
-           name.find(".experts.") != std::string::npos;
+    const bool expert = name.find("_exps.weight") != std::string::npos ||
+                        name.find(".experts.") != std::string::npos;
+    const bool weight = name.size() >= 7 &&
+                        name.compare(name.size() - 7, 7, ".weight") == 0;
+    return expert && weight;
 }
 
 static void init_sparse_tensor(tiered_buffer_context * ctx, ggml_tensor * tensor, tensor_state * state) {
@@ -376,7 +380,6 @@ static void stage_sparse_experts(tiered_buffer_context * ctx, const ggml_tensor 
         }
     } catch (...) {
         free_sparse_tensor(state);
-        // Re-reserve the address range because free_sparse_tensor releases it.
         state->sparse_size = align_up_size(state->size, granularity);
         TIERED_CU_CHECK(cuMemAddressReserve(
                 &state->sparse_address, state->sparse_size,
@@ -439,8 +442,28 @@ static ggml_status tiered_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_
     auto * ctx = static_cast<tiered_buffer_context *>(buffer->context);
     if (ctx->tensors.find(tensor) == ctx->tensors.end()) {
         ctx->tensors.emplace(tensor, std::make_unique<tensor_state>());
+        ctx->all_tensors.push_back(tensor);
     }
     return GGML_STATUS_SUCCESS;
+}
+
+static void tiered_refresh_views(tiered_buffer_context * ctx) {
+    for (size_t pass = 0; pass < ctx->all_tensors.size(); ++pass) {
+        bool changed = false;
+        for (ggml_tensor * tensor : ctx->all_tensors) {
+            if (!tensor->view_src || !tensor->view_src->data) {
+                continue;
+            }
+            void * expected = static_cast<char *>(tensor->view_src->data) + tensor->view_offs;
+            if (tensor->data != expected) {
+                tensor->data = expected;
+                changed = true;
+            }
+        }
+        if (!changed) {
+            break;
+        }
+    }
 }
 
 static void tiered_buffer_set_tensor(
@@ -459,6 +482,7 @@ static void tiered_buffer_set_tensor(
     auto & state_ptr = ctx->tensors[tensor];
     if (!state_ptr) {
         state_ptr = std::make_unique<tensor_state>();
+        ctx->all_tensors.push_back(tensor);
     }
     tensor_state * state = state_ptr.get();
     if (state->host_ptr || state->device_ptr || state->sparse_address) {
@@ -518,6 +542,8 @@ static void tiered_buffer_set_tensor(
             break;
     }
 
+    tiered_refresh_views(ctx);
+
     GGML_LOG_INFO("tiered-memory: %-4s %8.2f MiB %s\n",
             state->tier == GGML_CUDA_TIERED_MEMORY_VRAM ? "VRAM" :
             state->tier == GGML_CUDA_TIERED_MEMORY_DRAM ? "DRAM" : "SSD",
@@ -567,7 +593,6 @@ static void tiered_buffer_memset_tensor(
         TIERED_CUDA_CHECK(cudaMemset(
                 static_cast<char *>(state->device_ptr) + offset, value, size));
     } else if (state->host_ptr) {
-        // Model mmaps are read-only. Weight buffers should never be mutated.
         throw std::runtime_error("attempted to mutate a read-only tiered weight tensor");
     }
 }
@@ -575,7 +600,6 @@ static void tiered_buffer_memset_tensor(
 static void tiered_buffer_clear(ggml_backend_buffer_t buffer, uint8_t value) {
     GGML_UNUSED(buffer);
     GGML_UNUSED(value);
-    // The logical address space is replaced with per-tensor storage at load time.
 }
 
 static const ggml_backend_buffer_i tiered_buffer_interface = {
@@ -800,10 +824,8 @@ static void tiered_device_memory(ggml_backend_dev_t dev, size_t * free, size_t *
     ggml_backend_dev_memory(ctx->inner_device, free, total);
 }
 
-static ggml_backend_dev_type tiered_device_type(ggml_backend_dev_t dev) {
+static enum ggml_backend_dev_type tiered_device_type(ggml_backend_dev_t dev) {
     GGML_UNUSED(dev);
-    // Prevent automatic model-device selection. The public tiered loader selects
-    // this device explicitly.
     return GGML_BACKEND_DEVICE_TYPE_ACCEL;
 }
 
@@ -814,6 +836,7 @@ static void tiered_device_props(ggml_backend_dev_t dev, ggml_backend_dev_props *
     props->description = ctx->description.c_str();
     props->type = GGML_BACKEND_DEVICE_TYPE_ACCEL;
     props->device_id = ctx->device_id.c_str();
+    props->caps.buffer_from_host_ptr = false;
 }
 
 static ggml_backend_t tiered_device_init(ggml_backend_dev_t dev, const char * params) {
@@ -999,7 +1022,7 @@ extern "C" void ggml_backend_cuda_tiered_register(void) {
                 /* .context = */ buft_ctx,
             };
 
-            auto * dev = new ggml_backend_device {
+            ggml_backend_dev_t dev = new ggml_backend_device {
                 /* .iface   = */ tiered_device_interface,
                 /* .reg     = */ &tiered_registry,
                 /* .context = */ dev_ctx,
