@@ -2154,6 +2154,20 @@ static void ggml_backend_meta_set_tensor_async(ggml_backend_t backend, ggml_tens
             }
             GGML_ASSERT(shard_start == tensor->ne[3]);
         } break;
+        case GGML_BACKEND_SPLIT_AXIS_PARTIAL: {
+            GGML_ASSERT(tensor->type == GGML_TYPE_F32);
+            GGML_ASSERT(offset % sizeof(float) == 0);
+            GGML_ASSERT(size   % sizeof(float) == 0);
+            const size_t n = size / sizeof(float);
+            std::vector<float> partial(n);
+            const float * src = (const float *) data;
+            for (size_t i = 0; i < n; ++i) {
+                partial[i] = src[i] / n_backends;
+            }
+            for (size_t j = 0; j < n_backends; ++j) {
+                ggml_backend_tensor_set(scratch.get(tensor, j), partial.data(), offset, size);
+            }
+        } break;
         case GGML_BACKEND_SPLIT_AXIS_MIRRORED: {
             for (size_t j = 0; j < n_backends; j++) {
                 ggml_backend_tensor_set_async(
@@ -2219,6 +2233,21 @@ static void ggml_backend_meta_get_tensor_async(ggml_backend_t backend, const ggm
                 shard_start = shard_stop;
             }
             GGML_ASSERT(shard_start == tensor->ne[3]);
+        } break;
+        case GGML_BACKEND_SPLIT_AXIS_PARTIAL: {
+            GGML_ASSERT(tensor->type == GGML_TYPE_F32);
+            GGML_ASSERT(offset % sizeof(float) == 0);
+            GGML_ASSERT(size   % sizeof(float) == 0);
+            const size_t n = size / sizeof(float);
+            std::vector<float> partial(n);
+            float * dst = (float *) data;
+            std::fill(dst, dst + n, 0.0f);
+            for (size_t j = 0; j < n_backends; ++j) {
+                ggml_backend_tensor_get(scratch.get(tensor, j), partial.data(), offset, size);
+                for (size_t i = 0; i < n; ++i) {
+                    dst[i] += partial[i];
+                }
+            }
         } break;
         case GGML_BACKEND_SPLIT_AXIS_MIRRORED: {
             // TODO other simple backend may be better

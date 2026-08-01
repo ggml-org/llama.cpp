@@ -182,6 +182,15 @@ int main() {
         std::fprintf(stderr, "partial set/readback mismatch\n");
         return 1;
     }
+    std::fill(partial_actual.begin(), partial_actual.end(), 0.0f);
+    ggml_backend_tensor_set_async(backend.get(), partial, partial_expected.data(), 0, partial_nbytes);
+    ggml_backend_synchronize(backend.get());
+    ggml_backend_tensor_get_async(backend.get(), partial, partial_actual.data(), 0, partial_nbytes);
+    ggml_backend_synchronize(backend.get());
+    if (partial_actual != partial_expected) {
+        std::fprintf(stderr, "partial async set/readback mismatch\n");
+        return 1;
+    }
 
     std::puts("meta split axis-2, axis-3, mirrored, and partial readback passed");
     return 0;
