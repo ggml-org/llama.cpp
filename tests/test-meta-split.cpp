@@ -69,6 +69,8 @@ int main() {
 
     ggml_tensor * root = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F32, 4, 4, 8, 1);
     ggml_set_name(root, "root");
+    ggml_tensor * mirror = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F32, 4, 4, 8, 1);
+    ggml_set_name(mirror, "mirror");
     // Swap dimensions 0 and 1 while preserving dimension 2.  The result is
     // deliberately non-contiguous but remains split along axis 2.
     ggml_tensor * permuted = ggml_permute(ctx.get(), root, 1, 0, 2, 3);
@@ -88,8 +90,16 @@ int main() {
     ggml_backend_tensor_set(root, expected.data(), 0, nbytes);
 
     std::vector<float> actual(expected.size(), 0.0f);
-    ggml_backend_tensor_get(permuted, actual.data(), 0, nbytes);
+    ggml_backend_tensor_get(root, actual.data(), 0, nbytes);
+    for (size_t i = 0; i < expected.size(); ++i) {
+        if (expected[i] != actual[i]) {
+            std::fprintf(stderr, "contiguous axis-2 readback mismatch at %zu: %.9g != %.9g\n", i, expected[i], actual[i]);
+            return 1;
+        }
+    }
 
+    std::fill(actual.begin(), actual.end(), 0.0f);
+    ggml_backend_tensor_get(permuted, actual.data(), 0, nbytes);
     for (size_t i = 0; i < expected.size(); ++i) {
         if (expected[i] != actual[i]) {
             std::fprintf(stderr, "permuted axis-2 readback mismatch at %zu: %.9g != %.9g\n", i, expected[i], actual[i]);
@@ -97,6 +107,20 @@ int main() {
         }
     }
 
-    std::puts("meta split axis-2 permuted readback passed");
+    std::vector<float> mirrored(expected.size());
+    for (size_t i = 0; i < mirrored.size(); ++i) {
+        mirrored[i] = std::cos((float) i * 0.0625f);
+    }
+    ggml_backend_tensor_set(mirror, mirrored.data(), 0, nbytes);
+    std::fill(actual.begin(), actual.end(), 0.0f);
+    ggml_backend_tensor_get(mirror, actual.data(), 0, nbytes);
+    for (size_t i = 0; i < mirrored.size(); ++i) {
+        if (mirrored[i] != actual[i]) {
+            std::fprintf(stderr, "mirrored readback mismatch at %zu: %.9g != %.9g\n", i, mirrored[i], actual[i]);
+            return 1;
+        }
+    }
+
+    std::puts("meta split axis-2 and mirrored readback passed");
     return 0;
 }
