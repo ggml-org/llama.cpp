@@ -151,7 +151,7 @@ static void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, gg
             if (gqa_ratio % 16 == 0) {
                 ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<192, 128, 16>(ctx, dst);
             } else {
-                GGML_ASSERT(gqa_ratio % 8 == 0);
+                // GQA ratios that are not divisible by 8 ( like motif 3's 5) are handled by padding the tile to 8 channels, with out of bounds channels masked.
                 ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<192, 128,  8>(ctx, dst);
             }
         } break;
@@ -407,7 +407,9 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
             if (V->ne[0] != 128 || !gqa_opt_applies) {
                 return BEST_FATTN_KERNEL_NONE;
             }
-            if (gqa_ratio % 8 != 0) {
+            // While the mma kernel masks out of bounds GQA channels and thus supports non multiple of 8 GQA ratios with partially filled tiles,
+            // the tile kernel has no such masking, and strictly requires a GQA ratio that is divisible by 8.
+            if (gqa_ratio % 8 != 0 && !turing_mma_available(cc)) {
                 return BEST_FATTN_KERNEL_NONE;
             }
             break;
