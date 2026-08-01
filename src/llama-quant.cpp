@@ -318,6 +318,8 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
         quantize &= name.find("attn_q_b.weight")      == std::string::npos;
         quantize &= name.find("attn_kv_a_mqa.weight") == std::string::npos;
         quantize &= name.find("attn_kv_b.weight")     == std::string::npos;
+        quantize &= name.find("attn_k_b.weight")      == std::string::npos; // MLA split of attn_kv_b
+        quantize &= name.find("attn_v_b.weight")      == std::string::npos; // MLA split of attn_kv_b
         quantize &= name.find("attn_output.weight")   == std::string::npos;
     }
     // do not quantize the i32 token-id -> expert-id routing table (DeepSeek-V4)

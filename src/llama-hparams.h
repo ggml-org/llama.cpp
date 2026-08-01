@@ -252,6 +252,12 @@ struct llama_hparams {
     uint32_t motif_mhc_iters        = 20;
     float    motif_mhc_post_coeff   = 1.0f;
 
+    // Motif-3 GDLA, MLA latent KV cache on the full-attention layers.
+    bool     motif_mla_kv        = false;
+    uint32_t motif_n_embd_head_k = 0; // true per-head K dim (qk_nope + qk_rope)
+    uint32_t motif_n_embd_head_v = 0; // true per-head V dim
+    uint32_t motif_n_head_kv     = 0; // true GQA KV head count of the GDLA projections
+
     uint32_t dsv4_hc_mult              = 0;
     uint32_t dsv4_hc_sinkhorn_iters    = 0;
     uint32_t dsv4_hash_layer_count     = 0;

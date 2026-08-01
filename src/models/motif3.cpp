@@ -68,6 +68,29 @@ void llama_model_motif3::load_arch_hparams(llama_model_loader & ml) {
         throw std::runtime_error("Motif-3: head_count must be a multiple of head_count_kv");
     }
 
+    // GDLA MLA latent cache for the full attention layers, SWA layers keep the full GQA representation
+    if (hparams.swa_type != LLAMA_SWA_TYPE_NONE &&
+            ml.get_tensor_meta(tn(LLM_TENSOR_ATTN_K_B, "weight", 0).str().c_str()) != nullptr) {
+        hparams.motif_mla_kv        = true;
+        hparams.motif_n_embd_head_k = hparams.n_embd_head_k_full;
+        hparams.motif_n_embd_head_v = hparams.n_embd_head_v_full;
+        hparams.motif_n_head_kv     = hparams.n_head_kv();
+
+        hparams.n_embd_head_k_full  = hparams.n_lora_kv + hparams.n_rot_full;
+        hparams.n_embd_head_v_full  = hparams.n_lora_kv;
+
+        for (uint32_t il = 0; il < hparams.n_layer_all; ++il) {
+            if (!hparams.is_swa(il)) {
+                hparams.n_head_kv_arr[il] = 1;
+            }
+        }
+
+        LLAMA_LOG_INFO("%s: Motif-3 GDLA: using MLA latent KV cache on full-attention layers "
+                "(%u + %u per token instead of %u)\n", __func__,
+                hparams.n_lora_kv, hparams.n_rot_full,
+                hparams.motif_n_head_kv*(hparams.motif_n_embd_head_k + hparams.motif_n_embd_head_v));
+    }
+
 
     switch (hparams.n_layer()) {
         case 53: type = LLM_TYPE_314B_A13B; break;
@@ -81,8 +104,13 @@ void llama_model_motif3::load_arch_tensors(llama_model_loader &) {
     const int64_t q_lora_rank  = hparams.n_lora_q;
     const int64_t kv_lora_rank = hparams.n_lora_kv;
 
+    // With motif_mla_kv, n_embd_head_k/v and n_head_kv describe the latent cache of the full attention layers
+    const int64_t n_embd_head_k_att = hparams.motif_mla_kv ? hparams.motif_n_embd_head_k : n_embd_head_k;
+    const int64_t n_embd_head_v_att = hparams.motif_mla_kv ? hparams.motif_n_embd_head_v : n_embd_head_v;
+    const int64_t n_head_kv_att     = hparams.motif_mla_kv ? hparams.motif_n_head_kv     : n_head_kv;
+
     const int64_t n_embd_head_qk_rope = hparams.n_rot();
-    const int64_t n_embd_head_qk_nope = n_embd_head_k - n_embd_head_qk_rope;
+    const int64_t n_embd_head_qk_nope = n_embd_head_k_att - n_embd_head_qk_rope;
     GGML_ASSERT(n_embd_head_qk_nope >= 1);
 
     const int64_t n_noise  = hparams.motif_n_noise_heads;
@@ -109,15 +137,21 @@ void llama_model_motif3::load_arch_tensors(llama_model_loader &) {
         // GDLA
         layer.wq_a          = create_tensor(tn(LLM_TENSOR_ATTN_Q_A,      "weight", i), {n_embd, q_lora_rank}, 0);
         layer.attn_q_a_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_A_NORM, "weight", i), {q_lora_rank}, 0);
-        layer.wq_b          = create_tensor(tn(LLM_TENSOR_ATTN_Q_B,      "weight", i), {q_lora_rank, n_head * n_embd_head_k}, 0);
-        layer.wq_b_gate     = create_tensor(tn(LLM_TENSOR_ATTN_GATE,     "weight", i), {q_lora_rank, n_signal * n_embd_head_v}, TENSOR_NOT_REQUIRED);
+        layer.wq_b          = create_tensor(tn(LLM_TENSOR_ATTN_Q_B,      "weight", i), {q_lora_rank, n_head * n_embd_head_k_att}, 0);
+        layer.wq_b_gate     = create_tensor(tn(LLM_TENSOR_ATTN_GATE,     "weight", i), {q_lora_rank, n_signal * n_embd_head_v_att}, TENSOR_NOT_REQUIRED);
 
         layer.wkv_a_mqa      = create_tensor(tn(LLM_TENSOR_ATTN_KV_A_MQA,  "weight", i), {n_embd, kv_lora_rank + n_embd_head_qk_rope}, 0);
         layer.attn_kv_a_norm = create_tensor(tn(LLM_TENSOR_ATTN_KV_A_NORM, "weight", i), {kv_lora_rank}, 0);
-        layer.wkv_b          = create_tensor(tn(LLM_TENSOR_ATTN_KV_B,      "weight", i), {kv_lora_rank, n_head_kv * (n_embd_head_qk_nope + n_embd_head_v)}, 0);
+        layer.wkv_b          = create_tensor(tn(LLM_TENSOR_ATTN_KV_B,      "weight", i), {kv_lora_rank, n_head_kv_att * (n_embd_head_qk_nope + n_embd_head_v_att)}, 0);
+
+        if (hparams.motif_mla_kv) {
+            // per kv head slices of wkv_b, kb transposed
+            layer.wk_b = create_tensor(tn(LLM_TENSOR_ATTN_K_B, "weight", i), {n_embd_head_qk_nope, kv_lora_rank, n_head_kv_att}, 0);
+            layer.wv_b = create_tensor(tn(LLM_TENSOR_ATTN_V_B, "weight", i), {kv_lora_rank, n_embd_head_v_att, n_head_kv_att}, 0);
+        }
 
         layer.attn_lambda = create_tensor(tn(LLM_TENSOR_ATTN_LAMBDA, "weight", i), {n_embd, n_signal}, 0);
-        layer.wo          = create_tensor(tn(LLM_TENSOR_ATTN_OUT,    "weight", i), {n_signal * n_embd_head_v, n_embd}, 0);
+        layer.wo          = create_tensor(tn(LLM_TENSOR_ATTN_OUT,    "weight", i), {n_signal * n_embd_head_v_att, n_embd}, 0);
 
         // mHC
         if (hc > 0) {
@@ -542,8 +576,13 @@ ggml_tensor * llama_model_motif3::graph::build_gdla_attn(
         int il) const {
     const auto & layer = model.layers[il];
 
+    // With motif_mla_kv, n_embd_head_k/v and n_head_kv describe the latent cache of the full-attention layers instead
+    const int64_t n_embd_head_k_att = hparams.motif_mla_kv ? (int64_t) hparams.motif_n_embd_head_k : n_embd_head_k;
+    const int64_t n_embd_head_v_att = hparams.motif_mla_kv ? (int64_t) hparams.motif_n_embd_head_v : n_embd_head_v;
+    const int64_t n_head_kv_att     = hparams.motif_mla_kv ? (int64_t) hparams.motif_n_head_kv     : n_head_kv;
+
     const int64_t n_embd_head_qk_rope = n_rot;
-    const int64_t n_embd_head_qk_nope = n_embd_head_k - n_rot;
+    const int64_t n_embd_head_qk_nope = n_embd_head_k_att - n_rot;
 
     const int64_t kv_lora_rank = hparams.n_lora_kv;
 
@@ -577,11 +616,11 @@ ggml_tensor * llama_model_motif3::graph::build_gdla_attn(
 
     // HF layout within each head: [nope | rope]
     ggml_tensor * q_nope = ggml_view_3d(ctx0, q, n_embd_head_qk_nope, n_head, n_tokens,
-            ggml_row_size(q->type, n_embd_head_k),
-            ggml_row_size(q->type, n_embd_head_k) * n_head, 0);
+            ggml_row_size(q->type, n_embd_head_k_att),
+            ggml_row_size(q->type, n_embd_head_k_att) * n_head, 0);
     ggml_tensor * q_pe = ggml_view_3d(ctx0, q, n_embd_head_qk_rope, n_head, n_tokens,
-            ggml_row_size(q->type, n_embd_head_k),
-            ggml_row_size(q->type, n_embd_head_k) * n_head,
+            ggml_row_size(q->type, n_embd_head_k_att),
+            ggml_row_size(q->type, n_embd_head_k_att) * n_head,
             ggml_row_size(q->type, n_embd_head_qk_nope));
 
     ggml_tensor * kv_raw = ggml_mul_mat(ctx0, layer.wkv_a_mqa, cur);
@@ -605,27 +644,60 @@ ggml_tensor * llama_model_motif3::graph::build_gdla_attn(
     kv_cmpr = build_norm(kv_cmpr, layer.attn_kv_a_norm, nullptr, LLM_NORM_RMS, il);
     cb(kv_cmpr, "gdla_kv_cmpr", il);
 
+    const bool use_mla = hparams.motif_mla_kv && !is_swa;
+
+    ggml_tensor * Qcur  = nullptr;
+    ggml_tensor * Kcur  = nullptr;
+    ggml_tensor * Vcur  = nullptr;
+    ggml_tensor * v_mla = nullptr;
+
+    if (use_mla) {
+        // {n_embd_head_qk_nope, n_tokens, n_head}
+        q_nope = ggml_permute(ctx0, q_nope, 0, 2, 1, 3);
+        cb(q_nope, "gdla_q_nope_perm", il);
+
+        ggml_tensor * q_nope_absorbed = ggml_mul_mat(ctx0, layer.wk_b, q_nope);
+        cb(q_nope_absorbed, "gdla_q_nope_absorbed", il);
+
+        q_nope_absorbed = ggml_permute(ctx0, q_nope_absorbed, 0, 2, 1, 3);
+
+        Qcur = ggml_concat(ctx0, q_nope_absorbed, q_pe, 0);
+        cb(Qcur, "gdla_Qcur", il);
+
+        ggml_tensor * kv_cmpr_3d = ggml_reshape_3d(ctx0, kv_cmpr, kv_lora_rank, 1, n_tokens);
+
+        Kcur = ggml_concat(ctx0, kv_cmpr_3d, ggml_cont(ctx0, k_pe), 0);
+        cb(Kcur, "gdla_Kcur", il);
+
+        Vcur = kv_cmpr_3d;
+        cb(Vcur, "gdla_Vcur", il);
+
+        v_mla = layer.wv_b;
+    } else {
+
     ggml_tensor * kv = ggml_mul_mat(ctx0, layer.wkv_b, kv_cmpr); // [n_head_kv * (nope + v), nt]
     cb(kv, "gdla_kv", il);
 
-    ggml_tensor * k_nope = ggml_view_3d(ctx0, kv, n_embd_head_qk_nope, n_head_kv, n_tokens,
-            ggml_row_size(kv->type, n_embd_head_qk_nope + n_embd_head_v),
-            ggml_row_size(kv->type, n_embd_head_qk_nope + n_embd_head_v) * n_head_kv, 0);
-    ggml_tensor * Vcur = ggml_view_3d(ctx0, kv, n_embd_head_v, n_head_kv, n_tokens,
-            ggml_row_size(kv->type, n_embd_head_qk_nope + n_embd_head_v),
-            ggml_row_size(kv->type, n_embd_head_qk_nope + n_embd_head_v) * n_head_kv,
+    ggml_tensor * k_nope = ggml_view_3d(ctx0, kv, n_embd_head_qk_nope, n_head_kv_att, n_tokens,
+            ggml_row_size(kv->type, n_embd_head_qk_nope + n_embd_head_v_att),
+            ggml_row_size(kv->type, n_embd_head_qk_nope + n_embd_head_v_att) * n_head_kv_att, 0);
+    Vcur = ggml_view_3d(ctx0, kv, n_embd_head_v_att, n_head_kv_att, n_tokens,
+            ggml_row_size(kv->type, n_embd_head_qk_nope + n_embd_head_v_att),
+            ggml_row_size(kv->type, n_embd_head_qk_nope + n_embd_head_v_att) * n_head_kv_att,
             ggml_row_size(kv->type, n_embd_head_qk_nope));
     Vcur = ggml_cont(ctx0, Vcur);
     cb(Vcur, "gdla_v", il);
 
     // assemble Q/K in [rope | nope] order
-    ggml_tensor * Qcur = ggml_concat(ctx0, ggml_cont(ctx0, q_pe), ggml_cont(ctx0, q_nope), 0);
+    Qcur = ggml_concat(ctx0, ggml_cont(ctx0, q_pe), ggml_cont(ctx0, q_nope), 0);
     cb(Qcur, "gdla_Qcur", il);
 
     ggml_tensor * k_pe_rep = ggml_repeat_4d(ctx0, ggml_cont(ctx0, k_pe),
-            n_embd_head_qk_rope, n_head_kv, n_tokens, 1);
-    ggml_tensor * Kcur = ggml_concat(ctx0, k_pe_rep, ggml_cont(ctx0, k_nope), 0);
+            n_embd_head_qk_rope, n_head_kv_att, n_tokens, 1);
+    Kcur = ggml_concat(ctx0, k_pe_rep, ggml_cont(ctx0, k_nope), 0);
     cb(Kcur, "gdla_Kcur", il);
+
+    } // !use_mla
 
     // differential-attention lambda
     ggml_tensor * lambda = ggml_mul_mat(ctx0, layer.attn_lambda, cur); // [n_signal, nt]
@@ -643,35 +715,35 @@ ggml_tensor * llama_model_motif3::graph::build_gdla_attn(
     ggml_tensor * attn = inp_iswa
         ? build_attn(inp_iswa,
               nullptr, nullptr, nullptr,
-              Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il)
+              Qcur, Kcur, Vcur, nullptr, nullptr, v_mla, kq_scale, il)
         : build_attn(inp_kv,
               nullptr, nullptr, nullptr,
-              Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
+              Qcur, Kcur, Vcur, nullptr, nullptr, v_mla, kq_scale, il);
     cb(attn, "gdla_attn_raw", il);
 
     // split heads into n_group groups of (ratio signal + 1 noise) heads
-    ggml_tensor * a4 = ggml_reshape_4d(ctx0, attn, n_embd_head_v, gs, n_group, n_tokens);
+    ggml_tensor * a4 = ggml_reshape_4d(ctx0, attn, n_embd_head_v_att, gs, n_group, n_tokens);
 
-    ggml_tensor * attn1 = ggml_view_4d(ctx0, a4, n_embd_head_v, ratio, n_group, n_tokens,
+    ggml_tensor * attn1 = ggml_view_4d(ctx0, a4, n_embd_head_v_att, ratio, n_group, n_tokens,
             a4->nb[1], a4->nb[2], a4->nb[3], 0);
     attn1 = ggml_cont(ctx0, attn1);
 
-    ggml_tensor * attn2 = ggml_view_4d(ctx0, a4, n_embd_head_v, 1, n_group, n_tokens,
+    ggml_tensor * attn2 = ggml_view_4d(ctx0, a4, n_embd_head_v_att, 1, n_group, n_tokens,
             a4->nb[1], a4->nb[2], a4->nb[3], ratio*a4->nb[1]);
     attn2 = ggml_cont(ctx0, attn2);
-    ggml_tensor * attn2_rep = ggml_repeat_4d(ctx0, attn2, n_embd_head_v, ratio, n_group, n_tokens);
+    ggml_tensor * attn2_rep = ggml_repeat_4d(ctx0, attn2, n_embd_head_v_att, ratio, n_group, n_tokens);
 
     ggml_tensor * lam = ggml_reshape_4d(ctx0, lambda, 1, ratio, n_group, n_tokens);
     ggml_tensor * diff = ggml_sub(ctx0, attn1, ggml_mul(ctx0, attn2_rep, lam));
     cb(diff, "gdla_diff", il);
 
     if (gate) {
-        gate = ggml_reshape_4d(ctx0, gate, n_embd_head_v, ratio, n_group, n_tokens);
+        gate = ggml_reshape_4d(ctx0, gate, n_embd_head_v_att, ratio, n_group, n_tokens);
         diff = ggml_mul(ctx0, diff, gate);
         cb(diff, "gdla_gated", il);
     }
 
-    ggml_tensor * out = ggml_reshape_2d(ctx0, ggml_cont(ctx0, diff), n_signal * n_embd_head_v, n_tokens);
+    ggml_tensor * out = ggml_reshape_2d(ctx0, ggml_cont(ctx0, diff), n_signal * n_embd_head_v_att, n_tokens);
     out = build_lora_mm(layer.wo, out);
     cb(out, "gdla_out", il);
 
@@ -688,8 +760,11 @@ llama_model_motif3::graph::graph(const llama_model & model, const llm_graph_para
     const float yarn_log   = (freq_scale < 1.0f) ? logf(1.0f / freq_scale) : 0.0f;
     const float mscale_val = 1.0f + 0.1f * hparams.motif_mscale * yarn_log;
 
-    const float kq_scale_full = mscale_val * mscale_val / sqrtf(float(n_embd_head_k));
-    const float kq_scale_swa  = 1.0f / sqrtf(float(n_embd_head_k));
+    // with motif_mla_kv, n_embd_head_k describes the latent cache, and the softmax scale must use the true head size
+    const int64_t n_embd_head_k_att = hparams.motif_mla_kv ? (int64_t) hparams.motif_n_embd_head_k : n_embd_head_k;
+
+    const float kq_scale_full = mscale_val * mscale_val / sqrtf(float(n_embd_head_k_att));
+    const float kq_scale_swa  = 1.0f / sqrtf(float(n_embd_head_k_att));
 
     ggml_tensor * cur;
 

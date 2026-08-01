@@ -266,12 +266,31 @@ class Motif3Model(TextModel):
             "self_attn.wq_b_gate.weight":   T.ATTN_GATE,
             "self_attn.wkv_a.weight":       T.ATTN_KV_A_MQA,
             "self_attn.kv_norm.weight":     T.ATTN_KV_A_NORM,
-            "self_attn.wkv_b.weight":       T.ATTN_KV_B,
             "self_attn.lambda_proj.weight": T.ATTN_LAMBDA,
             "self_attn.wo.weight":          T.ATTN_OUT,
         }
         if sub in attn_map:
             return out(attn_map[sub], data_torch)
+
+        # for GDLA wkv_b, keep both the fused tensor, and also emit the per kv head split used by the MLA latent cache.
+        if sub == "self_attn.wkv_b.weight":
+            import torch
+
+            n_head_kv  = int(self.hparams["num_key_value_heads"])
+            v_head_dim = int(self.hparams["v_head_dim"])
+            qk_nope    = int(self.hparams["head_dim"]) - int(self.hparams["qk_rope_head_dim"])
+
+            assert data_torch.shape[0] == n_head_kv * (qk_nope + v_head_dim)
+
+            kv_b = data_torch.view(n_head_kv, qk_nope + v_head_dim, data_torch.shape[-1])
+            k_b, v_b = torch.split(kv_b, [qk_nope, v_head_dim], dim=1)
+            k_b = k_b.transpose(1, 2)
+
+            return [
+                (self.format_tensor_name(T.ATTN_KV_B, bid), data_torch),
+                (self.format_tensor_name(T.ATTN_K_B,  bid), k_b.contiguous()),
+                (self.format_tensor_name(T.ATTN_V_B,  bid), v_b.contiguous()),
+            ]
 
         # dense MLP (PolyNorm)
         dense_map = {
