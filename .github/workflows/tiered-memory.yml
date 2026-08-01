@@ -17,9 +17,65 @@ on:
       - feature/llamay-tiered-memory-planner
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
+  apply-ssd-view-offset:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/llamay-tiered-memory-planner
+      - name: Convert expert view offsets to base tensor offsets
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('ggml/src/ggml-cuda/tiered.cu')
+          text = path.read_text()
+          old = '''    std::vector<size_t> chunks;
+    chunks.reserve(host_ids.size());
+    const size_t granularity = state->sparse_granularity;
+
+    for (const int32_t expert : host_ids) {
+        if (expert < 0 || expert >= tensor->ne[2]) {
+            throw std::runtime_error("MUL_MAT_ID produced an out-of-range expert id");
+        }
+        for (int64_t i3 = 0; i3 < tensor->ne[3]; ++i3) {
+            const size_t slab_begin = static_cast<size_t>(i3) * tensor->nb[3] +
+                    static_cast<size_t>(expert) * tensor->nb[2];
+            const size_t slab_end = std::min(state->size, slab_begin + tensor->nb[2]);'''
+          new = '''    std::vector<size_t> chunks;
+    chunks.reserve(host_ids.size());
+    const size_t granularity = state->sparse_granularity;
+    size_t tensor_offset = 0;
+    tiered_view_base(tensor, &tensor_offset);
+
+    for (const int32_t expert : host_ids) {
+        if (expert < 0 || expert >= tensor->ne[2]) {
+            throw std::runtime_error("MUL_MAT_ID produced an out-of-range expert id");
+        }
+        for (int64_t i3 = 0; i3 < tensor->ne[3]; ++i3) {
+            const size_t slab_begin = tensor_offset +
+                    static_cast<size_t>(i3) * tensor->nb[3] +
+                    static_cast<size_t>(expert) * tensor->nb[2];
+            const size_t slab_end = std::min(state->size, slab_begin + tensor->nb[2]);'''
+          if new in text:
+              raise SystemExit(0)
+          if old not in text:
+              raise SystemExit('expected SSD expert loop was not found')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add ggml/src/ggml-cuda/tiered.cu
+          git commit -m "cuda: account for expert tensor view offsets"
+          git push origin HEAD:feature/llamay-tiered-memory-planner
+
   cpu-build:
     runs-on: ubuntu-24.04
     steps:
