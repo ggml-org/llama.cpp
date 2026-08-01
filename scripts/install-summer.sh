@@ -29,6 +29,34 @@ python3 scripts/apply-tiered-no-prompt-echo.py
 python3 scripts/apply-summer-vram-autotune.py scripts/summer "$SUMMER_TMP"
 python3 -m py_compile "$SUMMER_TMP"
 
+python3 - <<'PY'
+from pathlib import Path
+
+path = Path("ggml/src/ggml-cuda/tiered.cu")
+text = path.read_text(encoding="utf-8")
+phrases = (
+    "using a mapped pinned copy",
+    "tiered-memory: SSD tensor %s is used by unsupported op %s",
+    "tiered-memory: failed to stage DRAM weight %s: %s",
+    "tiered-memory: failed to stream %s: %s",
+)
+
+malformed = []
+for phrase in phrases:
+    start = text.find(phrase)
+    if start < 0:
+        malformed.append(f"missing generated phrase: {phrase}")
+        continue
+    tail = text[start + len(phrase):]
+    if not tail.startswith(r'\n"'):
+        malformed.append(f"malformed escaped newline after: {phrase}")
+
+if malformed:
+    raise SystemExit("\n".join(malformed))
+
+print(f"validated generated CUDA source: {path}")
+PY
+
 cmake -S . -B "$BUILD_DIR" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_CUDA_ARCHITECTURES="$CUDA_ARCH" \
