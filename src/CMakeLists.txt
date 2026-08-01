@@ -10,6 +10,7 @@ file(GLOB LLAMA_MODELS_SOURCES "models/*.cpp")
 
 add_library(llama
             ../include/llama.h
+            ../include/llama-tiered.h
             llama.cpp
             llama-adapter.cpp
             llama-arch.cpp
@@ -36,6 +37,7 @@ add_library(llama
             llama-model.cpp
             llama-quant.cpp
             llama-sampler.cpp
+            llama-tiered.cpp
             llama-vocab.cpp
             unicode-data.cpp
             unicode.cpp
