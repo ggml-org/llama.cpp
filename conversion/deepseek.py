@@ -499,7 +499,7 @@ class DeepseekV4Model(TextModel):
             logger.info("Skipping %d DeepSeek-V4 MTP tensor(s) for conversion v0", type(self)._skipped_mtp_tensors)
 
         # add a default chat template; if the model has a built-in template, it will be overridden later
-        model_id_hint = (self.remote_hf_model_id or self.dir_model.name).lower()
+        model_id_hint = self.remote_hf_model_id or self.dir_model.name
         is_0731 = "0731" in model_id_hint
         template_name = "deepseek-ai-DeepSeek-V4-Flash-0731.jinja" if is_0731 else "deepseek-ai-DeepSeek-V4.jinja"
         template_path = Path(__file__).parent.parent / "models" / "templates" / template_name
