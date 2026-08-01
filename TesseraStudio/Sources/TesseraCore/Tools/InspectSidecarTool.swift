@@ -26,20 +26,6 @@ public struct InspectSidecarTool: TesseraTool {
 
         let expanded = NSString(string: path).expandingTildeInPath
 
-        if TesseraFFIBridge.isAvailable {
-            do {
-                let info = try TesseraFFIBridge.inspectSidecar(path: expanded)
-                return .ok(Self.format(info), data: [
-                    "schema_version": .number(Double(info.schemaVersion)),
-                    "tessera_profile": .string(info.tesseraProfile),
-                    "effective_bits": .number(info.effectiveBits),
-                    "backend": .string("ffi"),
-                ])
-            } catch {
-                // fall through to CLI / direct read
-            }
-        }
-
         guard FileManager.default.fileExists(atPath: expanded) else {
             return .fail("Sidecar file not found: \(expanded)")
         }
@@ -81,25 +67,5 @@ public struct InspectSidecarTool: TesseraTool {
             "effective_bits": .number(effectiveBits),
             "backend": .string("cli"),
         ])
-    }
-
-    private static func format(_ info: SidecarInfo) -> String {
-        var lines = [
-            "Sidecar: \(info.modelPath)",
-            "Schema version: \(info.schemaVersion)",
-            "Tessera profile: \(info.tesseraProfile)",
-            "Effective bits: \(info.effectiveBits)",
-            "Kernel version: \(info.kernelVersion)",
-        ]
-        if !info.modalityScales.isEmpty {
-            lines.append("Modality scales (\(info.modalityScales.count)):")
-            for ms in info.modalityScales {
-                lines.append("  \(ms.modality): alpha=\(ms.awqAlpha)")
-            }
-        }
-        if !info.calibrationCorpus.isEmpty {
-            lines.append("Calibration corpus: \(info.calibrationCorpus)")
-        }
-        return lines.joined(separator: "\n")
     }
 }

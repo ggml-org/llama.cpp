@@ -1,20 +1,10 @@
 import XCTest
 @testable import TesseraCore
 
-final class TesseraFFIBridgeTests: XCTestCase {
-    func testStubReportsUnavailable() {
-        XCTAssertFalse(TesseraFFIBridge.isAvailable)
-        XCTAssertEqual(TesseraFFIBridge.version, "stub-0.0.0")
-    }
-
-    func testFactoryFallsBackToCLIWhenFFIUnavailable() {
+final class TesseraEngineBridgeFactoryTests: XCTestCase {
+    func testFactoryReturnsCLIBridge() {
         let bridge = TesseraEngineBridgeFactory.makeInferenceBridge()
         XCTAssertTrue(bridge is CLIEngineBridge)
-    }
-
-    func testFFICallsThrowWhenUnavailable() {
-        XCTAssertThrowsError(try TesseraFFIBridge.quantize(modelPath: "/tmp/m.gguf", outputPath: "/tmp/o.gguf"))
-        XCTAssertThrowsError(try TesseraFFIBridge.listModels(directory: "/tmp"))
     }
 }
 

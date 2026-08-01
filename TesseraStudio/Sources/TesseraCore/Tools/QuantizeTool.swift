@@ -47,24 +47,6 @@ public struct QuantizeTool: TesseraTool {
             return .fail("policy_path is required")
         }
 
-        // Prefer the native FFI; fall back to the CLI on failure/unavailability.
-        if TesseraFFIBridge.isAvailable {
-            do {
-                _ = try TesseraFFIBridge.quantize(
-                    modelPath: NSString(string: modelPath).expandingTildeInPath,
-                    outputPath: NSString(string: outputPath).expandingTildeInPath,
-                    config: arguments
-                )
-                return .ok("Quantization complete (FFI).", data: [
-                    "output_path": .string(outputPath),
-                    "policy_path": .string(policyPath),
-                    "backend": .string("ffi"),
-                ])
-            } catch {
-                // fall through to CLI
-            }
-        }
-
         var args = [
             NSString(string: modelPath).expandingTildeInPath,
             NSString(string: outputPath).expandingTildeInPath,

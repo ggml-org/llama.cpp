@@ -29,25 +29,6 @@ public struct ListModelsTool: TesseraTool {
         let filter = arguments["filter"]?.stringValue
         let expandedDir = NSString(string: dir).expandingTildeInPath
 
-        if TesseraFFIBridge.isAvailable {
-            do {
-                var models = try TesseraFFIBridge.listModels(directory: expandedDir)
-                if let filter, !filter.isEmpty {
-                    models = models.filter { $0.localizedCaseInsensitiveContains(filter) }
-                }
-                return .ok(models.isEmpty
-                    ? "No models found in \(expandedDir)"
-                    : "Found \(models.count) model(s) in \(expandedDir):\n\n" + models.sorted().map { "  \($0)" }.joined(separator: "\n"),
-                    data: [
-                        "count": .number(Double(models.count)),
-                        "directory": .string(expandedDir),
-                        "backend": .string("ffi"),
-                    ])
-            } catch {
-                // fall through to CLI / direct scan
-            }
-        }
-
         let fm = FileManager.default
         guard fm.fileExists(atPath: expandedDir) else {
             return .fail("Directory not found: \(expandedDir)")

@@ -52,24 +52,6 @@ public struct CalibrateTool: TesseraTool {
         let nTokens = arguments["n_tokens"]?.numberValue.map { Int($0) } ?? 5000
         let modality = arguments["modality"]?.stringValue ?? "text"
 
-        if TesseraFFIBridge.isAvailable {
-            do {
-                _ = try TesseraFFIBridge.calibrate(
-                    modelPath: NSString(string: modelPath).expandingTildeInPath,
-                    corpusPath: NSString(string: corpusPath).expandingTildeInPath,
-                    config: arguments
-                )
-                return .ok("Calibration complete (FFI).", data: [
-                    "output_path": .string(outputPath),
-                    "n_tokens": .number(Double(nTokens)),
-                    "modality": .string(modality),
-                    "backend": .string("ffi"),
-                ])
-            } catch {
-                // fall through to CLI
-            }
-        }
-
         let runner = ProcessRunner()
         let result = try await runner.run(
             executable: "tessera-imatrix",
