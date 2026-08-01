@@ -182,6 +182,20 @@ static void add_registration(tiered_buffer_context * ctx, uintptr_t begin, uintp
     });
 }
 
+static cudaError_t register_host_range(void * ptr, size_t size) {
+    const unsigned int base_flags = cudaHostRegisterPortable | cudaHostRegisterMapped;
+#if CUDART_VERSION >= 11010
+    cudaError_t status = cudaHostRegister(ptr, size, base_flags | cudaHostRegisterReadOnly);
+    if (status == cudaErrorNotSupported) {
+        (void) cudaGetLastError();
+        status = cudaHostRegister(ptr, size, base_flags);
+    }
+    return status;
+#else
+    return cudaHostRegister(ptr, size, base_flags);
+#endif
+}
+
 static void ensure_registered(tiered_buffer_context * ctx, void * ptr, size_t size) {
     const size_t page = page_size();
     const uintptr_t wanted_begin = align_down(reinterpret_cast<uintptr_t>(ptr), page);
@@ -199,11 +213,7 @@ static void ensure_registered(tiered_buffer_context * ctx, void * ptr, size_t si
         if (registration.begin > cursor) {
             const uintptr_t gap_end = std::min(registration.begin, wanted_end);
             const size_t gap_size = gap_end - cursor;
-            unsigned int flags = cudaHostRegisterPortable | cudaHostRegisterMapped;
-#if CUDART_VERSION >= 11010
-            flags |= cudaHostRegisterReadOnly;
-#endif
-            const cudaError_t status = cudaHostRegister(reinterpret_cast<void *>(cursor), gap_size, flags);
+            const cudaError_t status = register_host_range(reinterpret_cast<void *>(cursor), gap_size);
             if (status == cudaErrorHostMemoryAlreadyRegistered) {
                 (void) cudaGetLastError();
                 add_registration(ctx, cursor, gap_end, false);
@@ -221,11 +231,7 @@ static void ensure_registered(tiered_buffer_context * ctx, void * ptr, size_t si
 
     if (cursor < wanted_end) {
         const size_t gap_size = wanted_end - cursor;
-        unsigned int flags = cudaHostRegisterPortable | cudaHostRegisterMapped;
-#if CUDART_VERSION >= 11010
-        flags |= cudaHostRegisterReadOnly;
-#endif
-        const cudaError_t status = cudaHostRegister(reinterpret_cast<void *>(cursor), gap_size, flags);
+        const cudaError_t status = register_host_range(reinterpret_cast<void *>(cursor), gap_size);
         if (status == cudaErrorHostMemoryAlreadyRegistered) {
             (void) cudaGetLastError();
             add_registration(ctx, cursor, wanted_end, false);
@@ -319,6 +325,12 @@ static void stage_sparse_experts(tiered_buffer_context * ctx, const ggml_tensor 
     std::vector<int32_t> host_ids(static_cast<size_t>(ggml_nelements(ids)));
     ggml_backend_tensor_get(ids, host_ids.data(), 0, ggml_nbytes(ids));
 
+    size_t tensor_offset = 0;
+    (void) tiered_view_base(tensor, &tensor_offset);
+    if (tensor_offset > state->size || ggml_nbytes(tensor) > state->size - tensor_offset) {
+        throw std::runtime_error("SSD tensor view exceeds its base tensor");
+    }
+
     std::vector<size_t> chunks;
     chunks.reserve(host_ids.size());
     const size_t granularity = state->sparse_granularity;
@@ -328,7 +340,8 @@ static void stage_sparse_experts(tiered_buffer_context * ctx, const ggml_tensor 
             throw std::runtime_error("MUL_MAT_ID produced an out-of-range expert id");
         }
         for (int64_t i3 = 0; i3 < tensor->ne[3]; ++i3) {
-            const size_t slab_begin = static_cast<size_t>(i3) * tensor->nb[3] +
+            const size_t slab_begin = tensor_offset +
+                    static_cast<size_t>(i3) * tensor->nb[3] +
                     static_cast<size_t>(expert) * tensor->nb[2];
             const size_t slab_end = std::min(state->size, slab_begin + tensor->nb[2]);
             const size_t first = slab_begin / granularity * granularity;
