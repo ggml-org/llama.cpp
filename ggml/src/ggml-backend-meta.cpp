@@ -674,7 +674,7 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
         }
         // Batched/head-grouped matmuls preserve a split across dimensions 2/3
         // when the activation operand is mirrored.
-        if ((src_ss[0].axis == GGML_BACKEND_SPLIT_AXIS_2 || src_ss[0].axis == GGML_BACKEND_SPLIT_AXIS_3) &&
+        if (src_ss[0].axis == GGML_BACKEND_SPLIT_AXIS_2 &&
                 src_ss[1].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED) {
             return src_ss[0];
         }
@@ -1707,8 +1707,7 @@ static void ggml_backend_meta_buffer_get_tensor(ggml_backend_buffer_t buffer, co
     GGML_ASSERT(ggml_is_contiguous(tensor) ||
             split_state.axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED ||
             (ggml_is_permuted(tensor) &&
-             (split_state.axis == GGML_BACKEND_SPLIT_AXIS_2 ||
-              split_state.axis == GGML_BACKEND_SPLIT_AXIS_3)));
+             split_state.axis == GGML_BACKEND_SPLIT_AXIS_2));
 
     if (split_state.n_segments != 1 || split_state.nr[0] != 1) {
         GGML_ASSERT(split_state.axis >= 0 && split_state.axis < GGML_MAX_DIMS);
