@@ -139,6 +139,21 @@ int main() {
         }
     }
 
+    const size_t axis3_row_bytes = axis3->nb[3];
+    const size_t axis3_row_elems = axis3_row_bytes / sizeof(float);
+    const size_t patch_row_start = 2;
+    const size_t patch_row_count = 3;
+    std::vector<float> patch(patch_row_count * axis3_row_elems, -7.0f);
+    ggml_backend_tensor_set(axis3, patch.data(), patch_row_start * axis3_row_bytes, patch.size() * sizeof(float));
+    std::vector<float> patched_expected = axis3_expected;
+    std::copy(patch.begin(), patch.end(), patched_expected.begin() + patch_row_start * axis3_row_elems);
+    std::fill(axis3_actual.begin(), axis3_actual.end(), 0.0f);
+    ggml_backend_tensor_get(axis3, axis3_actual.data(), 0, axis3_nbytes);
+    if (axis3_actual != patched_expected) {
+        std::fprintf(stderr, "axis-3 partial set/readback mismatch\n");
+        return 1;
+    }
+
     std::fill(axis3_actual.begin(), axis3_actual.end(), 0.0f);
     ggml_backend_tensor_set_async(backend.get(), axis3, axis3_expected.data(), 0, axis3_nbytes);
     ggml_backend_synchronize(backend.get());
