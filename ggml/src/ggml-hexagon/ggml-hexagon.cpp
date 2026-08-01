@@ -4420,10 +4420,7 @@ static bool ggml_hexagon_cpy_tensor_async_phys(ggml_backend_t backend_src, ggml_
     sync_tensor.op     = GGML_OP_NONE;
 
     sess_src->enqueue_cpy(src, dst, &sync_tensor);
-    sess_src->flush_batch();
-
     sess_dst->enqueue_sync(&sync_tensor);
-    sess_dst->flush_batch();
 
     return true;
 }
