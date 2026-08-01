@@ -64,26 +64,117 @@ active bytes = tensor bytes × active fraction
 - Non-streamable tensors must fit in VRAM or registered DRAM.
 - SSD placement is restricted to stacked MoE expert weight tensors consumed by `MUL_MAT_ID`.
 
-## Quick start
+## Installation
 
-### Build
+### 1. Install build tools
+
+Ubuntu 22.04/24.04 or another compatible Linux distribution is recommended.
+
+```sh
+sudo apt update
+sudo apt install -y \
+  build-essential \
+  cmake \
+  git \
+  pkg-config
+```
+
+Install an NVIDIA driver and CUDA Toolkit supported by your GPU. Confirm that both the driver and compiler are visible:
+
+```sh
+nvidia-smi
+nvcc --version
+```
+
+> [!NOTE]
+> CUDA Virtual Memory Management is required for the SSD tier. A successful CUDA build does not guarantee that an older GPU or driver supports the required VMM operations.
+
+### 2. Clone the tiered-memory branch
+
+Until the feature is merged into the default branch, clone the PR branch directly:
+
+```sh
+git clone \
+  --branch feature/llamay-tiered-memory-planner \
+  --single-branch \
+  https://github.com/vnlpscale/Summer.cpp.git
+
+cd Summer.cpp
+```
+
+### 3. Configure the production build
+
+The tiered backend currently requires the statically linked backend registry. Keep `GGML_BACKEND_DL` disabled.
 
 ```sh
 cmake -S . -B build \
+  -DCMAKE_BUILD_TYPE=Release \
   -DGGML_CUDA=ON \
   -DGGML_BACKEND_DL=OFF \
-  -DLLAMA_BUILD_EXAMPLES=ON
-
-cmake --build build --target llama-tiered -j
+  -DBUILD_SHARED_LIBS=OFF \
+  -DLLAMA_BUILD_EXAMPLES=ON \
+  -DLLAMA_BUILD_TESTS=OFF
 ```
 
-### Run
+To reduce CUDA compilation time, target the compute capability of the installed GPU. For example, Ada GPUs such as the RTX 4090 use architecture `89`:
+
+```sh
+cmake -S . -B build \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CUDA_ARCHITECTURES=89 \
+  -DGGML_CUDA=ON \
+  -DGGML_BACKEND_DL=OFF \
+  -DBUILD_SHARED_LIBS=OFF \
+  -DLLAMA_BUILD_EXAMPLES=ON \
+  -DLLAMA_BUILD_TESTS=OFF
+```
+
+### 4. Build
+
+```sh
+cmake --build build --target llama-tiered -j"$(nproc)"
+```
+
+The executable is created at:
+
+```text
+build/bin/llama-tiered
+```
+
+### 5. Optional user-local install
+
+Copy the statically linked executable into a directory on your user `PATH`:
+
+```sh
+install -Dm755 build/bin/llama-tiered "$HOME/.local/bin/llama-tiered"
+```
+
+If `~/.local/bin` is not already in `PATH`:
+
+```sh
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+source "$HOME/.bashrc"
+```
+
+### 6. Verify the installation
+
+```sh
+llama-tiered --help
+```
+
+When running directly from the build directory, use:
+
+```sh
+build/bin/llama-tiered --help
+```
+
+## Quick start
 
 Let the runtime use currently available VRAM while preserving a safety reserve:
 
 ```sh
-build/bin/llama-tiered \
-  -m model.gguf \
+llama-tiered \
+  -m /path/to/model.gguf \
   --dram-mib 24000 \
   --reserve-mib 2048 \
   -n 64 \
@@ -93,12 +184,22 @@ build/bin/llama-tiered \
 Set an explicit VRAM budget when the GPU is shared with other processes:
 
 ```sh
-build/bin/llama-tiered \
-  -m model.gguf \
+llama-tiered \
+  -m /path/to/model.gguf \
   --vram-mib 5000 \
   --dram-mib 24000 \
   -n 64
 ```
+
+### Troubleshooting
+
+| Symptom | Check |
+|---|---|
+| `nvcc: command not found` | Install the CUDA Toolkit or add its `bin` directory to `PATH`. |
+| Tiered CUDA backend is unavailable | Reconfigure with `GGML_CUDA=ON`, `GGML_BACKEND_DL=OFF`, and `BUILD_SHARED_LIBS=OFF`. |
+| CUDA VMM operation fails | Check GPU architecture, driver version, and CUDA VMM support. |
+| Model load exceeds DRAM | Lower `--dram-mib`, increase the SSD tier, or reduce the model size/quantization. |
+| GPU allocation fails | Increase `--reserve-mib` or set a lower explicit `--vram-mib`. |
 
 ## What happens during inference
 
@@ -151,6 +252,8 @@ Keep the owner alive until every associated `llama_context` has been destroyed. 
 ## Requirements
 
 - Linux
+- CMake 3.14 or newer
+- a C++ compiler with C++17 support
 - NVIDIA CUDA with CUDA Virtual Memory Management support
 - a statically linked backend registry via `GGML_BACKEND_DL=OFF`
 - a GGUF model, including conventionally named split GGUF files
