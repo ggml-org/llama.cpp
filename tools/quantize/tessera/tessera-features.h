@@ -45,18 +45,29 @@ struct ts_features_header {
     std::vector<int32_t> target_layers;      // concatenation order
     ts_features_dtype dtype = TS_FEATURES_F32;
 
-    // Chunk layout the capture was produced with. The trunk forward clears its
-    // KV per chunk, so the first `warmup` tokens of each chunk are processed
+    // Window layout the capture was produced with. The trunk forward clears its
+    // KV per window, so the first `warmup` tokens of each window are processed
     // for context but NOT emitted (their hidden states lack a full left
-    // window). Each chunk therefore contributes (chunk_tokens - warmup)
-    // contiguous rows. chunk_tokens == 0 means "no chunk layout recorded"
+    // window). Each window therefore contributes (chunk_tokens - warmup)
+    // emitted rows. chunk_tokens == 0 means "no window layout recorded"
     // (treat the blob as one contiguous sequence).
-    int32_t chunk_tokens = 0;   // full chunk size (stride), warmup included
-    int32_t warmup       = 0;   // skipped prefix tokens per chunk
+    int32_t chunk_tokens = 0;   // full decode window size, warmup included
+    int32_t warmup       = 0;   // context-primer tokens skipped per window
+
+    // Window advance. Overlap mode strides windows by `stride` tokens
+    // (stride == chunk_tokens - warmup), so consecutive windows overlap by
+    // `warmup` tokens: each window re-decodes the previous window's tail to
+    // prime its KV, and the emitted rows form ONE contiguous corpus sequence
+    // starting at token `warmup`. stride == 0 marks a legacy capture that
+    // advanced by a full chunk_tokens per window and discarded a warmup prefix
+    // per window (gappy output); the row mapping falls back to
+    // stride = chunk_tokens for those files.
+    int32_t stride = 0;
 
     int32_t row_floats() const { return n_layers * n_embd; }
     int32_t bytes_per_float() const { return dtype == TS_FEATURES_F16 ? 2 : 4; }
     int32_t rows_per_chunk() const { return chunk_tokens - warmup; }
+    int32_t effective_stride() const { return stride > 0 ? stride : chunk_tokens; }
 };
 
 // Streaming writer. Feed one token at a time; the blob is written
@@ -99,8 +110,11 @@ struct ts_features_writer {
 bool ts_features_read_header(const std::string & prefix, ts_features_header & out);
 
 // Map an emitted feature row index to its corpus token index, accounting for
-// the per-chunk warmup skip. With no chunk layout recorded (chunk_tokens == 0)
-// the mapping is the identity when warmup == 0. Returns -1 if the layout is
-// inconsistent (warmup set without chunk_tokens), the row is out of range
-// ([0, n_tokens)), or a chunk has no emitted rows.
+// the window layout. In overlap mode (stride > 0) the emitted rows are
+// contiguous and this reduces to `warmup + row`. In legacy mode (stride == 0)
+// each window discarded a warmup prefix, so the mapping has a per-window gap.
+// With no window layout recorded (chunk_tokens == 0) the mapping is the
+// identity when warmup == 0. Returns -1 if the layout is inconsistent (warmup
+// set without chunk_tokens, or a stride that would double-emit/skip tokens),
+// the row is out of range ([0, n_tokens)), or a window has no emitted rows.
 int64_t ts_features_row_to_token(const ts_features_header & h, int64_t row);

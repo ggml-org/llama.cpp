@@ -1791,16 +1791,23 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params, c
 // <features_out>.json (header). The drafter encoder's FC input is a flat read
 // of one row per token, layers concatenated in --feature-layers order.
 //
-// Note on context: like compute_imatrix, the KV cache is cleared per chunk, so
-// each chunk's first tokens are processed without a full left window. We run
+// Note on context: like compute_imatrix, the KV cache is cleared per window, so
+// a window's first tokens are processed without a full left window. We run
 // those "warmup" tokens to build context but do NOT emit their features
 // (--features-warmup, default 256); only the well-contextualized tail of each
-// chunk is written. The warmup and chunk size are recorded in the header so
-// the training driver can map feature rows back to corpus tokens. This matches
+// window is written. Windows advance by stride = n_ctx - warmup (NOT n_ctx), so
+// consecutive windows overlap by exactly `warmup` tokens: each window re-decodes
+// the previous window's tail to prime its KV, and the emitted rows form ONE
+// contiguous corpus sequence (row r == corpus token warmup + r) instead of
+// dropping a warmup prefix per window. Every emitted token still sees >= warmup
+// genuine left-context tokens, now spanning the window boundary. This matches
 // the steady-state inference regime (the trunk also conditions on a ~n_ctx
-// window) and how EAGLE-style feature capture is done. Requesting logits for
-// every token keeps output_reorder on the exact proven path compute_imatrix
-// uses, so the layer buffers come back in batch order.
+// window) and how EAGLE-style feature capture is done, at a decode overhead of
+// n_ctx/(n_ctx - warmup) (~1.07x at warmup=256, n_ctx=4096). The warmup, window
+// size, and stride are recorded in the header so the training driver can map
+// feature rows back to corpus tokens. Requesting logits for every token keeps
+// output_reorder on the exact proven path compute_imatrix uses, so the layer
+// buffers come back in batch order.
 static bool compute_features(llama_context * ctx, const common_params & params, const int32_t n_ctx) {
     const llama_model * model = llama_get_model(ctx);
 
@@ -1831,6 +1838,10 @@ static bool compute_features(llama_context * ctx, const common_params & params, 
         warmup = n_ctx - 1;
     }
 
+    // windows advance by stride, overlapping by `warmup` tokens so the emitted
+    // rows are contiguous (see the note above). warmup <= n_ctx-1 => stride >= 1.
+    const int32_t stride = n_ctx - warmup;
+
     LOG_INF("%s: tokenizing the input ..\n", __func__);
     std::vector<llama_token> tokens = common_tokenize(ctx, params.prompt, true, params.parse_special);
     LOG_INF("%s: %zu tokens\n", __func__, tokens.size());
@@ -1852,27 +1863,30 @@ static bool compute_features(llama_context * ctx, const common_params & params, 
         LOG_ERR("%s: failed to open feature output '%s'\n", __func__, params.features_out.c_str());
         return false;
     }
-    // record the chunk layout so the training driver can map rows -> tokens.
+    // record the window layout so the training driver can map rows -> tokens.
     writer.header.chunk_tokens = n_ctx;
     writer.header.warmup       = warmup;
+    writer.header.stride       = stride;
 
-    const int n_chunk_max = (int) tokens.size() / n_ctx;
+    // window i decodes [i*stride, i*stride + n_ctx); the last window must stay
+    // within the corpus, so i*stride + n_ctx <= tokens.size().
+    const int n_chunk_max = (int) ((tokens.size() - n_ctx) / stride) + 1;
     const int n_chunk = params.n_chunks < 0 ? n_chunk_max : std::min(params.n_chunks, n_chunk_max);
     const int num_batches = (n_ctx + n_batch - 1) / n_batch;
 
     llama_batch batch = llama_batch_init(std::min(n_batch, n_ctx), 0, 1);
 
     const int32_t row_floats = n_embd * (int32_t) layers.size();
-    LOG_INF("%s: capturing %d chunks, n_ctx=%d, batch=%d, layers=%zu, n_embd=%d (%.1f KB/token f32)\n",
+    LOG_INF("%s: capturing %d windows, n_ctx=%d, batch=%d, layers=%zu, n_embd=%d (%.1f KB/token f32)\n",
             __func__, n_chunk, n_ctx, n_batch, layers.size(), n_embd,
             row_floats * sizeof(float) / 1024.0);
-    LOG_INF("%s: warmup=%d -> emitting %d of %d tokens per chunk\n",
-            __func__, warmup, n_ctx - warmup, n_ctx);
+    LOG_INF("%s: warmup=%d, stride=%d -> %d contiguous tokens/window, ~%lld total (%.2fx decode overhead)\n",
+            __func__, warmup, stride, stride, (long long) n_chunk * stride, (double) n_ctx / stride);
 
     std::vector<const float *> layer_rows(layers.size());
 
     for (int i = 0; i < n_chunk; ++i) {
-        const int start = i * n_ctx;
+        const int start = i * stride;
         const int end   = start + n_ctx;
 
         const auto t_start = std::chrono::high_resolution_clock::now();
@@ -1910,8 +1924,8 @@ static bool compute_features(llama_context * ctx, const common_params & params, 
             }
 
             for (int t = 0; t < batch_size; ++t) {
-                // chunk-local position; the warmup prefix is decoded for
-                // context but its features are not emitted.
+                // window-local position; the warmup prefix is the previous
+                // window's tail, re-decoded for context but not re-emitted.
                 const int32_t chunk_pos = j*n_batch + t;
                 if (chunk_pos < warmup) {
                     continue;

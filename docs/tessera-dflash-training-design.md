@@ -157,12 +157,17 @@ speculative telemetry loop (per the constraint above):
   drafter's `target_layer_ids` in concatenation order (e.g. `0,15,31`); the
   pass needs only the trunk + calibration text, no drafter load. Mutually
   exclusive with `--model-draft`. `--features-warmup` (default 256, clamped to
-  n_ctx-1) skips the under-contextualized prefix of each chunk - see the
-  context note below.
+  n_ctx-1) is the per-window context primer: windows overlap by exactly N
+  tokens (stride = n_ctx - N) so the emitted rows form one contiguous corpus
+  sequence and every emitted token still sees >= N genuine left-context tokens
+  - see the context note below.
 - Mechanism: enables the existing runtime tap
   `llama_set_embeddings_layer_inp(lid, true)` per target layer, runs the plain
-  chunked forward (same structure as `compute_imatrix`, KV cleared per chunk),
-  and streams `llama_get_embeddings_layer_inp(lid)` token-major to disk.
+  windowed forward (same structure as `compute_imatrix`, KV cleared per
+  window), and streams `llama_get_embeddings_layer_inp(lid)` token-major to
+  disk. Windows advance by `stride = n_ctx - warmup` (not n_ctx), so each
+  window re-decodes the previous window's trailing `warmup` tokens to prime its
+  KV; only positions [warmup, n_ctx) are emitted, giving a contiguous output.
   Requesting logits for every token keeps `output_reorder` on the exact proven
   `compute_imatrix` path, so layer buffers come back in batch order.
 - Format (owned by `tools/quantize/tessera/tessera-features.{h,cpp}`, shared
@@ -170,32 +175,45 @@ speculative telemetry loop (per the constraint above):
   `[n_tokens, n_layers*n_embd]`, layers concatenated in `--feature-layers`
   order; `<prefix>.json` = header. Schema `llama.tessera.features.v1`. The
   encoder's FC input is a flat read of `row_floats = n_layers*n_embd` floats
-  per token. The header also records `chunk_tokens` and `warmup` (the chunk
-  layout the blob was produced with), and the module exposes
-  `ts_features_row_to_token(header, row)` so the training driver can map an
-  emitted feature row back to its corpus token without re-deriving the layout.
+  per token. The header records `chunk_tokens` (window size), `warmup`, and
+  `stride` (window advance); in overlap mode `stride == chunk_tokens - warmup`
+  and the emitted rows are contiguous, so `ts_features_row_to_token(header, r)`
+  reduces to `warmup + r`. Legacy captures (stride absent/0, advanced by a full
+  window and dropped a warmup prefix per window) keep the old gappy mapping.
   F16/Q8_0 are reserved in the header `dtype` field but not yet implemented
   (f32 is exact and removes conversion risk from the critical path).
-- Verified live (stories260K tiny llama, n_embd=64): 23,552 tokens x 192
-  floats captured; header/blob size exact; values finite and per-token
-  distinct. Gold-standard cross-checks, all BIT-EXACT (max diff 0.0):
-  (a) a separate single-layer-1 capture matches the layer-1 block of the
-  3-layer blob over 1,507,328 floats -> layer order + token alignment +
-  deterministic batch-order readback; (b) a warmup=8 capture's row r equals the
-  warmup=0 row at `row_to_token(r)` over 4,239,360 floats -> the warmup skip
-  emits exactly the right tokens, in order, with the decode (hence context)
-  unaffected by the skip. Unit tests: `test_features.cpp` (51 assertions,
-  incl. the row->token mapping math).
+- Verified live (stories260K tiny llama, n_embd=64): with n_ctx=512, warmup=64
+  (stride=448) over 23,602 corpus tokens -> 52 windows x 448 = 23,296
+  contiguous rows, header/blob size exact, 1.14x decode overhead. Gold-standard
+  cross-checks, all BIT-EXACT (max diff 0.0): (a) layer order + alignment - a
+  single-layer-1 capture equals the layer-1 block of a [0,1,2] 3-layer blob
+  over 1,490,944 floats -> concatenation order, token alignment, deterministic
+  batch-order readback; (b) determinism - the full 52-window capture is
+  byte-identical across two runs; (c) window-0 invariance - a warmup=64
+  single-window capture (448 rows, tokens 64..511) equals rows 64..511 of a
+  warmup=0 single-window capture (512 rows, tokens 0..511) over 344,064 bytes
+  -> the warmup/overlap machinery changes only WHICH tokens are emitted, never
+  the decode. Multi-window contiguity then holds by composition: every window
+  runs the same self-contained KV-cleared decode (proven by c), tiled
+  contiguously (proven by the row->token math + the live 23,296 count). Unit
+  tests: `test_features.cpp` (62 assertions, incl. stride round-trip, stride
+  validation, and the overlap/legacy row->token mappings).
 
-Context note: like `compute_imatrix`, KV is cleared per chunk, so a chunk's
-first tokens lack a full left window. We DECODE those warmup tokens (they build
-context for the rest of the chunk) but do NOT emit their features; only the
-well-contextualized tail is written. This is mild and expected: the bulk of
-each chunk sees a full ~n_ctx window - the same regime the trunk runs in at
-inference (finite KV cache) and the regime EAGLE-style feature capture trains
-in. `compute_imatrix` applies the same idea for perplexity (`first = n_ctx/2`,
-imatrix.cpp:1683); we use a smaller fixed warmup to avoid discarding half the
-corpus.
+Context note: like `compute_imatrix`, KV is cleared per window, so a window's
+first tokens lack a full left window. We DECODE those `warmup` tokens (they
+build context for the rest of the window) but do NOT emit their features.
+Windows advance by `stride = n_ctx - warmup`, overlapping by exactly `warmup`
+tokens, so the re-decoded primer is the previous window's tail: the emitted
+rows form ONE contiguous corpus sequence (row r == corpus token warmup + r)
+rather than dropping a warmup prefix per window, and every emitted token sees
+>= warmup genuine left-context tokens spanning the window boundary. This is
+mild and expected: the bulk of each window sees a full ~n_ctx window - the same
+regime the trunk runs in at inference (finite KV cache) and the regime
+EAGLE-style feature capture trains in. `compute_imatrix` applies the same idea
+for perplexity (`first = n_ctx/2`, imatrix.cpp:1683); we use a smaller fixed
+warmup to avoid discarding half the corpus. The overlap costs n_ctx/(n_ctx -
+warmup) decode (~1.07x at warmup=256, n_ctx=4096) and recovers the
+warmup-per-window tokens the non-overlap layout threw away.
 
 ## 5. Staged plan
 

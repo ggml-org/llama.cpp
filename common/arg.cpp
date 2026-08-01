@@ -1865,11 +1865,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--features-warmup"}, "N",
         string_format(
-            "[imatrix] with --features-out, the number of prefix tokens per chunk "
-            "to run for context but NOT emit, since a fresh-KV chunk leaves them "
+            "[imatrix] with --features-out, the number of prefix tokens per window "
+            "to run for context but NOT emit, since a fresh-KV window leaves them "
             "without a full left window (default: %d, 0 = emit every token). "
-            "Clamped to n_ctx-1. Recorded in the header so the training driver can "
-            "map feature rows back to corpus tokens.",
+            "Windows overlap by exactly this many tokens (stride = n_ctx - N), so "
+            "the emitted rows form one contiguous corpus sequence and every emitted "
+            "token still sees >= N genuine left-context tokens. Clamped to n_ctx-1. "
+            "Recorded in the header so the training driver can map feature rows back "
+            "to corpus tokens.",
             params.features_warmup),
         [](common_params & params, int value) {
             params.features_warmup = value;

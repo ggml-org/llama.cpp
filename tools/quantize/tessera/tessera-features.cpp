@@ -117,6 +117,7 @@ bool ts_features_writer::close() {
     j["row_floats"]      = header.row_floats();
     j["chunk_tokens"]    = header.chunk_tokens;
     j["warmup"]          = header.warmup;
+    j["stride"]          = header.stride;
 
     const std::string json_path = prefix + ".json";
     std::FILE * fp = std::fopen(json_path.c_str(), "w");
@@ -199,14 +200,23 @@ bool ts_features_read_header(const std::string & prefix, ts_features_header & ou
         return false;
     }
 
-    // chunk layout is optional (absent in older files -> contiguous blob).
+    // window layout is optional (absent in older files -> contiguous blob).
     h.chunk_tokens = j.value("chunk_tokens", 0);
     h.warmup       = j.value("warmup", 0);
-    if (h.chunk_tokens < 0 || h.warmup < 0) {
+    h.stride       = j.value("stride", 0);   // absent in legacy files -> 0
+    if (h.chunk_tokens < 0 || h.warmup < 0 || h.stride < 0) {
         return false;
     }
     if (h.chunk_tokens > 0 && h.warmup >= h.chunk_tokens) {
-        return false; // would leave no emitted rows per chunk
+        return false; // would leave no emitted rows per window
+    }
+    if (h.chunk_tokens > 0 && h.stride > 0) {
+        // stride must tile the emitted rows without gaps or double-emission:
+        // rows_per_window <= stride <= chunk_tokens.
+        const int32_t per = h.chunk_tokens - h.warmup;
+        if (h.stride < per || h.stride > h.chunk_tokens) {
+            return false;
+        }
     }
 
     out = h;
@@ -218,14 +228,20 @@ int64_t ts_features_row_to_token(const ts_features_header & h, int64_t row) {
         return -1;
     }
     if (h.chunk_tokens == 0) {
-        // no chunk layout: identity only when nothing was skipped.
+        // no window layout: identity only when nothing was skipped.
         return h.warmup == 0 ? row : -1;
     }
     const int64_t per = h.rows_per_chunk();
     if (per <= 0) {
         return -1;
     }
+    const int64_t stride = h.effective_stride();
+    if (stride < per || stride > h.chunk_tokens) {
+        return -1;   // would double-emit or skip tokens
+    }
     const int64_t chunk  = row / per;
     const int64_t offset = row % per;
-    return chunk * h.chunk_tokens + h.warmup + offset;
+    // overlap mode (stride == per) collapses this to warmup + row (contiguous);
+    // legacy mode (stride == chunk_tokens) has a warmup gap per window.
+    return chunk * stride + h.warmup + offset;
 }

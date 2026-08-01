@@ -162,13 +162,14 @@ static void test_corrupt_header() {
 }
 
 static void test_chunk_layout_roundtrip() {
-    // warmup + chunk_tokens survive the header round-trip so the training
-    // driver can reconstruct row -> corpus-token alignment.
+    // warmup + chunk_tokens + stride survive the header round-trip so the
+    // training driver can reconstruct row -> corpus-token alignment.
     const std::string pfx = std::string(PREFIX) + "_chunky";
     ts_features_writer w;
     CHECK(w.open(pfx, 2, {4, 9}), "open chunky");
     w.header.chunk_tokens = 128;
     w.header.warmup       = 8;
+    w.header.stride       = 120;   // overlap mode: stride == chunk_tokens - warmup
     float row[2] = {1, 2};
     CHECK(w.append_token(row), "append chunky");
     CHECK(w.close(), "close chunky");
@@ -177,25 +178,91 @@ static void test_chunk_layout_roundtrip() {
     CHECK(ts_features_read_header(pfx, h), "read chunky header");
     CHECK(h.chunk_tokens == 128, "chunk_tokens round-trip");
     CHECK(h.warmup == 8, "warmup round-trip");
+    CHECK(h.stride == 120, "stride round-trip");
     CHECK(h.rows_per_chunk() == 120, "rows_per_chunk = 128 - 8");
+    CHECK(h.effective_stride() == 120, "effective_stride = stride when set");
+
+    // a header with no stride falls back to chunk_tokens (legacy files).
+    ts_features_header legacy;
+    legacy.chunk_tokens = 128;
+    legacy.warmup       = 8;
+    legacy.stride       = 0;
+    CHECK(legacy.effective_stride() == 128, "effective_stride legacy fallback");
+}
+
+static void write_with_stride(const std::string & pfx, int32_t stride) {
+    ts_features_writer w;
+    if (!w.open(pfx, 2, {4})) { return; }
+    w.header.chunk_tokens = 128;
+    w.header.warmup       = 8;
+    w.header.stride       = stride;
+    float row[2] = {1, 2};
+    w.append_token(row);
+    w.close();
+}
+
+static void test_stride_validation() {
+    // a stride that would double-emit (stride < rows_per_window) or skip
+    // (stride > chunk_tokens) is rejected by the reader. rows_per_window here
+    // is chunk_tokens - warmup = 128 - 8 = 120.
+    ts_features_header h;
+
+    write_with_stride(std::string(PREFIX) + "_stride_lo", 64);   // < 120
+    CHECK(!ts_features_read_header(std::string(PREFIX) + "_stride_lo", h),
+          "stride < rows_per_window rejected");
+
+    write_with_stride(std::string(PREFIX) + "_stride_hi", 200);  // > 128
+    CHECK(!ts_features_read_header(std::string(PREFIX) + "_stride_hi", h),
+          "stride > chunk_tokens rejected");
+
+    // stride == rows_per_window (overlap) and stride == chunk_tokens (legacy)
+    // are both valid.
+    write_with_stride(std::string(PREFIX) + "_stride_ok", 120);
+    CHECK(ts_features_read_header(std::string(PREFIX) + "_stride_ok", h),
+          "stride == rows_per_window accepted");
 }
 
 static void test_row_to_token() {
-    // chunked layout: chunk_tokens=128, warmup=8 -> 120 emitted rows/chunk.
+    // LEGACY layout (stride == 0): windows advanced by a full chunk_tokens and
+    // discarded a warmup prefix per window, so the mapping has a per-window gap.
+    // chunk_tokens=128, warmup=8 -> 120 emitted rows/window.
     ts_features_header h;
-    h.n_tokens     = 240;   // 2 chunks
+    h.n_tokens     = 240;   // 2 windows
     h.n_embd       = 2;
     h.n_layers     = 1;
     h.target_layers = {0};
     h.chunk_tokens = 128;
     h.warmup       = 8;
+    h.stride       = 0;     // legacy
 
-    CHECK(ts_features_row_to_token(h, 0)   == 8,   "row0 -> token 8 (first after warmup)");
-    CHECK(ts_features_row_to_token(h, 119) == 127, "row119 -> token 127 (chunk0 end)");
-    CHECK(ts_features_row_to_token(h, 120) == 136, "row120 -> token 136 (chunk1 start: 128+8)");
-    CHECK(ts_features_row_to_token(h, 239) == 255, "row239 -> token 255 (chunk1 end)");
+    CHECK(ts_features_row_to_token(h, 0)   == 8,   "legacy row0 -> token 8 (first after warmup)");
+    CHECK(ts_features_row_to_token(h, 119) == 127, "legacy row119 -> token 127 (window0 end)");
+    CHECK(ts_features_row_to_token(h, 120) == 136, "legacy row120 -> token 136 (window1 start: 128+8, gap)");
+    CHECK(ts_features_row_to_token(h, 239) == 255, "legacy row239 -> token 255 (window1 end)");
     CHECK(ts_features_row_to_token(h, 240) == -1,  "row240 out of range");
     CHECK(ts_features_row_to_token(h, -1)  == -1,  "negative row rejected");
+
+    // OVERLAP layout (stride == rows_per_window): windows overlap by `warmup`,
+    // so the emitted rows are contiguous and row r -> token warmup + r.
+    ts_features_header ov;
+    ov.n_tokens     = 240;
+    ov.n_embd       = 2;
+    ov.n_layers     = 1;
+    ov.target_layers = {0};
+    ov.chunk_tokens = 128;
+    ov.warmup       = 8;
+    ov.stride       = 120;  // == chunk_tokens - warmup
+
+    CHECK(ts_features_row_to_token(ov, 0)   == 8,   "overlap row0 -> token 8");
+    CHECK(ts_features_row_to_token(ov, 119) == 127, "overlap row119 -> token 127");
+    CHECK(ts_features_row_to_token(ov, 120) == 128, "overlap row120 -> token 128 (contiguous, no gap)");
+    CHECK(ts_features_row_to_token(ov, 239) == 247, "overlap row239 -> token 247");
+    // contiguous invariant: every row maps to warmup + row.
+    bool contiguous = true;
+    for (int64_t r = 0; r < ov.n_tokens; ++r) {
+        contiguous &= (ts_features_row_to_token(ov, r) == 8 + r);
+    }
+    CHECK(contiguous, "overlap mapping is contiguous (row -> warmup + row)");
 
     // no chunk layout + no warmup -> identity.
     ts_features_header flat;
@@ -231,6 +298,7 @@ int main() {
     test_error_paths();
     test_corrupt_header();
     test_chunk_layout_roundtrip();
+    test_stride_validation();
     test_row_to_token();
 
     printf("features: %d passed, %d failed\n", g_pass, g_fail);
