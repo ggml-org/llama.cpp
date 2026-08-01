@@ -1,4 +1,5 @@
 #include "tessera-dataset.h"
+#include "tessera-dpace.h"
 
 #include <cstdio>
 #include <cstring>
@@ -14,12 +15,15 @@ void ts_dataset_default_params(ts_dataset_params * p) {
     std::memset(p, 0, sizeof(*p));
     p->mode         = TS_DATASET_MODE_TEXT;
     p->min_accepted = 1;
+    p->dpace_alpha  = TS_DPACE_DEFAULT_ALPHA;
+    p->dflash_gamma = TS_DFLASH_DEFAULT_GAMMA;
 }
 
 int ts_dataset_mode_from_string(const char * s, ts_dataset_mode * out) {
-    if (std::strcmp(s, "text")  == 0) { *out = TS_DATASET_MODE_TEXT;  return 0; }
-    if (std::strcmp(s, "pairs") == 0) { *out = TS_DATASET_MODE_PAIRS; return 0; }
-    if (std::strcmp(s, "lk")    == 0) { *out = TS_DATASET_MODE_LK;    return 0; }
+    if (std::strcmp(s, "text")   == 0) { *out = TS_DATASET_MODE_TEXT;   return 0; }
+    if (std::strcmp(s, "pairs")  == 0) { *out = TS_DATASET_MODE_PAIRS;  return 0; }
+    if (std::strcmp(s, "lk")     == 0) { *out = TS_DATASET_MODE_LK;     return 0; }
+    if (std::strcmp(s, "dflash") == 0) { *out = TS_DATASET_MODE_DFLASH; return 0; }
     return -1;
 }
 
@@ -78,11 +82,65 @@ static void write_lk_lines(std::ofstream & out, const json & rec) {
     }
 }
 
+// One block-structured record per spec step for DFlash/D-PACE training.
+// The block is the n_dft drafted positions. Target token at position j is
+// verifier_argmax[j] (ground truth the block drafter should emit); the
+// acceptance proxy is confidence[j]. D-PACE weights are smoothed+normalized
+// and baked in so the training driver can pre-weight a standard CE label.
+// Returns true if a record was written.
+static bool write_dflash_line(std::ofstream & out, const json & rec,
+                              float alpha, float gamma) {
+    if (!rec.contains("confidence") || !rec["confidence"].is_array()) return false;
+    if (!rec.contains("verifier_argmax") || !rec["verifier_argmax"].is_array()) return false;
+
+    const int block_size = rec.value("drafted", 0);
+    if (block_size <= 0) return false;
+
+    const auto & conf  = rec["confidence"];
+    const auto & varg  = rec["verifier_argmax"];
+    if ((int)conf.size() < block_size || (int)varg.size() < block_size) return false;
+
+    std::vector<float> acc(block_size);
+    for (int j = 0; j < block_size; ++j) {
+        acc[j] = conf[j].get<float>();
+    }
+
+    std::vector<double> dpace_w(block_size);
+    ts_dpace_weights_smoothed(acc.data(), block_size, alpha, dpace_w.data());
+    ts_dpace_normalize_weights(dpace_w.data(), block_size);
+
+    std::vector<double> decay_w(block_size);
+    ts_dflash_decay_weights(block_size, gamma, decay_w.data());
+    ts_dpace_normalize_weights(decay_w.data(), block_size);
+
+    const double surrogate = ts_dpace_accepted_length_surrogate(acc.data(), block_size);
+
+    json o;
+    o["schema"]       = "llama.tessera.dflash-block.v1";
+    o["block_size"]   = block_size;
+    o["target_tokens"]    = json::array();
+    o["acceptance_probs"] = json::array();
+    o["dpace_weights"]    = json::array();
+    o["decay_weights"]    = json::array();
+    for (int j = 0; j < block_size; ++j) {
+        o["target_tokens"].push_back(varg[j].get<int64_t>());
+        o["acceptance_probs"].push_back(acc[j]);
+        o["dpace_weights"].push_back(dpace_w[j]);
+        o["decay_weights"].push_back(decay_w[j]);
+    }
+    o["n_acc"]     = rec.value("accepted", 0);
+    o["n_dft"]     = block_size;
+    o["surrogate"] = surrogate;
+    out << o.dump() << '\n';
+    return true;
+}
+
 // -------------------------------------------------------------------------
 // main entry
 
 int ts_dataset_run(const ts_dataset_params * params,
                    int * n_records_out,
+                   int * n_skipped_out,
                    std::string * err_msg) {
     std::ifstream fin(params->input_path);
     if (!fin) {
@@ -126,6 +184,13 @@ int ts_dataset_run(const ts_dataset_params * params,
             case TS_DATASET_MODE_TEXT:  write_text_line(fout, rec);  n_written++; break;
             case TS_DATASET_MODE_PAIRS: write_pairs_line(fout, rec); n_written++; break;
             case TS_DATASET_MODE_LK:    write_lk_lines(fout, rec);   n_written++; break;
+            case TS_DATASET_MODE_DFLASH:
+                if (write_dflash_line(fout, rec, params->dpace_alpha, params->dflash_gamma)) {
+                    n_written++;
+                } else {
+                    n_skipped++;
+                }
+                break;
         }
     }
 
@@ -133,6 +198,7 @@ int ts_dataset_run(const ts_dataset_params * params,
         if (err_msg) *err_msg = std::string("write failed: ") + params->output_path;
         return -1;
     }
-    if (n_records_out) *n_records_out = n_written;
+    if (n_records_out)  *n_records_out  = n_written;
+    if (n_skipped_out)  *n_skipped_out  = n_skipped;
     return 0;
 }

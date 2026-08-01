@@ -4367,11 +4367,12 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
-        {"--tessera-dataset-mode"}, "text|pairs|lk",
+        {"--tessera-dataset-mode"}, "text|pairs|lk|dflash",
         "Tessera: dataset output mode (default: text)\n"
         "text: accepted token IDs, one sequence per line\n"
         "pairs: rejection-sampling JSONL {context,drafted,accepted}\n"
-        "lk: LK loss JSONL {position,p_tokens,p_probs,q_tokens,q_probs,accepted}",
+        "lk: LK loss JSONL {position,p_tokens,p_probs,q_tokens,q_probs,accepted}\n"
+        "dflash: DFlash/D-PACE block JSONL {target_tokens,acceptance_probs,dpace_weights,decay_weights}",
         [](common_params &, const std::string & value) {
             tessera_params.dataset_mode = value;
         }

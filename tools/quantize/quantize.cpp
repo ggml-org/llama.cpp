@@ -586,17 +586,23 @@ static int ts_cli_dataset(const common_tessera_params & tp) {
         : tp.dataset_out;
     snprintf(dp.output_path, sizeof(dp.output_path), "%s", out.c_str());
     if (ts_dataset_mode_from_string(tp.dataset_mode.c_str(), &dp.mode) != 0) {
-        fprintf(stderr, "error: dataset: unknown mode '%s' (use text|pairs|lk)\n",
+        fprintf(stderr, "error: dataset: unknown mode '%s' (use text|pairs|lk|dflash)\n",
                 tp.dataset_mode.c_str());
         return 1;
     }
+    // dflash mode bakes D-PACE weights into each block; reuse the shared
+    // --tessera-dpace-alpha / --tessera-dpace-gamma knobs.
+    dp.dpace_alpha  = tp.dpace_alpha;
+    dp.dflash_gamma = tp.dpace_gamma;
     int n_records = 0;
+    int n_skipped = 0;
     std::string err;
-    if (ts_dataset_run(&dp, &n_records, &err) != 0) {
+    if (ts_dataset_run(&dp, &n_records, &n_skipped, &err) != 0) {
         fprintf(stderr, "error: dataset: %s\n", err.c_str());
         return 1;
     }
-    printf("dataset: %d records -> %s (mode=%s)\n", n_records, out.c_str(), tp.dataset_mode.c_str());
+    printf("dataset: %d records -> %s (mode=%s, skipped=%d)\n",
+           n_records, out.c_str(), tp.dataset_mode.c_str(), n_skipped);
     return 0;
 }
 

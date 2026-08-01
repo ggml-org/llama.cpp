@@ -114,8 +114,8 @@ compile_and_run throughput    $T/test_throughput.cpp  $T/tessera-throughput.cpp 
 # --- Drafter training pipeline: LK loss (pure math, no vendor) ---
 compile_and_run lk_loss       $T/test_lk_loss.cpp     $T/tessera-lk-loss.cpp
 
-# --- Drafter training pipeline: dataset prep (needs vendor/nlohmann) ---
-compile_and_run dataset       $T/test_dataset.cpp     $T/tessera-dataset.cpp -I vendor
+# --- Drafter training pipeline: dataset prep (needs vendor/nlohmann + dpace weights) ---
+compile_and_run dataset       $T/test_dataset.cpp     $T/tessera-dataset.cpp $T/tessera-dpace.cpp -I vendor
 
 # --- Drafter training pipeline: D-PACE loss (pure math, no vendor) ---
 compile_and_run dpace         $T/test_dpace.cpp       $T/tessera-dpace.cpp
