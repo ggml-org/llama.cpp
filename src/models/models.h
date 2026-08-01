@@ -2283,16 +2283,6 @@ struct llama_model_kimi_k3 : public llama_model_base {
         const llama_model & model;
 
         // Cross-layer residual attention (K3's `_apply_attn_res`).
-        //
-        // `src` holds the block-residual checkpoints, one [n_embd, n_token] slab
-        // per checkpoint, packed as [n_embd, n_ckpt, n_token] so that:
-        //   - ggml_rms_norm reduces over ne0 = n_embd (scores all slabs at once)
-        //   - ggml_dsv4_hc_pre reduces over ne1 = n_ckpt (the weighted sum)
-        // Both requirements are satisfied by the same layout, which is why this
-        // needs no transpose of the (large) stack.
-        // Each checkpoint is kept as its own [n_embd, 1, n_token] tensor and the
-        // [n_embd, n_ckpt, n_token] stack is materialised with ggml_concat only when
-        // the set changes (8 times per forward pass for the real model).
         std::vector<ggml_tensor *> resi;
         ggml_tensor *              resi_stack   = nullptr;
         int                        resi_stack_n = -1;
