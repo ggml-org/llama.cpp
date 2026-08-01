@@ -24,6 +24,8 @@ done
 cd "$ROOT"
 
 python3 scripts/apply-tiered-dram-pinned-fallback.py
+python3 scripts/apply-tiered-dram-matmul-staging.py
+python3 scripts/apply-tiered-no-prompt-echo.py
 python3 scripts/apply-summer-vram-autotune.py scripts/summer "$SUMMER_TMP"
 python3 -m py_compile "$SUMMER_TMP"
 
@@ -53,6 +55,8 @@ Summer.cpp installation complete.
   summer CLI         : $PREFIX/bin/summer
   model directory    : $HOME/models
   VRAM policy        : automatic free-memory reserve and OOM retry
+  DRAM matmul        : temporary VRAM staging for cuBLAS compatibility
+  prompt output      : generated tokens only
 
 Add this line to your shell configuration when $PREFIX/bin is not in PATH:
 
