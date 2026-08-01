@@ -2576,13 +2576,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "- mmap: memory-map model (if mmap disabled, slower load but may reduce pageouts if not using mlock)\n"
         "- mlock: force system to keep model in RAM rather than swapping or compressing\n"
         "- mmap+mlock: mmap + force system to keep model in RAM rather than swapping or compressing\n"
-        "- dio: use DirectIO if available\n",
+        "- dio: use DirectIO if available\n"
+        "- mmap+pin: mmap without mlock; only the N hottest MoE experts are mlocked at runtime (use with --pin-hot-experts)\n",
         [](common_params & params, const std::string & value) {
             /**/ if (value == "none")       { params.load_mode = LLAMA_LOAD_MODE_NONE;       }
             else if (value == "mmap")       { params.load_mode = LLAMA_LOAD_MODE_MMAP;       }
             else if (value == "mlock")      { params.load_mode = LLAMA_LOAD_MODE_MLOCK;      }
             else if (value == "mmap+mlock") { params.load_mode = LLAMA_LOAD_MODE_MMAP_MLOCK; }
             else if (value == "dio")        { params.load_mode = LLAMA_LOAD_MODE_DIRECT_IO;  }
+            else if (value == "mmap+pin")   { params.load_mode = LLAMA_LOAD_MODE_MMAP_PIN;   }
             else { throw std::invalid_argument("invalid value"); }
         }
     ).set_env("LLAMA_ARG_LOAD_MODE"));
@@ -2645,6 +2647,57 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_env("LLAMA_ARG_N_CPU_MOE"));
+    add_opt(common_arg(
+        {"--pin-hot-experts"}, "N",
+        string_format(
+            "lock the N most frequently used MoE experts per layer into RAM in place\n"
+            "(mlock on their existing weight tensors, no copy) so the OS cannot evict\n"
+            "them; ranking is GLOBAL across all layers (total slots = N x num_moe_layers),\n"
+            "the hot set is tracked dynamically from actual router decisions and refreshed\n"
+            "on the fly. Only affects experts kept in host (CPU) memory\n"
+            "(default: %d, 0 = disabled; incompatible with a custom eval callback)",
+            params.n_pin_hot_experts
+        ),
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("error: --pin-hot-experts must be >= 0");
+            }
+            params.n_pin_hot_experts = value;
+        }
+    ).set_env("LLAMA_ARG_PIN_HOTEXPERTS"));
+    add_opt(common_arg(
+        {"--pin-hot-experts-budget-mib"}, "N",
+        string_format(
+            "hard cap, in MiB, on total memory locked by --pin-hot-experts across ALL layers\n"
+            "combined (default: %" PRIu64 ", 0 = unlimited). mlock() faults pages into RAM as\n"
+            "part of locking them, so leaving this unlimited on a large model/N can get the\n"
+            "process killed by the OOM killer instead of --pin-hot-experts simply having no\n"
+            "effect. Leave enough headroom for the KV cache and compute buffers, e.g. total\n"
+            "RAM minus model size minus expected KV cache / activation memory",
+            params.n_pin_hot_experts_budget_mib
+        ),
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("error: --pin-hot-experts-budget-mib must be >= 0");
+            }
+            params.n_pin_hot_experts_budget_mib = (uint64_t) value;
+        }
+    ).set_env("LLAMA_ARG_PIN_HOTEXPERTS_BUDGET_MIB"));
+    add_opt(common_arg(
+        {"--pin-hot-experts-stats-interval"}, "N",
+        string_format(
+            "print hot-expert pinning stats (bytes locked, global pin counts, per-layer\n"
+            "breakdown) directly to stderr every N router observations (default: %" PRIu64 ", 0 = disabled --\n"
+            "a final summary is still printed when the context is destroyed)",
+            params.n_pin_hot_experts_stats_interval
+        ),
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("error: --pin-hot-experts-stats-interval must be >= 0");
+            }
+            params.n_pin_hot_experts_stats_interval = (uint64_t) value;
+        }
+    ).set_env("LLAMA_ARG_PIN_HOTEXPERTS_STATS_INTERVAL"));
     GGML_ASSERT(params.n_gpu_layers < 0); // string_format would need to be extended for a default >= 0
     add_opt(common_arg(
         {"-ngl", "--gpu-layers", "--n-gpu-layers"}, "N",

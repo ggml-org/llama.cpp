@@ -208,6 +208,7 @@ extern "C" {
         LLAMA_LOAD_MODE_MLOCK      = 2, // force system to keep model in RAM rather than swapping or compressing
         LLAMA_LOAD_MODE_MMAP_MLOCK = 3, // mmap + force system to keep model in RAM rather than swapping or compressing
         LLAMA_LOAD_MODE_DIRECT_IO  = 4, // use direct I/O if available
+        LLAMA_LOAD_MODE_MMAP_PIN   = 5, // mmap, do NOT mlock all weights; only hot experts are mlocked at runtime (use with n_pin_hot_experts)
     };
 
     LLAMA_API const char * llama_load_mode_name(enum llama_load_mode load_mode);
@@ -375,6 +376,29 @@ extern "C" {
 
         ggml_backend_sched_eval_callback cb_eval;
         void * cb_eval_user_data;
+
+        // number of hottest MoE experts to mlock per layer (total slots = N x
+        // num_moe_layers), ranked GLOBALLY across all layers inside their
+        // existing host-memory weight tensors, based on observed router usage
+        // (0 = disabled). No effect on experts offloaded to a non-host buffer.
+        // incompatible with a caller-supplied cb_eval, since only one eval
+        // callback can be installed at a time (a warning is logged and pinning
+        // is skipped in that case).
+        int32_t n_pin_hot_experts;
+
+        // hard cap, in bytes, on total memory mlock'd by n_pin_hot_experts across
+        // ALL layers combined (0 = unlimited). Because mlock() faults pages into
+        // RAM as part of locking them, leaving this at 0 with a large model/N
+        // can cause the OS to kill the process for memory exhaustion rather than
+        // n_pin_hot_experts simply having no effect -- setting an explicit budget
+        // that leaves headroom for the KV cache and compute buffers is strongly
+        // recommended whenever n_pin_hot_experts > 0.
+        uint64_t n_pin_hot_experts_budget_bytes;
+
+        // print hot-expert pinning stats to stderr every N router observations
+        // (0 = disabled, a final summary is still printed when the context is
+        // destroyed). Bypasses the log callback and writes directly with fprintf.
+        uint64_t n_pin_hot_experts_stats_interval;
 
         enum ggml_type type_k; // data type for K cache [EXPERIMENTAL]
         enum ggml_type type_v; // data type for V cache [EXPERIMENTAL]
