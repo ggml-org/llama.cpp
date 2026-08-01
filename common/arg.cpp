@@ -96,7 +96,9 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
     if (arg == "--tessera-kernel-fitness") { tessera_params.kernel_fitness = true; return 1; }
     if (arg == "--tessera-w4a4")           { tessera_params.w4a4           = true; return 1; }
     if (arg == "--tessera-acceptance")     { tessera_params.acceptance     = true; return 1; }
+    if (arg == "--no-tessera-acceptance")  { tessera_params.acceptance     = false; return 1; }
     if (arg == "--tessera-adaptive-requantize") { tessera_params.adaptive_requantize = true; return 1; }
+    if (arg == "--no-tessera-adaptive-requantize") { tessera_params.adaptive_requantize = false; return 1; }
     if (arg == "--tessera-adapt-dry-run")  { tessera_params.adapt_dry_run  = true; return 1; }
 
     // enum-valued
@@ -132,6 +134,7 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
     if (arg == "--tessera-ga-checkpoint")     { if (!require_val("--tessera-ga-checkpoint")) return -1;     tessera_params.ga_checkpoint    = val; return 2; }
     if (arg == "--calib-corpus")              { if (!require_val("--calib-corpus")) return -1;              tessera_params.calib_corpus     = val; return 2; }
     if (arg == "--calib-corpus-out")          { if (!require_val("--calib-corpus-out")) return -1;          tessera_params.calib_corpus_out = val; return 2; }
+    if (arg == "--progress-file")             { if (!require_val("--progress-file")) return -1;             tessera_params.progress_file    = val; return 2; }
     if (arg == "--tessera-awq-alpha")         { if (!require_val("--tessera-awq-alpha")) return -1;         tessera_params.awq_alpha        = val; return 2; }
     if (arg == "--tessera-ternary-threshold") { if (!require_val("--tessera-ternary-threshold")) return -1; tessera_params.ternary_threshold = val; return 2; }
     if (arg == "--tessera-kernel-fitness-dir") { if (!require_val("--tessera-kernel-fitness-dir")) return -1; tessera_params.kernel_fitness_dir = val; return 2; }
@@ -1828,7 +1831,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"-kvu", "--kv-unified"},
         {"-no-kvu", "--no-kv-unified"},
-        "use single unified KV buffer shared across all sequences (default: enabled if number of slots is auto)",
+        "use single unified KV buffer shared across all sequences (default: enabled)",
         [](common_params & params, bool value) {
             params.kv_unified = value;
         }
@@ -1841,6 +1844,45 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.cache_idle_slots = value;
         }
     ).set_env("LLAMA_ARG_CACHE_IDLE_SLOTS").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--max-requests"}, "N",
+        string_format("soft cap on in-flight requests; under KV pressure the lowest-scoring active request is preempted (default: %d, 0 = disabled, matches vLLM V1 admission control)",
+                      params.max_admitted_requests),
+        [](common_params & params, int value) {
+            params.max_admitted_requests = value;
+        }
+    ).set_env("LLAMA_ARG_MAX_REQUESTS").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--prefill-chunk-size"}, "N",
+        string_format("shared per-iteration prefill cap in tokens; prevents long prompts from stalling decode (default: %d, 0 = disabled, vLLM V1 default is 8192)",
+                      params.prefill_chunk_size),
+        [](common_params & params, int value) {
+            params.prefill_chunk_size = value;
+        }
+    ).set_env("LLAMA_ARG_PREFILL_CHUNK_SIZE").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--otel"},
+        {"--no-otel"},
+        "emit OpenTelemetry-compatible spans (W3C trace-context + newline-delimited JSON)",
+        [](common_params & params, bool value) {
+            params.otel_enabled = value;
+        }
+    ).set_env("LLAMA_ARG_OTEL").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--otel-endpoint"}, "URL",
+        "OTLP/HTTP endpoint for span export (e.g. http://collector:4318/v1/traces); empty writes to stderr",
+        [](common_params & params, const std::string & value) {
+            params.otel_endpoint = value;
+        }
+    ).set_env("LLAMA_ARG_OTEL_ENDPOINT").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
+        {"--otel-service-name"}, "NAME",
+        string_format("service.name attribute attached to every span (default: %s)", params.otel_service_name.c_str()),
+        [](common_params & params, const std::string & value) {
+            params.otel_service_name = value;
+        }
+    ).set_env("LLAMA_ARG_OTEL_SERVICE_NAME").set_examples({LLAMA_EXAMPLE_SERVER}));
+
     add_opt(common_arg(
         {"--context-shift"},
         {"--no-context-shift"},
@@ -4164,6 +4206,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ));
     add_opt(common_arg(
+        {"--progress-file"}, "PATH",
+        "Tessera: write NDJSON progress events to this path (one per tick, ~5/s)",
+        [](common_params &, const std::string & value) {
+            tessera_params.progress_file = value;
+        }
+    ));
+    add_opt(common_arg(
         {"--calib-corpus-out"}, "PATH",
         "Tessera: write resolved mini-corpus to this path",
         [](common_params &, const std::string & value) {
@@ -4332,10 +4381,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ));
     add_opt(common_arg(
         {"--tessera-acceptance"},
-        "Tessera: run the G6 acceptance gate after quantization and exit with "
-        "code 0 (pass) or 1 (fail)",
+        "Tessera: force-enable the G6 acceptance gate (on by default)",
         [](common_params &) {
             tessera_params.acceptance = true;
+        }
+    ));
+    add_opt(common_arg(
+        {"--no-tessera-acceptance"},
+        "Tessera: skip the G6 acceptance gate (faster iteration runs)",
+        [](common_params &) {
+            tessera_params.acceptance = false;
         }
     ));
     add_opt(common_arg(
@@ -4347,11 +4402,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ));
     add_opt(common_arg(
         {"--tessera-adaptive-requantize"},
-        "Tessera: run the L5 adaptive requantization loop after quantization "
-        "(L2 differential -> per-tensor tighten -> re-quantize, up to "
-        "--tessera-l5-generations). See docs/runtime-aware-pipeline.md Layer 5",
+        "Tessera: force-enable the L5 adaptive requantization loop (on by default)",
         [](common_params &) {
             tessera_params.adaptive_requantize = true;
+        }
+    ));
+    add_opt(common_arg(
+        {"--no-tessera-adaptive-requantize"},
+        "Tessera: skip the L5 adaptive requantization loop (faster iteration runs)",
+        [](common_params &) {
+            tessera_params.adaptive_requantize = false;
         }
     ));
     add_opt(common_arg(

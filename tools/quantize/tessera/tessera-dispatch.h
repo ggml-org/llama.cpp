@@ -53,15 +53,17 @@ struct ts_dispatch_params {
     float       w4a4_outlier_thresh;    // LLM.int8 |X| threshold (default 6.0)
     // S7 G6 acceptance gate. When set, re-quantizes each tensor under every
     // single-proxy expert and runs the composite-beats-single + ranking
-    // disagreement test after quantization.
-    bool        run_acceptance;
+    // disagreement test after quantization. On by default; the dispatch
+    // plumbs the common_tessera_params default (true) through.
+    bool        run_acceptance = true;
     ts_acceptance_config acceptance_config;
     // L5 adaptive requantization. When set, runs the L2 -> L5 -> re-quantize
     // loop after step 7 for up to l5_max_generations, tightening alpha/clip
     // (Stage A) or outlier_fraction (Stage B, A/B per tensor family) on
     // tensors whose L2 divergence overshoots their type baseline. See
-    // docs/runtime-aware-pipeline.md Layer 5.
-    bool        adaptive_requantize = false;
+    // docs/runtime-aware-pipeline.md Layer 5. On by default; the dispatch
+    // plumbs the common_tessera_params default (true) through.
+    bool        adaptive_requantize = true;
     int         l5_max_generations  = 3;     // generational cap
     float       l5_flag_multiplier  = 1.5f;  // L2 flag threshold = multiplier * type baseline
     float       l5_alpha_min        = 0.1f;  // floor for the Stage A alpha multiplier
@@ -69,6 +71,11 @@ struct ts_dispatch_params {
     float       l5_outlier_overshoot_scale = 0.5f;  // Stage B outlier_frac bump per unit overshoot
     float       l5_outlier_frac_cap = 0.25f; // Stage B outlier_fraction ceiling
     std::string l5_out_path;                 // empty = beside policy_out_path as <stem>.l5-loop.json
+    // Structured progress reporting. When progress_file is non-empty, the
+    // dispatch writes one NDJSON event per tick to that path for the Studio
+    // UI to tail. Terminal live-update auto-enables on TTY stderr.
+    std::string progress_file;               // empty = no NDJSON output
+    bool        progress_force_terminal = false;
 };
 
 // Result of the Tessera pipeline for one tensor.

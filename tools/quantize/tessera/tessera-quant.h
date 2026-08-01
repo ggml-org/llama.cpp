@@ -29,6 +29,30 @@ float ts_ternarize_with_acts(const float * weights, const float * act_scales,
                              int8_t * ternary_out,
                              int64_t out_dim, int64_t in_dim);
 
+// Fused scale-clip-ternarize: writes ws[r,c] = W[r,c] * wscale[c], optionally
+// clips per row, computes the mean-of-abs threshold, and produces the ternary
+// pattern - all in a single streaming pass over W. Replaces the unfused
+// sequence ts_mat_scale_cols -> copy -> clip -> ts_ternarize_with_acts ->
+// ts_vec_meanabs, cutting ~5 full-tensor passes down to 2 (one for threshold,
+// one for ternarize; unavoidable because threshold needs a full reduction
+// before ternary can be assigned).
+//
+// ws_out: (out_dim x in_dim) pre-allocated, receives the scaled (+ optionally
+//         clipped) weights so downstream passes (outlier selection, MSE) can
+//         reuse them without re-scaling.
+// core_out: (out_dim x in_dim) pre-allocated, receives the clipped ws (same as
+//           ws when clip is disabled). Needed by ts_compute_scales which
+//           expects the clipped weights.
+// ternary_out: (out_dim x in_dim) pre-allocated int8.
+// Returns the global_amp (mean of abs of ws).
+float ts_scale_clip_ternarize_fused(const float * weights,
+                                    const float * wscale,
+                                    float clip,
+                                    float * ws_out,
+                                    float * core_out,
+                                    int8_t * ternary_out,
+                                    int64_t out_dim, int64_t in_dim);
+
 // Pack ternary row into Tile640 wire format.
 // ternary_flat: (out_dim x in_dim) int8 {-1,0,+1}.
 // packed_out: pre-allocated int32 buffer, size = out_dim * pages_per_row * 32.

@@ -29,10 +29,14 @@ struct common_tessera_params {
     float       kernel_fitness_blend = 1.0f;
     bool        w4a4 = false;
     float       w4a4_outlier_thresh = 6.0f;
-    bool        acceptance = false;
+    bool        acceptance = true;
     std::string acceptance_out;
-    // L5 adaptive requantization loop (L2 -> L5 -> re-quantize, generational)
-    bool        adaptive_requantize = false;
+    // L5 adaptive requantization loop (L2 -> L5 -> re-quantize, generational).
+    // On by default: runtime-aware fixup of tensors whose L2 divergence
+    // overshoots their type baseline is part of the core pipeline, not an
+    // opt-in. Use --no-tessera-adaptive-requantize to disable for fast
+    // iteration runs.
+    bool        adaptive_requantize = true;
     int         l5_max_generations  = 3;
     float       l5_flag_multiplier  = 1.5f;
     float       l5_alpha_min        = 0.1f;
@@ -65,6 +69,11 @@ struct common_tessera_params {
     std::string dpace_out;
     float       dpace_alpha = 0.1f;
     float       dpace_gamma = 3.0f;
+    // Structured progress reporting for the quantize pipeline. When
+    // progress_file is non-empty, the dispatch writes one NDJSON event per
+    // tick to that path for the Studio UI to tail.
+    std::string progress_file;
+    bool        progress_force_terminal = false;
 };
 
 const common_tessera_params & common_get_tessera_params();

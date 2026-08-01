@@ -30,6 +30,8 @@ add_library(${TARGET}
     tessera/tessera-policy.cpp
     tessera/tessera-dispatch.cpp
     tessera/tessera-gguf-writer.cpp
+    # structured progress reporting (terminal live line + NDJSON for UI)
+    tessera/tessera-progress.cpp
     # probes + harnesses
     tessera/tessera-l5.cpp
     tessera/tessera-l15.cpp

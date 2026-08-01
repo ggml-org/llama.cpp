@@ -220,7 +220,65 @@ void ts_vec_scale(float * x, float scalar, int64_t n) {
 #endif
 }
 
+float ts_vec_maxabs(const float * x, int64_t n) {
+    if (n <= 0) {
+        return 0.0f;
+    }
+#if defined(__APPLE__)
+    float r = 0.0f;
+    vDSP_maxmgv(x, 1, &r, (vDSP_Length)n);
+    return r;
+#else
+    float r = 0.0f;
+    for (int64_t i = 0; i < n; ++i) {
+        r = std::max(r, std::fabs(x[i]));
+    }
+    return r;
+#endif
+}
+
+float ts_vec_meanabs(const float * x, int64_t n) {
+    if (n <= 0) {
+        return 0.0f;
+    }
+#if defined(__APPLE__)
+    // mean(|x|) directly via vDSP_meamgv (mean of magnitudes).
+    float r = 0.0f;
+    vDSP_meamgv(x, 1, &r, (vDSP_Length)n);
+    return r;
+#else
+    double sum = 0.0;
+    for (int64_t i = 0; i < n; ++i) {
+        sum += std::fabs((double)x[i]);
+    }
+    return (float)(sum / (double)n);
+#endif
+}
+
 // matrix ops
+
+void ts_mat_scale_cols(const float * W, const float * scale, float * out,
+                       int64_t rows, int64_t cols) {
+    // out[r, c] = W[r, c] * scale[c]. Each row is an elementwise mul against
+    // the same `scale` vector of length cols.
+    if (rows <= 0 || cols <= 0) {
+        return;
+    }
+#if defined(__APPLE__)
+    for (int64_t r = 0; r < rows; ++r) {
+        vDSP_vmul(W + r * cols, 1, scale, 1, out + r * cols, 1,
+                  (vDSP_Length)cols);
+    }
+#else
+    for (int64_t r = 0; r < rows; ++r) {
+        const float * wrow = W + r * cols;
+        float * orow = out + r * cols;
+        for (int64_t c = 0; c < cols; ++c) {
+            orow[c] = wrow[c] * scale[c];
+        }
+    }
+#endif
+}
 
 void ts_mat_mul(const float * A, const float * B, float * C,
                 int64_t M, int64_t K, int64_t N) {

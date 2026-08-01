@@ -26,8 +26,12 @@ void ts_vec_vmul(const float * a, const float * b, float * out, int64_t n);
 void ts_vec_vadd(const float * a, const float * b, float * out, int64_t n);
 void ts_vec_vsub(const float * a, const float * b, float * out, int64_t n);
 void ts_vec_scale(float * x, float scalar, int64_t n);  // in-place
+float ts_vec_maxabs(const float * x, int64_t n);        // max |x|
+float ts_vec_meanabs(const float * x, int64_t n);       // mean(|x|)
 
 // matrix ops (row-major, M rows x K cols)
+void ts_mat_scale_cols(const float * W, const float * scale, float * out,
+                       int64_t rows, int64_t cols);  // out[r,c] = W[r,c] * scale[c]
 void ts_mat_mul(const float * A, const float * B, float * C,
                 int64_t M, int64_t K, int64_t N);  // C = A @ B
 void ts_mat_mul_at(const float * A, const float * B, float * C,

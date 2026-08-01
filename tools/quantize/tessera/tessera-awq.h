@@ -143,6 +143,20 @@ struct ts_awq_evolve_params {
     // threads. 0/1 = serial (the historical behaviour). The evaluator ctx is
     // shared across threads and must guard any mutable state itself.
     int32_t   n_threads;
+    // Optional per-layer progress hook. Invoked once when each layer's GA
+    // completes, with the layer index, the layer count, and the layer's
+    // tensor name (may be NULL). The callback must be thread-safe since
+    // layers run concurrently when n_threads > 1. May be NULL.
+    void    (* on_layer_done)(int64_t idx, int64_t n_layers, const char * name,
+                              void * user);
+    void     * on_layer_done_user;
+    // Optional phase-transition hook. Invoked when evolve_all enters the
+    // screening phase (with the screen layer count) and again when it enters
+    // the main evolution (with the full layer count). phase is one of
+    // "screen" or "evolve". May be NULL.
+    void    (* on_phase_change)(const char * phase, int64_t n_layers,
+                                void * user);
+    void     * on_phase_change_user;
 };
 
 // Result of evolution for one tensor family.

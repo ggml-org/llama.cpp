@@ -22,6 +22,11 @@ struct ts_imatrix {
 // Load imatrix from .npz file. Returns 0 on success.
 int ts_imatrix_load_npz(const char * path, ts_imatrix * out, std::string * err_msg);
 
+// Load imatrix from a GGUF imatrix file (the format emitted by llama-imatrix).
+// Per-channel activation magnitudes are derived from the GGUF imatrix entry's
+// sums/counts as sums[i] / max(counts[i], 1). Returns 0 on success.
+int ts_imatrix_load_gguf(const char * path, ts_imatrix * out, std::string * err_msg);
+
 // Lookup activation scales for a tensor. Returns nullptr if not found.
 // Handles name normalization (strips ".weight" suffix, handles "blk.N." prefix).
 const float * ts_imatrix_lookup(const ts_imatrix * imatrix,

@@ -406,18 +406,79 @@ int ts_awq_evolve_all(const ts_awq_layer * layers, int64_t n_layers,
     // Progressive eval: screen on stratified 25% of layers first, then
     // promote survivors to full eval. For the per-layer GA, this reduces
     // to running a short screen on a subset of layers to warm-start seeds.
-    // With <= 4 layers, skip screening.
+    // With <= 4 layers, skip screening. The screen fans out across the same
+    // thread pool as the main evolution (layers are independent; the only
+    // shared state is eval_ctx, which the caller guards).
     if (n_layers > 4) {
         int64_t screen_count = std::max((int64_t)1, n_layers / 4);
         ts_awq_evolve_params screen_params = *params;
         screen_params.generations = std::max((int64_t)1, params->generations / 4);
+        screen_params.n_threads    = 1;  // no nested fan-out per layer
+
+        if (params->on_phase_change) {
+            params->on_phase_change("screen", screen_count,
+                                    params->on_phase_change_user);
+        }
 
         // Stratified screen: evenly spaced layers
-        std::vector<ts_awq_evolve_result> screen_results(screen_count);
+        std::vector<int64_t> screen_li(screen_count);
         for (int64_t si = 0; si < screen_count; si++) {
-            int64_t li = si * (n_layers - 1) / std::max((int64_t)1, screen_count - 1);
-            screen_params.seed = params->seed + (uint32_t)li;
-            int rc = ts_awq_evolve(&layers[li], eval, eval_ctx, &screen_params, &screen_results[si]);
+            screen_li[si] = si * (n_layers - 1) / std::max((int64_t)1, screen_count - 1);
+        }
+
+        std::vector<ts_awq_evolve_result> screen_results(screen_count);
+
+        const int32_t screen_threads = std::max(1, std::min(
+            (int32_t) std::thread::hardware_concurrency(),
+            std::min(params->n_threads > 0 ? params->n_threads : 1,
+                     (int32_t) screen_count)));
+
+        if (screen_threads <= 1) {
+            for (int64_t si = 0; si < screen_count; si++) {
+                screen_params.seed = params->seed + (uint32_t)screen_li[si];
+                int rc = ts_awq_evolve(&layers[screen_li[si]], eval, eval_ctx,
+                                       &screen_params, &screen_results[si]);
+                if (rc != 0) {
+                    return rc;
+                }
+                if (params->on_layer_done) {
+                    params->on_layer_done(si, screen_count,
+                                          layers[screen_li[si]].name.c_str(),
+                                          params->on_layer_done_user);
+                }
+            }
+        } else {
+            // Atomic work queue over screen indices. Same pattern as the main
+            // evolution loop below. screen_results slots do not alias.
+            std::atomic<int64_t> next_si(0);
+            std::atomic<int>     first_rc(0);
+            auto screen_worker = [&]() {
+                ts_awq_evolve_params sp = screen_params;
+                for (;;) {
+                    int64_t si = next_si.fetch_add(1, std::memory_order_relaxed);
+                    if (si >= screen_count) return;
+                    sp.seed = params->seed + (uint32_t)screen_li[si];
+                    int rc = ts_awq_evolve(&layers[screen_li[si]], eval, eval_ctx,
+                                           &sp, &screen_results[si]);
+                    if (rc != 0) {
+                        int expected = 0;
+                        first_rc.compare_exchange_strong(expected, rc,
+                                                         std::memory_order_relaxed);
+                    }
+                    if (params->on_layer_done) {
+                        params->on_layer_done(si, screen_count,
+                                              layers[screen_li[si]].name.c_str(),
+                                              params->on_layer_done_user);
+                    }
+                }
+            };
+            std::vector<std::thread> pool;
+            pool.reserve((size_t)screen_threads);
+            for (int32_t t = 0; t < screen_threads; t++) {
+                pool.emplace_back(screen_worker);
+            }
+            for (auto & th : pool) th.join();
+            int rc = first_rc.load(std::memory_order_relaxed);
             if (rc != 0) {
                 return rc;
             }
@@ -437,6 +498,11 @@ int ts_awq_evolve_all(const ts_awq_layer * layers, int64_t n_layers,
         : 1;
     const int32_t n_threads   = std::max(1, std::min(hw_threads, (int32_t)n_layers));
 
+    if (params->on_phase_change) {
+        params->on_phase_change("evolve", n_layers,
+                                params->on_phase_change_user);
+    }
+
     if (n_threads <= 1) {
         for (int64_t i = 0; i < n_layers; i++) {
             ts_awq_evolve_params layer_params = *params;
@@ -444,6 +510,10 @@ int ts_awq_evolve_all(const ts_awq_layer * layers, int64_t n_layers,
             int rc = ts_awq_evolve(&layers[i], eval, eval_ctx, &layer_params, &(*results)[i]);
             if (rc != 0) {
                 return rc;
+            }
+            if (params->on_layer_done) {
+                params->on_layer_done(i, n_layers, layers[i].name.c_str(),
+                                      params->on_layer_done_user);
             }
         }
         return 0;
@@ -469,6 +539,10 @@ int ts_awq_evolve_all(const ts_awq_layer * layers, int64_t n_layers,
                 int expected = 0;
                 first_rc.compare_exchange_strong(expected, rc,
                                                  std::memory_order_relaxed);
+            }
+            if (params->on_layer_done) {
+                params->on_layer_done(i, n_layers, layers[i].name.c_str(),
+                                      params->on_layer_done_user);
             }
         }
     };

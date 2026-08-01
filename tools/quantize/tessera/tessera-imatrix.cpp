@@ -6,6 +6,8 @@
 
 #include "tessera-imatrix.h"
 
+#include "imatrix-loader.h"
+
 #include <cstdio>
 #include <cstring>
 #include <cmath>
@@ -228,6 +230,45 @@ int ts_imatrix_load_npz(const char * path, ts_imatrix * out, std::string * err_m
 
     if (out->data.empty()) {
         if (err_msg) *err_msg = "no valid .npy entries found";
+        return 1;
+    }
+
+    return 0;
+}
+
+int ts_imatrix_load_gguf(const char * path, ts_imatrix * out, std::string * err_msg) {
+    // GGUF imatrix files are emitted by llama-imatrix and the standard
+    // quantize path. Each tensor's entry carries per-channel sums, abs_sums,
+    // fourth_sums, max_abs and counts. The per-channel activation magnitude
+    // used by the tessera AWQ/regime path is sums[i] / counts[i] (the mean
+    // squared activation); counts<=0 is treated as 1 to avoid div-by-zero.
+    common_imatrix loaded;
+    if (!common_imatrix_load(path, loaded)) {
+        if (err_msg) {
+            *err_msg = std::string("common_imatrix_load failed for: ") + path;
+        }
+        return 1;
+    }
+
+    for (const auto & kv : loaded.entries) {
+        const auto & entry = kv.second;
+        const size_t n = entry.sums.size();
+        if (n == 0) {
+            continue;
+        }
+        std::vector<float> vals(n);
+        for (size_t i = 0; i < n; i++) {
+            int64_t c = (i < entry.counts.size()) ? entry.counts[i] : 0;
+            float denom = (c > 0) ? (float)c : 1.0f;
+            vals[i] = entry.sums[i] / denom;
+        }
+        out->data[kv.first] = std::move(vals);
+    }
+
+    out->source_path = path;
+
+    if (out->data.empty()) {
+        if (err_msg) *err_msg = "GGUF imatrix contained no tensor entries";
         return 1;
     }
 

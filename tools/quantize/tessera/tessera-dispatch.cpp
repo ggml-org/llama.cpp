@@ -28,6 +28,9 @@
 #include "tessera-w4a4.h"
 #include "tessera-acceptance.h"
 #include "tessera-policy.h"
+#include "tessera-progress.h"
+#include "tessera-sharded-map.h"
+#include "tessera-vec.h"
 
 #include "gguf.h"
 #include "ggml.h"
@@ -39,7 +42,9 @@
 #include <cstring>
 #include <deque>
 #include <limits>
+#include <memory>
 #include <mutex>
+#include <atomic>
 #include <string>
 #include <thread>
 #include <utility>
@@ -192,22 +197,25 @@ static int ts_dispatch_mm_awq(const ts_mm_imatrix * mm, const char * name,
 // evaluator does not re-read disk per candidate. best_t2 / best_pair track,
 // per tensor, the best-scoring candidate's blended t_l^2 and its
 // (offline, kernel-direct) components, to feed the A/B harness after evolution.
+//
+// The caches are sharded concurrent maps (ts_sharded_map). The GA fans
+// per-tensor work across threads; each tensor is written by exactly one
+// worker, but a plain unordered_map would race on rehash across different
+// keys. Sharding by key hash gives lock-free operation for the common case
+// (two threads touching different keys land in different shards) and a
+// fine-grained lock for the rare same-shard collision. The `mode_prints`
+// counter is the only remaining shared mutable state; it uses a relaxed
+// atomic since the exact count does not matter (just a log-rate cap).
 struct ts_dispatch_eval_ctx {
     float    outlier_thresh;
     uint32_t seed;
     ts_l1_fitness_config l1;
     bool     verbose;
-    int      mode_prints;   // tensors whose fitness mode has been logged
-    std::unordered_map<std::string, std::vector<float>>      sidecar_cache;
-    std::unordered_map<std::string, float>                   best_t2;
-    std::unordered_map<std::string, std::pair<float, float>> best_pair;
-    std::unordered_map<std::string, int>                     modality;  // per-tensor operative modality
-    // The GA fans per-tensor work across threads (ts_awq_evolve_all). The
-    // per-tensor quantize inputs (weights, imatrix) and the routing/modality
-    // lookups above are read-only across threads, but the three caches below
-    // are written lazily by the evaluator. Guard them so concurrent tensors
-    // can populate sidecar_cache / record best_t2 / best_pair safely.
-    std::mutex mu;
+    std::atomic<int> mode_prints{0};   // tensors whose fitness mode has been logged
+    ts_sharded_map<std::string, std::vector<float>>      sidecar_cache;
+    ts_sharded_map<std::string, float>                   best_t2;
+    ts_sharded_map<std::string, std::pair<float, float>> best_pair;
+    const std::unordered_map<std::string, int> * modality = nullptr;  // per-tensor operative modality (read-only)
 };
 
 // GA evaluator: quantize the layer with a candidate (alpha, clip) and score
@@ -252,9 +260,11 @@ static ts_awq_score ts_dispatch_awq_eval(const ts_awq_candidate * cand,
     // route the layer to its expert and apply that expert's profile so the
     // GA scores candidates under the same knobs the final quantize uses
     int mod = 0;
-    auto mit = ec->modality.find(layer->name);
-    if (mit != ec->modality.end()) {
-        mod = mit->second;
+    if (ec->modality) {
+        auto mit = ec->modality->find(layer->name);
+        if (mit != ec->modality->end()) {
+            mod = mit->second;
+        }
     }
 
     ts_regime_descriptor rd = {};
@@ -298,51 +308,63 @@ static ts_awq_score ts_dispatch_awq_eval(const ts_awq_candidate * cand,
     float t2    = rel_frob;
     float kd_t2 = rel_frob;   // falls back to the proxy when no sidecar exists
     if (ec->l1.use_kernel_direct) {
-        // The GA may evaluate tensors concurrently (ts_awq_evolve_all fans
-        // per-tensor work across threads). The lazy sidecar load and the
-        // best-t2 recording below mutate ec's caches, so guard them. The
-        // disk read happens at most once per tensor (the cache check below
-        // short-circuits), and the kernel_direct_t2 compute reads from a
-        // stable node reference (unordered_map keeps refs valid across
-        // other inserts), so it is safe to run under the lock.
-        std::lock_guard<std::mutex> lk(ec->mu);
-        auto it = ec->sidecar_cache.find(layer->name);
-        if (it == ec->sidecar_cache.end()) {
+        // Lazy sidecar load: at most one disk read per tensor (the with_lock
+        // lambda runs atomically under the shard lock, so the first caller
+        // for a given tensor name populates the cache and subsequent callers
+        // for the SAME tensor see the entry). Different tensors hash to
+        // different shards and load concurrently with no contention.
+        const std::vector<float> * kdeq_ptr = ec->sidecar_cache.with_lock(
+            layer->name,
+            [&](std::unordered_map<std::string, std::vector<float>> & m,
+               const std::string & key) -> const std::vector<float> *
+        {
+            auto it = m.find(key);
+            if (it != m.end()) {
+                return &it->second;
+            }
             std::vector<float> kdeq;
             int64_t sr = 0;
             int64_t sc = 0;
             if (ec->l1.sidecar_dir[0] != '\0' &&
-                ts_l1_load_sidecar(ec->l1.sidecar_dir, layer->name.c_str(),
+                ts_l1_load_sidecar(ec->l1.sidecar_dir, key.c_str(),
                                    &kdeq, &sr, &sc) == 0 && sr * sc == n) {
-                ec->sidecar_cache[layer->name] = std::move(kdeq);
+                m.emplace(key, std::move(kdeq));
             } else {
-                ec->sidecar_cache[layer->name] = std::vector<float>();
+                m.emplace(key, std::vector<float>());
             }
-            it = ec->sidecar_cache.find(layer->name);
-            if (ec->verbose && ec->mode_prints < 3) {
+            it = m.find(key);
+            if (ec->verbose && ec->mode_prints.load(std::memory_order_relaxed) < 3) {
                 printf("tessera-dispatch: kernel-fitness: %s -> %s\n",
-                       layer->name.c_str(),
+                       key.c_str(),
                        it->second.empty() ? "offline proxy (no sidecar)"
                                           : "kernel-direct (L1 sidecar)");
-                ec->mode_prints++;
+                ec->mode_prints.fetch_add(1, std::memory_order_relaxed);
             }
-        }
-        if (!it->second.empty() && (int64_t)it->second.size() == n &&
+            return &it->second;
+        });
+        if (!kdeq_ptr->empty() && (int64_t)kdeq_ptr->size() == n &&
             (int64_t)qr.recon.size() == n) {
             kd_t2 = ts_l1_kernel_direct_t2(qr.recon.data(), layer->weights,
-                                           it->second.data(), n);
+                                           kdeq_ptr->data(), n);
             t2    = ts_l1_blended_t2(rel_frob, kd_t2, ec->l1.blend_factor);
         }
     }
 
-    // record the best candidate's (offline, kernel) pair for the A/B harness
+    // record the best candidate's (offline, kernel) pair for the A/B harness.
+    // Two threads in the same layer can race here (same GA layer evaluated by
+    // different generations within ts_awq_evolve, but ts_awq_evolve evaluates
+    // candidates serially per layer), so the shard lock is sufficient.
     if (ec->l1.use_kernel_direct) {
-        std::lock_guard<std::mutex> lk(ec->mu);
-        auto bit = ec->best_t2.find(layer->name);
-        if (bit == ec->best_t2.end() || t2 < bit->second) {
-            ec->best_t2[layer->name]   = t2;
-            ec->best_pair[layer->name] = std::make_pair(rel_frob, kd_t2);
-        }
+        ec->best_t2.with_lock(layer->name,
+            [&](std::unordered_map<std::string, float> & m,
+               const std::string & key)
+        {
+            auto bit = m.find(key);
+            if (bit == m.end() || t2 < bit->second) {
+                m[key] = t2;
+                ec->best_pair.assign(key, std::make_pair(rel_frob, kd_t2));
+            }
+        });
     }
 
     score.mse           = qr.mse;
@@ -396,11 +418,8 @@ static float ts_dispatch_forced_t2(const float * weights, const float * act_scal
     }
 
     const int64_t n = out_dim * in_dim;
-    double frob2 = 0.0;
-    for (int64_t i = 0; i < n; i++) {
-        frob2 += (double)weights[i] * (double)weights[i];
-    }
-    return (frob2 > 0.0) ? (float)((double)qr.mse * (double)n / frob2) : qr.mse;
+    float frob2 = ts_vec_dotpr(weights, weights, n);
+    return (frob2 > 0.0f) ? (qr.mse * (float)n / frob2) : qr.mse;
 }
 
 // ---------------------------------------------------------------------------
@@ -749,6 +768,33 @@ int ts_dispatch_run(const ts_dispatch_params * params,
 
     const bool verbose = params->verbose;
 
+    // Structured progress reporter. Lives for the whole dispatch; each phase
+    // resets the counters via ts_progress_set_phase. Terminal output auto-
+    // enables on TTY stderr; NDJSON writes to progress_file when set. The
+    // unique_ptr calls finish + destroy on scope exit so every early-return
+    // path cleans up without per-site teardown. The TESSERA_PROGRESS_FILE
+    // env var is a fallback so a shell can enable UI streaming without editing
+    // launch commands.
+    std::string progress_file = params->progress_file;
+    if (progress_file.empty()) {
+        const char * env = std::getenv("TESSERA_PROGRESS_FILE");
+        if (env && env[0] != '\0') {
+            progress_file = env;
+        }
+    }
+    struct ts_progress_deleter {
+        void operator()(ts_progress * p) const {
+            ts_progress_finish(p);
+            ts_progress_destroy(p);
+        }
+    };
+    std::unique_ptr<ts_progress, ts_progress_deleter> prog_guard(
+        ts_progress_create(
+            ts_progress_phase::SETUP, 0,
+            progress_file.empty() ? nullptr : progress_file.c_str(),
+            params->progress_force_terminal || verbose));
+    ts_progress * prog = prog_guard.get();
+
     // --- step 1: determine which steps to run ---
     const bool need_calibration = params->imatrix_path.empty() && params->policy_path.empty();
     const bool need_ga          = params->policy_path.empty();
@@ -777,6 +823,13 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             have_imatrix = true;
             if (verbose) {
                 printf("tessera-dispatch: calibration: loaded imatrix '%s' (%zu tensors)\n",
+                       params->imatrix_path.c_str(), imatrix.data.size());
+            }
+        } else if (ts_imatrix_load_gguf(params->imatrix_path.c_str(), &imatrix, &imsg) == 0) {
+            // GGUF imatrix (emitted by llama-imatrix) - fall back when NPZ fails.
+            have_imatrix = true;
+            if (verbose) {
+                printf("tessera-dispatch: calibration: loaded GGUF imatrix '%s' (%zu tensors)\n",
                        params->imatrix_path.c_str(), imatrix.data.size());
             }
         } else if (!have_mm_imatrix) {
@@ -947,6 +1000,10 @@ int ts_dispatch_run(const ts_dispatch_params * params,
         printf("tessera-dispatch: loaded '%s' (%lld tensors)\n",
                params->input_path.c_str(), (long long)n_tensors);
     }
+    // Seed the GA phase total with n_tensors (upper bound; refined at the
+    // evolve_all call site once ga_layers.size() is known).
+    ts_progress_set_phase(prog, ts_progress_phase::GA_EVOLVE, n_tensors,
+                          "per-tensor alpha search");
 
     // --- step 5b: HIGGS alpha_l estimation / cache lookup ---
     std::string higgs_mode = params->higgs_alpha_mode.empty() ? "uniform" : params->higgs_alpha_mode;
@@ -959,6 +1016,8 @@ int ts_dispatch_run(const ts_dispatch_params * params,
         std::vector<int64_t> higgs_outs, higgs_ins;
         std::vector<std::vector<float>> higgs_wbufs;
 
+        ts_progress_set_phase(prog, ts_progress_phase::HIGGS, n_tensors,
+                              "alpha_l estimation");
         for (int64_t i = 0; i < n_tensors; i++) {
             const char * name = gguf_get_tensor_name(in_ctx, i);
             const enum ggml_type type = gguf_get_tensor_type(in_ctx, i);
@@ -979,7 +1038,9 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             higgs_wptrs.push_back(higgs_wbufs.back().data());
             higgs_outs.push_back(ne[1]);
             higgs_ins.push_back(ne[0]);
+            ts_progress_inc(prog, 1, name);
         }
+        ts_progress_inc(prog, n_tensors - (int64_t)higgs_wptrs.size(), nullptr);
 
         if (!higgs_wptrs.empty()) {
             ts_higgs_cache_key ckey = ts_higgs_cache_compute_key(
@@ -1048,6 +1109,8 @@ int ts_dispatch_run(const ts_dispatch_params * params,
         std::vector<ts_awq_layer>          ga_layers;
         std::vector<ts_regime_descriptor>  ga_descs;     // regime descriptor per layer (archive axes)
 
+        ts_progress_set_phase(prog, ts_progress_phase::GA_PREP, n_tensors,
+                              "collect GA layers");
         for (int64_t i = 0; i < n_tensors; i++) {
             const char * name = gguf_get_tensor_name(in_ctx, i);
             const enum ggml_type type = gguf_get_tensor_type(in_ctx, i);
@@ -1143,15 +1206,18 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             layer.eff_rank    = desc.eff_rank;
             ga_layers.push_back(layer);
             ga_descs.push_back(desc);
+            ts_progress_inc(prog, 1, name);
         }
+        // Charge any filtered iterations so the bar completes.
+        ts_progress_inc(prog, n_tensors - (int64_t)ga_layers.size(), nullptr);
 
         if (!ga_layers.empty()) {
             ts_dispatch_eval_ctx eval_ctx;
             eval_ctx.outlier_thresh = params->outlier_frac;
             eval_ctx.seed           = (uint32_t)params->evolve_seed;
             eval_ctx.verbose        = verbose;
-            eval_ctx.mode_prints    = 0;
-            eval_ctx.modality       = mm_modality;
+            eval_ctx.mode_prints.store(0, std::memory_order_relaxed);
+            eval_ctx.modality       = &mm_modality;
 
             // S5 kernel-direct fitness config. The sidecar directory defaults
             // to the runtime hook's dump dir ($LLAMA_TILE640_DEBUG_DEQUANT_DIR).
@@ -1175,6 +1241,31 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             }
 
             std::vector<ts_awq_evolve_result> ga_results;
+            // Refine the GA progress total now that the quantizable 2D layer
+            // count is known (smaller than n_tensors: excludes norms, embeds,
+            // 1D/3D tensors). evolve_all will call on_phase_change when it
+            // enters screening vs main evolution so the UI can distinguish
+            // them; on_layer_done fires per completed layer in each phase.
+            evolve_params.on_layer_done = [](int64_t, int64_t,
+                                             const char * name, void * user) {
+                ts_progress * p = static_cast<ts_progress *>(user);
+                ts_progress_inc(p, 1, name);
+            };
+            evolve_params.on_layer_done_user = prog;
+            evolve_params.on_phase_change = [](const char * phase,
+                                               int64_t n_layers,
+                                               void * user) {
+                ts_progress * p = static_cast<ts_progress *>(user);
+                ts_progress_set_phase(p, ts_progress_phase::GA_SCREEN,
+                                      n_layers, phase);
+                // The main evolution is reported as GA_EVOLVE so the UI shows
+                // the right label; screen stays GA_SCREEN.
+                if (std::string(phase) == "evolve") {
+                    ts_progress_set_phase(p, ts_progress_phase::GA_EVOLVE,
+                                          n_layers, "per-tensor alpha search");
+                }
+            };
+            evolve_params.on_phase_change_user = prog;
             int rc = ts_awq_evolve_all(ga_layers.data(), (int64_t)ga_layers.size(),
                                        ts_dispatch_awq_eval, &eval_ctx,
                                        &evolve_params, &ga_results);
@@ -1267,14 +1358,14 @@ int ts_dispatch_run(const ts_dispatch_params * params,
                 std::vector<ts_ab_tensor_scores> ab_scores;
                 ab_scores.reserve(ga_names.size());
                 for (size_t l = 0; l < ga_names.size(); l++) {
-                    auto pit = eval_ctx.best_pair.find(ga_names[l]);
-                    if (pit == eval_ctx.best_pair.end()) {
+                    std::pair<float, float> pair_val;
+                    if (!eval_ctx.best_pair.find_copy(ga_names[l], pair_val)) {
                         continue;
                     }
                     ts_ab_tensor_scores s;
                     s.name              = ga_names[l];
-                    s.offline_proxy_mse = pit->second.first;
-                    s.kernel_direct_t2  = pit->second.second;
+                    s.offline_proxy_mse = pair_val.first;
+                    s.kernel_direct_t2  = pair_val.second;
                     s.alpha_l           = (fit_cfg.layer_alpha != nullptr)
                                               ? fit_cfg.layer_alpha[l] : 1.0f;
                     ab_scores.push_back(std::move(s));
@@ -1373,6 +1464,11 @@ int ts_dispatch_run(const ts_dispatch_params * params,
     std::string policy_json = "{\n  \"tensors\": [\n";
     bool first_policy_entry = true;
 
+    // The quantize-write loop is the second long phase. Bump progress per
+    // tensor written (quantized or copied through).
+    ts_progress_set_phase(prog, ts_progress_phase::QUANTIZE, n_tensors,
+                          "write quantized tensors");
+
     for (int64_t i = 0; i < n_tensors; i++) {
         const char * name = gguf_get_tensor_name(in_ctx, i);
         const enum ggml_type type = gguf_get_tensor_type(in_ctx, i);
@@ -1388,6 +1484,7 @@ int ts_dispatch_run(const ts_dispatch_params * params,
         if (t == nullptr) {
             fprintf(stderr, "tessera-dispatch: warning: tensor '%s' not found in ggml context, skipping\n", name);
             n_skipped++;
+            ts_progress_inc(prog, 1, name);
             continue;
         }
 
@@ -1398,6 +1495,7 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             if (verbose) {
                 printf("tessera-dispatch: copy-through %s (%s)\n", name, ggml_type_name(type));
             }
+            ts_progress_inc(prog, 1, name);
             continue;
         }
 
@@ -1412,6 +1510,7 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             fprintf(stderr, "tessera-dispatch: warning: unsupported type for '%s', copying through\n", name);
             gguf_add_tensor(out_ctx, t);
             n_skipped++;
+            ts_progress_inc(prog, 1, name);
             continue;
         }
 
@@ -1601,6 +1700,7 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             }
             result->tensors.push_back(std::move(tr));
             n_quantized++;
+            ts_progress_inc(prog, 1, name);
 
             if (verbose) {
                 printf("tessera-dispatch: quantized %s (3D, %lld experts)\n",
@@ -1697,6 +1797,7 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             total_mse += qr.mse;
             result->tensors.push_back(std::move(tr));
             n_quantized++;
+            ts_progress_inc(prog, 1, name);
 
             // Capture for the L5 refine loop (gated by params->adaptive_requantize;
             // cheap when the loop is off, since it only fires then).
@@ -1758,8 +1859,29 @@ int ts_dispatch_run(const ts_dispatch_params * params,
     // --- step 7b: G6 acceptance gate ---
     result->acceptance_ran = false;
     if (params->run_acceptance) {
-        std::vector<ts_acceptance_tensor> acc_tensors;
+        // Two phases:
+        //   (a) serial: load each 2D quantizable tensor's weights + act scales
+        //       (touches the ggml ctx, must be single-threaded).
+        //   (b) parallel: the 6 ts_dispatch_forced_t2 calls per tensor are
+        //       CPU-bound and independent across tensors. Fan out across the
+        //       same thread budget as the GA.
+        struct acc_work_item {
+            std::string name;
+            std::vector<float> weights;
+            std::vector<float> act_scratch;
+            const float * act;
+            int64_t out_dim, in_dim;
+            ts_expert_id routed_expert;
+        };
+        std::vector<acc_work_item> work;
 
+        const float alpha = default_alpha;
+        const float clip  = params->awq_clip;
+        const float othresh = params->outlier_frac;
+        const uint32_t seed = (uint32_t)params->evolve_seed;
+
+        ts_progress_set_phase(prog, "accept-prep", n_tensors,
+                              "load tensors for acceptance gate");
         for (int64_t i = 0; i < n_tensors; i++) {
             const char * name = gguf_get_tensor_name(in_ctx, i);
             const enum ggml_type type = gguf_get_tensor_type(in_ctx, i);
@@ -1767,49 +1889,96 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             int nd = GGML_MAX_DIMS;
             while (nd > 1 && ne[nd - 1] == 1) nd--;
 
-            if (nd != 2 || !ts_is_quantizable(name, type, nd)) continue;
+            if (nd != 2 || !ts_is_quantizable(name, type, nd)) {
+                ts_progress_inc(prog, 1, name);
+                continue;
+            }
 
             struct ggml_tensor * t = ggml_get_tensor(ggml_ctx, name);
-            if (!t) continue;
+            if (!t) {
+                ts_progress_inc(prog, 1, name);
+                continue;
+            }
 
-            std::vector<float> w = ts_tensor_to_f32(t);
-            if (w.empty()) continue;
-
-            const int64_t in_dim  = ne[0];
-            const int64_t out_dim = ne[1];
-
-            std::vector<float> act_scratch;
-            const float * act = ts_dispatch_act_scales(
-                have_imatrix ? &imatrix : nullptr, name, in_dim,
+            acc_work_item item;
+            item.name     = name;
+            item.weights  = ts_tensor_to_f32(t);
+            item.out_dim  = ne[1];
+            item.in_dim   = ne[0];
+            if (item.weights.empty()) {
+                ts_progress_inc(prog, 1, name);
+                continue;
+            }
+            item.act = ts_dispatch_act_scales(
+                have_imatrix ? &imatrix : nullptr, name, item.in_dim,
                 calib_X.empty() ? nullptr : calib_X.data(), calib_in_dim, calib_n_tokens,
-                &act_scratch);
+                &item.act_scratch);
 
-            const float alpha = default_alpha;
-            const float clip  = params->awq_clip;
-            const float othresh = params->outlier_frac;
-            const uint32_t seed = (uint32_t)params->evolve_seed;
-
-            // composite: regime-routed
             ts_regime_descriptor desc = ts_regime_compute_descriptor(
-                name, w.data(), out_dim, in_dim, nullptr, 0);
+                name, item.weights.data(), item.out_dim, item.in_dim, nullptr, 0);
             ts_regime_routing routing = ts_regime_classify(&desc);
-            float comp_t2 = ts_dispatch_forced_t2(
-                w.data(), act, out_dim, in_dim, routing.expert,
-                alpha, clip, othresh, seed);
+            item.routed_expert = routing.expert;
 
-            ts_acceptance_tensor at;
-            memset(&at, 0, sizeof(at));
-            snprintf(at.name, sizeof(at.name), "%s", name);
-            at.composite_t2      = comp_t2;
-            at.awq_t2            = ts_dispatch_forced_t2(w.data(), act, out_dim, in_dim, TS_EXPERT_AWQ,       alpha, clip, othresh, seed);
-            at.rotation_t2       = ts_dispatch_forced_t2(w.data(), act, out_dim, in_dim, TS_EXPERT_DARTQUANT, alpha, clip, othresh, seed);
-            at.lowrank_t2        = ts_dispatch_forced_t2(w.data(), act, out_dim, in_dim, TS_EXPERT_FLRQ,      alpha, clip, othresh, seed);
-            at.hessian_t2        = ts_dispatch_forced_t2(w.data(), act, out_dim, in_dim, TS_EXPERT_SEPTQ,     alpha, clip, othresh, seed);
-            at.offline_proxy_mse = comp_t2;
-            at.kernel_direct_t2  = comp_t2;  // no sidecar in standalone dispatch
-            at.held_out          = false;    // fraction-based fallback in ts_acceptance_run
-            acc_tensors.push_back(at);
+            work.push_back(std::move(item));
+            ts_progress_inc(prog, 1, name);
         }
+
+        std::vector<ts_acceptance_tensor> acc_tensors(work.size());
+
+        // Parallel 6x re-quantize per tensor. Each work item is independent;
+        // results land in acc_tensors[idx] which does not alias across idx.
+        ts_progress_set_phase(prog, "accept-run", (int64_t)work.size(),
+                              "acceptance gate (6 experts per tensor)");
+
+        const int32_t acc_threads = std::max(1, std::min(
+            (int32_t) std::thread::hardware_concurrency(),
+            std::min((int32_t)8, (int32_t)work.size())));
+
+        if (acc_threads <= 1 || work.size() < 2) {
+            for (size_t idx = 0; idx < work.size(); idx++) {
+                const auto & item = work[idx];
+                ts_acceptance_tensor at;
+                memset(&at, 0, sizeof(at));
+                snprintf(at.name, sizeof(at.name), "%s", item.name.c_str());
+                at.composite_t2 = ts_dispatch_forced_t2(item.weights.data(), item.act, item.out_dim, item.in_dim, item.routed_expert, alpha, clip, othresh, seed);
+                at.awq_t2       = ts_dispatch_forced_t2(item.weights.data(), item.act, item.out_dim, item.in_dim, TS_EXPERT_AWQ,       alpha, clip, othresh, seed);
+                at.rotation_t2  = ts_dispatch_forced_t2(item.weights.data(), item.act, item.out_dim, item.in_dim, TS_EXPERT_DARTQUANT, alpha, clip, othresh, seed);
+                at.lowrank_t2   = ts_dispatch_forced_t2(item.weights.data(), item.act, item.out_dim, item.in_dim, TS_EXPERT_FLRQ,      alpha, clip, othresh, seed);
+                at.hessian_t2   = ts_dispatch_forced_t2(item.weights.data(), item.act, item.out_dim, item.in_dim, TS_EXPERT_SEPTQ,     alpha, clip, othresh, seed);
+                at.offline_proxy_mse = at.composite_t2;
+                at.kernel_direct_t2  = at.composite_t2;
+                at.held_out          = false;
+                acc_tensors[idx] = at;
+                ts_progress_inc(prog, 1, item.name.c_str());
+            }
+        } else {
+            std::atomic<size_t> next_idx(0);
+            auto acc_worker = [&]() {
+                for (;;) {
+                    size_t idx = next_idx.fetch_add(1, std::memory_order_relaxed);
+                    if (idx >= work.size()) return;
+                    const auto & item = work[idx];
+                    ts_acceptance_tensor at;
+                    memset(&at, 0, sizeof(at));
+                    snprintf(at.name, sizeof(at.name), "%s", item.name.c_str());
+                    at.composite_t2 = ts_dispatch_forced_t2(item.weights.data(), item.act, item.out_dim, item.in_dim, item.routed_expert, alpha, clip, othresh, seed);
+                    at.awq_t2       = ts_dispatch_forced_t2(item.weights.data(), item.act, item.out_dim, item.in_dim, TS_EXPERT_AWQ,       alpha, clip, othresh, seed);
+                    at.rotation_t2  = ts_dispatch_forced_t2(item.weights.data(), item.act, item.out_dim, item.in_dim, TS_EXPERT_DARTQUANT, alpha, clip, othresh, seed);
+                    at.lowrank_t2   = ts_dispatch_forced_t2(item.weights.data(), item.act, item.out_dim, item.in_dim, TS_EXPERT_FLRQ,      alpha, clip, othresh, seed);
+                    at.hessian_t2   = ts_dispatch_forced_t2(item.weights.data(), item.act, item.out_dim, item.in_dim, TS_EXPERT_SEPTQ,     alpha, clip, othresh, seed);
+                    at.offline_proxy_mse = at.composite_t2;
+                    at.kernel_direct_t2  = at.composite_t2;
+                    at.held_out          = false;
+                    acc_tensors[idx] = at;
+                    ts_progress_inc(prog, 1, item.name.c_str());
+                }
+            };
+            std::vector<std::thread> pool;
+            pool.reserve((size_t)acc_threads);
+            for (int32_t t = 0; t < acc_threads; t++) pool.emplace_back(acc_worker);
+            for (auto & th : pool) th.join();
+        }
+        // work is destroyed here; acc_tensors owns the results.
 
         if (!acc_tensors.empty()) {
             ts_acceptance_run(&params->acceptance_config,
@@ -1891,11 +2060,15 @@ int ts_dispatch_run(const ts_dispatch_params * params,
     result->policy_json         = policy_json;
     result->policy_sha256       = "";
 
+    // --- finalize progress reporting ---
+    ts_progress_set_phase(prog, ts_progress_phase::FINALIZE, 0, "write GGUF");
+
     // --- cleanup ---
     ggml_free(out_ggml_ctx);
     gguf_free(out_ctx);
     gguf_free(in_ctx);
     ggml_free(ggml_ctx);
 
+    // prog_guard's deleter runs here: ts_progress_finish + ts_progress_destroy.
     return 0;
 }
