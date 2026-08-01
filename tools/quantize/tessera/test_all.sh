@@ -81,6 +81,9 @@ fi
 # --- Needs linalg + lbfgs (search pulls in vendor/nlohmann for the archive JSON) ---
 compile_and_run search      $T/test_search.cpp      $T/tessera-lrq.cpp $T/tessera-dartquant.cpp $T/tessera-flrq.cpp $T/tessera-champq.cpp $T/tessera-archive.cpp $T/tessera-linalg.cpp $T/tessera-lbfgs.cpp -I vendor
 
+# --- CHAMP-Q L-BFGS permutation port (parity vs Python champq_permute.py) ---
+compile_and_run champq      $T/test_champq.cpp      $T/tessera-champq.cpp $T/tessera-lbfgs.cpp -I vendor
+
 # --- MAP-Elites archive (search + linalg + lbfgs + vendor/nlohmann) ---
 compile_and_run map_elites  $T/test_map_elites.cpp  $T/tessera-lrq.cpp $T/tessera-dartquant.cpp $T/tessera-flrq.cpp $T/tessera-champq.cpp $T/tessera-archive.cpp $T/tessera-linalg.cpp $T/tessera-lbfgs.cpp -I vendor
 

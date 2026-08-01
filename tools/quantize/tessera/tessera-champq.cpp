@@ -6,8 +6,19 @@
 #include <cstring>
 #include <algorithm>
 #include <numeric>
+#include <vector>
 
 // --- CHAMP-Q ---
+//
+// Ported from tools/tessera/champq_permute.py. The continuous relaxation
+// parameterizes the permutation as a doubly-stochastic matrix M (K x K);
+// the relaxed weight is W_perm = W @ M. The smoothness loss is the discrete
+// second-difference proxy applied to W_perm, optionally activation-weighted.
+// L-BFGS descends in M-space; Sinkhorn re-projects M onto the doubly-stochastic
+// polytope between steps; Hungarian/greedy recovers a permutation at the end.
+//
+// All math is float32 (the Python reference keeps the closure in float64 but
+// the matmul inputs are f32; the parity test documents the resulting gap).
 
 void ts_champq_sinkhorn(float * M, int64_t n, int64_t n_iters, float eps) {
     for (int64_t i = 0; i < n * n; i++) {
@@ -43,7 +54,9 @@ void ts_champq_sinkhorn(float * M, int64_t n, int64_t n_iters, float eps) {
     }
 }
 
-// Hungarian algorithm (Kuhn-Munkres), O(n^3)
+// Hungarian algorithm (Kuhn-Munkres), O(n^3).
+// `cost` is (n x n) row-major; lower cost = preferred.
+// assignment[i] = column assigned to row i.
 static void ts_hungarian(const float * cost, int32_t * assignment, int64_t n) {
     if (n == 0) {
         return;
@@ -95,6 +108,7 @@ static void ts_hungarian(const float * cost, int32_t * assignment, int64_t n) {
         }
     }
 
+    std::fill(assignment, assignment + n, 0);
     for (int64_t j = 1; j <= n; j++) {
         if (p[j] != 0) {
             assignment[p[j] - 1] = (int32_t)(j - 1);
@@ -106,7 +120,7 @@ static void ts_hungarian(const float * cost, int32_t * assignment, int64_t n) {
 static void ts_greedy_assignment(const float * M, int32_t * assignment, int64_t n) {
     std::vector<int64_t> order(n * n);
     std::iota(order.begin(), order.end(), 0);
-    std::sort(order.begin(), order.end(), [&](int64_t a, int64_t b) {
+    std::stable_sort(order.begin(), order.end(), [&](int64_t a, int64_t b) {
         return M[a] > M[b];
     });
 
@@ -133,11 +147,40 @@ static void ts_greedy_assignment(const float * M, int32_t * assignment, int64_t 
     }
 }
 
+// Smoothness proxy on a (already permuted) 2-D weight.
+// d2[r, c] = W[r, c-1] - 2*W[r, c] + W[r, c+1] for c in [1, K-2].
+// Weighted by act_scales[c] at the stencil center; act_scales may be null.
+float ts_champq_smoothness(const float * W, const int32_t * perm,
+                           const float * act_scales,
+                           int64_t out_dim, int64_t in_dim) {
+    float s = 0.0f;
+    for (int64_t r = 0; r < out_dim; r++) {
+        for (int64_t c = 1; c < in_dim - 1; c++) {
+            float v0 = W[r * in_dim + perm[c - 1]];
+            float v1 = W[r * in_dim + perm[c]];
+            float v2 = W[r * in_dim + perm[c + 1]];
+            float d2 = v0 - 2.0f * v1 + v2;
+            float term = d2 * d2;
+            if (act_scales) {
+                term *= act_scales[c];
+            }
+            s += term;
+        }
+    }
+    return s;
+}
+
+// ---------------------------------------------------------------------------
+// Objective: smoothness loss + gradient on the relaxed M (K x K).
+// Mirrors champq_permute.smoothness_loss_grad.
+// ---------------------------------------------------------------------------
+
 struct ts_champq_ctx {
     const float * W;
     int64_t       out_dim;
     int64_t       in_dim;
     float         binariness;
+    const float * act_scales;  // length in_dim, may be null
 };
 
 static float ts_champq_eval(const float * x, float * grad, int64_t n, void * ctx) {
@@ -146,56 +189,72 @@ static float ts_champq_eval(const float * x, float * grad, int64_t n, void * ctx
     int64_t out_dim = c->out_dim;
     const float * W = c->W;
     float binariness = c->binariness;
+    const float * act = c->act_scales;
 
-    // M is (K x K), x is flattened M
-    // W_perm = W @ M: (out_dim x K)
-    std::vector<float> W_perm(out_dim * K);
-    for (int64_t r = 0; r < out_dim; r++) {
-        for (int64_t col = 0; col < K; col++) {
-            float s = 0.0f;
-            for (int64_t i = 0; i < K; i++) {
-                s += W[r * K + i] * x[i * K + col];
-            }
-            W_perm[r * K + col] = s;
-        }
-    }
-
-    float loss = 0.0f;
+    // Trivial interior case: only the binariness penalty contributes.
     if (K < 3) {
-        // trivial: no interior columns
+        float loss = 0.0f;
         if (binariness > 0.0f) {
             for (int64_t i = 0; i < n; i++) {
                 loss += binariness * x[i] * (1.0f - x[i]);
                 grad[i] = binariness * (1.0f - 2.0f * x[i]);
             }
         } else {
-            memset(grad, 0, n * sizeof(float));
+            std::memset(grad, 0, (size_t)n * sizeof(float));
         }
         return loss;
     }
 
-    // d2[r, c] = W_perm[r, c] - 2*W_perm[r, c+1] + W_perm[r, c+2], c in [0, K-3]
-    // loss = sum d2^2
-    std::vector<float> h(out_dim * K, 0.0f);
+    // W_perm = W @ M : (out_dim x K)
+    std::vector<float> W_perm(out_dim * K);
     for (int64_t r = 0; r < out_dim; r++) {
-        for (int64_t c = 0; c < K - 2; c++) {
-            float d2 = W_perm[r * K + c] - 2.0f * W_perm[r * K + c + 1] + W_perm[r * K + c + 2];
-            loss += d2 * d2;
-            // h[r, c+1] += d2 (the center of the stencil)
-            h[r * K + c + 1] = d2;
+        const float * Wr = W + r * K;
+        for (int64_t col = 0; col < K; col++) {
+            float s = 0.0f;
+            for (int64_t i = 0; i < K; i++) {
+                s += Wr[i] * x[i * K + col];
+            }
+            W_perm[r * K + col] = s;
         }
     }
 
-    // gradient: g[r, c] = 2 * (h[r, c-1] - 2*h[r, c] + h[r, c+1]) for interior
-    // grad_M = W^T @ g
+    // d2[r, c] = W_perm[r, c] - 2*W_perm[r, c+1] + W_perm[r, c+2], c in [0, K-3].
+    // h[r, c] = d2[r, c] * weight, where weight is act[c+1] (the stencil
+    // center) or 1.0. Stored shifted into a length-K buffer so h[r, k]
+    // corresponds to center column k in [1, K-2] (matches the Python
+    // h_pad[:, 1:K-1] = h layout).
+    std::vector<float> h(out_dim * K, 0.0f);
+    float loss = 0.0f;
+    for (int64_t r = 0; r < out_dim; r++) {
+        const float * wp = W_perm.data() + r * K;
+        for (int64_t c = 0; c < K - 2; c++) {
+            float d2 = wp[c] - 2.0f * wp[c + 1] + wp[c + 2];
+            float d2sq = d2 * d2;
+            if (act) {
+                // center column is c+1
+                float w = act[c + 1];
+                d2sq *= w;
+                h[r * K + (c + 1)] = d2 * w;
+            } else {
+                h[r * K + (c + 1)] = d2;
+            }
+            loss += d2sq;
+        }
+    }
+
+    // g[r, k] = d L / d W_perm[r, k] = 2 * (h[r, k-1] - 2*h[r, k] + h[r, k+1])
+    // for interior k in [1, K-2]. Boundary k=0, k=K-1 stays 0 (the missing
+    // neighbour in the padded h buffer is zero).
     std::vector<float> g(out_dim * K, 0.0f);
     for (int64_t r = 0; r < out_dim; r++) {
-        for (int64_t c = 1; c < K - 1; c++) {
-            g[r * K + c] = 2.0f * (h[r * K + c - 1] - 2.0f * h[r * K + c] + h[r * K + c + 1]);
+        const float * hr = h.data() + r * K;
+        float * gr = g.data() + r * K;
+        for (int64_t k = 1; k < K - 1; k++) {
+            gr[k] = 2.0f * (hr[k - 1] - 2.0f * hr[k] + hr[k + 1]);
         }
     }
 
-    // grad_M[i, k] = sum_r W[r, i] * g[r, k]
+    // grad_M[i, k] = sum_r W[r, i] * g[r, k] = (W^T @ g)[i, k]
     for (int64_t i = 0; i < K; i++) {
         for (int64_t k = 0; k < K; k++) {
             float s = 0.0f;
@@ -216,6 +275,10 @@ static float ts_champq_eval(const float * x, float * grad, int64_t n, void * ctx
     return loss;
 }
 
+// ---------------------------------------------------------------------------
+// Search driver.
+// ---------------------------------------------------------------------------
+
 struct ts_champq_project_ctx {
     int64_t K;
     int64_t sinkhorn_iters;
@@ -223,85 +286,172 @@ struct ts_champq_project_ctx {
 
 static void ts_champq_project(float * x, int64_t n, void * ctx) {
     auto * c = (ts_champq_project_ctx *)ctx;
-    // clamp to non-negative
+    // clamp to non-negative, then Sinkhorn-normalize.
     for (int64_t i = 0; i < n; i++) {
         x[i] = std::max(x[i], 1e-12f);
     }
     ts_champq_sinkhorn(x, c->K, c->sinkhorn_iters, 1e-12f);
 }
 
+// argsort descending with stable tie-break on index (matches numpy's
+// argsort(-magnitudes, kind="stable") which keeps ascending index order
+// among equal magnitudes). When `magnitudes` is null the per-column L2 norm
+// of W is used; otherwise the supplied per-channel magnitudes are used
+// (Python's compute_champq_permutation switches to act_scales when given).
+static void ts_argsort_desc(const float * W, const float * magnitudes,
+                            int64_t out_dim, int64_t in_dim,
+                            std::vector<int64_t> & perm) {
+    std::vector<double> mag(in_dim);
+    if (magnitudes) {
+        for (int64_t j = 0; j < in_dim; j++) {
+            mag[j] = (double)magnitudes[j];
+        }
+    } else {
+        for (int64_t j = 0; j < in_dim; j++) {
+            double s = 0.0;
+            for (int64_t i = 0; i < out_dim; i++) {
+                float v = W[i * in_dim + j];
+                s += (double)v * (double)v;
+            }
+            mag[j] = std::sqrt(s);
+        }
+    }
+    perm.resize(in_dim);
+    std::iota(perm.begin(), perm.end(), 0);
+    std::stable_sort(perm.begin(), perm.end(), [&](int64_t a, int64_t b) {
+        if (mag[a] != mag[b]) {
+            return mag[a] > mag[b];
+        }
+        return a < b;
+    });
+}
+
+// Minimal deterministic RNG (xorshift32) for the random init mode, so the
+// C++ init reproduces numpy default_rng(seed).permutation-free behaviour:
+// we only need a reproducible non-negative matrix to feed Sinkhorn. The
+// parity test uses init=l2rank (the default), so this path is exercised
+// only by the convergence smoke test.
+static uint32_t ts_xs32(uint32_t & state) {
+    state ^= state << 13;
+    state ^= state >> 17;
+    state ^= state << 5;
+    return state;
+}
+
 int ts_champq_compute(const float * weights, int64_t out_dim, int64_t in_dim,
                       const ts_champq_params * params, ts_champq_result * result) {
-    int64_t max_iters = params->max_iters > 0 ? params->max_iters : 100;
+    if (!weights || !params || !result || out_dim <= 0 || in_dim <= 0) {
+        return 1;
+    }
+    int64_t max_iters      = params->max_iters > 0 ? params->max_iters : 100;
     int64_t sinkhorn_iters = params->sinkhorn_iters > 0 ? params->sinkhorn_iters : 25;
+    int64_t history        = params->history > 0 ? params->history : 8;
+    float   binariness     = params->binariness;          // 0 by value-init
+    int32_t projection     = params->projection;          // 0 = hungarian
+    int32_t init           = params->init;                // 0 = l2rank
 
     int64_t K = in_dim;
     int64_t n = K * K;
 
-    // init M from L2-rank permutation
-    std::vector<float> col_norms(K);
-    for (int64_t j = 0; j < K; j++) {
-        float s = 0.0f;
-        for (int64_t i = 0; i < out_dim; i++) {
-            float v = weights[i * in_dim + j];
-            s += v * v;
-        }
-        col_norms[j] = sqrtf(s);
-    }
-    // argsort descending
-    std::vector<int64_t> rank_perm(K);
-    std::iota(rank_perm.begin(), rank_perm.end(), 0);
-    std::sort(rank_perm.begin(), rank_perm.end(), [&](int64_t a, int64_t b) {
-        return col_norms[a] > col_norms[b];
-    });
-
+    // Init M.
     std::vector<float> M(n, 0.0f);
-    for (int64_t i = 0; i < K; i++) {
-        M[i * K + rank_perm[i]] = 1.0f;
-    }
-
-    // baseline smoothness (identity perm)
-    float baseline_smooth = 0.0f;
-    for (int64_t r = 0; r < out_dim; r++) {
-        for (int64_t c = 1; c < K - 1; c++) {
-            float d2 = weights[r * K + c - 1] - 2.0f * weights[r * K + c] + weights[r * K + c + 1];
-            baseline_smooth += d2 * d2;
+    if (init == 2) {
+        // random: Sinkhorn(uniform). Deterministic given seed.
+        uint32_t st = params->seed ? params->seed : 1u;
+        for (int64_t i = 0; i < n; i++) {
+            M[i] = (float)((double)(ts_xs32(st) >> 8) / (double)(1u << 24));
+        }
+        ts_champq_project_ctx pctx = { K, std::max<int64_t>(sinkhorn_iters, 50) };
+        ts_champq_project(M.data(), n, &pctx);
+    } else if (init == 1) {
+        // identity
+        for (int64_t i = 0; i < K; i++) {
+            M[i * K + i] = 1.0f;
+        }
+    } else {
+        // l2rank: embed the rank permutation as a permutation matrix.
+        // When act_scales is provided, rank by act_scales (matches Python's
+        // compute_champq_permutation); otherwise rank by per-column L2 norm.
+        std::vector<int64_t> rank_perm;
+        ts_argsort_desc(weights, params->act_scales, out_dim, in_dim, rank_perm);
+        for (int64_t i = 0; i < K; i++) {
+            M[i * K + rank_perm[i]] = 1.0f;
         }
     }
+
+    // baseline smoothness at the identity perm (for the improvement ratio).
+    std::vector<int32_t> id_perm(K);
+    std::iota(id_perm.begin(), id_perm.end(), 0);
+    float baseline_smooth =
+        ts_champq_smoothness(weights, id_perm.data(), params->act_scales, out_dim, in_dim);
 
     if (params->use_lbfgs) {
-        ts_champq_ctx eval_ctx = { weights, out_dim, in_dim, 1.0f };
+        ts_champq_ctx eval_ctx;
+        eval_ctx.W           = weights;
+        eval_ctx.out_dim     = out_dim;
+        eval_ctx.in_dim      = in_dim;
+        eval_ctx.binariness  = binariness;
+        eval_ctx.act_scales  = params->act_scales;
+
         ts_champq_project_ctx proj_ctx = { K, sinkhorn_iters };
 
-        ts_pgd_minimize(M.data(), n, ts_champq_eval, &eval_ctx,
-                        ts_champq_project, &proj_ctx,
-                        max_iters, 0.1f, 1e-6f);
+        // L-BFGS project-between-steps driver. Mirrors
+        // champq_permute.lbfgs_permutation:
+        //   1. eval(M) -> loss, grad
+        //   2. step (Armijo line search) -> M_new, loss_new, grad_new
+        //   3. Sinkhorn-project M_new
+        //   4. recompute loss/grad at the projected point
+        // The trajectory (loss at the projected point each iteration) is
+        // recorded so the parity test can compare against Python.
+        ts_lbfgs_state * st = ts_lbfgs_state_create(n, history);
+
+        std::vector<float> grad(n), grad_new(n), x_new(n);
+        float loss = ts_champq_eval(M.data(), grad.data(), n, &eval_ctx);
+        result->loss_history.push_back(loss);
+
+        // Python: max_ls = 12 for the CHAMP-Q closure.
+        ts_lbfgs_step_params sp = { 1e-4f, 12, 0.5f, 1e-12f };
+
+        for (int64_t it = 0; it < max_iters; it++) {
+            int done = 0;
+            ts_lbfgs_step(st, M.data(), loss, grad.data(),
+                          ts_champq_eval, &eval_ctx, &sp,
+                          x_new.data(), grad_new.data(), &done);
+
+            // Re-project onto the doubly-stochastic manifold.
+            ts_champq_project(x_new.data(), n, &proj_ctx);
+
+            // Recompute loss/grad at the projected point so the next step
+            // has consistent values (the projection invalidates grad_new).
+            std::memcpy(M.data(), x_new.data(), (size_t)n * sizeof(float));
+            loss = ts_champq_eval(M.data(), grad.data(), n, &eval_ctx);
+            result->loss_history.push_back(loss);
+
+            // NOTE: champq_permute.lbfgs_permutation does NOT stop on a
+            // line-search failure (done); it only stops on the gradient-norm
+            // tol. We match that here: keep iterating to max_iters. The
+            // L-BFGS ring buffer self-clears on curvature violations, so a
+            // failed step just degrades gracefully to steepest descent next.
+            (void)done;
+        }
+        ts_lbfgs_state_destroy(st);
     }
 
-    // project to permutation
+    // Final projection to a permutation. Hungarian minimizes cost = -M.
     std::vector<int32_t> perm(K);
-    if (K <= 512) {
-        // Hungarian on negative M (minimize cost = maximize M)
+    bool use_greedy = (projection == 1) || (K > 512);
+    if (use_greedy) {
+        ts_greedy_assignment(M.data(), perm.data(), K);
+    } else {
         std::vector<float> cost(n);
         for (int64_t i = 0; i < n; i++) {
             cost[i] = -M[i];
         }
         ts_hungarian(cost.data(), perm.data(), K);
-    } else {
-        ts_greedy_assignment(M.data(), perm.data(), K);
     }
 
-    // compute final smoothness
-    float final_smooth = 0.0f;
-    for (int64_t r = 0; r < out_dim; r++) {
-        for (int64_t c = 1; c < K - 1; c++) {
-            float v0 = weights[r * K + perm[c - 1]];
-            float v1 = weights[r * K + perm[c]];
-            float v2 = weights[r * K + perm[c + 1]];
-            float d2 = v0 - 2.0f * v1 + v2;
-            final_smooth += d2 * d2;
-        }
-    }
+    float final_smooth =
+        ts_champq_smoothness(weights, perm.data(), params->act_scales, out_dim, in_dim);
 
     result->perm = std::move(perm);
     result->smoothness = final_smooth;
