@@ -3297,15 +3297,6 @@ int ggml_metal_op_silu_back(ggml_metal_op_t ctx, int idx) {
     ggml_metal_library_t lib = ctx->lib;
     ggml_metal_encoder_t enc = ctx->enc;
 
-    GGML_ASSERT(op->src[0]->type == GGML_TYPE_F32);
-    GGML_ASSERT(op->src[1]->type == GGML_TYPE_F32);
-    GGML_ASSERT(op->type         == GGML_TYPE_F32);
-
-    GGML_ASSERT(ggml_is_contiguous(op->src[0]));
-    GGML_ASSERT(ggml_is_contiguous(op->src[1]));
-    GGML_ASSERT(ggml_is_contiguous(op));
-    GGML_ASSERT(ggml_are_same_shape(op->src[0], op->src[1]));
-
     auto pipeline = ggml_metal_library_get_pipeline_silu_back(lib, op);
 
     const int64_t ne = ggml_nelements(op);
