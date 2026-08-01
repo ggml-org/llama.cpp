@@ -6,6 +6,8 @@ BUILD_DIR="${BUILD_DIR:-$ROOT/build}"
 PREFIX="${PREFIX:-$HOME/.local}"
 JOBS="${JOBS:-$(nproc)}"
 FORCE_MMQ="${FORCE_MMQ:-ON}"
+SUMMER_TMP="$(mktemp)"
+trap 'rm -f "$SUMMER_TMP"' EXIT
 
 if [[ -z "${CUDA_ARCH:-}" ]]; then
     CUDA_ARCH="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d '. ' || true)"
@@ -22,6 +24,8 @@ done
 cd "$ROOT"
 
 python3 scripts/apply-tiered-dram-pinned-fallback.py
+python3 scripts/apply-summer-vram-autotune.py scripts/summer "$SUMMER_TMP"
+python3 -m py_compile "$SUMMER_TMP"
 
 cmake -S . -B "$BUILD_DIR" \
     -DCMAKE_BUILD_TYPE=Release \
@@ -36,7 +40,7 @@ cmake -S . -B "$BUILD_DIR" \
 cmake --build "$BUILD_DIR" --target llama-tiered -j"$JOBS"
 
 install -Dm755 "$BUILD_DIR/bin/llama-tiered" "$PREFIX/bin/llama-tiered"
-install -Dm755 "$ROOT/scripts/summer" "$PREFIX/bin/summer"
+install -Dm755 "$SUMMER_TMP" "$PREFIX/bin/summer"
 mkdir -p "$HOME/models" "$HOME/.config/summer" "$HOME/.local/share/summer"
 
 cat <<EOF
@@ -48,6 +52,7 @@ Summer.cpp installation complete.
   llama-tiered       : $PREFIX/bin/llama-tiered
   summer CLI         : $PREFIX/bin/summer
   model directory    : $HOME/models
+  VRAM policy        : automatic free-memory reserve and OOM retry
 
 Add this line to your shell configuration when $PREFIX/bin is not in PATH:
 
