@@ -2130,7 +2130,8 @@ static void ggml_backend_meta_set_tensor_async(ggml_backend_t backend, ggml_tens
                 const int64_t shard_stop = shard_start + split_state.ne[j];
                 const int64_t copy_stop = std::min<int64_t>(row_stop, shard_stop);
                 if (copy_stop > shard_start) {
-                    ggml_backend_tensor_set_2d_async(simple_backend, simple_tensor, (const char *) data,
+                    ggml_backend_tensor_set_2d_async(simple_backend, simple_tensor,
+                            (const char *) data + shard_start * row_stride,
                             0, row_stride, copy_stop - shard_start,
                             simple_tensor->nb[3], row_stride);
                 }
@@ -2195,7 +2196,8 @@ static void ggml_backend_meta_get_tensor_async(ggml_backend_t backend, const ggm
                 const int64_t shard_stop = shard_start + split_state.ne[j];
                 const int64_t copy_stop = std::min<int64_t>(row_stop, shard_stop);
                 if (copy_stop > shard_start) {
-                    ggml_backend_tensor_get_2d_async(simple_backend, simple_tensor, (char *) data,
+                    ggml_backend_tensor_get_2d_async(simple_backend, simple_tensor,
+                            (char *) data + shard_start * row_stride,
                             0, row_stride, copy_stop - shard_start,
                             simple_tensor->nb[3], row_stride);
                 }
