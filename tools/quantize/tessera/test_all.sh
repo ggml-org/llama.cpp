@@ -49,7 +49,7 @@ echo ""
 # --- Standalone (test + own module) ---
 compile_and_run linalg      $T/test_linalg.cpp      $T/tessera-linalg.cpp
 compile_and_run lbfgs       $T/test_lbfgs.cpp       $T/tessera-lbfgs.cpp
-compile_and_run awq         $T/test_awq.cpp         $T/tessera-awq.cpp
+compile_and_run awq         $T/test_awq.cpp         $T/tessera-awq.cpp $T/tessera-policy.cpp -I vendor
 compile_and_run l5          $T/test_l5.cpp          $T/tessera-l5.cpp
 compile_and_run imatrix     $T/test_imatrix.cpp     $T/tessera-imatrix.cpp
 compile_and_run corpus      $T/test_corpus.cpp      $T/tessera-corpus.cpp

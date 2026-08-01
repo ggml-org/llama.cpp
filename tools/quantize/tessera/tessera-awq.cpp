@@ -37,49 +37,120 @@ struct ts_awq_rng {
 };
 
 //
-// Gene access (alpha, clip, lrq_rank_frac, rotation_lr)
+// Gene access. The 6 genes are the fields of ts_policy_genes, in declaration
+// order: alpha, clip, outlier_fraction, moment_mix, tail_guard,
+// ternary_threshold. This is the same space Python's Candidate searches
+// (awq-evolve.py), so set/get apply Python's per-gene clip ranges rather than
+// a blanket [0,1].
 //
 
-static const int TS_AWQ_N_GENES = 4;
+static const int TS_AWQ_N_GENES = 6;
+
+// Per-gene metadata: (min, max, sigma, is_multiplicative). Mirrors Python's
+// Candidate.clipped() ranges and mutate() sigma scales. ternary_threshold is
+// the one multiplicative gene in Python (its sigma scales the noise, not the
+// gene). is_multiplicative is recorded for fidelity but mutate() applies the
+// same additive `gene + gauss(sigma * scale)` form Python uses.
+struct ts_awq_gene_spec {
+    float lo;
+    float hi;
+    float sigma;
+    bool  is_multiplicative;
+};
+
+// alpha, clip, outlier_fraction, moment_mix, tail_guard, ternary_threshold
+static const ts_awq_gene_spec TS_AWQ_GENE_SPECS[TS_AWQ_N_GENES] = {
+    {  0.0f,    1.0f, 0.20f, false },  // alpha
+    {  0.70f,   1.0f, 0.08f, false },  // clip
+    {  0.0001f, 0.05f, 0.0f, false },  // outlier_fraction (sigma is value-dependent)
+    {  0.0f,    1.0f, 0.20f, false },  // moment_mix
+    {  0.0f,    2.0f, 0.25f, false },  // tail_guard
+    {  0.30f,   3.0f, 0.18f, true  },  // ternary_threshold (multiplicative)
+};
 
 static float ts_awq_get_gene(const ts_awq_candidate * c, int i) {
     switch (i) {
-        case 0: return c->alpha;
-        case 1: return c->clip;
-        case 2: return c->lrq_rank_frac;
-        case 3: return c->rotation_lr;
+        case 0: return c->genes.alpha;
+        case 1: return c->genes.clip;
+        case 2: return c->genes.outlier_fraction;
+        case 3: return c->genes.moment_mix;
+        case 4: return c->genes.tail_guard;
+        case 5: return c->genes.ternary_threshold;
         default: return 0.0f;
     }
 }
 
 static void ts_awq_set_gene(ts_awq_candidate * c, int i, float v) {
-    v = std::max(0.0f, std::min(1.0f, v));
+    if (i < 0 || i >= TS_AWQ_N_GENES) {
+        return;
+    }
+    const ts_awq_gene_spec & s = TS_AWQ_GENE_SPECS[i];
+    v = std::max(s.lo, std::min(s.hi, v));
     switch (i) {
-        case 0: c->alpha = v; break;
-        case 1: c->clip = v; break;
-        case 2: c->lrq_rank_frac = v; break;
-        case 3: c->rotation_lr = v; break;
+        case 0: c->genes.alpha             = v; break;
+        case 1: c->genes.clip              = v; break;
+        case 2: c->genes.outlier_fraction  = v; break;
+        case 3: c->genes.moment_mix        = v; break;
+        case 4: c->genes.tail_guard        = v; break;
+        case 5: c->genes.ternary_threshold = v; break;
         default: break;
     }
 }
 
+// Sigma for outlier_fraction is max(value, 0.001) in Python.
+static float ts_awq_gene_sigma(int i, float value) {
+    if (i == 2) {
+        return std::max(value, 0.001f);
+    }
+    return TS_AWQ_GENE_SPECS[i].sigma;
+}
+
 //
-// GA operators
+// GA operators. random_candidate ports Python's biased init (clip in
+// [0.78,1.0], ternary_threshold around 1.0, others uniform in range);
+// mutate ports Python's per-gene sigma scales.
 //
 
 static ts_awq_candidate ts_awq_random_candidate(ts_awq_rng * rng) {
     ts_awq_candidate c;
-    for (int i = 0; i < TS_AWQ_N_GENES; i++) {
-        ts_awq_set_gene(&c, i, rng->uniform());
-    }
     c.expert_hint = -1;
+    // alpha, moment_mix: uniform in [lo, hi].
+    ts_awq_set_gene(&c, 0, TS_AWQ_GENE_SPECS[0].lo +
+                         rng->uniform() * (TS_AWQ_GENE_SPECS[0].hi - TS_AWQ_GENE_SPECS[0].lo));
+    // clip: biased to [0.78, 1.0] (Python's init range).
+    ts_awq_set_gene(&c, 1, 0.78f + rng->uniform() * (1.0f - 0.78f));
+    // outlier_fraction: log-uniform across the full range (Python samples a
+    // span around base_fraction/4 .. base_fraction*4; we cover the full
+    // [0.0001, 0.05] log range).
+    {
+        float lo = std::max(TS_AWQ_GENE_SPECS[2].lo, 1e-7f);
+        float hi = TS_AWQ_GENE_SPECS[2].hi;
+        float v = expf(logf(lo) + rng->uniform() * (logf(hi) - logf(lo)));
+        ts_awq_set_gene(&c, 2, v);
+    }
+    // moment_mix: uniform.
+    ts_awq_set_gene(&c, 3, rng->uniform());
+    // tail_guard: uniform in [0, 1.0] (Python's init upper bound).
+    ts_awq_set_gene(&c, 4, rng->uniform());
+    // ternary_threshold: bias around 1.0 - 75% log-uniform in [0.5, 2.0],
+    // 25% uniform exploration in [0.4, 2.5] (Python's init).
+    {
+        float v;
+        if (rng->uniform() < 0.75f) {
+            v = expf(logf(0.5f) + rng->uniform() * (logf(2.0f) - logf(0.5f)));
+        } else {
+            v = 0.4f + rng->uniform() * (2.5f - 0.4f);
+        }
+        ts_awq_set_gene(&c, 5, v);
+    }
     return c;
 }
 
 static ts_awq_candidate ts_awq_mutate(const ts_awq_candidate * c, ts_awq_rng * rng, float sigma) {
     ts_awq_candidate out = *c;
     for (int i = 0; i < TS_AWQ_N_GENES; i++) {
-        ts_awq_set_gene(&out, i, ts_awq_get_gene(c, i) + rng->gauss(sigma));
+        float scale = ts_awq_gene_sigma(i, ts_awq_get_gene(c, i));
+        ts_awq_set_gene(&out, i, ts_awq_get_gene(c, i) + rng->gauss(sigma) * scale);
     }
     return out;
 }
@@ -145,12 +216,28 @@ ts_awq_archive_cell ts_awq_make_cell(float kurtosis, float eff_rank, int32_t fam
 
 std::string ts_awq_candidate_json(const ts_awq_candidate * cand) {
     char buf[512];
+    // snake_case keys match Python's policy_entry / ts_policy_read, so this
+    // round-trips with the policy reader (B4).
     snprintf(buf, sizeof(buf),
-             "{\"alpha\":%.6f,\"clip\":%.6f,\"lrq_rank_frac\":%.6f,"
-             "\"rotation_lr\":%.6f,\"expert_hint\":%lld}",
-             cand->alpha, cand->clip, cand->lrq_rank_frac, cand->rotation_lr,
-             (long long)cand->expert_hint);
+             "{\"awq_alpha\":%.6f,\"awq_clip\":%.6f,\"outlier_fraction\":%.6f,"
+             "\"moment_mix\":%.6f,\"tail_guard\":%.6f,\"ternary_threshold\":%.6f,"
+             "\"expert_hint\":%lld}",
+             cand->genes.alpha, cand->genes.clip, cand->genes.outlier_fraction,
+             cand->genes.moment_mix, cand->genes.tail_guard,
+             cand->genes.ternary_threshold, (long long)cand->expert_hint);
     return std::string(buf);
+}
+
+ts_awq_candidate ts_awq_candidate_from_genes(ts_policy_genes genes, int64_t expert_hint) {
+    ts_awq_candidate c;
+    c.genes       = genes;
+    c.expert_hint = expert_hint;
+    // Clamp each gene into range so a hand-edited or legacy policy cannot
+    // seed the GA with out-of-band values.
+    for (int i = 0; i < TS_AWQ_N_GENES; i++) {
+        ts_awq_set_gene(&c, i, ts_awq_get_gene(&c, i));
+    }
+    return c;
 }
 
 int ts_awq_evolve(const ts_awq_layer * layer,
