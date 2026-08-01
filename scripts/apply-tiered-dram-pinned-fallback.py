@@ -4,6 +4,13 @@ from pathlib import Path
 path = Path("ggml/src/ggml-cuda/tiered.cu")
 text = path.read_text(encoding="utf-8")
 
+broken = '"using a mapped pinned copy\n",'
+fixed = r'"using a mapped pinned copy\n",'
+if broken in text:
+    path.write_text(text.replace(broken, fixed), encoding="utf-8")
+    print(f"repaired escaped newline in {path}")
+    raise SystemExit(0)
+
 if (
     "bool host_ptr_owned = false;" in text
     and "using a mapped pinned copy" in text
