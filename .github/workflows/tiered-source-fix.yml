@@ -1,9 +1,9 @@
 name: tiered-source-fix
 
 on:
-  push:
+  pull_request:
     branches:
-      - feature/llamay-tiered-memory-planner
+      - master
 
 permissions:
   contents: write
