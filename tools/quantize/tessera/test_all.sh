@@ -50,6 +50,10 @@ echo ""
 compile_and_run linalg      $T/test_linalg.cpp      $T/tessera-linalg.cpp
 compile_and_run lbfgs       $T/test_lbfgs.cpp       $T/tessera-lbfgs.cpp
 compile_and_run awq         $T/test_awq.cpp         $T/tessera-awq.cpp $T/tessera-policy.cpp -I vendor
+# AWQ GA fitness port (parity vs Python awq-evolve.py + GA convergence).
+# Links the standalone port against tessera-policy (for ts_policy_genes) +
+# the awq sources + nlohmann/json (fixture loader).
+compile_and_run awq_fitness $T/test_awq_fitness.cpp $T/tessera-awq.cpp $T/tessera-awq-fitness.cpp $T/tessera-policy.cpp -I vendor
 compile_and_run l5          $T/test_l5.cpp          $T/tessera-l5.cpp
 compile_and_run imatrix     $T/test_imatrix.cpp     $T/tessera-imatrix.cpp
 compile_and_run corpus      $T/test_corpus.cpp      $T/tessera-corpus.cpp
@@ -69,7 +73,7 @@ compile_and_run operative_routing $T/test_operative_routing.cpp $T/tessera-regim
 # dispatch requires libgguf/libggml (full CMake build); skip in standalone mode
 printf "  %-30s" "dispatch"
 if [ -f build/ggml/src/libgguf.a ] || [ -f build/ggml/src/libgguf.dylib ]; then
-    compile_and_run dispatch $T/test_dispatch.cpp $T/tessera-dispatch.cpp $T/tessera-quant.cpp $T/tessera-vec.cpp $T/tessera-awq.cpp -I ggml/include -I ggml/src -L build/ggml/src -lgguf -lggml -framework Accelerate
+    compile_and_run dispatch $T/test_dispatch.cpp $T/tessera-dispatch.cpp $T/tessera-quant.cpp $T/tessera-vec.cpp $T/tessera-awq.cpp $T/tessera-awq-fitness.cpp -I ggml/include -I ggml/src -L build/ggml/src -lgguf -lggml -framework Accelerate
 else
     echo "SKIP (needs CMake build for libgguf)"
 fi

@@ -14,6 +14,7 @@ add_library(${TARGET}
     tessera/tessera-imatrix.cpp
     tessera/tessera-corpus.cpp
     tessera/tessera-awq.cpp
+    tessera/tessera-awq-fitness.cpp
     # search / GA / regime / HIGGS
     tessera/tessera-lrq.cpp
     tessera/tessera-dartquant.cpp

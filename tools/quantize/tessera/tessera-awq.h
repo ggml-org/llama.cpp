@@ -46,28 +46,61 @@ struct ts_awq_lrq_params {
 struct ts_awq_candidate ts_awq_candidate_from_genes(ts_policy_genes genes,
                                                     int64_t expert_hint);
 
-// Fitness score for a candidate.
+// Fitness score for a candidate. Mirrors Python's Score (awq-evolve.py):
+//   mse            = train_error  (per-layer relative output error if
+//                  train_activations present, else diagonal second-moment error)
+//   relative_frob  = tail_error   (mean(error^2 * fourth_moment))
+//   heldout_mse    = heldout_error (relative output error on held-out tokens,
+//                  falls back to the diagonal/train error when no heldout split)
+//   composite      = fitness = train + 2*heldout + 0.25*worst + 0.05*tail
+//                  + 0.15*outlier_fraction (computed only by ts_awq_evaluate,
+//                  the per-layer aggregator leaves it at 0)
+// The 1:1 field mapping keeps the Python parity test honest: each field is
+// checked against the Python Score computed on the same fixture.
 struct ts_awq_score {
-    float mse;              // layer-output MSE (primary)
-    float relative_frob;    // t_l^2 = ||W_hat - W||_F^2 / ||W||_F^2
-    float heldout_mse;      // held-out token MSE
-    float composite;        // alpha_l-weighted composite (uniform for now)
+    float mse;              // train_error (Python Score.train_error)
+    float relative_frob;    // tail_error  (Python Score.tail_error)
+    float heldout_mse;      // heldout_error (Python Score.heldout_error)
+    float composite;        // fitness (Python Score.fitness) or 0 per-layer
 };
 
-// Layer data passed to the evaluator.
+// Layer data passed to the evaluator. The new fields (second_moment,
+// fourth_moment, max_abs, *_activations, ref_*_output) carry exactly what
+// Python's Layer carries (awq-evolve.py:85); they are nullptr when the host
+// has not computed them, in which case the evaluator falls back to the
+// same paths Python falls back to (diagonal error, train==heldout, etc.).
 struct ts_awq_layer {
     std::string name;
-    std::string family;         // tensor family
-    const float * weights;      // (out_dim x in_dim)
-    const float * act_scales;   // (in_dim,) or nullptr
-    const float * calib_X;     // (n_tokens x in_dim) or nullptr
-    const float * ref_output;  // (n_tokens x out_dim) or nullptr
-    const float * imatrix;     // (in_dim,) or nullptr
+    std::string family;            // tensor family
+    const float * weights;         // (out_dim x in_dim)
+    const float * act_scales;      // (in_dim,) or nullptr
+    const float * calib_X;        // (n_tokens x in_dim) or nullptr
+    const float * ref_output;     // (n_tokens x out_dim) or nullptr
+    const float * imatrix;        // (in_dim,) or nullptr
+    // Observer telemetry used to build the importance vector (Python's
+    // _layer_features): second_moment and fourth_moment are E[x^2]/E[x^4]
+    // per input channel, max_abs is the per-channel peak. All length in_dim.
+    const float * second_moment;   // (in_dim,) or nullptr (defaults to ones)
+    const float * fourth_moment;   // (in_dim,) or nullptr (defaults to second^2)
+    const float * max_abs;         // (in_dim,) or nullptr (defaults to sqrt(second))
+    // Activation splits. train_activations is (n_tokens x in_dim),
+    // heldout_activations is (n_tokens_h x in_dim). When present, the
+    // evaluator uses relative_output_error (matmul-based) instead of the
+    // diagonal second-moment proxy, matching Python's _evaluate_layer.
+    const float * train_activations;    // (n_tokens x in_dim) or nullptr
+    const float * heldout_activations;  // (n_tokens_h x in_dim) or nullptr
+    // Precomputed reference outputs (activations @ weight.T). Optional: when
+    // null the evaluator computes them on the fly, exactly like Python's
+    // _reference_output lazy cache. train shape is (n_tokens x out_dim),
+    // heldout is (n_tokens_h x out_dim).
+    const float * ref_train_output;     // (n_tokens x out_dim) or nullptr
+    const float * ref_heldout_output;   // (n_tokens_h x out_dim) or nullptr
     int64_t out_dim;
     int64_t in_dim;
-    int64_t n_tokens;
-    float   kurtosis;           // from imatrix regime stats
-    float   eff_rank;           // effective rank
+    int64_t n_tokens;    // rows in train_activations
+    int64_t n_tokens_h;  // rows in heldout_activations
+    float   kurtosis;    // from imatrix regime stats
+    float   eff_rank;    // effective rank
 };
 
 // Evaluator callback: quantize with candidate, return score.
@@ -76,6 +109,16 @@ struct ts_awq_layer {
 typedef ts_awq_score (*ts_awq_eval_fn)(const ts_awq_candidate * cand,
                                        const ts_awq_layer * layer,
                                        void * ctx);
+
+// Concrete host-supplied evaluator that ports Python's _evaluate_uncached
+// (the per-layer reconstruction + composite fitness). Use this when the host
+// has populated ts_awq_layer.{second_moment,fourth_moment,max_abs,
+// train_activations,heldout_activations,ref_*_output}. Layers without those
+// fields fall back to the same paths Python falls back to (diagonal
+// second-moment error, train==heldout). ctx is unused (pass nullptr).
+ts_awq_score ts_awq_default_eval(const ts_awq_candidate * cand,
+                                 const ts_awq_layer * layer,
+                                 void * ctx);
 
 // MAP-Elites archive cell descriptor.
 struct ts_awq_archive_cell {
