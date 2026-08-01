@@ -2119,6 +2119,25 @@ static void ggml_backend_meta_set_tensor_async(ggml_backend_t backend, ggml_tens
             }
             GGML_ASSERT(offset_j == chunk_size_full);
         } break;
+        case GGML_BACKEND_SPLIT_AXIS_3: {
+            const size_t row_stride = tensor->nb[3];
+            GGML_ASSERT(size % row_stride == 0);
+            const int64_t row_stop = size / row_stride;
+            int64_t shard_start = 0;
+            for (size_t j = 0; j < n_backends; ++j) {
+                ggml_backend_t simple_backend = ggml_backend_meta_simple_backend(backend, j);
+                ggml_tensor * simple_tensor = scratch.get(tensor, j);
+                const int64_t shard_stop = shard_start + split_state.ne[j];
+                const int64_t copy_stop = std::min<int64_t>(row_stop, shard_stop);
+                if (copy_stop > shard_start) {
+                    ggml_backend_tensor_set_2d_async(simple_backend, simple_tensor, (const char *) data,
+                            0, row_stride, copy_stop - shard_start,
+                            simple_tensor->nb[3], row_stride);
+                }
+                shard_start = shard_stop;
+            }
+            GGML_ASSERT(shard_start == tensor->ne[3]);
+        } break;
         case GGML_BACKEND_SPLIT_AXIS_MIRRORED: {
             for (size_t j = 0; j < n_backends; j++) {
                 ggml_backend_tensor_set_async(
@@ -2164,6 +2183,25 @@ static void ggml_backend_meta_get_tensor_async(ggml_backend_t backend, const ggm
                 offset_j += chunk_size_j;
             }
             GGML_ASSERT(offset_j == chunk_size_full);
+        } break;
+        case GGML_BACKEND_SPLIT_AXIS_3: {
+            const size_t row_stride = tensor->nb[3];
+            GGML_ASSERT(size % row_stride == 0);
+            const int64_t row_stop = size / row_stride;
+            int64_t shard_start = 0;
+            for (size_t j = 0; j < n_backends; ++j) {
+                ggml_backend_t simple_backend = ggml_backend_meta_simple_backend(backend, j);
+                const ggml_tensor * simple_tensor = scratch.get(tensor, j);
+                const int64_t shard_stop = shard_start + split_state.ne[j];
+                const int64_t copy_stop = std::min<int64_t>(row_stop, shard_stop);
+                if (copy_stop > shard_start) {
+                    ggml_backend_tensor_get_2d_async(simple_backend, simple_tensor, (char *) data,
+                            0, row_stride, copy_stop - shard_start,
+                            simple_tensor->nb[3], row_stride);
+                }
+                shard_start = shard_stop;
+            }
+            GGML_ASSERT(shard_start == tensor->ne[3]);
         } break;
         case GGML_BACKEND_SPLIT_AXIS_MIRRORED: {
             // TODO other simple backend may be better
