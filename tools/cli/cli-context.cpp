@@ -628,8 +628,6 @@ int cli_context::run() {
             {"role",    "assistant"},
             {"content", content.content}
         };
-        // Keep reasoning so templates with preserve_thinking / --reasoning-preserve
-        // can re-inject prior thoughts on later turns (e.g. Qwen3.6).
         if (!content.reasoning.empty()) {
             assistant_msg["reasoning_content"] = content.reasoning;
         }
