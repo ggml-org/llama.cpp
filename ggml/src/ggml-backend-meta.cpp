@@ -1706,8 +1706,9 @@ static void ggml_backend_meta_buffer_get_tensor(ggml_backend_buffer_t buffer, co
     const ggml_backend_meta_split_state split_state = ggml_backend_meta_get_split_state(tensor, /*assume_sync =*/ false);
     GGML_ASSERT(ggml_is_contiguous(tensor) ||
             split_state.axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED ||
-            split_state.axis == GGML_BACKEND_SPLIT_AXIS_2 ||
-            split_state.axis == GGML_BACKEND_SPLIT_AXIS_3);
+            (ggml_is_permuted(tensor) &&
+             (split_state.axis == GGML_BACKEND_SPLIT_AXIS_2 ||
+              split_state.axis == GGML_BACKEND_SPLIT_AXIS_3)));
 
     if (split_state.n_segments != 1 || split_state.nr[0] != 1) {
         GGML_ASSERT(split_state.axis >= 0 && split_state.axis < GGML_MAX_DIMS);
