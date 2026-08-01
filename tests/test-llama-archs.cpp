@@ -13,6 +13,7 @@
 
 #include <cinttypes>
 #include <cstddef>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <cstdint>
@@ -348,6 +349,23 @@ static std::vector<float> get_logits(
         }
     }
     llama_batch_free(batch);
+
+    // Optional second decode exercises KV-cache reuse, graph reuse, and a
+    // non-zero position without changing the normal architecture baseline.
+    if (getenv("LLAMA_TEST_REPLAY") != nullptr) {
+        llama_batch replay = llama_batch_init(n_ctx, 0, 1);
+        common_batch_add(replay, tokens[0], n_tokens, {0}, true);
+        replay.n_tokens = 1;
+        if (llama_decode(lctx, replay)) {
+            llama_batch_free(replay);
+            throw std::runtime_error("failed to decode replay token");
+        }
+        const float * logits_ith = llama_get_logits_ith(lctx, 0);
+        for (uint32_t j = 0; j < n_vocab; j++) {
+            ret.push_back(logits_ith[j]);
+        }
+        llama_batch_free(replay);
+    }
     return ret;
 }
 
