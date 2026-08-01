@@ -24,6 +24,7 @@
 #include "tessera-mm-awq.h"
 #include "tessera-w4a4.h"
 #include "tessera-acceptance.h"
+#include "tessera-policy.h"
 
 #include "gguf.h"
 #include "ggml.h"
@@ -485,6 +486,30 @@ int ts_dispatch_run(const ts_dispatch_params * params,
     // --- step 4: resolve alpha ---
     if (params->awq_alpha != "auto" && !params->awq_alpha.empty()) {
         default_alpha = std::stof(params->awq_alpha);
+    }
+
+    // --- step 4b: read calibration policy (if any) ---
+    // ts_policy_read consumes the canonical tensor_families shape emitted by
+    // tools/tessera/awq-evolve.py and the legacy top-level tensors shape. When
+    // present, the per-tensor loop below resolves each tensor name to a family
+    // and overrides the AWQ alpha/clip and sparse-residual threshold from the
+    // policy, eliminating the Python pre-step.
+    ts_policy policy;
+    bool have_policy = false;
+    if (!params->policy_path.empty()) {
+        std::string pmsg;
+        if (ts_policy_read(params->policy_path.c_str(), &policy, &pmsg) != 0) {
+            if (err_msg) {
+                *err_msg = "failed to load policy '" + params->policy_path + "': " + pmsg;
+            }
+            return 1;
+        }
+        have_policy = true;
+        if (verbose) {
+            printf("tessera-dispatch: loaded policy '%s' (%zu families, search_schema='%s')\n",
+                   params->policy_path.c_str(), policy.tensors.size(),
+                   policy.search_schema.c_str());
+        }
     }
 
     // --- step 5: load input GGUF ---
@@ -1030,6 +1055,31 @@ int ts_dispatch_run(const ts_dispatch_params * params,
         tqp.awq_grid        = profile.awq_grid;
         tqp.max_outliers    = profile.max_outliers;
         tqp.outlier_thresh *= profile.outlier_thresh;
+
+        // Apply the calibration policy when one was loaded. The matched
+        // family's AWQ + Tessera genes override the routed profile so the
+        // runtime consumes Python's output natively (no Python pre-step).
+        // moment_mix / tail_guard / ternary_threshold are surfaced via the
+        // result for the candidate evaluator; the fields that map onto
+        // ts_quant_params_2d (alpha/clip/outlier_thresh) are applied here.
+        const ts_policy_tensor * pfam = have_policy
+            ? ts_policy_select(policy.tensors, name) : nullptr;
+        if (pfam != nullptr) {
+            tqp.alpha         = pfam->genes.alpha;
+            tqp.clip          = pfam->genes.clip;
+            // dispatch already treats outlier_frac as the selection threshold
+            // (params->outlier_frac -> qparams.outlier_thresh above), so the
+            // policy's outlier_fraction gene maps onto the same knob here.
+            tqp.outlier_thresh = pfam->genes.outlier_fraction;
+            if (verbose) {
+                printf("tessera-dispatch: %s matched policy family '%s' "
+                       "(exact=%d alpha=%.3f clip=%.3f frac=%.4f thresh=%.3f mix=%.3f tail=%.3f)\n",
+                       name, pfam->family.c_str(), (int)pfam->exact,
+                       pfam->genes.alpha, pfam->genes.clip, pfam->genes.outlier_fraction,
+                       pfam->genes.ternary_threshold, pfam->genes.moment_mix,
+                       pfam->genes.tail_guard);
+            }
+        }
 
         if (verbose) {
             printf("tessera-dispatch: %s family=%s modality=%d expert=%s reason='%s' "

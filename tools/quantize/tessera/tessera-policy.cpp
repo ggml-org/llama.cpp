@@ -133,6 +133,56 @@ void sha256_final(sha256_ctx * ctx, uint8_t * out) {
 
 // reader
 
+// Read one tensor_families entry. Handles the canonical snake_case gene
+// names (awq_alpha/awq_clip/outlier_fraction/moment_mix/tail_guard plus
+// the optional ternary_threshold) and the legacy alpha/clip/expert/mse/
+// relative_frob shape. Missing fields keep their struct defaults.
+static ts_policy_tensor read_family(const std::string & key, const json & tj) {
+    ts_policy_tensor t;
+    t.family = key;
+
+    // match / exact semantics (canonical shape). Legacy entries have no
+    // match list; treat the family key itself as a substring match so the
+    // matcher still resolves them.
+    if (tj.contains("match")) {
+        const json & m = tj.at("match");
+        if (m.is_array()) {
+            for (const auto & frag : m) {
+                if (frag.is_string()) {
+                    t.match.push_back(frag.get<std::string>());
+                }
+            }
+        }
+    }
+    if (t.match.empty()) {
+        t.match.push_back(key);
+    }
+    t.exact = tj.value("exact", false);
+
+    // canonical AWQ + Tessera genes
+    t.genes.alpha             = tj.value("awq_alpha",         t.genes.alpha);
+    t.genes.clip              = tj.value("awq_clip",          t.genes.clip);
+    t.genes.outlier_fraction  = tj.value("outlier_fraction",  t.genes.outlier_fraction);
+    t.genes.moment_mix        = tj.value("moment_mix",        t.genes.moment_mix);
+    t.genes.tail_guard        = tj.value("tail_guard",        t.genes.tail_guard);
+    t.genes.ternary_threshold = tj.value("ternary_threshold", t.genes.ternary_threshold);
+
+    // legacy alpha/clip (overrides defaults only when present)
+    if (tj.contains("alpha")) {
+        t.genes.alpha = tj.value("alpha", t.genes.alpha);
+    }
+    if (tj.contains("clip")) {
+        t.genes.clip = tj.value("clip", t.genes.clip);
+    }
+
+    // metrics side (legacy / archive-rich entries)
+    t.metrics.expert        = tj.value("expert",        t.metrics.expert);
+    t.metrics.mse           = tj.value("mse",           t.metrics.mse);
+    t.metrics.relative_frob = tj.value("relative_frob", t.metrics.relative_frob);
+
+    return t;
+}
+
 int ts_policy_read(const char * path, ts_policy * out, std::string * err_msg) {
     auto fail = [&](const std::string & msg) -> int {
         if (err_msg) { *err_msg = msg; }
@@ -159,40 +209,64 @@ int ts_policy_read(const char * path, ts_policy * out, std::string * err_msg) {
     }
 
     try {
-        const json & prov = j.at("provenance");
-        out->seed        = prov.value("seed",        uint64_t(0));
-        out->generations = prov.value("generations", int64_t(0));
-        out->islands     = prov.value("islands",     int64_t(0));
-        out->population  = prov.value("population",  int64_t(0));
-        out->timestamp   = prov.value("timestamp",   std::string());
-        out->build_info  = prov.value("build_info",  std::string());
-        out->main_tip    = prov.value("main_tip",    std::string());
+        // Provenance: canonical writer emits `evolution`; legacy emits
+        // `provenance`. Accept either, prefer evolution.
+        const json * prov = nullptr;
+        bool legacy_prov = false;
+        if (j.contains("evolution")) {
+            prov = &j.at("evolution");
+        } else if (j.contains("provenance")) {
+            prov = &j.at("provenance");
+            legacy_prov = true;
+        }
+        if (prov != nullptr) {
+            out->seed        = prov->value("seed",        uint64_t(0));
+            out->generations = prov->value("generations", int64_t(0));
+            out->islands     = prov->value("islands",     int64_t(0));
+            out->population  = prov->value("population",  int64_t(0));
+            out->timestamp   = prov->value("timestamp",   std::string());
+            out->build_info  = prov->value("build_info",  std::string());
+            out->main_tip    = prov->value("main_tip",    std::string());
+        }
+
+        out->search_schema = j.value("search_schema", std::string());
+        out->draft_type    = j.value("draft_type",    std::string());
 
         out->tensors.clear();
-        for (const auto & kv : j.at("tensors").items()) {
-            const json & tj = kv.value();
-            ts_policy_tensor t;
-            t.family        = tj.value("family",        std::string());
-            t.alpha         = tj.value("alpha",         0.0f);
-            t.clip          = tj.value("clip",          0.0f);
-            t.expert        = tj.value("expert",        std::string());
-            t.mse           = tj.value("mse",           0.0f);
-            t.relative_frob = tj.value("relative_frob", 0.0f);
-            out->tensors[kv.key()] = t;
+        const bool has_families = j.contains("tensor_families");
+        const bool has_legacy   = j.contains("tensors");
+        if (has_families) {
+            for (const auto & kv : j.at("tensor_families").items()) {
+                out->tensors.emplace_back(kv.key(), read_family(kv.key(), kv.value()));
+            }
+        } else if (has_legacy) {
+            std::fprintf(stderr,
+                "tessera-policy: %s uses the legacy top-level `tensors` shape; "
+                "please re-emit with tools/tessera/awq-evolve.py\n", path);
+            for (const auto & kv : j.at("tensors").items()) {
+                out->tensors.emplace_back(kv.key(), read_family(kv.key(), kv.value()));
+            }
+        }
+        if (legacy_prov && !has_families) {
+            std::fprintf(stderr,
+                "tessera-policy: %s uses the legacy `provenance` + `tensors` "
+                "shape\n", path);
         }
 
         out->archive.clear();
-        for (const auto & aj : j.at("archive")) {
-            ts_policy_archive_entry e;
-            const json & cell = aj.at("cell");
-            for (int i = 0; i < 3; i++) {
-                e.cell[i] = cell.at(i).get<int32_t>();
+        if (j.contains("archive")) {
+            for (const auto & aj : j.at("archive")) {
+                ts_policy_archive_entry e;
+                const json & cell = aj.at("cell");
+                for (int i = 0; i < 3; i++) {
+                    e.cell[i] = cell.at(i).get<int32_t>();
+                }
+                e.alpha  = aj.value("alpha",  0.0f);
+                e.clip   = aj.value("clip",   0.0f);
+                e.expert = aj.value("expert", std::string());
+                e.mse    = aj.value("mse",    0.0f);
+                out->archive.push_back(e);
             }
-            e.alpha  = aj.value("alpha",  0.0f);
-            e.clip   = aj.value("clip",   0.0f);
-            e.expert = aj.value("expert", std::string());
-            e.mse    = aj.value("mse",    0.0f);
-            out->archive.push_back(e);
         }
     } catch (const std::exception & e) {
         return fail(std::string("malformed policy: ") + e.what());
@@ -201,11 +275,76 @@ int ts_policy_read(const char * path, ts_policy * out, std::string * err_msg) {
     return 0;
 }
 
+// matcher
+
+bool ts_policy_match(const ts_policy_tensor & family, const std::string & name) {
+    if (family.match.empty()) {
+        return false;
+    }
+    if (family.exact) {
+        for (const auto & frag : family.match) {
+            if (name == frag) {
+                return true;
+            }
+        }
+        return false;
+    }
+    for (const auto & frag : family.match) {
+        if (name.find(frag) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
+const ts_policy_tensor * ts_policy_select(
+    const std::vector<std::pair<std::string, ts_policy_tensor>> & families,
+    const std::string & name) {
+    const ts_policy_tensor * best = nullptr;
+    // (is_exact, longest matching fragment length): exact wins over substring,
+    // then the longest fragment wins. Mirrors tensor_policy in quantize_v3.py.
+    std::pair<int, size_t> best_rank(-1, 0);
+    for (const auto & kv : families) {
+        const ts_policy_tensor & f = kv.second;
+        if (f.match.empty()) {
+            continue;
+        }
+        size_t matched_len = 0;
+        bool matched = false;
+        for (const auto & frag : f.match) {
+            if (f.exact) {
+                if (name == frag) {
+                    matched = true;
+                    matched_len = std::max(matched_len, frag.size());
+                }
+            } else if (name.find(frag) != std::string::npos) {
+                matched = true;
+                matched_len = std::max(matched_len, frag.size());
+            }
+        }
+        if (!matched) {
+            continue;
+        }
+        std::pair<int, size_t> rank(f.exact ? 1 : 0, matched_len);
+        if (rank > best_rank) {
+            best_rank = rank;
+            best = &f;
+        }
+    }
+    return best;
+}
+
 // writer
 
 int ts_policy_write(const char * path, const ts_policy * policy) {
     json j;
     j["schema"] = TS_POLICY_SCHEMA;
+    if (!policy->search_schema.empty()) {
+        j["search_schema"] = policy->search_schema;
+    }
+    if (!policy->draft_type.empty()) {
+        j["draft_type"] = policy->draft_type;
+    }
 
     json prov;
     prov["seed"]        = policy->seed;
@@ -215,21 +354,28 @@ int ts_policy_write(const char * path, const ts_policy * policy) {
     prov["timestamp"]   = policy->timestamp;
     prov["build_info"]  = policy->build_info;
     prov["main_tip"]    = policy->main_tip;
-    j["provenance"] = prov;
+    j["evolution"] = prov;
 
-    json tensors = json::object();
+    json families = json::object();
     for (const auto & kv : policy->tensors) {
         const ts_policy_tensor & t = kv.second;
         json tj;
-        tj["family"]        = t.family;
-        tj["alpha"]         = t.alpha;
-        tj["clip"]          = t.clip;
-        tj["expert"]        = t.expert;
-        tj["mse"]           = t.mse;
-        tj["relative_frob"] = t.relative_frob;
-        tensors[kv.first] = tj;
+        tj["match"]              = t.match.empty() ? json::array({ t.family }) : json(t.match);
+        tj["exact"]              = t.exact;
+        tj["awq_alpha"]          = t.genes.alpha;
+        tj["awq_clip"]           = t.genes.clip;
+        tj["outlier_fraction"]   = t.genes.outlier_fraction;
+        tj["moment_mix"]         = t.genes.moment_mix;
+        tj["tail_guard"]         = t.genes.tail_guard;
+        tj["ternary_threshold"]  = t.genes.ternary_threshold;
+        if (!t.metrics.expert.empty()) {
+            tj["expert"]        = t.metrics.expert;
+            tj["mse"]           = t.metrics.mse;
+            tj["relative_frob"] = t.metrics.relative_frob;
+        }
+        families[kv.first] = tj;
     }
-    j["tensors"] = tensors;
+    j["tensor_families"] = families;
 
     json archive = json::array();
     for (const auto & e : policy->archive) {
