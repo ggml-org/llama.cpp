@@ -51,6 +51,7 @@ jobs:
         run: >-
           cmake -S . -B build
           -DGGML_CUDA=ON
+          -DCMAKE_CUDA_ARCHITECTURES=89
           -DGGML_BACKEND_DL=OFF
           -DBUILD_SHARED_LIBS=OFF
           -DLLAMA_BUILD_EXAMPLES=ON
