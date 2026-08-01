@@ -17,61 +17,9 @@ on:
       - feature/llamay-tiered-memory-planner
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  apply-core-patch:
-    if: github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: feature/llamay-tiered-memory-planner
-      - name: Disable mmap prefetch for tiered loading
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          def replace_once(path: str, old: str, new: str) -> bool:
-              p = Path(path)
-              text = p.read_text()
-              if new in text:
-                  return False
-              if old not in text:
-                  raise SystemExit(f'missing expected source fragment in {path}: {old!r}')
-              p.write_text(text.replace(old, new, 1))
-              return True
-
-          changed = False
-          changed |= replace_once(
-              'include/llama.h',
-              '        // Keep the booleans together to avoid misalignment during copy-by-value.\n        bool vocab_only;',
-              '        // Keep the booleans together to avoid misalignment during copy-by-value.\n        bool mmap_prefetch;  // prefetch mmap pages while loading the model\n        bool vocab_only;')
-          changed |= replace_once(
-              'src/llama-model.cpp',
-              '        /*.kv_overrides                =*/ nullptr,\n        /*.vocab_only',
-              '        /*.kv_overrides                =*/ nullptr,\n        /*.mmap_prefetch               =*/ true,\n        /*.vocab_only')
-          changed |= replace_once(
-              'src/llama-model.cpp',
-              '    ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);',
-              '    ml.init_mappings(params.mmap_prefetch, use_mlock ? &pimpl->mlock_mmaps : nullptr);')
-          changed |= replace_once(
-              'src/llama-tiered.cpp',
-              '        model_params.load_mode = LLAMA_LOAD_MODE_MMAP;\n        model_params.main_gpu = 0;',
-              '        model_params.load_mode = LLAMA_LOAD_MODE_MMAP;\n        model_params.mmap_prefetch = false;\n        model_params.main_gpu = 0;')
-
-          if not changed:
-              raise SystemExit(0)
-          PY
-          if git diff --quiet; then
-            exit 0
-          fi
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add include/llama.h src/llama-model.cpp src/llama-tiered.cpp
-          git commit -m "llama: disable mmap prefetch for tiered loading"
-          git push origin HEAD:feature/llamay-tiered-memory-planner
-
   cpu-build:
     runs-on: ubuntu-24.04
     steps:
