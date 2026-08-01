@@ -20,6 +20,8 @@ add_library(${TARGET}
     tessera/tessera-dartquant.cpp
     tessera/tessera-flrq.cpp
     tessera/tessera-champq.cpp
+    # SEPTQ banded-Cholesky Hessian weight quantizer (B3)
+    tessera/tessera-septq.cpp
     tessera/tessera-archive.cpp
     tessera/tessera-regime.cpp
     tessera/tessera-higgs.cpp
