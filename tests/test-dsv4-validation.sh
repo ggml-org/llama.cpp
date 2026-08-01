@@ -108,6 +108,7 @@ run_mode() {
 
     "$SERVER" \
         --model "$DSV4_MODEL" \
+        --alias dsv4-validation \
         --host 127.0.0.1 \
         --port "$port" \
         --ctx-size "$CTX_SIZE" \
