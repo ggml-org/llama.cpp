@@ -89,6 +89,7 @@ static const char * const LLM_KV_QUANTIZE_IMATRIX_FILE       = "quantize.imatrix
 static const char * const LLM_KV_QUANTIZE_IMATRIX_DATASET    = "quantize.imatrix.dataset";
 static const char * const LLM_KV_QUANTIZE_IMATRIX_N_ENTRIES  = "quantize.imatrix.entries_count";
 static const char * const LLM_KV_QUANTIZE_IMATRIX_N_CHUNKS   = "quantize.imatrix.chunks_count";
+static const char * const LLM_KV_QUANTIZE_IMATRIX_PRIOR_W    = "quantize.imatrix.prior_weight";
 
 static bool striequals(const char * a, const char * b) {
     while (*a && *b) {
@@ -167,6 +168,8 @@ static void usage(const char * executable) {
     printf("                                      WARNING: this is an advanced option, use with care.\n");
     printf("  --keep-split\n");
     printf("                                      generate quantized model in the same shards as input\n");
+    printf("  --prior-weight N\n");
+    printf("                                      how many tokens the neutral prior is worth (when using imatrix)\n");
     printf("  --override-kv KEY=TYPE:VALUE\n");
     printf("                                      override model metadata by key in the quantized model. may be specified multiple times.\n");
     printf("                                      WARNING: this is an advanced option, use with care.\n");
@@ -188,7 +191,7 @@ static void usage(const char * executable) {
     exit(1);
 }
 
-static int load_imatrix(const std::string & imatrix_file, std::vector<std::string> & imatrix_datasets, std::unordered_map<std::string, std::vector<float>> & imatrix_data) {
+static int load_imatrix(const std::string & imatrix_file, std::vector<std::string> & imatrix_datasets, std::unordered_map<std::string, std::vector<float>> & imatrix_data, float & prior_weight) {
     common_imatrix loaded;
     if (!common_imatrix_load(imatrix_file, loaded)) {
         fprintf(stderr, "%s: failed to load imatrix from '%s'\n", __func__, imatrix_file.c_str());
@@ -213,7 +216,7 @@ static int load_imatrix(const std::string & imatrix_file, std::vector<std::strin
                 const float count = (float) entry.counts[j];
                 if (count > 0.0f) {
                     for (int64_t i = 0; i < ne0; ++i) {
-                        e[j*ne0 + i] = entry.sums[j*ne0 + i] / count;
+                        e[j*ne0 + i] = (entry.sums[j*ne0 + i] + prior_weight) / (count + prior_weight);
                     }
                 } else {
                     for (int64_t i = 0; i < ne0; ++i) {
@@ -235,6 +238,7 @@ static int load_imatrix(const std::string & imatrix_file, std::vector<std::strin
             }
         } else {
             // Legacy format: sums contain (raw/count)*ncall, divide by ncall
+            prior_weight = 0.0f; // can't use a prior weight without having proper activation counts
             const int64_t ncall = entry.counts.empty() ? 0 : entry.counts[0];
             if (ncall > 0) {
                 for (size_t i = 0; i < entry.sums.size(); ++i) {
@@ -272,10 +276,11 @@ static int prepare_imatrix(const std::string & imatrix_file,
         std::vector<std::string> & imatrix_dataset,
         const std::vector<std::string> & included_weights,
         const std::vector<std::string> & excluded_weights,
-        std::unordered_map<std::string, std::vector<float>> & imatrix_data) {
+        std::unordered_map<std::string, std::vector<float>> & imatrix_data,
+        float & prior_weight) {
     int m_last_call = -1;
     if (!imatrix_file.empty()) {
-        m_last_call = load_imatrix(imatrix_file, imatrix_dataset, imatrix_data);
+        m_last_call = load_imatrix(imatrix_file, imatrix_dataset, imatrix_data, prior_weight);
     }
     if (imatrix_data.empty()) {
         return m_last_call;
@@ -749,6 +754,13 @@ int llama_quantize(int argc, char ** argv) {
     std::vector<llama_model_kv_override> kv_overrides;
     std::vector<tensor_type_option> tensor_type_opts;
     std::vector<int> prune_layers;
+    // Neutral-prior blending is opt-in only: prior_weight defaults to 0.0f so the
+    // (sum + prior_weight) / (count + prior_weight) formula is an exact no-op
+    // unless --prior-weight is explicitly provided. (The upstream branch defaults
+    // to 1.0f and applies it unconditionally, which silently changes default
+    // quantization; that was reverted there and we keep it opt-in here.)
+    float prior_weight     = 0.0f;
+    bool  prior_weight_set = false;
     bool use_tessera = false;
 
     for (; arg_idx < argc && strncmp(argv[arg_idx], "--", 2) == 0; arg_idx++) {
@@ -814,6 +826,17 @@ int llama_quantize(int argc, char ** argv) {
             }
         } else if (strcmp(argv[arg_idx], "--keep-split") == 0) {
             params.keep_split = true;
+        } else if (strcmp(argv[arg_idx], "--prior-weight") == 0) {
+            if (arg_idx < argc-1) {
+                try {
+                    prior_weight = std::stof(argv[++arg_idx]);
+                    prior_weight_set = true;
+                } catch (...) {
+                    usage(argv[0]);
+                }
+            } else {
+                usage(argv[0]);
+            }
         } else {
             std::string terr;
             const int n = common_tessera_parse_one(argc, argv, arg_idx, terr);
@@ -863,7 +886,7 @@ int llama_quantize(int argc, char ** argv) {
 
     std::vector<std::string> imatrix_datasets;
     std::unordered_map<std::string, std::vector<float>> imatrix_data;
-    int m_last_call = prepare_imatrix(imatrix_file, imatrix_datasets, included_weights, excluded_weights, imatrix_data);
+    int m_last_call = prepare_imatrix(imatrix_file, imatrix_datasets, included_weights, excluded_weights, imatrix_data, prior_weight);
 
     std::vector<llama_model_imatrix_data> i_data;
     std::vector<llama_model_tensor_override> t_override;
@@ -903,6 +926,15 @@ int llama_quantize(int argc, char ** argv) {
             std::strcpy(kvo.key, LLM_KV_QUANTIZE_IMATRIX_N_CHUNKS);
             kvo.tag = LLAMA_KV_OVERRIDE_TYPE_INT;
             kvo.val_i64 = m_last_call;
+            kv_overrides.emplace_back(std::move(kvo));
+        }
+        // Only record the prior-weight metadata (and only apply the prior at
+        // all, see load_imatrix) when --prior-weight was explicitly passed.
+        if (prior_weight_set) {
+            llama_model_kv_override kvo;
+            std::strcpy(kvo.key, LLM_KV_QUANTIZE_IMATRIX_PRIOR_W);
+            kvo.tag = LLAMA_KV_OVERRIDE_TYPE_FLOAT;
+            kvo.val_f64 = prior_weight;
             kv_overrides.emplace_back(std::move(kvo));
         }
     }
