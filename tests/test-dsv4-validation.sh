@@ -126,7 +126,9 @@ run_mode() {
 
     local ready=0
     for _ in $(seq 1 "${DSV4_STARTUP_RETRIES:-300}"); do
-        if curl --silent --fail --max-time 2 "http://127.0.0.1:${port}/health" >/dev/null 2>&1; then
+        # /health can report service availability while the model is still
+        # loading; /props becomes successful only after the model is ready.
+        if curl --silent --fail --max-time 2 "http://127.0.0.1:${port}/props" >/dev/null 2>&1; then
             ready=1
             break
         fi
