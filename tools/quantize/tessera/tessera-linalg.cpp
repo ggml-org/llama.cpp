@@ -378,3 +378,118 @@ void ts_linalg_gram_schmidt(float * V, int64_t k, int64_t n) {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// tessera-flrq helper: symmetric eigendecomposition via cyclic Jacobi.
+// Self-contained; only touched by the FLRQ sketch-basis path. Computes the
+// eigendecomposition of the small (K x K) sketch gram matrix Y Y^T so the
+// FLRQ basis matches numpy.linalg.svd(Y) (whose left singular vectors are the
+// eigenvectors of Y Y^T). Sorts eigenpairs descending by eigenvalue.
+// ---------------------------------------------------------------------------
+
+void ts_linalg_sym_eig(const float * A, float * eigvals, float * eigvecs, int64_t n) {
+    // Work on a symmetric copy (force exact symmetry to absorb input noise).
+    std::vector<float> M(n * n);
+    for (int64_t i = 0; i < n; i++) {
+        for (int64_t j = i; j < n; j++) {
+            float v = 0.5f * (A[i*n + j] + A[j*n + i]);
+            M[i*n + j] = v;
+            M[j*n + i] = v;
+        }
+    }
+    // V starts as identity.
+    for (int64_t i = 0; i < n; i++) {
+        for (int64_t j = 0; j < n; j++) {
+            eigvecs[i*n + j] = (i == j) ? 1.0f : 0.0f;
+        }
+    }
+
+    const int64_t max_sweeps = 80;
+    for (int64_t sweep = 0; sweep < max_sweeps; sweep++) {
+        // off-diagonal Frobenius norm.
+        float off = 0.0f;
+        for (int64_t p = 0; p < n; p++) {
+            for (int64_t q = p + 1; q < n; q++) {
+                off += M[p*n + q] * M[p*n + q];
+            }
+        }
+        if (off <= 1e-30f) {
+            break;
+        }
+        // Cyclic sweep over all (p, q) pairs above the diagonal.
+        for (int64_t p = 0; p < n - 1; p++) {
+            for (int64_t q = p + 1; q < n; q++) {
+                float apq = M[p*n + q];
+                if (fabsf(apq) < 1e-30f) {
+                    continue;
+                }
+                float app = M[p*n + p];
+                float aqq = M[q*n + q];
+                // Rotation angle: tau = (aqq - app) / (2 apq); t = sign/(|tau|+sqrt(1+tau^2)).
+                float tau = (aqq - app) / (2.0f * apq);
+                float t;
+                if (tau >= 0.0f) {
+                    t = 1.0f / (tau + sqrtf(1.0f + tau*tau));
+                } else {
+                    t = -1.0f / (-tau + sqrtf(1.0f + tau*tau));
+                }
+                float c = 1.0f / sqrtf(1.0f + t*t);
+                float s = t * c;
+                // Apply rotation to columns/rows p, q of M.
+                for (int64_t i = 0; i < n; i++) {
+                    float mip = M[i*n + p];
+                    float miq = M[i*n + q];
+                    M[i*n + p] = c*mip - s*miq;
+                    M[i*n + q] = s*mip + c*miq;
+                }
+                for (int64_t j = 0; j < n; j++) {
+                    float mpj = M[p*n + j];
+                    float mqj = M[q*n + j];
+                    M[p*n + j] = c*mpj - s*mqj;
+                    M[q*n + j] = s*mpj + c*mqj;
+                }
+                // Accumulate eigenvectors: V = V @ R.
+                for (int64_t i = 0; i < n; i++) {
+                    float vip = eigvecs[i*n + p];
+                    float viq = eigvecs[i*n + q];
+                    eigvecs[i*n + p] = c*vip - s*viq;
+                    eigvecs[i*n + q] = s*vip + c*viq;
+                }
+            }
+        }
+    }
+
+    // Collect eigenvalues (diagonal) and sort descending (selection sort; n is small).
+    for (int64_t i = 0; i < n; i++) {
+        eigvals[i] = M[i*n + i];
+    }
+    std::vector<int64_t> order(n);
+    for (int64_t i = 0; i < n; i++) {
+        order[i] = i;
+    }
+    for (int64_t i = 0; i < n; i++) {
+        int64_t best = i;
+        for (int64_t j = i + 1; j < n; j++) {
+            if (eigvals[order[j]] > eigvals[order[best]]) {
+                best = j;
+            }
+        }
+        int64_t tmp = order[i];
+        order[i] = order[best];
+        order[best] = tmp;
+    }
+    std::vector<float> ev_sorted(n * n);
+    std::vector<float> lam_sorted(n);
+    for (int64_t j = 0; j < n; j++) {
+        lam_sorted[j] = eigvals[order[j]];
+        for (int64_t i = 0; i < n; i++) {
+            ev_sorted[i*n + j] = eigvecs[i*n + order[j]];
+        }
+    }
+    for (int64_t i = 0; i < n; i++) {
+        eigvals[i] = lam_sorted[i];
+        for (int64_t j = 0; j < n; j++) {
+            eigvecs[i*n + j] = ev_sorted[i*n + j];
+        }
+    }
+}

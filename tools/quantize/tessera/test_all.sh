@@ -54,6 +54,10 @@ compile_and_run awq         $T/test_awq.cpp         $T/tessera-awq.cpp $T/tesser
 # Links the standalone port against tessera-policy (for ts_policy_genes) +
 # the awq sources + nlohmann/json (fixture loader).
 compile_and_run awq_fitness $T/test_awq_fitness.cpp $T/tessera-awq.cpp $T/tessera-awq-fitness.cpp $T/tessera-policy.cpp -I vendor
+# FLRQ outlier-aware low-rank port (parity vs Python flrq_bcl; loads the
+# Python sketch basis from the fixture so the deterministic BLC core is pinned
+# bit-for-bit). Needs tessera-linalg (sym-eig for the sketch basis) + vendor.
+compile_and_run flrq        $T/test_flrq.cpp        $T/tessera-flrq.cpp $T/tessera-linalg.cpp -I vendor
 compile_and_run l5          $T/test_l5.cpp          $T/tessera-l5.cpp
 compile_and_run imatrix     $T/test_imatrix.cpp     $T/tessera-imatrix.cpp
 compile_and_run corpus      $T/test_corpus.cpp      $T/tessera-corpus.cpp
