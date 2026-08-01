@@ -18,8 +18,9 @@ int fa_vec_ne11_bucket(int64_t ne11);
 int fa_vec_ne01_bucket(int64_t ne01);
 
 // NE baked into each (dk,dv) baseline instantiation in kernels/fa.metal.
-// Hand-maintained mirror; keep in sync with those instantiations (run_fa_vec_tune_check
-// exercises every (Q,NE), so a missing instantiation surfaces there).
+// Hand-maintained mirror; keep in sync with those instantiations. test-backend-ops forces
+// every legal (Q,NE) on dk=128 and dk=576 under Metal, so a missing instantiation for
+// those two surfaces there; the other head sizes are only covered by the offline tuner.
 int fa_vec_baseline_ne(int dk, int dv);
 
 // Tuned table has two row kinds. Exact rows key a (ne11_b, ne01_b) bucket. Default rows
