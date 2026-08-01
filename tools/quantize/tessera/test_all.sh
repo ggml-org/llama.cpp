@@ -53,7 +53,7 @@ compile_and_run awq         $T/test_awq.cpp         $T/tessera-awq.cpp $T/tesser
 # AWQ GA fitness port (parity vs Python awq-evolve.py + GA convergence).
 # Links the standalone port against tessera-policy (for ts_policy_genes) +
 # the awq sources + nlohmann/json (fixture loader).
-compile_and_run awq_fitness $T/test_awq_fitness.cpp $T/tessera-awq.cpp $T/tessera-awq-fitness.cpp $T/tessera-policy.cpp -I vendor
+compile_and_run awq_fitness $T/test_awq_fitness.cpp $T/tessera-awq.cpp $T/tessera-awq-fitness.cpp $T/tessera-policy.cpp -I vendor -framework Accelerate
 # FLRQ outlier-aware low-rank port (parity vs Python flrq_bcl; loads the
 # Python sketch basis from the fixture so the deterministic BLC core is pinned
 # bit-for-bit). Needs tessera-linalg (sym-eig for the sketch basis) + vendor.

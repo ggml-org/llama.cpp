@@ -137,6 +137,12 @@ struct ts_awq_evolve_params {
     float     heldout_weight;    // weight for held-out MSE in composite, default 2.0
     uint32_t  seed;              // determinism
     bool      verbose;
+    // Per-tensor parallelism for ts_awq_evolve_all: each layer's GA runs
+    // independently (its population, archive and rng are local to one
+    // ts_awq_evolve call), so the per-layer loop fans out across this many
+    // threads. 0/1 = serial (the historical behaviour). The evaluator ctx is
+    // shared across threads and must guard any mutable state itself.
+    int32_t   n_threads;
 };
 
 // Result of evolution for one tensor family.

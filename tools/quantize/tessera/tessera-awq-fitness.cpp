@@ -21,6 +21,24 @@
 #include "tessera-awq-fitness.h"
 #include "tessera-awq.h"
 
+// BLAS: the two matmuls in ts_awq_relative_output_error dominate the GA cost
+// (O(n_tokens * out_dim * in_dim) per evaluation). Use single-precision
+// cblas_sgemm to match Python's numpy matmul dtype exactly (activations @
+// weight.T stays float32 because numpy preserves the f32 input dtype); the
+// error/ref reductions below stay in double to match numpy's default f64
+// reductions for f32 inputs. cblas_dgemm would diverge from Python's f32
+// matmul accumulation order.
+#if defined(__APPLE__)
+#ifndef ACCELERATE_NEW_LAPACK
+#define ACCELERATE_NEW_LAPACK
+#endif
+#include <Accelerate/Accelerate.h>
+#define TS_HAS_CBLAS 1
+#elif defined(GGML_USE_OPENBLAS)
+#include <cblas.h>
+#define TS_HAS_CBLAS 1
+#endif
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -306,6 +324,41 @@ void ts_awq_ternary_reconstruct(const float * W,
     }
 }
 
+// Compute C(M x N) = A(M x K) @ B(N x K)^T, row-major, single-precision.
+// This is the BLAS dispatch for the two matmuls in relative_output_error;
+// it dispatches to cblas_sgemm when Accelerate/OpenBLAS is linked and falls
+// back to a naive scalar triple loop otherwise (the pre-BLAS path, kept so
+// the file still builds without a BLAS dependency). The matmul is f32 to
+// match Python's numpy matmul dtype (activations @ weight.T stays f32).
+static void ts_fitness_matmul_at(const float * A, const float * B,
+                                 float * C,
+                                 int64_t M, int64_t K, int64_t N) {
+    if (M <= 0 || N <= 0) {
+        return;
+    }
+#if defined(TS_HAS_CBLAS)
+    // C = A * B^T. A is (M x K) row-major, B is (N x K) row-major so B^T is
+    // (K x N). Row-major strides: lda=K (A), ldb=K (B, read transposed),
+    // ldc=N (C). op(A)=NoTrans, op(B)=Trans.
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                (int)M, (int)N, (int)K,
+                1.0f, A, (int)K, B, (int)K, 0.0f, C, (int)N);
+#else
+    for (int64_t t = 0; t < M; t++) {
+        const float * arow = A + t * K;
+        float * crow = C + t * N;
+        for (int64_t o = 0; o < N; o++) {
+            const float * brow = B + o * K;
+            float acc = 0.0f;
+            for (int64_t j = 0; j < K; j++) {
+                acc += arow[j] * brow[j];
+            }
+            crow[o] = acc;
+        }
+    }
+#endif
+}
+
 double ts_awq_relative_output_error(const float * activations,
                                     const float * W,
                                     const float * reconstructed,
@@ -319,54 +372,37 @@ double ts_awq_relative_output_error(const float * activations,
 
     const int64_t ref_n = n_tokens * out_dim;
 
-    // reference = A @ W^T  (n_tokens x out_dim). Python computes this once
-    // and caches; here we either use the caller's buffer or materialize it.
-    std::vector<double> ref_buf;
-    const double * ref;
+    // reference = A @ W^T  (n_tokens x out_dim, f32). Python computes this
+    // once and caches; here we either use the caller's buffer or materialize
+    // it via BLAS. Kept in float to match Python's f32 matmul output.
+    std::vector<float> ref_buf;
+    const float * ref;
     if (reference_or_null) {
-        // Sum-of-squares only - convert on the fly.
-        ref = nullptr;  // we read from reference_or_null directly below
+        ref = reference_or_null;
     } else {
-        ref_buf.resize(ref_n, 0.0);
-        for (int64_t t = 0; t < n_tokens; t++) {
-            const float * arow = activations + t * in_dim;
-            double * rrow = ref_buf.data() + t * out_dim;
-            for (int64_t o = 0; o < out_dim; o++) {
-                double acc = 0.0;
-                // W is (out_dim x in_dim); W^T column o is W row o.
-                const float * wrow = W + o * in_dim;
-                for (int64_t j = 0; j < in_dim; j++) {
-                    acc += (double)arow[j] * (double)wrow[j];
-                }
-                rrow[o] = acc;
-            }
-        }
+        ref_buf.resize(ref_n);
+        ts_fitness_matmul_at(activations, W, ref_buf.data(),
+                             n_tokens, in_dim, out_dim);
         ref = ref_buf.data();
     }
 
-    // approximate = A @ R^T  (n_tokens x out_dim). Compute approximate-ref
-    // and accumulate its squared sum and ref's squared sum together to keep
-    // the working set small. Reductions are f64 to match numpy.
+    // approximate = A @ R^T  (n_tokens x out_dim, f32) via BLAS.
+    std::vector<float> approx_buf(ref_n);
+    ts_fitness_matmul_at(activations, reconstructed, approx_buf.data(),
+                         n_tokens, in_dim, out_dim);
+
+    // Error reduction: sum((approx - ref)^2) and sum(ref^2). This is
+    // O(n_tokens * out_dim), much smaller than the matmul, so a naive loop
+    // is fine. Reductions are f64 to match numpy's default reduction dtype
+    // for f32 inputs.
     double sum_sq_err = 0.0;
     double sum_sq_ref = 0.0;
-    for (int64_t t = 0; t < n_tokens; t++) {
-        const float * arow = activations + t * in_dim;
-        for (int64_t o = 0; o < out_dim; o++) {
-            const float * rrow = reconstructed + o * in_dim;
-            double acc = 0.0;
-            for (int64_t j = 0; j < in_dim; j++) {
-                acc += (double)arow[j] * (double)rrow[j];
-            }
-            double r;
-            if (reference_or_null) {
-                r = (double)reference_or_null[t * out_dim + o];
-            } else {
-                r = ref[t * out_dim + o];
-            }
-            double d = acc - r;
-            sum_sq_err += d * d;
-            sum_sq_ref += r * r;
-        }
+    for (int64_t i = 0; i < ref_n; i++) {
+        double a = (double)approx_buf[i];
+        double r = (double)ref[i];
+        double d = a - r;
+        sum_sq_err += d * d;
+        sum_sq_ref += r * r;
     }
 
     double mean_err = sum_sq_err / (double)ref_n;

@@ -39,7 +39,9 @@
 #include <cstring>
 #include <deque>
 #include <limits>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 #include <unordered_map>
@@ -200,6 +202,12 @@ struct ts_dispatch_eval_ctx {
     std::unordered_map<std::string, float>                   best_t2;
     std::unordered_map<std::string, std::pair<float, float>> best_pair;
     std::unordered_map<std::string, int>                     modality;  // per-tensor operative modality
+    // The GA fans per-tensor work across threads (ts_awq_evolve_all). The
+    // per-tensor quantize inputs (weights, imatrix) and the routing/modality
+    // lookups above are read-only across threads, but the three caches below
+    // are written lazily by the evaluator. Guard them so concurrent tensors
+    // can populate sidecar_cache / record best_t2 / best_pair safely.
+    std::mutex mu;
 };
 
 // GA evaluator: quantize the layer with a candidate (alpha, clip) and score
@@ -290,6 +298,14 @@ static ts_awq_score ts_dispatch_awq_eval(const ts_awq_candidate * cand,
     float t2    = rel_frob;
     float kd_t2 = rel_frob;   // falls back to the proxy when no sidecar exists
     if (ec->l1.use_kernel_direct) {
+        // The GA may evaluate tensors concurrently (ts_awq_evolve_all fans
+        // per-tensor work across threads). The lazy sidecar load and the
+        // best-t2 recording below mutate ec's caches, so guard them. The
+        // disk read happens at most once per tensor (the cache check below
+        // short-circuits), and the kernel_direct_t2 compute reads from a
+        // stable node reference (unordered_map keeps refs valid across
+        // other inserts), so it is safe to run under the lock.
+        std::lock_guard<std::mutex> lk(ec->mu);
         auto it = ec->sidecar_cache.find(layer->name);
         if (it == ec->sidecar_cache.end()) {
             std::vector<float> kdeq;
@@ -321,6 +337,7 @@ static ts_awq_score ts_dispatch_awq_eval(const ts_awq_candidate * cand,
 
     // record the best candidate's (offline, kernel) pair for the A/B harness
     if (ec->l1.use_kernel_direct) {
+        std::lock_guard<std::mutex> lk(ec->mu);
         auto bit = ec->best_t2.find(layer->name);
         if (bit == ec->best_t2.end() || t2 < bit->second) {
             ec->best_t2[layer->name]   = t2;
@@ -835,14 +852,41 @@ int ts_dispatch_run(const ts_dispatch_params * params,
     evolve_params.heldout_weight     = 2.0f;
     evolve_params.seed               = (uint32_t)params->evolve_seed;
     evolve_params.verbose            = verbose;
+    // Per-tensor GA parallelism: each layer's GA is independent (its
+    // population, archive and rng are local to ts_awq_evolve), so the
+    // per-layer loop fans out across this many threads. Default to the host's
+    // hardware concurrency capped at 8 (above that, the BLAS matmuls inside
+    // each evaluator already saturate the cores); override with the
+    // TESSERA_QUANTIZE_THREADS env var.
+    {
+        int32_t n_threads = 0;
+        const char * env = std::getenv("TESSERA_QUANTIZE_THREADS");
+        if (env != nullptr && env[0] != '\0') {
+            int parsed = std::atoi(env);
+            if (parsed > 0) {
+                n_threads = parsed;
+            } else if (parsed == 0) {
+                n_threads = 1;  // explicit "0" disables threading
+            }
+        }
+        if (n_threads == 0) {
+            unsigned int hw = std::thread::hardware_concurrency();
+            n_threads = hw > 0 ? (int32_t)hw : 1;
+            if (n_threads > 8) {
+                n_threads = 8;
+            }
+        }
+        evolve_params.n_threads = n_threads;
+    }
 
     if (need_ga) {
         if (verbose) {
-            printf("tessera-dispatch: GA configured (seed=%llu iters=%d islands=%d pop=%d)\n",
+            printf("tessera-dispatch: GA configured (seed=%llu iters=%d islands=%d pop=%d threads=%d)\n",
                    (unsigned long long)params->evolve_seed,
                    params->evolve_iters,
                    params->evolve_islands,
-                   params->evolve_population);
+                   params->evolve_population,
+                   evolve_params.n_threads);
         }
     }
 

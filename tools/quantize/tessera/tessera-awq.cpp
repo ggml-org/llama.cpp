@@ -1,10 +1,12 @@
 #include "tessera-awq.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <map>
+#include <thread>
 #include <vector>
 
 //
@@ -422,15 +424,63 @@ int ts_awq_evolve_all(const ts_awq_layer * layers, int64_t n_layers,
         }
     }
 
-    // Full per-layer evolution
-    for (int64_t i = 0; i < n_layers; i++) {
-        ts_awq_evolve_params layer_params = *params;
-        layer_params.seed = params->seed + (uint32_t)i;
-        int rc = ts_awq_evolve(&layers[i], eval, eval_ctx, &layer_params, &(*results)[i]);
-        if (rc != 0) {
-            return rc;
+    // Full per-layer evolution. Each layer's GA (population, archive, rng) is
+    // local to one ts_awq_evolve call, so layers are independent and can be
+    // fanned out across threads. results slots do not alias. The only shared
+    // mutable state is eval_ctx, which the caller must guard (the dispatch
+    // eval_ctx carries its own mutex for the sidecar/best-t2 caches). n_threads
+    // <= 1 keeps the historical serial behaviour (and the per-layer return-code
+    // short-circuit, which the parallel path replaces with a join-then-check).
+    const int32_t req_threads = params->n_threads > 1 ? params->n_threads : 1;
+    const int32_t hw_threads  = req_threads > 0
+        ? std::min(req_threads, (int32_t)std::thread::hardware_concurrency())
+        : 1;
+    const int32_t n_threads   = std::max(1, std::min(hw_threads, (int32_t)n_layers));
+
+    if (n_threads <= 1) {
+        for (int64_t i = 0; i < n_layers; i++) {
+            ts_awq_evolve_params layer_params = *params;
+            layer_params.seed = params->seed + (uint32_t)i;
+            int rc = ts_awq_evolve(&layers[i], eval, eval_ctx, &layer_params, &(*results)[i]);
+            if (rc != 0) {
+                return rc;
+            }
         }
+        return 0;
     }
 
-    return 0;
+    // Parallel: atomic work queue over layer indices. A shared atomic rc
+    // captures the first failure; workers keep draining the queue so a slow
+    // layer does not strand the pool. The join below waits for all workers
+    // before returning, so results is fully populated on return.
+    std::atomic<int64_t>  next_idx(0);
+    std::atomic<int>      first_rc(0);
+    auto worker = [&]() {
+        for (;;) {
+            int64_t i = next_idx.fetch_add(1, std::memory_order_relaxed);
+            if (i >= n_layers) {
+                return;
+            }
+            ts_awq_evolve_params layer_params = *params;
+            layer_params.n_threads = 1;  // no nested fan-out
+            layer_params.seed = params->seed + (uint32_t)i;
+            int rc = ts_awq_evolve(&layers[i], eval, eval_ctx, &layer_params, &(*results)[i]);
+            if (rc != 0) {
+                int expected = 0;
+                first_rc.compare_exchange_strong(expected, rc,
+                                                 std::memory_order_relaxed);
+            }
+        }
+    };
+
+    std::vector<std::thread> pool;
+    pool.reserve((size_t)n_threads);
+    for (int32_t t = 0; t < n_threads; t++) {
+        pool.emplace_back(worker);
+    }
+    for (auto & th : pool) {
+        th.join();
+    }
+
+    return first_rc.load(std::memory_order_relaxed);
 }
