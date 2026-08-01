@@ -32,6 +32,15 @@ static ggml_backend_meta_split_state split_state_callback(const ggml_tensor * te
         }
     } else if (std::strcmp(tensor->name, "partial") == 0) {
         state.axis = GGML_BACKEND_SPLIT_AXIS_PARTIAL;
+    } else if (std::strcmp(tensor->name, "segments") == 0) {
+        state.axis = GGML_BACKEND_SPLIT_AXIS_0;
+        state.n_segments = 2;
+        state.nr[0] = 1;
+        state.nr[1] = 1;
+        for (size_t j = 0; j < ud->ndev; ++j) {
+            state.ne[j] = tensor->ne[0] / 2 / (int64_t) ud->ndev;
+            state.ne[ud->ndev + j] = tensor->ne[0] / 2 / (int64_t) ud->ndev;
+        }
     }
     return state;
 }
@@ -78,6 +87,8 @@ int main() {
     ggml_set_name(axis3, "axis3");
     ggml_tensor * partial = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F32, 4, 4, 4, 1);
     ggml_set_name(partial, "partial");
+    ggml_tensor * segments = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F32, 8, 4, 1, 1);
+    ggml_set_name(segments, "segments");
     // Swap dimensions 0 and 1 while preserving dimension 2.  The result is
     // deliberately non-contiguous but remains split along axis 2.
     ggml_tensor * permuted = ggml_permute(ctx.get(), root, 1, 0, 2, 3);
@@ -192,6 +203,19 @@ int main() {
         return 1;
     }
 
-    std::puts("meta split axis-2, axis-3, mirrored, and partial readback passed");
+    const size_t segments_nbytes = ggml_nbytes(segments);
+    std::vector<float> segments_expected(segments_nbytes / sizeof(float));
+    for (size_t i = 0; i < segments_expected.size(); ++i) {
+        segments_expected[i] = (float) (1000 + i);
+    }
+    ggml_backend_tensor_set(segments, segments_expected.data(), 0, segments_nbytes);
+    std::vector<float> segments_actual(segments_expected.size(), 0.0f);
+    ggml_backend_tensor_get(segments, segments_actual.data(), 0, segments_nbytes);
+    if (segments_actual != segments_expected) {
+        std::fprintf(stderr, "multi-segment readback mismatch\n");
+        return 1;
+    }
+
+    std::puts("meta split axis-2, axis-3, mirrored, partial, and multi-segment readback passed");
     return 0;
 }
