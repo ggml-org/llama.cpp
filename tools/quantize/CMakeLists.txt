@@ -79,6 +79,69 @@ target_link_libraries(${TARGET} PUBLIC llama-common llama ${CMAKE_THREAD_LIBS_IN
 
 if(APPLE)
     target_link_libraries(${TARGET} PUBLIC "-framework Accelerate")
+
+    # ---- Metal acceleration for the Tessera quantize pipeline ----
+    # Build wiring (only on Apple; non-Apple builds use the vDSP/scalar
+    # fallback transparently via the ts_metal_available() runtime check):
+    #   1. compile tessera-metal.metal -> tessera-metal.metallib
+    #   2. regenerate tessera-metal-source.h (embedded source fallback)
+    #   3. add the Objective-C++ host dispatch (tessera-metal.mm)
+    #   4. link Metal.framework + Foundation.framework
+    find_library(METAL_FRAMEWORK    Metal      REQUIRED)
+    find_library(FOUNDATION_LIBRARY Foundation REQUIRED)
+
+    find_package(Python3 COMPONENTS Interpreter)
+
+    set(TS_METAL_DIR      ${CMAKE_CURRENT_SOURCE_DIR}/tessera)
+    set(TS_METAL_SOURCE   ${TS_METAL_DIR}/tessera-metal.metal)
+    set(TS_METAL_LIB      ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/tessera-metal.metallib)
+    set(TS_METAL_SRC_H    ${CMAKE_CURRENT_BINARY_DIR}/tessera-metal-source.h)
+    set(TS_METAL_EMBED_PY ${CMAKE_CURRENT_SOURCE_DIR}/tessera/embed_metal_source.py)
+
+    # compile the .metal to a .metallib at build time. A successful build
+    # means the kernels are valid Metal.
+    add_custom_command(
+        OUTPUT ${TS_METAL_LIB}
+        COMMAND xcrun -sdk macosx metal -O3 -std=metal3.0
+                -c ${TS_METAL_SOURCE} -o -
+            | xcrun -sdk macosx metallib - -o ${TS_METAL_LIB}
+        DEPENDS ${TS_METAL_SOURCE}
+        COMMENT "Compiling Tessera Metal kernels"
+        VERBATIM
+    )
+    add_custom_target(tessera-metal-lib ALL DEPENDS ${TS_METAL_LIB})
+    add_dependencies(${TARGET} tessera-metal-lib)
+
+    # regenerate the embedded-source fallback header whenever the .metal changes.
+    if(Python3_Interpreter_FOUND)
+        set(TS_PY ${Python3_EXECUTABLE})
+    else()
+        set(TS_PY python3)
+    endif()
+    add_custom_command(
+        OUTPUT ${TS_METAL_SRC_H}
+        COMMAND ${TS_PY} ${TS_METAL_EMBED_PY}
+                ${TS_METAL_SOURCE} ${TS_METAL_SRC_H}
+        DEPENDS ${TS_METAL_SOURCE} ${TS_METAL_EMBED_PY}
+        COMMENT "Embedding Tessera Metal source string"
+        VERBATIM
+    )
+    target_sources(${TARGET} PRIVATE ${TS_METAL_SRC_H})
+    target_include_directories(${TARGET} PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+
+    target_sources(${TARGET} PRIVATE tessera/tessera-metal.mm)
+    target_link_libraries(${TARGET} PUBLIC ${METAL_FRAMEWORK} ${FOUNDATION_LIBRARY})
+    set_source_files_properties(${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/tessera-metal.metallib
+                                PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
+
+    # install the metallib next to the binary so ts_metal_init can find it
+    if(LLAMA_TOOLS_INSTALL)
+        install(FILES ${TS_METAL_LIB} DESTINATION ${CMAKE_INSTALL_BINDIR})
+    endif()
+else()
+    # Non-Apple: link the no-op stub so ts_quantize_2d's Metal-gated calls
+    # resolve and the build still works (ts_metal_available() returns 0).
+    target_sources(${TARGET} PRIVATE tessera/tessera-metal-stub.cpp)
 endif()
 
 if(UNIX AND NOT APPLE)
@@ -118,6 +181,18 @@ target_compile_features(${TARGET} PRIVATE cxx_std_17)
 
 if(LLAMA_TOOLS_INSTALL)
     install(TARGETS ${TARGET} RUNTIME)
+endif()
+
+# tessera-metal: standalone correctness test for the Metal acceleration path.
+# Compares the three Metal kernels (scale_clip_ternarize, awq_grid_search,
+# dequant_mse_recon) against the CPU reference. macOS-only; the test exits 0
+# with a SKIP message when no Metal device is present.
+if(APPLE)
+    set(TARGET test-tessera-metal)
+    add_executable(${TARGET} tessera/test_metal.cpp)
+    target_link_libraries(${TARGET} PRIVATE llama-quantize-impl)
+    target_compile_features(${TARGET} PRIVATE cxx_std_17)
+    add_test(NAME ${TARGET} COMMAND ${TARGET})
 endif()
 
 # tessera-ffi: static library for the Tessera Studio xcframework.

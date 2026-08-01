@@ -8,6 +8,7 @@
 
 #include "tessera-quant.h"
 #include "tessera-vec.h"
+#include "tessera-metal.h"
 
 #include <algorithm>
 #include <cmath>
@@ -881,17 +882,56 @@ int ts_quantize_2d(const float * weights,
     const int64_t n     = out_dim * in_dim;
     const int64_t pages = ts_pages_per_row(in_dim);
 
+    // Metal path: when ts_metal_available(), upload the weight tensor once
+    // and let the batched AWQ grid kernel resolve alpha in a single dispatch
+    // (cuts the n_grid full-tensor passes to 1). Falls back to the CPU path
+    // when Metal is unavailable, the tensor is too wide for the kernel's
+    // threadgroup scratch, or the layer-output MSE variant is requested.
+    ts_metal_weights_t * mtl_w = nullptr;
+    bool use_metal = (ts_metal_available() == 1) && (in_dim <= 8192);
+    if (use_metal) {
+        mtl_w = ts_metal_upload_weights(weights, act_scales, out_dim, in_dim);
+        if (mtl_w == nullptr) {
+            use_metal = false;
+        }
+    }
+
     // --- resolve AWQ alpha (0 = auto-search when activations are present) ---
     float resolved_alpha = params->alpha;
     if (act_scales != nullptr && resolved_alpha == 0.0f) {
-        if (calib_X != nullptr && ref_output != nullptr && n_tokens > 0) {
-            resolved_alpha = ts_awq_scale_search_layer_output(
-                weights, act_scales, calib_X, ref_output,
-                out_dim, in_dim, n_tokens, params->awq_grid);
-        } else {
-            resolved_alpha = ts_awq_scale_search(
-                weights, act_scales, calib_X,
-                out_dim, in_dim, n_tokens, params->awq_grid);
+        const bool layer_output_search =
+            (calib_X != nullptr && ref_output != nullptr && n_tokens > 0);
+        bool metal_resolved = false;
+        if (use_metal && !layer_output_search) {
+            // Metal batched grid search: one dispatch over all alphas.
+            std::vector<float> grid((size_t)params->awq_grid);
+            for (int64_t g = 0; g < params->awq_grid; g++) {
+                grid[(size_t)g] = (float)g / (float)(params->awq_grid - 1);
+            }
+            std::vector<float> mse((size_t)params->awq_grid, 0.0f);
+            int mrc = ts_metal_awq_grid_search(mtl_w, grid.data(),
+                                               params->awq_grid, mse.data());
+            if (mrc == 0) {
+                float best_err = std::numeric_limits<float>::infinity();
+                for (int64_t g = 0; g < params->awq_grid; g++) {
+                    if (mse[(size_t)g] < best_err) {
+                        best_err = mse[(size_t)g];
+                        resolved_alpha = grid[(size_t)g];
+                    }
+                }
+                metal_resolved = true;
+            }
+        }
+        if (!metal_resolved) {
+            if (layer_output_search) {
+                resolved_alpha = ts_awq_scale_search_layer_output(
+                    weights, act_scales, calib_X, ref_output,
+                    out_dim, in_dim, n_tokens, params->awq_grid);
+            } else {
+                resolved_alpha = ts_awq_scale_search(
+                    weights, act_scales, calib_X,
+                    out_dim, in_dim, n_tokens, params->awq_grid);
+            }
         }
     }
 
@@ -912,10 +952,24 @@ int ts_quantize_2d(const float * weights,
     std::vector<float>   ws((size_t)n);
     std::vector<float>   core((size_t)n);
     std::vector<int8_t>  ternary((size_t)n);
-    float global_amp = ts_scale_clip_ternarize_fused(
-        weights, wscale.data(), params->clip,
-        ws.data(), core.data(), ternary.data(),
-        out_dim, in_dim);
+    float global_amp;
+    bool mtl_sct_ok = false;
+    if (use_metal) {
+        float gamp = 0.0f;
+        int mrc = ts_metal_scale_clip_ternarize(mtl_w, wscale.data(),
+                                                params->clip, ws.data(),
+                                                core.data(), ternary.data(), &gamp);
+        if (mrc == 0) {
+            global_amp = gamp;
+            mtl_sct_ok = true;
+        }
+    }
+    if (!mtl_sct_ok) {
+        global_amp = ts_scale_clip_ternarize_fused(
+            weights, wscale.data(), params->clip,
+            ws.data(), core.data(), ternary.data(),
+            out_dim, in_dim);
+    }
     if (n == 0) global_amp = 1.0f;
 
     std::vector<int32_t> outlier_flat = ts_select_repair_residuals(
@@ -972,99 +1026,105 @@ int ts_quantize_2d(const float * weights,
 
     result->best_alpha = resolved_alpha;
 
-    // --- reconstruction MSE + recon build, cache-blocked dequant + MSE ---
-    // The previous path materialized the full deq tensor (out_dim*in_dim floats,
-    // 180 MB for a 4096x11008 FFN tensor) via ts_dequant, then streamed it back
-    // out for the MSE/recon fold. On a tensor that spills L2 each dequant write
-    // is a DRAM round-trip and the MSE read is a second one.
-    //
-    // Cache-blocked variant: walk the output rows in blocks sized so the block's
-    // dequant scratch (B * in_dim * 4 B) fits in L2. For each block we dequant
-    // into a small scratch, apply the per-row outlier overrides, then fold
-    //   diff = ws - deq; mse += diff^2; recon[i] = deq[i] * input_scale[col]
-    // in the same sweep, so deq is consumed from L2 and never written to DRAM.
-    // The accumulation order over (row, col) is unchanged (blocks iterate rows
-    // in order, columns in order), so the mse reduction is bit-identical to the
-    // previous single-pass accumulation (float on Apple, double elsewhere).
+    // --- reconstruction MSE + recon build ---
+    // Metal path: when available, dispatch the fused dequant+outlier-restore+
+    // MSE+recon kernel over the GPU-resident weight buffer. Falls back to the
+    // cache-blocked CPU path below on any failure.
     std::vector<float> & recon = result->recon;
     recon.resize((size_t)n);
-
-    // Outlier override indices grouped per row via the CSR built above. Within
-    // a row the outlier cols live in result->outlier_cols[off .. off+count).
-    const int32_t * csr = result->outlier_row_offsets.data();
-    const int32_t * ocols = result->outlier_cols.data();
-
-    // Block size: target ~4 MB of dequant scratch so it sits comfortably below
-    // the ~12 MB L2 (leaves headroom for ws/recon streams). At least 1 row.
-    const int64_t block_rows = std::max<int64_t>(1, (int64_t)(4 * 1024 * 1024) /
-                                                        (in_dim * (int64_t)sizeof(float)));
-    std::vector<float> deq_block;
-
+    bool mtl_dmr_ok = false;
+    if (use_metal) {
+        float mse = 0.0f;
+        int mrc = ts_metal_dequant_mse_recon(
+            mtl_w, ternary.data(), result->page_scales.data(),
+            result->lane_scales.data(),
+            outlier_flat.empty() ? nullptr : outlier_flat.data(),
+            (int64_t)outlier_flat.size(),
+            ws.data(), input_scale.data(), recon.data(), &mse);
+        if (mrc == 0) {
+            result->mse = mse;
+            mtl_dmr_ok = true;
+        }
+    }
+    if (!mtl_dmr_ok) {
+        // Cache-blocked CPU path: walk output rows in blocks sized so the
+        // block's dequant scratch fits in L2. For each block: dequant into
+        // scratch, apply per-row outlier overrides, then fold
+        //   diff = ws - deq; mse += diff^2; recon[i] = deq[i] * input_scale[col]
+        // in the same sweep, so deq is consumed from L2 and never hits DRAM.
+        const int32_t * csr = result->outlier_row_offsets.data();
+        const int32_t * ocols = result->outlier_cols.data();
+        const int64_t block_rows = std::max<int64_t>(1, (int64_t)(4 * 1024 * 1024) /
+                                                            (in_dim * (int64_t)sizeof(float)));
+        std::vector<float> deq_block;
 #if defined(__APPLE__)
-    {
-        float mse_accum = 0.0f;
-        for (int64_t r_lo = 0; r_lo < out_dim; r_lo += block_rows) {
-            int64_t r_hi = std::min(r_lo + block_rows, out_dim);
-            deq_block.assign((size_t)(r_hi - r_lo) * (size_t)in_dim, 0.0f);
-            ts_dequant_rows(ternary.data(), result->page_scales.data(),
-                            result->lane_scales.data(), deq_block.data(),
-                            r_lo, r_hi, in_dim);
-            // Apply outlier overrides: deq[idx] = ws[idx] for each outlier in block.
-            for (int64_t r = r_lo; r < r_hi; r++) {
-                int32_t off0 = csr[r], off1 = csr[r + 1];
-                float * deqrow = deq_block.data() + (r - r_lo) * in_dim;
-                const float * wsrow = ws.data() + r * in_dim;
-                for (int32_t o = off0; o < off1; o++) {
-                    deqrow[(size_t)ocols[(size_t)o]] = wsrow[(size_t)ocols[(size_t)o]];
+        {
+            float mse_accum = 0.0f;
+            for (int64_t r_lo = 0; r_lo < out_dim; r_lo += block_rows) {
+                int64_t r_hi = std::min(r_lo + block_rows, out_dim);
+                deq_block.assign((size_t)(r_hi - r_lo) * (size_t)in_dim, 0.0f);
+                ts_dequant_rows(ternary.data(), result->page_scales.data(),
+                                result->lane_scales.data(), deq_block.data(),
+                                r_lo, r_hi, in_dim);
+                for (int64_t r = r_lo; r < r_hi; r++) {
+                    int32_t off0 = csr[r], off1 = csr[r + 1];
+                    float * deqrow = deq_block.data() + (r - r_lo) * in_dim;
+                    const float * wsrow = ws.data() + r * in_dim;
+                    for (int32_t o = off0; o < off1; o++) {
+                        deqrow[(size_t)ocols[(size_t)o]] = wsrow[(size_t)ocols[(size_t)o]];
+                    }
+                }
+                for (int64_t r = r_lo; r < r_hi; r++) {
+                    const float * ws_row   = ws.data() + r * in_dim;
+                    const float * deq_row  = deq_block.data() + (r - r_lo) * in_dim;
+                    float * recon_row      = recon.data() + r * in_dim;
+                    const float * iscale   = input_scale.data();
+                    for (int64_t c = 0; c < in_dim; c++) {
+                        float d = ws_row[c] - deq_row[c];
+                        mse_accum += d * d;
+                        recon_row[c] = deq_row[c] * iscale[c];
+                    }
                 }
             }
-            for (int64_t r = r_lo; r < r_hi; r++) {
-                const float * ws_row   = ws.data() + r * in_dim;
-                const float * deq_row  = deq_block.data() + (r - r_lo) * in_dim;
-                float * recon_row      = recon.data() + r * in_dim;
-                const float * iscale   = input_scale.data();
-                for (int64_t c = 0; c < in_dim; c++) {
-                    float d = ws_row[c] - deq_row[c];
-                    mse_accum += d * d;
-                    recon_row[c] = deq_row[c] * iscale[c];
-                }
-            }
+            result->mse = mse_accum / (float)n;
         }
-        result->mse = mse_accum / (float)n;
-    }
 #else
-    {
-        double mse_accum = 0.0;
-        for (int64_t r_lo = 0; r_lo < out_dim; r_lo += block_rows) {
-            int64_t r_hi = std::min(r_lo + block_rows, out_dim);
-            deq_block.assign((size_t)(r_hi - r_lo) * (size_t)in_dim, 0.0f);
-            ts_dequant_rows(ternary.data(), result->page_scales.data(),
-                            result->lane_scales.data(), deq_block.data(),
-                            r_lo, r_hi, in_dim);
-            for (int64_t r = r_lo; r < r_hi; r++) {
-                int32_t off0 = csr[r], off1 = csr[r + 1];
-                float * deqrow = deq_block.data() + (r - r_lo) * in_dim;
-                const float * wsrow = ws.data() + r * in_dim;
-                for (int32_t o = off0; o < off1; o++) {
-                    deqrow[(size_t)ocols[(size_t)o]] = wsrow[(size_t)ocols[(size_t)o]];
+        {
+            double mse_accum = 0.0;
+            for (int64_t r_lo = 0; r_lo < out_dim; r_lo += block_rows) {
+                int64_t r_hi = std::min(r_lo + block_rows, out_dim);
+                deq_block.assign((size_t)(r_hi - r_lo) * (size_t)in_dim, 0.0f);
+                ts_dequant_rows(ternary.data(), result->page_scales.data(),
+                                result->lane_scales.data(), deq_block.data(),
+                                r_lo, r_hi, in_dim);
+                for (int64_t r = r_lo; r < r_hi; r++) {
+                    int32_t off0 = csr[r], off1 = csr[r + 1];
+                    float * deqrow = deq_block.data() + (r - r_lo) * in_dim;
+                    const float * wsrow = ws.data() + r * in_dim;
+                    for (int32_t o = off0; o < off1; o++) {
+                        deqrow[(size_t)ocols[(size_t)o]] = wsrow[(size_t)ocols[(size_t)o]];
+                    }
+                }
+                for (int64_t r = r_lo; r < r_hi; r++) {
+                    const float * ws_row   = ws.data() + r * in_dim;
+                    const float * deq_row  = deq_block.data() + (r - r_lo) * in_dim;
+                    float * recon_row      = recon.data() + r * in_dim;
+                    const float * iscale   = input_scale.data();
+                    for (int64_t c = 0; c < in_dim; c++) {
+                        double d = (double)ws_row[c] - (double)deq_row[c];
+                        mse_accum += d * d;
+                        recon_row[c] = deq_row[c] * iscale[c];
+                    }
                 }
             }
-            for (int64_t r = r_lo; r < r_hi; r++) {
-                const float * ws_row   = ws.data() + r * in_dim;
-                const float * deq_row  = deq_block.data() + (r - r_lo) * in_dim;
-                float * recon_row      = recon.data() + r * in_dim;
-                const float * iscale   = input_scale.data();
-                for (int64_t c = 0; c < in_dim; c++) {
-                    double d = (double)ws_row[c] - (double)deq_row[c];
-                    mse_accum += d * d;
-                    recon_row[c] = deq_row[c] * iscale[c];
-                }
-            }
+            result->mse = (float)(mse_accum / (double)n);
         }
-        result->mse = (float)(mse_accum / (double)n);
-    }
 #endif
+    }
 
+    if (mtl_w != nullptr) {
+        ts_metal_release_weights(mtl_w);
+    }
     return 0;
 }
 
