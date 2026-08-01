@@ -1808,8 +1808,11 @@ bool llama_model::is_tensor_parallel_output_head(const ggml_tensor * tensor) con
         tp_sharded_output_initialized = true;
         const char * enabled = getenv("GGML_TP_SHARDED_OUTPUT");
         const bool supported_model = type == LLM_TYPE_35B_A3B || type == LLM_TYPE_122B_A10B;
+        const bool supported_arch =
+            ((arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE) && supported_model) ||
+            arch == LLM_ARCH_DEEPSEEK4;
         if (enabled != nullptr && strcmp(enabled, "1") == 0 && params.split_mode == LLAMA_SPLIT_MODE_TENSOR &&
-                (arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE) && supported_model) {
+                supported_arch) {
             const size_t ndev = get_split_state_ud.n_devices;
             auto valid_split = [&](const ggml_tensor * head, size_t rotation) {
                 if (head == nullptr || head == tok_embd || ggml_n_dims(head) != 2 ||
