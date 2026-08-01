@@ -788,7 +788,13 @@ struct llm_graph_params {
             cparams.embeddings_nextn        == other.cparams.embeddings_nextn        &&
             cparams.embeddings_nextn_masked == other.cparams.embeddings_nextn_masked &&
             cparams.causal_attn             == other.cparams.causal_attn             &&
-            cparams.imatrix_observer_epoch  == other.cparams.imatrix_observer_epoch  &&
+            // Both scopes' epochs must match: a graph may carry observers from
+            // either scope depending on arch, so a transition in either bucket
+            // invalidates the cached topology.
+            cparams.imatrix_observer_epoch[LLAMA_OBSERVER_SCOPE_VERIFIER] ==
+                other.cparams.imatrix_observer_epoch[LLAMA_OBSERVER_SCOPE_VERIFIER] &&
+            cparams.imatrix_observer_epoch[LLAMA_OBSERVER_SCOPE_DRAFTER] ==
+                other.cparams.imatrix_observer_epoch[LLAMA_OBSERVER_SCOPE_DRAFTER] &&
             arch  == other.arch  &&
             gtype == other.gtype &&
             cvec  == other.cvec  &&
@@ -966,14 +972,17 @@ struct llm_graph_context {
              const char   * weight_name) const;
     bool imatrix_observer_enabled(const char * weight_name) const;
 
-    // Drafter graphs (DFlash/DSpark) share tensor names with the verifier
-    // (e.g. both have blk.3.attn_output.weight) but the activations are
-    // different shapes because the architectures differ.  When both
-    // contexts run inside the same imatrix session, the second write
-    // trips a shape-mismatch error.  We disambiguate by prefixing every
-    // observer name on a drafter arch with "dft." so verifier and drafter
-    // land in separate m_stats buckets.
-    bool is_drafter_arch() const { return arch == LLM_ARCH_DFLASH; }
+    // Verifier and drafter each have an independent observer filter on the
+    // owning llama_context. The active scope is resolved per-graph so two
+    // contexts in the same process can collect into separate buckets without
+    // name prefixes on the observer tensors: DFlash drafter graphs read the
+    // DRAFTER scope, everything else reads whichever scope the user last set
+    // (default VERIFIER).
+    int imatrix_observer_scope() const {
+        return arch == LLM_ARCH_DFLASH
+                 ? (int) LLAMA_OBSERVER_SCOPE_DRAFTER
+                 : (int) cparams.imatrix_observer_scope;
+    }
     std::string imatrix_observer_name(const char * weight_name) const;
 
     ggml_tensor * build_imatrix_observer_cast_dense(

@@ -68,9 +68,18 @@ struct llama_cparams {
     ggml_backend_sched_eval_callback cb_eval;
     void * cb_eval_user_data;
     bool imatrix_observers;
-    llama_imatrix_observer_filter imatrix_observer_filter = nullptr;
-    void * imatrix_observer_filter_data = nullptr;
-    uint64_t imatrix_observer_epoch = 0;
+
+    // Per-scope observer state. The verifier and drafter each keep their own
+    // filter, user_data, and epoch so that two llama_context instances in the
+    // same process (one verifier, one drafter) can collect independent
+    // importance statistics. imatrix_observer_scope selects which slot
+    // llama_set_imatrix_observer_filter / llama_bump_imatrix_observer_epoch
+    // operate on (default VERIFIER); DFlash drafter graphs read the DRAFTER
+    // slot regardless of the user setting.
+    enum llama_observer_scope imatrix_observer_scope = LLAMA_OBSERVER_SCOPE_VERIFIER;
+    llama_imatrix_observer_filter imatrix_observer_filter[LLAMA_OBSERVER_SCOPE_DRAFTER + 1] = { nullptr, nullptr };
+    void * imatrix_observer_filter_data[LLAMA_OBSERVER_SCOPE_DRAFTER + 1] = { nullptr, nullptr };
+    uint64_t imatrix_observer_epoch[LLAMA_OBSERVER_SCOPE_DRAFTER + 1] = { 0, 0 };
 
     llama_context * ctx_other;
 };
