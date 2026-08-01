@@ -39,6 +39,37 @@ void metal_dump_dequant(
         int64_t cols,
         const char * name);
 
+// Tile640 variant: encodes the row-aware `kernel_TILE640_DEQUANT` Metal
+// kernel (one thread per element, no row overflow) into the backend's
+// active command encoder, writing the dequantized weight into a shared
+// device buffer. `op` is the GGML_OP_TILE640_MATMUL / _MATMUL_ID node;
+// its src[0..5] are the six Tile640 weight components (packed,
+// page_scales, lane_scales, outlier row offsets/cols/vals). `row_width`
+// is in_dim; `n_rows` is the number of weight rows to dequant (out_dim
+// for MATMUL, n_experts*out_dim for MATMUL_ID). `name` identifies the
+// tensor in the sidecar directory.
+//
+// `enc` is the backend's live compute encoder for `cmd_buf`; the dequant
+// is encoded into the same command buffer as the matmul (no mid-graph
+// waitUntilCompleted, which would deadlock the shared queue). A completed
+// handler is added to `cmd_buf` so the readback + sidecar write happen
+// after the GPU finishes the dequant. The handler runs asynchronously,
+// so the sidecar file may appear shortly after the matmul returns.
+//
+// This path is the runtime-faithful L1 producer for Tile640: it captures
+// the GPU dequant (including the sparse outlier addback the CPU
+// `dequantize_row_tessera_t640` trait omits), so the L1 fitness reflects
+// what the matmul actually consumes. No-op when the debug hook is off or
+// any of the six weight components is missing.
+void metal_dump_dequant_tile640(
+        ggml_metal_device_t dev,
+        ggml_metal_encoder_t enc,
+        ggml_metal_cmd_buf_t cmd_buf,
+        const struct ggml_tensor * op,
+        int64_t row_width,
+        int64_t n_rows,
+        const char * name);
+
 #ifdef __cplusplus
 }
 #endif

@@ -41,6 +41,7 @@ struct ggml_metal_op {
         this->dev             = dev;
         this->lib             = ggml_metal_device_get_library(dev);
         this->enc             = ggml_metal_encoder_init(cmd_buf, use_concurrency);
+        this->cmd_buf         = cmd_buf;
         this->mem_ranges      = ggml_mem_ranges_init(debug_graph);
         this->idx_start       = idx_start;
         this->idx_end         = idx_end;
@@ -92,6 +93,7 @@ struct ggml_metal_op {
     ggml_metal_device_t  dev;
     ggml_metal_library_t lib;
     ggml_metal_encoder_t enc;
+    ggml_metal_cmd_buf_t cmd_buf; // backing command buffer (for completed handlers)
     ggml_mem_ranges_t    mem_ranges;
 
     bool use_fusion;
@@ -1769,6 +1771,16 @@ int ggml_metal_op_tile640_matmul(ggml_metal_op_t ctx, int idx) {
     const int32_t out_dim = ggml_get_op_params_i32(op, 0);
     const int32_t n_tokens = (int32_t) op->src[6]->ne[1];
     const int32_t in_dim = (int32_t) op->src[6]->ne[0];
+
+    // Tessera Layer 1: dump the GPU dequantized weight to the sidecar
+    // before the matmul. Dispatches the row-aware kernel_TILE640_DEQUANT
+    // so the sidecar reflects the runtime's actual dequant (including
+    // the sparse outlier addback), not a CPU re-dequant. No-op when the
+    // dequant debug hook is not enabled (see metal-dump-dequant.h).
+    metal_dump_dequant_tile640(ctx->dev, ctx->enc, ctx->cmd_buf, op,
+                               (int64_t) in_dim,
+                               (int64_t) out_dim,
+                               op->src[0]->name);
     const int32_t pages_per_row = (in_dim + 639) / 640;
     const int32_t words_per_page =
         (int32_t) (op->src[0]->ne[0] / (out_dim * pages_per_row));
@@ -1824,6 +1836,15 @@ int ggml_metal_op_tile640_matmul_id(ggml_metal_op_t ctx, int idx) {
     const int32_t n_experts = ggml_get_op_params_i32(op, 0);
     const int32_t out_dim   = ggml_get_op_params_i32(op, 1);
     const int32_t in_dim    = (int32_t) op->src[6]->ne[0];
+
+    // Tessera Layer 1: dump the GPU dequantized weight bank (all
+    // n_experts*out_dim rows) to the sidecar before the matmul. Same
+    // row-aware kernel_TILE640_DEQUANT path as the dense matmul. No-op
+    // when the dequant debug hook is not enabled.
+    metal_dump_dequant_tile640(ctx->dev, ctx->enc, ctx->cmd_buf, op,
+                               (int64_t) in_dim,
+                               (int64_t) n_experts * (int64_t) out_dim,
+                               op->src[0]->name);
     const int32_t n_broadcast = (int32_t) op->src[6]->ne[1];
     const int32_t n_tokens  = (int32_t) op->src[6]->ne[2];
     const int32_t n_expert_used = (int32_t) op->src[7]->ne[0];
