@@ -1,0 +1,211 @@
+#!/usr/bin/env python3
+#
+# gen_awq_fitness_fixture.py
+#
+# Generates a deterministic fixture for the C++ AWQ fitness parity test
+# (tools/quantize/tessera/test_awq_fitness.cpp). Builds a small random
+# Layer + a fixed Candidate, runs Python's _ternary_reconstruct /
+# relative_output_error / _evaluate_uncached, and writes both the inputs
+# and the Python-computed outputs to fixtures/awq_fitness_fixture.json.
+#
+# The C++ test loads this JSON, runs the C++ port on the same inputs, and
+# asserts numerical parity. Regenerate by running this script once:
+#
+#   python3 tools/quantize/tessera/fixtures/gen_awq_fitness_fixture.py
+#
+# All RNG is seeded so the fixture is byte-stable.
+#
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import math
+import os
+import sys
+from pathlib import Path
+
+import numpy as np
+
+HERE = Path(__file__).resolve().parent
+REPO = HERE.parent.parent.parent.parent  # repo root
+AWQ_PY = REPO / "tools" / "tessera" / "awq-evolve.py"
+
+
+def load_awq_evolve():
+    spec = importlib.util.spec_from_file_location("awq_evolve", str(AWQ_PY))
+    m = importlib.util.module_from_spec(spec)
+    sys.modules["awq_evolve"] = m
+    spec.loader.exec_module(m)
+    return m
+
+
+def main() -> int:
+    awq = load_awq_evolve()
+    Candidate = awq.Candidate
+    Layer = awq.Layer
+
+    rng = np.random.default_rng(0xA115)
+    out_dim = 16
+    in_dim = 32
+    n_tokens = 8
+    n_tokens_h = 4
+
+    # Weights with a heavy-tailed shape: a few large outliers so the residual
+    # fold and the per-row clipping actually engage on a non-trivial slice.
+    weight = rng.standard_normal((out_dim, in_dim)).astype(np.float32)
+    # inject outliers in 3 channels
+    weight[:, 1] *= 6.0
+    weight[:, 7] *= 4.0
+    weight[0, 13] = 9.0
+
+    # Second / fourth moments and max_abs as f32 (the on-disk observer format).
+    x = rng.standard_normal((256, in_dim)).astype(np.float32)
+    second_moment = np.mean(x * x, axis=0).astype(np.float32)
+    fourth_moment = np.mean(x ** 4, axis=0).astype(np.float32)
+    max_abs = np.max(np.abs(x), axis=0).astype(np.float32)
+
+    train_activations = rng.standard_normal((n_tokens, in_dim)).astype(np.float32)
+    heldout_activations = rng.standard_normal((n_tokens_h, in_dim)).astype(np.float32)
+
+    # Fixed candidate that exercises the full path: non-trivial alpha, slightly
+    # aggressive clip, a non-zero outlier_fraction, non-zero moment_mix and
+    # tail_guard, and a ternary_threshold below the legacy 1.0 so the ternary
+    # mask is dense enough for the row_scale divide to be exercised.
+    candidate = Candidate(
+        alpha=0.5,
+        clip=0.85,
+        outlier_fraction=0.01,
+        moment_mix=0.4,
+        tail_guard=0.7,
+        ternary_threshold=0.9,
+    )
+
+    layer = Layer(
+        name="fixture_layer",
+        family="ffn",
+        weight=weight,
+        train_activations=train_activations,
+        heldout_activations=heldout_activations,
+        second_moment=second_moment,
+        fourth_moment=fourth_moment,
+        max_abs=max_abs,
+    )
+
+    rms, kurtosis_excess, tail_excess = awq._layer_features(layer)
+    importance = rms * (
+        1.0
+        + candidate.moment_mix * kurtosis_excess
+        + candidate.tail_guard * tail_excess
+    )
+    reconstructed = awq._ternary_reconstruct(weight, candidate, importance)
+
+    # relative_output_error against the train + heldout splits, with the
+    # precomputed reference outputs so the C++ side can do the same.
+    ref_train = (train_activations @ weight.T).astype(np.float32)
+    ref_heldout = (heldout_activations @ weight.T).astype(np.float32)
+    rel_train = float(awq.relative_output_error(
+        train_activations, weight, reconstructed, ref_train))
+    rel_heldout = float(awq.relative_output_error(
+        heldout_activations, weight, reconstructed, ref_heldout))
+
+    # _evaluate_uncached: composite across the single layer (matches the
+    # multi-layer aggregation the C++ test uses; one layer is the minimal
+    # shape that exercises every code path).
+    score = awq._evaluate_uncached(candidate, [layer])
+
+    # Also include a two-layer variant so the worst-layer quantile(0.9)
+    # aggregation has more than one element (quantile_linear of 2 elements
+    # exercises a fractional blend; of 1 element is degenerate).
+    layer_b = Layer(
+        name="fixture_layer_b",
+        family="attention",
+        weight=rng.standard_normal((12, in_dim)).astype(np.float32) * 0.5,
+        train_activations=rng.standard_normal((n_tokens, in_dim)).astype(np.float32),
+        heldout_activations=rng.standard_normal((n_tokens_h, in_dim)).astype(np.float32),
+        second_moment=second_moment,
+        fourth_moment=fourth_moment,
+        max_abs=max_abs,
+    )
+    score_b = awq._evaluate_uncached(candidate, [layer, layer_b])
+
+    def arr(a):
+        return np.asarray(a).astype(np.float32).flatten().tolist()
+
+    fixture = {
+        "version": 1,
+        "comment": "Generated by gen_awq_fitness_fixture.py; do not edit by hand.",
+        "tolerance": {
+            "reconstructed_rtol": 1e-5,
+            "relative_output_error_atol": 1e-6,
+            "composite_fitness_atol": 1e-5,
+        },
+        "candidate": {
+            "alpha": candidate.alpha,
+            "clip": candidate.clip,
+            "outlier_fraction": candidate.outlier_fraction,
+            "moment_mix": candidate.moment_mix,
+            "tail_guard": candidate.tail_guard,
+            "ternary_threshold": candidate.ternary_threshold,
+        },
+        "layer": {
+            "out_dim": int(out_dim),
+            "in_dim": int(in_dim),
+            "weight": arr(weight),
+            "second_moment": arr(second_moment),
+            "fourth_moment": arr(fourth_moment),
+            "max_abs": arr(max_abs),
+            "n_tokens": int(n_tokens),
+            "n_tokens_h": int(n_tokens_h),
+            "train_activations": arr(train_activations),
+            "heldout_activations": arr(heldout_activations),
+            "ref_train_output": arr(ref_train),
+            "ref_heldout_output": arr(ref_heldout),
+        },
+        "expected": {
+            "reconstructed": arr(reconstructed),
+            "relative_output_error_train": rel_train,
+            "relative_output_error_heldout": rel_heldout,
+            "importance": arr(importance),
+            "score_single": {
+                "train_error": score.train_error,
+                "heldout_error": score.heldout_error,
+                "tail_error": score.tail_error,
+                "size_cost": score.size_cost,
+                "fitness": score.fitness,
+                "worst_layer_error": score.worst_layer_error,
+            },
+        },
+        "layer_b": {
+            "out_dim": int(layer_b.weight.shape[0]),
+            "in_dim": int(in_dim),
+            "weight": arr(layer_b.weight),
+            "n_tokens": int(n_tokens),
+            "n_tokens_h": int(n_tokens_h),
+            "train_activations": arr(layer_b.train_activations),
+            "heldout_activations": arr(layer_b.heldout_activations),
+            "ref_train_output": arr(layer_b.train_activations @ layer_b.weight.T),
+            "ref_heldout_output": arr(layer_b.heldout_activations @ layer_b.weight.T),
+        },
+        "expected_two_layer": {
+            "train_error": score_b.train_error,
+            "heldout_error": score_b.heldout_error,
+            "tail_error": score_b.tail_error,
+            "size_cost": score_b.size_cost,
+            "fitness": score_b.fitness,
+            "worst_layer_error": score_b.worst_layer_error,
+        },
+    }
+
+    out_path = HERE / "awq_fitness_fixture.json"
+    with open(out_path, "w") as f:
+        json.dump(fixture, f, indent=2, sort_keys=True)
+    print(f"wrote {out_path} ({out_path.stat().st_size} bytes)")
+    print(f"  reconstructed shape: ({out_dim}, {in_dim})")
+    print(f"  single-layer fitness: {score.fitness:.8f}")
+    print(f"  two-layer   fitness: {score_b.fitness:.8f}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

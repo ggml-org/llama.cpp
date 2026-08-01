@@ -10,6 +10,7 @@
 #include "tessera-dispatch.h"
 #include "tessera-quant.h"
 #include "tessera-awq.h"
+#include "tessera-awq-fitness.h"
 #include "tessera-regime.h"
 #include "tessera-gguf-writer.h"
 #include "tessera-higgs.h"
@@ -204,6 +205,16 @@ struct ts_dispatch_eval_ctx {
 // ||W_hat - W||_F^2 / ||W||_F^2; with S5 kernel-direct fitness enabled it is
 // blended with ||W_hat - dequant_kernel||_F^2 / ||W||_F^2, where
 // dequant_kernel is the tensor's L1 sidecar (the kernel's real output).
+//
+// B2: when the layer carries per-channel second_moment telemetry (the imatrix
+// E[x^2]), the evaluator additionally computes the Python parity fitness
+// (ts_awq_evaluate_layer, a faithful port of awq-evolve.py:_evaluate_layer)
+// and uses its train_error as the composite driver. This makes the GA
+// optimize the same reconstruction-error objective Python's _evaluate_uncached
+// optimizes, instead of the offline Frobenius proxy. The S5 kernel-direct
+// path still runs (and still feeds the A/B harness) when use_kernel_direct is
+// set, but the composite reported back to the GA is the Python fitness so
+// the two stay aligned.
 static ts_awq_score ts_dispatch_awq_eval(const ts_awq_candidate * cand,
                                          const ts_awq_layer * layer,
                                          void * ctx) {
@@ -214,6 +225,18 @@ static ts_awq_score ts_dispatch_awq_eval(const ts_awq_candidate * cand,
     score.relative_frob = std::numeric_limits<float>::infinity();
     score.heldout_mse   = std::numeric_limits<float>::infinity();
     score.composite     = -std::numeric_limits<float>::infinity();
+
+    // B2 Python parity path: when second_moment is present, compute the
+    // awq-evolve.py fitness directly. This is the canonical "match Python"
+    // objective. We still run the S5 path below to record best_t2/best_pair
+    // for the A/B harness when use_kernel_direct is on.
+    ts_awq_score py_score;
+    bool have_py = false;
+    if (layer->second_moment != nullptr) {
+        if (ts_awq_evaluate_layer(*cand, *layer, &py_score) == 0) {
+            have_py = true;
+        }
+    }
 
     // route the layer to its expert and apply that expert's profile so the
     // GA scores candidates under the same knobs the final quantize uses
@@ -306,6 +329,23 @@ static ts_awq_score ts_dispatch_awq_eval(const ts_awq_candidate * cand,
     score.relative_frob = t2;       // t_l^2 used for fitness (blended when kernel-direct)
     score.heldout_mse   = qr.mse;   // no held-out split in standalone dispatch
     score.composite     = -t2;
+
+    // B2: when the Python parity fitness was computed, drive the GA from it.
+    // ts_awq_evaluate_layer leaves composite at 0, so derive the GA composite
+    // from train_error (lower-is-better -> negate). The Python fitness is the
+    // same reconstruction-error objective awq-evolve.py optimizes; using it
+    // here keeps the dispatch GA aligned with the reference implementation.
+    if (have_py) {
+        score.mse         = py_score.mse;
+        score.heldout_mse = py_score.heldout_mse;
+        // relative_frob carries the kernel-direct t_l^2 above when S5 is on;
+        // otherwise use the Python tail_error so the reported score still
+        // reflects a meaningful reconstruction metric.
+        if (!ec->l1.use_kernel_direct) {
+            score.relative_frob = py_score.relative_frob;
+        }
+        score.composite   = -py_score.mse;
+    }
     return score;
 }
 
@@ -703,9 +743,27 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             layer.calib_X     = nullptr;
             layer.ref_output  = nullptr;
             layer.imatrix     = act;
+            // B2 fitness: when the imatrix provides per-channel E[x^2] for
+            // this tensor, expose it as second_moment so the GA evaluator can
+            // run the Python parity fitness (ts_awq_evaluate_layer). The
+            // fourth_moment / max_abs fields stay null and the evaluator
+            // falls back to second^2 / sqrt(second), matching Python's
+            // Layer.from_npz fallback when in_sum4 / in_maxabs are absent.
+            // train/heldout activations are not yet wired here (no calib
+            // split), so the evaluator uses the diagonal second-moment loss
+            // for train_error and treats heldout == train, exactly as Python
+            // does when train_activations is None.
+            layer.second_moment       = (imdata && imdim == in_dim) ? imdata : nullptr;
+            layer.fourth_moment       = nullptr;
+            layer.max_abs             = nullptr;
+            layer.train_activations   = nullptr;
+            layer.heldout_activations = nullptr;
+            layer.ref_train_output    = nullptr;
+            layer.ref_heldout_output  = nullptr;
             layer.out_dim     = out_dim;
             layer.in_dim      = in_dim;
             layer.n_tokens    = 0;
+            layer.n_tokens_h  = 0;
             layer.kurtosis    = desc.kurtosis;
             layer.eff_rank    = desc.eff_rank;
             ga_layers.push_back(layer);

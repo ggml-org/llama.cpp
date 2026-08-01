@@ -67,9 +67,17 @@ int main() {
     layer.calib_X = nullptr;
     layer.ref_output = nullptr;
     layer.imatrix = nullptr;
+    layer.second_moment      = nullptr;
+    layer.fourth_moment      = nullptr;
+    layer.max_abs            = nullptr;
+    layer.train_activations  = nullptr;
+    layer.heldout_activations = nullptr;
+    layer.ref_train_output   = nullptr;
+    layer.ref_heldout_output = nullptr;
     layer.out_dim = 4;
     layer.in_dim = 4;
     layer.n_tokens = 0;
+    layer.n_tokens_h = 0;
     layer.kurtosis = 3.0f;
     layer.eff_rank = 0.5f;
 
