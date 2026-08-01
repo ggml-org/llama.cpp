@@ -9,6 +9,7 @@ export enum KeyboardKey {
 	ARROW_LEFT = 'ArrowLeft',
 	ARROW_RIGHT = 'ArrowRight',
 	TAB = 'Tab',
+	B_LOWER = 'b',
 	D_LOWER = 'd',
 	D_UPPER = 'D',
 	E_UPPER = 'E',

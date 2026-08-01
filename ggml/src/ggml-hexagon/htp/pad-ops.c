@@ -511,6 +511,8 @@ int op_pad(struct htp_ops_context * octx) {
         octx->dst_spad.size  = n_threads * octx->dst_spad.size_per_thread;
         octx->src0_spad.data = octx->ctx->vtcm_base;
         octx->dst_spad.data  = octx->src0_spad.data + octx->src0_spad.size;
+        octx->src0_spad.src  = NULL;
+        octx->dst_spad.src   = NULL;
     }
 
     struct htp_pad_context pctx = {

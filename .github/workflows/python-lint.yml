@@ -21,7 +21,7 @@ concurrency:
 
 jobs:
   flake8-lint:
-    runs-on: ubuntu-slim
+    runs-on: [self-hosted, fast]
     name: Lint
     steps:
       - name: Check out source repository

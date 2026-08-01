@@ -96,3 +96,34 @@ runs:
           echo "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           echo "CUDA_PATH=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           echo "CUDA_PATH_V13_1=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+    - name: Install Cuda Toolkit 13.3
+      if: ${{ inputs.cuda_version == '13.3' }}
+      shell: pwsh
+      run: |
+          mkdir -p "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3"
+          choco install unzip -y
+          curl -O "https://developer.download.nvidia.com/compute/cuda/redist/cuda_crt/windows-x86_64/cuda_crt-windows-x86_64-13.3.33-archive.zip"
+          curl -O "https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/windows-x86_64/cuda_cudart-windows-x86_64-13.3.29-archive.zip"
+          curl -O "https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/windows-x86_64/cuda_nvcc-windows-x86_64-13.3.33-archive.zip"
+          curl -O "https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvrtc/windows-x86_64/cuda_nvrtc-windows-x86_64-13.3.33-archive.zip"
+          curl -O "https://developer.download.nvidia.com/compute/cuda/redist/libcublas/windows-x86_64/libcublas-windows-x86_64-13.5.1.27-archive.zip"
+          curl -O "https://developer.download.nvidia.com/compute/cuda/redist/libnvvm/windows-x86_64/libnvvm-windows-x86_64-13.3.33-archive.zip"
+          curl -O "https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvtx/windows-x86_64/cuda_nvtx-windows-x86_64-13.3.29-archive.zip"
+          curl -O "https://developer.download.nvidia.com/compute/cuda/redist/cuda_profiler_api/windows-x86_64/cuda_profiler_api-windows-x86_64-13.3.27-archive.zip"
+          curl -O "https://developer.download.nvidia.com/compute/cuda/redist/visual_studio_integration/windows-x86_64/visual_studio_integration-windows-x86_64-13.3.27-archive.zip"
+          curl -O "https://developer.download.nvidia.com/compute/cuda/redist/cccl/windows-x86_64/cccl-windows-x86_64-13.3.3.3.1-archive.zip"
+          unzip '*.zip' -d "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3"
+          xcopy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3\cuda_crt-windows-x86_64-13.3.33-archive\*" "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3" /E /I /H /Y
+          xcopy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3\cuda_cudart-windows-x86_64-13.3.29-archive\*" "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3" /E /I /H /Y
+          xcopy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3\cuda_nvcc-windows-x86_64-13.3.33-archive\*" "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3" /E /I /H /Y
+          xcopy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3\cuda_nvrtc-windows-x86_64-13.3.33-archive\*" "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3" /E /I /H /Y
+          xcopy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3\libcublas-windows-x86_64-13.5.1.27-archive\*" "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3" /E /I /H /Y
+          xcopy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3\libnvvm-windows-x86_64-13.3.33-archive\*" "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3" /E /I /H /Y
+          xcopy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3\cuda_nvtx-windows-x86_64-13.3.29-archive\*" "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3" /E /I /H /Y
+          xcopy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3\cuda_profiler_api-windows-x86_64-13.3.27-archive\*" "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3" /E /I /H /Y
+          xcopy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3\visual_studio_integration-windows-x86_64-13.3.27-archive\*" "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3" /E /I /H /Y
+          xcopy "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3\cccl-windows-x86_64-13.3.3.3.1-archive\*" "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3" /E /I /H /Y
+          echo "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "CUDA_PATH=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          echo "CUDA_PATH_V13_3=C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8

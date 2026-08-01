@@ -68,7 +68,6 @@ export { default as SyntaxHighlightedCode } from './SyntaxHighlightedCode.svelte
  * ```svelte
  * <CollapsibleContentBlock
  *   bind:open
- *   icon={BrainIcon}
  *   title="Thinking..."
  *   isStreaming
  * >
@@ -77,3 +76,38 @@ export { default as SyntaxHighlightedCode } from './SyntaxHighlightedCode.svelte
  * ```
  */
 export { default as CollapsibleContentBlock } from './CollapsibleContentBlock.svelte';
+
+/**
+ * **CollapsibleTerminalBlock** - Expandable content card with a terminal-style frame
+ *
+ * Same shape as CollapsibleContentBlock, but with a `code-background`
+ * fill, subtle border, and tightened padding suited for shell command
+ * output and similar dense / monospace content.
+ *
+ * @example
+ * ```svelte
+ * <CollapsibleTerminalBlock bind:open title="Run command">
+ *   <pre>{output}</pre>
+ * </CollapsibleTerminalBlock>
+ * ```
+ */
+export { default as CollapsibleTerminalBlock } from './CollapsibleTerminalBlock.svelte';
+
+/**
+ * **MermaidPreview** - Interactive Mermaid diagram viewer
+ *
+ * Renders Mermaid-generated SVG diagrams with zoom, pan, and fit-to-view controls.
+ *
+ * **Features:**
+ * - Mouse wheel zoom in/out
+ * - Click-drag panning with pointer capture
+ * - Fit to view and reset view controls
+ * - Download as SVG
+ * - Responsive scaling with viewBox detection
+ *
+ * @example
+ * ```svelte
+ * <MermaidPreview svgHtml={diagramSvg} />
+ * ```
+ */
+export { default as MermaidPreview } from './MermaidPreview.svelte';

@@ -97,6 +97,7 @@ export interface ChatStreamCallbacks {
 	onToolCallsStreaming?: (toolCalls: ApiChatCompletionToolCall[]) => void;
 	onAttachments?: (messageId: string, extras: DatabaseMessageExtra[]) => void;
 	onModel?: (model: string) => void;
+	onCompletionId?: (id: string) => void;
 	onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void;
 	onAssistantTurnComplete?: (
 		content: string,
@@ -109,6 +110,11 @@ export interface ChatStreamCallbacks {
 		content: string,
 		extras?: DatabaseMessageExtra[]
 	) => Promise<DatabaseMessage>;
+	updateToolResultMessage?: (
+		messageId: string,
+		content: string,
+		extras?: DatabaseMessageExtra[]
+	) => Promise<void>;
 	createAssistantMessage?: () => Promise<DatabaseMessage>;
 	onFlowComplete?: (timings?: ChatMessageTimings) => void;
 	onError?: (error: Error) => void;

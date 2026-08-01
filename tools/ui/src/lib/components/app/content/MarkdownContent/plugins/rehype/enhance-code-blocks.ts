@@ -13,102 +13,19 @@
 import type { Plugin } from 'unified';
 import type { Root, Element, ElementContent } from 'hast';
 import { visit } from 'unist-util-visit';
+import { CODE_BLOCK_SCROLL_CONTAINER_CLASS, CODE_BLOCK_WRAPPER_CLASS } from '$lib/constants';
 import {
-	CODE_BLOCK_SCROLL_CONTAINER_CLASS,
-	CODE_BLOCK_WRAPPER_CLASS,
-	CODE_BLOCK_HEADER_CLASS,
-	CODE_BLOCK_ACTIONS_CLASS,
-	CODE_LANGUAGE_CLASS,
-	COPY_CODE_BTN_CLASS,
-	PREVIEW_CODE_BTN_CLASS,
-	RELATIVE_CLASS
-} from '$lib/constants';
+	createBlockHeader,
+	createCopyButton,
+	createPreviewButton,
+	createWrapper,
+	generateBlockId
+} from './code-block-utils';
 
 declare global {
 	interface Window {
 		idxCodeBlock?: number;
 	}
-}
-
-const COPY_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-copy-icon lucide-copy"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>`;
-
-const PREVIEW_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-eye lucide-eye-icon"><path d="M2.062 12.345a1 1 0 0 1 0-.69C3.5 7.73 7.36 5 12 5s8.5 2.73 9.938 6.655a1 1 0 0 1 0 .69C20.5 16.27 16.64 19 12 19s-8.5-2.73-9.938-6.655"/><circle cx="12" cy="12" r="3"/></svg>`;
-
-function createIconElement(svg: string): Element {
-	return {
-		type: 'element',
-		tagName: 'span',
-		properties: {},
-		children: [{ type: 'raw', value: svg } as unknown as ElementContent]
-	};
-}
-
-function createButton(className: string, title: string, iconSvg: string, codeId: string): Element {
-	return {
-		type: 'element',
-		tagName: 'button',
-		properties: {
-			className: [className],
-			'data-code-id': codeId,
-			title,
-			type: 'button'
-		},
-		children: [createIconElement(iconSvg)]
-	};
-}
-
-function createCopyButton(codeId: string): Element {
-	return createButton(COPY_CODE_BTN_CLASS, 'Copy code', COPY_ICON_SVG, codeId);
-}
-
-function createPreviewButton(codeId: string): Element {
-	return createButton(PREVIEW_CODE_BTN_CLASS, 'Preview code', PREVIEW_ICON_SVG, codeId);
-}
-
-function createHeader(language: string, codeId: string): Element {
-	const actions: Element[] = [createCopyButton(codeId)];
-
-	if (language.toLowerCase() === 'html') {
-		actions.push(createPreviewButton(codeId));
-	}
-
-	return {
-		type: 'element',
-		tagName: 'div',
-		properties: { className: [CODE_BLOCK_HEADER_CLASS] },
-		children: [
-			{
-				type: 'element',
-				tagName: 'span',
-				properties: { className: [CODE_LANGUAGE_CLASS] },
-				children: [{ type: 'text', value: language }]
-			},
-			{
-				type: 'element',
-				tagName: 'div',
-				properties: { className: [CODE_BLOCK_ACTIONS_CLASS] },
-				children: actions
-			}
-		]
-	};
-}
-
-function createScrollContainer(preElement: Element): Element {
-	return {
-		type: 'element',
-		tagName: 'div',
-		properties: { className: [CODE_BLOCK_SCROLL_CONTAINER_CLASS] },
-		children: [preElement]
-	};
-}
-
-function createWrapper(header: Element, preElement: Element): Element {
-	return {
-		type: 'element',
-		tagName: 'div',
-		properties: { className: [CODE_BLOCK_WRAPPER_CLASS, RELATIVE_CLASS] },
-		children: [header, createScrollContainer(preElement)]
-	};
 }
 
 function extractLanguage(codeElement: Element): string {
@@ -122,17 +39,6 @@ function extractLanguage(codeElement: Element): string {
 	}
 
 	return 'text';
-}
-
-/**
- * Generates a unique code block ID using a global counter.
- */
-function generateCodeId(): string {
-	if (typeof window !== 'undefined') {
-		return `code-${(window.idxCodeBlock = (window.idxCodeBlock ?? 0) + 1)}`;
-	}
-	// Fallback for SSR - use timestamp + random
-	return `code-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
 /**
@@ -154,15 +60,26 @@ export const rehypeEnhanceCodeBlocks: Plugin<[], Root> = () => {
 			if (!codeElement) return;
 
 			const language = extractLanguage(codeElement);
-			const codeId = generateCodeId();
+			const codeId = generateBlockId('code', 'idxCodeBlock');
 
 			codeElement.properties = {
 				...codeElement.properties,
 				'data-code-id': codeId
 			};
 
-			const header = createHeader(language, codeId);
-			const wrapper = createWrapper(header, node);
+			const actions: Element[] = [createCopyButton(codeId, 'data-code-id', 'Copy code')];
+
+			if (language.toLowerCase() === 'html') {
+				actions.push(createPreviewButton(codeId, 'data-code-id', 'Preview code'));
+			}
+
+			const header = createBlockHeader(language, codeId, 'data-code-id', actions);
+			const wrapper = createWrapper(
+				header,
+				node,
+				CODE_BLOCK_WRAPPER_CLASS,
+				CODE_BLOCK_SCROLL_CONTAINER_CLASS
+			);
 
 			// Replace pre with wrapper in parent
 			(parent.children as ElementContent[])[index] = wrapper;

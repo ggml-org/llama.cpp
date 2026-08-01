@@ -1,7 +1,6 @@
 #include "ggml.h"
 #include "llama.h"
 #include "llama-cpp.h"
-#include "get-model.h"
 #include "common.h"
 
 #ifdef NDEBUG
@@ -106,8 +105,6 @@ struct test_context {
         if (!ctx) {
             throw std::runtime_error("failed to create context");
         }
-
-        llama_set_warmup(ctx.get(), false);
 
         vocab = llama_model_get_vocab(model);
         n_vocab = llama_vocab_n_tokens(vocab);
@@ -1138,7 +1135,7 @@ int main(int argc, char ** argv) {
     test_args args = parse_cli(argc, argv);
 
     if (args.model.empty()) {
-        args.model = get_model_or_exit(1, argv);
+        args.model = common_get_model_or_exit(1, argv);
     }
 
     {

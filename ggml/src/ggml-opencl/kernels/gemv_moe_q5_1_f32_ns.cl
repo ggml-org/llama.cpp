@@ -39,6 +39,10 @@ __kernel void kernel_gemv_moe_q5_1_f32_ns(
     uint sgid = get_local_id(1);
     uint slid = get_sub_group_local_id();
 
+    if (i01 >= ne01) {
+        return;
+    }
+
     uint i11 = i20 % ne11;
 
     uint expert_id = src2[i20];

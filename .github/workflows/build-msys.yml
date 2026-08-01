@@ -15,9 +15,9 @@ concurrency:
 env:
   GGML_NLOOP: 3
   GGML_N_THREADS: 1
-  LLAMA_LOG_COLORS: 1
-  LLAMA_LOG_PREFIX: 1
-  LLAMA_LOG_TIMESTAMPS: 1
+  LLAMA_ARG_LOG_COLORS: 1
+  LLAMA_ARG_LOG_PREFIX: 1
+  LLAMA_ARG_LOG_TIMESTAMPS: 1
 
 jobs:
   windows-msys2:
@@ -27,8 +27,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { sys: UCRT64,  env: ucrt-x86_64,  build: Release }
-          - { sys: CLANG64, env: clang-x86_64, build: Release }
+          - { sys: UCRT64,  env: ucrt-x86_64,  compiler: gcc,   build: Release }
+          - { sys: CLANG64, env: clang-x86_64, compiler: clang, build: Release }
 
     steps:
       - name: Clone
@@ -37,7 +37,7 @@ jobs:
       #- name: ccache
       #  uses: ggml-org/ccache-action@v1.2.16
       #  with:
-      #    key: windows-msys2
+      #    key: msys-windows-2025-x64
       #    variant: ccache
       #    evict-old-files: 1d
       #    save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
@@ -48,9 +48,7 @@ jobs:
           update: true
           msystem: ${{matrix.sys}}
           install: >-
-            base-devel
-            git
-            mingw-w64-${{matrix.env}}-toolchain
+            mingw-w64-${{matrix.env}}-${{matrix.compiler}}
             mingw-w64-${{matrix.env}}-cmake
             mingw-w64-${{matrix.env}}-openblas
 

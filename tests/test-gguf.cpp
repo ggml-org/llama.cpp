@@ -26,6 +26,7 @@ enum handcrafted_file_type {
     HANDCRAFTED_HEADER_EMPTY               = 800,
 
     HANDCRAFTED_KV_BAD_KEY_SIZE            =  10 + offset_has_kv,
+    HANDCRAFTED_KV_EMPTY_KEY               =  15 + offset_has_kv,
     HANDCRAFTED_KV_BAD_TYPE                =  20 + offset_has_kv,
     // HANDCRAFTED_KV_BAD_VALUE_SIZE          =  30 + offset_has_kv, // removed because it can result in allocations > 1 TB (default sanitizer limit)
     HANDCRAFTED_KV_DUPLICATE_KEY           =  40 + offset_has_kv,
@@ -64,6 +65,7 @@ static std::string handcrafted_file_type_name(const enum handcrafted_file_type h
         case HANDCRAFTED_HEADER_EMPTY:               return "HEADER_EMPTY";
 
         case HANDCRAFTED_KV_BAD_KEY_SIZE:            return "KV_BAD_KEY_SIZE";
+        case HANDCRAFTED_KV_EMPTY_KEY:               return "KV_EMPTY_KEY";
         case HANDCRAFTED_KV_BAD_TYPE:                return "KV_BAD_TYPE";
         case HANDCRAFTED_KV_DUPLICATE_KEY:           return "KV_DUPLICATE_KEY";
         case HANDCRAFTED_KV_BAD_ALIGN:               return "KV_BAD_ALIGN";
@@ -162,6 +164,42 @@ static void helper_write(FILE * file, const void * data, const size_t nbytes) {
     GGML_ASSERT(fwrite(data, 1, nbytes, file) == nbytes);
 }
 
+static std::vector<uint8_t> read_file_to_buffer(FILE * file) {
+    GGML_ASSERT(file != nullptr);
+    GGML_ASSERT(fseek(file, 0, SEEK_END) == 0);
+
+    const long size = ftell(file);
+    GGML_ASSERT(size >= 0);
+
+    rewind(file);
+
+    std::vector<uint8_t> data(static_cast<size_t>(size));
+    GGML_ASSERT(fread(data.data(), 1, data.size(), file) == data.size());
+
+    rewind(file);
+    return data;
+}
+
+struct callback_reader_data {
+    const uint8_t * data;
+    size_t size;
+};
+
+static size_t read_buffer_callback(void * userdata, void * output, uint64_t offset, size_t len) {
+    GGML_ASSERT(len > 0);
+
+    const callback_reader_data & reader = *static_cast<callback_reader_data *>(userdata);
+
+    if (offset > reader.size || len > reader.size - offset) {
+        return 0;
+    }
+
+    const size_t data_offset = static_cast<size_t>(offset);
+    const size_t nread = std::min(len, reader.size - data_offset);
+    memcpy(static_cast<uint8_t *>(output), reader.data + data_offset, nread);
+    return nread;
+}
+
 static FILE * get_handcrafted_file(const unsigned int seed, const enum handcrafted_file_type hft, const int extra_bytes = 0) {
     FILE * file = tmpfile();
 
@@ -248,7 +286,9 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
         const enum gguf_type type     = gguf_type(hft == HANDCRAFTED_KV_BAD_TYPE ? GGUF_TYPE_COUNT : kv_types[i].first);
         const enum gguf_type type_arr = gguf_type(hft == HANDCRAFTED_KV_BAD_TYPE ? GGUF_TYPE_COUNT : kv_types[i].second);
 
-        const std::string key = "my_key_" + std::to_string((hft == HANDCRAFTED_KV_DUPLICATE_KEY ? i/2 : i));
+        const std::string key = hft == HANDCRAFTED_KV_EMPTY_KEY
+            ? ""
+            : "my_key_" + std::to_string((hft == HANDCRAFTED_KV_DUPLICATE_KEY ? i/2 : i));
 
         if (hft == HANDCRAFTED_KV_BAD_KEY_SIZE) {
             const uint64_t n = -1;
@@ -622,6 +662,13 @@ static bool handcrafted_check_tensors(const gguf_context * gguf_ctx, const unsig
             if (gguf_get_tensor_type(gguf_ctx, id) != type) {
                 ok = false;
             }
+
+            const int64_t * ne = gguf_get_tensor_ne(gguf_ctx, id);
+            for (int j = 0; j < GGML_MAX_DIMS; ++j) {
+                if (ne[j] != shape[j]) {
+                    ok = false;
+                }
+            }
         } else {
             ok = false;
             continue;
@@ -696,6 +743,7 @@ static std::pair<int, int> test_handcrafted_file(const unsigned int seed) {
         HANDCRAFTED_HEADER_EMPTY,
 
         HANDCRAFTED_KV_BAD_KEY_SIZE,
+        HANDCRAFTED_KV_EMPTY_KEY,
         HANDCRAFTED_KV_BAD_TYPE,
         HANDCRAFTED_KV_DUPLICATE_KEY,
         HANDCRAFTED_KV_BAD_ALIGN,
@@ -1095,10 +1143,29 @@ static bool same_tensor_data(const struct ggml_context * orig, const struct ggml
     return ok;
 }
 
-static std::pair<int, int> test_roundtrip(ggml_backend_dev_t dev, const unsigned int seed, const bool only_meta) {
+enum roundtrip_read_mode {
+    ROUNDTRIP_READ_MODE_FILE,
+    ROUNDTRIP_READ_MODE_BUFFER,
+    ROUNDTRIP_READ_MODE_CALLBACK,
+};
+
+static const char * roundtrip_read_mode_name(const roundtrip_read_mode mode) {
+    switch (mode) {
+        case ROUNDTRIP_READ_MODE_FILE:     return "file";
+        case ROUNDTRIP_READ_MODE_BUFFER:   return "buffer";
+        case ROUNDTRIP_READ_MODE_CALLBACK: return "callback";
+    }
+
+    GGML_ABORT("fatal error");
+}
+
+static std::pair<int, int> test_roundtrip(
+        ggml_backend_dev_t dev, const unsigned int seed, const bool only_meta,
+        const roundtrip_read_mode read_mode) {
     ggml_backend_t backend = ggml_backend_dev_init(dev, nullptr);
-    printf("%s: device=%s, backend=%s, only_meta=%s\n",
-        __func__, ggml_backend_dev_description(dev), ggml_backend_name(backend), only_meta ? "yes" : "no");
+    printf("%s: device=%s, backend=%s, only_meta=%s, read_mode=%s\n",
+        __func__, ggml_backend_dev_description(dev), ggml_backend_name(backend),
+        only_meta ? "yes" : "no", roundtrip_read_mode_name(read_mode));
 
     int npass = 0;
     int ntest = 0;
@@ -1133,7 +1200,22 @@ static std::pair<int, int> test_roundtrip(ggml_backend_dev_t dev, const unsigned
         /*no_alloc =*/ false,
         /*ctx      =*/ only_meta ? nullptr : &ctx_1,
     };
-    struct gguf_context * gguf_ctx_1 = gguf_init_from_file_ptr(file, gguf_params);
+    struct gguf_context * gguf_ctx_1 = nullptr;
+    const std::vector<uint8_t> data = read_mode == ROUNDTRIP_READ_MODE_FILE
+        ? std::vector<uint8_t>()
+        : read_file_to_buffer(file);
+
+    if (read_mode == ROUNDTRIP_READ_MODE_BUFFER) {
+        gguf_ctx_1 = gguf_init_from_buffer(data.data(), data.size(), gguf_params);
+    } else if (read_mode == ROUNDTRIP_READ_MODE_CALLBACK) {
+        callback_reader_data reader = {
+            /*.data = */ data.data(),
+            /*.size = */ data.size(),
+        };
+        gguf_ctx_1 = gguf_init_from_callback(read_buffer_callback, &reader, 4096, 4ull << 30 /* 4GB */, gguf_params);
+    } else {
+        gguf_ctx_1 = gguf_init_from_file_ptr(file, gguf_params);
+    }
 
     printf("%s: same_version: ", __func__);
     if (gguf_get_version(gguf_ctx_0) == gguf_get_version(gguf_ctx_1)) {
@@ -1343,7 +1425,17 @@ int main(int argc, char ** argv) {
         ggml_backend_dev_t dev = ggml_backend_dev_get(i);
 
         for (bool only_meta : {true, false}) {
-            std::pair<int, int> result = test_roundtrip(dev, seed, only_meta);
+            std::pair<int, int> result = test_roundtrip(dev, seed, only_meta, ROUNDTRIP_READ_MODE_FILE);
+            npass += result.first;
+            ntest += result.second;
+        }
+        {
+            std::pair<int, int> result = test_roundtrip(dev, seed, /*only_meta=*/false, ROUNDTRIP_READ_MODE_BUFFER);
+            npass += result.first;
+            ntest += result.second;
+        }
+        {
+            std::pair<int, int> result = test_roundtrip(dev, seed, /*only_meta=*/false, ROUNDTRIP_READ_MODE_CALLBACK);
             npass += result.first;
             ntest += result.second;
         }

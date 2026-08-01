@@ -3,14 +3,15 @@ from __future__ import annotations
 import math
 
 from pathlib import Path
-from typing import Iterable, TYPE_CHECKING
+from typing import Callable, Iterable, TYPE_CHECKING
 
 import torch
 
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import ModelBase, TextModel, gguf
+from .base import MmprojModel, ModelBase, TextModel, gguf
+from .qwenvl import Qwen2VLVisionModel
 
 
 @ModelBase.register("ExaoneForCausalLM")
@@ -23,7 +24,7 @@ class ExaoneModel(TextModel):
 
         assert (hparams["activation_function"] == "silu")
 
-        rotary_factor = self.find_hparam(["partial_rotary_factor", "rope_pct"], optional=True)
+        rotary_factor = self.rope_parameters.get("partial_rotary_factor")
         rotary_factor = rotary_factor if rotary_factor is not None else 1.0
         self.gguf_writer.add_rope_dimension_count(int(rotary_factor * (hparams["hidden_size"] // hparams["num_attention_heads"])))
 
@@ -38,7 +39,7 @@ class ExaoneModel(TextModel):
                 factor = rope_params.get("factor", 8.0)
                 low_freq_factor = rope_params.get("low_freq_factor", 1.0)
                 high_freq_factor = rope_params.get("high_freq_factor", 4.0)
-                old_context_len = self.hparams.get("original_max_position_embeddings", 8192)
+                old_context_len = rope_params.get("original_max_position_embeddings", 8192)
 
                 low_freq_wavelen = old_context_len / low_freq_factor
                 high_freq_wavelen = old_context_len / high_freq_factor
@@ -103,7 +104,7 @@ class Exaone4Model(TextModel):
                 factor = rope_params.get("factor", 16.0)
                 low_freq_factor = rope_params.get("low_freq_factor", 1.0)
                 high_freq_factor = rope_params.get("high_freq_factor", 4.0)
-                old_context_len = self.hparams.get("original_max_position_embeddings", 8192)
+                old_context_len = rope_params.get("original_max_position_embeddings", 8192)
 
                 low_freq_wavelen = old_context_len / low_freq_factor
                 high_freq_wavelen = old_context_len / high_freq_factor
@@ -208,3 +209,97 @@ class ExaoneMoEModel(Exaone4Model):
             experts = [k for d in self._experts for k in d.keys()]
             if len(experts) > 0:
                 raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@ModelBase.register("Exaone4_5_ForConditionalGeneration")
+class Exaone4_5_TextModel(Exaone4Model):
+    """Text tower of EXAONE 4.5; Tensors match EXAONE4"""
+
+    model_arch = gguf.MODEL_ARCH.EXAONE4
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        n_nextn = int(self.hparams.get("num_nextn_predict_layers", 0) or 0)
+        if n_nextn > 0:
+            self.block_count = self.hparams["num_hidden_layers"] + n_nextn
+            self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        n_nextn = int(self.hparams.get("num_nextn_predict_layers", 0) or 0)
+        if n_nextn > 0:
+            self.gguf_writer.add_nextn_predict_layers(n_nextn)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if name.startswith("mtp."):
+            n_nextn = int(self.hparams.get("num_nextn_predict_layers", 0) or 0)
+            if n_nextn <= 0:
+                return
+            nh = self.hparams["num_hidden_layers"]
+            if ".layers." in name:
+                share = self.hparams.get("mtp_share_layers", False)
+                mtp_bid = bid if bid is not None else 0
+                if share:
+                    for k in range(n_nextn):
+                        nn = name.replace(f"mtp.layers.{mtp_bid}", f"model.layers.{nh + k}")
+                        yield from super().modify_tensors(data_torch, nn, nh + k)
+                    return
+                name = name.replace(f"mtp.layers.{mtp_bid}", f"model.layers.{mtp_bid + nh}")
+            else:
+                remapper = {
+                    "mtp.fc": gguf.MODEL_TENSOR.NEXTN_EH_PROJ,
+                    "mtp.pre_fc_norm_embedding": gguf.MODEL_TENSOR.NEXTN_ENORM,
+                    "mtp.pre_fc_norm_hidden": gguf.MODEL_TENSOR.NEXTN_HNORM,
+                    "mtp.norm": gguf.MODEL_TENSOR.NEXTN_SHARED_HEAD_NORM,
+                }
+                _n = Path(name)
+                key = _n.stem
+                if key not in remapper:
+                    return
+                for bid_mtp in range(nh, self.block_count):
+                    mapped_name = self.format_tensor_name(remapper[key], bid_mtp, suffix=_n.suffix)
+                    yield from ModelBase.modify_tensors(self, data_torch, mapped_name, bid_mtp)
+                return
+
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("Exaone4_5_ForConditionalGeneration")
+class Exaone4_5VisionModel(Qwen2VLVisionModel):
+    """Vision tower for EXAONE 4.5; Qwen2-VL-style ViT (GQA) + patch merger"""
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+        name = name.replace("model.visual.", "visual.", 1)
+        return super().filter_tensors((name, gen))
+
+    def set_gguf_parameters(self):
+        MmprojModel.set_gguf_parameters(self)
+        assert self.hparams_vision is not None
+        hparams = self.hparams_vision
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.EXAONE4_5)
+        self.gguf_writer.add_vision_use_silu(True)
+        self.gguf_writer.add_vision_min_pixels(self.preprocessor_config["min_pixels"])
+        self.gguf_writer.add_vision_max_pixels(self.preprocessor_config["max_pixels"])
+        num_kv_head = self.find_vparam(["num_key_value_heads"], optional=True)
+        if num_kv_head is not None:
+            self.gguf_writer.add_vision_head_count_kv(num_kv_head)
+        eps = hparams.get("rms_norm_eps", self.global_config.get("rms_norm_eps", 1e-6))
+        self.gguf_writer.add_vision_attention_layernorm_eps(eps)
+        if (window_size := hparams.get("window_size")) is not None:
+            self.gguf_writer.add_vision_window_size(window_size)
+        fullatt_block_indexes = hparams.get("fullatt_block_indexes")
+        if fullatt_block_indexes:
+            n_wa_pattern = fullatt_block_indexes[0] + 1
+            for i in range(1, len(fullatt_block_indexes)):
+                if fullatt_block_indexes[i] - fullatt_block_indexes[i - 1] != n_wa_pattern:
+                    raise ValueError(f"Invalid EXAONE4.5 fullatt_block_indexes: {fullatt_block_indexes}")
+            self.gguf_writer.add_vision_n_wa_pattern(n_wa_pattern)
+
+    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        if ".qkv." in name:
+            yield from ModelBase.modify_tensors(self, data_torch, name, bid)
+            return
+
+        yield from Qwen2VLVisionModel.modify_tensors(self, data_torch, name, bid)

@@ -87,6 +87,8 @@ static std::string normalize_quotes_to_json(const std::string & input) {
     bool in_single_quoted = false;
     bool in_double_quoted = false;
 
+    auto is_word_char = [](char ch) { return std::isalnum(static_cast<unsigned char>(ch)) || ch == '_'; };
+
     for (size_t i = 0; i < input.size(); ++i) {
         char c = input[i];
 
@@ -150,6 +152,29 @@ static std::string normalize_quotes_to_json(const std::string & input) {
                 // Opening single quote -> convert to double quote
                 in_single_quoted = true;
                 result += '"';
+            }
+        } else if (!in_single_quoted && !in_double_quoted && (c == 'T' || c == 'F' || c == 'N') &&
+                   (i == 0 || !is_word_char(input[i - 1]))) {
+            // Python literals -> JSON; prefix match keeps streamed partials monotonic.
+            static constexpr std::pair<std::string_view, std::string_view> literals[] = {
+                { "True", "true" }, { "False", "false" }, { "None", "null" },
+            };
+            size_t n = 0;
+            while (i + n < input.size() && is_word_char(input[i + n])) {
+                ++n;
+            }
+            std::string_view token(input.data() + i, n);
+            bool matched = false;
+            for (const auto & [py, js] : literals) {
+                if (py.substr(0, n) == token) {
+                    result += js.substr(0, n);
+                    i += n - 1;
+                    matched = true;
+                    break;
+                }
+            }
+            if (!matched) {
+                result += c;
             }
         } else {
             result += c;
@@ -338,7 +363,7 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
     }
 
     if ((is_arg_value || is_arg_string_value) && current_tool) {
-        std::string value_content = std::string(trim_trailing_space(trim_leading_space(node.text, 1), 1));
+        std::string value_content = std::string(node.text);
 
         std::string value_to_add;
         if (value_content.empty() && is_arg_string_value) {
@@ -353,12 +378,8 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
             }
             value_to_add += escape_json_string_inner(value_content);
         } else if (!value_content.empty()) {
-            // For potential containers, normalize Python-style single quotes to JSON double quotes
-            bool is_potential_container = value_content[0] == '[' || value_content[0] == '{';
-            if (is_potential_container) {
-                value_content = normalize_container_value(value_content);
-            }
-            value_to_add += value_content;
+            // Pythonic scalars/containers -> JSON.
+            value_to_add += normalize_container_value(value_content);
         }
 
         args_target() += value_to_add;
@@ -466,11 +487,34 @@ common_peg_parser common_chat_peg_builder::standard_constructed_tools(
     return force_tool_calls ? section : optional(section);
 }
 
+// Like python_value(), but the leaf also accepts JSON-cased true/false/null, used by LFM2/LFM2.5
+common_peg_parser common_chat_peg_builder::python_or_json_value() {
+    return rule("python-or-json-value", [this]() {
+        auto ws    = space();
+        auto value = python_or_json_value();
+
+        auto member  = sequence({ python_string(), ws, literal(":"), ws, value });
+        auto members = sequence({ member, zero_or_more(sequence({ ws, literal(","), ws, member })) });
+        auto dict    = rule("python-or-json-dict", [&]() {
+            return sequence({ literal("{"), ws, choice({ literal("}"), sequence({ members, ws, literal("}") }) }), ws });
+        });
+
+        auto elements = sequence({ value, zero_or_more(sequence({ literal(","), ws, value })) });
+        auto array    = rule("python-or-json-array", [&]() {
+            return sequence({ literal("["), ws, choice({ literal("]"), sequence({ elements, ws, literal("]") }) }), ws });
+        });
+
+        return choice({ dict, array, python_string(), python_number(),
+                        python_bool(), python_null(), json_bool(), json_null() });
+    });
+}
+
 // Python-style tool calls: name(arg1="value1", arg2=123)
 // Used only by LFM2 for now, so we don't merge it into autoparser
 common_peg_parser common_chat_peg_builder::python_style_tool_calls(
     const ordered_json & tools,
-    bool                 parallel_tool_calls) {
+    bool                 parallel_tool_calls,
+    bool                 allow_json_literals) {
     if (!tools.is_array() || tools.empty()) {
         return eps();
     }
@@ -496,15 +540,16 @@ common_peg_parser common_chat_peg_builder::python_style_tool_calls(
                 auto arg_name_parser = literal(prop_name);
 
                 common_peg_parser arg_value_parser = eps();
-                auto string_value_parser = choice({
-                    literal("\"") + tool_arg_string_value(string_content('"')) + literal("\""),
-                    literal("'") + tool_arg_string_value(string_content('\'')) + literal("'")
-                });
+                // Quoted literal as a value: normalize_quotes_to_json preserves escapes.
+                auto string_value_parser = tool_arg_value(choice({
+                    literal("\"") + string_content('"') + literal("\""),
+                    literal("'") + string_content('\'') + literal("'")
+                }));
 
                 if (is_string_type) {
                     arg_value_parser = string_value_parser;
                 } else {
-                    arg_value_parser = tool_arg_value(python_value());
+                    arg_value_parser = tool_arg_value(allow_json_literals ? python_or_json_value() : python_value());
                 }
 
                 // Full argument: name="value" or name=value
@@ -701,7 +746,8 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
     const std::string &              effective_args_key,
     const std::string &              call_id_key,
     const std::string &              gen_call_id_key,
-    const std::vector<std::string> & parameters_order) {
+    const std::vector<std::string> & parameters_order,
+    bool                             accept_openai_wrapper) {
 
     auto tool_choices    = choice();
     auto name_key_parser = literal("\"" + effective_name_key + "\"");
@@ -763,7 +809,13 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
                 return idx_a < idx_b;
             });
 
-        auto ordered_body = tool_open(literal("{")) + space();
+        // accept an optional leading "type": "function" field when the model emits the OpenAI wrapper
+        common_peg_parser type_field = eps();
+        if (accept_openai_wrapper) {
+            type_field = optional(literal("\"type\"") + space() + literal(":") + space() +
+                                  literal("\"function\"") + space() + literal(",") + space());
+        }
+        auto ordered_body = tool_open(literal("{")) + space() + type_field;
         for (size_t i = 0; i < parser_pairs.size(); i++) {
             ordered_body = ordered_body + parser_pairs[i].first;
             if (i < parser_pairs.size() - 1) {
@@ -826,7 +878,8 @@ common_peg_parser common_chat_peg_builder::standard_json_tools(
                                                        bool                             function_is_key,
                                                        const std::string &              call_id_key,
                                                        const std::string &              gen_call_id_key,
-                                                       const std::vector<std::string> & parameters_order) {
+                                                       const std::vector<std::string> & parameters_order,
+                                                       bool                             accept_openai_wrapper) {
     if (!tools.is_array() || tools.empty()) {
         return eps();
     }
@@ -844,7 +897,7 @@ common_peg_parser common_chat_peg_builder::standard_json_tools(
         if (!name_spec.first.empty() || !args_spec.first.empty()) {
             tool_choices = build_json_tools_nested_keys(tools, effective_name_key, effective_args_key, call_id_key, gen_call_id_key);
         } else {
-            tool_choices = build_json_tools_flat_keys(tools, effective_name_key, effective_args_key, call_id_key, gen_call_id_key, parameters_order);
+            tool_choices = build_json_tools_flat_keys(tools, effective_name_key, effective_args_key, call_id_key, gen_call_id_key, parameters_order, accept_openai_wrapper);
         }
     }
 
@@ -996,6 +1049,144 @@ void common_chat_peg_gemma4_mapper::visit(const common_peg_ast_arena & arena, co
             }
         }
 
+        return;
+    }
+
+    for (auto child_id : node.children) {
+        visit(arena, child_id);
+    }
+}
+
+static void minimax_m3_collect(const common_peg_ast_arena &     arena,
+                               const common_peg_ast_node &      node,
+                               const std::string &              tag,
+                               std::vector<common_peg_ast_id> & out) {
+    for (auto child_id : node.children) {
+        const auto & child = arena.get(child_id);
+        if (child.tag == tag) {
+            out.push_back(child_id);
+        } else {
+            minimax_m3_collect(arena, child, tag, out);
+        }
+    }
+}
+
+static common_peg_ast_id minimax_m3_value_of(const common_peg_ast_arena & arena, const common_peg_ast_node & node) {
+    for (auto child_id : node.children) {
+        const auto & tag = arena.get(child_id).tag;
+        if (tag == common_chat_peg_builder::TOOL_ARG_VALUE ||
+            tag == common_chat_peg_builder::TOOL_ARG_STRING_VALUE ||
+            tag == common_chat_peg_minimax_m3_mapper::TOOL_ARG_OBJECT ||
+            tag == common_chat_peg_minimax_m3_mapper::TOOL_ARG_ARRAY) {
+            return child_id;
+        }
+    }
+    return COMMON_PEG_INVALID_AST_ID;
+}
+
+static std::string minimax_m3_value_to_json(const common_peg_ast_arena & arena, common_peg_ast_id id, bool closed);
+
+static std::string minimax_m3_member_to_json(const common_peg_ast_arena & arena, const common_peg_ast_node & node) {
+    auto name_id = arena.find_by_tag(node, common_chat_peg_builder::TOOL_ARG_NAME);
+    if (name_id == COMMON_PEG_INVALID_AST_ID) {
+        return "";
+    }
+
+    return ordered_json(arena.get(name_id).text).dump() + ":" +
+           minimax_m3_value_to_json(arena, minimax_m3_value_of(arena, node), !node.is_partial);
+}
+
+static std::string minimax_m3_container_to_json(const common_peg_ast_arena & arena,
+                                                const common_peg_ast_node & node,
+                                                bool                        is_object,
+                                                bool                        closed) {
+    const std::string tag = is_object ? common_chat_peg_builder::TOOL_ARG
+                                      : common_chat_peg_minimax_m3_mapper::TOOL_ARG_ITEM;
+
+    std::vector<common_peg_ast_id> entries;
+    minimax_m3_collect(arena, node, tag, entries);
+
+    std::string result = is_object ? "{" : "[";
+
+    bool add_comma = false;
+    for (auto entry_id : entries) {
+        const auto & entry = arena.get(entry_id);
+
+        std::string text;
+        if (is_object) {
+            text = minimax_m3_member_to_json(arena, entry);
+        } else {
+            text = minimax_m3_value_to_json(arena, minimax_m3_value_of(arena, entry), !entry.is_partial);
+        }
+
+        if (text.empty()) {
+            continue;
+        }
+
+        if (add_comma) {
+            result += ",";
+        }
+        add_comma = true;
+        result += text;
+    }
+
+    if (closed) {
+        result += is_object ? "}" : "]";
+    }
+    return result;
+}
+
+static std::string minimax_m3_value_to_json(const common_peg_ast_arena & arena, common_peg_ast_id id, bool closed) {
+    if (id == COMMON_PEG_INVALID_AST_ID) {
+        return "";
+    }
+
+    const auto & node = arena.get(id);
+
+    if (node.tag == common_chat_peg_minimax_m3_mapper::TOOL_ARG_OBJECT) {
+        return minimax_m3_container_to_json(arena, node, /* is_object = */ true, closed);
+    }
+
+    if (node.tag == common_chat_peg_minimax_m3_mapper::TOOL_ARG_ARRAY) {
+        return minimax_m3_container_to_json(arena, node, /* is_object = */ false, closed);
+    }
+
+    if (node.tag == common_chat_peg_builder::TOOL_ARG_STRING_VALUE) {
+        return "\"" + escape_json_string_inner(std::string(node.text)) + (closed ? "\"" : "");
+    }
+
+    // Numbers and booleans are written verbatim by the template
+    return std::string(node.text);
+}
+
+void common_chat_peg_minimax_m3_mapper::from_ast(const common_peg_ast_arena &    arena,
+                                                 const common_peg_parse_result & result) {
+    for (const auto & node : result.nodes) {
+        visit(arena, node);
+    }
+}
+
+void common_chat_peg_minimax_m3_mapper::visit(const common_peg_ast_arena & arena, common_peg_ast_id id) {
+    const auto & node = arena.get(id);
+
+    if (node.tag == common_chat_peg_builder::REASONING) {
+        result.reasoning_content += std::string(node.text);
+        return;
+    }
+
+    if (node.tag == common_chat_peg_builder::CONTENT) {
+        result.content += std::string(node.text);
+        return;
+    }
+
+    if (node.tag == common_chat_peg_builder::TOOL) {
+        auto name_id = arena.find_by_tag(node, common_chat_peg_builder::TOOL_NAME);
+        if (name_id != COMMON_PEG_INVALID_AST_ID) {
+            common_chat_tool_call call;
+            call.name      = std::string(arena.get(name_id).text);
+            call.arguments = minimax_m3_container_to_json(arena, node, /* is_object = */ true, !node.is_partial);
+            result.tool_calls.push_back(call);
+        }
         return;
     }
 

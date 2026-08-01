@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { ChevronLeft, ChevronRight } from '@lucide/svelte';
 	import type { Snippet } from 'svelte';
 
@@ -55,23 +56,23 @@
 	}
 
 	$effect(() => {
-		if (scrollContainer) {
-			setTimeout(() => {
-				updateScrollButtons();
-			}, 0);
-		}
+		if (!scrollContainer) return;
+
+		const observer = new ResizeObserver(() => updateScrollButtons());
+		observer.observe(scrollContainer);
+
+		return () => observer.disconnect();
 	});
 </script>
 
 <div class="relative {className}">
 	<button
-		class="absolute top-1/2 left-4 z-10 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full bg-background/25 shadow-md backdrop-blur-xs transition-opacity hover:bg-background/45 {canScrollLeft
-			? 'opacity-100'
-			: 'pointer-events-none opacity-0'}"
+		class="absolute top-1/2 left-4 z-10 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full bg-background/25 shadow-md backdrop-blur-xs transition-opacity hover:bg-background/45 disabled:pointer-events-none disabled:opacity-0"
 		onclick={scrollLeft}
+		disabled={!canScrollLeft}
 		aria-label="Scroll left"
 	>
-		<ChevronLeft class="h-4 w-4" />
+		<ChevronLeft class={ICON_CLASS_DEFAULT} />
 	</button>
 
 	<div
@@ -83,12 +84,11 @@
 	</div>
 
 	<button
-		class="absolute top-1/2 right-4 z-10 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full bg-background/25 shadow-md backdrop-blur-xs transition-opacity hover:bg-background/45 {canScrollRight
-			? 'opacity-100'
-			: 'pointer-events-none opacity-0'}"
+		class="absolute top-1/2 right-4 z-10 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full bg-background/25 shadow-md backdrop-blur-xs transition-opacity hover:bg-background/45 disabled:pointer-events-none disabled:opacity-0"
 		onclick={scrollRight}
+		disabled={!canScrollRight}
 		aria-label="Scroll right"
 	>
-		<ChevronRight class="h-4 w-4" />
+		<ChevronRight class={ICON_CLASS_DEFAULT} />
 	</button>
 </div>

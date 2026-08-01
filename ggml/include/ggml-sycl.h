@@ -27,6 +27,14 @@ GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_sycl_buffer_type(int de
 // split tensor buffer that splits matrices by rows across multiple devices
 GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_sycl_split_buffer_type(const float * tensor_split);
 
+// Tensor parallelism (--split-mode tensor): comm_init/free/allreduce_tensor
+// trio queried by the meta-backend via ggml_backend_reg_get_proc_address.
+// See typedefs in ggml/include/ggml-backend.h. Mirrors the CUDA backend's
+// pattern (ggml_backend_cuda_comm_*).
+GGML_BACKEND_API void * ggml_backend_sycl_comm_init(ggml_backend_t * backends, size_t n_backends);
+GGML_BACKEND_API void   ggml_backend_sycl_comm_free(void * comm_ctx);
+GGML_BACKEND_API bool   ggml_backend_sycl_comm_allreduce_tensor(void * comm_ctx, struct ggml_tensor ** tensors);
+
 // pinned host buffer for use with the CPU backend for faster copies between CPU and GPU
 GGML_BACKEND_API ggml_backend_buffer_type_t ggml_backend_sycl_host_buffer_type(void);
 

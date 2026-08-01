@@ -12,16 +12,16 @@ def create_server():
 
 def test_mcp_no_proxy():
     global server
-    server.webui_mcp_proxy = False
+    server.ui_mcp_proxy = False
     server.start()
 
     res = server.make_request("GET", "/cors-proxy")
-    assert res.status_code == 404
+    assert res.status_code == 403
 
 
 def test_mcp_proxy():
     global server
-    server.webui_mcp_proxy = True
+    server.ui_mcp_proxy = True
     server.start()
 
     url = f"http://{server.server_host}:{server.server_port}/cors-proxy?url=http://example.com"
@@ -32,7 +32,7 @@ def test_mcp_proxy():
 
 def test_mcp_proxy_custom_port():
     global server
-    server.webui_mcp_proxy = True
+    server.ui_mcp_proxy = True
     server.start()
 
     # try getting the server's models API via the proxy

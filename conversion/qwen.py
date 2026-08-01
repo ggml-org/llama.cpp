@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
+import json
+
 from typing import Any, Callable, Iterable, TYPE_CHECKING
 
 import torch
@@ -281,7 +282,7 @@ class Qwen3NextModel(Qwen2MoeModel):
         self.gguf_writer.add_full_attention_interval(self.hparams.get("full_attention_interval", 4))
         if (rope_dim := self.hparams.get("head_dim")) is None:
             rope_dim = self.hparams["hidden_size"] // self.hparams["num_attention_heads"]
-        self.gguf_writer.add_rope_dimension_count(int(rope_dim * self.hparams.get("partial_rotary_factor", 0.25)))
+        self.gguf_writer.add_rope_dimension_count(int(rope_dim * self.rope_parameters.get("partial_rotary_factor", 0.25)))
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
@@ -542,6 +543,7 @@ class _Qwen35MtpMixin:
     `mtp.*` to the standard layer-indexed nextn naming so the existing
     tensor_map handles them."""
 
+    supports_mtp_export = True
     hparams: dict[str, Any]
     model_arch: gguf.MODEL_ARCH
     gguf_writer: gguf.GGUFWriter
@@ -549,6 +551,7 @@ class _Qwen35MtpMixin:
     tensor_map: gguf.TensorNameMap
     no_mtp: bool
     mtp_only: bool
+    _original_block_count: int | None = None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -557,22 +560,44 @@ class _Qwen35MtpMixin:
             self.block_count += self.hparams.get("mtp_num_hidden_layers", 0)
         self.tensor_map = gguf.get_tensor_name_map(self.model_arch, self.block_count)
 
+    def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
+        hparams = {**self.hparams, **self.hparams.get("text_config", {})}
+        key = next((k for k in ["n_layers", "num_hidden_layers", "n_layer", "num_layers"] if k in hparams), None)
+        type(self)._original_block_count = hparams.get(key)
+        return super().index_tensors(remote_hf_model_id=remote_hf_model_id)  # ty: ignore[unresolved-attribute]
+
     @classmethod
     def filter_tensors(cls, item):
-        name, _ = item
+        assert cls._original_block_count is not None
+        # TODO: change TextModel to super()
+        if (titem := TextModel.filter_tensors(item)) is None:
+            return None
+        name, gen = titem
+        if name.startswith("model.mtp."):
+            name = name.replace("model.", "", 1)
         if name.startswith("mtp."):
             if cls.no_mtp:
                 return None
-            return item
-        if cls.mtp_only:
-            canonical = name.replace("language_model.", "")
-            keep = canonical in (
+            remapper = {
+                "fc":                    "eh_proj",
+                "pre_fc_norm_embedding": "enorm",
+                "pre_fc_norm_hidden":    "hnorm",
+                "norm":                  "shared_head.norm",
+            }
+            parts = name.split(".", 3)
+            if len(parts) == 4 and parts[1] == "layers" and parts[2].isdecimal():
+                mtp_idx = int(parts[2])
+                name = f"model.layers.{cls._original_block_count + mtp_idx}.{parts[3]}"
+            elif len(parts) == 3 and parts[1] in remapper:
+                name = f"model.layers.{cls._original_block_count}.{remapper[parts[1]]}.{parts[2]}"
+        elif cls.mtp_only:
+            keep = name in (
                 "model.embed_tokens.weight", "model.norm.weight", "lm_head.weight",
                 "embed_tokens.weight", "norm.weight",
             )
             if not keep:
                 return None
-        return super().filter_tensors(item)  # ty: ignore[unresolved-attribute]
+        return name, gen
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()  # ty: ignore[unresolved-attribute]
@@ -594,29 +619,6 @@ class _Qwen35MtpMixin:
             self.metadata.version, size_label=None, output_type=output_type, model_type=None)    # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
         self.fname_out = self.fname_out.parent / f"mtp-{fname_default}.gguf"
 
-    def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        if name.startswith("mtp."):
-            n_layer = self.hparams["num_hidden_layers"]
-            if name.find("layers.") != -1:
-                assert bid is not None
-                name = name.replace(f"mtp.layers.{bid}", f"model.layers.{bid + n_layer}")
-                bid = bid + n_layer
-            else:
-                remapper = {
-                    "mtp.fc":                    "model.layers.{bid}.eh_proj",
-                    "mtp.pre_fc_norm_embedding": "model.layers.{bid}.enorm",
-                    "mtp.pre_fc_norm_hidden":    "model.layers.{bid}.hnorm",
-                    "mtp.norm":                  "model.layers.{bid}.shared_head.norm",
-                }
-                stem   = Path(name).stem
-                suffix = Path(name).suffix
-                tmpl   = remapper[stem] + suffix
-                for b in range(n_layer, self.block_count):
-                    yield from super().modify_tensors(data_torch, tmpl.format(bid=b), b)  # ty: ignore[unresolved-attribute]
-                return
-
-        yield from super().modify_tensors(data_torch, name, bid)  # ty: ignore[unresolved-attribute]
-
 
 @ModelBase.register("Qwen3_5ForConditionalGeneration", "Qwen3_5ForCausalLM")
 class Qwen3_5TextModel(_Qwen35MtpMixin, _Qwen35MRopeMixin, _LinearAttentionVReorderBase):
@@ -626,3 +628,83 @@ class Qwen3_5TextModel(_Qwen35MtpMixin, _Qwen35MRopeMixin, _LinearAttentionVReor
 @ModelBase.register("Qwen3_5MoeForConditionalGeneration", "Qwen3_5MoeForCausalLM")
 class Qwen3_5MoeTextModel(_Qwen35MtpMixin, _Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35MOE
+
+
+@ModelBase.register("DFlashDraftModel")
+class DFlashModel(Qwen3Model):
+    model_arch = gguf.MODEL_ARCH.DFLASH
+
+    def set_vocab(self):
+        if self.target_model_dir is None:
+            raise ValueError(
+                "DFlash draft model requires --target-model-dir to be specified. "
+                "Please provide the path to the target model directory containing the tokenizer."
+            )
+        logger.info(f"DFlash: Using tokenizer from target model: {self.target_model_dir}")
+        original_dir = self.dir_model
+        self.dir_model = self.target_model_dir
+
+        # Reuse the target model's own vocab handler (e.g. Gemma-4 needs its
+        # own tokenizer logic, not the Qwen default).
+        from . import get_model_class
+        with open(self.target_model_dir / "config.json", "r", encoding="utf-8") as f:
+            target_arch = json.load(f)["architectures"][0]
+        target_cls = get_model_class(target_arch)
+
+        if target_cls is not type(self):
+            target_cls.set_vocab(self)  # ty: ignore[unresolved-attribute]
+        else:
+            super().set_vocab()
+
+        self.dir_model = original_dir
+
+        mask_token_id = self.hparams.get("dflash_config", {}).get("mask_token_id")
+        if mask_token_id is not None:
+            self.gguf_writer.add_mask_token_id(mask_token_id)
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+
+        block_size = self.hparams.get("block_size", 16)
+        self.gguf_writer.add_block_size(block_size)
+        dflash_config = self.hparams.get("dflash_config", {})
+
+        target_layer_ids = dflash_config.get("target_layer_ids", [])
+        if target_layer_ids:
+            extract_layer_ids = [i + 1 for i in target_layer_ids]
+            self.gguf_writer.add_target_layers(extract_layer_ids)
+
+        use_sliding_window = self.hparams.get("use_sliding_window", False)
+        sliding_window = self.hparams.get("sliding_window")
+        layer_types = self.hparams.get("layer_types")
+        if use_sliding_window and sliding_window and layer_types:
+            is_swa = [lt == "sliding_attention" for lt in layer_types]
+            self.gguf_writer.add_sliding_window(sliding_window)
+            self.gguf_writer.add_sliding_window_pattern(is_swa)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+        if not name.startswith("model."):
+            name = "model." + name
+        return super().filter_tensors((name, gen))
+
+
+@ModelBase.register("Qwen3DSparkModel")
+class DSparkModel(DFlashModel):
+    # DSpark = DFlash + a semi-autoregressive Markov head
+    model_arch = gguf.MODEL_ARCH.DFLASH
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # normalize the flat DeepSpec schema to DFlash's nested dflash_config
+        self.hparams.setdefault("dflash_config", {
+            k: self.hparams[k] for k in ("target_layer_ids", "mask_token_id") if k in self.hparams
+        })
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+        if name.endswith(("embed_tokens.weight", "lm_head.weight")):
+            return None
+        return super().filter_tensors((name, gen))

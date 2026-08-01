@@ -24,4 +24,4 @@ runs:
       run: |
         mkdir -p ${{ inputs.path }}
         cd ${{ inputs.path }}
-        curl --no-progress-meter ${{ inputs.url }} | tar -${{ inputs.type }}x --strip-components=${{ inputs.strip }}
+        curl --no-progress-meter -L ${{ inputs.url }} | tar -${{ inputs.type }}x --strip-components=${{ inputs.strip }}

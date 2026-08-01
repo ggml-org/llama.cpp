@@ -369,12 +369,13 @@ class NomicBertModel(BertModel):
         return super().filter_tensors(item)
 
     def modify_tensors(self, data_torch: torch.Tensor, name: str, bid: int | None) -> Iterable[tuple[str, torch.Tensor]]:
-        n_experts = self.find_hparam(["num_local_experts", "num_experts"])
         if "mlp.experts.mlp.w1" in name:
+            n_experts = self.find_hparam(["num_local_experts", "num_experts"])
             data_torch = data_torch.view(n_experts, self.hparams["n_inner"], self.hparams["n_embd"])
             name += ".weight"
 
         if "mlp.experts.mlp.w2" in name:
+            n_experts = self.find_hparam(["num_local_experts", "num_experts"])
             data_torch = data_torch.view(n_experts, self.hparams["n_inner"], self.hparams["n_embd"])
             data_torch = data_torch.transpose(1, 2)
             name += ".weight"
@@ -571,7 +572,16 @@ class JinaBertV2Model(BertModel):
         if tokenizer_class == 'BertTokenizer':
             super().set_vocab()
         elif tokenizer_class == 'RobertaTokenizer':
-            self._set_vocab_gpt2()
+            pre_tokenizer_type = None
+            tokenizer_json_path = self.dir_model / "tokenizer.json"
+            if tokenizer_json_path.is_file():
+                with open(tokenizer_json_path, "r", encoding="utf-8") as f:
+                    pre_tokenizer_type = json.load(f).get("pre_tokenizer", {}).get("type")
+
+            if pre_tokenizer_type == "Whitespace":
+                self._set_vocab_whitespace()
+            else:
+                self._set_vocab_gpt2()
             self.gguf_writer.add_token_type_count(2)
         else:
             raise NotImplementedError(f'Tokenizer {tokenizer_class} is not supported for JinaBertModel')
@@ -594,6 +604,12 @@ class ModernBertModel(BertModel):
             self.gguf_writer.add_sliding_window_pattern(sliding_window_pattern)
         self.gguf_writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
         self.gguf_writer.add_vocab_size(self.hparams["vocab_size"])
+        # FFN activation: ModernBert uses a GLU pair (ffn_up output is 2*n_ff). The
+        # original ModernBERT uses GELU (-> GeGLU); some derivatives such as IBM
+        # Granite Embedding 97m R2 use SiLU (-> SwiGLU). Persist this so the
+        # llama.cpp graph can pick the matching activation.
+        if hidden_act := self.hparams.get("hidden_activation"):
+            self.gguf_writer.add_hidden_act(hidden_act)
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:

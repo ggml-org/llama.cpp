@@ -15,8 +15,14 @@ add_library(${TARGET} STATIC
     server-common.h
     server-context.cpp
     server-context.h
+    server-stream.cpp
+    server-stream.h
     server-tools.cpp
     server-tools.h
+    server-mcp.cpp
+    server-mcp.h
+    server-schema.cpp
+    server-schema.h
 )
 
 if (BUILD_SHARED_LIBS)
@@ -31,17 +37,22 @@ target_link_libraries(${TARGET} PUBLIC llama-common mtmd ${CMAKE_THREAD_LIBS_INI
 
 set(TARGET llama-server-impl)
 
-add_library(${TARGET} STATIC
+add_library(${TARGET}
     server.cpp
     server-http.cpp
     server-http.h
     server-models.cpp
     server-models.h
 )
+set_target_properties(${TARGET} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
 target_include_directories(${TARGET} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(${TARGET} PRIVATE ../mtmd ${CMAKE_SOURCE_DIR})
 target_link_libraries(${TARGET} PUBLIC server-context llama-ui cpp-httplib ${CMAKE_THREAD_LIBS_INIT})
+
+if(LLAMA_TOOLS_INSTALL)
+    install(TARGETS ${TARGET} LIBRARY)
+endif()
 
 # llama-server executable
 

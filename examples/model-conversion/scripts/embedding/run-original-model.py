@@ -64,7 +64,7 @@ def load_model_and_tokenizer(model_path, use_sentence_transformers=False, device
         print("Using SentenceTransformer to apply all numbered layers")
         model = SentenceTransformer(model_path)
         tokenizer = model.tokenizer
-        config = model[0].auto_model.config
+        config = model[0].auto_model.config  # ty: ignore[unresolved-attribute]
     else:
         tokenizer = AutoTokenizer.from_pretrained(model_path)
         config = AutoConfig.from_pretrained(model_path, trust_remote_code=True)

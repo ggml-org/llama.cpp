@@ -24,9 +24,18 @@ import { toast } from 'svelte-sonner';
 import { DatabaseService } from '$lib/services/database.service';
 import { MigrationService } from '$lib/services/migration.service';
 import { config } from '$lib/stores/settings.svelte';
+import { mcpStore } from '$lib/stores/mcp.svelte';
 import { filterByLeafNodeId, findLeafNode, generateConversationTitle } from '$lib/utils';
 import type { McpServerOverride } from '$lib/types/database';
-import { MessageRole, HtmlInputType, FileExtensionText } from '$lib/enums';
+import { zipSync, unzipSync, strToU8, strFromU8 } from 'fflate';
+import {
+	MessageRole,
+	FileExtensionText,
+	MimeTypeText,
+	MimeTypeApplication,
+	ReasoningEffort,
+	SessionRecordType
+} from '$lib/enums';
 import {
 	ISO_DATE_TIME_SEPARATOR,
 	ISO_DATE_TIME_SEPARATOR_REPLACEMENT,
@@ -38,7 +47,10 @@ import {
 	ISO_TIME_SEPARATOR_REPLACEMENT,
 	NON_ALPHANUMERIC_REGEX,
 	MULTIPLE_UNDERSCORE_REGEX,
-	MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY
+	REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY,
+	NEWLINE,
+	SESSION_HARNESS,
+	ZIP_MAGIC
 } from '$lib/constants';
 
 import { ROUTES } from '$lib/constants/routes';
@@ -71,41 +83,25 @@ class ConversationsStore {
 	/** Whether the store has been initialized */
 	isInitialized = $state(false);
 
-	/** Pending MCP server overrides for new conversations (before first message) */
-	pendingMcpServerOverrides = $state<McpServerOverride[]>(ConversationsStore.loadMcpDefaults());
+	/** Global (non-conversation-specific) reasoning effort default */
+	pendingReasoningEffort = $state<ReasoningEffort>(ConversationsStore.loadReasoningEffortDefault());
 
-	/** Load MCP default overrides from localStorage */
-	private static loadMcpDefaults(): McpServerOverride[] {
-		if (typeof globalThis.localStorage === 'undefined') return [];
+	/** Load reasoning effort default from localStorage, DEFAULT defers to the server */
+	private static loadReasoningEffortDefault(): ReasoningEffort {
+		if (typeof globalThis.localStorage === 'undefined') return ReasoningEffort.DEFAULT;
 		try {
-			const raw = localStorage.getItem(MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY);
-			if (!raw) return [];
-			const parsed = JSON.parse(raw);
-			if (!Array.isArray(parsed)) return [];
-			return parsed.filter(
-				(o: unknown) => typeof o === 'object' && o !== null && 'serverId' in o && 'enabled' in o
-			) as McpServerOverride[];
+			const raw = localStorage.getItem(REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY);
+			return (raw as ReasoningEffort) || ReasoningEffort.DEFAULT;
 		} catch {
-			return [];
+			return ReasoningEffort.DEFAULT;
 		}
 	}
 
-	/** Persist MCP default overrides to localStorage */
-	private saveMcpDefaults(): void {
+	/** Persist reasoning effort default to localStorage */
+	private saveReasoningEffortDefaults(): void {
 		if (typeof globalThis.localStorage === 'undefined') return;
-		const plain = this.pendingMcpServerOverrides.map((o) => ({
-			serverId: o.serverId,
-			enabled: o.enabled
-		}));
-		if (plain.length > 0) {
-			localStorage.setItem(MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY, JSON.stringify(plain));
-		} else {
-			localStorage.removeItem(MCP_DEFAULT_ENABLED_LOCALSTORAGE_KEY);
-		}
+		localStorage.setItem(REASONING_EFFORT_DEFAULT_LOCALSTORAGE_KEY, this.pendingReasoningEffort);
 	}
-
-	/** Callback for title update confirmation dialog */
-	titleUpdateConfirmationCallback?: (currentTitle: string, newTitle: string) => Promise<boolean>;
 
 	/**
 	 * Callback for updating message content in chatStore.
@@ -114,6 +110,9 @@ class ConversationsStore {
 	private messageUpdateCallback:
 		| ((messageId: string, updates: Partial<DatabaseMessage>) => void)
 		| null = null;
+
+	/** In-flight init run; shared by concurrent callers, reset on failure to allow retry */
+	private initPromise: Promise<void> | null = null;
 
 	/**
 	 *
@@ -125,20 +124,25 @@ class ConversationsStore {
 
 	/**
 	 * Initialize the store by loading conversations from database.
-	 * Must be called once after app startup.
+	 * Safe to call multiple times: concurrent callers share a single run,
+	 * and a failed run can be retried by calling again.
 	 */
-	async init(): Promise<void> {
-		if (!browser) return;
-		if (this.isInitialized) return;
+	init(): Promise<void> {
+		if (!browser) return Promise.resolve();
+		if (this.initPromise) return this.initPromise;
 
-		try {
-			await MigrationService.runAllMigrations();
+		this.initPromise = (async () => {
+			try {
+				await MigrationService.runAllMigrations();
+				await this.loadConversations();
+				this.isInitialized = true;
+			} catch (error) {
+				console.error('Failed to initialize conversations:', error);
+				this.initPromise = null;
+			}
+		})();
 
-			await this.loadConversations();
-			this.isInitialized = true;
-		} catch (error) {
-			console.error('Failed to initialize conversations:', error);
-		}
+		return this.initPromise;
 	}
 
 	/**
@@ -177,8 +181,21 @@ class ConversationsStore {
 	 * Updates a message at a specific index in active messages
 	 */
 	updateMessageAtIndex(index: number, updates: Partial<DatabaseMessage>): void {
-		if (index !== -1 && this.activeMessages[index]) {
-			this.activeMessages[index] = { ...this.activeMessages[index], ...updates };
+		const message = index === -1 ? undefined : this.activeMessages[index];
+
+		if (!message) return;
+
+		// Assign field by field rather than replacing the object. Replacing it
+		// changes the array slot, which invalidates every consumer that merely
+		// walks the list - notably ChatMessages.displayMessages, which rebuilds
+		// entries for every message in the conversation. Deep $state proxies make
+		// per-field writes fine-grained, so only readers of the changed field wake.
+		const target = message as unknown as Record<string, unknown>;
+
+		for (const [key, value] of Object.entries(updates)) {
+			if (target[key] !== value) {
+				target[key] = value;
+			}
 		}
 	}
 
@@ -207,15 +224,6 @@ class ConversationsStore {
 	}
 
 	/**
-	 * Sets the callback function for title update confirmations
-	 */
-	setTitleUpdateConfirmationCallback(
-		callback: (currentTitle: string, newTitle: string) => Promise<boolean>
-	): void {
-		this.titleUpdateConfirmationCallback = callback;
-	}
-
-	/**
 	 *
 	 *
 	 * Conversation CRUD
@@ -238,20 +246,13 @@ class ConversationsStore {
 	 */
 	async createConversation(name?: string): Promise<string> {
 		const conversationName = name || `Chat ${new Date().toLocaleString()}`;
-		const conversation = await DatabaseService.createConversation(conversationName);
 
-		if (this.pendingMcpServerOverrides.length > 0) {
-			// Deep clone to plain objects (Svelte 5 $state uses Proxies which can't be cloned to IndexedDB)
-			const plainOverrides = this.pendingMcpServerOverrides.map((o) => ({
-				serverId: o.serverId,
-				enabled: o.enabled
-			}));
-			conversation.mcpServerOverrides = plainOverrides;
-			await DatabaseService.updateConversation(conversation.id, {
-				mcpServerOverrides: plainOverrides
-			});
-			this.pendingMcpServerOverrides = [];
-		}
+		// No MCP override list is seeded: getAllMcpServerOverrides resolves
+		// servers without a per-conversation override to `mcpServers[i].enabled`,
+		// and only explicit toggles are stored on the conversation.
+		const conversation = await DatabaseService.createConversation(conversationName, {
+			reasoningEffort: this.pendingReasoningEffort
+		});
 
 		this.conversations = [conversation, ...this.conversations];
 		this.activeConversation = conversation;
@@ -275,7 +276,6 @@ class ConversationsStore {
 				return false;
 			}
 
-			this.pendingMcpServerOverrides = [];
 			this.activeConversation = conversation;
 
 			if (conversation.currNode) {
@@ -304,8 +304,8 @@ class ConversationsStore {
 	clearActiveConversation(): void {
 		this.activeConversation = null;
 		this.activeMessages = [];
-		// reload MCP defaults so new chats inherit persisted state
-		this.pendingMcpServerOverrides = ConversationsStore.loadMcpDefaults();
+		// reload defaults so new chats inherit persisted state
+		this.pendingReasoningEffort = ConversationsStore.loadReasoningEffortDefault();
 	}
 
 	/**
@@ -363,10 +363,7 @@ class ConversationsStore {
 	async deleteAll(): Promise<void> {
 		try {
 			const allConversations = await DatabaseService.getAllConversations();
-
-			for (const conv of allConversations) {
-				await DatabaseService.deleteConversation(conv.id);
-			}
+			await DatabaseService.bulkDeleteConversations(allConversations.map((c) => c.id));
 
 			this.clearActiveConversation();
 			this.conversations = [];
@@ -377,6 +374,124 @@ class ConversationsStore {
 		} catch (error) {
 			console.error('Failed to delete all conversations:', error);
 			toast.error('Failed to delete conversations');
+		}
+	}
+
+	/**
+	 * Deletes multiple conversations in sequence.
+	 * Mirrors deleteConversation() per-id; navigates to NEW_CHAT only if the
+	 * currently-open chat was among the deleted ones.
+	 * @param convIds - Conversation IDs to delete
+	 */
+	async bulkDeleteConversations(convIds: string[]): Promise<void> {
+		if (convIds.length === 0) return;
+
+		try {
+			const idsToRemove = new SvelteSet(convIds);
+			// Collect all descendants recursively so the local cache stays consistent
+			// even when deleteWithForks is omitted.
+			const queue = [...convIds];
+			while (queue.length > 0) {
+				const parentId = queue.pop()!;
+				for (const c of this.conversations) {
+					if (c.forkedFromConversationId === parentId && !idsToRemove.has(c.id)) {
+						idsToRemove.add(c.id);
+						queue.push(c.id);
+					}
+				}
+			}
+
+			const activeWasDeleted =
+				this.activeConversation !== null && idsToRemove.has(this.activeConversation.id);
+
+			await DatabaseService.bulkDeleteConversations([...idsToRemove]);
+
+			this.conversations = this.conversations.filter((c) => !idsToRemove.has(c.id));
+
+			if (activeWasDeleted) {
+				this.clearActiveConversation();
+				await goto(ROUTES.NEW_CHAT);
+			}
+
+			toast.success(
+				idsToRemove.size === 1
+					? 'Conversation deleted'
+					: `${idsToRemove.size} conversations deleted`
+			);
+		} catch (error) {
+			console.error('Failed to bulk delete conversations:', error);
+			toast.error('Failed to delete conversations');
+		}
+	}
+
+	/**
+	 * Toggles the pinned state of each conversation individually.
+	 * Mixed-pin selections are intentionally not normalised here; the bulk
+	 * action UI surfaces them as a disabled mixed-state instead.
+	 * @param convIds - Conversation IDs to toggle
+	 */
+	async bulkToggleConversationPin(convIds: string[]): Promise<void> {
+		if (convIds.length === 0) return;
+
+		try {
+			const updates = await DatabaseService.bulkToggleConversationPins(convIds);
+
+			const activeId = this.activeConversation?.id;
+			if (activeId && updates.has(activeId)) {
+				this.activeConversation = {
+					...this.activeConversation!,
+					pinned: updates.get(activeId)!
+				};
+			}
+			for (let i = 0; i < this.conversations.length; i++) {
+				const newPinned = updates.get(this.conversations[i].id);
+				if (newPinned !== undefined) this.conversations[i].pinned = newPinned;
+			}
+
+			toast.success(
+				convIds.length === 1
+					? 'Conversation pin toggled'
+					: `Updated pin state for ${convIds.length} conversations`
+			);
+		} catch (error) {
+			console.error('Failed to bulk toggle pin:', error);
+			toast.error('Failed to update pin state');
+		}
+	}
+
+	/**
+	 * Bundles the given conversations into a single zip archive and triggers a
+	 * browser download (one JSONL file per conversation).
+	 * @param convIds - Conversation IDs to export
+	 */
+	async bulkExportConversations(convIds: string[]): Promise<void> {
+		if (convIds.length === 0) return;
+
+		try {
+			const fetched = await DatabaseService.getConversationsWithMessages(convIds);
+
+			const activeId = this.activeConversation?.id;
+			const overridden = fetched.get(activeId ?? '');
+			if (overridden && activeId) {
+				overridden.conv = { ...this.activeConversation! };
+			}
+
+			const exported = [...fetched.values()];
+			if (exported.length === 0) {
+				toast.error('No conversations to export');
+				return;
+			}
+
+			this.downloadConversationsArchive(exported);
+
+			toast.success(
+				exported.length === 1
+					? 'Conversation exported'
+					: `${exported.length} conversations exported`
+			);
+		} catch (error) {
+			console.error('Failed to bulk export conversations:', error);
+			toast.error('Failed to export conversations');
 		}
 	}
 
@@ -440,7 +555,6 @@ class ConversationsStore {
 
 			if (convIndex !== -1) {
 				this.conversations[convIndex].name = name;
-				this.conversations = [...this.conversations];
 			}
 
 			if (this.activeConversation?.id === convId) {
@@ -452,50 +566,59 @@ class ConversationsStore {
 	}
 
 	/**
-	 * Updates conversation title with optional confirmation dialog based on settings
-	 * @param convId - The conversation ID to update
-	 * @param newTitle - The new title content
-	 * @returns True if title was updated, false if cancelled
+	 * Toggles the pinned status of a conversation.
+	 * @param convId - The conversation ID to toggle
+	 * @returns The new pinned status
 	 */
-	async updateConversationTitleWithConfirmation(
-		convId: string,
-		newTitle: string
-	): Promise<boolean> {
+	async toggleConversationPin(convId: string): Promise<boolean> {
 		try {
-			const currentConfig = config();
+			const newPinnedState = await DatabaseService.toggleConversationPin(convId);
 
-			if (currentConfig.askForTitleConfirmation && this.titleUpdateConfirmationCallback) {
-				const conversation = await DatabaseService.getConversation(convId);
-				if (!conversation) return false;
+			const convIndex = this.conversations.findIndex((c) => c.id === convId);
 
-				const shouldUpdate = await this.titleUpdateConfirmationCallback(
-					conversation.name,
-					newTitle
-				);
-				if (!shouldUpdate) return false;
+			if (convIndex !== -1) {
+				this.conversations[convIndex].pinned = newPinnedState;
 			}
 
-			await this.updateConversationName(convId, newTitle);
-			return true;
+			if (this.activeConversation?.id === convId) {
+				this.activeConversation = { ...this.activeConversation, pinned: newPinnedState };
+			}
+
+			return newPinnedState;
 		} catch (error) {
-			console.error('Failed to update conversation title with confirmation:', error);
+			console.error('Failed to toggle conversation pin:', error);
 			return false;
 		}
 	}
 
 	/**
-	 * Updates conversation lastModified timestamp and moves it to top of list
+	 * Marks a conversation as recently active: stamps lastModified (persisted)
+	 * and moves it to the top of the list. Only message-activity flows call
+	 * this; metadata updates (rename, pin, settings) do not.
+	 *
+	 * @param convId - Conversation that produced the activity, defaults to the active one
 	 */
-	updateConversationTimestamp(): void {
-		if (!this.activeConversation) return;
+	updateConversationTimestamp(convId?: string): void {
+		const targetId = convId ?? this.activeConversation?.id;
+		if (!targetId) return;
 
-		const chatIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
+		const now = Date.now();
+
+		const chatIndex = this.conversations.findIndex((c) => c.id === targetId);
 
 		if (chatIndex !== -1) {
-			this.conversations[chatIndex].lastModified = Date.now();
+			this.conversations[chatIndex].lastModified = now;
 			const updatedConv = this.conversations.splice(chatIndex, 1)[0];
 			this.conversations = [updatedConv, ...this.conversations];
 		}
+
+		if (this.activeConversation?.id === targetId) {
+			this.activeConversation = { ...this.activeConversation, lastModified: now };
+		}
+
+		DatabaseService.updateConversation(targetId, { lastModified: now }).catch((error) =>
+			console.error('Failed to update conversation timestamp:', error)
+		);
 	}
 
 	/**
@@ -548,7 +671,7 @@ class ConversationsStore {
 					newFirstUserMessage.id !== currentFirstUserMessage.id ||
 					newFirstUserMessage.content.trim() !== currentFirstUserMessage.content.trim())
 			) {
-				await this.updateConversationTitleWithConfirmation(
+				await this.updateConversationName(
 					this.activeConversation.id,
 					generateConversationTitle(
 						newFirstUserMessage.content,
@@ -568,29 +691,41 @@ class ConversationsStore {
 	 */
 
 	/**
-	 * Gets MCP server override for a specific server in the active conversation.
-	 * Falls back to pending overrides if no active conversation exists.
-	 * @param serverId - The server ID to check
-	 * @returns The override if set, undefined if using global setting
+	 * Resolve the default enabled value for a server: its own `enabled`
+	 * flag in `mcpServers`, so the global on/off state lives in one place.
 	 */
-	getMcpServerOverride(serverId: string): McpServerOverride | undefined {
-		if (this.activeConversation) {
-			return this.activeConversation.mcpServerOverrides?.find(
-				(o: McpServerOverride) => o.serverId === serverId
-			);
-		}
-		return this.pendingMcpServerOverrides.find((o) => o.serverId === serverId);
+	#getDefaultOverride(serverId: string): McpServerOverride | undefined {
+		const server = mcpStore.getServers().find((s) => s.id === serverId);
+		if (!server) return undefined;
+		return { serverId, enabled: server.enabled };
 	}
 
 	/**
-	 * Get all MCP server overrides for the current conversation.
-	 * Returns pending overrides if no active conversation.
+	 * Gets the effective MCP server override for a specific server.
+	 * A per-conversation override wins when present; a server without one
+	 * resolves to its `mcpServers[i].enabled` default.
+	 * @param serverId - The server ID to check
+	 * @returns The effective override, undefined if no matching server
+	 */
+	getMcpServerOverride(serverId: string): McpServerOverride | undefined {
+		const override = this.activeConversation?.mcpServerOverrides?.find(
+			(o: McpServerOverride) => o.serverId === serverId
+		);
+		if (override) return override;
+		return this.#getDefaultOverride(serverId);
+	}
+
+	/**
+	 * Gets the effective override list for the current conversation:
+	 * one entry per configured server, resolved per server. The stored
+	 * per-conversation list is sparse and only holds explicit toggles.
 	 */
 	getAllMcpServerOverrides(): McpServerOverride[] {
-		if (this.activeConversation?.mcpServerOverrides) {
-			return this.activeConversation.mcpServerOverrides;
-		}
-		return this.pendingMcpServerOverrides;
+		const overrides = this.activeConversation?.mcpServerOverrides;
+		return mcpStore.getServers().map((s) => {
+			const override = overrides?.find((o: McpServerOverride) => o.serverId === s.id);
+			return { serverId: s.id, enabled: override?.enabled ?? s.enabled };
+		});
 	}
 
 	/**
@@ -605,13 +740,16 @@ class ConversationsStore {
 
 	/**
 	 * Sets or removes MCP server override for the active conversation.
-	 * If no conversation exists, stores as pending override.
+	 * If no conversation exists, persists `enabled` onto `mcpServers[i].enabled`
+	 * (the single source of truth for new-chat defaults).
 	 * @param serverId - The server ID to override
-	 * @param enabled - The enabled state, or undefined to remove override
+	 * @param enabled - The enabled state, or undefined to remove per-conversation override
 	 */
 	async setMcpServerOverride(serverId: string, enabled: boolean | undefined): Promise<void> {
 		if (!this.activeConversation) {
-			this.setPendingMcpServerOverride(serverId, enabled);
+			if (enabled !== undefined) {
+				mcpStore.updateServer(serverId, { enabled });
+			}
 			return;
 		}
 
@@ -651,31 +789,7 @@ class ConversationsStore {
 		if (convIndex !== -1) {
 			this.conversations[convIndex].mcpServerOverrides =
 				newOverrides.length > 0 ? newOverrides : undefined;
-			this.conversations = [...this.conversations];
 		}
-	}
-
-	/**
-	 * Sets or removes a pending MCP server override (for new conversations).
-	 */
-	private setPendingMcpServerOverride(serverId: string, enabled: boolean | undefined): void {
-		if (enabled === undefined) {
-			this.pendingMcpServerOverrides = this.pendingMcpServerOverrides.filter(
-				(o) => o.serverId !== serverId
-			);
-		} else {
-			const existingIndex = this.pendingMcpServerOverrides.findIndex(
-				(o) => o.serverId === serverId
-			);
-			if (existingIndex >= 0) {
-				const newOverrides = [...this.pendingMcpServerOverrides];
-				newOverrides[existingIndex] = { serverId, enabled };
-				this.pendingMcpServerOverrides = newOverrides;
-			} else {
-				this.pendingMcpServerOverrides = [...this.pendingMcpServerOverrides, { serverId, enabled }];
-			}
-		}
-		this.saveMcpDefaults();
 	}
 
 	/**
@@ -696,11 +810,49 @@ class ConversationsStore {
 	}
 
 	/**
-	 * Clears all pending MCP server overrides.
+	 * Gets the effective reasoning effort for the active conversation.
+	 * Returns the conversation override if set, otherwise the global default.
+	 * DEFAULT means no override is sent and the server decides.
 	 */
-	clearPendingMcpServerOverrides(): void {
-		this.pendingMcpServerOverrides = [];
-		this.saveMcpDefaults();
+	getReasoningEffort(): ReasoningEffort {
+		if (this.activeConversation) {
+			if (this.activeConversation.reasoningEffort !== undefined) {
+				return this.activeConversation.reasoningEffort;
+			}
+			// conversations created before the tri-state store an explicit
+			// opt-out only as thinkingEnabled = false
+			if (this.activeConversation.thinkingEnabled === false) {
+				return ReasoningEffort.OFF;
+			}
+		}
+		return this.pendingReasoningEffort;
+	}
+
+	/**
+	 * Sets the reasoning effort for the active conversation.
+	 * If no conversation exists, stores the global default.
+	 * @param effort - The effort level ('default' | 'off' | 'low' | 'medium' | 'high' | 'max')
+	 */
+	async setReasoningEffort(effort: ReasoningEffort): Promise<void> {
+		if (!this.activeConversation) {
+			this.pendingReasoningEffort = effort;
+			this.saveReasoningEffortDefaults();
+			return;
+		}
+
+		this.activeConversation = {
+			...this.activeConversation,
+			reasoningEffort: effort
+		};
+
+		await DatabaseService.updateConversation(this.activeConversation.id, {
+			reasoningEffort: effort
+		});
+
+		const convIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
+		if (convIndex !== -1) {
+			this.conversations[convIndex].reasoningEffort = effort;
+		}
 	}
 
 	/**
@@ -774,41 +926,202 @@ class ConversationsStore {
 			.replace(ISO_DATE_TIME_SEPARATOR, ISO_DATE_TIME_SEPARATOR_REPLACEMENT)
 			.replaceAll(ISO_TIME_SEPARATOR, ISO_TIME_SEPARATOR_REPLACEMENT);
 		const trimmedConvId = conversation.id?.slice(0, EXPORT_CONV_ID_TRIM_LENGTH) ?? '';
-		return `${formattedDate}_conv_${trimmedConvId}_${sanitizedName}.json`;
+		return `${formattedDate}_conv_${trimmedConvId}_${sanitizedName}${FileExtensionText.JSONL}`;
+	}
+
+	/**
+	 * Serializes a session (a conversation with its messages) as JSONL.
+	 * The first line is the session header (a `SessionRecordType.SESSION` record
+	 * carrying the conversation properties); each subsequent line is a single message.
+	 * @param data - The exported conversation payload
+	 * @returns The JSONL string (one record per line)
+	 */
+	serializeSessionToJsonl(data: ExportedConversation): string {
+		const { conv, messages } = data;
+
+		const sessionLine = JSON.stringify({
+			type: SessionRecordType.SESSION,
+			harness: SESSION_HARNESS,
+			...conv
+		});
+		const messageLines = messages.map((message: DatabaseMessage) => {
+			// `toolCalls` is stored as a JSON string; drop it when empty, otherwise parse it.
+			const { toolCalls, ...rest } = message;
+			const normalized = toolCalls ? { ...rest, toolCalls: JSON.parse(toolCalls) } : rest;
+
+			return JSON.stringify({ type: SessionRecordType.MESSAGE, message: normalized });
+		});
+
+		return [sessionLine, ...messageLines].join(NEWLINE);
+	}
+
+	/**
+	 * Parses the JSONL session format produced by {@link serializeSessionToJsonl}.
+	 * A `SessionRecordType.SESSION` line starts a new session; following
+	 * `SessionRecordType.MESSAGE` lines are appended to it. Supports multiple
+	 * sessions in a single file.
+	 * @param text - The JSONL file contents
+	 * @returns The parsed conversations with their messages
+	 */
+	parseSessionsJsonl(text: string): ExportedConversation[] {
+		const sessions: ExportedConversation[] = [];
+		let current: ExportedConversation | null = null;
+
+		for (const line of text.split(NEWLINE)) {
+			const trimmed = line.trim();
+			if (!trimmed) continue;
+
+			const record = JSON.parse(trimmed);
+
+			if (record.type === SessionRecordType.SESSION) {
+				// Drop the discriminator and harness marker; the rest is the conversation.
+				const conv = { ...record };
+				delete conv.type;
+				delete conv.harness;
+				current = { conv: conv as DatabaseConversation, messages: [] };
+				sessions.push(current);
+			} else if (record.type === SessionRecordType.MESSAGE) {
+				if (!current) {
+					throw new Error('Invalid JSONL: message record before any session record');
+				}
+
+				const message = record.message as DatabaseMessage;
+				// `toolCalls` is parsed to an array on export; the DB stores it as a string.
+				if (message.toolCalls !== undefined && typeof message.toolCalls !== 'string') {
+					message.toolCalls = JSON.stringify(message.toolCalls);
+				}
+				current.messages.push(message);
+			}
+			// Ignore unknown record types for forward compatibility.
+		}
+
+		return sessions;
+	}
+
+	/**
+	 * Reports whether the text is the JSONL session format, whose first non-empty
+	 * line is a `SessionRecordType.SESSION` record. A legacy JSON export starts
+	 * with an array or an object that has no such discriminator.
+	 * @param text - The file contents
+	 */
+	private isSessionsJsonl(text: string): boolean {
+		const trimmed = text.trimStart();
+		const lineEnd = trimmed.indexOf(NEWLINE);
+		const firstLine = lineEnd === -1 ? trimmed : trimmed.slice(0, lineEnd);
+
+		try {
+			return JSON.parse(firstLine).type === SessionRecordType.SESSION;
+		} catch {
+			// Not a standalone JSON record, so not the JSONL format.
+			return false;
+		}
+	}
+
+	/**
+	 * Parses an import file into conversations, accepting the current JSONL and
+	 * ZIP formats as well as the legacy JSON format. The format comes from the
+	 * contents, so an import works whatever the file is named.
+	 * @param file - The user-selected file
+	 * @returns The parsed conversations with their messages
+	 */
+	async parseImportFile(file: File): Promise<ExportedConversation[]> {
+		const bytes = new Uint8Array(await file.arrayBuffer());
+
+		if (ZIP_MAGIC.every((byte, index) => bytes[index] === byte)) {
+			const entries = unzipSync(bytes);
+			const sessions: ExportedConversation[] = [];
+			for (const [entryName, entryBytes] of Object.entries(entries)) {
+				if (!entryName.toLowerCase().endsWith(FileExtensionText.JSONL)) continue;
+				sessions.push(...this.parseSessionsJsonl(strFromU8(entryBytes)));
+			}
+			return sessions;
+		}
+
+		const text = strFromU8(bytes);
+
+		if (this.isSessionsJsonl(text)) {
+			return this.parseSessionsJsonl(text);
+		}
+
+		// Legacy JSON format: an array of conversations or a single conversation object.
+		const parsed = JSON.parse(text);
+		if (Array.isArray(parsed)) {
+			return parsed;
+		}
+		if (parsed && typeof parsed === 'object' && 'conv' in parsed && 'messages' in parsed) {
+			return [parsed];
+		}
+		throw new Error(
+			'Invalid file format: expected array of conversations or single conversation object'
+		);
 	}
 
 	/**
 	 * Triggers a browser download of the provided exported conversation data
-	 * @param data - The exported conversation payload (either a single conversation or array of them)
+	 * @param data - The exported conversation payload (a single conversation with its messages)
 	 * @param filename - Filename; if omitted, a deterministic name is generated
 	 */
-	downloadConversationFile(data: ExportedConversations, filename?: string): void {
-		// Choose the first conversation or message
-		const conversation =
-			'conv' in data ? data.conv : Array.isArray(data) ? data[0]?.conv : undefined;
-		const msgs =
-			'messages' in data ? data.messages : Array.isArray(data) ? data[0]?.messages : undefined;
+	downloadConversationFile(data: ExportedConversation, filename?: string): void {
+		const { conv: conversation, messages: msgs } = data;
 
 		if (!conversation) {
 			console.error('Invalid data: missing conversation');
 			return;
 		}
 
-		let downloadFilename: string;
+		const downloadFilename = filename ?? this.generateConversationFilename(conversation, msgs);
 
-		if (filename) {
-			downloadFilename = filename;
-		} else if (Array.isArray(data) && data.length > 1) {
-			downloadFilename = `${new Date().toISOString().split(ISO_DATE_TIME_SEPARATOR)[0]}_conversations.json`;
-		} else {
-			downloadFilename = this.generateConversationFilename(conversation, msgs);
+		const jsonl = this.serializeSessionToJsonl(data);
+		const blob = new Blob([jsonl], { type: MimeTypeText.JSONL });
+		this.triggerDownload(blob, downloadFilename);
+	}
+
+	/**
+	 * Triggers a browser download of multiple conversations as a `.zip`, one
+	 * `.jsonl` file per conversation.
+	 * @param data - The conversations to export
+	 */
+	downloadConversationsArchive(data: ExportedConversation[]): void {
+		if (data.length === 0) {
+			console.error('Invalid data: no conversations to export');
+			return;
 		}
 
-		const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+		const usedNames = new SvelteSet<string>();
+		const files: Record<string, Uint8Array> = {};
+
+		for (const session of data) {
+			const baseName = this.generateConversationFilename(session.conv, session.messages);
+
+			// Disambiguate any duplicate filenames within the archive.
+			let entryName = baseName;
+			let suffix = 1;
+			while (usedNames.has(entryName)) {
+				entryName = baseName.replace(
+					new RegExp(`${FileExtensionText.JSONL}$`),
+					`_${suffix++}${FileExtensionText.JSONL}`
+				);
+			}
+			usedNames.add(entryName);
+
+			files[entryName] = strToU8(this.serializeSessionToJsonl(session));
+		}
+
+		const archiveName = `${new Date().toISOString().split(ISO_DATE_TIME_SEPARATOR)[0]}_conversations${FileExtensionText.ZIP}`;
+
+		const zipped = zipSync(files);
+		const blob = new Blob([zipped], { type: MimeTypeApplication.ZIP });
+		this.triggerDownload(blob, archiveName);
+	}
+
+	/**
+	 * Triggers a browser download of a blob under the given filename.
+	 */
+	private triggerDownload(blob: Blob, filename: string): void {
 		const url = URL.createObjectURL(blob);
 		const a = document.createElement('a');
 		a.href = url;
-		a.download = downloadFilename;
+		a.download = filename;
 		document.body.appendChild(a);
 		a.click();
 		document.body.removeChild(a);
@@ -816,92 +1129,30 @@ class ConversationsStore {
 	}
 
 	/**
-	 * Downloads a conversation as JSON file.
+	 * Downloads a single conversation as a JSONL file, serializing the full message tree.
 	 * @param convId - The conversation ID to download
 	 */
 	async downloadConversation(convId: string): Promise<void> {
-		let conversation: DatabaseConversation | null;
-		let messages: DatabaseMessage[];
+		const conversation =
+			this.activeConversation?.id === convId
+				? this.activeConversation
+				: await DatabaseService.getConversation(convId);
 
-		if (this.activeConversation?.id === convId) {
-			conversation = this.activeConversation;
-			messages = this.activeMessages;
-		} else {
-			conversation = await DatabaseService.getConversation(convId);
-			if (!conversation) return;
-			messages = await DatabaseService.getConversationMessages(convId);
-		}
+		if (!conversation) return;
+
+		const messages = await DatabaseService.getConversationMessages(convId);
 
 		this.downloadConversationFile({ conv: conversation, messages });
 	}
 
 	/**
-	 * Imports conversations from a JSON file
-	 * Opens file picker and processes the selected file
-	 * @returns The list of imported conversations
-	 */
-	async importConversations(): Promise<DatabaseConversation[]> {
-		return new Promise((resolve, reject) => {
-			const input = document.createElement('input');
-			input.type = HtmlInputType.FILE;
-			input.accept = FileExtensionText.JSON;
-
-			input.onchange = async (e) => {
-				const file = (e.target as HTMLInputElement)?.files?.[0];
-
-				if (!file) {
-					reject(new Error('No file selected'));
-					return;
-				}
-
-				try {
-					const text = await file.text();
-					const parsedData = JSON.parse(text);
-					let importedData: ExportedConversations;
-
-					if (Array.isArray(parsedData)) {
-						importedData = parsedData;
-					} else if (
-						parsedData &&
-						typeof parsedData === 'object' &&
-						'conv' in parsedData &&
-						'messages' in parsedData
-					) {
-						importedData = [parsedData];
-					} else {
-						throw new Error('Invalid file format');
-					}
-
-					const result = await DatabaseService.importConversations(importedData);
-					toast.success(`Imported ${result.imported} conversation(s), skipped ${result.skipped}`);
-
-					await this.loadConversations();
-
-					const importedConversations = (
-						Array.isArray(importedData) ? importedData : [importedData]
-					).map((item) => item.conv);
-
-					resolve(importedConversations);
-				} catch (err: unknown) {
-					const message = err instanceof Error ? err.message : 'Unknown error';
-					console.error('Failed to import conversations:', err);
-					toast.error('Import failed', { description: message });
-					reject(new Error(`Import failed: ${message}`));
-				}
-			};
-
-			input.click();
-		});
-	}
-
-	/**
 	 * Imports conversations from provided data (without file picker)
 	 * @param data - Array of conversation data with messages
-	 * @returns Import result with counts
+	 * @returns The conversations written to the database and the ones skipped
 	 */
 	async importConversationsData(
 		data: ExportedConversations
-	): Promise<{ imported: number; skipped: number }> {
+	): Promise<{ imported: DatabaseConversation[]; skipped: DatabaseConversation[] }> {
 		const result = await DatabaseService.importConversations(data);
 		await this.loadConversations();
 		return result;
@@ -923,7 +1174,19 @@ export const isConversationsInitialized = () => conversationsStore.isInitialized
 /**
  * Builds a flat tree of conversations with depth levels for nested forks.
  * Accepts a pre-filtered list so search filtering stays in the component.
+ *
+ * Output order matches the sidebar render exactly: pinned first, then
+ * unpinned by lastModified desc, with forks interleaved under their parents.
+ * Range-select / marquee in the sidebar rely on this alignment.
  */
+
+// Pinned conversations first, then by lastModified descending
+const comparePinnedThenRecent = (a: DatabaseConversation, b: DatabaseConversation) => {
+	if (a.pinned && !b.pinned) return -1;
+	if (!a.pinned && b.pinned) return 1;
+	return b.lastModified - a.lastModified;
+};
+
 export function buildConversationTree(convs: DatabaseConversation[]): ConversationTreeItem[] {
 	const childrenByParent = new SvelteMap<string, DatabaseConversation[]>();
 	const forkIds = new SvelteSet<string>();
@@ -948,7 +1211,7 @@ export function buildConversationTree(convs: DatabaseConversation[]): Conversati
 
 		const children = childrenByParent.get(conv.id);
 		if (children) {
-			children.sort((a, b) => b.lastModified - a.lastModified);
+			children.sort(comparePinnedThenRecent);
 
 			for (const child of children) {
 				walk(child, depth + 1);
@@ -956,7 +1219,7 @@ export function buildConversationTree(convs: DatabaseConversation[]): Conversati
 		}
 	}
 
-	const roots = convs.filter((c) => !forkIds.has(c.id));
+	const roots = convs.filter((c) => !forkIds.has(c.id)).sort(comparePinnedThenRecent);
 	for (const root of roots) {
 		walk(root, 0);
 	}

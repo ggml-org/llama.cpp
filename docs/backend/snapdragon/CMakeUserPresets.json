@@ -24,7 +24,6 @@
             "GGML_LLAMAFILE":   "OFF",
             "GGML_OPENCL":      "ON",
             "GGML_HEXAGON":     "ON",
-            "GGML_HEXAGON_FP32_QUANTIZE_GROUP_SIZE": "128",
             "LLAMA_OPENSSL":    "OFF"
         }
     },
@@ -33,8 +32,8 @@
         "name": "arm64-windows-snapdragon",
         "inherits": [ "base", "arm64-windows-llvm" ],
         "cacheVariables": {
-            "CMAKE_C_FLAGS":   "-march=armv8.7a+fp16 -fvectorize -ffp-model=fast -flto -D_GNU_SOURCE",
-            "CMAKE_CXX_FLAGS": "-march=armv8.7a+fp16 -fvectorize -ffp-model=fast -flto -D_GNU_SOURCE",
+            "CMAKE_C_FLAGS":   "-march=armv8.7a+fp16+dotprod+i8mm -fvectorize -ffp-model=fast -flto -D_GNU_SOURCE",
+            "CMAKE_CXX_FLAGS": "-march=armv8.7a+fp16+dotprod+i8mm -fvectorize -ffp-model=fast -flto -D_GNU_SOURCE",
             "CMAKE_C_FLAGS_RELEASE":          "-O3 -DNDEBUG",
             "CMAKE_CXX_FLAGS_RELEASE":        "-O3 -DNDEBUG",
             "CMAKE_C_FLAGS_RELWITHDEBINFO":   "-O3 -DNDEBUG -g",
@@ -47,7 +46,6 @@
             "GGML_LLAMAFILE":   "OFF",
             "GGML_OPENCL":      "ON",
             "GGML_HEXAGON":     "ON",
-            "GGML_HEXAGON_FP32_QUANTIZE_GROUP_SIZE": "128",
             "LLAMA_OPENSSL":    "OFF"
         }
     },
@@ -73,7 +71,6 @@
             "GGML_LLAMAFILE":   "OFF",
             "GGML_OPENCL":      "OFF",
             "GGML_HEXAGON":     "ON",
-            "GGML_HEXAGON_FP32_QUANTIZE_GROUP_SIZE": "128",
             "LLAMA_OPENSSL":    "OFF"
         }
     },
