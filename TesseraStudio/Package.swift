@@ -8,6 +8,12 @@ import Foundation
 //                     for on-device inference. Compiles against the repo's
 //                     llama.h when present; otherwise builds a stub that
 //                     reports unavailable (see CLLAMA_NO_HEADERS below).
+//   CTesseraFFI       C target: TesseraFFIBridge's FFI surface. Compiles a
+//                     stub that reports unavailable when built by SwiftPM
+//                     (so swift build / swift test pass standalone). When
+//                     tessera.xcframework is linked in the Xcode app the
+//                     real C++ implementation takes over and isAvailable
+//                     returns true. See Sources/CTesseraFFI/tessera_ffi.c.
 //   TesseraCore       Platform-independent models, tool protocol, engine
 //                     bridge protocol + CLI bridge, and the shared SwiftUI
 //                     views (guarded with #if os() where needed).
@@ -22,8 +28,10 @@ import Foundation
 // Xcode project, which embeds tessera.xcframework. This mirrors the
 // pattern in docs/tessera-studio-design.md section 2.2.
 //
-// The planned native FFI surface (tessera.xcframework) is documented,
-// not built: see Sources/TesseraCore/tessera_ffi_reference.h.
+// The native FFI surface (tessera.xcframework) is built by
+// TesseraStudio/scripts/build-xcframework.sh and linked in the Xcode app.
+// SwiftPM builds the stub in Sources/CTesseraFFI instead; see
+// Sources/TesseraCore/tessera_ffi_reference.h for the contract history.
 
 // CLlama compiles against the llama.cpp public headers, which live in the
 // enclosing repo (this package is nested inside the fork). Resolve them
@@ -70,9 +78,15 @@ let package = Package(
             cSettings: cllamaCSettings
         ),
         .target(
+            name: "CTesseraFFI",
+            path: "Sources/CTesseraFFI",
+            publicHeadersPath: "include"
+        ),
+        .target(
             name: "TesseraCore",
             dependencies: [
                 "CLlama",
+                "CTesseraFFI",
                 .product(name: "SwiftSoup", package: "SwiftSoup"),
             ],
             path: "Sources/TesseraCore",

@@ -153,3 +153,9 @@ a.out.*
 
 AGENTS.local.md
 .pi/SYSTEM.md
+
+# Tessera Studio xcframework build outputs (see
+# TesseraStudio/scripts/build-xcframework.sh). The xcframework is rebuilt
+# locally; it is not checked in.
+/TesseraStudio/artifacts/
+/build-ffi/

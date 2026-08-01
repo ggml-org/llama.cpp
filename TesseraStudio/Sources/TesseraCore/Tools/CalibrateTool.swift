@@ -52,6 +52,28 @@ public struct CalibrateTool: TesseraTool {
         let nTokens = arguments["n_tokens"]?.numberValue.map { Int($0) } ?? 5000
         let modality = arguments["modality"]?.stringValue ?? "text"
 
+        // Prefer the linked xcframework when available; fall back to the
+        // tessera-imatrix CLI subprocess otherwise.
+        if TesseraFFIBridge.isAvailable {
+            switch TesseraFFIBridge.calibrate(
+                model: NSString(string: modelPath).expandingTildeInPath,
+                corpus: NSString(string: corpusPath).expandingTildeInPath,
+                config: ["n_tokens": nTokens, "modality": modality]
+            ) {
+            case let .success(output):
+                return .ok(output, data: [
+                    "output_path": .string(outputPath),
+                    "n_tokens": .number(Double(nTokens)),
+                    "modality": .string(modality),
+                    "backend": .string("ffi"),
+                ])
+            case .fallbackToCLI:
+                break
+            case let .error(code, message):
+                return .fail("Calibration failed via FFI (code \(code)): \(message)")
+            }
+        }
+
         let runner = ProcessRunner()
         let result = try await runner.run(
             executable: "tessera-imatrix",

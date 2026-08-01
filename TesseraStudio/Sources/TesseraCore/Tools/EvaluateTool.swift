@@ -65,6 +65,35 @@ public struct EvaluateTool: TesseraTool {
         let runtime = arguments["runtime"]?.stringValue ?? TesseraRuntime.onDevice.rawValue
         let measurePower = arguments["measure_power"].map { $0 != .bool(false) && $0 != .string("false") } ?? true
 
+        // The FFI cannot run a model forward pass (needed for perplexity), so
+        // it returns fallbackToCLI; the gate is kept so a future in-process
+        // evaluate path slots in here without touching the tool signature.
+        if TesseraFFIBridge.isAvailable {
+            var config: [String: Any] = [
+                "n_tokens": nTokens,
+                "runtime": runtime,
+                "measure_power": measurePower,
+            ]
+            if !evalCorpus.isEmpty {
+                config["eval_corpus"] = NSString(string: evalCorpus).expandingTildeInPath
+            }
+            switch TesseraFFIBridge.evaluate(
+                model: NSString(string: modelPath).expandingTildeInPath, config: config
+            ) {
+            case let .success(output):
+                return .ok(output, data: [
+                    "model_path": .string(modelPath),
+                    "runtime": .string(runtime),
+                    "n_tokens": .number(Double(nTokens)),
+                    "backend": .string("ffi"),
+                ])
+            case .fallbackToCLI:
+                break
+            case let .error(code, message):
+                return .fail("Evaluation failed via FFI (code \(code)): \(message)")
+            }
+        }
+
         var args = [
             "--model", NSString(string: modelPath).expandingTildeInPath,
             "--n-tokens", String(nTokens),
