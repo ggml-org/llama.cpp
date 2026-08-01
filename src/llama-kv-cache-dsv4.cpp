@@ -462,6 +462,7 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
     std::vector<int32_t> overlap_cur_reads;
 
     std::map<std::pair<llama_seq_id, llama_pos>, int64_t> curr_token_idx_map;
+    std::map<llama_seq_id, uint32_t> state_write_counts;
 
     for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
         for (int32_t s = 0; s < ubatch.n_seq_id[i]; ++s) {
@@ -524,6 +525,7 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
 
             plan.state_write_idxs.push_back(cache_off + pos/ratio);
             plan.state_write_pos.push_back((int32_t) source_start);
+            ++state_write_counts[seq_id];
 
             if (overlap) {
                 const llama_pos prev_start = source_start - ratio;
@@ -542,33 +544,57 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
         }
     }
 
-    if (ratio == DSV4_CSA_RATIO && plan.state_write_idxs.empty() && !plan.state_pos.empty()) {
-        // Non-boundary CSA steps still need a write op so their graph matches
-        // boundary steps. Use a padded scratch row that is masked from attention.
+    if (ratio == DSV4_CSA_RATIO && !plan.state_pos.empty()) {
         assert(kv_size > 0);
 
-        uint32_t i = 0;
-        while (i < ubatch.n_tokens && ubatch.pos[i] < 0) {
-            ++i;
-        }
-        assert(i < ubatch.n_tokens);
+        // Pad each stream to the reserve plan's block count.
+        const auto append_dummy_block = [&](llama_seq_id seq_id, uint32_t i) {
+            const int64_t cache_off = dsv4_stream_offset(n_stream, seq_id, kv_size);
+            const int32_t source_idx = state_source_idx(seq_id, ubatch.pos[i]);
 
-        const llama_pos    pos    = ubatch.pos[i];
-        const llama_seq_id seq_id = ubatch.seq_id[i][0];
-        const int64_t cache_off = dsv4_stream_offset(n_stream, seq_id, kv_size);
-        const int32_t source_idx = state_source_idx(seq_id, pos);
+            plan.state_write_idxs.push_back(cache_off + kv_size - 1);
+            plan.state_write_pos .push_back(0);
 
-        plan.state_write_idxs.push_back(cache_off + kv_size - 1);
-        plan.state_write_pos .push_back(0);
+            if (overlap) {
+                for (uint32_t j = 0; j < ratio; ++j) {
+                    overlap_prev_reads.push_back(source_idx);
+                    overlap_cur_reads .push_back(source_idx);
+                }
+            } else {
+                for (uint32_t j = 0; j < ratio; ++j) {
+                    plan.state_read_idxs.push_back(source_idx);
+                }
+            }
+        };
 
-        if (overlap) {
-            for (uint32_t j = 0; j < ratio; ++j) {
-                overlap_prev_reads.push_back(source_idx);
-                overlap_cur_reads .push_back(source_idx);
+        if (dsv4_ubatch_has_coupled(ubatch)) {
+            if (plan.state_write_idxs.empty()) {
+                uint32_t i = 0;
+                while (i < ubatch.n_tokens && ubatch.pos[i] < 0) {
+                    ++i;
+                }
+                assert(i < ubatch.n_tokens);
+                append_dummy_block(ubatch.seq_id[i][0], i);
             }
         } else {
-            for (uint32_t j = 0; j < ratio; ++j) {
-                plan.state_read_idxs.push_back(source_idx);
+            const uint32_t n_blocks = (std::max<uint32_t>(1, ubatch.n_seq_tokens) + ratio - 1)/ratio;
+
+            for (uint32_t s = 0; s < ubatch.n_seqs_unq; ++s) {
+                const llama_seq_id seq_id = ubatch.seq_id_unq[s];
+                const uint32_t n_writes = state_write_counts[seq_id];
+                if (n_writes >= n_blocks) {
+                    continue;
+                }
+                if (n_writes + 1 != n_blocks) {
+                    throw std::runtime_error("DSV4 CSA sequence positions are not contiguous");
+                }
+
+                uint32_t i = 0;
+                while (i < ubatch.n_tokens && (ubatch.pos[i] < 0 || !dsv4_token_has_seq(ubatch, i, seq_id))) {
+                    ++i;
+                }
+                assert(i < ubatch.n_tokens);
+                append_dummy_block(seq_id, i);
             }
         }
     }
@@ -604,12 +630,11 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
 
             const int64_t stream_off = dsv4_stream_offset(n_stream, seq_id, state_size);
             const uint32_t rollback = (uint32_t) seq_id < rs_idx.size() ? rs_idx[seq_id] : 0;
-            if (rollback > 0 && rollback <= n_rs_seq) {
-                const int64_t src_plane = (int64_t) rollback*state_rows;
-                for (uint32_t r = 0; r < state_size; ++r) {
-                    plan.state_restore_src_idxs.push_back((int32_t) (src_plane + stream_off + r));
-                    plan.state_restore_dst_idxs.push_back((int32_t) (stream_off + r));
-                }
+            // Keep the restore graph fixed-width when no rollback is pending.
+            const int64_t src_plane = rollback > 0 && rollback <= n_rs_seq ? (int64_t) rollback*state_rows : 0;
+            for (uint32_t r = 0; r < state_size; ++r) {
+                plan.state_restore_src_idxs.push_back((int32_t) (src_plane + stream_off + r));
+                plan.state_restore_dst_idxs.push_back((int32_t) (stream_off + r));
             }
 
             std::vector<uint32_t> token_idxs;
@@ -786,8 +811,8 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_reserve_comp_plan(
 
     const uint64_t state_rows = (uint64_t) state_size*n_stream;
     const size_t n_persist = (size_t) std::min<uint64_t>(ubatch.n_tokens, state_rows);
-    const size_t n_restore = (size_t) n_rs_seq*state_size*std::max<uint32_t>(1, ubatch.n_seqs_unq);
-    const size_t n_snapshot = n_restore;
+    const size_t n_restore = n_rs_seq > 0 ? (size_t) state_size*std::max<uint32_t>(1, ubatch.n_seqs_unq) : 0;
+    const size_t n_snapshot = (size_t) n_rs_seq*state_size*std::max<uint32_t>(1, ubatch.n_seqs_unq);
 
     plan.state_pos .resize(ubatch.n_tokens);
     plan.state_persist_src_idxs.resize(n_persist);
