@@ -1,6 +1,7 @@
 # DFlash block-drafter training driver - design
 
-Status: design + Stage 0 (go/no-go) findings. No driver code written yet.
+Status: design + Stage 0 (go/no-go) findings + offline feature-capture tooling
+landed. The training DRIVER (section 5, Stages 1-4) is not written yet.
 
 This documents the plan to train the DFlash/DSpark block drafter on-device, in
 idle time, using the D-PACE adaptive position-weight objective. It builds on
@@ -145,10 +146,48 @@ Owns:
 4. CLI + guard eval: acceptance-rate before/after on held-out blocks (reuse
    ts_lk_acceptance_rate / ts_dpace metrics), honest exit codes, dry-run default.
 
+### Feature capture: LANDED
+
+The offline capture tooling (risk #1's first half) is implemented as a
+dedicated trunk-only pass in `llama-imatrix`, NOT interleaved into the fragile
+speculative telemetry loop (per the constraint above):
+
+- CLI: `llama-imatrix -m trunk.gguf -f calib.txt --features-out <prefix>
+  --feature-layers <csv>`. `--feature-layers` is the drafter's
+  `target_layer_ids` in concatenation order (e.g. `0,15,31`); the pass needs
+  only the trunk + calibration text, no drafter load. Mutually exclusive with
+  `--model-draft`.
+- Mechanism: enables the existing runtime tap
+  `llama_set_embeddings_layer_inp(lid, true)` per target layer, runs the plain
+  chunked forward (same structure as `compute_imatrix`, KV cleared per chunk),
+  and streams `llama_get_embeddings_layer_inp(lid)` token-major to disk.
+  Requesting logits for every token keeps `output_reorder` on the exact proven
+  `compute_imatrix` path, so layer buffers come back in batch order.
+- Format (owned by `tools/quantize/tessera/tessera-features.{h,cpp}`, shared
+  with the future training driver): `<prefix>.bin` = raw f32 blob, row-major
+  `[n_tokens, n_layers*n_embd]`, layers concatenated in `--feature-layers`
+  order; `<prefix>.json` = header. Schema `llama.tessera.features.v1`. The
+  encoder's FC input is a flat read of `row_floats = n_layers*n_embd` floats
+  per token. F16/Q8_0 are reserved in the header `dtype` field but not yet
+  implemented (f32 is exact and removes conversion risk from the critical path).
+- Verified live (stories260K tiny llama, n_embd=64): 23,552 tokens x 192
+  floats captured; header/blob size exact; values finite and per-token
+  distinct. Gold-standard cross-check: a separate single-layer-1 capture
+  matches the layer-1 block of the 3-layer blob BIT-EXACTLY (max diff 0.0 over
+  1,507,328 floats), proving layer order + token alignment + deterministic
+  batch-order readback. Unit tests: `test_features.cpp` (35 assertions).
+
+Context note: like `compute_imatrix`, KV is cleared per chunk, so each chunk's
+first tokens are processed without left context - features are
+context-windowed, matching how the drafter conditions at train time.
+
 ## 5. Staged plan
 
 - Stage 0 (done): 0a differentiable YES; 0b layout nailed (off-by-one noted);
-  0c feature dim + capture tap confirmed.
+  0c feature dim + capture tap confirmed. Offline feature-capture tooling
+  LANDED (see section 4 "Feature capture: LANDED") - the trunk-only imatrix
+  pass + the tessera-features file format. Stage 1 now consumes real captured
+  features instead of a hand-built block.
 - Stage 1 (throwaway spike): hand-build one feature-augmented block, run one
   epoch of plain CE (weight = 1.0) through the generalized label fill, confirm
   loss decreases. Proves the encoder+decoder+CE plumbing.
@@ -160,9 +199,11 @@ Owns:
 
 ## 6. Risks, ranked
 
-1. Feature pipeline is the real project. The current dataset is missing the
-   drafter's primary input (trunk target-layer hidden states). Budget for the
-   capture tooling + storage/quantization.
+1. Feature pipeline is the real project. The capture tooling has LANDED
+   (imatrix trunk-only pass + tessera-features format, section 4). Remaining:
+   the train-time feature loader (features sidecar -> ggml_opt_dataset, own
+   item 1 above) and storage/quantization (f16/Q8_0; f32 capture works today
+   but is the dominant storage cost at corpus scale).
 2. Combined encoder+decoder training graph. The two-phase inference path must
    be fused into one differentiable step; the MASK-token embedding and the
    borrowed tok_embd/output setup are the fiddly parts. Stage 1 is the gate.

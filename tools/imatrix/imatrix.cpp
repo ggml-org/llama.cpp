@@ -8,6 +8,13 @@
 #include "sampling.h"
 #include "speculative.h"
 
+// staging API: llama_set_embeddings_layer_inp / llama_get_embeddings_layer_inp
+// (per-layer hidden-state capture used by the offline feature pass)
+#include "../../src/llama-ext.h"
+
+// offline DFlash feature-capture file format (shared with the training driver)
+#include "tessera-features.h"
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -39,6 +46,7 @@ static void print_usage(int, char ** argv) {
             "       [--in-file imatrix-prev-0.gguf --in-file imatrix-prev-1.gguf ...] [--parse-special] \\\n"
             "       [--show-statistics] \\\n"
             "       [--model-draft drafter.gguf --spec-steps 64]   # spec-decoding calibration\n"
+            "       [--features-out feats --feature-layers 0,15,31]   # offline DFlash feature capture\n"
             "       [...]\n" , argv[0]);
     LOG("\n");
 }
@@ -1769,6 +1777,153 @@ static bool compute_imatrix(llama_context * ctx, const common_params & params, c
     return true;
 }
 
+// Offline trunk-feature capture for DFlash drafter training (Path 1 in
+// docs/tessera-dflash-training-design.md).
+//
+// This is a dedicated trunk-only forward pass, deliberately separate from the
+// speculative telemetry loop above: that loop interleaves drafter forwards,
+// KV trimming, and output_reorder in ways that make hidden-state readback
+// fragile. Here we run the plain chunked forward (same structure as
+// compute_imatrix) with per-layer input-embedding capture enabled, and stream
+// the target-layer hidden states to disk token-major.
+//
+// Output: <features_out>.bin (raw [n_tokens, n_layers*n_embd], f32) plus
+// <features_out>.json (header). The drafter encoder's FC input is a flat read
+// of one row per token, layers concatenated in --feature-layers order.
+//
+// Note on context: like compute_imatrix, the KV cache is cleared per chunk, so
+// each chunk's first tokens are processed without left context. Features are
+// therefore context-windowed, which matches how the drafter conditions at
+// train time. Requesting logits for every token keeps output_reorder on the
+// exact proven path compute_imatrix uses, so the layer buffers come back in
+// batch order.
+static bool compute_features(llama_context * ctx, const common_params & params, const int32_t n_ctx) {
+    const llama_model * model = llama_get_model(ctx);
+
+    const int32_t n_embd   = llama_model_n_embd(model);
+    const int32_t n_layer  = llama_model_n_layer(model);
+    const int32_t n_batch  = params.n_batch;
+
+    const std::vector<int32_t> & layers = params.feature_layers;
+    if (layers.empty()) {
+        LOG_ERR("%s: --features-out requires --feature-layers\n", __func__);
+        return false;
+    }
+    for (int32_t lid : layers) {
+        if (lid < 0 || lid >= n_layer) {
+            LOG_ERR("%s: feature layer %d out of range [0, %d)\n", __func__, lid, n_layer);
+            return false;
+        }
+    }
+
+    LOG_INF("%s: tokenizing the input ..\n", __func__);
+    std::vector<llama_token> tokens = common_tokenize(ctx, params.prompt, true, params.parse_special);
+    LOG_INF("%s: %zu tokens\n", __func__, tokens.size());
+
+    if (int(tokens.size()) < n_ctx) {
+        LOG_ERR("%s: need at least %d tokens for a context of %d\n", __func__, n_ctx, n_ctx);
+        return false;
+    }
+
+    // enable per-layer input-embedding capture for the target layers. this
+    // flags a scheduler reserve, so the first decode grows the output buffer
+    // to hold the layer buffers (see llama_context::init_buffers).
+    for (int32_t lid : layers) {
+        llama_set_embeddings_layer_inp(ctx, (uint32_t) lid, true);
+    }
+
+    ts_features_writer writer;
+    if (!writer.open(params.features_out, n_embd, layers, TS_FEATURES_F32)) {
+        LOG_ERR("%s: failed to open feature output '%s'\n", __func__, params.features_out.c_str());
+        return false;
+    }
+
+    const int n_chunk_max = (int) tokens.size() / n_ctx;
+    const int n_chunk = params.n_chunks < 0 ? n_chunk_max : std::min(params.n_chunks, n_chunk_max);
+    const int num_batches = (n_ctx + n_batch - 1) / n_batch;
+
+    llama_batch batch = llama_batch_init(std::min(n_batch, n_ctx), 0, 1);
+
+    const int32_t row_floats = n_embd * (int32_t) layers.size();
+    LOG_INF("%s: capturing %d chunks, n_ctx=%d, batch=%d, layers=%zu, n_embd=%d (%.1f KB/token f32)\n",
+            __func__, n_chunk, n_ctx, n_batch, layers.size(), n_embd,
+            row_floats * sizeof(float) / 1024.0);
+
+    std::vector<const float *> layer_rows(layers.size());
+
+    for (int i = 0; i < n_chunk; ++i) {
+        const int start = i * n_ctx;
+        const int end   = start + n_ctx;
+
+        const auto t_start = std::chrono::high_resolution_clock::now();
+
+        llama_memory_clear(llama_get_memory(ctx), true);
+
+        for (int j = 0; j < num_batches; ++j) {
+            const int batch_start = start + j * n_batch;
+            const int batch_size  = std::min(end - batch_start, n_batch);
+
+            common_batch_clear(batch);
+            for (int k = 0; k < batch_size; ++k) {
+                // logits=true for all tokens: keeps output_reorder on the same
+                // proven path as compute_imatrix so layer buffers are batch-order.
+                common_batch_add(batch, tokens[batch_start + k], j*n_batch + k, { 0 }, true);
+            }
+
+            if (llama_decode(ctx, batch)) {
+                LOG_ERR("%s: failed to eval chunk %d batch %d\n", __func__, i, j);
+                llama_batch_free(batch);
+                return false;
+            }
+
+            // fetch each target layer's batch buffer once, then stream one
+            // fused row per token. buffer is token-major: row t at +t*n_embd.
+            std::vector<const float *> layer_bases(layers.size());
+            for (size_t li = 0; li < layers.size(); ++li) {
+                const float * base = llama_get_embeddings_layer_inp(ctx, (uint32_t) layers[li]);
+                if (base == nullptr) {
+                    LOG_ERR("%s: null layer-input buffer for layer %d\n", __func__, layers[li]);
+                    llama_batch_free(batch);
+                    return false;
+                }
+                layer_bases[li] = base;
+            }
+
+            for (int t = 0; t < batch_size; ++t) {
+                for (size_t li = 0; li < layers.size(); ++li) {
+                    layer_rows[li] = layer_bases[li] + (size_t) t * n_embd;
+                }
+                if (!writer.append_token_layers(layer_rows.data())) {
+                    LOG_ERR("%s: failed to write feature row\n", __func__);
+                    llama_batch_free(batch);
+                    return false;
+                }
+            }
+        }
+
+        if (i == 0) {
+            llama_synchronize(ctx);
+            const auto t_end = std::chrono::high_resolution_clock::now();
+            const float t_total = std::chrono::duration<float>(t_end - t_start).count();
+            LOG_INF("%s: %.2f seconds per chunk - ETA %.2f minutes\n",
+                    __func__, t_total, t_total * n_chunk / 60.0);
+        }
+    }
+
+    llama_batch_free(batch);
+
+    if (!writer.close()) {
+        LOG_ERR("%s: failed to finalize feature output\n", __func__);
+        return false;
+    }
+
+    LOG_INF("%s: wrote %lld tokens x %d floats to '%s.bin' (+ '%s.json')\n",
+            __func__, (long long) writer.n_tokens_written(), row_floats,
+            params.features_out.c_str(), params.features_out.c_str());
+
+    return true;
+}
+
 // Spec-decoding variant of compute_imatrix. Runs real speculative-decoding
 // forward passes on the calibration text instead of plain text forward
 // passes, so the captured imatrix reflects the drafter-co-decoded input
@@ -2636,7 +2791,12 @@ int main(int argc, char ** argv) {
     // graph observers; the drafter is observer-free.
     common_speculative_init_result_ptr spec_init;
     common_speculative_ptr spec;
-    const bool use_spec = !params.speculative.draft.mparams.path.empty();
+    const bool use_spec     = !params.speculative.draft.mparams.path.empty();
+    const bool use_features = !params.features_out.empty();
+    if (use_features && use_spec) {
+        LOG_ERR("%s: --features-out is a dedicated trunk-only pass and cannot be combined with --model-draft\n", __func__);
+        return 1;
+    }
     if (use_spec) {
         LOG_INF("%s: spec-decoding calibration requested; loading drafter '%s'\n",
                 __func__, params.speculative.draft.mparams.path.c_str());
@@ -2677,7 +2837,11 @@ int main(int argc, char ** argv) {
         LOG_INF("%s\n", common_params_get_system_info(params).c_str());
     }
 
-    if (use_spec) {
+    if (use_features) {
+        if (!compute_features(ctx, params, n_ctx)) {
+            return 1;
+        }
+    } else if (use_spec) {
         if (!compute_imatrix_spec(ctx, model, spec.get(), params, n_ctx)) {
             return 1;
         }
@@ -2687,7 +2851,11 @@ int main(int argc, char ** argv) {
         }
     }
 
-    g_collector.save_imatrix();
+    if (!use_features) {
+        // the feature pass is trunk-only and writes its own sidecar; it does
+        // not produce (or want) an imatrix, so skip the default save.
+        g_collector.save_imatrix();
+    }
 
     LOG("\n");
     llama_perf_context_print(ctx);

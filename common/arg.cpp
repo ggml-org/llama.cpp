@@ -1835,6 +1835,34 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
     add_opt(common_arg(
+        {"--features-out"}, "PREFIX",
+        string_format(
+            "[imatrix] run a dedicated trunk-only forward pass and capture the "
+            "target-layer hidden states for offline DFlash drafter training. "
+            "Writes <PREFIX>.bin (raw features, token-major "
+            "[n_tokens, n_layers*n_embd]) and <PREFIX>.json (header). Requires "
+            "--feature-layers. Schema: llama.tessera.features.v1 (default: %s).",
+            params.features_out.c_str()),
+        [](common_params & params, const std::string & value) {
+            params.features_out = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    add_opt(common_arg(
+        {"--feature-layers"}, "CSV",
+        "[imatrix] comma-separated trunk layer ids to capture with --features-out, "
+        "in the order the drafter encoder concatenates them (its target_layer_ids), "
+        "e.g. --feature-layers 0,15,31.",
+        [](common_params & params, const std::string & value) {
+            params.feature_layers.clear();
+            for (const auto & item : string_split<std::string>(value, ',')) {
+                if (item.empty()) {
+                    continue;
+                }
+                params.feature_layers.push_back(std::stoi(item));
+            }
+        }
+    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
+    add_opt(common_arg(
         {"--spec-steps"}, "N",
         string_format(
             "[imatrix] number of spec-decoding steps to roll forward when --model-draft is set "

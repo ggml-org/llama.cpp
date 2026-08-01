@@ -46,6 +46,8 @@ add_library(${TARGET}
     tessera/tessera-lk-loss.cpp
     tessera/tessera-dataset.cpp
     tessera/tessera-dpace.cpp
+    # drafter training pipeline: offline trunk-feature capture file format
+    tessera/tessera-features.cpp
     # multimodal
     tessera/tessera-mm-imatrix.cpp
     tessera/tessera-mm-awq.cpp

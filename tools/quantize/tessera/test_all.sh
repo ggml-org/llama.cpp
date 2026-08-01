@@ -120,6 +120,9 @@ compile_and_run dataset       $T/test_dataset.cpp     $T/tessera-dataset.cpp $T/
 # --- Drafter training pipeline: D-PACE loss (pure math, no vendor) ---
 compile_and_run dpace         $T/test_dpace.cpp       $T/tessera-dpace.cpp
 
+# --- Drafter training pipeline: offline feature-capture file format (needs vendor) ---
+compile_and_run features      $T/test_features.cpp    $T/tessera-features.cpp -I vendor
+
 # --- common/tessera-debug ---
 compile_and_run sidecar_v3  $C/test_sidecar_v3.cpp  $C/tessera-sidecar-v3.cpp -I $C
 
