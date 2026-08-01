@@ -41,3 +41,6 @@ jobs:
       - name: Type-check with ty
         run: |
             ty check --output-format=github
+      - name: Test model conversion
+        run: |
+            python -m unittest discover -s tests -p 'test_convert_hf_to_gguf.py' -v
