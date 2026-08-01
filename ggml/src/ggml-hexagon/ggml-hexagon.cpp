@@ -63,7 +63,11 @@ using intvec  = std::vector<int>;
 using uintvec = std::vector<unsigned int>;
 using u32vec  = std::vector<uint32_t>;
 
-#define GGML_HEXAGON_MAX_SESSIONS 16
+#define GGML_HEXAGON_MAX_SESSIONS          16
+#define GGML_HEXAGON_GRAPH_FLUSH_THRESHOLD 4
+
+#define GGML_HEXAGON_TOKEN_BUFFER_SIZE     8192
+#define GGML_HEXAGON_TOKEN_SLOT_SIZE       128
 
 struct ggml_hexagon_device_config {
     int physical_idx = 0;
@@ -358,7 +362,7 @@ struct ggml_hexagon_session {
 
     void flush(bool all = true);
     void flush_pending(bool all = false);
-    void flush_batch();
+    void flush_batch(size_t min_ops = 1);
 
     uint64_t record_event();
     void     wait_event(uint64_t seq);
@@ -402,9 +406,6 @@ struct ggml_hexagon_rpcmem_block {
         }
     }
 };
-
-#define GGML_HEXAGON_TOKEN_BUFFER_SIZE 8192
-#define GGML_HEXAGON_TOKEN_SLOT_SIZE   128
 
 struct ggml_hexagon_shared_buffer {
     ggml_hexagon_session * sess;
@@ -1706,9 +1707,6 @@ struct ggml_hexagon_opbatch {
             o.dst[i] = (i < outputs.size() && outputs[i]) ? add_tensor(outputs[i]) : 0xffff;
         }
     }
-
-    void finalize_ranges() {
-    }
 };
 
 struct ggml_hexagon_registry {
@@ -1942,10 +1940,8 @@ void ggml_hexagon_session::flush_pending(bool all) {
     }
 }
 
-void ggml_hexagon_session::flush_batch() {
-    if (op_batch->empty()) { return; }
-
-    op_batch->finalize_ranges();
+void ggml_hexagon_session::flush_batch(size_t min_ops) {
+    if (op_batch->n_ops < min_ops) { return; }
 
     htp_opbatch_req req {};
     dspqueue_buffer dbuf{};
@@ -1964,6 +1960,11 @@ void ggml_hexagon_session::flush_batch() {
     if (err != 0) {
         GGML_ABORT("ggml-hex: %s dspqueue_write failed: 0x%08x\n", this->c_name(), (unsigned) err);
     }
+}
+
+void ggml_hexagon_session::flush(bool all) {
+    flush_batch();
+    flush_pending(all);
 }
 
 void ggml_hexagon_session::enqueue_op(const htp_opnode & node) {
@@ -2013,12 +2014,6 @@ void ggml_hexagon_session::enqueue_sync(const ggml_tensor * sync_tensor) {
     sync_node.init(node);
     sync_node.name = "SYNC";
     this->enqueue_op(sync_node);
-}
-
-// Flush HTP response queue i.e wait for all outstanding requests to complete
-void ggml_hexagon_session::flush(bool all) {
-    flush_batch();
-    flush_pending(all);
 }
 
 void ggml_hexagon_session::wait_event(uint64_t seq) {
@@ -4252,7 +4247,8 @@ static ggml_status ggml_backend_hexagon_graph_compute(ggml_backend_t backend, gg
     }
 
     // Submit the current batch to the NPU asynchronously
-    sess->flush_batch();
+    // Coalesce tiny graphs to reduce dispatch overhead
+    sess->flush_batch(GGML_HEXAGON_GRAPH_FLUSH_THRESHOLD);
 
     return GGML_STATUS_SUCCESS;
 }
@@ -4394,16 +4390,22 @@ static bool ggml_hexagon_cpy_tensor_async_phys(ggml_backend_t backend_src, ggml_
     auto sbuf_dst = (ggml_hexagon_shared_buffer *) dst->buffer->context;
 
     uint32_t sync_seq = sess_dst->sync_seq++;
-    auto sync_token = (volatile uint32_t*)sbuf_dst->alloc_token();
-    if (!sync_token) {
-        GGML_LOG_ERROR("ggml-hex: failed to allocate sync token slot\n");
-        return false;
+    volatile uint32_t* sync_token;
+
+    HEX_VERBOSE("ggml-hex: %s cpy-tensor-async %s -> %s size %zu : seq %u\n",
+                sess_dst->name.c_str(), src->name, dst->name, ggml_nbytes(src), sync_seq);
+
+    while (1) {
+        sync_token = (volatile uint32_t*)sbuf_dst->alloc_token();
+        if (sync_token) break;
+
+        // out of sync token slots; flush both sessions to release old tokens
+        sess_src->flush(false);
+        sess_dst->flush(false);
     }
+
     sync_token[0] = 0;
     sync_token[1] = sync_seq;
-
-    HEX_VERBOSE("ggml-hex: %s cpy-tensor-async %s -> %s size %zu : sync token %p seq %u\n",
-                sess_dst->name.c_str(), src->name, dst->name, ggml_nbytes(src), (void*) sync_token, sync_seq);
 
     ggml_tensor sync_tensor {};
     sync_tensor.buffer = dst->buffer;
