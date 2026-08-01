@@ -145,12 +145,12 @@ run_mode() {
     local first_prompt second_prompt
     first_prompt=$(DSV4_N_PREDICT="$N_PREDICT" python3 - "$PROMPT" <<'PY'
 import json, sys
-print(json.dumps({"prompt": sys.argv[1], "n_predict": int(__import__("os").environ["DSV4_N_PREDICT"]), "seed": 123, "temperature": 0, "cache_prompt": True, "id_slot": 0, "return_tokens": True}))
+print(json.dumps({"model": "dsv4-validation", "prompt": sys.argv[1], "n_predict": int(__import__("os").environ["DSV4_N_PREDICT"]), "seed": 123, "temperature": 0, "cache_prompt": True, "id_slot": 0, "return_tokens": True}))
 PY
 )
     second_prompt=$(DSV4_N_PREDICT="$N_PREDICT" python3 - "$PROMPT$CONTINUATION" <<'PY'
 import json, sys
-print(json.dumps({"prompt": sys.argv[1], "n_predict": int(__import__("os").environ["DSV4_N_PREDICT"]), "seed": 123, "temperature": 0, "cache_prompt": True, "id_slot": 0, "return_tokens": True}))
+print(json.dumps({"model": "dsv4-validation", "prompt": sys.argv[1], "n_predict": int(__import__("os").environ["DSV4_N_PREDICT"]), "seed": 123, "temperature": 0, "cache_prompt": True, "id_slot": 0, "return_tokens": True}))
 PY
 )
     request "$port" "$first_prompt" "$out_dir/first.json"
