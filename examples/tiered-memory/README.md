@@ -1,66 +1,83 @@
-# Tiered-memory runtime prototype
+# CUDA tiered-memory inference
 
-This example implements the core memory hierarchy used by LlamaY on top of the existing llama.cpp graph scheduler:
+This directory demonstrates the production `llama-tiered.h` API. The implementation is integrated into the model loader and CUDA backend; it does not require `LD_PRELOAD`, an external manifest, or a second host copy of the GGUF weights.
 
-- **VRAM:** tensors are left on the CUDA device.
-- **DRAM:** tensors stay in the GGUF `mmap`, and only their file-backed pages are registered with `cudaHostRegister` for direct asynchronous DMA. No second host copy is allocated.
-- **SSD:** tensors stay in the same `mmap` but are not registered. The operating system faults pages in from storage when the scheduler requests them.
+## Memory tiers
 
-The existing `op_offload` scheduler path runs supported operations on CUDA even when their weight buffer is on the CPU. It creates the required per-split device copies at graph execution time. Registering the DRAM ranges makes those copies use pinned pages; leaving SSD ranges unregistered preserves demand paging.
+- **VRAM** — dense and high-activity tensors are allocated with the normal CUDA device allocator.
+- **DRAM zero-copy** — selected GGUF `mmap` pages are registered read-only with CUDA and exposed to kernels through their device alias. The original file-backed pages are used directly.
+- **SSD streaming** — stacked MoE expert matrices reserve a CUDA VMM address range. After the router produces expert IDs, only the selected expert granularity chunks are faulted from the GGUF mapping and copied into temporary VMM mappings. The mappings are released after the `MUL_MAT_ID` operation.
 
-## Build
-
-```sh
-cmake -B build -DGGML_CUDA=ON -DLLAMA_BUILD_EXAMPLES=ON
-cmake --build build --target llama-tiered-plan llama-tiered-preload llama-cli -j
-```
-
-The preload component is currently Linux-only.
-
-## Generate a plan
-
-```sh
-build/bin/llama-tiered-plan model.gguf \
-  --vram-mib 5000 \
-  --dram-mib 24000 \
-  --manifest model.tiers \
-  --print-command
-```
-
-The planner assigns whole tensors using the expected bytes read per token:
+The placement score is expected bytes read per token:
 
 ```text
 active bytes = tensor bytes × active fraction
 ```
 
-Dense attention, normalization, router, and dense FFN weights use an active fraction of `1`. Stacked MoE expert tensors use `expert_used_count / expert_count`. Higher active fractions receive VRAM first, then page-locked DRAM, with the remainder left on SSD-backed `mmap` pages.
+Dense tensors have an active fraction of `1`. Stacked MoE tensors use `expert_used_count / expert_count`. Non-streamable tensors must fit in VRAM or registered DRAM; the SSD tier is restricted to MoE expert weight matrices.
 
-The tool writes:
+## Build
 
-1. A manifest containing exact GGUF file offsets for each tier.
-2. A `--override-tensor` expression that keeps DRAM/SSD tensors in the CPU mmap buffer.
-3. With `--print-command`, a complete example invocation.
+The initial production implementation requires Linux, NVIDIA CUDA, CUDA VMM, and a statically linked backend registry:
+
+```sh
+cmake -S . -B build \
+  -DGGML_CUDA=ON \
+  -DGGML_BACKEND_DL=OFF \
+  -DLLAMA_BUILD_EXAMPLES=ON
+cmake --build build --target llama-tiered -j
+```
 
 ## Run
 
-Use the command printed by the planner. Its essential form is:
+Use an explicit DRAM budget. Omit `--vram-mib` to use currently free VRAM minus the reserve:
 
 ```sh
-LLAMA_TIERED_MANIFEST=model.tiers \
-LD_PRELOAD=/absolute/path/to/libllama-tiered-preload.so \
-build/bin/llama-cli \
+build/bin/llama-tiered \
   -m model.gguf \
-  -ngl 999 \
-  --override-tensor '^(?:...non-VRAM tensor names...)$=CPU'
+  --dram-mib 24000 \
+  --reserve-mib 2048 \
+  -n 64 \
+  "Explain virtual memory"
 ```
 
-The preload library only changes mappings whose canonical path appears in the manifest. For those mappings it uses `MAP_PRIVATE` with writable copy-on-write pages, then registers only the page-aligned DRAM ranges. The process does not write model data, so the private mapping does not create a duplicate unless another component modifies it.
+Use an explicit weight budget when several processes share the GPU:
 
-## Current scope
+```sh
+build/bin/llama-tiered \
+  -m model.gguf \
+  --vram-mib 5000 \
+  --dram-mib 24000
+```
 
-- Single-file GGUF models. Split GGUF manifests are not generated yet.
-- Linux and CUDA runtime (`libcudart`).
-- Whole-tensor placement; tensors are not split across tiers.
-- Runtime copies are scheduled by the existing ggml backend scheduler. This prototype does not yet add expert-slab gathering or transfer/compute overlap beyond the scheduler's existing asynchronous copy facilities.
+## Library API
 
-Use this as an experimental path. Verify generated outputs against a fully resident run before relying on it.
+```cpp
+#include "llama-tiered.h"
+
+llama_model_params model_params = llama_model_default_params();
+llama_tiered_memory_params memory = llama_tiered_memory_default_params();
+memory.dram_budget_bytes = 24ull * 1024 * 1024 * 1024;
+memory.vram_reserve_bytes = 2ull * 1024 * 1024 * 1024;
+
+llama_tiered_model * owner = llama_tiered_model_load_from_file(
+        "model.gguf", model_params, memory);
+if (!owner) {
+    fprintf(stderr, "%s\n", llama_tiered_last_error());
+    return 1;
+}
+
+llama_model * model = llama_tiered_model_get_model(owner);
+// Create and destroy llama_context objects normally.
+llama_tiered_model_free(owner);
+```
+
+`llama_tiered_model` owns the generated device list, tensor-buffer override, placement plan, and underlying `llama_model`. Do not call `llama_model_free` on the borrowed model pointer.
+
+## Current production constraints
+
+- Linux and NVIDIA CUDA only.
+- `GGML_BACKEND_DL=OFF` until tiered registry discovery is added to dynamic backend loading.
+- Conventionally named split GGUF files are supported; custom split names are not yet exposed by the public tiered API.
+- SSD streaming is limited to stacked MoE expert weight tensors consumed by `MUL_MAT_ID`.
+- SSD expert transfers are correctness-first and synchronized around the expert operation. Persistent caching and transfer/compute overlap are separate optimizations.
