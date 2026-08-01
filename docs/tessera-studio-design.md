@@ -23,7 +23,7 @@ the three prior scoping docs. This doc references them and does not
 re-litigate them.
 
 **Architect directives applied in this revision (2026-07-30):**
-web search is in scope (Tavily-backed, see section 5.6);
+web search is in scope (provider-shaped, keyless DuckDuckGo default, see section 5.4);
 .mlmodelc distribution is via App Store IAP with Apple-hosted
 background assets for large files (see section 5.10.4 and 5.10.5);
 Gemma 4 12B unified is a reasoning model and the engine + UI must
@@ -1087,44 +1087,57 @@ The Studio is a workbench. The user runs the plan, watches
 the L1 / L1.5 sidecars fill in, sees the L5 recommendations
 emerge, ships the .mlmodelc to the iPhone via iCloud Drive.
 
-### 5.4 Web search (Tavily-backed)
+### 5.4 Web search (provider-shaped, keyless by default)
+
+_Updated 2026-07-31: the search path is no longer Tavily-only. It is a
+provider seam with a keyless default, per the no-egress-by-default doctrine
+and the resolution of open question 11.13._
 
 The chat surface has a web search button next to the modality
 picker. Tapping it enables web search for the next message;
 the button is toggled off by default (privacy by default).
 When enabled, the engine routes the user's prompt through a
-two-step pipeline: (1) the prompt is sent to Tavily
-(`https://api.tavily.com/search`) with `search_depth: "basic"`
-and `max_results: 5`; (2) the top-5 results are folded into
-the prompt as a context block, the engine streams the synthesis,
-the citation links are rendered inline.
+two-step pipeline: (1) the prompt is sent to the active search
+provider with `max_results: 5`; (2) the top results are folded
+into the prompt as a context block, the engine streams the
+synthesis, and the citation links are rendered inline.
 
-The web search behaviour is documented at
-`https://docs.tavily.com/documentation/best-practices/best-
-practices-search`. The query is constrained to <= 400 chars
-(`Keep queries concise`), and the `time_range` is set to
-`month` for freshness. The `session_id` is a per-conversation
-UUID (Tavily's recommendation for multi-turn agents).
+The search backend is a seam, not a hard dependency. `TesseraWebSearch`
+is a thin facade over a `TesseraSearchProvider`, and the active provider
+is chosen in settings (`tessera.settings.searchProvider`):
 
-The Swift surface is `TesseraWebSearch.swift` (~200 LoC,
-TesseraCore):
+- DuckDuckGo (default, keyless). Hits the static HTML endpoint
+  (`https://html.duckduckgo.com/html/`) with URLSession and parses the
+  results page with SwiftSoup. No API key, no vendor account. The query
+  still leaves the device (it is a web search), but there is no key, no
+  billing, and no per-account query log to manage.
+- SearXNG (opt-in, self-hosted). Points at a SearXNG instance the user
+  runs themselves (`tessera.settings.searxngBaseURL`) and reads its JSON
+  API. Keyless, and keeps the query on the user's own infrastructure.
+- Tavily (opt-in, vendor key). The original provider, kept for its
+  agent-tuned results and clean citations. Requires
+  `tessera.settings.tavilyAPIKey` (or `TAVILY_API_KEY`) and is full
+  third-party egress, so it is never the default.
+
+Every provider returns the same `TesseraSearchHit` (url, title, content)
+and degrades to an empty result rather than throwing, so research falls
+back to "no sources" instead of crashing. The query is constrained to
+<= 400 chars.
+
+The Swift surface (TesseraCore):
 
 ```swift
+public protocol TesseraSearchProvider: Sendable {
+    var id: String { get }                 // "duckduckgo" | "searxng" | "tavily"
+    var configurationNote: String? { get } // nil when ready
+    func search(query: String, maxResults: Int) async -> [TesseraSearchHit]
+}
+
 public actor TesseraWebSearch {
-    public init(apiKey: String, baseURL: URL = .tavily)
-
-    public struct Result: Codable, Sendable {
-        public let title: String
-        public let url: URL
-        public let content: String
-        public let score: Double
-    }
-
-    public func search(
-        query: String,
-        sessionId: UUID,
-        maxResults: Int = 5
-    ) async throws -> [Result]
+    public init(provider: (any TesseraSearchProvider)? = nil) // defaults from settings
+    public var providerID: String { get }
+    public var configurationNote: String? { get }
+    public func search(query: String, maxResults: Int = 5) async -> [TesseraSearchHit]
 }
 ```
 
@@ -1133,17 +1146,15 @@ when the user enables it: `Web search: 5 sources, top hit
 "..."`. The chip is the same shape as the file attachment
 chips. The user can tap the chip to expand the source list.
 
-Tavily is the primary provider (best-practices document cited
-above; designed for AI agents; `tavily-best-practices` skill
-exists at `github.com/tavily-ai/skills`). A `Google CSE`
-fallback is in the design as a future option if Tavily's
-pricing changes; not implemented in v1.
-
-The privacy implication: the user's prompt and the session ID
-are sent to a third-party API. The Settings surface has a
-toggle for "Send prompts to web search provider" (default ON,
-warns the user). The privacy policy is in the App Store
-metadata (section 13.3) and the in-app About screen.
+The privacy implication depends on the provider. With the keyless
+DuckDuckGo default the query leaves the device but carries no account
+or key. With self-hosted SearXNG the query stays on the user's own
+infrastructure. With Tavily the prompt is sent to a third-party API.
+Because every provider egresses the query somewhere, the research tool
+runs at approval level `.prompt` (it asks before searching) rather than
+silently notifying. The Settings surface discloses the active provider;
+the privacy policy is in the App Store metadata (section 13.3) and the
+in-app About screen.
 
 The web search is on the chat surface, not on the A/B Compare
 or the Mac Studio. A/B is offline-by-construction; the Mac
@@ -2405,13 +2416,15 @@ strict concurrency.
 Question: Tavily only, or Tavily + Google CSE fallback,
 or Brave Search, or self-hosted (SearXNG)?
 
-Lean: Tavily only for v1. The `tavily-best-practices`
-skill exists (`github.com/tavily-ai/skills`); the API
-is designed for AI agents; the citation format is
-clean; the latency is predictable. Google CSE and
-Brave are added as a v2 fallback if Tavily's pricing
-or availability changes. Self-hosted SearXNG is not
-in scope (operational overhead, no SLA).
+Resolved (2026-07-31): provider-shaped, keyless default. DuckDuckGo's
+static HTML endpoint (URLSession + SwiftSoup, no key) is the default;
+self-hosted SearXNG is an opt-in for users who want the query to stay on
+their own infrastructure; Tavily is kept as an opt-in vendor provider
+behind `tessera.settings.tavilyAPIKey`. This supersedes the "Tavily only
+for v1" lean and brings SearXNG into scope - the no-Docker, run-from-source
+path answers the earlier operational-overhead objection. Implemented in
+`TesseraSearchProvider.swift`, `TesseraDuckDuckGoSearch.swift`,
+`TesseraSearXNGSearch.swift`, and `TesseraTavilySearch.swift`; see section 5.4.
 
 ### 11.14 Reasoning model UI defaults
 
@@ -3574,6 +3587,17 @@ whole inward flywheel of `self-improving-loop-design.md`.)
 
 ### 15.5 Autonomy calibration: needy -> learned trust -> scoped YOLO
 
+_Evidence base: `research-autonomy-calibration-2026-07-31.md`. That note
+is the source of truth for the claims below; where this section and the
+note disagree, the note wins until this section is updated._
+
+_Detailed engineering spec: `autonomy-calibration-design.md`. This section
+is the overview and rationale; that doc is the buildable spec - the
+action-class identity scheme, the learned-permission store, the asymmetric
+ratchet algorithm, the precedence model, scoped YOLO, the audit/revocation
+surface, and the leashed neural approver. Where the two disagree, the
+detailed spec wins for implementation._
+
 Studio starts NEEDY: it asks for approval often. Every approval and
 denial is a receipt (14.10), and the approval policy is a LEARNED
 PROJECTION over that history: action-classes the user consistently
@@ -3581,20 +3605,104 @@ allows auto-continue; novel and edge cases keep prompting. This
 SUPERSEDES the v1 approval posture in 14.5 and risk R28, which held
 approval to per-session-only and never persisted, on the theory that
 persisted approval is dangerous. The learned-trust model is safe
-precisely because of the invariant below; the per-session-only rule was
+precisely because of the invariants below; the per-session-only rule was
 a blunt instrument for a danger the ratchet defuses.
+
+**Why this is a real gap, not a feature grab.** Every shipping coding
+agent has a permission system; NONE learns. Claude Code, Cursor, Codex
+CLI, Cline, and OpenHands have all converged on a static spectrum from
+"ask everything" to "ask nothing," with a per-action classifier as the
+2025-2026 frontier (research note section 1, section 8). Classifiers
+judge each action in isolation; none accumulates evidence across
+sessions to move the baseline. Tessera's receipt-driven learned
+permission is the differentiator, and the longitudinal local approval
+history it runs on is the moat (15.6).
+
+**The design goal is calibration, not trust.** The human-factors
+literature is explicit: "design for appropriate trust, not greater
+trust" (Lee & See 2004, research note section 2). Both over-trust and
+under-trust are failure modes. A harness that only defends against
+over-trust by asking too often manufactures DISUSE: the user stops
+reading prompts and rubber-stamps them, defeating the safety mechanism.
+Claude Code's own reported 93% approval rate is disuse in progress
+(research note section 1). So the goal is to match autonomy to actual
+reliability - ask when it matters, stay quiet when it does not.
+
+**Three outcomes, not two.** The approval engine produces
+`autoApprove` / `askUser` / `reject` (landed in `TesseraSafetyDecision`).
+This maps to Claude Code's auto-mode tiers and OpenHands' ConfirmRisky
+policy. `autoApprove` = learned trust OR contained low-risk; `askUser` =
+uncertain or novel; `reject` = high-risk, forbidden, or circuit-breaker
+tripped. The loop MUST honor all three: today only `reject` is branched
+on and `autoApprove` still falls through to the prompt path, which is
+the wiring gap this section authorizes closing (research note section
+10).
 
 - **One-way ratchet (load-bearing).** Learning only ever moves toward
   MORE autonomy on OBSERVED-SAFE patterns. A NEW consequential or
   irreversible action-class ALWAYS prompts, regardless of history. "You
   have approved 200 file edits" must never translate into "auto-approve
   this `rm -rf`." Trust is per-action-class, and irreversible classes
-  are permanently un-trainable.
-- **Scoped YOLO mode.** A time-boxed AND goal/session-boxed override
-  that auto-approves within scope. It is always logged, always expires,
-  and still records receipts at full fidelity - a YOLO session is the
-  richest training data the harness gets (many actions, fast) and feeds
-  the loop rather than escaping it.
+  are permanently un-trainable. This is the structural defense against
+  OWASP ASI10 (rogue agents accumulating access over time) and against
+  approval-gaming (research note section 6, section 7).
+- **The ratchet is ASYMMETRIC.** Trust repairs slower than it builds:
+  automation failures cut trust more than successes restore it, and
+  trust after a violation may never return to its initial level (Yang et
+  al. 2023, Rittenberg et al. 2024, De Visser et al. 2018; research note
+  section 3). Encode this directly. GRANT threshold: N consecutive
+  approvals of the same action-class across M distinct sessions
+  (conservative defaults N=5, M=3, user-tunable). REVOKE threshold: a
+  SINGLE denial of that action-class resets its approval counter. Denial
+  signals are weighted heavier than approval signals by construction.
+- **The circuit breaker outranks the ratchet.** Given the asymmetry
+  above, the denial circuit-breaker (S3, already landed) is MORE
+  important than the ratchet. A tripped breaker fires before the ratchet
+  can grant further autonomy and resets all learned permission for the
+  affected action-class. If the two ever disagree, the breaker wins.
+- **Action-class identity is STRUCTURAL, not linguistic.** Learned
+  permission keys on tool identity + argument structure (e.g.
+  `bash:git status`, `bash:npm test`, `file_write:src/**`), never on the
+  natural-language description of the action. This blocks the
+  specification-gaming surface where an agent learns to REPHRASE a
+  dangerous action to match an approved pattern (Goodhart / reward
+  hacking; research note section 7). Start with tool + argument-prefix
+  patterns and evolve the granularity later (open question, section 9).
+- **The learned-permission store is auditable and revocable.** The user
+  can inspect every grant (which action-class, how many approvals,
+  across how many sessions, when granted) and revoke any entry. This is
+  the transparency Lee & See's "process" trust basis requires and the
+  antidote to access accumulating out of sight (research note section 6,
+  section 10).
+- **Dispositional floor and ceiling.** Some users want more autonomy on
+  day one; others want to stay needy forever (Hoff & Bashir 2015's
+  dispositional layer; research note section 2). The user sets a FLOOR
+  (minimum approval requirements learning cannot reduce) and a CEILING
+  (maximum autonomy learning cannot exceed). Learning moves within the
+  band; it never crosses the walls.
+- **Escalation communication follows selective-prediction evidence.**
+  When asking, describe the action and its risk tier, what changes if it
+  succeeds, and what cannot be undone. Do NOT show the agent's
+  confidence score or reasoning chain: revealing the AI's prediction
+  anchors the human and degrades the decision (research note section 5).
+  The prompt is about the ACTION, not the agent's opinion of it.
+- **Escalate on expected value, not a static table.** Per Horvitz (1999)
+  principle 4, auto-approve only when the expected value of acting
+  exceeds the expected value of asking, weighted by P(user approves |
+  context) and the cost of each error (research note section 4). Every
+  prompt has a real cost - interrupted flow, attention switching,
+  approval fatigue - and the spec models it rather than pretending
+  asking is free. Irreversible actions require explicit consent
+  regardless of learned trust (principle 7).
+- **Scoped YOLO mode (first-class, not a toggle).** A time-boxed AND
+  goal/session-boxed override that auto-approves within scope. It has:
+  explicit activation ("go fast for this task"); bounded scope (a
+  specific goal or session); a hard time limit (configurable, default 30
+  minutes); full receipt logging (every action recorded even though not
+  prompted); and automatic expiry with a summary of what ran
+  autonomously. A YOLO session is the richest training data the harness
+  gets (many actions, fast) and feeds the loop rather than escaping it.
+  Industry YOLO modes are unbounded toggles; the bounding is the point.
 
 ### 15.6 One receipt stream, two learners
 
@@ -3626,10 +3734,17 @@ already owns.
 ### 15.8 New open questions for the outward agent
 
 - **Q18. How much autonomy before requiring approval?** The ratchet
-  (15.5) needs a threshold: how many consistent approvals on an
-  action-class before it auto-continues, and what confidence. Lean:
-  start conservative (high count, high confidence) and let the user
-  tune.
+  (15.5) needs a threshold. The research
+  (`research-autonomy-calibration-2026-07-31.md` section 10) supplies
+  concrete, conservative defaults: GRANT after N=5 consecutive approvals
+  of an action-class across M=3 distinct sessions; REVOKE on a single
+  denial; both user-tunable within a dispositional floor/ceiling. The
+  genuinely OPEN question is no longer the count but the ACTION-CLASS
+  GRANULARITY: tool name alone is too coarse (all bash is one class),
+  tool + argument-prefix is the proposed start, semantic clustering is
+  most flexible but hardest to audit (research note section 9). Lean:
+  ship tool + argument-prefix patterns, keep the identity auditable, and
+  evolve granularity only with evidence.
 - **Q19. AFM teacher quality on the hard tail.** Is Apple Foundation
   Models good enough as the default teacher for the genuinely-hard
   escalations, or does the hard tail always need a third-party teacher?

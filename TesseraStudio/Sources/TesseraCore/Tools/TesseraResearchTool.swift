@@ -8,8 +8,10 @@ import Foundation
 /// as the agent loop); search goes through `TesseraWebSearch`.
 public struct TesseraResearchTool: TesseraTool {
     public let name = "research"
-    public let description = "Research a question on the web: plans sub-queries, searches (Tavily), curates sources, and writes a cited answer where every claim links to a real source. Returns the answer plus the source list."
-    public let defaultApprovalLevel = ApprovalLevel.notify
+    public let description = "Research a question on the web: plans sub-queries, runs a web search (keyless DuckDuckGo by default; SearXNG or Tavily if configured), curates sources, and writes a cited answer where every claim links to a real source. Returns the answer plus the source list."
+    // Web search sends the query to an external search engine, so this egresses
+    // regardless of provider and asks for approval rather than just notifying.
+    public let defaultApprovalLevel = ApprovalLevel.prompt
 
     public let parameters = JSONSchema(
         type: "object",

@@ -1186,7 +1186,11 @@ int ggml_metal_op_get_rows(ggml_metal_op_t ctx, int idx) {
     GGML_TENSOR_LOCALS( int32_t, ne,  op,         ne);
     GGML_TENSOR_LOCALS(uint64_t, nb,  op,         nb);
 
-    auto pipeline = ggml_metal_library_get_pipeline_get_rows(lib, op->src[0]->type);
+    // i64 indices are only instantiated for f32 sources (the SET_ROWS backward gather)
+    GGML_ASSERT(op->src[1]->type == GGML_TYPE_I32 ||
+            (op->src[1]->type == GGML_TYPE_I64 && op->src[0]->type == GGML_TYPE_F32));
+
+    auto pipeline = ggml_metal_library_get_pipeline_get_rows(lib, op);
 
     ggml_metal_kargs_get_rows args = {
         /*.ne00t =*/ ggml_is_quantized(op->src[0]->type) ? ne00/16 : ne00,

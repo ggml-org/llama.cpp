@@ -3388,6 +3388,7 @@ static void llama_set_param(struct ggml_tensor * tensor, llama_opt_param_filter 
 
 void llama_context::opt_init(struct llama_model * model, struct llama_opt_params lopt_params) {
     GGML_ASSERT(!opt_ctx);
+    opt_loss_type = lopt_params.loss_type;
     model->hparams.n_ctx_train = lopt_params.n_ctx_train > 0 ? lopt_params.n_ctx_train : n_ctx();
     const uint32_t n_batch     = std::min(this->n_batch(),  model->hparams.n_ctx_train);
     const uint32_t n_ubatch    = std::min(this->n_ubatch(), n_batch);
@@ -3432,6 +3433,7 @@ void llama_context::opt_epoch_iter(
         ggml_opt_result_t                result,
         const std::vector<llama_token> & tokens,
         const std::vector<llama_token> & labels_sparse,
+        const std::vector<float>       & labels_dense,
         llama_batch                    & batch,
         ggml_opt_epoch_callback          callback,
         bool                             train,
@@ -3517,12 +3519,24 @@ void llama_context::opt_epoch_iter(
             {
                 struct ggml_tensor * labels = ggml_opt_labels(opt_ctx);
                 GGML_ASSERT(labels->ne[1] == n_ubatch);
-                ggml_set_zero(labels);
-                const float onef = 1.0f;
-                for (uint32_t pos_ubatch = 0; pos_ubatch < n_ubatch; ++pos_ubatch) {
-                    const uint32_t ilabel = pos_ctx + pos_batch + pos_ubatch;
-                    GGML_ASSERT(labels_sparse[ilabel] < labels->ne[0]);
-                    ggml_backend_tensor_set(labels, &onef, (pos_ubatch*labels->ne[0] + labels_sparse[ilabel])*sizeof(float), sizeof(float));
+                if (opt_loss_type == GGML_OPT_LOSS_TYPE_LK) {
+                    // LK labels are dense probability distributions, one [n_vocab]
+                    // column per position, already contiguous in labels_dense; copy
+                    // each position's column straight into the labels tensor.
+                    const int64_t n_vocab = labels->ne[0];
+                    for (uint32_t pos_ubatch = 0; pos_ubatch < n_ubatch; ++pos_ubatch) {
+                        const uint32_t ilabel = pos_ctx + pos_batch + pos_ubatch;
+                        ggml_backend_tensor_set(labels, labels_dense.data() + (size_t)ilabel*n_vocab,
+                                (size_t)pos_ubatch*n_vocab*sizeof(float), n_vocab*sizeof(float));
+                    }
+                } else {
+                    ggml_set_zero(labels);
+                    const float onef = 1.0f;
+                    for (uint32_t pos_ubatch = 0; pos_ubatch < n_ubatch; ++pos_ubatch) {
+                        const uint32_t ilabel = pos_ctx + pos_batch + pos_ubatch;
+                        GGML_ASSERT(labels_sparse[ilabel] < labels->ne[0]);
+                        ggml_backend_tensor_set(labels, &onef, (pos_ubatch*labels->ne[0] + labels_sparse[ilabel])*sizeof(float), sizeof(float));
+                    }
                 }
             }
             ggml_opt_eval(opt_ctx, result);
@@ -3543,7 +3557,11 @@ void llama_context::opt_epoch(
         int64_t                   idata_split,
         ggml_opt_epoch_callback   callback_train,
         ggml_opt_epoch_callback   callback_eval) {
-    const uint32_t n_ctx    = this->n_ctx();
+    // Iterate the training context, not the padded capacity: n_ctx_train equals
+    // n_ctx() unless the caller pinned it (opt_init), e.g. to train short
+    // fixed-length datapoints. The per-datapoint copy below and opt_epoch_iter
+    // must both key off the same length.
+    const uint32_t n_ctx    = llama_model_n_ctx_train(&model);
     const uint32_t n_batch  = std::min(cparams.n_batch,  n_ctx);
     const uint32_t n_ubatch = std::min(cparams.n_ubatch, n_batch);
     const  int64_t ndata    = ggml_opt_dataset_ndata(dataset);
@@ -3557,6 +3575,15 @@ void llama_context::opt_epoch(
     std::vector<llama_token>        tokens(n_ctx);
     std::vector<llama_token> labels_sparse(n_ctx);
 
+    // LK trains against dense probability-distribution labels ([n_vocab] per
+    // position); cross-entropy keeps the sparse token-id labels above. The
+    // dense buffer is only allocated when needed.
+    const bool dense_labels = (opt_loss_type == GGML_OPT_LOSS_TYPE_LK);
+    std::vector<float> labels_dense;
+    if (dense_labels) {
+        labels_dense.resize((size_t)n_ctx * model.vocab.n_tokens());
+    }
+
     int64_t idata = 0;
 
     int64_t t_loop_start = ggml_time_us();
@@ -3565,8 +3592,12 @@ void llama_context::opt_epoch(
         constexpr bool train = true;
         const int64_t idata_in_loop = idata*ubatch_per_ctx;
 
-        ggml_opt_dataset_get_batch_host(dataset, tokens.data(), n_ctx*sizeof(llama_token), labels_sparse.data(), idata);
-        opt_epoch_iter(dataset, result_train, tokens, labels_sparse, batch,
+        if (dense_labels) {
+            ggml_opt_dataset_get_batch_host(dataset, tokens.data(), n_ctx*sizeof(llama_token), labels_dense.data(), idata);
+        } else {
+            ggml_opt_dataset_get_batch_host(dataset, tokens.data(), n_ctx*sizeof(llama_token), labels_sparse.data(), idata);
+        }
+        opt_epoch_iter(dataset, result_train, tokens, labels_sparse, labels_dense, batch,
             callback_train, train, idata_in_loop, ndata_in_loop, t_loop_start);
     }
 
@@ -3576,8 +3607,12 @@ void llama_context::opt_epoch(
         constexpr bool train = false;
         const int64_t idata_in_loop = (idata - idata_split)*ubatch_per_ctx;
 
-        ggml_opt_dataset_get_batch_host(dataset, tokens.data(), n_ctx*sizeof(llama_token), labels_sparse.data(), idata);
-        opt_epoch_iter(dataset, result_eval, tokens, labels_sparse, batch,
+        if (dense_labels) {
+            ggml_opt_dataset_get_batch_host(dataset, tokens.data(), n_ctx*sizeof(llama_token), labels_dense.data(), idata);
+        } else {
+            ggml_opt_dataset_get_batch_host(dataset, tokens.data(), n_ctx*sizeof(llama_token), labels_sparse.data(), idata);
+        }
+        opt_epoch_iter(dataset, result_eval, tokens, labels_sparse, labels_dense, batch,
             callback_eval, train, idata_in_loop, ndata_in_loop, t_loop_start);
     }
 

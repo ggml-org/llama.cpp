@@ -145,11 +145,19 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_pool_2d(ggml_met
     return res;
 }
 
-ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_get_rows(ggml_metal_library_t lib, ggml_type tsrc) {
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_get_rows(ggml_metal_library_t lib, const ggml_tensor * op) {
     char base[256];
     char name[256];
 
-    snprintf(base, 256, "kernel_get_rows_%s", ggml_type_name(tsrc));
+    const auto tsrc = op->src[0]->type;
+    const auto tidx = op->src[1]->type;
+
+    // i64 indices are only instantiated for f32 sources (the SET_ROWS backward gather); other types stay i32
+    if (tidx == GGML_TYPE_I64) {
+        snprintf(base, 256, "kernel_get_rows_%s_i64", ggml_type_name(tsrc));
+    } else {
+        snprintf(base, 256, "kernel_get_rows_%s", ggml_type_name(tsrc));
+    }
     snprintf(name, 256, "%s", base);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);

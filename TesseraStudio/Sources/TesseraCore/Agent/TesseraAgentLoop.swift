@@ -21,23 +21,41 @@ public final class TesseraAgentLoop {
     public let approvalEngine: TesseraApprovalEngine
     private let llmProvider: any LLMProvider
     private let maxIterations: Int
+    private let skillLoader: TesseraSkillLoader
+    private let permissionProfile: TesseraPermissionProfile
+    private let sandboxEnforceable: Bool
 
     public private(set) var isRunning = false
     public private(set) var currentTask: Task<Void, Never>?
     public private(set) var tokenBudget: TokenBudget
+    /// Stable id for this loop run; tags approval receipts (autonomy spec 14).
+    public let sessionID = UUID().uuidString
 
     public init(
         registry: TesseraToolRegistry,
         approvalEngine: TesseraApprovalEngine,
         llmProvider: (any LLMProvider)? = nil,
         maxIterations: Int = 10,
-        tokenLimit: Int = 8192
+        tokenLimit: Int = 8192,
+        skillLoader: TesseraSkillLoader? = nil,
+        permissionProfile: TesseraPermissionProfile = .standard,
+        sandboxEnforceable: Bool? = nil
     ) {
         self.registry = registry
         self.approvalEngine = approvalEngine
         self.llmProvider = llmProvider ?? PlaceholderLLMProvider()
         self.maxIterations = max(1, maxIterations)
         self.tokenBudget = TokenBudget(used: 0, limit: tokenLimit)
+        self.skillLoader = skillLoader ?? TesseraSkillLoader()
+        self.permissionProfile = permissionProfile
+        // nil -> platform default: sandboxed on iOS (App Store), not on macOS
+        // (Developer ID). Only matters once the safety spine's auto-approve path
+        // is wired; the reject path it uses today is sandbox-independent.
+        #if os(iOS)
+        self.sandboxEnforceable = sandboxEnforceable ?? true
+        #else
+        self.sandboxEnforceable = sandboxEnforceable ?? false
+        #endif
     }
 
     /// Run the agent loop on a user message, returning a stream of events.
@@ -86,7 +104,10 @@ public final class TesseraAgentLoop {
         history: [ChatMessage],
         continuation: AsyncStream<AgentEvent>.Continuation
     ) async throws {
-        let systemPrompt = buildSystemPrompt()
+        // Publish the live session id so a YOLO session started from the UI
+        // can bind to this loop (autonomy-calibration-design.md 10).
+        approvalEngine.autonomy.setActiveSession(sessionID)
+        let systemPrompt = buildSystemPrompt(userMessage: userMessage)
         var messages = history.map { LLMMessage(role: $0.role.rawValue, content: $0.content) }
         messages.append(LLMMessage(role: "user", content: userMessage))
 
@@ -121,16 +142,76 @@ public final class TesseraAgentLoop {
 
                 continuation.yield(.toolCall(name: call.name, arguments: call.arguments))
 
-                // Approval gate
-                let approved = await approvalEngine.requestApproval(
-                    toolName: call.name,
-                    arguments: call.arguments
+                // Autonomy-aware gate (autonomy-calibration-design.md 7):
+                // the base safety spine (S2/S3/S4) plus the learned-permission
+                // ratchet (steps 4, 6). Three outcomes:
+                //   reject     -> never run; recorded in the breaker.
+                //   askUser    -> force a prompt; a user denial feeds the
+                //                 breaker and revokes the class (ratchet).
+                //   autoApprove-> run without prompting (base or learned).
+                // Every outcome is receipt-logged (section 14).
+                let action = PendingAction(toolName: call.name, arguments: call.arguments)
+                let gate = approvalEngine.gateCheck(
+                    for: action,
+                    permissionProfile: permissionProfile,
+                    sandboxEnforceable: sandboxEnforceable,
+                    sessionID: sessionID
                 )
-                guard approved else {
-                    let denied = ToolResult.fail("Denied by user")
-                    continuation.yield(.toolResult(name: call.name, result: denied))
-                    messages.append(LLMMessage(role: "tool", content: "Tool '\(call.name)' was denied by the user."))
+                switch gate.check {
+                case .reject:
+                    approvalEngine.recordOutcome(
+                        action: action,
+                        risk: (try? TesseraActionVerifier.ruleBasedRisk(for: action)) ?? .medium,
+                        sandboxed: sandboxEnforceable,
+                        decision: .reject,
+                        userChoice: .none,
+                        source: gate.source,
+                        sessionID: sessionID
+                    )
+                    let blocked = ToolResult.fail("Blocked by the safety policy before execution.")
+                    continuation.yield(.toolResult(name: call.name, result: blocked))
+                    messages.append(LLMMessage(role: "tool", content: "Tool '\(call.name)' was blocked by the safety policy."))
+                    if approvalEngine.circuitBreaker.isTripped {
+                        continuation.yield(.error("Interrupted: the denial circuit-breaker tripped (too many blocked actions)."))
+                        return
+                    }
                     continue
+                case .askUser:
+                    let approved = await approvalEngine.requestApprovalForced(
+                        toolName: call.name,
+                        arguments: call.arguments
+                    )
+                    let risk = (try? TesseraActionVerifier.ruleBasedRisk(for: action)) ?? .medium
+                    approvalEngine.recordOutcome(
+                        action: action,
+                        risk: risk,
+                        sandboxed: sandboxEnforceable,
+                        decision: .askUser,
+                        userChoice: approved ? .approved : .denied,
+                        source: gate.source,
+                        sessionID: sessionID
+                    )
+                    guard approved else {
+                        approvalEngine.circuitBreaker.record(denied: true)
+                        let denied = ToolResult.fail("Denied by user")
+                        continuation.yield(.toolResult(name: call.name, result: denied))
+                        messages.append(LLMMessage(role: "tool", content: "Tool '\(call.name)' was denied by the user."))
+                        if approvalEngine.circuitBreaker.isTripped {
+                            continuation.yield(.error("Interrupted: the denial circuit-breaker tripped (too many denied actions)."))
+                            return
+                        }
+                        continue
+                    }
+                case .autoApprove:
+                    approvalEngine.recordOutcome(
+                        action: action,
+                        risk: (try? TesseraActionVerifier.ruleBasedRisk(for: action)) ?? .medium,
+                        sandboxed: sandboxEnforceable,
+                        decision: .autoApprove,
+                        userChoice: .none,
+                        source: gate.source,
+                        sessionID: sessionID
+                    )
                 }
 
                 // Execute
@@ -151,14 +232,21 @@ public final class TesseraAgentLoop {
         }
     }
 
-    private func buildSystemPrompt() -> String {
-        """
+    private func buildSystemPrompt(userMessage: String) -> String {
+        var prompt = """
         You are Tessera Studio Agent, an assistant for quantizing, calibrating,
         and deploying LLMs with the Tessera engine. You help users manage models,
         run calibration, evolve quantization policies, and evaluate results.
 
         \(registry.systemPromptToolsBlock())
         """
+        // On-demand skills (absorption I1): inject any skill whose manifest
+        // matches the user's message. Empty until the user authors skills.
+        let skills = skillLoader.systemPromptFragment(for: userMessage)
+        if !skills.isEmpty {
+            prompt += "\n\n# Relevant skills\n\n" + skills
+        }
+        return prompt
     }
 }
 

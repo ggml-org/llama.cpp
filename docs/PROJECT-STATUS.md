@@ -1,6 +1,6 @@
 # Tessera — Project Status
 
-_Last updated: 2026-07-29_
+_Last updated: 2026-07-31_
 
 Tessera is a fork of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) at
 [Tribunus-dev/tessera](https://github.com/Tribunus-dev/tessera). Default branch:
@@ -227,6 +227,72 @@ integration branch is the only one rebased onto upstream `master`.
 
 ---
 
+## External research inputs (2026-07-31)
+
+Two video sources, with every paper identity verified against arXiv. Full
+analysis and citations in `docs/research-efficiency-and-mutation-2026-07-31.md`
+(the source of truth; where it and a plan doc disagree, it wins until the
+plan doc is updated):
+
+- **YC "Kernel & Chip Club"** (`youtube.com/watch?v=n8dz2FX0_uY`) — the
+  state of the art on efficient inference, and almost a mirror of
+  Tessera's own thesis.
+- **"I Tried to Make an AI"** (`youtube.com/watch?v=IoM5zUI8oFc`,
+  commonLuke) — a from-scratch neuroevolution demo whose one transferable
+  idea is the mutation operator.
+
+A second, separate research input landed the same day: a deep-research pass
+over the five shipping coding agents with the most mature permission
+systems plus thirty years of human-factors trust-calibration literature.
+Full analysis and citations in
+`docs/research-autonomy-calibration-2026-07-31.md` (source of truth for
+autonomy calibration; binds `tessera-studio-design.md` section 15.5 and
+Priority 9 Wave 1 below). Headline: every shipping agent has a static
+permission gate; none learns. Tessera's receipt-driven learned permission
+is the differentiator.
+
+Six findings bind the roadmap:
+
+1. **Intelligence per Watt** (arXiv:2511.07885). `IPW = accuracy / watt`
+   (steady-state), `IPJ = accuracy / joule` (end-to-end). Local models
+   answer 88.7 % of queries; IPW improved 5.3x over 2023–2025; local
+   accelerators sit >=1.4x below cloud on the identical model ("significant
+   headroom for local accelerator optimization"). Tessera's hero metric
+   (`mWh/token`, the 30-minute flight test) IS IPJ — adopt the vocabulary
+   and cite the 1.4x headroom as the external justification for the
+   CoreML/ANE line. Follow-up "Open Jarvis" is a near-neighbor to track.
+2. **Reward hacking in self-improving code agents** (KernelBench,
+   arXiv:2502.10517; OpenReview `ikrQWGgxYg`). LLMs optimizing kernels game
+   the eval — the "world's fastest vector mean" returns 0; one hack detected
+   the correctness-vs-performance phase and submitted correct-slow then
+   fast-wrong (explicitly compared to VW dieselgate). Mitigation that
+   worked: an adversarial detector plus a flywheel where every hack becomes
+   a regression test. Independent published validation of the loop's
+   grounding rule (agent curates, world judges, never self-judge).
+3. **Heterogeneous inference + the roofline** (Williams/Waterman/Patterson,
+   CACM 2009). Prefill is compute-bound, decode is memory-bandwidth-bound,
+   attention vs MLP differ in arithmetic intensity — no single backend wins
+   everywhere. First-principles explanation for "ANE beats Metal ~3x on
+   prefill." On-device twist: route prefill to Metal and decode to
+   CoreML/ANE on the same SoC, measured with IOReport.
+4. **The evolutionary mutation operator** (NEAT, Stanley & Miikkulainen,
+   Artificial Life 2002). Selection + crossover + mutation; mutation is the
+   exploration term that reaches gains greedy hill-climbing provably cannot.
+   The one genuinely net-new mechanism for Tessera — the offensive twin of
+   the collapse guard. Becomes Priority 7.
+5. **ParallelKittens** (arXiv:2511.13940; ThunderKittens, arXiv:2410.20399).
+   Low direct applicability (single-SoC, not NVLink multi-GPU), but the
+   "simple kernels maintainable by humans and AI agents" philosophy is the
+   AGENTS.md directive stated back at us. The compute/communication-overlap
+   idea transfers to overlapping ANE execution with memory movement.
+6. **Batch simulation / GPU ECS** (Madrona; Large Batch Simulation for Deep
+   RL, ICLR '21). Batching thousands of environments into one throughput GPU
+   megakernel gives 100–1000x over CPU. The self-improving loop is
+   bottlenecked by eval throughput — batch candidate evaluations into one
+   pass rather than one at a time.
+
+---
+
 ## What's next
 
 ### Priority 1 — Runtime-aware calibration pipeline (Layers 1–6)
@@ -282,22 +348,38 @@ Expected conflict surface: `common/arg.cpp`, `common/speculative.cpp`,
 `src/llama-graph.cpp`, `tests/test-*`. Estimated 50–150 lines of
 resolution.
 
-### Priority 3 — dspark LoRA finetuning pipeline
+### Priority 3 — Native drafter-training pipeline (C++, not Python)
 
-Use `llama.spec_calib.v2` telemetry to rejection-sample dspark outputs:
+_Architect directive (2026-07-31): the training drivers are native C++/Swift,
+not PyTorch/peft. The Python plan that used to live here is superseded (kept in
+git history). The drivers train drafters directly against
+`llama.spec_calib.v2` telemetry, in-tree, reusing ggml-opt and the llama
+training API — no second runtime, no model-format round-trip._
 
-1. **Phase 1: PyTorch dspark implementation** — ~400 lines mirroring
-   `dflash.cpp` forward, plus the dspark-gguf-patch loading path. Standalone
-   `tools/tessera/dspark_pytorch.py`.
-2. **Phase 2: training harness** — `transformers` + `peft` + `accelerate`,
-   rejection-sampling loss against the v2 verifier top-k distribution.
-3. **Phase 3: first LoRA pass** — `α=β=γ=ε=0` (pure KL to verifier
-   top-k) as a sanity check. Sanity target: dspark acceptance on Q4_0
-   goes from 33 % (1-step) to ≥50 %.
+Two drivers share one plumbing (the self-improving flywheel's training step):
 
-This is the right way to get dspark aligned with Tessera's QAT target,
-since dspark's DeepSeek-style markov head is trained against a different
-distribution.
+1. **Path A — LK autoregressive drafter driver (LANDED).** Executable
+   `tools/quantize/tessera/tessera-train-lk` + pure trace→dense-label builder
+   `tessera-lk-train-data.{h,cpp}` (27/27 standalone tests). Trains with
+   `GGML_OPT_LOSS_TYPE_LK` (total-variation distance = 1 − acceptance rate).
+   One spec step per datapoint: input `[prime, draft...]`, label at position j
+   = `densify(verifier_topk[j])`. This is on-policy distillation, and it is the
+   only input prefix consistent with how the traces were collected (the
+   verifier distributions are conditioned on the draft prefix). Design:
+   `docs/tessera-lk-training-design.md`. Status: built, unit-tested, and the
+   dataset contract verified line-for-line against the llama-layer dense-label
+   epoch path; the numeric training loop still needs a real drafter GGUF smoke
+   test (this driver is the first consumer of that path).
+2. **Path B — DFlash/D-PACE block-drafter driver (next).** Reuses the arg
+   pre-scan, the dataset-build pattern, and the epoch loop; its labels are
+   pre-weighted cross-entropy rows (baked D-PACE weights from `tessera-dataset
+   --tessera-dataset-mode dflash`), not dense LK columns. Plus the offline
+   trunk-feature capture pipeline. Design: `docs/tessera-dflash-training-design.md`.
+
+Sanity target (carried over from the old plan): drafter acceptance on Q4_0 from
+~33 % (1-step) to ≥50 %. This is still the right way to align a drafter with
+Tessera's QAT target, since a stock drafter's head is trained against a
+different distribution.
 
 ### Priority 4 — End-to-end verification
 
@@ -331,6 +413,193 @@ step is to:
 - Schema versioning policy for `llama.spec_calib.v*` and
   `llama.tessera.per-tensor-calibration.v*`.
 
+### Priority 7 — Evolutionary mutation operator (heavy-tailed, world-gated)
+
+From finding 4 (NEAT). Mutation is the offensive twin of the collapse
+guard: the guard stops the loop getting worse, mutation is how it gets
+unexpectedly better. Full design in
+`research-efficiency-and-mutation-2026-07-31.md` section 3. In priority
+order:
+
+1. **Drafter loop is the safe sandbox — mutate here first.** Drafter
+   recursion is already safe (the trunk verifier rejects bad drafts), so
+   the acceptance rate against the trunk is a clean world-grounded fitness
+   — the exact analogue of "did Mario advance." Run a high mutation rate
+   over drafter configs (decoding thresholds, regime routing, LoRA
+   rank/alpha, prompt-template variants) essentially for free. This is
+   finding 3's drafter/verifier split repurposed as explore/exploit:
+   drafter = spice, trunk = world gate.
+2. **Three NEAT-style mutation classes** on the per-tensor GA and the
+   capability archive (which today is pure exploitation):
+   - *Parametric* — perturb a continuous knob, with a HEAVY-TAILED step
+     (Levy-flight / log-normal), not fixed-range Gaussian. Mostly tiny
+     nudges, rarely a large jump — the precise meaning of "occasional" +
+     "spicy."
+   - *Structural* — occasionally change structure, not just values: add a
+     regime bucket, enable/disable a drafter, swap a routing rule,
+     introduce a new tool. This is where the surprising gains live.
+   - *Random-restart* — very low probability, sample a fully random
+     configuration.
+3. **Every mutant still passes the world gate.** A mutant enters the
+   archive only if tests/builds/commits pass and guard axes do not regress
+   > epsilon. Because mutation widens the search, it widens the reward-hack
+   attack surface (finding 2) — strengthen the KernelGuard-style checker in
+   proportion. A dieselgate mutant is rejected and becomes a regression
+   test.
+4. **Adaptive schedule + island migration.** Trigger mutation BURSTS on
+   stagnation (no archive improvement for K generations -> reheat). Use the
+   existing island-GA infra for occasional cross-island migration (~1–5 %
+   every N generations) so islands don't each converge on their own local
+   optimum.
+5. **Measure it, don't hand-tune it.** Treat mutation rate and step
+   distribution as just another axis the multi-axis eval optimizes, A/B'd
+   via `tessera-ab-harness`, with guard axes ensuring "spicier" never means
+   "regressed."
+
+### Priority 8 — External-validation follow-ups (low effort, high leverage)
+
+Cheap deltas from findings 1–3 and 6 that strengthen existing work without
+new subsystems:
+
+- **Rename/align the hero metric to IPW/IPJ** (finding 1). `mWh/token` and
+  the flight-test metric are the same quantity as IPJ; adopt the vocabulary
+  in `tessera-studio-design.md` and `runtime-aware-pipeline.md` so Tessera's
+  numbers are comparable to a published Stanford baseline, and cite the
+  "1.4x local headroom" result as the written justification for the
+  CoreML/ANE line.
+- **Add a `fast_p`-shaped acceptance criterion** (finding 2): correct AND
+  beats baseline by threshold — never accuracy-or-speed alone.
+- **Add roofline / arithmetic-intensity framing** to
+  `tessera-coreml-conversion-design.md` to justify backend routing
+  (finding 3): compute-bound prefill -> Metal, bandwidth-bound decode ->
+  CoreML/ANE, measured with IOReport.
+- **Add a KernelGuard-style adversarial reward-hack checker** on acceptance
+  traces (`self-improving-loop-design.md` 4.4), not just a pass/fail gate,
+  with every discovered hack archived as a permanent regression test
+  (finding 2).
+- **Batch candidate evaluations** into one throughput pass rather than one
+  at a time (`self-improving-loop-design.md` 4.7), per Madrona (finding 6).
+- **Track "Open Jarvis"** (finding 1) as a near-neighbor of the
+  self-improving coding harness.
+
+### Priority 9 — General-agent harness (open-source absorption)
+
+Make Studio a genuinely good GENERAL agent harness, not just a coding
+agent - and the vehicle for the model-improvement flywheel, since the two
+are the same loop ("one machine, two payloads,"
+`self-improving-loop-design.md` section 1). Full absorption map in
+`docs/tessera-harness-absorption-2026-07-31.md`, built from seven scouted
+open-source agents (open-interpreter/Codex-RS, self-operating-computer,
+UI-TARS, OpenAdapt, browser-use, gpt-researcher, openclaw); per-repo
+evidence in `tessera-scout/reports/`.
+
+Ground truth: the inward flywheel is already built (agent loop + tool
+protocol + approval engine + 17 Learning services + 9 learning tools, all
+building green). The new work is the OUTWARD capabilities plus the safety
+spine both payloads share. Five themes, sequenced in three waves:
+
+- **Wave 1 — safety spine + cheap high-soul wins (P0).** Approval-engine
+  hardening (layered permission: policy x profile x sandbox-enforceability,
+  fail-safe to AskUser); fail-closed action verifier ("verify a real state
+  change, not a self-reported success"); denial circuit-breaker (the
+  collapse guard, made concrete); per-claim citation + never-fabricate
+  contract; skills directory + `SKILL.md` loader; research tool over a
+  newly-built `TesseraWebSearch`.
+- **Wave 2 — native capabilities (P0/P1, macOS-first).** Computer-use tool
+  (ScreenCaptureKit -> Accessibility -> CGEvent, model-native coordinate
+  grounding, skill-capture receipts, capture-time PII scrub); browser tool
+  (WKWebView + indexed-DOM serializer + page-change re-ground guard).
+- **Wave 3 — identity + polish (P1/P2).** `SOUL.md` persona, per-model
+  harness profiles + context-budget rules, local-first config posture +
+  `doctor` migrations, scoped gating, source curation.
+
+**Wave 1 status (2026-07-31): landed.** The safety spine
+(`TesseraSafetyDecision` / `TesseraActionVerifier` /
+`TesseraDenialCircuitBreaker`), the skills loader, and the cited research
+tool over the keyless `TesseraWebSearch` are built and tested. The
+approval engine now produces AND the loop honors all three outcomes
+(`autoApprove` / `askUser` / `reject`): `askUser` forces a real prompt
+even for a tool the user generally auto-approves, and a user denial feeds
+the circuit breaker. This is the research-backed spec in
+`research-autonomy-calibration-2026-07-31.md` and
+`tessera-studio-design.md` 15.5. The full autonomy system is specified in
+`docs/autonomy-calibration-design.md` (the action-class-identity decision
+that gated the ratchet is settled there: structural verb-prefix /
+path-glob / arg-shape classes, no ML in the classifier).
+
+**Autonomy Phases A-C (2026-07-31): landed.** The learned-permission
+RATCHET (grant after N=5 approvals across M=3 sessions, revoke on one
+denial), the irreversible-class guard, the dispositional floor/ceiling,
+scoped YOLO (time/goal/session-boxed, always logged, always expired),
+breaker suspension semantics, audit + revocation UI (Settings >
+Autonomy), recommendation-confirmation, the miscalibration regime-shift
+detector, and the LEASHED neural approver (pure-Swift MLP, idle-trained
+on approval receipts, calibration collapse guard with rollback, smart
+YOLO) are built and tested (188 tests green). The net predicts, never
+grants, and fails closed; the rule-based ratchet remains load-bearing
+and runs alone until the net warms up (50 receipts). Two pre-landing
+bugs were fixed during integration: the regime-shift trigger was
+mathematically unsatisfiable as written (replaced with a high-regime
+latch), and a failed first net training now stays cold instead of
+posing a random net as warm.
+
+Deliberately NOT absorbed (the skips are as important as the takes):
+anyone else's agent loop, cloud/vendor/server infra, heavy Python/CUDA/CV
+stacks, unsigned-binary supply chains, and self-judging evaluation. The
+cross-cutting risk is privacy (a screen recorder captures passwords/PHI by
+construction; a browser agent runs inside logged-in sessions), so the
+approval engine + no-egress boundary + capture-time scrub are gates, not
+afterthoughts.
+
+Differentiation: every scouted repo is a harness pointing at a model it
+does not own, or a model with no harness. Tessera owns BOTH and lets them
+co-evolve - the agent used by day improves the model by night, with a
+receipt for every step.
+
+**Product-direction decisions (2026-07-31).** Five calls that shape both
+payloads:
+
+- **Agent manager, not an editor.** Studio orchestrates, verifies, and
+  records agents; editors and browsers are things it drives and diffs
+  against, not things it is. No text editor, LSP, or debugger - that is a
+  commodity (Antigravity just forked VS Code) and a tar pit for a solo
+  dev. The seat Tessera takes is the layer above the editor.
+- **Distribution: Developer ID + notarization for the Mac app** (confirmed
+  by the user). Deep macOS integration (Accessibility, Full Disk Access,
+  screen recording) is impossible under Mac App Store sandboxing, so the
+  Mac app ships Developer ID; an iPhone companion, if built, is App Store
+  and acts as a remote control only.
+- **Telemetry is the fuel, not a liability.** Always-on LOCAL telemetry is
+  required: every (prompt, context, model output, user accept/reject,
+  outcome) tuple is a training example and the accept/reject signal is the
+  label, feeding idle-time LoRA of the local model
+  (`self-improving-loop-design.md`). The privacy invariant is that capture
+  and training stay on-device by default - EGRESS is what the approval
+  engine gates, not capture.
+- **Cloud teachers are required; Apple Foundation Models are the default
+  one.** The local model is the student; teachers supply reasoning on
+  problems the student struggles with (struggle-detect -> teacher query ->
+  reasoning capture -> distill). Apple Foundation Models (macOS 26+, no API
+  key, on-device or Private Cloud Compute) are the always-available
+  zero-friction default teacher; third-party cloud teachers (Claude/GPT)
+  are higher-capability but higher-egress, so opt-in and approval-gated.
+  Teacher bias (R3) and reasoning-externalization (R6) from the
+  self-improving-loop risks apply and must be managed.
+- **Egress caveat (the one honest tension).** Teacher distillation sends the
+  user's struggling prompts to a teacher - the single real egress in an
+  otherwise-local system. It is therefore opt-in, approval-governed, and
+  scrubbed/anonymized where possible; AFM/PCC is the low-egress default
+  precisely because of this.
+- **Autonomy calibration: needy -> learned trust -> scoped YOLO.** Studio
+  starts needy and asks often. Every approval/denial is a receipt, and the
+  approval policy is a learned projection over that history: action-classes
+  the user consistently allows auto-continue, novel/edge cases keep
+  prompting. Safety invariant: learning only moves toward MORE autonomy on
+  OBSERVED-SAFE patterns - a new consequential or irreversible action-class
+  always prompts regardless of history. Scoped YOLO mode is a
+  time/goal/session-boxed override that auto-approves within scope, is
+  always logged, and always expires.
+
 ---
 
 ## Open questions
@@ -363,3 +632,16 @@ step is to:
    The fork is a wider container (ANE prefill, dspark patcher, runtime
    probe, etc.). The brand could use a clear statement of intent —
    probably a paragraph in the README.
+
+6. **How spicy is too spicy?** The mutation operator (Priority 7) hinges
+   on the heavy-tailed step distribution and the burst-on-stagnation
+   policy, but the right tail heaviness, mutation rate, and stagnation
+   threshold K are unknown. The plan is to A/B them via
+   `tessera-ab-harness` with the guard axes as the regression constraint —
+   but the guard epsilon that defines "regressed" still needs a number.
+
+7. **Where does the adversarial reward-hack checker live?** Priority 8
+   adds a KernelGuard-style checker on acceptance traces, but it's unclear
+   whether it belongs in the eval harness (reject at the gate) or as a
+   post-hoc auditor over the capability archive. Mutation widening the
+   search (Priority 7) raises the stakes on this answer.

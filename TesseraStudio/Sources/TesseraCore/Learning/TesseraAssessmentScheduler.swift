@@ -54,6 +54,15 @@ public final class TesseraAssessmentScheduler: @unchecked Sendable {
             print("[tessera.assessment] teacher \(teacher.teacherId) degraded: pass fraction \(String(format: "%.2f", teacher.worldGatePassFraction)) over \(teacher.samples) samples")
         }
         print("[tessera.assessment] sweep: \(assessments.count) teacher(s), \(degraded.count) degraded")
+
+        // Idle-window work: incrementally (re)train the leashed approver
+        // network on the approval receipt stream (autonomy-calibration-
+        // design.md 11.5). Cheap, fully local, fail-closed; no-ops below
+        // the warmup threshold and rolls back on calibration collapse.
+        if TesseraLearningCenter.shared.autonomy.trainApprover(denialWeight: 5.0) {
+            print("[tessera.assessment] approver network retrained; calibration guard passed")
+        }
+
         return assessments
     }
 }

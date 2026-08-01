@@ -44,6 +44,10 @@ public enum TesseraSettingsKey {
     public static let learningBaseModelPath = "tessera.settings.learningBaseModelPath"
     public static let learningMinTracesForTraining = "tessera.settings.learningMinTracesForTraining"
     public static let learningTrainingDryRun = "tessera.settings.learningTrainingDryRun"
+    // Web search (agent research tool)
+    public static let searchProvider = "tessera.settings.searchProvider"
+    public static let searxngBaseURL = "tessera.settings.searxngBaseURL"
+    public static let tavilyAPIKey = "tessera.settings.tavilyAPIKey"
 }
 
 /// Factory defaults, registered at app launch.
@@ -83,6 +87,11 @@ public enum TesseraSettingsDefault {
     public static let learningBaseModelPath = ""           // empty -> training disabled
     public static let learningMinTracesForTraining = 1000
     public static let learningTrainingDryRun = true
+    // Web search. Keyless DuckDuckGo is the default; SearXNG (self-hosted) and
+    // Tavily (vendor key) are explicit opt-ins that stay off until configured.
+    public static let searchProvider = "duckduckgo"
+    public static let searxngBaseURL = ""
+    public static let tavilyAPIKey = ""
 }
 
 /// Log levels offered in Advanced settings.
@@ -130,6 +139,9 @@ public enum TesseraSettings {
             TesseraSettingsKey.learningBaseModelPath: TesseraSettingsDefault.learningBaseModelPath,
             TesseraSettingsKey.learningMinTracesForTraining: TesseraSettingsDefault.learningMinTracesForTraining,
             TesseraSettingsKey.learningTrainingDryRun: TesseraSettingsDefault.learningTrainingDryRun,
+            TesseraSettingsKey.searchProvider: TesseraSettingsDefault.searchProvider,
+            TesseraSettingsKey.searxngBaseURL: TesseraSettingsDefault.searxngBaseURL,
+            TesseraSettingsKey.tavilyAPIKey: TesseraSettingsDefault.tavilyAPIKey,
         ])
     }
 
@@ -308,5 +320,28 @@ public enum TesseraSettings {
     public static var learningTrainingDryRun: Bool {
         // register(defaults:) seeds this, so the bool read is meaningful.
         UserDefaults.standard.bool(forKey: TesseraSettingsKey.learningTrainingDryRun)
+    }
+
+    // MARK: Web search
+
+    /// Active web-search backend. Keyless DuckDuckGo unless the user opts into
+    /// self-hosted SearXNG or vendor Tavily.
+    public static var searchProvider: TesseraSearchProviderKind {
+        let raw = UserDefaults.standard.string(forKey: TesseraSettingsKey.searchProvider) ?? TesseraSettingsDefault.searchProvider
+        return TesseraSearchProviderKind(rawValue: raw) ?? .duckduckgo
+    }
+
+    /// Base URL of a self-hosted SearXNG instance (e.g. http://localhost:8888).
+    /// Empty means SearXNG search is not configured.
+    public static var searxngBaseURL: String {
+        UserDefaults.standard.string(forKey: TesseraSettingsKey.searxngBaseURL) ?? TesseraSettingsDefault.searxngBaseURL
+    }
+
+    /// Tavily vendor key. Falls back to the TAVILY_API_KEY environment variable
+    /// so a key set outside the app still works.
+    public static var tavilyAPIKey: String {
+        let explicit = UserDefaults.standard.string(forKey: TesseraSettingsKey.tavilyAPIKey) ?? TesseraSettingsDefault.tavilyAPIKey
+        if !explicit.isEmpty { return explicit }
+        return ProcessInfo.processInfo.environment["TAVILY_API_KEY"] ?? ""
     }
 }

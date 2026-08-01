@@ -248,6 +248,7 @@ struct llama_context {
             ggml_opt_result_t                result,
             const std::vector<llama_token> & tokens,
             const std::vector<llama_token> & labels_sparse,
+            const std::vector<float>       & labels_dense,
             llama_batch                    & batch,
             ggml_opt_epoch_callback          callback,
             bool                             train,
@@ -395,6 +396,9 @@ private:
 
     // training
     ggml_opt_context_t opt_ctx = nullptr;
+    // loss selected at opt_init; decides whether opt_epoch_iter fills sparse
+    // one-hot labels (cross-entropy) or copies dense distribution labels (LK)
+    ggml_opt_loss_type opt_loss_type = GGML_OPT_LOSS_TYPE_CROSS_ENTROPY;
 
     ggml_threadpool_t threadpool       = nullptr;
     ggml_threadpool_t threadpool_batch = nullptr;

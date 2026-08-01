@@ -26,6 +26,20 @@ struct SettingsView: View {
     @AppStorage(TesseraSettingsKey.onDeviceContextLength) private var onDeviceContextLength = TesseraSettingsDefault.onDeviceContextLength
     @AppStorage(TesseraSettingsKey.onDeviceGPULayers) private var onDeviceGPULayers = TesseraSettingsDefault.onDeviceGPULayers
 
+    // Autonomy (autonomy-calibration-design.md 13): snapshots of the learned-
+    // permission store, refreshed on appear and after every mutation.
+    @State private var autonomyEntries: [TesseraLearnedPermission] = []
+    @State private var autonomyRecommendations: [TesseraRecommendation] = []
+    @State private var autonomyConfig = TesseraPermissionConfig()
+    @State private var autonomySessionID = ""
+    @State private var yoloSession: TesseraYoloSession?
+    @State private var yoloGoal = ""
+    @State private var yoloReason = ""
+    @State private var yoloMinutes = 30
+    @State private var yoloNote: String?
+    @State private var netWarm = false
+    @State private var netNote: String?
+
     var body: some View {
         TabView {
             generalTab
@@ -34,6 +48,8 @@ struct SettingsView: View {
                 .tabItem { Label("Agent", systemImage: "cpu") }
             modelTab
                 .tabItem { Label("Model", systemImage: "brain") }
+            autonomyTab
+                .tabItem { Label("Autonomy", systemImage: "hand.raised") }
             advancedTab
                 .tabItem { Label("Advanced", systemImage: "slider.horizontal.3") }
         }
@@ -102,6 +118,231 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
+    }
+
+    // MARK: Autonomy tab (autonomy-calibration-design.md 9, 10, 11, 13)
+
+    private var autonomyTab: some View {
+        ScrollView {
+            Form {
+                autonomyDispositionSection
+                autonomyYoloSection
+                autonomyRecommendationsSection
+                autonomyEntriesSection
+                autonomyNetworkSection
+                autonomyGlobalSection
+            }
+            .formStyle(.grouped)
+        }
+        .onAppear { loadAutonomy() }
+        .onChange(of: autonomyConfig) { _, newValue in
+            TesseraLearningCenter.shared.autonomy.updateConfig { $0 = newValue }
+        }
+    }
+
+    private var autonomyDispositionSection: some View {
+        Section("Disposition (floor and ceiling)") {
+            Picker("Floor (minimum requirement)", selection: $autonomyConfig.floor) {
+                Text("Restricted (never auto-approve)").tag(TesseraPermissionProfile.restricted)
+                Text("Standard").tag(TesseraPermissionProfile.standard)
+                Text("Elevated").tag(TesseraPermissionProfile.elevated)
+            }
+            Picker("Ceiling (maximum learning may reach)", selection: $autonomyConfig.ceiling) {
+                Text("Contained low-risk only").tag(AutonomyCeiling.containedLowRiskOnly)
+                Text("Any non-irreversible class").tag(AutonomyCeiling.anyNonIrreversible)
+            }
+            Stepper("Approvals needed to grant: \(autonomyConfig.grantThresholdN)",
+                    value: $autonomyConfig.grantThresholdN, in: 1...20)
+            Stepper("Distinct sessions needed: \(autonomyConfig.sessionThresholdM)",
+                    value: $autonomyConfig.sessionThresholdM, in: 1...10)
+            Stepper("Path-glob depth: \(autonomyConfig.pathGlobDepth)",
+                    value: $autonomyConfig.pathGlobDepth, in: 1...4)
+        }
+    }
+
+    private var autonomyYoloSection: some View {
+        Section("Scoped YOLO") {
+            if let yolo = yoloSession {
+                LabeledContent("goal", value: yolo.goal ?? "-")
+                LabeledContent("reason", value: yolo.reason.isEmpty ? "-" : yolo.reason)
+                LabeledContent("expires", value: yolo.expiresAt.formatted())
+                LabeledContent("actions so far", value: "\(yolo.actionCount)")
+                Button("End YOLO") { endYolo() }
+            } else {
+                TextField("Goal (optional)", text: $yoloGoal)
+                TextField("Reason (for the audit log)", text: $yoloReason)
+                Stepper("Minutes: \(yoloMinutes)", value: $yoloMinutes, in: 5...240)
+                Button("Start YOLO") { startYolo() }
+                    .disabled(autonomySessionID.isEmpty)
+                if autonomySessionID.isEmpty {
+                    Text("Run the agent once first; YOLO binds to that session.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if let yoloNote {
+                    Text(yoloNote).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Text("YOLO auto-approves within scope, but irreversible actions always prompt. It expires on time and never persists across sessions.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var autonomyRecommendationsSection: some View {
+        Section("Recommendations") {
+            if autonomyRecommendations.isEmpty {
+                Text("Nothing to recommend yet.").foregroundStyle(.secondary)
+            } else {
+                ForEach(autonomyRecommendations) { rec in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(rec.message)
+                        HStack {
+                            Button("Confirm") { confirmRecommendation(rec.actionClass, .confirm) }
+                            Button("Not now") { confirmRecommendation(rec.actionClass, .notNow) }
+                            Button("Never") { confirmRecommendation(rec.actionClass, .never) }
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+        }
+    }
+
+    private var autonomyEntriesSection: some View {
+        Section("Learned permissions") {
+            if autonomyEntries.isEmpty {
+                Text("Tessera starts needy. As you approve actions, classes earn autonomy here.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(autonomyEntries) { entry in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 6) {
+                            Text(entry.actionClass).font(.system(.body, design: .monospaced))
+                            autonomyBadges(for: entry)
+                        }
+                        Text("\(entry.totalApprovals) approved / \(entry.totalDenials) denied / \(entry.distinctSessions) session(s)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        HStack {
+                            if entry.granted {
+                                Button("Revoke") { revokeEntry(entry.actionClass) }
+                            }
+                            if entry.revoked {
+                                Button("Un-revoke") { unrevokeEntry(entry.actionClass) }
+                            }
+                            if !entry.irreversible {
+                                Button("Add to denylist") { denylistEntry(entry.actionClass) }
+                            }
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func autonomyBadges(for entry: TesseraLearnedPermission) -> some View {
+        if entry.irreversible {
+            Text("irreversible").font(.caption2).padding(.horizontal, 4).background(.red.opacity(0.15))
+        } else if entry.granted {
+            Text("granted").font(.caption2).padding(.horizontal, 4).background(.green.opacity(0.15))
+        }
+        if entry.revoked {
+            Text("revoked").font(.caption2).padding(.horizontal, 4).background(.orange.opacity(0.15))
+        }
+    }
+
+    private var autonomyNetworkSection: some View {
+        Section("Approver network") {
+            LabeledContent("status", value: netWarm ? "warm (modulating grants)" : "cold (rule-based only)")
+            Button("Train now") { trainApproverNow() }
+            if let netNote {
+                Text(netNote).font(.caption).foregroundStyle(.secondary)
+            }
+            Text("A small local network trained on your approval receipts during idle time. It predicts; it never grants. Fails closed.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var autonomyGlobalSection: some View {
+        Section {
+            Button("Reset all grants") {
+                TesseraLearningCenter.shared.autonomy.resetAll()
+                loadAutonomy()
+            }
+            Button("Purge all learning data", role: .destructive) {
+                _ = try? TesseraLearningCenter.shared.purgeAll()
+                loadAutonomy()
+            }
+        }
+    }
+
+    private func loadAutonomy() {
+        let autonomy = TesseraLearningCenter.shared.autonomy
+        autonomyEntries = autonomy.entries()
+        autonomyRecommendations = autonomy.recommendations()
+        autonomyConfig = autonomy.config
+        autonomySessionID = autonomy.activeSessionID
+        yoloSession = autonomy.activeYolo(for: nil)
+        netWarm = autonomy.isNetWarm
+        if yoloMinutes == 30 { yoloMinutes = autonomy.config.yoloDefaultMinutes }
+    }
+
+    private func startYolo() {
+        let autonomy = TesseraLearningCenter.shared.autonomy
+        yoloSession = autonomy.startYolo(
+            goal: yoloGoal.isEmpty ? nil : yoloGoal,
+            sessionID: autonomySessionID,
+            reason: yoloReason,
+            minutes: yoloMinutes
+        )
+        yoloNote = nil
+    }
+
+    private func endYolo() {
+        if let summary = TesseraLearningCenter.shared.autonomy.endYolo() {
+            yoloNote = "Last YOLO ran \(summary.actionCount) action(s) across \(summary.classes.count) class(es); \(summary.denials) denial(s)."
+        }
+        yoloSession = nil
+    }
+
+    private func confirmRecommendation(_ actionClass: String, _ choice: TesseraRecommendationChoice) {
+        let sessionID = autonomySessionID.isEmpty ? "settings-ui" : autonomySessionID
+        _ = TesseraLearningCenter.shared.autonomy.confirmRecommendation(
+            actionClass: actionClass, choice: choice, sessionID: sessionID
+        )
+        loadAutonomy()
+    }
+
+    private func revokeEntry(_ actionClass: String) {
+        TesseraLearningCenter.shared.autonomy.revoke(actionClass)
+        loadAutonomy()
+    }
+
+    private func unrevokeEntry(_ actionClass: String) {
+        TesseraLearningCenter.shared.autonomy.unrevoke(actionClass)
+        loadAutonomy()
+    }
+
+    private func denylistEntry(_ actionClass: String) {
+        TesseraLearningCenter.shared.autonomy.denylist(actionClass)
+        loadAutonomy()
+    }
+
+    private func trainApproverNow() {
+        let autonomy = TesseraLearningCenter.shared.autonomy
+        let passed = autonomy.trainApprover(denialWeight: 5.0)
+        netWarm = autonomy.isNetWarm
+        if passed {
+            netNote = "Trained; the calibration guard passed."
+        } else if netWarm {
+            netNote = "Retrained net failed the calibration guard; rolled back to the previous weights."
+        } else {
+            netNote = "Not trained yet: needs at least \(TesseraAutonomyService.warmupThreshold) approval receipts, or the guard rolled back."
+        }
     }
 
     private var advancedTab: some View {

@@ -45,7 +45,7 @@ public struct TesseraActionVerifier: ActionVerifying {
     /// Maps an action to a risk level. May throw; a throw fails closed.
     private let assess: @Sendable (PendingAction) throws -> TesseraActionRisk
 
-    public init(assess: @escaping @Sendable (PendingAction) throws -> TesseraActionRisk = TesseraActionVerifier.ruleBasedRisk) {
+    public init(assess: @escaping @Sendable (PendingAction) throws -> TesseraActionRisk = { try TesseraActionVerifier.ruleBasedRisk(for: $0) }) {
         self.assess = assess
     }
 

@@ -9778,7 +9778,7 @@ kernel void kernel_get_rows_q(
     }
 }
 
-template<typename T0, typename T>
+template<typename T0, typename Ti, typename T>
 kernel void kernel_get_rows_f(
         constant ggml_metal_kargs_get_rows & args,
         device const void * src0,
@@ -9792,7 +9792,7 @@ kernel void kernel_get_rows_f(
     const int32_t i11 = tgpig.y;
     const int32_t i12 = tgpig.z;
 
-    const int32_t r = ((const device int32_t *) ((const device char *) src1 + i12*args.nb12 + i11*args.nb11 + i10*args.nb10))[0];
+    const int64_t r = ((const device Ti *) ((const device char *) src1 + i12*args.nb12 + i11*args.nb11 + i10*args.nb10))[0];
 
     const int32_t i02 = i11;
     const int32_t i03 = i12;
@@ -9807,13 +9807,14 @@ kernel void kernel_get_rows_f(
     }
 }
 
-typedef decltype(kernel_get_rows_f<float, float>) get_rows_f_t;
+typedef decltype(kernel_get_rows_f<float, int32_t, float>) get_rows_f_t;
 
-template [[host_name("kernel_get_rows_f32")]]  kernel get_rows_f_t kernel_get_rows_f<float, float>;
-template [[host_name("kernel_get_rows_f16")]]  kernel get_rows_f_t kernel_get_rows_f<half,  float>;
-template [[host_name("kernel_get_rows_i32")]]  kernel get_rows_f_t kernel_get_rows_f<int32_t, int32_t>;
+template [[host_name("kernel_get_rows_f32")]]     kernel get_rows_f_t kernel_get_rows_f<float,   int32_t, float>;
+template [[host_name("kernel_get_rows_f32_i64")]] kernel get_rows_f_t kernel_get_rows_f<float,   int64_t, float>;
+template [[host_name("kernel_get_rows_f16")]]     kernel get_rows_f_t kernel_get_rows_f<half,    int32_t, float>;
+template [[host_name("kernel_get_rows_i32")]]     kernel get_rows_f_t kernel_get_rows_f<int32_t, int32_t, int32_t>;
 #if defined(GGML_METAL_HAS_BF16)
-template [[host_name("kernel_get_rows_bf16")]] kernel get_rows_f_t kernel_get_rows_f<bfloat, float>;
+template [[host_name("kernel_get_rows_bf16")]]    kernel get_rows_f_t kernel_get_rows_f<bfloat,  int32_t, float>;
 #endif
 
 typedef decltype(kernel_get_rows_q<block_q4_0, 2, dequantize_q4_0>) get_rows_q_t;

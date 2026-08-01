@@ -52,6 +52,11 @@ public enum JSONValue: Codable, Sendable, Equatable {
         return nil
     }
 
+    public var boolValue: Bool? {
+        if case .bool(let v) = self { return v }
+        return nil
+    }
+
     /// A short human-readable description, used across the UI.
     public var shortDescription: String {
         switch self {

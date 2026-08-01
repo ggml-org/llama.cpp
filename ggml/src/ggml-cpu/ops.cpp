@@ -4849,6 +4849,7 @@ void ggml_compute_forward_cont(
 
 // ggml_compute_forward_get_rows
 
+template<typename idx_t>
 static void ggml_compute_forward_get_rows_q(
         const ggml_compute_params * params,
               ggml_tensor * dst) {
@@ -4883,7 +4884,7 @@ static void ggml_compute_forward_get_rows_q(
         const int64_t i12 = i/(ne11*ne10);
         const int64_t i11 = (i - i12*ne11*ne10)/ne10;
         const int64_t i10 = (i - i12*ne11*ne10 - i11*ne10);
-        const int64_t i01 = *(int32_t *) ((char *) src1->data + i10*nb10 + i11*nb11 + i12*nb12);
+        const int64_t i01 = *(idx_t *) ((char *) src1->data + i10*nb10 + i11*nb11 + i12*nb12);
 
         GGML_ASSERT(i01 >= 0 && i01 < ne01);
 
@@ -4893,6 +4894,7 @@ static void ggml_compute_forward_get_rows_q(
     }
 }
 
+template<typename idx_t>
 static void ggml_compute_forward_get_rows_f16(
         const ggml_compute_params * params,
               ggml_tensor * dst) {
@@ -4924,7 +4926,7 @@ static void ggml_compute_forward_get_rows_f16(
         const int64_t i12 = i/(ne11*ne10);
         const int64_t i11 = (i - i12*ne11*ne10)/ne10;
         const int64_t i10 = (i - i12*ne11*ne10 - i11*ne10);
-        const int64_t i01 = *(int32_t *) ((char *) src1->data + i10*nb10 + i11*nb11 + i12*nb12);
+        const int64_t i01 = *(idx_t *) ((char *) src1->data + i10*nb10 + i11*nb11 + i12*nb12);
 
         GGML_ASSERT(i01 >= 0 && i01 < ne01);
 
@@ -4934,6 +4936,7 @@ static void ggml_compute_forward_get_rows_f16(
     }
 }
 
+template<typename idx_t>
 static void ggml_compute_forward_get_rows_bf16(
         const ggml_compute_params * params,
               ggml_tensor * dst) {
@@ -4965,7 +4968,7 @@ static void ggml_compute_forward_get_rows_bf16(
         const int64_t i12 = i/(ne11*ne10);
         const int64_t i11 = (i - i12*ne11*ne10)/ne10;
         const int64_t i10 = (i - i12*ne11*ne10 - i11*ne10);
-        const int64_t i01 = *(int32_t *) ((char *) src1->data + i10*nb10 + i11*nb11 + i12*nb12);
+        const int64_t i01 = *(idx_t *) ((char *) src1->data + i10*nb10 + i11*nb11 + i12*nb12);
 
         GGML_ASSERT(i01 >= 0 && i01 < ne01);
 
@@ -4975,6 +4978,7 @@ static void ggml_compute_forward_get_rows_bf16(
     }
 }
 
+template<typename idx_t>
 static void ggml_compute_forward_get_rows_f32(
         const ggml_compute_params * params,
               ggml_tensor * dst) {
@@ -5006,7 +5010,7 @@ static void ggml_compute_forward_get_rows_f32(
         const int64_t i12 = i/(ne11*ne10);
         const int64_t i11 = (i - i12*ne11*ne10)/ne10;
         const int64_t i10 = (i - i12*ne11*ne10 - i11*ne10);
-        const int64_t i01 = *(int32_t *) ((char *) src1->data + i10*nb10 + i11*nb11 + i12*nb12);
+        const int64_t i01 = *(idx_t *) ((char *) src1->data + i10*nb10 + i11*nb11 + i12*nb12);
 
         GGML_ASSERT(i01 >= 0 && i01 < ne01);
 
@@ -5021,6 +5025,9 @@ void ggml_compute_forward_get_rows(
         ggml_tensor * dst) {
 
     const ggml_tensor * src0 = dst->src[0];
+    const ggml_tensor * src1 = dst->src[1];
+
+    GGML_ASSERT(src1->type == GGML_TYPE_I32 || src1->type == GGML_TYPE_I64);
 
     switch (src0->type) {
         case GGML_TYPE_Q1_0:
@@ -5050,20 +5057,36 @@ void ggml_compute_forward_get_rows(
         case GGML_TYPE_IQ3_S:
         case GGML_TYPE_IQ2_S:
             {
-                ggml_compute_forward_get_rows_q(params, dst);
+                if (src1->type == GGML_TYPE_I64) {
+                    ggml_compute_forward_get_rows_q<int64_t>(params, dst);
+                } else {
+                    ggml_compute_forward_get_rows_q<int32_t>(params, dst);
+                }
             } break;
         case GGML_TYPE_F16:
             {
-                ggml_compute_forward_get_rows_f16(params, dst);
+                if (src1->type == GGML_TYPE_I64) {
+                    ggml_compute_forward_get_rows_f16<int64_t>(params, dst);
+                } else {
+                    ggml_compute_forward_get_rows_f16<int32_t>(params, dst);
+                }
             } break;
         case GGML_TYPE_BF16:
             {
-                ggml_compute_forward_get_rows_bf16(params, dst);
+                if (src1->type == GGML_TYPE_I64) {
+                    ggml_compute_forward_get_rows_bf16<int64_t>(params, dst);
+                } else {
+                    ggml_compute_forward_get_rows_bf16<int32_t>(params, dst);
+                }
             } break;
         case GGML_TYPE_F32:
         case GGML_TYPE_I32:
             {
-                ggml_compute_forward_get_rows_f32(params, dst);
+                if (src1->type == GGML_TYPE_I64) {
+                    ggml_compute_forward_get_rows_f32<int64_t>(params, dst);
+                } else {
+                    ggml_compute_forward_get_rows_f32<int32_t>(params, dst);
+                }
             } break;
         default:
             {

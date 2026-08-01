@@ -55,6 +55,11 @@ let package = Package(
         .executable(name: "TesseraStudioMac", targets: ["TesseraStudioMac"]),
         .library(name: "TesseraStudioiOS", targets: ["TesseraStudioiOS"]),
     ],
+    dependencies: [
+        // Pure-Swift HTML parser used by the keyless web-search providers
+        // (DuckDuckGo HTML endpoint). No WebKit, works headless in tests.
+        .package(url: "https://github.com/scinfu/SwiftSoup.git", from: "2.6.0"),
+    ],
     targets: [
         .target(
             name: "CTesseraFFI",
@@ -69,7 +74,11 @@ let package = Package(
         ),
         .target(
             name: "TesseraCore",
-            dependencies: ["CTesseraFFI", "CLlama"],
+            dependencies: [
+                "CTesseraFFI",
+                "CLlama",
+                .product(name: "SwiftSoup", package: "SwiftSoup"),
+            ],
             path: "Sources/TesseraCore",
             // Ships the Skills format doc so the target has a resource bundle
             // (Bundle.module); the skill loader looks here for bundled skills.

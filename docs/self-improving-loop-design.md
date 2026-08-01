@@ -66,7 +66,7 @@ from scratch.
 | Runtime enum (onDevice/mlx/privateCloud) | EXISTS | `TesseraCore/Models/TesseraRuntime.swift` |
 | Drafter co-adaptation via rejection-sampling LoRA | PLANNED | `PROJECT-STATUS.md` Priority 3 (`tools/tessera/dspark_pytorch.py`, peft/accelerate, target 33%->50%) |
 | Runtime ground truth (kernel dequant fidelity) | PLANNED / IN FLIGHT | runtime-aware pipeline L1-L6 |
-| Web search / retrieval channel | DESIGNED | `tessera-studio-design.md` 5.6 (Tavily), `TesseraWebSearch.swift` |
+| Web search / retrieval channel | SEARCH PROVIDERS IMPLEMENTED; escalation wiring DESIGNED | `tessera-studio-design.md` 5.4 (provider-shaped, keyless DuckDuckGo default), `TesseraWebSearch.swift` + `TesseraSearchProvider.swift` |
 | Reasoning / CoT from day 1 | DESIGNED | `tessera-studio-design.md` 5.7, `ThinkingBlock.swift` |
 | Schema-versioned evidence / receipts pattern | EXISTS (pattern) | `llama.spec_calib.v*`, sidecar v3 |
 | Escalation subsystem (tier 1 + tier 2) | NEW | this plan, section 4.1 |
@@ -561,7 +561,7 @@ in section 8.
 ### Phase 2 - Retrieval + reference store + retrieve-before-escalate
 
 Goal: close the "go find out" loop and purify the escalation corpus.
-- Reuses: DESIGNED web search (`TesseraWebSearch.swift`, Tavily).
+- Reuses: IMPLEMENTED web search providers (`TesseraWebSearch.swift` facade over `TesseraSearchProvider.swift`; keyless DuckDuckGo default, SearXNG/Tavily opt-in).
 - New: reference store (provenance + TTL), the retrieve->still-stuck?->
   escalate ordering in the escalation router, foraging-signal capture.
 - Acceptance: measurable fraction of would-be escalations resolved by

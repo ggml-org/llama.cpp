@@ -18,6 +18,7 @@ public enum TesseraLearningServices {
         center.install(scheduler: TesseraAdaptationScheduler())
         center.install(assessor: TesseraTeacherAssessor())
         center.install(foraging: TesseraForagingStore())
+        center.install(autonomy: TesseraAutonomyService())
         center.install(headRouting: TesseraTrackRScaffold())
 
         let baseModel = TesseraSettings.learningBaseModelPath
