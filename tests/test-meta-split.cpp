@@ -139,6 +139,18 @@ int main() {
         }
     }
 
+    std::fill(axis3_actual.begin(), axis3_actual.end(), 0.0f);
+    ggml_backend_tensor_set_async(backend.get(), axis3, axis3_expected.data(), 0, axis3_nbytes);
+    ggml_backend_synchronize(backend.get());
+    ggml_backend_tensor_get_async(backend.get(), axis3, axis3_actual.data(), 0, axis3_nbytes);
+    ggml_backend_synchronize(backend.get());
+    for (size_t i = 0; i < axis3_expected.size(); ++i) {
+        if (axis3_expected[i] != axis3_actual[i]) {
+            std::fprintf(stderr, "axis-3 async readback mismatch at %zu: %.9g != %.9g\n", i, axis3_expected[i], axis3_actual[i]);
+            return 1;
+        }
+    }
+
     std::puts("meta split axis-2, axis-3, and mirrored readback passed");
     return 0;
 }
