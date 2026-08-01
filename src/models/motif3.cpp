@@ -85,6 +85,10 @@ void llama_model_motif3::load_arch_hparams(llama_model_loader & ml) {
             }
         }
 
+        // flag the model as MLA so the iswa base cache is allocated K only, while the SWA cache always keeps a real V regardless of this flag
+        hparams.n_embd_head_k_mla_impl = hparams.motif_n_embd_head_k;
+        hparams.n_embd_head_v_mla_impl = hparams.motif_n_embd_head_v;
+
         LLAMA_LOG_INFO("%s: Motif-3 GDLA: using MLA latent KV cache on full-attention layers "
                 "(%u + %u per token instead of %u)\n", __func__,
                 hparams.n_lora_kv, hparams.n_rot_full,
