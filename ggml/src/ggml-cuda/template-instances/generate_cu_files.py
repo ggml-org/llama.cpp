@@ -92,11 +92,13 @@ for ncols in [8, 16, 32, 64]:
                     continue
                 if head_size_kq == 320 and ncols2 != 32: # Mistral Small 4
                     continue
-                if head_size_kq == 512 and ncols2 not in (2, 4, 8): # Gemma 4 (+ MTP)
+                if head_size_kq == 512 and ncols2 not in (2, 4, 8, 16): # Gemma 4 (+ MTP), DeepSeek V4 sparse attention
+                    continue
+                if head_size_kq == 512 and ncols2 == 16 and ncols1 != 1:
                     continue
                 if head_size_kq == 576 and ncols2 not in (4, 16, 32): # Deepseek, GLM 4.7 Flash
                     continue
-                if head_size_kq not in (192, 320, 576) and ncols2 in (16, 32):
+                if head_size_kq not in (192, 320, 512, 576) and ncols2 in (16, 32):
                     continue
                 head_size_v = HEAD_SIZES_V_OVERRIDE.get(head_size_kq, head_size_kq)
                 f.write(SOURCE_FATTN_MMA_CASE.format(ncols1=ncols1, ncols2=ncols2, head_size_kq=head_size_kq, head_size_v=head_size_v))

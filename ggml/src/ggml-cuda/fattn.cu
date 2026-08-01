@@ -6,10 +6,27 @@
 #include "fattn-wmma-f16.cuh"
 #include "fattn.cuh"
 
+bool ggml_cuda_flash_attn_ext_mma_f16_shall_use_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    GGML_UNUSED_VARS(ctx);
+    const ggml_tensor * Q = dst->src[0];
+    const ggml_tensor * K = dst->src[1];
+    const ggml_tensor * top_k = dst->src[5];
+    // TODO better tuning of when to use top_k optimization on various hardware
+    return ((Q->ne[1] == 1 && K->ne[1] >= 4096) || K->ne[1] >= 8192) && top_k != nullptr;
+}
+
 template <int DKQ, int DV, int ncols2>
 static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
     const ggml_tensor * Q = dst->src[0];
+
+    // for DeepSeek V3.2 sparse top-k attention force Q tiles to always correspond to only 1 token (ncols1 = 1)
+    if constexpr (ggml_cuda_flash_attn_ext_mma_f16_may_use_top_k(DKQ, DV, 1, ncols2)) {
+        if (ggml_cuda_flash_attn_ext_mma_f16_shall_use_top_k(ctx, dst)) {
+            ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 1, ncols2>(ctx, dst);
+            return;
+        }
+    }
 
     if constexpr (ncols2 <= 8) {
         if (turing_mma_available(cc) && Q->ne[1] <= 8/ncols2) {
@@ -178,6 +195,10 @@ static void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, gg
             break;
         case 512:
             GGML_ASSERT(V->ne[0] == 512);
+            if (dst->src[5] && (amd_wmma_available(cc) || amd_mfma_available(cc))) {
+                ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<512, 512, 16>(ctx, dst);
+                break;
+            }
             ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2<512, 512>(ctx, dst);
             break;
         case 576: {
@@ -368,6 +389,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     const ggml_tensor * K     = dst->src[1];
     const ggml_tensor * V     = dst->src[2];
     const ggml_tensor * mask  = dst->src[3];
+    const ggml_tensor * top_k = dst->src[5];
 
     const int gqa_ratio = Q->ne[2] / K->ne[2];
     GGML_ASSERT(Q->ne[2] % K->ne[2] == 0);
@@ -488,6 +510,10 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     int gqa_ratio_eff = 1;
     while (gqa_ratio % (2*gqa_ratio_eff) == 0 && gqa_ratio_eff < ncols2_max) {
         gqa_ratio_eff *= 2;
+    }
+
+    if (top_k && Q->ne[0] == 512 && gqa_ratio % 16 == 0 && (amd_wmma_available(cc) || amd_mfma_available(cc))) {
+        return BEST_FATTN_KERNEL_MMA_F16;
     }
 
     if (volta_mma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
