@@ -1,0 +1,91 @@
+{
+  "draft_type": "hybrid",
+  "evolution": {
+    "build_info": "llama.cpp tessera test fixture",
+    "bundle_digest": "deadbeef",
+    "generations": 24,
+    "islands": 4,
+    "main_tip": "abc123",
+    "population": 16,
+    "seed": 640,
+    "timestamp": "2026-07-30T14:00:00Z"
+  },
+  "moe_residual_allocation": {
+    "layers": {
+      "3": {
+        "experts": {},
+        "tensors": {
+          "ffn_gate": {
+            "experts": {
+              "7": {
+                "awq_alpha": 0.55,
+                "awq_clip": 0.92,
+                "outlier_fraction": 0.003
+              }
+            }
+          }
+        }
+      }
+    },
+    "schema": "llama.tessera.moe-residual-policy.v1"
+  },
+  "schema": "llama.speculative.calibration-policy.v1",
+  "search_schema": "llama.tessera.awq-evolution.v1",
+  "tensor_families": {
+    "attention": {
+      "awq_alpha": 0.72,
+      "awq_clip": 0.95,
+      "exact": false,
+      "match": [
+        "attn_q",
+        "attn_k",
+        "attn_v",
+        "attn_output"
+      ],
+      "moment_mix": 0.21,
+      "outlier_fraction": 0.0042,
+      "tail_guard": 0.27
+    },
+    "ffn": {
+      "awq_alpha": 0.0,
+      "awq_clip": 0.9,
+      "exact": false,
+      "match": [
+        "ffn_gate",
+        "ffn_up",
+        "ffn_down"
+      ],
+      "moment_mix": 0.18,
+      "outlier_fraction": 0.0061,
+      "tail_guard": 0.31
+    },
+    "norm": {
+      "awq_alpha": 0.0,
+      "exact": true,
+      "match": [
+        "norm"
+      ],
+      "outlier_fraction": 1.0
+    },
+    "override:blk.3.ffn_gate.expert-7": {
+      "awq_alpha": 0.55,
+      "awq_clip": 0.92,
+      "exact": false,
+      "match": [
+        "blk.3.ffn_gate.expert-7"
+      ],
+      "moment_mix": 0.2,
+      "outlier_fraction": 0.003,
+      "tail_guard": 0.25
+    },
+    "router": {
+      "awq_alpha": 0.0,
+      "awq_clip": 0.88,
+      "exact": true,
+      "match": [
+        "ffn_gate_inp"
+      ],
+      "outlier_fraction": 0.002
+    }
+  }
+}
