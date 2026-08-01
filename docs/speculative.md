@@ -117,12 +117,14 @@ llama-server -m Qwen3-4B.gguf -md Qwen3-4B-DSpark.gguf \
 `--spec-draft-conf-min P` truncates each drafted block at the first position whose predicted
 acceptance (from the draft's confidence head, if present) falls below `P` (default 0 = disabled).
 
-Currently only drafts with a Qwen3 backbone are supported; support for other backbones
-(e.g. Gemma4) is planned.
+Drafts with a Qwen3 backbone and drafts with a DeepSeek-V4 backbone (MLA + MoE +
+hyper-connections, as used by DeepSeek-V4-Flash-DSpark) are supported; support for other
+backbones (e.g. Gemma4) is planned.
 
 See:
 
 - #25173
+- #25683
 
 ### n-gram Cache (`ngram-cache`)
 
