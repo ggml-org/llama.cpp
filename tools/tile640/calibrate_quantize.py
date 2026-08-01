@@ -131,13 +131,16 @@ def main() -> None:
     )
     parser.add_argument(
         "--per-tensor-fitness",
-        choices=("direct", "importance", "combined"),
-        default="direct",
+        choices=("lrq", "awq", "flrq", "dartquant", "compare"),
+        default="awq",
         help=(
-            "Per-tensor fitness mode. 'direct' = relative Frobenius MSE "
-            "between BF16 source and the dequantized reconstruction (the "
-            "round-trip integrity). 'importance' = legacy imatrix-weighted "
-            "MSE. 'combined' = direct + max-abs penalty."
+            "Per-tensor fitness mode, forwarded to per_tensor_calibrate.py. "
+            "The choices must match that tool's --fitness. 'awq' = island GA "
+            "via awq-evolve.py (the production path). 'lrq' = low-rank "
+            "weight-scaling closed-form fit. 'flrq' = outlier-aware low-rank "
+            "plus clipped residual. 'dartquant' = QR-Orth pre-rotation with "
+            "a Whip loss. 'compare' = run awq and lrq and write a "
+            "side-by-side report."
         ),
     )
     parser.add_argument(
@@ -150,7 +153,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--per-tensor-tool",
-        default="/Users/user/Developer/GitHub/llama.cpp/tools/tessera/per_tensor_calibrate.py",
+        default=os.path.join(
+            os.path.dirname(__file__), "..", "tessera", "per_tensor_calibrate.py"
+        ),
     )
     parser.add_argument(
         "--policy-generator",
