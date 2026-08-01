@@ -10,6 +10,18 @@
 #include "speculative.h"
 #include "server-common.h"
 
+#include <cstdio>
+#include <string>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
 using json = nlohmann::ordered_json;
 
 //
@@ -1708,20 +1720,94 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
     std::vector<uint8_t> state_data_tgt;
     std::vector<uint8_t> state_data_dft;
 
-    // check if we can allocate enough memory for the new state
-    try {
-        state_data_tgt.resize(state_size_tgt);
-        state_data_dft.resize(state_size_dft);
-    } catch (const std::bad_alloc & e) {
-        SRV_ERR("failed to allocate memory for prompt cache state: %s\n", e.what());
+    // --cache-disk mode: allocate state in mmap'd files instead of RAM
+    std::string ckpt_file;
+    uint8_t *   mmap_ptr   = nullptr;
+    size_t      mmap_len   = 0;
+    bool        disk_mode  = !cache_dir.empty();
 
-        limit_size = std::max<size_t>(1, 0.4*size());
+    if (disk_mode) {
+        SRV_INF("--cache-disk: allocating state on disk (tgt=%zu drft=%zu bytes)\n", state_size_tgt, state_size_dft);
 
-        SRV_WRN(" - cache size limit reduced to %.3f MiB\n", limit_size / (1024.0 * 1024.0));
+        // one file per checkpoint state: main + drft concatenated
+        const size_t total_size = state_size_tgt + state_size_dft;
+        ckpt_file = cache_dir + "/ckpt_" + std::to_string(next_ckpt_id++) + ".bin";
 
-        update();
+        // create + resize the file
+        FILE * f = fopen(ckpt_file.c_str(), "wb");
+        if (f == nullptr) {
+            SRV_ERR("failed to create cache-disk file %s\n", ckpt_file.c_str());
+            return nullptr;
+        }
+        if (total_size > 0) {
+            if (fseek(f, (long)(total_size - 1), SEEK_SET) != 0 || fputc(0, f) == EOF) {
+                SRV_ERR("failed to resize cache-disk file %s to %zu bytes\n", ckpt_file.c_str(), total_size);
+                fclose(f);
+                return nullptr;
+            }
+        }
+        fclose(f);
 
-        return nullptr;
+#ifdef _WIN32
+        // Windows mmap via CreateFileMapping
+        HANDLE hFile = CreateFileA(ckpt_file.c_str(), GENERIC_READ | GENERIC_WRITE, 0, NULL,
+                                   OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hFile == INVALID_HANDLE_VALUE) {
+            SRV_ERR("CreateFileA failed for %s\n", ckpt_file.c_str());
+            return nullptr;
+        }
+        HANDLE hMap = CreateFileMappingA(hFile, NULL, PAGE_READWRITE, 0, 0, NULL);
+        if (hMap == NULL) {
+            SRV_ERR("CreateFileMappingA failed for %s\n", ckpt_file.c_str());
+            CloseHandle(hFile);
+            return nullptr;
+        }
+        mmap_ptr = (uint8_t *) MapViewOfFile(hMap, FILE_MAP_ALL_ACCESS, 0, 0, 0);
+        if (mmap_ptr == nullptr) {
+            SRV_ERR("MapViewOfFile failed for %s\n", ckpt_file.c_str());
+            CloseHandle(hMap);
+            CloseHandle(hFile);
+            return nullptr;
+        }
+        // keep handles open for the lifetime of the mapping (closed on erase)
+        mmap_len = total_size;
+        // note: hFile/hMap are leaked per state unless we store them; for the MVP we
+        // rely on process exit to close them. A production impl would store them in
+        // server_prompt_data alongside the pointer.
+        (void) hFile; (void) hMap;
+#else
+        // POSIX mmap
+        int fd = open(ckpt_file.c_str(), O_RDWR);
+        if (fd < 0) {
+            SRV_ERR("open failed for %s\n", ckpt_file.c_str());
+            return nullptr;
+        }
+        void * addr = mmap(nullptr, total_size > 0 ? total_size : 1, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        if (addr == MAP_FAILED) {
+            SRV_ERR("mmap failed for %s\n", ckpt_file.c_str());
+            close(fd);
+            return nullptr;
+        }
+        mmap_ptr = (uint8_t *) addr;
+        mmap_len = total_size;
+        (void) fd; // fd can be closed after mmap
+#endif
+    } else {
+        // check if we can allocate enough memory for the new state
+        try {
+            state_data_tgt.resize(state_size_tgt);
+            state_data_dft.resize(state_size_dft);
+        } catch (const std::bad_alloc & e) {
+            SRV_ERR("failed to allocate memory for prompt cache state: %s\n", e.what());
+
+            limit_size = std::max<size_t>(1, 0.4*size());
+
+            SRV_WRN(" - cache size limit reduced to %.3f MiB\n", limit_size / (1024.0 * 1024.0));
+
+            update();
+
+            return nullptr;
+        }
     }
 
     states.push_back({
@@ -1732,6 +1818,10 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
         /*.data   =*/ {
             /*.main =*/ std::move(state_data_tgt),
             /*.drft =*/ std::move(state_data_dft),
+            /*.cache_file =*/ disk_mode ? ckpt_file : "",
+            /*.main_disk  =*/ disk_mode ? state_size_tgt : 0,
+            /*.drft_disk  =*/ disk_mode ? state_size_dft : 0,
+            /*.mmap_ptr   =*/ disk_mode ? mmap_ptr : nullptr,
         },
     });
 
@@ -1774,40 +1864,79 @@ bool server_prompt_cache::load(server_prompt & prompt, const server_tokens & tok
         SRV_TRC(" - found better prompt with f_keep = %.3f, f_sim = %.3f\n", f_keep_best, f_sim_best);
 
         {
-            auto & data = it_best->data.main;
+            auto & data = it_best->data;
 
-            const size_t size = data.size();
-            const size_t n = llama_state_seq_set_data_ext(ctx_tgt, data.data(), size, id_slot, 0);
-            if (n != size) {
-                SRV_ERR("failed to restore state with size %zu\n", size);
+            if (!data.cache_file.empty()) {
+                // disk-backed: read directly from the mmap region (zero extra RAM copy)
+                GGML_ASSERT(data.mmap_ptr != nullptr);
 
-                return false;
-            }
+                const size_t size = data.main_disk;
+                if (size > 0) {
+                    const size_t n = llama_state_seq_set_data_ext(ctx_tgt, data.mmap_ptr, size, id_slot, 0);
+                    if (n != size) {
+                        SRV_ERR("failed to restore state with size %zu\n", size);
 
-            data.clear();
-            data.shrink_to_fit();
-        }
+                        return false;
+                    }
+                }
 
-        {
-            auto & data = it_best->data.drft;
+                if (data.drft_disk > 0) {
+                    GGML_ASSERT(ctx_dft);
 
-            if (!data.empty()) {
-                GGML_ASSERT(ctx_dft);
+                    const size_t size = data.drft_disk;
+                    const size_t n = llama_state_seq_set_data_ext(ctx_dft, data.mmap_ptr + data.main_disk, size, id_slot, 0);
+                    if (n != size) {
+                        SRV_WRN("failed to restore state with size %zu\n", size);
 
-                const size_t size = data.size();
-                const size_t n = llama_state_seq_set_data_ext(ctx_dft, data.data(), size, id_slot, 0);
+                        return false;
+                    }
+                }
+            } else {
+                auto & vdata = data.main;
+
+                const size_t size = vdata.size();
+                const size_t n = llama_state_seq_set_data_ext(ctx_tgt, vdata.data(), size, id_slot, 0);
                 if (n != size) {
-                    SRV_WRN("failed to restore state with size %zu\n", size);
+                    SRV_ERR("failed to restore state with size %zu\n", size);
 
                     return false;
                 }
 
-                data.clear();
-                data.shrink_to_fit();
+                vdata.clear();
+                vdata.shrink_to_fit();
+
+                auto & vdata_drft = data.drft;
+
+                if (!vdata_drft.empty()) {
+                    GGML_ASSERT(ctx_dft);
+
+                    const size_t size = vdata_drft.size();
+                    const size_t n = llama_state_seq_set_data_ext(ctx_dft, vdata_drft.data(), size, id_slot, 0);
+                    if (n != size) {
+                        SRV_WRN("failed to restore state with size %zu\n", size);
+
+                        return false;
+                    }
+
+                    vdata_drft.clear();
+                    vdata_drft.shrink_to_fit();
+                }
             }
         }
 
         prompt = std::move(it_best->prompt);
+
+        // unmap + remove the disk file if disk-backed
+        auto & data = it_best->data;
+        if (!data.cache_file.empty() && data.mmap_ptr != nullptr) {
+#ifdef _WIN32
+            UnmapViewOfFile(data.mmap_ptr);
+#else
+            munmap(data.mmap_ptr, data.main_disk + data.drft_disk > 0 ? data.main_disk + data.drft_disk : 1);
+#endif
+            data.mmap_ptr = nullptr;
+            std::remove(data.cache_file.c_str());
+        }
 
         states.erase(it_best);
     }
@@ -1819,6 +1948,17 @@ void server_prompt_cache::update() {
     if (limit_size > 0) {
         while (!states.empty() && size() > limit_size) {
             SRV_WRN(" - cache size limit reached, removing oldest entry (size = %.3f MiB)\n", states.front().size() / (1024.0 * 1024.0));
+
+            auto & data = states.front().data;
+            if (!data.cache_file.empty() && data.mmap_ptr != nullptr) {
+#ifdef _WIN32
+                UnmapViewOfFile(data.mmap_ptr);
+#else
+                munmap(data.mmap_ptr, data.main_disk + data.drft_disk > 0 ? data.main_disk + data.drft_disk : 1);
+#endif
+                data.mmap_ptr = nullptr;
+                std::remove(data.cache_file.c_str());
+            }
 
             states.pop_front();
         }

@@ -610,7 +610,19 @@ struct server_prompt_data {
     std::vector<uint8_t> main;
     std::vector<uint8_t> drft;
 
+    // disk-backed checkpoint state (--cache-disk)
+    // when cache_file is non-empty, the KV state lives in a mmap'd file
+    // instead of RAM; main/drft vectors stay empty and size() reports
+    // the on-disk sizes for accounting.
+    std::string cache_file;       // path to the mmap'd checkpoint file (empty = RAM mode)
+    size_t      main_disk = 0;    // on-disk size of main state
+    size_t      drft_disk = 0;    // on-disk size of draft state
+    uint8_t *   mmap_ptr  = nullptr; // mapped region (main at [0, main_disk), drft after)
+
     size_t size() const {
+        if (!cache_file.empty()) {
+            return main_disk + drft_disk;
+        }
         return main.size() + drft.size();
     }
 };
@@ -643,6 +655,12 @@ struct server_prompt_cache {
 
     // in tokens, 0 = no limit
     size_t limit_tokens = 0;
+
+    // --cache-disk: directory for disk-backed checkpoint files (empty = RAM mode)
+    std::string cache_dir;
+
+    // unique id for checkpoint file names
+    uint64_t next_ckpt_id = 0;
 
     size_t size() const;
 

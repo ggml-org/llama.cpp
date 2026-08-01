@@ -271,9 +271,20 @@ struct server_slot {
             return false;
         }
 
-        llama_state_seq_get_data_ext(ctx_tgt, cur->data.main.data(), cur_size_tgt, id, LLAMA_STATE_SEQ_FLAGS_NONE);
-        if (ctx_dft) {
-            llama_state_seq_get_data_ext(ctx_dft, cur->data.drft.data(), cur_size_dft, id, LLAMA_STATE_SEQ_FLAGS_NONE);
+        if (!cur->data.cache_file.empty()) {
+            // disk-backed: write directly into the mmap region (zero extra RAM copy)
+            GGML_ASSERT(cur->data.mmap_ptr != nullptr);
+            if (cur_size_tgt > 0) {
+                llama_state_seq_get_data_ext(ctx_tgt, cur->data.mmap_ptr, cur_size_tgt, id, LLAMA_STATE_SEQ_FLAGS_NONE);
+            }
+            if (ctx_dft && cur_size_dft > 0) {
+                llama_state_seq_get_data_ext(ctx_dft, cur->data.mmap_ptr + cur_size_tgt, cur_size_dft, id, LLAMA_STATE_SEQ_FLAGS_NONE);
+            }
+        } else {
+            llama_state_seq_get_data_ext(ctx_tgt, cur->data.main.data(), cur_size_tgt, id, LLAMA_STATE_SEQ_FLAGS_NONE);
+            if (ctx_dft) {
+                llama_state_seq_get_data_ext(ctx_dft, cur->data.drft.data(), cur_size_dft, id, LLAMA_STATE_SEQ_FLAGS_NONE);
+            }
         }
 
         return true;
@@ -1395,6 +1406,12 @@ private:
             SRV_TRC("%s", "use `--cache-ram 0` to disable the prompt cache\n");
 
             prompt_cache = std::make_unique<server_prompt_cache>(params_base.cache_ram_mib, n_ctx);
+
+            if (!params_base.cache_disk_path.empty()) {
+                // --cache-disk: store checkpoint state in mmap'd files under this directory
+                prompt_cache->cache_dir = params_base.cache_disk_path;
+                SRV_TRC("prompt cache state will be stored on disk under: %s\n", params_base.cache_disk_path.c_str());
+            }
         } else {
             SRV_TRC("%s", "prompt cache is disabled - use `--cache-ram N` to enable it\n");
         }
