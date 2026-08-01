@@ -304,7 +304,7 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
         ctx_params.n_ubatch = 64;
     }
     if (getenv("LLAMA_TEST_FLASH_ATTN") != nullptr) {
-        ctx_params.flash_attn = true;
+        ctx_params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
     }
 
     size_t tmp = seed;
