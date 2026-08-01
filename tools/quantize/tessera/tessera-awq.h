@@ -7,6 +7,14 @@
 // Island model with MAP-Elites archive keyed on regime descriptors.
 // Deterministic given seed.
 //
+// The searched parameter space is the 6-gene ts_policy_genes payload shared
+// with the policy reader (B4): alpha, clip, outlier_fraction, moment_mix,
+// tail_guard, ternary_threshold. This is the same space Python's Candidate
+// (awq-evolve.py) searches, so a policy written by Python seeds the GA and
+// vice-versa.
+//
+
+#include "tessera-policy.h"
 
 #include <cstdint>
 #include <cstddef>
@@ -14,14 +22,29 @@
 #include <vector>
 #include <functional>
 
-// A candidate policy for one tensor family.
+// A candidate policy for one tensor family. The searched genes are the
+// embedded ts_policy_genes (the same type carried by ts_policy_tensor), so
+// the GA and the policy reader speak one type. expert_hint is metadata, not
+// searched. LRQ/DartQuant knobs live in a separate ts_awq_lrq_params (they
+// are a sub-policy in Python, not part of Candidate).
 struct ts_awq_candidate {
-    float   alpha;          // AWQ exponent [0, 1]
-    float   clip;           // outlier clip threshold
-    float   lrq_rank_frac;  // fraction of max rank for LRQ residual [0, 1]
-    float   rotation_lr;    // DartQuant step size hint
-    int64_t expert_hint;    // ts_expert_id or -1 for auto
+    ts_policy_genes genes;     // the 6 searched genes (alpha, clip, ...)
+    int64_t         expert_hint;  // ts_expert_id or -1 for auto
 };
+
+// LRQ/DartQuant sub-policy, kept separate from the candidate so the GA's
+// searched space matches Python's Candidate exactly. Carried alongside a
+// candidate by the experts that need it (tessera-lrq, tessera-dartquant).
+struct ts_awq_lrq_params {
+    float lrq_rank_frac = 0.0f;  // fraction of max rank for LRQ residual [0, 1]
+    float rotation_lr   = 0.0f;  // DartQuant step size hint
+};
+
+// Construct a candidate from a gene payload + expert hint. Bridges the
+// policy reader (B4) into the GA: read a policy, pick a family, feed its
+// genes here to seed evolution.
+struct ts_awq_candidate ts_awq_candidate_from_genes(ts_policy_genes genes,
+                                                    int64_t expert_hint);
 
 // Fitness score for a candidate.
 struct ts_awq_score {

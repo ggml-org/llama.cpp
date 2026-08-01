@@ -233,8 +233,8 @@ static ts_awq_score ts_dispatch_awq_eval(const ts_awq_candidate * cand,
     ts_expert_profile  prof = ts_expert_default_profile(rr.expert, mod);
 
     ts_quant_params_2d qp;
-    qp.alpha          = cand->alpha * prof.alpha_scale;
-    qp.clip           = cand->clip * prof.clip_scale;
+    qp.alpha          = cand->genes.alpha * prof.alpha_scale;
+    qp.clip           = cand->genes.clip * prof.clip_scale;
     qp.max_outliers   = prof.max_outliers;
     qp.outlier_thresh = ec->outlier_thresh * prof.outlier_thresh;
     qp.use_imatrix    = layer->imatrix != nullptr;
@@ -757,7 +757,7 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             // per-tensor alpha + per-layer relative Frobenius error
             std::vector<float> t2(ga_results.size());
             for (size_t l = 0; l < ga_results.size(); l++) {
-                ga_alpha[ga_names[l]] = ga_results[l].best.alpha;
+                ga_alpha[ga_names[l]] = ga_results[l].best.genes.alpha;
                 t2[l]                 = ga_results[l].best_score.relative_frob;
             }
 
@@ -814,7 +814,7 @@ int ts_dispatch_run(const ts_dispatch_params * params,
                 const float w_l     = fit_cfg.layer_alpha ? fit_cfg.layer_alpha[l] : 1.0f;
                 const float fitness = w_l * t2[l];
                 ts_archive_insert(&archive, &ga_descs[l], fitness,
-                                  ga_results[l].best.alpha, ga_results[l].best.clip,
+                                  ga_results[l].best.genes.alpha, ga_results[l].best.genes.clip,
                                   ga_names[l].c_str());
             }
             have_archive = true;
