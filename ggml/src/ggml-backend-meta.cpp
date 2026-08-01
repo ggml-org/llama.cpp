@@ -520,10 +520,14 @@ struct ggml_backend_meta_scratch_shards {
     ggml_backend_meta_simple_tensor_container & stc;
 
     explicit ggml_backend_meta_scratch_shards(size_t n_bufs) : stc(acquire(n_bufs)) {
-        // compact only when the struct arena nears capacity
+        // Compact when the struct arena nears capacity.  Compaction can only
+        // happen here (entries handed out earlier in this pass must stay
+        // valid), so keep a full half of the arena as headroom: a single
+        // pass with a large graph can register thousands of shards and an
+        // overflow aborts in ggml_new_tensor.
         bool needs_compact = false;
         for (ggml_context_ptr & c : stc.ctxs) {
-            if (ggml_used_mem(c.get()) > 3*ggml_get_mem_size(c.get())/4) {
+            if (ggml_used_mem(c.get()) > ggml_get_mem_size(c.get())/2) {
                 needs_compact = true;
                 break;
             }
@@ -544,7 +548,7 @@ struct ggml_backend_meta_scratch_shards {
         auto it = registry.find(n_bufs);
         if (it == registry.end()) {
             const ggml_init_params params = {
-                /*.mem_size   =*/ 16*1024*ggml_tensor_overhead(),
+                /*.mem_size   =*/ 64*1024*ggml_tensor_overhead(),
                 /*.mem_buffer =*/ nullptr,
                 /*.no_alloc   =*/ true,
             };
