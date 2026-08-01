@@ -1516,6 +1516,26 @@ static void ggml_backend_meta_buffer_memset_tensor(
                 }
             }
         } break;
+        case GGML_BACKEND_SPLIT_AXIS_3: {
+            const size_t row_stride = tensor->nb[3];
+            GGML_ASSERT(offset % row_stride == 0);
+            GGML_ASSERT(size   % row_stride == 0);
+            const int64_t row_start = offset / row_stride;
+            const int64_t row_stop  = (offset + size) / row_stride;
+            int64_t shard_start = 0;
+            for (size_t j = 0; j < n_bufs; ++j) {
+                ggml_tensor * simple_tensor = ggml_backend_meta_buffer_simple_tensor(tensor, j);
+                const int64_t shard_stop = shard_start + split_state.ne[j];
+                const int64_t copy_start = std::max<int64_t>(row_start, shard_start);
+                const int64_t copy_stop  = std::min<int64_t>(row_stop, shard_stop);
+                for (int64_t row = copy_start; row < copy_stop; ++row) {
+                    ggml_backend_tensor_memset(simple_tensor, value,
+                            (row - shard_start) * simple_tensor->nb[3], row_stride);
+                }
+                shard_start = shard_stop;
+            }
+            GGML_ASSERT(shard_start == tensor->ne[3]);
+        } break;
         case GGML_BACKEND_SPLIT_AXIS_PARTIAL: {
             GGML_ASSERT(value == 0);
             [[fallthrough]];
@@ -1669,6 +1689,29 @@ static void ggml_backend_meta_buffer_set_tensor(ggml_backend_buffer_t buffer, gg
             GGML_ASSERT(offset_j == chunk_size_full);
             run_setters(setters);
         } break;
+        case GGML_BACKEND_SPLIT_AXIS_3: {
+            const size_t row_stride = tensor->nb[3];
+            GGML_ASSERT(offset % row_stride == 0);
+            GGML_ASSERT(size   % row_stride == 0);
+            const int64_t row_start = offset / row_stride;
+            const int64_t row_stop  = (offset + size) / row_stride;
+            int64_t shard_start = 0;
+            for (size_t j = 0; j < n_bufs; ++j) {
+                ggml_tensor * simple_tensor = scratch.get(tensor, j);
+                const int64_t shard_stop = shard_start + split_state.ne[j];
+                const int64_t copy_start = std::max<int64_t>(row_start, shard_start);
+                const int64_t copy_stop  = std::min<int64_t>(row_stop, shard_stop);
+                if (copy_start < copy_stop) {
+                    const size_t data_offset = (copy_start - row_start) * row_stride;
+                    const size_t tensor_offset = (copy_start - shard_start) * simple_tensor->nb[3];
+                    ggml_backend_tensor_set_2d(simple_tensor, (const char *) data + data_offset,
+                            tensor_offset, row_stride, copy_stop - copy_start,
+                            simple_tensor->nb[3], row_stride);
+                }
+                shard_start = shard_stop;
+            }
+            GGML_ASSERT(shard_start == tensor->ne[3]);
+        } break;
         case GGML_BACKEND_SPLIT_AXIS_MIRRORED: {
             std::vector<std::function<void()>> setters;
             setters.reserve(n_bufs);
@@ -1792,6 +1835,29 @@ static void ggml_backend_meta_buffer_get_tensor(ggml_backend_buffer_t buffer, co
                 offset_j += chunk_size_j;
             }
             GGML_ASSERT(offset_j == chunk_size_full);
+        } break;
+        case GGML_BACKEND_SPLIT_AXIS_3: {
+            const size_t row_stride = tensor->nb[3];
+            GGML_ASSERT(offset % row_stride == 0);
+            GGML_ASSERT(size   % row_stride == 0);
+            const int64_t row_start = offset / row_stride;
+            const int64_t row_stop  = (offset + size) / row_stride;
+            int64_t shard_start = 0;
+            for (size_t j = 0; j < n_bufs; ++j) {
+                const ggml_tensor * simple_tensor = scratch.get(tensor, j);
+                const int64_t shard_stop = shard_start + split_state.ne[j];
+                const int64_t copy_start = std::max<int64_t>(row_start, shard_start);
+                const int64_t copy_stop  = std::min<int64_t>(row_stop, shard_stop);
+                if (copy_start < copy_stop) {
+                    const size_t data_offset = (copy_start - row_start) * row_stride;
+                    const size_t tensor_offset = (copy_start - shard_start) * simple_tensor->nb[3];
+                    ggml_backend_tensor_get_2d(simple_tensor, (char *) data + data_offset,
+                            tensor_offset, row_stride, copy_stop - copy_start,
+                            simple_tensor->nb[3], row_stride);
+                }
+                shard_start = shard_stop;
+            }
+            GGML_ASSERT(shard_start == tensor->ne[3]);
         } break;
         case GGML_BACKEND_SPLIT_AXIS_MIRRORED: {
             // TODO other simple backend may be better
