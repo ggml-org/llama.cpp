@@ -68,11 +68,11 @@ if (!owner) {
 }
 
 llama_model * model = llama_tiered_model_get_model(owner);
-// Create and destroy llama_context objects normally.
+// Create and destroy llama_context objects normally while owner remains alive.
 llama_tiered_model_free(owner);
 ```
 
-`llama_tiered_model` owns the generated device list, tensor-buffer override, placement plan, and underlying `llama_model`. Do not call `llama_model_free` on the borrowed model pointer.
+`llama_tiered_model` owns the generated device list, tensor-buffer override, placement plan, and underlying `llama_model`. Keep it alive until all contexts are destroyed, and do not call `llama_model_free` on the borrowed model pointer.
 
 ## Current production constraints
 
