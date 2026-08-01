@@ -1086,6 +1086,7 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_CONTEXT_LENGTH,          hparams.n_ctx_train);
     ml.get_key(LLM_KV_EMBEDDING_LENGTH,        hparams.n_embd);
     ml.get_key(LLM_KV_EMBEDDING_LENGTH_OUT,    hparams.n_embd_out_impl, false);
+    ml.get_key(LLM_KV_VOCAB_SIZE_OUT,          hparams.n_vocab_out_impl, false);
     ml.get_key(LLM_KV_ATTENTION_CAUSAL,        hparams.causal_attn,     false);
     ml.get_key(LLM_KV_POOLING_TYPE,            hparams.pooling_type,    false);
     ml.get_key(LLM_KV_BLOCK_COUNT,             hparams.n_layer_all);
@@ -1706,6 +1707,10 @@ const float * llama_model::tensor_split() const {
 uint32_t llama_model::n_gpu_layers() const {
     // note: plus 1 for the "output" layer
     return params.n_gpu_layers >= 0 ? params.n_gpu_layers : hparams.n_layer_all + 1;
+}
+
+uint32_t llama_model::n_vocab_out() const {
+    return hparams.n_vocab_out_impl > 0 ? hparams.n_vocab_out_impl : vocab.n_tokens();
 }
 
 llama_split_mode llama_model::split_mode() const {

@@ -175,6 +175,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_GENERAL_SOURCE_HF_REPO,           "general.source.huggingface.repository" },
 
     { LLM_KV_VOCAB_SIZE,                        "%s.vocab_size"                        },
+    { LLM_KV_VOCAB_SIZE_OUT,                    "%s.vocab_size_out"                    },
     { LLM_KV_CONTEXT_LENGTH,                    "%s.context_length"                    },
     { LLM_KV_EMBEDDING_LENGTH,                  "%s.embedding_length"                  },
     { LLM_KV_EMBEDDING_LENGTH_OUT,              "%s.embedding_length_out"              },

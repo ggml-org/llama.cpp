@@ -661,6 +661,9 @@ struct llama_model {
     uint32_t n_gpu_layers() const;
     llama_split_mode split_mode() const;
 
+    // output/logits vocab size (see llama_hparams::n_vocab_out_impl)
+    uint32_t n_vocab_out() const;
+
     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const;
 
     // total number of parameters in the model
