@@ -26,11 +26,11 @@ int ts_l15_load_reference(const char * sidecar_path,
     out->outlier_threshold = sc.header.outlier_threshold;
     out->outlier_count     = sc.header.outlier_count_total;
 
-    // derive tensor name from filename: strip directory and .tdqt suffix
+    // derive tensor name from filename: strip directory and .act.dequant.f32 suffix
     const char * base = strrchr(sidecar_path, '/');
     base = base ? base + 1 : sidecar_path;
     std::string name(base);
-    const size_t dot = name.rfind(".tdqt");
+    const size_t dot = name.rfind(".act.dequant.f32");
     if (dot != std::string::npos) {
         name.resize(dot);
     }
@@ -53,7 +53,8 @@ int ts_l15_load_directory(const char * dir_path,
     while ((ent = readdir(dir)) != nullptr) {
         const char * name = ent->d_name;
         size_t len = strlen(name);
-        if (len < 6 || strcmp(name + len - 5, ".tdqt") != 0) {
+        // skip entries shorter than the L1.5 suffix (16 chars for ".act.dequant.f32")
+        if (len < 16 || strcmp(name + len - 16, ".act.dequant.f32") != 0) {
             continue;
         }
 

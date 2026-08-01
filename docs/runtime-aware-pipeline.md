@@ -1,5 +1,9 @@
 # Runtime-Aware Calibration Pipeline — Implementation Plan
 
+_Last updated: 2026-08-01. Status table and per-layer "Reality" notes
+reflect what is actually in the tree; the design prose below each layer
+is the original spec and is preserved for context._
+
 _Companion to [`pipeline-design.md`](pipeline-design.md). Where the design
 doc describes what each layer is supposed to do, this document describes
 what needs to change to build them._
@@ -17,17 +21,30 @@ what needs to change to build them._
 The pipeline has six layers. Each one closes a different gap between the
 offline calibration reference and the runtime:
 
-| Layer | Question it answers | Status |
-|---|---|---|
-| 1 | What does the kernel actually dequant? | **Not started** |
-| 2 | How does that dequant differ from the BF16 source? | **Not started** |
-| 3 | What is the per-token coherence cost? | **Not started** |
-| 4 | What is the end-to-end behavioural delta? | **Not started** |
-| 5 | Where should we re-quantize? | **Not started** |
-| 6 | Can the GA optimize for the kernel directly? | **Not started** |
+| Layer | Question it answers | Status | Code path |
+|---|---|---|---|
+| 1 | What does the kernel actually dequant? | **Shipped** (v3 superset) | `common/tessera-debug/`, backend hooks in `ggml-{cpu,cuda,metal}/*-dump-dequant.*`, fitness in `tessera-l1-fitness.{h,cpp}` |
+| 1.5 | W4A4 FP16 reference sidecar | **Partial** (writer + reader shipped; see bug note) | `tessera-debug.h` FP16-reference writer, `tessera-l15.{h,cpp}` reader |
+| 2 | How does that dequant differ from the BF16 source? | **Shipped (weight-level)**; forward-pass differential is still design | `tessera-l2-diff.{h,cpp}` |
+| 3 | What is the per-token coherence cost? | **Shipped (per-row cosine)**; per-token KL is still design | `tessera-l3-coherence.{h,cpp}` |
+| 4 | What is the end-to-end behavioural delta? | **Partial** (data-free PPL/KL substitute); prompt-bank probe is still design | `tessera-ppl.{h,cpp}` |
+| 5 | Where should we re-quantize? | **Shipped** (scorers + adaptive requant on L2 reports); not yet on the dispatch path | `tessera-l5.{h,cpp}` |
+| 6 | Can the GA optimize for the kernel directly? | **Shipped** as the C++ dispatch GA fitness (not the Python `per_tensor_calibrate.py` mode the spec described) | `tessera-l1-fitness.{h,cpp}` consumed by `tessera-dispatch.cpp:263-294` |
 
-Layer 1 must land first. Each later layer consumes the artifacts of the
-previous one. The build order below mirrors that.
+L1 was the critical path and has landed; the layers below consume its
+sidecar. Where the shipped code does only part of what a layer's prose
+describes, a **Reality** callout at the end of that layer's section
+states the gap precisely.
+
+> Note on L1.5 (open bug): the writer emits files with suffix
+> `.act.dequant.f32` (`tessera-debug.h:115`); the L1.5 reader and its
+> test look for suffix `.tdqt` (`tessera-l15.{h,cpp}`, `test_l15.cpp`).
+> Until those agree, the reader cannot find writer output and the L1.5
+> reference path is not exercisable end-to-end. Separately, the backend
+> hooks currently populate the L1.5 sidecar with the same F32 dequant
+> buffer as L1 rather than an FP16 ground truth (acknowledged in the
+> hook comments as a follow-up). Fixing the suffix is tracked as the
+> next step for the W4A4 path; the L1 contract above is unaffected.
 
 ## Build order and dependencies
 
@@ -37,12 +54,15 @@ L1 (kernel hook) ──► L2 (BF16 vs quant differential) ──► L3 (per-tok
                                                        └► L5 (adaptive requantize) ──► L6 (kernel fitness)
 ```
 
-L1 is the critical path. L2, L3, L4 are progressive layers of the same
-forward-pass analysis; they can be built in parallel. L5 and L6 are the
-feedback loop; L6 closes the GA onto the kernel.
+L1 was the critical path and has landed; the layers above now consume
+its sidecar. L2, L3, L4 are progressive layers of the same forward-pass
+analysis; the shipped implementations cover the weight-level / per-row
+forms (see each layer's Reality note). L5 and L6 are the feedback loop;
+L6 has closed the GA onto the kernel via the C++ dispatch path.
 
 Estimated effort, person-weeks for a single engineer familiar with the
-llama.cpp GGML kernel API:
+llama.cpp GGML kernel API (original estimates, retained for context; L1
+and the C++ GA wiring have landed):
 
 - L1: 1 week (small C++ surface, but invasive across ggml-cpu/cuda/metal)
 - L2: 1 week (Python orchestration + JSON schema)
@@ -171,6 +191,23 @@ For the initial L1, default to stride=16 and emit full F32.
 - Files are written in a streaming fashion; the sidecar directory does
   not double the memory footprint of the model.
 
+### Reality (as shipped)
+
+L1 has landed and exceeds the spec above. The v3 TDQT sidecar format
+(`common/tessera-debug/tessera-debug.h`) adds per-row outlier counts
+(LLM.int8()-style 6.0 threshold), per-row timing/kernel_id/dispatch_count
+metadata, and a provenance JSON sidecar (kernel_version, main tip,
+calibration corpus hash). The hook is called from the real matmul paths
+in all three backends: `ggml-cpu.c`, `ggml-cuda.cu`, `ggml-metal-ops.cpp`
+(linked via `llama-tessera-debug` in each backend's CMakeLists). CLI
+wiring is in `common/arg.cpp` (`--tessera-dequant-dir`,
+`--tessera-dequant-stride`, env `LLAMA_TILE640_DEBUG_DEQUANT_DIR`).
+Tests: `test_l1_sidecar.cpp`, `common/tessera-debug/test_sidecar_v3.cpp`.
+The acceptance criterion above is met.
+
+The L1.5 FP16-reference sidecar (W4A4 mode) is partially shipped: the
+writer and reader both exist, but see the open bug note in the Overview.
+
 ---
 
 ## Layer 2 — BF16 vs quantized differential forward
@@ -248,6 +285,23 @@ forwards. On a 12B model with M-series Metal, each forward is ~10s; total
 - A "regression" test (Q4_0 vs F16) returns the expected baseline ranges
   for the uncalibrated quantizer.
 
+### Reality (as shipped)
+
+The weight-level differential has landed in
+`tools/quantize/tessera/tessera-l2-diff.{h,cpp}`: per-tensor
+`max_abs` / `mean_abs` / `relative_frobenius` / `per_layer_norm`, the
+type-aware tolerance table (2.3), the 1.5x flag decision, and a JSON
+report reader/writer using schema `llama.tessera.runtime-probe.v1`.
+Test: `test_l2l5.cpp::test_l2()`.
+
+Gap versus the spec above: this is the offline weight-level equivalent.
+The full two-forward-pass differential (with `top1_mismatch`,
+`top5_mismatch`, `n_samples` per tensor) and the
+`tools/tessera/runtime_probe.py` orchestrator are **not** shipped - the
+header comment is explicit that "the quantize tool cannot run full
+forwards." The acceptance criteria above (no-op F16-vs-F16, Q4_0 vs F16
+baseline) are therefore not exercisable from shipped code.
+
 ---
 
 ## Layer 3 — Per-token coherence
@@ -305,6 +359,21 @@ runtime_probe.py --bf16 ... --quantized ... --tokens 50 --per-token output.csv
 - A "Tessera-corrected" run shows lower divergence than Q4_0 at the same
   perplexity budget.
 
+### Reality (as shipped)
+
+The per-row weight-level analogue has landed in
+`tools/quantize/tessera/tessera-l3-coherence.{h,cpp}`:
+`ts_l3_row_cosine`, `ts_l3_tensor_coherence`, and `ts_l3_run` compute
+per-row cosine similarity between the L1 kernel sidecar and the L1.5
+reference sidecar. Test: `test_l2l5.cpp::test_l3()`.
+
+Gap versus the spec above: this is **per-row weight-level cosine**, not
+the per-token KL divergence / top-1 mismatch / `top5_overlap` the spec
+describes, and `tools/tessera/per_token_coherence.py` does not exist.
+Because L3 reads the L1.5 reference sidecar and L1.5 has the open suffix
+bug noted in the Overview, `ts_l3_run` would skip every tensor in
+practice until that bug is fixed.
+
 ---
 
 ## Layer 4 — End-to-end probe (the smoke test)
@@ -350,6 +419,23 @@ This is what the `tests` worktree branch should add as a CI smoke test.
   builds and non-zero on Q4_0 baseline.
 - The probe completes in < 5 minutes on a single 12B model.
 - Probe output is JSON-shaped so it can be archived per-build.
+
+### Reality (as shipped)
+
+A data-free PPL/KL substitute has landed in
+`tools/quantize/tessera/tessera-ppl.{h,cpp}`: `ts_ppl_compare` computes
+`delta_ppl`, `ppl_ratio`, `kl_divergence`, and a pass/fail verdict
+against a 0.5 threshold, over a forward callback
+(`ts_ppl_forward_fn`). Test: `test_l2l5.cpp::test_l4()` runs it on
+synthetic uniform-vs-peaked logits.
+
+Gap versus the spec above: there is no prompt bank (paris / gsm8k /
+multi-turn / code), no `exact_match`, no `logit_rank_correlation`, and
+no `tools/tessera/e2e_probe.py`. `test_e2e_pipeline.cpp` exists but is
+unrelated - it is an 8-step corpus->imatrix->quantize integration test
+on synthetic weights, not an L4 probe. The acceptance criteria above
+(exits 0 on Tessera-corrected builds, <5 min on 12B) are therefore not
+demonstrable from shipped code.
 
 ---
 
@@ -418,31 +504,61 @@ The orchestrator runs L2 → identify → GA → apply → L4 in one command.
 - A Tessera-corrected model is stable under the loop (no further changes
   needed; the loop terminates after 0 iterations).
 
+### Reality (as shipped)
+
+Two pieces have landed in `tools/quantize/tessera/tessera-l5.{h,cpp}`:
+
+1. Sensitivity scorers (`ts_l5_imatrix_magnitude`,
+   `ts_l5_gradient_proxy`, `ts_l5_layer_position_prior`, `ts_l5_combine`,
+   EMA, percentile rank, top-fraction picker, quantization ladder
+   `ts_l5_step_up` / `ts_l5_step_down`) and a generational orchestrator
+   (`ts_l5_orchestrate_step`).
+2. L2-closing adaptive requant (`ts_l5_adaptive_requant`): reads an
+   `ts_l2_report`, finds flagged tensors, tightens `alpha`/`clip`
+   proportional to overshoot, emits an `ts_l5_adaptive_plan`.
+
+Tests: `test_l5.cpp` covers the sensitivity scorers and orchestrator;
+`test_l2l5.cpp` exercises `ts_l5_adaptive_requant` end-to-end on a
+loaded L2 report.
+
+Gap versus the spec above: the apply-and-iterate half of the loop
+(apply the plan via `tile640_quantize_v3.py`, re-run L4, gate on the L4
+verdict) is not wired, and L5 is not referenced from
+`tessera-dispatch.cpp` - it is library + tests only, not yet on the
+dispatch path. The acceptance criteria above (L4 PASS after one
+iteration, <1h wall-clock) are not demonstrable because L4 itself is
+the partial PPL substitute.
+
 ---
 
 ## Layer 6 — Kernel-based GA fitness
 
 ### Goal
 
-Replace the offline `_ternary_reconstruct` reference in
-`per_tensor_calibrate.py`'s fitness evaluation with the actual kernel
-dequant captured in L1. The GA now optimizes for the deployed fidelity,
-not the reference.
+Replace the offline `_ternary_reconstruct` reference in the GA's
+fitness evaluation with the actual kernel dequant captured in L1. The
+GA then optimizes for the deployed fidelity, not the offline reference.
 
 ### What's needed
 
 #### 6.1 New fitness mode
 
-Add `fitness = "kernel-direct"` to `per_tensor_calibrate.py`. The mode:
+The original plan was to add `fitness = "kernel-direct"` to
+`per_tensor_calibrate.py`. As shipped, the kernel-direct mode was
+implemented in the **C++ dispatch GA** instead of the Python tool (see
+Reality below), so the Python `--fitness` choices remain `awq`, `lrq`,
+`flrq`, `dartquant`, `compare`. The mode's semantics are as originally
+specified:
 
 1. Reads the L1 sidecar for the current tensor.
 2. Loads the BF16 source tensor.
 3. Computes `relative_frobenius(dequant_kernel, BF16_source)`.
 4. Returns that as the fitness.
 
-The existing modes (`direct`, `importance`, `combined`) remain for
-sanity-check comparisons; `kernel-direct` is the production default once
-L1 lands.
+The offline modes remain as cheap sanity-check comparisons; the
+kernel-direct `t_l^2` is the production fitness when a sidecar is
+present, with `blend_factor` interpolating to the offline proxy when
+sidecar coverage is partial.
 
 > Alignment (2026-07-30): `kernel-direct` is the ground-truth
 > instantiation of the Linearity-Theorem term. Per tensor,
@@ -478,28 +594,58 @@ acceptable for offline use, comparable to the existing `direct` mode.
 
 ### Acceptance criteria
 
-- `per_tensor_calibrate.py --fitness kernel-direct --calibration-input path/to/calib.txt`
-  consumes L1 sidecars and produces a per-tensor policy.
+- The C++ dispatch GA, with `--tessera-kernel-fitness` and a sidecar
+  directory, consumes L1 sidecars and produces a per-tensor policy
+  whose per-tensor fitness is the kernel-direct `t_l^2`.
 - The resulting policy, when applied, produces a model that beats the
-  `direct` mode on L4 (e2e probe) by at least 10 % on top-1 match rate.
-- The GA's `importance` mode (legacy) is demonstrably worse on L4 than
-  `kernel-direct` for the same model.
+  offline-proxy fitness on L4 (e2e probe) by at least 10 % on top-1
+  match rate. *(Not yet demonstrable - L4 is the partial PPL
+  substitute, see Layer 4 Reality.)*
+- The offline-proxy fitness is demonstrably worse on L4 than
+  kernel-direct for the same model. *(Same caveat.)*
+
+### Reality (as shipped)
+
+L6 has landed in the C++ dispatch GA, not in `per_tensor_calibrate.py`.
+`tools/quantize/tessera/tessera-l1-fitness.{h,cpp}` implements
+`ts_l1_load_sidecar`, `ts_l1_kernel_direct_t2`, `ts_l1_blended_t2`, and
+`ts_l1_compute_all_t2`. `tessera-dispatch.cpp` consumes them at lines
+263-294 (per-candidate kernel-direct `t_l^2`, blended with the offline
+proxy via `blend_factor`), 725-742 (enable from `params->kernel_fitness`),
+and 833-858 (A/B harness report). CLI flags in `common/arg.cpp`:
+`--tessera-kernel-fitness`, `--tessera-kernel-fitness-dir`,
+`--tessera-kernel-fitness-blend`. Test: `test_l1_fitness.cpp`.
+
+Two caveats from the audit:
+
+- The QEP off-switch note below is honored - the fitness is purely
+  per-tensor `t_l^2` aggregation, no cross-layer error propagation.
+- In the standalone dispatch acceptance path (`dispatch.cpp:1346`),
+  `at.kernel_direct_t2 = comp_t2;` hardcodes kernel-direct equal to
+  offline when no sidecar is present. L6 is therefore effective in the
+  GA scoring path but not in the dispatch acceptance verdict.
 
 ---
 
 ## File-level summary
 
-| Layer | New C++ | New Python | Modified C++ | Modified Python |
-|---|---|---|---|---|
-| 1 | `common/tessera-debug.h` | — | 5 ggml kernel files | — |
-| 2 | — | `tools/tessera/runtime_probe.py` | — | — |
-| 3 | — | `tools/tessera/per_token_coherence.py` (or fold into runtime_probe.py) | — | — |
-| 4 | — | `tools/tessera/e2e_probe.py` | — | `tests/test-*.cpp` (smoke) |
-| 5 | — | — | — | `tools/tessera/per_tensor_calibrate.py` |
-| 6 | — | — | — | `tools/tessera/per_tensor_calibrate.py` |
+The original plan called for four new Python tools; the work ultimately
+landed primarily in C++ in `tools/quantize/tessera/`. The actual layout:
 
-Total: 1 new C++ file, 4 new Python tools, 5 modified C++ kernel files, 2
-modified Python tools, 1 modified test file.
+| Layer | New C++ (shipped) | New Python (shipped) | Modified C++ |
+|---|---|---|---|
+| 1 | `common/tessera-debug/tessera-debug.{h,cpp}`, `tessera-sidecar-v3.{h,cpp}`, `tessera-l1-fitness.{h,cpp}` | — | `ggml-{cpu,cuda,metal}/*-dump-dequant.*`, `common/arg.cpp` |
+| 1.5 | (uses L1 writer) | — | — |
+| 2 | `tessera-l2-diff.{h,cpp}` | — | — |
+| 3 | `tessera-l3-coherence.{h,cpp}` | — | — |
+| 4 | `tessera-ppl.{h,cpp}` | — | — |
+| 5 | `tessera-l5.{h,cpp}` | — | — |
+| 6 | `tessera-l1-fitness.{h,cpp}` (consumed by `tessera-dispatch.cpp`) | — | `tessera-dispatch.{h,cpp}`, `common/arg.cpp` |
+
+The originally-planned `tools/tessera/runtime_probe.py`,
+`per_token_coherence.py`, and `e2e_probe.py` were **not** created; the
+forward-pass differential, per-token KL, and prompt-bank probe remain
+unimplemented (see each layer's Reality note).
 
 ---
 

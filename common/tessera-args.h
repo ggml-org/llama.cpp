@@ -31,6 +31,15 @@ struct common_tessera_params {
     float       w4a4_outlier_thresh = 6.0f;
     bool        acceptance = false;
     std::string acceptance_out;
+    // L5 adaptive requantization loop (L2 -> L5 -> re-quantize, generational)
+    bool        adaptive_requantize = false;
+    int         l5_max_generations  = 3;
+    float       l5_flag_multiplier  = 1.5f;
+    float       l5_alpha_min        = 0.1f;
+    float       l5_clip_min         = 0.1f;
+    float       l5_outlier_overshoot_scale = 0.5f;
+    float       l5_outlier_frac_cap = 0.25f;
+    std::string l5_out;
     // self-improving capability loop: output-targeting ops that run then exit
     // without quantizing (precedent: --tessera-evolve-only / --tessera-calibrate-only)
     std::string capability_eval;

@@ -1092,6 +1092,14 @@ int llama_quantize(int argc, char ** argv) {
                          "%s", tp.acceptance_out.c_str());
             }
         }
+        tparams.adaptive_requantize          = tp.adaptive_requantize;
+        tparams.l5_max_generations           = tp.l5_max_generations;
+        tparams.l5_flag_multiplier           = tp.l5_flag_multiplier;
+        tparams.l5_alpha_min                 = tp.l5_alpha_min;
+        tparams.l5_clip_min                  = tp.l5_clip_min;
+        tparams.l5_outlier_overshoot_scale   = tp.l5_outlier_overshoot_scale;
+        tparams.l5_outlier_frac_cap          = tp.l5_outlier_frac_cap;
+        tparams.l5_out_path                  = tp.l5_out;
         ts_dispatch_result tresult;
         std::string terr;
         if (ts_dispatch_run(&tparams, &tresult, &terr) != 0) {
@@ -1103,6 +1111,9 @@ int llama_quantize(int argc, char ** argv) {
         if (tresult.acceptance_ran) {
             printf("tessera: acceptance: %s\n", tresult.acceptance.verdict);
             return tresult.acceptance.acceptance_passed ? 0 : 1;
+        }
+        if (tresult.l5_ran) {
+            printf("tessera: l5 adaptive requantize: ran\n");
         }
         return 0;
     }

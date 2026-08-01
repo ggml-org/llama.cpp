@@ -146,4 +146,16 @@ if(LLAMA_BUILD_TESTS)
     target_link_libraries(${TARGET} PRIVATE llama-quantize-impl)
     target_compile_features(${TARGET} PRIVATE cxx_std_17)
     add_test(NAME ${TARGET} COMMAND ${TARGET})
+
+    # L5 adaptive requantize loop integration test: builds a tiny synthetic
+    # GGUF with two 2D weights (attn + FFN), runs the full dispatch pipeline
+    # with adaptive_requantize enabled, and asserts the L2->L5->re-quantize
+    # loop ran and emitted the l5-loop.v1 report. Mirrors the lifetime test's
+    # link against llama-quantize-impl (which transitively brings in the L2/L5
+    # modules + libgguf/libggml).
+    set(TARGET test-tessera-l5-dispatch)
+    add_executable(${TARGET} tessera/test_l5_dispatch.cpp)
+    target_link_libraries(${TARGET} PRIVATE llama-quantize-impl)
+    target_compile_features(${TARGET} PRIVATE cxx_std_17)
+    add_test(NAME ${TARGET} COMMAND ${TARGET})
 endif()

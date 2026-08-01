@@ -1,6 +1,6 @@
 # Tessera — Project Status
 
-_Last updated: 2026-07-31_
+_Last updated: 2026-08-01_
 
 Tessera is a fork of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) at
 [Tribunus-dev/tessera](https://github.com/Tribunus-dev/tessera). Default branch:
@@ -297,32 +297,59 @@ Six findings bind the roadmap:
 
 ### Priority 1 — Runtime-aware calibration pipeline (Layers 1–6)
 
-The big unfinished work. Design in `tessera/docs/pipeline-design.md`:
+Status as of 2026-08-01. Design in `docs/pipeline-design.md`; per-layer
+details, code paths, and Reality notes in
+`docs/runtime-aware-pipeline.md`. The hook and the GA fitness are no
+longer the blocker; the remaining work is the forward-pass layers and
+the L5 apply loop.
 
-- **Layer 1: kernel dequant fidelity.** `LLAMA_TILE640_DEBUG_DEQUANT=1`
-  mode — kernel emits the effective dequantized weight per row to a sidecar
-  file. This is the only ground truth of the runtime.
-- **Layer 2: BF16 vs quantized differential forward.** Per-tensor capture
-  of `max|Δ|`, relative Frobenius, top-1/top-5 divergence.
-- **Layer 3: per-token coherence.** KL divergence, top-1 mismatch per
-  generated token.
-- **Layer 4: end-to-end probe.** 30–50-token runs, exact-match, perplexity
-  delta, logit rank correlation.
-- **Layer 5: adaptive requantization.** Re-run the per-tensor GA with
-  Layer 1 output as the fitness target for tensors where divergence
-  exceeds threshold.
-- **Layer 6: kernel-based GA fitness.** Replace the synthetic
-  `_ternary_reconstruct` reference inside the GA with the actual kernel
-  output. This is what closes the loop.
+- **Layer 1: kernel dequant fidelity — SHIPPED.** The
+  `LLAMA_TILE640_DEBUG_DEQUANT_DIR` hook emits the effective dequantized
+  weight per row to a v3 TDQT sidecar. Complete in all three backends
+  (`ggml-cpu/cpu-dump-dequant.cpp`,
+  `ggml-cuda/cuda-dump-dequant.cu`, `ggml-metal/metal-dump-dequant.mm`),
+  all called from their real matmul paths. Fitness reader in
+  `tessera-l1-fitness.{h,cpp}`. This is the runtime ground truth.
+- **Layer 1.5: W4A4 FP16 reference sidecar — PARTIAL.** Writer and
+  reader shipped, but the writer suffix (`.act.dequant.f32`) and the
+  reader suffix (`.tdqt`) disagree, so the path is not exercisable
+  end-to-end. Also the backend hooks currently emit the same F32 buffer
+  as L1 rather than an FP16 ground truth.
+- **Layer 2: BF16 vs quantized differential — SHIPPED (weight-level).**
+  Per-tensor weight-level divergence and type-aware flagging in
+  `tessera-l2-diff.{h,cpp}`. The two-forward-pass differential and
+  `tools/tessera/runtime_probe.py` are not yet built.
+- **Layer 3: per-token coherence — SHIPPED (per-row cosine).**
+  `tessera-l3-coherence.{h,cpp}` produces per-row cosine between the L1
+  and L1.5 sidecars. Per-token KL and `per_token_coherence.py` are not
+  yet built; depends on the L1.5 fix above.
+- **Layer 4: end-to-end probe — PARTIAL.** A data-free PPL/KL
+  substitute exists in `tessera-ppl.{h,cpp}`. The prompt-bank probe,
+  exact-match, and rank-correlation metrics are not yet built.
+- **Layer 5: adaptive requantization — SHIPPED (library + tests).**
+  Sensitivity scorers and L2-closing adaptive requant in
+  `tessera-l5.{h,cpp}`. Not yet on the `tessera-dispatch.cpp` path, and
+  the apply-and-iterate loop (apply plan -> re-quantize -> re-probe) is
+  not wired.
+- **Layer 6: kernel-based GA fitness — SHIPPED.** The C++ dispatch GA
+  consumes L1 sidecars as `t_l^2 = ||dequant_kernel(W_l) - W_l||_F^2 /
+  ||W_l||_F^2`, blended with the offline proxy, via
+  `tessera-l1-fitness.{h,cpp}` and `tessera-dispatch.cpp:263-294`. CLI:
+  `--tessera-kernel-fitness`, `--tessera-kernel-fitness-dir`,
+  `--tessera-kernel-fitness-blend`. This is what closes the loop; the
+  loop is closed at the GA-scoring level.
 
-The work lives on `tessera/integration-upstream-experiments` and needs:
+Remaining work, ranked:
 
-1. The `LLAMA_TILE640_DEBUG_DEQUANT=1` env-var hook in `ggml-cuda` and
-   `ggml-metal` kernels (currently partial).
-2. Python orchestration around the kernel debug output
-   (`tools/tessera/runtime_probe.py`).
-3. A new GA fitness mode in `per_tensor_calibrate.py` that consumes the
-   sidecar file.
+1. Fix the L1.5 suffix mismatch so the W4A4 reference path is live (and
+   unblock L3's end-to-end use).
+2. Build the forward-pass differential (L2) and the prompt-bank probe
+   (L4) - these are what make the L6 fidelity claim measurable as
+   user-visible behavior, not just per-tensor `t_l^2`.
+3. Wire `tessera-l5` into the dispatch path and add the
+   apply-plan-and-iterate loop.
+4. Lift the L1.5 ground truth to actual FP16 (currently bit-identical
+   to L1).
 
 ### Priority 2 — Rebase dspark-int work onto integration
 

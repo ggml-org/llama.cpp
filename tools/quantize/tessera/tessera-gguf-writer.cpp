@@ -104,3 +104,46 @@ void ts_gguf_write_tensor_cluster(struct gguf_context * ctx,
         gguf_add_tensor(ctx, t);
     }
 }
+
+int ts_gguf_repoint_tensor_cluster(struct ggml_context * gctx,
+                                   const char * base_name,
+                                   const void * result) {
+    const auto * res = static_cast<const ts_quant_result_2d *>(result);
+    if (gctx == nullptr || base_name == nullptr || res == nullptr) {
+        return 0;
+    }
+
+    // Pairs of (suffix, new data pointer). Order matches the cluster writer.
+    struct entry { const char * suffix; const void * data; };
+    const entry entries[] = {
+        { "weight_packed",           res->packed.data() },
+        { "weight_page_scales",      res->page_scales.data() },
+        { "weight_lane_scales",      res->lane_scales.data() },
+        { "weight_outlier_row_offsets", res->outlier_row_offsets.data() },
+        { "weight_outlier_cols",     res->outlier_cols.data() },
+        { "weight_outlier_vals",     res->outlier_vals.data() },
+        { "weight_act_scale",        res->act_scale.data() },
+    };
+
+    int repointed = 0;
+    for (const auto & e : entries) {
+        // Skip the optional act_scale buffer when the refined result dropped it
+        // (act_scale is empty when AWQ alpha resolves to 0); the descriptor would
+        // not have been written in that case.
+        if (e.data == nullptr) {
+            continue;
+        }
+        char want[GGML_MAX_NAME];
+        snprintf(want, sizeof(want), "%s.%s", base_name, e.suffix);
+        struct ggml_tensor * t = ggml_get_tensor(gctx, want);
+        if (t == nullptr) {
+            // For act_scale this is expected when it was absent at first write;
+            // for the others it indicates the cluster was never written, which
+            // is a caller bug. Either way, skip rather than create a new tensor.
+            continue;
+        }
+        t->data = const_cast<void *>(e.data);
+        repointed++;
+    }
+    return repointed;
+}

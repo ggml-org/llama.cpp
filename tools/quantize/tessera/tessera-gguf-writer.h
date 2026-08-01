@@ -49,3 +49,15 @@ void ts_gguf_write_tensor_cluster(struct gguf_context * ctx,
                                   const char * base_name,
                                   const void * result,
                                   int64_t out_dim, int64_t in_dim);
+
+// Repoint the data pointers of an existing tensor cluster (written by an
+// earlier ts_gguf_write_tensor_cluster call) at the buffers of `result`.
+// Used by the L5 adaptive-requantize loop, which re-quantizes a tensor
+// in place into the same ts_quant_result_2d and must refresh the GGUF
+// descriptors so the eventual gguf_write_to_file emits the refined bytes.
+// Tensors that are not found in gctx are skipped (silent: the cluster is
+// assumed to have been written already). Returns the number of tensors
+// repointed.
+int ts_gguf_repoint_tensor_cluster(struct ggml_context * gctx,
+                                   const char * base_name,
+                                   const void * result);

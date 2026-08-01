@@ -32,7 +32,9 @@ int ts_l15_load_reference(const char * sidecar_path,
                           std::string * err_msg);
 
 // Load all L1.5 references from a directory of sidecar files.
-// Files are named "<tensor_name>.tdqt" in the directory.
+// Files are named "<tensor_name>.act.dequant.f32" in the directory
+// (matching DEQUANT_FILE_SUFFIX_L15 in common/tessera-debug/tessera-debug.h,
+// the suffix the runtime hook actually writes).
 // Returns number of references loaded, or -1 on error.
 int ts_l15_load_directory(const char * dir_path,
                           std::vector<ts_l15_reference> * refs,

@@ -85,6 +85,15 @@ else
     echo "SKIP (needs CMake build for libgguf)"
 fi
 
+# L5 dispatch integration test: same libgguf/libggml link line as dispatch,
+# plus the L2-diff/L5 modules the adaptive-requantize loop pulls in.
+printf "  %-30s" "l5_dispatch"
+if [ -f build/ggml/src/libgguf.a ] || [ -f build/ggml/src/libgguf.dylib ]; then
+    compile_and_run l5_dispatch $T/test_l5_dispatch.cpp $T/tessera-dispatch.cpp $T/tessera-quant.cpp $T/tessera-vec.cpp $T/tessera-awq.cpp $T/tessera-awq-fitness.cpp $T/tessera-l2-diff.cpp $T/tessera-l3-coherence.cpp $T/tessera-l5.cpp $T/tessera-ppl.cpp $C/tessera-sidecar-v3.cpp -I ggml/include -I ggml/src -I vendor -I $C -L build/ggml/src -lgguf -lggml -framework Accelerate
+else
+    echo "SKIP (needs CMake build for libgguf)"
+fi
+
 # --- Needs linalg + lbfgs (search pulls in vendor/nlohmann for the archive JSON) ---
 compile_and_run search      $T/test_search.cpp      $T/tessera-lrq.cpp $T/tessera-dartquant.cpp $T/tessera-flrq.cpp $T/tessera-champq.cpp $T/tessera-archive.cpp $T/tessera-linalg.cpp $T/tessera-lbfgs.cpp -I vendor
 

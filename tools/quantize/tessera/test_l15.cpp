@@ -33,7 +33,7 @@ static void check_close(const char * name, float got, float want, float tol) {
     }
 }
 
-static const char * k_path = "/tmp/test_l15_ref.tdqt";
+static const char * k_path = "/tmp/test_l15_ref.act.dequant.f32";
 
 static bool write_synthetic_sidecar() {
     const int64_t rows = 4;

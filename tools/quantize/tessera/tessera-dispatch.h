@@ -12,8 +12,12 @@
 #include <string>
 #include <vector>
 #include <cstdint>
+#include <unordered_map>
 
 #include "tessera-acceptance.h"
+
+// Forward declaration; full definition in tessera-dispatch-internal.h.
+struct ts_dispatch_refine_entry;
 
 struct ts_dispatch_params {
     std::string input_path;
@@ -52,6 +56,19 @@ struct ts_dispatch_params {
     // disagreement test after quantization.
     bool        run_acceptance;
     ts_acceptance_config acceptance_config;
+    // L5 adaptive requantization. When set, runs the L2 -> L5 -> re-quantize
+    // loop after step 7 for up to l5_max_generations, tightening alpha/clip
+    // (Stage A) or outlier_fraction (Stage B, A/B per tensor family) on
+    // tensors whose L2 divergence overshoots their type baseline. See
+    // docs/runtime-aware-pipeline.md Layer 5.
+    bool        adaptive_requantize = false;
+    int         l5_max_generations  = 3;     // generational cap
+    float       l5_flag_multiplier  = 1.5f;  // L2 flag threshold = multiplier * type baseline
+    float       l5_alpha_min        = 0.1f;  // floor for the Stage A alpha multiplier
+    float       l5_clip_min         = 0.1f;  // floor for the Stage A clip multiplier
+    float       l5_outlier_overshoot_scale = 0.5f;  // Stage B outlier_frac bump per unit overshoot
+    float       l5_outlier_frac_cap = 0.25f; // Stage B outlier_fraction ceiling
+    std::string l5_out_path;                 // empty = beside policy_out_path as <stem>.l5-loop.json
 };
 
 // Result of the Tessera pipeline for one tensor.
@@ -103,6 +120,9 @@ struct ts_dispatch_result {
     // S7 G6 acceptance gate result (populated when run_acceptance is set)
     bool                  acceptance_ran;
     ts_acceptance_result  acceptance;
+    // L5 adaptive requantization result (populated when adaptive_requantize is set)
+    bool        l5_ran = false;
+    std::string l5_report_json;   // schema llama.tessera.l5-loop.v1
 };
 
 // Run the full Tessera quantization pipeline.
@@ -110,3 +130,17 @@ struct ts_dispatch_result {
 int ts_dispatch_run(const ts_dispatch_params * params,
                     ts_dispatch_result * result,
                     std::string * err_msg);
+
+// L5 adaptive requantize refine loop. Normally called by ts_dispatch_run when
+// params->adaptive_requantize is set; exposed so the integration test can
+// drive it directly. refine_map is keyed by tensor name; in_ctx/ggml_ctx are
+// the input GGUF (for re-reading source weights) and out_ggml_ctx is the
+// output descriptor context (refreshed via ts_gguf_repoint_tensor_cluster).
+struct ts_dispatch_refine_entry;
+int ts_dispatch_run_l5_loop(
+    const ts_dispatch_params * params,
+    ts_dispatch_result * result,
+    struct gguf_context * in_ctx,
+    struct ggml_context * ggml_ctx,
+    struct ggml_context * out_ggml_ctx,
+    std::unordered_map<std::string, ts_dispatch_refine_entry> & refine_map);

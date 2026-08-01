@@ -96,6 +96,7 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
     if (arg == "--tessera-kernel-fitness") { tessera_params.kernel_fitness = true; return 1; }
     if (arg == "--tessera-w4a4")           { tessera_params.w4a4           = true; return 1; }
     if (arg == "--tessera-acceptance")     { tessera_params.acceptance     = true; return 1; }
+    if (arg == "--tessera-adaptive-requantize") { tessera_params.adaptive_requantize = true; return 1; }
     if (arg == "--tessera-adapt-dry-run")  { tessera_params.adapt_dry_run  = true; return 1; }
 
     // enum-valued
@@ -135,6 +136,7 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
     if (arg == "--tessera-ternary-threshold") { if (!require_val("--tessera-ternary-threshold")) return -1; tessera_params.ternary_threshold = val; return 2; }
     if (arg == "--tessera-kernel-fitness-dir") { if (!require_val("--tessera-kernel-fitness-dir")) return -1; tessera_params.kernel_fitness_dir = val; return 2; }
     if (arg == "--tessera-acceptance-out") { if (!require_val("--tessera-acceptance-out")) return -1; tessera_params.acceptance_out = val; return 2; }
+    if (arg == "--tessera-l5-out")         { if (!require_val("--tessera-l5-out")) return -1;         tessera_params.l5_out          = val; return 2; }
     if (arg == "--tessera-capability-eval") { if (!require_val("--tessera-capability-eval")) return -1; tessera_params.capability_eval = val; return 2; }
     if (arg == "--tessera-capability-out")  { if (!require_val("--tessera-capability-out")) return -1;  tessera_params.capability_out  = val; return 2; }
     if (arg == "--tessera-adapt")           { if (!require_val("--tessera-adapt")) return -1;           tessera_params.adapt_eval      = val; return 2; }
@@ -216,6 +218,61 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
         catch (...) { err = string_format("error: invalid value for --tessera-w4a4-outlier-thresh: '%s'\n", val.c_str()); return -1; }
         if (f <= 0.0f) { err = string_format("error: --tessera-w4a4-outlier-thresh must be > 0, got %f\n", f); return -1; }
         tessera_params.w4a4_outlier_thresh = f;
+        return 2;
+    }
+    // --tessera-l5-* numeric knobs for the L5 adaptive requantize loop
+    if (arg == "--tessera-l5-generations") {
+        if (!require_val("--tessera-l5-generations")) return -1;
+        int n;
+        try { n = std::stoi(val); }
+        catch (...) { err = string_format("error: invalid value for --tessera-l5-generations: '%s'\n", val.c_str()); return -1; }
+        if (n < 1) { err = string_format("error: --tessera-l5-generations must be >= 1, got %d\n", n); return -1; }
+        tessera_params.l5_max_generations = n;
+        return 2;
+    }
+    if (arg == "--tessera-l5-flag-multiplier") {
+        if (!require_val("--tessera-l5-flag-multiplier")) return -1;
+        float f;
+        try { f = std::stof(val); }
+        catch (...) { err = string_format("error: invalid value for --tessera-l5-flag-multiplier: '%s'\n", val.c_str()); return -1; }
+        if (f <= 0.0f) { err = string_format("error: --tessera-l5-flag-multiplier must be > 0, got %f\n", f); return -1; }
+        tessera_params.l5_flag_multiplier = f;
+        return 2;
+    }
+    if (arg == "--tessera-l5-alpha-min") {
+        if (!require_val("--tessera-l5-alpha-min")) return -1;
+        float f;
+        try { f = std::stof(val); }
+        catch (...) { err = string_format("error: invalid value for --tessera-l5-alpha-min: '%s'\n", val.c_str()); return -1; }
+        if (f <= 0.0f || f > 1.0f) { err = string_format("error: --tessera-l5-alpha-min must be in (0, 1], got %f\n", f); return -1; }
+        tessera_params.l5_alpha_min = f;
+        return 2;
+    }
+    if (arg == "--tessera-l5-clip-min") {
+        if (!require_val("--tessera-l5-clip-min")) return -1;
+        float f;
+        try { f = std::stof(val); }
+        catch (...) { err = string_format("error: invalid value for --tessera-l5-clip-min: '%s'\n", val.c_str()); return -1; }
+        if (f <= 0.0f || f > 1.0f) { err = string_format("error: --tessera-l5-clip-min must be in (0, 1], got %f\n", f); return -1; }
+        tessera_params.l5_clip_min = f;
+        return 2;
+    }
+    if (arg == "--tessera-l5-outlier-overshoot-scale") {
+        if (!require_val("--tessera-l5-outlier-overshoot-scale")) return -1;
+        float f;
+        try { f = std::stof(val); }
+        catch (...) { err = string_format("error: invalid value for --tessera-l5-outlier-overshoot-scale: '%s'\n", val.c_str()); return -1; }
+        if (f < 0.0f) { err = string_format("error: --tessera-l5-outlier-overshoot-scale must be >= 0, got %f\n", f); return -1; }
+        tessera_params.l5_outlier_overshoot_scale = f;
+        return 2;
+    }
+    if (arg == "--tessera-l5-outlier-frac-cap") {
+        if (!require_val("--tessera-l5-outlier-frac-cap")) return -1;
+        float f;
+        try { f = std::stof(val); }
+        catch (...) { err = string_format("error: invalid value for --tessera-l5-outlier-frac-cap: '%s'\n", val.c_str()); return -1; }
+        if (f <= 0.0f || f > 1.0f) { err = string_format("error: --tessera-l5-outlier-frac-cap must be in (0, 1], got %f\n", f); return -1; }
+        tessera_params.l5_outlier_frac_cap = f;
         return 2;
     }
     if (arg == "--tessera-adapt-epsilon") {
@@ -4285,6 +4342,94 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "Tessera: write the G6 acceptance gate JSON report to PATH",
         [](common_params &, const std::string & value) {
             tessera_params.acceptance_out = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-adaptive-requantize"},
+        "Tessera: run the L5 adaptive requantization loop after quantization "
+        "(L2 differential -> per-tensor tighten -> re-quantize, up to "
+        "--tessera-l5-generations). See docs/runtime-aware-pipeline.md Layer 5",
+        [](common_params &) {
+            tessera_params.adaptive_requantize = true;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-l5-out"}, "PATH",
+        "Tessera: write the L5 loop report JSON (schema llama.tessera.l5-loop.v1) "
+        "to PATH (default: beside --tessera-policy-out as <stem>.l5-loop.json)",
+        [](common_params &, const std::string & value) {
+            tessera_params.l5_out = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-l5-generations"}, "N",
+        "Tessera: maximum L5 adaptive requantize generations (default: 3)",
+        [](common_params &, int value) {
+            if (value < 1) {
+                throw std::invalid_argument(
+                    string_format("error: --tessera-l5-generations must be >= 1, got %d\n", value));
+            }
+            tessera_params.l5_max_generations = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-l5-flag-multiplier"}, "F",
+        "Tessera: L2 flag threshold = F * type baseline (default: 1.5)",
+        [](common_params &, const std::string & value) {
+            float f = std::stof(value);
+            if (f <= 0.0f) {
+                throw std::invalid_argument(
+                    string_format("error: --tessera-l5-flag-multiplier must be > 0, got %f\n", f));
+            }
+            tessera_params.l5_flag_multiplier = f;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-l5-alpha-min"}, "F",
+        "Tessera: floor for the Stage A alpha multiplier (default: 0.1)",
+        [](common_params &, const std::string & value) {
+            float f = std::stof(value);
+            if (f <= 0.0f || f > 1.0f) {
+                throw std::invalid_argument(
+                    string_format("error: --tessera-l5-alpha-min must be in (0, 1], got %f\n", f));
+            }
+            tessera_params.l5_alpha_min = f;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-l5-clip-min"}, "F",
+        "Tessera: floor for the Stage A clip multiplier (default: 0.1)",
+        [](common_params &, const std::string & value) {
+            float f = std::stof(value);
+            if (f <= 0.0f || f > 1.0f) {
+                throw std::invalid_argument(
+                    string_format("error: --tessera-l5-clip-min must be in (0, 1], got %f\n", f));
+            }
+            tessera_params.l5_clip_min = f;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-l5-outlier-overshoot-scale"}, "F",
+        "Tessera: Stage B raises outlier_fraction by F * overshoot (default: 0.5)",
+        [](common_params &, const std::string & value) {
+            float f = std::stof(value);
+            if (f < 0.0f) {
+                throw std::invalid_argument(
+                    string_format("error: --tessera-l5-outlier-overshoot-scale must be >= 0, got %f\n", f));
+            }
+            tessera_params.l5_outlier_overshoot_scale = f;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-l5-outlier-frac-cap"}, "F",
+        "Tessera: ceiling for Stage B outlier_fraction (default: 0.25)",
+        [](common_params &, const std::string & value) {
+            float f = std::stof(value);
+            if (f <= 0.0f || f > 1.0f) {
+                throw std::invalid_argument(
+                    string_format("error: --tessera-l5-outlier-frac-cap must be in (0, 1], got %f\n", f));
+            }
+            tessera_params.l5_outlier_frac_cap = f;
         }
     ));
     add_opt(common_arg(

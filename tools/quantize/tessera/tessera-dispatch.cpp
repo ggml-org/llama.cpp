@@ -19,6 +19,8 @@
 #include "tessera-imatrix.h"
 #include "tessera-corpus.h"
 #include "tessera-l1-fitness.h"
+#include "tessera-l2-diff.h"
+#include "tessera-l5.h"
 #include "tessera-ab-harness.h"
 #include "tessera-mm-imatrix.h"
 #include "tessera-mm-fitness.h"
@@ -30,6 +32,7 @@
 #include "gguf.h"
 #include "ggml.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -381,6 +384,334 @@ static float ts_dispatch_forced_t2(const float * weights, const float * act_scal
         frob2 += (double)weights[i] * (double)weights[i];
     }
     return (frob2 > 0.0) ? (float)((double)qr.mse * (double)n / frob2) : qr.mse;
+}
+
+// ---------------------------------------------------------------------------
+// L5 adaptive requantize refine loop (dispatch L2 -> L5 -> re-quantize)
+// ---------------------------------------------------------------------------
+
+#include "tessera-dispatch-internal.h"
+
+// Re-read one tensor's source weights from the input GGUF as F32. Returns
+// an empty vector on failure (matching ts_tensor_to_f32's contract).
+static std::vector<float> ts_refine_reread_source(struct gguf_context * in_ctx,
+                                                  struct ggml_context * ggml_ctx,
+                                                  const ts_dispatch_refine_entry & e) {
+    const char * name = gguf_get_tensor_name(in_ctx, e.gguf_idx);
+    if (name == nullptr) {
+        return {};
+    }
+    struct ggml_tensor * t = ggml_get_tensor(ggml_ctx, name);
+    if (t == nullptr) {
+        return {};
+    }
+    return ts_tensor_to_f32(t);
+}
+
+// Relative Frobenius between source weights and a quant result's recon.
+// Matches the L2 weight-level metric (||src - recon||_F^2 / ||src||_F^2).
+static float ts_refine_rel_frob(const float * src, const ts_quant_result_2d * qr,
+                                int64_t n) {
+    if (src == nullptr || qr == nullptr || n <= 0) {
+        return 0.0f;
+    }
+    double num = 0.0;
+    double den = 0.0;
+    const float * recon = qr->recon.data();
+    for (int64_t i = 0; i < n; i++) {
+        const double d = (double)src[i] - (double)recon[i];
+        num += d * d;
+        den += (double)src[i] * (double)src[i];
+    }
+    if (den == 0.0) {
+        return 0.0f;
+    }
+    return (float)(num / den);
+}
+
+// Join a vector of strings with a separator (used for the per-family JSON
+// array in the report).
+static std::string ts_join(const std::vector<std::string> & parts,
+                           const std::string & sep) {
+    std::string out;
+    for (size_t i = 0; i < parts.size(); i++) {
+        if (i) out += sep;
+        out += parts[i];
+    }
+    return out;
+}
+
+// Run the L5 adaptive requantize loop over the captured 2D tensors. Mutates
+// the deque entries in place and repoints the GGUF descriptors. Emits one
+// JSON object per generation to l5_report_json on the result struct.
+//
+// Returns 0 on success (including the case where nothing was flagged and the
+// loop terminates immediately), non-zero only on a hard setup error.
+//
+// Declared non-static so the integration test in test_l5_dispatch.cpp can
+// drive it directly with a constructed refine_map (the test fixture builds
+// the in-memory state without going through the full GGUF walk).
+int ts_dispatch_run_l5_loop(
+    const ts_dispatch_params * params,
+    ts_dispatch_result * result,
+    struct gguf_context * in_ctx,
+    struct ggml_context * ggml_ctx,
+    struct ggml_context * out_ggml_ctx,
+    std::unordered_map<std::string, ts_dispatch_refine_entry> & refine_map) {
+
+    if (refine_map.empty()) {
+        return 0;
+    }
+
+    result->l5_ran = true;
+
+    // L5 params (alpha/clip are floors for the multipliers; both clamped below).
+    ts_l5_adaptive_params l5p;
+    ts_l5_adaptive_default_params(&l5p);
+    l5p.alpha_scale = 0.5f;  // base multiplier: tighten by 2x at overshoot 1
+    l5p.clip_scale  = 0.5f;
+    l5p.min_alpha   = params->l5_alpha_min;
+    l5p.min_clip    = params->l5_clip_min;
+
+    // Build the per-tensor L2 input view once; the loop refreshes the `quant`
+    // pointer after each re-quantize from the deque's recon.
+    const float flag_multiplier = params->l5_flag_multiplier;
+    const int   max_generations = params->l5_max_generations;
+    const float outlier_overshoot_scale = params->l5_outlier_overshoot_scale;
+    const float outlier_frac_cap = params->l5_outlier_frac_cap;
+
+    std::string report_json = "{\"schema\":\"llama.tessera.l5-loop.v1\",\"generations\":[";
+    bool first_gen = true;
+
+    // Snapshot the tensor list so we iterate in a stable order.
+    std::vector<std::string> names;
+    names.reserve(refine_map.size());
+    for (auto & kv : refine_map) {
+        names.push_back(kv.first);
+    }
+    std::sort(names.begin(), names.end());
+
+    for (int gen = 0; gen < max_generations; gen++) {
+        // (a) L2 measure: pair each tensor's re-read source with its recon.
+        std::vector<ts_l2_tensor_input> inputs;
+        inputs.reserve(names.size());
+        std::vector<std::vector<float>> src_keepalive(names.size());
+        for (size_t i = 0; i < names.size(); i++) {
+            auto it = refine_map.find(names[i]);
+            if (it == refine_map.end()) continue;
+            ts_dispatch_refine_entry & e = it->second;
+            src_keepalive[i] = ts_refine_reread_source(in_ctx, ggml_ctx, e);
+            if (src_keepalive[i].empty()) continue;
+            ts_l2_tensor_input tin = {};
+            tin.name  = e.name.c_str();
+            tin.qtype = "tessera_t640";
+            tin.rows  = e.out_dim;
+            tin.cols  = e.in_dim;
+            tin.bf16  = src_keepalive[i].data();
+            tin.quant = e.qr->recon.data();
+            inputs.push_back(tin);
+        }
+        if (inputs.empty()) break;
+
+        ts_l2_report l2rep = {};
+        ts_l2_config l2cfg;
+        ts_l2_default_config(&l2cfg);
+        snprintf(l2cfg.bf16_model_path, sizeof(l2cfg.bf16_model_path), "%s", params->input_path.c_str());
+        snprintf(l2cfg.corpus_path,     sizeof(l2cfg.corpus_path),     "%s", params->calib_corpus.c_str());
+        l2cfg.output_json_path[0] = '\0';  // in-memory only; we emit our own report
+        l2cfg.flag_multiplier = flag_multiplier;
+        if (ts_l2_run(&l2cfg, inputs.data(), (int64_t)inputs.size(), &l2rep) < 0) {
+            break;
+        }
+
+        // (b) L5 plan
+        ts_l5_adaptive_plan plan;
+        if (ts_l5_adaptive_requant(&l2rep, &l5p, gen, &plan) < 0) {
+            break;
+        }
+        if (plan.n_requant <= 0 || plan.specs.empty()) {
+            // nothing flagged this generation; loop has converged
+            if (!first_gen) report_json += ",";
+            first_gen = false;
+            report_json += "{\"generation\":" + std::to_string(gen) +
+                           ",\"n_flagged\":0,\"n_requant\":0,\"converged\":true}";
+            break;
+        }
+
+        // (c) A/B per family + re-quantize flagged tensors.
+        // Group specs by tensor family, then for each family with >=1 flagged
+        // tensor run Stage A (alpha/clip multiplier) and Stage B (outlier_fraction
+        // bump) on one representative tensor, pick the winner by rel_frob, and
+        // apply that strategy to every flagged tensor in the family.
+        std::map<std::string, std::vector<const ts_l5_requant_spec *>> by_family;
+        for (const auto & spec : plan.specs) {
+            const std::string fam = ts_regime_infer_family(spec.tensor_name.c_str());
+            by_family[fam].push_back(&spec);
+        }
+
+        // Track per-tensor before/after for the report.
+        std::vector<std::tuple<std::string, std::string, float, float>> deltas;
+        std::vector<std::string> family_winners;
+
+        for (const auto & fam_kv : by_family) {
+            const std::string & fam = fam_kv.first;
+            const auto & specs = fam_kv.second;
+            if (specs.empty()) continue;
+
+            // Representative: the first spec's tensor. Re-read its source once.
+            auto rep_it = refine_map.find(specs[0]->tensor_name);
+            if (rep_it == refine_map.end()) continue;
+            ts_dispatch_refine_entry & rep = rep_it->second;
+            std::vector<float> rep_src = ts_refine_reread_source(in_ctx, ggml_ctx, rep);
+            if (rep_src.empty()) continue;
+            const int64_t rep_n = rep.out_dim * rep.in_dim;
+
+            // --- Stage A: tighten alpha/clip as multipliers on current values.
+            //     alpha is the AWQ exponent in [0,1]; clip is the outlier clip
+            //     in [0.7,1.0]. new_alpha/new_clip from L5 are multipliers in
+            //     [min_alpha, 0.5]. If alpha_current is 0 (AWQ off), Stage A
+            //     cannot tighten alpha, so it tightens clip only.
+            ts_quant_params_2d tqp_A = rep.tqp;
+            const float a_mult = std::clamp(specs[0]->new_alpha, 0.0f, 1.0f);
+            const float c_mult = std::clamp(specs[0]->new_clip,  0.0f, 1.0f);
+            if (tqp_A.alpha > 0.0f) {
+                tqp_A.alpha = std::clamp(tqp_A.alpha * a_mult, 0.0f, 1.0f);
+            }
+            tqp_A.clip = std::clamp(tqp_A.clip * c_mult, 0.0f, 1.0f);
+
+            // --- Stage B: bump outlier_thresh by overshoot instead.
+            //     outlier_thresh on tqp is the selection threshold; raising it
+            //     selects more rows for the exact residual, lowering recon error.
+            ts_quant_params_2d tqp_B = rep.tqp;
+            const float bump = 1.0f + outlier_overshoot_scale * specs[0]->overshoot;
+            tqp_B.outlier_thresh = std::clamp(tqp_B.outlier_thresh * bump,
+                                              0.0f, outlier_frac_cap);
+
+            // Evaluate both on the representative. We re-quantize into scratch
+            // results (NOT the deque) so the comparison is non-destructive; the
+            // winning strategy is then applied to each flagged tensor's deque
+            // element in place.
+            const float * act = rep.act_scales_copy.empty()
+                                    ? nullptr : rep.act_scales_copy.data();
+            ts_quant_result_2d qr_A = {};
+            ts_quant_result_2d qr_B = {};
+            int rc_A = ts_quantize_2d(rep_src.data(), act, nullptr, nullptr, act,
+                                      rep.out_dim, rep.in_dim, 0, &tqp_A, &qr_A);
+            int rc_B = ts_quantize_2d(rep_src.data(), act, nullptr, nullptr, act,
+                                      rep.out_dim, rep.in_dim, 0, &tqp_B, &qr_B);
+            float frob_A = (rc_A == 0) ? ts_refine_rel_frob(rep_src.data(), &qr_A, rep_n) : 1e30f;
+            float frob_B = (rc_B == 0) ? ts_refine_rel_frob(rep_src.data(), &qr_B, rep_n) : 1e30f;
+
+            bool stage_b_wins = (frob_B < frob_A);
+            family_winners.push_back("{\"family\":\"" + fam + "\",\"stage\":\"" +
+                                     (stage_b_wins ? "B" : "A") +
+                                     "\",\"frob_A\":" + std::to_string(frob_A) +
+                                     ",\"frob_B\":" + std::to_string(frob_B) + "}");
+
+            // Apply the winning strategy to every flagged tensor in this family.
+            for (const auto * spec : specs) {
+                auto it = refine_map.find(spec->tensor_name);
+                if (it == refine_map.end()) continue;
+                ts_dispatch_refine_entry & e = it->second;
+
+                std::vector<float> src = ts_refine_reread_source(in_ctx, ggml_ctx, e);
+                if (src.empty()) continue;
+                const int64_t n = e.out_dim * e.in_dim;
+
+                ts_quant_params_2d tightened = e.tqp;
+                if (stage_b_wins) {
+                    tightened.outlier_thresh = std::clamp(
+                        tightened.outlier_thresh * (1.0f + outlier_overshoot_scale * spec->overshoot),
+                        0.0f, outlier_frac_cap);
+                } else {
+                    const float am = std::clamp(spec->new_alpha, 0.0f, 1.0f);
+                    const float cm = std::clamp(spec->new_clip,  0.0f, 1.0f);
+                    if (tightened.alpha > 0.0f) {
+                        tightened.alpha = std::clamp(tightened.alpha * am, 0.0f, 1.0f);
+                    }
+                    tightened.clip = std::clamp(tightened.clip * cm, 0.0f, 1.0f);
+                }
+
+                const float before = ts_refine_rel_frob(src.data(), e.qr, n);
+                const float * e_act = e.act_scales_copy.empty()
+                                          ? nullptr : e.act_scales_copy.data();
+                int rc = ts_quantize_2d(src.data(), e_act, nullptr, nullptr, e_act,
+                                        e.out_dim, e.in_dim, 0, &tightened, e.qr);
+                if (rc != 0) {
+                    continue;
+                }
+                // Refresh the GGUF descriptors: in-place re-quant may have
+                // reallocated the deque element's buffers.
+                ts_gguf_repoint_tensor_cluster(out_ggml_ctx, e.name.c_str(), e.qr);
+                const float after = ts_refine_rel_frob(src.data(), e.qr, n);
+
+                // Refresh result->tensors copies so downstream consumers see
+                // the refined bytes and applied profile.
+                for (auto & tr : result->tensors) {
+                    if (tr.name == e.name) {
+                        tr.packed              = ts_to_bytes_u32(e.qr->packed);
+                        tr.page_scales         = ts_to_bytes_u16(e.qr->page_scales);
+                        tr.lane_scales         = ts_to_bytes_i8(e.qr->lane_scales);
+                        tr.outlier_row_offsets = ts_to_bytes_i32(e.qr->outlier_row_offsets);
+                        tr.outlier_cols        = ts_to_bytes_i32(e.qr->outlier_cols);
+                        tr.outlier_vals        = ts_to_bytes_u16(e.qr->outlier_vals);
+                        tr.act_scale           = ts_to_bytes_u16(e.qr->act_scale);
+                        tr.mse                 = e.qr->mse;
+                        tr.alpha_used          = e.qr->best_alpha;
+                        tr.profile_alpha       = tightened.alpha;
+                        tr.profile_clip        = tightened.clip;
+                        tr.profile_outlier_thresh = tightened.outlier_thresh;
+                        break;
+                    }
+                }
+
+                deltas.push_back(std::make_tuple(e.name, fam, before, after));
+            }
+        }
+
+        // Generation report entry
+        if (!first_gen) report_json += ",";
+        first_gen = false;
+        report_json += "{\"generation\":" + std::to_string(gen) +
+                       ",\"n_flagged\":" + std::to_string((int64_t)l2rep.n_flagged) +
+                       ",\"n_requant\":" + std::to_string(plan.n_requant) +
+                       ",\"families\":[" + ts_join(family_winners, ",") + "]" +
+                       ",\"tensors\":[";
+        bool first_d = true;
+        for (const auto & d : deltas) {
+            if (!first_d) report_json += ",";
+            first_d = false;
+            report_json += "{\"name\":\"" + std::get<0>(d) +
+                           "\",\"family\":\"" + std::get<1>(d) +
+                           "\",\"before\":" + std::to_string(std::get<2>(d)) +
+                           ",\"after\":" + std::to_string(std::get<3>(d)) + "}";
+        }
+        report_json += "]}";
+    }
+
+    report_json += "]}";
+    result->l5_report_json = std::move(report_json);
+
+    // Write the report beside policy_out_path unless the caller overrode it.
+    if (!params->l5_out_path.empty()) {
+        std::ofstream out(params->l5_out_path);
+        if (out) {
+            out << result->l5_report_json;
+        }
+    } else if (!params->policy_out_path.empty()) {
+        std::string p = params->policy_out_path + ".l5-loop.json";
+        std::ofstream out(p);
+        if (out) {
+            out << result->l5_report_json;
+        }
+    }
+
+    if (params->verbose) {
+        printf("tessera-dispatch: l5 loop wrote %zu bytes of report\n",
+               result->l5_report_json.size());
+    }
+
+    return 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -960,6 +1291,11 @@ int ts_dispatch_run(const ts_dispatch_params * params,
     std::deque<ts_quant_result_2d>              cluster_results; // 2D weights
     std::deque<std::vector<ts_quant_result_2d>> moe_results;     // 3D MoE weights
 
+    // L5 adaptive requantize: per-tensor metadata captured during step 7 so the
+    // refine loop can target 2D tensors by name without re-walking the GGUF.
+    // Only 2D tensors are eligible; 3D MoE re-quantize is deferred.
+    std::unordered_map<std::string, ts_dispatch_refine_entry> refine_map;
+
     // --- step 7: walk tensors, quantize or copy through ---
     ts_quant_params_2d qparams;
     qparams.alpha          = default_alpha;
@@ -1318,6 +1654,23 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             result->tensors.push_back(std::move(tr));
             n_quantized++;
 
+            // Capture for the L5 refine loop (gated by params->adaptive_requantize;
+            // cheap when the loop is off, since it only fires then).
+            if (params->adaptive_requantize) {
+                ts_dispatch_refine_entry entry;
+                entry.name     = name;
+                entry.family   = family;
+                entry.gguf_idx = i;
+                entry.out_dim  = out_dim;
+                entry.in_dim   = in_dim;
+                entry.qr       = &qr;  // stable: cluster_results deque element
+                entry.tqp      = tqp;
+                if (act_scales != nullptr) {
+                    entry.act_scales_copy.assign(act_scales, act_scales + in_dim);
+                }
+                refine_map.emplace(name, std::move(entry));
+            }
+
             if (verbose) {
                 printf("tessera-dispatch: quantized %s (mse=%.6f alpha=%.3f)\n",
                        name, qr.mse, qr.best_alpha);
@@ -1349,6 +1702,14 @@ int ts_dispatch_run(const ts_dispatch_params * params,
     }
 
     policy_json += "\n  ]\n}";
+
+    // --- step 7a: L5 adaptive requantize loop ---
+    // Runs when --tessera-adaptive-requantize is set. Re-quantizes flagged
+    // tensors in place (refreshing the GGUF descriptors via
+    // ts_gguf_repoint_tensor_cluster) and emits an l5-loop.json report.
+    if (params->adaptive_requantize) {
+        ts_dispatch_run_l5_loop(params, result, in_ctx, ggml_ctx, out_ggml_ctx, refine_map);
+    }
 
     // --- step 7b: G6 acceptance gate ---
     result->acceptance_ran = false;
