@@ -89,6 +89,49 @@ class IMatrixCollector {
 public:
     IMatrixCollector() = default;
     void set_params(common_params params) { m_params = std::move(params); }
+    // Set the scope this collector attributes incoming observers to. Pair with
+    // llama_set_imatrix_observer_scope on the same context so the filter and
+    // the bucketing agree.
+    void set_observer_scope(int scope) { m_observer_scope = scope; }
+
+    // Stats are bucketed by (scope, name) so a verifier context and a drafter
+    // context sharing one collector land in separate ledgers without any name
+    // prefix on the observer tensors. The scope mirrors the scope the owning
+    // llama_context selected via llama_set_imatrix_observer_scope.
+    struct stats_key {
+        int         scope;
+        std::string name;
+        bool operator==(const stats_key & o) const {
+            return scope == o.scope && name == o.name;
+        }
+    };
+    struct stats_key_hash {
+        size_t operator()(const stats_key & k) const {
+            return std::hash<int>()(k.scope) ^
+                   (std::hash<std::string>()(k.name) << 1);
+        }
+    };
+    // Serialize a (scope, name) key to the tensor name written to disk. The
+    // verifier scope keeps the bare name (unchanged on-disk contract for
+    // verifier-only runs); the drafter scope is tagged so the two ledgers do
+    // not collide. This tag lives only in the collector, never in the graph
+    // build, so it carries no forward-compat risk if new drafter archs appear.
+    static std::string stats_key_name(const stats_key & key) {
+        if (key.scope == LLAMA_OBSERVER_SCOPE_VERIFIER) {
+            return key.name;
+        }
+        return std::string("dft.") + key.name;
+    }
+    // Inverse of stats_key_name: recover the (scope, name) bucket from a
+    // tensor name read off disk. Names carrying the drafter tag land in the
+    // drafter scope; everything else is verifier.
+    static stats_key parse_stats_key_name(const std::string & full) {
+        static const std::string k_drafter_tag = "dft.";
+        if (full.compare(0, k_drafter_tag.size(), k_drafter_tag) == 0) {
+            return { LLAMA_OBSERVER_SCOPE_DRAFTER, full.substr(k_drafter_tag.size()) };
+        }
+        return { LLAMA_OBSERVER_SCOPE_VERIFIER, full };
+    }
     bool collect_imatrix(struct ggml_tensor * t, bool ask, void * user_data);
     void begin_graph_observers();
     bool collect_graph_observers();
@@ -105,7 +148,7 @@ public:
     void save_imatrix_legacy(int32_t ncall = -1) const;
     void save_imatrix(int32_t n_chunk = -1) const;
     bool load_imatrix(const char * file_name);
-    const std::unordered_map<std::string, Stats> & get_mstats() const { return m_stats; }
+    const std::unordered_map<stats_key, Stats, stats_key_hash> & get_mstats() const { return m_stats; }
 private:
     static constexpr size_t k_observer_slots = 2;
     struct graph_observer_snapshot {
@@ -114,6 +157,7 @@ private:
         int64_t channels;
         int64_t experts;
         size_t offset;
+        int scope;  // enum llama_observer_scope the snapshot was collected under
     };
 
     bool reduce_graph_observers(
@@ -126,7 +170,11 @@ private:
     bool load_transfer_ledger(
             const std::string & imatrix_path,
             int32_t checkpoint_chunk);
-    std::unordered_map<std::string, Stats> m_stats;
+    std::unordered_map<stats_key, Stats, stats_key_hash> m_stats;
+    // Scope the collector attributes incoming observers to. The imatrix tool
+    // sets this together with llama_set_imatrix_observer_scope so the two
+    // stay in sync without the collector having to inspect the graph.
+    int m_observer_scope = LLAMA_OBSERVER_SCOPE_VERIFIER;
     common_params                          m_params;
     std::mutex                             m_mutex;
     std::vector<std::string>               m_datasets;
@@ -386,7 +434,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
         m_ids.resize(ggml_nbytes(ids));
         ggml_backend_tensor_get(ids, m_ids.data(), 0, ggml_nbytes(ids));
 
-        auto & e = m_stats[wname];
+        auto & e = m_stats[stats_key{ m_observer_scope, wname }];
 
         if (e.counts.size() == 1 && n_as > 1) {
             // broadcast, when loading an old imatrix
@@ -445,7 +493,7 @@ bool IMatrixCollector::collect_imatrix(struct ggml_tensor * t, bool ask, void * 
             }
         }
     } else {
-        auto & e = m_stats[wname];
+        auto & e = m_stats[stats_key{ m_observer_scope, wname }];
         const int64_t n_mat = src0->ne[2] * src0->ne[3];
 
         // use a single count per dense tensor
@@ -614,6 +662,7 @@ bool IMatrixCollector::collect_graph_observers() {
             channels,
             experts,
             m_observer_offsets[observer_index++],
+            m_observer_scope,
         });
     }
 
@@ -665,7 +714,7 @@ bool IMatrixCollector::reduce_graph_observers(
     // A short, deterministic merge below preserves the on-disk imatrix
     // contract while keeping that critical section proportional to the
     // compact statistics, not their parsing and allocation cost.
-    std::unordered_map<std::string, Stats> delta;
+    std::unordered_map<stats_key, Stats, stats_key_hash> delta;
     std::set<std::string> backends;
     for (const graph_observer_snapshot & snapshot : snapshots) {
         backends.insert(snapshot.backend_name);
@@ -681,7 +730,7 @@ bool IMatrixCollector::reduce_graph_observers(
                 name_end == std::string::npos
                     ? std::string::npos
                     : name_end - name_begin);
-            auto & entry = delta[wname];
+            auto & entry = delta[stats_key{ snapshot.scope, wname }];
             if (entry.values.empty()) {
                 entry.values.resize(channels * experts, 0.0f);
             }
@@ -744,8 +793,8 @@ bool IMatrixCollector::reduce_graph_observers(
                     __func__, backend.c_str());
         }
     }
-    for (auto & [name, source] : delta) {
-        auto & destination = m_stats[name];
+    for (auto & [key, source] : delta) {
+        auto & destination = m_stats[key];
         if (destination.values.empty()) {
             destination = Stats{
                 std::vector<float>(source.values.size(), 0.0f),
@@ -776,7 +825,7 @@ bool IMatrixCollector::reduce_graph_observers(
             LOG_ERR(
                 "%s: observer shape changed against accumulated state for %s: "
                 "stored=[%zu,%zu] incoming=[%zu,%zu]\n",
-                __func__, name.c_str(),
+                __func__, key.name.c_str(),
                 destination.values.size(), destination.counts.size(),
                 source.values.size(), source.counts.size());
             return false;
@@ -824,17 +873,19 @@ bool IMatrixCollector::update_progressive_transfer(
         return false;
     }
     std::lock_guard<std::mutex> lock(m_mutex);
+    // Use the serialized (scope-tagged) name for both the transfer ledger
+    // and the sort order; recover the in-memory bucket key for the lookup.
     std::vector<std::string> names;
     names.reserve(m_stats.size());
     for (const auto & item : m_stats) {
-        names.push_back(item.first);
+        names.push_back(stats_key_name(item.first));
     }
     std::sort(names.begin(), names.end());
 
     float worst_delta = 0.0f;
     size_t active = 0;
     for (const std::string & name : names) {
-        const Stats & stats = m_stats.at(name);
+        const Stats & stats = m_stats.at(parse_stats_key_name(name));
         if (stats.values.empty() || stats.counts.empty() ||
             stats.abs_values.size() != stats.values.size() ||
             stats.fourth_values.size() != stats.values.size()) {
@@ -1036,7 +1087,10 @@ void IMatrixCollector::save_imatrix_legacy(int32_t ncall) const {
     // this can happen with MoE models where some of the experts end up not being exercised by the provided training data
 
     int n_entries = 0;
-    std::vector<std::string> to_store;
+    // Pairs of (serialized on-disk name, in-memory bucket key) so the sort
+    // orders by the written name while the stats lookup uses the (scope, name)
+    // key the collector buckets on.
+    std::vector<std::pair<std::string, stats_key>> to_store;
 
     bool is_first = true; // for printing
     for (const auto & kv : m_stats) {
@@ -1059,16 +1113,16 @@ void IMatrixCollector::save_imatrix_legacy(int32_t ncall) const {
         }
 
         if (n_zeros == n_all) {
-            LOG_WRN("%s: entry '%40s' has no data - skipping\n", __func__, kv.first.c_str());
+            LOG_WRN("%s: entry '%40s' has no data - skipping\n", __func__, kv.first.name.c_str());
             continue;
         }
 
         if (n_zeros > 0) {
-            LOG_WRN("%s: entry '%40s' has partial data (%.2f%%)\n", __func__, kv.first.c_str(), 100.0f * (n_all - n_zeros) / n_all);
+            LOG_WRN("%s: entry '%40s' has partial data (%.2f%%)\n", __func__, kv.first.name.c_str(), 100.0f * (n_all - n_zeros) / n_all);
         }
 
         n_entries++;
-        to_store.push_back(kv.first);
+        to_store.push_back({ stats_key_name(kv.first), kv.first });
     }
 
     if (to_store.size() < m_stats.size()) {
@@ -1076,14 +1130,18 @@ void IMatrixCollector::save_imatrix_legacy(int32_t ncall) const {
     }
 
     // deterministic tensor name order
-    std::sort(to_store.begin(), to_store.end());
+    std::sort(to_store.begin(), to_store.end(),
+        [](const std::pair<std::string, stats_key> & a,
+           const std::pair<std::string, stats_key> & b) {
+            return a.first < b.first;
+        });
 
     const int32_t chunk_size = m_params.n_ctx / m_params.n_parallel;
 
     std::ofstream out(fname, std::ios::binary);
     out.write((const char *) &n_entries, sizeof(n_entries));
-    for (const auto & name : to_store) {
-        const auto & stat = m_stats.at(name);
+    for (const auto & [name, key] : to_store) {
+        const auto & stat = m_stats.at(key);
         const int32_t len = name.size();
         out.write((const char *) &len, sizeof(len));
         out.write(name.c_str(), len);
@@ -1152,7 +1210,7 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
     // write imatrix entries even if they don't have full data. (can be corrected when reading)
     // this can happen with MoE models where some of the experts end up not being exercised by the provided training data
 
-    std::vector<std::string> to_store;
+    std::vector<std::pair<std::string, stats_key>> to_store;
     size_t data_size = 0;
 
     bool is_first = true; // for printing
@@ -1172,10 +1230,10 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
         }
 
         if (n_zeros > 0) {
-            LOG_WRN("%s: entry '%40s' has partial data (%.2f%%)\n", __func__, kv.first.c_str(), 100.0f * (n_all - n_zeros) / n_all);
+            LOG_WRN("%s: entry '%40s' has partial data (%.2f%%)\n", __func__, kv.first.name.c_str(), 100.0f * (n_all - n_zeros) / n_all);
         }
 
-        to_store.push_back(kv.first);
+        to_store.push_back({ stats_key_name(kv.first), kv.first });
         data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * kv.second.values.size(), GGML_MEM_ALIGN);
         if (!kv.second.abs_values.empty()) {
             data_size += GGML_PAD(ggml_tensor_overhead() + sizeof(float) * kv.second.abs_values.size(), GGML_MEM_ALIGN);
@@ -1186,7 +1244,11 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
     }
 
     // deterministic tensor name order
-    std::sort(to_store.begin(), to_store.end());
+    std::sort(to_store.begin(), to_store.end(),
+        [](const std::pair<std::string, stats_key> & a,
+           const std::pair<std::string, stats_key> & b) {
+            return a.first < b.first;
+        });
 
     struct ggml_init_params params = {
         /* .mem_size   = */ data_size,
@@ -1214,8 +1276,8 @@ void IMatrixCollector::save_imatrix(int32_t n_chunk) const {
         gguf_set_val_u32(ctx_gguf, LLM_KV_IMATRIX_CHUNK_SIZE, m_params.n_ctx / m_params.n_parallel);
     }
 
-    for (const auto & name : to_store) {
-        const auto & stat = m_stats.at(name);
+    for (const auto & [name, key] : to_store) {
+        const auto & stat = m_stats.at(key);
         const int32_t nval = (int32_t) stat.values.size();
         const int32_t nmat = (int32_t) stat.counts.size();
         if (nval > 0 && nmat > 0) {
@@ -1383,7 +1445,7 @@ bool IMatrixCollector::load_imatrix(const char * file_name) {
     const bool is_legacy = loaded.is_legacy;
 
     for (auto & [name, entry] : loaded.entries) {
-        auto & e = m_stats[name];
+        auto & e = m_stats[parse_stats_key_name(name)];
 
         if (is_legacy) {
             // Legacy format: sums contain (raw_sum/raw_count)*ncall, counts contain {ncall}
@@ -2611,8 +2673,8 @@ static bool show_statistics(const common_params & params) {
         return false;
     }
     if (g_collector.load_imatrix(params.in_files[0].c_str())) {
-        for (const auto & [name, stats] :g_collector.get_mstats()) {
-            compute_statistics(ts, name, stats);
+        for (const auto & [key, stats] : g_collector.get_mstats()) {
+            compute_statistics(ts, IMatrixCollector::stats_key_name(key), stats);
         }
     } else {
         LOG_ERR("\nError: %s is not a valid imatrix file\n\n", params.in_files[0].c_str());
@@ -2816,6 +2878,13 @@ int main(int argc, char ** argv) {
         LOG_ERR("%s : failed to init\n", __func__);
         return 1;
     }
+    // The verifier context collects into the VERIFIER scope. Both the
+    // context's active scope (drives the graph-build filter dispatch) and the
+    // collector's scope (drives the m_stats bucketing) are set together so
+    // they cannot drift. A drafter context, if any, would bind to the DRAFTER
+    // scope on its own context and a DRAFTER-scoped collector.
+    llama_set_imatrix_observer_scope(ctx, LLAMA_OBSERVER_SCOPE_VERIFIER);
+    g_collector.set_observer_scope(LLAMA_OBSERVER_SCOPE_VERIFIER);
     llama_set_imatrix_observer_filter(
         ctx, IMatrixCollector::observer_filter, &g_collector);
 

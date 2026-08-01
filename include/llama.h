@@ -1038,16 +1038,38 @@ extern "C" {
     // Set abort callback
     LLAMA_API void llama_set_abort_callback(struct llama_context * ctx, ggml_abort_callback abort_callback, void * abort_callback_data);
 
+    // Identifier for the observer state on a llama_context. The verifier and
+    // drafter each have an independent (filter, filter_data, epoch) so that
+    // running both through the same process can collect importance statistics
+    // in separate buckets without name prefixes on the observer tensors.
+    // DFlash drafter graphs dispatch to DRAFTER; everything else uses the
+    // scope that llama_set_imatrix_observer_scope() last selected.
+    enum llama_observer_scope {
+        LLAMA_OBSERVER_SCOPE_VERIFIER = 0,
+        LLAMA_OBSERVER_SCOPE_DRAFTER  = 1,
+    };
+
     // Select graph-resident importance observers dynamically. Returning false
-    // omits the named observer from subsequently built decode graphs.
+    // omits the named observer from subsequently built decode graphs. The
+    // filter applies to the scope most recently set via
+    // llama_set_imatrix_observer_scope; the previous scope's filter is kept.
     typedef bool (*llama_imatrix_observer_filter)(const char * tensor_name, void * user_data);
     LLAMA_API void llama_set_imatrix_observer_filter(
             struct llama_context             * ctx,
             llama_imatrix_observer_filter      filter,
             void                            * user_data);
 
-    // Advance the graph-topology epoch after an observer filter changes its
-    // active tensor set. This preserves graph reuse between transitions.
+    // Switch the active observer scope for this context. Subsequent calls to
+    // llama_set_imatrix_observer_filter and llama_bump_imatrix_observer_epoch
+    // operate on the named scope. imatrix_observers on llama_context_params
+    // remains the context-level master switch, independent of scope.
+    LLAMA_API void llama_set_imatrix_observer_scope(
+            struct llama_context        * ctx,
+            enum llama_observer_scope     scope);
+
+    // Advance the graph-topology epoch for the active scope after its observer
+    // filter changes its active tensor set. This preserves graph reuse between
+    // transitions.
     LLAMA_API void llama_bump_imatrix_observer_epoch(struct llama_context * ctx);
 
     // Wait until all computations are finished

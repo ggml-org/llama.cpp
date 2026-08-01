@@ -137,6 +137,7 @@ struct llama_context {
     void set_imatrix_observer_filter(
             llama_imatrix_observer_filter filter,
             void * user_data);
+    void set_imatrix_observer_scope(enum llama_observer_scope scope);
     void bump_imatrix_observer_epoch();
 
     void set_embeddings (bool value);
