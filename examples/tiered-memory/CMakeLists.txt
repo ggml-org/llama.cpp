@@ -1,0 +1,5 @@
+set(TARGET llama-tiered)
+add_executable(${TARGET} tiered.cpp)
+target_link_libraries(${TARGET} PRIVATE llama)
+target_compile_features(${TARGET} PRIVATE cxx_std_17)
+install(TARGETS ${TARGET} RUNTIME)
