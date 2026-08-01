@@ -7,6 +7,24 @@ import re
 path = Path("ggml/src/ggml-cuda/tiered.cu")
 text = path.read_text(encoding="utf-8")
 
+repairs = {
+    '"tiered-memory: SSD tensor %s is used by unsupported op %s\n",':
+        r'"tiered-memory: SSD tensor %s is used by unsupported op %s\n",',
+    '"tiered-memory: failed to stage DRAM weight %s: %s\n",':
+        r'"tiered-memory: failed to stage DRAM weight %s: %s\n",',
+    '"tiered-memory: failed to stream %s: %s\n",':
+        r'"tiered-memory: failed to stream %s: %s\n",',
+}
+repaired = False
+for broken, fixed in repairs.items():
+    if broken in text:
+        text = text.replace(broken, fixed)
+        repaired = True
+if repaired:
+    path.write_text(text, encoding="utf-8")
+    print(f"repaired escaped newlines in {path}")
+    raise SystemExit(0)
+
 marker = "tiered-memory: stage DRAM MUL_MAT weights through temporary VRAM"
 if marker in text:
     print(f"already patched {path}")
