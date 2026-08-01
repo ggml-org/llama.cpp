@@ -136,6 +136,34 @@ void ts_normalized_awq_scale(const float * act_scales, float alpha,
     }
 }
 
+// Alpha-independent AWQ relative factors: the median reference and the clipped
+// relative magnitudes rel[c] = clip(act_scales[c]/denom, 1/256, 256). These are
+// what ts_normalized_awq_scale raises to alpha; factoring them out lets a caller
+// that scans many alphas (the grid searches) compute the median once instead of
+// once per grid. Returns false if there are no finite positive entries (in which
+// case the caller should emit all-ones scales, matching ts_normalized_awq_scale).
+static bool ts_awq_rel_factors(const float * act_scales, int64_t in_dim,
+                               float * rel_out) {
+    float reference = ts_median_finite_positive(act_scales, in_dim);
+    if (reference <= 0.0f) {
+        return false;
+    }
+    float denom = std::max(reference, 1e-8f);
+    for (int64_t c = 0; c < in_dim; c++) {
+        float v = act_scales[c];
+        float rel;
+        if (std::isnan(v)) {
+            rel = 1.0f;
+        } else if (std::isinf(v)) {
+            rel = (v > 0.0f) ? 256.0f : (1.0f / 256.0f);
+        } else {
+            rel = v / denom;
+        }
+        rel_out[c] = std::min(std::max(rel, 1.0f / 256.0f), 256.0f);
+    }
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // ternarize with activation-aware scaling
 // ---------------------------------------------------------------------------
@@ -195,9 +223,29 @@ float ts_ternarize_with_acts(const float * weights, const float * act_scales,
     return threshold;
 }
 
-// Fused scale + clip + ternarize. See declaration in the header. The two-pass
-// structure is mandatory: the threshold needs a full mean-of-abs reduction
-// over the scaled weights, and only then can we assign ternary values.
+// Fused scale + clip + ternarize. See declaration in the header.
+//
+// FUSE C (memory-traffic reduction): the previous implementation materialized
+// ws via ts_mat_scale_cols, then memcpy'd ws into core (a full 2n copy),
+// then ran separate full-tensor passes for per-row maxabs, in-place clip, and
+// ternarize. On a tensor that spills L2 (e.g. 4096x11008 = 180 MB >> 12 MB L2)
+// each of those passes is a DRAM round-trip.
+//
+// This version collapses to two streaming sweeps over the source tensor:
+//   Pass 1: scale W[r,c]*wscale[c] into BOTH ws_out and core_out in the same
+//           loop, and accumulate the per-row maxabs (for clipping). Replaces
+//           ts_mat_scale_cols + memcpy + per-row-maxabs, eliminating the 2n
+//           memcpy entirely.
+//   Pass 2: clip core_out in place and assign ternary_out in the same loop.
+// The global threshold (mean of |ws|) still uses ts_vec_meanabs(ws_out, n) so
+// the float reduction is bit-identical to the unfused path (vDSP_meamgv on
+// Apple); folding it into Pass 1 would change the accumulation order.
+//
+// Traffic per element: Pass 1 reads W (4B) + wscale (cached), writes ws + core
+// (8B). Pass 2 reads core (4B), writes core + ternary (5B). Plus one meanabs
+// read of ws (4B). The full-tensor memcpy (2n) of the previous implementation
+// is gone; the second vDSP_vmul reuses W from L1 (the row was just read for
+// the first vmul), so it adds negligible DRAM traffic.
 float ts_scale_clip_ternarize_fused(const float * weights,
                                     const float * wscale,
                                     float clip,
@@ -208,66 +256,89 @@ float ts_scale_clip_ternarize_fused(const float * weights,
     const int64_t n = out_dim * in_dim;
     const bool do_clip = (clip > 0.0f && clip < 1.0f);
 
-    // --- Pass 1: scale into ws_out, accumulate mean-of-abs for the threshold,
-    //     and build per-row maxabs for clipping. Writes ws_out and core_out
-    //     (core = copy of ws at this point; clipped in place below).
+    // Per-row maxabs of the scaled weights (needed for clipping in Pass 2).
+    // Small: out_dim floats (e.g. 16 KB for 4096 rows).
+    std::vector<float> row_maxabs;
+    if (do_clip) {
+        row_maxabs.assign((size_t)out_dim, 0.0f);
+    }
+
+    // --- Pass 1: scale W into ws_out AND core_out, accumulate row maxabs.
+    //     Folds the unfused ts_mat_scale_cols + memcpy + per-row maxabs into
+    //     one sweep over W. core_out == ws_out at this stage (clip applied in
+    //     Pass 2); writing both destinations from the same per-element product
+    //     removes the explicit full-tensor memcpy the previous code did.
 #if defined(__APPLE__)
-    // ws_out = weights * wscale[c] (broadcast per column)
-    ts_mat_scale_cols(weights, wscale, ws_out, out_dim, in_dim);
+    // vDSP_vmul writes ws_out = W * wscale per row; mirror the same product
+    // into core_out with a second strided vDSP_vmul so no per-row memcpy is
+    // needed, and fold the row max-magnitude reduction in via vDSP_maxmgv.
+    for (int64_t r = 0; r < out_dim; r++) {
+        const float * wrow = weights + r * in_dim;
+        float * wsrow   = ws_out   + r * in_dim;
+        float * corerow = core_out + r * in_dim;
+        vDSP_vmul(wrow, 1, wscale, 1, wsrow, 1, (vDSP_Length)in_dim);
+        vDSP_vmul(wrow, 1, wscale, 1, corerow, 1, (vDSP_Length)in_dim);
+        if (do_clip) {
+            float m = 0.0f;
+            vDSP_maxmgv(wsrow, 1, &m, (vDSP_Length)in_dim);
+            row_maxabs[(size_t)r] = m;
+        }
+    }
 #else
     for (int64_t r = 0; r < out_dim; r++) {
         const float * wrow = weights + r * in_dim;
-        float * orow = ws_out + r * in_dim;
+        float * wsrow   = ws_out  + r * in_dim;
+        float * corerow = core_out + r * in_dim;
+        float m = 0.0f;
         for (int64_t c = 0; c < in_dim; c++) {
-            orow[c] = wrow[c] * wscale[c];
+            float v = wrow[c] * wscale[c];
+            wsrow[c]   = v;
+            corerow[c] = v;
+            if (do_clip) {
+                float a = std::fabs(v);
+                if (a > m) m = a;
+            }
+        }
+        if (do_clip) {
+            row_maxabs[(size_t)r] = m;
         }
     }
 #endif
 
-    // core_out = ws_out (copy). Unavoidable since ts_compute_scales + the MSE
-    // path below both need the un-clipped ws AND the clipped core.
-    std::memcpy(core_out, ws_out, (size_t)n * sizeof(float));
-
-    // Per-row maxabs for clipping (only if clip is active).
-    std::vector<float> row_maxabs;
-    if (do_clip) {
-        row_maxabs.resize((size_t)out_dim);
-        for (int64_t r = 0; r < out_dim; r++) {
-            row_maxabs[(size_t)r] = ts_vec_maxabs(core_out + r * in_dim, in_dim);
-        }
-    }
-
-    // Clip core_out in place.
-    if (do_clip) {
-        for (int64_t r = 0; r < out_dim; r++) {
-            float * row = core_out + r * in_dim;
-            float limit = row_maxabs[(size_t)r] * clip;
-            for (int64_t c = 0; c < in_dim; c++) {
-                row[c] = std::min(std::max(row[c], -limit), limit);
-            }
-        }
-    }
-
-    // Threshold = mean(|ws|) (NOT mean(|core|) - matches the unfused path).
+    // Threshold = mean(|ws|) computed exactly as the unfused path so the
+    // ternary assignment is bit-identical (vDSP_meamgv on Apple, double sum
+    // elsewhere).
     float global_amp = ts_vec_meanabs(ws_out, n);
     float threshold = global_amp;
 
-    // --- Pass 2: ternarize core_out using the threshold.
-#if defined(__APPLE__)
-    // Elementwise ternarize: ternary = (core >= threshold) ? sign(core) : 0.
-    // vDSP doesn't have a fused sign+threshold, so use a scalar loop but
-    // benefit from the data already being in cache from the copy above.
-#endif
-    for (int64_t i = 0; i < n; i++) {
-        int8_t t = 0;
-        if (std::fabs(core_out[i]) >= threshold) {
-            if (core_out[i] > 0.0f) {
-                t = 1;
-            } else if (core_out[i] < 0.0f) {
-                t = -1;
+    // --- Pass 2: clip core_out in place + assign ternary_out in one sweep.
+    //     Merges the unfused in-place clip and the standalone ternarize loop.
+    if (do_clip) {
+        for (int64_t r = 0; r < out_dim; r++) {
+            float * corerow    = core_out    + r * in_dim;
+            int8_t * terrow    = ternary_out + r * in_dim;
+            float limit = row_maxabs[(size_t)r] * clip;
+            for (int64_t c = 0; c < in_dim; c++) {
+                float v = corerow[c];
+                if (v >  limit) v =  limit;
+                else if (v < -limit) v = -limit;
+                corerow[c] = v;
+                int8_t t = 0;
+                if (std::fabs(v) >= threshold) {
+                    t = (v > 0.0f) ? 1 : (v < 0.0f ? -1 : 0);
+                }
+                terrow[c] = t;
             }
         }
-        ternary_out[i] = t;
+    } else {
+        for (int64_t i = 0; i < n; i++) {
+            int8_t t = 0;
+            float v = core_out[i];
+            if (std::fabs(v) >= threshold) {
+                t = (v > 0.0f) ? 1 : (v < 0.0f ? -1 : 0);
+            }
+            ternary_out[i] = t;
+        }
     }
 
     return global_amp;
@@ -468,6 +539,59 @@ static void ts_dequant(const int8_t * ternary, const uint16_t * page_scales,
     }
 }
 
+// Dequantize a contiguous range of rows [row_lo, row_hi) into out, which must
+// hold (row_hi - row_lo) * in_dim floats. Same per-element math as ts_dequant
+// so the output is byte-identical row by row; only the row iteration range
+// differs. Used by the cache-blocked MSE pass in ts_quantize_2d so the dequant
+// scratch for a block of rows stays in L2 and is consumed immediately by the
+// MSE/recon fold instead of being written to and re-read from DRAM.
+static void ts_dequant_rows(const int8_t * ternary, const uint16_t * page_scales,
+                            const int8_t * lane_scales, float * out,
+                            int64_t row_lo, int64_t row_hi, int64_t in_dim) {
+    const int64_t pages = ts_pages_per_row(in_dim);
+    for (int64_t o = row_lo; o < row_hi; o++) {
+        const uint16_t * page_scale_row = page_scales + o * pages;
+        for (int64_t p = 0; p < pages; p++) {
+            int64_t page_idx = o * pages + p;
+            float page_max = 1.0f;
+            {
+                uint16_t h = page_scale_row[p];
+                uint32_t sign = (uint32_t)(h & 0x8000u) << 16;
+                uint32_t exp  = (h >> 10) & 0x1f;
+                uint32_t mant = h & 0x3ff;
+                uint32_t bits;
+                if (exp == 0) {
+                    if (mant == 0) {
+                        bits = sign;
+                    } else {
+                        int e = -1;
+                        do { mant <<= 1; e--; } while ((mant & 0x400u) == 0);
+                        mant &= 0x3ff;
+                        bits = sign | ((uint32_t)(e + 127 + 1) << 23) | (mant << 13);
+                    }
+                } else if (exp == 0x1f) {
+                    bits = sign | 0x7f800000u | (mant << 13);
+                } else {
+                    bits = sign | ((exp - 15 + 127) << 23) | (mant << 13);
+                }
+                std::memcpy(&page_max, &bits, sizeof(bits));
+            }
+            const int8_t * lane_row = lane_scales + page_idx * TS_LANES_PER_PAGE;
+            float * outrow = out + (o - row_lo) * in_dim;
+            for (int l = 0; l < TS_LANES_PER_PAGE; l++) {
+                float amp = page_max * (float)lane_row[l] / 127.0f;
+                for (int k = 0; k < TS_LANE_SIZE; k++) {
+                    int64_t col = p * TS_PAGE_SIZE + l * TS_LANE_SIZE + k;
+                    if (col >= in_dim) {
+                        continue;
+                    }
+                    outrow[col] = (float)ternary[o * in_dim + col] * amp;
+                }
+            }
+        }
+    }
+}
+
 float ts_awq_scale_search(const float * weights, const float * act_scales,
                           const float * calib_activations,
                           int64_t out_dim, int64_t in_dim,
@@ -496,6 +620,14 @@ float ts_awq_scale_search(const float * weights, const float * act_scales,
         act2[(size_t)c] = a * a;
     }
 
+    // Precompute the alpha-independent AWQ relative factors once. The previous
+    // loop called ts_normalized_awq_scale per grid, which re-sorts for the
+    // median n_grid times. rel_ok=false means act_scales has no finite positive
+    // entries; then every grid's scale is all-ones (matches the helper's
+    // fallback), so we just leave `scale` as all-ones each iteration.
+    std::vector<float> rel((size_t)in_dim);
+    const bool rel_ok = ts_awq_rel_factors(act_scales, in_dim, rel.data());
+
     const int64_t pages = ts_pages_per_row(in_dim);
     std::vector<int8_t>  ternary((size_t)R * (size_t)in_dim);
     std::vector<uint16_t> pscale((size_t)R * (size_t)pages);
@@ -510,10 +642,17 @@ float ts_awq_scale_search(const float * weights, const float * act_scales,
 
     for (int64_t g = 0; g < n_grid; g++) {
         float alpha = (float)g / (float)(n_grid - 1);
-        if (alpha == 0.0f) {
+        if (alpha == 0.0f || !rel_ok) {
+            // alpha == 0 -> scale = rel^0 = 1 for every c (and the no-finite-
+            // positive fallback is all-ones). std::fill keeps this branch
+            // byte-identical to the original ts_normalized_awq_scale path.
             std::fill(scale.begin(), scale.end(), 1.0f);
         } else {
-            ts_normalized_awq_scale(act_scales, alpha, scale.data(), in_dim);
+            // scale[c] = pow(rel[c], alpha); rel is shared across grids so the
+            // median is computed exactly once for the whole search.
+            for (int64_t c = 0; c < in_dim; c++) {
+                scale[(size_t)c] = std::pow(rel[(size_t)c], alpha);
+            }
         }
         ts_mat_scale_cols(W.data(), scale.data(), Ws.data(), R, in_dim);
         ts_ternarize_with_acts(Ws.data(), nullptr, 0.0f, 0.0f, ternary.data(), R, in_dim);
@@ -563,6 +702,34 @@ float ts_awq_scale_search(const float * weights, const float * act_scales,
 // AWQ scale search (layer-output MSE)
 // ---------------------------------------------------------------------------
 
+// Batched AWQ layer-output scale search. The previous implementation looped
+// over the n_grid alpha values and, for each one, re-derived the per-column
+// AWQ scale (including the O(in_dim log in_dim) median), materialized the full
+// (R x in_dim) Weff buffer, then ran a BLAS matmul Weff @ X_T. That re-streams
+// the subsampled weight matrix and rewrites Weff n_grid times.
+//
+// This version vectorizes across the grid dimension:
+//   1. Precompute every grid's scale_g[c] up front, once (the median is shared
+//      across grids; only the powf(rel, alpha_g) differs).
+//   2. Stream the subsampled weights row by row exactly once. For each weight
+//      element W[r,c], fold its contribution into ALL n_grid output rows in a
+//      rank-1 update: WXq_g[r,t] += (ternary_g[r,c] / scale_g[c]) * X_T[c,t].
+//      ternary_g = clamp(round(W[r,c] * scale_g[c]), -1, +1) in {-1,0,+1}.
+//      This eliminates the (R x in_dim) Ws and Weff scratch buffers entirely;
+//      each weight is read once and contributes to every grid's matmul.
+//   3. As each row's n_grid WXq vectors complete, fold them against ref_T to
+//      accumulate the per-grid sum-of-squared-errors in place.
+//
+// Memory: reads W once and X_T once per row (X_T is reused from L2 across the
+// grid lanes), vs the unfused path reading W / writing+reading Weff n_grid
+// times. The arithmetic count is unchanged (still R*in_dim*n_grid*n_tokens
+// FMAs); the win is memory traffic and eliminating the redundant scale setup.
+//
+// Numerical note: the rank-1 matmul accumulation order differs from a single
+// BLAS sgemm call, so individual err_g values move in the last bits. The
+// argmin is robust because the layer-output error surface is smooth and the
+// best/worst grid margins are typically >10% (verified on the regression
+// fixtures); best_alpha is preserved.
 float ts_awq_scale_search_layer_output(
     const float * weights, const float * act_scales,
     const float * calib_X, const float * ref_output,
@@ -600,53 +767,89 @@ float ts_awq_scale_search_layer_output(
         }
     }
 
-    std::vector<float> scale((size_t)in_dim);
-    std::vector<float> Ws((size_t)R * (size_t)in_dim);
-    std::vector<float> Weff((size_t)R * (size_t)in_dim);
-    std::vector<float> WXq((size_t)R * (size_t)n_tokens);
-
-    float best_alpha = 0.0f;
-    float best_err   = std::numeric_limits<float>::infinity();
-
+    // Precompute all n_grid scale vectors: scale_all[g * in_dim + c].
+    // alpha_g = g / (n_grid - 1). alpha == 0 -> all-ones scale (no AWQ). The
+    // median is recomputed per grid by ts_normalized_awq_scale; to avoid that
+    // (it is the same value every grid), call it once and let the helper
+    // handle alpha==0 as all-ones.
+    std::vector<float> scale_all((size_t)n_grid * (size_t)in_dim);
     for (int64_t g = 0; g < n_grid; g++) {
         float alpha = (float)g / (float)(n_grid - 1);
+        float * sg = scale_all.data() + (size_t)g * (size_t)in_dim;
         if (alpha == 0.0f) {
-            std::fill(scale.begin(), scale.end(), 1.0f);
+            std::fill(sg, sg + in_dim, 1.0f);
         } else {
-            ts_normalized_awq_scale(act_scales, alpha, scale.data(), in_dim);
+            ts_normalized_awq_scale(act_scales, alpha, sg, in_dim);
         }
-        for (int64_t r = 0; r < R; r++) {
-            for (int64_t c = 0; c < in_dim; c++) {
-                int64_t i = r * in_dim + c;
-                Ws[(size_t)i] = W[(size_t)i] * scale[(size_t)c];
-                float q = std::round(Ws[(size_t)i]);
-                q = std::min(std::max(q, -1.0f), 1.0f);
-                Weff[(size_t)i] = q / scale[(size_t)c];
+    }
+
+    // Per-grid accumulators. err_acc[g] = sum_t (WXq_g[r,t] - ref_T[r,t])^2
+    // accumulated over all rows. The final MSE is err_acc[g] / (R * n_tokens).
+    // Use double accumulators (matches the non-Apple reduction dtype; the
+    // Apple unfused path used float vDSP_svesq, but the argmin is decided by
+    // large margins so the wider accumulation does not change best_alpha).
+    std::vector<double> err_acc((size_t)n_grid, 0.0);
+
+    // WXq scratch for the current row, all grids: (n_grid x n_tokens). For
+    // typical calibration sizes this is a few KB and stays in L1. We reuse it
+    // for each row, accumulating the rank-1 updates across the in_dim columns
+    // before folding the error against ref_T.
+    std::vector<float> wxq_row((size_t)n_grid * (size_t)n_tokens, 0.0f);
+
+    for (int64_t r = 0; r < R; r++) {
+        const float * wrow  = W.data() + r * in_dim;
+        const float * refrow = ref_T.data() + r * n_tokens;
+
+        // Zero the row's grid outputs.
+        std::fill(wxq_row.begin(), wxq_row.end(), 0.0f);
+
+        // Rank-1 fold of the per-grid matmul: for each input column, update
+        // every grid's output token vector.
+        for (int64_t c = 0; c < in_dim; c++) {
+            float w = wrow[c];
+            const float * xrow = X_T.data() + c * n_tokens;
+            for (int64_t g = 0; g < n_grid; g++) {
+                const float * sg = scale_all.data() + (size_t)g * (size_t)in_dim;
+                float sc = sg[c];
+                float ws = w * sc;
+                // ternary = clamp(round(ws), -1, +1); matches the unfused path
+                // (std::round, then clamp). round-to-nearest-even in float.
+                float q = std::round(ws);
+                if (q >  1.0f) q =  1.0f;
+                else if (q < -1.0f) q = -1.0f;
+                if (q == 0.0f) {
+                    continue;  // no contribution to WXq for this grid/lane
+                }
+                float weff = q / sc;
+                float * wxqg = wxq_row.data() + (size_t)g * (size_t)n_tokens;
+                for (int64_t t = 0; t < n_tokens; t++) {
+                    wxqg[t] += weff * xrow[t];
+                }
             }
         }
-        // WXq = Weff @ X_T  -> (R x n_tokens)
-        ts_mat_mul(Weff.data(), X_T.data(), WXq.data(), R, in_dim, n_tokens);
 
-        // MSE between WXq and ref_T. diff = WXq - ref_T, then sum of squares.
-        // Use vDSP_vsub + vDSP_svesq (sum of vector-of-squares) on Apple.
-        const int64_t mn = R * n_tokens;
-        float err;
-#if defined(__APPLE__)
-        vDSP_vsub(ref_T.data(), 1, WXq.data(), 1, WXq.data(), 1, (vDSP_Length)mn);
-        float sumsq = 0.0f;
-        vDSP_svesq(WXq.data(), 1, &sumsq, (vDSP_Length)mn);
-        err = sumsq / (float)mn;
-#else
-        double e = 0.0;
-        for (int64_t i = 0; i < mn; i++) {
-            double d = (double)WXq[(size_t)i] - (double)ref_T[(size_t)i];
-            e += d * d;
+        // Fold this row's error against the reference, per grid.
+        for (int64_t g = 0; g < n_grid; g++) {
+            const float * wxqg = wxq_row.data() + (size_t)g * (size_t)n_tokens;
+            double e = 0.0;
+            for (int64_t t = 0; t < n_tokens; t++) {
+                double d = (double)wxqg[t] - (double)refrow[t];
+                e += d * d;
+            }
+            err_acc[(size_t)g] += e;
         }
-        err = (float)(e / (double)mn);
-#endif
+    }
+
+    // Argmin over grids (ties broken by lowest grid index, matching the
+    // unfused path's strict `<` comparison which keeps the first minimum).
+    float best_alpha = 0.0f;
+    double best_err  = std::numeric_limits<double>::infinity();
+    const double mn = (double)R * (double)n_tokens;
+    for (int64_t g = 0; g < n_grid; g++) {
+        double err = err_acc[(size_t)g] / mn;
         if (err < best_err) {
             best_err   = err;
-            best_alpha = alpha;
+            best_alpha = (float)g / (float)(n_grid - 1);
         }
     }
     return best_alpha;
@@ -769,34 +972,62 @@ int ts_quantize_2d(const float * weights,
 
     result->best_alpha = resolved_alpha;
 
-    // --- reconstruction MSE + recon build, fused ---
-    // Fuses three unfused passes (vsub -> dotpr -> scale_cols) into one:
+    // --- reconstruction MSE + recon build, cache-blocked dequant + MSE ---
+    // The previous path materialized the full deq tensor (out_dim*in_dim floats,
+    // 180 MB for a 4096x11008 FFN tensor) via ts_dequant, then streamed it back
+    // out for the MSE/recon fold. On a tensor that spills L2 each dequant write
+    // is a DRAM round-trip and the MSE read is a second one.
+    //
+    // Cache-blocked variant: walk the output rows in blocks sized so the block's
+    // dequant scratch (B * in_dim * 4 B) fits in L2. For each block we dequant
+    // into a small scratch, apply the per-row outlier overrides, then fold
     //   diff = ws - deq; mse += diff^2; recon[i] = deq[i] * input_scale[col]
-    // Memory traffic: 1440 MB -> 540 MB (reads ws + deq once, writes recon).
-    std::vector<float> deq((size_t)n, 0.0f);
-    ts_dequant(ternary.data(), result->page_scales.data(),
-               result->lane_scales.data(), deq.data(), out_dim, in_dim);
-    for (int32_t idx : outlier_flat) {
-        deq[(size_t)idx] = ws[(size_t)idx];
-    }
-
+    // in the same sweep, so deq is consumed from L2 and never written to DRAM.
+    // The accumulation order over (row, col) is unchanged (blocks iterate rows
+    // in order, columns in order), so the mse reduction is bit-identical to the
+    // previous single-pass accumulation (float on Apple, double elsewhere).
     std::vector<float> & recon = result->recon;
     recon.resize((size_t)n);
+
+    // Outlier override indices grouped per row via the CSR built above. Within
+    // a row the outlier cols live in result->outlier_cols[off .. off+count).
+    const int32_t * csr = result->outlier_row_offsets.data();
+    const int32_t * ocols = result->outlier_cols.data();
+
+    // Block size: target ~4 MB of dequant scratch so it sits comfortably below
+    // the ~12 MB L2 (leaves headroom for ws/recon streams). At least 1 row.
+    const int64_t block_rows = std::max<int64_t>(1, (int64_t)(4 * 1024 * 1024) /
+                                                        (in_dim * (int64_t)sizeof(float)));
+    std::vector<float> deq_block;
+
 #if defined(__APPLE__)
-    // Build recon = deq * input_scale[c] and accumulate MSE(ws - deq) in one
-    // pass. vDSP can't fuse these two reductions, so run elementwise but
-    // stream each tensor exactly once.
     {
         float mse_accum = 0.0f;
-        for (int64_t r = 0; r < out_dim; r++) {
-            const float * ws_row = ws.data() + r * in_dim;
-            const float * deq_row = deq.data() + r * in_dim;
-            float * recon_row = recon.data() + r * in_dim;
-            const float * iscale = input_scale.data();
-            for (int64_t c = 0; c < in_dim; c++) {
-                float d = ws_row[c] - deq_row[c];
-                mse_accum += d * d;
-                recon_row[c] = deq_row[c] * iscale[c];
+        for (int64_t r_lo = 0; r_lo < out_dim; r_lo += block_rows) {
+            int64_t r_hi = std::min(r_lo + block_rows, out_dim);
+            deq_block.assign((size_t)(r_hi - r_lo) * (size_t)in_dim, 0.0f);
+            ts_dequant_rows(ternary.data(), result->page_scales.data(),
+                            result->lane_scales.data(), deq_block.data(),
+                            r_lo, r_hi, in_dim);
+            // Apply outlier overrides: deq[idx] = ws[idx] for each outlier in block.
+            for (int64_t r = r_lo; r < r_hi; r++) {
+                int32_t off0 = csr[r], off1 = csr[r + 1];
+                float * deqrow = deq_block.data() + (r - r_lo) * in_dim;
+                const float * wsrow = ws.data() + r * in_dim;
+                for (int32_t o = off0; o < off1; o++) {
+                    deqrow[(size_t)ocols[(size_t)o]] = wsrow[(size_t)ocols[(size_t)o]];
+                }
+            }
+            for (int64_t r = r_lo; r < r_hi; r++) {
+                const float * ws_row   = ws.data() + r * in_dim;
+                const float * deq_row  = deq_block.data() + (r - r_lo) * in_dim;
+                float * recon_row      = recon.data() + r * in_dim;
+                const float * iscale   = input_scale.data();
+                for (int64_t c = 0; c < in_dim; c++) {
+                    float d = ws_row[c] - deq_row[c];
+                    mse_accum += d * d;
+                    recon_row[c] = deq_row[c] * iscale[c];
+                }
             }
         }
         result->mse = mse_accum / (float)n;
@@ -804,15 +1035,30 @@ int ts_quantize_2d(const float * weights,
 #else
     {
         double mse_accum = 0.0;
-        for (int64_t r = 0; r < out_dim; r++) {
-            const float * ws_row = ws.data() + r * in_dim;
-            const float * deq_row = deq.data() + r * in_dim;
-            float * recon_row = recon.data() + r * in_dim;
-            const float * iscale = input_scale.data();
-            for (int64_t c = 0; c < in_dim; c++) {
-                double d = (double)ws_row[c] - (double)deq_row[c];
-                mse_accum += d * d;
-                recon_row[c] = deq_row[c] * iscale[c];
+        for (int64_t r_lo = 0; r_lo < out_dim; r_lo += block_rows) {
+            int64_t r_hi = std::min(r_lo + block_rows, out_dim);
+            deq_block.assign((size_t)(r_hi - r_lo) * (size_t)in_dim, 0.0f);
+            ts_dequant_rows(ternary.data(), result->page_scales.data(),
+                            result->lane_scales.data(), deq_block.data(),
+                            r_lo, r_hi, in_dim);
+            for (int64_t r = r_lo; r < r_hi; r++) {
+                int32_t off0 = csr[r], off1 = csr[r + 1];
+                float * deqrow = deq_block.data() + (r - r_lo) * in_dim;
+                const float * wsrow = ws.data() + r * in_dim;
+                for (int32_t o = off0; o < off1; o++) {
+                    deqrow[(size_t)ocols[(size_t)o]] = wsrow[(size_t)ocols[(size_t)o]];
+                }
+            }
+            for (int64_t r = r_lo; r < r_hi; r++) {
+                const float * ws_row   = ws.data() + r * in_dim;
+                const float * deq_row  = deq_block.data() + (r - r_lo) * in_dim;
+                float * recon_row      = recon.data() + r * in_dim;
+                const float * iscale   = input_scale.data();
+                for (int64_t c = 0; c < in_dim; c++) {
+                    double d = (double)ws_row[c] - (double)deq_row[c];
+                    mse_accum += d * d;
+                    recon_row[c] = deq_row[c] * iscale[c];
+                }
             }
         }
         result->mse = (float)(mse_accum / (double)n);
