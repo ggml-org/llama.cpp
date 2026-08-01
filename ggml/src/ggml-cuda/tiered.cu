@@ -132,11 +132,23 @@ static size_t align_up_size(size_t value, size_t alignment) {
     return (value + alignment - 1) & ~(alignment - 1);
 }
 
+static const ggml_tensor * tiered_view_base(const ggml_tensor * tensor, size_t * offset) {
+    *offset = 0;
+    while (tensor && tensor->view_src) {
+        *offset += tensor->view_offs;
+        tensor = tensor->view_src;
+    }
+    return tensor;
+}
+
 static tiered_buffer_context * buffer_context(const ggml_tensor * tensor) {
     if (!tensor) {
         return nullptr;
     }
-    ggml_backend_buffer_t buffer = tensor->view_src ? tensor->view_src->buffer : tensor->buffer;
+    size_t view_offset = 0;
+    tensor = tiered_view_base(tensor, &view_offset);
+    GGML_UNUSED(view_offset);
+    ggml_backend_buffer_t buffer = tensor ? tensor->buffer : nullptr;
     if (!buffer || !buffer->context) {
         return nullptr;
     }
@@ -152,17 +164,11 @@ static tensor_state * state_for(const ggml_tensor * tensor) {
     if (!ctx) {
         return nullptr;
     }
-    auto found = ctx->tensors.find(tensor);
-    if (found != ctx->tensors.end()) {
-        return found->second.get();
-    }
-    if (tensor->view_src) {
-        found = ctx->tensors.find(tensor->view_src);
-        if (found != ctx->tensors.end()) {
-            return found->second.get();
-        }
-    }
-    return nullptr;
+    size_t view_offset = 0;
+    const ggml_tensor * base = tiered_view_base(tensor, &view_offset);
+    GGML_UNUSED(view_offset);
+    const auto found = ctx->tensors.find(base);
+    return found != ctx->tensors.end() ? found->second.get() : nullptr;
 }
 
 static void set_device(int device) {
@@ -440,9 +446,11 @@ static void * tiered_buffer_base(ggml_backend_buffer_t buffer) {
 
 static ggml_status tiered_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
     auto * ctx = static_cast<tiered_buffer_context *>(buffer->context);
-    if (ctx->tensors.find(tensor) == ctx->tensors.end()) {
-        ctx->tensors.emplace(tensor, std::make_unique<tensor_state>());
+    if (std::find(ctx->all_tensors.begin(), ctx->all_tensors.end(), tensor) == ctx->all_tensors.end()) {
         ctx->all_tensors.push_back(tensor);
+    }
+    if (!tensor->view_src && ctx->tensors.find(tensor) == ctx->tensors.end()) {
+        ctx->tensors.emplace(tensor, std::make_unique<tensor_state>());
     }
     return GGML_STATUS_SUCCESS;
 }
@@ -477,6 +485,25 @@ static void tiered_buffer_set_tensor(
 
     if (offset != 0 || size != ggml_nbytes(tensor)) {
         throw std::runtime_error(std::string("tiered weights require full-tensor initialization: ") + tensor->name);
+    }
+
+    if (tensor->view_src) {
+        tiered_refresh_views(ctx);
+        size_t view_offset = 0;
+        tiered_view_base(tensor, &view_offset);
+        tensor_state * state = state_for(tensor);
+        if (!state || !state->host_ptr || !tensor->data) {
+            throw std::runtime_error(std::string("tiered view initialized before its base tensor: ") + tensor->name);
+        }
+        if (state->tier == GGML_CUDA_TIERED_MEMORY_VRAM) {
+            TIERED_CUDA_CHECK(cudaMemcpy(tensor->data, data, size, cudaMemcpyHostToDevice));
+        } else {
+            const void * expected = static_cast<const char *>(state->host_ptr) + view_offset;
+            if (data != expected && std::memcmp(data, expected, size) != 0) {
+                throw std::runtime_error(std::string("host-tier view data differs from its base tensor: ") + tensor->name);
+            }
+        }
+        return;
     }
 
     auto & state_ptr = ctx->tensors[tensor];
@@ -558,21 +585,22 @@ static void tiered_buffer_get_tensor(
         size_t offset,
         size_t size) {
     auto * ctx = static_cast<tiered_buffer_context *>(buffer->context);
-    auto found = ctx->tensors.find(tensor);
-    if (found == ctx->tensors.end()) {
+    tensor_state * state = state_for(tensor);
+    if (!state) {
         throw std::runtime_error("tiered tensor state not found");
     }
-    tensor_state * state = found->second.get();
-    if (offset + size > state->size) {
+    if (offset + size > ggml_nbytes(tensor)) {
         throw std::runtime_error("tiered tensor read is out of bounds");
     }
     if (state->tier == GGML_CUDA_TIERED_MEMORY_VRAM) {
         set_device(ctx->device);
         TIERED_CUDA_CHECK(cudaMemcpy(
-                data, static_cast<const char *>(state->device_ptr) + offset,
+                data, static_cast<const char *>(tensor->data) + offset,
                 size, cudaMemcpyDeviceToHost));
     } else {
-        std::memcpy(data, static_cast<const char *>(state->host_ptr) + offset, size);
+        size_t view_offset = 0;
+        tiered_view_base(tensor, &view_offset);
+        std::memcpy(data, static_cast<const char *>(state->host_ptr) + view_offset + offset, size);
     }
 }
 
@@ -583,15 +611,14 @@ static void tiered_buffer_memset_tensor(
         size_t offset,
         size_t size) {
     auto * ctx = static_cast<tiered_buffer_context *>(buffer->context);
-    auto found = ctx->tensors.find(tensor);
-    if (found == ctx->tensors.end()) {
+    tensor_state * state = state_for(tensor);
+    if (!state) {
         return;
     }
-    tensor_state * state = found->second.get();
     if (state->tier == GGML_CUDA_TIERED_MEMORY_VRAM) {
         set_device(ctx->device);
         TIERED_CUDA_CHECK(cudaMemset(
-                static_cast<char *>(state->device_ptr) + offset, value, size));
+                static_cast<char *>(tensor->data) + offset, value, size));
     } else if (state->host_ptr) {
         throw std::runtime_error("attempted to mutate a read-only tiered weight tensor");
     }
