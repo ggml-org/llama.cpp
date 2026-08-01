@@ -20,8 +20,11 @@ static ggml_backend_meta_split_state split_state_callback(const ggml_tensor * te
     state.nr[0] = 1;
     state.n_segments = 1;
 
-    if (std::strcmp(tensor->name, "root") == 0 || std::strcmp(tensor->name, "axis3") == 0) {
-        const int axis = std::strcmp(tensor->name, "axis3") == 0 ? 3 : 2;
+    if (std::strcmp(tensor->name, "root") == 0 ||
+            std::strcmp(tensor->name, "axis3") == 0 ||
+            std::strcmp(tensor->name, "axis3-permuted") == 0) {
+        const int axis = (std::strcmp(tensor->name, "axis3") == 0 ||
+                std::strcmp(tensor->name, "axis3-permuted") == 0) ? 3 : 2;
         if (ud->ndev == 0 || tensor->ne[axis] % (int64_t) ud->ndev != 0) {
             std::fprintf(stderr, "invalid test split: axis=%d ne=%lld ndev=%zu\n", axis, (long long) tensor->ne[axis], ud->ndev);
             std::abort();
