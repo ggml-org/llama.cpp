@@ -311,10 +311,10 @@ the L5 apply loop.
   all called from their real matmul paths. Fitness reader in
   `tessera-l1-fitness.{h,cpp}`. This is the runtime ground truth.
 - **Layer 1.5: W4A4 FP16 reference sidecar — PARTIAL.** Writer and
-  reader shipped, but the writer suffix (`.act.dequant.f32`) and the
-  reader suffix (`.tdqt`) disagree, so the path is not exercisable
-  end-to-end. Also the backend hooks currently emit the same F32 buffer
-  as L1 rather than an FP16 ground truth.
+  reader shipped and the suffix mismatch is fixed (both sides now use
+  `.act.dequant.f32`), so the path is exercisable end-to-end. Remaining:
+  the backend hooks currently emit the same F32 buffer as L1 rather than
+  an FP16 ground truth.
 - **Layer 2: BF16 vs quantized differential — SHIPPED (weight-level).**
   Per-tensor weight-level divergence and type-aware flagging in
   `tessera-l2-diff.{h,cpp}`. The two-forward-pass differential and
@@ -326,11 +326,16 @@ the L5 apply loop.
 - **Layer 4: end-to-end probe — PARTIAL.** A data-free PPL/KL
   substitute exists in `tessera-ppl.{h,cpp}`. The prompt-bank probe,
   exact-match, and rank-correlation metrics are not yet built.
-- **Layer 5: adaptive requantization — SHIPPED (library + tests).**
+- **Layer 5: adaptive requantization — SHIPPED (on the dispatch path).**
   Sensitivity scorers and L2-closing adaptive requant in
-  `tessera-l5.{h,cpp}`. Not yet on the `tessera-dispatch.cpp` path, and
-  the apply-and-iterate loop (apply plan -> re-quantize -> re-probe) is
-  not wired.
+  `tessera-l5.{h,cpp}`. The full generational loop
+  (`ts_dispatch_run_l5_loop` in `tessera-dispatch.cpp`) runs when
+  `--tessera-adaptive-requantize` is passed: L2 measure ->
+  `ts_l5_adaptive_requant` plan -> A/B per tensor family (Stage A
+  tightens alpha/clip as multipliers, Stage B raises outlier_fraction)
+  -> re-quantize flagged tensors in place -> re-measure, up to
+  `--tessera-l5-generations`. Emits an `llama.tessera.l5-loop.v1` report
+  at `--tessera-l5-out`.
 - **Layer 6: kernel-based GA fitness — SHIPPED.** The C++ dispatch GA
   consumes L1 sidecars as `t_l^2 = ||dequant_kernel(W_l) - W_l||_F^2 /
   ||W_l||_F^2`, blended with the offline proxy, via
@@ -341,13 +346,15 @@ the L5 apply loop.
 
 Remaining work, ranked:
 
-1. Fix the L1.5 suffix mismatch so the W4A4 reference path is live (and
-   unblock L3's end-to-end use).
+1. ~~Fix the L1.5 suffix mismatch so the W4A4 reference path is live~~
+   (done 2026-08-01; L3's end-to-end use is unblocked).
 2. Build the forward-pass differential (L2) and the prompt-bank probe
    (L4) - these are what make the L6 fidelity claim measurable as
    user-visible behavior, not just per-tensor `t_l^2`.
-3. Wire `tessera-l5` into the dispatch path and add the
-   apply-plan-and-iterate loop.
+3. ~~Wire `tessera-l5` into the dispatch path and add the
+   apply-plan-and-iterate loop.~~ (done 2026-08-01; the loop is live
+   behind `--tessera-adaptive-requantize`, gated on L2
+   `relative_frobenius` rather than L4).
 4. Lift the L1.5 ground truth to actual FP16 (currently bit-identical
    to L1).
 

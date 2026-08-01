@@ -24,11 +24,11 @@ offline calibration reference and the runtime:
 | Layer | Question it answers | Status | Code path |
 |---|---|---|---|
 | 1 | What does the kernel actually dequant? | **Shipped** (v3 superset) | `common/tessera-debug/`, backend hooks in `ggml-{cpu,cuda,metal}/*-dump-dequant.*`, fitness in `tessera-l1-fitness.{h,cpp}` |
-| 1.5 | W4A4 FP16 reference sidecar | **Partial** (writer + reader shipped; see bug note) | `tessera-debug.h` FP16-reference writer, `tessera-l15.{h,cpp}` reader |
+| 1.5 | W4A4 FP16 reference sidecar | **Partial** (suffix-fixed; FP16 ground truth pending) | `tessera-debug.h` FP16-reference writer, `tessera-l15.{h,cpp}` reader |
 | 2 | How does that dequant differ from the BF16 source? | **Shipped (weight-level)**; forward-pass differential is still design | `tessera-l2-diff.{h,cpp}` |
 | 3 | What is the per-token coherence cost? | **Shipped (per-row cosine)**; per-token KL is still design | `tessera-l3-coherence.{h,cpp}` |
 | 4 | What is the end-to-end behavioural delta? | **Partial** (data-free PPL/KL substitute); prompt-bank probe is still design | `tessera-ppl.{h,cpp}` |
-| 5 | Where should we re-quantize? | **Shipped** (scorers + adaptive requant on L2 reports); not yet on the dispatch path | `tessera-l5.{h,cpp}` |
+| 5 | Where should we re-quantize? | **Shipped** (scorers + adaptive requant + dispatch loop) | `tessera-l5.{h,cpp}`, loop in `tessera-dispatch.cpp` |
 | 6 | Can the GA optimize for the kernel directly? | **Shipped** as the C++ dispatch GA fitness (not the Python `per_tensor_calibrate.py` mode the spec described) | `tessera-l1-fitness.{h,cpp}` consumed by `tessera-dispatch.cpp:263-294` |
 
 L1 was the critical path and has landed; the layers below consume its
@@ -36,15 +36,15 @@ sidecar. Where the shipped code does only part of what a layer's prose
 describes, a **Reality** callout at the end of that layer's section
 states the gap precisely.
 
-> Note on L1.5 (open bug): the writer emits files with suffix
-> `.act.dequant.f32` (`tessera-debug.h:115`); the L1.5 reader and its
-> test look for suffix `.tdqt` (`tessera-l15.{h,cpp}`, `test_l15.cpp`).
-> Until those agree, the reader cannot find writer output and the L1.5
-> reference path is not exercisable end-to-end. Separately, the backend
-> hooks currently populate the L1.5 sidecar with the same F32 dequant
-> buffer as L1 rather than an FP16 ground truth (acknowledged in the
-> hook comments as a follow-up). Fixing the suffix is tracked as the
-> next step for the W4A4 path; the L1 contract above is unaffected.
+> Note on L1.5 (status): the writer/reader suffix mismatch is fixed -
+> both sides now use `.act.dequant.f32` (`tessera-debug.h:115`,
+> `tessera-l15.{h,cpp}`), so `ts_l15_load_directory` consumes real
+> writer output and the L1.5 reference path is exercisable end-to-end.
+> Remaining gap: the backend hooks currently populate the L1.5 sidecar
+> with the same F32 dequant buffer as L1 rather than an FP16 ground
+> truth (acknowledged in the hook comments as a follow-up). Lifting the
+> ground truth to actual FP16 is tracked as the next step for the W4A4
+> path; the L1 contract above is unaffected.
 
 ## Build order and dependencies
 
@@ -517,17 +517,44 @@ Two pieces have landed in `tools/quantize/tessera/tessera-l5.{h,cpp}`:
    `ts_l2_report`, finds flagged tensors, tightens `alpha`/`clip`
    proportional to overshoot, emits an `ts_l5_adaptive_plan`.
 
+L5 is **on the dispatch path**. `ts_dispatch_run_l5_loop` in
+`tessera-dispatch.cpp` runs the full generational loop (L2 measure ->
+`ts_l5_adaptive_requant` plan -> re-quantize flagged tensors in place ->
+re-measure) when `--tessera-adaptive-requantize` is passed. The loop:
+
+- captures each 2D tensor into a `ts_dispatch_refine_entry` map during
+  step 7, so flagged tensors can be re-targeted without re-walking the
+  GGUF,
+- groups flagged tensors by `ts_regime_infer_family` (attn_q / attn_k /
+  attn_v / attn_out / ffn_gate / ffn_up / ffn_down), runs an A/B on one
+  representative per family - Stage A tightens alpha/clip as multipliers
+  on the GA/policy values (mirroring `ts_expert_profile.alpha_scale` /
+  `clip_scale`), Stage B raises `outlier_fraction` by overshoot - and
+  applies the winning strategy to every flagged tensor in that family,
+- re-quantizes flagged tensors in place into their existing deque
+  elements (stable addresses) and refreshes the GGUF descriptors via
+  `ts_gguf_repoint_tensor_cluster`,
+- emits the loop receipt at `--tessera-l5-out` (default: beside
+  `--tessera-policy-out` as `<stem>.l5-loop.json`), schema
+  `llama.tessera.l5-loop.v1`, recording per generation: n_flagged,
+  n_requant, per-family winning stage + frob_A/frob_B, and per-tensor
+  before/after `relative_frobenius`.
+
+Source weights are re-read from the input GGUF per flagged tensor per
+generation (no full-source retention), keeping the L5 memory budget flat
+at the cost of one read per flagged tensor.
+
 Tests: `test_l5.cpp` covers the sensitivity scorers and orchestrator;
 `test_l2l5.cpp` exercises `ts_l5_adaptive_requant` end-to-end on a
-loaded L2 report.
+loaded L2 report; `test_l5_dispatch.cpp` drives the full dispatch
+pipeline with `adaptive_requantize` on a synthetic two-tensor GGUF and
+asserts the loop runs, the report is well-formed, and the output GGUF
+survives the in-place re-quantization.
 
-Gap versus the spec above: the apply-and-iterate half of the loop
-(apply the plan via `tile640_quantize_v3.py`, re-run L4, gate on the L4
-verdict) is not wired, and L5 is not referenced from
-`tessera-dispatch.cpp` - it is library + tests only, not yet on the
-dispatch path. The acceptance criteria above (L4 PASS after one
-iteration, <1h wall-clock) are not demonstrable because L4 itself is
-the partial PPL substitute.
+Remaining gap versus the spec above: convergence is measured by L2
+weight-level `relative_frobenius`, not the L4 prompt-bank probe. The
+acceptance criteria above (L4 PASS after one iteration, <1h wall-clock)
+are therefore not yet demonstrable - see Layer 4.
 
 ---
 

@@ -89,7 +89,7 @@ the same files as llama.cpp. The Python quantizer lives in
 | ANE prefill (`common/ane-mtp.mm`) | **WIP** | Implementation present, full integration with the verifier's MTP context is not yet wired. `--no-embedded-mtp` flag bypasses the auto-trigger. |
 | dft. observer protocol (`llama-graph.cpp`) | **WIP** | String-prefix hack. See `docs/audit-2026-07-29.md`. To be replaced with proper per-context observer state. |
 | `dspark-gguf-patch/` | **Legacy** | Preprocessor for pre-PR-#25173 dspark drafters. Will be removed once the legacy converter is no longer in production. |
-| Kernel dequant debug mode (L1 sidecar) | **Production** | v3 TDQT sidecar in `common/tessera-debug/`, wired into all three backends; consumed as the GA's kernel-direct fitness in `tessera-dispatch.cpp` (L6). See `docs/runtime-aware-pipeline.md` for the full layer-by-layer status: L1 + L6 shipped; L1.5 partial (suffix bug); L2/L3 weight-level and per-row; L4 partial PPL substitute; L5 library + tests, not yet on the dispatch path. |
+| Kernel dequant debug mode (L1 sidecar) | **Production** | v3 TDQT sidecar in `common/tessera-debug/`, wired into all three backends; consumed as the GA's kernel-direct fitness in `tessera-dispatch.cpp` (L6). See `docs/runtime-aware-pipeline.md` for the full layer-by-layer status: L1 + L5 + L6 shipped (L5 behind `--tessera-adaptive-requantize`); L1.5 partial (suffix-fixed, FP16 ground truth pending); L2/L3 weight-level and per-row; L4 partial PPL substitute. |
 
 ## Build
 

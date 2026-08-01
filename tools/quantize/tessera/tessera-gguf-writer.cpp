@@ -84,16 +84,23 @@ void ts_gguf_write_tensor_cluster(struct gguf_context * ctx,
     t->data = (void *)res->outlier_row_offsets.data();
     gguf_add_tensor(ctx, t);
 
-    // weight_outlier_cols: i32 [total_outliers]
+    // weight_outlier_cols: i32 [total_outliers]. When there are no outliers the
+    // vector is empty and .data() may return nullptr, which trips gguf's
+    // non-null assertion at write time; point at a static zero in that case so
+    // the length-1 placeholder tensor has a valid backing buffer.
+    static const int32_t empty_i32 = 0;
+    static const ggml_fp16_t empty_f16 = 0;
     t = ggml_new_tensor_1d(gctx, GGML_TYPE_I32, n_outliers > 0 ? n_outliers : 1);
     ggml_format_name(t, "%s.weight_outlier_cols", base_name);
-    t->data = (void *)res->outlier_cols.data();
+    t->data = (n_outliers > 0) ? (void *)res->outlier_cols.data()
+                               : (void *)&empty_i32;
     gguf_add_tensor(ctx, t);
 
     // weight_outlier_vals: f16 [total_outliers]
     t = ggml_new_tensor_1d(gctx, GGML_TYPE_F16, n_outliers > 0 ? n_outliers : 1);
     ggml_format_name(t, "%s.weight_outlier_vals", base_name);
-    t->data = (void *)res->outlier_vals.data();
+    t->data = (n_outliers > 0) ? (void *)res->outlier_vals.data()
+                               : (void *)&empty_f16;
     gguf_add_tensor(ctx, t);
 
     // weight_act_scale: f16 [in_dim] (optional)
