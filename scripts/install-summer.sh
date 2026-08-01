@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BUILD_DIR="${BUILD_DIR:-$ROOT/build}"
+PREFIX="${PREFIX:-$HOME/.local}"
+JOBS="${JOBS:-$(nproc)}"
+FORCE_MMQ="${FORCE_MMQ:-ON}"
+
+if [[ -z "${CUDA_ARCH:-}" ]]; then
+    CUDA_ARCH="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d '. ' || true)"
+fi
+CUDA_ARCH="${CUDA_ARCH:-75}"
+
+for command in cmake git python3 nvcc nvidia-smi; do
+    if ! command -v "$command" >/dev/null 2>&1; then
+        echo "error: required command not found: $command" >&2
+        exit 1
+    fi
+done
+
+cd "$ROOT"
+
+python3 scripts/apply-tiered-dram-pinned-fallback.py
+
+cmake -S . -B "$BUILD_DIR" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_CUDA_ARCHITECTURES="$CUDA_ARCH" \
+    -DGGML_CUDA=ON \
+    -DGGML_CUDA_FORCE_MMQ="$FORCE_MMQ" \
+    -DGGML_BACKEND_DL=OFF \
+    -DBUILD_SHARED_LIBS=OFF \
+    -DLLAMA_BUILD_EXAMPLES=ON \
+    -DLLAMA_BUILD_TESTS=OFF
+
+cmake --build "$BUILD_DIR" --target llama-tiered -j"$JOBS"
+
+install -Dm755 "$BUILD_DIR/bin/llama-tiered" "$PREFIX/bin/llama-tiered"
+install -Dm755 "$ROOT/scripts/summer" "$PREFIX/bin/summer"
+mkdir -p "$HOME/models" "$HOME/.config/summer" "$HOME/.local/share/summer"
+
+cat <<EOF
+
+Summer.cpp installation complete.
+
+  CUDA architecture : $CUDA_ARCH
+  FORCE_MMQ          : $FORCE_MMQ
+  llama-tiered       : $PREFIX/bin/llama-tiered
+  summer CLI         : $PREFIX/bin/summer
+  model directory    : $HOME/models
+
+Add this line to your shell configuration when $PREFIX/bin is not in PATH:
+
+  export PATH="$PREFIX/bin:\$PATH"
+
+Then place one or more .gguf files in $HOME/models and run:
+
+  summer
+EOF
