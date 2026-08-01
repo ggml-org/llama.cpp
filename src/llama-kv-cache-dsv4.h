@@ -38,7 +38,7 @@ public:
 
     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const;
 
-    void state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const;
+    void state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags, const std::vector<uint32_t> & rs_idx) const;
     void state_read (llama_io_read_i  & io, llama_seq_id seq_id, llama_state_seq_flags flags);
 
     ggml_tensor * get_kv      (ggml_context * ctx, int32_t il) const;

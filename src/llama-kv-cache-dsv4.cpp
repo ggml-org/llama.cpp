@@ -252,7 +252,8 @@ static void dsv4_state_write_tensor_streams(
         uint32_t           tensor_rows,
         uint32_t           n_rows,
         uint32_t           s0,
-        uint32_t           ns) {
+        uint32_t           ns,
+        const std::vector<uint32_t> * stream_ids = nullptr) {
     const int32_t  type_i   = (int32_t) tensor->type;
     const uint64_t ne0      = tensor->ne[0];
     const uint64_t rows     = n_rows;
@@ -273,8 +274,16 @@ static void dsv4_state_write_tensor_streams(
         return;
     }
 
+    if (stream_ids && stream_ids->size() != ns) {
+        throw std::runtime_error("DSV4 state tensor stream map size mismatch");
+    }
+
     for (uint32_t s = 0; s < ns; ++s) {
-        const size_t offset = (size_t) (s0 + s)*stream_stride;
+        const uint32_t stream = stream_ids ? (*stream_ids)[s] : s0 + s;
+        if ((int64_t) stream >= tensor->ne[2]) {
+            throw std::runtime_error("DSV4 state tensor stream out of range");
+        }
+        const size_t offset = (size_t) stream*stream_stride;
         io.write_tensor(tensor, offset, size);
     }
 }
@@ -991,12 +1000,25 @@ std::map<ggml_backend_buffer_type_t, size_t> llama_dsv4_comp_state::memory_break
     return ret;
 }
 
-void llama_dsv4_comp_state::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
+void llama_dsv4_comp_state::state_write(
+        llama_io_write_i & io,
+        llama_seq_id seq_id,
+        llama_state_seq_flags flags,
+        const std::vector<uint32_t> & rs_idx) const {
     GGML_UNUSED(flags);
 
     uint32_t s0;
     uint32_t ns;
     dsv4_state_src_stream_range(n_stream, seq_id, s0, ns);
+
+    std::vector<uint32_t> stream_ids(ns);
+    for (uint32_t s = 0; s < ns; ++s) {
+        const uint32_t seq = seq_id >= 0 ? (uint32_t) seq_id : s0 + s;
+        if (seq >= rs_idx.size() || rs_idx[seq] > n_rs_seq) {
+            throw std::runtime_error("DSV4 recurrent state rollback index out of range");
+        }
+        stream_ids[s] = rs_idx[seq]*n_stream + s0 + s;
+    }
 
     const uint32_t version      = DSV4_COMP_STATE_VER;
     const uint32_t n_layer      = layers.size();
@@ -1011,8 +1033,8 @@ void llama_dsv4_comp_state::state_write(llama_io_write_i & io, llama_seq_id seq_
     for (const auto & layer : layers) {
         io.write(&layer.il, sizeof(layer.il));
 
-        dsv4_state_write_tensor_streams(io, layer.kv,    state_size, state_size, s0, ns);
-        dsv4_state_write_tensor_streams(io, layer.score, state_size, state_size, s0, ns);
+        dsv4_state_write_tensor_streams(io, layer.kv,    state_size, state_size, s0, ns, &stream_ids);
+        dsv4_state_write_tensor_streams(io, layer.score, state_size, state_size, s0, ns, &stream_ids);
     }
 }
 
@@ -1514,9 +1536,9 @@ void llama_kv_cache_dsv4::state_write(llama_io_write_i & io, llama_seq_id seq_id
         dsv4_state_write_k_cache(io, kv_lid.get(), seq_id, flags, n_rows_lid);
     }
 
-    csa_state->state_write(io, seq_id, flags);
-    hca_state->state_write(io, seq_id, flags);
-    lid_state->state_write(io, seq_id, flags);
+    csa_state->state_write(io, seq_id, flags, rs_idx);
+    hca_state->state_write(io, seq_id, flags, rs_idx);
+    lid_state->state_write(io, seq_id, flags, rs_idx);
 }
 
 void llama_kv_cache_dsv4::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
