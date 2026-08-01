@@ -10,6 +10,17 @@
 
 #include "tessera-septq.h"
 
+#if defined(__APPLE__)
+#ifndef ACCELERATE_NEW_LAPACK
+#define ACCELERATE_NEW_LAPACK
+#endif
+#include <Accelerate/Accelerate.h>
+#define TS_HAS_CBLAS 1
+#elif defined(GGML_USE_OPENBLAS)
+#include <cblas.h>
+#define TS_HAS_CBLAS 1
+#endif
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -37,9 +48,25 @@ void ts_septq_build_hessian(int64_t in_dim,
     std::memset(H, 0, sizeof(float) * (size_t)(in_dim * in_dim));
 
     if (activations != nullptr && n_tokens > 0) {
+#if defined(TS_HAS_CBLAS)
+        // activations is (n_tokens x in_dim) row-major. Compute X^T @ X via
+        // dgemm: H = (1/n) * A^T @ A (row-major, Upper). Then copy upper
+        // to lower for full matrix.
+        std::vector<double> Hacc((size_t)(in_dim * in_dim), 0.0);
+        // Promote activations to double for parity with the scalar path.
+        std::vector<double> Ad((size_t)(n_tokens * in_dim));
+        for (int64_t i = 0; i < n_tokens * in_dim; i++)
+            Ad[i] = (double)activations[i];
+        cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
+                    (int)in_dim, (int)in_dim, (int)n_tokens,
+                    1.0, Ad.data(), (int)in_dim, Ad.data(), (int)in_dim,
+                    0.0, Hacc.data(), (int)in_dim);
+        double inv_n = 1.0 / (double)std::max<int64_t>(n_tokens, 1);
+        for (int64_t i = 0; i < in_dim; i++)
+            for (int64_t j = 0; j < in_dim; j++)
+                H[i * in_dim + j] = (float)(Hacc[i * in_dim + j] * inv_n);
+#else
         // Accumulate X^T X in double, then cast per element to float32.
-        // A column-major accumulation over the lower triangle would be
-        // cheaper, but in_dim is modest and a dense accumulator is simpler.
         std::vector<double> Hacc((size_t)(in_dim * in_dim), 0.0);
         for (int64_t t = 0; t < n_tokens; t++) {
             const float * xrow = activations + (size_t)(t * in_dim);
@@ -56,6 +83,7 @@ void ts_septq_build_hessian(int64_t in_dim,
         for (int64_t i = 0; i < in_dim * in_dim; i++) {
             H[i] = (float)(Hacc[(size_t)i] * inv_n);
         }
+#endif
         // diag_mean + ridge, computed in float32 to match Python's np.float32
         // arithmetic on the float32 Hessian.
         double diag_sum = 0.0;
@@ -596,6 +624,14 @@ int ts_septq_quantize_2d(const float * weights, int64_t out_dim, int64_t in_dim,
         ts_septq_gptq_M(L.data(), in_dim, bandwidth, M.data());
         // W_comp = W - error_2d @ M;  error_2d is (out_dim x in_dim),
         // M is (in_dim x in_dim).
+#if defined(TS_HAS_CBLAS)
+        // Copy W into W_comp first, then W_comp -= error_2d @ M.
+        std::copy(weights, weights + n, W_comp.begin());
+        cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+                    (int)out_dim, (int)in_dim, (int)in_dim,
+                    -1.0f, error_2d.data(), (int)in_dim, M.data(), (int)in_dim,
+                    1.0f, W_comp.data(), (int)in_dim);
+#else
         for (int64_t r = 0; r < out_dim; r++) {
             const float * erow = error_2d.data() + r * in_dim;
             for (int64_t j = 0; j < in_dim; j++) {
@@ -606,6 +642,7 @@ int ts_septq_quantize_2d(const float * weights, int64_t out_dim, int64_t in_dim,
                 W_comp[r * in_dim + j] = weights[r * in_dim + j] - (float)acc;
             }
         }
+#endif
     } else {
         std::copy(weights, weights + n, W_comp.begin());
     }

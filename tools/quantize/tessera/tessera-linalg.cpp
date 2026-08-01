@@ -8,6 +8,17 @@
 
 #include "tessera-linalg.h"
 
+#if defined(__APPLE__)
+#ifndef ACCELERATE_NEW_LAPACK
+#define ACCELERATE_NEW_LAPACK
+#endif
+#include <Accelerate/Accelerate.h>
+#define TS_HAS_CBLAS 1
+#elif defined(GGML_USE_OPENBLAS)
+#include <cblas.h>
+#define TS_HAS_CBLAS 1
+#endif
+
 #include <cmath>
 #include <vector>
 
@@ -44,6 +55,12 @@ static void ts_fill_gaussian(float * buf, int64_t count, uint32_t * state) {
 // C(m x n) = A(m x k) @ B(k x n)
 static void ts_matmul(const float * A, const float * B, float * C,
                       int64_t m, int64_t k, int64_t n) {
+    if (m <= 0 || n <= 0) return;
+#if defined(TS_HAS_CBLAS)
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+                (int)m, (int)n, (int)k,
+                1.0f, A, (int)k, B, (int)n, 0.0f, C, (int)n);
+#else
     for (int64_t i = 0; i < m; i++) {
         for (int64_t j = 0; j < n; j++) {
             float s = 0.0f;
@@ -53,11 +70,20 @@ static void ts_matmul(const float * A, const float * B, float * C,
             C[i*n + j] = s;
         }
     }
+#endif
 }
 
 // C(n x k) = A^T @ B, where A is (m x n) and B is (m x k)
 static void ts_matmul_atb(const float * A, const float * B, float * C,
                           int64_t m, int64_t n, int64_t k) {
+    if (n <= 0 || k <= 0) return;
+#if defined(TS_HAS_CBLAS)
+    // A is (m x n) row-major; A^T is (n x m). B is (m x k) row-major.
+    // C = A^T @ B, (n x k). op(A)=Trans, op(B)=NoTrans.
+    cblas_sgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
+                (int)n, (int)k, (int)m,
+                1.0f, A, (int)n, B, (int)k, 0.0f, C, (int)k);
+#else
     for (int64_t i = 0; i < n; i++) {
         for (int64_t j = 0; j < k; j++) {
             float s = 0.0f;
@@ -67,6 +93,7 @@ static void ts_matmul_atb(const float * A, const float * B, float * C,
             C[i*k + j] = s;
         }
     }
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -234,7 +261,17 @@ void ts_linalg_svd_topk(const float * A, float * U, float * S, float * V,
     ts_linalg_householder_qr(Z.data(), Qrow.data(), Rt2.data(), n, k);
 
     std::vector<float> AtA(n*n);               // A^T A
+#if defined(TS_HAS_CBLAS)
+    // ssyrk: C = alpha * A^T A + beta * C. Row-major lower triangle first.
+    cblas_ssyrk(CblasRowMajor, CblasUpper, CblasTrans,
+                (int)n, (int)m, 1.0f, A, (int)n, 0.0f, AtA.data(), (int)n);
+    // copy upper to lower for full matrix (power iteration needs full AtA)
+    for (int64_t i = 0; i < n; i++)
+        for (int64_t j = i + 1; j < n; j++)
+            AtA[j*n + i] = AtA[i*n + j];
+#else
     ts_matmul_atb(A, A, AtA.data(), m, n, n);
+#endif
 
     std::vector<float> Z2(n*k);
     int64_t iters = n_iters > 1 ? n_iters : 1;

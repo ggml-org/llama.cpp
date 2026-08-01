@@ -1,6 +1,17 @@
 #include "tessera-flrq.h"
 #include "tessera-linalg.h"
 
+#if defined(__APPLE__)
+#ifndef ACCELERATE_NEW_LAPACK
+#define ACCELERATE_NEW_LAPACK
+#endif
+#include <Accelerate/Accelerate.h>
+#define TS_HAS_CBLAS 1
+#elif defined(GGML_USE_OPENBLAS)
+#include <cblas.h>
+#define TS_HAS_CBLAS 1
+#endif
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -60,6 +71,12 @@ struct ts_rng {
 // C(m x n) = A(m x k) @ B(k x n)
 void ts_matmul(const float * A, const float * B, float * C,
                int64_t m, int64_t k, int64_t n) {
+    if (m <= 0 || n <= 0) return;
+#if defined(TS_HAS_CBLAS)
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+                (int)m, (int)n, (int)k,
+                1.0f, A, (int)k, B, (int)n, 0.0f, C, (int)n);
+#else
     for (int64_t i = 0; i < m; i++) {
         for (int64_t j = 0; j < n; j++) {
             float s = 0.0f;
@@ -69,11 +86,18 @@ void ts_matmul(const float * A, const float * B, float * C,
             C[i*n + j] = s;
         }
     }
+#endif
 }
 
 // C(n x k) = A^T @ B, where A is (m x n) and B is (m x k)
 void ts_matmul_atb(const float * A, const float * B, float * C,
                    int64_t m, int64_t n, int64_t k) {
+    if (n <= 0 || k <= 0) return;
+#if defined(TS_HAS_CBLAS)
+    cblas_sgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
+                (int)n, (int)k, (int)m,
+                1.0f, A, (int)n, B, (int)k, 0.0f, C, (int)k);
+#else
     for (int64_t i = 0; i < n; i++) {
         for (int64_t j = 0; j < k; j++) {
             float s = 0.0f;
@@ -83,6 +107,7 @@ void ts_matmul_atb(const float * A, const float * B, float * C,
             C[i*k + j] = s;
         }
     }
+#endif
 }
 
 // Round-half-to-even (banker's rounding), matching numpy.round on the

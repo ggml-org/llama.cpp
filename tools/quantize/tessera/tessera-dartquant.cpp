@@ -22,6 +22,17 @@
 #include "tessera-dartquant.h"
 #include "tessera-linalg.h"
 
+#if defined(__APPLE__)
+#ifndef ACCELERATE_NEW_LAPACK
+#define ACCELERATE_NEW_LAPACK
+#endif
+#include <Accelerate/Accelerate.h>
+#define TS_HAS_CBLAS 1
+#elif defined(GGML_USE_OPENBLAS)
+#include <cblas.h>
+#define TS_HAS_CBLAS 1
+#endif
+
 #include <cmath>
 #include <cstring>
 #include <algorithm>
@@ -61,9 +72,21 @@ static void ts_ternarize_recon(const float * x, float * out, int64_t n) {
 // tessera-linalg has its own static copies which are file-local.
 // ---------------------------------------------------------------------------
 
-// C(m x n) = A(m x k) @ B(k x n)
+// C(m x n) = A(m x k) @ B(k x n). Double accumulation to match
+// Python numpy matmul (which promotes f32 inputs to f64 accumulation).
 static void ts_dq_matmul(const float * A, const float * B, float * C,
                          int64_t m, int64_t k, int64_t n) {
+    if (m <= 0 || n <= 0) return;
+#if defined(TS_HAS_CBLAS)
+    // Promote to double for parity with the scalar f64 accumulation path.
+    std::vector<double> Ad((size_t)m * k), Bd((size_t)k * n), Cd((size_t)m * n);
+    for (int64_t i = 0; i < m * k; i++) Ad[i] = (double)A[i];
+    for (int64_t i = 0; i < k * n; i++) Bd[i] = (double)B[i];
+    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+                (int)m, (int)n, (int)k,
+                1.0, Ad.data(), (int)k, Bd.data(), (int)n, 0.0, Cd.data(), (int)n);
+    for (int64_t i = 0; i < m * n; i++) C[i] = (float)Cd[i];
+#else
     for (int64_t i = 0; i < m; i++) {
         for (int64_t j = 0; j < n; j++) {
             double s = 0.0;
@@ -73,11 +96,22 @@ static void ts_dq_matmul(const float * A, const float * B, float * C,
             C[i*n + j] = (float)s;
         }
     }
+#endif
 }
 
 // C(n x k) = A(m x n)^T @ B(m x k)
 static void ts_dq_matmul_atb(const float * A, const float * B, float * C,
                              int64_t m, int64_t n, int64_t k) {
+    if (n <= 0 || k <= 0) return;
+#if defined(TS_HAS_CBLAS)
+    std::vector<double> Ad((size_t)m * n), Bd((size_t)m * k), Cd((size_t)n * k);
+    for (int64_t i = 0; i < m * n; i++) Ad[i] = (double)A[i];
+    for (int64_t i = 0; i < m * k; i++) Bd[i] = (double)B[i];
+    cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
+                (int)n, (int)k, (int)m,
+                1.0, Ad.data(), (int)n, Bd.data(), (int)k, 0.0, Cd.data(), (int)k);
+    for (int64_t i = 0; i < n * k; i++) C[i] = (float)Cd[i];
+#else
     for (int64_t i = 0; i < n; i++) {
         for (int64_t j = 0; j < k; j++) {
             double s = 0.0;
@@ -87,12 +121,23 @@ static void ts_dq_matmul_atb(const float * A, const float * B, float * C,
             C[i*k + j] = (float)s;
         }
     }
+#endif
 }
 
 // C(m x n) = A(m x k) @ B(n x k)^T, i.e. C[i,j] = sum_p A[i,p] * B[j,p].
 // Used for residual(out,K) @ X(n_tokens,K)^T -> err(out,n_tokens).
 static void ts_dq_matmul_abt(const float * A, const float * B, float * C,
                              int64_t m, int64_t k, int64_t n) {
+    if (m <= 0 || n <= 0) return;
+#if defined(TS_HAS_CBLAS)
+    std::vector<double> Ad((size_t)m * k), Bd((size_t)n * k), Cd((size_t)m * n);
+    for (int64_t i = 0; i < m * k; i++) Ad[i] = (double)A[i];
+    for (int64_t i = 0; i < n * k; i++) Bd[i] = (double)B[i];
+    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasTrans,
+                (int)m, (int)n, (int)k,
+                1.0, Ad.data(), (int)k, Bd.data(), (int)k, 0.0, Cd.data(), (int)n);
+    for (int64_t i = 0; i < m * n; i++) C[i] = (float)Cd[i];
+#else
     for (int64_t i = 0; i < m; i++) {
         for (int64_t j = 0; j < n; j++) {
             double s = 0.0;
@@ -102,6 +147,7 @@ static void ts_dq_matmul_abt(const float * A, const float * B, float * C,
             C[i*n + j] = (float)s;
         }
     }
+#endif
 }
 
 // Per-row L2 norms with a 1e-24 floor (matches Python _row_l2).
@@ -274,6 +320,21 @@ static float ts_output_mse_and_grad(const float * W, const float * R,
         // dL/dWp = (2/N) * err @ X  (out x K)
         std::vector<float> dL_dWp(out_dim * K);
         double inv = 2.0 / (double)n_err;
+#if defined(TS_HAS_CBLAS)
+        // err is (out_dim x X_count), X is (X_count x K). C = err @ X.
+        // Double accumulation to match the scalar path.
+        std::vector<double> err_d((size_t)out_dim * X_count);
+        std::vector<double> X_d((size_t)X_count * K);
+        std::vector<double> dL_dWp_d((size_t)out_dim * K);
+        for (int64_t i = 0; i < out_dim * X_count; i++) err_d[i] = (double)err[i];
+        for (int64_t i = 0; i < X_count * K; i++) X_d[i] = (double)X[i];
+        cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+                    (int)out_dim, (int)K, (int)X_count,
+                    inv, err_d.data(), (int)X_count, X_d.data(), (int)K,
+                    0.0, dL_dWp_d.data(), (int)K);
+        for (int64_t i = 0; i < out_dim * K; i++)
+            dL_dWp[i] = (float)dL_dWp_d[i];
+#else
         for (int64_t o = 0; o < out_dim; o++) {
             for (int64_t j = 0; j < K; j++) {
                 double s = 0.0;
@@ -283,6 +344,7 @@ static float ts_output_mse_and_grad(const float * W, const float * R,
                 dL_dWp[o*K + j] = (float)(inv * s);
             }
         }
+#endif
         // grad = W^T @ dL/dWp (in x in)
         ts_dq_matmul_atb(W, dL_dWp.data(), grad_out, out_dim, K, K);
     }
@@ -431,6 +493,24 @@ void ts_dartquant_apply(const float * W, const float * R,
     int64_t n_blocks = in_dim / block_size;
     for (int64_t b = 0; b < n_blocks; b++) {
         int64_t col_off = b * block_size;
+#if defined(TS_HAS_CBLAS)
+        // Double accumulation to match the scalar path.
+        std::vector<double> Wd((size_t)out_dim * block_size);
+        std::vector<double> Rd((size_t)block_size * block_size);
+        std::vector<double> Cd((size_t)out_dim * block_size);
+        for (int64_t i = 0; i < out_dim; i++)
+            for (int64_t k = 0; k < block_size; k++)
+                Wd[i*block_size + k] = (double)W[i*in_dim + col_off + k];
+        for (int64_t i = 0; i < block_size * block_size; i++)
+            Rd[i] = (double)R[i];
+        cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+                    (int)out_dim, (int)block_size, (int)block_size,
+                    1.0, Wd.data(), (int)block_size, Rd.data(), (int)block_size,
+                    0.0, Cd.data(), (int)block_size);
+        for (int64_t i = 0; i < out_dim; i++)
+            for (int64_t j = 0; j < block_size; j++)
+                W_rot[i*in_dim + col_off + j] = (float)Cd[i*block_size + j];
+#else
         for (int64_t i = 0; i < out_dim; i++) {
             const float * w_row = W + i*in_dim + col_off;
             float * out_row = W_rot + i*in_dim + col_off;
@@ -442,6 +522,7 @@ void ts_dartquant_apply(const float * W, const float * R,
                 out_row[j] = (float)s;
             }
         }
+#endif
     }
     // Remainder columns (in_dim not a multiple of block_size) are copied
     // verbatim, matching the no-op behaviour of an identity tail block.

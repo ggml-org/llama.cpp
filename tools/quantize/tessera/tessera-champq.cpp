@@ -2,6 +2,17 @@
 #include "tessera-linalg.h"
 #include "tessera-lbfgs.h"
 
+#if defined(__APPLE__)
+#ifndef ACCELERATE_NEW_LAPACK
+#define ACCELERATE_NEW_LAPACK
+#endif
+#include <Accelerate/Accelerate.h>
+#define TS_HAS_CBLAS 1
+#elif defined(GGML_USE_OPENBLAS)
+#include <cblas.h>
+#define TS_HAS_CBLAS 1
+#endif
+
 #include <cmath>
 #include <cstring>
 #include <algorithm>
@@ -207,6 +218,11 @@ static float ts_champq_eval(const float * x, float * grad, int64_t n, void * ctx
 
     // W_perm = W @ M : (out_dim x K)
     std::vector<float> W_perm(out_dim * K);
+#if defined(TS_HAS_CBLAS)
+    cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans,
+                (int)out_dim, (int)K, (int)K,
+                1.0f, W, (int)K, x, (int)K, 0.0f, W_perm.data(), (int)K);
+#else
     for (int64_t r = 0; r < out_dim; r++) {
         const float * Wr = W + r * K;
         for (int64_t col = 0; col < K; col++) {
@@ -217,6 +233,7 @@ static float ts_champq_eval(const float * x, float * grad, int64_t n, void * ctx
             W_perm[r * K + col] = s;
         }
     }
+#endif
 
     // d2[r, c] = W_perm[r, c] - 2*W_perm[r, c+1] + W_perm[r, c+2], c in [0, K-3].
     // h[r, c] = d2[r, c] * weight, where weight is act[c+1] (the stencil
@@ -255,6 +272,12 @@ static float ts_champq_eval(const float * x, float * grad, int64_t n, void * ctx
     }
 
     // grad_M[i, k] = sum_r W[r, i] * g[r, k] = (W^T @ g)[i, k]
+#if defined(TS_HAS_CBLAS)
+    cblas_sgemm(CblasRowMajor, CblasTrans, CblasNoTrans,
+                (int)K, (int)K, (int)out_dim,
+                1.0f, W, (int)K, g.data(), (int)K,
+                0.0f, grad, (int)K);
+#else
     for (int64_t i = 0; i < K; i++) {
         for (int64_t k = 0; k < K; k++) {
             float s = 0.0f;
@@ -264,6 +287,7 @@ static float ts_champq_eval(const float * x, float * grad, int64_t n, void * ctx
             grad[i * K + k] = s;
         }
     }
+#endif
 
     if (binariness > 0.0f) {
         for (int64_t i = 0; i < n; i++) {

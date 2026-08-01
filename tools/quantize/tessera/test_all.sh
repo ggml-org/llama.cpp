@@ -47,7 +47,7 @@ echo "Tessera integration tests"
 echo ""
 
 # --- Standalone (test + own module) ---
-compile_and_run linalg      $T/test_linalg.cpp      $T/tessera-linalg.cpp
+compile_and_run linalg      $T/test_linalg.cpp      $T/tessera-linalg.cpp -framework Accelerate
 compile_and_run lbfgs       $T/test_lbfgs.cpp       $T/tessera-lbfgs.cpp
 compile_and_run awq         $T/test_awq.cpp         $T/tessera-awq.cpp $T/tessera-policy.cpp -I vendor
 # AWQ GA fitness port (parity vs Python awq-evolve.py + GA convergence).
@@ -57,7 +57,7 @@ compile_and_run awq_fitness $T/test_awq_fitness.cpp $T/tessera-awq.cpp $T/tesser
 # FLRQ outlier-aware low-rank port (parity vs Python flrq_bcl; loads the
 # Python sketch basis from the fixture so the deterministic BLC core is pinned
 # bit-for-bit). Needs tessera-linalg (sym-eig for the sketch basis) + vendor.
-compile_and_run flrq        $T/test_flrq.cpp        $T/tessera-flrq.cpp $T/tessera-linalg.cpp -I vendor
+compile_and_run flrq        $T/test_flrq.cpp        $T/tessera-flrq.cpp $T/tessera-linalg.cpp -I vendor -framework Accelerate
 compile_and_run l5          $T/test_l5.cpp          $T/tessera-l5.cpp
 compile_and_run imatrix     $T/test_imatrix.cpp     $T/tessera-imatrix.cpp
 compile_and_run corpus      $T/test_corpus.cpp      $T/tessera-corpus.cpp
@@ -69,7 +69,7 @@ compile_and_run regime      $T/test_regime.cpp      $T/tessera-regime.cpp
 compile_and_run peqat       $T/test_peqat.cpp       $T/tessera-peqat.cpp
 # SEPTQ banded-Cholesky quantizer parity (B3): standalone, links the septq
 # port + nlohmann/json for the fixture loader.
-compile_and_run septq       $T/test_septq.cpp       $T/tessera-septq.cpp -I vendor
+compile_and_run septq       $T/test_septq.cpp       $T/tessera-septq.cpp -I vendor -framework Accelerate
 
 # --- Needs vec (Accelerate) ---
 compile_and_run vec         $T/test_vec.cpp         $T/tessera-vec.cpp -framework Accelerate
@@ -95,16 +95,16 @@ else
 fi
 
 # --- Needs linalg + lbfgs (search pulls in vendor/nlohmann for the archive JSON) ---
-compile_and_run search      $T/test_search.cpp      $T/tessera-lrq.cpp $T/tessera-dartquant.cpp $T/tessera-flrq.cpp $T/tessera-champq.cpp $T/tessera-archive.cpp $T/tessera-linalg.cpp $T/tessera-lbfgs.cpp -I vendor
+compile_and_run search      $T/test_search.cpp      $T/tessera-lrq.cpp $T/tessera-dartquant.cpp $T/tessera-flrq.cpp $T/tessera-champq.cpp $T/tessera-archive.cpp $T/tessera-linalg.cpp $T/tessera-lbfgs.cpp -I vendor -framework Accelerate
 
 # --- CHAMP-Q L-BFGS permutation port (parity vs Python champq_permute.py) ---
-compile_and_run champq      $T/test_champq.cpp      $T/tessera-champq.cpp $T/tessera-lbfgs.cpp -I vendor
+compile_and_run champq      $T/test_champq.cpp      $T/tessera-champq.cpp $T/tessera-lbfgs.cpp -I vendor -framework Accelerate
 
 # --- MAP-Elites archive (search + linalg + lbfgs + vendor/nlohmann) ---
-compile_and_run map_elites  $T/test_map_elites.cpp  $T/tessera-lrq.cpp $T/tessera-dartquant.cpp $T/tessera-flrq.cpp $T/tessera-champq.cpp $T/tessera-archive.cpp $T/tessera-linalg.cpp $T/tessera-lbfgs.cpp -I vendor
+compile_and_run map_elites  $T/test_map_elites.cpp  $T/tessera-lrq.cpp $T/tessera-dartquant.cpp $T/tessera-flrq.cpp $T/tessera-champq.cpp $T/tessera-archive.cpp $T/tessera-linalg.cpp $T/tessera-lbfgs.cpp -I vendor -framework Accelerate
 
 # --- Modality as operative regime axis (regime + search + linalg + lbfgs + vendor) ---
-compile_and_run modality_routing $T/test_modality_routing.cpp $T/tessera-regime.cpp $T/tessera-lrq.cpp $T/tessera-dartquant.cpp $T/tessera-flrq.cpp $T/tessera-champq.cpp $T/tessera-archive.cpp $T/tessera-linalg.cpp $T/tessera-lbfgs.cpp -I vendor
+compile_and_run modality_routing $T/test_modality_routing.cpp $T/tessera-regime.cpp $T/tessera-lrq.cpp $T/tessera-dartquant.cpp $T/tessera-flrq.cpp $T/tessera-champq.cpp $T/tessera-archive.cpp $T/tessera-linalg.cpp $T/tessera-lbfgs.cpp -I vendor -framework Accelerate
 
 # --- HIGGS integration (higgs + cache + search + quant + vec) ---
 compile_and_run higgs_integration $T/test_higgs_integration.cpp $T/tessera-higgs.cpp $T/tessera-higgs-cache.cpp $T/tessera-lrq.cpp $T/tessera-dartquant.cpp $T/tessera-flrq.cpp $T/tessera-champq.cpp $T/tessera-archive.cpp $T/tessera-linalg.cpp $T/tessera-lbfgs.cpp $T/tessera-quant.cpp $T/tessera-vec.cpp -I vendor -framework Accelerate
@@ -150,7 +150,7 @@ compile_and_run features      $T/test_features.cpp    $T/tessera-features.cpp -I
 compile_and_run lk_train_data $T/test_lk_train_data.cpp $T/tessera-lk-train-data.cpp $T/tessera-lk-loss.cpp -I vendor
 
 # --- DartQuant QR-Orth + Whip loss port (parity vs Python dartquant_qr_orth; needs vendor/nlohmann for fixture) ---
-compile_and_run dartquant $T/test_dartquant.cpp $T/tessera-dartquant.cpp $T/tessera-linalg.cpp -I vendor
+compile_and_run dartquant $T/test_dartquant.cpp $T/tessera-dartquant.cpp $T/tessera-linalg.cpp -I vendor -framework Accelerate
 
 # --- common/tessera-debug ---
 compile_and_run sidecar_v3  $C/test_sidecar_v3.cpp  $C/tessera-sidecar-v3.cpp -I $C
