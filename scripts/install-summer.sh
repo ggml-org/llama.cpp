@@ -27,6 +27,7 @@ python3 scripts/apply-tiered-dram-pinned-fallback.py
 python3 scripts/apply-tiered-dram-matmul-staging.py
 python3 scripts/apply-tiered-no-prompt-echo.py
 python3 scripts/apply-summer-vram-autotune.py scripts/summer "$SUMMER_TMP"
+python3 scripts/apply-summer-model-aware-memory.py "$SUMMER_TMP"
 python3 -m py_compile "$SUMMER_TMP"
 
 python3 - <<'PY'
@@ -82,7 +83,8 @@ Summer.cpp installation complete.
   llama-tiered       : $PREFIX/bin/llama-tiered
   summer CLI         : $PREFIX/bin/summer
   model directory    : $HOME/models
-  VRAM policy        : automatic free-memory reserve and OOM retry
+  VRAM policy        : free-memory check, 3400 MiB floor, bounded OOM retry
+  DRAM policy        : model-size-aware budget, system-RAM preflight
   DRAM matmul        : temporary VRAM staging for cuBLAS compatibility
   prompt output      : generated tokens only
 
