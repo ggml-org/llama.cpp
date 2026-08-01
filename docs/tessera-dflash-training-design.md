@@ -224,12 +224,16 @@ warmup-per-window tokens the non-overlap layout threw away.
   features instead of a hand-built block.
 - Stage 1 (throwaway spike): hand-build one feature-augmented block, run one
   epoch of plain CE (weight = 1.0) through the generalized label fill, confirm
-  loss decreases. Proves the encoder+decoder+CE plumbing.
+  loss decreases. Proves the encoder+decoder+CE plumbing. Assert the
+  token-fidelity invariant from section 7.1 (one shared tokenization across
+  features, block tokens, and vocab; no detokenize -> retokenize).
 - Stage 2: add the weight side-channel; A/B D-PACE vs decay weights on the same
   blocks, confirm the gradient reweights (cross-check ts_dpace_ab_compare).
 - Stage 3: CLI (--tessera-dflash-train or a dedicated tool), LoRA export, guard
   eval.
-- Stage 4: wire into the Swift RunTrainingTool plug-in point.
+- Stage 4: wire into the Swift RunTrainingTool plug-in point. Harvest traces via
+  an interception layer on the inference path, not by instrumenting the agent
+  harness (section 7.1).
 
 ## 6. Risks, ranked
 
@@ -244,3 +248,97 @@ warmup-per-window tokens the non-overlap layout threw away.
 3. Variable block size. Telemetry emits variable n_dft; the training graph
    wants fixed block_drafts. Fix block_size, pad with weight 0 (free).
 4. Feature storage size / quantization fidelity.
+
+## 7. Driver-design principles (Prime Intellect post-training playbook)
+
+Source: Will Brown (Prime Intellect), "Modern Post-Training: A Deep Dive",
+AI Engineer 2026-07 (transcript captured 2026-07-31). Prime Intellect is the
+leading open-source post-training shop; their Verifiers + Prime RL stack is the
+cloud-scale blueprint for the SAME flywheel Tessera builds on-device (harvest
+real-world signal, ground updates in verifiable outcomes, amortize training
+compute against inference). Take the CONCEPTS, not the code: Prime is
+Python/PyTorch/Torch Titan on GPU clusters and is egress-heavy (cloud
+sandboxes, hosted platform, API teachers), none of which fits Tessera's native
+C++/Swift + ggml-opt + no-egress doctrine. The alignments below are why the
+driver should be built the way it is, plus two concrete hazards to design out.
+
+### 7.1 Two concrete cautions
+
+**Token fidelity (the "renderers" hazard).** Tokenization is many-to-one, so a
+text -> tokens -> text round-trip (a chat template stripping a stray newline)
+silently changes the token stream. Prime found this causes trainer/inference
+mismatch and off-policy drift that only surfaces LATE in long runs; they built
+"renderers" (programmable chat templates + logical-prefix-hit detection) to
+keep dual message/token streams consistent.
+
+- The DFlash/LK drafter drivers are SAFE BY CONSTRUCTION if they stay in token
+  space. Features are keyed by corpus token index (ts_features_row_to_token);
+  block labels are token IDs (target_tokens[k] / verifier_argmax); densification
+  writes straight into the ggml label tensor (the LK driver already does this,
+  no detokenize/retokenize). There is no rendered text in the training path.
+- INVARIANT TO ASSERT AT DRIVER LOAD: feature rows, block-dataset tokens, and
+  the model vocab share ONE tokenization. This holds by construction - the
+  drafter borrows tok_embd + output (lm_head) from the trunk via ctx_other, so
+  its vocab IS the trunk vocab; spec_calib.v2 verifier_argmax/target_tokens are
+  trunk-vocab IDs; features are captured over the trunk-tokenized corpus - but
+  the driver should assert tokenizer/vocab identity explicitly and must NEVER
+  detokenize -> retokenize anywhere in the training path.
+- WHERE IT BITES LATER: the capability/coding-agent RL loop (the actual
+  self-improving loop) trains on chat-templated agent trajectories. THAT path
+  must capture tokens at generation time (as the LK driver does) and keep dual
+  message/token streams, not reconstruct from rendered text. This is Tessera's
+  real "renderers" concern; the drafter drivers avoid it by staying token-side.
+
+**Interception server (trace-harvest wiring).** Prime's pattern: the harness
+talks to a fake OpenAI/Anthropic-compatible endpoint; a thin layer intercepts
+each request/response, injects logprob capture + temperature, and routes to the
+trainer - the harness never knows it is being trained. This decouples
+running-the-agent from harvesting-signal, so the same harness runs identically
+in deploy and train mode.
+
+- For the DFlash OFFLINE driver this is background (it trains on already
+  captured features + traces).
+- For the self-improving-loop wiring (Stage 4, Swift RunTrainingTool /
+  orchestrator) this is the right shape: harvest traces via a capture layer on
+  the INFERENCE PATH (intercept request/response; record tokens + logprobs +
+  accept/reject), NOT by instrumenting the agent harness. Tessera already does a
+  version of this - spec_calib telemetry intercepts the spec-decode loop; imatrix
+  feature capture intercepts the trunk forward. Frame the orchestrator's trace
+  harvesting as an interception layer so TesseraAgentLoop stays unmodified.
+
+### 7.2 Design principles to build to
+
+- Loss / algorithm split. Keep the LOSS (weighted CE / D-PACE - the thing taking
+  the gradient) separable from the ALGORITHM / data-prep (block assembly,
+  dpace_weight baking, feature loading). Concretely: the generalized weighted-CE
+  label fill (llama-context.cpp:3517-3527, write dpace_weight not 1.0) is the
+  pure loss-side change; block layout + weight baking + feature load stay
+  driver-side. This is what keeps finetune unchanged (weight defaults 1.0) and
+  makes D-PACE-vs-decay a DATA-side swap (Stage 2 A/B). Mirrors the LK driver
+  (densify = algorithm, GGML_OPT_LOSS_TYPE_LK = loss).
+- Advantage-as-score. Plain CE = per-position weight 1; D-PACE = adaptive
+  per-position weight; LK = acceptance-rate objective. If another drafter
+  objective appears, factor it as "swap the loss target / the per-position
+  weight", not "write a new training loop". D-PACE's adaptive weights ARE the
+  drafter analogue of Prime's position/group reward shaping.
+- Teacher = offline verifier traces (OPD framing). On-policy distillation =
+  student sequences -> teacher prefill -> reference logprobs -> train. For the
+  drafter the teacher is the trunk VERIFIER, and spec_calib.v2 (verifier_argmax
+  / verifier_topk) is that teacher signal captured OFFLINE. So DFlash/LK
+  training is already distillation from the trunk-as-teacher; no live teacher is
+  needed. Live cloud teachers (escalation, decision #9) belong to the
+  capability/agent layer, formalizable later as OPD with a teacher pool.
+- Async / off-policy is fine. Idle-time training is inherently off-policy
+  (traces harvested during usage, trained later). Prime runs ~16 steps off-policy
+  BY DESIGN and decouples inference-server from trainer. Do not over-engineer
+  on-policyness for the drafter loop (the drafter changes slowly; traces are
+  recent). Keep harvest (continuous) decoupled from train (idle-triggered) -
+  which TesseraTrainingOrchestrator already does (gates on trace count + idle).
+- Group / variance rewards (later, capability axis). For the capability/coding
+  loop, adopt group-variance conciseness bonuses (bonus the shortest CORRECT
+  answer; optimal length cannot be known up front, so use group variance) to
+  bound chain-of-thought - directly addresses agent-loop-runaway (R27). Not
+  drafter-relevant now.
+
+Stage hooks: Stage 1 asserts the token-fidelity invariant (7.1); Stage 4 wires
+harvesting as an interception layer (7.1).
