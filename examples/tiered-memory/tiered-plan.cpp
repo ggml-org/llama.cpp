@@ -4,12 +4,14 @@
 #include "gguf.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -142,11 +144,11 @@ std::string canonical_path(const std::string & path) {
 }
 
 void print_summary(const common_tiered_memory_plan & plan) {
-    const auto mib = [](size_t bytes) { return bytes / 1024.0 / 1024.0; };
+    const auto mib = [](double bytes) { return bytes / 1024.0 / 1024.0; };
     std::cout << std::fixed << std::setprecision(2)
-              << "VRAM: " << mib(plan.vram_bytes) << " MiB, active " << mib(static_cast<size_t>(plan.active_vram_bytes)) << " MiB/token\n"
-              << "DRAM: " << mib(plan.dram_bytes) << " MiB, active " << mib(static_cast<size_t>(plan.active_dram_bytes)) << " MiB/token\n"
-              << "SSD : " << mib(plan.ssd_bytes)  << " MiB, active " << mib(static_cast<size_t>(plan.active_ssd_bytes))  << " MiB/token\n";
+              << "VRAM: " << mib(plan.vram_bytes) << " MiB, active " << mib(plan.active_vram_bytes) << " MiB/token\n"
+              << "DRAM: " << mib(plan.dram_bytes) << " MiB, active " << mib(plan.active_dram_bytes) << " MiB/token\n"
+              << "SSD : " << mib(plan.ssd_bytes)  << " MiB, active " << mib(plan.active_ssd_bytes)  << " MiB/token\n";
 }
 
 } // namespace
