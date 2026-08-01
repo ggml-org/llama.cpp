@@ -64,7 +64,7 @@ old = """        case GGML_CUDA_TIERED_MEMORY_DRAM: {
             tensor->data = state->device_ptr;
         } break;
 """
-new = """        case GGML_CUDA_TIERED_MEMORY_DRAM: {
+new = r"""        case GGML_CUDA_TIERED_MEMORY_DRAM: {
             cudaDeviceProp properties = {};
             TIERED_CUDA_CHECK(cudaGetDeviceProperties(&properties, ctx->device));
             if (!properties.canMapHostMemory) {
