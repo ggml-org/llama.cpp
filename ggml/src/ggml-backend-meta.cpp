@@ -1864,6 +1864,21 @@ static void ggml_backend_meta_buffer_get_tensor(ggml_backend_buffer_t buffer, co
             const ggml_tensor * simple_tensor = scratch.get(tensor, 0);
             ggml_backend_tensor_get(simple_tensor, data, offset, size);
         } break;
+        case GGML_BACKEND_SPLIT_AXIS_PARTIAL: {
+            GGML_ASSERT(tensor->type == GGML_TYPE_F32);
+            GGML_ASSERT(offset % sizeof(float) == 0);
+            GGML_ASSERT(size   % sizeof(float) == 0);
+            const size_t n = size / sizeof(float);
+            std::vector<float> partial(n);
+            std::fill((float *) data, (float *) data + n, 0.0f);
+            for (size_t j = 0; j < n_bufs; ++j) {
+                const ggml_tensor * simple_tensor = scratch.get(tensor, j);
+                ggml_backend_tensor_get(simple_tensor, partial.data(), offset, size);
+                for (size_t i = 0; i < n; ++i) {
+                    ((float *) data)[i] += partial[i];
+                }
+            }
+        } break;
         default: {
             GGML_ABORT("fatal error");
         }

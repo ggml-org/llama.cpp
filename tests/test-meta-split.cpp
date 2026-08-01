@@ -30,6 +30,8 @@ static ggml_backend_meta_split_state split_state_callback(const ggml_tensor * te
         for (size_t j = 0; j < ud->ndev; ++j) {
             state.ne[j] = tensor->ne[axis] / (int64_t) ud->ndev;
         }
+    } else if (std::strcmp(tensor->name, "partial") == 0) {
+        state.axis = GGML_BACKEND_SPLIT_AXIS_PARTIAL;
     }
     return state;
 }
@@ -74,6 +76,8 @@ int main() {
     ggml_set_name(mirror, "mirror");
     ggml_tensor * axis3 = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F32, 4, 4, 4, 8);
     ggml_set_name(axis3, "axis3");
+    ggml_tensor * partial = ggml_new_tensor_4d(ctx.get(), GGML_TYPE_F32, 4, 4, 4, 1);
+    ggml_set_name(partial, "partial");
     // Swap dimensions 0 and 1 while preserving dimension 2.  The result is
     // deliberately non-contiguous but remains split along axis 2.
     ggml_tensor * permuted = ggml_permute(ctx.get(), root, 1, 0, 2, 3);
@@ -166,6 +170,19 @@ int main() {
         }
     }
 
-    std::puts("meta split axis-2, axis-3, and mirrored readback passed");
+    const size_t partial_nbytes = ggml_nbytes(partial);
+    std::vector<float> partial_expected(partial_nbytes / sizeof(float));
+    for (size_t i = 0; i < partial_expected.size(); ++i) {
+        partial_expected[i] = (float) (i + 0.25f);
+    }
+    ggml_backend_tensor_set(partial, partial_expected.data(), 0, partial_nbytes);
+    std::vector<float> partial_actual(partial_expected.size(), 0.0f);
+    ggml_backend_tensor_get(partial, partial_actual.data(), 0, partial_nbytes);
+    if (partial_actual != partial_expected) {
+        std::fprintf(stderr, "partial set/readback mismatch\n");
+        return 1;
+    }
+
+    std::puts("meta split axis-2, axis-3, mirrored, and partial readback passed");
     return 0;
 }
