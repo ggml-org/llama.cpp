@@ -449,14 +449,15 @@ struct llama_model_motif3 : public llama_model_base {
         ggml_tensor * build_mhc_sinkhorn(ggml_tensor * m, int il) const;
 
         // weighted reduction over the expansion dim: [n_embd, E, nt] -> [n_embd, nt]
-        ggml_tensor * build_mhc_apply_pre(ggml_tensor * x, ggml_tensor * h_pre) const;
+        ggml_tensor * build_mhc_apply_pre(ggml_tensor * x, ggml_tensor * h_pre, int il) const;
 
         // out[dst] = sum_src h_res[dst,src] * x[src] + h_post[dst] * y
         ggml_tensor * build_mhc_combine(
                 ggml_tensor * x,      // [n_embd, E, nt]
                 ggml_tensor * y,      // [n_embd, nt]
                 ggml_tensor * h_post,
-                ggml_tensor * h_res) const;
+                ggml_tensor * h_res,
+                int il) const;
 
         // grouped PolyNorm gated activation: poly(gate) * up
         // per-expert variant when selected != nullptr (poly_w = [3, n_expert], poly_b = [1, n_expert])

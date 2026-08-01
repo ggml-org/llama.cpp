@@ -183,6 +183,7 @@ std::unique_ptr<llm_graph_context> llama_model_motif3::build_arch_graph(const ll
 
 // mHC
 
+
 void llama_model_motif3::graph::build_mhc_gates(
         ggml_tensor  * x,
         ggml_tensor  * norm_w,
@@ -209,9 +210,15 @@ void llama_model_motif3::graph::build_mhc_gates(
     ggml_tensor * alpha_post = ggml_view_1d(ctx0, alpha, 1, 1*ggml_row_size(alpha->type, 1));
     ggml_tensor * alpha_res  = ggml_view_1d(ctx0, alpha, 1, 2*ggml_row_size(alpha->type, 1));
 
+    const bool fuse_comb = cparams.fused_dsv4_hc_comb && hc == 4 && il >= 0;
+
+    // raw gate projections (shared by the fused and unfused h_res paths)
+    ggml_tensor * pre_lin  = ggml_mul_mat(ctx0, pre_w,  flat_norm); // [hc, nt]
+    ggml_tensor * post_lin = ggml_mul_mat(ctx0, post_w, flat_norm); // [hc, nt]
+    ggml_tensor * res_lin  = ggml_mul_mat(ctx0, res_w,  flat_norm); // [hc*hc, nt]
+
     // h_pre
-    ggml_tensor * pre = ggml_mul_mat(ctx0, pre_w, flat_norm); // [hc, nt]
-    pre = ggml_mul(ctx0, pre, alpha_pre);
+    ggml_tensor * pre = ggml_mul(ctx0, pre_lin, alpha_pre);
     pre = ggml_add(ctx0, pre, pre_b);
     pre = ggml_clamp(ctx0, pre, -10.0f, 10.0f);
     pre = ggml_sigmoid(ctx0, pre);
@@ -219,8 +226,7 @@ void llama_model_motif3::graph::build_mhc_gates(
     *h_pre = pre;
 
     // h_post
-    ggml_tensor * post = ggml_mul_mat(ctx0, post_w, flat_norm); // [hc, nt]
-    post = ggml_mul(ctx0, post, alpha_post);
+    ggml_tensor * post = ggml_mul(ctx0, post_lin, alpha_post);
     post = ggml_add(ctx0, post, post_b);
     post = ggml_clamp(ctx0, post, -10.0f, 10.0f);
     post = ggml_sigmoid(ctx0, post);
@@ -231,15 +237,26 @@ void llama_model_motif3::graph::build_mhc_gates(
     *h_post = post;
 
     // h_res
-    ggml_tensor * res_lin = ggml_mul_mat(ctx0, res_w, flat_norm); // [hc*hc, nt]
-    res_lin = ggml_mul(ctx0, res_lin, alpha_res);
-    // reshape to [hc(src=j), hc(dst=i), nt]
-    res_lin = ggml_reshape_3d(ctx0, res_lin, hc, hc, nt);
-    res_lin = ggml_add(ctx0, res_lin, res_b); // res_b: [hc, hc]
-    res_lin = ggml_clamp(ctx0, res_lin, -20.0f, 20.0f);
-    ggml_tensor * m = ggml_exp(ctx0, res_lin);
+    ggml_tensor * m = nullptr;
+    if (fuse_comb) {
+        ggml_tensor * mixes = ggml_concat(ctx0, pre_lin, post_lin, 0);
+        mixes = ggml_concat(ctx0, mixes, res_lin, 0); // [(2 + hc)*hc, nt]
 
-    m = build_mhc_sinkhorn(m, il);
+        ggml_tensor * base = ggml_concat(ctx0, pre_b, post_b, 0);
+        base = ggml_concat(ctx0, base, ggml_reshape_1d(ctx0, res_b, hc*hc), 0); // [(2 + hc)*hc]
+
+        m = ggml_dsv4_hc_comb(ctx0, mixes, alpha, base, /*eps =*/ 0.0f, (int32_t) hparams.motif_mhc_iters);
+        res->add_fused_node({LLM_FUSED_OP_DSV4_HC_COMB, m, il});
+    } else {
+        ggml_tensor * res_aff = ggml_mul(ctx0, res_lin, alpha_res);
+        // reshape to [hc(src=j), hc(dst=i), nt]
+        res_aff = ggml_reshape_3d(ctx0, res_aff, hc, hc, nt);
+        res_aff = ggml_add(ctx0, res_aff, res_b); // res_b: [hc, hc]
+        res_aff = ggml_clamp(ctx0, res_aff, -20.0f, 20.0f);
+        m = ggml_exp(ctx0, res_aff);
+
+        m = build_mhc_sinkhorn(m, il);
+    }
     cb(m, "mhc_h_res", il);
     *h_res = m;
 }
@@ -261,9 +278,16 @@ ggml_tensor * llama_model_motif3::graph::build_mhc_sinkhorn(ggml_tensor * m, int
     return m;
 }
 
-ggml_tensor * llama_model_motif3::graph::build_mhc_apply_pre(ggml_tensor * x, ggml_tensor * h_pre) const {
+ggml_tensor * llama_model_motif3::graph::build_mhc_apply_pre(ggml_tensor * x, ggml_tensor * h_pre, int il) const {
     const int64_t hc = hparams.motif_mhc_mult;
     const int64_t nt = x->ne[2];
+
+    if (cparams.fused_dsv4_hc_pre && il >= 0) {
+        // dst[i, t] = sum_h x[i, h, t]*h_pre[h, t], ascending h
+        ggml_tensor * result = ggml_dsv4_hc_pre(ctx0, x, h_pre);
+        res->add_fused_node({LLM_FUSED_OP_DSV4_HC_PRE, result, il});
+        return result;
+    }
 
     ggml_tensor * result = nullptr;
     for (int64_t ih = 0; ih < hc; ++ih) {
@@ -279,9 +303,18 @@ ggml_tensor * llama_model_motif3::graph::build_mhc_combine(
         ggml_tensor * x,
         ggml_tensor * y,
         ggml_tensor * h_post,
-        ggml_tensor * h_res) const {
+        ggml_tensor * h_res,
+        int il) const {
     const int64_t hc = hparams.motif_mhc_mult;
     const int64_t nt = y->ne[1];
+
+    if (cparams.fused_dsv4_hc_post && il >= 0) {
+        // ggml_dsv4_hc_post expects comb as [dst, src, nt]; h_res is [src, dst, nt].
+        ggml_tensor * comb = ggml_cont(ctx0, ggml_permute(ctx0, h_res, 1, 0, 2, 3));
+        ggml_tensor * result = ggml_dsv4_hc_post(ctx0, y, x, h_post, comb);
+        res->add_fused_node({LLM_FUSED_OP_DSV4_HC_POST, result, il});
+        return result;
+    }
 
     // h_res layout: [hc(src=j), hc(dst=i), nt]
     ggml_tensor * out = nullptr;
@@ -702,7 +735,7 @@ llama_model_motif3::graph::graph(const llama_model & model, const llm_graph_para
                     layer.mhc_attn_alpha,
                     &h_pre, &h_post, &h_res, il);
 
-            ggml_tensor * x_red = build_mhc_apply_pre(x, h_pre); // [n_embd, nt]
+            ggml_tensor * x_red = build_mhc_apply_pre(x, h_pre, il); // [n_embd, nt]
             cb(x_red, "mhc_attn_red", il);
 
             cur = build_norm(x_red, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
@@ -710,7 +743,7 @@ llama_model_motif3::graph::graph(const llama_model & model, const llm_graph_para
 
             cur = build_gdla_attn(model, inp_kv, inp_iswa, cur, inp_pos, kq_scale_full, kq_scale_swa, il);
 
-            x = build_mhc_combine(x, cur, h_post, h_res);
+            x = build_mhc_combine(x, cur, h_post, h_res, il);
             cb(x, "mhc_attn_out", il);
 
             build_mhc_gates(x,
@@ -721,7 +754,7 @@ llama_model_motif3::graph::graph(const llama_model & model, const llm_graph_para
                     layer.mhc_ffn_alpha,
                     &h_pre, &h_post, &h_res, il);
 
-            ggml_tensor * h_red = build_mhc_apply_pre(x, h_pre);
+            ggml_tensor * h_red = build_mhc_apply_pre(x, h_pre, il);
             cb(h_red, "mhc_ffn_red", il);
 
             cur = build_norm(h_red, layer.ffn_norm, nullptr, LLM_NORM_RMS, il);
@@ -736,7 +769,7 @@ llama_model_motif3::graph::graph(const llama_model & model, const llm_graph_para
             }
             cb(cur, "ffn_out", il);
 
-            x = build_mhc_combine(x, cur, h_post, h_res);
+            x = build_mhc_combine(x, cur, h_post, h_res, il);
             cb(x, "mhc_ffn_out", il);
         } else {
             ggml_tensor * inpSA = x;
