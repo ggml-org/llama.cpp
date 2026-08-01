@@ -57,6 +57,35 @@ public struct EvolveTool: TesseraTool {
         let generations = arguments["generations"]?.numberValue.map { Int($0) } ?? 50
         let population = arguments["population"]?.numberValue.map { Int($0) } ?? 32
 
+        // The FFI cannot run the GA (it needs a loaded model context), so the
+        // real impl and the stub both return fallbackToCLI; the gate is kept
+        // so a future in-process evolve path slots in here without touching
+        // the tool signature.
+        if TesseraFFIBridge.isAvailable {
+            let config: [String: Any] = [
+                "generations": generations,
+                "population": population,
+                "target_bits": targetBits,
+                "imatrix_path": NSString(string: imatrixPath).expandingTildeInPath,
+                "policy_out_path": NSString(string: outputPath).expandingTildeInPath,
+            ]
+            switch TesseraFFIBridge.evolve(
+                model: NSString(string: modelPath).expandingTildeInPath, config: config
+            ) {
+            case let .success(output):
+                return .ok(output, data: [
+                    "output_path": .string(outputPath),
+                    "target_bits": .number(targetBits),
+                    "generations": .number(Double(generations)),
+                    "backend": .string("ffi"),
+                ])
+            case .fallbackToCLI:
+                break
+            case let .error(code, message):
+                return .fail("Evolution failed via FFI (code \(code)): \(message)")
+            }
+        }
+
         let runner = ProcessRunner()
         let result = try await runner.run(
             executable: "tessera-evolve",

@@ -8,6 +8,52 @@ final class TesseraEngineBridgeFactoryTests: XCTestCase {
     }
 }
 
+// Locks in the no-xcframework (SwiftPM stub) contract: when the package is
+// built by swift build / swift test the CTesseraFFI stub is linked, so the
+// bridge reports unavailable and every operation falls back to the CLI. When
+// tessera.xcframework is linked in the Xcode app these assertions flip and
+// the real C++ engine takes over.
+final class TesseraFFIBridgeStubTests: XCTestCase {
+    func testStubReportsUnavailable() {
+        // The SwiftPM stub returns 0 from tessera_ffi_is_available().
+        XCTAssertFalse(TesseraFFIBridge.isAvailable)
+    }
+
+    func testStubVersionIsTheStubMarker() {
+        XCTAssertEqual(TesseraFFIBridge.version, "tessera-ffi-stub")
+    }
+
+    func testStubQuantizeFallsBackToCLI() {
+        let outcome = TesseraFFIBridge.quantize(
+            model: "/tmp/model.gguf", output: "/tmp/out.gguf", config: [:]
+        )
+        XCTAssertEqual(outcome, .fallbackToCLI)
+    }
+
+    func testStubEvolveFallsBackToCLI() {
+        let outcome = TesseraFFIBridge.evolve(model: "/tmp/model.gguf", config: [:])
+        XCTAssertEqual(outcome, .fallbackToCLI)
+    }
+
+    func testStubConvertFallsBackToCLI() {
+        let outcome = TesseraFFIBridge.convert(
+            model: "/tmp/model.gguf", output: "/tmp/out.mlmodelc", format: "coreml"
+        )
+        XCTAssertEqual(outcome, .fallbackToCLI)
+    }
+
+    func testStubEvaluateFallsBackToCLI() {
+        let outcome = TesseraFFIBridge.evaluate(model: "/tmp/model.gguf", config: [:])
+        XCTAssertEqual(outcome, .fallbackToCLI)
+    }
+
+    func testCapabilitiesReflectStub() {
+        let caps = TesseraEngineBridgeFactory.capabilities
+        XCTAssertFalse(caps.ffiAvailable)
+        XCTAssertEqual(caps.ffiVersion, "tessera-ffi-stub")
+    }
+}
+
 final class QuantizationReceiptTests: XCTestCase {
     private let sampleJSON = """
     {

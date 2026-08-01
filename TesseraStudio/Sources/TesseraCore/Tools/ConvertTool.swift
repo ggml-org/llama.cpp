@@ -46,6 +46,29 @@ public struct ConvertTool: TesseraTool {
         let computeUnits = arguments["compute_units"]?.stringValue ?? "cpuAndNeuralEngine"
         let precision = arguments["precision"]?.stringValue ?? "float16"
 
+        // The FFI cannot dequantize weight tensors without a loaded model
+        // context, so it returns fallbackToCLI; the gate is kept so a future
+        // in-process convert path slots in here.
+        if TesseraFFIBridge.isAvailable {
+            switch TesseraFFIBridge.convert(
+                model: NSString(string: modelPath).expandingTildeInPath,
+                output: NSString(string: outputPath).expandingTildeInPath,
+                format: "coreml"
+            ) {
+            case let .success(output):
+                return .ok(output, data: [
+                    "output_path": .string(outputPath),
+                    "compute_units": .string(computeUnits),
+                    "precision": .string(precision),
+                    "backend": .string("ffi"),
+                ])
+            case .fallbackToCLI:
+                break
+            case let .error(code, message):
+                return .fail("Conversion failed via FFI (code \(code)): \(message)")
+            }
+        }
+
         let runner = ProcessRunner()
         let result = try await runner.run(
             executable: "tessera-convert",

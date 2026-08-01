@@ -1,18 +1,17 @@
 // tessera_ffi_reference.h - REFERENCE ONLY, NOT COMPILED.
 //
-// This file documents the planned C FFI surface for the native Tessera
-// engine (tessera.xcframework, see docs/tessera-studio-design.md section
-// 3). It is intentionally NOT on any include path and is not part of any
-// target: no source in this package imports it, and SwiftPM does not
-// compile it. It exists only as a contract sketch for the future
-// xcframework integration.
+// This file documents the C FFI surface for the native Tessera engine
+// (tessera.xcframework, see docs/tessera-studio-design.md section 3). It
+// is intentionally NOT on any include path and is not part of any target:
+// no source in this package imports it, and SwiftPM does not compile it.
 //
-// The previous CTesseraFFI target (a link-time stub whose
-// tessera_ffi_is_available() always returned 0) has been removed: every
-// call site gated on it was statically dead, and the working on-device
-// path is the CLlama runtime bridge (dlopen of libllama.dylib). When the
-// native engine ships, build a real xcframework target against this
-// contract and reintroduce the Swift wrapper.
+// The IMPLEMENTED contract now lives in Sources/CTesseraFFI/include/tessera_ffi.h
+// (the published header), Sources/CTesseraFFI/tessera_ffi.c (the SwiftPM
+// stub, returns unavailable), and TesseraStudio/ffi/tessera_ffi.cpp (the
+// real C++ impl, compiled by CMake into tessera.xcframework). The Swift
+// wrapper is TesseraCore/Engine/TesseraFFIBridge.swift. This file remains
+// as the historical contract sketch; the three files above are the source
+// of truth.
 //
 // Conventions:
 //   - Functions returning int use 0 for success and a non-zero error code
