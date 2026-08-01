@@ -15,7 +15,11 @@ add_library(${TARGET}
     tessera/tessera-corpus.cpp
     tessera/tessera-awq.cpp
     # search / GA / regime / HIGGS
-    tessera/tessera-search.cpp
+    tessera/tessera-lrq.cpp
+    tessera/tessera-dartquant.cpp
+    tessera/tessera-flrq.cpp
+    tessera/tessera-champq.cpp
+    tessera/tessera-archive.cpp
     tessera/tessera-regime.cpp
     tessera/tessera-higgs.cpp
     tessera/tessera-higgs-cache.cpp
@@ -46,6 +50,8 @@ add_library(${TARGET}
     tessera/tessera-lk-loss.cpp
     tessera/tessera-dataset.cpp
     tessera/tessera-dpace.cpp
+    # drafter training pipeline: LK training-data builder (traces -> dense labels)
+    tessera/tessera-lk-train-data.cpp
     # drafter training pipeline: offline trunk-feature capture file format
     tessera/tessera-features.cpp
     # multimodal
@@ -88,6 +94,20 @@ endif()
 set(TARGET llama-quantize)
 
 add_executable(${TARGET} main.cpp)
+target_link_libraries(${TARGET} PRIVATE llama-quantize-impl)
+target_compile_features(${TARGET} PRIVATE cxx_std_17)
+
+if(LLAMA_TOOLS_INSTALL)
+    install(TARGETS ${TARGET} RUNTIME)
+endif()
+
+# tessera-train-lk: native LK (acceptance-rate) drafter training driver.
+# Reads spec_calib.v2 traces and trains a drafter with GGML_OPT_LOSS_TYPE_LK.
+# See docs/tessera-lk-training-design.md.
+
+set(TARGET tessera-train-lk)
+
+add_executable(${TARGET} tessera/tessera-train-lk.cpp)
 target_link_libraries(${TARGET} PRIVATE llama-quantize-impl)
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
 

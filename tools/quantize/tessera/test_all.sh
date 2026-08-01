@@ -75,16 +75,16 @@ else
 fi
 
 # --- Needs linalg + lbfgs (search pulls in vendor/nlohmann for the archive JSON) ---
-compile_and_run search      $T/test_search.cpp      $T/tessera-search.cpp $T/tessera-linalg.cpp $T/tessera-lbfgs.cpp -I vendor
+compile_and_run search      $T/test_search.cpp      $T/tessera-lrq.cpp $T/tessera-dartquant.cpp $T/tessera-flrq.cpp $T/tessera-champq.cpp $T/tessera-archive.cpp $T/tessera-linalg.cpp $T/tessera-lbfgs.cpp -I vendor
 
 # --- MAP-Elites archive (search + linalg + lbfgs + vendor/nlohmann) ---
-compile_and_run map_elites  $T/test_map_elites.cpp  $T/tessera-search.cpp $T/tessera-linalg.cpp $T/tessera-lbfgs.cpp -I vendor
+compile_and_run map_elites  $T/test_map_elites.cpp  $T/tessera-lrq.cpp $T/tessera-dartquant.cpp $T/tessera-flrq.cpp $T/tessera-champq.cpp $T/tessera-archive.cpp $T/tessera-linalg.cpp $T/tessera-lbfgs.cpp -I vendor
 
 # --- Modality as operative regime axis (regime + search + linalg + lbfgs + vendor) ---
-compile_and_run modality_routing $T/test_modality_routing.cpp $T/tessera-regime.cpp $T/tessera-search.cpp $T/tessera-linalg.cpp $T/tessera-lbfgs.cpp -I vendor
+compile_and_run modality_routing $T/test_modality_routing.cpp $T/tessera-regime.cpp $T/tessera-lrq.cpp $T/tessera-dartquant.cpp $T/tessera-flrq.cpp $T/tessera-champq.cpp $T/tessera-archive.cpp $T/tessera-linalg.cpp $T/tessera-lbfgs.cpp -I vendor
 
 # --- HIGGS integration (higgs + cache + search + quant + vec) ---
-compile_and_run higgs_integration $T/test_higgs_integration.cpp $T/tessera-higgs.cpp $T/tessera-higgs-cache.cpp $T/tessera-search.cpp $T/tessera-linalg.cpp $T/tessera-lbfgs.cpp $T/tessera-quant.cpp $T/tessera-vec.cpp -I vendor -framework Accelerate
+compile_and_run higgs_integration $T/test_higgs_integration.cpp $T/tessera-higgs.cpp $T/tessera-higgs-cache.cpp $T/tessera-lrq.cpp $T/tessera-dartquant.cpp $T/tessera-flrq.cpp $T/tessera-champq.cpp $T/tessera-archive.cpp $T/tessera-linalg.cpp $T/tessera-lbfgs.cpp $T/tessera-quant.cpp $T/tessera-vec.cpp -I vendor -framework Accelerate
 
 # --- Needs sidecar + vec ---
 compile_and_run l15         $T/test_l15.cpp         $T/tessera-l15.cpp $C/tessera-sidecar-v3.cpp $T/tessera-vec.cpp -I $C -framework Accelerate
@@ -122,6 +122,9 @@ compile_and_run dpace         $T/test_dpace.cpp       $T/tessera-dpace.cpp
 
 # --- Drafter training pipeline: offline feature-capture file format (needs vendor) ---
 compile_and_run features      $T/test_features.cpp    $T/tessera-features.cpp -I vendor
+
+# --- Drafter training pipeline: LK training-data builder (needs vendor + lk-loss densify) ---
+compile_and_run lk_train_data $T/test_lk_train_data.cpp $T/tessera-lk-train-data.cpp $T/tessera-lk-loss.cpp -I vendor
 
 # --- common/tessera-debug ---
 compile_and_run sidecar_v3  $C/test_sidecar_v3.cpp  $C/tessera-sidecar-v3.cpp -I $C
