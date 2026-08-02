@@ -7692,7 +7692,28 @@ inline bool enable_adreno_trans_weight_q5_K(const ggml_backend_opencl_context *b
            qh_img_width <= backend_ctx->image_max_buffer_size;
 }
 
+// The flat-GEMV large-m escape is OPT-IN (GGML_OPENCL_FLAT_LARGE_M=1) because it
+// is SLOWER than the route it replaces, not because it is unsafe. It was first
+// parked on the theory that it out-of-bounds-writes at vocab-scale shapes; that
+// was a misattribution (the test-backend-ops dst sentinel was tripped by the o4
+// GEMV's unguarded tail store, fixed separately - and at the shape it was blamed
+// for, k=1536, this predicate returns false anyway, so the flat route never ran).
+//
+// The escape's original rationale, "gemv_noshuffle perf drops for large M",
+// predates the o4 kernel, which now covers the same long-vocab shapes and beats
+// this route on every device measured (Qwen3-4B-Q4_K_M, q6_K lm_head
+// 151936x2560, tg128, matched pairs vs o4): A8X -10.3% (0/3 pairs), X2E -3.7%
+// (0/3). Keep it reachable for shapes o4 declines, but do not default it on.
+static inline bool flat_large_m_enabled() {
+    static const char * e = getenv("GGML_OPENCL_FLAT_LARGE_M");
+    static const bool en = e != nullptr && atoi(e) != 0;
+    return en;
+}
+
 static inline bool use_flat_gemv_for_large_m_q4_K(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
+    if (!flat_large_m_enabled()) {
+        return false;
+    }
     // gemv_noshuffle variant perf drops for large M, use flat variant for large M.
     // threshold is well above typical hidden/FFN dims, but below typical vocab sizes.
     // note that this forces large M weights to use LM GEMM.
@@ -7704,6 +7725,9 @@ static inline bool use_flat_gemv_for_large_m_q4_K(const ggml_backend_opencl_cont
 }
 
 static inline bool use_flat_gemv_for_large_m_q6_K(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
+    if (!flat_large_m_enabled()) {
+        return false;
+    }
     // gemv_noshuffle variant perf drops for large M, use flat variant for large M.
     // threshold is well above typical hidden/FFN dims, but below typical vocab sizes.
     // q6_K flat gemv is worse for smaller K; 2048 seems to be a reasonable threshold.
