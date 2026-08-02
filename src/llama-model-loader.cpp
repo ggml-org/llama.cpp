@@ -3,6 +3,7 @@
 #include "ggml-alloc.h"
 #include "ggml.h"
 #include "gguf.h"
+#include "ggml-qfx32.h"
 #include "llama-hparams.h"
 #include "llama.h"
 
@@ -759,6 +760,9 @@ llama_model_loader::llama_model_loader(
             case GGML_TYPE_NVFP4:   ftype = LLAMA_FTYPE_MOSTLY_NVFP4;   break;
             case GGML_TYPE_Q1_0:    ftype = LLAMA_FTYPE_MOSTLY_Q1_0;    break;
             case GGML_TYPE_Q2_0:    ftype = LLAMA_FTYPE_MOSTLY_Q2_0;    break;
+            case GGML_TYPE_QFX16:   ftype = LLAMA_FTYPE_MOSTLY_QFX16;   break;
+            case GGML_TYPE_QFX32:   ftype = LLAMA_FTYPE_MOSTLY_QFX32;   break;
+            case GGML_TYPE_QFXQ:    ftype = LLAMA_FTYPE_MOSTLY_QFXQ;    break;
             default:
                 {
                     LLAMA_LOG_WARN("%s: unknown type %s\n", __func__, ggml_type_name(type_max));
@@ -808,6 +812,13 @@ llama_model_loader::llama_model_loader(
 
     if (this->use_mmap && !llama_mmap::SUPPORTED) {
         LLAMA_LOG_WARN("%s: mmap is not supported on this platform\n", __func__);
+        this->use_mmap = false;
+    }
+
+    // QFX32 dequant-on-load: tensor sizes change (QFX32 -> f32), so mmap
+    // zero-copy is not possible (buffer would be undersized for decoded data)
+    if (this->use_mmap && getenv("GGML_QFX32_DEQUANT")) {
+        LLAMA_LOG_INFO("%s: disabling mmap for QFX32 dequant-on-load\n", __func__);
         this->use_mmap = false;
     }
 
@@ -1247,6 +1258,26 @@ struct ggml_tensor * llama_model_loader::create_tensor(
     }
 
     ggml_tensor * t_meta = get_tensor_meta(tn.str().c_str());
+
+    // QFXQ -> Q8_0 promotion: identical block layout enables native Metal Q8_0 kernels
+    if (t_meta && t_meta->type == GGML_TYPE_QFXQ) {
+        t_meta->type = GGML_TYPE_Q8_0;
+    }
+
+    // QFX32 dequant-on-load: override metadata type so buffer allocation
+    // uses f32 sizing and the tensor gets assigned to the GPU buffer.
+    // Store original type in a padding byte for load_all_data to detect.
+    const bool qfx32_promote = (t_meta && t_meta->type == GGML_TYPE_QFX32 && getenv("GGML_QFX32_DEQUANT"));
+    if (qfx32_promote) {
+        t_meta->type = GGML_TYPE_F32;
+        t_meta->nb[0] = sizeof(float);
+        for (int d = 1; d < GGML_MAX_DIMS; d++) {
+            t_meta->nb[d] = t_meta->nb[d-1] * t_meta->ne[d-1];
+        }
+        // Mark this tensor as QFX32-promoted using op_params[0]
+        t_meta->op_params[0] = GGML_TYPE_QFX32;
+    }
+
     ggml_backend_buffer_type_t buft = buft_for_tensor(t_meta);
     if (buft == nullptr) {
         return nullptr; // return type is ggml_tensor *
@@ -1272,6 +1303,11 @@ struct ggml_tensor * llama_model_loader::create_tensor(
 
     struct ggml_tensor * tensor = ggml_dup_tensor(ctx, cur);
     ggml_set_name(tensor, ggml_get_name(cur));
+
+    // Propagate QFX32 dequant marker to the allocated tensor
+    if (qfx32_promote) {
+        tensor->op_params[0] = GGML_TYPE_QFX32;
+    }
 
     if (duplicated) {
         size_data += ggml_nbytes(cur);
@@ -1398,6 +1434,26 @@ void llama_model_loader::load_data_for(struct ggml_tensor * cur) const {
 
     if (check_tensors && !ggml_validate_row_data(cur->type, cur->data, ggml_nbytes(cur))) {
         throw std::runtime_error(format("tensor '%s' has invalid data", ggml_get_name(cur)));
+    }
+
+    // QFX32: Optional dequant-on-load (opt-in via GGML_QFX32_DEQUANT=1).
+    // Default: streaming mode (smaller RAM, slower inference).
+    // With env var: decode to f32 at load time (2x RAM, native f32 speed).
+    if (cur->type == GGML_TYPE_QFX32 && getenv("GGML_QFX32_DEQUANT")) {
+        const int64_t nelements = ggml_nelements(cur);
+        const size_t f32_nbytes = nelements * sizeof(float);
+
+        float * f32_buf = (float *)malloc(f32_nbytes);
+        if (f32_buf) {
+            dequantize_row_qfx32(cur->data, f32_buf, nelements);
+
+            cur->data = f32_buf;
+            cur->type = GGML_TYPE_F32;
+            cur->nb[0] = sizeof(float);
+            for (int d = 1; d < GGML_MAX_DIMS; d++) {
+                cur->nb[d] = cur->nb[d-1] * cur->ne[d-1];
+            }
+        }
     }
 }
 
@@ -1531,6 +1587,13 @@ bool llama_model_loader::load_all_data(
 
         size_t n_size = ggml_nbytes(cur);
 
+        // QFX32 dequant-on-load: tensor was promoted to f32 in create_tensor,
+        // but on-disk data is still QFX32. Detect via op_params marker.
+        const bool qfx32_dequant = (cur->type == GGML_TYPE_F32 && cur->op_params[0] == GGML_TYPE_QFX32);
+        const size_t n_size_disk = qfx32_dequant
+            ? (size_t)(ggml_row_size(GGML_TYPE_QFX32, cur->ne[0]) * cur->ne[1] * cur->ne[2] * cur->ne[3])
+            : n_size;
+
         if (use_mmap) {
             const auto & mapping = mappings.at(weight->idx);
             ggml_backend_buffer_t buf_mmap = nullptr;
@@ -1539,30 +1602,48 @@ bool llama_model_loader::load_all_data(
             }
             uint8_t * data = (uint8_t *) mapping->addr() + weight->offs;
 
-            if (check_tensors) {
-                validation_result.emplace_back(std::async(std::launch::async, [cur, data, n_size] {
-                    return std::make_pair(cur, ggml_validate_row_data(cur->type, data, n_size));
-                }));
-            }
-
-            GGML_ASSERT(buf_mmap || cur->data); // either we have a buffer to allocate the tensor in, or it is already allocated
-            if (buf_mmap && cur->data == nullptr) {
-                ggml_backend_tensor_alloc(buf_mmap, cur, data);
-                if (lmlocks) {
-                    const auto & lmlock = lmlocks->at(weight->idx);
-                    lmlock->grow_to(weight->offs + n_size);
+            if (qfx32_dequant) {
+                // Decode QFX32 from mmap into f32 tensor buffer
+                // Cannot use zero-copy mmap path since tensor is f32-sized
+                const int64_t nelements = ggml_nelements(cur);
+                std::vector<float> f32_buf(nelements);
+                dequantize_row_qfx32(data, f32_buf.data(), nelements);
+                ggml_backend_tensor_set(cur, f32_buf.data(), 0, n_size);
+            } else {
+                if (check_tensors) {
+                    validation_result.emplace_back(std::async(std::launch::async, [cur, data, n_size] {
+                        return std::make_pair(cur, ggml_validate_row_data(cur->type, data, n_size));
+                    }));
                 }
 
-                auto & mmap_used = mmaps_used[weight->idx];
-                mmap_used.first  = std::min(mmap_used.first,  weight->offs);
-                mmap_used.second = std::max(mmap_used.second, weight->offs + n_size);
-            } else {
-                ggml_backend_tensor_set(cur, data, 0, n_size);
+                GGML_ASSERT(buf_mmap || cur->data); // either we have a buffer to allocate the tensor in, or it is already allocated
+                if (buf_mmap && cur->data == nullptr) {
+                    ggml_backend_tensor_alloc(buf_mmap, cur, data);
+                    if (lmlocks) {
+                        const auto & lmlock = lmlocks->at(weight->idx);
+                        lmlock->grow_to(weight->offs + n_size);
+                    }
+
+                    auto & mmap_used = mmaps_used[weight->idx];
+                    mmap_used.first  = std::min(mmap_used.first,  weight->offs);
+                    mmap_used.second = std::max(mmap_used.second, weight->offs + n_size);
+                } else {
+                    ggml_backend_tensor_set(cur, data, 0, n_size);
+                }
             }
         } else {
             const auto & file = files.at(weight->idx);
 
-            if (ggml_backend_buffer_is_host(cur->buffer)) {
+            if (qfx32_dequant) {
+                // Read QFX32 from file, decode to f32, write to tensor
+                const int64_t nelements = ggml_nelements(cur);
+                std::vector<uint8_t> qfx_buf(n_size_disk);
+                file->seek(weight->offs, SEEK_SET);
+                file->read_raw(qfx_buf.data(), n_size_disk);
+                std::vector<float> f32_buf(nelements);
+                dequantize_row_qfx32(qfx_buf.data(), f32_buf.data(), nelements);
+                ggml_backend_tensor_set(cur, f32_buf.data(), 0, n_size);
+            } else if (ggml_backend_buffer_is_host(cur->buffer)) {
                 file->seek(weight->offs, SEEK_SET);
                 file->read_raw(cur->data, n_size);
                 if (check_tensors) {
@@ -1636,7 +1717,7 @@ bool llama_model_loader::load_all_data(
             }
         }
 
-        size_done += n_size;
+        size_done += n_size_disk;
     }
 
     // free temporary resources used for async uploads

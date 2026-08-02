@@ -430,7 +430,11 @@ extern "C" {
         GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)
         GGML_TYPE_Q1_0    = 41,
         GGML_TYPE_Q2_0    = 42,
-        GGML_TYPE_COUNT   = 43,
+        // 43-45 reserved
+        GGML_TYPE_QFX16   = 46, // QomputeAI: Transition-encoded BFloat16 (LOSSLESS, 8-16 bpw, LUT inference)
+        GGML_TYPE_QFX32   = 47, // QomputeAI: Planar transition-encoded Float32 (LOSSLESS, 18.36 bpw)
+        GGML_TYPE_QFXQ    = 48, // QomputeAI: Q5_Q wavelet-lifted int8 (8.09 bpw, PPL=12.69)
+        GGML_TYPE_COUNT   = 49,
     };
 
     // precision
