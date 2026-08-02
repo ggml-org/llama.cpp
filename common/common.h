@@ -532,6 +532,9 @@ struct common_params {
     int32_t verbosity                  = 3;  // LOG_LEVEL_INFO
     int32_t control_vector_layer_start = -1; // layer range for control vector
     int32_t control_vector_layer_end   = -1; // layer range for control vector
+
+    float expert_heat_decay      = 0.99f;  // multiplicative decay per update
+    int   expert_heat_log_period = 100;    // log period in updates
     bool    offline                    = false;
 
     int32_t ppl_stride      = 0;     // stride for perplexity calculations. If left at 0, the pre-existing approach will be used.

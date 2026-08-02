@@ -2645,6 +2645,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             }
         }
     ).set_env("LLAMA_ARG_N_CPU_MOE"));
+    add_opt(common_arg(
+        {"--expert-heat-decay"}, "F",
+        "expert heatmap decay rate per update (default: 0.99)",
+        [](common_params & params, const std::string & value) {
+            params.expert_heat_decay = std::stof(value);
+        }
+    ).set_env("LLAMA_ARG_EXPERT_HEAT_DECAY"));
+    add_opt(common_arg(
+        {"--expert-heat-log-period"}, "N",
+        "expert heatmap log interval in updates (default: 100)",
+        [](common_params & params, int value) {
+            params.expert_heat_log_period = value;
+        }
+    ).set_env("LLAMA_ARG_EXPERT_HEAT_LOG_PERIOD"));
     GGML_ASSERT(params.n_gpu_layers < 0); // string_format would need to be extended for a default >= 0
     add_opt(common_arg(
         {"-ngl", "--gpu-layers", "--n-gpu-layers"}, "N",

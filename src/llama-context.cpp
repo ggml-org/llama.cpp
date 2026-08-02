@@ -463,6 +463,13 @@ llama_context::llama_context(
         }
     }
 
+    if (hparams.n_expert > 0 && !cparams.warmup) {
+        expert_heatmap = std::make_unique<llama_expert_heatmap>(
+            hparams.n_layer(), hparams.n_expert,
+            params.expert_heat_decay,
+            params.expert_heat_log_period);
+    }
+
     // Initialize the full vocabulary token ids for backend samplers.
     {
         const int n_vocab = model.vocab.n_tokens();
@@ -571,6 +578,26 @@ void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint3
         resolve(llm_fused_op_dsv4_hc_comb_probe, cparams.fused_dsv4_hc_comb);
         resolve(llm_fused_op_dsv4_hc_post_probe, cparams.fused_dsv4_hc_post);
         cparams.auto_fhc = false;
+    }
+}
+
+void llama_context::update_expert_heatmap(const llm_graph_result * res) {
+    if (!expert_heatmap || res->moe_sel_experts.empty()) {
+        return;
+    }
+
+    for (const auto & [il, tensor] : res->moe_sel_experts) {
+        int64_t n_expert_used = tensor->ne[0];
+        int64_t n_tokens = tensor->ne[1];
+
+        if (!tensor->data) {
+            continue;
+        }
+
+        std::vector<int32_t> expert_ids(n_expert_used * n_tokens);
+        ggml_backend_tensor_get(tensor, expert_ids.data(), 0, expert_ids.size() * sizeof(int32_t));
+
+        expert_heatmap->update(il, expert_ids.data(), n_expert_used, n_tokens);
     }
 }
 
@@ -1384,6 +1411,8 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         ret = status;
         return nullptr;
     }
+
+    update_expert_heatmap(res);
 
     ret = GGML_STATUS_SUCCESS;
 
@@ -3517,6 +3546,8 @@ llama_context_params llama_context_default_params() {
         /*.kv_unified                  =*/ false,
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,
+        /*.expert_heat_decay           =*/ 0.99f,
+        /*.expert_heat_log_period      =*/ 100,
         /*.ctx_other                   =*/ nullptr,
     };
 
