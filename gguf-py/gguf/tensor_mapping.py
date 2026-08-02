@@ -116,6 +116,7 @@ class TensorNameMap:
             "model.transformer.ln_f",                  # llada
             "final_norm",                              # modern-bert
             "model.norm",                              # cogvlm
+            "model.final_norm",                        # Zaya
         ),
 
         # Rope frequencies
@@ -269,6 +270,7 @@ class TensorNameMap:
             "layers.{bid}.self_attn.q_proj",                             # qwen3-embedding
             "backbone.layers.{bid}.mixer.q_proj",                        # nemotron-h
             "model.blocks.{bid}.attn.attn_query",                        # talkie
+            "model.layers.{bid}.self_attn.qkv.linear_q",                 # Zaya
         ),
 
         # Attention key
@@ -290,6 +292,7 @@ class TensorNameMap:
             "layers.{bid}.self_attn.k_proj",                           # qwen3-embedding
             "backbone.layers.{bid}.mixer.k_proj",                      # nemotron-h
             "model.blocks.{bid}.attn.attn_key",                        # talkie
+            "model.layers.{bid}.self_attn.qkv.linear_k",               # Zaya
         ),
 
         # Attention value
@@ -310,6 +313,7 @@ class TensorNameMap:
             "layers.{bid}.self_attn.v_proj",                             # qwen3-embedding
             "backbone.layers.{bid}.mixer.v_proj",                        # nemotron-h
             "model.blocks.{bid}.attn.attn_value",                        # talkie
+            "model.layers.{bid}.self_attn.qkv.val_proj1",                # Zaya
         ),
 
         # Attention output
@@ -349,6 +353,7 @@ class TensorNameMap:
             "backbone.layers.{bid}.mixer.o_proj",                           # nemotron-h
             "model.layers.{bid}.self_attn.language_expert_dense",           # cogvlm
             "model.blocks.{bid}.attn.attn_resid",                           # talkie
+            "model.layers.{bid}.self_attn.o_proj",                          # Zaya
         ),
 
         # Attention output norm
@@ -412,6 +417,7 @@ class TensorNameMap:
             "model.layers.{bid}.feedforward_layernorm",                      # apertus
             "model.layers.{bid}.pre_mlp_layernorm",                          # kormo
             "layers.{bid}.mlp_norm"                                          # modern-bert
+            "model.layers.{bid}.self_attn.rmsnorm_eda",                      # zaya
         ),
 
         # Pre feed-forward norm
@@ -462,6 +468,7 @@ class TensorNameMap:
             "backbone.layers.{bid}.mixer.gate",                 # nemotron-h-moe
             "model.layers.{bid}.moe.gate",                      # step3.5
             "model.layers.{bid}.router.proj",                   # gemma4
+            "model.layers.{bid}.self_attn.router_mlp.down_proj", # zaya
         ),
 
         MODEL_TENSOR.FFN_GATE_INP_SHEXP: (
@@ -577,6 +584,7 @@ class TensorNameMap:
             "layers.{bid}.mlp.gate_proj",                     # qwen3-embedding
             "model.layers.{bid}.mlp.language_mlp.gate_proj",  # cogvlm
             "model.blocks.{bid}.mlp.mlp_gate",                # talkie
+            "model.layers.{bid}.self_attn.router_mlp.0",      # zaya
         ),
 
         MODEL_TENSOR.FFN_GATE_EXP: (
@@ -815,6 +823,7 @@ class TensorNameMap:
             "model.layers.{bid}.mamba.conv1d",         # jamba falcon-h1 granite-hybrid
             "model.layers.layers.{bid}.mixer.conv1d",  # plamo2
             "model.layers.{bid}.linear_attn.conv1d",   # qwen3next
+            "model.layers.{bid}.self_attn.conv_qk.0",  # zaya
         ),
 
         MODEL_TENSOR.SSM_X: (
@@ -872,6 +881,12 @@ class TensorNameMap:
             "model.layers.{bid}.linear_attn.norm",  # qwen3next
             "backbone.layers.{bid}.mixer.norm",     # mamba2
             "model.layers.{bid}.self_attn.o_norm",  # kimi
+        ),
+        MODEL_TENSOR.ATTN_NORM: (
+            "model.layers.{bid}.input_layernorm",
+            "model.layers.{bid}.ln_1",
+            "model.layers.{bid}.norm1",
+            "model.layers.{bid}.input_norm",        # Zaya
         ),
 
         MODEL_TENSOR.SSM_OUT: (

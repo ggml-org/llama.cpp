@@ -510,6 +510,26 @@ struct llama_layer {
     struct ggml_tensor * ssm_g_b    = nullptr;
     struct ggml_tensor * ssm_o_norm = nullptr;
 
+    // ZAYA CCA (Compressed Convolutional Attention)
+    struct ggml_tensor * cca_conv_grp   = nullptr;  // grouped conv   (conv_qk.1)
+    struct ggml_tensor * cca_conv_grp_b = nullptr;  // grouped conv bias
+    struct ggml_tensor * cca_k_scale    = nullptr;  // learned K temperature
+    struct ggml_tensor * cca_val_proj1  = nullptr;  // V projection stream 1
+    struct ggml_tensor * cca_val_proj2  = nullptr;  // V projection stream 2
+
+    // ZAYA residual scaling
+    struct ggml_tensor * res_scale_hs   = nullptr;  // hidden_states_scale
+    struct ggml_tensor * res_scale_hs_b = nullptr;  // hidden_states_bias
+    struct ggml_tensor * res_scale_res  = nullptr;  // residual_scale
+    struct ggml_tensor * res_scale_res_b = nullptr; // residual_bias
+
+    // ZAYA Router (MoE gating)
+    struct ggml_tensor * zaya_router_mlp2     = nullptr;  // router MLP 2
+    struct ggml_tensor * zaya_router_mlp2_b   = nullptr;  // router MLP 2 bias
+    struct ggml_tensor * zaya_router_mlp4     = nullptr;  // router MLP 4
+    struct ggml_tensor * zaya_router_biases   = nullptr;  // balancing_biases
+    struct ggml_tensor * zaya_router_eda_scale = nullptr; // router_states_scale
+
     // DSA (deepseek sparse attention)
     struct ggml_tensor * indexer_k_norm   = nullptr;
     struct ggml_tensor * indexer_k_norm_b = nullptr;
@@ -585,6 +605,12 @@ struct llama_model {
     struct ggml_tensor * hc_head_fn    = nullptr;
     struct ggml_tensor * hc_head_base  = nullptr;
     struct ggml_tensor * hc_head_scale = nullptr;
+
+    // Zaya final residual scaling
+    struct ggml_tensor * zaya_res_scale_hs    = nullptr;
+    struct ggml_tensor * zaya_res_scale_hs_b  = nullptr;
+    struct ggml_tensor * zaya_res_scale_res   = nullptr;
+    struct ggml_tensor * zaya_res_scale_res_b = nullptr;
 
     // classifier
     struct ggml_tensor * cls       = nullptr;
