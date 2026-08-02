@@ -101,6 +101,16 @@ struct ts_awq_layer {
     int64_t n_tokens_h;  // rows in heldout_activations
     float   kurtosis;    // from imatrix regime stats
     float   eff_rank;    // effective rank
+    // Streaming weight loading: when non-null, the GA worker calls this
+    // callback to fetch the layer's weights on demand (instead of holding
+    // all layers' weights in memory at once). The callback receives the
+    // layer's user_data and returns a pointer to the f32 weight buffer
+    // (out_dim * in_dim floats). The caller owns the buffer; it must stay
+    // valid until weights_release_fn is called. When null, weights must be
+    // pre-loaded into the weights pointer above.
+    const float * (* weights_load_fn)(void * user_data);
+    void          (* weights_release_fn)(void * user_data, const float * buf);
+    void         * weights_user_data;
 };
 
 // Evaluator callback: quantize with candidate, return score.
@@ -189,7 +199,7 @@ int ts_awq_evolve(const ts_awq_layer * layer,
 
 // Run evolutionary search across all layers (the full pipeline).
 // layers: array of n_layers. results: one per layer.
-int ts_awq_evolve_all(const ts_awq_layer * layers, int64_t n_layers,
+int ts_awq_evolve_all(ts_awq_layer * layers, int64_t n_layers,
                       ts_awq_eval_fn eval, void * eval_ctx,
                       const ts_awq_evolve_params * params,
                       std::vector<ts_awq_evolve_result> * results);

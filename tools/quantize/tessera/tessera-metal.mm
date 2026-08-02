@@ -244,7 +244,14 @@ static float median_finite_positive(const float * x, int64_t n) {
 extern "C" {
 
 int ts_metal_available(void) {
-    return g_avail.load() == 1 ? 1 : 0;
+    // Env-var kill switch for isolating Metal-related crashes. Set
+    // TS_METAL_DISABLE=1 to force the CPU fallback path.
+    if (g_avail.load() == 1) {
+        const char * dis = getenv("TS_METAL_DISABLE");
+        if (dis && dis[0] == '1') return 0;
+        return 1;
+    }
+    return 0;
 }
 
 int ts_metal_init(void) {

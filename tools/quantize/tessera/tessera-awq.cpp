@@ -425,7 +425,7 @@ int ts_awq_evolve(const ts_awq_layer * layer,
     return 0;
 }
 
-int ts_awq_evolve_all(const ts_awq_layer * layers, int64_t n_layers,
+int ts_awq_evolve_all(ts_awq_layer * layers, int64_t n_layers,
                       ts_awq_eval_fn eval, void * eval_ctx,
                       const ts_awq_evolve_params * params,
                       std::vector<ts_awq_evolve_result> * results) {
@@ -578,7 +578,18 @@ int ts_awq_evolve_all(const ts_awq_layer * layers, int64_t n_layers,
             if (family_seeds.find_copy(layers[i].family, fam_seed)) {
                 layer_params.seed_candidate = &fam_seed;
             }
+            // Streaming weight load: if the layer has a load callback, fetch
+            // weights on demand instead of holding all layers in memory.
+            const float * loaded_weights = nullptr;
+            if (layers[i].weights_load_fn) {
+                loaded_weights = layers[i].weights_load_fn(layers[i].weights_user_data);
+                layers[i].weights = loaded_weights;
+            }
             int rc = ts_awq_evolve(&layers[i], eval, eval_ctx, &layer_params, &(*results)[i]);
+            if (layers[i].weights_release_fn && loaded_weights) {
+                layers[i].weights_release_fn(layers[i].weights_user_data, loaded_weights);
+                layers[i].weights = nullptr;
+            }
             if (rc != 0) {
                 return rc;
             }
@@ -615,7 +626,17 @@ int ts_awq_evolve_all(const ts_awq_layer * layers, int64_t n_layers,
             if (family_seeds.find_copy(layers[i].family, fam_seed)) {
                 layer_params.seed_candidate = &fam_seed;
             }
+            // Streaming weight load (see serial path above for details).
+            const float * loaded_weights = nullptr;
+            if (layers[i].weights_load_fn) {
+                loaded_weights = layers[i].weights_load_fn(layers[i].weights_user_data);
+                layers[i].weights = loaded_weights;
+            }
             int rc = ts_awq_evolve(&layers[i], eval, eval_ctx, &layer_params, &(*results)[i]);
+            if (layers[i].weights_release_fn && loaded_weights) {
+                layers[i].weights_release_fn(layers[i].weights_user_data, loaded_weights);
+                layers[i].weights = nullptr;
+            }
             if (rc != 0) {
                 int expected = 0;
                 first_rc.compare_exchange_strong(expected, rc,

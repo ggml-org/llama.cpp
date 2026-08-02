@@ -1113,8 +1113,17 @@ int ts_dispatch_run(const ts_dispatch_params * params,
 
     if (need_ga) {
         std::vector<std::string>           ga_names;
-        std::vector<std::vector<float>>    ga_wbufs;     // weight storage (owns data)
+        std::vector<std::vector<float>>    ga_wbufs;     // legacy: stays empty with streaming load
         std::vector<std::vector<float>>    ga_actbufs;   // corpus-derived act_scales storage
+        // Per-layer weight loader state: holds the ggml tensor pointer (from
+        // the mmap'd context) and the per-call f32 buffer. The GA worker
+        // populates buf on load, clears it on release, so only ~8 layers'
+        // f32 data is alive at once (one per worker thread).
+        struct ts_ga_weight_loader {
+            struct ggml_tensor * tensor;
+            std::vector<float>   buf;
+        };
+        std::vector<ts_ga_weight_loader>   ga_weight_loaders;
         std::vector<ts_awq_layer>          ga_layers;
         std::vector<ts_regime_descriptor>  ga_descs;     // regime descriptor per layer (archive axes)
 
@@ -1180,12 +1189,16 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             }
 
             ga_names.push_back(name);
-            ga_wbufs.push_back(std::move(w));
+            // NOTE: weights are NOT stored in ga_wbufs. The f32 conversion is
+            // needed only for the regime descriptor above; the GA loads weights
+            // on demand via weights_load_fn to avoid holding all 254 layers'
+            // f32 data in memory (~32 GB for an 8B model - fatal on 16 GB).
+            // ga_wbufs is kept for API compatibility but stays empty here.
 
             ts_awq_layer layer;
             layer.name        = ga_names.back();
             layer.family      = desc.family;
-            layer.weights     = ga_wbufs.back().data();
+            layer.weights     = nullptr;  // loaded on demand by the GA worker
             layer.act_scales  = act;
             layer.calib_X     = nullptr;
             layer.ref_output  = nullptr;
@@ -1213,6 +1226,23 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             layer.n_tokens_h  = 0;
             layer.kurtosis    = desc.kurtosis;
             layer.eff_rank    = desc.eff_rank;
+            // Streaming weight loader: each GA worker calls this to fetch the
+            // layer's f32 weights on demand from the mmap'd ggml context.
+            // The buffer is owned per-call and freed by weights_release_fn
+            // after the layer's GA completes. This keeps peak memory at
+            // ~8 concurrent layers (one per worker) instead of all 254.
+            layer.weights_load_fn = [](void * ud) -> const float * {
+                auto * ml = static_cast<struct ts_ga_weight_loader *>(ud);
+                ml->buf = ts_tensor_to_f32(ml->tensor);
+                return ml->buf.empty() ? nullptr : ml->buf.data();
+            };
+            layer.weights_release_fn = [](void * ud, const float *) {
+                auto * ml = static_cast<struct ts_ga_weight_loader *>(ud);
+                ml->buf.clear();
+                ml->buf.shrink_to_fit();
+            };
+            ga_weight_loaders.push_back({ggml_get_tensor(ggml_ctx, name), {}});
+            layer.weights_user_data = &ga_weight_loaders.back();
             ga_layers.push_back(layer);
             ga_descs.push_back(desc);
             ts_progress_inc(prog, 1, name);
