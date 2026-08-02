@@ -264,10 +264,10 @@ struct mtmd_context {
 
     // generation context
     struct clip_ctx * ctx_gen_a; // audio
-    std::vector<int32_t> gen_out_codes; // this frame's 16 sampled codes (CODE_GEN)
-    std::vector<float>   gen_out_embd;  // next-step hidden state fed back to backbone (CODE_GEN)
-    std::vector<float>   gen_out_audio; // decoded PCM samples for the current frame (CODE2WAV)
-    std::vector<uint8_t> gen_out_state; // state to feed into the next CODE2WAV call
+    std::vector<int32_t> gen_out_codes; // this frame's 16 sampled codes (GEN_CODE)
+    std::vector<float>   gen_out_embd;  // next-step hidden state fed back to backbone (GEN_CODE)
+    std::vector<float>   gen_out_audio; // decoded PCM samples for the current frame (GEN_WAV)
+    std::vector<uint8_t> gen_out_state; // state to feed into the next GEN_WAV call
 
     bool print_timings;
     int n_threads;
@@ -1621,7 +1621,7 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, const mtmd_gen_in
         clip_encode_params params;
         params.imgs        = &batch;
         params.n_threads   = ctx->n_threads;
-        params.gen_process = CLIP_GEN_PROCESS_CODE_GEN;
+        params.gen_process = CLIP_GEN_PROCESS_GEN_CODE;
         params.out_embd    = &out_embd;
         params.out_codes   = &out_codes;
         params.code0       = inp->code0;
@@ -1666,7 +1666,7 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, const mtmd_gen_in
     clip_encode_params params;
     params.imgs        = &batch;
     params.n_threads   = ctx->n_threads;
-    params.gen_process = CLIP_GEN_PROCESS_CODE2WAV;
+    params.gen_process = CLIP_GEN_PROCESS_GEN_WAV;
     params.codes       = &in_codes;
     params.out_audio   = &ctx->gen_out_audio;
     params.state_in    = inp->state_data ? &in_state : nullptr;

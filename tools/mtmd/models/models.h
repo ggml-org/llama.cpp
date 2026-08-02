@@ -239,7 +239,7 @@ struct clip_graph_qwen3tts_gen : clip_graph {
     // which sub-graph build() constructs, fixed at graph-build time
     clip_gen_process_type gen_process;
 
-    // sampling params, fixed at graph-build time (CODE_GEN only)
+    // sampling params, fixed at graph-build time (GEN_CODE only)
     int   top_k;
     float top_p;
 

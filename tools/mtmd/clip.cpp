@@ -1056,7 +1056,7 @@ static std::unique_ptr<clip_graph> clip_get_graph_builder(clip_ctx * ctx, const 
             } break;
         case PROJECTOR_TYPE_QWEN3TTS_GEN:
             {
-                const auto  gen_process = params ? params->gen_process : CLIP_GEN_PROCESS_CODE_GEN;
+                const auto  gen_process = params ? params->gen_process : CLIP_GEN_PROCESS_GEN_CODE;
                 const int   top_k = params ? params->top_k : 50;
                 const float top_p = params ? params->top_p : 1.0f;
                 builder = std::make_unique<clip_graph_qwen3tts_gen>(ctx, img, gen_process, top_k, top_p);
@@ -4172,7 +4172,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
         }
         set_input_f32("inp_raw", inp_raw);
 
-    } else if (!(ctx->proj_type() == PROJECTOR_TYPE_QWEN3TTS_GEN && params->gen_process == CLIP_GEN_PROCESS_CODE2WAV)) {
+    } else if (!(ctx->proj_type() == PROJECTOR_TYPE_QWEN3TTS_GEN && params->gen_process == CLIP_GEN_PROCESS_GEN_WAV)) {
         // audio input (code2wav has no hidden-state/raw input at all, its only input is the "inp_codes" tensor handled in the switch below)
         GGML_ASSERT(imgs.entries.size() == 1);
 
@@ -4735,7 +4735,7 @@ bool clip_encode(struct clip_ctx * ctx, struct clip_encode_params * params) {
             } break;
         case PROJECTOR_TYPE_QWEN3TTS_GEN:
             {
-                if (params->gen_process == CLIP_GEN_PROCESS_CODE2WAV) {
+                if (params->gen_process == CLIP_GEN_PROCESS_GEN_WAV) {
                     GGML_ASSERT(params->codes != nullptr);
 
                     // reorder frame-major input to the group-major layout the graph wants,

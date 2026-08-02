@@ -666,13 +666,13 @@ ggml_cgraph * clip_graph_qwen3tts_gen::build() {
 
     int idx;
     switch (gen_process) {
-        case CLIP_GEN_PROCESS_CODE_GEN: idx = 0; break;
-        case CLIP_GEN_PROCESS_CODE2WAV: idx = 1; break;
+        case CLIP_GEN_PROCESS_GEN_CODE: idx = 0; break;
+        case CLIP_GEN_PROCESS_GEN_WAV:  idx = 1; break;
         default: GGML_ABORT("unknown gen_process");
     }
 
-    // ---- CLIP_GEN_PROCESS_CODE_GEN: backbone hidden state -> 16 RVQ codes + next-step embd ----
-    // fixed-size [n_mmproj_embd] input; not build_inp_raw(), since a CODE2WAV call's `img` has no hidden-state data
+    // ---- CLIP_GEN_PROCESS_GEN_CODE: backbone hidden state -> 16 RVQ codes + next-step embd ----
+    // fixed-size [n_mmproj_embd] input; not build_inp_raw(), since a GEN_WAV call's `img` has no hidden-state data
     ggml_tensor * h_state = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_mmproj_embd);
     ggml_set_name(h_state, "inp_raw"); // must keep this exact name, clip_encode() sets it by name
     ggml_set_input(h_state);
@@ -738,7 +738,7 @@ ggml_cgraph * clip_graph_qwen3tts_gen::build() {
     out_embd = ggml_reshape_2d(ctx0, out_embd, out_embd->ne[0], 1);
     cb(out_embd, "gen_audio_out", -1);
 
-    // ---- CLIP_GEN_PROCESS_CODE2WAV: 16 RVQ codes -> raw PCM ----
+    // ---- CLIP_GEN_PROCESS_GEN_WAV: 16 RVQ codes -> raw PCM ----
     const int n_frames = hparams.wav_tfm_swa; // frames per batch, == the attention window
 
     ggml_tensor * inp_codes = ggml_new_tensor_2d(ctx0, GGML_TYPE_I32, n_frames, n_codes);
