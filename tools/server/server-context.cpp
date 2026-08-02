@@ -3391,7 +3391,10 @@ private:
                                                 // guarantee that a checkpoint will result in at least one token being processed [TAG_PROMPT_LOGITS]
                                                 SLT_TRC(slot, "checking checkpoint with [%d, %d] against %d...\n", cur.pos_min, cur.pos_max, pos_min_thold);
                                                 // workaround for [TAG_CHECKPOINTS_FIX_POS_MIN]
-                                                if (cur.pos_max > pos_next) {
+                                                // for aligned-removal memories the restore resumes at pos_max + 1,
+                                                // so a checkpoint with pos_max == pos_next would land the resume
+                                                // point past the divergence - require pos_max strictly below
+                                                if (cur.pos_max > pos_next || (n_seq_rm_align > 1 && cur.pos_max == pos_next)) {
                                                     return false;
                                                 }
                                                 return cur.pos_min < pos_min_thold || cur.pos_min == 0;
@@ -3407,7 +3410,16 @@ private:
                                             // restore the draft's speculative state
                                             common_speculative_set_state(spec.get(), slot.id, it->data_spec);
 
-                                            pos_next = std::min(pos_next, std::max(it->pos_min + 1, it->pos_max));
+                                            if (n_seq_rm_align > 1) {
+                                                // aligned-removal memories (e.g. DSV4) cannot remove at the restored
+                                                // tip: the restore invalidates the rollback history, so the only
+                                                // removal the memory still supports is a dead tail strictly past
+                                                // pos_max - resume at pos_max + 1 (the same shape as the speculative
+                                                // rollback below, which restores and then removes [pos_max + 1, end))
+                                                pos_next = std::min(pos_next, it->pos_max + 1);
+                                            } else {
+                                                pos_next = std::min(pos_next, std::max(it->pos_min + 1, it->pos_max));
+                                            }
                                             n_past   = std::min(slot.prompt.tokens.size_up_to_pos(pos_next), (size_t) it->n_tokens);
                                             SLT_TRC(slot, "restored context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_past = %d, size = %.3f MiB)\n", it->pos_min, it->pos_max, it->n_tokens, n_past, (float) it->size() / 1024 / 1024);
                                         }
