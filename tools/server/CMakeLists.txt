@@ -21,6 +21,12 @@ add_library(${TARGET} STATIC
     server-tools.h
     server-schema.cpp
     server-schema.h
+    server-admission.cpp
+    server-admission.h
+    server-prefill-policy.cpp
+    server-prefill-policy.h
+    server-metrics.cpp
+    server-metrics.h
 )
 
 if (BUILD_SHARED_LIBS)

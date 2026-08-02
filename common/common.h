@@ -819,6 +819,7 @@ struct common_params {
     bool        otel_enabled      = false;
     std::string otel_endpoint;
     std::string otel_service_name = "llama.cpp";
+    float       otel_sample_rate  = 1.0f;
 };
 
 // call once at the start of a program if it uses libcommon

@@ -144,10 +144,9 @@ int llama_server(common_params & params, int argc, char ** argv) {
         }
 
         if (params.n_parallel < 0) {
-            SRV_TRC("%s", "n_parallel is set to auto, using n_parallel = 4 and kv_unified = true\n");
+            SRV_TRC("%s", "n_parallel is set to auto, using n_parallel = 4\n");
 
             params.n_parallel = 4;
-            params.kv_unified = true;
         }
     }
 

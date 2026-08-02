@@ -539,11 +539,22 @@ struct server_task_result_metrics : server_task_result {
     uint64_t n_kv_radix_hit_positions_total = 0;
     uint64_t n_kv_prefix_shares_total = 0;
     uint64_t n_kv_prefix_shared_positions_total = 0;
+    uint64_t n_kv_block_radix_attaches_total = 0;
+    uint64_t n_kv_block_radix_attach_positions_total = 0;
+    uint64_t n_prep_staged_total = 0;
+    uint64_t n_prep_hits_total   = 0;
+    uint64_t n_prep_inline_total = 0;
     uint64_t n_scheduler_prefill_selections_total = 0;
     uint64_t scheduler_prefix_positions_total = 0;
     uint64_t scheduler_estimated_cost_tokens_total = 0;
     uint64_t scheduler_acceptance_milli_total = 0;
     int64_t  scheduler_score_milli_last = 0;
+
+    // Latency-histogram (TTFT/ITL/e2e/prefill/decode) Prometheus exposition
+    // text, rendered on the inference thread where the registry lives. Empty
+    // when the registry is not constructed (e.g. non-server examples).
+    uint64_t n_admission_preemptions_total = 0;
+    std::string histograms_prometheus;
 
     // while we can also use std::vector<server_slot> this requires copying the slot object which can be quite messy
     // therefore, we use json to temporarily store the slot.to_json() result
@@ -690,12 +701,22 @@ private:
 };
 
 // Native unified-KV ownership index.  The actual K/V tensors and their cell
-// sequence sets stay in llama_kv_cache; this server-side radix tracks which
+// sequence sets stay in llama_kv_cache; this server-side index tracks which
 // sequence can be used as a zero-copy source for each sealed prompt block.
 // A block is evictable only after every attached sequence releases it.
+//
+// Lookup is hash-chained in the style of vLLM's APC / SGLang's radix tree:
+// each sealed block's key is H(parent_block_hash, this_block_token_keys), so a
+// prefix match is a sequence of O(1) hashmap probes rather than a tree walk.
+// Eviction is O(1) per victim via an intrusive LRU list keyed by block id.
 struct server_kv_block_radix {
     struct block {
         uint64_t id = 0;
+        uint64_t hash = 0;       // chained hash of this sealed block
+        // first/last token keys of this block's key range; cheap verification
+        // that a hash hit is a real match (collisions -> 2^-128 per probe)
+        std::string key_first;
+        std::string key_last;
         llama_pos p0 = 0;
         llama_pos p1 = 0;
         uint64_t last_used = 0;
@@ -725,15 +746,28 @@ struct server_kv_block_radix {
     bool contains(uint64_t id) const { return blocks.find(id) != blocks.end(); }
 
 private:
-    struct node {
-        std::unordered_map<std::string, size_t> children;
+    // Intrusive LRU: blocks with no owners are eligible. The list is ordered
+    // oldest-first, so eviction always takes the head.
+    struct lru_node {
         uint64_t block_id = 0;
     };
+    using lru_list = std::list<lru_node>;
+
+    uint64_t chain_block_hash(uint64_t parent_hash, const std::vector<std::string> & keys, size_t begin, size_t end) const;
+    void lru_insert(uint64_t block_id);              // insert at MRU end
+    void lru_erase(uint64_t block_id);
 
     uint32_t block_tokens;
     uint64_t next_block_id = 1;
-    std::vector<node> nodes = { { } };
+    // block id -> block record
     std::unordered_map<uint64_t, block> blocks;
+    // chained block hash -> block id (O(1) prefix probes during attach)
+    std::unordered_map<uint64_t, uint64_t> hash_to_block;
+    // seq -> block ids that seq owns (O(owners) release instead of O(n_blocks))
+    std::unordered_map<llama_seq_id, std::unordered_set<uint64_t>> seq_blocks;
+    // intrusive LRU of blocks whose owner set is empty
+    lru_list lru_free;
+    std::unordered_map<uint64_t, lru_list::iterator> lru_iter;
 };
 
 // used exclusively by router mode

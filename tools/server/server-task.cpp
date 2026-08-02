@@ -1917,6 +1917,39 @@ void server_prompt_cache::update() {
     }
 }
 
+// FNV-style combiner for the chained block hash. Stable across runs (no
+// PYTHONHASHSEED-style randomization) because Tessera is single-process and
+// does not need cross-process hash agreement.
+uint64_t server_kv_block_radix::chain_block_hash(
+        uint64_t parent_hash, const std::vector<std::string> & keys, size_t begin, size_t end) const {
+    uint64_t h = parent_hash ^ 0x9e3779b97f4a7c15ull;
+    for (size_t i = begin; i < end; ++i) {
+        const std::string & k = keys[i];
+        // mix in the length so distinct keys hashing to the same 64-bit fold
+        // remain distinguishable
+        h ^= (uint64_t) k.size() + 0x517cc1b727220a95ull;
+        for (unsigned char c : k) {
+            h ^= c;
+            h *= 0x100000001b3ull;
+        }
+    }
+    return h;
+}
+
+void server_kv_block_radix::lru_insert(uint64_t block_id) {
+    lru_free.emplace_back(lru_node { block_id });
+    lru_iter[block_id] = std::prev(lru_free.end());
+}
+
+void server_kv_block_radix::lru_erase(uint64_t block_id) {
+    auto it = lru_iter.find(block_id);
+    if (it == lru_iter.end()) {
+        return;
+    }
+    lru_free.erase(it->second);
+    lru_iter.erase(it);
+}
+
 void server_kv_block_radix::publish(
         const std::vector<std::string> & keys,
         const std::vector<llama_pos> & block_positions,
@@ -1926,34 +1959,36 @@ void server_kv_block_radix::publish(
         return;
     }
 
-    size_t node = 0;
+    // Walk the request's stable keys in block-sized runs, chaining each sealed
+    // block's hash off the previous one. The chain makes prefix probes O(1).
+    uint64_t parent_hash = 0;
     size_t block_index = 0;
     llama_pos p0 = 0;
-    for (size_t i = 0; i < keys.size(); ++i) {
-        const auto it = nodes[node].children.find(keys[i]);
-        if (it != nodes[node].children.end()) {
-            node = it->second;
-        } else {
-            const size_t child = nodes.size();
-            nodes.emplace_back();
-            nodes[node].children.emplace(keys[i], child);
-            node = child;
-        }
-
-        const bool sealed = (i + 1) % block_tokens == 0 || i + 1 == keys.size();
-        if (!sealed) {
-            continue;
-        }
+    for (size_t i = 0; i < keys.size(); i += block_tokens) {
+        const size_t end = std::min(keys.size(), i + block_tokens);
+        const uint64_t h = chain_block_hash(parent_hash, keys, i, end);
         const llama_pos p1 = block_positions[std::min(block_index, block_positions.size() - 1)];
-        uint64_t id = nodes[node].block_id;
-        if (id == 0) {
-            id = next_block_id++;
-            nodes[node].block_id = id;
-            blocks.emplace(id, block { id, p0, p1, now, { } });
+
+        auto existing = hash_to_block.find(h);
+        if (existing == hash_to_block.end()) {
+            const uint64_t id = next_block_id++;
+            block b { id, h, keys[i], keys[end - 1], p0, p1, now, { seq } };
+            blocks.emplace(id, std::move(b));
+            hash_to_block.emplace(h, id);
+        } else {
+            block & entry = blocks.at(existing->second);
+            const bool was_empty = entry.owners.empty();
+            entry.owners.insert(seq);
+            entry.last_used = now;
+            if (was_empty) {
+                // re-publish of a previously-evictable block: take it off the
+                // free LRU now that it has an owner again
+                lru_erase(entry.id);
+            }
         }
-        auto & entry = blocks.at(id);
-        entry.owners.insert(seq);
-        entry.last_used = now;
+        seq_blocks[seq].insert(hash_to_block[h]);
+
+        parent_hash = h;
         p0 = p1;
         ++block_index;
     }
@@ -1962,22 +1997,28 @@ void server_kv_block_radix::publish(
 server_kv_block_radix::attachment server_kv_block_radix::attach(
         const std::vector<std::string> & keys, llama_seq_id seq, uint64_t now) {
     attachment result;
-    size_t node = 0;
-    for (size_t i = 0; i < keys.size(); ++i) {
-        const auto it = nodes[node].children.find(keys[i]);
-        if (it == nodes[node].children.end()) {
+    // Constant-time per-block prefix match: fold the chained hash one sealed
+    // block at a time and probe hash_to_block. Stop on the first miss so the
+    // returned prefix is always the longest cached run owned by one source.
+    uint64_t parent_hash = 0;
+    size_t i = 0;
+    for (; i + block_tokens <= keys.size(); i += block_tokens) {
+        const uint64_t h = chain_block_hash(parent_hash, keys, i, i + block_tokens);
+        const auto hit = hash_to_block.find(h);
+        if (hit == hash_to_block.end()) {
             break;
         }
-        node = it->second;
-        const uint64_t id = nodes[node].block_id;
-        if (id == 0) {
-            continue;
-        }
-        auto block_it = blocks.find(id);
-        if (block_it == blocks.end() || block_it->second.owners.empty()) {
+        auto bit = blocks.find(hit->second);
+        if (bit == blocks.end() || bit->second.owners.empty()) {
             break;
         }
-        auto & entry = block_it->second;
+        block & entry = bit->second;
+        // Verify the hash hit against the stored first/last keys. A 64-bit
+        // hash collision is already astronomically unlikely; this check makes
+        // a false prefix handoff effectively impossible.
+        if (entry.key_first != keys[i] || entry.key_last != keys[i + block_tokens - 1]) {
+            break;
+        }
         if (result.source < 0) {
             result.source = *entry.owners.begin();
         }
@@ -1986,43 +2027,79 @@ server_kv_block_radix::attachment server_kv_block_radix::attach(
         if (!entry.owners.count(result.source)) {
             break;
         }
+        const bool was_owned_by_seq = entry.owners.count(seq) > 0;
         entry.owners.insert(seq);
         entry.last_used = now;
+        seq_blocks[seq].insert(entry.id);
+        if (!was_owned_by_seq) {
+            lru_erase(entry.id);
+        }
         result.positions = entry.p1;
-        result.block_ids.push_back(id);
+        result.block_ids.push_back(entry.id);
+        parent_hash = h;
+    }
+    // Try the trailing partial block (the final sealed block of a prompt may
+    // be shorter than block_tokens). publish() seals and chains it under the
+    // same parent_hash, so the probe here is consistent.
+    if (result.source >= 0 && i < keys.size()) {
+        const uint64_t h = chain_block_hash(parent_hash, keys, i, keys.size());
+        const auto hit = hash_to_block.find(h);
+        if (hit != hash_to_block.end()) {
+            auto bit = blocks.find(hit->second);
+            if (bit != blocks.end() && !bit->second.owners.empty() &&
+                bit->second.owners.count(result.source) &&
+                bit->second.key_first == keys[i] &&
+                bit->second.key_last == keys[keys.size() - 1]) {
+                block & entry = bit->second;
+                const bool was_owned_by_seq = entry.owners.count(seq) > 0;
+                entry.owners.insert(seq);
+                entry.last_used = now;
+                seq_blocks[seq].insert(entry.id);
+                if (!was_owned_by_seq) {
+                    lru_erase(entry.id);
+                }
+                result.positions = entry.p1;
+                result.block_ids.push_back(entry.id);
+            }
+        }
     }
     return result;
 }
 
 void server_kv_block_radix::release(llama_seq_id seq) {
-    for (auto & [id, entry] : blocks) {
-        GGML_UNUSED(id);
-        entry.owners.erase(seq);
+    auto it = seq_blocks.find(seq);
+    if (it == seq_blocks.end()) {
+        return;
     }
+    for (uint64_t id : it->second) {
+        auto bit = blocks.find(id);
+        if (bit == blocks.end()) {
+            continue;
+        }
+        bit->second.owners.erase(seq);
+        if (bit->second.owners.empty()) {
+            // now eligible for eviction; park on the LRU free list
+            lru_insert(id);
+        }
+    }
+    seq_blocks.erase(it);
 }
 
 size_t server_kv_block_radix::evict(size_t max_blocks) {
     size_t evicted = 0;
-    while (blocks.size() > max_blocks) {
-        auto victim = blocks.end();
-        for (auto it = blocks.begin(); it != blocks.end(); ++it) {
-            if (!it->second.owners.empty()) {
-                continue;
-            }
-            if (victim == blocks.end() || it->second.last_used < victim->second.last_used) {
-                victim = it;
-            }
+    // O(1) per victim: the head of lru_free is the least-recently-used block
+    // with no owners. Loop until under the cap or no evictable blocks remain.
+    while (blocks.size() > max_blocks && !lru_free.empty()) {
+        const uint64_t id = lru_free.front().block_id;
+        lru_free.pop_front();
+        lru_iter.erase(id);
+
+        auto bit = blocks.find(id);
+        if (bit == blocks.end()) {
+            continue;
         }
-        if (victim == blocks.end()) {
-            break;
-        }
-        const uint64_t id = victim->first;
-        for (auto & node : nodes) {
-            if (node.block_id == id) {
-                node.block_id = 0;
-            }
-        }
-        blocks.erase(victim);
+        hash_to_block.erase(bit->second.hash);
+        blocks.erase(bit);
         ++evicted;
     }
     return evicted;

@@ -6,6 +6,9 @@
 #include "server-queue.h"
 #include "server-schema.h"
 #include "server-stream.h"
+#include "server-admission.h"
+#include "server-metrics.h"
+#include "server-prefill-policy.h"
 
 #include "build-info.h"
 #include "common.h"
@@ -286,6 +289,15 @@ struct server_slot {
     double t_prompt_processing = 0.0; // ms
     double t_token_generation = 0.0;  // ms
 
+    // Latency-histogram timing fields. Arrival time is captured when the
+    // task is assigned to this slot (start_processing / register task).
+    // t_first_token_us is set on the n_decoded == 1 sample. The inter-token
+    // latency uses t_last_emit_us, updated on every accepted token.
+    int64_t t_arrival_us        = 0;  // request arrival at the server
+    int64_t t_first_token_us    = 0;  // first generated token (TTFT endpoint)
+    int64_t t_last_emit_us      = 0;  // last accepted token (for ITL delta)
+    int64_t t_prefill_start_us  = 0;  // when this slot's prefill began
+
     std::function<void(int /* id_slot */)> callback_on_release;
 
     // Speculative decoding stats
@@ -334,6 +346,12 @@ struct server_slot {
 
         // clear multimodal state
         mbatch.reset();
+
+        // clear latency-histogram timing fields
+        t_arrival_us       = 0;
+        t_first_token_us   = 0;
+        t_last_emit_us     = 0;
+        t_prefill_start_us = 0;
     }
 
     void init_sampler() const {
@@ -814,6 +832,8 @@ struct server_metrics {
     uint64_t n_kv_radix_hit_positions_total = 0;
     uint64_t n_kv_prefix_shares_total = 0;
     uint64_t n_kv_prefix_shared_positions_total = 0;
+    uint64_t n_kv_block_radix_attaches_total = 0;
+    uint64_t n_kv_block_radix_attach_positions_total = 0;
     uint64_t n_scheduler_prefill_selections_total = 0;
     uint64_t scheduler_prefix_positions_total = 0;
     uint64_t scheduler_estimated_cost_tokens_total = 0;
@@ -871,6 +891,11 @@ struct server_metrics {
         n_kv_prefix_shared_positions_total += std::max<llama_pos>(0, positions);
     }
 
+    void on_kv_block_radix_attach(llama_pos positions) {
+        ++n_kv_block_radix_attaches_total;
+        n_kv_block_radix_attach_positions_total += std::max<llama_pos>(0, positions);
+    }
+
     void on_scheduler_prefill_selection(
             llama_pos prefix_positions,
             uint32_t estimated_cost_tokens,
@@ -921,6 +946,8 @@ public:
     }
 
     ~server_context_impl() {
+        // stop the overlap-scheduler worker before tearing anything else down
+        prep_pool.stop();
         if (!sleeping) {
             // destroy() is already called when entering sleeping state
             // we don't call it again here to avoid double free
@@ -975,7 +1002,32 @@ private:
     std::unique_ptr<server_prompt_cache> prompt_cache;
     server_kv_block_radix kv_block_radix;
 
+    // Overlap scheduler: cache-key vectors staged by the background prep pool
+    // while the GPU is decoding. Consulted (under mutex_prep) before falling
+    // back to an inline get_stable_cache_keys() call on the inference thread.
+    server_prep_pool prep_pool;
+    std::mutex mutex_prep;
+    std::unordered_map<int, std::vector<std::string>> prep_cache_keys;
+    uint64_t n_prep_staged_total   = 0; // requests handed to the prep worker
+    uint64_t n_prep_hits_total     = 0; // staged results consumed on the hot path
+    uint64_t n_prep_inline_total   = 0; // falls back to inline computation
+
     server_metrics metrics;
+
+    // Latency histograms + OTel-compatible tracing. Complementary to the
+    // aggregate counters above: the existing server_metrics struct carries
+    // totals/gauges; this registry adds P50/P95/P99 distributions for TTFT,
+    // ITL, e2e, prefill, and decode. See server-metrics.h.
+    std::unique_ptr<tessera_metrics::registry> latency_registry;
+    tessera_metrics::tracer    tracer;
+
+    // vLLM parity: per-iteration shared prefill budget and dynamic admission
+    // controller. Both are policy-only; the heavy code (KV release, queue
+    // manipulation) stays in server-context.cpp. See the corresponding
+    // headers for the rationale.
+    tessera_prefill::budget_calculator prefill_budget{tessera_prefill::policy_config{}};
+    tessera_admission::admission_config  admission_cfg;
+    uint64_t n_admission_preemptions_total = 0;
 
     json json_ui_settings = json::object();
 
@@ -1385,6 +1437,11 @@ private:
         // setup slots
         SRV_INF("initializing, n_slots = %d, n_ctx_slot = %d, kv_unified = '%s'\n",
                 params_base.n_parallel, n_ctx_slot, params_base.kv_unified ? "true" : "false");
+        // Surface the active prefix-cache path explicitly: the unified block-radix
+        // is the primary default; the serialized prompt snapshot is a fallback.
+        SRV_INF("KV mode: %s\n", params_base.kv_unified
+                ? "unified stream with block-radix prefix cache (zero-copy seq_cp sharing)"
+                : "legacy per-sequence KV with serialized prompt-cache snapshots");
 
         // initialize slots
         for (int i = 0; i < params_base.n_parallel; i++) {
@@ -1533,7 +1590,66 @@ private:
             handle_sleeping_state(sleeping);
         });
 
+        // Start the overlap-scheduler prep worker. It pre-stages stable cache
+        // keys for waiting tasks so the block-radix attach path does not pay
+        // O(prompt length) on the inference thread. Best-effort: if the worker
+        // cannot start, admission falls back to inline derivation.
+        prep_pool.start([this](const server_prep_pool::request & req) {
+            // Text-only prompts: derive the same "t:<token>" keys the inline
+            // path produces, but off the inference thread. Multimodal prompts
+            // are skipped here (has_mtmd) and fall back to inline derivation.
+            if (req.has_mtmd) {
+                return;
+            }
+            std::vector<std::string> keys;
+            keys.reserve(req.tokens.size());
+            for (llama_token t : req.tokens) {
+                if (t == LLAMA_TOKEN_NULL) {
+                    return; // unexpected without mtmd: bail, inline path will handle
+                }
+                keys.emplace_back("t:" + std::to_string(t));
+            }
+            std::lock_guard<std::mutex> lock(mutex_prep);
+            // Bound the staging map: entries for dropped/cancelled tasks
+            // would otherwise linger. The hot path erases on consume, so a
+            // full map only happens under abnormal task loss.
+            if (prep_cache_keys.size() >= 256) {
+                prep_cache_keys.clear();
+            }
+            prep_cache_keys[req.task_id] = std::move(keys);
+        });
+
         metrics.init();
+
+        // Construct the latency histogram registry once the context is live.
+        // The registry is heap-allocated so its mutexes/atomics have stable
+        // addresses across the (rare) reconfigure paths.
+        latency_registry = std::make_unique<tessera_metrics::registry>();
+
+        // Apply the admission / prefill / tracer configuration that the CLI
+        // flags populated into params_base before this load ran.
+        {
+            tessera_metrics::tracer::config tcfg;
+            tcfg.enabled      = params_base.otel_enabled;
+            tcfg.service_name = params_base.otel_service_name;
+            tcfg.endpoint     = params_base.otel_endpoint;
+            tcfg.sample_rate  = params_base.otel_sample_rate;
+            tracer.reconfigure(std::move(tcfg));
+        }
+        {
+            tessera_prefill::policy_config pcfg;
+            pcfg.iteration_cap_tokens = params_base.prefill_chunk_size;
+            prefill_budget.configure(pcfg);
+        }
+        admission_cfg.max_admitted             = params_base.max_admitted_requests;
+        if (admission_cfg.max_admitted > 0) {
+            SRV_INF("admission control: soft cap = %d (preempt under KV pressure)\n",
+                    admission_cfg.max_admitted);
+        }
+        if (params_base.prefill_chunk_size > 0) {
+            SRV_INF("prefill policy: shared per-iteration cap = %d tokens\n",
+                    params_base.prefill_chunk_size);
+        }
 
         if (params_base.cache_idle_slots) {
             if (params_base.cache_ram_mib == 0) {
@@ -1732,6 +1848,90 @@ private:
         return result;
     }
 
+    // Build a snapshot of all slots for the admission controller. Only the
+    // fields the policy consumes are populated. The score is reused from
+    // score_prefill_slot so the controller's victim ranking matches the
+    // scheduler's prefill ordering exactly.
+    tessera_admission::controller_snapshot admission_snapshot(int64_t now_us) const {
+        tessera_admission::controller_snapshot snap;
+        snap.slots.reserve(slots.size());
+        snap.n_processing = 0;
+        for (const auto & slot : slots) {
+            tessera_admission::slot_snapshot s;
+            s.id                 = slot.id;
+            s.processing         = slot.is_processing();
+            s.remaining_prefill  = slot.task ? std::max<int>(0, slot.task->n_tokens() - slot.prompt.n_tokens()) : 0;
+            s.decoded_so_far     = slot.n_decoded;
+            // Children of a parallel-sampling parent are not safe to preempt
+            // alone: their KV is shared with the parent.
+            s.preemptable        = slot.task && !slot.task->is_child() && !slot.task->is_parent();
+            if (s.processing) {
+                snap.n_processing++;
+                s.score_milli = score_prefill_slot(slot, now_us).score_milli;
+            }
+            snap.slots.push_back(std::move(s));
+        }
+        return snap;
+    }
+
+    // Re-queue a victim slot's task so it re-enters the scheduler. The victim
+    // keeps its prompt prefix in the radix cache (when cache_prompt is set),
+    // so readmission usually re-attaches most of the prefix cheaply. We also
+    // clear the victim's KV in the target context so the freed room is real.
+    void preempt_victim(int victim_id) {
+        server_slot * victim = get_slot_by_id(victim_id);
+        if (victim == nullptr || !victim->is_processing() || !victim->task) {
+            return;
+        }
+        SLT_INF(*victim, "preempted by admission controller (decoded = %d, prompt = %d)\n",
+                victim->n_decoded, victim->prompt.n_tokens());
+
+        // server_task is non-copyable (server_tokens deletes its copy ctor),
+        // so rebuild a fresh task with cloned tokens and the same params/id.
+        // The task id is preserved so any waiting HTTP response reader still
+        // matches the result when the re-prefill finishes.
+        server_task requeue(victim->task->type);
+        requeue.id          = victim->task->id;
+        requeue.index       = victim->task->index;
+        requeue.id_slot     = victim->task->id_slot;
+        requeue.id_parent   = victim->task->id_parent;
+        requeue.params      = victim->task->params;
+        requeue.tokens      = victim->task->tokens.clone();
+
+        // Discard the victim's KV. The radix cache (when enabled) preserves
+        // the prefix for cheap re-attach on readmission.
+        common_context_seq_rm(ctx_tgt, victim->id, -1, -1);
+        if (ctx_dft) {
+            common_context_seq_rm(ctx_dft, victim->id, -1, -1);
+        }
+
+        victim->release();
+        ++n_admission_preemptions_total;
+
+        // Re-post at the front so the preempted request is admitted again as
+        // soon as a slot frees up, instead of going to the back of the queue.
+        queue_tasks.post(std::move(requeue), /*front = */ true);
+    }
+
+    // Try the staged cache-key vector for task_id (computed by the prep pool);
+    // fall back to an inline get_stable_cache_keys() on the inference thread.
+    // Either path produces the same result; staging just hides the O(prompt
+    // length) derivation behind GPU decode time when a request had to wait.
+    bool consume_prep_cache_keys(int task_id, const server_tokens & tokens, std::vector<std::string> & keys) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_prep);
+            auto it = prep_cache_keys.find(task_id);
+            if (it != prep_cache_keys.end()) {
+                keys = it->second;
+                prep_cache_keys.erase(it);
+                ++n_prep_hits_total;
+                return !keys.empty() || tokens.empty();
+            }
+        }
+        ++n_prep_inline_total;
+        return tokens.get_stable_cache_keys(keys);
+    }
+
     void publish_slot_kv_blocks(const server_slot & slot) {
         if (!params_base.kv_unified || slot.prompt.tokens.empty()) {
             return;
@@ -1876,12 +2076,13 @@ private:
                 size_t best_prefix = 0;
                 server_kv_block_radix::attachment block_attachment;
                 std::vector<std::string> cache_keys;
-                if (params_base.kv_unified && task.tokens.get_stable_cache_keys(cache_keys)) {
+                if (params_base.kv_unified && consume_prep_cache_keys(task.id, task.tokens, cache_keys)) {
                     // The block radix only returns a source that owns every
                     // sealed prefix block, so one seq_cp attaches the exact
                     // native cell range without serializing or copying K/V.
                     block_attachment = kv_block_radix.attach(cache_keys, ret->id, ggml_time_us());
                     if (block_attachment.source >= 0 && block_attachment.positions > 0) {
+                        metrics.on_kv_block_radix_attach(block_attachment.positions);
                         source = get_slot_by_id(block_attachment.source);
                         best_prefix = task.tokens.size_up_to_pos(block_attachment.positions);
                         if (source == ret || source == nullptr || source->is_processing() ||
@@ -2116,6 +2317,11 @@ private:
         slot.state = slot.task->is_child()
             ? SLOT_STATE_WAIT_OTHER // wait for the parent to process prompt
             : SLOT_STATE_STARTED;
+
+        // Record request arrival for the TTFT/e2e latency histograms. The task
+        // struct carries no creation timestamp, so we use the assignment moment
+        // as the closest available proxy for "request entered the scheduler".
+        slot.t_arrival_us = ggml_time_us();
 
         // reset server kill-switch counter
         n_empty_consecutive = 0;
@@ -2452,6 +2658,30 @@ private:
 
         res->generation_params = slot.task->params; // copy the parameters
 
+        // Emit an OpenTelemetry-compatible span covering the request lifecycle
+        // when tracing is enabled. We construct the span descriptor explicitly
+        // (rather than using the RAII start_root handle) so the reported
+        // start/duration span arrival -> now, instead of just this function.
+        if (tracer.enabled() && slot.t_arrival_us > 0) {
+            const int64_t now_us = ggml_time_us();
+            tessera_metrics::span_descriptor d;
+            d.name          = "completion";
+            d.start_us      = slot.t_arrival_us;
+            d.duration_us   = std::max<int64_t>(0, now_us - slot.t_arrival_us);
+            tessera_metrics::tracer::new_trace_id(d.trace_id);
+            tessera_metrics::tracer::new_span_id(d.span_id);
+            std::memset(d.parent_span_id, 0, 8);
+            d.attributes = {
+                {"request.id",            std::to_string(slot.task->id)},
+                {"request.prompt_tokens", std::to_string(slot.task->n_tokens())},
+                {"request.cached_tokens", std::to_string(slot.n_prompt_tokens_cache)},
+                {"request.decoded_tokens",std::to_string(slot.n_decoded)},
+                {"request.ttft_us", std::to_string(slot.t_first_token_us > 0
+                    ? std::max<int64_t>(0, slot.t_first_token_us - slot.t_arrival_us) : 0)},
+            };
+            tracer.emit(std::move(d));
+        }
+
         queue_results.send(std::move(res));
     }
 
@@ -2676,6 +2906,21 @@ private:
                         }
                     }
 
+                    // Hand cache-key staging to the overlap-scheduler worker.
+                    // The task may have to wait for a free slot; if it does,
+                    // the worker hides the O(prompt length) key derivation
+                    // behind the in-flight GPU decode. Text-only prompts only:
+                    // multimodal prompts keep deriving inline (the chunk data
+                    // is move-only and not safe to snapshot cheaply).
+                    if (!task.tokens.empty() && !task.tokens.has_mtmd) {
+                        ++n_prep_staged_total;
+                        server_prep_pool::request req;
+                        req.task_id  = task.id;
+                        req.has_mtmd = false;
+                        req.tokens   = task.tokens.get_tokens(); // copy of ids
+                        prep_pool.submit(std::move(req));
+                    }
+
                     const int id_task = task.id;
 
                     server_slot * slot = get_available_slot(task);
@@ -2685,7 +2930,49 @@ private:
                     //
 
                     if (slot == nullptr) {
-                        // if no slot is available, we defer this task for processing later
+                        // No idle slot. When the admission controller is enabled
+                        // and the soft cap is exceeded, ask the policy whether to
+                        // preempt the lowest-scoring active request to make room.
+                        // The candidate is scored the same way as an admitted
+                        // prefill so the comparison is apples-to-apples.
+                        //
+                        // After a preempt we DEFER the candidate instead of
+                        // admitting it inline. The preempted task was re-posted
+                        // to the front of the queue, so it wins the freed slot
+                        // on the next iteration; admitting the candidate
+                        // immediately would let it take the slot and then be
+                        // preempted in turn when the next deferred task arrives,
+                        // producing an unbounded preempt thrash. Deferring
+                        // bounds total preemptions and guarantees forward
+                        // progress: every task eventually either gets a slot or
+                        // is itself the lowest-score victim.
+                        if (admission_cfg.max_admitted > 0 && task.type == SERVER_TASK_TYPE_COMPLETION) {
+                            const int64_t now_us = ggml_time_us();
+                            auto snap = admission_snapshot(now_us);
+                            if (snap.n_processing >= admission_cfg.max_admitted) {
+                                // Score the candidate using a throwaway slot-free
+                                // estimate: reuse score_prefill_slot's formula by
+                                // summing prefix reuse against the task's own tokens.
+                                // We approximate via a fresh slot's score (zero
+                                // prefix) so the policy sees the candidate's rank
+                                // relative to in-flight work.
+                                const int64_t candidate_score =
+                                    1000ll * 0 +                 // no resident prefix yet
+                                    8ll * 0 +                    // age 0 at arrival
+                                    16ll * 500 -                 // default acceptance_milli
+                                    4ll * (int64_t) task.n_tokens(); // suffix cost
+                                auto victim = tessera_admission::choose_preempt_victim(
+                                        snap, candidate_score, admission_cfg);
+                                if (victim.has_value()) {
+                                    SRV_INF("admission: preempting slot %d to admit task %d (processing = %d, cap = %d)\n",
+                                            *victim, id_task, snap.n_processing, admission_cfg.max_admitted);
+                                    preempt_victim(*victim);
+                                }
+                            }
+                        }
+                        // Defer this task for processing later. The preempted
+                        // task (if any) was re-posted to the front and will be
+                        // admitted next; this candidate waits behind it.
                         SRV_DBG("no slot is available, defer task, id_task = %d\n", id_task);
                         queue_tasks.defer(std::move(task));
                         break;
@@ -2831,11 +3118,24 @@ private:
                     res->n_kv_radix_hit_positions_total = metrics.n_kv_radix_hit_positions_total;
                     res->n_kv_prefix_shares_total = metrics.n_kv_prefix_shares_total;
                     res->n_kv_prefix_shared_positions_total = metrics.n_kv_prefix_shared_positions_total;
+                    res->n_kv_block_radix_attaches_total = metrics.n_kv_block_radix_attaches_total;
+                    res->n_kv_block_radix_attach_positions_total = metrics.n_kv_block_radix_attach_positions_total;
+                    res->n_prep_staged_total   = n_prep_staged_total;
+                    res->n_prep_hits_total     = n_prep_hits_total;
+                    res->n_prep_inline_total   = n_prep_inline_total;
                     res->n_scheduler_prefill_selections_total = metrics.n_scheduler_prefill_selections_total;
                     res->scheduler_prefix_positions_total = metrics.scheduler_prefix_positions_total;
                     res->scheduler_estimated_cost_tokens_total = metrics.scheduler_estimated_cost_tokens_total;
                     res->scheduler_acceptance_milli_total = metrics.scheduler_acceptance_milli_total;
                     res->scheduler_score_milli_last = metrics.scheduler_score_milli_last;
+                    res->n_admission_preemptions_total = n_admission_preemptions_total;
+
+                    // Render the latency histograms on this thread (the registry
+                    // is owned by the inference loop) and hand the exposition
+                    // text to the HTTP worker. The HTTP side just concatenates.
+                    if (latency_registry) {
+                        latency_registry->render_prometheus(res->histograms_prometheus);
+                    }
 
                     if (task.metrics_reset_bucket) {
                         metrics.reset_bucket();
@@ -3112,6 +3412,12 @@ private:
 
         GGML_ASSERT(batch.slot_batched || batch.size() == 0);
 
+        // Capture the decode-iteration wall clock for the latency histogram.
+        // Measured from the start of the first sub-batch decode through the end
+        // of the last post_decode; this is the per-iteration cost that drives
+        // ITL under load.
+        const int64_t t_decode_iter_start_us = batch.slot_batched ? ggml_time_us() : 0;
+
         if (batch.slot_batched) {
             auto & slot_batched      = batch.slot_batched;
             auto & alora_scale       = batch.alora_scale;
@@ -3170,6 +3476,12 @@ private:
                 abort_all_slots("post_decode() failed: " + std::string(e.what()));
                 break; // stop any further processing
             }
+        }
+
+        // Record the decode-iteration latency sample after the full sub-batch
+        // loop completes. Skip when the iteration had no work (no slot batched).
+        if (latency_registry && t_decode_iter_start_us > 0) {
+            latency_registry->record_decode(ggml_time_us() - t_decode_iter_start_us);
         }
     }
 
@@ -3401,6 +3713,16 @@ private:
                                score_prefill_slot(*rhs, schedule_now_us).score_milli;
                     });
 
+            // Reset the shared per-iteration prefill budget. The generating
+            // slots have already claimed their decode tokens in the batch
+            // above; the budget has to respect both the shared cap and the
+            // remaining physical batch headroom. When --prefill-chunk-size is
+            // 0 the calculator is inert (remaining == INT32_MAX), so legacy
+            // behavior is preserved exactly.
+            prefill_budget.reset(n_batch,
+                                 batch.size(),
+                                 (int32_t) generating.size());
+
             iterate(prefill_slots, [&](server_slot & slot) {
                 if (!add_ok || batch.size() >= n_batch) {
                     return; // batch is full, skip remaining slots
@@ -3433,10 +3755,25 @@ private:
 
                     // used to determine the number of tokens added to the batch for the current slot
                     const auto n_tokens_prev = batch.size();
-                    const int32_t prefill_quantum = prefill_quantum_for(
+                    int32_t prefill_quantum = prefill_quantum_for(
                         slot, n_batch, n_ubatch, !generating.empty());
+                    // Apply the shared per-iteration prefill cap. When the cap
+                    // is disabled the calculator returns the forced quantum
+                    // unchanged (or the slot's remaining work, whichever is
+                    // smaller), so the legacy path is preserved.
+                    const int32_t slot_remaining = static_cast<int32_t>(std::max<int>(
+                            0, slot.task->n_tokens() - slot.prompt.n_tokens()));
+                    prefill_quantum = prefill_budget.request_quantum(
+                            slot_remaining, prefill_quantum);
                     metrics.on_prefill_adaptive_quantum(
                         prefill_quantum, prefill_quantum_max);
+
+                    // Capture prefill-start wall clock on the first chunk so
+                    // the prefill-latency histogram reports wall time, not
+                    // just the cumulative slot.t_prompt_processing number.
+                    if (slot.t_prefill_start_us == 0) {
+                        slot.t_prefill_start_us = ggml_time_us();
+                    }
 
                     // TODO: maybe move branch to outside of this loop in the future
                     if (slot.state == SLOT_STATE_STARTED) {
@@ -3929,6 +4266,16 @@ private:
                         slot.i_batch   = batch.size() - 1;
 
                         slot.init_sampler();
+
+                        // Record the prefill-latency histogram sample once the
+                        // entire prompt has been ingested. We measure wall time
+                        // from the first chunk's start to this moment so the
+                        // sample reflects what the operator experiences, not
+                        // just GPU compute.
+                        if (latency_registry && slot.t_prefill_start_us > 0) {
+                            latency_registry->record_prefill(
+                                ggml_time_us() - slot.t_prefill_start_us);
+                        }
                     } else {
                         // skip ordinary mid-prompt checkpoints, unless the batch starts a user
                         // message or we are near the end of the prompt
@@ -4213,6 +4560,20 @@ private:
                 slot.n_decoded_last = 0;
                 slot.t_prompt_processing = (slot.t_start_generation - slot.t_start_process_prompt) / 1e3;
                 metrics.on_prompt_eval(slot);
+
+                // TTFT = arrival at the scheduler -> first generated token.
+                // The ITL tracker is seeded with the same instant so the first
+                // inter-token gap is measured from TTFT, not from epoch 0.
+                if (latency_registry) {
+                    const int64_t arrival = slot.t_arrival_us > 0
+                        ? slot.t_arrival_us : slot.t_start_process_prompt;
+                    latency_registry->record_ttft(t_now - arrival);
+                }
+                slot.t_first_token_us = t_now;
+                slot.t_last_emit_us   = t_now;
+            } else if (latency_registry && slot.t_last_emit_us > 0) {
+                latency_registry->record_itl(t_now - slot.t_last_emit_us);
+                slot.t_last_emit_us = t_now;
             }
 
             slot.t_token_generation = std::max<int64_t>(1, t_now - slot.t_start_generation) / 1e3;
@@ -4229,6 +4590,9 @@ private:
             if (!process_token(result, slot)) {
                 // release slot because of stop condition
                 slot.print_timings();
+                if (latency_registry && slot.t_arrival_us > 0) {
+                    latency_registry->record_e2e(ggml_time_us() - slot.t_arrival_us);
+                }
                 send_final_response(slot);
                 metrics.on_prediction(slot);
                 slot.release();
@@ -4356,8 +4720,27 @@ private:
 
                 slot.n_decoded += 1;
 
+                // Mirror the non-speculative latency hooks so TTFT / ITL / e2e
+                // histograms see speculative requests too. The first accepted
+                // token is the TTFT moment; subsequent tokens contribute ITL.
+                if (latency_registry) {
+                    if (slot.n_decoded == 1) {
+                        const int64_t arrival = slot.t_arrival_us > 0
+                            ? slot.t_arrival_us : slot.t_start_process_prompt;
+                        latency_registry->record_ttft(t_now - arrival);
+                        slot.t_first_token_us = t_now;
+                        slot.t_last_emit_us   = t_now;
+                    } else if (slot.t_last_emit_us > 0) {
+                        latency_registry->record_itl(t_now - slot.t_last_emit_us);
+                        slot.t_last_emit_us = t_now;
+                    }
+                }
+
                 if (!process_token(result, slot)) {
                     slot.print_timings();
+                    if (latency_registry && slot.t_arrival_us > 0) {
+                        latency_registry->record_e2e(ggml_time_us() - slot.t_arrival_us);
+                    }
                     send_final_response(slot);
                     metrics.on_prediction(slot);
                     slot.release();
@@ -4870,6 +5253,26 @@ void server_routes::init_routes() {
                     {"help",  "KV positions reused by idle-slot prefix handoffs."},
                     {"value",  res_task->n_kv_prefix_shared_positions_total}
             }, {
+                    {"name",  "kv_block_radix_attaches_total"},
+                    {"help",  "Prefix handoffs resolved by the unified-KV block radix (hash-chained)."},
+                    {"value",  res_task->n_kv_block_radix_attaches_total}
+            }, {
+                    {"name",  "kv_block_radix_attach_positions_total"},
+                    {"help",  "KV positions reused by block-radix attaches."},
+                    {"value",  res_task->n_kv_block_radix_attach_positions_total}
+            }, {
+                    {"name",  "prep_staged_total"},
+                    {"help",  "Tasks submitted to the overlap-scheduler prep worker for background cache-key staging."},
+                    {"value",  res_task->n_prep_staged_total}
+            }, {
+                    {"name",  "prep_hits_total"},
+                    {"help",  "Prep results consumed from the staging cache on the inference thread."},
+                    {"value",  res_task->n_prep_hits_total}
+            }, {
+                    {"name",  "prep_inline_total"},
+                    {"help",  "Cache-key derivations that ran inline (worker miss)."},
+                    {"value",  res_task->n_prep_inline_total}
+            }, {
                     {"name",  "scheduler_prefill_selections_total"},
                     {"help",  "Prompt selections ranked by the Tessera cache-aware scheduler."},
                     {"value",  res_task->n_scheduler_prefill_selections_total}
@@ -4884,11 +5287,15 @@ void server_routes::init_routes() {
             }, {
                     {"name",  "scheduler_acceptance_milli_total"},
                     {"help",  "Rolling speculative acceptance contribution, scaled by 1000."},
-                    {"value",  res_task->scheduler_acceptance_milli_total}
+                    {"value", res_task->scheduler_acceptance_milli_total}
+            }, {
+                    {"name",  "admission_preemptions_total"},
+                    {"help",  "Requests preempted by the dynamic admission controller to free KV room."},
+                    {"value", res_task->n_admission_preemptions_total}
             }, {
                     {"name",  "n_tokens_max"},
                     {"help",  "Largest observed n_tokens."},
-                    {"value",  res_task->n_tokens_max}
+                    {"value", res_task->n_tokens_max}
             }}},
             {"gauge", {{
                     {"name",  "prompt_tokens_seconds"},
@@ -4933,6 +5340,11 @@ void server_routes::init_routes() {
                             << "llamacpp:"        << name << " " << value << "\n";
             }
         }
+
+        // Append the latency-histogram block (TTFT/ITL/e2e/prefill/decode
+        // P50/P95/P99). The histograms render in Prometheus exposition format
+        // directly; the text was built on the inference thread above.
+        prometheus << res_task->histograms_prometheus;
 
         res->headers["Process-Start-Time-Unix"] = std::to_string(res_task->t_start);
         res->content_type = "text/plain; version=0.0.4";

@@ -2,11 +2,74 @@
 
 #include "server-task.h"
 
+#include <atomic>
 #include <condition_variable>
 #include <deque>
+#include <functional>
 #include <mutex>
+#include <thread>
 #include <vector>
+#include <unordered_map>
 #include <unordered_set>
+
+// Overlap scheduler: a background worker that pre-stages CPU-only preparation
+// for tasks while the main inference loop is busy on the GPU. This mirrors the
+// spirit of TRT-LLM's overlap scheduler (prepare iteration N+1 while iteration
+// N decodes) without splitting into a separate process: the main loop stays the
+// single GPU-submission thread, and only pure-function work that touches no
+// slot/llama_context state is allowed to run here.
+//
+// The first staged artifact is the stable cache-key vector used by the
+// block-radix prefix cache and the serialized prompt cache. Computing it is
+// O(prompt length) and previously ran on the inference thread inside
+// get_available_slot(); staging it on the worker removes that cost from the
+// admission critical path whenever a request waited in the queue.
+//
+// Fine-grained GPU/CPU overlap via Metal shared events or CUDA streams is left
+// as a TODO: it requires double-buffered slot/batch state which is a larger
+// change than is safe to make here.
+struct server_prep_pool {
+    // A single staged prep request. Holds only the data needed to derive
+    // stable cache keys without referencing the (move-only, shared) task
+    // object: the token ids and whether multimodal chunks are present. Text
+    // prompts are fully cacheable here; multimodal prompts are skipped and
+    // derived inline on the inference thread.
+    struct request {
+        int                      task_id  = -1;
+        bool                     has_mtmd = false;
+        std::vector<llama_token> tokens;
+    };
+
+    // Process staged requests. Called from the worker thread; the result is
+    // typically stored by the callback in a thread-safe map keyed by task_id.
+    using prep_fn = std::function<void(const request &)>;
+
+    server_prep_pool() = default;
+    ~server_prep_pool();
+
+    // Start the worker thread. idempotent. Returns false if the thread could
+    // not be started (caller falls back to inline prep).
+    bool start(prep_fn callback);
+
+    // Stop the worker and join. safe to call from any thread.
+    void stop();
+
+    // Submit a request for background staging. Moves the snapshot. If the
+    // worker is not running, the request is dropped (caller will compute
+    // inline on demand).
+    void submit(request && req);
+
+private:
+    void loop();
+
+    std::mutex              mutex;
+    std::condition_variable cv;
+    std::thread             worker;
+    std::atomic<bool>       running { false };
+    std::atomic<bool>       stop_requested { false };
+    std::deque<request>     queue;
+    prep_fn                 fn;
+};
 
 // struct for managing server tasks
 // in most cases, use server_response_reader to post new tasks and retrieve results

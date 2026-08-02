@@ -19,6 +19,80 @@
 // server_queue
 //
 
+server_prep_pool::~server_prep_pool() {
+    stop();
+}
+
+bool server_prep_pool::start(prep_fn callback) {
+    std::unique_lock<std::mutex> lock(mutex);
+    if (running.load()) {
+        return true;
+    }
+    fn = std::move(callback);
+    stop_requested.store(false);
+    try {
+        worker = std::thread([this]() { this->loop(); });
+    } catch (...) {
+        return false;
+    }
+    running.store(true);
+    return true;
+}
+
+void server_prep_pool::stop() {
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        if (!running.load()) {
+            return;
+        }
+        stop_requested.store(true);
+        cv.notify_all();
+    }
+    if (worker.joinable()) {
+        worker.join();
+    }
+    running.store(false);
+    std::unique_lock<std::mutex> lock(mutex);
+    queue.clear();
+}
+
+void server_prep_pool::submit(request && req) {
+    if (!running.load()) {
+        return; // worker not running: caller will compute inline on demand
+    }
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        queue.emplace_back(std::move(req));
+    }
+    cv.notify_one();
+}
+
+void server_prep_pool::loop() {
+    while (true) {
+        request req;
+        {
+            std::unique_lock<std::mutex> lock(mutex);
+            cv.wait(lock, [&] {
+                return stop_requested.load() || !queue.empty();
+            });
+            if (stop_requested.load() && queue.empty()) {
+                return;
+            }
+            if (!queue.empty()) {
+                req = std::move(queue.front());
+                queue.pop_front();
+            } else {
+                continue;
+            }
+        }
+        try {
+            fn(req);
+        } catch (...) {
+            // prep is best-effort: never let a staging error escape the worker
+        }
+    }
+}
+
 int server_queue::post(server_task && task, bool front) {
     std::unique_lock<std::mutex> lock(mutex_tasks);
     GGML_ASSERT(task.id != -1);
