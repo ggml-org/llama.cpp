@@ -1058,9 +1058,13 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
 
         if constexpr (nstages <= 1) {
 #if defined(AMD_WMMA_AVAILABLE)
-            if (DKQ <= 128)
+            // When DKQ > 128, K/V bypass LDS so tile_K/tile_V barriers are unnecessary.
+            // However, tile_mask still lives in LDS — the next iteration's load_mask
+            // would overwrite it while a slow warp might still be reading it in softmax.
+            // Keep the barrier when mask is active to prevent this WAR hazard.
+            if (DKQ <= 128 || ncols2 > 1 || mask_h)
 #endif // AMD_WMMA_AVAILABLE
-            __syncthreads(); // Only needed if tile_K == tile_V.
+            __syncthreads(); // Needed if tile_K == tile_V, or if tile_mask is in use.
         }
     }
 #else

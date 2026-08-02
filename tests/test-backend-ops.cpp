@@ -9594,6 +9594,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     // large-KV F16 cases (Qwen3.6-27B geometry and a llama-class control): the upstream matrix
     // stops at kv=1024, blind to long-context FA bugs (e.g. the oneDNN SDPA ordering race on BMG).
+    // For DKQ>128 on AMD WMMA, K/V bypass LDS but tile_mask stays in shared memory, so the end-of-loop
+    // barrier must still fire when a mask is active. kv=16384 with gqa_ratio>=4 (ncols2>=4) gives 256+
+    // attention loop iterations, stressing this synchronization path.
     for (int64_t kv : { 4096, 16384 }) {
         test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {6, 1}, kv, 512, true, false, 0, 0,
                                                         GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
