@@ -1,7 +1,12 @@
+// Activate the ggml-common.h decl block first so block_q8_0 / QK8_0 are visible
+// for the paged-attn on-the-fly q8_0 dequant path. Must precede any transitive
+// include of ggml-common.h.
+#define GGML_COMMON_DECL_CPP
 #include "ops.h"
 
 #include "ggml-cpu.h"
 #include "ggml-impl.h"
+#include "ggml-common.h"
 #include "binary-ops.h"
 #include "simd-gemm.h"
 #include "ggml.h"
@@ -9250,8 +9255,8 @@ void ggml_compute_forward_tessera_paged_attn(
     const ggml_tensor * page_map = dst->src[3];
 
     GGML_ASSERT(q->type == GGML_TYPE_F32);
-    GGML_ASSERT(k->type == GGML_TYPE_F32 || k->type == GGML_TYPE_F16);
-    GGML_ASSERT(v->type == GGML_TYPE_F32 || v->type == GGML_TYPE_F16);
+    GGML_ASSERT(k->type == GGML_TYPE_F32 || k->type == GGML_TYPE_F16 || k->type == GGML_TYPE_Q8_0);
+    GGML_ASSERT(v->type == GGML_TYPE_F32 || v->type == GGML_TYPE_F16 || v->type == GGML_TYPE_Q8_0);
     GGML_ASSERT(page_map->type == GGML_TYPE_I32);
     GGML_ASSERT(q->ne[0] == k->ne[0]);
     const bool v_trans = ggml_get_op_params_i32(dst, 1) != 0;
@@ -9279,14 +9284,29 @@ void ggml_compute_forward_tessera_paged_attn(
     float * out          = (float *) dst->data;
 
     const auto load_k = [k](int64_t i) {
-        return k->type == GGML_TYPE_F32
-            ? ((const float *) k->data)[i]
-            : ggml_fp16_to_fp32(((const ggml_fp16_t *) k->data)[i]);
+        if (k->type == GGML_TYPE_F32) {
+            return ((const float *) k->data)[i];
+        }
+        if (k->type == GGML_TYPE_F16) {
+            return ggml_fp16_to_fp32(((const ggml_fp16_t *) k->data)[i]);
+        }
+        // GGML_TYPE_Q8_0: block { ggml_half d; int8_t qs[QK8_0]; }, QK8_0 == 32.
+        // On-the-fly dequant: value = d * qs[i % QK8_0].
+        const block_q8_0 * blk = (const block_q8_0 *) k->data;
+        const float d = GGML_FP16_TO_FP32(blk[i / QK8_0].d);
+        return d * blk[i / QK8_0].qs[i % QK8_0];
     };
     const auto load_v = [v](int64_t i) {
-        return v->type == GGML_TYPE_F32
-            ? ((const float *) v->data)[i]
-            : ggml_fp16_to_fp32(((const ggml_fp16_t *) v->data)[i]);
+        if (v->type == GGML_TYPE_F32) {
+            return ((const float *) v->data)[i];
+        }
+        if (v->type == GGML_TYPE_F16) {
+            return ggml_fp16_to_fp32(((const ggml_fp16_t *) v->data)[i]);
+        }
+        // GGML_TYPE_Q8_0 dequant (same as load_k).
+        const block_q8_0 * blk = (const block_q8_0 *) v->data;
+        const float d = GGML_FP16_TO_FP32(blk[i / QK8_0].d);
+        return d * blk[i / QK8_0].qs[i % QK8_0];
     };
 
     const int64_t n_rows = nq*hq*ns;
@@ -9303,7 +9323,11 @@ void ggml_compute_forward_tessera_paged_attn(
         float max_score = -INFINITY;
         for (int64_t il = 0; il < n_kv; ++il) {
             const int32_t ip = map[is*n_kv + il];
-            GGML_ASSERT(ip >= 0 && ip < n_phy);
+            // Unused logical positions (causal tail / unallocated slots) carry
+            // UINT32_MAX and must not be attended. Treat them as -inf.
+            if (ip < 0 || ip >= n_phy) {
+                continue;
+            }
             float score = 0.0f;
             for (int64_t id = 0; id < d; ++id) score += q_row[id]*load_k((((is*n_phy + ip)*hkv + ihkv)*d) + id);
             max_score = MAX(max_score, score*scale);
@@ -9314,6 +9338,9 @@ void ggml_compute_forward_tessera_paged_attn(
         for (int64_t idv = 0; idv < dv; ++idv) out_row[idv] = 0.0f;
         for (int64_t il = 0; il < n_kv; ++il) {
             const int32_t ip = map[is*n_kv + il];
+            if (ip < 0 || ip >= n_phy) {
+                continue;
+            }
             float score = 0.0f;
             for (int64_t id = 0; id < d; ++id) score += q_row[id]*load_k((((is*n_phy + ip)*hkv + ihkv)*d) + id);
             const float weight = expf(score*scale - max_score);

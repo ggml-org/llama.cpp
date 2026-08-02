@@ -2817,7 +2817,8 @@ int ggml_metal_op_tessera_paged_attn(ggml_metal_op_t ctx, int idx) {
     ggml_tensor * op = ctx->node(idx);
     GGML_ASSERT(op->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT(op->src[1]->type == op->src[2]->type);
-    GGML_ASSERT(op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F16);
+    GGML_ASSERT(op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F16 ||
+                op->src[1]->type == GGML_TYPE_Q8_0);
     GGML_ASSERT(op->src[3]->type == GGML_TYPE_I32);
     const bool v_trans = ggml_get_op_params_i32(op, 1) != 0;
 
@@ -2829,8 +2830,13 @@ int ggml_metal_op_tessera_paged_attn(ggml_metal_op_t ctx, int idx) {
         (int32_t) op->src[1]->ne[1], (int32_t) op->src[3]->ne[0],
         (int32_t) op->src[1]->ne[2], (int32_t) op->src[0]->ne[3], (int32_t) v_trans, scale,
     };
-    const char * kernel = op->src[1]->type == GGML_TYPE_F16
-        ? "kernel_tessera_paged_attn_f16" : "kernel_tessera_paged_attn_f32";
+    const char * kernel = nullptr;
+    switch (op->src[1]->type) {
+        case GGML_TYPE_F16:  kernel = "kernel_tessera_paged_attn_f16";  break;
+        case GGML_TYPE_F32:  kernel = "kernel_tessera_paged_attn_f32";  break;
+        case GGML_TYPE_Q8_0: kernel = "kernel_tessera_paged_attn_q8_0"; break;
+        default: GGML_ABORT("tessera_paged_attn: unsupported K/V type");
+    }
     auto pipeline = ggml_metal_library_get_pipeline(ctx->lib, kernel);
     if (!pipeline.pipeline) {
         pipeline = ggml_metal_library_compile_pipeline(ctx->lib, kernel, kernel, nullptr);

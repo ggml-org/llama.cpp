@@ -224,6 +224,13 @@ public:
 
     uint32_t get_n_kv(const slot_info & sinfo) const;
 
+    // Build the full logical-position -> physical-cell map for the unified
+    // paged-attention decode path. Returns a vector of length n_kv where
+    // entry p is the physical cell index holding logical position p, or
+    // UINT32_MAX if the position is not resident. Used by TESSERA_PAGED_ATTN
+    // so the kernel can scatter-read the paged arena directly.
+    std::vector<uint32_t> build_tessera_full_page_map(const slot_info & sinfo, uint32_t n_kv) const;
+
     // get views of the current state of the cache
     ggml_tensor * get_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
     ggml_tensor * get_v(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;

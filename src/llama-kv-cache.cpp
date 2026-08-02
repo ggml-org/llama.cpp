@@ -1304,6 +1304,29 @@ uint32_t llama_kv_cache::get_n_kv(const slot_info & sinfo) const {
     return result;
 }
 
+std::vector<uint32_t> llama_kv_cache::build_tessera_full_page_map(const slot_info & sinfo, uint32_t n_kv) const {
+    // Invert the cell -> pos mapping for every resident cell of every stream
+    // the slot touches. Each cell holds exactly one logical position (pos[i]);
+    // the inverse lets the paged-attn kernel translate a logical KV index to
+    // the physical cell that stores its K/V row. Unused logical positions stay
+    // UINT32_MAX so the kernel can skip (or assert against) them.
+    std::vector<uint32_t> result(n_kv, std::numeric_limits<uint32_t>::max());
+    for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
+        const auto & cells = v_cells[sinfo.strm[s]];
+        const uint32_t n_cells = cells.size();
+        for (uint32_t i = 0; i < n_cells; ++i) {
+            if (cells.is_empty(i)) {
+                continue;
+            }
+            const llama_pos p = cells.pos_get(i);
+            if (p >= 0 && (uint32_t) p < n_kv) {
+                result[(uint32_t) p] = i;
+            }
+        }
+    }
+    return result;
+}
+
 std::vector<uint32_t> llama_kv_cache::tessera_kv_block_table::make_page_map(size_t stream) const {
     if (stream >= streams.size()) {
         throw std::out_of_range("Tessera KV page-map stream index");
@@ -2773,8 +2796,13 @@ void llama_kv_cache_context::set_input_kq_mask(ggml_tensor * dst, const llama_ub
 }
 
 void llama_kv_cache_context::set_input_tessera_page_map(ggml_tensor * dst) const {
-    const auto table = kv->build_tessera_block_table(sinfos[i_cur], n_kv);
-    const auto map = table.make_page_map(/* stream = */ 0);
+    // The paged-attn kernel reads K/V via the page map: dst[p] = the physical
+    // cell index holding logical position p. We invert the cell->pos map over
+    // every resident cell so historical positions (not just the current
+    // ubatch) resolve correctly. The previous block-table path only walked
+    // the current ubatch cells, leaving historical slots UINT32_MAX and
+    // producing garbage attention output.
+    const auto map = kv->build_tessera_full_page_map(sinfos[i_cur], n_kv);
     GGML_ASSERT(dst->type == GGML_TYPE_I32 && dst->ne[0] == (int64_t) map.size());
     ggml_backend_tensor_set(dst, map.data(), 0, map.size()*sizeof(map[0]));
 }

@@ -11257,6 +11257,11 @@ kernel void kernel_tessera_paged_attn(
     float max_score = -INFINITY;
     for (uint logical = 0; logical < args.n_kv; ++logical) {
         const uint physical = page_map[stream*args.n_kv + logical];
+        // Unused logical positions (causal tail / unallocated slots) carry
+        // UINT32_MAX; skip them rather than reading garbage K/V rows.
+        if (physical >= args.n_phy) {
+            continue;
+        }
         float score = 0.0f;
         for (uint i = 0; i < args.d; ++i) score += q[((stream*args.hq + q_head)*args.nq + query)*args.d + i]*float(k[((stream*args.n_phy + physical)*args.hkv + kv_head)*args.d + i]);
         max_score = max(max_score, score*args.scale);
@@ -11264,6 +11269,9 @@ kernel void kernel_tessera_paged_attn(
     float denom = 0.0f, value = 0.0f;
     for (uint logical = 0; logical < args.n_kv; ++logical) {
         const uint physical = page_map[stream*args.n_kv + logical];
+        if (physical >= args.n_phy) {
+            continue;
+        }
         float score = 0.0f;
         for (uint i = 0; i < args.d; ++i) score += q[((stream*args.hq + q_head)*args.nq + query)*args.d + i]*float(k[((stream*args.n_phy + physical)*args.hkv + kv_head)*args.d + i]);
         const float weight = exp(score*args.scale - max_score);
@@ -11282,6 +11290,63 @@ template [[host_name("kernel_tessera_paged_attn_f32")]] kernel void kernel_tesse
 template [[host_name("kernel_tessera_paged_attn_f16")]] kernel void kernel_tessera_paged_attn<half>(
     constant tessera_paged_attn_args &, device const float *, device const half *, device const half *,
     device const uint *, device float *, uint);
+
+// q8_0 K/V variant. K/V are packed block_q8_0 rows dequantized on the fly:
+//   value(i) = block[i/QK8_0].d * block[i/QK8_0].qs[i%QK8_0].
+// The flat element index matches the f32/f16 kernel so the cache layout
+// ([n_phy, hkv, d] row-major, d a whole number of q8_0 blocks) is read
+// identically. No f16 staging buffer is materialized.
+#define TESSERA_DEQUANT_Q8_0(p, i) ((float)((device const block_q8_0 *)(p))[(i)/QK8_0].qs[(i)%QK8_0] * \
+                                    (float)((device const block_q8_0 *)(p))[(i)/QK8_0].d)
+
+kernel void kernel_tessera_paged_attn_q8_0(
+        constant tessera_paged_attn_args & args [[buffer(0)]],
+        device const float * q        [[buffer(1)]],
+        device const char  * k        [[buffer(2)]],
+        device const char  * v        [[buffer(3)]],
+        device const uint  * page_map [[buffer(4)]],
+        device float * dst            [[buffer(5)]],
+        uint gid [[thread_position_in_grid]]) {
+    if (gid >= args.nq*args.hq*args.n_stream*args.dv) return;
+    const uint out_d = gid % args.dv;
+    const uint row = gid / args.dv;
+    const uint q_head = row % args.hq;
+    const uint query = (row / args.hq) % args.nq;
+    const uint stream = row / (args.hq*args.nq);
+    const uint kv_head = q_head/(args.hq/args.hkv);
+    float max_score = -INFINITY;
+    for (uint logical = 0; logical < args.n_kv; ++logical) {
+        const uint physical = page_map[stream*args.n_kv + logical];
+        if (physical >= args.n_phy) {
+            continue;
+        }
+        float score = 0.0f;
+        for (uint i = 0; i < args.d; ++i) {
+            const uint ki = ((stream*args.n_phy + physical)*args.hkv + kv_head)*args.d + i;
+            score += q[((stream*args.hq + q_head)*args.nq + query)*args.d + i]*TESSERA_DEQUANT_Q8_0(k, ki);
+        }
+        max_score = max(max_score, score*args.scale);
+    }
+    float denom = 0.0f, value = 0.0f;
+    for (uint logical = 0; logical < args.n_kv; ++logical) {
+        const uint physical = page_map[stream*args.n_kv + logical];
+        if (physical >= args.n_phy) {
+            continue;
+        }
+        float score = 0.0f;
+        for (uint i = 0; i < args.d; ++i) {
+            const uint ki = ((stream*args.n_phy + physical)*args.hkv + kv_head)*args.d + i;
+            score += q[((stream*args.hq + q_head)*args.nq + query)*args.d + i]*TESSERA_DEQUANT_Q8_0(k, ki);
+        }
+        const float weight = exp(score*args.scale - max_score);
+        denom += weight;
+        const uint v_index = args.v_trans
+            ? (((stream*args.dv + out_d)*args.hkv + kv_head)*args.n_phy + physical)
+            : (((stream*args.n_phy + physical)*args.hkv + kv_head)*args.dv + out_d);
+        value += weight*TESSERA_DEQUANT_Q8_0(v, v_index);
+    }
+    dst[gid] = value/denom;
+}
 
 // ====================== Tile640 ternary matmul (Metal) ======================
 //
