@@ -1202,9 +1202,16 @@ static std::vector<std::unique_ptr<server_tool>> build_tools() {
     return tools;
 }
 
+static std::string str_to_lower(const std::string & value) {
+    std::string lowered(value.size(), '\0');
+    std::transform(value.begin(), value.end(), lowered.begin(), [](unsigned char c) { return std::tolower(c); });
+    return lowered;
+}
+
 static std::string get_header(const std::map<std::string, std::string> & headers, const std::string & key, std::string default_value = "") {
+    const auto lowered_key = str_to_lower(key);
     for (const auto & h : headers) {
-        if (strcasecmp(h.first.c_str(), key.c_str()) == 0) {
+        if (str_to_lower(h.first) == lowered_key) {
             return h.second;
         }
     }
