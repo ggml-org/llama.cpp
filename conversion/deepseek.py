@@ -620,7 +620,8 @@ class DeepseekV4Model(TextModel):
         self.gguf_writer.add_hyper_connection_sinkhorn_iterations(hparams["hc_sinkhorn_iters"])
         self.gguf_writer.add_hyper_connection_epsilon(hparams["hc_eps"])
         self.gguf_writer.add_hash_layer_count(hparams["num_hash_layers"])
-        self.gguf_writer.add_embedding_length_out(hparams["hidden_size"] * hparams["hc_mult"])
+        if self.model_arch == gguf.MODEL_ARCH.DEEPSEEK4:
+            self.gguf_writer.add_embedding_length_out(hparams["hidden_size"] * hparams["hc_mult"])
         if self.mtp_only and (num_nextn_predict_layers := hparams.get("num_nextn_predict_layers", 0)) > 0:
             self.gguf_writer.add_nextn_predict_layers(num_nextn_predict_layers)
 
