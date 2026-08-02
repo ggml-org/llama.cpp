@@ -667,13 +667,13 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
 
             if (std::regex_match(tensor_name, pattern_attn_sinks)) {
                 GGML_ASSERT(segments.size() == 1);
-                if (ud->model->arch == LLM_ARCH_DEEPSEEK4) {
+                if (dsv4_tensor_layout) {
                     return {1};
                 }
                 return {std::lcm(n_embd_q, blck_size_perf)/n_embd_q * n_gqa};
             }
 
-            if (ud->model->arch == LLM_ARCH_DEEPSEEK4) {
+            if (dsv4_tensor_layout) {
                 if (std::regex_match(tensor_name, pattern_attn_q_b_weight) || std::regex_match(tensor_name, pattern_attn_q_b_bias)) {
                     GGML_ASSERT(segments.size() == 1);
                     return {hparams.n_embd_head_k(il)};
