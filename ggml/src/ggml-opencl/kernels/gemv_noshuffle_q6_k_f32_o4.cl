@@ -362,6 +362,11 @@ kernel void Q6K_O4_NAME(
         acc += reduce_lm[SUBGROUP_SIZE*1 + slid];
         acc += reduce_lm[SUBGROUP_SIZE*2 + slid];
         dst = (global float*)((global char*)dst + offsetd);
-        vstore4(acc, 0, &(dst[gid * 4]));
+        // The dispatch rounds ne01/4 up to the subgroup width, so the tail
+        // quads past the last row must not store (they wrote 128 rows past
+        // dst on every ne01 % 256 == 128 vocab, e.g. 151936).
+        if (gid * 4 + 3 < (uint)ne01) {
+            vstore4(acc, 0, &(dst[gid * 4]));
+        }
     }
 }
