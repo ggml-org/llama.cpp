@@ -2,13 +2,13 @@
 
 # Summer.cpp
 
-### VRAMを超えるGGUFモデルを、NVIDIA GPU・DRAM・SSDで動かす llama.cpp fork
+### VRAMを超えるGGUFモデルをNVIDIA GPU・DRAM・SSDで動かす llama.cpp fork
 
-**Tiered Memory Runtime · Streaming CLI Chat · GGUF Model Switching · Local Python Runner**
+**階層メモリ実行基盤・GGUF分割対応・CUDA向けローカル推論**
 
 [![Platform](https://img.shields.io/badge/platform-Linux-111827?logo=linux&logoColor=white)](#必要環境)
 [![GPU](https://img.shields.io/badge/GPU-NVIDIA%20CUDA-76B900?logo=nvidia&logoColor=white)](#必要環境)
-[![Language](https://img.shields.io/badge/CLI-Python%203-3776AB?logo=python&logoColor=white)](#summer-cli)
+[![Language](https://img.shields.io/badge/language-C%2B%2B17-00599C?logo=cplusplus&logoColor=white)](#手動ビルド)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](#ライセンス)
 
 </div>
@@ -18,13 +18,13 @@
 
 ## 概要
 
-Summer.cppは、llama.cppへtiered memory backendと専用実行ファイル`llama-tiered`を追加したforkです。
+Summer.cppは、llama.cppへtiered-memory backendと専用実行ファイル`llama-tiered`を追加したforkです。
 
 大きなGGUFモデルのtensorを、用途と予算に応じて次のメモリ階層へ配置します。
 
 | Tier | 配置先 | 用途 |
 |---|---|---|
-| VRAM | 通常のCUDA device memory | 頻繁に使うdense weight、embedding、hot tensor |
+| VRAM | CUDA device memory | 頻繁に使うdense weight、embedding、hot tensor |
 | DRAM | CUDA mapped host memory | VRAMに収まらないweightをzero-copyまたはmapped pinned copyで参照 |
 | SSD | file-backed GGUF mapping | routerが選択したMoE expert weightを必要時にstageし、hot expertを適応cacheへ保持 |
 
@@ -37,16 +37,6 @@ Placement planner
    ├── DRAM: mapped host memory / pinned copy fallback
    └── SSD : selected MoE slabs -> adaptive VRAM cache -> reusable scratch
 ```
-
-このリポジトリには、対話用の`summer` CLIも含まれます。
-
-- 生成テキストを逐次表示
-- `<think>...</think>`を表示しない
-- `~/models`以下のGGUFモデルを切り替え
-- 会話履歴を保持
-- llama.cppの通常ログを既定で非表示
-- 明示的なローカルPython実行
-- 直前の回答に含まれるPythonコードを確認して実行
 
 ## 実機確認済み構成
 
@@ -63,7 +53,7 @@ Placement planner
 | Prompt processing | 約31.7 tokens/s |
 | Token generation | 約27.7 tokens/s |
 
-性能値は短いプロンプトでの一例です。モデル、context、sampler、CPU、PCIe、ドライバ、バックグラウンド負荷により変化します。
+性能値は短いpromptでの一例です。model、context、sampler、CPU、PCIe、driver、background workloadにより変化します。
 
 ## 必要環境
 
@@ -78,7 +68,7 @@ Placement planner
 - モデルを保持できるSSD容量
 - DRAM tierを使う場合は十分なsystem RAM
 
-GTX 1660 SUPERと約9.35 GiBのモデルでは、OSや他プロセスを含めて16 GiB以上のsystem RAMを推奨します。DRAM fallbackはfile mmapとは別にmapped pinned copyを確保する場合があります。
+GTX 1660 SUPERと約9.35 GiBのモデルでは、OSや他processを含めて16 GiB以上のsystem RAMを推奨します。DRAM fallbackはfile mmapとは別にmapped pinned copyを確保する場合があります。
 
 確認:
 
@@ -112,14 +102,16 @@ git clone https://github.com/vnlpscale/Summer.cpp.git "$HOME/Summer.cpp"
 cd "$HOME/Summer.cpp"
 ```
 
-### 3. BuildとCLI install
+### 3. Buildとinstall
 
 インストーラは次を実行します。
 
-1. GTX 16/Turingで必要になるDRAM mapped pinned fallbackを適用
-2. CUDA版`llama-tiered`をRelease build
-3. `llama-tiered`と`summer`を`~/.local/bin`へinstall
-4. `~/models`を作成
+1. GTX 16/Turing向けDRAM mapped pinned fallbackを適用
+2. DRAM matmul stagingとprompt echo抑制patchを適用
+3. CUDA版`llama-tiered`をRelease build
+4. `llama-tiered`を`~/.local/bin`へinstall
+5. 旧SummerCLIコマンドを削除
+6. `~/models`を作成
 
 ```bash
 bash scripts/install-summer.sh
@@ -145,13 +137,7 @@ grep -qxF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.bashrc" || \
 
 source "$HOME/.bashrc"
 hash -r
-```
-
-確認:
-
-```bash
 command -v llama-tiered
-command -v summer
 ```
 
 ### 5. モデル配置
@@ -163,32 +149,34 @@ cp /path/to/model.gguf "$HOME/models/"
 
 split GGUFを使う場合は、同じdirectoryへ全partを置いてください。
 
-例:
-
 ```text
 ~/models/
 ├── Qwen3.6-35B-A3B-UD-IQ1_M.gguf
-├── another-model-Q4_K_M.gguf
 └── large-model/
     ├── model-00001-of-00003.gguf
     ├── model-00002-of-00003.gguf
     └── model-00003-of-00003.gguf
 ```
 
-### 6. 起動
+### 6. 実行
 
 ```bash
-summer
+llama-tiered \
+  -m "$HOME/models/Qwen3.6-35B-A3B-UD-IQ1_M.gguf" \
+  --vram-mib 3800 \
+  --dram-mib 6500 \
+  -n 128 \
+  "こんにちは。自己紹介してください。"
 ```
 
-## Manual build
-
-インストーラを使わず手動でbuildする場合:
+## 手動ビルド
 
 ```bash
 cd "$HOME/Summer.cpp"
 
 python3 scripts/apply-tiered-dram-pinned-fallback.py
+python3 scripts/apply-tiered-dram-matmul-staging.py
+python3 scripts/apply-tiered-no-prompt-echo.py
 
 rm -rf build
 
@@ -215,21 +203,9 @@ user-local install:
 
 ```bash
 install -Dm755 build/bin/llama-tiered "$HOME/.local/bin/llama-tiered"
-install -Dm755 scripts/summer "$HOME/.local/bin/summer"
 ```
 
-## llama-tieredを直接使う
-
-GTX 1660 SUPERで確認済みの安定構成:
-
-```bash
-llama-tiered \
-  -m "$HOME/models/Qwen3.6-35B-A3B-UD-IQ1_M.gguf" \
-  --vram-mib 3800 \
-  --dram-mib 6500 \
-  -n 128 \
-  "こんにちは。自己紹介してください。"
-```
+## llama-tieredの使用
 
 SSDへMoE weightを配置する大規模modelでは、適応expert cacheを有効にできます。cache容量は`--vram-mib`の内数で、resident weightの予算から自動的に差し引かれます。
 
@@ -258,7 +234,7 @@ cd "$HOME/Summer.cpp"
   "こんにちは。自己紹介してください。"
 ```
 
-llama.cpp/CUDAのログを非表示にする場合:
+llama.cpp/CUDAのlogを非表示にする場合:
 
 ```bash
 llama-tiered \
@@ -270,170 +246,20 @@ llama-tiered \
   2>/dev/null
 ```
 
-`2>/dev/null`はエラーも非表示にします。問題調査時には外してください。
-
-## Summer CLI
-
-起動:
-
-```bash
-summer
-```
-
-```text
-╭────────────────────────────────────────────────────────────╮
-│                           SUMMER                           │
-│                  streaming local AI chat                  │
-│           Qwen3.6-35B-A3B-UD-IQ1_M.gguf                  │
-╰────────────────────────────────────────────────────────────╯
-
-/help  /models  /model  /py  /runlast  /clear  /exit
-
-you ❯ こんにちは
-summer ❯ こんにちは。私はSummerです。
-```
-
-### CLI commands
-
-| Command | 動作 |
-|---|---|
-| `/help` | command一覧 |
-| `/models` | `~/models`以下のGGUF一覧 |
-| `/model` | 現在のモデルを表示 |
-| `/model 2` | 番号でモデル変更 |
-| `/model NAME` | 名前またはpathでモデル変更 |
-| `/tokens 512` | 最大生成token数を変更 |
-| `/clear` | 会話履歴を消去 |
-| `/history` | 現在の会話履歴を表示 |
-| `/about` | path、memory budget、token数などを表示 |
-| `/debug on` | llama.cpp/CUDA logを表示 |
-| `/debug off` | logを非表示 |
-| `/py CODE` | 1行Pythonを実行 |
-| `/py` | 複数行Python入力 |
-| `/pyfile PATH` | Python fileを実行 |
-| `/runlast` | 直前回答のPython blockを確認後に実行 |
-| `/pytimeout 30` | Python timeoutを秒単位で変更 |
-| `/exit` | 終了 |
-
-### モデル切替
-
-```text
-/models
-/model 2
-/model Qwen3.6-35B-A3B-UD-IQ1_M.gguf
-/model ~/models/another-model.gguf
-```
-
-モデルを変更すると、異なるtokenizerやchat formatの混在を防ぐため会話履歴を消去します。
-
-### ストリーミング
-
-CLIは`llama-tiered`の標準出力を1文字ずつ読み、生成結果を逐次表示します。`stdbuf`が利用可能な場合はprocess bufferingも無効化します。
-
-`<think>...</think>`はincremental filterで除去され、通常回答のみ表示されます。
-
-現在の`llama-tiered`は1回実行型です。CLIは各turnでprocessを起動し、会話履歴をpromptへ含めます。そのため、各messageでmodel load時間が発生します。
-
-## Python実行
-
-### 1行
-
-```text
-/py print(sum(range(10)))
-```
-
-### 複数行
-
-```text
-/py
-py … for i in range(5):
-py …     print(i)
-py … .end
-```
-
-### Python file
-
-```text
-/pyfile ~/scripts/test.py
-```
-
-### 直前回答のcode block
-
-モデルの回答に次のようなblockがある場合:
-
-````markdown
-```python
-print("hello")
-```
-````
-
-内容を表示して確認後に実行できます。
-
-```text
-/runlast
-```
-
-> [!WARNING]
-> Pythonはsandboxではありません。現在のLinux userと同じ権限でlocal実行されます。file削除、network access、process起動、credential参照などが可能です。内容を確認できないcodeは実行しないでください。
-
-## 設定file
-
-CLI設定:
-
-```text
-~/.config/summer/config.json
-```
-
-例:
-
-```json
-{
-  "model": "/home/USER/models/Qwen3.6-35B-A3B-UD-IQ1_M.gguf",
-  "vram_mib": 3800,
-  "dram_mib": 6500,
-  "max_tokens": 256,
-  "python_timeout": 15
-}
-```
-
-入力履歴:
-
-```text
-~/.local/share/summer/command_history
-```
-
-### Environment variables
-
-| Variable | Default | 用途 |
-|---|---|---|
-| `SUMMER_REPO` | `~/Summer.cpp` | source repository path |
-| `SUMMER_BINARY` | `~/.local/bin/llama-tiered`またはrepo build | 実行binaryを明示 |
-| `SUMMER_MODEL_DIR` | `~/models` | model検索directory |
-| `NO_COLOR` | 未設定 | ANSI colorを無効化 |
-
-例:
-
-```bash
-SUMMER_MODEL_DIR=/mnt/models summer
-```
+`2>/dev/null`はerrorも非表示にします。問題調査時には外してください。
 
 ## Memory budget調整
 
-`vram_mib`と`dram_mib`は`~/.config/summer/config.json`で変更できます。
-
 GTX 1660 SUPERでの開始値:
 
-```json
-{
-  "vram_mib": 3800,
-  "dram_mib": 6500
-}
+```text
+--vram-mib 3800 --dram-mib 6500
 ```
 
 調整方針:
 
-- GPU allocation errorが出る場合は`vram_mib`を下げる
-- SSDへtensorが配置される場合は`dram_mib`を増やす
+- GPU allocation errorが出る場合は`--vram-mib`を下げる
+- SSDへtensorが配置される場合は`--dram-mib`を増やす
 - system RAMが不足する場合は、より小さいGGUFまたは量子化を使う
 - desktop表示にもGPUを使う場合はVRAM reserveを十分に残す
 
@@ -458,7 +284,6 @@ local patchが競合する場合:
 ```bash
 cd "$HOME/Summer.cpp"
 git status --short
-
 git restore ggml/src/ggml-cuda/tiered.cu
 bash scripts/install-summer.sh
 ```
@@ -492,15 +317,13 @@ cmake --build build --target llama-tiered -j"$(nproc)"
 
 ### `tensor_state layout did not match expected source`
 
-`tiered.cu`が別patchまたはlocal editで変更されています。backupを取ってgit版へ戻します。
+`tiered.cu`が別patchまたはlocal editで変更されています。
 
 ```bash
 cd "$HOME/Summer.cpp"
 cp ggml/src/ggml-cuda/tiered.cu /tmp/tiered.cu.backup
-
 git restore ggml/src/ggml-cuda/tiered.cu
-python3 scripts/apply-tiered-dram-pinned-fallback.py
-cmake --build build --target llama-tiered -j"$(nproc)"
+bash scripts/install-summer.sh
 ```
 
 ### `operation not supported`
@@ -509,7 +332,6 @@ cmake --build build --target llama-tiered -j"$(nproc)"
 
 ```bash
 cd "$HOME/Summer.cpp"
-python3 scripts/apply-tiered-dram-pinned-fallback.py
 rm -rf build
 bash scripts/install-summer.sh
 ```
@@ -531,7 +353,7 @@ install -Dm755 build/bin/llama-tiered "$HOME/.local/bin/llama-tiered"
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 hash -r
-command -v summer
+command -v llama-tiered
 ```
 
 永続化:
@@ -545,30 +367,6 @@ source "$HOME/.bashrc"
 
 ```bash
 find "$HOME/models" -type f -iname '*.gguf'
-```
-
-CLI内:
-
-```text
-/models
-/model /absolute/path/to/model.gguf
-```
-
-### CLIが空の応答を返す
-
-```text
-/debug on
-```
-
-または直接実行してstderrを確認します。
-
-```bash
-llama-tiered \
-  -m "$HOME/models/model.gguf" \
-  --vram-mib 3800 \
-  --dram-mib 6500 \
-  -n 16 \
-  "test"
 ```
 
 ## SSD streamingの状態
@@ -609,7 +407,7 @@ if (!owner) {
 
 llama_model * model = llama_tiered_model_get_model(owner);
 
-// ownerが生存している間にllama_contextを作成・使用する。
+// ownerが生存している間にllama_contextを作成して使用する。
 
 llama_tiered_model_free(owner);
 ```
@@ -620,25 +418,23 @@ llama_tiered_model_free(owner);
 
 ```text
 Summer.cpp/
-├── examples/tiered-memory/       tiered memoryの詳細設計
-├── ggml/src/ggml-cuda/tiered.cu CUDA tiered backend
+├── examples/tiered-memory/                 tiered memoryの詳細設計
+├── ggml/src/ggml-cuda/tiered.cu           CUDA tiered backend
 ├── scripts/
 │   ├── apply-tiered-dram-pinned-fallback.py
-│   ├── install-summer.sh
-│   └── summer                    streaming chat CLI
-├── src/                          llama library
-└── build/bin/llama-tiered        build後の実行file
+│   ├── apply-tiered-dram-matmul-staging.py
+│   ├── apply-tiered-no-prompt-echo.py
+│   └── install-summer.sh
+├── src/                                    llama library
+└── build/bin/llama-tiered                  build後の実行file
 ```
 
 ## Uninstall
 
-user-local commandとCLI設定を削除します。
-
 ```bash
-rm -f "$HOME/.local/bin/summer"
 rm -f "$HOME/.local/bin/llama-tiered"
-rm -rf "$HOME/.config/summer"
-rm -rf "$HOME/.local/share/summer"
+rm -f "$HOME/.local/bin/Summer.CPP"
+rm -f "$HOME/.local/bin/summer"
 ```
 
 sourceとmodelも不要な場合のみ削除してください。
@@ -662,11 +458,3 @@ Summer.cppは[ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp)を基�
 ## ライセンス
 
 このリポジトリはupstream llama.cppと同じMIT Licenseです。詳細は[LICENSE](LICENSE)を参照してください。
-
----
-
-<div align="center">
-
-**Keep hot weights in VRAM. Keep the rest usable. Chat through Summer.**
-
-</div>

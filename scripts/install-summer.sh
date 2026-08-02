@@ -6,8 +6,6 @@ BUILD_DIR="${BUILD_DIR:-$ROOT/build}"
 PREFIX="${PREFIX:-$HOME/.local}"
 JOBS="${JOBS:-$(nproc)}"
 FORCE_MMQ="${FORCE_MMQ:-ON}"
-SUMMER_TMP="$(mktemp)"
-trap 'rm -f "$SUMMER_TMP"' EXIT
 
 if [[ -z "${CUDA_ARCH:-}" ]]; then
     CUDA_ARCH="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d '. ' || true)"
@@ -26,9 +24,6 @@ cd "$ROOT"
 python3 scripts/apply-tiered-dram-pinned-fallback.py
 python3 scripts/apply-tiered-dram-matmul-staging.py
 python3 scripts/apply-tiered-no-prompt-echo.py
-python3 scripts/apply-summer-vram-autotune.py scripts/summer "$SUMMER_TMP"
-python3 scripts/apply-summer-model-aware-memory.py "$SUMMER_TMP"
-python3 -m py_compile "$SUMMER_TMP"
 
 python3 - <<'PY'
 from pathlib import Path
@@ -71,8 +66,8 @@ cmake -S . -B "$BUILD_DIR" \
 cmake --build "$BUILD_DIR" --target llama-tiered -j"$JOBS"
 
 install -Dm755 "$BUILD_DIR/bin/llama-tiered" "$PREFIX/bin/llama-tiered"
-install -Dm755 "$SUMMER_TMP" "$PREFIX/bin/summer"
-mkdir -p "$HOME/models" "$HOME/.config/summer" "$HOME/.local/share/summer"
+rm -f "$PREFIX/bin/Summer.CPP" "$PREFIX/bin/summer"
+mkdir -p "$HOME/models"
 
 cat <<EOF
 
@@ -81,10 +76,7 @@ Summer.cpp installation complete.
   CUDA architecture : $CUDA_ARCH
   FORCE_MMQ          : $FORCE_MMQ
   llama-tiered       : $PREFIX/bin/llama-tiered
-  summer CLI         : $PREFIX/bin/summer
   model directory    : $HOME/models
-  VRAM policy        : free-memory check, 3400 MiB floor, bounded OOM retry
-  DRAM policy        : model-size-aware budget, system-RAM preflight
   DRAM matmul        : temporary VRAM staging for cuBLAS compatibility
   prompt output      : generated tokens only
 
@@ -92,7 +84,12 @@ Add this line to your shell configuration when $PREFIX/bin is not in PATH:
 
   export PATH="$PREFIX/bin:\$PATH"
 
-Then place one or more .gguf files in $HOME/models and run:
+Then place a GGUF file in $HOME/models and run:
 
-  summer
+  llama-tiered \
+    -m "$HOME/models/model.gguf" \
+    --vram-mib 3800 \
+    --dram-mib 6500 \
+    -n 128 \
+    "こんにちは"
 EOF
