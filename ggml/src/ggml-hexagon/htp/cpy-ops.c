@@ -337,6 +337,8 @@ int op_cpy(struct htp_ops_context * octx) {
         }
 
         atomic_uint* sync_token = (atomic_uint *)sync->data;
+
+        Q6_dccleaninva_A((void *)sync_token);
         uint32_t seq = ((uint32_t *)sync_token)[1];
         atomic_store(sync_token, seq);
         asm volatile ("syncht" : : : "memory");

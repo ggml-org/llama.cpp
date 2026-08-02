@@ -304,8 +304,6 @@ struct ggml_hexagon_tensor_extra {
     uint32_t             flags { 0 };
 };
 
-static ggml_hexagon_tensor_extra ggml_hexagon_dummy_extra;
-
 struct htp_opnode;
 
 struct ggml_hexagon_opbatch;
@@ -4440,9 +4438,12 @@ static bool ggml_hexagon_cpy_tensor_async_phys(ggml_backend_t backend_src, ggml_
     sync_token[0] = 0;
     sync_token[1] = sync_seq;
 
+    // dummy extra (must be static)
+    static ggml_hexagon_tensor_extra sync_extra { {}, 0 };
+
     ggml_tensor sync_tensor {};
     sync_tensor.buffer = dst->buffer;
-    sync_tensor.extra  = &ggml_hexagon_dummy_extra;
+    sync_tensor.extra  = &sync_extra;
     sync_tensor.data   = (void*) sync_token;
     sync_tensor.type   = GGML_TYPE_I32;
     sync_tensor.ne[0]  = 1;
