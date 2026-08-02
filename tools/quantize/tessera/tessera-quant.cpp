@@ -1128,6 +1128,93 @@ int ts_quantize_2d(const float * weights,
     return 0;
 }
 
+// Streaming MSE-only fitness for the GA evaluator. See header for docs.
+// Processes one row at a time with O(in_dim) scratch, producing the same MSE
+// as ts_quantize_2d without allocating the full ws/core/recon/packed buffers.
+float ts_quantize_mse_streaming(const float * weights,
+                                const float * act_scales,
+                                float alpha, float clip,
+                                int64_t out_dim, int64_t in_dim) {
+    if (!weights || out_dim <= 0 || in_dim <= 0) return -1.0f;
+    const int64_t pages = ts_pages_per_row(in_dim);
+    const int64_t n = out_dim * in_dim;
+
+    // Per-channel AWQ scales.
+    std::vector<float> wscale((size_t)in_dim, 1.0f);
+    if (act_scales && alpha > 0.0f) {
+        ts_normalized_awq_scale(act_scales, alpha, wscale.data(), in_dim);
+    }
+
+    // Global threshold = mean(|W * wscale|) over ALL elements. This requires
+    // one full pass over the weights to accumulate, but only a scalar result.
+    // Reuse the row scratch to avoid a separate allocation.
+    double gabs = 0.0;
+    {
+        std::vector<float> row_ws((size_t)in_dim);
+        for (int64_t r = 0; r < out_dim; r++) {
+            const float * wrow = weights + r * in_dim;
+            for (int64_t c = 0; c < in_dim; c++) {
+                row_ws[(size_t)c] = wrow[c] * wscale[(size_t)c];
+            }
+            for (int64_t c = 0; c < in_dim; c++) {
+                gabs += std::fabs((double)row_ws[(size_t)c]);
+            }
+        }
+    }
+    float threshold = (n > 0) ? (float)(gabs / (double)n) : 0.0f;
+
+    // Per-row streaming: scale -> clip -> ternarize -> compute_scales(1 row)
+    // -> dequant(1 row) -> accumulate MSE. Scratch is O(in_dim) per row.
+    std::vector<float>   row_ws((size_t)in_dim);
+    std::vector<int8_t>  row_tern((size_t)in_dim);
+    std::vector<uint16_t> row_pscale((size_t)pages);
+    std::vector<int8_t>  row_lscale((size_t)pages * TS_LANES_PER_PAGE);
+    std::vector<float>   row_deq((size_t)in_dim);
+
+    double mse_accum = 0.0;
+    for (int64_t r = 0; r < out_dim; r++) {
+        const float * wrow = weights + r * in_dim;
+
+        // Scale + clip into row_ws.
+        for (int64_t c = 0; c < in_dim; c++) {
+            row_ws[(size_t)c] = wrow[c] * wscale[(size_t)c];
+        }
+        if (clip > 0.0f && clip < 1.0f) {
+            float maxabs = ts_vec_maxabs(row_ws.data(), in_dim);
+            float limit = maxabs * clip;
+            for (int64_t c = 0; c < in_dim; c++) {
+                row_ws[(size_t)c] = std::min(std::max(row_ws[(size_t)c], -limit), limit);
+            }
+        }
+
+        // Ternarize.
+        for (int64_t c = 0; c < in_dim; c++) {
+            int8_t t = 0;
+            if (std::fabs(row_ws[(size_t)c]) >= threshold) {
+                t = (row_ws[(size_t)c] > 0.0f) ? 1 : ((row_ws[(size_t)c] < 0.0f) ? -1 : 0);
+            }
+            row_tern[(size_t)c] = t;
+        }
+
+        // Per-row page/lane scales.
+        ts_compute_scales(row_ws.data(), row_tern.data(),
+                          row_pscale.data(), row_lscale.data(),
+                          1, in_dim);
+
+        // Per-row dequant.
+        ts_dequant(row_tern.data(), row_pscale.data(), row_lscale.data(),
+                   row_deq.data(), 1, in_dim);
+
+        // Accumulate (ws - deq)^2 for this row.
+        for (int64_t c = 0; c < in_dim; c++) {
+            double d = (double)row_ws[(size_t)c] - (double)row_deq[(size_t)c];
+            mse_accum += d * d;
+        }
+    }
+
+    return (float)(mse_accum / (double)n);
+}
+
 // ---------------------------------------------------------------------------
 // quantize_3d (MoE experts)
 // ---------------------------------------------------------------------------

@@ -134,6 +134,23 @@ int ts_quantize_2d(const float * weights,
                    const ts_quant_params_2d * params,
                    ts_quant_result_2d * result);
 
+// Streaming MSE-only fitness: computes the same MSE as ts_quantize_2d but
+// row-by-row with O(in_dim) scratch instead of O(out_dim*in_dim). Used by
+// the GA evaluator to score candidates without allocating the full ws/core/
+// recon/packed buffers (700 MB -> ~132 KB per call for a 4096x11008 tensor).
+//
+// Returns the mean squared reconstruction error, or -1.0f on error. The MSE
+// is bit-identical to ts_quantize_2d's because the per-row scale/ternarize/
+// dequant computation is the same, just streamed.
+//
+// When the caller needs the full ts_quant_result_2d (for the winning
+// candidate), call ts_quantize_2d separately - it runs once per layer, not
+// once per candidate.
+float ts_quantize_mse_streaming(const float * weights,
+                                const float * act_scales,
+                                float alpha, float clip,
+                                int64_t out_dim, int64_t in_dim);
+
 // 3D (MoE expert) variant: flattens (n_experts x out_dim x in_dim) and
 // calls quantize_2d per expert. Results concatenated.
 int ts_quantize_3d(const float * weights,

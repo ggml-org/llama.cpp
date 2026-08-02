@@ -313,23 +313,39 @@ static ts_awq_score ts_dispatch_awq_eval(const ts_awq_candidate * cand,
     qp.awq_grid       = prof.awq_grid;
     qp.seed           = ec->seed;
 
-    ts_quant_result_2d qr;
-    int rc = ts_quantize_2d(layer->weights, layer->act_scales,
-                            layer->calib_X, layer->ref_output, layer->imatrix,
-                            layer->out_dim, layer->in_dim, layer->n_tokens,
-                            &qp, &qr);
-    if (rc != 0) {
-        return score;   // worst possible fitness
+    // Use the streaming MSE evaluator when kernel-direct fitness is OFF (the
+    // default). This avoids the 700 MB per-candidate allocation of the full
+    // ts_quantize_2d (ws + core + recon + packed + scales) and instead uses
+    // ~132 KB of per-row scratch. The MSE is bit-identical. When kernel-direct
+    // is ON, fall back to the full path because it needs qr.recon.
+    const int64_t n = layer->out_dim * layer->in_dim;
+    float mse_val;
+    ts_quant_result_2d qr;  // only populated when kernel-direct is on
+    if (!ec->l1.use_kernel_direct) {
+        // Streaming path: O(in_dim) scratch per candidate.
+        mse_val = ts_quantize_mse_streaming(
+            layer->weights, layer->act_scales,
+            qp.alpha, qp.clip,
+            layer->out_dim, layer->in_dim);
+        if (mse_val < 0.0f) {
+            return score;  // worst possible fitness
+        }
+    } else {
+        // Full path: needs qr.recon for kernel-direct t2.
+        int rc = ts_quantize_2d(layer->weights, layer->act_scales,
+                                layer->calib_X, layer->ref_output, layer->imatrix,
+                                layer->out_dim, layer->in_dim, layer->n_tokens,
+                                &qp, &qr);
+        if (rc != 0) {
+            return score;   // worst possible fitness
+        }
+        mse_val = qr.mse;
     }
 
-    // qr.mse is the mean squared reconstruction error, so
+    // mse is the mean squared reconstruction error, so
     // ||W_hat - W||_F^2 = mse * n.
-    const int64_t n = layer->out_dim * layer->in_dim;
-    double frob2 = 0.0;
-    for (int64_t i = 0; i < n; i++) {
-        frob2 += (double)layer->weights[i] * (double)layer->weights[i];
-    }
-    float rel_frob = (frob2 > 0.0) ? (float)((double)qr.mse * (double)n / frob2) : qr.mse;
+    float frob2 = ts_vec_dotpr(layer->weights, layer->weights, n);
+    float rel_frob = (frob2 > 0.0f) ? (mse_val * (float)n / frob2) : mse_val;
 
     // S5: kernel-direct t_l^2 from the L1 sidecar, blended with the proxy.
     float t2    = rel_frob;
