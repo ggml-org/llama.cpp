@@ -10161,7 +10161,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_from_file(const c
 using set_fa_vec_override_t   = void (*)(int, int);
 using clear_fa_vec_override_t = void (*)(void);
 
-// legal NE for a (dk,dv): NL = 32/NE, require (dk/4)%NL==0 && (dv/4)%NL==0
+// legal NE for a (dk,dv): NL = 32/NE, require (dk/4)%NL==0 && (dv/4)%NL==0.
+// keep in sync with ggml_metal_tuning::fa_vec_legal_ne in ggml-metal-tuning.h (used by the tool)
 static std::vector<int> fa_vec_legal_ne(int dk, int dv) {
     std::vector<int> r;
     for (int ne : {1, 2, 4}) {
@@ -10178,6 +10179,7 @@ static std::vector<int> fa_vec_legal_ne(int dk, int dv) {
 // per test case in the backend-agnostic case list. Covers padded rows (ne01 % Q != 0),
 // per-qq sinks, kvpad, the nsg-dependent shmem offsets / parallel-reduce stride
 // (ne11 -> nsg 1/2/4) and the quantized dequant-once path.
+// single-threaded; g_override_set is backend-global. called only after all parallel workers have joined.
 static bool run_fa_vec_slice(ggml_backend_t backend, ggml_backend_t backend_cpu) {
     auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
 
