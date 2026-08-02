@@ -2774,6 +2774,10 @@ class ggml_webgpu_shader_lib {
                 defines.push_back("TYPE_F32");
                 variant += "_f32";
                 break;
+            case GGML_TYPE_F16:
+                defines.push_back("TYPE_F16");
+                variant += "_f16";
+                break;
             case GGML_TYPE_I32:
                 defines.push_back("TYPE_I32");
                 variant += "_i32";
