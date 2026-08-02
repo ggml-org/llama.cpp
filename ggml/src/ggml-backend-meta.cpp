@@ -487,6 +487,13 @@ static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(ggml_backend_m
 // the owner's container, creating the registration there on demand.
 static struct ggml_tensor * ggml_backend_meta_simple_tensor_ensure(
         ggml_backend_meta_simple_tensor_container & stc, struct ggml_tensor * tensor, size_t index) {
+    // Graphs may feed a small activation from a concrete backend into a
+    // borrowed meta-backend operation. All ranks consume the same external
+    // tensor; peer-copy/access is handled by the outer scheduler/backend.
+    if (tensor->buffer == nullptr || !ggml_backend_buffer_is_meta(tensor->buffer)) {
+        return tensor;
+    }
+
     ggml_tensor * ret = ggml_backend_meta_buffer_simple_tensor(tensor, index);
     if (ret != nullptr) {
         return ret;
