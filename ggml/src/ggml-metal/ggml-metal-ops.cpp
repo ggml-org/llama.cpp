@@ -1314,7 +1314,14 @@ int ggml_metal_op_lightning_indexer(ggml_metal_op_t ctx, int idx) {
     const ggml_tensor * m = op->src[3];
 
     GGML_ASSERT(q->type == GGML_TYPE_F32);
-    GGML_ASSERT(k->type == GGML_TYPE_F16);
+    GGML_ASSERT(k->type == GGML_TYPE_F32  ||
+                k->type == GGML_TYPE_F16  ||
+                k->type == GGML_TYPE_BF16 ||
+                k->type == GGML_TYPE_Q4_0 ||
+                k->type == GGML_TYPE_Q4_1 ||
+                k->type == GGML_TYPE_Q5_0 ||
+                k->type == GGML_TYPE_Q5_1 ||
+                k->type == GGML_TYPE_Q8_0);
     GGML_ASSERT(w->type == GGML_TYPE_F32);
     GGML_ASSERT(m->type == GGML_TYPE_F16);
     GGML_ASSERT(op->type == GGML_TYPE_F32);
@@ -1325,7 +1332,6 @@ int ggml_metal_op_lightning_indexer(ggml_metal_op_t ctx, int idx) {
     ggml_metal_kargs_lightning_indexer args = {
         /*.n_kv      =*/ (int32_t) k->ne[2],
         /*.n_batch   =*/ (int32_t) q->ne[2],
-        /*.kv_offset =*/ 0,
         /*.mask_ne3  =*/ (int32_t) m->ne[3],
         /*.nb1       =*/ op->nb[1],
         /*.nb3       =*/ op->nb[3],
@@ -1346,40 +1352,17 @@ int ggml_metal_op_lightning_indexer(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(m),  4);
     ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op), 5);
 
-    constexpr int n_keys_simdgroup = 8;
-    constexpr int n_simdgroups     = 8;
-    constexpr int n_keys_tg        = n_keys_simdgroup*n_simdgroups;
-    constexpr int n_batch_tg       = 8;
+    constexpr int n_keys_tg  = 64;
+    constexpr int n_batch_tg = 8;
+    constexpr int nsg        = 8;
 
-    const int32_t n_kv = args.n_kv;
-    const int32_t n_tg = n_kv/n_keys_tg;
-    int32_t kv_offset = 0;
-
-    if (n_tg > 0) {
-        auto pipeline = ggml_metal_library_get_pipeline_lightning_indexer(ctx->lib, false);
-        ggml_metal_encoder_set_pipeline(enc, pipeline);
-        ggml_metal_encoder_set_bytes(enc, &args, sizeof(args), 0);
-        ggml_metal_encoder_dispatch_threadgroups(enc, n_tg, (q->ne[2] + n_batch_tg - 1)/n_batch_tg, q->ne[3], 32, n_simdgroups, 1);
-        kv_offset = n_tg*n_keys_tg;
-    }
-
-    const int32_t n_simdgroups_tail = (n_kv - kv_offset)/n_keys_simdgroup;
-    if (n_simdgroups_tail > 0) {
-        args.kv_offset = kv_offset;
-        auto pipeline = ggml_metal_library_get_pipeline_lightning_indexer(ctx->lib, false);
-        ggml_metal_encoder_set_pipeline(enc, pipeline);
-        ggml_metal_encoder_set_bytes(enc, &args, sizeof(args), 0);
-        ggml_metal_encoder_dispatch_threadgroups(enc, 1, (q->ne[2] + n_batch_tg - 1)/n_batch_tg, q->ne[3], 32, n_simdgroups_tail, 1);
-        kv_offset += n_simdgroups_tail*n_keys_simdgroup;
-    }
-
-    if (kv_offset < n_kv) {
-        args.kv_offset = kv_offset;
-        auto pipeline = ggml_metal_library_get_pipeline_lightning_indexer(ctx->lib, true);
-        ggml_metal_encoder_set_pipeline(enc, pipeline);
-        ggml_metal_encoder_set_bytes(enc, &args, sizeof(args), 0);
-        ggml_metal_encoder_dispatch_threadgroups(enc, 1, q->ne[2], q->ne[3], 32, 1, 1);
-    }
+    auto pipeline = ggml_metal_library_get_pipeline_lightning_indexer(ctx->lib, op);
+    ggml_metal_encoder_set_pipeline(enc, pipeline);
+    ggml_metal_encoder_set_bytes(enc, &args, sizeof(args), 0);
+    ggml_metal_encoder_dispatch_threadgroups(enc,
+            (k->ne[2] + n_keys_tg  - 1)/n_keys_tg,
+            (q->ne[2] + n_batch_tg - 1)/n_batch_tg,
+            q->ne[3], 32, nsg, 1);
 
     return 1;
 }

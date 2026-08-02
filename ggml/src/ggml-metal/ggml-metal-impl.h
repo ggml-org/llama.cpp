@@ -1174,7 +1174,6 @@ typedef struct {
 typedef struct {
     int32_t  n_kv;
     int32_t  n_batch;
-    int32_t  kv_offset;
     int32_t  mask_ne3;
     uint64_t nb1;
     uint64_t nb3;
