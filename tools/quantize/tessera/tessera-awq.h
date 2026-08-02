@@ -147,6 +147,14 @@ struct ts_awq_evolve_params {
     float     heldout_weight;    // weight for held-out MSE in composite, default 2.0
     uint32_t  seed;              // determinism
     bool      verbose;
+    // Parallel candidate evaluation: when > 1, the population evaluation
+    // within each generation is fanned out across this many threads. This is
+    // the "one layer, parallel candidates" model: the weight buffer is loaded
+    // once and shared read-only across threads, each evaluating a different
+    // candidate. Combined with ts_awq_evolve_all's n_threads=1 (serial layer
+    // processing), this keeps peak memory at 1 weight buffer + n_eval_threads
+    // scratch buffers instead of n_threads x (weight + scratch).
+    int32_t   n_eval_threads;
     // Per-tensor parallelism for ts_awq_evolve_all: each layer's GA runs
     // independently (its population, archive and rng are local to one
     // ts_awq_evolve call), so the per-layer loop fans out across this many

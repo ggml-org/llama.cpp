@@ -934,12 +934,18 @@ int ts_dispatch_run(const ts_dispatch_params * params,
     evolve_params.stagnation_limit   = 10;
     evolve_params.stagnation_epsilon = 1e-5f;
     evolve_params.seed_candidate     = nullptr;  // set per-layer by evolve_all
-    // Per-tensor GA parallelism: each layer's GA is independent (its
-    // population, archive and rng are local to ts_awq_evolve), so the
-    // per-layer loop fans out across this many threads. Default to the host's
-    // hardware concurrency capped at 8 (above that, the BLAS matmuls inside
-    // each evaluator already saturate the cores); override with the
-    // TESSERA_QUANTIZE_THREADS env var.
+    // Threading model: "serial layers, parallel candidates". One layer is
+    // loaded at a time (180 MB weight buffer shared read-only); all threads
+    // evaluate different candidates from the GA population in parallel. This
+    // keeps peak memory at 1 weight buffer + n_threads scratch buffers
+    // instead of n_threads x (weight + scratch), which is critical on memory-
+    // constrained systems (16 GB M1 with an 8 GB model).
+    //
+    // TESSERA_QUANTIZE_THREADS controls both the layer-parallel thread count
+    // (n_threads, used by evolve_all's work queue) and the candidate-parallel
+    // thread count (n_eval_threads, used inside each ts_awq_evolve call).
+    // On memory-constrained systems, set n_threads=1 so only one layer is
+    // loaded at a time, and let n_eval_threads parallelize the candidates.
     {
         int32_t n_threads = 0;
         const char * env = std::getenv("TESSERA_QUANTIZE_THREADS");
@@ -958,17 +964,28 @@ int ts_dispatch_run(const ts_dispatch_params * params,
                 n_threads = 8;
             }
         }
-        evolve_params.n_threads = n_threads;
+        // On systems with limited memory, prefer serial layers + parallel
+        // candidates. The TESSERA_QUANTIZE_LAYERS env var overrides: set to
+        // >1 to enable layer-level parallelism (uses more memory).
+        int32_t n_layer_threads = 1;  // serial by default (one layer at a time)
+        const char * lenv = std::getenv("TESSERA_QUANTIZE_LAYERS");
+        if (lenv != nullptr && lenv[0] != '\0') {
+            int parsed = std::atoi(lenv);
+            if (parsed > 0) n_layer_threads = parsed;
+        }
+        evolve_params.n_threads      = n_layer_threads;
+        evolve_params.n_eval_threads = n_threads;
     }
 
     if (need_ga) {
         if (verbose) {
-            printf("tessera-dispatch: GA configured (seed=%llu iters=%d islands=%d pop=%d threads=%d)\n",
+            printf("tessera-dispatch: GA configured (seed=%llu iters=%d islands=%d pop=%d layer_threads=%d eval_threads=%d)\n",
                    (unsigned long long)params->evolve_seed,
                    params->evolve_iters,
                    params->evolve_islands,
                    params->evolve_population,
-                   evolve_params.n_threads);
+                   evolve_params.n_threads,
+                   evolve_params.n_eval_threads);
         }
     }
 

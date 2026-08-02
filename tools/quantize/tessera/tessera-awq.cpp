@@ -278,14 +278,48 @@ int ts_awq_evolve(const ts_awq_layer * layer,
         }
     }
 
-    int64_t evaluations = 0;
+    std::atomic<int64_t> evaluations{0};
+
+    // Parallel candidate evaluation helper: evaluates a batch of (island,
+    // index) pairs across n_eval_threads threads. Each candidate is
+    // independent; the weight buffer (layer->weights) is shared read-only.
+    const int32_t n_eval = std::max((int32_t)1, params->n_eval_threads);
+    auto eval_population = [&](std::vector<std::pair<int64_t,int64_t>> & tasks) {
+        if (n_eval <= 1 || (int64_t)tasks.size() <= 1) {
+            for (auto & t : tasks) {
+                scores[t.first][t.second] = eval(&pops[t.first][t.second], layer, eval_ctx);
+                evaluations++;
+            }
+            return;
+        }
+        std::atomic<size_t> next(0);
+        auto worker = [&]() {
+            for (;;) {
+                size_t k = next.fetch_add(1, std::memory_order_relaxed);
+                if (k >= tasks.size()) return;
+                auto & t = tasks[k];
+                scores[t.first][t.second] = eval(&pops[t.first][t.second], layer, eval_ctx);
+                evaluations.fetch_add(1, std::memory_order_relaxed);
+            }
+        };
+        std::vector<std::thread> pool;
+        pool.reserve((size_t)std::min(n_eval, (int32_t)tasks.size()));
+        for (int32_t t = 0; t < std::min(n_eval, (int32_t)tasks.size()); t++) {
+            pool.emplace_back(worker);
+        }
+        for (auto & th : pool) th.join();
+    };
 
     // Evaluate initial populations
-    for (int64_t isl = 0; isl < n_islands; isl++) {
-        for (int64_t i = 0; i < pop_size; i++) {
-            scores[isl][i] = eval(&pops[isl][i], layer, eval_ctx);
-            evaluations++;
+    {
+        std::vector<std::pair<int64_t,int64_t>> tasks;
+        tasks.reserve((size_t)n_islands * (size_t)pop_size);
+        for (int64_t isl = 0; isl < n_islands; isl++) {
+            for (int64_t i = 0; i < pop_size; i++) {
+                tasks.push_back({isl, i});
+            }
         }
+        eval_population(tasks);
     }
 
     // Archive
@@ -363,11 +397,22 @@ int ts_awq_evolve(const ts_awq_layer * layer,
             }
             pops[isl] = std::move(next_pop);
 
-            // Evaluate new population
-            for (int64_t i = 0; i < pop_size; i++) {
-                scores[isl][i] = eval(&pops[isl][i], layer, eval_ctx);
-                evaluations++;
-                update_best(pops[isl][i], scores[isl][i]);
+            // Evaluate new population (parallel across the full generation's
+            // candidates: all islands x pop_size evaluated at once for better
+            // load balancing when some candidates converge faster than others).
+            {
+                std::vector<std::pair<int64_t,int64_t>> gen_tasks;
+                gen_tasks.reserve((size_t)n_islands * (size_t)pop_size);
+                for (int64_t j = 0; j < n_islands; j++) {
+                    for (int64_t i = 0; i < pop_size; i++) {
+                        gen_tasks.push_back({j, i});
+                    }
+                }
+                eval_population(gen_tasks);
+                // update_best is serial (mutates best/best_score)
+                for (auto & t : gen_tasks) {
+                    update_best(pops[t.first][t.second], scores[t.first][t.second]);
+                }
             }
         }
 
@@ -416,7 +461,7 @@ int ts_awq_evolve(const ts_awq_layer * layer,
     result->best = best;
     result->best_score = best_score;
     result->generations_run = gen + 1;  // actual generations completed (gen is 0-indexed)
-    result->evaluations = evaluations;
+    result->evaluations = evaluations.load();
     result->archive.clear();
     for (auto & kv : archive) {
         result->archive.push_back({kv.first, kv.second.cand});
