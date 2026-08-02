@@ -235,6 +235,7 @@ struct sycl_device_info {
     int max_wg_per_cu; // max work groups per compute unit - refer to
                        // cudaOccupancyMaxActiveBlocksPerMultiprocessor
     bool    vmm;                // virtual memory support
+    bool    l0_device_type_valid;
     bool    l0_discrete_gpu;    // Level Zero backend and not an integrated GPU
     size_t  vmm_granularity;    // granularity of virtual memory
     size_t  total_vram;
