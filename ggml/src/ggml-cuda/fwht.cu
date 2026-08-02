@@ -30,7 +30,7 @@ __global__ void fwht_cuda(const float * src, float * dst, const int64_t n_rows, 
 #pragma unroll
         for (int j = 0; j < el_w; j++) {
             const float val  = reg[j];
-            const float val2 = __shfl_xor_sync(0xFFFFFFFF, val, h, warp_size);
+            const float val2 = ggml_cuda_shfl_xor_sync<warp_size>(val, h);
 
             reg[j] = (lane & h) == 0 ? val + val2 : val2 - val;
         }
