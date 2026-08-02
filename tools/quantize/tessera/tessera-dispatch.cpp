@@ -30,6 +30,7 @@
 #include "tessera-policy.h"
 #include "tessera-progress.h"
 #include "tessera-sharded-map.h"
+#include "tessera-quantize-db.h"
 #include "tessera-vec.h"
 
 #include "gguf.h"
@@ -50,7 +51,9 @@
 #include <utility>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <fstream>
+#include <sstream>
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -497,6 +500,245 @@ static std::string ts_join(const std::vector<std::string> & parts,
     return out;
 }
 
+// ---------------------------------------------------------------------------
+// DuckDB store plumbing
+//
+// ts_dispatch_db is the per-run state threaded through the GA hooks. It owns
+// the open ts_quantize_db plus the per-tensor appenders used to bulk-log GA
+// candidate evaluations. The appenders live in a sharded map keyed by tensor
+// name so concurrent GA workers (one per layer) each get their own appender
+// without contending; DuckDB Appenders are not thread-safe across rows of the
+// same table, but distinct Appenders on the same Connection are.
+//
+// All DB calls are best-effort: a failure logs a one-line warning and the
+// pipeline continues. The DB is a recording/warm-start aid, not a correctness
+// requirement, so a corrupt file or full disk must never block quantization.
+struct ts_dispatch_db {
+    ts_quantize_db * db = nullptr;     // owned; null when --quantize-db is unset
+    std::string      run_id;           // empty until begin_run succeeds
+    std::string      model_hash;       // empty when hashing failed
+    // Resume set: tensor names with a converged result for this run_id.
+    // Populated at startup; the layer_skip_lookup callback checks membership.
+    std::unordered_set<std::string> converged;
+    // Open appenders keyed by tensor name. Each GA worker opens one on first
+    // eval_recorder call for its layer and flushes+closes it when evolve_all
+    // returns. The map's shard lock serializes open/close but per-row appends
+    // are uncontended once a worker holds its appender pointer (only that
+    // worker writes to it for the layer's GA duration).
+    ts_sharded_map<std::string, ts_quantize_db_appender *> appenders;
+    // Counter for eval rows lost to appender failures (best-effort logging;
+    // reported once at run end so a silent DB problem is visible).
+    std::atomic<int64_t> eval_rows_dropped{0};
+};
+
+// Open the store and begin a run. Returns a heap-allocated ts_dispatch_db
+// (owned by the caller via unique_ptr) or nullptr on failure / when the path
+// is empty. model_path is hashed to fingerprint this run for warm-start.
+static ts_dispatch_db * ts_dispatch_db_open(
+    const ts_dispatch_params * params, bool verbose)
+{
+    if (params->quantize_db_path.empty()) {
+        return nullptr;
+    }
+    ts_dispatch_db * wrap = new (std::nothrow) ts_dispatch_db();
+    if (wrap == nullptr) return nullptr;
+    std::string err;
+    wrap->db = ts_quantize_db_open(params->quantize_db_path, &err);
+    if (wrap->db == nullptr) {
+        fprintf(stderr, "tessera-dispatch: warning: --quantize-db open '%s' "
+                        "failed: %s (continuing without DB)\n",
+                params->quantize_db_path.c_str(), err.c_str());
+        return nullptr;
+    }
+    wrap->model_hash = ts_quantize_db_hash_gguf(params->input_path);
+    // config_json: a compact summary of the knobs that affect GA output. This
+    // is informational; warm-start keying uses model_hash only (config drift
+    // across runs is acceptable for the family-seed query, which ranks by
+    // best_composite rather than filtering by config).
+    std::string config = "{\"evolve_iters\":" + std::to_string(params->evolve_iters)
+        + ",\"evolve_islands\":" + std::to_string(params->evolve_islands)
+        + ",\"evolve_population\":" + std::to_string(params->evolve_population)
+        + ",\"outlier_frac\":" + std::to_string(params->outlier_frac)
+        + ",\"awq_clip\":" + std::to_string(params->awq_clip)
+        + ",\"awq_alpha\":\"" + params->awq_alpha + "\"}";
+    wrap->run_id = ts_quantize_db_begin_run(wrap->db, params->input_path,
+                                            wrap->model_hash,
+                                            "tessera-dev", config, &err);
+    if (wrap->run_id.empty()) {
+        fprintf(stderr, "tessera-dispatch: warning: begin_run failed: %s "
+                        "(continuing without DB)\n", err.c_str());
+        return nullptr;
+    }
+    // Resume: pull the list of tensors that already converged for this
+    // model_hash in prior runs (or this run, if it crashed mid-way). We look
+    // across all runs of the same model so a re-launch after a crash
+    // continues from the last checkpoint. force_requantize skips this.
+    if (!params->force_requantize && !wrap->model_hash.empty()) {
+        // Find any run_id for this model_hash with completed tensors. Goes
+        // through the public list_converged_for_model helper so the dispatch
+        // does not reach into the duckdb::Connection (which would require
+        // pulling duckdb.hpp into every translation unit that includes the
+        // dispatch).
+        std::vector<std::string> done;
+        if (ts_quantize_db_list_converged_for_model(wrap->db,
+                                                    wrap->model_hash,
+                                                    &done) == 0) {
+            wrap->converged.insert(done.begin(), done.end());
+        }
+    }
+    if (verbose) {
+        printf("tessera-dispatch: --quantize-db opened '%s' (run_id=%s, "
+               "model_hash=%s, %zu converged tensors)\n",
+               params->quantize_db_path.c_str(), wrap->run_id.c_str(),
+               wrap->model_hash.empty() ? "(hash failed)" : wrap->model_hash.c_str(),
+               wrap->converged.size());
+    }
+    return wrap;
+}
+
+// Finalize: mark the run complete (or failed) and close any appenders left
+// open by an early-return path. Called from the unique_ptr deleter so every
+// exit from ts_dispatch_run cleans up.
+static void ts_dispatch_db_close(ts_dispatch_db * wrap, const char * status) {
+    if (wrap == nullptr || wrap->db == nullptr) return;
+    if (!wrap->run_id.empty()) {
+        std::string err;
+        if (ts_quantize_db_complete_run(wrap->db, wrap->run_id, status, &err) != 0
+            && !err.empty()) {
+            fprintf(stderr, "tessera-dispatch: warning: complete_run(%s) "
+                            "failed: %s\n", status, err.c_str());
+        }
+    }
+    // Close any appenders that were never explicitly flushed (e.g. an early
+    // return between evolve_all and the per-tensor close loop).
+    wrap->appenders.with_lock("__close_all__",
+        [&](std::unordered_map<std::string, ts_quantize_db_appender *> & m,
+           const std::string &)
+    {
+        for (auto & kv : m) {
+            ts_quantize_db_appender_flush(kv.second);
+            ts_quantize_db_appender_close(kv.second);
+        }
+        m.clear();
+    });
+    if (wrap->eval_rows_dropped.load(std::memory_order_relaxed) > 0) {
+        fprintf(stderr, "tessera-dispatch: warning: %lld GA eval rows dropped "
+                        "(DB appender failures)\n",
+                (long long)wrap->eval_rows_dropped.load(std::memory_order_relaxed));
+    }
+    delete wrap->db;
+    wrap->db = nullptr;
+}
+
+// Per-evaluation callback: opens (lazily) and writes to the layer's appender.
+// Thread-safety: the GA evaluates a layer's population across multiple
+// candidate-eval threads (n_eval_threads), so this callback fires
+// concurrently for the SAME layer->name. DuckDB Appenders are not thread-safe
+// across rows of one appender, so the entire open+append sequence runs under
+// the shard lock for that tensor name. Different tensors hash to different
+// shards and append concurrently without contention.
+static void ts_dispatch_eval_recorder(const ts_awq_layer * layer,
+                                      int32_t generation, int32_t island,
+                                      int32_t candidate_idx,
+                                      const ts_awq_candidate * cand,
+                                      const ts_awq_score    * score,
+                                      void * user) {
+    auto * wrap = static_cast<ts_dispatch_db *>(user);
+    if (wrap == nullptr || wrap->db == nullptr || layer == nullptr) return;
+    const std::string key = layer->name;
+    ts_quantize_db_eval_row row;
+    row.run_id        = wrap->run_id;
+    row.tensor_name   = key;
+    row.generation    = generation;
+    row.island        = island;
+    row.candidate_idx = candidate_idx;
+    row.alpha         = cand ? cand->genes.alpha : 0.0f;
+    row.clip          = cand ? cand->genes.clip  : 0.0f;
+    row.composite     = score ? score->composite     : 0.0f;
+    row.mse           = score ? score->mse           : 0.0f;
+    row.relative_frob = score ? score->relative_frob : 0.0f;
+
+    bool dropped = wrap->appenders.with_lock(key,
+        [&](std::unordered_map<std::string, ts_quantize_db_appender *> & m,
+           const std::string & k) -> bool
+    {
+        auto it = m.find(k);
+        ts_quantize_db_appender * ap = (it != m.end()) ? it->second : nullptr;
+        if (ap == nullptr) {
+            std::string err;
+            ap = ts_quantize_db_appender_open(wrap->db, wrap->run_id, k, &err);
+            if (ap == nullptr) {
+                fprintf(stderr, "tessera-dispatch: warning: appender open for "
+                                "'%s' failed: %s\n", k.c_str(), err.c_str());
+                return true;  // dropped
+            }
+            m.emplace(k, ap);
+        }
+        return ts_quantize_db_appender_row(ap, row) != 0;
+    });
+    if (dropped) {
+        wrap->eval_rows_dropped.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+// Look up a family warm-start seed in the persistent store. Used as the
+// family_seed_lookup hook so the first layer of each family can warm-start
+// from prior runs when the in-memory cache is empty.
+static bool ts_dispatch_family_seed_lookup(const char * family,
+                                           ts_awq_candidate * out,
+                                           void * user) {
+    auto * wrap = static_cast<ts_dispatch_db *>(user);
+    if (wrap == nullptr || wrap->db == nullptr || family == nullptr ||
+        out == nullptr) {
+        return false;
+    }
+    ts_quantize_db_family_seed seed;
+    if (!ts_quantize_db_lookup_family_seed(wrap->db, family, wrap->run_id,
+                                           &seed)) {
+        return false;
+    }
+    out->genes.alpha = seed.best_alpha;
+    out->genes.clip  = seed.best_clip;
+    out->expert_hint = -1;
+    return true;
+}
+
+// Resume hook: short-circuit the GA for tensors that already converged for
+// this model in a prior run. Reconstructs a minimal result from the stored
+// ga_results row so the downstream per-tensor quantize step still has alpha.
+static bool ts_dispatch_layer_skip(const ts_awq_layer * layer,
+                                   ts_awq_evolve_result * out_result,
+                                   void * user) {
+    auto * wrap = static_cast<ts_dispatch_db *>(user);
+    if (wrap == nullptr || wrap->db == nullptr || layer == nullptr ||
+        out_result == nullptr) {
+        return false;
+    }
+    if (wrap->converged.find(layer->name) == wrap->converged.end()) {
+        return false;
+    }
+    // Look up by model_hash across all runs of this model (the resume set
+    // was built cross-run, so the matching ga_result row usually lives
+    // under a different run_id than this one).
+    ts_quantize_db_ga_result gr;
+    if (!ts_quantize_db_load_ga_result_for_model(wrap->db, wrap->model_hash,
+                                                 layer->name, &gr)) {
+        return false;
+    }
+    out_result->best.genes.alpha = gr.best_alpha;
+    out_result->best.genes.clip  = gr.best_clip;
+    out_result->best.expert_hint = -1;
+    out_result->best_score.composite     = gr.best_composite;
+    out_result->best_score.mse           = gr.best_mse;
+    out_result->best_score.relative_frob = gr.best_mse;
+    out_result->best_score.heldout_mse   = gr.best_mse;
+    out_result->generations_run = 0;
+    out_result->evaluations     = 0;
+    out_result->converged       = true;
+    out_result->warm_started    = true;   // resume == strongest warm-start
+    return true;
+}
+
 // Run the L5 adaptive requantize loop over the captured 2D tensors. Mutates
 // the deque entries in place and repoints the GGUF descriptors. Emits one
 // JSON object per generation to l5_report_json on the result struct.
@@ -788,6 +1030,24 @@ int ts_dispatch_run(const ts_dispatch_params * params,
 
     const bool verbose = params->verbose;
 
+    // Persistent store. Opened once; closed via the unique_ptr deleter so
+    // every return path (early or normal) marks the run done. nullptr when
+    // --quantize-db is not set or open failed (the pipeline runs ephemeral).
+    // db_run_status defaults to "failed" and is only flipped to "completed"
+    // at the successful return, so any early-return path leaves the row
+    // marked failed without needing to touch every return site.
+    struct ts_dispatch_db_deleter {
+        std::string * status;
+        void operator()(ts_dispatch_db * w) const {
+            ts_dispatch_db_close(w, status ? status->c_str() : "completed");
+        }
+    };
+    std::string db_run_status = "failed";
+    std::unique_ptr<ts_dispatch_db, ts_dispatch_db_deleter>
+        db_guard(ts_dispatch_db_open(params, verbose),
+                 ts_dispatch_db_deleter{&db_run_status});
+    ts_dispatch_db * db_wrap = db_guard.get();
+
     // Structured progress reporter. Lives for the whole dispatch; each phase
     // resets the counters via ts_progress_set_phase. Terminal output auto-
     // enables on TTY stderr; NDJSON writes to progress_file when set. The
@@ -907,6 +1167,7 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             printf("tessera-dispatch: calibrate_only, returning early\n");
         }
         result->policy_json = "{}";
+        db_run_status = "completed";
         return 0;
     }
 
@@ -933,6 +1194,17 @@ int ts_dispatch_run(const ts_dispatch_params * params,
     // later tensors in a family converge in 1-5 generations.
     evolve_params.stagnation_limit   = 10;
     evolve_params.stagnation_epsilon = 1e-5f;
+    // TESSERA_STAGNATION_LIMIT overrides the default early-termination window
+    // (generations without improvement). Useful for tests that need to force
+    // convergence on small fixtures, and for users who want to tune the GA's
+    // exploration/exploitation trade-off.
+    {
+        const char * env = std::getenv("TESSERA_STAGNATION_LIMIT");
+        if (env != nullptr && env[0] != '\0') {
+            int parsed = std::atoi(env);
+            if (parsed > 0) evolve_params.stagnation_limit = parsed;
+        }
+    }
     evolve_params.seed_candidate     = nullptr;  // set per-layer by evolve_all
     // Threading model: "serial layers, parallel candidates". One layer is
     // loaded at a time (180 MB weight buffer shared read-only); all threads
@@ -994,6 +1266,7 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             printf("tessera-dispatch: evolve_only, returning early\n");
         }
         result->policy_json = "{}";
+        db_run_status = "completed";
         return 0;
     }
 
@@ -1289,8 +1562,33 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             // ggml_nelements via the loader callback).
             ga_weight_loaders.push_back({ggml_get_tensor(ggml_ctx, name), {}});
             layer.weights_user_data = &ga_weight_loaders.back();
+            layer.layer_depth = ts_quantize_db_layer_depth(name);
             ga_layers.push_back(layer);
             ga_descs.push_back(desc);
+            // Record the tensor in the persistent registry. One row per
+            // quantizable weight, with the regime descriptors (kurtosis /
+            // eff_rank) computed above. Best-effort: a failure here only
+            // loses metadata, never blocks quantization.
+            if (db_wrap != nullptr) {
+                ts_quantize_db_tensor trec;
+                trec.run_id      = db_wrap->run_id;
+                trec.name        = name;
+                trec.family      = desc.family;
+                trec.layer_depth = layer.layer_depth;
+                trec.out_dim     = out_dim;
+                trec.in_dim      = in_dim;
+                trec.n_elements  = out_dim * in_dim;
+                trec.kurtosis    = desc.kurtosis;
+                trec.eff_rank    = desc.eff_rank;
+                trec.source_type = ggml_type_name(type);
+                std::string terr;
+                if (ts_quantize_db_insert_tensor(db_wrap->db, trec, &terr) != 0
+                    && !terr.empty()) {
+                    fprintf(stderr, "tessera-dispatch: warning: "
+                                    "insert_tensor('%s') failed: %s\n",
+                            name, terr.c_str());
+                }
+            }
             ts_progress_inc(prog, 1, name);
         }
         // Charge any filtered iterations so the bar completes.
@@ -1351,6 +1649,16 @@ int ts_dispatch_run(const ts_dispatch_params * params,
                 }
             };
             evolve_params.on_phase_change_user = prog;
+            // DB hooks: per-evaluation appender, family warm-start lookup,
+            // and resume skip. All three no-op when db_wrap is null.
+            if (db_wrap != nullptr) {
+                evolve_params.eval_recorder           = ts_dispatch_eval_recorder;
+                evolve_params.eval_recorder_user      = db_wrap;
+                evolve_params.family_seed_lookup      = ts_dispatch_family_seed_lookup;
+                evolve_params.family_seed_lookup_user = db_wrap;
+                evolve_params.layer_skip_lookup       = ts_dispatch_layer_skip;
+                evolve_params.layer_skip_lookup_user  = db_wrap;
+            }
             int rc = ts_awq_evolve_all(ga_layers.data(), (int64_t)ga_layers.size(),
                                        ts_dispatch_awq_eval, &eval_ctx,
                                        &evolve_params, &ga_results);
@@ -1368,6 +1676,47 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             for (size_t l = 0; l < ga_results.size(); l++) {
                 ga_alpha[ga_names[l]] = ga_results[l].best.genes.alpha;
                 t2[l]                 = ga_results[l].best_score.relative_frob;
+            }
+
+            // Persist GA results + flush per-tensor eval appenders. Each
+            // layer's appender was opened lazily inside eval_recorder; close
+            // it now so the ga_evaluations rows for this tensor are visible
+            // to subsequent queries (warm-start, resume, the duckdb CLI).
+            if (db_wrap != nullptr) {
+                for (size_t l = 0; l < ga_results.size(); l++) {
+                    // Flush + close this layer's appender (no-op if none).
+                    db_wrap->appenders.with_lock(ga_names[l],
+                        [&](std::unordered_map<std::string,
+                                                ts_quantize_db_appender *> & m,
+                           const std::string & key)
+                    {
+                        auto it = m.find(key);
+                        if (it != m.end()) {
+                            ts_quantize_db_appender_flush(it->second);
+                            ts_quantize_db_appender_close(it->second);
+                            m.erase(it);
+                        }
+                    });
+                    ts_quantize_db_ga_result gr;
+                    gr.run_id          = db_wrap->run_id;
+                    gr.tensor_name     = ga_names[l];
+                    gr.family          = ga_layers[l].family;
+                    gr.best_alpha      = ga_results[l].best.genes.alpha;
+                    gr.best_clip       = ga_results[l].best.genes.clip;
+                    gr.best_composite  = ga_results[l].best_score.composite;
+                    gr.best_mse        = ga_results[l].best_score.mse;
+                    gr.generations_run = (int32_t)ga_results[l].generations_run;
+                    gr.n_evaluations   = ga_results[l].evaluations;
+                    gr.converged       = ga_results[l].converged;
+                    gr.warm_started    = ga_results[l].warm_started;
+                    std::string gerr;
+                    if (ts_quantize_db_insert_ga_result(db_wrap->db, gr, &gerr) != 0
+                        && !gerr.empty()) {
+                        fprintf(stderr, "tessera-dispatch: warning: "
+                                        "insert_ga_result('%s') failed: %s\n",
+                                ga_names[l].c_str(), gerr.c_str());
+                    }
+                }
             }
 
             // HIGGS-weighted pipeline composite (uniform when layer counts differ)
@@ -2073,6 +2422,32 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             if (verbose) {
                 printf("tessera-dispatch: acceptance: %s\n", result->acceptance.verdict);
             }
+            // Persist per-tensor acceptance rows. The verdict is the same
+            // string the gate emits at the run level; per-tensor verdict
+            // would need an extra ts_acceptance API, so we record the t2
+            // breakdown (the part useful for offline analysis).
+            if (db_wrap != nullptr) {
+                for (const auto & at : acc_tensors) {
+                    ts_quantize_db_acceptance arec;
+                    arec.run_id       = db_wrap->run_id;
+                    arec.tensor_name  = at.name;
+                    arec.family       = ts_regime_infer_family(at.name);
+                    arec.composite_t2 = at.composite_t2;
+                    arec.awq_t2       = at.awq_t2;
+                    arec.rotation_t2  = at.rotation_t2;
+                    arec.lowrank_t2   = at.lowrank_t2;
+                    arec.hessian_t2   = at.hessian_t2;
+                    arec.verdict      = result->acceptance.composite_wins
+                                            ? "pass" : "fail";
+                    std::string aerr;
+                    if (ts_quantize_db_insert_acceptance(db_wrap->db, arec, &aerr) != 0
+                        && !aerr.empty()) {
+                        fprintf(stderr, "tessera-dispatch: warning: "
+                                        "insert_acceptance('%s') failed: %s\n",
+                                at.name, aerr.c_str());
+                    }
+                }
+            }
         }
     }
 
@@ -2153,6 +2528,10 @@ int ts_dispatch_run(const ts_dispatch_params * params,
     gguf_free(out_ctx);
     gguf_free(in_ctx);
     ggml_free(ggml_ctx);
+
+    // Successful return: the db_guard deleter marks this run "completed".
+    // Any early-return path above leaves db_run_status at "failed".
+    db_run_status = "completed";
 
     // prog_guard's deleter runs here: ts_progress_finish + ts_progress_destroy.
     return 0;

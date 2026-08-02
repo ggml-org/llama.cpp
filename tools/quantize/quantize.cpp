@@ -1101,6 +1101,8 @@ int llama_quantize(int argc, char ** argv) {
         tparams.l5_outlier_overshoot_scale   = tp.l5_outlier_overshoot_scale;
         tparams.l5_outlier_frac_cap          = tp.l5_outlier_frac_cap;
         tparams.l5_out_path                  = tp.l5_out;
+        tparams.quantize_db_path             = tp.quantize_db;
+        tparams.force_requantize             = tp.force_requantize;
         ts_dispatch_result tresult;
         std::string terr;
         if (ts_dispatch_run(&tparams, &tresult, &terr) != 0) {

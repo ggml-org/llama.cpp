@@ -760,6 +760,14 @@ struct common_params {
     llama_progress_callback load_progress_callback = NULL;
     void *                  load_progress_callback_user_data = NULL;
     bool no_alloc = false; // Don't allocate model buffers
+
+    // admission control + prefill pacing (server). Default 0 = disabled.
+    int32_t max_admitted_requests = 0;
+    int32_t prefill_chunk_size    = 0;
+    // OpenTelemetry span export (server).
+    bool        otel_enabled      = false;
+    std::string otel_endpoint;
+    std::string otel_service_name = "llama.cpp";
 };
 
 // call once at the start of a program if it uses libcommon

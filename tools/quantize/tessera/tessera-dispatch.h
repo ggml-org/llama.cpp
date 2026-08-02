@@ -16,6 +16,9 @@
 
 #include "tessera-acceptance.h"
 
+// Forward declaration so the dispatch header does not require duckdb.hpp.
+struct ts_quantize_db;
+
 // Forward declaration; full definition in tessera-dispatch-internal.h.
 struct ts_dispatch_refine_entry;
 
@@ -76,6 +79,14 @@ struct ts_dispatch_params {
     // UI to tail. Terminal live-update auto-enables on TTY stderr.
     std::string progress_file;               // empty = no NDJSON output
     bool        progress_force_terminal = false;
+    // DuckDB persistent store path. When non-empty the dispatch opens (or
+    // creates) a DuckDB file at this path, records one row per run / tensor
+    // / GA result, bulk-logs every GA candidate evaluation, and reloads
+    // family-optimal alpha/clip from prior runs to warm-start the GA. Tensors
+    // with a converged result for the same model_hash are skipped unless
+    // force_requantize is set, making the pipeline crash-resumable.
+    std::string quantize_db_path;            // empty = ephemeral, no DB
+    bool        force_requantize = false;
 };
 
 // Result of the Tessera pipeline for one tensor.

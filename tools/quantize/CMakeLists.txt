@@ -2,6 +2,48 @@
 
 set(TARGET llama-quantize-impl)
 
+# ---- DuckDB amalgamation (persistent quantize store) ----
+# Vendored at third-party/duckdb/{duckdb.cpp,duckdb.hpp}. The amalgamation is
+# a single ~25 MB translation unit; it compiles slowly (~2 min) but produces a
+# self-contained library with no external runtime deps. Compiled as a static
+# OBJECT library so it links cleanly into llama-quantize-impl and is not
+# rebuilt on every quantize-impl change.
+#
+# TESSERA_DISABLE_DUCKDB (env or cache variable) skips compiling the
+# amalgamation; the dispatch still builds, with --quantize-db a no-op. Useful
+# for fast iteration cycles where the DB store is not being exercised.
+set(TS_DUCKDB_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../third-party/duckdb)
+if(EXISTS ${TS_DUCKDB_DIR}/duckdb.cpp AND EXISTS ${TS_DUCKDB_DIR}/duckdb.hpp)
+    set(TS_DUCKDB_AVAILABLE ON)
+else()
+    set(TS_DUCKDB_AVAILABLE OFF)
+endif()
+if(DEFINED ENV{TESSERA_DISABLE_DUCKDB})
+    set(TS_DUCKDB_AVAILABLE OFF)
+endif()
+if(TS_DUCKDB_AVAILABLE)
+    add_library(duckdb-amalgamation OBJECT
+        ${TS_DUCKDB_DIR}/duckdb.cpp)
+    target_include_directories(duckdb-amalgamation PUBLIC ${TS_DUCKDB_DIR})
+    # The amalgamation is internally a single TU; give it lots of memory and
+    # disable some pedantic warnings it does not pass.
+    target_compile_options(duckdb-amalgamation PRIVATE
+        -w
+        $<$<CXX_COMPILER_ID:AppleClang,Clang>:-Wno-deprecated-declarations>)
+    # Use the biggest reasonable optimization for the amalgamation: it is a
+    # runtime hot path (Appender flushes, query parsing) and a -O0 build is
+    # measurably slower at insert time. Falls back to the parent CMAKE flags
+    # when CMAKE_BUILD_TYPE is unset.
+    if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+        target_compile_options(duckdb-amalgamation PRIVATE -O2)
+    endif()
+    message(STATUS "Tessera: DuckDB amalgamation enabled "
+                   "(${TS_DUCKDB_DIR}/duckdb.cpp)")
+else()
+    message(STATUS "Tessera: DuckDB amalgamation not found "
+                   "(--quantize-db will be a no-op)")
+endif()
+
 add_library(${TARGET}
     quantize.cpp
     # core numeric
@@ -71,10 +113,23 @@ add_library(${TARGET}
     tessera/tessera-coreml-telemetry.cpp
     # shared sidecar v3 (lives in common/, needed by tessera-l15)
     ../../common/tessera-debug/tessera-sidecar-v3.cpp
+    # DuckDB-backed persistent store (no-op when --quantize-db is not passed)
+    tessera/tessera-quantize-db.cpp
 )
 set_target_properties(${TARGET} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
-target_include_directories(${TARGET} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/tessera)
+target_include_directories(${TARGET} PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/tessera)
+
+# Pull the duckdb include path through the amalgamation target when present,
+# so tessera-quantize-db.cpp can find duckdb.hpp. The OBJECT library's
+# sources are linked in by the $<TARGET_OBJECTS> below.
+if(TS_DUCKDB_AVAILABLE)
+    target_sources(${TARGET} PRIVATE $<TARGET_OBJECTS:duckdb-amalgamation>)
+    target_link_libraries(${TARGET} PUBLIC duckdb-amalgamation)
+endif()
+
 target_link_libraries(${TARGET} PUBLIC llama-common llama ${CMAKE_THREAD_LIBS_INIT})
 
 if(APPLE)
@@ -220,6 +275,31 @@ target_compile_features(${TARGET} PRIVATE cxx_std_17)
 if(LLAMA_BUILD_TESTS)
     set(TARGET test-tessera-gguf-write)
     add_executable(${TARGET} tessera/test_gguf_write_lifetime.cpp)
+    target_link_libraries(${TARGET} PRIVATE llama-quantize-impl)
+    target_compile_features(${TARGET} PRIVATE cxx_std_17)
+    add_test(NAME ${TARGET} COMMAND ${TARGET})
+
+    # DuckDB persistent-store test: schema, Appender bulk insert, warm-start
+    # cross-run lookup, and resumability (list_converged_for_model). Standalone
+    # binary so it can run without a GGUF; links duckdb-amalgamation directly
+    # plus the DB module (does not need the rest of the dispatch).
+    set(TARGET test-tessera-quantize-db)
+    add_executable(${TARGET} tessera/test_quantize_db.cpp
+                                  tessera/tessera-quantize-db.cpp)
+    target_link_libraries(${TARGET} PRIVATE
+        llama-common ${CMAKE_THREAD_LIBS_INIT})
+    target_compile_features(${TARGET} PRIVATE cxx_std_17)
+    if(TS_DUCKDB_AVAILABLE)
+        target_sources(${TARGET} PRIVATE $<TARGET_OBJECTS:duckdb-amalgamation>)
+        target_link_libraries(${TARGET} PRIVATE duckdb-amalgamation)
+    endif()
+    add_test(NAME ${TARGET} COMMAND ${TARGET})
+
+    # End-to-end DuckDB integration test through the dispatch: cold start,
+    # warm-start (cross-run family seed), and resume (skip converged). Builds
+    # a synthetic GGUF and runs the full pipeline against a real DuckDB file.
+    set(TARGET test-tessera-quantize-db-e2e)
+    add_executable(${TARGET} tessera/test_quantize_db_e2e.cpp)
     target_link_libraries(${TARGET} PRIVATE llama-quantize-impl)
     target_compile_features(${TARGET} PRIVATE cxx_std_17)
     add_test(NAME ${TARGET} COMMAND ${TARGET})

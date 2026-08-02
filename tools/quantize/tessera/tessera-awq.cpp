@@ -283,12 +283,23 @@ int ts_awq_evolve(const ts_awq_layer * layer,
     // Parallel candidate evaluation helper: evaluates a batch of (island,
     // index) pairs across n_eval_threads threads. Each candidate is
     // independent; the weight buffer (layer->weights) is shared read-only.
+    // gen is the generation index (-1 = initial population) so the optional
+    // eval_recorder callback can stream rows tagged with the right generation.
     const int32_t n_eval = std::max((int32_t)1, params->n_eval_threads);
-    auto eval_population = [&](std::vector<std::pair<int64_t,int64_t>> & tasks) {
+    auto eval_population = [&](std::vector<std::pair<int64_t,int64_t>> & tasks,
+                               int64_t gen) {
+        const bool has_recorder = (params->eval_recorder != nullptr);
         if (n_eval <= 1 || (int64_t)tasks.size() <= 1) {
             for (auto & t : tasks) {
                 scores[t.first][t.second] = eval(&pops[t.first][t.second], layer, eval_ctx);
                 evaluations++;
+                if (has_recorder) {
+                    params->eval_recorder(layer, (int32_t)gen, (int32_t)t.first,
+                                          (int32_t)t.second,
+                                          &pops[t.first][t.second],
+                                          &scores[t.first][t.second],
+                                          params->eval_recorder_user);
+                }
             }
             return;
         }
@@ -300,6 +311,13 @@ int ts_awq_evolve(const ts_awq_layer * layer,
                 auto & t = tasks[k];
                 scores[t.first][t.second] = eval(&pops[t.first][t.second], layer, eval_ctx);
                 evaluations.fetch_add(1, std::memory_order_relaxed);
+                if (has_recorder) {
+                    params->eval_recorder(layer, (int32_t)gen, (int32_t)t.first,
+                                          (int32_t)t.second,
+                                          &pops[t.first][t.second],
+                                          &scores[t.first][t.second],
+                                          params->eval_recorder_user);
+                }
             }
         };
         std::vector<std::thread> pool;
@@ -319,7 +337,7 @@ int ts_awq_evolve(const ts_awq_layer * layer,
                 tasks.push_back({isl, i});
             }
         }
-        eval_population(tasks);
+        eval_population(tasks, -1);
     }
 
     // Archive
@@ -408,7 +426,7 @@ int ts_awq_evolve(const ts_awq_layer * layer,
                         gen_tasks.push_back({j, i});
                     }
                 }
-                eval_population(gen_tasks);
+                eval_population(gen_tasks, gen);
                 // update_best is serial (mutates best/best_score)
                 for (auto & t : gen_tasks) {
                     update_best(pops[t.first][t.second], scores[t.first][t.second]);
@@ -451,6 +469,12 @@ int ts_awq_evolve(const ts_awq_layer * layer,
             } else {
                 gens_since_improve++;
                 if (gens_since_improve >= params->stagnation_limit) {
+                    // Converged: best has been stable for stagnation_limit
+                    // generations, so further iterations are unlikely to
+                    // improve. Surfaced via result->converged so callers
+                    // (the persistent store, resume set) can treat this
+                    // tensor as a stable warm-start seed.
+                    result->converged = true;
                     break;
                 }
             }
@@ -462,6 +486,7 @@ int ts_awq_evolve(const ts_awq_layer * layer,
     result->best_score = best_score;
     result->generations_run = gen + 1;  // actual generations completed (gen is 0-indexed)
     result->evaluations = evaluations.load();
+    result->warm_started = (params->seed_candidate != nullptr);
     result->archive.clear();
     for (auto & kv : archive) {
         result->archive.push_back({kv.first, kv.second.cand});
@@ -616,11 +641,35 @@ int ts_awq_evolve_all(ts_awq_layer * layers, int64_t n_layers,
 
     if (n_threads <= 1) {
         for (int64_t i = 0; i < n_layers; i++) {
+            // Resume hook: if the caller has a prior converged result for
+            // this layer (e.g. from a DuckDB-backed store), skip the GA
+            // entirely and use the stored result. The layer's weights are
+            // not touched in this path, so no load/release is needed.
+            if (params->layer_skip_lookup && (*results)[i].best.genes.alpha == 0.0f) {
+                ts_awq_evolve_result skipped = {};
+                if (params->layer_skip_lookup(&layers[i], &skipped,
+                                              params->layer_skip_lookup_user)) {
+                    (*results)[i] = std::move(skipped);
+                    family_seeds.assign(layers[i].family, (*results)[i].best);
+                    if (params->on_layer_done) {
+                        params->on_layer_done(i, n_layers, layers[i].name.c_str(),
+                                              params->on_layer_done_user);
+                    }
+                    continue;
+                }
+            }
             ts_awq_evolve_params layer_params = *params;
             layer_params.seed = params->seed + (uint32_t)i;
-            // Inject the family's best-known candidate if available.
+            // Inject the family's best-known candidate if available. Try the
+            // in-memory cache first (cheap), then the persistent-store lookup
+            // (one SQL query) so the first layer of a family can warm-start
+            // from prior runs on disk.
             ts_awq_candidate fam_seed;
             if (family_seeds.find_copy(layers[i].family, fam_seed)) {
+                layer_params.seed_candidate = &fam_seed;
+            } else if (params->family_seed_lookup &&
+                       params->family_seed_lookup(layers[i].family.c_str(), &fam_seed,
+                                                  params->family_seed_lookup_user)) {
                 layer_params.seed_candidate = &fam_seed;
             }
             // Streaming weight load: if the layer has a load callback, fetch
@@ -660,15 +709,36 @@ int ts_awq_evolve_all(ts_awq_layer * layers, int64_t n_layers,
             if (i >= n_layers) {
                 return;
             }
+            // Resume hook (see serial path). (*results)[i] does not alias
+            // across workers, so the move is race-free.
+            if (params->layer_skip_lookup && (*results)[i].best.genes.alpha == 0.0f) {
+                ts_awq_evolve_result skipped = {};
+                if (params->layer_skip_lookup(&layers[i], &skipped,
+                                              params->layer_skip_lookup_user)) {
+                    (*results)[i] = std::move(skipped);
+                    family_seeds.assign(layers[i].family, (*results)[i].best);
+                    if (params->on_layer_done) {
+                        params->on_layer_done(i, n_layers, layers[i].name.c_str(),
+                                              params->on_layer_done_user);
+                    }
+                    continue;
+                }
+            }
             ts_awq_evolve_params layer_params = *params;
             layer_params.n_threads = 1;  // no nested fan-out
             layer_params.seed = params->seed + (uint32_t)i;
             // Inject the family's best-known candidate if available. The
             // sharded map is thread-safe; if two layers in the same family
             // run concurrently, the second one to finish overwrites the seed,
-            // which is fine (both are near-optimal).
+            // which is fine (both are near-optimal). The persistent-store
+            // fallback only fires when the in-memory cache has no entry for
+            // this family yet (first layer of the family in this run).
             ts_awq_candidate fam_seed;
             if (family_seeds.find_copy(layers[i].family, fam_seed)) {
+                layer_params.seed_candidate = &fam_seed;
+            } else if (params->family_seed_lookup &&
+                       params->family_seed_lookup(layers[i].family.c_str(), &fam_seed,
+                                                  params->family_seed_lookup_user)) {
                 layer_params.seed_candidate = &fam_seed;
             }
             // Streaming weight load (see serial path above for details).

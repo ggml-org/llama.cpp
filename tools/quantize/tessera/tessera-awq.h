@@ -101,6 +101,12 @@ struct ts_awq_layer {
     int64_t n_tokens_h;  // rows in heldout_activations
     float   kurtosis;    // from imatrix regime stats
     float   eff_rank;    // effective rank
+    // Block index parsed from the tensor name (e.g. blk.12.ffn_gate -> 12).
+    // 0 for non-block tensors (embeddings, norm, output). Set by the dispatch
+    // from ts_quantize_db_layer_depth(); enables depth-aware family queries
+    // like "best alpha for ffn_gate at depth 10-15" against the persistent
+    // store. Default 0 keeps existing behaviour when the host does not set it.
+    int32_t layer_depth = 0;
     // Streaming weight loading: when non-null, the GA worker calls this
     // callback to fetch the layer's weights on demand (instead of holding
     // all layers' weights in memory at once). The callback receives the
@@ -136,6 +142,10 @@ struct ts_awq_archive_cell {
     int32_t eff_rank_bucket;    // quantized effective rank
     int32_t family_bucket;      // tensor family index
 };
+
+// Forward declaration: ts_awq_evolve_params.layer_skip_lookup takes a pointer
+// to ts_awq_evolve_result, defined below.
+struct ts_awq_evolve_result;
 
 struct ts_awq_evolve_params {
     int64_t population;     // island population size, default 32
@@ -187,6 +197,38 @@ struct ts_awq_evolve_params {
     // the best candidate from a previously-converged tensor in the same family,
     // so the GA starts near-optimal instead of from scratch. May be NULL.
     const ts_awq_candidate * seed_candidate;
+    // Persistent-store hooks (optional, used when the dispatch opens a
+    // DuckDB-backed store via --quantize-db). All may be NULL.
+    //
+    // eval_recorder: invoked once per candidate evaluation. Called from
+    // inside the GA's parallel eval_population, so the implementation MUST
+    // be thread-safe (e.g. buffer into a per-call Appender). Used to stream
+    // every GA candidate to the ga_evaluations table.
+    void    (* eval_recorder)(const ts_awq_layer * layer,
+                              int32_t generation, int32_t island,
+                              int32_t candidate_idx,
+                              const ts_awq_candidate * cand,
+                              const ts_awq_score    * score,
+                              void * user) = nullptr;
+    void     * eval_recorder_user = nullptr;
+    // family_seed_lookup: evolve_all calls this when seeding a layer's GA
+    // from a same-family prior result. Returns true and fills *out when a
+    // seed exists; false otherwise. Used to warm-start from prior runs
+    // stored on disk (replaces the in-memory family_seeds map for the
+    // first layer of each family).
+    bool    (* family_seed_lookup)(const char * family,
+                                   ts_awq_candidate * out,
+                                   void * user) = nullptr;
+    void     * family_seed_lookup_user = nullptr;
+    // layer_skip_lookup: evolve_all calls this once per layer before
+    // running its GA. When it returns true, the layer's result is filled
+    // from a prior converged run (the callback writes into *out_result)
+    // and the GA is skipped entirely. Used for crash-resumability: a
+    // restart picks up from the last completed tensor.
+    bool    (* layer_skip_lookup)(const ts_awq_layer * layer,
+                                  ts_awq_evolve_result * out_result,
+                                  void * user) = nullptr;
+    void     * layer_skip_lookup_user = nullptr;
 };
 
 // Result of evolution for one tensor family.
@@ -195,6 +237,13 @@ struct ts_awq_evolve_result {
     ts_awq_score     best_score;
     int64_t          generations_run;
     int64_t          evaluations;
+    // Convergence flags surfaced for the persistent store. converged is set
+    // when the GA ended via stagnation early-termination (true) vs ran all
+    // generations (false). warm_started is set when the initial population
+    // was seeded from a family/persistent-store seed. The dispatch records
+    // both into the ga_results row.
+    bool             converged     = false;
+    bool             warm_started = false;
     // archive: best candidate per regime cell
     std::vector<std::pair<ts_awq_archive_cell, ts_awq_candidate>> archive;
 };

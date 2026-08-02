@@ -135,6 +135,8 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
     if (arg == "--calib-corpus")              { if (!require_val("--calib-corpus")) return -1;              tessera_params.calib_corpus     = val; return 2; }
     if (arg == "--calib-corpus-out")          { if (!require_val("--calib-corpus-out")) return -1;          tessera_params.calib_corpus_out = val; return 2; }
     if (arg == "--progress-file")             { if (!require_val("--progress-file")) return -1;             tessera_params.progress_file    = val; return 2; }
+    if (arg == "--quantize-db")               { if (!require_val("--quantize-db")) return -1;               tessera_params.quantize_db      = val; return 2; }
+    if (arg == "--force-requantize")          {                                                              tessera_params.force_requantize = true; return 1; }
     if (arg == "--tessera-awq-alpha")         { if (!require_val("--tessera-awq-alpha")) return -1;         tessera_params.awq_alpha        = val; return 2; }
     if (arg == "--tessera-ternary-threshold") { if (!require_val("--tessera-ternary-threshold")) return -1; tessera_params.ternary_threshold = val; return 2; }
     if (arg == "--tessera-kernel-fitness-dir") { if (!require_val("--tessera-kernel-fitness-dir")) return -1; tessera_params.kernel_fitness_dir = val; return 2; }
@@ -4210,6 +4212,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "Tessera: write NDJSON progress events to this path (one per tick, ~5/s)",
         [](common_params &, const std::string & value) {
             tessera_params.progress_file = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--quantize-db"}, "PATH",
+        "Tessera: DuckDB file for persistent GA results, family warm-start, and crash-resumable runs",
+        [](common_params &, const std::string & value) {
+            tessera_params.quantize_db = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--force-requantize"},
+        "Tessera: with --quantize-db, re-run the GA for every tensor even if a converged result exists",
+        [](common_params &) {
+            tessera_params.force_requantize = true;
         }
     ));
     add_opt(common_arg(

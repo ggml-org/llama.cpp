@@ -74,6 +74,16 @@ struct common_tessera_params {
     // tick to that path for the Studio UI to tail.
     std::string progress_file;
     bool        progress_force_terminal = false;
+    // DuckDB-backed persistent store. When quantize_db is non-empty, the
+    // dispatch opens (or creates) a DuckDB file at that path and records one
+    // row per run/tensor/GA-result, plus bulk-logs every GA candidate eval
+    // via the Appender API. The store also drives warm-start (GA seeds from
+    // prior runs of the same family) and crash-resumability (tensors that
+    // already converged are skipped). Empty = ephemeral, no DB.
+    std::string quantize_db;
+    // When set with --quantize-db, ignore existing converged tensors for
+    // this run's model_hash and re-run the GA for every tensor.
+    bool        force_requantize = false;
 };
 
 const common_tessera_params & common_get_tessera_params();
