@@ -71,7 +71,7 @@ jobs:
           nvidia-smi
           GG_BUILD_CUDA=1 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
 
-  gpu-amd:
+  gpu-hip:
     runs-on: [self-hosted, Linux, AMD]
 
     steps:
