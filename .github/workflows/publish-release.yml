@@ -76,22 +76,50 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          if gh release view "$TAG" >/dev/null 2>&1; then
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            args=(
+              release create "$TAG"
+              --verify-tag
+              --title "Summer.cpp $TAG"
+              --notes-file "$NOTES"
+            )
+
+            if [[ "$TAG" == *-* ]]; then
+              args+=(--prerelease)
+            else
+              args+=(--latest)
+            fi
+
+            gh "${args[@]}"
+          else
             echo "release already exists: $TAG"
+          fi
+
+      - name: Record published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          status_dir="$(mktemp -d)"
+          git fetch origin master
+          git worktree add "$status_dir/worktree" origin/master
+          cd "$status_dir/worktree"
+
+          mkdir -p .github/releases
+          gh release view "$TAG" \
+            --json tagName,name,url,isPrerelease,publishedAt,targetCommitish \
+            > ".github/releases/${TAG}.json"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ".github/releases/${TAG}.json"
+
+          if git diff --cached --quiet; then
+            echo "release metadata already recorded"
             exit 0
           fi
 
-          args=(
-            release create "$TAG"
-            --verify-tag
-            --title "Summer.cpp $TAG"
-            --notes-file "$NOTES"
-          )
-
-          if [[ "$TAG" == *-* ]]; then
-            args+=(--prerelease)
-          else
-            args+=(--latest)
-          fi
-
-          gh "${args[@]}"
+          git commit -m "release: record ${TAG} publication"
+          git push origin HEAD:master
