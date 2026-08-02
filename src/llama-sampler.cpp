@@ -570,7 +570,8 @@ struct llama_sampler_backend_probe {
 static llama_sampler_backend_probe llama_sampler_backend_probe_graph(
         llama_sampler * sampler,
         int64_t         n_candidates,
-        uint32_t        max_nodes) {
+        uint32_t        max_nodes,
+        bool            with_candidates) {
     ggml_init_params params = {
         /*.mem_size   =*/ max_nodes * ggml_tensor_overhead() + ggml_graph_overhead_custom(max_nodes, false),
         /*.mem_buffer =*/ nullptr,
@@ -589,7 +590,7 @@ static llama_sampler_backend_probe llama_sampler_backend_probe_graph(
         /*.logits       =*/ ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_candidates),
         /*.probs        =*/ nullptr,
         /*.sampled      =*/ nullptr,
-        /*.candidates   =*/ ggml_new_tensor_1d(ctx, GGML_TYPE_I32, n_candidates),
+        /*.candidates   =*/ with_candidates ? ggml_new_tensor_1d(ctx, GGML_TYPE_I32, n_candidates) : nullptr,
     };
 
     if (sampler->iface->backend_reset) {
@@ -630,7 +631,7 @@ static bool llama_sampler_backend_support(
         return true;
     }
 
-    auto probe = llama_sampler_backend_probe_graph(smpl, 1024*1024, GGML_DEFAULT_GRAPH_SIZE);
+    auto probe = llama_sampler_backend_probe_graph(smpl, 1024*1024, GGML_DEFAULT_GRAPH_SIZE, true);
 
     for (int i = 0; i < ggml_graph_n_nodes(probe.gf); i++) {
         struct ggml_tensor * op = ggml_graph_node(probe.gf, i);
@@ -750,7 +751,7 @@ static bool llama_sampler_chain_backend_init(
         res = res && res_cur;
     }
 
-    auto probe = llama_sampler_backend_probe_graph(smpl, 1024*1024, GGML_DEFAULT_GRAPH_SIZE);
+    auto probe = llama_sampler_backend_probe_graph(smpl, 1024*1024, GGML_DEFAULT_GRAPH_SIZE, false);
     chain->n_nodes = llama_sampler_backend_probe_n_nodes(probe);
 
     return res;
