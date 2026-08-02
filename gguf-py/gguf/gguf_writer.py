@@ -82,6 +82,16 @@ class GGUFWriter:
         GGUFValueType.FLOAT64: "d",
         GGUFValueType.BOOL:    "?",
     }
+    _integer_value_types = frozenset({
+        GGUFValueType.UINT8, GGUFValueType.INT8,
+        GGUFValueType.UINT16, GGUFValueType.INT16,
+        GGUFValueType.UINT32, GGUFValueType.INT32,
+        GGUFValueType.UINT64, GGUFValueType.INT64,
+    })
+    _float_value_types = frozenset({
+        GGUFValueType.FLOAT32,
+        GGUFValueType.FLOAT64,
+    })
 
     def __init__(
         self, path: os.PathLike[str] | str | None, arch: str, use_temp_file: bool = False, endianess: GGUFEndian = GGUFEndian.LITTLE,
@@ -278,7 +288,39 @@ class GGUFWriter:
         if any(key in kv_data for kv_data in self.kv_data):
             logger.warning(f'Duplicated key name {key!r}, overwriting it with new value {val!r} of type {vtype.name}')
 
+        if not self._validate_value_type(val, vtype, sub_type):
+            raise TypeError(
+                f"key {key!r}: expected {vtype.name}, got {type(val).__name__}: {val!r}"
+            )
+
         self.kv_data[0][key] = GGUFValue(value=val, type=vtype, sub_type=sub_type)
+
+    @classmethod
+    def _validate_value_type(cls, val: Any, vtype: GGUFValueType, sub_type: GGUFValueType | None = None) -> bool:
+        if val is None:
+            return False
+        if vtype == GGUFValueType.STRING:
+            return isinstance(val, (str, bytes, bytearray))
+        if vtype == GGUFValueType.ARRAY:
+            # str/bytearray are Sequence subclasses but are never valid array
+            # values in GGUF.  bytes, however, *is* used by add_array() as a
+            # UINT8 array (e.g. precompiled_charsmap), so it must be allowed.
+            if not isinstance(val, Sequence) or isinstance(val, (str, bytearray)):
+                return False
+            if sub_type is not None and len(val) > 0:
+                return all(cls._validate_value_type(item, sub_type) for item in val)
+            return True
+        if vtype == GGUFValueType.BOOL:
+            return isinstance(val, (bool, np.bool_))
+        if vtype in cls._integer_value_types:
+            # Reject bool -- Python's bool is a subclass of int, which is a common
+            # source of silent bugs when passing boolean flags to integer metadata.
+            return isinstance(val, (int, np.integer)) and not isinstance(val, (bool, np.bool_))
+        if vtype in cls._float_value_types:
+            # Accept int for float -- struct.pack handles this correctly and
+            # conversion scripts commonly pass integer literals (e.g. eps=0).
+            return isinstance(val, (int, float, np.integer, np.floating)) and not isinstance(val, (bool, np.bool_))
+        return True
 
     def add_uint8(self, key: str, val: int) -> None:
         self.add_key_value(key,val, GGUFValueType.UINT8)
