@@ -471,6 +471,13 @@ llama_context::llama_context(
             params.expert_hot_s);
     }
 
+    if (hparams.n_expert > 0 && !cparams.warmup) {
+        expert_hotstore = std::make_unique<llama_expert_hotstore>(
+            &model, hparams.n_layer(), hparams.n_expert,
+            params.expert_hot_s);
+        expert_hotstore->log();
+    }
+
     // Initialize the full vocabulary token ids for backend samplers.
     {
         const int n_vocab = model.vocab.n_tokens();
