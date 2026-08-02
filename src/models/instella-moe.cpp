@@ -1,8 +1,20 @@
 #include "models.h"
 
-// AMD Instella-MoE: DeepSeek-V3 style MLA + sigmoid-routed MoE, with two deltas:
-//  - gated attention: the attention output is scaled by sigmoid(attn_gate @ x) before wo
-//  - FarSkip-Collective: two residual streams, see the graph below
+// AMD Instella-MoE: DeepSeek-V3 style MLA + sigmoid-routed MoE.
+//
+// This file is derived from deepseek2.cpp (the MLA absorption path). The MLA attention math, the
+// YaRN kq_scale pre-scaling, sigmoid routing with e_score_correction_bias, the shared experts and
+// the leading dense layers are all unchanged from there. Only two things differ, and both are
+// tagged inline so a reviewer can find them with a grep:
+//
+//  - [TAG_INSTELLA_GATED_ATTN] the attention output is scaled by sigmoid(attn_gate @ x) before wo.
+//    x is the post-attn_norm input, not the raw residual.
+//  - [TAG_INSTELLA_FARSKIP] FarSkip-Collective: the block carries two residual streams, so
+//    attention and the FFN read different tensors and run in parallel.
+//
+// Deliberately not ported from deepseek2.cpp: the q_lora_rank path, the non-absorbed
+// (is_mla == false) path, and the llama-4 attention temperature scaling. The convert script
+// rejects checkpoints that would need any of them - see InstellaMoEModel in conversion/deepseek.py.
 
 void llama_model_instella_moe::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
@@ -63,6 +75,9 @@ void llama_model_instella_moe::load_arch_tensors(llama_model_loader &) {
         layer.wk_b      = create_tensor(tn(LLM_TENSOR_ATTN_K_B,      "weight", i), {n_embd_head_qk_nope, kv_lora_rank, n_head}, 0);
         layer.wv_b      = create_tensor(tn(LLM_TENSOR_ATTN_V_B,      "weight", i), {kv_lora_rank, n_embd_head_v_mla, n_head}, 0);
 
+        // [TAG_INSTELLA_GATED_ATTN] the only tensor this arch adds over deepseek2. Both the enum
+        // and its self_attn.gate_proj mapping already exist for afmoe, so nothing new was needed
+        // in llama-arch.cpp or tensor_mapping.py.
         layer.wqkv_gate = create_tensor(tn(LLM_TENSOR_ATTN_GATE, "weight", i), {n_embd, n_head * n_embd_head_v_mla}, 0);
         layer.wo        = create_tensor(tn(LLM_TENSOR_ATTN_OUT,  "weight", i), {n_head * n_embd_head_v_mla, n_embd}, 0);
 
@@ -130,9 +145,14 @@ llama_model_instella_moe::graph::graph(const llama_model & model, const llm_grap
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
+    // [TAG_INSTELLA_FARSKIP]
     // FarSkip-Collective keeps two residual streams: the full one, and one that excludes the
     // routed-expert contribution of the layer that produced it. Attention consumes the latter,
     // which decouples it from the expert combine of the preceding layer.
+    //
+    // Both start out as the same node. That is what lets layer 0 - dense, so it has no routed
+    // experts to exclude - fall out of the uniform loop below instead of needing the separate
+    // non-tuple branch that FarSkipDecoderLayer has in modeling_instella_moe.py.
     ggml_tensor * res_full = inpL;
     ggml_tensor * res_nort = inpL;
 
@@ -140,11 +160,15 @@ llama_model_instella_moe::graph::graph(const llama_model & model, const llm_grap
         const bool is_moe = (uint32_t) il >= hparams.n_layer_dense_lead;
 
         // norm
+        // [TAG_INSTELLA_FARSKIP] attention normalises the routed-free stream; deepseek2 normalises
+        // the single residual here
         cur = build_norm(res_nort, model.layers[il].attn_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "attn_norm", il);
 
         // self_attention
         {
+            // [TAG_INSTELLA_GATED_ATTN] computed from the post-attn_norm activations, matching
+            // MLAGatedAttention in modeling_instella_moe.py - not from the raw residual
             ggml_tensor * gate = build_lora_mm(model.layers[il].wqkv_gate, cur);
             cb(gate, "attn_gate_proj", il);
 
@@ -220,16 +244,20 @@ llama_model_instella_moe::graph::graph(const llama_model & model, const llm_grap
 
             // note: MLA with the absorption optimization converts into MQA (ie: GQA with 1 group)
             cur = build_attn(inp_attn,
-                    NULL, NULL, NULL, // wo is applied after the gating
+                    NULL, NULL, NULL, // [TAG_INSTELLA_GATED_ATTN] wo is applied after the gating
                     Qcur, Kcur, Vcur, nullptr, nullptr, model.layers[il].wv_b, kq_scale, il);
             cb(cur, "attn_out", il);
 
+            // [TAG_INSTELLA_FARSKIP] three tensors are sliced here where deepseek2 slices two: the
+            // gate and res_full are both still live below. res_nort deliberately is not - it was
+            // already consumed by attn_norm above and there is no next layer to feed.
             if (il == n_layer - 1 && inp_out_ids) {
                 cur      = ggml_get_rows(ctx0, cur,      inp_out_ids);
                 gate     = ggml_get_rows(ctx0, gate,     inp_out_ids);
                 res_full = ggml_get_rows(ctx0, res_full, inp_out_ids);
             }
 
+            // [TAG_INSTELLA_GATED_ATTN] the only extra arithmetic this arch adds over deepseek2
             cur = ggml_mul(ctx0, cur, ggml_sigmoid(ctx0, gate));
             cb(cur, "attn_gated", il);
 
@@ -240,7 +268,9 @@ llama_model_instella_moe::graph::graph(const llama_model & model, const llm_grap
         ggml_tensor * attn_out = ggml_add(ctx0, cur, res_full);
         cb(attn_out, "attn_res", il);
 
-        // the FFN reads the residual from before the attention update, so the two run in parallel
+        // [TAG_INSTELLA_FARSKIP] the FFN reads the residual from before the attention update, so
+        // the two run in parallel. deepseek2 normalises the post-attention residual (attn_out)
+        // here, which is what makes its blocks sequential.
         cur = build_norm(res_full, model.layers[il].ffn_norm, NULL, LLM_NORM_RMS, il);
         cb(cur, "ffn_norm", il);
 
@@ -277,6 +307,10 @@ llama_model_instella_moe::graph::graph(const llama_model & model, const llm_grap
                     NULL, LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(ffn_shexp, "ffn_shexp", il);
 
+            // [TAG_INSTELLA_FARSKIP] the two-stream update. res_nort omits moe_out, so the next
+            // layer's attention does not depend on this layer's expert combine. res_full sums the
+            // same four terms deepseek2 accumulates (attn + residual + shared + routed), only
+            // associated differently so res_nort falls out for free.
             res_nort = ggml_add(ctx0, attn_out, ffn_shexp);
             cb(res_nort, "l_out_no_routed", il);
 
@@ -287,7 +321,8 @@ llama_model_instella_moe::graph::graph(const llama_model & model, const llm_grap
         cb(res_full, "l_out", il);
 
         if (!is_moe) {
-            // a dense layer has no routed experts, so both streams stay identical
+            // [TAG_INSTELLA_FARSKIP] a dense layer has no routed experts, so both streams stay
+            // identical - this is the collapse that removes the layer-0 special case
             res_nort = res_full;
         }
     }
