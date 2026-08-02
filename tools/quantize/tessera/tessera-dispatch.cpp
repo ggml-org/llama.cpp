@@ -83,8 +83,18 @@ static std::vector<uint8_t> ts_to_bytes_i32(const std::vector<int32_t> & v) {
 // A tensor is quantizable if it is a 2D or 3D F32/F16 weight matrix
 // whose name maps to a known tensor family (attn, ffn, etc).
 static bool ts_is_quantizable(const char * name, enum ggml_type type, int n_dims) {
-    if (type != GGML_TYPE_F32 && type != GGML_TYPE_F16) {
+    // Accept any type that has a dequant path. This lets the pipeline consume
+    // any source GGUF format (f32, f16, q8_0, q4_0, etc) since ts_tensor_to_f32
+    // uses the generic ggml type-traits dequant. Skip the destination type
+    // (TESSERA_T640) to avoid re-quantizing an already-quantized model.
+    if (type == GGML_TYPE_TESSERA_T640) {
         return false;
+    }
+    if (type != GGML_TYPE_F32 && type != GGML_TYPE_F16) {
+        const struct ggml_type_traits * traits = ggml_get_type_traits(type);
+        if (!traits || !traits->to_float) {
+            return false;
+        }
     }
     if (n_dims != 2 && n_dims != 3) {
         return false;
@@ -102,12 +112,22 @@ static std::vector<float> ts_tensor_to_f32(const struct ggml_tensor * t) {
     const int64_t n = ggml_nelements(t);
     std::vector<float> out((size_t)n);
 
+    if (t->data == nullptr) {
+        out.clear();
+        return out;
+    }
     if (t->type == GGML_TYPE_F32) {
         std::memcpy(out.data(), t->data, (size_t)n * sizeof(float));
-    } else if (t->type == GGML_TYPE_F16) {
-        ggml_fp16_to_fp32_row((const ggml_fp16_t *)t->data, out.data(), n);
     } else {
-        out.clear();
+        // Generic dequant path via the type traits table. Handles F16, Q8_0,
+        // and any other registered ggml type. This lets the pipeline consume
+        // any source GGUF format, not just f16/f32.
+        const struct ggml_type_traits * traits = ggml_get_type_traits(t->type);
+        if (traits && traits->to_float) {
+            traits->to_float(t->data, out.data(), n);
+        } else {
+            out.clear();
+        }
     }
     return out;
 }
@@ -1129,6 +1149,10 @@ int ts_dispatch_run(const ts_dispatch_params * params,
 
         ts_progress_set_phase(prog, ts_progress_phase::GA_PREP, n_tensors,
                               "collect GA layers");
+        ga_weight_loaders.reserve((size_t)n_tensors);  // prevent realloc (raw ptrs stored)
+        ga_layers.reserve((size_t)n_tensors);
+        ga_names.reserve((size_t)n_tensors);
+        ga_descs.reserve((size_t)n_tensors);
         for (int64_t i = 0; i < n_tensors; i++) {
             const char * name = gguf_get_tensor_name(in_ctx, i);
             const enum ggml_type type = gguf_get_tensor_type(in_ctx, i);
@@ -1241,6 +1265,11 @@ int ts_dispatch_run(const ts_dispatch_params * params,
                 ml->buf.clear();
                 ml->buf.shrink_to_fit();
             };
+            // NOTE: ga_weight_loaders MUST be reserved before the loop so the
+            // vector never reallocates. layer.weights_user_data stores a raw
+            // pointer to ga_weight_loaders.back(); a reallocation would dangle
+            // every prior pointer and crash the GA workers (SIGSEGV in
+            // ggml_nelements via the loader callback).
             ga_weight_loaders.push_back({ggml_get_tensor(ggml_ctx, name), {}});
             layer.weights_user_data = &ga_weight_loaders.back();
             ga_layers.push_back(layer);
