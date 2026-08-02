@@ -199,11 +199,13 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     set(MODEL_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-models/")
     file(MAKE_DIRECTORY "${MODEL_DIR}")
 
+    # fixed seed: the recurrent-state rollback cases compare logits against
+    # references at a fixed epsilon, which must not vary run to run
     llama_test(
         test-llama-archs
         NAME test-generate-models
         LABEL main
-        ARGS -o "${MODEL_DIR}"
+        ARGS -o "${MODEL_DIR}" -s 1234
     )
     set_tests_properties(test-generate-models PROPERTIES
         FIXTURES_SETUP generate-models

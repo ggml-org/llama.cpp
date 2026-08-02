@@ -6,6 +6,8 @@
 #include <clocale>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
+#include <map>
 #include <vector>
 
 static llama_context * make_ctx(const common_params & params, llama_model * model) {
@@ -33,6 +35,344 @@ static bool decode_one(llama_context * ctx, llama_token tok, llama_pos pos) {
     const bool ok = llama_decode(ctx, batch) == 0;
     llama_batch_free(batch);
     return ok;
+}
+
+//
+// deep-rollback cases (DSV4-architecture fixtures only)
+//
+// The per-token rollback tier above covers depths up to n_rs_seq. These cases
+// pin the contract for depths beyond it and for the rollback lifecycle:
+//   a) a 128-aligned rollback deeper than n_rs_seq replays reference-equal
+//   b) a rollback the raw SWA window cannot cover is refused cleanly or
+//      falls back checkpoint-equivalent - never silently wrong output
+//   c) a second seq_rm before any decode is rejected or cumulative-correct
+//   d) a failed decode after a rollback is armed does not lose or corrupt the
+//      pending rollback state - the next decode replays reference-equal
+//
+
+using pos_logits = std::map<llama_pos, std::vector<float>>;
+
+static llama_context * make_deep_ctx(
+        const common_params & params, llama_model * model, uint32_t n_rs_seq, uint32_t n_ubatch, uint32_t n_ctx) {
+    auto cparams = common_context_params_to_llama(params);
+    cparams.n_seq_max = 1;
+    cparams.n_rs_seq  = n_rs_seq;
+    cparams.n_ctx     = n_ctx;
+    cparams.n_batch   = std::max(n_ctx, n_rs_seq + 1);
+    cparams.n_ubatch  = std::max(n_ubatch, n_rs_seq + 1);
+    return llama_init_from_model(model, cparams);
+}
+
+static bool decode_singles(
+        llama_context * ctx, const std::vector<llama_token> & tokens,
+        llama_pos p0, llama_pos p1, pos_logits * logits_out, uint32_t n_vocab) {
+    for (llama_pos pos = p0; pos < p1; ++pos) {
+        if (!decode_one(ctx, tokens[pos], pos)) {
+            return false;
+        }
+        if (logits_out) {
+            const float * logits = llama_get_logits_ith(ctx, 0);
+            if (logits == nullptr) {
+                return false;
+            }
+            (*logits_out)[pos].assign(logits, logits + n_vocab);
+        }
+    }
+    return true;
+}
+
+// every replayed position must match its reference row
+static bool logits_equal(const pos_logits & ref, const pos_logits & got, const char * label) {
+    constexpr float eps = 1e-5f;
+    for (const auto & [pos, got_row] : got) {
+        const auto it = ref.find(pos);
+        if (it == ref.end()) {
+            fprintf(stderr, "%s: no reference logits at position %d\n", label, pos);
+            return false;
+        }
+        for (size_t tok = 0; tok < got_row.size(); ++tok) {
+            if (std::fabs(it->second[tok] - got_row[tok]) > eps) {
+                fprintf(stderr, "%s: logits mismatch at position %d, token %zu (%g != %g)\n",
+                        label, pos, tok, (double) it->second[tok], (double) got_row[tok]);
+                return false;
+            }
+        }
+    }
+    return !got.empty();
+}
+
+// reference logits: an untouched context decoding the same stream the same way
+static bool build_reference(
+        const common_params & params, llama_model * model, const std::vector<llama_token> & tokens,
+        uint32_t n_rs_seq, uint32_t n_ubatch, uint32_t n_ctx,
+        llama_pos batch_end, llama_pos ref_from, llama_pos ref_to, pos_logits & out, uint32_t n_vocab) {
+    llama_context * ctx = make_deep_ctx(params, model, n_rs_seq, n_ubatch, n_ctx);
+    if (ctx == nullptr) {
+        return false;
+    }
+    bool ok = decode_tokens(ctx, tokens, batch_end);
+    ok = ok && decode_singles(ctx, tokens, batch_end, ref_from, nullptr, n_vocab);
+    ok = ok && decode_singles(ctx, tokens, ref_from, ref_to, &out, n_vocab);
+    llama_free(ctx);
+    return ok;
+}
+
+// a) aligned deep rollback: from position 306 back to the 128-aligned 256,
+//    depth 50 > n_rs_seq, then replay must be reference-equal
+static bool case_aligned_deep_rollback(
+        const common_params & params, llama_model * model, const std::vector<llama_token> & tokens, uint32_t n_vocab) {
+    const char * label = "case_aligned_deep_rollback";
+
+    pos_logits ref;
+    if (!build_reference(params, model, tokens, 8, 512, 1024, 256, 256, 300, ref, n_vocab)) {
+        fprintf(stderr, "%s: failed to build reference\n", label);
+        return false;
+    }
+
+    llama_context * ctx = make_deep_ctx(params, model, 8, 512, 1024);
+    if (ctx == nullptr) {
+        fprintf(stderr, "%s: failed to create context\n", label);
+        return false;
+    }
+
+    bool ok = decode_tokens(ctx, tokens, 256) && decode_singles(ctx, tokens, 256, 306, nullptr, n_vocab);
+    if (!ok) {
+        fprintf(stderr, "%s: initial decode failed\n", label);
+        llama_free(ctx);
+        return false;
+    }
+
+    if (!llama_memory_seq_rm(llama_get_memory(ctx), 0, 256, -1)) {
+        fprintf(stderr, "%s: aligned deep rollback to position 256 (depth 50) was refused\n", label);
+        llama_free(ctx);
+        return false;
+    }
+
+    pos_logits got;
+    ok = decode_singles(ctx, tokens, 256, 300, &got, n_vocab);
+    if (!ok) {
+        fprintf(stderr, "%s: replay decode failed\n", label);
+        llama_free(ctx);
+        return false;
+    }
+
+    ok = logits_equal(ref, got, label);
+    llama_free(ctx);
+    return ok;
+}
+
+// b) uncovered depth: stacked rollbacks walk the sequence back beyond what the
+//    raw SWA window still holds; the memory must refuse at some point or
+//    replay reference-equal - silently wrong output fails the case
+static bool case_uncovered_depth(
+        const common_params & params, llama_model * model, const std::vector<llama_token> & tokens, uint32_t n_vocab) {
+    const char * label = "case_uncovered_depth";
+
+    pos_logits ref;
+    if (!build_reference(params, model, tokens, 8, 16, 1024, 240, 263, 279, ref, n_vocab)) {
+        fprintf(stderr, "%s: failed to build reference\n", label);
+        return false;
+    }
+
+    llama_context * ctx = make_deep_ctx(params, model, 8, 16, 1024);
+    if (ctx == nullptr) {
+        fprintf(stderr, "%s: failed to create context\n", label);
+        return false;
+    }
+
+    bool ok = decode_tokens(ctx, tokens, 240) && decode_singles(ctx, tokens, 240, 900, nullptr, n_vocab);
+    if (!ok) {
+        fprintf(stderr, "%s: initial decode failed\n", label);
+        llama_free(ctx);
+        return false;
+    }
+
+    // stack depth-7 rollbacks from 899 down to 263: the cumulative depth walks
+    // far behind anything the raw window ring still holds
+    bool refused = false;
+    for (llama_pos target = 893; target >= 263; target -= 7) {
+        if (!llama_memory_seq_rm(llama_get_memory(ctx), 0, target, -1)) {
+            refused = true;
+            break;
+        }
+    }
+
+    if (refused) {
+        fprintf(stderr, "%s: uncovered rollback cleanly refused\n", label);
+        llama_free(ctx);
+        return true;
+    }
+
+    pos_logits got;
+    ok = decode_singles(ctx, tokens, 263, 279, &got, n_vocab);
+    if (!ok) {
+        fprintf(stderr, "%s: replay decode failed after unrefused uncovered rollback\n", label);
+        llama_free(ctx);
+        return false;
+    }
+
+
+    ok = logits_equal(ref, got, label);
+    if (!ok) {
+        fprintf(stderr, "%s: uncovered rollback was silently applied with wrong output\n", label);
+    }
+    llama_free(ctx);
+    return ok;
+}
+
+// c) stacked rollback: a second seq_rm before any decode must be rejected or
+//    behave cumulative-correct (replay from the deeper target reference-equal)
+static bool case_stacked_rollback(
+        const common_params & params, llama_model * model, const std::vector<llama_token> & tokens, uint32_t n_vocab) {
+    const char * label = "case_stacked_rollback";
+
+    // low positions on purpose: with only a handful of compressed blocks in
+    // view, per-position state rows corrupted by the stacked rollback dominate
+    // the attention output instead of vanishing into a long context
+    pos_logits ref;
+    if (!build_reference(params, model, tokens, 8, 512, 1024, 4, 10, 20, ref, n_vocab)) {
+        fprintf(stderr, "%s: failed to build reference\n", label);
+        return false;
+    }
+
+    llama_context * ctx = make_deep_ctx(params, model, 8, 512, 1024);
+    if (ctx == nullptr) {
+        fprintf(stderr, "%s: failed to create context\n", label);
+        return false;
+    }
+
+    bool ok = decode_tokens(ctx, tokens, 4) && decode_singles(ctx, tokens, 4, 20, nullptr, n_vocab);
+    if (!ok) {
+        fprintf(stderr, "%s: initial decode failed\n", label);
+        llama_free(ctx);
+        return false;
+    }
+
+    // two stacked rollbacks with cumulative depth 10 > n_rs_seq, both targets
+    // mid-block so partial compressor state is live at each restore point
+    if (!llama_memory_seq_rm(llama_get_memory(ctx), 0, 14, -1)) {
+        fprintf(stderr, "%s: first rollback (depth 6) was refused\n", label);
+        llama_free(ctx);
+        return false;
+    }
+
+    const bool second = llama_memory_seq_rm(llama_get_memory(ctx), 0, 10, -1);
+    if (!second) {
+        fprintf(stderr, "%s: stacked rollback cleanly rejected\n", label);
+        // the pending first rollback must still replay correctly from 14
+        pos_logits got;
+        ok = decode_singles(ctx, tokens, 14, 20, &got, n_vocab);
+        ok = ok && logits_equal(ref, got, label);
+        llama_free(ctx);
+        return ok;
+    }
+
+    pos_logits got;
+    ok = decode_singles(ctx, tokens, 10, 20, &got, n_vocab);
+    if (!ok) {
+        fprintf(stderr, "%s: replay decode failed after stacked rollback\n", label);
+        llama_free(ctx);
+        return false;
+    }
+
+    ok = logits_equal(ref, got, label);
+    if (!ok) {
+        fprintf(stderr, "%s: stacked rollback accepted but replay is not cumulative-correct\n", label);
+    }
+    llama_free(ctx);
+    return ok;
+}
+
+// d) failed decode with a deep rollback armed: the failure must not lose or
+//    corrupt the pending rollback - the subsequent replay must be
+//    reference-equal
+static bool case_failed_decode_lifecycle(
+        const common_params & params, llama_model * model, const std::vector<llama_token> & tokens, uint32_t n_vocab) {
+    const char * label = "case_failed_decode_lifecycle";
+
+    pos_logits ref;
+    if (!build_reference(params, model, tokens, 8, 512, 1024, 256, 256, 300, ref, n_vocab)) {
+        fprintf(stderr, "%s: failed to build reference\n", label);
+        return false;
+    }
+
+    llama_context * ctx = make_deep_ctx(params, model, 8, 512, 1024);
+    if (ctx == nullptr) {
+        fprintf(stderr, "%s: failed to create context\n", label);
+        return false;
+    }
+
+    bool ok = decode_tokens(ctx, tokens, 256) && decode_singles(ctx, tokens, 256, 306, nullptr, n_vocab);
+    if (!ok) {
+        fprintf(stderr, "%s: initial decode failed\n", label);
+        llama_free(ctx);
+        return false;
+    }
+
+    // arm a deep aligned rollback, then fail a decode before the replay
+    if (!llama_memory_seq_rm(llama_get_memory(ctx), 0, 256, -1)) {
+        fprintf(stderr, "%s: deep rollback to position 256 (depth 50) was refused\n", label);
+        llama_free(ctx);
+        return false;
+    }
+
+    // a decode that must fail: position far beyond n_ctx
+    if (decode_one(ctx, tokens[0], 4000)) {
+        fprintf(stderr, "%s: decode at position 4000 unexpectedly succeeded, cannot exercise the hazard\n", label);
+        llama_free(ctx);
+        return false;
+    }
+
+    pos_logits got;
+    ok = decode_singles(ctx, tokens, 256, 300, &got, n_vocab);
+    if (!ok) {
+        fprintf(stderr, "%s: replay decode failed after the failed decode\n", label);
+        llama_free(ctx);
+        return false;
+    }
+
+    ok = logits_equal(ref, got, label);
+    if (!ok) {
+        fprintf(stderr, "%s: pending rollback state corrupted by the failed decode\n", label);
+    }
+    llama_free(ctx);
+    return ok;
+}
+
+static int run_deep_rollback_cases(const common_params & params, llama_model * model, uint32_t n_vocab) {
+    char arch[64] = {0};
+    if (llama_model_meta_val_str(model, "general.architecture", arch, sizeof(arch)) < 0 ||
+            strcmp(arch, "deepseek4") != 0) {
+        fprintf(stderr, "%s : skipping deep-rollback cases for non-DSV4 arch\n", __func__);
+        return 0;
+    }
+
+    std::vector<llama_token> tokens;
+    tokens.reserve(1024);
+    for (uint32_t i = 0; i < 1024; ++i) {
+        tokens.push_back(1 + (llama_token) ((i*7) % (n_vocab - 1)));
+    }
+
+    struct named_case {
+        const char * name;
+        bool (*fn)(const common_params &, llama_model *, const std::vector<llama_token> &, uint32_t);
+    };
+    const named_case cases[] = {
+        { "aligned-deep-rollback",   case_aligned_deep_rollback },
+        { "stacked-rollback",        case_stacked_rollback },
+        { "failed-decode-lifecycle", case_failed_decode_lifecycle },
+        { "uncovered-depth",         case_uncovered_depth },
+    };
+
+    int n_failed = 0;
+    for (const auto & c : cases) {
+        const bool ok = c.fn(params, model, tokens, n_vocab);
+        fprintf(stderr, "%s : deep-rollback case %-24s : %s\n", __func__, c.name, ok ? "PASS" : "FAIL");
+        if (!ok) {
+            n_failed++;
+        }
+    }
+    return n_failed;
 }
 
 int main(int argc, char ** argv) {
@@ -220,5 +560,11 @@ int main(int argc, char ** argv) {
     llama_free(ctx_src);
     llama_free(ctx_dst);
     llama_free(ctx_dirty);
+
+    const int n_deep_failed = run_deep_rollback_cases(params, model, n_vocab);
+    if (n_deep_failed > 0) {
+        fprintf(stderr, "%s : %d deep-rollback case(s) failed\n", __func__, n_deep_failed);
+        return 1;
+    }
     return 0;
 }

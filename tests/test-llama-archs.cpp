@@ -40,12 +40,18 @@ static double nmse(const std::vector<float> & a, const std::vector<float> & b) {
     return mse_a_b / mse_a_0;
 }
 
+struct tensor_data_params {
+    size_t seed;
+    float  sigma;
+};
+
 static void set_tensor_data(struct ggml_tensor * tensor, void * userdata) {
-    size_t seed = *(const size_t *) userdata;
+    const tensor_data_params & tdp = *(const tensor_data_params *) userdata;
+    size_t seed = tdp.seed;
     std::hash<std::string> hasher;
     seed ^= hasher(tensor->name);
     std::mt19937 gen(seed);
-    std::normal_distribution<float> dis(0.0f, 1.0e-2f);
+    std::normal_distribution<float> dis(0.0f, tdp.sigma);
 
     const int64_t ne = ggml_nelements(tensor);
     if (tensor->type == GGML_TYPE_F32) {
@@ -289,9 +295,19 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
     return true;
 }
 
+// The saved DEEPSEEK4 fixture needs weights big enough that attention output
+// is visible in the logits: the recurrent-state rollback test compares
+// replayed logits against a reference, which is vacuous if the context
+// contribution drowns in fp noise. Only the saved fixture gets the larger
+// sigma - the backend NMSE comparison keeps the default, where cross-backend
+// divergence stays within its threshold.
+static float weight_sigma(const llm_arch arch) {
+    return arch == LLM_ARCH_DEEPSEEK4 ? 1.0e-1f : 1.0e-2f;
+}
+
 static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const std::vector<ggml_backend_dev_t> & devs,
-        const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false) {
+        const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false, float sigma = 1.0e-2f) {
     GGML_ASSERT((gguf_ctx == nullptr) != (file == nullptr));
     llama_model_params model_params = llama_model_default_params();
     model_params.progress_callback = silent_model_load_progress;
@@ -308,7 +324,7 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
         ctx_params.n_ubatch = 64;
     }
 
-    size_t tmp = seed;
+    tensor_data_params tmp = { seed, sigma };
     llama_model_ptr model(gguf_ctx != nullptr ?
         llama_model_init_from_user(gguf_ctx, set_tensor_data, &tmp, model_params) :
         llama_model_load_from_file_ptr(file, model_params));
@@ -507,7 +523,7 @@ static int save_models(const llm_arch target_arch, const size_t seed, const ggml
                 continue;
             }
             gguf_context_ptr gguf_ctx = get_gguf_ctx(arch, moe);
-            auto model_and_ctx = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {});
+            auto model_and_ctx = get_model_and_ctx(gguf_ctx.get(), nullptr, seed, {}, LLAMA_SPLIT_MODE_LAYER, false, weight_sigma(arch));
             const std::string path = dir + "/" + llm_arch_name(arch) + (moe ? "-moe.gguf" : "-dense.gguf");
             LOG_INF("%s: Saving %s model (%s) to %s...\n", __func__, llm_arch_name(arch), moe ? "MoE" : "dense", path.c_str());
             llama_model_save_to_file(model_and_ctx.first.get(), path.c_str());
