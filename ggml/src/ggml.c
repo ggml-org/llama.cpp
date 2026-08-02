@@ -10,6 +10,13 @@
 // FIXME: required here for quantization functions
 #include "ggml-quants.h"
 
+#ifdef __ARM_FEATURE_SVE
+#include <arm_sve.h>
+#endif
+#if defined(__ARM_NEON)
+#include <arm_neon.h>
+#endif
+
 #ifdef GGML_USE_CPU_HBM
 #include <hbwmalloc.h>
 #endif
@@ -466,9 +473,32 @@ ggml_bf16_t ggml_fp32_to_bf16(float x) {
 }
 
 void ggml_fp16_to_fp32_row(const ggml_fp16_t * x, float * y, int64_t n) {
+#if defined(__ARM_FEATURE_SVE)
+    int64_t i = 0;
+    for (; i + svcntw() <= n; i += svcntw()) {
+        svbool_t pg = svwhilelt_b16_s32(i, n);
+        svfloat32_t val = svcvt_f32_f16_x(pg, svld1_f16(pg, (const __fp16 *)x + i));
+        svst1_f32(pg, y + i, val);
+    }
+    for (; i < n; i++) {
+        y[i] = GGML_FP16_TO_FP32(x[i]);
+    }
+#elif defined(__ARM_NEON)
+    int64_t i = 0;
+    for (; i + 7 < n; i += 8) {
+        float32x4_t val0 = vcvt_f32_f16(vld1_f16((const __fp16 *)x + i + 0));
+        float32x4_t val1 = vcvt_f32_f16(vld1_f16((const __fp16 *)x + i + 4));
+        vst1q_f32(y + i + 0, val0);
+        vst1q_f32(y + i + 4, val1);
+    }
+    for (; i < n; i++) {
+        y[i] = GGML_FP16_TO_FP32(x[i]);
+    }
+#else
     for (int64_t i = 0; i < n; i++) {
         y[i] = GGML_FP16_TO_FP32(x[i]);
     }
+#endif
 }
 
 void ggml_fp32_to_fp16_row(const float * x, ggml_fp16_t * y, int64_t n) {
