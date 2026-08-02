@@ -20,7 +20,7 @@ Common params:
 ## Qwen3-TTS
 
 Available params:
-- `--tts-lang` can be `cn`, `en`, `ge`, `it`, `po`, `sp`, `ja`, `ko`, `fr`, `ru` (default: `en`)
+- `--tts-lang` can be `zh`, `en`, `de`, `it`, `pt`, `es`, `ja`, `ko`, `fr`, `ru` (default: `en`)
 - `--tts-speaker-file` should point to a speaker reference audio file (wav, mp3)
 
 Example usage:

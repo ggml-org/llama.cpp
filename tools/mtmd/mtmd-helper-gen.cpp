@@ -19,15 +19,18 @@
 // Audio generation helpers
 //
 
-// maps the 2-letter --tts-lang codes (see tools/tts/README.md) to the language
+// maps the --tts-lang codes (see tools/tts/README.md) to the language
 // names used by the codec_language special tokens
+//
+// primary keys are ISO 639-1 codes; the old non-standard codes ("cn", "ge",
+// "po", "sp") are kept as aliases for backward compatibility
 static const std::unordered_map<std::string, std::string> tts_lang_codes = {
-    { "cn", "chinese"    },
+    { "zh", "chinese"    },
     { "en", "english"    },
-    { "ge", "german"     },
+    { "de", "german"     },
     { "it", "italian"    },
-    { "po", "portuguese" },
-    { "sp", "spanish"    },
+    { "pt", "portuguese" },
+    { "es", "spanish"    },
     { "ja", "japanese"   },
     { "ko", "korean"     },
     { "fr", "french"     },
