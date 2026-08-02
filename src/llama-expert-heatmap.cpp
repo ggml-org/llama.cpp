@@ -22,8 +22,6 @@ llama_expert_heatmap::llama_expert_heatmap(
 }
 
 void llama_expert_heatmap::update(int layer_idx, const int32_t * expert_ids, int n_expert_used, int n_tokens) {
-    decay_all();
-
     float * layer_heat = heat.data() + layer_idx * n_experts;
 
     for (int t = 0; t < n_tokens; t++) {
@@ -40,6 +38,8 @@ void llama_expert_heatmap::update_from_graph(const std::vector<std::pair<int, gg
         return;
     }
 
+    decay_all();
+
     int64_t n_tokens = 0;
     for (const auto & [il, tensor] : moe_sel_experts) {
         n_tokens = tensor->ne[1];
@@ -55,7 +55,7 @@ void llama_expert_heatmap::update_from_graph(const std::vector<std::pair<int, gg
     }
 
     tokens_total += n_tokens;
-    if (log_period > 0 && tokens_total % log_period == 0) {
+    if (log_period > 0 && tokens_total / log_period > (tokens_total - n_tokens) / log_period) {
         log();
     }
 }
