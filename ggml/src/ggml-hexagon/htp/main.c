@@ -706,38 +706,38 @@ static inline void profile_stop(uint32_t mode, struct profile_data * d) {
     }
 }
 
-#define HTP_SYNC_TIMEOUT (1000000000ULL)
+#define HTP_FENCE_TIMEOUT (1000000000ULL)
 
-static int op_sync(struct htp_ops_context * octx) {
+static int op_fence(struct htp_ops_context * octx) {
     struct htp_context *ctx = octx->ctx;
 
     const struct htp_tensor * sync = octx->src[0];
-    atomic_uint* sync_token = (atomic_uint *)sync->data;
+    atomic_uint* sync_fence = (atomic_uint *)sync->data;
 
-    Q6_dccleaninva_A((void *)sync_token);
-    uint32_t seq   = sync_token[1];
+    Q6_dccleaninva_A((void *)sync_fence);
+    uint32_t seq   = sync_fence[1];
     uint64_t spins = 0;
     while (1) {
-        Q6_dccleaninva_A((void *)sync_token);
+        Q6_dccleaninva_A((void *)sync_fence);
         asm volatile ("syncht" : : : "memory");
-        if (atomic_load(sync_token) == seq) {
+        if (atomic_load(sync_fence) == seq) {
             break;
         }
-        if (++spins > HTP_SYNC_TIMEOUT) {
-            FARF(ERROR, "ggml-hex: sync-wait TIMEOUT : token %p spins %llu seq %u\n", sync_token, spins, seq);
+        if (++spins > HTP_FENCE_TIMEOUT) {
+            FARF(ERROR, "ggml-hex: sync-wait TIMEOUT : fence %p spins %llu seq %u\n", sync_fence, spins, seq);
             break;
         }
         hex_pause();
     }
 
-    FARF(HIGH, "ggml-hex: sync-done : token %p spins %llu seq %u\n", sync_token, spins, seq);
+    FARF(HIGH, "ggml-hex: sync-done : fence %p spins %llu seq %u\n", sync_fence, spins, seq);
     return HTP_STATUS_OK;
 }
 
 static int execute_op(struct htp_ops_context * octx) {
     switch (octx->op) {
-        case HTP_OP_SYNC:
-            return op_sync(octx);
+        case HTP_OP_FENCE:
+            return op_fence(octx);
 
         case HTP_OP_MUL_MAT:
         case HTP_OP_MUL_MAT_ADD:

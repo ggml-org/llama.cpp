@@ -336,15 +336,15 @@ int op_cpy(struct htp_ops_context * octx) {
             qurt_mem_cache_clean((qurt_addr_t) 0, 0, QURT_MEM_CACHE_FLUSH_INVALIDATE_ALL, QURT_MEM_DCACHE);
         }
 
-        atomic_uint* sync_token = (atomic_uint *)sync->data;
+        atomic_uint* sync_fence = (atomic_uint *)sync->data;
 
-        Q6_dccleaninva_A((void *)sync_token);
-        uint32_t seq = ((uint32_t *)sync_token)[1];
-        atomic_store(sync_token, seq);
+        Q6_dccleaninva_A((void *)sync_fence);
+        uint32_t seq = ((uint32_t *)sync_fence)[1];
+        atomic_store(sync_fence, seq);
         asm volatile ("syncht" : : : "memory");
-        Q6_dccleaninva_A((void *)sync_token);
+        Q6_dccleaninva_A((void *)sync_fence);
 
-        FARF(HIGH, "ggml-hex: sync-release : token %p seq %u\n", sync_token, seq);
+        FARF(HIGH, "ggml-hex: sync-release : fence %p seq %u\n", sync_fence, seq);
     }
 
     return HTP_STATUS_OK;
