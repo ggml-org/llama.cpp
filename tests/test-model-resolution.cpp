@@ -153,11 +153,12 @@ static const std::vector<std::string> vendors = {
 };
 
 // every speculative sidecar type at the same quant
-static const std::vector<std::string> trio = {
+static const std::vector<std::string> quad = {
     "model-Q8_0.gguf",
     "mtp-model-Q8_0.gguf",
     "dflash-model-Q8_0.gguf",
     "eagle3-model-Q8_0.gguf",
+    "dspark-model-Q8_0.gguf",
 };
 
 static const std::vector<std::string> dflash_only = {
@@ -168,6 +169,22 @@ static const std::vector<std::string> dflash_only = {
 static const std::vector<std::string> eagle3_only = {
     "model-Q8_0.gguf",
     "eagle3-model-Q8_0.gguf",
+};
+
+// a single full quant with dspark sidecars at other quants,
+// in the style of ggml-org/DeepSeek-V4-Flash-0731-GGUF
+static const std::vector<std::string> spark = {
+    "README.md",
+    "model-MXFP4.gguf",
+    "dspark-model-BF16.gguf",
+    "dspark-model-MXFP4.gguf",
+};
+
+// dspark outranks dflash in the type auto-selection
+static const std::vector<std::string> dspark_dflash = {
+    "model-Q8_0.gguf",
+    "dflash-model-Q8_0.gguf",
+    "dspark-model-Q8_0.gguf",
 };
 
 //
@@ -181,7 +198,7 @@ struct plan_case {
     const std::vector<std::string> & files;
     const char * hf_repo;
     const char * hf_file;
-    bool sidecars;        // request mmproj + mtp + dflash + eagle3
+    bool sidecars;        // request mmproj + mtp + dflash + eagle3 + dspark
     bool order_dependent; // the expected pick depends on the listing order
     const char * primary;
     std::vector<std::string> model_files;
@@ -189,33 +206,34 @@ struct plan_case {
     const char * mtp;
     const char * dflash;
     const char * eagle3;
+    const char * dspark;
 };
 
 static const plan_case plan_cases[] = {
     // exact tag picks the matching primary, sidecars follow the tag
     {"flat exact tag", flat, "test/repo:Q8_0", "", true, false,
      "model-Q8_0.gguf", {"model-Q8_0.gguf"},
-     "mmproj-model-Q8_0.gguf", "mtp-model-Q8_0.gguf", "dflash-model-Q8_0.gguf", ""},
+     "mmproj-model-Q8_0.gguf", "mtp-model-Q8_0.gguf", "dflash-model-Q8_0.gguf", "", ""},
 
     // no tag falls back to the default quant preference
     {"flat default", flat, "test/repo", "", false, false,
      "model-Q4_K_M.gguf", {"model-Q4_K_M.gguf"},
-     "", "", "", ""},
+     "", "", "", "", ""},
 
     // no tag and no default match falls back to the first model in the listing
     {"unsloth fallback", unsloth, "test/repo", "", true, true,
      "model-UD-Q8_K_XL.gguf", {"model-UD-Q8_K_XL.gguf"},
-     "mmproj-BF16.gguf", "", "", ""},
+     "mmproj-BF16.gguf", "", "", "", ""},
 
     // explicit hf_file picks that exact file
     {"flat hf_file", flat, "test/repo", "model-BF16.gguf", false, false,
      "model-BF16.gguf", {"model-BF16.gguf"},
-     "", "", "", ""},
+     "", "", "", "", ""},
 
     // missing hf_file resolves nothing
     {"flat missing hf_file", flat, "test/repo", "nope.gguf", false, false,
      "", {},
-     "", "", "", ""},
+     "", "", "", "", ""},
 
     // a sharded primary brings all its parts, a subdir primary finds the root sidecar
     {"subdir shards", subdir, "test/repo:Q3_K_M", "", true, false,
@@ -223,38 +241,48 @@ static const plan_case plan_cases[] = {
      {"Q3_K_M/model-Q3_K_M-00001-of-00003.gguf",
       "Q3_K_M/model-Q3_K_M-00002-of-00003.gguf",
       "Q3_K_M/model-Q3_K_M-00003-of-00003.gguf"},
-     "mmproj-model-f16.gguf", "model-mtp-Q8_0.gguf", "", ""},
+     "mmproj-model-f16.gguf", "model-mtp-Q8_0.gguf", "", "", ""},
 
     // a tag with no matching full model still resolves the requested sidecars
     {"hole tag sidecar", hole, "test/repo:Q4_0", "", true, false,
      "", {},
-     "", "mtp-model-Q4_0.gguf", "dflash-model-Q8_0.gguf", ""},
+     "", "mtp-model-Q4_0.gguf", "dflash-model-Q8_0.gguf", "", ""},
 
     // the same tag without a requested sidecar resolves nothing
     {"hole tag alone", hole, "test/repo:Q4_0", "", false, false,
      "", {},
-     "", "", "", ""},
+     "", "", "", "", ""},
 
     // no tag anchors the sidecars on the primary quant
     {"hole default anchor", hole, "test/repo", "", true, false,
      "model-Q4_K_M.gguf", {"model-Q4_K_M.gguf"},
-     "", "mtp-model-Q4_0.gguf", "dflash-model-Q8_0.gguf", ""},
+     "", "mtp-model-Q4_0.gguf", "dflash-model-Q8_0.gguf", "", ""},
 
     // the mtp- keyword is case sensitive, a suffix -MTP file is not discovered
     {"unsloth suffix mtp", unsloth, "test/repo:Q8_K_XL", "", true, false,
      "model-UD-Q8_K_XL.gguf", {"model-UD-Q8_K_XL.gguf"},
-     "mmproj-BF16.gguf", "", "", ""},
+     "mmproj-BF16.gguf", "", "", "", ""},
 
     // vendor prefixes and the dot quant convention both match the tag,
     // first match wins between two files at the same quant
     {"vendor prefix", vendors, "test/repo:Q8_0", "", false, true,
      "TheDrummer_Model-24B-v4.1-Q8_0.gguf", {"TheDrummer_Model-24B-v4.1-Q8_0.gguf"},
-     "", "", "", ""},
+     "", "", "", "", ""},
 
     // every sidecar type resolves at the tag
-    {"trio exact tag", trio, "test/repo:Q8_0", "", true, false,
+    {"quad exact tag", quad, "test/repo:Q8_0", "", true, false,
      "model-Q8_0.gguf", {"model-Q8_0.gguf"},
-     "", "mtp-model-Q8_0.gguf", "dflash-model-Q8_0.gguf", "eagle3-model-Q8_0.gguf"},
+     "", "mtp-model-Q8_0.gguf", "dflash-model-Q8_0.gguf", "eagle3-model-Q8_0.gguf", "dspark-model-Q8_0.gguf"},
+
+    // no tag anchors the dspark sidecar on the only full quant
+    {"spark default anchor", spark, "test/repo", "", true, false,
+     "model-MXFP4.gguf", {"model-MXFP4.gguf"},
+     "", "", "", "", "dspark-model-MXFP4.gguf"},
+
+    // a tag with no matching full model still resolves the exact dspark sidecar
+    {"spark tag sidecar", spark, "test/repo:BF16", "", true, false,
+     "", {},
+     "", "", "", "", "dspark-model-BF16.gguf"},
 };
 
 static void check_plan(const plan_case & c) {
@@ -263,6 +291,7 @@ static void check_plan(const plan_case & c) {
     opts.download_mtp    = c.sidecars;
     opts.download_dflash = c.sidecars;
     opts.download_eagle3 = c.sidecars;
+    opts.download_dspark = c.sidecars;
 
     auto plan = common_download_get_hf_plan(model_ref(c.hf_repo, c.hf_file), opts);
 
@@ -271,6 +300,7 @@ static void check_plan(const plan_case & c) {
     REQUIRE_EQ(plan.mtp.path,     c.mtp);
     REQUIRE_EQ(plan.dflash.path,  c.dflash);
     REQUIRE_EQ(plan.eagle3.path,  c.eagle3);
+    REQUIRE_EQ(plan.dspark.path,  c.dspark);
 
     // exact shard set, order insensitive; the primary must be the first split
     std::vector<std::string> actual;
@@ -336,9 +366,11 @@ static void test_task_assembly() {
 
     g_repos["test/main"]   = flat;
     g_repos["test/hole"]   = hole;
-    g_repos["test/trio"]   = trio;
+    g_repos["test/quad"]   = quad;
     g_repos["test/dflash"] = dflash_only;
     g_repos["test/eagle3"] = eagle3_only;
+    g_repos["test/spark"]  = spark;
+    g_repos["test/pair"]   = dspark_dflash;
     g_repos["test/small"]  = {"draft-model-Q4_K_M.gguf"};
     g_repos["test/preset"] = {"preset.ini", "model-Q8_0.gguf"};
 
@@ -384,9 +416,9 @@ static void test_task_assembly() {
     {
         // -hfd without a spec type auto-selects the type, mtp first when all ship
         common_params params;
-        assemble({"server", "-hf", "test/main:Q8_0", "-hfd", "test/trio:Q8_0"}, params);
+        assemble({"server", "-hf", "test/main:Q8_0", "-hfd", "test/quad:Q8_0"}, params);
         REQUIRE(params.speculative.types == std::vector<enum common_speculative_type>{COMMON_SPECULATIVE_TYPE_DRAFT_MTP});
-        REQUIRE_EQ(params.speculative.draft.mparams.path, cached("test/trio", "mtp-model-Q8_0.gguf"));
+        REQUIRE_EQ(params.speculative.draft.mparams.path, cached("test/quad", "mtp-model-Q8_0.gguf"));
     }
     {
         // auto-selection with only a dflash sidecar
@@ -401,6 +433,21 @@ static void test_task_assembly() {
         assemble({"server", "-hf", "test/main:Q8_0", "-hfd", "test/eagle3:Q8_0"}, params);
         REQUIRE(params.speculative.types == std::vector<enum common_speculative_type>{COMMON_SPECULATIVE_TYPE_DRAFT_EAGLE3});
         REQUIRE_EQ(params.speculative.draft.mparams.path, cached("test/eagle3", "eagle3-model-Q8_0.gguf"));
+    }
+    {
+        // auto-selection prefers dspark over dflash when both ship
+        common_params params;
+        assemble({"server", "-hf", "test/main:Q8_0", "-hfd", "test/pair:Q8_0"}, params);
+        REQUIRE(params.speculative.types == std::vector<enum common_speculative_type>{COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK});
+        REQUIRE_EQ(params.speculative.draft.mparams.path, cached("test/pair", "dspark-model-Q8_0.gguf"));
+    }
+    {
+        // -hf with the dspark spec type wires the sidecar of the main repo,
+        // anchored on the only full quant
+        common_params params;
+        assemble({"server", "-hf", "test/spark", "--spec-type", "draft-dspark"}, params);
+        REQUIRE_EQ(params.model.path, cached("test/spark", "model-MXFP4.gguf"));
+        REQUIRE_EQ(params.speculative.draft.mparams.path, cached("test/spark", "dspark-model-MXFP4.gguf"));
     }
     {
         // -hfd on a repo without sidecars keeps resolving a full model as draft
