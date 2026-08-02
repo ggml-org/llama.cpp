@@ -2380,15 +2380,20 @@ int ts_dispatch_run(const ts_dispatch_params * params,
         //   (b) parallel: the 6 ts_dispatch_forced_t2 calls per tensor are
         //       CPU-bound and independent across tensors. Fan out across the
         //       same thread budget as the GA.
+        // Acceptance gate work items: store only metadata + the ggml tensor
+        // pointer (not the f32 weights). Each worker loads the tensor on
+        // demand from the mmap'd GGUF, evaluates 6 experts, then frees.
+        // Peak: n_threads x 180 MB instead of 254 x 180 MB = 45 GB.
         struct acc_work_item {
             std::string name;
-            std::vector<float> weights;
+            struct ggml_tensor * tensor;  // from mmap'd ggml_ctx; data valid
             std::vector<float> act_scratch;
             const float * act;
             int64_t out_dim, in_dim;
             ts_expert_id routed_expert;
         };
         std::vector<acc_work_item> work;
+        work.reserve((size_t)n_tensors);
 
         const float alpha = default_alpha;
         const float clip  = params->awq_clip;
@@ -2396,7 +2401,7 @@ int ts_dispatch_run(const ts_dispatch_params * params,
         const uint32_t seed = (uint32_t)params->evolve_seed;
 
         ts_progress_set_phase(prog, "accept-prep", n_tensors,
-                              "load tensors for acceptance gate");
+                              "collect tensors for acceptance gate");
         for (int64_t i = 0; i < n_tensors; i++) {
             const char * name = gguf_get_tensor_name(in_ctx, i);
             const enum ggml_type type = gguf_get_tensor_type(in_ctx, i);
@@ -2417,22 +2422,27 @@ int ts_dispatch_run(const ts_dispatch_params * params,
 
             acc_work_item item;
             item.name     = name;
-            item.weights  = ts_tensor_to_f32(t);
+            item.tensor   = t;
             item.out_dim  = ne[1];
             item.in_dim   = ne[0];
-            if (item.weights.empty()) {
-                ts_progress_inc(prog, 1, name);
-                continue;
-            }
             item.act = ts_dispatch_act_scales(
                 have_imatrix ? &imatrix : nullptr, name, item.in_dim,
                 calib_X.empty() ? nullptr : calib_X.data(), calib_in_dim, calib_n_tokens,
                 &item.act_scratch);
 
-            ts_regime_descriptor desc = ts_regime_compute_descriptor(
-                name, item.weights.data(), item.out_dim, item.in_dim, nullptr, 0);
-            ts_regime_routing routing = ts_regime_classify(&desc);
-            item.routed_expert = routing.expert;
+            // Regime descriptor needs the weights for kurtosis/eff_rank.
+            // Load temporarily, compute, free.
+            {
+                std::vector<float> w = ts_tensor_to_f32(t);
+                if (w.empty()) {
+                    ts_progress_inc(prog, 1, name);
+                    continue;
+                }
+                ts_regime_descriptor desc = ts_regime_compute_descriptor(
+                    name, w.data(), item.out_dim, item.in_dim, nullptr, 0);
+                ts_regime_routing routing = ts_regime_classify(&desc);
+                item.routed_expert = routing.expert;
+            }
 
             work.push_back(std::move(item));
             ts_progress_inc(prog, 1, name);
@@ -2440,10 +2450,12 @@ int ts_dispatch_run(const ts_dispatch_params * params,
 
         std::vector<ts_acceptance_tensor> acc_tensors(work.size());
 
-        // Parallel 6x re-quantize per tensor. Each work item is independent;
-        // results land in acc_tensors[idx] which does not alias across idx.
+        // Parallel 6x re-quantize per tensor. Each worker loads the tensor
+        // from the mmap'd GGUF on demand (streaming), evaluates 6 experts
+        // via ts_quantize_mse_streaming (132 KB scratch each), then the
+        // loaded weights go out of scope. Peak: 4 x 180 MB + 4 x 132 KB.
         ts_progress_set_phase(prog, "accept-run", (int64_t)work.size(),
-                              "acceptance gate (6 experts per tensor)");
+                              "acceptance gate (6 experts per tensor, streaming)");
 
         const int32_t acc_threads = std::max(1, std::min(
             (int32_t) std::thread::hardware_concurrency(),
@@ -2452,14 +2464,16 @@ int ts_dispatch_run(const ts_dispatch_params * params,
         if (acc_threads <= 1 || work.size() < 2) {
             for (size_t idx = 0; idx < work.size(); idx++) {
                 const auto & item = work[idx];
+                std::vector<float> w = ts_tensor_to_f32(item.tensor);
+                if (w.empty()) continue;
                 ts_acceptance_tensor at;
                 memset(&at, 0, sizeof(at));
                 snprintf(at.name, sizeof(at.name), "%s", item.name.c_str());
-                at.composite_t2 = ts_dispatch_forced_t2(item.weights.data(), item.act, item.out_dim, item.in_dim, item.routed_expert, alpha, clip, othresh, seed);
-                at.awq_t2       = ts_dispatch_forced_t2(item.weights.data(), item.act, item.out_dim, item.in_dim, TS_EXPERT_AWQ,       alpha, clip, othresh, seed);
-                at.rotation_t2  = ts_dispatch_forced_t2(item.weights.data(), item.act, item.out_dim, item.in_dim, TS_EXPERT_DARTQUANT, alpha, clip, othresh, seed);
-                at.lowrank_t2   = ts_dispatch_forced_t2(item.weights.data(), item.act, item.out_dim, item.in_dim, TS_EXPERT_FLRQ,      alpha, clip, othresh, seed);
-                at.hessian_t2   = ts_dispatch_forced_t2(item.weights.data(), item.act, item.out_dim, item.in_dim, TS_EXPERT_SEPTQ,     alpha, clip, othresh, seed);
+                at.composite_t2 = ts_dispatch_forced_t2(w.data(), item.act, item.out_dim, item.in_dim, item.routed_expert, alpha, clip, othresh, seed);
+                at.awq_t2       = ts_dispatch_forced_t2(w.data(), item.act, item.out_dim, item.in_dim, TS_EXPERT_AWQ,       alpha, clip, othresh, seed);
+                at.rotation_t2  = ts_dispatch_forced_t2(w.data(), item.act, item.out_dim, item.in_dim, TS_EXPERT_DARTQUANT, alpha, clip, othresh, seed);
+                at.lowrank_t2   = ts_dispatch_forced_t2(w.data(), item.act, item.out_dim, item.in_dim, TS_EXPERT_FLRQ,      alpha, clip, othresh, seed);
+                at.hessian_t2   = ts_dispatch_forced_t2(w.data(), item.act, item.out_dim, item.in_dim, TS_EXPERT_SEPTQ,     alpha, clip, othresh, seed);
                 at.offline_proxy_mse = at.composite_t2;
                 at.kernel_direct_t2  = at.composite_t2;
                 at.held_out          = false;
@@ -2473,14 +2487,17 @@ int ts_dispatch_run(const ts_dispatch_params * params,
                     size_t idx = next_idx.fetch_add(1, std::memory_order_relaxed);
                     if (idx >= work.size()) return;
                     const auto & item = work[idx];
+                    // Load weights from mmap'd GGUF on demand.
+                    std::vector<float> w = ts_tensor_to_f32(item.tensor);
+                    if (w.empty()) continue;
                     ts_acceptance_tensor at;
                     memset(&at, 0, sizeof(at));
                     snprintf(at.name, sizeof(at.name), "%s", item.name.c_str());
-                    at.composite_t2 = ts_dispatch_forced_t2(item.weights.data(), item.act, item.out_dim, item.in_dim, item.routed_expert, alpha, clip, othresh, seed);
-                    at.awq_t2       = ts_dispatch_forced_t2(item.weights.data(), item.act, item.out_dim, item.in_dim, TS_EXPERT_AWQ,       alpha, clip, othresh, seed);
-                    at.rotation_t2  = ts_dispatch_forced_t2(item.weights.data(), item.act, item.out_dim, item.in_dim, TS_EXPERT_DARTQUANT, alpha, clip, othresh, seed);
-                    at.lowrank_t2   = ts_dispatch_forced_t2(item.weights.data(), item.act, item.out_dim, item.in_dim, TS_EXPERT_FLRQ,      alpha, clip, othresh, seed);
-                    at.hessian_t2   = ts_dispatch_forced_t2(item.weights.data(), item.act, item.out_dim, item.in_dim, TS_EXPERT_SEPTQ,     alpha, clip, othresh, seed);
+                    at.composite_t2 = ts_dispatch_forced_t2(w.data(), item.act, item.out_dim, item.in_dim, item.routed_expert, alpha, clip, othresh, seed);
+                    at.awq_t2       = ts_dispatch_forced_t2(w.data(), item.act, item.out_dim, item.in_dim, TS_EXPERT_AWQ,       alpha, clip, othresh, seed);
+                    at.rotation_t2  = ts_dispatch_forced_t2(w.data(), item.act, item.out_dim, item.in_dim, TS_EXPERT_DARTQUANT, alpha, clip, othresh, seed);
+                    at.lowrank_t2   = ts_dispatch_forced_t2(w.data(), item.act, item.out_dim, item.in_dim, TS_EXPERT_FLRQ,      alpha, clip, othresh, seed);
+                    at.hessian_t2   = ts_dispatch_forced_t2(w.data(), item.act, item.out_dim, item.in_dim, TS_EXPERT_SEPTQ,     alpha, clip, othresh, seed);
                     at.offline_proxy_mse = at.composite_t2;
                     at.kernel_direct_t2  = at.composite_t2;
                     at.held_out          = false;
