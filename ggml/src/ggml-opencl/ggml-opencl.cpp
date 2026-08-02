@@ -7114,7 +7114,7 @@ static void ggml_cl_moe_combine_fused(ggml_backend_t backend, const ggml_tensor 
     backend_ctx->enqueue_ndrange_kernel(kernel, 2, gws, lws, dst);
 }
 
-inline bool use_q4k_tiled(const ggml_tensor *tensor);   // defined below (used by the GLU-subgraph fuse check)
+inline bool use_q4k_tiled(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor);   // defined below (used by the GLU-subgraph fuse check)
 inline bool use_adreno_kernels(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor);   // defined below
 
 static bool ggml_opencl_can_fuse(const ggml_backend_opencl_context * backend_ctx, const struct ggml_cgraph * cgraph, int node_idx, std::initializer_list<enum ggml_op> ops) {
@@ -7166,7 +7166,7 @@ static bool ggml_opencl_can_fuse(const ggml_backend_opencl_context * backend_ctx
         }
         // the fused kernel reads the standard noshuffle image layout; the tiled
         // layout packs weights differently -> defer those to the per-op path
-        if (use_q4k_tiled(gate->src[0]) || use_q4k_tiled(up->src[0])) {
+        if (use_q4k_tiled(backend_ctx, gate->src[0]) || use_q4k_tiled(backend_ctx, up->src[0])) {
             return false;
         }
         // that noshuffle layout is only produced at set_tensor time when
@@ -7622,35 +7622,46 @@ inline bool use_adreno_moe_kernels(const ggml_backend_opencl_context *backend_ct
     return (((strstr(tensor->name, "ffn") != NULL) && (strstr(tensor->name, "exps") != NULL)) || (strstr(tensor->name, "as") != NULL)) && (ne01 % 32 == 0);
 }
 
-// Tiled-wide q6_K GEMV (default ON; opt out via GGML_OPENCL_Q6K_GEMV_TILED=0).
+// Device default for the tiled-wide lm_head/embed GEMV layout. The 64-row tiled
+// layout wins on X2E and A8X but inverts hard on A7X (the tiled kernel is slower
+// there than even the flat path), so the default is the discrete generations with
+// measured evidence only. Deliberately not gen_level (it cannot separate A8X from
+// X2E) and deliberately not "!= A7X" (unmeasured generations must stay off).
+inline bool tiled_gemv_default_on(const ggml_backend_opencl_context *backend_ctx) {
+    return backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E ||
+           backend_ctx->adreno_gen == ADRENO_GPU_GEN::A8X;
+}
+
+// Tiled-wide q6_K GEMV (default ON for X2E/A8X; GGML_OPENCL_Q6K_GEMV_TILED
+// forces either way: =0 off everywhere, any other value on everywhere).
 // Both the convert (set_tensor) and the GEMV dispatch must agree on this so the
 // buffer layout matches the kernel.
-inline bool q6k_gemv_tiled_enabled() {
-    static const bool en = []{
-        const char * e = std::getenv("GGML_OPENCL_Q6K_GEMV_TILED");
-        return !e || e[0] == '\0' || e[0] != '0';
-    }();
-    return en;
+inline bool q6k_gemv_tiled_enabled(const ggml_backend_opencl_context *backend_ctx) {
+    static const char * e = std::getenv("GGML_OPENCL_Q6K_GEMV_TILED");
+    if (e && e[0] != '\0') {
+        return e[0] != '0';
+    }
+    return tiled_gemv_default_on(backend_ctx);
 }
 
 // Only the long-vocab lm_head/embed shapes use the tiled layout; ne01 % 64 == 0
 // is required by the 64-row tiling (no row padding in the buffers).
-inline bool use_q6k_tiled(const ggml_tensor *tensor) {
-    return q6k_gemv_tiled_enabled() && tensor->type == GGML_TYPE_Q6_K &&
+inline bool use_q6k_tiled(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
+    return q6k_gemv_tiled_enabled(backend_ctx) && tensor->type == GGML_TYPE_Q6_K &&
            tensor->ne[1] >= 32768 && tensor->ne[1] % 64 == 0;
 }
 
-// q4_K analog of the tiled-wide lm_head/embed GEMV (default ON; opt out via
-// GGML_OPENCL_Q4K_GEMV_TILED=0). Same gate.
-inline bool q4k_gemv_tiled_enabled() {
-    static const bool en = []{
-        const char * e = std::getenv("GGML_OPENCL_Q4K_GEMV_TILED");
-        return !e || e[0] == '\0' || e[0] != '0';
-    }();
-    return en;
+// q4_K analog of the tiled-wide lm_head/embed GEMV (default ON for X2E/A8X;
+// GGML_OPENCL_Q4K_GEMV_TILED forces either way). Same gate.
+inline bool q4k_gemv_tiled_enabled(const ggml_backend_opencl_context *backend_ctx) {
+    static const char * e = std::getenv("GGML_OPENCL_Q4K_GEMV_TILED");
+    if (e && e[0] != '\0') {
+        return e[0] != '0';
+    }
+    return tiled_gemv_default_on(backend_ctx);
 }
-inline bool use_q4k_tiled(const ggml_tensor *tensor) {
-    return q4k_gemv_tiled_enabled() && tensor->type == GGML_TYPE_Q4_K &&
+inline bool use_q4k_tiled(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
+    return q4k_gemv_tiled_enabled(backend_ctx) && tensor->type == GGML_TYPE_Q4_K &&
            tensor->ne[1] >= 32768 && tensor->ne[1] % 64 == 0;
 }
 
@@ -7681,7 +7692,7 @@ inline bool enable_adreno_trans_weight_q5_K(const ggml_backend_opencl_context *b
            qh_img_width <= backend_ctx->image_max_buffer_size;
 }
 
-static inline bool use_flat_gemv_for_large_m_q4_K(const ggml_tensor *tensor) {
+static inline bool use_flat_gemv_for_large_m_q4_K(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
     // gemv_noshuffle variant perf drops for large M, use flat variant for large M.
     // threshold is well above typical hidden/FFN dims, but below typical vocab sizes.
     // note that this forces large M weights to use LM GEMM.
@@ -7689,7 +7700,7 @@ static inline bool use_flat_gemv_for_large_m_q4_K(const ggml_tensor *tensor) {
     // weight is converted to the 64-row tiled layout, which the flat gemv would
     // misread as garbage. use_q4k_tiled owns these large-M weights, so defer to it.
     return tensor->ne[1] >= 32768 && tensor->ne[2] == 1 && tensor->ne[3] == 1
-           && !use_q4k_tiled(tensor);
+           && !use_q4k_tiled(backend_ctx, tensor);
 }
 
 static inline bool use_flat_gemv_for_large_m_q6_K(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
@@ -7701,7 +7712,7 @@ static inline bool use_flat_gemv_for_large_m_q6_K(const ggml_backend_opencl_cont
     // converted to the 64-row tiled layout, which the flat gemv would misread as
     // garbage. use_q6k_tiled owns these large-M weights (it requires ne01 % 64 == 0,
     // so it never claims an odd-vocab weight), so defer to it first.
-    if (use_q6k_tiled(tensor)) {
+    if (use_q6k_tiled(backend_ctx, tensor)) {
         return false;
     }
     // The noshuffle (transposed-weight) layout packs 2 rows per 32-bit texel and the
@@ -9728,7 +9739,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
         // use_adreno_moe_kernels, so it lands here in the general branch. Produce
         // the final 64-row-tiled canonical layout directly into q/d/dm/s (buffer
         // sizes already match), read back by kernel_gemv_noshuffle_q4_k_f32_tiled.
-        if (use_q4k_tiled(tensor)) {
+        if (use_q4k_tiled(backend_ctx, tensor)) {
             cl_kernel tk = backend_ctx->kernel_convert_block_q4_k_tiled_ns;
 
             int ne00 = tensor->ne[0];
@@ -9757,7 +9768,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
         }
 
         cl_kernel kernel = backend_ctx->kernel_convert_block_q4_K;
-        if (use_adreno_kernels(backend_ctx, tensor) && !use_flat_gemv_for_large_m_q4_K(tensor)) {
+        if (use_adreno_kernels(backend_ctx, tensor) && !use_flat_gemv_for_large_m_q4_K(backend_ctx, tensor)) {
             kernel = backend_ctx->kernel_convert_block_q4_K_noshuffle;
         }
 #else
@@ -9785,7 +9796,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
 
         tensor->extra  = extra;
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
-        if (use_adreno_kernels(backend_ctx, tensor) && !use_flat_gemv_for_large_m_q4_K(tensor)) {
+        if (use_adreno_kernels(backend_ctx, tensor) && !use_flat_gemv_for_large_m_q4_K(backend_ctx, tensor)) {
 
             int M = tensor->ne[1];
             int K = tensor->ne[0];
@@ -10118,7 +10129,7 @@ static void ggml_backend_opencl_buffer_set_tensor(ggml_backend_buffer_t buffer, 
         // the final 64-row-tiled canonical layout directly into ql/qh/s/d (buffer
         // sizes already match), read back by kernel_gemv_noshuffle_q6_K_f32_tiled.
         // Bypasses the plain-SOA convert + per-array transpose below.
-        if (use_q6k_tiled(tensor)) {
+        if (use_q6k_tiled(backend_ctx, tensor)) {
             cl_kernel kernel = backend_ctx->kernel_convert_block_q6_k_tiled_ns;
 
             int ne00 = tensor->ne[0];
@@ -10999,7 +11010,7 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, 
             CL_CHECK(clReleaseMemObject(data_device));
             return;
         }
-        if (use_adreno_kernels(backend_ctx, tensor) && !use_flat_gemv_for_large_m_q4_K(tensor)) {
+        if (use_adreno_kernels(backend_ctx, tensor) && !use_flat_gemv_for_large_m_q4_K(backend_ctx, tensor)) {
             int M = tensor->ne[1];
             int K = tensor->ne[0];
 
@@ -18304,7 +18315,7 @@ static void ggml_cl_mul_mat_q4_k_f32_adreno(ggml_backend_t backend, const ggml_t
         cl_mem b_sub_buf = nullptr;
         cl_mem b_img = nullptr;
 
-        const bool use_tiled = !use_mc3 && use_q4k_tiled(src0);
+        const bool use_tiled = !use_mc3 && use_q4k_tiled(backend_ctx, src0);
 
         // image for q (not needed for the tiled path, which reads __global)
         if (!use_tiled) {
@@ -18805,7 +18816,7 @@ static void ggml_cl_mul_mat_q6_K_f32_adreno(ggml_backend_t backend, const ggml_t
     // Batched verify lm_head/embed (ne1==3, tiled layout): multi-column tiled
     // GEMV — streams the large lm_head weight once across the 3 verify columns
     // (the #1 MTP bottleneck; mc3 above can't, it reads the noshuffle layout).
-    const bool use_q6k_tiled_mc = q6k_mc3 && (ne1 == 3) && (ne01 >= 32768) && use_q6k_tiled(src0);
+    const bool use_q6k_tiled_mc = q6k_mc3 && (ne1 == 3) && (ne01 >= 32768) && use_q6k_tiled(backend_ctx, src0);
 
     if (ne1 == 1 || use_q6k_mc3 || use_q6k_tiled_mc) {
         cl_mem ql_img = nullptr;
@@ -18828,7 +18839,7 @@ static void ggml_cl_mul_mat_q6_K_f32_adreno(ggml_backend_t backend, const ggml_t
             const char * e = std::getenv("GGML_OPENCL_Q6K_GEMV_O4_GLOBAL");
             return !e || e[0] == '\0' || e[0] != '0';
         }();
-        const bool use_tiled     = !use_q6k_mc3 && use_q6k_tiled(src0);
+        const bool use_tiled     = !use_q6k_mc3 && use_q6k_tiled(backend_ctx, src0);
         const bool use_o4        = !use_tiled && !use_q6k_mc3 && gemv_o4_env && (ne01 % 4 == 0) && (ne01 >= 32768);
         const bool use_o4_global = use_o4 && o4_global_env;
 
@@ -18907,7 +18918,7 @@ static void ggml_cl_mul_mat_q6_K_f32_adreno(ggml_backend_t backend, const ggml_t
         // the plain noshuffle GEMM below reads it as plain-transposed and produces
         // garbage. Use the batched GEMM that matches the decode tiled GEMV's
         // layout; it reads the f32 activation directly (column-major, no transpose).
-        if (use_q6k_tiled(src0)) {
+        if (use_q6k_tiled(backend_ctx, src0)) {
             cl_mem b_sub_buf_t = nullptr;
             cl_mem b_img_t     = nullptr;
 
@@ -20057,7 +20068,7 @@ static void ggml_cl_mul_mat(ggml_backend_t backend, const ggml_tensor * src0, co
         }
 
         // q4_k x fp32
-        if (src0t == GGML_TYPE_Q4_K && src1t == GGML_TYPE_F32 && !use_flat_gemv_for_large_m_q4_K(src0)) {
+        if (src0t == GGML_TYPE_Q4_K && src1t == GGML_TYPE_F32 && !use_flat_gemv_for_large_m_q4_K(backend_ctx, src0)) {
             ggml_cl_mul_mat_q4_k_f32_adreno(backend, src0, src1, dst);
             return;
         }
