@@ -34,6 +34,10 @@ function escapeCode(code: string): string {
 	return code.replace(AMPERSAND_REGEX, '&amp;').replace(LT_REGEX, '&lt;').replace(GT_REGEX, '&gt;');
 }
 
+/** Bounded cache for highlightCode results. */
+const HIGHLIGHT_CACHE_MAX_SIZE = 64;
+const highlightCache = new Map<string, string>();
+
 /**
  * Highlights code using highlight.js
  * @param code - The code to highlight
@@ -47,23 +51,37 @@ function escapeCode(code: string): string {
 export function highlightCode(code: string, language: string, autoDetect = true): string {
 	if (!code) return '';
 
+	// Cache key includes language and autoDetect flag since results differ.
+	// During streaming, the same code string may be highlighted repeatedly
+	// (e.g., when text after a code block changes but the code itself doesn't).
+	const cacheKey = `${language}:${autoDetect}:${code}`;
+	const cached = highlightCache.get(cacheKey);
+	if (cached) return cached;
+
 	const trimmed = trimCodePadding(code);
+	let result: string;
 
 	try {
 		const lang = language.toLowerCase();
 		const isSupported = hljs.getLanguage(lang);
 
 		if (isSupported) {
-			return hljs.highlight(trimmed, { language: lang }).value;
+			result = hljs.highlight(trimmed, { language: lang }).value;
 		} else if (autoDetect) {
-			return hljs.highlightAuto(trimmed).value;
+			result = hljs.highlightAuto(trimmed).value;
 		} else {
-			return escapeCode(trimmed);
+			result = escapeCode(trimmed);
 		}
 	} catch {
-		// Fallback to escaped plain text
-		return escapeCode(trimmed);
+		result = escapeCode(trimmed);
 	}
+
+	if (highlightCache.size >= HIGHLIGHT_CACHE_MAX_SIZE) {
+		highlightCache.delete(highlightCache.keys().next().value!);
+	}
+	highlightCache.set(cacheKey, result);
+
+	return result;
 }
 
 export { trimCodePadding };

@@ -971,6 +971,9 @@ class GGUFWriter:
     def add_norm_before_residual(self, value: bool) -> None:
         self.add_bool(Keys.LLM.NORM_BEFORE_RESIDUAL.format(arch=self.arch), value)
 
+    def add_norm_before_fc(self, value: bool) -> None:
+        self.add_bool(Keys.LLM.NORM_BEFORE_FC.format(arch=self.arch), value)
+
     def add_attention_output_group_count(self, count: int) -> None:
         self.add_uint32(Keys.Attention.OUTPUT_GROUP_COUNT.format(arch=self.arch), count)
 
@@ -1223,6 +1226,9 @@ class GGUFWriter:
     def add_vision_head_count_kv(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.Attention.HEAD_COUNT_KV, value)
 
+    def add_vision_head_dim(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.Attention.HEAD_DIM, value)
+
     def add_vision_attention_layernorm_eps(self, value: float) -> None:
         self.add_float32(Keys.ClipVision.Attention.LAYERNORM_EPS, value)
 
@@ -1350,8 +1356,29 @@ class GGUFWriter:
     def add_audio_num_mel_bins(self, value: int) -> None:
         self.add_uint32(Keys.ClipAudio.NUM_MEL_BINS, value)
 
+    def add_audio_rvq_num_quantizers(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.RVQ_NUM_QUANTIZERS, value)
+
+    def add_audio_rvq_codebook_size(self, values: Sequence[int]) -> None:
+        self.add_array(Keys.ClipAudio.RVQ_CODEBOOK_SIZE, values)
+
+    def add_audio_wa_pattern_mode(self, modes: Sequence[int]) -> None:
+        self.add_array(Keys.ClipAudio.WA_PATTERN_MODE, modes)
+
+    def add_audio_window_size(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.WINDOW_SIZE, value)
+
+    def add_audio_local_block_count(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.LOCAL_BLOCK_COUNT, value)
+
+    def add_audio_local_group_size(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.LOCAL_GROUP_SIZE, value)
+
     def add_audio_stack_factor(self, value: int) -> None:
         self.add_uint32(Keys.ClipAudio.Projector.STACK_FACTOR, value)
+
+    def add_audio_subsampling_factor(self, value: int) -> None:
+        self.add_uint32(Keys.ClipAudio.SUBSAMPLING_FACTOR, value)
 
     def add_audio_chunk_size(self, value: int) -> None:
         self.add_uint32(Keys.ClipAudio.CHUNK_SIZE, value)
