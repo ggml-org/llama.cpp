@@ -19,4 +19,6 @@ struct llama_expert_heatmap {
     void update(int layer_idx, const int32_t * expert_ids, int n_expert_used, int n_tokens);
     void decay_all();
     void log() const;
+
+    std::vector<int> get_top_s(int layer_idx, int s) const;
 };
