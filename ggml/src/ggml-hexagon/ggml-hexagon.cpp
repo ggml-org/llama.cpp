@@ -66,8 +66,8 @@ using u32vec  = std::vector<uint32_t>;
 #define GGML_HEXAGON_MAX_SESSIONS          16
 #define GGML_HEXAGON_GRAPH_FLUSH_THRESHOLD 16
 
-#define GGML_HEXAGON_TOKEN_BUFFER_SIZE     8192
-#define GGML_HEXAGON_TOKEN_SLOT_SIZE       128
+#define GGML_HEXAGON_FENCE_BUFFER_SIZE     8192
+#define GGML_HEXAGON_FENCE_SLOT_SIZE       128
 
 struct ggml_hexagon_device_config {
     int physical_idx = 0;
@@ -365,7 +365,7 @@ struct ggml_hexagon_session {
 
     void enqueue_op(const htp_opnode & node);
     void enqueue_cpy(const ggml_tensor * src, ggml_tensor * dst, const ggml_tensor * sync_tensor = nullptr);
-    void enqueue_sync(const ggml_tensor * sync_tensor);
+    void enqueue_fence(const ggml_tensor * sync_tensor);
 
     void flush(bool all = true);
     void flush_pending(bool all = false);
@@ -431,8 +431,8 @@ struct ggml_hexagon_shared_buffer {
     ggml_hexagon_session *                     sess;
     std::shared_ptr<ggml_hexagon_rpcmem_block> mem;
     std::vector<ggml_hexagon_tensor_extra *>   tensor_extra;
-    std::vector<uint16_t>                      free_tokens;
-    size_t  extra_size = 0;
+    std::vector<uint16_t>                      fences_free;
+    size_t  fences_size = 0;
     bool    mapped;
     bool    pinned;
 
@@ -441,25 +441,25 @@ struct ggml_hexagon_shared_buffer {
     size_t       size()   const { return mem ? mem->size : 0;  }
     int          fd()     const { return mem ? mem->fd   : -1; }
 
-    uint8_t * alloc_token() {
-        if (free_tokens.empty()) { return nullptr; }
-        uint16_t slot = free_tokens.front();
-        free_tokens.erase(free_tokens.begin());
+    uint8_t * alloc_fence() {
+        if (fences_free.empty()) { return nullptr; }
+        uint16_t slot = fences_free.front();
+        fences_free.erase(fences_free.begin());
 
-        size_t guard_offset = size() - extra_size;
-        uint8_t * token_ptr = base() + guard_offset + (size_t)slot * GGML_HEXAGON_TOKEN_SLOT_SIZE;
+        size_t guard_offset = size() - fences_size;
+        uint8_t * fence_ptr = base() + guard_offset + (size_t)slot * GGML_HEXAGON_FENCE_SLOT_SIZE;
 
-        return token_ptr;
+        return fence_ptr;
     }
 
-    void release_token(void * ptr) {
-        if (extra_size == 0) return;
-        size_t guard_offset = size() - extra_size;
+    void release_fence(void * ptr) {
+        if (fences_size == 0) return;
+        size_t guard_offset = size() - fences_size;
         uintptr_t offset = (uintptr_t)ptr - (uintptr_t)(base() + guard_offset);
-        uint16_t slot = offset / GGML_HEXAGON_TOKEN_SLOT_SIZE;
-        int max_slots = extra_size / GGML_HEXAGON_TOKEN_SLOT_SIZE;
+        uint16_t slot = offset / GGML_HEXAGON_FENCE_SLOT_SIZE;
+        int max_slots = fences_size / GGML_HEXAGON_FENCE_SLOT_SIZE;
         if (slot >= 0 && slot < max_slots) {
-            free_tokens.push_back(slot);
+            fences_free.push_back(slot);
         }
     }
 
@@ -516,36 +516,36 @@ struct ggml_hexagon_shared_buffer {
         this->mem  = nullptr;
     }
 
-    ggml_hexagon_shared_buffer(ggml_hexagon_session * sess, size_t size, bool pinned = false, size_t extra_size = 0) {
-        this->sess       = sess;
-        this->mapped     = false;
-        this->pinned     = pinned;
-        this->extra_size = extra_size;
+    ggml_hexagon_shared_buffer(ggml_hexagon_session * sess, size_t size, bool pinned = false, size_t fence_size = 0) {
+        this->sess        = sess;
+        this->mapped      = false;
+        this->pinned      = pinned;
+        this->fences_size = fence_size;
 
         // Size adjustment inside the buffer class
         size_t guard_offset = (size + 4095) & ~4095;
         size_t total_size = guard_offset;
-        if (extra_size > 0) {
-            total_size += 4096 + extra_size;
+        if (fence_size > 0) {
+            total_size += 4096 + fence_size;
         }
 
         alloc(total_size);
 
-        if (extra_size > 0) {
-            int max_slots = extra_size / GGML_HEXAGON_TOKEN_SLOT_SIZE;
+        if (fence_size > 0) {
+            int max_slots = fence_size / GGML_HEXAGON_FENCE_SLOT_SIZE;
             for (int i = 0; i < max_slots; i++) {
-                free_tokens.push_back(i);
+                fences_free.push_back(i);
             }
         }
     }
 
     // Clone constructor for cross-session mapping
     ggml_hexagon_shared_buffer(ggml_hexagon_session * sess, const ggml_hexagon_shared_buffer & other) {
-        this->sess       = sess;
-        this->mem        = other.mem;
-        this->mapped     = false;
-        this->pinned     = other.pinned;
-        this->extra_size = other.extra_size;
+        this->sess        = sess;
+        this->mem         = other.mem;
+        this->mapped      = false;
+        this->pinned      = other.pinned;
+        this->fences_size = other.fences_size;
     }
 
     ~ggml_hexagon_shared_buffer() {
@@ -1429,7 +1429,7 @@ static ggml_backend_buffer_t ggml_backend_hexagon_buffer_type_alloc_buffer(
             ggml_backend_buffer_type_t buffer_type, size_t size) {
     auto sess = static_cast<ggml_backend_hexagon_buffer_type_context *>(buffer_type->context)->sess;
     try {
-        ggml_hexagon_shared_buffer * sbuf = new ggml_hexagon_shared_buffer(sess, size, false, GGML_HEXAGON_TOKEN_BUFFER_SIZE);
+        ggml_hexagon_shared_buffer * sbuf = new ggml_hexagon_shared_buffer(sess, size, false, GGML_HEXAGON_FENCE_BUFFER_SIZE);
         return ggml_backend_buffer_init(buffer_type, ggml_backend_hexagon_buffer_interface, sbuf, size);
     } catch (const std::exception & exc) {
         GGML_LOG_ERROR("ggml-hex: %s failed to allocate device buffer context: %s\n", sess->c_name(), exc.what());
@@ -1441,7 +1441,7 @@ static ggml_backend_buffer_t ggml_backend_hexagon_host_buffer_type_alloc_buffer(
             ggml_backend_buffer_type_t buffer_type, size_t size) {
     auto sess = static_cast<ggml_backend_hexagon_buffer_type_context *>(buffer_type->context)->sess;
     try {
-        ggml_hexagon_shared_buffer * sbuf = new ggml_hexagon_shared_buffer(sess, size, false, GGML_HEXAGON_TOKEN_BUFFER_SIZE);
+        ggml_hexagon_shared_buffer * sbuf = new ggml_hexagon_shared_buffer(sess, size, false, GGML_HEXAGON_FENCE_BUFFER_SIZE);
         return ggml_backend_buffer_init(buffer_type, ggml_backend_hexagon_host_buffer_interface, sbuf, size);
     } catch (const std::exception & exc) {
         GGML_LOG_ERROR("ggml-hex: %s failed to allocate host buffer context: %s\n", sess->c_name(), exc.what());
@@ -1916,10 +1916,10 @@ struct ggml_hexagon_opqueue {
                 if (opt_profile) {
                     ggml_hexagon_dump_op_prof(shm_buf->sess->name, ops[i], pd[i]);
                 }
-                if (ops[i].opcode == HTP_OP_SYNC) {
+                if (ops[i].opcode == HTP_OP_FENCE) {
                     auto sbuf = static_cast<ggml_hexagon_shared_buffer *>(ops[i].src0()->buffer->context);
-                    void * token_ptr = ops[i].src0()->data;
-                    sbuf->release_token(token_ptr);
+                    void * fence_ptr = ops[i].src0()->data;
+                    sbuf->release_fence(fence_ptr);
                 }
             }
 
@@ -2034,20 +2034,20 @@ void ggml_hexagon_session::enqueue_cpy(const ggml_tensor * src, ggml_tensor * ds
 
     cpy_node.init(node);
     if (sync_tensor) {
-        cpy_node.name = "CPY+SYNC";
+        cpy_node.name = "CPY+FENCE";
     }
     this->enqueue_op(cpy_node);
 }
 
-void ggml_hexagon_session::enqueue_sync(const ggml_tensor * sync_tensor) {
-    htp_opnode sync_node(HTP_OP_SYNC);
+void ggml_hexagon_session::enqueue_fence(const ggml_tensor * sync_tensor) {
+    htp_opnode sync_node(HTP_OP_FENCE);
 
     ggml_tensor* node = sync_node.add_dummy(*sync_tensor);
     node->op     = GGML_OP_NONE;
     node->src[0] = node;
 
     sync_node.init(node);
-    sync_node.name = "SYNC";
+    sync_node.name = "FENCE";
     this->enqueue_op(sync_node);
 }
 
@@ -4426,22 +4426,22 @@ static bool ggml_hexagon_cpy_tensor_async_phys(ggml_backend_t backend_src, ggml_
     auto sbuf_dst = (ggml_hexagon_shared_buffer *) dst->buffer->context;
 
     uint32_t sync_seq = sess_dst->sync_seq++;
-    volatile uint32_t* sync_token;
+    volatile uint32_t* sync_fence;
 
     HEX_VERBOSE("ggml-hex: %s cpy-tensor-async %s -> %s size %zu : seq %u\n",
                 sess_dst->name.c_str(), src->name, dst->name, ggml_nbytes(src), sync_seq);
 
     while (1) {
-        sync_token = (volatile uint32_t*)sbuf_dst->alloc_token();
-        if (sync_token) break;
+        sync_fence = (volatile uint32_t*)sbuf_dst->alloc_fence();
+        if (sync_fence) break;
 
-        // out of sync token slots; flush both sessions to release old tokens
+        // out of sync fence slots; flush both sessions to release old fences
         sess_src->flush(false);
         sess_dst->flush(false);
     }
 
-    sync_token[0] = 0;
-    sync_token[1] = sync_seq;
+    sync_fence[0] = 0;
+    sync_fence[1] = sync_seq;
 
     // dummy extra (must be static)
     static ggml_hexagon_tensor_extra sync_extra { {}, GGML_HEXAGON_TENSOR_WEIGHT };
@@ -4449,7 +4449,7 @@ static bool ggml_hexagon_cpy_tensor_async_phys(ggml_backend_t backend_src, ggml_
     ggml_tensor sync_tensor {};
     sync_tensor.buffer = dst->buffer;
     sync_tensor.extra  = &sync_extra;
-    sync_tensor.data   = (void*) sync_token;
+    sync_tensor.data   = (void*) sync_fence;
     sync_tensor.type   = GGML_TYPE_I32;
     sync_tensor.ne[0]  = 1;
     sync_tensor.ne[1]  = 1;
@@ -4462,7 +4462,7 @@ static bool ggml_hexagon_cpy_tensor_async_phys(ggml_backend_t backend_src, ggml_
     sync_tensor.op     = GGML_OP_NONE;
 
     sess_src->enqueue_cpy(src, dst, &sync_tensor);
-    sess_dst->enqueue_sync(&sync_tensor);
+    sess_dst->enqueue_fence(&sync_tensor);
 
     sess_dst->add_sync_peer(sess_src);
 
