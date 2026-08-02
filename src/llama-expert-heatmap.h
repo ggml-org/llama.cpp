@@ -12,7 +12,7 @@ struct llama_expert_heatmap {
     int hot_s;
     float decay_rate;
     int   log_period;
-    int   update_count;
+    int64_t tokens_total; // real tokens seen (not multiplied by layers)
 
     std::vector<float> heat;
 

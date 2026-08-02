@@ -5,6 +5,7 @@
 #include "ggml-backend.h"
 
 #include <algorithm>
+#include <cinttypes>
 #include <cstdio>
 #include <cmath>
 
@@ -16,7 +17,7 @@ llama_expert_heatmap::llama_expert_heatmap(
     hot_s(hot_s),
     decay_rate(decay_rate),
     log_period(log_period),
-    update_count(0),
+    tokens_total(0),
     heat(n_layers * n_experts, 0.0f) {
 }
 
@@ -33,30 +34,29 @@ void llama_expert_heatmap::update(int layer_idx, const int32_t * expert_ids, int
             }
         }
     }
-
-    update_count++;
-    if (log_period > 0 && update_count % log_period == 0) {
-        log();
-    }
 }
-
 void llama_expert_heatmap::update_from_graph(const std::vector<std::pair<int, ggml_tensor *>> & moe_sel_experts) {
     if (moe_sel_experts.empty()) {
         return;
     }
 
+    int64_t n_tokens = 0;
     for (const auto & [il, tensor] : moe_sel_experts) {
-        int64_t n_expert_used = tensor->ne[0];
-        int64_t n_tokens = tensor->ne[1];
+        n_tokens = tensor->ne[1];
 
         if (!tensor->data) {
             continue;
         }
 
-        std::vector<int32_t> expert_ids(n_expert_used * n_tokens);
+        std::vector<int32_t> expert_ids(tensor->ne[0] * n_tokens);
         ggml_backend_tensor_get(tensor, expert_ids.data(), 0, expert_ids.size() * sizeof(int32_t));
 
-        update(il, expert_ids.data(), n_expert_used, n_tokens);
+        update(il, expert_ids.data(), tensor->ne[0], n_tokens);
+    }
+
+    tokens_total += n_tokens;
+    if (log_period > 0 && tokens_total % log_period == 0) {
+        log();
     }
 }
 
@@ -67,7 +67,7 @@ void llama_expert_heatmap::decay_all() {
 }
 
 void llama_expert_heatmap::log() const {
-    LLAMA_LOG("=== Expert heatmap (update %d) ===\n", update_count);
+    LLAMA_LOG("=== Expert heatmap (tokens %" PRId64 ") ===\n", tokens_total);
 
     for (int l = 0; l < n_layers; l++) {
         const float * layer_heat = heat.data() + l * n_experts;
