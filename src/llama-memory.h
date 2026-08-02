@@ -100,6 +100,9 @@ struct llama_memory_i {
     // getters
     virtual bool get_can_shift() const = 0;
 
+    // position alignment of the memory's deep-rollback tier (1 = no aligned tier)
+    virtual llama_pos get_seq_rm_align() const { return 1; }
+
     //
     // ops
     //

@@ -1455,6 +1455,11 @@ llama_memory_context_ptr llama_kv_cache_dsv4::init_update(llama_context * lctx, 
             std::move(lid_state->sc_info));
 }
 
+llama_pos llama_kv_cache_dsv4::get_seq_rm_align() const {
+    // the aligned deep-rollback tier snapshots at HCA block boundaries
+    return n_rs_aligned > 0 ? (llama_pos) DSV4_HCA_RATIO : 1;
+}
+
 bool llama_kv_cache_dsv4::get_can_shift() const {
     // Compressed row metadata uses block-derived positions. Keep shifting
     // disabled until DSV4 compressed-cache shift semantics are wired.

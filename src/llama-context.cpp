@@ -3981,6 +3981,14 @@ bool llama_memory_can_shift(llama_memory_t mem) {
     return mem->get_can_shift();
 }
 
+llama_pos llama_memory_seq_rm_align(llama_memory_t mem) {
+    if (!mem) {
+        return 1;
+    }
+
+    return mem->get_seq_rm_align();
+}
+
 // llama state API
 
 // deprecated

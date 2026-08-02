@@ -793,6 +793,13 @@ extern "C" {
     // Check if the memory supports shifting
     LLAMA_API bool llama_memory_can_shift(llama_memory_t mem);
 
+    // Position alignment of the memory's deep-rollback tier: in addition to the
+    // bounded per-token tier (see llama_n_rs_seq), partial sequence removal below
+    // the current tip may be requested at positions that are multiples of this
+    // value, subject to snapshot coverage (llama_memory_seq_rm reports acceptance).
+    // Returns 1 when the memory has no aligned deep-rollback tier. [EXPERIMENTAL]
+    LLAMA_API llama_pos llama_memory_seq_rm_align(llama_memory_t mem);
+
     //
     // State / sessions
     //
