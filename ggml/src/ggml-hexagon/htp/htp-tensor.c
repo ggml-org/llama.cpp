@@ -79,7 +79,9 @@ void htp_tensor_dirty_all(struct htp_context * ctx, const struct htp_tensor * co
 
     for (uint32_t i = 0; i < n; i++) {
         const struct htp_tensor * t = tensors[i];
-        if (!t) continue;
+        if (!t || (t->flags & HTP_TENSOR_WEIGHT)) {
+            continue;
+        }
 
         if (t->size <= HEX_L2_FLUSH_IL_THRESHOLD) {
             hex_l2flush((void *) (uintptr_t) t->data, t->size);

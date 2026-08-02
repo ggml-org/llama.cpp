@@ -234,9 +234,10 @@ static void ggml_hexagon_dump_trace_events(const std::string & sess_name, const 
     }
 }
 
-// **
-
-#define GGML_HEXAGON_TENSOR_REPACK 1
+enum ggml_hexagon_tensor_flags {
+    GGML_HEXAGON_TENSOR_REPACK = (1 << 0),
+    GGML_HEXAGON_TENSOR_WEIGHT = (1 << 1),
+};
 
 static inline bool ggml_hexagon_is_repack_type(enum ggml_type type) {
     return type == GGML_TYPE_Q4_0 || type == GGML_TYPE_Q4_1 ||
@@ -1119,9 +1120,11 @@ static void ggml_backend_hexagon_buffer_set_tensor(ggml_backend_buffer_t buffer,
     auto sbuf  = (ggml_hexagon_shared_buffer *) buffer->context;
     auto sess  = sbuf->sess;
 
-    if (ggml_hexagon_is_repack_type(tensor->type) &&
-            ggml_backend_buffer_get_usage(buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
-        extra->flags |= GGML_HEXAGON_TENSOR_REPACK;
+    if (ggml_backend_buffer_get_usage(buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
+        extra->flags |= GGML_HEXAGON_TENSOR_WEIGHT;
+        if (ggml_hexagon_is_repack_type(tensor->type)) {
+            extra->flags |= GGML_HEXAGON_TENSOR_REPACK;
+        }
     }
 
     HEX_VERBOSE("ggml-hex: %s set-tensor %s : data %p offset %zu size %zu usage %d flags 0x%x\n",
@@ -1243,9 +1246,11 @@ static void ggml_backend_hexagon_buffer_set_tensor_2d(ggml_backend_buffer_t buff
     auto sbuf  = (ggml_hexagon_shared_buffer *) buffer->context;
     auto sess  = sbuf->sess;
 
-    if (ggml_hexagon_is_repack_type(tensor->type) &&
-            ggml_backend_buffer_get_usage(buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
-        extra->flags |= GGML_HEXAGON_TENSOR_REPACK;
+    if (ggml_backend_buffer_get_usage(buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
+        extra->flags |= GGML_HEXAGON_TENSOR_WEIGHT;
+        if (ggml_hexagon_is_repack_type(tensor->type)) {
+            extra->flags |= GGML_HEXAGON_TENSOR_REPACK;
+        }
     }
 
     HEX_VERBOSE("ggml-hex: %s set-tensor-2d %s : data %p offset %zu size %zu n_copies %zu stride_tensor %zu stride_data %zu usage %d flags 0x%x\n",
@@ -1656,7 +1661,7 @@ struct ggml_hexagon_opbatch {
         }
 
         h.flags = 0;
-        if (ggml_backend_buffer_get_usage(t->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
+        if ((extra->flags & GGML_HEXAGON_TENSOR_WEIGHT) != 0) {
             h.flags |= HTP_TENSOR_WEIGHT;
         }
         if ((extra->flags & GGML_HEXAGON_TENSOR_REPACK) != 0) {
@@ -4439,7 +4444,7 @@ static bool ggml_hexagon_cpy_tensor_async_phys(ggml_backend_t backend_src, ggml_
     sync_token[1] = sync_seq;
 
     // dummy extra (must be static)
-    static ggml_hexagon_tensor_extra sync_extra { {}, 0 };
+    static ggml_hexagon_tensor_extra sync_extra { {}, GGML_HEXAGON_TENSOR_WEIGHT };
 
     ggml_tensor sync_tensor {};
     sync_tensor.buffer = dst->buffer;
