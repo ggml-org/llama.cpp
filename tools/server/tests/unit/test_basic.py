@@ -63,6 +63,24 @@ def test_server_slots():
     assert "params" not in res.body[0]
 
 
+def test_server_metrics_kv_cache():
+    global server
+    server.server_metrics = True
+    server.n_ctx = 512
+    server.n_slots = 2
+    server.start()
+
+    res = server.make_request("GET", "/metrics")
+    assert res.status_code == 200
+    assert "llamacpp:kv_cache_used_cells" in res.body
+    assert "llamacpp:kv_cache_total_cells" in res.body
+    assert "llamacpp:kv_cache_usage_ratio" in res.body
+
+    total_cells = re.search(r"^llamacpp:kv_cache_total_cells (\d+)$", res.body, re.MULTILINE)
+    assert total_cells is not None
+    assert int(total_cells.group(1)) == server.n_ctx
+
+
 def test_load_split_model():
     global server
     server.offline = False
