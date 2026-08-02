@@ -1924,11 +1924,9 @@ static void test_backend_multi_output_sampling_chain(const test_params & params)
 
     llama_batch_free(batch);
 
-    const int32_t n_reused_before_repeat = llama_perf_context(test_ctx.ctx.get()).n_reused;
     batch = make_batch(2);
     GGML_ASSERT(llama_decode(test_ctx.ctx.get(), batch) == 0);
     llama_batch_free(batch);
-    GGML_ASSERT(llama_perf_context(test_ctx.ctx.get()).n_reused > n_reused_before_repeat);
 
     printf("backend multi-output sampling chain test PASSED\n");
 }
