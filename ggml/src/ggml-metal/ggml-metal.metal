@@ -11279,12 +11279,6 @@ typedef decltype(kernel_count_equal<int32_t>) kernel_count_equal_t;
 
 template [[host_name("kernel_count_equal_i32")]] kernel kernel_count_equal_t kernel_count_equal<int32_t>;
 
-constexpr constant short LI_N_EMBD = 128;
-constexpr constant short LI_N_HEAD = 64;
-constexpr constant short LI_N_KEY_SIMDGROUP = 8;
-constexpr constant short LI_N_SIMDGROUP = 8;
-constexpr constant short LI_N_BATCH_TG = 8;
-
 template<
     typename kd4x4_t,
     short nl_k,
@@ -11296,105 +11290,124 @@ kernel void kernel_lightning_indexer(
         device const char * w,
         device const char * m,
         device       char * dst,
-        uint3   tgpig[[threadgroup_position_in_grid]],
-        ushort  tiitg[[thread_index_in_threadgroup]],
-        ushort  tiisg[[thread_index_in_simdgroup]],
-        ushort  sgitg[[simdgroup_index_in_threadgroup]],
-        ushort3   ntg[[threads_per_threadgroup]]) {
-    constexpr short n_embd8 = LI_N_EMBD/8;
-    constexpr short n_embd16 = LI_N_EMBD/16;
-    constexpr short n_embd4 = LI_N_EMBD/4;
-    constexpr short n_head_tile = 8;
-    constexpr short n_key_tg = LI_N_KEY_SIMDGROUP*LI_N_SIMDGROUP;
+        uint3  tgpig[[threadgroup_position_in_grid]],
+        ushort tiitg[[thread_index_in_threadgroup]],
+        ushort tiisg[[thread_index_in_simdgroup]],
+        ushort sgitg[[simdgroup_index_in_threadgroup]]) {
+    constexpr short DK    = OP_LIGHTNING_INDEXER_DK;
+    constexpr short NH    = OP_LIGHTNING_INDEXER_NH;
+    constexpr short NHPTG = OP_LIGHTNING_INDEXER_NHPTG;
+    constexpr short NKPSG = OP_LIGHTNING_INDEXER_NKPSG;
+    constexpr short NSG   = OP_LIGHTNING_INDEXER_NSG;
+    constexpr short NBPTG = OP_LIGHTNING_INDEXER_NBPTG;
+
+    constexpr short DK4  = DK/4;
+    constexpr short DK8  = DK/8;
+    constexpr short DK16 = DK/16;
+
+    constexpr short NK  = NKPSG*NSG; // keys    per threadgroup
+    constexpr short NTG = 32*NSG;    // threads per threadgroup
 
     const int i_stream = tgpig.z;
-    const int i_kv_0 = tgpig.x*n_key_tg;
-    const int i_kv = i_kv_0 + sgitg*LI_N_KEY_SIMDGROUP;
+    const int i_kv_0   = tgpig.x*NK;            // first key of this threadgroup
+    const int i_kv     = i_kv_0 + sgitg*NKPSG;  // first key of this simdgroup
 
-    threadgroup half k_shared[n_key_tg*LI_N_EMBD];
-    threadgroup half4x4 * k4x4_shared = (threadgroup half4x4 *) k_shared;
+    threadgroup half4x4   sk4x4[NK*DK16];
+    threadgroup half    * sk = (threadgroup half *) sk4x4;
 
-    for (short i = tiitg; i < n_key_tg*n_embd16; i += ntg.x*ntg.y) {
-        const short ik = i/n_embd16;
-        const short i16 = i - ik*n_embd16;
-        const int i_k = i_kv_0 + ik;
+    for (short i = tiitg; i < NK*DK16; i += NTG) {
+        const short ik  = i/DK16;
+        const short i16 = i%DK16;
 
         half4x4 tmp;
-        if (i_k < args.n_kv) {
-            device const kd4x4_t * row = (device const kd4x4_t *) (k + i_k*args.nbk2 + i_stream*args.nbk3);
-            deq_k(row + i16/nl_k, i16%nl_k, tmp);
+
+        if (i_kv_0 + ik < args.n_kv) {
+            device const kd4x4_t * kr = (device const kd4x4_t *) (k + (i_kv_0 + ik)*args.nbk2 + i_stream*args.nbk3);
+
+            deq_k(kr + i16/nl_k, i16%nl_k, tmp);
         } else {
             FOR_UNROLL (short j = 0; j < 4; ++j) {
                 tmp[j] = half4(0.0h);
             }
         }
 
-        k4x4_shared[i] = tmp;
+        sk4x4[i] = tmp;
     }
 
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
-    simdgroup_half8x8 mk[n_embd8];
+    // K tile of this simdgroup, transposed to [DK, NKPSG]
+    simdgroup_half8x8 mk[DK8];
 
-    FOR_UNROLL (short i = 0; i < n_embd8; ++i) {
-        simdgroup_load(mk[i], k_shared + sgitg*LI_N_KEY_SIMDGROUP*LI_N_EMBD + 8*i, LI_N_EMBD, 0, true);
+    FOR_UNROLL (short i = 0; i < DK8; ++i) {
+        simdgroup_load(mk[i], sk + sgitg*NKPSG*DK + 8*i, DK, 0, true);
     }
 
-    threadgroup half  q_shared[n_head_tile*LI_N_EMBD];
-    threadgroup float w_shared[n_head_tile];
-    threadgroup float qk_shared[LI_N_SIMDGROUP*n_head_tile*LI_N_KEY_SIMDGROUP];
+    threadgroup half4   sq4[NHPTG*DK4];
+    threadgroup half  * sq = (threadgroup half *) sq4;
 
-    const int i_batch_0 = tgpig.y*LI_N_BATCH_TG;
-    const int n_batch = min((int) LI_N_BATCH_TG, args.n_batch - i_batch_0);
+    threadgroup float sw [NHPTG];
+    threadgroup float sqk[NSG*NHPTG*NKPSG];
+
+    const int i_batch_0 = tgpig.y*NBPTG;
+    const int n_batch   = min((int) NBPTG, args.n_batch - i_batch_0);
 
     for (short ib = 0; ib < n_batch; ++ib) {
         const int i_batch = i_batch_0 + ib;
-        device const char * q_base = q + i_batch*args.nbq2 + i_stream*args.nbq3;
-        device const char * w_base = w + i_batch*args.nbw1 + i_stream*args.nbw3;
+
+        device const char * pq = q + i_batch*args.nbq2 + i_stream*args.nbq3;
+        device const char * pw = w + i_batch*args.nbw1 + i_stream*args.nbw3;
 
         float score = 0.0f;
 
-        FOR_UNROLL (short i_head = 0; i_head < LI_N_HEAD; i_head += n_head_tile) {
-            for (short i = tiitg; i < n_head_tile*n_embd4; i += ntg.x*ntg.y) {
-                const short ih = i/n_embd4;
-                const short i4 = i - ih*n_embd4;
-                device const float4 * q4 = (device const float4 *) (q_base + (i_head + ih)*args.nbq1);
-                *(threadgroup half4 *) (q_shared + ih*LI_N_EMBD + 4*i4) = half4(q4[i4]);
+        FOR_UNROLL (short i_head = 0; i_head < NH; i_head += NHPTG) {
+            // stage the Q tile [DK, NHPTG] and the (prescaled) head weights
+            for (short i = tiitg; i < NHPTG*DK4; i += NTG) {
+                const short ih = i/DK4;
+                const short i4 = i%DK4;
+
+                device const float4 * q4 = (device const float4 *) (pq + (i_head + ih)*args.nbq1);
+
+                sq4[ih*DK4 + i4] = half4(q4[i4]);
             }
 
-            if (tiitg < n_head_tile) {
-                w_shared[tiitg] = *((device const float *) (w_base + (i_head + tiitg)*sizeof(float)));
+            if (tiitg < NHPTG) {
+                sw[tiitg] = ((device const float *) pw)[i_head + tiitg];
             }
 
             threadgroup_barrier(mem_flags::mem_threadgroup);
 
             simdgroup_float8x8 mqk = make_filled_simdgroup_matrix<float, 8>(0.0f);
 
-            FOR_UNROLL (short i = 0; i < n_embd8; ++i) {
+            FOR_UNROLL (short i = 0; i < DK8; ++i) {
                 simdgroup_half8x8 mq;
-                simdgroup_load(mq, q_shared + 8*i, LI_N_EMBD, 0, false);
+
+                simdgroup_load(mq, sq + 8*i, DK, 0, false);
                 simdgroup_multiply_accumulate(mqk, mq, mk[i], mqk);
             }
 
-            threadgroup float * qk = qk_shared + sgitg*n_head_tile*LI_N_KEY_SIMDGROUP;
-            simdgroup_store(mqk, qk, LI_N_KEY_SIMDGROUP, 0, false);
+            threadgroup float * pqk = sqk + sgitg*NHPTG*NKPSG;
+
+            simdgroup_store(mqk, pqk, NKPSG, 0, false);
             simdgroup_barrier(mem_flags::mem_threadgroup);
 
-            if (tiisg < LI_N_KEY_SIMDGROUP) {
-                FOR_UNROLL (short ih = 0; ih < n_head_tile; ++ih) {
-                    score += max(qk[ih*LI_N_KEY_SIMDGROUP + tiisg], 0.0f)*w_shared[ih];
+            // one lane per key: ReLU, apply the head weight and accumulate over the head tile
+            if (tiisg < NKPSG) {
+                FOR_UNROLL (short ih = 0; ih < NHPTG; ++ih) {
+                    score += max(pqk[ih*NKPSG + tiisg], 0.0f)*sw[ih];
                 }
             }
 
             threadgroup_barrier(mem_flags::mem_threadgroup);
         }
 
-        if (tiisg < LI_N_KEY_SIMDGROUP) {
+        if (tiisg < NKPSG) {
             const int ik = i_kv + tiisg;
             if (ik < args.n_kv) {
-                device const half * mask = (device const half *) (m + i_batch*args.nbm1 + (i_stream % args.mask_ne3)*args.nbm3);
-                device float * out = (device float *) (dst + i_batch*args.nb1 + i_stream*args.nb3);
-                out[ik] = score + float(mask[ik]);
+                device const half  * pm = (device const half  *) (m   + i_batch*args.nbm1 + (i_stream % args.mask_ne3)*args.nbm3);
+                device       float * pd = (device       float *) (dst + i_batch*args.nb1  + i_stream*args.nb3);
+
+                pd[ik] = score + (float) pm[ik];
             }
         }
     }

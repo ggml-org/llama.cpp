@@ -2,6 +2,7 @@
 
 #import "ggml-impl.h"
 #import "ggml-backend-impl.h"
+#import "ggml-metal-impl.h"
 
 #include <Foundation/Foundation.h>
 
@@ -1300,13 +1301,15 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
             }
             return has_simdgroup_mm; // TODO: over-restricted for vec-kernels
         case GGML_OP_LIGHTNING_INDEXER:
+            if (op->src[0]->ne[0] != OP_LIGHTNING_INDEXER_DK ||
+                op->src[0]->ne[1] != OP_LIGHTNING_INDEXER_NH) {
+                return false;
+            }
             if (!has_simdgroup_mm ||
                 op->src[0]->type != GGML_TYPE_F32 ||
                 op->src[2]->type != GGML_TYPE_F32 ||
                 op->src[3]->type != GGML_TYPE_F16 ||
                 op->type         != GGML_TYPE_F32 ||
-                op->src[0]->ne[0] != 128 ||
-                op->src[0]->ne[1] != 64 ||
                 !ggml_is_contiguous_rows(op->src[0]) ||
                 !ggml_is_contiguous_rows(op->src[1]) ||
                 !ggml_is_contiguous_rows(op->src[2]) ||
