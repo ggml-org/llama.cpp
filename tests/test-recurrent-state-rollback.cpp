@@ -414,6 +414,94 @@ static bool case_failed_decode_lifecycle(
     return ok;
 }
 
+// e) state save with an aligned rollback pending: sequence state is sized and
+//    saved while the marker is armed (the server prompt-cache does this on
+//    every task start); states without aligned planes must degrade to their
+//    live plane instead of failing the save, and the saved state must restore
+//    reference-equal
+static bool case_aligned_pending_state_save(
+        const common_params & params, llama_model * model, const std::vector<llama_token> & tokens, uint32_t n_vocab) {
+    const char * label = "case_aligned_pending_state_save";
+
+    pos_logits ref;
+    if (!build_reference(params, model, tokens, 8, 512, 1024, 256, 256, 300, ref, n_vocab)) {
+        fprintf(stderr, "%s: failed to build reference\n", label);
+        return false;
+    }
+
+    llama_context * ctx_src = make_deep_ctx(params, model, 8, 512, 1024);
+    llama_context * ctx_dst = make_deep_ctx(params, model, 8, 512, 1024);
+    if (ctx_src == nullptr || ctx_dst == nullptr) {
+        fprintf(stderr, "%s: failed to create contexts\n", label);
+        return false;
+    }
+
+    bool ok = decode_tokens(ctx_src, tokens, 256) && decode_singles(ctx_src, tokens, 256, 306, nullptr, n_vocab);
+    if (!ok) {
+        fprintf(stderr, "%s: initial decode failed\n", label);
+        llama_free(ctx_src);
+        llama_free(ctx_dst);
+        return false;
+    }
+
+    if (!llama_memory_seq_rm(llama_get_memory(ctx_src), 0, 256, -1)) {
+        fprintf(stderr, "%s: aligned deep rollback to position 256 was refused\n", label);
+        llama_free(ctx_src);
+        llama_free(ctx_dst);
+        return false;
+    }
+
+    if (llama_state_seq_get_size(ctx_src, 0) == 0) {
+        fprintf(stderr, "%s: state size query failed with an aligned rollback pending\n", label);
+        llama_free(ctx_src);
+        llama_free(ctx_dst);
+        return false;
+    }
+
+    common_prompt_checkpoint ckpt;
+    ckpt.update_tgt(ctx_src, 0, 0);
+    ckpt.load_tgt(ctx_dst, 0, 0);
+    llama_free(ctx_src);
+
+    pos_logits got;
+    ok = decode_singles(ctx_dst, tokens, 256, 300, &got, n_vocab);
+    if (!ok) {
+        fprintf(stderr, "%s: replay decode failed after state restore\n", label);
+        llama_free(ctx_dst);
+        return false;
+    }
+
+    // The save/load round trip repacks memory cells, which changes attention
+    // reduction order; the resulting drift is ~5e-5 at this context length and
+    // hits the pre-existing per-token save path equally (measured 2.4e-5 on the
+    // same prompt), so this case uses a round-trip tolerance instead of the
+    // in-place eps. Real state corruption measures ~1e-3 even on far shorter
+    // contexts, an order of magnitude above this tolerance.
+    constexpr float roundtrip_eps = 2e-4f;
+    ok = !got.empty();
+    for (const auto & [pos, row] : got) {
+        const auto it = ref.find(pos);
+        if (it == ref.end()) {
+            fprintf(stderr, "%s: no reference logits at position %d\n", label, pos);
+            ok = false;
+            break;
+        }
+        for (size_t tok = 0; tok < row.size(); ++tok) {
+            if (std::fabs(it->second[tok] - row[tok]) > roundtrip_eps) {
+                fprintf(stderr, "%s: logits mismatch at position %d, token %zu (%g != %g)\n",
+                        label, pos, tok, (double) it->second[tok], (double) row[tok]);
+                ok = false;
+                break;
+            }
+        }
+        if (!ok) {
+            break;
+        }
+    }
+    llama_free(ctx_dst);
+    return ok;
+}
+
 static int run_deep_rollback_cases(const common_params & params, llama_model * model, uint32_t n_vocab) {
     char arch[64] = {0};
     if (llama_model_meta_val_str(model, "general.architecture", arch, sizeof(arch)) < 0 ||
@@ -437,6 +525,7 @@ static int run_deep_rollback_cases(const common_params & params, llama_model * m
         { "stacked-rollback",        case_stacked_rollback },
         { "failed-decode-lifecycle", case_failed_decode_lifecycle },
         { "uncovered-depth",         case_uncovered_depth },
+        { "aligned-pending-state-save", case_aligned_pending_state_save },
     };
 
     int n_failed = 0;
