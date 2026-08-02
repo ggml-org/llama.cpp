@@ -477,6 +477,23 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_soft_max(ggml_me
     return res;
 }
 
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_soft_max_back(ggml_metal_library_t lib, const ggml_tensor * op) {
+    GGML_ASSERT(op->op == GGML_OP_SOFT_MAX_BACK);
+    GGML_ASSERT(op->src[0]->type == GGML_TYPE_F32);
+    GGML_ASSERT(op->src[1]->type == GGML_TYPE_F32);
+
+    const char * base = "kernel_soft_max_back_f32";
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, base);
+    if (!res.pipeline) {
+        res = ggml_metal_library_compile_pipeline(lib, base, base, nullptr);
+    }
+
+    res.smem = 32*sizeof(float);
+
+    return res;
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_ssm_conv(ggml_metal_library_t lib, const ggml_tensor * op) {
     GGML_ASSERT(op->src[0]->type == GGML_TYPE_F32);
     GGML_ASSERT(op->src[1]->type == GGML_TYPE_F32);

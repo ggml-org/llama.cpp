@@ -2168,6 +2168,49 @@ template [[host_name("kernel_soft_max_f32")]]   kernel kernel_soft_max_t   kerne
 template [[host_name("kernel_soft_max_f16_4")]] kernel kernel_soft_max_4_t kernel_soft_max_4<half4>;
 template [[host_name("kernel_soft_max_f32_4")]] kernel kernel_soft_max_4_t kernel_soft_max_4<float4>;
 
+kernel void kernel_soft_max_back_f32(
+        constant ggml_metal_kargs_soft_max_back & args,
+        device const char * src0,
+        device const char * src1,
+        device       char * dst,
+        threadgroup float * buf [[threadgroup(0)]],
+        uint3  tgpig[[threadgroup_position_in_grid]],
+        uint3  tpitg[[thread_position_in_threadgroup]],
+        uint  sgitg[[simdgroup_index_in_threadgroup]],
+        uint  tiisg[[thread_index_in_simdgroup]],
+        uint3   ntg[[threads_per_threadgroup]]) {
+    device const float * grad = (device const float *) (src0 + tgpig.x*args.nb01 + tgpig.y*args.nb02 + tgpig.z*args.nb03);
+    device const float * y    = (device const float *) (src1 + tgpig.x*args.nb11 + tgpig.y*args.nb12 + tgpig.z*args.nb13);
+    device       float * dx   = (device       float *) (dst  + tgpig.x*args.nb1  + tgpig.y*args.nb2  + tgpig.z*args.nb3);
+
+    float dot = 0.0f;
+    for (int i00 = tpitg.x; i00 < args.ne00; i00 += ntg.x) {
+        dot += y[i00]*grad[i00];
+    }
+
+    dot = simd_sum(dot);
+
+    if (ntg.x > N_SIMDWIDTH) {
+        if (sgitg == 0) {
+            buf[tiisg] = 0.0f;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        if (tiisg == 0) {
+            buf[sgitg] = dot;
+        }
+
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        dot = simd_sum(buf[tiisg]);
+    }
+
+    for (int i00 = tpitg.x; i00 < args.ne00; i00 += ntg.x) {
+        dx[i00] = args.scale*y[i00]*(grad[i00] - dot);
+    }
+}
+
 // ref: ggml.c:ggml_compute_forward_ssm_conv_f32
 kernel void kernel_ssm_conv_f32_f32(
         constant ggml_metal_kargs_ssm_conv & args,
