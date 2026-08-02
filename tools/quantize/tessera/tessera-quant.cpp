@@ -670,17 +670,16 @@ float ts_awq_scale_search(const float * weights, const float * act_scales,
                 diffrow[c] = drow[c] / scale[c] - wrow[c];
             }
         }
-        // importance-weighted MSE: mean( diff^2 * act^2 ). diff^2 * act^2 is an
-        // elementwise mul followed by a sum; vDSP dispatches both.
+        // importance-weighted MSE: mean( diff^2 * act^2 ).
         float err_sum = 0.0f;
         const int64_t mn = R * in_dim;
 #if defined(__APPLE__)
-        // Square `diff` in place, multiply by act^2, then sum. vDSP_vmul +
-        // vDSP_sves (sum of vector elements, not in older SDKs) - use vDSP_vmul
-        // into a scratch then vDSP_sve.
+        // Square diff in place, then multiply by act^2, then sum.
+        // vDSP_vmul(a, a, a) computes a*a elementwise (in-place squaring).
         static thread_local std::vector<float> scratch;
         if ((int64_t)scratch.size() < mn) scratch.resize((size_t)mn);
-        vDSP_vmul(diff.data(), 1, act2.data(), 1, scratch.data(), 1, (vDSP_Length)mn);
+        vDSP_vmul(diff.data(), 1, diff.data(), 1, scratch.data(), 1, (vDSP_Length)mn);
+        vDSP_vmul(scratch.data(), 1, act2.data(), 1, scratch.data(), 1, (vDSP_Length)mn);
         vDSP_sve(scratch.data(), 1, &err_sum, (vDSP_Length)mn);
 #else
         double err = 0.0;
