@@ -1274,9 +1274,11 @@ llama_model_deepseek4::graph::graph(const llama_model & model, const llm_graph_p
     res->t_embd = cur;
 
     cur = ggml_mul_mat(ctx0, model.output, cur);
-    if (model.is_tensor_parallel_output_head(model.output)) {
-        // The output head is split over its input dimension in tensor mode;
-        // mark the partial logits for the required FP32 allreduce.
+    if (model.is_tensor_parallel_output_head(model.output) &&
+            !model.is_tensor_parallel_output_head_vocab_sharded(model.output)) {
+        // Input-dimension sharding produces partial logits requiring an FP32
+        // allreduce. Vocabulary sharding leaves logits partitioned for the
+        // meta buffer to reassemble when CPU sampling reads them.
         cur->flags |= GGML_TENSOR_FLAG_FORCE_FP32_ALLREDUCE;
     }
     cb(cur, "result_output", -1);

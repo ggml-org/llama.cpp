@@ -670,6 +670,7 @@ struct llama_model {
     llama_split_mode split_mode() const;
 
     bool is_tensor_parallel_output_head(const ggml_tensor * tensor) const;
+    bool is_tensor_parallel_output_head_vocab_sharded(const ggml_tensor * tensor) const;
 
     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const;
 
