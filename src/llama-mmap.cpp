@@ -63,6 +63,16 @@ static std::string llama_format_win_err(DWORD err) {
 }
 #endif
 
+static thread_local bool llama_mmap_writable = false;
+
+bool llama_mmap_get_writable() {
+    return llama_mmap_writable;
+}
+
+void llama_mmap_set_writable(bool writable) {
+    llama_mmap_writable = writable;
+}
+
 // llama_file
 
 struct llama_file::impl {
@@ -445,7 +455,14 @@ struct llama_mmap::impl {
     impl(struct llama_file * file, size_t prefetch, bool numa) {
         size = file->size();
         int fd = file->file_id();
+#ifdef __linux__
+        const bool writable = llama_mmap_get_writable();
+        int flags = writable ? MAP_PRIVATE : MAP_SHARED;
+        int protection = writable ? PROT_READ | PROT_WRITE : PROT_READ;
+#else
         int flags = MAP_SHARED;
+        int protection = PROT_READ;
+#endif
         if (numa) { prefetch = 0; }
 #ifdef __linux__
         if (posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL)) {
@@ -454,7 +471,7 @@ struct llama_mmap::impl {
         }
         if (prefetch) { flags |= MAP_POPULATE; }
 #endif
-        addr = mmap(NULL, file->size(), PROT_READ, flags, fd, 0);
+        addr = mmap(NULL, file->size(), protection, flags, fd, 0);
         if (addr == MAP_FAILED) {
             throw std::runtime_error(format("mmap failed: %s", strerror(errno)));
         }

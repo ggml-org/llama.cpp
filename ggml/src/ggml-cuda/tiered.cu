@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -57,23 +58,30 @@ struct host_registration {
     bool owned = false;
 };
 
-struct sparse_mapping {
-    CUdeviceptr address = 0;
-    size_t size = 0;
-    CUmemGenericAllocationHandle handle = 0;
+struct expert_cache_slot {
+    int32_t expert = -1;
+    uint64_t last_hit_epoch = 0;
+    size_t device_offset = 0;
+};
+
+struct expert_cache_state {
+    size_t slot_size = 0;
+    std::vector<uint16_t> heat;
+    std::vector<expert_cache_slot> slots;
 };
 
 struct tensor_state {
     ggml_cuda_tiered_memory_tier tier = GGML_CUDA_TIERED_MEMORY_VRAM;
     void * host_ptr = nullptr;
     void * device_ptr = nullptr;
+    bool host_ptr_owned = false;
     size_t size = 0;
     size_t alloc_size = 0;
 
     CUdeviceptr sparse_address = 0;
     size_t sparse_size = 0;
     size_t sparse_granularity = 0;
-    std::vector<sparse_mapping> active_mappings;
+    std::unique_ptr<expert_cache_state> cache;
 };
 
 struct tiered_buffer_context {
@@ -82,8 +90,22 @@ struct tiered_buffer_context {
     size_t address_space_size = 0;
     std::shared_ptr<tiered_plan> plan;
     std::unordered_map<const ggml_tensor *, std::unique_ptr<tensor_state>> tensors;
-    std::vector<ggml_tensor *> all_tensors;
     std::vector<host_registration> registrations;
+    void * expert_staging = nullptr;
+    size_t expert_staging_size = 0;
+    void * expert_cache = nullptr;
+    size_t expert_cache_size = 0;
+    bool expert_cache_initialized = false;
+    uint64_t cache_epoch = 0;
+    uint64_t cache_requests = 0;
+    uint64_t cache_hits = 0;
+    uint64_t cache_hit_bytes = 0;
+    uint64_t cache_miss_bytes = 0;
+    uint64_t cache_h2d_bytes = 0;
+    uint64_t cache_d2d_bytes = 0;
+    uint64_t cache_admissions = 0;
+    uint64_t cache_evictions = 0;
+    std::mutex compute_mutex;
 };
 
 struct tiered_buffer_type_context {
@@ -153,7 +175,8 @@ static tiered_buffer_context * buffer_context(const ggml_tensor * tensor) {
         return nullptr;
     }
     const char * name = ggml_backend_buft_name(buffer->buft);
-    if (!name || std::strncmp(name, "CUDA_TIERED", 12) != 0) {
+    constexpr char prefix[] = "CUDA_TIERED";
+    if (!name || std::strncmp(name, prefix, sizeof(prefix) - 1) != 0) {
         return nullptr;
     }
     return static_cast<tiered_buffer_context *>(buffer->context);
@@ -183,17 +206,7 @@ static void add_registration(tiered_buffer_context * ctx, uintptr_t begin, uintp
 }
 
 static cudaError_t register_host_range(void * ptr, size_t size) {
-    const unsigned int base_flags = cudaHostRegisterPortable | cudaHostRegisterMapped;
-#if CUDART_VERSION >= 11010
-    cudaError_t status = cudaHostRegister(ptr, size, base_flags | cudaHostRegisterReadOnly);
-    if (status == cudaErrorNotSupported) {
-        (void) cudaGetLastError();
-        status = cudaHostRegister(ptr, size, base_flags);
-    }
-    return status;
-#else
-    return cudaHostRegister(ptr, size, base_flags);
-#endif
+    return cudaHostRegister(ptr, size, cudaHostRegisterPortable | cudaHostRegisterMapped);
 }
 
 static void ensure_registered(tiered_buffer_context * ctx, void * ptr, size_t size) {
@@ -239,6 +252,46 @@ static void ensure_registered(tiered_buffer_context * ctx, void * ptr, size_t si
             TIERED_CUDA_CHECK(status);
             add_registration(ctx, cursor, wanted_end, true);
         }
+    }
+}
+
+static void copy_host_to_device(tiered_buffer_context * ctx, void * dst, const void * src, size_t size) {
+    if (size == 0) {
+        return;
+    }
+
+    const uintptr_t begin = reinterpret_cast<uintptr_t>(src);
+    const uintptr_t end = begin + size;
+    if (end < begin) {
+        throw std::runtime_error("host-to-device copy range overflow");
+    }
+
+    std::vector<uintptr_t> cuts = { begin, end };
+    for (const auto & registration : ctx->registrations) {
+        if (registration.end <= begin) {
+            continue;
+        }
+        if (registration.begin >= end) {
+            break;
+        }
+        if (registration.begin > begin && registration.begin < end) {
+            cuts.push_back(registration.begin);
+        }
+        if (registration.end > begin && registration.end < end) {
+            cuts.push_back(registration.end);
+        }
+    }
+
+    std::sort(cuts.begin(), cuts.end());
+    cuts.erase(std::unique(cuts.begin(), cuts.end()), cuts.end());
+    for (size_t i = 1; i < cuts.size(); ++i) {
+        const size_t offset = cuts[i - 1] - begin;
+        const size_t copy_size = cuts[i] - cuts[i - 1];
+        TIERED_CUDA_CHECK(cudaMemcpy(
+                static_cast<char *>(dst) + offset,
+                reinterpret_cast<const void *>(cuts[i - 1]),
+                copy_size,
+                cudaMemcpyHostToDevice));
     }
 }
 
@@ -293,11 +346,6 @@ static void init_sparse_tensor(tiered_buffer_context * ctx, ggml_tensor * tensor
 
 static void free_sparse_tensor(tensor_state * state) {
 #if !defined(GGML_CUDA_NO_VMM)
-    for (const auto & mapping : state->active_mappings) {
-        (void) cuMemUnmap(mapping.address, mapping.size);
-        (void) cuMemRelease(mapping.handle);
-    }
-    state->active_mappings.clear();
     if (state->sparse_address) {
         (void) cuMemAddressFree(state->sparse_address, state->sparse_size);
         state->sparse_address = 0;
@@ -307,117 +355,392 @@ static void free_sparse_tensor(tensor_state * state) {
 #endif
 }
 
-static void stage_sparse_experts(tiered_buffer_context * ctx, const ggml_tensor * tensor, tensor_state * state, const ggml_tensor * ids) {
-#if defined(GGML_CUDA_NO_VMM)
-    GGML_UNUSED(ctx);
-    GGML_UNUSED(tensor);
-    GGML_UNUSED(state);
-    GGML_UNUSED(ids);
-    throw std::runtime_error("tiered SSD streaming requires CUDA VMM support");
-#else
-    if (!state->active_mappings.empty()) {
-        throw std::runtime_error("tiered SSD tensor already has active mappings");
+static void disable_expert_cache(tiered_buffer_context * ctx) {
+    for (auto & entry : ctx->tensors) {
+        entry.second->cache.reset();
     }
+    if (ctx->expert_cache) {
+        (void) cudaFree(ctx->expert_cache);
+        ctx->expert_cache = nullptr;
+    }
+    ctx->expert_cache_size = 0;
+}
+
+static void initialize_expert_cache(tiered_buffer_context * ctx) {
+    if (ctx->expert_cache_initialized) {
+        return;
+    }
+    ctx->expert_cache_initialized = true;
+
+    const size_t budget = ctx->plan->options.ssd_cache_bytes;
+    if (budget == 0) {
+        return;
+    }
+
+    struct cache_candidate {
+        ggml_tensor * tensor = nullptr;
+        tensor_state * state = nullptr;
+        size_t slot_size = 0;
+        size_t n_slots = 0;
+    };
+
+    try {
+        std::vector<cache_candidate> candidates;
+        for (auto & entry : ctx->tensors) {
+            ggml_tensor * tensor = const_cast<ggml_tensor *>(entry.first);
+            tensor_state * state = entry.second.get();
+            if (state->tier == GGML_CUDA_TIERED_MEMORY_VRAM ||
+                    !state->host_ptr || !is_ssd_eligible(tensor) ||
+                    tensor->ne[2] <= 1 || tensor->ne[3] != 1 ||
+                    state->size != ggml_nbytes(tensor)) {
+                continue;
+            }
+
+            const size_t guard = std::min<size_t>(tensor->nb[2], 512);
+            if (tensor->nb[2] > std::numeric_limits<size_t>::max() - guard) {
+                continue;
+            }
+            const size_t raw_slot_size = tensor->nb[2] + guard;
+            if (raw_slot_size > std::numeric_limits<size_t>::max() - 255) {
+                continue;
+            }
+            candidates.push_back({ tensor, state, align_up_size(raw_slot_size, 256), 0 });
+        }
+
+        std::sort(candidates.begin(), candidates.end(), [](const cache_candidate & lhs, const cache_candidate & rhs) {
+            return std::strcmp(lhs.tensor->name, rhs.tensor->name) < 0;
+        });
+
+        size_t used = 0;
+        bool made_progress = true;
+        while (made_progress) {
+            made_progress = false;
+            for (cache_candidate & candidate : candidates) {
+                if (candidate.n_slots >= static_cast<size_t>(candidate.tensor->ne[2]) ||
+                        candidate.slot_size > budget - used) {
+                    continue;
+                }
+                ++candidate.n_slots;
+                used += candidate.slot_size;
+                made_progress = true;
+            }
+        }
+
+        if (used == 0) {
+            GGML_LOG_WARN("tiered-memory: expert cache budget %.2f MiB is too small for one slot\n",
+                    budget / 1024.0 / 1024.0);
+            return;
+        }
+
+        set_device(ctx->device);
+        const cudaError_t allocation_status = cudaMalloc(&ctx->expert_cache, used);
+        if (allocation_status != cudaSuccess) {
+            GGML_LOG_WARN("tiered-memory: could not allocate %.2f MiB expert cache (%s); cache disabled\n",
+                    used / 1024.0 / 1024.0, cudaGetErrorString(allocation_status));
+            (void) cudaGetLastError();
+            ctx->expert_cache = nullptr;
+            return;
+        }
+        ctx->expert_cache_size = used;
+
+        struct prepared_cache {
+            tensor_state * state = nullptr;
+            std::unique_ptr<expert_cache_state> cache;
+        };
+        std::vector<prepared_cache> prepared;
+        size_t offset = 0;
+        size_t total_slots = 0;
+        for (const cache_candidate & candidate : candidates) {
+            if (candidate.n_slots == 0) {
+                continue;
+            }
+            auto cache = std::make_unique<expert_cache_state>();
+            cache->slot_size = candidate.slot_size;
+            cache->heat.resize(static_cast<size_t>(candidate.tensor->ne[2]), 0);
+            cache->slots.resize(candidate.n_slots);
+            for (expert_cache_slot & slot : cache->slots) {
+                slot.device_offset = offset;
+                offset += candidate.slot_size;
+            }
+            total_slots += candidate.n_slots;
+            prepared.push_back({ candidate.state, std::move(cache) });
+        }
+
+        for (prepared_cache & item : prepared) {
+            item.state->cache = std::move(item.cache);
+        }
+
+        GGML_LOG_INFO("tiered-memory: expert cache %.2f/%.2f MiB, %zu slots across %zu tensors\n",
+                used / 1024.0 / 1024.0,
+                budget / 1024.0 / 1024.0,
+                total_slots,
+                prepared.size());
+    } catch (const std::exception & error) {
+        disable_expert_cache(ctx);
+        GGML_LOG_WARN("tiered-memory: expert cache initialization failed (%s); cache disabled\n", error.what());
+    }
+}
+
+static void expert_slab_range(
+        const ggml_tensor * tensor,
+        const tensor_state * state,
+        size_t tensor_offset,
+        int32_t expert,
+        size_t * slab_begin,
+        size_t * slab_end) {
+    *slab_begin = tensor_offset + static_cast<size_t>(expert) * tensor->nb[2];
+    *slab_end = tensor_offset + static_cast<size_t>(expert + 1) * tensor->nb[2];
+    if (expert < tensor->ne[2] - 1) {
+        *slab_end += std::min<size_t>(tensor->nb[2], 512);
+    }
+    *slab_end = std::min(state->size, *slab_end);
+    if (*slab_begin >= *slab_end || *slab_end > state->size) {
+        throw std::runtime_error("MUL_MAT_ID expert slab exceeds its base tensor");
+    }
+}
+
+static bool stage_cached_experts(
+        tiered_buffer_context * ctx,
+        const ggml_tensor * tensor,
+        tensor_state * state,
+        size_t tensor_offset,
+        const std::vector<int32_t> & ranked_ids,
+        const std::vector<int32_t> & sorted_ids,
+        size_t ids_per_row,
+        size_t n_rows) {
+    expert_cache_state * cache = state->cache.get();
+    if (!cache || n_rows != 1 || tensor_offset != 0 || tensor->view_src || tensor->ne[3] != 1 ||
+            cache->heat.size() != static_cast<size_t>(tensor->ne[2])) {
+        return false;
+    }
+
+    for (uint16_t & value : cache->heat) {
+        value = static_cast<uint16_t>((static_cast<uint32_t>(value) * 7) / 8);
+    }
+    for (size_t rank = 0; rank < ranked_ids.size(); ++rank) {
+        const size_t row_rank = rank % ids_per_row;
+        const uint64_t increment = static_cast<uint64_t>(ids_per_row - row_rank) * 8;
+        uint16_t & value = cache->heat[static_cast<size_t>(ranked_ids[rank])];
+        value = static_cast<uint16_t>(std::min<uint64_t>(
+                std::numeric_limits<uint16_t>::max(), static_cast<uint64_t>(value) + increment));
+    }
+
+    if (++ctx->cache_epoch == 0) {
+        ++ctx->cache_epoch;
+    }
+
+    struct cache_miss {
+        int32_t expert = -1;
+        size_t slab_begin = 0;
+        size_t copy_size = 0;
+    };
+    std::vector<cache_miss> misses;
+    std::vector<uint8_t> protected_slots(cache->slots.size(), 0);
+
+    for (const int32_t expert : sorted_ids) {
+        size_t slab_begin = 0;
+        size_t slab_end = 0;
+        expert_slab_range(tensor, state, tensor_offset, expert, &slab_begin, &slab_end);
+        const size_t copy_size = slab_end - slab_begin;
+        ++ctx->cache_requests;
+
+        size_t hit_slot = cache->slots.size();
+        for (size_t slot_index = 0; slot_index < cache->slots.size(); ++slot_index) {
+            if (cache->slots[slot_index].expert == expert) {
+                hit_slot = slot_index;
+                break;
+            }
+        }
+
+        if (hit_slot != cache->slots.size()) {
+            expert_cache_slot & slot = cache->slots[hit_slot];
+            TIERED_CUDA_CHECK(cudaMemcpy(
+                    static_cast<char *>(ctx->expert_staging) + slab_begin,
+                    static_cast<const char *>(ctx->expert_cache) + slot.device_offset,
+                    copy_size,
+                    cudaMemcpyDeviceToDevice));
+            slot.last_hit_epoch = ctx->cache_epoch;
+            protected_slots[hit_slot] = 1;
+            ++ctx->cache_hits;
+            ctx->cache_hit_bytes += copy_size;
+            ctx->cache_d2d_bytes += copy_size;
+        } else {
+            copy_host_to_device(ctx,
+                    static_cast<char *>(ctx->expert_staging) + slab_begin,
+                    static_cast<const char *>(state->host_ptr) + slab_begin,
+                    copy_size);
+            misses.push_back({ expert, slab_begin, copy_size });
+            ctx->cache_miss_bytes += copy_size;
+            ctx->cache_h2d_bytes += copy_size;
+        }
+    }
+
+    std::sort(misses.begin(), misses.end(), [&](const cache_miss & lhs, const cache_miss & rhs) {
+        const uint16_t lhs_heat = cache->heat[static_cast<size_t>(lhs.expert)];
+        const uint16_t rhs_heat = cache->heat[static_cast<size_t>(rhs.expert)];
+        return lhs_heat != rhs_heat ? lhs_heat > rhs_heat : lhs.expert < rhs.expert;
+    });
+
+    for (const cache_miss & miss : misses) {
+        size_t victim = cache->slots.size();
+        for (size_t slot_index = 0; slot_index < cache->slots.size(); ++slot_index) {
+            const expert_cache_slot & slot = cache->slots[slot_index];
+            if (protected_slots[slot_index]) {
+                continue;
+            }
+            if (slot.expert < 0) {
+                victim = slot_index;
+                break;
+            }
+            if (victim == cache->slots.size()) {
+                victim = slot_index;
+                continue;
+            }
+            const expert_cache_slot & current = cache->slots[victim];
+            const uint16_t slot_heat = cache->heat[static_cast<size_t>(slot.expert)];
+            const uint16_t current_heat = cache->heat[static_cast<size_t>(current.expert)];
+            if (slot_heat < current_heat ||
+                    (slot_heat == current_heat && slot.last_hit_epoch < current.last_hit_epoch)) {
+                victim = slot_index;
+            }
+        }
+
+        if (victim == cache->slots.size()) {
+            continue;
+        }
+        expert_cache_slot & slot = cache->slots[victim];
+        if (slot.expert >= 0 &&
+                cache->heat[static_cast<size_t>(miss.expert)] <= cache->heat[static_cast<size_t>(slot.expert)]) {
+            continue;
+        }
+
+        TIERED_CUDA_CHECK(cudaMemcpy(
+                static_cast<char *>(ctx->expert_cache) + slot.device_offset,
+                static_cast<const char *>(ctx->expert_staging) + miss.slab_begin,
+                miss.copy_size,
+                cudaMemcpyDeviceToDevice));
+        if (slot.expert >= 0) {
+            ++ctx->cache_evictions;
+        }
+        slot.expert = miss.expert;
+        slot.last_hit_epoch = ctx->cache_epoch;
+        protected_slots[victim] = 1;
+        ++ctx->cache_admissions;
+        ctx->cache_d2d_bytes += miss.copy_size;
+    }
+
+    return true;
+}
+
+static void * stage_tiered_experts(tiered_buffer_context * ctx, const ggml_tensor * tensor, tensor_state * state, const ggml_tensor * ids) {
     if (!ids || ids->type != GGML_TYPE_I32) {
         throw std::runtime_error("MUL_MAT_ID expert ids must be I32");
     }
 
-    std::vector<int32_t> host_ids(static_cast<size_t>(ggml_nelements(ids)));
-    ggml_backend_tensor_get(ids, host_ids.data(), 0, ggml_nbytes(ids));
+    if (ids->ne[0] <= 0 || ids->ne[1] <= 0 || ids->ne[2] != 1 || ids->ne[3] != 1 || ids->nb[0] != sizeof(int32_t)) {
+        throw std::runtime_error("MUL_MAT_ID expert ids have an unsupported layout");
+    }
+
+    const size_t ids_per_row = static_cast<size_t>(ids->ne[0]);
+    const size_t n_rows = static_cast<size_t>(ids->ne[1]);
+    if (ids_per_row > std::numeric_limits<size_t>::max() / sizeof(int32_t) ||
+            n_rows > std::numeric_limits<size_t>::max() / ids_per_row) {
+        throw std::runtime_error("MUL_MAT_ID expert ids size overflow");
+    }
+    const size_t row_size = ids_per_row * sizeof(int32_t);
+    if (ids->nb[1] < row_size) {
+        throw std::runtime_error("MUL_MAT_ID expert ids have an invalid row stride");
+    }
+
+    std::vector<int32_t> ranked_ids(ids_per_row * n_rows);
+    ggml_backend_tensor_get_2d(ids, ranked_ids.data(), 0, row_size, n_rows, ids->nb[1], row_size);
 
     size_t tensor_offset = 0;
     (void) tiered_view_base(tensor, &tensor_offset);
     if (tensor_offset > state->size || ggml_nbytes(tensor) > state->size - tensor_offset) {
-        throw std::runtime_error("SSD tensor view exceeds its base tensor");
+        throw std::runtime_error("tiered expert tensor view exceeds its base tensor");
     }
 
-    std::vector<size_t> chunks;
-    chunks.reserve(host_ids.size());
-    const size_t granularity = state->sparse_granularity;
-
-    for (const int32_t expert : host_ids) {
+    for (const int32_t expert : ranked_ids) {
         if (expert < 0 || expert >= tensor->ne[2]) {
             throw std::runtime_error("MUL_MAT_ID produced an out-of-range expert id");
         }
+    }
+
+    std::vector<int32_t> host_ids = ranked_ids;
+    std::sort(host_ids.begin(), host_ids.end());
+    host_ids.erase(std::unique(host_ids.begin(), host_ids.end()), host_ids.end());
+
+    set_device(ctx->device);
+    size_t staging_size = state->sparse_size > 0 ? state->sparse_size : align_up_size(state->size, 256);
+    if (!ctx->expert_cache_initialized && ctx->plan->options.ssd_cache_bytes > 0) {
+        for (const auto & entry : ctx->tensors) {
+            const ggml_tensor * candidate_tensor = entry.first;
+            const tensor_state * candidate_state = entry.second.get();
+            if (candidate_state->tier == GGML_CUDA_TIERED_MEMORY_VRAM || !is_ssd_eligible(candidate_tensor)) {
+                continue;
+            }
+            const size_t candidate_size = candidate_state->sparse_size > 0 ?
+                    candidate_state->sparse_size : align_up_size(candidate_state->size, 256);
+            staging_size = std::max(staging_size, candidate_size);
+        }
+    }
+    if (ctx->expert_staging_size < staging_size) {
+        if (ctx->expert_staging) {
+            TIERED_CUDA_CHECK(cudaFree(ctx->expert_staging));
+            ctx->expert_staging = nullptr;
+            ctx->expert_staging_size = 0;
+        }
+        cudaError_t allocation_status = cudaMalloc(&ctx->expert_staging, staging_size);
+        if (allocation_status != cudaSuccess && ctx->expert_cache) {
+            GGML_LOG_WARN("tiered-memory: disabling expert cache to grow staging scratch to %.2f MiB\n",
+                    staging_size / 1024.0 / 1024.0);
+            (void) cudaGetLastError();
+            disable_expert_cache(ctx);
+            allocation_status = cudaMalloc(&ctx->expert_staging, staging_size);
+        }
+        TIERED_CUDA_CHECK(allocation_status);
+        ctx->expert_staging_size = staging_size;
+    }
+
+    initialize_expert_cache(ctx);
+
+    if (!stage_cached_experts(ctx, tensor, state, tensor_offset, ranked_ids, host_ids, ids_per_row, n_rows)) {
         for (int64_t i3 = 0; i3 < tensor->ne[3]; ++i3) {
-            const size_t slab_begin = tensor_offset +
-                    static_cast<size_t>(i3) * tensor->nb[3] +
-                    static_cast<size_t>(expert) * tensor->nb[2];
-            const size_t slab_end = std::min(state->size, slab_begin + tensor->nb[2]);
-            const size_t first = slab_begin / granularity * granularity;
-            const size_t last = align_up_size(slab_end, granularity);
-            for (size_t offset = first; offset < last; offset += granularity) {
-                chunks.push_back(offset);
+            size_t first = 0;
+            while (first < host_ids.size()) {
+                size_t last = first;
+                while (last + 1 < host_ids.size() && host_ids[last + 1] == host_ids[last] + 1) {
+                    ++last;
+                }
+
+                const size_t slab_begin = tensor_offset +
+                        static_cast<size_t>(i3) * tensor->nb[3] +
+                        static_cast<size_t>(host_ids[first]) * tensor->nb[2];
+                size_t slab_end = tensor_offset +
+                        static_cast<size_t>(i3) * tensor->nb[3] +
+                        static_cast<size_t>(host_ids[last] + 1) * tensor->nb[2];
+                if (host_ids[last] < tensor->ne[2] - 1) {
+                    slab_end += std::min<size_t>(tensor->nb[2], 512);
+                }
+                slab_end = std::min(state->size, slab_end);
+                if (slab_begin >= slab_end || slab_end > state->size) {
+                    throw std::runtime_error("MUL_MAT_ID expert slab exceeds its base tensor");
+                }
+
+                const size_t copy_size = slab_end - slab_begin;
+                copy_host_to_device(ctx,
+                        static_cast<char *>(ctx->expert_staging) + slab_begin,
+                        static_cast<const char *>(state->host_ptr) + slab_begin,
+                        copy_size);
+                ctx->cache_h2d_bytes += copy_size;
+                first = last + 1;
             }
         }
     }
+    TIERED_CUDA_CHECK(cudaStreamSynchronize(nullptr));
 
-    std::sort(chunks.begin(), chunks.end());
-    chunks.erase(std::unique(chunks.begin(), chunks.end()), chunks.end());
-
-    CUmemAllocationProp property = {};
-    property.type = CU_MEM_ALLOCATION_TYPE_PINNED;
-    property.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
-    property.location.id = ctx->device;
-
-    CUmemAccessDesc access = {};
-    access.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
-    access.location.id = ctx->device;
-    access.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
-
-    try {
-        for (const size_t offset : chunks) {
-            const size_t mapping_size = std::min(granularity, state->sparse_size - offset);
-            CUmemGenericAllocationHandle handle = 0;
-            TIERED_CU_CHECK(cuMemCreate(&handle, mapping_size, &property, 0));
-            const CUdeviceptr address = state->sparse_address + offset;
-            try {
-                TIERED_CU_CHECK(cuMemMap(address, mapping_size, 0, handle, 0));
-                TIERED_CU_CHECK(cuMemSetAccess(address, mapping_size, &access, 1));
-            } catch (...) {
-                (void) cuMemRelease(handle);
-                throw;
-            }
-
-            state->active_mappings.push_back({address, mapping_size, handle});
-
-            const size_t copy_size = offset < state->size ?
-                    std::min(mapping_size, state->size - offset) : 0;
-            if (copy_size > 0) {
-                TIERED_CUDA_CHECK(cudaMemcpy(
-                        reinterpret_cast<void *>(address),
-                        static_cast<const char *>(state->host_ptr) + offset,
-                        copy_size,
-                        cudaMemcpyHostToDevice));
-            }
-            if (copy_size < mapping_size) {
-                TIERED_CUDA_CHECK(cudaMemset(
-                        reinterpret_cast<char *>(address) + copy_size,
-                        0,
-                        mapping_size - copy_size));
-            }
-        }
-    } catch (...) {
-        free_sparse_tensor(state);
-        state->sparse_size = align_up_size(state->size, granularity);
-        TIERED_CU_CHECK(cuMemAddressReserve(
-                &state->sparse_address, state->sparse_size,
-                granularity, 0, 0));
-        throw;
-    }
-#endif
-}
-
-static void unstage_sparse_experts(tensor_state * state) {
-#if !defined(GGML_CUDA_NO_VMM)
-    for (const auto & mapping : state->active_mappings) {
-        TIERED_CU_CHECK(cuMemUnmap(mapping.address, mapping.size));
-        TIERED_CU_CHECK(cuMemRelease(mapping.handle));
-    }
-    state->active_mappings.clear();
-#else
-    GGML_UNUSED(state);
-#endif
+    return static_cast<char *>(ctx->expert_staging) + tensor_offset;
 }
 
 static const char * tiered_buft_name(ggml_backend_buffer_type_t buft) {
@@ -435,9 +758,40 @@ static void tiered_buffer_free(ggml_backend_buffer_t buffer) {
             (void) cudaFree(state->device_ptr);
             state->device_ptr = nullptr;
         }
+        if (state->host_ptr_owned && state->host_ptr) {
+            (void) cudaFreeHost(state->host_ptr);
+            state->host_ptr = nullptr;
+            state->host_ptr_owned = false;
+        }
         if (state->tier == GGML_CUDA_TIERED_MEMORY_SSD) {
             free_sparse_tensor(state);
         }
+    }
+
+    if (ctx->plan->options.ssd_cache_bytes > 0) {
+        const uint64_t cacheable_bytes = ctx->cache_hit_bytes + ctx->cache_miss_bytes;
+        const double request_hit_rate = ctx->cache_requests > 0 ?
+                100.0 * static_cast<double>(ctx->cache_hits) / static_cast<double>(ctx->cache_requests) : 0.0;
+        const double byte_hit_rate = cacheable_bytes > 0 ?
+                100.0 * static_cast<double>(ctx->cache_hit_bytes) / static_cast<double>(cacheable_bytes) : 0.0;
+        GGML_LOG_INFO(
+                "tiered-memory: expert cache hits %llu/%llu (%.2f%% requests, %.2f%% bytes), "
+                "H2D %.2f MiB, D2D %.2f MiB, admissions %llu, evictions %llu\n",
+                static_cast<unsigned long long>(ctx->cache_hits),
+                static_cast<unsigned long long>(ctx->cache_requests),
+                request_hit_rate,
+                byte_hit_rate,
+                ctx->cache_h2d_bytes / 1024.0 / 1024.0,
+                ctx->cache_d2d_bytes / 1024.0 / 1024.0,
+                static_cast<unsigned long long>(ctx->cache_admissions),
+                static_cast<unsigned long long>(ctx->cache_evictions));
+    }
+    disable_expert_cache(ctx);
+
+    if (ctx->expert_staging) {
+        (void) cudaFree(ctx->expert_staging);
+        ctx->expert_staging = nullptr;
+        ctx->expert_staging_size = 0;
     }
 
     for (auto it = ctx->registrations.rbegin(); it != ctx->registrations.rend(); ++it) {
@@ -459,32 +813,10 @@ static void * tiered_buffer_base(ggml_backend_buffer_t buffer) {
 
 static ggml_status tiered_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
     auto * ctx = static_cast<tiered_buffer_context *>(buffer->context);
-    if (std::find(ctx->all_tensors.begin(), ctx->all_tensors.end(), tensor) == ctx->all_tensors.end()) {
-        ctx->all_tensors.push_back(tensor);
-    }
     if (!tensor->view_src && ctx->tensors.find(tensor) == ctx->tensors.end()) {
         ctx->tensors.emplace(tensor, std::make_unique<tensor_state>());
     }
     return GGML_STATUS_SUCCESS;
-}
-
-static void tiered_refresh_views(tiered_buffer_context * ctx) {
-    for (size_t pass = 0; pass < ctx->all_tensors.size(); ++pass) {
-        bool changed = false;
-        for (ggml_tensor * tensor : ctx->all_tensors) {
-            if (!tensor->view_src || !tensor->view_src->data) {
-                continue;
-            }
-            void * expected = static_cast<char *>(tensor->view_src->data) + tensor->view_offs;
-            if (tensor->data != expected) {
-                tensor->data = expected;
-                changed = true;
-            }
-        }
-        if (!changed) {
-            break;
-        }
-    }
 }
 
 static void tiered_buffer_set_tensor(
@@ -501,7 +833,10 @@ static void tiered_buffer_set_tensor(
     }
 
     if (tensor->view_src) {
-        tiered_refresh_views(ctx);
+        if (!tensor->view_src->data) {
+            throw std::runtime_error(std::string("tiered view initialized before its source tensor: ") + tensor->name);
+        }
+        tensor->data = static_cast<char *>(tensor->view_src->data) + tensor->view_offs;
         size_t view_offset = 0;
         tiered_view_base(tensor, &view_offset);
         tensor_state * state = state_for(tensor);
@@ -509,7 +844,7 @@ static void tiered_buffer_set_tensor(
             throw std::runtime_error(std::string("tiered view initialized before its base tensor: ") + tensor->name);
         }
         if (state->tier == GGML_CUDA_TIERED_MEMORY_VRAM) {
-            TIERED_CUDA_CHECK(cudaMemcpy(tensor->data, data, size, cudaMemcpyHostToDevice));
+            copy_host_to_device(ctx, tensor->data, data, size);
         } else {
             const void * expected = static_cast<const char *>(state->host_ptr) + view_offset;
             if (data != expected && std::memcmp(data, expected, size) != 0) {
@@ -522,7 +857,6 @@ static void tiered_buffer_set_tensor(
     auto & state_ptr = ctx->tensors[tensor];
     if (!state_ptr) {
         state_ptr = std::make_unique<tensor_state>();
-        ctx->all_tensors.push_back(tensor);
     }
     tensor_state * state = state_ptr.get();
     if (state->host_ptr || state->device_ptr || state->sparse_address) {
@@ -554,8 +888,7 @@ static void tiered_buffer_set_tensor(
     switch (state->tier) {
         case GGML_CUDA_TIERED_MEMORY_VRAM: {
             TIERED_CUDA_CHECK(cudaMalloc(&state->device_ptr, state->alloc_size));
-            TIERED_CUDA_CHECK(cudaMemcpy(
-                    state->device_ptr, data, state->size, cudaMemcpyHostToDevice));
+            copy_host_to_device(ctx, state->device_ptr, data, state->size);
             if (state->alloc_size > state->size) {
                 TIERED_CUDA_CHECK(cudaMemset(
                         static_cast<char *>(state->device_ptr) + state->size,
@@ -571,7 +904,28 @@ static void tiered_buffer_set_tensor(
             if (!properties.canMapHostMemory) {
                 throw std::runtime_error("CUDA device cannot map host memory");
             }
-            ensure_registered(ctx, state->host_ptr, state->size);
+
+            // GGUF weights normally come from a read-only file mmap. Some
+            // pre-Ampere GPUs/drivers reject cudaHostRegisterMapped for that
+            // range. Fall back to an owned mapped pinned copy.
+            try {
+                ensure_registered(ctx, state->host_ptr, state->size);
+            } catch (const std::exception & error) {
+                (void) cudaGetLastError();
+                GGML_LOG_WARN(
+                        "tiered-memory: direct DRAM registration failed for %s (%s); "
+                        "using a mapped pinned copy\n",
+                        tensor->name, error.what());
+
+                void * pinned = nullptr;
+                TIERED_CUDA_CHECK(cudaHostAlloc(
+                        &pinned, state->size,
+                        cudaHostAllocPortable | cudaHostAllocMapped));
+                std::memcpy(pinned, data, state->size);
+                state->host_ptr = pinned;
+                state->host_ptr_owned = true;
+            }
+
             TIERED_CUDA_CHECK(cudaHostGetDevicePointer(
                     &state->device_ptr, state->host_ptr, 0));
             tensor->data = state->device_ptr;
@@ -579,10 +933,15 @@ static void tiered_buffer_set_tensor(
 
         case GGML_CUDA_TIERED_MEMORY_SSD:
             init_sparse_tensor(ctx, tensor, state);
+            try {
+                ensure_registered(ctx, state->host_ptr, state->size);
+            } catch (const std::exception & error) {
+                (void) cudaGetLastError();
+                GGML_LOG_WARN("tiered-memory: could not page-lock %s (%s); using pageable transfers\n",
+                        tensor->name, error.what());
+            }
             break;
     }
-
-    tiered_refresh_views(ctx);
 
     GGML_LOG_INFO("tiered-memory: %-4s %8.2f MiB %s\n",
             state->tier == GGML_CUDA_TIERED_MEMORY_VRAM ? "VRAM" :
@@ -760,29 +1119,64 @@ static ggml_status compute_view(tiered_backend_context * ctx, ggml_cgraph * grap
 
 static ggml_status tiered_backend_graph_compute(ggml_backend_t backend, ggml_cgraph * graph) {
     auto * ctx = static_cast<tiered_backend_context *>(backend->context);
+    std::unique_lock<std::mutex> compute_lock;
+    for (int i = 0; i < graph->n_nodes && !compute_lock.owns_lock(); ++i) {
+        for (int src_index = 0; src_index < GGML_MAX_SRC; ++src_index) {
+            tiered_buffer_context * weight_ctx = buffer_context(graph->nodes[i]->src[src_index]);
+            if (weight_ctx) {
+                compute_lock = std::unique_lock<std::mutex>(weight_ctx->compute_mutex);
+                break;
+            }
+        }
+    }
     int segment_begin = 0;
 
     for (int i = 0; i < graph->n_nodes; ++i) {
         ggml_tensor * node = graph->nodes[i];
-        tensor_state * ssd_state = nullptr;
+        tensor_state * streamed_state = nullptr;
         tiered_buffer_context * weight_ctx = nullptr;
+
+        tensor_state * dram_state = nullptr;
+        tiered_buffer_context * dram_ctx = nullptr;
+        size_t dram_view_offset = 0;
 
         for (int src_index = 0; src_index < GGML_MAX_SRC; ++src_index) {
             ggml_tensor * src = node->src[src_index];
             tensor_state * state = state_for(src);
-            if (!state || state->tier != GGML_CUDA_TIERED_MEMORY_SSD) {
+            if (!state) {
                 continue;
             }
-            if (node->op != GGML_OP_MUL_MAT_ID || src_index != 0) {
-                GGML_LOG_ERROR("tiered-memory: SSD tensor %s is used by unsupported op %s\n",
-                        src->name, ggml_op_name(node->op));
-                return GGML_STATUS_FAILED;
+
+            if (state->tier == GGML_CUDA_TIERED_MEMORY_SSD) {
+                if (node->op != GGML_OP_MUL_MAT_ID || src_index != 0) {
+                    GGML_LOG_ERROR("tiered-memory: SSD tensor %s is used by unsupported op %s\n",
+                            src->name, ggml_op_name(node->op));
+                    return GGML_STATUS_FAILED;
+                }
+                streamed_state = state;
+                weight_ctx = buffer_context(src);
+                continue;
             }
-            ssd_state = state;
-            weight_ctx = buffer_context(src);
+
+            if (state->tier == GGML_CUDA_TIERED_MEMORY_DRAM &&
+                    node->op == GGML_OP_MUL_MAT_ID && src_index == 0) {
+                streamed_state = state;
+                weight_ctx = buffer_context(src);
+                continue;
+            }
+
+            // Stage DRAM MUL_MAT weights because cuBLAS cannot use mapped host aliases reliably on Turing.
+            if (state->tier == GGML_CUDA_TIERED_MEMORY_DRAM &&
+                    node->op == GGML_OP_MUL_MAT && src_index == 0) {
+                size_t view_offset = 0;
+                (void) tiered_view_base(src, &view_offset);
+                dram_state = state;
+                dram_ctx = buffer_context(src);
+                dram_view_offset = view_offset;
+            }
         }
 
-        if (!ssd_state) {
+        if (!streamed_state && !dram_state) {
             continue;
         }
 
@@ -792,21 +1186,72 @@ static ggml_status tiered_backend_graph_compute(ggml_backend_t backend, ggml_cgr
         }
         ggml_backend_synchronize(ctx->inner);
 
-        ggml_tensor * weight = node->src[0];
-        try {
-            stage_sparse_experts(weight_ctx, weight, ssd_state, node->src[2]);
-            status = compute_view(ctx, graph, i, i + 1);
-            ggml_backend_synchronize(ctx->inner);
-            unstage_sparse_experts(ssd_state);
-        } catch (const std::exception & error) {
-            GGML_LOG_ERROR("tiered-memory: failed to stream %s: %s\n",
-                    weight->name, error.what());
+        if (dram_state) {
+            void * staged = nullptr;
+            ggml_tensor * original_weight = node->src[0];
+            ggml_tensor staged_weight = {};
+
             try {
-                unstage_sparse_experts(ssd_state);
-            } catch (...) {
+                if (dram_view_offset > dram_state->size ||
+                        ggml_nbytes(original_weight) > dram_state->size - dram_view_offset) {
+                    throw std::runtime_error("tiered DRAM weight view exceeds its base tensor");
+                }
+                set_device(ctx->device);
+                TIERED_CUDA_CHECK(cudaMalloc(&staged, dram_state->alloc_size));
+                copy_host_to_device(dram_ctx,
+                        staged,
+                        dram_state->host_ptr,
+                        dram_state->size);
+                if (dram_state->alloc_size > dram_state->size) {
+                    TIERED_CUDA_CHECK(cudaMemset(
+                            static_cast<char *>(staged) + dram_state->size,
+                            0,
+                            dram_state->alloc_size - dram_state->size));
+                }
+                TIERED_CUDA_CHECK(cudaStreamSynchronize(nullptr));
+
+                staged_weight = *original_weight;
+                staged_weight.data = static_cast<char *>(staged) + dram_view_offset;
+                staged_weight.view_src = nullptr;
+                staged_weight.view_offs = 0;
+                node->src[0] = &staged_weight;
+
+                status = compute_view(ctx, graph, i, i + 1);
+                ggml_backend_synchronize(ctx->inner);
+
+                node->src[0] = original_weight;
+                TIERED_CUDA_CHECK(cudaFree(staged));
+                staged = nullptr;
+            } catch (const std::exception & error) {
+                node->src[0] = original_weight;
+                if (staged) {
+                    (void) cudaFree(staged);
+                }
+                GGML_LOG_ERROR("tiered-memory: failed to stage DRAM weight %s: %s\n",
+                        original_weight ? original_weight->name : "unknown", error.what());
+                return GGML_STATUS_FAILED;
             }
-            return GGML_STATUS_FAILED;
+        } else {
+            ggml_tensor * weight = node->src[0];
+            ggml_tensor staged_weight = {};
+            try {
+                void * staged_data = stage_tiered_experts(weight_ctx, weight, streamed_state, node->src[2]);
+                staged_weight = *weight;
+                staged_weight.data = staged_data;
+                staged_weight.view_src = nullptr;
+                staged_weight.view_offs = 0;
+                node->src[0] = &staged_weight;
+                status = compute_view(ctx, graph, i, i + 1);
+                ggml_backend_synchronize(ctx->inner);
+                node->src[0] = weight;
+            } catch (const std::exception & error) {
+                node->src[0] = weight;
+                GGML_LOG_ERROR("tiered-memory: failed to stream %s: %s\n",
+                        weight->name, error.what());
+                return GGML_STATUS_FAILED;
+            }
         }
+
         if (status != GGML_STATUS_SUCCESS) {
             return status;
         }

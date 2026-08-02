@@ -26,7 +26,7 @@ Summer.cppは、llama.cppへtiered-memory backendと専用実行ファイル`lla
 |---|---|---|
 | VRAM | CUDA device memory | 頻繁に使うdense weight、embedding、hot tensor |
 | DRAM | CUDA mapped host memory | VRAMに収まらないweightをzero-copyまたはmapped pinned copyで参照 |
-| SSD | CUDA Virtual Memory Management | routerが選択したMoE expert weightを必要時にstage |
+| SSD | file-backed GGUF mapping | routerが選択したMoE expert weightを必要時にstageし、hot expertを適応cacheへ保持 |
 
 ```text
 GGUF file
@@ -35,7 +35,7 @@ GGUF file
 Placement planner
    ├── VRAM: resident CUDA allocations
    ├── DRAM: mapped host memory / pinned copy fallback
-   └── SSD : temporary CUDA VMM mappings for MoE experts
+   └── SSD : selected MoE slabs -> adaptive VRAM cache -> reusable scratch
 ```
 
 ## 実機確認済み構成
@@ -207,6 +207,20 @@ install -Dm755 build/bin/llama-tiered "$HOME/.local/bin/llama-tiered"
 
 ## llama-tieredの使用
 
+SSDへMoE weightを配置する大規模modelでは、適応expert cacheを有効にできます。cache容量は`--vram-mib`の内数で、resident weightの予算から自動的に差し引かれます。
+
+```bash
+llama-tiered \
+  -m "$HOME/models/Laguna-S-2.1-UD-IQ1_S.gguf" \
+  --vram-mib 3800 \
+  --dram-mib 6500 \
+  --cache-mib 1024 \
+  -n 128 \
+  "こんにちは"
+```
+
+cacheはsingle-row decode時のrouter履歴からhot expertを選び、multi-row prompt batchではcache汚染を避けるため自動的にbypassされます。終了logにはhit率、H2D/D2D転送量、admission数、eviction数が表示されます。
+
 build directoryから直接実行する場合:
 
 ```bash
@@ -324,18 +338,17 @@ bash scripts/install-summer.sh
 
 ### `CUDA error: an illegal memory access was encountered`
 
-TuringでSSD selective streamingを使った場合に確認されています。`--dram-mib 1`のような設定は避け、VRAM + DRAMへ戻します。
+古いbinaryではtiered bufferの検出失敗とstrided expert IDの誤読により、SSD pointerがstageされないままkernelから参照される問題がありました。sourceを更新して再buildします。
 
 ```bash
-llama-tiered \
-  -m "$HOME/models/model.gguf" \
-  --vram-mib 3800 \
-  --dram-mib 6500 \
-  -n 32 \
-  "test"
+cd "$HOME/Summer.cpp"
+cmake --build build --target llama-tiered -j"$(nproc)"
+install -Dm755 build/bin/llama-tiered "$HOME/.local/bin/llama-tiered"
 ```
 
-### `llama-tiered: command not found`
+再発する場合は、最初に短いpromptを`compute-sanitizer --tool memcheck`で確認してください。
+
+### `summer: command not found`
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
@@ -358,17 +371,18 @@ find "$HOME/models" -type f -iname '*.gguf'
 
 ## SSD streamingの状態
 
-SSD tierはstacked MoE expert tensorを`MUL_MAT_ID`実行時にCUDA VMMへ一時mapする設計です。
+SSD tierはstacked MoE expert tensorをGGUF mmapに保持し、`MUL_MAT_ID`実行時に選択されたexpert slabだけを再利用可能なVRAM scratchへ転送します。LinuxではGGUFをwritable private mappingとして開くため、fileを変更せずにTuringでもsource pageを直接page-lockできます。
 
 現在の制約:
 
-- Turing/GTX 16ではselective mapping時にMMVQ kernelのvectorized readがunmapped pageへ到達する可能性がある
+- page-lock可能なRAMがある場合、stream対象expertの大部分がresident memoryとして固定される
+- VRAM scratchは最大のstacked expert tensorと同じ大きさを確保する
 - correctness-firstの同期処理で、転送とcomputeのoverlapは未実装
-- persistent expert cacheは未実装
+- adaptive expert cacheはsingle-row decodeに対応
+- 同じmodelを共有する複数contextのgraph実行は直列化される
 - GPU architectureごとのphysical validationが必要
-- 本READMEの既定構成ではSSD streamingを使用しない
 
-SSD pathを試す場合は、必ず短い生成、`CUDA_LAUNCH_BLOCKING=1`、`compute-sanitizer`などで検証してください。本番用途には推奨しません。
+GTX 1660 SUPERとLaguna-S-2.1 IQ1_Sでは、1 token、16 tokens、128 tokens、および`compute-sanitizer`で検証済みです。他のmodelやGPUでは短い生成から確認してください。
 
 ## Library API
 
