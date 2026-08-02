@@ -456,7 +456,7 @@ static float ts_dispatch_forced_t2(const float * weights, const float * act_scal
 
     const int64_t n = out_dim * in_dim;
     float frob2 = ts_vec_dotpr(weights, weights, n);
-    return (frob2 > 0.0f) ? (qr.mse * (float)n / frob2) : qr.mse;
+    return (frob2 > 0.0f) ? (mse * (float)n / frob2) : mse;
 }
 
 // ---------------------------------------------------------------------------

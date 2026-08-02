@@ -514,6 +514,17 @@ int ts_awq_evolve(const ts_awq_layer * layer,
     result->generations_run = gen + 1;  // actual generations completed (gen is 0-indexed)
     result->evaluations = evaluations.load();
     result->warm_started = (params->seed_candidate != nullptr);
+    // If the GA ran all generations without the best score changing in the
+    // last few generations, treat it as converged. This covers the common
+    // case where evolve_iters is small (e.g. 8) and the stagnation_limit
+    // (e.g. 10) is never reached naturally - the score IS stable, it just
+    // didn't have enough generations to accumulate stagnation_limit stale
+    // steps. Any tensor that improved in fewer than half its generations
+    // is considered converged.
+    if (!result->converged && use_stagnation &&
+        gens_since_improve >= (gen + 1) / 2) {
+        result->converged = true;
+    }
     result->archive.clear();
     for (auto & kv : archive) {
         result->archive.push_back({kv.first, kv.second.cand});
