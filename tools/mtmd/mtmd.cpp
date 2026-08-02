@@ -451,7 +451,7 @@ struct mtmd_context {
                     tok_row_end       = {lookup_token("\n")};
                     tok_row_end_trail = false; // no trailing end-of-row token
                     ov_img_first      = true;
-                    image_preproc     = std::make_unique<mtmd_image_preprocessor_llava_uhd>(ctx_v);
+                    image_preproc     = std::make_unique<mtmd_image_preprocessor_minicpmv>(ctx_v);
                 } break;
             case PROJECTOR_TYPE_QWEN2VL:
             case PROJECTOR_TYPE_QWEN25VL:
@@ -723,6 +723,10 @@ struct mtmd_context {
                     aud_beg = "<|audio>";
                     aud_end = "<audio|>";
                     audio_preproc = std::make_unique<mtmd_audio_preprocessor_gemma4a>(ctx_a);
+                } break;
+            case PROJECTOR_TYPE_PARAKEET:
+                {
+                    audio_preproc = std::make_unique<mtmd_audio_preprocessor_parakeet>(ctx_a);
                 } break;
             case PROJECTOR_TYPE_GEMMA4UA:
                 {

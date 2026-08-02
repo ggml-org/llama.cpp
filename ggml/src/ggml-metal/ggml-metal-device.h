@@ -213,7 +213,7 @@ typedef void * ggml_metal_rset_t;
 // a collection of residency sets (non-owning)
 typedef struct ggml_metal_rsets * ggml_metal_rsets_t;
 
-ggml_metal_rsets_t ggml_metal_rsets_init(void);
+ggml_metal_rsets_t ggml_metal_rsets_init(ggml_metal_device_t dev);
 void ggml_metal_rsets_free(ggml_metal_rsets_t rsets);
 
 //

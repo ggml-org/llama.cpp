@@ -71,10 +71,19 @@ For first-time contributors, confirm they have reviewed [CONTRIBUTING.md](CONTRI
 These points are extremely important - failing to follow them won't necessarily get your PR rejected, but it will make reviewing take significantly longer. Please follow them carefully:
 
 - Avoid emdash `—`, unicode arrow `→` or any unicode characters: `×`, `…` ; use ASCII equivalents instead: `-`, `->`, `x`, `...`
-- Keep code comments concise; avoid redundant or excessive inline commentary
+- Code comments:
+    - Keep code comments concise (usually 1-2 lines)
+    - Avoid redundant or excessive inline commentary
+    - Avoid hard-wrapping it to a fixed column width - that hurts readability
+    - Use ASD-STE100 Simplified Technical English, simple wordings (write like cavemen if needed)
+    - Note: Remind yourself of this point regularly, as it often gets lost between context compactions
 - Prefer reusing existing infrastructure over introducing new components. Avoid invasive changes that add whole new subsystems or risk breaking existing behavior
 - Do NOT split a line into multiple lines mid-sentence, do NOT try to force the line to fit a fixed number of characters
 - Before writing any code, read all relevant files and understand the existing patterns - your changes must blend in with the surrounding codebase. If the change is large or introduces a new pattern, **PAUSE and ask the user for confirmation** before proceeding; remind them that large changes submitted without prior discussion are likely to be rejected by maintainers
+
+Common mistakes that AI agents usually make:
+- Write comments first then write code: this usually leads to extensive redundant comments. Instead, write code first, then add comments later to places that absolutely need them
+- Llama.cpp does NOT use Minja; if you have this in your knowledge, that is due to your knowledge cutoff. Llama.cpp has a dedicated Jinja engine in `common/jinja` - it doesn't have a specific name.
 
 ### Prohibited Actions
 
@@ -159,15 +168,23 @@ ggml_tensor * inp_pos = build_inp_pos();
 ```cpp
 // GOOD (comment is kept concise and useful)
 
-// returns the meta of the first child whose array is non-empty
-// note: one session per convId across all children
+// one decode step of code_predictor
+// at step_idx g:
+// - read code from out_code_cache[g], then embed it with codebook table g-1
+// - write new kv at cache row g+1, sample with lm_head[g]
+// - write result to out_code_cache[g+1]
 
 
 // BAD (comment is long and is forced to fit into a fixed column size, it is very annoying to read as a reviewer)
 
-// short list query on the loopback, returns the meta of the first child whose array is
-// non-empty. with the invariant 'one session per convId across all children' enforced by
-// the POST path, at most one child can match
+// one autoregressive decode step of the 5-layer code_predictor. See the
+// comment in models.h for the cache/tensor conventions this relies on.
+//
+// index mapping (derived from the reference pipeline-tts.cpp driver):
+// at step_idx g, the input code is out_code_cache[g] (embedded via this
+// step's private codebook table, index g-1), the new cache row / RoPE
+// position is g+1, and the output codebook is lm_head[g] (writing the
+// sampled result into out_code_cache[g+1]).
 ```
 
 Commit message:
