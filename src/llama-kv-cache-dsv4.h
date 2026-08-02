@@ -23,6 +23,7 @@ public:
             uint32_t        state_size,
             uint32_t        n_embd_state,
             uint32_t        n_rs_seq,
+            uint32_t        n_aligned,
             const char    * name,
         const llama_memory_i::layer_filter_cb & filter);
 
@@ -34,6 +35,7 @@ public:
     uint32_t get_state_size() const;
     uint32_t get_n_stream()   const;
     uint32_t get_n_rs_seq()   const;
+    uint32_t get_n_aligned()  const;
     uint32_t get_n_rows()     const;
 
     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const;
@@ -65,6 +67,7 @@ private:
     const uint32_t n_embd_state;
     const uint32_t n_stream;
     const uint32_t n_rs_seq;
+    const uint32_t n_aligned;
 
     std::vector<std::pair<ggml_context_ptr, ggml_backend_buffer_ptr>> ctxs_bufs;
 
@@ -100,6 +103,7 @@ public:
                      uint32_t   n_ubatch,
                      uint32_t   n_pad,
                      uint32_t   n_rs_seq,
+                     uint32_t   n_rs_aligned,
         const layer_filter_cb & filter,
         const  layer_reuse_cb & reuse);
 
@@ -149,8 +153,10 @@ public:
     llama_dsv4_comp_state * get_lid_state() const;
 
     uint32_t get_n_rs_seq() const;
+    uint32_t get_n_rs_aligned() const;
     const std::vector<uint32_t> & get_rs_idx() const;
     void reset_rs_idx_for_ubatches(const std::vector<llama_ubatch> & ubatches);
+    void note_aligned_snapshots_for_ubatches(const std::vector<llama_ubatch> & ubatches);
 
 private:
     llama_hparams hparams_raw;
@@ -160,8 +166,14 @@ private:
 
     const uint32_t n_seq_max;
     const uint32_t n_rs_seq;
+    const uint32_t n_rs_aligned;
 
+    // rs_idx[seq] encodes the pending rollback restore: 0 = none,
+    // 1..n_rs_seq = per-token plane, n_rs_seq+1+slot = aligned plane slot
     std::vector<uint32_t> rs_idx;
+
+    // boundary position held by each aligned slot per seq, -1 = empty
+    std::vector<std::vector<llama_pos>> aligned_pos;
 
     std::unique_ptr<llama_kv_cache_iswa> kv_raw;
     std::unique_ptr<llama_kv_cache>      kv_csa;

@@ -432,6 +432,7 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
         uint32_t kv_size,
         uint32_t n_stream,
         uint32_t n_rs_seq,
+        uint32_t n_aligned,
         const std::vector<uint32_t> & rs_idx) {
     llama_kv_cache_dsv4_context::comp_plan plan;
     plan.n_visible.resize(ubatch.n_tokens);
@@ -631,7 +632,10 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
             const int64_t stream_off = dsv4_stream_offset(n_stream, seq_id, state_size);
             const uint32_t rollback = (uint32_t) seq_id < rs_idx.size() ? rs_idx[seq_id] : 0;
             // Keep the restore graph fixed-width when no rollback is pending.
-            const int64_t src_plane = rollback > 0 && rollback <= n_rs_seq ? (int64_t) rollback*state_rows : 0;
+            // Markers beyond this state's planes (an aligned marker on a state
+            // without aligned slots) degrade to a no-op self-copy: such a state
+            // has nothing to restore, its rows are rewritten by the replay.
+            const int64_t src_plane = rollback > 0 && rollback <= n_rs_seq + n_aligned ? (int64_t) rollback*state_rows : 0;
             for (uint32_t r = 0; r < state_size; ++r) {
                 plan.state_restore_src_idxs.push_back((int32_t) (src_plane + stream_off + r));
                 plan.state_restore_dst_idxs.push_back((int32_t) (stream_off + r));
@@ -649,7 +653,7 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
             }
 
             const uint32_t n_seq_tokens = (uint32_t) token_idxs.size();
-            const int64_t scratch_off = (int64_t) state_rows*(1 + n_rs_seq);
+            const int64_t scratch_off = (int64_t) state_rows*(1 + n_rs_seq + n_aligned);
             for (uint32_t d = 1; d <= n_rs_seq; ++d) {
                 const int64_t dst_plane = (int64_t) d*state_rows;
 
@@ -672,6 +676,40 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_comp_plan(
 
                     plan.state_snapshot_src_idxs.push_back(src);
                     plan.state_snapshot_dst_idxs.push_back((int32_t) (dst_plane + stream_off + r));
+                }
+            }
+
+            // Aligned-tier snapshots: when this ubatch commits an HCA boundary
+            // for this seq, capture the ring as of that boundary into the
+            // boundary's aligned plane slot. One write per slot (the latest
+            // boundary wins) so ggml_set_rows never sees duplicate rows.
+            if (n_aligned > 0) {
+                std::map<uint32_t, uint32_t> slot_last_j; // slot -> index into token_idxs
+                for (uint32_t j = 0; j < n_seq_tokens; ++j) {
+                    const llama_pos pos = ubatch.pos[token_idxs[j]];
+                    if (pos < 0 || (pos + 1) % DSV4_HCA_RATIO != 0) {
+                        continue;
+                    }
+                    const uint32_t slot = (uint32_t) (((pos + 1)/DSV4_HCA_RATIO) % n_aligned);
+                    slot_last_j[slot] = j;
+                }
+
+                for (const auto & [slot, j_boundary] : slot_last_j) {
+                    const int64_t dst_plane = (int64_t) (1 + n_rs_seq + slot)*state_rows;
+                    const uint32_t prefix = j_boundary + 1;
+
+                    for (uint32_t r = 0; r < state_size; ++r) {
+                        int32_t src = (int32_t) (stream_off + r);
+                        for (uint32_t j = 0; j < prefix; ++j) {
+                            const uint32_t i_tok = token_idxs[j];
+                            if (ubatch.pos[i_tok] >= 0 && (uint32_t) (ubatch.pos[i_tok]%state_size) == r) {
+                                src = (int32_t) (scratch_off + i_tok);
+                            }
+                        }
+
+                        plan.state_snapshot_src_idxs.push_back(src);
+                        plan.state_snapshot_dst_idxs.push_back((int32_t) (dst_plane + stream_off + r));
+                    }
                 }
             }
         }
@@ -700,12 +738,13 @@ static std::vector<llama_kv_cache_dsv4_context::comp_plan> dsv4_build_comp_plans
         uint32_t kv_size,
         uint32_t n_stream,
         uint32_t n_rs_seq,
+        uint32_t n_aligned,
         const std::vector<uint32_t> & rs_idx) {
     std::vector<llama_kv_cache_dsv4_context::comp_plan> plans;
     plans.reserve(ubatches.size());
 
     for (const llama_ubatch & ubatch : ubatches) {
-        plans.push_back(dsv4_build_comp_plan(ubatch, ratio, overlap, state_size, kv_size, n_stream, n_rs_seq, rs_idx));
+        plans.push_back(dsv4_build_comp_plan(ubatch, ratio, overlap, state_size, kv_size, n_stream, n_rs_seq, n_aligned, rs_idx));
     }
 
     return plans;
@@ -793,7 +832,8 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_reserve_comp_plan(
         uint32_t state_size,
         uint32_t kv_size,
         uint32_t n_stream,
-        uint32_t n_rs_seq) {
+        uint32_t n_rs_seq,
+        uint32_t n_aligned) {
     llama_kv_cache_dsv4_context::comp_plan plan;
     plan.n_visible.resize(ubatch.n_tokens);
     plan.n_stream = dsv4_comp_graph_n_stream(ubatch, n_stream);
@@ -812,7 +852,8 @@ static llama_kv_cache_dsv4_context::comp_plan dsv4_build_reserve_comp_plan(
     const uint64_t state_rows = (uint64_t) state_size*n_stream;
     const size_t n_persist = (size_t) std::min<uint64_t>(ubatch.n_tokens, state_rows);
     const size_t n_restore = n_rs_seq > 0 ? (size_t) state_size*std::max<uint32_t>(1, ubatch.n_seqs_unq) : 0;
-    const size_t n_snapshot = (size_t) n_rs_seq*state_size*std::max<uint32_t>(1, ubatch.n_seqs_unq);
+    const size_t n_aligned_writes = n_aligned > 0 ? (size_t) std::min<uint32_t>(n_aligned, n_seq_tokens/128 + 1) : 0;
+    const size_t n_snapshot = (size_t) (n_rs_seq + n_aligned_writes)*state_size*std::max<uint32_t>(1, ubatch.n_seqs_unq);
 
     plan.state_pos .resize(ubatch.n_tokens);
     plan.state_persist_src_idxs.resize(n_persist);
@@ -847,13 +888,15 @@ llama_dsv4_comp_state::llama_dsv4_comp_state(
             uint32_t        state_size,
             uint32_t        n_embd_state,
             uint32_t        n_rs_seq,
+            uint32_t        n_aligned,
         const char    * name,
         const llama_memory_i::layer_filter_cb & filter) :
     ratio(ratio),
     state_size(state_size),
     n_embd_state(n_embd_state),
     n_stream(unified ? 1 : n_seq_max),
-    n_rs_seq(n_rs_seq) {
+    n_rs_seq(n_rs_seq),
+    n_aligned(n_aligned) {
     const llama_hparams & hparams = model.hparams;
 
     struct ggml_backend_buft_comparator {
@@ -909,7 +952,7 @@ llama_dsv4_comp_state::llama_dsv4_comp_state(
             throw std::runtime_error("failed to create ggml context for DSV4 compressor state");
         }
 
-        const uint32_t n_planes = n_stream*(1 + n_rs_seq);
+        const uint32_t n_planes = n_stream*(1 + n_rs_seq + n_aligned);
         ggml_tensor * kv    = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd_state, state_size, n_planes);
         ggml_tensor * score = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_embd_state, state_size, n_planes);
 
@@ -956,7 +999,7 @@ void llama_dsv4_comp_state::clear(llama_seq_id seq_id, bool data) {
         GGML_ASSERT((uint32_t) seq_id < n_stream);
 
         for (const auto & layer : layers) {
-            for (uint32_t d = 0; d <= n_rs_seq; ++d) {
+            for (uint32_t d = 0; d <= n_rs_seq + n_aligned; ++d) {
                 const uint32_t stream = d*n_stream + (uint32_t) seq_id;
                 dsv4_clear_tensor_stream(layer.kv,    stream);
                 dsv4_clear_tensor_stream(layer.score, stream);
@@ -1039,7 +1082,7 @@ void llama_dsv4_comp_state::state_write(
     std::vector<uint32_t> stream_ids(ns);
     for (uint32_t s = 0; s < ns; ++s) {
         const uint32_t seq = seq_id >= 0 ? (uint32_t) seq_id : s0 + s;
-        if (seq >= rs_idx.size() || rs_idx[seq] > n_rs_seq) {
+        if (seq >= rs_idx.size() || rs_idx[seq] > n_rs_seq + n_aligned) {
             throw std::runtime_error("DSV4 recurrent state rollback index out of range");
         }
         stream_ids[s] = rs_idx[seq]*n_stream + s0 + s;
@@ -1109,14 +1152,18 @@ ggml_tensor * llama_dsv4_comp_state::get_kv_all(ggml_context * ctx, int32_t il) 
     const int32_t ids = map_layer_ids.at(il);
     ggml_tensor * state = layers[ids].kv;
 
-    return ggml_view_2d(ctx, state, state->ne[0], get_n_rows()*(1 + n_rs_seq), state->nb[1], 0);
+    return ggml_view_2d(ctx, state, state->ne[0], get_n_rows()*(1 + n_rs_seq + n_aligned), state->nb[1], 0);
+}
+
+uint32_t llama_dsv4_comp_state::get_n_aligned() const {
+    return n_aligned;
 }
 
 ggml_tensor * llama_dsv4_comp_state::get_score_all(ggml_context * ctx, int32_t il) const {
     const int32_t ids = map_layer_ids.at(il);
     ggml_tensor * state = layers[ids].score;
 
-    return ggml_view_2d(ctx, state, state->ne[0], get_n_rows()*(1 + n_rs_seq), state->nb[1], 0);
+    return ggml_view_2d(ctx, state, state->ne[0], get_n_rows()*(1 + n_rs_seq + n_aligned), state->nb[1], 0);
 }
 
 ggml_tensor * llama_dsv4_comp_state::get_kv(ggml_context * ctx, int32_t il) const {
@@ -1168,6 +1215,7 @@ llama_kv_cache_dsv4::llama_kv_cache_dsv4(
                  uint32_t   n_ubatch,
                  uint32_t   n_pad,
                  uint32_t   n_rs_seq,
+                 uint32_t   n_rs_aligned,
     const layer_filter_cb & filter,
     const  layer_reuse_cb & reuse) :
     hparams_raw(model.hparams),
@@ -1176,7 +1224,9 @@ llama_kv_cache_dsv4::llama_kv_cache_dsv4(
     hparams_lid(model.hparams),
     n_seq_max(n_seq_max),
     n_rs_seq(n_rs_seq),
-    rs_idx(n_seq_max, 0) {
+    n_rs_aligned(n_rs_aligned),
+    rs_idx(n_seq_max, 0),
+    aligned_pos(n_seq_max, std::vector<llama_pos>(n_rs_aligned, -1)) {
 
     const layer_filter_cb filter_raw = [&](int32_t il) {
         if (filter && !filter(il)) {
@@ -1262,19 +1312,19 @@ llama_kv_cache_dsv4::llama_kv_cache_dsv4(
 
     csa_state = std::make_unique<llama_dsv4_comp_state>(
             model, offload, unified_compressed, n_seq_max, DSV4_CSA_RATIO, 2*DSV4_CSA_RATIO,
-            2*model.hparams.n_embd_head_k(), n_rs_seq, "csa", filter_csa);
+            2*model.hparams.n_embd_head_k(), n_rs_seq, n_rs_aligned, "csa", filter_csa);
 
     LLAMA_LOG_INFO("%s: creating DSV4 HCA compressor state\n", __func__);
 
     hca_state = std::make_unique<llama_dsv4_comp_state>(
             model, offload, unified_compressed, n_seq_max, DSV4_HCA_RATIO, DSV4_HCA_RATIO,
-            model.hparams.n_embd_head_k(), n_rs_seq, "hca", filter_hca);
+            model.hparams.n_embd_head_k(), n_rs_seq, 0, "hca", filter_hca);
 
     LLAMA_LOG_INFO("%s: creating DSV4 lightning-indexer compressor state\n", __func__);
 
     lid_state = std::make_unique<llama_dsv4_comp_state>(
             model, offload, unified_compressed, n_seq_max, DSV4_CSA_RATIO, 2*DSV4_CSA_RATIO,
-            2*model.hparams.indexer_head_size, n_rs_seq, "lid", filter_csa);
+            2*model.hparams.indexer_head_size, n_rs_seq, n_rs_aligned, "lid", filter_csa);
 
     // DSV4 attention reads compressed-K / compressor-state rows that the current
     // graph does not necessarily overwrite; uninitialized buffer contents would
@@ -1428,14 +1478,49 @@ bool llama_kv_cache_dsv4::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1
             return false;
         }
 
+        // A pending un-consumed rollback must be replayed before another can
+        // be accepted: recomputing depth from the already-purged pos_max would
+        // silently restore the wrong plane.
+        if (rs_idx[seq_id] != 0) {
+            return false;
+        }
+
         const llama_pos rollback = pos_max - (p0 - 1);
-        if (rollback < 1 || rollback > (llama_pos) n_rs_seq) {
+        if (rollback < 1) {
+            return false;
+        }
+
+        uint32_t marker = 0;
+        if (rollback <= (llama_pos) n_rs_seq) {
+            marker = (uint32_t) rollback;
+        } else if (n_rs_aligned > 0 && p0 % (llama_pos) DSV4_HCA_RATIO == 0) {
+            // aligned deep tier: the target boundary must still hold a snapshot
+            const uint32_t slot = (uint32_t) ((p0/DSV4_HCA_RATIO) % n_rs_aligned);
+            if (aligned_pos[seq_id][slot] != p0) {
+                return false;
+            }
+            marker = n_rs_seq + 1 + slot;
+        } else {
+            return false;
+        }
+
+        // Never apply a rollback the raw SWA window can no longer cover: the
+        // replay from p0 reads raw K back to p0 - n_swa, and reclaimed cells
+        // would silently produce wrong output.
+        const llama_pos swa_min = kv_raw->get_swa()->seq_pos_min(seq_id);
+        if (swa_min < 0 || swa_min > std::max<llama_pos>(0, p0 - (llama_pos) hparams_raw.n_swa)) {
             return false;
         }
 
         const bool res = kv_raw->seq_rm(seq_id, p0, p1);
         if (res) {
-            rs_idx[seq_id] = (uint32_t) rollback;
+            rs_idx[seq_id] = marker;
+            // aligned slots holding rolled-back future boundaries are dead
+            for (llama_pos & pos : aligned_pos[seq_id]) {
+                if (pos > p0) {
+                    pos = -1;
+                }
+            }
         }
 
         return res;
@@ -1464,6 +1549,7 @@ void llama_kv_cache_dsv4::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_ds
 
     if (seq_id_src != seq_id_dst) {
         rs_idx[seq_id_dst] = 0;
+        std::fill(aligned_pos[seq_id_dst].begin(), aligned_pos[seq_id_dst].end(), -1);
     }
 }
 
@@ -1610,8 +1696,12 @@ void llama_kv_cache_dsv4::state_read(llama_io_read_i & io, llama_seq_id seq_id, 
     if (seq_id >= 0) {
         GGML_ASSERT((uint32_t) seq_id < n_seq_max);
         rs_idx[seq_id] = 0;
+        std::fill(aligned_pos[seq_id].begin(), aligned_pos[seq_id].end(), -1);
     } else {
         std::fill(rs_idx.begin(), rs_idx.end(), 0);
+        for (auto & slots : aligned_pos) {
+            std::fill(slots.begin(), slots.end(), -1);
+        }
     }
 }
 
@@ -1647,6 +1737,10 @@ uint32_t llama_kv_cache_dsv4::get_n_rs_seq() const {
     return n_rs_seq;
 }
 
+uint32_t llama_kv_cache_dsv4::get_n_rs_aligned() const {
+    return n_rs_aligned;
+}
+
 const std::vector<uint32_t> & llama_kv_cache_dsv4::get_rs_idx() const {
     return rs_idx;
 }
@@ -1662,6 +1756,29 @@ void llama_kv_cache_dsv4::reset_rs_idx_for_ubatches(const std::vector<llama_ubat
                 const llama_seq_id seq_id = ubatch.seq_id[i][s];
                 if (seq_id >= 0 && (uint32_t) seq_id < n_seq_max) {
                     rs_idx[seq_id] = 0;
+                }
+            }
+        }
+    }
+}
+
+void llama_kv_cache_dsv4::note_aligned_snapshots_for_ubatches(const std::vector<llama_ubatch> & ubatches) {
+    if (n_rs_aligned == 0) {
+        return;
+    }
+
+    for (const llama_ubatch & ubatch : ubatches) {
+        for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+            const llama_pos pos = ubatch.pos[i];
+            if (pos < 0 || (pos + 1) % (llama_pos) DSV4_HCA_RATIO != 0) {
+                continue;
+            }
+            const llama_pos boundary = pos + 1;
+            const uint32_t  slot     = (uint32_t) ((boundary/DSV4_HCA_RATIO) % n_rs_aligned);
+            for (int32_t s = 0; s < ubatch.n_seq_id[i]; ++s) {
+                const llama_seq_id seq_id = ubatch.seq_id[i][s];
+                if (seq_id >= 0 && (uint32_t) seq_id < n_seq_max) {
+                    aligned_pos[seq_id][slot] = boundary;
                 }
             }
         }
@@ -1697,8 +1814,12 @@ void llama_kv_cache_dsv4::clear_compressed(llama_seq_id seq_id, bool data) {
 
     if (seq_id >= 0) {
         rs_idx[seq_id] = 0;
+        std::fill(aligned_pos[seq_id].begin(), aligned_pos[seq_id].end(), -1);
     } else {
         std::fill(rs_idx.begin(), rs_idx.end(), 0);
+        for (auto & slots : aligned_pos) {
+            std::fill(slots.begin(), slots.end(), -1);
+        }
     }
 }
 
@@ -1992,13 +2113,13 @@ llama_kv_cache_dsv4_context::llama_kv_cache_dsv4_context(
     ubatches(std::move(ubatches)),
     plans_csa(dsv4_build_comp_plans(this->ubatches, DSV4_CSA_RATIO, true,
                 kv->get_csa_state()->get_state_size(), kv->get_csa()->get_size(), kv->get_csa_state()->get_n_stream(),
-                kv->get_n_rs_seq(), kv->get_rs_idx())),
+                kv->get_n_rs_seq(), kv->get_csa_state()->get_n_aligned(), kv->get_rs_idx())),
     plans_hca(dsv4_build_comp_plans(this->ubatches, DSV4_HCA_RATIO, false,
                 kv->get_hca_state()->get_state_size(), kv->get_hca()->get_size(), kv->get_hca_state()->get_n_stream(),
-                kv->get_n_rs_seq(), kv->get_rs_idx())),
+                kv->get_n_rs_seq(), kv->get_hca_state()->get_n_aligned(), kv->get_rs_idx())),
     plans_lid(dsv4_build_comp_plans(this->ubatches, DSV4_CSA_RATIO, true,
                 kv->get_lid_state()->get_state_size(), kv->get_lid()->get_size(), kv->get_lid_state()->get_n_stream(),
-                kv->get_n_rs_seq(), kv->get_rs_idx())),
+                kv->get_n_rs_seq(), kv->get_lid_state()->get_n_aligned(), kv->get_rs_idx())),
     ctx_raw(std::make_unique<llama_kv_cache_dsv4_raw_context>(
                 kv->get_raw(),
                 std::move(sinfos_raw_base_write),
@@ -2025,6 +2146,7 @@ llama_kv_cache_dsv4_context::llama_kv_cache_dsv4_context(
     hca_state(kv->get_hca_state()),
     lid_state(kv->get_lid_state()),
     status(ctx_raw->get_status()) {
+    kv->note_aligned_snapshots_for_ubatches(this->ubatches);
     kv->reset_rs_idx_for_ubatches(this->ubatches);
 }
 
@@ -2161,7 +2283,7 @@ const llama_kv_cache_dsv4_context::comp_plan & llama_kv_cache_dsv4_context::get_
 
     reserve_plan_csa = dsv4_build_reserve_comp_plan(
             ubatch, DSV4_CSA_RATIO, true,
-            csa_state->get_state_size(), get_csa()->get_n_kv(), csa_state->get_n_stream(), csa_state->get_n_rs_seq());
+            csa_state->get_state_size(), get_csa()->get_n_kv(), csa_state->get_n_stream(), csa_state->get_n_rs_seq(), csa_state->get_n_aligned());
 
     return reserve_plan_csa;
 }
@@ -2175,7 +2297,7 @@ const llama_kv_cache_dsv4_context::comp_plan & llama_kv_cache_dsv4_context::get_
 
     reserve_plan_hca = dsv4_build_reserve_comp_plan(
             ubatch, DSV4_HCA_RATIO, false,
-            hca_state->get_state_size(), get_hca()->get_n_kv(), hca_state->get_n_stream(), hca_state->get_n_rs_seq());
+            hca_state->get_state_size(), get_hca()->get_n_kv(), hca_state->get_n_stream(), hca_state->get_n_rs_seq(), hca_state->get_n_aligned());
 
     return reserve_plan_hca;
 }
@@ -2189,7 +2311,7 @@ const llama_kv_cache_dsv4_context::comp_plan & llama_kv_cache_dsv4_context::get_
 
     reserve_plan_lid = dsv4_build_reserve_comp_plan(
             ubatch, DSV4_CSA_RATIO, true,
-            lid_state->get_state_size(), get_lid()->get_n_kv(), lid_state->get_n_stream(), lid_state->get_n_rs_seq());
+            lid_state->get_state_size(), get_lid()->get_n_kv(), lid_state->get_n_stream(), lid_state->get_n_rs_seq(), lid_state->get_n_aligned());
 
     return reserve_plan_lid;
 }
