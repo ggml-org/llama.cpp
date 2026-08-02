@@ -221,10 +221,10 @@ kernel void kernel_gemm_noshuffle_q4_k_f32_r1(
         half dd  = d_ptr [sb_idx * m];
         half dmm = dm_ptr[sb_idx * m];
 
-        global const uchar * sc0 = src0_s + gx * num_blocks_K * K_SCALE_SIZE + sb_idx * K_SCALE_SIZE;
+        global const uchar * sc0 = src0_s + sb_idx * K_SCALE_SIZE * m + gx;
 
         uchar sv0, mn0;
-        get_scale_min_k4(sub_idx, sc0, 1, &sv0, &mn0, mask_d6, mask_d4, mask_hi2);
+        get_scale_min_k4(sub_idx, sc0, m, &sv0, &mn0, mask_d6, mask_d4, mask_hi2);
 
         half scale = convert_half(convert_float(dd)  * (float)sv0);
         half mval  = convert_half(convert_float(dmm) * (float)mn0);
@@ -318,12 +318,12 @@ kernel void kernel_gemm_noshuffle_q4_k_f32_kimg(
         half2 d  = vload2(0, d_ptr  + sb_idx * m);
         half2 dm = vload2(0, dm_ptr + sb_idx * m);
 
-        global const uchar * sc0 = src0_s + (gx_2+0) * num_blocks_K * K_SCALE_SIZE + sb_idx * K_SCALE_SIZE;
-        global const uchar * sc1 = src0_s + (gx_2+1) * num_blocks_K * K_SCALE_SIZE + sb_idx * K_SCALE_SIZE;
+        global const uchar * sc0 = src0_s + sb_idx * K_SCALE_SIZE * m + (gx_2+0);
+        global const uchar * sc1 = sc0 + 1;
 
         uchar sv0, mn0, sv1, mn1;
-        get_scale_min_k4(sub_idx, sc0, 1, &sv0, &mn0, mask_d6, mask_d4, mask_hi2);
-        get_scale_min_k4(sub_idx, sc1, 1, &sv1, &mn1, mask_d6, mask_d4, mask_hi2);
+        get_scale_min_k4(sub_idx, sc0, m, &sv0, &mn0, mask_d6, mask_d4, mask_hi2);
+        get_scale_min_k4(sub_idx, sc1, m, &sv1, &mn1, mask_d6, mask_d4, mask_hi2);
 
         half2 scale = convert_half2(convert_float2(d)  * convert_float2((uchar2)(sv0, sv1)));
         half2 mval  = convert_half2(convert_float2(dm) * convert_float2((uchar2)(mn0, mn1)));
@@ -433,9 +433,9 @@ kernel void kernel_gemm_noshuffle_q4_k_f32_cok(
         half dd  = d_ptr [sb_idx * m];
         half dmm = dm_ptr[sb_idx * m];
 
-        global const uchar * sc0 = src0_s + gx * num_blocks_K * K_SCALE_SIZE + sb_idx * K_SCALE_SIZE;
+        global const uchar * sc0 = src0_s + sb_idx * K_SCALE_SIZE * m + gx;
         uchar sv0, mn0;
-        get_scale_min_k4(sub_idx, sc0, 1, &sv0, &mn0, mask_d6, mask_d4, mask_hi2);
+        get_scale_min_k4(sub_idx, sc0, m, &sv0, &mn0, mask_d6, mask_d4, mask_hi2);
         half scale = convert_half(convert_float(dd)  * (float)sv0);
         half mval  = convert_half(convert_float(dmm) * (float)mn0);
 

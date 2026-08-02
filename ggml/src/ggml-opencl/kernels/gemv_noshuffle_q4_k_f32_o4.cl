@@ -11,9 +11,11 @@
 #define NSUBGROUPS 4
 #define SUBGROUP_SIZE 64
 
+// scales are transposed: consecutive codes of a row are `stride` apart
 inline void get_scale_min_k4(
     int j,
     global const uchar * q,
+    uint stride,
     uchar * d,
     uchar * m,
     uchar mask_d6,
@@ -21,11 +23,11 @@ inline void get_scale_min_k4(
     uchar mask_hi2
 ) {
     if (j < 4) {
-        *d = q[j]   & mask_d6;
-        *m = q[j+4] & mask_d6;
+        *d = q[j*stride]     & mask_d6;
+        *m = q[(j+4)*stride] & mask_d6;
     } else {
-        *d = (q[j+4] & mask_d4) | ((q[j-4] & mask_hi2) >> 2);
-        *m = ((q[j+4] >> 4) & mask_d4) | ((q[j]   & mask_hi2) >> 2);
+        *d = (q[(j+4)*stride] & mask_d4) | ((q[(j-4)*stride] & mask_hi2) >> 2);
+        *m = ((q[(j+4)*stride] >> 4) & mask_d4) | ((q[j*stride] & mask_hi2) >> 2);
     }
 }
 
@@ -237,7 +239,6 @@ kernel void kernel_gemv_noshuffle_q4_k_f32_o4(
 
     uint LINE_STRIDE_A  = M / 2;
     uint BLOCK_STRIDE_A = NSUBGROUPS * M;
-    uint scales_per_row = (K / QK_K) * 12;
 
     private uint4  regA;
     private half2  regS_a, regS_b;
@@ -254,22 +255,22 @@ kernel void kernel_gemv_noshuffle_q4_k_f32_o4(
         // pair a scales/mins
         half2 d_a  = src0_d[gid_a + sb * LINE_STRIDE_A];
         half2 dm_a = src0_m[gid_a + sb * LINE_STRIDE_A];
-        global const uchar * sc0a = src0_s + 2 * gid_a * scales_per_row + sb * 12;
-        global const uchar * sc1a = src0_s + (2 * gid_a + 1) * scales_per_row + sb * 12;
+        global const uchar * sc0a = src0_s + sb * 12 * M + 2 * gid_a;
+        global const uchar * sc1a = sc0a + 1;
         uchar sv0a, mn0a, sv1a, mn1a;
-        get_scale_min_k4(j, sc0a, &sv0a, &mn0a, mask_d6, mask_d4, mask_hi2);
-        get_scale_min_k4(j, sc1a, &sv1a, &mn1a, mask_d6, mask_d4, mask_hi2);
+        get_scale_min_k4(j, sc0a, M, &sv0a, &mn0a, mask_d6, mask_d4, mask_hi2);
+        get_scale_min_k4(j, sc1a, M, &sv1a, &mn1a, mask_d6, mask_d4, mask_hi2);
         regS_a = convert_half2(convert_float2(d_a)  * convert_float2((uchar2)(sv0a, sv1a)));
         regM_a = convert_half2(convert_float2(dm_a) * convert_float2((uchar2)(mn0a, mn1a)));
 
         // pair b scales/mins
         half2 d_b  = src0_d[gid_b + sb * LINE_STRIDE_A];
         half2 dm_b = src0_m[gid_b + sb * LINE_STRIDE_A];
-        global const uchar * sc0b = src0_s + 2 * gid_b * scales_per_row + sb * 12;
-        global const uchar * sc1b = src0_s + (2 * gid_b + 1) * scales_per_row + sb * 12;
+        global const uchar * sc0b = src0_s + sb * 12 * M + 2 * gid_b;
+        global const uchar * sc1b = sc0b + 1;
         uchar sv0b, mn0b, sv1b, mn1b;
-        get_scale_min_k4(j, sc0b, &sv0b, &mn0b, mask_d6, mask_d4, mask_hi2);
-        get_scale_min_k4(j, sc1b, &sv1b, &mn1b, mask_d6, mask_d4, mask_hi2);
+        get_scale_min_k4(j, sc0b, M, &sv0b, &mn0b, mask_d6, mask_d4, mask_hi2);
+        get_scale_min_k4(j, sc1b, M, &sv1b, &mn1b, mask_d6, mask_d4, mask_hi2);
         regS_b = convert_half2(convert_float2(d_b)  * convert_float2((uchar2)(sv0b, sv1b)));
         regM_b = convert_half2(convert_float2(dm_b) * convert_float2((uchar2)(mn0b, mn1b)));
 
