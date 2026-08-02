@@ -435,12 +435,23 @@ int ts_awq_evolve_all(const ts_awq_layer * layers, int64_t n_layers,
 
     results->resize(n_layers);
 
+    // Family warm-start cache: maps family name -> best candidate from a
+    // previously-converged tensor in that family. Lives across BOTH the
+    // screening and evolution phases so screen results seed the evolution.
+    // Layers in the same family (e.g. all blk.*.ffn_up) tend to have similar
+    // optimal alpha/clip, so seeding the GA from a sibling's result converges
+    // in a few generations instead of dozens. Thread-safe via ts_sharded_map.
+    ts_sharded_map<std::string, ts_awq_candidate> family_seeds;
+
     // Progressive eval: screen on stratified 25% of layers first, then
     // promote survivors to full eval. For the per-layer GA, this reduces
     // to running a short screen on a subset of layers to warm-start seeds.
     // With <= 4 layers, skip screening. The screen fans out across the same
     // thread pool as the main evolution (layers are independent; the only
     // shared state is eval_ctx, which the caller guards).
+    // Screen results are fed into family_seeds so the main evolution starts
+    // warm for every family the screen touched (typically all of them, since
+    // the stratified sample covers every block).
     if (n_layers > 4) {
         int64_t screen_count = std::max((int64_t)1, n_layers / 4);
         ts_awq_evolve_params screen_params = *params;
@@ -468,11 +479,22 @@ int ts_awq_evolve_all(const ts_awq_layer * layers, int64_t n_layers,
         if (screen_threads <= 1) {
             for (int64_t si = 0; si < screen_count; si++) {
                 screen_params.seed = params->seed + (uint32_t)screen_li[si];
+                // Reuse family seed from earlier screen layers if available.
+                ts_awq_candidate fam_seed;
+                if (family_seeds.find_copy(layers[screen_li[si]].family, fam_seed)) {
+                    screen_params.seed_candidate = &fam_seed;
+                } else {
+                    screen_params.seed_candidate = nullptr;
+                }
                 int rc = ts_awq_evolve(&layers[screen_li[si]], eval, eval_ctx,
                                        &screen_params, &screen_results[si]);
                 if (rc != 0) {
                     return rc;
                 }
+                // Feed the result back into the family cache for later screen
+                // layers AND the main evolution phase.
+                family_seeds.assign(layers[screen_li[si]].family,
+                                    screen_results[si].best);
                 if (params->on_layer_done) {
                     params->on_layer_done(si, screen_count,
                                           layers[screen_li[si]].name.c_str(),
@@ -490,6 +512,12 @@ int ts_awq_evolve_all(const ts_awq_layer * layers, int64_t n_layers,
                     int64_t si = next_si.fetch_add(1, std::memory_order_relaxed);
                     if (si >= screen_count) return;
                     sp.seed = params->seed + (uint32_t)screen_li[si];
+                    ts_awq_candidate fam_seed;
+                    if (family_seeds.find_copy(layers[screen_li[si]].family, fam_seed)) {
+                        sp.seed_candidate = &fam_seed;
+                    } else {
+                        sp.seed_candidate = nullptr;
+                    }
                     int rc = ts_awq_evolve(&layers[screen_li[si]], eval, eval_ctx,
                                            &sp, &screen_results[si]);
                     if (rc != 0) {
@@ -497,6 +525,8 @@ int ts_awq_evolve_all(const ts_awq_layer * layers, int64_t n_layers,
                         first_rc.compare_exchange_strong(expected, rc,
                                                          std::memory_order_relaxed);
                     }
+                    family_seeds.assign(layers[screen_li[si]].family,
+                                        screen_results[si].best);
                     if (params->on_layer_done) {
                         params->on_layer_done(si, screen_count,
                                               layers[screen_li[si]].name.c_str(),
@@ -535,13 +565,9 @@ int ts_awq_evolve_all(const ts_awq_layer * layers, int64_t n_layers,
                                 params->on_phase_change_user);
     }
 
-    // Family warm-start cache: maps family name -> best candidate from a
-    // previously-converged tensor in that family. Layers in the same family
-    // (e.g. all blk.*.ffn_up) tend to have similar optimal alpha/clip, so
-    // seeding the GA from a sibling's result converges in a few generations
-    // instead of dozens. Thread-safe via ts_sharded_map so the parallel path
-    // can use it without a global lock.
-    ts_sharded_map<std::string, ts_awq_candidate> family_seeds;
+    // family_seeds was declared before the screening phase and is already
+    // populated with the screen's best candidate per family. The evolve
+    // phase reads and updates it as each layer converges.
 
     if (n_threads <= 1) {
         for (int64_t i = 0; i < n_layers; i++) {
