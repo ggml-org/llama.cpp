@@ -443,20 +443,14 @@ static float ts_dispatch_forced_t2(const float * weights, const float * act_scal
                                    uint32_t seed) {
     ts_expert_profile prof = ts_expert_default_profile(expert);
 
-    ts_quant_params_2d qp;
-    qp.alpha          = base_alpha * prof.alpha_scale;
-    qp.clip           = base_clip * prof.clip_scale;
-    qp.max_outliers   = prof.max_outliers;
-    qp.outlier_thresh = outlier_thresh * prof.outlier_thresh;
-    qp.use_imatrix    = act_scales != nullptr;
-    qp.use_septq      = prof.use_septq;
-    qp.awq_grid       = prof.awq_grid;
-    qp.seed           = seed;
+    float resolved_alpha = base_alpha * prof.alpha_scale;
+    float resolved_clip  = base_clip * prof.clip_scale;
 
-    ts_quant_result_2d qr;
-    int rc = ts_quantize_2d(weights, act_scales, nullptr, nullptr, act_scales,
-                            out_dim, in_dim, 0, &qp, &qr);
-    if (rc != 0) {
+    // Streaming MSE path: ~132 KB scratch instead of 700 MB.
+    float mse = ts_quantize_mse_streaming(
+        weights, act_scales, resolved_alpha, resolved_clip,
+        out_dim, in_dim);
+    if (mse < 0.0f) {
         return 1.0f;  // worst case
     }
 
@@ -913,14 +907,19 @@ int ts_dispatch_run_l5_loop(
             // element in place.
             const float * act = rep.act_scales_copy.empty()
                                     ? nullptr : rep.act_scales_copy.data();
-            ts_quant_result_2d qr_A = {};
-            ts_quant_result_2d qr_B = {};
-            int rc_A = ts_quantize_2d(rep_src.data(), act, nullptr, nullptr, act,
-                                      rep.out_dim, rep.in_dim, 0, &tqp_A, &qr_A);
-            int rc_B = ts_quantize_2d(rep_src.data(), act, nullptr, nullptr, act,
-                                      rep.out_dim, rep.in_dim, 0, &tqp_B, &qr_B);
-            float frob_A = (rc_A == 0) ? ts_refine_rel_frob(rep_src.data(), &qr_A, rep_n) : 1e30f;
-            float frob_B = (rc_B == 0) ? ts_refine_rel_frob(rep_src.data(), &qr_B, rep_n) : 1e30f;
+            // Streaming MSE for the A/B comparison (only needs the scalar,
+            // not the full packed output). ~132 KB scratch per call.
+            float mse_A = ts_quantize_mse_streaming(
+                rep_src.data(), act, tqp_A.alpha, tqp_A.clip,
+                rep.out_dim, rep.in_dim);
+            float mse_B = ts_quantize_mse_streaming(
+                rep_src.data(), act, tqp_B.alpha, tqp_B.clip,
+                rep.out_dim, rep.in_dim);
+            float rep_frob2 = ts_vec_dotpr(rep_src.data(), rep_src.data(), rep_n);
+            float frob_A = (mse_A >= 0.0f && rep_frob2 > 0.0f)
+                               ? (mse_A * (float)rep_n / rep_frob2) : 1e30f;
+            float frob_B = (mse_B >= 0.0f && rep_frob2 > 0.0f)
+                               ? (mse_B * (float)rep_n / rep_frob2) : 1e30f;
 
             bool stage_b_wins = (frob_B < frob_A);
             family_winners.push_back("{\"family\":\"" + fam + "\",\"stage\":\"" +
