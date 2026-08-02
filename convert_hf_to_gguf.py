@@ -126,6 +126,10 @@ def parse_args() -> argparse.Namespace:
         help="Exclude the multi-token prediction (MTP) head from the converted GGUF. Pair with --mtp on a second run to publish trunk and MTP as two files. Note: the split form duplicates embeddings, but even though the bundled default is more space-efficient overall, this allows differing quantization which may be more performant.",
     )
     parser.add_argument(
+        "--dspark", action="store_true",
+        help="Export only the DeepSeek-V4 DSpark draft tensors as a separate GGUF.",
+    )
+    parser.add_argument(
         "--mistral-format", action="store_true",
         help="Whether the model is stored following the Mistral format.",
     )
@@ -254,9 +258,16 @@ def main() -> None:
             from conversion.mistral import MistralModel
             model_class = MistralModel
 
-        if args.mtp and args.no_mtp:
-            logger.error("--mtp and --no-mtp are mutually exclusive")
+        if sum((args.mtp, args.no_mtp, args.dspark)) > 1:
+            logger.error("--mtp, --no-mtp, and --dspark are mutually exclusive")
             sys.exit(1)
+
+        if args.dspark:
+            if is_mistral_format or model_architecture != "DeepseekV4ForCausalLM":
+                logger.error("--dspark is only supported for DeepseekV4ForCausalLM")
+                sys.exit(1)
+            from conversion.deepseek import DeepseekV4DSparkModel
+            model_class = DeepseekV4DSparkModel
 
         if args.mtp or args.no_mtp:
             if not model_class.supports_mtp_export:
