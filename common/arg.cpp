@@ -2659,6 +2659,13 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.expert_heat_log_period = value;
         }
     ).set_env("LLAMA_ARG_EXPERT_HEAT_LOG_PERIOD"));
+    add_opt(common_arg(
+        {"--expert-hot-s"}, "N",
+        "number of top expert slots for GPU hot store (default: 0 = disabled)",
+        [](common_params & params, int value) {
+            params.expert_hot_s = value;
+        }
+    ).set_env("LLAMA_ARG_EXPERT_HOT_S"));
     GGML_ASSERT(params.n_gpu_layers < 0); // string_format would need to be extended for a default >= 0
     add_opt(common_arg(
         {"-ngl", "--gpu-layers", "--n-gpu-layers"}, "N",

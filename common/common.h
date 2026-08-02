@@ -535,6 +535,7 @@ struct common_params {
 
     float expert_heat_decay      = 0.99f;  // multiplicative decay per update
     int   expert_heat_log_period = 100;    // log period in updates
+    int   expert_hot_s           = 0;      // top-S expert slots (0 = disabled)
     bool    offline                    = false;
 
     int32_t ppl_stride      = 0;     // stride for perplexity calculations. If left at 0, the pre-existing approach will be used.

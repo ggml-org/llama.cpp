@@ -7,9 +7,10 @@
 
 llama_expert_heatmap::llama_expert_heatmap(
         int n_layers, int n_experts,
-        float decay_rate, int log_period) :
+        float decay_rate, int log_period, int hot_s) :
     n_layers(n_layers),
     n_experts(n_experts),
+    hot_s(hot_s),
     decay_rate(decay_rate),
     log_period(log_period),
     update_count(0),

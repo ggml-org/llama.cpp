@@ -467,7 +467,8 @@ llama_context::llama_context(
         expert_heatmap = std::make_unique<llama_expert_heatmap>(
             hparams.n_layer(), hparams.n_expert,
             params.expert_heat_decay,
-            params.expert_heat_log_period);
+            params.expert_heat_log_period,
+            params.expert_hot_s);
     }
 
     // Initialize the full vocabulary token ids for backend samplers.
@@ -3548,6 +3549,7 @@ llama_context_params llama_context_default_params() {
         /*.n_sampler                   =*/ 0,
         /*.expert_heat_decay           =*/ 0.99f,
         /*.expert_heat_log_period      =*/ 100,
+        /*.expert_hot_s                =*/ 0,
         /*.ctx_other                   =*/ nullptr,
     };
 
