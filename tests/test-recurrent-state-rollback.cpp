@@ -55,11 +55,12 @@ using pos_logits = std::map<llama_pos, std::vector<float>>;
 static llama_context * make_deep_ctx(
         const common_params & params, llama_model * model, uint32_t n_rs_seq, uint32_t n_ubatch, uint32_t n_ctx) {
     auto cparams = common_context_params_to_llama(params);
-    cparams.n_seq_max = 1;
-    cparams.n_rs_seq  = n_rs_seq;
-    cparams.n_ctx     = n_ctx;
-    cparams.n_batch   = std::max(n_ctx, n_rs_seq + 1);
-    cparams.n_ubatch  = std::max(n_ubatch, n_rs_seq + 1);
+    cparams.n_seq_max    = 1;
+    cparams.n_rs_seq     = n_rs_seq;
+    cparams.n_rs_aligned = 4;
+    cparams.n_ctx        = n_ctx;
+    cparams.n_batch      = std::max(n_ctx, n_rs_seq + 1);
+    cparams.n_ubatch     = std::max(n_ubatch, n_rs_seq + 1);
     return llama_init_from_model(model, cparams);
 }
 
