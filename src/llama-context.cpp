@@ -463,7 +463,8 @@ llama_context::llama_context(
         }
     }
 
-    if (hparams.n_expert > 0 && !cparams.warmup) {
+    if (hparams.n_expert > 0 && !cparams.warmup &&
+        (params.expert_heat_log_period != 0 || params.expert_hot_s != 0)) {
         expert_heatmap = std::make_unique<llama_expert_heatmap>(
             hparams.n_layer(), hparams.n_expert,
             params.expert_heat_decay,
@@ -471,7 +472,7 @@ llama_context::llama_context(
             params.expert_hot_s);
     }
 
-    if (hparams.n_expert > 0 && !cparams.warmup) {
+    if (hparams.n_expert > 0 && !cparams.warmup && params.expert_hot_s != 0) {
         expert_hotstore = std::make_unique<llama_expert_hotstore>(
             &model, hparams.n_layer(), hparams.n_expert,
             params.expert_hot_s);
@@ -3544,7 +3545,7 @@ llama_context_params llama_context_default_params() {
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,
         /*.expert_heat_decay           =*/ 0.99f,
-        /*.expert_heat_log_period      =*/ 100,
+        /*.expert_heat_log_period      =*/ 0,
         /*.expert_hot_s                =*/ 0,
         /*.ctx_other                   =*/ nullptr,
     };

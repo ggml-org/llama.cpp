@@ -534,7 +534,7 @@ struct common_params {
     int32_t control_vector_layer_end   = -1; // layer range for control vector
 
     float expert_heat_decay      = 0.99f;  // multiplicative decay per update
-    int   expert_heat_log_period = 100;    // log period in updates
+    int   expert_heat_log_period = 0;    // log period in updates (0 = off)
     int   expert_hot_s           = 0;      // top-S expert slots (0 = disabled)
     bool    offline                    = false;
 
