@@ -743,8 +743,22 @@ static std::vector<llama_kv_cache_dsv4_context::comp_plan> dsv4_build_comp_plans
     std::vector<llama_kv_cache_dsv4_context::comp_plan> plans;
     plans.reserve(ubatches.size());
 
+    // A pending restore belongs to the first ubatch of its seq only: replaying
+    // it in later ubatches would clobber ring rows the earlier ubatches have
+    // already persisted for their own positions.
+    std::vector<uint32_t> rs_remaining = rs_idx;
+
     for (const llama_ubatch & ubatch : ubatches) {
-        plans.push_back(dsv4_build_comp_plan(ubatch, ratio, overlap, state_size, kv_size, n_stream, n_rs_seq, n_aligned, rs_idx));
+        plans.push_back(dsv4_build_comp_plan(ubatch, ratio, overlap, state_size, kv_size, n_stream, n_rs_seq, n_aligned, rs_remaining));
+
+        for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+            for (int32_t s = 0; s < ubatch.n_seq_id[i]; ++s) {
+                const llama_seq_id seq_id = ubatch.seq_id[i][s];
+                if (seq_id >= 0 && (size_t) seq_id < rs_remaining.size()) {
+                    rs_remaining[seq_id] = 0;
+                }
+            }
+        }
     }
 
     return plans;
