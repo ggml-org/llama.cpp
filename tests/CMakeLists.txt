@@ -217,6 +217,18 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     set_tests_properties(test-recurrent-state-rollback PROPERTIES
         FIXTURES_REQUIRED generate-models
     )
+
+    # CPU only: with n_rs_seq enabled the DSV4 graph's per-plane state inputs
+    # exceed GGML_SCHED_MAX_SPLIT_INPUTS when a single device takes the whole graph
+    llama_test(
+        test-recurrent-state-rollback
+        NAME test-recurrent-state-rollback-dsv4
+        LABEL main
+        ARGS -m "${MODEL_DIR}/deepseek4-moe.gguf" --device none
+    )
+    set_tests_properties(test-recurrent-state-rollback-dsv4 PROPERTIES
+        FIXTURES_REQUIRED generate-models
+    )
 endif()
 
 llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp)

@@ -9,6 +9,7 @@
 
 // TODO: replace with #include "llama-ext.h" in the future
 #include "../src/llama-arch.h"
+#include "../src/llama-hparams.h"
 #include "../src/llama-model-saver.h"
 
 #include <cinttypes>
@@ -109,6 +110,11 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         n_embd = 128;
         n_head = 1;
         n_ff   = 192;
+    } else if (arch == LLM_ARCH_DEEPSEEK4) {
+        n_embd  = 128;
+        n_head  = 2;
+        n_ff    = 192;
+        n_layer = 3; // one layer per compress ratio: raw, CSA, HCA
     } else if (arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE) {
         n_layer = 3;
     } else if (arch == LLM_ARCH_CHAMELEON) {
@@ -168,6 +174,11 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_ROPE_DIMENSION_COUNT,       uint32_t(64));
         ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH_MLA,   uint32_t(192));
         ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH_MLA, uint32_t(128));
+    } else if (arch == LLM_ARCH_DEEPSEEK4) {
+        // the graph requires key_length == value_length, K doubles as V in the k-only caches
+        ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH,   uint32_t(64));
+        ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH, uint32_t(64));
+        ms.add_kv(LLM_KV_ROPE_DIMENSION_COUNT,   uint32_t(16));
     } else if (arch == LLM_ARCH_MINIMAX_M3) {
         // partial rotary: n_rot must not exceed the indexer key length (64)
         ms.add_kv(LLM_KV_ROPE_DIMENSION_COUNT,       uint32_t(64));
@@ -222,6 +233,23 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
         ms.add_kv(LLM_KV_EXPERT_GATING_FUNC,         uint32_t(2)); // sigmoid
         ms.add_kv(LLM_KV_EXPERT_GROUP_SCALE,         1.0f);
         ms.add_kv(LLM_KV_EXPERTS_PER_GROUP,          uint32_t(1));
+    }
+
+    if (arch == LLM_ARCH_DEEPSEEK4) {
+        ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, uint32_t(1)); // MQA: a single shared KV vector per position
+        ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW, n_ctx);      // the raw window must cover positions the HCA has not yet compressed
+        ms.add_kv(LLM_KV_EXPERT_GATING_FUNC,      uint32_t(LLAMA_EXPERT_GATING_FUNC_TYPE_SQRT_SOFTPLUS)); // the loader rejects other scoring
+        ms.add_kv(LLM_KV_EXPERT_WEIGHTS_SCALE,    1.5f);
+        ms.add_kv(LLM_KV_EXPERT_WEIGHTS_NORM,     true);
+        ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP,        10.0f);
+        ms.add_kv(LLM_KV_ATTENTION_OUTPUT_GROUP_COUNT,      uint32_t(2));
+        ms.add_kv(LLM_KV_ATTENTION_OUTPUT_LORA_RANK,        uint32_t(16));
+        ms.add_kv(LLM_KV_ATTENTION_COMPRESS_ROPE_FREQ_BASE, 160000.0f);
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT,              uint32_t(4)); // the graph builder asserts hc == 4
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, uint32_t(20));
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_EPSILON,            1.0e-6f);
+        ms.add_kv(LLM_KV_HASH_LAYER_COUNT, uint32_t(0)); // hash routing reads an I32 token->expert table, incompatible with random weights
+        ms.add_kv(LLM_KV_ATTENTION_COMPRESS_RATIOS, std::vector<uint32_t>({0, 4, 128}));
     }
 
     ms.add_kv(LLM_KV_POSNET_EMBEDDING_LENGTH,   n_embd);
@@ -345,6 +373,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_DEEPSEEK:
         case LLM_ARCH_DEEPSEEK2:
         case LLM_ARCH_DEEPSEEK32:
+        case LLM_ARCH_DEEPSEEK4:
         case LLM_ARCH_GLM4_MOE:
         case LLM_ARCH_GLM_DSA:
         case LLM_ARCH_EXAONE_MOE:
@@ -422,9 +451,6 @@ static bool arch_supported(const llm_arch arch) {
         return false; // TODO tensor shapes
     }
     if (arch == LLM_ARCH_DEEPSEEK2OCR) {
-        return false;
-    }
-    if (arch == LLM_ARCH_DEEPSEEK4) {
         return false;
     }
 
