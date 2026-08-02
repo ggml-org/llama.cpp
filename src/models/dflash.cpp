@@ -3,6 +3,7 @@
 #include "llama-impl.h"
 #include "llama-kv-cache.h"
 #include "llama-kv-cache-iswa.h"
+#include "ggml-backend.h"
 
 void llama_model_dflash::load_arch_hparams(llama_model_loader & ml) {
 
@@ -487,6 +488,13 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
         output = model_other->output;
     }
 
+    if (output->buffer != nullptr && ggml_backend_buffer_is_meta(output->buffer)) {
+        ggml_tensor * concrete = ggml_backend_meta_get_simple_tensor(output, 0);
+        GGML_ASSERT(concrete->ne[0] == output->ne[0] && concrete->ne[1] == output->ne[1] &&
+                "DFlash requires a mirrored target output head");
+        output = concrete;
+    }
+
     cur = build_lora_mm(output, cur);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
@@ -661,6 +669,13 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
         const auto * model_other = llama_get_model(cparams.ctx_other);
         GGML_ASSERT(model_other->output != nullptr && "DSpark decoder requires the target model's output projection");
         output = model_other->output;
+    }
+
+    if (output->buffer != nullptr && ggml_backend_buffer_is_meta(output->buffer)) {
+        ggml_tensor * concrete = ggml_backend_meta_get_simple_tensor(output, 0);
+        GGML_ASSERT(concrete->ne[0] == output->ne[0] && concrete->ne[1] == output->ne[1] &&
+                "DFlash requires a mirrored target output head");
+        output = concrete;
     }
 
     cur = build_lora_mm(output, cur);

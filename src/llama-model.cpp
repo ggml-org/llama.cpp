@@ -1815,8 +1815,10 @@ bool llama_model::is_tensor_parallel_output_head(const ggml_tensor * tensor) con
         const char * vocab_sharded = getenv("GGML_TP_VOCAB_SHARDED_OUTPUT");
         const bool vocab_sharded_output = arch == LLM_ARCH_DEEPSEEK4 &&
             vocab_sharded != nullptr && strcmp(vocab_sharded, "1") == 0;
-        if (enabled != nullptr && strcmp(enabled, "1") == 0 && params.split_mode == LLAMA_SPLIT_MODE_TENSOR &&
-                supported_arch) {
+        const bool requested = enabled != nullptr && strcmp(enabled, "1") == 0;
+        if (requested && params.no_tp_output_head_sharding && arch == LLM_ARCH_DEEPSEEK4) {
+            LLAMA_LOG_WARN("%s: keeping the DeepSeek V4 output head mirrored because an external draft model shares it\n", __func__);
+        } else if (requested && params.split_mode == LLAMA_SPLIT_MODE_TENSOR && supported_arch) {
             const size_t ndev = get_split_state_ud.n_devices;
             auto valid_split = [&](const ggml_tensor * head, size_t rotation) {
                 if (head == nullptr || head == tok_embd || ggml_n_dims(head) != 2 ||
@@ -2585,6 +2587,7 @@ llama_model_params llama_model_default_params() {
         /*.no_host                     =*/ false,
         /*.no_alloc                    =*/ false,
         /*.load_mtp                    =*/ false,
+        /*.no_tp_output_head_sharding =*/ false,
     };
 
     return result;

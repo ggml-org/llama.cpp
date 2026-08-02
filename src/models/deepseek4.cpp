@@ -1395,6 +1395,9 @@ llama_model_deepseek4::graph::graph(const llama_model & model, const llm_graph_p
     res->t_embd = cur;
 
     cur = ggml_mul_mat(ctx0, model.output, cur);
+    if (model.is_tensor_parallel_output_head(model.output)) {
+        cur->flags |= GGML_TENSOR_FLAG_FORCE_FP32_ALLREDUCE;
+    }
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 
@@ -1537,6 +1540,9 @@ llama_model_deepseek4::graph_mtp::graph_mtp(const llama_model & model, const llm
     ggml_tensor * head_w = layer.nextn.shared_head_head ? layer.nextn.shared_head_head : model.output;
     GGML_ASSERT(head_w && "DEEPSEEK4 MTP missing LM head");
     cur = ggml_mul_mat(ctx0, head_w, cur);
+    if (model.is_tensor_parallel_output_head(head_w)) {
+        cur->flags |= GGML_TENSOR_FLAG_FORCE_FP32_ALLREDUCE;
+    }
     cb(cur, "result_output", -1);
 
     res->t_logits = cur;
