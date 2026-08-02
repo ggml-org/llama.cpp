@@ -4,6 +4,7 @@
 #include "ggml.h"
 
 #include <cstdint>
+#include <vector>
 
 namespace ggml_metal_tuning {
 
@@ -51,6 +52,19 @@ struct fa_vec_entry_t {
     fa_vec_key_t key;
     fa_vec_cfg_t cfg;
 };
+
+// legal NE values for a (dk,dv): NL = 32/NE, require (dk/4)%NL==0 && (dv/4)%NL==0.
+// single source shared by the offline tuner and test-backend-ops.
+inline std::vector<int> fa_vec_legal_ne(int dk, int dv) {
+    std::vector<int> r;
+    for (int ne : { 1, 2, 4 }) {
+        const int nl = 32 / ne;
+        if ((dk/4) % nl == 0 && (dv/4) % nl == 0) {
+            r.push_back(ne);
+        }
+    }
+    return r;
+}
 
 // test/tune-only override; when set, fa_vec_pick returns it directly.
 void         fa_vec_set_override(fa_vec_cfg_t cfg);

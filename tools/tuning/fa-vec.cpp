@@ -3,6 +3,7 @@
 
 #include "ggml.h"
 #include "ggml-backend.h"
+#include "ggml-metal-tuning.h"
 
 #include <algorithm>
 #include <cmath>
@@ -155,7 +156,7 @@ static void fa_init_kq_mask(ggml_tensor * t, std::mt19937 & rng, float min, floa
 static unsigned fa_cell_seed(const fa_shape & s, unsigned base) {
     unsigned h = base;
     for (int v : { s.dk, s.dv, s.ne01, s.ne11, (int) s.type_kv }) {
-        h = h*1000003u + (unsigned) v;
+        h = h*1000003u + (unsigned) v;  // small prime, standard multiplicative hash mixing
     }
     return h;
 }
@@ -173,18 +174,6 @@ static void fa_init_tensors(ggml_context * ctx, const fa_shape & s, unsigned bas
             fa_init_uniform(t, rng, -1.0f, 1.0f);
         }
     }
-}
-
-// legal NE for a (dk,dv): NL = 32/NE, require (dk/4)%NL==0 && (dv/4)%NL==0
-static std::vector<int> fa_legal_ne(int dk, int dv) {
-    std::vector<int> r;
-    for (int ne : { 1, 2, 4 }) {
-        const int nl = 32 / ne;
-        if ((dk/4) % nl == 0 && (dv/4) % nl == 0) {
-            r.push_back(ne);
-        }
-    }
-    return r;
 }
 
 using set_override_t   = void (*)(int, int);
@@ -227,7 +216,7 @@ static const char * fa_type_token(ggml_type t) {
         case GGML_TYPE_Q5_0: return "GGML_TYPE_Q5_0";
         case GGML_TYPE_Q5_1: return "GGML_TYPE_Q5_1";
         case GGML_TYPE_Q8_0: return "GGML_TYPE_Q8_0";
-        default:             return "GGML_TYPE_F16";
+        default:             GGML_ABORT("unhandled KV type in fa_type_token: %d", (int) t);
     }
 }
 
@@ -256,7 +245,7 @@ static std::vector<fa_cand> fa_build_cands(const fa_procs & procs, int dk, int d
 
     std::vector<fa_cand> cands;
     base_i = -1;
-    for (int ne : fa_legal_ne(dk, dv)) {
+    for (int ne : ggml_metal_tuning::fa_vec_legal_ne(dk, dv)) {
         for (int Q : { 1, 2, 4 }) {
             if (Q == 1 && ne == base_ne) {
                 base_i = (int) cands.size();
