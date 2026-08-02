@@ -44,9 +44,7 @@ void llama_model_deepseek32::load_arch_hparams(llama_model_loader & ml) {
     GGML_ASSERT(hparams.n_layer_nextn < hparams.n_layer_all && "n_layer_nextn must be < n_layer");
 
     switch (hparams.n_layer()) {
-        case 61: // GGUF with NextN/MTP metadata: n_layer() excludes the nextn layer
-        case 62:
-            type = LLM_TYPE_685B_A37B; break;
+        case 61: type = LLM_TYPE_685B_A37B; break;
         default: type = LLM_TYPE_UNKNOWN;
     }
 }
