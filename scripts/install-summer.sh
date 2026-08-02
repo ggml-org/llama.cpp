@@ -71,7 +71,8 @@ cmake -S . -B "$BUILD_DIR" \
 cmake --build "$BUILD_DIR" --target llama-tiered -j"$JOBS"
 
 install -Dm755 "$BUILD_DIR/bin/llama-tiered" "$PREFIX/bin/llama-tiered"
-install -Dm755 "$SUMMER_TMP" "$PREFIX/bin/summer"
+install -Dm755 "$SUMMER_TMP" "$PREFIX/bin/Summer.CPP"
+rm -f "$PREFIX/bin/summer"
 mkdir -p "$HOME/models" "$HOME/.config/summer" "$HOME/.local/share/summer"
 
 cat <<EOF
@@ -81,7 +82,7 @@ Summer.cpp installation complete.
   CUDA architecture : $CUDA_ARCH
   FORCE_MMQ          : $FORCE_MMQ
   llama-tiered       : $PREFIX/bin/llama-tiered
-  summer CLI         : $PREFIX/bin/summer
+  Summer.CPP CLI     : $PREFIX/bin/Summer.CPP
   model directory    : $HOME/models
   VRAM policy        : free-memory check, 3400 MiB floor, bounded OOM retry
   DRAM policy        : model-size-aware budget, system-RAM preflight
@@ -94,5 +95,5 @@ Add this line to your shell configuration when $PREFIX/bin is not in PATH:
 
 Then place one or more .gguf files in $HOME/models and run:
 
-  summer
+  Summer.CPP
 EOF

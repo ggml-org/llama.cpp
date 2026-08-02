@@ -8,7 +8,7 @@
 
 [![Platform](https://img.shields.io/badge/platform-Linux-111827?logo=linux&logoColor=white)](#必要環境)
 [![GPU](https://img.shields.io/badge/GPU-NVIDIA%20CUDA-76B900?logo=nvidia&logoColor=white)](#必要環境)
-[![Language](https://img.shields.io/badge/CLI-Python%203-3776AB?logo=python&logoColor=white)](#summer-cli)
+[![Language](https://img.shields.io/badge/CLI-Python%203-3776AB?logo=python&logoColor=white)](#summercpp-cli)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](#ライセンス)
 
 </div>
@@ -38,7 +38,7 @@ Placement planner
    └── SSD : temporary CUDA VMM mappings for MoE experts
 ```
 
-このリポジトリには、対話用の`summer` CLIも含まれます。
+このリポジトリには、対話用の`Summer.CPP` CLIも含まれます。
 
 - 生成テキストを逐次表示
 - `<think>...</think>`を表示しない
@@ -118,8 +118,9 @@ cd "$HOME/Summer.cpp"
 
 1. GTX 16/Turingで必要になるDRAM mapped pinned fallbackを適用
 2. CUDA版`llama-tiered`をRelease build
-3. `llama-tiered`と`summer`を`~/.local/bin`へinstall
-4. `~/models`を作成
+3. `llama-tiered`と`Summer.CPP`を`~/.local/bin`へinstall
+4. 旧CLIの`~/.local/bin/summer`を削除
+5. `~/models`を作成
 
 ```bash
 bash scripts/install-summer.sh
@@ -151,7 +152,7 @@ hash -r
 
 ```bash
 command -v llama-tiered
-command -v summer
+command -v Summer.CPP
 ```
 
 ### 5. モデル配置
@@ -178,7 +179,7 @@ split GGUFを使う場合は、同じdirectoryへ全partを置いてください
 ### 6. 起動
 
 ```bash
-summer
+Summer.CPP
 ```
 
 ## Manual build
@@ -215,7 +216,8 @@ user-local install:
 
 ```bash
 install -Dm755 build/bin/llama-tiered "$HOME/.local/bin/llama-tiered"
-install -Dm755 scripts/summer "$HOME/.local/bin/summer"
+install -Dm755 scripts/summer "$HOME/.local/bin/Summer.CPP"
+rm -f "$HOME/.local/bin/summer"
 ```
 
 ## llama-tieredを直接使う
@@ -258,17 +260,17 @@ llama-tiered \
 
 `2>/dev/null`はエラーも非表示にします。問題調査時には外してください。
 
-## Summer CLI
+## Summer.CPP CLI
 
 起動:
 
 ```bash
-summer
+Summer.CPP
 ```
 
 ```text
 ╭────────────────────────────────────────────────────────────╮
-│                           SUMMER                           │
+│                        Summer.CPP                          │
 │                  streaming local AI chat                  │
 │           Qwen3.6-35B-A3B-UD-IQ1_M.gguf                  │
 ╰────────────────────────────────────────────────────────────╯
@@ -276,7 +278,7 @@ summer
 /help  /models  /model  /py  /runlast  /clear  /exit
 
 you ❯ こんにちは
-summer ❯ こんにちは。私はSummerです。
+Summer.CPP ❯ こんにちは。私はSummerです。
 ```
 
 ### CLI commands
@@ -400,7 +402,7 @@ CLI設定:
 例:
 
 ```bash
-SUMMER_MODEL_DIR=/mnt/models summer
+SUMMER_MODEL_DIR=/mnt/models Summer.CPP
 ```
 
 ## Memory budget調整
@@ -513,12 +515,12 @@ llama-tiered \
   "test"
 ```
 
-### `summer: command not found`
+### `Summer.CPP: command not found`
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 hash -r
-command -v summer
+command -v Summer.CPP
 ```
 
 永続化:
@@ -611,7 +613,7 @@ Summer.cpp/
 ├── scripts/
 │   ├── apply-tiered-dram-pinned-fallback.py
 │   ├── install-summer.sh
-│   └── summer                    streaming chat CLI
+│   └── summer                    Summer.CPP CLI source
 ├── src/                          llama library
 └── build/bin/llama-tiered        build後の実行file
 ```
@@ -621,6 +623,7 @@ Summer.cpp/
 user-local commandとCLI設定を削除します。
 
 ```bash
+rm -f "$HOME/.local/bin/Summer.CPP"
 rm -f "$HOME/.local/bin/summer"
 rm -f "$HOME/.local/bin/llama-tiered"
 rm -rf "$HOME/.config/summer"

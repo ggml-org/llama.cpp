@@ -124,7 +124,7 @@ def banner(model: Path) -> None:
     inner = width - 2
     label = model.name if len(model.name) <= inner - 2 else model.name[: inner - 3] + "…"
     print(f"{PURPLE}╭{'─' * inner}╮{RESET}")
-    print(f"{PURPLE}│{RESET}{BOLD}{CYAN}{' SUMMER '.center(inner)}{RESET}{PURPLE}│{RESET}")
+    print(f"{PURPLE}│{RESET}{BOLD}{CYAN}{' Summer.CPP '.center(inner)}{RESET}{PURPLE}│{RESET}")
     print(f"{PURPLE}│{RESET}{DIM}{'streaming local AI chat'.center(inner)}{RESET}{PURPLE}│{RESET}")
     print(f"{PURPLE}│{RESET}{GRAY}{label.center(inner)}{RESET}{PURPLE}│{RESET}")
     print(f"{PURPLE}╰{'─' * inner}╯{RESET}")
@@ -183,7 +183,7 @@ def run_model(prompt: str, model: Path, config: dict[str, object], debug: bool) 
     if shutil.which("stdbuf"):
         command = ["stdbuf", "-o0", "-e0", *command]
 
-    print(f"{DIM}Summer is loading…{RESET}", end="\r", flush=True)
+    print(f"{DIM}Summer.CPP is loading…{RESET}", end="\r", flush=True)
     process: subprocess.Popen[str] | None = None
     parts: list[str] = []
     started = False
@@ -200,7 +200,7 @@ def run_model(prompt: str, model: Path, config: dict[str, object], debug: bool) 
             if not text:
                 return
             print(" " * 80, end="\r")
-            print(f"{BOLD}{PURPLE}summer ❯{RESET} ", end="", flush=True)
+            print(f"{BOLD}{PURPLE}Summer.CPP ❯{RESET} ", end="", flush=True)
             started = True
         print(text, end="", flush=True)
         parts.append(text)
@@ -387,7 +387,7 @@ def main() -> int:
             continue
         if command == "/history":
             for role, text in history:
-                print(f"{'you' if role == 'user' else 'summer'} ❯ {text}\n")
+                print(f"{'you' if role == 'user' else 'Summer.CPP'} ❯ {text}\n")
             continue
         if command == "/about":
             print(json.dumps({**config, "binary": str(binary), "repo": str(REPO)}, ensure_ascii=False, indent=2), "\n")
