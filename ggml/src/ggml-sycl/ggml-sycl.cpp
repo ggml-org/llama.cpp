@@ -167,7 +167,10 @@ static ggml_sycl_device_info ggml_sycl_init() {
             ze_device_properties_t props = {};
             props.stype = ZE_STRUCTURE_TYPE_DEVICE_PROPERTIES;
             ze_result_t r = zeDeviceGetProperties(ze_dev, &props);
-            info.devices[i].l0_discrete_gpu = r == ZE_RESULT_SUCCESS && !(props.flags & ZE_DEVICE_PROPERTY_FLAG_INTEGRATED);
+            if (r == ZE_RESULT_SUCCESS) {
+                info.devices[i].l0_device_type_valid = true;
+                info.devices[i].l0_discrete_gpu = !(props.flags & ZE_DEVICE_PROPERTY_FLAG_INTEGRATED);
+            }
         }
 #endif
     }
@@ -5606,7 +5609,11 @@ static void ggml_backend_sycl_device_get_memory(ggml_backend_dev_t dev, size_t *
 }
 
 static enum ggml_backend_dev_type ggml_backend_sycl_device_get_type(ggml_backend_dev_t dev) {
-    GGML_UNUSED(dev);
+    ggml_backend_sycl_device_context * ctx = (ggml_backend_sycl_device_context *)dev->context;
+    const sycl_device_info & info = ggml_sycl_info().devices[ctx->device];
+    if (info.l0_device_type_valid && !info.l0_discrete_gpu) {
+        return GGML_BACKEND_DEVICE_TYPE_IGPU;
+    }
     return GGML_BACKEND_DEVICE_TYPE_GPU;
 }
 
