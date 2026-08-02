@@ -86,6 +86,8 @@ struct common_chat_msg {
     std::string                               reasoning_content;
     std::string                               tool_name;
     std::string                               tool_call_id;
+    bool                                      content_present = true;
+    bool                                      content_is_null = false;
 
     nlohmann::ordered_json to_json_oaicompat(bool concat_typed_text = false) const;
 
@@ -122,7 +124,8 @@ struct common_chat_msg {
     bool operator==(const common_chat_msg & other) const {
         return role == other.role && content == other.content && content_parts == other.content_parts &&
                tool_calls == other.tool_calls && reasoning_content == other.reasoning_content &&
-               tool_name == other.tool_name && tool_call_id == other.tool_call_id;
+               tool_name == other.tool_name && tool_call_id == other.tool_call_id &&
+               content_present == other.content_present && content_is_null == other.content_is_null;
     }
 
     bool operator!=(const common_chat_msg & other) const { return !(*this == other); }
