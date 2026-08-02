@@ -123,7 +123,7 @@ llama_context::llama_context(
     cparams.no_perf                 = params.no_perf;
     cparams.warmup                  = false;
 
-    // one extra slot: index n_layer captures the output of the final layer
+    // +1: id n_layer() taps the output of the last layer ("input" of the head)
     cparams.embeddings_layer_inp.resize(hparams.n_layer() + 1, false);
     embd_layer_inp.resize(hparams.n_layer() + 1);
 
@@ -334,25 +334,6 @@ llama_context::llama_context(
                 throw std::runtime_error(format("failed to initialize %s backend", ggml_backend_dev_name(dev.dev)));
             }
             backends.emplace_back(backend);
-        }
-
-        // A layer-split DFlash/DSpark draft may borrow a tensor-sharded output
-        // head from its target. Add an independent backend for the target meta
-        // device so only that shared projection uses target tensor parallelism;
-        // the three draft backbone layers retain their layer placement.
-        if (model.arch == LLM_ARCH_DFLASH && cparams.ctx_other != nullptr) {
-            const llama_model * model_other = llama_get_model(cparams.ctx_other);
-            if (model_other->split_mode() == LLAMA_SPLIT_MODE_TENSOR) {
-                GGML_ASSERT(model_other->devices.size() == 1);
-                ggml_backend_dev_t meta_dev = model_other->devices[0].dev;
-                ggml_backend_t backend = ggml_backend_dev_init(meta_dev, nullptr);
-                if (backend == nullptr) {
-                    throw std::runtime_error(format("failed to initialize borrowed %s backend", ggml_backend_dev_name(meta_dev)));
-                }
-                LLAMA_LOG_INFO("%s: adding borrowed target backend %s for the DFlash output head\n",
-                        __func__, ggml_backend_dev_name(meta_dev));
-                backends.emplace_back(backend);
-            }
         }
 
         // add ACCEL backends (such as BLAS)
@@ -1187,7 +1168,7 @@ void llama_context::set_embeddings_nextn(bool value, bool masked) {
 void llama_context::set_embeddings_layer_inp(uint32_t lid, bool enable) {
     LLAMA_LOG_DEBUG("%s: lid = %d, enable = %d\n", __func__, lid, enable);
 
-    GGML_ASSERT(lid < cparams.embeddings_layer_inp.size());
+    GGML_ASSERT(lid <= model.hparams.n_layer());
 
     cparams.embeddings_layer_inp[lid] = enable;
 
@@ -1760,7 +1741,8 @@ int llama_context::decode(const llama_batch & batch_inp) {
     const auto & hparams = model.hparams;
 
     const int64_t n_vocab = vocab.n_tokens();
-    const int64_t n_embd  = hparams.n_embd_inp();
+    const bool    mtp_embd = cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP && batch_inp.embd;
+    const int64_t n_embd  = mtp_embd ? hparams.n_embd_out() : hparams.n_embd_inp();
 
     // when computing embeddings, all tokens are output
     const bool output_all   = cparams.embeddings;
@@ -2319,8 +2301,9 @@ void llama_context::extract_layer_inputs(const llm_graph_result * res, size_t to
 }
 
 void llama_context::output_reorder() {
-    const uint64_t n_vocab = model.vocab.n_tokens();
-    const uint64_t n_embd  = model.hparams.n_embd;
+    const uint64_t n_vocab     = model.vocab.n_tokens();
+    const uint64_t n_embd      = model.hparams.n_embd;
+    const uint64_t n_embd_out  = model.hparams.n_embd_out();
 
     for (size_t s = 0; s < output_swaps.size(); ++s) {
         const uint64_t i0 = output_swaps[s].i0;
@@ -2333,14 +2316,14 @@ void llama_context::output_reorder() {
         }
 
         if (embd.size > 0) {
-            for (uint64_t k = 0; k < n_embd; k++) {
-                std::swap(embd.data[i0*n_embd + k], embd.data[i1*n_embd + k]);
+            for (uint64_t k = 0; k < n_embd_out; k++) {
+                std::swap(embd.data[i0*n_embd_out + k], embd.data[i1*n_embd_out + k]);
             }
         }
 
         if (embd_nextn.size > 0) {
-            for (uint64_t k = 0; k < n_embd; k++) {
-                std::swap(embd_nextn.data[i0*n_embd + k], embd_nextn.data[i1*n_embd + k]);
+            for (uint64_t k = 0; k < n_embd_out; k++) {
+                std::swap(embd_nextn.data[i0*n_embd_out + k], embd_nextn.data[i1*n_embd_out + k]);
             }
         }
 
@@ -2395,6 +2378,7 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
         model.arch == LLM_ARCH_QWEN35 ||
         model.arch == LLM_ARCH_QWEN35MOE ||
         model.arch == LLM_ARCH_DEEPSEEK4 ||
+        (model.arch == LLM_ARCH_DFLASH && model.hparams.dsv4_hc_mult > 0) ||
         model.arch == LLM_ARCH_NANBEIGE ||
         model.arch == LLM_ARCH_DFLASH || // DSpark drafters may reuse the deepseek4-style MLA/MoE/HC graph
         model.arch == LLM_ARCH_MINIMAX_M3) {

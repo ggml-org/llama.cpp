@@ -33,7 +33,7 @@ enum resize_algo {
     RESIZE_ALGO_BILINEAR, // stretch to target resolution
     RESIZE_ALGO_BICUBIC, // center-crop when aspect ratio doesn't match
     RESIZE_ALGO_BICUBIC_PILLOW,
-    // RESIZE_ALGO_LANCZOS, // TODO
+    RESIZE_ALGO_LANCZOS,
 };
 
 // Padding style for img_tool::resize
@@ -54,6 +54,8 @@ struct clip_hparams {
     int32_t projection_dim = 0;
     int32_t n_head = 0;
     int32_t n_head_kv = 0;
+    // 0 = derive from n_embd; set when qkv width != n_embd
+    int32_t n_embd_head = 0;
     int32_t n_layer = 0;
     int32_t n_merge = 1; // number of patch merges **per-side**
 
