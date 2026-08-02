@@ -2252,8 +2252,9 @@ int llama_bench(int argc, char ** argv) {
     // ref: https://github.com/ggml-org/llama.cpp/pull/16944#issuecomment-3478151721
     ctx_state cstate;
 
-    int  params_idx   = 0;
-    auto params_count = params_instances.size();
+    int  params_idx        = 0;
+    int  failed_benchmarks = 0;
+    auto params_count      = params_instances.size();
     for (const auto & inst : params_instances) {
         params_idx++;
         if (params.progress) {
@@ -2287,12 +2288,19 @@ int llama_bench(int argc, char ** argv) {
             uint32_t n_ctx_needed = inst.n_prompt + inst.n_gen + inst.n_depth;
             cparams.n_ctx = std::max(cparams.n_ctx, n_ctx_needed);
 
-            common_fit_params(inst.model.c_str(), &mparams, &cparams,
-                fit_tensor_split.data(),
-                fit_overrides.data(),
-                margins.data(),
-                inst.fit_min_ctx,
-                params.verbose ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
+            try {
+                common_fit_params(inst.model.c_str(), &mparams, &cparams,
+                    fit_tensor_split.data(),
+                    fit_overrides.data(),
+                    margins.data(),
+                    inst.fit_min_ctx,
+                    params.verbose ? GGML_LOG_LEVEL_DEBUG : GGML_LOG_LEVEL_ERROR);
+            } catch (const std::exception & e) {
+                fprintf(stderr, "%s: error: failed to fit params for model '%s': %s\n", __func__, inst.model.c_str(), e.what());
+                failed_benchmarks++;
+                cstate = ctx_state();
+                continue;
+            }
        }
 
         // keep the same model between tests when possible
@@ -2304,7 +2312,10 @@ int llama_bench(int argc, char ** argv) {
             lmodel = llama_model_load_from_file(inst.model.c_str(), mparams);
             if (lmodel == NULL) {
                 fprintf(stderr, "%s: error: failed to load model '%s'\n", __func__, inst.model.c_str());
-                return 1;
+                failed_benchmarks++;
+                prev_inst = nullptr;
+                cstate = ctx_state();
+                continue;
             }
             prev_inst = &inst;
         }
@@ -2313,7 +2324,11 @@ int llama_bench(int argc, char ** argv) {
         if (ctx == NULL) {
             fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, inst.model.c_str());
             llama_model_free(lmodel);
-            return 1;
+            lmodel = nullptr;
+            prev_inst = nullptr;
+            failed_benchmarks++;
+            cstate = ctx_state();
+            continue;
         }
 
         test t(inst, lmodel, ctx);
@@ -2477,5 +2492,5 @@ int llama_bench(int argc, char ** argv) {
 
     llama_backend_free();
 
-    return 0;
+    return failed_benchmarks == 0 ? 0 : 1;
 }
