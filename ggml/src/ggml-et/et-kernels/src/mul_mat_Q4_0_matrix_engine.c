@@ -247,10 +247,10 @@ int entry_point(struct ggml_et_binary_params *params, void *env) {
         int64_t n_groups = (n_tiles + r - 1) / r;
         int64_t base_units = m_tiles * n_groups * batch_count;
         int64_t waves = (base_units + MACHINE_SLOTS - 1) / MACHINE_SLOTS;
-        
+
         int64_t penalty = (r > 8) ? r : 8;
         int64_t score = waves * penalty;
-        
+
         if (score < min_score) {
             min_score = score;
             best_r = r;
