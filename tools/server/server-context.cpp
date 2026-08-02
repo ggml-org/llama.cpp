@@ -951,6 +951,10 @@ private:
     // if swa_full is enabled, this is set to 0 to simulate a non-SWA model
     int32_t n_swa;
 
+    // set to llama_memory_seq_rm_align(memory) of the target context
+    // > 1 when the memory has an aligned deep-rollback tier (e.g. DSV4)
+    llama_pos n_seq_rm_align = 1;
+
     // slots / clients
     std::vector<server_slot> slots;
 
@@ -1134,7 +1138,8 @@ private:
                 if (spec_mtp) {
                     cparams_dft.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
                 }
-                cparams_dft.n_rs_seq = 0;
+                cparams_dft.n_rs_seq     = 0;
+                cparams_dft.n_rs_aligned = 0;
 
                 std::vector<ggml_backend_dev_t> devs;
                 uint32_t hp_ngl = 0;
@@ -1302,6 +1307,11 @@ private:
         ctx_tgt_seq_rm_type = common_context_can_seq_rm(ctx_tgt);
         if (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_NO) {
             SRV_WRN("%s", "speculative decoding not supported by this context\n");
+        }
+
+        n_seq_rm_align = llama_memory_seq_rm_align(llama_get_memory(ctx_tgt));
+        if (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS && n_seq_rm_align > 1) {
+            SRV_INF("deep-rollback tier active, seq_rm_align = %d\n", (int) n_seq_rm_align);
         }
 
         if (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL) {
@@ -3328,40 +3338,86 @@ private:
                                 }
 
                                 if (pos_min >= pos_min_thold) {
-                                    // search for a context checkpoint
-                                    const auto it = std::find_if(
-                                        slot.prompt.checkpoints.rbegin(),
-                                        slot.prompt.checkpoints.rend(),
-                                        [&](const auto & cur) {
-                                            // guarantee that a checkpoint will result in at least one token being processed [TAG_PROMPT_LOGITS]
-                                            SLT_TRC(slot, "checking checkpoint with [%d, %d] against %d...\n", cur.pos_min, cur.pos_max, pos_min_thold);
-                                            // workaround for [TAG_CHECKPOINTS_FIX_POS_MIN]
-                                            if (cur.pos_max > pos_next) {
-                                                return false;
+                                    // deep-rollback-capable memories (e.g. DSV4 with the aligned tier)
+                                    // can serve the divergence themselves: the recurrent state rolls
+                                    // back to an aligned boundary and the removed suffix is re-decoded.
+                                    // try this before falling back to the checkpoint machinery
+                                    bool rs_deep = false;
+
+                                    if (ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS && n_seq_rm_align > 1 &&
+                                        !slot.prompt.tokens.has_mtmd) {
+                                        const auto pos_max_seq = llama_memory_seq_pos_max(llama_get_memory(ctx_tgt), slot.id);
+
+                                        if (pos_next > pos_max_seq) {
+                                            // nothing to remove below the tip - the live state simply
+                                            // continues; a full-prefix re-eval ([TAG_PROMPT_LOGITS])
+                                            // removes at most one token, which the bounded per-token
+                                            // rollback tier covers
+                                            rs_deep = true;
+                                        } else {
+                                            // divergence below the tip: align the reuse point down to a
+                                            // boundary the deep tier can restore
+                                            llama_pos pos_rm = (pos_next/n_seq_rm_align)*n_seq_rm_align;
+                                            int n_past_new = (int) slot.prompt.tokens.size_up_to_pos(pos_rm);
+
+                                            // keep at least one task token beyond the target so the
+                                            // [TAG_PROMPT_LOGITS] re-eval never needs a second removal
+                                            // below an armed rollback
+                                            if (n_past_new >= slot.task->n_tokens()) {
+                                                pos_rm    -= n_seq_rm_align;
+                                                n_past_new = pos_rm > 0 ? (int) slot.prompt.tokens.size_up_to_pos(pos_rm) : 0;
                                             }
-                                            return cur.pos_min < pos_min_thold || cur.pos_min == 0;
+
+                                            // the memory is the authority on coverage - beyond it the
+                                            // rollback is refused and the checkpoint machinery below is
+                                            // the fallback, with n_past/pos_next untouched
+                                            if (pos_rm > 0 && llama_memory_seq_rm(llama_get_memory(ctx_tgt), slot.id, pos_rm, -1)) {
+                                                SLT_INF(slot, "aligning n_past %d -> %d (seq_rm_align = %d)\n", n_past, n_past_new, (int) n_seq_rm_align);
+                                                SLT_INF(slot, "deep rollback engaged (pos_rm = %d, depth = %d)\n", pos_rm, (int) (pos_max_seq - pos_rm + 1));
+
+                                                n_past   = n_past_new;
+                                                pos_next = pos_rm;
+                                                rs_deep  = true;
+                                            }
                                         }
-                                    );
-
-                                    bool do_reset = it == slot.prompt.checkpoints.rend();
-
-                                    if (!do_reset) {
-                                        // restore the context checkpoint
-                                        it->load_tgt(ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
-                                        it->load_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
-                                        // restore the draft's speculative state
-                                        common_speculative_set_state(spec.get(), slot.id, it->data_spec);
-
-                                        pos_next = std::min(pos_next, std::max(it->pos_min + 1, it->pos_max));
-                                        n_past   = std::min(slot.prompt.tokens.size_up_to_pos(pos_next), (size_t) it->n_tokens);
-                                        SLT_TRC(slot, "restored context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_past = %d, size = %.3f MiB)\n", it->pos_min, it->pos_max, it->n_tokens, n_past, (float) it->size() / 1024 / 1024);
                                     }
 
-                                    if (do_reset) {
-                                        SLT_TRC(slot, "forcing full prompt re-processing due to lack of cache data (likely due to SWA or hybrid/recurrent memory, see %s)\n",
-                                                "https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055");
-                                        pos_next = 0;
-                                        n_past = 0;
+                                    if (!rs_deep) {
+                                        // search for a context checkpoint
+                                        const auto it = std::find_if(
+                                            slot.prompt.checkpoints.rbegin(),
+                                            slot.prompt.checkpoints.rend(),
+                                            [&](const auto & cur) {
+                                                // guarantee that a checkpoint will result in at least one token being processed [TAG_PROMPT_LOGITS]
+                                                SLT_TRC(slot, "checking checkpoint with [%d, %d] against %d...\n", cur.pos_min, cur.pos_max, pos_min_thold);
+                                                // workaround for [TAG_CHECKPOINTS_FIX_POS_MIN]
+                                                if (cur.pos_max > pos_next) {
+                                                    return false;
+                                                }
+                                                return cur.pos_min < pos_min_thold || cur.pos_min == 0;
+                                            }
+                                        );
+
+                                        bool do_reset = it == slot.prompt.checkpoints.rend();
+
+                                        if (!do_reset) {
+                                            // restore the context checkpoint
+                                            it->load_tgt(ctx_tgt, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                                            it->load_dft(ctx_dft, slot.id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
+                                            // restore the draft's speculative state
+                                            common_speculative_set_state(spec.get(), slot.id, it->data_spec);
+
+                                            pos_next = std::min(pos_next, std::max(it->pos_min + 1, it->pos_max));
+                                            n_past   = std::min(slot.prompt.tokens.size_up_to_pos(pos_next), (size_t) it->n_tokens);
+                                            SLT_TRC(slot, "restored context checkpoint (pos_min = %d, pos_max = %d, n_tokens = %" PRId64 ", n_past = %d, size = %.3f MiB)\n", it->pos_min, it->pos_max, it->n_tokens, n_past, (float) it->size() / 1024 / 1024);
+                                        }
+
+                                        if (do_reset) {
+                                            SLT_TRC(slot, "forcing full prompt re-processing due to lack of cache data (likely due to SWA or hybrid/recurrent memory, see %s)\n",
+                                                    "https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055");
+                                            pos_next = 0;
+                                            n_past = 0;
+                                        }
                                     }
                                 }
                             }

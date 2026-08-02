@@ -1625,6 +1625,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CHECKPOINT_MIN_SPACING_NT").set_examples({LLAMA_EXAMPLE_SERVER}));
     add_opt(common_arg(
+        {"--rs-aligned"}, "N",
+        string_format("number of boundary-aligned deep-rollback state slots per sequence, for memories that support them (default: %d, 0 = disabled)", params.n_rs_aligned),
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("rs-aligned must be non-negative");
+            }
+            params.n_rs_aligned = value;
+        }
+    ).set_env("LLAMA_ARG_RS_ALIGNED").set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"-cram", "--cache-ram"}, "N",
         string_format("set the maximum cache size in MiB (default: %d, -1 - no limit, 0 - disable)"
             "[(more info)](https://github.com/ggml-org/llama.cpp/pull/16391)", params.cache_ram_mib),
