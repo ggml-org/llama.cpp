@@ -336,6 +336,25 @@ llama_context::llama_context(
             backends.emplace_back(backend);
         }
 
+        // A layer-split DFlash/DSpark draft may borrow a tensor-sharded output
+        // head from its target. Add an independent backend for the target meta
+        // device so only that shared projection uses target tensor parallelism;
+        // the three draft backbone layers retain their layer placement.
+        if (model.arch == LLM_ARCH_DFLASH && cparams.ctx_other != nullptr) {
+            const llama_model * model_other = llama_get_model(cparams.ctx_other);
+            if (model_other->split_mode() == LLAMA_SPLIT_MODE_TENSOR) {
+                GGML_ASSERT(model_other->devices.size() == 1);
+                ggml_backend_dev_t meta_dev = model_other->devices[0].dev;
+                ggml_backend_t backend = ggml_backend_dev_init(meta_dev, nullptr);
+                if (backend == nullptr) {
+                    throw std::runtime_error(format("failed to initialize borrowed %s backend", ggml_backend_dev_name(meta_dev)));
+                }
+                LLAMA_LOG_INFO("%s: adding borrowed target backend %s for the DFlash output head\n",
+                        __func__, ggml_backend_dev_name(meta_dev));
+                backends.emplace_back(backend);
+            }
+        }
+
         // add ACCEL backends (such as BLAS)
         for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
             ggml_backend_dev_t dev = ggml_backend_dev_get(i);

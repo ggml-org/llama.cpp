@@ -349,6 +349,29 @@ static void build_dspark_markov_head(llm_graph_context & g, const llama_model & 
     ggml_build_forward_expand(g.gf, out);
 }
 
+// Resolve the target LM head borrowed by DFlash. The draft backbone stays
+// layer-split, but an input-dimension-sharded target head can execute on the
+// borrowed target meta backend and allreduce complete FP32 logits.
+static ggml_tensor * dflash_shared_output(
+        ggml_tensor * output, bool * force_fp32_allreduce) {
+    *force_fp32_allreduce = false;
+    if (output->buffer == nullptr || !ggml_backend_buffer_is_meta(output->buffer)) {
+        return output;
+    }
+
+    ggml_tensor * concrete = ggml_backend_meta_get_simple_tensor(output, 0);
+    const bool mirrored = concrete->ne[0] == output->ne[0] && concrete->ne[1] == output->ne[1];
+    if (mirrored) {
+        return concrete;
+    }
+
+    const bool input_sharded = concrete->ne[0] < output->ne[0] && concrete->ne[1] == output->ne[1];
+    GGML_ASSERT(input_sharded &&
+            "DFlash supports mirrored or input-dimension-sharded target output heads");
+    *force_fp32_allreduce = true;
+    return output;
+}
+
 // DeepSeek-V4 backbone decoder: HC-expand -> N x (HC-pre/MLA-attn/HC-post, HC-pre/MoE-FFN/HC-post) -> HC-head
 template <>
 void llama_model_dflash::graph<false>::build_dsv4(const llama_model & model, ggml_tensor * inp_pos,
@@ -463,14 +486,13 @@ void llama_model_dflash::graph<false>::build_dsv4(const llama_model & model, ggm
         GGML_ASSERT(model_other->output != nullptr && "DFlash decoder requires the target model's output projection");
         output = model_other->output;
     }
-    if (output->buffer != nullptr && ggml_backend_buffer_is_meta(output->buffer)) {
-        ggml_tensor * concrete = ggml_backend_meta_get_simple_tensor(output, 0);
-        GGML_ASSERT(concrete->ne[0] == output->ne[0] && concrete->ne[1] == output->ne[1] &&
-                "DFlash requires a mirrored target output; disable GGML_TP_SHARDED_OUTPUT");
-        output = concrete;
-    }
+    bool force_fp32_allreduce = false;
+    output = dflash_shared_output(output, &force_fp32_allreduce);
 
     cur = build_lora_mm(output, cur);
+    if (force_fp32_allreduce) {
+        cur->flags |= GGML_TENSOR_FLAG_FORCE_FP32_ALLREDUCE;
+    }
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 
@@ -735,14 +757,13 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
         GGML_ASSERT(model_other->output != nullptr && "DFlash decoder requires the target model's output projection");
         output = model_other->output;
     }
-    if (output->buffer != nullptr && ggml_backend_buffer_is_meta(output->buffer)) {
-        ggml_tensor * concrete = ggml_backend_meta_get_simple_tensor(output, 0);
-        GGML_ASSERT(concrete->ne[0] == output->ne[0] && concrete->ne[1] == output->ne[1] &&
-                "DFlash requires a mirrored target output; disable GGML_TP_SHARDED_OUTPUT");
-        output = concrete;
-    }
+    bool force_fp32_allreduce = false;
+    output = dflash_shared_output(output, &force_fp32_allreduce);
 
     cur = build_lora_mm(output, cur);
+    if (force_fp32_allreduce) {
+        cur->flags |= GGML_TENSOR_FLAG_FORCE_FP32_ALLREDUCE;
+    }
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 
