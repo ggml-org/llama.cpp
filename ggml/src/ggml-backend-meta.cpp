@@ -1926,6 +1926,11 @@ bool ggml_backend_buffer_is_meta(ggml_backend_buffer_t buf) {
     return buf != nullptr && buf->iface.free_buffer == ggml_backend_meta_buffer_iface.free_buffer;
 }
 
+ggml_tensor * ggml_backend_meta_get_simple_tensor(const ggml_tensor * tensor, size_t index) {
+    GGML_ASSERT(tensor != nullptr && tensor->buffer != nullptr);
+    return ggml_backend_meta_buffer_simple_tensor(tensor, index);
+}
+
 static ggml_backend_buffer_t ggml_backend_meta_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
     const size_t n_simple_bufts = ggml_backend_meta_buft_n_bufts(buft);
 

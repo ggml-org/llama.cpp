@@ -66,6 +66,8 @@ extern "C" {
     GGML_API enum ggml_backend_buffer_usage ggml_backend_buffer_get_usage     (ggml_backend_buffer_t buffer);
     GGML_API ggml_backend_buffer_type_t     ggml_backend_buffer_get_type      (ggml_backend_buffer_t buffer);
     GGML_API void                           ggml_backend_buffer_reset         (ggml_backend_buffer_t buffer);
+    GGML_API bool                           ggml_backend_buffer_is_meta       (ggml_backend_buffer_t buffer);
+    GGML_API struct ggml_tensor *           ggml_backend_meta_get_simple_tensor(const struct ggml_tensor * tensor, size_t index);
 
     // tensor copy between different backends
     GGML_API void ggml_backend_tensor_copy(const struct ggml_tensor * src, struct ggml_tensor * dst);
