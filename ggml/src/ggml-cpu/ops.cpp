@@ -5489,8 +5489,6 @@ static void ggml_compute_forward_soft_max_f32(
     const float m0 = powf(2.0f, -(max_bias       ) / n_head_log2);
     const float m1 = powf(2.0f, -(max_bias / 2.0f) / n_head_log2);
 
-    float * wp = (float *) params->wdata + (ne00 + CACHE_LINE_SIZE_F32) * ith;
-
     const bool use_f16 = (src1 && src1->type == GGML_TYPE_F16);
 
     // sinks
@@ -5514,36 +5512,79 @@ static void ggml_compute_forward_soft_max_f32(
                 ggml_fp16_t * mp_f16 = src1 ? (ggml_fp16_t *)((char *) src1->data + i11*nb11 + i12*nb12 + i13*nb13) : NULL;
                 float       * mp_f32 = src1 ? (float       *)((char *) src1->data + i11*nb11 + i12*nb12 + i13*nb13) : NULL;
 
-                ggml_vec_cpy_f32  (ne00, wp, sp);
-                ggml_vec_scale_f32(ne00, wp, scale);
+                // scale src0 and add the mask/ALiBi bias straight into dst,
+                // saving the per-thread workspace and one to two sweeps per
+                // row. the f32 paths use the same GGML_F32_VEC macros as
+                // ggml_vec_scale_f32, so every arch keeps hand-SIMD quality.
                 if (mp_f32) {
                     if (use_f16) {
+                        // f16 mask: f16->f32 blocks SIMD, keep scalar
                         for (int i = 0; i < ne00; ++i) {
-                            wp[i] += slope*GGML_CPU_FP16_TO_FP32(mp_f16[i]);
+                            dp[i]  = sp[i]*scale;
+                            dp[i] += slope*GGML_CPU_FP16_TO_FP32(mp_f16[i]);
                         }
                     } else {
+#if defined(GGML_SIMD)
+                        // f32 mask: one vectorized scale + mask pass
+                        const int np = (ne00 & ~(GGML_F32_STEP - 1));
+                        const GGML_F32_VEC vscale = GGML_F32_VEC_SET1(scale);
+                        const GGML_F32_VEC vslope = GGML_F32_VEC_SET1(slope);
+                        for (int i = 0; i < np; i += GGML_F32_STEP) {
+                            for (int j = 0; j < GGML_F32_ARR; j++) {
+                                GGML_F32_VEC va = GGML_F32_VEC_LOAD(sp + i + j*GGML_F32_EPR);
+                                va = GGML_F32_VEC_MUL(va, vscale);
+                                GGML_F32_VEC vm = GGML_F32_VEC_LOAD(mp_f32 + i + j*GGML_F32_EPR);
+                                va = GGML_F32_VEC_FMA(va, vm, vslope);
+                                GGML_F32_VEC_STORE(dp + i + j*GGML_F32_EPR, va);
+                            }
+                        }
+                        for (int i = np; i < ne00; ++i) {
+                            dp[i] = sp[i]*scale + slope*mp_f32[i];
+                        }
+#else
                         for (int i = 0; i < ne00; ++i) {
-                            wp[i] += slope*mp_f32[i];
+                            dp[i] = sp[i]*scale + slope*mp_f32[i];
+                        }
+#endif
+                    }
+                } else {
+#if defined(GGML_SIMD)
+                    // no mask: vectorized scale
+                    const int np = (ne00 & ~(GGML_F32_STEP - 1));
+                    const GGML_F32_VEC vscale = GGML_F32_VEC_SET1(scale);
+                    for (int i = 0; i < np; i += GGML_F32_STEP) {
+                        for (int j = 0; j < GGML_F32_ARR; j++) {
+                            GGML_F32_VEC va = GGML_F32_VEC_LOAD(sp + i + j*GGML_F32_EPR);
+                            va = GGML_F32_VEC_MUL(va, vscale);
+                            GGML_F32_VEC_STORE(dp + i + j*GGML_F32_EPR, va);
                         }
                     }
+                    for (int i = np; i < ne00; ++i) {
+                        dp[i] = sp[i]*scale;
+                    }
+#else
+                    for (int i = 0; i < ne00; ++i) {
+                        dp[i] = sp[i]*scale;
+                    }
+#endif
                 }
 
 #ifndef NDEBUG
                 for (int i = 0; i < ne00; ++i) {
-                    //printf("p[%d] = %f\n", i, p[i]);
-                    assert(!isnan(wp[i]));
+                    assert(!isnan(dp[i]));
                 }
 #endif // NDEBUG
 
                 float max = -INFINITY;
-                ggml_vec_max_f32(ne00, &max, wp);
+                ggml_vec_max_f32(ne00, &max, dp);
 
                 // if we have sinks, make a correction as if they were included in the softmax
                 if (sk) {
                     max = MAX(max, sk[i02]);
                 }
 
-                ggml_float sum = ggml_vec_soft_max_f32(ne00, dp, wp, max);
+                // y == x is safe: each output only depends on the scalar max
+                ggml_float sum = ggml_vec_soft_max_f32(ne00, dp, dp, max);
                 assert(sum > 0.0);
 
                 if (sk) {
