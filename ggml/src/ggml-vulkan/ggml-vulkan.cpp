@@ -317,7 +317,7 @@ static void ggml_vk_print_device_lost_info(const vk_device& device);
 // Prevent simultaneous submissions to the same queue.
 struct vk_queue_handle {
     vk::Queue queue;
-    vk_device device;
+    vk_device_ref device;
     virtual void submit(vk::ArrayProxy<const vk::SubmitInfo> submits, vk::Fence fence) = 0;
     virtual void lock()   {}   // no-op by default (internally synchronized case)
     virtual void unlock() {}
@@ -331,7 +331,9 @@ struct vk_queue_handle_synchronized : vk_queue_handle {
         try {
             queue.submit(submits, fence);
         } catch (vk::DeviceLostError &) {
-            ggml_vk_print_device_lost_info(device);
+            if (auto dev = device.lock()) {
+                ggml_vk_print_device_lost_info(dev);
+            }
             throw;
         }
     }
@@ -345,7 +347,9 @@ struct vk_queue_handle_unsynchronized : vk_queue_handle {
         try {
             queue.submit(submits, fence);
         } catch (vk::DeviceLostError &) {
-            ggml_vk_print_device_lost_info(device);
+            if (auto dev = device.lock()) {
+                ggml_vk_print_device_lost_info(dev);
+            }
             throw;
         }
     }
