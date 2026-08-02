@@ -46,12 +46,29 @@ struct Params {
 
 @group(0) @binding(0) var<storage, read_write> s_in: array<f32>;
 #ifdef XBC_OVERLAP
-@group(0) @binding(1) var<storage, read_write> x_B_C_merged: array<f32>;
-@group(0) @binding(2) var<storage, read_write> dt: array<f32>;
-@group(0) @binding(3) var<storage, read_write> A: array<f32>;
-@group(0) @binding(4) var<storage, read_write> ids: array<i32>;
-@group(0) @binding(5) var<storage, read_write> dst: array<f32>;
-@group(0) @binding(6) var<uniform> params: Params;
+#ifdef IDS_OVERLAP
+@group(0) @binding(1) var<storage, read_write> x_dt_B_C_ids_merged: array<u32>;
+#ifdef A_OVERLAP
+@group(0) @binding(2) var<storage, read_write> dst: array<f32>;
+@group(0) @binding(3) var<uniform> params: Params;
+#else
+@group(0) @binding(2) var<storage, read_write> A: array<f32>;
+@group(0) @binding(3) var<storage, read_write> dst: array<f32>;
+@group(0) @binding(4) var<uniform> params: Params;
+#endif
+#else
+@group(0) @binding(1) var<storage, read_write> x_dt_B_C_merged: array<f32>;
+#ifdef A_OVERLAP
+@group(0) @binding(2) var<storage, read_write> ids: array<i32>;
+@group(0) @binding(3) var<storage, read_write> dst: array<f32>;
+@group(0) @binding(4) var<uniform> params: Params;
+#else
+@group(0) @binding(2) var<storage, read_write> A: array<f32>;
+@group(0) @binding(3) var<storage, read_write> ids: array<i32>;
+@group(0) @binding(4) var<storage, read_write> dst: array<f32>;
+@group(0) @binding(5) var<uniform> params: Params;
+#endif
+#endif
 #else
 @group(0) @binding(1) var<storage, read_write> x: array<f32>;
 @group(0) @binding(2) var<storage, read_write> dt: array<f32>;
@@ -69,6 +86,24 @@ var<workgroup> shared_reduce: array<f32, TOKENS_PER_TILE * WG_SIZE>;
 
 fn reduce_base(token_in_tile: u32) -> u32 {
     return token_in_tile * WG_SIZE;
+}
+
+#ifdef XBC_OVERLAP
+fn read_merged_f32(idx: u32) -> f32 {
+#ifdef IDS_OVERLAP
+    return bitcast<f32>(x_dt_B_C_ids_merged[idx]);
+#else
+    return x_dt_B_C_merged[idx];
+#endif
+}
+#endif
+
+fn read_state_slot(i3: u32) -> u32 {
+#ifdef IDS_OVERLAP
+    return x_dt_B_C_ids_merged[params.offset_ids + i3];
+#else
+    return u32(ids[params.offset_ids + i3]);
+#endif
 }
 
 @compute @workgroup_size(WG_SIZE)
@@ -90,13 +125,18 @@ fn main(
     let ir = head_seq % params.n_head;
     let i3 = head_seq / params.n_head;
 
-    let state_slot = u32(ids[params.offset_ids + i3]);
+    let state_slot = read_state_slot(i3);
     let g = ir / (params.n_head / params.n_group);
 
     let s_idx = params.offset_s + tid + i1 * params.stride_s1 + ir * params.stride_s2 + state_slot * params.stride_s3;
     var s_prev = s_in[s_idx];
 
-    let A0 = A[params.offset_A + (tid % params.a_ne0) + ir * params.stride_A1];
+    let a_idx = params.offset_A + (tid % params.a_ne0) + ir * params.stride_A1;
+#ifdef A_OVERLAP
+    let A0 = read_merged_f32(a_idx);
+#else
+    let A0 = A[a_idx];
+#endif
 
     for (var token_base = 0u; token_base < params.n_seq_tokens; token_base += TOKENS_PER_TILE) {
         if (tid < TOKENS_PER_TILE) {
@@ -104,11 +144,15 @@ fn main(
             if (token < params.n_seq_tokens) {
                 let x_idx = params.offset_x + i1 + ir * params.stride_x1 + token * params.stride_x2 + i3 * params.stride_x3;
                 let dt_idx = params.offset_dt + ir + token * params.stride_dt1 + i3 * params.stride_dt2;
+#ifdef XBC_OVERLAP
+                let dt0 = read_merged_f32(dt_idx);
+#else
                 let dt0 = dt[dt_idx];
+#endif
                 let dtsp = select(log(1.0 + exp(dt0)), dt0, dt0 > 20.0);
                 shared_dtsp[tid] = dtsp;
 #ifdef XBC_OVERLAP
-                shared_x_dt[tid] = x_B_C_merged[x_idx] * dtsp;
+                shared_x_dt[tid] = read_merged_f32(x_idx) * dtsp;
 #else
                 shared_x_dt[tid] = x[x_idx] * dtsp;
 #endif
@@ -130,7 +174,7 @@ fn main(
             let b_idx = params.offset_B + tid + g * params.stride_B1 + token * params.stride_B2 + i3 * params.stride_B3;
             let c_idx = params.offset_C + tid + g * params.stride_C1 + token * params.stride_C2 + i3 * params.stride_C3;
 #ifdef XBC_OVERLAP
-            let s = s_prev * dA + x_B_C_merged[b_idx] * x_dt;
+            let s = s_prev * dA + read_merged_f32(b_idx) * x_dt;
 #else
             let s = s_prev * dA + B[b_idx] * x_dt;
 #endif
@@ -138,7 +182,7 @@ fn main(
 
 #ifdef USE_SUBGROUP_REDUCTION
 #ifdef XBC_OVERLAP
-            let subgroup_partial = subgroupAdd(s * x_B_C_merged[c_idx]);
+            let subgroup_partial = subgroupAdd(s * read_merged_f32(c_idx));
 #else
             let subgroup_partial = subgroupAdd(s * C[c_idx]);
 #endif
@@ -147,7 +191,7 @@ fn main(
             }
 #else
 #ifdef XBC_OVERLAP
-            shared_reduce[reduce_idx] = s * x_B_C_merged[c_idx];
+            shared_reduce[reduce_idx] = s * read_merged_f32(c_idx);
 #else
             shared_reduce[reduce_idx] = s * C[c_idx];
 #endif

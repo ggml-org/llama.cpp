@@ -479,6 +479,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.e_score_correction",                    # exaone-moe
             "model.layers.{bid}.block_sparse_moe.gate.e_score_correction",  # kimi
             "model.layers.{bid}.moe.router_bias",                           # step3.5 expert selection bias
+            "model.layers.{bid}.mlp.experts.e_score_correction",       # laguna
         ),
 
         # Feed-forward up
@@ -1263,7 +1264,8 @@ class TensorNameMap:
         ),
 
         MODEL_TENSOR.INDEXER_K_NORM: (
-            "model.layers.{bid}.self_attn.indexer.k_norm", # DSA
+            "model.layers.{bid}.self_attn.indexer.k_norm",  # DSA
+            "model.layers.{bid}.self_attn.index_k_norm",    # MSA
         ),
 
         MODEL_TENSOR.INDEXER_PROJ: (
@@ -1278,6 +1280,18 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.indexer.wq_b", # DSA
         ),
 
+        MODEL_TENSOR.INDEXER_Q_PROJ: (
+            "model.layers.{bid}.self_attn.index_q_proj", # MSA
+        ),
+
+        MODEL_TENSOR.INDEXER_K_PROJ: (
+            "model.layers.{bid}.self_attn.index_k_proj", # MSA
+        ),
+
+        MODEL_TENSOR.INDEXER_Q_NORM: (
+            "model.layers.{bid}.self_attn.index_q_norm", # MSA
+        ),
+
         ############################################################################
         # TODO: these do not belong to block_mappings_cfg - move them to mappings_cfg
         MODEL_TENSOR.ENC_OUTPUT_NORM: (
@@ -1288,6 +1302,18 @@ class TensorNameMap:
 
         MODEL_TENSOR.FC: (
             "model.fc", # dflash
+        ),
+
+        MODEL_TENSOR.DSPARK_MARKOV_W1: (
+            "model.markov_head.markov_w1", # dspark
+        ),
+
+        MODEL_TENSOR.DSPARK_MARKOV_W2: (
+            "model.markov_head.markov_w2", # dspark
+        ),
+
+        MODEL_TENSOR.DSPARK_CONF_PROJ: (
+            "model.confidence_head.proj", # dspark
         ),
 
         MODEL_TENSOR.CLS: (
@@ -1824,6 +1850,14 @@ class TensorNameMap:
             "visual.downsample", # glm4v
         ),
 
+        MODEL_TENSOR.V_MM_MERGER_FC1: (
+            "patch_merge_mlp.linear_1", # minimax-m3
+        ),
+
+        MODEL_TENSOR.V_MM_MERGER_FC2: (
+            "patch_merge_mlp.linear_2", # minimax-m3
+        ),
+
         MODEL_TENSOR.V_DS_NORM: (
             "model.visual.deepstack_merger_list.{bid}.norm", # deepstack in qwen3vl
         ),
@@ -2073,6 +2107,8 @@ class TensorNameMap:
             "conformer.pre_encode.conv.{bid}", # lfm2
             "model.audio_tower.subsample_conv_projection.conv_{bid}.conv", # gemma3n
             "conformer.subsample_conv_projection.layer{bid}.conv", # gemma4
+            "sound_encoder.encoder.subsampling.layers.{bid}", # parakeet
+            "encoder.conv{bid}", # mimo-audio-tokenizer
         ),
 
         MODEL_TENSOR.A_ENC_CONV1D_NORM: (
@@ -2097,6 +2133,7 @@ class TensorNameMap:
         MODEL_TENSOR.A_POST_NORM: (
             "audio_tower.layer_norm", # ultravox
             "audio_tower.ln_post", # qwen2omni
+            "encoder.layer_norm", # mimo-audio-tokenizer
         ),
 
         MODEL_TENSOR.A_ENC_ATTN_Q: (
@@ -2104,7 +2141,9 @@ class TensorNameMap:
             "conformer.layers.{bid}.self_attn.linear_q", # lfm2
             "conformer.layers.{bid}.attention.attn.q_proj", # gemma3n
             "conformer.layers.{bid}.self_attn.q_proj", # gemma4
+            "sound_encoder.encoder.layers.{bid}.self_attn.q_proj", # parakeet
             "encoder.layers.{bid}.attn.to_q", # granite_speech
+            "encoder.layers.{bid}.self_attn.q_proj", # mimo-audio-tokenizer
         ),
 
         MODEL_TENSOR.A_ENC_ATTN_K: (
@@ -2112,7 +2151,9 @@ class TensorNameMap:
             "conformer.layers.{bid}.self_attn.linear_k", # lfm2
             "conformer.layers.{bid}.attention.attn.k_proj", # gemma3n
             "conformer.layers.{bid}.self_attn.k_proj", # gemma4
+            "sound_encoder.encoder.layers.{bid}.self_attn.k_proj", # parakeet
             "encoder.layers.{bid}.attn.to_k", # granite_speech (split from to_kv)
+            "encoder.layers.{bid}.self_attn.k_proj", # mimo-audio-tokenizer
         ),
 
         MODEL_TENSOR.A_ENC_ATTN_V: (
@@ -2120,7 +2161,9 @@ class TensorNameMap:
             "conformer.layers.{bid}.self_attn.linear_v", # lfm2
             "conformer.layers.{bid}.attention.attn.v_proj", # gemma3n
             "conformer.layers.{bid}.self_attn.v_proj", # gemma4
+            "sound_encoder.encoder.layers.{bid}.self_attn.v_proj", # parakeet
             "encoder.layers.{bid}.attn.to_v", # granite_speech (split from to_kv)
+            "encoder.layers.{bid}.self_attn.v_proj", # mimo-audio-tokenizer
         ),
 
         MODEL_TENSOR.A_ENC_ATTN_K_REL: (
@@ -2148,7 +2191,9 @@ class TensorNameMap:
             "audio_tower.layers.{bid}.self_attn_layer_norm", # ultravox
             "conformer.layers.{bid}.norm_self_att", # lfm2
             "conformer.layers.{bid}.attention.pre_attn_norm", # gemma3n
+            "sound_encoder.encoder.layers.{bid}.norm_self_att", # parakeet
             "encoder.layers.{bid}.attn.pre_norm", # granite_speech
+            "encoder.layers.{bid}.self_attn_layer_norm", # mimo-audio-tokenizer
         ),
 
         MODEL_TENSOR.A_ENC_OUTPUT: (
@@ -2156,20 +2201,25 @@ class TensorNameMap:
             "conformer.layers.{bid}.self_attn.linear_out", # lfm2
             "conformer.layers.{bid}.attention.post", # gemma3n
             "conformer.layers.{bid}.self_attn.post", # gemma4
+            "sound_encoder.encoder.layers.{bid}.self_attn.o_proj", # parakeet
             "encoder.layers.{bid}.attn.to_out", # granite_speech
+            "encoder.layers.{bid}.self_attn.out_proj", # mimo-audio-tokenizer
         ),
 
         MODEL_TENSOR.A_ENC_OUTPUT_NORM: (
             "audio_tower.layers.{bid}.final_layer_norm", # ultravox
             "conformer.layers.{bid}.norm_out", # lfm2
             "conformer.layers.{bid}.attention.post_norm", # gemma3n
+            "sound_encoder.encoder.layers.{bid}.norm_out", # parakeet
             "encoder.layers.{bid}.post_norm", # granite_speech
+            "encoder.layers.{bid}.final_layer_norm", # mimo-audio-tokenizer
         ),
 
         MODEL_TENSOR.A_ENC_FFN_NORM: (
             "conformer.layers.{bid}.norm_feed_forward1", # lfm2
             "conformer.layers.{bid}.ffw_layer_start.pre_layer_norm", # gemma3n
             "conformer.layers.{bid}.feed_forward1.pre_layer_norm", # gemma4
+            "sound_encoder.encoder.layers.{bid}.norm_feed_forward1", # parakeet
             "encoder.layers.{bid}.ff1.pre_norm", # granite_speech
         ),
 
@@ -2187,7 +2237,9 @@ class TensorNameMap:
             "conformer.layers.{bid}.feed_forward1.linear1", # lfm2
             "conformer.layers.{bid}.ffw_layer_start.ffw_layer_1", # gemma3n
             "conformer.layers.{bid}.feed_forward1.ffw_layer_1", # gemma4
+            "sound_encoder.encoder.layers.{bid}.feed_forward1.linear1", # parakeet
             "encoder.layers.{bid}.ff1.up_proj", # granite_speech
+            "encoder.layers.{bid}.fc1", # mimo-audio-tokenizer
         ),
 
         MODEL_TENSOR.A_ENC_FFN_GATE: (),
@@ -2197,13 +2249,16 @@ class TensorNameMap:
             "conformer.layers.{bid}.feed_forward1.linear2", # lfm2
             "conformer.layers.{bid}.ffw_layer_start.ffw_layer_2", # gemma3n
             "conformer.layers.{bid}.feed_forward1.ffw_layer_2", # gemma4
+            "sound_encoder.encoder.layers.{bid}.feed_forward1.linear2", # parakeet
             "encoder.layers.{bid}.ff1.down_proj", # granite_speech
+            "encoder.layers.{bid}.fc2", # mimo-audio-tokenizer
         ),
 
         MODEL_TENSOR.A_ENC_FFN_UP_1: (
             "conformer.layers.{bid}.feed_forward2.linear1", # lfm2
             "conformer.layers.{bid}.ffw_layer_end.ffw_layer_1", # gemma3n
             "conformer.layers.{bid}.feed_forward2.ffw_layer_1", # gemma4
+            "sound_encoder.encoder.layers.{bid}.feed_forward2.linear1", # parakeet
             "encoder.layers.{bid}.ff2.up_proj", # granite_speech
         ),
 
@@ -2211,6 +2266,7 @@ class TensorNameMap:
             "conformer.layers.{bid}.feed_forward2.linear2", # lfm2
             "conformer.layers.{bid}.ffw_layer_end.ffw_layer_2", # gemma3n
             "conformer.layers.{bid}.feed_forward2.ffw_layer_2", # gemma4
+            "sound_encoder.encoder.layers.{bid}.feed_forward2.linear2", # parakeet
             "encoder.layers.{bid}.ff2.down_proj", # granite_speech
         ),
 
@@ -2218,8 +2274,22 @@ class TensorNameMap:
             "conformer.layers.{bid}.norm_feed_forward2", # lfm2
             "conformer.layers.{bid}.ffw_layer_end.pre_layer_norm", # gemma3n
             "conformer.layers.{bid}.feed_forward2.pre_layer_norm", # gemma4
+            "sound_encoder.encoder.layers.{bid}.norm_feed_forward2", # parakeet
             "encoder.layers.{bid}.ff2.pre_norm", # granite_speech
         ),
+
+        MODEL_TENSOR.A_ENC_DOWNSAMPLE_CONV: (
+            "encoder.down_sample_layer.0", # mimo-audio-tokenizer
+        ),
+
+        MODEL_TENSOR.A_ENC_DOWNSAMPLE_NORM: (
+            "encoder.down_sample_norm", # mimo-audio-tokenizer
+        ),
+
+        # note: the raw per-quantizer "encoder.quantizer.vq.layers.{i}._codebook.embed"
+        # tensors are merged (padded + stacked, like MoE experts) into this single 3D
+        # tensor in conversion code, so no raw-name mapping is registered here.
+        MODEL_TENSOR.A_ENC_RVQ_CODEBOOK: (),
 
         MODEL_TENSOR.A_ENC_FFN_POST_NORM_1: (
             "conformer.layers.{bid}.ffw_layer_end.post_layer_norm", # gemma3n
@@ -2233,20 +2303,24 @@ class TensorNameMap:
         MODEL_TENSOR.A_ENC_LINEAR_POS: (
             "conformer.layers.{bid}.self_attn.linear_pos", # lfm2
             "conformer.layers.{bid}.attention.attn.relative_position_embedding.pos_proj", # gemma3n
+            "sound_encoder.encoder.layers.{bid}.self_attn.relative_k_proj", # parakeet
         ),
 
         MODEL_TENSOR.A_ENC_POS_BIAS_U: (
             "conformer.layers.{bid}.self_attn.pos_bias_u", # lfm2
+            "sound_encoder.encoder.layers.{bid}.self_attn.bias_u", # parakeet
         ),
 
         MODEL_TENSOR.A_ENC_POS_BIAS_V: (
             "conformer.layers.{bid}.self_attn.pos_bias_v", # lfm2
+            "sound_encoder.encoder.layers.{bid}.self_attn.bias_v", # parakeet
         ),
 
         MODEL_TENSOR.A_ENC_OUT: (
             "conformer.pre_encode.out", # lfm2
             "model.audio_tower.subsample_conv_projection.input_proj_linear", # gemma3n (note: it should be A_ENC_INP_PROJ, this is a mistake; it should be corrected in C++ code when it's supported)
             "conformer.output_proj", # gemma4
+            "sound_encoder.encoder.subsampling.linear", # parakeet
         ),
 
         # note: some tensors below has "audio." pseudo-prefix, to prevent conflicts with vision tensors
@@ -2256,6 +2330,7 @@ class TensorNameMap:
             "audio.multi_modal_projector.linear_{bid}", # ultravox, meralion
             "audio_adapter.model.{bid}", # lfm2
             "audio_tower.proj{bid}", # qwen3omni
+            "sound_projection.linear{bid}", # parakeet (linear1, linear2)
         ),
 
         MODEL_TENSOR.A_MMPROJ_FC: (
@@ -2266,39 +2341,89 @@ class TensorNameMap:
 
         MODEL_TENSOR.A_MM_NORM_PRE: (
             "audio.multi_modal_projector.ln_pre", # ultravox
+            "sound_projection.norm", # parakeet
         ),
 
         MODEL_TENSOR.A_MM_NORM_MID: (
             "audio.multi_modal_projector.ln_mid", # ultravox
         ),
 
+        # note: the raw per-channel "speech_embeddings.{i}" tensors are merged
+        # (stacked, like MoE experts) into this single 3D tensor in conversion
+        # code, so no raw-name mapping is registered here.
+        MODEL_TENSOR.A_MM_CODE_EMBD: (),
+
+        MODEL_TENSOR.A_MM_LOCAL_ATTN_Q: (
+            "audio_encoder.input_local_transformer.layers.{bid}.self_attn.q_proj", # mimo-v2.5
+        ),
+        MODEL_TENSOR.A_MM_LOCAL_ATTN_K: (
+            "audio_encoder.input_local_transformer.layers.{bid}.self_attn.k_proj", # mimo-v2.5
+        ),
+        MODEL_TENSOR.A_MM_LOCAL_ATTN_V: (
+            "audio_encoder.input_local_transformer.layers.{bid}.self_attn.v_proj", # mimo-v2.5
+        ),
+        MODEL_TENSOR.A_MM_LOCAL_ATTN_OUT: (
+            "audio_encoder.input_local_transformer.layers.{bid}.self_attn.o_proj", # mimo-v2.5
+        ),
+        MODEL_TENSOR.A_MM_LOCAL_FFN_GATE: (
+            "audio_encoder.input_local_transformer.layers.{bid}.mlp.gate_proj", # mimo-v2.5
+        ),
+        MODEL_TENSOR.A_MM_LOCAL_FFN_UP: (
+            "audio_encoder.input_local_transformer.layers.{bid}.mlp.up_proj", # mimo-v2.5
+        ),
+        MODEL_TENSOR.A_MM_LOCAL_FFN_DOWN: (
+            "audio_encoder.input_local_transformer.layers.{bid}.mlp.down_proj", # mimo-v2.5
+        ),
+        MODEL_TENSOR.A_MM_LOCAL_LN1: (
+            "audio_encoder.input_local_transformer.layers.{bid}.input_layernorm", # mimo-v2.5
+        ),
+        MODEL_TENSOR.A_MM_LOCAL_LN2: (
+            "audio_encoder.input_local_transformer.layers.{bid}.post_attention_layernorm", # mimo-v2.5
+        ),
+        MODEL_TENSOR.A_MM_LOCAL_NORM: (
+            "audio_encoder.input_local_transformer.norm", # mimo-v2.5
+        ),
+
         MODEL_TENSOR.A_ENC_CONV_DW: (
             "conformer.layers.{bid}.conv.depthwise_conv", # lfm2
             "conformer.layers.{bid}.lconv1d.depthwise_conv1d", # gemma3n
+            "sound_encoder.encoder.layers.{bid}.conv.depthwise_conv", # parakeet
             "encoder.layers.{bid}.conv.depth_conv.conv", # granite_speech
         ),
 
         MODEL_TENSOR.A_ENC_CONV_NORM: (
             "conformer.layers.{bid}.conv.batch_norm", # lfm2
             "conformer.layers.{bid}.lconv1d.pre_layer_norm", # gemma3n
+            "sound_encoder.encoder.layers.{bid}.conv.norm", # parakeet
+        ),
+
+        MODEL_TENSOR.A_ENC_CONV_NORM_MEAN: (
+            "sound_encoder.encoder.layers.{bid}.conv.norm.running_mean", # parakeet
+        ),
+
+        MODEL_TENSOR.A_ENC_CONV_NORM_VAR: (
+            "sound_encoder.encoder.layers.{bid}.conv.norm.running_var", # parakeet
             "encoder.layers.{bid}.conv.batch_norm", # granite_speech
         ),
 
         MODEL_TENSOR.A_ENC_CONV_PW1: (
             "conformer.layers.{bid}.conv.pointwise_conv1", # lfm2
             "conformer.layers.{bid}.lconv1d.linear_start", # gemma3n
+            "sound_encoder.encoder.layers.{bid}.conv.pointwise_conv1", # parakeet
             "encoder.layers.{bid}.conv.up_conv", # granite_speech
         ),
 
         MODEL_TENSOR.A_ENC_CONV_PW2: (
             "conformer.layers.{bid}.conv.pointwise_conv2", # lfm2
             "conformer.layers.{bid}.lconv1d.linear_end", # gemma3n
+            "sound_encoder.encoder.layers.{bid}.conv.pointwise_conv2", # parakeet
             "encoder.layers.{bid}.conv.down_conv", # granite_speech
         ),
 
         MODEL_TENSOR.A_ENC_NORM_CONV: (
             "conformer.layers.{bid}.norm_conv", # lfm2
             "conformer.layers.{bid}.lconv1d.conv_norm", # gemma3n
+            "sound_encoder.encoder.layers.{bid}.norm_conv", # parakeet
             "encoder.layers.{bid}.conv.norm", # granite_speech
         ),
 
@@ -2308,6 +2433,14 @@ class TensorNameMap:
 
         MODEL_TENSOR.A_PER_DIM_SCALE: (
             "conformer.layers.{bid}.attention.attn.per_dim_scale", # gemma4
+        ),
+
+        MODEL_TENSOR.A_ENC_MEL_FILTERS: (
+            "sound_encoder.encoder.feature_extractor.featurizer.fb", # parakeet
+        ),
+
+        MODEL_TENSOR.A_ENC_WINDOW: (
+            "sound_encoder.encoder.feature_extractor.featurizer.window", # parakeet
         ),
 
         MODEL_TENSOR.A_MM_EMBEDDING: (

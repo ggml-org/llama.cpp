@@ -1378,3 +1378,5 @@ GGML_BACKEND_API ggml_backend_reg_t ggml_backend_openvino_reg(void) {
 
     return &reg;
 }
+
+GGML_BACKEND_DL_IMPL(ggml_backend_openvino_reg)
