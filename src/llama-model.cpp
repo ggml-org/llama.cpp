@@ -2162,8 +2162,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             nullptr,
                             filter_mtp,
                             nullptr,
-                            nullptr,
-                            true);
+                            nullptr);
                 } else {
                     res = new llama_kv_cache_dsv4(
                             *this,
@@ -2203,8 +2202,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                             nullptr,
                             nullptr,
                             nullptr,
-                            nullptr,
-                            true);
+                            nullptr);
                     break;
                 }
             }

@@ -112,8 +112,7 @@ public:
                llama_memory_t   mem_other,
         const layer_filter_cb & filter,
         const  layer_reuse_cb & reuse,
-        const  layer_share_cb & share,
-                         bool   mla = false);
+        const  layer_share_cb & share);
 
     ~llama_kv_cache() = default;
 
@@ -161,7 +160,6 @@ public:
 
     ggml_type type_k() const;
     ggml_type type_v() const;
-    bool      has_v()  const;
 
     std::vector<uint32_t> get_layer_ids() const;
     ggml_tensor * get_k_storage(int32_t il) const;
@@ -224,7 +222,6 @@ public:
 private:
     const llama_model & model;
     const llama_hparams & hparams;
-    const bool is_mla;
 
     struct kv_layer {
         // layer index in the model
@@ -377,7 +374,6 @@ public:
 
     ggml_type type_k() const;
     ggml_type type_v() const;
-    bool      has_v()  const;
 
     // get views of the current state of the cache
     ggml_tensor * get_k(ggml_context * ctx, int32_t il) const;

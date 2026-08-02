@@ -891,7 +891,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_attention(
 
 ggml_tensor * llama_model_deepseek4::graph::build_attention(
         const llama_model & model,
-        llm_graph_input_attn_kv_iswa * inp_mtp,
+        llm_graph_input_attn_k_iswa * inp_mtp,
         ggml_tensor * cur,
         ggml_tensor * inp_pos,
         int il) const {
@@ -901,7 +901,7 @@ ggml_tensor * llama_model_deepseek4::graph::build_attention(
 ggml_tensor * llama_model_deepseek4::graph::build_attention_impl(
         const llama_model & model,
         llm_graph_input_dsv4 * inp_dsv4,
-        llm_graph_input_attn_kv_iswa * inp_mtp,
+        llm_graph_input_attn_k_iswa * inp_mtp,
         ggml_tensor * cur,
         ggml_tensor * inp_pos,
         int il) const {
@@ -1443,7 +1443,7 @@ llama_model_deepseek4::graph_mtp::graph_mtp(const llama_model & model, const llm
 
     ggml_tensor * inp_pos = build_inp_pos();
     ggml_tensor * inp_out_ids = build_inp_out_ids();
-    llm_graph_input_attn_kv_iswa * inp_attn = build_attn_inp_kv_iswa();
+    llm_graph_input_attn_k_iswa * inp_attn = build_attn_inp_k_iswa();
 
     ggml_tensor * h_norm = build_norm(h_state, layer.nextn.hnorm, nullptr, LLM_NORM_RMS, il);
     cb(h_norm, "mtp_hnorm", il);

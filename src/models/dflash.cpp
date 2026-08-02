@@ -510,7 +510,7 @@ llama_model_dflash::graph_dsv4::graph_dsv4(const llama_model & model, const llm_
 
     ggml_tensor * inp_pos = build_inp_pos();
 
-    llm_graph_input_attn_kv_iswa * inp_attn = build_attn_inp_kv_iswa();
+    llm_graph_input_attn_k_iswa * inp_attn = build_attn_inp_k_iswa();
 
     // KV cache injection: fused target features from the encoder
     if (ubatch.embd) {
