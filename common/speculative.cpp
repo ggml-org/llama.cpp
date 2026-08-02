@@ -2374,6 +2374,17 @@ common_speculative_init_result::common_speculative_init_result(
     auto mparams = common_model_params_to_llama(params_dft);
     auto cparams = common_context_params_to_llama(params_dft);
 
+    // The DeepSeek-V4 DSpark draft has only three large decoder layers. Keep
+    // the target tensor-parallel while distributing the draft by whole layers;
+    // the DFlash draft weights do not define tensor-parallel split semantics.
+    const bool spec_dspark = std::find(params.speculative.types.begin(),
+            params.speculative.types.end(), COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK) !=
+            params.speculative.types.end();
+    if (spec_dspark && mparams.split_mode == LLAMA_SPLIT_MODE_TENSOR) {
+        mparams.split_mode = LLAMA_SPLIT_MODE_LAYER;
+        LOG_INF("%s: using layer split for DSpark draft weights while retaining target tensor split\n", __func__);
+    }
+
     if (spec_mtp) {
         cparams.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
     }
