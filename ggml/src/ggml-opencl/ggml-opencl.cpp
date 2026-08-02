@@ -7622,18 +7622,36 @@ inline bool use_adreno_moe_kernels(const ggml_backend_opencl_context *backend_ct
     return (((strstr(tensor->name, "ffn") != NULL) && (strstr(tensor->name, "exps") != NULL)) || (strstr(tensor->name, "as") != NULL)) && (ne01 % 32 == 0);
 }
 
-// Device default for the tiled-wide lm_head/embed GEMV layout. The 64-row tiled
-// layout wins on X2E and A8X but inverts hard on A7X (the tiled kernel is slower
-// there than even the flat path), so the default is the discrete generations with
-// measured evidence only. Deliberately not gen_level (it cannot separate A8X from
-// X2E) and deliberately not "!= A7X" (unmeasured generations must stay off).
+// Device default for the tiled-wide lm_head/embed GEMV layout: ON for X2E and A8X.
+//
+// These kernels were previously off everywhere on the grounds that they compute
+// wrong values at multi-superblock K. They do not: that NMSE ~2 came from the
+// backend having no get_tensor restore path for the tiled layout, so
+// test-backend-ops (which builds its CPU reference by copying the weights back
+// out of the backend) compared a correct GPU result against a reference
+// dequantized from tiled bytes. With the restore path added, MUL_MAT passes with
+// the tiled kernels on, unmodified, on both devices.
+//
+// Perf, Qwen3-4B-Q4_K_M (q6_K lm_head 151936x2560), tg128, matched pairs with
+// alternating lead, tiled vs o4:
+//
+//     A8X   +11.9%   6/6 pairs positive, order bias -0.06% (16.93 vs 15.14 tok/s)
+//     X2E    +6.9%   4/4 pairs positive, order bias -0.03% (35.24 vs 32.87 tok/s)
+//
+// Measure this one on a COLD device. These kernels are far more clock-sensitive
+// than the o4 route they replace: on a heat-soaked A8X (CPU cap at 1.5-1.9 GHz)
+// tiled pins at ~14.2 tok/s while o4 still makes ~14.9, which reads as a 4-5%
+// LOSS and inverts the ranking. The same box, after a reboot and a gate that
+// waits for policy6 to return to 4396800, reports the +11.9% above with no
+// order bias. A7X regresses hard on this layout and stays off.
+// GGML_OPENCL_{Q4K,Q6K}_GEMV_TILED forces either way (=0 off, any other value on).
 inline bool tiled_gemv_default_on(const ggml_backend_opencl_context *backend_ctx) {
-    return backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E ||
-           backend_ctx->adreno_gen == ADRENO_GPU_GEN::A8X;
+    return backend_ctx && (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E ||
+                           backend_ctx->adreno_gen == ADRENO_GPU_GEN::A8X);
 }
 
-// Tiled-wide q6_K GEMV (default ON for X2E/A8X; GGML_OPENCL_Q6K_GEMV_TILED
-// forces either way: =0 off everywhere, any other value on everywhere).
+// Tiled-wide q6_K GEMV (default OFF; GGML_OPENCL_Q6K_GEMV_TILED forces either
+// way: =0 off everywhere, any other value on everywhere).
 // Both the convert (set_tensor) and the GEMV dispatch must agree on this so the
 // buffer layout matches the kernel.
 inline bool q6k_gemv_tiled_enabled(const ggml_backend_opencl_context *backend_ctx) {
@@ -7646,13 +7664,17 @@ inline bool q6k_gemv_tiled_enabled(const ggml_backend_opencl_context *backend_ct
 
 // Only the long-vocab lm_head/embed shapes use the tiled layout; ne01 % 64 == 0
 // is required by the 64-row tiling (no row padding in the buffers).
+// use_adreno_kernels is required: only the Adreno GEMV path can read the tiled
+// layout, so converting a weight it would decline (e.g. ne00 < 512) leaves the
+// generic kernel reading tiled bytes as plain SOA.
 inline bool use_q6k_tiled(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
     return q6k_gemv_tiled_enabled(backend_ctx) && tensor->type == GGML_TYPE_Q6_K &&
-           tensor->ne[1] >= 32768 && tensor->ne[1] % 64 == 0;
+           tensor->ne[1] >= 32768 && tensor->ne[1] % 64 == 0 &&
+           use_adreno_kernels(backend_ctx, tensor);
 }
 
-// q4_K analog of the tiled-wide lm_head/embed GEMV (default ON for X2E/A8X;
-// GGML_OPENCL_Q4K_GEMV_TILED forces either way). Same gate.
+// q4_K analog of the tiled-wide lm_head/embed GEMV (default OFF;
+// GGML_OPENCL_Q4K_GEMV_TILED forces either way: =0 off, else on). Same gate.
 inline bool q4k_gemv_tiled_enabled(const ggml_backend_opencl_context *backend_ctx) {
     static const char * e = std::getenv("GGML_OPENCL_Q4K_GEMV_TILED");
     if (e && e[0] != '\0') {
@@ -7662,7 +7684,8 @@ inline bool q4k_gemv_tiled_enabled(const ggml_backend_opencl_context *backend_ct
 }
 inline bool use_q4k_tiled(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
     return q4k_gemv_tiled_enabled(backend_ctx) && tensor->type == GGML_TYPE_Q4_K &&
-           tensor->ne[1] >= 32768 && tensor->ne[1] % 64 == 0;
+           tensor->ne[1] >= 32768 && tensor->ne[1] % 64 == 0 &&
+           use_adreno_kernels(backend_ctx, tensor);
 }
 
 inline bool enable_adreno_trans_weight(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
@@ -11000,6 +11023,54 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, 
         cl_uchar mask_F0 = 0xF0;
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+        // Undo the 64-row-tiled canonical pack (kernel_convert_block_q4_k_tiled_ns).
+        // Without this, a read-back of a tiled weight returns the tiled bytes
+        // reinterpreted as block_q4_K -- which is how test-backend-ops builds its
+        // CPU reference (ggml_backend_graph_copy -> tensor_get), so the tiled path
+        // "failed" the suite while computing the correct product.
+        if (use_q4k_tiled(backend_ctx, tensor)) {
+            const int    ne00v = tensor->ne[0];
+            const int    ne01v = tensor->ne[1];
+            const int    nbv   = ne00v / 256;
+            const size_t n_blk = (size_t)nbv * ne01v;
+
+            std::vector<uint32_t> tq(n_blk*32);
+            std::vector<uint16_t> td(n_blk), tdm(n_blk);
+            std::vector<uint8_t>  ts(n_blk*12);
+            CL_CHECK(clEnqueueReadBuffer(queue, extra->q,  CL_TRUE, 0, tq.size()*4,  tq.data(),  0, NULL, NULL));
+            CL_CHECK(clEnqueueReadBuffer(queue, extra->d,  CL_TRUE, 0, td.size()*2,  td.data(),  0, NULL, NULL));
+            CL_CHECK(clEnqueueReadBuffer(queue, extra->dm, CL_TRUE, 0, tdm.size()*2, tdm.data(), 0, NULL, NULL));
+            CL_CHECK(clEnqueueReadBuffer(queue, extra->s,  CL_TRUE, 0, ts.size(),    ts.data(),  0, NULL, NULL));
+
+            std::vector<uint8_t> rebuilt(ggml_nbytes(tensor), 0);
+            for (int i01 = 0; i01 < ne01v; ++i01) {
+                const int rt = i01/64, rit = i01%64;
+                for (int i00 = 0; i00 < nbv; ++i00) {
+                    uint8_t * b = rebuilt.data() + ((size_t)i00 + (size_t)i01*nbv)*144;
+                    const int tb = rt*nbv + i00;
+                    const size_t si = (size_t)tb*64 + rit;
+
+                    memcpy(b + 0, &td [si], 2);
+                    memcpy(b + 2, &tdm[si], 2);
+                    memcpy(b + 4, &ts[si*12], 12);
+
+                    uint32_t qw[32];
+                    for (int gr = 0; gr < 8; ++gr) {
+                        const size_t base = ((size_t)tb*8 + gr)*64 + rit;
+                        for (int j = 0; j < 4; ++j) qw[gr*4 + j] = tq[base*4 + j];
+                    }
+                    uint8_t * q = b + 16;
+                    for (int e = 0; e < 256; ++e) {
+                        const int g = e>>6, w = e&63, h = w>>5, l = w&31;
+                        const uint32_t code = (qw[e>>3] >> ((e&7)*4)) & 0xF;
+                        q[g*32 + l] |= (uint8_t)(h ? (code << 4) : code);
+                    }
+                }
+            }
+            memcpy(data, rebuilt.data() + offset, size);
+            CL_CHECK(clReleaseMemObject(data_device));
+            return;
+        }
         if (use_adreno_moe_kernels(backend_ctx, tensor)) {
             cl_int err;
             cl_mem data_device = clCreateBuffer(context, CL_MEM_READ_WRITE,
@@ -11222,6 +11293,61 @@ static void ggml_backend_opencl_buffer_get_tensor(ggml_backend_buffer_t buffer, 
         ggml_tensor_extra_cl_q6_K * extra = (ggml_tensor_extra_cl_q6_K *)tensor->extra;
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+        // Undo the 64-row-tiled canonical pack (kernel_convert_block_q6_k_tiled_ns).
+        // See the q4_K tiled restore above for why a read-back path is required.
+        if (use_q6k_tiled(backend_ctx, tensor)) {
+            const int    ne00v = tensor->ne[0];
+            const int    ne01v = tensor->ne[1];
+            const int    nbv   = ne00v / 256;
+            const size_t n_blk = (size_t)nbv * ne01v;
+
+            std::vector<uint32_t> tql(n_blk*32), tqh(n_blk*16);
+            std::vector<uint8_t>  ts(n_blk*16);
+            std::vector<uint16_t> td(n_blk);
+            CL_CHECK(clEnqueueReadBuffer(queue, extra->ql, CL_TRUE, 0, tql.size()*4, tql.data(), 0, NULL, NULL));
+            CL_CHECK(clEnqueueReadBuffer(queue, extra->qh, CL_TRUE, 0, tqh.size()*4, tqh.data(), 0, NULL, NULL));
+            CL_CHECK(clEnqueueReadBuffer(queue, extra->s,  CL_TRUE, 0, ts.size(),    ts.data(),  0, NULL, NULL));
+            CL_CHECK(clEnqueueReadBuffer(queue, extra->d,  CL_TRUE, 0, td.size()*2,  td.data(),  0, NULL, NULL));
+
+            std::vector<uint8_t> rebuilt(ggml_nbytes(tensor), 0);
+            for (int i01 = 0; i01 < ne01v; ++i01) {
+                const int rt = i01/64, rit = i01%64;
+                for (int i00 = 0; i00 < nbv; ++i00) {
+                    uint8_t * b = rebuilt.data() + ((size_t)i00 + (size_t)i01*nbv)*210;
+                    const int tb = rt*nbv + i00;
+                    const size_t si = (size_t)tb*64 + rit;
+
+                    uint32_t qlw[32], qhw[16];
+                    for (int g = 0; g < 8; ++g) {
+                        const size_t base = ((size_t)tb*8 + g)*64 + rit;
+                        for (int j = 0; j < 4; ++j) qlw[g*4 + j] = tql[base*4 + j];
+                    }
+                    for (int g = 0; g < 4; ++g) {
+                        const size_t base = ((size_t)tb*4 + g)*64 + rit;
+                        for (int j = 0; j < 4; ++j) qhw[g*4 + j] = tqh[base*4 + j];
+                    }
+
+                    uint8_t * ql = b;
+                    uint8_t * qh = b + 128;
+                    for (int e = 0; e < 256; ++e) {
+                        const int n = (e >= 128) ? 1 : 0;
+                        const int within = e - n*128, q = within/32, l = within%32;
+                        const int off_ql = n*64, off_qh = n*32;
+                        const uint8_t low4 = (qlw[e>>3] >> ((e&7)*4)) & 0xF;
+                        const uint8_t hi2  = (qhw[e>>4] >> ((e&15)*2)) & 0x3;
+                        if      (q == 0) ql[off_ql + l]      |= low4;
+                        else if (q == 1) ql[off_ql + l + 32] |= low4;
+                        else if (q == 2) ql[off_ql + l]      |= (uint8_t)(low4 << 4);
+                        else             ql[off_ql + l + 32] |= (uint8_t)(low4 << 4);
+                        qh[off_qh + l] |= (uint8_t)(hi2 << (q*2));
+                    }
+                    memcpy(b + 192, &ts[si*16], 16);
+                    memcpy(b + 208, &td[si], 2);
+                }
+            }
+            memcpy(data, rebuilt.data() + offset, size);
+            return;
+        }
         if (use_adreno_moe_kernels(backend_ctx, tensor)) {
             cl_int err;
             cl_mem data_device = clCreateBuffer(context, CL_MEM_READ_WRITE,
