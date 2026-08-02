@@ -475,6 +475,12 @@ llama_context::llama_context(
         expert_hotstore = std::make_unique<llama_expert_hotstore>(
             &model, hparams.n_layer(), hparams.n_expert,
             params.expert_hot_s);
+        for (auto & backend : backends) {
+            if (ggml_backend_dev_type(ggml_backend_get_device(backend.get())) != GGML_BACKEND_DEVICE_TYPE_CPU) {
+                expert_hotstore->allocate(ggml_backend_get_default_buffer_type(backend.get()));
+                break;
+            }
+        }
         expert_hotstore->log();
     }
 

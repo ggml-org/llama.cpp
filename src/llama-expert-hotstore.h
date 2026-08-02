@@ -2,7 +2,10 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
+
+#include "ggml-cpp.h"
 
 struct llama_model;
 
@@ -17,8 +20,24 @@ struct llama_expert_hotstore {
     // expert weight tensors (gate/up/down, incl. chexps variants)
     std::vector<size_t> bytes_per_slot;
 
+    // one hot tensor per expert weight tensor, shape {ne0, ne1, hot_s}
+    struct entry {
+        int          layer_idx;
+        ggml_tensor* src; // model tensor holding all n_experts slices
+        ggml_tensor* dst; // hot tensor holding hot_s slots
+    };
+    std::vector<entry> entries;
+
+    // keeps the GPU buffer (and its no_alloc context) alive
+    ggml_context_ptr        ctx;
+    ggml_backend_buffer_ptr buf;
+
     llama_expert_hotstore(const llama_model * model, int n_layers,
                           int n_experts, int hot_s);
+
+    // allocate the GPU hot store for `hot_s` slots. returns false (and
+    // leaves the store disabled) on failure or shortage of VRAM.
+    bool allocate(ggml_backend_buffer_type_t gpu_buft);
 
     void log() const;
 };
