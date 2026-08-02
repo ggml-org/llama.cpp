@@ -1096,10 +1096,15 @@ void llama_dsv4_comp_state::state_write(
     std::vector<uint32_t> stream_ids(ns);
     for (uint32_t s = 0; s < ns; ++s) {
         const uint32_t seq = seq_id >= 0 ? (uint32_t) seq_id : s0 + s;
-        if (seq >= rs_idx.size() || rs_idx[seq] > n_rs_seq + n_aligned) {
+        if (seq >= rs_idx.size()) {
             throw std::runtime_error("DSV4 recurrent state rollback index out of range");
         }
-        stream_ids[s] = rs_idx[seq]*n_stream + s0 + s;
+        // Markers beyond this state's planes (an aligned marker on a state
+        // without aligned slots) degrade to the live plane - such a state has
+        // nothing snapshot-held to save, its rows are rewritten by the replay.
+        // Mirrors the restore graph's self-copy rule in dsv4_build_comp_plan.
+        const uint32_t plane = rs_idx[seq] <= n_rs_seq + n_aligned ? rs_idx[seq] : 0;
+        stream_ids[s] = plane*n_stream + s0 + s;
     }
 
     const uint32_t version      = DSV4_COMP_STATE_VER;
