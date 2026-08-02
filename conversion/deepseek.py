@@ -460,6 +460,8 @@ class InstellaMoEModel(DeepseekV2Model):
             raise NotImplementedError("Instella-MoE with attn_only_farskip/mlp_only_farskip is not supported")
         if not hparams.get("gated_attention", False):
             raise NotImplementedError("Instella-MoE without gated attention is not supported")
+        # Opus has suggestewd this. While thsi is not a hard requirement current IntellaMOE not utilizes it. As we force it here
+        # we could skip the whole processing of it in instella-moe.cpp. I think this is debatable.
         if hparams.get("q_lora_rank") is not None:
             raise NotImplementedError("Instella-MoE with a low-rank query projection is not supported")
         if not hparams.get("rope_interleave", True):
