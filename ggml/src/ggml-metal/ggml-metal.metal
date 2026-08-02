@@ -11348,6 +11348,176 @@ kernel void kernel_tessera_paged_attn_q8_0(
     dst[gid] = value/denom;
 }
 
+// S4: q2_K K/V variant. 2-bit K-quant (2.625 bpw effective) with a 256-element
+// super-block: per-super-block fp16 d/dmin, 16 packed 4-bit sub-scales, and
+// 2-bit weights. Dequant is fused element-wise into the attention inner loop,
+// mirroring the CPU helper in ops.cpp and dequantize_row_q2_K in ggml-quants.c.
+// value = d*(sc&0xF)*((q>>shift)&3) - dmin*(sc>>4).
+// Flat channel c (0..255) within super-block -> n_block=c/128, j=(c%128)/32,
+// is = n_block*8 + j*2 + (c_in_j/16), q offset = n_block*32 + (c&15) + (c/16%2)*16.
+inline float tessera_dequant_q2_k_elem(device const char * p, uint i) {
+    const uint sb = i / QK_K;
+    const uint c  = i - sb*QK_K;
+    device const block_q2_K * blk = (device const block_q2_K *)p + sb;
+    const float d    = blk->d;
+    const float dmin = blk->dmin;
+    const uint n_block = c >> 7;
+    const uint c_in_n  = c & 127;
+    const uint j       = c_in_n >> 5;
+    const uint c_in_j  = c_in_n & 31;
+    const uint is_idx  = (n_block << 3) + (j << 1) + (c_in_j >> 4);
+    const uchar sc = blk->scales[is_idx];
+    const float dl = d * (sc & 0xF);
+    const float ml = dmin * (sc >> 4);
+    const uchar q  = blk->qs[(n_block << 5) + (c_in_j & 15) + (c_in_j >> 4)*16];
+    return (dl * (float)((q >> (j*2)) & 3)) - ml;
+}
+
+kernel void kernel_tessera_paged_attn_q2_K(
+        constant tessera_paged_attn_args & args [[buffer(0)]],
+        device const float * q        [[buffer(1)]],
+        device const char  * k        [[buffer(2)]],
+        device const char  * v        [[buffer(3)]],
+        device const uint  * page_map [[buffer(4)]],
+        device float * dst            [[buffer(5)]],
+        uint gid [[thread_position_in_grid]]) {
+    if (gid >= args.nq*args.hq*args.n_stream*args.dv) return;
+    const uint out_d = gid % args.dv;
+    const uint row = gid / args.dv;
+    const uint q_head = row % args.hq;
+    const uint query = (row / args.hq) % args.nq;
+    const uint stream = row / (args.hq*args.nq);
+    const uint kv_head = q_head/(args.hq/args.hkv);
+    float max_score = -INFINITY;
+    for (uint logical = 0; logical < args.n_kv; ++logical) {
+        const uint physical = page_map[stream*args.n_kv + logical];
+        if (physical >= args.n_phy) {
+            continue;
+        }
+        float score = 0.0f;
+        for (uint i = 0; i < args.d; ++i) {
+            const uint ki = ((stream*args.n_phy + physical)*args.hkv + kv_head)*args.d + i;
+            score += q[((stream*args.hq + q_head)*args.nq + query)*args.d + i]*tessera_dequant_q2_k_elem(k, ki);
+        }
+        max_score = max(max_score, score*args.scale);
+    }
+    float denom = 0.0f, value = 0.0f;
+    for (uint logical = 0; logical < args.n_kv; ++logical) {
+        const uint physical = page_map[stream*args.n_kv + logical];
+        if (physical >= args.n_phy) {
+            continue;
+        }
+        float score = 0.0f;
+        for (uint i = 0; i < args.d; ++i) {
+            const uint ki = ((stream*args.n_phy + physical)*args.hkv + kv_head)*args.d + i;
+            score += q[((stream*args.hq + q_head)*args.nq + query)*args.d + i]*tessera_dequant_q2_k_elem(k, ki);
+        }
+        const float weight = exp(score*args.scale - max_score);
+        denom += weight;
+        const uint v_index = args.v_trans
+            ? (((stream*args.dv + out_d)*args.hkv + kv_head)*args.n_phy + physical)
+            : (((stream*args.n_phy + physical)*args.hkv + kv_head)*args.dv + out_d);
+        value += weight*tessera_dequant_q2_k_elem(v, v_index);
+    }
+    dst[gid] = value/denom;
+}
+
+// S4: q4_0 K/V variant. 4-bit (4.5 bpw effective), block { half d; uchar qs[16]; }
+// covering 32 elements. Low nibbles -> elem 0..15, high nibbles -> elem 16..31.
+// value = (nibble - 8) * d. q4_0 is the lowest bit-width with full Metal
+// set_rows support (kernel_set_rows_f32_i32_q4_0), so it is the practical
+// low-bit KV point on this backend.
+inline float tessera_dequant_q4_0_elem(device const char * p, uint i) {
+    const uint sb = i / QK4_0;
+    const uint c  = i - sb*QK4_0;
+    device const block_q4_0 * blk = (device const block_q4_0 *)p + sb;
+    const float d = blk->d;
+    const uchar byte = blk->qs[c & 15];
+    const float nibble = (c < 16) ? (byte & 0xF) : (byte >> 4);
+    return (nibble - 8.0f) * d;
+}
+
+// S4: q5_0 K/V variant. 5-bit, block { half d; uchar qh[4]; uchar qs[16]; }.
+// 5th bit comes from qh (LE uint32). Matches dequantize_row_q5_0.
+inline float tessera_dequant_q5_0_elem(device const char * p, uint i) {
+    const uint sb = i / QK5_0;
+    const uint c  = i - sb*QK5_0;
+    device const block_q5_0 * blk = (device const block_q5_0 *)p + sb;
+    const float d = blk->d;
+    device const uint * qhu = (device const uint *)blk->qh;
+    const uint qh = qhu[0];
+    const uint j = c & 15;
+    const uchar byte = blk->qs[j];
+    float q5;
+    if (c < 16) {
+        const uint xh = ((qh >> j) << 4) & 0x10;
+        q5 = (byte & 0xF) | xh;
+    } else {
+        const uint xh = (qh >> (j + 12)) & 0x10;
+        q5 = (byte >> 4) | xh;
+    }
+    return (q5 - 16.0f) * d;
+}
+
+#define TESSERA_PAGED_KERNEL_BODY(LOAD_KV) \
+    if (gid >= args.nq*args.hq*args.n_stream*args.dv) return; \
+    const uint out_d = gid % args.dv; \
+    const uint row = gid / args.dv; \
+    const uint q_head = row % args.hq; \
+    const uint query = (row / args.hq) % args.nq; \
+    const uint stream = row / (args.hq*args.nq); \
+    const uint kv_head = q_head/(args.hq/args.hkv); \
+    float max_score = -INFINITY; \
+    for (uint logical = 0; logical < args.n_kv; ++logical) { \
+        const uint physical = page_map[stream*args.n_kv + logical]; \
+        if (physical >= args.n_phy) { continue; } \
+        float score = 0.0f; \
+        for (uint i = 0; i < args.d; ++i) { \
+            const uint ki = ((stream*args.n_phy + physical)*args.hkv + kv_head)*args.d + i; \
+            score += q[((stream*args.hq + q_head)*args.nq + query)*args.d + i]*LOAD_KV(k, ki); \
+        } \
+        max_score = max(max_score, score*args.scale); \
+    } \
+    float denom = 0.0f, value = 0.0f; \
+    for (uint logical = 0; logical < args.n_kv; ++logical) { \
+        const uint physical = page_map[stream*args.n_kv + logical]; \
+        if (physical >= args.n_phy) { continue; } \
+        float score = 0.0f; \
+        for (uint i = 0; i < args.d; ++i) { \
+            const uint ki = ((stream*args.n_phy + physical)*args.hkv + kv_head)*args.d + i; \
+            score += q[((stream*args.hq + q_head)*args.nq + query)*args.d + i]*LOAD_KV(k, ki); \
+        } \
+        const float weight = exp(score*args.scale - max_score); \
+        denom += weight; \
+        const uint v_index = args.v_trans \
+            ? (((stream*args.dv + out_d)*args.hkv + kv_head)*args.n_phy + physical) \
+            : (((stream*args.n_phy + physical)*args.hkv + kv_head)*args.dv + out_d); \
+        value += weight*LOAD_KV(v, v_index); \
+    } \
+    dst[gid] = value/denom;
+
+kernel void kernel_tessera_paged_attn_q4_0(
+        constant tessera_paged_attn_args & args [[buffer(0)]],
+        device const float * q        [[buffer(1)]],
+        device const char  * k        [[buffer(2)]],
+        device const char  * v        [[buffer(3)]],
+        device const uint  * page_map [[buffer(4)]],
+        device float * dst            [[buffer(5)]],
+        uint gid [[thread_position_in_grid]]) {
+    TESSERA_PAGED_KERNEL_BODY(tessera_dequant_q4_0_elem)
+}
+
+kernel void kernel_tessera_paged_attn_q5_0(
+        constant tessera_paged_attn_args & args [[buffer(0)]],
+        device const float * q        [[buffer(1)]],
+        device const char  * k        [[buffer(2)]],
+        device const char  * v        [[buffer(3)]],
+        device const uint  * page_map [[buffer(4)]],
+        device float * dst            [[buffer(5)]],
+        uint gid [[thread_position_in_grid]]) {
+    TESSERA_PAGED_KERNEL_BODY(tessera_dequant_q5_0_elem)
+}
+
 // ====================== Tile640 ternary matmul (Metal) ======================
 //
 // Ported from prism-engine's `templates/ternary_tile640_gemv.metal`. Layout:

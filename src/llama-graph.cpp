@@ -3056,7 +3056,8 @@ ggml_tensor * llm_graph_context::build_attn(
         !kq_b && !sinks && !v_mla &&
         q_cur->type == GGML_TYPE_F32 &&
         (mctx_cur->type_k() == GGML_TYPE_F16 || mctx_cur->type_k() == GGML_TYPE_F32 ||
-         mctx_cur->type_k() == GGML_TYPE_Q8_0) &&
+         mctx_cur->type_k() == GGML_TYPE_Q8_0 || mctx_cur->type_k() == GGML_TYPE_Q2_K ||
+         mctx_cur->type_k() == GGML_TYPE_Q4_0 || mctx_cur->type_k() == GGML_TYPE_Q5_0) &&
         mctx_cur->type_k() == mctx_cur->type_v();
 
     if (use_tessera_paged) {
@@ -3332,7 +3333,8 @@ ggml_tensor * llm_graph_context::build_attn(
         cparams.causal_attn && ubatch.n_tokens == 1 && inp->get_tessera_page_map(is_swa) &&
         !kq_b && !sinks && !v_mla && q_cur->type == GGML_TYPE_F32 &&
         (mctx_cur->type_k() == GGML_TYPE_F16 || mctx_cur->type_k() == GGML_TYPE_F32 ||
-         mctx_cur->type_k() == GGML_TYPE_Q8_0) &&
+         mctx_cur->type_k() == GGML_TYPE_Q8_0 || mctx_cur->type_k() == GGML_TYPE_Q2_K ||
+         mctx_cur->type_k() == GGML_TYPE_Q4_0 || mctx_cur->type_k() == GGML_TYPE_Q5_0) &&
         mctx_cur->type_k() == mctx_cur->type_v();
     ggml_tensor * cur = nullptr;
     if (use_tessera_paged) {

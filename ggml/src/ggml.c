@@ -5477,8 +5477,8 @@ struct ggml_tensor * ggml_tessera_paged_attn(
         struct ggml_tensor  * page_map,
         float                 scale) {
     GGML_ASSERT(q->type == GGML_TYPE_F32);
-    GGML_ASSERT((k->type == GGML_TYPE_F16 || k->type == GGML_TYPE_F32 || k->type == GGML_TYPE_Q8_0) &&
-                (v->type == GGML_TYPE_F16 || v->type == GGML_TYPE_F32 || v->type == GGML_TYPE_Q8_0));
+    GGML_ASSERT((k->type == GGML_TYPE_F16 || k->type == GGML_TYPE_F32 || k->type == GGML_TYPE_Q8_0 || k->type == GGML_TYPE_Q2_K || k->type == GGML_TYPE_Q4_0 || k->type == GGML_TYPE_Q5_0) &&
+                (v->type == GGML_TYPE_F16 || v->type == GGML_TYPE_F32 || v->type == GGML_TYPE_Q8_0 || v->type == GGML_TYPE_Q2_K || v->type == GGML_TYPE_Q4_0 || v->type == GGML_TYPE_Q5_0));
     GGML_ASSERT(page_map->type == GGML_TYPE_I32);
     GGML_ASSERT(q->ne[0] == k->ne[0]);
     const bool v_trans = v->ne[0] == k->ne[2];

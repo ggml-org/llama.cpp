@@ -9246,6 +9246,73 @@ void ggml_compute_forward_flash_attn_ext(
     }
 }
 
+// Dequantize one element at flat logical index i of a contiguous q2_K row.
+// Mirrors dequantize_row_q2_K in ggml-quants.c. QK_K == 256; a super-block
+// holds 16 sub-blocks of 16 elements. The element layout within a super-block
+// is: 2 outer halves of 128 (n_block = i/128 % 2), each half has 4 sub-blocks
+// (j = (i%128)/32) using bit-shift j*2; within a sub-block the first 16
+// elements come from q[n_block*32 + 0..15], the next 16 from
+// q[n_block*32 + 16..31]. Scales are packed 2-per-byte at is = n_block*8 + j*2.
+static inline float tessera_dequant_q2_k_elem(const block_q2_K * base, int64_t i) {
+    const int64_t sb = i / QK_K;            // super-block index
+    const int      c  = (int)(i - sb*QK_K); // 0..255 within super-block
+    const block_q2_K & blk = base[sb];
+    // d/dmin are the first 4 bytes of the block. block_q2_K exposes them via a
+    // union whose member tag varies with GGML_COMMON_AGGR_* (C vs C++ vs Metal),
+    // so read the raw half storage for portability across compile contexts.
+    const ggml_fp16_t * hd = (const ggml_fp16_t *)&blk;
+    const float d    = GGML_FP16_TO_FP32(hd[0]);
+    const float dmin = GGML_FP16_TO_FP32(hd[1]);
+    const int n_block = c >> 7;             // 0 or 1 (c / 128)
+    const int c_in_n  = c & 127;            // c % 128
+    const int j       = c_in_n >> 5;        // 0..3 (c_in_n / 32)
+    const int c_in_j  = c_in_n & 31;        // 0..31
+    const int is_idx  = (n_block << 3) + (j << 1) + (c_in_j >> 4); // n_block*8 + j*2 + (0|1)
+    const uint8_t sc = blk.scales[is_idx];
+    const float dl = d * (sc & 0xF);
+    const float ml = dmin * (sc >> 4);
+    const uint8_t * q = blk.qs + n_block*32 + (c_in_j & 15) + (c_in_j >> 4)*16;
+    const int shift = j*2;
+    return dl * ((int8_t)((*q >> shift) & 3)) - ml;
+}
+
+// q4_0: block { ggml_half d; uint8_t qs[QK4_0/2]; }, QK4_0 == 32, 4-bit nibbles.
+// Layout (see dequantize_row_q4_0): low nibbles of qs[0..15] -> elements 0..15,
+// high nibbles -> elements 16..31. value = (nibble - 8) * d.
+static inline float tessera_dequant_q4_0_elem(const block_q4_0 * base, int64_t i) {
+    const int64_t sb = i / QK4_0;
+    const int      c  = (int)(i - sb*QK4_0);
+    const block_q4_0 & blk = base[sb];
+    const float d = GGML_FP16_TO_FP32(blk.d);
+    const uint8_t byte = blk.qs[c & 15];
+    const int nibble = (c < 16) ? (byte & 0xF) : (byte >> 4);
+    return (nibble - 8) * d;
+}
+
+// q5_0: block { ggml_half d; uint8_t qh[4]; uint8_t qs[QK5_0/2]; }, QK5_0 == 32.
+// Layout (see dequantize_row_q5_0): low nibble + 5th bit -> elem 0..15,
+// high nibble + 5th bit -> elem 16..31. value = (q5 - 16) * d, where the 5th
+// bit comes from qh treated as a little-endian uint32 (bit j for elem j and
+// bit j+16 for elem j+16). Matches the reference bit extraction.
+static inline float tessera_dequant_q5_0_elem(const block_q5_0 * base, int64_t i) {
+    const int64_t sb = i / QK5_0;
+    const int      c  = (int)(i - sb*QK5_0);
+    const block_q5_0 & blk = base[sb];
+    const float d = GGML_FP16_TO_FP32(blk.d);
+    uint32_t qh;
+    memcpy(&qh, blk.qh, sizeof(qh));
+    const int j = c & 15;
+    const uint8_t byte = blk.qs[j];
+    if (c < 16) {
+        const uint8_t xh = ((qh >> j) << 4) & 0x10;
+        const int q5 = (byte & 0xF) | xh;
+        return (q5 - 16) * d;
+    }
+    const uint8_t xh = (qh >> (j + 12)) & 0x10;
+    const int q5 = (byte >> 4) | xh;
+    return (q5 - 16) * d;
+}
+
 void ggml_compute_forward_tessera_paged_attn(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
@@ -9253,10 +9320,13 @@ void ggml_compute_forward_tessera_paged_attn(
     const ggml_tensor * k        = dst->src[1];
     const ggml_tensor * v        = dst->src[2];
     const ggml_tensor * page_map = dst->src[3];
-
     GGML_ASSERT(q->type == GGML_TYPE_F32);
-    GGML_ASSERT(k->type == GGML_TYPE_F32 || k->type == GGML_TYPE_F16 || k->type == GGML_TYPE_Q8_0);
-    GGML_ASSERT(v->type == GGML_TYPE_F32 || v->type == GGML_TYPE_F16 || v->type == GGML_TYPE_Q8_0);
+    GGML_ASSERT(k->type == GGML_TYPE_F32 || k->type == GGML_TYPE_F16 ||
+                k->type == GGML_TYPE_Q8_0 || k->type == GGML_TYPE_Q2_K ||
+                k->type == GGML_TYPE_Q4_0 || k->type == GGML_TYPE_Q5_0);
+    GGML_ASSERT(v->type == GGML_TYPE_F32 || v->type == GGML_TYPE_F16 ||
+                v->type == GGML_TYPE_Q8_0 || v->type == GGML_TYPE_Q2_K ||
+                v->type == GGML_TYPE_Q4_0 || v->type == GGML_TYPE_Q5_0);
     GGML_ASSERT(page_map->type == GGML_TYPE_I32);
     GGML_ASSERT(q->ne[0] == k->ne[0]);
     const bool v_trans = ggml_get_op_params_i32(dst, 1) != 0;
@@ -9290,6 +9360,16 @@ void ggml_compute_forward_tessera_paged_attn(
         if (k->type == GGML_TYPE_F16) {
             return ggml_fp16_to_fp32(((const ggml_fp16_t *) k->data)[i]);
         }
+        if (k->type == GGML_TYPE_Q2_K) {
+            // S4: 2-bit K-quant dequant fused into the attention inner loop.
+            return tessera_dequant_q2_k_elem((const block_q2_K *) k->data, i);
+        }
+        if (k->type == GGML_TYPE_Q4_0) {
+            return tessera_dequant_q4_0_elem((const block_q4_0 *) k->data, i);
+        }
+        if (k->type == GGML_TYPE_Q5_0) {
+            return tessera_dequant_q5_0_elem((const block_q5_0 *) k->data, i);
+        }
         // GGML_TYPE_Q8_0: block { ggml_half d; int8_t qs[QK8_0]; }, QK8_0 == 32.
         // On-the-fly dequant: value = d * qs[i % QK8_0].
         const block_q8_0 * blk = (const block_q8_0 *) k->data;
@@ -9302,6 +9382,15 @@ void ggml_compute_forward_tessera_paged_attn(
         }
         if (v->type == GGML_TYPE_F16) {
             return ggml_fp16_to_fp32(((const ggml_fp16_t *) v->data)[i]);
+        }
+        if (v->type == GGML_TYPE_Q2_K) {
+            return tessera_dequant_q2_k_elem((const block_q2_K *) v->data, i);
+        }
+        if (v->type == GGML_TYPE_Q4_0) {
+            return tessera_dequant_q4_0_elem((const block_q4_0 *) v->data, i);
+        }
+        if (v->type == GGML_TYPE_Q5_0) {
+            return tessera_dequant_q5_0_elem((const block_q5_0 *) v->data, i);
         }
         // GGML_TYPE_Q8_0 dequant (same as load_k).
         const block_q8_0 * blk = (const block_q8_0 *) v->data;
