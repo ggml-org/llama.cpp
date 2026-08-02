@@ -302,6 +302,7 @@ static void ggml_hexagon_precompute_fused_ffn_params(
 
 struct ggml_hexagon_tensor_extra {
     std::vector<uint8_t> shadow_buf;
+    size_t               shadow_size { 0 };
     uint32_t             flags { 0 };
 };
 
@@ -1111,6 +1112,33 @@ static void repack_tiled_mxfp4(void * data, const ggml_tensor * t, size_t offset
     }
 }
 
+static void repack_tensor_tiled(ggml_tensor * tensor, const void * data, size_t size) {
+    switch (tensor->type) {
+        case GGML_TYPE_Q4_0:
+            repack_q4_0_tiled(tensor, data, 0, size);
+            break;
+
+        case GGML_TYPE_Q4_1:
+            repack_q4_1_tiled(tensor, data, 0, size);
+            break;
+
+        case GGML_TYPE_Q8_0:
+            repack_q8_0_tiled(tensor, data, 0, size);
+            break;
+
+        case GGML_TYPE_IQ4_NL:
+            repack_q4_0_tiled(tensor, data, 0, size);
+            break;
+
+        case GGML_TYPE_MXFP4:
+            repack_mxfp4_tiled(tensor, data, 0, size);
+            break;
+
+        default:
+            break;
+    }
+}
+
 static void ggml_backend_hexagon_buffer_set_tensor(ggml_backend_buffer_t buffer,
                                                    ggml_tensor *         tensor,
                                                    const void *          data,
@@ -1135,37 +1163,22 @@ static void ggml_backend_hexagon_buffer_set_tensor(ggml_backend_buffer_t buffer,
         return;
     }
 
-    extra->shadow_buf.reserve(ggml_nbytes(tensor));
-    extra->shadow_buf.insert(extra->shadow_buf.end(), (const uint8_t *) data, (const uint8_t *) data + size);
+    if (offset == 0 && size == ggml_nbytes(tensor) && extra->shadow_buf.empty()) {
+        repack_tensor_tiled(tensor, data, size);
+        return;
+    }
 
-    if (extra->shadow_buf.size() >= ggml_nbytes(tensor)) {
-        // Repack in one shot!
-        switch (tensor->type) {
-            case GGML_TYPE_Q4_0:
-                repack_q4_0_tiled(tensor, extra->shadow_buf.data(), 0, extra->shadow_buf.size());
-                break;
+    if (extra->shadow_buf.size() < ggml_nbytes(tensor)) {
+        extra->shadow_buf.resize(ggml_nbytes(tensor));
+    }
+    memcpy(extra->shadow_buf.data() + offset, data, size);
+    extra->shadow_size += size;
 
-            case GGML_TYPE_Q4_1:
-                repack_q4_1_tiled(tensor, extra->shadow_buf.data(), 0, extra->shadow_buf.size());
-                break;
-
-            case GGML_TYPE_Q8_0:
-                repack_q8_0_tiled(tensor, extra->shadow_buf.data(), 0, extra->shadow_buf.size());
-                break;
-
-            case GGML_TYPE_IQ4_NL:
-                repack_q4_0_tiled(tensor, extra->shadow_buf.data(), 0, extra->shadow_buf.size());
-                break;
-
-            case GGML_TYPE_MXFP4:
-                repack_mxfp4_tiled(tensor, extra->shadow_buf.data(), 0, extra->shadow_buf.size());
-                break;
-
-            default:
-                break;
-        }
+    if (extra->shadow_size >= ggml_nbytes(tensor)) {
+        repack_tensor_tiled(tensor, extra->shadow_buf.data(), extra->shadow_buf.size());
         extra->shadow_buf.clear();
         extra->shadow_buf.shrink_to_fit();
+        extra->shadow_size = 0;
     }
 }
 
@@ -1263,39 +1276,19 @@ static void ggml_backend_hexagon_buffer_set_tensor_2d(ggml_backend_buffer_t buff
         return;
     }
 
-    extra->shadow_buf.reserve(ggml_nbytes(tensor));
-    for (size_t i = 0; i < n_copies; i++) {
-        extra->shadow_buf.insert(extra->shadow_buf.end(), (const uint8_t *) data + i * stride_data, (const uint8_t *) data + i * stride_data + size);
+    if (extra->shadow_buf.size() < ggml_nbytes(tensor)) {
+        extra->shadow_buf.resize(ggml_nbytes(tensor));
     }
+    for (size_t i = 0; i < n_copies; i++) {
+        memcpy(extra->shadow_buf.data() + offset + i * stride_tensor, (const uint8_t *) data + i * stride_data, size);
+    }
+    extra->shadow_size += n_copies * size;
 
-    if (extra->shadow_buf.size() >= ggml_nbytes(tensor)) {
-        // Repack in one shot!
-        switch (tensor->type) {
-            case GGML_TYPE_Q4_0:
-                repack_q4_0_tiled(tensor, extra->shadow_buf.data(), 0, extra->shadow_buf.size());
-                break;
-
-            case GGML_TYPE_Q4_1:
-                repack_q4_1_tiled(tensor, extra->shadow_buf.data(), 0, extra->shadow_buf.size());
-                break;
-
-            case GGML_TYPE_Q8_0:
-                repack_q8_0_tiled(tensor, extra->shadow_buf.data(), 0, extra->shadow_buf.size());
-                break;
-
-            case GGML_TYPE_IQ4_NL:
-                repack_q4_0_tiled(tensor, extra->shadow_buf.data(), 0, extra->shadow_buf.size());
-                break;
-
-            case GGML_TYPE_MXFP4:
-                repack_mxfp4_tiled(tensor, extra->shadow_buf.data(), 0, extra->shadow_buf.size());
-                break;
-
-            default:
-                break;
-        }
+    if (extra->shadow_size >= ggml_nbytes(tensor)) {
+        repack_tensor_tiled(tensor, extra->shadow_buf.data(), extra->shadow_buf.size());
         extra->shadow_buf.clear();
         extra->shadow_buf.shrink_to_fit();
+        extra->shadow_size = 0;
     }
 }
 
