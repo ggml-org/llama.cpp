@@ -153,7 +153,7 @@ cell_result measure_cell(ggml_backend_t backend, const perf_cell & cell, int rep
     for (size_t i = 0; i < order.size(); ++i) {
         res.t[order[i]] = measure_one(backend, cell, reps, set_cand, clear_cand, order[i]);
 
-        if (i % 4 != 0) {
+        if (i % 4 != 0) {  // re-check anchor every 4 candidates: balances drift detection latency against overhead
             continue;
         }
 
