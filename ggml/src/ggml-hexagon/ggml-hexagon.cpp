@@ -299,6 +299,13 @@ static void ggml_hexagon_precompute_fused_ffn_params(
 
 // ** backend sessions
 
+struct ggml_hexagon_tensor_extra {
+    std::vector<uint8_t> shadow_buf;
+    uint32_t             flags { 0 };
+};
+
+static ggml_hexagon_tensor_extra ggml_hexagon_dummy_extra;
+
 struct htp_opnode;
 
 struct ggml_hexagon_opbatch;
@@ -422,12 +429,13 @@ struct ggml_hexagon_rpcmem_block {
 };
 
 struct ggml_hexagon_shared_buffer {
-    ggml_hexagon_session * sess;
+    ggml_hexagon_session *                     sess;
     std::shared_ptr<ggml_hexagon_rpcmem_block> mem;
-    bool                   mapped;
-    bool                   pinned;
-    std::vector<uint16_t>  free_tokens;
-    size_t                 extra_size = 0;
+    std::vector<ggml_hexagon_tensor_extra *>   tensor_extra;
+    std::vector<uint16_t>                      free_tokens;
+    size_t  extra_size = 0;
+    bool    mapped;
+    bool    pinned;
 
     const char * c_name() const { return sess->c_name(); }
     uint8_t *    base()   const { return mem ? mem->base : nullptr; }
@@ -543,6 +551,9 @@ struct ggml_hexagon_shared_buffer {
 
     ~ggml_hexagon_shared_buffer() {
         free();
+        for (auto * extra : tensor_extra) {
+            delete extra;
+        }
     }
 };
 
@@ -567,17 +578,14 @@ static enum ggml_status ggml_backend_hexagon_buffer_init_tensor(ggml_backend_buf
     HEX_VERBOSE("ggml-hex: %s init-tensor %s : base %p data %p nbytes %zu\n", sess->c_name(),
                 tensor->name, (void *) sbuf->base(), tensor->data, ggml_nbytes(tensor));
 
-    if (ggml_hexagon_is_repack_type(tensor->type)) {
-        bool repack = false;
-        if (ggml_backend_buffer_get_usage(buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
-            repack = true;
-        } else if (sess->needs_repack.count(tensor)) {
-            repack = true;
-            sess->needs_repack.erase(tensor);
-        }
+    auto extra = new ggml_hexagon_tensor_extra();
+    sbuf->tensor_extra.push_back(extra);
 
-        if (repack) {
-            tensor->extra = (void *)((uintptr_t)tensor->extra | GGML_HEXAGON_TENSOR_REPACK);
+    tensor->extra = extra;
+    if (ggml_hexagon_is_repack_type(tensor->type)) {
+        if (sess->needs_repack.count(tensor)) {
+            extra->flags |= GGML_HEXAGON_TENSOR_REPACK;
+            sess->needs_repack.erase(tensor);
         }
     }
 
@@ -1109,52 +1117,54 @@ static void ggml_backend_hexagon_buffer_set_tensor(ggml_backend_buffer_t buffer,
                                                    const void *          data,
                                                    size_t                offset,
                                                    size_t                size) {
-    auto sbuf = (ggml_hexagon_shared_buffer *) buffer->context;
-    auto sess = sbuf->sess;
+    auto extra = (ggml_hexagon_tensor_extra *)  tensor->extra;
+    auto sbuf  = (ggml_hexagon_shared_buffer *) buffer->context;
+    auto sess  = sbuf->sess;
 
     if (ggml_hexagon_is_repack_type(tensor->type) &&
             ggml_backend_buffer_get_usage(buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
-        tensor->extra = (void*)((uintptr_t)tensor->extra | GGML_HEXAGON_TENSOR_REPACK);
+        extra->flags |= GGML_HEXAGON_TENSOR_REPACK;
     }
 
-    HEX_VERBOSE("ggml-hex: %s set-tensor %s : data %p offset %zu size %zu usage %d extra 0x%lx\n",
-        sess->c_name(), tensor->name, data, offset, size, (int) buffer->usage, (unsigned long)tensor->extra);
+    HEX_VERBOSE("ggml-hex: %s set-tensor %s : data %p offset %zu size %zu usage %d flags 0x%x\n",
+        sess->c_name(), tensor->name, data, offset, size, (int) buffer->usage, extra->flags);
 
-    const bool is_repack = ((uintptr_t)tensor->extra & GGML_HEXAGON_TENSOR_REPACK) != 0;
-    if (!is_repack) {
+    if ((extra->flags & GGML_HEXAGON_TENSOR_REPACK) == 0) {
         memcpy((char *) tensor->data + offset, data, size);
         return;
     }
 
-    size_t slice_size = tensor->ne[1] * ggml_row_size(tensor->type, tensor->ne[0]);
-    GGML_ASSERT(offset % slice_size == 0 && "offset must be aligned to slice boundary");
-    GGML_ASSERT(offset + size <= ggml_nbytes(tensor));
+    extra->shadow_buf.reserve(ggml_nbytes(tensor));
+    extra->shadow_buf.insert(extra->shadow_buf.end(), (const uint8_t *) data, (const uint8_t *) data + size);
 
-    switch (tensor->type) {
-        case GGML_TYPE_Q4_0:
-            repack_q4_0_tiled(tensor, data, offset, size);
-            break;
+    if (extra->shadow_buf.size() >= ggml_nbytes(tensor)) {
+        // Repack in one shot!
+        switch (tensor->type) {
+            case GGML_TYPE_Q4_0:
+                repack_q4_0_tiled(tensor, extra->shadow_buf.data(), 0, extra->shadow_buf.size());
+                break;
 
-        case GGML_TYPE_Q4_1:
-            repack_q4_1_tiled(tensor, data, offset, size);
-            break;
+            case GGML_TYPE_Q4_1:
+                repack_q4_1_tiled(tensor, extra->shadow_buf.data(), 0, extra->shadow_buf.size());
+                break;
 
-        case GGML_TYPE_Q8_0:
-            repack_q8_0_tiled(tensor, data, offset, size);
-            break;
+            case GGML_TYPE_Q8_0:
+                repack_q8_0_tiled(tensor, extra->shadow_buf.data(), 0, extra->shadow_buf.size());
+                break;
 
-        case GGML_TYPE_IQ4_NL:
-            // IQ4_NL has identical block layout to Q4_0 (ggml_half d + uint8_t qs[16])
-            repack_q4_0_tiled(tensor, data, offset, size);
-            break;
+            case GGML_TYPE_IQ4_NL:
+                repack_q4_0_tiled(tensor, extra->shadow_buf.data(), 0, extra->shadow_buf.size());
+                break;
 
-        case GGML_TYPE_MXFP4:
-            repack_mxfp4_tiled(tensor, data, offset, size);
-            break;
+            case GGML_TYPE_MXFP4:
+                repack_mxfp4_tiled(tensor, extra->shadow_buf.data(), 0, extra->shadow_buf.size());
+                break;
 
-        default:
-            memcpy((char *) tensor->data + offset, data, size);
-            break;
+            default:
+                break;
+        }
+        extra->shadow_buf.clear();
+        extra->shadow_buf.shrink_to_fit();
     }
 }
 
@@ -1163,14 +1173,14 @@ static void ggml_backend_hexagon_buffer_get_tensor(ggml_backend_buffer_t buffer,
                                                    void *                data,
                                                    size_t                offset,
                                                    size_t                size) {
-    auto sbuf = (ggml_hexagon_shared_buffer *) buffer->context;
-    auto sess = sbuf->sess;
+    auto extra = (ggml_hexagon_tensor_extra *)  tensor->extra;
+    auto sbuf  = (ggml_hexagon_shared_buffer *) buffer->context;
+    auto sess  = sbuf->sess;
 
-    HEX_VERBOSE("ggml-hex: %s get-tensor %s : data %p offset %zu size %zu usage %d\n",
-            sess->c_name(), tensor->name, data, offset, size, (int) buffer->usage);
+    HEX_VERBOSE("ggml-hex: %s get-tensor %s : data %p offset %zu size %zu usage %d flags 0x%x\n",
+            sess->c_name(), tensor->name, data, offset, size, (int) buffer->usage, extra->flags);
 
-    const bool is_repack = ((uintptr_t)tensor->extra & GGML_HEXAGON_TENSOR_REPACK) != 0;
-    if (!is_repack) {
+    if ((extra->flags & GGML_HEXAGON_TENSOR_REPACK) == 0) {
         memcpy(data, (const char *) tensor->data + offset, size);
         return;
     }
@@ -1224,65 +1234,65 @@ static bool ggml_backend_hexagon_buffer_cpy_tensor(ggml_backend_buffer_t      bu
 }
 
 static void ggml_backend_hexagon_buffer_set_tensor_2d(ggml_backend_buffer_t buffer,
-                                                      ggml_tensor *         tensor,
-                                                      const void *          data,
-                                                      size_t                offset,
-                                                      size_t                size,
-                                                      size_t                n_copies,
-                                                      size_t                stride_tensor,
-                                                      size_t                stride_data) {
-    auto sbuf = (ggml_hexagon_shared_buffer *) buffer->context;
-    auto sess = sbuf->sess;
+                                                          ggml_tensor *         tensor,
+                                                          const void *          data,
+                                                          size_t                offset,
+                                                          size_t                size,
+                                                          size_t                n_copies,
+                                                          size_t                stride_tensor,
+                                                          size_t                stride_data) {
+    auto extra = (ggml_hexagon_tensor_extra *)  tensor->extra;
+    auto sbuf  = (ggml_hexagon_shared_buffer *) buffer->context;
+    auto sess  = sbuf->sess;
 
-    if (ggml_hexagon_is_repack_type(tensor->type) && ggml_backend_buffer_get_usage(buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
-        tensor->extra = (void*)((uintptr_t)tensor->extra | GGML_HEXAGON_TENSOR_REPACK);
+    if (ggml_hexagon_is_repack_type(tensor->type) &&
+            ggml_backend_buffer_get_usage(buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
+        extra->flags |= GGML_HEXAGON_TENSOR_REPACK;
     }
 
-    HEX_VERBOSE("ggml-hex: %s set-tensor-2d %s : data %p offset %zu size %zu n_copies %zu stride_tensor %zu stride_data %zu usage %d extra 0x%lx\n",
-                sess->c_name(), tensor->name, data, offset, size, n_copies, stride_tensor, stride_data, (int) buffer->usage, (unsigned long)tensor->extra);
+    HEX_VERBOSE("ggml-hex: %s set-tensor-2d %s : data %p offset %zu size %zu n_copies %zu stride_tensor %zu stride_data %zu usage %d flags 0x%x\n",
+                sess->c_name(), tensor->name, data, offset, size, n_copies, stride_tensor, stride_data, (int) buffer->usage, extra->flags);
 
-    const bool is_repack = ((uintptr_t)tensor->extra & GGML_HEXAGON_TENSOR_REPACK) != 0;
-    if (!is_repack) {
+    if ((extra->flags & GGML_HEXAGON_TENSOR_REPACK) == 0) {
         for (size_t i = 0; i < n_copies; i++) {
             memcpy((uint8_t *) tensor->data + offset + i * stride_tensor, (const uint8_t *) data + i * stride_data, size);
         }
         return;
     }
 
-    size_t temp_size = n_copies * stride_tensor;
-    std::vector<uint8_t> temp_buf(temp_size);
+    extra->shadow_buf.reserve(ggml_nbytes(tensor));
     for (size_t i = 0; i < n_copies; i++) {
-        memcpy(temp_buf.data() + i * stride_tensor, (const uint8_t *) data + i * stride_data, size);
+        extra->shadow_buf.insert(extra->shadow_buf.end(), (const uint8_t *) data + i * stride_data, (const uint8_t *) data + i * stride_data + size);
     }
 
-    size_t slice_size = tensor->ne[1] * ggml_row_size(tensor->type, tensor->ne[0]);
-    GGML_ASSERT(offset % slice_size == 0 && "offset must be aligned to slice boundary");
-    GGML_ASSERT(offset + temp_size <= ggml_nbytes(tensor));
+    if (extra->shadow_buf.size() >= ggml_nbytes(tensor)) {
+        // Repack in one shot!
+        switch (tensor->type) {
+            case GGML_TYPE_Q4_0:
+                repack_q4_0_tiled(tensor, extra->shadow_buf.data(), 0, extra->shadow_buf.size());
+                break;
 
-    switch (tensor->type) {
-        case GGML_TYPE_Q4_0:
-            repack_q4_0_tiled(tensor, temp_buf.data(), offset, temp_size);
-            break;
+            case GGML_TYPE_Q4_1:
+                repack_q4_1_tiled(tensor, extra->shadow_buf.data(), 0, extra->shadow_buf.size());
+                break;
 
-        case GGML_TYPE_Q4_1:
-            repack_q4_1_tiled(tensor, temp_buf.data(), offset, temp_size);
-            break;
+            case GGML_TYPE_Q8_0:
+                repack_q8_0_tiled(tensor, extra->shadow_buf.data(), 0, extra->shadow_buf.size());
+                break;
 
-        case GGML_TYPE_Q8_0:
-            repack_q8_0_tiled(tensor, temp_buf.data(), offset, temp_size);
-            break;
+            case GGML_TYPE_IQ4_NL:
+                repack_q4_0_tiled(tensor, extra->shadow_buf.data(), 0, extra->shadow_buf.size());
+                break;
 
-        case GGML_TYPE_IQ4_NL:
-            repack_q4_0_tiled(tensor, temp_buf.data(), offset, temp_size);
-            break;
+            case GGML_TYPE_MXFP4:
+                repack_mxfp4_tiled(tensor, extra->shadow_buf.data(), 0, extra->shadow_buf.size());
+                break;
 
-        case GGML_TYPE_MXFP4:
-            repack_mxfp4_tiled(tensor, temp_buf.data(), offset, temp_size);
-            break;
-
-        default:
-            memcpy((char *) tensor->data + offset, temp_buf.data(), temp_size);
-            break;
+            default:
+                break;
+        }
+        extra->shadow_buf.clear();
+        extra->shadow_buf.shrink_to_fit();
     }
 }
 
@@ -1294,27 +1304,31 @@ static void ggml_backend_hexagon_buffer_get_tensor_2d(ggml_backend_buffer_t buff
                                                       size_t                n_copies,
                                                       size_t                stride_tensor,
                                                       size_t                stride_data) {
-    auto sbuf = (ggml_hexagon_shared_buffer *) buffer->context;
-    auto sess = sbuf->sess;
+    auto extra = (ggml_hexagon_tensor_extra *)  tensor->extra;
+    auto sbuf  = (ggml_hexagon_shared_buffer *) buffer->context;
+    auto sess  = sbuf->sess;
 
     HEX_VERBOSE("ggml-hex: %s get-tensor-2d %s : data %p offset %zu size %zu n_copies %zu stride_tensor %zu stride_data %zu usage %d\n",
                 sess->c_name(), tensor->name, data, offset, size, n_copies, stride_tensor, stride_data, (int) buffer->usage);
 
-    const bool is_repack = ((uintptr_t)tensor->extra & GGML_HEXAGON_TENSOR_REPACK) != 0;
-
-    if (!is_repack) {
+    if ((extra->flags & GGML_HEXAGON_TENSOR_REPACK) == 0) {
         for (size_t i = 0; i < n_copies; i++) {
             memcpy((uint8_t *)data + i * stride_data, (const uint8_t *)tensor->data + offset + i * stride_tensor, size);
         }
         return;
     }
 
-    size_t temp_size = n_copies * stride_tensor;
-    std::vector<uint8_t> temp_buf(temp_size);
+    size_t temp_size      = n_copies > 0 ? (n_copies - 1) * stride_tensor + size : 0;
+    size_t slice_size     = tensor->ne[1] * ggml_row_size(tensor->type, tensor->ne[0]);
+    size_t slice_offset   = offset % slice_size;
+    size_t row_size_bytes = ggml_row_size(tensor->type, tensor->ne[0]);
 
-    size_t slice_size = tensor->ne[1] * ggml_row_size(tensor->type, tensor->ne[0]);
-    GGML_ASSERT(offset % slice_size == 0 && "offset must be aligned to slice boundary");
-    GGML_ASSERT(offset + temp_size <= ggml_nbytes(tensor));
+    GGML_ASSERT((slice_offset % row_size_bytes) == 0 && "offset must be aligned to row boundary");
+    GGML_ASSERT((temp_size % row_size_bytes)    == 0 && "temp_size must be a multiple of row size");
+    GGML_ASSERT((slice_offset / row_size_bytes) % 32 == 0 && "offset must be aligned to tile size (32 rows)");
+    GGML_ASSERT((offset + temp_size) <= ggml_nbytes(tensor));
+
+    std::vector<uint8_t> temp_buf(temp_size);
 
     switch (tensor->type) {
         case GGML_TYPE_Q4_0:
@@ -1574,15 +1588,17 @@ struct ggml_hexagon_opbatch {
     }
 
     bool same_shape(const htp_tensor * h, const ggml_tensor * t) const {
+        auto extra = (ggml_hexagon_tensor_extra *) t->extra;
+
         int64_t ne0 = t->ne[0];
         int64_t ne1 = t->ne[1];
-        const bool is_repack = ((uintptr_t)t->extra & GGML_HEXAGON_TENSOR_REPACK) != 0;
+        const bool is_repack = (extra->flags & GGML_HEXAGON_TENSOR_REPACK) != 0;
         if (is_repack) {
             ne0 = hex_round_up(ne0, 32);
             ne1 = hex_round_up(ne1, 32);
         }
         int64_t nb1 = is_repack ? ggml_row_size(t->type, ne0) : t->nb[1];
-        int64_t nb2 = is_repack ? nb1 * ne1 : t->nb[2];
+        int64_t nb2 = is_repack ? nb1 * ne1      : t->nb[2];
         int64_t nb3 = is_repack ? nb2 * t->ne[2] : t->nb[3];
 
         return (h->type == t->type) &&
@@ -1592,7 +1608,8 @@ struct ggml_hexagon_opbatch {
 
     // add tensor and return its index
     int add_tensor(const ggml_tensor * t) {
-        auto sbuf = static_cast<ggml_hexagon_shared_buffer *>(t->buffer->context);
+        auto extra = (ggml_hexagon_tensor_extra *) t->extra;
+        auto sbuf  = static_cast<ggml_hexagon_shared_buffer *>(t->buffer->context);
 
         // First lookup by tensor data
         auto range = d_map.equal_range(t->data);
@@ -1621,7 +1638,7 @@ struct ggml_hexagon_opbatch {
         h.data  = t_offset;
         h.type  = t->type;
 
-        const bool is_repack = ((uintptr_t)t->extra & GGML_HEXAGON_TENSOR_REPACK) != 0;
+        const bool is_repack = (extra->flags & GGML_HEXAGON_TENSOR_REPACK) != 0;
         if (is_repack) {
             h.ne[0] = hex_round_up(t->ne[0], 32);
             h.ne[1] = hex_round_up(t->ne[1], 32);
@@ -1644,7 +1661,7 @@ struct ggml_hexagon_opbatch {
         if (ggml_backend_buffer_get_usage(t->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
             h.flags |= HTP_TENSOR_WEIGHT;
         }
-        if (((uintptr_t)t->extra & GGML_HEXAGON_TENSOR_REPACK) != 0) {
+        if ((extra->flags & GGML_HEXAGON_TENSOR_REPACK) != 0) {
             h.flags |= HTP_TENSOR_REPACK;
         }
 
@@ -4425,6 +4442,7 @@ static bool ggml_hexagon_cpy_tensor_async_phys(ggml_backend_t backend_src, ggml_
 
     ggml_tensor sync_tensor {};
     sync_tensor.buffer = dst->buffer;
+    sync_tensor.extra  = &ggml_hexagon_dummy_extra;
     sync_tensor.data   = (void*) sync_token;
     sync_tensor.type   = GGML_TYPE_I32;
     sync_tensor.ne[0]  = 1;
