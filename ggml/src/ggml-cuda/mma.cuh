@@ -736,7 +736,7 @@ namespace ggml_cuda_mma {
             int i = threadIdx.x / 16;
             tmp[i] = tile_float.x[l];
             i ^= 1;
-            tmp[i] = __shfl_xor_sync(0xFFFFFFFF, tile_float.x[l], 16, WARP_SIZE);
+            tmp[i] = ggml_cuda_shfl_xor_sync(tile_float.x[l], 16);
             ret.x[l] = make_half2(tmp[0], tmp[1]);
         }
         return ret;
@@ -767,8 +767,8 @@ namespace ggml_cuda_mma {
 
             // On Volta FP16 and FP32 tiles have a different memory layout,
             //     for the conversion threads with an offset of 2 need to exchange half their values:
-            ret.x[l0/2 + (((threadIdx.x % 4) / 2) ^ 1)] = __shfl_xor_sync(
-                0xFFFFFFFF, ret.x[l0/2 + (((threadIdx.x % 4) / 2) ^ 1)], 2, WARP_SIZE);
+            ret.x[l0/2 + (((threadIdx.x % 4) / 2) ^ 1)] = ggml_cuda_shfl_xor_sync(
+                ret.x[l0/2 + (((threadIdx.x % 4) / 2) ^ 1)], 2);
         }
         return ret;
     }
