@@ -6,6 +6,9 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cstdint>
+#include <functional>
+
 using ordered_json = nlohmann::ordered_json;
 
 static std::string_view trim_trailing_space(std::string_view sv, int max = -1) {
@@ -233,6 +236,43 @@ common_peg_parser common_chat_peg_builder::tag_with_safe_content(const std::stri
     }
     auto content_chunk = rule(tag_name, content(negate(literal(marker)) + any() + until(marker)));
     return zero_or_more(choice({ p, content_chunk }));
+}
+
+common_peg_parser common_chat_peg_builder::permute(const std::string &                    rule_prefix,
+                                                   const std::vector<common_peg_parser> & parsers) {
+    if (parsers.empty()) {
+        return eps();
+    }
+
+    if (parsers.size() == 1 || parsers.size() > COMMON_CHAT_MAX_PERMUTE) {
+        return sequence(parsers);
+    }
+
+    std::map<uint32_t, common_peg_parser>      rules;
+    std::function<common_peg_parser(uint32_t)> remaining_of;
+
+    remaining_of = [&](uint32_t remaining) -> common_peg_parser {
+        if (remaining == 0) {
+            return eps();
+        }
+
+        auto cached = rules.find(remaining);
+        if (cached != rules.end()) {
+            return cached->second;
+        }
+
+        auto alternatives = choice();
+        for (size_t i = 0; i < parsers.size(); i++) {
+            const uint32_t bit = 1u << i;
+            if (remaining & bit) {
+                alternatives |= parsers[i] + remaining_of(remaining & ~bit);
+            }
+        }
+
+        return rules.emplace(remaining, rule(rule_prefix + "-" + std::to_string(remaining), alternatives)).first->second;
+    };
+
+    return remaining_of((1u << parsers.size()) - 1);
 }
 
 std::string & common_chat_peg_mapper::args_target() {
