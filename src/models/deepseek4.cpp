@@ -91,7 +91,11 @@ void llama_model_deepseek4::load_arch_tensors(llama_model_loader & ml) {
     const int64_t hc_mix_dim  = (2 + hc_mult) * hc_mult;
 
     const bool mtp_only = (n_layer_nextn > 0) && (ml.get_weight("blk.0.attn_norm.weight") == nullptr);
-    const int trunk_flags = mtp_only ? TENSOR_NOT_REQUIRED : 0;
+    int mtp_flags = mtp_only ? TENSOR_NOT_REQUIRED : 0;
+
+    if (!ml.load_mtp) {
+        mtp_flags |= TENSOR_SKIP;
+    }
 
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
@@ -104,7 +108,7 @@ void llama_model_deepseek4::load_arch_tensors(llama_model_loader & ml) {
 
     for (int i = 0; i < n_layer_all; ++i) {
         auto & layer = layers[i];
-        const int flags = i < n_layer ? trunk_flags : 0;
+        const int flags = i < n_layer ? mtp_flags : 0;
 
         layer.attn_norm     = create_tensor(tn(LLM_TENSOR_ATTN_NORM,     "weight", i), {n_embd}, flags);
         layer.attn_sinks    = create_tensor(tn(LLM_TENSOR_ATTN_SINKS,    "weight", i), {n_head}, flags);

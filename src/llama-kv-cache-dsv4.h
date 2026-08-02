@@ -41,9 +41,9 @@ public:
     void state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags, const std::vector<uint32_t> & rs_idx) const;
     void state_read (llama_io_read_i  & io, llama_seq_id seq_id, llama_state_seq_flags flags);
 
-    ggml_tensor * get_kv      (ggml_context * ctx, int32_t il) const;
-    ggml_tensor * get_score   (ggml_context * ctx, int32_t il) const;
-    ggml_tensor * get_kv_all  (ggml_context * ctx, int32_t il) const;
+    ggml_tensor * get_kv       (ggml_context * ctx, int32_t il) const;
+    ggml_tensor * get_score    (ggml_context * ctx, int32_t il) const;
+    ggml_tensor * get_kv_all   (ggml_context * ctx, int32_t il) const;
     ggml_tensor * get_score_all(ggml_context * ctx, int32_t il) const;
 
     ggml_tensor * cpy_kv   (ggml_context * ctx, ggml_tensor * cur, ggml_tensor * idxs, int32_t il) const;
