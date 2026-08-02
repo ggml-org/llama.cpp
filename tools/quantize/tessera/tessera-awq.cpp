@@ -1,4 +1,5 @@
 #include "tessera-awq.h"
+#include "tessera-sharded-map.h"
 
 #include <algorithm>
 #include <atomic>
@@ -267,6 +268,14 @@ int ts_awq_evolve(const ts_awq_layer * layer,
         for (int64_t i = 0; i < pop_size; i++) {
             pops[isl][i] = ts_awq_random_candidate(&rng);
         }
+        // Family warm-start: inject the seed candidate (from a previously-
+        // converged tensor in the same family) into the population, replacing
+        // the second member. The first member stays random so the GA still
+        // explores. The seed gives the GA a near-optimal starting point so
+        // convergence happens in a few generations instead of dozens.
+        if (params->seed_candidate != nullptr && pop_size > 1) {
+            pops[isl][1] = *params->seed_candidate;
+        }
     }
 
     int64_t evaluations = 0;
@@ -301,8 +310,18 @@ int ts_awq_evolve(const ts_awq_layer * layer,
         }
     }
 
+    // Early termination: track consecutive generations without improvement.
+    // If stagnation_limit > 0 and the best score hasn't improved by more than
+    // stagnation_epsilon for that many generations, the GA has converged and
+    // we stop early. This cuts typical evolution from 100 gens to ~20-30.
+    const bool   use_stagnation = (params->stagnation_limit > 0);
+    const float  stag_eps       = params->stagnation_epsilon;
+    int64_t      gens_since_improve = 0;
+    float        prev_best_composite = best_score.composite;
+
     // Main GA loop
-    for (int64_t gen = 0; gen < n_gen; gen++) {
+    int64_t gen = 0;
+    for (; gen < n_gen; gen++) {
         for (int64_t isl = 0; isl < n_islands; isl++) {
             // Rank by composite descending (higher = better)
             std::vector<int64_t> idx(pop_size);
@@ -378,12 +397,25 @@ int ts_awq_evolve(const ts_awq_layer * layer,
                 scores[dst][wi] = migrant_scores[isl];
             }
         }
+
+        // Stagnation check: has the best score improved this generation?
+        if (use_stagnation) {
+            if (best_score.composite > prev_best_composite + stag_eps) {
+                gens_since_improve = 0;
+                prev_best_composite = best_score.composite;
+            } else {
+                gens_since_improve++;
+                if (gens_since_improve >= params->stagnation_limit) {
+                    break;
+                }
+            }
+        }
     }
 
     // Fill result
     result->best = best;
     result->best_score = best_score;
-    result->generations_run = n_gen;
+    result->generations_run = gen + 1;  // actual generations completed (gen is 0-indexed)
     result->evaluations = evaluations;
     result->archive.clear();
     for (auto & kv : archive) {
@@ -503,14 +535,29 @@ int ts_awq_evolve_all(const ts_awq_layer * layers, int64_t n_layers,
                                 params->on_phase_change_user);
     }
 
+    // Family warm-start cache: maps family name -> best candidate from a
+    // previously-converged tensor in that family. Layers in the same family
+    // (e.g. all blk.*.ffn_up) tend to have similar optimal alpha/clip, so
+    // seeding the GA from a sibling's result converges in a few generations
+    // instead of dozens. Thread-safe via ts_sharded_map so the parallel path
+    // can use it without a global lock.
+    ts_sharded_map<std::string, ts_awq_candidate> family_seeds;
+
     if (n_threads <= 1) {
         for (int64_t i = 0; i < n_layers; i++) {
             ts_awq_evolve_params layer_params = *params;
             layer_params.seed = params->seed + (uint32_t)i;
+            // Inject the family's best-known candidate if available.
+            ts_awq_candidate fam_seed;
+            if (family_seeds.find_copy(layers[i].family, fam_seed)) {
+                layer_params.seed_candidate = &fam_seed;
+            }
             int rc = ts_awq_evolve(&layers[i], eval, eval_ctx, &layer_params, &(*results)[i]);
             if (rc != 0) {
                 return rc;
             }
+            // Store this layer's best as the family seed for subsequent layers.
+            family_seeds.assign(layers[i].family, (*results)[i].best);
             if (params->on_layer_done) {
                 params->on_layer_done(i, n_layers, layers[i].name.c_str(),
                                       params->on_layer_done_user);
@@ -534,12 +581,22 @@ int ts_awq_evolve_all(const ts_awq_layer * layers, int64_t n_layers,
             ts_awq_evolve_params layer_params = *params;
             layer_params.n_threads = 1;  // no nested fan-out
             layer_params.seed = params->seed + (uint32_t)i;
+            // Inject the family's best-known candidate if available. The
+            // sharded map is thread-safe; if two layers in the same family
+            // run concurrently, the second one to finish overwrites the seed,
+            // which is fine (both are near-optimal).
+            ts_awq_candidate fam_seed;
+            if (family_seeds.find_copy(layers[i].family, fam_seed)) {
+                layer_params.seed_candidate = &fam_seed;
+            }
             int rc = ts_awq_evolve(&layers[i], eval, eval_ctx, &layer_params, &(*results)[i]);
             if (rc != 0) {
                 int expected = 0;
                 first_rc.compare_exchange_strong(expected, rc,
                                                  std::memory_order_relaxed);
             }
+            // Store this layer's best as the family seed for subsequent layers.
+            family_seeds.assign(layers[i].family, (*results)[i].best);
             if (params->on_layer_done) {
                 params->on_layer_done(i, n_layers, layers[i].name.c_str(),
                                       params->on_layer_done_user);

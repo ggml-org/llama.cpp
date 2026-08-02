@@ -157,6 +157,18 @@ struct ts_awq_evolve_params {
     void    (* on_phase_change)(const char * phase, int64_t n_layers,
                                 void * user);
     void     * on_phase_change_user;
+    // Early termination: if the best composite score has not improved by more
+    // than stagnation_epsilon for stagnation_limit consecutive generations,
+    // the GA stops early and marks the tensor as converged. 0 = disabled
+    // (run all generations). Default is set by the caller (the dispatch sets
+    // a sensible default).
+    int64_t   stagnation_limit;    // gens without improvement before stop, 0 = off
+    float     stagnation_epsilon;  // min improvement to count as progress
+    // Family warm-start seed: if non-null, injected into the initial population
+    // of every island (replacing one random member). This lets the caller pass
+    // the best candidate from a previously-converged tensor in the same family,
+    // so the GA starts near-optimal instead of from scratch. May be NULL.
+    const ts_awq_candidate * seed_candidate;
 };
 
 // Result of evolution for one tensor family.

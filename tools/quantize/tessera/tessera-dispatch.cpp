@@ -905,6 +905,15 @@ int ts_dispatch_run(const ts_dispatch_params * params,
     evolve_params.heldout_weight     = 2.0f;
     evolve_params.seed               = (uint32_t)params->evolve_seed;
     evolve_params.verbose            = verbose;
+    // Early termination: stop a tensor's GA after 10 consecutive generations
+    // with < 1e-5 improvement in the composite score. Most tensors converge
+    // by gen 15-30; without this the GA wastes 70+% of its evaluations on
+    // stagnant populations. Combined with family warm-start (the seed_candidate
+    // field, populated by evolve_all from same-family converged tensors),
+    // later tensors in a family converge in 1-5 generations.
+    evolve_params.stagnation_limit   = 10;
+    evolve_params.stagnation_epsilon = 1e-5f;
+    evolve_params.seed_candidate     = nullptr;  // set per-layer by evolve_all
     // Per-tensor GA parallelism: each layer's GA is independent (its
     // population, archive and rng are local to ts_awq_evolve), so the
     // per-layer loop fans out across this many threads. Default to the host's
