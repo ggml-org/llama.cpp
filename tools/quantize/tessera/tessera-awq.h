@@ -165,6 +165,14 @@ struct ts_awq_evolve_params {
     // processing), this keeps peak memory at 1 weight buffer + n_eval_threads
     // scratch buffers instead of n_threads x (weight + scratch).
     int32_t   n_eval_threads;
+    // One-shot family hypothesis test: when seed_candidate is non-null AND
+    // seed_composite > 0, evaluate the seed once. If the score is >=
+    // seed_composite * seed_accept_ratio, accept it directly (skip the GA).
+    // seed_composite is the score the seed achieved on its original tensor.
+    // seed_accept_ratio is the transfer threshold (e.g. 0.95 = accept if this
+    // tensor scores within 95% of the original). Default 0.95.
+    float     seed_composite;
+    float     seed_accept_ratio;
     // Per-tensor parallelism for ts_awq_evolve_all: each layer's GA runs
     // independently (its population, archive and rng are local to one
     // ts_awq_evolve call), so the per-layer loop fans out across this many
@@ -215,9 +223,11 @@ struct ts_awq_evolve_params {
     // from a same-family prior result. Returns true and fills *out when a
     // seed exists; false otherwise. Used to warm-start from prior runs
     // stored on disk (replaces the in-memory family_seeds map for the
-    // first layer of each family).
+    // first layer of each family). out_composite is the seed's score on its
+    // original tensor (used by the one-shot hypothesis test); may be null.
     bool    (* family_seed_lookup)(const char * family,
                                    ts_awq_candidate * out,
+                                   float * out_composite,
                                    void * user) = nullptr;
     void     * family_seed_lookup_user = nullptr;
     // layer_skip_lookup: evolve_all calls this once per layer before
@@ -244,6 +254,7 @@ struct ts_awq_evolve_result {
     // both into the ga_results row.
     bool             converged     = false;
     bool             warm_started = false;
+    bool             family_matched = false;  // one-shot hypothesis test accepted
     // archive: best candidate per regime cell
     std::vector<std::pair<ts_awq_archive_cell, ts_awq_candidate>> archive;
 };

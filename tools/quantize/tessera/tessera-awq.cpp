@@ -256,6 +256,33 @@ int ts_awq_evolve(const ts_awq_layer * layer,
     const int64_t n_islands  = std::max(params->islands, (int64_t)1);
     const int64_t mig_interval = params->migration_interval > 0 ? params->migration_interval : 10;
 
+    // One-shot hypothesis test: when a family seed candidate exists, evaluate
+    // it ONCE against this layer's weights. If the composite score is within
+    // seed_accept_ratio of the seed's recorded score (i.e. the family optimum
+    // transfers to this tensor), accept it directly and skip the GA entirely.
+    // This costs 1 evaluation instead of 640+ for tensors that share the
+    // family optimum - which is most of them in a transformer (sibling layers
+    // at similar depths have nearly identical weight distributions).
+    if (params->seed_candidate != nullptr && params->seed_composite > 0.0f &&
+        params->seed_accept_ratio > 0.0f) {
+        ts_awq_score seed_score = eval(params->seed_candidate, layer, eval_ctx);
+        float threshold = params->seed_composite * params->seed_accept_ratio;
+        if (seed_score.composite >= threshold) {
+            // Family optimum transfers: accept and skip the GA.
+            result->best           = *params->seed_candidate;
+            result->best_score     = seed_score;
+            result->generations_run = 0;
+            result->evaluations     = 1;
+            result->converged       = true;
+            result->warm_started    = true;
+            result->family_matched  = true;
+            result->archive.clear();
+            return 0;
+        }
+        // Family optimum does NOT transfer (this tensor is an outlier).
+        // Fall through to the full GA, warm-started from the seed.
+    }
+
     ts_awq_rng rng;
     rng.init(params->seed);
 
@@ -511,7 +538,14 @@ int ts_awq_evolve_all(ts_awq_layer * layers, int64_t n_layers,
     // Layers in the same family (e.g. all blk.*.ffn_up) tend to have similar
     // optimal alpha/clip, so seeding the GA from a sibling's result converges
     // in a few generations instead of dozens. Thread-safe via ts_sharded_map.
-    ts_sharded_map<std::string, ts_awq_candidate> family_seeds;
+    // Family warm-start cache: stores the best candidate AND its composite
+    // score per family, so the one-shot hypothesis test can compare against
+    // the seed's original fitness.
+    struct family_seed_entry {
+        ts_awq_candidate candidate;
+        float            composite;
+    };
+    ts_sharded_map<std::string, family_seed_entry> family_seeds;
 
     // Progressive eval: screen on stratified 25% of layers first, then
     // promote survivors to full eval. For the per-layer GA, this reduces
@@ -550,9 +584,10 @@ int ts_awq_evolve_all(ts_awq_layer * layers, int64_t n_layers,
             for (int64_t si = 0; si < screen_count; si++) {
                 screen_params.seed = params->seed + (uint32_t)screen_li[si];
                 // Reuse family seed from earlier screen layers if available.
-                ts_awq_candidate fam_seed;
+                family_seed_entry fam_seed;
                 if (family_seeds.find_copy(layers[screen_li[si]].family, fam_seed)) {
-                    screen_params.seed_candidate = &fam_seed;
+                    screen_params.seed_candidate = &fam_seed.candidate;
+                    screen_params.seed_composite = fam_seed.composite;
                 } else {
                     screen_params.seed_candidate = nullptr;
                 }
@@ -564,7 +599,7 @@ int ts_awq_evolve_all(ts_awq_layer * layers, int64_t n_layers,
                 // Feed the result back into the family cache for later screen
                 // layers AND the main evolution phase.
                 family_seeds.assign(layers[screen_li[si]].family,
-                                    screen_results[si].best);
+                                    {screen_results[si].best, screen_results[si].best_score.composite});
                 if (params->on_layer_done) {
                     params->on_layer_done(si, screen_count,
                                           layers[screen_li[si]].name.c_str(),
@@ -582,9 +617,10 @@ int ts_awq_evolve_all(ts_awq_layer * layers, int64_t n_layers,
                     int64_t si = next_si.fetch_add(1, std::memory_order_relaxed);
                     if (si >= screen_count) return;
                     sp.seed = params->seed + (uint32_t)screen_li[si];
-                    ts_awq_candidate fam_seed;
+                    family_seed_entry fam_seed;
                     if (family_seeds.find_copy(layers[screen_li[si]].family, fam_seed)) {
-                        sp.seed_candidate = &fam_seed;
+                        sp.seed_candidate = &fam_seed.candidate;
+                    sp.seed_composite = fam_seed.composite;
                     } else {
                         sp.seed_candidate = nullptr;
                     }
@@ -596,7 +632,7 @@ int ts_awq_evolve_all(ts_awq_layer * layers, int64_t n_layers,
                                                          std::memory_order_relaxed);
                     }
                     family_seeds.assign(layers[screen_li[si]].family,
-                                        screen_results[si].best);
+                                        {screen_results[si].best, screen_results[si].best_score.composite});
                     if (params->on_layer_done) {
                         params->on_layer_done(si, screen_count,
                                               layers[screen_li[si]].name.c_str(),
@@ -650,7 +686,7 @@ int ts_awq_evolve_all(ts_awq_layer * layers, int64_t n_layers,
                 if (params->layer_skip_lookup(&layers[i], &skipped,
                                               params->layer_skip_lookup_user)) {
                     (*results)[i] = std::move(skipped);
-                    family_seeds.assign(layers[i].family, (*results)[i].best);
+                    family_seeds.assign(layers[i].family, {(*results)[i].best, (*results)[i].best_score.composite});
                     if (params->on_layer_done) {
                         params->on_layer_done(i, n_layers, layers[i].name.c_str(),
                                               params->on_layer_done_user);
@@ -664,13 +700,17 @@ int ts_awq_evolve_all(ts_awq_layer * layers, int64_t n_layers,
             // in-memory cache first (cheap), then the persistent-store lookup
             // (one SQL query) so the first layer of a family can warm-start
             // from prior runs on disk.
-            ts_awq_candidate fam_seed;
+            family_seed_entry fam_seed;
             if (family_seeds.find_copy(layers[i].family, fam_seed)) {
-                layer_params.seed_candidate = &fam_seed;
+                layer_params.seed_candidate = &fam_seed.candidate;
+                    layer_params.seed_composite = fam_seed.composite;
             } else if (params->family_seed_lookup &&
-                       params->family_seed_lookup(layers[i].family.c_str(), &fam_seed,
+                       params->family_seed_lookup(layers[i].family.c_str(),
+                                                  &fam_seed.candidate,
+                                                  &fam_seed.composite,
                                                   params->family_seed_lookup_user)) {
-                layer_params.seed_candidate = &fam_seed;
+                layer_params.seed_candidate = &fam_seed.candidate;
+                layer_params.seed_composite = fam_seed.composite;
             }
             // Streaming weight load: if the layer has a load callback, fetch
             // weights on demand instead of holding all layers in memory.
@@ -688,7 +728,7 @@ int ts_awq_evolve_all(ts_awq_layer * layers, int64_t n_layers,
                 return rc;
             }
             // Store this layer's best as the family seed for subsequent layers.
-            family_seeds.assign(layers[i].family, (*results)[i].best);
+            family_seeds.assign(layers[i].family, {(*results)[i].best, (*results)[i].best_score.composite});
             if (params->on_layer_done) {
                 params->on_layer_done(i, n_layers, layers[i].name.c_str(),
                                       params->on_layer_done_user);
@@ -716,7 +756,7 @@ int ts_awq_evolve_all(ts_awq_layer * layers, int64_t n_layers,
                 if (params->layer_skip_lookup(&layers[i], &skipped,
                                               params->layer_skip_lookup_user)) {
                     (*results)[i] = std::move(skipped);
-                    family_seeds.assign(layers[i].family, (*results)[i].best);
+                    family_seeds.assign(layers[i].family, {(*results)[i].best, (*results)[i].best_score.composite});
                     if (params->on_layer_done) {
                         params->on_layer_done(i, n_layers, layers[i].name.c_str(),
                                               params->on_layer_done_user);
@@ -733,13 +773,17 @@ int ts_awq_evolve_all(ts_awq_layer * layers, int64_t n_layers,
             // which is fine (both are near-optimal). The persistent-store
             // fallback only fires when the in-memory cache has no entry for
             // this family yet (first layer of the family in this run).
-            ts_awq_candidate fam_seed;
+            family_seed_entry fam_seed;
             if (family_seeds.find_copy(layers[i].family, fam_seed)) {
-                layer_params.seed_candidate = &fam_seed;
+                layer_params.seed_candidate = &fam_seed.candidate;
+                    layer_params.seed_composite = fam_seed.composite;
             } else if (params->family_seed_lookup &&
-                       params->family_seed_lookup(layers[i].family.c_str(), &fam_seed,
+                       params->family_seed_lookup(layers[i].family.c_str(),
+                                                  &fam_seed.candidate,
+                                                  &fam_seed.composite,
                                                   params->family_seed_lookup_user)) {
-                layer_params.seed_candidate = &fam_seed;
+                layer_params.seed_candidate = &fam_seed.candidate;
+                layer_params.seed_composite = fam_seed.composite;
             }
             // Streaming weight load (see serial path above for details).
             const float * loaded_weights = nullptr;
@@ -758,7 +802,7 @@ int ts_awq_evolve_all(ts_awq_layer * layers, int64_t n_layers,
                                                  std::memory_order_relaxed);
             }
             // Store this layer's best as the family seed for subsequent layers.
-            family_seeds.assign(layers[i].family, (*results)[i].best);
+            family_seeds.assign(layers[i].family, {(*results)[i].best, (*results)[i].best_score.composite});
             if (params->on_layer_done) {
                 params->on_layer_done(i, n_layers, layers[i].name.c_str(),
                                       params->on_layer_done_user);

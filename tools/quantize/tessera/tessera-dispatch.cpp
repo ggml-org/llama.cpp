@@ -686,6 +686,7 @@ static void ts_dispatch_eval_recorder(const ts_awq_layer * layer,
 // from prior runs when the in-memory cache is empty.
 static bool ts_dispatch_family_seed_lookup(const char * family,
                                            ts_awq_candidate * out,
+                                           float * out_composite,
                                            void * user) {
     auto * wrap = static_cast<ts_dispatch_db *>(user);
     if (wrap == nullptr || wrap->db == nullptr || family == nullptr ||
@@ -700,6 +701,7 @@ static bool ts_dispatch_family_seed_lookup(const char * family,
     out->genes.alpha = seed.best_alpha;
     out->genes.clip  = seed.best_clip;
     out->expert_hint = -1;
+    if (out_composite) *out_composite = seed.best_composite;
     return true;
 }
 
@@ -1194,6 +1196,12 @@ int ts_dispatch_run(const ts_dispatch_params * params,
     // later tensors in a family converge in 1-5 generations.
     evolve_params.stagnation_limit   = 10;
     evolve_params.stagnation_epsilon = 1e-5f;
+    // One-shot family hypothesis test: accept a family seed if this tensor's
+    // eval scores within 95% of the seed's original composite. This skips the
+    // GA entirely for tensors that share the family optimum (most of them in a
+    // transformer), costing 1 eval instead of 640+.
+    evolve_params.seed_accept_ratio = 0.95f;
+    evolve_params.seed_composite    = 0.0f;  // populated per-layer by evolve_all
     // TESSERA_STAGNATION_LIMIT overrides the default early-termination window
     // (generations without improvement). Useful for tests that need to force
     // convergence on small fixtures, and for users who want to tune the GA's
