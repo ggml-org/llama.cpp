@@ -102,6 +102,31 @@ static bool logits_equal(const pos_logits & ref, const pos_logits & got, const c
     return !got.empty();
 }
 
+// decode [p0, p1) as ONE batch (the context may split it into several
+// ubatches), capturing logits for every position
+static bool decode_range_batch(
+        llama_context * ctx, const std::vector<llama_token> & tokens,
+        llama_pos p0, llama_pos p1, pos_logits * logits_out, uint32_t n_vocab) {
+    const uint32_t count = (uint32_t) (p1 - p0);
+    llama_batch batch = llama_batch_init(count, 0, 1);
+    for (llama_pos pos = p0; pos < p1; ++pos) {
+        common_batch_add(batch, tokens[pos], pos, { 0 }, true);
+    }
+    const bool ok = llama_decode(ctx, batch) == 0;
+    if (ok && logits_out) {
+        for (uint32_t i = 0; i < count; ++i) {
+            const float * logits = llama_get_logits_ith(ctx, i);
+            if (logits == nullptr) {
+                llama_batch_free(batch);
+                return false;
+            }
+            (*logits_out)[p0 + (llama_pos) i].assign(logits, logits + n_vocab);
+        }
+    }
+    llama_batch_free(batch);
+    return ok;
+}
+
 // reference logits: an untouched context decoding the same stream the same way
 static bool build_reference(
         const common_params & params, llama_model * model, const std::vector<llama_token> & tokens,
@@ -159,6 +184,55 @@ static bool case_aligned_deep_rollback(
 
     ok = logits_equal(ref, got, label);
     llama_free(ctx);
+    if (!ok) {
+        return false;
+    }
+
+    // Multi-ubatch replay: the same deep rollback replayed as ONE batch that
+    // the context splits into several ubatches must also be reference-equal.
+    // The pending restore must run exactly once, in the first ubatch.
+    pos_logits ref_mu;
+    {
+        llama_context * ctx_r = make_deep_ctx(params, model, 8, 16, 1024);
+        ok = ctx_r != nullptr &&
+             decode_tokens(ctx_r, tokens, 256) &&
+             decode_range_batch(ctx_r, tokens, 256, 300, &ref_mu, n_vocab);
+        if (ctx_r != nullptr) {
+            llama_free(ctx_r);
+        }
+        if (!ok) {
+            fprintf(stderr, "%s: failed to build multi-ubatch reference\n", label);
+            return false;
+        }
+    }
+
+    llama_context * ctx_mu = make_deep_ctx(params, model, 8, 16, 1024);
+    if (ctx_mu == nullptr) {
+        fprintf(stderr, "%s: failed to create multi-ubatch context\n", label);
+        return false;
+    }
+
+    ok = decode_tokens(ctx_mu, tokens, 256) && decode_singles(ctx_mu, tokens, 256, 306, nullptr, n_vocab);
+    ok = ok && llama_memory_seq_rm(llama_get_memory(ctx_mu), 0, 256, -1);
+    if (!ok) {
+        fprintf(stderr, "%s: multi-ubatch rollback setup failed\n", label);
+        llama_free(ctx_mu);
+        return false;
+    }
+
+    pos_logits got_mu;
+    ok = decode_range_batch(ctx_mu, tokens, 256, 300, &got_mu, n_vocab);
+    if (!ok) {
+        fprintf(stderr, "%s: multi-ubatch replay decode failed\n", label);
+        llama_free(ctx_mu);
+        return false;
+    }
+
+    ok = logits_equal(ref_mu, got_mu, label);
+    if (!ok) {
+        fprintf(stderr, "%s: multi-ubatch replay diverged from reference\n", label);
+    }
+    llama_free(ctx_mu);
     return ok;
 }
 
