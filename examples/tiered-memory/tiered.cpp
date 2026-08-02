@@ -5,6 +5,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <limits>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -15,7 +17,7 @@ constexpr uint64_t MiB = 1024ull * 1024ull;
 void print_usage(const char * argv0) {
     std::fprintf(stderr,
             "usage: %s -m MODEL.gguf --dram-mib N [--vram-mib N] "
-            "[--reserve-mib N] [-n N] [PROMPT]\n",
+            "[--cache-mib N] [--reserve-mib N] [-n N] [PROMPT]\n",
             argv0);
 }
 
@@ -41,16 +43,25 @@ int main(int argc, char ** argv) {
             }
             return argv[i];
         };
+        auto parse_mib = [&](const char * option) -> uint64_t {
+            const uint64_t value = std::stoull(require_value(option));
+            if (value > std::numeric_limits<uint64_t>::max() / MiB) {
+                throw std::out_of_range("MiB value is too large");
+            }
+            return value * MiB;
+        };
 
         try {
             if (arg == "-m" || arg == "--model") {
                 model_path = require_value(arg.c_str());
             } else if (arg == "--vram-mib") {
-                tiered_params.vram_budget_bytes = std::stoull(require_value(arg.c_str())) * MiB;
+                tiered_params.vram_budget_bytes = parse_mib(arg.c_str());
             } else if (arg == "--dram-mib") {
-                tiered_params.dram_budget_bytes = std::stoull(require_value(arg.c_str())) * MiB;
+                tiered_params.dram_budget_bytes = parse_mib(arg.c_str());
+            } else if (arg == "--cache-mib") {
+                tiered_params.ssd_cache_bytes = parse_mib(arg.c_str());
             } else if (arg == "--reserve-mib") {
-                tiered_params.vram_reserve_bytes = std::stoull(require_value(arg.c_str())) * MiB;
+                tiered_params.vram_reserve_bytes = parse_mib(arg.c_str());
             } else if (arg == "--main-gpu") {
                 tiered_params.main_gpu = std::stoi(require_value(arg.c_str()));
             } else if (arg == "-n") {
@@ -133,16 +144,10 @@ int main(int argc, char ** argv) {
     llama_sampler * sampler = llama_sampler_chain_init(sampler_params);
     llama_sampler_chain_add(sampler, llama_sampler_init_greedy());
 
-    for (const llama_token token : prompt_tokens) {
-        char piece[256];
-        const int length = llama_token_to_piece(
-                vocab, token, piece, sizeof(piece), 0, true);
-        if (length > 0) {
-            std::fwrite(piece, 1, static_cast<size_t>(length), stdout);
-        }
-    }
-    std::fflush(stdout);
-
+    // Do not echo the tokenized prompt. Besides producing duplicate CLI text,
+    // token-to-piece conversion can expose model-specific BOS/EOS markers.
+    // The caller already owns the prompt and only generated tokens belong on
+    // standard output.
     llama_batch batch = llama_batch_get_one(
             prompt_tokens.data(), static_cast<int32_t>(prompt_tokens.size()));
     int position = 0;

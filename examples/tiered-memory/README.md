@@ -4,7 +4,7 @@
 
 ### Run models larger than VRAM — without duplicating the GGUF in host memory.
 
-**VRAM residency · DRAM zero-copy · SSD expert streaming**
+**VRAM residency · registered DRAM · SSD expert streaming**
 
 [![Platform](https://img.shields.io/badge/platform-Linux-111827?logo=linux&logoColor=white)](#requirements)
 [![Backend](https://img.shields.io/badge/backend-NVIDIA%20CUDA-76B900?logo=nvidia&logoColor=white)](#requirements)
@@ -34,15 +34,15 @@ Tiered Memory assigns each tensor to the cheapest usable memory tier while prior
                    └───────┬────────┬──────────┘
                            │        │
               ┌────────────▼─┐  ┌───▼───────────────┐
-              │ VRAM         │  │ DRAM zero-copy    │
-              │ hot tensors  │  │ CUDA-mapped mmap  │
+              │ VRAM         │  │ registered DRAM   │
+              │ hot tensors  │  │ file-backed mmap  │
               └──────────────┘  └───────────────────┘
                            │
-                           │ router-selected experts
-                    ┌──────▼──────────────┐
-                    │ SSD expert streaming│
-                    │ temporary CUDA VMM  │
-                    └─────────────────────┘
+                            │ router-selected experts
+                     ┌──────▼──────────────┐
+                     │ adaptive VRAM cache │
+                     │ reusable VRAM scratch│
+                     └─────────────────────┘
 ```
 
 ## Memory tiers
@@ -50,8 +50,8 @@ Tiered Memory assigns each tensor to the cheapest usable memory tier while prior
 | Tier | Placement | Runtime behavior | Best suited for |
 |---|---|---|---|
 | **VRAM** | Normal CUDA allocation | Uploaded once and kept resident | Dense and high-activity tensors |
-| **DRAM zero-copy** | Read-only CUDA registration of GGUF `mmap` pages | Kernels access the file-backed pages through a device alias | Warm tensors that do not fit in VRAM |
-| **SSD streaming** | Reserved CUDA VMM address range | Only router-selected MoE expert chunks are mapped, copied, executed, and released | Cold stacked expert matrices |
+| **Registered DRAM** | Writable private GGUF `mmap` pages registered with CUDA | Selected experts are copied into reusable VRAM scratch before execution | Warm tensors that do not fit in VRAM |
+| **SSD streaming** | File-backed GGUF mapping, page-locked when RAM permits | Router-selected MoE slabs use an adaptive VRAM cache before reusable scratch | Cold stacked expert matrices |
 
 The planner ranks tensors by expected bytes read per token:
 
@@ -191,6 +191,19 @@ llama-tiered \
   -n 64
 ```
 
+Enable the adaptive expert cache for models with streamed MoE tensors:
+
+```sh
+llama-tiered \
+  -m /path/to/model.gguf \
+  --vram-mib 3800 \
+  --dram-mib 6500 \
+  --cache-mib 256 \
+  -n 128
+```
+
+The cache is included in `--vram-mib`; it does not add 256 MiB above that placement budget. Cache slots are partitioned across streamed tensors. Single-row decode requests use aged, rank-weighted hotness and recency for admission and eviction. Multi-row prompt batches bypass the cache so they do not evict decode entries.
+
 ### Troubleshooting
 
 | Symptom | Check |
@@ -206,11 +219,13 @@ llama-tiered \
 1. The GGUF is opened with `mmap`; tiered loading disables whole-model mmap prefetch.
 2. The planner assigns every tensor to VRAM, DRAM, or SSD.
 3. VRAM tensors are uploaded normally.
-4. DRAM tensors retain their original file-backed pages and receive CUDA device aliases through read-only host registration.
-5. SSD-tier tensors reserve virtual GPU address ranges without allocating the complete tensor in VRAM.
-6. When a `MUL_MAT_ID` node runs, router IDs are copied to the host.
-7. Selected expert chunks are deduplicated, faulted from the GGUF mapping, and mapped into CUDA VMM.
-8. The expert operation executes, then its temporary mappings are synchronized and released.
+4. DRAM and SSD expert tensors retain their original file-backed pages. Linux uses a writable private mapping so CUDA can page-lock the source without modifying the GGUF.
+5. The backend allocates one reusable VRAM scratch area sized for the largest streamed expert stack.
+6. If configured, a bounded expert cache is split into per-tensor slab slots.
+7. When a `MUL_MAT_ID` node runs, strided router IDs are packed and copied to the host.
+8. Cache hits use device-to-device copies. Misses copy page-locked GGUF data to the slab's natural scratch offset.
+9. Aged router rank, frequency, and recency control admission and eviction.
+10. The expert operation executes, then the original tensor pointer is restored after synchronization.
 
 ## Library API
 
@@ -222,6 +237,7 @@ llama_model_params model_params = llama_model_default_params();
 llama_tiered_memory_params memory = llama_tiered_memory_default_params();
 memory.dram_budget_bytes  = 24ull * 1024 * 1024 * 1024;
 memory.vram_reserve_bytes =  2ull * 1024 * 1024 * 1024;
+memory.ssd_cache_bytes    = 256ull * 1024 * 1024;
 
 llama_tiered_model * owner = llama_tiered_model_load_from_file(
         "model.gguf",
@@ -264,7 +280,11 @@ Keep the owner alive until every associated `llama_context` has been destroyed. 
 - Custom split-file naming is not exposed by the public API.
 - SSD streaming currently targets stacked MoE expert weight tensors used by `MUL_MAT_ID`.
 - SSD transfers are correctness-first and synchronized around each expert operation.
-- Persistent expert caching and transfer/compute overlap are not implemented.
+- Page-locking can make most streamed expert weights resident in host RAM; registration falls back to pageable transfers when it fails.
+- The reusable scratch allocation is as large as the largest streamed expert tensor and must fit inside the VRAM reserve.
+- Graph execution is serialized when multiple contexts share one tiered model.
+- The adaptive cache is decode-only, uses fixed per-tensor partitions, and falls back to direct staging if allocation fails.
+- Transfer/compute overlap is not implemented.
 - Physical-GPU validation is still required for each target architecture before production rollout, including logits parity, memory pressure, PCIe traffic, and throughput measurements.
 
 ## Validation checklist
@@ -275,7 +295,7 @@ For a target model and GPU, compare tiered execution against a fully resident ba
 [ ] identical prompt and sampler configuration
 [ ] logits or deterministic token parity
 [ ] stable VRAM and DRAM usage over long generation
-[ ] no invalid VMM accesses under CUDA sanitizers
+[ ] no invalid memory accesses under CUDA sanitizers
 [ ] expected SSD reads for selected experts only
 [ ] acceptable prompt and token-generation throughput
 ```

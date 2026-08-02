@@ -1558,6 +1558,13 @@ bool llama_model_loader::load_all_data(
                 mmap_used.second = std::max(mmap_used.second, weight->offs + n_size);
             } else {
                 ggml_backend_tensor_set(cur, data, 0, n_size);
+                constexpr char tiered_prefix[] = "CUDA_TIERED";
+                const char * buffer_name = ggml_backend_buffer_name(cur->buffer);
+                if (buffer_name && std::strncmp(buffer_name, tiered_prefix, sizeof(tiered_prefix) - 1) == 0) {
+                    auto & mmap_used = mmaps_used[weight->idx];
+                    mmap_used.first  = std::min(mmap_used.first,  weight->offs);
+                    mmap_used.second = std::max(mmap_used.second, weight->offs + n_size);
+                }
             }
         } else {
             const auto & file = files.at(weight->idx);

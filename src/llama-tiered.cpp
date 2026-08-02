@@ -66,6 +66,18 @@ struct tiered_plan_guard {
     }
 };
 
+struct writable_mmap_guard {
+    bool previous = llama_mmap_get_writable();
+
+    writable_mmap_guard() {
+        llama_mmap_set_writable(true);
+    }
+
+    ~writable_mmap_guard() {
+        llama_mmap_set_writable(previous);
+    }
+};
+
 bool is_expert_stack(const std::string & name) {
     return name.find("_exps") != std::string::npos ||
            name.find(".experts.") != std::string::npos;
@@ -341,9 +353,8 @@ extern "C" llama_tiered_model * llama_tiered_model_load_from_file(
         if (tiered_params.main_gpu < 0) {
             throw std::invalid_argument("main_gpu must be non-negative");
         }
-        if (tiered_params.ssd_cache_bytes != 0) {
-            throw std::invalid_argument(
-                    "ssd_cache_bytes is reserved and must currently be zero");
+        if (tiered_params.ssd_cache_bytes > std::numeric_limits<size_t>::max()) {
+            throw std::invalid_argument("ssd_cache_bytes exceeds the platform size limit");
         }
 
         ggml_backend_load_all();
@@ -377,6 +388,10 @@ extern "C" llama_tiered_model * llama_tiered_model_load_from_file(
             vram_budget = free_vram > tiered_params.vram_reserve_bytes ?
                     static_cast<uint64_t>(free_vram) - tiered_params.vram_reserve_bytes : 0;
         }
+        if (tiered_params.ssd_cache_bytes > vram_budget) {
+            throw std::invalid_argument("ssd_cache_bytes exceeds the available VRAM budget");
+        }
+        vram_budget -= tiered_params.ssd_cache_bytes;
 
         model_metadata metadata;
         std::vector<std::string> paths = resolve_model_files(path_model, metadata);
@@ -428,6 +443,7 @@ extern "C" llama_tiered_model * llama_tiered_model_load_from_file(
         model_params.no_host = false;
         model_params.no_alloc = false;
 
+        writable_mmap_guard mmap_guard;
         if (paths.size() == 1) {
             owner->model = llama_model_load_from_file(paths[0].c_str(), model_params);
         } else {

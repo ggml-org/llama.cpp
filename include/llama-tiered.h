@@ -16,7 +16,7 @@ extern "C" {
 struct llama_tiered_model;
 
 struct llama_tiered_memory_params {
-    // Maximum model-weight bytes permanently resident in VRAM.
+    // Maximum bytes used by resident model weights and the expert cache.
     // A value of 0 selects the currently free VRAM minus vram_reserve_bytes.
     uint64_t vram_budget_bytes;
 
@@ -24,11 +24,11 @@ struct llama_tiered_memory_params {
     uint64_t dram_budget_bytes;
 
     // VRAM kept free for the KV cache, activations, graph work buffers, and
-    // temporary SSD expert mappings. Used only when vram_budget_bytes is 0.
+    // expert staging scratch. Used only when vram_budget_bytes is 0.
     uint64_t vram_reserve_bytes;
 
-    // Reserved for a persistent expert cache. The current implementation uses
-    // per-operation sparse VMM mappings and therefore accepts only 0 here.
+    // Persistent adaptive expert cache. This is deducted from
+    // vram_budget_bytes before resident weights are placed.
     uint64_t ssd_cache_bytes;
 
     // Physical CUDA device index.

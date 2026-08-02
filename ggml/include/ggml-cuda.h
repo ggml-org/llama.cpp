@@ -56,8 +56,7 @@ struct ggml_cuda_tiered_tensor_plan {
 };
 
 struct ggml_cuda_tiered_plan_options {
-    // Reserved for a future persistent expert cache. The current implementation
-    // releases sparse VMM mappings after each streamed operation.
+    // Persistent adaptive expert cache for streamed MoE slabs.
     size_t ssd_cache_bytes;
 
     // Treat unsupported tensor layouts or unavailable CUDA facilities as hard
