@@ -7495,6 +7495,7 @@ static ggml_backend_i ggml_backend_opencl_i = {
 ggml_backend_t ggml_backend_opencl_init(void) {
     ggml_backend_dev_t dev = ggml_backend_reg_dev_get(ggml_backend_opencl_reg(), 0);
     ggml_backend_opencl_context *backend_ctx = ggml_cl_init(dev);
+    backend_ctx->ref_count++;
 
     ggml_backend_t backend = new ggml_backend {
         /* .guid    = */ ggml_backend_opencl_guid(),
