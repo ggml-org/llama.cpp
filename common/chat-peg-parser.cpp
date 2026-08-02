@@ -300,6 +300,7 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
     bool is_arg_name         = node.tag == common_chat_peg_builder::TOOL_ARG_NAME;
     bool is_arg_value        = node.tag == common_chat_peg_builder::TOOL_ARG_VALUE;
     bool is_arg_string_value = node.tag == common_chat_peg_builder::TOOL_ARG_STRING_VALUE;
+    bool is_required_arg = node.tag.rfind(common_chat_peg_builder::TOOL_REQUIRED_ARG_PREFIX, 0) == 0;
 
     if (is_tool_open) {
         pending_tool_call     = common_chat_tool_call();
@@ -307,6 +308,13 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
         arg_count             = 0;
         args_buffer.clear();
         closing_quote_pending = false;
+        required_args.clear();
+        seen_args.clear();
+    }
+
+    if (is_required_arg && current_tool) {
+        required_args.insert(node.tag.substr(std::char_traits<char>::length(
+            common_chat_peg_builder::TOOL_REQUIRED_ARG_PREFIX)));
     }
 
     if (is_tool_id && current_tool) {
@@ -348,11 +356,15 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
     }
 
     if (is_arg_name && current_tool) {
+        const std::string arg_name(trim(node.text));
+        if (!seen_args.insert(arg_name).second) {
+            throw std::runtime_error("Duplicate tool argument: " + arg_name);
+        }
         std::string arg_entry;
         if (arg_count > 0) {
             arg_entry = ",";
         }
-        arg_entry += ordered_json(trim(node.text)).dump() + ":";
+        arg_entry += ordered_json(arg_name).dump() + ":";
         ++arg_count;
 
         auto & target = args_target();
@@ -393,6 +405,11 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
     }
 
     if (is_tool_close && current_tool) {
+        for (const auto & required_arg : required_args) {
+            if (seen_args.find(required_arg) == seen_args.end()) {
+                throw std::runtime_error("Missing required tool argument: " + required_arg);
+            }
+        }
         // Flush buffer to arguments if tool name was never seen
         if (current_tool->name.empty() && !args_buffer.empty()) {
             current_tool->arguments = args_buffer;
