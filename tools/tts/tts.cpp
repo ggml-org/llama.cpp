@@ -62,11 +62,18 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    // important: keep this file as generic as possible
+    //            model-specific logic should be in mtmd-helper-gen or mtmd API
+
     // always enable embd, so that we can pass hidden states to the audio generation helper
     params.embedding = true;
 
     llama_backend_init();
     llama_numa_init(params.numa);
+
+    //
+    // load backbone model and mmproj
+    //
 
     auto llama_init = common_init_from_params(params);
     llama_model    * model = llama_init->model();
@@ -89,6 +96,10 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    //
+    // stage 0: process speaker reference file, if any
+    //
+
     mtmd::bitmap_ptr speaker_bitmap;
     if (!params.tts_speaker_file.empty()) {
         auto wrapper = mtmd_helper_bitmap_init_from_file(mctx.get(), params.tts_speaker_file.c_str(), false);
@@ -109,24 +120,21 @@ int main(int argc, char ** argv) {
     inp.top_p       = params.sampling.top_p;
     inp.out_type    = MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
     const int64_t t_prompt_start_us = ggml_time_us();
+
+    //
+    // stage 1: process prompt via backbone model, generate semantic representation
+    //
+
     if (gen.set_input(&inp) != 0) {
         LOG_ERR("set_input failed\n");
         return 1;
     }
 
-    // codec_0 (backbone) EOS token: ordinary LLM sampling concern, kept out of the
-    // model-agnostic audio-generation helper
-    const llama_vocab * vocab = llama_model_get_vocab(model);
-    llama_token codec_eos_tok = LLAMA_TOKEN_NULL;
-    for (llama_token t = 0; t < llama_vocab_n_tokens(vocab); t++) {
-        if (!strcmp(llama_vocab_get_text(vocab, t), "<|codec_eos_token|>")) { codec_eos_tok = t; break; }
-    }
-    if (codec_eos_tok == LLAMA_TOKEN_NULL) {
-        LOG_ERR("missing codec eos token in vocab\n");
-        return 1;
-    }
+    // TODO: explicit prompt processing step here
 
-    auto sample_codec0 = [&]() -> llama_token {
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+
+    auto sample_semantic_code = [&]() -> llama_token {
         llama_token t = common_sampler_sample(smpl, lctx, -1);
         common_sampler_accept(smpl, t, true);
         return t;
@@ -134,20 +142,24 @@ int main(int argc, char ** argv) {
 
     const int max_new = params.n_predict > 0 ? params.n_predict : 512;
     int n_frames = 0;
-    llama_token sampled = sample_codec0();
+    llama_token sampled = sample_semantic_code();
     const float * h_state = llama_get_embeddings_ith(lctx, -1);
 
     tts_timings timings;
     const int64_t t_gen_start_us = ggml_time_us();
 
-    for (; n_frames < max_new && sampled != codec_eos_tok; n_frames++) {
+    for (; n_frames < max_new && !llama_vocab_is_eog(vocab, sampled); n_frames++) {
         const float * h_next = nullptr;
+
+        // stage 2+3: semantic --> acoustic details --> audio waveform
+        //            step() runs both stages and returns new h_state for next step
         if (gen.step(sampled, h_state, &h_next) != 0) {
             LOG_ERR("step failed at frame %d\n", n_frames);
             return 1;
         }
+
         h_state = h_next;
-        sampled = sample_codec0();
+        sampled = sample_semantic_code();
         timings.report(n_frames + 1);
     }
     const double t_gen_s = (ggml_time_us() - t_gen_start_us) / 1e6;

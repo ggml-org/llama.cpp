@@ -36,10 +36,6 @@ _ACT2FN = {
 }
 
 
-# TODO: figure out the correct template
-DEFAULT_TEMPLATE = """{% for m in messages %}{{m['content']}}{% endfor %}"""
-
-
 @ModelBase.register("Qwen3TTSForConditionalGeneration")
 class Qwen3TTSTalkerModel(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN3TTS
@@ -120,7 +116,6 @@ class Qwen3TTSTalkerModel(TextModel):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-        self.gguf_writer.add_chat_template(DEFAULT_TEMPLATE)
 
         # note: final vocab layout is [text_vocab | codec_vocab], with text_vocab is actually padded with -inf in cgraph
         # for codec_vocab, only first 2048 rows can be sampled for semantic code

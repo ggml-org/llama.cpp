@@ -342,8 +342,8 @@ struct mtmd_gen_audio_info {
 MTMD_API struct mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context * ctx);
 
 enum mtmd_gen_process_type {
-    MTMD_GEN_PROCESS_TYPE_GEN_CODE, // h_state to codes
-    MTMD_GEN_PROCESS_TYPE_GEN_WAV,  // convert internal representation (codes, mel-spectrogram, etc.) to PCM audio
+    MTMD_GEN_PROCESS_TYPE_GEN_CODE, // h_state to semantic (codes, mel-spectrogram, etc.)
+    MTMD_GEN_PROCESS_TYPE_GEN_WAV,  // convert semantic to PCM audio
                                     // for qwen3tts, this is code2wav
 };
 struct mtmd_gen_inp {
