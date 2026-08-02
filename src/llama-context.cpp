@@ -1413,7 +1413,10 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         return nullptr;
     }
 
-    update_expert_heatmap(res);
+    if (expert_heatmap) {
+        synchronize();
+        update_expert_heatmap(res);
+    }
 
     ret = GGML_STATUS_SUCCESS;
 
