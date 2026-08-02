@@ -463,6 +463,12 @@ void llama_model_dflash::graph<false>::build_dsv4(const llama_model & model, ggm
         GGML_ASSERT(model_other->output != nullptr && "DFlash decoder requires the target model's output projection");
         output = model_other->output;
     }
+    if (output->buffer != nullptr && ggml_backend_buffer_is_meta(output->buffer)) {
+        ggml_tensor * concrete = ggml_backend_meta_get_simple_tensor(output, 0);
+        GGML_ASSERT(concrete->ne[0] == output->ne[0] && concrete->ne[1] == output->ne[1] &&
+                "DFlash requires a mirrored target output; disable GGML_TP_SHARDED_OUTPUT");
+        output = concrete;
+    }
 
     cur = build_lora_mm(output, cur);
     cb(cur, "result_output", -1);
@@ -728,6 +734,12 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
         const auto * model_other = llama_get_model(cparams.ctx_other);
         GGML_ASSERT(model_other->output != nullptr && "DFlash decoder requires the target model's output projection");
         output = model_other->output;
+    }
+    if (output->buffer != nullptr && ggml_backend_buffer_is_meta(output->buffer)) {
+        ggml_tensor * concrete = ggml_backend_meta_get_simple_tensor(output, 0);
+        GGML_ASSERT(concrete->ne[0] == output->ne[0] && concrete->ne[1] == output->ne[1] &&
+                "DFlash requires a mirrored target output; disable GGML_TP_SHARDED_OUTPUT");
+        output = concrete;
     }
 
     cur = build_lora_mm(output, cur);
