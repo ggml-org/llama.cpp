@@ -582,26 +582,6 @@ void llama_context::resolve_fused_ops(const llama_memory_context_i * mctx, uint3
     }
 }
 
-void llama_context::update_expert_heatmap(const llm_graph_result * res) {
-    if (!expert_heatmap || res->moe_sel_experts.empty()) {
-        return;
-    }
-
-    for (const auto & [il, tensor] : res->moe_sel_experts) {
-        int64_t n_expert_used = tensor->ne[0];
-        int64_t n_tokens = tensor->ne[1];
-
-        if (!tensor->data) {
-            continue;
-        }
-
-        std::vector<int32_t> expert_ids(n_expert_used * n_tokens);
-        ggml_backend_tensor_get(tensor, expert_ids.data(), 0, expert_ids.size() * sizeof(int32_t));
-
-        expert_heatmap->update(il, expert_ids.data(), n_expert_used, n_tokens);
-    }
-}
-
 void llama_context::sched_reserve() {
     if (!sched_need_reserve) {
         return;
@@ -1415,7 +1395,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
 
     if (expert_heatmap) {
         synchronize();
-        update_expert_heatmap(res);
+        expert_heatmap->update_from_graph(res->moe_sel_experts);
     }
 
     ret = GGML_STATUS_SUCCESS;

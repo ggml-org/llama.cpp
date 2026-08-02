@@ -2,6 +2,9 @@
 
 #include <vector>
 #include <cstdint>
+#include <utility>
+
+struct ggml_tensor;
 
 struct llama_expert_heatmap {
     int n_layers;
@@ -19,6 +22,7 @@ struct llama_expert_heatmap {
                          int hot_s = 0);
 
     void update(int layer_idx, const int32_t * expert_ids, int n_expert_used, int n_tokens);
+    void update_from_graph(const std::vector<std::pair<int, ggml_tensor *>> & moe_sel_experts);
     void decay_all();
     void log() const;
 

@@ -1,6 +1,9 @@
 #include "llama-expert-heatmap.h"
 #include "llama-impl.h"
 
+#include "ggml.h"
+#include "ggml-backend.h"
+
 #include <algorithm>
 #include <cstdio>
 #include <cmath>
@@ -34,6 +37,26 @@ void llama_expert_heatmap::update(int layer_idx, const int32_t * expert_ids, int
     update_count++;
     if (log_period > 0 && update_count % log_period == 0) {
         log();
+    }
+}
+
+void llama_expert_heatmap::update_from_graph(const std::vector<std::pair<int, ggml_tensor *>> & moe_sel_experts) {
+    if (moe_sel_experts.empty()) {
+        return;
+    }
+
+    for (const auto & [il, tensor] : moe_sel_experts) {
+        int64_t n_expert_used = tensor->ne[0];
+        int64_t n_tokens = tensor->ne[1];
+
+        if (!tensor->data) {
+            continue;
+        }
+
+        std::vector<int32_t> expert_ids(n_expert_used * n_tokens);
+        ggml_backend_tensor_get(tensor, expert_ids.data(), 0, expert_ids.size() * sizeof(int32_t));
+
+        update(il, expert_ids.data(), n_expert_used, n_tokens);
     }
 }
 
