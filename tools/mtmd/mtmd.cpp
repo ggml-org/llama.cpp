@@ -1642,9 +1642,9 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, const mtmd_gen_in
         return 0;
     }
 
-    // MTMD_GEN_PROCESS_TYPE_CODE2WAV
+    // MTMD_GEN_PROCESS_TYPE_GEN_WAV
     if (!inp->codes || inp->n_codes == 0) {
-        LOG_ERR("%s: codes required for code2wav\n", __func__);
+        LOG_ERR("%s: codes required for gen_wav\n", __func__);
         return 1;
     }
     std::vector<int32_t> in_codes(inp->codes, inp->codes + inp->n_codes);
@@ -1653,7 +1653,8 @@ static int32_t mtmd_gen_audio_process_impl(mtmd_context * ctx, const mtmd_gen_in
         in_state.assign(inp->state_data, inp->state_data + inp->state_size);
     }
 
-    // code2wav has no hidden-state input, the batch entry is an unused placeholder
+    // gen_wav has no hidden-state input, the batch entry is an unused placeholder
+    // TODO @ngxson : some models in the future may require hidden-state input, need to update this code later
     clip_image_f32 dummy;
     dummy.set_size({1, 1}, false, true);
     dummy.cpy_buf(std::vector<float>(1, 0.0f));

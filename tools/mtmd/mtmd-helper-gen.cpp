@@ -234,7 +234,7 @@ public:
 
         codes_buf.insert(codes_buf.end(), out.codes, out.codes + out.n_codes);
         if (out.n_codes > 0 && codes_buf.size() / out.n_codes >= window_frames) {
-            if (!flush_c2w()) {
+            if (!flush_gen_wav()) {
                 return 1;
             }
         }
@@ -264,7 +264,7 @@ public:
     }
 
     int32_t get_output(int32_t * out_sample_rate, const char ** out_data, size_t * out_data_len, int64_t * out_n_samples) override {
-        if (!flush_c2w()) {
+        if (!flush_gen_wav()) {
             return 1;
         }
 
@@ -360,21 +360,21 @@ private:
         return ok;
     }
 
-    // runs one CODE2WAV process() call on whatever is currently buffered, carrying
+    // runs one GEN_WAV process() call on whatever is currently buffered, carrying
     // the persisted state (KV cache + conv left-context) across batches
-    bool flush_c2w() {
+    bool flush_gen_wav() {
         if (codes_buf.empty()) {
             return true;
         }
         mtmd_gen_inp inp{};
-        inp.type       = MTMD_GEN_PROCESS_TYPE_CODE2WAV;
+        inp.type       = MTMD_GEN_PROCESS_TYPE_GEN_WAV;
         inp.codes      = codes_buf.data();
         inp.n_codes    = codes_buf.size();
         inp.state_data = c2w_state.empty() ? nullptr : (const char *) c2w_state.data();
         inp.state_size = c2w_state.size();
         mtmd_gen_out out{};
         if (mtmd_gen_audio_process(mctx, &inp, &out) != 0) {
-            LOG_ERR("mtmd_helper_gen_audio: code2wav process failed\n");
+            LOG_ERR("mtmd_helper_gen_audio: gen_wav process failed\n");
             return false;
         }
         audio_pcm.insert(audio_pcm.end(), out.audio, out.audio + out.n_samples);

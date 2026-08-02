@@ -343,7 +343,8 @@ MTMD_API struct mtmd_gen_audio_info mtmd_gen_audio_get_info(const mtmd_context *
 
 enum mtmd_gen_process_type {
     MTMD_GEN_PROCESS_TYPE_GEN_CODE, // h_state to codes
-    MTMD_GEN_PROCESS_TYPE_CODE2WAV, // codes to raw PCM audio
+    MTMD_GEN_PROCESS_TYPE_GEN_WAV,  // convert internal representation (codes, mel-spectrogram, etc.) to PCM audio
+                                    // for qwen3tts, this is code2wav
 };
 struct mtmd_gen_inp {
     enum mtmd_gen_process_type type;
@@ -354,7 +355,7 @@ struct mtmd_gen_inp {
     int32_t top_k;
     float   top_p;
 
-    // for MTMD_GEN_PROCESS_TYPE_CODE2WAV
+    // for MTMD_GEN_PROCESS_TYPE_GEN_WAV
     int32_t * codes;
     size_t    n_codes;
     const char * state_data;
@@ -369,7 +370,7 @@ struct mtmd_gen_out {
     const float * embd; // the generated hidden state, to be fed back to backbone
                         // it must have n_text_embd elements
 
-    // for MTMD_GEN_PROCESS_TYPE_CODE2WAV
+    // for MTMD_GEN_PROCESS_TYPE_GEN_WAV
     const float * audio;
     size_t        n_samples;
     const char * state_data;

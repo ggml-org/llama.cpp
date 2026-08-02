@@ -67,6 +67,9 @@ Due to wide variety of audio generation pipelines, the `mtmd_gen_audio` system i
     - Sidecar models (code2wav, bigvgan, etc) must live inside the mmproj GGUF (but can be in different `clip_context` if necessary)
         - Note: it should use `ggml_build_forward_select` to select graphs if multiple graphs living in the same context
     - Reuse existing GGUF metadata key name and tensor name whenever possible; think twice before adding extensive changes to GGUF writer. For example, Qwen3-TTS hard-code part of the hparams to `clip.cpp` as they won't likely to change.
+    - For tensor naming:
+        - Prefixed with `a.*` for tensors used by speaker encoder pipeline
+        - Prefixed with `a.gen.*` for generation stages (code / mel-spectrogram / PCM generation)
 3. Make sure most of the changes happen inside `mtmd-helper-gen.cpp`. A good PR looks like this:
     - 10-20% changes is to add new backbone (text) model and conversion
     - 60% changes inside `mtmd-helper-gen.cpp`

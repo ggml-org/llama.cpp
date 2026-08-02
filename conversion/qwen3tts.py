@@ -22,6 +22,12 @@ from .base import ModelBase, MmprojModel, TextModel, gguf
 # - output tensor codec_head is smaller than vocab, so logits will be padded at inference time
 # - suppress_tokens is used to limit the backbone to only sample either semantic or EOS (stop) token
 
+# pipeline stage mapping:
+#   speaker reference encoder --> mapped to normal mtmd audio encoder
+#   backbone --> mapped to normal libllama text model (autoregressive)
+#   code_predictor --> MTMD_GEN_PROCESS_TYPE_GEN_CODE
+#   code2wav --> MTMD_GEN_PROCESS_TYPE_GEN_WAV
+
 # torch activation functions used by Qwen3TTSTalkerResizeMLP (config's hidden_act)
 _ACT2FN = {
     "silu": F.silu,
@@ -251,7 +257,7 @@ class Qwen3TTSSpeakerEncoderModel(MmprojModel):
         self.gguf_writer.add_gen_audio_attention_layernorm_eps(code_predictor_config["rms_norm_eps"])
         # note: code2wav hparams are hardcoded on the mtmd/clip.cpp side for now, not written here
 
-    def _wav_decoder_config(self) -> dict[str, Any]:
+    def _wav_decoder_config(self) -> dict[str, Any] | None:
         # code2wav (RVQ codes -> raw PCM) lives in its own checkpoint dir, sibling to
         # the main safetensors, with its own config.json
         if self._wav_config_cache is None:
@@ -415,6 +421,7 @@ class Qwen3TTSSpeakerEncoderModel(MmprojModel):
             "mlp.down_proj.weight":           T.A_GEN_WAV_TFM_FFN_DOWN,
             "mlp_layer_scale.scale":          T.A_GEN_WAV_TFM_FFN_SCALE,
         }
+        assert wav_config is not None
         for bid in range(wav_config["num_hidden_layers"]):
             for key, tensor_id in tfm_layer_map.items():
                 yield (self.format_tensor_name(tensor_id, bid), get(f"decoder.pre_transformer.layers.{bid}.{key}"))
