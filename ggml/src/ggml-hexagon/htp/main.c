@@ -714,6 +714,7 @@ static int op_sync(struct htp_ops_context * octx) {
     const struct htp_tensor * sync = octx->src[0];
     atomic_uint* sync_token = (atomic_uint *)sync->data;
 
+    Q6_dccleaninva_A((void *)sync_token);
     uint32_t seq   = sync_token[1];
     uint64_t spins = 0;
     while (1) {
