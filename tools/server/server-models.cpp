@@ -234,7 +234,8 @@ server_models::server_models(
     unset_reserved_args(base_preset, true);
     // set binary path
     try {
-        bin_path = get_server_exec_path().u8string();
+        auto u8s = get_server_exec_path().u8string();
+        bin_path = std::string(reinterpret_cast<const char*>(u8s.data()), u8s.size());
     } catch (const std::exception & e) {
         bin_path = argv[0];
         LOG_WRN("failed to get server executable path: %s\n", e.what());
