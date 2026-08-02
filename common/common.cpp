@@ -1603,12 +1603,6 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
     mparams.use_extra_bufts = !params.no_extra_bufts;
     mparams.no_host         = params.no_host;
 
-    const bool has_shared_output_draft = std::find(params.speculative.types.begin(),
-            params.speculative.types.end(), COMMON_SPECULATIVE_TYPE_DRAFT_DFLASH) != params.speculative.types.end() ||
-        std::find(params.speculative.types.begin(), params.speculative.types.end(),
-            COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK) != params.speculative.types.end();
-    mparams.no_tp_output_head_sharding = has_shared_output_draft;
-
     if (params.kv_overrides.empty()) {
         mparams.kv_overrides = NULL;
     } else {
