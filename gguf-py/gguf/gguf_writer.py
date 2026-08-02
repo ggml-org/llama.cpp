@@ -1226,6 +1226,9 @@ class GGUFWriter:
     def add_vision_head_count_kv(self, value: int) -> None:
         self.add_uint32(Keys.ClipVision.Attention.HEAD_COUNT_KV, value)
 
+    def add_vision_head_dim(self, value: int) -> None:
+        self.add_uint32(Keys.ClipVision.Attention.HEAD_DIM, value)
+
     def add_vision_attention_layernorm_eps(self, value: float) -> None:
         self.add_float32(Keys.ClipVision.Attention.LAYERNORM_EPS, value)
 

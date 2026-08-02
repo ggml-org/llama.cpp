@@ -658,6 +658,40 @@ template <> struct reorder_vec_dot_q_sycl<GGML_TYPE_Q6_K> {
 #define VDR_Q4_0_Q8_1_MMVQ 2
 #define VDR_Q4_0_Q8_1_MMQ  4
 
+#define VDR_Q2_0_Q8_1_MMVQ 1
+
+template <int vdr>
+static __dpct_inline__ float vec_dot_q2_0_q8_1_impl(
+    const int * v,
+    const int * u,
+    const float & d2,
+    const sycl::half2 & ds8) {
+    int sumi = 0;
+
+#pragma unroll
+    for (int i = 0; i < vdr; ++i) {
+#pragma unroll
+        for (int j = 0; j < 4; ++j) {
+            const uint8_t q = (uint8_t) ((uint32_t) v[i] >> (8 * j));
+
+            // unpack 2-bit values to byte lanes (0..3), then apply zero-point
+            // correction with ds8f.y() below, mirroring the q4_0 style.
+            int vi = 0;
+            vi |= (((q >> 0) & 0x3) & 0xFF) << 0;
+            vi |= (((q >> 2) & 0x3) & 0xFF) << 8;
+            vi |= (((q >> 4) & 0x3) & 0xFF) << 16;
+            vi |= (((q >> 6) & 0x3) & 0xFF) << 24;
+
+            sumi = dpct::dp4a(vi, u[4 * i + j], sumi);
+        }
+    }
+
+    const sycl::float2 ds8f = ds8.convert<float, sycl::rounding_mode::automatic>();
+    // q2_0 has zero-point 1. Scale ds8f.y() by processed-lane ratio,
+    // consistent with q4_0's explicit zero-point subtraction style.
+    return d2 * (sumi * ds8f.x() - ((float) vdr / (float) QI2_0) * ds8f.y());
+}
+
 template <int vdr>
 static __dpct_inline__ float vec_dot_q4_0_q8_1_impl(const int * v, const int * u, const float & d4,
                                                     const sycl::half2 & ds8) {
@@ -880,6 +914,41 @@ vec_dot_q4_0_q8_1(const void *__restrict__ vbq,
     }
 
     return vec_dot_q4_0_q8_1_impl<VDR_Q4_0_Q8_1_MMVQ>(v, u, bq4_0->d, bq8_1->ds);
+}
+
+static __dpct_inline__ float
+vec_dot_q2_0_q8_1(const void *__restrict__ vbq,
+                  const block_q8_1 *__restrict__ bq8_1, const int &iqs) {
+
+    const block_q2_0 * bq2_0 = (const block_q2_0 *) vbq;
+
+    int v[2 * VDR_Q2_0_Q8_1_MMVQ];
+    int u[8 * VDR_Q2_0_Q8_1_MMVQ];
+
+#pragma unroll
+    for (int i = 0; i < VDR_Q2_0_Q8_1_MMVQ; ++i) {
+        const int base = 4 * (iqs + i);
+
+        // Q2_0 has QK2_0 = 64 and uses 2 x QK8_1 blocks on the RHS.
+        v[2 * i + 0] = get_int_from_uint8(bq2_0->qs, iqs + i);
+        v[2 * i + 1] = get_int_from_uint8(bq2_0->qs, iqs + i + QI2_0);
+
+        u[8 * i + 0] = get_int_from_int8_aligned(bq8_1[0].qs, base + 0);
+        u[8 * i + 1] = get_int_from_int8_aligned(bq8_1[0].qs, base + 1);
+        u[8 * i + 2] = get_int_from_int8_aligned(bq8_1[0].qs, base + 2);
+        u[8 * i + 3] = get_int_from_int8_aligned(bq8_1[0].qs, base + 3);
+
+        u[8 * i + 4] = get_int_from_int8_aligned(bq8_1[1].qs, base + 0);
+        u[8 * i + 5] = get_int_from_int8_aligned(bq8_1[1].qs, base + 1);
+        u[8 * i + 6] = get_int_from_int8_aligned(bq8_1[1].qs, base + 2);
+        u[8 * i + 7] = get_int_from_int8_aligned(bq8_1[1].qs, base + 3);
+    }
+
+    const float sum0 = vec_dot_q2_0_q8_1_impl<VDR_Q2_0_Q8_1_MMVQ>(
+        v + 0, u + 0, bq2_0->d, bq8_1[0].ds);
+    const float sum1 = vec_dot_q2_0_q8_1_impl<VDR_Q2_0_Q8_1_MMVQ>(
+        v + VDR_Q2_0_Q8_1_MMVQ, u + 4 * VDR_Q2_0_Q8_1_MMVQ, bq2_0->d, bq8_1[1].ds);
+    return sum0 + sum1;
 }
 
 static __dpct_inline__ float

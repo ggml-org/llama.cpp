@@ -759,7 +759,7 @@ jobs:
 
     env:
       OPENBLAS_VERSION: 0.3.23
-      VULKAN_VERSION: 1.4.313.2
+      VULKAN_VERSION: 1.4.357.0
 
     strategy:
       matrix:
