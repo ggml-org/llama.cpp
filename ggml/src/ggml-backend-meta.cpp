@@ -1178,7 +1178,15 @@ static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(ggml_backend_m
         t_ij->flags = tensor->flags;
         memcpy(t_ij->op_params, tensor->op_params, sizeof(tensor->op_params));
         ggml_set_name(t_ij, tensor->name);
+
         t_ij->buffer = simple_buf;
+        if (simple_buf) {
+            // the backend that owns the buffer will set .extra
+            ggml_backend_buffer_init_tensor(simple_buf, t_ij);
+        } else {
+            t_ij->extra = tensor->extra;
+        }
+
         t_ij->view_src = tensor->view_src;
         t_ij->view_offs = tensor->view_offs;
         if (t_ij->view_src != nullptr && ggml_backend_buffer_is_meta(t_ij->view_src->buffer)) {
@@ -1209,7 +1217,6 @@ static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(ggml_backend_m
             t_ij->data = (char *) ggml_backend_buffer_get_base(simple_buf)
                 + size_t(tensor->data) - size_t(ggml_backend_buffer_get_base(tensor->buffer));
         }
-        t_ij->extra = tensor->extra;
         for (int i = 0; i < GGML_MAX_SRC; i++) {
             t_ij->src[i] = tensor->src[i];
             if (tensor->src[i] == tensor) {
