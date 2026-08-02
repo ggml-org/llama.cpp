@@ -419,22 +419,22 @@ static enum ggml_status ggml_backend_zdnn_graph_compute(ggml_backend_t backend, 
 }
 
 static ggml_backend_i ggml_backend_zdnn_i = {
-    /* .get_name               = */ ggml_backend_zdnn_name,
-    /* .free                   = */ ggml_backend_zdnn_free,
-    /* .set_tensor_async       = */ NULL,
-    /* .get_tensor_async       = */ NULL,
-    /* .set_tensor_2d_async    = */ NULL,
-    /* .get_tensor_2d_async    = */ NULL,
-    /* .cpy_tensor_async       = */ NULL,
-    /* .synchronize            = */ NULL,
-    /* .graph_plan_create      = */ NULL,
-    /* .graph_plan_free        = */ NULL,
-    /* .graph_plan_update      = */ NULL,
-    /* .graph_plan_compute     = */ NULL,
-    /* .graph_compute          = */ ggml_backend_zdnn_graph_compute,
-    /* .event_record           = */ NULL,
-    /* .event_wait             = */ NULL,
-    /* .graph_optimize         = */ NULL,
+    /* .get_name                = */ ggml_backend_zdnn_name,
+    /* .free                    = */ ggml_backend_zdnn_free,
+    /* .set_tensor_async        = */ NULL,
+    /* .get_tensor_async        = */ NULL,
+    /* .set_tensor_2d_async     = */ NULL,
+    /* .get_tensor_2d_async     = */ NULL,
+    /* .cpy_tensor_async        = */ NULL,
+    /* .synchronize             = */ NULL,
+    /* .graph_plan_create       = */ NULL,
+    /* .graph_plan_free         = */ NULL,
+    /* .graph_plan_update       = */ NULL,
+    /* .graph_plan_compute      = */ NULL,
+    /* .graph_compute           = */ ggml_backend_zdnn_graph_compute,
+    /* .event_record            = */ NULL,
+    /* .event_wait              = */ NULL,
+    /* .graph_optimize          = */ NULL,
 };
 
 static ggml_guid_t ggml_backend_zdnn_guid(void) {
@@ -487,7 +487,8 @@ static void ggml_backend_zdnn_device_get_props(ggml_backend_dev_t dev, ggml_back
         /* .async                = */ false,
         /* .host_buffer          = */ false,
         /* .buffer_from_host_ptr = */ false,
-        /* .events               = */ false
+        /* .events               = */ false,
+        /* .copy_stream          = */ false,
     };
 }
 
