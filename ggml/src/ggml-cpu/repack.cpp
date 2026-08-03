@@ -4570,6 +4570,19 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
     static const ggml::cpu::repack::tensor_traits<block_q2_K, 1, 16, GGML_TYPE_Q8_K> q2_K_16x1_q8_K;
 #endif
 
+    // [deepseek4 / DeepSeek-V4-Flash — upstream ggml-org/llama.cpp#25837] Do NOT online-repack the MLA
+    // output-projection weights attn_output_a / attn_output_b. Repack reorders their (2D) layout in
+    // memory, but the deepseek4 MLA graph consumes these two specifically in a way that reads the
+    // reordered bytes back wrong -> silently garbled output (an endless run of '='), or the
+    // forward_mul_mat 2D assert (:4282) on the stock path. Bisected to exactly these tensors (86 of 494);
+    // attn_q_a/_b are the same type but consumed compatibly and repack fine. Excluding only these two
+    // restores coherent output at negligible cost. Not arch-specific (repro on both NEON and x86).
+    if (cur->name[0] != '\0' &&
+        (std::strstr(cur->name, "attn_output_a") != nullptr ||
+         std::strstr(cur->name, "attn_output_b") != nullptr)) {
+        return nullptr;
+    }
+
     if (cur->type == GGML_TYPE_Q4_0) {
         if (ggml_cpu_has_avx2() || (ggml_cpu_has_sve() && ggml_cpu_has_matmul_int8() && ggml_cpu_get_sve_cnt() == QK8_0)) {
             if (cur->ne[1] % 8 == 0) {
