@@ -28,7 +28,9 @@
 				<span class="font-mono">{fileGlobMeta.include}</span>
 			{/if}
 			<span class="text-muted-foreground">&nbsp;in&nbsp;</span>
-			<span class="font-mono" title={fileGlobMeta.path}>{abbreviateHome(fileGlobMeta.path, home)}</span>
+			<span class="font-mono" title={fileGlobMeta.path}
+				>{abbreviateHome(fileGlobMeta.path, home)}</span
+			>
 		{/if}
 	{/snippet}
 

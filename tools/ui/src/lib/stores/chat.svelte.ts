@@ -1102,10 +1102,7 @@ class ChatStore {
 				if (currentConv.workingDirectory) {
 					const cwdMessage = await this.addMessage(
 						MessageRole.USER,
-						formatCwdMessage(
-							currentConv.workingDirectory,
-							await toolsStore.resolveServerHome()
-						),
+						formatCwdMessage(currentConv.workingDirectory, await toolsStore.resolveServerHome()),
 						MessageType.TEXT,
 						sysOrRootId
 					);

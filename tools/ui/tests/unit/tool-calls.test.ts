@@ -97,7 +97,9 @@ describe('formatCwdMessage / parseCwdMessage', () => {
 
 	it('parses a cwd message even when guidance follows the link', () => {
 		expect(
-			parseCwdMessage('Set working directory to [file:///a/b](~\/b). Tool calls run with this as their working directory.')
+			parseCwdMessage(
+				'Set working directory to [file:///a/b](~\/b). Tool calls run with this as their working directory.'
+			)
 		).toEqual({ path: '/a/b', display: '~/b' });
 	});
 
@@ -510,5 +512,4 @@ describe('parseExecShellCommandMeta', () => {
 			)
 		).toBeNull();
 	});
-
 });

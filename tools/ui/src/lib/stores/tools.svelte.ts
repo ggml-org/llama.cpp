@@ -1,7 +1,13 @@
 import type { OpenAIToolDefinition, ToolEntry, ToolGroup } from '$lib/types';
 import { ToolsService } from '$lib/services/tools.service';
 import { mcpStore } from '$lib/stores/mcp.svelte';
-import { BuiltInTool, HealthCheckStatus, JsonSchemaType, ToolCallType, ToolSource } from '$lib/enums';
+import {
+	BuiltInTool,
+	HealthCheckStatus,
+	JsonSchemaType,
+	ToolCallType,
+	ToolSource
+} from '$lib/enums';
 import { config } from '$lib/stores/settings.svelte';
 import {
 	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
