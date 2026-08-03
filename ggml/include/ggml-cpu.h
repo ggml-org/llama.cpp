@@ -22,6 +22,24 @@ extern "C" {
 
         // use only reference implementations
         bool use_ref;
+
+        // profiler context (set by backend when profiling is enabled, NULL otherwise)
+        // when non-NULL, the compute loop will record per-node timing
+        void * profiling_context;
+
+        // callback for recording a profile record from C code (set by backend when profiling)
+        // The callback receives the full tensor node so it can extract all sources, types,
+        // op_params, and sub-op information directly.
+        // params: context, type, name, split_id, start_ns, end_ns, bytes, extra, node
+        void (*profiling_record_fn)(void *                     context,
+                                    int                        type,
+                                    const char *               name,
+                                    int                        split_id,
+                                    uint64_t                   start_ns,
+                                    uint64_t                   end_ns,
+                                    uint64_t                   bytes,
+                                    const char *               extra,
+                                    const struct ggml_tensor * node);
     };
 
     // numa strategies
