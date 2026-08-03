@@ -387,11 +387,24 @@ fixture binds the expected path to env/shape/reference-produced headers and
 the exact validated V620, while retained kernel-name traces close dispatch
 attestation.
 
-This closes focused implementation correctness and repeatability, not whole-
-model deployment. The next gate is J16+HC-held-constant whole-model A/B plus
-fully attested corpus equality, followed by a fresh combined-stack trace.
-Fused top-k, reduced-precision Q, rocWMMA, and device-local candidate merging
-remain deferred.
+The J16+HC-held-constant whole-model and corpus gates now pass at clean commit
+`9f4808637`. In the single-observation A/B/A whole-model bracket, candidate
+LID subwave-4 is +0.94% at 512, -0.62% at 2K, +4.79% at 8K, and +10.18% at
+16K versus the control midpoint. Short/mid control drift is elevated
+(-2.52% to -3.50%), so those three points prove no material (>2%) midpoint
+regression rather than a statistical gain; the 16K controls are stable at
++0.14% drift and establish the long-context whole-model win. The fully hashed
+2,527-token proxy gate matches content, token IDs, prompts, counts, replay, and
+KV reuse for all six layer/tensor responses. Its single first-prompt
+observations are +0.21% layer and +1.70% tensor and remain correctness/routing
+sanity, not statistical performance evidence.
+
+Subwave-4 is therefore promoted as guarded optimization three for the known
+stack, still explicit via `GGML_HIP_RDNA2_LID_SUBWAVE=4`; generic and
+near-shape fallbacks remain intact. A fresh compact 16K combined-stack trace is
+the next attribution gate before selecting optimization four. Fused top-k,
+reduced-precision Q, rocWMMA, and device-local candidate merging remain
+deferred.
 
 Mapping and screening artifacts:
 
@@ -407,6 +420,8 @@ Mapping and screening artifacts:
 - `$HOME/edwin/llama-jobs/dsv4-lid-study/20260803T205000Z-subwave4-087813f76-prototype/` (corrected temporary source, CPU-reference/fallback fast screen, distinct trace dispatch/resources, restoration proof)
 - `$HOME/edwin/llama-jobs/dsv4-lid-study/20260803T211000Z-subwave4-validation-3276edc81/` (excluded first deterministic attempt: detected 1-ULP reassociation drift at KV=1)
 - `$HOME/edwin/llama-jobs/dsv4-lid-study/20260803T212000Z-subwave4-validation-3276edc81/` (authoritative bitwise/path/counter/repeated-process/fallback artifact; final source patch and binary hashes)
+- `$HOME/edwin/llama-jobs/dsv4-lid-study/20260803T220000Z-subwave4-whole-model-9f4808637/` (J16+HC-held-constant 512/2K/8K/16K A/B/A; stable 16K +10.18%)
+- `$HOME/edwin/llama-jobs/dsv4-corpus-validation/20260803T212823.803707936Z-attested-9f4808637e55-20974/` (fully hashed LID-off/on corpus acceptance; all six responses equal)
 
 Screening artifacts:
 
@@ -444,6 +459,7 @@ Artifacts:
 
 - `$HOME/llama-jobs/dsv4-corpus-validation/20260803T173909.127798287Z-attested-ec1b7e64c2cc-6101/` (J-width acceptance artifact)
 - `$HOME/edwin/llama-jobs/dsv4-corpus-validation/20260803T190100.516971835Z-attested-56dd4177e501-15597/` (J16-only versus J16+HC acceptance artifact; full hashes, batch/ubatch 512/256, `complete=1`)
+- `$HOME/edwin/llama-jobs/dsv4-corpus-validation/20260803T212823.803707936Z-attested-9f4808637e55-20974/` (J16+HC+LID-off versus LID-on acceptance; six exact response matches; +0.21% layer/+1.70% tensor single observations)
 - `$HOME/edwin/llama-jobs/dsv4-corpus-validation/20260803T184944.079084014Z-attested-56dd4177e501-25863/` (excluded interrupted attempt: all responses exist and match, but no final status/comparison artifact and `candidate.rc=120`)
 - `$HOME/llama-jobs/dsv4-corpus-validation/20260803T165136Z-88c415d91/` (superseded pre-normalization artifact)
 
@@ -525,11 +541,39 @@ Artifact:
 
 - `$HOME/edwin/llama-jobs/20260803-210548-mtp-stateful-7a75d8a5a/` (`stateful-continuation/diagnostic-evidence.json`)
 
-The next MTP step is source-level recurrent-state rollback repair: identify the
-state cells/checkpoints modified by speculative prefix verification, prove
-rejected/unused target positions and draft state are removed or restored, and
-rerun this three-arm diagnostic before the full production validator. Do not
-relax token equality or tune TG first.
+Iteration-14 diagnostics narrow this again. A fresh cap-1-prefix→cap-0
+continuation still produces the forked trajectory
+`[22648,14,3676,18333,14,305,14961,32907]` even though continuation drafting is
+zero. The poisoned state is therefore in the target trajectory left by the
+speculative prefix, not merely a stale draft context affecting later verifier
+choices.
+
+Three source-level experiments preserve exact patches, builds, commands, and
+fresh-server output. First, forcing target and draft checkpoints for every
+speculative attempt still forks. Second, removing CSA/HCA/LID compressed-cache
+rows alongside the raw cache during bounded rollback still forks. Third,
+forcing checkpoint serialization/restoration with `LLAMA_STATE_SEQ_FLAGS_NONE`
+(including compressed caches) rather than `PARTIAL_ONLY` also still forks.
+Each test restores and rebuilds the clean source afterward. This excludes
+bounded `rs_idx` restoration, omitted compressed-cache removal, and partial
+checkpoint contents as individually sufficient causes. It does **not** prove
+those paths ideal in all cases; the stronger surviving hypothesis is
+accepted-token re-evaluation/replay or multi-token recurrent verification
+semantics, including an accepted draft processed in the same target batch.
+
+Artifacts:
+
+- `$HOME/edwin/llama-jobs/20260803-214024-mtp-prefix1-cont0-9f4808637/` (target-state isolation; continuation cap zero)
+- `$HOME/edwin/llama-jobs/20260803-212523-mtp-force-checkpoint-9f4808637/` (forced target+draft checkpoint path; partial state)
+- `$HOME/edwin/llama-jobs/20260803-214302-mtp-compressed-cache-fix-9f4808637/` (bounded compressed-cache removal experiment)
+- `$HOME/edwin/llama-jobs/20260803-214553-mtp-full-state-checkpoint-9f4808637/` (forced full-state checkpoint experiment)
+
+The next MTP step is to instrument and repair accepted-token replay: prove the
+exact target batches/state positions used on the one accepted and one rejected
+prefix drafts, then force accepted tokens through target-equivalent sequential
+re-evaluation from a pre-verification checkpoint. Rerun the bounded stateful
+diagnostic before the full production validator. Do not relax token equality
+or tune TG first.
 
 ### M3 - implementation and matched A/B
 
@@ -575,15 +619,15 @@ A dense mask is not a sparse performance implementation. Success requires runtim
 | 2026-08-03 | Do not switch to communication-first after the local compute wins. | Fresh 16K trace assigns RCCL device work 9.84% and explicit copies 0.18%; x8 bus 46 is not the slowest by total/RCCL kernel sums. | final |
 | 2026-08-03 | Tune the LID vector kernel before considering fused selection. | Lightning indexer is 14.87% while selection is only about 0.31%; exact counters show 74.1% occupancy, 16.5% memory busy, 95.5% L2 hits, no LDS conflicts, and 6,481 VALU instructions/work-item. | selected |
 | 2026-08-03 | Reject simple LID K4/H32 tiling; do not combine or deploy it. | K4 regresses 9.2-10.5% and does not improve occupancy despite fewer VGPRs; H32 is neutral within drift and doubles LDS. Both fail the 10% local promotion gate. | final |
-| 2026-08-03 | Implement same-tree LID subwave-4 as guarded optimization three; withhold deployment until whole-model/corpus gates. | Distinct reference/candidate traces, exact outputs across tails/graphs/fallbacks, 30 process observations per shape, counters, and final review pass. Local latency falls 41.8% at KV=256 and 47.5% at KV=4096; VALU instructions fall 6,481→2,923. | accepted locally |
+| 2026-08-03 | Promote same-tree LID subwave-4 as guarded optimization three for the known stack. | Focused exact/path/fallback/counter gates pass; J16+HC-held-constant whole model is +10.18% at 16K with 0.14% control drift and has no >2% short midpoint regression; fully hashed LID-off/on proxy outputs match in all six layer/tensor cases. | accepted guarded |
 | 2026-08-03 | Do not accept production MTP; repair recurrent speculative rollback before TG work. | Stateful continuation proves cap-0 prefix→cap-1 stays main while cap-1 prefix→cap-1 reproduces the exact fork despite identical visible prefix tokens. Earlier speculative history leaves different recurrent state. | blocked |
 
 ## 9. Open questions
 
 1. Does the J=16 win hold on a user-supplied production corpus? The attested engineering proxy and through-16K synthetic scaling are positive, but no user corpus exists and 32K cannot complete under the five-minute cap.
 2. Can a later expert-concentration signal select J=16/J=32/J=64 without a host synchronization? This patch intentionally stays explicit.
-3. How much of the accepted local 1.72-1.91x subwave-4 LID gain survives in combined J16+HC whole-model PP, and what becomes dominant in the fresh 16K trace?
-4. Which target/draft recurrent-state rollback or checkpoint operation fails to restore the cap-1 prefix state, and can a narrow fix make all three stateful arms and the full production validator token-identical?
+3. After the guarded subwave-4 path delivers +10.18% at stable 16K, what becomes dominant in the fresh combined-stack trace, and does routed MMQ remain the next optimization family?
+4. Which accepted-token replay or multi-token target-verification operation leaves the cap-1-prefix target trajectory different? Forced partial/full checkpoints and compressed-cache removal are not sufficient repairs; can sequential target re-evaluation make the bounded stateful arms and full production validator token-identical?
 5. Does HIP flash attention perform partial arbitrary-mask tile pruning? Scaling rejects complete fixed-top-k pruning, but source/counters do not yet quantify partial pruning.
 6. How are LID scores and global top-k distributed across the four meta devices at runtime?
 7. RCCL kernels do not make x8 bus 46 the slowest, but what algorithm roles and actual peer bytes/bandwidth explain the per-agent RCCL asymmetry?
@@ -610,15 +654,16 @@ DSV4_REPS=2 DSV4_TIMEOUT=300 scripts/dsv4-rocm/run-pp.sh
 ```
 
 Current combined-stack correctness and profile commands, rerunnable from a
-fresh shell at clean commit `52e012104` (the validation code is unchanged from
-the acceptance build at `56dd4177e`):
+fresh shell at clean implementation/runner commit `9f4808637` (later commits
+only update this evidence record):
 
 ```bash
 cd /home/edwin/llama.cpp-rdna2
 cmake --build build --target llama-server llama-bench -j 12
 
 DSV4_BASE_MMQ_J=16 DSV4_CANDIDATE_MMQ_J=16 \
-DSV4_BASE_HC_MIXES=0 DSV4_CANDIDATE_HC_MIXES=1 \
+DSV4_BASE_HC_MIXES=1 DSV4_CANDIDATE_HC_MIXES=1 \
+DSV4_BASE_LID_SUBWAVE=0 DSV4_CANDIDATE_LID_SUBWAVE=4 \
 DSV4_BATCH_SIZE=512 DSV4_UBATCH_SIZE=256 DSV4_HASH_MODE=full \
 scripts/dsv4-rocm/run-corpus-validation.sh
 
@@ -626,7 +671,8 @@ trace_log=$(mktemp)
 HSA_OVERRIDE_GFX_VERSION=10.3.0 HSA_NO_SCRATCH_RECLAIM=1 \
 GGML_HIP_GRAPHS=1 GGML_CUDA_ALLREDUCE=nccl GGML_CUDA_P2P=1 \
 GGML_HIP_RDNA2_MMQ_J=16 GGML_HIP_RDNA2_HC_MIXES=1 \
-DSV4_PROFILE=kernel DSV4_LABEL=kernel-trace-j16-hc-16k \
+GGML_HIP_RDNA2_LID_SUBWAVE=4 \
+DSV4_PROFILE=kernel DSV4_LABEL=kernel-trace-j16-hc-lid-16k \
 DSV4_PROMPTS=16384 DSV4_UBATCHES=256 DSV4_BATCH=512 \
 DSV4_REPS=1 DSV4_TIMEOUT=300 \
 scripts/dsv4-rocm/profile-pp.sh | tee "$trace_log"
@@ -640,12 +686,15 @@ scripts/dsv4-rocm/analyze-trace-agents.py "$run_dir" \
   | tee "$run_dir/measured-region-agents.txt"
 ```
 
-Accepted artifacts are
+Accepted correctness artifacts are
 `$HOME/edwin/llama-jobs/dsv4-corpus-validation/20260803T190100.516971835Z-attested-56dd4177e501-15597/`
-and
+for HC and
+`$HOME/edwin/llama-jobs/dsv4-corpus-validation/20260803T212823.803707936Z-attested-9f4808637e55-20974/`
+for LID. The pre-LID attribution trace is
 `$HOME/edwin/llama-jobs/dsv4-rocm-pp/20260803T191856.045376424Z-kernel-trace-j16-hc-16k-52e0121043ad-23195/`.
 These commands are a phase checkpoint, not the project's final completion
-command; production MTP is blocked and the selected LID phase remains.
+command; production MTP remains blocked and the fresh post-LID trace/next PP
+decision remain.
 
 Current production diagnostic, rerunnable from the clean worktree (it is
 expected to exit nonzero while the recorded MTP divergence persists):
