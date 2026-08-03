@@ -114,6 +114,9 @@ class Qwen3TTSTalkerModel(TextModel):
         special_vocab = gguf.SpecialVocab(self.dir_model, load_merges=True)
         special_vocab.add_to_gguf(self.gguf_writer)
 
+        # make sure that the model has no chat template, so chat will be disabled
+        self.gguf_writer.add_chat_template(None)
+
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
 

@@ -930,3 +930,18 @@ int32_t mtmd_helper_video_read_next(mtmd_helper_video * ctx,
     GGML_ASSERT(false && "video is not supported in this build (MTMD_VIDEO is set to OFF)");
 #endif
 }
+
+bool mtmd_helper_model_can_chat(llama_context * lctx, mtmd_context * mctx) {
+    if (!mctx) {
+        return true;
+    }
+
+    auto * model = llama_get_model(lctx);
+    auto * tmpl = llama_model_chat_template(model, nullptr);
+    auto info = mtmd_gen_audio_get_info(mctx);
+
+    // tts-only model cannot be used for chat (no chat template)
+    bool is_tts_only = info.type != MTMD_GEN_AUDIO_TYPE_NONE && tmpl == nullptr;
+
+    return !is_tts_only;
+}
