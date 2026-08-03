@@ -6,10 +6,10 @@
 	import { BuiltInTool } from '$lib/enums';
 	import {
 		abbreviateHome,
-		 buildCaseInsensitiveGlob,
-		 joinPath,
-		 lastPathSegment,
-		 rankEntries,
+		buildCaseInsensitiveGlob,
+		joinPath,
+		lastPathSegment,
+		rankEntries,
 		splitPathQuery,
 		type GlobEntry
 	} from '$lib/utils';

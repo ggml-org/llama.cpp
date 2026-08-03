@@ -12,8 +12,13 @@
 		onClear?: (event?: MouseEvent) => void;
 	}
 
-	let { directory = null, homeBase = null, disabled = false, showTooltip = false, onClear }: Props =
-		$props();
+	let {
+		directory = null,
+		homeBase = null,
+		disabled = false,
+		showTooltip = false,
+		onClear
+	}: Props = $props();
 
 	const displayLabel = $derived(
 		directory ? abbreviateWorkingDir(directory, homeBase) : 'Select working directory'

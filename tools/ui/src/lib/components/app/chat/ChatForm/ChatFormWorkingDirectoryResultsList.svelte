@@ -27,7 +27,11 @@
 	}: Props = $props();
 </script>
 
-<div bind:this={container} class="max-h-48 overflow-y-auto" transition:fly={{ y: -4, duration: 100 }}>
+<div
+	bind:this={container}
+	class="max-h-48 overflow-y-auto"
+	transition:fly={{ y: -4, duration: 100 }}
+>
 	{#if isSearching && results.length === 0}
 		<div class="px-2 py-1.5 text-sm text-muted-foreground">Searching...</div>
 	{:else if error}

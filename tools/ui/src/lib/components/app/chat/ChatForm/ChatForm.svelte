@@ -118,9 +118,7 @@
 	// The cwd shown on the chip comes from the conversation state; on the
 	// empty new-chat screen it falls back to the pending pick that
 	// createConversation() consumes on first send.
-	let cwd = $derived(
-		activeConversation()?.cwd ?? pendingCwd()
-	);
+	let cwd = $derived(activeConversation()?.cwd ?? pendingCwd());
 
 	async function handleWorkingDirectoryChange(value: string | null) {
 		await conversationsStore.setCwd(value);
