@@ -316,11 +316,11 @@ __launch_bounds__(8*WARP_SIZE, 1) static __global__ void soft_max_f32_paralleliz
 // https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/device-callable-apis.html#grid-synchronization
 // https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/device-callable-apis.html#class-cluster-group
 {
-    __shared__ float shared_vals[2][2][32];
+    __shared__ float shared_vals[2][32];
 
     for (int rowx = 0; rowx < p.ne01 * p.ne02 * p.ne03; rowx++) {
         soft_max_f32_parallelize_cols_single_row(x + int64_t(rowx) * p.ncols, dst + int64_t(rowx) * p.ncols, tmp_maxs,
-                                                 tmp_sums, shared_vals[rowx & 1][0], shared_vals[rowx & 1][1], p);
+                                                 tmp_sums, shared_vals[0], shared_vals[1], p);
     }
 }
 
