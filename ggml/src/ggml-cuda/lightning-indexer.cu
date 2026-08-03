@@ -3,6 +3,30 @@
 #include "fattn-common.cuh"
 #include "convert.cuh"
 
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+
+static bool lightning_indexer_rdna2_subwave4_enabled() {
+#if defined(GGML_USE_HIP)
+    static const bool value = []() {
+        const char * env = std::getenv("GGML_HIP_RDNA2_LID_SUBWAVE");
+        if (!env || !env[0] || std::strcmp(env, "0") == 0) {
+            return false;
+        }
+        if (std::strcmp(env, "4") == 0) {
+            return true;
+        }
+
+        fprintf(stderr, "GGML_HIP_RDNA2_LID_SUBWAVE must be 0 or 4 (got '%s')\n", env);
+        GGML_ABORT("invalid RDNA2 lightning indexer subwave override");
+    }();
+    return value;
+#else
+    return false;
+#endif
+}
+
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 #if defined(TURING_MMA_AVAILABLE)
 
@@ -382,6 +406,111 @@ static __global__ void lightning_indexer_kernel_vec(
     }
 }
 
+#if defined(GGML_USE_HIP)
+// Opt-in RDNA2 production-shape path: each four-lane subgroup owns one K vector.
+// The explicit register tree reproduces the original width-32 XOR reduction:
+// offsets 16, 8, and 4 in registers, then offsets 2 and 1 by subgroup shuffle.
+template <int WARPS_PER_BLOCK, int K_VECS_PER_BLOCK, int64_t N_EMBD, int64_t N_HEAD, ggml_type TYPE_K>
+static __global__ void lightning_indexer_kernel_vec_subwave4(
+        const float * Q, const char * K, const float * W, const half * M, float * dst,
+        int64_t n_stream, int64_t n_batch, int64_t n_kv,
+        size_t nb1, size_t nb2, size_t nb3,
+        size_t nbq1, size_t nbq2, size_t nbq3,
+        size_t nbk1, size_t nbk2, size_t nbk3,
+        size_t nbw1, size_t nbw2, size_t nbw3,
+        size_t nbm1, size_t nbm2, size_t nbm3,
+        int64_t nem3) {
+#pragma clang fp reassociate(off)
+    static_assert(WARP_SIZE == 32, "subwave4 path requires wave32");
+    static_assert(K_VECS_PER_BLOCK == WARPS_PER_BLOCK * 8, "eight K vectors per wave required");
+    static_assert(N_EMBD == 128 && N_HEAD == 64 && TYPE_K == GGML_TYPE_F16, "production shape only");
+
+    constexpr int THREADS_PER_BLOCK = WARPS_PER_BLOCK * WARP_SIZE;
+    constexpr int N_HEAD_INNER = N_HEAD / 4;
+    const int i_batch = blockIdx.y;
+    const int i_stream = blockIdx.z;
+    const int i_warp = threadIdx.y;
+    const int i_lane = threadIdx.x;
+    const int tid = i_warp * WARP_SIZE + i_lane;
+    const int subgroup = i_lane / 4;
+    const int subgroup_lane = i_lane % 4;
+    const int start_kv_block = blockIdx.x * K_VECS_PER_BLOCK;
+    const int i_kv = start_kv_block + i_warp * 8 + subgroup;
+
+    const char * q_base = (const char *) Q + i_batch*nbq2 + i_stream*nbq3;
+    const float * w_base = (const float *) ((const char *) W + i_batch*nbw1 + i_stream*nbw3);
+
+    float4 k_reg_f[8];
+    constexpr dequantize_V_t dequantize_k = get_dequantize_V<TYPE_K, float, 4>();
+#pragma unroll
+    for (int j = 0; j < 8; ++j) {
+        if (i_kv < n_kv) {
+            const void * k_base = (const void *) ((const char *) K + i_kv*nbk2 + i_stream*nbk3);
+            dequantize_k(k_base, &k_reg_f[j], (subgroup_lane + 4*j) * 4);
+        } else {
+            k_reg_f[j] = make_float4(0, 0, 0, 0);
+        }
+    }
+
+    float score_k = 0.0f;
+    for (int i_head_0 = 0; i_head_0 < N_HEAD; i_head_0 += N_HEAD_INNER) {
+        __shared__ float w_shared[N_HEAD_INNER];
+        __shared__ float4 q_shared_f[N_HEAD_INNER][N_EMBD / 4];
+        if (tid < N_HEAD_INNER) {
+            w_shared[tid] = w_base[i_head_0 + tid];
+        }
+        constexpr int n_q = N_HEAD_INNER * (N_EMBD / 4);
+#pragma unroll
+        for (int i_q = tid; i_q < n_q; i_q += THREADS_PER_BLOCK) {
+            const int i_head_inner = i_q / (N_EMBD / 4);
+            const int i_head = i_head_0 + i_head_inner;
+            const int i_embd = i_q % (N_EMBD / 4);
+            q_shared_f[i_head_inner][i_embd] = *(const float4 *) (q_base + i_head*nbq1 + i_embd*sizeof(float4));
+        }
+        __syncthreads();
+
+        for (int i_head_inner = 0; i_head_inner < N_HEAD_INNER; ++i_head_inner) {
+            float partial[8] = { 0.0f };
+#pragma unroll
+            for (int j = 0; j < 8; ++j) {
+                const float4 q_vec = q_shared_f[i_head_inner][subgroup_lane + 4*j];
+                ggml_cuda_mad(partial[j], q_vec.x, k_reg_f[j].x);
+                ggml_cuda_mad(partial[j], q_vec.y, k_reg_f[j].y);
+                ggml_cuda_mad(partial[j], q_vec.z, k_reg_f[j].z);
+                ggml_cuda_mad(partial[j], q_vec.w, k_reg_f[j].w);
+            }
+            const float offset16_0 = partial[0] + partial[4];
+            const float offset16_2 = partial[2] + partial[6];
+            const float offset8_0 = offset16_0 + offset16_2;
+            const float offset16_1 = partial[1] + partial[5];
+            const float offset16_3 = partial[3] + partial[7];
+            const float offset8_1 = offset16_1 + offset16_3;
+            float sum = offset8_0 + offset8_1;
+            sum = warp_reduce_sum<4>(sum);
+            if (subgroup_lane == 0) {
+                sum = (sum > 0.0f) ? sum : 0.0f;
+                score_k += sum * w_shared[i_head_inner];
+            }
+        }
+        __syncthreads();
+    }
+
+    __shared__ float dst_shared[K_VECS_PER_BLOCK];
+    if (subgroup_lane == 0) {
+        dst_shared[i_warp * 8 + subgroup] = score_k;
+    }
+    __syncthreads();
+    if (tid < K_VECS_PER_BLOCK) {
+        const int dst_kv = start_kv_block + tid;
+        if (dst_kv < n_kv) {
+            const half * m_base = (const half *) ((const char *) M + i_batch*nbm1 + (i_stream%nem3)*nbm3);
+            float * dst_base = (float *) ((char *) dst + i_batch*nb1 + i_stream*nb3);
+            dst_base[dst_kv] = dst_shared[tid] + __half2float(m_base[dst_kv]);
+        }
+    }
+}
+#endif // defined(GGML_USE_HIP)
+
 #define LIGHTNING_INDEXER_CASE(lightning_indexer_kernel, n_embd, n_head, K, type_K)         \
     if (K->type == (type_K)) {                                                              \
         lightning_indexer_kernel<WARPS_PER_BLOCK, K_VECS_PER_BLOCK, n_embd, n_head, type_K> \
@@ -443,8 +572,31 @@ void ggml_cuda_lightning_indexer(ggml_backend_cuda_context & ctx, ggml_tensor * 
     const half  *   m_d = (const half  *)   m->data;
     float       * dst_d = (      float *) dst->data;
 
-    const int device = ggml_cuda_get_device();
-    const int cc     = ggml_cuda_info().devices[device].cc;
+    const int device    = ggml_cuda_get_device();
+    const int cc        = ggml_cuda_info().devices[device].cc;
+    const int warp_size = ggml_cuda_info().devices[device].warp_size;
+
+    #if defined(GGML_USE_HIP)
+    if (GGML_CUDA_CC_IS_RDNA2(cc) && warp_size == 32 &&
+        n_embd == 128 && n_head == 64 && n_batch == 256 && n_stream == 1 && n_kv >= 1 && n_kv <= 4096 &&
+        k->type == GGML_TYPE_F16 && lightning_indexer_rdna2_subwave4_enabled()) {
+        constexpr int K_VECS_PER_BLOCK = 64;
+        constexpr int WARPS_PER_BLOCK = 8;
+        dim3 block(32, WARPS_PER_BLOCK);
+        dim3 grid((n_kv + K_VECS_PER_BLOCK - 1) / K_VECS_PER_BLOCK, n_batch, n_stream);
+        lightning_indexer_kernel_vec_subwave4<WARPS_PER_BLOCK, K_VECS_PER_BLOCK, 128, 64, GGML_TYPE_F16>
+            <<<grid, block, 0, ctx.stream()>>>(
+                q_d, k_d, w_d, m_d, dst_d,
+                n_stream, n_batch, n_kv,
+                nb1, nb2, nb3,
+                nbq1, nbq2, nbq3,
+                nbk1, nbk2, nbk3,
+                nbw1, nbw2, nbw3,
+                nbm1, nbm2, nbm3,
+                nem3);
+        return;
+    }
+#endif // defined(GGML_USE_HIP)
 
     if (n_embd == 128 && n_head == 64) {
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)

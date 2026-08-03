@@ -265,12 +265,13 @@ if (NOT LLAMA_SANITIZE_ADDRESS AND NOT GGML_SCHED_NO_REALLOC)
 endif()
 llama_build_and_test(test-backend-ops.cpp)
 
-# Synthetic graph-level benchmarks for gfx1030/RDNA2 quantized matmul tuning.
+# Synthetic graph-level benchmarks for gfx1030/RDNA2 kernel tuning.
 # They are manual benchmarks rather than CTests because timing is device-dependent.
 if (GGML_HIP)
     llama_build(test-mmvq-rdna2.cpp)
     llama_build(test-mmid-rdna2.cpp)
     llama_build(test-hc-mixes-rdna2.cpp)
+    llama_build(test-lightning-indexer-rdna2.cpp)
 endif()
 
 llama_build_and_test(test-tensor-split.cpp)
