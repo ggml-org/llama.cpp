@@ -1107,6 +1107,7 @@ struct llama_model_deepseek4 : public llama_model_base {
     void load_arch_tensors(llama_model_loader & ml) override;
 
     struct graph : public llm_graph_context {
+        graph(const llm_graph_params & params) : llm_graph_context(params) {}
         graph(const llama_model & model, const llm_graph_params & params);
 
         ggml_tensor * build_hc_pre(
@@ -1134,6 +1135,21 @@ struct llama_model_deepseek4 : public llama_model_base {
         ggml_tensor * build_attention(
                 const llama_model & model,
                 llm_graph_input_dsv4 * inp_dsv4,
+                ggml_tensor * cur,
+                ggml_tensor * inp_pos,
+                int il) const;
+
+        ggml_tensor * build_attention(
+                const llama_model & model,
+                llm_graph_input_attn_k_iswa * inp_mtp,
+                ggml_tensor * cur,
+                ggml_tensor * inp_pos,
+                int il) const;
+
+        ggml_tensor * build_attention_impl(
+                const llama_model & model,
+                llm_graph_input_dsv4 * inp_dsv4,
+                llm_graph_input_attn_k_iswa * inp_mtp,
                 ggml_tensor * cur,
                 ggml_tensor * inp_pos,
                 int il) const;
@@ -1213,6 +1229,10 @@ struct llama_model_deepseek4 : public llama_model_base {
                 int il) const;
     };
 
+    struct graph_mtp : public graph {
+        graph_mtp(const llama_model & model, const llm_graph_params & params);
+    };
+
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
@@ -1270,6 +1290,10 @@ struct llama_model_dflash : public llama_model_base {
         graph(const llama_model & model, const llm_graph_params & params);
 
         ggml_tensor * build_inp_embd_enc() const;
+    };
+
+    struct graph_dsv4 : public llama_model_deepseek4::graph {
+        graph_dsv4(const llama_model & model, const llm_graph_params & params);
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;

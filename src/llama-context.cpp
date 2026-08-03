@@ -120,8 +120,9 @@ llama_context::llama_context(
     cparams.no_perf                 = params.no_perf;
     cparams.warmup                  = false;
 
-    cparams.embeddings_layer_inp.resize(hparams.n_layer(), false);
-    embd_layer_inp.resize(hparams.n_layer());
+    // +1: id n_layer() taps the output of the last layer ("input" of the head)
+    cparams.embeddings_layer_inp.resize(hparams.n_layer() + 1, false);
+    embd_layer_inp.resize(hparams.n_layer() + 1);
 
     cparams.ctx_type     = params.ctx_type;
     cparams.pooling_type = params.pooling_type;
@@ -1164,7 +1165,7 @@ void llama_context::set_embeddings_nextn(bool value, bool masked) {
 void llama_context::set_embeddings_layer_inp(uint32_t lid, bool enable) {
     LLAMA_LOG_DEBUG("%s: lid = %d, enable = %d\n", __func__, lid, enable);
 
-    GGML_ASSERT(lid < model.hparams.n_layer());
+    GGML_ASSERT(lid <= model.hparams.n_layer());
 
     cparams.embeddings_layer_inp[lid] = enable;
 
@@ -1716,7 +1717,8 @@ int llama_context::decode(const llama_batch & batch_inp) {
     const auto & hparams = model.hparams;
 
     const int64_t n_vocab = vocab.n_tokens();
-    const int64_t n_embd  = hparams.n_embd_inp();
+    const bool    mtp_embd = cparams.ctx_type == LLAMA_CONTEXT_TYPE_MTP && batch_inp.embd;
+    const int64_t n_embd  = mtp_embd ? hparams.n_embd_out() : hparams.n_embd_inp();
 
     // when computing embeddings, all tokens are output
     const bool output_all   = cparams.embeddings;
@@ -2275,8 +2277,9 @@ void llama_context::extract_layer_inputs(const llm_graph_result * res, size_t to
 }
 
 void llama_context::output_reorder() {
-    const uint64_t n_vocab = model.vocab.n_tokens();
-    const uint64_t n_embd  = model.hparams.n_embd;
+    const uint64_t n_vocab     = model.vocab.n_tokens();
+    const uint64_t n_embd      = model.hparams.n_embd;
+    const uint64_t n_embd_out  = model.hparams.n_embd_out();
 
     for (size_t s = 0; s < output_swaps.size(); ++s) {
         const uint64_t i0 = output_swaps[s].i0;
@@ -2289,14 +2292,14 @@ void llama_context::output_reorder() {
         }
 
         if (embd.size > 0) {
-            for (uint64_t k = 0; k < n_embd; k++) {
-                std::swap(embd.data[i0*n_embd + k], embd.data[i1*n_embd + k]);
+            for (uint64_t k = 0; k < n_embd_out; k++) {
+                std::swap(embd.data[i0*n_embd_out + k], embd.data[i1*n_embd_out + k]);
             }
         }
 
         if (embd_nextn.size > 0) {
-            for (uint64_t k = 0; k < n_embd; k++) {
-                std::swap(embd_nextn.data[i0*n_embd + k], embd_nextn.data[i1*n_embd + k]);
+            for (uint64_t k = 0; k < n_embd_out; k++) {
+                std::swap(embd_nextn.data[i0*n_embd_out + k], embd_nextn.data[i1*n_embd_out + k]);
             }
         }
 
@@ -2351,6 +2354,7 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
         model.arch == LLM_ARCH_QWEN35 ||
         model.arch == LLM_ARCH_QWEN35MOE ||
         model.arch == LLM_ARCH_DEEPSEEK4 ||
+        (model.arch == LLM_ARCH_DFLASH && model.hparams.dsv4_hc_mult > 0) ||
         model.arch == LLM_ARCH_NANBEIGE ||
         model.arch == LLM_ARCH_MINIMAX_M3) {
         return std::max<uint32_t>(n_tokens * 40, 32u * model.n_tensors());
@@ -3553,6 +3557,22 @@ llama_context * llama_init_from_model(
         }
     }
 
+    if ((model->hparams.is_mla() || model->arch == LLM_ARCH_DEEPSEEK4) && params.type_k != params.type_v) {
+        LLAMA_LOG_ERROR("%s: model does not support different K (%s) and V (%s) cache types\n", __func__, ggml_type_name(params.type_k), ggml_type_name(params.type_v));
+        return nullptr;
+    }
+
+    if (ggml_is_quantized(params.type_v) && params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_ENABLED) {
+        if (params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_AUTO) {
+            LLAMA_LOG_INFO("%s: enabling flash_attn since it is required for quantized V cache\n", __func__);
+            params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+        }
+        if (params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_DISABLED) {
+            LLAMA_LOG_ERROR("%s: quantized V cache requires flash_attn to be enabled\n", __func__);
+            return nullptr;
+        }
+    }
+
     if (params.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED && ggml_is_quantized(params.type_k)) {
         const uint32_t blck_size = ggml_blck_size(params.type_k);
         for (uint32_t il = 0; il < model->hparams.n_layer(); ++il) {
@@ -3573,11 +3593,6 @@ llama_context * llama_init_from_model(
                 return nullptr;
             }
         }
-    }
-
-    if (ggml_is_quantized(params.type_v) && params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_DISABLED) {
-        LLAMA_LOG_ERROR("%s: V cache quantization requires flash_attn\n", __func__);
-        return nullptr;
     }
 
     if (params.pooling_type != LLAMA_POOLING_TYPE_UNSPECIFIED &&
