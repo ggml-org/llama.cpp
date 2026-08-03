@@ -2027,53 +2027,13 @@ static bool compute_features(llama_context * ctx, const common_params & params, 
     return true;
 }
 
-// Spec-decoding variant of compute_imatrix. Thin wrapper that routes to
-// common/speculative-calibration.{h,cpp} (the new module) and wires the
-// imatrix graph-observer lifecycle into its observer_hooks. The actual
-// drafter-forward + per-prefix verifier-forward + KV rollback + per-step
-// telemetry now lives in common/speculative-calibration.cpp.
-//
-// Inputs (unchanged):
-//   ctx_tgt:  verifier context (already loaded, has graph observers attached)
-//   model_tgt: verifier model (needed for vocab and sampler)
-//   spec:     common_speculative handle (drafter model is already loaded
-//             inside the spec struct; both ctx_tgt and ctx_dft have been
-//             set on params.speculative.draft by the caller)
-//   params:   common_params; we use params.prompt (text), params.n_spec_steps,
-//             params.telemetry_out, params.n_telemetry_topk
-//   n_ctx:    context size used to prime the prompt
-//
-// Observer hooks: the new module drives the drafter and per-prefix
-// verifier forwards on its own; it calls our hooks once per "main"
-// forward (the i==n_dft per-prefix forward) so the imatrix collector
-// can attribute the captured tensors to the current step's chunk. The
-// new module also calls the flush hook at the tail of the run, replacing
-// the explicit g_collector.flush_graph_observers() the inlined function
-// used to return.
-
-static void imatrix_spec_obs_begin(void * /*user_data*/) {
-    g_collector.begin_graph_observers();
-}
-
-static bool imatrix_spec_obs_flush(void * /*user_data*/) {
-    return g_collector.flush_graph_observers();
-}
-
-static bool compute_imatrix_spec(
-    llama_context * ctx_tgt,
-    llama_model * model_tgt,
-    common_speculative * spec,
-    common_params & params,
-    const int32_t n_ctx
-) {
-    common_speculative_calibration_options opts;
-    opts.telemetry_out        = params.telemetry_out;
-    opts.telemetry_topk       = params.n_telemetry_topk;
-    opts.observer_hooks.begin = imatrix_spec_obs_begin;
-    opts.observer_hooks.flush = imatrix_spec_obs_flush;
-    return common_speculative_calibration_run(
-        ctx_tgt, model_tgt, spec, params, n_ctx, opts);
-}
+// Spec-decoding variant of compute_imatrix. Routes through
+// common/speculative-calibration.{h,cpp} (the new module) and wires
+// the imatrix graph-observer lifecycle into its observer_hooks. The
+// actual drafter-forward + per-prefix verifier-forward + KV rollback
+// + per-step telemetry lives in common/speculative-calibration.cpp.
+// The new module calls begin/flush hooks around the per-step main
+// forward and at the tail of the run.
 
 static bool show_statistics(const common_params & params) {
     std::vector<tensor_statistics> ts;
@@ -2360,7 +2320,12 @@ int main(int argc, char ** argv) {
             return 1;
         }
     } else if (use_spec) {
-        if (!compute_imatrix_spec(ctx, model, spec.get(), params, n_ctx)) {
+        common_speculative_calibration_options opts;
+        opts.telemetry_out        = params.telemetry_out;
+        opts.telemetry_topk       = params.n_telemetry_topk;
+        opts.observer_hooks.begin = [](void *) { g_collector.begin_graph_observers(); };
+        opts.observer_hooks.flush = [](void *) { return g_collector.flush_graph_observers(); };
+        if (!common_speculative_calibration_run(ctx, model, spec.get(), params, n_ctx, opts)) {
             return 1;
         }
     } else {
