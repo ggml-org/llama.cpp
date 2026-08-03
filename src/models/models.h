@@ -1249,6 +1249,11 @@ struct llama_model_dflash : public llama_model_base {
     void load_arch_hparams(llama_model_loader & ml) override;
     void load_arch_tensors(llama_model_loader & ml) override;
 
+    // DSpark markov head graph builder.  Exposed as a static member so the
+    // gemma4 dflash subclass (and any future arch-agnostic subclasses) can
+    // apply the markov head bias without copying the implementation.
+    static void build_dspark_markov_head(llm_graph_context & gctx, const llama_model & model, ggml_tensor * tokens);
+
     template <bool is_enc>
     struct graph : public llm_graph_context {
         graph(const llama_model & model, const llm_graph_params & params);
@@ -1258,6 +1263,9 @@ struct llama_model_dflash : public llama_model_base {
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
+
+
+#include "dflash-gemma4.h"
 
 
 struct llama_model_mistral4 : public llama_model_deepseek2 {
