@@ -1062,6 +1062,7 @@ struct peg_test_case {
     common_chat_msg              expect;
     bool                         is_partial            = false;
     bool                         expect_reconstruction = false;
+    bool                         expect_exact          = false;
 };
 
 struct make_peg_parser {
@@ -1179,7 +1180,7 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
             }
         }
         try {
-            assert_msg_equals(msg_current, msg_accum, true);
+            assert_msg_equals(msg_current, msg_accum, !tc.expect_exact);
         } catch (std::exception & e) {
             throw std::runtime_error((std::string("Error comparing accumulated message to current: ") + e.what()).c_str());
         }
@@ -1188,9 +1189,9 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
     }
 
     if (!tc.is_partial) {
-        assert_msg_equals(tc.expect, parser.parse(tc.input, false), true);
+        assert_msg_equals(tc.expect, parser.parse(tc.input, false), !tc.expect_exact);
     }
-    assert_msg_equals(tc.expect, msg_accum, true);
+    assert_msg_equals(tc.expect, msg_accum, !tc.expect_exact);
 
     // Test grammar if present in params
     if (!parser.params_.grammar.empty()) {
@@ -1509,6 +1510,11 @@ class peg_test_builder {
 
     peg_test_builder & expect_reconstruction(bool val = true) {
         tc_.expect_reconstruction = val;
+        return *this;
+    }
+
+    peg_test_builder & expect_exact(bool val = true) {
+        tc_.expect_exact = val;
         return *this;
     }
 
@@ -3962,6 +3968,8 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_tool_calls({
                 { "special_function", R"({"arg1": 1})", {} },
             })
+            .expect_exact()
+            .expect_reconstruction()
             .run();
 
         // Tool call with negative number
@@ -4187,6 +4195,8 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_tool_calls({
                 { "special_function", R"({"arg1": 1})", {} },
             })
+            .expect_exact()
+            .expect_reconstruction()
             .run();
 
         // Tool call with multiple params (mixed types)
@@ -4240,6 +4250,25 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .tools({ get_time_tool })
             .expect_reasoning("Let me check the time")
             .expect_tool_calls({ { "get_time", R"({"city": "Tokyo"})", {} } })
+            .run();
+    }
+
+    {
+        // The DSML separator belongs to the tool call block, not assistant content.
+        auto tst = peg_tester("models/templates/deepseek-ai-DeepSeek-V4-Flash-0731.jinja", detailed_debug);
+        tst.test(
+               "\n\n"
+               "<｜DSML｜tool_calls>\n"
+               "<｜DSML｜invoke name=\"special_function\">\n"
+               "<｜DSML｜parameter name=\"arg1\" string=\"false\">1</｜DSML｜parameter>\n"
+               "</｜DSML｜invoke>\n"
+               "</｜DSML｜tool_calls>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .expect_exact()
+            .expect_reconstruction()
             .run();
     }
 

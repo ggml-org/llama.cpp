@@ -1964,6 +1964,7 @@ static common_chat_params common_chat_params_init_deepseek_v3_2(const common_cha
     const std::string PARAM_START  = "<" + DSML + "parameter";
     const std::string PARAM_END    = "</" + DSML + "parameter>";
     const std::string GEN_PROMPT   = "<｜Assistant｜>";
+    const std::string TC_SEPARATOR = "\n\n";
 
     data.prompt = common_chat_template_direct_apply_impl(
         tmpl, inputs, adjusted_messages, std::nullopt, additional_context);
@@ -2090,7 +2091,9 @@ static common_chat_params common_chat_params_init_deepseek_v3_2(const common_cha
 
         if (extract_reasoning && inputs.enable_thinking) {
             reasoning = p.optional(THINK_START + p.reasoning(p.until(THINK_END)) + THINK_END);
-            reasoning_with_tc = THINK_START + p.reasoning(p.until_one_of({ FC_START, THINK_END })) + obligatory_tool_calls;
+            reasoning_with_tc = THINK_START +
+                p.reasoning(p.until_one_of({ TC_SEPARATOR + FC_START, FC_START, THINK_END })) +
+                p.optional(p.literal(TC_SEPARATOR)) + obligatory_tool_calls;
             allow_reasoning_with_tc = true;
         } else if (extract_reasoning) {
             // Thinking disabled but reasoning extraction requested: the generation prompt
@@ -2113,7 +2116,9 @@ static common_chat_params common_chat_params_init_deepseek_v3_2(const common_cha
             return generation_prompt + reasoning + p.content(p.rest()) + end;
         }
 
-        auto content_before_tools = p.negate(p.literal(THINK_START)) + p.content(p.until(FC_START));
+        auto content_before_tools = p.negate(p.literal(THINK_START)) +
+            p.content(p.until_one_of({ TC_SEPARATOR + FC_START, FC_START })) +
+            p.optional(p.literal(TC_SEPARATOR));
         return allow_reasoning_with_tc ? generation_prompt + (reasoning_with_tc | (reasoning + content_before_tools + tool_calls)) + end :
             generation_prompt + reasoning + content_before_tools + tool_calls + end;
     });
