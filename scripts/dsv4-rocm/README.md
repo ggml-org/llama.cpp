@@ -129,9 +129,27 @@ scripts/dsv4-rocm/compare-validation.py \
   --json "$artifact_root/comparison.json"
 ```
 
-The comparison fails if content, generated token IDs, prompts, or token counts
-differ. Its timing row is only one natural-text observation; use bracketed
-`run-pp.sh` repetitions for performance claims.
+The comparison fails if required response fields are missing/malformed, if
+timings are internally inconsistent, or if content, generated token IDs,
+prompts, or token counts differ. Its timing row is only one natural-text
+observation; use bracketed `run-pp.sh` repetitions for performance claims.
+
+For an acceptance-quality base/J16 run, use the safety-guarded attested wrapper
+from a clean checkout:
+
+```bash
+cd /home/edwin/llama.cpp-rdna2
+DSV4_HASH_MODE=full scripts/dsv4-rocm/run-corpus-validation.sh
+```
+
+It holds the shared GPU lock, refuses active ROCm processes, rechecks before
+each variant, reads the exact UTF-8 prompt bytes through `DSV4_PROMPT_FILE`,
+and requires full hashes of all model shards. The artifact includes clean
+source identity, executable and resolved llama/ggml DSO hashes, exact exported
+settings and base/candidate command files, ROCm/hardware details, all response
+JSON/logs, comparison output, and response hashes. Full model hashing occurs
+before inference and can take time, but it does not consume the measured PP
+budget.
 
 ## Artifacts
 
