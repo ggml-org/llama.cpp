@@ -835,14 +835,32 @@ struct ggml_backend_sched {
 #define tensor_copy(tensor, backend_id, copy_id) tensor_id_copy(hash_id(tensor), backend_id, copy_id)
 
 static void ggml_backend_sched_split_inputs_grow(struct ggml_backend_sched_split * split) {
-    int new_cap = split->inputs_capacity > 0 ? split->inputs_capacity * 2 : GGML_SCHED_MAX_SPLIT_INPUTS;
-    split->inputs = (struct ggml_tensor **) realloc(split->inputs, new_cap * sizeof(struct ggml_tensor *));
+    int new_cap = GGML_SCHED_MAX_SPLIT_INPUTS;
+    if (split->inputs_capacity > 0) {
+        new_cap = 2*split->inputs_capacity;
+        GGML_LOG_WARN("%s: increasing split inputs capacity from %d to %d\n", __func__, split->inputs_capacity, new_cap);
+    }
+    auto * pnew = (struct ggml_tensor **) realloc((void *) split->inputs, new_cap * sizeof(struct ggml_tensor *));
+    if (pnew == NULL) {
+        GGML_LOG_ERROR("%s: failed to allocate %zu bytes\n", __func__, new_cap * sizeof(struct ggml_tensor *));
+        GGML_ABORT("failed to grow split inputs container");
+    }
+    split->inputs = pnew;
     split->inputs_capacity = new_cap;
 }
 
 static void ggml_backend_sched_graph_inputs_grow(ggml_backend_sched_t sched) {
-    int new_cap = sched->graph_inputs_capacity > 0 ? sched->graph_inputs_capacity * 2 : GGML_SCHED_MAX_SPLIT_INPUTS;
-    sched->graph_inputs = (struct ggml_tensor **) realloc(sched->graph_inputs, new_cap * sizeof(struct ggml_tensor *));
+    int new_cap = GGML_SCHED_MAX_SPLIT_INPUTS;
+    if (sched->graph_inputs_capacity > 0) {
+        new_cap = 2*sched->graph_inputs_capacity;
+        GGML_LOG_WARN("%s: increasing graph inputs capacity from %d to %d\n", __func__, sched->graph_inputs_capacity, new_cap);
+    }
+    auto * pnew = (struct ggml_tensor **) realloc((void *) sched->graph_inputs, new_cap * sizeof(struct ggml_tensor *));
+    if (pnew == NULL) {
+        GGML_LOG_ERROR("%s: failed to allocate %zu bytes\n", __func__, new_cap * sizeof(struct ggml_tensor *));
+        GGML_ABORT("failed to grow graph inputs container");
+    }
+    sched->graph_inputs = pnew;
     sched->graph_inputs_capacity = new_cap;
 }
 
@@ -1333,8 +1351,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                         realloc(sched->splits, sched->splits_capacity * sizeof(struct ggml_backend_sched_split));
                     GGML_ASSERT(sched->splits != NULL);
                     for (int k = old_cap; k < sched->splits_capacity; k++) {
-                        sched->splits[k].inputs = NULL;
-                        sched->splits[k].inputs_capacity = 0;
+                        memset(&sched->splits[k], 0, sizeof(struct ggml_backend_sched_split));
                     }
                 }
                 split = &sched->splits[i_split];
@@ -1808,10 +1825,6 @@ ggml_backend_sched_t ggml_backend_sched_new(
     const int initial_splits_capacity = 16;
     sched->splits = (ggml_backend_sched_split *) calloc(initial_splits_capacity, sizeof(sched->splits[0]));
     sched->splits_capacity = initial_splits_capacity;
-    for (int i = 0; i < initial_splits_capacity; i++) {
-        sched->splits[i].inputs = NULL;
-        sched->splits[i].inputs_capacity = 0;
-    }
 
     sched->graph_inputs_capacity = GGML_SCHED_MAX_SPLIT_INPUTS;
     sched->graph_inputs = (struct ggml_tensor **) calloc(sched->graph_inputs_capacity, sizeof(struct ggml_tensor *));
