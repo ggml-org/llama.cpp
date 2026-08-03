@@ -87,6 +87,16 @@ struct ts_dispatch_params {
     // force_requantize is set, making the pipeline crash-resumable.
     std::string quantize_db_path;            // empty = ephemeral, no DB
     bool        force_requantize = false;
+    // L2 forward-pass differential plumbing (Layer 2 of the runtime-aware
+    // pipeline, see docs/runtime-aware-pipeline.md). The dispatch itself
+    // does not run the forwards; the tools/tessera/runtime_probe.py
+    // orchestrator shells out to llama-cli / llama-imatrix with
+    // --tessera-matmul-output-dir and reads the resulting .matmul-output.f32
+    // sidecars. The dispatch records the orchestrator's config in the
+    // L2 report's provenance block when these fields are non-empty.
+    std::string runtime_probe;            // orchestrator marker (the prompts file the orchestrator is using)
+    std::string runtime_probe_bf16;       // path to the BF16 source model
+    std::string runtime_probe_l2_out;     // path to the L2 JSONL report
 };
 
 // Result of the Tessera pipeline for one tensor.

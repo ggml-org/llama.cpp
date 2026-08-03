@@ -84,6 +84,19 @@ struct common_tessera_params {
     // When set with --quantize-db, ignore existing converged tensors for
     // this run's model_hash and re-run the GA for every tensor.
     bool        force_requantize = false;
+    // L2 forward-pass differential (Layer 2 of the runtime-aware pipeline).
+    // When runtime_probe is non-empty, the dispatch records that the
+    // caller is the tools/tessera/runtime_probe.py orchestrator and
+    // passes the bf16 / quantized model paths and l2_out JSONL target
+    // to the dispatch so they can be embedded in the L2 report's
+    // provenance block. The actual matmul-output sidecar capture
+    // happens in llama-cli / llama-imatrix via the
+    // --tessera-matmul-output-dir CLI flag (common/arg.cpp). The
+    // dispatch itself does not run the forwards; the orchestrator
+    // shells out to llama-cli twice and reads the sidecars.
+    std::string runtime_probe;
+    std::string runtime_probe_bf16;
+    std::string runtime_probe_l2_out;
 };
 
 const common_tessera_params & common_get_tessera_params();

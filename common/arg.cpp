@@ -9,6 +9,7 @@
 #include "log.h"
 #include "tessera-args.h"
 #include "tessera-debug.h"
+#include "tessera-matmul-output.h"
 #include "sampling.h"
 #include "speculative.h"
 #include "preset.h"
@@ -137,6 +138,9 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
     if (arg == "--progress-file")             { if (!require_val("--progress-file")) return -1;             tessera_params.progress_file    = val; return 2; }
     if (arg == "--quantize-db")               { if (!require_val("--quantize-db")) return -1;               tessera_params.quantize_db      = val; return 2; }
     if (arg == "--force-requantize")          {                                                              tessera_params.force_requantize = true; return 1; }
+    if (arg == "--tessera-runtime-probe")     { if (!require_val("--tessera-runtime-probe")) return -1;     tessera_params.runtime_probe     = val; return 2; }
+    if (arg == "--tessera-runtime-probe-bf16"){ if (!require_val("--tessera-runtime-probe-bf16")) return -1;tessera_params.runtime_probe_bf16= val; return 2; }
+    if (arg == "--tessera-l2-out")            { if (!require_val("--tessera-l2-out")) return -1;            tessera_params.runtime_probe_l2_out = val; return 2; }
     if (arg == "--tessera-awq-alpha")         { if (!require_val("--tessera-awq-alpha")) return -1;         tessera_params.awq_alpha        = val; return 2; }
     if (arg == "--tessera-ternary-threshold") { if (!require_val("--tessera-ternary-threshold")) return -1; tessera_params.ternary_threshold = val; return 2; }
     if (arg == "--tessera-kernel-fitness-dir") { if (!require_val("--tessera-kernel-fitness-dir")) return -1; tessera_params.kernel_fitness_dir = val; return 2; }
@@ -165,6 +169,14 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
     if (arg == "--tessera-dequant-stride") {
         if (!require_val("--tessera-dequant-stride")) return -1;
         tessera_debug::set_dequant_stride((int64_t) atoll(val.c_str())); return 2;
+    }
+    if (arg == "--tessera-matmul-output-dir") {
+        if (!require_val("--tessera-matmul-output-dir")) return -1;
+        tessera_matmul_output::set_matmul_output_dir(val); return 2;
+    }
+    if (arg == "--tessera-matmul-output-stride") {
+        if (!require_val("--tessera-matmul-output-stride")) return -1;
+        tessera_matmul_output::set_matmul_output_stride((int64_t) atoll(val.c_str())); return 2;
     }
 
     // integer-valued
@@ -4165,6 +4177,23 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_TILE640_DEBUG_DEQUANT_STRIDE"));
     add_opt(common_arg(
+        {"--tessera-matmul-output-dir"}, "PATH",
+        "Tessera: dump per-tensor matmul output (F32) to PATH as .matmul-output.f32 sidecar files. "
+        "Used by the L2 forward-pass differential (tools/tessera/runtime_probe.py). "
+        "(env: LLAMA_TILE640_DEBUG_MATMUL_OUTPUT_DIR)",
+        [](common_params &, const std::string & value) {
+            tessera_matmul_output::set_matmul_output_dir(value);
+        }
+    ).set_env("LLAMA_TILE640_DEBUG_MATMUL_OUTPUT_DIR"));
+    add_opt(common_arg(
+        {"--tessera-matmul-output-stride"}, "N",
+        "Tessera: capture only every Nth row in matmul-output sidecar output "
+        "(default: 1, capture all rows)",
+        [](common_params &, const std::string & value) {
+            tessera_matmul_output::set_matmul_output_stride((int64_t) std::stoll(value));
+        }
+    ).set_env("LLAMA_TILE640_DEBUG_MATMUL_OUTPUT_STRIDE"));
+    add_opt(common_arg(
         {"--tessera-mode"}, "MODE",
         "Tessera mode: off, default, calibrate-only, evolve-only (default: default)",
         [](common_params &, const std::string & value) {
@@ -4229,6 +4258,34 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         "Tessera: with --quantize-db, re-run the GA for every tensor even if a converged result exists",
         [](common_params &) {
             tessera_params.force_requantize = true;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-runtime-probe"}, "PATH",
+        "Tessera: write L2 forward-pass differential report here (used by tools/tessera/runtime_probe.py). "
+        "The dispatch does not run the forwards itself; the orchestrator shells out to llama-cli / "
+        "llama-imatrix with --tessera-matmul-output-dir and reads the resulting .matmul-output.f32 sidecars.",
+        [](common_params &, const std::string & value) {
+            tessera_params.runtime_probe = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-runtime-probe-bf16"}, "PATH",
+        "Tessera: path to the BF16 source model used by the L2 forward-pass differential "
+        "(recorded in the L2 report's provenance block).",
+        [](common_params &, const std::string & value) {
+            tessera_params.runtime_probe_bf16 = value;
+        }
+    ));
+    add_opt(common_arg(
+        {"--tessera-l2-out"}, "PATH",
+        "Tessera: output JSONL path for the L2 forward-pass differential report "
+        "(schema llama.tessera.runtime-probe.v1, one line per tensor per layer per position). "
+        "When set, the dispatch records this path for the runtime-probe orchestrator. "
+        "The actual JSONL is written by tools/tessera/runtime_probe.py after joining the BF16 "
+        "and quantized matmul-output sidecars.",
+        [](common_params &, const std::string & value) {
+            tessera_params.runtime_probe_l2_out = value;
         }
     ));
     add_opt(common_arg(

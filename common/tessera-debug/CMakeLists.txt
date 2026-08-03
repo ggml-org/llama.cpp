@@ -83,6 +83,8 @@ set(TARGET llama-tessera-debug)
 add_library(${TARGET} STATIC
     tessera-debug.cpp
     tessera-debug.h
+    tessera-matmul-output.cpp
+    tessera-matmul-output.h
     ${TESSERA_BUILD_INFO_OUT}
 )
 
