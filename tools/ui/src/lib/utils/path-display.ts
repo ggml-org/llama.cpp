@@ -59,7 +59,7 @@ export interface CwdMessageInfo {
  */
 export function formatCwdMessage(cwd: string, home: string | null): string {
 	const display = abbreviateWorkingDir(cwd, home);
-	return `${CWD_CHANGED_PREFIX}[file://${cwd}](${display})`;
+	return `${CWD_CHANGED_PREFIX}[file://${cwd}](${display}). This adds/modifies a "x-tool-cwd" header in the POST request to /tools endpoint for all further tool calls.`;
 }
 
 /**
@@ -75,7 +75,8 @@ export function parseCwdMessage(content: string): CwdMessageInfo | null {
 	}
 	if (trimmed.startsWith(CWD_CHANGED_PREFIX)) {
 		const rest = trimmed.slice(CWD_CHANGED_PREFIX.length);
-		const link = rest.match(/^\[file:\/\/([\s\S]*)\]\(([\s\S]*)\)$/);
+		// not anchored to the end: guidance may follow the link
+		const link = rest.match(/^\[file:\/\/([\s\S]*)\]\(([\s\S]*)\)/);
 		if (link) return { path: link[1], display: link[2] };
 		return { path: rest, display: rest };
 	}

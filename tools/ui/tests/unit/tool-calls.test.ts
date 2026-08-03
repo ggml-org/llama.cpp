@@ -79,13 +79,13 @@ describe('abbreviateHome', () => {
 describe('formatCwdMessage / parseCwdMessage', () => {
 	it('formats a cwd change matching the UI text, with a file link', () => {
 		expect(formatCwdMessage('/Users/al/Documents', '/Users/al')).toBe(
-			'Set working directory to [file:///Users/al/Documents](~/Documents)'
+			'Set working directory to [file:///Users/al/Documents](~/Documents). This adds/modifies a "x-tool-cwd" header in the POST request to /tools endpoint for all further tool calls.'
 		);
 	});
 
 	it('falls back to the basename display when home is unknown', () => {
 		expect(formatCwdMessage('/opt/project', null)).toBe(
-			'Set working directory to [file:///opt/project](project)'
+			'Set working directory to [file:///opt/project](project). This adds/modifies a "x-tool-cwd" header in the POST request to /tools endpoint for all further tool calls.'
 		);
 	});
 
@@ -93,6 +93,12 @@ describe('formatCwdMessage / parseCwdMessage', () => {
 		const info = parseCwdMessage(formatCwdMessage('/Users/al/Documents', '/Users/al'));
 		expect(info?.path).toBe('/Users/al/Documents');
 		expect(info?.display).toBe('~/Documents');
+	});
+
+	it('parses a cwd message even when guidance follows the link', () => {
+		expect(
+			parseCwdMessage('Set working directory to [file:///a/b](~\/b). Tool calls run with this as their working directory.')
+		).toEqual({ path: '/a/b', display: '~/b' });
 	});
 
 	it('parses the cleared marker, current and legacy', () => {
