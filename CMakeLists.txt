@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.14...3.28) # for add_link_options and implicit target directories.
 project("llama.cpp" C CXX)
 include(CheckIncludeFileCXX)
+include(CheckSymbolExists)
 
 #set(CMAKE_WARN_DEPRECATED YES)
 set(CMAKE_WARN_UNUSED_CLI YES)
@@ -85,9 +86,18 @@ else()
 endif()
 
 # subprocess spawning isn't a supported/sandbox-friendly operation on mobile OSes or in WASM
+# It also requires posix_spawn_file_actions_addchdir_np, which is unavailable on glibc < 2.29
 if (CMAKE_SYSTEM_NAME STREQUAL "iOS" OR CMAKE_SYSTEM_NAME STREQUAL "Android" OR ANDROID
         OR CMAKE_SYSTEM_NAME STREQUAL "Emscripten" OR EMSCRIPTEN)
     set(LLAMA_SUBPROCESS_DEFAULT OFF)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    check_symbol_exists(posix_spawn_file_actions_addchdir_np spawn.h HAVE_POSIX_SPAWN_ADDCHDIR_NP)
+    if(NOT HAVE_POSIX_SPAWN_ADDCHDIR_NP)
+        message(STATUS "posix_spawn_file_actions_addchdir_np not found; disabling LLAMA_SUBPROCESS")
+        set(LLAMA_SUBPROCESS_DEFAULT OFF)
+    else()
+        set(LLAMA_SUBPROCESS_DEFAULT ON)
+    endif()
 else()
     set(LLAMA_SUBPROCESS_DEFAULT ON)
 endif()
