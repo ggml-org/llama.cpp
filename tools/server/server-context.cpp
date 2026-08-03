@@ -4463,15 +4463,15 @@ void server_routes::init_routes() {
                     {"help",  "Largest observed n_tokens."},
                     {"value",  res_task->n_tokens_max}
             }, {
-                    {"name",  "spec_decode_num_draft_tokens"},
+                    {"name",  "spec_decode_num_draft_tokens_total"},
                     {"help",  "Total draft tokens generated"},
                     {"value",  res_task->n_draft_tokens_total}
             }, {
-                    {"name",  "spec_decode_num_accepted_tokens"},
+                    {"name",  "spec_decode_num_accepted_tokens_total"},
                     {"help",  "Total draft tokens accepted by the target model"},
                     {"value",  res_task->n_draft_accepted_total}
             }, {
-                    {"name",  "spec_decode_num_drafts"},
+                    {"name",  "spec_decode_num_drafts_total"},
                     {"help",  "Total speculative decoding verification steps"},
                     {"value",  res_task->n_draft_verif_steps_total}
             }}},
@@ -4517,11 +4517,11 @@ void server_routes::init_routes() {
 
         // labeled counter: one time series per draft position
         if (!res_task->n_accepted_per_pos_total.empty()) {
-            prometheus << "# HELP llamacpp:spec_decode_num_accepted_tokens_per_pos"
+            prometheus << "# HELP llamacpp:spec_decode_num_accepted_tokens_per_pos_total"
                           " Accepted tokens per draft position\n"
-                       << "# TYPE llamacpp:spec_decode_num_accepted_tokens_per_pos counter\n";
+                       << "# TYPE llamacpp:spec_decode_num_accepted_tokens_per_pos_total counter\n";
             for (size_t i = 0; i < res_task->n_accepted_per_pos_total.size(); i++) {
-                prometheus << "llamacpp:spec_decode_num_accepted_tokens_per_pos{position=\""
+                prometheus << "llamacpp:spec_decode_num_accepted_tokens_per_pos_total{position=\""
                            << i << "\"} " << res_task->n_accepted_per_pos_total[i] << "\n";
             }
         }
