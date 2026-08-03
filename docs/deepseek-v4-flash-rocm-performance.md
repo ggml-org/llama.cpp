@@ -418,10 +418,35 @@ performance evidence.
 Routed MMQ is selected again as optimization four: the two J16 type-16/type-18
 kernels alone are 27.14% of summed device time, and all `mul_mat_q` name matches
 are 43.15%. Communication, LID follow-up, and flash each remain below their
-selection thresholds. The next MMQ work must screen a mechanism beyond the
-already routing-sensitive fixed J width and retain explicit/fallback behavior;
-it must not turn J16 into a skew-blind default. Fused top-k, reduced-precision
-Q, rocWMMA, and device-local candidate merging remain deferred.
+selection thresholds.
+
+A bounded RDNA2 configuration screen then tested mechanisms beyond J width for
+the J16 IQ2_XXS/IQ3_XXS kernels. I=64 regresses all uniform/hot cases by
+16.0-21.6% and changes low-order output bits; I=256 exceeds the supported
+shared-memory configuration and aborts fail-closed. Launch-bound occupancy 1
+and 3 are neutral (within 0.36%). Reducing block threads 256→128 is neutral to
++1.30% for IQ2 but improves IQ3_XXS by 16.08% uniform and 16.38% hot, with exact
+outputs (`max_abs=0`) for both quant types/routes. The final candidate therefore
+changes only RDNA2 IQ3_XXS J16 `fallback=false`; fallback=true and every other
+J/type/backend configuration are untouched.
+
+Commit `803a41c37` contains that one-line optimization-four candidate. With
+J16+HC+LID fixed, whole-model control-midpoint gains are +2.37% at 2K, +1.70%
+at 8K, and +1.69% at 16K; control drift is -1.49% to -1.87%. The initial
+single 512 observation is excluded for short-context inference because every
+arm's first repetition is graph-cold and candidate cold cost was unusually
+large. A dedicated three-repetition 512 A/B/A uses the stable repetition
+median and shows +2.11% with 1.01% control drift (508.109/513.265 controls
+around 521.471 t/s candidate). Focused review finds no correctness blocker;
+its residual medium is performance coverage on older/unclassified AMD targets
+that share the RDNA2 config fallback. The change is functionally thread-count
+parametric and exact on the V620, but remains guarded by the existing J16
+specialization decision rather than becoming a new generic J default.
+
+This is local/whole-model promotion, not final deployment acceptance. A fully
+attested natural-proxy equality gate and compact focused dispatch/resource
+proof remain next. Fused top-k, reduced-precision Q, rocWMMA, and device-local
+candidate merging remain deferred.
 
 Mapping and screening artifacts:
 
@@ -440,6 +465,11 @@ Mapping and screening artifacts:
 - `$HOME/edwin/llama-jobs/dsv4-lid-study/20260803T220000Z-subwave4-whole-model-9f4808637/` (J16+HC-held-constant 512/2K/8K/16K A/B/A; stable 16K +10.18%)
 - `$HOME/edwin/llama-jobs/dsv4-corpus-validation/20260803T212823.803707936Z-attested-9f4808637e55-20974/` (fully hashed LID-off/on corpus acceptance; all six responses equal)
 - `$HOME/edwin/llama-jobs/dsv4-rocm-pp/20260803T215054.700650714Z-kernel-trace-j16-hc-lid-16k-fdde31252a63-8573/` (fresh post-LID 16K compact trace; aggregate/per-agent summaries)
+- `$HOME/edwin/llama-jobs/20260803-221516-mmq-config-screen-6af98d65b/` (excluded strict-zero-tolerance first screen; correctly stops on I64 low-order drift)
+- `$HOME/edwin/llama-jobs/20260803-221906-mmq-config-screen-tolerant-6af98d65b/` (I64 16.0-21.6% regressions and I256 fail-closed unsupported evidence; source restored)
+- `$HOME/edwin/llama-jobs/20260803-222442-mmq-config-screen-core-6af98d65b/` (authoritative T128/occupancy screen; exact focused outputs, three process timings per type/route)
+- `$HOME/edwin/llama-jobs/20260803-223310-iq3-t128-whole-model-6af98d65b/` (J16+HC+LID-held-constant 512/2K/8K/16K A/B/A; initial 512 single-observation excluded)
+- `$HOME/edwin/llama-jobs/20260803-224633-iq3-t128-short-repeat-6af98d65b/` (dedicated three-repetition 512 A/B/A; stable-median +2.11%)
 
 Screening artifacts:
 
@@ -666,14 +696,14 @@ A dense mask is not a sparse performance implementation. Success requires runtim
 | 2026-08-03 | Tune the LID vector kernel before considering fused selection. | Lightning indexer is 14.87% while selection is only about 0.31%; exact counters show 74.1% occupancy, 16.5% memory busy, 95.5% L2 hits, no LDS conflicts, and 6,481 VALU instructions/work-item. | selected |
 | 2026-08-03 | Reject simple LID K4/H32 tiling; do not combine or deploy it. | K4 regresses 9.2-10.5% and does not improve occupancy despite fewer VGPRs; H32 is neutral within drift and doubles LDS. Both fail the 10% local promotion gate. | final |
 | 2026-08-03 | Promote same-tree LID subwave-4 as guarded optimization three for the known stack. | Focused exact/path/fallback/counter gates pass; J16+HC-held-constant whole model is +10.18% at 16K with 0.14% control drift and has no >2% short midpoint regression; fully hashed LID-off/on proxy outputs match in all six layer/tensor cases. | accepted guarded |
-| 2026-08-03 | Return to routed MMQ as optimization four after the post-LID trace. | Fresh 16K trace shows LID device time -44.96% and total device time -10.27%; `mul_mat_q` name matches now lead at 43.15%, with the J16 type-16/type-18 pair alone 27.14%. RCCL is 9.76% and copies ~0.21% wall. | selected |
+| 2026-08-03 | Promote RDNA2 IQ3_XXS J16 128-thread blocks as optimization four pending corpus/dispatch gates. | Exact focused outputs; IQ3 uniform/hot latency -16.08/-16.38%; whole-model +2.11/+2.37/+1.70/+1.69% at 512/2K/8K/16K after excluding graph-cold first-repetition inference. I64 regresses, I256 is unsupported, occupancy 1/3 is neutral. | accepted locally |
 | 2026-08-03 | Reject/defer production MTP for the exact-greedy DSV4 stack. | Production and n-max matrix diverge; rejection-only sequential replay fixes target-only continuation but not continued speculation; even zero-accept target-single advancement with full-state checkpoints later forks. No exact output or TG acceptance exists. | final deferred |
 
 ## 9. Open questions
 
 1. Does the J=16 win hold on a user-supplied production corpus? The attested engineering proxy and through-16K synthetic scaling are positive, but no user corpus exists and 32K cannot complete under the five-minute cap.
 2. Can a later expert-concentration signal select J=16/J=32/J=64 without a host synchronization? This patch intentionally stays explicit.
-3. Which mechanism beyond the routing-sensitive fixed J width can improve the post-LID trace's dominant J16 type-16/type-18 MMQ pair without regressing hot routing or generic backends?
+3. Does the locally accepted IQ3_XXS J16 128-thread configuration pass fully attested natural-proxy equality and focused dispatch/resource proof, and does its older/unclassified-AMD performance risk justify keeping it service-local or upstreaming broadly?
 4. If production MTP is ever reopened, which model-level recurrent state/logit component changes after verification/checkpoint round trips even with zero accepted drafts? A focused state-hash/logit fixture is required before another server-level repair or full validator.
 5. Does HIP flash attention perform partial arbitrary-mask tile pruning? Scaling rejects complete fixed-top-k pruning, but source/counters do not yet quantify partial pruning.
 6. How are LID scores and global top-k distributed across the four meta devices at runtime?
