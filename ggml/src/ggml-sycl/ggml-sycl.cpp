@@ -5801,7 +5801,9 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
                          op->type == GGML_TYPE_Q1_0 ||
                          op->type == GGML_TYPE_Q4_1 || op->type == GGML_TYPE_Q4_0 || op->type == GGML_TYPE_IQ4_NL ||
                          op->type == GGML_TYPE_MXFP4 || op->type == GGML_TYPE_NVFP4) &&
-                        op->src[0]->type == GGML_TYPE_F32 &&
+                        (op->src[0]->type == GGML_TYPE_F32 ||
+                         (op->src[0]->type == GGML_TYPE_F16 &&
+                         (op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_F32))) &&
                         (op->src[1]->type == GGML_TYPE_I64 || op->src[1]->type == GGML_TYPE_I32));
                 return res;
             }
