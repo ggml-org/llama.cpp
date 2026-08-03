@@ -83,8 +83,9 @@ llama_expert_hotstore(const llama_model * model, int n_layers,
     // the experts that changed (stable slots; unchanged experts not re-copied).
     void resync_top_s(const llama_expert_heatmap & heatmap);
 
-    // cadence-gated wrapper: re-sync only if tokens_total crossed sync_period.
-    void maybe_resync(const llama_expert_heatmap & heatmap);
+    // cadence-gated wrapper: re-sync only if tokens_total crossed sync_period;
+    // multi_slot freezes the hot store (static slots, no swapping)
+    void maybe_resync(const llama_expert_heatmap & heatmap, bool multi_slot);
 
     // returns the GPU slot index holding expert_id in layer il, or -1 if none
     int slot_of(int layer_idx, int expert_id) const;

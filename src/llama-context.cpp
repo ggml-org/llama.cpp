@@ -1417,7 +1417,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         if (!expert_hotstore->is_filled) {
             expert_hotstore->copy_top_s(*expert_heatmap);
         } else {
-            expert_hotstore->maybe_resync(*expert_heatmap);
+            expert_hotstore->maybe_resync(*expert_heatmap, ubatch.n_tokens > 1);
             if (getenv("LLAMA_EXPERT_HITRATE")) {
                 expert_hotstore->log_hit_rate(res->moe_sel_experts);
             }

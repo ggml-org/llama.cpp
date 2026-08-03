@@ -264,8 +264,9 @@ void llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
     }
 }
 
-void llama_expert_hotstore::maybe_resync(const llama_expert_heatmap & heatmap) {
-    if (sync_period <= 0 || heatmap.tokens_total <= 0) {
+void llama_expert_hotstore::maybe_resync(const llama_expert_heatmap & heatmap, bool multi_slot) {
+    // n_tokens>1 (multi-slot) freezes the hot store: no swapping during the batch
+    if (multi_slot || sync_period <= 0 || heatmap.tokens_total <= 0) {
         return;
     }
     if (heatmap.tokens_total / sync_period > last_sync_tokens / sync_period) {
