@@ -19,7 +19,7 @@ if (CUDAToolkit_FOUND)
         # 120    == Blackwell, needs CUDA v12.8, FP4 tensor cores
         #
         # XX-virtual == compile CUDA code as PTX, do JIT compilation to binary code on first run
-        # XX-real    == compile as device code for this specific architecture
+        # XX-real    == compile CUDA code as device code for this specific architecture
         # no suffix  == compile as both PTX and device code
         #
         # The default behavior for a non-native is to build virtual architectures as needed to cover all features needed
