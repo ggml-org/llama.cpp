@@ -674,7 +674,8 @@ export class DatabaseService {
 								serverId: o.serverId,
 								enabled: o.enabled
 							}))
-						: undefined
+						: undefined,
+					workingDirectory: sourceConv.workingDirectory
 				};
 
 				await db[IDXDB_TABLES.conversations].add(newConv);

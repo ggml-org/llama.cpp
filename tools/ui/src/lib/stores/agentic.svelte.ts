@@ -22,6 +22,7 @@
 
 import { ChatService } from '$lib/services';
 import { config } from '$lib/stores/settings.svelte';
+import { conversationsStore } from '$lib/stores/conversations.svelte';
 import { mcpStore } from '$lib/stores/mcp.svelte';
 import { modelsStore } from '$lib/stores/models.svelte';
 import { toolsStore } from '$lib/stores/tools.svelte';
@@ -816,7 +817,8 @@ class AgenticStore {
 							createdToolResultMessageId = msg.id;
 
 							let accumulated = '';
-							for await (const ev of ToolsService.streamTool(toolName, args, signal)) {
+							const cwd = conversationsStore.activeConversation?.workingDirectory;
+							for await (const ev of ToolsService.streamTool(toolName, args, signal, cwd)) {
 								if (ev.chunk !== null) {
 									accumulated += ev.chunk;
 									await updateToolResultMessage(msg.id, accumulated);
@@ -835,7 +837,8 @@ class AgenticStore {
 							result = accumulated;
 						} else if (toolSource === ToolSource.BUILTIN) {
 							const args = this.parseToolArguments(toolCall.function.arguments);
-							const executionResult = await ToolsService.executeTool(toolName, args, signal);
+							const cwd = conversationsStore.activeConversation?.workingDirectory;
+							const executionResult = await ToolsService.executeTool(toolName, args, signal, cwd);
 
 							result = executionResult.content;
 

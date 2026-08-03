@@ -12,10 +12,11 @@
 		ChatMessageAssistant,
 		ChatMessageUser,
 		ChatMessageSystem,
+		ChatMessageCwdChange,
 		ChatMessageMcpPrompt
 	} from '$lib/components/app/chat';
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
-	import { deriveAgenticSections } from '$lib/utils';
+	import { deriveAgenticSections, parseCwdMessage } from '$lib/utils';
 	import type { DatabaseMessageExtraMcpPrompt } from '$lib/types';
 	import { ROUTES } from '$lib/constants/routes';
 
@@ -54,6 +55,12 @@
 		message.role === MessageRole.SYSTEM && message.content === SYSTEM_MESSAGE_PLACEHOLDER
 			? ''
 			: message.content
+	);
+
+	// Synthetic cwd-change messages render with the folder-row UI instead
+	// of a user bubble.
+	let cwdMessageInfo = $derived(
+		message.role === MessageRole.USER ? parseCwdMessage(message.content) : null
 	);
 
 	let rawEditContent = $derived.by(() => {
@@ -375,6 +382,8 @@
 			{showDeleteDialog}
 			{siblingInfo}
 		/>
+	{:else if cwdMessageInfo}
+		<ChatMessageCwdChange class={className} info={cwdMessageInfo} />
 	{:else if message.role === MessageRole.USER}
 		<ChatMessageUser
 			class={className}

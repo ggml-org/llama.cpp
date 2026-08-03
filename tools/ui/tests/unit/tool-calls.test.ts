@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { AgenticSectionType, BuiltInTool } from '$lib/enums';
 import type { AgenticSection } from '$lib/utils';
 import { parseToolArgs } from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/_shared';
+import { lastPathSegment, formatCwdMessage, parseCwdMessage } from '$lib/utils';
 import {
 	parseWriteFileMeta,
 	type WriteFileMeta
@@ -26,6 +27,74 @@ function makeSection(
 		...overrides
 	};
 }
+
+describe('lastPathSegment', () => {
+	it('returns the last segment of an absolute path', () => {
+		expect(lastPathSegment('/Users/me/code/my-project')).toBe('my-project');
+	});
+
+	it('returns the last segment of a tilde-relative path', () => {
+		expect(lastPathSegment('~/git/llama.brand')).toBe('llama.brand');
+	});
+
+	it('strips trailing slashes', () => {
+		expect(lastPathSegment('/foo/bar/')).toBe('bar');
+	});
+
+	it('strips multiple trailing slashes', () => {
+		expect(lastPathSegment('/foo/bar///')).toBe('bar');
+	});
+
+	it('returns the input unchanged when there is no slash', () => {
+		expect(lastPathSegment('project')).toBe('project');
+	});
+
+	it('returns tilde when only tilde is given', () => {
+		expect(lastPathSegment('~/')).toBe('~');
+	});
+});
+
+describe('formatCwdMessage / parseCwdMessage', () => {
+	it('formats a cwd change matching the UI text, with a file link', () => {
+		expect(formatCwdMessage('/Users/al/Documents', '/Users/al')).toBe(
+			'Set working directory to [file:///Users/al/Documents](~/Documents)'
+		);
+	});
+
+	it('falls back to the basename display when home is unknown', () => {
+		expect(formatCwdMessage('/opt/project', null)).toBe(
+			'Set working directory to [file:///opt/project](project)'
+		);
+	});
+
+	it('round-trips through the parser', () => {
+		const info = parseCwdMessage(formatCwdMessage('/Users/al/Documents', '/Users/al'));
+		expect(info?.path).toBe('/Users/al/Documents');
+		expect(info?.display).toBe('~/Documents');
+	});
+
+	it('parses the cleared marker, current and legacy', () => {
+		expect(parseCwdMessage('Working directory cleared')).toEqual({ path: null, display: '' });
+		expect(parseCwdMessage('CWD is cleared')).toEqual({ path: null, display: '' });
+	});
+
+	it('parses the legacy link format (swapped parts)', () => {
+		const info = parseCwdMessage('CWD is changed to: [~/Documents](file:///Users/al/Documents)');
+		expect(info?.path).toBe('/Users/al/Documents');
+		expect(info?.display).toBe('~/Documents');
+	});
+
+	it('parses the legacy plain-path format', () => {
+		const info = parseCwdMessage('CWD is changed to: /opt/project');
+		expect(info?.path).toBe('/opt/project');
+		expect(info?.display).toBe('/opt/project');
+	});
+
+	it('returns null for regular user messages', () => {
+		expect(parseCwdMessage('hello there')).toBeNull();
+		expect(parseCwdMessage('CWD is changed to something')).toBeNull();
+	});
+});
 
 describe('parseToolArgs (shared)', () => {
 	it('returns null when the section has no toolArgs', () => {
@@ -413,4 +482,5 @@ describe('parseExecShellCommandMeta', () => {
 			)
 		).toBeNull();
 	});
+
 });

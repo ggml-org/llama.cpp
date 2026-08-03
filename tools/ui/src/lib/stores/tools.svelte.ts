@@ -1,7 +1,7 @@
 import type { OpenAIToolDefinition, ToolEntry, ToolGroup } from '$lib/types';
 import { ToolsService } from '$lib/services/tools.service';
 import { mcpStore } from '$lib/stores/mcp.svelte';
-import { HealthCheckStatus, JsonSchemaType, ToolCallType, ToolSource } from '$lib/enums';
+import { BuiltInTool, HealthCheckStatus, JsonSchemaType, ToolCallType, ToolSource } from '$lib/enums';
 import { config } from '$lib/stores/settings.svelte';
 import {
 	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
@@ -20,6 +20,7 @@ class ToolsStore {
 	private _error = $state<string | null>(null);
 	private _disabledTools = $state(new SvelteSet<string>());
 	private _toolsEndpointUnreachable = $state(false);
+	private _serverHome = $state<string | null | undefined>(undefined);
 
 	constructor() {
 		try {
@@ -136,6 +137,10 @@ class ToolsStore {
 
 	get builtinTools(): OpenAIToolDefinition[] {
 		return this._builtinTools;
+	}
+
+	get serverHome(): string | null {
+		return this._serverHome ?? null;
 	}
 
 	get mcpTools(): OpenAIToolDefinition[] {
@@ -487,6 +492,29 @@ class ToolsStore {
 		} finally {
 			this._loading = false;
 		}
+	}
+
+	/**
+	 * Absolute home directory on the server, resolved once per session via
+	 * file_glob_search's `base` field (the server expands `~`). Anchors the
+	 * directory picker's search scope and the `~` abbreviation of cwd
+	 * displays. Returns null when tools are unavailable.
+	 */
+	async resolveServerHome(): Promise<string | null> {
+		if (this._serverHome !== undefined) return this._serverHome;
+		try {
+			const res = await ToolsService.executeToolRaw(BuiltInTool.FILE_GLOB_SEARCH, {
+				path: '~',
+				type: 'dir',
+				max_depth: 1,
+				limit: 1
+			});
+			this._serverHome = typeof res.base === 'string' ? res.base : null;
+		} catch {
+			// searches still work via a literal `~`, only `~` abbreviation degrades
+			this._serverHome = null;
+		}
+		return this._serverHome;
 	}
 }
 
