@@ -11,6 +11,8 @@ OUTPUT_DIR=${LLAMA_JOB_DIR:-${DSV4_OUTPUT_DIR:-$HOME/llama-jobs/dsv4-production-
 BASE_PORT=${DSV4_PORT:-18240}
 OUTER_TIMEOUT=${DSV4_OUTER_TIMEOUT:-unknown}
 N_PREDICT=${DSV4_N_PREDICT:-128}
+DRAFT_N_MAX=${DSV4_DRAFT_N_MAX:-3}
+HASH_MODE=${DSV4_HASH_MODE:-full}
 STARTUP_RETRIES=${DSV4_STARTUP_RETRIES:-900}
 
 fail() {
@@ -18,18 +20,19 @@ fail() {
     exit 2
 }
 
-for pair in "DSV4_PORT:$BASE_PORT" "DSV4_N_PREDICT:$N_PREDICT" "DSV4_STARTUP_RETRIES:$STARTUP_RETRIES"; do
+for pair in "DSV4_PORT:$BASE_PORT" "DSV4_N_PREDICT:$N_PREDICT" "DSV4_DRAFT_N_MAX:$DRAFT_N_MAX" "DSV4_STARTUP_RETRIES:$STARTUP_RETRIES"; do
     name=${pair%%:*}
     value=${pair#*:}
     [[ "$value" =~ ^[1-9][0-9]*$ ]] || fail "$name must be a positive integer"
 done
+[[ "$HASH_MODE" == full || "$HASH_MODE" == quick ]] || fail "DSV4_HASH_MODE must be full or quick"
 git -C "$ROOT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1 || fail "checkout not found: $ROOT_DIR"
 [[ -z $(git -C "$ROOT_DIR" status --porcelain=v1) ]] || fail "source tree must be clean"
 [[ -x "$SERVER" ]] || fail "server is not executable: $SERVER"
 [[ -f "$MODEL" ]] || fail "main model not found: $MODEL"
 [[ -f "$DRAFT_MODEL" ]] || fail "draft model not found: $DRAFT_MODEL"
 [[ -f "$CORPUS" ]] || fail "prompt corpus not found: $CORPUS"
-for tool in curl flock git python3 rocm-smi sha256sum; do
+for tool in curl flock git python3 rocm-smi sha256sum stat; do
     command -v "$tool" >/dev/null || fail "$tool is required"
 done
 
@@ -41,7 +44,12 @@ fi
 cp "${BASH_SOURCE[0]}" "$OUTPUT_DIR/production-runner.sh"
 chmod +x "$OUTPUT_DIR/production-runner.sh"
 sha256sum "$OUTPUT_DIR/production-runner.sh" > "$OUTPUT_DIR/production-runner.sha256"
-printf 'outer_timeout_seconds=%s\n' "$OUTER_TIMEOUT" > "$OUTPUT_DIR/runner-settings.txt"
+{
+    printf 'outer_timeout_seconds=%s\n' "$OUTER_TIMEOUT"
+    printf 'hash_mode=%s\n' "$HASH_MODE"
+    printf 'draft_n_max=%s\n' "$DRAFT_N_MAX"
+    printf 'cuda_graphs_disabled=%s\n' "${GGML_CUDA_DISABLE_GRAPHS+x}"
+} > "$OUTPUT_DIR/runner-settings.txt"
 if [[ -z ${LLAMA_JOB_DIR:-} ]]; then
     exec 9>"$HOME/llama-jobs/gpu.lock"
     flock -n 9 || fail "GPU job lock is held"
@@ -55,7 +63,8 @@ check_gpus_idle() {
 }
 check_gpus_idle "initial check"
 
-export DSV4_HASH_MODE=full
+export DSV4_HASH_MODE="$HASH_MODE"
+export DSV4_DRAFT_N_MAX="$DRAFT_N_MAX"
 export LD_LIBRARY_PATH="$(dirname "$SERVER")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export GGML_CUDA_ALLREDUCE=${GGML_CUDA_ALLREDUCE:-nccl}
 export GGML_CUDA_P2P=${GGML_CUDA_P2P:-1}
@@ -66,7 +75,11 @@ export HSA_NO_SCRATCH_RECLAIM=${HSA_NO_SCRATCH_RECLAIM:-1}
 export HSA_OVERRIDE_GFX_VERSION=${HSA_OVERRIDE_GFX_VERSION:-10.3.0}
 
 "$ROOT_DIR/scripts/dsv4-rocm/manifest.sh" "$OUTPUT_DIR" "$SERVER" "$MODEL"
-sha256sum "$DRAFT_MODEL" > "$OUTPUT_DIR/draft-model.sha256"
+if [[ "$HASH_MODE" == full ]]; then
+    sha256sum "$DRAFT_MODEL" > "$OUTPUT_DIR/draft-model.sha256"
+else
+    stat --printf='size=%s mtime=%y inode=%i path=%n\n' "$DRAFT_MODEL" > "$OUTPUT_DIR/draft-model.identity"
+fi
 sha256sum "$CORPUS" > "$OUTPUT_DIR/corpus.sha256"
 cp "$CORPUS" "$OUTPUT_DIR/corpus.txt"
 cat > "$OUTPUT_DIR/production-client.py" <<'PYCLIENT'
@@ -171,7 +184,7 @@ common_args=(
 draft_args=(
     --spec-draft-model "$DRAFT_MODEL"
     --spec-type draft-mtp
-    --spec-draft-n-max 3
+    --spec-draft-n-max "$DRAFT_N_MAX"
     --spec-draft-p-min 0
     --spec-draft-p-split 0.10
     --spec-draft-ngl all
@@ -193,6 +206,11 @@ run_arm() {
         for name in GGML_CUDA_ALLREDUCE GGML_CUDA_P2P GGML_HIP_GRAPHS GGML_HIP_RDNA2_MMQ_J GGML_HIP_RDNA2_HC_MIXES HSA_NO_SCRATCH_RECLAIM HSA_OVERRIDE_GFX_VERSION; do
             printf 'export %s=%q\n' "$name" "${!name}"
         done
+        if [[ -v GGML_CUDA_DISABLE_GRAPHS ]]; then
+            printf 'export GGML_CUDA_DISABLE_GRAPHS=%q\n' "$GGML_CUDA_DISABLE_GRAPHS"
+        else
+            printf 'unset GGML_CUDA_DISABLE_GRAPHS\n'
+        fi
         printf '%q ' "${command[@]}"
         printf '\n'
     } > "$arm_dir/server-command.sh"

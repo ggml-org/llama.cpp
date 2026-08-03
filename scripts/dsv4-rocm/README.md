@@ -301,6 +301,13 @@ outer timeout includes model hashing/loading; the request itself is capped at
 five minutes, so model preparation remains outside the measured PP/TG fields.
 Do not use production port 8080.
 
+Bounded diagnostics may set `DSV4_DRAFT_N_MAX=1`, `DSV4_N_PREDICT=64`, and
+`DSV4_HASH_MODE=quick` after linking back to one full-hash run. Set
+`GGML_CUDA_DISABLE_GRAPHS=1` to disable runtime HIP/CUDA graph capture; absence
+means enabled. `GGML_HIP_GRAPHS` is a build-time CMake option in this checkout,
+not a runtime off switch. Every diagnostic arm records the resolved n-max,
+hash mode, and graph-disable presence.
+
 ## Summarize existing output
 
 ```bash
