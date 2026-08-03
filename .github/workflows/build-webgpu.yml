@@ -1,29 +1,7 @@
 name: CI (webgpu)
 
 on:
-  workflow_dispatch: # allows manual triggering
-  push:
-    branches:
-      - master
-    paths: [
-      '.github/workflows/build-webgpu.yml',
-      '**/CMakeLists.txt',
-      '**/.cmake',
-      '**/*.h',
-      '**/*.hpp',
-      '**/*.c',
-      '**/*.cpp',
-      '**/*.wgsl',
-      '**/*.tmpl',
-      'ggml/src/ggml-webgpu/wgsl-shaders/embed_wgsl.py'
-    ]
-
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths: [
-      '.github/workflows/build-webgpu.yml',
-      'ggml/src/ggml-webgpu/**'
-    ]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}

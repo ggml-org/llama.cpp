@@ -1,13 +1,7 @@
 name: UI Build
 
 on:
-  workflow_call:
-    inputs:
-      hf_ui_version:
-        description: 'Version string for version.json (e.g. 12345)'
-        required: false
-        type: string
-
+  workflow_dispatch:
 jobs:
   build:
     runs-on: ubuntu-slim

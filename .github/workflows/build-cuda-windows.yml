@@ -5,9 +5,7 @@ name: CI (CUDA, windows)
 # note: running this workflow manually will populate the ccache for the release builds
 #       this can be used before merging a PR to speed up the release workflow
 on:
-  workflow_dispatch: # allows manual triggering
-
-# note: this will run in queue with the release workflow
+  workflow_dispatch:
 concurrency:
   group: release
   queue: max

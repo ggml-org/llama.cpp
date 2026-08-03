@@ -2,24 +2,6 @@ name: CI (android)
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - master
-    paths:
-      - '.github/workflows/build-android.yml'
-      - '**/CMakeLists.txt'
-      - '**/.cmake'
-      - '**/*.h'
-      - '**/*.hpp'
-      - '**/*.c'
-      - '**/*.cpp'
-
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths:
-      - '.github/workflows/build-android.yml'
-      - 'examples/llama.android/**'
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true

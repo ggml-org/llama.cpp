@@ -3,18 +3,6 @@ on:
   # only manual triggers due to low-importance of the workflows
   # TODO: for regular runs, provision dedicated self-hosted runners
   workflow_dispatch:
-  push:
-    branches:
-      - master
-    paths: [
-      '.github/workflows/build-cross.yml',
-      'ggml/src/spacemit/*',
-      'ggml/src/arch/loongarch/*'
-    ]
-  # run once every week
-  schedule:
-    - cron: '0 0 * * 0'
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true

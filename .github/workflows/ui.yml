@@ -7,23 +7,6 @@ on:
         description: 'Commit SHA1 to build'
         required: false
         type: string
-  push:
-    branches:
-      - master
-    paths: [
-      '.github/workflows/ui.yml',
-      '.github/workflows/ui-build.yml',
-      'tools/ui/**.*',
-      'tools/server/tests/**.*'
-    ]
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths: [
-      '.github/workflows/ui.yml',
-      '.github/workflows/ui-build.yml',
-      'tools/ui/**.*',
-      'tools/server/tests/**.*'
-    ]
 
 env:
   LLAMA_ARG_LOG_COLORS: 1

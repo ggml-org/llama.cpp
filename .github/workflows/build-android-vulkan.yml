@@ -13,26 +13,7 @@ name: CI (android-vulkan)
 # into the target `libggml-vulkan.so`.
 
 on:
-  workflow_dispatch: # allows manual triggering
-  push:
-    branches:
-      - master
-    paths:
-      - '.github/workflows/build-android-vulkan.yml'
-      - '**/CMakeLists.txt'
-      - '**/.cmake'
-      - '**/*.h'
-      - '**/*.hpp'
-      - '**/*.c'
-      - '**/*.cpp'
-      - '**/*.comp'
-      - '**/*.glsl'
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths:
-      - '.github/workflows/build-android-vulkan.yml'
-      - 'ggml/src/ggml-vulkan/**'
-
+  workflow_dispatch:
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true

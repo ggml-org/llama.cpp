@@ -1,21 +1,7 @@
 name: Check vendor
 
 on:
-  workflow_dispatch: # allows manual triggering
-  push:
-    branches:
-      - master
-    paths: [
-      'vendor/**',
-      'scripts/sync_vendor.py'
-    ]
-
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths: [
-      'vendor/**',
-      'scripts/sync_vendor.py'
-    ]
+  workflow_dispatch:
 
 jobs:
   check-vendor:

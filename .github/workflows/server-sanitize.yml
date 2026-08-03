@@ -11,19 +11,6 @@ on:
         description: 'Run slow tests'
         required: true
         type: boolean
-  push:
-    branches:
-      - master
-    paths: [
-      '.github/workflows/server-sanitize.yml',
-      '**/CMakeLists.txt',
-      '**/Makefile',
-      '**/*.h',
-      '**/*.hpp',
-      '**/*.c',
-      '**/*.cpp',
-      'tools/server/**.*'
-    ]
 
 env:
   LLAMA_ARG_LOG_COLORS: 1

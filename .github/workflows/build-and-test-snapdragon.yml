@@ -2,27 +2,6 @@ name: CI (snapdragon)
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - master
-    paths:
-      - '.github/workflows/build-and-test-snapdragon.yml'
-      - 'ggml/include/ggml-hexagon.h'
-      - 'ggml/src/ggml-hexagon/**'
-      - 'docs/backend/snapdragon/**'
-      - 'scripts/snapdragon/**'
-      - 'CMakePresets.json'
-
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths:
-      - '.github/workflows/build-and-test-snapdragon.yml'
-      - 'ggml/include/ggml-hexagon.h'
-      - 'ggml/src/ggml-hexagon/**'
-      - 'docs/backend/snapdragon/**'
-      - 'scripts/snapdragon/**'
-      - 'CMakePresets.json'
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true

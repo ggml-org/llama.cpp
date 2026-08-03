@@ -16,10 +16,6 @@ on:
         description: "Skip the s390x build target (useful for fast test runs that do not need the IBM Z runner)"
         type: boolean
         default: false
-  schedule:
-    # Rebuild daily rather than on every push because it is expensive
-    - cron: '12 4 * * *'
-
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true
@@ -349,38 +345,38 @@ jobs:
       - name: Export digest metadata
         shell: bash
         run: |
-            set -euo pipefail
+          set -euo pipefail
 
-            TAGS="${{ matrix.config.tag }}"
-            ARCH_SUFFIX="${{ steps.meta.outputs.arch_suffix }}"
-            DIGEST_FILE="/tmp/digests/${{ steps.meta.outputs.digest_artifact_suffix }}.tsv"
-            mkdir -p /tmp/digests
+          TAGS="${{ matrix.config.tag }}"
+          ARCH_SUFFIX="${{ steps.meta.outputs.arch_suffix }}"
+          DIGEST_FILE="/tmp/digests/${{ steps.meta.outputs.digest_artifact_suffix }}.tsv"
+          mkdir -p /tmp/digests
 
-            add_digest_rows() {
-                local image_type="$1"
-                local digest="$2"
+          add_digest_rows() {
+              local image_type="$1"
+              local digest="$2"
 
-                if [[ -z "$digest" ]]; then
-                  echo "Missing digest for image_type=${image_type}" >&2
-                  exit 1
-                fi
+              if [[ -z "$digest" ]]; then
+                echo "Missing digest for image_type=${image_type}" >&2
+                exit 1
+              fi
 
-                for tag in $TAGS; do
-                    printf '%s\t%s\t%s\t%s\n' "$tag" "$ARCH_SUFFIX" "$image_type" "$digest" >> "$DIGEST_FILE"
-                done
-            }
+              for tag in $TAGS; do
+                  printf '%s\t%s\t%s\t%s\n' "$tag" "$ARCH_SUFFIX" "$image_type" "$digest" >> "$DIGEST_FILE"
+              done
+          }
 
-            if [[ "${{ matrix.config.full }}" == "true" ]]; then
-                add_digest_rows "full" "${{ steps.build_full.outputs.digest }}"
-            fi
+          if [[ "${{ matrix.config.full }}" == "true" ]]; then
+              add_digest_rows "full" "${{ steps.build_full.outputs.digest }}"
+          fi
 
-            if [[ "${{ matrix.config.light }}" == "true" ]]; then
-                add_digest_rows "light" "${{ steps.build_light.outputs.digest }}"
-            fi
+          if [[ "${{ matrix.config.light }}" == "true" ]]; then
+              add_digest_rows "light" "${{ steps.build_light.outputs.digest }}"
+          fi
 
-            if [[ "${{ matrix.config.server }}" == "true" ]]; then
-                add_digest_rows "server" "${{ steps.build_server.outputs.digest }}"
-            fi
+          if [[ "${{ matrix.config.server }}" == "true" ]]; then
+              add_digest_rows "server" "${{ steps.build_server.outputs.digest }}"
+          fi
 
       - name: Upload digest metadata
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7

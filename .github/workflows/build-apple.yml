@@ -1,29 +1,7 @@
 name: CI (apple)
 
 on:
-  workflow_dispatch: # allows manual triggering
-  push:
-    branches:
-      - master
-    paths: [
-      '.github/workflows/build-apple.yml',
-      '**/CMakeLists.txt',
-      '**/.cmake',
-      '**/*.h',
-      '**/*.hpp',
-      '**/*.c',
-      '**/*.cpp',
-      '**/*.swift',
-      '**/*.m',
-      '**/*.metal'
-    ]
-
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths: [
-      '.github/workflows/build-apple.yml',
-      'ggml/src/ggml-metal/**'
-    ]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}

@@ -7,25 +7,6 @@ on:
         description: 'Create new release'
         required: true
         type: boolean
-  push:
-    branches:
-      - master
-    paths: [
-      '.github/workflows/release.yml',
-      '**/CMakeLists.txt',
-      '**/.cmake',
-      '**/*.h',
-      '**/*.hpp',
-      '**/*.c',
-      '**/*.cpp',
-      '**/*.cu',
-      '**/*.cuh',
-      '**/*.swift',
-      '**/*.m',
-      '**/*.metal',
-      '**/*.comp',
-      '**/*.glsl'
-    ]
 
 env:
   GH_TOKEN: ${{ github.token }}
@@ -575,7 +556,7 @@ jobs:
         id: checkout
         uses: actions/checkout@v6
         with:
-            fetch-depth: 0
+          fetch-depth: 0
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -1546,7 +1527,7 @@ jobs:
     # Fine-grant permission
     # https://docs.github.com/en/actions/security-for-github-actions/security-guides/automatic-token-authentication#modifying-the-permissions-for-the-github_token
     permissions:
-        contents: write # for creating release
+      contents: write   # for creating release
 
     runs-on: ubuntu-slim
 

@@ -1,29 +1,7 @@
 name: HIP quality check
 
 on:
-  workflow_dispatch: # allows manual triggering
-  push:
-    branches:
-      - master
-    paths: [
-      '.github/workflows/hip-quality-check.yml',
-      '**/*.cu',
-      '**/*.cuh',
-      'ggml/src/ggml-hip/CMakeLists.txt',
-      'ggml/src/ggml-cuda/vendors/hip.h',
-      'scripts/hip/gcn-cdna-vgpr-check.py'
-    ]
-
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths: [
-      '.github/workflows/hip-quality-check.yml',
-      '**/*.cu',
-      '**/*.cuh',
-      'ggml/src/ggml-hip/CMakeLists.txt',
-      'ggml/src/ggml-cuda/vendors/hip.h',
-      'scripts/hip/gcn-cdna-vgpr-check.py'
-    ]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}

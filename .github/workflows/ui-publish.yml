@@ -1,17 +1,7 @@
 name: UI Publish
 
 on:
-  workflow_call:
-    inputs:
-      version_tag:
-        description: 'Version tag to publish under (e.g., b1234)'
-        required: true
-        type: string
-    secrets:
-      hf_token:
-        description: 'Hugging Face token with write access'
-        required: true
-
+  workflow_dispatch:
 jobs:
   build:
     name: Build static output

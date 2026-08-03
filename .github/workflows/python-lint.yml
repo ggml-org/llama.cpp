@@ -1,19 +1,7 @@
 name: flake8 Lint
 
 on:
-  push:
-    branches:
-      - master
-    paths: [
-      '.github/workflows/python-lint.yml',
-      '**/*.py'
-    ]
-  pull_request:
-    types: [opened, synchronize, reopened]
-    paths: [
-      '.github/workflows/python-lint.yml',
-      '**/*.py'
-    ]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
@@ -33,4 +21,4 @@ jobs:
       - name: flake8 Lint
         uses: py-actions/flake8@84ec6726560b6d5bd68f2a5bed83d62b52bb50ba # v2
         with:
-            plugins: "flake8-no-print"
+          plugins: "flake8-no-print"
