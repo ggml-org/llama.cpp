@@ -115,6 +115,8 @@ void cpu_dump_dequant(
     const int64_t stride = tessera_debug::dequant_stride();
     const int64_t captured_rows = (rows + stride - 1) / stride;
 
+    // L1 sidecar: F32 dequantized weight. The L1 file is always F32
+    // (the dequant is exact at F32 precision).
     tessera_debug::open_dequant_writer(tensor_name, captured_rows, cols);
     int64_t out_r = 0;
     for (int64_t r = 0; r < rows; r += stride, out_r++) {
@@ -124,18 +126,59 @@ void cpu_dump_dequant(
     }
     tessera_debug::close_dequant_writer();
     // Per-row outlier counts (|x| > threshold) are now sealed in the
-    // sidecar file's per-row strip. The L3 metric and the L5 IterQuant
-    // orchestrator consume this strip via tools/tessera/l3_sidecar_v3_reader.py.
+    // L1 sidecar file's per-row strip. The L3 metric and the L5
+    // IterQuant orchestrator consume this strip via
+    // tools/tessera/l3_sidecar_v3_reader.py.
     //
     // In W4A4 mode (LLAMA_TILE640_DEBUG_DEQUANT_MODE=w4a4), the L1.5
-    // FP16-reference sidecar (.act.dequant.f32) is also written. The
-    // data is the same F32 values; a future refactor will pass the
-    // original FP16 weight to the hook so the L1.5 reference captures
-    // the actual ground-truth (vs. the dequantized quantized weight
-    // captured by L1). For now the L1 and L1.5 files are bit-identical
-    // in the data block, which makes the error metric
-    // ||FP16(l) - Q_b(l)||_F^2 / ||FP16(l)||_F^2 collapse to zero
-    // and the L5 / L6 consumers know to special-case it.
+    // FP16-reference sidecar is also written. The L1.5 reference is
+    // the F32 dequant cast to FP16 (proper rounding via
+    // ggml_fp32_to_fp16, NOT truncation). This is the FP16 ground
+    // truth: the file data block is 2 bytes/value, the header dtype
+    // is DEQUANT_DTYPE_F16, and the file suffix is `.act.dequant.f16`.
+    // The conversion is done here in the hook (not the writer) so
+    // the L1.5 metric
+    //     ||FP16(Q_b(W_l)) - FP16(W_l)||_F^2 / ||FP16(W_l)||_F^2
+    // is well-defined and non-zero whenever the kernel dequant is
+    // not bit-exact at F16 precision (the common case for any
+    // non-power-of-2 weight value).
+    if (tessera_debug::dequant_w4a4_enabled() && tessera_debug::l15_dtype_is_f16()) {
+        tessera_debug::open_fp16_reference_writer(tensor_name, captured_rows, cols);
+        out_r = 0;
+        for (int64_t r = 0; r < rows; r += stride, out_r++) {
+            // Convert F32 -> FP16 with proper rounding. The writer's
+            // write_fp16_reference_row_from_f32 helper does the same
+            // conversion internally; we use the explicit FP16 path
+            // here so the per-row timing and v3 meta strip are
+            // populated alongside the FP16 data (the helper would
+            // also work but couples conversion + write into one call).
+            const float * row = scratch + r * cols;
+            // Stack buffer for small rows, heap for large.
+            uint16_t stack_buf[256];
+            uint16_t * fp16_row;
+            std::vector<uint16_t> heap_buf;
+            if ((size_t) cols <= 256) {
+                fp16_row = stack_buf;
+            } else {
+                heap_buf.resize((size_t) cols);
+                fp16_row = heap_buf.data();
+            }
+            for (int64_t c = 0; c < cols; c++) {
+                fp16_row[c] = (uint16_t) ggml_fp32_to_fp16(row[c]);
+            }
+            tessera_debug::write_fp16_reference_row(out_r, fp16_row, cols);
+            tessera_debug::set_fp16_reference_row_meta(out_r,
+                                                       row_timing_ns[(size_t) r],
+                                                       kernel_id,
+                                                       /*dispatch_count=*/1);
+        }
+        tessera_debug::close_fp16_reference_writer();
+    }
+    // Note: the legacy F32 L1.5 path (l15_dtype=f32) is handled
+    // automatically by tessera_debug::write_dequant_row's auto-
+    // populate branch, which mirrors the F32 buffer to the L1.5
+    // sidecar when both L1 and L1.5 are open as F32. No explicit
+    // call is needed here.
 
     std::free(scratch);
 }

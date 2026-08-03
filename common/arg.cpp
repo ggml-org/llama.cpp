@@ -178,6 +178,10 @@ int common_tessera_parse_one(int argc, char ** argv, int i, std::string & err) {
         if (!require_val("--tessera-matmul-output-stride")) return -1;
         tessera_matmul_output::set_matmul_output_stride((int64_t) atoll(val.c_str())); return 2;
     }
+    if (arg == "--tessera-l15-dtype") {
+        if (!require_val("--tessera-l15-dtype")) return -1;
+        tessera_debug::set_l15_dtype(val); return 2;
+    }
 
     // integer-valued
     if (arg == "--tessera-evolve-seed") {
@@ -4154,6 +4158,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_TILE640_DEBUG_DEQUANT_STRIDE"));
     add_opt(common_arg(
+<<<<<<< HEAD
         {"--tessera-matmul-output-dir"}, "PATH",
         "Tessera: dump per-tensor matmul output (F32) to PATH as .matmul-output.f32 sidecar files. "
         "Used by the L2 forward-pass differential (tools/tessera/runtime_probe.py). "
@@ -4170,6 +4175,19 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             tessera_matmul_output::set_matmul_output_stride((int64_t) std::stoll(value));
         }
     ).set_env("LLAMA_TILE640_DEBUG_MATMUL_OUTPUT_STRIDE"));
+    add_opt(common_arg(
+        {"--tessera-l15-dtype"}, "DTYPE",
+        "Tessera: dtype of the L1.5 reference sidecar. 'f16' (default) "
+        "writes the FP16 ground truth (the whole point of L1.5 - distinct "
+        "from the F32 L1 dequant); 'f32' writes the legacy F32 reference "
+        "(preserved for back-compat with the legacy W4A4 reader). Only "
+        "takes effect when --tessera-dequant-dir is set and the W4A4 mode "
+        "is enabled (--tessera-dequant-mode=w4a4 or "
+        "LLAMA_TILE640_DEBUG_DEQUANT_MODE=w4a4).",
+        [](common_params &, const std::string & value) {
+            tessera_debug::set_l15_dtype(value);
+        }
+    ).set_env("LLAMA_TESSERA_L15_DTYPE"));
     add_opt(common_arg(
         {"--tessera-mode"}, "MODE",
         "Tessera mode: off, default, calibrate-only, evolve-only (default: default)",

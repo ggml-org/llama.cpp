@@ -110,13 +110,29 @@ namespace tessera_debug {
     static constexpr uint32_t DEQUANT_DTYPE_F16       = 1;
     static constexpr uint32_t DEQUANT_DTYPE_BF16      = 2;
 
-    // Suffixes for the two sidecar file kinds. The L1.5 reference
-    // sidecar (`.act.dequant.f32`) is written only when
-    // `LLAMA_TILE640_DEBUG_DEQUANT_MODE=w4a4` is set; the L1 dequant
-    // sidecar (`.dequant.f32`) is always written when the hook is
-    // enabled.
-    static constexpr const char * DEQUANT_FILE_SUFFIX_L1  = ".dequant.f32";
-    static constexpr const char * DEQUANT_FILE_SUFFIX_L15 = ".act.dequant.f32";
+    // Suffixes for the three sidecar file kinds:
+    //   - `.dequant.f32`         L1 dequant sidecar (always written when
+    //                             the hook is enabled).
+    //   - `.act.dequant.f32`     L1.5 reference sidecar, F32 data block
+    //                             (legacy W4A4 mode; preserved for back-compat
+    //                             with existing reader/test code).
+    //   - `.act.dequant.f16`     L1.5 reference sidecar, FP16 data block
+    //                             (default when W4A4 is enabled; the whole
+    //                             point of L1.5 is the FP16 ground truth).
+    // The W4A4 mode controls whether the L1.5 sidecar is written at all
+    // (see `set_dequant_mode` / `dequant_w4a4_enabled`); the L1.5 dtype
+    // is independent (see `set_l15_dtype` / `l15_dtype_is_f16`).
+    static constexpr const char * DEQUANT_FILE_SUFFIX_L1      = ".dequant.f32";
+    static constexpr const char * DEQUANT_FILE_SUFFIX_L15_F32 = ".act.dequant.f32";
+    static constexpr const char * DEQUANT_FILE_SUFFIX_L15_F16 = ".act.dequant.f16";
+
+    // Dtype strings for `set_l15_dtype`. The L1.5 reference is stored as
+    // FP16 by default (the whole point of L1.5 is the FP16 ground truth,
+    // distinct from the F32 L1 dequant). "f32" is the legacy W4A4
+    // behavior; kept available for back-compat with existing reader code
+    // and for users who explicitly want a higher-precision reference.
+    static constexpr const char * L15_DTYPE_F16 = "f16";
+    static constexpr const char * L15_DTYPE_F32 = "f32";
 
     // Default outlier threshold for the per-row |x| > t count. Chosen to
     // match the LLM.int8() precedent (Dettmers et al., 2022): 0.1% of
@@ -155,6 +171,23 @@ namespace tessera_debug {
 
     // Returns true iff the current mode is "w4a4" (L1.5 sidecar enabled).
     bool dequant_w4a4_enabled();
+
+    // Configure the L1.5 reference dtype. "f16" (default) writes the L1.5
+    // sidecar as FP16 ground truth (2 bytes/value, file suffix
+    // `.act.dequant.f16`); "f32" writes the legacy F32 reference (4
+    // bytes/value, suffix `.act.dequant.f32`). The choice is independent
+    // of the W4A4 mode toggle above; both are required for the L1.5 file
+    // to be written at all. Last write wins; can also be set via the
+    // `LLAMA_TESSERA_L15_DTYPE` env var at process start. No effect on an
+    // already-open sidecar file (the header is written once at open time,
+    // and the dtype is recorded in it).
+    void set_l15_dtype(const std::string & dtype);
+
+    // Returns the currently-configured L1.5 dtype (default "f16").
+    const std::string & l15_dtype();
+
+    // Convenience: true when the L1.5 dtype is FP16 (the default).
+    bool l15_dtype_is_f16();
 
     // Configure the |x| > threshold cutoff used by the per-row outlier
     // counter. The threshold is recorded in the sidecar file header so
@@ -215,17 +248,36 @@ namespace tessera_debug {
     void close_dequant_writer();
 
     // Open (or reuse) the L1.5 FP16-reference sidecar file for
-    // `tensor_name` and write its v3 header. The file is at
-    // `<dequant_dir>/<tensor_name>.act.dequant.f32`. Same shape and
-    // per-row semantics as the L1 sidecar; the data block is the F32
-    // cast of the FP16 reference. No-op unless the mode is "w4a4"
-    // (see `set_dequant_mode` and `dequant_w4a4_enabled`).
+    // `tensor_name` and write its v3 header. The file path and the
+    // on-disk dtype depend on the L1.5 dtype config (see `set_l15_dtype`):
+    //   - dtype "f16" -> `<dequant_dir>/<tensor_name>.act.dequant.f16`,
+    //     header dtype = DEQUANT_DTYPE_F16, data block is 2 bytes/value.
+    //   - dtype "f32" -> `<dequant_dir>/<tensor_name>.act.dequant.f32`,
+    //     header dtype = DEQUANT_DTYPE_F32, data block is 4 bytes/value
+    //     (legacy W4A4 behavior; preserved for back-compat).
+    // The data is the FP16 ground truth (or the F32 reference, when
+    // dtype = "f32") captured at the runtime hook. No-op unless the mode
+    // is "w4a4" (see `set_dequant_mode` and `dequant_w4a4_enabled`).
     void open_fp16_reference_writer(const char * tensor_name, int64_t rows, int64_t cols);
 
-    // Append a single row of `n` F32 values (the F32 cast of the FP16
-    // reference) to the currently-open L1.5 sidecar file. Same shape
-    // and per-row semantics as `write_dequant_row`.
-    void write_fp16_reference_row(int64_t row_idx, const float * data, int64_t n);
+    // Append a single row of `n` FP16 values to the currently-open L1.5
+    // sidecar file. The dtype must be "f16" (the default) - the call is
+    // a no-op otherwise with a warning to stderr. The backend hook is
+    // expected to convert from F32 to FP16 (via `ggml_fp32_to_fp16`,
+    // proper rounding) before calling. `n` should match the `cols`
+    // passed to `open_fp16_reference_writer`; a mismatch logs a warning
+    // and the shorter count is written.
+    void write_fp16_reference_row(int64_t row_idx, const uint16_t * data, int64_t n);
+
+    // Back-compat helper: convert `n` F32 values to FP16 (proper
+    // rounding via ggml_fp32_to_fp16) and write them as a single row of
+    // the L1.5 sidecar. Used by call sites that already hold the F32
+    // buffer and want the writer to do the conversion. The dtype must
+    // be "f16" (the default) - the call is a no-op otherwise. This
+    // convenience is the same path the legacy F32 `write_fp16_reference_row`
+    // callers used to take; the writer now converts to FP16 internally
+    // instead of writing the F32 buffer as the reference data.
+    void write_fp16_reference_row_from_f32(int64_t row_idx, const float * data, int64_t n);
 
     // Record the per-row v3 metadata for the L1.5 sidecar. Same fields
     // and semantics as `set_dequant_row_meta`.
