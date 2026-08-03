@@ -2118,7 +2118,7 @@ static common_chat_params common_chat_params_init_deepseek_v3_2(const common_cha
 
         auto content_before_tools = p.negate(p.literal(THINK_START)) +
             p.content(p.until_one_of({ TC_SEPARATOR + FC_START, FC_START })) +
-            p.optional(p.literal(TC_SEPARATOR));
+            p.space();
         return allow_reasoning_with_tc ? generation_prompt + (reasoning_with_tc | (reasoning + content_before_tools + tool_calls)) + end :
             generation_prompt + reasoning + content_before_tools + tool_calls + end;
     });
