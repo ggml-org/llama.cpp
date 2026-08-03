@@ -790,7 +790,7 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
             ggml_backend_dev_t dev = ggml_backend_buft_get_device(ggml_backend_buffer_get_type(tensor->buffer));
             const ggml_backend_meta_device_context * dev_ctx = (const ggml_backend_meta_device_context *) dev->context;
             ggml_backend_meta_split_state ret = dev_ctx->get_split_state(tensor, dev_ctx->get_split_state_ud);
-            if (ret.axis >= 0 && ret.axis <= GGML_MAX_DIMS) {
+            if (ret.axis >= 0 && ret.axis < GGML_MAX_DIMS) {
                 const int64_t granularity = ret.axis == GGML_BACKEND_SPLIT_AXIS_0 ? ggml_blck_size(tensor->type) : 1;
                 int64_t ne_sum = 0;
                 for (size_t s = 0; s < ret.n_segments; s++) {
