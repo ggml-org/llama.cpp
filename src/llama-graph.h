@@ -541,6 +541,7 @@ public:
 class llm_graph_input_dsv4 : public llm_graph_input_i {
 public:
     struct comp_input {
+        ggml_tensor * state_idxs       = nullptr; // I32 [n_state_idxs]
         ggml_tensor * state_pos        = nullptr; // I32 [n_state]
         ggml_tensor * state_persist_src_idxs = nullptr; // I32 [n_state_persist]
         ggml_tensor * state_persist_dst_idxs = nullptr; // I32 [n_state_persist]

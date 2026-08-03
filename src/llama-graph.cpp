@@ -685,13 +685,16 @@ static void dsv4_set_i64(ggml_tensor * dst, const std::vector<int64_t> & src) {
     ggml_backend_tensor_set(dst, src.data(), 0, src.size()*ggml_element_size(dst));
 }
 
-static void dsv4_set_i32(ggml_tensor * dst, const std::vector<int32_t> & src) {
-    if (!dst || !dst->buffer) {
-        return;
+static size_t dsv4_set_i32(ggml_tensor * dst, const std::vector<int32_t> & src, size_t offset) {
+    const size_t size = src.size()*sizeof(int32_t);
+
+    if (dst && dst->buffer && size > 0) {
+        GGML_ASSERT(dst->type == GGML_TYPE_I32);
+        GGML_ASSERT(offset + size <= ggml_nbytes(dst));
+        ggml_backend_tensor_set(dst, src.data(), offset, size);
     }
 
-    GGML_ASSERT(dst->ne[0] == (int64_t) src.size());
-    ggml_backend_tensor_set(dst, src.data(), 0, src.size()*ggml_element_size(dst));
+    return offset + size;
 }
 
 static void dsv4_set_kq_mask(
@@ -808,16 +811,19 @@ static void dsv4_set_comp_inputs(
         bool debug,
         uint32_t n_tokens,
         int64_t n_stream) {
-    dsv4_set_i32(inp.state_pos, plan.state_pos);
-    dsv4_set_i32(inp.state_persist_src_idxs, plan.state_persist_src_idxs);
-    dsv4_set_i32(inp.state_persist_dst_idxs, plan.state_persist_dst_idxs);
-    dsv4_set_i32(inp.state_restore_src_idxs, plan.state_restore_src_idxs);
-    dsv4_set_i32(inp.state_restore_dst_idxs, plan.state_restore_dst_idxs);
-    dsv4_set_i32(inp.state_snapshot_src_idxs, plan.state_snapshot_src_idxs);
-    dsv4_set_i32(inp.state_snapshot_dst_idxs, plan.state_snapshot_dst_idxs);
-    dsv4_set_i32(inp.state_read_idxs, plan.state_read_idxs);
+    size_t offset = 0;
+    offset = dsv4_set_i32(inp.state_idxs, plan.state_pos, offset);
+    offset = dsv4_set_i32(inp.state_idxs, plan.state_persist_src_idxs, offset);
+    offset = dsv4_set_i32(inp.state_idxs, plan.state_persist_dst_idxs, offset);
+    offset = dsv4_set_i32(inp.state_idxs, plan.state_restore_src_idxs, offset);
+    offset = dsv4_set_i32(inp.state_idxs, plan.state_restore_dst_idxs, offset);
+    offset = dsv4_set_i32(inp.state_idxs, plan.state_snapshot_src_idxs, offset);
+    offset = dsv4_set_i32(inp.state_idxs, plan.state_snapshot_dst_idxs, offset);
+    offset = dsv4_set_i32(inp.state_idxs, plan.state_read_idxs, offset);
+    offset = dsv4_set_i32(inp.state_idxs, plan.state_write_pos, offset);
+    GGML_ASSERT(offset == (inp.state_idxs ? ggml_nbytes(inp.state_idxs) : 0));
+
     dsv4_set_i64(inp.state_write_idxs, plan.state_write_idxs);
-    dsv4_set_i32(inp.state_write_pos, plan.state_write_pos);
     dsv4_set_kq_mask(inp.kq_mask, plan, n_tokens, n_stream);
 
     if (debug || dsv4_compress_debug()) {
@@ -850,12 +856,26 @@ static bool dsv4_can_reuse_kq_mask(
            t->ne[3] == n_stream;
 }
 
+static int64_t dsv4_comp_n_state_idxs(const llama_kv_cache_dsv4_context::comp_plan & plan) {
+    return (int64_t) (
+            plan.state_pos.size() +
+            plan.state_persist_src_idxs.size() +
+            plan.state_persist_dst_idxs.size() +
+            plan.state_restore_src_idxs.size() +
+            plan.state_restore_dst_idxs.size() +
+            plan.state_snapshot_src_idxs.size() +
+            plan.state_snapshot_dst_idxs.size() +
+            plan.state_read_idxs.size() +
+            plan.state_write_pos.size());
+}
+
 static bool dsv4_can_reuse_comp_input(
         const llm_graph_input_dsv4::comp_input & inp,
         const llama_kv_cache_dsv4_context::comp_plan & plan,
         uint32_t n_tokens,
         int64_t n_stream) {
     bool res = true;
+    res &= dsv4_can_reuse_tensor_1d(inp.state_idxs, dsv4_comp_n_state_idxs(plan));
     res &= dsv4_can_reuse_tensor_1d(inp.state_pos, plan.state_pos.size());
     res &= dsv4_can_reuse_tensor_1d(inp.state_persist_src_idxs, plan.state_persist_src_idxs.size());
     res &= dsv4_can_reuse_tensor_1d(inp.state_persist_dst_idxs, plan.state_persist_dst_idxs.size());
@@ -887,6 +907,22 @@ static ggml_tensor * dsv4_build_input_1d(
     return res;
 }
 
+static ggml_tensor * dsv4_build_input_view_1d(
+        ggml_context * ctx,
+        ggml_tensor  * src,
+        int64_t        ne0,
+        int64_t        offset,
+        const std::string & name) {
+    if (src == nullptr || ne0 == 0) {
+        return nullptr;
+    }
+
+    ggml_tensor * res = ggml_view_1d(ctx, src, ne0, offset*ggml_element_size(src));
+    ggml_set_name(res, name.c_str());
+
+    return res;
+}
+
 static void dsv4_build_comp_inputs(
         ggml_context * ctx,
         llm_graph_input_dsv4::comp_input & inp,
@@ -894,16 +930,36 @@ static void dsv4_build_comp_inputs(
         const char * name,
         const llama_cparams & cparams,
         int64_t n_stream) {
-    inp.state_pos = dsv4_build_input_1d(ctx, GGML_TYPE_I32, plan.state_pos.size(), std::string("dsv4_") + name + "_state_pos");
-    inp.state_persist_src_idxs = dsv4_build_input_1d(ctx, GGML_TYPE_I32, plan.state_persist_src_idxs.size(), std::string("dsv4_") + name + "_state_persist_src_idxs");
-    inp.state_persist_dst_idxs = dsv4_build_input_1d(ctx, GGML_TYPE_I32, plan.state_persist_dst_idxs.size(), std::string("dsv4_") + name + "_state_persist_dst_idxs");
-    inp.state_restore_src_idxs = dsv4_build_input_1d(ctx, GGML_TYPE_I32, plan.state_restore_src_idxs.size(), std::string("dsv4_") + name + "_state_restore_src_idxs");
-    inp.state_restore_dst_idxs = dsv4_build_input_1d(ctx, GGML_TYPE_I32, plan.state_restore_dst_idxs.size(), std::string("dsv4_") + name + "_state_restore_dst_idxs");
-    inp.state_snapshot_src_idxs = dsv4_build_input_1d(ctx, GGML_TYPE_I32, plan.state_snapshot_src_idxs.size(), std::string("dsv4_") + name + "_state_snapshot_src_idxs");
-    inp.state_snapshot_dst_idxs = dsv4_build_input_1d(ctx, GGML_TYPE_I32, plan.state_snapshot_dst_idxs.size(), std::string("dsv4_") + name + "_state_snapshot_dst_idxs");
-    inp.state_read_idxs = dsv4_build_input_1d(ctx, GGML_TYPE_I32, plan.state_read_idxs.size(), std::string("dsv4_") + name + "_state_read_idxs");
-    inp.state_write_idxs = dsv4_build_input_1d(ctx, GGML_TYPE_I64, plan.state_write_idxs.size(), std::string("dsv4_") + name + "_state_write_idxs");
-    inp.state_write_pos = dsv4_build_input_1d(ctx, GGML_TYPE_I32, plan.state_write_pos.size(), std::string("dsv4_") + name + "_state_write_pos");
+    const std::string prefix = std::string("dsv4_") + name + "_";
+
+    inp.state_idxs = dsv4_build_input_1d(ctx, GGML_TYPE_I32, dsv4_comp_n_state_idxs(plan), prefix + "state_idxs");
+    // Keep state_idxs as a direct node source so the scheduler can rotate input copies.
+    ggml_tensor * state_idxs = inp.state_idxs ? ggml_dup(ctx, inp.state_idxs) : nullptr;
+    if (state_idxs) {
+        ggml_set_name(state_idxs, (prefix + "state_idxs_cpy").c_str());
+    }
+
+    int64_t offset = 0;
+    inp.state_pos = dsv4_build_input_view_1d(ctx, state_idxs, plan.state_pos.size(), offset, prefix + "state_pos"); offset += plan.state_pos.size();
+    inp.state_persist_src_idxs = dsv4_build_input_view_1d(ctx, state_idxs, plan.state_persist_src_idxs.size(), offset, prefix + "state_persist_src_idxs");
+    offset += plan.state_persist_src_idxs.size();
+    inp.state_persist_dst_idxs = dsv4_build_input_view_1d(ctx, state_idxs, plan.state_persist_dst_idxs.size(), offset, prefix + "state_persist_dst_idxs");
+    offset += plan.state_persist_dst_idxs.size();
+    inp.state_restore_src_idxs = dsv4_build_input_view_1d(ctx, state_idxs, plan.state_restore_src_idxs.size(), offset, prefix + "state_restore_src_idxs");
+    offset += plan.state_restore_src_idxs.size();
+    inp.state_restore_dst_idxs = dsv4_build_input_view_1d(ctx, state_idxs, plan.state_restore_dst_idxs.size(), offset, prefix + "state_restore_dst_idxs");
+    offset += plan.state_restore_dst_idxs.size();
+    inp.state_snapshot_src_idxs = dsv4_build_input_view_1d(ctx, state_idxs, plan.state_snapshot_src_idxs.size(), offset, prefix + "state_snapshot_src_idxs");
+    offset += plan.state_snapshot_src_idxs.size();
+    inp.state_snapshot_dst_idxs = dsv4_build_input_view_1d(ctx, state_idxs, plan.state_snapshot_dst_idxs.size(), offset, prefix + "state_snapshot_dst_idxs");
+    offset += plan.state_snapshot_dst_idxs.size();
+    inp.state_read_idxs = dsv4_build_input_view_1d(ctx, state_idxs, plan.state_read_idxs.size(), offset, prefix + "state_read_idxs");
+    offset += plan.state_read_idxs.size();
+    inp.state_write_pos = dsv4_build_input_view_1d(ctx, state_idxs, plan.state_write_pos.size(), offset, prefix + "state_write_pos");
+    offset += plan.state_write_pos.size();
+    GGML_ASSERT(offset == dsv4_comp_n_state_idxs(plan));
+
+    inp.state_write_idxs = dsv4_build_input_1d(ctx, GGML_TYPE_I64, plan.state_write_idxs.size(), prefix + "state_write_idxs");
 
     if (plan.n_kv > 0) {
         const int64_t n_tokens = (int64_t) plan.n_visible.size();
