@@ -4199,6 +4199,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
     add_opt(common_arg(
+        {"--spec-ngram-suffix-n-min"}, "N",
+        string_format("discard drafts shorter than this for ngram-suffix speculative decoding (default: %d)", params.speculative.ngram_suffix.n_min),
+        [](common_params & params, int value) {
+            if (value < 1) {
+                throw std::invalid_argument("ngram-suffix n-min must be at least 1");
+            }
+            params.speculative.ngram_suffix.n_min = value;
+        }
+    ).set_spec().set_examples({LLAMA_EXAMPLE_SPECULATIVE, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+    add_opt(common_arg(
         {"--spec-ngram-suffix-max-factor"}, "F",
         string_format("draft up to match_len * F tokens for ngram-suffix speculative decoding (default: %.1f)", params.speculative.ngram_suffix.max_factor),
         [](common_params & params, const std::string & value) {

@@ -1822,6 +1822,11 @@ struct common_speculative_impl_ngram_suffix : public common_speculative_impl {
             common_suffix_draft draft = st.tree.speculate(
                     context, params.n_max, params.max_factor, params.min_prob);
 
+            // a short draft is unlikely to pay for its verification batch.
+            if ((int32_t) draft.tokens.size() < params.n_min) {
+                continue;
+            }
+
             *dp.result = std::move(draft.tokens);
         }
     }

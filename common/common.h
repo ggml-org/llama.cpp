@@ -370,6 +370,7 @@ struct common_params_speculative_ngram_cache {
 struct common_params_speculative_ngram_suffix {
     int32_t max_depth = 24;    // suffix-tree depth = max context-match length
     int32_t n_max     = 24;    // maximum number of drafted tokens
+    int32_t n_min     = 3;     // discard drafts shorter than this
     float   max_factor = 1.0f; // draft up to match_len * max_factor tokens
     float   min_prob   = 0.1f; // stop drafting below this frequency probability
 };
