@@ -360,18 +360,38 @@ Read-only review confirmed the arithmetic/index/tail mapping and caught a
 host-preprocessor guard that initially eliminated the candidate; the corrected
 HIP guard then proved dispatch.
 
-The corrected fast screen is unusually strong: control-midpoint latency fell
+The corrected fast screen was unusually strong: control-midpoint latency fell
 509.26→271.69 us at KV=256 (-46.65%, 1.87x) and 7,910.92→4,158.95 us at
-KV=4096 (-47.43%, 1.90x). Control drift is 0.36%/0.43%. The committed
-KV=256 CPU-reference fixture and batch-1 fallback pass, invalid env aborts, and
-247 trace events carry the distinct `lightning_indexer_kernel_vec_subwave4`
-name. Resources are 72 VGPR, 128 SGPR, 8,704 B LDS, and zero scratch. The
-source was restored and rebuilt after the temporary run. This clears the fast
-screen only: promotion still requires bitwise candidate/current outputs,
-process-level repeated A/B/A, counters, full guard/fallback review, and a
-combined-stack whole-model/corpus gate. Do not commit or deploy it on the
-aggregate timing alone. Fused top-k, reduced-precision Q, rocWMMA, and
-device-local candidate merging remain deferred.
+KV=4096 (-47.43%, 1.90x). A new deterministic graph fixture then found the
+first candidate was not yet bitwise: KV=1 differed in 91/256 values by at most
+5.96e-8 because global `-funsafe-math-optimizations` reassociated the explicit
+register tree. That attempt is excluded. A kernel-local
+`#pragma clang fp reassociate(off)` restores the intended tree without changing
+the generic kernel.
+
+Commit `7a75d8a5a` contains the opt-in guarded path and manual differential
+fixture. The authoritative artifact proves separate generic/subwave kernel
+names with rocprof and bitwise equality for KV=1/63/64/65/256/4096, graphs off
+at 256/4096, batch-1 fallback, and ineligible batch 255/257 plus KV=4097.
+Four executed generic fallback cases cover F16/F32, 32/64 heads, and 1/4
+streams. Ten process-level A/B/A cycles per shape (30 observations) give
+437.90→254.95 us at KV=256 (-41.78%, 1.72x; 0.046% control drift) and
+6,884.95→3,611.25 us at KV=4096 (-47.55%, 1.91x; -0.151% drift); every process
+has one stable output hash per shape. The production CPU-reference fixture
+passes. Candidate counters show the intended mechanism: VALU instructions per
+work-item fall 6,481→2,923 while wavefront count stays 131,072. The pragma
+raises trace-reported VGPRs to 88 and measured occupancy falls 74.135→61.505%,
+but instruction reduction dominates; SGPR 128, LDS 8,704 B, and scratch zero
+remain. Three review rounds end with no blocker/high/medium finding; the final
+fixture binds the expected path to env/shape/reference-produced headers and
+the exact validated V620, while retained kernel-name traces close dispatch
+attestation.
+
+This closes focused implementation correctness and repeatability, not whole-
+model deployment. The next gate is J16+HC-held-constant whole-model A/B plus
+fully attested corpus equality, followed by a fresh combined-stack trace.
+Fused top-k, reduced-precision Q, rocWMMA, and device-local candidate merging
+remain deferred.
 
 Mapping and screening artifacts:
 
@@ -384,7 +404,9 @@ Mapping and screening artifacts:
 - `$HOME/edwin/llama-jobs/dsv4-lid-study/20260803T201000Z-k4-217f2a271-prototype/` (discarded K4 source, correctness/fallback/invalid-env screen, A/B/A, trace resources, occupancy counters)
 - `$HOME/edwin/llama-jobs/dsv4-lid-study/20260803T202000Z-h32-217f2a271-prototype/` (discarded H32 source, retained KV=256 reference test, A/B/A, trace resources)
 - `$HOME/edwin/llama-jobs/dsv4-lid-study/20260803T204500Z-subwave4-087813f76-prototype/` (excluded: host-side `RDNA2` preprocessor condition removed the candidate; invalid env did not fail)
-- `$HOME/edwin/llama-jobs/dsv4-lid-study/20260803T205000Z-subwave4-087813f76-prototype/` (corrected temporary source, CPU-reference/fallback screen, A/B/A, distinct trace dispatch/resources, restoration proof)
+- `$HOME/edwin/llama-jobs/dsv4-lid-study/20260803T205000Z-subwave4-087813f76-prototype/` (corrected temporary source, CPU-reference/fallback fast screen, distinct trace dispatch/resources, restoration proof)
+- `$HOME/edwin/llama-jobs/dsv4-lid-study/20260803T211000Z-subwave4-validation-3276edc81/` (excluded first deterministic attempt: detected 1-ULP reassociation drift at KV=1)
+- `$HOME/edwin/llama-jobs/dsv4-lid-study/20260803T212000Z-subwave4-validation-3276edc81/` (authoritative bitwise/path/counter/repeated-process/fallback artifact; final source patch and binary hashes)
 
 Screening artifacts:
 
@@ -486,13 +508,28 @@ Artifact:
 
 - `$HOME/edwin/llama-jobs/20260803-204032-mtp-prefix-replay8-fresh-087813f76/` (`diagnostic-evidence.json` is authoritative)
 
-The next smallest diagnostic is a stateful continuation on fresh servers:
-generate the common first five tokens, then continue through the fork while
-reusing the resident slot. Compare cap-0 prefix→cap-1 continuation against
-cap-1 prefix→cap-1 continuation and a cap-0 continuation. This separates
-ordinary sequential recurrent state from state left by earlier speculative
-verification/rollback. Slot cache identity and nonzero draft activity must be
-proved; if needed, then capture target top-1/top-2 logits and margin.
+The stateful continuation diagnostic now isolates the mechanism. Three fresh
+servers generated the common first five tokens, then reused the resident slot;
+each continuation processed exactly one prompt token and ended with 2,539
+cached tokens. Cap-0 prefix→cap-0 continuation matches main. Cap-0 prefix→cap-1
+also matches main even though the continuation drafts four and accepts two.
+But cap-1 prefix (two drafted, one accepted)→cap-1 continuation reproduces the
+exact original fork and continuation:
+`[22648,14,3676,18333,14,41933,32907,38593]`. All arms emitted identical first
+five tokens. Earlier speculative verification/rollback therefore leaves a
+different DSV4 recurrent state even when visible tokens match; current-step
+verification batching alone is insufficient. This is causal bug isolation,
+not MTP acceptance or TG evidence.
+
+Artifact:
+
+- `$HOME/edwin/llama-jobs/20260803-210548-mtp-stateful-7a75d8a5a/` (`stateful-continuation/diagnostic-evidence.json`)
+
+The next MTP step is source-level recurrent-state rollback repair: identify the
+state cells/checkpoints modified by speculative prefix verification, prove
+rejected/unused target positions and draft state are removed or restored, and
+rerun this three-arm diagnostic before the full production validator. Do not
+relax token equality or tune TG first.
 
 ### M3 - implementation and matched A/B
 
@@ -538,15 +575,15 @@ A dense mask is not a sparse performance implementation. Success requires runtim
 | 2026-08-03 | Do not switch to communication-first after the local compute wins. | Fresh 16K trace assigns RCCL device work 9.84% and explicit copies 0.18%; x8 bus 46 is not the slowest by total/RCCL kernel sums. | final |
 | 2026-08-03 | Tune the LID vector kernel before considering fused selection. | Lightning indexer is 14.87% while selection is only about 0.31%; exact counters show 74.1% occupancy, 16.5% memory busy, 95.5% L2 hits, no LDS conflicts, and 6,481 VALU instructions/work-item. | selected |
 | 2026-08-03 | Reject simple LID K4/H32 tiling; do not combine or deploy it. | K4 regresses 9.2-10.5% and does not improve occupancy despite fewer VGPRs; H32 is neutral within drift and doubles LDS. Both fail the 10% local promotion gate. | final |
-| 2026-08-03 | Promote same-tree LID subwave-4 from fast screen to comprehensive validation, not deployment. | Distinct candidate dispatch is 1.87-1.90x locally with low control drift and a passing CPU-reference fixture, but bitwise current/candidate, repeated process-level A/B/A, counters, and whole-model correctness/performance remain. | selected |
-| 2026-08-03 | Do not accept production MTP yet. | Full and four-cell bounded runs prove MTP executes, but n-max 3 diverges at token 41 and n-max 1 at token 6 regardless of graph capture; timings are inconsistent across single observations. | blocked |
+| 2026-08-03 | Implement same-tree LID subwave-4 as guarded optimization three; withhold deployment until whole-model/corpus gates. | Distinct reference/candidate traces, exact outputs across tails/graphs/fallbacks, 30 process observations per shape, counters, and final review pass. Local latency falls 41.8% at KV=256 and 47.5% at KV=4096; VALU instructions fall 6,481→2,923. | accepted locally |
+| 2026-08-03 | Do not accept production MTP; repair recurrent speculative rollback before TG work. | Stateful continuation proves cap-0 prefix→cap-1 stays main while cap-1 prefix→cap-1 reproduces the exact fork despite identical visible prefix tokens. Earlier speculative history leaves different recurrent state. | blocked |
 
 ## 9. Open questions
 
 1. Does the J=16 win hold on a user-supplied production corpus? The attested engineering proxy and through-16K synthetic scaling are positive, but no user corpus exists and 32K cannot complete under the five-minute cap.
 2. Can a later expert-concentration signal select J=16/J=32/J=64 without a host synchronization? This patch intentionally stays explicit.
-3. Does the 1.9x local same-tree subwave-4 LID prototype remain bitwise equal and retain enough whole-model gain after comprehensive repeated validation to justify a guarded third patch?
-4. Does stateful cap-0-prefix versus cap-1-prefix continuation prove that earlier speculative verification/rollback leaves the recurrent state responsible for the token-6 MTP fork?
+3. How much of the accepted local 1.72-1.91x subwave-4 LID gain survives in combined J16+HC whole-model PP, and what becomes dominant in the fresh 16K trace?
+4. Which target/draft recurrent-state rollback or checkpoint operation fails to restore the cap-1 prefix state, and can a narrow fix make all three stateful arms and the full production validator token-identical?
 5. Does HIP flash attention perform partial arbitrary-mask tile pruning? Scaling rejects complete fixed-top-k pruning, but source/counters do not yet quantify partial pruning.
 6. How are LID scores and global top-k distributed across the four meta devices at runtime?
 7. RCCL kernels do not make x8 bus 46 the slowest, but what algorithm roles and actual peer bytes/bandwidth explain the per-agent RCCL asymmetry?
