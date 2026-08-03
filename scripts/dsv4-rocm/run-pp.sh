@@ -45,7 +45,8 @@ Important environment overrides:
   DSV4_TENSOR_SPLIT       slash-separated split for llama-bench (default 1/1/1/1)
   DSV4_OUTPUT_ROOT        artifact root (default $HOME/llama-jobs/dsv4-rocm-pp)
   DSV4_LABEL              safe run label
-  DSV4_PROFILE=trace      add whole-process rocprofv3 tracing; post-filter to recorded measured timestamps
+  DSV4_PROFILE=trace      full rocprofv3 runtime trace (CSV+JSON)
+  DSV4_PROFILE=kernel     compact kernel/memory-copy/RCCL trace (CSV only)
   DSV4_NO_WARMUP=1        disable llama-bench warmup (profile wrapper default only)
   DSV4_ALLOW_BUSY_GPUS=1  override safety refusal (never use for controlled A/B)
   DSV4_HASH_MODE=full     hash every GGUF shard; default records path/size/mtime only
@@ -79,7 +80,7 @@ done
 [[ "$TERM_GRACE_S" =~ ^[0-9]+$ ]] || fail "DSV4_TERM_GRACE must be a non-negative integer"
 [ "$TERM_GRACE_S" -lt "$TIMEOUT_S" ] || fail "DSV4_TERM_GRACE must be less than DSV4_TIMEOUT"
 [ "$TERM_GRACE_S" -lt "$STARTUP_TIMEOUT_S" ] || fail "DSV4_TERM_GRACE must be less than DSV4_STARTUP_TIMEOUT"
-[[ "$PROFILE" == none || "$PROFILE" == trace ]] || fail "DSV4_PROFILE must be none or trace"
+[[ "$PROFILE" == none || "$PROFILE" == trace || "$PROFILE" == kernel ]] || fail "DSV4_PROFILE must be none, trace, or kernel"
 [[ "$NO_WARMUP" == 0 || "$NO_WARMUP" == 1 ]] || fail "DSV4_NO_WARMUP must be 0 or 1"
 [[ "$ALLOW_BUSY" == 0 || "$ALLOW_BUSY" == 1 ]] || fail "DSV4_ALLOW_BUSY_GPUS must be 0 or 1"
 [ -f "$MODEL" ] || fail "model not found: $MODEL"
@@ -87,8 +88,8 @@ done
 for tool in awk date flock grep python3 readlink rocm-smi setsid sha256sum; do
     command -v "$tool" >/dev/null || fail "$tool is required"
 done
-if [[ "$PROFILE" == trace ]]; then
-    command -v rocprofv3 >/dev/null || fail "rocprofv3 is required for DSV4_PROFILE=trace"
+if [[ "$PROFILE" != none ]]; then
+    command -v rocprofv3 >/dev/null || fail "rocprofv3 is required for DSV4_PROFILE=$PROFILE"
 fi
 
 BENCH=$(readlink -f "$BENCH")
@@ -223,20 +224,24 @@ export HSA_OVERRIDE_GFX_VERSION=${HSA_OVERRIDE_GFX_VERSION:-10.3.0}
 "$ROOT_DIR/scripts/dsv4-rocm/manifest.sh" "$run_dir" "$BENCH" "$MODEL"
 
 payload_cmd=("${bench_cmd[@]}")
-if [[ "$PROFILE" == trace ]]; then
+if [[ "$PROFILE" != none ]]; then
     mkdir "$run_dir/rocprof"
-    payload_cmd=(
-        rocprofv3
+    profile_args=(
         --output-directory "$run_dir/rocprof"
         --output-file dsv4-pp
-        --output-format csv json
-        --runtime-trace
         --stats
         --summary
         --summary-per-domain
         --summary-output-file "$run_dir/rocprof-summary.txt"
-        -- "${bench_cmd[@]}"
     )
+    if [[ "$PROFILE" == trace ]]; then
+        profile_args+=(--output-format csv json --runtime-trace)
+    else
+        # Kernel dispatches dominate full-trace size. This compact mode keeps the
+        # measured-region attribution inputs without HIP API events or multi-GB JSON.
+        profile_args+=(--output-format csv --kernel-trace --memory-copy-trace --rccl-trace)
+    fi
+    payload_cmd=(rocprofv3 "${profile_args[@]}" -- "${bench_cmd[@]}")
 fi
 printf '%q ' "${payload_cmd[@]}" > "$run_dir/executed-command.sh"
 printf '\n' >> "$run_dir/executed-command.sh"

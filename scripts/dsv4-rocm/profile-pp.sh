@@ -2,7 +2,7 @@
 # One-shape rocprofv3 trace. run-pp.sh owns safety checks and artifacts.
 set -Eeuo pipefail
 ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
-export DSV4_PROFILE=trace
+export DSV4_PROFILE=${DSV4_PROFILE:-trace}
 export DSV4_NO_WARMUP=${DSV4_NO_WARMUP:-1}
 export DSV4_PROMPTS=${DSV4_PROMPTS:-8192}
 export DSV4_UBATCHES=${DSV4_UBATCHES:-256}

@@ -182,9 +182,19 @@ DSV4_PROMPTS=8192 DSV4_UBATCHES=256 DSV4_REPS=1 \
 scripts/dsv4-rocm/profile-pp.sh
 ```
 
-The profile wrapper disables llama-bench's warmup and records whole-process HIP
-runtime, kernel, memory, and RCCL trace/statistics under `rocprof/`. Model-load
-events are still present. Do **not** use whole-process summary percentages for
+For long-context attribution where full HIP API and JSON output would consume
+several GiB, use compact CSV-only tracing. It retains the kernel dispatch,
+memory-copy, and RCCL inputs required by `summarize-trace.py`:
+
+```bash
+DSV4_PROFILE=kernel DSV4_PROMPTS=16384 \
+DSV4_LABEL=kernel-trace-base-16k scripts/dsv4-rocm/profile-pp.sh
+```
+
+The profile wrapper disables llama-bench's warmup. Full `trace` mode records
+whole-process HIP runtime, kernel, memory, and RCCL CSV/JSON under `rocprof/`;
+compact `kernel` mode omits HIP API events and JSON. Model-load events are still
+present in either mode. Do **not** use whole-process summary percentages for
 optimization decisions. Filter the trace to the interval beginning at
 `measurement-start.ns` and ending at the corresponding line in
 `result-completed-at.ns`; traced throughput is not comparable to ordinary A/B
