@@ -271,8 +271,6 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
             } else {
                 const int64_t n_idx_dim = hparams.indexer_head_size;   // 128
 
-                GGML_ASSERT(!inp_attn->self_k_rot && !inp_attn->self_v_rot && "MSA: attn-rot not supported");
-
                 // Index Branch, project, norm, partial RoPE, cache
                 ggml_tensor * iq = build_lora_mm(model.layers[il].index_q_proj, cur);
                 ggml_tensor * ik = build_lora_mm(model.layers[il].index_k_proj, cur);
@@ -288,6 +286,14 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                 const auto * mctx_cur = inp_attn->mctx;
                 ggml_build_forward_expand(gf, mctx_cur->cpy_k_idx(ctx0, ik, inp_attn->get_k_idxs(), il));
                 ggml_tensor * ik_kv = mctx_cur->get_k_idx(ctx0, il);
+
+                if (inp_attn->self_k_rot) {
+                    Qcur = llama_mul_mat_hadamard(ctx0, Qcur, inp_attn->self_k_rot);
+                    Kcur = llama_mul_mat_hadamard(ctx0, Kcur, inp_attn->self_k_rot);
+                }
+                if (inp_attn->self_v_rot) {
+                    Vcur = llama_mul_mat_hadamard(ctx0, Vcur, inp_attn->self_v_rot);
+                }
 
                 // Main branch: store K/V, take cache views
                 ggml_build_forward_expand(gf, Qcur);
@@ -431,7 +437,9 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_
                         cur = ggml_concat(ctx0, cur, outs[st], 1);
                     }
                 }
-
+                if (inp_attn->self_v_rot) {
+                    cur = llama_mul_mat_hadamard(ctx0, cur, inp_attn->self_v_rot);
+                }
                 cb(cur, "kqv_out", il);
                 if (model.layers[il].wo) {
                     cur = build_lora_mm(model.layers[il].wo, cur, model.layers[il].wo_s);
