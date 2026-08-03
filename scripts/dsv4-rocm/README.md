@@ -181,7 +181,8 @@ variables before applying each arm, and records the resolved controls in both
 self-contained command files and `effective-settings.sh`.
 
 It holds the shared GPU lock, refuses active ROCm processes, rechecks before
-each variant, reads the exact UTF-8 prompt bytes through `DSV4_PROMPT_FILE`,
+each variant, pins server batch/ubatch to 512/256 by default, and reads the
+exact UTF-8 prompt bytes through `DSV4_PROMPT_FILE`,
 and requires full hashes of all model shards. The artifact includes clean
 source identity, executable and resolved llama/ggml DSO hashes, exact exported
 settings and base/candidate command files, ROCm/hardware details, all response

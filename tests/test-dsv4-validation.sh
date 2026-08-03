@@ -21,6 +21,8 @@ Environment overrides:
   DSV4_DRAFT_N_MAX          optional speculative draft token count
   DSV4_PORT               first localhost port (default: 18080)
   DSV4_CTX_SIZE           context size (default: 4096)
+  DSV4_BATCH_SIZE         logical batch size (default: 512)
+  DSV4_UBATCH_SIZE        physical batch size (default: 256)
   DSV4_N_PREDICT          generated tokens per request (default: 8)
   DSV4_CACHE_REUSE        minimum cache-reuse chunk (default: 16)
   DSV4_PROMPT_FILE        UTF-8 prompt file; mutually exclusive with DSV4_PROMPT
@@ -42,11 +44,19 @@ FLASH_ATTN=${DSV4_FLASH_ATTN:-auto}
 PARALLEL=${DSV4_PARALLEL:-1}
 BASE_PORT=${DSV4_PORT:-18080}
 CTX_SIZE=${DSV4_CTX_SIZE:-4096}
+BATCH_SIZE=${DSV4_BATCH_SIZE:-512}
+UBATCH_SIZE=${DSV4_UBATCH_SIZE:-256}
 N_PREDICT=${DSV4_N_PREDICT:-8}
 CACHE_REUSE=${DSV4_CACHE_REUSE:-16}
 DRAFT_MODEL=${DSV4_DRAFT_MODEL:-}
 SPEC_TYPE=${DSV4_SPEC_TYPE:-}
 DRAFT_N_MAX=${DSV4_DRAFT_N_MAX:-}
+for pair in "DSV4_BATCH_SIZE:$BATCH_SIZE" "DSV4_UBATCH_SIZE:$UBATCH_SIZE"; do
+    name=${pair%%:*}
+    value=${pair#*:}
+    [[ "$value" =~ ^[1-9][0-9]*$ ]] || { echo "error: $name must be a positive integer" >&2; exit 2; }
+done
+(( UBATCH_SIZE <= BATCH_SIZE )) || { echo "error: DSV4_UBATCH_SIZE must not exceed DSV4_BATCH_SIZE" >&2; exit 2; }
 case "$FLASH_ATTN" in
     on|off|auto) ;;
     *) echo "error: DSV4_FLASH_ATTN must be on, off, or auto (got '$FLASH_ATTN')" >&2; exit 2 ;;
@@ -110,7 +120,7 @@ request() {
 run_mode() {
     local mode=$1 label=$2 port=$3 out_dir="$TMP_ROOT/$2" server_log="$TMP_ROOT/$2/server.log"
     mkdir -p "$out_dir"
-    echo "[$label] split-mode=$mode tensor-split=$TENSOR_SPLIT flash-attn=$FLASH_ATTN parallel=$PARALLEL"
+    echo "[$label] split-mode=$mode tensor-split=$TENSOR_SPLIT flash-attn=$FLASH_ATTN batch=$BATCH_SIZE ubatch=$UBATCH_SIZE parallel=$PARALLEL"
 
     local -a draft_args=()
     if [[ -n "$DRAFT_MODEL" ]]; then
@@ -126,6 +136,8 @@ run_mode() {
         --host 127.0.0.1 \
         --port "$port" \
         --ctx-size "$CTX_SIZE" \
+        --batch-size "$BATCH_SIZE" \
+        --ubatch-size "$UBATCH_SIZE" \
         --parallel "$PARALLEL" \
         --seed 123 \
         --temp 0 \

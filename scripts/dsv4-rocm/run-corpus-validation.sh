@@ -9,6 +9,8 @@ CORPUS=${DSV4_PROMPT_FILE:-$ROOT_DIR/scripts/dsv4-rocm/corpus/technical-proxy.tx
 OUTPUT_ROOT=${DSV4_OUTPUT_ROOT:-$HOME/llama-jobs/dsv4-corpus-validation}
 BASE_PORT=${DSV4_PORT:-18180}
 CTX_SIZE=${DSV4_CTX_SIZE:-8192}
+BATCH_SIZE=${DSV4_BATCH_SIZE:-512}
+UBATCH_SIZE=${DSV4_UBATCH_SIZE:-256}
 N_PREDICT=${DSV4_N_PREDICT:-4}
 CACHE_REUSE=${DSV4_CACHE_REUSE:-16}
 TENSOR_SPLIT=${DSV4_TENSOR_SPLIT:-1,1,1,1}
@@ -28,13 +30,14 @@ fail() {
     exit 2
 }
 
-for pair in "DSV4_PORT:$BASE_PORT" "DSV4_CTX_SIZE:$CTX_SIZE" "DSV4_N_PREDICT:$N_PREDICT" \
-            "DSV4_CACHE_REUSE:$CACHE_REUSE" "DSV4_STARTUP_RETRIES:$STARTUP_RETRIES" \
+for pair in "DSV4_PORT:$BASE_PORT" "DSV4_CTX_SIZE:$CTX_SIZE" "DSV4_BATCH_SIZE:$BATCH_SIZE" \
+            "DSV4_UBATCH_SIZE:$UBATCH_SIZE" "DSV4_N_PREDICT:$N_PREDICT" "DSV4_CACHE_REUSE:$CACHE_REUSE" "DSV4_STARTUP_RETRIES:$STARTUP_RETRIES" \
             "DSV4_REQUEST_TIMEOUT:$REQUEST_TIMEOUT"; do
     name=${pair%%:*}
     value=${pair#*:}
     [[ "$value" =~ ^[1-9][0-9]*$ ]] || fail "$name must be a positive integer"
 done
+(( UBATCH_SIZE <= BATCH_SIZE )) || fail "DSV4_UBATCH_SIZE must not exceed DSV4_BATCH_SIZE"
 [[ "$ALLOW_BUSY" == 0 || "$ALLOW_BUSY" == 1 ]] || fail "DSV4_ALLOW_BUSY_GPUS must be 0 or 1"
 for pair in "DSV4_BASE_MMQ_J:$BASE_MMQ_J" "DSV4_CANDIDATE_MMQ_J:$CANDIDATE_MMQ_J"; do
     name=${pair%%:*}
@@ -103,6 +106,8 @@ export DSV4_MODEL="$MODEL"
 export DSV4_SERVER="$SERVER"
 export DSV4_PROMPT_FILE="$CORPUS"
 export DSV4_CTX_SIZE="$CTX_SIZE"
+export DSV4_BATCH_SIZE="$BATCH_SIZE"
+export DSV4_UBATCH_SIZE="$UBATCH_SIZE"
 export DSV4_N_PREDICT="$N_PREDICT"
 export DSV4_CACHE_REUSE="$CACHE_REUSE"
 export DSV4_TENSOR_SPLIT="$TENSOR_SPLIT"
@@ -129,6 +134,8 @@ unset GGML_HIP_RDNA2_MMQ_J GGML_HIP_RDNA2_HC_MIXES
     printf 'export DSV4_SERVER=%q\n' "$DSV4_SERVER"
     printf 'export DSV4_PROMPT_FILE=%q\n' "$DSV4_PROMPT_FILE"
     printf 'export DSV4_CTX_SIZE=%q\n' "$DSV4_CTX_SIZE"
+    printf 'export DSV4_BATCH_SIZE=%q\n' "$DSV4_BATCH_SIZE"
+    printf 'export DSV4_UBATCH_SIZE=%q\n' "$DSV4_UBATCH_SIZE"
     printf 'export DSV4_N_PREDICT=%q\n' "$DSV4_N_PREDICT"
     printf 'export DSV4_CACHE_REUSE=%q\n' "$DSV4_CACHE_REUSE"
     printf 'export DSV4_TENSOR_SPLIT=%q\n' "$DSV4_TENSOR_SPLIT"
