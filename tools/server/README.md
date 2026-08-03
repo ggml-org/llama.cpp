@@ -204,6 +204,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `-ag, --agent, -no-ag, --no-agent` | whether to enable CORS proxy and all built-in tools - do not enable in untrusted environments (default: disabled)<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_AGENT) |
 | `--ui, --webui, --no-ui, --no-webui` | whether to enable the Web UI (default: enabled)<br/>(env: LLAMA_ARG_UI) |
 | `--embedding, --embeddings` | restrict to only support embedding use case; use only with dedicated embedding models (default: disabled)<br/>(env: LLAMA_ARG_EMBEDDINGS) |
+| `--vla-model FILE` | path to a VLA control model GGUF file; enables `POST /v1/vla/predictions`<br/>(env: LLAMA_ARG_VLA_MODEL) |
 | `--rerank, --reranking` | enable reranking endpoint on server (default: disabled)<br/>(env: LLAMA_ARG_RERANKING) |
 | `--api-key KEY` | API key to use for authentication, multiple keys can be provided as a comma-separated list (default: none)<br/>(env: LLAMA_API_KEY) |
 | `--api-key-file FNAME` | path to file containing API keys, one per line; lines starting with a hash are treated as comments (default: none)<br/>(env: LLAMA_ARG_API_KEY_FILE) |
@@ -1432,6 +1433,31 @@ curl http://localhost:8080/v1/responses \
 
 This endpoint works by converting Responses request into Chat Completions request.
 
+
+### POST `/v1/vla/predictions`: VLA control prediction
+
+Requires a server built with `LLAMA_BUILD_VLA=ON` and started with
+`--vla-model FILE`. The request accepts one `input` or `content` value in the
+same text and multimodal formats as the embeddings endpoints, plus:
+
+- `state`: required flat numeric array
+- `noise`: optional flat or two-dimensional numeric array
+- `embodiment_id`: optional integer, default `0`
+
+```sh
+curl http://localhost:8080/v1/vla/predictions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": "move to the target",
+    "state": [0.0, 0.0],
+    "embodiment_id": 0
+  }'
+```
+
+The state and optional noise sizes are model-defined and reported by
+`GET /props` under `vla`. The response has `object: "vla.prediction"`, a
+two-dimensional `controls` array, control dimensions, evaluated token count,
+and prediction timing. Hidden states are never returned.
 
 ### POST `/v1/embeddings`: OpenAI-compatible embeddings API
 

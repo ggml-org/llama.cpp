@@ -17,6 +17,7 @@ enum server_task_type {
     SERVER_TASK_TYPE_COMPLETION,
     SERVER_TASK_TYPE_EMBEDDING,
     SERVER_TASK_TYPE_RERANK,
+    SERVER_TASK_TYPE_VLA_PREDICTION,
     SERVER_TASK_TYPE_INFILL,
     SERVER_TASK_TYPE_CANCEL,
     SERVER_TASK_TYPE_CONTROL,
@@ -96,6 +97,11 @@ struct task_params {
 
     // Embeddings
     int32_t embd_normalize = 2; // (-1=none, 0=max absolute int16, 1=taxicab, 2=Euclidean/L2, >2=p-norm)
+
+    // VLA prediction
+    std::vector<float> vla_state;
+    std::vector<float> vla_noise;
+    int32_t vla_embodiment_id = 0;
 
     json format_logit_bias(const std::vector<llama_logit_bias> & logit_bias) const;
     json to_json(bool only_metrics = false) const;
@@ -187,6 +193,7 @@ struct server_task {
         switch (type) {
             case SERVER_TASK_TYPE_EMBEDDING:
             case SERVER_TASK_TYPE_RERANK:
+            case SERVER_TASK_TYPE_VLA_PREDICTION:
                 return true;
             default:
                 return false;
@@ -484,6 +491,18 @@ struct server_task_result_embd : server_task_result {
     json to_json_non_oaicompat();
 
     json to_json_oaicompat();
+};
+
+struct server_task_result_vla : server_task_result {
+    std::vector<float> controls;
+    int32_t control_dim = 0;
+    int32_t control_horizon = 0;
+    int32_t n_tokens = 0;
+    double prediction_ms = 0.0;
+    std::string model;
+    std::string model_type;
+
+    virtual json to_json() override;
 };
 
 struct server_task_result_rerank : server_task_result {

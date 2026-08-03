@@ -93,6 +93,14 @@ MTMD_API int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
 
 typedef int32_t (*mtmd_helper_post_decode_callback)(struct llama_batch batch, void * user_data);
 
+struct mtmd_helper_decode_params {
+    bool output_all;
+    mtmd_helper_post_decode_callback callback;
+    void * callback_user_data;
+};
+
+MTMD_API struct mtmd_helper_decode_params mtmd_helper_decode_params_default(void);
+
 // helper function to decode an image whose embeddings have already been calculated
 // this helper will handle batching and pre/post decoding setup (for ex. gemma 3 requires non-causal attention)
 // ret 0 on success, -1 on chunk not being a valid image chunk, 1 on decode failure
@@ -106,6 +114,18 @@ MTMD_API int32_t mtmd_helper_decode_image_chunk(mtmd_context * ctx,
                                                 llama_pos * new_n_past,
                                                 mtmd_helper_post_decode_callback callback,
                                                 void * user_data);
+
+// Extended variant. Set output_all to request per-token model outputs for all
+// media tokens, for example to read them with llama_get_embeddings_ith().
+MTMD_API int32_t mtmd_helper_decode_image_chunk_ex(mtmd_context * ctx,
+                                                   struct llama_context * lctx,
+                                                   const mtmd_input_chunk * chunk,
+                                                   float * encoded_embd,
+                                                   llama_pos n_past,
+                                                   llama_seq_id seq_id,
+                                                   int32_t n_batch,
+                                                   llama_pos * new_n_past,
+                                                   struct mtmd_helper_decode_params params);
 
 //
 // video input helpers (requires ffmpeg/ffprobe installed on the system)

@@ -2537,6 +2537,15 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples(mmproj_examples).set_env("LLAMA_ARG_MMPROJ_URL"));
     add_opt(common_arg(
+        {"--vla-model"}, "FILE",
+        "path to a VLA control model GGUF file; enables POST /v1/vla/predictions",
+        [](common_params & params, const std::string & value) {
+            params.vla_model_path = value;
+            params.embedding = true;
+            params.pooling_type = LLAMA_POOLING_TYPE_NONE;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_VLA_MODEL"));
+    add_opt(common_arg(
         {"--mmproj-auto"},
         {"--no-mmproj", "--no-mmproj-auto"},
         string_format("whether to use multimodal projector file (if available), useful when using -hf (default: %s)", params.no_mmproj ? "disabled" : "enabled"),
