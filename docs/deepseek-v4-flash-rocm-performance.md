@@ -284,9 +284,48 @@ With `GGML_HIP_RDNA2_MMQ_J=16` fixed in all arms, bracketed whole-model PP
 improved from control midpoints 414.468/409.075/325.116 t/s to
 501.063/494.149/389.632 t/s at 512/2K/8K: +20.9%/+20.8%/+19.8% from the
 second optimization alone. The combined gain over the earlier no-J16 default
-control midpoint is approximately +36%/+35%/+33%. A new natural-text
-base/candidate gate with J16 in both arms remains required before this second
-control is accepted for deployment.
+control midpoint is approximately +36%/+35%/+33%.
+
+The deployment gate is now complete. Commits `4dd19713f` and `56dd4177e`
+parameterize the attested arms and pin the validation server to batch/ubatch
+512/256; without the explicit physical batch, llama-server's default ubatch
+512 would only exercise the generic HC fallback. At clean commit `56dd4177e`,
+the fully hashed J16-only versus J16+HC run matched all six natural-text proxy
+responses in content, token IDs, prompt bytes, counts, continuation, replay,
+and KV reuse. Its single first-prompt observations were 326.653→370.314 t/s
+(+13.37%) in tensor mode and 208.128→222.924 (+7.11%) in layer-reference mode.
+These remain correctness/dispatch-sanity observations rather than statistical
+speed evidence; bracketed llama-bench is the throughput evidence.
+
+A fresh combined-stack compact trace at 16K confirms dispatch and sets the
+third-phase direction. Its 59.514-second measured region contains 1,793,356
+kernel events and 140.528 summed device-seconds. Name-matched `mul_mat_q`
+remains 40.19%; the custom HC kernel is 10.28%, lightning indexer is 14.87%,
+RCCL device work is 9.84%, and explicit flash attention is 9.40%. The old
+rocBLAS HC family has zero calls; the custom kernel has the expected 22,016
+calls and 14.445 device-seconds versus 48.981 seconds for the old Cijk in the
+prior 16K trace, a trace-local 3.39x reduction. LID plus its separate top-k
+kernel families is approximately 15.2%, just crossing the M1 threshold after
+the first two compute improvements. Because raw LID scanning dominates its
+small selection overhead and scales rapidly, the next evidence-backed local
+phase is LID vector-kernel/fused-selection investigation, not communication
+first. Name-matched MMQ remains the largest family and stays in the roadmap;
+any further J-width automation must handle routing skew.
+
+Per-agent analysis maps KFD agents through `agent_info.csv` to PCI BDF. Summed
+all-kernel duration ranges only 34.016–35.772 seconds; the x8 device at
+`0000:46:00.0` is 35.385 seconds and is not the slowest. RCCL sums are
+3.670/3.355/5.232/1.568 seconds for buses 43/46/23/03 respectively, so role or
+algorithm asymmetry persists but does not single out the x8 link. H2D duration
+to bus 46 is 34.137 ms versus 23.722–25.258 ms for the others, but all measured
+copy events total only 108.966 ms (0.18% wall), and the trace exposes no direct
+D2D copy events for RCCL. These data reject communication-first under the 20%
+rule; they do not measure bytes or prove PCIe bandwidth causality.
+
+The flash-attention mean grows from 869.8 us/call at 8K to 1,200.1 us/call at
+16K while call count doubles. Together with dense operands in the graph, this
+is inconsistent with complete fixed-top-k arbitrary-mask tile pruning, though
+it does not exclude partial pruning; CSA remains a later long-context phase.
 
 Mapping and screening artifacts:
 
@@ -294,6 +333,7 @@ Mapping and screening artifacts:
 - `$HOME/edwin/llama-jobs/dsv4-rocm-pp/20260803T175022.376406151Z-trace-map-cijk-256-ec1b7e64c2cc-24970/` (single-microbatch trace)
 - `$HOME/edwin/llama-jobs/dsv4-hc-mixes-sweep/20260803T181014Z-1d6a42983-prototype/` (tile sweep, correctness, fallback, graph, and dispatch proof)
 - `$HOME/edwin/llama-jobs/dsv4-hc-mixes-sweep/20260803T182030Z-560635e3b-whole-model/` (J16-held-constant whole-model A/B)
+- `$HOME/edwin/llama-jobs/dsv4-rocm-pp/20260803T191856.045376424Z-kernel-trace-j16-hc-16k-52e0121043ad-23195/` (combined-stack 16K compact trace, aggregate and per-agent measured-region summaries)
 
 Screening artifacts:
 
@@ -329,7 +369,9 @@ llama-bench runs remain the throughput evidence.
 
 Artifacts:
 
-- `$HOME/llama-jobs/dsv4-corpus-validation/20260803T173909.127798287Z-attested-ec1b7e64c2cc-6101/` (acceptance artifact)
+- `$HOME/llama-jobs/dsv4-corpus-validation/20260803T173909.127798287Z-attested-ec1b7e64c2cc-6101/` (J-width acceptance artifact)
+- `$HOME/edwin/llama-jobs/dsv4-corpus-validation/20260803T190100.516971835Z-attested-56dd4177e501-15597/` (J16-only versus J16+HC acceptance artifact; full hashes, batch/ubatch 512/256, `complete=1`)
+- `$HOME/edwin/llama-jobs/dsv4-corpus-validation/20260803T184944.079084014Z-attested-56dd4177e501-25863/` (excluded interrupted attempt: all responses exist and match, but no final status/comparison artifact and `candidate.rc=120`)
 - `$HOME/llama-jobs/dsv4-corpus-validation/20260803T165136Z-88c415d91/` (superseded pre-normalization artifact)
 
 ### M3 - implementation and matched A/B
@@ -371,17 +413,19 @@ A dense mask is not a sparse performance implementation. Success requires runtim
 | 2026-08-03 | Trace whole process but apply attribution thresholds only after filtering to recorded measured-run timestamps. | Independent review found model load would bias whole-process totals. | final |
 | 2026-08-03 | Select routed MMQ as M1 rather than CSA/LID/communication. | Measured-region trace assigns about 40% of summed kernel time to `mul_mat_q`; RCCL is 8%, LID 6.3%, explicit flash attention 5.6%, and measured H2D only 47 ms. | final |
 | 2026-08-03 | Keep J=16 explicit for the known DSV4 IQ2_M service; do not make it a generic RDNA2 default. | Bracketed synthetic PP gains 10.0-11.7% and the attested 2,527-token natural proxy gains 5.26% in tensor mode, but hot-routing microbench regresses with J=16. | final |
-| 2026-08-03 | Select the M=24,N=256,K=16384 F32 `hc_mixes` GEMM as optimization two. | Exact rocBLAS dimensions/call count map the 26.43-28.44% Cijk kernel to two `build_hc_pre` calls in each of 43 layers on four GPUs; explicit CSA is 7.06% and LID is 11.11% at 16K. | implemented, corpus gate pending |
-| 2026-08-03 | Keep the skinny hc-mixer path explicit and exact-shape while screening. | Custom 12x16x256 kernel is bit-identical and 3.83x faster locally; J16-held-constant PP gains 19.8-20.9%, while all near-shapes retain rocBLAS/generic fallback. | provisional |
+| 2026-08-03 | Select the M=24,N=256,K=16384 F32 `hc_mixes` GEMM as optimization two. | Exact rocBLAS dimensions/call count map the 26.43-28.44% Cijk kernel to two `build_hc_pre` calls in each of 43 layers on four GPUs; explicit CSA is 7.06% and LID is 11.11% at 16K. | accepted |
+| 2026-08-03 | Keep the skinny hc-mixer path explicit and exact-shape for the known service. | Custom 12x16x256 kernel is bit-identical and 3.83x faster locally; J16-held-constant PP gains 19.8-20.9%; the fully attested 256-ubatch corpus gate matches all responses; all near-shapes retain rocBLAS/generic fallback. | final |
+| 2026-08-03 | Do not switch to communication-first after the local compute wins. | Fresh 16K trace assigns RCCL device work 9.84% and explicit copies 0.18%; x8 bus 46 is not the slowest by total/RCCL kernel sums. | final |
+| 2026-08-03 | Investigate LID vector/fused selection as optimization phase three. | Lightning indexer is 14.87% and LID plus separate top-k name families is about 15.2% at 16K, up from 6.30% at 8K; MMQ remains 40.19% but has already received its first routing-sensitive optimization. | provisional |
 
 ## 9. Open questions
 
-1. Does the J=16 win hold on a user-supplied production corpus? The attested engineering proxy and through-16K synthetic scaling are positive, but 32K cannot complete under the five-minute cap.
+1. Does the J=16 win hold on a user-supplied production corpus? The attested engineering proxy and through-16K synthetic scaling are positive, but no user corpus exists and 32K cannot complete under the five-minute cap.
 2. Can a later expert-concentration signal select J=16/J=32/J=64 without a host synchronization? This patch intentionally stays explicit.
-3. After the 3.83x local `hc_mixes` and ~20% PP win, does a fresh measured-region trace show RCCL or routed MMQ as the next limiter?
-4. Does HIP flash attention perform any arbitrary-mask tile pruning? Source and counters must answer before a later CSA patch.
+3. Which part of the HIP LID vector kernel (K dequantization, 64-head dot products, reduction, or score write) is limiting, and can score production be fused with local top-k without breaking global-index/tie semantics?
+4. Does HIP flash attention perform partial arbitrary-mask tile pruning? Scaling rejects complete fixed-top-k pruning, but source/counters do not yet quantify partial pruning.
 5. How are LID scores and global top-k distributed across the four meta devices at runtime?
-6. Are peer copies direct and what bandwidth does GPU3's x8 path achieve?
+6. RCCL kernels do not make x8 bus 46 the slowest, but what algorithm roles and actual peer bytes/bandwidth explain the per-agent RCCL asymmetry?
 7. Which short-prompt/long-context mix and fixed corpus best represent the user's production workload?
 
 ## 10. Reproduction record
@@ -403,6 +447,44 @@ GGML_HIP_RDNA2_MMQ_J=16 \
 DSV4_LABEL=mmq-j16-8k DSV4_PROMPTS=8192 DSV4_UBATCHES=256 \
 DSV4_REPS=2 DSV4_TIMEOUT=300 scripts/dsv4-rocm/run-pp.sh
 ```
+
+Current combined-stack correctness and profile commands, rerunnable from a
+fresh shell at clean commit `52e012104` (the validation code is unchanged from
+the acceptance build at `56dd4177e`):
+
+```bash
+cd /home/edwin/llama.cpp-rdna2
+cmake --build build --target llama-server llama-bench -j 12
+
+DSV4_BASE_MMQ_J=16 DSV4_CANDIDATE_MMQ_J=16 \
+DSV4_BASE_HC_MIXES=0 DSV4_CANDIDATE_HC_MIXES=1 \
+DSV4_BATCH_SIZE=512 DSV4_UBATCH_SIZE=256 DSV4_HASH_MODE=full \
+scripts/dsv4-rocm/run-corpus-validation.sh
+
+trace_log=$(mktemp)
+HSA_OVERRIDE_GFX_VERSION=10.3.0 HSA_NO_SCRATCH_RECLAIM=1 \
+GGML_HIP_GRAPHS=1 GGML_CUDA_ALLREDUCE=nccl GGML_CUDA_P2P=1 \
+GGML_HIP_RDNA2_MMQ_J=16 GGML_HIP_RDNA2_HC_MIXES=1 \
+DSV4_PROFILE=kernel DSV4_LABEL=kernel-trace-j16-hc-16k \
+DSV4_PROMPTS=16384 DSV4_UBATCHES=256 DSV4_BATCH=512 \
+DSV4_REPS=1 DSV4_TIMEOUT=300 \
+scripts/dsv4-rocm/profile-pp.sh | tee "$trace_log"
+run_dir=$(awk -F= '$1 == "run_dir" { print $2 }' "$trace_log" | tail -1)
+test -n "$run_dir"
+scripts/dsv4-rocm/summarize-trace.py "$run_dir" --top 40 \
+  --json "$run_dir/measured-region-summary.json" \
+  | tee "$run_dir/measured-region-summary.txt"
+scripts/dsv4-rocm/analyze-trace-agents.py "$run_dir" \
+  --json "$run_dir/measured-region-agents.json" \
+  | tee "$run_dir/measured-region-agents.txt"
+```
+
+Accepted artifacts are
+`$HOME/edwin/llama-jobs/dsv4-corpus-validation/20260803T190100.516971835Z-attested-56dd4177e501-15597/`
+and
+`$HOME/edwin/llama-jobs/dsv4-rocm-pp/20260803T191856.045376424Z-kernel-trace-j16-hc-16k-52e0121043ad-23195/`.
+These commands are a phase checkpoint, not the project's final completion
+command; production-MTP and the selected LID phase remain.
 
 Planned final record:
 
