@@ -338,8 +338,19 @@ __kernel void flash_attn_f32_q8_0_q1(
 inline float4 dequant_q8_0_lane(const global char * block_ptr, int lane) {
     const float d = vload_half(0, (const global half *)block_ptr);
     const global char * qs = block_ptr + 2 + lane * 4;
+    // Keep the scalar char loads: a vload4/convert_float4 form measured
+    // -1.6..-2.8% tg on the X2-90 (DX.50.39) - the compiler does better here
+    // than the explicit vector load.
     return d * (float4)((float)qs[0], (float)qs[1], (float)qs[2], (float)qs[3]);
 }
+
+// dp4a QK dot for the decode (q1) kernels: staged Q rows are requantized to
+// packed int8 once per WG (same requantization as the q1_split int path), so
+// the KV sweep replaces dequant+float-mad with one integer dot per quartet.
+// Requires each lane's quartet index to fit one sweep (DK_VEC <= subgroup).
+#if defined(FA_HAVE_INT_DOT) && (DK_VEC <= FA_SG) && !defined(FA_Q8_INT_QK_OFF)
+#define FA_Q8_INT_QK 1
+#endif
 
 REQD_SUBGROUP_SIZE_64
 __kernel void flash_attn_f32_q8_0_q1_vec(
@@ -820,6 +831,29 @@ __kernel void flash_attn_f32_q8_0_q1_vec_mq_split(
     }
     barrier(CLK_LOCAL_MEM_FENCE);
 
+#ifdef FA_Q8_INT_QK
+    // Requantize the staged Q rows to packed int8 once per WG: one thread per
+    // (head, block). The KV sweep then runs dp4a against raw q8_0 K bytes.
+    __local uint  q_packed_l[MQ_GQA * DK_Q8_BLOCKS * 8];
+    __local float q_d_l[MQ_GQA * DK_Q8_BLOCKS];
+    for (int i = tid; i < MQ_GQA * DK_Q8_BLOCKS; i += MQ_SPLIT_WG_SIZE_Q8) {
+        const int h = i / DK_Q8_BLOCKS;
+        const int b = i % DK_Q8_BLOCKS;
+        ACC_TYPE4 qb[8];
+        #pragma unroll
+        for (int j = 0; j < 8; ++j) {
+            qb[j] = q_shared[h * DK_VEC + b * 8 + j];
+        }
+        uint packed_tmp[8];
+        q_d_l[i] = quant_q_block_int8_packed(qb, packed_tmp);
+        #pragma unroll
+        for (int j = 0; j < 8; ++j) {
+            q_packed_l[i * 8 + j] = packed_tmp[j];
+        }
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+#endif
+
     float slope[MQ_GQA];
     #pragma unroll
     for (int h = 0; h < MQ_GQA; ++h) {
@@ -859,10 +893,46 @@ __kernel void flash_attn_f32_q8_0_q1_vec_mq_split(
     const int kv_lo     = kv_start + sgid * kv_per_sg;
     const int kv_hi     = min(kv_end, kv_lo + kv_per_sg);
 
+#ifdef FA_Q8_INT_QK
+    // DK_VEC <= subgroup size: this lane's quartet index is fixed for the
+    // whole sweep, so its packed-Q words and block scales hoist to registers.
+    uint  qp_h[MQ_GQA];
+    float qd_h[MQ_GQA];
+    {
+        const int b = tid_sg / 8;
+        const int j = tid_sg % 8;
+        #pragma unroll
+        for (int h = 0; h < MQ_GQA; ++h) {
+            if (tid_sg < DK_VEC) {
+                qp_h[h] = q_packed_l[(h * DK_Q8_BLOCKS + b) * 8 + j];
+                qd_h[h] = q_d_l[h * DK_Q8_BLOCKS + b];
+            } else {
+                qp_h[h] = 0;
+                qd_h[h] = 0.0f;
+            }
+        }
+    }
+#endif
+
     for (int k_idx = kv_lo; k_idx < kv_hi; ++k_idx) {
         const global char * k_row = k_base + batch_idx * k_nb3 + head_kv_idx * k_nb2 + k_idx * k_nb1;
         const global char * v_row = v_base + batch_idx * v_nb3 + head_kv_idx * v_nb2 + k_idx * v_nb1;
 
+#ifdef FA_Q8_INT_QK
+        ACC_TYPE dot_s[MQ_GQA];
+        #pragma unroll
+        for (int h = 0; h < MQ_GQA; ++h) dot_s[h] = 0.0f;
+        if (tid_sg < DK_VEC) {
+            const global char * kb = k_row + (tid_sg / 8) * Q8_0_BLOCK_SIZE;
+            const float kd       = vload_half(0, (const global half *) kb);
+            const uint  k_packed = as_uint(vload4(tid_sg % 8, (const global uchar *)(kb + 2)));
+            #pragma unroll
+            for (int h = 0; h < MQ_GQA; ++h) {
+                const int idot = dot_acc_sat_4x8packed_ss_int(qp_h[h], k_packed, 0);
+                dot_s[h] = mad((ACC_TYPE) idot, qd_h[h] * kd, dot_s[h]);
+            }
+        }
+#else
         ACC_TYPE4 dot4[MQ_GQA];
         #pragma unroll
         for (int h = 0; h < MQ_GQA; ++h) dot4[h] = (ACC_TYPE4)(0.0f);
@@ -876,12 +946,17 @@ __kernel void flash_attn_f32_q8_0_q1_vec_mq_split(
                 dot4[h] = mad(q_shared[h * DK_VEC + qk], k_v, dot4[h]);
             }
         }
+#endif
 
         ACC_TYPE score[MQ_GQA];
         #pragma unroll
         for (int h = 0; h < MQ_GQA; ++h) {
+#ifdef FA_Q8_INT_QK
+            ACC_TYPE s = sub_group_reduce_add(dot_s[h]) * scale;
+#else
             const ACC_TYPE dot_partial = dot4[h].s0 + dot4[h].s1 + dot4[h].s2 + dot4[h].s3;
             ACC_TYPE s = sub_group_reduce_add(dot_partial) * scale;
+#endif
             if (mask_base[h] != NULL) {
                 const global MASK_DATA_TYPE * mask_ptr = (const global MASK_DATA_TYPE *) mask_base[h];
                 s += slope[h] * (ACC_TYPE) mask_ptr[k_idx];
@@ -1073,6 +1148,28 @@ __kernel void flash_attn_f32_q8_0_q1_vec_mq_split_c8(
     }
     barrier(CLK_LOCAL_MEM_FENCE);
 
+#ifdef FA_Q8_INT_QK
+    // Same once-per-WG Q requantization as the mq_split kernel above.
+    __local uint  q_packed_l[MQ_GQA * DK_Q8_BLOCKS * 8];
+    __local float q_d_l[MQ_GQA * DK_Q8_BLOCKS];
+    for (int i = tid; i < MQ_GQA * DK_Q8_BLOCKS; i += MQ_SPLIT_WG_SIZE_Q8) {
+        const int h = i / DK_Q8_BLOCKS;
+        const int b = i % DK_Q8_BLOCKS;
+        ACC_TYPE4 qb[8];
+        #pragma unroll
+        for (int j = 0; j < 8; ++j) {
+            qb[j] = q_shared[h * DK_VEC + b * 8 + j];
+        }
+        uint packed_tmp[8];
+        q_d_l[i] = quant_q_block_int8_packed(qb, packed_tmp);
+        #pragma unroll
+        for (int j = 0; j < 8; ++j) {
+            q_packed_l[i * 8 + j] = packed_tmp[j];
+        }
+    }
+    barrier(CLK_LOCAL_MEM_FENCE);
+#endif
+
     float slope[MQ_GQA];
     #pragma unroll
     for (int h = 0; h < MQ_GQA; ++h) {
@@ -1127,6 +1224,27 @@ __kernel void flash_attn_f32_q8_0_q1_vec_mq_split_c8(
         const global char * k_row = k_base + k_row_base + (ulong) k_safe * k_nb1;
         const global char * v_row = v_base + v_row_base + (ulong) k_safe * v_nb1;
 
+#ifdef FA_Q8_INT_QK
+        // dp4a K dot over this lane's quartets of the cluster's row.
+        ACC_TYPE dot_s[MQ_GQA];
+        #pragma unroll
+        for (int h = 0; h < MQ_GQA; ++h) dot_s[h] = 0.0f;
+        #pragma unroll
+        for (int i = 0; i < FA_CL_DKQ; ++i) {
+            const int qk = lic + FA_CL_C * i;
+            const int b  = qk / 8;
+            const int j  = qk % 8;
+            const global char * kb = k_row + b * Q8_0_BLOCK_SIZE;
+            const float kd       = vload_half(0, (const global half *) kb);
+            const uint  k_packed = as_uint(vload4(j, (const global uchar *)(kb + 2)));
+            #pragma unroll
+            for (int h = 0; h < MQ_GQA; ++h) {
+                const int idot = dot_acc_sat_4x8packed_ss_int(
+                    q_packed_l[(h * DK_Q8_BLOCKS + b) * 8 + j], k_packed, 0);
+                dot_s[h] = mad((ACC_TYPE) idot, q_d_l[h * DK_Q8_BLOCKS + b] * kd, dot_s[h]);
+            }
+        }
+#else
         // Float-dequant K dot over this lane's quartets of the cluster's row.
         ACC_TYPE4 dot4[MQ_GQA];
         #pragma unroll
@@ -1140,12 +1258,17 @@ __kernel void flash_attn_f32_q8_0_q1_vec_mq_split_c8(
                 dot4[h] = mad(q_shared[h * DK_VEC + qk], k_v, dot4[h]);
             }
         }
+#endif
 
         // Cluster-reduce (xor steps < FA_CL_C stay inside the cluster) + score.
         ACC_TYPE score[MQ_GQA];
         #pragma unroll
         for (int h = 0; h < MQ_GQA; ++h) {
+#ifdef FA_Q8_INT_QK
+            ACC_TYPE s = dot_s[h];
+#else
             ACC_TYPE s = dot4[h].s0 + dot4[h].s1 + dot4[h].s2 + dot4[h].s3;
+#endif
             #pragma unroll
             for (int step = 1; step < FA_CL_C; step <<= 1) {
                 s += sub_group_shuffle_xor(s, step);
