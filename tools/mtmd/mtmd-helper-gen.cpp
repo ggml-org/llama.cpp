@@ -84,10 +84,12 @@ public:
 
     virtual void reset() = 0;
     virtual int32_t set_input(const mtmd_helper_gen_audio_inp * inp) = 0;
+    // decodes at most n_batch prompt tokens; returns remaining count (0 = done), <0 on error
+    virtual int32_t step_prompt(int32_t n_batch) = 0;
     // sampled may be LLAMA_TOKEN_NULL for pipelines with no discrete backbone token
     // (e.g. continuous/diffusion models); such pipelines read whatever they need
     // directly off h_state_in instead
-    virtual int32_t step(llama_token sampled, const float * h_state_in, const float ** h_state_out) = 0;
+    virtual int32_t step_gen(llama_token sampled, const float * h_state_in, const float ** h_state_out) = 0;
     virtual int32_t get_output(int32_t * out_sample_rate, const char ** out_data, size_t * out_data_len, int64_t * out_n_samples) = 0;
 
 protected:
@@ -115,6 +117,10 @@ public:
         overlay_idx = 0;
         h_state_buf.clear();
         out_buf.clear();
+        prompt_embd_buf.clear();
+        prompt_batch.reset();
+        n_prompt = 0;
+        prompt_pos = 0;
     }
 
     int32_t set_input(const mtmd_helper_gen_audio_inp * inp) override {
@@ -179,7 +185,7 @@ public:
         prompt.push_back(sum_row(tts_eos, codec_pad));
         prompt.push_back(sum_row(tts_pad, codec_bos));
 
-        const int n_prompt = (int) prompt.size();
+        n_prompt = (int) prompt.size();
 
         // the talker rides the qwen3vl interleaved mrope: positions carry
         // n_pos_per_embd sections laid out [section * n_tokens + i], all
@@ -188,22 +194,17 @@ public:
                 llama_model_rope_type(model) == LLAMA_ROPE_TYPE_IMROPE;
         const int n_pos_per_embd = mrope ? 4 : 1;
 
-        std::vector<float> embd_buf((size_t) n_prompt * (size_t) n_e);
+        prompt_embd_buf.resize((size_t) n_prompt * (size_t) n_e);
         for (int i = 0; i < n_prompt; i++) {
-            memcpy(embd_buf.data() + (size_t) i * n_e, prompt[(size_t) i].data(), (size_t) n_e * sizeof(float));
+            memcpy(prompt_embd_buf.data() + (size_t) i * n_e, prompt[(size_t) i].data(), (size_t) n_e * sizeof(float));
         }
 
-        decode_embd_batch batch_embd(embd_buf.data(), n_prompt, n_pos_per_embd, n_e);
-        if (mrope) batch_embd.set_position_mrope_1d(0, seq_id);
-        else       batch_embd.set_position_normal  (0, seq_id);
-        batch_embd.batch.logits[n_prompt - 1] = 1;
+        prompt_batch.reset(new decode_embd_batch(prompt_embd_buf.data(), n_prompt, n_pos_per_embd, n_e));
+        if (mrope) prompt_batch->set_position_mrope_1d(0, seq_id);
+        else       prompt_batch->set_position_normal  (0, seq_id);
+        prompt_pos = 0;
 
-        if (llama_decode(lctx, batch_embd.batch) != 0) {
-            LOG_ERR("mtmd_helper_gen_audio: prefill decode failed\n");
-            return 1;
-        }
-
-        pos = n_prompt;
+        pos = 0;
         top_k = inp->top_k > 0 ? inp->top_k : 50;
         top_p = inp->top_p > 0 ? inp->top_p : 1.0f;
         out_type = inp->out_type;
@@ -218,7 +219,37 @@ public:
         return 0;
     }
 
-    int32_t step(llama_token sampled, const float * h_state_in, const float ** h_state_out) override {
+    int32_t step_prompt(int32_t n_batch) override {
+        GGML_ASSERT(n_batch > 0);
+        if (prompt_pos >= n_prompt) {
+            return 0;
+        }
+        const int32_t n_tokens_batch = std::min(n_batch, n_prompt - prompt_pos);
+        llama_batch batch_view = prompt_batch->get_view(prompt_pos, n_tokens_batch);
+
+        const bool is_last_batch = (prompt_pos + n_tokens_batch) == n_prompt;
+        if (is_last_batch) {
+            batch_view.logits[n_tokens_batch - 1] = 1;
+        }
+
+        if (llama_decode(lctx, batch_view) != 0) {
+            LOG_ERR("mtmd_helper_gen_audio: prompt decode failed\n");
+            return -1;
+        }
+
+        pos        += n_tokens_batch;
+        prompt_pos += n_tokens_batch;
+
+        if (prompt_pos >= n_prompt) {
+            // prompt fully processed, its embedding buffer is no longer needed
+            prompt_batch.reset();
+            prompt_embd_buf.clear();
+            return 0;
+        }
+        return n_prompt - prompt_pos;
+    }
+
+    int32_t step_gen(llama_token sampled, const float * h_state_in, const float ** h_state_out) override {
         mtmd_gen_inp inp{};
         inp.type  = MTMD_GEN_PROCESS_TYPE_GEN_CODE;
         inp.code0 = sampled - codec_0;
@@ -404,6 +435,11 @@ private:
     llama_seq_id seq_id = 0;
     bool mrope = false;
     int pos = 0;
+    // prompt decode state, consumed batch-by-batch by step_prompt()
+    std::vector<float> prompt_embd_buf;
+    std::unique_ptr<decode_embd_batch> prompt_batch;
+    int n_prompt = 0;
+    int prompt_pos = 0;
     int32_t top_k = 50;
     float   top_p = 1.0f;
     std::vector<int32_t> codes_buf;
@@ -453,12 +489,19 @@ int32_t mtmd_helper_gen_audio_set_input(mtmd_helper_gen_audio * ctx, const mtmd_
     return ctx->pipeline->set_input(inp);
 }
 
-int32_t mtmd_helper_gen_audio_step(mtmd_helper_gen_audio * ctx, llama_token sampled,
-                                   const float * h_state_in, const float ** h_state_out) {
+int32_t mtmd_helper_gen_audio_step_prompt(mtmd_helper_gen_audio * ctx, int32_t n_batch) {
+    if (!ctx->pipeline) {
+        return -1;
+    }
+    return ctx->pipeline->step_prompt(n_batch);
+}
+
+int32_t mtmd_helper_gen_audio_step_gen(mtmd_helper_gen_audio * ctx, llama_token sampled,
+                                       const float * h_state_in, const float ** h_state_out) {
     if (!ctx->pipeline) {
         return 1;
     }
-    return ctx->pipeline->step(sampled, h_state_in, h_state_out);
+    return ctx->pipeline->step_gen(sampled, h_state_in, h_state_out);
 }
 
 int32_t mtmd_helper_gen_audio_get_output(mtmd_helper_gen_audio * ctx, int32_t * out_sample_rate,

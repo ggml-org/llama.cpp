@@ -120,7 +120,6 @@ int main(int argc, char ** argv) {
     inp.top_k       = params.sampling.top_k;
     inp.top_p       = params.sampling.top_p;
     inp.out_type    = MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV;
-    const int64_t t_prompt_start_us = ggml_time_us();
 
     //
     // stage 1: process prompt via backbone model, generate semantic representation
@@ -131,7 +130,18 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    // TODO: explicit prompt processing step here
+    const int64_t t_prompt_start_us = ggml_time_us();
+
+    for (;;) {
+        int32_t ret = gen.step_prompt(params.n_batch);
+        if (ret < 0) {
+            LOG_ERR("prompt processing failed\n");
+            return 1;
+        }
+        if (ret == 0) {
+            break;
+        }
+    }
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
@@ -153,9 +163,9 @@ int main(int argc, char ** argv) {
         const float * h_next = nullptr;
 
         // stage 2+3: semantic --> acoustic details --> audio waveform
-        //            step() runs both stages and returns new h_state for next step
-        if (gen.step(sampled, h_state, &h_next) != 0) {
-            LOG_ERR("step failed at frame %d\n", n_frames);
+        //            step_gen() runs both stages and returns new h_state for next step
+        if (gen.step_gen(sampled, h_state, &h_next) != 0) {
+            LOG_ERR("step_gen failed at frame %d\n", n_frames);
             return 1;
         }
 
