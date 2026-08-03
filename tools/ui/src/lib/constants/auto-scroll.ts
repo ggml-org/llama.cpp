@@ -5,6 +5,14 @@ export const AUTO_SCROLL_INTERVAL = 100;
 // for this many consecutive frames, bounded by the time cap below.
 export const LANDING_STABLE_FRAMES = 10;
 export const LANDING_SETTLE_MAX_MS = 1000;
+// Discrete content injection (e.g. a synthetic cwd-change message appended
+// mid-chat): content-visibility sizes the new node at its placeholder before
+// the real height is known, so scrollHeight is transiently too large and the
+// viewport snaps back once it collapses. Hold the height briefly before the
+// pin so the injected row appears without a jump. Smaller than the landing
+// settle because a single row settles in a few frames.
+export const INJECTION_STABLE_FRAMES = 3;
+export const INJECTION_SETTLE_MAX_MS = 400;
 // Chat main view: tight threshold because scroll-here events come from
 // discrete assistant-message appends.
 export const AUTO_SCROLL_AT_BOTTOM_THRESHOLD = 10;
