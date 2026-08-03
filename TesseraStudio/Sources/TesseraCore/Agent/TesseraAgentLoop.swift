@@ -43,6 +43,8 @@ public final class TesseraAgentLoop {
     ) {
         self.registry = registry
         self.approvalEngine = approvalEngine
+        // Fallback only when a caller passes nil. ContentView passes a real
+        // provider from TesseraLLMProviderFactory.makeFromSettings().
         self.llmProvider = llmProvider ?? PlaceholderLLMProvider()
         self.maxIterations = max(1, maxIterations)
         self.tokenBudget = TokenBudget(used: 0, limit: tokenLimit)
@@ -323,8 +325,11 @@ public protocol LLMProvider: Sendable {
     ) async throws -> LLMResponse
 }
 
-/// Placeholder LLM that echoes the user message. Replace with a real
-/// provider (local llama.cpp server, MLX, or cloud API) in production.
+/// Last-resort LLM that echoes the user message and recognizes a few tool
+/// keywords. The factory (TesseraLLMProviderFactory.makeFromSettings) upgrades
+/// to the on-device provider as soon as a model is available, so this is only
+/// reached when the library is genuinely empty - it keeps the app responsive
+/// instead of crashing on a missing model.
 public struct PlaceholderLLMProvider: LLMProvider {
     public init() {}
 

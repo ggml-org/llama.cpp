@@ -27,6 +27,8 @@ public enum TesseraSettingsKey {
     public static let onDeviceGPULayers = "tessera.settings.onDeviceGPULayers"
     // First-run
     public static let onboardingComplete = "tessera.settings.onboardingComplete"
+    // Audience mode (studio-ux blueprint section 3.1). Simple / Standard / Studio.
+    public static let audienceMode = "tessera.settings.audienceMode"
     // Learning (self-improving loop)
     public static let learningEnabled = "tessera.settings.learningEnabled"
     public static let learningEscalationEnabled = "tessera.settings.learningEscalationEnabled"
@@ -99,6 +101,32 @@ public enum TesseraLogLevel: String, CaseIterable, Sendable {
     case debug, info, warning, error
 }
 
+/// The audience mode axis (studio-ux blueprint section 3.1). Three depths of
+/// the same four-destination shell, switchable from the toolbar. Persisted in
+/// UserDefaults so it survives across launches. Simple is the calm default.
+public enum AudienceMode: String, CaseIterable, Sendable {
+    case simple
+    case standard
+    case studio
+
+    public var displayName: String {
+        switch self {
+        case .simple: "Simple"
+        case .standard: "Standard"
+        case .studio: "Studio"
+        }
+    }
+
+    /// SF Symbol for the toolbar segment.
+    public var icon: String {
+        switch self {
+        case .simple: "person.fill"
+        case .standard: "person.crop.circle.badge gearshape"
+        case .studio: "testtube.2"
+        }
+    }
+}
+
 /// Read-only access to current settings for non-view code.
 public enum TesseraSettings {
     /// Register factory defaults. Call once at app launch.
@@ -123,6 +151,7 @@ public enum TesseraSettings {
             TesseraSettingsKey.onDeviceContextLength: TesseraSettingsDefault.onDeviceContextLength,
             TesseraSettingsKey.onDeviceGPULayers: TesseraSettingsDefault.onDeviceGPULayers,
             TesseraSettingsKey.onboardingComplete: false,
+            TesseraSettingsKey.audienceMode: AudienceMode.simple.rawValue,
             TesseraSettingsKey.learningEnabled: TesseraSettingsDefault.learningEnabled,
             TesseraSettingsKey.learningEscalationEnabled: TesseraSettingsDefault.learningEscalationEnabled,
             TesseraSettingsKey.learningTeachers: TesseraSettingsDefault.learningTeachers,
@@ -186,10 +215,21 @@ public enum TesseraSettings {
         UserDefaults.standard.string(forKey: TesseraSettingsKey.cliPath) ?? TesseraSettingsDefault.cliPath
     }
 
+    // MARK: Audience mode
+
+    /// Current audience mode. Simple by default (blueprint section 3.1).
+    public static var audienceMode: AudienceMode {
+        let raw = UserDefaults.standard.string(forKey: TesseraSettingsKey.audienceMode) ?? AudienceMode.simple.rawValue
+        return AudienceMode(rawValue: raw) ?? .simple
+    }
+
+    public static func setAudienceMode(_ mode: AudienceMode) {
+        UserDefaults.standard.set(mode.rawValue, forKey: TesseraSettingsKey.audienceMode)
+    }
+
     // MARK: LLM provider
 
-    public static var llmProviderType: TesseraLLMProviderType {
-        let raw = UserDefaults.standard.string(forKey: TesseraSettingsKey.llmProviderType) ?? TesseraSettingsDefault.llmProviderType
+    public static var llmProviderType: TesseraLLMProviderType {        let raw = UserDefaults.standard.string(forKey: TesseraSettingsKey.llmProviderType) ?? TesseraSettingsDefault.llmProviderType
         return TesseraLLMProviderType(rawValue: raw) ?? .placeholder
     }
 

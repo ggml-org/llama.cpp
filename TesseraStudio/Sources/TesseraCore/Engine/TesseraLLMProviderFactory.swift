@@ -72,8 +72,16 @@ public struct TesseraLLMProviderConfig: Sendable {
     }
 }
 
-/// Builds the concrete `LLMProvider` for a requested backend. Defaults to the
-/// placeholder so an unconfigured app keeps working exactly as before.
+/// Builds the concrete `LLMProvider` for a requested backend.
+///
+/// Resolution policy (studio-ux blueprint section 8 Phase 1): the on-device
+/// path is the real default. A brand-new user has `llmProviderType == .placeholder`
+/// in UserDefaults (the registered default). `makeFromSettings` upgrades that
+/// to the on-device provider as soon as a GGUF is discoverable on disk, so
+/// onboarding's "pick a starter model" step leaves the user with a working
+/// chat. The PlaceholderLLMProvider is kept only as the last-resort fallback
+/// for the genuinely empty library, so the app never hard-crashes on a
+/// missing model.
 public enum TesseraLLMProviderFactory {
     public static func make(
         type: TesseraLLMProviderType,
@@ -90,18 +98,68 @@ public enum TesseraLLMProviderFactory {
                 useStreaming: config.remoteUseStreaming
             )
         case .onDevice:
+            // If the configured model path is missing, fall back to a
+            // discoverable GGUF; if none exists either, keep the app
+            // responsive with the placeholder rather than crashing on load.
+            let resolved = resolvedOnDeviceModelPath(config: config)
+            if resolved.isEmpty {
+                return PlaceholderLLMProvider()
+            }
+            var effective = config
+            effective.onDeviceModelPath = resolved
             return LlamaLLMProvider(
-                modelPath: config.onDeviceModelPath,
-                libraryPath: config.onDeviceLibraryPath,
-                contextLength: config.onDeviceContextLength,
-                gpuLayers: config.onDeviceGPULayers,
-                threadCount: config.onDeviceThreadCount
+                modelPath: effective.onDeviceModelPath,
+                libraryPath: effective.onDeviceLibraryPath,
+                contextLength: effective.onDeviceContextLength,
+                gpuLayers: effective.onDeviceGPULayers,
+                threadCount: effective.onDeviceThreadCount
             )
         }
     }
 
-    /// Convenience: build from the current settings.
+    /// Convenience: build from the current settings. Upgrades the legacy
+    /// placeholder default to the on-device path when a model is available.
     public static func makeFromSettings() -> any LLMProvider {
-        make(type: TesseraSettings.llmProviderType, config: .fromSettings())
+        let type = TesseraSettings.llmProviderType
+        let config = TesseraLLMProviderConfig.fromSettings()
+        if type == .placeholder {
+            // Auto-upgrade: if a model is discoverable, use it on-device.
+            if !resolvedOnDeviceModelPath(config: config).isEmpty {
+                return make(type: .onDevice, config: config)
+            }
+            return PlaceholderLLMProvider()
+        }
+        return make(type: type, config: config)
+    }
+
+    /// Resolve the on-device model path: the configured one if it exists on
+    /// disk, else the first GGUF/.mlmodelc found in the standard scan
+    /// directories, else empty string (caller falls back to placeholder).
+    public static func resolvedOnDeviceModelPath(config: TesseraLLMProviderConfig) -> String {
+        let fm = FileManager.default
+        let configured = config.onDeviceModelPath.isEmpty
+            ? ""
+            : NSString(string: config.onDeviceModelPath).expandingTildeInPath
+        if !configured.isEmpty && fm.fileExists(atPath: configured) {
+            return configured
+        }
+        // Discover a starter model in the standard scan directories.
+        let dirs = [
+            NSString(string: TesseraSettings.modelDirectory).expandingTildeInPath,
+            NSString(string: "~/Models").expandingTildeInPath
+        ]
+        for dir in dirs {
+            guard let contents = try? fm.contentsOfDirectory(atPath: dir) else { continue }
+            // Prefer a Tessera-quantized .mlmodelc (ANE-ready), then any
+            // .mlmodelc, then any .gguf. Sorted for determinism.
+            let sortedContents = contents.sorted()
+            if let mlc = sortedContents.first(where: { $0.hasSuffix(".mlmodelc") }) {
+                return (dir as NSString).appendingPathComponent(mlc)
+            }
+            if let gguf = sortedContents.first(where: { $0.hasSuffix(".gguf") }) {
+                return (dir as NSString).appendingPathComponent(gguf)
+            }
+        }
+        return ""
     }
 }
