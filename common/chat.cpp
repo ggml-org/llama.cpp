@@ -1983,7 +1983,7 @@ static common_chat_params common_chat_params_init_deepseek_v3_2(const common_cha
     if (inputs.has_continuation()) {
         const auto & msg = inputs.continue_msg;
 
-        if (is_v4 && !inputs.enable_thinking) {
+        if (is_v4 && msg.reasoning_content.empty()) {
             data.generation_prompt = GEN_PROMPT + THINK_END;
             if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_CONTENT) {
                 data.generation_prompt += msg.render_content();
@@ -2093,7 +2093,7 @@ static common_chat_params common_chat_params_init_deepseek_v3_2(const common_cha
             reasoning = p.optional(THINK_START + p.reasoning(p.until(THINK_END)) + THINK_END);
             reasoning_with_tc = THINK_START +
                 p.reasoning(p.until_one_of({ TC_SEPARATOR + FC_START, FC_START, THINK_END })) +
-                p.optional(p.literal(TC_SEPARATOR)) + obligatory_tool_calls;
+                p.space() + obligatory_tool_calls;
             allow_reasoning_with_tc = true;
         } else if (extract_reasoning) {
             // Thinking disabled but reasoning extraction requested: the generation prompt

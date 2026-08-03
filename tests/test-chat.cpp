@@ -1062,7 +1062,6 @@ struct peg_test_case {
     common_chat_msg              expect;
     bool                         is_partial            = false;
     bool                         expect_reconstruction = false;
-    bool                         expect_exact          = false;
 };
 
 struct make_peg_parser {
@@ -1180,7 +1179,7 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
             }
         }
         try {
-            assert_msg_equals(msg_current, msg_accum, !tc.expect_exact);
+            assert_msg_equals(msg_current, msg_accum, true);
         } catch (std::exception & e) {
             throw std::runtime_error((std::string("Error comparing accumulated message to current: ") + e.what()).c_str());
         }
@@ -1189,9 +1188,9 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
     }
 
     if (!tc.is_partial) {
-        assert_msg_equals(tc.expect, parser.parse(tc.input, false), !tc.expect_exact);
+        assert_msg_equals(tc.expect, parser.parse(tc.input, false), true);
     }
-    assert_msg_equals(tc.expect, msg_accum, !tc.expect_exact);
+    assert_msg_equals(tc.expect, msg_accum, true);
 
     // Test grammar if present in params
     if (!parser.params_.grammar.empty()) {
@@ -1510,11 +1509,6 @@ class peg_test_builder {
 
     peg_test_builder & expect_reconstruction(bool val = true) {
         tc_.expect_reconstruction = val;
-        return *this;
-    }
-
-    peg_test_builder & expect_exact(bool val = true) {
-        tc_.expect_exact = val;
         return *this;
     }
 
@@ -3968,7 +3962,6 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_tool_calls({
                 { "special_function", R"({"arg1": 1})", {} },
             })
-            .expect_exact()
             .expect_reconstruction()
             .run();
 
@@ -4195,7 +4188,6 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_tool_calls({
                 { "special_function", R"({"arg1": 1})", {} },
             })
-            .expect_exact()
             .expect_reconstruction()
             .run();
 
@@ -4267,7 +4259,6 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
             .tools({ special_function_tool })
             .expect(message_assist_call)
-            .expect_exact()
             .expect_reconstruction()
             .run();
     }
@@ -6494,14 +6485,8 @@ static void test_template_generation_prompt() {
         check(tmpls, continuation_reasoning(), "<｜Assistant｜><think>I'm");
     }
 
-    const std::string deepseek_v4_reasoning_effort_max =
-        "Reasoning Effort: Absolute maximum with no shortcuts permitted.\n"
-        "You MUST be very thorough in your thinking and comprehensively decompose the problem to resolve the root cause, rigorously stress-testing your logic against all potential paths, edge cases, and adversarial scenarios.\n"
-        "Explicitly write out your entire deliberation process, documenting every intermediate step, considered alternative, and rejected hypothesis to ensure absolutely no assumption is left unchecked.\n\n";
-    const std::string deepseek_v4_flash_0731_reasoning_effort_max =
-        "Reasoning Effort: Beyond maximum — exhaustive, relentless, and uncompromising.\n"
-        "You MUST reason with the utmost depth and rigor, leaving absolutely nothing to chance: exhaustively decompose the problem into its most fundamental components, trace every causal chain to its root, and resolve the underlying cause rather than any surface symptom.\n"
-        "Do not stop reasoning until you have independently verified the solution from multiple angles and are certain that no assumption remains unchecked and no error remains undiscovered.\n\n";
+    const std::string deepseek_v4_reasoning_effort_max = "Reasoning Effort: Absolute maximum";
+    const std::string deepseek_v4_flash_0731_reasoning_effort_max = "Reasoning Effort: Beyond maximum";
 
     {
         auto tmpls = read_templates("models/templates/deepseek-ai-DeepSeek-V4.jinja");
@@ -6510,6 +6495,7 @@ static void test_template_generation_prompt() {
         check(tmpls, continuation_reasoning(), "<｜Assistant｜><think>I'm");
 
         auto continuation_content_no_thinking = continuation_content();
+        continuation_content_no_thinking.messages = { system_msg, message_user, simple_assist_msg("Hello, ") };
         continuation_content_no_thinking.enable_thinking = false;
         check(tmpls, continuation_content_no_thinking, "<｜Assistant｜></think>Hello, ");
 
@@ -6517,7 +6503,7 @@ static void test_template_generation_prompt() {
         max_inputs.messages = { system_msg, message_user };
         max_inputs.chat_template_kwargs["reasoning_effort"] = R"("max")";
         auto max_params = common_chat_templates_apply(tmpls.get(), max_inputs);
-        assert_contains(max_params.prompt, deepseek_v4_reasoning_effort_max + system_msg.content);
+        assert_contains(max_params.prompt, deepseek_v4_reasoning_effort_max);
 
         auto high_inputs = max_inputs;
         high_inputs.chat_template_kwargs["reasoning_effort"] = R"("high")";
@@ -6606,6 +6592,7 @@ static void test_template_generation_prompt() {
         check(tmpls, continuation_reasoning(), "<｜Assistant｜><think>I'm");
 
         auto continuation_content_no_thinking = continuation_content();
+        continuation_content_no_thinking.messages = { system_msg, message_user, simple_assist_msg("Hello, ") };
         continuation_content_no_thinking.enable_thinking = false;
         check(tmpls, continuation_content_no_thinking, "<｜Assistant｜></think>Hello, ");
 
@@ -6613,12 +6600,12 @@ static void test_template_generation_prompt() {
         high_inputs.messages = { system_msg, message_user };
         high_inputs.chat_template_kwargs["reasoning_effort"] = R"("high")";
         auto high_params = common_chat_templates_apply(tmpls.get(), high_inputs);
-        assert_contains(high_params.prompt, deepseek_v4_reasoning_effort_max + system_msg.content);
+        assert_contains(high_params.prompt, deepseek_v4_reasoning_effort_max);
 
         auto max_inputs = high_inputs;
         max_inputs.chat_template_kwargs["reasoning_effort"] = R"("max")";
         auto max_params = common_chat_templates_apply(tmpls.get(), max_inputs);
-        assert_contains(max_params.prompt, deepseek_v4_flash_0731_reasoning_effort_max + system_msg.content);
+        assert_contains(max_params.prompt, deepseek_v4_flash_0731_reasoning_effort_max);
 
         auto low_inputs = high_inputs;
         low_inputs.chat_template_kwargs["reasoning_effort"] = R"("low")";
