@@ -262,6 +262,15 @@ llama_build_and_test(test-model-resolution.cpp)
 # the test serves its repos from an httplib server, and the library links it privately
 target_link_libraries(test-model-resolution PRIVATE cpp-httplib)
 
+# Covers llama_file's read path, which nothing else does. llama_file is internal and
+# the llama library does not export it - WINDOWS_EXPORT_ALL_SYMBOLS is set on common
+# and on the tools, but not on llama itself, which is the same reason the block above
+# is disabled on Windows. So the sources are compiled into the test rather than linked
+# from the library. llama-impl.cpp comes along because llama-mmap.cpp calls format()
+# and llama_log_internal() from it, and neither is exported either.
+llama_build_and_test(test-llama-file.cpp ../src/llama-mmap.cpp ../src/llama-impl.cpp)
+target_include_directories(test-llama-file PRIVATE ${PROJECT_SOURCE_DIR}/src)
+
 if (NOT LLAMA_SANITIZE_ADDRESS AND NOT GGML_SCHED_NO_REALLOC)
   # TODO: repair known memory leaks
   llama_build_and_test(test-opt.cpp)
