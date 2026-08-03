@@ -1103,6 +1103,9 @@ int llama_quantize(int argc, char ** argv) {
         tparams.l5_out_path                  = tp.l5_out;
         tparams.quantize_db_path             = tp.quantize_db;
         tparams.force_requantize             = tp.force_requantize;
+        tparams.runtime_probe                = tp.runtime_probe;
+        tparams.runtime_probe_bf16           = tp.runtime_probe_bf16;
+        tparams.runtime_probe_l2_out         = tp.runtime_probe_l2_out;
         ts_dispatch_result tresult;
         std::string terr;
         if (ts_dispatch_run(&tparams, &tresult, &terr) != 0) {

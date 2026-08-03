@@ -54,6 +54,8 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         ggml-cpu/ops.cpp
         ggml-cpu/cpu-dump-dequant.h
         ggml-cpu/cpu-dump-dequant.cpp
+        ggml-cpu/cpu-dump-matmul-output.h
+        ggml-cpu/cpu-dump-matmul-output.cpp
         )
 
     target_compile_features(${GGML_CPU_NAME} PRIVATE c_std_11 cxx_std_17)

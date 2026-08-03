@@ -83,6 +83,8 @@ set(TARGET llama-tessera-debug)
 add_library(${TARGET} STATIC
     tessera-debug.cpp
     tessera-debug.h
+    tessera-matmul-output.cpp
+    tessera-matmul-output.h
     ${TESSERA_BUILD_INFO_OUT}
 )
 
@@ -105,3 +107,16 @@ if (NOT TARGET llama-log)
     add_subdirectory(${CMAKE_SOURCE_DIR}/common/log ${CMAKE_BINARY_DIR}/_deps/llama-log)
 endif()
 target_link_libraries(${TARGET} PUBLIC llama-log)
+
+# Standalone smoke test for the L2 matmul-output sidecar writer
+# (tessera-matmul-output.{h,cpp}). Mirrors the L1 sidecar test pattern
+# (test_sidecar_v3.cpp) - kept as a sibling file rather than wired to
+# ctest so a missing link (e.g. building outside tests/) does not break
+# the sidecar library itself. Run as: ./bin/test-tessera-matmul-output.
+if (LLAMA_BUILD_TESTS)
+    set(TS_MM_OUT_TEST_TARGET test-tessera-matmul-output)
+    add_executable(${TS_MM_OUT_TEST_TARGET} test_matmul_output.cpp)
+    target_link_libraries(${TS_MM_OUT_TEST_TARGET} PRIVATE ${TARGET})
+    target_compile_features(${TS_MM_OUT_TEST_TARGET} PRIVATE cxx_std_17)
+    add_test(NAME ${TS_MM_OUT_TEST_TARGET} COMMAND ${TS_MM_OUT_TEST_TARGET})
+endif()
