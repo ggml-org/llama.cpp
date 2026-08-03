@@ -1310,7 +1310,22 @@ std::vector<uint32_t> llama_kv_cache::build_tessera_full_page_map(const slot_inf
     // the inverse lets the paged-attn kernel translate a logical KV index to
     // the physical cell that stores its K/V row. Unused logical positions stay
     // UINT32_MAX so the kernel can skip (or assert against) them.
+    //
+    // The paged-attn kernel has no mask of its own: it attends to every entry
+    // of this map that is not UINT32_MAX. The KQ mask path (set_input_kq_mask)
+    // applies causal + SWA + per-sequence filtering for the flash path, so the
+    // page map must encode the SAME gating. A cell is attendable by a query at
+    // position p1 for sequence seq iff:
+    //   - the cell belongs to seq (cells.seq_has(i, seq))
+    //   - causal: cells.pos_get(i) <= p1
+    //   - SWA: !is_masked_swa(n_swa, swa_type, cells.pos_get(i), p1)
+    // A cell may belong to several sequences; we expose it iff at least one of
+    // them would attend it. For non-SWA caches (swa_type == NONE) only the
+    // causal check remains, and in normal decode no future cell exists, so the
+    // map is unchanged for the wave-1 non-SWA path. Without this filter the
+    // kernel reads K/V rows that should be SWA-masked and produces noise.
     std::vector<uint32_t> result(n_kv, std::numeric_limits<uint32_t>::max());
+    const bool check_swa = (swa_type != LLAMA_SWA_TYPE_NONE) && (n_swa > 0);
     for (uint32_t s = 0; s < sinfo.n_stream(); ++s) {
         const auto & cells = v_cells[sinfo.strm[s]];
         const uint32_t n_cells = cells.size();
@@ -1319,7 +1334,26 @@ std::vector<uint32_t> llama_kv_cache::build_tessera_full_page_map(const slot_inf
                 continue;
             }
             const llama_pos p = cells.pos_get(i);
-            if (p >= 0 && (uint32_t) p < n_kv) {
+            if (p < 0 || (uint32_t) p >= n_kv) {
+                continue;
+            }
+            bool attendable = false;
+            for (int seq_id = 0; seq_id < LLAMA_MAX_SEQ; ++seq_id) {
+                if (!cells.seq_has(i, seq_id)) {
+                    continue;
+                }
+                const llama_pos p1 = cells.seq_pos_max(seq_id);
+                // causal: future positions are not attendable
+                if (p > p1) {
+                    continue;
+                }
+                if (check_swa && llama_hparams::is_masked_swa(n_swa, swa_type, p, p1)) {
+                    continue;
+                }
+                attendable = true;
+                break;
+            }
+            if (attendable) {
                 result[(uint32_t) p] = i;
             }
         }

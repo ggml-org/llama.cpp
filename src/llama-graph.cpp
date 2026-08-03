@@ -3053,6 +3053,7 @@ ggml_tensor * llm_graph_context::build_attn(
         tessera_paged_attn_enabled() &&
         cparams.kv_unified && cparams.causal_attn && ubatch.n_tokens == 1 &&
         inp->get_tessera_page_map() &&
+        !mctx_cur->is_v_trans() &&
         !kq_b && !sinks && !v_mla &&
         q_cur->type == GGML_TYPE_F32 &&
         (mctx_cur->type_k() == GGML_TYPE_F16 || mctx_cur->type_k() == GGML_TYPE_F32 ||
@@ -3331,6 +3332,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
     const bool use_tessera_paged = tessera_paged_attn_enabled() && cparams.kv_unified &&
         cparams.causal_attn && ubatch.n_tokens == 1 && inp->get_tessera_page_map(is_swa) &&
+        !mctx_cur->is_v_trans() &&
         !kq_b && !sinks && !v_mla && q_cur->type == GGML_TYPE_F32 &&
         (mctx_cur->type_k() == GGML_TYPE_F16 || mctx_cur->type_k() == GGML_TYPE_F32 ||
          mctx_cur->type_k() == GGML_TYPE_Q8_0 || mctx_cur->type_k() == GGML_TYPE_Q2_K ||
