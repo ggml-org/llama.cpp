@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { AgenticSectionType, BuiltInTool } from '$lib/enums';
 import type { AgenticSection } from '$lib/utils';
 import { parseToolArgs } from '$lib/components/app/chat/ChatMessages/ChatMessage/ChatMessageToolCall/parsers/_shared';
-import { lastPathSegment, formatCwdMessage, parseCwdMessage } from '$lib/utils';
+import { lastPathSegment, abbreviateHome, formatCwdMessage, parseCwdMessage } from '$lib/utils';
 import {
 	parseWriteFileMeta,
 	type WriteFileMeta
@@ -51,6 +51,28 @@ describe('lastPathSegment', () => {
 
 	it('returns tilde when only tilde is given', () => {
 		expect(lastPathSegment('~/')).toBe('~');
+	});
+});
+
+describe('abbreviateHome', () => {
+	it('abbreviates paths under home with a tilde', () => {
+		expect(abbreviateHome('/Users/al/Documents/x.txt', '/Users/al')).toBe('~/Documents/x.txt');
+	});
+
+	it('abbreviates home itself to a bare tilde', () => {
+		expect(abbreviateHome('/Users/al', '/Users/al')).toBe('~');
+	});
+
+	it('returns paths outside home unchanged', () => {
+		expect(abbreviateHome('/opt/project', '/Users/al')).toBe('/opt/project');
+	});
+
+	it('does not abbreviate a mere prefix match', () => {
+		expect(abbreviateHome('/Users/alice/x', '/Users/al')).toBe('/Users/alice/x');
+	});
+
+	it('returns the path unchanged when home is unknown', () => {
+		expect(abbreviateHome('/Users/al/Documents', null)).toBe('/Users/al/Documents');
 	});
 });
 

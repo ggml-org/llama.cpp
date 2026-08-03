@@ -161,6 +161,7 @@ export { parseHeadersToArray, serializeHeaders } from './headers';
 // Working-directory display helpers (HOME-style tilde abbreviation)
 export {
 	abbreviateWorkingDir,
+	abbreviateHome,
 	lastPathSegment,
 	formatCwdMessage,
 	parseCwdMessage,

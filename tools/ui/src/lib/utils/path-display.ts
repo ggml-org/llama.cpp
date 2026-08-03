@@ -25,6 +25,19 @@ export function abbreviateWorkingDir(
 	return lastPathSegment(path);
 }
 
+/**
+ * Replace a leading `home` prefix in `path` with `~`. Unlike
+ * abbreviateWorkingDir, paths outside `home` (or an unknown home) are
+ * returned unchanged - used for tool-call path displays where the full
+ * path matters.
+ */
+export function abbreviateHome(path: string, home: string | null | undefined): string {
+	if (!home) return path;
+	if (path === home) return '~';
+	if (path.startsWith(home + '/')) return '~/' + path.slice(home.length + 1);
+	return path;
+}
+
 export const CWD_CHANGED_PREFIX = 'Set working directory to ';
 export const CWD_CLEARED_TEXT = 'Working directory cleared';
 
