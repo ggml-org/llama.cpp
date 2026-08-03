@@ -93,7 +93,7 @@ class ConversationsStore {
 	 * Cleared by `loadConversation` and `clearActiveConversation` so a
 	 * stale pick can't bleed onto an unrelated chat.
 	 */
-	pendingWorkingDirectory = $state<string | null>(null);
+	pendingCwd = $state<string | null>(null);
 
 	/** Load reasoning effort default from localStorage, DEFAULT defers to the server */
 	private static loadReasoningEffortDefault(): ReasoningEffort {
@@ -263,9 +263,9 @@ class ConversationsStore {
 		// here too, then cleared so it doesn't bleed onto subsequent new chats.
 		const conversation = await DatabaseService.createConversation(conversationName, {
 			reasoningEffort: this.pendingReasoningEffort,
-			workingDirectory: this.pendingWorkingDirectory ?? undefined
+			cwd: this.pendingCwd ?? undefined
 		});
-		this.pendingWorkingDirectory = null;
+		this.pendingCwd = null;
 
 		this.conversations = [conversation, ...this.conversations];
 		this.activeConversation = conversation;
@@ -291,7 +291,7 @@ class ConversationsStore {
 
 			// Drop any cwd the user drafted on the empty new-chat screen -
 			// it doesn't belong to this conversation.
-			this.pendingWorkingDirectory = null;
+			this.pendingCwd = null;
 
 			this.activeConversation = conversation;
 
@@ -323,7 +323,7 @@ class ConversationsStore {
 		this.activeMessages = [];
 		// reload defaults so new chats inherit persisted state
 		this.pendingReasoningEffort = ConversationsStore.loadReasoningEffortDefault();
-		this.pendingWorkingDirectory = null;
+		this.pendingCwd = null;
 	}
 
 	/**
@@ -878,35 +878,35 @@ class ConversationsStore {
 	 * an empty string to clear it, which restores the picker's empty state.
 	 *
 	 * On the empty new-chat screen (no active conversation yet), the value
-	 * is buffered into `pendingWorkingDirectory` so the user can pick before
+	 * is buffered into `pendingCwd` so the user can pick before
 	 * sending the first message; `createConversation()` consumes it.
 	 *
 	 * @param value - Absolute server-side path to the working directory, or null to clear
 	 */
-	async setWorkingDirectory(value: string | null): Promise<void> {
+	async setCwd(value: string | null): Promise<void> {
 		const trimmed = value?.trim() || undefined;
 
 		// No chat yet - buffer for the first chat the user creates.
 		if (!this.activeConversation) {
-			this.pendingWorkingDirectory = trimmed ?? null;
+			this.pendingCwd = trimmed ?? null;
 			return;
 		}
 
 		this.activeConversation = {
 			...this.activeConversation,
-			workingDirectory: trimmed
+			cwd: trimmed
 		};
 
 		await DatabaseService.updateConversation(this.activeConversation.id, {
-			workingDirectory: trimmed
+			cwd: trimmed
 		});
 
 		const convIndex = this.conversations.findIndex((c) => c.id === this.activeConversation!.id);
 		if (convIndex !== -1) {
-			this.conversations[convIndex].workingDirectory = trimmed;
+			this.conversations[convIndex].cwd = trimmed;
 			this.conversations = [...this.conversations];
 		}
-		this.pendingWorkingDirectory = null;
+		this.pendingCwd = null;
 	}
 
 	/**
@@ -1223,7 +1223,7 @@ if (browser) {
 export const conversations = () => conversationsStore.conversations;
 export const activeConversation = () => conversationsStore.activeConversation;
 export const activeMessages = () => conversationsStore.activeMessages;
-export const pendingWorkingDirectory = () => conversationsStore.pendingWorkingDirectory;
+export const pendingCwd = () => conversationsStore.pendingCwd;
 export const isConversationsInitialized = () => conversationsStore.isInitialized;
 
 /**

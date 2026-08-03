@@ -37,7 +37,7 @@
 		conversationsStore,
 		activeMessages,
 		activeConversation,
-		pendingWorkingDirectory
+		pendingCwd
 	} from '$lib/stores/conversations.svelte';
 	import type { GetPromptResult, MCPPromptInfo, MCPResourceInfo, PromptMessage } from '$lib/types';
 	import { isIMEComposing, parseClipboardContent, uuid } from '$lib/utils';
@@ -118,12 +118,12 @@
 	// The cwd shown on the chip comes from the conversation state; on the
 	// empty new-chat screen it falls back to the pending pick that
 	// createConversation() consumes on first send.
-	let workingDirectory = $derived(
-		activeConversation()?.workingDirectory ?? pendingWorkingDirectory()
+	let cwd = $derived(
+		activeConversation()?.cwd ?? pendingCwd()
 	);
 
 	async function handleWorkingDirectoryChange(value: string | null) {
-		await conversationsStore.setWorkingDirectory(value);
+		await conversationsStore.setCwd(value);
 		if (conversationsStore.activeConversation) {
 			// Mid-conversation: also drop a synthetic cwd message into chat
 			// history so the model sees the change on its next turn. On the
@@ -593,7 +593,7 @@
 
 	{#if toolsStore.builtinTools.length > 0}
 		<ChatFormWorkingDirectory
-			directory={workingDirectory}
+			directory={cwd}
 			onChange={handleWorkingDirectoryChange}
 			onClose={refocusInput}
 			{disabled}

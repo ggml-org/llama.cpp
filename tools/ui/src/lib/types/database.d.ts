@@ -14,7 +14,7 @@ export interface DatabaseConversation {
 	mcpServerOverrides?: McpServerOverride[];
 	thinkingEnabled?: boolean;
 	reasoningEffort?: ReasoningEffort;
-	workingDirectory?: string;
+	cwd?: string;
 	forkedFromConversationId?: string;
 	pinned?: boolean;
 }
@@ -122,6 +122,8 @@ export interface DatabaseMessage {
 	toolCallId?: string;
 	/** Working directory the tool call ran with (sent via the x-tool-cwd header), stored per call so the UI can show it accurately even after the conversation cwd changes */
 	toolCwd?: string;
+	/** Internal flag marking a UI-generated message (e.g. a cwd change). Never sent to the model in the OpenAI messages schema; "user" role is kept so chat templates accept it. */
+	isSynthetic?: boolean;
 	children: string[];
 	extra?: DatabaseMessageExtra[];
 	timings?: ChatMessageTimings;

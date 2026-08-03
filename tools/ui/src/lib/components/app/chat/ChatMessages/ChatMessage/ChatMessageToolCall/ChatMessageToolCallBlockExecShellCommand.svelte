@@ -81,9 +81,9 @@
 	// tool result message (it travels via the x-tool-cwd header, not the tool
 	// args). Reading it from the section keeps it accurate even if the
 	// conversation cwd changes later.
-	const workingDirectory = $derived(section.toolCwd);
+	const cwd = $derived(section.toolCwd);
 	const home = $derived(toolsStore.serverHome);
-	const wdDisplay = $derived(abbreviateHome(workingDirectory ?? '', home));
+	const wdDisplay = $derived(abbreviateHome(cwd ?? '', home));
 
 	const exitBadgeClass = $derived(
 		execShellExitStatus?.timedOut
@@ -169,8 +169,8 @@
 </script>
 
 {#snippet execShellTitle()}
-	{#if workingDirectory}
-		<span class="exec-wd" title={workingDirectory}>{wdDisplay}</span>
+	{#if cwd}
+		<span class="exec-wd" title={cwd}>{wdDisplay}</span>
 		<span class="exec-prompt">$</span>
 	{/if}
 	{#if highlightedCommandHtml}

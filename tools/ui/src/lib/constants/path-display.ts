@@ -1,0 +1,20 @@
+/**
+ * Constants for synthetic working-directory messages.
+ *
+ * The synthetic cwd-change message is text the UI renders as a folder row
+ * and the model sees as a turn reminder. The prefix and cleared marker keep
+ * the human-readable wording; the file-link regexes parse the
+ * `[file:///abs/path](display)` payload back out on the UI side.
+ */
+
+export const CWD_CHANGED_PREFIX = 'Set working directory to ';
+export const CWD_CLEARED_TEXT = 'Working directory cleared';
+
+export const CWD_CHANGED_PREFIX_LEGACY = 'CWD is changed to: ';
+export const CWD_CLEARED_TEXT_LEGACY = 'CWD is cleared';
+
+/** Matches the leading `[file:///abs/path](display)` link; not anchored to the end so trailing guidance may follow. */
+export const CWD_LINK_REGEX = /^\[file:\/\/([\s\S]*)\]\(([\s\S]*)\)/;
+
+/** Matches the legacy link format with swapped parts: `[display](file:///abs/path)`. */
+export const CWD_LINK_LEGACY_REGEX = /^\[([\s\S]*)\]\(file:\/\/([\s\S]*)\)$/;

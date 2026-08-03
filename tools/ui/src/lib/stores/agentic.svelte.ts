@@ -813,7 +813,7 @@ class AgenticStore {
 							updateToolResultMessage
 						) {
 							const args = this.parseToolArguments(toolCall.function.arguments);
-							const cwd = conversationsStore.activeConversation?.workingDirectory;
+							const cwd = conversationsStore.activeConversation?.cwd;
 							const msg = await createToolResultMessage(toolCall.id, '', undefined, cwd);
 							createdToolResultMessageId = msg.id;
 
@@ -837,7 +837,7 @@ class AgenticStore {
 							result = accumulated;
 						} else if (toolSource === ToolSource.BUILTIN) {
 							const args = this.parseToolArguments(toolCall.function.arguments);
-							const cwd = conversationsStore.activeConversation?.workingDirectory;
+							const cwd = conversationsStore.activeConversation?.cwd;
 							const executionResult = await ToolsService.executeTool(toolName, args, signal, cwd);
 
 							result = executionResult.content;

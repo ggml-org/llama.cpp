@@ -40,6 +40,7 @@ export * from './mcp';
 export * from './mcp-form';
 export * from './mcp-resource';
 export * from './message-export';
+export * from './path-display';
 export * from './model-id';
 export * from './model-loading';
 export * from './sse';

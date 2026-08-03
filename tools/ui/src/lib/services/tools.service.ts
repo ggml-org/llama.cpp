@@ -2,7 +2,7 @@ import { base } from '$app/paths';
 import { getJsonHeaders } from '$lib/utils/api-headers';
 import { parseSseJsonStream, type SseJsonEvent } from '$lib/utils/sse';
 import { apiFetch } from '$lib/utils';
-import { API_TOOLS } from '$lib/constants';
+import { API_TOOLS, X_TOOL_CWD_HEADER } from '$lib/constants';
 import { ToolResponseField } from '$lib/enums';
 import type { ToolExecutionResult, ServerBuiltinToolInfo } from '$lib/types';
 
@@ -32,7 +32,7 @@ export class ToolsService {
 		const result = await apiFetch<Record<string, unknown>>(API_TOOLS.EXECUTE, {
 			method: 'POST',
 			body: JSON.stringify({ tool: toolName, params }),
-			headers: cwd ? { 'x-tool-cwd': cwd } : undefined,
+			headers: cwd ? { [X_TOOL_CWD_HEADER]: cwd } : undefined,
 			signal
 		});
 
@@ -61,7 +61,7 @@ export class ToolsService {
 		return apiFetch<Record<string, unknown>>(API_TOOLS.EXECUTE, {
 			method: 'POST',
 			body: JSON.stringify({ tool: toolName, params }),
-			headers: cwd ? { 'x-tool-cwd': cwd } : undefined,
+			headers: cwd ? { [X_TOOL_CWD_HEADER]: cwd } : undefined,
 			signal
 		});
 	}
@@ -88,7 +88,7 @@ export class ToolsService {
 		cwd?: string
 	): AsyncGenerator<ToolStreamEvent> {
 		const headers = getJsonHeaders();
-		if (cwd) headers['x-tool-cwd'] = cwd;
+		if (cwd) headers[X_TOOL_CWD_HEADER] = cwd;
 		const response = await fetch(`${base}${API_TOOLS.EXECUTE}`, {
 			method: 'POST',
 			headers,

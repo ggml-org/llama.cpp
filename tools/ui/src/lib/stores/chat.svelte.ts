@@ -874,7 +874,8 @@ class ChatStore {
 		content: string,
 		type: MessageType = MessageType.TEXT,
 		parent: string = '-1',
-		extras?: DatabaseMessageExtra[]
+		extras?: DatabaseMessageExtra[],
+		isSynthetic?: boolean
 	): Promise<DatabaseMessage> {
 		const activeConv = conversationsStore.activeConversation;
 		if (!activeConv) throw new Error('No active conversation');
@@ -897,7 +898,8 @@ class ChatStore {
 				timestamp: Date.now(),
 				toolCalls: '',
 				children: [],
-				extra: extras
+				extra: extras,
+				isSynthetic
 			},
 			parentId
 		);
@@ -923,14 +925,15 @@ class ChatStore {
 		// repeated picks update it in place instead of stacking another row.
 		const last = conversationsStore.activeMessages[conversationsStore.activeMessages.length - 1];
 		if (last && last.role === MessageRole.USER && parseCwdMessage(last.content)) {
-			await DatabaseService.updateMessage(last.id, { content });
+			await DatabaseService.updateMessage(last.id, { content, isSynthetic: true });
 			conversationsStore.updateMessageAtIndex(conversationsStore.activeMessages.length - 1, {
-				content
+				content,
+				isSynthetic: true
 			});
 			return;
 		}
 
-		await this.addMessage(MessageRole.USER, content);
+		await this.addMessage(MessageRole.USER, content, MessageType.TEXT, '-1', undefined, true);
 	}
 
 	async addSystemPrompt(): Promise<void> {
@@ -1099,12 +1102,14 @@ class ChatStore {
 				// chat history before the first user message, so the model sees
 				// it on its first turn. createConversation() has already threaded
 				// the pending pick onto the conversation.
-				if (currentConv.workingDirectory) {
+				if (currentConv.cwd) {
 					const cwdMessage = await this.addMessage(
 						MessageRole.USER,
-						formatCwdMessage(currentConv.workingDirectory, await toolsStore.resolveServerHome()),
+						formatCwdMessage(currentConv.cwd, await toolsStore.resolveServerHome()),
 						MessageType.TEXT,
-						sysOrRootId
+						sysOrRootId,
+						undefined,
+						true
 					);
 					parentIdForUserMessage = cwdMessage.id;
 				} else {

@@ -1,3 +1,12 @@
+import {
+	CWD_CHANGED_PREFIX,
+	CWD_CHANGED_PREFIX_LEGACY,
+	CWD_CLEARED_TEXT,
+	CWD_CLEARED_TEXT_LEGACY,
+	CWD_LINK_LEGACY_REGEX,
+	CWD_LINK_REGEX
+} from '$lib/constants';
+
 /**
  * Last non-empty slash-delimited segment of `path`, with trailing
  * slashes stripped. Returns the input unchanged when no `/` is present.
@@ -38,11 +47,7 @@ export function abbreviateHome(path: string, home: string | null | undefined): s
 	return path;
 }
 
-export const CWD_CHANGED_PREFIX = 'Set working directory to ';
-export const CWD_CLEARED_TEXT = 'Working directory cleared';
-
-const CWD_CHANGED_PREFIX_LEGACY = 'CWD is changed to: ';
-const CWD_CLEARED_TEXT_LEGACY = 'CWD is cleared';
+export { CWD_CHANGED_PREFIX, CWD_CLEARED_TEXT } from '$lib/constants';
 
 export interface CwdMessageInfo {
 	// absolute server-side path, null when the cwd was cleared
@@ -76,13 +81,13 @@ export function parseCwdMessage(content: string): CwdMessageInfo | null {
 	if (trimmed.startsWith(CWD_CHANGED_PREFIX)) {
 		const rest = trimmed.slice(CWD_CHANGED_PREFIX.length);
 		// not anchored to the end: guidance may follow the link
-		const link = rest.match(/^\[file:\/\/([\s\S]*)\]\(([\s\S]*)\)/);
+		const link = rest.match(CWD_LINK_REGEX);
 		if (link) return { path: link[1], display: link[2] };
 		return { path: rest, display: rest };
 	}
 	if (trimmed.startsWith(CWD_CHANGED_PREFIX_LEGACY)) {
 		const rest = trimmed.slice(CWD_CHANGED_PREFIX_LEGACY.length);
-		const link = rest.match(/^\[([\s\S]*)\]\(file:\/\/([\s\S]*)\)$/);
+		const link = rest.match(CWD_LINK_LEGACY_REGEX);
 		if (link) return { path: link[2], display: link[1] };
 		return { path: rest, display: rest };
 	}
