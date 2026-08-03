@@ -1,6 +1,8 @@
 #include "argsort.cuh"
 #include "top-k.cuh"
 
+#include <cstdlib>
+
 #ifdef GGML_CUDA_USE_CUB
 #    if defined(GGML_USE_HIP)
 #        include <hipcub/hipcub.hpp>
@@ -26,6 +28,7 @@ using namespace cub;
 #ifdef ROCPRIM_TOP_K_AVAILABLE
 
 static constexpr int ROCPRIM_TOP_K_SORT_BLOCK = 256;
+static constexpr int ROCPRIM_TOP_K_SORT_BLOCK_LARGE = 512;
 
 static int next_power_of_2(int x) {
     int n = 1;
@@ -35,12 +38,13 @@ static int next_power_of_2(int x) {
     return n;
 }
 
+template<int BLOCK>
 static __global__ void top_k_rocprim_sort_candidates(
         const float * keys_in,
         const int *   values_in,
         int *         values_out,
         int           k) {
-    using block_sort = rocprim::block_radix_sort<float, ROCPRIM_TOP_K_SORT_BLOCK, 1, int>;
+    using block_sort = rocprim::block_radix_sort<float, BLOCK, 1, int>;
     __shared__ typename block_sort::storage_type storage;
 
     const int row = blockIdx.x;
@@ -60,8 +64,9 @@ static void top_k_rocprim(
         int              ncols,
         int              nrows,
         int              k,
-        cudaStream_t     stream) {
-    GGML_ASSERT(k > 0 && k <= ROCPRIM_TOP_K_SORT_BLOCK);
+        cudaStream_t     stream,
+        bool             sort_large) {
+    GGML_ASSERT(k > 0 && (k <= ROCPRIM_TOP_K_SORT_BLOCK || sort_large));
 
     ggml_cuda_pool_alloc<float> selected_keys_alloc(pool, (size_t) k * nrows);
     ggml_cuda_pool_alloc<int>   selected_vals_alloc(pool, (size_t) k * nrows);
@@ -90,8 +95,13 @@ static void top_k_rocprim(
         CUDA_CHECK(status);
     }
 
-    top_k_rocprim_sort_candidates<<<nrows, ROCPRIM_TOP_K_SORT_BLOCK, 0, stream>>>(
-        selected_keys, selected_vals, dst, k);
+    if (k <= ROCPRIM_TOP_K_SORT_BLOCK) {
+        top_k_rocprim_sort_candidates<ROCPRIM_TOP_K_SORT_BLOCK><<<nrows, ROCPRIM_TOP_K_SORT_BLOCK, 0, stream>>>(
+            selected_keys, selected_vals, dst, k);
+    } else {
+        top_k_rocprim_sort_candidates<ROCPRIM_TOP_K_SORT_BLOCK_LARGE><<<nrows, ROCPRIM_TOP_K_SORT_BLOCK_LARGE, 0, stream>>>(
+            selected_keys, selected_vals, dst, k);
+    }
     CUDA_CHECK(cudaGetLastError());
 }
 
@@ -149,8 +159,15 @@ void ggml_cuda_op_top_k(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int64_t    k     = dst->ne[0];
     ggml_cuda_pool & pool  = ctx.pool();
 #ifdef ROCPRIM_TOP_K_AVAILABLE
-    if (k <= ROCPRIM_TOP_K_SORT_BLOCK) {
-        top_k_rocprim(pool, src0_d, dst_d, ncols, nrows, k, stream);
+    // DSV4 lightning-indexer top-k reaches k=512 and a padded score width
+    // above 4096 at the ~16K context boundary. The HIP CUB argsort path can
+    // return invalid indices for this shape on gfx1030; use rocPRIM's top-k
+    // followed by a 512-thread local sort instead. The sorted result preserves
+    // normal ggml_top_k semantics. k=512 and this width are the DSV4 LID
+    // shape that exercises the problematic range on gfx1030.
+    const bool use_dsv4_rocprim = k <= ROCPRIM_TOP_K_SORT_BLOCK_LARGE && ncols > 4096;
+    if (k <= ROCPRIM_TOP_K_SORT_BLOCK || use_dsv4_rocprim) {
+        top_k_rocprim(pool, src0_d, dst_d, ncols, nrows, k, stream, use_dsv4_rocprim);
         return;
     }
     // Fall through to the full argsort path for unusually large K.
