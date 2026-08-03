@@ -14,6 +14,21 @@ namespace {
 
 constexpr uint64_t MiB = 1024ull * 1024ull;
 
+constexpr const char * LLAMA_ASCII_LOGO = R"(
+▄▄ ▄▄
+██ ██
+██ ██  ▀▀█▄ ███▄███▄  ▀▀█▄    ▄████ ████▄ ████▄
+██ ██ ▄█▀██ ██ ██ ██ ▄█▀██    ██    ██ ██ ██ ██
+██ ██ ▀█▄██ ██ ██ ██ ▀█▄██ ██ ▀████ ████▀ ████▀
+                                    ██    ██
+                                    ▀▀    ▀▀
+)";
+
+void print_banner() {
+    std::fputs(LLAMA_ASCII_LOGO, stderr);
+    std::fputs("Summer.cpp tiered-memory CLI\n\n", stderr);
+}
+
 void print_usage(const char * argv0) {
     std::fprintf(stderr,
             "usage: %s -m MODEL.gguf --dram-mib N [--vram-mib N] "
@@ -90,6 +105,8 @@ int main(int argc, char ** argv) {
             prompt += argv[i];
         }
     }
+
+    print_banner();
 
     llama_model_params model_params = llama_model_default_params();
     llama_tiered_model * tiered = llama_tiered_model_load_from_file(
