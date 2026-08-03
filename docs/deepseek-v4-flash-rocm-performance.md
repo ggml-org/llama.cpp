@@ -68,7 +68,7 @@ The only attested DSV4 sweep found so far is `/home/edwin/dsv4-dspark-sweep-2026
 | UD-IQ3_XXS + BF16 DSpark, n-max 16 | 13.9 t/s | 20.1 t/s | one fixed 512-token CLI run |
 | UD-IQ3_XXS + Haraldh MXFP4/Q8 DSpark, n-max 16 | 9.2 t/s | 19.4 t/s | one fixed 512-token CLI run |
 
-These are provenance data, not a statistical baseline. The new baseline must use the IQ2_M target, current base commit, repeated PP-only runs, and no speculative draft during PP attribution unless explicitly testing draft overhead.
+These are provenance data, not a statistical baseline. The user reports roughly 80-300 PP t/s from the current IQ2_M server under real inference, but the prompt length, cache state, concurrent load, and timing definition vary; record this as workload-dependent field evidence, not a controlled result. The new baseline must use the IQ2_M target, current base commit, repeated PP-only runs, and no speculative draft during PP attribution unless explicitly testing draft overhead.
 
 Reusable assets:
 
@@ -160,24 +160,28 @@ Candidate implementation if confirmed: tune only the measured dominant GGUF quan
 
 ### M0 - reproducible baseline and profiler harness
 
-Artifacts under `perf/dsv4-rocm/`:
+Harness source under `scripts/dsv4-rocm/`; timestamped raw artifacts under `$HOME/llama-jobs/dsv4-rocm-pp/`:
 
-- `manifest.sh`: hardware, source, build, model hashes/metadata, environment, command.
+- `manifest.sh`: hardware, source, build, model shard identities/optional hashes, environment, command.
 - `run-pp.sh`: PP-only deterministic runner with repetitions and unique output directory.
 - `summarize.py`: median/p95, raw timings, failures, and identities.
-- `profile.sh`: rocprofv3 trace wrapper plus rocm-smi sampling.
+- `profile-pp.sh`: rocprofv3 trace wrapper plus rocm-smi sampling.
 - `README.md`: safe use, including refusal to run while another llama process owns GPUs unless explicitly overridden.
 
-Initial practical matrix:
+Initial quick-iteration matrix:
 
-- prompt tokens: 512, 2048, 8192, 32768; add 64K/128K only after stability;
-- ubatch: 128, 256, 512; batch fixed at least as large;
-- modes: PP-only (`-n 1` or benchmark-native PP), then fixed-prefix TG separately;
-- repetitions: two warmups and five measured runs for short cases; at least three measured for expensive cases;
+- one complete short grid: prompt 512 and 2048, ubatch 256, batch 512;
+- one separate long-context probe: prompt 8192, ubatch 256, two repetitions;
+- modes: PP-only (benchmark-native PP), then fixed-prefix TG separately;
+- repetitions: one built-in warmup plus three measured samples per completed short shape;
+- measurement budget: absolute five-minute cap beginning at the first measured prompt run, explicitly excluding initial model load/context creation/warmup; JSONL preserves completed cases when truncated;
+- truncated or shape-incomplete summaries are marked `complete=false`, exit nonzero after preserving evidence, and cannot be used as matched A/B results;
+- quick summaries report median/range and latency; p05/p95 remain unavailable until at least 20 samples;
+- final-validation expansion only: ubatch 128/512 and prompt 32K/64K/128K after the fast loop stabilizes;
 - main run: IQ2_M, four GPUs, tensor split 1,1,1,1, FA on, no draft for PP attribution;
 - comparison: draft enabled only in a separate PP+TG run.
 
-Metrics: PP t/s and wall time, peak VRAM/RAM, per-GPU utilization/clocks/power, kernel time/calls, HIP memcpy/P2P bytes, RCCL time, attention/LID/top-k/MoE stage percentages, and failures.
+Metrics: PP t/s and measured latency, peak VRAM/RAM, per-GPU utilization/clocks/power, kernel time/calls, HIP memcpy/P2P bytes, RCCL time, attention/LID/top-k/MoE stage percentages, and failures. Whole-process rocprof summaries include model-load/setup events and are not valid for stage thresholds; filter traces to the harness-recorded first measured-run and completed-record timestamps.
 
 ### M1 - select one optimization from profile evidence
 
@@ -188,15 +192,15 @@ Decision rule:
 - MoE/MMQ >=35% at 512-8K: tune the dominant routed expert path;
 - copies/collectives >=20%: optimize tensor split/communication first.
 
-Do not select by architectural elegance alone.
+Do not select by architectural elegance alone. Apply thresholds only to a trace interval aligned to measured PP, never to whole-process profiler totals. Compare only identical complete shapes using paired/interleaved base-candidate-base ordering.
 
 ### M2 - correctness proof and microbenchmark
 
-Before integration, add a focused backend op test or deterministic reference for the changed operation. Required cases include short visible length, exactly/above top-k, chunk boundaries, unequal sequence lengths where supported, and gfx1030-specific dispatch fallback.
+Before integration, add a focused backend op test or deterministic reference for the changed operation. Required cases include short visible length, exactly/above top-k, chunk boundaries, unequal sequence lengths where supported, and gfx1030-specific dispatch fallback. Because llama-bench uses synthetic token IDs and MoE routing is input-dependent, any exploratory win must also pass one fixed, recorded production-representative token corpus before acceptance.
 
 ### M3 - implementation and matched A/B
 
-One implementation branch and one writer. Keep the base binary and build artifacts. Run static/backend tests first, then DSV4 validation, then matched benchmark/profile. Report local kernel speed separately from whole-model PP.
+One implementation branch and one writer. Keep the base binary and build artifacts. A frozen baseline is valid only when its sibling llama/ggml DSOs are selected and hashed; an executable that resolves candidate-build libraries is not frozen. Run static/backend tests first, then DSV4 validation, then matched benchmark/profile. Report local kernel speed separately from whole-model PP.
 
 ### M4 - independent review and next decision
 
@@ -228,6 +232,9 @@ A dense mask is not a sparse performance implementation. Success requires runtim
 | 2026-08-03 | PP first; TG secondary. | User objective. | final |
 | 2026-08-03 | Profile short-prompt MoE/communication and long-context attention/LID separately. | Existing 512-token 13.9 t/s result plus graph inspection. | final |
 | 2026-08-03 | Direct indexed CSA remains the leading long-context architectural candidate, not yet the selected first patch. | Dense operands proven in source; wall-time dominance unmeasured. | provisional |
+| 2026-08-03 | Do not treat historical 13.9 t/s as current production throughput; user observes about 80-300 PP t/s under varying live IQ2_M workloads. | User report; controlled conditions not yet recorded. | final |
+| 2026-08-03 | Cap measured PP at five minutes while excluding initial load/warmup; run 8K separately and reject incomplete runs for matched A/B. | User direction plus independent benchmark-validity review. | final |
+| 2026-08-03 | Trace whole process but apply attribution thresholds only after filtering to recorded measured-run timestamps. | Independent review found model load would bias whole-process totals. | final |
 
 ## 9. Open questions
 
@@ -242,7 +249,7 @@ A dense mask is not a sparse performance implementation. Success requires runtim
 
 ## 10. Reproduction record
 
-Pending the first controlled GPU window. Do not populate this section with the active production service's throughput because it has an external client and speculative decode enabled.
+Pending the first controlled GPU window. Do not populate this section with the active production service's throughput because it has an external client and speculative decode enabled. Quick-loop benchmark execution is capped at five measured minutes with model load excluded; longer contexts are deferred to final validation.
 
 Planned final record:
 
