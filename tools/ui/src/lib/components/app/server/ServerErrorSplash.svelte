@@ -158,6 +158,7 @@
 					<div class="relative">
 						<Input
 							id="api-key-input"
+							type="password"
 							placeholder="Enter your API key..."
 							bind:value={apiKeyInput}
 							onkeydown={handleApiKeyKeydown}
