@@ -8,6 +8,7 @@
 #include "ggml-cpp.h"
 
 struct llama_model;
+struct llama_expert_heatmap;
 
 // stores per-layer sizing for the Mixture of Experts GPU hot store.
 // one "slot" holds a single expert's weights for one layer.
@@ -32,12 +33,19 @@ struct llama_expert_hotstore {
     ggml_context_ptr        ctx;
     ggml_backend_buffer_ptr buf;
 
+    // true once the first copy of the top-S experts landed (once per session)
+    bool is_filled = false;
+
     llama_expert_hotstore(const llama_model * model, int n_layers,
                           int n_experts, int hot_s);
 
     // allocate the GPU hot store for `hot_s` slots. returns false (and
     // leaves the store disabled) on failure or shortage of VRAM.
     bool allocate(ggml_backend_buffer_type_t gpu_buft);
+
+    // copy the top-S expert slices for every layer into the GPU hot store,
+    // using the given heatmap for the ranking. no-op if already filled.
+    void copy_top_s(const llama_expert_heatmap & heatmap);
 
     void log() const;
 };

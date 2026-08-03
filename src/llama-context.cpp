@@ -1411,6 +1411,9 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         synchronize();
         expert_heatmap->update_from_graph(res->moe_sel_experts);
     }
+    if (expert_heatmap && expert_hotstore && !expert_hotstore->is_filled) {
+        expert_hotstore->copy_top_s(*expert_heatmap);
+    }
 
     ret = GGML_STATUS_SUCCESS;
 

@@ -1,8 +1,10 @@
 #include "llama-expert-hotstore.h"
+#include "llama-expert-heatmap.h"
 #include "llama-impl.h"
 #include "llama-model.h"
 
 #include "ggml.h"
+#include "ggml-backend.h"
 
 #include <regex>
 
@@ -89,6 +91,31 @@ bool llama_expert_hotstore::allocate(ggml_backend_buffer_type_t gpu_buft) {
     ggml_backend_buffer_set_usage(buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
 
     return true;
+}
+
+void llama_expert_hotstore::copy_top_s(const llama_expert_heatmap & heatmap) {
+    if (is_filled || hot_s <= 0 || entries.empty()) {
+        return;
+    }
+
+    for (const auto & e : entries) {
+        const size_t slot = ggml_nbytes(e.src) / (size_t) e.src->ne[2];
+        const char * src = e.src->data ? (const char *) ggml_get_data(e.src) : nullptr;
+        if (!src) {
+            continue;
+        }
+
+        const auto top = heatmap.get_top_s(e.layer_idx, hot_s);
+        for (size_t p = 0; p < top.size() && p < (size_t) hot_s; p++) {
+            const int     ex      = top[p];
+            const size_t  src_off = (size_t) ex * slot;
+            const size_t  dst_off = p * slot;
+            ggml_backend_tensor_set(e.dst, src + src_off, dst_off, slot);
+        }
+    }
+
+    is_filled = true;
+    LLAMA_LOG("=== Expert hot store: top-S experts copied to GPU ===\n");
 }
 
 void llama_expert_hotstore::log() const {
