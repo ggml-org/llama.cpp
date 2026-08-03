@@ -19,7 +19,7 @@ if (CUDAToolkit_FOUND)
         # 120    == Blackwell, needs CUDA v12.8, FP4 tensor cores
         #
         # XX-virtual == compile CUDA code as PTX, do JIT compilation to binary code on first run
-        # XX-real    == compile CUDA code as device code for this specific architecture
+        # XX-real    == compile as device code for this specific architecture
         # no suffix  == compile as both PTX and device code
         #
         # The default behavior for a non-native is to build virtual architectures as needed to cover all features needed
@@ -244,6 +244,13 @@ if (CUDAToolkit_FOUND)
         endif()
 
         message(STATUS "CUDA host compiler is ${CUDA_CCID} ${CUDA_CCVER}")
+
+        # GCC 11 misdiagnoses std::vector::insert(initializer_list) in ggml_cuda_try_fuse as a buffer overflow.
+        # Keep the workaround source-local so real string-overflow diagnostics remain enabled elsewhere.
+        if (CUDA_CCID STREQUAL "GNU" AND CUDA_CCVER VERSION_GREATER_EQUAL "11" AND CUDA_CCVER VERSION_LESS "12")
+            set_property(SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/ggml-cuda.cu" APPEND PROPERTY COMPILE_OPTIONS
+                "-Xcompiler=-Wno-stringop-overflow")
+        endif()
 
         ggml_get_flags(${CUDA_CCID} ${CUDA_CCVER})
         list(APPEND CUDA_CXX_FLAGS ${CXX_FLAGS} ${GF_CXX_FLAGS})  # This is passed to -Xcompiler later
