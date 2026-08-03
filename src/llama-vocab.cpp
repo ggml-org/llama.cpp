@@ -2532,6 +2532,12 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             const std::string & key = kv(std::get<0>(it));
             int32_t & id = std::get<1>(it);
 
+            if (id >= 0 && static_cast<size_t>(id) >= id_to_token.size()) {
+                LLAMA_LOG_WARN("%s: default special token '%s' = %d out of vocab range, disabling\n",
+                    __func__, key.c_str(), id);
+                id = LLAMA_TOKEN_NULL;
+            }
+
             uint32_t new_id;
             if (!ml.get_key(std::get<0>(it), new_id, false)) {
                 continue;
