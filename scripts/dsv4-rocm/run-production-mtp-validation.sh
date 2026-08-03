@@ -230,7 +230,8 @@ run_arm() {
 run_arm main-only "$BASE_PORT"
 run_arm mtp "$((BASE_PORT + 1))" "${draft_args[@]}"
 
-python3 - "$OUTPUT_DIR" <<'PY'
+set +e
+python3 - "$OUTPUT_DIR" <<'PY' | tee "$OUTPUT_DIR/comparison.txt"
 import json
 import math
 import pathlib
@@ -247,9 +248,14 @@ base = load("main-only")
 mtp = load("mtp")
 base_response = base["response"]
 mtp_response = mtp["response"]
-for field in ("content", "tokens"):
-    if base_response.get(field) != mtp_response.get(field):
-        raise SystemExit(f"main-only/MTP {field} differ")
+content_equal = base_response.get("content") == mtp_response.get("content")
+tokens_equal = base_response.get("tokens") == mtp_response.get("tokens")
+base_tokens = base_response["tokens"]
+mtp_tokens = mtp_response["tokens"]
+first_token_difference = next(
+    (index for index, pair in enumerate(zip(base_tokens, mtp_tokens)) if pair[0] != pair[1]),
+    None,
+)
 if base.get("request") != mtp.get("request"):
     raise SystemExit("main-only/MTP requests differ")
 if base_response["timings"]["prompt_n"] != mtp_response["timings"]["prompt_n"]:
@@ -285,7 +291,10 @@ def timing(response, key):
 
 summary = {
     "measurement_note": "single main-only-then-MTP observation; correctness and production-routing evidence, not a stable speed claim",
-    "responses_match": True,
+    "responses_match": content_equal and tokens_equal,
+    "content_equal": content_equal,
+    "token_ids_equal": tokens_equal,
+    "first_token_difference_index": first_token_difference,
     "prompt_tokens": int(timing(base_response, "prompt_n")),
     "generated_tokens": int(timing(base_response, "predicted_n")),
     "main_only": {
@@ -313,7 +322,16 @@ for stage, metric in (("pp", "pp_tps"), ("tg", "tg_tps")):
     summary[f"{stage}_delta_pct"] = 100 * (after / before - 1)
 (root / "comparison.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
 print(json.dumps(summary, indent=2, sort_keys=True))
+if not content_equal or not tokens_equal:
+    raise SystemExit("main-only/MTP generated outputs differ")
 PY
+compare_rc=${PIPESTATUS[0]}
+set -e
+if [[ "$compare_rc" -ne 0 ]]; then
+    printf 'complete=0\nacceptance=failed\ncomparison_rc=%s\nfinished_at=%s\n' \
+        "$compare_rc" "$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)" > "$OUTPUT_DIR/production-status.txt"
+    exit "$compare_rc"
+fi
 
 printf 'complete=1\nfinished_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%S.%NZ)" > "$OUTPUT_DIR/production-status.txt"
 echo "Artifacts: $OUTPUT_DIR"
