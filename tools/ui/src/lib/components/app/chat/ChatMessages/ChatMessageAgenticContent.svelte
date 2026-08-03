@@ -3,6 +3,7 @@
 		ChatMessageStatistics,
 		MarkdownContent,
 		ChatMessageActionCardPermissionRequest,
+		ChatMessageActionCardQuestionRequest,
 		ChatMessageActionCardContinueRequest
 	} from '$lib/components/app';
 
@@ -10,6 +11,7 @@
 	import type {
 		ChatMessageAgenticTimings,
 		ChatMessageAgenticTurnStats,
+		AgenticQuestionAnswers,
 		DatabaseMessage
 	} from '$lib/types';
 	import { deriveAgenticSections, type AgenticSection } from '$lib/utils';
@@ -70,6 +72,16 @@
 	function handlePermission(decision: ToolPermissionDecision) {
 		permissionDismissed = true;
 		agenticResolvePermission(message.convId, decision);
+	}
+
+	function handleQuestionAnswers(answers: AgenticQuestionAnswers) {
+		permissionDismissed = true;
+		agenticResolvePermission(message.convId, answers);
+	}
+
+	function handleQuestionDismiss() {
+		permissionDismissed = true;
+		agenticResolvePermission(message.convId, ToolPermissionDecision.DENY);
 	}
 
 	let continueDismissed = $state(false);
@@ -238,11 +250,19 @@
 	{/if}
 
 	{#if pendingPermission && !permissionDismissed}
-		<ChatMessageActionCardPermissionRequest
-			toolName={pendingPermission.toolName}
-			serverLabel={pendingPermission.serverLabel}
-			onDecision={handlePermission}
-		/>
+		{#if pendingPermission.kind === 'question'}
+			<ChatMessageActionCardQuestionRequest
+				questions={pendingPermission.questions}
+				onAnswer={handleQuestionAnswers}
+				onDismiss={handleQuestionDismiss}
+			/>
+		{:else}
+			<ChatMessageActionCardPermissionRequest
+				toolName={pendingPermission.toolName}
+				serverLabel={pendingPermission.serverLabel}
+				onDecision={handlePermission}
+			/>
+		{/if}
 	{/if}
 
 	{#if pendingContinue && !continueDismissed}

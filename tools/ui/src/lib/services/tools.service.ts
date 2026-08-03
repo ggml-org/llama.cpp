@@ -34,6 +34,21 @@ export class ToolsService {
 			return { content: String(result[ToolResponseField.ERROR]), isError: true };
 		}
 
+		if (result.status === 'awaiting_user' && typeof result.request_id === 'string') {
+			return {
+				content: '',
+				isError: false,
+				awaitingUser: {
+					kind: typeof result.kind === 'string' ? result.kind : 'unknown',
+					requestID: result.request_id,
+					payload:
+						typeof result.payload === 'object' && result.payload !== null
+							? (result.payload as Record<string, unknown>)
+							: {}
+				}
+			};
+		}
+
 		if (ToolResponseField.PLAIN_TEXT in result) {
 			return { content: String(result[ToolResponseField.PLAIN_TEXT]), isError: false };
 		}

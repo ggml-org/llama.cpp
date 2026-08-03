@@ -1,4 +1,4 @@
-import type { MessageRole } from '$lib/enums';
+import type { MessageRole, ToolPermissionDecision } from '$lib/enums';
 import { ToolCallType } from '$lib/enums';
 import type {
 	ApiChatCompletionRequest,
@@ -52,6 +52,36 @@ export type AgenticMessage =
 export type AgenticAssistantMessage = Extract<AgenticMessage, { role: MessageRole.ASSISTANT }>;
 export type AgenticToolCallList = NonNullable<AgenticAssistantMessage['tool_calls']>;
 
+export interface AgenticQuestionOption {
+	label: string;
+	description: string;
+}
+
+export interface AgenticQuestionPrompt {
+	question: string;
+	header: string;
+	options?: AgenticQuestionOption[];
+	multiple?: boolean;
+	custom?: boolean;
+}
+
+export type AgenticQuestionAnswers = string[][];
+
+export type AgenticInteractiveRequest =
+	| {
+			kind: 'permission';
+			toolName: string;
+			serverLabel: string;
+	  }
+	| {
+			kind: 'question';
+			toolName: 'question';
+			requestID: string;
+			questions: AgenticQuestionPrompt[];
+	  };
+
+export type AgenticInteractiveResolution = ToolPermissionDecision | AgenticQuestionAnswers;
+
 export type AgenticChatCompletionRequest = Omit<ApiChatCompletionRequest, 'messages'> & {
 	messages: AgenticMessage[];
 	stream: true;
@@ -68,7 +98,7 @@ export interface AgenticSession {
 	totalToolCalls: number;
 	lastError: Error | null;
 	streamingToolCall: { name: string; arguments: string } | null;
-	pendingPermissionRequest: { toolName: string; serverLabel: string } | null;
+	pendingPermissionRequest: AgenticInteractiveRequest | null;
 	/** ID of the tool call whose output is currently being streamed back
 	 *  (e.g. exec_shell_command outputting to /tools?stream=true). Lets the
 	 *  matching tool renderer flip into live-update mode while chunks
