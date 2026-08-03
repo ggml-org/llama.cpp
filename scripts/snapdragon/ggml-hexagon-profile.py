@@ -689,9 +689,9 @@ def main():
             elif args.tail is not None:
                 dev_ops = dev_ops[-args.tail:]
 
-            logger.info(f"\n=========================================")
+            logger.info("\n=========================================")
             logger.info(f" Device: {dev}")
-            logger.info(f"=========================================")
+            logger.info("=========================================")
 
             if args.timeline:
                 for op in dev_ops:

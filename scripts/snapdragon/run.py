@@ -9,6 +9,10 @@ import argparse
 import subprocess
 import platform
 import shlex
+import logging
+
+logger = logging.getLogger("run")
+
 
 def parse_target(target_str):
     if not target_str:
@@ -26,18 +30,21 @@ def parse_target(target_str):
     else:
         return None, None
 
+
 def shlex_join(args_list):
     if hasattr(shlex, 'join'):
         return shlex.join(args_list)
     import pipes
     return " ".join(pipes.quote(x) for x in args_list)
 
+
 def main():
+    logging.basicConfig(level=logging.INFO, format='%(message)s')
     # Split arguments at '--'
     if '--' in sys.argv:
         idx = sys.argv.index('--')
         run_args = sys.argv[1:idx]
-        cmd_args = sys.argv[idx+1:]
+        cmd_args = sys.argv[idx + 1:]
     else:
         run_args = sys.argv[1:]
         cmd_args = []
@@ -89,7 +96,7 @@ def main():
 
     if not cmd_args:
         parser.print_help()
-        print("\nError: No command specified after '--'")
+        logger.error("\nError: No command specified after '--'")
         sys.exit(1)
 
     target_type = None
@@ -98,7 +105,7 @@ def main():
     if args.target:
         target_type, target_val = parse_target(args.target)
         if not target_type:
-            print(f"Error: Invalid target format '{args.target}'. Must be android[:serial]/adb[:serial], linux:[user@]host/lnx:[user@]host/ubuntu:[user@]host, or windows/wos.", file=sys.stderr)
+            logger.error(f"Error: Invalid target format '{args.target}'. Must be android[:serial]/adb[:serial], linux:[user@]host/lnx:[user@]host/ubuntu:[user@]host, or windows/wos.")
             sys.exit(1)
         target_prefix = args.target.split(":", 1)[0]
 
@@ -242,17 +249,17 @@ def main():
     if basename == "test-backend-ops":
         for i in range(len(cmd_args)):
             if cmd_args[i] in ("-p", "--params") and i + 1 < len(cmd_args):
-                val = cmd_args[i+1]
+                val = cmd_args[i + 1]
                 new_val = ""
                 for j, char in enumerate(val):
                     if char in ('[', ']'):
-                        if j > 0 and val[j-1] == '\\':
+                        if j > 0 and val[j - 1] == '\\':
                             new_val += char
                         else:
                             new_val += '\\' + char
                     else:
                         new_val += char
-                cmd_args[i+1] = new_val
+                cmd_args[i + 1] = new_val
 
         has_b = any(arg == "-b" for arg in cmd_args)
         if not has_b:
@@ -290,12 +297,12 @@ def main():
 
     # Automatically add -v to known llama tools if sched-debug, verbose, or profile are set
     verbose_trigger = (
-        args.sched_debug or
-        args.verbose is not None or
-        args.profile is not None or
-        args.hex_verbose is not None or
-        args.hex_profile is not None or
-        args.hex_optrace is not None
+        args.sched_debug
+        or args.verbose is not None
+        or args.profile is not None
+        or args.hex_verbose is not None
+        or args.hex_profile is not None
+        or args.hex_optrace is not None
     )
     if verbose_trigger and basename in ("llama-cli", "llama-completion", "llama-bench", "llama-server", "llama-mtmd-cli"):
         if "-v" not in cmd_args and "--verbose" not in cmd_args:
@@ -337,14 +344,14 @@ def main():
         adb_shell_cmd = f"cd {target_dir} && ulimit -c unlimited && {env_str} {cmd_str} 2>&1"
         full_cmd = adb_base + ["shell", adb_shell_cmd]
 
-        print(f"+ {' '.join(full_cmd)}")
+        logger.info(f"+ {' '.join(full_cmd)}")
         res = subprocess.run(full_cmd, stderr=subprocess.STDOUT)
         sys.exit(res.returncode)
 
     elif target_type == "linux":
         ssh_host = target_val
         if not ssh_host:
-            print("Error: SSH host not specified in target (e.g. use linux:user@host, lnx:user@host, or ubuntu:user@host). Cannot execute.", file=sys.stderr)
+            logger.error("Error: SSH host not specified in target (e.g. use linux:user@host, lnx:user@host, or ubuntu:user@host). Cannot execute.")
             sys.exit(1)
 
         # Linux remote run via SSH
@@ -360,12 +367,12 @@ def main():
         ssh_shell_cmd = f"cd {target_dir} && ulimit -c unlimited && {env_str} {cmd_str} 2>&1"
         full_cmd = ["ssh", ssh_host, ssh_shell_cmd]
 
-        print(f"+ {' '.join(full_cmd)}")
+        logger.info(f"+ {' '.join(full_cmd)}")
         res = subprocess.run(full_cmd, stderr=subprocess.STDOUT)
         sys.exit(res.returncode)
 
     elif target_type == "windows":
-        print("Windows target execution is currently a stub.")
+        logger.info("Windows target execution is currently a stub.")
         sys.exit(0)
 
     else:
@@ -381,12 +388,14 @@ def main():
         for k, v in env_vars.items():
             local_env[k] = v
 
-        print(f"+ {shlex_join(cmd_args)}")
+        logger.info(f"+ {shlex_join(cmd_args)}")
         res = subprocess.run(cmd_args, env=local_env, stderr=subprocess.STDOUT)
         sys.exit(res.returncode)
+
+
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\nInterrupted by user.")
+        logger.info("\nInterrupted by user.")
         sys.exit(130)
