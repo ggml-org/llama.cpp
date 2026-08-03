@@ -154,10 +154,6 @@ public:
     //
 
     uint32_t get_size()     const;
-
-    // read only accessor to the cell state of the stream. intended for composed memory implementations
-    // (like llama_kv_cache_msa) that need to relate the cache contents to token positions
-    const llama_kv_cells & get_cells(llama_seq_id seq_id) const;
     uint32_t get_n_stream() const;
 
     bool get_has_shift() const;
@@ -167,6 +163,8 @@ public:
 
     std::vector<uint32_t> get_layer_ids() const;
     ggml_tensor * get_k_storage(int32_t il) const;
+
+    const llama_kv_cells & get_cells(llama_seq_id seq_id) const;
 
     //
     // graph_build API
