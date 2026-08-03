@@ -41,12 +41,7 @@ enum htp_data_type {
 #define QK_Q8_0_TILED  128  // 32x32 Q8_0 tiled layout
 #define QK_MXFP4_TILED 256  // 32x32 MXFP4 tiled layout
 
-// Mask to enable various stages of the Ops.
-// Used for debugging and profiling.
-enum htp_op_stage {
-    HTP_OPSTAGE_QUEUE    = (1 << 0),  // Enable Queueing (ie calls into NPU)
-    HTP_OPSTAGE_COMPUTE  = (1 << 1),  // Enable Compute
-};
+
 
 // Do not reorder first 4 (used as an index)
 enum htp_op_code {

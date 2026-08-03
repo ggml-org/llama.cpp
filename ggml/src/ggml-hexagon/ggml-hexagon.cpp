@@ -107,8 +107,6 @@ static int    opt_fa_select = 2; // 2 = HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = C
 //     https://docs.qualcomm.com/doc/80-N2040-61/topic/hvx-pmu-events.html
 static u32vec opt_pmu_evt { 0x3, 0x111, 0x100, 0x105, 0x240, 0x256, 0x7D, 0x8C };
 
-// Enable all stages by default
-static int opt_opstage  = HTP_OPSTAGE_QUEUE | HTP_OPSTAGE_COMPUTE;
 static int opt_opbatch  = 1024; // max number of ops in a batch
 static int opt_opqueue  = 64;   // max number of pending batches
 static int opt_optrace  = 0;    // trace buffer size per thread (0 means default)
@@ -1717,10 +1715,6 @@ struct ggml_hexagon_opbatch {
         memcpy(o.kernel_params, node.kernel_params,   sizeof(o.kernel_params));
         o.opcode = node.opcode;
         o.flags  = 0;
-
-        if (!(opt_opstage & HTP_OPSTAGE_COMPUTE)) {
-            o.flags |= HTP_OPFLAGS_SKIP_COMPUTE;
-        }
 
         ggml_hexagon_dump_op_exec(sess->c_name(), ops[n], o.flags);
 
@@ -5073,7 +5067,6 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
                   "please update hexagon_type to match ggml_type");
 
     const char * str_verbose  = getenv("GGML_HEXAGON_VERBOSE");
-    const char * str_opstage  = getenv("GGML_HEXAGON_OPSTAGE");
     const char * str_opbatch  = getenv("GGML_HEXAGON_OPBATCH");
     const char * str_opqueue  = getenv("GGML_HEXAGON_OPQUEUE");
     const char * str_oppoll   = getenv("GGML_HEXAGON_OPPOLL");
@@ -5124,7 +5117,6 @@ static void ggml_hexagon_init(ggml_backend_reg * reg) {
 
     opt_opfilter  = str_opfilter ? new std::regex(str_opfilter, RE_ICASE) : NULL;
     opt_verbose   = str_verbose  ? atoi(str_verbose)                      : 0;
-    opt_opstage   = str_opstage  ? strtoul(str_opstage, NULL, 0)          : opt_opstage;
     opt_opbatch   = str_opbatch  ? strtoul(str_opbatch, NULL, 0)          : opt_opbatch;
     opt_opqueue   = str_opqueue  ? strtoul(str_opqueue, NULL, 0)          : opt_opqueue;
     opt_optrace   = str_optrace  ? strtoul(str_optrace, NULL, 0)          : (opt_opbatch * 256);
