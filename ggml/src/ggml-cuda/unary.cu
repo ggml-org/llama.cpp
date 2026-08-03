@@ -128,6 +128,29 @@ static __global__ void unary_op_kernel(const T * x, T * dst, const int k) {
 }
 
 template <float (*op)(float), typename T>
+static __global__ void unary_op_kernel_strided(const T * x,T * dst,
+                                               const int64_t ne0, const int64_t ne1, const int64_t ne2, const int64_t ne3,
+                                               const int64_t ne_total,
+                                               const int64_t sx0, const int64_t sx1, const int64_t sx2, const int64_t sx3,
+                                               const int64_t sd0, const int64_t sd1, const int64_t sd2, const int64_t sd3
+) {
+    const int64_t i = blockDim.x * blockIdx.x + threadIdx.x;
+    if (i >= ne_total) return;
+
+    int64_t i3 = i / (ne0 * ne1 * ne2);
+    int64_t rem = i - i3 * (ne0 * ne1 * ne2);
+    int64_t i2 = rem / (ne0 * ne1);
+    rem -= i2 * (ne0 * ne1);
+    int64_t i1 = rem / ne0;
+    int64_t i0 = rem - i1 * ne0;
+
+    int64_t src_off = i0 * sx0 + i1 * sx1 + i2 * sx2 + i3 * sx3;
+    int64_t dst_off = i0 * sd0 + i1 * sd1 + i2 * sd2 + i3 * sd3;
+
+    dst[dst_off] = (T)op((float)x[src_off]);
+}
+
+template <float (*op)(float), typename T>
 static void unary_cuda(const T * x, T * dst, const int k, cudaStream_t stream) {
     const int num_blocks = (k + CUDA_NEG_BLOCK_SIZE - 1) / CUDA_NEG_BLOCK_SIZE;
     const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params((dim3)num_blocks, CUDA_NEG_BLOCK_SIZE, 0, stream);
@@ -141,16 +164,55 @@ void ggml_cuda_op_unary(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     void * dst_d = dst->data;
     cudaStream_t stream = ctx.stream();
 
-    GGML_ASSERT(ggml_is_contiguous(src0));
-
+    GGML_ASSERT(ggml_is_contiguous(src0)   ||ggml_is_contiguous_rows(src0));
     GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16);
     GGML_ASSERT( dst->type == GGML_TYPE_F32 ||  dst->type == GGML_TYPE_F16);
     GGML_ASSERT(src0->type == dst->type);
 
-    if (src0->type == GGML_TYPE_F16) {
-        unary_cuda<op>((const half *)src0_d, (half *)dst_d, ggml_nelements(src0), stream);
-    } else {
-        unary_cuda<op>((const float *)src0_d, (float *)dst_d, ggml_nelements(src0), stream);
+    const int64_t n_total = ggml_nelements(src0);
+    if(ggml_is_contiguous(src0)){
+        
+        if (src0->type == GGML_TYPE_F16) {
+            unary_cuda<op>((const half *)src0_d, (half *)dst_d, n_total, stream);
+        } else {
+            unary_cuda<op>((const float *)src0_d, (float *)dst_d, n_total, stream);
+        }
+    }else {
+
+        const size_t type_size = ggml_type_size(src0->type);
+
+        const int64_t ne0 = src0->ne[0];
+        const int64_t ne1 = src0->ne[1] > 0 ? src0->ne[1] : 1;
+        const int64_t ne2 = src0->ne[2] > 0 ? src0->ne[2] : 1;
+        const int64_t ne3 = src0->ne[3] > 0 ? src0->ne[3] : 1;
+
+        const int64_t sx0 = src0->nb[0] / type_size;
+        const int64_t sx1 = src0->nb[1] / type_size;
+        const int64_t sx2 = src0->nb[2] / type_size;
+        const int64_t sx3 = src0->nb[3] / type_size;
+
+        const int64_t sd0 = dst->nb[0] / type_size;
+        const int64_t sd1 = dst->nb[1] / type_size;
+        const int64_t sd2 = dst->nb[2] / type_size;
+        const int64_t sd3 = dst->nb[3] / type_size;
+
+        const int block_size = CUDA_NEG_BLOCK_SIZE;
+        const int grid_size = (n_total + block_size - 1) / block_size;
+        const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params((dim3)grid_size, block_size, 0, stream);
+
+        if (src0->type == GGML_TYPE_F16) {
+            ggml_cuda_kernel_launch(unary_op_kernel_strided<op, half>,
+                launch_params,(const half*)src0->data, (half*)dst->data,
+                ne0, ne1, ne2, ne3, n_total,
+                sx0, sx1, sx2, sx3,
+                sd0, sd1, sd2, sd3);
+        } else {
+            ggml_cuda_kernel_launch(unary_op_kernel_strided<op, float>,
+                launch_params,(const float*)src0->data, (float*)dst->data,
+                ne0, ne1, ne2, ne3, n_total,
+                sx0, sx1, sx2, sx3,
+                sd0, sd1, sd2, sd3);
+        }
     }
 }
 
