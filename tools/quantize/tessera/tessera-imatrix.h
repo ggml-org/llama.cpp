@@ -14,8 +14,16 @@
 #include <cstdint>
 
 struct ts_imatrix {
-    // tensor_name -> per-channel activation magnitudes (in_dim floats)
+    // tensor_name -> per-channel activation magnitudes (in_dim floats).
+    // For GGUF imatrix this is the mean squared activation sums[i]/counts[i];
+    // for .npz it is the raw stored vector.
     std::map<std::string, std::vector<float>> data;
+    // tensor_name -> per-channel running max of |activation| (in_dim floats).
+    // Populated only from GGUF imatrix (.in_maxabs); empty for the legacy
+    // .npz path which does not carry per-channel max. Used by the outlier-
+    // aware experts (DartQuant/CHAMP-Q) to localize which channels carry the
+    // heavy tail. Length matches data[name] when present.
+    std::map<std::string, std::vector<float>> max_abs;
     std::string source_path;
 };
 
@@ -32,6 +40,14 @@ int ts_imatrix_load_gguf(const char * path, ts_imatrix * out, std::string * err_
 const float * ts_imatrix_lookup(const ts_imatrix * imatrix,
                                 const char * tensor_name,
                                 int64_t * out_dim);
+
+// Lookup per-channel max |activation| for a tensor (the .in_maxabs field of a
+// GGUF imatrix). Returns nullptr if the imatrix has no max_abs entry for this
+// tensor (e.g. legacy .npz inputs, or a GGUF produced by an older producer
+// that did not collect max). out_dim receives the vector length on success.
+const float * ts_imatrix_lookup_max_abs(const ts_imatrix * imatrix,
+                                        const char * tensor_name,
+                                        int64_t * out_dim);
 
 // Compute regime statistics from imatrix data for one tensor.
 struct ts_imatrix_regime_stats {

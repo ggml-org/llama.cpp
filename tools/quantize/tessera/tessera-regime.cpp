@@ -302,18 +302,20 @@ static float ts_regime_percentile(const float * x, int64_t n, float pct) {
 ts_regime_descriptor ts_regime_compute_descriptor(
     const char * tensor_name,
     const float * weights, int64_t out_dim, int64_t in_dim,
-    const float * imatrix_data, int64_t imatrix_dim) {
+    const float * imatrix_data, int64_t imatrix_dim,
+    const float * imatrix_max_abs, int64_t imatrix_max_abs_dim) {
 
     ts_regime_descriptor desc;
-    desc.tensor_name    = tensor_name ? tensor_name : "";
-    desc.family         = ts_regime_infer_family(tensor_name);
-    desc.out_dim        = out_dim;
-    desc.in_dim         = in_dim;
-    desc.modality       = ts_regime_infer_modality(tensor_name);
-    desc.kurtosis       = 3.0f;
-    desc.eff_rank       = 0.5f;
-    desc.mean_magnitude = 0.0f;
-    desc.p99            = 0.0f;
+    desc.tensor_name       = tensor_name ? tensor_name : "";
+    desc.family            = ts_regime_infer_family(tensor_name);
+    desc.out_dim           = out_dim;
+    desc.in_dim            = in_dim;
+    desc.modality          = ts_regime_infer_modality(tensor_name);
+    desc.kurtosis          = 3.0f;
+    desc.eff_rank          = 0.5f;
+    desc.mean_magnitude    = 0.0f;
+    desc.p99               = 0.0f;
+    desc.max_outlier_ratio = 0.0f;
 
     if (imatrix_data && imatrix_dim > 0) {
         desc.kurtosis       = ts_regime_kurtosis(imatrix_data, imatrix_dim);
@@ -347,7 +349,46 @@ ts_regime_descriptor ts_regime_compute_descriptor(
         desc.mean_magnitude = sum / (float)n;
     }
 
+    // Per-channel max |activation| -> localized outlier concentration.
+    // The routing thresholds (kurtosis, eff_rank) are global scalars derived
+    // from the per-channel mean-squared-act vector, so they cannot tell the
+    // rotation/permutation experts WHICH channels carry the heavy tail. The
+    // ratio of the largest per-channel max to the median max is a cheap,
+    // scale-free proxy for "how concentrated are the outliers". 1.0 means
+    // uniform (no localized outlier); >=~5 means a small set of channels
+    // dominates. The experts key off this to grow the per-row repair budget.
+    if (imatrix_max_abs && imatrix_max_abs_dim > 1) {
+        std::vector<float> mags(imatrix_max_abs_dim);
+        float max_abs = 0.0f;
+        for (int64_t i = 0; i < imatrix_max_abs_dim; i++) {
+            float v = fabsf(imatrix_max_abs[i]);
+            mags[i] = v;
+            if (v > max_abs) {
+                max_abs = v;
+            }
+        }
+        if (max_abs > 1e-30f) {
+            float med = ts_regime_percentile(mags.data(), imatrix_max_abs_dim, 0.5f);
+            if (med > 1e-30f) {
+                desc.max_outlier_ratio = max_abs / med;
+            }
+        }
+    }
+
     return desc;
+}
+
+ts_regime_descriptor ts_regime_compute_descriptor(
+    const char * tensor_name,
+    const float * weights, int64_t out_dim, int64_t in_dim,
+    const float * imatrix_data, int64_t imatrix_dim) {
+    // Forward to the max_abs-aware overload with no per-channel max. Keeps
+    // max_outlier_ratio = 0 so callers that have no max data behave exactly
+    // as before (the experts keep their default outlier budget).
+    return ts_regime_compute_descriptor(
+        tensor_name, weights, out_dim, in_dim,
+        imatrix_data, imatrix_dim,
+        nullptr, 0);
 }
 
 // --- summary ---

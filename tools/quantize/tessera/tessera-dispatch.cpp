@@ -1560,11 +1560,17 @@ int ts_dispatch_run(const ts_dispatch_params * params,
             // regime descriptors (kurtosis / eff_rank) feed the GA archive cell
             const float * imdata = nullptr;
             int64_t       imdim  = 0;
+            const float * imdata_max_abs = nullptr;
+            int64_t       imdim_max_abs  = 0;
             if (have_imatrix) {
                 imdata = ts_imatrix_lookup(&imatrix, name, &imdim);
+                // Per-channel max |activation| (.in_maxabs) - the localized
+                // outlier signal that kurtosis (a global scalar) cannot see.
+                imdata_max_abs = ts_imatrix_lookup_max_abs(&imatrix, name, &imdim_max_abs);
             }
             ts_regime_descriptor desc = ts_regime_compute_descriptor(
-                name, w.data(), out_dim, in_dim, imdata, imdata ? imdim : 0);
+                name, w.data(), out_dim, in_dim, imdata, imdata ? imdim : 0,
+                imdata_max_abs, imdata_max_abs ? imdim_max_abs : 0);
 
             // multimodal: resolve the operative modality (drives routing + the
             // archive axis) and run the per-modality AWQ alpha search (drives

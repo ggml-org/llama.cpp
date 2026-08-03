@@ -263,6 +263,15 @@ int ts_imatrix_load_gguf(const char * path, ts_imatrix * out, std::string * err_
             vals[i] = entry.sums[i] / denom;
         }
         out->data[kv.first] = std::move(vals);
+
+        // Per-channel max |activation| (.in_maxabs). The producer always
+        // collects this; the loader's optional-field path leaves the vector
+        // empty when an older GGUF omits it. The outlier-aware experts key
+        // off this, so we surface it verbatim - no counts scaling applies
+        // (max is non-additive by definition).
+        if (!entry.max_abs.empty()) {
+            out->max_abs[kv.first] = entry.max_abs;
+        }
     }
 
     out->source_path = path;
@@ -275,6 +284,17 @@ int ts_imatrix_load_gguf(const char * path, ts_imatrix * out, std::string * err_
     return 0;
 }
 
+// Normalize a tensor name the same way ts_imatrix_lookup does, so lookups
+// into data and max_abs cannot drift apart (a typo here would silently drop
+// the per-channel max and the experts would fall back to the global budget).
+static std::string ts_imatrix_normalize_name(const char * tensor_name) {
+    std::string name(tensor_name ? tensor_name : "");
+    if (name.size() > 7 && name.substr(name.size() - 7) == ".weight") {
+        name = name.substr(0, name.size() - 7);
+    }
+    return name;
+}
+
 const float * ts_imatrix_lookup(const ts_imatrix * imatrix,
                                 const char * tensor_name,
                                 int64_t * out_dim) {
@@ -282,15 +302,30 @@ const float * ts_imatrix_lookup(const ts_imatrix * imatrix,
         return nullptr;
     }
 
-    std::string name(tensor_name);
-
-    // strip ".weight" suffix
-    if (name.size() > 7 && name.substr(name.size() - 7) == ".weight") {
-        name = name.substr(0, name.size() - 7);
-    }
+    const std::string name = ts_imatrix_normalize_name(tensor_name);
 
     auto it = imatrix->data.find(name);
     if (it == imatrix->data.end()) {
+        return nullptr;
+    }
+
+    if (out_dim) {
+        *out_dim = (int64_t)it->second.size();
+    }
+    return it->second.data();
+}
+
+const float * ts_imatrix_lookup_max_abs(const ts_imatrix * imatrix,
+                                        const char * tensor_name,
+                                        int64_t * out_dim) {
+    if (!imatrix || !tensor_name || imatrix->max_abs.empty()) {
+        return nullptr;
+    }
+
+    const std::string name = ts_imatrix_normalize_name(tensor_name);
+
+    auto it = imatrix->max_abs.find(name);
+    if (it == imatrix->max_abs.end()) {
         return nullptr;
     }
 

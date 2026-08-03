@@ -25,6 +25,15 @@ struct ts_regime_descriptor {
     int64_t     out_dim;
     int64_t     in_dim;
     int32_t     modality;       // 0=text, 1=image, 2=audio (default 0)
+    // Per-channel max-outlier concentration, derived from the imatrix
+    // .in_maxabs field when available: ratio of the largest per-channel
+    // max|activation| to the median across channels. 1.0 means outliers are
+    // spread evenly (no single channel dominates); large values mean a small
+    // set of channels carry the heavy tail and the rotation/permutation
+    // experts should grow their per-row repair budget accordingly. 0.0 when
+    // no per-channel max is available (legacy .npz, or producer run that did
+    // not collect max) - experts then keep their default outlier budget.
+    float       max_outlier_ratio;
 };
 
 struct ts_regime_routing {
@@ -52,10 +61,23 @@ std::vector<ts_regime_routing> ts_regime_route_all(
 
 // Compute regime descriptors from imatrix data + weight matrix.
 // Fills kurtosis, eff_rank, mean_magnitude, p99 from activation stats.
+// max_outlier_ratio is left at 0 (no per-channel max supplied).
 ts_regime_descriptor ts_regime_compute_descriptor(
     const char * tensor_name,
     const float * weights, int64_t out_dim, int64_t in_dim,
     const float * imatrix_data, int64_t imatrix_dim);
+
+// As above, but also fills max_outlier_ratio from the per-channel max|act|
+// vector (the imatrix .in_maxabs field, in_dim floats). imatrix_max_abs may
+// be null / imatrix_max_abs_dim 0 to signal "no per-channel max available";
+// the descriptor then keeps max_outlier_ratio = 0 and the experts fall back
+// to their default outlier budget. Pass the same imatrix_data as the 6-arg
+// form; the two arrays are independent (mean squared act vs running max).
+ts_regime_descriptor ts_regime_compute_descriptor(
+    const char * tensor_name,
+    const float * weights, int64_t out_dim, int64_t in_dim,
+    const float * imatrix_data, int64_t imatrix_dim,
+    const float * imatrix_max_abs, int64_t imatrix_max_abs_dim);
 
 // Per-expert quantization parameter profile. Maps a routed expert to the
 // concrete adjustments applied to ts_quant_params_2d before quantizing, so
