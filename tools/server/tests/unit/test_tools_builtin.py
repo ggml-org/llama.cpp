@@ -164,14 +164,14 @@ def _docker_unavailable_reason() -> str | None:
 def docker_container():
     reason = _docker_unavailable_reason()
     if reason is not None:
-        pytest.skip(reason)
+        pytest.skip(reason)  # ty: ignore[too-many-positional-arguments, invalid-argument-type]
 
     proc = subprocess.run(
         ["docker", "run", "-d", "--rm", "busybox", "sleep", "300"],
         capture_output=True, text=True,
     )
     if proc.returncode != 0:
-        pytest.skip(f"failed to start docker container: {proc.stderr.strip()}")
+        pytest.skip(f"failed to start docker container: {proc.stderr.strip()}")  # ty: ignore[too-many-positional-arguments, invalid-argument-type]
 
     container_id = proc.stdout.strip()
     try:
@@ -199,7 +199,7 @@ def test_tools_builtin_docker_header(docker_container: str):
 def test_tools_builtin_docker_runtime_cleans_up_spawned_container():
     reason = _docker_unavailable_reason()
     if reason is not None:
-        pytest.skip(reason)
+        pytest.skip(reason)  # ty: ignore[too-many-positional-arguments, invalid-argument-type]
 
     global server
     server.server_tools_runtime = "docker:busybox"
