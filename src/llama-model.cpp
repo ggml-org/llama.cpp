@@ -268,6 +268,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_smollm3(params);
         case LLM_ARCH_OPENAI_MOE:
             return new llama_model_openai_moe(params);
+        case LLM_ARCH_GEAR:
+            return new llama_model_gear(params);
         case LLM_ARCH_FALCON_H1:
             return new llama_model_falcon_h1(params);
         case LLM_ARCH_LFM2:
@@ -853,6 +855,7 @@ static llama_rope_scaling_type llama_rope_scaling_type_from_string(const std::st
 // default for ModernBert-style architectures.
 static const std::map<std::string, llm_ffn_op_type> LLM_FFN_OP_TYPES_FROM_STRING = {
     { "gelu",   LLM_FFN_GEGLU  },
+    { "gelu_pytorch_tanh", LLM_FFN_GELU },
     { "geglu",  LLM_FFN_GEGLU  },
     { "silu",   LLM_FFN_SWIGLU },
     { "swish",  LLM_FFN_SWIGLU },
@@ -1822,6 +1825,7 @@ void llama_model::print_info() const {
                 arch == LLM_ARCH_FALCON_H1 ||
                 arch == LLM_ARCH_PLAMO2 ||
                 arch == LLM_ARCH_GRANITE_HYBRID ||
+                arch == LLM_ARCH_GEAR ||
                 arch == LLM_ARCH_QWEN3NEXT ||
                 arch == LLM_ARCH_QWEN35 ||
                 arch == LLM_ARCH_QWEN35MOE ||
@@ -2528,6 +2532,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_OPENAI_MOE:
         case LLM_ARCH_HUNYUAN_DENSE:
         case LLM_ARCH_HY_V3:
+        case LLM_ARCH_GEAR:
         case LLM_ARCH_LFM2:
         case LLM_ARCH_LFM2MOE:
         case LLM_ARCH_SMALLTHINKER:

@@ -187,6 +187,9 @@ uint32_t llama_hparams::n_embd_r() const {
     }
 
     if (n_shortconv_l_cache != 0) {
+        if (n_shortconv_state_size != 0) {
+            return n_shortconv_state_size;
+        }
         // for LFM2 models
         return n_embd * (n_shortconv_l_cache - 1);
     }

@@ -517,6 +517,7 @@ class MODEL_ARCH(IntEnum):
     GPT_OSS          = auto()
     LFM2             = auto()
     LFM2MOE          = auto()
+    GEAR             = auto()
     DREAM            = auto()
     SMALLTHINKER     = auto()
     LLADA            = auto()
@@ -763,6 +764,14 @@ class MODEL_TENSOR(IntEnum):
     SHORTCONV_CONV       = auto()
     SHORTCONV_INPROJ     = auto()
     SHORTCONV_OUTPROJ    = auto()
+    GEAR_MIX_Q           = auto()
+    GEAR_MIX_K           = auto()
+    GEAR_MIX_V           = auto()
+    GEAR_MIX_OUT         = auto()
+    GEAR_MIX_Q_NORM      = auto()
+    GEAR_MIX_K_NORM      = auto()
+    GEAR_MIX_KEY_CONV    = auto()
+    GEAR_MIX_VALUE_CONV  = auto()
     VISEXP_ATTN_QKV      = auto()
     VISEXP_ATTN_OUT      = auto()
     VISEXP_GATE          = auto()
@@ -1099,6 +1108,7 @@ MODEL_ARCH_NAMES: dict[MODEL_ARCH, str] = {
     MODEL_ARCH.GPT_OSS:          "gpt-oss",
     MODEL_ARCH.LFM2:             "lfm2",
     MODEL_ARCH.LFM2MOE:          "lfm2moe",
+    MODEL_ARCH.GEAR:             "gear",
     MODEL_ARCH.DREAM:            "dream",
     MODEL_ARCH.SMALLTHINKER:     "smallthinker",
     MODEL_ARCH.LLADA:            "llada",
@@ -1343,6 +1353,14 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.SHORTCONV_CONV:            "blk.{bid}.shortconv.conv",
     MODEL_TENSOR.SHORTCONV_INPROJ:          "blk.{bid}.shortconv.in_proj",
     MODEL_TENSOR.SHORTCONV_OUTPROJ:         "blk.{bid}.shortconv.out_proj",
+    MODEL_TENSOR.GEAR_MIX_Q:                "blk.{bid}.mix_q",
+    MODEL_TENSOR.GEAR_MIX_K:                "blk.{bid}.mix_k",
+    MODEL_TENSOR.GEAR_MIX_V:                "blk.{bid}.mix_v",
+    MODEL_TENSOR.GEAR_MIX_OUT:              "blk.{bid}.mix_output",
+    MODEL_TENSOR.GEAR_MIX_Q_NORM:           "blk.{bid}.mix_q_norm",
+    MODEL_TENSOR.GEAR_MIX_K_NORM:           "blk.{bid}.mix_k_norm",
+    MODEL_TENSOR.GEAR_MIX_KEY_CONV:         "blk.{bid}.mix_key_conv",
+    MODEL_TENSOR.GEAR_MIX_VALUE_CONV:       "blk.{bid}.mix_value_conv",
     MODEL_TENSOR.VISEXP_ATTN_QKV:           "blk.{bid}.vis_attn_qkv",
     MODEL_TENSOR.VISEXP_ATTN_OUT:           "blk.{bid}.vis_attn_output",
     MODEL_TENSOR.VISEXP_GATE:               "blk.{bid}.vis_gate",
@@ -4043,6 +4061,32 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.FFN_DOWN_EXP,
         MODEL_TENSOR.FFN_UP_EXP,
         MODEL_TENSOR.FFN_EXP_PROBS_B,
+    ],
+    MODEL_ARCH.GEAR: [
+        MODEL_TENSOR.TOKEN_EMBD,
+        MODEL_TENSOR.OUTPUT_NORM,
+        MODEL_TENSOR.OUTPUT,
+        MODEL_TENSOR.ATTN_NORM,
+        MODEL_TENSOR.ATTN_POST_NORM,
+        MODEL_TENSOR.ATTN_Q,
+        MODEL_TENSOR.ATTN_Q_NORM,
+        MODEL_TENSOR.ATTN_K,
+        MODEL_TENSOR.ATTN_K_NORM,
+        MODEL_TENSOR.ATTN_V,
+        MODEL_TENSOR.ATTN_OUT,
+        MODEL_TENSOR.GEAR_MIX_Q,
+        MODEL_TENSOR.GEAR_MIX_Q_NORM,
+        MODEL_TENSOR.GEAR_MIX_K,
+        MODEL_TENSOR.GEAR_MIX_K_NORM,
+        MODEL_TENSOR.GEAR_MIX_V,
+        MODEL_TENSOR.GEAR_MIX_OUT,
+        MODEL_TENSOR.GEAR_MIX_KEY_CONV,
+        MODEL_TENSOR.GEAR_MIX_VALUE_CONV,
+        MODEL_TENSOR.FFN_PRE_NORM,
+        MODEL_TENSOR.FFN_GATE,
+        MODEL_TENSOR.FFN_UP,
+        MODEL_TENSOR.FFN_DOWN,
+        MODEL_TENSOR.FFN_POST_NORM,
     ],
     MODEL_ARCH.SMALLTHINKER: [
         MODEL_TENSOR.TOKEN_EMBD,

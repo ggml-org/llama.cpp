@@ -915,6 +915,31 @@ class TensorNameMap:
         MODEL_TENSOR.SSM_G_B: (
             "model.layers.{bid}.self_attn.g_b_proj",
         ),
+
+        MODEL_TENSOR.GEAR_MIX_Q: (
+            "model.layers.{bid}.local_mixer.q_proj",
+        ),
+        MODEL_TENSOR.GEAR_MIX_K: (
+            "model.layers.{bid}.local_mixer.k_proj",
+        ),
+        MODEL_TENSOR.GEAR_MIX_V: (
+            "model.layers.{bid}.local_mixer.v_proj",
+        ),
+        MODEL_TENSOR.GEAR_MIX_OUT: (
+            "model.layers.{bid}.local_mixer.o_proj",
+        ),
+        MODEL_TENSOR.GEAR_MIX_Q_NORM: (
+            "model.layers.{bid}.local_mixer.q_norm",
+        ),
+        MODEL_TENSOR.GEAR_MIX_K_NORM: (
+            "model.layers.{bid}.local_mixer.k_norm",
+        ),
+        MODEL_TENSOR.GEAR_MIX_KEY_CONV: (
+            "model.layers.{bid}.local_mixer.key_conv",
+        ),
+        MODEL_TENSOR.GEAR_MIX_VALUE_CONV: (
+            "model.layers.{bid}.local_mixer.value_conv",
+        ),
         MODEL_TENSOR.TIME_MIX_W0: (
             "model.layers.{bid}.attention.w0",            # rwkv7
         ),

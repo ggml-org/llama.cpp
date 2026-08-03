@@ -466,6 +466,16 @@ struct llama_layer {
     // openai-moe
     struct ggml_tensor * attn_sinks = nullptr;
 
+    // Gear local mixer
+    struct ggml_tensor * gear_mix_wq         = nullptr;
+    struct ggml_tensor * gear_mix_wk         = nullptr;
+    struct ggml_tensor * gear_mix_wv         = nullptr;
+    struct ggml_tensor * gear_mix_wo         = nullptr;
+    struct ggml_tensor * gear_mix_q_norm     = nullptr;
+    struct ggml_tensor * gear_mix_k_norm     = nullptr;
+    struct ggml_tensor * gear_mix_key_conv   = nullptr;
+    struct ggml_tensor * gear_mix_value_conv = nullptr;
+
     // DeepSeek-V4
     struct ggml_tensor * attn_kv_norm = nullptr;
     struct ggml_tensor * hc_attn_fn   = nullptr;

@@ -116,6 +116,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_HY_V3,            "hy_v3"            },
     { LLM_ARCH_SMOLLM3,          "smollm3"          },
     { LLM_ARCH_OPENAI_MOE,       "gpt-oss"          },
+    { LLM_ARCH_GEAR,             "gear"             },
     { LLM_ARCH_LFM2,             "lfm2"             },
     { LLM_ARCH_LFM2MOE,          "lfm2moe"          },
     { LLM_ARCH_DREAM,            "dream"            },
@@ -580,6 +581,14 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_POS_NET_ATTN_V,                         "posnet.%d.attn_v" },
     { LLM_TENSOR_POS_NET_ATTN_OUT,                       "posnet.%d.attn_output" },
     { LLM_TENSOR_ATTN_SINKS,                             "blk.%d.attn_sinks" },
+    { LLM_TENSOR_GEAR_MIX_Q,                             "blk.%d.mix_q" },
+    { LLM_TENSOR_GEAR_MIX_K,                             "blk.%d.mix_k" },
+    { LLM_TENSOR_GEAR_MIX_V,                             "blk.%d.mix_v" },
+    { LLM_TENSOR_GEAR_MIX_OUT,                           "blk.%d.mix_output" },
+    { LLM_TENSOR_GEAR_MIX_Q_NORM,                        "blk.%d.mix_q_norm" },
+    { LLM_TENSOR_GEAR_MIX_K_NORM,                        "blk.%d.mix_k_norm" },
+    { LLM_TENSOR_GEAR_MIX_KEY_CONV,                      "blk.%d.mix_key_conv" },
+    { LLM_TENSOR_GEAR_MIX_VALUE_CONV,                    "blk.%d.mix_value_conv" },
     { LLM_TENSOR_SHORTCONV_CONV,                         "blk.%d.shortconv.conv" },
     { LLM_TENSOR_SHORTCONV_INPROJ,                       "blk.%d.shortconv.in_proj" },
     { LLM_TENSOR_SHORTCONV_OUTPROJ,                      "blk.%d.shortconv.out_proj" },
@@ -818,6 +827,14 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
     {LLM_TENSOR_CONVNEXT_PW1,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_CONVNEXT_PW2,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_CONVNEXT_GAMMA,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_GEAR_MIX_Q,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_GEAR_MIX_K,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_GEAR_MIX_V,                 {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_GEAR_MIX_OUT,               {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
+    {LLM_TENSOR_GEAR_MIX_Q_NORM,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_GEAR_MIX_K_NORM,            {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL}},
+    {LLM_TENSOR_GEAR_MIX_KEY_CONV,          {LLM_TENSOR_LAYER_REPEATING, GGML_OP_SSM_CONV}},
+    {LLM_TENSOR_GEAR_MIX_VALUE_CONV,        {LLM_TENSOR_LAYER_REPEATING, GGML_OP_SSM_CONV}},
     {LLM_TENSOR_SHORTCONV_CONV,             {LLM_TENSOR_LAYER_REPEATING, GGML_OP_SSM_CONV}},
     {LLM_TENSOR_SHORTCONV_INPROJ,           {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_SHORTCONV_OUTPROJ,          {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
@@ -938,6 +955,7 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
         case LLM_ARCH_FALCON_H1:
         case LLM_ARCH_PLAMO2:
         case LLM_ARCH_GRANITE_HYBRID:
+        case LLM_ARCH_GEAR:
         case LLM_ARCH_LFM2:
         case LLM_ARCH_LFM2MOE:
         case LLM_ARCH_NEMOTRON_H:
@@ -996,6 +1014,7 @@ bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
         case LLM_ARCH_NEMOTRON_H:
         case LLM_ARCH_NEMOTRON_H_MOE:
         case LLM_ARCH_GRANITE_HYBRID:
+        case LLM_ARCH_GEAR:
         case LLM_ARCH_LFM2:
         case LLM_ARCH_LFM2MOE:
         case LLM_ARCH_MINIMAX_M2:
