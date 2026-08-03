@@ -54,7 +54,7 @@ def main():
     parser.add_argument("--profile", help="Profiling flag (enables Hexagon profiling and OpenCL autotuning)")
     parser.add_argument("--sched-debug", action="store_true", help="Enable GGML/llama.cpp scheduler debug output (GGML_SCHED_DEBUG=2)")
     parser.add_argument("--mtmd-device", help="Specify the backend device ID for Multi-Threaded Multi-Device setup (MTMD_BACKEND_DEVICE)")
-    
+
     # Hexagon specific parameters
     parser.add_argument("--hex-verbose", help="Enable verbose logging (GGML_HEXAGON_VERBOSE)")
     parser.add_argument("--hex-profile", help="Enable NPU/Hexagon profiling and performance metrics print (GGML_HEXAGON_PROFILE)")
@@ -130,7 +130,7 @@ def main():
 
     # Environment variables to map
     env_vars = {}
-    
+
     def set_env(env_name, opt_val):
         if opt_val is not None:
             env_vars[env_name] = str(opt_val)
@@ -140,20 +140,20 @@ def main():
     # Resolve and filter devices (HTP vs OpenCL)
     devices_val = args.devices if args.devices is not None else "HTP0:0"
     parts = [p.strip() for p in devices_val.split(",")]
-    
+
     # Any device containing "htp" is Hexagon, rest is OpenCL
     hex_parts = [p for p in parts if "htp" in p.lower()]
     cl_parts = [p for p in parts if "htp" not in p.lower()]
-    
+
     hex_devices = ",".join(hex_parts)
     cl_device = ",".join(cl_parts)
-    
+
     # Set Hexagon devices
     if hex_devices:
         env_vars["GGML_HEXAGON_DEVICES"] = hex_devices
     elif "GGML_HEXAGON_DEVICES" in os.environ:
         env_vars["GGML_HEXAGON_DEVICES"] = os.environ["GGML_HEXAGON_DEVICES"]
-        
+
     # Set OpenCL device (unless overridden by --cl-device)
     final_cl_device = args.cl_device if args.cl_device is not None else cl_device
     if final_cl_device:
@@ -162,18 +162,18 @@ def main():
         env_vars["GGML_OPENCL_DEVICE"] = os.environ["GGML_OPENCL_DEVICE"]
 
     # Map shared & backend-specific parameters with correct overrides
-    
+
     # Verbose logging mapping
     hex_verbose_val = args.hex_verbose if args.hex_verbose is not None else args.verbose
     set_env("GGML_HEXAGON_VERBOSE", hex_verbose_val)
-    
+
     cl_cache_debug_val = args.cl_cache_debug if args.cl_cache_debug is not None else args.verbose
     set_env("GGML_OPENCL_KERNEL_CACHE_DEBUG", cl_cache_debug_val)
-    
+
     # Profiling mapping
     hex_profile_val = args.hex_profile if args.hex_profile is not None else args.profile
     set_env("GGML_HEXAGON_PROFILE", hex_profile_val)
-    
+
     if args.cl_fa_tune or args.profile is not None:
         env_vars["GGML_OPENCL_FA_TUNE"] = "1"
     elif "GGML_OPENCL_FA_TUNE" in os.environ:
@@ -201,17 +201,17 @@ def main():
     set_env("GGML_OPENCL_PLATFORM", args.cl_platform)
     set_env("GGML_OPENCL_OPFILTER", args.cl_opfilter)
     set_env("GGML_OPENCL_KERNEL_CACHE_DIR", args.cl_cache_dir)
-    
+
     if args.cl_disable_fusion:
         env_vars["GGML_OPENCL_DISABLE_FUSION"] = "1"
     elif "GGML_OPENCL_DISABLE_FUSION" in os.environ:
         env_vars["GGML_OPENCL_DISABLE_FUSION"] = os.environ["GGML_OPENCL_DISABLE_FUSION"]
-        
+
     if args.cl_adreno_xmem:
         env_vars["GGML_OPENCL_ADRENO_XMEM_GEMM"] = "1"
     elif "GGML_OPENCL_ADRENO_XMEM_GEMM" in os.environ:
         env_vars["GGML_OPENCL_ADRENO_XMEM_GEMM"] = os.environ["GGML_OPENCL_ADRENO_XMEM_GEMM"]
-        
+
     if args.cl_adreno_large_buffer:
         env_vars["GGML_OPENCL_ADRENO_USE_LARGE_BUFFER"] = "1"
     elif "GGML_OPENCL_ADRENO_USE_LARGE_BUFFER" in os.environ:
@@ -290,11 +290,11 @@ def main():
 
     # Automatically add -v to known llama tools if sched-debug, verbose, or profile are set
     verbose_trigger = (
-        args.sched_debug or 
-        args.verbose is not None or 
-        args.profile is not None or 
-        args.hex_verbose is not None or 
-        args.hex_profile is not None or 
+        args.sched_debug or
+        args.verbose is not None or
+        args.profile is not None or
+        args.hex_verbose is not None or
+        args.hex_profile is not None or
         args.hex_optrace is not None
     )
     if verbose_trigger and basename in ("llama-cli", "llama-completion", "llama-bench", "llama-server", "llama-mtmd-cli"):
@@ -309,7 +309,7 @@ def main():
             cmd_args += ["--ubatch-size", "1024"]
         if "-fa" not in cmd_args and "--flash-attn" not in cmd_args:
             cmd_args += ["-fa", "on"]
-            
+
     if basename in ("llama-cli", "llama-completion", "llama-server", "llama-bench"):
         if "-t" not in cmd_args and "--threads" not in cmd_args:
             cmd_args += ["-t", "6"]

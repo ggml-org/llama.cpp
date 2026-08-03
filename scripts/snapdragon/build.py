@@ -42,7 +42,7 @@ def main():
     parser.add_argument("--no-docker", action="store_true", help="Build natively on the host instead of in a docker container")
     parser.add_argument("--preset", help="Override the CMake preset to use")
     parser.add_argument("--debug", action="store_true", help="Build in debug mode (uses -debug presets instead of -release)")
-    
+
     # Push options
     parser.add_argument("--push", action="store_true", help="Push built package to the target device via ADB or SSH/SCP")
     parser.add_argument("--target-dir", help="Target directory on the device (default: /data/local/tmp/llama.cpp for Android, ~/llama.cpp for Linux)")
@@ -123,7 +123,7 @@ def main():
         # Native/local host build
         print("Running native/local CMake build...")
         install_prefix = os.path.join(repo_root, install_dir, "llama.cpp")
-        
+
         # Configure
         configure_cmd = ["cmake", f"--preset={preset}", "-B", build_dir]
         print(f"+ {' '.join(configure_cmd)}")
@@ -152,15 +152,15 @@ def main():
         print("Running Docker-based cross-compilation build...")
         image_name = "arm64-linux" if target_type == "linux" else "arm64-android"
         image = f"{args.toolchain_url}/{image_name}:{args.toolchain_version}"
-        
+
         install_prefix_container = f"/workspace/{install_dir}/llama.cpp"
-        
+
         build_sh_cmd = (
             f"cmake --preset {preset} -B /workspace/{build_dir} && "
             f"cmake --build /workspace/{build_dir} -j {jobs} && "
             f"cmake --install /workspace/{build_dir} --prefix {install_prefix_container}"
         )
-        
+
         docker_cmd = [
             "docker", "run", "--rm",
             "--volume", f"{repo_root}:/workspace",
@@ -170,9 +170,9 @@ def main():
         uid_gid = get_uid_gid()
         if uid_gid:
             docker_cmd += ["-u", uid_gid[0]]
-            
+
         docker_cmd += [image, "bash", "-c", build_sh_cmd]
-        
+
         print(f"+ {' '.join(docker_cmd)}")
         res = subprocess.run(docker_cmd, cwd=repo_root)
         if res.returncode != 0:
@@ -187,7 +187,7 @@ def main():
         if not os.path.exists(src_path):
             print(f"Error: installation directory {src_path} does not exist. Cannot deploy.", file=sys.stderr)
             sys.exit(1)
-            
+
         # Resolve target directory on device
         target_dir = args.target_dir
         if not target_dir:
