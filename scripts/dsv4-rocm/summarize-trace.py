@@ -17,6 +17,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("run_dir", type=Path, help="DSV4 run directory containing rocprof/")
     parser.add_argument("--clock-offset-ns", type=int, help="realtime minus CLOCK_MONOTONIC in ns")
+    parser.add_argument(
+        "--max-clock-drift-ns", type=int, default=1_000_000,
+        help="maximum accepted start/end clock-offset change (default: 1000000 ns)",
+    )
     parser.add_argument("--top", type=int, default=20, help="rows to print per domain (default: 20)")
     parser.add_argument("--json", type=Path, help="optional machine-readable output path")
     return parser.parse_args()
@@ -33,21 +37,43 @@ def read_ints(path: Path) -> list[int]:
     return values
 
 
-def read_clock_offset(run_dir: Path, override: int | None) -> int:
+def read_clock_offset(
+    run_dir: Path, override: int | None, max_drift_ns: int
+) -> tuple[int, int | None, int | None, str]:
     if override is not None:
-        return override
+        return override, None, None, "command-line override"
     path = run_dir / "clock-domain.txt"
     if not path.is_file():
         raise ValueError(f"missing {path}; supply --clock-offset-ns for a legacy trace")
-    for line in path.read_text().splitlines():
-        if line.startswith("realtime_minus_monotonic_ns="):
-            return int(line.split("=", 1)[1])
-    raise ValueError(f"missing realtime_minus_monotonic_ns in {path}")
+    values = dict(
+        line.split("=", 1) for line in path.read_text().splitlines() if "=" in line
+    )
+    if "start_realtime_minus_monotonic_ns" in values:
+        start_offset = int(values["start_realtime_minus_monotonic_ns"])
+        start_span_ns = int(values.get("start_calibration_span_ns", "0"))
+        if "end_realtime_minus_monotonic_ns" not in values:
+            uncertainty_ns = (start_span_ns + 1) // 2 if start_span_ns else None
+            return start_offset, None, uncertainty_ns, "run-start calibration only"
+        end_offset = int(values["end_realtime_minus_monotonic_ns"])
+        end_span_ns = int(values.get("end_calibration_span_ns", "0"))
+        drift_ns = end_offset - start_offset
+        if abs(drift_ns) > max_drift_ns:
+            raise ValueError(
+                f"realtime/monotonic offset changed by {drift_ns} ns; "
+                f"limit is {max_drift_ns} ns"
+            )
+        uncertainty_ns = (abs(drift_ns) + max(start_span_ns, end_span_ns) + 1) // 2
+        return (start_offset + end_offset) // 2, drift_ns, uncertainty_ns, "run start/end midpoint"
+    if "realtime_minus_monotonic_ns" in values:
+        return int(values["realtime_minus_monotonic_ns"]), None, None, "legacy single calibration"
+    raise ValueError(f"missing realtime/monotonic offset in {path}")
 
 
-def find_trace(rocprof_dir: Path, suffix: str) -> Path | None:
+def find_trace(rocprof_dir: Path, suffix: str, required: bool = False) -> Path | None:
     matches = sorted(rocprof_dir.glob(f"*_{suffix}.csv"))
     if not matches:
+        if required:
+            raise ValueError(f"missing required *_{suffix}.csv under {rocprof_dir}")
         return None
     if len(matches) != 1:
         raise ValueError(f"expected one *_{suffix}.csv under {rocprof_dir}, found {len(matches)}")
@@ -97,12 +123,16 @@ def print_domain(title: str, values: dict[str, dict[str, int]], top: int, wall_n
 
 def main() -> int:
     args = parse_args()
+    if args.max_clock_drift_ns < 0:
+        raise ValueError("--max-clock-drift-ns must be non-negative")
     run_dir = args.run_dir.resolve()
     rocprof_dir = run_dir / "rocprof"
     if not rocprof_dir.is_dir():
         raise ValueError(f"missing rocprof directory: {rocprof_dir}")
 
-    offset_ns = read_clock_offset(run_dir, args.clock_offset_ns)
+    offset_ns, clock_drift_ns, clock_uncertainty_ns, clock_source = read_clock_offset(
+        run_dir, args.clock_offset_ns, args.max_clock_drift_ns
+    )
     measurement_epoch_ns = read_ints(run_dir / "measurement-start.ns")[0]
     completed_epoch_ns = max(read_ints(run_dir / "result-completed-at.ns"))
     start_ns = measurement_epoch_ns - offset_ns
@@ -111,14 +141,26 @@ def main() -> int:
         raise ValueError("completed timestamp does not follow measurement start")
     wall_ns = end_ns - start_ns
 
-    domains = {
-        "kernels": aggregate(find_trace(rocprof_dir, "kernel_trace"), "Kernel_Name", start_ns, end_ns),
-        "memory_copies": aggregate(find_trace(rocprof_dir, "memory_copy_trace"), "Direction", start_ns, end_ns),
-        "rccl_api": aggregate(find_trace(rocprof_dir, "rccl_api_trace"), "Function", start_ns, end_ns),
+    trace_files = {
+        "kernels": find_trace(rocprof_dir, "kernel_trace", required=True),
+        "memory_copies": find_trace(rocprof_dir, "memory_copy_trace"),
+        "rccl_api": find_trace(rocprof_dir, "rccl_api_trace"),
     }
+    domains = {
+        "kernels": aggregate(trace_files["kernels"], "Kernel_Name", start_ns, end_ns),
+        "memory_copies": aggregate(trace_files["memory_copies"], "Direction", start_ns, end_ns),
+        "rccl_api": aggregate(trace_files["rccl_api"], "Function", start_ns, end_ns),
+    }
+    if not domains["kernels"]:
+        raise ValueError("required kernel trace has no events in the measured interval")
 
     print(f"run_dir={run_dir}")
     print(f"clock_offset_ns={offset_ns}")
+    print(f"clock_source={clock_source}")
+    print(f"clock_drift_ns={clock_drift_ns if clock_drift_ns is not None else 'unknown'}")
+    print(f"clock_uncertainty_ns={clock_uncertainty_ns if clock_uncertainty_ns is not None else 'unknown'}")
+    for domain, path in trace_files.items():
+        print(f"{domain}_trace={path if path is not None else 'missing'}")
     print(f"measurement_epoch_ns={measurement_epoch_ns}")
     print(f"completed_epoch_ns={completed_epoch_ns}")
     print(f"measurement_monotonic_ns={start_ns}")
@@ -134,6 +176,10 @@ def main() -> int:
         output = {
             "run_dir": str(run_dir),
             "clock_offset_ns": offset_ns,
+            "clock_source": clock_source,
+            "clock_drift_ns": clock_drift_ns,
+            "clock_uncertainty_ns": clock_uncertainty_ns,
+            "trace_files": {key: str(value) if value is not None else None for key, value in trace_files.items()},
             "measurement_epoch_ns": measurement_epoch_ns,
             "completed_epoch_ns": completed_epoch_ns,
             "measurement_monotonic_ns": start_ns,

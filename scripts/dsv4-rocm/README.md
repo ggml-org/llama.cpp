@@ -137,9 +137,9 @@ optimization decisions. Filter the trace to the interval beginning at
 `result-completed-at.ns`; traced throughput is not comparable to ordinary A/B
 throughput.
 
-Each new run stores `clock-domain.txt`, which maps the harness's realtime
-markers to rocprof's monotonic timestamps. Generate measured-region text and
-JSON summaries with:
+Each new run stores start/end calibrations in `clock-domain.txt`, which map the
+harness's realtime markers to rocprof's monotonic timestamps and bound clock
+drift across the run. Generate measured-region text and JSON summaries with:
 
 ```bash
 run_dir=/home/edwin/llama-jobs/dsv4-rocm-pp/<trace-run>
@@ -149,9 +149,12 @@ scripts/dsv4-rocm/summarize-trace.py "$run_dir" --top 30 \
 ```
 
 Kernel durations are clipped to the measured interval and summed across all
-devices/queues, so their wall-equivalent percentage can exceed 100%. A legacy
-trace without `clock-domain.txt` requires its run-time realtime-minus-monotonic
-offset via `--clock-offset-ns`; do not reconstruct that offset after a reboot.
+devices/queues, so their wall-equivalent percentage can exceed 100%. The
+summarizer requires a kernel trace/nonempty measured interval and rejects more
+than 1 ms of start-to-end clock-offset drift by default. A legacy trace without
+`clock-domain.txt` requires its run-time realtime-minus-monotonic offset via
+`--clock-offset-ns`; do not reconstruct that offset after a reboot. A single
+legacy calibration has unknown boundary uncertainty and is labeled as such.
 
 ## Summarize existing output
 

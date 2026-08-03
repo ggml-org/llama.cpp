@@ -193,9 +193,13 @@ selecting the fastest value. The separate traced 8K run measured 238.528 t/s,
 which demonstrates roughly 18% profiler overhead relative to its nearby
 ordinary baseline and is not an A/B throughput number.
 
-The exact measured interval for the trace is 34.345 seconds. After mapping the
-harness realtime markers to rocprof monotonic timestamps, it contains 978,828
-kernel events and 85.912 summed device-seconds across four GPUs. Routed
+The harness-recorded measured interval for the trace is 34.345 seconds. After
+mapping its realtime markers to rocprof monotonic timestamps, it contains
+978,828 kernel events and 85.912 summed device-seconds across four GPUs. This
+legacy trace's single clock calibration was backfilled on the same boot about
+32 minutes later, so the interval duration is unaffected but boundary
+uncertainty is unknown; new traces capture start/end mappings and reject more
+than 1 ms of offset drift. Routed
 `mul_mat_q` kernels account for approximately 40% of summed kernel time:
 IQ2_XXS 18.12%, IQ3_XXS 9.66%, type 8 6.14%, type 13 3.43%, and smaller
 quantized types the remainder. The largest single Tensile Cijk GEMM is 28.44%,
@@ -227,10 +231,12 @@ J=64 from the full 256-token width even though compact routed tiles see far
 fewer rows per expert. A focused 256-expert/top-6 fixture found J=16 reduced
 IQ2_XXS latency from a paired mean 3049.7 us to 1575.8 us and IQ3_XXS from
 3312.5 us to 1787.0 us, with zero A/B mismatches. Setting J=16 for the whole
-model improved matched medians from 367.246 to 410.547 t/s at 512 (+11.8%),
-364.486 to 403.849 t/s at 2K (+10.8%), and 292.528 to 323.151 t/s at 8K
-(+10.5%). J=8 regressed whole-model 2K PP to 350.359 t/s despite winning the
-isolated IQ3 case.
+model improved medians to 410.547 t/s at 512, 403.849 t/s at 2K, and 323.151
+t/s at 8K. Trailing default controls measured 367.977, 364.810, and 294.796
+t/s respectively, versus leading controls of 367.246, 364.486, and 292.528.
+Relative to the midpoint of the bracketing controls, J=16 gained 11.7%, 10.8%,
+and 10.0%; control drift was 0.1% at 2K and 0.8% at 8K. J=8 regressed
+whole-model 2K PP to 350.359 t/s despite winning the isolated IQ3 case.
 
 The control remains opt-in because expert skew changes the optimum: in a
 16-hot-expert fixture, J=16 was roughly 43-45% slower than J=64 while J=32 was
@@ -242,7 +248,8 @@ Screening artifacts:
 
 - `$HOME/llama-jobs/dsv4-rocm-mmq-sweep/20260803T160812Z-04c01936c/`
 - `$HOME/llama-jobs/dsv4-rocm-mmq-sweep/20260803T160916Z-full-model/`
-- Full-model harness runs labeled `mmq-jauto-*`, `mmq-j8-*`, and `mmq-j16-*`.
+- Full-model harness runs labeled `mmq-jauto-*`, `mmq-j8-*`, `mmq-j16-*`, and trailing controls `mmq-jauto-*-post`.
+- Fully distinguishing target-shape correctness rerun: `prototype1024-validation/` below the focused sweep directory; J16 and J64 outputs match bit-for-bit for both IQ types and uniform/hot routes.
 
 ### M2 - correctness proof and microbenchmark
 

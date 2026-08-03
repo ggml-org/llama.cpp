@@ -186,9 +186,10 @@ boot_id_path = Path("/proc/sys/kernel/random/boot_id")
 boot_id = boot_id_path.read_text().strip() if boot_id_path.is_file() else "unavailable"
 Path(sys.argv[1]).write_text(
     f"boot_id={boot_id}\n"
-    f"captured_realtime_ns={realtime}\n"
-    f"captured_monotonic_ns={monotonic}\n"
-    f"realtime_minus_monotonic_ns={realtime - monotonic}\n"
+    f"start_captured_realtime_ns={realtime}\n"
+    f"start_captured_monotonic_ns={monotonic}\n"
+    f"start_realtime_minus_monotonic_ns={realtime - monotonic}\n"
+    f"start_calibration_span_ns={realtime_after - realtime_before}\n"
 )
 PY
 
@@ -433,6 +434,24 @@ truncated=0
     printf 'truncated=%s\n' "$truncated"
     printf 'finished_at_ns=%s\n' "$(now_ns)"
 } >> "$run_dir/status.txt"
+
+python3 - "$run_dir/clock-domain.txt" <<'PY'
+from pathlib import Path
+import time
+import sys
+
+realtime_before = time.time_ns()
+monotonic = time.clock_gettime_ns(time.CLOCK_MONOTONIC)
+realtime_after = time.time_ns()
+realtime = (realtime_before + realtime_after) // 2
+with Path(sys.argv[1]).open("a") as handle:
+    handle.write(
+        f"end_captured_realtime_ns={realtime}\n"
+        f"end_captured_monotonic_ns={monotonic}\n"
+        f"end_realtime_minus_monotonic_ns={realtime - monotonic}\n"
+        f"end_calibration_span_ns={realtime_after - realtime_before}\n"
+    )
+PY
 
 if [ -f "$run_dir/startup-timeout" ]; then
     echo "Benchmark did not reach its first measured prompt run within ${STARTUP_TIMEOUT_S}s; see $run_dir/bench.log" >&2

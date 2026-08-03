@@ -227,10 +227,11 @@ float deterministic_value(size_t index, float phase) {
 void quantize_expert_weights(const params & p, std::vector<uint8_t> & packed) {
     const size_t row_bytes = ggml_row_size(p.type, p.k);
 
-    // This is a dispatch benchmark. Quantize a small deterministic row set and
-    // replicate it in an expert-dependent pattern so IQ fixtures start quickly
-    // while output rows and routed experts remain distinguishable.
-    constexpr size_t nprototypes = 16;
+    // This is a dispatch benchmark. Quantize a bounded deterministic row set
+    // and reuse it in an expert-dependent pattern so IQ fixtures start quickly.
+    // All rows and experts are distinct for the target N <= 512, experts <= 256
+    // cases; larger command-line stress shapes may alias modulo nprototypes.
+    constexpr size_t nprototypes = 1024;
     std::vector<float> row(static_cast<size_t>(p.k));
     std::vector<float> importance(static_cast<size_t>(p.k), 1.0f);
     std::vector<uint8_t> prototypes(nprototypes * row_bytes);
@@ -246,7 +247,7 @@ void quantize_expert_weights(const params & p, std::vector<uint8_t> & packed) {
     for (int64_t expert = 0; expert < p.experts; ++expert) {
         for (int64_t out = 0; out < p.n; ++out) {
             const size_t row_index = static_cast<size_t>(expert * p.n + out);
-            const size_t prototype = static_cast<size_t>(out + 7 * expert) % nprototypes;
+            const size_t prototype = static_cast<size_t>(out + 257 * expert) % nprototypes;
             std::memcpy(packed.data() + row_index * row_bytes,
                         prototypes.data() + prototype * row_bytes, row_bytes);
         }
