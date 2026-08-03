@@ -8,7 +8,10 @@
 // `compute_imatrix_spec()`.  It was extracted here in 2026-07 so the
 // calibration path can be reused from other tools (server telemetry,
 // dspark-realign, etc.) without copy-pasting the 600+ lines of manual
-// KV bookkeeping again.
+// KV bookkeeping again.  The inlined `compute_imatrix_spec()` wrapper
+// in imatrix.cpp was removed on 2026-08-03 (it was dead code after
+// this extraction landed); the imatrix binary now calls
+// common_speculative_calibration_run() directly.
 //
 // WHY IT BYPASSES common_speculative_*
 // ------------------------------------
@@ -55,9 +58,9 @@
 
 //
 // Run the spec-decoding calibration loop.  See speculative-calibration.h
-// for the API contract.  Logic was moved verbatim from
-// compute_imatrix_spec() in tools/imatrix/imatrix.cpp — the only
-// changes are:
+// for the API contract.  Logic was moved verbatim from the inlined
+// `compute_imatrix_spec()` that used to live in
+// tools/imatrix/imatrix.cpp (since removed) — the only changes are:
 //   - g_collector.begin_graph_observers() / .flush_graph_observers()
 //     are replaced with opts.observer_hooks.begin() / .flush().
 //   - A final observer_hooks.flush() at the end replaces the
