@@ -466,8 +466,7 @@ struct common_params {
     int32_t n_chunks              =    -1; // max number of chunks to process (-1 = unlimited)
     int32_t n_spec_steps          =    64; // [imatrix] number of spec-decoding steps to roll forward when --model-draft is set (0 = until context limit)
     std::string telemetry_out;             // [imatrix] path to write per-step accept/reject JSONL when --model-draft is set
-    int32_t n_telemetry_topk   = 0;        // [imatrix] when > 0 with telemetry_out, emit spec_calib.v3 schema with verifier+drafter top-k distributions per draft position (0 = minimal record)
-    bool    telemetry_v1_compat = false;   // [imatrix] when true with telemetry_out, emit the legacy llama.dflash.acceptance.v1 schema instead of the unified v3 schema. Adapter for one major version, then remove.
+    int32_t n_telemetry_topk   = 0;        // [imatrix] when > 0 with telemetry_out, additionally emit verifier+drafter top-k distributions per draft position in the llama.tessera.spec.v1 record (0 = minimal record with confidence[] only)
     std::string features_out;              // [imatrix] prefix for offline trunk target-layer feature capture (<prefix>.bin + <prefix>.json); enables the dedicated capture pass
     std::vector<int32_t> feature_layers;   // [imatrix] trunk layer ids to capture, in the encoder concatenation order (the drafter's target_layer_ids)
     int32_t features_warmup    = 256;      // [imatrix] per-chunk prefix tokens to process for context but not emit (their hidden states lack a full left window); 0 = emit all

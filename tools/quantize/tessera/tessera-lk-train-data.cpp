@@ -19,11 +19,11 @@ static bool parse_usable(const char * line, int block_size, json & out) {
     if (line == nullptr || block_size < 0) return false;
     try {
         json rec = json::parse(line);
-        if (rec.value("schema", "") != "llama.spec_calib.v2") return false;
-        if (rec.value("drafted", -1) != block_size)           return false;
-        if (!rec.contains("prime_token"))                     return false;
+        if (rec.value("schema", "") != "llama.tessera.spec.v1") return false;
+        if (rec.value("drafted", -1) != block_size)              return false;
+        if (!rec.contains("prime_token"))                        return false;
         if (!rec.contains("drafted_tokens") || !rec["drafted_tokens"].is_array()) return false;
-        if ((int) rec["drafted_tokens"].size() < block_size)  return false;
+        if ((int) rec["drafted_tokens"].size() < block_size)     return false;
         if (!rec.contains("verifier_topk_tokens") || !rec["verifier_topk_tokens"].is_array()) return false;
         if (!rec.contains("verifier_topk_probs")  || !rec["verifier_topk_probs"].is_array())  return false;
         if ((int) rec["verifier_topk_tokens"].size() < block_size + 1) return false;
@@ -94,7 +94,7 @@ int ts_lk_train_detect_block_size(const char * traces_path) {
         if (line.empty()) continue;
         try {
             json rec = json::parse(line);
-            if (rec.value("schema", "") != "llama.spec_calib.v2") continue;
+            if (rec.value("schema", "") != "llama.tessera.spec.v1") continue;
             const int n_dft = rec.value("drafted", -1);
             if (n_dft > 0) hist[n_dft]++;
         } catch (...) {

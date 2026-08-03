@@ -4,7 +4,7 @@
 // tessera-lk-train-data.h
 //
 // Input stage of the native LK drafter-training driver (tessera-train-lk):
-// turns raw llama.spec_calib.v2 acceptance traces (from llama-imatrix
+// turns raw llama.tessera.spec.v1 acceptance traces (from llama-imatrix
 // --telemetry-out --telemetry-topk K) into the (tokens, dense-labels)
 // datapoints that GGML_OPT_LOSS_TYPE_LK consumes.
 //
@@ -33,14 +33,14 @@
 #include <cstdint>
 
 // Decide whether a JSON line is a usable LK training example: a
-// llama.spec_calib.v2 record whose drafted count equals block_size and that
+// llama.tessera.spec.v1 record whose drafted count equals block_size and that
 // carries verifier_topk_tokens/probs for all block_size + 1 positions. Returns
 // 1 if usable, 0 otherwise. Cheap (parse only, no densify); used to size the
 // dataset in a first pass before densifying in a second pass.
 int ts_lk_train_line_usable(const char * line, int block_size);
 
-// Parse one spec_calib.v2 line and, if usable, write a single training example
-// into the caller's buffers:
+// Parse one llama.tessera.spec.v1 line and, if usable, write a single training
+// example into the caller's buffers:
 //   out_tokens[0..block_size]              length block_size + 1 (int32 tokens)
 //   out_labels[0..(block_size+1)*n_vocab)  position-major dense distributions
 // Returns 1 if an example was written, 0 if the line is not usable (skipped),
@@ -50,5 +50,5 @@ int ts_lk_train_example_from_line(const char * line, int block_size, int n_vocab
 
 // Auto-detect the modal drafted count across a trace file, so the driver can
 // default --block-size to whatever the collection run actually used. Returns
-// the modal n_dft (> 0), or -1 if no spec_calib.v2 record is found.
+// the modal n_dft (> 0), or -1 if no llama.tessera.spec.v1 record is found.
 int ts_lk_train_detect_block_size(const char * traces_path);

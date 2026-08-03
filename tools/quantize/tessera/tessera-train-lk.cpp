@@ -2,7 +2,7 @@
 //
 // Trains an autoregressive speculative-decoding drafter to directly maximize
 // the verifier acceptance rate, using GGML_OPT_LOSS_TYPE_LK. Reads
-// llama.spec_calib.v2 traces (llama-imatrix --telemetry-out --telemetry-topk),
+// llama.tessera.spec.v1 traces (llama-imatrix --telemetry-out --telemetry-topk),
 // builds the dense-label dataset the llama-layer LK path already expects, runs
 // the epoch loop, and saves the trained drafter GGUF. See
 // docs/tessera-lk-training-design.md for the design.
@@ -27,13 +27,13 @@
 #include <vector>
 
 static void print_usage(const char * prog) {
-    printf("usage: %s -m drafter.gguf --traces spec_calib.v2.jsonl -o trained.gguf [options]\n", prog);
+    printf("usage: %s -m drafter.gguf --traces spec.jsonl -o trained.gguf [options]\n", prog);
     printf("\n");
     printf("LK drafter training: minimize the total-variation distance between the\n");
     printf("drafter and verifier distributions, i.e. maximize the acceptance rate.\n");
     printf("\n");
     printf("Tessera options:\n");
-    printf("  --traces PATH        llama.spec_calib.v2 JSONL (from llama-imatrix --telemetry-out)\n");
+    printf("  --traces PATH        llama.tessera.spec.v1 JSONL (from llama-imatrix --telemetry-out)\n");
     printf("  --block-size B       drafted tokens per step; n_ctx = B+1 (default: auto-detect modal)\n");
     printf("  --max-examples N     dataset cap, bounds dense-label memory (default 512)\n");
     printf("  --dry-run            build the dataset and print stats; do not train or save\n");
@@ -100,7 +100,7 @@ int main(int argc, char ** argv) {
     if (block_size <= 0) {
         block_size = ts_lk_train_detect_block_size(traces_path.c_str());
         if (block_size <= 0) {
-            LOG_ERR("could not auto-detect block size from %s (no spec_calib.v2 records?); pass --block-size\n",
+            LOG_ERR("could not auto-detect block size from %s (no llama.tessera.spec.v1 records?); pass --block-size\n",
                     traces_path.c_str());
             return 1;
         }
@@ -158,7 +158,7 @@ int main(int argc, char ** argv) {
 
     const int ndata = (int) usable.size();
     if (ndata == 0) {
-        LOG_ERR("no usable spec_calib.v2 records with drafted == %d in %s\n",
+        LOG_ERR("no usable llama.tessera.spec.v1 records with drafted == %d in %s\n",
                 block_size, traces_path.c_str());
         return 1;
     }
