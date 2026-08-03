@@ -576,6 +576,14 @@ export { default as ChatMessageMcpPrompt } from './ChatMessages/ChatMessage/Chat
 export { default as ChatMessageCwdChange } from './ChatMessages/ChatMessage/ChatMessageCwdChange.svelte';
 
 /**
+ * Generic wrapper for UI-generated (synthetic) messages. Routes the
+ * working-directory change to ChatMessageCwdChange and renders a muted
+ * fallback for any other synthetic text, so no synthetic message ever
+ * surfaces as a user bubble.
+ */
+export { default as ChatMessageSynthetic } from './ChatMessages/ChatMessage/ChatMessageSynthetic.svelte';
+
+/**
  * Formatted content display for MCP prompt messages. Renders the full prompt
  * content with arguments in a readable format. Used within ChatMessageMcpPrompt
  * for the expanded view.

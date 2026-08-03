@@ -12,7 +12,7 @@
 		ChatMessageAssistant,
 		ChatMessageUser,
 		ChatMessageSystem,
-		ChatMessageCwdChange,
+		ChatMessageSynthetic,
 		ChatMessageMcpPrompt
 	} from '$lib/components/app/chat';
 	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
@@ -58,10 +58,12 @@
 	);
 
 	// Synthetic cwd-change messages render with the folder-row UI instead
-	// of a user bubble.
+	// of a user bubble. The persisted flag is the primary signal; the
+	// content parse keeps pre-flag rows rendering the same way.
 	let cwdMessageInfo = $derived(
 		message.role === MessageRole.USER ? parseCwdMessage(message.content) : null
 	);
+	let isSynthetic = $derived(Boolean(message.isSynthetic) || cwdMessageInfo !== null);
 
 	let rawEditContent = $derived.by(() => {
 		if (message.role !== MessageRole.ASSISTANT) return undefined;
@@ -351,7 +353,7 @@
 	}
 </script>
 
-<div class="chat-message">
+<div class="chat-message" class:chat-message--synthetic={isSynthetic}>
 	{#if message.role === MessageRole.SYSTEM}
 		<ChatMessageSystem
 			bind:textareaElement
@@ -382,8 +384,8 @@
 			{showDeleteDialog}
 			{siblingInfo}
 		/>
-	{:else if cwdMessageInfo}
-		<ChatMessageCwdChange class={className} info={cwdMessageInfo} />
+	{:else if isSynthetic}
+		<ChatMessageSynthetic {message} class={className} />
 	{:else if message.role === MessageRole.USER}
 		<ChatMessageUser
 			class={className}
@@ -433,5 +435,14 @@
 	.chat-message {
 		content-visibility: auto;
 		contain-intrinsic-size: auto 500px;
+	}
+
+	/*
+	 * Synthetic rows (e.g. the working-directory change) are small, so an
+	 * accurate placeholder keeps the injected row from inflating the
+	 * auto-scroll offset; the 500px default is for ordinary bubbles.
+	 */
+	.chat-message--synthetic {
+		contain-intrinsic-size: auto 40px;
 	}
 </style>

@@ -1,9 +1,4 @@
-import {
-	AUTO_SCROLL_AT_BOTTOM_THRESHOLD,
-	AUTO_SCROLL_INTERVAL,
-	INJECTION_SETTLE_MAX_MS,
-	INJECTION_STABLE_FRAMES
-} from '$lib/constants';
+import { AUTO_SCROLL_AT_BOTTOM_THRESHOLD, AUTO_SCROLL_INTERVAL } from '$lib/constants';
 
 export interface AutoScrollOptions {
 	disabled?: boolean;
@@ -27,10 +22,6 @@ export class AutoScrollController {
 	private _mutationObserver: MutationObserver | null = null;
 	private _rafPending = false;
 	private _observerEnabled = false;
-	private _settleRaf: number | undefined;
-	private _settleStart = 0;
-	private _settleLastHeight = 0;
-	private _settleStableFrames = 0;
 	constructor(options: AutoScrollOptions = {}) {
 		this._disabled = options.disabled ?? false;
 	}
@@ -202,11 +193,10 @@ export class AutoScrollController {
 					this._container.scrollTop = this._container.scrollHeight;
 					return;
 				}
-				// Discrete injection (e.g. a synthetic cwd-change row): wait for
-				// scrollHeight to hold before pinning so the viewport does not
-				// snap back when content-visibility swaps the 500px placeholder
-				// for the real (small) row height.
-				this._settleToBottom();
+				// Discrete injection (e.g. a synthetic cwd-change row): the row
+				// carries an accurate contain-intrinsic-size, so pinning now
+				// does not snap back to a collapsed placeholder.
+				this._container.scrollTop = this._container.scrollHeight;
 			});
 		});
 
@@ -223,42 +213,6 @@ export class AutoScrollController {
 			this._mutationObserver = null;
 		}
 		this._rafPending = false;
-		if (this._settleRaf !== undefined) {
-			cancelAnimationFrame(this._settleRaf);
-			this._settleRaf = undefined;
-		}
-	}
-
-	/**
-	 * Pins the bottom only after scrollHeight has held steady for a few
-	 * frames, so content-visibility placeholder realizations do not leave
-	 * the viewport over-scrolled. No-op while streaming (the interval owns
-	 * the pin) or once the user has scrolled up.
-	 */
-	private _settleToBottom(): void {
-		if (this._settleRaf !== undefined) return;
-		if (!this._container || !this._autoScrollEnabled) return;
-		this._settleStart = performance.now();
-		this._settleLastHeight = this._container.scrollHeight;
-		this._settleStableFrames = 0;
-		this._settleRaf = requestAnimationFrame(() => this._settleTick());
-	}
-
-	private _settleTick(): void {
-		this._settleRaf = undefined;
-		if (this._disabled || !this._container || !this._autoScrollEnabled) return;
-
-		const height = this._container.scrollHeight;
-		this._settleStableFrames = height === this._settleLastHeight ? this._settleStableFrames + 1 : 0;
-		this._settleLastHeight = height;
-
-		const stable = this._settleStableFrames >= INJECTION_STABLE_FRAMES;
-		const timedOut = performance.now() - this._settleStart > INJECTION_SETTLE_MAX_MS;
-		if (this._autoScrollEnabled && (stable || timedOut)) {
-			this._container.scrollTop = this._container.scrollHeight;
-			return;
-		}
-		this._settleRaf = requestAnimationFrame(() => this._settleTick());
 	}
 }
 
