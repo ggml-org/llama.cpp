@@ -209,10 +209,21 @@ host API calls 248.6 ms; the multi-second whole-process copy/init totals were
 model-load pollution. This satisfies the >=35% M1 MoE/MMQ rule and does not
 satisfy the communication or LID thresholds.
 
+A compact measured-region trace at 16K confirms the crossover without the
+multi-GiB HIP API/JSON output: 1,793,356 kernel events, 185.325 summed
+device-seconds, and 70.382 seconds wall time. The dominant Cijk kernel remains
+26.43%; lightning indexer rises to 11.11%, explicit flash attention to 7.06%,
+routed MMQ totals about 34.8%, and RCCL device work is 7.28%. The attention
+subsystem is growing, but neither explicit CSA nor LID/top-k individually
+crosses 15% at 16K. The complete artifact is 809 MiB. A complete 32K sample
+exceeds the fixed five-minute measured cap even with warmup disabled, so 16K
+is the longest complete attribution point under the current rule.
+
 Measured-region artifacts:
 
 - `$HOME/llama-jobs/dsv4-rocm-pp/20260803T155051.535173991Z-trace-base-8k-04c01936c-04c01936cfc8-2974/`
 - `measured-region-summary.txt` and `measured-region-summary.json` in that run.
+- `$HOME/llama-jobs/dsv4-rocm-pp/20260803T175617.261510915Z-kernel-trace-base-16k-e62763ecbf21-14872/`
 
 ### M1 - select one optimization from profile evidence
 
@@ -244,6 +255,24 @@ best. Any automatic selector must account for routing concentration or be
 narrowly guarded; do not make J=16 a generic RDNA2 routed-MMQ default from the
 balanced fixture alone.
 
+**Selected second path:** tune the exact skinny F32 hidden-channel mixer GEMM,
+not indexed CSA yet. rocBLAS profile logging identifies the dominant Tensile
+kernel as `rocblas_sgemm(transA=T, transB=N, M=24, N=256, K=16384)` with 344
+calls per 256-token microbatch. DeepSeek-V4 has 43 blocks and calls
+`build_hc_pre()` twice per block; across four tensor-parallel GPUs this is
+`43*2*4 = 344`, exactly matching the Cijk, RCCL all-reduce, and fused
+`dsv4_hc_post` counts. The source operation is
+`ggml_mul_mat(hc_fn, flat_norm)`, named `hc_mixes`. Its selected Tensile macro
+tile is 128x256, wasting most output rows for M=24. At 16K there are 22,016
+calls (`344*64` microbatches), again exactly matching the model structure.
+Implement and microbenchmark a narrow shape/backend guard with generic
+fallback before considering a broader GEMM heuristic.
+
+Mapping artifacts:
+
+- `$HOME/edwin/llama-jobs/dsv4-rocm-rocblas/20260803T175331Z-ec1b7e64c-map-cijk/` (three-line aggregate rocBLAS profile)
+- `$HOME/edwin/llama-jobs/dsv4-rocm-pp/20260803T175022.376406151Z-trace-map-cijk-256-ec1b7e64c2cc-24970/` (single-microbatch trace)
+
 Screening artifacts:
 
 - `$HOME/llama-jobs/dsv4-rocm-mmq-sweep/20260803T160812Z-04c01936c/`
@@ -266,13 +295,20 @@ token IDs, prompts, counts, and first-prompt timings.
 
 Default and J=16 runs both passed layer-reference versus tensor split,
 continuation, replay, and KV reuse. All six base/candidate responses matched in
-content and token IDs. On the single natural-text first-prompt observation,
-tensor-split PP was 399.794 t/s by default and 419.577 t/s with J=16 (+4.95%);
-layer-split was 259.833 versus 292.803 t/s (+12.69%). These are correctness and
-routing-sanity evidence, not a statistical performance result; the bracketed
+content and token IDs. The initial artifact used the pre-normalized corpus and
+had incomplete attestation. The acceptance rerun at clean commit `ec1b7e64c`
+uses the normalized 2,527-token bytes, strict response/timing validation,
+exclusive output directories, full SHA-256 hashes of all three GGUF shards,
+and hashes for the server executable plus seven resolved llama/ggml DSOs. Its
+single first-prompt observation was 399.268→420.273 t/s (+5.26%) in tensor mode
+and 259.319→291.886 (+12.56%) in layer-reference mode. These are correctness
+and routing-sanity evidence, not a statistical performance result; bracketed
 llama-bench runs remain the throughput evidence.
 
-Artifact: `$HOME/llama-jobs/dsv4-corpus-validation/20260803T165136Z-88c415d91/`.
+Artifacts:
+
+- `$HOME/llama-jobs/dsv4-corpus-validation/20260803T173909.127798287Z-attested-ec1b7e64c2cc-6101/` (acceptance artifact)
+- `$HOME/llama-jobs/dsv4-corpus-validation/20260803T165136Z-88c415d91/` (superseded pre-normalization artifact)
 
 ### M3 - implementation and matched A/B
 
@@ -312,13 +348,14 @@ A dense mask is not a sparse performance implementation. Success requires runtim
 | 2026-08-03 | Cap measured PP at five minutes while excluding initial load/warmup; run 8K separately and reject incomplete runs for matched A/B. | User direction plus independent benchmark-validity review. | final |
 | 2026-08-03 | Trace whole process but apply attribution thresholds only after filtering to recorded measured-run timestamps. | Independent review found model load would bias whole-process totals. | final |
 | 2026-08-03 | Select routed MMQ as M1 rather than CSA/LID/communication. | Measured-region trace assigns about 40% of summed kernel time to `mul_mat_q`; RCCL is 8%, LID 6.3%, explicit flash attention 5.6%, and measured H2D only 47 ms. | final |
-| 2026-08-03 | Keep J=16 explicit for the known DSV4 IQ2_M service; do not make it a generic RDNA2 default. | Bracketed synthetic PP gains 10.0-10.8% and the 2,528-token natural proxy gains 4.95% in tensor mode, but hot-routing microbench regresses with J=16. | final |
+| 2026-08-03 | Keep J=16 explicit for the known DSV4 IQ2_M service; do not make it a generic RDNA2 default. | Bracketed synthetic PP gains 10.0-11.7% and the attested 2,527-token natural proxy gains 5.26% in tensor mode, but hot-routing microbench regresses with J=16. | final |
+| 2026-08-03 | Select the M=24,N=256,K=16384 F32 `hc_mixes` GEMM as optimization two. | Exact rocBLAS dimensions/call count map the 26.43-28.44% Cijk kernel to two `build_hc_pre` calls in each of 43 layers on four GPUs; explicit CSA is 7.06% and LID is 11.11% at 16K. | selected |
 
 ## 9. Open questions
 
-1. Does the J=16 win hold on a user-supplied production corpus and at final 32K+ contexts? The committed natural-text proxy is positive but only one observation.
+1. Does the J=16 win hold on a user-supplied production corpus? The attested engineering proxy and through-16K synthetic scaling are positive, but 32K cannot complete under the five-minute cap.
 2. Can a later expert-concentration signal select J=16/J=32/J=64 without a host synchronization? This patch intentionally stays explicit.
-3. What is the identity of the dominant 28.44% Tensile Cijk GEMM, and can its exact DSV4 shape be tuned without moving the bottleneck to RCCL?
+3. How much can a narrow M=24,N<=256,K=16384 `hc_mixes` kernel beat rocBLAS's 128x256 macro-tile, and does RCCL become the limiter?
 4. Does HIP flash attention perform any arbitrary-mask tile pruning? Source and counters must answer before a later CSA patch.
 5. How are LID scores and global top-k distributed across the four meta devices at runtime?
 6. Are peer copies direct and what bandwidth does GPU3's x8 path achieve?
