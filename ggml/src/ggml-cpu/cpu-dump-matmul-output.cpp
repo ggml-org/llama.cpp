@@ -34,6 +34,18 @@ void cpu_dump_matmul_output(
     if (params->ith != 0) {
         return;
     }
+    // Audit fix 3: filter by tensor name. The matmul op is called for
+    // every matmul in the graph, including RoPE rotation matrix
+    // lookups, token-embedding gathers, and small bias-projection
+    // matmuls that are not in the L2 scope. The allowlist keeps
+    // only the linear layer matmuls of the per-block transformer
+    // (attn_q/k/v/output, ffn_gate/up/down) and the model head
+    // (output.weight). The rest are silently skipped - the sidecar
+    // dir stays focused on the tensors that have a meaningful
+    // forward-pass differential to score.
+    if (!tessera_matmul_output::matmul_output_tensor_allowed(tensor_name)) {
+        return;
+    }
     // The matmul dst layout: (ne0, ne1, ne2, ne3) row-major F32, where
     // ne1 is the number of tokens, ne0 is the output dimension. The
     // sidecar stores one row per token (rows = ne1, cols = ne0).
@@ -55,7 +67,48 @@ void cpu_dump_matmul_output(
     const int64_t stride = tessera_matmul_output::matmul_output_stride();
     const int64_t captured_rows = (ne1 + stride - 1) / stride;
 
+    // Audit fix 2: the open_matmul_output_writer enforces the hard
+    // cap (MATMUL_OUTPUT_MAX_ROWS = 4096) and silently rejects
+    // over-cap tensors with a one-time warning. The pre-check here
+    // is a fast-fail that avoids the more expensive dst-row-pointer
+    // computation in the over-cap case. Both layers are guarded so
+    // the cap holds even if open_matmul_output_writer's check is
+    // bypassed by a future change.
+    if (captured_rows > tessera_matmul_output::MATMUL_OUTPUT_MAX_ROWS) {
+        return;
+    }
+
+    // Remember the current tensor name so we can detect an
+    // audit-fix-4 drop. If the open was rejected because of a
+    // shape mismatch (decode-time reopen of a prefill-time
+    // tensor), we want to skip the subsequent write + close
+    // calls so the rejected invocation does not corrupt the
+    // prefill data via the still-open prefill stream.
+    const std::string tensor_name_str(tensor_name);
     tessera_matmul_output::open_matmul_output_writer(tensor_name, captured_rows, ne0);
+
+    // If the open was silently dropped (shape mismatch - typical
+    // for decode reopening a prefill tensor), bail out. The
+    // close call at the end of THIS invocation would otherwise
+    // re-seal the prefill v2/v3 strips using the decode-side
+    // g_stream state (which was NOT touched by the rejected
+    // open, so this is safe), but the write calls in the loop
+    // below would land in the prefill stream and overwrite
+    // prefill data. We skip the whole loop + close to be safe.
+    //
+    // We detect the drop by checking whether the g_stream's
+    // current tensor_name matches ours. After a successful
+    // open, g_stream.tensor_name == our name. After a dropped
+    // open, g_stream is unchanged (it still holds the prefill
+    // stream), so the names match too. We distinguish the two by
+    // checking the rows/cols: after a drop, g_stream.rows is the
+    // prefill rows (large), not our decode rows (small). If the
+    // rows don't match, the open was dropped.
+    if (tessera_matmul_output::matmul_output_stream_rows() != captured_rows ||
+        tessera_matmul_output::matmul_output_stream_cols() != ne0) {
+        // The open was dropped. Skip the writes and close.
+        return;
+    }
 
     const int64_t nb1 = dst->nb[1];
     const int64_t nb2 = dst->nb[2];
