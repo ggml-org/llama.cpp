@@ -486,6 +486,13 @@ int llama_server(common_params & params, int argc, char ** argv) {
 
     SRV_INF("listening on %s\n", ctx_http.listening_address.c_str());
 
+    // TODO: remove this in the future
+    // check the string to also handle the .sock case
+    if (string_ends_with(ctx_http.listening_address, ":8080")) {
+        SRV_WRN("%s", "NOTICE: server default port will be changed to :9931 in a future release\n");
+        SRV_WRN("%s", "        ref: https://github.com/ggml-org/llama.cpp/pull/26508\n");
+    }
+
     if (is_router_server) {
         if (!params.models_preset_hf.empty()) {
             SRV_WRN(      "NOTE: using preset.ini from HF repo '%s'\n", params.models_preset_hf.c_str());
