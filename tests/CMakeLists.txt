@@ -353,6 +353,8 @@ set_tests_properties(test-state-restore-fragmented PROPERTIES FIXTURES_REQUIRED 
 # Test state save/load functionality
 llama_build_and_test(test-save-load-state.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
 set_tests_properties(test-save-load-state PROPERTIES FIXTURES_REQUIRED test-download-model)
+llama_build_and_test(test-spec-calibration.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
+set_tests_properties(test-spec-calibration PROPERTIES FIXTURES_REQUIRED test-download-model)
 
 if (NOT GGML_BACKEND_DL)
     # these tests use the backends directly and cannot be built with dynamic loading
