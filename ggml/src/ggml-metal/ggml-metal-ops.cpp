@@ -1358,7 +1358,7 @@ int ggml_metal_op_lightning_indexer(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(m),  4);
     ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op), 5);
 
-    const int nsg   = OP_LIGHTNING_INDEXER_NSG; 
+    const int nsg   = OP_LIGHTNING_INDEXER_NSG;
     const int nkptg = OP_LIGHTNING_INDEXER_NKPSG*nsg;
     const int nbptg = OP_LIGHTNING_INDEXER_NBPTG;
 
