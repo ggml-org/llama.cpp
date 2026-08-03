@@ -3640,11 +3640,13 @@ private:
         if (ret != 0) {
             {
                 std::string err;
+                enum error_type err_type = ERROR_TYPE_SERVER;
 
                 if (n_batch == 1 && ret == 1) {
                     // TODO: try to terminate only the largest active slot/sequence and continue with the rest
                     //       need to remove the tokens from the current batch too
                     err = "Context size has been exceeded.";
+                    err_type = ERROR_TYPE_EXCEED_CONTEXT_SIZE;
                 }
 
                 if (ret == -1) {
@@ -3663,7 +3665,16 @@ private:
 
                     for (auto & slot : slots) {
                         if (slot.is_processing()) {
-                            send_error(slot, err);
+                            // ERROR_TYPE_EXCEED_CONTEXT_SIZE asserts n_ctx > 0 && n_prompt_tokens > 0
+                            // (send_error / GGML_ASSERT); degrade to ERROR_TYPE_SERVER rather than
+                            // risk aborting the whole process on a slot that doesn't hold that
+                            // invariant. slot.n_ctx is set at slot init and is always > 0; n_tokens()
+                            // is non-zero for any is_processing() slot in practice but isn't statically
+                            // guaranteed, so the check stays explicit.
+                            const enum error_type type = (err_type == ERROR_TYPE_EXCEED_CONTEXT_SIZE &&
+                                                          slot.n_ctx > 0 && slot.task->n_tokens() > 0)
+                                                       ? err_type : ERROR_TYPE_SERVER;
+                            send_error(slot, err, type);
                             slot.release();
 
                             // note: it's complicated to keep track of how much of the current batch has been
