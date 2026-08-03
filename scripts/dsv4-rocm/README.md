@@ -98,6 +98,22 @@ expert routing changes the optimum. Keep the variable and its value in the
 manifest, use complete paired runs, and do not carry this setting to unrelated
 models without screening their routing shape.
 
+`test-mmid-rdna2` defaults to a fast prototype-weight fixture for performance
+screens. Its `--fixture unique` mode independently quantizes every
+expert/output row for correctness. The target-shape check uses N=512,
+batch=256, 256 experts, top-6, and K=256 (one quant block) so coupled
+expert/row addressing is distinguishable without minutes of setup. Dump a J64
+reference and compare J16 for both `iq2_xxs`/`iq3_xxs` and `uniform`/`hot`:
+
+```bash
+GGML_HIP_RDNA2_MMQ_J=64 build/bin/test-mmid-rdna2 \
+  --type iq2_xxs --fixture unique --k 256 --n 512 --batch 256 \
+  --experts 256 --top-k 6 --routing uniform --dump-output /tmp/mmid.bin
+GGML_HIP_RDNA2_MMQ_J=16 build/bin/test-mmid-rdna2 \
+  --type iq2_xxs --fixture unique --k 256 --n 512 --batch 256 \
+  --experts 256 --top-k 6 --routing uniform --compare-output /tmp/mmid.bin
+```
+
 ## Artifacts
 
 Runs are written to collision-resistant directories under

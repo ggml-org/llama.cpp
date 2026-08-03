@@ -249,7 +249,7 @@ Screening artifacts:
 - `$HOME/llama-jobs/dsv4-rocm-mmq-sweep/20260803T160812Z-04c01936c/`
 - `$HOME/llama-jobs/dsv4-rocm-mmq-sweep/20260803T160916Z-full-model/`
 - Full-model harness runs labeled `mmq-jauto-*`, `mmq-j8-*`, `mmq-j16-*`, and trailing controls `mmq-jauto-*-post`.
-- Fully distinguishing target-shape correctness rerun: `prototype1024-validation/` below the focused sweep directory; J16 and J64 outputs match bit-for-bit for both IQ types and uniform/hot routes.
+- Fast `prototype1024-validation/` screening and a separate `unique-fixture-validation/` below the focused sweep directory. The latter gives every expert/output row independently quantized weights at target N=512, batch=256, experts=256, and top-6 (K reduced to one 256-value quant block to keep setup bounded). J16 and J64 outputs match bit-for-bit for both IQ types and uniform/hot routes.
 
 ### M2 - correctness proof and microbenchmark
 

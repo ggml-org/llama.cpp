@@ -52,8 +52,7 @@ def read_clock_offset(
         start_offset = int(values["start_realtime_minus_monotonic_ns"])
         start_span_ns = int(values.get("start_calibration_span_ns", "0"))
         if "end_realtime_minus_monotonic_ns" not in values:
-            uncertainty_ns = (start_span_ns + 1) // 2 if start_span_ns else None
-            return start_offset, None, uncertainty_ns, "run-start calibration only"
+            raise ValueError("new-format clock-domain.txt is missing the run-end calibration")
         end_offset = int(values["end_realtime_minus_monotonic_ns"])
         end_span_ns = int(values.get("end_calibration_span_ns", "0"))
         drift_ns = end_offset - start_offset
