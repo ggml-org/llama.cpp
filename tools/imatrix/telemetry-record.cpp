@@ -1,5 +1,5 @@
-// Implementation of the unified spec_calib.v3 telemetry record serializer
-// and the v1-compat adapter. See telemetry-record.h for the schema contract.
+// Implementation of the unified llama.tessera.spec.v1 telemetry record
+// serializer. See telemetry-record.h for the schema contract.
 
 #include "telemetry-record.h"
 
@@ -70,39 +70,17 @@ void append_int_array(std::string & out, const char * field_name, const std::vec
 
 }  // namespace
 
-std::string build_telemetry_jsonl(const telemetry_record & rec, int topk, bool v1_compat) {
+std::string build_telemetry_jsonl(const telemetry_record & rec, int topk) {
+    // Unified llama.tessera.spec.v1 schema. Always includes confidence[]
+    // and the cheap token arrays; the per-position top-k fields are added
+    // only when topk > 0.
     std::string line;
-
-    if (v1_compat) {
-        // Legacy adapter. Only seq_id, drafted, accepted, confidence[].
-        // All other fields on `rec` are ignored. Schema name is the
-        // original v1 string so existing consumers keep working.
-        line.reserve(64 + 24 * std::max<size_t>(rec.confidence.size(), 1));
-        line  = "{\"schema\":\"";
-        line += SCHEMA_V1_COMPAT;
-        line += "\",\"seq_id\":";
-        append_int(line, rec.seq_id);
-        line += ",\"drafted\":";
-        append_int(line, rec.drafted);
-        line += ",\"accepted\":";
-        append_int(line, rec.accepted);
-        line += ",\"confidence\":[";
-        for (size_t i = 0; i < rec.confidence.size(); ++i) {
-            if (i > 0) line += ",";
-            append_float(line, (double) rec.confidence[i], "%.8g");
-        }
-        line += "]}\n";
-        return line;
-    }
-
-    // v3: strict superset of v1 + v2. Always includes confidence[] and the
-    // cheap v2 token arrays. Top-k fields only when topk > 0.
     line.reserve(256 + 48 * (rec.drafted_tokens.size() + rec.accepted_tokens.size() +
                               rec.confidence.size() +
                               (topk > 0 ? (rec.verifier_topk.size() + rec.drafter_topk.size()) * 8 : 0)));
 
     line  = "{\"schema\":\"";
-    line += SCHEMA_V3;
+    line += SCHEMA_SPEC_V1;
     line += "\",\"seq_id\":";
     append_int(line, rec.seq_id);
     line += ",\"step_idx\":";

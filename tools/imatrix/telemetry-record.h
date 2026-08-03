@@ -1,26 +1,20 @@
 // Per-step telemetry record emitted by the imatrix spec-decoding calibration
-// path. The shape of the serialized record is selected at build time via the
-// `v1_compat` flag on `build_telemetry_jsonl`.
+// path. The serialized record uses the single canonical schema
+// llama.tessera.spec.v1; the field set is the union of what the previous
+// v1 and v2 schemas carried, with the top-k fields added only when topk > 0.
 //
-// Production schema (v3) is a strict superset of v1 + v2:
 //   - always: schema, seq_id, step_idx, prime_token, drafted, accepted,
 //             drafted_tokens, accepted_tokens, confidence[]
 //   - when topk > 0: topk, verifier_argmax, drafter_argmax,
 //                    verifier_topk_tokens, verifier_topk_probs,
 //                    drafter_topk_tokens, drafter_topk_probs
 //
-// v1-compat adapter (--telemetry-v1-compat):
-//   { schema, seq_id, drafted, accepted, confidence[] }
-//
-// The schema name is part of the public contract: consumers branch on it. The
-// two schema names emitted by this module are exactly:
-//   - "llama.spec_calib.v3"
-//   - "llama.dflash.acceptance.v1"
+// The schema name is part of the public contract: consumers branch on it.
+// The single schema name emitted by this module is exactly:
+//   - "llama.tessera.spec.v1"
 //
 // Any change to the field set, the schema name, or the field types is a
-// breaking change and requires a major version bump.
-//
-// Schema versioning rationale: see docs/audit-2026-07-29.md §5.
+// breaking change and requires updating every consumer in lockstep.
 
 #pragma once
 
@@ -40,7 +34,8 @@ struct topk_entry {
 
 // All data needed to serialize one JSONL telemetry record for a single
 // spec-decoding step. Caller fills in the fields that are available; the
-// serializer decides which to emit based on `topk` and `v1_compat`.
+// serializer decides which to emit based on `topk` (topk == 0 suppresses
+// the per-position top-k fields).
 struct telemetry_record {
     int32_t  seq_id      = 0;
     int32_t  step_idx    = 0;
@@ -49,38 +44,35 @@ struct telemetry_record {
     int32_t  accepted    = 0;   // number of accepted drafts (longest prefix match)
 
     // Per-draft-position verifier softmax probability of the drafter's pick.
-    // Always populated (v3 always emits confidence[]; v1-compat also emits it).
+    // Always populated; the unified record always carries confidence[].
     std::vector<float> confidence;
 
-    // Cheap v2 fields, always emitted in v3.
+    // Cheap payload fields, always emitted.
     std::vector<int32_t> drafted_tokens;
     std::vector<int32_t> accepted_tokens;
 
-    // Verifier and drafter per-position argmaxes. Only emitted in v3 when
-    // topk > 0 (i.e. when the rest of the top-k fields are also emitted).
+    // Verifier and drafter per-position argmaxes. Only emitted when topk > 0.
     std::vector<int32_t> verifier_argmax;
     std::vector<int32_t> drafter_argmax;
 
     // Per-position top-k distributions. Parallel arrays per position.
-    // Only emitted in v3 when topk > 0.
+    // Only emitted when topk > 0.
     std::vector<topk_entry> verifier_topk;
     std::vector<topk_entry> drafter_topk;
 };
 
 // Serialize `rec` to a single JSONL line (including trailing newline).
 //
-// Parameters:
-//   - topk: if > 0 and !v1_compat, include the verifier/drafter top-k
-//           distributions and the argmax arrays. Ignored when v1_compat
-//           is true (v1 never carries topk).
-//   - v1_compat: emit the legacy llama.dflash.acceptance.v1 schema with
-//               only seq_id, drafted, accepted, confidence[]. All other
-//               fields on `rec` are ignored.
-std::string build_telemetry_jsonl(const telemetry_record & rec, int topk, bool v1_compat);
+// Parameter:
+//   - topk: if > 0, additionally include the verifier/drafter top-k
+//           distributions and the argmax arrays. If 0, emit only the
+//           always-present cheap payload.
+//
+// The schema is always llama.tessera.spec.v1.
+std::string build_telemetry_jsonl(const telemetry_record & rec, int topk);
 
-// Schema names emitted by this module. Exposed for tests and consumers that
-// need to branch on the schema without hardcoding the string.
-constexpr const char * SCHEMA_V3       = "llama.spec_calib.v3";
-constexpr const char * SCHEMA_V1_COMPAT = "llama.dflash.acceptance.v1";
+// Schema name emitted by this module. Exposed for tests and consumers
+// that need to branch on the schema without hardcoding the string.
+constexpr const char * SCHEMA_SPEC_V1 = "llama.tessera.spec.v1";
 
 }  // namespace spec_calib

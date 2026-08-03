@@ -74,8 +74,10 @@ $LLAMA_CPP_BUILD/bin/llama-imatrix \
     -o dspark_q40_spec.imatrix.gguf
 ```
 
-Telemetry JSONL conforms to `llama.dflash.acceptance.v1`:
-`{seq_id, drafted, accepted, confidence[]}` — one record per spec step.
+Telemetry JSONL conforms to `llama.tessera.spec.v1`:
+`{seq_id, step_idx, prime_token, drafted, accepted, drafted_tokens[],
+accepted_tokens[], confidence[]}` (top-k fields added when
+`--telemetry-topk > 0`) — one record per spec step.
 
 ## Files
 

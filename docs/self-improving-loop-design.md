@@ -52,8 +52,8 @@ from scratch.
 
 | Loop component | Status | Where |
 | --- | --- | --- |
-| Accept/reject trace (drafter signal + fast metric) | EXISTS | `llama.dflash.acceptance.v1`, `tools/imatrix/imatrix.cpp` |
-| Per-position verifier+drafter top-k (rejection-sampling input) | EXISTS | `llama.spec_calib.v2` / `.v3`, `tools/imatrix/imatrix.cpp` |
+| Accept/reject trace (drafter signal + fast metric) | EXISTS | `llama.tessera.spec.v1` (cheap payload), `tools/imatrix/imatrix.cpp` |
+| Per-position verifier+drafter top-k (rejection-sampling input) | EXISTS | `llama.tessera.spec.v1` (top-k payload, when `--telemetry-topk > 0`), `tools/imatrix/imatrix.cpp` |
 | DFlash drafter running (~30% accept) | EXISTS | imatrix spec path |
 | DSpark drafter running (33% accept Q4_0) | EXISTS | `tools/dspark-gguf-patch/` + imatrix spec path |
 | Acceptance metric module (C++) | EXISTS | `tools/quantize/tessera/tessera-acceptance.{h,cpp}` |
@@ -68,7 +68,7 @@ from scratch.
 | Runtime ground truth (kernel dequant fidelity) | PLANNED / IN FLIGHT | runtime-aware pipeline L1-L6 |
 | Web search / retrieval channel | SEARCH PROVIDERS IMPLEMENTED; escalation wiring DESIGNED | `tessera-studio-design.md` 5.4 (provider-shaped, keyless DuckDuckGo default), `TesseraWebSearch.swift` + `TesseraSearchProvider.swift` |
 | Reasoning / CoT from day 1 | DESIGNED | `tessera-studio-design.md` 5.7, `ThinkingBlock.swift` |
-| Schema-versioned evidence / receipts pattern | EXISTS (pattern) | `llama.spec_calib.v*`, sidecar v3 |
+| Schema-versioned evidence / receipts pattern | EXISTS (pattern) | `llama.tessera.spec.v1`, sidecar v3 |
 | Escalation subsystem (tier 1 + tier 2) | NEW | this plan, section 4.1 |
 | Curation pipeline | NEW | section 4.2 |
 | Knowledge stores (reasoning playbook, reference store) | NEW | section 4.3 |
@@ -118,7 +118,7 @@ and knowledge* in the world's actual output (acceptance traces, tests,
 builds, commits). Same thesis - close every optimization on real
 ground truth, never a proxy - at two levels of the stack. The receipts
 / schema-versioned-evidence substrate (sidecar v3,
-`llama.spec_calib.v*`) is shared across both: the acceptance telemetry
+`llama.tessera.spec.v1`) is shared across both: the acceptance telemetry
 is the L1-equivalent for drafter quality, and the world signals are the
 L4-equivalent (end-to-end probe) for capability.
 
@@ -435,7 +435,7 @@ design) is the natural place to render it.
 Purpose: make the self-improving system inspectable and deletable.
 
 Extend the existing schema-versioned-evidence pattern (sidecar v3,
-`llama.spec_calib.v*`) to harvested training data: what was collected,
+`llama.tessera.spec.v1`) to harvested training data: what was collected,
 from which session, what it trained, and purge-on-demand. This fits
 Tessera's existing receipts identity and is a trust requirement for a
 system that learns from everything the user touches.

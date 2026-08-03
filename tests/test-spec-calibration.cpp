@@ -11,10 +11,10 @@
 //   1. At least one JSONL record was emitted.
 //   2. Each record parses as JSON (we use a minimal hand-rolled scanner
 //      because the calibration API does not depend on nlohmann/json).
-//   3. The schema field is "llama.dflash.acceptance.v1" (default) or
-//      "llama.spec_calib.v2" (when topk > 0).
+//   3. The schema field is "llama.tessera.spec.v1" (the single canonical
+//      schema).
 //   4. Required fields are present: schema, seq_id, drafted, accepted.
-//   5. In v2 mode, verifier_argmax, drafter_argmax, and the
+//   5. When topk > 0, verifier_argmax, drafter_argmax, and the
 //      *_topk_{tokens,probs} arrays are present and have the right shape.
 //   6. The confidence[] array has one entry per drafted token.
 //
@@ -168,9 +168,9 @@ static int parse_record(const std::string & line, jsonl_record & rec) {
     rec.seq_id   = std::atoi(seq_id_s.c_str());
     rec.drafted  = std::atoi(drafted_s.c_str());
     rec.accepted = std::atoi(accepted_s.c_str());
-    if (rec.schema == "llama.spec_calib.v2") {
+    if (rec.schema == "llama.tessera.spec.v1") {
         const std::string topk_s = find_field(line, "topk");
-        if (topk_s.empty()) return 22;  // v2 requires topk field
+        if (topk_s.empty()) return 22;  // topk field must be present (test always sets topk=4)
         rec.topk = std::atoi(topk_s.c_str());
         rec.n_v_topk = count_array_entries(line, "verifier_topk_tokens");
         rec.n_d_topk = count_array_entries(line, "drafter_topk_tokens");
@@ -293,32 +293,28 @@ static int test_with_model(common_params & params_in, const std::string & teleme
                     __func__, n_records, err, line.c_str());
             return err;
         }
-        if (rec.schema == "llama.dflash.acceptance.v1") {
-            // v1: drafted and accepted are present, confidence[] exists.
+        if (rec.schema == "llama.tessera.spec.v1") {
+            // spec.v1 always carries confidence[]; the per-position top-k
+            // arrays are present only when topk > 0. This test always
+            // runs with topk=4 (see below) so the top-k arrays must be
+            // present and have right size.
             if (rec.drafted < 0)  return 41;
             if (rec.accepted < 0) return 42;
-            if (rec.n_conf != rec.drafted) {
-                LOG_ERR("%s: v1 confidence[%d] != drafted=%d\n",
-                        __func__, rec.n_conf, rec.drafted);
-                return 43;
-            }
-        } else if (rec.schema == "llama.spec_calib.v2") {
-            // v2: topk arrays and confidence[] exist and have right size.
             if (rec.topk <= 0) return 44;
             // Each topk array has drafted+1 entries (one per prefix,
             // including the bonus).
             if (rec.n_v_topk != rec.drafted + 1) {
-                LOG_ERR("%s: v2 verifier_topk_tokens has %d entries, expected %d\n",
+                LOG_ERR("%s: spec.v1 verifier_topk_tokens has %d entries, expected %d\n",
                         __func__, rec.n_v_topk, rec.drafted + 1);
                 return 45;
             }
             if (rec.n_d_topk != rec.drafted + 1) {
-                LOG_ERR("%s: v2 drafter_topk_tokens has %d entries, expected %d\n",
+                LOG_ERR("%s: spec.v1 drafter_topk_tokens has %d entries, expected %d\n",
                         __func__, rec.n_d_topk, rec.drafted + 1);
                 return 46;
             }
             if (rec.n_conf != rec.drafted) {
-                LOG_ERR("%s: v2 confidence[%d] != drafted=%d\n",
+                LOG_ERR("%s: spec.v1 confidence[%d] != drafted=%d\n",
                         __func__, rec.n_conf, rec.drafted);
                 return 47;
             }
@@ -379,7 +375,9 @@ int main(int argc, char ** argv) {
     if (telemetry_path.empty()) {
         telemetry_path = "/tmp/test-spec-calibration.jsonl";
     }
-    // We always test v2 (topk=4) on top of v1 to exercise both schemas.
+    // We always test with topk=4 so the test exercises the per-position
+    // top-k fields. The same record also exercises the always-emitted
+    // cheap payload (confidence[], drafted_tokens, accepted_tokens).
     params.n_telemetry_topk = 4;
 
     int err = test_with_model(params, telemetry_path);

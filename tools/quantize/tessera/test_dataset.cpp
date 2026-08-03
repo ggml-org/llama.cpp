@@ -35,12 +35,12 @@ static std::string read_file(const std::string & path) {
     return ss.str();
 }
 
-// A minimal valid spec_calib.v2 record.
+// A minimal valid llama.tessera.spec.v1 record.
 static std::string make_record(int n_acc, int n_dft,
                                std::vector<int> drafted,
                                std::vector<int> accepted) {
     json j;
-    j["schema"]          = "llama.spec_calib.v2";
+    j["schema"]          = "llama.tessera.spec.v1";
     j["seq_id"]          = 0;
     j["step_idx"]        = 0;
     j["prime_token"]     = 42;
@@ -59,15 +59,16 @@ static std::string make_record(int n_acc, int n_dft,
     return j.dump();
 }
 
-// A spec_calib.v2 record that also carries per-position confidence[], as the
-// real imatrix v2 path emits. verifier_argmax is the per-position ground truth
-// (length n_dft+1); confidence is the acceptance proxy (length n_dft).
+// A llama.tessera.spec.v1 record that also carries per-position confidence[],
+// as the real imatrix spec-calibration path emits. verifier_argmax is the
+// per-position ground truth (length n_dft+1); confidence is the acceptance
+// proxy (length n_dft).
 static std::string make_dflash_record(int n_acc, int n_dft,
                                       std::vector<int> drafted,
                                       std::vector<int> verifier_argmax,
                                       std::vector<double> confidence) {
     json j;
-    j["schema"]          = "llama.spec_calib.v2";
+    j["schema"]          = "llama.tessera.spec.v1";
     j["seq_id"]          = 0;
     j["step_idx"]        = 0;
     j["prime_token"]     = 42;
@@ -193,8 +194,10 @@ static void test_min_accepted_filter() {
 }
 
 static void test_wrong_schema_skipped() {
+    // Record carrying an unrelated schema name should be skipped while a
+    // llama.tessera.spec.v1 record in the same file is processed.
     const std::string jsonl =
-        "{\"schema\":\"llama.dflash.acceptance.v1\",\"seq_id\":0,\"drafted\":4,\"accepted\":3}\n" +
+        "{\"schema\":\"some.other.schema\",\"seq_id\":0,\"drafted\":4,\"accepted\":3}\n" +
         make_record(2, 3, {101, 102, 103}, {101, 102, 999}) + "\n";
     const std::string in_path  = write_tmp("schema_in.jsonl", jsonl);
     const std::string out_path = "/tmp/ts_dataset_test_schema_out.txt";
@@ -208,7 +211,7 @@ static void test_wrong_schema_skipped() {
     int n = 0;
     std::string err;
     CHECK(ts_dataset_run(&p, &n, nullptr, &err) == 0, "schema rc");
-    CHECK(n == 1, "v1 record skipped, v2 processed");
+    CHECK(n == 1, "unrelated-schema record skipped, spec.v1 processed");
 }
 
 static void test_missing_input() {
@@ -275,7 +278,7 @@ static void test_dflash_mode() {
 }
 
 static void test_dflash_requires_confidence() {
-    // A v2 record without confidence[] cannot form a block -> skipped.
+    // A spec.v1 record without confidence[] cannot form a block -> skipped.
     const std::string jsonl =
         make_record(2, 3, {101, 102, 103}, {101, 102, 999}) + "\n";
     const std::string in_path  = write_tmp("dflash_noconf_in.jsonl", jsonl);
