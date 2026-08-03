@@ -10,10 +10,12 @@
 #include <ctime>
 #include <atomic>
 #include <cstring>
+#include <cstdint>
 #include <algorithm>
 #include <unordered_set>
 #include <functional>
 #include <memory>
+#include <mutex>
 
 namespace fs = std::filesystem;
 
@@ -61,6 +63,85 @@ public:
             int timeout_secs,
             const std::function<bool(const std::string &)> & on_chunk = nullptr) const = 0;
 };
+
+// shared subprocess execution helper, used by both the local and the docker-backed tools_io implementations.
+// combine_stderr=false when the raw stdout bytes must not be tainted by stderr, e.g. reading file contents.
+static tools_io::exec_result run_subprocess(
+        const std::vector<std::string> & args,
+        size_t max_output,
+        int timeout_secs,
+        const std::function<bool(const std::string &)> & on_chunk,
+        bool combine_stderr,
+        const std::string & cwd = "") {
+    tools_io::exec_result res;
+
+    common_subproc proc;
+
+    int options = subprocess_option_no_window
+                | subprocess_option_inherit_environment
+                | subprocess_option_search_user_path;
+    if (combine_stderr) {
+        options |= subprocess_option_combined_stdout_stderr;
+    }
+
+    if (!proc.create(args, options, {}, cwd.empty() ? nullptr : cwd.c_str())) {
+        res.output = "failed to spawn process";
+        return res;
+    }
+
+    std::atomic<bool> done{false};
+    std::atomic<bool> timed_out{false};
+
+    std::thread timeout_thread([&]() {
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_secs);
+        while (!done.load()) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                timed_out.store(true);
+                proc.terminate();
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    });
+
+    FILE * f = proc.stdout_file();
+    std::string output;
+    bool truncated = false;
+    if (f) {
+        char buf[4096];
+        while (fgets(buf, sizeof(buf), f) != nullptr) {
+            if (!truncated) {
+                size_t len = strlen(buf);
+                if (output.size() + len <= max_output) {
+                    output.append(buf, len);
+                    if (on_chunk && !on_chunk(std::string(buf, len))) {
+                        proc.terminate();
+                        break;
+                    }
+                } else {
+                    size_t remaining = max_output - output.size();
+                    output.append(buf, remaining);
+                    if (on_chunk && remaining > 0) on_chunk(std::string(buf, remaining));
+                    truncated = true;
+                }
+            }
+        }
+    }
+
+    done.store(true);
+    if (timeout_thread.joinable()) {
+        timeout_thread.join();
+    }
+
+    res.exit_code = proc.join();
+
+    res.output    = output;
+    res.timed_out = timed_out.load();
+    if (truncated) {
+        res.output += "\n[output truncated]";
+    }
+    return res;
+}
 
 class tools_io_basic : public tools_io {
 public:
@@ -140,72 +221,7 @@ public:
             size_t max_output,
             int timeout_secs,
             const std::function<bool(const std::string &)> & on_chunk = nullptr) const override {
-        exec_result res;
-
-        common_subproc proc;
-
-        int options = subprocess_option_no_window
-                    | subprocess_option_combined_stdout_stderr
-                    | subprocess_option_inherit_environment
-                    | subprocess_option_search_user_path;
-
-        if (!proc.create(args, options, {}, cwd.empty() ? nullptr : cwd.c_str())) {
-            res.output = "failed to spawn process";
-            return res;
-        }
-
-        std::atomic<bool> done{false};
-        std::atomic<bool> timed_out{false};
-
-        std::thread timeout_thread([&]() {
-            auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout_secs);
-            while (!done.load()) {
-                if (std::chrono::steady_clock::now() >= deadline) {
-                    timed_out.store(true);
-                    proc.terminate();
-                    return;
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            }
-        });
-
-        FILE * f = proc.stdout_file();
-        std::string output;
-        bool truncated = false;
-        if (f) {
-            char buf[4096];
-            while (fgets(buf, sizeof(buf), f) != nullptr) {
-                if (!truncated) {
-                    size_t len = strlen(buf);
-                    if (output.size() + len <= max_output) {
-                        output.append(buf, len);
-                        if (on_chunk && !on_chunk(std::string(buf, len))) {
-                            proc.terminate();
-                            break;
-                        }
-                    } else {
-                        size_t remaining = max_output - output.size();
-                        output.append(buf, remaining);
-                        if (on_chunk && remaining > 0) on_chunk(std::string(buf, remaining));
-                        truncated = true;
-                    }
-                }
-            }
-        }
-
-        done.store(true);
-        if (timeout_thread.joinable()) {
-            timeout_thread.join();
-        }
-
-        res.exit_code = proc.join();
-
-        res.output    = output;
-        res.timed_out = timed_out.load();
-        if (truncated) {
-            res.output += "\n[output truncated]";
-        }
-        return res;
+        return run_subprocess(args, max_output, timeout_secs, on_chunk, /*combine_stderr=*/true, cwd);
     }
 
 private:
@@ -257,8 +273,180 @@ private:
     }
 };
 
+// timeout for auxiliary docker exec calls (stat/mkdir/ls/cp helpers); exec_shell_command uses its own
+// caller-controlled timeout instead, enforced separately in run()
+static constexpr int SERVER_TOOL_DOCKER_EXEC_TIMEOUT = 15; // seconds
+static constexpr size_t SERVER_TOOL_DOCKER_READ_FILE_MAX_SIZE = 64 * 1024 * 1024; // 64 MB
+
+// runs every tools_io operation inside an already-running docker container via `docker exec`/`docker cp`.
+// the container itself is started, mounted, and torn down externally by the caller.
+class tools_io_docker : public tools_io {
+public:
+    // cwd, if non-empty, is used to resolve relative paths and as the working directory for run()
+    tools_io_docker(std::string container_id, std::string cwd = "")
+        : container_id(std::move(container_id)), cwd(std::move(cwd)) {}
+
+    bool is_directory(const std::string & path) const override {
+        return shell_test("-d", resolve(path));
+    }
+
+    bool is_regular_file(const std::string & path) const override {
+        return shell_test("-f", resolve(path));
+    }
+
+    bool file_size(const std::string & path, uintmax_t & out_size) const override {
+        auto res = exec({"sh", "-c", "wc -c < \"$1\"", "_", resolve(path)}, 64, true);
+        if (res.exit_code != 0 || res.timed_out) return false;
+        try {
+            size_t pos;
+            out_size = (uintmax_t) std::stoull(res.output, &pos);
+        } catch (...) {
+            return false;
+        }
+        return true;
+    }
+
+    bool read_file(const std::string & path, std::string & out) const override {
+        // combine_stderr=false: stderr must not be spliced into raw file bytes
+        auto res = exec({"cat", "--", resolve(path)}, SERVER_TOOL_DOCKER_READ_FILE_MAX_SIZE, false);
+        if (res.exit_code != 0 || res.timed_out) return false;
+        out = res.output;
+        return true;
+    }
+
+    bool write_file(const std::string & path, const std::string & content) const override {
+        std::string abs_path = resolve(path);
+
+        std::error_code ec;
+        fs::path tmp_dir = fs::temp_directory_path(ec);
+        if (ec) return false;
+
+        static std::atomic<uint64_t> tmp_counter{0};
+        fs::path tmp = tmp_dir / string_format(
+            "llama-tools-io-docker-%zu-%llu.tmp",
+            std::hash<std::thread::id>{}(std::this_thread::get_id()),
+            (unsigned long long) tmp_counter.fetch_add(1));
+
+        {
+            std::ofstream f(tmp, std::ios::binary);
+            if (!f) return false;
+            f << content;
+            if (!f) return false;
+        }
+
+        bool ok = shell_run({"sh", "-c", "mkdir -p \"$(dirname \"$1\")\"", "_", abs_path});
+        if (ok) {
+            auto res = run_subprocess(
+                {"docker", "cp", tmp.string(), container_id + ":" + abs_path},
+                4096, SERVER_TOOL_DOCKER_EXEC_TIMEOUT, nullptr, true);
+            ok = res.exit_code == 0 && !res.timed_out;
+        }
+
+        std::error_code rm_ec;
+        fs::remove(tmp, rm_ec);
+        return ok;
+    }
+
+    std::vector<std::string> list_files(const std::string & base, std::string & err) const override {
+        err.clear();
+        std::string abs_base = resolve(base);
+        if (!is_directory(base)) {
+            err = "path does not exist or is not a directory: " + base;
+            return {};
+        }
+
+        auto res = exec(
+            {"sh", "-c", "cd \"$1\" && git ls-files --cached --others --exclude-standard", "_", abs_base},
+            SERVER_TOOL_GIT_LS_FILES_MAX_OUTPUT, true);
+
+        if (res.exit_code == 0 && !res.timed_out) {
+            return split_lines(res.output, /*strip_dot_slash=*/false);
+        }
+
+        static const char * prune_names[] = {
+            ".git", ".svn", ".hg", "node_modules", "__pycache__",
+            ".venv", "venv", "dist", "build", "target", ".cache", ".idea", ".vscode",
+        };
+        std::string prune_expr;
+        for (const char * n : prune_names) {
+            if (!prune_expr.empty()) prune_expr += " -o ";
+            prune_expr += std::string("-name ") + n;
+        }
+        std::string find_cmd = "cd \"$1\" && find . \\( " + prune_expr + " \\) -prune -o -type f -print";
+        auto find_res = exec({"sh", "-c", find_cmd, "_", abs_base}, SERVER_TOOL_GIT_LS_FILES_MAX_OUTPUT, true);
+
+        return split_lines(find_res.output, /*strip_dot_slash=*/true);
+    }
+
+    // wraps the command with an in-container `timeout`, since killing the local `docker exec` client
+    // does not kill the process tree running inside the container
+    exec_result run(
+            const std::vector<std::string> & args,
+            size_t max_output,
+            int timeout_secs,
+            const std::function<bool(const std::string &)> & on_chunk = nullptr) const override {
+        std::vector<std::string> docker_args = {"docker", "exec", "-i"};
+        if (!cwd.empty()) {
+            docker_args.push_back("-w");
+            docker_args.push_back(cwd);
+        }
+        docker_args.push_back(container_id);
+        docker_args.push_back("timeout");
+        docker_args.push_back(std::to_string(timeout_secs) + "s");
+        docker_args.insert(docker_args.end(), args.begin(), args.end());
+        // small buffer over timeout_secs so the in-container `timeout` has a chance to exit cleanly
+        // before the host-side supervisory timeout forcibly kills the docker exec client
+        return run_subprocess(docker_args, max_output, timeout_secs + 5, on_chunk, true);
+    }
+
+private:
+    std::string container_id;
+    std::string cwd;
+
+    // resolves `path` against `cwd` if `path` is relative and `cwd` is set; otherwise returns `path` unchanged.
+    // container paths are always POSIX-style ('/'), regardless of host OS.
+    std::string resolve(const std::string & path) const {
+        if (cwd.empty() || (!path.empty() && path[0] == '/')) {
+            return path;
+        }
+        return cwd + "/" + path;
+    }
+
+    exec_result exec(const std::vector<std::string> & inner, size_t max_output, bool combine_stderr) const {
+        std::vector<std::string> args = {"docker", "exec", container_id};
+        args.insert(args.end(), inner.begin(), inner.end());
+        return run_subprocess(args, max_output, SERVER_TOOL_DOCKER_EXEC_TIMEOUT, nullptr, combine_stderr);
+    }
+
+    bool shell_run(const std::vector<std::string> & inner) const {
+        auto res = exec(inner, 4096, true);
+        return res.exit_code == 0 && !res.timed_out;
+    }
+
+    bool shell_test(const char * flag, const std::string & path) const {
+        return shell_run({"sh", "-c", std::string("[ ") + flag + " \"$1\" ]", "_", path});
+    }
+
+    static std::vector<std::string> split_lines(const std::string & text, bool strip_dot_slash) {
+        std::vector<std::string> result;
+        std::istringstream iss(text);
+        std::string line;
+        while (std::getline(iss, line)) {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (line.empty()) continue;
+            if (strip_dot_slash && line.rfind("./", 0) == 0) line = line.substr(2);
+            std::replace(line.begin(), line.end(), '\\', '/');
+            result.push_back(line);
+        }
+        return result;
+    }
+};
+
 static std::unique_ptr<tools_io> make_tools_io(const json & params) {
     std::string cwd = json_value(params, "cwd", std::string());
+    if (params.contains("docker_container_id")) {
+        return std::make_unique<tools_io_docker>(params.at("docker_container_id").get<std::string>(), cwd);
+    }
     return std::make_unique<tools_io_basic>(cwd);
 }
 
@@ -627,8 +815,11 @@ struct server_tool_exec_shell_command : server_tool {
         timeout    = std::min(timeout,    SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_TIMEOUT);
         max_output = std::min(max_output, SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE);
 
+        // docker containers are Linux-based regardless of host OS, so a docker target always gets `sh -c`
 #ifdef _WIN32
-        std::vector<std::string> args = {"cmd", "/c", command};
+        std::vector<std::string> args = params.contains("docker_container_id")
+            ? std::vector<std::string>{"sh", "-c", command}
+            : std::vector<std::string>{"cmd", "/c", command};
 #else
         std::vector<std::string> args = {"sh", "-c", command};
 #endif
@@ -1174,6 +1365,104 @@ struct server_mcp_tool : server_tool {
     }
 };
 
+// owns the docker container used as the sandboxed runtime for tool invocations, as configured by
+// --tools-runtime. "spawned" mode starts and stops the container itself; "existing" mode just reuses
+// a container id the user already has running and never stops it.
+struct server_tools_docker_runtime {
+    server_tools_docker_runtime(const server_tools_docker_runtime &) = delete;
+
+    explicit server_tools_docker_runtime(const std::string & spec) {
+        static const std::string docker_prefix           = "docker:";
+        static const std::string docker_container_prefix = "docker-container:";
+        if (spec.rfind(docker_prefix, 0) == 0) {
+            spawned = true;
+            image   = spec.substr(docker_prefix.size());
+            if (image.empty()) {
+                throw std::runtime_error("--tools-runtime docker:<image> requires an image name");
+            }
+            spawn();
+        } else if (spec.rfind(docker_container_prefix, 0) == 0) {
+            spawned      = false;
+            container_id = spec.substr(docker_container_prefix.size());
+            if (container_id.empty()) {
+                throw std::runtime_error("--tools-runtime docker-container:<id> requires a container id");
+            }
+        } else {
+            throw std::runtime_error("unknown --tools-runtime option: " + spec);
+        }
+    }
+
+    ~server_tools_docker_runtime() {
+        if (spawned && !container_id.empty()) {
+            // closing stdin signals the container's shell (its pid 1) to exit; --rm then removes it
+            proc.close_stdin();
+            proc.join();
+        }
+    }
+
+    // container id to use for the next tool call; respawns a spawned container that died on its own,
+    // or throws if an externally-managed one is no longer reachable
+    std::string get_container_id() {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (!spawned) {
+            if (!is_running(container_id)) {
+                throw std::runtime_error(string_format(
+                    "docker container \"%s\" is no longer running, restart it to keep using tools",
+                    container_id.c_str()));
+            }
+            return container_id;
+        }
+
+        if (!proc.alive()) {
+            SRV_WRN("docker tools runtime container \"%s\" died, respawning\n", container_id.c_str());
+            spawn();
+        }
+        return container_id;
+    }
+
+private:
+    bool spawned = false;
+    std::string image; // spawned mode only
+    std::string container_id;
+    common_subproc proc; // spawned mode only: `docker run` client that keeps the container alive
+    std::mutex mutex;
+
+    // spawns "docker run --rm -i <image> sh" and keeps its stdin open; the shell blocks reading stdin,
+    // so the container stays alive until we close it (see destructor) or it is killed from the outside
+    void spawn() {
+        std::error_code ec;
+        fs::path cidfile = fs::temp_directory_path(ec) / string_format(
+            "llama-tools-runtime-cid-%zu.tmp", std::hash<std::thread::id>{}(std::this_thread::get_id()));
+        fs::remove(cidfile, ec);
+
+        std::vector<std::string> args = {"docker", "run", "--rm", "-i", "--cidfile", cidfile.string(), image, "sh"};
+        int options = subprocess_option_no_window
+                    | subprocess_option_inherit_environment
+                    | subprocess_option_search_user_path;
+        if (!proc.create(args, options)) {
+            throw std::runtime_error("failed to spawn docker container for tools runtime (image: " + image + ")");
+        }
+
+        std::string cid;
+        for (int i = 0; i < 100 && cid.empty(); i++) {
+            std::ifstream f(cidfile);
+            if (f) std::getline(f, cid);
+            if (cid.empty()) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+        fs::remove(cidfile, ec);
+        if (cid.empty()) {
+            proc.terminate();
+            throw std::runtime_error("timed out waiting for docker container to start (image: " + image + ")");
+        }
+        container_id = cid;
+    }
+
+    static bool is_running(const std::string & id) {
+        auto res = run_subprocess({"docker", "inspect", "-f", "{{.State.Running}}", id}, 16, 5, nullptr, true);
+        return res.exit_code == 0 && !res.timed_out && res.output.rfind("true", 0) == 0;
+    }
+};
+
 static server_tool & find_tool(std::vector<std::unique_ptr<server_tool>> & tools, const std::string & name, bool require_stream) {
     for (auto & t : tools) {
         if (t->name == name) {
@@ -1218,8 +1507,16 @@ static std::string get_header(const std::map<std::string, std::string> & headers
     return default_value;
 }
 
+server_tools::server_tools() = default;
+server_tools::~server_tools() = default;
+
 void server_tools::setup(const std::vector<std::string> & enabled_tools,
-                         server_mcp & mcp_mgr) {
+                         server_mcp & mcp_mgr,
+                         const std::string & tools_runtime) {
+    if (!tools_runtime.empty()) {
+        docker_runtime = std::make_unique<server_tools_docker_runtime>(tools_runtime);
+    }
+
     if (!enabled_tools.empty()) {
         if (!common_subproc::is_supported()) {
             throw std::runtime_error("subprocess is not enabled on this build");
@@ -1302,9 +1599,24 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools,
             bool stream = body.value("stream", false);
 
             // accept x-tool-cwd header to override of the process
+            if (params.contains("cwd")) {
+                params.erase("cwd");
+            }
             auto cwd = get_header(req.headers, "x-tool-cwd");
             if (!cwd.empty()) {
                 params["cwd"] = cwd;
+            }
+
+            // accept x-tool-docker header to route tool I/O through a running docker container;
+            // falls back to the --tools-runtime container, if configured
+            if (params.contains("docker_container_id")) {
+                params.erase("docker_container_id");
+            }
+            auto docker_container_id = get_header(req.headers, "x-tool-docker");
+            if (!docker_container_id.empty()) {
+                params["docker_container_id"] = docker_container_id;
+            } else if (docker_runtime) {
+                params["docker_container_id"] = docker_runtime->get_container_id();
             }
 
             server_tool & tool = find_tool(tools, tool_name, stream);
