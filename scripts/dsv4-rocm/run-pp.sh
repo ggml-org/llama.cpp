@@ -219,6 +219,13 @@ export HSA_OVERRIDE_GFX_VERSION=${HSA_OVERRIDE_GFX_VERSION:-10.3.0}
     printf 'DSV4_ALLOW_BUSY_GPUS=%q\n' "$ALLOW_BUSY"
     printf 'DSV4_LIBRARY_PATH=%q\n' "$LIBRARY_PATH"
     printf 'LD_LIBRARY_PATH=%q\n' "$LD_LIBRARY_PATH"
+    for name in GGML_HIP_RDNA2_MMQ_J GGML_HIP_RDNA2_HC_MIXES GGML_HIP_RDNA2_LID_SUBWAVE; do
+        if declare -p "$name" >/dev/null 2>&1; then
+            printf '%s=%q\n' "$name" "${!name}"
+        else
+            printf 'unset %s\n' "$name"
+        fi
+    done
 } > "$run_dir/effective-settings.sh"
 
 "$ROOT_DIR/scripts/dsv4-rocm/manifest.sh" "$run_dir" "$BENCH" "$MODEL"

@@ -138,6 +138,27 @@ The benchmark also checks a double-accumulation CPU reference. Hold
 `GGML_HIP_RDNA2_MMQ_J=16` constant in every arm of whole-model tests so only
 the hidden-channel path changes.
 
+## RDNA2 DSV4 lightning-indexer subwave path
+
+`GGML_HIP_RDNA2_LID_SUBWAVE=4` enables the bitwise-preserving four-lane
+subwave reduction for the guarded DSV4 F16 shape: 128 embedding values, 64
+heads, batch 256, one stream, and KV 1–4096 on wave32 RDNA2. Unset/`0` and all
+other devices, shapes, types, and backends keep the generic vector kernel.
+Other values fail closed. The manual fixture requires explicit path identity;
+run reference and candidate in separate processes:
+
+```bash
+GGML_HIP_RDNA2_LID_SUBWAVE=0 build/bin/test-lightning-indexer-rdna2 \
+  --kv 4096 --expect-path reference --dump-output /tmp/lid-kv4096.bin
+GGML_HIP_RDNA2_LID_SUBWAVE=4 build/bin/test-lightning-indexer-rdna2 \
+  --kv 4096 --expect-path subwave4 --compare-output /tmp/lid-kv4096.bin
+```
+
+The fixture's candidate expectation is intentionally bound to the validated
+Radeon Pro V620 target. Acceptance artifacts must additionally preserve
+reference/candidate kernel-name traces; byte equality alone cannot prove the
+candidate dispatched.
+
 ## Natural-text proxy validation
 
 `scripts/dsv4-rocm/corpus/technical-proxy.txt` is a fixed 2,527-token
@@ -175,10 +196,20 @@ DSV4_BASE_HC_MIXES=0 DSV4_CANDIDATE_HC_MIXES=1 \
 scripts/dsv4-rocm/run-corpus-validation.sh
 ```
 
-Empty per-arm controls mean unset; HC controls also accept `0`. MMQ controls
-must be supported multiples of eight. The wrapper removes inherited MMQ/HC
-variables before applying each arm, and records the resolved controls in both
-self-contained command files and `effective-settings.sh`.
+To isolate the lightning-indexer optimization, hold J16 and HC fixed:
+
+```bash
+DSV4_BASE_MMQ_J=16 DSV4_CANDIDATE_MMQ_J=16 \
+DSV4_BASE_HC_MIXES=1 DSV4_CANDIDATE_HC_MIXES=1 \
+DSV4_BASE_LID_SUBWAVE=0 DSV4_CANDIDATE_LID_SUBWAVE=4 \
+scripts/dsv4-rocm/run-corpus-validation.sh
+```
+
+Empty per-arm controls mean unset; HC controls accept `0`/`1` and LID controls
+accept `0`/`4`. MMQ controls must be supported multiples of eight. The wrapper
+removes inherited MMQ/HC/LID variables before applying each arm, and records
+the resolved controls in both self-contained command files and
+`effective-settings.sh`.
 
 It holds the shared GPU lock, refuses active ROCm processes, rechecks before
 each variant, pins server batch/ubatch to 512/256 by default, and reads the
