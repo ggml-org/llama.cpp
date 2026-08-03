@@ -2971,7 +2971,7 @@ struct llama_sampler * llama_sampler_init_penalties(
         float penalty_repeat,
         float penalty_freq,
         float penalty_present) {
-    penalty_last_n = std::max(penalty_last_n, 0);
+    penalty_last_n = penalty_last_n == -1 ? 1024 : std::max(penalty_last_n, 0);
 
     if (llama_sampler_penalties::is_disabled(
                 penalty_last_n, penalty_repeat, penalty_freq, penalty_present)) {
@@ -3155,8 +3155,7 @@ static void llama_sampler_dry_apply(struct llama_sampler * smpl, llama_token_dat
         return;
     }
 
-    int32_t effective_dry_penalty_last_n = (ctx->dry_penalty_last_n == -1) ? ctx->total_context_size : std::max(ctx->dry_penalty_last_n, 0);
-    int last_n_repeat = std::min(std::min((int)ctx->last_tokens.size(), effective_dry_penalty_last_n), ctx->total_context_size);
+    int last_n_repeat = std::min(std::min((int)ctx->last_tokens.size(), ctx->dry_penalty_last_n), ctx->total_context_size);
 
     if (last_n_repeat <= ctx->dry_allowed_length) {
         return;
@@ -3401,7 +3400,7 @@ static struct llama_sampler_i llama_sampler_dry_i = {
 };
 
 struct llama_sampler * llama_sampler_init_dry(const struct llama_vocab * vocab, int32_t n_ctx_train, float dry_multiplier, float dry_base, int32_t dry_allowed_length, int32_t dry_penalty_last_n, const char** seq_breakers, size_t num_breakers) {
-    int32_t effective_dry_penalty_last_n = (dry_penalty_last_n == -1) ? n_ctx_train : std::max(dry_penalty_last_n, 0);
+    dry_penalty_last_n = dry_penalty_last_n == -1 ? 1024 : std::max(dry_penalty_last_n, 0);
     std::unordered_multimap<llama_token, std::vector<llama_token>> processed_breakers;
     const int MAX_CHAR_LEN = 40;
     const int MAX_SEQ_LEN = 20;
@@ -3444,9 +3443,9 @@ struct llama_sampler * llama_sampler_init_dry(const struct llama_vocab * vocab, 
             /* .dry_allowed_length     = */ dry_allowed_length,
             /* .dry_penalty_last_n     = */ dry_penalty_last_n,
             /* .dry_processed_breakers = */ std::move(processed_breakers),
-            /* .dry_repeat_count       = */ dry_enabled ? std::vector<int>(effective_dry_penalty_last_n, 0) : std::vector<int>{},
+            /* .dry_repeat_count       = */ dry_enabled ? std::vector<int>(dry_penalty_last_n, 0) : std::vector<int>{},
             /* .dry_max_token_repeat   = */ {},
-            /* .last_tokens            = */ dry_enabled ? ring_buffer<llama_token>(effective_dry_penalty_last_n) : ring_buffer<llama_token>(0),
+            /* .last_tokens            = */ dry_enabled ? ring_buffer<llama_token>(dry_penalty_last_n) : ring_buffer<llama_token>(0),
         }
     );
 }

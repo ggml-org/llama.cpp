@@ -1242,6 +1242,9 @@ static void test_backend_penalties_sampling(const test_params & params) {
     printf("Testing backend penalties (repeat + freq + presence)\n");
     compare_penalties_logits(params, 64, 1.1f, 0.5f, 0.25f, "Hello Hello world");
 
+    printf("Testing backend penalties with penalty_last_n = -1\n");
+    compare_penalties_logits(params, -1, 1.1f, 0.5f, 0.25f, "Hello Hello world");
+
     printf("Testing backend penalties with penalty_last_n > 64\n");
     const auto * vocab = llama_model_get_vocab(params.model.get());
     std::vector<llama_token> tokens(8);

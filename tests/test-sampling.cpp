@@ -158,6 +158,26 @@ static void test_penalties(
     tester.check();
 }
 
+static void test_penalties_last_n() {
+    const int32_t n_vocab = 1025;
+    std::vector<llama_token_data> data;
+    data.reserve(n_vocab);
+
+    auto * sampler = llama_sampler_init_penalties(n_vocab, -1, 2.0f, 0.0f, 0.0f);
+    for (llama_token token = 0; token < n_vocab; ++token) {
+        data.push_back({ token, 1.0f, 0.0f });
+        llama_sampler_accept(sampler, token);
+    }
+
+    llama_token_data_array cur_p = { data.data(), data.size(), -1, false };
+    llama_sampler_apply(sampler, &cur_p);
+    llama_sampler_free(sampler);
+
+    GGML_ASSERT(data[0].logit == 1.0f);
+    GGML_ASSERT(data[1].logit == 0.5f);
+    GGML_ASSERT(data[1024].logit == 0.5f);
+}
+
 static void test_dry(
     const std::vector<float> & probs, const std::vector<llama_token> & last_tokens,
     const std::vector<float> & expected_probs, float dry_multiplier, float dry_base,
@@ -179,6 +199,37 @@ static void test_dry(
     tester.apply(llama_sampler_init_dist(0));
     DUMP(&tester.cur_p);
     tester.check();
+}
+
+static void test_dry_last_n() {
+    const int32_t n_vocab = 1027;
+    std::vector<llama_token> last_tokens = { 0, 1, 2 };
+    for (llama_token token = 3; token < n_vocab; ++token) {
+        last_tokens.push_back(token);
+    }
+    last_tokens.push_back(0);
+    last_tokens.push_back(1);
+
+    const auto apply_dry = [&](int32_t dry_penalty_last_n) {
+        std::vector<llama_token_data> data;
+        data.reserve(n_vocab);
+        for (llama_token token = 0; token < n_vocab; ++token) {
+            data.push_back({ token, 0.0f, 0.0f });
+        }
+
+        auto * sampler = llama_sampler_init_dry_testing(2048, 1.0f, 2.0f, 1, dry_penalty_last_n, {});
+        for (llama_token token : last_tokens) {
+            llama_sampler_accept(sampler, token);
+        }
+
+        llama_token_data_array cur_p = { data.data(), data.size(), -1, false };
+        llama_sampler_apply(sampler, &cur_p);
+        llama_sampler_free(sampler);
+        return data[2].logit;
+    };
+
+    GGML_ASSERT(apply_dry(-1) == 0.0f);
+    GGML_ASSERT(apply_dry(2048) < 0.0f);
 }
 
 static void test_top_n_sigma(const std::vector<float> & probs, const std::vector<float> & probs_expected, int n) {
@@ -352,13 +403,14 @@ int main(void) {
     test_penalties({0.2f, 0.2f, 0.2f, 0.2f, 0.2f}, {0},             {0.000011f, 0.249997f, 0.249997f, 0.249997f, 0.249997f}, 1.0f, 5.0f, 5.0f);
     test_penalties({0.2f, 0.2f, 0.2f, 0.2f, 0.2f}, {0, 1, 2},       {0.000023f, 0.000023f, 0.000023f, 0.499966f, 0.499966f}, 1.0f, 5.0f, 5.0f);
     test_penalties({0.2f, 0.2f, 0.2f, 0.2f, 0.2f}, {0, 1, 2, 0, 0}, {0.000000f, 0.000023f, 0.000023f, 0.499977f, 0.499977f}, 1.0f, 5.0f, 5.0f);
-
+    test_penalties_last_n();
 
     test_dry({0.25f, 0.25f, 0.25f, 0.25f}, {0, 1}, {0.25f, 0.25f, 0.25f, 0.25f}, 1.0f, 1.1f, 2, 4, {});
     test_dry({0.25f, 0.25f, 0.25f, 0.25f}, {0, 1, 2, 0, 1}, {0.296923f, 0.296923f, 0.109232f, 0.296923f}, 1.0f, 1.1f, 2, 5, {});
     test_dry({0.2f, 0.2f, 0.2f, 0.2f, 0.2f}, {0, 1, 3, 4, 0, 1}, {0.2f, 0.2f, 0.2f, 0.2f, 0.2f}, 1.0f, 1.1f, 2, 6, {{3}});
     test_dry({0.2f, 0.2f, 0.2f, 0.2f, 0.2f}, {0, 1, 2, 0, 1}, {0.241818f, 0.241818f, 0.032727f, 0.241818f, 0.241818f}, 2.0f, 1.1f, 2, 5, {});
     test_dry({0.2f, 0.2f, 0.2f, 0.2f, 0.2f}, {0, 1, 2, 3, 4, 0, 1}, {0.2f, 0.2f, 0.2f, 0.2f, 0.2f}, 1.0f, 1.1f, 4, 7, {});
+    test_dry_last_n();
 
     test_top_n_sigma({0.1f, 0.2f, 0.3f, 0.4f}, {0.0f, 0.0f, 0.428571f, 0.571429f}, 1.00f);
     test_top_n_sigma({0.1f, 0.2f, 0.3f, 0.4f}, {0.1f, 0.2f, 0.3f, 0.4f}, 0.00f); // top_n_sigma == 0 now represents a no-op rather than greedy decoding as of PR#13345
