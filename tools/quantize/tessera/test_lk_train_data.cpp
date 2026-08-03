@@ -17,10 +17,10 @@ static int g_pass = 0, g_fail = 0;
 #define APPROX(a, b, eps) (std::fabs((a) - (b)) < (eps))
 #define EPS 1e-5
 
-// One spec_calib.v2 step: block_size = 2 (n_dft = 2), so n_ctx = 3.
+// One llama.tessera.spec.v1 step: block_size = 2 (n_dft = 2), so n_ctx = 3.
 // prime = 5, drafted = [7, 8]. Verifier top-k given for all 3 positions.
 static const char * kLine =
-    "{\"schema\":\"llama.spec_calib.v2\",\"seq_id\":0,\"step_idx\":0,"
+    "{\"schema\":\"llama.tessera.spec.v1\",\"seq_id\":0,\"step_idx\":0,"
     "\"prime_token\":5,\"drafted\":2,\"accepted\":2,\"topk\":3,"
     "\"drafted_tokens\":[7,8],\"accepted_tokens\":[7,8,9],"
     "\"verifier_argmax\":[1,3,0],"
@@ -36,7 +36,7 @@ static void test_usability() {
     CHECK(ts_lk_train_line_usable(kLine, 2) == 1, "usable at matching block_size");
     CHECK(ts_lk_train_line_usable(kLine, 3) == 0, "not usable at wrong block_size");
     CHECK(ts_lk_train_line_usable(kLine, 1) == 0, "not usable at smaller block_size");
-    CHECK(ts_lk_train_line_usable("{\"schema\":\"llama.dflash.acceptance.v1\",\"drafted\":2}", 2) == 0,
+    CHECK(ts_lk_train_line_usable("{\"schema\":\"some.other.schema\",\"drafted\":2}", 2) == 0,
           "wrong schema rejected");
     CHECK(ts_lk_train_line_usable("not json at all", 2) == 0, "garbage line rejected");
     CHECK(ts_lk_train_line_usable(kLine, 2) == 1, "usable re-check (no state)");
@@ -96,7 +96,7 @@ static void test_skip_leaves_buffers_untouched() {
 static void test_densify_error_is_fatal() {
     // verifier_topk token 99 is out of range for n_vocab = 10 -> densify fails.
     const char * bad =
-        "{\"schema\":\"llama.spec_calib.v2\",\"prime_token\":5,\"drafted\":1,"
+        "{\"schema\":\"llama.tessera.spec.v1\",\"prime_token\":5,\"drafted\":1,"
         "\"drafted_tokens\":[7],"
         "\"verifier_topk_tokens\":[[99],[0]],"
         "\"verifier_topk_probs\":[[0.5],[0.5]]}";
@@ -112,7 +112,7 @@ static void test_detect_block_size() {
         std::ofstream f(path);
         // three records with drafted=2, one with drafted=4 -> modal = 2
         for (int i = 0; i < 3; ++i) f << kLine << "\n";
-        f << "{\"schema\":\"llama.spec_calib.v2\",\"drafted\":4}\n";
+        f << "{\"schema\":\"llama.tessera.spec.v1\",\"drafted\":4}\n";
         f << "garbage\n";
     }
     CHECK(ts_lk_train_detect_block_size(path) == 2, "modal block_size = 2");

@@ -50,7 +50,7 @@ static void test_usable_positive() {
 
 static void test_usable_negative_wrong_schema() {
     const std::string line =
-        R"({"schema":"llama.spec_calib.v2","drafted":3,"prime_token":1,)"
+        R"({"schema":"llama.tessera.spec.v1","drafted":3,"prime_token":1,)"
         R"("verifier_argmax":[10,20,30]})";
     CHECK(ts_dflash_train_line_usable(line.c_str(), 3) == 0,
           "wrong schema rejected");
@@ -140,7 +140,7 @@ static void test_example_from_line_decay_scheme() {
 static void test_example_from_line_unusable() {
     // Wrong schema: returns 0, buffers untouched.
     const std::string line =
-        R"({"schema":"llama.spec_calib.v2","drafted":3,"prime_token":1})";
+        R"({"schema":"llama.tessera.spec.v1","drafted":3,"prime_token":1})";
     int32_t tokens[4]  = { 7, 7, 7, 7 };
     int32_t labels[4]  = { 7, 7, 7, 7 };
     float   weights[4] = { 7, 7, 7, 7 };
@@ -186,8 +186,8 @@ static void test_detect_block_size_empty() {
 static void test_detect_block_size_wrong_schema() {
     // All wrong-schema lines: -1.
     const std::vector<std::string> lines = {
-        R"({"schema":"llama.spec_calib.v2","drafted":3})",
-        R"({"schema":"llama.dflash.acceptance.v1","step":1})",
+        R"({"schema":"llama.tessera.spec.v1","drafted":3})",
+        R"({"schema":"some.other.schema","step":1})",
     };
     const std::string p = write_jsonl(lines);
     const int n = ts_dflash_train_detect_block_size(p.c_str());

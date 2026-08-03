@@ -166,9 +166,9 @@ int ts_dataset_run(const ts_dataset_params * params,
             continue;
         }
 
-        // Schema check: only process spec_calib.v2 records.
+        // Schema check: only process llama.tessera.spec.v1 records.
         const std::string schema = rec.value("schema", "");
-        if (schema != "llama.spec_calib.v2") {
+        if (schema != "llama.tessera.spec.v1") {
             n_skipped++;
             continue;
         }

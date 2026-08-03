@@ -3,7 +3,7 @@
 //
 // tessera-dataset.h
 //
-// Dataset preparation from llama.spec_calib.v2 telemetry JSONL (produced by
+// Dataset preparation from llama.tessera.spec.v1 telemetry JSONL (produced by
 // llama-imatrix --telemetry-out --telemetry-topk K). Converts raw per-step
 // acceptance traces into training data for the drafter fine-tuning pipeline.
 //
@@ -51,7 +51,7 @@ enum ts_dataset_mode {
 };
 
 struct ts_dataset_params {
-    char input_path[1024];   // llama.spec_calib.v2 JSONL
+    char input_path[1024];   // llama.tessera.spec.v1 JSONL
     char output_path[1024];  // output file
     ts_dataset_mode mode;
     int  min_accepted;       // skip steps with fewer accepted tokens (default 1)

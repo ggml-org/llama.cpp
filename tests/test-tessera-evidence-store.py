@@ -19,20 +19,33 @@ class EvidenceStoreTest(unittest.TestCase):
             root = Path(directory)
             store = root / "store"
             telemetry = root / "events.jsonl"
-            # Mix v1 (legacy adapter) and v3 (default unified schema) records
-            # to verify both are accepted by the consumer.
+            # The unified llama.tessera.spec.v1 schema is the only schema
+            # the imatrix spec-calibration path emits. Two records
+            # exercising the same schema in the minimal (topk=0) mode
+            # so the consumer's per-position counter still sees 3
+            # confidence entries per record.
             telemetry.write_text(
                 "\n".join([
                     json.dumps({
-                        "schema": "llama.dflash.acceptance.v1",
+                        "schema": "llama.tessera.spec.v1",
+                        "seq_id": 0,
+                        "step_idx": 0,
+                        "prime_token": 1,
                         "drafted": 3,
                         "accepted": 2,
+                        "drafted_tokens": [10, 20, 30],
+                        "accepted_tokens": [10, 20, 99],
                         "confidence": [0.9, 0.8, 0.3],
                     }),
                     json.dumps({
-                        "schema": "llama.spec_calib.v3",
+                        "schema": "llama.tessera.spec.v1",
+                        "seq_id": 0,
+                        "step_idx": 1,
+                        "prime_token": 2,
                         "drafted": 3,
                         "accepted": 2,
+                        "drafted_tokens": [11, 21, 31],
+                        "accepted_tokens": [11, 21, 98],
                         "confidence": [0.9, 0.8, 0.3],
                     }),
                 ]) + "\n",
@@ -77,7 +90,7 @@ class EvidenceStoreTest(unittest.TestCase):
                 "--store", str(store), "--run-id", "pilot",
                 "--output", str(summary),
             ], check=True, capture_output=True, text=True)
-            # Two events written above (one v1, one v3), 3 positions each.
+            # Two events written above, 3 positions each.
             self.assertEqual(pl.scan_parquet(store / "acceptance" / "*.parquet").select(pl.len()).collect().item(), 2)
             self.assertEqual(pl.scan_parquet(store / "acceptance_position" / "*.parquet").select(pl.len()).collect().item(), 6)
             kinds = set(pl.read_parquet(summary)["kind"].to_list())

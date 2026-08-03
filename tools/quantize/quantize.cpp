@@ -636,13 +636,13 @@ static int ts_cli_dpace(const common_tessera_params & tp) {
         if (line.empty()) {
             continue;
         }
-        // Parse llama.dflash.acceptance.v1 JSONL
-        // Expected: {"schema":"llama.dflash.acceptance.v1","drafted":N,"accepted":M,"confidence":[...]}
+        // Parse llama.tessera.spec.v1 JSONL
+        // Expected: {"schema":"llama.tessera.spec.v1", ... , "confidence":[...]}
         auto j = nlohmann::json::parse(line, nullptr, false);
         if (j.is_discarded()) {
             continue;
         }
-        if (j.value("schema", "") != "llama.dflash.acceptance.v1") {
+        if (j.value("schema", "") != "llama.tessera.spec.v1") {
             continue;
         }
         if (!j.contains("confidence") || !j["confidence"].is_array()) {
@@ -689,7 +689,7 @@ static int ts_cli_dpace(const common_tessera_params & tp) {
     }
 
     if (n_events == 0) {
-        fprintf(stderr, "error: dpace: no valid llama.dflash.acceptance.v1 events in %s\n",
+        fprintf(stderr, "error: dpace: no valid llama.tessera.spec.v1 events in %s\n",
                 tp.dpace_in.c_str());
         return 1;
     }

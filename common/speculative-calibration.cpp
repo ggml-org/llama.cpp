@@ -122,12 +122,14 @@ bool common_speculative_calibration_run(
     // tokens before it can draft at position n_past.
     //
     // If `opts.telemetry_out` is set, we open a JSONL file and write
-    // one record per spec step with the drafter's per-position confidence
-    // (the verifier's softmax probability of the drafter's pick). This
-    // matches the schema used by llama-server for `dflash-acceptance.jsonl`
-    // and is the input for downstream drafter fine-tuning (e.g. rejection
-    // sampling on dspark to bring it back into alignment with the QAT
-    // target — see the dspark-realign pipeline).
+    // one record per spec step carrying the drafter's per-position
+    // confidence (the verifier's softmax probability of the drafter's
+    // pick), the draft / accepted token sequences, and - when
+    // telemetry_topk > 0 - the full per-position top-k verifier and
+    // drafter distributions. The schema is llama.tessera.spec.v1. This
+    // is the input for downstream drafter fine-tuning (LK loss, D-PACE
+    // weighted CE, rejection-sampling on dspark to bring it back into
+    // alignment with the QAT target - see the dspark-realign pipeline).
     FILE * telemetry_fp = nullptr;
     if (!opts.telemetry_out.empty()) {
         telemetry_fp = std::fopen(opts.telemetry_out.c_str(), "w");
@@ -214,11 +216,15 @@ bool common_speculative_calibration_run(
 
     while (n_steps_opt <= 0 || step < n_steps_opt) {
         // 1. Drafter forward: at position n_past, sample one token.
-        //    Save the drafter's logits after each forward so the v2
+        //    Save the drafter's logits after each forward so the
         //    telemetry has the full per-position distribution (the
         //    drafter's graph exposes logits only at position 0 of the
         //    last batch, so we need to save it before the next forward
-        //    overwrites it).
+        //    overwrites it). When telemetry_topk > 0 we serialize these
+        //    into the drafter_topk_* arrays; when topk == 0 we still
+        //    need the verifier's softmax probability of the drafter's
+        //    pick (confidence[]) which is computed below from the
+        //    verifier's per-position row.
         std::vector<const float *> dft_logits_ptrs;
         std::vector<std::vector<float>> dft_logits_storage;
         dft_logits_ptrs.reserve(n_draft_max + 1);
@@ -411,12 +417,12 @@ bool common_speculative_calibration_run(
 
         // 4b. If telemetry is enabled, compute the verifier's softmax
         //     probability of each draft token and emit a JSONL record.
-        //     Two schemas:
-        //     - llama.dflash.acceptance.v1 (default): confidence[] is the
-        //       verifier's softmax probability of the drafter's pick.
-        //     - llama.spec_calib.v2 (--telemetry-topk > 0): adds
-        //       verifier_topk_*, drafter_topk_*, accepted_tokens, etc.
-        //       for distillation/rejection-sampling training.
+        //     Single schema: llama.tessera.spec.v1. The cheap per-step
+        //     fields (schema, seq_id, step_idx, prime_token, drafted,
+        //     accepted, drafted_tokens, accepted_tokens, confidence)
+        //     are always emitted; the per-position top-k distributions
+        //     (verifier_topk_*, drafter_topk_*, *_argmax) are added only
+        //     when telemetry_topk > 0.
         //
         //     The verifier's per-position logits are in v_logits_ptrs
         //     (n_dft+1 entries, one per prefix [id_last] up through
@@ -495,7 +501,7 @@ bool common_speculative_calibration_run(
                 v_topk_probs[i]  = std::move(tk.second);
                 v_argmax_explicit[i] = am;
             }
-            // confidence[] for v1: softmax prob of draft[i-1] under
+            // confidence[] is the softmax prob of draft[i-1] under the
             // verifier at the i-th per-position forward. Use the
             // precomputed row (avoids re-scanning the vocab).
             for (int i = 1; i <= n_dft; ++i) {
@@ -547,32 +553,54 @@ bool common_speculative_calibration_run(
                 accepted_tokens.push_back(bonus_local);
             }
 
-            // Hand-build the JSONL record. We keep arrays parallel
-            // (tokens[] and probs[]) to keep the encoding compact; the
-            // training pipeline re-zips them per position.
+            // Hand-build the JSONL record. Single schema
+            // (llama.tessera.spec.v1). The cheap per-step fields are
+            // always emitted; the top-k fields are added only when
+            // topk > 0. We keep arrays parallel (tokens[] and probs[])
+            // to keep the encoding compact; the training pipeline
+            // re-zips them per position.
             std::string line;
+            line  = "{\"schema\":\"llama.tessera.spec.v1\"";
+            line += ",\"seq_id\":0";
+            line += ",\"step_idx\":" + std::to_string(step);
+            line += ",\"prime_token\":" + std::to_string(id_last);
+            line += ",\"drafted\":" + std::to_string(n_dft);
+            line += ",\"accepted\":" + std::to_string(n_acc);
+
+            // drafted_tokens and accepted_tokens are part of the cheap
+            // payload (always emitted) so that downstream consumers
+            // (LK training, DFlash dataset prep) don't need topk > 0
+            // to recover the draft trajectory.
+            line += ",\"drafted_tokens\":[";
+            for (int i = 0; i < n_dft; ++i) {
+                if (i > 0) line += ",";
+                line += std::to_string(draft[i]);
+            }
+            line += "]";
+
+            line += ",\"accepted_tokens\":[";
+            for (size_t i = 0; i < accepted_tokens.size(); ++i) {
+                if (i > 0) line += ",";
+                line += std::to_string(accepted_tokens[i]);
+            }
+            line += "]";
+
+            // confidence = verifier softmax prob of each draft token.
+            // Always emitted as part of the unified record.
+            line += ",\"confidence\":[";
+            for (size_t i = 0; i < confidence.size(); ++i) {
+                if (i > 0) line += ",";
+                char buf[64];
+                std::snprintf(buf, sizeof(buf), "%.8g",
+                              (double) confidence[i]);
+                line += buf;
+            }
+            line += "]";
+
             if (topk > 0) {
-                line  = "{\"schema\":\"llama.spec_calib.v2\"";
-                line += ",\"seq_id\":0";
-                line += ",\"step_idx\":" + std::to_string(step);
-                line += ",\"prime_token\":" + std::to_string(id_last);
-                line += ",\"drafted\":" + std::to_string(n_dft);
-                line += ",\"accepted\":" + std::to_string(n_acc);
+                // Per-position top-k distributions: argmaxes plus the
+                // top-k token/prob arrays for both verifier and drafter.
                 line += ",\"topk\":" + std::to_string(topk);
-
-                line += ",\"drafted_tokens\":[";
-                for (int i = 0; i < n_dft; ++i) {
-                    if (i > 0) line += ",";
-                    line += std::to_string(draft[i]);
-                }
-                line += "]";
-
-                line += ",\"accepted_tokens\":[";
-                for (size_t i = 0; i < accepted_tokens.size(); ++i) {
-                    if (i > 0) line += ",";
-                    line += std::to_string(accepted_tokens[i]);
-                }
-                line += "]";
 
                 line += ",\"verifier_argmax\":[";
                 for (int i = 0; i <= n_dft; ++i) {
@@ -641,36 +669,9 @@ bool common_speculative_calibration_run(
                     line += "]";
                 }
                 line += "]";
-
-                // v1 back-compat: confidence = verifier softmax prob of
-                // each draft token (so existing rejection-sampling tools
-                // can consume v2 records too).
-                line += ",\"confidence\":[";
-                for (size_t i = 0; i < confidence.size(); ++i) {
-                    if (i > 0) line += ",";
-                    char buf[64];
-                    std::snprintf(buf, sizeof(buf), "%.8g",
-                                  (double) confidence[i]);
-                    line += buf;
-                }
-                line += "]";
-                line += "}\n";
-            } else {
-                // v1 schema (existing path, unchanged).
-                line  = "{\"schema\":\"llama.dflash.acceptance.v1\"";
-                line += ",\"seq_id\":0";
-                line += ",\"drafted\":" + std::to_string(n_dft);
-                line += ",\"accepted\":" + std::to_string(n_acc);
-                line += ",\"confidence\":[";
-                for (size_t i = 0; i < confidence.size(); ++i) {
-                    if (i > 0) line += ",";
-                    char buf[64];
-                    std::snprintf(buf, sizeof(buf), "%.8g",
-                                  (double) confidence[i]);
-                    line += buf;
-                }
-                line += "]}\n";
             }
+
+            line += "}\n";
             if (std::fwrite(line.data(), 1, line.size(), telemetry_fp) != line.size()) {
                 LOG_WRN("%s: failed to write telemetry record at step %d\n",
                         __func__, step);

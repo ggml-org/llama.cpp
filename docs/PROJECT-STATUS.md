@@ -21,10 +21,12 @@ the middle layers. After five phases of work:
 - Tessera's quantizer is now a per-tensor evolutionary system with a direct
   round-trip fitness mode. It improves round-trip Frobenius by 12–18 % per
   tensor over the legacy importance-weighted calibrator.
-- Spec-decoding telemetry (`llama.dflash.acceptance.v1` and
-  `llama.spec_calib.v2`) is in `llama-imatrix`. The v2 schema captures full
-  per-position verifier + drafter distributions suitable for rejection-sampling
-  LoRA fine-tuning of dspark.
+- Spec-decoding telemetry (`llama.tessera.spec.v1`) is in `llama-imatrix`.
+  The schema is a single unified record whose cheap per-step fields
+  (drafted, accepted, confidence[]) are always emitted; the per-position
+  verifier + drafter top-k distributions are added on top when
+  `--telemetry-topk > 0`. Suitable for rejection-sampling LoRA
+  fine-tuning of dspark.
 - The fork builds clean for `llama-cli`, `llama-server`, and `llama-imatrix`
   against upstream `master` (60 commits ahead of the original dspark-int base).
 - Eight worktrees cover the active branches: `main` (the original Tessera
@@ -119,12 +121,15 @@ and `…-direct.json`.
 
 Built the spec-calibration telemetry path inside `llama-imatrix`:
 
-- **v1 schema** (`llama.dflash.acceptance.v1`) — per-step accept/reject JSONL.
-- **v2 schema** (`llama.spec_calib.v2`) — per-position verifier and drafter
-  top-k distributions. This is the right shape for rejection-sampling LoRA
-  fine-tuning of dspark: we record what each side would have predicted at each
-  position and the relative probability mass, then sample dspark outputs from
-  the verifier's distribution weighted by the drafter's confidence.
+- **Unified schema** (`llama.tessera.spec.v1`) — single record per spec
+  step. The cheap per-step payload (drafted, accepted, confidence[],
+  draft / accepted token sequences) is always emitted; the per-position
+  verifier and drafter top-k distributions are added on top when
+  `--telemetry-topk > 0`. This is the right shape for rejection-sampling
+  LoRA fine-tuning of dspark: we record what each side would have
+  predicted at each position and the relative probability mass, then
+  sample dspark outputs from the verifier's distribution weighted by
+  the drafter's confidence.
 
 CLI surface:
 - `--model-draft <path>` — path to a dflash/DSpark drafter gguf.
@@ -163,9 +168,11 @@ Q5_K_M. Spec alignment is the bottleneck, not the loader.
   `common/speculative.cpp` (the upstream rewrite absorbed the real MTP
   integration under the `DRAFT_MTP` enum).
 - `dft.` string prefix workaround in `src/llama-graph.cpp` (4 call sites).
-- Two parallel telemetry schemas (v1, v2) without an adapter (the
-  `telemetry-schemas` agent unified this under `llama.spec_calib.v3` with
-  v1/v2 as legacy adapters).
+- Two parallel telemetry schemas (v1, v2) without an adapter. The
+  `telemetry-schemas` agent first unified them under
+  `llama.spec_calib.v3` (with v1/v2 as legacy adapters); the
+  `spec-consolidate` agent later collapsed v1/v2/v3 into a single
+  `llama.tessera.spec.v1` record.
 - Test coverage shockingly thin (28 621 LOC of code, 68 lines of test).
   The `tests` agent added production-grade coverage for dflash, dspark,
   telemetry, server-MTP, patcher, and quantizer policy.
@@ -375,7 +382,8 @@ rebase pass to bring:
 - `spec-calib-api` — extract spec-decoding calibration into
   `common/speculative-calibration.{h,cpp}`.
 - `telemetry-schemas` — unify v1/v2 under `llama.spec_calib.v3` with
-  v1/v2 as legacy adapters.
+  v1/v2 as legacy adapters. Superseded by `spec-consolidate` which
+  collapsed v1/v2/v3 into a single `llama.tessera.spec.v1` record.
 - `tests` — production-grade test coverage.
 
 Expected conflict surface: `common/arg.cpp`, `common/speculative.cpp`,
@@ -387,8 +395,8 @@ resolution.
 _Architect directive (2026-07-31): the training drivers are native C++/Swift,
 not PyTorch/peft. The Python plan that used to live here is superseded (kept in
 git history). The drivers train drafters directly against
-`llama.spec_calib.v2` telemetry, in-tree, reusing ggml-opt and the llama
-training API — no second runtime, no model-format round-trip._
+`llama.tessera.spec.v1` telemetry, in-tree, reusing ggml-opt and the
+llama training API — no second runtime, no model-format round-trip._
 
 Two drivers share one plumbing (the self-improving flywheel's training step):
 
@@ -444,7 +452,9 @@ step is to:
 - CI workflow on the integration branch (the fork doesn't have one).
 - Doc coverage: per-tensor calibration API, telemetry schemas, dspark
   patcher, ANE prefill.
-- Schema versioning policy for `llama.spec_calib.v*` and
+- Schema versioning policy for `llama.tessera.*` (the spec-decoding
+  telemetry is now a single `llama.tessera.spec.v1` record; the
+  previous v1/v2/v3 split is gone) and
   `llama.tessera.per-tensor-calibration.v*`.
 
 ### Priority 7 — Evolutionary mutation operator (heavy-tailed, world-gated)

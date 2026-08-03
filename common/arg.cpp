@@ -1935,9 +1935,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         string_format(
             "[imatrix] path to write per-step accept/reject JSONL when "
             "--model-draft is set (default: %s). Schema: "
-            "llama.dflash.acceptance.v1 with seq_id, drafted, accepted, "
+            "llama.tessera.spec.v1 with seq_id, step_idx, prime_token, "
+            "drafted, accepted, drafted_tokens[], accepted_tokens[], "
             "confidence[]. One record per spec step. Use for drafter "
-            "fine-tuning (rejection sampling).",
+            "fine-tuning (rejection sampling, LK loss, D-PACE).",
             params.telemetry_out.c_str()),
         [](common_params & params, const std::string & value) {
             params.telemetry_out = value;
@@ -1946,10 +1947,12 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--telemetry-topk"}, "N",
         string_format(
-            "[imatrix] when > 0 with --telemetry-out, emit llama.spec_calib.v2 "
-            "schema with full top-N distributions of verifier and drafter at each "
-            "draft position (default: %d, 0 = v1 only). Used for drafter "
-            "fine-tuning via distillation/rejection sampling. Suggested: 64.",
+            "[imatrix] when > 0 with --telemetry-out, additionally emit "
+            "the per-position verifier and drafter top-N distributions "
+            "(topk, *_argmax[], *_topk_*[][]) in the llama.tessera.spec.v1 "
+            "record (default: %d, 0 = cheap per-step payload only). Used "
+            "for drafter fine-tuning via distillation / rejection sampling. "
+            "Suggested: 64.",
             params.n_telemetry_topk),
         [](common_params & params, int value) {
             params.n_telemetry_topk = value;
@@ -1997,19 +2000,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.features_warmup),
         [](common_params & params, int value) {
             params.features_warmup = value;
-        }
-    ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
-    add_opt(common_arg(
-        {"--telemetry-v1-compat"},
-        string_format(
-            "[imatrix] when set with --telemetry-out, emit the legacy "
-            "llama.dflash.acceptance.v1 schema (seq_id, drafted, accepted, "
-            "confidence[]) instead of the unified llama.spec_calib.v3. "
-            "Adapter for one major version to give existing consumers time "
-            "to migrate. Default: %s.",
-            params.telemetry_v1_compat ? "true" : "false"),
-        [](common_params & params) {
-            params.telemetry_v1_compat = true;
         }
     ).set_examples({LLAMA_EXAMPLE_IMATRIX}));
     add_opt(common_arg({ "-fa", "--flash-attn" }, "[on|off|auto]",
@@ -4673,7 +4663,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ));
     add_opt(common_arg(
         {"--tessera-dataset"}, "PATH",
-        "Tessera: prepare drafter training data from llama.spec_calib.v2 JSONL\n"
+        "Tessera: prepare drafter training data from llama.tessera.spec.v1 JSONL\n"
         "at PATH, write the result, then exit without quantizing",
         [](common_params &, const std::string & value) {
             tessera_params.dataset_in = value;

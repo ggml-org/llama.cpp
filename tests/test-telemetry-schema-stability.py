@@ -2,27 +2,20 @@
 """
 Schema stability regression test.
 
-Pins the contract that:
-  1. The unified spec_calib.v3 schema is the canonical schema emitted by
-     tools/imatrix/imatrix.cpp.
-  2. The legacy llama.dflash.acceptance.v1 schema is still emitted as a
-     documented adapter when --telemetry-v1-compat is set.
-  3. Every code path in this repository that consumes the v1 schema name
-     (search/regex/branch) also recognizes the v3 schema name, so the
-     cutover from v1 default to v3 default does not silently break any
-     consumer.
+Pins the contract that there is EXACTLY ONE canonical spec-decoding
+telemetry schema emitted by this repository: `llama.tessera.spec.v1`.
+The previous versioned schemas (llama.dflash.acceptance.v1,
+llama.spec_calib.v2, llama.spec_calib.v3) are gone.
 
-The test is grep-based by design: it scans the source tree for
-`llama.dflash.acceptance.v1` references and checks each one for the
-presence of `llama.spec_calib.v3` (or documents it as an acceptable
-exception: documentation or test fixture).
+The test scans the source tree for any reference to the legacy
+schema names and fails if it finds one in a C/C++/Python file outside
+the documented allowlist.
 
 Run from the build directory: `ctest -R test-telemetry-schema-stability`.
 """
 
 from __future__ import annotations
 
-import re
 import sys
 import unittest
 from pathlib import Path
@@ -36,39 +29,35 @@ EXCLUDE_DIRS = {
     "build",
     "build-release",
     "build-debug",
+    "build-agent-g",
     "node_modules",
     "__pycache__",
 }
 
 # The single canonical schema name. Changing this requires updating
 # the C++ serializer, the consumers, and this test together.
-CANONICAL_SCHEMA  = "llama.spec_calib.v3"
-LEGACY_SCHEMA     = "llama.dflash.acceptance.v1"
+CANONICAL_SCHEMA = "llama.tessera.spec.v1"
 
-# Files where it is OK to mention the legacy schema without also mentioning
-# the v3 schema. These are documentation, the v1-compat emission site, and
-# test fixtures that explicitly exercise the adapter.
+# Legacy schema names that must NOT be emitted by anything in this
+# repository. Any reference to one of these in a source file is a
+# regression.
+LEGACY_SCHEMAS = (
+    "llama.dflash.acceptance.v1",
+    "llama.spec_calib.v2",
+    "llama.spec_calib.v3",
+)
+
+# Files where it is OK to mention a legacy schema (e.g. the docs
+# that document the historical change, the merge notes, or this test
+# file itself).
 ALLOWED_EXCEPTIONS = {
-    # The v1-compat emission site in the C++ source. This is where the
-    # legacy string lives; it must not also reference v3.
-    "tools/imatrix/telemetry-record.cpp",
-    "tools/imatrix/telemetry-record.h",
-    "common/arg.cpp",                      # --telemetry-v1-compat help text
-    "common/common.h",                     # the field default
-    # Documentation describing the v1-compat adapter and the v3 superset.
-    "docs/audit-2026-07-29.md",
-    "docs/architecture.md",
-    "docs/architecture-worktrees.md",
-    "docs/speculative.md",
-    "docs/tessera.md",
-    "README.md",
-    "tools/dspark-gguf-patch/README.md",
-    "tools/tessera/README.md",
-    # This test file itself, and the other test that round-trips a v1
-    # record through the consumer to prove the adapter still works.
+    # This test file mentions the legacy names in its own docstring and
+    # in the LEGACY_SCHEMAS tuple that drives the source scan.
     "tests/test-telemetry-schema-stability.py",
+    # The spec.v1 serializer's no-leakage test intentionally references
+    # the legacy schema names so it can assert that the emitted record
+    # does not contain them.
     "tests/test-telemetry-record.cpp",
-    "tests/test-tessera-evidence-store.py",
 }
 
 
@@ -88,78 +77,31 @@ def iter_source_files() -> list[Path]:
     return out
 
 
+def _read(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
 class SchemaStabilityTest(unittest.TestCase):
-    def test_canonical_schema_is_v3(self):
-        # The C++ source of truth must define v3 as the canonical schema.
-        header = (REPO_ROOT / "tools/imatrix/telemetry-record.h").read_text(
-            encoding="utf-8")
-        self.assertIn("\"llama.spec_calib.v3\"", header,
-                      "telemetry-record.h must declare llama.spec_calib.v3")
-        self.assertIn("llama.dflash.acceptance.v1", header,
-                      "telemetry-record.h must still declare the v1 schema "
-                      "name for the v1-compat adapter")
+    def test_canonical_schema_is_spec_v1(self):
+        # The C++ source of truth must declare spec.v1 as the canonical
+        # schema name. We allow the constant to live in either the
+        # production emission site (common/speculative-calibration.h)
+        # or the test serializer (tools/imatrix/telemetry-record.h).
+        spec_calib_h = REPO_ROOT / "common" / "speculative-calibration.h"
+        text = _read(spec_calib_h)
+        self.assertIn(CANONICAL_SCHEMA, text,
+                      f"{spec_calib_h} must declare the canonical {CANONICAL_SCHEMA} schema name")
 
-    def test_legacy_consumers_recognize_v3(self):
+    def test_no_legacy_schema_in_source(self):
         """
-        Every code file (not docs/tests) that branches on
-        llama.dflash.acceptance.v1 must also handle llama.spec_calib.v3,
-        otherwise the v3 default emission would silently break it.
+        No source file (.cpp/.h/.hpp/.cc/.cxx/.py) may reference a legacy
+        schema name. We enforce this aggressively because the whole point
+        of the consolidation is that there is exactly one schema.
         """
-        offenders: list[str] = []
-        for path in iter_source_files():
-            rel = str(path.relative_to(REPO_ROOT))
-            if rel in ALLOWED_EXCEPTIONS:
-                continue
-            if path.suffix in (".md", ".txt", ".json", ".yml", ".yaml"):
-                # Pure documentation / config: v1 mentions are fine, but
-                # we still record them so we can review.
-                continue
-            try:
-                text = path.read_text(encoding="utf-8", errors="replace")
-            except Exception:
-                continue
-            if LEGACY_SCHEMA not in text:
-                continue
-            if CANONICAL_SCHEMA in text:
-                continue
-            # Special case: the imatrix.cpp emission site itself is allowed
-            # to mention the legacy schema (it routes to the v1-compat
-            # helper). It's already in ALLOWED_EXCEPTIONS via the header
-            # path, but be explicit for the .cpp.
-            if rel == "tools/imatrix/imatrix.cpp":
-                continue
-            offenders.append(rel)
-
-        if offenders:
-            self.fail(
-                "The following files reference the legacy "
-                f"{LEGACY_SCHEMA!r} schema but do NOT mention the new "
-                f"{CANONICAL_SCHEMA!r} schema. Update them so the v3 "
-                "default emission is consumed correctly:\n  - "
-                + "\n  - ".join(sorted(offenders))
-            )
-
-    def test_documentation_references_v3(self):
-        """
-        The user-facing docs that mention the spec-calib telemetry schema
-        should reflect the v3 default. We tolerate v1 mentions in
-        documentation but require at least one v3 mention in the main
-        README or docs/speculative.md.
-        """
-        for doc_rel in ("README.md", "docs/speculative.md"):
-            text = (REPO_ROOT / doc_rel).read_text(encoding="utf-8")
-            self.assertIn(CANONICAL_SCHEMA, text,
-                          f"{doc_rel} must mention the v3 schema name")
-
-    def test_no_legacy_v2_schema_emitted(self):
-        """
-        The legacy llama.spec_calib.v2 schema is no longer emitted by
-        imatrix.cpp (it has been superseded by v3). Make sure no code
-        path in the C++ source emits it, and that consumers do not
-        require it.
-        """
-        offenders: list[str] = []
-        legacy_v2 = "llama.spec_calib.v2"
+        offenders: list[tuple[str, str]] = []
         for path in iter_source_files():
             rel = str(path.relative_to(REPO_ROOT))
             if rel in ALLOWED_EXCEPTIONS:
@@ -167,18 +109,53 @@ class SchemaStabilityTest(unittest.TestCase):
             if path.suffix not in (".cpp", ".h", ".hpp", ".cc", ".cxx",
                                     ".py"):
                 continue
-            try:
-                text = path.read_text(encoding="utf-8", errors="replace")
-            except Exception:
+            text = _read(path)
+            for legacy in LEGACY_SCHEMAS:
+                if legacy in text:
+                    offenders.append((rel, legacy))
+        if offenders:
+            pretty = "\n  - ".join(f"{rel}  ({name})"
+                                    for rel, name in sorted(offenders))
+            self.fail(
+                "The following files still reference a legacy spec-decoding "
+                "schema name. The consolidation to "
+                f"{CANONICAL_SCHEMA!r} requires removing all references to "
+                "the old v1/v2/v3 schemas:\n  - " + pretty
+            )
+
+    def test_no_telemetry_v1_compat(self):
+        """
+        The --telemetry-v1-compat flag and the common_params::telemetry_v1_compat
+        field are gone. Any reference to them in a C++ source file is a
+        regression.
+        """
+        offenders: list[str] = []
+        for path in iter_source_files():
+            rel = str(path.relative_to(REPO_ROOT))
+            if rel in ALLOWED_EXCEPTIONS:
                 continue
-            if legacy_v2 in text:
+            if path.suffix not in (".cpp", ".h", ".hpp", ".cc", ".cxx"):
+                continue
+            text = _read(path)
+            if "telemetry_v1_compat" in text:
                 offenders.append(rel)
         if offenders:
             self.fail(
-                f"The following files still reference the superseded "
-                f"{legacy_v2!r} schema. Remove the references; v3 is the "
-                "canonical superset:\n  - " + "\n  - ".join(sorted(offenders))
+                "The following files still reference "
+                "'telemetry_v1_compat'. The --telemetry-v1-compat flag is "
+                "removed; the field is gone:\n  - "
+                + "\n  - ".join(sorted(offenders))
             )
+
+    def test_documentation_mentions_canonical(self):
+        """
+        The main README and the speculative-decoding doc should mention
+        the new single schema name.
+        """
+        for doc_rel in ("README.md", "docs/speculative.md"):
+            text = _read(REPO_ROOT / doc_rel)
+            self.assertIn(CANONICAL_SCHEMA, text,
+                          f"{doc_rel} must mention the canonical {CANONICAL_SCHEMA} schema name")
 
 
 if __name__ == "__main__":

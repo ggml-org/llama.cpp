@@ -92,11 +92,10 @@ def count_telemetry(path: Path) -> int:
     if not path.exists():
         return 0
     with path.open("r", encoding="utf-8", errors="replace") as source:
-        # Accept both the legacy v1 schema (--telemetry-v1-compat) and the
-        # default unified v3 schema.
+        # The unified llama.tessera.spec.v1 schema is the only schema
+        # the imatrix spec-calibration path emits.
         return sum(
-            '"schema":"llama.dflash.acceptance.v1"' in line
-            or '"schema":"llama.spec_calib.v3"' in line
+            '"schema":"llama.tessera.spec.v1"' in line
             for line in source
         )
 

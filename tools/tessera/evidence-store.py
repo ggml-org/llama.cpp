@@ -281,10 +281,9 @@ def ingest_acceptance(args) -> None:
                 continue
             event = json.loads(line)
             schema = event.get("schema", "")
-            # The unified v3 schema (`llama.spec_calib.v3`) is emitted by the
-            # dflash spec_calib path; the legacy `llama.dflash.acceptance.v1`
-            # is the v1-compat adapter. MTP has its own schema.
-            if schema in ("llama.dflash.acceptance.v1", "llama.spec_calib.v3"):
+            # The unified `llama.tessera.spec.v1` schema is emitted by
+            # the imatrix spec-calibration path. MTP has its own schema.
+            if schema == "llama.tessera.spec.v1":
                 draft_type = "dflash"
             elif "mtp" in schema:
                 draft_type = "mtp"

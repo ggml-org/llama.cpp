@@ -36,7 +36,7 @@ the same way `TesseraTrainingOrchestrator` already shells out to
 | Dense-from-top-k reconstruction | `tools/quantize/tessera/tessera-lk-loss.{h,cpp}` `ts_lk_dense_from_topk` | landed (87e7a97aa) |
 | `llama_opt_params.loss_type` threading | `include/llama.h`, `src/llama-context.cpp:3391` | landed (c98e53072) |
 | Dense-label epoch path (data=tokens, labels=dense) | `src/llama-context.cpp` `opt_epoch` / `opt_epoch_iter` | landed |
-| Trace collection | `tools/imatrix/imatrix.cpp` `--telemetry-out --telemetry-topk K` (`llama.spec_calib.v2`) | landed |
+| Trace collection | `tools/imatrix/imatrix.cpp` `--telemetry-out --telemetry-topk K` (`llama.tessera.spec.v1`) | landed |
 
 The driver is the last missing piece: it reads traces, builds the dataset the
 llama-layer LK path already expects, and drives the epoch loop.
@@ -57,7 +57,7 @@ So the driver does not get to choose the layout; it must produce exactly this.
 
 ## 4. The input side: on-policy distillation (the one real design decision)
 
-A `llama.spec_calib.v2` record is one speculative-decoding step:
+A `llama.tessera.spec.v1` record is one speculative-decoding step:
 
 - `prime_token` - the token that seeds the step.
 - `drafted_tokens[0..n_dft-1]` - the drafter's proposed tokens.

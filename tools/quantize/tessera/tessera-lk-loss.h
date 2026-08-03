@@ -12,7 +12,8 @@
 //
 // Two modes:
 //   full  - both distributions available over the full vocabulary
-//   topk  - only top-k entries available (the llama.spec_calib.v2 case)
+//   topk  - only top-k entries available (the llama.tessera.spec.v1 case
+//           when telemetry_topk > 0)
 //
 // The topk mode computes alpha over the union of the two top-k sets,
 // treating out-of-set mass as a single residual bucket. This is the
@@ -65,13 +66,14 @@ double ts_lk_token_contribution(float p_x, float q_x);
 //
 // Dense reconstruction from top-k telemetry.
 //
-// The llama.spec_calib.v2 traces store only the top-k entries of each
-// distribution, but GGML_OPT_LOSS_TYPE_LK consumes a dense verifier
-// distribution as its label tensor. These functions densify a top-k record:
-// the top-k probabilities are placed at their token slots and the residual
-// mass (1 - sum(probs)) is spread uniformly over the remaining vocabulary.
-// The high-probability support is preserved exactly; only the long tail is
-// approximated, which is where negligible acceptance mass lives for k >= 8.
+// The llama.tessera.spec.v1 traces store only the top-k entries of each
+// distribution (when telemetry_topk > 0), but GGML_OPT_LOSS_TYPE_LK
+// consumes a dense verifier distribution as its label tensor. These
+// functions densify a top-k record: the top-k probabilities are placed
+// at their token slots and the residual mass (1 - sum(probs)) is spread
+// uniformly over the remaining vocabulary. The high-probability support
+// is preserved exactly; only the long tail is approximated, which is
+// where negligible acceptance mass lives for k >= 8.
 //
 
 // Reconstruct a single dense distribution from its top-k entries.
