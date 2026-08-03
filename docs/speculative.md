@@ -356,6 +356,8 @@ If a draft model is combined with a draftless decoding the draftless decoding ha
                                         suffix-tree depth = max context-match length for ngram-suffix speculative decoding (default: 24)
 --spec-ngram-suffix-n-max               N
                                         maximum number of draft tokens for ngram-suffix speculative decoding (default: 24)
+--spec-ngram-suffix-n-min               N
+                                        discard drafts shorter than this for ngram-suffix speculative decoding (default: 3)
 --spec-ngram-suffix-max-factor          F
                                         draft up to match_len * F tokens for ngram-suffix speculative decoding (default: 1.0)
 --spec-ngram-suffix-min-prob            F
