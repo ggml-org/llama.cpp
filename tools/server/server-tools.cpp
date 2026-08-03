@@ -1309,13 +1309,16 @@ struct server_tool_get_info : server_tool {
     json invoke(json params, server_tool::stream *) const override {
         auto io = make_tools_io(params);
 
+        // inside docker, we always use the linux command
 #ifdef _WIN32
-        auto res = io->run({"cmd", "/c", "ver"}, 4096, 5);
+        std::vector<std::string> args = params.contains("docker_container_id")
+            ? std::vector<std::string>{"uname", "-a"}
+            : std::vector<std::string>{"cmd", "/c", "ver"};
 #else
-        auto res = io->run({"uname", "-a"}, 4096, 5);
+        std::vector<std::string> args = {"uname", "-a"};
 #endif
-        // "ver" prints a blank line before the version, so the output is stripped on both ends;
-        // a failed spawn or a timeout leaves a diagnostic in res.output, which is not an OS name
+
+        auto res = io->run(args, 4096, 5);
         std::string os_info = res.exit_code == 0 && !res.timed_out ? string_strip(res.output) : "unknown";
 
         std::string cwd = json_value(params, "cwd", std::string());
