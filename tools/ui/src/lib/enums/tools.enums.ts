@@ -30,6 +30,7 @@ export enum BuiltInTool {
 	EDIT_FILE = 'edit_file',
 	WRITE_FILE = 'write_file',
 	GET_DATETIME = 'get_datetime',
+	GET_INFO = 'get_info',
 	FILE_GLOB_SEARCH = 'file_glob_search',
 	GREP_SEARCH = 'grep_search',
 	EXEC_SHELL_COMMAND = 'exec_shell_command',
