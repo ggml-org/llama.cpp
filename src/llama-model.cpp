@@ -1327,8 +1327,20 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
     };
 
     // assign the input layer
-    // there is very little benefit to offloading the input layer, so always keep it on the CPU
-    pimpl->dev_input = { cpu_dev, &pimpl->cpu_buft_list };
+    // there is very little benefit to offloading the input layer on discrete GPUs,
+    // so keep it on the CPU unless full GPU offload is requested. When all layers
+    // are offloaded, mirror the output-layer policy so token embeddings and
+    // GET_ROWS live on the GPU. On UMA/APU systems (e.g. Strix Halo) keeping
+    // tok_embd on CPU forces a scheduler split and CPU-side GET_ROWS each token,
+    // which significantly hurts token generation throughput.
+    // see: https://github.com/ggml-org/llama.cpp/issues/25700
+    if (act_gpu_layers >= n_layer_all) {
+        GGML_ASSERT(!devices.empty());
+        auto * dev0 = devices.front().dev;
+        pimpl->dev_input = { dev0, &pimpl->gpu_buft_list.at(dev0) };
+    } else {
+        pimpl->dev_input = { cpu_dev, &pimpl->cpu_buft_list };
+    }
 
     // assign the repeating layers to the devices according to the splits
     pimpl->dev_layer.resize(n_layer_all);
