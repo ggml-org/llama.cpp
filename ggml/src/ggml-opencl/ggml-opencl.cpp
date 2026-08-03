@@ -1088,6 +1088,7 @@ struct ggml_backend_opencl_context {
     cl_kernel kernel_gemm_noshuffle_q8_0_q8_1_dp4a = nullptr;  // dp4a (int8) dense q8_0 prefill GEMM (opt-in)
     cl_kernel kernel_gemm_noshuffle_q8_0_q8_1_dp4a_wimg = nullptr;  // q8_0 dense dp4a, weights via texture (opt-in)
     cl_kernel kernel_gemv_noshuffle_q8_0_f32;
+    cl_kernel kernel_gemv_noshuffle_q8_0_f32_splitk;  // split-K across WGs (small-M decode)
     cl_kernel kernel_gemm_noshuffle_q1_0_f32;
     cl_kernel kernel_gemv_noshuffle_q1_0_f32;
     cl_kernel kernel_gemv_noshuffle_q4_k_f32;
@@ -3819,6 +3820,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
         cl_program prog = build_program_from_source(backend_ctx, kernel_src_CL_gemv_general.c_str(), CL_gemv_compile_opts);
 
         CL_CHECK((backend_ctx->kernel_gemv_noshuffle_q8_0_f32 = clCreateKernel(prog, "kernel_gemv_noshuffle_q8_0_f32", &err), err));
+        CL_CHECK((backend_ctx->kernel_gemv_noshuffle_q8_0_f32_splitk = clCreateKernel(prog, "kernel_gemv_noshuffle_q8_0_f32_splitk", &err), err));
         CL_CHECK(clReleaseProgram(prog));
         GGML_LOG_CONT(".");
     }
@@ -18107,6 +18109,66 @@ static void ggml_cl_mul_mat_q8_0_f32_adreno(ggml_backend_t backend, const ggml_t
         img_desc.image_width = K * N / 4;
         img_desc.buffer = b_sub_buf;
         CL_CHECK((b_img = clCreateImage(context, CL_MEM_READ_ONLY, &img_fmt, &img_desc, NULL, &err), err));
+
+        // Split-K for small-M decode GEMVs. The base kernel puts one output row
+        // per lane and splits K only inside one workgroup, so M is the sole source
+        // of workgroup parallelism: gpt-oss's K and V projections are M=512 = 8
+        // workgroups on a 16-CU X2, and the kernel measures 48 GB/s where the
+        // M=2880/4096 projections in the same decode graph reach 122-123. Mirrors
+        // the q4_0/q4_K split-K above and reuses their reduce kernel.
+        //
+        // Enabled where it is measured to win, like the q4_K gate: X2-90 +2.8%
+        // tg32 @d4096 on gpt-oss; Adreno 840 (12 CU) NEUTRAL on Llama-3.2-3B-Q8_0
+        // (0.0% @d4096 -- its K/V proj is M=1024 = 16 workgroups, which already
+        // fills 12 CUs). Unmeasured on X1E/A7X/A6X and the q4_K split-K measured
+        // -0.7% on X1E, so the default is not widened on absence of evidence.
+        static const bool q8_splitk_env_set = []{
+            const char * e = std::getenv("GGML_OPENCL_Q8_GEMV_SPLITK");
+            return e && e[0] != '\0';
+        }();
+        static const bool q8_splitk_env_on = []{
+            const char * e = std::getenv("GGML_OPENCL_Q8_GEMV_SPLITK");
+            return !(e && e[0] == '0');
+        }();
+        const bool q8_splitk_on = q8_splitk_env_set
+            ? q8_splitk_env_on
+            : (backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E);
+        if (q8_splitk_on && backend_ctx->kernel_gemv_noshuffle_q8_0_f32_splitk &&
+            ne01 <= 1024 && ne01 % 64 == 0) {
+            const int    nsg    = 8;
+            const int    ksplit = 8;                        // -> 8 * M/64 workgroups
+            const size_t gx     = (size_t) CEIL_DIV(ne01, 64) * 64;
+
+            backend_ctx->prealloc_splitk_partial.allocate(
+                backend_ctx->context, (size_t) ksplit * ne01 * sizeof(float));
+            cl_mem partial = backend_ctx->prealloc_splitk_partial.buffer;
+
+            cl_kernel ks = backend_ctx->kernel_gemv_noshuffle_q8_0_f32_splitk;
+            CL_CHECK(clSetKernelArg(ks, 0, sizeof(cl_mem), &q_img));
+            CL_CHECK(clSetKernelArg(ks, 1, sizeof(cl_mem), &extra0_q8_0->d));
+            CL_CHECK(clSetKernelArg(ks, 2, sizeof(cl_mem), &b_img));
+            CL_CHECK(clSetKernelArg(ks, 3, sizeof(cl_mem), &partial));
+            CL_CHECK(clSetKernelArg(ks, 4, sizeof(cl_int), &ne00));
+            CL_CHECK(clSetKernelArg(ks, 5, sizeof(cl_int), &ne01));
+            size_t lsk[3] = { 64, (size_t) nsg, 1 };
+            size_t gsk[3] = { gx, (size_t) (nsg * ksplit), 1 };
+            backend_ctx->enqueue_ndrange_kernel(ks, 3, gsk, lsk, dst);
+
+            cl_kernel kr = backend_ctx->kernel_gemv_splitk_reduce_f32;
+            CL_CHECK(clSetKernelArg(kr, 0, sizeof(cl_mem),   &partial));
+            CL_CHECK(clSetKernelArg(kr, 1, sizeof(cl_mem),   &extrad->data_device));
+            CL_CHECK(clSetKernelArg(kr, 2, sizeof(cl_ulong), &offsetd));
+            CL_CHECK(clSetKernelArg(kr, 3, sizeof(cl_int),   &ne01));
+            CL_CHECK(clSetKernelArg(kr, 4, sizeof(cl_int),   &ksplit));
+            size_t lr[3] = { 64, 1, 1 };
+            size_t gr[3] = { (size_t) CEIL_DIV(ne01, 64) * 64, 1, 1 };
+            backend_ctx->enqueue_ndrange_kernel(kr, 3, gr, lr, dst);
+
+            CL_CHECK(clReleaseMemObject(q_img));
+            CL_CHECK(clReleaseMemObject(b_img));
+            CL_CHECK(clReleaseMemObject(b_sub_buf));
+            return;
+        }
 
         kernel = backend_ctx->kernel_gemv_noshuffle_q8_0_f32;
 
