@@ -3670,9 +3670,12 @@ private:
                             // risk aborting the whole process on a slot that doesn't hold that
                             // invariant. slot.n_ctx is set at slot init and is always > 0; n_tokens()
                             // is non-zero for any is_processing() slot in practice but isn't statically
-                            // guaranteed, so the check stays explicit.
+                            // guaranteed, so the check stays explicit. slot.task is also checked
+                            // explicitly rather than assuming is_processing() implies non-null, since
+                            // that pairing is a state invariant this guard exists precisely because we
+                            // don't want to trust unconditionally.
                             const enum error_type type = (err_type == ERROR_TYPE_EXCEED_CONTEXT_SIZE &&
-                                                          slot.n_ctx > 0 && slot.task->n_tokens() > 0)
+                                                          slot.n_ctx > 0 && slot.task && slot.task->n_tokens() > 0)
                                                        ? err_type : ERROR_TYPE_SERVER;
                             send_error(slot, err, type);
                             slot.release();
