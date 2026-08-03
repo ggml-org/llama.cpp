@@ -1,5 +1,6 @@
 #include "llama-expert-hotstore.h"
 #include "llama-expert-heatmap.h"
+#include "llama-expert-tier.h"
 #include "llama-impl.h"
 #include "llama-model.h"
 
@@ -79,12 +80,10 @@ bool llama_expert_hotstore::allocate(ggml_backend_buffer_type_t gpu_buft) {
     }
 
     // per-layer LUTs and masks for in-graph routing (oldtricks Trick 4).
-    // hot_lut/cold_lut are i32, hot_mask/cold_mask are f32, all [n_experts].
+    // hot_lut i32, cold_mask f32, both [n_experts].
     luts.assign(n_layers, layer_lut{});
     for (int il = 0; il < n_layers; il++) {
         luts[il].hot_lut   = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, n_experts);
-        luts[il].cold_lut  = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, n_experts);
-        luts[il].hot_mask  = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, n_experts);
         luts[il].cold_mask = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, n_experts);
     }
 
@@ -120,11 +119,22 @@ bool llama_expert_hotstore::allocate(ggml_backend_buffer_type_t gpu_buft) {
     // slots 0..hot_s-1, so slot hot_s stays zero for the lifetime of the store.
     ggml_backend_buffer_clear(buf.get(), 0);
 
+    // register each expert weight tensor with the tier hook so build_lora_mm_id
+    // can find its GPU hot tensor and per-layer LUTs.
+    for (const auto & e : entries) {
+        const auto & L = luts[e.layer_idx];
+        llama_expert_tier_register(e.src, e.dst, L.hot_lut, L.cold_mask);
+    }
+
     return true;
 }
 
+llama_expert_hotstore::~llama_expert_hotstore() {
+    llama_expert_tier_clear();
+}
+
 void llama_expert_hotstore::copy_top_s(const llama_expert_heatmap & heatmap) {
-    if (is_filled || hot_s <= 0 || entries.empty()) {
+    if (is_filled || hot_s <= 0 || entries.empty() || !buf) {
         return;
     }
 
@@ -157,8 +167,34 @@ void llama_expert_hotstore::copy_top_s(const llama_expert_heatmap & heatmap) {
     LLAMA_LOG("=== Expert hot store: top-S experts copied to GPU ===\n");
 }
 
+void llama_expert_hotstore::plant_static() {
+    if (is_filled || hot_s <= 0 || entries.empty() || !buf) {
+        return;
+    }
+
+    // plant experts 0..hot_s-1 into slots 0..hot_s-1, one shot, no heatmap
+    for (int il = 0; il < n_layers; il++) {
+        auto & ste = slot_to_expert[il];
+        for (int p = 0; p < hot_s && p < n_experts; p++) {
+            ste[p] = p;
+        }
+        for (entry * e : entries_by_layer[il]) {
+            const size_t slot = ggml_nbytes(e->src) / (size_t) e->src->ne[2];
+            const char * src = e->src->data ? (const char *) ggml_get_data(e->src) : nullptr;
+            if (!src) continue;
+            for (int p = 0; p < hot_s && p < n_experts; p++) {
+                ggml_backend_tensor_set(e->dst, src + (size_t) p * slot, (size_t) p * slot, slot);
+            }
+        }
+    }
+
+    is_filled = true;
+    update_luts();
+    LLAMA_LOG("=== Expert hot store: STATIC plant of %d experts per layer ===\n", hot_s);
+}
+
 void llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
-    if (!is_filled || hot_s <= 0) {
+    if (!is_filled || hot_s <= 0 || !buf) {
         return;
     }
 
@@ -251,13 +287,11 @@ int llama_expert_hotstore::slot_of(int layer_idx, int expert_id) const {
 }
 
 void llama_expert_hotstore::update_luts() {
-    if (hot_s <= 0 || luts.empty()) {
+    if (hot_s <= 0 || luts.empty() || !buf) {
         return;
     }
 
     std::vector<int32_t> hot_lut_h(n_experts);
-    std::vector<int32_t> cold_lut_h(n_experts);
-    std::vector<float>   hot_mask_h(n_experts);
     std::vector<float>   cold_mask_h(n_experts);
 
     for (int il = 0; il < n_layers; il++) {
@@ -266,8 +300,6 @@ void llama_expert_hotstore::update_luts() {
         // defaults: everyone cold
         for (int e = 0; e < n_experts; e++) {
             hot_lut_h[e]   = hot_s;     // sentinel slot (zero)
-            cold_lut_h[e]  = e;         // real expert id
-            hot_mask_h[e]  = 0.0f;
             cold_mask_h[e] = 1.0f;
         }
 
@@ -278,20 +310,45 @@ void llama_expert_hotstore::update_luts() {
                 continue;
             }
             hot_lut_h[e]   = p;         // its slot index
-            cold_lut_h[e]  = 0;         // dummy expert 0
-            hot_mask_h[e]  = 1.0f;
             cold_mask_h[e] = 0.0f;
         }
 
         const size_t bytes_i32 = n_experts * sizeof(int32_t);
         const size_t bytes_f32 = n_experts * sizeof(float);
         ggml_backend_tensor_set(luts[il].hot_lut,   hot_lut_h.data(),   0, bytes_i32);
-        ggml_backend_tensor_set(luts[il].cold_lut,  cold_lut_h.data(),  0, bytes_i32);
-        ggml_backend_tensor_set(luts[il].hot_mask,  hot_mask_h.data(),  0, bytes_f32);
         ggml_backend_tensor_set(luts[il].cold_mask, cold_mask_h.data(), 0, bytes_f32);
     }
 
     luts_version++;
+}
+
+void llama_expert_hotstore::log_hit_rate(const std::vector<std::pair<int, ggml_tensor *>> & moe_sel) {
+    if (moe_sel.empty() || !is_filled) {
+        return;
+    }
+    size_t hits = 0, total = 0;
+    for (const auto & kv : moe_sel) {
+        const int il = kv.first;
+        const ggml_tensor * t = kv.second;
+        if (!t || !t->data || t->type != GGML_TYPE_I32) {
+            continue;
+        }
+        const size_t n = ggml_nelements(t);
+        std::vector<int32_t> ids(n);
+        ggml_backend_tensor_get(t, ids.data(), 0, n * sizeof(int32_t));
+        for (size_t i = 0; i < n; i++) {
+            const int32_t id = ids[i];
+            if (id >= 0 && id < n_experts) {
+                total++;
+                if (slot_of(il, id) >= 0) {
+                    hits++;
+                }
+            }
+        }
+    }
+    if (total > 0) {
+        LLAMA_LOG("=== expert hot hit rate: %zu/%zu = %.1f%% ===\n", hits, total, 100.0f * (float) hits / (float) total);
+    }
 }
 
 void llama_expert_hotstore::log() const {

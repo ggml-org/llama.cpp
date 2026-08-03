@@ -1,5 +1,6 @@
 #include "llama-graph.h"
 
+#include "llama-expert-tier.h"
 #include "llama-impl.h"
 #include "llama-model.h"
 #include "llama-batch.h"
@@ -1485,6 +1486,14 @@ ggml_tensor * llm_graph_context::build_lora_mm_id(
           ggml_tensor * cur, // ggml_tensor * b
           ggml_tensor * ids,
           ggml_tensor * w_s) const {
+    // expert tier hook: if `w` has a registered GPU hot store, build the
+    // dual-path (hot GPU slots + cold CPU experts) result and return it.
+    // Skip when loras are active so build_lora_mm_id's lora loop still runs.
+    if (loras->empty()) {
+        if (auto * r = llama_expert_tier_build(ctx0, w, cur, ids, w_s)) {
+            return r;
+        }
+    }
     ggml_tensor * res = ggml_mul_mat_id(ctx0, w, cur, ids);
 
     if (w_s) {

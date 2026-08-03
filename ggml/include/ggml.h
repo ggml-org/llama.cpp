@@ -590,6 +590,8 @@ extern "C" {
 
         GGML_OP_GLU,
 
+        GGML_OP_MUL_MAT_ID_COLD,
+
         GGML_OP_COUNT,
     };
 
@@ -1447,6 +1449,16 @@ extern "C" {
             struct ggml_tensor  * as,
             struct ggml_tensor  * b,
             struct ggml_tensor  * ids);
+
+    // mul_mat_id restricted to cold experts only: computes only rows whose
+    // expert is marked 1 in cold_mask (i32 [n_expert], 1 = cold); hot slots
+    // are zeroed in the result
+    GGML_API struct ggml_tensor * ggml_mul_mat_id_cold(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * as,
+            struct ggml_tensor  * b,
+            struct ggml_tensor  * ids,
+            struct ggml_tensor  * cold_mask);
 
     // A: m columns, n rows,
     // B: p columns, n rows,

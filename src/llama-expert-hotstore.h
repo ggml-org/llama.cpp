@@ -36,18 +36,11 @@ struct llama_expert_hotstore {
     // stable across re-syncs: an expert that stays hot keeps its slot.
     std::vector<std::vector<int>> slot_to_expert;
 
-    // per-layer LUTs and masks for in-graph routing (oldtricks Trick 4).
+    // per-layer LUT and mask for in-graph routing.
     // hot_lut[e]   = slot index [0..hot_s-1] if e is hot, or hot_s (sentinel) if cold.
-    // cold_lut[e]  = e if e is cold, or 0 (dummy expert) if hot.
-    // hot_mask[e]  = 1.0f if e is hot, else 0.0f.
-    // cold_mask[e] = 1.0f if e is cold, else 0.0f.
-    // All allocated in the same ctx/buf as the hot tensors (GPU); populated
-    // in resync_top_s and H2D only on ubatches where a slot swapped (see
-    // luts_version). Read by build_moe_ffn_tiered via ggml_get_rows.
+    // cold_mask[e] = 1.0f if e is cold, else 0.0f (passed to mul_mat_id_cold).
     struct layer_lut {
         ggml_tensor * hot_lut   = nullptr; // i32[n_experts]
-        ggml_tensor * cold_lut  = nullptr; // i32[n_experts]
-        ggml_tensor * hot_mask  = nullptr; // f32[n_experts]
         ggml_tensor * cold_mask = nullptr; // f32[n_experts]
     };
     std::vector<layer_lut> luts; // size n_layers
@@ -68,8 +61,10 @@ struct llama_expert_hotstore {
     // tokens_total at the last sync (fill or re-sync) for boundary-cross check
     int64_t last_sync_tokens = 0;
 
-    llama_expert_hotstore(const llama_model * model, int n_layers,
-                          int n_experts, int hot_s, int sync_period = 0);
+llama_expert_hotstore(const llama_model * model, int n_layers,
+                      int n_experts, int hot_s, int sync_period = 0);
+
+    ~llama_expert_hotstore();
 
     // allocate the GPU hot store for `hot_s` slots. returns false (and
     // leaves the store disabled) on failure or shortage of VRAM.
@@ -78,6 +73,11 @@ struct llama_expert_hotstore {
     // copy the top-S expert slices for every layer into the GPU hot store,
     // using the given heatmap for the ranking. one-shot (guarded by is_filled).
     void copy_top_s(const llama_expert_heatmap & heatmap);
+
+    // static plant: fill slots 0..hot_s-1 with experts 0..hot_s-1 per layer,
+    // build LUTs/masks accordingly, no heatmap, no resync. Diagnostic only:
+    // isolates the dual-path graph from the heat/dynamic-copy path.
+    void plant_static();
 
     // re-sync the hot store to the current heatmap ranking, swapping only
     // the experts that changed (stable slots; unchanged experts not re-copied).
@@ -89,8 +89,12 @@ struct llama_expert_hotstore {
     // returns the GPU slot index holding expert_id in layer il, or -1 if none
     int slot_of(int layer_idx, int expert_id) const;
 
-    // rebuild hot_lut/cold_lut/hot_mask/cold_mask from slot_to_expert for
-    // every layer and H2D-copy them into the GPU tensors. bumps luts_version.
+    // diagnostic: count how many router-selected expert ids hit a hot slot.
+    // reads the selected_experts tensors (call after synchronize).
+    void log_hit_rate(const std::vector<std::pair<int, ggml_tensor *>> & moe_sel);
+
+    // rebuild hot_lut/cold_mask from slot_to_expert for every layer
+    // and H2D-copy them into the GPU tensors. bumps luts_version.
     // called from copy_top_s (initial fill) and resync_top_s (swaps).
     void update_luts();
 
