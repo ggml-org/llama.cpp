@@ -308,8 +308,7 @@ prior 16K trace, a trace-local 3.39x reduction. LID plus its separate top-k
 kernel families is approximately 15.2%, just crossing the M1 threshold after
 the first two compute improvements. Because raw LID scanning dominates its
 small selection overhead and scales rapidly, the next evidence-backed local
-phase is LID vector-kernel/fused-selection investigation, not communication
-first. Name-matched MMQ remains the largest family and stays in the roadmap;
+phase is LID vector-kernel tiling first, not communication or top-k fusion. Name-matched MMQ remains the largest family and stays in the roadmap;
 any further J-width automation must handle routing skew.
 
 Per-agent analysis maps KFD agents through `agent_info.csv` to PCI BDF. Summed
@@ -327,6 +326,21 @@ The flash-attention mean grows from 869.8 us/call at 8K to 1,200.1 us/call at
 is inconsistent with complete fixed-top-k arbitrary-mask tile pruning, though
 it does not exclude partial pruning; CSA remains a later long-context phase.
 
+The focused LID baseline closes the first limiter question. Commit `05a7e5731`
+adds the exact batch-256 production shape to `test-backend-ops`: CPU-reference
+correctness passes at KV=256, and ordinary ROCm0 performance is 504.82 us at
+KV=256 and 7,856.11 us at KV=4096 (2.14/2.20 effective TFLOPS by the fixture's
+operation convention). Trace launches use eight wave32s, 80 VGPRs, 128 SGPRs,
+8,704 bytes LDS, and zero scratch. Filtered KV=4096 counters measure 74.135%
+occupancy, 23.726 mean waves/CU, 6,481 VALU instructions/work-item, 16.456%
+memory-unit busy, 95.474% L2 hit rate, 11,328 KiB fetches, 3,837 KiB writes,
+zero LDS bank conflict, and 2.532% ALU stall by LDS. Therefore DRAM/LDS are not
+the first-order limiters; FP32 vector/reduction instruction work and the
+VGPR-limited 74% occupancy are. Selection kernels are only about 0.31%, so
+phase three begins with K-vectors-per-wave 4 versus the current 8, then a
+32-head inner tile versus 16. Fused top-k, reduced-precision Q, rocWMMA, and
+device-local candidate merging are deferred.
+
 Mapping and screening artifacts:
 
 - `$HOME/edwin/llama-jobs/dsv4-rocm-rocblas/20260803T175331Z-ec1b7e64c-map-cijk/` (three-line aggregate rocBLAS profile)
@@ -334,6 +348,7 @@ Mapping and screening artifacts:
 - `$HOME/edwin/llama-jobs/dsv4-hc-mixes-sweep/20260803T181014Z-1d6a42983-prototype/` (tile sweep, correctness, fallback, graph, and dispatch proof)
 - `$HOME/edwin/llama-jobs/dsv4-hc-mixes-sweep/20260803T182030Z-560635e3b-whole-model/` (J16-held-constant whole-model A/B)
 - `$HOME/edwin/llama-jobs/dsv4-rocm-pp/20260803T191856.045376424Z-kernel-trace-j16-hc-16k-52e0121043ad-23195/` (combined-stack 16K compact trace, aggregate and per-agent measured-region summaries)
+- `$HOME/edwin/llama-jobs/dsv4-lid-study/20260803T195000Z-bd4d1b9aa-baseline/` (launch scaling, exact fixture correctness/performance, hardware counters, raw DBs, counter command, and next-screen contract)
 
 Screening artifacts:
 
@@ -373,6 +388,31 @@ Artifacts:
 - `$HOME/edwin/llama-jobs/dsv4-corpus-validation/20260803T190100.516971835Z-attested-56dd4177e501-15597/` (J16-only versus J16+HC acceptance artifact; full hashes, batch/ubatch 512/256, `complete=1`)
 - `$HOME/edwin/llama-jobs/dsv4-corpus-validation/20260803T184944.079084014Z-attested-56dd4177e501-25863/` (excluded interrupted attempt: all responses exist and match, but no final status/comparison artifact and `candidate.rc=120`)
 - `$HOME/llama-jobs/dsv4-corpus-validation/20260803T165136Z-88c415d91/` (superseded pre-normalization artifact)
+
+### Production server and MTP gate
+
+Commit `eff519d09` adds a fail-closed production-config validator and
+`38880f985` ensures failed comparisons preserve diagnostics. It runs fresh
+main-only and Q4 MTP servers with the accepted J16+HC stack, tensor split,
+262144 context, unified F16 KV, batch/ubatch 512/256, draft-mtp n-max 3 on
+ROCm0+ROCm1, and a fixed 2,527-token prompt followed by 128 generated tokens.
+It requires actual draft counters and exact generated content/token equality.
+
+The first real run is a **failed acceptance**, not a deployment pass. Both arms
+completed, and MTP genuinely drafted (71 attempts, 211 drafted, 55 accepted,
+71 verification steps; 26.07% token acceptance), but greedy output diverged
+from main-only at generated token index 41 (`32907` versus `12275`). A single
+main-then-MTP observation also showed PP 381.585→345.794 t/s (-9.38%) and TG
+20.208→19.951 t/s (-1.27%). Those deltas are diagnostic only, but they provide
+no MTP speed evidence and exact deterministic equivalence failed. Production
+MTP acceptance therefore remains blocked pending isolation of speculative
+batching/verification, graph/cache behavior, or configuration effects. The
+main J16+HC PP stack itself remains accepted by the non-draft gates above.
+
+Failed diagnostic artifact (fully hashed source/server/DSOs/main shards/draft
+model/corpus and exact commands):
+
+- `$HOME/edwin/llama-jobs/20260803-194659-dsv4-prod-mtp-j16-hc-r3/`
 
 ### M3 - implementation and matched A/B
 
@@ -416,17 +456,19 @@ A dense mask is not a sparse performance implementation. Success requires runtim
 | 2026-08-03 | Select the M=24,N=256,K=16384 F32 `hc_mixes` GEMM as optimization two. | Exact rocBLAS dimensions/call count map the 26.43-28.44% Cijk kernel to two `build_hc_pre` calls in each of 43 layers on four GPUs; explicit CSA is 7.06% and LID is 11.11% at 16K. | accepted |
 | 2026-08-03 | Keep the skinny hc-mixer path explicit and exact-shape for the known service. | Custom 12x16x256 kernel is bit-identical and 3.83x faster locally; J16-held-constant PP gains 19.8-20.9%; the fully attested 256-ubatch corpus gate matches all responses; all near-shapes retain rocBLAS/generic fallback. | final |
 | 2026-08-03 | Do not switch to communication-first after the local compute wins. | Fresh 16K trace assigns RCCL device work 9.84% and explicit copies 0.18%; x8 bus 46 is not the slowest by total/RCCL kernel sums. | final |
-| 2026-08-03 | Investigate LID vector/fused selection as optimization phase three. | Lightning indexer is 14.87% and LID plus separate top-k name families is about 15.2% at 16K, up from 6.30% at 8K; MMQ remains 40.19% but has already received its first routing-sensitive optimization. | provisional |
+| 2026-08-03 | Tune the LID vector kernel before considering fused selection. | Lightning indexer is 14.87% while selection is only about 0.31%; exact counters show 74.1% occupancy, 16.5% memory busy, 95.5% L2 hits, no LDS conflicts, and 6,481 VALU instructions/work-item. | selected |
+| 2026-08-03 | Do not accept production MTP yet. | At the exact production-like 262K configuration, MTP drafted and verified tokens but greedy output diverged at generated token 41; single-observation TG was 1.27% lower, not higher. | blocked |
 
 ## 9. Open questions
 
 1. Does the J=16 win hold on a user-supplied production corpus? The attested engineering proxy and through-16K synthetic scaling are positive, but no user corpus exists and 32K cannot complete under the five-minute cap.
 2. Can a later expert-concentration signal select J=16/J=32/J=64 without a host synchronization? This patch intentionally stays explicit.
-3. Which part of the HIP LID vector kernel (K dequantization, 64-head dot products, reduction, or score write) is limiting, and can score production be fused with local top-k without breaking global-index/tie semantics?
-4. Does HIP flash attention perform partial arbitrary-mask tile pruning? Scaling rejects complete fixed-top-k pruning, but source/counters do not yet quantify partial pruning.
-5. How are LID scores and global top-k distributed across the four meta devices at runtime?
-6. RCCL kernels do not make x8 bus 46 the slowest, but what algorithm roles and actual peer bytes/bandwidth explain the per-agent RCCL asymmetry?
-7. Which short-prompt/long-context mix and fixed corpus best represent the user's production workload?
+3. Does reducing K vectors/wave from 8 to 4 recover enough of the measured 26% occupancy headroom to overcome extra blocks/Q staging, and does a 32-head inner tile reduce barriers without losing residency?
+4. Why does production MTP greedy output diverge at token 41 despite target verification, and can graph/cache/config isolation restore equivalence and a real TG gain?
+5. Does HIP flash attention perform partial arbitrary-mask tile pruning? Scaling rejects complete fixed-top-k pruning, but source/counters do not yet quantify partial pruning.
+6. How are LID scores and global top-k distributed across the four meta devices at runtime?
+7. RCCL kernels do not make x8 bus 46 the slowest, but what algorithm roles and actual peer bytes/bandwidth explain the per-agent RCCL asymmetry?
+8. Which short-prompt/long-context mix and fixed corpus best represent the user's production workload?
 
 ## 10. Reproduction record
 
@@ -484,7 +526,38 @@ Accepted artifacts are
 and
 `$HOME/edwin/llama-jobs/dsv4-rocm-pp/20260803T191856.045376424Z-kernel-trace-j16-hc-16k-52e0121043ad-23195/`.
 These commands are a phase checkpoint, not the project's final completion
-command; production-MTP and the selected LID phase remain.
+command; production MTP is blocked and the selected LID phase remains.
+
+Current production diagnostic, rerunnable from the clean worktree (it is
+expected to exit nonzero while the recorded MTP divergence persists):
+
+```bash
+cd /home/edwin/llama.cpp-rdna2
+cmake --build build --target llama-server -j 12
+timeout --signal=TERM --kill-after=30s 2400s env \
+  GGML_HIP_RDNA2_MMQ_J=16 GGML_HIP_RDNA2_HC_MIXES=1 \
+  DSV4_OUTER_TIMEOUT=2400 \
+  scripts/dsv4-rocm/run-production-mtp-validation.sh
+```
+
+Current exact-shape LID baseline:
+
+```bash
+cd /home/edwin/llama.cpp-rdna2
+cmake --build build --target test-backend-ops -j 12
+export HSA_OVERRIDE_GFX_VERSION=10.3.0 LD_LIBRARY_PATH=$PWD/build/bin
+build/bin/test-backend-ops test -b ROCm0 -o LIGHTNING_INDEXER \
+  -p 'hsk=128,nh=64,kv=256,nb=256,ns=1,nm=1,type_K=f16'
+for kv in 256 4096; do
+  build/bin/test-backend-ops perf -b ROCm0 -o LIGHTNING_INDEXER \
+    -p "hsk=128,nh=64,kv=$kv,nb=256,ns=1,nm=1,type_K=f16"
+done
+```
+
+The counter commands and raw DBs are preserved under
+`$HOME/edwin/llama-jobs/dsv4-lid-study/20260803T195000Z-bd4d1b9aa-baseline/`.
+The production failure is under
+`$HOME/edwin/llama-jobs/20260803-194659-dsv4-prod-mtp-j16-hc-r3/`.
 
 Planned final record:
 
