@@ -5,7 +5,7 @@
 	import { ToolsService } from '$lib/services/tools.service';
 	import { toolsStore } from '$lib/stores/tools.svelte';
 	import { BuiltInTool } from '$lib/enums';
-	import { abbreviateWorkingDir, lastPathSegment } from '$lib/utils';
+	import { abbreviateWorkingDir, abbreviateHome, lastPathSegment } from '$lib/utils';
 	import { debounce } from '$lib/utils/debounce';
 	import * as Popover from '$lib/components/ui/popover';
 	import * as Tooltip from '$lib/components/ui/tooltip';
@@ -129,6 +129,25 @@
 	// Build a substring glob from the raw query: letters become
 	// case-insensitive char classes (glob_match supports [xX]) so "proj"
 	// matches "Project-Alpha"; glob metacharacters are dropped.
+	// Path-like queries (starting with / or ~) are treated as path
+	// navigation: search the parent directory for the last segment instead
+	// of glob-matching the whole query against home-relative entries.
+	function splitPathQuery(query: string): { parent: string; last: string } | null {
+		if (!query.startsWith('/') && !query.startsWith('~')) return null;
+		const normalized = query.replace(/\/+$/, '');
+		if (!normalized || normalized === '~') {
+			return { parent: normalized === '~' ? '~' : '/', last: '' };
+		}
+		const idx = normalized.lastIndexOf('/');
+		if (idx === 0) return { parent: '/', last: normalized.slice(1) };
+		return { parent: normalized.slice(0, idx), last: normalized.slice(idx + 1) };
+	}
+
+	// Effective directory the current search runs against (shown in the
+	// footer); updated by doSearch, including when an exactly-typed
+	// directory is "entered".
+	let searchScope = $state('~');
+
 	function buildCaseInsensitiveGlob(query: string): string {
 		let out = '*';
 		for (const c of query) {
@@ -172,6 +191,7 @@
 			searchError = null;
 			isSearching = false;
 			hoveredIndex = -1;
+			searchScope = homeBase ?? '~';
 			return;
 		}
 
@@ -180,6 +200,8 @@
 		searchController = controller;
 		const mySeq = ++searchSeq;
 
+		const pathQuery = splitPathQuery(trimmed);
+
 		isSearching = true;
 		try {
 			// A generous limit is requested because ranking happens
@@ -187,10 +209,14 @@
 			const res = await ToolsService.executeToolRaw(
 				BuiltInTool.FILE_GLOB_SEARCH,
 				{
-					path: homeBase ?? '~',
+					path: pathQuery ? pathQuery.parent : (homeBase ?? '~'),
 					type: 'dir',
-					include: buildCaseInsensitiveGlob(trimmed),
-					max_depth: 6,
+					include: pathQuery
+						? pathQuery.last
+							? buildCaseInsensitiveGlob(pathQuery.last)
+							: '*'
+						: buildCaseInsensitiveGlob(trimmed),
+					max_depth: pathQuery ? 1 : 6,
 					limit: 100
 				},
 				controller.signal
@@ -204,10 +230,41 @@
 			}
 			const base = typeof res.base === 'string' ? res.base : '';
 			const entries = Array.isArray(res.entries) ? (res.entries as GlobEntry[]) : [];
-			queryResults = rankEntries(entries, trimmed)
-				.slice(0, 20)
-				.map((e) => joinPath(base, e.path));
+			const ranked = rankEntries(entries, pathQuery?.last ?? trimmed);
+			let results = ranked.map((e) => joinPath(base, e.path));
+			searchScope = pathQuery ? pathQuery.parent : (homeBase ?? '~');
+
+			// An exactly-typed directory is "entered": list its children too,
+			// so path navigation doesn't require a trailing slash.
+			const last = pathQuery?.last;
+			const exact = last
+				? ranked.find((e) => lastPathSegment(e.path).toLowerCase() === last.toLowerCase())
+				: undefined;
+			if (exact) {
+				const exactDir = joinPath(base, exact.path);
+				const childRes = await ToolsService.executeToolRaw(
+					BuiltInTool.FILE_GLOB_SEARCH,
+					{ path: exactDir, type: 'dir', include: '*', max_depth: 1, limit: 100 },
+					controller.signal
+				);
+				if (mySeq !== searchSeq) return;
+				if (typeof childRes.error !== 'string') {
+					const childBase = typeof childRes.base === 'string' ? childRes.base : '';
+					const childEntries = Array.isArray(childRes.entries)
+						? (childRes.entries as GlobEntry[])
+						: [];
+					const children = childEntries
+						.map((e) => joinPath(childBase, e.path))
+						.sort((a, b) => a.localeCompare(b));
+					results = [...results, ...children];
+					searchScope = exactDir;
+				}
+			}
+
+			queryResults = results.slice(0, 20);
 			hoveredIndex = queryResults.length > 0 ? 0 : -1;
+			// new results: scroll the list back to the top (first item is hovered)
+			if (hoveredIndex === 0) scrollTrigger++;
 			searchError = null;
 		} catch (err) {
 			if (mySeq !== searchSeq) return;
@@ -353,6 +410,9 @@
 			queryResults = [];
 			searchError = null;
 			void toolsStore.resolveServerHome();
+			searchScope = homeBase ?? '~';
+			// show the current directory (and its siblings) right away
+			if (inputValue.trim()) runSearch(inputValue);
 		} else {
 			cancelSearch();
 			// bits-ui-initiated close (Escape on the content, outside-click,
@@ -521,7 +581,9 @@
 					<span class="px-2 py-1.5 font-mono text-[10px]">
 						Searching in:
 
-						<span class="truncate text-muted-foreground/70" title={homeBase}>~</span>
+						<span class="truncate text-muted-foreground/70" title={searchScope}
+							>{abbreviateHome(searchScope, homeBase)}</span
+						>
 					</span>
 				{/if}
 			</div>
