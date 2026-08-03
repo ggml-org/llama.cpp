@@ -3621,7 +3621,7 @@ int32_t llama_vocab::impl::token_to_piece(llama_token token, char * buf, int32_t
                 if (vocab.is_byte(token)) {
                     // Handle byte tokens like <0xXX>
                     if (token_text.length() == 6 && token_text.substr(0, 3) == "<0x" && token_text.back() == '>') {
-                        std::string hex_str = token_text.text.substr(3, 2);
+                        std::string hex_str = token_text.substr(3, 2);
                         if (std::isxdigit(static_cast<unsigned char>(hex_str[0])) && std::isxdigit(static_cast<unsigned char>(hex_str[1]))) {
                             int hex_val = std::stoi(hex_str, nullptr, 16);
                             if (length < 1) {
