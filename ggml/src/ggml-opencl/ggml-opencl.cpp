@@ -513,7 +513,16 @@ struct ggml_opencl_fa_kernels {
     std::map<std::pair<int, int>, cl_kernel> f32_q8_0_q1_vec_mq_split_c8;
     std::map<std::pair<int, int>, cl_kernel> f32_q8_0_q1_vec_mq_split_g8_c8;  // GQA8 cluster (dk=64)
     std::map<std::pair<int, int>, cl_kernel> f32_f16_q1_vec_mq_split_g8_hs2;
-    std::map<std::pair<int, int>, cl_kernel> f32_f16_q1_vec_mq_split_gqa4_hs2;  // gqa4 via MQ_GQA=2 x 2 WGs  // gqa8 via MQ_GQA=4 x 2 WGs
+    std::map<std::pair<int, int>, cl_kernel> f32_f16_q1_vec_mq_split_gqa4_hs2;
+    // q1_vec_mq_split built alone (FA_MQ_SPLIT_ONLY) for a specific
+    // (dk, dv, gqa), with its own MQ_NSG_SPLIT / FA_HEAD_SUB. Used where the
+    // shared program either cannot hold the MQ family (DK=512) or produces a
+    // kernel the device refuses to launch at the required workgroup size
+    // (DK=256 gqa=8: per-kernel max 128 < required 192 on the X2-90).
+    std::map<std::tuple<int, int, int>, cl_kernel> mq_narrow;
+    std::map<std::tuple<int, int, int>, cl_kernel> mq_narrow_k_img;  // same, K as image1d_buffer_t
+    std::map<std::tuple<int, int, int>, int>       mq_narrow_wg;
+    std::map<std::tuple<int, int, int>, int>       mq_narrow_hs;  // gqa4 via MQ_GQA=2 x 2 WGs  // gqa8 via MQ_GQA=4 x 2 WGs
     int fa_hs_wg  = 128;  // workgroup size of the head-split program
     int fa_hs_sub = 2;    // FA_HEAD_SUB it was built with
     std::map<std::pair<int, int>, cl_kernel> f32_q8_0;               // prefill (baseline)
@@ -4840,6 +4849,128 @@ static bool ggml_opencl_ensure_fa_f32_f16_prefill_512(ggml_backend_opencl_contex
     return true;
 }
 
+// DK=512 (Gemma-4 global layers) decode: q1_vec in its own minimal program.
+//
+// The shared DK=512 decode program is built -D FA_DECODE_MINIMAL, which drops
+// q1_vec, because its DV=512 vector arrays dominate the shader compiler's host
+// memory and made the build fragile. The fallback is flash_attn_f32_f16_q1,
+// whose ACC_TYPE4 o_acc[DV_VEC] is 2 KB of private array per work item at
+// DV=512 — it spills to DDR, walks K twice, and runs on n_head workgroups with
+// no K-split. Measured on gemma-4-E4B @d4096 (X2-90): ~30 ms/token for the 7
+// global layers = 3.9 GB/s against a ~130 GB/s roofline.
+//
+// FA_VEC_ONLY isolates q1_vec exactly as FA_PREFILL_ONLY isolates the BM tile,
+// so the compiler only ever sees one kernel. Best-effort: on failure the
+// dispatch falls back to q1 as before.
+static bool ggml_opencl_ensure_fa_f32_f16_vec_512(ggml_backend_opencl_context * backend_ctx) {
+    const int dk = 512, dv = 512;
+    const std::pair<int, int> dk_dv = {dk, dv};
+    if (backend_ctx->fa.f32_f16_q1_vec.count(dk_dv) > 0) return true;
+
+    static bool failed = false;
+    if (failed) return false;
+
+    const ggml_opencl_fa_dim * cfg = nullptr;
+    for (const auto & d : g_opencl_fa_dims) {
+        if (d.dk == dk && d.dv == dv) { cfg = &d; break; }
+    }
+    if (cfg == nullptr) { failed = true; return false; }
+
+    const std::string opts = ggml_opencl_fa_compile_opts(backend_ctx, cfg, FA_VARIANT_F32_F16) +
+                             " -D FA_DECODE_ONLY -D FA_VEC_ONLY";
+    cl_program prog = build_program_from_source_ex(
+        backend_ctx->context, backend_ctx->device,
+        ggml_opencl_fa_kernel_src(FA_VARIANT_F32_F16).c_str(), opts,
+        /*fatal=*/false, "fa f32_f16 decode512 vec", backend_ctx->queue);
+    if (!prog) { failed = true; return false; }
+
+    cl_int err;
+    cl_kernel k = clCreateKernel(prog, "flash_attn_f32_f16_q1_vec", &err);
+    if (err != CL_SUCCESS) { clReleaseProgram(prog); failed = true; return false; }
+    if (!ggml_opencl_fa_kernel_fits_wg(backend_ctx, k, 256,
+                                       "flash_attn_f32_f16_q1_vec (decode512)", dk, dv)) {
+        clReleaseKernel(k);
+        clReleaseProgram(prog);
+        failed = true;
+        return false;
+    }
+    backend_ctx->fa.f32_f16_q1_vec[dk_dv] = k;
+    ggml_opencl_log_fa_kernel_spill(backend_ctx, k, "flash_attn_f32_f16_q1_vec (decode512)", dk, dv);
+    clReleaseProgram(prog);
+    return true;
+}
+
+// DK=512 decode, KV-head-coalesced + flash-decoding split, in its own program.
+//
+// q1_vec still reads the KV cache once per QUERY head: gemma-4-E4B is
+// n_head 8 / n_head_kv 2, so its global layers stream 4x more KV than they
+// have to (E2B, n_head_kv 1, streams 8x). The MQ split kernel gives one
+// workgroup all MQ_GQA query heads of a KV head — the KV row is read once and
+// shared — and splits n_kv across workgroups, which the DK=512 decode path has
+// never had (q1/q1_vec run n_head workgroups, no K-split).
+//
+// FA_MQ_ONLY drops the prefill tile and the legacy decode kernels;
+// FA_MQ_SPLIT_ONLY additionally drops q1_vec_mq, the cluster (c8) forms and the
+// K-image form, leaving exactly one kernel — the same isolation trick that lets
+// the BM tile and q1_vec build at DK=512 at all.
+// head_sub > 1 runs an MQ_GQA = gqa/head_sub program on head_sub workgroups per
+// KV head: per-head lane state (o_acc, m_i, l_i, slope) shrinks by that factor
+// and the grid grows by it, paying one extra read of each KV row. At DV=512 the
+// per-head state is large (E2B's gqa=8 form measures 752 B/work-item, past the
+// 512 B occupancy cliff) and the grid is small (E2B has a single KV head), so
+// both sides of that trade point the same way.
+static bool ggml_opencl_ensure_fa_mq_narrow(ggml_backend_opencl_context * backend_ctx,
+                                           int dk, int dv, int gqa, int head_sub, int nsg_split,
+                                           bool k_img) {
+    const std::tuple<int, int, int> key = {dk, dv, gqa};
+    const int mq_gqa = gqa / head_sub;
+    auto & target = k_img ? backend_ctx->fa.mq_narrow_k_img : backend_ctx->fa.mq_narrow;
+    if (target.count(key) > 0) return true;
+
+    static std::set<std::tuple<int, int, int, int>> failed;
+    const std::tuple<int, int, int, int> fkey = {dk, dv, gqa, k_img ? 1 : 0};
+    if (failed.count(fkey) > 0) return false;
+
+    const ggml_opencl_fa_dim * cfg = nullptr;
+    for (const auto & d : g_opencl_fa_dims) {
+        if (d.dk == dk && d.dv == dv) { cfg = &d; break; }
+    }
+    if (cfg == nullptr) { failed.insert(fkey); return false; }
+
+    const size_t wg = (size_t) 64 * nsg_split;
+    const std::string opts = ggml_opencl_fa_compile_opts(backend_ctx, cfg, FA_VARIANT_F32_F16) +
+                             " -D FA_MQ_ONLY -D FA_MQ_SPLIT_ONLY -D MQ_GQA=" + std::to_string(mq_gqa) +
+                             " -D MQ_NSG_SPLIT=" + std::to_string(nsg_split) +
+                             " -D FA_HEAD_SUB=" + std::to_string(head_sub) +
+                             (k_img ? " -D FA_MQ_KIMG" : "");
+    const std::string tag = std::string("fa f32_f16 mq_split narrow") + (k_img ? " k_img" : "") +
+                            " dk" + std::to_string(dk) +
+                            " gqa" + std::to_string(gqa) + " mq" + std::to_string(mq_gqa) +
+                            " hs" + std::to_string(head_sub) + " wg" + std::to_string(wg);
+    cl_program prog = build_program_from_source_ex(
+        backend_ctx->context, backend_ctx->device,
+        ggml_opencl_fa_kernel_src(FA_VARIANT_F32_F16).c_str(), opts,
+        /*fatal=*/false, tag.c_str(), backend_ctx->queue);
+    if (!prog) { failed.insert(fkey); return false; }
+
+    cl_int err;
+    cl_kernel k = clCreateKernel(prog,
+        k_img ? "flash_attn_f32_f16_q1_vec_mq_split_k_img" : "flash_attn_f32_f16_q1_vec_mq_split", &err);
+    if (err != CL_SUCCESS) { clReleaseProgram(prog); failed.insert(fkey); return false; }
+    if (!ggml_opencl_fa_kernel_fits_wg(backend_ctx, k, wg, tag.c_str(), dk, dv)) {
+        clReleaseKernel(k);
+        clReleaseProgram(prog);
+        failed.insert(fkey);
+        return false;
+    }
+    target[key]                       = k;
+    backend_ctx->fa.mq_narrow_wg[key] = (int) wg;
+    backend_ctx->fa.mq_narrow_hs[key] = head_sub;
+    ggml_opencl_log_fa_kernel_spill(backend_ctx, k, tag.c_str(), dk, dv);
+    clReleaseProgram(prog);
+    return true;
+}
+
 // Compile one (variant, dk, dv); memoised. false = compiler rejected.
 static bool ggml_opencl_ensure_fa_variant(ggml_backend_opencl_context * backend_ctx, int dk, int dv, ggml_opencl_fa_variant variant) {
     const std::pair<int, int> dk_dv = {dk, dv};
@@ -7766,10 +7897,24 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                     return false;
                 }
                 if (q->ne[1] == 1) {
-                    // DK=512 decode is bandwidth-bound and slower on the GPU
-                    // than on the CPU; decline it here so it runs on the CPU.
-                    // Prefill (n_q > 1) stays on the GPU.
-                    return false;
+                    // Declining DK=512 decode is NOT free: it makes every
+                    // global-attention layer a CPU island whose K and V views
+                    // (8.4 MB each at n_kv=4096) are copied device->host every
+                    // token - 17 graph splits against 3, and ~13 ms/token of
+                    // host time on gemma-4-E4B. It was still the better trade
+                    // while the only DK=512 decode kernel was q1, which holds
+                    // 2 KB/work-item of o_acc at DV=512 and spills it. With the
+                    // DV-split q1_vec and the KV-head-coalescing split kernel
+                    // (both built in their own minimal programs below) keeping
+                    // it on the GPU wins 44-61% tg at depth on the X2-90 and
+                    // 34-36% on the A8X. Opt out: GGML_OPENCL_FA_DK512_DECODE=0.
+                    static const char * dk512_env = getenv("GGML_OPENCL_FA_DK512_DECODE");
+                    if (dk512_env != NULL && dk512_env[0] == '0') {
+                        return false;
+                    }
+                    if (!ggml_opencl_ensure_fa_f32_f16_vec_512(backend_ctx)) {
+                        return false;
+                    }
                 } else {
                     // prefill, BM-tile in its own FA_PREFILL_ONLY program
                     if (!ggml_opencl_ensure_fa_f32_f16_prefill_512(backend_ctx, /*split=*/false)) {
@@ -14811,6 +14956,13 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
     } else if (is_mixed) {
         ggml_opencl_ensure_fa_variant(backend_ctx, d_head_q, d_head_v, FA_VARIANT_F32_F16);
         if (fa_decode_only_512) {
+            // DK=512 decode: q1_vec lives in its own FA_VEC_ONLY program (the
+            // shared decode program must drop it to stay under the compiler's
+            // host-memory ceiling). Without it decode falls back to q1, which
+            // spills 2 KB/work-item of o_acc at DV=512.
+            if (n_q == 1) {
+                ggml_opencl_ensure_fa_f32_f16_vec_512(backend_ctx);
+            }
             // DK=512: the BM-tile prefill kernels are specifically compiled from
             // FA_PREFILL_ONLY
             if (n_q > 1) {
@@ -14840,6 +14992,52 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
         }
     } else {
         ggml_opencl_ensure_fa_variant(backend_ctx, d_head_q, d_head_v, FA_VARIANT_F32);
+    }
+
+    // Narrow (one-kernel) MQ split programs for the shapes where the shared
+    // program cannot serve decode: gemma-4's DK=512 global layers (the MQ
+    // family does not fit the compiler there) and its DK=256 gqa=8 SWA layers
+    // (the stock g8 kernel needs a 192-thread workgroup, which the X2-90
+    // refuses per-kernel). Both otherwise fall back to a per-query-head kernel
+    // that re-reads the KV cache gqa times.
+    if (n_q == 1 && is_mixed && d_head_q == d_head_v &&
+        (d_head_q == 512 || d_head_q == 256) && n_head_kv > 0) {
+        const int gqa = n_head / n_head_kv;
+        if (gqa == 4 || gqa == 8) {
+            // hs/nsg defaults are per-shape measurements on the X2-90; the env
+            // knobs exist to re-tune them elsewhere. DK=256 gqa=8 must stay at
+            // a 128-thread workgroup - the stock 192-thread g8 kernel is what
+            // the X2-90 refuses per-kernel.
+            int hs  = (d_head_q == 512) ? ((gqa == 8) ? 4 : 1) : ((gqa == 8) ? 2 : 1);
+            int nsg = (d_head_q == 256 && gqa == 8) ? 2 : 4;
+            static const int hs_env  = []{ const char * e = getenv("GGML_OPENCL_FA_MQN_HS");
+                                           return (e && e[0]) ? atoi(e) : 0; }();
+            static const int nsg_env = []{ const char * e = getenv("GGML_OPENCL_FA_MQN_NSG");
+                                           return (e && e[0]) ? atoi(e) : 0; }();
+            if (hs_env  > 0) hs  = hs_env;
+            if (nsg_env > 0) nsg = nsg_env;
+            // K through the texture cache (image1d_buffer_t) instead of a plain
+            // buffer. Measured on the X2-90 (palindromed, non-overlapping):
+            // E4B (gqa=4, head_sub=1) +3.5% @d4096 / +3.8% @d8192, but E2B
+            // (gqa=8, head_sub=4) -4.5% / -9.3%. The split tracks head_sub: with
+            // head_sub > 1 every KV row is re-read by that many workgroups, and
+            // the texture path's per-access latency is paid on each re-read
+            // instead of being amortised over one streaming pass. So enable it
+            // only where one workgroup owns the whole gqa group.
+            // GGML_OPENCL_FA_MQN_KIMG=0/1 forces it either way.
+            static const int mqn_kimg_env = []{
+                const char * e = getenv("GGML_OPENCL_FA_MQN_KIMG");
+                if (e == NULL || e[0] == 0) return -1;
+                return (e[0] != '0') ? 1 : 0;
+            }();
+            const bool mqn_kimg = (mqn_kimg_env >= 0) ? (mqn_kimg_env == 1) : (hs == 1);
+            if (gqa % hs == 0) {
+                ggml_opencl_ensure_fa_mq_narrow(backend_ctx, d_head_q, d_head_v, gqa, hs, nsg, false);
+                if (mqn_kimg) {
+                    ggml_opencl_ensure_fa_mq_narrow(backend_ctx, d_head_q, d_head_v, gqa, hs, nsg, true);
+                }
+            }
+        }
     }
 
     const std::pair<int, int> dk_dv = {d_head_q, d_head_v};
@@ -15152,10 +15350,26 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
             const char * e = getenv("GGML_OPENCL_FD_MIN_N_KV_MQ");
             return (e && e[0]) ? atoi(e) : FD_MIN_N_KV;
         }();
+        // A shape with a narrow (purpose-built) MQ kernel carries its own,
+        // much lower n_kv floor. Those kernels exist only for shapes whose
+        // alternative is a per-query-head kernel re-reading the KV cache gqa
+        // times, so the KV-sharing win starts well below the split-tuned
+        // FD_MIN_N_KV -- and gemma-4's sliding window caps n_kv at 1024/256 on
+        // most layers, which would otherwise never reach any MQ route. Scoped
+        // to those shapes so no other model's decode routing changes.
+        static const int mq_narrow_min_n_kv = []{
+            const char * e = getenv("GGML_OPENCL_FA_MQN_MIN_N_KV");
+            return (e && e[0]) ? atoi(e) : 128;
+        }();
+        const bool have_mq_narrow =
+            backend_ctx->fa.mq_narrow.count({d_head_q, d_head_v, gqa_ratio_dispatch}) > 0;
+        const int mq_n_kv_floor = have_mq_narrow
+            ? std::min(fd_min_n_kv_mq, mq_narrow_min_n_kv)
+            : fd_min_n_kv_mq;
         if (mq_enabled && mq_kv_ok && nq_in_vec_range && !is_causal &&
             backend_ctx->gpu_family != INTEL &&
             !use_local_tile &&
-            n_kv >= fd_min_n_kv_mq &&
+            n_kv >= mq_n_kv_floor &&
             backend_ctx->fa.f32_merge.count(dk_dv) > 0) {
             if (nq1_only && lmq_on && is_mixed && d_head_q == 128 && d_head_v == 128 &&
                 gqa_ratio_dispatch == 8 &&
@@ -15177,6 +15391,21 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
                 use_fd_mq   = true;
                 fd_mq_wg    = 128;
                 fd_head_sub = 2;
+            // Narrow one-kernel MQ split program (gemma-4 DK=512 global layers
+            // and DK=256 gqa=8 SWA layers). Carries its own workgroup size and
+            // FA_HEAD_SUB, both chosen when it was built.
+            } else if (nq1_only && is_mixed &&
+                backend_ctx->fa.mq_narrow.count({d_head_q, d_head_v, gqa_ratio_dispatch}) > 0) {
+                const std::tuple<int, int, int> nk = {d_head_q, d_head_v, gqa_ratio_dispatch};
+                if (backend_ctx->fa.mq_narrow_k_img.count(nk) > 0) {
+                    fd_k_split   = backend_ctx->fa.mq_narrow_k_img.at(nk);
+                    use_fa_k_img = true;
+                } else {
+                    fd_k_split   = backend_ctx->fa.mq_narrow.at(nk);
+                }
+                use_fd_mq   = true;
+                fd_mq_wg    = (size_t) backend_ctx->fa.mq_narrow_wg.at(nk);
+                fd_head_sub = backend_ctx->fa.mq_narrow_hs.at(nk);
             } else if (nq1_only && is_mixed && gqa_ratio_dispatch == 4 &&
                 ((d_head_q == 256 && d_head_v == 256) ||
                  (d_head_q == 128 && d_head_v == 128)) &&
@@ -15629,7 +15858,9 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
                     k_pixels, (size_t) backend_ctx->image_max_buffer_size);
             }
             if (k_img == nullptr) {
-                if (backend_ctx->fa.f32_f16_q1_vec_mq_split_gqa.count({d_head_q, d_head_v, gqa_ratio_dispatch}) > 0) {
+                if (backend_ctx->fa.mq_narrow.count({d_head_q, d_head_v, gqa_ratio_dispatch}) > 0) {
+                    k_split = backend_ctx->fa.mq_narrow.at({d_head_q, d_head_v, gqa_ratio_dispatch});
+                } else if (backend_ctx->fa.f32_f16_q1_vec_mq_split_gqa.count({d_head_q, d_head_v, gqa_ratio_dispatch}) > 0) {
                     k_split = backend_ctx->fa.f32_f16_q1_vec_mq_split_gqa.at({d_head_q, d_head_v, gqa_ratio_dispatch});
                 } else if (gqa_ratio_dispatch == 4 &&
                     backend_ctx->fa.f32_f16_q1_vec_mq_split.count(dk_dv) > 0) {
