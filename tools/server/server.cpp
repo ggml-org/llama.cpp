@@ -490,6 +490,7 @@ int llama_server(common_params & params, int argc, char ** argv) {
     // check the string to also handle the .sock case
     if (string_ends_with(ctx_http.listening_address, ":8080")) {
         SRV_WRN("%s", "NOTICE: server default port will be changed to :6631 in a future release\n");
+        SRV_WRN("%s", "        ref: https://github.com/ggml-org/llama.cpp/pull/26508\n");
     }
 
     if (is_router_server) {
