@@ -82,7 +82,7 @@
 				<div class="relative w-full">
 					<Input
 						id={field.key}
-						type={field.isPositiveInteger ? 'number' : 'text'}
+						type={field.isPrivate ? 'password' : field.isPositiveInteger ? 'number' : 'text'}
 						{...field.isPositiveInteger ? { min: '1', step: '1' } : {}}
 						value={currentValue}
 						oninput={(e) => onConfigChange(field.key, e.currentTarget.value)}
