@@ -258,6 +258,22 @@ than 1 ms of start-to-end clock-offset drift by default. A legacy trace without
 `--clock-offset-ns`; do not reconstruct that offset after a reboot. A single
 legacy calibration has unknown boundary uncertainty and is labeled as such.
 
+For multi-GPU imbalance, preserve a per-agent view after generating the main
+summary:
+
+```bash
+scripts/dsv4-rocm/analyze-trace-agents.py "$run_dir" \
+  --json "$run_dir/measured-region-agents.json" \
+  | tee "$run_dir/measured-region-agents.txt"
+```
+
+This maps rocprof KFD agents to PCI BDFs through the run's `agent_info.csv` and
+reports measured-region all-kernel sums plus conservative kernel-name-match
+families and copy endpoints. Name matches overlap and are not operation-level
+proof. Durations are clipped and then summed over queues; they expose imbalance
+but do not by themselves prove PCIe causality or
+link bandwidth.
+
 ## Summarize existing output
 
 ```bash
