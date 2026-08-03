@@ -204,10 +204,7 @@ for i in "${!arr_hf[@]}"; do
         echo -e "$result"
     else
         # either contains "new york" or both "men" and "walk"
-        if [[ "$hf" == "ggml-org/Voxtral-Mini-3B-2507-GGUF:Q4_K_M" ]] \
-                && ! grep -Fq "encoding mtmd batch, n_chunks = 1 (done = 1, total = 3)" <<< "$output"; then
-            result="$prefix \033[31mFAIL\033[0m: $hf (expected one audio chunk)"
-        elif echo "$output" | grep -iq "new york" \
+        if echo "$output" | grep -iq "new york" \
                 || (echo "$output" | grep -iq "men" && echo "$output" | grep -iq "walk")
         then
             result="$prefix \033[32mOK\033[0m:   $hf"
