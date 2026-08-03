@@ -274,6 +274,33 @@ proof. Durations are clipped and then summed over queues; they expose imbalance
 but do not by themselves prove PCIe causality or
 link bandwidth.
 
+## Production MTP validation
+
+After the main-model PP controls pass, exercise the accepted stack with the
+production context/KV/batch settings and the Q4 MTP draft model:
+
+```bash
+timeout --signal=TERM --kill-after=30s 2400s env \
+GGML_HIP_RDNA2_MMQ_J=16 GGML_HIP_RDNA2_HC_MIXES=1 \
+DSV4_OUTER_TIMEOUT=2400 \
+scripts/dsv4-rocm/run-production-mtp-validation.sh
+```
+
+The runner holds the shared GPU lock, rejects active ROCm processes again
+immediately before each server launch, uses a 262144-token unified F16 KV
+context with batch/ubatch 512/256, and compares a fresh main-only server with a
+fresh MTP server (`draft-mtp`, Q4_0, n-max 3, ROCm0+ROCm1). It fully hashes the
+main shards, draft model, server/DSOs, corpus, and its embedded request client.
+The fixed request processes the engineering proxy before generating 128 tokens.
+Content and token IDs must match exactly; the MTP arm must report nonzero draft
+attempts and drafted tokens. PP and TG timings plus draft acceptance are one
+matched main-then-MTP observation, not a stable speed claim.
+
+Default output is a new `$HOME/llama-jobs/dsv4-production-mtp-*` directory. The
+outer timeout includes model hashing/loading; the request itself is capped at
+five minutes, so model preparation remains outside the measured PP/TG fields.
+Do not use production port 8080.
+
 ## Summarize existing output
 
 ```bash
