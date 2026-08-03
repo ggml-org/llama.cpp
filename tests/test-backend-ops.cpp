@@ -6949,7 +6949,7 @@ struct test_tessera_paged_attn : public test_case {
         ggml_set_name(v, "tessera_paged_v");
         ggml_set_name(map, "tessera_paged_map");
 
-        ggml_tensor * out = ggml_tessera_paged_attn(ctx, q, k, v, map, 1.0f/sqrtf(32.0f));
+        ggml_tensor * out = ggml_tessera_paged_attn(ctx, q, k, v, map, 1.0f/sqrtf(32.0f), v_trans);
         ggml_set_name(out, "out");
         return out;
     }

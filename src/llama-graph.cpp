@@ -3071,7 +3071,9 @@ ggml_tensor * llm_graph_context::build_attn(
         q = ggml_permute(ctx0, q, 0, 2, 1, 3); // [d, token, q_head, stream]
         k = mctx_cur->get_k_paged(ctx0, il);
         v = mctx_cur->get_v_paged(ctx0, il);
-        cur = ggml_tessera_paged_attn(ctx0, q, k, v, inp->get_tessera_page_map(), kq_scale);
+        // pass the cache's true V layout explicitly: the op can no longer infer
+        // it from shapes (ambiguous when head_dim == n_kv, e.g. SWA caches).
+        cur = ggml_tessera_paged_attn(ctx0, q, k, v, inp->get_tessera_page_map(), kq_scale, mctx_cur->is_v_trans());
         cur = ggml_reshape_2d(ctx0, cur, cur->ne[0]*cur->ne[1], cur->ne[2]*cur->ne[3]);
         cb(cur, "tessera_paged_kqv_out", il);
     } else {
@@ -3348,7 +3350,9 @@ ggml_tensor * llm_graph_context::build_attn(
         q = ggml_permute(ctx0, q, 0, 2, 1, 3);
         k = mctx_cur->get_k_paged(ctx0, il);
         v = mctx_cur->get_v_paged(ctx0, il);
-        cur = ggml_tessera_paged_attn(ctx0, q, k, v, inp->get_tessera_page_map(is_swa), kq_scale);
+        // pass the cache's true V layout explicitly: the op can no longer infer
+        // it from shapes (ambiguous when head_dim == n_kv, e.g. SWA caches).
+        cur = ggml_tessera_paged_attn(ctx0, q, k, v, inp->get_tessera_page_map(is_swa), kq_scale, mctx_cur->is_v_trans());
         cur = ggml_reshape_2d(ctx0, cur, cur->ne[0]*cur->ne[1], cur->ne[2]*cur->ne[3]);
         cb(cur, "tessera_paged_kqv_out", il);
     } else {

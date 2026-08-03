@@ -5475,16 +5475,17 @@ struct ggml_tensor * ggml_tessera_paged_attn(
         struct ggml_tensor  * k,
         struct ggml_tensor  * v,
         struct ggml_tensor  * page_map,
-        float                 scale) {
+                  float       scale,
+                  bool        v_trans) {
     GGML_ASSERT(q->type == GGML_TYPE_F32);
     GGML_ASSERT((k->type == GGML_TYPE_F16 || k->type == GGML_TYPE_F32 || k->type == GGML_TYPE_Q8_0 || k->type == GGML_TYPE_Q2_K || k->type == GGML_TYPE_Q4_0 || k->type == GGML_TYPE_Q5_0) &&
                 (v->type == GGML_TYPE_F16 || v->type == GGML_TYPE_F32 || v->type == GGML_TYPE_Q8_0 || v->type == GGML_TYPE_Q2_K || v->type == GGML_TYPE_Q4_0 || v->type == GGML_TYPE_Q5_0));
     GGML_ASSERT(page_map->type == GGML_TYPE_I32);
     GGML_ASSERT(q->ne[0] == k->ne[0]);
-    const bool v_trans = v->ne[0] == k->ne[2];
     GGML_ASSERT(k->ne[1] == v->ne[1]);
     GGML_ASSERT(k->ne[3] == v->ne[3]);
     GGML_ASSERT(v_trans || k->ne[2] == v->ne[2]);
+    GGML_ASSERT(v_trans ? v->ne[0] == k->ne[2] : v->ne[0] == k->ne[0]);
     GGML_ASSERT(q->ne[2] % k->ne[1] == 0);
     GGML_ASSERT(page_map->ne[1] == q->ne[3]);
     // page_map is the logical sequence.  K/V may have more rows because they
