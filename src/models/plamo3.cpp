@@ -13,7 +13,7 @@ void llama_model_plamo3::load_arch_hparams(llama_model_loader & ml) {
         hparams.swa_type = LLAMA_SWA_TYPE_NONE;
     }
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 24: type = LLM_TYPE_2B; break;
         default: type = LLM_TYPE_UNKNOWN;
     }

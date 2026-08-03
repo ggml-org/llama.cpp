@@ -22,7 +22,7 @@ void llama_model_modern_bert::load_arch_hparams(llama_model_loader & ml) {
         hparams.llm_ffn_op = llm_ffn_op_type_from_string(hidden_act, LLM_FFN_GEGLU);
     }
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 12:
             type = LLM_TYPE_47M; break; // granite-embedding-small
         case 22:

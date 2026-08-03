@@ -1,6 +1,9 @@
 // See https://svelte.dev/docs/kit/types#app.d.ts
 // for information about these interfaces
 
+import 'vite-plugin-pwa/pwa-assets';
+import 'vite-plugin-pwa/svelte';
+
 // Import chat types from dedicated module
 
 import type {
@@ -16,6 +19,10 @@ import type {
 	ApiErrorResponse,
 	ApiLlamaCppServerProps,
 	ApiModelDataEntry,
+	ApiModelLoadStage,
+	ApiModelsSseProgress,
+	ApiModelsSseData,
+	ApiModelsSseEvent,
 	ApiModelListResponse,
 	ApiProcessingState,
 	ApiRouterModelMeta,
@@ -49,6 +56,7 @@ import type {
 	// Model types
 	ModelModalities,
 	ModelOption,
+	ModelLoadProgress,
 	// Settings types
 	SettingsChatServiceOptions,
 	SettingsConfigValue,
@@ -80,6 +88,10 @@ declare global {
 		ApiErrorResponse,
 		ApiLlamaCppServerProps,
 		ApiModelDataEntry,
+		ApiModelLoadStage,
+		ApiModelsSseProgress,
+		ApiModelsSseData,
+		ApiModelsSseEvent,
 		ApiModelListResponse,
 		ApiProcessingState,
 		ApiRouterModelMeta,
@@ -117,6 +129,7 @@ declare global {
 		// Model types
 		ModelModalities,
 		ModelOption,
+		ModelLoadProgress,
 		// Settings types
 		SettingsChatServiceOptions,
 		SettingsConfigValue,

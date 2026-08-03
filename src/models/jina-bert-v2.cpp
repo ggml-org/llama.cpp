@@ -4,7 +4,7 @@ void llama_model_jina_bert_v2::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS,    hparams.f_norm_eps);
     hparams.f_max_alibi_bias = 8.0f;
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 4:  type = LLM_TYPE_33M;  break; // jina-embeddings-small
         case 12: type = LLM_TYPE_137M; break; // jina-embeddings-base
         default: type = LLM_TYPE_UNKNOWN;

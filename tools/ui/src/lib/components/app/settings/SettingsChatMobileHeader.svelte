@@ -1,7 +1,8 @@
 <script lang="ts">
+	import { ICON_CLASS_DEFAULT } from '$lib/constants/css-classes';
 	import { Settings, ChevronLeft, ChevronRight } from '@lucide/svelte';
 	import { onMount, tick } from 'svelte';
-	import type { SettingsSection, SettingsSectionTitle } from '$lib/constants';
+	import type { SettingsSection, SettingsSectionTitle } from '$lib/types';
 	import { useScrollCarousel } from '$lib/hooks/use-scroll-carousel.svelte';
 
 	interface Props {
@@ -46,7 +47,7 @@
 				onclick={carousel.scrollLeft}
 				aria-label="Scroll left"
 			>
-				<ChevronLeft class="h-4 w-4" />
+				<ChevronLeft class={ICON_CLASS_DEFAULT} />
 			</button>
 
 			<div
@@ -69,7 +70,7 @@
 									carousel.scrollToCenter(e.currentTarget as HTMLElement);
 								}}
 							>
-								<section.icon class="h-4 w-4 flex-shrink-0" />
+								<section.icon class="{ICON_CLASS_DEFAULT} flex-shrink-0" />
 								<span>{section.title}</span>
 							</a>
 						{:else}
@@ -85,7 +86,7 @@
 									carousel.scrollToCenter(e.currentTarget as HTMLElement);
 								}}
 							>
-								<section.icon class="h-4 w-4 flex-shrink-0" />
+								<section.icon class="{ICON_CLASS_DEFAULT} flex-shrink-0" />
 								<span>{section.title}</span>
 							</button>
 						{/if}
@@ -100,7 +101,7 @@
 				onclick={carousel.scrollRight}
 				aria-label="Scroll right"
 			>
-				<ChevronRight class="h-4 w-4" />
+				<ChevronRight class={ICON_CLASS_DEFAULT} />
 			</button>
 		</div>
 	</div>

@@ -30,7 +30,7 @@ void llama_model_afmoe::load_arch_hparams(llama_model_loader & ml) {
         hparams.expert_gating_func = LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID;
     }
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 56: type = LLM_TYPE_6B; break;
         case 32: type = LLM_TYPE_26B; break;
         default: type = LLM_TYPE_UNKNOWN;

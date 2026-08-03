@@ -33,13 +33,15 @@ inline float block_q_6_K_dot_y_flat(
     global uchar * blk_qh,
     global char  * blk_scales,
     global half  * blk_d,
-    global float * yy,
     int ib,
     int ip,
     int is,
-    int l0
+    int l0,
+    float4 y0,
+    float4 y1,
+    float4 y2,
+    float4 y3
 ) {
-    int y_offset   = 128*ip + l0;
     int q_offset_l =  64*ip + l0;
     int q_offset_h =  32*ip + l0;
 
@@ -48,36 +50,28 @@ inline float block_q_6_K_dot_y_flat(
     global uchar * qh = blk_qh     + ib*64 + q_offset_h;
     global char  * sc = blk_scales + ib*16 + is;
 
-    global float * y = yy + ib * QK_K + y_offset;
-
     float dall = blk_d[ib];
 
-    float  sumf = 0;
-    float4 sums = {0.f, 0.f, 0.f, 0.f};
+    // Vectorized loads: 3 uchar4 weight loads instead of 12 scalar byte reads.
+    // q_offset_l/h are 4-aligned, so these are aligned vector loads.
+    uchar4 q1v = vload4(0, q1);
+    uchar4 q2v = vload4(0, q2);
+    uchar4 qhv = vload4(0, qh);
 
-    sums.s0 += y[0+ 0] * ((float)((q1[0] & 0xF) | ((qh[0] & Q6_K_MASK1) << 4)) - 32.f);
-    sums.s1 += y[0+32] * ((float)((q2[0] & 0xF) | ((qh[0] & Q6_K_MASK2) << 2)) - 32.f);
-    sums.s2 += y[0+64] * ((float)((q1[0]  >> 4) | ((qh[0] & Q6_K_MASK3) << 0)) - 32.f);
-    sums.s3 += y[0+96] * ((float)((q2[0]  >> 4) | ((qh[0] & Q6_K_MASK4) >> 2)) - 32.f);
+    int4 q1i = convert_int4(q1v);
+    int4 q2i = convert_int4(q2v);
+    int4 qhi = convert_int4(qhv);
 
-    sums.s0 += y[1+ 0] * ((float)((q1[1] & 0xF) | ((qh[1] & Q6_K_MASK1) << 4)) - 32.f);
-    sums.s1 += y[1+32] * ((float)((q2[1] & 0xF) | ((qh[1] & Q6_K_MASK2) << 2)) - 32.f);
-    sums.s2 += y[1+64] * ((float)((q1[1]  >> 4) | ((qh[1] & Q6_K_MASK3) << 0)) - 32.f);
-    sums.s3 += y[1+96] * ((float)((q2[1]  >> 4) | ((qh[1] & Q6_K_MASK4) >> 2)) - 32.f);
+    // Reconstruct the four 6-bit weight groups (low/high nibble of ql OR'd with the
+    // matching 2-bit plane of qh), same arithmetic as the scalar version, then dot()
+    // against the cached activation lanes.
+    float4 w0 = convert_float4((q1i & 0xF) | ((qhi & Q6_K_MASK1) << 4)) - 32.f;
+    float4 w1 = convert_float4((q2i & 0xF) | ((qhi & Q6_K_MASK2) << 2)) - 32.f;
+    float4 w2 = convert_float4((q1i >> 4)  | ((qhi & Q6_K_MASK3)     )) - 32.f;
+    float4 w3 = convert_float4((q2i >> 4)  | ((qhi & Q6_K_MASK4) >> 2)) - 32.f;
 
-    sums.s0 += y[2+ 0] * ((float)((q1[2] & 0xF) | ((qh[2] & Q6_K_MASK1) << 4)) - 32.f);
-    sums.s1 += y[2+32] * ((float)((q2[2] & 0xF) | ((qh[2] & Q6_K_MASK2) << 2)) - 32.f);
-    sums.s2 += y[2+64] * ((float)((q1[2]  >> 4) | ((qh[2] & Q6_K_MASK3) << 0)) - 32.f);
-    sums.s3 += y[2+96] * ((float)((q2[2]  >> 4) | ((qh[2] & Q6_K_MASK4) >> 2)) - 32.f);
-
-    sums.s0 += y[3+ 0] * ((float)((q1[3] & 0xF) | ((qh[3] & Q6_K_MASK1) << 4)) - 32.f);
-    sums.s1 += y[3+32] * ((float)((q2[3] & 0xF) | ((qh[3] & Q6_K_MASK2) << 2)) - 32.f);
-    sums.s2 += y[3+64] * ((float)((q1[3]  >> 4) | ((qh[3] & Q6_K_MASK3) << 0)) - 32.f);
-    sums.s3 += y[3+96] * ((float)((q2[3]  >> 4) | ((qh[3] & Q6_K_MASK4) >> 2)) - 32.f);
-
-    sumf += dall * (sums.s0 * sc[0] + sums.s1 * sc[2] + sums.s2 * sc[4] + sums.s3 * sc[6]);
-
-    return sumf;
+    return dall * (dot(y0, w0) * sc[0] + dot(y1, w1) * sc[2] +
+                   dot(y2, w2) * sc[4] + dot(y3, w3) * sc[6]);
 }
 
 #undef N_DST
@@ -89,7 +83,7 @@ inline float block_q_6_K_dot_y_flat(
 #define N_SIMDGROUP 2
 #define N_SIMDWIDTH 16
 #elif defined (ADRENO_GPU)
-#define N_DST 4
+#define N_DST 16
 #define N_SIMDGROUP 2
 #define N_SIMDWIDTH 64
 #endif
@@ -146,49 +140,39 @@ kernel void kernel_mul_mv_q6_K_f32_flat(
     global half  * blk_d      = (global half  *) src0_d  + offset_src0_d;
     global float * yy         = (global float *) src1    + r1*ne10 + im*ne00*ne1;
 
-    int tid = get_sub_group_local_id()/BLOCK_STRIDE; // first block_stride groups have tid=0
-    int ix  = get_sub_group_local_id()%BLOCK_STRIDE; // first block is 0..block_stride-1
+    int tid = get_sub_group_local_id()%(N_SIMDWIDTH/BLOCK_STRIDE); // within-super-block part, 0..15
+    int ix  = get_sub_group_local_id()/(N_SIMDWIDTH/BLOCK_STRIDE); // super-block selector, 0..BLOCK_STRIDE-1
     int ip  = tid/8;   // first or second half of (super) block (0 or 1)
     int il  = tid%8;   // each half has 8 parts, one per scale
     int n   = 4;       // 4 scales at a time (and 4 sums)
     int l0  = n*il;    // offset into half-block, 0..28
     int is  = 8*ip + l0/16; // 0, 1, 8, 9
 
-    float4 sumf = 0;
+    float sumf[N_DST];
+    for (int row = 0; row < N_DST; row++) {
+        sumf[row] = 0.f;
+    }
 
     for (int ib = ix; ib < nb; ib += BLOCK_STRIDE) {
-        if (first_row + 0 < ne01) {
-            sumf.s0 += block_q_6_K_dot_y_flat(blk_ql + 0*nb*128, blk_qh + 0*nb*64, blk_scales + 0*nb*16, blk_d + 0*nb, yy, ib, ip, is, l0);
-        }
-        if (first_row + 1 < ne01) {
-            sumf.s1 += block_q_6_K_dot_y_flat(blk_ql + 1*nb*128, blk_qh + 1*nb*64, blk_scales + 1*nb*16, blk_d + 1*nb, yy, ib, ip, is, l0);
-        }
-        if (first_row + 2 < ne01) {
-            sumf.s2 += block_q_6_K_dot_y_flat(blk_ql + 2*nb*128, blk_qh + 2*nb*64, blk_scales + 2*nb*16, blk_d + 2*nb, yy, ib, ip, is, l0);
-        }
-        if (first_row + 3 < ne01) {
-            sumf.s3 += block_q_6_K_dot_y_flat(blk_ql + 3*nb*128, blk_qh + 3*nb*64, blk_scales + 3*nb*16, blk_d + 3*nb, yy, ib, ip, is, l0);
+        global float * y = yy + ib * QK_K + 128*ip + l0;
+        float4 y0 = vload4(0, y +  0);
+        float4 y1 = vload4(0, y + 32);
+        float4 y2 = vload4(0, y + 64);
+        float4 y3 = vload4(0, y + 96);
+
+        for (int row = 0; row < N_DST; row++) {
+            if (first_row + row < ne01) {
+                sumf[row] += block_q_6_K_dot_y_flat(
+                    blk_ql + row*nb*128, blk_qh + row*nb*64, blk_scales + row*nb*16, blk_d + row*nb,
+                    ib, ip, is, l0, y0, y1, y2, y3);
+            }
         }
     }
 
-    float4 tot = (float4)(
-        sub_group_reduce_add(sumf.s0),
-        sub_group_reduce_add(sumf.s1),
-        sub_group_reduce_add(sumf.s2),
-        sub_group_reduce_add(sumf.s3)
-    );
-    if (get_sub_group_local_id() == 0) {
-        if (first_row + 0 < ne01) {
-            dst[r1*ne0 + im*ne0*ne1 + first_row + 0] = tot.s0;
-        }
-        if (first_row + 1 < ne01) {
-            dst[r1*ne0 + im*ne0*ne1 + first_row + 1] = tot.s1;
-        }
-        if (first_row + 2 < ne01) {
-            dst[r1*ne0 + im*ne0*ne1 + first_row + 2] = tot.s2;
-        }
-        if (first_row + 3 < ne01) {
-            dst[r1*ne0 + im*ne0*ne1 + first_row + 3] = tot.s3;
+    for (int row = 0; row < N_DST; row++) {
+        float tot = sub_group_reduce_add(sumf[row]);
+        if (get_sub_group_local_id() == 0 && first_row + row < ne01) {
+            dst[r1*ne0 + im*ne0*ne1 + first_row + row] = tot;
         }
     }
 }

@@ -29,6 +29,13 @@ export default ts.config(
 			// This app uses hash-based routing (#/) where resolve() from $app/paths does not apply
 			'svelte/no-navigation-without-resolve': 'off',
 
+			// Snippet bodies often ignore one or more of the parent's params
+			// (e.g. `{#snippet children(_meta, ctx)}` when only ctx is read).
+			'@typescript-eslint/no-unused-vars': [
+				'error',
+				{ argsIgnorePattern: '^_', varsIgnorePattern: '^_' }
+			],
+
 			// Enforce empty line at end of file
 			'eol-last': 'error'
 		}
@@ -46,7 +53,15 @@ export default ts.config(
 	},
 	{
 		// Exclude generated build output and Storybook files from ESLint
-		ignores: ['dist/**', 'build/**', '.svelte-kit/**', 'test-results/**', '.storybook/**/*']
+		ignores: [
+			'dist/**',
+			'build/**',
+			'.svelte-kit/**',
+			'test-results/**',
+			'.storybook/**/*',
+			'src/lib/services/sandbox-worker.js',
+			'src/lib/vendors/**'
+		]
 	},
 	storybook.configs['flat/recommended']
 );

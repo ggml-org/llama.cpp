@@ -3,6 +3,7 @@
 #include "ggml-impl.h"
 #include "ggml.h"
 
+#include <cstdlib>
 #include <cstring>
 #include <openvino/runtime/intel_gpu/ocl/ocl.hpp>
 #include <openvino/runtime/intel_npu/level_zero/level_zero.hpp>
@@ -22,7 +23,38 @@ void ggml_openvino_device_config::init() {
     if (initialized) {
         return;
     }
-    device_name = getenv("GGML_OPENVINO_DEVICE") ? getenv("GGML_OPENVINO_DEVICE") : "CPU";
+
+    // All recognized GGML_OPENVINO_* env vars. Their values are cached here
+    // once at backend init time and read back via ggml_openvino_getenv_str()
+    // (raw string) or ggml_openvino_getenv_int() (integer / boolean toggle).
+    static constexpr const char * env_var_names[] = {
+        // String values (use ggml_openvino_getenv_str)
+        "GGML_OPENVINO_DEVICE",
+        "GGML_OPENVINO_CACHE_DIR",
+        // Integer values (use ggml_openvino_getenv_int)
+        "GGML_OPENVINO_PREFILL_CHUNK_SIZE",
+        // Boolean toggles (treated as int flags via ggml_openvino_getenv_int)
+        "GGML_OPENVINO_STATEFUL_EXECUTION",
+        "GGML_OPENVINO_PROFILING",
+        "GGML_OPENVINO_DUMP_CGRAPH",
+        "GGML_OPENVINO_DUMP_IR",
+        "GGML_OPENVINO_DEBUG_INPUT",
+        "GGML_OPENVINO_DEBUG_OUTPUT",
+        "GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS",
+        "GGML_OPENVINO_ENABLE_CACHE",
+        "GGML_OPENVINO_DISABLE_CACHE",
+        "GGML_OPENVINO_DISABLE_KV_SLICE",
+        "GGML_OPENVINO_MANUAL_GQA_ATTN",
+    };
+
+    for (const char * const & env_var : env_var_names) {
+        auto * env = getenv(env_var);
+        if (env) {
+            environment_variables[env_var] = env;
+        }
+    }
+
+    device_name = ggml_openvino_getenv_str("GGML_OPENVINO_DEVICE", "CPU");
     auto available_devices = ov_singleton_core().get_available_devices();
     if (std::find(available_devices.begin(), available_devices.end(), device_name) == available_devices.end()) {
         GGML_LOG_WARN("GGML OpenVINO Backend: device %s is not available, fallback to CPU\n", device_name.c_str());
@@ -30,7 +62,7 @@ void ggml_openvino_device_config::init() {
     }
     is_npu = (device_name == "NPU");
 
-    auto * cache_dir = getenv("GGML_OPENVINO_CACHE_DIR");
+    const char * cache_dir = ggml_openvino_getenv_str("GGML_OPENVINO_CACHE_DIR");
     if (device_name == "NPU") {
         compile_config = {
             {"NPU_COMPILER_DYNAMIC_QUANTIZATION", "YES"   },
@@ -119,6 +151,23 @@ const std::string & ggml_openvino_get_device_name() {
     return ggml_openvino_get_device_config().device_name;
 }
 
+// Get the value of a GGML_OPENVINO_* env var as a string. Returns
+// default_value when the var is unset or set to an empty string.
+const char * ggml_openvino_getenv_str(const char * var, const char * default_value) {
+    auto & env_map = ggml_openvino_get_device_config().environment_variables;
+    auto it = env_map.find(var);
+    return (it == env_map.end() || it->second.empty()) ? default_value : it->second.c_str();
+}
+
+// Get the value of a GGML_OPENVINO_* env var as an int (via std::atoi).
+// Returns default_value (0) when the var is unset or empty. Used for both
+// integer settings (e.g. GGML_OPENVINO_PREFILL_CHUNK_SIZE) and boolean
+// toggles: "0" disables, any non-zero integer enables.
+int ggml_openvino_getenv_int(const char * var, int default_value) {
+    const char * v = ggml_openvino_getenv_str(var, nullptr);
+    return v ? std::atoi(v) : default_value;
+}
+
 // Check if running on NPU
 bool ggml_openvino_is_npu() {
     return ggml_openvino_get_device_config().is_npu;
@@ -173,7 +222,8 @@ std::optional<ExtraQuantType> ggml_openvino_get_requant_type(const ggml_tensor *
         return std::nullopt;
     }
     if (strncmp(tensor->name, "token_embd.weight", 17) == 0) {
-        return ((ggml_openvino_is_npu() && tensor->type == GGML_TYPE_Q6_K) ? ExtraQuantType::F16 : ExtraQuantType::Q8_0_C);
+        return ((ggml_openvino_is_npu() && tensor->type == GGML_TYPE_Q6_K) ? ExtraQuantType::F16 :
+                                                                             ExtraQuantType::Q8_0_C);
     }
     if (strncmp(tensor->name, "output.weight", 13) == 0) {
         return ExtraQuantType::Q8_0_C;
@@ -296,6 +346,10 @@ ggml_openvino_extracted_layout ggml_openvino_get_extracted_layout(const ggml_ten
 
     case GGML_TYPE_Q8_0:
         layout.is_symmetric = true;
+        break;
+
+    case GGML_TYPE_Q5_1:
+        // u8 weights (5-bit values), asymmetric (scale + zero point)
         break;
 
     case GGML_TYPE_Q6_K:

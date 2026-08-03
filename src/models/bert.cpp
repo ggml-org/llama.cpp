@@ -1,9 +1,9 @@
 #include "models.h"
 
 void llama_model_bert::load_arch_hparams(llama_model_loader & ml) {
-    ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS,    hparams.f_norm_eps);
+    ml.get_key(LLM_KV_ATTENTION_LAYERNORM_EPS, hparams.f_norm_eps);
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 3:
             type = LLM_TYPE_17M; break; // bge-micro
         case 6:

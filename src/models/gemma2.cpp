@@ -16,7 +16,7 @@ void llama_model_gemma2::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTN_LOGIT_SOFTCAPPING,      hparams.f_attn_logit_softcapping, false);
     ml.get_key(LLM_KV_FINAL_LOGIT_SOFTCAPPING,     hparams.f_final_logit_softcapping, false);
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 26: type = LLM_TYPE_2B; break;
         case 42: type = LLM_TYPE_9B; break;
         case 46: type = LLM_TYPE_27B; break;

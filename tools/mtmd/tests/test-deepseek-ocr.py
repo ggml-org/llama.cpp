@@ -9,6 +9,7 @@ its output, and holds them against the HF model's scores.
 
 import argparse
 import logging
+import re
 import subprocess
 import sys
 import unicodedata
@@ -28,6 +29,15 @@ class ModelSpec:
     mmproj_arg: str
     model_default: str
     mmproj_default: str
+    prompt: str = "Free OCR."
+    n_predict: int = 512
+    n_ctx: int | None = None
+    # Unlimited-OCR's "document parsing" prompt emits <|det|> grounding markup that
+    # the HF reference strips in result.md; drop it before scoring to match.
+    strip_grounding: bool = False
+    # v2/Unlimited loop on hard tiles; DRY caps it the way HF's
+    # no_repeat_ngram_size does. v1 scores fine without it.
+    dry: bool = False
 
 
 @dataclass
@@ -62,6 +72,24 @@ MODELS = {
         model_arg="--llama-model-2", mmproj_arg="--mmproj-2",
         model_default="gguf_models/deepseek-ai/deepseek-ocr-2-bf16.gguf",
         mmproj_default="gguf_models/deepseek-ai/mmproj-deepseek-ocr-2-bf16.gguf",
+        # v2 keeps generating past 512 on multi-tile; give it room to match the HF ref.
+        n_predict=2048,
+        dry=True,
+    ),
+    "unlimited": ModelSpec(
+        key="unlimited", label="Unlimited-OCR",
+        model_arg="--llama-model-unlimited", mmproj_arg="--mmproj-unlimited",
+        model_default="gguf_models/baidu/unlimited-ocr-bf16.gguf",
+        mmproj_default="gguf_models/baidu/mmproj-unlimited-ocr-bf16.gguf",
+        # "Free OCR." immediately emits EOS on this checkpoint; the HF reference
+        # (demo/unlimited_ocr_scores.py) uses "document parsing.", which grounds.
+        prompt="document parsing.",
+        # Grounding emits ~3x the tokens of plain OCR, so it needs a larger budget
+        # and context to reach the article body the ground truth covers.
+        n_predict=4096,
+        n_ctx=16384,
+        strip_grounding=True,
+        dry=True,
     ),
 }
 
@@ -70,7 +98,9 @@ CASES = [
         model_key="v1", label="single-view scan",
         image="tools/mtmd/test-1.jpeg",
         ground_truth="tools/mtmd/tests/test-1-ground-truth.txt",
-        hf_cer=0.3030, hf_chrf=67.52, cer_tol=0.02, chrf_tol=2.0,
+        # Fragile image: the HF ref itself swings ~0.286-0.314 across precision
+        # configs -- hence the wide tol. llama.cpp bf16 ~0.322/63.8.
+        hf_cer=0.3140, hf_chrf=67.57, cer_tol=0.04, chrf_tol=5.0,
     ),
     TestCase(
         model_key="v2", label="single-view scan",
@@ -82,7 +112,42 @@ CASES = [
         # is one pixel off and lands at ~0.69 instead.
         hf_cer=0.7761, hf_chrf=28.70, cer_tol=0.12, chrf_tol=8.0,
     ),
+    TestCase(
+        model_key="v1", label="multi-tile (dynamic resolution)",
+        image="tools/mtmd/tests/test-1-positive.png",
+        ground_truth="tools/mtmd/tests/test-1-ground-truth.txt",
+        # 429x806 -- 806 > 640 triggers the v1 "Gundam" path: (1,2) grid ->
+        # 2 local 640 tiles + 1 global 1024 view. Regression guard for the
+        # tiling preprocessor -- a broken tile path craters the score.
+        # hf_cer/hf_chrf are HF v1's measured scores -- it reads this clean crop exactly.
+        hf_cer=0.0000, hf_chrf=100.00, cer_tol=0.03, chrf_tol=3.0,
+    ),
+    TestCase(
+        model_key="v2", label="multi-tile (dynamic resolution)",
+        image="tools/mtmd/tests/test-1-positive.png",
+        ground_truth="tools/mtmd/tests/test-1-ground-truth.txt",
+        # 429x806 -- 806 > 768 triggers the v2 path: (1,2) grid ->
+        # 2 local 768 tiles + 1 global 1024 view = 545 image tokens.
+        hf_cer=0.0236, hf_chrf=97.05, cer_tol=0.03, chrf_tol=3.0,
+    ),
+    TestCase(
+        model_key="unlimited", label="single-view scan",
+        image="tools/mtmd/test-1.jpeg",
+        ground_truth="tools/mtmd/tests/test-1-ground-truth.txt",
+        # HF reference: Unlimited-OCR scoring (gundam, bf16) on this image/ground-truth.
+        # Decoder runs full MHA, not R-SWA; the band absorbs that gap + bf16 variance.
+        hf_cer=0.1869, hf_chrf=75.23, cer_tol=0.06, chrf_tol=6.0,
+    ),
 ]
+
+
+GROUNDING_TAG_RE = re.compile(r"<\|(ref|det)\|>.*?<\|/\1\|>", re.DOTALL)
+
+
+def strip_grounding(text: str) -> str:
+    """Drop <|ref|>..<|/ref|> / <|det|>..<|/det|> grounding markup, matching the
+    cleaned result.md the HF reference scores against."""
+    return GROUNDING_TAG_RE.sub("", text)
 
 
 def arg_dest(flag: str) -> str:
@@ -129,27 +194,32 @@ def compute_chrf(expected: str, ocr_out: str) -> float:
     return CHRF().sentence_score(ocr_out, [expected]).score
 
 
-def run_mtmd_cli(model_path, mmproj_path, image_path, bin_path) -> str:
+def run_mtmd_cli(spec: "ModelSpec", model_path, mmproj_path, image_path, bin_path) -> str:
     """Run mtmd-cli on the image and return its output."""
     cmd = [
         str(bin_path),
         "-m", str(model_path),
         "--mmproj", str(mmproj_path),
         "--image", str(image_path),
-        "-p", "Free OCR. ",
+        "-p", spec.prompt,
         "--chat-template", "deepseek-ocr",
         "--temp", "0",
         "--flash-attn", "off",  # match the HF "eager" attention reference
         "--no-warmup",
-        "-n", "512",  # cap loops on hard images (KV would otherwise fill)
+        "-n", str(spec.n_predict),  # cap loops on hard images (KV would otherwise fill)
+    ]
+    if spec.dry:
         # HF decodes with no_repeat_ngram_size; llama.cpp's analog is DRY.
         # Default DRY breakers include "\n", so they are cleared below.
-        "--dry-multiplier", "0.8",
-        "--dry-base", "1.75",
-        "--dry-allowed-length", "2",
-        "--dry-penalty-last-n", "-1",
-        "--dry-sequence-breaker", "none",
-    ]
+        cmd += [
+            "--dry-multiplier", "0.8",
+            "--dry-base", "1.75",
+            "--dry-allowed-length", "2",
+            "--dry-penalty-last-n", "-1",
+            "--dry-sequence-breaker", "none",
+        ]
+    if spec.n_ctx is not None:
+        cmd += ["-c", str(spec.n_ctx)]
     logger.debug(f"  command: {' '.join(cmd)}")
 
     try:
@@ -164,6 +234,8 @@ def run_mtmd_cli(model_path, mmproj_path, image_path, bin_path) -> str:
         raise RuntimeError(f"llama-mtmd-cli failed with code {result.returncode}")
 
     output = result.stdout.decode("utf-8", errors="replace").strip()
+    if spec.strip_grounding:
+        output = strip_grounding(output)
     if not output:
         raise RuntimeError("llama-mtmd-cli produced no output on stdout")
     logger.info(f"  output: {len(output)} chars")
@@ -193,7 +265,7 @@ def evaluate(case: "TestCase", expected: str, ocr_out: str) -> bool:
 
     logger.info("")
     logger.info("=" * 60)
-    logger.info("Free OCR evaluation:")
+    logger.info("OCR evaluation:")
     logger.info("=" * 60)
     logger.info(f"  CER               {cer:>7.4f}    (HF {case.hf_cer:.4f}, <= {case.cer_max:>7.4f}  -> {verdict(cer_pass)})")
     logger.info(f"  chrF (0-100)      {chrf:>7.2f}    (HF {case.hf_chrf:.2f}, >= {case.chrf_min:>7.2f}  -> {verdict(chrf_pass)})")
@@ -269,9 +341,9 @@ def main() -> int:
         expected = read_expected_text(ground_truth)
         logger.info(f"  Image: {case.image}")
         logger.info(f"  Expected text: {len(expected)} chars")
-        logger.info("  Running llama.cpp 'Free OCR'")
+        logger.info(f"  Running llama.cpp prompt {model_spec.prompt!r}")
         try:
-            ocr_out = run_mtmd_cli(model, mmproj, image, binary)
+            ocr_out = run_mtmd_cli(model_spec, model, mmproj, image, binary)
         except RuntimeError as e:
             logger.error(f"  Error: {e}")
             results[title] = False

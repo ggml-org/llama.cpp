@@ -132,14 +132,18 @@
 
 	async function handleExportConfirm(selectedConversations: DatabaseConversation[]) {
 		try {
-			const allData: ExportedConversations = await Promise.all(
+			const allData: ExportedConversation[] = await Promise.all(
 				selectedConversations.map(async (conv) => {
 					const messages = await conversationsStore.getConversationMessages(conv.id);
 					return { conv: $state.snapshot(conv), messages: $state.snapshot(messages) };
 				})
 			);
 
-			conversationsStore.downloadConversationFile(allData);
+			if (allData.length === 1) {
+				conversationsStore.downloadConversationFile(allData[0]);
+			} else {
+				conversationsStore.downloadConversationsArchive(allData);
+			}
 
 			exportedConversations = selectedConversations;
 			showExportSummary = true;
@@ -155,38 +159,24 @@
 		try {
 			const input = document.createElement('input');
 
+			// No `accept` filter: iOS resolves each entry to a UTI and has none for
+			// `.jsonl`, which greys out exported conversations in the file picker.
+			// `parseImportFile` detects the format from the file contents instead.
 			input.type = HtmlInputType.FILE;
-			input.accept = FileExtensionText.JSON;
 
 			input.onchange = async (e) => {
 				const file = (e.target as HTMLInputElement)?.files?.[0];
 				if (!file) return;
 
 				try {
-					const text = await file.text();
-					const parsedData = JSON.parse(text);
-					let importedData: ExportedConversations;
+					const importedData = await conversationsStore.parseImportFile(file);
 
-					if (Array.isArray(parsedData)) {
-						importedData = parsedData;
-					} else if (
-						parsedData &&
-						typeof parsedData === 'object' &&
-						'conv' in parsedData &&
-						'messages' in parsedData
-					) {
-						// Single conversation object
-						importedData = [parsedData];
-					} else {
-						throw new Error(
-							'Invalid file format: expected array of conversations or single conversation object'
-						);
+					if (importedData.length === 0) {
+						throw new Error('No conversations found in file');
 					}
 
 					fullImportData = importedData;
-					availableConversations = importedData.map(
-						(item: { conv: DatabaseConversation; messages: DatabaseMessage[] }) => item.conv
-					);
+					availableConversations = importedData.map((item) => item.conv);
 					messageCountMap = createMessageCountMap(importedData);
 					showImportDialog = true;
 				} catch (err: unknown) {
@@ -211,9 +201,17 @@
 				.snapshot(fullImportData)
 				.filter((item) => selectedIds.has(item.conv.id));
 
-			await conversationsStore.importConversationsData(selectedData);
+			const { imported, skipped } = await conversationsStore.importConversationsData(selectedData);
 
-			importedConversations = selectedConversations;
+			// A conversation already in the database is left untouched, so the summary
+			// lists what was written and the toast accounts for the rest.
+			if (skipped.length > 0) {
+				toast.info(
+					`Skipped ${skipped.length} conversation${skipped.length === 1 ? '' : 's'} already in your library`
+				);
+			}
+
+			importedConversations = imported;
 			showImportSummary = true;
 			showExportSummary = false;
 			showImportDialog = false;
@@ -258,7 +256,7 @@
 	<SettingsGroup title="Conversations">
 		<SettingsChatImportExportSection
 			title="Export"
-			description="Download your conversations as a JSON file. This includes all messages, attachments, and conversation history."
+			description="Download your conversations as a ZIP of JSONL files. This includes all messages, attachments, and conversation history."
 			IconComponent={Download}
 			buttonText="Export conversations"
 			onclick={handleExportClick}
@@ -267,7 +265,7 @@
 
 		<SettingsChatImportExportSection
 			title="Import"
-			description="Import one or more conversations from a previously exported JSON file. This will merge with your existing conversations."
+			description="Import one or more conversations from a previously exported ZIP or JSONL file. This will merge with your existing conversations."
 			IconComponent={Upload}
 			buttonText="Import conversations"
 			onclick={handleImportClick}

@@ -13,7 +13,7 @@ void llama_model_falcon_h1::load_arch_hparams(llama_model_loader & ml) {
 
     std::fill(hparams.is_recr_impl.begin(), hparams.is_recr_impl.end(), true);
 
-    switch (hparams.n_layer) {
+    switch (hparams.n_layer()) {
         case 36:
             type = LLM_TYPE_0_5B; break;
         case 24:

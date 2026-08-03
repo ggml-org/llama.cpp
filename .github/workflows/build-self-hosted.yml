@@ -6,7 +6,7 @@ on:
     branches:
       - master
     paths: [
-      '.github/workflows/build.yml',
+      '.github/workflows/build-self-hosted.yml',
       '**/CMakeLists.txt',
       '**/.cmake',
       '**/*.h',
@@ -48,6 +48,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # note: this is dud token to avoid rate limiting (https://github.com/ggml-org/llama.cpp/pull/25706#issuecomment-4979941302)
+  HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
   GGML_NLOOP: 3
   GGML_N_THREADS: 1
   LLAMA_ARG_LOG_COLORS: 1
@@ -264,14 +266,10 @@ jobs:
   gpu-openvino-low-perf:
     runs-on: [self-hosted, Linux, Intel, OpenVINO]
 
-    concurrency:
-      group: openvino-gpu-${{ github.head_ref || github.ref }}
-      cancel-in-progress: false
-
     env:
       # Sync versions in build.yml, build-self-hosted.yml, release.yml, build-cache.yml, .devops/openvino.Dockerfile
-      OPENVINO_VERSION_MAJOR: "2026.0"
-      OPENVINO_VERSION_FULL: "2026.0.0.20965.c6d6a13a886"
+      OPENVINO_VERSION_MAJOR: "2026.2.1"
+      OPENVINO_VERSION_FULL: "2026.2.1.21919.ede283a88e3"
 
     steps:
       - name: Clone

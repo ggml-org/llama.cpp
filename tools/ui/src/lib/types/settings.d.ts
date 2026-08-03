@@ -4,9 +4,10 @@ import type { OpenAIToolDefinition } from './mcp';
 import type { DatabaseMessageExtra } from './database';
 import type {
 	ParameterSource,
-	ReasoningEffort,
 	SyncableParameterType,
-	SettingsFieldType
+	SettingsFieldType,
+	StreamConnectionState,
+	ReasoningEffort
 } from '$lib/enums';
 import type { Icon } from '@lucide/svelte';
 import type { Component } from 'svelte';
@@ -26,8 +27,11 @@ export interface SettingsEntry {
 	type: SettingsFieldType;
 	section?: string;
 	options?: Array<{ value: string; label: string; icon: Component }>;
+	/** Options rendered for RADIO fields. Each entry maps a `value` (the radio's selected value) to the underlying config `key` whose boolean state mirrors it. */
+	radioOptions?: Array<{ value: string; label: string; key: string; isExperimental?: boolean }>;
 	isExperimental?: boolean;
 	isPositiveInteger?: boolean;
+	dependsOn?: string;
 	sync?: {
 		serverKey: string;
 		paramType: SyncableParameterType;
@@ -48,8 +52,11 @@ export interface SettingsFieldConfig {
 	type: SettingsFieldType;
 	isExperimental?: boolean;
 	isPositiveInteger?: boolean;
+	dependsOn?: string;
 	help?: string;
 	options?: Array<{ value: string; label: string; icon?: typeof Icon }>;
+	/** Options rendered for RADIO fields. Each entry maps a `value` (the radio's selected value) to the underlying config `key` whose boolean state mirrors it. */
+	radioOptions?: Array<{ value: string; label: string; key: string; isExperimental?: boolean }>;
 }
 
 /** Re-exported for backward compatibility. */
@@ -119,6 +126,7 @@ export interface SettingsChatServiceOptions {
 		toolCalls?: string
 	) => void;
 	onError?: (error: Error) => void;
+	onConnectionState?: (state: StreamConnectionState) => void;
 }
 
 export type SettingsConfigType = typeof SETTING_CONFIG_DEFAULT & {

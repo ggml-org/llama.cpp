@@ -13,6 +13,103 @@ The `llama-server` application supports several implementations of speculative d
 A much smaller model (called the _draft model_) generates drafts.
 A draft model is the most used approach in speculative decoding.
 
+### EAGLE-3 (`draft-eagle3`)
+
+EAGLE-3 uses a small draft model that reads the target model's hidden states to predict the next tokens, so it
+reaches higher acceptance than a standalone draft model of the same size. The draft is a one-layer transformer
+trained for a specific target model; it shares the target model's tokenizer and, optionally, uses a reduced draft
+vocabulary with its own `lm_head`, which is mapped back using a `d2t` table.
+
+Convert the EAGLE-3 checkpoint with `--target-model-dir` so it inherits the target's tokenizer and the layer
+indices to read. Both the SpecForge `LlamaForCausalLMEagle3` and the vLLM/AngelSlim `Eagle3LlamaForCausalLM`
+checkpoint formats are supported (for example [`AngelSlim/Qwen3-4B_eagle3`](https://huggingface.co/AngelSlim/Qwen3-4B_eagle3)
+for `Qwen/Qwen3-4B`):
+
+```bash
+python convert_hf_to_gguf.py AngelSlim/Qwen3-4B_eagle3 \
+    --target-model-dir Qwen/Qwen3-4B --outtype bf16 --outfile Qwen3-4B-eagle3.gguf
+
+llama-server -m Qwen3-4B.gguf -md Qwen3-4B-eagle3.gguf --spec-type draft-eagle3
+```
+
+Supported EAGLE-3 draft models include:
+
+- [yuhuili/EAGLE3-LLaMA3.1-Instruct-8B](https://huggingface.co/yuhuili/EAGLE3-LLaMA3.1-Instruct-8B)
+- [yuhuili/EAGLE3-LLaMA3.3-Instruct-70B](https://huggingface.co/yuhuili/EAGLE3-LLaMA3.3-Instruct-70B)
+- [RedHatAI/gemma-4-31B-it-speculator.eagle3](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.eagle3)
+- [RedHatAI/gemma-4-26B-A4B-it-speculator.eagle3](https://huggingface.co/RedHatAI/gemma-4-26B-A4B-it-speculator.eagle3)
+- [Tengyunw/qwen3_8b_eagle3](https://huggingface.co/Tengyunw/qwen3_8b_eagle3)
+- [Tengyunw/qwen3_30b_moe_eagle3](https://huggingface.co/Tengyunw/qwen3_30b_moe_eagle3)
+- [AngelSlim/Qwen3-1.7B_eagle3](https://huggingface.co/AngelSlim/Qwen3-1.7B_eagle3)
+- [AngelSlim/Qwen3-4B_eagle3](https://huggingface.co/AngelSlim/Qwen3-4B_eagle3)
+- [AngelSlim/Qwen3-8B_eagle3](https://huggingface.co/AngelSlim/Qwen3-8B_eagle3)
+- [AngelSlim/Qwen3-14B_eagle3](https://huggingface.co/AngelSlim/Qwen3-14B_eagle3)
+- [AngelSlim/Qwen3-32B_eagle3](https://huggingface.co/AngelSlim/Qwen3-32B_eagle3)
+- [AngelSlim/Qwen3-a3B_eagle3](https://huggingface.co/AngelSlim/Qwen3-a3B_eagle3)
+- [RedHatAI/gpt-oss-20b-speculator.eagle3](https://huggingface.co/RedHatAI/gpt-oss-20b-speculator.eagle3)
+- [lmsys/EAGLE3-gpt-oss-120b-bf16](https://huggingface.co/lmsys/EAGLE3-gpt-oss-120b-bf16)
+- [nvidia/gpt-oss-120b-Eagle3-long-context](https://huggingface.co/nvidia/gpt-oss-120b-Eagle3-long-context)
+
+For the full and up-to-date list of supported models, see #18039.
+
+### DFlash (`draft-dflash`)
+
+DFlash produces an entire block of draft tokens in a single forward pass (block diffusion) and
+injects the target model's hidden states into the draft model's attention, instead of drafting one
+token at a time. This keeps the draft model small while making drafting GPU-friendly. Unlike EAGLE-3
+(a single-layer autoregressive draft), the DFlash draft uses several transformer layers but emits a
+whole block per draft step.
+
+The draft is a small block-diffusion model trained for a specific target (for example
+`z-lab/Qwen3-4B-DFlash` for `Qwen/Qwen3-4B`). Convert it with `--target-model-dir` so it inherits the
+target's tokenizer and token embeddings:
+
+```bash
+python convert_hf_to_gguf.py z-lab/Qwen3-4B-DFlash \
+    --target-model-dir Qwen/Qwen3-4B --outtype bf16 --outfile Qwen3-4B-DFlash.gguf
+
+llama-server -m Qwen3-4B.gguf -md Qwen3-4B-DFlash.gguf \
+    --spec-type draft-dflash --spec-draft-n-max 15 -fa on --jinja
+```
+
+`--spec-draft-n-max` is clamped to the draft model's trained block size.
+
+See:
+
+- #22105
+
+### DSpark (`draft-dspark`)
+
+DSpark extends DFlash with a semi-autoregressive _Markov head_: the draft still emits a whole
+block per forward pass, but each block position's logits are biased by a low-rank term keyed on
+the previous token, chained in-graph across the block. This keeps drafting at one decode per
+block while recovering some of the left-to-right signal that pure block diffusion loses.
+
+The draft is a small DeepSpec checkpoint trained for a specific target (for example
+[`deepseek-ai/dspark_qwen3_4b_block7`](https://huggingface.co/deepseek-ai/dspark_qwen3_4b_block7)
+for `Qwen/Qwen3-4B`). Convert it with `--target-model-dir` so it inherits the target's tokenizer
+and token embeddings:
+
+```bash
+python convert_hf_to_gguf.py deepseek-ai/dspark_qwen3_4b_block7 \
+    --target-model-dir Qwen/Qwen3-4B --outtype bf16 --outfile Qwen3-4B-DSpark.gguf
+
+llama-server -m Qwen3-4B.gguf -md Qwen3-4B-DSpark.gguf \
+    --spec-type draft-dspark --spec-draft-n-max 7 -fa on --jinja
+```
+
+`--spec-draft-n-max` is clamped to the draft model's trained block size.
+
+`--spec-draft-conf-min P` truncates each drafted block at the first position whose predicted
+acceptance (from the draft's confidence head, if present) falls below `P` (default 0 = disabled).
+
+Currently only drafts with a Qwen3 backbone are supported; support for other backbones
+(e.g. Gemma4) is planned.
+
+See:
+
+- #25173
+
 ### n-gram Cache (`ngram-cache`)
 
 An n-gram is a sequence of n tokens. The n-gram cache implementation maintains statistics about short n-gram sequences.
@@ -108,7 +205,7 @@ If a draft model is combined with a draftless decoding the draftless decoding ha
 ### General Speculative Parameters
 
 ```
---spec-type [none|draft-simple|draft-mtp|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]
+--spec-type [none|draft-simple|draft-eagle3|draft-dflash|draft-dspark|draft-mtp|ngram-cache|ngram-simple|ngram-map-k|ngram-map-k4v|ngram-mod]
                                         comma-separated list of types of speculative decoding to use
                                         (default: none)
                                         (env: LLAMA_ARG_SPEC_TYPE)
@@ -247,6 +344,9 @@ Specifies a comma-separated list of speculative decoding types to use.
 |------|-------------|
 | `none` | No speculative decoding (default) |
 | `draft-simple` | Use a simple draft model for speculation |
+| `draft-eagle3` | Use an EAGLE-3 draft model that reads the target's hidden states |
+| `draft-dflash` | Use a DFlash block-diffusion draft model that emits a block per step |
+| `draft-dspark` | Use a DSpark draft model (DFlash backbone + semi-autoregressive Markov head) |
 | `draft-mtp` | Use Multi Token Prediction (MTP) heads from the main model |
 | `ngram-cache` | Use n-gram cache lookup |
 | `ngram-simple` | Use simple n-gram pattern matching |

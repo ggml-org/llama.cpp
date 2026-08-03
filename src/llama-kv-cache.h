@@ -98,7 +98,7 @@ public:
     //       likely through `struct llama_memory_params`
     llama_kv_cache(
             const llama_model & model,
-            const llama_hparams & hparams,
+          const llama_hparams & hparams,
                     ggml_type   type_k,
                     ggml_type   type_v,
                          bool   v_trans,
@@ -109,8 +109,10 @@ public:
                      uint32_t   n_pad,
                      uint32_t   n_swa,
                llama_swa_type   swa_type,
+               llama_memory_t   mem_other,
         const layer_filter_cb & filter,
-        const  layer_reuse_cb & reuse);
+        const  layer_reuse_cb & reuse,
+        const  layer_share_cb & share);
 
     ~llama_kv_cache() = default;
 
@@ -159,6 +161,9 @@ public:
     ggml_type type_k() const;
     ggml_type type_v() const;
 
+    std::vector<uint32_t> get_layer_ids() const;
+    ggml_tensor * get_k_storage(int32_t il) const;
+
     //
     // graph_build API
     //
@@ -168,10 +173,12 @@ public:
     // get views of the current state of the cache
     ggml_tensor * get_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
     ggml_tensor * get_v(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
+    ggml_tensor * get_k_idx(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
 
     // store k_cur and v_cur in the cache based on the provided head location
     ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il, const slot_info & sinfo) const;
     ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il, const slot_info & sinfo) const;
+    ggml_tensor * cpy_k_idx(ggml_context * ctx, ggml_tensor * k_idx_cur, ggml_tensor * k_idxs, int32_t il, const slot_info & sinfo) const;
 
     //
     // preparation API
@@ -223,9 +230,11 @@ private:
 
         ggml_tensor * k;
         ggml_tensor * v;
+        ggml_tensor * k_idx;   // MSA single-head indexer keys, F32
 
         std::vector<ggml_tensor *> k_stream;
         std::vector<ggml_tensor *> v_stream;
+        std::vector<ggml_tensor *> k_idx_stream;
     };
 
     bool v_trans = true;  // the value tensor is transposed
@@ -254,6 +263,9 @@ private:
     // env: LLAMA_KV_CACHE_DEBUG
     int debug = 0;
 
+    // set when a k_idx (indexer) cache exists and the stream layout supports MSA (single seq, or one stream per seq)
+    bool msa_strict_slots = false;
+
     // this is the SWA type of the cache - not to be confused with the model SWA type
     const llama_swa_type swa_type = LLAMA_SWA_TYPE_NONE;
 
@@ -264,7 +276,12 @@ private:
     // note: this is not part of the KV state and it's only used to speed-up the find_slot() method
     std::vector<uint32_t> v_heads;
 
-    std::vector<llama_kv_cells> v_cells;
+    // TODO: temporary until we refactor to be able to share the same cells between 2 kv caches [TAG_KV_CACHE_SHARE_CELLS]
+    llama_kv_cache * other;
+
+    std::shared_ptr<llama_kv_cells_vec> v_cells_impl;
+
+    llama_kv_cells_vec & v_cells;
 
     // maps from a sequence id to a stream id
     std::vector<uint32_t> seq_to_stream;
@@ -281,6 +298,7 @@ private:
 
     size_t size_k_bytes() const;
     size_t size_v_bytes() const;
+    size_t size_k_idx_bytes() const;
 
     ggml_tensor * build_rope_shift(
             const llama_cparams & cparams,
@@ -360,6 +378,7 @@ public:
     // get views of the current state of the cache
     ggml_tensor * get_k(ggml_context * ctx, int32_t il) const;
     ggml_tensor * get_v(ggml_context * ctx, int32_t il) const;
+    ggml_tensor * get_k_idx(ggml_context * ctx, int32_t il) const;
 
     // store k_cur and v_cur in the cache based on the provided head location
     // note: the heads in k_cur and v_cur should be laid out contiguously in memory
@@ -369,6 +388,7 @@ public:
     //   - v_idxs [n_tokens] or [n_tokens*n_embd_v_gqa] depending if V cache is transposed
     ggml_tensor * cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il) const;
     ggml_tensor * cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il) const;
+    ggml_tensor * cpy_k_idx(ggml_context * ctx, ggml_tensor * k_idx_cur, ggml_tensor * k_idxs, int32_t il) const;
 
     // create destination indices for each head of the current batch for where it would be written in the KV cache
     // the indices address the global KV cache (not per stream) - this is not relevant for the user of this API, but

@@ -13,6 +13,14 @@
 
 struct build_vit_opts {
     ggml_tensor * attn_mask = nullptr;
+    // TODO @ngxson : merge attn_mask and attn_mask_layers into one call
+    std::vector<ggml_tensor *> attn_mask_layers; // one per layer
+
+    // hook at layer output embeddings
+    std::function<void(ggml_tensor * cur, int il)> callback_layer_out = nullptr;
+
+    // whether to skip the automatic post-layernorm (model.post_ln_w) applied at the end
+    bool skip_post_ln = false;
 };
 
 struct clip_graph {
@@ -20,8 +28,8 @@ struct clip_graph {
     const clip_hparams & hparams;
     projector_type proj_type;
 
-    // we only support single image per batch
-    const clip_image_f32 & img;
+    const clip_image_f32 & img; // for backward compat
+    const clip_image_f32_batch * img_batch = nullptr;
 
     const int patch_size;
     const int n_patches_x;
@@ -37,6 +45,9 @@ struct clip_graph {
     float kq_scale; // TODO: maybe move this to hparams
     const clip_flash_attn_type flash_attn_type;
 
+    // TODO [QWEN_VIDEO]: improve this in the future
+    int n_batch = 1;
+
     ggml_context_ptr ctx0_ptr;
     ggml_context * ctx0;
     ggml_cgraph * gf;
@@ -51,10 +62,20 @@ struct clip_graph {
     virtual ggml_tensor * build_mm(ggml_tensor * w, ggml_tensor * x) const;
     // TODO: build_mm(w, b, x) to support bias
 
+    virtual bool support_batch() const {
+        return false;
+    }
+
     //
     // utility functions
     //
     void cb(ggml_tensor * cur0, const char * name, int il) const;
+
+    const clip_image_f32 & get_img(size_t idx) const {
+        GGML_ASSERT(img_batch);
+        GGML_ASSERT(idx < img_batch->entries.size());
+        return img_batch->entries[idx];
+    }
 
     // siglip2 naflex
     ggml_tensor * resize_position_embeddings(uint32_t interpolation_mode = DEFAULT_INTERPOLATION_MODE);
