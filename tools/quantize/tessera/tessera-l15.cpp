@@ -12,6 +12,42 @@
 #include <cstring>
 #include <cmath>
 
+namespace {
+
+// Suffix lengths (including the leading dot). The L1.5 reader
+// matches either suffix; both decode into F32 via the v3 reader.
+constexpr size_t k_suffix_f32_len = 16;  // ".act.dequant.f32"
+constexpr size_t k_suffix_f16_len = 16;  // ".act.dequant.f16"
+
+// Strip the longest matching L1.5 suffix from `name`. Returns the
+// stripped name and sets `*file_dtype` to the on-disk dtype (0 = F32,
+// 1 = F16). When neither suffix is present, the name is returned
+// unchanged and `*file_dtype` is set to UINT32_MAX.
+std::string strip_l15_suffix(const char * path, uint32_t * file_dtype) {
+    const char * base = strrchr(path, '/');
+    base = base ? base + 1 : path;
+    std::string name(base);
+    // Try the longer match first (both suffixes are 16 chars; this
+    // branch keeps the order explicit for the future-proof case where
+    // one of them changes length).
+    const size_t dot_f16 = name.rfind(".act.dequant.f16");
+    if (dot_f16 != std::string::npos) {
+        name.resize(dot_f16);
+        *file_dtype = 1;
+        return name;
+    }
+    const size_t dot_f32 = name.rfind(".act.dequant.f32");
+    if (dot_f32 != std::string::npos) {
+        name.resize(dot_f32);
+        *file_dtype = 0;
+        return name;
+    }
+    *file_dtype = UINT32_MAX;
+    return name;
+}
+
+} // namespace
+
 int ts_l15_load_reference(const char * sidecar_path,
                           ts_l15_reference * out,
                           std::string * err_msg) {
@@ -23,18 +59,15 @@ int ts_l15_load_reference(const char * sidecar_path,
     out->rows = sc.header.rows;
     out->cols = sc.header.cols;
     out->data = std::move(sc.data);
+    out->file_dtype = sc.header.dtype;
     out->outlier_threshold = sc.header.outlier_threshold;
     out->outlier_count     = sc.header.outlier_count_total;
 
-    // derive tensor name from filename: strip directory and .act.dequant.f32 suffix
-    const char * base = strrchr(sidecar_path, '/');
-    base = base ? base + 1 : sidecar_path;
-    std::string name(base);
-    const size_t dot = name.rfind(".act.dequant.f32");
-    if (dot != std::string::npos) {
-        name.resize(dot);
-    }
-    out->tensor_name = std::move(name);
+    out->tensor_name = strip_l15_suffix(sidecar_path, &out->file_dtype);
+    // The header's dtype is the on-disk truth; the filename strip is
+    // only used to derive the tensor name. If they disagree (an
+    // inconsistent file), trust the header.
+    out->file_dtype = sc.header.dtype;
 
     return 0;
 }
@@ -48,28 +81,70 @@ int ts_l15_load_directory(const char * dir_path,
         return -1;
     }
 
-    int count = 0;
+    // First pass: collect all L1.5 sidecar files. The on-disk dtypes
+    // (F32 vs F16) are tracked per tensor; when both are present, the
+    // F16 (new default) wins and the F32 (legacy) is skipped.
+    std::vector<std::string> f16_paths;
+    std::vector<std::string> f32_paths;
     struct dirent * ent;
     while ((ent = readdir(dir)) != nullptr) {
         const char * name = ent->d_name;
         size_t len = strlen(name);
-        // skip entries shorter than the L1.5 suffix (16 chars for ".act.dequant.f32")
-        if (len < 16 || strcmp(name + len - 16, ".act.dequant.f32") != 0) {
+        if (len >= k_suffix_f16_len &&
+            strcmp(name + len - k_suffix_f16_len, ".act.dequant.f16") == 0) {
+            std::string p(dir_path); p += '/'; p += name;
+            f16_paths.push_back(std::move(p));
             continue;
         }
+        if (len >= k_suffix_f32_len &&
+            strcmp(name + len - k_suffix_f32_len, ".act.dequant.f32") == 0) {
+            std::string p(dir_path); p += '/'; p += name;
+            f32_paths.push_back(std::move(p));
+            continue;
+        }
+    }
 
-        std::string path(dir_path);
-        path += '/';
-        path += name;
+    // Tensor-name dedup: when both F16 and F32 sidecars exist for the
+    // same tensor, only the F16 is loaded. F16 is the new ground
+    // truth; the F32 duplicate is left in place for the legacy reader
+    // (l3_sidecar_v3_reader.py etc.) but is not consumed here.
+    auto has_f16 = [&](const std::string & f32_path) -> bool {
+        uint32_t dt = UINT32_MAX;
+        const std::string nm = strip_l15_suffix(f32_path.c_str(), &dt);
+        for (const auto & p : f16_paths) {
+            uint32_t d2 = UINT32_MAX;
+            if (strip_l15_suffix(p.c_str(), &d2) == nm) {
+                return true;
+            }
+        }
+        return false;
+    };
 
+    int count = 0;
+    for (const auto & p : f16_paths) {
         ts_l15_reference ref;
         std::string load_err;
-        if (ts_l15_load_reference(path.c_str(), &ref, &load_err) != 0) {
-            if (err_msg) { *err_msg = path + ": " + load_err; }
+        if (ts_l15_load_reference(p.c_str(), &ref, &load_err) != 0) {
+            if (err_msg) { *err_msg = p + ": " + load_err; }
             closedir(dir);
             return -1;
         }
-
+        refs->push_back(std::move(ref));
+        count++;
+    }
+    for (const auto & p : f32_paths) {
+        if (has_f16(p)) {
+            // F16 is the preferred reference; skip the legacy F32
+            // duplicate so the L1.5 metrics see the new ground truth.
+            continue;
+        }
+        ts_l15_reference ref;
+        std::string load_err;
+        if (ts_l15_load_reference(p.c_str(), &ref, &load_err) != 0) {
+            if (err_msg) { *err_msg = p + ": " + load_err; }
+            closedir(dir);
+            return -1;
+        }
         refs->push_back(std::move(ref));
         count++;
     }

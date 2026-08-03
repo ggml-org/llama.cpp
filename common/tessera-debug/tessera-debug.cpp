@@ -10,6 +10,61 @@
 
 #include "tessera-build-info.h"
 
+// FP16 -> F32 conversion for the FP16 row outlier counter. We do not
+// pull in ggml.h from this translation unit (the sidecar writer is a
+// pure stream sink, below the ggml layering); the local copy of
+// ggml_compute_fp16_to_fp32 mirrors ggml/src/ggml-impl.h:384-405 and
+// is bit-identical to the canonical implementation. The F32 -> FP16
+// direction (used by the public `write_fp16_reference_row_from_f32`
+// convenience helper) is the symmetric routine below.
+namespace {
+union fp32_bits {
+    uint32_t as_bits;
+    float    as_value;
+};
+inline float fp32_from_bits(uint32_t w) {
+    fp32_bits u; u.as_bits = w; return u.as_value;
+}
+inline uint32_t fp32_to_bits(float f) {
+    fp32_bits u; u.as_value = f; return u.as_bits;
+}
+inline float local_fp16_to_fp32(uint16_t h) {
+    const uint32_t w = (uint32_t) h << 16;
+    const uint32_t sign = w & UINT32_C(0x80000000);
+    const uint32_t two_w = w + w;
+    const uint32_t exp_offset = UINT32_C(0xE0) << 23;
+    const float exp_scale = 0x1.0p-112f;
+    const float normalized_value = fp32_from_bits((two_w >> 4) + exp_offset) * exp_scale;
+    const uint32_t magic_mask = UINT32_C(126) << 23;
+    const float magic_bias = 0.5f;
+    const float denormalized_value = fp32_from_bits((two_w >> 17) | magic_mask) - magic_bias;
+    const uint32_t denormalized_cutoff = UINT32_C(1) << 27;
+    const uint32_t result = sign |
+        (two_w < denormalized_cutoff ? fp32_to_bits(denormalized_value) : fp32_to_bits(normalized_value));
+    return fp32_from_bits(result);
+}
+inline uint16_t local_fp32_to_fp16(float f) {
+    const float scale_to_inf = 0x1.0p+112f;
+    const float scale_to_zero = 0x1.0p-110f;
+    float base = (fabsf(f) * scale_to_inf) * scale_to_zero;
+
+    const uint32_t w = fp32_to_bits(f);
+    const uint32_t shl1_w = w + w;
+    const uint32_t sign = w & UINT32_C(0x80000000);
+    uint32_t bias = shl1_w & UINT32_C(0xFF000000);
+    if (bias < UINT32_C(0x71000000)) {
+        bias = UINT32_C(0x71000000);
+    }
+
+    base = fp32_from_bits((bias >> 1) + UINT32_C(0x07800000)) + base;
+    const uint32_t bits = fp32_to_bits(base);
+    const uint32_t exp_bits = (bits >> 13) & UINT32_C(0x00007C00);
+    const uint32_t mantissa_bits = bits & UINT32_C(0x00000FFF);
+    const uint32_t nonsign = exp_bits + mantissa_bits;
+    return (uint16_t) ((sign >> 16) | (shl1_w > UINT32_C(0xFF000000) ? UINT16_C(0x7E00) : nonsign));
+}
+} // anonymous namespace
+
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -44,6 +99,7 @@ namespace {
 struct EnvState {
     std::string dequant_dir;
     std::string mode;
+    std::string l15_dtype;     // L1.5 reference dtype: "f16" (default) or "f32" (legacy)
     std::string model;
     std::string calibration_corpus;
     std::string calibration_corpus_hash;
@@ -67,6 +123,9 @@ void ensure_env_loaded() {
     }
     if (const char * v = std::getenv("LLAMA_TILE640_DEBUG_DEQUANT_MODE"); v != nullptr) {
         s.mode = v;
+    }
+    if (const char * v = std::getenv("LLAMA_TESSERA_L15_DTYPE"); v != nullptr) {
+        s.l15_dtype = v;
     }
     if (const char * v = std::getenv("TESSERA_TELEMETRY_MODEL"); v != nullptr) {
         s.model = v;
@@ -93,8 +152,12 @@ struct RowV3Meta {
 };
 
 // State for a single open sidecar file. Both the L1 and L1.5 sidecars
-// use the same layout (v3); they differ only in the file suffix and
-// (potentially) in the per-row data semantics.
+// use the same v3 layout; they differ in the file suffix and in the
+// on-disk dtype of the data block. The L1 sidecar is always F32; the
+// L1.5 sidecar's dtype is configurable (FP16 by default, F32 for
+// legacy W4A4 back-compat). The header field `dtype` is taken from
+// `file_dtype` so a reader that dispatches on the header can locate
+// the data correctly.
 struct SidecarStream {
     std::ofstream            ofs;
     std::string              tensor_name;
@@ -103,7 +166,8 @@ struct SidecarStream {
     std::vector<int32_t>     row_outlier_counts;
     int64_t                  outlier_count_total = 0;
     std::vector<RowV3Meta>   row_meta;        // size = rows
-    std::string              suffix;          // ".dequant.f32" or ".act.dequant.f32"
+    std::string              suffix;          // ".dequant.f32", ".act.dequant.f32", or ".act.dequant.f16"
+    uint32_t                 file_dtype;      // DEQUANT_DTYPE_F32 (=0) or DEQUANT_DTYPE_F16 (=1)
     bool                     open = false;
 };
 
@@ -114,30 +178,46 @@ bool sidecar_open_impl(SidecarStream & s,
                        const std::string & dir,
                        const char * tensor_name,
                        int64_t rows, int64_t cols,
-                       const char * suffix) {
+                       const char * suffix,
+                       uint32_t file_dtype) {
     if (dir.empty() || tensor_name == nullptr) {
         return false;
     }
+    if (file_dtype != DEQUANT_DTYPE_F32 && file_dtype != DEQUANT_DTYPE_F16) {
+        fprintf(stderr, "tessera_debug: bad file_dtype %u for '%s'\n",
+                file_dtype, tensor_name);
+        return false;
+    }
 
-    // Fast path: same tensor, same shape -> keep the open file.
+    // Fast path: same tensor, same shape, same suffix, same dtype ->
+    // keep the open file. The dtype check is essential for the L1.5
+    // case: a process that switches the L1.5 dtype between open calls
+    // (e.g. via set_l15_dtype) would otherwise silently mix F32 and
+    // FP16 rows in the same file. Reopen the file with the new dtype
+    // instead.
     if (s.open && s.tensor_name == tensor_name &&
-        s.rows == rows && s.cols == cols) {
+        s.rows == rows && s.cols == cols &&
+        s.suffix == suffix && s.file_dtype == file_dtype) {
         return true;
     }
 
     // Shape mismatch on an already-open writer: close + reopen. We
     // intentionally avoid rewriting the header in-place; the simpler
     // behavior is to truncate the file under the same name. The caller
-    // is expected to provide a consistent (name, rows, cols) for any
-    // given tensor.
+    // is expected to provide a consistent (name, rows, cols, dtype) for
+    // any given tensor.
     if (s.open) {
         if (s.tensor_name == tensor_name &&
-            (s.rows != rows || s.cols != cols)) {
-            fprintf(stderr, "tessera_debug: shape mismatch for '%s' (%lldx%lld -> %lldx%lld); "
+            (s.rows != rows || s.cols != cols || s.suffix != suffix ||
+             s.file_dtype != file_dtype)) {
+            fprintf(stderr, "tessera_debug: shape/dtype mismatch for '%s' "
+                    "(%lldx%lld dtype=%u suffix=%s -> %lldx%lld dtype=%u suffix=%s); "
                     "closing and reopening\n",
                     tensor_name,
                     (long long) s.rows, (long long) s.cols,
-                    (long long) rows, (long long) cols);
+                    (unsigned) s.file_dtype, s.suffix.c_str(),
+                    (long long) rows, (long long) cols,
+                    (unsigned) file_dtype, suffix);
         }
         s.ofs.close();
         s.tensor_name.clear();
@@ -146,6 +226,8 @@ bool sidecar_open_impl(SidecarStream & s,
         s.row_outlier_counts.clear();
         s.outlier_count_total = 0;
         s.row_meta.clear();
+        s.suffix.clear();
+        s.file_dtype = 0;
         s.open = false;
     }
 
@@ -174,14 +256,16 @@ bool sidecar_open_impl(SidecarStream & s,
     // same offsets as in v1/v2, so a v1 or v2 reader that does NOT
     // dispatch on version can still locate them (a v1 reader that
     // assumes F32 data at offset 28 will see garbage on a v3 file;
-    // readers that check the version field work correctly).
+    // readers that check the version field work correctly). The
+    // `dtype` field is the L1.5 reference dtype (F32 or F16); the data
+    // block size is rows*cols*bytes_per_elem where bytes_per_elem is
+    // 4 for F32 and 2 for F16.
     s.ofs.write(DEQUANT_FILE_MAGIC, 4);
     uint32_t version = DEQUANT_FILE_VERSION;
-    uint32_t dtype   = DEQUANT_DTYPE_F32;
     s.ofs.write(reinterpret_cast<const char *>(&version), sizeof(version));
     s.ofs.write(reinterpret_cast<const char *>(&rows),    sizeof(rows));
     s.ofs.write(reinterpret_cast<const char *>(&cols),    sizeof(cols));
-    s.ofs.write(reinterpret_cast<const char *>(&dtype),   sizeof(dtype));
+    s.ofs.write(reinterpret_cast<const char *>(&file_dtype), sizeof(file_dtype));
 
     const float threshold = g_outlier_threshold;
     int64_t     total_zero = 0;
@@ -205,6 +289,7 @@ bool sidecar_open_impl(SidecarStream & s,
     s.rows        = rows;
     s.cols        = cols;
     s.suffix      = suffix;
+    s.file_dtype  = file_dtype;
     s.open        = true;
     return true;
 }
@@ -213,6 +298,12 @@ void sidecar_write_row_impl(SidecarStream & s,
                             int64_t row_idx, const float * data, int64_t n) {
     (void) row_idx;
     if (!s.open || data == nullptr || n <= 0) {
+        return;
+    }
+    if (s.file_dtype != DEQUANT_DTYPE_F32) {
+        fprintf(stderr, "tessera_debug: sidecar '%s' opened as dtype %u; "
+                "refusing F32 row write\n",
+                s.tensor_name.c_str(), (unsigned) s.file_dtype);
         return;
     }
     if (n != s.cols) {
@@ -241,6 +332,56 @@ void sidecar_write_row_impl(SidecarStream & s,
 
     s.ofs.write(reinterpret_cast<const char *>(data),
                 static_cast<std::streamsize>(n * sizeof(float)));
+}
+
+void sidecar_write_row_fp16_impl(SidecarStream & s,
+                                 int64_t row_idx,
+                                 const uint16_t * data,
+                                 int64_t n) {
+    (void) row_idx;
+    if (!s.open || data == nullptr || n <= 0) {
+        return;
+    }
+    if (s.file_dtype != DEQUANT_DTYPE_F16) {
+        fprintf(stderr, "tessera_debug: sidecar '%s' opened as dtype %u; "
+                "refusing FP16 row write\n",
+                s.tensor_name.c_str(), (unsigned) s.file_dtype);
+        return;
+    }
+    if (n != s.cols) {
+        fprintf(stderr, "tessera_debug: row width mismatch for '%s' (cols=%lld, got=%lld); "
+                "writing %lld values\n",
+                s.tensor_name.c_str(),
+                (long long) s.cols, (long long) n, (long long) n);
+    }
+
+    // Outlier count is computed by upcasting the FP16 to F32 for the
+    // threshold comparison. The threshold (default 6.0) is a magnitude
+    // cutoff, so the half-precision representation is good enough; the
+    // upcast recovers the same |x| to within 1 ULP. This matches the
+    // L1 F32 outlier accounting bit-for-bit on inputs that are exactly
+    // representable in FP16, and is off by at most one element on
+    // inputs that round at FP16 precision.
+    int32_t row_count = 0;
+    const float t = g_outlier_threshold;
+    for (int64_t i = 0; i < n; i++) {
+        const float f = local_fp16_to_fp32(data[i]);
+        if (fabsf(f) > t) {
+            row_count++;
+        }
+    }
+    if (row_idx >= 0 && row_idx < (int64_t) s.row_outlier_counts.size()) {
+        s.row_outlier_counts[(size_t) row_idx] = row_count;
+    } else {
+        fprintf(stderr, "tessera_debug: row_idx %lld out of range for '%s' (rows=%lld); "
+                "counting but not recording per-row\n",
+                (long long) row_idx, s.tensor_name.c_str(),
+                (long long) s.rows);
+    }
+    s.outlier_count_total += row_count;
+
+    s.ofs.write(reinterpret_cast<const char *>(data),
+                static_cast<std::streamsize>(n * sizeof(uint16_t)));
 }
 
 void sidecar_set_row_meta_impl(SidecarStream & s,
@@ -272,6 +413,8 @@ void sidecar_close_impl(SidecarStream & s) {
         s.row_outlier_counts.clear();
         s.outlier_count_total = 0;
         s.row_meta.clear();
+        s.suffix.clear();
+        s.file_dtype = 0;
         return;
     }
 
@@ -340,6 +483,17 @@ void sidecar_close_impl(SidecarStream & s) {
 
         std::ofstream prov(prov_path, std::ios::out | std::ios::trunc);
         if (prov.is_open()) {
+            // The "sidecar_kind" field discriminates the four cases:
+            //   - ".dequant.f32"             -> "dequant"          (L1)
+            //   - ".act.dequant.f32"         -> "fp16_reference_f32" (L1.5 legacy)
+            //   - ".act.dequant.f16"         -> "fp16_reference_f16" (L1.5 default)
+            const char * kind = "dequant";
+            if (s.suffix == DEQUANT_FILE_SUFFIX_L15_F32) {
+                kind = "fp16_reference_f32";
+            } else if (s.suffix == DEQUANT_FILE_SUFFIX_L15_F16) {
+                kind = "fp16_reference_f16";
+            }
+            const char * dtype_str = (s.file_dtype == DEQUANT_DTYPE_F16) ? "f16" : "f32";
             prov << "{\n"
                  << "  \"model\": \"" << es.model << "\",\n"
                  << "  \"calibration_corpus\": \"" << es.calibration_corpus << "\",\n"
@@ -350,9 +504,8 @@ void sidecar_close_impl(SidecarStream & s) {
                  << "  \"created_at\": \"" << ts << "\",\n"
                  << "  \"tessera_main_tip\": \"" << TESSERA_MAIN_TIP << "\",\n"
                  << "  \"sidecar_path\": \"" << sidecar_path << "\",\n"
-                 << "  \"sidecar_kind\": \""
-                 << (s.suffix == DEQUANT_FILE_SUFFIX_L15 ? "fp16_reference" : "dequant")
-                 << "\"\n"
+                 << "  \"sidecar_kind\": \"" << kind << "\",\n"
+                 << "  \"sidecar_dtype\": \"" << dtype_str << "\"\n"
                  << "}\n";
             prov.flush();
             prov.close();
@@ -368,6 +521,8 @@ void sidecar_close_impl(SidecarStream & s) {
     s.row_outlier_counts.clear();
     s.outlier_count_total = 0;
     s.row_meta.clear();
+    s.suffix.clear();
+    s.file_dtype = 0;
     s.open = false;
 }
 
@@ -397,6 +552,8 @@ void set_dequant_dir(const std::string & path) {
         g_l1.row_outlier_counts.clear();
         g_l1.outlier_count_total = 0;
         g_l1.row_meta.clear();
+        g_l1.suffix.clear();
+        g_l1.file_dtype = 0;
         g_l1.open = false;
     }
     if (g_l15.open) {
@@ -409,6 +566,8 @@ void set_dequant_dir(const std::string & path) {
         g_l15.row_outlier_counts.clear();
         g_l15.outlier_count_total = 0;
         g_l15.row_meta.clear();
+        g_l15.suffix.clear();
+        g_l15.file_dtype = 0;
         g_l15.open = false;
     }
     env_state().dequant_dir = path;
@@ -435,6 +594,8 @@ void set_dequant_mode(const std::string & mode) {
             g_l1.row_outlier_counts.clear();
             g_l1.outlier_count_total = 0;
             g_l1.row_meta.clear();
+            g_l1.suffix.clear();
+            g_l1.file_dtype = 0;
             g_l1.open = false;
         }
         if (g_l15.open) {
@@ -445,6 +606,8 @@ void set_dequant_mode(const std::string & mode) {
             g_l15.row_outlier_counts.clear();
             g_l15.outlier_count_total = 0;
             g_l15.row_meta.clear();
+            g_l15.suffix.clear();
+            g_l15.file_dtype = 0;
             g_l15.open = false;
         }
         fprintf(stderr, "tessera_debug: closing L1/L1.5 sidecars due to mode flip\n");
@@ -459,6 +622,70 @@ const std::string & dequant_mode() {
 bool dequant_w4a4_enabled() {
     ensure_env_loaded();
     return env_state().mode == DEQUANT_MODE_W4A4;
+}
+
+void set_l15_dtype(const std::string & dtype) {
+    ensure_env_loaded();
+    if (dtype == env_state().l15_dtype) {
+        return;
+    }
+    // A dtype change while a sidecar is open would mix F32 and FP16
+    // rows in the same file. Close both streams; the next open_*_writer
+    // call will reopen under the new dtype.
+    if (g_l1.open || g_l15.open) {
+        if (g_l1.open) {
+            g_l1.ofs.close();
+            g_l1.tensor_name.clear();
+            g_l1.rows = 0;
+            g_l1.cols = 0;
+            g_l1.row_outlier_counts.clear();
+            g_l1.outlier_count_total = 0;
+            g_l1.row_meta.clear();
+            g_l1.suffix.clear();
+            g_l1.file_dtype = 0;
+            g_l1.open = false;
+        }
+        if (g_l15.open) {
+            g_l15.ofs.close();
+            g_l15.tensor_name.clear();
+            g_l15.rows = 0;
+            g_l15.cols = 0;
+            g_l15.row_outlier_counts.clear();
+            g_l15.outlier_count_total = 0;
+            g_l15.row_meta.clear();
+            g_l15.suffix.clear();
+            g_l15.file_dtype = 0;
+            g_l15.open = false;
+        }
+        fprintf(stderr, "tessera_debug: closing L1/L1.5 sidecars due to L1.5 dtype flip\n");
+    }
+    env_state().l15_dtype = dtype;
+}
+
+const std::string & l15_dtype() {
+    ensure_env_loaded();
+    return env_state().l15_dtype;
+}
+
+bool l15_dtype_is_f16() {
+    ensure_env_loaded();
+    // "f16" is the default; the only other accepted value is "f32"
+    // (legacy). An empty string is treated as "f16" so unset / unconfig
+    // callers get the new default. Other values log a warning and fall
+    // back to f16.
+    const std::string & d = env_state().l15_dtype;
+    if (d.empty()) {
+        return true;
+    }
+    if (d == L15_DTYPE_F16) {
+        return true;
+    }
+    if (d == L15_DTYPE_F32) {
+        return false;
+    }
+    fprintf(stderr, "tessera_debug: unknown LLAMA_TESSERA_L15_DTYPE='%s'; "
+            "expected 'f16' or 'f32'; falling back to 'f16'\n", d.c_str());
+    return true;
 }
 
 void set_outlier_threshold(float threshold) {
@@ -483,24 +710,45 @@ void open_dequant_writer(const char * tensor_name, int64_t rows, int64_t cols) {
     std::lock_guard<std::recursive_mutex> lk(g_writer_mutex);
     ensure_env_loaded();
     if (!sidecar_open_impl(g_l1, env_state().dequant_dir, tensor_name, rows, cols,
-                            DEQUANT_FILE_SUFFIX_L1)) {
+                            DEQUANT_FILE_SUFFIX_L1, DEQUANT_DTYPE_F32)) {
         return;
     }
-    // In w4a4 mode, also open the L1.5 sidecar. The data will be the
-    // same F32 values written via write_fp16_reference_row, but the
-    // file suffix and path differ. Backends are expected to call
-    // open_fp16_reference_writer after open_dequant_writer and use
-    // write_fp16_reference_row for the reference row data.
+    // In w4a4 mode, also open the L1.5 sidecar. The suffix and on-disk
+    // dtype come from the L1.5 dtype config (see set_l15_dtype): the
+    // default "f16" opens `.act.dequant.f16` with DEQUANT_DTYPE_F16
+    // (the FP16 ground truth - the whole point of L1.5); the legacy
+    // "f32" opens `.act.dequant.f32` with DEQUANT_DTYPE_F32. Backends
+    // are expected to call open_fp16_reference_writer after
+    // open_dequant_writer and use the matching
+    // write_fp16_reference_row{,_from_f32} entry point to feed the
+    // reference row data.
     if (dequant_w4a4_enabled()) {
+        const char * l15_suffix = DEQUANT_FILE_SUFFIX_L15_F16;
+        uint32_t     l15_dtype  = DEQUANT_DTYPE_F16;
+        if (!l15_dtype_is_f16()) {
+            l15_suffix = DEQUANT_FILE_SUFFIX_L15_F32;
+            l15_dtype  = DEQUANT_DTYPE_F32;
+        }
         sidecar_open_impl(g_l15, env_state().dequant_dir, tensor_name, rows, cols,
-                          DEQUANT_FILE_SUFFIX_L15);
+                          l15_suffix, l15_dtype);
     }
 }
 
 void write_dequant_row(int64_t row_idx, const float * data, int64_t n) {
     std::lock_guard<std::recursive_mutex> lk(g_writer_mutex);
     sidecar_write_row_impl(g_l1, row_idx, data, n);
-    if (dequant_w4a4_enabled() && g_l15.open && data != nullptr && n > 0) {
+    // Back-compat: when w4a4 is enabled AND the L1.5 dtype is the
+    // legacy "f32", auto-populate the L1.5 file with the same F32
+    // data. The FP16 L1.5 path (the default) is the hook's
+    // responsibility - the hook does the F32->FP16 conversion
+    // (ggml_fp32_to_fp16, proper rounding) and calls
+    // write_fp16_reference_row with the FP16 buffer. The two paths
+    // are independent; a given hook call always writes to L1, and
+    // additionally either auto-populates the F32 L1.5 OR explicitly
+    // populates the FP16 L1.5, depending on the L1.5 dtype config.
+    if (dequant_w4a4_enabled() && g_l15.open &&
+        g_l15.file_dtype == DEQUANT_DTYPE_F32 &&
+        data != nullptr && n > 0) {
         sidecar_write_row_impl(g_l15, row_idx, data, n);
     }
 }
@@ -536,13 +784,60 @@ void open_fp16_reference_writer(const char * tensor_name, int64_t rows, int64_t 
         // works regardless of mode.
         return;
     }
+    const char * l15_suffix = DEQUANT_FILE_SUFFIX_L15_F16;
+    uint32_t     l15_dtype  = DEQUANT_DTYPE_F16;
+    if (!l15_dtype_is_f16()) {
+        l15_suffix = DEQUANT_FILE_SUFFIX_L15_F32;
+        l15_dtype  = DEQUANT_DTYPE_F32;
+    }
     sidecar_open_impl(g_l15, env_state().dequant_dir, tensor_name, rows, cols,
-                      DEQUANT_FILE_SUFFIX_L15);
+                      l15_suffix, l15_dtype);
 }
 
-void write_fp16_reference_row(int64_t row_idx, const float * data, int64_t n) {
+void write_fp16_reference_row(int64_t row_idx, const uint16_t * data, int64_t n) {
     std::lock_guard<std::recursive_mutex> lk(g_writer_mutex);
-    sidecar_write_row_impl(g_l15, row_idx, data, n);
+    sidecar_write_row_fp16_impl(g_l15, row_idx, data, n);
+}
+
+void write_fp16_reference_row_from_f32(int64_t row_idx, const float * data, int64_t n) {
+    std::lock_guard<std::recursive_mutex> lk(g_writer_mutex);
+    if (!g_l15.open || data == nullptr || n <= 0) {
+        return;
+    }
+    if (g_l15.file_dtype != DEQUANT_DTYPE_F16) {
+        // L1.5 is open as F32; the F32 path is handled by
+        // write_dequant_row's auto-populate branch. Calling
+        // write_fp16_reference_row_from_f32 on an F32 sidecar would
+        // silently up-cast FP16->F32 then write F32, which is not
+        // what the caller wants; refuse the call with a warning so
+        // the bug surfaces.
+        fprintf(stderr, "tessera_debug: write_fp16_reference_row_from_f32 on "
+                "an F32 L1.5 sidecar ('%s'); call write_fp16_reference_row on the "
+                "FP16 buffer or switch the L1.5 dtype to f16\n",
+                g_l15.tensor_name.c_str());
+        return;
+    }
+    // Convert F32 -> FP16 with proper rounding, then write the FP16
+    // buffer as a single row. Local stack buffer for the common
+    // small-row case; heap fallback for big rows. The conversion is
+    // bit-identical to ggml_compute_fp32_to_fp16 in
+    // ggml/src/ggml-impl.h:407-431; we keep a local copy here to
+    // avoid pulling ggml.h into the writer (which sits below the
+    // ggml layer).
+    std::vector<uint16_t> fp16_buf;
+    uint16_t stack_buf[256];
+    if ((size_t) n <= 256) {
+        for (int64_t i = 0; i < n; i++) {
+            stack_buf[i] = local_fp32_to_fp16(data[i]);
+        }
+        sidecar_write_row_fp16_impl(g_l15, row_idx, stack_buf, n);
+    } else {
+        fp16_buf.resize((size_t) n);
+        for (int64_t i = 0; i < n; i++) {
+            fp16_buf[(size_t) i] = local_fp32_to_fp16(data[i]);
+        }
+        sidecar_write_row_fp16_impl(g_l15, row_idx, fp16_buf.data(), n);
+    }
 }
 
 void set_fp16_reference_row_meta(int64_t row_idx,

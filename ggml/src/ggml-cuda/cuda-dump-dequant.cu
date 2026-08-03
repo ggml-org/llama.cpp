@@ -224,7 +224,45 @@ void ggml_cuda_dump_dequant(ggml_backend_cuda_context & ctx, const ggml_tensor *
                                             /*dispatch_count=*/1);
     }
     tessera_debug::close_dequant_writer();
-    // In W4A4 mode the L1.5 FP16-reference sidecar is auto-populated
-    // by the writer (same F32 data block, different file suffix). See
-    // the header for the FP16-reference semantics.
+    // In W4A4 mode, the L1.5 FP16-reference sidecar is also written.
+    // The L1.5 reference is the F32 dequant cast to FP16 (proper
+    // rounding via ggml_fp32_to_fp16, NOT truncation). This is the
+    // FP16 ground truth: the file data block is 2 bytes/value, the
+    // header dtype is DEQUANT_DTYPE_F16, and the file suffix is
+    // `.act.dequant.f16`. The conversion is done here in the hook
+    // (not the writer) so the L1.5 metric
+    //     ||FP16(Q_b(W_l)) - FP16(W_l)||_F^2 / ||FP16(W_l)||_F^2
+    // is well-defined and non-zero whenever the kernel dequant is
+    // not bit-exact at F16 precision (the common case for any
+    // non-power-of-2 weight value).
+    if (tessera_debug::dequant_w4a4_enabled() && tessera_debug::l15_dtype_is_f16()) {
+        tessera_debug::open_fp16_reference_writer(src0->name, captured_rows, ne1);
+        out_r = 0;
+        for (int64_t r = 0; r < ne0; r += stride, out_r++) {
+            const float * row = dst_h.data() + r * ne1;
+            // Stack buffer for small rows, heap for large.
+            uint16_t stack_buf[256];
+            uint16_t * fp16_row;
+            std::vector<uint16_t> heap_buf;
+            if ((size_t) ne1 <= 256) {
+                fp16_row = stack_buf;
+            } else {
+                heap_buf.resize((size_t) ne1);
+                fp16_row = heap_buf.data();
+            }
+            for (int64_t c = 0; c < ne1; c++) {
+                fp16_row[c] = (uint16_t) ggml_fp32_to_fp16(row[c]);
+            }
+            tessera_debug::write_fp16_reference_row(out_r, fp16_row, ne1);
+            tessera_debug::set_fp16_reference_row_meta(out_r, per_row_ns,
+                                                       kernel_id,
+                                                       /*dispatch_count=*/1);
+        }
+        tessera_debug::close_fp16_reference_writer();
+    }
+    // Note: the legacy F32 L1.5 path (l15_dtype=f32) is handled
+    // automatically by tessera_debug::write_dequant_row's auto-
+    // populate branch, which mirrors the F32 buffer to the L1.5
+    // sidecar when both L1 and L1.5 are open as F32. No explicit
+    // call is needed here.
 }

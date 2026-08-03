@@ -1,9 +1,45 @@
 #include "tessera-sidecar-v3.h"
 
+#include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 
 static_assert(sizeof(ts_sidecar_v3_row_meta) == 24, "row meta must be 24 bytes");
+
+// FP16 -> F32 decoder for the FP16 data path. Bit-identical to
+// ggml_compute_fp16_to_fp32 in ggml/src/ggml-impl.h:384-405; we keep
+// a local copy here so the reader can decode FP16 data without
+// pulling ggml.h into common/tessera-debug (the sidecar reader sits
+// below the ggml layer). The decoder handles normalized values,
+// denormals, +/-infinity, and NaN the same way ggml does.
+namespace {
+inline float ts_bits_to_f32(uint32_t w) {
+    union { uint32_t as_bits; float as_value; } u;
+    u.as_bits = w;
+    return u.as_value;
+}
+inline uint32_t ts_f32_to_bits(float f) {
+    union { uint32_t as_bits; float as_value; } u;
+    u.as_value = f;
+    return u.as_bits;
+}
+inline float ts_fp16_to_fp32_local(uint16_t h) {
+    const uint32_t w = (uint32_t) h << 16;
+    const uint32_t sign = w & UINT32_C(0x80000000);
+    const uint32_t two_w = w + w;
+    const uint32_t exp_offset = UINT32_C(0xE0) << 23;
+    const float exp_scale = 0x1.0p-112f;
+    const float normalized_value = ts_bits_to_f32((two_w >> 4) + exp_offset) * exp_scale;
+    const uint32_t magic_mask = UINT32_C(126) << 23;
+    const float magic_bias = 0.5f;
+    const float denormalized_value = ts_bits_to_f32((two_w >> 17) | magic_mask) - magic_bias;
+    const uint32_t denormalized_cutoff = UINT32_C(1) << 27;
+    const uint32_t result = sign |
+        (two_w < denormalized_cutoff ? ts_f32_to_bits(denormalized_value) : ts_f32_to_bits(normalized_value));
+    return ts_bits_to_f32(result);
+}
+} // namespace
 
 // minimal SHA-256 (FIPS 180-4)
 
@@ -166,6 +202,12 @@ int ts_sidecar_v3_read(const char * path, ts_sidecar_v3 * out,
         if (err_msg) { *err_msg = "negative dimensions"; }
         return -1;
     }
+    if (h.dtype != 0 /* DEQUANT_DTYPE_F32 */ &&
+        h.dtype != 1 /* DEQUANT_DTYPE_F16 */) {
+        fclose(f);
+        if (err_msg) { *err_msg = "unsupported dtype"; }
+        return -1;
+    }
 
     const size_t rows = (size_t) h.rows;
     const size_t cols = (size_t) h.cols;
@@ -188,11 +230,26 @@ int ts_sidecar_v3_read(const char * path, ts_sidecar_v3 * out,
 
     const size_t n_data = rows * cols;
     out->data.resize(n_data);
-    if (n_data > 0 &&
-        fread(out->data.data(), sizeof(float), n_data, f) != n_data) {
-        fclose(f);
-        if (err_msg) { *err_msg = "truncated data"; }
-        return -1;
+    if (n_data > 0) {
+        if (h.dtype == 0 /* DEQUANT_DTYPE_F32 */) {
+            // F32 data block: rows*cols*4 bytes, direct read.
+            if (fread(out->data.data(), sizeof(float), n_data, f) != n_data) {
+                fclose(f);
+                if (err_msg) { *err_msg = "truncated data (F32)"; }
+                return -1;
+            }
+        } else {
+            // FP16 data block: rows*cols*2 bytes, decoded to F32.
+            std::vector<uint16_t> fp16_buf(n_data);
+            if (fread(fp16_buf.data(), sizeof(uint16_t), n_data, f) != n_data) {
+                fclose(f);
+                if (err_msg) { *err_msg = "truncated data (FP16)"; }
+                return -1;
+            }
+            for (size_t i = 0; i < n_data; i++) {
+                out->data[i] = ts_fp16_to_fp32_local(fp16_buf[i]);
+            }
+        }
     }
 
     fclose(f);
