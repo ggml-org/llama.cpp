@@ -47,6 +47,7 @@ struct split_params {
     std::string output;
     bool no_tensor_first_split = false;
     bool dry_run = false;
+    bool delete_files = false;
 };
 
 static void split_print_usage(const char * executable) {
@@ -65,6 +66,7 @@ static void split_print_usage(const char * executable) {
     printf("  --split-max-size N(M|G) max size per split\n");
     printf("  --no-tensor-first-split do not add tensors to the first split (disabled by default)\n");
     printf("  --dry-run               only print out a split plan and exit, without writing any new files\n");
+    printf("  --delete-files          delete the split files during execution to free up disk space\n");
     printf("\n");
 }
 
@@ -147,6 +149,9 @@ static void split_params_parse_ex(int argc, const char ** argv, split_params & p
             }
             params.mode = MODE_SIZE;
             params.n_bytes_split = split_str_to_n_bytes(argv[arg_idx]);
+        } else if (arg == "--delete-files") {
+            arg_found = true;
+            params.delete_files = true;
         }
 
         if (!arg_found) {
@@ -554,6 +559,16 @@ static void gguf_merge(const split_params & split_params) {
         ggml_free(ctx_meta);
         f_input.close();
         fprintf(stderr, "\033[3Ddone\n");
+
+        if (!split_params.dry_run && split_params.delete_files) {
+            int delete_result = std::remove(split_path);
+            if (delete_result != 0) {
+                fprintf(stderr, "error: failed to delete %s\n", split_path);
+                exit(EXIT_FAILURE);
+            }
+            fprintf(stderr, "%s: deleted file %s\n", __func__, split_path);
+        }
+
     }
 
     if (!split_params.dry_run) {
