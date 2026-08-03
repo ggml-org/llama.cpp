@@ -473,9 +473,11 @@ llama_context::llama_context(
     }
 
     if (hparams.n_expert > 0 && !cparams.warmup && params.expert_hot_s != 0) {
+        // re-sync cadence ties to the heatmap log period when set, else 100 tokens
+        const int sync_period = params.expert_heat_log_period > 0 ? params.expert_heat_log_period : 100;
         expert_hotstore = std::make_unique<llama_expert_hotstore>(
             &model, hparams.n_layer(), hparams.n_expert,
-            params.expert_hot_s);
+            params.expert_hot_s, sync_period);
         for (auto & backend : backends) {
             if (ggml_backend_dev_type(ggml_backend_get_device(backend.get())) != GGML_BACKEND_DEVICE_TYPE_CPU) {
                 expert_hotstore->allocate(ggml_backend_get_default_buffer_type(backend.get()));
@@ -1411,8 +1413,12 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         synchronize();
         expert_heatmap->update_from_graph(res->moe_sel_experts);
     }
-    if (expert_heatmap && expert_hotstore && !expert_hotstore->is_filled) {
-        expert_hotstore->copy_top_s(*expert_heatmap);
+    if (expert_heatmap && expert_hotstore) {
+        if (!expert_hotstore->is_filled) {
+            expert_hotstore->copy_top_s(*expert_heatmap);
+        } else {
+            expert_hotstore->maybe_resync(*expert_heatmap);
+        }
     }
 
     ret = GGML_STATUS_SUCCESS;

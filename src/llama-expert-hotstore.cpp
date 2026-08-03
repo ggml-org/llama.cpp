@@ -15,11 +15,12 @@
 static const std::regex g_re_exps_weight("blk\\.(\\d+)\\.ffn_(up|down|gate|gate_up)_(ch|)exps\\.weight");
 
 llama_expert_hotstore::llama_expert_hotstore(
-        const llama_model * model, int n_layers, int n_experts, int hot_s) :
+        const llama_model * model, int n_layers, int n_experts, int hot_s, int sync_period) :
     n_layers(n_layers),
     n_experts(n_experts),
     hot_s(hot_s),
-    bytes_per_slot(n_layers, 0) {
+    bytes_per_slot(n_layers, 0),
+    sync_period(sync_period) {
     if (n_layers <= 0) {
         return;
     }
@@ -34,6 +35,17 @@ llama_expert_hotstore::llama_expert_hotstore(
                 entries.push_back({il, tensor, nullptr});
             }
         }
+    }
+
+    // entries is fixed from here on; build a per-layer index of stable
+    // pointers so copy/resync do not iterate the whole entries vector.
+    entries_by_layer.assign(n_layers, {});
+    for (auto & e : entries) {
+        entries_by_layer[e.layer_idx].push_back(&e);
+    }
+
+    if (hot_s > 0) {
+        slot_to_expert.assign(n_layers, std::vector<int>(hot_s, -1));
     }
 }
 
@@ -98,24 +110,124 @@ void llama_expert_hotstore::copy_top_s(const llama_expert_heatmap & heatmap) {
         return;
     }
 
-    for (const auto & e : entries) {
-        const size_t slot = ggml_nbytes(e.src) / (size_t) e.src->ne[2];
-        const char * src = e.src->data ? (const char *) ggml_get_data(e.src) : nullptr;
-        if (!src) {
-            continue;
+    for (int il = 0; il < n_layers; il++) {
+        const std::vector<int> top = heatmap.get_top_s(il, hot_s);
+        auto & ste = slot_to_expert[il];
+        for (int p = 0; p < (int) top.size() && p < hot_s; p++) {
+            ste[p] = top[p];
         }
 
-        const auto top = heatmap.get_top_s(e.layer_idx, hot_s);
-        for (size_t p = 0; p < top.size() && p < (size_t) hot_s; p++) {
-            const int     ex      = top[p];
-            const size_t  src_off = (size_t) ex * slot;
-            const size_t  dst_off = p * slot;
-            ggml_backend_tensor_set(e.dst, src + src_off, dst_off, slot);
+        for (entry * e : entries_by_layer[il]) {
+            const size_t slot = ggml_nbytes(e->src) / (size_t) e->src->ne[2];
+            const char * src = e->src->data ? (const char *) ggml_get_data(e->src) : nullptr;
+            if (!src) {
+                continue;
+            }
+            for (int p = 0; p < hot_s; p++) {
+                const int ex = ste[p];
+                if (ex < 0) {
+                    continue;
+                }
+                ggml_backend_tensor_set(e->dst, src + (size_t) ex * slot, (size_t) p * slot, slot);
+            }
         }
     }
 
+    last_sync_tokens = heatmap.tokens_total;
     is_filled = true;
     LLAMA_LOG("=== Expert hot store: top-S experts copied to GPU ===\n");
+}
+
+void llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
+    if (!is_filled || hot_s <= 0) {
+        return;
+    }
+
+    int swapped = 0;
+    for (int il = 0; il < n_layers; il++) {
+        const std::vector<int> top = heatmap.get_top_s(il, hot_s);
+        auto & ste = slot_to_expert[il];
+
+        // which experts are in the new ranking
+        std::vector<char> in_new(n_experts, 0);
+        for (int e : top) {
+            if (e >= 0 && e < n_experts) {
+                in_new[e] = 1;
+            }
+        }
+
+        // evict: free slots whose resident expert fell out of the new top-S
+        for (int p = 0; p < hot_s; p++) {
+            if (ste[p] >= 0 && !in_new[ste[p]]) {
+                ste[p] = -1;
+            }
+        }
+
+        // collect new experts that are not currently resident
+        std::vector<char> resident_set(n_experts, 0);
+        for (int p = 0; p < hot_s; p++) {
+            if (ste[p] >= 0) {
+                resident_set[ste[p]] = 1;
+            }
+        }
+        std::vector<int> to_place;
+        for (int e : top) {
+            if (e >= 0 && e < n_experts && !resident_set[e]) {
+                to_place.push_back(e);
+            }
+        }
+
+        // place each new expert into the first free slot, copy its weights
+        for (int e : to_place) {
+            int p = -1;
+            for (int q = 0; q < hot_s; q++) {
+                if (ste[q] < 0) {
+                    p = q;
+                    break;
+                }
+            }
+            if (p < 0) {
+                break; // no free slot (should not happen: evictions == new)
+            }
+            for (entry * ent : entries_by_layer[il]) {
+                const size_t slot = ggml_nbytes(ent->src) / (size_t) ent->src->ne[2];
+                const char * src = ent->src->data ? (const char *) ggml_get_data(ent->src) : nullptr;
+                if (!src) {
+                    continue;
+                }
+                ggml_backend_tensor_set(ent->dst, src + (size_t) e * slot, (size_t) p * slot, slot);
+            }
+            ste[p] = e;
+            swapped++;
+        }
+    }
+
+    last_sync_tokens = heatmap.tokens_total;
+    if (swapped > 0) {
+        LLAMA_LOG("=== Expert hot store: re-sync swapped %d expert slots ===\n", swapped);
+    }
+}
+
+void llama_expert_hotstore::maybe_resync(const llama_expert_heatmap & heatmap) {
+    if (sync_period <= 0 || heatmap.tokens_total <= 0) {
+        return;
+    }
+    if (heatmap.tokens_total / sync_period > last_sync_tokens / sync_period) {
+        resync_top_s(heatmap);
+    }
+}
+
+int llama_expert_hotstore::slot_of(int layer_idx, int expert_id) const {
+    if (layer_idx < 0 || layer_idx >= n_layers || hot_s <= 0) {
+        return -1;
+    }
+    const auto & ste = slot_to_expert[layer_idx];
+    for (int p = 0; p < hot_s; p++) {
+        if (ste[p] == expert_id) {
+            return p;
+        }
+    }
+    return -1;
 }
 
 void llama_expert_hotstore::log() const {
