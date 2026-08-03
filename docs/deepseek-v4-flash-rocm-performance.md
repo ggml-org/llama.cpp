@@ -256,9 +256,9 @@ Screening artifacts:
 Before integration, add a focused backend op test or deterministic reference for the changed operation. Required cases include short visible length, exactly/above top-k, chunk boundaries, unequal sequence lengths where supported, and gfx1030-specific dispatch fallback. Because llama-bench uses synthetic token IDs and MoE routing is input-dependent, any exploratory win must also pass one fixed, recorded production-representative token corpus before acceptance.
 
 The repository now includes `scripts/dsv4-rocm/corpus/technical-proxy.txt`, a
-9,816-byte natural-text engineering proxy with SHA-256
-`c9ecdea26250567d276881e2c0b1465df03c4d3d28bcc7814ecc431da34d20ce`.
-It tokenizes to 2,528 prompt tokens. This approximates the user's technical
+9,807-byte natural-text engineering proxy with SHA-256
+`396c178b3f77e7a920473fedaa54d79d3c98df5a27baebfa9b7de62a793a71df`.
+It tokenizes to 2,527 prompt tokens. This approximates the user's technical
 assistant workload but is explicitly not a user-supplied production corpus.
 `test-dsv4-validation.sh` can preserve server logs/responses via
 `DSV4_OUTPUT_DIR`; `compare-validation.py` compares base/candidate content,

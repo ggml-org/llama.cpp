@@ -2,10 +2,10 @@ This is a fixed natural-text technical proxy for DeepSeek-V4 prompt-processing v
 
 # DeepSeek-V4-Flash ROCm prompt-processing performance plan
 
-Status: living engineering record  
-Owner branch: `perf/dsv4-rocm-pp-20260803`  
-Base: `b88a59fbc6ac255e6bf5e2dd790f559c89ce911c` in Edwin's llama.cpp fork  
-Target host: `edwin@192.168.1.161` (`webhie`)  
+Status: living engineering record
+Owner branch: `perf/dsv4-rocm-pp-20260803`
+Base: `b88a59fbc6ac255e6bf5e2dd790f559c89ce911c` in Edwin's llama.cpp fork
+Target host: `edwin@192.168.1.161` (`webhie`)
 Last updated: 2026-08-03
 
 ## 1. Objective and success criteria
@@ -159,4 +159,3 @@ Test: attribute PP to `MUL_MAT_ID`/MMQ and routing; record achieved bandwidth/wa
 Candidate implementation if confirmed: tune only the measured dominant GGUF quant/shape, guarded by architecture/shape dispatch with generic fallback.
 
 ## 6. Milestone plan
-

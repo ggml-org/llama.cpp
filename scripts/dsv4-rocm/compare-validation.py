@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -29,6 +30,42 @@ def load(root: Path, mode: str, request: str) -> dict:
     return value
 
 
+def require_number(value: object, name: str, *, positive: bool = False) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError(f"{name} is not a finite number")
+    if positive and value <= 0:
+        raise ValueError(f"{name} must be positive")
+    return float(value)
+
+
+def validate_response(value: dict, name: str) -> dict:
+    content = value.get("content")
+    prompt = value.get("prompt")
+    tokens = value.get("tokens")
+    if not isinstance(content, str) or not content:
+        raise ValueError(f"{name}: content is missing or empty")
+    if not isinstance(prompt, str) or not prompt:
+        raise ValueError(f"{name}: prompt is missing or empty")
+    if not isinstance(tokens, list) or not tokens or any(isinstance(token, bool) or not isinstance(token, int) for token in tokens):
+        raise ValueError(f"{name}: tokens must be a nonempty integer list")
+    for key in ("tokens_evaluated", "tokens_predicted"):
+        field = value.get(key)
+        if isinstance(field, bool) or not isinstance(field, int) or field <= 0:
+            raise ValueError(f"{name}: {key} must be a positive integer")
+
+    timings = value.get("timings")
+    if not isinstance(timings, dict):
+        raise ValueError(f"{name}: timings is not an object")
+    prompt_n = require_number(timings.get("prompt_n"), f"{name}: timings.prompt_n", positive=True)
+    prompt_ms = require_number(timings.get("prompt_ms"), f"{name}: timings.prompt_ms", positive=True)
+    prompt_tps = require_number(timings.get("prompt_per_second"), f"{name}: timings.prompt_per_second", positive=True)
+    require_number(timings.get("cache_n"), f"{name}: timings.cache_n")
+    expected_tps = prompt_n * 1000.0 / prompt_ms
+    if not math.isclose(prompt_tps, expected_tps, rel_tol=1e-9, abs_tol=1e-9):
+        raise ValueError(f"{name}: prompt_per_second is inconsistent with prompt_n/prompt_ms")
+    return timings
+
+
 def main() -> int:
     args = parse_args()
     base_root = args.base.resolve()
@@ -39,15 +76,17 @@ def main() -> int:
         for request in REQUESTS:
             base = load(base_root, mode, request)
             candidate = load(candidate_root, mode, request)
-            for key in ("content", "tokens", "prompt", "tokens_evaluated", "tokens_predicted"):
-                if base.get(key) != candidate.get(key):
-                    raise ValueError(f"{mode}/{request}: base and candidate differ for {key}")
             name = f"{mode}/{request}"
+            base_timings = validate_response(base, f"base/{name}")
+            candidate_timings = validate_response(candidate, f"candidate/{name}")
+            for key in ("content", "tokens", "prompt", "tokens_evaluated", "tokens_predicted"):
+                if base[key] != candidate[key]:
+                    raise ValueError(f"{name}: base and candidate differ for {key}")
             comparisons[name] = {
                 "content_equal": True,
                 "tokens_equal": True,
-                "base_cache_n": base.get("timings", {}).get("cache_n"),
-                "candidate_cache_n": candidate.get("timings", {}).get("cache_n"),
+                "base_cache_n": base_timings["cache_n"],
+                "candidate_cache_n": candidate_timings["cache_n"],
             }
 
     performance: dict[str, dict] = {}
@@ -55,18 +94,16 @@ def main() -> int:
     for mode in MODES:
         base = load(base_root, mode, "first")
         candidate = load(candidate_root, mode, "first")
-        base_timings = base.get("timings", {})
-        candidate_timings = candidate.get("timings", {})
-        base_n = base_timings.get("prompt_n")
-        candidate_n = candidate_timings.get("prompt_n")
-        if not isinstance(base_n, (int, float)) or base_n <= 0 or base_n != candidate_n:
-            raise ValueError(f"{mode}/first: invalid or mismatched prompt_n")
-        base_tps = base_timings.get("prompt_per_second")
-        candidate_tps = candidate_timings.get("prompt_per_second")
-        base_ms = base_timings.get("prompt_ms")
-        candidate_ms = candidate_timings.get("prompt_ms")
-        if not all(isinstance(value, (int, float)) and value > 0 for value in (base_tps, candidate_tps, base_ms, candidate_ms)):
-            raise ValueError(f"{mode}/first: invalid prompt timings")
+        base_timings = validate_response(base, f"base/{mode}/first")
+        candidate_timings = validate_response(candidate, f"candidate/{mode}/first")
+        base_n = base_timings["prompt_n"]
+        candidate_n = candidate_timings["prompt_n"]
+        if base_n != candidate_n:
+            raise ValueError(f"{mode}/first: mismatched prompt_n")
+        base_tps = base_timings["prompt_per_second"]
+        candidate_tps = candidate_timings["prompt_per_second"]
+        base_ms = base_timings["prompt_ms"]
+        candidate_ms = candidate_timings["prompt_ms"]
         delta_pct = 100.0 * (candidate_tps / base_tps - 1.0)
         performance[mode] = {
             "prompt_n": base_n,

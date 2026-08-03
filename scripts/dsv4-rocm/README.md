@@ -116,9 +116,9 @@ GGML_HIP_RDNA2_MMQ_J=16 build/bin/test-mmid-rdna2 \
 
 ## Natural-text proxy validation
 
-`scripts/dsv4-rocm/corpus/technical-proxy.txt` is a fixed 2,528-token
+`scripts/dsv4-rocm/corpus/technical-proxy.txt` is a fixed 2,527-token
 engineering proxy, not a user-supplied production corpus. Its SHA-256 is
-`c9ecdea26250567d276881e2c0b1465df03c4d3d28bcc7814ecc431da34d20ce`.
+`396c178b3f77e7a920473fedaa54d79d3c98df5a27baebfa9b7de62a793a71df`.
 Set `DSV4_OUTPUT_DIR` when running `tests/test-dsv4-validation.sh` to preserve
 layer/tensor server logs and response JSON. Run the same command with the MMQ
 override unset and set to 16, using different output directories, then compare:

@@ -23,6 +23,7 @@ Environment overrides:
   DSV4_CTX_SIZE           context size (default: 4096)
   DSV4_N_PREDICT          generated tokens per request (default: 8)
   DSV4_CACHE_REUSE        minimum cache-reuse chunk (default: 16)
+  DSV4_PROMPT_FILE        UTF-8 prompt file; mutually exclusive with DSV4_PROMPT
   DSV4_OUTPUT_DIR         preserve responses/logs in a new directory instead of deleting a temporary directory
 USAGE
 }
@@ -67,8 +68,7 @@ command -v python3 >/dev/null || { echo "error: python3 is required" >&2; exit 2
 KEEP_ARTIFACTS=0
 if [[ -n ${DSV4_OUTPUT_DIR:-} ]]; then
     TMP_ROOT=$DSV4_OUTPUT_DIR
-    [[ ! -e "$TMP_ROOT" ]] || { echo "error: DSV4_OUTPUT_DIR already exists: $TMP_ROOT" >&2; exit 2; }
-    mkdir -p "$TMP_ROOT"
+    mkdir -- "$TMP_ROOT" || { echo "error: cannot create exclusive DSV4_OUTPUT_DIR: $TMP_ROOT" >&2; exit 2; }
     KEEP_ARTIFACTS=1
 else
     TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/dsv4-validation.XXXXXX")
@@ -83,6 +83,11 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+PROMPT_FILE=${DSV4_PROMPT_FILE:-}
+if [[ -n "$PROMPT_FILE" ]]; then
+    [[ -f "$PROMPT_FILE" ]] || { echo "error: DSV4_PROMPT_FILE is not a file: $PROMPT_FILE" >&2; exit 2; }
+    [[ ! -v DSV4_PROMPT ]] || { echo "error: DSV4_PROMPT_FILE and DSV4_PROMPT are mutually exclusive" >&2; exit 2; }
+fi
 PROMPT=${DSV4_PROMPT:-'A deterministic DSv4 validation prompt: explain why caching a shared prefix helps inference.'}
 CONTINUATION=${DSV4_CONTINUATION:-' Continue with one short sentence about the same topic.'}
 
@@ -155,14 +160,16 @@ run_mode() {
     fi
 
     local first_prompt second_prompt
-    first_prompt=$(DSV4_N_PREDICT="$N_PREDICT" python3 - "$PROMPT" <<'PY'
-import json, sys
-print(json.dumps({"model": "dsv4-validation", "prompt": sys.argv[1], "n_predict": int(__import__("os").environ["DSV4_N_PREDICT"]), "seed": 123, "temperature": 0, "cache_prompt": True, "id_slot": 0, "return_tokens": True}))
+    first_prompt=$(DSV4_N_PREDICT="$N_PREDICT" python3 - "$PROMPT_FILE" "$PROMPT" <<'PY'
+import json, pathlib, sys
+prompt = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8") if sys.argv[1] else sys.argv[2]
+print(json.dumps({"model": "dsv4-validation", "prompt": prompt, "n_predict": int(__import__("os").environ["DSV4_N_PREDICT"]), "seed": 123, "temperature": 0, "cache_prompt": True, "id_slot": 0, "return_tokens": True}))
 PY
 )
-    second_prompt=$(DSV4_N_PREDICT="$N_PREDICT" python3 - "$PROMPT$CONTINUATION" <<'PY'
-import json, sys
-print(json.dumps({"model": "dsv4-validation", "prompt": sys.argv[1], "n_predict": int(__import__("os").environ["DSV4_N_PREDICT"]), "seed": 123, "temperature": 0, "cache_prompt": True, "id_slot": 0, "return_tokens": True}))
+    second_prompt=$(DSV4_N_PREDICT="$N_PREDICT" python3 - "$PROMPT_FILE" "$PROMPT" "$CONTINUATION" <<'PY'
+import json, pathlib, sys
+prompt = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8") if sys.argv[1] else sys.argv[2]
+print(json.dumps({"model": "dsv4-validation", "prompt": prompt + sys.argv[3], "n_predict": int(__import__("os").environ["DSV4_N_PREDICT"]), "seed": 123, "temperature": 0, "cache_prompt": True, "id_slot": 0, "return_tokens": True}))
 PY
 )
     request "$port" "$first_prompt" "$out_dir/first.json" "$server_log"
