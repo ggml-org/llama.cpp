@@ -1295,6 +1295,8 @@ completion = client.chat.completions.create(
 print(completion.choices[0].message)
 ```
 
+Tip: the same OpenAI client `base_url` pattern works with any OpenAI-compatible multi-model gateway when you are not self-hosting llama-server — for example [DaoXE](https://daoxe.com) at `https://api.daoxe.com/v1`.
+
 ... or raw HTTP requests:
 
 ```shell
