@@ -70,9 +70,11 @@ bool llama_expert_hotstore::allocate(ggml_backend_buffer_type_t gpu_buft) {
         return false;
     }
 
-    // one hot tensor per model expert tensor, trimmed to hot_s slots
+    // one hot tensor per model expert tensor, with hot_s expert slots plus
+    // 1 sentinel slot (index hot_s) that stays zero so cold selections read
+    // zeros via a valid in-range index (sentinel trick, oldtricks Trick 2).
     for (auto & e : entries) {
-        e.dst = ggml_new_tensor_3d(ctx.get(), e.src->type, e.src->ne[0], e.src->ne[1], hot_s);
+        e.dst = ggml_new_tensor_3d(ctx.get(), e.src->type, e.src->ne[0], e.src->ne[1], hot_s + 1);
     }
 
     // check whether the buffer would fit before committing any VRAM
@@ -101,6 +103,11 @@ bool llama_expert_hotstore::allocate(ggml_backend_buffer_type_t gpu_buft) {
     }
     buf = ggml_backend_buffer_ptr(b);
     ggml_backend_buffer_set_usage(buf.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+    // zero the whole buffer so the sentinel slot (index hot_s) AND every
+    // not-yet-filled expert slot is zero; copy_top_s/resync_top_s only write
+    // slots 0..hot_s-1, so slot hot_s stays zero for the lifetime of the store.
+    ggml_backend_buffer_clear(buf.get(), 0);
 
     return true;
 }
@@ -240,11 +247,11 @@ void llama_expert_hotstore::log() const {
     LLAMA_LOG("  total bytes/slot across all layers = %zu (%zu MiB)\n",
         total, total / (1024 * 1024));
     if (buf) {
-        LLAMA_LOG("  GPU hot store allocated: %s, %zu bytes (%zu MiB) for %d slots\n",
+        LLAMA_LOG("  GPU hot store allocated: %s, %zu bytes (%zu MiB) for %d+1 slots (%d expert + 1 sentinel)\n",
             ggml_backend_buffer_name(buf.get()),
             ggml_backend_buffer_get_size(buf.get()),
             ggml_backend_buffer_get_size(buf.get()) / (1024 * 1024),
-            hot_s);
+            hot_s, hot_s);
     } else if (hot_s > 0) {
         LLAMA_LOG("  hot store DISABLED (%d slots requested)\n", hot_s);
     }
