@@ -1,7 +1,6 @@
 #include "fa-vec.h"
-
-#include "ggml.h"
 #include "ggml-backend.h"
+#include "ggml.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -42,8 +41,8 @@ static void usage(const char * argv0) {
 }
 
 int main(int argc, char ** argv) {
-    const char * tuner  = nullptr;
-    const char * bname  = nullptr;
+    const char * tuner = nullptr;
+    const char * bname = nullptr;
     tuner_opts   opts;
 
     for (int i = 1; i < argc; i++) {
