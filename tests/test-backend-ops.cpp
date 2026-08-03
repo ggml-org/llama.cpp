@@ -10157,12 +10157,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_from_file(const c
 }
 
 // ---- FA vec (Q,NE): forced-config numerical slice (Metal only) ----
-// metal proc_address bridges (resolved by string, not symbol linkage)
 using set_fa_vec_override_t   = void (*)(int, int);
 using clear_fa_vec_override_t = void (*)(void);
 
-// legal NE for a (dk,dv): NL = 32/NE, require (dk/4)%NL==0 && (dv/4)%NL==0.
-// keep in sync with ggml_metal_tuning::fa_vec_legal_ne in ggml-metal-tuning.h (used by the tool)
+// NL = 32/NE must divide both dk/4 and dv/4.
 static std::vector<int> fa_vec_legal_ne(int dk, int dv) {
     std::vector<int> r;
     for (int ne : {1, 2, 4}) {
@@ -10174,12 +10172,8 @@ static std::vector<int> fa_vec_legal_ne(int dk, int dv) {
     return r;
 }
 
-// Forces every legal (Q,NE) on two representative shapes and compares against the CPU
-// reference. Metal-only: the override is a backend-global switch, so it cannot be expressed
-// per test case in the backend-agnostic case list. Covers padded rows (ne01 % Q != 0),
-// per-qq sinks, kvpad, the nsg-dependent shmem offsets / parallel-reduce stride
-// (ne11 -> nsg 1/2/4) and the quantized dequant-once path.
-// single-threaded; g_override_set is backend-global. called only after all parallel workers have joined.
+// Covers padded rows, sinks, kvpad, multi-SIMDgroup reduction, quantized K/V, and MLA views.
+// The override is backend-global, so this runs after all parallel workers have joined.
 static bool run_fa_vec_slice(ggml_backend_t backend, ggml_backend_t backend_cpu) {
     auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
 
@@ -10366,8 +10360,6 @@ static bool test_backend(ggml_backend_t backend, ggml_backend_dev_t dev, test_mo
         output_printer->print_summary(test_summary_info(n_ok, tests_run, false));
         output_printer->print_failed_tests(failed_tests);
 
-        // Metal-only: force every legal (Q,NE) on a bounded slice of shapes. Reuses the
-        // reference CPU backend above; a no-op on backends without the override proc.
         const bool slice_ok = run_fa_vec_slice(backend, backend_cpu.get());
 
         return n_ok == tests_run && slice_ok;
