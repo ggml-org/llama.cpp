@@ -2623,6 +2623,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_STEP35:
         case LLM_ARCH_TALKIE:
         case LLM_ARCH_MELLUM:
+        // fallback, dflash rope is inherited from the linked target
         case LLM_ARCH_DFLASH:
             return LLAMA_ROPE_TYPE_NEOX;
 

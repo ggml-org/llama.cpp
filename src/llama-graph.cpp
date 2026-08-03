@@ -1350,7 +1350,10 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     n_outputs        (params.n_outputs),
     n_ctx_orig       (cparams.n_ctx_orig_yarn),
     pooling_type     (cparams.pooling_type),
-    rope_type        (hparams.rope_type),
+    // DFlash: inherit rope type from the linked target
+    rope_type        ((arch == LLM_ARCH_DFLASH && cparams.ctx_other != nullptr)
+                      ? llama_get_model(cparams.ctx_other)->hparams.rope_type
+                      : hparams.rope_type),
     sched            (params.sched),
     backend_cpu      (params.backend_cpu),
     cvec             (params.cvec),
