@@ -255,6 +255,25 @@ Screening artifacts:
 
 Before integration, add a focused backend op test or deterministic reference for the changed operation. Required cases include short visible length, exactly/above top-k, chunk boundaries, unequal sequence lengths where supported, and gfx1030-specific dispatch fallback. Because llama-bench uses synthetic token IDs and MoE routing is input-dependent, any exploratory win must also pass one fixed, recorded production-representative token corpus before acceptance.
 
+The repository now includes `scripts/dsv4-rocm/corpus/technical-proxy.txt`, a
+9,816-byte natural-text engineering proxy with SHA-256
+`c9ecdea26250567d276881e2c0b1465df03c4d3d28bcc7814ecc431da34d20ce`.
+It tokenizes to 2,528 prompt tokens. This approximates the user's technical
+assistant workload but is explicitly not a user-supplied production corpus.
+`test-dsv4-validation.sh` can preserve server logs/responses via
+`DSV4_OUTPUT_DIR`; `compare-validation.py` compares base/candidate content,
+token IDs, prompts, counts, and first-prompt timings.
+
+Default and J=16 runs both passed layer-reference versus tensor split,
+continuation, replay, and KV reuse. All six base/candidate responses matched in
+content and token IDs. On the single natural-text first-prompt observation,
+tensor-split PP was 399.794 t/s by default and 419.577 t/s with J=16 (+4.95%);
+layer-split was 259.833 versus 292.803 t/s (+12.69%). These are correctness and
+routing-sanity evidence, not a statistical performance result; the bracketed
+llama-bench runs remain the throughput evidence.
+
+Artifact: `$HOME/llama-jobs/dsv4-corpus-validation/20260803T165136Z-88c415d91/`.
+
 ### M3 - implementation and matched A/B
 
 One implementation branch and one writer. Keep the base binary and build artifacts. A frozen baseline is valid only when its sibling llama/ggml DSOs are selected and hashed; an executable that resolves candidate-build libraries is not frozen. Run static/backend tests first, then DSV4 validation, then matched benchmark/profile. Report local kernel speed separately from whole-model PP.
@@ -293,12 +312,12 @@ A dense mask is not a sparse performance implementation. Success requires runtim
 | 2026-08-03 | Cap measured PP at five minutes while excluding initial load/warmup; run 8K separately and reject incomplete runs for matched A/B. | User direction plus independent benchmark-validity review. | final |
 | 2026-08-03 | Trace whole process but apply attribution thresholds only after filtering to recorded measured-run timestamps. | Independent review found model load would bias whole-process totals. | final |
 | 2026-08-03 | Select routed MMQ as M1 rather than CSA/LID/communication. | Measured-region trace assigns about 40% of summed kernel time to `mul_mat_q`; RCCL is 8%, LID 6.3%, explicit flash attention 5.6%, and measured H2D only 47 ms. | final |
-| 2026-08-03 | Keep J=16 opt-in until skew-aware dispatch or a narrow DSV4 guard is validated. | +10.5-10.8% matched 2K/8K PP, but hot-routing microbench regresses with J=16. | provisional |
+| 2026-08-03 | Keep J=16 explicit for the known DSV4 IQ2_M service; do not make it a generic RDNA2 default. | Bracketed synthetic PP gains 10.0-10.8% and the 2,528-token natural proxy gains 4.95% in tensor mode, but hot-routing microbench regresses with J=16. | final |
 
 ## 9. Open questions
 
-1. Does the J=16 win hold on a fixed production-representative token corpus and at final 32K+ contexts?
-2. Can expert concentration be obtained cheaply enough to select J=16/J=32/J=64 without a host synchronization, or should the optimization stay explicitly configured for DSV4?
+1. Does the J=16 win hold on a user-supplied production corpus and at final 32K+ contexts? The committed natural-text proxy is positive but only one observation.
+2. Can a later expert-concentration signal select J=16/J=32/J=64 without a host synchronization? This patch intentionally stays explicit.
 3. What is the identity of the dominant 28.44% Tensile Cijk GEMM, and can its exact DSV4 shape be tuned without moving the bottleneck to RCCL?
 4. Does HIP flash attention perform any arbitrary-mask tile pruning? Source and counters must answer before a later CSA patch.
 5. How are LID scores and global top-k distributed across the four meta devices at runtime?
@@ -307,9 +326,10 @@ A dense mask is not a sparse performance implementation. Success requires runtim
 
 ## 10. Reproduction record
 
-The first controlled window is complete. These are exploratory records, not the
-final acceptance command; 32K+ and the fixed production corpus remain deferred.
-All harness runs cap measured time at five minutes while excluding model load.
+The first controlled window and fixed natural-text proxy are complete. These
+are not yet the final acceptance command; 32K+ and any user-supplied production
+corpus remain deferred. All harness runs cap measured time at five minutes
+while excluding model load.
 
 Current 8K control/candidate commands:
 

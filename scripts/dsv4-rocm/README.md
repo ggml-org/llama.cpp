@@ -114,6 +114,25 @@ GGML_HIP_RDNA2_MMQ_J=16 build/bin/test-mmid-rdna2 \
   --experts 256 --top-k 6 --routing uniform --compare-output /tmp/mmid.bin
 ```
 
+## Natural-text proxy validation
+
+`scripts/dsv4-rocm/corpus/technical-proxy.txt` is a fixed 2,528-token
+engineering proxy, not a user-supplied production corpus. Its SHA-256 is
+`c9ecdea26250567d276881e2c0b1465df03c4d3d28bcc7814ecc431da34d20ce`.
+Set `DSV4_OUTPUT_DIR` when running `tests/test-dsv4-validation.sh` to preserve
+layer/tensor server logs and response JSON. Run the same command with the MMQ
+override unset and set to 16, using different output directories, then compare:
+
+```bash
+scripts/dsv4-rocm/compare-validation.py \
+  "$artifact_root/base" "$artifact_root/candidate" \
+  --json "$artifact_root/comparison.json"
+```
+
+The comparison fails if content, generated token IDs, prompts, or token counts
+differ. Its timing row is only one natural-text observation; use bracketed
+`run-pp.sh` repetitions for performance claims.
+
 ## Artifacts
 
 Runs are written to collision-resistant directories under

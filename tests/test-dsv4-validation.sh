@@ -23,6 +23,7 @@ Environment overrides:
   DSV4_CTX_SIZE           context size (default: 4096)
   DSV4_N_PREDICT          generated tokens per request (default: 8)
   DSV4_CACHE_REUSE        minimum cache-reuse chunk (default: 16)
+  DSV4_OUTPUT_DIR         preserve responses/logs in a new directory instead of deleting a temporary directory
 USAGE
 }
 
@@ -63,14 +64,22 @@ SERVER=${DSV4_SERVER:-$ROOT_DIR/build/bin/llama-server}
 command -v curl >/dev/null || { echo "error: curl is required" >&2; exit 2; }
 command -v python3 >/dev/null || { echo "error: python3 is required" >&2; exit 2; }
 
-TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/dsv4-validation.XXXXXX")
+KEEP_ARTIFACTS=0
+if [[ -n ${DSV4_OUTPUT_DIR:-} ]]; then
+    TMP_ROOT=$DSV4_OUTPUT_DIR
+    [[ ! -e "$TMP_ROOT" ]] || { echo "error: DSV4_OUTPUT_DIR already exists: $TMP_ROOT" >&2; exit 2; }
+    mkdir -p "$TMP_ROOT"
+    KEEP_ARTIFACTS=1
+else
+    TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/dsv4-validation.XXXXXX")
+fi
 SERVER_PID=""
 cleanup() {
     if [[ -n "$SERVER_PID" ]]; then
         kill "$SERVER_PID" 2>/dev/null || true
         wait "$SERVER_PID" 2>/dev/null || true
     fi
-    rm -rf "$TMP_ROOT"
+    [[ "$KEEP_ARTIFACTS" == 1 ]] || rm -rf "$TMP_ROOT"
 }
 trap cleanup EXIT INT TERM
 
@@ -78,12 +87,12 @@ PROMPT=${DSV4_PROMPT:-'A deterministic DSv4 validation prompt: explain why cachi
 CONTINUATION=${DSV4_CONTINUATION:-' Continue with one short sentence about the same topic.'}
 
 request() {
-    local port=$1 body=$2 output=$3 status
+    local port=$1 body=$2 output=$3 server_log=$4 status
     status=$(curl --silent --show-error --output "$output" --write-out '%{http_code}' \
         --max-time "${DSV4_REQUEST_TIMEOUT:-300}" \
         -H 'Content-Type: application/json' \
         --data "$body" "http://127.0.0.1:${port}/completion") || {
-        echo "error: request failed (server log: $TMP_ROOT/server.log)" >&2
+        echo "error: request failed (server log: $server_log)" >&2
         return 1
     }
     if [[ "$status" != 200 ]]; then
@@ -94,7 +103,7 @@ request() {
 }
 
 run_mode() {
-    local mode=$1 label=$2 port=$3 out_dir="$TMP_ROOT/$2"
+    local mode=$1 label=$2 port=$3 out_dir="$TMP_ROOT/$2" server_log="$TMP_ROOT/$2/server.log"
     mkdir -p "$out_dir"
     echo "[$label] split-mode=$mode tensor-split=$TENSOR_SPLIT flash-attn=$FLASH_ATTN parallel=$PARALLEL"
 
@@ -121,7 +130,7 @@ run_mode() {
         --cache-prompt \
         --cache-reuse "$CACHE_REUSE" \
         "${draft_args[@]}" \
-        >"$TMP_ROOT/server.log" 2>&1 &
+        >"$server_log" 2>&1 &
     SERVER_PID=$!
 
     local ready=0
@@ -134,14 +143,14 @@ run_mode() {
         fi
         if ! kill -0 "$SERVER_PID" 2>/dev/null; then
             echo "error: llama-server exited while starting ($label):" >&2
-            cat "$TMP_ROOT/server.log" >&2
+            cat "$server_log" >&2
             return 1
         fi
         sleep 1
     done
     if [[ "$ready" != 1 ]]; then
         echo "error: llama-server did not become ready ($label):" >&2
-        cat "$TMP_ROOT/server.log" >&2
+        cat "$server_log" >&2
         return 1
     fi
 
@@ -156,9 +165,9 @@ import json, sys
 print(json.dumps({"model": "dsv4-validation", "prompt": sys.argv[1], "n_predict": int(__import__("os").environ["DSV4_N_PREDICT"]), "seed": 123, "temperature": 0, "cache_prompt": True, "id_slot": 0, "return_tokens": True}))
 PY
 )
-    request "$port" "$first_prompt" "$out_dir/first.json"
-    request "$port" "$second_prompt" "$out_dir/continuation.json"
-    request "$port" "$second_prompt" "$out_dir/replay.json"
+    request "$port" "$first_prompt" "$out_dir/first.json" "$server_log"
+    request "$port" "$second_prompt" "$out_dir/continuation.json" "$server_log"
+    request "$port" "$second_prompt" "$out_dir/replay.json" "$server_log"
 
     python3 - "$label" "$out_dir" <<'PY'
 import json
@@ -222,3 +231,6 @@ print("[compare] reference and tensor-split deterministic outputs match")
 PY
 
 echo "DSv4 validation passed (model: $DSV4_MODEL)"
+if [[ "$KEEP_ARTIFACTS" == 1 ]]; then
+    printf 'Validation artifacts: %s\n' "$TMP_ROOT"
+fi
