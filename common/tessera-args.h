@@ -60,7 +60,7 @@ struct common_tessera_params {
     // north-star throughput harness: run workloads then exit without quantizing
     std::string throughput_workload;
     std::string throughput_out;
-    // drafter training dataset preparation: convert spec_calib.v2 JSONL then exit
+    // drafter training dataset preparation: convert llama.tessera.spec.v1 JSONL then exit
     std::string dataset_in;
     std::string dataset_out;
     std::string dataset_mode = "text";
