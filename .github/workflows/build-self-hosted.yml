@@ -81,6 +81,12 @@ jobs:
 
       - name: Test
         id: ggml-ci
+        # GGML_CUDA_ENABLE_UNIFIED_MEMORY=1: workaround for a coherence issue on
+        # integrated RDNA3.5 (gfx1151) where GPU kernels reading mmap-loaded
+        # weights can return incorrect output. Unified (managed) memory restores
+        # coherence. Remove once the underlying ROCm/HIP issue is fixed.
+        env:
+          GGML_CUDA_ENABLE_UNIFIED_MEMORY: "1"
         run: |
           rocminfo
           GG_BUILD_ROCM=1 GG_BUILD_AMDGPU_TARGETS=gfx1151 bash ./ci/run.sh ~/results/llama.cpp ~/mnt/llama.cpp
