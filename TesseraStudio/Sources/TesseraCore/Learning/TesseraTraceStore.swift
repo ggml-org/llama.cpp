@@ -1,6 +1,6 @@
 import Foundation
 
-/// File-backed accumulator for llama.spec_calib.v2 telemetry JSONL.
+/// File-backed accumulator for llama.tessera.spec.v1 telemetry JSONL.
 /// Traces accumulate across imatrix calibration runs; the orchestrator
 /// reads them when enough data has gathered to form a training dataset.
 ///
