@@ -36,7 +36,7 @@ castle ::= ...
 
 ## Non-Terminals and Terminals
 
-Non-terminal symbols (rule names) stand for a pattern of terminals and other non-terminals. They are required to be a dashed lowercase word, like `move`, `castle`, or `check-mate`.
+Non-terminal symbols (rule names) stand for a pattern of terminals and other non-terminals. They may contain letters, digits, hyphens, and underscores, and typically start with a lowercase letter — though camelCase names are also valid (e.g. `dataType`, `relationOperator`). Examples: `move`, `castle`, `check-mate`, `dataType`.
 
 Terminals are actual characters ([code points](https://en.wikipedia.org/wiki/Code_point)). They can be specified as a sequence like `"1"` or `"O-O"` or as ranges like `[1-9]` or `[NBKQR]`.
 
