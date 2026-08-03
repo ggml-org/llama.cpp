@@ -201,6 +201,7 @@ Invoke a tool call, request body is a JSON object with:
 
 Headers:
 - `x-tool-cwd`: optional; if set, use as the CWD for tool; this is not part of tool's params because it's meant to be set by the runtime, not the LLM itself
+- `x-tool-docker`: optional; if set, use this docker container ID as tool runtime environment
 
 Returns JSON object. There are two response formats (MCP tools use the same two formats: their result content is concatenated into `plain_text_response`, and RPC or tool errors are surfaced as the `error` string):
 
