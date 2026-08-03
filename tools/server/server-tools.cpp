@@ -64,24 +64,27 @@ public:
 
 class tools_io_basic : public tools_io {
 public:
+    // cwd, if non-empty, is used to resolve relative paths and as the working directory for run()
+    explicit tools_io_basic(std::string cwd = "") : cwd(std::move(cwd)) {}
+
     bool is_directory(const std::string & path) const override {
         std::error_code ec;
-        return fs::is_directory(path, ec) && !ec;
+        return fs::is_directory(resolve(path), ec) && !ec;
     }
 
     bool is_regular_file(const std::string & path) const override {
         std::error_code ec;
-        return fs::is_regular_file(path, ec) && !ec;
+        return fs::is_regular_file(resolve(path), ec) && !ec;
     }
 
     bool file_size(const std::string & path, uintmax_t & out_size) const override {
         std::error_code ec;
-        out_size = fs::file_size(path, ec);
+        out_size = fs::file_size(resolve(path), ec);
         return !ec;
     }
 
     bool read_file(const std::string & path, std::string & out) const override {
-        std::ifstream f(path, std::ios::binary);
+        std::ifstream f(resolve(path), std::ios::binary);
         if (!f) return false;
         std::ostringstream ss;
         ss << f.rdbuf();
@@ -91,12 +94,12 @@ public:
 
     bool write_file(const std::string & path, const std::string & content) const override {
         std::error_code ec;
-        fs::path fpath(path);
+        fs::path fpath(resolve(path));
         if (fpath.has_parent_path()) {
             fs::create_directories(fpath.parent_path(), ec);
             if (ec) return false;
         }
-        std::ofstream f(path, std::ios::binary);
+        std::ofstream f(fpath, std::ios::binary);
         if (!f) return false;
         f << content;
         return (bool) f;
@@ -104,13 +107,14 @@ public:
 
     std::vector<std::string> list_files(const std::string & base, std::string & err) const override {
         err.clear();
+        std::string abs_base = resolve(base);
         if (!is_directory(base)) {
             err = "path does not exist or is not a directory: " + base;
             return {};
         }
 
         auto res = run(
-            {"git", "-C", base, "ls-files", "--cached", "--others", "--exclude-standard"},
+            {"git", "-C", abs_base, "ls-files", "--cached", "--others", "--exclude-standard"},
             SERVER_TOOL_GIT_LS_FILES_MAX_OUTPUT, SERVER_TOOL_GIT_LS_FILES_TIMEOUT);
 
         if (res.exit_code == 0 && !res.timed_out) {
@@ -128,7 +132,7 @@ public:
             return result;
         }
 
-        return list_files_fallback(base);
+        return list_files_fallback(abs_base);
     }
 
     exec_result run(
@@ -145,7 +149,7 @@ public:
                     | subprocess_option_inherit_environment
                     | subprocess_option_search_user_path;
 
-        if (!proc.create(args, options)) {
+        if (!proc.create(args, options, {}, cwd.empty() ? nullptr : cwd.c_str())) {
             res.output = "failed to spawn process";
             return res;
         }
@@ -205,6 +209,16 @@ public:
     }
 
 private:
+    std::string cwd;
+
+    // resolves `path` against `cwd` if `path` is relative and `cwd` is set; otherwise returns `path` unchanged
+    std::string resolve(const std::string & path) const {
+        if (cwd.empty() || fs::path(path).is_absolute()) {
+            return path;
+        }
+        return (fs::path(cwd) / path).string();
+    }
+
     static const std::unordered_set<std::string> & junk_dir_names() {
         static const std::unordered_set<std::string> names = {
             ".git", ".svn", ".hg", "node_modules", "__pycache__",
@@ -244,8 +258,8 @@ private:
 };
 
 static std::unique_ptr<tools_io> make_tools_io(const json & params) {
-    GGML_UNUSED(params); // TODO in follow-up PR
-    return std::make_unique<tools_io_basic>();
+    std::string cwd = json_value(params, "cwd", std::string());
+    return std::make_unique<tools_io_basic>(cwd);
 }
 
 // no '/' in pattern -> match basename at any depth; else match full relative path
@@ -1188,6 +1202,22 @@ static std::vector<std::unique_ptr<server_tool>> build_tools() {
     return tools;
 }
 
+static std::string str_to_lower(const std::string & value) {
+    std::string lowered(value.size(), '\0');
+    std::transform(value.begin(), value.end(), lowered.begin(), [](unsigned char c) { return std::tolower(c); });
+    return lowered;
+}
+
+static std::string get_header(const std::map<std::string, std::string> & headers, const std::string & key, std::string default_value = "") {
+    const auto lowered_key = str_to_lower(key);
+    for (const auto & h : headers) {
+        if (str_to_lower(h.first) == lowered_key) {
+            return h.second;
+        }
+    }
+    return default_value;
+}
+
 void server_tools::setup(const std::vector<std::string> & enabled_tools,
                          server_mcp & mcp_mgr) {
     if (!enabled_tools.empty()) {
@@ -1270,6 +1300,12 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools,
             std::string tool_name = body.at("tool").get<std::string>();
             json params = body.value("params", json::object());
             bool stream = body.value("stream", false);
+
+            // accept x-tool-cwd header to override of the process
+            auto cwd = get_header(req.headers, "x-tool-cwd");
+            if (!cwd.empty()) {
+                params["cwd"] = cwd;
+            }
 
             server_tool & tool = find_tool(tools, tool_name, stream);
 
