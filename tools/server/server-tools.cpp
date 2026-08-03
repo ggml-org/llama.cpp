@@ -1090,6 +1090,57 @@ struct server_tool_get_datetime : server_tool {
     }
 };
 
+//
+// get_info: returns runtime info (OS name/version and cwd)
+//
+
+struct server_tool_get_info : server_tool {
+    server_tool_get_info() {
+        name = "get_info";
+        display_name = "Get Runtime Info";
+        permission_write = false;
+    }
+
+    json get_definition() const override {
+        return {
+            {"type", "function"},
+            {"function", {
+                {"name", name},
+                {"description", "Returns runtime info: the OS name/version and the current working directory"},
+                {"parameters", {
+                    {"type", "object"},
+                    {"properties", json::object()},
+                }},
+            }},
+        };
+    }
+
+    json invoke(json params, server_tool::stream *) const override {
+        auto io = make_tools_io(params);
+
+#ifdef _WIN32
+        auto res = io->run({"cmd", "/c", "ver"}, 4096, 5);
+#else
+        auto res = io->run({"uname", "-a"}, 4096, 5);
+#endif
+        std::string os_info = res.output;
+        while (!os_info.empty() && (os_info.back() == '\n' || os_info.back() == '\r')) {
+            os_info.pop_back();
+        }
+
+        std::string cwd = json_value(params, "cwd", std::string());
+        if (cwd.empty()) {
+            std::error_code ec;
+            cwd = fs::current_path(ec).string();
+        }
+
+        return {
+            {"os",  os_info},
+            {"cwd", cwd},
+        };
+    }
+};
+
 struct server_tool_stream_result : server_task_result {
     std::string chunk;
     bool done = false;
@@ -1199,6 +1250,7 @@ static std::vector<std::unique_ptr<server_tool>> build_tools() {
     tools.push_back(std::make_unique<server_tool_write_file>());
     tools.push_back(std::make_unique<server_tool_edit_file>());
     tools.push_back(std::make_unique<server_tool_get_datetime>());
+    tools.push_back(std::make_unique<server_tool_get_info>());
     return tools;
 }
 
