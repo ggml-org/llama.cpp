@@ -76,7 +76,7 @@ struct output_stats {
 void usage(const char * program) {
     std::printf("Synthetic routed quantized MUL_MAT_ID benchmark using the HIP GGML backend graph.\n\n");
     std::printf("usage: %s [options]\n\n", program);
-    std::printf("  --type TYPE             q4_k or q6_k (q4_k)\n");
+    std::printf("  --type TYPE             q4_k, q6_k, iq2_xxs, iq2_s, iq3_xxs, or iq3_s (q4_k)\n");
     std::printf("  --k N                   input width, divisible by the quant block size (4096)\n");
     std::printf("  --n N                   expert output rows (512)\n");
     std::printf("  --batch N               routed tokens, 1..256 (32)\n");
@@ -101,6 +101,22 @@ bool parse_type(const char * value, ggml_type & type) {
     }
     if (std::strcmp(value, "q6_k") == 0) {
         type = GGML_TYPE_Q6_K;
+        return true;
+    }
+    if (std::strcmp(value, "iq2_xxs") == 0) {
+        type = GGML_TYPE_IQ2_XXS;
+        return true;
+    }
+    if (std::strcmp(value, "iq2_s") == 0) {
+        type = GGML_TYPE_IQ2_S;
+        return true;
+    }
+    if (std::strcmp(value, "iq3_xxs") == 0) {
+        type = GGML_TYPE_IQ3_XXS;
+        return true;
+    }
+    if (std::strcmp(value, "iq3_s") == 0) {
+        type = GGML_TYPE_IQ3_S;
         return true;
     }
     return false;
@@ -210,16 +226,29 @@ float deterministic_value(size_t index, float phase) {
 
 void quantize_expert_weights(const params & p, std::vector<uint8_t> & packed) {
     const size_t row_bytes = ggml_row_size(p.type, p.k);
+
+    // This is a dispatch benchmark. Quantize a small deterministic row set and
+    // replicate it in an expert-dependent pattern so IQ fixtures start quickly
+    // while output rows and routed experts remain distinguishable.
+    constexpr size_t nprototypes = 16;
     std::vector<float> row(static_cast<size_t>(p.k));
+    std::vector<float> importance(static_cast<size_t>(p.k), 1.0f);
+    std::vector<uint8_t> prototypes(nprototypes * row_bytes);
+    for (size_t prototype = 0; prototype < nprototypes; ++prototype) {
+        for (int64_t col = 0; col < p.k; ++col) {
+            row[static_cast<size_t>(col)] = deterministic_value(
+                prototype * static_cast<size_t>(p.k) + static_cast<size_t>(col), 0.13f * static_cast<float>(prototype + 1));
+        }
+        ggml_quantize_chunk(p.type, row.data(), prototypes.data() + prototype * row_bytes,
+                            0, 1, p.k, importance.data());
+    }
 
     for (int64_t expert = 0; expert < p.experts; ++expert) {
         for (int64_t out = 0; out < p.n; ++out) {
             const size_t row_index = static_cast<size_t>(expert * p.n + out);
-            for (int64_t col = 0; col < p.k; ++col) {
-                row[static_cast<size_t>(col)] = deterministic_value(
-                    row_index * static_cast<size_t>(p.k) + static_cast<size_t>(col), 0.13f * static_cast<float>(expert + 1));
-            }
-            ggml_quantize_chunk(p.type, row.data(), packed.data() + row_index * row_bytes, 0, 1, p.k, nullptr);
+            const size_t prototype = static_cast<size_t>(out + 7 * expert) % nprototypes;
+            std::memcpy(packed.data() + row_index * row_bytes,
+                        prototypes.data() + prototype * row_bytes, row_bytes);
         }
     }
 }

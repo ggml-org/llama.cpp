@@ -4,6 +4,8 @@
 
 #include <climits>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 
 #define MMQ_DP4A_MAX_BATCH_SIZE 64 // Max. batch size to use for dp4a MMQ kernels when FP16 tensor cores are available.
 #define MMQ_ITER_K             256
@@ -1592,6 +1594,28 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
          ntx_fd);
 }
 
+static int ggml_cuda_rdna2_mmq_J_override() {
+#if defined(GGML_USE_HIP)
+    static const int value = []() {
+        const char * env = std::getenv("GGML_HIP_RDNA2_MMQ_J");
+        if (!env || !env[0]) {
+            return 0;
+        }
+
+        char * end = nullptr;
+        const long parsed = std::strtol(env, &end, 10);
+        if (end == env || *end != '\0' || parsed < 8 || parsed > 128 || parsed % 8 != 0) {
+            fprintf(stderr, "GGML_HIP_RDNA2_MMQ_J must be a multiple of 8 in [8, 128] (got '%s')\n", env);
+            GGML_ABORT("invalid RDNA2 MMQ J override");
+        }
+        return int(parsed);
+    }();
+    return value;
+#else
+    return 0;
+#endif
+}
+
 template <ggml_type type, bool fallback>
 void mul_mat_q_switch_J(ggml_backend_cuda_context & ctx, const mmq_args & args, cudaStream_t stream) {
     const int    id    = ggml_cuda_get_device();
@@ -1617,6 +1641,17 @@ void mul_mat_q_switch_J(ggml_backend_cuda_context & ctx, const mmq_args & args, 
             J_best = J;
             ntiles_J_best = ntiles_x;
         }
+    }
+
+    const int J_override = ggml_cuda_rdna2_mmq_J_override();
+    if (J_override && GGML_CUDA_CC_IS_RDNA2(cc) && args.ids_dst) {
+        const ggml_cuda_mmq_config config = ggml_cuda_mmq_get_config(type, J_override, fallback, cc);
+        if (config.type == GGML_TYPE_COUNT || mmq_get_nbytes_shared(config, cc) > smpbo) {
+            fprintf(stderr, "GGML_HIP_RDNA2_MMQ_J=%d is unsupported for type=%d fallback=%d\n",
+                    J_override, int(type), int(fallback));
+            GGML_ABORT("unsupported RDNA2 MMQ J override");
+        }
+        J_best = J_override;
     }
 
     switch (J_best) {
