@@ -2694,7 +2694,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_EXPERT_HEAT_LOG_PERIOD"));
     add_opt(common_arg(
-        {"--expert-hot-s"}, "N",
+        {"-las", "--expert-hot-s"}, "N",
         "number of top expert slots for GPU hot store (default: 0 = disabled)",
         [](common_params & params, int value) {
             params.expert_hot_s = value;
