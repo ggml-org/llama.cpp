@@ -36,6 +36,26 @@ struct llama_expert_hotstore {
     // stable across re-syncs: an expert that stays hot keeps its slot.
     std::vector<std::vector<int>> slot_to_expert;
 
+    // per-layer LUTs and masks for in-graph routing (oldtricks Trick 4).
+    // hot_lut[e]   = slot index [0..hot_s-1] if e is hot, or hot_s (sentinel) if cold.
+    // cold_lut[e]  = e if e is cold, or 0 (dummy expert) if hot.
+    // hot_mask[e]  = 1.0f if e is hot, else 0.0f.
+    // cold_mask[e] = 1.0f if e is cold, else 0.0f.
+    // All allocated in the same ctx/buf as the hot tensors (GPU); populated
+    // in resync_top_s and H2D only on ubatches where a slot swapped (see
+    // luts_version). Read by build_moe_ffn_tiered via ggml_get_rows.
+    struct layer_lut {
+        ggml_tensor * hot_lut   = nullptr; // i32[n_experts]
+        ggml_tensor * cold_lut  = nullptr; // i32[n_experts]
+        ggml_tensor * hot_mask  = nullptr; // f32[n_experts]
+        ggml_tensor * cold_mask = nullptr; // f32[n_experts]
+    };
+    std::vector<layer_lut> luts; // size n_layers
+
+    // bumped on every resync that swapped >0 slots; build_moe_ffn_tiered
+    // compares to its own cached counter to know whether H2D is needed.
+    int64_t luts_version = 0;
+
     // keeps the GPU buffer (and its no_alloc context) alive
     ggml_context_ptr        ctx;
     ggml_backend_buffer_ptr buf;
@@ -68,6 +88,11 @@ struct llama_expert_hotstore {
 
     // returns the GPU slot index holding expert_id in layer il, or -1 if none
     int slot_of(int layer_idx, int expert_id) const;
+
+    // rebuild hot_lut/cold_lut/hot_mask/cold_mask from slot_to_expert for
+    // every layer and H2D-copy them into the GPU tensors. bumps luts_version.
+    // called from copy_top_s (initial fill) and resync_top_s (swaps).
+    void update_luts();
 
     void log() const;
 };

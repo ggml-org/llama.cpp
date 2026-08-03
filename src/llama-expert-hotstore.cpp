@@ -59,8 +59,9 @@ bool llama_expert_hotstore::allocate(ggml_backend_buffer_type_t gpu_buft) {
     }
 
     // a no_alloc context just for the hot tensor metadata
+    // (also holds the per-layer LUT/mask tensors created below)
     ggml_init_params params = {
-        /*.mem_size   =*/ ggml_tensor_overhead() * entries.size(),
+        /*.mem_size   =*/ ggml_tensor_overhead() * (entries.size() + 4 * n_layers),
         /*.mem_buffer =*/ nullptr,
         /*.no_alloc   =*/ true,
     };
@@ -75,6 +76,16 @@ bool llama_expert_hotstore::allocate(ggml_backend_buffer_type_t gpu_buft) {
     // zeros via a valid in-range index (sentinel trick, oldtricks Trick 2).
     for (auto & e : entries) {
         e.dst = ggml_new_tensor_3d(ctx.get(), e.src->type, e.src->ne[0], e.src->ne[1], hot_s + 1);
+    }
+
+    // per-layer LUTs and masks for in-graph routing (oldtricks Trick 4).
+    // hot_lut/cold_lut are i32, hot_mask/cold_mask are f32, all [n_experts].
+    luts.assign(n_layers, layer_lut{});
+    for (int il = 0; il < n_layers; il++) {
+        luts[il].hot_lut   = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, n_experts);
+        luts[il].cold_lut  = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_I32, n_experts);
+        luts[il].hot_mask  = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, n_experts);
+        luts[il].cold_mask = ggml_new_tensor_1d(ctx.get(), GGML_TYPE_F32, n_experts);
     }
 
     // check whether the buffer would fit before committing any VRAM
@@ -142,6 +153,7 @@ void llama_expert_hotstore::copy_top_s(const llama_expert_heatmap & heatmap) {
 
     last_sync_tokens = heatmap.tokens_total;
     is_filled = true;
+    update_luts();
     LLAMA_LOG("=== Expert hot store: top-S experts copied to GPU ===\n");
 }
 
@@ -211,6 +223,7 @@ void llama_expert_hotstore::resync_top_s(const llama_expert_heatmap & heatmap) {
 
     last_sync_tokens = heatmap.tokens_total;
     if (swapped > 0) {
+        update_luts();
         LLAMA_LOG("=== Expert hot store: re-sync swapped %d expert slots ===\n", swapped);
     }
 }
@@ -235,6 +248,50 @@ int llama_expert_hotstore::slot_of(int layer_idx, int expert_id) const {
         }
     }
     return -1;
+}
+
+void llama_expert_hotstore::update_luts() {
+    if (hot_s <= 0 || luts.empty()) {
+        return;
+    }
+
+    std::vector<int32_t> hot_lut_h(n_experts);
+    std::vector<int32_t> cold_lut_h(n_experts);
+    std::vector<float>   hot_mask_h(n_experts);
+    std::vector<float>   cold_mask_h(n_experts);
+
+    for (int il = 0; il < n_layers; il++) {
+        const auto & ste = slot_to_expert[il];
+
+        // defaults: everyone cold
+        for (int e = 0; e < n_experts; e++) {
+            hot_lut_h[e]   = hot_s;     // sentinel slot (zero)
+            cold_lut_h[e]  = e;         // real expert id
+            hot_mask_h[e]  = 0.0f;
+            cold_mask_h[e] = 1.0f;
+        }
+
+        // residents override
+        for (int p = 0; p < hot_s; p++) {
+            const int e = ste[p];
+            if (e < 0) {
+                continue;
+            }
+            hot_lut_h[e]   = p;         // its slot index
+            cold_lut_h[e]  = 0;         // dummy expert 0
+            hot_mask_h[e]  = 1.0f;
+            cold_mask_h[e] = 0.0f;
+        }
+
+        const size_t bytes_i32 = n_experts * sizeof(int32_t);
+        const size_t bytes_f32 = n_experts * sizeof(float);
+        ggml_backend_tensor_set(luts[il].hot_lut,   hot_lut_h.data(),   0, bytes_i32);
+        ggml_backend_tensor_set(luts[il].cold_lut,  cold_lut_h.data(),  0, bytes_i32);
+        ggml_backend_tensor_set(luts[il].hot_mask,  hot_mask_h.data(),  0, bytes_f32);
+        ggml_backend_tensor_set(luts[il].cold_mask, cold_mask_h.data(), 0, bytes_f32);
+    }
+
+    luts_version++;
 }
 
 void llama_expert_hotstore::log() const {
