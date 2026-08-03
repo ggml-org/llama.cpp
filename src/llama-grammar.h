@@ -89,7 +89,10 @@ struct llama_grammar_parser {
 
     llama_grammar_rules rules;
 
-    llama_grammar_parser(const struct llama_vocab * vocab = nullptr) : vocab(vocab) {}
+    uint64_t max_repetition_threshold;
+
+    llama_grammar_parser(const struct llama_vocab * vocab = nullptr);
+
 
     llama_grammar_stack c_rules() const;
 
