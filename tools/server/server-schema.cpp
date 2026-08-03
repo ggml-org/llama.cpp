@@ -124,8 +124,8 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         ->set_desc("Dynamic temperature exponent, controls how entropy maps to temperature"));
 
     add((new field_num("repeat_last_n", params.sampling.penalty_last_n))
-        ->set_hard_limits(-1, INT32_MAX)
-        ->set_desc("Last n tokens to consider for penalizing repetition (0 = disabled, -1 = ctx-size)"));
+        ->set_hard_limits(0, INT32_MAX)
+        ->set_desc("Last n tokens to consider for penalizing repetition (0 = disabled)"));
 
     add((new field_num("repeat_penalty", params.sampling.penalty_repeat))
         ->set_desc("Control the repetition of token sequences in the generated text (1.0 = disabled)"));
@@ -151,8 +151,8 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         ->set_desc("Tokens that extend repetition beyond this length receive exponentially increasing penalty: multiplier * base ^ (sequence_length - allowed_length)"));
 
     add((new field_num("dry_penalty_last_n", params.sampling.dry_penalty_last_n))
-        ->set_hard_limits(-1, INT32_MAX)
-        ->set_desc("How many tokens to scan for repetitions (0 = disabled, -1 = 1024)"));
+        ->set_hard_limits(0, INT32_MAX)
+        ->set_desc("How many tokens to scan for repetitions (0 = disabled)"));
 
     add((new field_num("mirostat", params.sampling.mirostat))
         ->set_limits(0, 2)
