@@ -88,6 +88,9 @@ struct llama_context {
     float * get_embeddings_nextn();
     float * get_embeddings_nextn_ith(int32_t i);
 
+    // dflash draft: GPU-computed argmax token id for output position i
+    llama_token get_draft_id_ith(int32_t i);
+
     float * get_embeddings_layer_inp(uint32_t lid);
 
     llama_token * get_sampled_tokens() const;
@@ -114,6 +117,7 @@ struct llama_context {
 
     void set_embeddings (bool value);
     void set_embeddings_nextn(bool value, bool masked);
+    void set_draft_argmax(bool value);
     void set_embeddings_layer_inp(uint32_t lid, bool enable);
     void set_nextn_layer_offset(int32_t offset);
     void set_causal_attn(bool value);
@@ -299,6 +303,10 @@ private:
     // populated only when cparams.embeddings_nextn is enabled and the model graph
     // sets llm_graph_result::t_h_nextn
     buffer_view<float> embd_nextn = {nullptr, 0};
+
+    // dflash draft: GPU argmax token id per output ([n_outputs]); populated only
+    // when the model graph sets llm_graph_result::t_draft_ids (dflash decoder)
+    buffer_view<llama_token> draft_ids = {nullptr, 0};
 
     // host buffers for output layer input embeddings, per layer
     // populated when cparams.output_layer_inp[il] is true

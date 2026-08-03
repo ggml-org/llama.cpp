@@ -932,6 +932,9 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
     // draft-dspark: the draft carries a Markov head and uses an anchor-first block layout
     const bool is_dspark;
 
+    // Use CPU samplers for the greedy path and DSpark, otherwise run draft argmax on the GPU.
+    const bool use_cpu_samplers;
+
     const int32_t * target_layer_ids   = nullptr; // model_dft's extract layer indices
     uint32_t        target_layer_ids_n = 0;
 
@@ -943,6 +946,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         : common_speculative_impl(type, n_seq)
         , params(params.draft)
         , is_dspark(type == COMMON_SPECULATIVE_TYPE_DRAFT_DSPARK)
+        , use_cpu_samplers(is_dspark || this->params.p_min > 0.0f)
     {
         auto * ctx_tgt = this->params.ctx_tgt;
         auto * ctx_dft = this->params.ctx_dft;
@@ -986,14 +990,17 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
         batch        = llama_batch_init(llama_n_batch(ctx_dft), 0,          n_seq);
         batch_inject = llama_batch_init(llama_n_batch(ctx_dft), n_embd_dec, n_seq);
 
-        smpls.resize(n_seq);
-        for (auto & s : smpls) {
-            common_params_sampling sparams;
-            sparams.no_perf  = false;
-            sparams.top_k    = 10;
-            sparams.samplers = { COMMON_SAMPLER_TYPE_TOP_K };
-            s.reset(common_sampler_init(model_dft, sparams));
+        if (use_cpu_samplers) {
+            smpls.resize(n_seq);
+            for (auto & s : smpls) {
+                common_params_sampling sparams;
+                sparams.no_perf  = false;
+                sparams.top_k    = is_dspark ? 10 : 1;
+                sparams.samplers = { COMMON_SAMPLER_TYPE_TOP_K };
+                s.reset(common_sampler_init(model_dft, sparams));
+            }
         }
+        llama_set_draft_argmax(ctx_dft, !use_cpu_samplers);
 
         // turn on extraction of the target layers' input embeddings
         for (uint32_t k = 0; k < target_layer_ids_n; ++k) {
@@ -1140,7 +1147,9 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
                 continue;
             }
 
-            common_sampler_reset(smpls[seq_id].get());
+            if (!smpls.empty()) {
+                common_sampler_reset(smpls[seq_id].get());
+            }
 
             const int32_t n = (int32_t) dp.n_past;
 
@@ -1174,7 +1183,7 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             const int32_t beg            = i_block_beg[seq_id];
             const int32_t n_block_tokens = n_block[seq_id];
 
-            auto * smpl = smpls[seq_id].get();
+            auto * smpl = smpls.empty() ? nullptr : smpls[seq_id].get();
 
             auto & result = *dp.result;
 
@@ -1209,25 +1218,30 @@ struct common_speculative_impl_draft_dflash : public common_speculative_impl {
             } else {
                 // greedily read the predicted block at this sequence's noise positions 1..n_block_tokens-1
                 for (int32_t i = 1; i < n_block_tokens; ++i) {
-                    common_sampler_sample(smpl, ctx_dft, beg + i, true);
+                    llama_token best_id = 0;
+                    float       p       = 1.0f;
 
-                    const auto * cur_p = common_sampler_get_candidates(smpl, true);
-
-                    for (int k = 0; k < std::min(3, (int) cur_p->size); ++k) {
-                        LOG_DBG(" - seq_id %d, draft candidate %3d, pos %3d: %6d (%8.3f) '%s'\n",
-                                seq_id, k, i - 1, cur_p->data[k].id, cur_p->data[k].p,
-                                common_token_to_piece(ctx_dft, cur_p->data[k].id).c_str());
+                    if (!use_cpu_samplers) {
+                        best_id = llama_get_draft_id_ith(ctx_dft, beg + i);
+                    } else {
+                        common_sampler_sample(smpl, ctx_dft, beg + i, true);
+                        const auto * cur_p = common_sampler_get_candidates(smpl, true);
+                        best_id = cur_p->data[0].id;
+                        p       = cur_p->data[0].p;
                     }
 
-                    const llama_token id = cur_p->data[0].id;
+                    LOG_DBG(" - seq_id %d, draft pos %3d: %6d (%8.3f) '%s'\n",
+                            seq_id, i - 1, best_id, p, common_token_to_piece(ctx_dft, best_id).c_str());
 
-                    if (cur_p->data[0].p < params.p_min) {
+                    if (p < params.p_min) {
                         break;
                     }
 
-                    common_sampler_accept(smpl, id, true);
+                    if (smpl) {
+                        common_sampler_accept(smpl, best_id, true);
+                    }
 
-                    result.push_back(id);
+                    result.push_back(best_id);
                 }
             }
 

@@ -116,6 +116,7 @@ llama_context::llama_context(
     cparams.embeddings              = params.embeddings;
     cparams.embeddings_nextn        = false;
     cparams.embeddings_nextn_masked = false;
+    cparams.draft_argmax            = false;
     cparams.offload_kqv             = params.offload_kqv;
     cparams.no_perf                 = params.no_perf;
     cparams.warmup                  = false;
@@ -967,6 +968,26 @@ float * llama_context::get_embeddings_nextn_ith(int32_t i) {
     }
 }
 
+llama_token llama_context::get_draft_id_ith(int32_t i) {
+    output_reorder();
+
+    try {
+        if (draft_ids.data == nullptr) {
+            throw std::runtime_error("no draft ids");
+        }
+
+        const int64_t j = output_resolve_row(i);
+        return draft_ids.data[j];
+    } catch (const std::exception & err) {
+        LLAMA_LOG_ERROR("%s: invalid draft id %d, reason: %s\n", __func__, i, err.what());
+#ifndef NDEBUG
+        GGML_ABORT("fatal error");
+#else
+        return LLAMA_TOKEN_NULL;
+#endif
+    }
+}
+
 float * llama_context::get_embeddings_layer_inp(uint32_t lid) {
     output_reorder();
 
@@ -1153,6 +1174,12 @@ void llama_context::set_embeddings(bool value) {
 
     // TODO: not sure yet if we want to reserve here
     //sched_need_reserve = true;
+}
+
+void llama_context::set_draft_argmax(bool value) {
+    LLAMA_LOG_DEBUG("%s: value = %d\n", __func__, value);
+
+    cparams.draft_argmax = value;
 }
 
 void llama_context::set_embeddings_nextn(bool value, bool masked) {
@@ -2009,6 +2036,17 @@ int llama_context::decode(const llama_batch & batch_inp) {
             }
         }
 
+        // extract dflash draft argmax token ids (GPU argmax over the vocab, per output row)
+        if (auto * t_draft_ids = res->get_draft_ids()) {
+            if (draft_ids.data && n_outputs > 0) {
+                ggml_backend_t backend_ids = ggml_backend_sched_get_tensor_backend(sched.get(), t_draft_ids);
+                GGML_ASSERT(backend_ids != nullptr);
+                GGML_ASSERT(n_outputs_prev + n_outputs <= (int64_t) draft_ids.size);
+                llama_token * draft_ids_out = draft_ids.data + n_outputs_prev;
+                ggml_backend_tensor_get_async(backend_ids, t_draft_ids, draft_ids_out, 0, n_outputs*sizeof(llama_token));
+            }
+        }
+
         // Copy backend sampling output if this ubatch produced any sampling tensors.
         if (has_samplers && (!res->t_sampled.empty() || !res->t_sampled_probs.empty() || !res->t_sampled_logits.empty())) {
             const auto seq_to_output_row = build_seq_to_output_row(ubatch, n_outputs_prev);
@@ -2101,6 +2139,10 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     bool has_embd       = cparams.embeddings;
     bool has_embd_nextn = cparams.embeddings_nextn;
 
+    // opt-in per-position argmax token id output (llm_graph_result::t_draft_ids);
+    // enabled via llama_set_draft_argmax() -- used by the dflash speculative draft
+    const bool has_draft_ids = cparams.draft_argmax;
+
     // TODO: hacky enc-dec support
     if (model.arch == LLM_ARCH_T5) {
         has_logits = true;
@@ -2114,6 +2156,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     logits.size     = has_logits     ? n_vocab*n_outputs_max     : 0;
     embd.size       = has_embd       ? n_embd_out*n_outputs_max  : 0;
     embd_nextn.size = has_embd_nextn ? n_embd_out*n_outputs_max  : 0;
+    draft_ids.size  = has_draft_ids  ? (size_t) n_outputs_max    : 0;
 
     if (has_embd_nextn && !cparams.embeddings_nextn_masked) {
         // unmasked: nextn row exists for every token in the batch, not just
@@ -2142,7 +2185,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
     const size_t prev_size = buf_output ? ggml_backend_buffer_get_size(buf_output.get()) : 0;
     const size_t new_size  =
         (logits.size + embd.size + embd_nextn.size + embd_layer_inp_float_count + backend_float_count) * sizeof(float) +
-        (                                                                         backend_token_count) * sizeof(llama_token);
+        (draft_ids.size                                                        + backend_token_count) * sizeof(llama_token);
 
     // alloc only when more than the current capacity is required
     // TODO: also consider shrinking the buffer
@@ -2159,6 +2202,7 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
             logits.data = nullptr;
             embd.data = nullptr;
             embd_nextn.data = nullptr;
+            draft_ids.data = nullptr;
             for (auto & layer_inp : embd_layer_inp) {
                 layer_inp = {nullptr, 0};
             }
@@ -2192,6 +2236,9 @@ uint32_t llama_context::output_reserve(int32_t n_outputs) {
 
     embd_nextn = has_embd_nextn ? buffer_view<float>{(float *) (base + offset), embd_nextn.size} : buffer_view<float>{nullptr, 0};
     offset += embd_nextn.size * sizeof(float);
+
+    draft_ids = has_draft_ids ? buffer_view<llama_token>{(llama_token *) (base + offset), draft_ids.size} : buffer_view<llama_token>{nullptr, 0};
+    offset += draft_ids.size * sizeof(llama_token);
 
     for (uint32_t il = 0; il < embd_layer_inp.size(); ++il) {
         if (cparams.embeddings_layer_inp[il]) {
@@ -3773,6 +3820,16 @@ float * llama_get_embeddings_nextn_ith(llama_context * ctx, int32_t i) {
     ctx->synchronize();
 
     return ctx->get_embeddings_nextn_ith(i);
+}
+
+llama_token llama_get_draft_id_ith(llama_context * ctx, int32_t i) {
+    ctx->synchronize();
+
+    return ctx->get_draft_id_ith(i);
+}
+
+void llama_set_draft_argmax(llama_context * ctx, bool value) {
+    ctx->set_draft_argmax(value);
 }
 
 float * llama_get_embeddings_layer_inp(llama_context * ctx, uint32_t lid) {

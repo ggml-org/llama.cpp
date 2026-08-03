@@ -493,6 +493,12 @@ llama_model_dflash::graph<false>::graph(const llama_model & model, const llm_gra
 
     ggml_build_forward_expand(gf, cur);
 
+    if (cparams.draft_argmax) {
+        res->t_draft_ids = ggml_argmax(ctx0, cur);
+        cb(res->t_draft_ids, "draft_ids", -1);
+        ggml_build_forward_expand(gf, res->t_draft_ids);
+    }
+
     // DSpark: bias the draft logits with the Markov head
     if (model.dspark_markov_w1) {
         build_dspark_markov_head(*this, model, inp_tokens);
