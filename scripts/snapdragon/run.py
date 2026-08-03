@@ -240,6 +240,20 @@ def main():
 
     device_val = None
     if basename == "test-backend-ops":
+        for i in range(len(cmd_args)):
+            if cmd_args[i] in ("-p", "--params") and i + 1 < len(cmd_args):
+                val = cmd_args[i+1]
+                new_val = ""
+                for j, char in enumerate(val):
+                    if char in ('[', ']'):
+                        if j > 0 and val[j-1] == '\\':
+                            new_val += char
+                        else:
+                            new_val += '\\' + char
+                    else:
+                        new_val += char
+                cmd_args[i+1] = new_val
+
         has_b = any(arg == "-b" for arg in cmd_args)
         if not has_b:
             if args.devices:
@@ -283,7 +297,7 @@ def main():
         args.hex_profile is not None or 
         args.hex_optrace is not None
     )
-    if verbose_trigger and basename in ("llama-cli", "llama-completion", "llama-bench", "llama-server", "test-backend-ops", "llama-mtmd-cli"):
+    if verbose_trigger and basename in ("llama-cli", "llama-completion", "llama-bench", "llama-server", "llama-mtmd-cli"):
         if "-v" not in cmd_args and "--verbose" not in cmd_args:
             cmd_args.append("-v")
 
