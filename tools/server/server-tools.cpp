@@ -1094,6 +1094,9 @@ struct server_tool_get_datetime : server_tool {
 // get_info: returns runtime info (OS name/version and cwd)
 //
 
+static constexpr size_t SERVER_TOOL_GET_INFO_MAX_OUTPUT = 4 * 1024; // 4 KB
+static constexpr int    SERVER_TOOL_GET_INFO_TIMEOUT    = 5;        // seconds
+
 struct server_tool_get_info : server_tool {
     server_tool_get_info() {
         name = "get_info";
@@ -1119,19 +1122,21 @@ struct server_tool_get_info : server_tool {
         auto io = make_tools_io(params);
 
 #ifdef _WIN32
-        auto res = io->run({"cmd", "/c", "ver"}, 4096, 5);
+        auto res = io->run({"cmd", "/c", "ver"}, SERVER_TOOL_GET_INFO_MAX_OUTPUT, SERVER_TOOL_GET_INFO_TIMEOUT);
 #else
-        auto res = io->run({"uname", "-a"}, 4096, 5);
+        auto res = io->run({"uname", "-a"}, SERVER_TOOL_GET_INFO_MAX_OUTPUT, SERVER_TOOL_GET_INFO_TIMEOUT);
 #endif
-        std::string os_info = res.output;
-        while (!os_info.empty() && (os_info.back() == '\n' || os_info.back() == '\r')) {
-            os_info.pop_back();
-        }
+        // "ver" prints a blank line before the version, so the output is stripped on both ends;
+        // a failed spawn or a timeout leaves a diagnostic in res.output, which is not an OS name
+        std::string os_info = res.exit_code == 0 && !res.timed_out ? string_strip(res.output) : "unknown";
 
         std::string cwd = json_value(params, "cwd", std::string());
         if (cwd.empty()) {
             std::error_code ec;
             cwd = fs::current_path(ec).string();
+            if (ec) {
+                cwd = "unknown";
+            }
         }
 
         return {
