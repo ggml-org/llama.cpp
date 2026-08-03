@@ -9884,6 +9884,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     }
 
     test_cases.emplace_back(new test_cross_entropy_loss     (GGML_TYPE_F32, {   10, 5, 4, 3}));
+    // row lengths that leave a partial simdgroup on Metal
+    test_cases.emplace_back(new test_cross_entropy_loss     (GGML_TYPE_F32, {   33, 5, 4, 3}));
+    test_cases.emplace_back(new test_cross_entropy_loss     (GGML_TYPE_F32, { 1000, 1, 1, 1}));
     test_cases.emplace_back(new test_cross_entropy_loss     (GGML_TYPE_F32, {30000, 1, 1, 1}));
     test_cases.emplace_back(new test_cross_entropy_loss_back(GGML_TYPE_F32, {   10, 5, 4, 3}));
     test_cases.emplace_back(new test_cross_entropy_loss_back(GGML_TYPE_F32, {30000, 1, 1, 1}));

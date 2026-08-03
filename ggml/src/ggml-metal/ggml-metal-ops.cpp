@@ -495,6 +495,10 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
             {
                 n_fuse = ggml_metal_op_count_equal(ctx, idx);
             } break;
+        case GGML_OP_CROSS_ENTROPY_LOSS:
+            {
+                n_fuse = ggml_metal_op_cross_entropy_loss(ctx, idx);
+            } break;
         default:
             {
                 GGML_LOG_ERROR("%s: error: node %3d, op = %8s not implemented\n", __func__, idx, ggml_op_name(node->op));
@@ -5153,6 +5157,51 @@ int ggml_metal_op_count_equal(ggml_metal_op_t ctx, int idx) {
         ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
         ggml_metal_encoder_dispatch_threadgroups(enc, ne01, ne02, ne03, nth, 1, 1);
     }
+
+    return 1;
+}
+
+int ggml_metal_op_cross_entropy_loss(ggml_metal_op_t ctx, int idx) {
+    ggml_tensor * op = ctx->node(idx);
+
+    ggml_metal_library_t lib = ctx->lib;
+    ggml_metal_encoder_t enc = ctx->enc;
+
+    GGML_ASSERT(ggml_is_contiguous(op->src[0]));
+    GGML_ASSERT(ggml_is_contiguous(op->src[1]));
+    GGML_ASSERT(ggml_are_same_shape(op->src[0], op->src[1]));
+    GGML_ASSERT(ggml_is_scalar(op));
+
+    const int64_t ne00  = op->src[0]->ne[0];
+    const int64_t nrows = ggml_nrows(op->src[0]);
+
+    ggml_metal_kargs_cross_entropy_loss args = {
+        /*.ne00  =*/ ne00,
+        /*.nrows =*/ nrows,
+    };
+
+    auto pipeline = ggml_metal_library_get_pipeline_cross_entropy_loss(lib, op);
+
+    int nth = 32; // SIMD width
+
+    while (nth < ne00 && nth < ggml_metal_pipeline_max_theads_per_threadgroup(pipeline)) {
+        nth *= 2;
+    }
+
+    nth = std::min(nth, ggml_metal_pipeline_max_theads_per_threadgroup(pipeline));
+    nth = std::min(nth, (int) ne00);
+
+    const int nsg = (nth + 31)/32;
+
+    ggml_metal_encoder_set_pipeline(enc, pipeline);
+    ggml_metal_encoder_set_bytes   (enc, &args, sizeof(args), 0);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[0]), 1);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op->src[1]), 2);
+    ggml_metal_encoder_set_buffer  (enc, ggml_metal_get_buffer_id(op),         3);
+
+    ggml_metal_encoder_set_threadgroup_memory_size(enc, nsg*sizeof(float), 0);
+
+    ggml_metal_encoder_dispatch_threadgroups(enc, 1, 1, 1, nth, 1, 1);
 
     return 1;
 }
