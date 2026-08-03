@@ -78,6 +78,26 @@ The manifest stores the executable SHA-256, `ldd` resolution, SHA-256 for all
 resolved local llama/ggml DSOs, selected CMake cache when available, git diff,
 and untracked-file hashes. Verify resolved DSO paths before accepting an A/B.
 
+## RDNA2 routed-MMQ screening
+
+`GGML_HIP_RDNA2_MMQ_J` is an experimental, opt-in tile-width override for
+routed MMQ on RDNA2 only. The default dispatch is unchanged when it is unset.
+Valid values are supported multiples of eight from 8 through 128; an
+unsupported type/configuration fails rather than silently changing the test.
+For example:
+
+```bash
+GGML_HIP_RDNA2_MMQ_J=16 \
+DSV4_LABEL=mmq-j16-quick DSV4_PROMPTS=512,2048 DSV4_REPS=3 \
+scripts/dsv4-rocm/run-pp.sh
+```
+
+On the target IQ2_M model, J=16 is the current exploratory winner. It is not
+yet a general RDNA2 default: the focused fixture shows that strongly skewed
+expert routing changes the optimum. Keep the variable and its value in the
+manifest, use complete paired runs, and do not carry this setting to unrelated
+models without screening their routing shape.
+
 ## Artifacts
 
 Runs are written to collision-resistant directories under
@@ -90,6 +110,8 @@ Runs are written to collision-resistant directories under
 - `summary.tsv` and `summary.json`: completion state, expected/missing shapes, median/range, latency, and raw samples;
 - `bench.log`: loader/progress/errors;
 - `measurement-start.ns`, `result-completed-at.ns`: trace-alignment timestamps;
+- `clock-domain.txt`: run-time realtime-to-monotonic clock mapping and boot ID;
+- `measured-region-summary.{txt,json}`: optional filtered rocprof attribution;
 - `rocm-smi.log`: one-second utilization/memory/power/clock samples;
 - `status.txt`: nanosecond timestamps, truncation, and process exit code.
 
@@ -114,6 +136,22 @@ optimization decisions. Filter the trace to the interval beginning at
 `measurement-start.ns` and ending at the corresponding line in
 `result-completed-at.ns`; traced throughput is not comparable to ordinary A/B
 throughput.
+
+Each new run stores `clock-domain.txt`, which maps the harness's realtime
+markers to rocprof's monotonic timestamps. Generate measured-region text and
+JSON summaries with:
+
+```bash
+run_dir=/home/edwin/llama-jobs/dsv4-rocm-pp/<trace-run>
+scripts/dsv4-rocm/summarize-trace.py "$run_dir" --top 30 \
+  --json "$run_dir/measured-region-summary.json" \
+  | tee "$run_dir/measured-region-summary.txt"
+```
+
+Kernel durations are clipped to the measured interval and summed across all
+devices/queues, so their wall-equivalent percentage can exceed 100%. A legacy
+trace without `clock-domain.txt` requires its run-time realtime-minus-monotonic
+offset via `--clock-offset-ns`; do not reconstruct that offset after a reboot.
 
 ## Summarize existing output
 

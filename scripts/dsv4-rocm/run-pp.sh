@@ -173,6 +173,25 @@ run_id="$(date -u +%Y%m%dT%H%M%S.%NZ)-${LABEL}-${commit}-$RANDOM"
 run_dir="$OUTPUT_ROOT/$run_id"
 mkdir "$run_dir"
 
+python3 - "$run_dir/clock-domain.txt" <<'PY'
+from pathlib import Path
+import time
+import sys
+
+realtime_before = time.time_ns()
+monotonic = time.clock_gettime_ns(time.CLOCK_MONOTONIC)
+realtime_after = time.time_ns()
+realtime = (realtime_before + realtime_after) // 2
+boot_id_path = Path("/proc/sys/kernel/random/boot_id")
+boot_id = boot_id_path.read_text().strip() if boot_id_path.is_file() else "unavailable"
+Path(sys.argv[1]).write_text(
+    f"boot_id={boot_id}\n"
+    f"captured_realtime_ns={realtime}\n"
+    f"captured_monotonic_ns={monotonic}\n"
+    f"realtime_minus_monotonic_ns={realtime - monotonic}\n"
+)
+PY
+
 printf '%q ' "${bench_cmd[@]}" > "$run_dir/command.sh"
 printf '\n' >> "$run_dir/command.sh"
 chmod +x "$run_dir/command.sh"

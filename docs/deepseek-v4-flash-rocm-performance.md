@@ -183,6 +183,33 @@ Initial quick-iteration matrix:
 
 Metrics: PP t/s and measured latency, peak VRAM/RAM, per-GPU utilization/clocks/power, kernel time/calls, HIP memcpy/P2P bytes, RCCL time, attention/LID/top-k/MoE stage percentages, and failures. Whole-process rocprof summaries include model-load/setup events and are not valid for stage thresholds; filter traces to the harness-recorded first measured-run and completed-record timestamps.
 
+#### Controlled M0 results (2026-08-03)
+
+The rebuilt `04c01936c` default dispatch produced matched medians of 367.246
+t/s at 512 tokens, 364.486 t/s at 2K, and 292.528 t/s at 8K (batch 512,
+ubatch 256, four-way tensor split, three/three/two repetitions). The 512 case
+had a slow first sample; cite medians and preserve raw samples rather than
+selecting the fastest value. The separate traced 8K run measured 238.528 t/s,
+which demonstrates roughly 18% profiler overhead relative to its nearby
+ordinary baseline and is not an A/B throughput number.
+
+The exact measured interval for the trace is 34.345 seconds. After mapping the
+harness realtime markers to rocprof monotonic timestamps, it contains 978,828
+kernel events and 85.912 summed device-seconds across four GPUs. Routed
+`mul_mat_q` kernels account for approximately 40% of summed kernel time:
+IQ2_XXS 18.12%, IQ3_XXS 9.66%, type 8 6.14%, type 13 3.43%, and smaller
+quantized types the remainder. The largest single Tensile Cijk GEMM is 28.44%,
+RCCL device all-reduce 8.01%, lightning indexer 6.30%, and explicit flash
+attention 5.57%. Within the interval, H2D copies total only 46.7 ms and RCCL
+host API calls 248.6 ms; the multi-second whole-process copy/init totals were
+model-load pollution. This satisfies the >=35% M1 MoE/MMQ rule and does not
+satisfy the communication or LID thresholds.
+
+Measured-region artifacts:
+
+- `$HOME/llama-jobs/dsv4-rocm-pp/20260803T155051.535173991Z-trace-base-8k-04c01936c-04c01936cfc8-2974/`
+- `measured-region-summary.txt` and `measured-region-summary.json` in that run.
+
 ### M1 - select one optimization from profile evidence
 
 Decision rule:
@@ -193,6 +220,29 @@ Decision rule:
 - copies/collectives >=20%: optimize tensor split/communication first.
 
 Do not select by architectural elegance alone. Apply thresholds only to a trace interval aligned to measured PP, never to whole-process profiler totals. Compare only identical complete shapes using paired/interleaved base-candidate-base ordering.
+
+**Selected first path:** RDNA2 routed-MMQ tile width, initially as an opt-in
+screening control rather than a broad default. The existing selector chooses
+J=64 from the full 256-token width even though compact routed tiles see far
+fewer rows per expert. A focused 256-expert/top-6 fixture found J=16 reduced
+IQ2_XXS latency from a paired mean 3049.7 us to 1575.8 us and IQ3_XXS from
+3312.5 us to 1787.0 us, with zero A/B mismatches. Setting J=16 for the whole
+model improved matched medians from 367.246 to 410.547 t/s at 512 (+11.8%),
+364.486 to 403.849 t/s at 2K (+10.8%), and 292.528 to 323.151 t/s at 8K
+(+10.5%). J=8 regressed whole-model 2K PP to 350.359 t/s despite winning the
+isolated IQ3 case.
+
+The control remains opt-in because expert skew changes the optimum: in a
+16-hot-expert fixture, J=16 was roughly 43-45% slower than J=64 while J=32 was
+best. Any automatic selector must account for routing concentration or be
+narrowly guarded; do not make J=16 a generic RDNA2 routed-MMQ default from the
+balanced fixture alone.
+
+Screening artifacts:
+
+- `$HOME/llama-jobs/dsv4-rocm-mmq-sweep/20260803T160812Z-04c01936c/`
+- `$HOME/llama-jobs/dsv4-rocm-mmq-sweep/20260803T160916Z-full-model/`
+- Full-model harness runs labeled `mmq-jauto-*`, `mmq-j8-*`, and `mmq-j16-*`.
 
 ### M2 - correctness proof and microbenchmark
 
@@ -235,21 +285,37 @@ A dense mask is not a sparse performance implementation. Success requires runtim
 | 2026-08-03 | Do not treat historical 13.9 t/s as current production throughput; user observes about 80-300 PP t/s under varying live IQ2_M workloads. | User report; controlled conditions not yet recorded. | final |
 | 2026-08-03 | Cap measured PP at five minutes while excluding initial load/warmup; run 8K separately and reject incomplete runs for matched A/B. | User direction plus independent benchmark-validity review. | final |
 | 2026-08-03 | Trace whole process but apply attribution thresholds only after filtering to recorded measured-run timestamps. | Independent review found model load would bias whole-process totals. | final |
+| 2026-08-03 | Select routed MMQ as M1 rather than CSA/LID/communication. | Measured-region trace assigns about 40% of summed kernel time to `mul_mat_q`; RCCL is 8%, LID 6.3%, explicit flash attention 5.6%, and measured H2D only 47 ms. | final |
+| 2026-08-03 | Keep J=16 opt-in until skew-aware dispatch or a narrow DSV4 guard is validated. | +10.5-10.8% matched 2K/8K PP, but hot-routing microbench regresses with J=16. | provisional |
 
 ## 9. Open questions
 
-1. What is the current IQ2_M PP baseline without speculative draft at 512/2K/8K/32K?
-2. What fraction of PP is MoE/MMQ, communication/copies, CSA attention, LID, top-k, compression, and HC?
-3. Does HIP flash attention perform any arbitrary-mask tile pruning? Source and counters must answer.
-4. How are LID scores and global top-k distributed across the four meta devices at runtime?
-5. Are peer copies direct and what bandwidth does GPU3's x8 path achieve?
-6. Which existing RDNA2 MMQ branch is already proven correct and beneficial for this exact IQ2_M expert shape?
-7. Is rocprofv3 stable with this custom kernel/ROCm stack, and which counters are available on V620?
-8. What short-prompt/long-context split best represents the user's production workload?
+1. Does the J=16 win hold on a fixed production-representative token corpus and at final 32K+ contexts?
+2. Can expert concentration be obtained cheaply enough to select J=16/J=32/J=64 without a host synchronization, or should the optimization stay explicitly configured for DSV4?
+3. What is the identity of the dominant 28.44% Tensile Cijk GEMM, and can its exact DSV4 shape be tuned without moving the bottleneck to RCCL?
+4. Does HIP flash attention perform any arbitrary-mask tile pruning? Source and counters must answer before a later CSA patch.
+5. How are LID scores and global top-k distributed across the four meta devices at runtime?
+6. Are peer copies direct and what bandwidth does GPU3's x8 path achieve?
+7. Which short-prompt/long-context mix and fixed corpus best represent the user's production workload?
 
 ## 10. Reproduction record
 
-Pending the first controlled GPU window. Do not populate this section with the active production service's throughput because it has an external client and speculative decode enabled. Quick-loop benchmark execution is capped at five measured minutes with model load excluded; longer contexts are deferred to final validation.
+The first controlled window is complete. These are exploratory records, not the
+final acceptance command; 32K+ and the fixed production corpus remain deferred.
+All harness runs cap measured time at five minutes while excluding model load.
+
+Current 8K control/candidate commands:
+
+```bash
+cd /home/edwin/llama.cpp-rdna2
+unset GGML_HIP_RDNA2_MMQ_J
+DSV4_LABEL=mmq-jauto-8k DSV4_PROMPTS=8192 DSV4_UBATCHES=256 \
+DSV4_REPS=2 DSV4_TIMEOUT=300 scripts/dsv4-rocm/run-pp.sh
+
+GGML_HIP_RDNA2_MMQ_J=16 \
+DSV4_LABEL=mmq-j16-8k DSV4_PROMPTS=8192 DSV4_UBATCHES=256 \
+DSV4_REPS=2 DSV4_TIMEOUT=300 scripts/dsv4-rocm/run-pp.sh
+```
 
 Planned final record:
 
