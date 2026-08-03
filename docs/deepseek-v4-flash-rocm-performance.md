@@ -337,9 +337,20 @@ memory-unit busy, 95.474% L2 hit rate, 11,328 KiB fetches, 3,837 KiB writes,
 zero LDS bank conflict, and 2.532% ALU stall by LDS. Therefore DRAM/LDS are not
 the first-order limiters; FP32 vector/reduction instruction work and the
 VGPR-limited 74% occupancy are. Selection kernels are only about 0.31%, so
-phase three begins with K-vectors-per-wave 4 versus the current 8, then a
-32-head inner tile versus 16. Fused top-k, reduced-precision Q, rocWMMA, and
-device-local candidate merging are deferred.
+phase three began with K-vectors-per-wave 4 versus the current 8, then a
+32-head inner tile versus 16. Both temporary opt-in prototypes were screened,
+rejected, preserved, and removed from the clean source. K4 reduced reported
+VGPRs 80→72 but left occupancy unchanged (74.135→74.186%), doubled wavefronts,
+and regressed A/B/A control-midpoint latency 9.21% at KV=256 and 10.48% at
+KV=4096. H32 used 72 VGPRs and 16,896 trace-reported LDS bytes with no scratch,
+but demonstrated no gain: +0.39%/+0.26% latency, within short-shape control
+drift. Only the retained KV=256 CPU-reference fixtures passed; the losers did
+not undergo the comprehensive correctness contract and are not deployment
+candidates. Simple launch/head tiling is therefore exhausted. Any further LID
+work needs a reduction/instruction redesign with an explicit numerical-order
+review, or the roadmap should pivot to another measured family. Fused top-k,
+reduced-precision Q, rocWMMA, and device-local candidate merging remain
+deferred.
 
 Mapping and screening artifacts:
 
@@ -348,7 +359,9 @@ Mapping and screening artifacts:
 - `$HOME/edwin/llama-jobs/dsv4-hc-mixes-sweep/20260803T181014Z-1d6a42983-prototype/` (tile sweep, correctness, fallback, graph, and dispatch proof)
 - `$HOME/edwin/llama-jobs/dsv4-hc-mixes-sweep/20260803T182030Z-560635e3b-whole-model/` (J16-held-constant whole-model A/B)
 - `$HOME/edwin/llama-jobs/dsv4-rocm-pp/20260803T191856.045376424Z-kernel-trace-j16-hc-16k-52e0121043ad-23195/` (combined-stack 16K compact trace, aggregate and per-agent measured-region summaries)
-- `$HOME/edwin/llama-jobs/dsv4-lid-study/20260803T195000Z-bd4d1b9aa-baseline/` (launch scaling, exact fixture correctness/performance, hardware counters, raw DBs, counter command, and next-screen contract)
+- `$HOME/edwin/llama-jobs/dsv4-lid-study/20260803T195000Z-bd4d1b9aa-baseline/` (launch scaling, exact fixture correctness/performance, hardware counters, raw DBs, counter command, and screen contract)
+- `$HOME/edwin/llama-jobs/dsv4-lid-study/20260803T201000Z-k4-217f2a271-prototype/` (discarded K4 source, correctness/fallback/invalid-env screen, A/B/A, trace resources, occupancy counters)
+- `$HOME/edwin/llama-jobs/dsv4-lid-study/20260803T202000Z-h32-217f2a271-prototype/` (discarded H32 source, retained KV=256 reference test, A/B/A, trace resources)
 
 Screening artifacts:
 
@@ -414,6 +427,32 @@ model/corpus and exact commands):
 
 - `$HOME/edwin/llama-jobs/20260803-194659-dsv4-prod-mtp-j16-hc-r3/`
 
+Commit `3fc2c17f6` parameterizes n-max, quick/full hashes, and the actual runtime
+graph-disable variable. A four-cell, 64-token bounded matrix confirms that
+neither runtime graph capture nor n-max 1 restores equivalence. Main-only token
+IDs are identical across all cells. MTP graph-on/off IDs are also identical for
+each n-max: n-max 3 always forks at token 41 (`32907`→`12275`), while n-max 1
+always forks at token 6 (`124793`→`14`). Graph toggling is therefore not the
+cause. N-max changes the verification batch width/cadence and moves the fork,
+which favors target batch-shape arithmetic or DSV4 recurrent rollback state as
+the remaining mechanisms. Source inspection confirms every draft position is
+sampled from target logits and emitted IDs come from the verifier, so there is
+no evidence that accepted draft IDs intentionally bypass target verification.
+Single-cell TG deltas range from -4.7% to +19.2% and are contradictory; they
+remain unusable as a speed claim.
+
+Matrix summary (quick identities linked to the full-hash run above):
+
+- `$HOME/edwin/llama-jobs/dsv4-mtp-matrix-20260803T200941Z-3fc2c17f6/`
+- source runs `$HOME/edwin/llama-jobs/20260803-200941-mtp-matrix-{g1n3,g1n1,g0n3,g0n1}/`
+
+The next smallest diagnostic is prefix replay at the n-max-1 fork: append the
+common output tokens through index 4, request two tokens, and compare
+request-level speculative n-max 0 versus 1 in the same MTP-enabled server. An
+immediate token-6 fork implicates verification batch arithmetic before prior
+rollback history; equivalence implicates accumulated recurrent rollback/cache.
+If needed, capture target top-1/top-2 logits and margin at that first fork.
+
 ### M3 - implementation and matched A/B
 
 One implementation branch and one writer. Keep the base binary and build artifacts. A frozen baseline is valid only when its sibling llama/ggml DSOs are selected and hashed; an executable that resolves candidate-build libraries is not frozen. Run static/backend tests first, then DSV4 validation, then matched benchmark/profile. Report local kernel speed separately from whole-model PP.
@@ -457,14 +496,15 @@ A dense mask is not a sparse performance implementation. Success requires runtim
 | 2026-08-03 | Keep the skinny hc-mixer path explicit and exact-shape for the known service. | Custom 12x16x256 kernel is bit-identical and 3.83x faster locally; J16-held-constant PP gains 19.8-20.9%; the fully attested 256-ubatch corpus gate matches all responses; all near-shapes retain rocBLAS/generic fallback. | final |
 | 2026-08-03 | Do not switch to communication-first after the local compute wins. | Fresh 16K trace assigns RCCL device work 9.84% and explicit copies 0.18%; x8 bus 46 is not the slowest by total/RCCL kernel sums. | final |
 | 2026-08-03 | Tune the LID vector kernel before considering fused selection. | Lightning indexer is 14.87% while selection is only about 0.31%; exact counters show 74.1% occupancy, 16.5% memory busy, 95.5% L2 hits, no LDS conflicts, and 6,481 VALU instructions/work-item. | selected |
-| 2026-08-03 | Do not accept production MTP yet. | At the exact production-like 262K configuration, MTP drafted and verified tokens but greedy output diverged at generated token 41; single-observation TG was 1.27% lower, not higher. | blocked |
+| 2026-08-03 | Reject simple LID K4/H32 tiling; do not combine or deploy it. | K4 regresses 9.2-10.5% and does not improve occupancy despite fewer VGPRs; H32 is neutral within drift and doubles LDS. Both fail the 10% local promotion gate. | final |
+| 2026-08-03 | Do not accept production MTP yet. | Full and four-cell bounded runs prove MTP executes, but n-max 3 diverges at token 41 and n-max 1 at token 6 regardless of graph capture; timings are inconsistent across single observations. | blocked |
 
 ## 9. Open questions
 
 1. Does the J=16 win hold on a user-supplied production corpus? The attested engineering proxy and through-16K synthetic scaling are positive, but no user corpus exists and 32K cannot complete under the five-minute cap.
 2. Can a later expert-concentration signal select J=16/J=32/J=64 without a host synchronization? This patch intentionally stays explicit.
-3. Does reducing K vectors/wave from 8 to 4 recover enough of the measured 26% occupancy headroom to overcome extra blocks/Q staging, and does a 32-head inner tile reduce barriers without losing residency?
-4. Why does production MTP greedy output diverge at token 41 despite target verification, and can graph/cache/config isolation restore equivalence and a real TG gain?
+3. Is a same-order LID reduction/instruction redesign possible after K4/H32 tiling failed, and is its bounded ~9% per-device wall opportunity worth the numerical and maintenance risk versus pivoting back to MMQ/CSA?
+4. Does request-level n-max 1 versus 0 prefix replay reproduce the token-6 MTP fork before any rejection history, proving verification-batch target arithmetic, or does it implicate accumulated DSV4 recurrent rollback/cache?
 5. Does HIP flash attention perform partial arbitrary-mask tile pruning? Scaling rejects complete fixed-top-k pruning, but source/counters do not yet quantify partial pruning.
 6. How are LID scores and global top-k distributed across the four meta devices at runtime?
 7. RCCL kernels do not make x8 bus 46 the slowest, but what algorithm roles and actual peer bytes/bandwidth explain the per-agent RCCL asymmetry?
