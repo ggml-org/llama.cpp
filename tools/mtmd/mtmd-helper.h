@@ -172,6 +172,8 @@ enum mtmd_helper_gen_audio_outtype {
     MTMD_HELPER_GEN_AUDIO_OUTTYPE_WAV, // WAV PCM 16-bit LE, mono
 };
 struct mtmd_helper_gen_audio_inp {
+    llama_seq_id seq_id;
+
     const char * prompt;
     size_t       prompt_len;
 

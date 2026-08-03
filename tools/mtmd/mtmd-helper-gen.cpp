@@ -106,6 +106,7 @@ public:
     using mtmd_gen_audio_pipeline::mtmd_gen_audio_pipeline;
 
     void reset() override {
+        seq_id = 0;
         pos = 0;
         codes_buf.clear();
         c2w_state.clear();
@@ -118,6 +119,7 @@ public:
 
     int32_t set_input(const mtmd_helper_gen_audio_inp * inp) override {
         reset();
+        seq_id = inp->seq_id;
 
         if (!ensure_cache()) {
             return 1;
@@ -192,8 +194,8 @@ public:
         }
 
         decode_embd_batch batch_embd(embd_buf.data(), n_prompt, n_pos_per_embd, n_e);
-        if (mrope) batch_embd.set_position_mrope_1d(0, 0);
-        else       batch_embd.set_position_normal(0, 0);
+        if (mrope) batch_embd.set_position_mrope_1d(0, seq_id);
+        else       batch_embd.set_position_normal  (0, seq_id);
         batch_embd.batch.logits[n_prompt - 1] = 1;
 
         if (llama_decode(lctx, batch_embd.batch) != 0) {
@@ -243,8 +245,8 @@ public:
 
         const int n_pos_per_embd = mrope ? 4 : 1;
         decode_embd_batch batch_embd(fb.data(), 1, n_pos_per_embd, n_embd);
-        if (mrope) batch_embd.set_position_mrope_1d(pos, 0);
-        else       batch_embd.set_position_normal(pos, 0);
+        if (mrope) batch_embd.set_position_mrope_1d(pos, seq_id);
+        else       batch_embd.set_position_normal  (pos, seq_id);
         batch_embd.batch.logits[0] = 1;
         pos++;
 
@@ -399,8 +401,9 @@ private:
     size_t window_frames = 72;
 
     // per-generation state, cleared by reset()
-    bool   mrope = false;
-    int    pos   = 0;
+    llama_seq_id seq_id = 0;
+    bool mrope = false;
+    int pos = 0;
     int32_t top_k = 50;
     float   top_p = 1.0f;
     std::vector<int32_t> codes_buf;

@@ -112,6 +112,7 @@ int main(int argc, char ** argv) {
 
     mtmd_helper::gen_audio gen(lctx, mctx.get());
     mtmd_helper_gen_audio_inp inp{};
+    inp.seq_id      = 0;
     inp.prompt      = params.prompt.c_str();
     inp.prompt_len  = params.prompt.size();
     inp.speaker_ref = speaker_bitmap.get();
