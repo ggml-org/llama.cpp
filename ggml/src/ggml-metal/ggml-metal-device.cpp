@@ -2173,6 +2173,8 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_training(ggml_me
     if (!res.pipeline) {
         res = ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
     }
+    return res;
+}
 
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_silu_back(ggml_metal_library_t lib, const ggml_tensor * op) {
     assert(op->op == GGML_OP_SILU_BACK);
