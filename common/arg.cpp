@@ -4158,7 +4158,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_TILE640_DEBUG_DEQUANT_STRIDE"));
     add_opt(common_arg(
-<<<<<<< HEAD
         {"--tessera-matmul-output-dir"}, "PATH",
         "Tessera: dump per-tensor matmul output (F32) to PATH as .matmul-output.f32 sidecar files. "
         "Used by the L2 forward-pass differential (tools/tessera/runtime_probe.py). "
