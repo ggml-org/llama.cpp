@@ -59,7 +59,7 @@ export interface CwdMessageInfo {
  */
 export function formatCwdMessage(cwd: string, home: string | null): string {
 	const display = abbreviateWorkingDir(cwd, home);
-	return `${CWD_CHANGED_PREFIX}[file://${cwd}](${display}). This adds/modifies a "x-tool-cwd" header in the POST request to /tools endpoint for all further tool calls.`;
+	return `${CWD_CHANGED_PREFIX}[file://${cwd}](${display}).`;
 }
 
 /**

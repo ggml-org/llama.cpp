@@ -79,13 +79,13 @@ describe('abbreviateHome', () => {
 describe('formatCwdMessage / parseCwdMessage', () => {
 	it('formats a cwd change matching the UI text, with a file link', () => {
 		expect(formatCwdMessage('/Users/al/Documents', '/Users/al')).toBe(
-			'Set working directory to [file:///Users/al/Documents](~/Documents). This adds/modifies a "x-tool-cwd" header in the POST request to /tools endpoint for all further tool calls.'
+			'Set working directory to [file:///Users/al/Documents](~/Documents).'
 		);
 	});
 
 	it('falls back to the basename display when home is unknown', () => {
 		expect(formatCwdMessage('/opt/project', null)).toBe(
-			'Set working directory to [file:///opt/project](project). This adds/modifies a "x-tool-cwd" header in the POST request to /tools endpoint for all further tool calls.'
+			'Set working directory to [file:///opt/project](project).'
 		);
 	});
 

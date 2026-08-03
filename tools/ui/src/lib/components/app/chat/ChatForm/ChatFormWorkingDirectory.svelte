@@ -45,13 +45,11 @@
 	const pickerSupported =
 		typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function';
 
-	// Popover open state. The popover element handles outside-click and Escape;
-	// we just react to open and seed the search field with the active path.
+	// Popover open state; the element handles outside-click and Escape.
 	let isOpen = $state(false);
 	let inputValue = $state('');
 	let searchInputRef: HTMLInputElement | null = $state(null);
 
-	// Search / autocomplete state. Results are absolute directory paths.
 	let queryResults = $state<string[]>([]);
 	let isSearching = $state(false);
 	let searchError = $state<string | null>(null);
@@ -66,8 +64,6 @@
 	// abbreviation.
 	let homeBase = $derived(toolsStore.serverHome);
 
-	// Label on the trigger button: abbreviated active path, or the ghost
-	// prompt.
 	let displayLabel = $derived.by(() => {
 		if (!directory) return 'Select working directory';
 		return abbreviateWorkingDir(directory, homeBase);
@@ -126,12 +122,9 @@
 		isSearching = false;
 	}
 
-	// Build a substring glob from the raw query: letters become
-	// case-insensitive char classes (glob_match supports [xX]) so "proj"
-	// matches "Project-Alpha"; glob metacharacters are dropped.
-	// Path-like queries (starting with / or ~) are treated as path
-	// navigation: search the parent directory for the last segment instead
-	// of glob-matching the whole query against home-relative entries.
+	// Path-like queries (starting with / or ~) navigate: search the parent
+	// directory for the last segment instead of glob-matching home-relative
+	// entries.
 	function splitPathQuery(query: string): { parent: string; last: string } | null {
 		if (!query.startsWith('/') && !query.startsWith('~')) return null;
 		const normalized = query.replace(/\/+$/, '');
@@ -347,11 +340,8 @@
 	function handleKeydown(event: KeyboardEvent) {
 		if (event.key === 'Enter') {
 			event.preventDefault();
-			// Commit the highlighted search result when there is one
-			// (the user may have arrow-keyed to it or it is the auto-
-			// selected first row after results landed). Fall back to
-			// the raw input only when the query returned no matches,
-			// so the user can still type a known absolute path.
+			// Commit the highlighted result, falling back to the raw input
+			// only when the query returned no matches.
 			if (hoveredIndex >= 0 && queryResults[hoveredIndex]) {
 				commit(queryResults[hoveredIndex]);
 			} else if (queryResults.length === 0) {
@@ -389,9 +379,8 @@
 		closePicker();
 	}
 
-	// Chip is always visible - the X just clears the picked directory and
-	// reveals the empty "Select working directory" placeholder again. No-op
-	// when there's already nothing to clear.
+	// The chip is always visible; the X clears the directory (no-op when
+	// already empty).
 	function handleDismiss(event?: MouseEvent) {
 		event?.stopPropagation();
 		event?.preventDefault();
@@ -411,7 +400,6 @@
 			searchError = null;
 			void toolsStore.resolveServerHome();
 			searchScope = homeBase ?? '~';
-			// show the current directory (and its siblings) right away
 			if (inputValue.trim()) runSearch(inputValue);
 		} else {
 			cancelSearch();

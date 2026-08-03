@@ -38,7 +38,6 @@ json server_tool::to_json() const {
 static constexpr size_t SERVER_TOOL_GIT_LS_FILES_MAX_OUTPUT = 8 * 1024 * 1024; // 8 MB
 static constexpr int SERVER_TOOL_GIT_LS_FILES_TIMEOUT = 15; // seconds
 
-// expand a leading "~" to the user's home directory
 static std::string expand_home(const std::string & path) {
     if (path.empty() || path[0] != '~') return path;
     if (path.size() > 1 && path[1] != '/' && path[1] != '\\') return path;
