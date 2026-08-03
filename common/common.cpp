@@ -998,6 +998,23 @@ bool fs_is_directory(const std::string & path) {
     return std::filesystem::exists(dir) && std::filesystem::is_directory(dir);
 }
 
+std::string common_get_env(const std::string & name) {
+    const char * value = std::getenv(name.c_str());
+    return value == nullptr ? "" : value;
+}
+
+void common_set_env(const std::string & name, const std::string & value) {
+#if defined(_WIN32)
+    _putenv_s(name.c_str(), value.c_str());
+#else
+    if (value.empty()) {
+        unsetenv(name.c_str());
+    } else {
+        setenv(name.c_str(), value.c_str(), 1);
+    }
+#endif
+}
+
 std::string fs_get_cache_directory() {
     std::string cache_directory = "";
     auto ensure_trailing_slash = [](std::string p) {
@@ -1299,8 +1316,9 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
     pimpl->samplers.resize(cparams.n_seq_max);
     pimpl->samplers_seq_config.resize(cparams.n_seq_max);
 
+    const int32_t n_ctx = cparams.n_ctx > 0 ? (int32_t) cparams.n_ctx : llama_model_n_ctx_train(model);
     for (int i = 0; i < (int) cparams.n_seq_max; ++i) {
-        pimpl->samplers[i].reset(common_sampler_init(model, params.sampling));
+        pimpl->samplers[i].reset(common_sampler_init(model, params.sampling, n_ctx));
         pimpl->samplers_seq_config[i] = { i, common_sampler_get(pimpl->samplers[i].get()) };
     }
 
@@ -1462,18 +1480,18 @@ common_init_result_ptr common_init_from_params(common_params & params, bool mode
 common_init_result::~common_init_result() = default;
 
 std::string common_get_model_endpoint() {
-    const char * model_endpoint_env = getenv("MODEL_ENDPOINT");
-    // We still respect the use of environment-variable "HF_ENDPOINT" for backward-compatibility.
-    const char * hf_endpoint_env = getenv("HF_ENDPOINT");
-    const char * endpoint_env = model_endpoint_env ? model_endpoint_env : hf_endpoint_env;
-    std::string model_endpoint = "https://huggingface.co/";
-    if (endpoint_env) {
-        model_endpoint = endpoint_env;
-        if (model_endpoint.back() != '/') {
-            model_endpoint += '/';
-        }
+    std::string endpoint = common_get_env("MODEL_ENDPOINT");
+    if (endpoint.empty()) {
+        // the HF_ENDPOINT variable is respected for backward compatibility
+        endpoint = common_get_env("HF_ENDPOINT");
     }
-    return model_endpoint;
+    if (endpoint.empty()) {
+        return "https://huggingface.co/";
+    }
+    if (endpoint.back() != '/') {
+        endpoint += '/';
+    }
+    return endpoint;
 }
 
 char * common_get_model_or_exit(int argc, char * argv[]) {
