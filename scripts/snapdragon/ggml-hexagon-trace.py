@@ -46,7 +46,6 @@ def get_split_output_path(base_path, device_name):
     return f"{root}-{safe_device}{ext}"
 
 
-
 def normalize_event_name(evt_type, info=0):
     if evt_type == "HVX_COMP":
         return "V-COMP"

@@ -9,6 +9,10 @@ import argparse
 import subprocess
 import platform
 import shutil
+import logging
+
+logger = logging.getLogger("build")
+
 
 def parse_target(target_str):
     if not target_str:
@@ -26,12 +30,15 @@ def parse_target(target_str):
     else:
         return None, None
 
+
 def get_uid_gid():
     if platform.system() != "Windows":
         return [f"{os.getuid()}:{os.getgid()}"]
     return []
 
+
 def main():
+    logging.basicConfig(level=logging.INFO, format='%(message)s')
     parser = argparse.ArgumentParser(
         description="Build llama.cpp for Snapdragon using cross-compilation docker containers or natively."
     )
@@ -55,7 +62,7 @@ def main():
 
     target_type, target_val = parse_target(args.target)
     if not target_type:
-        print(f"Error: Invalid target format '{args.target}'. Must be android[:serial]/adb[:serial], linux:[user@]host/lnx:[user@]host/ubuntu:[user@]host, or windows/wos.", file=sys.stderr)
+        logger.error(f"Error: Invalid target format '{args.target}'. Must be android[:serial]/adb[:serial], linux:[user@]host/lnx:[user@]host/ubuntu:[user@]host, or windows/wos.")
         sys.exit(1)
 
     # Determine preset and check if it's debug
@@ -101,55 +108,55 @@ def main():
             dst_mtime = os.path.getmtime(preset_dst)
             if src_mtime > dst_mtime:
                 preset_bak = preset_dst + ".bak"
-                print(f"Docs CMakeUserPresets.json is newer. Backing up existing {preset_dst} to {preset_bak}")
+                logger.info(f"Docs CMakeUserPresets.json is newer. Backing up existing {preset_dst} to {preset_bak}")
                 shutil.copy2(preset_dst, preset_bak)
                 should_copy = True
 
         if should_copy:
-            print(f"Copying CMakeUserPresets.json from {preset_src} to {preset_dst}")
+            logger.info(f"Copying CMakeUserPresets.json from {preset_src} to {preset_dst}")
             shutil.copy2(preset_src, preset_dst)
     else:
-        print("Warning: CMakeUserPresets.json not found in docs/backend/snapdragon/.", file=sys.stderr)
+        logger.warning("Warning: CMakeUserPresets.json not found in docs/backend/snapdragon/.")
 
     jobs = args.jobs if args.jobs else os.cpu_count() or 4
 
     if target_type == "windows":
-        print("Windows target selected. Forcing native compilation...")
+        logger.info("Windows target selected. Forcing native compilation...")
         args.no_docker = True
         if platform.system() != "Windows":
-            print("Warning: Windows compilation is intended to run on Windows arm64 hosts.", file=sys.stderr)
+            logger.warning("Warning: Windows compilation is intended to run on Windows arm64 hosts.")
 
     if args.no_docker:
         # Native/local host build
-        print("Running native/local CMake build...")
+        logger.info("Running native/local CMake build...")
         install_prefix = os.path.join(repo_root, install_dir, "llama.cpp")
 
         # Configure
         configure_cmd = ["cmake", f"--preset={preset}", "-B", build_dir]
-        print(f"+ {' '.join(configure_cmd)}")
+        logger.info(f"+ {' '.join(configure_cmd)}")
         res = subprocess.run(configure_cmd, cwd=repo_root)
         if res.returncode != 0:
-            print("CMake configuration failed.", file=sys.stderr)
+            logger.error("CMake configuration failed.")
             sys.exit(res.returncode)
 
         # Build
         build_cmd = ["cmake", "--build", build_dir, "-j", str(jobs)]
-        print(f"+ {' '.join(build_cmd)}")
+        logger.info(f"+ {' '.join(build_cmd)}")
         res = subprocess.run(build_cmd, cwd=repo_root)
         if res.returncode != 0:
-            print("CMake build failed.", file=sys.stderr)
+            logger.error("CMake build failed.")
             sys.exit(res.returncode)
 
         # Install
         install_cmd = ["cmake", "--install", build_dir, "--prefix", install_prefix]
-        print(f"+ {' '.join(install_cmd)}")
+        logger.info(f"+ {' '.join(install_cmd)}")
         res = subprocess.run(install_cmd, cwd=repo_root)
         if res.returncode != 0:
-            print("CMake install failed.", file=sys.stderr)
+            logger.error("CMake install failed.")
             sys.exit(res.returncode)
     else:
         # Docker-based build
-        print("Running Docker-based cross-compilation build...")
+        logger.info("Running Docker-based cross-compilation build...")
         image_name = "arm64-linux" if target_type == "linux" else "arm64-android"
         image = f"{args.toolchain_url}/{image_name}:{args.toolchain_version}"
 
@@ -173,19 +180,19 @@ def main():
 
         docker_cmd += [image, "bash", "-c", build_sh_cmd]
 
-        print(f"+ {' '.join(docker_cmd)}")
+        logger.info(f"+ {' '.join(docker_cmd)}")
         res = subprocess.run(docker_cmd, cwd=repo_root)
         if res.returncode != 0:
-            print("Docker-based build failed.", file=sys.stderr)
+            logger.error("Docker-based build failed.")
             sys.exit(res.returncode)
 
-    print("\nBuild and installation completed successfully!")
+    logger.info("\nBuild and installation completed successfully!")
 
     # Push/deploy if requested
     if args.push:
         src_path = os.path.join(repo_root, install_dir, "llama.cpp")
         if not os.path.exists(src_path):
-            print(f"Error: installation directory {src_path} does not exist. Cannot deploy.", file=sys.stderr)
+            logger.error(f"Error: installation directory {src_path} does not exist. Cannot deploy.")
             sys.exit(1)
 
         # Resolve target directory on device
@@ -194,40 +201,41 @@ def main():
             target_dir = "/data/local/tmp/llama.cpp" if target_type == "android" else "~/llama.cpp"
 
         if target_type == "android":
-            print(f"\nPushing built artifacts to Android device via ADB...")
+            logger.info("\nPushing built artifacts to Android device via ADB...")
             adb_cmd = ["adb"]
             if target_val: # serial
                 adb_cmd += ["-s", target_val]
             # Android destination directory is target_dir
             push_cmd = adb_cmd + ["push", src_path, target_dir]
-            print(f"+ {' '.join(push_cmd)}")
+            logger.info(f"+ {' '.join(push_cmd)}")
             res = subprocess.run(push_cmd)
             if res.returncode != 0:
-                print("ADB push failed.", file=sys.stderr)
+                logger.error("ADB push failed.")
                 sys.exit(res.returncode)
-            print("ADB push completed successfully!")
+            logger.info("ADB push completed successfully!")
 
         elif target_type == "linux":
             ssh_host = target_val
             if not ssh_host:
-                print("Error: SSH host not specified in target (e.g. use linux:user@host, lnx:user@host, or ubuntu:user@host). Cannot deploy.", file=sys.stderr)
+                logger.error("Error: SSH host not specified in target (e.g. use linux:user@host, lnx:user@host, or ubuntu:user@host). Cannot deploy.")
                 sys.exit(1)
-            print(f"\nDeploying built artifacts to Linux device {ssh_host} via SSH/SCP...")
+            logger.info(f"\nDeploying built artifacts to Linux device {ssh_host} via SSH/SCP...")
             # Deploy to target_dir
             deploy_cmd = ["scp", "-r", src_path, f"{ssh_host}:{target_dir}"]
-            print(f"+ {' '.join(deploy_cmd)}")
+            logger.info(f"+ {' '.join(deploy_cmd)}")
             res = subprocess.run(deploy_cmd)
             if res.returncode != 0:
-                print("SSH/SCP deploy failed.", file=sys.stderr)
+                logger.error("SSH/SCP deploy failed.")
                 sys.exit(res.returncode)
-            print("SSH/SCP deploy completed successfully!")
+            logger.info("SSH/SCP deploy completed successfully!")
 
         elif target_type == "windows":
-            print("\nPush for Windows on Snapdragon (windows) target is currently a stub.")
+            logger.info("\nPush for Windows on Snapdragon (windows) target is currently a stub.")
+
 
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\nInterrupted by user.")
+        logger.info("\nInterrupted by user.")
         sys.exit(130)
