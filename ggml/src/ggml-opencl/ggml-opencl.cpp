@@ -7750,9 +7750,9 @@ static inline bool use_flat_gemv_for_large_m_q4_K(const ggml_backend_opencl_cont
 }
 
 static inline bool use_flat_gemv_for_large_m_q6_K(const ggml_backend_opencl_context *backend_ctx, const ggml_tensor *tensor) {
-    if (!flat_large_m_enabled()) {
-        return false;
-    }
+    // NOTE on ordering: the ne01 % 128 escape below is a CORRECTNESS guard, not a
+    // performance one, so it must be reachable regardless of flat_large_m_enabled().
+    // The opt-in gate therefore sits after it, and after the tiled deferral.
     // gemv_noshuffle variant perf drops for large M, use flat variant for large M.
     // threshold is well above typical hidden/FFN dims, but below typical vocab sizes.
     // q6_K flat gemv is worse for smaller K; 2048 seems to be a reasonable threshold.
@@ -7776,6 +7776,10 @@ static inline bool use_flat_gemv_for_large_m_q6_K(const ggml_backend_opencl_cont
     // 128 and keep the noshuffle path.
     if ((tensor->ne[1] % 128 != 0) && tensor->ne[2] == 1 && tensor->ne[3] == 1) {
         return true;
+    }
+
+    if (!flat_large_m_enabled()) {
+        return false;
     }
 
     // The gemv_noshuffle slowdown tracks TOTAL weight size, not ne0 alone; ne0 >= 2048 is a
