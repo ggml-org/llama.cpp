@@ -64,20 +64,24 @@
 //
 // JSONL SCHEMA
 // ------------
-// Two coexisting schemas, both emitted by this API:
-//   - llama.dflash.acceptance.v1  (telemetry_topk == 0, default)
-//       {schema, seq_id, drafted, accepted, confidence[]}
-//   - llama.spec_calib.v2         (telemetry_topk > 0)
-//       {schema, seq_id, step_idx, prime_token, drafted, accepted,
-//        topk, drafted_tokens[], accepted_tokens[],
-//        verifier_argmax[], drafter_argmax[],
-//        verifier_topk_tokens[][], verifier_topk_probs[][],
-//        drafter_topk_tokens[][], drafter_topk_probs[][],
-//        confidence[]}
-// The schema is chosen per-run by the telemetry_topk option.  Both
-// schemas are stable: the v1 schema matches the dflash-acceptance.jsonl
-// that llama-server and dspark-realign already consume, and the v2
-// schema is the in-tree superset that the dspark-realign pipeline reads.
+// Single canonical schema: `llama.tessera.spec.v1`.  Per-step cheap
+// fields are always emitted; per-position top-k distributions are added
+// only when telemetry_topk > 0.
+//
+// Always-emitted fields (cheap per-step payload, present for every
+// telemetry_topk value):
+//   schema, seq_id, step_idx, prime_token, drafted, accepted,
+//   drafted_tokens[], accepted_tokens[], confidence[]
+//
+// Top-k fields (present only when telemetry_topk > 0):
+//   topk, verifier_argmax[], drafter_argmax[],
+//   verifier_topk_tokens[][], verifier_topk_probs[][],
+//   drafter_topk_tokens[][], drafter_topk_probs[][]
+//
+// Confidence is the per-draft-token verifier softmax probability of the
+// drafter's pick; consumers that only need the accept/reject signal can
+// ignore the top-k fields entirely.  Consumers that need full per-position
+// distributions set telemetry_topk > 0 and read the topk arrays.
 //
 
 #include "common.h"
@@ -128,8 +132,10 @@ struct common_speculative_calibration_options {
     // Empty = no telemetry.
     std::string telemetry_out;
 
-    // Number of top-k entries to include in the v2 schema.
-    // 0 = emit v1 schema (confidence only).
+    // Number of top-k entries to include in the per-position verifier
+    // and drafter distributions.  0 = emit a record without the top-k
+    // fields (cheap per-step payload only).  > 0 = additionally emit the
+    // top-k token/prob arrays for the drafter fine-tuning pipeline.
     int32_t telemetry_topk = 0;
 
     // Observer hooks for the verifier's main forward.
