@@ -19,8 +19,8 @@ def create_server():
     server.server_tools = "all"
 
 
-def call_tool(name: str, params: dict) -> dict:
-    res = server.make_request("POST", "/tools", data={"tool": name, "params": params})
+def call_tool(name: str, params: dict, headers: dict | None = None) -> dict:
+    res = server.make_request("POST", "/tools", data={"tool": name, "params": params}, headers=headers)
     assert res.status_code == 200, res.body
     assert "error" not in res.body, res.body
     return res.body
@@ -121,6 +121,29 @@ def test_tools_builtin_exec_shell_command_stream():
     chunks = "".join(e["chunk"] for e in events[:-1])
     assert "hello" in chunks
     assert "[exit code: 0]" in chunks
+
+
+def test_tools_builtin_cwd_header():
+    global server
+    server.start()
+
+    cwd_dir = os.path.join(PROJECT_ROOT, "tools", "server", "tests", "unit")
+    headers = {"x-tool-cwd": cwd_dir}
+
+    res = call_tool("read_file", {"path": "test_tools_builtin.py"}, headers=headers)
+    assert GREP_MARKER in res["plain_text_response"]
+
+    # exec_shell_command should also run with that directory as its working directory:
+    # writing to a relative filename must land inside cwd_dir
+    marker_name = "llama_cpp_test_tools_builtin_cwd_marker.txt"
+    marker_path = os.path.join(cwd_dir, marker_name)
+    try:
+        command = f"echo hello > {marker_name}"
+        call_tool("exec_shell_command", {"command": command}, headers=headers)
+        assert os.path.exists(marker_path)
+    finally:
+        if os.path.exists(marker_path):
+            os.remove(marker_path)
 
 
 def test_tools_builtin_edit_file_rejects_overlapping_edits():

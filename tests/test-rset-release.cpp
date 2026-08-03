@@ -3,13 +3,13 @@
 // thus, this test is not run by default
 // example model to run with: google/gemma-4-E4B-it-qat-q4_0-gguf
 
+#include "llama.h"
+#include "common.h"
+
 #include <cstdint>
 #include <mach/mach.h>
 #include <mach/mach_host.h>
 #include <unistd.h>
-
-#include "llama.h"
-#include "get-model.h"
 
 static uint64_t wired_memory() {
     vm_statistics64_data_t vmstat;
@@ -21,7 +21,7 @@ static uint64_t wired_memory() {
 }
 
 int main(int argc, char ** argv) {
-    auto * model_path = get_model_or_exit(argc, argv);
+    auto * model_path = common_get_model_or_exit(argc, argv);
 
     llama_backend_init();
 
