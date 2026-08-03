@@ -99,6 +99,8 @@ add_library(${TARGET}
     tessera/tessera-dpace.cpp
     # drafter training pipeline: LK training-data builder (traces -> dense labels)
     tessera/tessera-lk-train-data.cpp
+    # drafter training pipeline: DFlash training-data builder (block.v1 -> weighted CE labels)
+    tessera/tessera-dflash-train-data.cpp
     # drafter training pipeline: offline trunk-feature capture file format
     tessera/tessera-features.cpp
     # multimodal
@@ -231,6 +233,23 @@ endif()
 set(TARGET tessera-train-lk)
 
 add_executable(${TARGET} tessera/tessera-train-lk.cpp)
+target_link_libraries(${TARGET} PRIVATE llama-quantize-impl)
+target_compile_features(${TARGET} PRIVATE cxx_std_17)
+
+if(LLAMA_TOOLS_INSTALL)
+    install(TARGETS ${TARGET} RUNTIME)
+endif()
+
+# tessera-train-dflash: native DFlash / D-PACE block-drafter training driver.
+# Reads llama.tessera.dflash-block.v1 records (from tessera-dataset
+# --tessera-dataset-mode dflash) and trains a drafter with weighted
+# cross-entropy. The D-PACE weight is the per-position CE scale written at
+# the llama-layer label fill (the additive change to src/llama-context.cpp);
+# the ggml CE graph is unchanged. See docs/tessera-dflash-training-design.md.
+
+set(TARGET tessera-train-dflash)
+
+add_executable(${TARGET} tessera/tessera-train-dflash.cpp)
 target_link_libraries(${TARGET} PRIVATE llama-quantize-impl)
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
 

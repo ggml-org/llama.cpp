@@ -1655,9 +1655,28 @@ extern "C" {
         enum ggml_opt_loss_type loss_type; // loss to minimize. GGML_OPT_LOSS_TYPE_LK requires the labels to be
                                            // dense probability distributions (see tools/quantize/tessera/tessera-lk-loss.h),
                                            // not the token-id labels used for cross-entropy.
+
+        // DFlash / D-PACE training: when true, the sparse cross-entropy label
+        // fill writes labels[target, pos] = weight[pos] instead of 1.0, so the
+        // ggml CE computes sum_j w_j * (-log q(y_j)) with a per-position
+        // gradient scale. Weights are passed via llama_set_opt_label_weights
+        // before llama_opt_epoch. Default false keeps finetune.cpp and the
+        // LK driver on the existing 1.0 path unchanged.
+        bool use_weighted_ce;
     };
 
     LLAMA_API void llama_opt_init(struct llama_context * lctx, struct llama_model * model, struct llama_opt_params lopt_params);
+
+    // DFlash / D-PACE training: attach a per-position CE weight buffer. The
+    // buffer must contain n_tok floats per example (ndata * n_tok total),
+    // laid out as weights[idata * n_tok + pos]. The buffer is borrowed, not
+    // copied: it must outlive llama_opt_epoch. Pass NULL to detach. n_tok
+    // is the per-example token count (= n_ctx_train set via llama_opt_params).
+    // Only takes effect when lopt_params.use_weighted_ce was true.
+    LLAMA_API void llama_set_opt_label_weights(
+            struct llama_context * lctx,
+            const float          * weights,
+            size_t                 n_tok);
 
     LLAMA_API void llama_opt_epoch(
             struct llama_context    * lctx,

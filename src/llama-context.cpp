@@ -3400,7 +3400,14 @@ static void llama_set_param(struct ggml_tensor * tensor, llama_opt_param_filter 
 
 void llama_context::opt_init(struct llama_model * model, struct llama_opt_params lopt_params) {
     GGML_ASSERT(!opt_ctx);
-    opt_loss_type = lopt_params.loss_type;
+    opt_loss_type         = lopt_params.loss_type;
+    opt_use_weighted_ce   = lopt_params.use_weighted_ce;
+    if (!opt_use_weighted_ce) {
+        // Default: detach any leftover weight buffer so an earlier driver
+        // can't leak its weights into a later (non-DFlash) call.
+        opt_label_weights       = nullptr;
+        opt_label_weights_n_ctx = 0;
+    }
     model->hparams.n_ctx_train = lopt_params.n_ctx_train > 0 ? lopt_params.n_ctx_train : n_ctx();
     const uint32_t n_batch     = std::min(this->n_batch(),  model->hparams.n_ctx_train);
     const uint32_t n_ubatch    = std::min(this->n_ubatch(), n_batch);
@@ -3438,6 +3445,16 @@ void llama_context::opt_init(struct llama_model * model, struct llama_opt_params
             llama_set_param(reinterpret_cast<struct ggml_tensor **>(&layer)[i], param_filter, param_filter_ud);
         }
     }
+}
+
+void llama_context::set_opt_label_weights(const float * weights, size_t n_tok) {
+    if (weights == nullptr || n_tok == 0) {
+        opt_label_weights       = nullptr;
+        opt_label_weights_n_ctx = 0;
+        return;
+    }
+    opt_label_weights       = weights;
+    opt_label_weights_n_ctx = n_tok;
 }
 
 void llama_context::opt_epoch_iter(
@@ -3542,12 +3559,30 @@ void llama_context::opt_epoch_iter(
                                 (size_t)pos_ubatch*n_vocab*sizeof(float), n_vocab*sizeof(float));
                     }
                 } else {
+                    // DFlash / D-PACE: when use_weighted_ce is on, the sparse
+                    // label fill writes labels[target, pos] = weight[pos]
+                    // instead of 1.0, so the ggml CE computes
+                    // sum_j w_j * (-log q(y_j)) with a per-position gradient
+                    // scale. n_ctx is the per-example length set at opt_init
+                    // (= the dataset's n_ctx), and idata_in_loop / (n_ctx/n_ubatch)
+                    // recovers the current example id since ubatch_per_ctx is an
+                    // integer divisor (asserted in opt_epoch).
                     ggml_set_zero(labels);
-                    const float onef = 1.0f;
+                    const int64_t ubatch_per_ctx = n_ctx / n_ubatch;
+                    const int64_t idata          = idata_in_loop / ubatch_per_ctx;
+                    const float  * wbuf          = opt_use_weighted_ce ? opt_label_weights : nullptr;
+                    const size_t  wbuf_n_ctx     = opt_label_weights_n_ctx;
                     for (uint32_t pos_ubatch = 0; pos_ubatch < n_ubatch; ++pos_ubatch) {
                         const uint32_t ilabel = pos_ctx + pos_batch + pos_ubatch;
                         GGML_ASSERT(labels_sparse[ilabel] < labels->ne[0]);
-                        ggml_backend_tensor_set(labels, &onef, (pos_ubatch*labels->ne[0] + labels_sparse[ilabel])*sizeof(float), sizeof(float));
+                        // default weight 1.0; the only change is reading from
+                        // the per-position weight buffer when wbuf is set.
+                        float wf = 1.0f;
+                        if (wbuf != nullptr && ilabel < wbuf_n_ctx) {
+                            wf = wbuf[idata * wbuf_n_ctx + ilabel];
+                        }
+                        ggml_backend_tensor_set(labels, &wf,
+                                (pos_ubatch*labels->ne[0] + labels_sparse[ilabel])*sizeof(float), sizeof(float));
                     }
                 }
             }
@@ -4360,6 +4395,13 @@ bool llama_opt_param_filter_all(const struct ggml_tensor * tensor, void * userda
 
 void llama_opt_init(struct llama_context * ctx, struct llama_model * model, struct llama_opt_params lopt_params) {
     ctx->opt_init(model, lopt_params);
+}
+
+void llama_set_opt_label_weights(struct llama_context * ctx, const float * weights, size_t n_tok) {
+    if (ctx == nullptr) {
+        return;
+    }
+    ctx->set_opt_label_weights(weights, n_tok);
 }
 
 void llama_opt_epoch(

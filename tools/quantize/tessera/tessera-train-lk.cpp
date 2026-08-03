@@ -211,6 +211,7 @@ int main(int argc, char ** argv) {
         /*get_opt_pars_ud =*/&params.lr,
         /*optimizer_type  =*/params.optimizer,
         /*loss_type       =*/GGML_OPT_LOSS_TYPE_LK,
+        /*use_weighted_ce =*/false,
     };
     llama_opt_init(ctx, model, lopt_params);
 
