@@ -1318,7 +1318,8 @@ class ChatStore {
 			createToolResultMessage: async (
 				toolCallId: string,
 				content: string,
-				extras?: DatabaseMessageExtra[]
+				extras?: DatabaseMessageExtra[],
+				toolCwd?: string
 			) => {
 				const msg = await DatabaseService.createMessageBranch(
 					{
@@ -1327,6 +1328,7 @@ class ChatStore {
 						role: MessageRole.TOOL,
 						content,
 						toolCallId,
+						toolCwd,
 						timestamp: Date.now(),
 						toolCalls: '',
 						children: [],

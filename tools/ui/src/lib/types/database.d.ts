@@ -120,6 +120,8 @@ export interface DatabaseMessage {
 	completionId?: string;
 	/** Tool call ID for tool result messages (role: 'tool') */
 	toolCallId?: string;
+	/** Working directory the tool call ran with (sent via the x-tool-cwd header), stored per call so the UI can show it accurately even after the conversation cwd changes */
+	toolCwd?: string;
 	children: string[];
 	extra?: DatabaseMessageExtra[];
 	timings?: ChatMessageTimings;

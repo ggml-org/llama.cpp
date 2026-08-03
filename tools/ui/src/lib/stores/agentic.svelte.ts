@@ -813,11 +813,11 @@ class AgenticStore {
 							updateToolResultMessage
 						) {
 							const args = this.parseToolArguments(toolCall.function.arguments);
-							const msg = await createToolResultMessage(toolCall.id, '');
+							const cwd = conversationsStore.activeConversation?.workingDirectory;
+							const msg = await createToolResultMessage(toolCall.id, '', undefined, cwd);
 							createdToolResultMessageId = msg.id;
 
 							let accumulated = '';
-							const cwd = conversationsStore.activeConversation?.workingDirectory;
 							for await (const ev of ToolsService.streamTool(toolName, args, signal, cwd)) {
 								if (ev.chunk !== null) {
 									accumulated += ev.chunk;
